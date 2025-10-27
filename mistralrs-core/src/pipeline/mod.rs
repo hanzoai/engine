@@ -43,8 +43,8 @@ pub use loaders::{
     ModelPaths, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
     Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName,
     QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3Loader, Qwen3MoELoader,
-    SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader, VisionLoaderType,
-    VisionModel, VisionModelLoader,
+    Qwen3VLLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
+    VisionLoaderType, VisionModel, VisionModelLoader,
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -297,8 +297,6 @@ pub enum CacheBackendMetadata {
     },
     PagedAttention {
         metadata: PagedAttentionMeta,
-        blocks_to_swap_in: HashMap<usize, usize>,
-        blocks_to_swap_out: HashMap<usize, usize>,
         blocks_to_copy: HashMap<usize, Vec<usize>>,
     },
 }
@@ -593,19 +591,13 @@ pub trait Pipeline:
             CacheBackendMetadata::PagedAttention {
                 metadata,
                 blocks_to_copy,
-                blocks_to_swap_in,
-                blocks_to_swap_out,
             } => {
                 // Cloning might be bad?
                 self.get_metadata()
                     .cache_engine
                     .as_ref()
                     .expect("PagedAttention must have cache engines.")
-                    .execute_scheduler_ops(
-                        &blocks_to_swap_in,
-                        &blocks_to_swap_out,
-                        &blocks_to_copy,
-                    )?;
+                    .execute_scheduler_ops(&blocks_to_copy)?;
 
                 let inputs_iter =
                     std::iter::once(self.get_processor().inputs_processor().process_inputs(
