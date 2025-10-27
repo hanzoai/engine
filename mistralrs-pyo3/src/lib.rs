@@ -782,8 +782,6 @@ impl Runner {
             true
         };
 
-        // Allocate 0.5 GB of CPU memory just as a placeholder.
-        // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
         let cache_config = match (
             pa_blk_size,
             pa_gpu_mem,
@@ -794,38 +792,32 @@ impl Runner {
         ) {
             (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
                 block_size,
-                512,
                 MemoryGpuConfig::ContextSize(max_seq_len),
                 pa_cache_type.unwrap_or_default(),
             )?),
             (block_size, None, None, Some(ctxt), true, false) => Some(PagedAttentionConfig::new(
                 block_size,
-                512,
                 MemoryGpuConfig::ContextSize(ctxt),
                 pa_cache_type.unwrap_or_default(),
             )?),
             (block_size, None, Some(f), None, true, false) => Some(PagedAttentionConfig::new(
                 block_size,
-                512,
                 MemoryGpuConfig::Utilization(f),
                 pa_cache_type.unwrap_or_default(),
             )?),
             (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
                 block_size,
-                512,
                 MemoryGpuConfig::MbAmount(m),
                 pa_cache_type.unwrap_or_default(),
             )?),
             (block_size, Some(_m), Some(f), None, true, false) => Some(PagedAttentionConfig::new(
                 block_size,
-                512,
                 MemoryGpuConfig::Utilization(f),
                 pa_cache_type.unwrap_or_default(),
             )?),
             (block_size, Some(_m), None, Some(ctxt), true, false) => {
                 Some(PagedAttentionConfig::new(
                     block_size,
-                    512,
                     MemoryGpuConfig::ContextSize(ctxt),
                     pa_cache_type.unwrap_or_default(),
                 )?)
@@ -833,7 +825,6 @@ impl Runner {
             (block_size, None, Some(f), Some(_ctxt), true, false) => {
                 Some(PagedAttentionConfig::new(
                     block_size,
-                    512,
                     MemoryGpuConfig::Utilization(f),
                     pa_cache_type.unwrap_or_default(),
                 )?)
@@ -1183,6 +1174,7 @@ impl Runner {
                     top_n_logprobs: request.top_logprobs.unwrap_or(1),
                     frequency_penalty: request.frequency_penalty,
                     presence_penalty: request.presence_penalty,
+                    repetition_penalty: request.repetition_penalty,
                     max_len: request.max_tokens,
                     stop_toks,
                     logits_bias: request.logit_bias.clone(),
@@ -1293,6 +1285,7 @@ impl Runner {
                     top_n_logprobs: 1,
                     frequency_penalty: request.frequency_penalty,
                     presence_penalty: request.presence_penalty,
+                    repetition_penalty: request.repetition_penalty,
                     max_len: request.max_tokens,
                     stop_toks,
                     logits_bias: request.logit_bias.clone(),
@@ -1792,6 +1785,7 @@ impl Runner {
                     top_n_logprobs: request.top_logprobs.unwrap_or(1),
                     frequency_penalty: request.frequency_penalty,
                     presence_penalty: request.presence_penalty,
+                    repetition_penalty: request.repetition_penalty,
                     max_len: request.max_tokens,
                     stop_toks,
                     logits_bias: request.logit_bias.clone(),
@@ -1901,6 +1895,7 @@ impl Runner {
                     top_n_logprobs: 1,
                     frequency_penalty: request.frequency_penalty,
                     presence_penalty: request.presence_penalty,
+                    repetition_penalty: request.repetition_penalty,
                     max_len: request.max_tokens,
                     stop_toks,
                     logits_bias: request.logit_bias.clone(),
