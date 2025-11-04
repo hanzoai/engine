@@ -16,7 +16,10 @@ fn main() {
         println!("Hanzo Engine v0.6.0 - High-performance AI inference engine");
         println!();
         println!("USAGE:");
-        println!("    hanzo-engine [OPTIONS]");
+        println!("    hanzo-engine [OPTIONS] [MODEL_ID]");
+        println!();
+        println!("ARGS:");
+        println!("    <MODEL_ID>    HuggingFace model ID or local path [optional]");
         println!();
         println!("OPTIONS:");
         println!("    --port <PORT>          Port to listen on [default: 36900]");
@@ -25,14 +28,23 @@ fn main() {
         println!("    -V, --version          Print version");
         println!();
         println!("EXAMPLES:");
-        println!("    # Start server on default port (36900)");
+        println!("    # Start server on default port (36900) in basic mode");
         println!("    hanzo-engine");
         println!();
-        println!("    # Start server on custom port");
+        println!("    # Start with a specific embedding model");
+        println!("    hanzo-engine Qwen/Qwen3-Embedding-8B");
+        println!();
+        println!("    # Start on custom port");
         println!("    hanzo-engine --port 8080");
         println!();
         println!("NOTE: Hanzo Engine uses mistral.rs under the hood.");
-        println!("      For advanced options, use mistralrs-server directly.");
+        println!("      Set MISTRALRS_DEBUG=1 for detailed logging.");
+        println!();
+        println!("ENDPOINTS:");
+        println!("    POST /v1/embeddings           Generate embeddings");
+        println!("    POST /v1/chat/completions     Chat completions");
+        println!("    GET  /v1/models               List models");
+        println!("    GET  /health                  Health check");
         return;
     }
     
@@ -54,19 +66,47 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str())
         .unwrap_or("0.0.0.0");
+
+    // Check if model ID is provided (first non-option arg)
+    let model_id = args.iter()
+        .skip(1)
+        .find(|arg| !arg.starts_with('-') && !port.contains(*arg) && !host.contains(*arg));
     
     println!("🚀 Starting Hanzo Engine on {}:{}", host, port);
     println!("📊 Embeddings API: http://{}:{}/v1/embeddings", host, port);
     println!("💬 Chat API: http://{}:{}/v1/chat/completions", host, port);
+    
+    if let Some(model) = model_id {
+        println!("📦 Model: {}", model);
+    } else {
+        println!("⚠️  No model specified - server will start but needs model for inference");
+    }
     println!();
     
-    // Call mistralrs-server with appropriate arguments
-    let status = Command::new("mistralrs-server")
-        .arg("--port")
+    // Build command based on whether model is specified
+    let mut cmd = Command::new("mistralrs-server");
+    
+    if let Some(model) = model_id {
+        // Use 'run' subcommand for auto-loading a model
+        cmd.arg("run")
+            .arg("--model-id")
+            .arg(model);
+    } else {
+        // Use 'plain' subcommand with a dummy model for basic server
+        // This allows the server to start and accept requests
+        cmd.arg("plain")
+            .arg("--model-id")
+            .arg("microsoft/Phi-3-mini-4k-instruct"); // Lightweight default model
+    }
+    
+    cmd.arg("--port")
         .arg(port)
+        .arg("--serve-ip")
+        .arg(host)
         .arg("--log")
-        .arg("info")
-        .status();
+        .arg("info");
+    
+    let status = cmd.status();
     
     match status {
         Ok(exit_status) => {
