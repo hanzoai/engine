@@ -3,7 +3,7 @@ use candle_core::Device;
 use engine::Engine;
 pub use engine::{
     get_engine_terminate_flag, reset_engine_terminate_flag, should_terminate_engine_sequences,
-    BertEmbeddingModel, EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
+    EngineInstruction, SearchEmbeddingModel, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
 };
 use hf_hub::Cache;
 pub use lora::Ordering;
@@ -12,6 +12,7 @@ pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::OnceLock;
 use std::time::Instant;
 use std::{
@@ -32,6 +33,7 @@ mod device_map;
 mod engine;
 mod lora;
 mod model_loader;
+mod moe;
 mod ops;
 pub use model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
@@ -48,7 +50,6 @@ mod amoe;
 mod attention;
 mod diffusion_models;
 pub mod distributed;
-mod embedding;
 mod gguf;
 pub mod layers;
 mod layers_masker;
@@ -136,7 +137,7 @@ pub struct EngineConfig {
     pub prefix_cache_n: usize,
     pub disable_eos_stop: bool,
     pub throughput_logging_enabled: bool,
-    pub search_embedding_model: Option<BertEmbeddingModel>,
+    pub search_embedding_model: Option<SearchEmbeddingModel>,
     pub search_callback: Option<Arc<SearchCallback>>,
     pub tool_callbacks: tools::ToolCallbacks,
     pub tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -185,6 +186,7 @@ pub struct MistralRsConfig {
     pub device: Device,
     pub category: ModelCategory,
     pub modalities: Modalities,
+    pub max_seq_len: Option<usize>,
 }
 
 /// Internal structure to hold per-engine state
@@ -218,7 +220,7 @@ struct RebootState {
     prefix_cache_n: usize,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
-    search_embedding_model: Option<BertEmbeddingModel>,
+    search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -258,7 +260,7 @@ pub struct MistralRsBuilder {
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
     throughput_logging_enabled: bool,
-    search_embedding_model: Option<BertEmbeddingModel>,
+    search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -273,7 +275,7 @@ impl MistralRsBuilder {
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         method: SchedulerConfig,
         throughput_logging: bool,
-        search_embedding_model: Option<BertEmbeddingModel>,
+        search_embedding_model: Option<SearchEmbeddingModel>,
     ) -> Self {
         Self {
             pipeline,
@@ -384,15 +386,17 @@ impl MistralRs {
     ) -> Result<EngineInstance, String> {
         let (tx, rx) = channel(10_000);
 
-        let category = pipeline.try_lock().unwrap().category();
-        let kind = pipeline.try_lock().unwrap().get_metadata().kind.clone();
-        let device = pipeline.try_lock().unwrap().device();
-        let modalities = pipeline
-            .try_lock()
-            .unwrap()
-            .get_metadata()
-            .modalities
-            .clone();
+        let pipeline_guard = pipeline.try_lock().unwrap();
+        let category = pipeline_guard.category();
+        let metadata = pipeline_guard.get_metadata();
+        let kind = metadata.kind.clone();
+        let device = pipeline_guard.device();
+        let modalities = metadata.modalities.clone();
+        let max_seq_len = match &category {
+            ModelCategory::Diffusion | ModelCategory::Speech => None,
+            _ => Some(metadata.max_seq_len),
+        };
+        drop(pipeline_guard);
 
         info!("Pipeline input modalities are {:?}", &modalities.input);
         info!("Pipeline output modalities are {:?}", &modalities.output);
@@ -402,14 +406,17 @@ impl MistralRs {
             device,
             category: category.clone(),
             modalities,
+            max_seq_len,
         };
 
+        let tx_for_engine = tx.clone();
         let engine_handler = thread::spawn(move || {
             #[cfg(feature = "metal")]
             objc::rc::autoreleasepool(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
                     let engine = Engine::new(
+                        tx_for_engine,
                         rx,
                         pipeline,
                         method,
@@ -433,6 +440,7 @@ impl MistralRs {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
                     let engine = Engine::new(
+                        tx_for_engine,
                         rx,
                         pipeline,
                         method,
@@ -481,6 +489,21 @@ impl MistralRs {
         mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
             get_mut_arcmutex!(pipeline).device(),
         );
+
+        // For hybrid models (Mamba-Attention), force batch_size=1 to prevent state bleeding
+        // Mamba's stateful nature makes batched inference complex; this ensures correctness
+        let method = if !get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache
+            && get_mut_arcmutex!(pipeline).cache().is_hybrid()
+        {
+            info!(
+                "Hybrid model detected (Mamba-Attention), enforcing batch_size=1 for correctness"
+            );
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()),
+            }
+        } else {
+            method
+        };
 
         let no_kv_cache = no_kv_cache.unwrap_or(false);
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
@@ -532,7 +555,7 @@ impl MistralRs {
             prefix_cache_n,
             disable_eos_stop,
             throughput_logging_enabled,
-            search_embedding_model: search_embedding_model.clone(),
+            search_embedding_model,
             search_callback: search_callback.clone(),
             tool_callbacks: tool_callbacks.clone(),
             tool_callbacks_with_tools: tool_callbacks_with_tools.clone(),
@@ -672,7 +695,7 @@ impl MistralRs {
                 prefix_cache_n: reboot_state.prefix_cache_n,
                 disable_eos_stop: reboot_state.disable_eos_stop,
                 throughput_logging_enabled: reboot_state.throughput_logging_enabled,
-                search_embedding_model: reboot_state.search_embedding_model.clone(),
+                search_embedding_model: reboot_state.search_embedding_model,
                 search_callback: reboot_state.search_callback.clone(),
                 tool_callbacks: reboot_state.tool_callbacks.clone(),
                 tool_callbacks_with_tools: reboot_state.tool_callbacks_with_tools.clone(),
@@ -779,6 +802,36 @@ impl MistralRs {
         }
     }
 
+    /// Get the maximum supported sequence length for a model, if applicable.
+    pub fn max_sequence_length(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<Option<usize>, MistralRsError> {
+        let resolved_model_id = match model_id {
+            Some(id) => id.to_string(),
+            None => {
+                let default_lock = self
+                    .default_engine_id
+                    .read()
+                    .map_err(|_| MistralRsError::SenderPoisoned)?;
+                default_lock
+                    .as_ref()
+                    .ok_or(MistralRsError::EnginePoisoned)?
+                    .clone()
+            }
+        };
+
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        if let Some(engine_instance) = engines.get(&resolved_model_id) {
+            Ok(engine_instance.config.max_seq_len)
+        } else {
+            Err(MistralRsError::EnginePoisoned)
+        }
+    }
+
     pub fn next_request_id(&self) -> usize {
         let l = self.next_request_id.lock().unwrap();
         let last = &mut *l.borrow_mut();
@@ -795,6 +848,21 @@ impl MistralRs {
         method: SchedulerConfig,
         config: AddModelConfig,
     ) -> Result<(), String> {
+        // For hybrid models (Mamba-Attention), force batch_size=1 to prevent state bleeding
+        let method = {
+            let pipeline_guard = pipeline.try_lock().unwrap();
+            if !pipeline_guard.get_metadata().no_kv_cache && pipeline_guard.cache().is_hybrid() {
+                info!(
+                    "Hybrid model detected (Mamba-Attention), enforcing batch_size=1 for correctness"
+                );
+                SchedulerConfig::DefaultScheduler {
+                    method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()),
+                }
+            } else {
+                method
+            }
+        };
+
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
             method: method.clone(),
@@ -803,7 +871,7 @@ impl MistralRs {
             prefix_cache_n: config.engine_config.prefix_cache_n,
             disable_eos_stop: config.engine_config.disable_eos_stop,
             throughput_logging_enabled: config.engine_config.throughput_logging_enabled,
-            search_embedding_model: config.engine_config.search_embedding_model.clone(),
+            search_embedding_model: config.engine_config.search_embedding_model,
             search_callback: config.engine_config.search_callback.clone(),
             tool_callbacks: config.engine_config.tool_callbacks.clone(),
             tool_callbacks_with_tools: config.engine_config.tool_callbacks_with_tools.clone(),
