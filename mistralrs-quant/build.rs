@@ -20,6 +20,7 @@ fn cuda_version_from_build_system() -> (usize, usize) {
     let version_number = release_section.split(' ').nth(1).unwrap();
 
     match version_number {
+        "13.0" => (13, 0),
         "12.9" => (12, 9),
         "12.8" => (12, 8),
         "12.6" => (12, 6),
@@ -133,6 +134,20 @@ fn main() -> Result<(), String> {
             );
         }
 
+        if blockwise_fp8_ffi_ct
+            .contains("pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = true;")
+        {
+            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
+                "pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = true;",
+                &format!("pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = {cc_is_over_800};"),
+            );
+        } else {
+            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
+                "pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = false;",
+                &format!("pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = {cc_is_over_800};"),
+            );
+        }
+
         std::fs::write(BLOCKWISE_FP8_FFI_PATH, blockwise_fp8_ffi_ct).unwrap();
 
         let mut scalar_fp8_ffi_ct = read_to_string(SCALAR_FP8_FFI_PATH).unwrap();
@@ -193,11 +208,13 @@ fn main() -> Result<(), String> {
             lib_files.push("kernels/marlin/marlin_matmul_awq_bf16.cu");
             lib_files.push("kernels/marlin/marlin_repack.cu");
             lib_files.push("kernels/blockwise_fp8/blockwise_fp8.cu");
+            lib_files.push("kernels/blockwise_fp8/blockwise_fp8_gemm.cu");
             lib_files.push("kernels/scalar_fp8/scalar_fp8.cu");
             lib_files.push("kernels/vector_fp8/vector_fp8.cu");
         } else {
             lib_files.push("kernels/marlin/dummy_marlin_kernel.cu");
             lib_files.push("kernels/blockwise_fp8/blockwise_fp8_dummy.cu");
+            lib_files.push("kernels/blockwise_fp8/blockwise_fp8_gemm_dummy.cu");
             lib_files.push("kernels/scalar_fp8/scalar_fp8_dummy.cu");
             lib_files.push("kernels/vector_fp8/vector_fp8_dummy.cu");
         }
@@ -277,10 +294,15 @@ fn main() -> Result<(), String> {
             "copy",
         ];
         const HEADER_SOURCES: [&str; 5] = ["utils", "bf16", "scan_impl", "sort_impl", "copy_impl"];
+        // Include-only headers (not compiled directly, just tracked for changes)
+        const INCLUDE_ONLY: [&str; 2] = ["float8", "float4"];
         for src in METAL_SOURCES {
             println!("cargo::rerun-if-changed=src/metal_kernels/{src}.metal");
         }
         for src in HEADER_SOURCES {
+            println!("cargo::rerun-if-changed=src/metal_kernels/{src}.metal");
+        }
+        for src in INCLUDE_ONLY {
             println!("cargo::rerun-if-changed=src/metal_kernels/{src}.metal");
         }
         println!("cargo::rerun-if-changed=build.rs");

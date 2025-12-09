@@ -75,11 +75,9 @@ impl CacheEngine {
     }
 
     pub fn get_kv_cache(&self) -> MutexGuard<'_, Vec<KVCache>> {
-        loop {
-            if let Ok(v) = self.gpu_cache.try_lock() {
-                return v;
-            }
-        }
+        // Use blocking lock instead of busy-wait spin loop to avoid CPU waste
+        // and potential thread starvation issues
+        self.gpu_cache.lock().expect("KV cache mutex was poisoned")
     }
 
     fn allocate_gpu_cache(
@@ -104,17 +102,17 @@ impl CacheEngine {
             let key_blocks = if let Device::Metal(dev) = &device {
                 #[cfg(feature = "metal")]
                 {
-                    use candle_core::{from_storage_no_op, MetalStorage, Shape, Storage};
+                    use candle_core::{MetalStorage, Shape, Storage};
 
                     let elem_count = cache_config.num_gpu_blocks
                         * key_block_shape.0
                         * key_block_shape.1
                         * key_block_shape.2
                         * key_block_shape.3;
-                    let buffer = dev.new_buffer_private(elem_count, dtype, "k_cache")?;
+                    let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
                     let storage =
                         Storage::Metal(MetalStorage::new(buffer, dev.clone(), elem_count, dtype));
-                    from_storage_no_op(
+                    Tensor::from((
                         storage,
                         Shape::from_dims(&[
                             cache_config.num_gpu_blocks,
@@ -123,8 +121,7 @@ impl CacheEngine {
                             key_block_shape.2,
                             key_block_shape.3,
                         ]),
-                        false,
-                    )
+                    ))
                 }
 
                 #[cfg(not(feature = "metal"))]
@@ -150,16 +147,16 @@ impl CacheEngine {
             let value_blocks = if let Device::Metal(dev) = &device {
                 #[cfg(feature = "metal")]
                 {
-                    use candle_core::{from_storage_no_op, MetalStorage, Shape, Storage};
+                    use candle_core::{MetalStorage, Shape, Storage};
 
                     let elem_count = cache_config.num_gpu_blocks
                         * value_block_shape.0
                         * value_block_shape.1
                         * value_block_shape.2;
-                    let buffer = dev.new_buffer_private(elem_count, dtype, "v_cache")?;
+                    let buffer = dev.new_private_buffer(elem_count, dtype, "v_cache")?;
                     let storage =
                         Storage::Metal(MetalStorage::new(buffer, dev.clone(), elem_count, dtype));
-                    from_storage_no_op(
+                    Tensor::from((
                         storage,
                         Shape::from_dims(&[
                             cache_config.num_gpu_blocks,
@@ -167,8 +164,7 @@ impl CacheEngine {
                             value_block_shape.1,
                             value_block_shape.2,
                         ]),
-                        false,
-                    )
+                    ))
                 }
 
                 #[cfg(not(feature = "metal"))]

@@ -16,14 +16,14 @@ pub const USE_FP8: bool = false;
 mod backend;
 mod ffi;
 
-pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
+pub use backend::{copy_blocks, kv_scale_update, paged_attention, reshape_and_cache, swap_blocks};
     "#;
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/cuda/pagedattention.cuh");
     println!("cargo:rerun-if-changed=src/cuda/copy_blocks_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/reshape_and_cache_kernel.cu");
-
+    println!("cargo:rerun-if-changed=src/cuda/update_kvscales.cu");
     // Detect CUDA compute capability for FP8 support
     let compute_cap = {
         if let Ok(var) = std::env::var("CUDA_COMPUTE_CAP") {
@@ -135,7 +135,12 @@ fn main() -> Result<(), String> {
     use std::process::Command;
     use std::{env, str};
 
-    const METAL_SOURCES: [&str; 3] = ["copy_blocks", "pagedattention", "reshape_and_cache"];
+    const METAL_SOURCES: [&str; 4] = [
+        "copy_blocks",
+        "pagedattention",
+        "reshape_and_cache",
+        "kv_scale_update",
+    ];
     for src in METAL_SOURCES {
         println!("cargo::rerun-if-changed=src/metal/kernels/{src}.metal");
     }
