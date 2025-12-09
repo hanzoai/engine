@@ -29,16 +29,18 @@ impl Engine {
     pub async fn handle_request(self: Arc<Self>, request: Request) {
         match request {
             Request::Normal(request) => {
-                if matches!(
-                    request.messages,
+                let is_chat = matches!(
+                    &request.messages,
                     RequestMessage::Chat { .. } | RequestMessage::VisionChat { .. }
-                ) && request.web_search_options.is_some()
-                    || !self.tool_callbacks.is_empty()
-                    || !self.tool_callbacks_with_tools.is_empty()
-                {
+                );
+                let has_tooling =
+                    !self.tool_callbacks.is_empty() || !self.tool_callbacks_with_tools.is_empty();
+                let has_search = request.web_search_options.is_some();
+
+                if is_chat && (has_search || has_tooling) {
                     search_request::search_request(self.clone(), *request).await;
                 } else {
-                    self.add_request(*request).await
+                    self.add_request(*request).await;
                 }
             }
             Request::ReIsq(level) => {
@@ -169,6 +171,7 @@ impl Engine {
             } => Some(generation_params.clone()),
             _ => None,
         };
+        let mut added_seq = false;
 
         let (mut prompt_tokens, prompt_text) = match request.messages {
             RequestMessage::Chat {
@@ -563,6 +566,17 @@ impl Engine {
                 self.logger.add_new_sequence();
             }
 
+            // Allocate Mamba state pool slot for hybrid models
+            {
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
+                    let mut hybrid_cache = pipeline.cache().hybrid();
+                    if let Some(slot_idx) = hybrid_cache.allocate_seq() {
+                        seq.set_mamba_state_idx(Some(slot_idx));
+                    }
+                }
+            }
+
             // Run the inputs processor to update the prompt for multimodal models.
             if images.is_some() || audios.is_some() {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
@@ -623,6 +637,10 @@ impl Engine {
 
             *get_mut_arcmutex!(self.id) += 1;
             get_mut_arcmutex!(self.scheduler).add_seq(seq);
+            added_seq = true;
+        }
+        if added_seq {
+            self.pending_notify.notify_one();
         }
     }
 

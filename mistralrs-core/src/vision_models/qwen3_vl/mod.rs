@@ -19,10 +19,10 @@ use crate::{
     },
 };
 
-mod config;
-mod inputs_processor;
+pub(crate) mod config;
+pub(crate) mod inputs_processor;
 mod text;
-mod vision;
+pub(crate) mod vision;
 
 pub(crate) use config::Config;
 pub(crate) use inputs_processor::Qwen3VLProcessor;
@@ -51,8 +51,13 @@ impl Qwen3VLModel {
                 .pp("visual")
                 .set_device(normal_loading_metadata.real_device.clone()),
         )?;
+        // Use top-level quantization_config if present, otherwise fall back to text_config's
+        let mut text_config = cfg.text_config.clone();
+        if cfg.quantization_config.is_some() {
+            text_config.quantization_config = cfg.quantization_config.clone();
+        }
         let text = Qwen3VLTextModel::new(
-            &cfg.text_config,
+            &text_config,
             vb.clone(),
             cfg.tie_word_embeddings,
             normal_loading_metadata,
@@ -624,12 +629,12 @@ impl Qwen3VLModel {
 }
 
 pub(crate) struct Qwen3VLVisionSpecificArgs {
-    input_ids_full: Tensor,
-    image_grid_thw: Option<Tensor>, // Some when pixel values are provided
-    video_grid_thw: Option<Tensor>, // Some when pixel values are provided
-    seqlens: Vec<usize>,
-    continuous_img_pad: Vec<Vec<(usize, usize)>>,
-    continuous_vid_pad: Vec<Vec<(usize, usize)>>,
+    pub input_ids_full: Tensor,
+    pub image_grid_thw: Option<Tensor>, // Some when pixel values are provided
+    pub video_grid_thw: Option<Tensor>, // Some when pixel values are provided
+    pub seqlens: Vec<usize>,
+    pub continuous_img_pad: Vec<Vec<(usize, usize)>>,
+    pub continuous_vid_pad: Vec<Vec<(usize, usize)>>,
 }
 
 impl VisionModel for Qwen3VLModel {
