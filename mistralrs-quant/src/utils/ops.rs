@@ -1581,6 +1581,798 @@ impl CumSumOp for Tensor {
     }
 }
 
+/// Fused GPT-OSS SwiGLU activation
+/// Formula: output = (clamp(up, -limit, limit) + 1) * gate_clamped * sigmoid(gate_clamped * alpha)
+/// where gate_clamped = min(gate, limit)
+#[cfg(feature = "cuda")]
+pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -> Result<Tensor> {
+    use half::{bf16, f16};
+
+    let gate = gate.contiguous()?;
+    let up = up.contiguous()?;
+
+    if gate.shape() != up.shape() {
+        candle_core::bail!(
+            "gptoss_swiglu: gate and up must have same shape, got {:?} vs {:?}",
+            gate.shape(),
+            up.shape()
+        );
+    }
+
+    let device = match gate.device() {
+        candle_core::Device::Cuda(dev) => dev,
+        _ => candle_core::bail!("gptoss_swiglu requires CUDA device"),
+    };
+
+    let n_elements = gate.elem_count();
+    let dtype = gate.dtype();
+
+    let gate_storage = gate.storage_and_layout().0;
+    let up_storage = up.storage_and_layout().0;
+
+    let gate_cuda = match &*gate_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("Expected CUDA storage for gate"),
+    };
+    let up_cuda = match &*up_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("Expected CUDA storage for up"),
+    };
+
+    let stream = device.cuda_stream().cu_stream();
+
+    match dtype {
+        DType::F16 => {
+            let output = device.alloc_zeros::<f16>(n_elements)?;
+            let gate_slice = gate_cuda.as_cuda_slice::<f16>()?;
+            let up_slice = up_cuda.as_cuda_slice::<f16>()?;
+
+            let (gate_ptr, _g_guard) = slice_ptr(gate_slice, 0);
+            let (up_ptr, _u_guard) = slice_ptr(up_slice, 0);
+            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+            unsafe {
+                ffi::gptoss_swiglu_f16(
+                    gate_ptr as *const c_void,
+                    up_ptr as *const c_void,
+                    out_ptr as *mut c_void,
+                    n_elements as u32,
+                    alpha,
+                    limit,
+                    stream,
+                );
+            }
+
+            drop(_o_guard);
+            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                gate.shape().clone(),
+            )))
+        }
+        DType::BF16 => {
+            let output = device.alloc_zeros::<bf16>(n_elements)?;
+            let gate_slice = gate_cuda.as_cuda_slice::<bf16>()?;
+            let up_slice = up_cuda.as_cuda_slice::<bf16>()?;
+
+            let (gate_ptr, _g_guard) = slice_ptr(gate_slice, 0);
+            let (up_ptr, _u_guard) = slice_ptr(up_slice, 0);
+            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+            unsafe {
+                ffi::gptoss_swiglu_bf16(
+                    gate_ptr as *const c_void,
+                    up_ptr as *const c_void,
+                    out_ptr as *mut c_void,
+                    n_elements as u32,
+                    alpha,
+                    limit,
+                    stream,
+                );
+            }
+
+            drop(_o_guard);
+            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                gate.shape().clone(),
+            )))
+        }
+        DType::F32 => {
+            let output = device.alloc_zeros::<f32>(n_elements)?;
+            let gate_slice = gate_cuda.as_cuda_slice::<f32>()?;
+            let up_slice = up_cuda.as_cuda_slice::<f32>()?;
+
+            let (gate_ptr, _g_guard) = slice_ptr(gate_slice, 0);
+            let (up_ptr, _u_guard) = slice_ptr(up_slice, 0);
+            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+            unsafe {
+                ffi::gptoss_swiglu_f32(
+                    gate_ptr as *const c_void,
+                    up_ptr as *const c_void,
+                    out_ptr as *mut c_void,
+                    n_elements as u32,
+                    alpha,
+                    limit,
+                    stream,
+                );
+            }
+
+            drop(_o_guard);
+            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                gate.shape().clone(),
+            )))
+        }
+        _ => candle_core::bail!("gptoss_swiglu: unsupported dtype {:?}", dtype),
+    }
+}
+
+/// Fused GPT-OSS SwiGLU for interleaved gate/up data.
+///
+/// This handles interleaved gate/up format directly, avoiding 2 tensor copies
+/// from narrow().squeeze().contiguous().
+///
+/// Args:
+///   gate_up: [N, intermediate_size, 2] - interleaved gate/up data
+///   alpha: SwiGLU alpha parameter
+///   limit: SwiGLU limit parameter
+///
+/// Returns: [N, intermediate_size] - activated output
+#[cfg(feature = "cuda")]
+pub fn gptoss_swiglu_interleaved(
+    gate_up: &Tensor,
+    intermediate_size: usize,
+    alpha: f32,
+    limit: f32,
+) -> Result<Tensor> {
+    use half::{bf16, f16};
+    use std::ffi::c_void;
+
+    let gate_up = gate_up.contiguous()?;
+
+    let dims = gate_up.dims();
+    if dims.len() != 3 || dims[2] != 2 {
+        candle_core::bail!(
+            "gptoss_swiglu_interleaved: expected gate_up shape [N, intermediate_size, 2], got {:?}",
+            dims
+        );
+    }
+
+    let n = dims[0]; // num_tokens * topk
+    let device = match gate_up.device() {
+        candle_core::Device::Cuda(dev) => dev,
+        _ => candle_core::bail!("gptoss_swiglu_interleaved requires CUDA device"),
+    };
+
+    let dtype = gate_up.dtype();
+    let n_output_elements = n * intermediate_size;
+
+    let gate_up_storage = gate_up.storage_and_layout().0;
+    let gate_up_cuda = match &*gate_up_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("Expected CUDA storage for gate_up"),
+    };
+
+    let stream = device.cuda_stream().cu_stream();
+
+    match dtype {
+        DType::F16 => {
+            let output = device.alloc_zeros::<f16>(n_output_elements)?;
+            let gate_up_slice = gate_up_cuda.as_cuda_slice::<f16>()?;
+
+            let (gate_up_ptr, _gu_guard) = slice_ptr(gate_up_slice, 0);
+            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+            unsafe {
+                ffi::gptoss_swiglu_interleaved_f16(
+                    gate_up_ptr as *const c_void,
+                    out_ptr as *mut c_void,
+                    n as u32,
+                    intermediate_size as u32,
+                    alpha,
+                    limit,
+                    stream,
+                );
+            }
+
+            drop(_o_guard);
+            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                Shape::from(vec![n, intermediate_size]),
+            )))
+        }
+        DType::BF16 => {
+            let output = device.alloc_zeros::<bf16>(n_output_elements)?;
+            let gate_up_slice = gate_up_cuda.as_cuda_slice::<bf16>()?;
+
+            let (gate_up_ptr, _gu_guard) = slice_ptr(gate_up_slice, 0);
+            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+            unsafe {
+                ffi::gptoss_swiglu_interleaved_bf16(
+                    gate_up_ptr as *const c_void,
+                    out_ptr as *mut c_void,
+                    n as u32,
+                    intermediate_size as u32,
+                    alpha,
+                    limit,
+                    stream,
+                );
+            }
+
+            drop(_o_guard);
+            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                Shape::from(vec![n, intermediate_size]),
+            )))
+        }
+        DType::F32 => {
+            let output = device.alloc_zeros::<f32>(n_output_elements)?;
+            let gate_up_slice = gate_up_cuda.as_cuda_slice::<f32>()?;
+
+            let (gate_up_ptr, _gu_guard) = slice_ptr(gate_up_slice, 0);
+            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+            unsafe {
+                ffi::gptoss_swiglu_interleaved_f32(
+                    gate_up_ptr as *const c_void,
+                    out_ptr as *mut c_void,
+                    n as u32,
+                    intermediate_size as u32,
+                    alpha,
+                    limit,
+                    stream,
+                );
+            }
+
+            drop(_o_guard);
+            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                Shape::from(vec![n, intermediate_size]),
+            )))
+        }
+        _ => candle_core::bail!("gptoss_swiglu_interleaved: unsupported dtype {:?}", dtype),
+    }
+}
+
+/// Fused softmax with sinks for GPT-OSS attention.
+///
+/// This computes softmax over attention logits while including a per-head "sink" value
+/// in the normalization, then drops the sink from the output.
+///
+/// Args:
+///   logits: [batch, heads, q_len, k_len] - attention scores (q @ k.T * scale)
+///   sinks: [heads] - per-head sink values
+///   mask: Optional [batch, 1, q_len, k_len] - attention mask (0 = attend, -inf = mask)
+///
+/// Returns: [batch, heads, q_len, k_len] - softmax probabilities (sink dropped from normalization)
+#[cfg(feature = "cuda")]
+pub fn softmax_with_sinks(
+    logits: &Tensor,
+    sinks: &Tensor,
+    mask: Option<&Tensor>,
+) -> Result<Tensor> {
+    use half::{bf16, f16};
+    use std::ffi::c_void;
+
+    let logits = logits.contiguous()?;
+    let sinks = sinks.contiguous()?;
+
+    let dims = logits.dims();
+    if dims.len() != 4 {
+        candle_core::bail!(
+            "softmax_with_sinks: expected logits to have 4 dims [b, h, q, k], got {:?}",
+            dims
+        );
+    }
+
+    let batch_size = dims[0];
+    let num_heads = dims[1];
+    let q_len = dims[2];
+    let k_len = dims[3];
+
+    if sinks.dims() != [num_heads] {
+        candle_core::bail!(
+            "softmax_with_sinks: expected sinks shape [{}], got {:?}",
+            num_heads,
+            sinks.dims()
+        );
+    }
+
+    let device = match logits.device() {
+        candle_core::Device::Cuda(dev) => dev,
+        _ => candle_core::bail!("softmax_with_sinks requires CUDA device"),
+    };
+
+    let dtype = logits.dtype();
+    let n_elements = logits.elem_count();
+
+    let logits_storage = logits.storage_and_layout().0;
+    let sinks_storage = sinks.storage_and_layout().0;
+
+    let logits_cuda = match &*logits_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("Expected CUDA storage for logits"),
+    };
+    let sinks_cuda = match &*sinks_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("Expected CUDA storage for sinks"),
+    };
+
+    // Handle optional mask
+    let mask = if let Some(m) = mask {
+        Some(m.contiguous()?)
+    } else {
+        None
+    };
+
+    let stream = device.cuda_stream().cu_stream();
+
+    match dtype {
+        DType::F16 => {
+            let output = device.alloc_zeros::<f16>(n_elements)?;
+
+            let logits_slice = logits_cuda.as_cuda_slice::<f16>()?;
+            let sinks_slice = sinks_cuda.as_cuda_slice::<f16>()?;
+
+            let (logits_ptr, _l_guard) = slice_ptr(logits_slice, 0);
+            let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, 0);
+            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+            let mask_ptr = if let Some(ref m) = mask {
+                let m_storage = m.storage_and_layout().0;
+                let m_cuda = match &*m_storage {
+                    candle_core::Storage::Cuda(s) => s,
+                    _ => candle_core::bail!("Expected CUDA storage for mask"),
+                };
+                let m_slice = m_cuda.as_cuda_slice::<f16>()?;
+                let (ptr, _guard) = slice_ptr(m_slice, 0);
+                ptr as *const c_void
+            } else {
+                std::ptr::null()
+            };
+
+            unsafe {
+                ffi::softmax_with_sinks_f16(
+                    logits_ptr as *const c_void,
+                    sinks_ptr as *const c_void,
+                    mask_ptr,
+                    out_ptr as *mut c_void,
+                    batch_size as i32,
+                    num_heads as i32,
+                    q_len as i32,
+                    k_len as i32,
+                    1.0, // scale already applied to logits
+                    stream,
+                );
+            }
+
+            drop(_o_guard);
+            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                logits.shape().clone(),
+            )))
+        }
+        DType::BF16 => {
+            let output = device.alloc_zeros::<bf16>(n_elements)?;
+
+            let logits_slice = logits_cuda.as_cuda_slice::<bf16>()?;
+            let sinks_slice = sinks_cuda.as_cuda_slice::<bf16>()?;
+
+            let (logits_ptr, _l_guard) = slice_ptr(logits_slice, 0);
+            let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, 0);
+            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+            let mask_ptr = if let Some(ref m) = mask {
+                let m_storage = m.storage_and_layout().0;
+                let m_cuda = match &*m_storage {
+                    candle_core::Storage::Cuda(s) => s,
+                    _ => candle_core::bail!("Expected CUDA storage for mask"),
+                };
+                let m_slice = m_cuda.as_cuda_slice::<bf16>()?;
+                let (ptr, _guard) = slice_ptr(m_slice, 0);
+                ptr as *const c_void
+            } else {
+                std::ptr::null()
+            };
+
+            unsafe {
+                ffi::softmax_with_sinks_bf16(
+                    logits_ptr as *const c_void,
+                    sinks_ptr as *const c_void,
+                    mask_ptr,
+                    out_ptr as *mut c_void,
+                    batch_size as i32,
+                    num_heads as i32,
+                    q_len as i32,
+                    k_len as i32,
+                    1.0,
+                    stream,
+                );
+            }
+
+            drop(_o_guard);
+            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                logits.shape().clone(),
+            )))
+        }
+        DType::F32 => {
+            let output = device.alloc_zeros::<f32>(n_elements)?;
+
+            let logits_slice = logits_cuda.as_cuda_slice::<f32>()?;
+            let sinks_slice = sinks_cuda.as_cuda_slice::<f32>()?;
+
+            let (logits_ptr, _l_guard) = slice_ptr(logits_slice, 0);
+            let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, 0);
+            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+            let mask_ptr = if let Some(ref m) = mask {
+                let m_storage = m.storage_and_layout().0;
+                let m_cuda = match &*m_storage {
+                    candle_core::Storage::Cuda(s) => s,
+                    _ => candle_core::bail!("Expected CUDA storage for mask"),
+                };
+                let m_slice = m_cuda.as_cuda_slice::<f32>()?;
+                let (ptr, _guard) = slice_ptr(m_slice, 0);
+                ptr as *const c_void
+            } else {
+                std::ptr::null()
+            };
+
+            unsafe {
+                ffi::softmax_with_sinks_f32(
+                    logits_ptr as *const c_void,
+                    sinks_ptr as *const c_void,
+                    mask_ptr,
+                    out_ptr as *mut c_void,
+                    batch_size as i32,
+                    num_heads as i32,
+                    q_len as i32,
+                    k_len as i32,
+                    1.0,
+                    stream,
+                );
+            }
+
+            drop(_o_guard);
+            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                logits.shape().clone(),
+            )))
+        }
+        _ => candle_core::bail!("softmax_with_sinks: unsupported dtype {:?}", dtype),
+    }
+}
+
+/// Activation enum for fused GLU kernel.
+/// Must match the GluActivation enum in CUDA (ops.cu) and Metal (fused_glu.metal) kernels.
+#[derive(Clone, Copy, Debug)]
+#[repr(i32)]
+pub enum GluActivationType {
+    Silu = 0,
+    Gelu = 1,
+    Relu = 2,
+}
+
+// CPU activation functions for fused GLU
+fn cpu_silu(x: f32) -> f32 {
+    x / (1.0 + (-x).exp())
+}
+
+fn cpu_gelu(x: f32) -> f32 {
+    #[allow(clippy::excessive_precision)]
+    const SQRT_2_OVER_PI: f32 = 0.7978845608;
+    const COEFF: f32 = 0.044715;
+    let x3 = x * x * x;
+    let inner = SQRT_2_OVER_PI * (x + COEFF * x3);
+    0.5 * x * (1.0 + inner.tanh())
+}
+
+fn cpu_relu(x: f32) -> f32 {
+    x.max(0.0)
+}
+
+fn apply_cpu_activation(x: f32, activation: GluActivationType) -> f32 {
+    match activation {
+        GluActivationType::Silu => cpu_silu(x),
+        GluActivationType::Gelu => cpu_gelu(x),
+        GluActivationType::Relu => cpu_relu(x),
+    }
+}
+
+/// CPU implementation of fused GLU using rayon parallelism
+fn fused_glu_cpu_impl(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Result<Tensor> {
+    use candle_core::cpu_backend::CpuStorage;
+    use half::{bf16, f16};
+    use rayon::prelude::*;
+
+    let shape = a.shape().clone();
+    let dtype = a.dtype();
+
+    let (a_storage, a_layout) = a.storage_and_layout();
+    let (b_storage, b_layout) = b.storage_and_layout();
+
+    let a_cpu = match &*a_storage {
+        candle_core::Storage::Cpu(s) => s,
+        _ => candle_core::bail!("fused_glu_cpu: expected CPU storage"),
+    };
+    let b_cpu = match &*b_storage {
+        candle_core::Storage::Cpu(s) => s,
+        _ => candle_core::bail!("fused_glu_cpu: expected CPU storage"),
+    };
+
+    let result_storage = match dtype {
+        DType::F32 => {
+            let a_slice = a_cpu.as_slice::<f32>()?;
+            let b_slice = b_cpu.as_slice::<f32>()?;
+            let a_offset = a_layout.start_offset();
+            let b_offset = b_layout.start_offset();
+            let len = a.elem_count();
+
+            let result: Vec<f32> = (0..len)
+                .into_par_iter()
+                .map(|i| {
+                    let a_val = a_slice[a_offset + i];
+                    let b_val = b_slice[b_offset + i];
+                    apply_cpu_activation(a_val, activation) * b_val
+                })
+                .collect();
+            CpuStorage::F32(result)
+        }
+        DType::F16 => {
+            let a_slice = a_cpu.as_slice::<f16>()?;
+            let b_slice = b_cpu.as_slice::<f16>()?;
+            let a_offset = a_layout.start_offset();
+            let b_offset = b_layout.start_offset();
+            let len = a.elem_count();
+
+            let result: Vec<f16> = (0..len)
+                .into_par_iter()
+                .map(|i| {
+                    let a_val = a_slice[a_offset + i].to_f32();
+                    let b_val = b_slice[b_offset + i].to_f32();
+                    f16::from_f32(apply_cpu_activation(a_val, activation) * b_val)
+                })
+                .collect();
+            CpuStorage::F16(result)
+        }
+        DType::BF16 => {
+            let a_slice = a_cpu.as_slice::<bf16>()?;
+            let b_slice = b_cpu.as_slice::<bf16>()?;
+            let a_offset = a_layout.start_offset();
+            let b_offset = b_layout.start_offset();
+            let len = a.elem_count();
+
+            let result: Vec<bf16> = (0..len)
+                .into_par_iter()
+                .map(|i| {
+                    let a_val = a_slice[a_offset + i].to_f32();
+                    let b_val = b_slice[b_offset + i].to_f32();
+                    bf16::from_f32(apply_cpu_activation(a_val, activation) * b_val)
+                })
+                .collect();
+            CpuStorage::BF16(result)
+        }
+        _ => candle_core::bail!("fused_glu_cpu: unsupported dtype {:?}", dtype),
+    };
+
+    Ok(Tensor::from((
+        candle_core::Storage::Cpu(result_storage),
+        shape,
+    )))
+}
+
+/// CUDA implementation of fused GLU
+#[cfg(feature = "cuda")]
+fn fused_glu_cuda(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Result<Tensor> {
+    use half::{bf16, f16};
+    use std::ffi::c_void;
+
+    let device = match a.device() {
+        candle_core::Device::Cuda(dev) => dev,
+        _ => candle_core::bail!("fused_glu_cuda requires CUDA device"),
+    };
+
+    let n_elements = a.elem_count();
+    let dtype = a.dtype();
+
+    let a_storage = a.storage_and_layout().0;
+    let b_storage = b.storage_and_layout().0;
+
+    let a_cuda = match &*a_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("Expected CUDA storage for a"),
+    };
+    let b_cuda = match &*b_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("Expected CUDA storage for b"),
+    };
+
+    let stream = device.cuda_stream().cu_stream();
+
+    match dtype {
+        DType::F16 => {
+            let output = device.alloc_zeros::<f16>(n_elements)?;
+            let a_slice = a_cuda.as_cuda_slice::<f16>()?;
+            let b_slice = b_cuda.as_cuda_slice::<f16>()?;
+
+            let (a_ptr, _a_guard) = slice_ptr(a_slice, 0);
+            let (b_ptr, _b_guard) = slice_ptr(b_slice, 0);
+            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+            unsafe {
+                ffi::fused_glu_f16(
+                    a_ptr as *const c_void,
+                    b_ptr as *const c_void,
+                    out_ptr as *mut c_void,
+                    n_elements as u32,
+                    activation as i32,
+                    stream,
+                );
+            }
+
+            drop(_o_guard);
+            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                a.shape().clone(),
+            )))
+        }
+        DType::BF16 => {
+            let output = device.alloc_zeros::<bf16>(n_elements)?;
+            let a_slice = a_cuda.as_cuda_slice::<bf16>()?;
+            let b_slice = b_cuda.as_cuda_slice::<bf16>()?;
+
+            let (a_ptr, _a_guard) = slice_ptr(a_slice, 0);
+            let (b_ptr, _b_guard) = slice_ptr(b_slice, 0);
+            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+            unsafe {
+                ffi::fused_glu_bf16(
+                    a_ptr as *const c_void,
+                    b_ptr as *const c_void,
+                    out_ptr as *mut c_void,
+                    n_elements as u32,
+                    activation as i32,
+                    stream,
+                );
+            }
+
+            drop(_o_guard);
+            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                a.shape().clone(),
+            )))
+        }
+        DType::F32 => {
+            let output = device.alloc_zeros::<f32>(n_elements)?;
+            let a_slice = a_cuda.as_cuda_slice::<f32>()?;
+            let b_slice = b_cuda.as_cuda_slice::<f32>()?;
+
+            let (a_ptr, _a_guard) = slice_ptr(a_slice, 0);
+            let (b_ptr, _b_guard) = slice_ptr(b_slice, 0);
+            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+            unsafe {
+                ffi::fused_glu_f32(
+                    a_ptr as *const c_void,
+                    b_ptr as *const c_void,
+                    out_ptr as *mut c_void,
+                    n_elements as u32,
+                    activation as i32,
+                    stream,
+                );
+            }
+
+            drop(_o_guard);
+            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                a.shape().clone(),
+            )))
+        }
+        _ => candle_core::bail!("fused_glu_cuda: unsupported dtype {:?}", dtype),
+    }
+}
+
+/// Metal implementation of fused GLU
+#[cfg(feature = "metal")]
+fn fused_glu_metal(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Result<Tensor> {
+    let n_elements = a.elem_count();
+    let dtype = a.dtype();
+    let shape = a.shape().clone();
+
+    let (a_storage, a_layout) = a.storage_and_layout();
+    let (b_storage, b_layout) = b.storage_and_layout();
+
+    let a_metal = match &*a_storage {
+        candle_core::Storage::Metal(s) => s,
+        _ => candle_core::bail!("fused_glu_metal: expected Metal storage"),
+    };
+    let b_metal = match &*b_storage {
+        candle_core::Storage::Metal(s) => s,
+        _ => candle_core::bail!("fused_glu_metal: expected Metal storage"),
+    };
+
+    let device = a_metal.device();
+    let encoder = device.command_encoder()?;
+    encoder.set_label("fused-glu");
+
+    let output = device.new_buffer(n_elements, dtype, "fused-glu-output")?;
+
+    crate::metal_kernels::call_fused_glu(
+        device.device(),
+        &encoder,
+        &crate::metal_kernels::Kernels::new(),
+        dtype,
+        a_metal.buffer(),
+        b_metal.buffer(),
+        a_layout.start_offset() * dtype.size_in_bytes(),
+        b_layout.start_offset() * dtype.size_in_bytes(),
+        n_elements,
+        activation as i32,
+        &output,
+    )
+    .map_err(candle_core::Error::wrap)?;
+
+    let newstorage = candle_core::MetalStorage::new(output, device.clone(), n_elements, dtype);
+    Ok(Tensor::from((
+        candle_core::Storage::Metal(newstorage),
+        shape,
+    )))
+}
+
+/// Fused GLU activation: output = activation(a) * b
+///
+/// This fuses the activation function application and element-wise multiplication
+/// into a single pass, reducing memory bandwidth and eliminating
+/// intermediate tensor allocation.
+///
+/// Supported on CUDA (optimized kernel), Metal (optimized kernel), and CPU (rayon parallelism).
+///
+/// Args:
+///   a: Input tensor to apply activation to
+///   b: Tensor to multiply with activated values
+///   activation: The activation function to apply (SiLU, GELU, or ReLU)
+///
+/// Returns: Tensor with same shape as inputs
+pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Result<Tensor> {
+    let a = a.contiguous()?;
+    let b = b.contiguous()?;
+
+    if a.shape() != b.shape() {
+        candle_core::bail!(
+            "fused_glu: a and b must have same shape, got {:?} vs {:?}",
+            a.shape(),
+            b.shape()
+        );
+    }
+
+    match a.device() {
+        #[cfg(feature = "cuda")]
+        candle_core::Device::Cuda(_) => fused_glu_cuda(&a, &b, activation),
+
+        #[cfg(feature = "metal")]
+        candle_core::Device::Metal(_) => fused_glu_metal(&a, &b, activation),
+
+        candle_core::Device::Cpu => fused_glu_cpu_impl(&a, &b, activation),
+
+        #[allow(unreachable_patterns)]
+        _ => candle_core::bail!("fused_glu: unsupported device"),
+    }
+}
+
 mod tests {
     #[test]
     fn test_cumsum_exclusive_forward_cpu() {
@@ -1898,14 +2690,13 @@ mod tests {
     #[test]
     fn test_bitpack_8bit_cuda() {
         use crate::HqqBits;
-        use candle_core::DType;
         use candle_core::{Device, Tensor};
         let bits = HqqBits::Eight;
         let device = Device::new_cuda(0).unwrap();
-        let wq = Tensor::from_vec(vec![257_i32, 258, 259, 260, 511, 512], (3, 2), &device).unwrap();
+        // Use U8 tensor directly to avoid candle's to_dtype which may not have
+        // PTX compiled for newer GPU architectures (e.g., SM 120)
+        let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 255, 0], (3, 2), &device).unwrap();
         let c = bits.bitpack_type()(wq.clone())
-            .unwrap()
-            .to_dtype(DType::U8)
             .unwrap()
             .to_vec2::<u8>()
             .unwrap();
