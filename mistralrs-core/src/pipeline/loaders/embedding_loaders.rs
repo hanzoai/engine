@@ -8,6 +8,7 @@ use std::{
 use crate::{
     attention::ATTENTION_CHUNK_SIZE,
     embedding_models::{
+        bert::{BertConfig, BertEmbeddingModel},
         embedding_gemma::{EmbeddingGemma, EmbeddingGemmaConfig},
         qwen3_embedding::{Config as Qwen3EmbeddingConfig, Model as Qwen3EmbeddingModel},
     },
@@ -93,6 +94,8 @@ pub enum EmbeddingLoaderType {
     EmbeddingGemma,
     #[serde(rename = "qwen3embedding")]
     Qwen3Embedding,
+    #[serde(rename = "bert")]
+    Bert,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -101,6 +104,8 @@ impl EmbeddingLoaderType {
         match name {
             "Gemma3TextModel" => Ok(Self::EmbeddingGemma),
             "Qwen3ForCausalLM" => Ok(Self::Qwen3Embedding),
+            // BERT-based models (sentence-transformers, etc.)
+            "BertModel" | "BertForMaskedLM" | "BertForSequenceClassification" => Ok(Self::Bert),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers model class `{other}`. Please raise an issue."
             ),
@@ -114,8 +119,9 @@ impl FromStr for EmbeddingLoaderType {
         match s {
             "embeddinggemma" => Ok(Self::EmbeddingGemma),
             "qwen3embedding" => Ok(Self::Qwen3Embedding),
+            "bert" => Ok(Self::Bert),
             a => Err(format!(
-                "Unknown architecture `{a}`. Possible architectures: `embeddinggemma`, `qwen3embedding`."
+                "Unknown architecture `{a}`. Possible architectures: `embeddinggemma`, `qwen3embedding`, `bert`."
             )),
         }
     }
@@ -126,6 +132,7 @@ impl Display for EmbeddingLoaderType {
         match self {
             Self::EmbeddingGemma => write!(f, "embeddinggemma"),
             Self::Qwen3Embedding => write!(f, "qwen3embedding"),
+            Self::Bert => write!(f, "bert"),
         }
     }
 }
@@ -280,6 +287,7 @@ impl AutoEmbeddingLoader {
         match tp {
             EmbeddingLoaderType::EmbeddingGemma => Ok(Box::new(EmbeddingGemmaLoader)),
             EmbeddingLoaderType::Qwen3Embedding => Ok(Box::new(Qwen3EmbeddingLoader)),
+            EmbeddingLoaderType::Bert => Ok(Box::new(BertEmbeddingLoader)),
         }
     }
 }
@@ -730,6 +738,186 @@ impl DeviceMappedModelLoader for Qwen3EmbeddingLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+        };
+
+        Ok(Box::new(cfg))
+    }
+}
+
+/// [`EmbeddingModelLoader`] for a BERT model.
+///
+/// Supports sentence-transformers models like all-MiniLM-L6-v2, all-mpnet-base-v2,
+/// BAAI/bge-small-en-v1.5, and other BERT-based embedding models.
+///
+/// [`EmbeddingModelLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.EmbeddingModelLoader.html
+pub struct BertEmbeddingLoader;
+
+impl EmbeddingModelLoader for BertEmbeddingLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn EmbeddingModel + Send + Sync>> {
+        let cfg: BertConfig = serde_json::from_str(config)?;
+
+        Ok(Box::new(BertEmbeddingModel::new(
+            &cfg,
+            vb,
+            self.is_gptx(config)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        // BERT uses its own embedding format, not GPT-style
+        Ok(false)
+    }
+    fn has_causal_attention(&self, _: &str) -> Result<bool> {
+        // BERT uses bidirectional attention, not causal
+        Ok(false)
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: BertConfig = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+}
+
+impl IsqModelLoader for BertEmbeddingLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            // Attention layers
+            Regex::new(r"encoder\.layer\.(\d+)\.attention\.self\.query\.(weight|bias)$")?,
+            Regex::new(r"encoder\.layer\.(\d+)\.attention\.self\.key\.(weight|bias)$")?,
+            Regex::new(r"encoder\.layer\.(\d+)\.attention\.self\.value\.(weight|bias)$")?,
+            Regex::new(r"encoder\.layer\.(\d+)\.attention\.output\.dense\.(weight|bias)$")?,
+            // FFN layers
+            Regex::new(r"encoder\.layer\.(\d+)\.intermediate\.dense\.(weight|bias)$")?,
+            Regex::new(r"encoder\.layer\.(\d+)\.output\.dense\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            // BERT prefix
+            Regex::new(r"bert\.encoder\.layer\.(\d+)\.attention\.self\.query\.(weight|bias)$")?,
+            Regex::new(r"bert\.encoder\.layer\.(\d+)\.attention\.self\.key\.(weight|bias)$")?,
+            Regex::new(r"bert\.encoder\.layer\.(\d+)\.attention\.self\.value\.(weight|bias)$")?,
+            Regex::new(r"bert\.encoder\.layer\.(\d+)\.attention\.output\.dense\.(weight|bias)$")?,
+            Regex::new(r"bert\.encoder\.layer\.(\d+)\.intermediate\.dense\.(weight|bias)$")?,
+            Regex::new(r"bert\.encoder\.layer\.(\d+)\.output\.dense\.(weight|bias)$")?,
+        ])
+    }
+}
+
+impl DeviceMappedModelLoader for BertEmbeddingLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: BertConfig = serde_json::from_str(config)?;
+
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: BertConfig = serde_json::from_str(config)?;
+
+        let elems = {
+            // Word embeddings
+            let word_embeddings = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            // Position embeddings
+            let position_embeddings = cfg.hidden_size * cfg.max_position_embeddings / weight_pack_factor;
+            // Token type embeddings
+            let token_type_embeddings = cfg.hidden_size * cfg.type_vocab_size / weight_pack_factor;
+            // Embedding LayerNorm (weight + bias)
+            let embedding_layernorm = cfg.hidden_size * 2;
+
+            word_embeddings + position_embeddings + token_type_embeddings + embedding_layernorm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: BertConfig = serde_json::from_str(config)?;
+
+        let per_layer_elems = {
+            let h = cfg.hidden_size;
+            let i = cfg.intermediate_size;
+
+            // Self attention: Q, K, V projections (h -> h each, with bias)
+            let qkv_proj = 3 * (h * h / weight_pack_factor + h);
+            // Output projection (h -> h, with bias)
+            let out_proj = h * h / weight_pack_factor + h;
+            // Attention output LayerNorm
+            let attn_ln = h * 2;
+
+            // Intermediate FFN (h -> i, with bias)
+            let intermediate = h * i / weight_pack_factor + i;
+            // Output FFN (i -> h, with bias)
+            let output = i * h / weight_pack_factor + h;
+            // Output LayerNorm
+            let output_ln = h * 2;
+
+            qkv_proj + out_proj + attn_ln + intermediate + output + output_ln
+        };
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: BertConfig = serde_json::from_str(config)?;
+        Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: BertConfig = serde_json::from_str(config)?;
+
+        // BERT uses same number of heads for Q, K, V (no GQA)
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_attention_heads,  // BERT doesn't use GQA
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: None,  // BERT doesn't use sliding window
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
