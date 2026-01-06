@@ -11,7 +11,17 @@ keywords.workspace = true
 categories.workspace = true
 license.workspace = true
 homepage.workspace = true
-default-run = "mistralrs-server"
+default-run = "hanzo-engine"
+
+# Primary binary - Hanzo Engine
+[[bin]]
+name = "hanzo-engine"
+path = "src/main.rs"
+
+# Backwards compatibility alias
+[[bin]]
+name = "mistralrs-server"
+path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true

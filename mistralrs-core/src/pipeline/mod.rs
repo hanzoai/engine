@@ -38,9 +38,9 @@ pub use isq::{parse_isq_value, IsqModel, IsqOrganization, UQFF_MULTI_FILE_DELIMI
 use llguidance::toktrie::TokEnv;
 pub use loaders::{
     AdapterKind, AutoDeviceMapParams, AutoEmbeddingLoader, AutoNormalLoader, AutoVisionLoader,
-    DeepSeekV2Loader, DeepSeekV3Loader, DeviceMappedModelLoader, DiffusionLoaderType,
-    DiffusionModel, DiffusionModelLoader, EmbeddingGemmaLoader, EmbeddingLoaderType,
-    EmbeddingModel, EmbeddingModelLoader, EmbeddingModelPaths, EmbeddingModule,
+    BertEmbeddingLoader, DeepSeekV2Loader, DeepSeekV3Loader, DeviceMappedModelLoader,
+    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, EmbeddingGemmaLoader,
+    EmbeddingLoaderType, EmbeddingModel, EmbeddingModelLoader, EmbeddingModelPaths, EmbeddingModule,
     EmbeddingModulePaths, EmbeddingModuleType, FluxLoader, GLM4Loader, Gemma2Loader, Gemma3Loader,
     Gemma3nLoader, GemmaLoader, GraniteMoeHybridLoader, Idefics2Loader, Idefics3Loader,
     LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader,
