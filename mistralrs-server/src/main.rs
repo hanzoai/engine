@@ -22,7 +22,12 @@ use interactive_mode::interactive_mode;
 mod mcp_server;
 
 #[derive(Parser)]
-#[command(version, about, long_about = None)]
+#[command(
+    name = "hanzo-engine",
+    version,
+    about = "Hanzo Engine - High-performance AI inference engine for LLMs and embeddings",
+    long_about = "Hanzo Engine is a high-performance AI inference engine built on mistral.rs.\n\nIt provides OpenAI-compatible APIs for:\n  - Chat completions (LLMs)\n  - Text embeddings (BERT, Qwen3, Gemma)\n  - Vision models\n  - Audio models\n\nSupports Metal (macOS), CUDA (Linux/Windows), and CPU backends."
+)]
 struct Args {
     /// IP to serve on. Defaults to "0.0.0.0"
     #[arg(long)]

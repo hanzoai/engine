@@ -1,0 +1,50 @@
+[package]
+name = "hanzo-engine-dso"
+version = "0.1.0"
+edition = "2021"
+authors = ["Hanzo Network <dev@hanzo.ai>"]
+description = "DSO integration for Hanzo Engine - high-performance experience retrieval"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Hanzo Node integration
+hanzo-experience-registry = { path = "../../node/crates/hanzo-experience-registry" }
+hanzo-dso-aggregator = { path = "../../node/crates/hanzo-dso-aggregator" }
+hanzo-embedding = { path = "../../node/crates/hanzo-embedding" }
+
+# Mistral.rs core
+mistralrs-core = { path = "../mistralrs-core" }
+
+# Candle (Rust ML framework)
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "7511e510" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "7511e510" }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async runtime
+tokio = { version = "1.45", features = ["full"] }
+async-trait = "0.1"
+
+# Utilities
+thiserror = "2.0"
+anyhow = "1.0"
+tracing = "0.1"
+uuid = "1.17"
+
+# Performance
+rayon = "1.10"
+parking_lot = "0.12"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "retrieval"
+harness = false
+
+[features]
+default = ["cuda"]
+cuda = []
+metal = []
