@@ -2,16 +2,31 @@ use candle_core::{IndexOp, Result, Tensor, D};
 use candle_nn::Module;
 use serde::Deserialize;
 
+fn default_false() -> bool {
+    false
+}
+
+fn default_true() -> bool {
+    true
+}
+
 /// Pooling layer
 #[derive(Deserialize, Debug, Clone)]
 pub struct Pooling {
     pub word_embedding_dimension: usize,
+    #[serde(default = "default_false")]
     pub pooling_mode_cls_token: bool,
+    #[serde(default = "default_false")]
     pub pooling_mode_mean_tokens: bool,
+    #[serde(default = "default_false")]
     pub pooling_mode_max_tokens: bool,
+    #[serde(default = "default_false")]
     pub pooling_mode_mean_sqrt_len_tokens: bool,
+    #[serde(default = "default_false")]
     pub pooling_mode_weightedmean_tokens: bool,
+    #[serde(default = "default_false")]
     pub pooling_mode_lasttoken: bool,
+    #[serde(default = "default_true")]
     pub include_prompt: bool,
 }
 
@@ -31,9 +46,10 @@ impl Module for Pooling {
         }
         if self.pooling_mode_mean_tokens {
             // Assume full attention mask. Otherwise this must be updated
-
-            let sum_embeddings = xs.sum(1)?;
-            outputs.push(sum_embeddings);
+            // Mean pooling: sum(embeddings) / seq_len
+            let seq_len = xs.dim(1)? as f64;
+            let mean_embeddings = (xs.sum(1)? / seq_len)?;
+            outputs.push(mean_embeddings);
         }
         if self.pooling_mode_max_tokens {
             unimplemented!();
