@@ -36,9 +36,9 @@ rust-version = "1.86"
 # candle-metal-kernels = { version = "0.9.2-alpha.2" }
 # Use local hanzo-ml dependencies for development
 candle-core = { path = "../ml/hanzo-ml", package = "hanzo-ml" }
-candle-nn = { path = "../ml/hanzo-ml-nn", package = "hanzo-ml-nn" }
-candle-flash-attn = { path = "../ml/hanzo-ml-flash-attn", package = "hanzo-ml-flash-attn" }
-candle-flash-attn-v3 = { path = "../ml/hanzo-ml-flash-attn", package = "hanzo-ml-flash-attn" }
+candle-nn = { path = "../ml/hanzo-nn", package = "hanzo-nn" }
+candle-flash-attn = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
+candle-flash-attn-v3 = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
 candle-metal-kernels = { path = "../ml/hanzo-ml-metal-kernels", package = "hanzo-ml-metal-kernels" }
 # Git candle dependencies (for upstream compatibility)
 # candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.9.2-alpha.2", rev = "fd8448d" }
