@@ -1,11 +1,11 @@
-on: 
+on:
   schedule:
       - cron: '0 0 * * 1'
   push:
-    branches: 
+    branches:
       - master
   pull_request:
-    branches: 
+    branches:
       - master
   workflow_dispatch:
 
@@ -21,6 +21,12 @@ jobs:
         rust: [stable]
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: engine
+      - uses: actions/checkout@v4
+        with:
+          repository: hanzoai/ml
+          path: ml
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -29,7 +35,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: check
-          args: --package hanzo-engine
+          args: --manifest-path engine/Cargo.toml --package hanzo-engine
 
   test:
     name: Test Suite
@@ -40,6 +46,12 @@ jobs:
         rust: [stable]
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: engine
+      - uses: actions/checkout@v4
+        with:
+          repository: hanzoai/ml
+          path: ml
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -50,13 +62,19 @@ jobs:
           TESTS_HF_TOKEN: ${{ secrets.HF_TOKEN }}
         with:
           command: test
-          args: -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
+          args: --manifest-path engine/Cargo.toml -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
 
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: engine
+      - uses: actions/checkout@v4
+        with:
+          repository: hanzoai/ml
+          path: ml
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -66,13 +84,19 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: fmt
-          args: --all -- --check
+          args: --manifest-path engine/Cargo.toml --all -- --check
 
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: engine
+      - uses: actions/checkout@v4
+        with:
+          repository: hanzoai/ml
+          path: ml
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -82,13 +106,19 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --workspace --tests --examples -- -D warnings
+          args: --manifest-path engine/Cargo.toml --workspace --tests --examples -- -D warnings
 
   docs:
     name: Docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: engine
+      - uses: actions/checkout@v4
+        with:
+          repository: hanzoai/ml
+          path: ml
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -97,26 +127,32 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: doc
-          args: --workspace
+          args: --manifest-path engine/Cargo.toml --workspace
 
   hanzo-engine:
     name: Build Hanzo Engine
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: engine
+      - uses: actions/checkout@v4
+        with:
+          repository: hanzoai/ml
+          path: ml
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
           override: true
       - name: Build hanzo-engine
-        run: cargo build --package hanzo-engine --release
+        run: cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --release
       - name: Test hanzo-engine
-        run: cargo test --package hanzo-engine
+        run: cargo test --manifest-path engine/Cargo.toml --package hanzo-engine
       - name: Verify binary
         run: |
-          ./target/release/hanzo-engine --version
-          ./target/release/hanzo-engine --help
+          ./engine/target/release/hanzo-engine --version
+          ./engine/target/release/hanzo-engine --help
 
   typos:
     name: Typos
@@ -138,6 +174,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: engine
+      - uses: actions/checkout@v4
+        with:
+          repository: hanzoai/ml
+          path: ml
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -146,11 +188,4 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: check
-          args: --workspace
-
-  # run `mlc` (`cargo install mlc`)
-  # markdown-link-check:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: gaurav-nelson/github-action-markdown-link-check@v1
+          args: --manifest-path engine/Cargo.toml --workspace
