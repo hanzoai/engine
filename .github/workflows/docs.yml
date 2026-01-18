@@ -22,8 +22,15 @@ jobs:
       matrix:
         rust: [stable]
     steps:
-      - name: Checkout
+      - name: Checkout engine
         uses: actions/checkout@v4
+        with:
+          path: engine
+      - name: Checkout ml
+        uses: actions/checkout@v4
+        with:
+          repository: hanzoai/ml
+          path: ml
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -34,20 +41,20 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: doc
-          args: --no-deps
+          args: --manifest-path engine/Cargo.toml --no-deps
       - name: Build docs
         run: |
           rm -rf ./docs
-          echo "<meta http-equiv=\"refresh\" content=\"0; url=mistralrs\">" > target/doc/index.html
-          cp -r target/doc ./docs
+          echo "<meta http-equiv=\"refresh\" content=\"0; url=mistralrs\">" > engine/target/doc/index.html
+          cp -r engine/target/doc ./docs
       - name: Build Python docs
         run: |
           python3 -m venv myenv
           source myenv/bin/activate
           pip install maturin[patchelf] pdoc
-          cd mistralrs-pyo3
+          cd engine/mistralrs-pyo3
           maturin develop
-          cd ..
+          cd ../..
           pdoc mistralrs -o ./docs/pyo3
       - name: Deploy
         uses: JamesIves/github-pages-deploy-action@v4
