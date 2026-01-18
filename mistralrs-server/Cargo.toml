@@ -17,11 +17,13 @@ default-run = "hanzo-engine"
 [[bin]]
 name = "hanzo-engine"
 path = "src/main.rs"
+doc = false  # Avoid doc collision with hanzo-engine package
 
 # Backwards compatibility alias
 [[bin]]
 name = "mistralrs-server"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 anyhow.workspace = true
