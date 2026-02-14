@@ -12,7 +12,7 @@ use axum::{
     },
 };
 use either::Either;
-use mistralrs_core::{ChatCompletionResponse, MistralRs, Request, Response};
+use mistralrs_core::{ChatCompletionResponse, MistralRs, Request, Response, ToolType};
 use serde_json::Value;
 use tokio::sync::mpsc::Sender;
 use uuid::Uuid;
@@ -26,9 +26,10 @@ use crate::{
         JsonError, ModelErrorMessage,
     },
     openai::{
-        ChatCompletionRequest, Message, MessageContent, ResponsesChunk, ResponsesContent,
-        ResponsesCreateRequest, ResponsesDelta, ResponsesDeltaContent, ResponsesDeltaOutput,
-        ResponsesError, ResponsesObject, ResponsesOutput, ResponsesUsage,
+        ChatCompletionRequest, FunctionCalled, Message, MessageContent, ResponsesChunk,
+        ResponsesContent, ResponsesCreateRequest, ResponsesDelta, ResponsesDeltaContent,
+        ResponsesDeltaOutput, ResponsesError, ResponsesObject, ResponsesOutput, ResponsesUsage,
+        ToolCall,
     },
     streaming::{get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
@@ -189,6 +190,25 @@ impl IntoResponse for ResponsesResponder {
                 .to_response(http::StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
+}
+
+/// Convert ToolCallResponse to OpenAI-compatible ToolCall format
+fn convert_tool_calls(
+    tool_calls: &Option<Vec<mistralrs_core::ToolCallResponse>>,
+) -> Option<Vec<ToolCall>> {
+    tool_calls.as_ref().map(|calls| {
+        calls
+            .iter()
+            .map(|tc| ToolCall {
+                id: Some(tc.id.clone()),
+                tp: ToolType::Function,
+                function: FunctionCalled {
+                    name: tc.function.name.clone(),
+                    arguments: tc.function.arguments.clone(),
+                },
+            })
+            .collect()
+    })
 }
 
 /// Convert chat completion response to responses object
@@ -481,7 +501,7 @@ pub async fn create_response(
                                     content: Some(MessageContent::from_text(content.clone())),
                                     role: choice.message.role.clone(),
                                     name: None,
-                                    tool_calls: None, // TODO: Convert ToolCallResponse to ToolCall if needed
+                                    tool_calls: convert_tool_calls(&choice.message.tool_calls),
                                     tool_call_id: None,
                                 });
                             }
@@ -514,7 +534,7 @@ pub async fn create_response(
                                     content: Some(MessageContent::from_text(content.clone())),
                                     role: choice.message.role.clone(),
                                     name: None,
-                                    tool_calls: None, // TODO: Convert ToolCallResponse to ToolCall if needed
+                                    tool_calls: convert_tool_calls(&choice.message.tool_calls),
                                     tool_call_id: None,
                                 });
                             }
