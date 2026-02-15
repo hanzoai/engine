@@ -1,30 +1,31 @@
 <a name="top"></a>
 <h1 align="center">
-  mistral.rs
+  Hanzo Engine
 </h1>
 
 <h3 align="center">
-Blazingly fast LLM inference.
+Blazingly fast LLM inference. ZAP-native, MCP-ready.
 </h3>
 
 <p align="center">
-| <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Documentation</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Documentation</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> | <a href="https://matrix.to/#/#mistral.rs:matrix.org"><b>Matrix</b></a> |
+| <a href="https://github.com/hanzoai/engine"><b>GitHub</b></a> | <a href="https://discord.gg/5rPsrAzK7S"><b>Discord</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Docs</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Docs</b></a> |
 </p>
 
 <p align="center">
-  <a href="https://github.com/EricLBuehler/mistral.rs/stargazers">
-    <img src="https://img.shields.io/github/stars/EricLBuehler/mistral.rs?style=social&label=Star" alt="GitHub stars">
+  <a href="https://github.com/hanzoai/engine/stargazers">
+    <img src="https://img.shields.io/github/stars/hanzoai/engine?style=social&label=Star" alt="GitHub stars">
   </a>
 </p>
 
-**Mistral.rs is a cross-platform, highly-multimodal inference engine that brings you:**
-- All-in-one multimodal workflow: text↔text, text+vision↔text, text+vision+audio↔text, text→speech, text→image, text→embeddings
-- APIs: Rust, Python, OpenAI HTTP server (with Chat Completions, Responses API), MCP server
-- 🔗 **MCP Client**: Connect to external tools and services automatically (file systems, web search, databases, APIs)
-- Performance: ISQ, PagedAttention, FlashAttention, **per-layer topology optimization**
-- Support for embedding, speech generation, and image generation models
+**Hanzo Engine is a high-performance, multimodal inference engine built on [mistral.rs](https://github.com/EricLBuehler/mistral.rs):**
+- All-in-one multimodal workflow: text, vision, audio, speech, image generation, embeddings
+- APIs: Rust, Python, OpenAI-compatible HTTP server, MCP server
+- **MCP Server**: Expose tools and resources via Model Context Protocol
+- **MCP Client**: Connect to external tools and services automatically
+- Performance: ISQ, PagedAttention, FlashAttention, per-layer topology optimization
+- Part of the Hanzo AI stack: works with [cloud-api](https://github.com/hanzoai/cloud) (ZAP gateway) and [node](https://github.com/hanzoai/node) (agent platform)
 
-Please submit requests for new models [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
+Submit model requests [here](https://github.com/hanzoai/engine/issues).
 
 ## Supported Models
 
