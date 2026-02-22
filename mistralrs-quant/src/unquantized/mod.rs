@@ -37,6 +37,7 @@ impl QuantMethod for UnquantLinear {
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
             | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::PerTensorFP8 { .. }
             | QuantMethodConfig::Afq { .. }
             | QuantMethodConfig::MXFP4 { .. } => unreachable!(),
             QuantMethodConfig::Unquantized(l) => Ok(Self {
@@ -80,7 +81,7 @@ impl QuantMethod for UnquantLinear {
                 DeviceLocation::Cuda { .. } => {
                     // Try to use cublaslt, otherwise fallback to gemm
                     if let (Device::Cuda(_), Some(cublaslt)) =
-                        (a.device(), CUBLASLT_CONTROLLER.get())
+                        (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device()))
                     {
                         cublaslt
                             .batch_matmul(
@@ -121,7 +122,9 @@ impl QuantMethod for UnquantLinear {
                     }
                 }
             }
-        } else if let (Device::Cuda(_), Some(cublaslt)) = (a.device(), CUBLASLT_CONTROLLER.get()) {
+        } else if let (Device::Cuda(_), Some(cublaslt)) =
+            (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device()))
+        {
             // cuBLAS batch_matmul requires 3D tensors, fall back to regular matmul for 2D
             if a.rank() >= 3 && w.rank() >= 3 {
                 cublaslt
@@ -338,6 +341,20 @@ impl QuantMethod for UnquantLinear {
                     lin: Linear::new(w, b),
                     dtype: DType::F8E4M3,
                 })?))
+            }
+            Some(IsqType::F8Q8) => {
+                let _acquired_quantize_guard = guard.acquire(&device);
+                if imatrix_weight.is_some() {
+                    candle_core::bail!("F8Q8 does not support imatrix.");
+                }
+
+                let w = self.w.to_device(&device)?;
+                let b = if let Some(b) = &self.b {
+                    Some(b.to_device(&device)?)
+                } else {
+                    None
+                };
+                Ok(Arc::new(crate::F8Q8Linear::from_weight(&w, b)?))
             }
             None => {
                 let _acquired_quantize_guard = guard.acquire(&device);

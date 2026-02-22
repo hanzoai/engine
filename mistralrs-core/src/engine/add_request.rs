@@ -136,7 +136,7 @@ impl Engine {
             RequestMessage::VisionChat { ref audios, .. } => Some(audios.clone()),
             _ => None,
         };
-
+        let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
         let matcher = Arc::new(handle_seq_error!(
             ToolCallingMatcher::new(request.tool_choice.unwrap_or(ToolChoice::Auto),),
             request.response
@@ -161,20 +161,25 @@ impl Engine {
             } => Some(generation_params.clone()),
             _ => None,
         };
+
+        let image_gen_save_file = match &request.messages {
+            RequestMessage::ImageGeneration { save_file, .. } => save_file.clone(),
+            _ => None,
+        };
         let mut added_seq = false;
 
         let (mut prompt_tokens, prompt_text) = match request.messages {
             RequestMessage::Chat {
                 messages,
                 enable_thinking,
-                reasoning_effort: _,
+                reasoning_effort,
             }
             | RequestMessage::VisionChat {
                 images: _,
                 audios: _,
                 messages,
                 enable_thinking,
-                reasoning_effort: _,
+                reasoning_effort,
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
                 let tools = request.tools.unwrap_or_default();
@@ -184,6 +189,7 @@ impl Engine {
                     true,
                     true,
                     enable_thinking,
+                    reasoning_effort,
                     tools,
                 );
                 handle_seq_error!(template, request.response)
@@ -544,10 +550,15 @@ impl Engine {
                 images.clone(),
                 audios.clone(),
                 block_size,
-                Some(matcher.clone()),
+                if has_tools {
+                    Some(matcher.clone())
+                } else {
+                    None
+                },
                 image_generation_format,
                 seq_step_type,
                 diffusion_params.clone(),
+                image_gen_save_file.clone(),
                 seq_preallocated_cache,
                 request.return_raw_logits,
                 eos_toks,
@@ -577,6 +588,9 @@ impl Engine {
                         if let Err(e) = seq.enable_harmony_mode() {
                             warn!("Failed to enable Harmony mode: {e}");
                         }
+                    } else if chat_template.uses_think_tags() {
+                        // Enable think tag mode if the chat template uses <think> tags
+                        seq.enable_think_tag_mode();
                     }
                 }
             }
@@ -633,20 +647,6 @@ impl Engine {
                     seq.keep_num_audios(audios_to_keep);
                     seq.prefill_v2_normal(normal, toks, offset)
                 }
-                Some(MatchingCache::Paged {
-                    logical_blocks,
-                    physical_blocks,
-                    images_to_keep,
-                    audios_to_keep,
-                    toks,
-                    offset,
-                }) => {
-                    self.logger.add_prefix_cache_hit();
-
-                    seq.keep_num_images(images_to_keep);
-                    seq.keep_num_audios(audios_to_keep);
-                    seq.prefill_v2_paged(logical_blocks, physical_blocks, toks, offset)
-                }
                 None => seq,
             };
 
@@ -670,6 +670,7 @@ impl Engine {
                     request.add_generation_prompt,
                     request.add_special_tokens,
                     request.enable_thinking,
+                    request.reasoning_effort,
                     tools,
                 );
                 let toks = match template {

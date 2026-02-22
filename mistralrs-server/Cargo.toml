@@ -1,5 +1,6 @@
 [package]
 name = "mistralrs-server"
+publish = false
 readme = "../README.md"
 authors = ["Eric Buehler"]
 version.workspace = true
@@ -52,6 +53,11 @@ flash-attn = [
   "cuda",
   "mistralrs-core/flash-attn",
   "mistralrs-server-core/flash-attn",
+]
+flash-attn-v3 = [
+  "cuda",
+  "mistralrs-core/flash-attn-v3",
+  "mistralrs-server-core/flash-attn-v3",
 ]
 accelerate = ["mistralrs-core/accelerate", "mistralrs-server-core/accelerate"]
 mkl = ["mistralrs-core/mkl", "mistralrs-server-core/mkl"]
