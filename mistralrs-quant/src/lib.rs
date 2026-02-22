@@ -10,6 +10,7 @@ use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
 };
+use pertensor_fp8::pertensor_fp8_linear_b;
 
 #[cfg(feature = "metal")]
 mod metal_kernels;
@@ -20,6 +21,7 @@ mod blockwise_fp8;
 pub mod cublaslt;
 pub mod distributed;
 mod dummy;
+pub mod f8q8;
 mod fp8;
 pub mod gemv;
 mod gguf;
@@ -28,6 +30,8 @@ mod hqq;
 mod imatrix;
 mod lora;
 mod mxfp4;
+mod pending_layer;
+mod pertensor_fp8;
 pub mod rotary;
 pub mod safetensors;
 mod scalar_fp8;
@@ -54,6 +58,7 @@ pub use distributed::{
     BarrierLike, Comm, Id, RingConfig, SumAllReduce,
 };
 pub use dummy::DummyLayer;
+pub use f8q8::F8Q8Linear;
 pub use fp8::FP8Linear;
 #[cfg(feature = "cuda")]
 pub use gemv::gemv;
@@ -67,13 +72,16 @@ pub use lora::{
     LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
 };
 pub use mxfp4::MXFP4Layer;
+pub use pending_layer::PendingIsqLayer;
+pub use pertensor_fp8::PerTensorFP8Linear;
 pub use unquantized::UnquantLinear;
+pub use utils::flash_attn_sinks_metal;
+pub use utils::flash_attn_sinks_varlen_metal;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_interleaved;
 pub use utils::isq::apply_immediate_isq;
-#[cfg(feature = "cuda")]
 pub use utils::softmax_with_sinks;
 pub use utils::{fused_glu, GluActivationType};
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
@@ -88,6 +96,10 @@ pub struct ImmediateIsqParams {
     pub ty: Option<IsqType>,
     pub predicates: Vec<Regex>,
     pub overrides: Vec<ImmediateIsqOverride>,
+    /// Thread pool for parallel immediate ISQ on discrete GPUs.
+    /// When `Some`, `apply_immediate_isq` will spawn quantization tasks
+    /// on this pool and return `PendingIsqLayer` wrappers.
+    pub pool: Option<Arc<rayon::ThreadPool>>,
 }
 
 #[derive(Clone, Debug)]
@@ -108,13 +120,15 @@ thread_local! {
 }
 
 pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>) {
-    set_immediate_isq_with_overrides(isq, predicates, Vec::new());
+    let (pool, _) = create_isq_thread_pool(isq);
+    set_immediate_isq_with_pool(isq, predicates, Vec::new(), pool);
 }
 
-pub fn set_immediate_isq_with_overrides(
+pub fn set_immediate_isq_with_pool(
     isq: Option<IsqType>,
     predicates: Vec<Regex>,
     overrides: Vec<ImmediateIsqOverride>,
+    pool: rayon::ThreadPool,
 ) {
     ENGINE_IMMEDIATE_ISQ.with(|cell| {
         *cell.borrow_mut() = Some(ImmediateIsqParams {
@@ -122,8 +136,33 @@ pub fn set_immediate_isq_with_overrides(
             ty: isq,
             predicates,
             overrides,
+            pool: Some(Arc::new(pool)),
         });
     });
+}
+
+/// Create a rayon thread pool for parallel immediate ISQ.
+/// Returns `(pool, num_threads)` so callers can log the thread count.
+///
+/// Thread count is based on the quantization type:
+/// - GGML types (Q2K-Q8K) and F8E4M3: `rayon::current_num_threads()` (CPU quantization)
+/// - HQQ/AFQ: 1 thread (GPU quantization, serialized by `QuantizeOntoGuard`)
+pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize) {
+    let num_threads = if std::env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
+        1
+    } else if let Some(ty) = ty {
+        ty.get_max_isq_cpu_threads()
+            .map(usize::from)
+            .unwrap_or_else(rayon::current_num_threads)
+    } else {
+        rayon::current_num_threads()
+    };
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build()
+        .expect("Failed to create ISQ thread pool");
+    (pool, num_threads)
 }
 
 pub fn get_immediate_isq() -> Option<ImmediateIsqParams> {
@@ -185,7 +224,7 @@ pub enum QuantizedConfig {
         is_awq: bool,
     },
     Fp8 {
-        weight_block_size: Vec<usize>,
+        weight_block_size: Option<Vec<usize>>,
     },
     Bitsandbytes {
         bnb_4bit_quant_type: Option<String>,
@@ -232,10 +271,10 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                 })
             }
             Some(m) if m == "fp8" => {
-                let weight_block_size = raw
-                    .weight_block_size
-                    .ok_or_else(|| serde::de::Error::missing_field("weight_block_size"))?;
-                Ok(QuantizedConfig::Fp8 { weight_block_size })
+                // weight_block_size is optional - None means per-tensor quantization
+                Ok(QuantizedConfig::Fp8 {
+                    weight_block_size: raw.weight_block_size,
+                })
             }
             Some(m) if m == "bitsandbytes" => Ok(QuantizedConfig::Bitsandbytes {
                 bnb_4bit_quant_type: raw.bnb_4bit_quant_type,
@@ -367,6 +406,13 @@ pub enum QuantMethodConfig {
         dequant_dtype: DType,
         weight_block_size: Vec<usize>,
     },
+    PerTensorFP8 {
+        weight: Tensor,
+        weight_scale_inv: Tensor,
+        activation_scale: Option<Tensor>,
+        bias: Option<Tensor>,
+        dequant_dtype: DType,
+    },
     Afq {
         weight: Tensor,
         bias: Option<Tensor>,
@@ -468,6 +514,7 @@ impl Convolution {
     }
 }
 
+/// In-situ quantization type specifying the format to apply to model weights.
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Eq, Serialize, Deserialize)]
 pub enum IsqType {
     Q4_0,
@@ -493,6 +540,7 @@ pub enum IsqType {
     AFQ4,
     AFQ3,
     AFQ2,
+    F8Q8,
 }
 
 impl IsqType {
@@ -524,6 +572,8 @@ impl IsqType {
                 .div_ceil(GgmlDType::Q6K.type_size()),
             Self::Q8K => (dtype.size_in_bytes() * GgmlDType::Q8K.block_size())
                 .div_ceil(GgmlDType::Q8K.type_size()),
+            // F8Q8: 33 bytes per 32 values -> similar to Q8_0
+            Self::F8Q8 => (dtype.size_in_bytes() * 32).div_ceil(33),
             // Estimates
             Self::HQQ4 => 4,
             Self::HQQ8 => 2,
@@ -544,7 +594,7 @@ impl IsqType {
                 // Use 1 because our HQQ quantizes on the GPU
                 Some(1.try_into().unwrap())
             }
-            IsqType::F8E4M3 => None,
+            IsqType::F8E4M3 | IsqType::F8Q8 => None,
             IsqType::Q2K
             | IsqType::Q3K
             | IsqType::Q4K
@@ -633,6 +683,7 @@ pub enum QuantizedSerdeType {
     Hqq = 2,
     Fp8 = 3,
     Afq = 4,
+    F8Q8 = 5,
 }
 
 impl TryFrom<usize> for QuantizedSerdeType {
@@ -644,6 +695,7 @@ impl TryFrom<usize> for QuantizedSerdeType {
             2 => Ok(Self::Hqq),
             3 => Ok(Self::Fp8),
             4 => Ok(Self::Afq),
+            5 => Ok(Self::F8Q8),
             other => candle_core::bail!("QuantizedSerdeType {other} is invalid."),
         }
     }
@@ -851,8 +903,26 @@ pub fn linear_no_bias(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantizedConfig::Fp8 { .. } => {
-                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, Default::default(), vb)?
+            QuantizedConfig::Fp8 { weight_block_size } => {
+                if weight_block_size.is_some() {
+                    blockwise_fp8_linear_b(
+                        in_dim,
+                        out_dim,
+                        quant_conf,
+                        false,
+                        Default::default(),
+                        vb,
+                    )?
+                } else {
+                    pertensor_fp8_linear_b(
+                        in_dim,
+                        out_dim,
+                        quant_conf,
+                        false,
+                        Default::default(),
+                        vb,
+                    )?
+                }
             }
             QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
@@ -898,8 +968,26 @@ pub fn linear(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantizedConfig::Fp8 { .. } => {
-                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, true, Default::default(), vb)?
+            QuantizedConfig::Fp8 { weight_block_size } => {
+                if weight_block_size.is_some() {
+                    blockwise_fp8_linear_b(
+                        in_dim,
+                        out_dim,
+                        quant_conf,
+                        true,
+                        Default::default(),
+                        vb,
+                    )?
+                } else {
+                    pertensor_fp8_linear_b(
+                        in_dim,
+                        out_dim,
+                        quant_conf,
+                        true,
+                        Default::default(),
+                        vb,
+                    )?
+                }
             }
             QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, true, vb)?) as Arc<_>

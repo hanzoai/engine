@@ -8,7 +8,7 @@ GPT-OSS is a Mixture of Experts (MoE) language model with specialized attention 
 - Hybrid cache supporting both full and sliding window attention
 
 ```bash
-./mistralrs-server -i plain -m openai/gpt-oss-20b -a gpt_oss
+mistralrs run -m openai/gpt-oss-20b
 ```
 
 > Note: GPT-OSS MoE experts are pre-quantized in MXFP4 format. ISQ can be applied to attention layers only.
@@ -16,10 +16,10 @@ GPT-OSS is a Mixture of Experts (MoE) language model with specialized attention 
 > Note: PagedAttention is not supported for GPT-OSS due to custom attention with sinks.
 
 ## HTTP API
-You can find a more detailed example [here](../examples/server/gpt_oss.py).
+You can find a more detailed example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/gpt_oss.py).
 
 ```bash
-./mistralrs-server --port 1234 plain -m openai/gpt-oss-20b -a gpt_oss
+mistralrs serve -p 1234 -m openai/gpt-oss-20b
 ```
 
 ```py
@@ -48,8 +48,8 @@ while True:
     messages.append({"role": "assistant", "content": resp})
 ```
 
-## Python API
-You can find a more detailed example [here](../examples/python/gpt_oss.py).
+## Python SDK
+You can find a more detailed example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gpt_oss.py).
 
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
@@ -77,8 +77,8 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-## Rust API
-You can find a more detailed example [here](../mistralrs/examples/gpt_oss/main.rs).
+## Rust SDK
+You can find a more detailed example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs).
 
 ```rust
 use anyhow::Result;
