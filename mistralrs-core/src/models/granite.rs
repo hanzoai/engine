@@ -15,7 +15,7 @@ use std::{
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     kv_cache::{HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType},
     layers::{embedding, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
@@ -1397,6 +1397,7 @@ impl CausalSelfAttention {
                 // GraniteMoeHybrid uses attention_multiplier instead of 1/sqrt(d)
                 softmax_scale: cfg.attention_multiplier,
                 sliding_window: None,
+                sinks: None,
             },
         })
     }
@@ -1851,6 +1852,7 @@ impl GraniteMoeHybrid {
                 sliding_window: None,
                 k_head_dim: cfg.head_dim(),
                 v_head_dim: cfg.head_dim(),
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
             embedding_multiplier: cfg.embedding_multiplier,
@@ -1901,6 +1903,7 @@ impl GraniteMoeHybrid {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             x = self.mapper.map(x, layer_idx)?;
@@ -1911,9 +1914,10 @@ impl GraniteMoeHybrid {
                     if let GraniteLayerCache::Attention(kv_cache) =
                         &mut internal_cache.caches[layer_idx]
                     {
+                        let mask_for_layer = mask.as_ref().map(|m| m.get(x.device()).clone());
                         x = block.forward(
                             &x,
-                            &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                            &mask_for_layer,
                             seqlen_offsets,
                             kv_cache,
                             metadata.as_ref().map(|(kv_cache, metadata)| {
@@ -1986,7 +1990,8 @@ impl GraniteMoeHybrid {
         }
 
         let x = x.to_device(&self.device)?;
-        let mut x = self.ln_f.forward(&x)?;
+        let x = self.ln_f.forward(&x)?;
+        let mut x = extract_logits(&x, context_lens)?;
 
         if let Some(t) = self.lm_head.quantized_act_type() {
             x = x.to_dtype(t)?;
@@ -1996,7 +2001,7 @@ impl GraniteMoeHybrid {
         // Scale logits
         logits = scale_tensor(logits, self.logits_scaling)?;
 
-        extract_logits(&logits, context_lens)
+        Ok(logits)
     }
 
     pub fn residual_tensors_m(&self, uvb_m: UnVarBuilder) -> Vec<(String, Tensor)> {
