@@ -373,8 +373,8 @@ async fn text_interactive_mode(
                         io::stdout().flush().unwrap();
                     }
 
-                    if choice.finish_reason.is_some() {
-                        if matches!(choice.finish_reason.as_ref().unwrap().as_str(), "length") {
+                    if let Some(ref finish_reason) = choice.finish_reason {
+                        if matches!(finish_reason.as_str(), "length") {
                             print!("...");
                         }
                         break;
@@ -687,8 +687,8 @@ async fn vision_interactive_mode(
                         io::stdout().flush().unwrap();
                     }
 
-                    if choice.finish_reason.is_some() {
-                        if matches!(choice.finish_reason.as_ref().unwrap().as_str(), "length") {
+                    if let Some(ref finish_reason) = choice.finish_reason {
+                        if matches!(finish_reason.as_str(), "length") {
                             print!("...");
                         }
                         break;
@@ -804,6 +804,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
                 prompt: prompt.to_string(),
                 format: ImageGenerationResponseFormat::Url,
                 generation_params: diffusion_params.clone(),
+                save_file: None,
             },
             sampling_params: SamplingParams::deterministic(),
             response: tx,
