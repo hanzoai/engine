@@ -27,30 +27,26 @@ jobs:
         with:
           repository: hanzoai/ml
           path: ml
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: ${{ matrix.rust }}
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: --manifest-path engine/Cargo.toml --package hanzo-engine
+      - name: Cargo check
+        run: cargo check --manifest-path engine/Cargo.toml --package hanzo-engine
 
   check-metal:
     name: Check (metal)
     runs-on: macOS-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - uses: actions-rs/cargo@v1
+          path: engine
+      - uses: actions/checkout@v4
         with:
-          command: check
-          args: --workspace --features metal
+          repository: hanzoai/ml
+          path: ml
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cargo check (metal)
+        run: cargo check --manifest-path engine/Cargo.toml --workspace --features metal
 
   test:
     name: Test Suite
@@ -67,17 +63,13 @@ jobs:
         with:
           repository: hanzoai/ml
           path: ml
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: ${{ matrix.rust }}
-          override: true
-      - uses: actions-rs/cargo@v1
+      - name: Cargo test
+        run: cargo test --manifest-path engine/Cargo.toml -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
         env:
           TESTS_HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        with:
-          command: test
-          args: --manifest-path engine/Cargo.toml -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
 
   fmt:
     name: Rustfmt
@@ -90,16 +82,11 @@ jobs:
         with:
           repository: hanzoai/ml
           path: ml
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - run: rustup component add rustfmt
-      - uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --manifest-path engine/Cargo.toml --all -- --check
+          components: rustfmt
+      - name: Cargo fmt
+        run: cargo fmt --manifest-path engine/Cargo.toml --all -- --check
 
   clippy:
     name: Clippy
@@ -112,16 +99,11 @@ jobs:
         with:
           repository: hanzoai/ml
           path: ml
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - run: rustup component add clippy
-      - uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: --manifest-path engine/Cargo.toml --workspace --tests --examples -- -D warnings
+          components: clippy
+      - name: Cargo clippy
+        run: cargo clippy --manifest-path engine/Cargo.toml --workspace --tests --examples -- -D warnings
 
   docs:
     name: Docs
@@ -134,15 +116,9 @@ jobs:
         with:
           repository: hanzoai/ml
           path: ml
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          command: doc
-          args: --manifest-path engine/Cargo.toml --workspace
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cargo doc
+        run: cargo doc --manifest-path engine/Cargo.toml --workspace
 
   hanzo-engine:
     name: Build Hanzo Engine
@@ -155,11 +131,7 @@ jobs:
         with:
           repository: hanzoai/ml
           path: ml
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
+      - uses: dtolnay/rust-toolchain@stable
       - name: Build hanzo-engine
         run: cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --release
       - name: Test hanzo-engine
@@ -174,11 +146,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
       - name: Typos check with custom config file
         uses: crate-ci/typos@master
         with:
@@ -195,12 +162,8 @@ jobs:
         with:
           repository: hanzoai/ml
           path: ml
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
-          toolchain: 1.90.0
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: --manifest-path engine/Cargo.toml --workspace
+          toolchain: "1.90.0"
+      - name: Cargo check (MSRV)
+        run: cargo check --manifest-path engine/Cargo.toml --workspace
