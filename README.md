@@ -525,11 +525,11 @@ spec:
 
 ```bash
 # 2x GPU tensor parallelism
-MISTRALRS_MN_LOCAL_WORLD_SIZE=2 hanzo-engine serve \
+HANZO_ENGINE_LOCAL_WORLD_SIZE=2 hanzo-engine serve \
   -m zenlm/zen4 --port 8000
 
 # 4x GPU
-MISTRALRS_MN_LOCAL_WORLD_SIZE=4 hanzo-engine serve \
+HANZO_ENGINE_LOCAL_WORLD_SIZE=4 hanzo-engine serve \
   -m zenlm/zen4-max --port 8000
 ```
 
@@ -645,8 +645,8 @@ hanzo-engine tune -m zenlm/zen4-mini --emit-config optimal.toml
 
 | Variable | Description |
 |----------|-------------|
-| `MISTRALRS_MN_LOCAL_WORLD_SIZE` | Number of GPUs for NCCL tensor parallelism |
-| `MISTRALRS_NO_NCCL=1` | Disable NCCL, use device mapping instead |
+| `HANZO_ENGINE_LOCAL_WORLD_SIZE` | Number of GPUs for NCCL tensor parallelism |
+| `HANZO_ENGINE_NO_NCCL=1` | Disable NCCL, use device mapping instead |
 | `RING_CONFIG` | Path to ring topology JSON config |
 | `KEEP_ALIVE_INTERVAL` | SSE keep-alive interval in ms |
 | `HF_TOKEN` | HuggingFace Hub authentication token |
