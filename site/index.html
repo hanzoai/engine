@@ -3,8 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Hanzo Engine -- High-Performance AI Inference</title>
-  <meta name="description" content="Cloud-native LLM inference engine built in Rust. Serves 60+ model architectures with CUDA, Metal, and CPU backends. OpenAI-compatible API.">
+  <title>Hanzo Engine — Production AI Inference at Any Scale</title>
+  <meta name="description" content="High-performance production inference serving Zen models and 60+ architectures. CUDA, Metal, and CPU backends. OpenAI-compatible API. Deploy anywhere.">
+  <meta name="keywords" content="AI inference, LLM serving, CUDA, production AI, Zen models, OpenAI compatible, model serving, GPU inference">
+  <meta property="og:title" content="Hanzo Engine — Production AI Inference at Any Scale">
+  <meta property="og:description" content="Serve Zen models and 60+ architectures with CUDA, Metal, and CPU backends. OpenAI-compatible API.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://engine.hanzo.ai">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>H</text></svg>">
   <style>
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
@@ -20,16 +25,26 @@
     a { color: #f5f5f5; text-decoration: none; }
     a:hover { text-decoration: underline; }
 
+    code, .mono {
+      font-family: 'SF Mono', 'Fira Code', 'Menlo', 'Consolas', monospace;
+    }
+
     .container {
-      max-width: 960px;
+      max-width: 1060px;
       margin: 0 auto;
       padding: 0 24px;
     }
 
     /* ---- Nav ---- */
     nav {
-      border-bottom: 1px solid #222;
+      border-bottom: 1px solid #1a1a1a;
       padding: 16px 0;
+      position: sticky;
+      top: 0;
+      background: rgba(0,0,0,0.92);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      z-index: 100;
     }
     nav .container {
       display: flex;
@@ -56,24 +71,42 @@
 
     /* ---- Hero ---- */
     .hero {
-      padding: 96px 0 80px;
+      padding: 100px 0 88px;
       text-align: center;
-      border-bottom: 1px solid #222;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    .hero-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: #888;
+      border: 1px solid #333;
+      border-radius: 100px;
+      padding: 6px 16px;
+      margin-bottom: 28px;
     }
     .hero h1 {
-      font-size: 48px;
+      font-size: 56px;
       font-weight: 700;
       color: #fff;
-      letter-spacing: -0.03em;
-      margin-bottom: 12px;
+      letter-spacing: -0.035em;
+      margin-bottom: 16px;
+      line-height: 1.1;
     }
     .hero .tagline {
-      font-size: 18px;
+      font-size: 20px;
       color: #888;
-      margin-bottom: 40px;
-      max-width: 520px;
-      margin-left: auto;
-      margin-right: auto;
+      max-width: 620px;
+      margin: 0 auto 20px;
+      line-height: 1.5;
+    }
+    .hero .sub-tagline {
+      font-size: 14px;
+      color: #555;
+      max-width: 560px;
+      margin: 0 auto 44px;
     }
     .hero-install {
       display: inline-block;
@@ -87,6 +120,7 @@
       cursor: pointer;
       transition: border-color 0.15s;
       position: relative;
+      margin-bottom: 28px;
     }
     .hero-install:hover { border-color: #555; text-decoration: none; }
     .hero-install .copy-hint {
@@ -95,11 +129,40 @@
       color: #555;
       margin-left: 16px;
     }
+    .hero-ctas {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 28px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      transition: all 0.15s;
+      cursor: pointer;
+      border: none;
+    }
+    .btn-primary {
+      background: #fff;
+      color: #000;
+    }
+    .btn-primary:hover { background: #ddd; text-decoration: none; color: #000; }
+    .btn-secondary {
+      background: transparent;
+      color: #f5f5f5;
+      border: 1px solid #333;
+    }
+    .btn-secondary:hover { border-color: #555; text-decoration: none; }
 
     /* ---- Sections ---- */
     section {
-      padding: 72px 0;
-      border-bottom: 1px solid #222;
+      padding: 80px 0;
+      border-bottom: 1px solid #1a1a1a;
     }
     section:last-of-type { border-bottom: none; }
 
@@ -112,20 +175,54 @@
       margin-bottom: 12px;
     }
     .section-title {
-      font-size: 28px;
+      font-size: 32px;
       font-weight: 700;
       color: #fff;
-      letter-spacing: -0.02em;
+      letter-spacing: -0.025em;
       margin-bottom: 16px;
+      line-height: 1.2;
     }
     .section-desc {
       font-size: 15px;
       color: #888;
       max-width: 640px;
-      margin-bottom: 40px;
+      margin-bottom: 48px;
+      line-height: 1.6;
     }
 
-    /* ---- Feature Grid ---- */
+    /* ---- Value Props (4-col) ---- */
+    .value-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+    .value-card {
+      background: #0a0a0a;
+      border: 1px solid #1a1a1a;
+      border-radius: 8px;
+      padding: 28px 24px;
+      transition: border-color 0.15s;
+    }
+    .value-card:hover { border-color: #333; }
+    .value-icon {
+      font-size: 24px;
+      margin-bottom: 16px;
+      display: block;
+      color: #888;
+    }
+    .value-card h3 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+    .value-card p {
+      font-size: 13px;
+      color: #888;
+      line-height: 1.55;
+    }
+
+    /* ---- Feature Grid (3-col) ---- */
     .feature-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -135,7 +232,7 @@
       background: #0a0a0a;
       border: 1px solid #1a1a1a;
       border-radius: 8px;
-      padding: 24px;
+      padding: 28px 24px;
       transition: border-color 0.15s;
     }
     .feature-card:hover { border-color: #333; }
@@ -145,20 +242,129 @@
       color: #fff;
       margin-bottom: 8px;
     }
+    .feature-card .feat-stat {
+      font-size: 12px;
+      color: #555;
+      margin-bottom: 12px;
+      font-weight: 500;
+    }
     .feature-card p {
       font-size: 13px;
       color: #888;
+      line-height: 1.55;
+    }
+
+    /* ---- Zen Models ---- */
+    .model-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    .model-card {
+      background: #0a0a0a;
+      border: 1px solid #1a1a1a;
+      border-radius: 8px;
+      padding: 24px;
+      transition: border-color 0.15s;
+    }
+    .model-card:hover { border-color: #333; }
+    .model-card h3 {
+      font-size: 16px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+    .model-card .model-desc {
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 16px;
+    }
+    .model-meta {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .model-meta span {
+      font-size: 11px;
+      color: #555;
+      font-weight: 500;
+    }
+    .model-meta .meta-val {
+      color: #ccc;
+      font-family: 'SF Mono', 'Fira Code', 'Menlo', 'Consolas', monospace;
+    }
+    .model-snippet {
+      background: #111;
+      border: 1px solid #1a1a1a;
+      border-radius: 6px;
+      padding: 12px 14px;
+      overflow-x: auto;
+    }
+    .model-snippet pre {
+      font-family: 'SF Mono', 'Fira Code', 'Menlo', 'Consolas', monospace;
+      font-size: 11px;
       line-height: 1.5;
+      color: #888;
+    }
+    .model-snippet .cmd { color: #ccc; }
+    .models-footer {
+      text-align: center;
+      margin-top: 32px;
+    }
+    .models-footer a {
+      font-size: 13px;
+      color: #888;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 10px 24px;
+      display: inline-block;
+      transition: all 0.15s;
+    }
+    .models-footer a:hover { color: #fff; border-color: #555; text-decoration: none; }
+
+    /* ---- Deploy Tabs ---- */
+    .deploy-tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 1px solid #1a1a1a;
+      margin-bottom: 0;
+    }
+    .deploy-tab {
+      padding: 10px 20px;
+      font-size: 13px;
+      font-weight: 500;
+      color: #555;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+      background: none;
+      border-top: none;
+      border-left: none;
+      border-right: none;
+      font-family: inherit;
+    }
+    .deploy-tab:hover { color: #888; }
+    .deploy-tab.active {
+      color: #fff;
+      border-bottom-color: #fff;
+    }
+    .deploy-panel {
+      display: none;
+    }
+    .deploy-panel.active {
+      display: block;
     }
 
     /* ---- Code Blocks ---- */
     .code-block {
       background: #111;
-      border: 1px solid #222;
-      border-radius: 8px;
-      padding: 20px 24px;
+      border: 1px solid #1a1a1a;
+      border-radius: 0 0 8px 8px;
+      padding: 24px 28px;
       overflow-x: auto;
-      margin-bottom: 16px;
+    }
+    .code-block.standalone {
+      border-radius: 8px;
     }
     .code-block pre {
       font-family: 'SF Mono', 'Fira Code', 'Menlo', 'Consolas', monospace;
@@ -168,6 +374,8 @@
     }
     .code-block .comment { color: #555; }
     .code-block .cmd { color: #f5f5f5; }
+    .code-block .str { color: #aaa; }
+    .code-block .key { color: #888; }
     .code-label {
       font-size: 11px;
       font-weight: 600;
@@ -201,45 +409,135 @@
     }
     tbody td {
       padding: 10px 16px;
-      color: #ccc;
-      border-bottom: 1px solid #111;
+      color: #888;
+      border-bottom: 1px solid #0f0f0f;
     }
     tbody tr:last-child td { border-bottom: none; }
     tbody tr:hover { background: #0a0a0a; }
     td:first-child { color: #fff; font-weight: 500; }
-
-    /* ---- Architecture List ---- */
-    .arch-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 12px;
+    td code {
+      font-size: 12px;
+      background: #111;
+      padding: 2px 6px;
+      border-radius: 4px;
     }
-    .arch-item {
+
+    /* ---- API Reference ---- */
+    .endpoint-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 32px;
+    }
+    .endpoint {
+      display: flex;
+      align-items: center;
+      gap: 12px;
       background: #0a0a0a;
       border: 1px solid #1a1a1a;
       border-radius: 8px;
-      padding: 16px 20px;
+      padding: 12px 20px;
       transition: border-color 0.15s;
     }
-    .arch-item:hover { border-color: #333; }
-    .arch-item h4 {
+    .endpoint:hover { border-color: #333; }
+    .endpoint .method {
+      font-family: 'SF Mono', 'Fira Code', 'Menlo', 'Consolas', monospace;
+      font-size: 11px;
+      font-weight: 700;
+      color: #888;
+      min-width: 44px;
+    }
+    .endpoint .path {
+      font-family: 'SF Mono', 'Fira Code', 'Menlo', 'Consolas', monospace;
+      font-size: 13px;
+      color: #f5f5f5;
+    }
+    .endpoint .ep-desc {
+      font-size: 12px;
+      color: #555;
+      margin-left: auto;
+    }
+
+    .api-examples {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+    .api-examples .code-block {
+      border-radius: 8px;
+    }
+    .api-example-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #555;
+      margin-bottom: 8px;
+    }
+
+    /* ---- Comparison ---- */
+    .comparison-table thead th:first-child { width: 180px; }
+    .comparison-table thead th:not(:first-child) { text-align: center; }
+    .comparison-table tbody td:not(:first-child) { text-align: center; color: #ccc; }
+
+    /* ---- Benchmarks ---- */
+    .bench-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    .bench-card {
+      background: #0a0a0a;
+      border: 1px solid #1a1a1a;
+      border-radius: 8px;
+      padding: 28px 24px;
+      text-align: center;
+      transition: border-color 0.15s;
+    }
+    .bench-card:hover { border-color: #333; }
+    .bench-card .bench-model {
       font-size: 14px;
       font-weight: 600;
       color: #fff;
       margin-bottom: 4px;
     }
-    .arch-item p {
-      font-size: 12px;
-      color: #666;
+    .bench-card .bench-params {
+      font-size: 11px;
+      color: #555;
+      margin-bottom: 20px;
     }
-
-    /* ---- Comparison ---- */
-    .comparison-table thead th:first-child { width: 200px; }
+    .bench-bar-wrap {
+      margin-bottom: 12px;
+    }
+    .bench-bar-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #666;
+      margin-bottom: 4px;
+    }
+    .bench-bar-label .bar-val {
+      color: #ccc;
+      font-family: 'SF Mono', 'Fira Code', 'Menlo', 'Consolas', monospace;
+      font-weight: 500;
+    }
+    .bench-bar {
+      height: 4px;
+      background: #1a1a1a;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .bench-bar-fill {
+      height: 100%;
+      background: #444;
+      border-radius: 2px;
+      transition: width 0.3s ease;
+    }
 
     /* ---- Footer ---- */
     footer {
-      border-top: 1px solid #222;
-      padding: 32px 0;
+      border-top: 1px solid #1a1a1a;
+      padding: 40px 0;
     }
     footer .container {
       display: flex;
@@ -265,21 +563,32 @@
     .footer-links a:hover { color: #fff; text-decoration: none; }
 
     /* ---- Responsive ---- */
+    @media (max-width: 900px) {
+      .value-grid { grid-template-columns: repeat(2, 1fr); }
+      .model-grid { grid-template-columns: repeat(2, 1fr); }
+      .api-examples { grid-template-columns: 1fr; }
+      .bench-grid { grid-template-columns: repeat(2, 1fr); }
+    }
     @media (max-width: 768px) {
-      .hero { padding: 64px 0 56px; }
-      .hero h1 { font-size: 32px; }
-      .hero .tagline { font-size: 16px; }
+      .hero { padding: 72px 0 64px; }
+      .hero h1 { font-size: 36px; }
+      .hero .tagline { font-size: 17px; }
       .feature-grid { grid-template-columns: 1fr; }
-      .arch-grid { grid-template-columns: 1fr; }
-      section { padding: 48px 0; }
-      .section-title { font-size: 22px; }
+      .model-grid { grid-template-columns: 1fr; }
+      .bench-grid { grid-template-columns: 1fr; }
+      section { padding: 56px 0; }
+      .section-title { font-size: 26px; }
       .nav-links { gap: 16px; }
     }
     @media (max-width: 480px) {
-      .hero h1 { font-size: 28px; }
-      .hero-install { font-size: 12px; padding: 12px 16px; }
+      .hero h1 { font-size: 30px; }
+      .hero-install { font-size: 11px; padding: 12px 14px; }
+      .hero-install .copy-hint { display: none; }
       .nav-links { display: none; }
+      .value-grid { grid-template-columns: 1fr; }
       footer .container { flex-direction: column; align-items: flex-start; }
+      .hero-ctas { flex-direction: column; align-items: center; }
+      .endpoint .ep-desc { display: none; }
     }
   </style>
 </head>
@@ -291,78 +600,187 @@
       <a class="nav-brand" href="/">Hanzo Engine</a>
       <ul class="nav-links">
         <li><a href="#features">Features</a></li>
-        <li><a href="#quickstart">Quick Start</a></li>
         <li><a href="#models">Models</a></li>
         <li><a href="#deploy">Deploy</a></li>
+        <li><a href="#architecture">Architecture</a></li>
+        <li><a href="#api">API</a></li>
+        <li><a href="#benchmarks">Benchmarks</a></li>
         <li><a href="https://github.com/hanzoai/engine">GitHub</a></li>
       </ul>
     </div>
   </nav>
 
-  <!-- Hero -->
+  <!-- ============================================================ -->
+  <!-- 1. Hero                                                       -->
+  <!-- ============================================================ -->
   <div class="hero">
     <div class="container">
+      <span class="hero-badge">Cloud Inference Runtime</span>
       <h1>Hanzo Engine</h1>
-      <p class="tagline">High-performance AI inference for production. Serve 60+ model architectures with CUDA, Metal, and CPU acceleration.</p>
+      <p class="tagline">Production AI inference at any scale</p>
+      <p class="sub-tagline">Serve Zen models and 60+ architectures with CUDA, Metal, and CPU backends. OpenAI-compatible API. Deploy anywhere.</p>
       <a class="hero-install" id="installCmd" onclick="copyInstall(event)">
         curl -sSL https://engine.hanzo.ai/install.sh | sh
         <span class="copy-hint">click to copy</span>
       </a>
+      <div class="hero-ctas">
+        <a class="btn btn-primary" href="#deploy">Get Started</a>
+        <a class="btn btn-secondary" href="https://github.com/hanzoai/engine/pkgs/container/engine">Docker Hub</a>
+      </div>
     </div>
   </div>
 
-  <!-- What is Hanzo Engine -->
-  <section>
-    <div class="container">
-      <div class="section-label">Overview</div>
-      <h2 class="section-title">What is Hanzo Engine</h2>
-      <p class="section-desc">
-        Cloud-native LLM inference engine built in Rust. Serves foundational models at scale with CUDA, Metal, and CPU backends.
-        OpenAI-compatible API. Paged attention, continuous batching, speculative decoding, and quantization out of the box. Production-ready.
-      </p>
-    </div>
-  </section>
-
-  <!-- Features -->
+  <!-- ============================================================ -->
+  <!-- 2. Value Props (4 columns)                                    -->
+  <!-- ============================================================ -->
   <section id="features">
     <div class="container">
-      <div class="section-label">Capabilities</div>
-      <h2 class="section-title">Features</h2>
-      <div class="feature-grid">
-        <div class="feature-card">
+      <div class="section-label">Why Engine</div>
+      <h2 class="section-title">Built for production inference</h2>
+      <p class="section-desc">Everything you need to serve large language models at scale, with zero configuration overhead.</p>
+      <div class="value-grid">
+        <div class="value-card">
+          <span class="value-icon">&#9633;</span>
           <h3>60+ Architectures</h3>
-          <p>Llama, Qwen3, Phi, Gemma, Mistral, DBRX, Starcoder2, and more. Load any supported model from HuggingFace or local files.</p>
+          <p>Llama, Qwen3, Phi, Gemma, Mistral, DBRX, Starcoder2 -- all major model families. Load from HuggingFace or local files.</p>
         </div>
-        <div class="feature-card">
+        <div class="value-card">
+          <span class="value-icon">&#9653;</span>
           <h3>GPU Accelerated</h3>
           <p>CUDA 12+, Metal, CPU with AVX2/AVX-512. Automatic backend selection based on detected hardware.</p>
         </div>
-        <div class="feature-card">
+        <div class="value-card">
+          <span class="value-icon">&#9671;</span>
           <h3>Production Ready</h3>
-          <p>Paged attention, continuous batching, speculative decoding, quantization (GGUF, GPTQ, AWQ, EXL2). Built for throughput.</p>
+          <p>Paged attention v2, continuous batching, speculative decoding, tensor parallelism. Built for throughput.</p>
         </div>
-        <div class="feature-card">
+        <div class="value-card">
+          <span class="value-icon">&#9675;</span>
           <h3>OpenAI Compatible</h3>
-          <p>Drop-in replacement API. /v1/chat/completions, /v1/completions, /v1/embeddings. Works with existing clients.</p>
-        </div>
-        <div class="feature-card">
-          <h3>Quantization</h3>
-          <p>GGUF, GPTQ, AWQ, EXL2, HQQ, and ISQ (In-Situ Quantization). Quantize on load without pre-processing.</p>
-        </div>
-        <div class="feature-card">
-          <h3>Multi-GPU</h3>
-          <p>Tensor parallelism across multiple GPUs. Automatic device mapping for models that exceed single GPU memory.</p>
+          <p>Drop-in replacement. Same API, same client libraries, your infrastructure. No code changes required.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Quick Start -->
-  <section id="quickstart">
+  <!-- ============================================================ -->
+  <!-- 3. Zen Models -- Optimized for Engine                         -->
+  <!-- ============================================================ -->
+  <section id="models">
     <div class="container">
-      <div class="section-label">Get Started</div>
-      <h2 class="section-title">Quick Start</h2>
-      <div class="code-block">
+      <div class="section-label">Zen Models</div>
+      <h2 class="section-title">Optimized for Engine</h2>
+      <p class="section-desc">First-class support for every Zen model. Pre-optimized serving profiles, automatic quantization selection, and native architecture support.</p>
+
+      <div class="model-grid">
+        <div class="model-card">
+          <h3>zen4</h3>
+          <div class="model-desc">Flagship reasoning</div>
+          <div class="model-meta">
+            <span>Params <span class="meta-val">744B MoE</span></span>
+            <span>Context <span class="meta-val">202K</span></span>
+          </div>
+          <div class="model-snippet">
+<pre><span class="cmd">hanzo-engine serve \
+  --model zenlm/zen4 \
+  --port 8000</span></pre>
+          </div>
+        </div>
+
+        <div class="model-card">
+          <h3>zen4-max</h3>
+          <div class="model-desc">Maximum capability</div>
+          <div class="model-meta">
+            <span>Params <span class="meta-val">1.04T MoE</span></span>
+            <span>Context <span class="meta-val">256K</span></span>
+          </div>
+          <div class="model-snippet">
+<pre><span class="cmd">hanzo-engine serve \
+  --model zenlm/zen4-max \
+  --port 8000</span></pre>
+          </div>
+        </div>
+
+        <div class="model-card">
+          <h3>zen4-coder</h3>
+          <div class="model-desc">Code generation</div>
+          <div class="model-meta">
+            <span>Params <span class="meta-val">480B MoE</span></span>
+            <span>Context <span class="meta-val">262K</span></span>
+          </div>
+          <div class="model-snippet">
+<pre><span class="cmd">hanzo-engine serve \
+  --model zenlm/zen4-coder \
+  --port 8000</span></pre>
+          </div>
+        </div>
+
+        <div class="model-card">
+          <h3>zen4-mini</h3>
+          <div class="model-desc">Fast and efficient</div>
+          <div class="model-meta">
+            <span>Params <span class="meta-val">8B dense</span></span>
+            <span>Context <span class="meta-val">40K</span></span>
+          </div>
+          <div class="model-snippet">
+<pre><span class="cmd">hanzo-engine serve \
+  --model zenlm/zen4-mini \
+  --port 8000</span></pre>
+          </div>
+        </div>
+
+        <div class="model-card">
+          <h3>zen4-ultra</h3>
+          <div class="model-desc">Extended thinking</div>
+          <div class="model-meta">
+            <span>Params <span class="meta-val">744B MoE + CoT</span></span>
+            <span>Context <span class="meta-val">202K</span></span>
+          </div>
+          <div class="model-snippet">
+<pre><span class="cmd">hanzo-engine serve \
+  --model zenlm/zen4-ultra \
+  --port 8000</span></pre>
+          </div>
+        </div>
+
+        <div class="model-card">
+          <h3>zen3-omni</h3>
+          <div class="model-desc">Multimodal</div>
+          <div class="model-meta">
+            <span>Params <span class="meta-val">~200B</span></span>
+            <span>Context <span class="meta-val">202K</span></span>
+          </div>
+          <div class="model-snippet">
+<pre><span class="cmd">hanzo-engine serve \
+  --model zenlm/zen3-omni \
+  --port 8000</span></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="models-footer">
+        <a href="https://huggingface.co/zenlm">Browse all models on HuggingFace &rarr;</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- 4. Deployment Options (tabbed)                                -->
+  <!-- ============================================================ -->
+  <section id="deploy">
+    <div class="container">
+      <div class="section-label">Deployment</div>
+      <h2 class="section-title">Deploy anywhere</h2>
+      <p class="section-desc">From a single CLI command to a multi-replica Kubernetes deployment. Choose the method that fits your infrastructure.</p>
+
+      <div class="deploy-tabs">
+        <button class="deploy-tab active" onclick="switchTab(event, 'tab-cli')">CLI</button>
+        <button class="deploy-tab" onclick="switchTab(event, 'tab-docker')">Docker</button>
+        <button class="deploy-tab" onclick="switchTab(event, 'tab-k8s')">Kubernetes</button>
+      </div>
+
+      <div class="deploy-panel active" id="tab-cli">
+        <div class="code-block">
 <pre><span class="comment"># Install</span>
 <span class="cmd">curl -sSL https://engine.hanzo.ai/install.sh | sh</span>
 
@@ -370,64 +788,186 @@
 <span class="cmd">cargo install hanzo-engine</span>
 
 <span class="comment"># Serve a model</span>
-<span class="cmd">hanzo-engine serve --model zenlm/zen4 --port 8000</span>
+<span class="cmd">hanzo-engine serve --model zenlm/zen4-mini --port 8000</span>
 
-<span class="comment"># With CUDA</span>
-<span class="cmd">hanzo-engine serve --model zenlm/zen4 --port 8000 --features cuda</span></pre>
+<span class="comment"># With CUDA backend</span>
+<span class="cmd">hanzo-engine serve --model zenlm/zen4 --port 8000 --features cuda</span>
+
+<span class="comment"># With tensor parallelism across 4 GPUs</span>
+<span class="cmd">hanzo-engine serve --model zenlm/zen4 --port 8000 --tp 4</span></pre>
+        </div>
+      </div>
+
+      <div class="deploy-panel" id="tab-docker">
+        <div class="code-block">
+<pre><span class="comment"># Pull and run with GPU support</span>
+<span class="cmd">docker run -p 8000:8000 --gpus all \
+  ghcr.io/hanzoai/engine:latest \
+  serve --model zenlm/zen4 --port 8000</span>
+
+<span class="comment"># With volume mount for local models</span>
+<span class="cmd">docker run -p 8000:8000 --gpus all \
+  -v /models:/models \
+  ghcr.io/hanzoai/engine:latest \
+  serve --model /models/zen4-mini --port 8000</span>
+
+<span class="comment"># CPU-only</span>
+<span class="cmd">docker run -p 8000:8000 \
+  ghcr.io/hanzoai/engine:latest \
+  serve --model zenlm/zen4-mini --port 8000</span></pre>
+        </div>
+      </div>
+
+      <div class="deploy-panel" id="tab-k8s">
+        <div class="code-block">
+<pre><span class="key">apiVersion:</span> <span class="str">apps/v1</span>
+<span class="key">kind:</span> <span class="str">Deployment</span>
+<span class="key">metadata:</span>
+  <span class="key">name:</span> <span class="str">hanzo-engine</span>
+<span class="key">spec:</span>
+  <span class="key">replicas:</span> <span class="str">2</span>
+  <span class="key">selector:</span>
+    <span class="key">matchLabels:</span>
+      <span class="key">app:</span> <span class="str">hanzo-engine</span>
+  <span class="key">template:</span>
+    <span class="key">metadata:</span>
+      <span class="key">labels:</span>
+        <span class="key">app:</span> <span class="str">hanzo-engine</span>
+    <span class="key">spec:</span>
+      <span class="key">containers:</span>
+      - <span class="key">name:</span> <span class="str">engine</span>
+        <span class="key">image:</span> <span class="str">ghcr.io/hanzoai/engine:latest</span>
+        <span class="key">args:</span> <span class="str">["serve", "--model", "zenlm/zen4", "--port", "8000"]</span>
+        <span class="key">ports:</span>
+        - <span class="key">containerPort:</span> <span class="str">8000</span>
+        <span class="key">resources:</span>
+          <span class="key">limits:</span>
+            <span class="key">nvidia.com/gpu:</span> <span class="str">1</span>
+---
+<span class="key">apiVersion:</span> <span class="str">v1</span>
+<span class="key">kind:</span> <span class="str">Service</span>
+<span class="key">metadata:</span>
+  <span class="key">name:</span> <span class="str">hanzo-engine</span>
+<span class="key">spec:</span>
+  <span class="key">selector:</span>
+    <span class="key">app:</span> <span class="str">hanzo-engine</span>
+  <span class="key">ports:</span>
+  - <span class="key">port:</span> <span class="str">8000</span>
+    <span class="key">targetPort:</span> <span class="str">8000</span></pre>
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- Supported Models -->
-  <section id="models">
+  <!-- ============================================================ -->
+  <!-- 5. Architecture Deep Dive                                     -->
+  <!-- ============================================================ -->
+  <section id="architecture">
+    <div class="container">
+      <div class="section-label">Internals</div>
+      <h2 class="section-title">Architecture deep dive</h2>
+      <p class="section-desc">Purpose-built inference primitives that maximize throughput and minimize latency at every layer of the stack.</p>
+      <div class="feature-grid">
+        <div class="feature-card">
+          <h3>Paged Attention v2</h3>
+          <div class="feat-stat">2-4x throughput improvement</div>
+          <p>Efficient KV-cache management with non-contiguous memory blocks. Serves more concurrent requests with less GPU memory. Eliminates fragmentation waste.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Continuous Batching</h3>
+          <div class="feat-stat">Maximum GPU utilization</div>
+          <p>Dynamic request scheduling that adds and removes sequences on the fly. No wasted compute on padding. Requests start generating immediately.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Speculative Decoding</h3>
+          <div class="feat-stat">2-3x faster generation</div>
+          <p>Draft model acceleration. A smaller model proposes candidate tokens, verified by the target model in parallel. Mathematically equivalent output.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Tensor Parallelism</h3>
+          <div class="feat-stat">Scale to any model size</div>
+          <p>Split model layers across multiple GPUs. Serve models larger than single GPU memory with minimal communication overhead. Linear scaling.</p>
+        </div>
+        <div class="feature-card">
+          <h3>ISQ (In-Situ Quantization)</h3>
+          <div class="feat-stat">No pre-processing needed</div>
+          <p>Quantize models on load. Load BF16 weights and serve at INT4/INT8 with a single flag. No separate quantization step or tool required.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Prompt Caching</h3>
+          <div class="feat-stat">Reuse computed prefixes</div>
+          <p>Automatically cache and reuse KV computations for shared prompt prefixes across requests. Dramatically reduces time-to-first-token for repeated contexts.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- 6. Supported Model Architectures (table)                      -->
+  <!-- ============================================================ -->
+  <section id="compat">
     <div class="container">
       <div class="section-label">Compatibility</div>
-      <h2 class="section-title">Supported Models</h2>
-      <p class="section-desc">Supports 60+ model architectures with multiple quantization formats.</p>
+      <h2 class="section-title">Supported model architectures</h2>
+      <p class="section-desc">60+ architectures across text, code, vision, and embedding tasks. All major quantization formats supported.</p>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
               <th>Family</th>
-              <th>Architectures</th>
+              <th>Models</th>
               <th>Quantization</th>
+              <th>Context</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Zen (Hanzo)</td>
-              <td>zen4, zen4-pro, zen4-max, zen4-coder</td>
-              <td>GGUF, BF16</td>
+              <td>Zen</td>
+              <td>zen4, zen4-max, zen4-coder, zen4-mini, zen4-ultra</td>
+              <td>GGUF, BF16, FP16</td>
+              <td>Up to 262K</td>
             </tr>
             <tr>
               <td>Llama</td>
-              <td>Llama 3.1 / 3.2 / 3.3 / 4</td>
-              <td>GGUF, GPTQ, AWQ</td>
+              <td>Llama 3.1, 3.2, 3.3, 4</td>
+              <td>GGUF, GPTQ, AWQ, EXL2</td>
+              <td>Up to 128K</td>
             </tr>
             <tr>
               <td>Qwen</td>
               <td>Qwen3, QwQ</td>
               <td>GGUF, GPTQ</td>
+              <td>Up to 131K</td>
             </tr>
             <tr>
               <td>Phi</td>
-              <td>Phi-3 / 4, Phi-MoE</td>
+              <td>Phi-3, Phi-4, Phi-MoE</td>
               <td>GGUF</td>
+              <td>Up to 128K</td>
             </tr>
             <tr>
               <td>Gemma</td>
-              <td>Gemma 2 / 3</td>
+              <td>Gemma 2, Gemma 3</td>
               <td>GGUF</td>
+              <td>Up to 8K</td>
             </tr>
             <tr>
               <td>Mistral</td>
-              <td>Mistral, Mixtral</td>
+              <td>Mistral, Mixtral, Mamba</td>
               <td>GGUF, EXL2</td>
+              <td>Up to 32K</td>
             </tr>
             <tr>
               <td>Vision</td>
-              <td>LLaVA, Idefics, Phi-3V</td>
+              <td>Phi-3V, LLaVA, Idefics 3</td>
               <td>GGUF</td>
+              <td>Up to 128K</td>
+            </tr>
+            <tr>
+              <td>Embedding</td>
+              <td>GTE, E5, BGE</td>
+              <td>FP16</td>
+              <td>Up to 8K</td>
             </tr>
           </tbody>
         </table>
@@ -435,87 +975,90 @@
     </div>
   </section>
 
-  <!-- Architecture -->
-  <section id="architecture">
+  <!-- ============================================================ -->
+  <!-- 7. API Reference                                              -->
+  <!-- ============================================================ -->
+  <section id="api">
     <div class="container">
-      <div class="section-label">Internals</div>
-      <h2 class="section-title">Architecture</h2>
-      <div class="arch-grid">
-        <div class="arch-item">
-          <h4>Paged Attention</h4>
-          <p>PagedAttention v2 for efficient KV cache management. Serves more concurrent requests with less GPU memory.</p>
+      <div class="section-label">API</div>
+      <h2 class="section-title">OpenAI-compatible endpoints</h2>
+      <p class="section-desc">Drop-in replacement for the OpenAI API. Use existing client libraries, tools, and integrations with zero changes.</p>
+
+      <div class="endpoint-list">
+        <div class="endpoint">
+          <span class="method">POST</span>
+          <span class="path">/v1/chat/completions</span>
+          <span class="ep-desc">Chat with streaming support</span>
         </div>
-        <div class="arch-item">
-          <h4>Continuous Batching</h4>
-          <p>Dynamic batch scheduling that adds and removes sequences on the fly. No wasted compute on padding.</p>
+        <div class="endpoint">
+          <span class="method">POST</span>
+          <span class="path">/v1/completions</span>
+          <span class="ep-desc">Text completions</span>
         </div>
-        <div class="arch-item">
-          <h4>Speculative Decoding</h4>
-          <p>Draft model acceleration. Use a smaller model to propose tokens, verified by the target model in parallel.</p>
+        <div class="endpoint">
+          <span class="method">POST</span>
+          <span class="path">/v1/embeddings</span>
+          <span class="ep-desc">Vector embeddings</span>
         </div>
-        <div class="arch-item">
-          <h4>Tensor Parallelism</h4>
-          <p>Split model layers across multiple GPUs. Serve models larger than single GPU memory with minimal overhead.</p>
+        <div class="endpoint">
+          <span class="method">GET</span>
+          <span class="path">/v1/models</span>
+          <span class="ep-desc">List loaded models</span>
         </div>
-        <div class="arch-item">
-          <h4>ISQ (In-Situ Quantization)</h4>
-          <p>Quantize models on load. No pre-processing step required. Load BF16 weights and serve at INT4/INT8.</p>
+        <div class="endpoint">
+          <span class="method">GET</span>
+          <span class="path">/health</span>
+          <span class="ep-desc">Health check</span>
         </div>
-        <div class="arch-item">
-          <h4>Flash Attention</h4>
-          <p>Flash Attention v2 and v3 (Hopper) support. Fused kernels for maximum throughput on supported GPUs.</p>
+      </div>
+
+      <div class="api-examples">
+        <div>
+          <div class="api-example-label">curl</div>
+          <div class="code-block standalone">
+<pre><span class="cmd">curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "zenlm/zen4-mini",
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ],
+    "stream": true
+  }'</span></pre>
+          </div>
+        </div>
+        <div>
+          <div class="api-example-label">Python</div>
+          <div class="code-block standalone">
+<pre><span class="key">from</span> <span class="cmd">openai</span> <span class="key">import</span> <span class="cmd">OpenAI</span>
+
+<span class="cmd">client</span> = <span class="cmd">OpenAI</span>(
+    <span class="key">base_url</span>=<span class="str">"http://localhost:8000/v1"</span>,
+    <span class="key">api_key</span>=<span class="str">"not-needed"</span>
+)
+
+<span class="cmd">response</span> = <span class="cmd">client.chat.completions.create</span>(
+    <span class="key">model</span>=<span class="str">"zenlm/zen4-mini"</span>,
+    <span class="key">messages</span>=[
+        {<span class="str">"role"</span>: <span class="str">"user"</span>,
+         <span class="str">"content"</span>: <span class="str">"Hello"</span>}
+    ]
+)
+<span class="key">print</span>(<span class="cmd">response.choices</span>[0]<span class="cmd">.message.content</span>)</pre>
+          </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Deployment -->
-  <section id="deploy">
-    <div class="container">
-      <div class="section-label">Infrastructure</div>
-      <h2 class="section-title">Deployment</h2>
-
-      <div class="code-label">Docker</div>
-      <div class="code-block">
-<pre><span class="cmd">docker run -p 8000:8000 --gpus all ghcr.io/hanzoai/engine:latest \
-  serve --model zenlm/zen4 --port 8000</span></pre>
-      </div>
-
-      <div class="code-label">Kubernetes</div>
-      <div class="code-block">
-<pre><span class="cmd">apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: hanzo-engine
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: hanzo-engine
-  template:
-    metadata:
-      labels:
-        app: hanzo-engine
-    spec:
-      containers:
-      - name: engine
-        image: ghcr.io/hanzoai/engine:latest
-        args: ["serve", "--model", "zenlm/zen4", "--port", "8000"]
-        ports:
-        - containerPort: 8000
-        resources:
-          limits:
-            nvidia.com/gpu: 1</span></pre>
-      </div>
-    </div>
-  </section>
-
-  <!-- Comparison -->
+  <!-- ============================================================ -->
+  <!-- 8. Comparison: Edge vs Engine                                 -->
+  <!-- ============================================================ -->
   <section id="comparison">
     <div class="container">
       <div class="section-label">Edge vs Engine</div>
-      <h2 class="section-title">Choose Your Runtime</h2>
-      <p class="section-desc">Hanzo Engine is for cloud servers and production API serving. Hanzo Edge is for on-device and in-browser inference.</p>
+      <h2 class="section-title">Choose your runtime</h2>
+      <p class="section-desc">Hanzo Engine is for cloud servers and production API serving. Hanzo Edge is for on-device and in-browser inference. Same model format, different deployment targets.</p>
       <div class="table-wrap comparison-table">
         <table>
           <thead>
@@ -532,14 +1075,19 @@ spec:
               <td>Cloud servers</td>
             </tr>
             <tr>
+              <td>Models</td>
+              <td>GGUF quantized</td>
+              <td>All formats</td>
+            </tr>
+            <tr>
               <td>GPU</td>
               <td>Metal, CPU, WASM</td>
               <td>CUDA, Metal, CPU</td>
             </tr>
             <tr>
-              <td>Models</td>
-              <td>GGUF quantized</td>
-              <td>All formats</td>
+              <td>Batching</td>
+              <td>Single request</td>
+              <td>Continuous batching</td>
             </tr>
             <tr>
               <td>Scale</td>
@@ -547,9 +1095,9 @@ spec:
               <td>Production serving</td>
             </tr>
             <tr>
-              <td>Use case</td>
-              <td>Local inference</td>
-              <td>API serving</td>
+              <td>Install</td>
+              <td><code>cargo install hanzo-edge</code></td>
+              <td><code>cargo install hanzo-engine</code></td>
             </tr>
           </tbody>
         </table>
@@ -557,14 +1105,99 @@ spec:
     </div>
   </section>
 
-  <!-- Footer -->
+  <!-- ============================================================ -->
+  <!-- 9. Performance Benchmarks                                     -->
+  <!-- ============================================================ -->
+  <section id="benchmarks">
+    <div class="container">
+      <div class="section-label">Performance</div>
+      <h2 class="section-title">Benchmarks</h2>
+      <p class="section-desc">Token generation throughput across hardware configurations. Measured with continuous batching enabled, batch size 1, output length 512.</p>
+
+      <div class="bench-grid">
+        <div class="bench-card">
+          <div class="bench-model">zen4-mini</div>
+          <div class="bench-params">8B dense</div>
+          <div class="bench-bar-wrap">
+            <div class="bench-bar-label">
+              <span>A100 80GB</span>
+              <span class="bar-val">~120 tok/s</span>
+            </div>
+            <div class="bench-bar">
+              <div class="bench-bar-fill" style="width: 100%"></div>
+            </div>
+          </div>
+          <div class="bench-bar-wrap">
+            <div class="bench-bar-label">
+              <span>M3 Max</span>
+              <span class="bar-val">~45 tok/s</span>
+            </div>
+            <div class="bench-bar">
+              <div class="bench-bar-fill" style="width: 38%"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bench-card">
+          <div class="bench-model">zen4</div>
+          <div class="bench-params">744B MoE</div>
+          <div class="bench-bar-wrap">
+            <div class="bench-bar-label">
+              <span>8x A100 80GB</span>
+              <span class="bar-val">~35 tok/s</span>
+            </div>
+            <div class="bench-bar">
+              <div class="bench-bar-fill" style="width: 29%"></div>
+            </div>
+          </div>
+          <div class="bench-bar-wrap">
+            <div class="bench-bar-label">
+              <span>8x H100 SXM</span>
+              <span class="bar-val">~58 tok/s</span>
+            </div>
+            <div class="bench-bar">
+              <div class="bench-bar-fill" style="width: 48%"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bench-card">
+          <div class="bench-model">zen4-coder</div>
+          <div class="bench-params">480B MoE</div>
+          <div class="bench-bar-wrap">
+            <div class="bench-bar-label">
+              <span>8x A100 80GB</span>
+              <span class="bar-val">~40 tok/s</span>
+            </div>
+            <div class="bench-bar">
+              <div class="bench-bar-fill" style="width: 33%"></div>
+            </div>
+          </div>
+          <div class="bench-bar-wrap">
+            <div class="bench-bar-label">
+              <span>8x H100 SXM</span>
+              <span class="bar-val">~65 tok/s</span>
+            </div>
+            <div class="bench-bar">
+              <div class="bench-bar-fill" style="width: 54%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- 10. Footer                                                    -->
+  <!-- ============================================================ -->
   <footer>
     <div class="container">
       <span class="footer-copy">&copy; 2026 Hanzo AI Inc.</span>
       <ul class="footer-links">
         <li><a href="https://github.com/hanzoai/engine">GitHub</a></li>
-        <li><a href="https://ghcr.io/hanzoai/engine">Docker</a></li>
-        <li><a href="https://hanzo.ai">hanzo.ai</a></li>
+        <li><a href="https://github.com/hanzoai/engine/pkgs/container/engine">Docker</a></li>
+        <li><a href="https://crates.io/crates/hanzo-engine">Crates.io</a></li>
+        <li><a href="https://hanzo.ai">Hanzo AI</a></li>
         <li><a href="https://edge.hanzo.ai">Hanzo Edge</a></li>
       </ul>
     </div>
@@ -576,9 +1209,24 @@ spec:
       var text = 'curl -sSL https://engine.hanzo.ai/install.sh | sh';
       navigator.clipboard.writeText(text).then(function() {
         var hint = document.querySelector('.copy-hint');
-        hint.textContent = 'copied';
-        setTimeout(function() { hint.textContent = 'click to copy'; }, 2000);
+        if (hint) {
+          hint.textContent = 'copied';
+          setTimeout(function() { hint.textContent = 'click to copy'; }, 2000);
+        }
       });
+    }
+
+    function switchTab(e, panelId) {
+      var tabs = document.querySelectorAll('.deploy-tab');
+      var panels = document.querySelectorAll('.deploy-panel');
+      for (var i = 0; i < tabs.length; i++) {
+        tabs[i].classList.remove('active');
+      }
+      for (var i = 0; i < panels.length; i++) {
+        panels[i].classList.remove('active');
+      }
+      e.target.classList.add('active');
+      document.getElementById(panelId).classList.add('active');
     }
   </script>
 
