@@ -858,7 +858,8 @@ impl DeviceMappedModelLoader for BertEmbeddingLoader {
             // Word embeddings
             let word_embeddings = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             // Position embeddings
-            let position_embeddings = cfg.hidden_size * cfg.max_position_embeddings / weight_pack_factor;
+            let position_embeddings =
+                cfg.hidden_size * cfg.max_position_embeddings / weight_pack_factor;
             // Token type embeddings
             let token_type_embeddings = cfg.hidden_size * cfg.type_vocab_size / weight_pack_factor;
             // Embedding LayerNorm (weight + bias)
@@ -917,11 +918,12 @@ impl DeviceMappedModelLoader for BertEmbeddingLoader {
             max_seq_len: cfg.max_position_embeddings,
             num_layers: cfg.num_hidden_layers,
             hidden_size: cfg.hidden_size,
-            num_kv_heads: cfg.num_attention_heads,  // BERT doesn't use GQA
+            num_kv_heads: cfg.num_attention_heads, // BERT doesn't use GQA
             num_attn_heads: cfg.num_attention_heads,
-            sliding_window: None,  // BERT doesn't use sliding window
+            sliding_window: None, // BERT doesn't use sliding window
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
