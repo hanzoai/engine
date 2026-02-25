@@ -47,7 +47,7 @@ impl Module for Pooling {
         if self.pooling_mode_mean_tokens {
             // Assume full attention mask. Otherwise this must be updated
             // Mean pooling: sum(embeddings) / seq_len
-            #[allow(clippy::cast_possible_truncation)]
+            #[allow(clippy::cast_precision_loss)]
             let seq_len = xs.dim(1)? as f64;
             let mean_embeddings = (xs.sum(1)? / seq_len)?;
             outputs.push(mean_embeddings);
