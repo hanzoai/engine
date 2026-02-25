@@ -1,65 +1,31 @@
-name: docs
+name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: ["master"]
-
+    branches: [master]
+    paths: ['site/**']
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
 concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  group: pages
+  cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Checkout engine
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
         with:
-          path: engine
-      - name: Checkout ml
-        uses: actions/checkout@v4
-        with:
-          repository: hanzoai/ml
-          path: ml
-
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-
-      - name: Setup mdbook
-        uses: peaceiris/actions-mdbook@v2
-        with:
-          mdbook-version: 'latest'
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      # Build mdbook (main documentation)
-      - name: Build mdbook
-        run: mdbook build docs
-
-      # Build Python docs
-      - name: Build Python docs
-        run: |
-          python3 -m venv myenv
-          source myenv/bin/activate
-          pip install maturin[patchelf] pdoc
-          cd engine/mistralrs-pyo3
-          maturin develop
-          cd ..
-          pdoc mistralrs -o ./docs/book/pyo3
-
-      - name: Deploy
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: ./docs/book
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
