@@ -18,7 +18,9 @@ use crate::{
     device_map::DeviceMapper,
     layers::{embedding, layer_norm, linear, Activation},
     paged_attention::AttentionImplementation,
-    pipeline::{text_models_inputs_processor::FlashParams, EmbeddingModel, IsqModel, NormalLoadingMetadata},
+    pipeline::{
+        text_models_inputs_processor::FlashParams, EmbeddingModel, IsqModel, NormalLoadingMetadata,
+    },
     serde_default_fn,
 };
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
@@ -169,8 +171,13 @@ impl BertSelfAttention {
 
     fn transpose_for_scores(&self, x: &Tensor) -> Result<Tensor> {
         let (batch_size, seq_len, _) = x.dims3()?;
-        x.reshape((batch_size, seq_len, self.num_attention_heads, self.attention_head_size))?
-            .transpose(1, 2)
+        x.reshape((
+            batch_size,
+            seq_len,
+            self.num_attention_heads,
+            self.attention_head_size,
+        ))?
+        .transpose(1, 2)
     }
 
     fn forward(&self, hidden_states: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
@@ -186,7 +193,11 @@ impl BertSelfAttention {
         let key = self.transpose_for_scores(&key)?.contiguous()?;
         let value = self.transpose_for_scores(&value)?.contiguous()?;
 
-        tracing::debug!("After transpose_for_scores - query shape: {:?}, key shape: {:?}", query.shape(), key.shape());
+        tracing::debug!(
+            "After transpose_for_scores - query shape: {:?}, key shape: {:?}",
+            query.shape(),
+            key.shape()
+        );
 
         // Scaled dot-product attention
         // key shape: (batch, num_heads, seq_len, head_dim)
@@ -209,7 +220,11 @@ impl BertSelfAttention {
         let context = attention_probs.matmul(&value)?;
         let context = context.transpose(1, 2)?;
         let (batch_size, seq_len, _, _) = context.dims4()?;
-        context.reshape((batch_size, seq_len, self.num_attention_heads * self.attention_head_size))
+        context.reshape((
+            batch_size,
+            seq_len,
+            self.num_attention_heads * self.attention_head_size,
+        ))
     }
 }
 
@@ -407,9 +422,7 @@ impl BertEmbeddingModel {
         };
 
         // Expand to [batch_size, 1, 1, seq_len] for broadcasting
-        let extended_mask = attention_mask
-            .unsqueeze(1)?
-            .unsqueeze(2)?;
+        let extended_mask = attention_mask.unsqueeze(1)?.unsqueeze(2)?;
 
         // Convert to attention bias: 0 -> large negative, 1 -> 0
         // Using -10000.0 instead of NEG_INFINITY to avoid BF16 precision issues
@@ -429,10 +442,17 @@ impl EmbeddingModel for BertEmbeddingModel {
         input_ids: &Tensor,
         _flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
-        tracing::debug!("BertEmbeddingModel forward - input_ids shape: {:?}", input_ids.shape());
+        tracing::debug!(
+            "BertEmbeddingModel forward - input_ids shape: {:?}",
+            input_ids.shape()
+        );
 
         let hidden_states = self.embeddings.forward(input_ids, None)?;
-        tracing::debug!("BertEmbeddingModel forward - after embeddings shape: {:?}, dtype: {:?}", hidden_states.shape(), hidden_states.dtype());
+        tracing::debug!(
+            "BertEmbeddingModel forward - after embeddings shape: {:?}, dtype: {:?}",
+            hidden_states.shape(),
+            hidden_states.dtype()
+        );
 
         // Create attention mask and convert to match hidden_states dtype
         let attention_mask = self.make_attention_mask(input_ids)?;
@@ -441,8 +461,13 @@ impl EmbeddingModel for BertEmbeddingModel {
             None => None,
         };
 
-        let encoder_output = self.encoder.forward(&hidden_states, attention_mask.as_ref())?;
-        tracing::debug!("BertEmbeddingModel forward - encoder output shape: {:?}", encoder_output.shape());
+        let encoder_output = self
+            .encoder
+            .forward(&hidden_states, attention_mask.as_ref())?;
+        tracing::debug!(
+            "BertEmbeddingModel forward - encoder output shape: {:?}",
+            encoder_output.shape()
+        );
 
         // Return the full sequence output (pooling is done in the pipeline)
         Ok(encoder_output)

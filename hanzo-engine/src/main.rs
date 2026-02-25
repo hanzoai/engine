@@ -7,10 +7,10 @@ use std::process::Command;
 fn main() {
     // Get the arguments
     let args: Vec<String> = env::args().collect();
-    
+
     // Default port for Hanzo Engine
     let default_port = "36900";
-    
+
     // If no arguments or help is requested, show help
     if args.len() == 1 || args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
         println!("Hanzo Engine v0.6.0 - High-performance AI inference engine");
@@ -35,31 +35,33 @@ fn main() {
         println!("      For advanced options, use mistralrs-server directly.");
         return;
     }
-    
+
     if args.contains(&"--version".to_string()) || args.contains(&"-V".to_string()) {
         println!("Hanzo Engine v0.6.0");
         return;
     }
-    
+
     // Parse port from arguments
-    let port = args.iter()
+    let port = args
+        .iter()
         .position(|arg| arg == "--port")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str())
         .unwrap_or(default_port);
-    
-    // Parse host from arguments  
-    let host = args.iter()
+
+    // Parse host from arguments
+    let host = args
+        .iter()
         .position(|arg| arg == "--host")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str())
         .unwrap_or("0.0.0.0");
-    
+
     println!("🚀 Starting Hanzo Engine on {}:{}", host, port);
     println!("📊 Embeddings API: http://{}:{}/v1/embeddings", host, port);
     println!("💬 Chat API: http://{}:{}/v1/chat/completions", host, port);
     println!();
-    
+
     // Call mistralrs-server with appropriate arguments
     let status = Command::new("mistralrs-server")
         .arg("--port")
@@ -67,7 +69,7 @@ fn main() {
         .arg("--log")
         .arg("info")
         .status();
-    
+
     match status {
         Ok(exit_status) => {
             if !exit_status.success() {
