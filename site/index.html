@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hanzo Engine -- High-Performance AI Inference</title>
+  <meta name="description" content="Cloud-native LLM inference engine built in Rust. Serves 60+ model architectures with CUDA, Metal, and CPU backends. OpenAI-compatible API.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>H</text></svg>">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background: #000;
+      color: #f5f5f5;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: #f5f5f5; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ---- Nav ---- */
+    nav {
+      border-bottom: 1px solid #222;
+      padding: 16px 0;
+    }
+    nav .container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .nav-brand {
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+      letter-spacing: -0.02em;
+    }
+    .nav-links {
+      display: flex;
+      gap: 24px;
+      list-style: none;
+    }
+    .nav-links a {
+      font-size: 13px;
+      color: #888;
+      transition: color 0.15s;
+    }
+    .nav-links a:hover { color: #fff; text-decoration: none; }
+
+    /* ---- Hero ---- */
+    .hero {
+      padding: 96px 0 80px;
+      text-align: center;
+      border-bottom: 1px solid #222;
+    }
+    .hero h1 {
+      font-size: 48px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: -0.03em;
+      margin-bottom: 12px;
+    }
+    .hero .tagline {
+      font-size: 18px;
+      color: #888;
+      margin-bottom: 40px;
+      max-width: 520px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .hero-install {
+      display: inline-block;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 14px 24px;
+      font-family: 'SF Mono', 'Fira Code', 'Menlo', 'Consolas', monospace;
+      font-size: 14px;
+      color: #f5f5f5;
+      cursor: pointer;
+      transition: border-color 0.15s;
+      position: relative;
+    }
+    .hero-install:hover { border-color: #555; text-decoration: none; }
+    .hero-install .copy-hint {
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 11px;
+      color: #555;
+      margin-left: 16px;
+    }
+
+    /* ---- Sections ---- */
+    section {
+      padding: 72px 0;
+      border-bottom: 1px solid #222;
+    }
+    section:last-of-type { border-bottom: none; }
+
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #555;
+      margin-bottom: 12px;
+    }
+    .section-title {
+      font-size: 28px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: -0.02em;
+      margin-bottom: 16px;
+    }
+    .section-desc {
+      font-size: 15px;
+      color: #888;
+      max-width: 640px;
+      margin-bottom: 40px;
+    }
+
+    /* ---- Feature Grid ---- */
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    .feature-card {
+      background: #0a0a0a;
+      border: 1px solid #1a1a1a;
+      border-radius: 8px;
+      padding: 24px;
+      transition: border-color 0.15s;
+    }
+    .feature-card:hover { border-color: #333; }
+    .feature-card h3 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+    .feature-card p {
+      font-size: 13px;
+      color: #888;
+      line-height: 1.5;
+    }
+
+    /* ---- Code Blocks ---- */
+    .code-block {
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 8px;
+      padding: 20px 24px;
+      overflow-x: auto;
+      margin-bottom: 16px;
+    }
+    .code-block pre {
+      font-family: 'SF Mono', 'Fira Code', 'Menlo', 'Consolas', monospace;
+      font-size: 13px;
+      line-height: 1.7;
+      color: #ccc;
+    }
+    .code-block .comment { color: #555; }
+    .code-block .cmd { color: #f5f5f5; }
+    .code-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #555;
+      margin-bottom: 8px;
+    }
+
+    /* ---- Tables ---- */
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid #1a1a1a;
+      border-radius: 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    thead th {
+      text-align: left;
+      padding: 12px 16px;
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #555;
+      background: #0a0a0a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    tbody td {
+      padding: 10px 16px;
+      color: #ccc;
+      border-bottom: 1px solid #111;
+    }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: #0a0a0a; }
+    td:first-child { color: #fff; font-weight: 500; }
+
+    /* ---- Architecture List ---- */
+    .arch-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+    .arch-item {
+      background: #0a0a0a;
+      border: 1px solid #1a1a1a;
+      border-radius: 8px;
+      padding: 16px 20px;
+      transition: border-color 0.15s;
+    }
+    .arch-item:hover { border-color: #333; }
+    .arch-item h4 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+    .arch-item p {
+      font-size: 12px;
+      color: #666;
+    }
+
+    /* ---- Comparison ---- */
+    .comparison-table thead th:first-child { width: 200px; }
+
+    /* ---- Footer ---- */
+    footer {
+      border-top: 1px solid #222;
+      padding: 32px 0;
+    }
+    footer .container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+    .footer-copy {
+      font-size: 12px;
+      color: #555;
+    }
+    .footer-links {
+      display: flex;
+      gap: 24px;
+      list-style: none;
+    }
+    .footer-links a {
+      font-size: 12px;
+      color: #666;
+      transition: color 0.15s;
+    }
+    .footer-links a:hover { color: #fff; text-decoration: none; }
+
+    /* ---- Responsive ---- */
+    @media (max-width: 768px) {
+      .hero { padding: 64px 0 56px; }
+      .hero h1 { font-size: 32px; }
+      .hero .tagline { font-size: 16px; }
+      .feature-grid { grid-template-columns: 1fr; }
+      .arch-grid { grid-template-columns: 1fr; }
+      section { padding: 48px 0; }
+      .section-title { font-size: 22px; }
+      .nav-links { gap: 16px; }
+    }
+    @media (max-width: 480px) {
+      .hero h1 { font-size: 28px; }
+      .hero-install { font-size: 12px; padding: 12px 16px; }
+      .nav-links { display: none; }
+      footer .container { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav>
+    <div class="container">
+      <a class="nav-brand" href="/">Hanzo Engine</a>
+      <ul class="nav-links">
+        <li><a href="#features">Features</a></li>
+        <li><a href="#quickstart">Quick Start</a></li>
+        <li><a href="#models">Models</a></li>
+        <li><a href="#deploy">Deploy</a></li>
+        <li><a href="https://github.com/hanzoai/engine">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <div class="hero">
+    <div class="container">
+      <h1>Hanzo Engine</h1>
+      <p class="tagline">High-performance AI inference for production. Serve 60+ model architectures with CUDA, Metal, and CPU acceleration.</p>
+      <a class="hero-install" id="installCmd" onclick="copyInstall(event)">
+        curl -sSL https://engine.hanzo.ai/install.sh | sh
+        <span class="copy-hint">click to copy</span>
+      </a>
+    </div>
+  </div>
+
+  <!-- What is Hanzo Engine -->
+  <section>
+    <div class="container">
+      <div class="section-label">Overview</div>
+      <h2 class="section-title">What is Hanzo Engine</h2>
+      <p class="section-desc">
+        Cloud-native LLM inference engine built in Rust. Serves foundational models at scale with CUDA, Metal, and CPU backends.
+        OpenAI-compatible API. Paged attention, continuous batching, speculative decoding, and quantization out of the box. Production-ready.
+      </p>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section id="features">
+    <div class="container">
+      <div class="section-label">Capabilities</div>
+      <h2 class="section-title">Features</h2>
+      <div class="feature-grid">
+        <div class="feature-card">
+          <h3>60+ Architectures</h3>
+          <p>Llama, Qwen3, Phi, Gemma, Mistral, DBRX, Starcoder2, and more. Load any supported model from HuggingFace or local files.</p>
+        </div>
+        <div class="feature-card">
+          <h3>GPU Accelerated</h3>
+          <p>CUDA 12+, Metal, CPU with AVX2/AVX-512. Automatic backend selection based on detected hardware.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Production Ready</h3>
+          <p>Paged attention, continuous batching, speculative decoding, quantization (GGUF, GPTQ, AWQ, EXL2). Built for throughput.</p>
+        </div>
+        <div class="feature-card">
+          <h3>OpenAI Compatible</h3>
+          <p>Drop-in replacement API. /v1/chat/completions, /v1/completions, /v1/embeddings. Works with existing clients.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Quantization</h3>
+          <p>GGUF, GPTQ, AWQ, EXL2, HQQ, and ISQ (In-Situ Quantization). Quantize on load without pre-processing.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Multi-GPU</h3>
+          <p>Tensor parallelism across multiple GPUs. Automatic device mapping for models that exceed single GPU memory.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quick Start -->
+  <section id="quickstart">
+    <div class="container">
+      <div class="section-label">Get Started</div>
+      <h2 class="section-title">Quick Start</h2>
+      <div class="code-block">
+<pre><span class="comment"># Install</span>
+<span class="cmd">curl -sSL https://engine.hanzo.ai/install.sh | sh</span>
+
+<span class="comment"># Or via cargo</span>
+<span class="cmd">cargo install hanzo-engine</span>
+
+<span class="comment"># Serve a model</span>
+<span class="cmd">hanzo-engine serve --model zenlm/zen4 --port 8000</span>
+
+<span class="comment"># With CUDA</span>
+<span class="cmd">hanzo-engine serve --model zenlm/zen4 --port 8000 --features cuda</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Supported Models -->
+  <section id="models">
+    <div class="container">
+      <div class="section-label">Compatibility</div>
+      <h2 class="section-title">Supported Models</h2>
+      <p class="section-desc">Supports 60+ model architectures with multiple quantization formats.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Family</th>
+              <th>Architectures</th>
+              <th>Quantization</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Zen (Hanzo)</td>
+              <td>zen4, zen4-pro, zen4-max, zen4-coder</td>
+              <td>GGUF, BF16</td>
+            </tr>
+            <tr>
+              <td>Llama</td>
+              <td>Llama 3.1 / 3.2 / 3.3 / 4</td>
+              <td>GGUF, GPTQ, AWQ</td>
+            </tr>
+            <tr>
+              <td>Qwen</td>
+              <td>Qwen3, QwQ</td>
+              <td>GGUF, GPTQ</td>
+            </tr>
+            <tr>
+              <td>Phi</td>
+              <td>Phi-3 / 4, Phi-MoE</td>
+              <td>GGUF</td>
+            </tr>
+            <tr>
+              <td>Gemma</td>
+              <td>Gemma 2 / 3</td>
+              <td>GGUF</td>
+            </tr>
+            <tr>
+              <td>Mistral</td>
+              <td>Mistral, Mixtral</td>
+              <td>GGUF, EXL2</td>
+            </tr>
+            <tr>
+              <td>Vision</td>
+              <td>LLaVA, Idefics, Phi-3V</td>
+              <td>GGUF</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture -->
+  <section id="architecture">
+    <div class="container">
+      <div class="section-label">Internals</div>
+      <h2 class="section-title">Architecture</h2>
+      <div class="arch-grid">
+        <div class="arch-item">
+          <h4>Paged Attention</h4>
+          <p>PagedAttention v2 for efficient KV cache management. Serves more concurrent requests with less GPU memory.</p>
+        </div>
+        <div class="arch-item">
+          <h4>Continuous Batching</h4>
+          <p>Dynamic batch scheduling that adds and removes sequences on the fly. No wasted compute on padding.</p>
+        </div>
+        <div class="arch-item">
+          <h4>Speculative Decoding</h4>
+          <p>Draft model acceleration. Use a smaller model to propose tokens, verified by the target model in parallel.</p>
+        </div>
+        <div class="arch-item">
+          <h4>Tensor Parallelism</h4>
+          <p>Split model layers across multiple GPUs. Serve models larger than single GPU memory with minimal overhead.</p>
+        </div>
+        <div class="arch-item">
+          <h4>ISQ (In-Situ Quantization)</h4>
+          <p>Quantize models on load. No pre-processing step required. Load BF16 weights and serve at INT4/INT8.</p>
+        </div>
+        <div class="arch-item">
+          <h4>Flash Attention</h4>
+          <p>Flash Attention v2 and v3 (Hopper) support. Fused kernels for maximum throughput on supported GPUs.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Deployment -->
+  <section id="deploy">
+    <div class="container">
+      <div class="section-label">Infrastructure</div>
+      <h2 class="section-title">Deployment</h2>
+
+      <div class="code-label">Docker</div>
+      <div class="code-block">
+<pre><span class="cmd">docker run -p 8000:8000 --gpus all ghcr.io/hanzoai/engine:latest \
+  serve --model zenlm/zen4 --port 8000</span></pre>
+      </div>
+
+      <div class="code-label">Kubernetes</div>
+      <div class="code-block">
+<pre><span class="cmd">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hanzo-engine
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hanzo-engine
+  template:
+    metadata:
+      labels:
+        app: hanzo-engine
+    spec:
+      containers:
+      - name: engine
+        image: ghcr.io/hanzoai/engine:latest
+        args: ["serve", "--model", "zenlm/zen4", "--port", "8000"]
+        ports:
+        - containerPort: 8000
+        resources:
+          limits:
+            nvidia.com/gpu: 1</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Comparison -->
+  <section id="comparison">
+    <div class="container">
+      <div class="section-label">Edge vs Engine</div>
+      <h2 class="section-title">Choose Your Runtime</h2>
+      <p class="section-desc">Hanzo Engine is for cloud servers and production API serving. Hanzo Edge is for on-device and in-browser inference.</p>
+      <div class="table-wrap comparison-table">
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th>Hanzo Edge</th>
+              <th>Hanzo Engine</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Target</td>
+              <td>Devices, browsers</td>
+              <td>Cloud servers</td>
+            </tr>
+            <tr>
+              <td>GPU</td>
+              <td>Metal, CPU, WASM</td>
+              <td>CUDA, Metal, CPU</td>
+            </tr>
+            <tr>
+              <td>Models</td>
+              <td>GGUF quantized</td>
+              <td>All formats</td>
+            </tr>
+            <tr>
+              <td>Scale</td>
+              <td>Single user</td>
+              <td>Production serving</td>
+            </tr>
+            <tr>
+              <td>Use case</td>
+              <td>Local inference</td>
+              <td>API serving</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <span class="footer-copy">&copy; 2026 Hanzo AI Inc.</span>
+      <ul class="footer-links">
+        <li><a href="https://github.com/hanzoai/engine">GitHub</a></li>
+        <li><a href="https://ghcr.io/hanzoai/engine">Docker</a></li>
+        <li><a href="https://hanzo.ai">hanzo.ai</a></li>
+        <li><a href="https://edge.hanzo.ai">Hanzo Edge</a></li>
+      </ul>
+    </div>
+  </footer>
+
+  <script>
+    function copyInstall(e) {
+      e.preventDefault();
+      var text = 'curl -sSL https://engine.hanzo.ai/install.sh | sh';
+      navigator.clipboard.writeText(text).then(function() {
+        var hint = document.querySelector('.copy-hint');
+        hint.textContent = 'copied';
+        setTimeout(function() { hint.textContent = 'click to copy'; }, 2000);
+      });
+    }
+  </script>
+
+</body>
+</html>
