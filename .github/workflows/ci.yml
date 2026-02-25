@@ -11,6 +11,10 @@ on:
 
 name: Continuous integration
 
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+
 jobs:
   check:
     name: Check
@@ -31,7 +35,7 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - name: Cargo check
-        run: cargo check --manifest-path engine/Cargo.toml --package hanzo-engine
+        run: cargo check --manifest-path engine/Cargo.toml --locked --workspace --no-default-features
 
   check-metal:
     name: Check (metal)
@@ -46,7 +50,7 @@ jobs:
           path: ml
       - uses: dtolnay/rust-toolchain@stable
       - name: Cargo check (metal)
-        run: cargo check --manifest-path engine/Cargo.toml --workspace --features metal
+        run: cargo check --manifest-path engine/Cargo.toml --locked --workspace --features metal
 
   test:
     name: Test Suite
@@ -67,7 +71,7 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - name: Cargo test
-        run: cargo test --manifest-path engine/Cargo.toml -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
+        run: cargo test --manifest-path engine/Cargo.toml --locked -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
         env:
           TESTS_HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
@@ -103,7 +107,7 @@ jobs:
         with:
           components: clippy
       - name: Cargo clippy
-        run: cargo clippy --manifest-path engine/Cargo.toml --workspace --tests --examples -- -D warnings
+        run: cargo clippy --manifest-path engine/Cargo.toml --locked --workspace --no-default-features --tests --examples -- -D warnings
 
   docs:
     name: Docs
@@ -118,7 +122,7 @@ jobs:
           path: ml
       - uses: dtolnay/rust-toolchain@stable
       - name: Cargo doc
-        run: cargo doc --manifest-path engine/Cargo.toml --workspace
+        run: cargo doc --manifest-path engine/Cargo.toml --locked --workspace --no-default-features
 
   hanzo-engine:
     name: Build Hanzo Engine
@@ -133,9 +137,9 @@ jobs:
           path: ml
       - uses: dtolnay/rust-toolchain@stable
       - name: Build hanzo-engine
-        run: cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --release
+        run: cargo build --manifest-path engine/Cargo.toml --locked --package hanzo-engine --no-default-features --release
       - name: Test hanzo-engine
-        run: cargo test --manifest-path engine/Cargo.toml --package hanzo-engine
+        run: cargo test --manifest-path engine/Cargo.toml --locked --package hanzo-engine --no-default-features
       - name: Verify binary
         run: |
           ./engine/target/release/hanzo-engine --version
@@ -152,7 +156,7 @@ jobs:
           config: .typos.toml
 
   msrv:
-    name: MSRV Check (1.90)
+    name: MSRV Check (1.88)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -164,6 +168,6 @@ jobs:
           path: ml
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.90.0"
+          toolchain: "1.88.0"
       - name: Cargo check (MSRV)
-        run: cargo check --manifest-path engine/Cargo.toml --workspace
+        run: cargo check --manifest-path engine/Cargo.toml --locked --workspace --no-default-features
