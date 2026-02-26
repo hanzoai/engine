@@ -2,7 +2,7 @@
 
 Speculative decoding is an inference acceleration technique that uses a smaller "draft" model to propose tokens, which are then validated in parallel by the larger "target" model. This can significantly speed up generation when the draft model frequently predicts tokens the target model would also choose.
 
-Mistral.rs implements speculative decoding based on the paper: [Fast Inference from Transformers via Speculative Decoding](https://arxiv.org/pdf/2211.17192).
+Hanzo Engine implements speculative decoding based on the paper: [Fast Inference from Transformers via Speculative Decoding](https://arxiv.org/pdf/2211.17192).
 
 ## How It Works
 

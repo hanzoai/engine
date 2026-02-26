@@ -1,6 +1,6 @@
-# Web search tool in mistral.rs
+# Web search tool in Hanzo Engine
 
-mistral.rs is compatible with OpenAI's `web_search_options` parameter! Once enabled, this allows web searching for models.
+Hanzo Engine is compatible with OpenAI's `web_search_options` parameter! Once enabled, this allows web searching for models.
 
 This works with all models that support [tool calling](TOOL_CALLING.md). However, your mileage may vary depending on the specific model. The following models work during testing and are recommended for usage:
 
@@ -25,7 +25,7 @@ Internally, we now use [google/embeddinggemma-300m](https://huggingface.co/googl
 
 ## Specifying a custom search callback
 
-By default, mistral.rs uses a DuckDuckGo-based search callback. To override this, you can provide your own search function:
+By default, Hanzo Engine uses a DuckDuckGo-based search callback. To override this, you can provide your own search function:
 
 - Rust: use `.with_search_callback(...)` on the model builder with an `Arc<dyn Fn(&SearchFunctionParameters) -> anyhow::Result<Vec<SearchResult>> + Send + Sync>`.
 - Python: pass the `search_callback` keyword argument to `Runner`, which should be a function `def search_callback(query: str) -> List[Dict[str, str]]` returning a list of results with keys `"title"`, `"description"`, `"url"`, and `"content"`.
@@ -77,7 +77,7 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 messages = [
     {
         "role": "user",
-        "content": "Can you show me some code using mistral.rs for running Llama 3.2 Vision?",
+        "content": "Can you show me some code using Hanzo Engine for running Llama 3.2 Vision?",
     }
 ]
 
@@ -114,10 +114,10 @@ def my_search_callback(query: str) -> list[dict[str, str]]:
     # Fetch or compute search results here
     return [
         {
-            "title": "Mistral.rs GitHub",
-            "description": "Official mistral.rs repository",
-            "url": "https://github.com/EricLBuehler/mistral.rs",
-            "content": "mistral.rs is a Rust binding for Mistral models...",
+            "title": "Hanzo Engine GitHub",
+            "description": "Official Hanzo Engine repository",
+            "url": "https://github.com/hanzoai/engine",
+            "content": "Hanzo Engine is a high-performance LLM inference engine...",
         },
     ]
 
@@ -136,7 +136,7 @@ res = runner.send_chat_completion_request(
         messages=[
             {
                 "role": "user",
-                "content": "Can you show me some code using mistral.rs for running Llama 3.2 Vision?",
+                "content": "Can you show me some code using Hanzo Engine for running Llama 3.2 Vision?",
             }
         ],
         max_tokens=256,

@@ -1,11 +1,11 @@
 [package]
 name = "mistralrs-macros"
 readme = "../README.md"
-authors = ["Eric Buehler"]
+authors = ["Hanzo AI <dev@hanzo.ai>", "Eric Buehler"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Proc macros for mistral.rs tool definitions"
+description = "Proc macros for Hanzo Engine tool definitions"
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true

@@ -162,7 +162,7 @@ jobs:
         git log --pretty=format:"* %s (%h)" $(git describe --tags --abbrev=0 2>/dev/null || echo HEAD~10)..HEAD >> CHANGELOG.md
         echo "" >> CHANGELOG.md
         echo "## Features" >> CHANGELOG.md
-        echo "- High-performance inference engine based on mistral.rs" >> CHANGELOG.md
+        echo "- High-performance LLM inference engine" >> CHANGELOG.md
         echo "- Support for Qwen3 models (8B/4B variants)" >> CHANGELOG.md
         echo "- Native embeddings and reranking" >> CHANGELOG.md
         echo "- CUDA support for NVIDIA GPUs" >> CHANGELOG.md

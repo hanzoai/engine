@@ -17,7 +17,7 @@ The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/
 [**Phi 4 multimodal supports audio inputs!**](#audio-input).
 
 ## HTTP server
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v.py).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/examples/server/phi3v.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -83,13 +83,13 @@ print(resp)
 
 ```
 
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/hanzoai/engine/blob/main/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/hanzoai/engine/blob/main/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/models/vision_models/main.rs).
 
 This is a minimal example of running the Phi 4 Multimodal model with a dummy image.
 
@@ -133,7 +133,7 @@ async fn main() -> Result<()> {
 ```
 
 ## Python
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/examples/python/phi3v.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -181,9 +181,9 @@ print(res.usage)
 
 ## Audio input
 
-Alongside vision, Phi 4 Multimodal in `mistral.rs` can accept **audio** as an additional modality.  This unlocks fully-local pipelines such as **text + speech + vision -> text** where the model can reason jointly over what it *hears* and what it *sees*.
+Alongside vision, Phi 4 Multimodal in Hanzo Engine can accept **audio** as an additional modality.  This unlocks fully-local pipelines such as **text + speech + vision -> text** where the model can reason jointly over what it *hears* and what it *sees*.
 
-`mistral.rs` automatically decodes the supplied audio (WAV/MP3/FLAC/OGG/… – anything [Symphonia](https://github.com/pdeljanov/Symphonia) can handle) into 16-bit PCM.
+Hanzo Engine automatically decodes the supplied audio (WAV/MP3/FLAC/OGG/… – anything [Symphonia](https://github.com/pdeljanov/Symphonia) can handle) into 16-bit PCM.
 
 ### OpenAI HTTP API
 
@@ -252,7 +252,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-With this, you now have a single-call pipeline that fuses *sound*, *vision*, and *text* – all running locally through `mistral.rs`! 🔥
+With this, you now have a single-call pipeline that fuses *sound*, *vision*, and *text* – all running locally through Hanzo Engine! 🔥
 
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/hanzoai/engine/blob/main/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/hanzoai/engine/blob/main/examples/python/phi3v_local_img.py).

@@ -4,7 +4,7 @@ Voxtral Mini is a 4.4B parameter real-time automatic speech recognition (ASR) mo
 
 The Voxtral Model has support in the Rust, Python, and HTTP APIs. Additionally, the Voxtral Model supports ISQ for increased performance.
 
-> Note: Voxtral uses Mistral's native format (`params.json`, `consolidated.safetensors`, `tekken.json`), which mistral.rs handles automatically.
+> Note: Voxtral uses Mistral's native format (`params.json`, `consolidated.safetensors`, `tekken.json`), which Hanzo Engine handles automatically.
 
 ## HTTP server
 
@@ -55,7 +55,7 @@ print(resp)
 ```
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/asr/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/models/asr/main.rs).
 
 ```rust
 use anyhow::Result;

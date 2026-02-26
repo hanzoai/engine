@@ -3,7 +3,7 @@
 `mistralrs serve` can speak the **MCP – Model-Control-Protocol** in addition to the regular OpenAI-compatible REST API.
 
 At a high-level, MCP is an opinionated, tool-based JSON-RPC 2.0 protocol that lets clients interact with models through structured *tool calls* instead of specialised HTTP routes.  
-The implementation in Mistral.rs is powered by [`rust-mcp-sdk`](https://crates.io/crates/rust-mcp-sdk) and automatically registers tools based on the modalities supported by the loaded model (text, vision, …).
+The implementation in Hanzo Engine is powered by [`rust-mcp-sdk`](https://crates.io/crates/rust-mcp-sdk) and automatically registers tools based on the modalities supported by the loaded model (text, vision, …).
 
 Exposed tools:
 
@@ -208,7 +208,7 @@ curl -X POST http://localhost:4321/mcp \
 
 ## Limitations & roadmap
 
-The MCP support that ships with the current Mistral.rs release focuses on the **happy-path**.  A few niceties have not yet been implemented and PRs are more than welcome:
+The MCP support that ships with the current Hanzo Engine release focuses on the **happy-path**.  A few niceties have not yet been implemented and PRs are more than welcome:
 
 1. Streaming token responses (similar to the `stream=true` flag in the OpenAI API).
 2. An authentication layer – if you are exposing the MCP port publicly run it behind a reverse-proxy that handles auth (e.g.  nginx + OIDC).
