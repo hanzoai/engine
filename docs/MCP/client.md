@@ -1,6 +1,6 @@
 # MCP (Model Context Protocol) Client
 
-mistral.rs includes a built-in MCP client that allows models to connect to external tools and services through the Model Context Protocol. This enables automatic tool discovery and usage from any MCP-compatible server.
+Hanzo Engine includes a built-in MCP client that allows models to connect to external tools and services through the Model Context Protocol. This enables automatic tool discovery and usage from any MCP-compatible server.
 
 ## Quick Start
 

@@ -1,14 +1,14 @@
 # Engine Internals
 
-This document describes internal engine behaviors in mistral.rs.
+This document describes internal engine behaviors in Hanzo Engine.
 
 ## Overview
 
-The mistral.rs engine manages model inference through a background thread pool. Each loaded model runs in its own engine thread, which handles request queuing, batching, and execution.
+The Hanzo Engine manages model inference through a background thread pool. Each loaded model runs in its own engine thread, which handles request queuing, batching, and execution.
 
 ## Warmup Run
 
-When a text or vision model is loaded in a multi-threaded runtime, mistral.rs automatically performs a warmup ("dummy") run:
+When a text or vision model is loaded in a multi-threaded runtime, Hanzo Engine automatically performs a warmup ("dummy") run:
 
 - Sends a short completion request ("hello" with max 1 token) to initialize CUDA kernels and caches
 - Logs "Beginning dummy run." when starting and "Dummy run completed in Xs." when finished
@@ -19,7 +19,7 @@ This warmup ensures that CUDA kernel compilation and memory allocation happens d
 
 ## Automatic Engine Recovery
 
-If the inference engine thread dies unexpectedly (e.g., due to a panic), mistral.rs can automatically recover:
+If the inference engine thread dies unexpectedly (e.g., due to a panic), Hanzo Engine can automatically recover:
 
 - Detects dead engine threads when sending requests
 - Automatically reboots the engine using saved configuration
@@ -30,7 +30,7 @@ This ensures high availability without manual intervention.
 
 ## Thread Model
 
-Each model loaded in mistral.rs runs in its own dedicated engine thread:
+Each model loaded in Hanzo Engine runs in its own dedicated engine thread:
 
 1. **Main Thread**: Handles HTTP requests, CLI interaction, and dispatches work to engine threads
 2. **Engine Threads**: Each loaded model has a dedicated thread for inference

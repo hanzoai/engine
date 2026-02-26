@@ -2,7 +2,7 @@
 
 **[See the GLM4 model Collection](https://huggingface.co/collections/THUDM/glm-4-0414-67f3cbcb34dd9d252707cb2e)**
 
-GLM4 is a series of open, multilingual, and multimodal large language models. The text-to-text LLM backbones in GLM4 are supported by mistral.rs.
+GLM4 is a series of open, multilingual, and multimodal large language models. The text-to-text LLM backbones in GLM4 are supported by Hanzo Engine.
 
 ## HTTP API
 

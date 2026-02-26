@@ -4,7 +4,7 @@ In situ quantization (ISQ) quantizes model weights in place as they are loaded, 
 
 If the quantized weights are small enough to fit even though the original weights would not, you can still run the model! Like all quantization, ISQ may also increase inference performance due to reduced memory bandwidth pressure.
 
-**Quick start**: Just use `--isq 4` (or 2, 3, 5, 6, 8) and mistral.rs will pick the best quantization for your hardware:
+**Quick start**: Just use `--isq 4` (or 2, 3, 5, 6, 8) and Hanzo Engine will pick the best quantization for your hardware:
 ```
 mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 ```
@@ -16,7 +16,7 @@ To set the ISQ type for individual layers, use a model [`topology`](TOPOLOGY.md)
 > Note: 🔥 AFQ (affine) quantization is designed to be fast on **Metal** but is only supported on Metal.
 
 ## Automatic ISQ (just use a number!)
-Instead of specifying a quantization type like `Q4K`, you can just pass an integer (2, 3, 4, 5, 6, or 8) and mistral.rs will automatically select the best quantization method for your platform.
+Instead of specifying a quantization type like `Q4K`, you can just pass an integer (2, 3, 4, 5, 6, or 8) and Hanzo Engine will automatically select the best quantization method for your platform.
 
 On Metal, this uses fast AFQ quantization (for 2, 3, 4, 6, or 8 bits). On other platforms, it falls back to Q/K quantization.
 
@@ -79,7 +79,7 @@ Deferred ISQ loads the full unquantized model into CPU memory first, then quanti
 ## Accuracy
 
 Accuracy of ISQ can be measured by the performance degradation versus the unquantized model.
-This is commonly measured with perplexity. Please see the [perplexity](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/perplexity/main.rs) example.
+This is commonly measured with perplexity. Please see the [perplexity](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/advanced/perplexity/main.rs) example.
 
 To improve the accuracy of a model with ISQ, use an imatrix file. These can be found online (for example, on Hugging Face), and should be passed with the `--imatrix` flag for `plain` models. This will increase the accuracy of the quantization significantly and bring the ISQ quantization up to par with the GGUF counterpart.
 
@@ -96,7 +96,7 @@ runner = Runner(
 ```
 
 ## Rust Example
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/isq/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/isq/main.rs).
 
 ```rust
 let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")

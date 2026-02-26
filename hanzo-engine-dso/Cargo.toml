@@ -12,12 +12,12 @@ hanzo-experience-registry = { path = "../../node/crates/hanzo-experience-registr
 hanzo-dso-aggregator = { path = "../../node/crates/hanzo-dso-aggregator" }
 hanzo-embedding = { path = "../../node/crates/hanzo-embedding" }
 
-# Mistral.rs core
+# Engine core
 mistralrs-core = { path = "../mistralrs-core" }
 
-# Candle (Rust ML framework)
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "7511e510" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "7511e510" }
+# Hanzo ML (Rust ML framework)
+candle-core = { path = "../../ml/hanzo-ml", package = "hanzo-ml" }
+candle-nn = { path = "../../ml/hanzo-nn", package = "hanzo-nn" }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
