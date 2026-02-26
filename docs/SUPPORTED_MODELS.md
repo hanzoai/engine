@@ -1,6 +1,6 @@
 # Supported Models
 
-Complete reference for model support in mistral.rs.
+Complete reference for model support in Hanzo Engine.
 
 ## Model Categories
 
@@ -61,7 +61,7 @@ Complete reference for model support in mistral.rs.
 - Embedding Gemma
 - Qwen 3 Embedding
 
-[Request a new model](https://github.com/EricLBuehler/mistral.rs/issues/156)
+[Request a new model](https://github.com/hanzoai/engine/issues/new?labels=new+model&title=Model+Request:+)
 
 ### Supported GGUF Architectures
 
@@ -234,7 +234,7 @@ mistralrs serve -p 1234 --log output.txt --format gguf -t HuggingFaceH4/zephyr-7
 
 ### Chat Templates and Tokenizer
 
-Mistral.rs will attempt to automatically load a chat template and tokenizer. This enables high flexibility across models and ensures accurate and flexible chat templating. However, this behavior can be customized.
+Hanzo Engine will attempt to automatically load a chat template and tokenizer. This enables high flexibility across models and ensures accurate and flexible chat templating. However, this behavior can be customized.
 
 - [Adapter models documentation](ADAPTER_MODELS.md)
 - [Chat templates documentation](CHAT_TOK.md)

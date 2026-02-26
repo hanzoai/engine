@@ -1,6 +1,6 @@
 # HTTP server
 
-Mistral.rs provides a lightweight OpenAI API compatible HTTP server based on [axum](https://github.com/tokio-rs/axum). The request and response formats are supersets of the OpenAI API.
+Hanzo Engine provides a lightweight OpenAI API compatible HTTP server based on [axum](https://github.com/tokio-rs/axum). The request and response formats are supersets of the OpenAI API.
 
 The API consists of the following endpoints. They can be viewed in your browser interactively by going to `http://localhost:<port>/docs`.
 
@@ -51,7 +51,7 @@ When streaming, `reasoning_content` appears in the `delta` object alongside `con
 
 ## Model Parameter Validation
 
-Mistral.rs validates that the `model` parameter in API requests matches the model that was actually loaded by the server. This ensures requests are processed by the correct model and prevents confusion.
+Hanzo Engine validates that the `model` parameter in API requests matches the model that was actually loaded by the server. This ensures requests are processed by the correct model and prevents confusion.
 
 **Behavior:**
 - If the `model` parameter matches the loaded model name, the request proceeds normally
@@ -81,7 +81,7 @@ client = openai.OpenAI(
 completion = client.chat.completions.create(
 model="default",
 messages=[
-    {"role": "system", "content": "You are Mistral.rs, an AI assistant."},
+    {"role": "system", "content": "You are Hanzo Engine, an AI assistant."},
     {"role": "user", "content": "Write a story about Rust error handling."}
 ]
 )
@@ -99,7 +99,7 @@ curl http://localhost:1234/v1/chat/completions \
 "messages": [
 {
     "role": "system",
-    "content": "You are Mistral.rs, an AI assistant."
+    "content": "You are Hanzo Engine, an AI assistant."
 },
 {
     "role": "user",

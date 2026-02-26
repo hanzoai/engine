@@ -1,10 +1,10 @@
-![mistral.rs](banner.png)
+![Hanzo Engine](banner.png)
 
 ## Quick Links
 
 | I want to... | Go to... |
 |--------------|----------|
-| Install mistral.rs | [Installation Guide](INSTALLATION.md) |
+| Install Hanzo Engine | [Installation Guide](INSTALLATION.md) |
 | Understand cargo features | [Cargo Features](CARGO_FEATURES.md) |
 | Run a model | [CLI Reference](CLI.md) |
 | Use the HTTP API | [HTTP Server](HTTP.md) |
@@ -14,7 +14,7 @@
 
 ## Getting Started
 
-- [Installation Guide](INSTALLATION.md) - Install mistral.rs on your system
+- [Installation Guide](INSTALLATION.md) - Install Hanzo Engine on your system
 - [Cargo Features](CARGO_FEATURES.md) - Complete cargo features reference
 - [CLI Reference](CLI.md) - Complete CLI command reference
 - [CLI TOML Configuration](CLI_CONFIG.md) - Configure via TOML files
@@ -114,4 +114,4 @@
 
 ## Contributing
 
-See the main [README](https://github.com/EricLBuehler/mistral.rs/blob/master/README.md#contributing) for contribution guidelines.
+See the main [README](https://github.com/hanzoai/engine/blob/main/README.md#contributing) for contribution guidelines.

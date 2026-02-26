@@ -10,7 +10,6 @@ It has the following features:
 
 Paper: https://arxiv.org/abs/2405.19076
 
-https://github.com/EricLBuehler/mistral.rs/assets/65165915/33593903-d907-4c08-a0ac-d349d7bf33de
 
 > Note: By default, this has the capability to create an csv loss image. When building from source (for Python or CLI), you may use `--no-default-features` command line to disable this. This may be necessary if networking is unavailable.
 
@@ -141,7 +140,7 @@ print(res.usage)
 ```
 
 ## Rust SDK
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/anymoe/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/advanced/anymoe/main.rs).
 
 ```rust
 use anyhow::Result;

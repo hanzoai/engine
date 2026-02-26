@@ -4,18 +4,16 @@ This file provides guidance to AI assistants working with the Hanzo Engine codeb
 
 ## Project Overview
 
-**Hanzo Engine** is Hanzo AI's high-performance LLM inference engine, built on top of [mistral.rs](https://github.com/EricLBuehler/mistral.rs) - a blazing-fast LLM inference engine written in Rust.
+**Hanzo Engine** is Hanzo AI's high-performance LLM inference engine written in Rust.
 
 ### Integration Status
 
-- **Upstream Sync**: Fully synchronized with mistral.rs at commit `530463af1` (Implement Qwen 3 VL! #1657)
 - **Last Sync Date**: 2025-10-26
-- **Upstream Repository**: https://github.com/EricLBuehler/mistral.rs
 - **Remote**: Configured as `upstream` in git
 
 ### Hanzo-Specific Components
 
-This repository extends mistral.rs with:
+This repository includes:
 
 1. **hanzo-engine/** - Custom CLI tool and server with Hanzo-specific features:
    - `serve` - Start inference server on port 36900
@@ -33,10 +31,10 @@ This repository extends mistral.rs with:
 ### Architecture
 
 Hanzo Engine is a Rust workspace containing:
-- All standard mistral.rs workspace members
-- **hanzo-engine/** (NEW) - Custom inference server and CLI
+- All standard workspace members (mistralrs-core, mistralrs-server, etc.)
+- **hanzo-engine/** - Custom inference server and CLI
 
-mistral.rs provides comprehensive LLM inference with support for text, vision, image generation, and speech models through multiple APIs (Rust, Python, OpenAI HTTP, MCP).
+The engine provides comprehensive LLM inference with support for text, vision, image generation, and speech models through multiple APIs (Rust, Python, OpenAI HTTP, MCP).
 
 ## Essential Commands
 
@@ -56,7 +54,7 @@ cargo build --package hanzo-engine --release --features cuda
 cargo install --path hanzo-engine --no-default-features --features metal
 ```
 
-### Building Upstream mistral.rs Components
+### Building Core Components
 
 ```bash
 # Basic release build
@@ -68,7 +66,7 @@ cargo build --release --features "cuda flash-attn cudnn"
 # With Metal support (macOS)
 cargo build --release --features metal
 
-# Install upstream mistralrs-server binary
+# Install mistralrs-server binary
 cargo install --path mistralrs-server --features <features>
 ```
 
@@ -116,9 +114,9 @@ You should also look for a model.safetensors.index.json file for the model at ha
   - Ollama compatibility layer
   - Status: Compiles successfully with Metal backend (macOS)
 
-#### Upstream mistral.rs Components
+#### Core Components
 - `mistralrs-core/` - Core inference engine, model implementations, pipelines
-- `mistralrs-server/` - CLI binary entry point (upstream)
+- `mistralrs-server/` - CLI binary entry point
 - `mistralrs-server-core/` - HTTP server routing, OpenAI API implementation
 - `mistralrs-pyo3/` - Python bindings (PyO3)
 - `mistralrs/` - High-level Rust API
@@ -194,7 +192,7 @@ See `docs/` directory for detailed documentation on specific models and features
 ### Embeddings Implementation
 - **Status**: Temporarily disabled (backed up to `embeddings.rs.bak`)
 - **Issue**: The `embedding` module in `mistralrs_core` is private and not accessible through public API
-- **TODO**: Research proper way to implement embeddings using public mistralrs API
+- **TODO**: Research proper way to implement embeddings using public API
 - **Previous attempt**: Used internal `BertEmbeddingModel` and `BertPipeline` which are not publicly exposed
 
 ### Dependencies
@@ -205,7 +203,7 @@ Current `hanzo-engine/Cargo.toml` needs these dependencies for embeddings:
 
 ## Syncing with Upstream
 
-To pull latest changes from upstream mistral.rs:
+To pull latest changes from upstream:
 
 ```bash
 # Fetch upstream changes

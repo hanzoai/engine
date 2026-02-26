@@ -4,15 +4,15 @@ Gemma 3n models are designed for efficient execution on low-resource devices. Th
 
 The Gemma 3n Model has support in the Rust, Python, and HTTP APIs. Additionally, the Gemma 3n Model supports ISQ for increased performance.
 
-- **Full multimodal support**: mistral.rs supports text, audio, and vision inputs to Gemma 3n!
+- **Full multimodal support**: Hanzo Engine supports text, audio, and vision inputs to Gemma 3n!
 
-- **🪆 mistral.rs supports dynamically resizing the Gemma 3n model with that MatFormer architecture!**
+- **🪆 Hanzo Engine supports dynamically resizing the Gemma 3n model with that MatFormer architecture!**
 
     Gemma 3n implements the MatFormer architecture, which allows one model to be resized dynamically and tune performance on resource-constrained systems.
 
-    Mistral.rs supports this feature!
+    Hanzo Engine supports this feature!
     
-    You can access it using the `matformer_config_path` ([example config](https://github.com/EricLBuehler/mistral.rs/blob/master/matformer_configs/gemma3n.csv)) and `matformer_slice_name` arguments throughout the APIs.
+    You can access it using the `matformer_config_path` ([example config](https://github.com/hanzoai/engine/blob/main/matformer_configs/gemma3n.csv)) and `matformer_slice_name` arguments throughout the APIs.
     
 - **Prequantized UQFF models:**
   - [Gemma 3n E4B](https://huggingface.co/EricB/gemma-3n-E4B-it-UQFF)
@@ -22,11 +22,11 @@ The Gemma 3n Model has support in the Rust, Python, and HTTP APIs. Additionally,
 
 MatFormer allows you to dynamically adjust the model size based on your resource constraints. The Gemma 3n model comes with several pre-configured slices that offer different performance/resource trade-offs.
 
-You can read more about MatFormer in mistral.rs [here](MATFORMER.md).
+You can read more about MatFormer in Hanzo Engine [here](MATFORMER.md).
 
 ### Available Slices
 
-The default configuration file ([`matformer_configs/gemma3n.csv`](https://github.com/EricLBuehler/mistral.rs/blob/master/matformer_configs/gemma3n.csv)) includes:
+The default configuration file ([`matformer_configs/gemma3n.csv`](https://github.com/hanzoai/engine/blob/main/matformer_configs/gemma3n.csv)) includes:
 - **Main model** (3.98B params, 35 layers) - Full model with best performance
 - **Config for official E2B Model** (1.91B params, 30 layers) - Balanced performance/efficiency  
 - Various intermediate configurations from E1.96B to E3.79B with different layer and FFN configurations
@@ -136,7 +136,7 @@ The slice selection allows you to:
 - Maintain acceptable quality for many use cases with smaller slices
 
 ## HTTP server
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/gemma3n.py).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/examples/server/gemma3n.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -215,13 +215,13 @@ print(resp)
 
 ```
 
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/hanzoai/engine/blob/main/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/hanzoai/engine/blob/main/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/models/vision_models/main.rs).
 
 This is a minimal example of running the Gemma 3n model with a dummy image.
 
@@ -265,7 +265,7 @@ async fn main() -> Result<()> {
 ```
 
 ## Python
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gemma3n.py).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/examples/python/gemma3n.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -379,7 +379,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-With this, you now have a single-call pipeline that fuses *sound*, *vision*, and *text* – all running locally through `mistral.rs`! 🔥
+With this, you now have a single-call pipeline that fuses *sound*, *vision*, and *text* – all running locally through Hanzo Engine! 🔥
 
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/hanzoai/engine/blob/main/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/hanzoai/engine/blob/main/examples/python/phi3v_local_img.py).

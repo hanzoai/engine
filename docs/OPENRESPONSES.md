@@ -1,6 +1,6 @@
 # OpenResponses API
 
-mistral.rs supports the [OpenResponses API specification](https://www.openresponses.org/specification).
+Hanzo Engine supports the [OpenResponses API specification](https://www.openresponses.org/specification).
 
 ## Endpoints
 
@@ -18,7 +18,7 @@ The following parameters are accepted for API compatibility but will return erro
 | `parallel_tool_calls` | Only `true` or omitted is supported; `false` returns an error |
 | `max_tool_calls` | Not supported; setting any value returns an error |
 
-## mistral.rs Extensions
+## Hanzo Engine Extensions
 
 These additional parameters are available beyond the spec:
 
