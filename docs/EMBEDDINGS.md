@@ -1,6 +1,6 @@
 # Embeddings Overview
 
-Mistral.rs can load embedding models alongside chat, vision, diffusion, and speech workloads. Embedding models
+Hanzo Engine can load embedding models alongside chat, vision, diffusion, and speech workloads. Embedding models
 produce dense vector representations that you can use for similarity search, clustering, reranking, and other
 semantic tasks.
 

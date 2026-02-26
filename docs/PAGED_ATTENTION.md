@@ -1,6 +1,6 @@
-# PagedAttention in mistral.rs
+# PagedAttention in Hanzo Engine
 
-Mistral.rs supports PagedAttention ([paper here](https://arxiv.org/abs/2309.06180)) to accelerate both normal inference and batched inference on:
+Hanzo Engine supports PagedAttention ([paper here](https://arxiv.org/abs/2309.06180)) to accelerate both normal inference and batched inference on:
 - CUDA (Unix-like platforms such as WSL, Linux)
 - Metal
 
@@ -103,13 +103,13 @@ The prefix cache operates at the block level (not token level) for efficiency:
 
 On Metal (macOS Apple Silicon), the GPU and CPU share the same physical RAM (unified memory). Unlike CUDA GPUs with dedicated VRAM where unused memory would otherwise be wasted, allocating large KV caches on Metal wires physical RAM away from the OS and CPU, which can cause system-wide memory pressure and thrashing.
 
-To avoid this, mistral.rs automatically caps the PagedAttention KV cache on Metal to `max_seq_len * max_batch_size` tokens — just enough for the configured context length. On CUDA, the full available memory is used for maximum request concurrency (following the vLLM approach).
+To avoid this, Hanzo Engine automatically caps the PagedAttention KV cache on Metal to `max_seq_len * max_batch_size` tokens — just enough for the configured context length. On CUDA, the full available memory is used for maximum request concurrency (following the vLLM approach).
 
 You can override this behavior on any platform with `--pa-memory-mb` to set an explicit KV cache budget in megabytes.
 
-## FlashAttention V2/V3 + PagedAttention in mistral.rs
+## FlashAttention V2/V3 + PagedAttention in Hanzo Engine
 
-If mistral.rs is compiled with [FlashAttention](FLASH_ATTENTION.md) and PagedAttention is enabled, then FlashAttention will be used in tandem to accelerate
+If Hanzo Engine is compiled with [FlashAttention](FLASH_ATTENTION.md) and PagedAttention is enabled, then FlashAttention will be used in tandem to accelerate
 the prefill phase.
 
 ## Using the CLI
@@ -132,7 +132,7 @@ mistralrs run --paged-attn on --pa-memory-mb 4096 --pa-block-size 32 --pa-cache-
 ```
 
 ## Using the Rust SDK
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/paged_attn/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/advanced/paged_attn/main.rs).
 
 ```rust
 use anyhow::Result;

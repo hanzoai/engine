@@ -1,6 +1,6 @@
 # Idefics 3 Vision: [`HuggingFaceM4/Idefics3-8B-Llama3`](https://huggingface.co/HuggingFaceM4/Idefics3-8B-Llama3)
 
-Mistral.rs supports the Idefics 3 vision model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.
+Hanzo Engine supports the Idefics 3 vision model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.
 
 UQFF quantizations are also available.
 
@@ -29,7 +29,7 @@ Simply substitute the Idefics 3 model ID (`HuggingFaceM4/Idefics3-8B-Llama3`) wi
 
 ## Interactive mode
 
-Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.
+Hanzo Engine supports interactive mode for vision models! It is an easy way to interact with the model.
 
 1) Start up interactive mode with the Idefics 3 model
 
@@ -68,7 +68,7 @@ The mountain is Mount Washington.
 ```
 
 ## HTTP server
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/idefics3.py).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/examples/server/idefics3.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -141,13 +141,13 @@ resp = completion.choices[0].message.content
 print(resp)
 ```
 
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/hanzoai/engine/blob/main/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/hanzoai/engine/blob/main/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/models/vision_models/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -192,7 +192,7 @@ async fn main() -> Result<()> {
 ---
 
 ## Python
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/idefics3.py).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/examples/python/idefics3.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -239,8 +239,8 @@ print(res.usage)
 
 ```
 
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/hanzoai/engine/blob/main/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/hanzoai/engine/blob/main/examples/python/phi3v_local_img.py).
 
 ## UQFF models
 Coming soon!

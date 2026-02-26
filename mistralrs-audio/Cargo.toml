@@ -1,7 +1,7 @@
 [package]
 name = "mistralrs-audio"
 readme = "../README.md"
-authors = ["Eric Buehler"]
+authors = ["Hanzo AI <dev@hanzo.ai>", "Eric Buehler"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

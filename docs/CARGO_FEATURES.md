@@ -1,6 +1,6 @@
 # Cargo Features Reference
 
-This document provides a complete reference for all cargo features available in mistral.rs.
+This document provides a complete reference for all cargo features available in Hanzo Engine.
 
 ## Quick Reference
 
@@ -268,8 +268,8 @@ cargo install mistralrs-cli --features "mkl"
 cargo install mistralrs-cli --features "cuda cudnn flash-attn nccl"
 
 # Build from source with CUDA
-git clone https://github.com/EricLBuehler/mistral.rs.git
-cd mistral.rs
+git clone https://github.com/hanzoai/engine.git
+cd engine
 cargo build --release --features "cuda cudnn flash-attn"
 ```
 

@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Common issues and solutions for mistral.rs.
+Common issues and solutions for Hanzo Engine.
 
 ## Debug Mode
 
@@ -88,7 +88,7 @@ This checks your system configuration and reports any issues.
 ### Model Loading Issues
 
 **Model type not auto-detected:**
-- If auto-detection fails, please [raise an issue](https://github.com/EricLBuehler/mistral.rs/issues)
+- If auto-detection fails, please [raise an issue](https://github.com/hanzoai/engine/issues)
 - You can manually specify the architecture if needed
 
 **Chat template issues:**
@@ -101,8 +101,8 @@ This checks your system configuration and reports any issues.
 If you're still stuck:
 
 - [Discord](https://discord.gg/SZrecqK8qw) - Community support
-- [Matrix](https://matrix.to/#/#mistral.rs:matrix.org) - Alternative chat
-- [GitHub Issues](https://github.com/EricLBuehler/mistral.rs/issues) - Bug reports and feature requests
+- [GitHub Discussions](https://github.com/hanzoai/engine/discussions) - Community Q&A
+- [GitHub Issues](https://github.com/hanzoai/engine/issues) - Bug reports and feature requests
 
 When reporting issues, please include:
 1. Output of `mistralrs doctor`

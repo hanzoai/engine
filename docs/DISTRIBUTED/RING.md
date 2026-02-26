@@ -1,6 +1,6 @@
-# Ring backend in mistral.rs
+# Ring backend in Hanzo Engine
 
-Mistral.rs provides a TCP-based ring backend for distributed tensor-parallel inference. This backend is enabled by compiling with the `ring` feature and implements collective operations over a ring topology using TCP sockets.
+Hanzo Engine provides a TCP-based ring backend for distributed tensor-parallel inference. This backend is enabled by compiling with the `ring` feature and implements collective operations over a ring topology using TCP sockets.
 
 ## Prerequisites
 - Build with the `ring` feature enable, **in addition to any others**:
@@ -50,7 +50,7 @@ Each node connects to its right neighbor by IP and port, and the last node wraps
 
 Example for two processes:
 
-- [`ring_0.json`](https://github.com/EricLBuehler/mistral.rs/blob/master/ring_configs/ring_0.json):
+- [`ring_0.json`](https://github.com/hanzoai/engine/blob/main/ring_configs/ring_0.json):
   ```json
   {
     "master_ip": "0.0.0.0",
@@ -62,7 +62,7 @@ Example for two processes:
   }
   ```
 
-- [`ring_0.json`](https://github.com/EricLBuehler/mistral.rs/blob/master/ring_configs/ring_1.json):
+- [`ring_0.json`](https://github.com/hanzoai/engine/blob/main/ring_configs/ring_1.json):
   ```json
   {
     "master_ip": "0.0.0.0",

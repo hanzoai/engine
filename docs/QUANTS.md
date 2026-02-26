@@ -1,6 +1,6 @@
-# Quantization in mistral.rs
+# Quantization in Hanzo Engine
 
-Mistral.rs supports the following quantization:
+Hanzo Engine supports the following quantization:
 - ⭐ ISQ ([read more detail](ISQ.md))
     - Supported in all plain/vision and adapter models
     - Works on all supported devices
@@ -19,12 +19,12 @@ Mistral.rs supports the following quantization:
     - I quants coming!
     - CPU, CUDA, Metal (all supported devices)
     - 2, 3, 4, 5, 6, 8 bit
-- GPTQ (convert with [this script](https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/convert_to_gptq.py))
+- GPTQ (convert with [this script](https://github.com/hanzoai/engine/blob/main/scripts/convert_to_gptq.py))
     - Supported in all plain/vision and adapter models
     - CUDA only
     - 2, 3, 4, 8 bit
     - [Marlin](https://github.com/IST-DASLab/marlin) kernel support in 4-bit and 8-bit.
-- AWQ (convert with [this script](https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/convert_awq_marlin.py))
+- AWQ (convert with [this script](https://github.com/hanzoai/engine/blob/main/scripts/convert_awq_marlin.py))
     - Supported in all plain/vision and adapter models
     - CUDA only
     - 4 and 8 bit
@@ -63,7 +63,7 @@ mistralrs run --isq 4 -m microsoft/Phi-3-mini-4k-instruct
 
 ## Using a GPTQ quantized model
 - Provide the model ID for the GPTQ model
-- Mistral.rs will automatically detect and use GPTQ quantization for plain and vision models!
+- Hanzo Engine will automatically detect and use GPTQ quantization for plain and vision models!
 - The [Marlin](https://github.com/IST-DASLab/marlin) kernel will automatically be used for 4-bit and 8-bit.
 
 ```
@@ -79,7 +79,7 @@ python3 scripts/convert_to_gptq.py --src path/to/model --dst output/model/path -
 
 ## Using a MLX prequantized model (on Metal)
 - Provide the model ID for the MLX prequantized model
-- Mistral.rs will automatically detect and use quantization for plain and vision models!
+- Hanzo Engine will automatically detect and use quantization for plain and vision models!
 - Specialized kernels will be used to accelerate inference!
 
 ```

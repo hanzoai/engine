@@ -2,7 +2,7 @@
 
 **[See the Gemma 2 model Collection](https://huggingface.co/collections/google/gemma-2-release-667d6600fd5220e7b967f315)**
 
-The Gemma 2 models are a family of text-to-text decoder-only LLMs. As such, the methods to use them are the same as with all other text-to-text LLMs supported by mistral.rs.
+The Gemma 2 models are a family of text-to-text decoder-only LLMs. As such, the methods to use them are the same as with all other text-to-text LLMs supported by Hanzo Engine.
 
 ## HTTP API
 

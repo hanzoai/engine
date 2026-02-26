@@ -4,7 +4,7 @@ This document covers MLX support, Metal GPU acceleration, and Apple Silicon opti
 
 ## Overview
 
-Hanzo Engine is a fork of mistral.rs optimized for high-performance LLM inference. On macOS/iOS, it leverages Apple's Metal framework for GPU acceleration with specialized quantization kernels inspired by MLX (Apple's ML framework).
+Hanzo Engine is a high-performance LLM inference engine. On macOS/iOS, it leverages Apple's Metal framework for GPU acceleration with specialized quantization kernels inspired by MLX (Apple's ML framework).
 
 ## Metal Backend Support
 
@@ -177,7 +177,7 @@ cargo run --release --features "metal accelerate" -- \
 
 ## Upstream Synchronization
 
-This fork tracks `upstream/main` from [EricLBuehler/mistral.rs](https://github.com/EricLBuehler/mistral.rs).
+This repository tracks upstream changes and merges them periodically.
 
 Recent upstream branches of interest:
 - `mlx_rmsnorm_and_rope` - MLX RMSNorm and RoPE optimizations

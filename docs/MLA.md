@@ -1,4 +1,4 @@
-# Multi-head Latent Attention (MLA) in mistral.rs
+# Multi-head Latent Attention (MLA) in Hanzo Engine
 
 Multi-head Latent Attention (MLA) is an efficient attention mechanism that reduces KV cache memory usage by compressing key-value states into a low-rank latent space. This technique was introduced in DeepSeek V2 and is also used in DeepSeek V3 and GLM-4.7-Flash models.
 

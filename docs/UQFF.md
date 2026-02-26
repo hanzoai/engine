@@ -35,7 +35,7 @@ While ISQ is a powerful feature enabling easy quantization of models, the key li
 
 In contrast to GGUF, which only supports the GGUF quantizations, UQFF is designed with flexibiliuty in mind. At its code, it extends the power and flexibility of ISQ. The ability to support multiple quantization types (more to come!) in one simple, easy-to-use file is a critical feature.
 
-Additionally, users will no longer need to wait for GGUF support to begin using post-training quantized models. As we add new models and quantization schemes to mistral.rs, the feature set of UQFF will grow.
+Additionally, users will no longer need to wait for GGUF support to begin using post-training quantized models. As we add new models and quantization schemes to Hanzo Engine, the feature set of UQFF will grow.
 
 ## Support
 
@@ -106,8 +106,8 @@ mistralrs run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instru
 ### Using with the Rust SDK
 
 Check out the following examples:
-- Normal: [uqff/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/uqff/main.rs)
-- Vision: [uqff_vision/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/uqff_vision/main.rs)
+- Normal: [uqff/main.rs](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/uqff/main.rs)
+- Vision: [uqff_vision/main.rs](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/uqff_vision/main.rs)
 
 ### Using the Python SDK
 Modify the `Which` instantiation as follows:
@@ -236,4 +236,4 @@ After this, you can use Git to track, commit, and push files.
 
 You can find a list of models in the [Hugging Face model collection](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 
-Have you created a UQFF model on Hugging Face? If so, please [create an issue](https://github.com/EricLBuehler/mistral.rs/issues/new).
+Have you created a UQFF model on Hugging Face? If so, please [create an issue](https://github.com/hanzoai/engine/issues/new).

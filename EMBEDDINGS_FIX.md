@@ -6,7 +6,7 @@ Fixed the `/v1/embeddings` endpoint in the Hanzo Engine to generate real embeddi
 ## Changes Made
 
 ### 1. Created New Embeddings Module (`/Users/z/work/hanzo/engine/hanzo-engine/src/embeddings.rs`)
-- Implemented `EmbeddingEngine` struct that uses the mistralrs BERT model
+- Implemented `EmbeddingEngine` struct that uses the BERT model
 - Uses the Snowflake Arctic Embed L model for high-quality embeddings
 - Supports batch processing of multiple texts
 - Implements mean pooling and L2 normalization for sentence embeddings
@@ -21,7 +21,7 @@ Fixed the `/v1/embeddings` endpoint in the Hanzo Engine to generate real embeddi
 
 ### 3. Updated Cargo Configuration (`/Users/z/work/hanzo/engine/hanzo-engine/Cargo.toml`)
 - Changed default features from `cuda` to `metal` for macOS compatibility
-- Kept mistralrs dependencies for embedding model support
+- Kept core dependencies for embedding model support
 
 ## Key Features
 

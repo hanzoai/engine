@@ -1,6 +1,6 @@
 # mistralrs Rust SDK
 
-The `mistralrs` crate provides a high-level Rust API for running LLM inference with mistral.rs.
+The `mistralrs` crate provides a high-level Rust API for running LLM inference with Hanzo Engine.
 
 > **Full API reference:** [docs.rs/mistralrs](https://docs.rs/mistralrs)
 
@@ -186,7 +186,7 @@ fn get_weather(
 }
 ```
 
-See [Tool Calling](TOOL_CALLING.md) for full details, or the [`examples/advanced/tools/`](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/tools) example.
+See [Tool Calling](TOOL_CALLING.md) for full details, or the [`examples/advanced/tools/`](https://github.com/hanzoai/engine/tree/main/mistralrs/examples/advanced/tools) example.
 
 ## Agents
 
@@ -205,7 +205,7 @@ let response = agent.run("What's the weather in NYC and London?").await?;
 println!("{}", response.final_text);
 ```
 
-See the [`examples/advanced/agent/`](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/agent) example for streaming agents and the `#[tool]` macro.
+See the [`examples/advanced/agent/`](https://github.com/hanzoai/engine/tree/main/mistralrs/examples/advanced/agent) example for streaming agents and the `#[tool]` macro.
 
 ## Blocking API
 
@@ -259,4 +259,4 @@ Run any example with:
 cargo run --release --features <features> --example <name>
 ```
 
-Browse all examples: [`mistralrs/examples/`](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples)
+Browse all examples: [`mistralrs/examples/`](https://github.com/hanzoai/engine/tree/main/mistralrs/examples)

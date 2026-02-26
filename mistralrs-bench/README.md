@@ -11,7 +11,7 @@
 > mistralrs bench -m model-id
 > ```
 
-This is our official benchmarking application, which allows you to collect structured information about the speed of `mistral.rs`.
+This is the official benchmarking application, which allows you to collect structured information about the speed of [Hanzo Engine](https://github.com/hanzoai/engine).
 
 > [!NOTE]
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.

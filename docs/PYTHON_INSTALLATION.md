@@ -82,8 +82,8 @@ Building from source gives you access to the latest features and allows customiz
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/EricLBuehler/mistral.rs.git
-   cd mistral.rs/mistralrs-pyo3
+   git clone https://github.com/hanzoai/engine.git
+   cd engine/mistralrs-pyo3
    ```
 
 2. **Create and activate a virtual environment:**
@@ -148,5 +148,5 @@ print(response.choices[0].message.content)
 ## Next Steps
 
 - [SDK Documentation](PYTHON_SDK.md) - Full SDK reference
-- [Examples](https://github.com/EricLBuehler/mistral.rs/tree/master/examples/python) - Python examples
-- [Cookbook](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/cookbook.ipynb) - Interactive tutorial
+- [Examples](https://github.com/hanzoai/engine/tree/main/examples/python) - Python examples
+- [Cookbook](https://github.com/hanzoai/engine/blob/main/examples/python/cookbook.ipynb) - Interactive tutorial

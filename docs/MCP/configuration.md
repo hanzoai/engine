@@ -1,6 +1,6 @@
 # MCP Configuration Reference
 
-This page provides a complete reference for configuring the MCP client in mistral.rs.
+This page provides a complete reference for configuring the MCP client in Hanzo Engine.
 
 ## Quick Start - Minimal Configuration
 
@@ -69,7 +69,7 @@ Configuration for each MCP server:
   "timeout_secs": null,               // Optional, null = no timeout (default)
   "headers": {                        // Optional custom headers
     "X-API-Version": "v1",
-    "User-Agent": "mistral-rs/0.6.0"
+    "User-Agent": "hanzo-engine/0.7.0"
   }
 }
 ```
@@ -82,7 +82,7 @@ Configuration for each MCP server:
   "url": "wss://realtime.example.com/mcp",
   "timeout_secs": null,               // Optional, null = no timeout (default)
   "headers": {                        // Optional WebSocket headers
-    "Origin": "https://mistral.rs",
+    "Origin": "https://engine.hanzo.ai",
     "Sec-WebSocket-Protocol": "mcp"
   }
 }
