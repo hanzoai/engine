@@ -11,7 +11,7 @@ The Llama 4 collection of models are natively multimodal AI models that enable t
 - Very sparse: 1 activated expert for both Scout (of 16), and Maverick (of 128)
 - RoPE enhancement: iRoPE enables high context-length functionality
 
-**Integration in mistral.rs:**
+**Integration in Hanzo Engine:**
 - Tool calling + [Automatic web search](WEB_SEARCH.md)
 - ISQ
 - Rust, Python and HTTP APIs
@@ -24,7 +24,7 @@ The Python and HTTP APIs support sending images as:
 The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 ## HTTP server
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llama4.py).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/examples/server/llama4.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -107,13 +107,13 @@ print(resp)
 
 ```
 
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/hanzoai/engine/blob/main/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/hanzoai/engine/blob/main/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/models/vision_models/main.rs).
 
 This is a minimal example of running the Llama 4 model with a dummy image.
 
@@ -158,7 +158,7 @@ async fn main() -> Result<()> {
 ```
 
 ## Python
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/llama4.py).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/examples/python/llama4.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -205,5 +205,5 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/hanzoai/engine/blob/main/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/hanzoai/engine/blob/main/examples/python/phi3v_local_img.py).

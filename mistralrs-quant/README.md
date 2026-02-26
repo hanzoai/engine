@@ -2,7 +2,7 @@
 
 An advanced and highly diverse set of quantization techniques. This crate supports both quantization and optimized inference.
 
-It has grown beyon simply quantization and is used by `mistral.rs` to power:
+It has grown beyond simply quantization and is used by [Hanzo Engine](https://github.com/hanzoai/engine) to power:
 - ISQ
 - Imatrix collection
 - General quantization features

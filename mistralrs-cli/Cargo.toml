@@ -1,10 +1,10 @@
 [package]
 name = "mistralrs-cli"
 readme = "../README.md"
-authors = ["Eric Buehler"]
+authors = ["Hanzo AI <dev@hanzo.ai>", "Eric Buehler"]
 version.workspace = true
 edition.workspace = true
-description = "Command-line interface for mistral.rs LLM inference"
+description = "Command-line interface for Hanzo Engine LLM inference"
 homepage.workspace = true
 repository.workspace = true
 keywords.workspace = true

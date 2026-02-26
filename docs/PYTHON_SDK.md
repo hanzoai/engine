@@ -5,7 +5,7 @@ Documentation for the `mistralrs` Python package.
 > **Installation:** See [PYTHON_INSTALLATION.md](PYTHON_INSTALLATION.md) for installation instructions.
 
 **Table of contents**
-- Full API reference: [here](https://ericlbuehler.github.io/mistral.rs/pyo3/mistralrs.html)
+- Full API reference: [here](https://docs.hanzo.ai/docs/services/engine/pyo3/mistralrs.html)
 - Model configuration (`Which` enum): [here](#which)
 - Multi-model support: [here](#multi-model-support)
 - MCP Client Configuration: [here](#mcp-client)

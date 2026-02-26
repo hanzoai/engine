@@ -1,6 +1,6 @@
 # EmbeddingGemma
 
-EmbeddingGemma was the first embedding model supported by mistral.rs. This guide walks through serving the
+EmbeddingGemma was the first embedding model supported by Hanzo Engine. This guide walks through serving the
 model via the OpenAI-compatible HTTP server, running it from Python, and embedding text directly in Rust.
 
 For a catalog of available embedding models and general usage tips, see [EMBEDDINGS.md](EMBEDDINGS.md).
@@ -41,7 +41,7 @@ curl http://localhost:1234/v1/embeddings \
   -d '{"model": "default", "input": ["task: search result | query: What is graphene?", "task: search result | query: What is an apple?"]}'
 ```
 
-An example with the OpenAI client can be found [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/embedding.py).
+An example with the OpenAI client can be found [here](https://github.com/hanzoai/engine/blob/main/examples/server/embedding.py).
 
 By default the server registers the model as `default`. To expose it under a custom name or alongside chat
 models, run in multi-model mode and assign an identifier in the selector configuration:
@@ -83,7 +83,7 @@ embeddings = runner.send_embedding_request(request)
 print(len(embeddings), len(embeddings[0]))
 ```
 
-Refer to [this example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/embedding_gemma.py) for a complete runnable script.
+Refer to [this example](https://github.com/hanzoai/engine/blob/main/examples/python/embedding_gemma.py) for a complete runnable script.
 
 ## Rust SDK
 
@@ -113,7 +113,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-This example lives [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/getting_started/embedding/main.rs), and can be run with:
+This example lives [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/getting_started/embedding/main.rs), and can be run with:
 
 ```bash
 cargo run --package mistralrs --example embedding_gemma

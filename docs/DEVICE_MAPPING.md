@@ -1,10 +1,10 @@
 # Device mapping
 
-In mistral.rs, device mapping is **automatically managed** to be as performant and easy as possible. Automatic device mapping is enabled
+In Hanzo Engine, device mapping is **automatically managed** to be as performant and easy as possible. Automatic device mapping is enabled
 by default in the CLI/server and Python SDK and does not make any changes when the model fits entirely on the GPU.
 
 > [!NOTE]
-> If your system has more than one CUDA device, mistral.rs will automatically use [tensor parallelism](DISTRIBUTED/DISTRIBUTED.md). If the model does not
+> If your system has more than one CUDA device, Hanzo Engine will automatically use [tensor parallelism](DISTRIBUTED/DISTRIBUTED.md). If the model does not
 > completely fit on the available GPUs, or you wish to use automatic device mapping, you can disable tensor parallelism by setting `MISTRALRS_NO_NCCL=1`.
 
 Automatic device mapping works by prioritizing loading models into GPU memory, and any remaining parts are loaded into CPU memory.
@@ -29,11 +29,11 @@ On integrated GPU systems (e.g. Apple Silicon, NVIDIA Grace Blackwell, Jetson) w
 
 ## Examples
 - Python
-    - Text models [text_auto_device_map.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/text_auto_device_map.py)
-    - Vision models [vision_auto_device_map.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/vision_auto_device_map.py)
+    - Text models [text_auto_device_map.py](https://github.com/hanzoai/engine/blob/main/examples/python/text_auto_device_map.py)
+    - Vision models [vision_auto_device_map.py](https://github.com/hanzoai/engine/blob/main/examples/python/vision_auto_device_map.py)
 - Rust
-    - Text models [text_auto_device_map/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs)
-    - Vision models [vision_auto_device_map/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs)
+    - Text models [text_auto_device_map/main.rs](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/advanced/auto_device_map/main.rs)
+    - Vision models [vision_auto_device_map/main.rs](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/advanced/auto_device_map/main.rs)
 - Server
     - Text models:
     ```bash
@@ -59,7 +59,7 @@ There are 2 ways to do device mapping:
 
 The format for the ordinals and number of layers is `ORD:NUM;...` where ORD is the unique ordinal and NUM is the number of layers for that GPU. This may be repeated as many times as necessary.
 
-> Note: We refer to GPU layers as "device layers" throughout mistral.rs.
+> Note: We refer to GPU layers as "device layers" throughout Hanzo Engine.
 
 ## Example of specifying ordinals
 ```
