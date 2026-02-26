@@ -1,6 +1,6 @@
-# Speech model support in mistral.rs
+# Speech model support in Hanzo Engine
 
-Mistral.rs supports various modalities of models, including speech models. Speech models handle audio-to-text (ASR) and text-to-speech (TTS) tasks.
+Hanzo Engine supports various modalities of models, including speech models. Speech models handle audio-to-text (ASR) and text-to-speech (TTS) tasks.
 
 Please see docs for the following model types:
 

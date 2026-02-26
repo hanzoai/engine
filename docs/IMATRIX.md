@@ -1,6 +1,6 @@
 # Enhancing ISQ with an imatrix
 
-Mistral.rs supports enhancing the performance of models quantized with ISQ by collecting an imatix from [calibration data](https://github.com/EricLBuehler/mistral.rs/tree/master/calibration_data/). The following quantizations are supported with an imatrix:
+Hanzo Engine supports enhancing the performance of models quantized with ISQ by collecting an imatix from [calibration data](https://github.com/hanzoai/engine/tree/main/calibration_data/). The following quantizations are supported with an imatrix:
 
 - `Q2K`
 - `Q3K`
@@ -12,7 +12,7 @@ Mistral.rs supports enhancing the performance of models quantized with ISQ by co
 
 Using an imatrix causes the quantization process to take longer as the data must be collected, but there is no inference-time performance decrease.
 
-> Note: mistral.rs will automatically generate a **.cimatrix** file which can be used within mistral.rs as a replacement for a .imatrix file. The primary advantage is the in-situ generation within mistral.rs. The format is incompatible with llama.cpp.
+> Note: Hanzo Engine will automatically generate a **.cimatrix** file which can be used within Hanzo Engine as a replacement for a .imatrix file. The primary advantage is the in-situ generation within Hanzo Engine. The format is incompatible with llama.cpp.
 
 To use this, simply specify the calibration data file in the various APIs as detailed below.
 
@@ -22,7 +22,7 @@ mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct --calibration-file cal
 ```
 
 ## With the Rust SDK
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/imatrix/).
+You can find this example [here](https://github.com/hanzoai/engine/tree/main/mistralrs/examples/imatrix/).
 
 ```rust
 let model = TextModelBuilder::new("meta-llama/Llama-3.2-3B-Instruct")
@@ -35,7 +35,7 @@ let model = TextModelBuilder::new("meta-llama/Llama-3.2-3B-Instruct")
 ```
 
 ## With the Python SDK
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/imatrix.py).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/examples/python/imatrix.py).
 
 ```python
 runner = Runner(
