@@ -1,6 +1,6 @@
 # MCP Transport Types
 
-mistral.rs supports three transport types for connecting to MCP servers, each optimized for different use cases.
+Hanzo Engine supports three transport types for connecting to MCP servers, each optimized for different use cases.
 
 ## HTTP Transport
 
@@ -16,7 +16,7 @@ Best for public APIs, RESTful services, and servers behind load balancers.
     "timeout_secs": 30,
     "headers": {
       "X-API-Version": "v1",
-      "User-Agent": "mistral-rs/0.6.0"
+      "User-Agent": "hanzo-engine/0.7.0"
     }
   },
   "bearer_token": "your-api-token"
@@ -52,7 +52,7 @@ Best for real-time applications, bidirectional communication, and low-latency re
     "url": "wss://realtime.example.com/mcp",
     "timeout_secs": 60,
     "headers": {
-      "Origin": "https://mistral.rs",
+      "Origin": "https://engine.hanzo.ai",
       "Sec-WebSocket-Protocol": "mcp"
     }
   },

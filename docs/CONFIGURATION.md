@@ -1,6 +1,6 @@
 # Configuration Reference
 
-This document covers environment variables and server configuration for mistral.rs.
+This document covers environment variables and server configuration for Hanzo Engine.
 
 ## Runtime Environment Variables
 

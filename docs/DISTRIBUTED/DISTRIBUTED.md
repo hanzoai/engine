@@ -1,6 +1,6 @@
-# Distributed inference in mistral.rs
+# Distributed inference in Hanzo Engine
 
-Mistral.rs supports distributed inference with a few strategies
+Hanzo Engine supports distributed inference with a few strategies
 - [NCCL](NCCL.md) (recommended for CUDA)
 - [Ring backend](RING.md) (supported on all devices)
 

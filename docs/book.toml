@@ -1,7 +1,7 @@
 [book]
-title = "mistral.rs Documentation"
+title = "Hanzo Engine Documentation"
 description = "Fast, flexible LLM inference."
-authors = ["Eric Buehler"]
+authors = ["Hanzo AI"]
 language = "en"
 src = "."
 
@@ -11,9 +11,9 @@ build-dir = "book"
 [output.html]
 default-theme = "light"
 preferred-dark-theme = "ayu"
-git-repository-url = "https://github.com/EricLBuehler/mistral.rs"
-edit-url-template = "https://github.com/EricLBuehler/mistral.rs/edit/master/docs/{path}"
-site-url = "/mistral.rs/"
+git-repository-url = "https://github.com/hanzoai/engine"
+edit-url-template = "https://github.com/hanzoai/engine/edit/main/docs/{path}"
+site-url = "/engine/"
 
 [output.html.search]
 enable = true

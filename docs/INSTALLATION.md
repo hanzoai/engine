@@ -6,12 +6,12 @@ The install script automatically detects your hardware (CUDA, Metal, MKL) and bu
 
 **Linux/macOS:**
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/hanzoai/engine/main/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/hanzoai/engine/main/install.ps1 | iex
 ```
 
 ## Prerequisites
@@ -71,8 +71,8 @@ cargo install mistralrs-cli --features "cuda flash-attn cudnn"
 ## Build from Source
 
 ```bash
-git clone https://github.com/EricLBuehler/mistral.rs.git
-cd mistral.rs
+git clone https://github.com/hanzoai/engine.git
+cd engine
 cargo install --path mistralrs-cli --features "<your-features>"
 ```
 
@@ -86,12 +86,12 @@ cargo build --release --features "cuda flash-attn cudnn"
 Docker images are available for quick deployment:
 
 ```bash
-docker pull ghcr.io/ericlbuehler/mistral.rs:latest
-docker run --gpus all -p 1234:1234 ghcr.io/ericlbuehler/mistral.rs:latest \
+docker pull ghcr.io/hanzoai/engine:latest
+docker run --gpus all -p 1234:1234 ghcr.io/hanzoai/engine:latest \
   serve -m Qwen/Qwen3-4B
 ```
 
-[Docker images on GitHub Container Registry](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs)
+[Docker images on GitHub Container Registry](https://github.com/hanzoai/engine/pkgs/container/engine)
 
 Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
 

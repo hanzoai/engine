@@ -1,6 +1,6 @@
-# Sampling and penalty techniques in mistral.rs
+# Sampling and penalty techniques in Hanzo Engine
 
-mistral.rs supports a comprehensive set of sampling and penalty techniques to control text generation. These can be configured via the HTTP API, Python SDK, or Rust SDK.
+Hanzo Engine supports a comprehensive set of sampling and penalty techniques to control text generation. These can be configured via the HTTP API, Python SDK, or Rust SDK.
 
 ## Temperature
 
@@ -127,4 +127,4 @@ response = runner.send_chat_completion_request(
 )
 ```
 
-Please suggest more sampling techniques by [raising an issue](https://github.com/EricLBuehler/mistral.rs/issues)!
+Please suggest more sampling techniques by [raising an issue](https://github.com/hanzoai/engine/issues)!

@@ -1,6 +1,6 @@
-# NCCL in mistral.rs
+# NCCL in Hanzo Engine
 
-Mistral.rs supports distributed inference on CUDA with Tensor Parallelism via NCCL.
+Hanzo Engine supports distributed inference on CUDA with Tensor Parallelism via NCCL.
 
 > Note: Multi-node support is coming! Distributed inference on Apple hardware is also being investigated.
 
@@ -10,7 +10,7 @@ TP splits the model into shards and benefits from fast single-node interconnects
 
 **Important**: The world size (total number of GPUs) must be a power of 2 (e.g., 1, 2, 4, 8, 16, 32, etc.). This is a requirement for optimal performance and correct operation of the distributed algorithms.
 
-> Note: In mistral.rs, if NCCL is enabled, then automatic device mapping *will not* be used.
+> Note: In Hanzo Engine, if NCCL is enabled, then automatic device mapping *will not* be used.
 
 **Important**: To build for NCCL, be sure to add the `nccl` feature flag (for example: `--features nccl,cuda`).
 
@@ -28,7 +28,7 @@ Set the number of ranks using `MISTRALRS_MN_LOCAL_WORLD_SIZE`, e.g.,
 MISTRALRS_MN_LOCAL_WORLD_SIZE=2 mistralrs serve -p 8000 -m Qwen/Qwen3-30B-A3B-Instruct-2507
 ```
 
-where, if no `MISTRALRS_MN_LOCAL_WORLD_SIZE` env given, mistral.rs will split the model across all available devices.
+where, if no `MISTRALRS_MN_LOCAL_WORLD_SIZE` env given, Hanzo Engine will split the model across all available devices.
 
 ## Multi-node support
 
@@ -42,12 +42,12 @@ MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=1 MISTRALRS_WORKER_SERV
 MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=2 MISTRALRS_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> mistralrs run -m ...
 ```
 
-Multi-node support in mistral.rs divides the nodes into two groups: a "head" node, and multiple "worker" nodes. Head node choice is arbitrary.
+Multi-node support in Hanzo Engine divides the nodes into two groups: a "head" node, and multiple "worker" nodes. Head node choice is arbitrary.
 For example, if a system has 8 nodes, there will be 1 "head" node, and 7 "worker" nodes. 
 
 To enable multi-node, set the `MISTRALRS_MN_GLOBAL_WORLD_SIZE=<number>` environment variable to the total number of GPUs in all nodes, including "head" and "worker"s. **Note**: This number must be a power of 2.
 
-It is recommended to use server mode with mistral.rs when in multi-node. **Currently, you must send requests to every node!**
+It is recommended to use server mode with Hanzo Engine when in multi-node. **Currently, you must send requests to every node!**
 
 The following environment variables must be set for each node:
 

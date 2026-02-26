@@ -2,7 +2,7 @@
 
 The Qwen 3 VL models are the successors to the Qwen 2.5 VL models, featuring a diverse lineup of increased performance, flexible sizes, and reasoning-capable models.
 
-Mistral.rs supports the Qwen 3 VL vision model family (including MoE variants), with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements. MoE variants also support [MoQE](ISQ.md) via the `--organization moqe` flag.
+Hanzo Engine supports the Qwen 3 VL vision model family (including MoE variants), with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements. MoE variants also support [MoQE](ISQ.md) via the `--organization moqe` flag.
 
 UQFF quantizations are also available.
 
@@ -25,7 +25,7 @@ The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/
 
 ## Interactive mode
 
-Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.
+Hanzo Engine supports interactive mode for vision models! It is an easy way to interact with the model.
 
 Start up interactive mode with the Qwen3 VL model:
 
@@ -34,7 +34,7 @@ mistralrs run vision -m Qwen/Qwen3-VL-4B-Instruct
 ```
 
 ## HTTP server
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_vl.py).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/examples/server/qwen3_vl.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -82,13 +82,13 @@ print(resp)
 
 ```
 
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/hanzoai/engine/blob/main/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/hanzoai/engine/blob/main/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/models/vision_models/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -131,7 +131,7 @@ async fn main() -> Result<()> {
 ---
 
 ## Python
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_vl.py).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/examples/python/qwen3_vl.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -179,5 +179,5 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/hanzoai/engine/blob/main/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/hanzoai/engine/blob/main/examples/python/phi3v_local_img.py).

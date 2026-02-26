@@ -20,7 +20,7 @@ RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN rustup update nightly && rustup default nightly
 
-WORKDIR /mistralrs
+WORKDIR /engine
 COPY . .
 
 # Rayon threads are limited to minimize memory requirements in CI, avoiding OOM
@@ -50,11 +50,11 @@ RUN <<HEREDOC
     rm -rf /var/lib/apt/lists/*
 HEREDOC
 
-COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-bench /usr/local/bin/mistralrs-bench
-COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-server /usr/local/bin/mistralrs-server
-COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-web-chat /usr/local/bin/mistralrs-web-chat
+COPY --chmod=755 --from=builder /engine/target/release/mistralrs-bench /usr/local/bin/mistralrs-bench
+COPY --chmod=755 --from=builder /engine/target/release/mistralrs-server /usr/local/bin/mistralrs-server
+COPY --chmod=755 --from=builder /engine/target/release/mistralrs-web-chat /usr/local/bin/mistralrs-web-chat
 # Copy chat templates for users running models which may not include them
-COPY --from=builder /mistralrs/chat_templates /chat_templates
+COPY --from=builder /engine/chat_templates /chat_templates
 
 ENV HUGGINGFACE_HUB_CACHE=/data \
     PORT=80

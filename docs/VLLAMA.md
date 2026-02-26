@@ -1,6 +1,6 @@
 # Llama 3.2 Vision Model: [`meta-llama/Llama-3.2-11B-Vision-Instruct`](https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct)
 
-Mistral.rs supports the Llama 3.2 vision model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.
+Hanzo Engine supports the Llama 3.2 vision model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.
 
 UQFF quantizations are also available.
 
@@ -26,7 +26,7 @@ The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/
 
 ## Interactive mode
 
-Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.
+Hanzo Engine supports interactive mode for vision models! It is an easy way to interact with the model.
 
 https://github.com/user-attachments/assets/4d11c35c-9ea2-42b8-8cab-5f7e8e2ee9ff
 
@@ -62,7 +62,7 @@ The image appears to be of Mount Washington, which is the highest peak in the No
 ```
 
 ## HTTP server
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llama_vision.py).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/examples/server/llama_vision.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -140,13 +140,13 @@ print(resp)
 
 ```
 
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/hanzoai/engine/blob/main/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/hanzoai/engine/blob/main/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/models/vision_models/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -192,7 +192,7 @@ async fn main() -> Result<()> {
 ---
 
 ## Python
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/llama_vision.py).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/examples/python/llama_vision.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -240,8 +240,8 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/hanzoai/engine/blob/main/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/hanzoai/engine/blob/main/examples/python/phi3v_local_img.py).
 
 ## UQFF models
 [UQFF](UQFF.md) is a quantized file format similar to GGUF based on ISQ. It removes the memory and compute requirements that come with ISQ by providing ready-made quantizations! The key advantage over GGUF is the flexibility to store multiple quantizations in one file.
