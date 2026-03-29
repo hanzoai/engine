@@ -44,6 +44,8 @@ tokio.workspace = true
 tracing.workspace = true
 rust-mcp-sdk.workspace = true
 async-trait.workspace = true
+hanzo-zap.workspace = true
+reqwest.workspace = true
 
 [features]
 cuda = ["mistralrs-core/cuda", "mistralrs-server-core/cuda"]
