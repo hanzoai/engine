@@ -38,9 +38,10 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     let tok_env = metadata.tok_env().ok_or(candle_core::Error::Msg(
         "`finish_or_add_toks_to_seq` requires the pipeline to have a token trie".to_string(),
     ))?;
-    // Include special tokens only when tool calling is active, so tool parsers
-    // can see delimiters like <tool_call>, [TOOL_CALLS], <|python_tag|>.
-    let include_special = seq.tools.is_some();
+    // Include special tokens when tool calling is active (so tool parsers can see
+    // delimiters like <tool_call>, [TOOL_CALLS], <|python_tag|>) or when think tag
+    // mode is enabled (so <think>/<\/think> delimiters are visible in the output).
+    let include_special = seq.tools.is_some() || seq.is_think_tag_mode();
     let completion_bytes = tok_env
         .tok_trie()
         .decode_ext(&[logprobs.token], include_special);
@@ -212,7 +213,13 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         // to ensure sequence completes even when tool detection thinks output might be a tool call
         if let Some(reason) = is_done {
             if use_prefix_cacher {
-                prefix_cacher.add_sequence(seq);
+                let recurrent_snapshots = if this.cache().is_hybrid() {
+                    seq.recurrent_state_idx()
+                        .and_then(|idx| this.cache().hybrid().snapshot_recurrent_state(idx).ok())
+                } else {
+                    None
+                };
+                prefix_cacher.add_sequence(seq, recurrent_snapshots);
                 prefix_cacher.evict_caches()?;
             }
             seq.set_state(crate::sequence::SequenceState::Done(reason));
@@ -362,7 +369,13 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             }
 
             if use_prefix_cacher {
-                prefix_cacher.add_sequence(seq);
+                let recurrent_snapshots = if this.cache().is_hybrid() {
+                    seq.recurrent_state_idx()
+                        .and_then(|idx| this.cache().hybrid().snapshot_recurrent_state(idx).ok())
+                } else {
+                    None
+                };
+                prefix_cacher.add_sequence(seq, recurrent_snapshots);
                 prefix_cacher.evict_caches()?;
             }
 
