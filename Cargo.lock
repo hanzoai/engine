@@ -2497,6 +2497,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-zap"
+version = "0.1.0"
+dependencies = [
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3856,10 +3869,12 @@ dependencies = [
  "ctrlc",
  "directories 6.0.0",
  "either",
+ "hanzo-zap",
  "indexmap 2.13.0",
  "mistralrs-core",
  "mistralrs-server-core",
  "regex",
+ "reqwest 0.13.2",
  "rust-mcp-sdk",
  "rustyline",
  "serde",
