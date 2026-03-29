@@ -5,8 +5,8 @@
 //!
 //! Flow: node --ZAP:{zap_port}--> engine --HTTP--> axum handler
 
-use hanzo_zap::{ZapServer, cloud_handler};
-use tracing::{info, warn, error};
+use hanzo_zap::{cloud_handler, ZapServer};
+use tracing::{error, info, warn};
 
 /// Start the native ZAP listener for the engine.
 pub async fn start_zap_server(listen_addr: &str, oai_port: u16) {
@@ -36,7 +36,10 @@ pub async fn start_zap_server(listen_addr: &str, oai_port: u16) {
                         req = req.header("Authorization", &auth);
                     }
 
-                    let resp = req.send().await.map_err(|e| format!("forward error: {e}"))?;
+                    let resp = req
+                        .send()
+                        .await
+                        .map_err(|e| format!("forward error: {e}"))?;
                     let status = resp.status().as_u16() as u32;
                     let resp_body = resp.bytes().await.map_err(|e| format!("body error: {e}"))?;
 
