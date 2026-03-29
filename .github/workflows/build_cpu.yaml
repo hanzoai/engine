@@ -23,6 +23,20 @@ jobs:
         steps:
             - name: Checkout repository
               uses: actions/checkout@v4
+              with:
+                path: engine
+
+            - name: Checkout ml
+              uses: actions/checkout@v4
+              with:
+                repository: hanzoai/ml
+                path: ml
+
+            - name: Checkout node (hanzo-zap crate)
+              uses: actions/checkout@v4
+              with:
+                repository: hanzoai/node
+                path: node
 
             - name: Initialize Docker Buildx
               uses: docker/setup-buildx-action@v3
