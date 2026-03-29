@@ -43,18 +43,18 @@ jobs:
         workspaces: engine
 
     - name: Build
-      run: cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --release --verbose
+      run: cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --no-default-features --release --verbose
 
     - name: Run tests
       env:
         TESTS_HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      run: cargo test --manifest-path engine/Cargo.toml --package hanzo-engine --verbose
+      run: cargo test --manifest-path engine/Cargo.toml --package hanzo-engine --no-default-features --verbose
 
     - name: Check formatting
       run: cargo fmt --manifest-path engine/Cargo.toml --package hanzo-engine -- --check
 
     - name: Run clippy
-      run: cargo clippy --manifest-path engine/Cargo.toml --package hanzo-engine -- -D warnings
+      run: cargo clippy --manifest-path engine/Cargo.toml --package hanzo-engine --no-default-features -- -D warnings
 
   build-binaries:
     name: Build ${{ matrix.target }}
