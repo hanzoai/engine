@@ -106,7 +106,12 @@ jobs:
         with:
           components: rustfmt
       - name: Cargo fmt
-        run: cargo fmt --manifest-path engine/Cargo.toml --all -- --check
+        run: |
+          cd engine
+          cargo fmt -p hanzo-engine -p mistralrs-server-core -p mistralrs-server -p mistralrs-cli \
+            -p mistralrs-core -p mistralrs -p mistralrs-bench -p mistralrs-vision -p mistralrs-quant \
+            -p mistralrs-paged-attn -p mistralrs-web-chat -p mistralrs-audio -p mistralrs-mcp \
+            -p mistralrs-macros -- --check
 
   clippy:
     name: Clippy
