@@ -31,6 +31,10 @@ jobs:
         with:
           repository: hanzoai/ml
           path: ml
+      - uses: actions/checkout@v4
+        with:
+          repository: hanzoai/node
+          path: node
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
@@ -48,6 +52,10 @@ jobs:
         with:
           repository: hanzoai/ml
           path: ml
+      - uses: actions/checkout@v4
+        with:
+          repository: hanzoai/node
+          path: node
       - uses: dtolnay/rust-toolchain@stable
       - name: Cargo check (metal)
         run: cargo check --manifest-path engine/Cargo.toml --locked --workspace --features metal
@@ -67,6 +75,10 @@ jobs:
         with:
           repository: hanzoai/ml
           path: ml
+      - uses: actions/checkout@v4
+        with:
+          repository: hanzoai/node
+          path: node
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
@@ -86,6 +98,10 @@ jobs:
         with:
           repository: hanzoai/ml
           path: ml
+      - uses: actions/checkout@v4
+        with:
+          repository: hanzoai/node
+          path: node
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -103,6 +119,10 @@ jobs:
         with:
           repository: hanzoai/ml
           path: ml
+      - uses: actions/checkout@v4
+        with:
+          repository: hanzoai/node
+          path: node
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -120,6 +140,10 @@ jobs:
         with:
           repository: hanzoai/ml
           path: ml
+      - uses: actions/checkout@v4
+        with:
+          repository: hanzoai/node
+          path: node
       - uses: dtolnay/rust-toolchain@stable
       - name: Cargo doc
         run: cargo doc --manifest-path engine/Cargo.toml --locked --workspace --no-default-features
@@ -135,6 +159,10 @@ jobs:
         with:
           repository: hanzoai/ml
           path: ml
+      - uses: actions/checkout@v4
+        with:
+          repository: hanzoai/node
+          path: node
       - uses: dtolnay/rust-toolchain@stable
       - name: Build hanzo-engine
         run: cargo build --manifest-path engine/Cargo.toml --locked --package hanzo-engine --no-default-features --release
@@ -166,6 +194,10 @@ jobs:
         with:
           repository: hanzoai/ml
           path: ml
+      - uses: actions/checkout@v4
+        with:
+          repository: hanzoai/node
+          path: node
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.88.0"
