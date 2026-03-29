@@ -1,6 +1,6 @@
-# Vision model support in Hanzo Engine
+# Vision model support in mistral.rs
 
-Hanzo Engine supports various modalities of models, including vision models. Vision models take images and text as input and have the capability to reason over both.
+Mistral.rs supports various modalities of models, including vision models. Vision models take images and text as input and have the capability to reason over both.
 
 Please see docs for the following model types:
 
@@ -16,7 +16,8 @@ Please see docs for the following model types:
 - Mistral 3: [MISTRAL3.md](MISTRAL3.md)
 - Llama 4: [LLAMA4.md](LLAMA4.md)
 - Qwen 3-VL: [QWEN3VL.md](QWEN3VL.md)
+- Qwen 3.5: [QWEN3_5.md](QWEN3_5.md)
 - MiniCPM-O 2.6: [MINICPMO_2_6.md](MINICPMO_2_6.md)
 
 > Note for the Python and HTTP APIs:
-> We follow the OpenAI specification for structuring the image messages and allow both base64 encoded images as well as a URL/path to the image. There are many examples of this, see [this Python example](https://github.com/hanzoai/engine/blob/main/examples/python/phi3v.py).
+> We follow the OpenAI specification for structuring the image messages and allow both base64 encoded images as well as a URL/path to the image. There are many examples of this, see [this Python example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py).
