@@ -117,7 +117,12 @@ jobs:
 
     - name: Build binary
       run: |
-        cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --release --target ${{ matrix.target }} --features ${{ matrix.features }}
+        FEATURES="${{ matrix.features }}"
+        if [ -n "$FEATURES" ]; then
+          cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --release --target ${{ matrix.target }} --features "$FEATURES"
+        else
+          cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --release --target ${{ matrix.target }} --no-default-features
+        fi
 
     - name: Rename binary to hanzoai
       shell: bash
@@ -266,7 +271,7 @@ jobs:
 
     - name: Build hanzo-engine
       run: |
-        cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --release --features cuda,flash-attn
+        cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --release --no-default-features --features cuda,flash-attn
 
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
