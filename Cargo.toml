@@ -200,6 +200,7 @@ mistralrs = { path = "mistralrs", version = "0.7.1-alpha.1" }
 mistralrs-audio = { path = "mistralrs-audio", version = "0.7.1-alpha.1" }
 mistralrs-mcp = { path = "mistralrs-mcp", version = "0.7.1-alpha.1" }
 mistralrs-macros = { path = "mistralrs-macros", version = "0.7.1-alpha.1" }
+hanzo-zap = { path = "../node/hanzo-libs/hanzo-zap", version = "0.1.0" }
 
 [profile.release-with-debug]
 inherits = "release"
