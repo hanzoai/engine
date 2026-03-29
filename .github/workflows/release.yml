@@ -27,6 +27,10 @@ jobs:
       with:
         repository: hanzoai/ml
         path: ml
+    - uses: actions/checkout@v4
+      with:
+        repository: hanzoai/node
+        path: node
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -89,6 +93,10 @@ jobs:
       with:
         repository: hanzoai/ml
         path: ml
+    - uses: actions/checkout@v4
+      with:
+        repository: hanzoai/node
+        path: node
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -200,6 +208,10 @@ jobs:
       with:
         repository: hanzoai/ml
         path: ml
+    - uses: actions/checkout@v4
+      with:
+        repository: hanzoai/node
+        path: node
 
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
