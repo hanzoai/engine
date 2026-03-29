@@ -441,7 +441,11 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    if !args.interactive_mode && args.port.is_none() && args.mcp_port.is_none() && args.zap_port.is_none() {
+    if !args.interactive_mode
+        && args.port.is_none()
+        && args.mcp_port.is_none()
+        && args.zap_port.is_none()
+    {
         anyhow::bail!("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port` or `--mcp-port` or `--zap-port`?")
     }
 
