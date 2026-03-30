@@ -116,6 +116,7 @@ jobs:
         sudo apt-get install -y gcc-aarch64-linux-gnu
 
     - name: Build binary
+      shell: bash
       run: |
         FEATURES="${{ matrix.features }}"
         if [ -n "$FEATURES" ]; then
@@ -240,44 +241,11 @@ jobs:
         fi
         echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
 
-    - name: Create Dockerfile for hanzo-engine
-      run: |
-        cat > Dockerfile.hanzo <<'EOF'
-        FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04 AS runtime
-
-        # Install runtime dependencies
-        RUN apt-get update && apt-get install -y \
-            libssl3 \
-            ca-certificates \
-            && rm -rf /var/lib/apt/lists/*
-
-        # Copy the built binary
-        COPY engine/target/release/hanzo-engine /usr/local/bin/hanzoai
-
-        # Create model storage directory
-        RUN mkdir -p /root/.hanzo/models
-
-        # Set environment variables
-        ENV RUST_LOG=info
-        ENV HANZO_HOME=/root/.hanzo
-
-        # Expose ports
-        EXPOSE 3690
-
-        # Run the engine
-        ENTRYPOINT ["/usr/local/bin/hanzoai"]
-        CMD ["--help"]
-        EOF
-
-    - name: Build hanzo-engine
-      run: |
-        cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --release --no-default-features --features cuda,flash-attn
-
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
         context: .
-        file: ./Dockerfile.hanzo
+        file: engine/Dockerfile
         platforms: linux/amd64
         push: true
         tags: |
