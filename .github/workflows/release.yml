@@ -17,7 +17,7 @@ permissions:
 jobs:
   build-and-test:
     name: Build and Test
-    runs-on: ubuntu-latest
+    runs-on: hanzo-build-linux-amd64
 
     steps:
     - uses: actions/checkout@v4
@@ -60,22 +60,23 @@ jobs:
     name: Build ${{ matrix.target }}
     needs: build-and-test
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: hanzo-build-linux-amd64
             name: hanzoai-linux-amd64
-            features: cuda,flash-attn
+            features: ""
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: hanzo-build-linux-arm64
             name: hanzoai-linux-arm64
-            features: cuda,flash-attn
+            features: ""
           - target: x86_64-apple-darwin
             os: macos-latest
             name: hanzoai-macos-amd64
             features: metal
           - target: aarch64-apple-darwin
-            os: macos-latest
+            os: macos-14
             name: hanzoai-macos-arm64
             features: metal
           - target: x86_64-pc-windows-msvc
@@ -156,7 +157,7 @@ jobs:
   create-release:
     name: Create Release
     needs: build-binaries
-    runs-on: ubuntu-latest
+    runs-on: hanzo-build-linux-amd64
 
     steps:
     - uses: actions/checkout@v4
@@ -204,7 +205,7 @@ jobs:
   publish-docker:
     name: Publish Docker Image
     needs: build-and-test
-    runs-on: ubuntu-latest
+    runs-on: hanzo-build-linux-amd64
 
     steps:
     - uses: actions/checkout@v4
