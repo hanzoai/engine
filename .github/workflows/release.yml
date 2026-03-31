@@ -91,6 +91,7 @@ jobs:
             features: ""
 
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.cross == true }}
 
     steps:
     - uses: actions/checkout@v4
@@ -171,6 +172,7 @@ jobs:
   create-release:
     name: Create Release
     needs: build-binaries
+    if: always() && !cancelled()
     runs-on: hanzo-build-linux-amd64
 
     steps:
