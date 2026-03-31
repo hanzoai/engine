@@ -103,8 +103,8 @@ jobs:
     - name: Install build tools (Linux)
       if: runner.os == 'Linux'
       run: |
-        apt-get update -qq
-        apt-get install -y -qq build-essential pkg-config libssl-dev curl
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq build-essential pkg-config libssl-dev curl
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -114,7 +114,7 @@ jobs:
     - name: Install cross-compilation tools
       if: matrix.target == 'aarch64-unknown-linux-gnu'
       run: |
-        apt-get install -y -qq gcc-aarch64-linux-gnu
+        sudo apt-get install -y -qq gcc-aarch64-linux-gnu
         mkdir -p engine/.cargo
         echo '[target.aarch64-unknown-linux-gnu]' >> engine/.cargo/config.toml
         echo 'linker = "aarch64-linux-gnu-gcc"' >> engine/.cargo/config.toml
