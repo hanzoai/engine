@@ -42,13 +42,13 @@ jobs:
       with:
         workspaces: engine
 
-    - name: Build
-      run: cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --no-default-features --release --verbose
+    - name: Build (check)
+      run: cargo check --manifest-path engine/Cargo.toml --package hanzo-engine --no-default-features --verbose
 
     - name: Run tests
       env:
         TESTS_HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      run: cargo test --manifest-path engine/Cargo.toml --package hanzo-engine --no-default-features --verbose
+      run: cargo test --manifest-path engine/Cargo.toml --package hanzo-engine --no-default-features
 
     - name: Check formatting
       run: cargo fmt --manifest-path engine/Cargo.toml --package hanzo-engine -- --check
