@@ -17,7 +17,7 @@ permissions:
 jobs:
   build-and-test:
     name: Build and Test
-    runs-on: hanzo-build-linux-amd64
+    runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
@@ -155,7 +155,7 @@ jobs:
   create-release:
     name: Create Release
     needs: build-binaries
-    runs-on: hanzo-build-linux-amd64
+    runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
@@ -203,7 +203,7 @@ jobs:
   publish-docker:
     name: Publish Docker Image
     needs: build-and-test
-    runs-on: hanzo-build-linux-amd64
+    runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
