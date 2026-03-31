@@ -17,7 +17,7 @@ permissions:
 jobs:
   build-and-test:
     name: Build and Test
-    runs-on: ubuntu-latest
+    runs-on: hanzo-build-linux-amd64
 
     steps:
     - uses: actions/checkout@v4
@@ -64,11 +64,11 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: hanzo-build-linux-amd64
             name: hanzoai-linux-amd64
             features: ""
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: hanzo-build-linux-amd64
             name: hanzoai-linux-arm64
             features: ""
             cross: true
@@ -103,8 +103,8 @@ jobs:
     - name: Install build tools (Linux)
       if: runner.os == 'Linux'
       run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq build-essential pkg-config libssl-dev
+        apt-get update -qq
+        apt-get install -y -qq build-essential pkg-config libssl-dev curl
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -114,8 +114,7 @@ jobs:
     - name: Install cross-compilation tools
       if: matrix.target == 'aarch64-unknown-linux-gnu'
       run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu
+        apt-get install -y -qq gcc-aarch64-linux-gnu
         mkdir -p engine/.cargo
         echo '[target.aarch64-unknown-linux-gnu]' >> engine/.cargo/config.toml
         echo 'linker = "aarch64-linux-gnu-gcc"' >> engine/.cargo/config.toml
@@ -161,7 +160,7 @@ jobs:
   create-release:
     name: Create Release
     needs: build-binaries
-    runs-on: ubuntu-latest
+    runs-on: hanzo-build-linux-amd64
 
     steps:
     - uses: actions/checkout@v4
@@ -209,7 +208,7 @@ jobs:
   publish-docker:
     name: Publish Docker Image
     needs: build-and-test
-    runs-on: ubuntu-latest
+    runs-on: hanzo-build-linux-amd64
 
     steps:
     - uses: actions/checkout@v4
