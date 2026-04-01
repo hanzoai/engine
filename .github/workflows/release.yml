@@ -75,7 +75,7 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: hanzo-build-linux-amd64
             name: hanzoai-linux-arm64
-            features: ""
+            features: "vendored-openssl"
             cross: true
           - target: x86_64-apple-darwin
             os: macos-latest
