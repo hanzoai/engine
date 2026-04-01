@@ -136,7 +136,7 @@ jobs:
       run: |
         FEATURES="${{ matrix.features }}"
         if [ -n "$FEATURES" ]; then
-          cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --release --target ${{ matrix.target }} --features "$FEATURES"
+          cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --release --target ${{ matrix.target }} --no-default-features --features "$FEATURES"
         else
           cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --release --target ${{ matrix.target }} --no-default-features
         fi
