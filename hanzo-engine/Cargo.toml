@@ -27,6 +27,7 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 dirs = "5.0"
+openssl = { workspace = true, optional = true }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 futures = { workspace = true }
 indicatif = "0.17"
@@ -39,3 +40,4 @@ metal = ["mistralrs-core/metal"]
 flash-attn = ["mistralrs-core/flash-attn"]
 mkl = ["mistralrs-core/mkl"]
 no-cuda = []
+vendored-openssl = ["openssl"]
