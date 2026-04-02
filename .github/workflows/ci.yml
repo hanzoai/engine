@@ -35,6 +35,9 @@ jobs:
         with:
           repository: hanzoai/node
           path: node
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential pkg-config libssl-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
@@ -79,6 +82,9 @@ jobs:
         with:
           repository: hanzoai/node
           path: node
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential pkg-config libssl-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
@@ -128,6 +134,8 @@ jobs:
         with:
           repository: hanzoai/node
           path: node
+      - name: Install build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential pkg-config libssl-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -149,6 +157,8 @@ jobs:
         with:
           repository: hanzoai/node
           path: node
+      - name: Install build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential pkg-config libssl-dev
       - uses: dtolnay/rust-toolchain@stable
       - name: Cargo doc
         run: cargo doc --manifest-path engine/Cargo.toml --locked --workspace --no-default-features
@@ -168,6 +178,8 @@ jobs:
         with:
           repository: hanzoai/node
           path: node
+      - name: Install build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential pkg-config libssl-dev
       - uses: dtolnay/rust-toolchain@stable
       - name: Build hanzo-engine
         run: cargo build --manifest-path engine/Cargo.toml --locked --package hanzo-engine --no-default-features --release
@@ -203,6 +215,8 @@ jobs:
         with:
           repository: hanzoai/node
           path: node
+      - name: Install build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential pkg-config libssl-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.88.0"
