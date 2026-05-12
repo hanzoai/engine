@@ -85,7 +85,7 @@ impl QuantMethod for MXFP4Layer {
     }
 
     #[allow(unused_variables)]
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         if matches!(x.device(), Device::Cuda(_)) && ffi::HAVE_MXFP4_GEMM_KERNELS {
             let orig_dims = x.dims().to_vec();
@@ -135,7 +135,7 @@ impl QuantMethod for MXFP4Layer {
     }
 
     #[allow(unused_variables)]
-    fn gather_forward(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+    fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         if matches!(x.device(), Device::Cuda(_)) && ffi::HAVE_MXFP4_GEMM_KERNELS {
             return ops::mxfp4_indexed_moe_gemm(
@@ -566,7 +566,7 @@ impl MXFP4Layer {
         let scales_data: Vec<u8> = scales_cpu.flatten_all()?.to_vec1()?;
         let x_data: Vec<f32> = x_f32.flatten_all()?.to_vec1()?;
 
-        // output: [m, n] — accumulate x @ W^T in blocks of 32 columns
+        // output: [m, n], accumulate x @ W^T in blocks of 32 columns
         let mut output = vec![0f32; m * n];
         let k_half = k / 2;
 
@@ -616,7 +616,7 @@ impl MXFP4Layer {
     }
 
     /// CPU MoE forward: blocked dequant per (token, expert) pair.
-    /// Avoids dequantizing all experts — only touches the needed weight blocks.
+    /// Avoids dequantizing all experts, only touches the needed weight blocks.
     fn gather_forward_dequantize(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
         let x_dims = x.dims();
         let indices_dims = indices.dims();
