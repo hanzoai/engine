@@ -83,7 +83,7 @@ Building from source gives you access to the latest features and allows customiz
 1. **Clone the repository:**
    ```bash
    git clone https://github.com/hanzoai/engine.git
-   cd engine/mistralrs-pyo3
+   cd Hanzo Engine/mistralrs-pyo3
    ```
 
 2. **Create and activate a virtual environment:**
@@ -147,6 +147,6 @@ print(response.choices[0].message.content)
 
 ## Next Steps
 
-- [SDK Documentation](PYTHON_SDK.md) - Full SDK reference
-- [Examples](https://github.com/hanzoai/engine/tree/main/examples/python) - Python examples
-- [Cookbook](https://github.com/hanzoai/engine/blob/main/examples/python/cookbook.ipynb) - Interactive tutorial
+- [SDK Documentation](PYTHON_SDK.md): Full SDK reference
+- [Examples](https://github.com/hanzoai/engine/tree/master/examples/python): Python examples
+- [Cookbook](https://github.com/hanzoai/engine/blob/master/examples/python/cookbook.ipynb): Interactive tutorial

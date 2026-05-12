@@ -4,16 +4,16 @@ This document describes internal engine behaviors in Hanzo Engine.
 
 ## Overview
 
-The Hanzo Engine manages model inference through a background thread pool. Each loaded model runs in its own engine thread, which handles request queuing, batching, and execution.
+The Hanzo Engine engine manages model inference through a background thread pool. Each loaded model runs in its own engine thread, which handles request queuing, batching, and execution.
 
 ## Warmup Run
 
-When a text or vision model is loaded in a multi-threaded runtime, Hanzo Engine automatically performs a warmup ("dummy") run:
+When a text or multimodal model is loaded in a multi-threaded runtime, Hanzo Engine automatically performs a warmup ("dummy") run:
 
 - Sends a short completion request ("hello" with max 1 token) to initialize CUDA kernels and caches
 - Logs "Beginning dummy run." when starting and "Dummy run completed in Xs." when finished
 - Helps ensure more consistent performance for the first real user request
-- Only runs for text and vision models (not diffusion/speech)
+- Only runs for text and multimodal models (not diffusion/speech)
 
 This warmup ensures that CUDA kernel compilation and memory allocation happens during model loading rather than during the first user request.
 
@@ -40,6 +40,6 @@ For multi-model setups, each model gets its own engine thread, allowing true par
 
 ## See Also
 
-- [Multi-Model Support](multi_model/overview.md) - Load and manage multiple models
-- [Configuration](CONFIGURATION.md) - Environment variables affecting engine behavior
-- [PagedAttention](PAGED_ATTENTION.md) - Memory management for high throughput
+- [Multi-Model Support](multi_model/overview.md): Load and manage multiple models
+- [Configuration](CONFIGURATION.md): Environment variables affecting engine behavior
+- [PagedAttention](PAGED_ATTENTION.md): Memory management for high throughput
