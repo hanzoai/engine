@@ -41,9 +41,11 @@ mod metal;
 mod model_loader;
 mod moe;
 mod ops;
+mod video_input;
 pub use model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
 };
+pub use video_input::{sample_frame_indices, VideoInput};
 mod embedding_models;
 mod kv_cache;
 mod search;
@@ -58,7 +60,6 @@ mod diagnostics;
 mod diffusion_models;
 pub mod distributed;
 mod gguf;
-pub mod harmony;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
@@ -68,13 +69,13 @@ mod models;
 mod paged_attention;
 mod pipeline;
 mod prefix_cacher;
+pub mod reasoning_parsers;
 mod request;
 mod response;
 mod sampler;
 mod scheduler;
 mod sequence;
 mod speech_models;
-pub mod think_tags;
 mod toml_selector;
 mod tools;
 mod topology;
@@ -114,11 +115,12 @@ pub use pipeline::{
     GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
     GGUFSpecificConfig, GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader,
     LlamaLoader, Loader, LocalModelPaths, LoraAdapterPaths, MistralLoader, MixtralLoader,
-    Modalities, ModelKind, ModelPaths, MultimodalPromptPrefixer, NormalLoader, NormalLoaderBuilder,
-    NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
-    SpeculativeConfig, SpeculativeLoader, SpeculativePipeline, SpeechLoader, SpeechPipeline,
-    Starcoder2Loader, SupportedModality, TokenSource, VisionLoader, VisionLoaderBuilder,
-    VisionLoaderType, VisionSpecificConfig, UQFF_MULTI_FILE_DELIMITER,
+    Modalities, ModelKind, ModelPaths, MultimodalLoader, MultimodalLoaderBuilder,
+    MultimodalLoaderType, MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
+    Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
+    SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality, TokenSource,
+    UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
     ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
@@ -127,7 +129,8 @@ pub use request::{
 };
 pub use response::*;
 pub use sampler::{
-    CustomLogitsProcessor, DrySamplingParams, SamplingParams, StopTokens, TopLogprob,
+    CustomLogitsProcessor, DrySamplingParams, ModelGenerationDefaults, SamplingParams, StopTokens,
+    TopLogprob,
 };
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
@@ -159,8 +162,7 @@ pub struct EngineConfig {
     pub throughput_logging_enabled: bool,
     pub search_embedding_model: Option<SearchEmbeddingModel>,
     pub search_callback: Option<Arc<SearchCallback>>,
-    pub tool_callbacks: tools::ToolCallbacks,
-    pub tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+    pub tool_callbacks: tools::ToolCallbacksWithTools,
 }
 
 impl Default for EngineConfig {
@@ -174,7 +176,6 @@ impl Default for EngineConfig {
             search_embedding_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
-            tool_callbacks_with_tools: HashMap::new(),
         }
     }
 }
@@ -218,13 +219,14 @@ pub struct MistralRsConfig {
     pub category: ModelCategory,
     pub modalities: Modalities,
     pub max_seq_len: Option<usize>,
+    pub generation_defaults: Option<ModelGenerationDefaults>,
 }
 
 /// Configuration for recreating a model loader when reloading an unloaded model.
 /// This captures the essential parameters needed to reconstruct a loader.
 #[derive(Clone)]
 pub struct ModelLoaderConfig {
-    /// The model selection configuration (Plain, GGUF, Vision, etc.)
+    /// The model selection configuration (Plain, GGUF, Multimodal, etc.)
     pub model_selected: ModelSelected,
     /// Source of the HF token
     pub token_source: TokenSource,
@@ -260,7 +262,7 @@ pub struct UnloadedModelState {
     pub engine_config: EngineConfig,
     /// MCP client configuration
     pub mcp_client_config: Option<McpClientConfig>,
-    /// Model category (Text, Vision, etc.)
+    /// Model category (Text, Multimodal, etc.)
     pub category: ModelCategory,
     /// Model metadata configuration
     pub mistralrs_config: MistralRsConfig,
@@ -318,8 +320,7 @@ struct RebootState {
     throughput_logging_enabled: bool,
     search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<search::SearchCallback>>,
-    tool_callbacks: tools::ToolCallbacks,
-    tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+    tool_callbacks: tools::ToolCallbacksWithTools,
     mcp_client_config: Option<McpClientConfig>,
     /// Optional loader config for reloading after unload
     loader_config: Option<ModelLoaderConfig>,
@@ -391,8 +392,7 @@ pub struct MistralRsBuilder {
     throughput_logging_enabled: bool,
     search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<SearchCallback>>,
-    tool_callbacks: tools::ToolCallbacks,
-    tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+    tool_callbacks: tools::ToolCallbacksWithTools,
     mcp_client_config: Option<McpClientConfig>,
     loader_config: Option<ModelLoaderConfig>,
 }
@@ -420,7 +420,6 @@ impl MistralRsBuilder {
             search_embedding_model,
             search_callback: None,
             tool_callbacks: HashMap::new(),
-            tool_callbacks_with_tools: HashMap::new(),
             mcp_client_config: None,
             loader_config: None,
         }
@@ -475,7 +474,23 @@ impl MistralRsBuilder {
         name: impl Into<String>,
         tool_callback: Arc<ToolCallback>,
     ) -> Self {
-        self.tool_callbacks.insert(name.into(), tool_callback);
+        let name = name.into();
+        // Wrap bare callback with a minimal tool definition.
+        self.tool_callbacks.insert(
+            name.clone(),
+            ToolCallbackWithTool {
+                callback: tool_callback,
+                tool: Tool {
+                    tp: ToolType::Function,
+                    function: Function {
+                        description: None,
+                        name,
+                        parameters: None,
+                        strict: None,
+                    },
+                },
+            },
+        );
         self
     }
 
@@ -488,7 +503,7 @@ impl MistralRsBuilder {
         tool: Tool,
     ) -> Self {
         let name = name.into();
-        self.tool_callbacks_with_tools.insert(
+        self.tool_callbacks.insert(
             name,
             ToolCallbackWithTool {
                 callback: tool_callback,
@@ -541,6 +556,7 @@ impl MistralRs {
             ModelCategory::Diffusion | ModelCategory::Speech => None,
             _ => Some(metadata.max_seq_len),
         };
+        let generation_defaults = pipeline_guard.generation_defaults();
         let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
         drop(pipeline_guard);
 
@@ -559,6 +575,7 @@ impl MistralRs {
             category: category.clone(),
             modalities,
             max_seq_len,
+            generation_defaults,
         };
 
         let tx_for_engine = tx.clone();
@@ -580,7 +597,6 @@ impl MistralRs {
                         config.search_embedding_model,
                         config.search_callback.clone(),
                         config.tool_callbacks.clone(),
-                        config.tool_callbacks_with_tools.clone(),
                         logger_for_engine,
                     )
                     .expect("Engine creation failed.");
@@ -605,7 +621,6 @@ impl MistralRs {
                         config.search_embedding_model,
                         config.search_callback.clone(),
                         config.tool_callbacks.clone(),
-                        config.tool_callbacks_with_tools.clone(),
                         logger_for_engine,
                     )
                     .expect("Engine creation failed.");
@@ -638,8 +653,7 @@ impl MistralRs {
             throughput_logging_enabled,
             search_embedding_model,
             search_callback,
-            tool_callbacks,
-            mut tool_callbacks_with_tools,
+            mut tool_callbacks,
             mcp_client_config,
             loader_config,
         } = config;
@@ -665,7 +679,7 @@ impl MistralRs {
 
                     // Merge MCP tool callbacks with tools into the new collection
                     for (name, callback_with_tool) in mcp_callbacks_with_tools {
-                        tool_callbacks_with_tools.insert(name.clone(), callback_with_tool.clone());
+                        tool_callbacks.insert(name.clone(), callback_with_tool.clone());
                     }
 
                     if tools_count == 0 {
@@ -701,7 +715,6 @@ impl MistralRs {
             search_embedding_model,
             search_callback: search_callback.clone(),
             tool_callbacks: tool_callbacks.clone(),
-            tool_callbacks_with_tools: tool_callbacks_with_tools.clone(),
             mcp_client_config: mcp_client_config.clone(),
             loader_config,
         };
@@ -716,7 +729,6 @@ impl MistralRs {
             search_embedding_model,
             search_callback,
             tool_callbacks,
-            tool_callbacks_with_tools,
         };
 
         // Create the engine instance
@@ -760,7 +772,7 @@ impl MistralRs {
             && is_multi_threaded
             && matches!(
                 engine_instance.category,
-                ModelCategory::Text | ModelCategory::Vision { .. }
+                ModelCategory::Text | ModelCategory::Multimodal { .. }
             )
         {
             let clone_sender = engine_instance.sender.clone();
@@ -787,6 +799,8 @@ impl MistralRs {
                     logits_processors: None,
                     return_raw_logits: false,
                     web_search_options: None,
+                    max_tool_rounds: None,
+                    tool_dispatch_url: None,
                     model_id: None,
                     truncate_sequence: false,
                 }));
@@ -858,7 +872,6 @@ impl MistralRs {
                 search_embedding_model: reboot_state.search_embedding_model,
                 search_callback: reboot_state.search_callback.clone(),
                 tool_callbacks: reboot_state.tool_callbacks.clone(),
-                tool_callbacks_with_tools: reboot_state.tool_callbacks_with_tools.clone(),
             };
             let new_engine_instance = Self::create_engine_instance(
                 reboot_state.pipeline.clone(),
@@ -1206,7 +1219,6 @@ impl MistralRs {
             search_embedding_model: config.engine_config.search_embedding_model,
             search_callback: config.engine_config.search_callback.clone(),
             tool_callbacks: config.engine_config.tool_callbacks.clone(),
-            tool_callbacks_with_tools: config.engine_config.tool_callbacks_with_tools.clone(),
             mcp_client_config: config.mcp_client_config.clone(),
             loader_config: config.loader_config.clone(),
         };
@@ -1386,7 +1398,7 @@ impl MistralRs {
             .read()
             .map_err(|_| "Failed to acquire read lock on engines")?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
-            Ok(engine_instance.reboot_state.tool_callbacks_with_tools.len())
+            Ok(engine_instance.reboot_state.tool_callbacks.len())
         } else {
             Err(format!("Model {resolved_model_id} not found"))
         }
@@ -1477,10 +1489,6 @@ impl MistralRs {
                 search_embedding_model: engine_instance.reboot_state.search_embedding_model,
                 search_callback: engine_instance.reboot_state.search_callback.clone(),
                 tool_callbacks: engine_instance.reboot_state.tool_callbacks.clone(),
-                tool_callbacks_with_tools: engine_instance
-                    .reboot_state
-                    .tool_callbacks_with_tools
-                    .clone(),
             },
             mcp_client_config: engine_instance.reboot_state.mcp_client_config.clone(),
             category: engine_instance.category.clone(),
@@ -1617,10 +1625,6 @@ impl MistralRs {
             search_embedding_model: unloaded_state.engine_config.search_embedding_model,
             search_callback: unloaded_state.engine_config.search_callback.clone(),
             tool_callbacks: unloaded_state.engine_config.tool_callbacks.clone(),
-            tool_callbacks_with_tools: unloaded_state
-                .engine_config
-                .tool_callbacks_with_tools
-                .clone(),
             mcp_client_config: unloaded_state.mcp_client_config.clone(),
             loader_config: Some(unloaded_state.loader_config.clone()),
         };
