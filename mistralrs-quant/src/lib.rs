@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     fmt::Debug,
     num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
+    sync::{atomic::AtomicUsize, Arc, Condvar, Mutex, MutexGuard},
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
@@ -63,6 +63,11 @@ pub use fp8::FP8Linear;
 #[cfg(feature = "cuda")]
 pub use gemv::gemv;
 pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
+#[cfg(feature = "cuda")]
+pub use gguf::cuda::{
+    grouped_moe_gemm_prequantized, indexed_moe_fused_decode, moe_dispatch_build,
+    quantize_input_q8_1, ACT_GELU_PYTORCH_TANH, ACT_SILU,
+};
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
@@ -90,6 +95,56 @@ pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 use candle_nn::{Conv1d, Conv2d, Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
 
+/// Limits outstanding async ISQ jobs to prevent unbounded memory growth.
+///
+/// Without backpressure, MoE models (e.g. Gemma4 with 128 experts × 30 layers)
+/// queue BF16 tensor data in the rayon pool faster than the pool can quantize,
+/// causing OOM on memory-constrained systems like macOS Metal with unified memory.
+pub struct IsqBackpressure {
+    count: Mutex<usize>,
+    cvar: Condvar,
+    max: usize,
+}
+
+impl IsqBackpressure {
+    pub fn new(max: usize) -> Self {
+        Self {
+            count: Mutex::new(0),
+            cvar: Condvar::new(),
+            max,
+        }
+    }
+
+    /// Block until a slot is available, then increment the outstanding count.
+    pub fn acquire(&self) {
+        let mut count = self.count.lock().expect("ISQ backpressure lock poisoned");
+        while *count >= self.max {
+            count = self
+                .cvar
+                .wait(count)
+                .expect("ISQ backpressure lock poisoned");
+        }
+        *count += 1;
+    }
+
+    /// Decrement the outstanding count and wake a blocked loader thread.
+    pub fn release(&self) {
+        let mut count = self.count.lock().expect("ISQ backpressure lock poisoned");
+        *count = count.saturating_sub(1);
+        self.cvar.notify_one();
+    }
+}
+
+impl Debug for IsqBackpressure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let count = self.count.lock().map(|c| *c).unwrap_or(0);
+        f.debug_struct("IsqBackpressure")
+            .field("outstanding", &count)
+            .field("max", &self.max)
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ImmediateIsqParams {
     pub guard: QuantizeOntoGuard,
@@ -100,6 +155,8 @@ pub struct ImmediateIsqParams {
     /// When `Some`, `apply_immediate_isq` will spawn quantization tasks
     /// on this pool and return `PendingIsqLayer` wrappers.
     pub pool: Option<Arc<rayon::ThreadPool>>,
+    /// Backpressure to limit outstanding async ISQ jobs.
+    pub backpressure: Arc<IsqBackpressure>,
 }
 
 #[derive(Clone, Debug)]
@@ -130,12 +187,16 @@ pub fn set_immediate_isq_with_pool(
     overrides: Vec<ImmediateIsqOverride>,
     pool: rayon::ThreadPool,
 ) {
+    // Allow pool threads + 1 outstanding jobs: enough for pipeline overlap
+    // (load next tensor while pool quantizes current) without unbounded growth.
+    let max_outstanding = pool.current_num_threads() + 1;
     ENGINE_IMMEDIATE_ISQ.with(|cell| {
         *cell.borrow_mut() = Some(ImmediateIsqParams {
             guard: QuantizeOntoGuard::new(),
             ty: isq,
             predicates,
             overrides,
+            backpressure: Arc::new(IsqBackpressure::new(max_outstanding)),
             pool: Some(Arc::new(pool)),
         });
     });
@@ -471,11 +532,6 @@ impl MatMul {
     pub fn qmatmul(&self, x: &Tensor, matmul: &QMatMul) -> Result<Tensor> {
         matmul.forward(x)
     }
-
-    /// Compute quantized matrix-matrix product.
-    pub fn qmethod_matmul(&self, x: &Tensor, matmul: &dyn QuantMethod) -> Result<Tensor> {
-        matmul.forward(x)
-    }
 }
 
 /// Device/configurable intelligent convolution
@@ -581,8 +637,19 @@ impl IsqBits {
         }
     }
 
-    /// Return all platform variants (non-Metal first, then Metal if different).
+    /// Return all platform variants, with the current platform's preferred variant first.
+    /// On Metal, AFQ variants come first; on other platforms, GGUF/Q variants come first.
     pub fn expand(self) -> Vec<IsqType> {
+        #[cfg(feature = "metal")]
+        match self {
+            Self::Two => vec![IsqType::AFQ2, IsqType::Q2K],
+            Self::Three => vec![IsqType::AFQ3, IsqType::Q3K],
+            Self::Four => vec![IsqType::AFQ4, IsqType::Q4K],
+            Self::Five => vec![IsqType::Q5K],
+            Self::Six => vec![IsqType::AFQ6, IsqType::Q6K],
+            Self::Eight => vec![IsqType::AFQ8, IsqType::Q8_0],
+        }
+        #[cfg(not(feature = "metal"))]
         match self {
             Self::Two => vec![IsqType::Q2K, IsqType::AFQ2],
             Self::Three => vec![IsqType::Q3K, IsqType::AFQ3],
@@ -904,44 +971,49 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     fn dequantize_w(&self) -> Result<Tensor>;
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    /// Automatically cast to required quantization activation type and back
-    fn forward_autocast(&self, a: &Tensor) -> Result<Tensor> {
-        let original_ty = a.dtype();
-        let a = if let Some(t) = self.quantized_act_type() {
-            a.to_dtype(t)?
+    /// Automatically casts to the required quantization activation type and back.
+    fn forward(&self, a: &Tensor) -> Result<Tensor> {
+        if let Some(t) = self.quantized_act_type() {
+            let original_ty = a.dtype();
+            self.forward_raw(&a.to_dtype(t)?)?.to_dtype(original_ty)
         } else {
-            a.clone()
-        };
-        self.forward(&a)?.to_dtype(original_ty)
+            self.forward_raw(a)
+        }
     }
 
-    /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    fn forward(&self, a: &Tensor) -> Result<Tensor>;
+    /// Raw matmul without dtype casting. Implementors override this.
+    /// Callers should use `forward` instead.
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor>;
 
-    /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    /// Automatically cast to required quantization activation type and back.
+    /// Compute gather matmul of `self` and `a`. `self` should contain the weights.
+    /// Automatically casts to the required quantization activation type and back.
     ///
     /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
     /// then the indices are (n_tokens, n_experts).
-    fn gather_forward_autocast(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        let original_ty = a.dtype();
-        let a = if let Some(t) = self.quantized_act_type() {
-            a.to_dtype(t)?
+    fn gather_forward(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        if let Some(t) = self.quantized_act_type() {
+            let original_ty = a.dtype();
+            self.gather_forward_raw(&a.to_dtype(t)?, indices)?
+                .to_dtype(original_ty)
         } else {
-            a.clone()
-        };
-        self.gather_forward(&a, indices)?.to_dtype(original_ty)
+            self.gather_forward_raw(a, indices)
+        }
     }
 
-    /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    ///
-    /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
-    /// then the indices are (n_tokens, n_experts).
-    fn gather_forward(&self, _a: &Tensor, _indices: &Tensor) -> Result<Tensor> {
+    /// Raw gather matmul without dtype casting. Implementors override this.
+    /// Callers should use `gather_forward` instead.
+    fn gather_forward_raw(&self, _a: &Tensor, _indices: &Tensor) -> Result<Tensor> {
         candle_core::bail!(
             "{} does not support `gather_forward`. Please raise an issue.",
             self.name()
         )
+    }
+
+    /// Get the underlying QTensor if this is a GGUF quantized layer.
+    /// Used for direct kernel access in the grouped MoE prefill path.
+    #[cfg(feature = "cuda")]
+    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+        None
     }
 
     /// If a quantized method, return the activation dtype.
@@ -984,7 +1056,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
 
 impl Module for dyn QuantMethod {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        Self::forward(self, xs)
+        QuantMethod::forward(self, xs)
     }
 }
 

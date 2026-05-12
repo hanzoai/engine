@@ -3,7 +3,7 @@
 use candle_core::Device;
 use mistralrs_core::{
     AddModelConfig, DefaultSchedulerMethod, EngineConfig, IsqType, Pipeline, SchedulerConfig,
-    SearchCallback, SearchEmbeddingModel, ToolCallback, ToolCallbackWithTool,
+    SearchCallback, SearchEmbeddingModel, ToolCallbackWithTool,
 };
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
@@ -14,8 +14,8 @@ use crate::Model;
 pub enum AnyModelBuilder {
     /// A text model builder.
     Text(crate::TextModelBuilder),
-    /// A vision model builder.
-    Vision(crate::VisionModelBuilder),
+    /// A multimodal model builder.
+    Multimodal(crate::MultimodalModelBuilder),
     /// An auto-detecting model builder.
     Auto(crate::ModelBuilder),
     /// A GGUF model builder.
@@ -33,7 +33,7 @@ impl AnyModelBuilder {
     pub fn model_id(&self) -> String {
         match self {
             AnyModelBuilder::Text(b) => b.model_id.clone(),
-            AnyModelBuilder::Vision(b) => b.model_id.clone(),
+            AnyModelBuilder::Multimodal(b) => b.model_id.clone(),
             AnyModelBuilder::Auto(b) => b.model_id.clone(),
             AnyModelBuilder::Gguf(b) => b.model_id.clone(),
             AnyModelBuilder::Diffusion(b) => b.model_id.clone(),
@@ -48,7 +48,7 @@ impl AnyModelBuilder {
     ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
         match self {
             AnyModelBuilder::Text(b) => build_text_pipeline(b).await,
-            AnyModelBuilder::Vision(b) => build_vision_pipeline(b).await,
+            AnyModelBuilder::Multimodal(b) => build_multimodal_pipeline(b).await,
             AnyModelBuilder::Auto(b) => build_auto_pipeline(b).await,
             AnyModelBuilder::Gguf(b) => build_gguf_pipeline(b).await,
             AnyModelBuilder::Diffusion(b) => build_diffusion_pipeline(b).await,
@@ -65,9 +65,9 @@ impl From<crate::TextModelBuilder> for AnyModelBuilder {
     }
 }
 
-impl From<crate::VisionModelBuilder> for AnyModelBuilder {
-    fn from(b: crate::VisionModelBuilder) -> Self {
-        AnyModelBuilder::Vision(b)
+impl From<crate::MultimodalModelBuilder> for AnyModelBuilder {
+    fn from(b: crate::MultimodalModelBuilder) -> Self {
+        AnyModelBuilder::Multimodal(b)
     }
 }
 
@@ -127,7 +127,7 @@ impl MultiModelBuilder {
         }
     }
 
-    /// Add a model. The model ID will be the pipeline name (e.g., "google/gemma-3-4b-it").
+    /// Add a model. The model ID will be the pipeline name (e.g., "google/gemma-4-E4B-it").
     pub fn add_model<B: Into<AnyModelBuilder>>(mut self, builder: B) -> Self {
         self.builders.push(MultiModelEntry {
             builder: builder.into(),
@@ -188,12 +188,7 @@ impl MultiModelBuilder {
             runner_builder = runner_builder.with_search_callback(cb);
         }
 
-        for (name, cb) in &add_model_config.engine_config.tool_callbacks {
-            runner_builder = runner_builder.with_tool_callback(name.clone(), cb.clone());
-        }
-
-        for (name, callback_with_tool) in &add_model_config.engine_config.tool_callbacks_with_tools
-        {
+        for (name, callback_with_tool) in &add_model_config.engine_config.tool_callbacks {
             runner_builder = runner_builder.with_tool_callback_and_tool(
                 name.clone(),
                 callback_with_tool.callback.clone(),
@@ -321,8 +316,7 @@ pub(crate) fn build_engine_config(
     throughput_logging_enabled: bool,
     search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<SearchCallback>>,
-    tool_callbacks: &HashMap<String, Arc<ToolCallback>>,
-    tool_callbacks_with_tools: &HashMap<String, ToolCallbackWithTool>,
+    tool_callbacks: &HashMap<String, ToolCallbackWithTool>,
     no_kv_cache: bool,
     prefix_cache_n: Option<usize>,
 ) -> EngineConfig {
@@ -331,7 +325,6 @@ pub(crate) fn build_engine_config(
         search_embedding_model,
         search_callback,
         tool_callbacks: tool_callbacks.clone(),
-        tool_callbacks_with_tools: tool_callbacks_with_tools.clone(),
         no_kv_cache,
         no_prefix_cache: prefix_cache_n.is_none(),
         prefix_cache_n: prefix_cache_n.unwrap_or(16),
@@ -360,7 +353,6 @@ pub(crate) async fn build_pipeline_from_text_loader(
         builder.search_embedding_model,
         builder.search_callback.clone(),
         &builder.tool_callbacks,
-        &builder.tool_callbacks_with_tools,
         builder.no_kv_cache,
         builder.prefix_cache_n,
     );
@@ -411,7 +403,6 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         builder.search_embedding_model,
         builder.search_callback.clone(),
         &builder.tool_callbacks,
-        &builder.tool_callbacks_with_tools,
         builder.no_kv_cache,
         builder.prefix_cache_n,
     );
@@ -464,11 +455,7 @@ pub async fn build_model_from_pipeline(
         runner_builder = runner_builder.with_search_callback(cb);
     }
 
-    for (name, cb) in &add_model_config.engine_config.tool_callbacks {
-        runner_builder = runner_builder.with_tool_callback(name.clone(), cb.clone());
-    }
-
-    for (name, callback_with_tool) in &add_model_config.engine_config.tool_callbacks_with_tools {
+    for (name, callback_with_tool) in &add_model_config.engine_config.tool_callbacks {
         runner_builder = runner_builder.with_tool_callback_and_tool(
             name.clone(),
             callback_with_tool.callback.clone(),
@@ -552,7 +539,6 @@ pub async fn build_text_pipeline(
         builder.search_embedding_model,
         builder.search_callback.clone(),
         &builder.tool_callbacks,
-        &builder.tool_callbacks_with_tools,
         builder.no_kv_cache,
         builder.prefix_cache_n,
     );
@@ -605,14 +591,14 @@ pub async fn build_text_pipeline(
     Ok((pipeline, scheduler_config, add_model_config))
 }
 
-/// Build a vision model pipeline from a VisionModelBuilder.
+/// Build a multimodal model pipeline from a MultimodalModelBuilder.
 /// Returns the pipeline, scheduler config, and AddModelConfig needed for Model creation.
-pub async fn build_vision_pipeline(
-    builder: crate::VisionModelBuilder,
+pub async fn build_multimodal_pipeline(
+    builder: crate::MultimodalModelBuilder,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    let config = VisionSpecificConfig {
+    let config = MultimodalSpecificConfig {
         topology: builder.topology.clone(),
         write_uqff: builder.write_uqff.clone(),
         from_uqff: builder.from_uqff.clone(),
@@ -627,7 +613,7 @@ pub async fn build_vision_pipeline(
 
     maybe_initialize_logging(builder.with_logging);
 
-    let loader = VisionLoaderBuilder::new(
+    let loader = MultimodalLoaderBuilder::new(
         config,
         builder.chat_template.clone(),
         builder.tokenizer_json.clone(),
@@ -648,7 +634,9 @@ pub async fn build_vision_pipeline(
         builder
             .device_mapping
             .clone()
-            .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_vision())),
+            .unwrap_or(DeviceMapSetting::Auto(
+                AutoDeviceMapParams::default_multimodal(),
+            )),
         isq_type,
         builder.paged_attn_cfg,
     )?;
@@ -665,7 +653,6 @@ pub async fn build_vision_pipeline(
         builder.search_embedding_model,
         builder.search_callback.clone(),
         &builder.tool_callbacks,
-        &builder.tool_callbacks_with_tools,
         false,
         builder.prefix_cache_n,
     );
@@ -674,13 +661,15 @@ pub async fn build_vision_pipeline(
     let device_map_setting = builder
         .device_mapping
         .clone()
-        .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_vision()));
+        .unwrap_or(DeviceMapSetting::Auto(
+            AutoDeviceMapParams::default_multimodal(),
+        ));
 
     // Convert from_uqff Vec<PathBuf> to semicolon-separated string if present
     let from_uqff_str = join_path_list(builder.from_uqff.as_deref(), UQFF_MULTI_FILE_DELIMITER);
 
     let loader_config = ModelLoaderConfig {
-        model_selected: ModelSelected::VisionPlain {
+        model_selected: ModelSelected::MultimodalPlain {
             model_id: builder.model_id.clone(),
             tokenizer_json: builder.tokenizer_json.clone(),
             arch: builder.loader_type,
@@ -772,7 +761,6 @@ pub async fn build_gguf_pipeline(
         builder.search_embedding_model,
         builder.search_callback.clone(),
         &builder.tool_callbacks,
-        &builder.tool_callbacks_with_tools,
         builder.no_kv_cache,
         builder.prefix_cache_n,
     );
@@ -1021,7 +1009,7 @@ pub async fn build_embedding_pipeline(
 }
 
 /// Build a model pipeline using auto-detection from a ModelBuilder.
-/// This uses `AutoLoaderBuilder` to detect the model type (text, vision, embedding, etc.)
+/// This uses `AutoLoaderBuilder` to detect the model type (text, multimodal, embedding, etc.)
 /// from the model's config.json, similar to the CLI `run` command.
 pub async fn build_auto_pipeline(
     builder: crate::ModelBuilder,
@@ -1040,7 +1028,7 @@ pub async fn build_auto_pipeline(
         matformer_slice_name: builder.matformer_slice_name.clone(),
     };
 
-    let vision_config = VisionSpecificConfig {
+    let vision_config = MultimodalSpecificConfig {
         topology: builder.topology.clone(),
         write_uqff: builder.write_uqff.clone(),
         from_uqff: builder.from_uqff.clone(),
@@ -1108,7 +1096,6 @@ pub async fn build_auto_pipeline(
         builder.search_embedding_model,
         builder.search_callback.clone(),
         &builder.tool_callbacks,
-        &builder.tool_callbacks_with_tools,
         builder.no_kv_cache,
         builder.prefix_cache_n,
     );

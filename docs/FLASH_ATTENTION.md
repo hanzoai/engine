@@ -15,4 +15,11 @@ the prefill phase.
 | Blackwell | 10.0, 12.0 | RTX 50* | `--features flash-attn` |
 
 > Note: FlashAttention V2 and V3 are mutually exclusive
-> Note: To use FlashAttention in the Python SDK, [compile from source](https://github.com/hanzoai/engine/blob/main/mistralrs-pyo3/README.md).
+> Note: To use FlashAttention in the Python SDK, [compile from source](https://github.com/hanzoai/engine/blob/master/mistralrs-pyo3/README.md).
+
+## See Also
+
+- [Performance Guide](PERFORMANCE.md): How FlashAttention fits into the optimization stack
+- [PagedAttention](PAGED_ATTENTION.md): Memory-efficient KV cache management
+- [Cargo Features](CARGO_FEATURES.md): Build flags for FlashAttention
+- [Installation](INSTALLATION.md): Hardware requirements
