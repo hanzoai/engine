@@ -19,7 +19,7 @@ use mistralrs_quant::{
 use serde::{Deserialize, Serialize};
 
 pub use crate::attention::Sdpa;
-pub use crate::layers_masker::CausalMasker;
+pub use crate::layers_masker::{CausalMaskConfig, CausalMasker};
 pub use crate::layers_utils::repeat_kv;
 use crate::{
     amoe::{AnyMoeTrainableLayer, MlpLayer},
@@ -2312,6 +2312,29 @@ impl RotaryEmbedding {
             Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
         }
     }
+
+    /// Apply RoPE to Q only (skip K rotation for shared KV layers).
+    pub fn forward_q(&self, q: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
+        let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
+        let rope = if self.is_gpt_neox {
+            candle_nn::rotary_emb::rope
+        } else {
+            candle_nn::rotary_emb::rope_i
+        };
+        if seqlen_offsets.len() == 1 {
+            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
+            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
+            rope(&q.contiguous()?, &cos, &sin)
+        } else {
+            let mut q_embeds = Vec::new();
+            for (i, offset) in seqlen_offsets.iter().enumerate() {
+                let cos = self.cos.narrow(0, *offset, seq_len)?;
+                let sin = self.sin.narrow(0, *offset, seq_len)?;
+                q_embeds.push(rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?);
+            }
+            Tensor::cat(&q_embeds, 0)
+        }
+    }
 }
 
 /// GPT-OSS style rotary embedding with YARN scaling support.
@@ -2696,8 +2719,8 @@ impl TensorInfExtend for Tensor {
             DType::F32 => Ok(sum.to_scalar::<f32>()? == 0.),
             DType::F64 => Ok(sum.to_scalar::<f64>()? == 0.),
             DType::F8E4M3 => Ok(sum.to_scalar::<F8E4M3>()? == F8E4M3::ZERO),
-            DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
-                candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors are not supported with .any")
+            DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 | _ => {
+                candle_core::bail!("dtype {:?} is not supported with .any", self.dtype())
             }
         }
     }
@@ -2715,8 +2738,8 @@ pub fn clamp_for_f16(xs: &Tensor) -> Result<Tensor> {
         DType::F32 => f32::MAX - 1000.,
         DType::F64 => f64::MAX as f32 - 1000.,
         DType::F8E4M3 => F8E4M3::MAX.to_f32() - 1000.,
-        DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
-            candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors are not supported with .any")
+        DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 | _ => {
+            candle_core::bail!("dtype {:?} is not supported with clamp_for_f16", xs.dtype())
         }
     };
     if xs.is_inf()?.any()? {
@@ -2874,19 +2897,7 @@ impl Mlp {
     }
 
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let lhs = self.gate.forward(&xs)?;
-        let rhs = self.up.forward(&xs)?;
-        let mut res = self
-            .down
-            .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?)?;
-        if self.gate.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = crate::ops::quantized_ffn(xs, &*self.gate, &*self.up, &*self.down, self.act)?;
         Ok(res)
     }
 }
@@ -2895,18 +2906,7 @@ impl AnyMoeTrainableLayer for Mlp {}
 
 impl MlpLayer for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let lhs = MatMul.qmethod_matmul(&xs, &*self.gate)?;
-        let rhs = MatMul.qmethod_matmul(&xs, &*self.up)?;
-        let mut res =
-            MatMul.qmethod_matmul(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?, &*self.down)?;
-        if self.gate.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = crate::ops::quantized_ffn(xs, &*self.gate, &*self.up, &*self.down, self.act)?;
         Ok(res)
     }
     fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
