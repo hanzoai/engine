@@ -1,3 +1,4 @@
+use crate::attention::AttentionMask;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use candle_core::{Result, Tensor, D};
@@ -42,6 +43,7 @@ pub trait CacheManager<T: CacheManagerMixin + MetadataMixin + ?Sized> {
 pub enum KvCache {
     Normal { k: SingleCache, v: SingleCache },
     Rotating { k: RotatingCache, v: RotatingCache },
+    Shared { owner: usize },
 }
 
 impl KvCache {
@@ -57,10 +59,15 @@ impl KvCache {
         Self::Rotating { k, v }
     }
 
+    pub fn new_shared(owner: usize) -> Self {
+        Self::Shared { owner }
+    }
+
     pub fn k(&self) -> Result<Option<Tensor>> {
         match self {
             Self::Normal { k, .. } => k.current_data(),
             Self::Rotating { k, .. } => k.current_data(),
+            Self::Shared { .. } => Ok(None),
         }
     }
 
@@ -68,6 +75,31 @@ impl KvCache {
         match self {
             Self::Normal { v, .. } => v.current_data(),
             Self::Rotating { v, .. } => v.current_data(),
+            Self::Shared { .. } => Ok(None),
+        }
+    }
+
+    /// Return the K tensor from the last `append()` call.
+    ///
+    /// For Normal caches this is identical to `k()`. For Rotating caches it
+    /// returns the full (retained + new) tensor that `append()` produced,
+    /// which during prefill may be larger than the internal sliding-window
+    /// buffer returned by `k()`.  Shared KV layers must use this instead of
+    /// `k()` so they see the same K/V the donor used for its own attention.
+    pub fn appended_k(&self) -> Result<Option<Tensor>> {
+        match self {
+            Self::Normal { k, .. } => k.current_data(),
+            Self::Rotating { k, .. } => Ok(k.last_append_result().cloned()),
+            Self::Shared { .. } => Ok(None),
+        }
+    }
+
+    /// Same as [`appended_k`](Self::appended_k) but for the V tensor.
+    pub fn appended_v(&self) -> Result<Option<Tensor>> {
+        match self {
+            Self::Normal { v, .. } => v.current_data(),
+            Self::Rotating { v, .. } => Ok(v.last_append_result().cloned()),
+            Self::Shared { .. } => Ok(None),
         }
     }
 
@@ -85,6 +117,11 @@ impl KvCache {
                 let out_v = vc.append(&v)?;
                 (Some(out_k), Some(out_v))
             }
+            Self::Shared { owner } => {
+                candle_core::bail!(
+                    "attempted to append KV data to shared cache owned by layer {owner}"
+                );
+            }
         };
         let k = match out_k {
             None => {
@@ -92,6 +129,7 @@ impl KvCache {
                 match self {
                     Self::Normal { k, .. } => shape[k.dim] = 0,
                     Self::Rotating { k, .. } => shape[k.dim] = 0,
+                    Self::Shared { .. } => unreachable!(),
                 }
                 Tensor::zeros(shape, k.dtype(), k.device())?
             }
@@ -103,6 +141,7 @@ impl KvCache {
                 match self {
                     Self::Normal { v, .. } => shape[v.dim] = 0,
                     Self::Rotating { v, .. } => shape[v.dim] = 0,
+                    Self::Shared { .. } => unreachable!(),
                 }
                 Tensor::zeros(shape, v.dtype(), v.device())?
             }
@@ -115,6 +154,7 @@ impl KvCache {
         match self {
             Self::Normal { k, .. } => k.current_seq_len(),
             Self::Rotating { k, .. } => k.current_seq_len(),
+            Self::Shared { .. } => 0,
         }
     }
 
@@ -128,6 +168,7 @@ impl KvCache {
                 k.reset();
                 v.reset();
             }
+            Self::Shared { .. } => {}
         }
     }
 
@@ -144,6 +185,7 @@ impl KvCache {
                 v.set_len(len)?;
                 Ok(())
             }
+            Self::Shared { .. } => Ok(()),
         }
     }
 
@@ -159,11 +201,16 @@ impl KvCache {
                 v.try_set_len(len)?;
                 Ok(())
             }
+            Self::Shared { .. } => Ok(()),
         }
     }
 
     pub fn is_rotating(&self) -> bool {
         matches!(self, Self::Rotating { .. })
+    }
+
+    pub fn is_shared(&self) -> bool {
+        matches!(self, Self::Shared { .. })
     }
 }
 
@@ -174,6 +221,7 @@ pub struct NormalCache(pub Vec<KvCache>);
 pub enum NormalCacheType {
     Normal { max_seq_len: usize },
     SlidingWindow { window: usize },
+    Shared { owner: usize },
 }
 
 impl NormalCache {
@@ -226,6 +274,9 @@ impl NormalCache {
                 NormalCacheType::SlidingWindow { window } => {
                     caches.push(KvCache::new_rotating(2, window, Self::CACHE_GROW_SIZE));
                 }
+                NormalCacheType::Shared { owner } => {
+                    caches.push(KvCache::new_shared(owner));
+                }
             }
         }
         Arc::new(Mutex::new(Self(caches)))
@@ -255,7 +306,6 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     seqs[0].normal_cache()
                 };
                 let Some(cache) = src_cache.get(layer).unwrap().as_ref() else {
-                    // This is hit in gemma3n for the shared kv cache
                     new_k_cache.push(None);
                     new_v_cache.push(None);
                     continue;
@@ -266,6 +316,11 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     }
                     KvCache::Rotating { k, v } => {
                         (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
+                    }
+                    KvCache::Shared { .. } => {
+                        new_k_cache.push(None);
+                        new_v_cache.push(None);
+                        continue;
                     }
                 }
             };
@@ -284,7 +339,6 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     seq.normal_cache()
                 };
                 let Some(cache) = src_cache.get(layer).unwrap().as_ref() else {
-                    // Skip for shared kv cache layers in models like gemma3n
                     continue;
                 };
                 let (src_k, src_v) = match cache {
@@ -294,6 +348,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     KvCache::Rotating { k, v } => {
                         (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
                     }
+                    KvCache::Shared { .. } => continue,
                 };
                 let offset = i * first_k.dims()[0];
                 batch_k.slice_set(&src_k, 0, offset).unwrap();
@@ -314,24 +369,9 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
         {
             // Use this for the various parameters. Assumes all seqs are from one model.
             let Some(cache_ref) = seq0_cache[layer_idx].as_ref() else {
-                // This is hit in gemma3n for the shared kv cache - create dummy cache
-                // These layers don't have their own cache because they share another layer's cache
-                caches.push(KvCache::Normal {
-                    k: SingleCache {
-                        all_data: None,
-                        dim: 0,
-                        current_seq_len: 0,
-                        max_seq_len: 0,
-                        capacity_seq_len: 0,
-                    },
-                    v: SingleCache {
-                        all_data: None,
-                        dim: 0,
-                        current_seq_len: 0,
-                        max_seq_len: 0,
-                        capacity_seq_len: 0,
-                    },
-                });
+                let mut cache = pipeline.cache().normal().0[layer_idx].clone();
+                cache.reset();
+                caches.push(cache);
                 continue;
             };
             match cache_ref {
@@ -362,7 +402,6 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     let template_cache_dim = old_k.dim;
                     let template_cache_csl = old_k.current_seq_len;
                     let template_cache_msl = old_k.max_seq_len;
-                    let template_cache_offset = old_k.offset;
                     let template_cache_capsl = old_k.capacity_seq_len;
 
                     caches.push(KvCache::Rotating {
@@ -371,18 +410,21 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             dim: template_cache_dim,
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
-                            offset: template_cache_offset,
                             capacity_seq_len: template_cache_capsl,
+                            last_append_result: None,
                         },
                         v: RotatingCache {
                             all_data: v_cache.map(|x| x.contiguous().unwrap()),
                             dim: template_cache_dim,
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
-                            offset: template_cache_offset,
                             capacity_seq_len: template_cache_capsl,
+                            last_append_result: None,
                         },
                     });
+                }
+                KvCache::Shared { owner } => {
+                    caches.push(KvCache::Shared { owner: *owner });
                 }
             }
         }
@@ -392,6 +434,17 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
         let all_cache = pipeline.cache().normal();
         for layer in 0..pipeline.get_metadata().num_hidden_layers {
             let cache = all_cache.0.get(layer).unwrap();
+            if let KvCache::Shared { owner } = cache {
+                for seq in seqs.iter_mut() {
+                    let output_cache = if modify_draft_cache {
+                        seq.normal_draft_cache()
+                    } else {
+                        seq.normal_cache()
+                    };
+                    output_cache[layer] = Some(KvCache::Shared { owner: *owner });
+                }
+                continue;
+            }
             // This case for llama 3.2 vision cross attn
             if cache.k().unwrap().is_none() {
                 continue;
@@ -404,6 +457,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 KvCache::Rotating { k, v } => {
                     (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
                 }
+                KvCache::Shared { .. } => unreachable!(),
             };
 
             let k_caches = k_cache.chunk(seqs.len(), 0).unwrap();
@@ -453,19 +507,20 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                                 dim: cache_k.dim,
                                 current_seq_len: cache_k.current_seq_len,
                                 max_seq_len: cache_k.max_seq_len,
-                                offset: cache_k.offset,
                                 capacity_seq_len: cache_k.capacity_seq_len,
+                                last_append_result: None,
                             },
                             v: RotatingCache {
                                 all_data: Some(v),
                                 dim: cache_v.dim,
                                 current_seq_len: cache_v.current_seq_len,
                                 max_seq_len: cache_v.max_seq_len,
-                                offset: cache_v.offset,
                                 capacity_seq_len: cache_v.capacity_seq_len,
+                                last_append_result: None,
                             },
                         });
                     }
+                    KvCache::Shared { .. } => unreachable!(),
                 }
             }
         }
@@ -505,11 +560,48 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 continue;
             }
 
+            match &old_caches[layer_idx] {
+                KvCache::Rotating { k, .. } => {
+                    *layer = KvCache::Rotating {
+                        k: RotatingCache {
+                            all_data: None,
+                            dim: k.dim,
+                            current_seq_len: 0,
+                            max_seq_len: k.max_seq_len,
+                            capacity_seq_len: k.capacity_seq_len,
+                            last_append_result: None,
+                        },
+                        v: RotatingCache {
+                            all_data: None,
+                            dim: k.dim,
+                            current_seq_len: 0,
+                            max_seq_len: k.max_seq_len,
+                            capacity_seq_len: k.capacity_seq_len,
+                            last_append_result: None,
+                        },
+                    };
+                    continue;
+                }
+                KvCache::Shared { owner } => {
+                    *layer = KvCache::Shared { owner: *owner };
+                    continue;
+                }
+                KvCache::Normal { .. } => {}
+            }
+
             let mut k_caches = Vec::new();
             let mut v_caches = Vec::new();
+            let mut missing_preallocated = false;
             for seq in seqs.iter_mut() {
-                let (mut k_preallocated_cache, mut v_preallocated_cache) =
-                    (*seq.preallocated_cache().as_ref().unwrap()).clone();
+                let Some((mut k_preallocated_cache, mut v_preallocated_cache)) = seq
+                    .preallocated_cache()
+                    .and_then(|cache| cache.get(layer_idx))
+                    .cloned()
+                    .flatten()
+                else {
+                    missing_preallocated = true;
+                    break;
+                };
                 if let Some(layer_devices) = &layer_devices {
                     let layer_dev = &layer_devices[layer_idx];
                     k_preallocated_cache = k_preallocated_cache
@@ -521,6 +613,10 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 }
                 k_caches.push(k_preallocated_cache);
                 v_caches.push(v_preallocated_cache);
+            }
+            if missing_preallocated {
+                layer.reset();
+                continue;
             }
             let k_cache = if k_caches.len() > 1 {
                 Tensor::cat(&k_caches, 0).unwrap()
@@ -557,31 +653,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     };
                     *layer = cache;
                 }
-                KvCache::Rotating { k, .. } => {
-                    let template_cache_dim = k.dim;
-                    let template_cache_msl = k.max_seq_len;
-
-                    // Rotating cache is not preallocated.
-                    let cache = KvCache::Rotating {
-                        k: RotatingCache {
-                            all_data: None,
-                            dim: template_cache_dim,
-                            current_seq_len: 0,
-                            max_seq_len: template_cache_msl,
-                            offset: 0,
-                            capacity_seq_len: 0,
-                        },
-                        v: RotatingCache {
-                            all_data: None,
-                            dim: template_cache_dim,
-                            current_seq_len: 0,
-                            max_seq_len: template_cache_msl,
-                            offset: 0,
-                            capacity_seq_len: 0,
-                        },
-                    };
-                    *layer = cache;
-                }
+                KvCache::Rotating { .. } | KvCache::Shared { .. } => unreachable!(),
             }
         }
     }
@@ -663,13 +735,17 @@ impl Cache {
         cache: &mut Option<(Tensor, Tensor)>,
         k: Tensor,
         v: Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         sliding_window: Option<usize>,
     ) -> Result<(Tensor, Tensor, Option<Tensor>)> {
+        let mask_tensor = match attention_mask {
+            AttentionMask::Custom(t) => Some(t.clone()),
+            _ => None,
+        };
         let (k, v, attention_mask) = match cache.clone() {
-            None => (k, v, attention_mask.cloned()),
+            None => (k, v, mask_tensor),
             Some((mut prev_k, mut prev_v)) => {
-                let mut mask = attention_mask.cloned();
+                let mut mask = mask_tensor;
                 if let Some(sliding_window) = sliding_window {
                     let kv_seq_len = prev_k.dim(2)?;
                     if kv_seq_len > sliding_window {
@@ -1031,11 +1107,9 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                                 k.all_data = Some(batched_k);
                                 k.current_seq_len = tk.current_seq_len;
                                 k.capacity_seq_len = tk.current_seq_len;
-                                k.offset = tk.offset;
                                 v.all_data = Some(batched_v);
                                 v.current_seq_len = tk.current_seq_len;
                                 v.capacity_seq_len = tk.current_seq_len;
-                                v.offset = tk.offset;
                             }
                             _ => {}
                         }
@@ -1097,11 +1171,9 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                                     k.all_data = Some(seq_k);
                                     k.current_seq_len = src_k.current_seq_len;
                                     k.capacity_seq_len = src_k.current_seq_len;
-                                    k.offset = src_k.offset;
                                     v.all_data = Some(seq_v);
                                     v.current_seq_len = src_k.current_seq_len;
                                     v.capacity_seq_len = src_k.current_seq_len;
-                                    v.offset = src_k.offset;
                                 }
                                 _ => {}
                             }
