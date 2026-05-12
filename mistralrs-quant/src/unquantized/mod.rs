@@ -13,7 +13,7 @@ use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
-    AfqBits, AfqGroupSize, AfqLayer, FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, MatMul,
+    AfqBits, AfqGroupSize, AfqLayer, FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType,
     QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
 };
 
@@ -52,7 +52,7 @@ impl QuantMethod for UnquantLinear {
         Ok(self.w.clone())
     }
 
-    fn forward(&self, a: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(a.device().clone());
 
@@ -122,23 +122,43 @@ impl QuantMethod for UnquantLinear {
                     }
                 }
             }
-        } else if let (Device::Cuda(_), Some(cublaslt)) =
-            (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device()))
-        {
-            // cuBLAS batch_matmul requires 3D tensors, fall back to regular matmul for 2D
-            if a.rank() >= 3 && w.rank() >= 3 {
-                cublaslt
-                    .batch_matmul(a, &w, None, None, None, None, None)?
-                    .t()
-            } else {
-                MatMul.matmul(a, &w.t()?)
-            }
         } else {
-            MatMul.matmul(a, &w.t()?)
+            match a.device().location() {
+                DeviceLocation::Cuda { .. } => {
+                    if let (Device::Cuda(_), Some(cublaslt)) =
+                        (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device()))
+                    {
+                        // cuBLAS batch_matmul requires 3D tensors, fall back to regular matmul for 2D.
+                        if a.rank() >= 3 && w.rank() >= 3 {
+                            cublaslt
+                                .batch_matmul(a, &w, None, None, None, None, None)?
+                                .t()
+                        } else {
+                            a.matmul(&w.t()?)
+                        }
+                    } else {
+                        a.matmul(&w.t()?)
+                    }
+                }
+                DeviceLocation::Metal { .. } => a.matmul(&w.t()?),
+                DeviceLocation::Cpu => {
+                    #[cfg(feature = "accelerate")]
+                    {
+                        let original_dtype = a.dtype();
+                        a.to_dtype(DType::F32)?
+                            .matmul(&w.t()?.to_dtype(DType::F32)?)?
+                            .to_dtype(original_dtype)
+                    }
+                    #[cfg(not(feature = "accelerate"))]
+                    {
+                        a.matmul(&w.t()?)
+                    }
+                }
+            }
         }
     }
 
-    fn gather_forward(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+    fn gather_forward_raw(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
         // Weights are [num_experts, out_features, in_features]
         // For Metal path:
         //   - a: (b_size, seq_len, 1, 1, hidden_dim) - 5D
