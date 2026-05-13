@@ -17,8 +17,10 @@ path = "src/bin/hanzo-engine.rs"
 
 [dependencies]
 # Inference backend: high-level Rust facade + low-level core.
-mistralrs = { path = "../mistralrs" }
-mistralrs-core = { path = "../mistralrs-core" }
+# Path is the workspace fork (kept in sync with upstream 0.8.x); version is
+# the matching crates.io release so the manifest is publishable.
+mistralrs = { version = "0.8.1", path = "../mistralrs" }
+mistralrs-core = { version = "0.8.1", path = "../mistralrs-core" }
 
 # Lib internals
 anyhow = { workspace = true }
