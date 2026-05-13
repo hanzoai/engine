@@ -9,8 +9,8 @@ WORKDIR /build
 # Copy ml dependency (must be present at ../ml relative to engine)
 COPY ml/ /build/ml/
 
-# Copy node dependency (hanzo-zap crate)
-COPY node/hanzo-libs/hanzo-zap/ /build/node/hanzo-libs/hanzo-zap/
+# Copy net dependency (hanzo-zap crate from github.com/hanzoai/hanzonet)
+COPY net/hanzo-zap/ /build/net/hanzo-zap/
 
 # Copy engine source
 COPY engine/ /build/engine/
