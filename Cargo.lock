@@ -2380,7 +2380,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-zap"
-version = "0.1.0"
+version = "0.6.75"
 dependencies = [
  "rustls",
  "serde",
