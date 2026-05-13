@@ -8,33 +8,34 @@ This file provides guidance to AI assistants working with the Hanzo Engine codeb
 
 ### Integration Status
 
-- **Last Sync Date**: 2025-10-26
-- **Remote**: Configured as `upstream` in git
+- **Last Sync Date**: 2026-05-06 — merged upstream mistral.rs `2d4ba4f16`
+- **Remote**: Configured as `upstream` (EricLBuehler/mistral.rs) in git
+- **Workspace version**: 0.8.1 (synced with upstream)
 
 ### Hanzo-Specific Components
 
-This repository includes:
+`hanzo-engine/` is now both a **library** and a **binary**:
 
-1. **hanzo-engine/** - Custom CLI tool and server with Hanzo-specific features:
-   - `serve` - Start inference server on port 36900
-   - `pull` - Download models from HuggingFace, Ollama, MLX, or URLs
-   - `list` - Manage downloaded models
-   - `chat` - Interactive chat interface
-   - `embed` - Generate embeddings (WIP - needs reimplementation)
+1. **Library — `hanzo_engine::*`** (the canonical inference API for the Hanzo stack):
+   - `InferenceEngine` trait: `fn infer(&self, model_id: &[u8;32], prompt: &[u8]) -> Result<Vec<u8>, EngineError>`
+   - `EmbeddingEngine` trait: `fn embed(&self, dim: usize, text: &[u8]) -> Result<Vec<f32>, EngineError>`
+   - Process-wide registry (`OnceLock`-backed): `register_inference_engine`, `register_embedding_engine`, `infer`, `embed`
+   - `MistralEngine` — real implementation backed by `mistralrs-core` (handles HF repos and local paths; derives `model_id` as SHA-256 of source)
+   - Consumers: hanzo-vm precompiles `0x0201` (AI inference) and `0x0202` (AI embedding) — they call `hanzo_engine::infer` / `embed` synchronously through the registry
+   - **NOT** the routing/pricing crate. The Hamiltonian-Hidden-Markov MarketMaker lives in `hanzo-hmm` (`~/work/hanzo/net/hanzo-hmm`) and prices heterogeneous compute; the EVM precompiles depend on `hanzo-engine`, not on `hanzo-hmm`.
 
-2. **Features**:
-   - OpenAI-compatible API endpoints
-   - Ollama compatibility mode
-   - Model management and caching
-   - Custom model directory support
+2. **Binary — `hanzo-engine`** (thin CLI wrapper):
+   - Shells out to `mistralrs-server` for the full HTTP server experience
+   - Use the library for programmatic / in-process integration
 
 ### Architecture
 
 Hanzo Engine is a Rust workspace containing:
-- All standard workspace members (mistralrs-core, mistralrs-server, etc.)
-- **hanzo-engine/** - Custom inference server and CLI
+- All upstream mistral.rs workspace members (mistralrs-core, mistralrs-server, mistralrs, mistralrs-mcp, …)
+- **hanzo-engine/** — lib + bin: canonical Hanzo inference + embedding API
+- Local candle fork at `../ml/hanzo-{ml,nn,flash-attn,metal-kernels}` overrides upstream's `candle-*` crates via `[workspace.dependencies]` path overrides
 
-The engine provides comprehensive LLM inference with support for text, vision, image generation, and speech models through multiple APIs (Rust, Python, OpenAI HTTP, MCP).
+The engine provides comprehensive LLM inference with support for text, multimodal (incl. video), image generation, speech, and embeddings through multiple APIs (Rust, Python, OpenAI HTTP, MCP).
 
 ## Essential Commands
 
