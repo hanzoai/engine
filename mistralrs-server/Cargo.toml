@@ -12,15 +12,8 @@ keywords.workspace = true
 categories.workspace = true
 license.workspace = true
 homepage.workspace = true
-default-run = "hanzo-engine"
-
-# Primary binary - Hanzo Engine
-[[bin]]
-name = "hanzo-engine"
-path = "src/main.rs"
-doc = false  # Avoid doc collision with hanzo-engine package
-
-# Backwards compatibility alias
+# The hanzo-engine binary now lives in the dedicated hanzo-engine package
+# (lib + bin). mistralrs-server keeps only its upstream identity here.
 [[bin]]
 name = "mistralrs-server"
 path = "src/main.rs"
