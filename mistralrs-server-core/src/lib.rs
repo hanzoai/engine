@@ -219,6 +219,7 @@
 //! }
 //! ```
 
+pub mod anthropic;
 pub mod background_tasks;
 pub mod cached_responses;
 pub mod chat_completion;
