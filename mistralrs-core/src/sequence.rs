@@ -11,7 +11,7 @@ use crate::{
 use crate::{
     pipeline::{DiffusionGenerationParams, KvCache},
     response::CompletionChoice,
-    tools::ToolCallingMatcher,
+    tools::{StreamingToolCallParser, ToolCallingMatcher, ToolStreamEvent},
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
     ImageGenerationResponse, ImageGenerationResponseFormat,
 };
@@ -471,6 +471,11 @@ pub struct Sequence {
     // Tool calls
     pub tools: Option<Arc<ToolCallingMatcher>>,
 
+    // Streaming tool-call argument-delta parser.
+    // Lazily created in `take_streaming_tool_events` when tool calling is active
+    // and the chat-streaming path begins observing tool-call output.
+    streaming_tool_parser: Option<StreamingToolCallParser>,
+
     // Harmony format parsing context (for GPT-OSS models)
     harmony_context: Option<HarmonyContext>,
 
@@ -578,6 +583,7 @@ impl Sequence {
             step_start_instant: None,
             harmony_context: None,
             think_tag_context: None,
+            streaming_tool_parser: None,
         }
     }
 
@@ -1290,6 +1296,41 @@ impl Sequence {
         if let Some(ref mut ctx) = self.think_tag_context {
             ctx.finalize();
         }
+    }
+
+    /// Feed the accumulated completion text into the streaming tool-call
+    /// parser (creating it on first call) and return any newly emitted
+    /// events. Caller turns events into OpenAI streaming `tool_calls`
+    /// deltas.
+    ///
+    /// `full` is the full completion text observed so far (not just the
+    /// most recent delta) — the parser tracks its own consumed offset.
+    pub fn take_streaming_tool_events(&mut self, full: &str) -> Vec<ToolStreamEvent> {
+        let parser = self
+            .streaming_tool_parser
+            .get_or_insert_with(StreamingToolCallParser::new);
+        parser.feed(full);
+        parser.take_events()
+    }
+
+    /// Finalize the streaming tool-call parser at end of stream and return
+    /// any trailing events.
+    pub fn finalize_streaming_tool_parser(&mut self) -> Vec<ToolStreamEvent> {
+        if let Some(ref mut parser) = self.streaming_tool_parser {
+            parser.finalize();
+            parser.take_events()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Whether the streaming tool-call parser has committed to a known tool
+    /// format (i.e., we've already emitted at least a `Header` event).
+    pub fn streaming_tool_committed(&self) -> bool {
+        self.streaming_tool_parser
+            .as_ref()
+            .map(|p| p.committed())
+            .unwrap_or(false)
     }
 }
 
