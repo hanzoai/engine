@@ -15,6 +15,7 @@ use mistralrs_server_core::{
         MistralRsForServerBuilder, ModelConfig,
     },
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
+    model_registry::{self, ExpertBackend, ExpertSpec, ModalitySet, ModelRegistry},
 };
 
 mod interactive_mode;
@@ -170,6 +171,23 @@ struct Args {
     /// Disable automatic ZAP binary protocol server
     #[arg(long, default_value_t = false)]
     no_zap: bool,
+
+    /// Register an expert in the ModelRegistry (multimodal router, M1 stub).
+    ///
+    /// Format: `ID:KIND:LOCATION`
+    ///   * KIND is one of `inprocess`, `proxy`, `subprocess`.
+    ///   * LOCATION is `auto` for `inprocess` (means the model the server is
+    ///     otherwise loading), a URL for `proxy`, or a path for `subprocess`.
+    ///
+    /// If no `default:inprocess:auto` entry is supplied, one is auto-added
+    /// so the in-process model is always visible on `/v1/models`. May be
+    /// passed multiple times.
+    ///
+    /// See `MULTIMODAL_ROUTER_DESIGN.md` for the long-term plan; M1 only
+    /// surfaces these entries on `/v1/models` and continues to dispatch
+    /// `default`/InProcess ids through the existing in-process pipeline.
+    #[arg(long = "register", value_name = "ID:KIND:LOCATION")]
+    register: Vec<String>,
 }
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
@@ -353,6 +371,35 @@ async fn main() -> Result<()> {
 
     // Load MCP configuration if provided
     let mcp_config = load_mcp_config(args.mcp_config.as_deref())?;
+
+    // Build the ModelRegistry (M1: single-slot stub). We do this before model
+    // loading so any malformed --register flag fails fast.
+    let mut registry = ModelRegistry::new();
+    let mut saw_default = false;
+    for raw in &args.register {
+        let spec = model_registry::parse_register_spec(raw)?;
+        if spec.id == "default" {
+            saw_default = true;
+        }
+        info!(
+            "Registering expert `{}` (backend={}, modalities={:?})",
+            spec.id,
+            spec.backend.kind(),
+            spec.modalities.capability_names(),
+        );
+        registry.register(spec)?;
+    }
+    if !saw_default {
+        // Auto-register the in-process default model so /v1/models always
+        // surfaces it. Per the design, default carries text + tool bits.
+        let spec = ExpertSpec::new(
+            "default",
+            ExpertBackend::InProcess,
+            ModalitySet::TEXT | ModalitySet::TOOL,
+        );
+        registry.register(spec)?;
+    }
+    model_registry::set_global(registry)?;
 
     let paged_attn = configure_paged_attn_from_flags(args.paged_attn, args.no_paged_attn)?;
 
