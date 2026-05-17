@@ -7,9 +7,68 @@ use crate::{
     prefix_cacher::PrefixCacheManagerV2,
     sampler::Logprobs,
     sequence::{Sequence, SequenceRecognizer, SequenceState, StopReason},
-    tools::{parse_text_tools, ToolCallResponse, ToolCallType},
+    tools::{parse_text_tools, ToolCallResponse, ToolCallType, ToolStreamEvent},
 };
 use mistralrs_mcp::CalledFunction;
+
+/// Convert a batch of `ToolStreamEvent`s into the OpenAI streaming-delta
+/// shape: `tool_calls: [{index, id?, type, function: {name?, arguments}}]`.
+///
+/// Multiple `Args` events for the same `index` are concatenated into a
+/// single `arguments` fragment to keep the SSE chunk count down. `Header`
+/// events emit `id` + `name` with empty `arguments`. `Done` events do not
+/// add anything to the delta (the parent code emits a separate finish chunk).
+fn stream_events_to_delta_calls(events: Vec<ToolStreamEvent>) -> Vec<ToolCallResponse> {
+    // Preserve order: each new index appears once; subsequent Args for an
+    // already-seen index extend that index's `arguments` in place.
+    let mut calls: Vec<ToolCallResponse> = Vec::new();
+    let mut idx_position: std::collections::HashMap<usize, usize> = Default::default();
+    for ev in events {
+        match ev {
+            ToolStreamEvent::Header { index, id, name } => {
+                if let Some(&pos) = idx_position.get(&index) {
+                    // Should be rare; overwrite id/name if a re-header arrives.
+                    calls[pos].id = id;
+                    calls[pos].function.name = name;
+                } else {
+                    let pos = calls.len();
+                    idx_position.insert(index, pos);
+                    calls.push(ToolCallResponse {
+                        index,
+                        id,
+                        tp: ToolCallType::Function,
+                        function: CalledFunction {
+                            name,
+                            arguments: String::new(),
+                        },
+                    });
+                }
+            }
+            ToolStreamEvent::Args { index, fragment } => {
+                if let Some(&pos) = idx_position.get(&index) {
+                    calls[pos].function.arguments.push_str(&fragment);
+                } else {
+                    // Args before Header: synthesize a header-less entry.
+                    let pos = calls.len();
+                    idx_position.insert(index, pos);
+                    calls.push(ToolCallResponse {
+                        index,
+                        id: String::new(),
+                        tp: ToolCallType::Function,
+                        function: CalledFunction {
+                            name: String::new(),
+                            arguments: fragment,
+                        },
+                    });
+                }
+            }
+            ToolStreamEvent::Done { .. } => {
+                // No-op for delta emission; finish chunk is emitted by caller.
+            }
+        }
+    }
+    calls
+}
 
 use super::Pipeline;
 
@@ -77,6 +136,56 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             }
         };
 
+        // While the model is still emitting a (not-yet-complete) tool call
+        // and we are NOT in Harmony mode (which finalizes atomically at
+        // end-of-stream), stream `function.arguments` deltas as they arrive
+        // so OpenAI-streaming clients (Codex CLI, opencode, LiteLLM, the
+        // OpenAI SDK, Claude Code over the OAI bridge) can begin invoking
+        // before the full tool block closes.
+        if seq.get_mut_group().is_chat
+            && seq.tools.is_some()
+            && !seq.is_harmony_mode()
+            && tool_use_still_possible
+            && !tool_use_is_done
+            && is_done.is_none()
+        {
+            // Feed the full accumulated completion text into the streaming
+            // parser; it tracks consumed offset internally.
+            let full = seq
+                .peek_delta()
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            let events = seq.take_streaming_tool_events(&full);
+            if !events.is_empty() {
+                let tool_calls = stream_events_to_delta_calls(events);
+                if !tool_calls.is_empty() {
+                    seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
+                        delta: crate::Delta {
+                            content: None,
+                            role: "assistant".to_string(),
+                            tool_calls: Some(tool_calls),
+                            reasoning_content: None,
+                        },
+                        index: seq.get_response_index(),
+                        finish_reason: None,
+                        logprobs: None,
+                    });
+                    if seq
+                        .get_mut_group()
+                        .maybe_send_streaming_response(seq, this.name().clone(), None)
+                        .await
+                        .is_err()
+                    {
+                        seq.set_state(crate::sequence::SequenceState::Done(
+                            crate::sequence::StopReason::Canceled,
+                        ));
+                        this.reset_non_granular_state();
+                    }
+                }
+            }
+        }
+
         // let send = seq.get_toks().len() % 2 == 0 || is_done.is_some();
         let send = true;
         // Send chunks when:
@@ -133,14 +242,58 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                                 vec![]
                             }
                         } else {
-                            // Not in Harmony mode - parse text for tool calls
+                            // Not in Harmony mode - parse text for tool calls.
+                            // `peek_delta` already returned the FULL accumulated
+                            // tool-call text (stream_idx hasn't moved while
+                            // `tool_use_still_possible` was true), so we pass
+                            // the whole accumulated buffer.
                             let (_, tool_calls) =
                                 parse_text_tools(this, delta.as_str(), seq.tools.clone())
                                     .map_err(candle_core::Error::msg)?;
                             if !tool_calls.is_empty() {
                                 is_done = Some(StopReason::ToolCalls);
                             }
-                            tool_calls
+                            // If we've already been streaming tool-call deltas
+                            // for this turn, do NOT also re-emit the full call
+                            // here — OpenAI clients would double-apply. Drain
+                            // any trailing parser events (in case the final
+                            // bytes weren't yet fed) and emit them; emit just
+                            // a finish chunk afterwards.
+                            if seq.streaming_tool_committed() {
+                                let trailing = seq.finalize_streaming_tool_parser();
+                                let trailing_calls = stream_events_to_delta_calls(trailing);
+                                if !trailing_calls.is_empty() {
+                                    seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
+                                        delta: crate::Delta {
+                                            content: None,
+                                            role: "assistant".to_string(),
+                                            tool_calls: Some(trailing_calls),
+                                            reasoning_content: None,
+                                        },
+                                        index: seq.get_response_index(),
+                                        finish_reason: None,
+                                        logprobs: None,
+                                    });
+                                    if seq
+                                        .get_mut_group()
+                                        .maybe_send_streaming_response(
+                                            seq,
+                                            this.name().clone(),
+                                            None,
+                                        )
+                                        .await
+                                        .is_err()
+                                    {
+                                        seq.set_state(crate::sequence::SequenceState::Done(
+                                            crate::sequence::StopReason::Canceled,
+                                        ));
+                                        this.reset_non_granular_state();
+                                    }
+                                }
+                                vec![]
+                            } else {
+                                tool_calls
+                            }
                         };
 
                         seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
