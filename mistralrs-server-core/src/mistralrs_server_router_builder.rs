@@ -14,6 +14,7 @@ use utoipa_swagger_ui::SwaggerUi;
 #[cfg(feature = "swagger-ui")]
 use crate::openapi_doc::get_openapi_doc;
 use crate::{
+    anthropic::messages,
     chat_completion::chatcompletions,
     completions::completions,
     embeddings::embeddings,
@@ -213,6 +214,7 @@ fn init_router(
 
     let router = Router::new()
         .route("/v1/chat/completions", post(chatcompletions))
+        .route("/v1/messages", post(messages))
         .route("/v1/completions", post(completions))
         .route("/v1/embeddings", post(embeddings))
         .route("/v1/models", get(models))
