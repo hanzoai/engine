@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::{
+    model_registry,
     openai::{ModelObject, ModelObjects},
     types::ExtractedMistralRsState,
 };
@@ -40,49 +41,133 @@ impl From<TuneProfileRequest> for TuneProfile {
   responses((status = 200, description = "Served model info", body = ModelObjects))
 )]
 pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects> {
-    let mut model_objects = Vec::new();
-
-    // Add "default" as a special model option
-    model_objects.push(ModelObject {
-        id: "default".to_string(),
-        object: "model",
-        created: state.get_creation_time(),
-        owned_by: "local",
-        status: None,
-        tools_available: None,
-        mcp_tools_count: None,
-        mcp_servers_connected: None,
-    });
-
-    // Get all models with their status (loaded, unloaded, reloading)
+    // Collect the base "loaded model" view from the in-process pipeline. This
+    // is the legacy data that mistralrs-server has always returned and must
+    // stay byte-stable for single-model parity (M1 task #5).
     let models_with_status = state.list_models_with_status().unwrap_or_default();
+    let created = state.get_creation_time();
 
-    for (model_id, status) in models_with_status {
-        // Get model-specific information (only available for loaded models)
-        let (tools_available, mcp_tools_count, mcp_servers_connected) =
-            if status == CoreModelStatus::Loaded {
-                let tools_count = state.get_tools_count(Some(&model_id)).unwrap_or(0);
-                let has_mcp = state.has_mcp_client(Some(&model_id)).unwrap_or(false);
+    // If a ModelRegistry is installed (i.e. hanzo-engine started with at
+    // least one --register flag, including the auto-registered "default"),
+    // build the listing from the registry so /v1/models reflects every
+    // expert plus its modality bits. Otherwise fall back to the historical
+    // shape used by raw mistralrs-server.
+    let mut model_objects: Vec<ModelObject> = Vec::new();
 
-                if has_mcp || tools_count > 0 {
-                    (Some(tools_count > 0), Some(tools_count), Some(1)) // Simplified MCP info
+    if let Some(registry) = model_registry::global() {
+        // Stable sort by id so the response order is deterministic across
+        // restarts. (HashMap iteration order is not.)
+        let mut experts = registry.list();
+        experts.sort_by(|a, b| a.id.cmp(&b.id));
+
+        for expert in experts {
+            let backend_kind = expert.backend.kind();
+            let capabilities: Vec<String> = expert
+                .modalities
+                .capability_names()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect();
+
+            // For in-process experts, pull live status / tool counts so the
+            // single-model "default" entry behaves identically to before.
+            let (status, tools_available, mcp_tools_count, mcp_servers_connected) =
+                if matches!(
+                    expert.backend,
+                    crate::model_registry::ExpertBackend::InProcess
+                ) {
+                    // Look up by registry id first; the pipeline's own
+                    // "default" routing accepts `None` to mean "the single
+                    // configured model", which matches legacy behavior when
+                    // the only entry is `default`.
+                    let lookup_id = if expert.id == "default" {
+                        None
+                    } else {
+                        Some(expert.id.as_str())
+                    };
+
+                    let core_status = models_with_status
+                        .iter()
+                        .find(|(id, _)| Some(id.as_str()) == lookup_id)
+                        .map(|(_, s)| *s);
+
+                    let is_loaded = matches!(core_status, Some(CoreModelStatus::Loaded) | None);
+                    let (ta, mt, ms) = if is_loaded {
+                        let tools_count = state.get_tools_count(lookup_id).unwrap_or(0);
+                        let has_mcp = state.has_mcp_client(lookup_id).unwrap_or(false);
+                        if has_mcp || tools_count > 0 {
+                            (Some(tools_count > 0), Some(tools_count), Some(1))
+                        } else {
+                            (None, None, None)
+                        }
+                    } else {
+                        (None, None, None)
+                    };
+
+                    (core_status.map(|s| s.to_string()), ta, mt, ms)
+                } else {
+                    // Remote/subprocess experts: M1 does not health-check
+                    // them, so don't pretend to know status or tools.
+                    (None, None, None, None)
+                };
+
+            model_objects.push(ModelObject {
+                id: expert.id.clone(),
+                object: "model",
+                created,
+                owned_by: "local",
+                status,
+                tools_available,
+                mcp_tools_count,
+                mcp_servers_connected,
+                capabilities: Some(capabilities),
+                backend: Some(backend_kind.to_string()),
+            });
+        }
+    } else {
+        // Legacy path — preserved verbatim for mistralrs-server callers that
+        // never opt into the registry.
+        model_objects.push(ModelObject {
+            id: "default".to_string(),
+            object: "model",
+            created,
+            owned_by: "local",
+            status: None,
+            tools_available: None,
+            mcp_tools_count: None,
+            mcp_servers_connected: None,
+            capabilities: None,
+            backend: None,
+        });
+
+        for (model_id, status) in &models_with_status {
+            let (tools_available, mcp_tools_count, mcp_servers_connected) =
+                if *status == CoreModelStatus::Loaded {
+                    let tools_count = state.get_tools_count(Some(model_id)).unwrap_or(0);
+                    let has_mcp = state.has_mcp_client(Some(model_id)).unwrap_or(false);
+
+                    if has_mcp || tools_count > 0 {
+                        (Some(tools_count > 0), Some(tools_count), Some(1))
+                    } else {
+                        (None, None, None)
+                    }
                 } else {
                     (None, None, None)
-                }
-            } else {
-                (None, None, None)
-            };
+                };
 
-        model_objects.push(ModelObject {
-            id: model_id,
-            object: "model",
-            created: state.get_creation_time(),
-            owned_by: "local",
-            status: Some(status.to_string()),
-            tools_available,
-            mcp_tools_count,
-            mcp_servers_connected,
-        });
+            model_objects.push(ModelObject {
+                id: model_id.clone(),
+                object: "model",
+                created,
+                owned_by: "local",
+                status: Some(status.to_string()),
+                tools_available,
+                mcp_tools_count,
+                mcp_servers_connected,
+                capabilities: None,
+                backend: None,
+            });
+        }
     }
 
     Json(ModelObjects {
