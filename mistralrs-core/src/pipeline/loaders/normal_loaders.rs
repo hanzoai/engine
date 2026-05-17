@@ -167,8 +167,8 @@ pub enum NormalLoaderType {
     DeepSeekV2,
     #[serde(rename = "deepseekv3")]
     DeepSeekV3,
-    #[serde(rename = "deepseekv4")]
-    DeepSeekV4,
+    #[serde(rename = "zen5")]
+    Zen5,
     #[serde(rename = "qwen3")]
     Qwen3,
     #[serde(rename = "glm4")]
@@ -205,7 +205,7 @@ impl NormalLoaderType {
             "PhiMoEForCausalLM" => Ok(Self::Phi3_5MoE),
             "DeepseekV2ForCausalLM" => Ok(Self::DeepSeekV2),
             "DeepseekV3ForCausalLM" => Ok(Self::DeepSeekV3),
-            "DeepseekV4ForCausalLM" | "DeepSeekV4ForCausalLM" => Ok(Self::DeepSeekV4),
+            "Zen5ForCausalLM" | "DeepseekV4ForCausalLM" | "DeepSeekV4ForCausalLM" => Ok(Self::Zen5),
             "Qwen3ForCausalLM" => Ok(Self::Qwen3),
             "Glm4ForCausalLM" => Ok(Self::GLM4),
             "Glm4MoeLiteForCausalLM" => Ok(Self::GLM4MoeLite),
@@ -238,7 +238,7 @@ impl FromStr for NormalLoaderType {
             "phi3.5moe" => Ok(Self::Phi3_5MoE),
             "deepseekv2" => Ok(Self::DeepSeekV2),
             "deepseekv3" => Ok(Self::DeepSeekV3),
-            "deepseekv4" | "deepseek_v4" | "deepseek-v4-flash" => Ok(Self::DeepSeekV4),
+            "zen5" | "deepseekv4" | "deepseek_v4" | "deepseek-v4-flash" => Ok(Self::Zen5),
             "qwen3" => Ok(Self::Qwen3),
             "glm4" => Ok(Self::GLM4),
             "glm4moelite" => Ok(Self::GLM4MoeLite),
@@ -268,7 +268,7 @@ impl Display for NormalLoaderType {
             Self::Starcoder2 => write!(f, "starcoder2"),
             Self::DeepSeekV2 => write!(f, "deepseekv2"),
             Self::DeepSeekV3 => write!(f, "deepseekv3"),
-            Self::DeepSeekV4 => write!(f, "deepseekv4"),
+            Self::Zen5 => write!(f, "zen5"),
             Self::Qwen3 => write!(f, "qwen3"),
             Self::GLM4 => write!(f, "glm4"),
             Self::GLM4MoeLite => write!(f, "glm4moelite"),
@@ -326,7 +326,7 @@ impl AutoNormalLoader {
             NormalLoaderType::Phi3_5MoE => Ok(Box::new(Phi3_5MoELoader)),
             NormalLoaderType::DeepSeekV2 => Ok(Box::new(DeepSeekV2Loader)),
             NormalLoaderType::DeepSeekV3 => Ok(Box::new(DeepSeekV3Loader)),
-            NormalLoaderType::DeepSeekV4 => Ok(Box::new(DeepSeekV4Loader)),
+            NormalLoaderType::Zen5 => Ok(Box::new(Zen5Loader)),
             NormalLoaderType::Qwen3 => Ok(Box::new(Qwen3Loader)),
             NormalLoaderType::GLM4 => Ok(Box::new(GLM4Loader)),
             NormalLoaderType::GLM4MoeLite => Ok(Box::new(GLM4MoeLiteLoader)),
@@ -3100,9 +3100,9 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
 /// dense layers.
 ///
 /// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
-pub struct DeepSeekV4Loader;
+pub struct Zen5Loader;
 
-impl NormalModelLoader for DeepSeekV4Loader {
+impl NormalModelLoader for Zen5Loader {
     fn load(
         &self,
         config: &str,
@@ -3110,8 +3110,8 @@ impl NormalModelLoader for DeepSeekV4Loader {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
-        Ok(Box::new(models::deepseek4::DeepSeekV4::new(
+        let cfg: crate::models::zen5::Zen5Config = serde_json::from_str(config)?;
+        Ok(Box::new(models::zen5::Zen5::new(
             &cfg,
             vb,
             self.is_gptx(config)?,
@@ -3129,18 +3129,18 @@ impl NormalModelLoader for DeepSeekV4Loader {
         _normal_loading_metadata: NormalLoadingMetadata,
         _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        anyhow::bail!("xlora is not supported for DeepSeekV4")
+        anyhow::bail!("xlora is not supported for Zen5")
     }
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
-        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        let cfg: crate::models::zen5::Zen5Config = serde_json::from_str(config)?;
         Ok(Box::new(cfg))
     }
 }
 
-impl IsqModelLoader for DeepSeekV4Loader {
+impl IsqModelLoader for Zen5Loader {
     fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
         let mut data = vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -3154,7 +3154,7 @@ impl IsqModelLoader for DeepSeekV4Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.indexer\.attn_q_b\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.indexer\.proj\.(weight|bias)$")?,
         ];
-        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        let cfg: crate::models::zen5::Zen5Config = serde_json::from_str(config)?;
         if cfg.q_lora_rank.is_some() {
             data.extend(vec![
                 Regex::new(r"layers\.(\d+)\.self_attn\.q_a_proj\.(weight|bias)$")?,
@@ -3215,7 +3215,7 @@ impl IsqModelLoader for DeepSeekV4Loader {
 
     fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         let mut data = vec![Regex::new(r"lm_head\.(weight|bias)$")?];
-        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        let cfg: crate::models::zen5::Zen5Config = serde_json::from_str(config)?;
         for layer_idx in 0..cfg.num_hidden_layers {
             if let Some(n_routed_experts) = cfg.n_routed_experts.filter(|_| {
                 layer_idx >= cfg.first_k_dense_replace && layer_idx % cfg.moe_layer_freq == 0
@@ -3265,7 +3265,7 @@ impl IsqModelLoader for DeepSeekV4Loader {
     }
 }
 
-impl DeviceMappedModelLoader for DeepSeekV4Loader {
+impl DeviceMappedModelLoader for Zen5Loader {
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -3279,7 +3279,7 @@ impl DeviceMappedModelLoader for DeepSeekV4Loader {
             anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
-        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        let cfg: crate::models::zen5::Zen5Config = serde_json::from_str(config)?;
 
         Ok(
             max_batch_size
@@ -3302,7 +3302,7 @@ impl DeviceMappedModelLoader for DeepSeekV4Loader {
         weight_pack_factor: usize,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
-        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        let cfg: crate::models::zen5::Zen5Config = serde_json::from_str(config)?;
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
@@ -3323,7 +3323,7 @@ impl DeviceMappedModelLoader for DeepSeekV4Loader {
         weight_pack_factor: usize,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<Vec<usize>> {
-        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        let cfg: crate::models::zen5::Zen5Config = serde_json::from_str(config)?;
         let mut per_layer_elems = Vec::new();
 
         for layer_idx in 0..cfg.num_hidden_layers {
@@ -3423,12 +3423,12 @@ impl DeviceMappedModelLoader for DeepSeekV4Loader {
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        let cfg: crate::models::zen5::Zen5Config = serde_json::from_str(config)?;
         Ok(cfg.num_hidden_layers)
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        let cfg: crate::models::zen5::Zen5Config = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,

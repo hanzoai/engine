@@ -1251,6 +1251,17 @@ impl Sequence {
         self.think_tag_context.is_some()
     }
 
+    /// Is the model currently emitting tokens inside an open `<think>` block?
+    /// Used by the streaming tool-call parser to avoid promoting tool-call
+    /// markers that appear in reasoning text into real `tool_calls` deltas
+    /// (matches antirez/ds4 commit 037ee39 behavior).
+    pub fn is_currently_in_think_block(&self) -> bool {
+        self.think_tag_context
+            .as_ref()
+            .map(|ctx| ctx.is_in_think_block())
+            .unwrap_or(false)
+    }
+
     /// Process text through the think tag parser (if enabled).
     pub fn process_think_tag_text(&mut self, text: &str) {
         if let Some(ref mut ctx) = self.think_tag_context {
