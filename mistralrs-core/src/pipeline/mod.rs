@@ -42,7 +42,7 @@ pub use isq::{
 use llguidance::toktrie::TokEnv;
 pub use loaders::{
     AdapterKind, AutoDeviceMapParams, AutoEmbeddingLoader, AutoNormalLoader, AutoVisionLoader,
-    BertEmbeddingLoader, DeepSeekV2Loader, DeepSeekV3Loader, DeepSeekV4Loader,
+    BertEmbeddingLoader, DeepSeekV2Loader, DeepSeekV3Loader, Zen5Loader,
     DeviceMappedModelLoader,
     DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, EmbeddingGemmaLoader,
     EmbeddingLoaderType, EmbeddingModel, EmbeddingModelLoader, EmbeddingModelPaths,

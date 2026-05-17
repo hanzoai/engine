@@ -68,7 +68,7 @@ enum ScoringFunc {
 }
 
 #[derive(Deserialize, Clone, Debug)]
-pub struct DeepSeekV4Config {
+pub struct Zen5Config {
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
     pub(crate) intermediate_size: usize,
@@ -127,7 +127,7 @@ pub struct DeepSeekV4Config {
     pub(crate) mtp_num_layers: usize,
 }
 
-impl DeepSeekV4Config {
+impl Zen5Config {
     pub(crate) fn q_head_dim(&self) -> usize {
         self.qk_rope_head_dim + self.qk_nope_head_dim
     }
@@ -183,7 +183,7 @@ impl QProj {
 /// the compressed `kv_lora_rank` view of K); the V4 indexer adds the *Top-K
 /// gating* on top of it. See `~/work/zen/zen5/ds4.c` lines 6868–6948.
 #[allow(dead_code)]
-struct DeepSeekV4Indexer {
+struct Zen5Indexer {
     /// Low-rank query projection: (q_lora_rank) -> (index_n_heads * index_head_dim).
     attn_q_b: Arc<dyn QuantMethod>,
     /// Per-head weight projection: hidden_size -> index_n_heads.
@@ -196,10 +196,10 @@ struct DeepSeekV4Indexer {
 }
 
 #[allow(dead_code)]
-impl DeepSeekV4Indexer {
+impl Zen5Indexer {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        cfg: &DeepSeekV4Config,
+        cfg: &Zen5Config,
         vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
@@ -300,7 +300,7 @@ impl DeepSeekV4Indexer {
 /// odd-indexed layers from 3 onwards are ratio-128 (compression without an
 /// indexer). We accept either an explicit per-config flag or fall back to the
 /// reference schedule for the canonical model shape.
-fn layer_has_indexer(cfg: &DeepSeekV4Config, layer_idx: usize) -> bool {
+fn layer_has_indexer(cfg: &Zen5Config, layer_idx: usize) -> bool {
     if cfg.compress_ratio == 0 {
         return false;
     }
@@ -323,7 +323,7 @@ fn layer_has_indexer(cfg: &DeepSeekV4Config, layer_idx: usize) -> bool {
 /// the sibling-GGUF loader is in place it will populate `heads` and the
 /// forward will be replaced with the actual draft computation.
 #[allow(dead_code)]
-struct DeepSeekV4MTP {
+struct Zen5MTP {
     /// One entry per draft head. Populated when MTP weights are loaded.
     /// Empty -> passthrough mode.
     heads: Vec<MtpHead>,
@@ -346,8 +346,8 @@ struct MtpHead {
 }
 
 #[allow(dead_code)]
-impl DeepSeekV4MTP {
-    fn new(cfg: &DeepSeekV4Config) -> Self {
+impl Zen5MTP {
+    fn new(cfg: &Zen5Config) -> Self {
         Self {
             heads: Vec::new(),
             num_heads: cfg.mtp_num_layers,
@@ -390,21 +390,21 @@ struct Attention {
     kv_b_proj: Arc<dyn QuantMethod>,
     o_proj: Arc<dyn QuantMethod>,
     rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
-    cfg: DeepSeekV4Config,
+    cfg: Zen5Config,
     q_head_dim: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     num_attention_heads: usize,
     mla_weights: MlaWeights,
     /// Optional V4 Flash compressed-K indexer (only on ratio-4 layers).
-    indexer: Option<DeepSeekV4Indexer>,
+    indexer: Option<Zen5Indexer>,
 }
 
 impl Attention {
     #[allow(clippy::too_many_arguments)]
     fn new(
         rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
-        cfg: &DeepSeekV4Config,
+        cfg: &Zen5Config,
         vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
@@ -482,7 +482,7 @@ impl Attention {
             mapper.device_for(layer_idx, loading_isq),
         );
 
-        let indexer = DeepSeekV4Indexer::new(
+        let indexer = Zen5Indexer::new(
             cfg,
             vb.pp("indexer"),
             mapper,
@@ -731,14 +731,14 @@ impl Attention {
 
 struct MoeGate {
     weight: Tensor,
-    cfg: DeepSeekV4Config,
+    cfg: Zen5Config,
     top_k: usize,
     n_routed_experts: usize,
     e_score_correction_bias: Option<Tensor>,
 }
 
 impl MoeGate {
-    fn new(cfg: &DeepSeekV4Config, vb: ShardedVarBuilder, n_routed_experts: usize) -> Result<Self> {
+    fn new(cfg: &Zen5Config, vb: ShardedVarBuilder, n_routed_experts: usize) -> Result<Self> {
         let weight = vb.get((n_routed_experts, cfg.hidden_size), "weight")?;
         let e_score_correction_bias = if matches!(cfg.topk_method, TopkMethod::NoAuxTc) {
             Some(vb.get_with_hints_dtype(
@@ -869,7 +869,7 @@ struct Moe {
 impl Moe {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        cfg: &DeepSeekV4Config,
+        cfg: &Zen5Config,
         vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
@@ -982,7 +982,7 @@ impl DecoderLayer {
     #[allow(clippy::too_many_arguments)]
     fn new(
         rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
-        cfg: &DeepSeekV4Config,
+        cfg: &Zen5Config,
         vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
@@ -1072,7 +1072,7 @@ impl DecoderLayer {
     }
 }
 
-pub struct DeepSeekV4 {
+pub struct Zen5 {
     lm_head: Arc<dyn QuantMethod>,
     embed_tokens: Embedding,
     norm: RmsNorm,
@@ -1084,12 +1084,12 @@ pub struct DeepSeekV4 {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     /// V4 Flash MTP draft heads. Empty when no sibling MTP GGUF is loaded.
     #[allow(dead_code)]
-    mtp: DeepSeekV4MTP,
+    mtp: Zen5MTP,
 }
 
-impl DeepSeekV4 {
+impl Zen5 {
     pub fn new(
-        cfg: &DeepSeekV4Config,
+        cfg: &Zen5Config,
         vb: ShardedVarBuilder,
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
@@ -1187,7 +1187,7 @@ impl DeepSeekV4 {
         // V4 raw sliding-window cache. Each layer gets a rotating ring of
         // `cfg.sliding_window` rows; the compressed indexer cache extension
         // (per-layer ratio-4 compressed rows) is the next pass — see the
-        // file-level note for `DeepSeekV4Indexer`.
+        // file-level note for `Zen5Indexer`.
         let cache = if cfg.sliding_window > 0 {
             EitherCache::Normal(NormalCache::from_types(
                 (0..cfg.num_hidden_layers)
@@ -1203,7 +1203,7 @@ impl DeepSeekV4 {
             ))
         };
 
-        let mtp = DeepSeekV4MTP::new(cfg);
+        let mtp = Zen5MTP::new(cfg);
 
         Ok(Self {
             lm_head,
@@ -1314,7 +1314,7 @@ impl DeepSeekV4 {
     }
 }
 
-impl IsqModel for DeepSeekV4 {
+impl IsqModel for Zen5 {
     fn get_layers(
         &mut self,
     ) -> (
@@ -1488,7 +1488,7 @@ impl IsqModel for DeepSeekV4 {
     }
 }
 
-impl NormalModel for DeepSeekV4 {
+impl NormalModel for Zen5 {
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -1519,7 +1519,7 @@ impl NormalModel for DeepSeekV4 {
         _flash_params: &FlashParams,
         _flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
-        candle_core::bail!("xlora is not supported for DeepSeekV4")
+        candle_core::bail!("xlora is not supported for Zen5")
     }
     fn cache(&self) -> &EitherCache {
         &self.cache
@@ -1541,4 +1541,4 @@ impl NormalModel for DeepSeekV4 {
     }
 }
 
-impl AnyMoeBaseModelMixin for DeepSeekV4 {}
+impl AnyMoeBaseModelMixin for Zen5 {}

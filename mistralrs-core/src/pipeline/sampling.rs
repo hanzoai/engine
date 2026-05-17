@@ -148,6 +148,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             && tool_use_still_possible
             && !tool_use_is_done
             && is_done.is_none()
+            // ds4 commit 037ee39: don't treat tool-call markers inside a still-
+            // open `<think>` block as real tool calls — they are reasoning.
+            && !seq.is_currently_in_think_block()
         {
             // Feed the full accumulated completion text into the streaming
             // parser; it tracks consumed offset internally.
