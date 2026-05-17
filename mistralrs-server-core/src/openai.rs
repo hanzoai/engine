@@ -645,6 +645,15 @@ pub struct ModelObject {
     /// Number of connected MCP servers
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp_servers_connected: Option<usize>,
+    /// Capabilities advertised by the ModelRegistry, e.g. `["text", "tool"]`.
+    /// Populated from `ModalitySet::capability_names`. Omitted for legacy
+    /// entries that predate the registry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<String>>,
+    /// Backend kind from the registry: `inprocess`, `proxy`, or `subprocess`.
+    /// Omitted for legacy entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
 }
 
 /// Collection of available models
