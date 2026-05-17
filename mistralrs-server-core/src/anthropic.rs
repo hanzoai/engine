@@ -517,12 +517,12 @@ impl IntoResponse for AnthropicResponder {
 }
 
 /// Anthropic-compatible messages endpoint handler.
-#[cfg_attr(feature = "swagger-ui", utoipa::path(
-    post,
-    tag = "Anthropic",
-    path = "/v1/messages",
-    responses((status = 200, description = "Anthropic Messages response"))
-))]
+///
+/// Documented in `mistralrs-server-core/src/anthropic.rs`. Not exposed via the
+/// `swagger-ui` feature because the Anthropic request types are not annotated
+/// with `utoipa::ToSchema` — they are deserialized via serde untagged unions
+/// (`AnthropicMessageContent`, `AnthropicSystem`) which do not have a single
+/// OpenAPI schema representation.
 pub async fn messages(
     axum::extract::State(state): ExtractedMistralRsState,
     Json(req): Json<AnthropicMessagesRequest>,
