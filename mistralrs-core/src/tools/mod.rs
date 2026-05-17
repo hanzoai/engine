@@ -1,10 +1,12 @@
 mod request;
 mod response;
+mod streaming_parser;
 
 use candle_core::Result;
 use regex::Regex;
 pub use request::*;
 pub use response::*;
+pub use streaming_parser::{StreamingToolCallParser, ToolStreamEvent};
 use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
