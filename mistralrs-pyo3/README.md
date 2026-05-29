@@ -1,17 +1,17 @@
-# Hanzo Engine Python SDK
+# mistralrs Python SDK
 
-Python bindings for [Hanzo Engine](https://github.com/hanzoai/engine), a high-performance LLM inference engine.
+`mistralrs` is the Python SDK for [mistral.rs](https://github.com/EricLBuehler/mistral.rs), a blazing-fast LLM inference engine.
 
 ## Documentation
 
 For full documentation, see:
-- [Python SDK Documentation](https://docs.hanzo.ai/docs/services/engine/PYTHON_SDK.html)
-- [Installation Guide](https://docs.hanzo.ai/docs/services/engine/PYTHON_INSTALLATION.html)
+- [Python SDK Documentation](https://ericlbuehler.github.io/mistral.rs/tutorials/03-python-sdk/)
+- [Installation Guide](https://ericlbuehler.github.io/mistral.rs/guides/install/)
 
 ## Quick Install
 
 ```bash
-pip install hanzo-engine-cuda   # NVIDIA GPUs
-pip install hanzo-engine-metal  # Apple Silicon
-pip install hanzo-engine        # CPU only
+pip install mistralrs-cuda   # NVIDIA GPUs
+pip install mistralrs-metal  # Apple Silicon
+pip install mistralrs        # CPU only
 ```

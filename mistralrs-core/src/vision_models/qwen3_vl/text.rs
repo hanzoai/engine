@@ -70,10 +70,10 @@ impl Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let xs = xs.clone();
-        let lhs = self.gate_proj.forward(&xs)?.apply(&self.act_fn)?;
+        let lhs = self.gate_proj.forward(&xs)?;
         let rhs = self.up_proj.forward(&xs)?;
         self.down_proj
-            .forward(&(lhs * rhs)?)?
+            .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act_fn)?)?
             .to_dtype(original_dtype)
     }
 }
@@ -195,9 +195,8 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let mut q = self.q_proj.forward(xs)?;
-        let mut k = self.k_proj.forward(xs)?;
-        let mut v = self.v_proj.forward(xs)?;
+        let (mut q, mut k, mut v) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -216,10 +215,15 @@ impl Attention {
             (q, k, v)
         };
 
-        q = q.apply(&self.q_norm)?;
-        k = k.apply(&self.k_norm)?;
-
-        self.rotary_emb.forward(cos_sin, &mut q, &mut k)?;
+        (q, k) = self.rotary_emb.forward_qk_norm(
+            cos_sin,
+            &q,
+            &k,
+            self.q_norm.weight(),
+            self.k_norm.weight(),
+            self.q_norm.eps(),
+            self.k_norm.eps(),
+        )?;
 
         let q = q.contiguous()?;
         let k = k.contiguous()?;

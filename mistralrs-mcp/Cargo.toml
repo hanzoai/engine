@@ -3,7 +3,7 @@ name = "mistralrs-mcp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "MCP (Model Context Protocol) client for Hanzo Engine"
+description = "MCP (Model Context Protocol) client for mistral.rs"
 license.workspace = true
 homepage.workspace = true
 keywords = ["mcp", "tools", "ai", "llm"]
@@ -14,6 +14,7 @@ readme = "../README.md"
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+image.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["full"] }
