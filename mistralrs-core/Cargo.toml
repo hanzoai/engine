@@ -14,6 +14,7 @@ homepage.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+sha1 = "0.10"
 candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
@@ -147,3 +148,6 @@ code-execution = ["dep:mistralrs-code-exec"]
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3"
