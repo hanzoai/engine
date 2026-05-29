@@ -724,7 +724,9 @@ pub async fn messages(
     openai_req.stream = Some(stream);
 
     let model = areq.model.clone();
-    let model_id = if openai_req.model == "default" {
+    let model_id = if openai_req.model == "default"
+        || openai_req.model.to_ascii_lowercase().starts_with("claude")
+    {
         None
     } else {
         Some(openai_req.model.clone())
