@@ -38,17 +38,17 @@ openssl = { version = "0.10", features = ["vendored"] }
 # candle-flash-attn = { version = "0.10.2" }
 # candle-metal-kernels = { version = "0.10.2" }
 # Use local hanzo-ml dependencies (Hanzo fork of candle)
-candle-core = { path = "../ml/hanzo-ml", package = "hanzo-ml" }
-candle-nn = { path = "../ml/hanzo-nn", package = "hanzo-nn" }
-candle-flash-attn = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
-candle-flash-attn-v3 = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
-candle-metal-kernels = { path = "../ml/hanzo-metal-kernels", package = "hanzo-metal-kernels" }
+candle-core = { git = "https://github.com/hanzoai/ml", package = "hanzo-ml" }
+candle-nn = { git = "https://github.com/hanzoai/ml", package = "hanzo-nn" }
+candle-flash-attn = { git = "https://github.com/hanzoai/ml", package = "hanzo-flash-attn" }
+candle-flash-attn-v3 = { git = "https://github.com/hanzoai/ml", package = "hanzo-flash-attn" }
+candle-metal-kernels = { git = "https://github.com/hanzoai/ml", package = "hanzo-metal-kernels" }
 # candle-core = { path = "../candle/candle-core" }
 # candle-nn = { path = "../candle/candle-nn" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }
 # candle-flash-attn = { path = "../candle/candle-flash-attn" }
 # Add hanzo-ml-inference support  
-hanzo-ml-inference = { path = "../ml/hanzo-ml-inference", version = "0.1.0" }
+hanzo-ml-inference = { git = "https://github.com/hanzoai/ml", package = "hanzo-ml-inference" }
 
 axum = "0.8.8"
 anyhow = "1.0.100"
@@ -196,7 +196,7 @@ mistralrs = { path = "mistralrs", version = "0.8.1" }
 mistralrs-audio = { path = "mistralrs-audio", version = "0.8.1" }
 mistralrs-mcp = { path = "mistralrs-mcp", version = "0.8.1" }
 mistralrs-macros = { path = "mistralrs-macros", version = "0.8.1" }
-hanzo-zap = { path = "../net/hanzo-zap", version = "0.6.75" }
+hanzo-zap = { git = "https://github.com/hanzoai/zap" }
 
 [profile.release-with-debug]
 inherits = "release"
