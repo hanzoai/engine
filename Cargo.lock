@@ -2472,6 +2472,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-engine"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "mistralrs",
+ "mistralrs-core",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
