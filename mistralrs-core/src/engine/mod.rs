@@ -52,8 +52,11 @@ use crate::{
 };
 
 mod add_request;
+pub(crate) mod agentic_loop;
+pub use agentic_loop::DEFAULT_MAX_TOOL_ROUNDS;
+pub(crate) mod agentic_session;
+mod file_tools;
 mod logger;
-mod search_request;
 mod tool_dispatch;
 
 pub enum EngineInstruction {
@@ -171,6 +174,8 @@ pub struct Engine {
     logger: Arc<IntervalLogger>,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
     pending_notify: Arc<Notify>,
+    pub(crate) session_store: Arc<std::sync::Mutex<agentic_session::AgenticSessionStore>>,
+    pub(crate) file_store: crate::files::FileStore,
 }
 
 impl Drop for Engine {
@@ -197,6 +202,8 @@ impl Engine {
         search_callback: Option<Arc<search::SearchCallback>>,
         tool_callbacks: tools::ToolCallbacksWithTools,
         logger: Arc<IntervalLogger>,
+        session_store: Arc<std::sync::Mutex<agentic_session::AgenticSessionStore>>,
+        file_store: crate::files::FileStore,
     ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
@@ -242,6 +249,8 @@ impl Engine {
             logger,
             handles: Arc::new(Mutex::new(Vec::new())),
             pending_notify: Arc::new(Notify::new()),
+            session_store,
+            file_store,
         })
     }
 
@@ -422,6 +431,17 @@ impl Engine {
                     }
 
                     if !scheduled.prompt.is_empty() {
+                        // Mirror the paged-attn arm: prime timing fields before step()
+                        // so update_time_info called from inside sampling sees them.
+                        let pre_step_now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .expect("Time travel has occurred!")
+                            .as_millis();
+                        for seq in scheduled.prompt.iter_mut() {
+                            seq.prompt_timestamp = Some(pre_step_now);
+                            seq.set_step_start_instant();
+                        }
+
                         let prompt_exec_time = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 

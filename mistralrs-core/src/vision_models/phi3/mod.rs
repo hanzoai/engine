@@ -30,8 +30,8 @@ use crate::{
     },
     layers_masker::PastKvLenCache,
     paged_attention::{
-        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
-        PagedAttention,
+        encoder_cache::{CacheModality, EncoderCacheManager},
+        AttentionImplementation, ModelConfigMetadata, PagedAttention,
     },
     pipeline::{
         extract_logits,
@@ -365,9 +365,7 @@ impl AnyMoeTrainableLayer for Mlp {}
 impl MlpLayer for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let up_states = self.gate_up_proj.forward(xs)?;
-        let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
-        let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
-        let up_states = (up_states * gate.apply(&self.act_fn))?;
+        let up_states = crate::ops::split_mul_and_act(&up_states, self.i_size, self.act_fn)?;
         let res = self.down_proj.forward(&up_states)?;
         Ok(res)
     }
@@ -739,7 +737,7 @@ impl ImageEmbedding {
                     if n_hashes > 0 && n_hashes == bs {
                         let mut guard = encoder_cache.lock().expect("encoder cache lock poisoned");
                         for (i, &hash) in image_hashes.iter().enumerate() {
-                            if let Some(cached) = guard.get(hash) {
+                            if let Some(cached) = guard.get(CacheModality::Image, hash) {
                                 per_image_cached[i] = Some(cached[0].clone());
                             } else {
                                 miss_indices.push(i);
@@ -885,7 +883,11 @@ impl ImageEmbedding {
                         if n_hashes > 0 && bs_ < n_hashes {
                             let mut guard =
                                 encoder_cache.lock().expect("encoder cache lock poisoned");
-                            guard.insert(image_hashes[bs_], vec![layerout.clone()]);
+                            guard.insert(
+                                CacheModality::Image,
+                                image_hashes[bs_],
+                                vec![layerout.clone()],
+                            );
                         }
 
                         image_set_tensor_inner.push(layerout);
@@ -903,7 +905,7 @@ impl ImageEmbedding {
                     {
                         let mut guard = encoder_cache.lock().expect("encoder cache lock poisoned");
                         for (i, &hash) in image_hashes.iter().enumerate() {
-                            if let Some(cached) = guard.get(hash) {
+                            if let Some(cached) = guard.get(CacheModality::Image, hash) {
                                 per_image_features[i] = Some(cached[0].clone());
                             } else {
                                 miss_indices.push(i);
@@ -922,7 +924,11 @@ impl ImageEmbedding {
                             {
                                 let mut guard =
                                     encoder_cache.lock().expect("encoder cache lock poisoned");
-                                guard.insert(image_hashes[idx], vec![feats.clone()]);
+                                guard.insert(
+                                    CacheModality::Image,
+                                    image_hashes[idx],
+                                    vec![feats.clone()],
+                                );
                             }
                             per_image_features[idx] = Some(feats);
                         }
@@ -1272,6 +1278,8 @@ pub(crate) struct Phi3VisionSpecificArgs {
     pub image_sizes: Option<Vec<(usize, usize)>>,
     pub image_hashes: Vec<u64>,
 }
+
+impl crate::speculative::SpeculativeTargetMixin for Model {}
 
 impl MultimodalModel for Model {
     fn forward(

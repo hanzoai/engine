@@ -265,9 +265,8 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let mut q = self.q_proj.forward(xs)?;
-        let mut k = self.k_proj.forward(xs)?;
-        let mut v = self.v_proj.forward(xs)?;
+        let (mut q, mut k, mut v) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -1011,6 +1010,8 @@ impl IsqModel for Glm4Moe {
         Some(uvb.to_safetensors())
     }
 }
+
+impl crate::speculative::SpeculativeTargetMixin for Glm4Moe {}
 
 impl NormalModel for Glm4Moe {
     fn forward(

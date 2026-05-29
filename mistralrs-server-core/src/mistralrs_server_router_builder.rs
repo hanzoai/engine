@@ -14,12 +14,14 @@ use utoipa_swagger_ui::SwaggerUi;
 #[cfg(feature = "swagger-ui")]
 use crate::openapi_doc::get_openapi_doc;
 use crate::{
+    approvals::{resolve_agent_approval, ApprovalBroker},
     chat_completion::chatcompletions,
     completions::completions,
     embeddings::embeddings,
+    files::{delete_file, get_file, get_file_content, list_files},
     handlers::{
-        get_model_status, health, models, re_isq, reload_model, system_doctor, system_info,
-        tune_model, unload_model,
+        delete_session, get_model_status, get_session, health, models, put_session, re_isq,
+        reload_model, system_doctor, system_info, tune_model, unload_model,
     },
     image_generation::image_generation,
     responses::{cancel_response, create_response, delete_response, get_response},
@@ -33,6 +35,8 @@ use crate::{
 pub struct AgenticDefaults {
     pub max_tool_rounds: Option<usize>,
     pub tool_dispatch_url: Option<String>,
+    pub agent_permission: Option<mistralrs_core::AgentPermission>,
+    pub approval_broker: ApprovalBroker,
 }
 
 // NOTE(EricLBuehler): Accept up to 50mb input
@@ -189,6 +193,23 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
+    pub fn with_agent_permission(mut self, permission: mistralrs_core::AgentPermission) -> Self {
+        self.agentic_defaults.agent_permission = Some(permission);
+        self
+    }
+
+    pub fn with_code_execution_permission(
+        self,
+        permission: mistralrs_core::CodeExecutionPermission,
+    ) -> Self {
+        self.with_agent_permission(permission.into())
+    }
+
+    pub fn with_approval_broker(mut self, broker: ApprovalBroker) -> Self {
+        self.agentic_defaults.approval_broker = broker;
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -252,7 +273,7 @@ fn init_router(
     let router_max_body_limit = max_body_limit.unwrap_or(DEFAULT_MAX_BODY_LIMIT);
 
     let cors_layer = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
         .allow_headers([http::header::CONTENT_TYPE, http::header::AUTHORIZATION])
         .allow_origin(allow_origin);
 
@@ -271,15 +292,27 @@ fn init_router(
         .route("/", get(health))
         .route("/re_isq", post(re_isq))
         .route("/v1/images/generations", post(image_generation))
+        .route("/v1/files", get(list_files))
+        .route("/v1/files/{id}", get(get_file).delete(delete_file))
+        .route("/v1/files/{id}/content", get(get_file_content))
         .route("/v1/audio/speech", post(speech_generation))
+        .route(
+            "/v1/agent/approvals/{approval_id}",
+            post(resolve_agent_approval),
+        )
         .route("/v1/responses", post(create_response))
         .route(
             "/v1/responses/{response_id}",
             get(get_response).delete(delete_response),
         )
         .route("/v1/responses/{response_id}/cancel", post(cancel_response))
+        .route(
+            "/v1/sessions/{session_id}",
+            get(get_session).put(put_session).delete(delete_session),
+        )
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
+        .layer(Extension(agentic_defaults.approval_broker.clone()))
         .layer(Extension(agentic_defaults))
         .with_state(state);
 
