@@ -37,7 +37,7 @@ tokio.workspace = true
 tracing.workspace = true
 rust-mcp-sdk.workspace = true
 async-trait.workspace = true
-hanzo-zap.workspace = true
+hanzo-zap = { workspace = true, optional = true }
 reqwest.workspace = true
 
 [features]
@@ -59,3 +59,4 @@ mkl = ["mistralrs-core/mkl", "mistralrs-server-core/mkl"]
 nccl = ["mistralrs-core/nccl", "mistralrs-server-core/nccl"]
 ring = ["mistralrs-core/ring", "mistralrs-server-core/ring"]
 mcp-server = ["rust-mcp-sdk/server", "rust-mcp-sdk/hyper-server"]
+zap = ["dep:hanzo-zap"]

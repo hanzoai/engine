@@ -29,7 +29,7 @@ thiserror = { workspace = true }
 tokio = { version = "1.47", features = ["rt-multi-thread", "macros"] }
 
 [features]
-default = ["metal"]
+default = []
 cuda = ["mistralrs-core/cuda"]
 metal = ["mistralrs-core/metal"]
 flash-attn = ["mistralrs-core/flash-attn"]
