@@ -2,7 +2,7 @@
 name = "mistralrs-server"
 publish = false
 readme = "../README.md"
-authors = ["Hanzo AI <dev@hanzo.ai>", "Eric Buehler"]
+authors = ["Eric Buehler"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,12 +12,6 @@ keywords.workspace = true
 categories.workspace = true
 license.workspace = true
 homepage.workspace = true
-# The hanzo-engine binary now lives in the dedicated hanzo-engine package
-# (lib + bin). mistralrs-server keeps only its upstream identity here.
-[[bin]]
-name = "mistralrs-server"
-path = "src/main.rs"
-doc = false
 
 [dependencies]
 anyhow.workspace = true
@@ -37,8 +31,6 @@ tokio.workspace = true
 tracing.workspace = true
 rust-mcp-sdk.workspace = true
 async-trait.workspace = true
-hanzo-zap = { workspace = true, optional = true }
-reqwest.workspace = true
 
 [features]
 cuda = ["mistralrs-core/cuda", "mistralrs-server-core/cuda"]
@@ -59,4 +51,3 @@ mkl = ["mistralrs-core/mkl", "mistralrs-server-core/mkl"]
 nccl = ["mistralrs-core/nccl", "mistralrs-server-core/nccl"]
 ring = ["mistralrs-core/ring", "mistralrs-server-core/ring"]
 mcp-server = ["rust-mcp-sdk/server", "rust-mcp-sdk/hyper-server"]
-zap = ["dep:hanzo-zap"]

@@ -163,9 +163,8 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let mut q = self.q_proj.forward(xs)?;
-        let mut k = self.k_proj.forward(xs)?;
-        let mut v = self.v_proj.forward(xs)?;
+        let (mut q, mut k, mut v) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -184,14 +183,6 @@ impl Attention {
             (q, k, v)
         };
 
-        q = q.apply(&self.q_norm)?;
-        k = k.apply(&self.k_norm)?;
-
-        (q, k) = match self.use_sliding_window {
-            true => self.rotary_emb_local.forward(&q, &k, seqlen_offsets)?,
-            false => self.rotary_emb_global.forward(&q, &k, seqlen_offsets)?,
-        };
-
         let mask = if self.use_sliding_window {
             sliding_attention_mask
         } else {
@@ -204,6 +195,27 @@ impl Attention {
             attention_mask
         } else {
             mask
+        };
+
+        (q, k) = match self.use_sliding_window {
+            true => self.rotary_emb_local.forward_qk_norm(
+                &q,
+                &k,
+                self.q_norm.weight(),
+                self.k_norm.weight(),
+                self.q_norm.eps(),
+                self.k_norm.eps(),
+                seqlen_offsets,
+            )?,
+            false => self.rotary_emb_global.forward_qk_norm(
+                &q,
+                &k,
+                self.q_norm.weight(),
+                self.k_norm.weight(),
+                self.q_norm.eps(),
+                self.k_norm.eps(),
+                seqlen_offsets,
+            )?,
         };
 
         let mut attn_output = match &self.paged_attn {
@@ -247,6 +259,7 @@ impl Attention {
                         &v,
                         mask.as_option_tensor(),
                         &self.sdpa_params,
+                        false,
                     )?,
                 }
             }
@@ -347,25 +360,24 @@ impl DecoderLayer {
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
+        let xs = self.self_attn.forward(
+            &xs,
+            attention_mask,
+            sliding_attention_mask,
+            seqlen_offsets,
+            kv_cache,
+            metadata,
+            flash_params,
+        )?;
         let xs = self
-            .self_attn
-            .forward(
-                &xs,
-                attention_mask,
-                sliding_attention_mask,
-                seqlen_offsets,
-                kv_cache,
-                metadata,
-                flash_params,
-            )?
-            .apply(&self.post_attention_layernorm)?;
-        let xs = (xs + residual)?;
+            .post_attention_layernorm
+            .forward_residual(&xs, residual)?;
         let residual = &xs;
         let xs = self
             .mlp
-            .forward(&xs.apply(&self.pre_feedforward_layernorm)?)?
-            .apply(&self.post_feedforward_layernorm)?;
-        residual + xs
+            .forward(&xs.apply(&self.pre_feedforward_layernorm)?)?;
+        self.post_feedforward_layernorm
+            .forward_residual(&xs, residual)
     }
 }
 
@@ -864,6 +876,8 @@ impl IsqModel for TextModel {
         Ok(names)
     }
 }
+
+impl crate::speculative::SpeculativeTargetMixin for TextModel {}
 
 impl MultimodalModel for TextModel {
     fn forward(
