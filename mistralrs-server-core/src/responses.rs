@@ -1466,7 +1466,8 @@ async fn parse_openresponses_request(
         web_search_options: oairequest.web_search_options,
         top_k: oairequest.top_k,
         grammar: oairequest.grammar,
-        min_p: oairequest.min_p,
+        // ds4 commit 613e9b2: default min-p filtering at 0.05.
+        min_p: oairequest.min_p.or(Some(0.05)),
         dry_multiplier: oairequest.dry_multiplier,
         dry_base: oairequest.dry_base,
         dry_allowed_length: oairequest.dry_allowed_length,
