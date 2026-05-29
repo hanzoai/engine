@@ -2,6 +2,12 @@
 
 use anyhow::Context;
 use anymoe::{AnyMoeConfig, AnyMoeExpertType};
+use code_execution::{
+    build_agent_approval_callback, AgentPermissionPy, AgentToolApprovalDecisionKindPy,
+    AgentToolApprovalDecisionPy, AgentToolApprovalPy, AgentToolKindPy, AgentToolMetadataPy,
+    AgentToolSourcePy, CodeExecutionConfig, CodeExecutionPermissionPy, NetworkModePy,
+    SandboxPolicy,
+};
 use either::Either;
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -26,29 +32,34 @@ use util::{
 
 use candle_core::{Device, Result};
 use mistralrs_core::{
-    initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader, AutoDeviceMapParams,
-    ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
-    DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
-    DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams, EmbeddingLoaderBuilder,
-    EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
-    GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar,
-    Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, MultimodalLoaderBuilder,
-    MultimodalSpecificConfig, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
-    PagedAttentionConfig, PagedCacheType, ReasoningEffort, Request as _Request, RequestMessage,
-    Response, ResponseOk, SamplingParams, SchedulerConfig, SearchEmbeddingModel, SpeculativeConfig,
-    SpeculativeLoader, SpeechLoader, StopTokens, TokenSource, TokenizationRequest, Tool, Topology,
+    initialize_logging, paged_attn_supported, parse_isq_value, AgentToolApprovalHandler,
+    AnyMoeLoader, AutoDeviceMapParams, ChatCompletionResponse, CompletionResponse, Constraint,
+    DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata,
+    DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams,
+    EmbeddingLoaderBuilder, EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
+    LlguidanceGrammar, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder,
+    MultimodalLoaderBuilder, MultimodalSpecificConfig, NormalLoaderBuilder, NormalRequest,
+    NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, ReasoningEffort,
+    Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
+    SearchEmbeddingModel, SpeculativeConfig, SpeechLoader, StopTokens, TokenSource,
+    TokenizationRequest, Tool, Topology,
 };
 use mistralrs_core::{
     CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
     ToolCallbacks,
 };
 use mistralrs_mcp::{McpClientConfig, McpServerConfig, McpServerSource};
+#[cfg(not(feature = "code-execution"))]
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use pyo3::Bound;
 use pyo3::PyObject;
 use std::fs::File;
 mod anymoe;
+mod code_execution;
+mod files;
 mod requests;
 mod stream;
 mod util;
@@ -136,17 +147,19 @@ fn wrap_search_callback(cb: PyObject) -> Arc<SearchCallback> {
 }
 
 fn wrap_tool_callback(cb: PyObject) -> Arc<ToolCallback> {
-    Arc::new(move |func: &CalledFunction| {
-        Python::with_gil(|py| {
-            let json = py.import("json")?;
-            let args: Py<PyAny> = json
-                .call_method1("loads", (func.arguments.clone(),))?
-                .into();
-            let obj = cb.call1(py, (func.name.clone(), args))?;
-            obj.extract::<String>(py)
-        })
-        .map_err(|e: PyErr| anyhow::anyhow!(e.to_string()))
-    })
+    Arc::new(
+        move |func: &CalledFunction, _ctx: &mistralrs_core::ToolCallContext| {
+            Python::with_gil(|py| {
+                let json = py.import("json")?;
+                let args: Py<PyAny> = json
+                    .call_method1("loads", (func.arguments.clone(),))?
+                    .into();
+                let obj = cb.call1(py, (func.name.clone(), args))?;
+                obj.extract::<String>(py)
+            })
+            .map_err(|e: PyErr| anyhow::anyhow!(e.to_string()))
+        },
+    )
 }
 
 fn wrap_tool_callbacks(obj: PyObject) -> anyhow::Result<ToolCallbacks> {
@@ -591,8 +604,8 @@ impl Runner {
         no_kv_cache = false,
         prefix_cache_n = 16,
         token_source = "cache",
-        speculative_gamma = 32,
-        which_draft = None,
+        mtp_model = None,
+        mtp_n_predict = None,
         chat_template = None,
         jinja_explicit = None,
         num_device_layers = None,
@@ -611,6 +624,7 @@ impl Runner {
         search_callback = None,
         tool_callbacks = None,
         mcp_client_config = None,
+        code_execution_config = None,
     ))]
     fn new(
         which: Which,
@@ -618,8 +632,8 @@ impl Runner {
         no_kv_cache: bool,
         prefix_cache_n: usize,
         token_source: &str,
-        speculative_gamma: usize,
-        which_draft: Option<Which>,
+        mtp_model: Option<String>,
+        mtp_n_predict: Option<usize>,
         chat_template: Option<String>,
         jinja_explicit: Option<String>,
         num_device_layers: Option<Vec<String>>,
@@ -638,6 +652,7 @@ impl Runner {
         search_callback: Option<PyObject>,
         tool_callbacks: Option<PyObject>,
         mcp_client_config: Option<McpClientConfigPy>,
+        code_execution_config: Option<CodeExecutionConfig>,
     ) -> PyApiResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -742,18 +757,6 @@ impl Runner {
             chat_template.clone(),
             jinja_explicit.clone(),
         )?;
-        let loader = if let Some(draft_which) = which_draft {
-            let draft = parse_which(draft_which, no_kv_cache, chat_template, jinja_explicit)?;
-            Box::new(SpeculativeLoader {
-                target: loader,
-                draft,
-                config: SpeculativeConfig {
-                    gamma: speculative_gamma,
-                },
-            })
-        } else {
-            loader
-        };
         let loader = if let Some(amoe_conf) = anymoe_config {
             Box::new(AnyMoeLoader {
                 target: loader,
@@ -891,6 +894,16 @@ impl Runner {
             )
             .map_err(PyApiErr::from)?;
 
+        if let Some(mtp_model) = mtp_model {
+            pipeline
+                .blocking_lock()
+                .attach_speculative(SpeculativeConfig::Mtp(mistralrs_core::MtpConfig::new(
+                    mtp_model,
+                    mtp_n_predict,
+                )))
+                .map_err(|e| PyApiErr::from(&e))?;
+        }
+
         let scheduler_config = if cache_config.is_some() {
             // Handle case where we may have device mapping
             if let Some(ref cache_config) = pipeline.blocking_lock().get_metadata().cache_config {
@@ -943,6 +956,19 @@ impl Runner {
         }
         if let Some(mcp_config) = mcp_client_config {
             builder = builder.with_mcp_client(mcp_config.into());
+        }
+        if let Some(code_exec) = code_execution_config {
+            #[cfg(feature = "code-execution")]
+            {
+                builder = builder.with_code_execution(code_exec.into());
+            }
+            #[cfg(not(feature = "code-execution"))]
+            {
+                let _ = code_exec;
+                return Err(util::PyApiErr(PyValueError::new_err(
+                    "code_execution_config requires the 'code-execution' feature; rebuild mistralrs with `--features code-execution`",
+                )));
+            }
         }
         let rt = Runtime::new().expect("Failed to create Runner::new runtime");
         let mistralrs = rt.block_on(async {
@@ -1249,6 +1275,13 @@ impl Runner {
                 None
             };
 
+            let agent_approval_callback = build_agent_approval_callback(
+                request
+                    .agent_approval_callback
+                    .as_ref()
+                    .map(|callback| callback.clone_ref(py)),
+            );
+
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
                 messages,
@@ -1277,10 +1310,22 @@ impl Runner {
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
+                enable_code_execution: request.enable_code_execution,
+                code_execution_permission: request.code_execution_permission,
+                code_execution_approval_notifier: None,
+                agent_permission: request.agent_permission,
+                agent_approval_handler: agent_approval_callback
+                    .map(AgentToolApprovalHandler::from_sync),
+                agent_approval_notifier: None,
                 max_tool_rounds: request.max_tool_rounds,
                 tool_dispatch_url: request.tool_dispatch_url.clone(),
                 model_id: model_id.clone(),
                 truncate_sequence: request.truncate_sequence,
+                session_id: request.session_id.clone(),
+                files: request
+                    .files
+                    .clone()
+                    .map(|fs| fs.into_iter().map(Into::into).collect()),
             }));
 
             let is_streaming = request.stream;
@@ -1358,10 +1403,18 @@ impl Runner {
                         logits_processors: None,
                         return_raw_logits: false,
                         web_search_options: None,
+                        enable_code_execution: false,
+                        code_execution_permission: None,
+                        code_execution_approval_notifier: None,
+                        agent_permission: None,
+                        agent_approval_handler: None,
+                        agent_approval_notifier: None,
                         max_tool_rounds: None,
                         tool_dispatch_url: None,
                         model_id: model_id.clone(),
                         truncate_sequence,
+                        session_id: None,
+                        files: None,
                     }));
 
                     sender
@@ -1475,10 +1528,18 @@ impl Runner {
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: None,
+                enable_code_execution: false,
+                code_execution_permission: None,
+                code_execution_approval_notifier: None,
+                agent_permission: None,
+                agent_approval_handler: None,
+                agent_approval_notifier: None,
                 max_tool_rounds: None,
                 tool_dispatch_url: None,
                 model_id: model_id.clone(),
                 truncate_sequence: request.truncate_sequence,
+                session_id: None,
+                files: None,
             }));
 
             let debug_repr = format!("{request:?}");
@@ -1535,10 +1596,18 @@ impl Runner {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            enable_code_execution: false,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: model_id.clone(),
             truncate_sequence: false,
+            session_id: None,
+            files: None,
         }));
 
         let runner = self.runner.clone();
@@ -1587,10 +1656,18 @@ impl Runner {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            enable_code_execution: false,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: model_id.clone(),
             truncate_sequence: false,
+            session_id: None,
+            files: None,
         }));
 
         let runner = self.runner.clone();
@@ -1714,6 +1791,61 @@ impl Runner {
     /// List all available model IDs in multi-model mode (aliases if configured).
     fn list_models(&self) -> PyApiResult<Vec<String>> {
         self.runner.list_models().map_err(PyApiErr::from)
+    }
+
+    /// Export an agentic session as a JSON string. `None` if missing.
+    #[pyo3(signature = (session_id, model_id = None))]
+    fn export_session(
+        &self,
+        session_id: String,
+        model_id: Option<String>,
+    ) -> PyApiResult<Option<String>> {
+        let session = self
+            .runner
+            .export_session(model_id.as_deref(), &session_id)
+            .map_err(PyApiErr::from)?;
+        match session {
+            Some(s) => serde_json::to_string(&s)
+                .map(Some)
+                .map_err(|e| PyApiErr::from(format!("Failed to serialize session: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    /// Import an agentic session from a JSON string. Replaces any existing session with the same ID.
+    #[pyo3(signature = (session_id, session_json, model_id = None))]
+    fn import_session(
+        &self,
+        session_id: String,
+        session_json: String,
+        model_id: Option<String>,
+    ) -> PyApiResult<()> {
+        let session: mistralrs_core::SerializedSession = serde_json::from_str(&session_json)
+            .map_err(|e| PyApiErr::from(format!("Failed to parse session JSON: {e}")))?;
+        self.runner
+            .import_session(model_id.as_deref(), session_id, session)
+            .map_err(PyApiErr::from)
+    }
+
+    /// Delete an agentic session. Returns whether the session existed.
+    #[pyo3(signature = (session_id, model_id = None))]
+    fn delete_session(&self, session_id: String, model_id: Option<String>) -> PyApiResult<bool> {
+        self.runner
+            .delete_session(model_id.as_deref(), &session_id)
+            .map_err(PyApiErr::from)
+    }
+
+    /// List all stored agentic session IDs.
+    #[pyo3(signature = (model_id = None))]
+    fn list_session_ids(&self, model_id: Option<String>) -> PyApiResult<Vec<String>> {
+        self.runner
+            .list_session_ids(model_id.as_deref())
+            .map_err(PyApiErr::from)
+    }
+
+    /// Look up a file by id. Returns the full body even if the response payload was wire-truncated.
+    fn find_file(&self, file_id: String) -> Option<mistralrs_core::File> {
+        self.runner.find_file(&file_id).map(|f| (*f).clone())
     }
 
     /// Return the maximum supported sequence length for the requested model, if available.
@@ -2033,6 +2165,13 @@ impl Runner {
                 None
             };
 
+            let agent_approval_callback = build_agent_approval_callback(
+                request
+                    .agent_approval_callback
+                    .as_ref()
+                    .map(|callback| callback.clone_ref(py)),
+            );
+
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
                 messages,
@@ -2061,10 +2200,22 @@ impl Runner {
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
+                enable_code_execution: request.enable_code_execution,
+                code_execution_permission: request.code_execution_permission,
+                code_execution_approval_notifier: None,
+                agent_permission: request.agent_permission,
+                agent_approval_handler: agent_approval_callback
+                    .map(AgentToolApprovalHandler::from_sync),
+                agent_approval_notifier: None,
                 max_tool_rounds: request.max_tool_rounds,
                 tool_dispatch_url: request.tool_dispatch_url.clone(),
                 model_id: Some(model_id.clone()),
                 truncate_sequence: request.truncate_sequence,
+                session_id: request.session_id.clone(),
+                files: request
+                    .files
+                    .clone()
+                    .map(|fs| fs.into_iter().map(Into::into).collect()),
             }));
 
             let is_streaming = request.stream;
@@ -2166,10 +2317,18 @@ impl Runner {
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: None,
+                enable_code_execution: false,
+                code_execution_permission: None,
+                code_execution_approval_notifier: None,
+                agent_permission: None,
+                agent_approval_handler: None,
+                agent_approval_notifier: None,
                 max_tool_rounds: None,
                 tool_dispatch_url: None,
                 model_id: Some(model_id.clone()),
                 truncate_sequence: request.truncate_sequence,
+                session_id: None,
+                files: None,
             }));
 
             let debug_repr = format!("{request:?}");
@@ -2415,6 +2574,20 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DiffusionArchitecture>()?;
     m.add_class::<AnyMoeConfig>()?;
     m.add_class::<AnyMoeExpertType>()?;
+    m.add_class::<CodeExecutionConfig>()?;
+    m.add_class::<SandboxPolicy>()?;
+    m.add_class::<NetworkModePy>()?;
+    m.add_class::<CodeExecutionPermissionPy>()?;
+    m.add_class::<AgentPermissionPy>()?;
+    m.add_class::<AgentToolSourcePy>()?;
+    m.add_class::<AgentToolKindPy>()?;
+    m.add_class::<AgentToolMetadataPy>()?;
+    m.add_class::<AgentToolApprovalPy>()?;
+    m.add_class::<AgentToolApprovalDecisionKindPy>()?;
+    m.add_class::<AgentToolApprovalDecisionPy>()?;
+    m.add_class::<files::RequestedFile>()?;
+    m.add_class::<mistralrs_core::File>()?;
+    m.add_class::<mistralrs_core::FileSource>()?;
     m.add_class::<ToolChoice>()?;
     m.add_class::<SpeechGenerationResponse>()?;
     m.add_class::<SpeechLoaderType>()?;
@@ -2426,6 +2599,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<mistralrs_core::Choice>()?;
     m.add_class::<mistralrs_core::ChunkChoice>()?;
     m.add_class::<mistralrs_core::Usage>()?;
+    m.add_class::<mistralrs_core::AgenticToolCallRecord>()?;
     m.add_class::<mistralrs_core::ChatCompletionResponse>()?;
     m.add_class::<mistralrs_core::ChatCompletionChunkResponse>()?;
     m.add_class::<mistralrs_core::CompletionChoice>()?;
@@ -2436,5 +2610,9 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<McpServerSourcePy>()?;
     m.add_class::<McpServerConfigPy>()?;
     m.add_class::<McpClientConfigPy>()?;
+    m.add_class::<mistralrs_core::WebSearchOptions>()?;
+    m.add_class::<mistralrs_core::SearchContextSize>()?;
+    m.add_class::<mistralrs_core::WebSearchUserLocation>()?;
+    m.add_class::<mistralrs_core::ApproximateUserLocation>()?;
     Ok(())
 }

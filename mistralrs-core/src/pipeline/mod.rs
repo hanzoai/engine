@@ -16,8 +16,7 @@ mod normal;
 mod paths;
 mod processing;
 mod response;
-mod sampling;
-mod speculative;
+pub(crate) mod sampling;
 mod speech;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
@@ -30,6 +29,7 @@ pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 pub use auto::{AutoLoader, AutoLoaderBuilder};
 use chat_template::ChatTemplate;
 pub use diffusion::{DiffusionLoader, DiffusionLoaderBuilder};
+pub(crate) use embedding::EmbeddingLoadContext;
 pub use embedding::{EmbeddingLoader, EmbeddingLoaderBuilder, EmbeddingSpecificConfig};
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
@@ -37,17 +37,18 @@ use image::DynamicImage;
 pub use inputs_processor::InputProcessorOutput;
 pub(crate) use isq::IsqModelLoader;
 pub use isq::{
-    expand_isq_value, parse_isq_value, IsqModel, IsqOrganization, UQFF_MULTI_FILE_DELIMITER,
+    expand_isq_value, parse_isq_value, parse_uqff_shard, resolve_uqff_shorthand, IsqModel,
+    IsqOrganization, UQFF_MULTI_FILE_DELIMITER,
 };
 use llguidance::toktrie::TokEnv;
 pub use loaders::{
     AdapterKind, AutoDeviceMapParams, AutoEmbeddingLoader, AutoMultimodalLoader, AutoNormalLoader,
-    BertEmbeddingLoader, DeepSeekV2Loader, DeepSeekV3Loader, DeviceMappedModelLoader,
-    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, EmbeddingGemmaLoader,
-    EmbeddingLoaderType, EmbeddingModel, EmbeddingModelLoader, EmbeddingModelPaths,
-    EmbeddingModule, EmbeddingModulePaths, EmbeddingModuleType, FluxLoader, GLM4Loader,
-    GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, Gemma3Loader, Gemma3nLoader, Gemma4Loader,
-    GemmaLoader, GptOssLoader, GraniteMoeHybridLoader, Idefics2Loader, Idefics3Loader, LLaVALoader,
+    DeepSeekV2Loader, DeepSeekV3Loader, DeviceMappedModelLoader, DiffusionLoaderType,
+    DiffusionModel, DiffusionModelLoader, EmbeddingGemmaLoader, EmbeddingLoaderType,
+    EmbeddingModel, EmbeddingModelLoader, EmbeddingModelPaths, EmbeddingModule,
+    EmbeddingModulePaths, EmbeddingModuleType, FluxLoader, GLM4Loader, GLM4MoeLiteLoader,
+    GLM4MoeLoader, Gemma2Loader, Gemma3Loader, Gemma3nLoader, Gemma4Loader, GemmaLoader,
+    GptOssLoader, GraniteMoeHybridLoader, Idefics2Loader, Idefics3Loader, LLaVALoader,
     LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, Mistral3Loader,
     MistralLoader, MixtralLoader, ModelKind, ModelPaths, MultimodalLoaderType, MultimodalModel,
     MultimodalModelLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
@@ -92,7 +93,6 @@ pub(crate) use processing::{
     apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
 };
 use rand_isaac::Isaac64Rng;
-pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 pub use speech::{SpeechLoader, SpeechPipeline};
 use std::any::Any;
 use std::fmt::Debug;
@@ -445,6 +445,26 @@ pub trait Pipeline:
         return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error>;
 
+    fn attach_speculative(
+        &mut self,
+        _config: crate::speculative::SpeculativeConfig,
+    ) -> Result<(), candle_core::Error> {
+        candle_core::bail!("This pipeline does not support speculative decoding attachment.")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn try_sample_speculative_causal_gen(
+        &mut self,
+        _input_seqs: &mut [&mut Sequence],
+        _logits: &[Tensor],
+        _prefix_cacher: &mut PrefixCacheManagerV2,
+        _disable_eos_stop: bool,
+        _rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        _metadata: Option<PagedAttentionMeta>,
+    ) -> Result<bool, candle_core::Error> {
+        Ok(false)
+    }
+
     /// Returns the total of model execution time.
     #[allow(clippy::too_many_arguments)]
     async fn step(
@@ -459,6 +479,10 @@ pub trait Pipeline:
     ) -> Result<Duration, candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
+                if !is_prompt && !return_raw_logits {
+                    crate::speculative::driver::clear_staged_speculative_tokens(input_seqs);
+                }
+
                 let inputs_iter =
                     std::iter::once(self.get_processor().inputs_processor().process_inputs(
                         self.tokenizer(),
@@ -591,26 +615,41 @@ pub trait Pipeline:
                     ForwardInputsResult::RawLogits { .. }
                     | ForwardInputsResult::Embeddings { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
-                        self.sample_causal_gen(
-                            input_seqs,
-                            logits
-                                .into_iter()
-                                .map(|r| {
-                                    #[allow(irrefutable_let_patterns)]
-                                    let ForwardInputsResult::CausalGeneration { logits } = r
-                                    else {
-                                        unreachable!(
-                                            "All results must have same type, `CausalGeneration`"
-                                        )
-                                    };
-                                    logits
-                                })
-                                .collect::<Vec<_>>(),
-                            prefix_cacher,
-                            disable_eos_stop,
-                            rng,
-                        )
-                        .await?;
+                        let logits = logits
+                            .into_iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::CausalGeneration { logits } = r
+                                else {
+                                    unreachable!(
+                                        "All results must have same type, `CausalGeneration`"
+                                    )
+                                };
+                                logits
+                            })
+                            .collect::<Vec<_>>();
+                        if is_prompt
+                            || return_raw_logits
+                            || !self
+                                .try_sample_speculative_causal_gen(
+                                    input_seqs,
+                                    &logits,
+                                    prefix_cacher,
+                                    disable_eos_stop,
+                                    rng.clone(),
+                                    None,
+                                )
+                                .await?
+                        {
+                            self.sample_causal_gen(
+                                input_seqs,
+                                logits,
+                                prefix_cacher,
+                                disable_eos_stop,
+                                rng,
+                            )
+                            .await?;
+                        }
                     }
                     ForwardInputsResult::Image { .. } => {
                         response::send_image_responses(
@@ -683,6 +722,7 @@ pub trait Pipeline:
                 Ok(exec_duration)
             }
             CacheBackendMetadata::PagedAttention { metadata } => {
+                let speculative_metadata = metadata.clone();
                 // For hybrid models, build state_indices tensor from sequences'
                 // recurrent_state_idx so recurrent layers are active during forward.
                 // Paged attention manages KV caches separately, but recurrent state
@@ -811,24 +851,39 @@ pub trait Pipeline:
                     ForwardInputsResult::RawLogits { .. }
                     | ForwardInputsResult::Embeddings { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
-                        self.sample_causal_gen(
-                            input_seqs,
-                            logits
-                                .into_iter()
-                                .map(|r| {
-                                    #[allow(irrefutable_let_patterns)]
-                                    let ForwardInputsResult::CausalGeneration { logits } = r
-                                    else {
-                                        unreachable!("All results must have same type")
-                                    };
-                                    logits
-                                })
-                                .collect::<Vec<_>>(),
-                            prefix_cacher,
-                            disable_eos_stop,
-                            rng,
-                        )
-                        .await?;
+                        let logits = logits
+                            .into_iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::CausalGeneration { logits } = r
+                                else {
+                                    unreachable!("All results must have same type")
+                                };
+                                logits
+                            })
+                            .collect::<Vec<_>>();
+                        if is_prompt
+                            || return_raw_logits
+                            || !self
+                                .try_sample_speculative_causal_gen(
+                                    input_seqs,
+                                    &logits,
+                                    prefix_cacher,
+                                    disable_eos_stop,
+                                    rng.clone(),
+                                    Some(speculative_metadata),
+                                )
+                                .await?
+                        {
+                            self.sample_causal_gen(
+                                input_seqs,
+                                logits,
+                                prefix_cacher,
+                                disable_eos_stop,
+                                rng,
+                            )
+                            .await?;
+                        }
                     }
                     ForwardInputsResult::Image { .. } => {
                         response::send_image_responses(

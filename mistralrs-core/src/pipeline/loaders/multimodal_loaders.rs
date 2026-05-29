@@ -8,7 +8,7 @@ use candle_core::{DType, Device, Tensor, D};
 use candle_nn::Conv2dConfig;
 use image::{ColorType, DynamicImage};
 use itertools::Itertools;
-use mistralrs_quant::log::once_log_info;
+use mistralrs_quant::log::once_log_debug;
 use mistralrs_quant::ShardedVarBuilder;
 
 #[cfg(feature = "pyo3_macros")]
@@ -33,6 +33,7 @@ use crate::pipeline::{
     EitherCache, IsqModel, Modalities, MultimodalPromptPrefixer, Processor, ProcessorCreator,
     SupportedModality,
 };
+use crate::speculative::SpeculativeTargetMixin;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::vision_models::clip::ClipConfig;
 use crate::vision_models::gemma3::config::Gemma3Config;
@@ -77,7 +78,7 @@ use crate::vision_models::voxtral::config::VoxtralConfig;
 use crate::vision_models::voxtral::{VoxtralModel, VoxtralProcessor};
 use crate::vision_models::{minicpmo, phi4};
 
-pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin {
+pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
     #[allow(clippy::too_many_arguments)]
     fn forward(
@@ -329,7 +330,7 @@ impl AutoMultimodalLoader {
 
         // Voxtral: params.json has `multimodal` but no `architectures`
         if auto_cfg.multimodal.is_some() && auto_cfg.architectures.is_empty() {
-            once_log_info("Automatic loader type determined to be `voxtral`");
+            once_log_debug("Automatic loader type determined to be `voxtral`");
             return Ok(Box::new(VoxtralLoader));
         }
 
@@ -340,7 +341,7 @@ impl AutoMultimodalLoader {
         let name = &auto_cfg.architectures[0];
         let tp = MultimodalLoaderType::from_causal_lm_name(name)?;
 
-        once_log_info(format!("Automatic loader type determined to be `{tp}`"));
+        once_log_debug(format!("Automatic loader type determined to be `{tp}`"));
 
         // Delegate to the concrete loader
         Ok(match tp {
@@ -7646,7 +7647,7 @@ impl DeviceMappedModelLoader for Gemma4Loader {
 
                 let moe = if tc.enable_moe_block {
                     let ne = tc.num_experts.unwrap_or(0);
-                    let ei = tc.expert_intermediate_size.unwrap_or(0);
+                    let ei = tc.expert_intermediate_size().unwrap_or(0);
                     ne * tc.hidden_size * ei * 2
                         + ne * ei * tc.hidden_size
                         + ne

@@ -162,7 +162,6 @@ struct FullAttention {
     num_kv_heads: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    rot_dim: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
@@ -226,8 +225,6 @@ impl FullAttention {
         let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
         let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
 
-        let rot_dim = (head_dim as f64 * cfg.partial_rotary_factor) as usize;
-
         let sliding_window = None;
         Ok(Self {
             q_proj,
@@ -240,7 +237,6 @@ impl FullAttention {
             num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
             head_dim,
             rotary_emb,
-            rot_dim,
             paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(num_kv_heads, num_heads, comm),
@@ -263,9 +259,8 @@ impl FullAttention {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
-        let q_gate = self.q_proj.forward(x)?;
-        let k = self.k_proj.forward(x)?;
-        let v = self.v_proj.forward(x)?;
+        let (q_gate, k, v) =
+            crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         // Split q_gate into q and gate: first reshape to per-head (head_dim*2), then chunk
         // Reference: view(*input_shape, -1, head_dim*2), chunk(2, dim=-1)
         let q_gate = q_gate.reshape((b_sz, seq_len, self.num_heads, self.head_dim * 2))?;
@@ -291,25 +286,15 @@ impl FullAttention {
             (q, k, v)
         };
 
-        // Apply QK norm
-        q = q.apply(&self.q_norm)?;
-        k = k.apply(&self.k_norm)?;
-
-        // Apply partial RoPE
-        if self.rot_dim < self.head_dim {
-            let q_rot = q.narrow(D::Minus1, 0, self.rot_dim)?;
-            let q_pass = q.narrow(D::Minus1, self.rot_dim, self.head_dim - self.rot_dim)?;
-            let k_rot = k.narrow(D::Minus1, 0, self.rot_dim)?;
-            let k_pass = k.narrow(D::Minus1, self.rot_dim, self.head_dim - self.rot_dim)?;
-
-            let (q_rot, k_rot) = self.rotary_emb.forward(&q_rot, &k_rot, seqlen_offsets)?;
-            q = Tensor::cat(&[q_rot, q_pass], D::Minus1)?;
-            k = Tensor::cat(&[k_rot, k_pass], D::Minus1)?;
-        } else {
-            let (q_new, k_new) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
-            q = q_new;
-            k = k_new;
-        }
+        (q, k) = self.rotary_emb.forward_qk_norm(
+            &q,
+            &k,
+            self.q_norm.weight(),
+            self.k_norm.weight(),
+            self.q_norm.eps(),
+            self.k_norm.eps(),
+            seqlen_offsets,
+        )?;
 
         // Standard attention
         let mut y = match &self.paged_attn {
@@ -1085,6 +1070,8 @@ impl IsqModel for Model {
         uvb.to_safetensors()
     }
 }
+
+impl crate::speculative::SpeculativeTargetMixin for Model {}
 
 impl NormalModel for Model {
     fn forward(
