@@ -50,6 +50,7 @@ pub use model_loader::{
 pub use video_input::{sample_frame_indices, VideoInput};
 mod embedding_models;
 mod kv_cache;
+pub mod disk_kv_cache;
 mod search;
 
 mod model_selected;
