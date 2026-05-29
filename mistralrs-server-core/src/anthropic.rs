@@ -308,7 +308,9 @@ fn build_sampling_params(req: &AnthropicMessagesRequest) -> SamplingParams {
         temperature: req.temperature,
         top_k: req.top_k,
         top_p: req.top_p,
-        min_p: None,
+        // ds4 commit 613e9b2: default min-p filtering at 0.05. Anthropic's
+        // Messages API does not expose min_p; we always apply the default.
+        min_p: Some(0.05),
         top_n_logprobs: 0,
         frequency_penalty: None,
         presence_penalty: None,
