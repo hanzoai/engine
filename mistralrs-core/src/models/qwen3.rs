@@ -190,9 +190,8 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let mut q = self.q_proj.forward(xs)?;
-        let mut k = self.k_proj.forward(xs)?;
-        let mut v = self.v_proj.forward(xs)?;
+        let (mut q, mut k, mut v) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -211,10 +210,15 @@ impl Attention {
             (q, k, v)
         };
 
-        q = q.apply(&self.q_norm)?;
-        k = k.apply(&self.k_norm)?;
-
-        (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        (q, k) = self.rotary_emb.forward_qk_norm(
+            &q,
+            &k,
+            self.q_norm.weight(),
+            self.k_norm.weight(),
+            self.q_norm.eps(),
+            self.k_norm.eps(),
+            seqlen_offsets,
+        )?;
 
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => match metadata {
@@ -662,6 +666,8 @@ impl IsqModel for Model {
         Ok(names)
     }
 }
+
+impl crate::speculative::SpeculativeTargetMixin for Model {}
 
 impl NormalModel for Model {
     fn forward(

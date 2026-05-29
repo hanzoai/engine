@@ -234,9 +234,7 @@ impl Mlp {
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let up_states = self.gate_up_proj.forward(xs)?;
-        let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
-        let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
-        let up_states = (up_states * gate.apply(&self.act_fn))?;
+        let up_states = crate::ops::split_mul_and_act(&up_states, self.i_size, self.act_fn)?;
         let res = self.down_proj.forward(&up_states)?;
         Ok(res)
     }
@@ -548,6 +546,8 @@ pub(crate) struct Phi4MMVisionSpecificArgs {
     pub audio_attention_mask: Option<Tensor>,
     pub image_hashes: Vec<u64>,
 }
+
+impl crate::speculative::SpeculativeTargetMixin for Phi4MMModel {}
 
 impl MultimodalModel for Phi4MMModel {
     fn forward(

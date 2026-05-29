@@ -1,5 +1,5 @@
 # `mistralrs-server-core`
 
-Core crate that powers the [Hanzo Engine](https://github.com/hanzoai/engine) server.
+Core crate that powers `mistral.rs server`.
 
 Documentation: https://docs.rs/mistralrs-server-core/

@@ -19,18 +19,27 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 use args::{resolve_model_type, resolve_quantize_model_type, CacheCommand, Cli, Command};
 use commands::{
     run_bench, run_cache_delete, run_cache_list, run_doctor, run_from_config, run_interactive,
-    run_login, run_quantize, run_server, run_tune,
+    run_login, run_quantize, run_server, run_tune, BenchRunConfig,
 };
+
+const MISTRALRS_LOG_TARGETS: &[&str] = &[
+    "mistralrs",
+    "mistralrs_audio",
+    "mistralrs_code_exec",
+    "mistralrs_core",
+    "mistralrs_mcp",
+    "mistralrs_paged_attn",
+    "mistralrs_quant",
+    "mistralrs_sandbox",
+    "mistralrs_server",
+    "mistralrs_server_core",
+    "mistralrs_vision",
+];
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing (can be customized via RUST_LOG env var)
-    tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
     let cli = Cli::parse();
+    init_tracing(cli.global.verbose);
 
     match cli.command {
         Command::Serve {
@@ -38,15 +47,27 @@ async fn main() -> Result<()> {
             default_model,
             server,
             runtime,
+            agent_options,
+            sandbox,
         } => {
             let model_type = resolve_model_type(model_type, default_model)?;
-            run_server(model_type, server, runtime, cli.global).await?;
+            run_server(
+                model_type,
+                server,
+                runtime,
+                agent_options,
+                sandbox,
+                cli.global,
+            )
+            .await?;
         }
 
         Command::Run {
             model_type,
             default_model,
             runtime,
+            agent_options,
+            sandbox,
             thinking,
             input,
             image,
@@ -55,7 +76,16 @@ async fn main() -> Result<()> {
         } => {
             let model_type = resolve_model_type(model_type, default_model)?;
             run_interactive(
-                model_type, runtime, cli.global, thinking, input, image, video, audio,
+                model_type,
+                runtime,
+                agent_options,
+                sandbox,
+                cli.global,
+                thinking,
+                input,
+                image,
+                video,
+                audio,
             )
             .await?;
         }
@@ -108,16 +138,50 @@ async fn main() -> Result<()> {
             runtime,
             prompt_len,
             gen_len,
+            depth,
             iterations,
             warmup,
         } => {
             let model_type = resolve_model_type(model_type, default_model)?;
             run_bench(
-                model_type, runtime, cli.global, prompt_len, gen_len, iterations, warmup,
+                model_type,
+                runtime,
+                cli.global,
+                BenchRunConfig {
+                    prompt_lens: prompt_len,
+                    gen_len,
+                    depths: depth,
+                    iterations,
+                    warmup,
+                },
             )
             .await?;
         }
     }
 
     Ok(())
+}
+
+fn init_tracing(verbose: u8) {
+    tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| default_filter(verbose)))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+}
+
+fn default_filter(verbose: u8) -> EnvFilter {
+    let (base, level) = match verbose {
+        0 => ("warn", "info"),
+        1 => ("warn", "debug"),
+        _ => ("warn,hf_hub=info", "trace"),
+    };
+    MISTRALRS_LOG_TARGETS
+        .iter()
+        .fold(EnvFilter::new(base), |filter, target| {
+            filter.add_directive(
+                format!("{target}={level}")
+                    .parse()
+                    .expect("valid default log directive"),
+            )
+        })
 }
