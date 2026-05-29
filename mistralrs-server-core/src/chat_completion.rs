@@ -568,7 +568,11 @@ pub async fn parse_request(
                 temperature: oairequest.temperature,
                 top_k: oairequest.top_k,
                 top_p: oairequest.top_p,
-                min_p: oairequest.min_p,
+                // ds4 commit 613e9b2: default min-p filtering at 0.05 when the
+                // client does not pass one. Keeps top_p free to remain at 1.0 while
+                // still excluding very low relative-probability tokens from the
+                // sampling set. Explicit client values are honored.
+                min_p: oairequest.min_p.or(Some(0.05)),
                 top_n_logprobs: oairequest.top_logprobs.unwrap_or(1),
                 frequency_penalty: oairequest.frequency_penalty,
                 presence_penalty: oairequest.presence_penalty,
