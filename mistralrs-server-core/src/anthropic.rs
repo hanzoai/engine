@@ -244,8 +244,15 @@ fn anthropic_to_openai(
     for m in &areq.messages {
         translate_message(&m.role, &m.content, &mut messages);
     }
+    // Claude Code sends Anthropic model ids (claude-sonnet-4-5-*, ...); route them to the
+    // single loaded model. The response still echoes the originally requested id.
+    let model = if areq.model.to_ascii_lowercase().starts_with("claude") {
+        "default"
+    } else {
+        areq.model.as_str()
+    };
     let mut obj = json!({
-        "model": areq.model,
+        "model": model,
         "messages": messages,
         "max_tokens": areq.max_tokens,
         "stream": false,
@@ -724,9 +731,7 @@ pub async fn messages(
     openai_req.stream = Some(stream);
 
     let model = areq.model.clone();
-    let model_id = if openai_req.model == "default"
-        || openai_req.model.to_ascii_lowercase().starts_with("claude")
-    {
+    let model_id = if openai_req.model == "default" {
         None
     } else {
         Some(openai_req.model.clone())
