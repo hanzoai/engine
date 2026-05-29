@@ -1,7 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
@@ -40,7 +43,7 @@ macro_rules! is_sliding {
     };
 }
 
-fn first_kv_shared_layer_idx(cfg: &Gemma4TextConfig) -> usize {
+pub(super) fn first_kv_shared_layer_idx(cfg: &Gemma4TextConfig) -> usize {
     cfg.num_hidden_layers
         .saturating_sub(cfg.num_kv_shared_layers)
 }
@@ -70,14 +73,14 @@ fn kv_shared_layer_index(cfg: &Gemma4TextConfig, layer_idx: usize) -> Result<Opt
 /// with zeros. The result: cos=1, sin=0 for non-rotated positions, so the
 /// standard rotary formula `x*cos + rotate_half(x)*sin` acts as identity
 /// for those dims.
-struct ProportionalRotaryEmbedding {
+pub(super) struct ProportionalRotaryEmbedding {
     cos: Tensor,
     sin: Tensor,
     is_gpt_neox: bool,
 }
 
 impl ProportionalRotaryEmbedding {
-    fn new(
+    pub(super) fn new(
         base: f32,
         head_dim: usize,
         partial_rotary_factor: f64,
@@ -115,45 +118,8 @@ impl ProportionalRotaryEmbedding {
         })
     }
 
-    fn forward(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        seqlen_offsets: &[usize],
-    ) -> Result<(Tensor, Tensor)> {
-        let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
-
-        let rope = if self.is_gpt_neox {
-            candle_nn::rotary_emb::rope
-        } else {
-            candle_nn::rotary_emb::rope_i
-        };
-
-        if seqlen_offsets.len() == 1 {
-            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = rope(&q.contiguous()?, &cos, &sin)?;
-            let k_embed = rope(&k.contiguous()?, &cos, &sin)?;
-            Ok((q_embed, k_embed))
-        } else {
-            let mut q_embeds = Vec::new();
-            let mut k_embeds = Vec::new();
-            for (seq_idx, offset) in seqlen_offsets.iter().enumerate() {
-                let cos = self.cos.narrow(0, *offset, seq_len)?;
-                let sin = self.sin.narrow(0, *offset, seq_len)?;
-                let q_s = q.i(seq_idx)?;
-                let k_s = k.i(seq_idx)?;
-                let q_embed = rope(&q_s.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                let k_embed = rope(&k_s.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                q_embeds.push(q_embed);
-                k_embeds.push(k_embed);
-            }
-            Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
-        }
-    }
-
     /// Apply RoPE to Q only (skip K rotation for shared KV layers).
-    fn forward_q(&self, q: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
+    pub(super) fn forward_q(&self, q: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
         let rope = if self.is_gpt_neox {
             candle_nn::rotary_emb::rope
@@ -174,6 +140,45 @@ impl ProportionalRotaryEmbedding {
             }
             Tensor::cat(&q_embeds, 0)
         }
+    }
+
+    fn forward_qk_norm(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        q_norm: &RmsNorm,
+        k_norm: &RmsNorm,
+        seqlen_offsets: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        crate::layers::qk_rms_norm_rope(
+            q,
+            k,
+            q_norm.weight(),
+            k_norm.weight(),
+            q_norm.eps(),
+            k_norm.eps(),
+            &self.cos,
+            &self.sin,
+            self.is_gpt_neox,
+            seqlen_offsets,
+        )
+    }
+
+    fn forward_q_norm(
+        &self,
+        q: &Tensor,
+        q_norm: &RmsNorm,
+        seqlen_offsets: &[usize],
+    ) -> Result<Tensor> {
+        crate::layers::q_rms_norm_rope(
+            q,
+            q_norm.weight(),
+            q_norm.eps(),
+            &self.cos,
+            &self.sin,
+            self.is_gpt_neox,
+            seqlen_offsets,
+        )
     }
 }
 
@@ -238,7 +243,6 @@ impl Gemma4Router {
 //  Attention
 // ────────────────────────────────────────────────────────────────────────────
 
-#[allow(dead_code)]
 struct Attention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
@@ -250,8 +254,6 @@ struct Attention {
     rotary_emb_global: Arc<ProportionalRotaryEmbedding>,
     rotary_emb_local: Arc<RotaryEmbedding>,
     is_sliding: bool,
-    is_k_eq_v: bool,
-    partial_rotary_dim: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     q_norm: RmsNorm,
@@ -290,12 +292,6 @@ impl Attention {
                 cfg.num_key_value_heads
             };
             (cfg.global_head_dim, global_kv)
-        };
-
-        let partial_rotary_dim = if sliding {
-            head_dim
-        } else {
-            (cfg.global_head_dim as f64 * cfg.partial_rotary_factor()) as usize
         };
 
         let q_proj = ColumnParallelLayer::new(
@@ -375,8 +371,6 @@ impl Attention {
             rotary_emb_global,
             rotary_emb_local,
             is_sliding: sliding,
-            is_k_eq_v,
-            partial_rotary_dim,
             paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(
@@ -411,23 +405,42 @@ impl Attention {
         let (b_sz, q_len, _) = xs.dims3()?;
         let is_shared = self.kv_shared_layer_index.is_some();
 
+        let qkv = if !is_shared {
+            self.v_proj
+                .as_ref()
+                .map(|v_proj| {
+                    crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &**v_proj)
+                })
+                .transpose()?
+        } else {
+            None
+        };
+
         // Q projection (always needed)
-        let mut q = self.q_proj.forward(xs)?;
+        let mut q = if let Some((q, _, _)) = qkv.as_ref() {
+            q.clone()
+        } else {
+            self.q_proj.forward(xs)?
+        };
         q = if q_len != 1 {
             q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?
                 .transpose(1, 2)?
         } else {
             q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?
         };
-        q = q.apply(&self.q_norm)?;
 
         // K/V projection, reshape, norms (skip for shared layers that reuse donor KV)
         let (mut k, v) = if !is_shared {
-            let k = self.k_proj.forward(xs)?;
-            let v = if let Some(ref v_proj) = self.v_proj {
-                v_proj.forward(xs)?
+            let (k, v) = if let Some((_, k, v)) = qkv {
+                (k, v)
             } else {
-                k.clone()
+                let k = self.k_proj.forward(xs)?;
+                let v = if let Some(ref v_proj) = self.v_proj {
+                    v_proj.forward(xs)?
+                } else {
+                    k.clone()
+                };
+                (k, v)
             };
             let (k, v) = if q_len != 1 {
                 (
@@ -442,10 +455,7 @@ impl Attention {
                     v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?,
                 )
             };
-            (
-                Some(k.apply(&self.k_norm)?),
-                Some(v.apply(&self.v_norm_rms)?),
-            )
+            (Some(k), Some(v.apply(&self.v_norm_rms)?))
         } else {
             (None, None)
         };
@@ -453,19 +463,40 @@ impl Attention {
         // Apply RoPE
         if self.is_sliding {
             if let Some(k_val) = k.take() {
-                let (q_rot, k_rot) = self.rotary_emb_local.forward(&q, &k_val, seqlen_offsets)?;
+                let (q_rot, k_rot) = self.rotary_emb_local.forward_qk_norm(
+                    &q,
+                    &k_val,
+                    self.q_norm.weight(),
+                    self.k_norm.weight(),
+                    self.q_norm.eps(),
+                    self.k_norm.eps(),
+                    seqlen_offsets,
+                )?;
                 q = q_rot;
                 k = Some(k_rot);
             } else {
-                q = self.rotary_emb_local.forward_q(&q, seqlen_offsets)?;
+                q = self.rotary_emb_local.forward_q_norm(
+                    &q,
+                    self.q_norm.weight(),
+                    self.q_norm.eps(),
+                    seqlen_offsets,
+                )?;
             }
         } else {
             if let Some(k_val) = k.take() {
-                let (q_rot, k_rot) = self.rotary_emb_global.forward(&q, &k_val, seqlen_offsets)?;
+                let (q_rot, k_rot) = self.rotary_emb_global.forward_qk_norm(
+                    &q,
+                    &k_val,
+                    &self.q_norm,
+                    &self.k_norm,
+                    seqlen_offsets,
+                )?;
                 q = q_rot;
                 k = Some(k_rot);
             } else {
-                q = self.rotary_emb_global.forward_q(&q, seqlen_offsets)?;
+                q = self
+                    .rotary_emb_global
+                    .forward_q_norm(&q, &self.q_norm, seqlen_offsets)?;
             }
         }
 
@@ -532,34 +563,33 @@ impl Attention {
             }
             None => {
                 // Eager attention path, use normal kv_caches.
-                let (k, v) = if let Some(donor_idx) = self.kv_shared_layer_index {
+                let (mut k, mut v) = if let Some(donor_idx) = self.kv_shared_layer_index {
                     let donor_cache = &kv_caches[donor_idx];
                     // Use appended_k/v to get the full K/V from the donor's last
                     // append (retained + new during prefill), not the truncated
                     // sliding-window buffer that current_data()/k()/v() returns.
                     let dk = donor_cache.appended_k()?.unwrap().to_device(q.device())?;
                     let dv = donor_cache.appended_v()?.unwrap().to_device(q.device())?;
-                    // Shared sliding-window layers read from a full (non-rotating) donor cache.
-                    // During decode (q_len == 1) there is no explicit mask, so narrow the KV to the sliding window.
-                    // During prefill the mask handles this.
-                    if self.is_sliding && q_len == 1 {
-                        if let Some(window) = self.sdpa_params.sliding_window {
-                            let kv_len = dk.dim(2)?;
-                            if kv_len > window {
-                                let start = kv_len - window;
-                                (dk.narrow(2, start, window)?, dv.narrow(2, start, window)?)
-                            } else {
-                                (dk, dv)
-                            }
-                        } else {
-                            (dk, dv)
-                        }
-                    } else {
-                        (dk, dv)
-                    }
+                    (dk, dv)
                 } else {
                     kv_caches[self.layer_idx].append(k.as_ref().unwrap(), v.as_ref().unwrap())?
                 };
+
+                // Some sliding layers intentionally use a full normal cache
+                // because they donate KV to later shared layers. Decode often
+                // has no explicit mask, so every sliding layer must still clamp
+                // its effective KV span to the sliding window here. Rotating
+                // caches are already at most `window`, so this is a no-op for
+                // the usual non-donor sliding layers.
+                if let Some((start, len)) = sliding_decode_kv_window(
+                    self.is_sliding,
+                    q_len,
+                    self.sdpa_params.sliding_window,
+                    k.dim(2)?,
+                ) {
+                    k = k.narrow(2, start, len)?;
+                    v = v.narrow(2, start, len)?;
+                }
 
                 let mask = if self.is_sliding {
                     sliding_attention_mask
@@ -605,15 +635,25 @@ impl Attention {
 
                 // Gemma 4 attention scores reach magnitude 15-20 with
                 // softmax_scale=1. At that range BF16 precision is ~0.15,
-                // so the Metal SDPA vector kernel (F32 internally) resolves
-                // score differences that a BF16 matmul rounds away,
-                // producing different softmax winners. Promote to F32
-                // during decode so both code paths agree.
-                if q_len == 1 && q.dtype() != candle_core::DType::F32 {
-                    let q32 = q.to_dtype(candle_core::DType::F32)?;
-                    let k32 = k.to_dtype(candle_core::DType::F32)?;
-                    let v32 = v.to_dtype(candle_core::DType::F32)?;
-                    Sdpa.run_attention(&q32, &k32, &v32, &mask, flash_params, &self.sdpa_params)?
+                // so the Metal SDPA vector kernel resolves score differences
+                // that a BF16 matmul rounds away, producing different softmax
+                // winners. The FA-vec DK=512 path covers head_dim=512 layers
+                // but sliding-window layers use head_dim=256 and still route
+                // through the BF16 SDPA vector — those need the F32 upcast.
+                let is_short_decode =
+                    q_len <= 16 && seqlen_offsets.iter().any(|offset| *offset > 0);
+                let f32_upcast = is_short_decode && q.dtype() != DType::F32 && self.head_dim != 512;
+                if f32_upcast {
+                    let q32 = q.to_dtype(DType::F32)?;
+                    let k32 = k.to_dtype(DType::F32)?;
+                    let v32 = v.to_dtype(DType::F32)?;
+                    let mask32 = match &mask {
+                        AttentionMask::Custom(mask) => {
+                            AttentionMask::Custom(mask.to_dtype(DType::F32)?)
+                        }
+                        other => other.clone(),
+                    };
+                    Sdpa.run_attention(&q32, &k32, &v32, &mask32, flash_params, &self.sdpa_params)?
                         .to_dtype(q.dtype())?
                 } else {
                     Sdpa.run_attention(&q, &k, &v, &mask, flash_params, &self.sdpa_params)?
@@ -631,6 +671,19 @@ impl Attention {
         let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }
+}
+
+fn sliding_decode_kv_window(
+    is_sliding: bool,
+    q_len: usize,
+    sliding_window: Option<usize>,
+    kv_len: usize,
+) -> Option<(usize, usize)> {
+    let window = sliding_window?;
+    if !is_sliding || q_len != 1 || kv_len <= window {
+        return None;
+    }
+    Some((kv_len - window, window))
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -735,7 +788,7 @@ impl DecoderLayer {
             let num_experts = cfg.num_experts.unwrap_or(128);
             let top_k = cfg.top_k_experts.unwrap_or(2);
             let expert_inter = cfg
-                .expert_intermediate_size
+                .expert_intermediate_size()
                 .unwrap_or(cfg.intermediate_size);
 
             // Support both old ("moe") and new ("experts") weight paths
@@ -871,20 +924,19 @@ impl DecoderLayer {
 
         let residual = xs.clone();
         let normed = self.input_layernorm.forward(&xs)?;
-        let attn_out = self
-            .self_attn
-            .forward(
-                &normed,
-                attention_mask,
-                sliding_attention_mask,
-                seqlen_offsets,
-                kv_caches,
-                metadata,
-                flash_params,
-            )?
-            .apply(&self.post_attention_layernorm)?;
+        let attn_out = self.self_attn.forward(
+            &normed,
+            attention_mask,
+            sliding_attention_mask,
+            seqlen_offsets,
+            kv_caches,
+            metadata,
+            flash_params,
+        )?;
 
-        xs = (attn_out + &residual)?;
+        xs = self
+            .post_attention_layernorm
+            .forward_residual(&attn_out, &residual)?;
 
         // Feedforward
         let residual = xs.clone();
@@ -939,11 +991,13 @@ impl DecoderLayer {
             // Dense path: MLP only
             let normed_in = xs.apply(&self.pre_feedforward_layernorm)?;
             let mlp_out = self.mlp.forward(&normed_in)?;
-            let mlp_out = mlp_out.apply(&self.post_feedforward_layernorm)?;
-            xs = (&residual + mlp_out)?;
+            xs = self
+                .post_feedforward_layernorm
+                .forward_residual(&mlp_out, &residual)?;
         };
 
         // PLE: per-layer embedding injection (after feedforward, before layer scalar)
+        let mut layer_scalar_applied = false;
         if let (Some(ref gate), Some(ref proj), Some(ref norm)) = (
             &self.per_layer_input_gate,
             &self.per_layer_projection,
@@ -953,21 +1007,26 @@ impl DecoderLayer {
                 let residual_ple = xs.clone();
                 // gate: Linear(hidden_size -> ple_dim)
                 let gate_in = xs;
-                let mut gated = gate.forward(&gate_in)?;
+                let gated = gate.forward(&gate_in)?;
                 // activation + elementwise multiply with per_layer_input
-                gated = gated.apply(&self.act)?;
-                gated = (gated * pli)?;
+                let gated = crate::ops::mul_and_act(&gated, pli, self.act)?;
                 // projection: Linear(ple_dim -> hidden_size)
                 let projected = proj.forward(&gated)?;
                 // post-norm + residual
-                let normed = norm.forward(&projected)?;
-                xs = (residual_ple + normed)?;
+                xs = if let Some(ref scalar) = self.layer_scalar {
+                    layer_scalar_applied = true;
+                    norm.forward_residual_scaled(&projected, &residual_ple, scalar)?
+                } else {
+                    norm.forward_residual(&projected, &residual_ple)?
+                };
             }
         }
 
         // Apply layer scalar
-        if let Some(ref scalar) = self.layer_scalar {
-            xs = xs.broadcast_mul(scalar)?;
+        if !layer_scalar_applied {
+            if let Some(ref scalar) = self.layer_scalar {
+                xs = xs.broadcast_mul(scalar)?;
+            }
         }
 
         Ok(xs)
@@ -1085,11 +1144,66 @@ pub struct TextModel {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: usize,
     final_logit_softcapping: Option<f64>,
+    last_spec_hidden: Mutex<Option<Tensor>>,
     image_token_id: Option<usize>,
     video_token_id: Option<usize>,
     use_bidirectional_vision_attention: bool,
     cfg: ModelConfigMetadata,
     model_config: Arc<dyn ModelConfigLike + Send + Sync>,
+}
+
+#[derive(Clone)]
+struct PrefillQuerySelection {
+    source_context_lens: Vec<(usize, usize)>,
+    reduced_context_lens: Vec<(usize, usize)>,
+    seqlen_offsets: Vec<usize>,
+    num_cached_tokens: Vec<usize>,
+    query_lens: Vec<usize>,
+}
+
+impl PrefillQuerySelection {
+    fn from_logits_context(
+        q_len: usize,
+        context_lens: &[(usize, usize)],
+        seqlen_offsets: &[usize],
+    ) -> Option<Self> {
+        if context_lens.is_empty() || context_lens.len() != seqlen_offsets.len() {
+            return None;
+        }
+
+        let mut reduced_context_lens = Vec::with_capacity(context_lens.len());
+        let mut tail_offsets = Vec::with_capacity(context_lens.len());
+        let mut num_cached_tokens = Vec::with_capacity(context_lens.len());
+        let mut query_lens = Vec::with_capacity(context_lens.len());
+
+        for ((start, len), offset) in context_lens.iter().zip(seqlen_offsets.iter()) {
+            if *len != 1 || start.checked_add(*len)? != q_len {
+                return None;
+            }
+            reduced_context_lens.push((0, *len));
+            tail_offsets.push(offset + start);
+            num_cached_tokens.push(offset + start);
+            query_lens.push(*len);
+        }
+
+        Some(Self {
+            source_context_lens: context_lens.to_vec(),
+            reduced_context_lens,
+            seqlen_offsets: tail_offsets,
+            num_cached_tokens,
+            query_lens,
+        })
+    }
+
+    fn reduce(&self, tensor: &Tensor) -> Result<Tensor> {
+        extract_logits(tensor, self.source_context_lens.clone())
+    }
+}
+
+struct KvSharingFastPrefillPlan {
+    first_shared_layer: usize,
+    query_selection: PrefillQuerySelection,
+    paged_metadata: Option<PagedAttentionInputMetadata>,
 }
 
 impl TextModel {
@@ -1384,6 +1498,7 @@ impl TextModel {
             max_seq_len: cfg.max_position_embeddings,
             sliding_window: cfg.effective_sliding_window(),
             final_logit_softcapping: cfg.final_logit_softcapping,
+            last_spec_hidden: Mutex::new(None),
             image_token_id,
             video_token_id,
             use_bidirectional_vision_attention: matches!(
@@ -1400,8 +1515,16 @@ impl TextModel {
         self.embed_tokens.forward(input_ids)
     }
 
+    pub fn last_spec_hidden(&self) -> Option<Tensor> {
+        self.last_spec_hidden.lock().ok().and_then(|h| h.clone())
+    }
+
     pub fn model_config_like(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
         self.model_config.clone()
+    }
+
+    pub fn device_mapper(&self) -> &dyn DeviceMapper {
+        &*self.mapper
     }
 
     /// Compute PLE per-layer inputs from both token embeddings and hidden state projection.
@@ -1464,6 +1587,69 @@ impl TextModel {
         Ok(Some(per_layer_inputs))
     }
 
+    fn kv_sharing_fast_prefill_plan(
+        &self,
+        input_ids: &Tensor,
+        context_lens: &[(usize, usize)],
+        seqlen_offsets: &[usize],
+        metadata: Option<&PagedAttentionInputMetadata>,
+        has_bidirectional: bool,
+    ) -> Result<Option<KvSharingFastPrefillPlan>> {
+        if std::env::var("MISTRALRS_GEMMA4_DISABLE_FAST_PREFILL").is_ok() || has_bidirectional {
+            return Ok(None);
+        }
+        let (b_sz, q_len) = input_ids.dims2()?;
+        if q_len <= 1 || context_lens.len() != b_sz || seqlen_offsets.len() != b_sz {
+            return Ok(None);
+        }
+        let first_shared = self.first_kv_shared_layer_idx();
+        if first_shared == 0 || first_shared >= self.layers.len() {
+            return Ok(None);
+        }
+        if !self.layers[first_shared..]
+            .iter()
+            .all(|layer| layer.self_attn.kv_shared_layer_index.is_some())
+        {
+            return Ok(None);
+        }
+
+        let Some(query_selection) =
+            PrefillQuerySelection::from_logits_context(q_len, context_lens, seqlen_offsets)
+        else {
+            return Ok(None);
+        };
+
+        let paged_metadata = if let Some(metadata) = metadata {
+            if metadata.block_tables.is_none() {
+                return Ok(None);
+            }
+            Some(
+                metadata
+                    .for_reduced_prefill_queries(
+                        &self.mapper.get_unique_devices(),
+                        &query_selection.num_cached_tokens,
+                        &query_selection.query_lens,
+                    )
+                    .map_err(|err| candle_core::Error::Msg(err.to_string()))?,
+            )
+        } else {
+            None
+        };
+
+        Ok(Some(KvSharingFastPrefillPlan {
+            first_shared_layer: first_shared,
+            query_selection,
+            paged_metadata,
+        }))
+    }
+
+    fn first_kv_shared_layer_idx(&self) -> usize {
+        self.layers
+            .iter()
+            .position(|layer| layer.self_attn.kv_shared_layer_index.is_some())
+            .unwrap_or(self.layers.len())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn forward_embeds(
         &self,
@@ -1471,7 +1657,7 @@ impl TextModel {
         ple_input_ids: &Tensor,
         mut xs: Tensor,
         seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
+        mut context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
         has_images: bool,
@@ -1496,6 +1682,10 @@ impl TextModel {
         // that the paged-attention gather path does NOT force causal=true (which
         // would undo the bidirectional overrides in the materialized masks).
         let bidir_flash = FlashParams::empty(false);
+        let force_eager_full_attention = self
+            .layers
+            .iter()
+            .any(|layer| !layer.self_attn.is_sliding && layer.self_attn.head_dim > 512);
 
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
             let attention_mask = CausalMasker.make_causal_mask(
@@ -1507,10 +1697,6 @@ impl TextModel {
                     ..Default::default()
                 },
             )?;
-            let attention_mask = match attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
-                other => other,
-            };
 
             let sliding_attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
@@ -1522,36 +1708,32 @@ impl TextModel {
                 },
             )?;
             let sliding_attention_mask = match sliding_attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(
-                    Self::apply_image_bidirectional_mask(
+                AttentionMask::Custom(m) => {
+                    AttentionMask::Custom(Self::apply_image_bidirectional_mask(
                         &m,
                         input_ids,
                         self.image_token_id.expect("missing image token id"),
                         self.video_token_id,
-                    )?
-                    .to_device(&Device::Cpu)?,
-                ),
+                    )?)
+                }
                 other => other,
             };
 
             (attention_mask, sliding_attention_mask, Some(&bidir_flash))
         } else {
-            // Full-attention layers (head_dim=512) use eager attention because
-            // flash-attn v2 produces incorrect results for head_dim > 256.
-            // Eager attention needs a real causal mask (not the 1x1 flash dummy).
+            // Keep full-attention layers on flash-attn when their head dim is
+            // supported. PagedAttention still needs a non-None prompt mask
+            // (CausalFlash is enough) to route prompt chunks through SDPA
+            // before writing to the paged cache.
             let attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
                 mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig {
-                    force_custom: true,
+                    force_custom: force_eager_full_attention,
                     ..Default::default()
                 },
             )?;
-            let attention_mask = match attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
-                other => other,
-            };
             let is_first = metadata
                 .as_ref()
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
@@ -1570,15 +1752,7 @@ impl TextModel {
                     ..Default::default()
                 },
             )?;
-            let sliding_attention_mask = match sliding_attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
-                other => other,
-            };
-            let sliding_attention_mask = if metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-            {
+            let sliding_attention_mask = if is_first {
                 sliding_attention_mask
             } else {
                 AttentionMask::None
@@ -1590,46 +1764,126 @@ impl TextModel {
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
 
+        let fast_prefill_tail = self.kv_sharing_fast_prefill_plan(
+            input_ids,
+            &context_lens,
+            seqlen_offsets,
+            metadata.as_ref().map(|(_, metadata)| *metadata),
+            has_bidirectional,
+        )?;
+        let mut reduced_to_logits = false;
+        let no_attention_mask = AttentionMask::None;
+        let tail_prefill_mask = AttentionMask::CausalFlash;
+
         for (i, layer) in self.layers.iter().enumerate() {
+            if let Some(plan) = fast_prefill_tail
+                .as_ref()
+                .filter(|plan| i == plan.first_shared_layer)
+            {
+                xs = plan.query_selection.reduce(&xs)?;
+                context_lens = plan.query_selection.reduced_context_lens.clone();
+                reduced_to_logits = true;
+            }
+
             xs = self.mapper.map(xs, i)?;
             let per_layer_input = per_layer_inputs
                 .as_ref()
-                .map(|pli| self.mapper.map(pli[i].clone(), i))
+                .map(|pli| {
+                    let pli = if reduced_to_logits {
+                        fast_prefill_tail
+                            .as_ref()
+                            .expect("missing active fast prefill plan")
+                            .query_selection
+                            .reduce(&pli[i])?
+                    } else {
+                        pli[i].clone()
+                    };
+                    self.mapper.map(pli, i)
+                })
                 .transpose()?;
             // In the bidirectional path, only sliding-attention layers use the
             // non-causal flash params (matching HF which only applies the
             // bidirectional mask override to sliding_attention, not full_attention).
-            let this_layer_flash = if has_bidirectional && !layer.self_attn.is_sliding {
+            let this_layer_flash = if reduced_to_logits {
+                None
+            } else if has_bidirectional && !layer.self_attn.is_sliding {
                 Some(flash_params)
             } else {
                 layer_flash_params
             };
+            let layer_seqlen_offsets = if reduced_to_logits {
+                fast_prefill_tail
+                    .as_ref()
+                    .expect("missing active fast prefill plan")
+                    .query_selection
+                    .seqlen_offsets
+                    .as_slice()
+            } else {
+                seqlen_offsets
+            };
+            let (layer_attention_mask, layer_sliding_attention_mask) = if reduced_to_logits {
+                if fast_prefill_tail
+                    .as_ref()
+                    .and_then(|plan| plan.paged_metadata.as_ref())
+                    .is_some()
+                {
+                    (&tail_prefill_mask, &tail_prefill_mask)
+                } else {
+                    (&no_attention_mask, &no_attention_mask)
+                }
+            } else {
+                (
+                    &attention_mask.get(xs.device()),
+                    &sliding_attention_mask.get(xs.device()),
+                )
+            };
             xs = layer.forward(
                 &xs,
                 per_layer_input.as_ref(),
-                &attention_mask.get(xs.device()),
-                &sliding_attention_mask.get(xs.device()),
-                seqlen_offsets,
+                layer_attention_mask,
+                layer_sliding_attention_mask,
+                layer_seqlen_offsets,
                 cache,
                 metadata.as_ref().map(|(kv_cache, metadata)| {
                     let cache_idx = layer.self_attn.kv_shared_layer_index.unwrap_or(i);
-                    (kv_cache[cache_idx].clone(), *metadata)
+                    let metadata = if reduced_to_logits {
+                        fast_prefill_tail
+                            .as_ref()
+                            .and_then(|plan| plan.paged_metadata.as_ref())
+                            .unwrap_or(*metadata)
+                    } else {
+                        *metadata
+                    };
+                    (kv_cache[cache_idx].clone(), metadata)
                 }),
                 this_layer_flash,
             )?;
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
+        let spec_hidden = extract_logits(&xs, context_lens.clone())?;
         let xs = extract_logits(&xs, context_lens)?;
+        if let Ok(mut hidden) = self.last_spec_hidden.lock() {
+            *hidden = Some(spec_hidden);
+        }
         let mut xs = self.lm_head.forward(&xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            let original_dtype = xs.dtype();
             xs = xs.to_dtype(DType::F32)?;
-            xs = (xs / final_logit_softcapping)?;
-            xs = xs.tanh()?;
-            xs = (xs * final_logit_softcapping)?;
-            xs = xs.to_dtype(original_dtype)?;
+            #[cfg(feature = "cuda")]
+            if xs.device().is_cuda() {
+                xs = crate::ops::cuda_softcap_f32(&xs, final_logit_softcapping as f32)?;
+            } else {
+                xs = (xs / final_logit_softcapping)?;
+                xs = xs.tanh()?;
+                xs = (xs * final_logit_softcapping)?;
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                xs = (xs / final_logit_softcapping)?;
+                xs = xs.tanh()?;
+                xs = (xs * final_logit_softcapping)?;
+            }
         }
 
         Ok(xs)
@@ -1853,6 +2107,8 @@ impl IsqModel for TextModel {
 //  MultimodalModel
 // ────────────────────────────────────────────────────────────────────────────
 
+impl crate::speculative::SpeculativeTargetMixin for TextModel {}
+
 impl MultimodalModel for TextModel {
     fn forward(
         &self,
@@ -1895,3 +2151,21 @@ impl MultimodalModel for TextModel {
 // ────────────────────────────────────────────────────────────────────────────
 
 impl AnyMoeBaseModelMixin for TextModel {}
+
+#[cfg(test)]
+mod tests {
+    use super::sliding_decode_kv_window;
+
+    #[test]
+    fn sliding_decode_kv_window_clamps_only_single_token_sliding_decode() {
+        assert_eq!(
+            sliding_decode_kv_window(true, 1, Some(512), 7354),
+            Some((6842, 512))
+        );
+        assert_eq!(sliding_decode_kv_window(true, 1, Some(512), 512), None);
+        assert_eq!(sliding_decode_kv_window(true, 1, Some(512), 128), None);
+        assert_eq!(sliding_decode_kv_window(true, 7, Some(512), 7354), None);
+        assert_eq!(sliding_decode_kv_window(false, 1, Some(512), 7354), None);
+        assert_eq!(sliding_decode_kv_window(true, 1, None, 7354), None);
+    }
+}

@@ -199,8 +199,6 @@ build_features() {
     features=""
 
     if [ "$os" = "macos" ]; then
-        check_xcode_cli_tools
-        check_metal_toolchain
         features="metal"
         info "macOS detected - enabling metal"
     else
@@ -332,6 +330,12 @@ main() {
         install_rust
     fi
 
+    # Run prereq installers outside any $() so xcodebuild stdout (asset paths with slashes) can't leak into the captured feature string.
+    if [ "$os" = "macos" ]; then
+        check_xcode_cli_tools
+        check_metal_toolchain
+    fi
+
     echo ""
     info "Detecting hardware capabilities..."
 
@@ -400,7 +404,7 @@ main() {
     echo ""
     echo "  mistralrs run -m Qwen/Qwen3-4B"
     echo ""
-    echo "  mistralrs serve --ui -m google/gemma-4-E4B-it"
+    echo "  mistralrs serve --agent -m google/gemma-4-E4B-it"
     echo ""
     echo "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
     echo ""
