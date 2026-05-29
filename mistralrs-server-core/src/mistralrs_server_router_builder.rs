@@ -279,6 +279,7 @@ fn init_router(
 
     let router = Router::new()
         .route("/v1/chat/completions", post(chatcompletions))
+        .route("/v1/messages", post(crate::anthropic::messages))
         .route("/v1/completions", post(completions))
         .route("/v1/embeddings", post(embeddings))
         .route("/v1/models", get(models))
