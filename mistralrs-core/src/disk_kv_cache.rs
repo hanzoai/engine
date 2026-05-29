@@ -13,6 +13,8 @@ const KVC_HEADER_BYTES: usize = 48;
 const FILE_SUFFIX: &str = ".kv";
 const MIN_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
 
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveReason {
@@ -163,7 +165,8 @@ impl DiskKvCache {
     ) -> io::Result<()> {
         header.payload_bytes = payload.len() as u64;
         let path = self.path_for(key);
-        let tmp = path.with_extension("kv.tmp");
+        let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = path.with_extension(format!("{}-{}.kv.tmp", std::process::id(), seq));
         {
             let f = OpenOptions::new()
                 .write(true)
@@ -189,9 +192,21 @@ impl DiskKvCache {
                 let mut header = KvcHeader::read(&mut f)?;
                 let mut text_len_buf = [0u8; 4];
                 f.read_exact(&mut text_len_buf)?;
-                let text_len = u32::from_le_bytes(text_len_buf) as usize;
-                let mut rendered_text = vec![0u8; text_len];
+                let text_len = u32::from_le_bytes(text_len_buf) as u64;
+                if text_len > self.budget_bytes {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "kvc text_len exceeds cache budget",
+                    ));
+                }
+                let mut rendered_text = vec![0u8; text_len as usize];
                 f.read_exact(&mut rendered_text)?;
+                if header.payload_bytes > self.budget_bytes {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "kvc payload_bytes exceeds cache budget",
+                    ));
+                }
                 let mut payload = vec![0u8; header.payload_bytes as usize];
                 f.read_exact(&mut payload)?;
                 let now = SystemTime::now()
