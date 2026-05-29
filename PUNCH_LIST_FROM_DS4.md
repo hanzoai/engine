@@ -2,6 +2,49 @@
 
 Audit comparing `antirez/ds4` (DeepSeek V4 Flash native engine, `~/work/zen/zen5`) against `hanzo-engine` (thin shim over `mistralrs-server`, this repo). Items ordered by **value-to-difficulty ratio**, highest first. DeepSeek/DSML-specific items skipped — only carry features that generalize to mistral-rs's model zoo.
 
+## Port progress
+
+### Original 8-item audit
+
+| # | Item | Status |
+|---|---|---|
+| 1 | SHA1-keyed rendered-prefix disk KV cache | ⬜ pending (1–2 weeks; unblocks #3 + 3 of 4 newer items) |
+| 2 | Anthropic-compatible `/v1/messages` | ✅ landed in `mistralrs-server-core/src/anthropic.rs` |
+| 3 | Exact tool-call replay map (tool-id → sampled bytes) | ⬜ pending (waits on #1 for KVC tail-section) |
+| 4 | Streaming tool-call argument deltas | ✅ landed in `mistralrs-core/src/tools/streaming_parser.rs` + `pipeline/sampling.rs` |
+| 5 | Thinking-mode streaming separation in OAI | ✅ already wired via `get_think_tag_reasoning_delta` / `get_think_tag_content_delta` |
+| 6 | Greedy-during-protocol / sampled-during-payload split | ⬜ pending (sampler state machine + grammar classifier) |
+| 7 | Cross-session live-checkpoint eviction-to-disk | ⬜ pending (subset of #1) |
+| 8 | Single-direction activation steering hooks | ⬜ pending (research-tier; lower priority) |
+
+### Post-launch upstream commits we've reviewed
+
+| Commit | Item | Status |
+|---|---|---|
+| `037ee39` | Ignore tool calls inside `<think>` | ✅ ported — `Sequence::is_currently_in_think_block()` guard in `sampling.rs` |
+| `613e9b2` | Default sampling to min-p 0.05 | ✅ ported — applied in all three handlers (chat_completion / responses / anthropic) |
+| `be43477` | Standardize context-length errors | ✅ ported (pragmatic) — `classify_error_kind()` in `anthropic.rs` promotes generic `api_error` to `invalid_request_error` / `not_found_error` / `overloaded_error` based on message pattern. Engine-side classification still TBD; this is the protocol-shape side |
+| `312935e` | Opt-in CORS | ✅ already covered — mistral-rs uses `tower_http::cors::CorsLayer` in `router_builder.rs`, more configurable than ds4's binary flag |
+| `950e8e6` | Preserve literal tool-result text | ✅ already covered — mistral-rs's Jinja-based chat templates render tool results literally; our `flatten_message_content` for `ToolResult` does no escaping |
+| `7b68234` | Prepend tool schemas to system prompt | ⬜ pending — Jinja-template rework; the cache-stability motivation lands once #1 is in |
+| `f074c7b` | Anchor cold KV checkpoints at chat task boundary | ⬜ pending — needs #1 |
+| `d0357ec` + `b62292c` | KV-cache hit-count decay for eviction | ⬜ pending — needs #1 |
+| `5bc1e6d` | Flash graph correctness fixes | ⬜ pending — DS4-specific (compressed indexer); lands when we flesh out `models/zen5.rs` indexer path |
+| `c9dd949` | CUDA compressed-prefill RoPE | ⬜ pending — DS4-specific |
+
+### What's blocking what
+
+```
+disk-KV cache (#1)
+    ├── #3 exact tool-call replay map
+    ├── #7 eviction-to-disk
+    ├── 7b68234 prepend tool schemas (gains cache-stability value)
+    ├── f074c7b anchor cold KV at chat-task boundary
+    └── d0357ec + b62292c hit-count decay
+```
+
+
+
 ## 1. SHA1-keyed rendered-prefix disk KV cache
 
 **Status:** absent. `mistralrs-core/src/prefix_cacher.rs` is in-RAM token-prefix only.
