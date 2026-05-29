@@ -20,16 +20,9 @@ use mistralrs_server_core::{
 mod interactive_mode;
 use interactive_mode::interactive_mode;
 mod mcp_server;
-#[cfg(feature = "zap")]
-mod zap_server;
 
 #[derive(Parser)]
-#[command(
-    name = "hanzo-engine",
-    version,
-    about = "Hanzo Engine - High-performance AI inference engine for LLMs and embeddings",
-    long_about = "Hanzo Engine is a high-performance AI inference engine built on mistral.rs.\n\nIt provides OpenAI-compatible APIs for:\n  - Chat completions (LLMs)\n  - Text embeddings (BERT, Qwen3, Gemma)\n  - Vision models\n  - Audio models\n\nSupports Metal (macOS), CUDA (Linux/Windows), and CPU backends."
-)]
+#[command(version, about, long_about = None)]
 struct Args {
     /// IP to serve on. Defaults to "0.0.0.0"
     #[arg(long)]
@@ -164,15 +157,6 @@ struct Args {
     /// MCP client configuration file path
     #[arg(long)]
     mcp_config: Option<String>,
-
-    /// Port to serve ZAP binary protocol on (native peer-to-peer transport).
-    /// Defaults to port+2 when --port is set (e.g. port 8080 → ZAP 8082).
-    #[arg(long)]
-    zap_port: Option<u16>,
-
-    /// Disable automatic ZAP binary protocol server
-    #[arg(long, default_value_t = false)]
-    no_zap: bool,
 }
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
@@ -439,12 +423,8 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    if !args.interactive_mode
-        && args.port.is_none()
-        && args.mcp_port.is_none()
-        && args.zap_port.is_none()
-    {
-        anyhow::bail!("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port` or `--mcp-port` or `--zap-port`?")
+    if !args.interactive_mode && args.port.is_none() && args.mcp_port.is_none() {
+        anyhow::bail!("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port` or `--mcp-port`?")
     }
 
     let mcp_port = if let Some(port) = args.mcp_port {
@@ -465,7 +445,6 @@ async fn main() -> Result<()> {
         tokio::spawn(async {})
     };
 
-    let oai_port_num = args.port;
     let oai_port = if let Some(port) = args.port {
         let ip = args
             .serve_ip
@@ -491,43 +470,7 @@ async fn main() -> Result<()> {
         tokio::spawn(async {})
     };
 
-    // Resolve effective ZAP port:
-    //   --zap-port explicitly set → use that
-    //   --port set and --no-zap false → default to port + 2
-    //   --no-zap → disabled
-    let effective_zap_port = if args.no_zap {
-        None
-    } else if let Some(zp) = args.zap_port {
-        Some(zp)
-    } else {
-        oai_port_num.map(|p| p + 2)
-    };
-
-    let zap_task = if let Some(zap_port) = effective_zap_port {
-        let host = args
-            .serve_ip
-            .clone()
-            .unwrap_or_else(|| "0.0.0.0".to_string());
-        let forward_port = oai_port_num.unwrap_or(8080);
-        let addr = format!("{host}:{zap_port}");
-        #[cfg(feature = "zap")]
-        let task = {
-            info!("ZAP binary protocol listening on {addr}.");
-            tokio::spawn(async move {
-                zap_server::start_zap_server(&addr, forward_port).await;
-            })
-        };
-        #[cfg(not(feature = "zap"))]
-        let task = {
-            let _ = (&addr, forward_port);
-            tokio::spawn(async {})
-        };
-        task
-    } else {
-        tokio::spawn(async {})
-    };
-
-    let (_, _, _) = join!(oai_port, mcp_port, zap_task);
+    let (_, _) = join!(oai_port, mcp_port);
 
     Ok(())
 }

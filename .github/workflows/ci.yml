@@ -1,19 +1,15 @@
-on:
+on: 
   schedule:
       - cron: '0 0 * * 1'
   push:
-    branches:
-      - main
+    branches: 
+      - master
   pull_request:
-    branches:
-      - main
+    branches: 
+      - master
   workflow_dispatch:
 
 name: Continuous integration
-
-env:
-  CARGO_INCREMENTAL: 0
-  CARGO_TERM_COLOR: always
 
 jobs:
   check:
@@ -21,180 +17,112 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [hanzo-build-linux-amd64, windows-latest, macOS-latest]
+        os: [ubuntu-latest, windows-latest, macOS-latest]
         rust: [stable]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
         with:
-          path: engine
-      - uses: actions/checkout@v4
-        with:
-          repository: hanzoai/ml
-          path: ml
-      - uses: actions/checkout@v4
-        with:
-          repository: hanzoai/node
-          path: node
-      - name: Install build tools (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential pkg-config libssl-dev
-      - uses: dtolnay/rust-toolchain@master
-        with:
+          profile: minimal
           toolchain: ${{ matrix.rust }}
-      - name: Cargo check
-        run: cargo check --manifest-path engine/Cargo.toml --locked --workspace --no-default-features
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
 
   check-metal:
     name: Check (metal)
-    runs-on: macos-14
+    runs-on: macOS-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
         with:
-          path: engine
-      - uses: actions/checkout@v4
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
         with:
-          repository: hanzoai/ml
-          path: ml
-      - uses: actions/checkout@v4
-        with:
-          repository: hanzoai/node
-          path: node
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Cargo check (metal)
-        run: cargo check --manifest-path engine/Cargo.toml --locked --workspace --features metal
+          command: check
+          args: --workspace --features metal
 
   test:
     name: Test Suite
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [hanzo-build-linux-amd64, windows-latest, macOS-latest]
+        os: [ubuntu-latest, windows-latest, macOS-latest]
         rust: [stable]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
         with:
-          path: engine
-      - uses: actions/checkout@v4
-        with:
-          repository: hanzoai/ml
-          path: ml
-      - uses: actions/checkout@v4
-        with:
-          repository: hanzoai/node
-          path: node
-      - name: Install build tools (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential pkg-config libssl-dev
-      - uses: dtolnay/rust-toolchain@master
-        with:
+          profile: minimal
           toolchain: ${{ matrix.rust }}
-      - name: Cargo test
-        run: cargo test --manifest-path engine/Cargo.toml --locked -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
+          override: true
+      - uses: actions-rs/cargo@v1
         env:
           TESTS_HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        with:
+          command: test
+          args: -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
 
   fmt:
     name: Rustfmt
-    runs-on: hanzo-build-linux-amd64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
         with:
-          path: engine
-      - uses: actions/checkout@v4
+          profile: minimal
+          toolchain: stable
+          override: true
+      - run: rustup component add rustfmt
+      - uses: actions-rs/cargo@v1
         with:
-          repository: hanzoai/ml
-          path: ml
-      - uses: actions/checkout@v4
-        with:
-          repository: hanzoai/node
-          path: node
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - name: Cargo fmt
-        run: |
-          cd engine
-          cargo fmt -p hanzo-engine -p mistralrs-server-core -p mistralrs-server -p mistralrs-cli \
-            -p mistralrs-core -p mistralrs -p mistralrs-bench -p mistralrs-vision -p mistralrs-quant \
-            -p mistralrs-paged-attn -p mistralrs-web-chat -p mistralrs-audio -p mistralrs-mcp \
-            -p mistralrs-macros -- --check
+          command: fmt
+          args: --all -- --check
 
   clippy:
     name: Clippy
-    runs-on: hanzo-build-linux-amd64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
         with:
-          path: engine
-      - uses: actions/checkout@v4
+          profile: minimal
+          toolchain: stable
+          override: true
+      - run: rustup component add clippy
+      - uses: actions-rs/cargo@v1
         with:
-          repository: hanzoai/ml
-          path: ml
-      - uses: actions/checkout@v4
-        with:
-          repository: hanzoai/node
-          path: node
-      - name: Install build tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential pkg-config libssl-dev
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - name: Cargo clippy
-        run: cargo clippy --manifest-path engine/Cargo.toml --locked --workspace --no-default-features --tests --examples -- -D warnings
+          command: clippy
+          args: --workspace --tests --examples -- -D warnings
 
   docs:
     name: Docs
-    runs-on: hanzo-build-linux-amd64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
         with:
-          path: engine
-      - uses: actions/checkout@v4
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
         with:
-          repository: hanzoai/ml
-          path: ml
-      - uses: actions/checkout@v4
-        with:
-          repository: hanzoai/node
-          path: node
-      - name: Install build tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential pkg-config libssl-dev
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Cargo doc
-        run: cargo doc --manifest-path engine/Cargo.toml --locked --workspace --no-default-features
-
-  hanzo-engine:
-    name: Build Hanzo Engine
-    runs-on: hanzo-build-linux-amd64
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          path: engine
-      - uses: actions/checkout@v4
-        with:
-          repository: hanzoai/ml
-          path: ml
-      - uses: actions/checkout@v4
-        with:
-          repository: hanzoai/node
-          path: node
-      - name: Install build tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential pkg-config libssl-dev
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Build hanzo-engine
-        run: cargo build --manifest-path engine/Cargo.toml --locked --package hanzo-engine --no-default-features --release
-      - name: Test hanzo-engine
-        run: cargo test --manifest-path engine/Cargo.toml --locked --package hanzo-engine --no-default-features
-      - name: Verify binary
-        run: |
-          ./engine/target/release/hanzo-engine --version
-          ./engine/target/release/hanzo-engine --help
+          command: doc
+          args: --workspace
 
   typos:
     name: Typos
-    runs-on: hanzo-build-linux-amd64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
       - name: Typos check with custom config file
         uses: crate-ci/typos@master
         with:
@@ -213,24 +141,23 @@ jobs:
           fi
 
   msrv:
-    name: MSRV Check (1.88)
-    runs-on: hanzo-build-linux-amd64
+    name: MSRV Check (1.90)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
         with:
-          path: engine
-      - uses: actions/checkout@v4
+          profile: minimal
+          toolchain: 1.90.0
+          override: true
+      - uses: actions-rs/cargo@v1
         with:
-          repository: hanzoai/ml
-          path: ml
-      - uses: actions/checkout@v4
-        with:
-          repository: hanzoai/node
-          path: node
-      - name: Install build tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential pkg-config libssl-dev
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.88.0"
-      - name: Cargo check (MSRV)
-        run: cargo check --manifest-path engine/Cargo.toml --locked --workspace --no-default-features
+          command: check
+          args: --workspace
+
+  # run `mlc` (`cargo install mlc`)
+  # markdown-link-check:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: gaurav-nelson/github-action-markdown-link-check@v1

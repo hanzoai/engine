@@ -1,7 +1,7 @@
 [package]
 name = "mistralrs"
 readme = "README.md"
-authors = ["Hanzo AI <dev@hanzo.ai>", "Eric Buehler"]
+authors = ["Eric Buehler"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -184,10 +184,6 @@ name = "paged_attn"
 path = "examples/advanced/paged_attn/main.rs"
 
 [[example]]
-name = "speculative"
-path = "examples/advanced/speculative/main.rs"
-
-[[example]]
 name = "auto_device_map"
 path = "examples/advanced/auto_device_map/main.rs"
 
@@ -222,6 +218,18 @@ path = "examples/advanced/perplexity/main.rs"
 [[example]]
 name = "embeddings"
 path = "examples/advanced/embeddings/main.rs"
+
+[[example]]
+name = "code_execution"
+path = "examples/advanced/code_execution/main.rs"
+
+[[example]]
+name = "code_execution_approval"
+path = "examples/advanced/code_execution_approval/main.rs"
+
+[[example]]
+name = "code_execution_files"
+path = "examples/advanced/code_execution_files/main.rs"
 
 # ========== Cookbook ==========
 
@@ -261,3 +269,5 @@ mkl = ["mistralrs-core/mkl"]
 nccl = ["mistralrs-core/nccl"]
 # Use ring instead of aws-lc-rs for TLS
 ring = ["mistralrs-core/ring"]
+# Python code execution tool
+code-execution = ["mistralrs-core/code-execution"]

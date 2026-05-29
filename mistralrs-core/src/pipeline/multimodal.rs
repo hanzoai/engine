@@ -1,5 +1,4 @@
-use super::isq::ImatrixDataSource;
-use super::isq::UqffFullSer;
+use super::isq::{ImatrixDataSource, UqffFullSer, WeightLoadingMode, WeightLoadingState};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoMultimodalLoader,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
@@ -24,7 +23,7 @@ use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
+use crate::pipeline::text_models_inputs_processor::{make_prompt_chunk, InputMetadata};
 use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
@@ -63,7 +62,7 @@ use std::time::Instant;
 use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, trace, warn};
 
 pub struct MultimodalPipeline {
     model: Box<dyn MultimodalModel + Send + Sync>,
@@ -279,7 +278,7 @@ impl Loader for MultimodalLoader {
             paged_attn_config = None;
         }
 
-        info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
+        debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
 
@@ -484,7 +483,7 @@ impl Loader for MultimodalLoader {
             paged_attn_config = None;
         }
 
-        info!("Model config: {:?}", self.inner.get_config_repr(&config)?);
+        trace!("Model config: {:?}", self.inner.get_config_repr(&config)?);
         if crate::using_flash_attn() {
             once_log_info("FlashAttention is enabled.");
         }
@@ -587,6 +586,17 @@ impl Loader for MultimodalLoader {
         };
 
         let multi_progress = Arc::new(new_multi_progress());
+
+        info!(
+            "{}",
+            WeightLoadingMode::from(WeightLoadingState {
+                from_uqff: self.config.from_uqff.is_some(),
+                loading_isq,
+                immediate_isq: use_immediate,
+                write_uqff: self.config.write_uqff.is_some(),
+            })
+            .message("model")
+        );
 
         let mut model = if use_nccl || use_ring() {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
@@ -821,9 +831,9 @@ impl Loader for MultimodalLoader {
                 None
             };
             if should_quantize_pass {
-                info!("Applying ISQ to all ranks.");
+                debug!("Applying ISQ to all ranks.");
             } else {
-                info!("Serializing existing ISQ tensors without additional quantization.");
+                debug!("Serializing existing ISQ tensors without additional quantization.");
             }
             model.quantize(
                 in_situ_quant,
@@ -1063,6 +1073,47 @@ impl MetadataMixin for MultimodalPipeline {
     }
 }
 
+impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
+    fn has_speculative_proposer(&self) -> bool {
+        self.model.has_speculative_proposer()
+    }
+
+    fn speculative_proposal_len(&self) -> Option<usize> {
+        self.model.speculative_proposal_len()
+    }
+
+    fn speculative_target_hiddens(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> candle_core::Result<Option<Tensor>> {
+        self.model.speculative_target_hiddens(rows)
+    }
+
+    fn speculative_propose(
+        &mut self,
+        ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
+    ) -> candle_core::Result<Option<crate::speculative::SpeculativeProposalBatch>> {
+        self.model.speculative_propose(ctx)
+    }
+
+    fn build_speculative_verify_inputs(
+        &self,
+        input_meta: InputMetadata,
+    ) -> candle_core::Result<Box<dyn Any>> {
+        let model_specific_args = self.model.default_model_specific_args(&input_meta.input);
+        Ok(Box::new(ModelInputs {
+            input_ids: input_meta.input,
+            seqlen_offsets: input_meta.positions,
+            context_lens: input_meta.context_lens,
+            position_ids: input_meta.position_ids,
+            pixel_values: None,
+            model_specific_args,
+            paged_attn_meta: input_meta.paged_attn_meta,
+            flash_meta: input_meta.flash_meta,
+        }))
+    }
+}
+
 #[async_trait::async_trait]
 impl Pipeline for MultimodalPipeline {
     fn forward_inputs(
@@ -1109,6 +1160,65 @@ impl Pipeline for MultimodalPipeline {
             Ok(ForwardInputsResult::CausalGeneration { logits })
         }
     }
+
+    fn attach_speculative(
+        &mut self,
+        config: crate::speculative::SpeculativeConfig,
+    ) -> candle_core::Result<()> {
+        if matches!(config, crate::speculative::SpeculativeConfig::Mtp(_))
+            && self.get_metadata().cache_engine.is_none()
+        {
+            candle_core::bail!(
+                "MTP speculative decoding currently requires PagedAttention for this pipeline."
+            );
+        }
+        if let Some(info) = self.model.attach_speculative(config)? {
+            self.model.log_speculative_attach(&info);
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn try_sample_speculative_causal_gen(
+        &mut self,
+        seqs: &mut [&mut Sequence],
+        logits: &[Tensor],
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        metadata: Option<crate::pipeline::text_models_inputs_processor::PagedAttentionMeta>,
+    ) -> candle_core::Result<bool> {
+        if !self.model.has_speculative_proposer() {
+            crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+            return Ok(false);
+        }
+
+        let general_metadata = self.get_metadata();
+        if let Some(cache_engine) = general_metadata.cache_engine.as_ref() {
+            let Some(metadata) = metadata else {
+                crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+                return Ok(false);
+            };
+            let cache = crate::speculative::cache::PagedSpeculativeCacheAccess::new(
+                &metadata,
+                cache_engine,
+            );
+            return crate::speculative::driver::try_sample_speculative_causal_gen(
+                self,
+                seqs,
+                logits,
+                prefix_cacher,
+                disable_eos_stop,
+                rng,
+                &cache,
+            )
+            .await;
+        }
+
+        crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+        Ok(false)
+    }
+
     async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],
@@ -1188,10 +1298,10 @@ impl AnyMoePipelineMixin for MultimodalPipeline {
             ));
 
             let mut filenames = vec![];
-            for rfilename in
-                api_dir_list!(api, model_id, true).filter(|x| x.ends_with(".safetensors"))
+            for rfilename in api_dir_list!(api, model_id, true, &revision)
+                .filter(|x| x.ends_with(".safetensors"))
             {
-                filenames.push(api_get_file!(api, &rfilename, model_id));
+                filenames.push(api_get_file!(api, &rfilename, model_id, &revision));
             }
 
             let regex = regex.clone();
@@ -1246,10 +1356,10 @@ impl AnyMoePipelineMixin for MultimodalPipeline {
             ));
 
             let mut gate_filenames = vec![];
-            for rfilename in
-                api_dir_list!(api, model_id, true).filter(|x| x.ends_with(".safetensors"))
+            for rfilename in api_dir_list!(api, model_id, true, &revision)
+                .filter(|x| x.ends_with(".safetensors"))
             {
-                gate_filenames.push(api_get_file!(api, &rfilename, model_id));
+                gate_filenames.push(api_get_file!(api, &rfilename, model_id, &revision));
             }
             assert_eq!(
                 gate_filenames.len(),
