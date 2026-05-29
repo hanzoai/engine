@@ -508,14 +508,56 @@ impl IntoResponse for AnthropicResponder {
             AnthropicResponder::Json(v) => Json(v).into_response(),
             AnthropicResponder::Sse(s) => s.into_response(),
             AnthropicResponder::Error(code, msg, kind) => {
+                // ds4 commit be43477: emit Anthropic-shaped error with the
+                // right error.type per Anthropic spec. Caller picks the
+                // protocol kind; we re-classify obvious cases here for
+                // request-level errors that the engine still labels generic.
+                let final_kind = classify_error_kind(kind, &msg);
                 let body = serde_json::json!({
                     "type": "error",
-                    "error": { "type": kind, "message": msg }
+                    "error": { "type": final_kind, "message": msg }
                 });
                 (code, Json(body)).into_response()
             }
         }
     }
+}
+
+/// Promote generic `api_error` to a more specific Anthropic error type
+/// when the message clearly identifies the cause. Matches the ds4 be43477
+/// behavior of distinguishing context-length and similar request-shape
+/// errors from real server faults.
+///
+/// Anthropic taxonomy reference:
+/// - `invalid_request_error` — bad parameters, ctx exceeded, model unknown
+/// - `authentication_error` — auth header issues
+/// - `permission_error` — model/account permission
+/// - `not_found_error` — model/resource missing
+/// - `request_too_large` — payload size
+/// - `rate_limit_error` — throttled
+/// - `api_error` — generic server fault
+/// - `overloaded_error` — temporarily overloaded
+fn classify_error_kind(initial: &'static str, msg: &str) -> &'static str {
+    // Explicit callers (invalid_request_error, etc.) take precedence.
+    if initial != "api_error" {
+        return initial;
+    }
+    let lc = msg.to_ascii_lowercase();
+    if lc.contains("context")
+        && (lc.contains("exceed") || lc.contains("too long") || lc.contains("max"))
+    {
+        return "invalid_request_error";
+    }
+    if lc.contains("max_tokens") || lc.contains("token limit") || lc.contains("seq_len") {
+        return "invalid_request_error";
+    }
+    if lc.contains("model") && (lc.contains("not found") || lc.contains("unknown")) {
+        return "not_found_error";
+    }
+    if lc.contains("overload") || lc.contains("busy") {
+        return "overloaded_error";
+    }
+    initial
 }
 
 /// Anthropic-compatible messages endpoint handler.
