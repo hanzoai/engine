@@ -2864,6 +2864,18 @@ pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resul
         );
     }
 
+    // ROCm has no fused-glu kernel; decompose to eager `activation(a) * b`
+    // (uses the real bf16 unary + multiply HIP kernels).
+    if a.device().is_rocm() {
+        let act = match activation {
+            GluActivationType::Silu => a.silu()?,
+            GluActivationType::Gelu => a.gelu()?,
+            GluActivationType::GeluErf => a.gelu_erf()?,
+            GluActivationType::Relu => a.relu()?,
+        };
+        return act.mul(&b);
+    }
+
     a.apply_op2_no_bwd(&b, &FusedGlu(activation))
 }
 
