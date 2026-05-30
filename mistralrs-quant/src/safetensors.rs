@@ -172,6 +172,8 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
             };
             Storage::Cpu(cpu_storage)
         }
+        #[cfg(feature = "rocm")]
+        Device::Rocm(_) => candle_core::bail!("dummy MX dtypes (F4/F6/F8) are not supported on rocm yet"),
         #[cfg(feature = "cuda")]
         Device::Cuda(device) => {
             let mut slice = unsafe { device.alloc::<u8>(data.len())? };
