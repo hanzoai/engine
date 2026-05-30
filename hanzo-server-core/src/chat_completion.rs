@@ -22,7 +22,7 @@ use itertools::Itertools;
 use hanzo_engine::{
     AgentPermission, AgentToolApprovalHandler, AgentToolApprovalNotifier, AgenticToolCallData,
     AgenticToolCallPhase, AgenticToolCallRecord, ChatCompletionChunkResponse,
-    ChatCompletionResponse, Constraint, MistralRs, ModelCategory, NormalRequest, ReasoningEffort,
+    ChatCompletionResponse, Constraint, Hanzo, ModelCategory, NormalRequest, ReasoningEffort,
     Request, RequestMessage, Response, SamplingParams,
 };
 use serde_json::{json, Value};
@@ -43,7 +43,7 @@ use crate::{
         ResponseFormat,
     },
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
-    types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
+    types::{ExtractedHanzoState, OnChunkCallback, OnDoneCallback, SharedHanzoState},
     util::{parse_audio_url, parse_image_url, sanitize_error_message, validate_model_name},
     video::parse_video_url,
 };
@@ -343,7 +343,7 @@ impl futures::Stream for ChatCompletionStreamer {
         match self.rx.poll_recv(cx) {
             Poll::Ready(Some(resp)) => match resp {
                 Response::ModelError(msg, _) => {
-                    MistralRs::maybe_log_error(
+                    Hanzo::maybe_log_error(
                         self.state.clone(),
                         &ModelErrorMessage(msg.to_string()),
                     );
@@ -358,7 +358,7 @@ impl futures::Stream for ChatCompletionStreamer {
                     )))
                 }
                 Response::InternalError(e) => {
-                    MistralRs::maybe_log_error(self.state.clone(), &*e);
+                    Hanzo::maybe_log_error(self.state.clone(), &*e);
                     self.done_state = DoneState::SendingDone;
                     Poll::Ready(Some(Ok(
                         Event::default().data(sanitize_error_message(e.as_ref()))
@@ -369,7 +369,7 @@ impl futures::Stream for ChatCompletionStreamer {
                         self.done_state = DoneState::SendingDone;
                     }
                     // Done now, just need to send the [DONE]
-                    MistralRs::maybe_log_response(self.state.clone(), &response);
+                    Hanzo::maybe_log_response(self.state.clone(), &response);
 
                     if let Some(on_chunk) = &self.on_chunk {
                         response = on_chunk(response);
@@ -479,7 +479,7 @@ fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
 /// request format used by mistral.rs.
 pub async fn parse_request(
     oairequest: ChatCompletionRequest,
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     tx: Sender<Response>,
     tool_dispatch_url: Option<String>,
     agent_approval_handler: Option<AgentToolApprovalHandler>,
@@ -487,7 +487,7 @@ pub async fn parse_request(
 ) -> Result<(Request, bool)> {
     let repr = serde_json::to_string(&oairequest)
         .context("Failed to serialize chat completion request for logging")?;
-    MistralRs::maybe_log_request(state.clone(), repr);
+    Hanzo::maybe_log_request(state.clone(), repr);
 
     // Validate that the requested model matches the loaded model
     validate_model_name(&oairequest.model, state.clone())?;
@@ -934,7 +934,7 @@ pub async fn parse_request(
     responses((status = 200, description = "Chat completions"))
 )]
 pub async fn chatcompletions(
-    State(state): ExtractedMistralRsState,
+    State(state): ExtractedHanzoState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
     Json(mut oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
@@ -1008,7 +1008,7 @@ pub async fn chatcompletions(
 
 /// Handle route / generation errors and logging them.
 pub fn handle_error(
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> ChatCompletionResponder {
     handle_completion_error(state, e)
@@ -1017,7 +1017,7 @@ pub fn handle_error(
 /// Creates a SSE streamer for chat completions with optional callbacks.
 pub fn create_streamer(
     rx: Receiver<Response>,
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     on_chunk: Option<ChatCompletionOnChunkCallback>,
     on_done: Option<ChatCompletionOnDoneCallback>,
 ) -> Sse<KeepAliveStream<ChatCompletionStreamer>> {
@@ -1031,7 +1031,7 @@ pub fn create_streamer(
 /// Process non-streaming chat completion responses.
 pub async fn process_non_streaming_response(
     rx: &mut Receiver<Response>,
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
 ) -> ChatCompletionResponder {
     let mut tool_call_records = Vec::new();
     let mut pending_args = std::collections::HashMap::new();
@@ -1094,20 +1094,20 @@ pub async fn process_non_streaming_response(
 }
 
 /// Matches and processes different types of model responses into appropriate chat completion responses.
-pub fn match_responses(state: SharedMistralRsState, response: Response) -> ChatCompletionResponder {
+pub fn match_responses(state: SharedHanzoState, response: Response) -> ChatCompletionResponder {
     match response {
         Response::InternalError(e) => {
-            MistralRs::maybe_log_error(state, &*e);
+            Hanzo::maybe_log_error(state, &*e);
             ChatCompletionResponder::InternalError(e)
         }
         Response::ModelError(msg, response) => {
-            MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
-            MistralRs::maybe_log_response(state, &response);
+            Hanzo::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
+            Hanzo::maybe_log_response(state, &response);
             ChatCompletionResponder::ModelError(msg, response)
         }
         Response::ValidationError(e) => ChatCompletionResponder::ValidationError(e),
         Response::Done(response) => {
-            MistralRs::maybe_log_response(state, &response);
+            Hanzo::maybe_log_response(state, &response);
             ChatCompletionResponder::Json(response)
         }
         Response::Chunk(_) => unreachable!(),

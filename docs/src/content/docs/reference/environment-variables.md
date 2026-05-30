@@ -49,7 +49,7 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 |---|---|
 | `MCP_CONFIG_PATH` | MCP client configuration path used when `--mcp-config` is not passed. |
 | `KEEP_ALIVE_INTERVAL` | SSE keep-alive interval in milliseconds. Falls back to the default if missing or invalid. |
-| `XDG_CACHE_HOME` | Base cache directory for web UI state. The UI uses `$XDG_CACHE_HOME/mistralrs`. |
+| `XDG_CACHE_HOME` | Base cache directory for web UI state. The UI uses `$XDG_CACHE_HOME/hanzo`. |
 | `HOME` | Fallback for web UI cache path when `XDG_CACHE_HOME` is not set. |
 
 ## Attention kernels

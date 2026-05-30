@@ -22,7 +22,7 @@ hanzo run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct --calibration-file calibra
 ```
 
 ## With the Rust SDK
-You can find this example [here](https://github.com/hanzoai/engine/tree/master/mistralrs/examples/imatrix/).
+You can find this example [here](https://github.com/hanzoai/engine/tree/master/hanzo/examples/imatrix/).
 
 ```rust
 let model = TextModelBuilder::new("meta-llama/Llama-3.2-3B-Instruct")

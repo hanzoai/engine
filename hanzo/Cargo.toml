@@ -11,7 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 license.workspace = true
 homepage.workspace = true
-documentation = "https://docs.rs/mistralrs"
+documentation = "https://docs.rs/hanzo"
 
 [dependencies]
 hanzo-engine.workspace = true

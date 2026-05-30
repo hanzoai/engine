@@ -58,7 +58,7 @@ impl PythonSession {
             dir.to_path_buf()
         } else {
             let dir = tempfile::Builder::new()
-                .prefix("mistralrs-code-")
+                .prefix("hanzo-code-")
                 .tempdir()?;
             #[allow(deprecated)]
             dir.into_path()

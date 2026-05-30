@@ -3,7 +3,7 @@
 The Rust SDK for [mistral.rs](https://github.com/EricLBuehler/mistral.rs), a high-performance
 LLM inference engine supporting text, multimodal, speech, image generation, and embedding models.
 
-[API Docs](https://docs.rs/mistralrs) | [GitHub](https://github.com/EricLBuehler/mistral.rs) | [Examples](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples) | [Discord](https://discord.gg/SZrecqK8qw)
+[API Docs](https://docs.rs/hanzo) | [GitHub](https://github.com/EricLBuehler/mistral.rs) | [Examples](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples) | [Discord](https://discord.gg/SZrecqK8qw)
 
 ## Quick Start
 

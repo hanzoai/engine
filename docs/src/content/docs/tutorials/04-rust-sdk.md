@@ -10,8 +10,8 @@ The Rust SDK embeds the engine directly into a Rust program. A Rust toolchain is
 ## Creating the project
 
 ```bash
-cargo new --bin hello-mistralrs
-cd hello-mistralrs
+cargo new --bin hello-hanzo
+cd hello-hanzo
 ```
 
 Add the dependencies to `Cargo.toml`:
@@ -122,7 +122,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-The stream yields `Response` values. Most are `Response::Chunk` carrying assistant output in `choices[0].delta.content`. Other variants cover errors and the final completion event; production code should pattern-match exhaustively. See [docs.rs/mistralrs](https://docs.rs/mistralrs).
+The stream yields `Response` values. Most are `Response::Chunk` carrying assistant output in `choices[0].delta.content`. Other variants cover errors and the final completion event; production code should pattern-match exhaustively. See [docs.rs/hanzo](https://docs.rs/hanzo).
 
 ## Notes
 

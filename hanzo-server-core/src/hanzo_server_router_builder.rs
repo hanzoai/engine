@@ -26,7 +26,7 @@ use crate::{
     image_generation::image_generation,
     responses::{cancel_response, create_response, delete_response, get_response},
     speech_generation::speech_generation,
-    types::SharedMistralRsState,
+    types::SharedHanzoState,
 };
 
 /// Server-level defaults for agentic features.
@@ -52,28 +52,28 @@ pub const DEFAULT_MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 ///
 /// Basic usage:
 /// ```ignore
-/// use hanzo_server_core::hanzo_server_router_builder::MistralRsServerRouterBuilder;
+/// use hanzo_server_core::hanzo_server_router_builder::HanzoServerRouterBuilder;
 ///
-/// let router = MistralRsServerRouterBuilder::new()
-///     .with_mistralrs(mistralrs_instance)
+/// let router = HanzoServerRouterBuilder::new()
+///     .with_hanzo(hanzo_instance)
 ///     .build()
 ///     .await?;
 /// ```
 ///
 /// With custom configuration:
 /// ```ignore
-/// use hanzo_server_core::hanzo_server_router_builder::MistralRsServerRouterBuilder;
+/// use hanzo_server_core::hanzo_server_router_builder::HanzoServerRouterBuilder;
 ///
-/// let router = MistralRsServerRouterBuilder::new()
-///     .with_mistralrs(mistralrs_instance)
+/// let router = HanzoServerRouterBuilder::new()
+///     .with_hanzo(hanzo_instance)
 ///     .with_include_swagger_routes(false)
 ///     .with_base_path("/api/mistral")
 ///     .build()
 ///     .await?;
 /// ```
-pub struct MistralRsServerRouterBuilder {
+pub struct HanzoServerRouterBuilder {
     /// The shared mistral.rs instance
-    hanzo: Option<SharedMistralRsState>,
+    hanzo: Option<SharedHanzoState>,
     /// Whether to include Swagger/OpenAPI documentation routes.
     /// Only available when the `swagger-ui` feature is enabled.
     #[cfg(feature = "swagger-ui")]
@@ -90,7 +90,7 @@ pub struct MistralRsServerRouterBuilder {
     agentic_defaults: AgenticDefaults,
 }
 
-impl Default for MistralRsServerRouterBuilder {
+impl Default for HanzoServerRouterBuilder {
     /// Creates a new builder with default configuration.
     fn default() -> Self {
         Self {
@@ -106,24 +106,24 @@ impl Default for MistralRsServerRouterBuilder {
     }
 }
 
-impl MistralRsServerRouterBuilder {
-    /// Creates a new `MistralRsServerRouterBuilder` with default settings.
+impl HanzoServerRouterBuilder {
+    /// Creates a new `HanzoServerRouterBuilder` with default settings.
     ///
     /// This is equivalent to calling `Default::default()`.
     ///
     /// ### Examples
     ///
     /// ```ignore
-    /// use hanzo_server_core::hanzo_server_router_builder::MistralRsServerRouterBuilder;
+    /// use hanzo_server_core::hanzo_server_router_builder::HanzoServerRouterBuilder;
     ///
-    /// let builder = MistralRsServerRouterBuilder::new();
+    /// let builder = HanzoServerRouterBuilder::new();
     /// ```
     pub fn new() -> Self {
         Default::default()
     }
 
     /// Sets the shared mistral.rs instance
-    pub fn with_mistralrs(mut self, hanzo: SharedMistralRsState) -> Self {
+    pub fn with_hanzo(mut self, hanzo: SharedHanzoState) -> Self {
         self.hanzo = Some(hanzo);
         self
     }
@@ -215,16 +215,16 @@ impl MistralRsServerRouterBuilder {
     /// ### Examples
     ///
     /// ```ignore
-    /// use hanzo_server_core::hanzo_server_router_builder::MistralRsServerRouterBuilder;
+    /// use hanzo_server_core::hanzo_server_router_builder::HanzoServerRouterBuilder;
     ///
-    /// let router = MistralRsServerRouterBuilder::new()
-    ///     .with_mistralrs(mistralrs_instance)
+    /// let router = HanzoServerRouterBuilder::new()
+    ///     .with_hanzo(hanzo_instance)
     ///     .build()
     ///     .await?;
     /// ```
     pub async fn build(self) -> Result<Router> {
         let hanzo = self.hanzo.ok_or_else(|| {
-            anyhow::anyhow!("`hanzo` instance must be set. Use `with_mistralrs`.")
+            anyhow::anyhow!("`hanzo` instance must be set. Use `with_hanzo`.")
         })?;
 
         #[allow(unused_mut)]
@@ -249,12 +249,12 @@ impl MistralRsServerRouterBuilder {
     }
 }
 
-/// Initializes and configures the underlying axum router with MistralRs API endpoints.
+/// Initializes and configures the underlying axum router with Hanzo API endpoints.
 ///
 /// This function creates a router with all the necessary API endpoints,
 /// CORS configuration, and body size limits.
 fn init_router(
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     allowed_origins: Option<Vec<String>>,
     max_body_limit: Option<usize>,
     agentic_defaults: AgenticDefaults,

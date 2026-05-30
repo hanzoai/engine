@@ -9,8 +9,8 @@ use hanzo_engine::{
     SpeechLoaderType,
 };
 use hanzo_server_core::{
-    approvals::ApprovalBroker, mistralrs_for_server_builder::MistralRsForServerBuilder,
-    hanzo_server_router_builder::MistralRsServerRouterBuilder,
+    approvals::ApprovalBroker, hanzo_for_server_builder::HanzoForServerBuilder,
+    hanzo_server_router_builder::HanzoServerRouterBuilder,
 };
 
 use crate::args::{
@@ -61,8 +61,8 @@ pub async fn run_server(
     // Extract quantization settings
     let isq = extract_isq_setting(&model_type);
 
-    // Build the MistralRs instance
-    let mut builder = MistralRsForServerBuilder::new()
+    // Build the Hanzo instance
+    let mut builder = HanzoForServerBuilder::new()
         .with_model(model_selected)
         .with_max_seqs(runtime.max_seqs)
         .with_no_kv_cache(runtime.no_kv_cache)
@@ -116,11 +116,11 @@ pub async fn run_server(
     let _ = sandbox_policy;
 
     let hanzo = builder.build().await?;
-    let mistralrs_for_ui = hanzo.clone();
+    let hanzo_for_ui = hanzo.clone();
 
     // Build and run the server
-    let mut app = MistralRsServerRouterBuilder::new()
-        .with_mistralrs(hanzo)
+    let mut app = HanzoServerRouterBuilder::new()
+        .with_hanzo(hanzo)
         .with_max_tool_rounds_optional(server.max_tool_rounds)
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
         .with_agent_permission(runtime.code_exec_permission.into())
@@ -140,7 +140,7 @@ pub async fn run_server(
             }
         };
         let ui_router = build_ui_router(
-            mistralrs_for_ui,
+            hanzo_for_ui,
             runtime.enable_search,
             runtime.search_embedding_model.map(|m| m.into()),
             enable_code_execution,
