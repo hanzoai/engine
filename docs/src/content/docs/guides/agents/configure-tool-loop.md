@@ -10,7 +10,7 @@ The server-side tool loop runs whenever the model invokes a tool during a reques
 ## Maximum tool rounds
 
 ```bash
-mistralrs serve --max-tool-rounds 10 -m <model>
+hanzo serve --max-tool-rounds 10 -m <model>
 ```
 
 `--max-tool-rounds` caps rounds before the server forces a final response. The flag is unset by default; the loop's internal fallback cap is 256.
@@ -20,7 +20,7 @@ mistralrs serve --max-tool-rounds 10 -m <model>
 `--tool-dispatch-url` POSTs each tool call to an external URL instead of running it in-process.
 
 ```bash
-mistralrs serve --tool-dispatch-url http://localhost:7070/tools -m <model>
+hanzo serve --tool-dispatch-url http://localhost:7070/tools -m <model>
 ```
 
 Request body sent to the dispatch URL:
@@ -28,7 +28,7 @@ Request body sent to the dispatch URL:
 ```json
 {
   "name": "search",
-  "arguments": { "query": "mistralrs" }
+  "arguments": { "query": "hanzo" }
 }
 ```
 

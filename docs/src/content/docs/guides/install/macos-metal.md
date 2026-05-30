@@ -29,7 +29,7 @@ The standard combination on Apple Silicon is `metal accelerate`. Metal is the GP
 From crates.io:
 
 ```bash
-cargo install mistralrs-cli --features "metal accelerate"
+cargo install hanzo-cli --features "metal accelerate"
 ```
 
 From source:
@@ -37,7 +37,7 @@ From source:
 ```bash
 git clone https://github.com/EricLBuehler/mistral.rs.git
 cd mistral.rs
-cargo install --path mistralrs-cli --features "metal accelerate"
+cargo install --path hanzo-cli --features "metal accelerate"
 ```
 
 For Intel Macs, omit Metal and use `accelerate`, or use `mkl` if Intel's MKL is installed.
@@ -47,7 +47,7 @@ For Intel Macs, omit Metal and use `accelerate`, or use `mkl` if Intel's MKL is 
 Apple Silicon uses unified memory; the GPU and CPU share physical RAM. Implications:
 
 - No separate VRAM budget. A model that fits in RAM fits on the GPU.
-- `mistralrs doctor` reports total system memory rather than separate GPU memory.
+- `hanzo doctor` reports total system memory rather than separate GPU memory.
 - Default paged attention block sizes are tuned for dedicated VRAM. See the [paged attention guide](/mistral.rs/guides/perf/use-paged-attention/) for tuning on unified memory.
 
 Total RAM caps model size. A 32 GB machine fits models up to ~20B parameters at 4-bit with moderate context. A 64 GB machine fits 70B-class models at 4-bit.
@@ -61,7 +61,7 @@ Existing GGUF files load and run directly. AFQ performance benefits require re-q
 ## Verifying the install
 
 ```bash
-mistralrs doctor
+hanzo doctor
 ```
 
 The output includes a `[INFO] Build features: ...` line listing `metal` (and `accelerate` if compiled in). If `metal` is missing, rebuild with `--features "metal accelerate"`.

@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-The built-in web UI is mounted at `/ui` by default whenever you run `mistralrs serve`. Use cases:
+The built-in web UI is mounted at `/ui` by default whenever you run `hanzo serve`. Use cases:
 
 - Sanity-checking a newly loaded model.
 - Demonstrating tool calling and code execution without explaining the response envelope.
@@ -16,7 +16,7 @@ The UI is a single-page app bundled into the binary. Nothing is fetched from the
 ## Basic usage
 
 ```bash
-mistralrs serve -m Qwen/Qwen3-4B
+hanzo serve -m Qwen/Qwen3-4B
 ```
 
 Open `http://localhost:1234/ui`. The UI provides:
@@ -31,7 +31,7 @@ Open `http://localhost:1234/ui`. The UI provides:
 ## With agents enabled
 
 ```bash
-mistralrs serve --agent -m Qwen/Qwen3-4B
+hanzo serve --agent -m Qwen/Qwen3-4B
 ```
 
 (`--agent` is a shorthand for `--enable-search --enable-code-execution`. To turn the pieces on individually, use the two flags directly.)
@@ -56,4 +56,4 @@ Clearing browser local storage for the site resets all UI state.
 
 ## Disabling the UI
 
-Pass `--no-ui` to `mistralrs serve` to skip mounting the UI router. The HTTP API continues to serve normally.
+Pass `--no-ui` to `hanzo serve` to skip mounting the UI router. The HTTP API continues to serve normally.

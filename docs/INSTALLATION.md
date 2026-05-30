@@ -33,7 +33,7 @@ irm https://raw.githubusercontent.com/hanzoai/engine/main/install.ps1 | iex
 
 4. (Optional) Set up HuggingFace authentication:
    ```bash
-   mistralrs login
+   hanzo login
    ```
    Or use `huggingface-cli login` as documented [here](https://huggingface.co/docs/huggingface_hub/en/installation).
 
@@ -65,12 +65,12 @@ Determine which features to enable based on your hardware:
 ## Install from crates.io
 
 ```bash
-cargo install mistralrs-cli --features "<your-features>"
+cargo install hanzo-cli --features "<your-features>"
 ```
 
 Example:
 ```bash
-cargo install mistralrs-cli --features "cuda flash-attn cudnn"
+cargo install hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 ## Build from Source
@@ -78,7 +78,7 @@ cargo install mistralrs-cli --features "cuda flash-attn cudnn"
 ```bash
 git clone https://github.com/hanzoai/engine.git
 cd engine
-cargo install --path mistralrs-cli --features "<your-features>"
+cargo install --path hanzo-cli --features "<your-features>"
 ```
 
 Example:
@@ -108,7 +108,7 @@ Install the Python package:
 pip install mistralrs-cuda    # For NVIDIA GPUs
 pip install mistralrs-metal   # For Apple Silicon
 pip install mistralrs-mkl     # For Intel CPUs
-pip install mistralrs         # CPU-only
+pip install hanzo         # CPU-only
 ```
 
 - [Full installation instructions](PYTHON_INSTALLATION.md)
@@ -120,13 +120,13 @@ After installation, verify everything works:
 
 ```bash
 # Check CLI is installed
-mistralrs --help
+hanzo --help
 
 # Run system diagnostics
-mistralrs doctor
+hanzo doctor
 
 # Test with a small model
-mistralrs run -m Qwen/Qwen3-0.6B
+hanzo run -m Qwen/Qwen3-0.6B
 ```
 
 ## Getting Models
@@ -136,13 +136,13 @@ mistralrs run -m Qwen/Qwen3-0.6B
 Models download automatically from Hugging Face Hub:
 
 ```bash
-mistralrs run -m meta-llama/Llama-3.2-3B-Instruct
+hanzo run -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
 For gated models, authenticate first:
 ```bash
-mistralrs login
-# Or: mistralrs run --token-source env:HF_TOKEN -m <model>
+hanzo login
+# Or: hanzo run --token-source env:HF_TOKEN -m <model>
 ```
 
 ### From Local Files
@@ -150,18 +150,18 @@ mistralrs login
 Pass a path to a downloaded model:
 
 ```bash
-mistralrs run -m /path/to/model
+hanzo run -m /path/to/model
 ```
 
 ### Running GGUF Models
 
 ```bash
-mistralrs run --format gguf -m author/model-repo -f model-quant.gguf
+hanzo run --format gguf -m author/model-repo -f model-quant.gguf
 ```
 
 Specify tokenizer if needed:
 ```bash
-mistralrs run --format gguf -m author/model-repo -f file.gguf -t author/official-tokenizer
+hanzo run --format gguf -m author/model-repo -f file.gguf -t author/official-tokenizer
 ```
 
 ## Next Steps

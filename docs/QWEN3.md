@@ -5,8 +5,8 @@ The Qwen 3 family is a collection of hybrid reasoning MoE and non-MoE models ran
 ## Quick Start
 
 ```bash
-mistralrs run --isq 4 -m Qwen/Qwen3-8B
-mistralrs run --isq 4 -m Qwen/Qwen3-30B-A3B
+hanzo run --isq 4 -m Qwen/Qwen3-8B
+hanzo run --isq 4 -m Qwen/Qwen3-30B-A3B
 ```
 
 > Note: Hanzo Engine can load all [FP8 pre-quantized versions](https://huggingface.co/Qwen/Qwen3-14B-FP8) natively! Simply replace the model ID.
@@ -20,7 +20,7 @@ The Qwen 3 models are hybrid reasoning models which can be controlled at inferen
 You can find a more detailed example demonstrating enabling/disabling thinking [here](https://github.com/hanzoai/engine/blob/main/examples/server/qwen3.py).
 
 ```bash
-mistralrs serve --isq 4 -p 1234 -m Qwen/Qwen3-8B
+hanzo serve --isq 4 -p 1234 -m Qwen/Qwen3-8B
 ```
 
 ```py
@@ -42,7 +42,7 @@ print(completion.choices[0].message.content)
 You can find a more detailed example demonstrating enabling/disabling thinking [here](https://github.com/hanzoai/engine/blob/main/examples/python/qwen3.py).
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from hanzo import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.Plain(
@@ -73,7 +73,7 @@ You can find a more detailed example demonstrating enabling/disabling thinking [
 
 ```rust
 use anyhow::Result;
-use mistralrs::{
+use hanzo::{
     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
 };
 

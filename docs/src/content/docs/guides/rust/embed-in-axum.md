@@ -1,11 +1,11 @@
 ---
-title: Embed mistralrs inside an Axum application
+title: Embed hanzo inside an Axum application
 description: Mount the HTTP API inside an existing Axum router.
 sidebar:
   order: 2
 ---
 
-To add mistral.rs to an existing Axum app, mount the mistralrs router under a sub-path. The pattern uses two builders from `mistralrs-server-core`:
+To add mistral.rs to an existing Axum app, mount the hanzo router under a sub-path. The pattern uses two builders from `hanzo-server-core`:
 
 - `MistralRsForServerBuilder` constructs the engine state (`SharedMistralRsState = Arc<MistralRs>`).
 - `MistralRsServerRouterBuilder` produces an Axum `Router` from that state.
@@ -14,9 +14,9 @@ To add mistral.rs to an existing Axum app, mount the mistralrs router under a su
 
 ```toml
 [dependencies]
-mistralrs = "0.8"
-mistralrs-core = "0.8"
-mistralrs-server-core = "0.8"
+hanzo = "0.8"
+hanzo-engine = "0.8"
+hanzo-server-core = "0.8"
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 ```
@@ -25,10 +25,10 @@ tokio = { version = "1", features = ["full"] }
 
 ```rust
 use axum::{Router, routing::get};
-use mistralrs_core::{AutoDeviceMapParams, ModelDType, ModelSelected};
-use mistralrs_server_core::{
+use hanzo_engine::{AutoDeviceMapParams, ModelDType, ModelSelected};
+use hanzo_server_core::{
     mistralrs_for_server_builder::MistralRsForServerBuilder,
-    mistralrs_server_router_builder::MistralRsServerRouterBuilder,
+    hanzo_server_router_builder::MistralRsServerRouterBuilder,
 };
 
 #[tokio::main]
@@ -89,6 +89,6 @@ async fn main() -> anyhow::Result<()> {
 
 ## Calling the model directly from a handler
 
-For custom request shapes, share the `SharedMistralRsState` directly with Axum handlers and use the lower-level helpers exposed by `mistralrs-server-core`.
+For custom request shapes, share the `SharedMistralRsState` directly with Axum handlers and use the lower-level helpers exposed by `hanzo-server-core`.
 
-A complete example (with custom OpenAPI integration) is in the `mistralrs-server-core` crate-level documentation.
+A complete example (with custom OpenAPI integration) is in the `hanzo-server-core` crate-level documentation.

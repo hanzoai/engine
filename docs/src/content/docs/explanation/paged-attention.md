@@ -1,6 +1,6 @@
 ---
 title: PagedAttention
-description: Block-based KV caching in mistralrs.
+description: Block-based KV caching in hanzo.
 sidebar:
   order: 5
 ---
