@@ -44,6 +44,7 @@ cuda = [
 ]
 nccl = ["cuda", "candle-core/nccl"]
 rocm = ["candle-core/rocm", "candle-nn/rocm"]
+vulkan = ["candle-core/vulkan", "candle-nn/vulkan"]
 metal = [
     "candle-core/metal",
     "candle-nn/metal",
