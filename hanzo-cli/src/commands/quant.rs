@@ -10,7 +10,7 @@ use hanzo_engine::{
     AutoTuneRequest, ModelSelected, TokenSource, TuneProfile,
 };
 
-const UQFF_REPO_ORG: &str = "mistralrs-community";
+const UQFF_REPO_ORG: &str = "hanzo-community";
 const UQFF_REPO_SUFFIX: &str = "-UQFF";
 
 #[derive(Default, Debug, Clone)]

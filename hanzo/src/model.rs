@@ -57,7 +57,7 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
 /// [`AnyMoeModelBuilder`]: crate::AnyMoeModelBuilder
 ///
 pub struct Model {
-    pub(crate) runner: Arc<MistralRs>,
+    pub(crate) runner: Arc<Hanzo>,
 }
 
 /// Token-by-token stream returned by [`Model::stream_chat_request`].
@@ -90,9 +90,9 @@ impl futures::Stream for Stream<'_> {
 }
 
 impl Model {
-    /// Wrap an existing [`MistralRs`] engine instance.
+    /// Wrap an existing [`Hanzo`] engine instance.
     /// Prefer using a builder (e.g., [`ModelBuilder`](crate::ModelBuilder)) instead.
-    pub fn new(runner: Arc<MistralRs>) -> Self {
+    pub fn new(runner: Arc<Hanzo>) -> Self {
         Self { runner }
     }
 
@@ -791,7 +791,7 @@ impl Model {
     // ========================================================================
 
     /// Retrieve some information about this model.
-    pub fn config(&self) -> crate::error::Result<MistralRsConfig> {
+    pub fn config(&self) -> crate::error::Result<HanzoConfig> {
         self.config_with_model(None)
     }
 
@@ -800,7 +800,7 @@ impl Model {
     pub fn config_with_model(
         &self,
         model_id: Option<&str>,
-    ) -> crate::error::Result<MistralRsConfig> {
+    ) -> crate::error::Result<HanzoConfig> {
         self.runner
             .config(model_id)
             .map_err(|e| SdkError::Inference(e.into()))
@@ -886,8 +886,8 @@ impl Model {
         Ok(self.runner.list_models_with_status()?)
     }
 
-    /// Get the underlying MistralRs instance.
-    pub fn inner(&self) -> &MistralRs {
+    /// Get the underlying Hanzo instance.
+    pub fn inner(&self) -> &Hanzo {
         &self.runner
     }
 
@@ -947,6 +947,6 @@ impl Model {
     ) -> crate::error::Result<Vec<(String, Option<String>)>> {
         self.runner
             .list_mcp_tools(model_id)
-            .map_err(|e| crate::error::Error::from(hanzo_engine::MistralRsError::Other(e)))
+            .map_err(|e| crate::error::Error::from(hanzo_engine::HanzoError::Other(e)))
     }
 }

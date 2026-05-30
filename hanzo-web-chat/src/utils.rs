@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 /// Determine the base cache directory for the application.
-/// Uses XDG_CACHE_HOME or falls back to ~/.cache/mistralrs-web-chat.
+/// Uses XDG_CACHE_HOME or falls back to ~/.cache/hanzo-web-chat.
 pub fn get_cache_dir() -> PathBuf {
     // XDG_CACHE_HOME or default to ~/.cache
     let cache_home = std::env::var("XDG_CACHE_HOME")
@@ -11,5 +11,5 @@ pub fn get_cache_dir() -> PathBuf {
                 .map(|h| PathBuf::from(h).join(".cache"))
                 .unwrap_or_else(|_| PathBuf::from(".cache"))
         });
-    cache_home.join("mistralrs-web-chat")
+    cache_home.join("hanzo-web-chat")
 }

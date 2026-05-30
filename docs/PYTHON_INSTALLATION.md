@@ -7,17 +7,17 @@ Pre-built wheels are available for common platforms. Choose the package that mat
 | Hardware | Install Command |
 |----------|----------------|
 | **Recommended (auto-optimized)** | `pip install hanzo` |
-| NVIDIA GPUs (CUDA) | `pip install mistralrs-cuda` |
-| Apple Silicon (Metal) | `pip install mistralrs-metal` |
-| Apple Accelerate | `pip install mistralrs-accelerate` |
-| Intel CPUs (MKL) | `pip install mistralrs-mkl` |
+| NVIDIA GPUs (CUDA) | `pip install hanzo-cuda` |
+| Apple Silicon (Metal) | `pip install hanzo-metal` |
+| Apple Accelerate | `pip install hanzo-accelerate` |
+| Intel CPUs (MKL) | `pip install hanzo-mkl` |
 
 ### Platform-Specific Optimizations
 
 The `hanzo` base package includes platform-specific optimizations:
 - **macOS Apple Silicon**: Metal GPU support built-in
 - **Linux/Windows x86_64**: Intel MKL optimizations built-in
-- **Linux aarch64**: CPU-only (use `mistralrs-cuda` for GPU support)
+- **Linux aarch64**: CPU-only (use `hanzo-cuda` for GPU support)
 
 All packages install the `hanzo` Python module. The package suffix controls which accelerator features are enabled.
 
@@ -26,10 +26,10 @@ All packages install the `hanzo` Python module. The package suffix controls whic
 | Package | Linux x86_64 | Linux aarch64 | Windows x86_64 | macOS aarch64 |
 |---------|:------------:|:-------------:|:--------------:|:-------------:|
 | hanzo | MKL | CPU | MKL | Metal |
-| mistralrs-cuda | CUDA | CUDA | CUDA | - |
-| mistralrs-metal | - | - | - | Metal |
-| mistralrs-accelerate | - | - | - | Accelerate |
-| mistralrs-mkl | MKL | - | MKL | - |
+| hanzo-cuda | CUDA | CUDA | CUDA | - |
+| hanzo-metal | - | - | - | Metal |
+| hanzo-accelerate | - | - | - | Accelerate |
+| hanzo-mkl | MKL | - | MKL | - |
 
 **Python version**: 3.10+ (wheels use abi3 for forward compatibility)
 
@@ -44,7 +44,7 @@ On Windows, additional runtime dependencies may be required:
 
 ```bash
 # Example: Install with CUDA support
-pip install mistralrs-cuda -v
+pip install hanzo-cuda -v
 ```
 
 ## Build from Source

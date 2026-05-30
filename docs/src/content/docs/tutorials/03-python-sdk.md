@@ -13,10 +13,10 @@ The Python package ships as one wheel per accelerator. Install the one matching 
 
 ```bash
 pip install hanzo             # CPU, or Intel CPU with MKL
-pip install mistralrs-cuda        # NVIDIA GPUs
-pip install mistralrs-metal       # Apple Silicon
-pip install mistralrs-mkl         # Intel CPU, MKL wheel with symbols pinned
-pip install mistralrs-accelerate  # macOS, Accelerate framework
+pip install hanzo-cuda        # NVIDIA GPUs
+pip install hanzo-metal       # Apple Silicon
+pip install hanzo-mkl         # Intel CPU, MKL wheel with symbols pinned
+pip install hanzo-accelerate  # macOS, Accelerate framework
 ```
 
 Install only one. All wheels expose the same `from hanzo import ...` API; they differ only in the compiled backend.

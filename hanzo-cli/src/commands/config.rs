@@ -5,8 +5,8 @@ use tracing::info;
 
 use hanzo_engine::initialize_logging;
 use hanzo_server_core::{
-    mistralrs_for_server_builder::{MistralRsForServerBuilder, ModelConfig},
-    hanzo_server_router_builder::MistralRsServerRouterBuilder,
+    hanzo_for_server_builder::{HanzoForServerBuilder, ModelConfig},
+    hanzo_server_router_builder::HanzoServerRouterBuilder,
 };
 
 use crate::args::{MatformerSelection, RuntimeOptions};
@@ -59,7 +59,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
 
     let (model_configs, cpu) = build_model_configs(&models, &runtime, &global.token_source).await?;
 
-    let mut builder = MistralRsForServerBuilder::new()
+    let mut builder = HanzoForServerBuilder::new()
         .with_max_seqs(runtime.max_seqs)
         .with_no_kv_cache(runtime.no_kv_cache)
         .with_token_source(global.token_source)
@@ -115,10 +115,10 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
     let _ = sandbox_policy;
 
     let hanzo = builder.build().await?;
-    let mistralrs_for_ui = hanzo.clone();
+    let hanzo_for_ui = hanzo.clone();
 
-    let mut app = MistralRsServerRouterBuilder::new()
-        .with_mistralrs(hanzo)
+    let mut app = HanzoServerRouterBuilder::new()
+        .with_hanzo(hanzo)
         .with_max_tool_rounds_optional(server.max_tool_rounds)
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
         .build()
@@ -136,7 +136,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
             }
         };
         let ui_router = build_ui_router(
-            mistralrs_for_ui,
+            hanzo_for_ui,
             runtime.enable_search,
             runtime.search_embedding_model.map(|m| m.into()),
             enable_code_execution,
@@ -183,7 +183,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
 
     let (model_configs, cpu) = build_model_configs(&models, &runtime, &global.token_source).await?;
 
-    let mut builder = MistralRsForServerBuilder::new()
+    let mut builder = HanzoForServerBuilder::new()
         .with_max_seqs(runtime.max_seqs)
         .with_no_kv_cache(runtime.no_kv_cache)
         .with_token_source(global.token_source)

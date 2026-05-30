@@ -167,7 +167,7 @@ async fn decode_video_ffmpeg(
     }
 
     // Write to temp file
-    let tmp_dir = std::env::temp_dir().join("mistralrs_video");
+    let tmp_dir = std::env::temp_dir().join("hanzo_video");
     fs::create_dir_all(&tmp_dir).await?;
     let video_id = uuid::Uuid::new_v4();
     let input_path = tmp_dir.join(format!("{video_id}.video"));

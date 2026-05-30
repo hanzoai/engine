@@ -12,7 +12,7 @@ With tools enabled, the engine runs the tool and continues the request without r
 The loop runs only when the model emits a tool call. The server advertises tools to the model in any of these cases:
 
 - `--enable-search` is on (advertises the web search tool).
-- `--enable-code-execution` is on and the request sets `enable_code_execution: true` (advertises the `mistralrs_execute_python` tool).
+- `--enable-code-execution` is on and the request sets `enable_code_execution: true` (advertises the `hanzo_execute_python` tool).
 - A registered tool callback exists (Rust/Python SDK `tool_callbacks` or MCP client tools).
 - `--tool-dispatch-url` is set.
 

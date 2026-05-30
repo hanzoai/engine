@@ -30,11 +30,11 @@
 //!         ChatCompletionOnChunkCallback, ChatCompletionOnDoneCallback, ChatCompletionResponder,
 //!     },
 //!     handler_core::{create_response_channel, send_request},
-//!     mistralrs_for_server_builder::MistralRsForServerBuilder,
-//!     hanzo_server_router_builder::MistralRsServerRouterBuilder,
+//!     hanzo_for_server_builder::HanzoForServerBuilder,
+//!     hanzo_server_router_builder::HanzoServerRouterBuilder,
 //!     openai::ChatCompletionRequest,
 //!     openapi_doc::get_openapi_doc,
-//!     types::SharedMistralRsState,
+//!     types::SharedHanzoState,
 //! };
 //!
 //! #[derive(OpenApi)]
@@ -53,7 +53,7 @@
 //!
 //! #[derive(Clone)]
 //! pub struct AppState {
-//!     pub mistralrs_state: SharedMistralRsState,
+//!     pub hanzo_state: SharedHanzoState,
 //!     pub db_create: fn(),
 //! }
 //!
@@ -96,7 +96,7 @@
 //!         matformer_slice_name,
 //!     };
 //!
-//!     let shared_mistralrs = MistralRsForServerBuilder::new()
+//!     let shared_hanzo = HanzoForServerBuilder::new()
 //!         .with_model(model)
 //!         .with_in_situ_quant("8".to_string())
 //!         .set_paged_attn(Some(true))
@@ -104,22 +104,22 @@
 //!         .await
 //!         .unwrap();
 //!
-//!     let mistralrs_base_path = "/api/mistral";
+//!     let hanzo_base_path = "/api/mistral";
 //!
-//!     let mistralrs_routes = MistralRsServerRouterBuilder::new()
-//!         .with_mistralrs(shared_mistralrs.clone())
+//!     let hanzo_routes = HanzoServerRouterBuilder::new()
+//!         .with_hanzo(shared_hanzo.clone())
 //!         .with_include_swagger_routes(false)
-//!         .with_base_path(mistralrs_base_path)
+//!         .with_base_path(hanzo_base_path)
 //!         .build()
 //!         .await
 //!         .unwrap();
 //!
-//!     let mistralrs_doc = get_openapi_doc(Some(mistralrs_base_path));
+//!     let hanzo_doc = get_openapi_doc(Some(hanzo_base_path));
 //!     let mut api_docs = ApiDoc::openapi();
-//!     api_docs.merge(mistralrs_doc);
+//!     api_docs.merge(hanzo_doc);
 //!
 //!     let app_state = Arc::new(AppState {
-//!         mistralrs_state: shared_mistralrs,
+//!         hanzo_state: shared_hanzo,
 //!         db_create: mock_db_call,
 //!     });
 //!
@@ -127,7 +127,7 @@
 //!         .route("/", get(root))
 //!         .route("/chat", post(custom_chat))
 //!         .with_state(app_state.clone())
-//!         .nest(mistralrs_base_path, mistralrs_routes)
+//!         .nest(hanzo_base_path, hanzo_routes)
 //!         .merge(SwaggerUi::new("/api-docs").url("/api-docs/openapi.json", api_docs));
 //!
 //!     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -159,19 +159,19 @@
 //!     State(state): State<Arc<AppState>>,
 //!     Json(oai_request): Json<ChatCompletionRequest>,
 //! ) -> ChatCompletionResponder {
-//!     let mistralrs_state = state.mistralrs_state.clone();
+//!     let hanzo_state = state.hanzo_state.clone();
 //!     let (tx, mut rx) = create_response_channel(None);
 //!
 //!     let (request, is_streaming) =
-//!         match parse_request(oai_request, mistralrs_state.clone(), tx, None, None, None).await {
+//!         match parse_request(oai_request, hanzo_state.clone(), tx, None, None, None).await {
 //!             Ok(x) => x,
-//!             Err(e) => return handle_error(mistralrs_state, e.into()),
+//!             Err(e) => return handle_error(hanzo_state, e.into()),
 //!         };
 //!
 //!     dbg!(request.clone());
 //!
-//!     if let Err(e) = send_request(&mistralrs_state, request).await {
-//!         return handle_error(mistralrs_state, e.into());
+//!     if let Err(e) = send_request(&hanzo_state, request).await {
+//!         return handle_error(hanzo_state, e.into());
 //!     }
 //!
 //!     if is_streaming {
@@ -194,11 +194,11 @@
 //!                 (db_fn)();
 //!             });
 //!
-//!         let streamer = create_streamer(rx, mistralrs_state.clone(), Some(on_chunk), Some(on_done));
+//!         let streamer = create_streamer(rx, hanzo_state.clone(), Some(on_chunk), Some(on_done));
 //!
 //!         ChatCompletionResponder::Sse(streamer)
 //!     } else {
-//!         let response = process_non_streaming_response(&mut rx, mistralrs_state.clone()).await;
+//!         let response = process_non_streaming_response(&mut rx, hanzo_state.clone()).await;
 //!
 //!         match &response {
 //!             ChatCompletionResponder::Json(json_response) => {
@@ -231,7 +231,7 @@ pub mod files;
 pub mod handler_core;
 mod handlers;
 pub mod image_generation;
-pub mod mistralrs_for_server_builder;
+pub mod hanzo_for_server_builder;
 pub mod hanzo_server_router_builder;
 pub mod model_registry;
 pub mod openai;

@@ -187,4 +187,4 @@ Long-form SDK examples live in the repository so they can stay checked against t
 
 - Python: [`examples/python/`](https://github.com/EricLBuehler/mistral.rs/tree/master/examples/python)
 - HTTP/OpenAI clients: [`examples/server/`](https://github.com/EricLBuehler/mistral.rs/tree/master/examples/server)
-- Rust multimodal models: [`hanzo/examples/models/multimodal_models/main.rs`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs)
+- Rust multimodal models: [`hanzo/examples/models/multimodal_models/main.rs`](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/models/multimodal_models/main.rs)
