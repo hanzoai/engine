@@ -910,7 +910,7 @@ mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x,
   reinterpret_cast<half &>(y[ib].ds.y) = (half)sum;
 }
 
-// Host-side launchers used by `mistralrs-quant/src/gguf/ffi.rs`.
+// Host-side launchers used by `hanzo-quant/src/gguf/ffi.rs`.
 
 #define MMVQ_LAUNCHER_PLAIN(tag, dst_tag, dst_c_type)                          \
   extern "C" void launch_mmvq_gguf_##tag##_##dst_tag##_plain(                  \

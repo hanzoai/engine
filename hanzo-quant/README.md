@@ -1,4 +1,4 @@
-# `mistralrs-quant`
+# `hanzo-quant`
 
 An advanced and highly diverse set of quantization techniques. This crate supports both quantization and optimized inference.
 
