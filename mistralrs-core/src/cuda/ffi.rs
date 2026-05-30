@@ -20,7 +20,7 @@ extern "C" {
     );
     pub(crate) fn asort_asc_bf16(
         x: *const c_void,
-        dst: *const c_void,
+        dst: *mut c_void,
         nrows: i32,
         ncols: i32,
         inplace: bool,
