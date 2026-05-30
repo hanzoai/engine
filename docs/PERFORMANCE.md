@@ -2,19 +2,19 @@
 
 This guide helps you choose the right performance settings for your hardware and workload. Each section gives you the key decision, then links to the detailed reference page.
 
-> Don't want to read all this? Run `mistralrs tune -m <model>` and it will recommend the best configuration for your hardware automatically.
+> Don't want to read all this? Run `hanzo tune -m <model>` and it will recommend the best configuration for your hardware automatically.
 
 ## Quick Recommendations
 
 | Hardware | Suggested command |
 |---|---|
-| NVIDIA GPU (16+ GB VRAM) | `mistralrs serve --isq 4 -m <model>` |
-| NVIDIA GPU (8 GB VRAM) | `mistralrs serve --isq 4 -m <7B-model>` |
-| Apple Silicon (16+ GB RAM) | `mistralrs serve --isq 4 -m <model>` |
-| CPU only | `mistralrs serve --isq 4 --cpu -m <small-model>` |
-| Multi-GPU NVIDIA | `mistralrs serve -m <model>` (auto tensor parallelism) |
+| NVIDIA GPU (16+ GB VRAM) | `hanzo serve --isq 4 -m <model>` |
+| NVIDIA GPU (8 GB VRAM) | `hanzo serve --isq 4 -m <7B-model>` |
+| Apple Silicon (16+ GB RAM) | `hanzo serve --isq 4 -m <model>` |
+| CPU only | `hanzo serve --isq 4 --cpu -m <small-model>` |
+| Multi-GPU NVIDIA | `hanzo serve -m <model>` (auto tensor parallelism) |
 
-For precise recommendations, use `mistralrs tune -m <model>` which analyzes your available memory and model size.
+For precise recommendations, use `hanzo tune -m <model>` which analyzes your available memory and model size.
 
 ## The Performance Stack
 
@@ -58,7 +58,7 @@ To improve ISQ accuracy, use an importance matrix: `--calibration-file calibrati
 For Mixture of Experts models (DeepSeek V2/V3, Qwen3 MoE, Qwen3-VL MoE, GLM-4.7), [MoQE](https://arxiv.org/abs/2310.02410) quantizes only the expert layers while keeping attention and other layers at higher precision. This preserves more quality than uniform quantization since expert layers make up the bulk of parameters in MoE models.
 
 ```bash
-mistralrs run --isq 4 --isq-organization moqe -m deepseek-ai/DeepSeek-R1
+hanzo run --isq 4 --isq-organization moqe -m deepseek-ai/DeepSeek-R1
 ```
 
 MoQE is available in the CLI (`--isq-organization moqe`), Python SDK (`organization="MoQE"`), and Rust SDK. See [ISQ docs](ISQ.md#isq-quantization-types) for the full list of supported models.
@@ -78,19 +78,19 @@ PagedAttention manages KV cache memory efficiently, enabling longer contexts and
 
 ```bash
 # Allocate for a specific context length (recommended)
-mistralrs serve -m <model> --pa-context-len 8192
+hanzo serve -m <model> --pa-context-len 8192
 
 # Or set a fixed memory budget
-mistralrs serve -m <model> --pa-memory-mb 4096
+hanzo serve -m <model> --pa-memory-mb 4096
 
 # Or use a fraction of available VRAM
-mistralrs serve -m <model> --pa-memory-fraction 0.8
+hanzo serve -m <model> --pa-memory-fraction 0.8
 ```
 
 **FP8 KV cache quantization** halves KV cache memory, allowing ~2x longer contexts:
 
 ```bash
-mistralrs serve -m <model> --pa-cache-type f8e4m3
+hanzo serve -m <model> --pa-cache-type f8e4m3
 ```
 
 > Full reference: [PagedAttention](PAGED_ATTENTION.md)
@@ -129,16 +129,16 @@ mistral.rs auto-detects multiple CUDA GPUs and uses tensor parallelism via NCCL.
 
 ```bash
 # Uses all available GPUs automatically
-mistralrs serve -m <large-model>
+hanzo serve -m <large-model>
 
 # Or specify GPU count
-MISTRALRS_MN_LOCAL_WORLD_SIZE=2 mistralrs serve -m <large-model>
+MISTRALRS_MN_LOCAL_WORLD_SIZE=2 hanzo serve -m <large-model>
 ```
 
 If the model doesn't fit on GPUs even with parallelism, disable NCCL to use automatic device mapping (GPU + CPU offloading):
 
 ```bash
-MISTRALRS_NO_NCCL=1 mistralrs serve --isq 4 -m <large-model>
+MISTRALRS_NO_NCCL=1 hanzo serve --isq 4 -m <large-model>
 ```
 
 **Multiple machines:** Use the [Ring backend](DISTRIBUTED/RING.md) for cross-machine inference over TCP.
@@ -160,7 +160,7 @@ Speculative decoding uses a small "draft" model to propose tokens, which the lar
 
 ```bash
 # Configure via TOML
-mistralrs run --from-toml speculative.toml
+hanzo run --from-toml speculative.toml
 ```
 
 > Full reference: [Speculative Decoding](SPECULATIVE_DECODING.md)
@@ -170,7 +170,7 @@ mistralrs run --from-toml speculative.toml
 **Quick benchmark:**
 
 ```bash
-mistralrs bench -m <model> --isq 4
+hanzo bench -m <model> --isq 4
 ```
 
 This measures prefill speed (tokens/sec processing the prompt) and decode speed (tokens/sec generating output). Key metrics:
@@ -182,7 +182,7 @@ This measures prefill speed (tokens/sec processing the prompt) and decode speed 
 **Automated recommendations:**
 
 ```bash
-mistralrs tune -m <model>
+hanzo tune -m <model>
 ```
 
 Shows a table of quantization options ranked by fit, quality, and performance for your hardware. Use `--profile quality` or `--profile fast` to shift the ranking.

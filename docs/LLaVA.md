@@ -12,13 +12,13 @@ ISQ is supported for increased performance.
 ## Quick Start
 
 ```bash
-mistralrs run -m llava-hf/llava-v1.6-mistral-7b-hf --isq 4 --image photo.jpg -i "Describe this image"
+hanzo run -m llava-hf/llava-v1.6-mistral-7b-hf --isq 4 --image photo.jpg -i "Describe this image"
 ```
 
 For vicuna backend, specify the chat template:
 
 ```bash
-mistralrs run -m llava-hf/llava-v1.6-vicuna-7b-hf --isq 4 -c ./chat_templates/vicuna.json --image photo.jpg -i "Describe this image"
+hanzo run -m llava-hf/llava-v1.6-vicuna-7b-hf --isq 4 -c ./chat_templates/vicuna.json --image photo.jpg -i "Describe this image"
 ```
 
 ## Input Formats
@@ -33,7 +33,7 @@ The Rust SDK takes images from the [image](https://docs.rs/image/latest/image/in
 1) Start the server
 
 ```bash
-mistralrs serve -m llava-hf/llava-v1.6-mistral-7b-hf --isq 4 -p 1234
+hanzo serve -m llava-hf/llava-v1.6-mistral-7b-hf --isq 4 -p 1234
 ```
 
 2) Send a request
@@ -75,7 +75,7 @@ print(completion.choices[0].message.content)
 You can find this example [here](https://github.com/hanzoai/engine/blob/master/examples/python/llava_next.py).
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
     which=Which.MultimodalPlain(
@@ -120,7 +120,7 @@ You can find this example [here](https://github.com/hanzoai/engine/blob/master/m
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+use hanzo::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {

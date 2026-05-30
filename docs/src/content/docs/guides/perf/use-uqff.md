@@ -10,7 +10,7 @@ UQFF (Universal Quantized File Format) stores pre-quantized weights and loads di
 ## Using a UQFF model
 
 ```bash
-mistralrs run -m <repo> --from-uqff model.q4k-0.uqff
+hanzo run -m <repo> --from-uqff model.q4k-0.uqff
 ```
 
 `-m <repo>` is required for tokenizer/base resolution. `--from-uqff` accepts a numeric shorthand (`2`, `3`, `4`, `5`, `6`, `8`) or an ISQ type name (`q4k`, `afq8`, etc.).
@@ -24,7 +24,7 @@ For locally-stored UQFF files, `-m` can be the local directory and `--from-uqff`
 The `quantize` subcommand converts an unquantized model to UQFF:
 
 ```bash
-mistralrs quantize \
+hanzo quantize \
   -m google/gemma-4-E4B-it \
   --isq q4k \
   -o gemma-q4k.uqff

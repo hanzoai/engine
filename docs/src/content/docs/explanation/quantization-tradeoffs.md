@@ -1,6 +1,6 @@
 ---
 title: Quantization tradeoffs
-description: How mistralrs applies in-situ quantization and chooses formats per device.
+description: How hanzo applies in-situ quantization and chooses formats per device.
 sidebar:
   order: 4
 ---
@@ -65,7 +65,7 @@ Flash attention operates on activations, not weights, and composes with any ISQ 
 
 ## UQFF
 
-UQFF files are a serialized form of an ISQ-quantized model. `mistralrs quantize` runs ISQ and writes the result; `--from-uqff` loads that file without re-running the quantization step. Quality is identical at the same ISQ type; only load time differs.
+UQFF files are a serialized form of an ISQ-quantized model. `hanzo quantize` runs ISQ and writes the result; `--from-uqff` loads that file without re-running the quantization step. Quality is identical at the same ISQ type; only load time differs.
 
 ## See also
 

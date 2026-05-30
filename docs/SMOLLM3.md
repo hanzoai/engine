@@ -5,12 +5,12 @@ SmolLM3 is a 3B parameter long-context hybrid reasoning language model. It suppo
 ## Quick Start
 
 ```bash
-mistralrs run --isq 8 -m HuggingFaceTB/SmolLM3-3B
+hanzo run --isq 8 -m HuggingFaceTB/SmolLM3-3B
 ```
 
 **UQFF prequantized:**
 ```bash
-mistralrs run -m EricB/SmolLM3-3B-UQFF --from-uqff smollm33b-q4k-0.uqff
+hanzo run -m EricB/SmolLM3-3B-UQFF --from-uqff smollm33b-q4k-0.uqff
 ```
 
 > Note: tool calling support is fully implemented for the SmolLM3 models, including agentic web search.
@@ -24,7 +24,7 @@ The SmolLM3 models are hybrid reasoning models which can be controlled at infere
 You can find a more detailed example demonstrating enabling/disabling thinking [here](https://github.com/hanzoai/engine/blob/main/examples/server/smollm3.py).
 
 ```bash
-mistralrs serve --isq 8 -p 1234 -m HuggingFaceTB/SmolLM3-3B
+hanzo serve --isq 8 -p 1234 -m HuggingFaceTB/SmolLM3-3B
 ```
 
 ```py
@@ -46,7 +46,7 @@ print(completion.choices[0].message.content)
 You can find a more detailed example demonstrating enabling/disabling thinking [here](https://github.com/hanzoai/engine/blob/main/examples/python/smollm3.py).
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from hanzo import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.Plain(
@@ -77,7 +77,7 @@ You can find a more detailed example demonstrating enabling/disabling thinking [
 
 ```rust
 use anyhow::Result;
-use mistralrs::{
+use hanzo::{
     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
 };
 

@@ -6,7 +6,7 @@ Pre-built wheels are available for common platforms. Choose the package that mat
 
 | Hardware | Install Command |
 |----------|----------------|
-| **Recommended (auto-optimized)** | `pip install mistralrs` |
+| **Recommended (auto-optimized)** | `pip install hanzo` |
 | NVIDIA GPUs (CUDA) | `pip install mistralrs-cuda` |
 | Apple Silicon (Metal) | `pip install mistralrs-metal` |
 | Apple Accelerate | `pip install mistralrs-accelerate` |
@@ -14,18 +14,18 @@ Pre-built wheels are available for common platforms. Choose the package that mat
 
 ### Platform-Specific Optimizations
 
-The `mistralrs` base package includes platform-specific optimizations:
+The `hanzo` base package includes platform-specific optimizations:
 - **macOS Apple Silicon**: Metal GPU support built-in
 - **Linux/Windows x86_64**: Intel MKL optimizations built-in
 - **Linux aarch64**: CPU-only (use `mistralrs-cuda` for GPU support)
 
-All packages install the `mistralrs` Python module. The package suffix controls which accelerator features are enabled.
+All packages install the `hanzo` Python module. The package suffix controls which accelerator features are enabled.
 
 ### Supported Platforms
 
 | Package | Linux x86_64 | Linux aarch64 | Windows x86_64 | macOS aarch64 |
 |---------|:------------:|:-------------:|:--------------:|:-------------:|
-| mistralrs | MKL | CPU | MKL | Metal |
+| hanzo | MKL | CPU | MKL | Metal |
 | mistralrs-cuda | CUDA | CUDA | CUDA | - |
 | mistralrs-metal | - | - | - | Metal |
 | mistralrs-accelerate | - | - | - | Accelerate |
@@ -83,7 +83,7 @@ Building from source gives you access to the latest features and allows customiz
 1. **Clone the repository:**
    ```bash
    git clone https://github.com/hanzoai/engine.git
-   cd Hanzo Engine/mistralrs-pyo3
+   cd Hanzo Engine/hanzo-pyo3
    ```
 
 2. **Create and activate a virtual environment:**
@@ -123,13 +123,13 @@ maturin develop -r --features "cuda flash-attn cudnn"
 ## Verify Installation
 
 ```python
-import mistralrs
-print(mistralrs.__version__)
+import hanzo
+print(hanzo.__version__)
 ```
 
 Quick test:
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest
+from hanzo import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-0.6B"),

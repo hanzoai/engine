@@ -1,6 +1,6 @@
 ---
 title: Call a model from Rust
-description: Add mistralrs to a Cargo project, load a model in-process, and stream a response. About fifteen minutes.
+description: Add hanzo to a Cargo project, load a model in-process, and stream a response. About fifteen minutes.
 sidebar:
   order: 4
 ---
@@ -19,7 +19,7 @@ Add the dependencies to `Cargo.toml`:
 ```toml
 [dependencies]
 anyhow = "1"
-mistralrs = "0.8"
+hanzo = "0.8"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -27,13 +27,13 @@ The default features build for CPU. For GPU acceleration, enable the matching fe
 
 ```toml
 # NVIDIA GPU (CUDA)
-mistralrs = { version = "0.8", features = ["cuda", "flash-attn", "cudnn"] }
+hanzo = { version = "0.8", features = ["cuda", "flash-attn", "cudnn"] }
 
 # Apple Silicon (Metal)
-mistralrs = { version = "0.8", features = ["metal"] }
+hanzo = { version = "0.8", features = ["metal"] }
 
 # Intel CPU with MKL
-mistralrs = { version = "0.8", features = ["mkl"] }
+hanzo = { version = "0.8", features = ["mkl"] }
 ```
 
 Feature names match the CLI build features. The [cargo features reference](/mistral.rs/reference/cargo-features/) lists every option.
@@ -44,7 +44,7 @@ Replace `src/main.rs`:
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqBits, ModelBuilder, TextMessageRole, TextMessages};
+use hanzo::{IsqBits, ModelBuilder, TextMessageRole, TextMessages};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -83,7 +83,7 @@ The first run downloads Gemma 4 into the Hugging Face cache. The Gemma license m
 ```rust
 use anyhow::Result;
 use futures::StreamExt;
-use mistralrs::{
+use hanzo::{
     ChatCompletionChunkResponse, ChunkChoice, Delta, IsqBits, ModelBuilder, Response,
     TextMessageRole, TextMessages,
 };

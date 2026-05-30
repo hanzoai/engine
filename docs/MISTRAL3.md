@@ -5,7 +5,7 @@ The Mistral Small 3.1 model is a strong multimodal (text+vision) model with 128k
 ## Quick Start
 
 ```bash
-mistralrs run -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 --isq 4 --image photo.jpg -i "Describe this image"
+hanzo run -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 --isq 4 --image photo.jpg -i "Describe this image"
 ```
 
 ## Input Formats
@@ -21,7 +21,7 @@ The Mistral Small 3.1 model itself does not come with the correct JINJA chat tem
 tool calling with Mistral Small 3.1, and you can use it by specifying the `jinja_explicit` parameter in the various APIs. For example:
 
 ```bash
-mistralrs serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
+hanzo serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 ```
 
 ## HTTP API
@@ -29,7 +29,7 @@ mistralrs serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_to
 1) Start the server
 
 ```bash
-mistralrs serve -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 --isq 4 -p 1234
+hanzo serve -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 --isq 4 -p 1234
 ```
 
 2) Send a request
@@ -71,7 +71,7 @@ print(completion.choices[0].message.content)
 You can find this example [here](https://github.com/hanzoai/engine/blob/master/examples/python/mistral3.py).
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
     which=Which.MultimodalPlain(
@@ -117,7 +117,7 @@ You can find this example [here](https://github.com/hanzoai/engine/blob/master/m
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+use hanzo::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {

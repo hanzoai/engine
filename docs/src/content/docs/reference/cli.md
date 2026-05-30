@@ -1,26 +1,26 @@
 ---
 title: CLI reference
-description: Subcommands and flags of the mistralrs binary.
+description: Subcommands and flags of the hanzo binary.
 sidebar:
   order: 1
 ---
 
-This page documents what the binary actually exposes. For complete and current help, run `mistralrs --help` and `mistralrs <subcommand> --help`.
+This page documents what the binary actually exposes. For complete and current help, run `hanzo --help` and `hanzo <subcommand> --help`.
 
 ## Subcommands
 
 | Subcommand | Purpose |
 |---|---|
-| `mistralrs run` | Load a model and open an interactive chat (or one-shot with `-i`). |
-| `mistralrs serve` | Load a model and expose an OpenAI-compatible HTTP server. |
-| `mistralrs bench` | Benchmark a model. |
-| `mistralrs tune` | Recommend a quantization and device-mapping configuration. |
-| `mistralrs quantize` | Generate UQFF files from a model. |
-| `mistralrs from-config` | Load and run from a TOML configuration file. |
-| `mistralrs login` | Save a Hugging Face token to `~/.cache/huggingface/token`. |
-| `mistralrs doctor` | Report system, hardware, and build information. |
-| `mistralrs cache` | List or delete Hugging Face cache entries. |
-| `mistralrs completions` | Generate shell completions (bash, zsh, fish, elvish, powershell). |
+| `hanzo run` | Load a model and open an interactive chat (or one-shot with `-i`). |
+| `hanzo serve` | Load a model and expose an OpenAI-compatible HTTP server. |
+| `hanzo bench` | Benchmark a model. |
+| `hanzo tune` | Recommend a quantization and device-mapping configuration. |
+| `hanzo quantize` | Generate UQFF files from a model. |
+| `hanzo from-config` | Load and run from a TOML configuration file. |
+| `hanzo login` | Save a Hugging Face token to `~/.cache/huggingface/token`. |
+| `hanzo doctor` | Report system, hardware, and build information. |
+| `hanzo cache` | List or delete Hugging Face cache entries. |
+| `hanzo completions` | Generate shell completions (bash, zsh, fish, elvish, powershell). |
 
 ## Global flags
 
@@ -145,7 +145,7 @@ OS-level isolation applied to the code-execution subprocess. See [sandbox refere
 | `--max-num-images <n>` | Max images per request. |
 | `--max-image-length <px>` | Max image dimension for device mapping. |
 
-## `mistralrs serve` flags
+## `hanzo serve` flags
 
 | Flag | Default | Purpose |
 |---|---|---|
@@ -156,9 +156,9 @@ OS-level isolation applied to the code-execution subprocess. See [sandbox refere
 | `--max-tool-rounds <n>` | not set | Cap on agentic tool loop rounds. |
 | `--tool-dispatch-url <url>` | not set | External URL for tool execution. |
 
-CORS allowed origins and the request body limit (default 50 MB) are not exposed as CLI flags. They can be configured programmatically through `MistralRsServerRouterBuilder` in `mistralrs-server-core`.
+CORS allowed origins and the request body limit (default 50 MB) are not exposed as CLI flags. They can be configured programmatically through `MistralRsServerRouterBuilder` in `hanzo-server-core`.
 
-## `mistralrs run` flags
+## `hanzo run` flags
 
 | Flag | Purpose |
 |---|---|
@@ -168,7 +168,7 @@ CORS allowed origins and the request body limit (default 50 MB) are not exposed 
 | `--video <path>` | Attach video (repeatable, requires `-i`). |
 | `--thinking [bool]` | Control thinking mode for models that support it. |
 
-## `mistralrs bench` flags
+## `hanzo bench` flags
 
 | Flag | Default | Purpose |
 |---|---|---|
@@ -177,7 +177,7 @@ CORS allowed origins and the request body limit (default 50 MB) are not exposed 
 | `--iterations <n>` | 3 | Number of measured runs to average. |
 | `--warmup <n>` | 1 | Number of warmup runs (discarded). |
 
-## `mistralrs tune` flags
+## `hanzo tune` flags
 
 | Flag | Default | Purpose |
 |---|---|---|
@@ -185,7 +185,7 @@ CORS allowed origins and the request body limit (default 50 MB) are not exposed 
 | `--json` | off | Emit JSON instead of a human-readable table. |
 | `--emit-config <path>` | not set | Write the recommended settings as TOML. |
 
-## `mistralrs quantize` flags
+## `hanzo quantize` flags
 
 | Flag | Purpose |
 |---|---|
@@ -197,13 +197,13 @@ CORS allowed origins and the request body limit (default 50 MB) are not exposed 
 | `--isq-organization <org>` | `default` or `moqe`. |
 | `--imatrix <path>` / `--calibration-file <path>` | Quantization enhancement options. |
 
-## `mistralrs from-config` flags
+## `hanzo from-config` flags
 
 | Flag | Purpose |
 |---|---|
 | `-f`, `--file <path>` | TOML configuration file (required). |
 
-## `mistralrs login` flags
+## `hanzo login` flags
 
 | Flag | Purpose |
 |---|---|
@@ -211,16 +211,16 @@ CORS allowed origins and the request body limit (default 50 MB) are not exposed 
 
 Without `--token`, the command prompts interactively. The token is saved to `~/.cache/huggingface/token` (or `$HF_HOME/token` if set).
 
-## `mistralrs cache` subcommands
+## `hanzo cache` subcommands
 
 | Subcommand | Purpose |
 |---|---|
-| `mistralrs cache list` | List cached model entries. |
-| `mistralrs cache delete -m <id>` | Remove a cache entry. |
+| `hanzo cache list` | List cached model entries. |
+| `hanzo cache delete -m <id>` | Remove a cache entry. |
 
-## `mistralrs doctor` flags
+## `hanzo doctor` flags
 
-Run `mistralrs doctor` after installation or when GPU acceleration, build features, or Hugging Face connectivity look wrong.
+Run `hanzo doctor` after installation or when GPU acceleration, build features, or Hugging Face connectivity look wrong.
 
 | Flag | Purpose |
 |---|---|
@@ -232,7 +232,7 @@ Common ones:
 
 | Variable | Purpose |
 |---|---|
-| `RUST_LOG` | Override the `tracing` log filter (e.g. `mistralrs_core=debug,tower_http=info`). |
+| `RUST_LOG` | Override the `tracing` log filter (e.g. `hanzo_engine=debug,tower_http=info`). |
 | `HF_HOME` | Hugging Face cache root. |
 | `HF_TOKEN` | Override the cached token at runtime. |
 | `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` disables all network calls to the Hugging Face Hub; files are loaded from the local cache only. |

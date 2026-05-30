@@ -52,14 +52,14 @@ Hanzo Engine supports the following quantization:
 - Provide the GGUF file
 
 ```
-mistralrs run --format gguf -f my-gguf-file.gguf
+hanzo run --format gguf -f my-gguf-file.gguf
 ```
 
 ## Using ISQ
 See the [docs](ISQ.md)
 
 ```
-mistralrs run --isq 4 -m microsoft/Phi-3-mini-4k-instruct
+hanzo run --isq 4 -m microsoft/Phi-3-mini-4k-instruct
 ```
 
 ## Using a GPTQ quantized model
@@ -68,7 +68,7 @@ mistralrs run --isq 4 -m microsoft/Phi-3-mini-4k-instruct
 - The [Marlin](https://github.com/IST-DASLab/marlin) kernel will automatically be used for 4-bit and 8-bit.
 
 ```
-mistralrs run -m kaitchup/Phi-3-mini-4k-instruct-gptq-4bit
+hanzo run -m kaitchup/Phi-3-mini-4k-instruct-gptq-4bit
 ```
 
 You can create your own GPTQ model using [`scripts/convert_to_gptq.py`](https://github.com/hanzoai/engine/blob/master/scripts/convert_to_gptq.py):
@@ -84,7 +84,7 @@ python3 scripts/convert_to_gptq.py --src path/to/model --dst output/model/path -
 - Specialized kernels will be used to accelerate inference!
 
 ```
-mistralrs run -m mlx-community/Llama-3.8-1B-8bit
+hanzo run -m mlx-community/Llama-3.8-1B-8bit
 ```
 ## See Also
 

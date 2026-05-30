@@ -6,14 +6,14 @@ This file provides instructions for AI agents to understand the layout of the `m
 ## Repository Structure
 
 - `/mistralrs/`           : Main Rust crate (text & multimodal inference API)
-- `/mistralrs-core/`      : Core inference logic and tensor operations (text models)
-- `/mistralrs-vision/`    : Image processing utilities (resizing, preprocessing for multimodal models)
-- `/mistralrs-quant/`     : Quantization support (ISQ, GGUF, GPTQ, AWQ, FP8, HQQ, etc.)
-- `/mistralrs-paged-attn/`: PagedAttention implementation
-- `/mistralrs-pyo3/`      : Python bindings (PyO3)
-- `/mistralrs-cli/`       : Unified CLI binary (commands: run, serve, bench, from-config)
-- `/mistralrs-server-core/`: Shared server core logic
-- `/mistralrs-bench/`     : (Deprecated) Use `mistralrs bench` instead
+- `/hanzo-engine/`      : Core inference logic and tensor operations (text models)
+- `/hanzo-vision/`    : Image processing utilities (resizing, preprocessing for multimodal models)
+- `/hanzo-quant/`     : Quantization support (ISQ, GGUF, GPTQ, AWQ, FP8, HQQ, etc.)
+- `/hanzo-paged-attn/`: PagedAttention implementation
+- `/hanzo-pyo3/`      : Python bindings (PyO3)
+- `/hanzo-cli/`       : Unified CLI binary (commands: run, serve, bench, from-config)
+- `/hanzo-server-core/`: Shared server core logic
+- `/hanzo-bench/`     : (Deprecated) Use `hanzo bench` instead
 - `/docs/`             : Astro/Starlight documentation site (deployed to GitHub Pages)
 - `/examples/`            : Usage examples (Rust, Python, server samples, notebooks)
 - `/chat_templates/`      : Chat formatting templates (JSON/Jinja)
@@ -24,25 +24,25 @@ This file provides instructions for AI agents to understand the layout of the `m
 Mistral.rs supports multiple model types and advanced features via dedicated crates and CLI subcommands:
 
 - **Text Inference**
-  - Crate: `mistralrs-core` (low-level ops), `mistralrs` (API wrapper)
-  - CLI: `mistralrs run -m <model>` or `mistralrs serve -m <model>` (auto-detects model type)
+  - Crate: `hanzo-engine` (low-level ops), `hanzo` (API wrapper)
+  - CLI: `hanzo run -m <model>` or `hanzo serve -m <model>` (auto-detects model type)
   - Docs: `docs/src/content/docs/guides/customize/sampling.md`, `docs/src/content/docs/guides/agents/`
 - **Multimodal Models**
-  - Crate: `mistralrs-vision`
-  - CLI: `mistralrs run -m <model>` (auto-detects multimodal models)
+  - Crate: `hanzo-vision`
+  - CLI: `hanzo run -m <model>` (auto-detects multimodal models)
   - Docs: `docs/src/content/docs/explanation/multimodal-pipeline.md`, `docs/src/content/docs/reference/supported-models.md`
 - **Diffusion Models**
-  - CLI: `mistralrs run -m <model>` (auto-detects diffusion models)
+  - CLI: `hanzo run -m <model>` (auto-detects diffusion models)
   - Docs: `docs/src/content/docs/reference/supported-models.md`
 - **Speech Models**
-  - CLI: `mistralrs run -m <model>` (auto-detects speech models)
+  - CLI: `hanzo run -m <model>` (auto-detects speech models)
   - Docs: `docs/src/content/docs/reference/supported-models.md`
 - **Quantization & ISQ**
-  - Crate: `mistralrs-quant`
+  - Crate: `hanzo-quant`
   - Docs: `docs/src/content/docs/reference/quantization-types.md`, `docs/src/content/docs/explanation/quantization-tradeoffs.md`
   - Conversion Script: `scripts/convert_awq_marlin.py`
 - **Paged Attention**
-  - Crate: `mistralrs-paged-attn`
+  - Crate: `hanzo-paged-attn`
   - Docs: `docs/src/content/docs/explanation/paged-attention.md`, `docs/src/content/docs/guides/perf/use-paged-attention.md`
 - **Adapters & LoRA/X-LoRA**
   - Docs: `docs/src/content/docs/guides/customize/lora-adapters.md`
@@ -59,8 +59,8 @@ Mistral.rs supports multiple model types and advanced features via dedicated cra
    ```
 4. Or build/install only the CLI binary:
    ```bash
-   cargo build --release --package mistralrs-cli --features "<features>"
-   cargo install --path mistralrs-cli --features "<features>"
+   cargo build --release --package hanzo-cli --features "<features>"
+   cargo install --path hanzo-cli --features "<features>"
    ```
 
 ## Models
@@ -74,7 +74,7 @@ You should also look for a model.safetensors.index.json file for the model at ha
 - Core test suite (requires HF token for some tests):
   ```bash
   export HF_TOKEN=<your_token>  # or TESTS_HF_TOKEN for CI parity
-  cargo test -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
+  cargo test -p hanzo-engine -p hanzo-quant -p hanzo-vision
   ```
 - Run all tests across workspace (may skip some crates without tests):
   ```bash
@@ -108,7 +108,7 @@ Avoid returning TODOs.
 
 ## Examples
 
-- Rust examples: `mistralrs/examples/`
+- Rust examples: `hanzo/examples/`
 - Python examples: `examples/python/`
 - Server samples: `examples/server/`
 - Run Python scripts:
@@ -117,9 +117,9 @@ Avoid returning TODOs.
   ```
 - Run CLI:
   ```bash
-  mistralrs run -m <model>        # Interactive mode
-  mistralrs serve -p 1234 -m <model>  # Server mode
-  mistralrs bench -m <model>      # Benchmarking
+  hanzo run -m <model>        # Interactive mode
+  hanzo serve -p 1234 -m <model>  # Server mode
+  hanzo bench -m <model>      # Benchmarking
   ```
 
 ## CI Parity

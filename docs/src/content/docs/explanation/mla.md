@@ -1,6 +1,6 @@
 ---
 title: Multi-head Latent Attention
-description: How mistralrs handles MLA, including the optimized decode path and opt-out.
+description: How hanzo handles MLA, including the optimized decode path and opt-out.
 sidebar:
   order: 6
 ---
@@ -13,7 +13,7 @@ The KV cache stores the latent vector rather than full K and V. A projection ste
 
 ## Optimized decode path
 
-On CUDA (Unix), mistralrs uses a specialized MLA decode kernel when all of the following hold:
+On CUDA (Unix), hanzo uses a specialized MLA decode kernel when all of the following hold:
 
 - `MISTRALRS_NO_MLA` is not set to `"1"`.
 - The attention mask is empty (single-token decode: prefill falls back to the generic path).

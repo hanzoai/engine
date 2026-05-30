@@ -7,7 +7,7 @@ The Idefics 2 Model has support in the Rust, Python, and HTTP APIs. The Idefics 
 ## Quick Start
 
 ```bash
-mistralrs run -m HuggingFaceM4/idefics2-8b-chatty --isq 4 --image photo.jpg -i "Describe this image"
+hanzo run -m HuggingFaceM4/idefics2-8b-chatty --isq 4 --image photo.jpg -i "Describe this image"
 ```
 
 ## Input Formats
@@ -22,7 +22,7 @@ The Rust SDK takes images from the [image](https://docs.rs/image/latest/image/in
 1) Start the server
 
 ```bash
-mistralrs serve -m HuggingFaceM4/idefics2-8b-chatty --isq 4 -p 1234
+hanzo serve -m HuggingFaceM4/idefics2-8b-chatty --isq 4 -p 1234
 ```
 
 2) Send a request
@@ -64,7 +64,7 @@ print(completion.choices[0].message.content)
 You can find this example [here](https://github.com/hanzoai/engine/blob/master/examples/python/phi3v.py).
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
     which=Which.MultimodalPlain(
@@ -109,7 +109,7 @@ You can find this example [here](https://github.com/hanzoai/engine/blob/master/m
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+use hanzo::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
