@@ -7,7 +7,7 @@ Common issues and solutions for Hanzo Engine.
 Enable debug mode for more information:
 
 ```bash
-MISTRALRS_DEBUG=1 mistralrs run -m <model>
+MISTRALRS_DEBUG=1 hanzo run -m <model>
 ```
 
 Debug mode causes:
@@ -20,7 +20,7 @@ Debug mode causes:
 Run the built-in diagnostics tool:
 
 ```bash
-mistralrs doctor
+hanzo doctor
 ```
 
 This checks your system configuration and reports any issues.
@@ -39,7 +39,7 @@ This checks your system configuration and reports any issues.
 **Error: `CUDA_ERROR_NOT_FOUND` or symbol not found:**
 - For non-quantized models, specify the data type to load and run in
 - Use one of `f32`, `f16`, `bf16` or `auto` (auto chooses based on device)
-- Example: `mistralrs run -m <model> -d auto`
+- Example: `hanzo run -m <model> -d auto`
 
 **Minimum CUDA compute capability:**
 - The minimum supported CUDA compute cap is **5.3**
@@ -120,7 +120,7 @@ Pre-built wheels are only available for supported platform combinations. Check t
 
 ```bash
 git clone https://github.com/hanzoai/engine.git
-cd Hanzo Engine/mistralrs-pyo3
+cd Hanzo Engine/hanzo-pyo3
 python -m venv .venv && source .venv/bin/activate
 pip install maturin[patchelf]
 maturin develop -r --features <your-features>
@@ -143,23 +143,23 @@ The `mistralrs-cuda` pip package is compiled against a specific CUDA toolkit ver
 The model itself may not fit into GPU memory at full precision. Reduce memory usage by quantizing on the fly with In-Situ Quantization (ISQ):
 
 ```bash
-mistralrs run -m <model> --isq q4k
+hanzo run -m <model> --isq q4k
 ```
 
 Alternatively, load a pre-quantized model in GGUF or UQFF format, which are already compressed on disk:
 
 ```bash
 # GGUF
-mistralrs run --format gguf -m <repo> -f <file.gguf>
+hanzo run --format gguf -m <repo> -f <file.gguf>
 
-# UQFF (generate first with `mistralrs quantize`, then load)
-mistralrs run --format uqff -m <model> -f <file.uqff>
+# UQFF (generate first with `hanzo quantize`, then load)
+hanzo run --format uqff -m <model> -f <file.uqff>
 ```
 
 You can also offload some layers to CPU with device mapping:
 
 ```bash
-mistralrs run -m <model> -n "0:16;cpu:16"
+hanzo run -m <model> -n "0:16;cpu:16"
 ```
 
 **OOM during inference:**
@@ -168,25 +168,25 @@ If the model loads successfully but you hit OOM while generating, the KV cache i
 
 ```bash
 # Limit KV cache to a specific context length
-mistralrs serve -m <model> --pa-context-len 4096
+hanzo serve -m <model> --pa-context-len 4096
 
 # Or set a fixed memory budget in MB
-mistralrs serve -m <model> --pa-memory-mb 2048
+hanzo serve -m <model> --pa-memory-mb 2048
 
 # Or reduce the fraction of free GPU memory used (default is 0.90)
-mistralrs serve -m <model> --pa-memory-fraction 0.5
+hanzo serve -m <model> --pa-memory-fraction 0.5
 ```
 
 Reducing the maximum number of concurrent sequences also lowers peak memory usage:
 
 ```bash
-mistralrs serve -m <model> --max-seqs 8
+hanzo serve -m <model> --max-seqs 8
 ```
 
 If none of these help, disable PagedAttention entirely to use a dynamically allocated cache:
 
 ```bash
-mistralrs serve -m <model> --no-paged-attn
+hanzo serve -m <model> --no-paged-attn
 ```
 
 **OOM with multiple models:**
@@ -200,7 +200,7 @@ When running multiple models via the [multi-model](multi_model/overview.md) conf
 This is usually a chat template mismatch. The model expects a specific prompt format and produces nonsense when it receives the wrong one. Try providing an explicit Jinja template:
 
 ```bash
-mistralrs run -m <model> --jinja-explicit chat_templates/<template>.jinja
+hanzo run -m <model> --jinja-explicit chat_templates/<template>.jinja
 ```
 
 Browse the `chat_templates/` directory for templates matching your model family. See [Chat Templates](CHAT_TOK.md) for details.
@@ -221,7 +221,7 @@ Some models are fine-tuned for tool use and may emit tool-call JSON even when no
 Models that support thinking mode (such as Qwen3 and DeepSeek) emit `<think>...</think>` blocks containing chain-of-thought reasoning. This is expected behavior. To disable thinking entirely, pass `--thinking false`:
 
 ```bash
-mistralrs run -m Qwen/Qwen3-4B --thinking false
+hanzo run -m Qwen/Qwen3-4B --thinking false
 ```
 
 If you omit the `--thinking` flag, the chat template's default behavior applies. See [CLI Reference](CLI.md#thinking-mode) for details.
@@ -261,19 +261,19 @@ Some models on Hugging Face (such as Llama and Mistral) require you to accept a 
 
 ```bash
 # Interactive login (saves token to ~/.cache/huggingface/token)
-mistralrs login
+hanzo login
 
 # Or provide the token directly
-mistralrs login --token hf_xxxxxxxxxxxxx
+hanzo login --token hf_xxxxxxxxxxxxx
 
 # Or pass a token via environment variable at runtime
-mistralrs run -m <model> --token-source env:HF_TOKEN
+hanzo run -m <model> --token-source env:HF_TOKEN
 ```
 
 **"Model not found" errors:**
 
 1. Double-check the model ID for typos (e.g., `mistralai/Mistral-7B-Instruct-v0.1`, not `mistral/Mistral-7B`)
-2. Verify Hugging Face connectivity by running `mistralrs doctor` -- it tests the connection and token validity
+2. Verify Hugging Face connectivity by running `hanzo doctor` -- it tests the connection and token validity
 3. If you are behind a corporate proxy or firewall, ensure `https://huggingface.co` is reachable
 4. Check whether the model has been renamed or moved on Hugging Face
 
@@ -286,7 +286,7 @@ If you're still stuck:
 - [GitHub Issues](https://github.com/hanzoai/engine/issues): Bug reports and feature requests
 
 When reporting issues, please include:
-1. Output of `mistralrs doctor`
+1. Output of `hanzo doctor`
 2. Full error message
 3. Command you ran
 4. Hardware (GPU model, OS)

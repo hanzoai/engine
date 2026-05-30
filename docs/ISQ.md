@@ -6,7 +6,7 @@ If the quantized weights are small enough to fit even though the original weight
 
 **Quick start**: Just use `--isq 4` (or 2, 3, 5, 6, 8) and Hanzo Engine will pick the best quantization for your hardware:
 ```
-mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
+hanzo run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
 An API is exposed on the Python and Rust SDKs which provides the ability to dynamically re-ISQ models at runtime.
@@ -21,7 +21,7 @@ Instead of specifying a quantization type like `Q4K`, you can just pass an integ
 On Metal, this uses fast AFQ quantization (for 2, 3, 4, 6, or 8 bits). On other platforms, it falls back to Q/K quantization.
 
 ```
-mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
+hanzo run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
 ## ISQ quantization types
@@ -49,7 +49,7 @@ mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 - MXFP4
 
 ```
-mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
+hanzo run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
 For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.02410) can be applied to only quantize MoE layers. This is configured via the ISQ "organization" parameter in all APIs. The following models support MoQE:
@@ -110,12 +110,12 @@ let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
 
 ## Server example
 ```
-mistralrs serve --port 1234 --isq 4 -m mistralai/Mistral-7B-Instruct-v0.1
+hanzo serve --port 1234 --isq 4 -m mistralai/Mistral-7B-Instruct-v0.1
 ```
 
 Or with a specific quantization type:
 ```
-mistralrs serve --port 1234 --isq Q4K -m mistralai/Mistral-7B-Instruct-v0.1
+hanzo serve --port 1234 --isq Q4K -m mistralai/Mistral-7B-Instruct-v0.1
 ```
 ## See Also
 

@@ -12,12 +12,12 @@ For normal CLI usage, start with `--quant`. It prefers a prebuilt UQFF from `mis
 Pass `--quant` with the bit width:
 
 ```bash
-mistralrs run --quant 4 -m google/gemma-4-E4B-it
+hanzo run --quant 4 -m google/gemma-4-E4B-it
 ```
 
 `--quant 4` first looks for a matching prebuilt UQFF. If none is available, it applies ISQ at load time and chooses a format per backend: AFQ4 on Metal, Q4K on CUDA or CPU. With runtime ISQ, weights are quantized as they arrive; the full unquantized model is never resident in memory.
 
-Memory footprint scales roughly linearly with bits per weight: a model in BF16 (2 bytes/param) uses about half the memory at `--quant 8` and a quarter at `--quant 4`. KV cache memory depends on context length and is independent of quantization. Use `nvidia-smi` (or equivalent) and `mistralrs tune` to measure on your hardware.
+Memory footprint scales roughly linearly with bits per weight: a model in BF16 (2 bytes/param) uses about half the memory at `--quant 8` and a quarter at `--quant 4`. KV cache memory depends on context length and is independent of quantization. Use `nvidia-smi` (or equivalent) and `hanzo tune` to measure on your hardware.
 
 ## Bit widths
 
@@ -28,9 +28,9 @@ Supported widths: 2, 3, 4, 5, 6, 8. Fewer bits means less memory and more qualit
 `--quant` also accepts format names:
 
 ```bash
-mistralrs run --quant q4k -m google/gemma-4-E4B-it     # Q4K, CUDA/CPU friendly
-mistralrs run --quant afq4 -m google/gemma-4-E4B-it    # AFQ4, Metal-optimized
-mistralrs run --quant q8_0 -m google/gemma-4-E4B-it    # Q8_0, the GGUF standard
+hanzo run --quant q4k -m google/gemma-4-E4B-it     # Q4K, CUDA/CPU friendly
+hanzo run --quant afq4 -m google/gemma-4-E4B-it    # AFQ4, Metal-optimized
+hanzo run --quant q8_0 -m google/gemma-4-E4B-it    # Q8_0, the GGUF standard
 ```
 
 Use `--isq` instead only when you want to force runtime ISQ and skip the UQFF lookup. The full list is in the [quantization reference](/mistral.rs/reference/quantization-types/).
@@ -40,16 +40,16 @@ Use `--isq` instead only when you want to force runtime ISQ and skip the UQFF lo
 Use `--quant auto` to pick a quantization level for the current host:
 
 ```bash
-mistralrs run --quant auto -m google/gemma-4-E4B-it
+hanzo run --quant auto -m google/gemma-4-E4B-it
 ```
 
-Use `mistralrs tune` when you want to inspect the memory/quality tradeoff or save the recommendation:
+Use `hanzo tune` when you want to inspect the memory/quality tradeoff or save the recommendation:
 
 ```bash
-mistralrs tune -m google/gemma-4-E4B-it
+hanzo tune -m google/gemma-4-E4B-it
 ```
 
-The command loads the model at several quantization levels, runs a short benchmark on each, and prints memory usage, context length headroom, and a quality proxy. To emit the recommendation as config, pass `--emit-config recommended.toml` and run `mistralrs from-config -f recommended.toml`.
+The command loads the model at several quantization levels, runs a short benchmark on each, and prints memory usage, context length headroom, and a quality proxy. To emit the recommendation as config, pass `--emit-config recommended.toml` and run `hanzo from-config -f recommended.toml`.
 
 ## Quantization from Python and Rust
 

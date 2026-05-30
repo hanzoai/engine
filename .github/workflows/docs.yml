@@ -5,12 +5,12 @@ on:
     branches: ["master"]
     paths:
       - "docs/**"
-      - "mistralrs-pyo3/**"
+      - "hanzo-pyo3/**"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "docs/**"
-      - "mistralrs-pyo3/**"
+      - "hanzo-pyo3/**"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 

@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-`mistralrs serve` exposes a model over an OpenAI-compatible HTTP API. The model used here is Google's [Gemma 4](https://huggingface.co/google/gemma-4-E4B-it). If you prefer to stay on the Qwen model from [Tutorial 1](/mistral.rs/tutorials/01-install-and-run/), substitute `Qwen/Qwen3-4B` for `google/gemma-4-E4B-it` throughout and skip the license step below.
+`hanzo serve` exposes a model over an OpenAI-compatible HTTP API. The model used here is Google's [Gemma 4](https://huggingface.co/google/gemma-4-E4B-it). If you prefer to stay on the Qwen model from [Tutorial 1](/mistral.rs/tutorials/01-install-and-run/), substitute `Qwen/Qwen3-4B` for `google/gemma-4-E4B-it` throughout and skip the license step below.
 
 ## Accepting the Gemma license
 
@@ -16,7 +16,7 @@ Gemma weights are gated on Hugging Face. One-time setup per account:
 3. Pass the token to mistral.rs:
 
 ```bash
-mistralrs login
+hanzo login
 ```
 
 The token is saved to `~/.cache/huggingface/token` and reused for subsequent downloads. If you have already logged in via `huggingface-cli`, skip this step -- both tools read the same token file.
@@ -24,7 +24,7 @@ The token is saved to `~/.cache/huggingface/token` and reused for subsequent dow
 ## Starting the server
 
 ```bash
-mistralrs serve -m google/gemma-4-E4B-it
+hanzo serve -m google/gemma-4-E4B-it
 ```
 
 The first run downloads the weights. When loading completes:
@@ -96,10 +96,10 @@ for chunk in stream:
 
 ## The built-in web UI
 
-The web UI is mounted at `/ui` by default whenever you run `mistralrs serve`:
+The web UI is mounted at `/ui` by default whenever you run `hanzo serve`:
 
 ```bash
-mistralrs serve -m google/gemma-4-E4B-it
+hanzo serve -m google/gemma-4-E4B-it
 ```
 
 Open `http://localhost:1234/ui`. The UI provides a chat window with markdown rendering, reasoning blocks, and controls for sampling parameters and the system prompt. Pass `--no-ui` if you want the HTTP endpoints only.

@@ -1,5 +1,5 @@
 ---
-title: Run mistralrs in Docker
+title: Run hanzo in Docker
 description: Build and run the published container images, with and without CUDA.
 sidebar:
   order: 1
@@ -18,10 +18,10 @@ From a repository checkout:
 
 ```bash
 # CPU
-docker build -t mistralrs:latest -f Dockerfile .
+docker build -t hanzo:latest -f Dockerfile .
 
 # CUDA
-docker build -t mistralrs:cuda -f Dockerfile.cuda-all .
+docker build -t hanzo:cuda -f Dockerfile.cuda-all .
 ```
 
 The CUDA build is slower the first time because flash-attention compilation takes a while. Subsequent builds use the Docker layer cache.
@@ -32,13 +32,13 @@ The CUDA build is slower the first time because flash-attention compilation take
 docker run --rm -it \
   -p 1234:80 \
   -v $HOME/.cache/huggingface:/data \
-  mistralrs:latest \
-  mistralrs-server -m Qwen/Qwen3-4B
+  hanzo:latest \
+  hanzo-server -m Qwen/Qwen3-4B
 ```
 
 Notes:
 
-The image binds port 80 internally by default, controlled by the `PORT` environment variable. `-p 1234:80` publishes it as 1234 on the host, matching the standard mistralrs default.
+The image binds port 80 internally by default, controlled by the `PORT` environment variable. `-p 1234:80` publishes it as 1234 on the host, matching the standard hanzo default.
 
 The container's Hugging Face cache directory is `/data`. Mounting the host cache there avoids re-downloading weights on first run.
 
@@ -48,8 +48,8 @@ The container's Hugging Face cache directory is `/data`. Mounting the host cache
 docker run --rm -it --gpus all \
   -p 1234:80 \
   -v $HOME/.cache/huggingface:/data \
-  mistralrs:cuda \
-  mistralrs-server -m Qwen/Qwen3-4B
+  hanzo:cuda \
+  hanzo-server -m Qwen/Qwen3-4B
 ```
 
 `--gpus all` exposes all detected NVIDIA GPUs. To pin a specific GPU: `--gpus '"device=0"'`. Without the flag, the CUDA image falls back to CPU inference.

@@ -9,7 +9,7 @@ Examples below show HTTP (Hugging Face), Process (filesystem), and WebSocket tra
 ### Rust SDK
 
 ```rust
-use mistralrs::{
+use hanzo::{
     TextModelBuilder, McpClientConfig, McpServerConfig, McpServerSource,
     TextMessages, TextMessageRole,
 };
@@ -91,12 +91,12 @@ async fn main() -> anyhow::Result<()> {
 ### Python SDK
 
 ```python
-import mistralrs
+import hanzo
 
 # Process example (filesystem server - recommended for getting started)
-filesystem_server = mistralrs.McpServerConfigPy(
+filesystem_server = hanzo.McpServerConfigPy(
     name="Filesystem Tools",
-    source=mistralrs.McpServerSourcePy.Process(
+    source=hanzo.McpServerSourcePy.Process(
         command="npx",
         args=["@modelcontextprotocol/server-filesystem", "."],
         work_dir=None,
@@ -105,10 +105,10 @@ filesystem_server = mistralrs.McpServerConfigPy(
 )
 
 # Alternative HTTP example (Hugging Face MCP server)
-hf_server = mistralrs.McpServerConfigPy(
+hf_server = hanzo.McpServerConfigPy(
     id="hf_server",
     name="Hugging Face MCP",
-    source=mistralrs.McpServerSourcePy.Http(
+    source=hanzo.McpServerSourcePy.Http(
         url="https://hf.co/mcp",
         timeout_secs=30,
         headers=None
@@ -120,9 +120,9 @@ hf_server = mistralrs.McpServerConfigPy(
 )
 
 # Alternative WebSocket example
-websocket_server = mistralrs.McpServerConfigPy(
+websocket_server = hanzo.McpServerConfigPy(
     name="WebSocket Example",
-    source=mistralrs.McpServerSourcePy.WebSocket(
+    source=hanzo.McpServerSourcePy.WebSocket(
         url="wss://api.example.com/mcp",
         timeout_secs=30,
         headers=None
@@ -131,7 +131,7 @@ websocket_server = mistralrs.McpServerConfigPy(
 )
 
 # Create MCP client config using filesystem server (others are disabled)
-mcp_config = mistralrs.McpClientConfigPy(
+mcp_config = hanzo.McpClientConfigPy(
     servers=[filesystem_server], # hf_server, websocket_server can be added when enabled
     auto_register_tools=True,
     tool_timeout_secs=30,
@@ -139,17 +139,17 @@ mcp_config = mistralrs.McpClientConfigPy(
 )
 
 # Build model with MCP support
-runner = mistralrs.Runner(
-    which=mistralrs.Which.Plain(
+runner = hanzo.Runner(
+    which=hanzo.Which.Plain(
         model_id="Qwen/Qwen3-4B",
-        arch=mistralrs.Architecture.Qwen3,
+        arch=hanzo.Architecture.Qwen3,
     ),
     mcp_client_config=mcp_config
 )
 
 # Use the model - tools are automatically available
 res = runner.send_chat_completion_request(
-    mistralrs.ChatCompletionRequest(
+    hanzo.ChatCompletionRequest(
         model="default",
         messages=[
             {"role": "user", "content": "List the files in the current directory and create a test.txt file"}
@@ -240,7 +240,7 @@ print(res.choices[0].message.content)
 
 2. Start server with MCP:
 ```bash
-mistralrs serve \
+hanzo serve \
   -p 1234 \
   --mcp-config mcp-config.json \
   -m Qwen/Qwen3-4B

@@ -1,4 +1,4 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 
 # Choose a multimodal model that supports both modalities

@@ -7,7 +7,7 @@ For a catalog of all embedding backends, see [EMBEDDINGS.md](EMBEDDINGS.md).
 ## Quick Start
 
 ```bash
-mistralrs serve embedding -m Qwen/Qwen3-Embedding-0.6B -p 1234
+hanzo serve embedding -m Qwen/Qwen3-Embedding-0.6B -p 1234
 ```
 
 ## HTTP API
@@ -15,7 +15,7 @@ mistralrs serve embedding -m Qwen/Qwen3-Embedding-0.6B -p 1234
 Start the server:
 
 ```bash
-mistralrs serve embedding -m Qwen/Qwen3-Embedding-0.6B -p 1234
+hanzo serve embedding -m Qwen/Qwen3-Embedding-0.6B -p 1234
 ```
 
 Send a request:
@@ -51,7 +51,7 @@ Instantiate `Runner` with the embedding selector and request Qwen3 explicitly. T
 OpenAI embeddings array shape:
 
 ```python
-from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
+from hanzo import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
 
 runner = Runner(
     which=Which.Embedding(
@@ -78,7 +78,7 @@ repository sample:
 
 ```rust
 use anyhow::Result;
-use mistralrs::{EmbeddingModelBuilder, EmbeddingRequest};
+use hanzo::{EmbeddingModelBuilder, EmbeddingRequest};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -100,4 +100,4 @@ async fn main() -> Result<()> {
 }
 ```
 
-You can find the full example at [`mistralrs/examples/advanced/embeddings/main.rs`](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/advanced/embeddings/main.rs).
+You can find the full example at [`hanzo/examples/advanced/embeddings/main.rs`](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/advanced/embeddings/main.rs).

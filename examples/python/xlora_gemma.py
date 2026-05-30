@@ -1,4 +1,4 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from hanzo import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.XLora(
