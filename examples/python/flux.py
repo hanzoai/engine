@@ -1,4 +1,4 @@
-from mistralrs import (
+from hanzo import (
     Runner,
     Which,
     DiffusionArchitecture,

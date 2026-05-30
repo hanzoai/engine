@@ -2476,8 +2476,8 @@ name = "hanzo-engine"
 version = "0.6.0"
 dependencies = [
  "anyhow",
- "mistralrs",
- "mistralrs-core",
+ "hanzo",
+ "hanzo-engine",
  "sha2",
  "thiserror 2.0.18",
  "tokio",
@@ -3446,7 +3446,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs"
+name = "hanzo"
 version = "0.8.1"
 dependencies = [
  "anyhow",
@@ -3457,8 +3457,8 @@ dependencies = [
  "futures",
  "image",
  "indexmap 2.13.0",
- "mistralrs-core",
- "mistralrs-macros",
+ "hanzo-engine",
+ "hanzo-macros",
  "rand 0.9.4",
  "reqwest 0.13.1",
  "schemars 1.2.0",
@@ -3472,7 +3472,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs-audio"
+name = "hanzo-audio"
 version = "0.8.1"
 dependencies = [
  "anyhow",
@@ -3482,14 +3482,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs-bench"
+name = "hanzo-bench"
 version = "0.8.1"
 dependencies = [
  "anyhow",
  "candle-core",
  "clap",
  "cli-table",
- "mistralrs-core",
+ "hanzo-engine",
  "serde",
  "serde_json",
  "tokio",
@@ -3497,7 +3497,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs-cli"
+name = "hanzo-cli"
 version = "0.8.1"
 dependencies = [
  "anyhow",
@@ -3516,10 +3516,10 @@ dependencies = [
  "include_dir",
  "indexmap 2.13.0",
  "mime_guess",
- "mistralrs",
- "mistralrs-core",
- "mistralrs-sandbox",
- "mistralrs-server-core",
+ "hanzo",
+ "hanzo-engine",
+ "hanzo-sandbox",
+ "hanzo-server-core",
  "regex",
  "rustyline",
  "serde",
@@ -3534,15 +3534,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs-code-exec"
+name = "hanzo-code-exec"
 version = "0.8.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
  "image",
  "libc",
- "mistralrs-mcp",
- "mistralrs-sandbox",
+ "hanzo-llm-mcp",
+ "hanzo-sandbox",
  "serde",
  "serde_json",
  "tempfile",
@@ -3552,7 +3552,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs-core"
+name = "hanzo-engine"
 version = "0.8.1"
 dependencies = [
  "accelerate-src",
@@ -3601,13 +3601,13 @@ dependencies = [
  "mime_guess",
  "minijinja",
  "minijinja-contrib",
- "mistralrs-audio",
- "mistralrs-code-exec",
- "mistralrs-mcp",
- "mistralrs-paged-attn",
- "mistralrs-quant",
- "mistralrs-sandbox",
- "mistralrs-vision",
+ "hanzo-audio",
+ "hanzo-code-exec",
+ "hanzo-llm-mcp",
+ "hanzo-paged-attn",
+ "hanzo-quant",
+ "hanzo-sandbox",
+ "hanzo-vision",
  "num-traits",
  "objc",
  "objc2-metal",
@@ -3660,7 +3660,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs-macros"
+name = "hanzo-macros"
 version = "0.8.1"
 dependencies = [
  "darling 0.23.0",
@@ -3670,7 +3670,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs-mcp"
+name = "hanzo-llm-mcp"
 version = "0.8.1"
 dependencies = [
  "anyhow",
@@ -3692,7 +3692,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs-paged-attn"
+name = "hanzo-paged-attn"
 version = "0.8.1"
 dependencies = [
  "anyhow",
@@ -3708,7 +3708,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs-pyo3"
+name = "hanzo-pyo3"
 version = "0.8.1"
 dependencies = [
  "accelerate-src",
@@ -3722,8 +3722,8 @@ dependencies = [
  "indexmap 2.13.0",
  "intel-mkl-src",
  "itertools",
- "mistralrs-core",
- "mistralrs-mcp",
+ "hanzo-engine",
+ "hanzo-llm-mcp",
  "pyo3",
  "pyo3-build-config",
  "reqwest 0.13.1",
@@ -3734,7 +3734,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs-quant"
+name = "hanzo-quant"
 version = "0.8.1"
 dependencies = [
  "byteorder",
@@ -3763,7 +3763,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs-sandbox"
+name = "hanzo-sandbox"
 version = "0.8.1"
 dependencies = [
  "anyhow",
@@ -3779,7 +3779,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs-server"
+name = "hanzo-server"
 version = "0.8.1"
 dependencies = [
  "anyhow",
@@ -3790,8 +3790,8 @@ dependencies = [
  "directories 6.0.0",
  "either",
  "indexmap 2.13.0",
- "mistralrs-core",
- "mistralrs-server-core",
+ "hanzo-engine",
+ "hanzo-server-core",
  "regex",
  "rust-mcp-sdk",
  "rustyline",
@@ -3802,7 +3802,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs-server-core"
+name = "hanzo-server-core"
 version = "0.8.1"
 dependencies = [
  "accelerate-src",
@@ -3817,7 +3817,7 @@ dependencies = [
  "indexmap 2.13.0",
  "intel-mkl-src",
  "itertools",
- "mistralrs-core",
+ "hanzo-engine",
  "reqwest 0.13.1",
  "serde",
  "serde_json",
@@ -3831,7 +3831,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs-vision"
+name = "hanzo-vision"
 version = "0.8.1"
 dependencies = [
  "candle-core",

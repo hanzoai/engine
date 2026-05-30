@@ -5,13 +5,13 @@ sidebar:
   order: 14
 ---
 
-Before debugging setup issues, run `mistralrs doctor`. It reports detected hardware, compiled accelerator features, and Hugging Face connectivity.
+Before debugging setup issues, run `hanzo doctor`. It reports detected hardware, compiled accelerator features, and Hugging Face connectivity.
 
 For unlisted issues, file an issue on [GitHub](https://github.com/EricLBuehler/mistral.rs/issues) with a reproducer.
 
 ## Installation and build
 
-### `mistralrs: command not found` after install
+### `hanzo: command not found` after install
 
 The binary is at `~/.cargo/bin/mistralrs`. The directory is added to `PATH` by `rustup`, but the change does not apply to the current shell. Open a new shell or run `source "$HOME/.cargo/env"`.
 
@@ -19,15 +19,15 @@ The binary is at `~/.cargo/bin/mistralrs`. The directory is added to `PATH` by `
 
 Flash attention requires compute capability 8.0+. On older GPUs, drop `flash-attn` from features and rebuild with `cuda cudnn`.
 
-### `mistralrs login` rejects the token
+### `hanzo login` rejects the token
 
-The token must start with `hf_`. The validation happens in `mistralrs login` before saving.
+The token must start with `hf_`. The validation happens in `hanzo login` before saving.
 
 ## Model loading
 
 ### Gated repository (Gemma, LLaMA, FLUX.1-dev, etc.)
 
-Accept the license on the model's Hugging Face page, then save a token with `mistralrs login`. The token is stored at `~/.cache/huggingface/token` (or `$HF_HOME/token`).
+Accept the license on the model's Hugging Face page, then save a token with `hanzo login`. The token is stored at `~/.cache/huggingface/token` (or `$HF_HOME/token`).
 
 ### `Out of memory` on load
 
@@ -37,7 +37,7 @@ Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `
 
 ### Generation slower than expected
 
-Verify accelerator features are compiled in with `mistralrs doctor`. If `cuda` is missing, the binary was built without GPU support.
+Verify accelerator features are compiled in with `hanzo doctor`. If `cuda` is missing, the binary was built without GPU support.
 
 ### Response cut off
 
@@ -69,9 +69,9 @@ The session expired (30-minute idle TTL) or was evicted (128-session cap, LRU). 
 
 ## Python SDK
 
-### `from mistralrs import Runner` fails with `ImportError`
+### `from hanzo import Runner` fails with `ImportError`
 
-The wrong wheel was installed. Reinstall with the matching variant: `mistralrs-cuda` for NVIDIA, `mistralrs-metal` for Apple Silicon, `mistralrs` for CPU/MKL.
+The wrong wheel was installed. Reinstall with the matching variant: `mistralrs-cuda` for NVIDIA, `mistralrs-metal` for Apple Silicon, `hanzo` for CPU/MKL.
 
 ## Rust SDK
 

@@ -1,22 +1,21 @@
 [workspace]
 members = [
-    "mistralrs-server-core",
-    "mistralrs-server",
-    "mistralrs-cli",
-    "mistralrs-core",
-    "mistralrs-pyo3",
-    "mistralrs",
-    "mistralrs-bench",
-    "mistralrs-vision",
-    "mistralrs-quant",
-    "mistralrs-paged-attn",
-
-    "mistralrs-audio",
-    "mistralrs-mcp",
-    "mistralrs-macros",
-    "mistralrs-code-exec",
-    "mistralrs-sandbox",
+    "hanzo-server-core",
+    "hanzo-server",
+    "hanzo-cli",
     "hanzo-engine",
+    "hanzo-pyo3",
+    "hanzo",
+    "hanzo-bench",
+    "hanzo-vision",
+    "hanzo-quant",
+    "hanzo-paged-attn",
+
+    "hanzo-audio",
+    "hanzo-llm-mcp",
+    "hanzo-macros",
+    "hanzo-code-exec",
+    "hanzo-sandbox",
 ]
 resolver = "2"
 
@@ -190,17 +189,17 @@ landlock = "0.4.4"
 nix = { version = "0.31.3", default-features = false }
 itoa = "1.0.18"
 
-mistralrs-core = { path = "mistralrs-core", version = "0.8.1" }
-mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.8.1" }
-mistralrs-quant = { path = "mistralrs-quant", version = "0.8.1" }
-mistralrs-vision = { path = "mistralrs-vision", version = "0.8.1" }
-mistralrs-server-core = { path = "mistralrs-server-core", version = "0.8.1" }
-mistralrs = { path = "mistralrs", version = "0.8.1" }
-mistralrs-audio = { path = "mistralrs-audio", version = "0.8.1" }
-mistralrs-mcp = { path = "mistralrs-mcp", version = "0.8.1" }
-mistralrs-macros = { path = "mistralrs-macros", version = "0.8.1" }
-mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.8.1" }
-mistralrs-sandbox = { path = "mistralrs-sandbox", version = "0.8.1" }
+hanzo-engine = { path = "hanzo-engine", version = "0.8.1" }
+hanzo-paged-attn = { path = "hanzo-paged-attn", version = "0.8.1" }
+hanzo-quant = { path = "hanzo-quant", version = "0.8.1" }
+hanzo-vision = { path = "hanzo-vision", version = "0.8.1" }
+hanzo-server-core = { path = "hanzo-server-core", version = "0.8.1" }
+hanzo = { path = "hanzo", version = "0.8.1" }
+hanzo-audio = { path = "hanzo-audio", version = "0.8.1" }
+hanzo-llm-mcp = { path = "hanzo-llm-mcp", version = "0.8.1" }
+hanzo-macros = { path = "hanzo-macros", version = "0.8.1" }
+hanzo-code-exec = { path = "hanzo-code-exec", version = "0.8.1" }
+hanzo-sandbox = { path = "hanzo-sandbox", version = "0.8.1" }
 
 [profile.release-with-debug]
 inherits = "release"

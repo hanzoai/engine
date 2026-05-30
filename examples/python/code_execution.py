@@ -1,17 +1,17 @@
 """
 Python code execution with the OS-level sandbox enabled.
 
-Equivalent of `mistralrs/examples/advanced/code_execution/main.rs` for the
+Equivalent of `hanzo/examples/advanced/code_execution/main.rs` for the
 Python SDK. The model is given the `execute_python` tool and runs Python
 inside a per-session subprocess that is hardened with rlimits + seccomp +
 namespaces + Landlock on Linux (Seatbelt + rlimits on macOS).
 
 Run with:
-    pip install -e mistralrs-pyo3 --features code-execution
+    pip install -e hanzo-pyo3 --features code-execution
     python examples/python/code_execution.py
 """
 
-from mistralrs import (
+from hanzo import (
     ChatCompletionRequest,
     CodeExecutionConfig,
     NetworkMode,

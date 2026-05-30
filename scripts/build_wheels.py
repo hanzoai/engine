@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build script for mistralrs Python wheels.
+Build script for hanzo Python wheels.
 
 Auto-detects platform, architecture, and available accelerators.
 Builds appropriate wheels based on the detected environment.
@@ -8,7 +8,7 @@ Builds appropriate wheels based on the detected environment.
 Usage:
     python scripts/build_wheels.py --list                    # Show buildable packages
     python scripts/build_wheels.py --all                     # Build all supported
-    python scripts/build_wheels.py -p mistralrs mistralrs-cuda
+    python scripts/build_wheels.py -p hanzo mistralrs-cuda
 """
 
 from __future__ import annotations
@@ -31,12 +31,12 @@ from typing import Optional
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 REPO_ROOT = SCRIPT_DIR.parent
-PYPROJECT_PATH = REPO_ROOT / "mistralrs-pyo3" / "pyproject.toml"
-CARGO_MANIFEST = REPO_ROOT / "mistralrs-pyo3" / "Cargo.toml"
+PYPROJECT_PATH = REPO_ROOT / "hanzo-pyo3" / "pyproject.toml"
+CARGO_MANIFEST = REPO_ROOT / "hanzo-pyo3" / "Cargo.toml"
 DOCKERFILE_PATH = REPO_ROOT / "Dockerfile.manylinux"
 
 PACKAGE_NAMES = [
-    "mistralrs",
+    "hanzo",
     "mistralrs-cuda",
     "mistralrs-metal",
     "mistralrs-accelerate",
@@ -142,8 +142,8 @@ def _detect_cuda() -> bool:
 def get_package_configs() -> dict[str, PackageConfig]:
     """Define the build configuration for each package."""
     return {
-        "mistralrs": PackageConfig(
-            name="mistralrs",
+        "hanzo": PackageConfig(
+            name="hanzo",
             features=[],  # Features determined by platform
             supported_os=[OS.LINUX, OS.DARWIN, OS.WINDOWS],
             supported_arch=[Arch.X86_64, Arch.AARCH64],
@@ -181,7 +181,7 @@ def get_package_configs() -> dict[str, PackageConfig]:
 
 
 def get_features_for_base_package(plat: Platform) -> list[str]:
-    """Get features for the 'mistralrs' base package based on platform."""
+    """Get features for the 'hanzo' base package based on platform."""
     if plat.os == OS.DARWIN and plat.arch == Arch.AARCH64:
         return ["metal"]  # macOS aarch64: Metal
     elif plat.arch == Arch.X86_64:
@@ -236,8 +236,8 @@ def modify_pyproject_name(name: str) -> None:
 
 
 def restore_pyproject_name() -> None:
-    """Restore project.name to default 'mistralrs'."""
-    modify_pyproject_name("mistralrs")
+    """Restore project.name to default 'hanzo'."""
+    modify_pyproject_name("hanzo")
 
 
 # ============================================================================
@@ -252,7 +252,7 @@ def build_wheel(
 ) -> Path:
     """Build a wheel for the given package configuration."""
     # Determine features
-    if package_config.name == "mistralrs":
+    if package_config.name == "hanzo":
         features = get_features_for_base_package(plat)
     else:
         features = package_config.features
@@ -339,7 +339,7 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
         "-o",
         f"/io/wheels/{output_dir.name}",
         "-m",
-        "mistralrs-pyo3/Cargo.toml",
+        "hanzo-pyo3/Cargo.toml",
         "--interpreter",
         "python3.10",
     ]
@@ -389,7 +389,7 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Build mistralrs Python wheels",
+        description="Build hanzo Python wheels",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -397,7 +397,7 @@ Examples:
   python scripts/build_wheels.py --all
 
   # Build specific packages
-  python scripts/build_wheels.py --packages mistralrs mistralrs-cuda
+  python scripts/build_wheels.py --packages hanzo mistralrs-cuda
 
   # Specify output directory
   python scripts/build_wheels.py --all -o ./dist
@@ -454,7 +454,7 @@ Examples:
             cfg = configs[name]
             features = (
                 cfg.features
-                if cfg.name != "mistralrs"
+                if cfg.name != "hanzo"
                 else get_features_for_base_package(plat)
             )
             print(f"  - {name} (features: {features or 'none'})")

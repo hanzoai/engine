@@ -1,23 +1,23 @@
 ---
 title: Configure the HTTP server
-description: Host, port, body limits, and authentication for mistralrs serve.
+description: Host, port, body limits, and authentication for hanzo serve.
 sidebar:
   order: 1
 ---
 
-`mistralrs serve` defaults: bind on `0.0.0.0:1234`, CORS open, no authentication, 50 MB request body limit.
+`hanzo serve` defaults: bind on `0.0.0.0:1234`, CORS open, no authentication, 50 MB request body limit.
 
 ## Host and port
 
 ```bash
-mistralrs serve --host 127.0.0.1 --port 8080 -m <model>
+hanzo serve --host 127.0.0.1 --port 8080 -m <model>
 ```
 
 `--host` controls the bind interface. `0.0.0.0` (default) accepts connections from any host on the network; `127.0.0.1` restricts to the local machine. `--port` is the TCP port (default 1234).
 
 ## CORS and body limit
 
-CORS allowed origins and the request body limit are not exposed as CLI flags. They can be configured programmatically through `MistralRsServerRouterBuilder` in `mistralrs-server-core`.
+CORS allowed origins and the request body limit are not exposed as CLI flags. They can be configured programmatically through `MistralRsServerRouterBuilder` in `hanzo-server-core`.
 
 The default allowed origin is any. The default body limit is 50 MB. Allowed methods are `GET`, `POST`, `PUT`, `DELETE`; allowed headers include `Content-Type` and `Authorization`.
 
@@ -30,14 +30,14 @@ OpenAI-protocol clients always send an `Authorization: Bearer ...` header becaus
 ## Logging
 
 ```bash
-mistralrs serve -v -m <model>
+hanzo serve -v -m <model>
 ```
 
-Use `-vv` for trace-level file/cache internals. Module filters are still available with `RUST_LOG`, for example `RUST_LOG=mistralrs_core=debug,tower_http=info`.
+Use `-vv` for trace-level file/cache internals. Module filters are still available with `RUST_LOG`, for example `RUST_LOG=hanzo_engine=debug,tower_http=info`.
 
 ## Config file versus flags
 
-Most CLI flags have a TOML config equivalent. Run with `mistralrs from-config -f config.toml`.
+Most CLI flags have a TOML config equivalent. Run with `hanzo from-config -f config.toml`.
 
 Full schema: [CLI TOML config reference](/mistral.rs/reference/cli-toml-config/). Minimal example:
 

@@ -19,7 +19,7 @@ Check the server environment:
 ffmpeg -version
 ```
 
-If that command fails in the same shell, service, or container that starts `mistralrs`, video requests for non-GIF files will fail.
+If that command fails in the same shell, service, or container that starts `hanzo`, video requests for non-GIF files will fail.
 
 ## Install FFmpeg
 
@@ -65,13 +65,13 @@ Animated `.gif` files are supported without FFmpeg.
 Use `--video` with one-shot input:
 
 ```bash
-mistralrs run -m google/gemma-4-E4B-it --quant 8 --video clip.mp4 -i "Summarize this clip."
+hanzo run -m google/gemma-4-E4B-it --quant 8 --video clip.mp4 -i "Summarize this clip."
 ```
 
 Multiple videos are allowed:
 
 ```bash
-mistralrs run -m google/gemma-4-E4B-it --video clip1.mp4 --video clip2.mp4 -i "Compare these clips."
+hanzo run -m google/gemma-4-E4B-it --video clip1.mp4 --video clip2.mp4 -i "Compare these clips."
 ```
 
 Interactive mode also auto-detects video file paths in prompts:

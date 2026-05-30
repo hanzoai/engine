@@ -1,11 +1,11 @@
 ---
 title: Environment variables
-description: Environment variables read by mistralrs at build time or runtime.
+description: Environment variables read by hanzo at build time or runtime.
 sidebar:
   order: 15
 ---
 
-User-facing environment variables read by `mistralrs` or its build scripts. Standard Cargo build variables such as `OUT_DIR` and `TARGET` are omitted.
+User-facing environment variables read by `hanzo` or its build scripts. Standard Cargo build variables such as `OUT_DIR` and `TARGET` are omitted.
 
 ## Hugging Face
 
@@ -13,9 +13,9 @@ User-facing environment variables read by `mistralrs` or its build scripts. Stan
 |---|---|
 | `HF_HOME` | Root of the Hugging Face cache. Default `~/.cache/huggingface`. |
 | `HF_HUB_CACHE` | Hugging Face hub cache location. |
-| `HF_TOKEN` | Auth token. Overrides any token saved by `mistralrs login` at `$HF_HOME/token`. |
+| `HF_TOKEN` | Auth token. Overrides any token saved by `hanzo login` at `$HF_HOME/token`. |
 | `HF_HUB_TOKEN` | Auth token fallback when `HF_TOKEN` is not set. |
-| `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` (or `true`/`yes`/`on`) disables all network calls to the Hugging Face Hub. Files and repo listings are served from `$HF_HUB_CACHE`/`$HF_HOME/hub` only; missing files fail fast with a clear error. The `mistralrs doctor` connectivity check is also skipped. |
+| `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` (or `true`/`yes`/`on`) disables all network calls to the Hugging Face Hub. Files and repo listings are served from `$HF_HUB_CACHE`/`$HF_HOME/hub` only; missing files fail fast with a clear error. The `hanzo doctor` connectivity check is also skipped. |
 
 If `--token-source env:NAME` is used, mistral.rs reads the environment variable named by `NAME` as the token source.
 
@@ -27,7 +27,7 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 
 | Variable | Purpose |
 |---|---|
-| `RUST_LOG` | Override the `tracing` log filter. Examples: `mistralrs_core=debug,tower_http=info`, `trace`. CLI users can usually use `-v` or `-vv` instead. |
+| `RUST_LOG` | Override the `tracing` log filter. Examples: `hanzo_engine=debug,tower_http=info`, `trace`. CLI users can usually use `-v` or `-vv` instead. |
 | `MISTRALRS_DEBUG` | `MISTRALRS_DEBUG=1` enables extra debug-level engine tracing. |
 
 ## Quantization and loading

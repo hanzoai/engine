@@ -3,7 +3,7 @@
 HTTP code-execution approval flow.
 
 Start the server:
-    mistralrs serve --agent -p 1234 -m Qwen/Qwen3-4B
+    hanzo serve --agent -p 1234 -m Qwen/Qwen3-4B
 
 Then run:
     python examples/server/code_execution_approval.py

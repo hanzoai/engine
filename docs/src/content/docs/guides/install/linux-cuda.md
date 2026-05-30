@@ -38,7 +38,7 @@ Flash attention requires compute capability 8.0+. Flash attention v3 requires 9.
 Install with a specific feature set from crates.io:
 
 ```bash
-cargo install mistralrs-cli --features "cuda flash-attn cudnn"
+cargo install hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 From a source checkout:
@@ -46,7 +46,7 @@ From a source checkout:
 ```bash
 git clone https://github.com/EricLBuehler/mistral.rs.git
 cd mistral.rs
-cargo install --path mistralrs-cli --features "cuda flash-attn cudnn"
+cargo install --path hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 ## Unusual CUDA layouts
@@ -55,7 +55,7 @@ For a non-standard toolkit location, set `CUDA_ROOT` before building:
 
 ```bash
 export CUDA_ROOT=/opt/cuda-12.4
-cargo install mistralrs-cli --features "cuda flash-attn cudnn"
+cargo install hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 `CUDA_ROOT` overrides the `nvcc` discovered via `PATH`. The build uses the `nvcc` matching the `CUDA_ROOT` value.
@@ -68,10 +68,10 @@ export LD_LIBRARY_PATH="/opt/cuda-12.4/lib64:$LD_LIBRARY_PATH"
 
 ## Verifying the install
 
-`mistralrs doctor` reports GPU detection and compiled features:
+`hanzo doctor` reports GPU detection and compiled features:
 
 ```bash
-mistralrs doctor
+hanzo doctor
 ```
 
 The output includes lines like:

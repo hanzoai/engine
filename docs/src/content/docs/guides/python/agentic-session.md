@@ -12,7 +12,7 @@ Sessions on the HTTP server are keyed by session id and persist message history,
 `Runner` exposes the same session operations as the HTTP endpoints:
 
 ```python
-from mistralrs import Runner, Which
+from hanzo import Runner, Which
 
 runner = Runner(which=Which.Plain(model_id="Qwen/Qwen3-4B"))
 
@@ -30,7 +30,7 @@ Each method takes an optional `model_id` keyword argument for multi-model setups
 `ChatCompletionRequest` can carry a `session_id`, so in-process Python requests can reuse agentic state:
 
 ```python
-from mistralrs import ChatCompletionRequest
+from hanzo import ChatCompletionRequest
 
 response = runner.send_chat_completion_request(
     ChatCompletionRequest(

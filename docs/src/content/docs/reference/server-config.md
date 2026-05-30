@@ -55,7 +55,7 @@ For the full TOML schema, see the [CLI TOML config reference](/mistral.rs/refere
 
 ## Not exposed via CLI
 
-CORS allowed origins and the request body limit (default 50 MB) are configurable only programmatically through `MistralRsServerRouterBuilder` in `mistralrs-server-core`.
+CORS allowed origins and the request body limit (default 50 MB) are configurable only programmatically through `MistralRsServerRouterBuilder` in `hanzo-server-core`.
 
 ## Environment variables
 

@@ -29,4 +29,4 @@ These affect automatic device mapping but are not a hard limit.
 
 ---
 
-<small>Generated from [`mistralrs-pyo3/mistralrs.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/mistralrs.pyi).</small>
+<small>Generated from [`hanzo-pyo3/mistralrs.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo-pyo3/mistralrs.pyi).</small>

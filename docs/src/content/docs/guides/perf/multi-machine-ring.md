@@ -12,7 +12,7 @@ When a model exceeds one machine's GPU memory, mistral.rs can split it across mu
 The `ring` feature must be compiled in:
 
 ```bash
-cargo install --path mistralrs-cli --features "cuda flash-attn ring"
+cargo install --path hanzo-cli --features "cuda flash-attn ring"
 ```
 
 ## Configuration

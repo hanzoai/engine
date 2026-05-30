@@ -250,7 +250,7 @@ except Exception as e:
 
 ### Enable Debug Logging
 ```rust
-std::env::set_var("RUST_LOG", "mistralrs_mcp=debug");
+std::env::set_var("RUST_LOG", "hanzo_llm_mcp=debug");
 env_logger::init();
 ```
 

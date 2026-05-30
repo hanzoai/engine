@@ -1,6 +1,6 @@
 ---
 title: Deploy
-description: Run mistralrs in production, including container images and an operational checklist.
+description: Run hanzo in production, including container images and an operational checklist.
 ---
 
 When mistral.rs runs anywhere other than a development laptop, several development conveniences (ephemeral storage, no TLS, single model, forgiving network) no longer apply.

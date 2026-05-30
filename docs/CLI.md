@@ -1,6 +1,6 @@
-# mistralrs CLI Reference
+# hanzo CLI Reference
 
-This is the comprehensive CLI reference for `mistralrs`. The CLI provides commands for interactive mode, HTTP server, builtin UI, quantization, and system diagnostics.
+This is the comprehensive CLI reference for `hanzo`. The CLI provides commands for interactive mode, HTTP server, builtin UI, quantization, and system diagnostics.
 
 ## Table of Contents
 
@@ -43,7 +43,7 @@ This is the comprehensive CLI reference for `mistralrs`. The CLI provides comman
 Start a model in interactive mode for conversational use, or run a single one-shot request with `-i`.
 
 ```bash
-mistralrs run [MODEL_TYPE] -m <MODEL_ID> [OPTIONS]
+hanzo run [MODEL_TYPE] -m <MODEL_ID> [OPTIONS]
 ```
 
 Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified. This allows a shorter syntax.
@@ -52,13 +52,13 @@ Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified. This all
 
 ```bash
 # Run a text model interactively (shorthand - auto type is implied)
-mistralrs run -m Qwen/Qwen3-4B
+hanzo run -m Qwen/Qwen3-4B
 
 # Run with thinking mode enabled
-mistralrs run -m Qwen/Qwen3-4B --thinking
+hanzo run -m Qwen/Qwen3-4B --thinking
 
 # Run a multimodal model
-mistralrs run -m google/gemma-4-E4B-it
+hanzo run -m google/gemma-4-E4B-it
 ```
 
 **One-shot mode examples:**
@@ -67,25 +67,25 @@ When `-i` is provided, the model processes a single request and exits. Combine w
 
 ```bash
 # Text-only one-shot
-mistralrs run -m Qwen/Qwen3-4B -i "What is the capital of France?"
+hanzo run -m Qwen/Qwen3-4B -i "What is the capital of France?"
 
 # Describe an image
-mistralrs run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
+hanzo run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
 
 # Multiple images
-mistralrs run -m google/gemma-4-E4B-it --image img1.jpg --image img2.png -i "Compare these images"
+hanzo run -m google/gemma-4-E4B-it --image img1.jpg --image img2.png -i "Compare these images"
 
 # Video input
-mistralrs run -m google/gemma-4-E4B-it --video clip.mp4 -i "What happens in this video?"
+hanzo run -m google/gemma-4-E4B-it --video clip.mp4 -i "What happens in this video?"
 
 # Audio input
-mistralrs run -m google/gemma-4-E4B-it --audio recording.wav -i "Transcribe this audio"
+hanzo run -m google/gemma-4-E4B-it --audio recording.wav -i "Transcribe this audio"
 
 # Mixed media (image + audio)
-mistralrs run -m google/gemma-4-E4B-it --image photo.jpg --audio clip.mp3 -i "Describe the image and transcribe the audio"
+hanzo run -m google/gemma-4-E4B-it --image photo.jpg --audio clip.mp3 -i "Describe the image and transcribe the audio"
 
 # URLs work too
-mistralrs run -m google/gemma-4-E4B-it --image https://example.com/photo.jpg -i "What is in this image?"
+hanzo run -m google/gemma-4-E4B-it --image https://example.com/photo.jpg -i "What is in this image?"
 ```
 
 **Options:**
@@ -107,7 +107,7 @@ The `run` command also accepts all [runtime options](#runtime-options).
 Start an HTTP server with OpenAI-compatible API endpoints.
 
 ```bash
-mistralrs serve [MODEL_TYPE] -m <MODEL_ID> [OPTIONS]
+hanzo serve [MODEL_TYPE] -m <MODEL_ID> [OPTIONS]
 ```
 
 Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified.
@@ -116,19 +116,19 @@ Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified.
 
 ```bash
 # Start server on default port 1234 (shorthand)
-mistralrs serve -m Qwen/Qwen3-4B
+hanzo serve -m Qwen/Qwen3-4B
 
 # Explicit auto type (equivalent to above)
-mistralrs serve -m Qwen/Qwen3-4B
+hanzo serve -m Qwen/Qwen3-4B
 
 # Start server with web UI
-mistralrs serve -m Qwen/Qwen3-4B --ui
+hanzo serve -m Qwen/Qwen3-4B --ui
 
 # Start server on custom port
-mistralrs serve -m Qwen/Qwen3-4B -p 3000
+hanzo serve -m Qwen/Qwen3-4B -p 3000
 
 # Start server with MCP support
-mistralrs serve -m Qwen/Qwen3-4B --mcp-port 8081
+hanzo serve -m Qwen/Qwen3-4B --mcp-port 8081
 ```
 
 **Server Options:**
@@ -150,29 +150,29 @@ The `serve` command also accepts all [runtime options](#runtime-options).
 Generate UQFF (Unified Quantized File Format) files from a model. Supports multiple quantization types in a single command.
 
 ```bash
-mistralrs quantize <MODEL_TYPE> -m <MODEL_ID> --isq <LEVEL>[,<LEVEL>...] -o <OUTPUT>
+hanzo quantize <MODEL_TYPE> -m <MODEL_ID> --isq <LEVEL>[,<LEVEL>...] -o <OUTPUT>
 ```
 
 **Examples:**
 
 ```bash
 # Quantize to a single type (file output)
-mistralrs quantize -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-uqff/qwen3-4b-q4k.uqff
+hanzo quantize -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-uqff/qwen3-4b-q4k.uqff
 
 # Quantize to a single type (directory output, auto-named)
-mistralrs quantize -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-uqff/
+hanzo quantize -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-uqff/
 
 # Quantize to multiple types at once (directory output)
-mistralrs quantize -m Qwen/Qwen3-4B --isq q4k,q8_0 -o qwen3-4b-uqff/
+hanzo quantize -m Qwen/Qwen3-4B --isq q4k,q8_0 -o qwen3-4b-uqff/
 
 # Equivalent: repeated --isq flags
-mistralrs quantize -m Qwen/Qwen3-4B --isq q4k --isq q8_0 -o qwen3-4b-uqff/
+hanzo quantize -m Qwen/Qwen3-4B --isq q4k --isq q8_0 -o qwen3-4b-uqff/
 
 # Quantize a multimodal model
-mistralrs quantize -m google/gemma-4-E4B-it --isq 4 -o gemma4-E4B-uqff/
+hanzo quantize -m google/gemma-4-E4B-it --isq 4 -o gemma4-E4B-uqff/
 
 # Quantize with imatrix for better quality
-mistralrs quantize -m Qwen/Qwen3-4B --isq q4k --imatrix imatrix.dat -o qwen3-4b-uqff/qwen3-4b-q4k.uqff
+hanzo quantize -m Qwen/Qwen3-4B --isq q4k --imatrix imatrix.dat -o qwen3-4b-uqff/qwen3-4b-q4k.uqff
 ```
 
 When using directory output mode, the `quantize` command automatically:
@@ -198,7 +198,7 @@ When using directory output mode, the `quantize` command automatically:
 Get quantization and device mapping recommendations for a model. The tune command analyzes your hardware and shows all quantization options with their estimated memory usage, context room, and quality trade-offs.
 
 ```bash
-mistralrs tune [MODEL_TYPE] -m <MODEL_ID> [OPTIONS]
+hanzo tune [MODEL_TYPE] -m <MODEL_ID> [OPTIONS]
 ```
 
 Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified, which supports all model types. See [details](#auto).
@@ -207,19 +207,19 @@ Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified, which su
 
 ```bash
 # Get balanced recommendations (shorthand)
-mistralrs tune -m Qwen/Qwen3-4B
+hanzo tune -m Qwen/Qwen3-4B
 
 # Get quality-focused recommendations
-mistralrs tune -m Qwen/Qwen3-4B --profile quality
+hanzo tune -m Qwen/Qwen3-4B --profile quality
 
 # Get fast inference recommendations
-mistralrs tune -m Qwen/Qwen3-4B --profile fast
+hanzo tune -m Qwen/Qwen3-4B --profile fast
 
 # Output as JSON
-mistralrs tune -m Qwen/Qwen3-4B --json
+hanzo tune -m Qwen/Qwen3-4B --json
 
 # Generate a TOML config file with recommendations
-mistralrs tune -m Qwen/Qwen3-4B --emit-config config.toml
+hanzo tune -m Qwen/Qwen3-4B --emit-config config.toml
 ```
 
 **Example Output (CUDA):**
@@ -249,7 +249,7 @@ Quantization Options
 
 Recommended Command
 -------------------
-  mistralrs serve -m Qwen/Qwen3-4B --isq q8_0
+  hanzo serve -m Qwen/Qwen3-4B --isq q8_0
 
 [INFO] PagedAttention is available (mode: auto)
 ```
@@ -294,17 +294,17 @@ Quantization Options
 Run comprehensive system diagnostics and environment checks. The doctor command helps identify configuration issues and validates your system is ready for inference.
 
 ```bash
-mistralrs doctor [OPTIONS]
+hanzo doctor [OPTIONS]
 ```
 
 **Examples:**
 
 ```bash
 # Run diagnostics
-mistralrs doctor
+hanzo doctor
 
 # Output as JSON
-mistralrs doctor --json
+hanzo doctor --json
 ```
 
 **Checks Performed:**
@@ -329,17 +329,17 @@ mistralrs doctor --json
 Authenticate with HuggingFace Hub by saving your token to the local cache.
 
 ```bash
-mistralrs login [OPTIONS]
+hanzo login [OPTIONS]
 ```
 
 **Examples:**
 
 ```bash
 # Interactive login (prompts for token)
-mistralrs login
+hanzo login
 
 # Provide token directly
-mistralrs login --token hf_xxxxxxxxxxxxx
+hanzo login --token hf_xxxxxxxxxxxxx
 ```
 
 The token is saved to the standard HuggingFace cache location:
@@ -361,7 +361,7 @@ If the `HF_HOME` environment variable is set, the token is saved to `$HF_HOME/to
 Manage the HuggingFace model cache. List cached models or delete specific models.
 
 ```bash
-mistralrs cache <SUBCOMMAND>
+hanzo cache <SUBCOMMAND>
 ```
 
 **Subcommands:**
@@ -371,7 +371,7 @@ mistralrs cache <SUBCOMMAND>
 List all cached models with their sizes and last used times.
 
 ```bash
-mistralrs cache list
+hanzo cache list
 ```
 
 **Example output:**
@@ -397,17 +397,17 @@ Cache directory: /home/user/.cache/huggingface/hub
 Delete a specific model from the cache.
 
 ```bash
-mistralrs cache delete -m <MODEL_ID>
+hanzo cache delete -m <MODEL_ID>
 ```
 
 **Examples:**
 
 ```bash
 # Delete a specific model
-mistralrs cache delete -m Qwen/Qwen3-4B
+hanzo cache delete -m Qwen/Qwen3-4B
 
 # Delete a model with organization
-mistralrs cache delete -m meta-llama/Llama-3.2-3B
+hanzo cache delete -m meta-llama/Llama-3.2-3B
 ```
 
 ---
@@ -417,7 +417,7 @@ mistralrs cache delete -m meta-llama/Llama-3.2-3B
 Run performance benchmarks to measure prefill and decode speeds.
 
 ```bash
-mistralrs bench [MODEL_TYPE] -m <MODEL_ID> [OPTIONS]
+hanzo bench [MODEL_TYPE] -m <MODEL_ID> [OPTIONS]
 ```
 
 Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified.
@@ -426,16 +426,16 @@ Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified.
 
 ```bash
 # Run default benchmark (512 prompt tokens, 128 generated tokens, 3 iterations)
-mistralrs bench -m Qwen/Qwen3-4B
+hanzo bench -m Qwen/Qwen3-4B
 
 # Custom prompt and generation lengths
-mistralrs bench -m Qwen/Qwen3-4B --prompt-len 1024 --gen-len 256
+hanzo bench -m Qwen/Qwen3-4B --prompt-len 1024 --gen-len 256
 
 # More iterations for better statistics
-mistralrs bench -m Qwen/Qwen3-4B --iterations 10
+hanzo bench -m Qwen/Qwen3-4B --iterations 10
 
 # With ISQ quantization
-mistralrs bench -m Qwen/Qwen3-4B --isq q4k
+hanzo bench -m Qwen/Qwen3-4B --isq q4k
 ```
 
 **Example output:**
@@ -478,13 +478,13 @@ Run the CLI from a TOML configuration file. This is the recommended way to run m
 See [CLI_CONFIG.md](CLI_CONFIG.md) for full TOML configuration format details.
 
 ```bash
-mistralrs from-config --file <PATH>
+hanzo from-config --file <PATH>
 ```
 
 **Example:**
 
 ```bash
-mistralrs from-config --file config.toml
+hanzo from-config --file config.toml
 ```
 
 **Multi-model example** (config.toml):
@@ -516,20 +516,20 @@ model_id = "google/embeddinggemma-300m"
 Generate shell completions for your shell.
 
 ```bash
-mistralrs completions <SHELL>
+hanzo completions <SHELL>
 ```
 
 **Examples:**
 
 ```bash
 # Generate bash completions
-mistralrs completions bash > ~/.local/share/bash-completion/completions/mistralrs
+hanzo completions bash > ~/.local/share/bash-completion/completions/mistralrs
 
 # Generate zsh completions
-mistralrs completions zsh > ~/.zfunc/_mistralrs
+hanzo completions zsh > ~/.zfunc/_mistralrs
 
 # Generate fish completions
-mistralrs completions fish > ~/.config/fish/completions/mistralrs.fish
+hanzo completions fish > ~/.config/fish/completions/mistralrs.fish
 ```
 
 **Supported Shells:** `bash`, `zsh`, `fish`, `elvish`, `powershell`
@@ -543,8 +543,8 @@ mistralrs completions fish > ~/.config/fish/completions/mistralrs.fish
 Auto-detect model type. This is the recommended option for most models and is on by default simply by leaving out the explicit model type.
 
 ```bash
-mistralrs run -m Qwen/Qwen3-4B
-mistralrs serve -m Qwen/Qwen3-4B
+hanzo run -m Qwen/Qwen3-4B
+hanzo serve -m Qwen/Qwen3-4B
 ```
 
 The `auto` type supports text, multimodal, and other model types through automatic detection.
@@ -554,8 +554,8 @@ The `auto` type supports text, multimodal, and other model types through automat
 Explicit text generation model configuration.
 
 ```bash
-mistralrs run text -m Qwen/Qwen3-4B
-mistralrs serve text -m Qwen/Qwen3-4B
+hanzo run text -m Qwen/Qwen3-4B
+hanzo serve text -m Qwen/Qwen3-4B
 ```
 
 ### multimodal
@@ -563,8 +563,8 @@ mistralrs serve text -m Qwen/Qwen3-4B
 Multimodal models that can process images, audio, and text.
 
 ```bash
-mistralrs run multimodal -m google/gemma-4-E4B-it
-mistralrs serve multimodal -m google/gemma-4-E4B-it
+hanzo run multimodal -m google/gemma-4-E4B-it
+hanzo serve multimodal -m google/gemma-4-E4B-it
 ```
 
 **Multimodal Options:**
@@ -580,8 +580,8 @@ mistralrs serve multimodal -m google/gemma-4-E4B-it
 Image generation models using diffusion.
 
 ```bash
-mistralrs run diffusion -m black-forest-labs/FLUX.1-schnell
-mistralrs serve diffusion -m black-forest-labs/FLUX.1-schnell
+hanzo run diffusion -m black-forest-labs/FLUX.1-schnell
+hanzo serve diffusion -m black-forest-labs/FLUX.1-schnell
 ```
 
 ### speech
@@ -589,8 +589,8 @@ mistralrs serve diffusion -m black-forest-labs/FLUX.1-schnell
 Speech synthesis models.
 
 ```bash
-mistralrs run speech -m nari-labs/Dia-1.6B
-mistralrs serve speech -m nari-labs/Dia-1.6B
+hanzo run speech -m nari-labs/Dia-1.6B
+hanzo serve speech -m nari-labs/Dia-1.6B
 ```
 
 ### embedding
@@ -598,7 +598,7 @@ mistralrs serve speech -m nari-labs/Dia-1.6B
 Text embedding models. These do not support interactive mode but can be used with the HTTP server.
 
 ```bash
-mistralrs serve embedding -m google/embeddinggemma-300m
+hanzo serve embedding -m google/embeddinggemma-300m
 ```
 
 ---
@@ -613,22 +613,22 @@ In-situ quantization (ISQ) reduces model memory usage by quantizing weights at l
 
 ```bash
 # Simple bit-width quantization
-mistralrs run -m Qwen/Qwen3-4B --isq 4
-mistralrs run -m Qwen/Qwen3-4B --isq 8
+hanzo run -m Qwen/Qwen3-4B --isq 4
+hanzo run -m Qwen/Qwen3-4B --isq 8
 
 # GGML-style quantization
-mistralrs run -m Qwen/Qwen3-4B --isq q4_0
-mistralrs run -m Qwen/Qwen3-4B --isq q4_1
-mistralrs run -m Qwen/Qwen3-4B --isq q4k
-mistralrs run -m Qwen/Qwen3-4B --isq q5k
-mistralrs run -m Qwen/Qwen3-4B --isq q6k
+hanzo run -m Qwen/Qwen3-4B --isq q4_0
+hanzo run -m Qwen/Qwen3-4B --isq q4_1
+hanzo run -m Qwen/Qwen3-4B --isq q4k
+hanzo run -m Qwen/Qwen3-4B --isq q5k
+hanzo run -m Qwen/Qwen3-4B --isq q6k
 ```
 
 **ISQ Organization:**
 
 ```bash
 # Use MOQE organization for potentially better quality
-mistralrs run -m Qwen/Qwen3-4B --isq q4k --isq-organization moqe
+hanzo run -m Qwen/Qwen3-4B --isq q4k --isq-organization moqe
 ```
 
 ---
@@ -640,20 +640,20 @@ UQFF (Unified Quantized File Format) provides pre-quantized model files for fast
 **Generate UQFF files:**
 
 ```bash
-mistralrs quantize -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-uqff/
+hanzo quantize -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-uqff/
 ```
 
 **Load from UQFF:**
 
 ```bash
 # Specify just the first shard -- remaining shards are auto-discovered
-mistralrs run -m Qwen/Qwen3-4B --from-uqff q4k-0.uqff
+hanzo run -m Qwen/Qwen3-4B --from-uqff q4k-0.uqff
 ```
 
 **Multiple UQFF files (semicolon-separated, for different quantizations in one load):**
 
 ```bash
-mistralrs run -m Qwen/Qwen3-4B --from-uqff "q4k-0.uqff;q8_0-0.uqff"
+hanzo run -m Qwen/Qwen3-4B --from-uqff "q4k-0.uqff;q8_0-0.uqff"
 ```
 
 > Note: Shard auto-discovery means you no longer need to list every shard file. Specifying `q4k-0.uqff` will automatically find `q4k-1.uqff`, `q4k-2.uqff`, etc.
@@ -668,26 +668,26 @@ PagedAttention enables efficient memory management for the KV cache. It is autom
 
 ```bash
 # Auto mode (default): enabled on CUDA, disabled on Metal/CPU
-mistralrs serve -m Qwen/Qwen3-4B --paged-attn auto
+hanzo serve -m Qwen/Qwen3-4B --paged-attn auto
 
 # Force enable
-mistralrs serve -m Qwen/Qwen3-4B --paged-attn on
+hanzo serve -m Qwen/Qwen3-4B --paged-attn on
 
 # Force disable
-mistralrs serve -m Qwen/Qwen3-4B --paged-attn off
+hanzo serve -m Qwen/Qwen3-4B --paged-attn off
 ```
 
 **Memory allocation options (mutually exclusive):**
 
 ```bash
 # Allocate for specific context length (recommended)
-mistralrs serve -m Qwen/Qwen3-4B --pa-context-len 8192
+hanzo serve -m Qwen/Qwen3-4B --pa-context-len 8192
 
 # Allocate specific GPU memory in MB
-mistralrs serve -m Qwen/Qwen3-4B --pa-memory-mb 4096
+hanzo serve -m Qwen/Qwen3-4B --pa-memory-mb 4096
 
 # Allocate fraction of GPU memory (0.0-1.0)
-mistralrs serve -m Qwen/Qwen3-4B --pa-memory-fraction 0.8
+hanzo serve -m Qwen/Qwen3-4B --pa-memory-fraction 0.8
 ```
 
 **Additional options:**
@@ -707,35 +707,35 @@ Control how model layers are distributed across devices.
 
 ```bash
 # Use defaults (automatic)
-mistralrs run -m Qwen/Qwen3-4B
+hanzo run -m Qwen/Qwen3-4B
 ```
 
 **Manual layer assignment:**
 
 ```bash
 # Assign 10 layers to GPU 0, 20 layers to GPU 1
-mistralrs run -m Qwen/Qwen3-4B -n "0:10;1:20"
+hanzo run -m Qwen/Qwen3-4B -n "0:10;1:20"
 
 # Equivalent long form
-mistralrs run -m Qwen/Qwen3-4B --device-layers "0:10;1:20"
+hanzo run -m Qwen/Qwen3-4B --device-layers "0:10;1:20"
 ```
 
 **CPU-only execution:**
 
 ```bash
-mistralrs run -m Qwen/Qwen3-4B --cpu
+hanzo run -m Qwen/Qwen3-4B --cpu
 ```
 
 **Topology file:**
 
 ```bash
-mistralrs run -m Qwen/Qwen3-4B --topology topology.yaml
+hanzo run -m Qwen/Qwen3-4B --topology topology.yaml
 ```
 
 **Custom HuggingFace cache:**
 
 ```bash
-mistralrs run -m Qwen/Qwen3-4B --hf-cache /path/to/cache
+hanzo run -m Qwen/Qwen3-4B --hf-cache /path/to/cache
 ```
 
 **Device mapping options:**
@@ -759,20 +759,20 @@ Apply LoRA or X-LoRA adapters to models.
 
 ```bash
 # Single LoRA adapter
-mistralrs run -m Qwen/Qwen3-4B --lora my-lora-adapter
+hanzo run -m Qwen/Qwen3-4B --lora my-lora-adapter
 
 # Multiple LoRA adapters (semicolon-separated)
-mistralrs run -m Qwen/Qwen3-4B --lora "adapter1;adapter2"
+hanzo run -m Qwen/Qwen3-4B --lora "adapter1;adapter2"
 ```
 
 **X-LoRA:**
 
 ```bash
 # X-LoRA adapter with ordering file
-mistralrs run -m Qwen/Qwen3-4B --xlora my-xlora-adapter --xlora-order ordering.json
+hanzo run -m Qwen/Qwen3-4B --xlora my-xlora-adapter --xlora-order ordering.json
 
 # With target non-granular index
-mistralrs run -m Qwen/Qwen3-4B --xlora my-xlora-adapter --xlora-order ordering.json --tgt-non-granular-index 2
+hanzo run -m Qwen/Qwen3-4B --xlora my-xlora-adapter --xlora-order ordering.json --tgt-non-granular-index 2
 ```
 
 ---
@@ -785,16 +785,16 @@ Override the model's default chat template.
 
 ```bash
 # JSON template file
-mistralrs run -m Qwen/Qwen3-4B --chat-template template.json
+hanzo run -m Qwen/Qwen3-4B --chat-template template.json
 
 # Jinja template file
-mistralrs run -m Qwen/Qwen3-4B --chat-template template.jinja
+hanzo run -m Qwen/Qwen3-4B --chat-template template.jinja
 ```
 
 **Explicit Jinja override:**
 
 ```bash
-mistralrs run -m Qwen/Qwen3-4B --jinja-explicit custom.jinja
+hanzo run -m Qwen/Qwen3-4B --jinja-explicit custom.jinja
 ```
 
 ---
@@ -805,10 +805,10 @@ Enable web search capabilities (requires an embedding model).
 
 ```bash
 # Enable search with default embedding model
-mistralrs run -m Qwen/Qwen3-4B --enable-search
+hanzo run -m Qwen/Qwen3-4B --enable-search
 
 # Specify embedding model
-mistralrs run -m Qwen/Qwen3-4B --enable-search --search-embedding-model embedding-gemma
+hanzo run -m Qwen/Qwen3-4B --enable-search --search-embedding-model embedding-gemma
 ```
 
 ---
@@ -819,13 +819,13 @@ Control thinking/reasoning mode for models that support it (like DeepSeek, Qwen3
 
 ```bash
 # Force thinking on (equivalent to --thinking true)
-mistralrs run -m Qwen/Qwen3-4B --thinking
+hanzo run -m Qwen/Qwen3-4B --thinking
 
 # Force thinking off
-mistralrs run -m Qwen/Qwen3-4B --thinking false
+hanzo run -m Qwen/Qwen3-4B --thinking false
 ```
 
-`--thinking` (or `--thinking true`) forces thinking on. `--thinking false` forces thinking off. If you omit the flag entirely, `mistralrs run` defers to the chat template's default behavior. Templates with an explicit thinking toggle use the repository fallback of `true` when no override is provided.
+`--thinking` (or `--thinking true`) forces thinking on. `--thinking false` forces thinking off. If you omit the flag entirely, `hanzo run` defers to the chat template's default behavior. Templates with an explicit thinking toggle use the repository fallback of `true` when no override is provided.
 
 In interactive mode, thinking content is displayed in gray text before the final response.
 
@@ -855,13 +855,13 @@ These options apply to all commands.
 
 ```bash
 # Set random seed
-mistralrs run -m Qwen/Qwen3-4B --seed 42
+hanzo run -m Qwen/Qwen3-4B --seed 42
 
 # Enable logging
-mistralrs run -m Qwen/Qwen3-4B --log requests.log
+hanzo run -m Qwen/Qwen3-4B --log requests.log
 
 # Use token from environment variable
-mistralrs run -m meta-llama/Llama-3.2-3B-Instruct --token-source env:HF_TOKEN
+hanzo run -m meta-llama/Llama-3.2-3B-Instruct --token-source env:HF_TOKEN
 ```
 
 ---
@@ -910,17 +910,17 @@ For loading quantized models.
 
 ```bash
 # Load a GGUF model
-mistralrs run -m Qwen/Qwen3-4B --format gguf -f model.gguf
+hanzo run -m Qwen/Qwen3-4B --format gguf -f model.gguf
 
 # Multiple GGUF files
-mistralrs run -m Qwen/Qwen3-4B --format gguf -f "model-part1.gguf;model-part2.gguf"
+hanzo run -m Qwen/Qwen3-4B --format gguf -f "model-part1.gguf;model-part2.gguf"
 ```
 
 ---
 
 ## Interactive Commands
 
-When running in interactive mode (`mistralrs run`), the following commands are available:
+When running in interactive mode (`hanzo run`), the following commands are available:
 
 | Command | Description |
 |---------|-------------|
