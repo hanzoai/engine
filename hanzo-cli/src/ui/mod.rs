@@ -9,7 +9,7 @@ use axum::Router;
 use include_dir::{include_dir, Dir};
 use indexmap::IndexMap;
 use hanzo::{Model, SearchEmbeddingModel};
-use hanzo_engine::{MistralRs, ModelCategory, SupportedModality};
+use hanzo_engine::{Hanzo, ModelCategory, SupportedModality};
 use tokio::fs;
 use tower_http::services::ServeDir;
 
@@ -63,7 +63,7 @@ fn modality_label(m: &SupportedModality) -> String {
     .to_string()
 }
 
-fn build_model_list(hanzo: &Arc<MistralRs>) -> IndexMap<String, UiModelInfo> {
+fn build_model_list(hanzo: &Arc<Hanzo>) -> IndexMap<String, UiModelInfo> {
     let mut models = IndexMap::new();
     if let Ok(list) = hanzo.list_models() {
         for model_id in list {
@@ -109,7 +109,7 @@ fn build_model_list(hanzo: &Arc<MistralRs>) -> IndexMap<String, UiModelInfo> {
 }
 
 pub async fn build_ui_router(
-    hanzo: Arc<MistralRs>,
+    hanzo: Arc<Hanzo>,
     enable_search: bool,
     search_embedding_model: Option<SearchEmbeddingModel>,
     enable_code_execution: bool,

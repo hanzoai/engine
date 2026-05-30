@@ -91,8 +91,8 @@ hanzo serve --ui --isq 4 -m Qwen/Qwen3-4B
 
 ```bash
 pip install hanzo        # CPU
-pip install mistralrs-cuda   # NVIDIA GPU
-pip install mistralrs-metal  # Apple Silicon
+pip install hanzo-cuda   # NVIDIA GPU
+pip install hanzo-metal  # Apple Silicon
 ```
 
 ```python

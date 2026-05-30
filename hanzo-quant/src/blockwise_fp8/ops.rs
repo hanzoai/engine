@@ -1349,7 +1349,7 @@ mod tests {
 
         let api = ApiBuilder::new().with_progress(true).build().unwrap();
         let api = api.repo(Repo::with_revision(
-            "EricB/mistralrs_tests".to_string(),
+            "EricB/hanzo_tests".to_string(),
             RepoType::Model,
             "main".to_string(),
         ));

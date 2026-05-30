@@ -18,7 +18,7 @@ use axum::{
     },
     Extension, Json,
 };
-use hanzo_engine::{ChatCompletionChunkResponse, MistralRs, Response, ToolCallResponse};
+use hanzo_engine::{ChatCompletionChunkResponse, Hanzo, Response, ToolCallResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc::Receiver;
@@ -33,7 +33,7 @@ use crate::{
     hanzo_server_router_builder::AgenticDefaults,
     openai::ChatCompletionRequest,
     streaming::{get_keep_alive_interval, DoneState},
-    types::{ExtractedMistralRsState, SharedMistralRsState},
+    types::{ExtractedHanzoState, SharedHanzoState},
     util::sanitize_error_message,
 };
 
@@ -594,14 +594,14 @@ fn to_event((name, payload): NamedEvent) -> Event {
 
 pub struct MessagesStreamer {
     rx: Receiver<Response>,
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     builder: StreamBuilder,
     buffered: std::collections::VecDeque<NamedEvent>,
     done_state: DoneState,
 }
 
 impl MessagesStreamer {
-    fn new(rx: Receiver<Response>, state: SharedMistralRsState) -> Self {
+    fn new(rx: Receiver<Response>, state: SharedHanzoState) -> Self {
         Self {
             rx,
             state,
@@ -629,7 +629,7 @@ impl futures::Stream for MessagesStreamer {
         loop {
             match self.rx.poll_recv(cx) {
                 Poll::Ready(Some(Response::Chunk(chunk))) => {
-                    MistralRs::maybe_log_response(self.state.clone(), &chunk);
+                    Hanzo::maybe_log_response(self.state.clone(), &chunk);
                     let events = self.builder.ingest_chunk(&chunk);
                     let all_finished = chunk.choices.iter().all(|c| c.finish_reason.is_some());
                     for ev in events {
@@ -646,7 +646,7 @@ impl futures::Stream for MessagesStreamer {
                     }
                 }
                 Poll::Ready(Some(Response::Done(resp))) => {
-                    MistralRs::maybe_log_response(self.state.clone(), &resp);
+                    Hanzo::maybe_log_response(self.state.clone(), &resp);
                     let events = self.builder.ingest_done(&resp);
                     for ev in events {
                         self.buffered.push_back(ev);
@@ -658,7 +658,7 @@ impl futures::Stream for MessagesStreamer {
                     return Poll::Ready(None);
                 }
                 Poll::Ready(Some(Response::ModelError(msg, _))) => {
-                    MistralRs::maybe_log_error(
+                    Hanzo::maybe_log_error(
                         self.state.clone(),
                         &ModelErrorMessage(msg.clone()),
                     );
@@ -681,7 +681,7 @@ impl futures::Stream for MessagesStreamer {
                     return Poll::Ready(Some(Ok(to_event(("error".to_string(), err)))));
                 }
                 Poll::Ready(Some(Response::InternalError(e))) => {
-                    MistralRs::maybe_log_error(self.state.clone(), &*e);
+                    Hanzo::maybe_log_error(self.state.clone(), &*e);
                     let err = json!({
                         "type": "error",
                         "error": {
@@ -705,7 +705,7 @@ impl futures::Stream for MessagesStreamer {
 
 fn create_messages_streamer(
     rx: Receiver<Response>,
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
 ) -> Sse<KeepAliveStream<MessagesStreamer>> {
     let streamer = MessagesStreamer::new(rx, state);
     let keep_alive_interval = get_keep_alive_interval();
@@ -715,7 +715,7 @@ fn create_messages_streamer(
 
 /// `POST /v1/messages` - Anthropic-compatible chat for Claude Code.
 pub async fn messages(
-    State(state): ExtractedMistralRsState,
+    State(state): ExtractedHanzoState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
     Json(areq): Json<AnthropicMessagesRequest>,
 ) -> axum::response::Response {

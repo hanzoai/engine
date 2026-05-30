@@ -140,7 +140,7 @@ print(res.usage)
 ```
 
 ## Rust SDK
-You can find this example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/advanced/anymoe/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/hanzo/examples/advanced/anymoe/main.rs).
 
 ```rust
 use anyhow::Result;

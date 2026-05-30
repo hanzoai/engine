@@ -68,7 +68,7 @@ Concrete `hanzo serve` example:
 
 ```bash
 hanzo serve \
-  -m mistralrs-community/gemma-4-E4B-it-UQFF \
+  -m hanzo-community/gemma-4-E4B-it-UQFF \
   --from-uqff 8 \
   --enable-code-execution \
   --sandbox on \
@@ -135,7 +135,7 @@ A startup warning is logged. With all sandbox layers off, model-generated code h
 
 ## Programmatic use
 
-For end-to-end code execution setup, see [enable code execution](/mistral.rs/guides/agents/enable-code-execution/). The checked-in examples cover [Python](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/code_execution.py), [Rust](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/code_execution/main.rs), and [Rust file outputs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/code_execution_files/main.rs). Python types are documented in the [Python API reference](/mistral.rs/reference/python/code-execution/).
+For end-to-end code execution setup, see [enable code execution](/mistral.rs/guides/agents/enable-code-execution/). The checked-in examples cover [Python](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/code_execution.py), [Rust](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/code_execution/main.rs), and [Rust file outputs](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/code_execution_files/main.rs). Python types are documented in the [Python API reference](/mistral.rs/reference/python/code-execution/).
 
 Rust:
 

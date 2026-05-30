@@ -29,19 +29,19 @@ TESTPYPI_URL = "https://test.pypi.org/legacy/"
 # Valid package name prefixes (wheel names use underscores)
 VALID_PACKAGE_PREFIXES = {
     "hanzo",
-    "mistralrs_cuda",
-    "mistralrs_metal",
-    "mistralrs_accelerate",
-    "mistralrs_mkl",
+    "hanzo_cuda",
+    "hanzo_metal",
+    "hanzo_accelerate",
+    "hanzo_mkl",
 }
 
 # Mapping from wheel name prefix to PyPI package name
 WHEEL_TO_PYPI = {
     "hanzo": "hanzo",
-    "mistralrs_cuda": "mistralrs-cuda",
-    "mistralrs_metal": "mistralrs-metal",
-    "mistralrs_accelerate": "mistralrs-accelerate",
-    "mistralrs_mkl": "mistralrs-mkl",
+    "hanzo_cuda": "hanzo-cuda",
+    "hanzo_metal": "hanzo-metal",
+    "hanzo_accelerate": "hanzo-accelerate",
+    "hanzo_mkl": "hanzo-mkl",
 }
 
 
@@ -206,7 +206,7 @@ Examples:
   python scripts/upload_wheels.py ./wheels --token pypi-xxx
 
   # Upload specific packages only
-  python scripts/upload_wheels.py ./wheels -p mistralrs-cuda
+  python scripts/upload_wheels.py ./wheels -p hanzo-cuda
         """,
     )
 

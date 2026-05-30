@@ -295,7 +295,7 @@ pub use hanzo_engine::{
 
 // ========== Config Types ==========
 pub use hanzo_engine::{
-    DefaultSchedulerMethod, IsqType, MemoryGpuConfig, MistralRsConfig, ModelDType,
+    DefaultSchedulerMethod, IsqType, MemoryGpuConfig, HanzoConfig, ModelDType,
     PagedAttentionConfig, PagedCacheType, SchedulerConfig, WebSearchOptions,
 };
 
@@ -341,7 +341,7 @@ pub use hanzo_engine::{MultimodalLoaderType, NormalLoaderType};
 pub use hanzo_engine::TokenSource;
 
 // ========== Engine (Advanced) ==========
-pub use hanzo_engine::{IntervalLogger, MistralRs, RequestMessage, ResponseOk};
+pub use hanzo_engine::{IntervalLogger, Hanzo, RequestMessage, ResponseOk};
 
 // ========== Utilities ==========
 pub use hanzo_engine::{initialize_logging, paged_attn_supported, parse_isq_value};

@@ -523,13 +523,13 @@ hanzo completions <SHELL>
 
 ```bash
 # Generate bash completions
-hanzo completions bash > ~/.local/share/bash-completion/completions/mistralrs
+hanzo completions bash > ~/.local/share/bash-completion/completions/hanzo
 
 # Generate zsh completions
-hanzo completions zsh > ~/.zfunc/_mistralrs
+hanzo completions zsh > ~/.zfunc/_hanzo
 
 # Generate fish completions
-hanzo completions fish > ~/.config/fish/completions/mistralrs.fish
+hanzo completions fish > ~/.config/fish/completions/hanzo.fish
 ```
 
 **Supported Shells:** `bash`, `zsh`, `fish`, `elvish`, `powershell`

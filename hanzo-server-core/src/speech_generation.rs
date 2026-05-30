@@ -11,7 +11,7 @@ use axum::{
 };
 use hanzo_engine::{
     speech_utils::{self, Sample},
-    Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response, SamplingParams,
+    Constraint, Hanzo, NormalRequest, Request, RequestMessage, Response, SamplingParams,
 };
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -21,7 +21,7 @@ use crate::{
         ErrorToResponse, JsonError,
     },
     openai::{AudioResponseFormat, SpeechGenerationRequest},
-    types::SharedMistralRsState,
+    types::SharedHanzoState,
     util::{sanitize_error_message, validate_model_name},
 };
 
@@ -55,11 +55,11 @@ impl IntoResponse for SpeechGenerationResponder {
 /// request format used by mistral.rs.
 pub fn parse_request(
     oairequest: SpeechGenerationRequest,
-    state: Arc<MistralRs>,
+    state: Arc<Hanzo>,
     tx: Sender<Response>,
 ) -> Result<(Request, AudioResponseFormat)> {
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
-    MistralRs::maybe_log_request(state.clone(), repr);
+    Hanzo::maybe_log_request(state.clone(), repr);
 
     // Validate that the requested model matches the loaded model
     validate_model_name(&oairequest.model, state.clone())?;
@@ -110,7 +110,7 @@ pub fn parse_request(
     responses((status = 200, description = "Speech generation"))
 )]
 pub async fn speech_generation(
-    State(state): State<Arc<MistralRs>>,
+    State(state): State<Arc<Hanzo>>,
     Json(oairequest): Json<SpeechGenerationRequest>,
 ) -> SpeechGenerationResponder {
     let (tx, mut rx) = create_response_channel(None);
@@ -139,19 +139,19 @@ pub async fn speech_generation(
 
 /// Helper function to handle speech generation errors and logging them.
 pub fn handle_error(
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> SpeechGenerationResponder {
     let sanitized_msg = sanitize_error_message(&*e);
     let e = anyhow::Error::msg(sanitized_msg);
-    MistralRs::maybe_log_error(state, &*e);
+    Hanzo::maybe_log_error(state, &*e);
     SpeechGenerationResponder::InternalError(e.into())
 }
 
 /// Process non-streaming speech generation responses.
 pub async fn process_non_streaming_response(
     rx: &mut Receiver<Response>,
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     response_format: AudioResponseFormat,
 ) -> SpeechGenerationResponder {
     base_process_non_streaming_response(
@@ -165,20 +165,20 @@ pub async fn process_non_streaming_response(
 
 /// Matches and processes different types of model responses into appropriate speech generation responses.
 pub fn match_responses(
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     response: Response,
     response_format: AudioResponseFormat,
 ) -> SpeechGenerationResponder {
     match response {
         Response::InternalError(e) => {
-            MistralRs::maybe_log_error(state, &*e);
+            Hanzo::maybe_log_error(state, &*e);
             SpeechGenerationResponder::InternalError(e)
         }
         Response::ValidationError(e) => SpeechGenerationResponder::ValidationError(e),
         Response::ImageGeneration(_) => unreachable!(),
         Response::CompletionModelError(m, _) => {
             let e = anyhow::Error::msg(m.to_string());
-            MistralRs::maybe_log_error(state, &*e);
+            Hanzo::maybe_log_error(state, &*e);
             SpeechGenerationResponder::InternalError(e.into())
         }
         Response::CompletionDone(_) => unreachable!(),
