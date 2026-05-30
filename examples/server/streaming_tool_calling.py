@@ -7,7 +7,7 @@ with finish_reason="tool_calls".
 
 Usage:
 ```
-mistralrs serve --quant q4k -p 1234 -m meta-llama/Meta-Llama-3.1-8B-Instruct
+hanzo serve --quant q4k -p 1234 -m meta-llama/Meta-Llama-3.1-8B-Instruct
 ```
 
 And then:

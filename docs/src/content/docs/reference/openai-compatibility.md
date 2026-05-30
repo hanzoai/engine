@@ -1,6 +1,6 @@
 ---
 title: OpenAI compatibility
-description: Which OpenAI API fields mistralrs implements, which it extends, and which it does not support.
+description: Which OpenAI API fields hanzo implements, which it extends, and which it does not support.
 sidebar:
   order: 5
 ---
@@ -36,7 +36,7 @@ mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libr
 
 `seed`, `user`, `stream_options`, `metadata`, `service_tier`, `parallel_tool_calls`, `store`. The request body accepts these fields (unknown fields are not rejected) but no behavior is wired to them. Use mistral.rs `session_id` for persistence.
 
-### mistralrs extensions
+### hanzo extensions
 
 Accepted alongside OpenAI fields. OpenAI ignores them:
 

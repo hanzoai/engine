@@ -20,7 +20,7 @@ Legacy target/draft speculative decoding has been removed. New speculative decod
 Use `--mtp-model` with an assistant model id or path:
 
 ```bash
-mistralrs run -m <target-model> \
+hanzo run -m <target-model> \
   --mtp-model <assistant-model-or-path> \
   --mtp-n-predict 6
 ```
@@ -32,7 +32,7 @@ mistralrs run -m <target-model> \
 `Runner` accepts `mtp_model` and `mtp_n_predict`:
 
 ```python
-from mistralrs import Runner, Which
+from hanzo import Runner, Which
 
 runner = Runner(
     which=Which.Plain(model_id="<target-model>"),
@@ -46,7 +46,7 @@ runner = Runner(
 Builders that load text, multimodal, or auto-detected models accept an MTP config:
 
 ```rust
-use mistralrs::{ModelBuilder, MtpConfig};
+use hanzo::{ModelBuilder, MtpConfig};
 
 let model = ModelBuilder::new("<target-model>")
     .with_mtp_config(MtpConfig {

@@ -27,7 +27,7 @@ UQFF carries a packed `major.minor.patch` version. Readers reject a different ma
 
 ## Reference implementation
 
-Canonical implementations: `mistralrs-quant` (writer) and the model loader in `mistralrs-core` (reader).
+Canonical implementations: `hanzo-quant` (writer) and the model loader in `hanzo-engine` (reader).
 
 ## Caveats
 

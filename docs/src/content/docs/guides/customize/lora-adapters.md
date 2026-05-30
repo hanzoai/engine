@@ -10,13 +10,13 @@ LoRA adapters add task-specific fine-tuning on top of a base model without modif
 ## Loading a LoRA
 
 ```bash
-mistralrs run -m <base-model> --lora <lora-repo>
+hanzo run -m <base-model> --lora <lora-repo>
 ```
 
 Multiple adapters: semicolon-separated.
 
 ```bash
-mistralrs run -m <base-model> --lora "<lora-repo-1>;<lora-repo-2>"
+hanzo run -m <base-model> --lora "<lora-repo-1>;<lora-repo-2>"
 ```
 
 mistral.rs reads `adapter_config.json` from the LoRA repo for targeted modules and rank.
@@ -26,7 +26,7 @@ mistral.rs reads `adapter_config.json` from the LoRA repo for targeted modules a
 X-LoRA loads multiple adapters with a learned scaling head selecting per-token weighting.
 
 ```bash
-mistralrs run \
+hanzo run \
   -m <base-model> \
   --xlora <xlora-repo> \
   --xlora-order <ordering-file.json>
@@ -41,7 +41,7 @@ mistralrs run \
 Python:
 
 ```python
-from mistralrs import Runner, Which
+from hanzo import Runner, Which
 
 runner = Runner(
     which=Which.Lora(

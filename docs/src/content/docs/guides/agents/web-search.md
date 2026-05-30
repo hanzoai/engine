@@ -12,7 +12,7 @@ The built-in search and extraction tools use [strict tool calling](/mistral.rs/g
 ## Turning it on
 
 ```bash
-mistralrs serve --enable-search -m <model>
+hanzo serve --enable-search -m <model>
 ```
 
 The built-in backend uses DuckDuckGo (`https://html.duckduckgo.com/html/?q=...`). Up to 10 results are returned per query. Results pass through a readability-style extractor.
@@ -22,7 +22,7 @@ The built-in backend uses DuckDuckGo (`https://html.duckduckgo.com/html/?q=...`)
 Retrieved results pass through an embedding-based reranker before reaching the model. To enable a reranker:
 
 ```bash
-mistralrs serve --enable-search \
+hanzo serve --enable-search \
   --search-embedding-model embedding-gemma \
   -m <model>
 ```

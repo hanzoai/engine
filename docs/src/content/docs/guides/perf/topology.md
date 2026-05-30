@@ -7,7 +7,7 @@ sidebar:
 
 Topology is a per-layer placement and quantization mechanism. A YAML file specifies, per layer range, the device and quantization to use.
 
-Most cases do not need topology. Defaults work for typical hardware; `mistralrs tune` covers common optimization.
+Most cases do not need topology. Defaults work for typical hardware; `hanzo tune` covers common optimization.
 
 ## Config
 
@@ -30,7 +30,7 @@ Layers outside any range use defaults. `device` is a CUDA (`cuda[N]`), Metal (`m
 Pass with `--topology`:
 
 ```bash
-mistralrs serve --topology topology.yaml -m <model>
+hanzo serve --topology topology.yaml -m <model>
 ```
 
 ## Notes

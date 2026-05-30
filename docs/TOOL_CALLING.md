@@ -19,7 +19,7 @@ All supported models respond according to the [OpenAI tool calling API](https://
 
 > Some models (e.g. Mistral Small/Nemo) require a specific chat template:
 > ```bash
-> mistralrs serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
+> hanzo serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 > ```
 
 ## Two modes of tool calling
@@ -148,7 +148,7 @@ The tool dispatch URL lets the server POST unhandled tool calls to your HTTP end
 
 ```bash
 # CLI: applies to all requests
-mistralrs serve -p 1234 --tool-dispatch-url https://my-service.com/tools --max-tool-rounds 5 -m google/gemma-4-E4B-it
+hanzo serve -p 1234 --tool-dispatch-url https://my-service.com/tools --max-tool-rounds 5 -m google/gemma-4-E4B-it
 ```
 
 ```rust

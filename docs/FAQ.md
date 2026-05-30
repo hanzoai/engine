@@ -7,7 +7,7 @@
 It depends on the model, quantization level, context length, and batch size. The best way to find out is to let mistral.rs analyze your hardware:
 
 ```bash
-mistralrs tune -m <model>
+hanzo tune -m <model>
 ```
 
 This shows a table of quantization options with estimated memory usage, context headroom, and quality trade-offs, all specific to your GPU. Quantization (`--isq 4`) typically reduces memory by 3-4x compared to FP16.
@@ -33,7 +33,7 @@ See the [Quantization Overview](QUANTS.md) for all options.
 Yes. Pass a local path instead of a Hugging Face model ID:
 
 ```bash
-mistralrs run -m /path/to/model
+hanzo run -m /path/to/model
 ```
 
 ### How do I use gated models (Llama, etc.)?
@@ -41,11 +41,11 @@ mistralrs run -m /path/to/model
 1. Accept the model license on Hugging Face
 2. Authenticate:
    ```bash
-   mistralrs login
+   hanzo login
    ```
 3. Run normally:
    ```bash
-   mistralrs run -m meta-llama/Llama-3.2-3B-Instruct
+   hanzo run -m meta-llama/Llama-3.2-3B-Instruct
    ```
 
 Alternatively, use `--token-source env:HF_TOKEN` with a Hugging Face token in your environment.
@@ -60,7 +60,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBueh
 
 Or if installed via cargo:
 ```bash
-cargo install mistralrs-cli --features "<your-features>" --force
+cargo install hanzo-cli --features "<your-features>" --force
 ```
 
 ### Does mistral.rs work on WSL?
@@ -92,13 +92,13 @@ By default, PagedAttention allocates 90% of free VRAM for the KV cache. Reduce i
 
 ```bash
 # Allocate for a specific context length
-mistralrs serve -m <model> --pa-context-len 4096
+hanzo serve -m <model> --pa-context-len 4096
 
 # Or set a memory cap
-mistralrs serve -m <model> --pa-memory-mb 2048
+hanzo serve -m <model> --pa-memory-mb 2048
 
 # Or use a fraction
-mistralrs serve -m <model> --pa-memory-fraction 0.5
+hanzo serve -m <model> --pa-memory-fraction 0.5
 ```
 
 ### How do I reduce Time to First Token (TTFT)?
@@ -138,7 +138,7 @@ See [Supported Models](SUPPORTED_MODELS.md) for the complete list. Architecture 
 Yes. Use a TOML config file with multiple `[[models]]` entries:
 
 ```bash
-mistralrs from-config --file config.toml
+hanzo from-config --file config.toml
 ```
 
 See [Multi-Model Support](multi_model/overview.md) for details.
