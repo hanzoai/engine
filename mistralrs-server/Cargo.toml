@@ -37,11 +37,12 @@ tokio.workspace = true
 tracing.workspace = true
 rust-mcp-sdk.workspace = true
 async-trait.workspace = true
-hanzo-zap.workspace = true
+# hanzo-zap.workspace = true  # removed: zap_server disabled
 reqwest.workspace = true
 
 [features]
 cuda = ["mistralrs-core/cuda", "mistralrs-server-core/cuda"]
+rocm = ["mistralrs-core/rocm", "mistralrs-server-core/rocm"]
 cudnn = ["mistralrs-core/cudnn", "mistralrs-server-core/cudnn"]
 metal = ["mistralrs-core/metal", "mistralrs-server-core/metal"]
 flash-attn = [
