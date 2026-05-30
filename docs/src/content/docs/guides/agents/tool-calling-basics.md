@@ -87,10 +87,10 @@ The caller invokes the real API and sends the result back:
 ## Server-side: enabling built-in tools
 
 ```bash
-mistralrs serve --enable-search --enable-code-execution -m <model>
+hanzo serve --enable-search --enable-code-execution -m <model>
 ```
 
-For custom tools, the cleanest path is to run them as an MCP server and connect mistralrs as a client. See the [MCP client guide](/mistral.rs/guides/agents/connect-mcp-server/).
+For custom tools, the cleanest path is to run them as an MCP server and connect hanzo as a client. See the [MCP client guide](/mistral.rs/guides/agents/connect-mcp-server/).
 
 The SDKs can also register custom callbacks directly: Python uses `Runner(tool_callbacks=...)`; Rust builders use `with_tool_callback(...)` or `with_tool_callback_and_tool(...)`.
 

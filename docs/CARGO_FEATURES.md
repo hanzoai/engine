@@ -30,7 +30,7 @@ Enables NVIDIA GPU acceleration via CUDA. This is the primary feature for runnin
 **Usage:**
 ```bash
 cargo build --release --features cuda
-cargo install mistralrs-cli --features cuda
+cargo install hanzo-cli --features cuda
 ```
 
 **What it enables:**
@@ -175,7 +175,7 @@ Enables multi-GPU distributed inference using NVIDIA NCCL (NVIDIA Collective Com
 cargo build --release --features "cuda nccl"
 
 # Run with specific GPU count
-MISTRALRS_MN_LOCAL_WORLD_SIZE=2 mistralrs serve -m Qwen/Qwen3-30B-A3B-Instruct
+MISTRALRS_MN_LOCAL_WORLD_SIZE=2 hanzo serve -m Qwen/Qwen3-30B-A3B-Instruct
 ```
 
 **Environment Variables:**
@@ -205,7 +205,7 @@ cargo build --release --features ring
 
 # Configure via JSON file
 export RING_CONFIG=path/to/ring_config.json
-mistralrs serve -m model-id
+hanzo serve -m model-id
 ```
 
 **Configuration:**
@@ -256,16 +256,16 @@ See [Ring documentation](DISTRIBUTED/RING.md) for detailed setup instructions.
 
 ```bash
 # NVIDIA GPU with all optimizations
-cargo install mistralrs-cli --features "cuda cudnn flash-attn"
+cargo install hanzo-cli --features "cuda cudnn flash-attn"
 
 # Apple Silicon
-cargo install mistralrs-cli --features "metal accelerate"
+cargo install hanzo-cli --features "metal accelerate"
 
 # Intel CPU
-cargo install mistralrs-cli --features "mkl"
+cargo install hanzo-cli --features "mkl"
 
 # Multi-GPU NVIDIA setup
-cargo install mistralrs-cli --features "cuda cudnn flash-attn nccl"
+cargo install hanzo-cli --features "cuda cudnn flash-attn nccl"
 
 # Build from source with CUDA
 git clone https://github.com/hanzoai/engine.git
@@ -281,7 +281,7 @@ These features are primarily for library development and are not typically used 
 
 | Feature | Description |
 |---------|-------------|
-| `pyo3_macros` | Python bindings support (used by mistralrs-pyo3) |
+| `pyo3_macros` | Python bindings support (used by hanzo-pyo3) |
 | `utoipa` | OpenAPI documentation generation |
 
 ---
@@ -295,13 +295,13 @@ The Python SDK is distributed as separate packages with features pre-configured:
 | `mistralrs-cuda` | `cuda cudnn flash-attn` |
 | `mistralrs-metal` | `metal accelerate` |
 | `mistralrs-mkl` | `mkl` |
-| `mistralrs` | CPU only |
+| `hanzo` | CPU only |
 
 ```bash
 pip install mistralrs-cuda    # NVIDIA GPUs
 pip install mistralrs-metal   # Apple Silicon
 pip install mistralrs-mkl     # Intel CPUs
-pip install mistralrs         # Generic CPU
+pip install hanzo         # Generic CPU
 ```
 
 ---
@@ -310,10 +310,10 @@ pip install mistralrs         # Generic CPU
 
 ### Diagnosing Issues
 
-Use `mistralrs doctor` to diagnose your system configuration and verify features are working correctly:
+Use `hanzo doctor` to diagnose your system configuration and verify features are working correctly:
 
 ```bash
-mistralrs doctor
+hanzo doctor
 ```
 
 This command checks:
@@ -324,7 +324,7 @@ This command checks:
 
 ### Feature not working
 
-1. Run `mistralrs doctor` to check system configuration
+1. Run `hanzo doctor` to check system configuration
 
 2. Verify the feature is enabled in your build:
    ```bash

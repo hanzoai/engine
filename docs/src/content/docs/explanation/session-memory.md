@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-Agentic sessions hold tool-call records, tool responses, and multimodal payloads from earlier turns. mistralrs stores this state in memory and reconciles it with each new request.
+Agentic sessions hold tool-call records, tool responses, and multimodal payloads from earlier turns. hanzo stores this state in memory and reconciles it with each new request.
 
 ## Store
 

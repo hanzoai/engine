@@ -24,7 +24,7 @@ irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1
 The script detects CUDA and selects features accordingly. To install manually:
 
 ```powershell
-cargo install mistralrs-cli --features "cuda flash-attn cudnn"
+cargo install hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 Prerequisites:
@@ -53,13 +53,13 @@ CUDA behavior under WSL matches native Linux, including flash-attention and flas
 ## Verifying the install
 
 ```powershell
-mistralrs doctor
+hanzo doctor
 ```
 
 Or inside WSL:
 
 ```bash
-mistralrs doctor
+hanzo doctor
 ```
 
 Both list the GPU and compiled features.

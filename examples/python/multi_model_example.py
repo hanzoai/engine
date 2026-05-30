@@ -13,7 +13,7 @@ Models used:
 - Text: Qwen/Qwen3-4B (Architecture.Qwen3)
 """
 
-from mistralrs import (
+from hanzo import (
     Runner,
     Which,
     ChatCompletionRequest,

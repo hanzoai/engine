@@ -1,6 +1,6 @@
 ---
-title: Expose mistralrs as an MCP server
-description: Run mistralrs as an MCP server other agents can call.
+title: Expose hanzo as an MCP server
+description: Run hanzo as an MCP server other agents can call.
 sidebar:
   order: 9
 ---
@@ -10,7 +10,7 @@ mistral.rs can expose itself as an MCP server.
 ## Starting an MCP server
 
 ```bash
-mistralrs serve --mcp-port 3030 -m Qwen/Qwen3-4B
+hanzo serve --mcp-port 3030 -m Qwen/Qwen3-4B
 ```
 
 `--mcp-port` enables the MCP server on a separate port. The endpoint is `POST /mcp` over HTTP with JSON-RPC 2.0.

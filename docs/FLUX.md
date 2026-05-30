@@ -7,7 +7,7 @@ We support both the `-schnell` and `-dev` versions of the model.
 ## Quick Start
 
 ```bash
-mistralrs run diffusion -m black-forest-labs/FLUX.1-schnell -a flux
+hanzo run diffusion -m black-forest-labs/FLUX.1-schnell -a flux
 ```
 
 ## Memory Usage
@@ -24,7 +24,7 @@ The FLUX model itself is 12 billion parameters (~24GB), and the T5 XXL encoder m
 Start the server:
 
 ```
-mistralrs serve diffusion -p 1234 -m black-forest-labs/FLUX.1-schnell -a flux
+hanzo serve diffusion -p 1234 -m black-forest-labs/FLUX.1-schnell -a flux
 ```
 
 Send a request:
@@ -47,7 +47,7 @@ print(result.data[0].url)
 ```rust
 use std::time::Instant;
 use anyhow::Result;
-use mistralrs::{DiffusionGenerationParams, DiffusionLoaderType, DiffusionModelBuilder, ImageGenerationResponseFormat};
+use hanzo::{DiffusionGenerationParams, DiffusionLoaderType, DiffusionModelBuilder, ImageGenerationResponseFormat};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
 ## Python SDK
 
 ```py
-from mistralrs import (
+from hanzo import (
     Runner,
     Which,
     DiffusionArchitecture,

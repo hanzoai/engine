@@ -102,11 +102,11 @@ Create `mcp-config.json` with a **working example** using the filesystem server:
 
 ```bash
 # Start with MCP configuration
-mistralrs serve --mcp-config mcp-config.json -p 1234 -m Qwen/Qwen3-4B
+hanzo serve --mcp-config mcp-config.json -p 1234 -m Qwen/Qwen3-4B
 
 # Alternative: Use environment variable
 export MCP_CONFIG_PATH=mcp-config.json
-mistralrs serve -p 1234 -m Qwen/Qwen3-4B
+hanzo serve -p 1234 -m Qwen/Qwen3-4B
 ```
 
 ✅ **Server starts with tools automatically loaded!**

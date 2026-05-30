@@ -1,6 +1,6 @@
 ---
 title: Device mapping
-description: How mistralrs decides where to put a model across available GPUs, and when you should override it.
+description: How hanzo decides where to put a model across available GPUs, and when you should override it.
 sidebar:
   order: 7
 ---
@@ -23,7 +23,7 @@ If the model does not fit, CPU offload places some layers on CPU, and disk-based
 
 ## Auto-detection
 
-`mistralrs run -m <model>` with no device mapping flags:
+`hanzo run -m <model>` with no device mapping flags:
 
 1. Counts available CUDA (or Metal) devices.
 2. With one device, everything goes there.
@@ -54,7 +54,7 @@ Cases for manual mapping:
 
 Apple Silicon has no multi-GPU concept. CPU and GPU share unified memory; device mapping is a no-op.
 
-`mistralrs doctor` reports a single device on Apple hardware regardless of CPU/GPU distinction. The engine handles CPU vs GPU kernel placement at a lower level.
+`hanzo doctor` reports a single device on Apple hardware regardless of CPU/GPU distinction. The engine handles CPU vs GPU kernel placement at a lower level.
 
 ## Interaction with `--dtype`
 

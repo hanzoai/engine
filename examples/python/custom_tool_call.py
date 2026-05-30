@@ -1,6 +1,6 @@
 import json
 import os
-from mistralrs import (
+from hanzo import (
     Runner,
     Which,
     ChatCompletionRequest,

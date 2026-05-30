@@ -9,7 +9,7 @@ Prequantized UQFF models:
 ## Quick Start
 
 ```bash
-mistralrs run -m google/gemma-3n-E4B-it --isq 4 --image photo.jpg -i "Describe this image"
+hanzo run -m google/gemma-3n-E4B-it --isq 4 --image photo.jpg -i "Describe this image"
 ```
 
 ## Input Formats
@@ -42,7 +42,7 @@ The default configuration file ([`matformer_configs/gemma3n.csv`](https://github
 ### Command Line Example
 
 ```bash
-mistralrs run -m google/gemma-3n-E4B-it \
+hanzo run -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 ```
@@ -52,13 +52,13 @@ mistralrs run -m google/gemma-3n-E4B-it \
 1) Start the server
 
 ```bash
-mistralrs serve -m google/gemma-3n-E4B-it --isq 4 -p 1234
+hanzo serve -m google/gemma-3n-E4B-it --isq 4 -p 1234
 ```
 
 Or with MatFormer:
 
 ```bash
-mistralrs serve -m google/gemma-3n-E4B-it --isq 4 -p 1234 \
+hanzo serve -m google/gemma-3n-E4B-it --isq 4 -p 1234 \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 ```
@@ -124,7 +124,7 @@ print(completion.choices[0].message.content)
 You can find this example [here](https://github.com/hanzoai/engine/blob/master/examples/python/gemma3n.py).
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
     which=Which.MultimodalPlain(
@@ -163,7 +163,7 @@ print(res.usage)
 **With MatFormer:**
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
     which=Which.MultimodalPlain(
@@ -210,7 +210,7 @@ You can find this example [here](https://github.com/hanzoai/engine/blob/master/m
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+use hanzo::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -251,7 +251,7 @@ async fn main() -> Result<()> {
 
 ```rust
 use anyhow::Result;
-use mistralrs::{AudioInput, IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+use hanzo::{AudioInput, IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 use std::path::PathBuf;
 
 #[tokio::main]

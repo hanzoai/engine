@@ -43,7 +43,7 @@ On macOS, the resource cap fields are accepted for configuration compatibility b
 
 CLI/TOML expose the common controls: mode, memory, CPU, process count, and network. Programmatic `SandboxPolicy` also exposes open-file and written-file-size caps.
 
-**TOML (`mistralrs from-config -f <toml>`):**
+**TOML (`hanzo from-config -f <toml>`):**
 
 ```toml
 [sandbox]
@@ -64,10 +64,10 @@ network       = "loopback"  # "none" | "loopback" | "full"
 --sandbox-network  {none|loopback|full}
 ```
 
-Concrete `mistralrs serve` example:
+Concrete `hanzo serve` example:
 
 ```bash
-mistralrs serve \
+hanzo serve \
   -m mistralrs-community/gemma-4-E4B-it-UQFF \
   --from-uqff 8 \
   --enable-code-execution \
@@ -131,7 +131,7 @@ Resource rlimits are not applied on macOS. Applying them from the server require
 
 Set `mode = "off"` in the TOML, `--sandbox off` on the CLI, or `MISTRALRS_SANDBOX=off` in the env.
 
-A startup warning is logged. With all sandbox layers off, model-generated code has full filesystem, network, and subprocess access as the mistralrs user.
+A startup warning is logged. With all sandbox layers off, model-generated code has full filesystem, network, and subprocess access as the hanzo user.
 
 ## Programmatic use
 
@@ -140,7 +140,7 @@ For end-to-end code execution setup, see [enable code execution](/mistral.rs/gui
 Rust:
 
 ```rust
-use mistralrs::{CodeExecutionConfig, NetworkMode, SandboxPolicy};
+use hanzo::{CodeExecutionConfig, NetworkMode, SandboxPolicy};
 
 let cfg = CodeExecutionConfig {
     sandbox_policy: Some(SandboxPolicy {
@@ -155,7 +155,7 @@ let cfg = CodeExecutionConfig {
 Python:
 
 ```python
-from mistralrs import CodeExecutionConfig, NetworkMode, Runner, SandboxPolicy, Which
+from hanzo import CodeExecutionConfig, NetworkMode, Runner, SandboxPolicy, Which
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),

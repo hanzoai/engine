@@ -64,7 +64,7 @@ jobs:
           TESTS_HF_TOKEN: ${{ secrets.HF_TOKEN }}
         with:
           command: test
-          args: -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
+          args: -p hanzo-engine -p hanzo-quant -p hanzo-vision
 
   fmt:
     name: Rustfmt

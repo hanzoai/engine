@@ -1,6 +1,6 @@
 ---
 title: Python SDK
-description: Build against the mistralrs Python package. Streaming, multimodal input, and persistent sessions.
+description: Build against the hanzo Python package. Streaming, multimodal input, and persistent sessions.
 ---
 
 [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) covers the Python SDK basics. These guides cover the next steps.

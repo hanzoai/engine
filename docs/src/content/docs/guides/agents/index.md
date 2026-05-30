@@ -32,7 +32,7 @@ The agent system has three layers:
 
 - [Connect to an MCP server](/mistral.rs/guides/agents/connect-mcp-server/): use external MCP tools.
 - [Configure the tool loop](/mistral.rs/guides/agents/configure-tool-loop/): round caps and dispatch URLs.
-- [Expose mistralrs as an MCP server](/mistral.rs/guides/agents/expose-as-mcp/): let other agents call your models.
+- [Expose hanzo as an MCP server](/mistral.rs/guides/agents/expose-as-mcp/): let other agents call your models.
 
 ## Recommended order
 
@@ -44,6 +44,6 @@ The agent system has three layers:
 6. [Persist agent sessions](/mistral.rs/guides/agents/persist-sessions/)
 7. [Connect to an MCP server](/mistral.rs/guides/agents/connect-mcp-server/)
 8. [Configure the tool loop](/mistral.rs/guides/agents/configure-tool-loop/)
-9. [Expose mistralrs as an MCP server](/mistral.rs/guides/agents/expose-as-mcp/)
+9. [Expose hanzo as an MCP server](/mistral.rs/guides/agents/expose-as-mcp/)
 
 For design rationale (server-side tool loops, session splicing), see the [explanation section](/mistral.rs/explanation/agentic-loop/).

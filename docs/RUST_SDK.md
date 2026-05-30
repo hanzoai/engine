@@ -1,6 +1,6 @@
-# mistralrs Rust SDK
+# hanzo Rust SDK
 
-The `mistralrs` crate provides a high-level Rust API for running LLM inference with Hanzo Engine.
+The `hanzo` crate provides a high-level Rust API for running LLM inference with Hanzo Engine.
 
 > **Full API reference:** [docs.rs/mistralrs](https://docs.rs/mistralrs)
 
@@ -20,28 +20,28 @@ The `mistralrs` crate provides a high-level Rust API for running LLM inference w
 ## Installation
 
 ```bash
-cargo add mistralrs
+cargo add hanzo
 ```
 
 Or in your `Cargo.toml`:
 ```toml
 [dependencies]
-mistralrs = "0.7"
+hanzo = "0.7"
 ```
 
 For GPU acceleration, enable the appropriate feature:
 ```toml
-mistralrs = { version = "0.8", features = ["metal"] }     # macOS
-mistralrs = { version = "0.8", features = ["cuda"] }       # NVIDIA
+hanzo = { version = "0.8", features = ["metal"] }     # macOS
+hanzo = { version = "0.8", features = ["cuda"] }       # NVIDIA
 ```
 
 ## Quick Start
 
 ```rust
-use mistralrs::{IsqBits, ModelBuilder, TextMessages, TextMessageRole};
+use hanzo::{IsqBits, ModelBuilder, TextMessages, TextMessageRole};
 
 #[tokio::main]
-async fn main() -> mistralrs::error::Result<()> {
+async fn main() -> hanzo::error::Result<()> {
     let model = ModelBuilder::new("Qwen/Qwen3-4B")
         .with_auto_isq(IsqBits::Four)
         .build()
@@ -117,7 +117,7 @@ let response = model.send_chat_request(request).await?;
 
 ```rust
 use futures::StreamExt;
-use mistralrs::*;
+use hanzo::*;
 
 let mut stream = model.stream_chat_request(messages).await?;
 while let Some(chunk) = stream.next().await {
@@ -134,7 +134,7 @@ while let Some(chunk) = stream.next().await {
 Derive `schemars::JsonSchema` on your type and the model will be constrained to produce valid JSON:
 
 ```rust
-use mistralrs::*;
+use hanzo::*;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -176,7 +176,7 @@ let response = model.send_chat_request(request).await?;
 ### Using the `#[tool]` macro
 
 ```rust
-use mistralrs::tool;
+use hanzo::tool;
 
 #[tool(description = "Get the current weather for a location")]
 fn get_weather(
@@ -193,7 +193,7 @@ See [Tool Calling](TOOL_CALLING.md) for full details, or the [`examples/advanced
 `AgentBuilder` wraps the tool-calling loop, automatically dispatching tool calls and feeding results back:
 
 ```rust
-use mistralrs::*;
+use hanzo::*;
 
 let agent = AgentBuilder::new(model)
     .with_system_prompt("You are a helpful assistant with tools.")
@@ -212,10 +212,10 @@ See the [`examples/advanced/agent/`](https://github.com/hanzoai/engine/tree/mast
 For non-async applications, use `BlockingModel`:
 
 ```rust
-use mistralrs::blocking::BlockingModel;
-use mistralrs::{IsqBits, ModelBuilder};
+use hanzo::blocking::BlockingModel;
+use hanzo::{IsqBits, ModelBuilder};
 
-fn main() -> mistralrs::error::Result<()> {
+fn main() -> hanzo::error::Result<()> {
     let model = BlockingModel::from_builder(
         ModelBuilder::new("Qwen/Qwen3-4B")
             .with_auto_isq(IsqBits::Four),
@@ -259,7 +259,7 @@ Run any example with:
 cargo run --release --features <features> --example <name>
 ```
 
-Browse all examples: [`mistralrs/examples/`](https://github.com/hanzoai/engine/tree/master/mistralrs/examples)
+Browse all examples: [`hanzo/examples/`](https://github.com/hanzoai/engine/tree/master/mistralrs/examples)
 
 ## See Also
 
