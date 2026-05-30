@@ -2,6 +2,8 @@ use candle_core::{shape::Dim, DType, Result, Tensor, D};
 
 #[cfg(feature = "cuda")]
 use crate::cuda::ffi;
+#[cfg(feature = "rocm")]
+use crate::rocm::ffi as rocm_ffi;
 use crate::layers::Activation;
 #[cfg(feature = "cuda")]
 use candle_core::Shape;
@@ -467,6 +469,85 @@ impl candle_core::CustomOp1 for ArgSort {
         drop(dst_guard);
         let dst_ret = candle_core::cuda_backend::CudaStorage {
             slice: CudaStorageSlice::U32(dst),
+            device: dev.clone(),
+        };
+        Ok((dst_ret, layout.shape().clone()))
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        storage: &candle_core::RocmStorage,
+        layout: &candle_core::Layout,
+    ) -> Result<(candle_core::RocmStorage, candle_core::Shape)> {
+        use candle_core::rocm_backend::RocmStorageSlice;
+        use std::ffi::c_void;
+
+        let dev = &storage.device;
+        let elem_count = layout.shape().elem_count();
+        let ncols = self.last_dim as i32;
+        let nrows = elem_count as i32 / ncols;
+        let dst = dev.alloc::<u32>(elem_count)?;
+
+        let src_ptr = storage.slice.as_ptr() as *const c_void;
+        let dst_ptr = dst.as_ptr();
+        let stream = dev.stream().as_raw() as i64;
+        unsafe {
+            if self.asc {
+                match storage.slice.dtype() {
+                    candle_core::DType::U8 => {
+                        rocm_ffi::asort_asc_u8(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::U32 => {
+                        rocm_ffi::asort_asc_u32(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::I64 => {
+                        rocm_ffi::asort_asc_i64(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::BF16 => {
+                        rocm_ffi::asort_asc_bf16(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::F16 => {
+                        rocm_ffi::asort_asc_f16(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::F32 => {
+                        rocm_ffi::asort_asc_f32(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::F64 => {
+                        rocm_ffi::asort_asc_f64(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    _ => candle_core::bail!("Unexpected dtype in asort"),
+                }
+            } else {
+                match storage.slice.dtype() {
+                    candle_core::DType::U8 => {
+                        rocm_ffi::asort_desc_u8(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::U32 => {
+                        rocm_ffi::asort_desc_u32(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::I64 => {
+                        rocm_ffi::asort_desc_i64(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::BF16 => {
+                        rocm_ffi::asort_desc_bf16(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::F16 => {
+                        rocm_ffi::asort_desc_f16(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::F32 => {
+                        rocm_ffi::asort_desc_f32(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::F64 => {
+                        rocm_ffi::asort_desc_f64(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    _ => candle_core::bail!("Unexpected dtype in asort"),
+                }
+            }
+        }
+        let dst_ret = candle_core::RocmStorage {
+            slice: RocmStorageSlice::U32(dst),
             device: dev.clone(),
         };
         Ok((dst_ret, layout.shape().clone()))
