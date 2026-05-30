@@ -179,6 +179,8 @@ impl DeviceMapSetting {
                     {
                         let dev = match device.location() {
                             DeviceLocation::Cpu => Device::Cpu,
+                            #[cfg(feature = "rocm")]
+                            DeviceLocation::Rocm { .. } => device.clone(),
                             DeviceLocation::Cuda { gpu_id: device_ord } => {
                                 if device_ord == *ordinal {
                                     device.clone()
@@ -192,6 +194,8 @@ impl DeviceMapSetting {
                                                 DeviceLocation::Cpu => 0,
                                                 DeviceLocation::Cuda { gpu_id } => gpu_id,
                                                 DeviceLocation::Metal { gpu_id } => gpu_id,
+                                                #[cfg(feature = "rocm")]
+                                                DeviceLocation::Rocm { gpu_id } => gpu_id,
                                             };
                                             (d.clone(), ordinal)
                                         })
@@ -652,6 +656,8 @@ pub fn get_all_similar_devices(base: &Device) -> Result<Vec<Device>> {
     let mut devices = Vec::new();
     match base {
         Device::Cpu => return Ok(vec![Device::Cpu]),
+        #[cfg(feature = "rocm")]
+        Device::Rocm(_) => return Ok(vec![base.clone()]),
         Device::Cuda(_) => {
             let mut ord = 0;
             let DeviceLocation::Cuda { gpu_id: base_ord } = base.location() else {
