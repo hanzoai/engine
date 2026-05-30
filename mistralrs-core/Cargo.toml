@@ -124,6 +124,7 @@ cuda = [
 ]
 cudnn = ["candle-core/cudnn"]
 rocm = ["candle-core/rocm", "candle-nn/rocm", "mistralrs-quant/rocm"]
+vulkan = ["candle-core/vulkan", "candle-nn/vulkan", "mistralrs-quant/vulkan"]
 metal = [
     "candle-core/metal",
     "candle-nn/metal",

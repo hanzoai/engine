@@ -32,6 +32,13 @@ impl MemoryUsage {
                 sys.refresh_cpu_all();
                 Ok(usize::try_from(sys.available_memory())?)
             }
+            #[cfg(feature = "vulkan")]
+            Device::Vulkan(_) => {
+                // 8060S APU: unified memory shared with system RAM
+                let mut sys = System::new_all();
+                sys.refresh_cpu_all();
+                Ok(usize::try_from(sys.available_memory())?)
+            }
             Device::Cpu => {
                 let mut sys = System::new_all();
                 sys.refresh_cpu_all();
@@ -82,6 +89,12 @@ impl MemoryUsage {
         match device {
             #[cfg(feature = "rocm")]
             Device::Rocm(_) => {
+                let mut sys = System::new_all();
+                sys.refresh_cpu_all();
+                Ok(usize::try_from(sys.total_memory())?)
+            }
+            #[cfg(feature = "vulkan")]
+            Device::Vulkan(_) => {
                 let mut sys = System::new_all();
                 sys.refresh_cpu_all();
                 Ok(usize::try_from(sys.total_memory())?)
