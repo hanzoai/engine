@@ -70,6 +70,57 @@ fn main() {
             println!("cargo:rustc-link-lib=dylib=stdc++");
         }
     }
+
+    #[cfg(feature = "rocm")]
+    {
+        use std::path::PathBuf;
+        use std::process::Command;
+        println!("cargo:rerun-if-changed=build.rs");
+        println!("cargo:rerun-if-changed=src/rocm/sort.hip.cpp");
+        let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+
+        let rocm_path =
+            std::env::var("ROCM_PATH").unwrap_or_else(|_| "/opt/rocm".to_string());
+        let hipcc = {
+            let p = PathBuf::from(&rocm_path).join("bin/hipcc");
+            if p.exists() {
+                p.to_string_lossy().into_owned()
+            } else {
+                "hipcc".to_string()
+            }
+        };
+        let gfx =
+            std::env::var("ROCM_GFX_ARCH").unwrap_or_else(|_| "gfx1151".to_string());
+
+        // Compile the HIP sort/topk kernels into a relocatable object.
+        let obj = build_dir.join("sort.hip.o");
+        let status = Command::new(&hipcc)
+            .args(["-c", "-std=c++17", "-O3", "-fPIC"])
+            .arg(format!("--offload-arch={gfx}"))
+            .arg("src/rocm/sort.hip.cpp")
+            .arg("-o")
+            .arg(&obj)
+            .status()
+            .expect("failed to invoke hipcc for src/rocm/sort.hip.cpp");
+        assert!(status.success(), "hipcc failed to compile src/rocm/sort.hip.cpp");
+
+        // Archive into a static library so the Rust linker pulls in the fatbin.
+        let lib = build_dir.join("libmistralrsrocm.a");
+        let _ = std::fs::remove_file(&lib);
+        let status = Command::new("ar")
+            .arg("rcs")
+            .arg(&lib)
+            .arg(&obj)
+            .status()
+            .expect("failed to invoke ar to archive sort.hip.o");
+        assert!(status.success(), "ar failed to archive sort.hip.o");
+
+        println!("cargo:rustc-link-search=native={}", build_dir.display());
+        println!("cargo:rustc-link-lib=static=mistralrsrocm");
+        println!("cargo:rustc-link-search=native={rocm_path}/lib");
+        println!("cargo:rustc-link-lib=dylib=amdhip64");
+        println!("cargo:rustc-link-lib=dylib=stdc++");
+    }
 }
 
 fn set_git_revision() {
