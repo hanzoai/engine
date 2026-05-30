@@ -20,7 +20,7 @@ use mistralrs_server_core::{
 mod interactive_mode;
 use interactive_mode::interactive_mode;
 mod mcp_server;
-mod zap_server;
+// mod zap_server;  // disabled: hanzo-zap removed
 
 #[derive(Parser)]
 #[command(
@@ -502,21 +502,8 @@ async fn main() -> Result<()> {
         oai_port_num.map(|p| p + 2)
     };
 
-    let zap_task = if let Some(zap_port) = effective_zap_port {
-        let host = args
-            .serve_ip
-            .clone()
-            .unwrap_or_else(|| "0.0.0.0".to_string());
-        let forward_port = oai_port_num.unwrap_or(8080);
-        let addr = format!("{host}:{zap_port}");
-        info!("ZAP binary protocol listening on {addr}.");
-
-        tokio::spawn(async move {
-            zap_server::start_zap_server(&addr, forward_port).await;
-        })
-    } else {
-        tokio::spawn(async {})
-    };
+    let _ = effective_zap_port;
+    let zap_task = tokio::spawn(async {});
 
     let (_, _, _) = join!(oai_port, mcp_port, zap_task);
 
