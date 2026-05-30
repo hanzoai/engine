@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-const UQFF_DUMMY_TENSOR_MARKER: &str = "__mistralrs_uqff_dummy_tensor__";
+const UQFF_DUMMY_TENSOR_MARKER: &str = "__hanzo_uqff_dummy_tensor__";
 
 fn marked_uqff_dummy_tensor(name: &str) -> Option<&str> {
     name.strip_prefix(UQFF_DUMMY_TENSOR_MARKER)

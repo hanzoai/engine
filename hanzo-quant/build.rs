@@ -107,15 +107,15 @@ fn main() -> Result<(), String> {
         // https://github.com/EricLBuehler/mistral.rs/issues/588
         let out_file = if target.contains("msvc") {
             // Windows case
-            build_dir.join("mistralrsquant.lib")
+            build_dir.join("hanzoquant.lib")
         } else {
-            build_dir.join("libmistralrsquant.a")
+            build_dir.join("libhanzoquant.a")
         };
         builder
             .build_lib(out_file)
             .expect("Build mistral quant lib failed!");
         println!("cargo:rustc-link-search={}", build_dir.display());
-        println!("cargo:rustc-link-lib=mistralrsquant");
+        println!("cargo:rustc-link-lib=hanzoquant");
         println!("cargo:rustc-link-lib=dylib=cudart");
 
         if target.contains("msvc") {

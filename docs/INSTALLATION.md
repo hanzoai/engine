@@ -105,9 +105,9 @@ Learn more about running Docker containers: https://docs.docker.com/engine/refer
 Install the Python package:
 
 ```bash
-pip install mistralrs-cuda    # For NVIDIA GPUs
-pip install mistralrs-metal   # For Apple Silicon
-pip install mistralrs-mkl     # For Intel CPUs
+pip install hanzo-cuda    # For NVIDIA GPUs
+pip install hanzo-metal   # For Apple Silicon
+pip install hanzo-mkl     # For Intel CPUs
 pip install hanzo         # CPU-only
 ```
 

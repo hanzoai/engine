@@ -106,8 +106,8 @@ hanzo run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-f
 ### Using with the Rust SDK
 
 Check out the following examples:
-- Normal: [uqff/main.rs](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/uqff/main.rs)
-- Multimodal: [uqff_multimodal/main.rs](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/quantization/uqff_multimodal/main.rs)
+- Normal: [uqff/main.rs](https://github.com/hanzoai/engine/blob/master/hanzo/examples/uqff/main.rs)
+- Multimodal: [uqff_multimodal/main.rs](https://github.com/hanzoai/engine/blob/master/hanzo/examples/quantization/uqff_multimodal/main.rs)
 
 ### Using the Python SDK
 Modify the `Which` instantiation as follows:

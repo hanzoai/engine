@@ -12,7 +12,7 @@ MISTRALRS_DEBUG=1 hanzo run -m <model>
 
 Debug mode causes:
 - If loading a GGUF or GGML model, outputs a file containing the names, shapes, and types of each tensor:
-  - `mistralrs_gguf_tensors.txt` or `mistralrs_ggml_tensors.txt`
+  - `hanzo_gguf_tensors.txt` or `hanzo_ggml_tensors.txt`
 - Increased logging verbosity
 
 ## System Diagnostics
@@ -128,7 +128,7 @@ maturin develop -r --features <your-features>
 
 **CUDA version mismatch between pip package and system:**
 
-The `mistralrs-cuda` pip package is compiled against a specific CUDA toolkit version. If your system has a different CUDA version, you may see errors like `libcudart.so.XX: cannot open shared object file` or symbol-not-found crashes at runtime. Solutions:
+The `hanzo-cuda` pip package is compiled against a specific CUDA toolkit version. If your system has a different CUDA version, you may see errors like `libcudart.so.XX: cannot open shared object file` or symbol-not-found crashes at runtime. Solutions:
 
 1. Install the matching CUDA toolkit version, or
 2. Build from source against your local CUDA installation:

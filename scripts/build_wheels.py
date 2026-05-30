@@ -8,7 +8,7 @@ Builds appropriate wheels based on the detected environment.
 Usage:
     python scripts/build_wheels.py --list                    # Show buildable packages
     python scripts/build_wheels.py --all                     # Build all supported
-    python scripts/build_wheels.py -p hanzo mistralrs-cuda
+    python scripts/build_wheels.py -p hanzo hanzo-cuda
 """
 
 from __future__ import annotations
@@ -37,10 +37,10 @@ DOCKERFILE_PATH = REPO_ROOT / "Dockerfile.manylinux"
 
 PACKAGE_NAMES = [
     "hanzo",
-    "mistralrs-cuda",
-    "mistralrs-metal",
-    "mistralrs-accelerate",
-    "mistralrs-mkl",
+    "hanzo-cuda",
+    "hanzo-metal",
+    "hanzo-accelerate",
+    "hanzo-mkl",
 ]
 
 
@@ -149,29 +149,29 @@ def get_package_configs() -> dict[str, PackageConfig]:
             supported_arch=[Arch.X86_64, Arch.AARCH64],
             requires_accelerator=None,
         ),
-        "mistralrs-cuda": PackageConfig(
-            name="mistralrs-cuda",
+        "hanzo-cuda": PackageConfig(
+            name="hanzo-cuda",
             features=["cuda"],
             supported_os=[OS.LINUX, OS.WINDOWS],
             supported_arch=[Arch.X86_64, Arch.AARCH64],
             requires_accelerator="cuda",
         ),
-        "mistralrs-metal": PackageConfig(
-            name="mistralrs-metal",
+        "hanzo-metal": PackageConfig(
+            name="hanzo-metal",
             features=["metal"],
             supported_os=[OS.DARWIN],
             supported_arch=[Arch.AARCH64],
             requires_accelerator="metal",
         ),
-        "mistralrs-accelerate": PackageConfig(
-            name="mistralrs-accelerate",
+        "hanzo-accelerate": PackageConfig(
+            name="hanzo-accelerate",
             features=["accelerate"],
             supported_os=[OS.DARWIN],
             supported_arch=[Arch.AARCH64],
             requires_accelerator=None,  # Accelerate is always available on macOS
         ),
-        "mistralrs-mkl": PackageConfig(
-            name="mistralrs-mkl",
+        "hanzo-mkl": PackageConfig(
+            name="hanzo-mkl",
             features=["mkl"],
             supported_os=[OS.LINUX, OS.WINDOWS],
             supported_arch=[Arch.X86_64],
@@ -322,7 +322,7 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
             "docker",
             "build",
             "-t",
-            "mistralrs-wheelmaker:latest",
+            "hanzo-wheelmaker:latest",
             "-f",
             "Dockerfile.manylinux",
             ".",
@@ -358,7 +358,7 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
         "RUSTFLAGS=-C target-cpu=generic",
     ]
 
-    docker_cmd.extend(["mistralrs-wheelmaker:latest"] + maturin_args)
+    docker_cmd.extend(["hanzo-wheelmaker:latest"] + maturin_args)
 
     print("  Running Docker build with RUSTFLAGS=-C target-cpu=generic")
     print(f"  Maturin args: {' '.join(maturin_args)}")
@@ -397,7 +397,7 @@ Examples:
   python scripts/build_wheels.py --all
 
   # Build specific packages
-  python scripts/build_wheels.py --packages hanzo mistralrs-cuda
+  python scripts/build_wheels.py --packages hanzo hanzo-cuda
 
   # Specify output directory
   python scripts/build_wheels.py --all -o ./dist

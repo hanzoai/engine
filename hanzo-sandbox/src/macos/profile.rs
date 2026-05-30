@@ -172,18 +172,18 @@ mod tests {
     #[test]
     fn workdir_gets_read_write_rules() {
         let profile = render(&SandboxPolicy {
-            session_workdir: Some(PathBuf::from("/tmp/mistralrs workdir")),
+            session_workdir: Some(PathBuf::from("/tmp/hanzo workdir")),
             ..SandboxPolicy::default()
         });
 
-        assert!(profile.contains("(allow file-read* (literal \"/tmp/mistralrs workdir\"))"));
-        assert!(profile.contains("(allow file-write* (literal \"/tmp/mistralrs workdir\"))"));
-        assert!(profile.contains("(allow file-write* (subpath \"/tmp/mistralrs workdir\"))"));
+        assert!(profile.contains("(allow file-read* (literal \"/tmp/hanzo workdir\"))"));
+        assert!(profile.contains("(allow file-write* (literal \"/tmp/hanzo workdir\"))"));
+        assert!(profile.contains("(allow file-write* (subpath \"/tmp/hanzo workdir\"))"));
         assert!(
-            !profile.contains("(allow file-map-executable (literal \"/tmp/mistralrs workdir\"))")
+            !profile.contains("(allow file-map-executable (literal \"/tmp/hanzo workdir\"))")
         );
         assert!(
-            !profile.contains("(allow file-map-executable (subpath \"/tmp/mistralrs workdir\"))")
+            !profile.contains("(allow file-map-executable (subpath \"/tmp/hanzo workdir\"))")
         );
     }
 

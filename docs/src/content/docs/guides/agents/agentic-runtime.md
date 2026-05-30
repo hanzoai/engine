@@ -173,7 +173,7 @@ let request = RequestBuilder::from(messages)
     });
 ```
 
-See the [Rust approval example](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/code_execution_approval/main.rs).
+See the [Rust approval example](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/code_execution_approval/main.rs).
 
 ## HTTP run stream
 
@@ -209,7 +209,7 @@ Model output arrives as standard chat-completion chunks. Tool progress arrives a
 
 ```text
 event: agentic_tool_call_progress
-data: {"type":"agentic_tool_call_progress","round":0,"tool_name":"mistralrs_execute_python","phase":"calling","data":{"tool_type":"code_execution","code":"print('hello')"}}
+data: {"type":"agentic_tool_call_progress","round":0,"tool_name":"hanzo_execute_python","phase":"calling","data":{"tool_type":"code_execution","code":"print('hello')"}}
 ```
 
 A complete code-execution event can include captured output and media:
@@ -218,7 +218,7 @@ A complete code-execution event can include captured output and media:
 {
   "type": "agentic_tool_call_progress",
   "round": 0,
-  "tool_name": "mistralrs_execute_python",
+  "tool_name": "hanzo_execute_python",
   "phase": "complete",
   "data": {
     "tool_type": "code_execution",
@@ -226,7 +226,7 @@ A complete code-execution event can include captured output and media:
     "images_base64": ["..."],
     "video_frames_base64": ["..."],
     "video_frame_count": 12,
-    "working_directory": "/tmp/mistralrs-code-demo",
+    "working_directory": "/tmp/hanzo-code-demo",
     "execution_time_ms": 118
   }
 }
@@ -281,7 +281,7 @@ The non-streaming response carries the produced files in a top-level `files` arr
       "format": "png",
       "mime_type": "image/png",
       "bytes": 14823,
-      "source": {"tool": "mistralrs_execute_python", "round": 0, "turn": 0},
+      "source": {"tool": "hanzo_execute_python", "round": 0, "turn": 0},
       "data_base64": "iVBORw0KGgo..."
     },
     {
@@ -290,7 +290,7 @@ The non-streaming response carries the produced files in a top-level `files` arr
       "format": "csv",
       "mime_type": "text/csv",
       "bytes": 412,
-      "source": {"tool": "mistralrs_execute_python", "round": 0, "turn": 0},
+      "source": {"tool": "hanzo_execute_python", "round": 0, "turn": 0},
       "text": "x,y\n0,0\n..."
     }
   ]
@@ -301,7 +301,7 @@ When streaming, each file is emitted as soon as it is produced via a named SSE e
 
 ```text
 event: file_produced
-data: {"id":"file_abc_r0_0","name":"plot.png","format":"png","mime_type":"image/png","bytes":14823,"source":{"tool":"mistralrs_execute_python","round":0,"turn":0},"data_base64":"iVBORw0KGgo..."}
+data: {"id":"file_abc_r0_0","name":"plot.png","format":"png","mime_type":"image/png","bytes":14823,"source":{"tool":"hanzo_execute_python","round":0,"turn":0},"data_base64":"iVBORw0KGgo..."}
 ```
 
 Each `agentic_tool_calls[*]` record gains a `file_ids` field that lists the ids of files attributable to that round, so apps can correlate files with the tool that wrote them.

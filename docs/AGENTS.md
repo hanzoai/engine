@@ -809,12 +809,12 @@ hanzo serve -p 1234 \
 ### Examples
 
 **Rust SDK:**
-- [Agent (non-streaming)](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/agent/main.rs)
-- [Agent (streaming)](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/agent_streaming/main.rs)
-- [Tool callbacks](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/tool_callback/main.rs)
-- [Web search](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/web_search/main.rs)
-- [Custom search callback](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/search_callback/main.rs)
-- [MCP client](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/mcp_client/main.rs)
+- [Agent (non-streaming)](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/agent/main.rs)
+- [Agent (streaming)](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/agent_streaming/main.rs)
+- [Tool callbacks](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/tool_callback/main.rs)
+- [Web search](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/web_search/main.rs)
+- [Custom search callback](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/search_callback/main.rs)
+- [MCP client](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/mcp_client/main.rs)
 
 **Python SDK:**
 - [Agentic tools (callbacks)](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/agentic_tools.py)

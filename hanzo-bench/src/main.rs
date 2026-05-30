@@ -4,8 +4,8 @@ use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use hanzo_engine::{
     get_auto_device_map_params, get_model_dtype, initialize_logging, paged_attn_supported,
     parse_isq_value, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, DrySamplingParams, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs,
-    MistralRsBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, PagedCacheType, Request,
+    DeviceMapSetting, DrySamplingParams, Loader, LoaderBuilder, MemoryGpuConfig, Hanzo,
+    HanzoBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, PagedCacheType, Request,
     RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 use std::fmt::Display;
@@ -46,7 +46,7 @@ impl Display for UncertainTokSec {
 }
 
 async fn run_bench(
-    hanzo: Arc<MistralRs>,
+    hanzo: Arc<Hanzo>,
     prompt: RequestMessage,
     n_gen: usize,
     concurrency: usize,
@@ -245,7 +245,7 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
     print_stdout(table).expect("print table");
 }
 
-async fn warmup_run(hanzo: Arc<MistralRs>) {
+async fn warmup_run(hanzo: Arc<Hanzo>) {
     let sampling_params = SamplingParams {
         max_len: Some(1),
         ..SamplingParams::deterministic()
@@ -558,7 +558,7 @@ async fn main() -> anyhow::Result<()> {
             ),
         }
     };
-    let hanzo = MistralRsBuilder::new(pipeline, scheduler_config, false, None)
+    let hanzo = HanzoBuilder::new(pipeline, scheduler_config, false, None)
         .with_no_prefix_cache(true)
         .with_disable_eos_stop(true)
         .build()
