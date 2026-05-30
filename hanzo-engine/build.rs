@@ -45,16 +45,16 @@ fn main() {
         // https://github.com/EricLBuehler/mistral.rs/issues/588
         let out_file = if target.contains("msvc") {
             // Windows case
-            build_dir.join("mistralrscuda.lib")
+            build_dir.join("hanzocuda.lib")
         } else {
-            build_dir.join("libmistralrscuda.a")
+            build_dir.join("libhanzocuda.a")
         };
 
         builder
             .build_lib(out_file)
             .expect("Build mistral-core failed!");
         println!("cargo:rustc-link-search={}", build_dir.display());
-        println!("cargo:rustc-link-lib=mistralrscuda");
+        println!("cargo:rustc-link-lib=hanzocuda");
         println!("cargo:rustc-link-lib=dylib=cudart");
 
         if target.contains("msvc") {

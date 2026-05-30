@@ -161,7 +161,7 @@ impl MultiModelBuilder {
             anyhow::bail!("MultiModelBuilder requires at least one model to be added");
         }
 
-        // Build the first model to create the initial MistralRs instance
+        // Build the first model to create the initial Hanzo instance
         let mut builders_iter = self.builders.into_iter();
         let first_entry = builders_iter.next().unwrap();
 
@@ -173,8 +173,8 @@ impl MultiModelBuilder {
             .clone()
             .unwrap_or_else(|| pipeline_name.clone());
 
-        // Create the MistralRsBuilder for the first model
-        let mut runner_builder = hanzo_engine::MistralRsBuilder::new(
+        // Create the HanzoBuilder for the first model
+        let mut runner_builder = hanzo_engine::HanzoBuilder::new(
             pipeline,
             scheduler_config,
             add_model_config.engine_config.throughput_logging_enabled,
@@ -251,7 +251,7 @@ impl MultiModelBuilder {
                 .set_default_model_id(&default_id)
                 .map_err(|e| anyhow::anyhow!(e))?;
         }
-        // Otherwise, the first model is already the default (set by MistralRs::new)
+        // Otherwise, the first model is already the default (set by Hanzo::new)
 
         Ok(Model::new(hanzo))
     }
@@ -453,7 +453,7 @@ pub async fn build_model_from_pipeline(
     scheduler_config: SchedulerConfig,
     add_model_config: AddModelConfig,
 ) -> Model {
-    let mut runner_builder = hanzo_engine::MistralRsBuilder::new(
+    let mut runner_builder = hanzo_engine::HanzoBuilder::new(
         pipeline,
         scheduler_config,
         add_model_config.engine_config.throughput_logging_enabled,

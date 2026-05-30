@@ -72,16 +72,16 @@ fn main() -> Result<()> {
     // https://github.com/EricLBuehler/mistral.rs/issues/588
     let out_file = if target.contains("msvc") {
         // Windows case
-        build_dir.join("mistralrspagedattention.lib")
+        build_dir.join("hanzopagedattention.lib")
     } else {
-        build_dir.join("libmistralrspagedattention.a")
+        build_dir.join("libhanzopagedattention.a")
     };
     builder
         .build_lib(out_file)
         .expect("Build paged attention lib failed!");
 
     println!("cargo:rustc-link-search={}", build_dir.display());
-    println!("cargo:rustc-link-lib=mistralrspagedattention");
+    println!("cargo:rustc-link-lib=hanzopagedattention");
     println!("cargo:rustc-link-lib=dylib=cudart");
 
     if using_fp8 {
@@ -126,9 +126,9 @@ fn main() -> Result<(), String> {
         );
         // Write a dummy metallib file to satisfy the include_bytes! macro
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
-        std::fs::write(out_dir.join("mistralrs_paged_attention.metallib"), []).unwrap();
-        std::fs::write(out_dir.join("mistralrs_paged_attention_ios.metallib"), []).unwrap();
-        std::fs::write(out_dir.join("mistralrs_paged_attention_tvos.metallib"), []).unwrap();
+        std::fs::write(out_dir.join("hanzo_paged_attention.metallib"), []).unwrap();
+        std::fs::write(out_dir.join("hanzo_paged_attention_ios.metallib"), []).unwrap();
+        std::fs::write(out_dir.join("hanzo_paged_attention_tvos.metallib"), []).unwrap();
         return Ok(());
     }
 
@@ -215,9 +215,9 @@ fn main() -> Result<(), String> {
 
         // Compile air to metallib
         let lib_name = match platform {
-            Platform::MacOS => "mistralrs_paged_attention.metallib",
-            Platform::Ios => "mistralrs_paged_attention_ios.metallib",
-            Platform::TvOS => "mistralrs_paged_attention_tvos.metallib",
+            Platform::MacOS => "hanzo_paged_attention.metallib",
+            Platform::Ios => "hanzo_paged_attention_ios.metallib",
+            Platform::TvOS => "hanzo_paged_attention_tvos.metallib",
         };
         let metallib = out_dir.join(lib_name);
         let mut compile_metallib_cmd = Command::new("xcrun");

@@ -88,7 +88,7 @@ hanzo serve -p 1234 -m microsoft/Phi-3-mini-128k-instruct --topology topologies/
 ```
 
 ## Rust example
-Example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/topology/main.rs).
+Example [here](https://github.com/hanzoai/engine/blob/main/hanzo/examples/topology/main.rs).
 
 ## Python example
 Example [here](https://github.com/hanzoai/engine/blob/main/examples/python/topology.py).

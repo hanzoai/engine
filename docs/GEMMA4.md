@@ -2,7 +2,7 @@
 
 Gemma 4 is a multimodal model that supports text, vision (image), video, and audio input with text output. It builds on the Gemma family with full multimodal capabilities across all four input modalities.
 
-Pre-quantized UQFF models are available in the [mistralrs-community Gemma 4 collection](https://huggingface.co/collections/mistralrs-community/gemma-4).
+Pre-quantized UQFF models are available in the [hanzo-community Gemma 4 collection](https://huggingface.co/collections/hanzo-community/gemma-4).
 
 > **Video support**: Non-GIF video formats (mp4, avi, mov, etc.) require FFmpeg to be installed. See [VIDEO.md](VIDEO.md) for installation instructions and details.
 
@@ -192,7 +192,7 @@ print(res.usage)
 
 ## Rust SDK
 
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/models/multimodal_models/main.rs).
 
 This is a minimal example of running the Gemma 4 model with a video input. Video decoding uses the `parse_video_url` helper from `hanzo-server-core`, which handles FFmpeg decoding and frame sampling automatically.
 

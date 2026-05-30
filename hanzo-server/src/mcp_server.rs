@@ -9,7 +9,7 @@ use tokio::net::TcpListener;
 
 use hanzo_server_core::{
     chat_completion::parse_request, handler_core::create_response_channel,
-    types::SharedMistralRsState,
+    types::SharedHanzoState,
 };
 
 // Import your existing types
@@ -81,7 +81,7 @@ pub trait McpTool: Send + Sync {
     async fn call(
         &self,
         args: serde_json::Value,
-        state: &SharedMistralRsState,
+        state: &SharedHanzoState,
     ) -> std::result::Result<CallToolResult, CallToolError>;
 }
 
@@ -157,7 +157,7 @@ impl McpTool for ChatTool {
     async fn call(
         &self,
         args: serde_json::Value,
-        state: &SharedMistralRsState,
+        state: &SharedHanzoState,
     ) -> std::result::Result<CallToolResult, CallToolError> {
         // Translate to the internal ChatCompletionRequest.
         let chat_req: hanzo_server_core::openai::ChatCompletionRequest =
@@ -206,13 +206,13 @@ This server provides LLM text and multimodal model inference. You can use the fo
 
 // HTTP MCP Handler
 pub struct HttpMcpHandler {
-    pub state: SharedMistralRsState,
+    pub state: SharedHanzoState,
     tools: HashMap<String, Arc<dyn McpTool>>,
     server_info: InitializeResult,
 }
 
 impl HttpMcpHandler {
-    pub fn new(state: SharedMistralRsState) -> Self {
+    pub fn new(state: SharedHanzoState) -> Self {
         let modalities = &state.config(None).unwrap().modalities;
 
         let mut tools: HashMap<String, Arc<dyn McpTool>> = HashMap::new();
@@ -351,7 +351,7 @@ async fn handle_jsonrpc(
 
 // Create HTTP MCP server - this replaces your old create_mcp_server function
 pub async fn create_http_mcp_server(
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     host: String,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {

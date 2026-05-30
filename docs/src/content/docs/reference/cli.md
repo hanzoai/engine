@@ -83,7 +83,7 @@ Accepted by `serve` and `run`; `bench` rejects them at startup because it measur
 
 | Flag | Purpose |
 |---|---|
-| `--quant <value>` | Quantization front-door. Numeric (`2`, `3`, `4`, `5`, `6`, `8`) and ISQ names (e.g. `q4k`, `afq8`, `fp8`, `mxfp4`) prefer a prebuilt UQFF from `mistralrs-community/<model>-UQFF`, then fall back to ISQ. `auto` is accepted by `serve`, `run`, and `bench`; `tune` rejects `auto` because it is the recommender. Conflicts with `--isq` and `--from-uqff`. |
+| `--quant <value>` | Quantization front-door. Numeric (`2`, `3`, `4`, `5`, `6`, `8`) and ISQ names (e.g. `q4k`, `afq8`, `fp8`, `mxfp4`) prefer a prebuilt UQFF from `hanzo-community/<model>-UQFF`, then fall back to ISQ. `auto` is accepted by `serve`, `run`, and `bench`; `tune` rejects `auto` because it is the recommender. Conflicts with `--isq` and `--from-uqff`. |
 | `--isq <type>` | Lower-level in-situ quantization knob (no UQFF lookup). Numeric (`2`, `3`, `4`, `5`, `6`, `8`) or format name (`q4k`, `afq4`, `q8_0`, etc.). |
 | `--from-uqff <path>` | Load a pre-quantized UQFF file. |
 | `--isq-organization <org>` | `default` or `moqe`. |
@@ -156,7 +156,7 @@ OS-level isolation applied to the code-execution subprocess. See [sandbox refere
 | `--max-tool-rounds <n>` | not set | Cap on agentic tool loop rounds. |
 | `--tool-dispatch-url <url>` | not set | External URL for tool execution. |
 
-CORS allowed origins and the request body limit (default 50 MB) are not exposed as CLI flags. They can be configured programmatically through `MistralRsServerRouterBuilder` in `hanzo-server-core`.
+CORS allowed origins and the request body limit (default 50 MB) are not exposed as CLI flags. They can be configured programmatically through `HanzoServerRouterBuilder` in `hanzo-server-core`.
 
 ## `hanzo run` flags
 

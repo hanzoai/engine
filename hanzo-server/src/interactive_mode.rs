@@ -3,7 +3,7 @@ use either::Either;
 use indexmap::IndexMap;
 use hanzo_engine::{
     speech_utils, Constraint, DiffusionGenerationParams, DrySamplingParams,
-    ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory, NormalRequest,
+    ImageGenerationResponseFormat, MessageContent, Hanzo, ModelCategory, NormalRequest,
     Request, RequestMessage, Response, ResponseOk, SamplingParams, WebSearchOptions,
     TERMINATE_ALL_NEXT_STEP,
 };
@@ -75,7 +75,7 @@ static CTRLC_HANDLER: LazyLock<Mutex<&'static (dyn Fn() + Sync)>> =
     LazyLock::new(|| Mutex::new(&exit_handler));
 
 pub async fn interactive_mode(
-    hanzo: Arc<MistralRs>,
+    hanzo: Arc<Hanzo>,
     do_search: bool,
     enable_thinking: Option<bool>,
 ) {
@@ -235,7 +235,7 @@ fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -
 }
 
 async fn text_interactive_mode(
-    hanzo: Arc<MistralRs>,
+    hanzo: Arc<Hanzo>,
     do_search: bool,
     enable_thinking: Option<bool>,
 ) {
@@ -481,7 +481,7 @@ fn parse_files_and_message(input: &str, regex: &Regex) -> (Vec<String>, String) 
 }
 
 async fn multimodal_interactive_mode(
-    hanzo: Arc<MistralRs>,
+    hanzo: Arc<Hanzo>,
     do_search: bool,
     enable_thinking: Option<bool>,
 ) {
@@ -829,14 +829,14 @@ async fn multimodal_interactive_mode(
 }
 
 async fn audio_interactive_mode(
-    _mistralrs: Arc<MistralRs>,
+    _hanzo: Arc<Hanzo>,
     _do_search: bool,
     _enable_thinking: Option<bool>,
 ) {
     unimplemented!("Using audio models isn't supported yet")
 }
 
-async fn diffusion_interactive_mode(hanzo: Arc<MistralRs>, do_search: bool) {
+async fn diffusion_interactive_mode(hanzo: Arc<Hanzo>, do_search: bool) {
     let sender = hanzo.get_sender(None).unwrap();
 
     let diffusion_params = DiffusionGenerationParams::default();
@@ -938,7 +938,7 @@ async fn diffusion_interactive_mode(hanzo: Arc<MistralRs>, do_search: bool) {
     rl.save_history(&history_file_path()).unwrap();
 }
 
-async fn speech_interactive_mode(hanzo: Arc<MistralRs>, do_search: bool) {
+async fn speech_interactive_mode(hanzo: Arc<Hanzo>, do_search: bool) {
     let sender = hanzo.get_sender(None).unwrap();
 
     info!("Starting interactive loop for speech");

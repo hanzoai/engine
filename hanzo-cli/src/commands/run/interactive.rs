@@ -7,7 +7,7 @@ use either::Either;
 use indexmap::IndexMap;
 use hanzo_engine::{
     speech_utils, AgentPermission, AgentToolKind, Constraint, DiffusionGenerationParams,
-    DrySamplingParams, ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory,
+    DrySamplingParams, ImageGenerationResponseFormat, MessageContent, Hanzo, ModelCategory,
     NormalRequest, Request, RequestMessage, Response, ResponseOk, SamplingParams, Usage,
     WebSearchOptions, TERMINATE_ALL_NEXT_STEP,
 };
@@ -136,7 +136,7 @@ pub struct OneshotInput {
 }
 
 pub async fn oneshot_mode(
-    hanzo: Arc<MistralRs>,
+    hanzo: Arc<Hanzo>,
     do_search: bool,
     do_code_exec: bool,
     agent_permission: AgentPermission,
@@ -173,7 +173,7 @@ pub async fn oneshot_mode(
 }
 
 async fn oneshot_text(
-    hanzo: Arc<MistralRs>,
+    hanzo: Arc<Hanzo>,
     do_search: bool,
     do_code_exec: bool,
     agent_permission: AgentPermission,
@@ -244,7 +244,7 @@ async fn oneshot_text(
 }
 
 async fn oneshot_multimodal(
-    hanzo: Arc<MistralRs>,
+    hanzo: Arc<Hanzo>,
     do_search: bool,
     do_code_exec: bool,
     agent_permission: AgentPermission,
@@ -416,7 +416,7 @@ async fn oneshot_multimodal(
 }
 
 fn print_stats(
-    hanzo: &Arc<MistralRs>,
+    hanzo: &Arc<Hanzo>,
     sampling_params: &SamplingParams,
     first_token_duration: Option<std::time::Duration>,
     last_usage: Option<Usage>,
@@ -455,7 +455,7 @@ fn print_stats(
 }
 
 pub async fn interactive_mode(
-    hanzo: Arc<MistralRs>,
+    hanzo: Arc<Hanzo>,
     do_search: bool,
     do_code_exec: bool,
     agent_permission: AgentPermission,
@@ -598,7 +598,7 @@ fn interactive_fallback_sample_parameters() -> SamplingParams {
     }
 }
 
-fn interactive_sample_parameters(hanzo: &Arc<MistralRs>) -> SamplingParams {
+fn interactive_sample_parameters(hanzo: &Arc<Hanzo>) -> SamplingParams {
     match hanzo
         .config(None)
         .ok()
@@ -678,7 +678,7 @@ fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -
 }
 
 async fn text_interactive_mode(
-    hanzo: Arc<MistralRs>,
+    hanzo: Arc<Hanzo>,
     do_search: bool,
     do_code_exec: bool,
     agent_permission: AgentPermission,
@@ -1201,7 +1201,7 @@ async fn stream_assistant_response(
 }
 
 async fn multimodal_interactive_mode(
-    hanzo: Arc<MistralRs>,
+    hanzo: Arc<Hanzo>,
     do_search: bool,
     do_code_exec: bool,
     agent_permission: AgentPermission,
@@ -1512,7 +1512,7 @@ async fn multimodal_interactive_mode(
 }
 
 async fn audio_interactive_mode(
-    _mistralrs: Arc<MistralRs>,
+    _hanzo: Arc<Hanzo>,
     _do_search: bool,
     _do_code_exec: bool,
     _agent_permission: AgentPermission,
@@ -1523,7 +1523,7 @@ async fn audio_interactive_mode(
 }
 
 async fn diffusion_interactive_mode(
-    hanzo: Arc<MistralRs>,
+    hanzo: Arc<Hanzo>,
     do_search: bool,
     do_code_exec: bool,
     agent_permission: AgentPermission,
@@ -1638,7 +1638,7 @@ async fn diffusion_interactive_mode(
 }
 
 async fn speech_interactive_mode(
-    hanzo: Arc<MistralRs>,
+    hanzo: Arc<Hanzo>,
     do_search: bool,
     do_code_exec: bool,
     agent_permission: AgentPermission,

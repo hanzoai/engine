@@ -18,7 +18,7 @@ use crate::{
     },
     openai::{CompletionRequest, Grammar},
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
-    types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
+    types::{ExtractedHanzoState, OnChunkCallback, OnDoneCallback, SharedHanzoState},
     util::{sanitize_error_message, validate_model_name},
 };
 use anyhow::Result;
@@ -31,7 +31,7 @@ use axum::{
     },
 };
 use hanzo_engine::{
-    CompletionChunkResponse, CompletionResponse, Constraint, MistralRs, NormalRequest, Request,
+    CompletionChunkResponse, CompletionResponse, Constraint, Hanzo, NormalRequest, Request,
     RequestMessage, Response, SamplingParams,
 };
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -109,7 +109,7 @@ impl futures::Stream for CompletionStreamer {
         match self.rx.poll_recv(cx) {
             Poll::Ready(Some(resp)) => match resp {
                 Response::CompletionModelError(msg, _) => {
-                    MistralRs::maybe_log_error(
+                    Hanzo::maybe_log_error(
                         self.state.clone(),
                         &ModelErrorMessage(msg.to_string()),
                     );
@@ -124,7 +124,7 @@ impl futures::Stream for CompletionStreamer {
                     )))
                 }
                 Response::InternalError(e) => {
-                    MistralRs::maybe_log_error(self.state.clone(), &*e);
+                    Hanzo::maybe_log_error(self.state.clone(), &*e);
                     self.done_state = DoneState::SendingDone;
                     Poll::Ready(Some(Ok(
                         Event::default().data(sanitize_error_message(e.as_ref()))
@@ -135,7 +135,7 @@ impl futures::Stream for CompletionStreamer {
                         self.done_state = DoneState::SendingDone;
                     }
                     // Done now, just need to send the [DONE]
-                    MistralRs::maybe_log_response(self.state.clone(), &response);
+                    Hanzo::maybe_log_response(self.state.clone(), &response);
 
                     if let Some(on_chunk) = &self.on_chunk {
                         response = on_chunk(response);
@@ -202,11 +202,11 @@ impl IntoResponse for CompletionResponder {
 /// request format used by mistral.rs.
 pub fn parse_request(
     oairequest: CompletionRequest,
-    state: Arc<MistralRs>,
+    state: Arc<Hanzo>,
     tx: Sender<Response>,
 ) -> Result<(Request, bool)> {
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
-    MistralRs::maybe_log_request(state.clone(), repr);
+    Hanzo::maybe_log_request(state.clone(), repr);
 
     // Validate that the requested model matches the loaded model
     validate_model_name(&oairequest.model, state.clone())?;
@@ -291,7 +291,7 @@ pub fn parse_request(
     responses((status = 200, description = "Completions"))
 )]
 pub async fn completions(
-    State(state): ExtractedMistralRsState,
+    State(state): ExtractedHanzoState,
     Json(oairequest): Json<CompletionRequest>,
 ) -> CompletionResponder {
     let (tx, mut rx) = create_response_channel(None);
@@ -314,7 +314,7 @@ pub async fn completions(
 
 /// Handle route / generation errors and logging them.
 pub fn handle_error(
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> CompletionResponder {
     handle_completion_error(state, e)
@@ -323,7 +323,7 @@ pub fn handle_error(
 /// Creates a SSE streamer for chat completions with optional callbacks.
 pub fn create_streamer(
     rx: Receiver<Response>,
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     on_chunk: Option<CompletionOnChunkCallback>,
     on_done: Option<CompletionOnDoneCallback>,
 ) -> Sse<KeepAliveStream<CompletionStreamer>> {
@@ -337,26 +337,26 @@ pub fn create_streamer(
 /// Process non-streaming completion responses.
 pub async fn process_non_streaming_response(
     rx: &mut Receiver<Response>,
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
 ) -> CompletionResponder {
     base_process_non_streaming_response(rx, state, match_responses, handle_error).await
 }
 
 /// Matches and processes different types of model responses into appropriate completion responses.
-pub fn match_responses(state: SharedMistralRsState, response: Response) -> CompletionResponder {
+pub fn match_responses(state: SharedHanzoState, response: Response) -> CompletionResponder {
     match response {
         Response::InternalError(e) => {
-            MistralRs::maybe_log_error(state, &*e);
+            Hanzo::maybe_log_error(state, &*e);
             CompletionResponder::InternalError(e)
         }
         Response::CompletionModelError(msg, response) => {
-            MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
-            MistralRs::maybe_log_response(state, &response);
+            Hanzo::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
+            Hanzo::maybe_log_response(state, &response);
             CompletionResponder::ModelError(msg, response)
         }
         Response::ValidationError(e) => CompletionResponder::ValidationError(e),
         Response::CompletionDone(response) => {
-            MistralRs::maybe_log_response(state, &response);
+            Hanzo::maybe_log_response(state, &response);
             CompletionResponder::Json(response)
         }
         Response::CompletionChunk(_) => unreachable!(),

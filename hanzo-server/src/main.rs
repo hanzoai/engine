@@ -10,11 +10,11 @@ use tokio::join;
 use tracing::{error, info, warn};
 
 use hanzo_server_core::{
-    mistralrs_for_server_builder::{
+    hanzo_for_server_builder::{
         configure_paged_attn_from_flags, defaults, get_search_embedding_model,
-        MistralRsForServerBuilder, ModelConfig,
+        HanzoForServerBuilder, ModelConfig,
     },
-    hanzo_server_router_builder::MistralRsServerRouterBuilder,
+    hanzo_server_router_builder::HanzoServerRouterBuilder,
 };
 
 mod interactive_mode;
@@ -351,7 +351,7 @@ async fn main() -> Result<()> {
             // Multi-model mode
             let model_configs = load_multi_model_config(&config)?;
 
-            let mut builder = MistralRsForServerBuilder::new()
+            let mut builder = HanzoForServerBuilder::new()
                 .with_max_seqs(args.max_seqs)
                 .with_no_kv_cache(args.no_kv_cache)
                 .with_token_source(args.token_source)
@@ -383,7 +383,7 @@ async fn main() -> Result<()> {
         }
         model => {
             // Single-model mode
-            let mut builder = MistralRsForServerBuilder::new()
+            let mut builder = HanzoForServerBuilder::new()
                 .with_model(model)
                 .with_max_seqs(args.max_seqs)
                 .with_no_kv_cache(args.no_kv_cache)
@@ -454,8 +454,8 @@ async fn main() -> Result<()> {
         // Create listener early to validate address before model loading
         let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
 
-        let app = MistralRsServerRouterBuilder::new()
-            .with_mistralrs(hanzo)
+        let app = HanzoServerRouterBuilder::new()
+            .with_hanzo(hanzo)
             .build()
             .await?;
 

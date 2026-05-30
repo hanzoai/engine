@@ -14,7 +14,7 @@ Fast, flexible LLM inference.
 </h3>
 
 <p align="center">
-  | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://crates.io/crates/mistralrs"><b>Rust SDK</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/tutorials/03-python-sdk/"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
+  | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://crates.io/crates/hanzo"><b>Rust SDK</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/tutorials/03-python-sdk/"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
 </p>
 
 <p align="center">
@@ -209,7 +209,7 @@ hanzo doctor
 ## Python SDK
 
 ```bash
-pip install hanzo  # or mistralrs-cuda, mistralrs-metal, mistralrs-mkl, mistralrs-accelerate
+pip install hanzo  # or hanzo-cuda, hanzo-metal, hanzo-mkl, hanzo-accelerate
 ```
 
 ```python
@@ -263,7 +263,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-[API Docs](https://docs.rs/mistralrs) | [Crate](https://crates.io/crates/mistralrs) | [Examples](hanzo/examples)
+[API Docs](https://docs.rs/hanzo) | [Crate](https://crates.io/crates/hanzo) | [Examples](hanzo/examples)
 
 ## Docker
 

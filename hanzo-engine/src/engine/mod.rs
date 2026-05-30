@@ -152,7 +152,7 @@ pub fn reset_engine_terminate_flag() {
     }
 }
 
-/// Engine instructions, per Engine (MistralRs) ID.
+/// Engine instructions, per Engine (Hanzo) ID.
 pub static ENGINE_INSTRUCTIONS: LazyLock<
     std::sync::Mutex<HashMap<usize, Option<EngineInstruction>>>,
 > = LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));

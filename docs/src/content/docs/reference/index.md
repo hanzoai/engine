@@ -17,7 +17,7 @@ Reference pages are short, complete, and lookup-oriented. For narrative or motiv
 
 **[Python API](/mistral.rs/reference/python/).** The public surface of the `hanzo` Python package, generated from the type stub: `Runner`, `Which`, request and response types.
 
-**Rust API.** Canonical reference at [docs.rs/mistralrs](https://docs.rs/mistralrs).
+**Rust API.** Canonical reference at [docs.rs/hanzo](https://docs.rs/hanzo).
 
 **MCP configuration schema.** The JSON schema for MCP client configuration files.
 

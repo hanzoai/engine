@@ -21,7 +21,7 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
 ```
 
-The binary is installed to `~/.cargo/bin/mistralrs`. The installer adds that directory to your `PATH`, but the change does not apply to the current shell. Start a new shell, or run `source "$HOME/.cargo/env"`. Then verify:
+The binary is installed to `~/.cargo/bin/hanzo`. The installer adds that directory to your `PATH`, but the change does not apply to the current shell. Start a new shell, or run `source "$HOME/.cargo/env"`. Then verify:
 
 ```bash
 hanzo --version
@@ -64,7 +64,7 @@ A few commands are available at the prompt: `/clear` resets the conversation, `/
 
 ## Notes
 
-The model loads at native precision (BF16 for Qwen3-4B), so the full weights must fit in GPU memory. For larger models that do not fit, use `--quant 4`: it prefers a prebuilt UQFF from `mistralrs-community` if one exists, otherwise applies ISQ at 4 bits. `--quant auto` benchmarks your hardware and picks. See [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/) for the details.
+The model loads at native precision (BF16 for Qwen3-4B), so the full weights must fit in GPU memory. For larger models that do not fit, use `--quant 4`: it prefers a prebuilt UQFF from `hanzo-community` if one exists, otherwise applies ISQ at 4 bits. `--quant auto` benchmarks your hardware and picks. See [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/) for the details.
 
 `hanzo` infers the model architecture, chat template, and target device from the Hugging Face repository. Every inferred choice can be overridden with a flag.
 
