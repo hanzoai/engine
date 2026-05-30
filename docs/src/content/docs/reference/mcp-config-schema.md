@@ -1,6 +1,6 @@
 ---
 title: MCP configuration schema
-description: JSON schema for mistralrs MCP client configuration files.
+description: JSON schema for hanzo MCP client configuration files.
 sidebar:
   order: 8
 ---
@@ -138,7 +138,7 @@ Tools from a server with `tool_prefix = "fs"` are exposed as `fs_read_file`, `fs
 Pass it on the CLI:
 
 ```bash
-mistralrs serve --mcp-config mcp.json -m Qwen/Qwen3-4B
+hanzo serve --mcp-config mcp.json -m Qwen/Qwen3-4B
 ```
 
 The same path can be supplied via the `MCP_CONFIG_PATH` environment variable.

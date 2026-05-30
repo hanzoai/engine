@@ -240,7 +240,7 @@ Model type is auto-detected. Use flags for quantized models and adapters:
 ### Example: Zephyr GGUF model
 
 ```bash
-mistralrs serve -p 1234 --log output.txt --format gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf
+hanzo serve -p 1234 --log output.txt --format gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf
 ```
 
 ### Chat Templates and Tokenizer

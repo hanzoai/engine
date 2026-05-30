@@ -16,13 +16,13 @@ Flash attention is a Cargo feature. The install script enables it when a support
 
 ```bash
 # Ampere, Ada, older Hopper
-cargo install --path mistralrs-cli --features "cuda flash-attn cudnn"
+cargo install --path hanzo-cli --features "cuda flash-attn cudnn"
 
 # Hopper (H100), for v3
-cargo install --path mistralrs-cli --features "cuda flash-attn flash-attn-v3 cudnn"
+cargo install --path hanzo-cli --features "cuda flash-attn flash-attn-v3 cudnn"
 ```
 
-`mistralrs doctor` lists compiled features.
+`hanzo doctor` lists compiled features.
 
 ## Composition with paged attention
 

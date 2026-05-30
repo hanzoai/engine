@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from mistralrs import Runner, Which, ChatCompletionRequest
+from hanzo import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.Plain(

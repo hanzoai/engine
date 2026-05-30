@@ -12,7 +12,7 @@ Streaming displays output as it generates rather than after the full response. T
 The simplest pattern is a for loop:
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest
+from hanzo import Runner, Which, ChatCompletionRequest
 
 runner = Runner(Which.Plain(model_id="Qwen/Qwen3-4B"), in_situ_quant="4")
 
@@ -40,7 +40,7 @@ The SDK does not expose a native async iterator. Wrap the synchronous iterator i
 
 ```python
 import asyncio
-from mistralrs import Runner, Which, ChatCompletionRequest
+from hanzo import Runner, Which, ChatCompletionRequest
 
 runner = Runner(Which.Plain(model_id="Qwen/Qwen3-4B"), in_situ_quant="4")
 
@@ -100,7 +100,7 @@ async def stream(prompt: str):
     return StreamingResponse(iter(), media_type="text/event-stream")
 ```
 
-For production, run mistralrs as an HTTP server (see [Tutorial 2](/mistral.rs/tutorials/02-serve-an-api/)) and call it with the OpenAI Python client rather than loading the model in the web app process. The HTTP server's streaming is more robust under load.
+For production, run hanzo as an HTTP server (see [Tutorial 2](/mistral.rs/tutorials/02-serve-an-api/)) and call it with the OpenAI Python client rather than loading the model in the web app process. The HTTP server's streaming is more robust under load.
 
 ## Catching errors during streaming
 

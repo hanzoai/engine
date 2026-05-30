@@ -12,8 +12,8 @@ Most text-only models use the same CLI, HTTP, Python, and Rust shape. This page 
 Start with auto-detection unless you have a reason to force an architecture:
 
 ```bash
-mistralrs run --quant 4 -m Qwen/Qwen3-4B
-mistralrs serve --quant 4 -p 1234 -m Qwen/Qwen3-4B
+hanzo run --quant 4 -m Qwen/Qwen3-4B
+hanzo serve --quant 4 -p 1234 -m Qwen/Qwen3-4B
 ```
 
 The server is OpenAI-compatible:
@@ -34,7 +34,7 @@ print(completion.choices[0].message.content)
 The Python SDK selector is explicit when auto-detection is not enough:
 
 ```python
-from mistralrs import Architecture, ChatCompletionRequest, Runner, Which
+from hanzo import Architecture, ChatCompletionRequest, Runner, Which
 
 runner = Runner(
     which=Which.Plain(
@@ -112,8 +112,8 @@ Qwen3 supports the same tool-calling and web-search surface as the agent guides.
 MoE families such as DeepSeek, GLM-4.7, Phi 3.5 MoE, and Qwen3 MoE can use MoQE to quantize expert weights separately from the rest of the model:
 
 ```bash
-mistralrs run --isq 4 --isq-organization moqe -m deepseek-ai/DeepSeek-V2-Lite
-mistralrs run --isq 4 --isq-organization moqe -m Qwen/Qwen3-30B-A3B
+hanzo run --isq 4 --isq-organization moqe -m deepseek-ai/DeepSeek-V2-Lite
+hanzo run --isq 4 --isq-organization moqe -m Qwen/Qwen3-30B-A3B
 ```
 
 These examples use `--isq` because MoQE is an explicit runtime ISQ layout. MoQE is most useful when the routed experts dominate memory. Expect small output differences between quantization levels because router decisions are sensitive to numerical noise.
@@ -125,7 +125,7 @@ In the Python SDK, pass `organization=IsqOrganization.MoQE` inside `Which.Plain(
 DeepSeek V2/V3 and GLM-4.7-Flash use Multi-head Latent Attention. MLA usually reduces KV-cache memory compared with standard attention. If you are debugging unexpected paged-attention behavior, first compare with paged attention disabled:
 
 ```bash
-mistralrs run --paged-attn off -m deepseek-ai/DeepSeek-R1
+hanzo run --paged-attn off -m deepseek-ai/DeepSeek-R1
 ```
 
 ## GPT-OSS
@@ -133,8 +133,8 @@ mistralrs run --paged-attn off -m deepseek-ai/DeepSeek-R1
 GPT-OSS is not a normal dense checkpoint. Its MoE experts are stored in MXFP4 and custom attention uses per-head sinks. Load it without an ISQ flag first:
 
 ```bash
-mistralrs run -m openai/gpt-oss-20b
-mistralrs serve -p 1234 -m openai/gpt-oss-20b
+hanzo run -m openai/gpt-oss-20b
+hanzo serve -p 1234 -m openai/gpt-oss-20b
 ```
 
 Paged attention is not supported for GPT-OSS. ISQ can be applied only to attention layers; the expert weights are already quantized.
@@ -144,14 +144,14 @@ Paged attention is not supported for GPT-OSS. ISQ can be applied only to attenti
 Qwen3 Next mixes Gated Delta Network layers with full attention. It is good for long-context coding workloads, but its cost profile differs from a pure softmax-attention model.
 
 ```bash
-mistralrs run --quant 4 -m Qwen/Qwen3-Next-80B-A3B-Instruct
-mistralrs serve --quant 4 -p 1234 -m Qwen/Qwen3-Next-80B-A3B-Instruct
+hanzo run --quant 4 -m Qwen/Qwen3-Next-80B-A3B-Instruct
+hanzo serve --quant 4 -p 1234 -m Qwen/Qwen3-Next-80B-A3B-Instruct
 ```
 
 Qwen3-Coder-Next checkpoints use the same architecture when the checkpoint is available. GGUF checkpoints use the GGUF selector:
 
 ```bash
-mistralrs run --format gguf -m Qwen/Qwen3-Coder-Next-GGUF -f <filename>
+hanzo run --format gguf -m Qwen/Qwen3-Coder-Next-GGUF -f <filename>
 ```
 
 ## UQFF examples
@@ -159,7 +159,7 @@ mistralrs run --format gguf -m Qwen/Qwen3-Coder-Next-GGUF -f <filename>
 When a pre-quantized UQFF repo exists, load it directly:
 
 ```bash
-mistralrs run -m EricB/SmolLM3-3B-UQFF --from-uqff smollm33b-q4k-0.uqff
+hanzo run -m EricB/SmolLM3-3B-UQFF --from-uqff smollm33b-q4k-0.uqff
 ```
 
 See [UQFF format](/mistral.rs/reference/uqff-format/) for file layout and [use pre-quantized UQFF models](/mistral.rs/guides/perf/use-uqff/) for runtime usage.
@@ -170,4 +170,4 @@ Long-form SDK examples live in the repository so they can compile with the Rust 
 
 - Python: [`examples/python/`](https://github.com/EricLBuehler/mistral.rs/tree/master/examples/python)
 - HTTP/OpenAI clients: [`examples/server/`](https://github.com/EricLBuehler/mistral.rs/tree/master/examples/server)
-- Rust text models: [`mistralrs/examples/models/text_models/main.rs`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs)
+- Rust text models: [`hanzo/examples/models/text_models/main.rs`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs)

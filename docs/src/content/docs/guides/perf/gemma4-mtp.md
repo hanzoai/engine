@@ -14,7 +14,7 @@ Gemma 4 MTP currently requires PagedAttention.
 Use the published assistant checkpoint:
 
 ```bash
-mistralrs run -m google/gemma-4-E4B-it --quant 8 \
+hanzo run -m google/gemma-4-E4B-it --quant 8 \
   --mtp-model google/gemma-4-E4B-it-assistant \
   --mtp-n-predict 6
 ```
@@ -22,7 +22,7 @@ mistralrs run -m google/gemma-4-E4B-it --quant 8 \
 Or use a downloaded checkout:
 
 ```bash
-mistralrs run -m google/gemma-4-E4B-it --quant 8 \
+hanzo run -m google/gemma-4-E4B-it --quant 8 \
   --mtp-model ./gemma-4-E4B-it-assistant \
   --mtp-n-predict 6
 ```
@@ -32,7 +32,7 @@ mistralrs run -m google/gemma-4-E4B-it --quant 8 \
 ## Python
 
 ```python
-from mistralrs import Runner, Which
+from hanzo import Runner, Which
 
 runner = Runner(
     which=Which.MultimodalPlain(model_id="google/gemma-4-E4B-it"),
@@ -45,7 +45,7 @@ runner = Runner(
 ## Rust
 
 ```rust
-use mistralrs::{ModelBuilder, MtpConfig};
+use hanzo::{ModelBuilder, MtpConfig};
 
 let model = ModelBuilder::new("google/gemma-4-E4B-it")
     .with_mtp_config(MtpConfig {
@@ -59,7 +59,7 @@ let model = ModelBuilder::new("google/gemma-4-E4B-it")
 For concise builder code, use:
 
 ```rust
-let model = mistralrs::ModelBuilder::new("google/gemma-4-E4B-it")
+let model = hanzo::ModelBuilder::new("google/gemma-4-E4B-it")
     .with_mtp_model("google/gemma-4-E4B-it-assistant", Some(6))
     .build()
     .await?;

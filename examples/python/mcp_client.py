@@ -7,17 +7,17 @@ to the model during conversations.
 Install the filesystem server first: npx @modelcontextprotocol/server-filesystem . -y
 """
 
-import mistralrs
+import hanzo
 
 
 def main():
     # Connect to a local filesystem MCP server
-    mcp_config = mistralrs.McpClientConfigPy(
+    mcp_config = hanzo.McpClientConfigPy(
         servers=[
-            mistralrs.McpServerConfigPy(
+            hanzo.McpServerConfigPy(
                 id="filesystem",
                 name="Filesystem Tools",
-                source=mistralrs.McpServerSourcePy.Process(
+                source=hanzo.McpServerSourcePy.Process(
                     command="npx",
                     args=["@modelcontextprotocol/server-filesystem", "."],
                     work_dir=None,
@@ -35,21 +35,21 @@ def main():
     # For authentication, set bearer_token="your-token".
     # To avoid tool name conflicts, set tool_prefix="prefix".
 
-    runner = mistralrs.Runner(
-        which=mistralrs.Which.Plain(
+    runner = hanzo.Runner(
+        which=hanzo.Which.Plain(
             model_id="Qwen/Qwen3-4B",
-            arch=mistralrs.Architecture.Qwen3,
+            arch=hanzo.Architecture.Qwen3,
         ),
         mcp_client_config=mcp_config,
     )
 
-    request = mistralrs.ChatCompletionRequest(
+    request = hanzo.ChatCompletionRequest(
         model="default",
         messages=[
             {"role": "user", "content": "List the files in the current directory."}
         ],
         max_tokens=1000,
-        tool_choice=mistralrs.ToolChoice.Auto,
+        tool_choice=hanzo.ToolChoice.Auto,
     )
 
     response = runner.send_chat_completion_request(request)

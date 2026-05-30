@@ -5,7 +5,7 @@ Voxtral Mini is a 4.4B parameter real-time automatic speech recognition (ASR) mo
 ## Quick Start
 
 ```bash
-mistralrs run multimodal -m mistralai/Voxtral-Mini-4B-Realtime-2602
+hanzo run multimodal -m mistralai/Voxtral-Mini-4B-Realtime-2602
 ```
 
 The Voxtral Model has support in the Rust, Python, and HTTP APIs. Additionally, the Voxtral Model supports ISQ for increased performance.
@@ -17,7 +17,7 @@ The Voxtral Model has support in the Rust, Python, and HTTP APIs. Additionally, 
 Start the server:
 
 ```
-mistralrs serve multimodal -m mistralai/Voxtral-Mini-4B-Realtime-2602 -p 1234
+hanzo serve multimodal -m mistralai/Voxtral-Mini-4B-Realtime-2602 -p 1234
 ```
 
 Send a request:
@@ -64,7 +64,7 @@ You can find this example [here](https://github.com/hanzoai/engine/blob/master/m
 
 ```rust
 use anyhow::Result;
-use mistralrs::{AudioInput, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+use hanzo::{AudioInput, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
 ## Python SDK
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
     which=Which.MultimodalPlain(

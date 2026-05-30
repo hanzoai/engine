@@ -272,16 +272,16 @@ install_ffmpeg() {
     fi
 }
 
-# Install mistralrs-cli
+# Install hanzo-cli
 install_mistralrs() {
     features="$1"
 
     if [ -n "$features" ]; then
-        info "Installing mistralrs-cli with features: $features"
-        cargo install mistralrs-cli@0.8.1 --features "$features"
+        info "Installing hanzo-cli with features: $features"
+        cargo install hanzo-cli@0.8.1 --features "$features"
     else
-        info "Installing mistralrs-cli with default features"
-        cargo install mistralrs-cli@0.8.1
+        info "Installing hanzo-cli with default features"
+        cargo install hanzo-cli@0.8.1
     fi
 }
 
@@ -402,9 +402,9 @@ main() {
     printf "${BOLD}Quick Start${NC}\n"
     echo "==========="
     echo ""
-    echo "  mistralrs run -m Qwen/Qwen3-4B"
+    echo "  hanzo run -m Qwen/Qwen3-4B"
     echo ""
-    echo "  mistralrs serve --agent -m google/gemma-4-E4B-it"
+    echo "  hanzo serve --agent -m google/gemma-4-E4B-it"
     echo ""
     echo "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
     echo ""
@@ -413,7 +413,7 @@ main() {
         printf "      https://github.com/EricLBuehler/mistral.rs/blob/master/docs/VIDEO.md\n"
         echo ""
     fi
-    printf "${YELLOW}Note:${NC} To use 'mistralrs' now, run: ${BOLD}. \"\$HOME/.cargo/env\"${NC}\n"
+    printf "${YELLOW}Note:${NC} To use 'hanzo' now, run: ${BOLD}. \"\$HOME/.cargo/env\"${NC}\n"
     printf "      Or restart your terminal.\n"
 }
 

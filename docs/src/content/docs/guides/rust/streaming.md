@@ -12,7 +12,7 @@ sidebar:
 ```rust
 use anyhow::Result;
 use futures::StreamExt;
-use mistralrs::{
+use hanzo::{
     ChatCompletionChunkResponse, ChunkChoice, Delta, IsqBits, ModelBuilder,
     Response, TextMessageRole, TextMessages,
 };
@@ -77,7 +77,7 @@ When tool calling is enabled and the model invokes a tool mid-stream, the engine
 To observe tool rounds, use `Response::AgenticToolCallProgress`:
 
 ```rust
-use mistralrs::core::AgenticToolCallPhase;
+use hanzo::core::AgenticToolCallPhase;
 
 Response::AgenticToolCallProgress {
     tool_name, phase, ..

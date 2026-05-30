@@ -31,11 +31,11 @@ Fast, flexible LLM inference.
 
 ## Why mistral.rs?
 
-- **Any Hugging Face model, zero config**: Just `mistralrs run -m user/model`. Architecture, quantization format, and chat template are auto-detected.
+- **Any Hugging Face model, zero config**: Just `hanzo run -m user/model`. Architecture, quantization format, and chat template are auto-detected.
 - **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
 - **Smart quantization**: `--quant` automatically selects the best quantization format at that level: using a prebuilt UQFF if one is published, otherwise applying ISQ. [Docs](https://ericlbuehler.github.io/mistral.rs/tutorials/06-quantize-a-model/)
 - **Built-in web UI**: Served at `/ui` by default. Shows reasoning, code execution, plots, and files inline. Edit any message and the new branch runs with its own Python state. Pass `--no-ui` to disable.
-- **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
+- **Hardware-aware**: `hanzo tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
 - **Native agentic support**: built-in [agentic loop](https://ericlbuehler.github.io/mistral.rs/guides/agents/) with web search, local Python code execution with model feedback, session management, and custom tool hooks.
 
@@ -59,41 +59,41 @@ irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1
 
 ```bash
 # Interactive chat
-mistralrs run -m Qwen/Qwen3-4B
+hanzo run -m Qwen/Qwen3-4B
 
 # One-shot prompt (no interactive session)
-mistralrs run -m Qwen/Qwen3-4B -i "What is the capital of France?"
+hanzo run -m Qwen/Qwen3-4B -i "What is the capital of France?"
 
 # One-shot with an image
-mistralrs run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
+hanzo run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
 
 # Agentic REPL: search + code execution from the terminal
-mistralrs run --agent -m Qwen/Qwen3-4B
+hanzo run --agent -m Qwen/Qwen3-4B
 
 # Start an API server with the built-in web UI
-mistralrs serve -m google/gemma-4-E4B-it
+hanzo serve -m google/gemma-4-E4B-it
 ```
 
 For the server command, visit `http://localhost:1234/ui` for the web chat interface.
 
-### The `mistralrs` CLI
+### The `hanzo` CLI
 
 The CLI is designed to be **zero-config**: just point it at a model and go.
 
 - **Auto-detection**: Automatically detects model architecture, quantization format, and chat template
 - **All-in-one**: Single binary for chat, server, benchmarks, and web UI (`run`, `serve`, `bench`)
-- **Hardware tuning**: Run `mistralrs tune` to automatically benchmark and configure optimal settings for your hardware
+- **Hardware tuning**: Run `hanzo tune` to automatically benchmark and configure optimal settings for your hardware
 - **Format-agnostic**: Works with Hugging Face models, GGUF files, and [UQFF quantizations](https://ericlbuehler.github.io/mistral.rs/reference/uqff-format/) seamlessly
 
 ```bash
 # Auto-tune for your hardware and emit a config file
-mistralrs tune -m Qwen/Qwen3-4B --emit-config config.toml
+hanzo tune -m Qwen/Qwen3-4B --emit-config config.toml
 
 # Run using the generated config
-mistralrs from-config -f config.toml
+hanzo from-config -f config.toml
 
 # Diagnose system issues (CUDA, Metal, HuggingFace connectivity)
-mistralrs doctor
+hanzo doctor
 ```
 
 [Full CLI documentation](https://ericlbuehler.github.io/mistral.rs/reference/cli/)
@@ -209,11 +209,11 @@ mistralrs doctor
 ## Python SDK
 
 ```bash
-pip install mistralrs  # or mistralrs-cuda, mistralrs-metal, mistralrs-mkl, mistralrs-accelerate
+pip install hanzo  # or mistralrs-cuda, mistralrs-metal, mistralrs-mkl, mistralrs-accelerate
 ```
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest
+from hanzo import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),
@@ -235,12 +235,12 @@ print(res.choices[0].message.content)
 ## Rust SDK
 
 ```bash
-cargo add mistralrs
+cargo add hanzo
 ```
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, TextMessages, MultimodalModelBuilder};
+use hanzo::{IsqType, TextMessageRole, TextMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -263,7 +263,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-[API Docs](https://docs.rs/mistralrs) | [Crate](https://crates.io/crates/mistralrs) | [Examples](mistralrs/examples)
+[API Docs](https://docs.rs/mistralrs) | [Crate](https://crates.io/crates/mistralrs) | [Examples](hanzo/examples)
 
 ## Docker
 

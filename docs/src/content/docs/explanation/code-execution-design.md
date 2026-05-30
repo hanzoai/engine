@@ -5,7 +5,7 @@ sidebar:
   order: 9
 ---
 
-The code-execution feature runs user-requested Python in a dedicated subprocess. The model never touches the mistralrs process directly.
+The code-execution feature runs user-requested Python in a dedicated subprocess. The model never touches the hanzo process directly.
 
 ## Session model
 
@@ -38,15 +38,15 @@ Per-session default: a fresh temp dir, deleted when the session ends. With `--co
 
 ## Isolation boundary
 
-The subprocess always runs as the same user as mistralrs. What constrains it on top of that depends on the entry point and platform.
+The subprocess always runs as the same user as hanzo. What constrains it on top of that depends on the entry point and platform.
 
 ### CLI and TOML default
 
-`mistralrs serve` and `mistralrs from-config` default to `--sandbox auto`, which enables the [OS-level sandbox](/mistral.rs/reference/sandbox/) on Linux and macOS and is a no-op with a warning on other platforms. On Linux that means env scrubbing, user/IPC/UTS (and optional NET) namespaces, a Landlock FS allowlist, `setrlimit` caps, a seccomp deny-list, and optional cgroup v2 limits. On macOS it means Seatbelt (`sandbox-exec`) with a deny-by-default profile plus env scrubbing.
+`hanzo serve` and `hanzo from-config` default to `--sandbox auto`, which enables the [OS-level sandbox](/mistral.rs/reference/sandbox/) on Linux and macOS and is a no-op with a warning on other platforms. On Linux that means env scrubbing, user/IPC/UTS (and optional NET) namespaces, a Landlock FS allowlist, `setrlimit` caps, a seccomp deny-list, and optional cgroup v2 limits. On macOS it means Seatbelt (`sandbox-exec`) with a deny-by-default profile plus env scrubbing.
 
 `--sandbox on` promotes any missing sandbox layer (no Landlock, no seccomp, no namespaces) into a hard error at code-execution init, instead of falling back to whatever layers are available.
 
-`--sandbox off` and `MISTRALRS_SANDBOX=off` disable all sandbox layers: the subprocess then has the same filesystem, network, and syscall access as any Python process running as the mistralrs user. A startup warning is logged so the choice is visible in logs.
+`--sandbox off` and `MISTRALRS_SANDBOX=off` disable all sandbox layers: the subprocess then has the same filesystem, network, and syscall access as any Python process running as the hanzo user. A startup warning is logged so the choice is visible in logs.
 
 ### Python and Rust API behavior
 
@@ -63,7 +63,7 @@ Known limitations:
 - **Missing kernel features.** Without unprivileged user namespaces, Landlock (kernel 5.13+), or seccomp filter install, the corresponding layers are skipped under `--sandbox auto`. Use `--sandbox on` to make that a hard error instead of a silent fallback.
 - **Shared workdirs.** `--code-exec-workdir <path>` is made writable inside the sandbox and shared across sessions. Anything written there persists and is visible to subsequent sessions.
 
-For high-assurance deployments (multi-tenant, untrusted prompts, regulated data), also run the mistralrs process itself inside a container or VM, as a dedicated low-privilege user, with constrained network egress. `--tool-dispatch-url` is the alternative when you want code execution to leave the mistralrs host entirely.
+For high-assurance deployments (multi-tenant, untrusted prompts, regulated data), also run the hanzo process itself inside a container or VM, as a dedicated low-privilege user, with constrained network egress. `--tool-dispatch-url` is the alternative when you want code execution to leave the hanzo host entirely.
 
 ## See also
 

@@ -12,7 +12,7 @@ The code execution and file helper tools use [strict tool calling](/mistral.rs/g
 ## Turning it on
 
 ```bash
-mistralrs serve --enable-code-execution -m <model>
+hanzo serve --enable-code-execution -m <model>
 ```
 
 The `code-execution` Cargo feature is in the default feature set. Binaries built with `--no-default-features` need it added explicitly.
@@ -78,7 +78,7 @@ The response gains a top-level `files` array:
 Python SDK:
 
 ```python
-from mistralrs import ChatCompletionRequest, CodeExecutionConfig, RequestedFile, Runner, Which
+from hanzo import ChatCompletionRequest, CodeExecutionConfig, RequestedFile, Runner, Which
 
 runner = Runner(which=Which.Plain(model_id="Qwen/Qwen3-4B"), code_execution_config=CodeExecutionConfig())
 resp = runner.send_chat_completion_request(
@@ -96,7 +96,7 @@ for f in resp.files or []:
 Rust SDK:
 
 ```rust
-let req = mistralrs::RequestBuilder::from(messages)
+let req = hanzo::RequestBuilder::from(messages)
     .with_code_execution()
     .require_file("plot.png");
 
@@ -149,7 +149,7 @@ On Linux and macOS the subprocess is wrapped in an OS-level sandbox by default (
 Example with explicit sandbox settings:
 
 ```bash
-mistralrs serve \
+hanzo serve \
   -m mistralrs-community/gemma-4-E4B-it-UQFF \
   --from-uqff 8 \
   --enable-code-execution \
@@ -169,7 +169,7 @@ See the full [sandbox reference](/mistral.rs/reference/sandbox/) for what each l
 Programmatic sandbox configuration:
 
 ```rust
-use mistralrs::{CodeExecutionConfig, NetworkMode, SandboxPolicy};
+use hanzo::{CodeExecutionConfig, NetworkMode, SandboxPolicy};
 
 let cfg = CodeExecutionConfig {
     sandbox_policy: Some(SandboxPolicy {
@@ -182,7 +182,7 @@ let cfg = CodeExecutionConfig {
 ```
 
 ```python
-from mistralrs import CodeExecutionConfig, NetworkMode, Runner, SandboxPolicy, Which
+from hanzo import CodeExecutionConfig, NetworkMode, Runner, SandboxPolicy, Which
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),
