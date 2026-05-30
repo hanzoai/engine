@@ -1007,13 +1007,19 @@ impl MistralRsForServerBuilder {
 // TODO: replace with best device?
 /// Initializes the device to be used for computation, optionally forcing CPU usage and setting a seed.
 fn init_device(force_cpu: bool, seed: Option<u64>) -> Result<candle_core::Device> {
-    #[cfg(feature = "metal")]
+    #[cfg(feature = "rocm")]
+    let device = if force_cpu {
+        Device::Cpu
+    } else {
+        Device::new_rocm(0)?
+    };
+    #[cfg(all(feature = "metal", not(feature = "rocm")))]
     let device = if force_cpu {
         Device::Cpu
     } else {
         Device::new_metal(0)?
     };
-    #[cfg(not(feature = "metal"))]
+    #[cfg(all(not(feature = "metal"), not(feature = "rocm")))]
     #[allow(clippy::if_same_then_else)]
     let device = if force_cpu {
         Device::Cpu
