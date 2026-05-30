@@ -205,4 +205,4 @@ Members and their wire/config names where relevant. The members are fieldless Py
 
 ---
 
-<small>Generated from [`hanzo-pyo3/mistralrs.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo-pyo3/mistralrs.pyi).</small>
+<small>Generated from [`hanzo-pyo3/hanzo.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo-pyo3/hanzo.pyi).</small>

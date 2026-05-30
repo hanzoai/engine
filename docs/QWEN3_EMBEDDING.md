@@ -100,4 +100,4 @@ async fn main() -> Result<()> {
 }
 ```
 
-You can find the full example at [`hanzo/examples/advanced/embeddings/main.rs`](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/advanced/embeddings/main.rs).
+You can find the full example at [`hanzo/examples/advanced/embeddings/main.rs`](https://github.com/hanzoai/engine/blob/main/hanzo/examples/advanced/embeddings/main.rs).

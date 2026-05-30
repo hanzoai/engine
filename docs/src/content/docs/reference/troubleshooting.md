@@ -13,7 +13,7 @@ For unlisted issues, file an issue on [GitHub](https://github.com/EricLBuehler/m
 
 ### `hanzo: command not found` after install
 
-The binary is at `~/.cargo/bin/mistralrs`. The directory is added to `PATH` by `rustup`, but the change does not apply to the current shell. Open a new shell or run `source "$HOME/.cargo/env"`.
+The binary is at `~/.cargo/bin/hanzo`. The directory is added to `PATH` by `rustup`, but the change does not apply to the current shell. Open a new shell or run `source "$HOME/.cargo/env"`.
 
 ### Build fails with `flash-attn` feature enabled
 
@@ -51,11 +51,11 @@ Check the `Server listening on http://...` line in the server output to confirm 
 
 ### CORS errors in a browser
 
-The default allows any origin. Custom CORS configuration is only available programmatically through `MistralRsServerRouterBuilder`.
+The default allows any origin. Custom CORS configuration is only available programmatically through `HanzoServerRouterBuilder`.
 
 ### `413 Payload Too Large`
 
-The default body limit is 50 MB and is not configurable via the CLI. Configure programmatically through `MistralRsServerRouterBuilder`.
+The default body limit is 50 MB and is not configurable via the CLI. Configure programmatically through `HanzoServerRouterBuilder`.
 
 ### UI does not load at `/ui`
 
@@ -71,7 +71,7 @@ The session expired (30-minute idle TTL) or was evicted (128-session cap, LRU). 
 
 ### `from hanzo import Runner` fails with `ImportError`
 
-The wrong wheel was installed. Reinstall with the matching variant: `mistralrs-cuda` for NVIDIA, `mistralrs-metal` for Apple Silicon, `hanzo` for CPU/MKL.
+The wrong wheel was installed. Reinstall with the matching variant: `hanzo-cuda` for NVIDIA, `hanzo-metal` for Apple Silicon, `hanzo` for CPU/MKL.
 
 ## Rust SDK
 

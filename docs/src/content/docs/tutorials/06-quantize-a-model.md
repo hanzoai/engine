@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-For normal CLI usage, start with `--quant`. It prefers a prebuilt UQFF from `mistralrs-community/<model>-UQFF` when one is published, and falls back to in-situ quantization (ISQ) otherwise. A 14B model in BF16 needs about 28 GB for weights; at 4 bits the same model is about 7 GB. The model used here is Gemma 4.
+For normal CLI usage, start with `--quant`. It prefers a prebuilt UQFF from `hanzo-community/<model>-UQFF` when one is published, and falls back to in-situ quantization (ISQ) otherwise. A 14B model in BF16 needs about 28 GB for weights; at 4 bits the same model is about 7 GB. The model used here is Gemma 4.
 
 ## Basic usage
 

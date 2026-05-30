@@ -292,15 +292,15 @@ The Python SDK is distributed as separate packages with features pre-configured:
 
 | Package | Equivalent Features |
 |---------|---------------------|
-| `mistralrs-cuda` | `cuda cudnn flash-attn` |
-| `mistralrs-metal` | `metal accelerate` |
-| `mistralrs-mkl` | `mkl` |
+| `hanzo-cuda` | `cuda cudnn flash-attn` |
+| `hanzo-metal` | `metal accelerate` |
+| `hanzo-mkl` | `mkl` |
 | `hanzo` | CPU only |
 
 ```bash
-pip install mistralrs-cuda    # NVIDIA GPUs
-pip install mistralrs-metal   # Apple Silicon
-pip install mistralrs-mkl     # Intel CPUs
+pip install hanzo-cuda    # NVIDIA GPUs
+pip install hanzo-metal   # Apple Silicon
+pip install hanzo-mkl     # Intel CPUs
 pip install hanzo         # Generic CPU
 ```
 

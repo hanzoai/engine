@@ -9,7 +9,7 @@ use axum::{
 use base64::{prelude::BASE64_STANDARD, Engine};
 use futures::future::join_all;
 use hanzo_engine::{
-    Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response, SamplingParams,
+    Constraint, Hanzo, NormalRequest, Request, RequestMessage, Response, SamplingParams,
 };
 use tokio::sync::mpsc::Receiver;
 
@@ -22,7 +22,7 @@ use crate::{
         EmbeddingData, EmbeddingEncodingFormat, EmbeddingInput, EmbeddingRequest,
         EmbeddingResponse, EmbeddingUsage, EmbeddingVector,
     },
-    types::{ExtractedMistralRsState, SharedMistralRsState},
+    types::{ExtractedHanzoState, SharedHanzoState},
     util::{sanitize_error_message, validate_model_name},
 };
 
@@ -63,12 +63,12 @@ impl IntoResponse for EmbeddingResponder {
     responses((status = 200, description = "Embeddings", body = EmbeddingResponse))
 )]
 pub async fn embeddings(
-    State(state): ExtractedMistralRsState,
+    State(state): ExtractedHanzoState,
     Json(oairequest): Json<EmbeddingRequest>,
 ) -> EmbeddingResponder {
     let repr =
         serde_json::to_string(&oairequest).expect("Serialization of embedding request failed.");
-    MistralRs::maybe_log_request(state.clone(), repr);
+    Hanzo::maybe_log_request(state.clone(), repr);
 
     if let Err(e) = validate_model_name(&oairequest.model, state.clone()) {
         return validation_error(e);
@@ -140,7 +140,7 @@ pub async fn embeddings(
                         total_tokens = total_tokens.saturating_add(item_total_tokens);
                     }
                     Err(e) => {
-                        MistralRs::maybe_log_error(state.clone(), e.as_ref());
+                        Hanzo::maybe_log_error(state.clone(), e.as_ref());
                         return internal_error(e);
                     }
                 }
@@ -183,7 +183,7 @@ pub async fn embeddings(
                         total_tokens = total_tokens.saturating_add(item_total_tokens);
                     }
                     Err(e) => {
-                        MistralRs::maybe_log_error(state.clone(), e.as_ref());
+                        Hanzo::maybe_log_error(state.clone(), e.as_ref());
                         return internal_error(e);
                     }
                 }
@@ -203,7 +203,7 @@ pub async fn embeddings(
         usage,
     };
 
-    MistralRs::maybe_log_response(state.clone(), &response);
+    Hanzo::maybe_log_response(state.clone(), &response);
 
     EmbeddingResponder::Json(response)
 }
@@ -239,7 +239,7 @@ fn normalize_inputs(input: EmbeddingInput) -> Result<Inputs> {
 }
 
 async fn fetch_embedding(
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     prompt: String,
     model_id: Option<&str>,
     truncate_sequence: bool,
@@ -282,7 +282,7 @@ async fn fetch_embedding(
 }
 
 async fn fetch_embedding_tokens(
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     tokens: Vec<u32>,
     model_id: Option<&str>,
     truncate_sequence: bool,
@@ -326,7 +326,7 @@ async fn fetch_embedding_tokens(
 
 async fn process_embedding_response(
     rx: &mut Receiver<Response>,
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
 ) -> Result<EmbeddingWithUsage> {
     base_process_non_streaming_response(
         rx,

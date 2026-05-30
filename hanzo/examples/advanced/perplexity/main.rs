@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use either::Either;
 use hanzo::{
-    cross_entropy_loss, parse_isq_value, Constraint, DType, Device, MistralRs, ModelBuilder,
+    cross_entropy_loss, parse_isq_value, Constraint, DType, Device, Hanzo, ModelBuilder,
     NormalRequest, Request, ResponseOk, SamplingParams, Tensor,
 };
 use tokio::sync::mpsc::channel;
@@ -34,7 +34,7 @@ struct Args {
     calibration_file: Option<PathBuf>,
 }
 
-async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(Tensor, Vec<u32>)> {
+async fn process_chunk(runner: &Hanzo, chunk: Vec<u32>) -> anyhow::Result<(Tensor, Vec<u32>)> {
     let (tx, mut rx) = channel(1);
 
     let request = Request::Normal(Box::new(NormalRequest {
