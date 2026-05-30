@@ -1,5 +1,5 @@
 [package]
-name = "mistralrs-quant"
+name = "hanzo-quant"
 readme = "../README.md"
 authors = ["Hanzo AI <dev@hanzo.ai>", "Eric Buehler"]
 version.workspace = true
@@ -11,6 +11,9 @@ keywords.workspace = true
 categories.workspace = true
 license.workspace = true
 homepage.workspace = true
+
+[lib]
+name = "mistralrs_quant"
 
 [dependencies]
 candle-core.workspace = true
