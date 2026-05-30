@@ -43,6 +43,7 @@ cuda = [
     "dep:cudaforge"
 ]
 nccl = ["cuda", "candle-core/nccl"]
+rocm = ["candle-core/rocm", "candle-nn/rocm"]
 metal = [
     "candle-core/metal",
     "candle-nn/metal",
