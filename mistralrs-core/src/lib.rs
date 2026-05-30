@@ -34,6 +34,8 @@ pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISI
 };
 
 mod cuda;
+#[cfg(feature = "rocm")]
+mod rocm;
 mod device_map;
 mod engine;
 mod lora;
