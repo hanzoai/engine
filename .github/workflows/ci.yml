@@ -89,7 +89,7 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - name: Cargo test
-        run: cargo test --manifest-path engine/Cargo.toml --locked -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
+        run: cargo test --manifest-path engine/Cargo.toml --locked -p mistralrs-core -p hanzo-quant -p mistralrs-vision
         env:
           TESTS_HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
@@ -115,7 +115,7 @@ jobs:
         run: |
           cd engine
           cargo fmt -p hanzo-engine -p mistralrs-server-core -p mistralrs-server -p mistralrs-cli \
-            -p mistralrs-core -p mistralrs -p mistralrs-bench -p mistralrs-vision -p mistralrs-quant \
+            -p mistralrs-core -p mistralrs -p mistralrs-bench -p mistralrs-vision -p hanzo-quant \
             -p mistralrs-paged-attn -p mistralrs-web-chat -p mistralrs-audio -p mistralrs-mcp \
             -p mistralrs-macros -- --check
 
