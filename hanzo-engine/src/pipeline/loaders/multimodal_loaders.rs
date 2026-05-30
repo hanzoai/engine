@@ -565,7 +565,7 @@ fn get_clip_vit_num_elems(cfg: &ClipConfig) -> usize {
 
 /// [`MultimodalLoader`] for a Phi 3 Vision model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct Phi3VLoader;
 
 pub struct Phi3VPrefixer;
@@ -847,7 +847,7 @@ impl DeviceMappedModelLoader for Phi3VLoader {
 
 /// [`MultimodalLoader`] for an Idefics 2 Vision model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct Idefics2Loader;
 
 pub struct Idefics2Prefixer;
@@ -1198,7 +1198,7 @@ impl DeviceMappedModelLoader for Idefics2Loader {
 
 /// [`MultimodalLoader`] for an LLaVANext Vision model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct LLaVANextLoader;
 
 pub struct LLaVANextPrefixer;
@@ -1468,7 +1468,7 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
 
 /// [`MultimodalLoader`] for an LLaVA Vision model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct LLaVALoader;
 
 pub struct LLaVAPrefixer;
@@ -1730,7 +1730,7 @@ impl DeviceMappedModelLoader for LLaVALoader {
 
 /// [`MultimodalLoader`] for an Llama Vision model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct VLlamaLoader;
 
 pub struct VLlamaPrefixer;
@@ -2116,7 +2116,7 @@ impl DeviceMappedModelLoader for VLlamaLoader {
 
 /// [`MultimodalLoader`] for an Qwen2-VL model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct Qwen2VLLoader;
 
 pub struct Qwen2VLPrefixer;
@@ -2417,7 +2417,7 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
 
 /// [`MultimodalLoader`] for an Idefics 3 Vision model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct Idefics3Loader;
 
 pub struct Idefics3Prefixer;
@@ -2735,7 +2735,7 @@ impl DeviceMappedModelLoader for Idefics3Loader {
 
 /// [`MultimodalLoader`] for an MiniCpm-O model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct MiniCpmOLoader;
 
 pub struct MiniCpmOPrefixer;
@@ -3014,7 +3014,7 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
 
 /// [`MultimodalLoader`] for a Phi 4MM Vision model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct Phi4MMLoader;
 
 pub struct Phi4MMPrefixer;
@@ -3360,7 +3360,7 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
 
 /// [`MultimodalLoader`] for an Qwen2_5VL model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct Qwen2_5VLLoader;
 
 pub struct Qwen2_5VLPrefixer;
@@ -3656,7 +3656,7 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
 
 /// [`MultimodalLoader`] for an Gemma 3 model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct Gemma3Loader;
 
 pub struct Gemma3Prefixer;
@@ -3995,7 +3995,7 @@ impl DeviceMappedModelLoader for Gemma3Loader {
 
 /// [`MultimodalLoader`] for an Mistral 3 model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct Mistral3Loader;
 
 pub struct Mistral3Prefixer;
@@ -4320,7 +4320,7 @@ impl DeviceMappedModelLoader for Mistral3Loader {
 
 /// [`MultimodalLoader`] for an Llama Vision model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct VLlama4Loader;
 
 pub struct VLlama4Prefixer;
@@ -4726,7 +4726,7 @@ impl DeviceMappedModelLoader for VLlama4Loader {
 
 /// [`MultimodalLoader`] for an Gemma 3n model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct Gemma3nLoader;
 
 #[allow(dead_code)]
@@ -5602,7 +5602,7 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
 
 /// [`MultimodalLoader`] for an Qwen3VL model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct Qwen3VLLoader;
 
 pub struct Qwen3VLPrefixer;
@@ -5924,7 +5924,7 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
 
 /// [`MultimodalLoader`] for a Qwen3VLMoE model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct Qwen3VLMoELoader;
 
 pub struct Qwen3VLMoEPrefixer;
@@ -6304,7 +6304,7 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
 
 /// [`MultimodalLoader`] for a Qwen3.5 dense (hybrid GDN + full attention) model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct Qwen3_5Loader;
 
 pub struct Qwen3_5Prefixer;
@@ -6639,7 +6639,7 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
 
 /// [`MultimodalLoader`] for a Qwen3.5 MoE (hybrid GDN + full attention) model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct Qwen3_5MoeLoader;
 
 pub struct Qwen3_5MoePrefixer;
@@ -7034,7 +7034,7 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
 
 /// [`MultimodalLoader`] for a Voxtral model.
 ///
-/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
 pub struct VoxtralLoader;
 
 pub struct VoxtralPrefixer;

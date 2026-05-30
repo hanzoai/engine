@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Render hanzo-pyo3/mistralrs.pyi as Starlight Markdown pages.
+Render hanzo-pyo3/hanzo.pyi as Starlight Markdown pages.
 
 The .pyi file is the single source of truth for the Python API. This script
 parses it with `ast` and writes one Markdown file per logical group into
@@ -23,7 +23,7 @@ WEBSITE_DIR = SCRIPT_DIR.parent
 REPO_DIR = WEBSITE_DIR.parent
 PYI_PATH = REPO_DIR / "hanzo-pyo3" / "hanzo.pyi"
 OUT_DIR = WEBSITE_DIR / "src" / "content" / "docs" / "reference" / "python"
-STUB_REL = "hanzo-pyo3/mistralrs.pyi"
+STUB_REL = "hanzo-pyo3/hanzo.pyi"
 
 # (title, slug, description, [class names to include])
 GROUPS = [
@@ -513,10 +513,10 @@ def _render_index() -> str:
         "| Accelerator | Package |",
         "| --- | --- |",
         "| CPU (or Intel CPU with MKL) | `pip install hanzo` |",
-        "| NVIDIA GPU | `pip install mistralrs-cuda` |",
-        "| Apple Silicon | `pip install mistralrs-metal` |",
-        "| Intel MKL (pinned) | `pip install mistralrs-mkl` |",
-        "| macOS Accelerate | `pip install mistralrs-accelerate` |",
+        "| NVIDIA GPU | `pip install hanzo-cuda` |",
+        "| Apple Silicon | `pip install hanzo-metal` |",
+        "| Intel MKL (pinned) | `pip install hanzo-mkl` |",
+        "| macOS Accelerate | `pip install hanzo-accelerate` |",
         "",
         "## Pages",
         "",

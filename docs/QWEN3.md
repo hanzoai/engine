@@ -69,7 +69,7 @@ print(res.usage)
 ```
 
 ## Rust SDK
-You can find a more detailed example demonstrating enabling/disabling thinking [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/models/text_models/main.rs).
+You can find a more detailed example demonstrating enabling/disabling thinking [here](https://github.com/hanzoai/engine/blob/main/hanzo/examples/models/text_models/main.rs).
 
 ```rust
 use anyhow::Result;

@@ -9,7 +9,7 @@ use either::Either;
 use image::codecs::gif::GifDecoder;
 use image::{AnimationDecoder, DynamicImage};
 use hanzo_engine::{
-    AudioInput, ChatCompletionResponse, CompletionResponse, MistralRs, Request, Response,
+    AudioInput, ChatCompletionResponse, CompletionResponse, Hanzo, Request, Response,
     ResponseErr, VideoInput,
 };
 use pyo3::{exceptions::PyValueError, PyErr};
@@ -64,8 +64,8 @@ impl From<serde_json::Error> for PyApiErr {
     }
 }
 
-impl From<hanzo_engine::MistralRsError> for PyApiErr {
-    fn from(value: hanzo_engine::MistralRsError) -> Self {
+impl From<hanzo_engine::HanzoError> for PyApiErr {
+    fn from(value: hanzo_engine::HanzoError) -> Self {
         Self::from(value.to_string())
     }
 }
@@ -103,14 +103,14 @@ pub(crate) fn next_request_id() -> usize {
 }
 
 pub(crate) fn send_request_with_optional_stream(
-    runner: Arc<MistralRs>,
+    runner: Arc<Hanzo>,
     model_id: Option<String>,
     request: Request,
     mut rx: Receiver<Response>,
     debug_repr: String,
     is_streaming: bool,
 ) -> Result<Either<Response, Receiver<Response>>, String> {
-    MistralRs::maybe_log_request(runner.clone(), debug_repr);
+    Hanzo::maybe_log_request(runner.clone(), debug_repr);
     let sender = runner
         .get_sender(model_id.as_deref())
         .map_err(|e| e.to_string())?;
@@ -132,7 +132,7 @@ pub(crate) fn send_request_with_optional_stream(
 }
 
 pub(crate) fn send_request_and_wait(
-    runner: Arc<MistralRs>,
+    runner: Arc<Hanzo>,
     model_id: Option<String>,
     request: Request,
     rx: Receiver<Response>,
@@ -430,7 +430,7 @@ fn decode_video_ffmpeg(bytes: &[u8], source_hint: &str) -> anyhow::Result<VideoI
         );
     }
 
-    let tmp_dir = std::env::temp_dir().join("mistralrs_video");
+    let tmp_dir = std::env::temp_dir().join("hanzo_video");
     fs::create_dir_all(&tmp_dir)?;
     let video_id = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

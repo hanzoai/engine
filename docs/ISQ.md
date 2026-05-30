@@ -80,7 +80,7 @@ Deferred ISQ loads the full unquantized model into CPU memory first, then quanti
 ## Accuracy
 
 Accuracy of ISQ can be measured by the performance degradation versus the unquantized model.
-This is commonly measured with perplexity. Please see the [perplexity](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/advanced/perplexity/main.rs) example.
+This is commonly measured with perplexity. Please see the [perplexity](https://github.com/hanzoai/engine/blob/main/hanzo/examples/advanced/perplexity/main.rs) example.
 
 To improve the accuracy of a model with ISQ, use an imatrix file. These can be found online (for example, on Hugging Face), and should be passed with the `--imatrix` flag for `plain` models. This will increase the accuracy of the quantization significantly and bring the ISQ quantization up to par with the GGUF counterpart.
 
@@ -97,7 +97,7 @@ runner = Runner(
 ```
 
 ## Rust Example
-You can find this example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/isq/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/hanzo/examples/isq/main.rs).
 
 ```rust
 let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")

@@ -273,7 +273,7 @@ install_ffmpeg() {
 }
 
 # Install hanzo-cli
-install_mistralrs() {
+install_hanzo() {
     features="$1"
 
     if [ -n "$features" ]; then
@@ -389,7 +389,7 @@ main() {
     esac
 
     echo ""
-    install_mistralrs "$features"
+    install_hanzo "$features"
 
     # Ensure cargo bin is in PATH for this session
     if [ -f "$HOME/.cargo/env" ]; then

@@ -58,7 +58,7 @@ print(res.usage)
 ```
 
 ## Rust SDK
-You can find this example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/models/text_models/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/hanzo/examples/models/text_models/main.rs).
 
 ```rust
 use anyhow::Result;

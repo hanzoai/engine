@@ -2,7 +2,7 @@
 
 The `hanzo` crate provides a high-level Rust API for running LLM inference with Hanzo Engine.
 
-> **Full API reference:** [docs.rs/mistralrs](https://docs.rs/mistralrs)
+> **Full API reference:** [docs.rs/hanzo](https://docs.rs/hanzo)
 
 **Table of contents**
 - [Installation](#installation)
@@ -84,7 +84,7 @@ let model = TextModelBuilder::new("Qwen/Qwen3-4B")
     .await?;
 ```
 
-Key builder methods include `with_isq()`, `with_auto_isq()`, `with_dtype()`, `with_force_cpu()`, `with_device_mapping()`, `with_chat_template()`, `with_paged_attn()`, `with_max_num_seqs()`, `with_mcp_client()`, and more. See the [API docs](https://docs.rs/mistralrs) for the full list.
+Key builder methods include `with_isq()`, `with_auto_isq()`, `with_dtype()`, `with_force_cpu()`, `with_device_mapping()`, `with_chat_template()`, `with_paged_attn()`, `with_max_num_seqs()`, `with_mcp_client()`, and more. See the [API docs](https://docs.rs/hanzo) for the full list.
 
 ## Request Types
 
@@ -186,7 +186,7 @@ fn get_weather(
 }
 ```
 
-See [Tool Calling](TOOL_CALLING.md) for full details, or the [`examples/advanced/tools/`](https://github.com/hanzoai/engine/tree/master/mistralrs/examples/advanced/tools) example.
+See [Tool Calling](TOOL_CALLING.md) for full details, or the [`examples/advanced/tools/`](https://github.com/hanzoai/engine/tree/master/hanzo/examples/advanced/tools) example.
 
 ## Agents
 
@@ -205,7 +205,7 @@ let response = agent.run("What's the weather in NYC and London?").await?;
 println!("{}", response.final_text);
 ```
 
-See the [`examples/advanced/agent/`](https://github.com/hanzoai/engine/tree/master/mistralrs/examples/advanced/agent) example for streaming agents and the `#[tool]` macro.
+See the [`examples/advanced/agent/`](https://github.com/hanzoai/engine/tree/master/hanzo/examples/advanced/agent) example for streaming agents and the `#[tool]` macro.
 
 ## Blocking API
 
@@ -259,7 +259,7 @@ Run any example with:
 cargo run --release --features <features> --example <name>
 ```
 
-Browse all examples: [`hanzo/examples/`](https://github.com/hanzoai/engine/tree/master/mistralrs/examples)
+Browse all examples: [`hanzo/examples/`](https://github.com/hanzoai/engine/tree/master/hanzo/examples)
 
 ## See Also
 
@@ -267,4 +267,4 @@ Browse all examples: [`hanzo/examples/`](https://github.com/hanzoai/engine/tree/
 - [Agentic Features Guide](AGENTS.md): Agent builder, tool callbacks, web search
 - [Tool Calling](TOOL_CALLING.md): Tool calling reference
 - [Performance Guide](PERFORMANCE.md): Optimization options
-- [API Docs (docs.rs)](https://docs.rs/mistralrs): Full API reference
+- [API Docs (docs.rs)](https://docs.rs/hanzo): Full API reference

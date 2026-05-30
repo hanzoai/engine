@@ -11,24 +11,24 @@
 ###############################################################################
 
 # hanzo: CPU-only, uses Docker manylinux with RUSTFLAGS="-C target-cpu=generic"
-# mistralrs-cuda: uses native maturin (not Docker)
-python scripts/build_wheels.py -p hanzo mistralrs-cuda
+# hanzo-cuda: uses native maturin (not Docker)
+python scripts/build_wheels.py -p hanzo hanzo-cuda
 
 ###############################################################################
 # BOX 2: Linux x86_64 + CUDA + MKL
 ###############################################################################
 
 # hanzo: has MKL, uses native maturin (not Docker, because MKL feature)
-# mistralrs-cuda: uses native maturin
-# mistralrs-mkl: uses native maturin
-python scripts/build_wheels.py -p hanzo mistralrs-cuda mistralrs-mkl
+# hanzo-cuda: uses native maturin
+# hanzo-mkl: uses native maturin
+python scripts/build_wheels.py -p hanzo hanzo-cuda hanzo-mkl
 
 ###############################################################################
 # BOX 2: Windows x86_64 + CUDA + MKL
 ###############################################################################
 
 # All use native maturin (no Docker on Windows)
-python scripts/build_wheels.py -p hanzo mistralrs-cuda mistralrs-mkl
+python scripts/build_wheels.py -p hanzo hanzo-cuda hanzo-mkl
 
 ###############################################################################
 # BOX 3: macOS aarch64 + Metal
@@ -61,9 +61,9 @@ python scripts/build_wheels.py --all
 # hanzo            | (none)      | Linux aarch64                  | Docker manylinux
 # hanzo            | mkl         | Linux/Windows x86_64           | Native maturin
 # hanzo            | metal       | macOS aarch64                  | Native maturin
-# mistralrs-cuda       | cuda        | Linux + Windows (x86_64/arm64) | Native maturin
-# mistralrs-metal      | metal       | macOS aarch64                  | Native maturin
-# mistralrs-accelerate | accelerate  | macOS aarch64                  | Native maturin
-# mistralrs-mkl        | mkl         | Linux + Windows x86_64         | Native maturin
+# hanzo-cuda       | cuda        | Linux + Windows (x86_64/arm64) | Native maturin
+# hanzo-metal      | metal       | macOS aarch64                  | Native maturin
+# hanzo-accelerate | accelerate  | macOS aarch64                  | Native maturin
+# hanzo-mkl        | mkl         | Linux + Windows x86_64         | Native maturin
 #
 # Python version: 3.10 only (abi3 provides forward compatibility to 3.11+)

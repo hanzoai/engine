@@ -2472,15 +2472,397 @@ dependencies = [
 ]
 
 [[package]]
-name = "hanzo-engine"
-version = "0.6.0"
+name = "hanzo"
+version = "0.8.1"
 dependencies = [
  "anyhow",
- "hanzo",
+ "candle-core",
+ "candle-nn",
+ "clap",
+ "either",
+ "futures",
  "hanzo-engine",
- "sha2",
+ "hanzo-macros",
+ "image",
+ "indexmap 2.13.0",
+ "rand 0.9.4",
+ "reqwest 0.13.1",
+ "schemars 1.2.0",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "walkdir",
+]
+
+[[package]]
+name = "hanzo-audio"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "apodize",
+ "hound",
+ "symphonia",
+]
+
+[[package]]
+name = "hanzo-bench"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "candle-core",
+ "clap",
+ "cli-table",
+ "hanzo-engine",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "hanzo-cli"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "candle-core",
+ "chrono",
+ "clap",
+ "clap_complete",
+ "comfy-table",
+ "ctrlc",
+ "directories 6.0.0",
+ "dirs",
+ "either",
+ "futures-util",
+ "hanzo",
+ "hanzo-engine",
+ "hanzo-sandbox",
+ "hanzo-server-core",
+ "image",
+ "include_dir",
+ "indexmap 2.13.0",
+ "mime_guess",
+ "regex",
+ "rustyline",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid 1.19.0",
+ "walkdir",
+]
+
+[[package]]
+name = "hanzo-code-exec"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "hanzo-llm-mcp",
+ "hanzo-sandbox",
+ "image",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid 1.19.0",
+]
+
+[[package]]
+name = "hanzo-engine"
+version = "0.8.1"
+dependencies = [
+ "accelerate-src",
+ "ahash",
+ "akin",
+ "anyhow",
+ "apodize",
+ "as-any",
+ "async-trait",
+ "base64 0.22.1",
+ "bm25",
+ "bytemuck",
+ "bytemuck_derive",
+ "candle-core",
+ "candle-flash-attn",
+ "candle-flash-attn-v3",
+ "candle-metal-kernels",
+ "candle-nn",
+ "cfgrammar",
+ "chrono",
+ "clap",
+ "csv",
+ "cudaforge",
+ "derive-new",
+ "derive_more",
+ "dirs",
+ "either",
+ "float8",
+ "futures",
+ "galil-seiferas",
+ "half",
+ "hanzo-audio",
+ "hanzo-code-exec",
+ "hanzo-llm-mcp",
+ "hanzo-paged-attn",
+ "hanzo-quant",
+ "hanzo-sandbox",
+ "hanzo-vision",
+ "hashbrown 0.16.1",
+ "hf-hub",
+ "hound",
+ "html2text",
+ "http",
+ "image",
+ "indexmap 2.13.0",
+ "indicatif 0.18.3",
+ "intel-mkl-src",
+ "interprocess",
+ "itertools",
+ "libc",
+ "llguidance",
+ "lrtable",
+ "mime_guess",
+ "minijinja",
+ "minijinja-contrib",
+ "num-traits",
+ "objc",
+ "objc2-metal",
+ "openai-harmony",
+ "ordered-float",
+ "parking_lot",
+ "pyo3",
+ "radix_trie",
+ "rand 0.9.4",
+ "rand_distr 0.5.1",
+ "rand_isaac",
+ "rayon",
+ "regex",
+ "regex-automata",
+ "reqwest 0.13.1",
+ "rubato",
+ "rust-mcp-schema",
+ "rustc-hash 2.1.1",
+ "rustfft",
+ "safetensors 0.7.0",
+ "schemars 1.2.0",
+ "scraper",
+ "serde",
+ "serde-big-array",
+ "serde-saphyr",
+ "serde_json",
+ "serde_plain",
+ "sha1",
+ "statrs",
+ "strum 0.27.2",
+ "symphonia",
+ "sysinfo",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokenizers 0.21.4",
+ "tokio",
+ "tokio-rayon",
+ "tokio-tungstenite",
+ "toktrie",
+ "toktrie_hf_tokenizers",
+ "toml 0.9.11+spec-1.1.0",
+ "tqdm",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "utoipa",
+ "uuid 1.19.0",
+ "variantly",
+ "vob",
+]
+
+[[package]]
+name = "hanzo-llm-mcp"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures-util",
+ "http",
+ "image",
+ "pyo3",
+ "reqwest 0.13.1",
+ "rust-mcp-schema",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-test",
+ "tokio-tungstenite",
+ "tracing",
+ "utoipa",
+ "uuid 1.19.0",
+]
+
+[[package]]
+name = "hanzo-macros"
+version = "0.8.1"
+dependencies = [
+ "darling 0.23.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
+name = "hanzo-paged-attn"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "candle-core",
+ "candle-metal-kernels",
+ "cudaforge",
+ "dispatch2",
+ "float8",
+ "half",
+ "objc2-foundation",
+ "objc2-metal",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "hanzo-pyo3"
+version = "0.8.1"
+dependencies = [
+ "accelerate-src",
+ "anyhow",
+ "base64 0.22.1",
+ "candle-core",
+ "data-url",
+ "either",
+ "futures",
+ "hanzo-engine",
+ "hanzo-llm-mcp",
+ "image",
+ "indexmap 2.13.0",
+ "intel-mkl-src",
+ "itertools",
+ "pyo3",
+ "pyo3-build-config",
+ "reqwest 0.13.1",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "hanzo-quant"
+version = "0.8.1"
+dependencies = [
+ "byteorder",
+ "candle-core",
+ "candle-metal-kernels",
+ "candle-nn",
+ "cudaforge",
+ "dispatch2",
+ "float8",
+ "half",
+ "hf-hub",
+ "lazy_static",
+ "memmap2",
+ "objc2-foundation",
+ "objc2-metal",
+ "paste",
+ "rayon",
+ "regex",
+ "safetensors 0.7.0",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "yoke 0.8.1",
+]
+
+[[package]]
+name = "hanzo-sandbox"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "itoa",
+ "landlock",
+ "libc",
+ "nix 0.31.3",
+ "seccompiler",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "hanzo-server"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "clap",
+ "ctrlc",
+ "directories 6.0.0",
+ "either",
+ "hanzo-engine",
+ "hanzo-server-core",
+ "indexmap 2.13.0",
+ "regex",
+ "rust-mcp-sdk",
+ "rustyline",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "hanzo-server-core"
+version = "0.8.1"
+dependencies = [
+ "accelerate-src",
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "candle-core",
+ "data-url",
+ "either",
+ "futures",
+ "hanzo-engine",
+ "image",
+ "indexmap 2.13.0",
+ "intel-mkl-src",
+ "itertools",
+ "reqwest 0.13.1",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "url",
+ "utoipa",
+ "utoipa-swagger-ui",
+ "uuid 1.19.0",
+]
+
+[[package]]
+name = "hanzo-vision"
+version = "0.8.1"
+dependencies = [
+ "candle-core",
+ "image",
+ "rayon",
 ]
 
 [[package]]
@@ -3443,400 +3825,6 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "hanzo"
-version = "0.8.1"
-dependencies = [
- "anyhow",
- "candle-core",
- "candle-nn",
- "clap",
- "either",
- "futures",
- "image",
- "indexmap 2.13.0",
- "hanzo-engine",
- "hanzo-macros",
- "rand 0.9.4",
- "reqwest 0.13.1",
- "schemars 1.2.0",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "walkdir",
-]
-
-[[package]]
-name = "hanzo-audio"
-version = "0.8.1"
-dependencies = [
- "anyhow",
- "apodize",
- "hound",
- "symphonia",
-]
-
-[[package]]
-name = "hanzo-bench"
-version = "0.8.1"
-dependencies = [
- "anyhow",
- "candle-core",
- "clap",
- "cli-table",
- "hanzo-engine",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "hanzo-cli"
-version = "0.8.1"
-dependencies = [
- "anyhow",
- "axum",
- "candle-core",
- "chrono",
- "clap",
- "clap_complete",
- "comfy-table",
- "ctrlc",
- "directories 6.0.0",
- "dirs",
- "either",
- "futures-util",
- "image",
- "include_dir",
- "indexmap 2.13.0",
- "mime_guess",
- "hanzo",
- "hanzo-engine",
- "hanzo-sandbox",
- "hanzo-server-core",
- "regex",
- "rustyline",
- "serde",
- "serde_json",
- "tokio",
- "toml 0.9.11+spec-1.1.0",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid 1.19.0",
- "walkdir",
-]
-
-[[package]]
-name = "hanzo-code-exec"
-version = "0.8.1"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "image",
- "libc",
- "hanzo-llm-mcp",
- "hanzo-sandbox",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "uuid 1.19.0",
-]
-
-[[package]]
-name = "hanzo-engine"
-version = "0.8.1"
-dependencies = [
- "accelerate-src",
- "ahash",
- "akin",
- "anyhow",
- "apodize",
- "as-any",
- "async-trait",
- "base64 0.22.1",
- "bm25",
- "bytemuck",
- "bytemuck_derive",
- "candle-core",
- "candle-flash-attn",
- "candle-flash-attn-v3",
- "candle-metal-kernels",
- "candle-nn",
- "cfgrammar",
- "chrono",
- "clap",
- "csv",
- "cudaforge",
- "derive-new",
- "derive_more",
- "dirs",
- "either",
- "float8",
- "futures",
- "galil-seiferas",
- "half",
- "hashbrown 0.16.1",
- "hf-hub",
- "hound",
- "html2text",
- "http",
- "image",
- "indexmap 2.13.0",
- "indicatif 0.18.3",
- "intel-mkl-src",
- "interprocess",
- "itertools",
- "libc",
- "llguidance",
- "lrtable",
- "mime_guess",
- "minijinja",
- "minijinja-contrib",
- "hanzo-audio",
- "hanzo-code-exec",
- "hanzo-llm-mcp",
- "hanzo-paged-attn",
- "hanzo-quant",
- "hanzo-sandbox",
- "hanzo-vision",
- "num-traits",
- "objc",
- "objc2-metal",
- "openai-harmony",
- "ordered-float",
- "parking_lot",
- "pyo3",
- "radix_trie",
- "rand 0.9.4",
- "rand_distr 0.5.1",
- "rand_isaac",
- "rayon",
- "regex",
- "regex-automata",
- "reqwest 0.13.1",
- "rubato",
- "rust-mcp-schema",
- "rustc-hash 2.1.1",
- "rustfft",
- "safetensors 0.7.0",
- "schemars 1.2.0",
- "scraper",
- "serde",
- "serde-big-array",
- "serde-saphyr",
- "serde_json",
- "serde_plain",
- "sha1",
- "statrs",
- "strum 0.27.2",
- "symphonia",
- "sysinfo",
- "tempfile",
- "thiserror 2.0.18",
- "tokenizers 0.21.4",
- "tokio",
- "tokio-rayon",
- "tokio-tungstenite",
- "toktrie",
- "toktrie_hf_tokenizers",
- "toml 0.9.11+spec-1.1.0",
- "tqdm",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
- "utoipa",
- "uuid 1.19.0",
- "variantly",
- "vob",
-]
-
-[[package]]
-name = "hanzo-macros"
-version = "0.8.1"
-dependencies = [
- "darling 0.23.0",
- "proc-macro2",
- "quote",
- "syn 2.0.114",
-]
-
-[[package]]
-name = "hanzo-llm-mcp"
-version = "0.8.1"
-dependencies = [
- "anyhow",
- "async-trait",
- "futures-util",
- "http",
- "image",
- "pyo3",
- "reqwest 0.13.1",
- "rust-mcp-schema",
- "serde",
- "serde_json",
- "tokio",
- "tokio-test",
- "tokio-tungstenite",
- "tracing",
- "utoipa",
- "uuid 1.19.0",
-]
-
-[[package]]
-name = "hanzo-paged-attn"
-version = "0.8.1"
-dependencies = [
- "anyhow",
- "candle-core",
- "candle-metal-kernels",
- "cudaforge",
- "dispatch2",
- "float8",
- "half",
- "objc2-foundation",
- "objc2-metal",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "hanzo-pyo3"
-version = "0.8.1"
-dependencies = [
- "accelerate-src",
- "anyhow",
- "base64 0.22.1",
- "candle-core",
- "data-url",
- "either",
- "futures",
- "image",
- "indexmap 2.13.0",
- "intel-mkl-src",
- "itertools",
- "hanzo-engine",
- "hanzo-llm-mcp",
- "pyo3",
- "pyo3-build-config",
- "reqwest 0.13.1",
- "serde",
- "serde_json",
- "tokio",
- "url",
-]
-
-[[package]]
-name = "hanzo-quant"
-version = "0.8.1"
-dependencies = [
- "byteorder",
- "candle-core",
- "candle-metal-kernels",
- "candle-nn",
- "cudaforge",
- "dispatch2",
- "float8",
- "half",
- "hf-hub",
- "lazy_static",
- "memmap2",
- "objc2-foundation",
- "objc2-metal",
- "paste",
- "rayon",
- "regex",
- "safetensors 0.7.0",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "yoke 0.8.1",
-]
-
-[[package]]
-name = "hanzo-sandbox"
-version = "0.8.1"
-dependencies = [
- "anyhow",
- "itoa",
- "landlock",
- "libc",
- "nix 0.31.3",
- "seccompiler",
- "serde",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "hanzo-server"
-version = "0.8.1"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "clap",
- "ctrlc",
- "directories 6.0.0",
- "either",
- "indexmap 2.13.0",
- "hanzo-engine",
- "hanzo-server-core",
- "regex",
- "rust-mcp-sdk",
- "rustyline",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "hanzo-server-core"
-version = "0.8.1"
-dependencies = [
- "accelerate-src",
- "anyhow",
- "axum",
- "base64 0.22.1",
- "candle-core",
- "data-url",
- "either",
- "futures",
- "image",
- "indexmap 2.13.0",
- "intel-mkl-src",
- "itertools",
- "hanzo-engine",
- "reqwest 0.13.1",
- "serde",
- "serde_json",
- "tokio",
- "tower-http",
- "tracing",
- "url",
- "utoipa",
- "utoipa-swagger-ui",
- "uuid 1.19.0",
-]
-
-[[package]]
-name = "hanzo-vision"
-version = "0.8.1"
-dependencies = [
- "candle-core",
- "image",
- "rayon",
 ]
 
 [[package]]

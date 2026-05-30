@@ -52,7 +52,7 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    eprintln!("⚠️  mistralrs-web-chat is deprecated. Please use `hanzo serve --ui` from hanzo-cli instead.");
+    eprintln!("⚠️  hanzo-web-chat is deprecated. Please use `hanzo serve --ui` from hanzo-cli instead.");
 
     let cli = Cli::parse();
     if cli.text_models.is_empty()

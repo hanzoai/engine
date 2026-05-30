@@ -1,6 +1,6 @@
 ---
 title: HTTP API reference
-description: Every endpoint, request schema, response schema, and mistralrs-specific extension.
+description: Every endpoint, request schema, response schema, and hanzo-specific extension.
 sidebar:
   order: 4
 ---
@@ -279,14 +279,14 @@ Example response:
       "format": "png",
       "mime_type": "image/png",
       "bytes": 14823,
-      "source": {"tool": "mistralrs_execute_python", "round": 0, "turn": 0},
+      "source": {"tool": "hanzo_execute_python", "round": 0, "turn": 0},
       "data_base64": "iVBORw0KGgo..."
     }
   ],
   "agentic_tool_calls": [
     {
       "round": 0,
-      "name": "mistralrs_execute_python",
+      "name": "hanzo_execute_python",
       "file_ids": ["file_abc_r0_0"]
     }
   ]
@@ -299,7 +299,7 @@ Streaming requests emit each file as soon as it is produced. The body is the sam
 
 ```text
 event: file_produced
-data: {"id":"file_abc_r0_0","name":"plot.png","format":"png","mime_type":"image/png","bytes":14823,"source":{"tool":"mistralrs_execute_python","round":0,"turn":0},"data_base64":"iVBORw0KGgo..."}
+data: {"id":"file_abc_r0_0","name":"plot.png","format":"png","mime_type":"image/png","bytes":14823,"source":{"tool":"hanzo_execute_python","round":0,"turn":0},"data_base64":"iVBORw0KGgo..."}
 ```
 
 ### Size policy
@@ -329,7 +329,7 @@ File metadata shape:
   "purpose": "agent_output",
   "format": "png",
   "mime_type": "image/png",
-  "source": {"tool": "mistralrs_execute_python", "round": 0, "turn": 0}
+  "source": {"tool": "hanzo_execute_python", "round": 0, "turn": 0}
 }
 ```
 

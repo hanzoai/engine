@@ -117,7 +117,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-This example lives [here](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/getting_started/embedding/main.rs), and can be run with:
+This example lives [here](https://github.com/hanzoai/engine/blob/master/hanzo/examples/getting_started/embedding/main.rs), and can be run with:
 
 ```bash
 cargo run --package hanzo --example embedding_gemma

@@ -5,7 +5,7 @@ This file provides instructions for AI agents to understand the layout of the `m
 
 ## Repository Structure
 
-- `/mistralrs/`           : Main Rust crate (text & multimodal inference API)
+- `/hanzo/`           : Main Rust crate (text & multimodal inference API)
 - `/hanzo-engine/`      : Core inference logic and tensor operations (text models)
 - `/hanzo-vision/`    : Image processing utilities (resizing, preprocessing for multimodal models)
 - `/hanzo-quant/`     : Quantization support (ISQ, GGUF, GPTQ, AWQ, FP8, HQQ, etc.)

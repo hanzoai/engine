@@ -3,13 +3,13 @@
 use std::sync::Arc;
 
 use axum::extract::State;
-use hanzo_engine::{MistralRs, Pipeline};
+use hanzo_engine::{Hanzo, Pipeline};
 
 /// This is the underlying instance of mistral.rs.
-pub type SharedMistralRsState = Arc<MistralRs>;
+pub type SharedHanzoState = Arc<Hanzo>;
 
-/// This is the `SharedMistralRsState` that has been extracted for an axum handler.
-pub type ExtractedMistralRsState = State<SharedMistralRsState>;
+/// This is the `SharedHanzoState` that has been extracted for an axum handler.
+pub type ExtractedHanzoState = State<SharedHanzoState>;
 
 pub(crate) type LoadedPipeline = Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>;
 
