@@ -1,6 +1,6 @@
 ---
 title: Generate images with diffusion models
-description: Running FLUX and similar image-generation models through the mistralrs OpenAI-compatible API.
+description: Running FLUX and similar image-generation models through the hanzo OpenAI-compatible API.
 sidebar:
   order: 3
 ---
@@ -10,7 +10,7 @@ mistral.rs serves diffusion models through `POST /v1/images/generations`. The ma
 ## Running FLUX
 
 ```bash
-mistralrs serve -m black-forest-labs/FLUX.1-schnell
+hanzo serve -m black-forest-labs/FLUX.1-schnell
 ```
 
 `FLUX.1-schnell` is permissively licensed. `FLUX.1-dev` requires Hugging Face license acceptance, same flow as [the Gemma setup](/mistral.rs/tutorials/02-serve-an-api/#accepting-the-gemma-license).
@@ -59,7 +59,7 @@ FLUX is memory-hungry at native precision. Diffusion models do not support runti
 ## Python SDK
 
 ```python
-from mistralrs import (
+from hanzo import (
     DiffusionArchitecture,
     ImageGenerationResponseFormat,
     Runner,

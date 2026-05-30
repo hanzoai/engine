@@ -1,6 +1,6 @@
 # MCP protocol support
 
-`mistralrs serve` can speak the **MCP – Model-Control-Protocol** in addition to the regular OpenAI-compatible REST API.
+`hanzo serve` can speak the **MCP – Model-Control-Protocol** in addition to the regular OpenAI-compatible REST API.
 
 At a high-level, MCP is an opinionated, tool-based JSON-RPC 2.0 protocol that lets clients interact with models through structured *tool calls* instead of specialised HTTP routes.  
 The implementation in Hanzo Engine is powered by [`rust-mcp-sdk`](https://crates.io/crates/rust-mcp-sdk) and automatically registers tools based on the modalities supported by the loaded model (text, vision, …).
@@ -32,7 +32,7 @@ Exposed tools:
 Start the normal HTTP server and add the `--mcp-port` flag to expose an MCP endpoint **in parallel** on a separate port:
 
 ```bash
-mistralrs serve \
+hanzo serve \
   -p 1234 \
   --mcp-port 4321 \
   -m mistralai/Mistral-7B-Instruct-v0.3

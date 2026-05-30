@@ -5,13 +5,13 @@ GLM4 is a series of open, multilingual, and multimodal large language models. Th
 ## Quick Start
 
 ```bash
-mistralrs run --isq 4 -m THUDM/GLM-4-9B-0414
+hanzo run --isq 4 -m THUDM/GLM-4-9B-0414
 ```
 
 ## HTTP API
 
 ```bash
-mistralrs serve --isq 4 -p 1234 -m THUDM/GLM-4-9B-0414
+hanzo serve --isq 4 -p 1234 -m THUDM/GLM-4-9B-0414
 ```
 
 ```py
@@ -32,7 +32,7 @@ print(completion.choices[0].message.content)
 ## Python SDK
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from hanzo import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.Plain(
@@ -61,7 +61,7 @@ print(res.usage)
 
 ```rust
 use anyhow::Result;
-use mistralrs::{
+use hanzo::{
     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
 };
 

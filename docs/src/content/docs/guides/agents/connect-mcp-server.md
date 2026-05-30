@@ -1,6 +1,6 @@
 ---
 title: Connect to an MCP server
-description: Use mistralrs as an MCP client.
+description: Use hanzo as an MCP client.
 sidebar:
   order: 7
 ---
@@ -12,7 +12,7 @@ MCP tools automatically use [strict tool calling](/mistral.rs/guides/agents/stri
 ## Starting with a config file
 
 ```bash
-mistralrs serve --mcp-config mcp.json -m <model>
+hanzo serve --mcp-config mcp.json -m <model>
 ```
 
 The `MCP_CONFIG_PATH` environment variable is an alternative to the flag.

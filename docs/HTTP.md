@@ -4,7 +4,7 @@ Hanzo Engine provides a lightweight OpenAI API compatible HTTP server based on [
 
 The API consists of the following endpoints. They can be viewed in your browser interactively by going to `http://localhost:<port>/docs`.
 
-> ℹ️  Besides the HTTP endpoints described below, `mistralrs serve` can also expose the same functionality via the **MCP protocol**.
+> ℹ️  Besides the HTTP endpoints described below, `hanzo serve` can also expose the same functionality via the **MCP protocol**.
 > Enable it with `--mcp-port <port>` and see [MCP/server.md](MCP/server.md) for details.
 
 ## Additional object keys
@@ -189,7 +189,7 @@ curl http://localhost:1234/v1/completions \
 Serve an embedding model (for example, EmbeddingGemma) to enable this endpoint:
 
 ```bash
-mistralrs serve -m google/embeddinggemma-300m
+hanzo serve -m google/embeddinggemma-300m
 ```
 
 In multi-model mode, include an `Embedding` entry in your selector config to expose it alongside chat models.
@@ -246,7 +246,7 @@ Responses follow the OpenAI schema: `object: "list"`, `data[*].embedding` contai
 Generate images using diffusion models (like FLUX). First, serve a diffusion model:
 
 ```bash
-mistralrs serve -m black-forest-labs/FLUX.1-schnell
+hanzo serve -m black-forest-labs/FLUX.1-schnell
 ```
 
 Supported request fields:
@@ -302,7 +302,7 @@ curl http://localhost:1234/v1/images/generations \
 Generate speech from text using speech models (like Dia). First, serve a speech model:
 
 ```bash
-mistralrs serve -m nari-labs/Dia-1.6B
+hanzo serve -m nari-labs/Dia-1.6B
 ```
 
 Supported request fields:

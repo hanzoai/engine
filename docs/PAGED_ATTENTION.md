@@ -119,16 +119,16 @@ Add the `--pa-gpu-mem`/`--pa-gpu-mem-usage` and `--pa-blk-size` parameters befor
 To enable KV cache quantization, use the `--pa-cache-type` parameter with either `auto` (default) or `f8e4m3`.
 
 ```
-mistralrs run --pa-memory-mb 8192 --pa-block-size 32 --isq 4 -m microsoft/Phi-3-mini-128k-instruct
+hanzo run --pa-memory-mb 8192 --pa-block-size 32 --isq 4 -m microsoft/Phi-3-mini-128k-instruct
 ```
 
 ```
-mistralrs run --pa-memory-fraction 0.95 --pa-block-size 32 --format gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
+hanzo run --pa-memory-fraction 0.95 --pa-block-size 32 --format gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
 ```
 
 Example with FP8 KV cache quantization:
 ```
-mistralrs run --paged-attn on --pa-memory-mb 4096 --pa-block-size 32 --pa-cache-type f8e4m3 -m microsoft/Phi-3-mini-128k-instruct
+hanzo run --paged-attn on --pa-memory-mb 4096 --pa-block-size 32 --pa-cache-type f8e4m3 -m microsoft/Phi-3-mini-128k-instruct
 ```
 
 ## Using the Rust SDK
@@ -136,7 +136,7 @@ You can find this example [here](https://github.com/hanzoai/engine/blob/master/m
 
 ```rust
 use anyhow::Result;
-use mistralrs::{
+use hanzo::{
     IsqType, MemoryGpuConfig, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
     TextModelBuilder,
 };
@@ -180,7 +180,7 @@ async fn main() -> Result<()> {
 Example with FP8 KV cache quantization:
 ```rust
 use anyhow::Result;
-use mistralrs::{
+use hanzo::{
     IsqType, MemoryGpuConfig, PagedAttentionMetaBuilder, PagedCacheType, 
     TextMessageRole, TextMessages, TextModelBuilder,
 };
@@ -206,7 +206,7 @@ async fn main() -> Result<()> {
 
 ## Using the Python SDK
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from hanzo import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.Plain(
@@ -235,7 +235,7 @@ print(res.usage)
 
 Example with FP8 KV cache quantization:
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture, PagedCacheType
+from hanzo import Runner, Which, ChatCompletionRequest, Architecture, PagedCacheType
 
 runner = Runner(
     which=Which.Plain(

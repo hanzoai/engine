@@ -9,7 +9,7 @@ This script tests the core multi-model operations:
 - Model removal (commented out for safety)
 """
 
-from mistralrs import (
+from hanzo import (
     Runner,
     Which,
     ChatCompletionRequest,

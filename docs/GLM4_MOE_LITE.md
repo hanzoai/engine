@@ -5,13 +5,13 @@ GLM-4.7-Flash is a mixture of experts (MoE) model from the GLM family with MLA (
 ## Quick Start
 
 ```bash
-mistralrs run --isq 4 -m zai-org/GLM-4.7-Flash
+hanzo run --isq 4 -m zai-org/GLM-4.7-Flash
 ```
 
 ## HTTP API
 
 ```bash
-mistralrs serve --isq 4 -p 1234 -m zai-org/GLM-4.7-Flash
+hanzo serve --isq 4 -p 1234 -m zai-org/GLM-4.7-Flash
 ```
 
 ```py
@@ -32,7 +32,7 @@ print(completion.choices[0].message.content)
 ## Python SDK
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from hanzo import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.Plain(
@@ -62,7 +62,7 @@ You can find this example [here](https://github.com/hanzoai/engine/blob/main/mis
 
 ```rust
 use anyhow::Result;
-use mistralrs::{
+use hanzo::{
     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
 };
 

@@ -1,6 +1,6 @@
 ---
 title: Architecture
-description: How mistralrs is organized. Request flow, threading, and how pieces interact.
+description: How hanzo is organized. Request flow, threading, and how pieces interact.
 sidebar:
   order: 1
 ---

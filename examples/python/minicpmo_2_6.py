@@ -1,4 +1,4 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 MODEL_ID = "openbmb/MiniCPM-o-2_6"
 
