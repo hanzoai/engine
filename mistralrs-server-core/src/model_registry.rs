@@ -113,9 +113,6 @@ fn zen_sku_table() -> &'static [ZenSku] {
         ZenSku { sku: "zen5-max",   hf_repo: "zenlm/zen-5-max-gguf",
             arch: ArchKind::Unsupported("deepseek-v4-pro"),
             quant: Some("Q4_K_M"), modality: Modality::Text },
-        ZenSku { sku: "zen5-ultra", hf_repo: "zenlm/zen-5-max-gguf",
-            arch: ArchKind::Unsupported("deepseek-v4-pro"),
-            quant: Some("Q4_K_M"), modality: Modality::Text },
 
         // Zen5 embeddings. qwen3 backbone is in tree but the embedding head
         // is served by `mistralrs-core::pipeline::embedding`, which already
@@ -130,40 +127,12 @@ fn zen_sku_table() -> &'static [ZenSku] {
             arch: ArchKind::Supported("qwen3"), quant: None,
             modality: Modality::Embedding },
 
-        // ---- Zen4 family ---------------------------------------------------
-        // Upstream weights for zen4 live in the gateway's Fireworks routes;
-        // the zenlm/zen4* repos are identity wrappers (chat templates, system
-        // prompts). Arch backbones map to in-tree GLM / Qwen / DeepSeek.
-        ZenSku { sku: "zen4", hf_repo: "zenlm/zen4",
-            arch: ArchKind::Supported("glm4moe"), quant: None,
-            modality: Modality::Text },
-        ZenSku { sku: "zen4-pro", hf_repo: "zenlm/zen4-pro",
-            arch: ArchKind::Supported("deepseekv3"), quant: None,
-            modality: Modality::Text },
-        ZenSku { sku: "zen4-max", hf_repo: "zenlm/zen4-max",
-            arch: ArchKind::Unsupported("anthropic-claude-opus"), quant: None,
-            modality: Modality::Text },
-        ZenSku { sku: "zen4.1", hf_repo: "zenlm/zen4.1",
-            arch: ArchKind::Unsupported("anthropic-claude-sonnet"), quant: None,
-            modality: Modality::Text },
-        ZenSku { sku: "zen4-mini", hf_repo: "zenlm/zen4-mini",
-            arch: ArchKind::Unsupported("openai-gpt-5-nano"), quant: None,
-            modality: Modality::Text },
-        ZenSku { sku: "zen4-ultra", hf_repo: "zenlm/zen4-ultra",
-            arch: ArchKind::Supported("deepseekv3"), quant: None,
-            modality: Modality::Text },
-        ZenSku { sku: "zen4-thinking", hf_repo: "zenlm/zen4-thinking",
-            arch: ArchKind::Supported("deepseekv3"), quant: None,
-            modality: Modality::Text },
-        ZenSku { sku: "zen4-coder", hf_repo: "zenlm/zen4-coder",
-            arch: ArchKind::Supported("deepseekv3"), quant: None,
-            modality: Modality::Text },
-        ZenSku { sku: "zen4-coder-flash", hf_repo: "zenlm/zen4-coder-flash",
-            arch: ArchKind::Supported("deepseekv3"), quant: None,
-            modality: Modality::Text },
-        ZenSku { sku: "zen4-coder-pro", hf_repo: "zenlm/zen4-coder-pro",
-            arch: ArchKind::Supported("gpt_oss"), quant: None,
-            modality: Modality::Text },
+        // Zen4 generation (zen4, zen4-pro, zen4-max, zen4.1, zen4-mini,
+        // zen4-ultra, zen4-thinking, zen4-coder, zen4-coder-flash,
+        // zen4-coder-pro) sunset 2026-05-30 with the zenlm/zen4* HF mirrors.
+        // Routing still works via the gateway's Fireworks aliases for any
+        // legacy callers, but the engine no longer claims to be able to load
+        // them directly. Use the zen5 ladder instead.
 
         // ---- Zen3 family (multimodal + specialty) --------------------------
         ZenSku { sku: "zen3-omni", hf_repo: "zenlm/zen-omni",
@@ -184,29 +153,9 @@ fn zen_sku_table() -> &'static [ZenSku] {
         ZenSku { sku: "zen3-vl-235B-A22B", hf_repo: "zenlm/zen-vl-235b-a22b",
             arch: ArchKind::Unsupported("qwen3-vl"), quant: None,
             modality: Modality::Vision },
-        ZenSku { sku: "zen3-vl-reranker-2B", hf_repo: "zenlm/zen-vl-reranker-2b",
-            arch: ArchKind::Unsupported("qwen3-vl"), quant: None,
-            modality: Modality::Vision },
-        ZenSku { sku: "zen3-vl-reranker-8B", hf_repo: "zenlm/zen-vl-reranker-8b",
-            arch: ArchKind::Unsupported("qwen3-vl"), quant: None,
-            modality: Modality::Vision },
-        ZenSku { sku: "zen3-vl-embedding-2B", hf_repo: "zenlm/zen-vl-embedding-2b",
-            arch: ArchKind::Unsupported("qwen3-vl"), quant: None,
-            modality: Modality::Embedding },
-        ZenSku { sku: "zen3-vl-embedding-8B", hf_repo: "zenlm/zen-vl-embedding-8b",
-            arch: ArchKind::Unsupported("qwen3-vl"), quant: None,
-            modality: Modality::Embedding },
-
-        // Zen3 web-agent dense (qwen3 backbone, tool-use trained).
-        ZenSku { sku: "zen3-web-8B",  hf_repo: "zenlm/zen-web-8b",
-            arch: ArchKind::Supported("qwen3"), quant: None,
-            modality: Modality::Text },
-        ZenSku { sku: "zen3-web-14B", hf_repo: "zenlm/zen-web-14b",
-            arch: ArchKind::Supported("qwen3"), quant: None,
-            modality: Modality::Text },
-        ZenSku { sku: "zen3-web-32B", hf_repo: "zenlm/zen-web-32b",
-            arch: ArchKind::Supported("qwen3"), quant: None,
-            modality: Modality::Text },
+        // zen3-vl-reranker-{2B,8B}, zen3-vl-embedding-{2B,8B}, and
+        // zen3-web-{8B,14B,32B} were virtual SKUs with no HF weights — removed
+        // 2026-05-30. The canonical zen3-vl-* size variants above remain.
 
         ZenSku { sku: "zen3-nano",  hf_repo: "zenlm/zen-nano-0.6b",
             arch: ArchKind::Supported("llama"), quant: None,
@@ -238,14 +187,10 @@ fn zen_sku_table() -> &'static [ZenSku] {
             arch: ArchKind::Unsupported("qwen3-tts"), quant: None,
             modality: Modality::Audio },
 
-        // Zen3 embeddings (text-only, in-tree).
+        // Zen3 embeddings (text-only, in-tree). zen3-embedding-medium /
+        // zen3-embedding-small ghost aliases were sunset 2026-05-30; use the
+        // zen5-embedding-{0.6B,4B,8B} ladder for new integrations.
         ZenSku { sku: "zen3-embedding",        hf_repo: "zenlm/zen-embedding",
-            arch: ArchKind::Supported("qwen3"), quant: None,
-            modality: Modality::Embedding },
-        ZenSku { sku: "zen3-embedding-medium", hf_repo: "zenlm/zen3-embedding-medium",
-            arch: ArchKind::Supported("qwen3"), quant: None,
-            modality: Modality::Embedding },
-        ZenSku { sku: "zen3-embedding-small",  hf_repo: "zenlm/zen3-embedding-small",
             arch: ArchKind::Supported("qwen3"), quant: None,
             modality: Modality::Embedding },
     ]
@@ -290,10 +235,25 @@ mod tests {
     fn known_skus_resolve() {
         for sku in [
             "zen5", "zen5-pro", "zen5-max", "zen5-flash", "zen5-coder",
-            "zen5-embedding-8B", "zen4", "zen4-coder", "zen3-vl", "zen3-asr",
-            "zen3-nano",
+            "zen5-embedding-8B", "zen3-vl", "zen3-asr", "zen3-nano",
         ] {
             assert!(lookup(sku).is_some(), "missing SKU `{sku}`");
+        }
+    }
+
+    #[test]
+    fn sunset_skus_are_absent() {
+        // Zen4 generation + virtual zen3 aliases were removed 2026-05-30.
+        for sku in [
+            "zen4", "zen4-pro", "zen4-max", "zen4.1", "zen4-mini", "zen4-ultra",
+            "zen4-thinking", "zen4-coder", "zen4-coder-flash", "zen4-coder-pro",
+            "zen5-ultra",
+            "zen3-vl-reranker-2B", "zen3-vl-reranker-8B",
+            "zen3-vl-embedding-2B", "zen3-vl-embedding-8B",
+            "zen3-web-8B", "zen3-web-14B", "zen3-web-32B",
+            "zen3-embedding-small", "zen3-embedding-medium",
+        ] {
+            assert!(lookup(sku).is_none(), "sunset SKU `{sku}` still in registry");
         }
     }
 
