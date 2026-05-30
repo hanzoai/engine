@@ -1,11 +1,11 @@
 ---
 title: Serve multiple models from one process
-description: Load several models into one mistralrs server. Route requests by the model field, unload models to free memory, reload them on demand.
+description: Load several models into one hanzo server. Route requests by the model field, unload models to free memory, reload them on demand.
 sidebar:
   order: 2
 ---
 
-`mistralrs serve -m <model>` loads exactly one model. To host multiple models in one server, use a TOML config and `mistralrs from-config`.
+`hanzo serve -m <model>` loads exactly one model. To host multiple models in one server, use a TOML config and `hanzo from-config`.
 
 ## Starting a multi-model server
 
@@ -37,7 +37,7 @@ in_situ_quant = "4"
 Start with `from-config`:
 
 ```bash
-mistralrs from-config -f models.toml
+hanzo from-config -f models.toml
 ```
 
 Each `[[models]]` entry is one loaded model. The request id is the entry's `model_id`. `default_model_id` (if set) must match a `model_id` and is used when a request omits `model` or sends `"default"`.
@@ -88,7 +88,7 @@ curl -X POST http://localhost:1234/v1/models/reload \
 Rust:
 
 ```rust
-use mistralrs::{IsqType, MultiModelBuilder, TextModelBuilder, MultimodalModelBuilder};
+use hanzo::{IsqType, MultiModelBuilder, TextModelBuilder, MultimodalModelBuilder};
 
 let model = MultiModelBuilder::new()
     .add_model(TextModelBuilder::new("Qwen/Qwen3-4B").with_isq(IsqType::Q4K))

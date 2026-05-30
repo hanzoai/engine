@@ -69,7 +69,7 @@ The Python SDK accepts OpenAI-compatible tool schemas as JSON strings on `ChatCo
 
 ```python
 import json
-from mistralrs import ChatCompletionRequest, Runner, Which
+from hanzo import ChatCompletionRequest, Runner, Which
 
 tool_schema = json.dumps({
     "type": "function",
@@ -109,7 +109,7 @@ In Rust, set `strict: Some(true)` on the tool's `Function`:
 use std::collections::HashMap;
 
 use anyhow::Result;
-use mistralrs::{
+use hanzo::{
     Function, IsqBits, ModelBuilder, RequestBuilder, TextMessageRole, Tool, ToolChoice, ToolType,
 };
 use serde_json::{json, Value};

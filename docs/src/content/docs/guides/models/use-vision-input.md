@@ -14,7 +14,7 @@ If you will send video files, install FFmpeg first. The canonical setup checklis
 Interactive mode auto-detects file paths in prompts:
 
 ```bash
-mistralrs run -m Qwen/Qwen3-VL-4B-Instruct
+hanzo run -m Qwen/Qwen3-VL-4B-Instruct
 ```
 
 ```
@@ -24,7 +24,7 @@ mistralrs run -m Qwen/Qwen3-VL-4B-Instruct
 Or pass attachments with `-i`:
 
 ```bash
-mistralrs run -m Qwen/Qwen3-VL-4B-Instruct --image photo.jpg -i "What is this?"
+hanzo run -m Qwen/Qwen3-VL-4B-Instruct --image photo.jpg -i "What is this?"
 ```
 
 The CLI supports `--image`, `--audio`, and `--video`. Each accepts multiple values.

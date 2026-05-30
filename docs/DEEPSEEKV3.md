@@ -5,7 +5,7 @@ The DeepSeek V3 is a mixture of expert (MoE) model.
 ## Quick Start
 
 ```bash
-mistralrs run --isq 4 -m deepseek-ai/DeepSeek-R1
+hanzo run --isq 4 -m deepseek-ai/DeepSeek-R1
 ```
 
 > Note: The non-distill versions of the DeepSeek R1 models share the DeepSeek V3 architecture.
@@ -13,22 +13,22 @@ mistralrs run --isq 4 -m deepseek-ai/DeepSeek-R1
 > Note: This model supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
 
 ```bash
-mistralrs run --isq 4 -m deepseek-ai/DeepSeek-R1 --isq-organization moqe
+hanzo run --isq 4 -m deepseek-ai/DeepSeek-R1 --isq-organization moqe
 ```
 
 ## Running the distill models
 
 The various [distillation](https://huggingface.co/collections/deepseek-ai/deepseek-r1-678e1e131c0169c0bc89728d) models can be run out of the box.
 ```bash
-mistralrs run --isq 4 -m deepseek-ai/DeepSeek-R1-Distill-Llama-8B
-mistralrs run --isq 4 -m deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
-mistralrs run --isq 4 -m deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+hanzo run --isq 4 -m deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+hanzo run --isq 4 -m deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+hanzo run --isq 4 -m deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
 ```
 
 ## HTTP API
 
 ```bash
-mistralrs serve --isq 4 -p 1234 -m deepseek-ai/DeepSeek-R1
+hanzo serve --isq 4 -p 1234 -m deepseek-ai/DeepSeek-R1
 ```
 
 ```py
@@ -49,7 +49,7 @@ print(completion.choices[0].message.content)
 ## Python SDK
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from hanzo import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.Plain(
@@ -79,7 +79,7 @@ You can find this example [here](https://github.com/hanzoai/engine/blob/main/mis
 
 ```rust
 use anyhow::Result;
-use mistralrs::{
+use hanzo::{
     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
 };
 

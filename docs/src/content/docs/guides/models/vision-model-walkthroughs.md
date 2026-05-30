@@ -12,8 +12,8 @@ All supported vision families use the same OpenAI-style multimodal message shape
 CLI:
 
 ```bash
-mistralrs run -m Qwen/Qwen3-VL-4B-Instruct --quant 4 --image photo.jpg -i "Describe this image"
-mistralrs serve -m Qwen/Qwen3-VL-4B-Instruct --quant 4 -p 1234
+hanzo run -m Qwen/Qwen3-VL-4B-Instruct --quant 4 --image photo.jpg -i "Describe this image"
+hanzo serve -m Qwen/Qwen3-VL-4B-Instruct --quant 4 -p 1234
 ```
 
 HTTP:
@@ -42,7 +42,7 @@ print(completion.choices[0].message.content)
 Python SDK:
 
 ```python
-from mistralrs import ChatCompletionRequest, MultimodalArchitecture, Runner, Which
+from hanzo import ChatCompletionRequest, MultimodalArchitecture, Runner, Which
 
 runner = Runner(
     which=Which.MultimodalPlain(
@@ -97,7 +97,7 @@ Use `file://` URLs for local files, `https://` for remote files, and `data:image
 Use `--video` on the CLI or a `video_url` content part over HTTP:
 
 ```bash
-mistralrs run -m google/gemma-4-E4B-it --quant 8 --video clip.mp4 -i "Summarize this clip."
+hanzo run -m google/gemma-4-E4B-it --quant 8 --video clip.mp4 -i "Summarize this clip."
 ```
 
 ```json
@@ -134,7 +134,7 @@ WAV, MP3, FLAC, and OGG are decoded natively. Other formats require FFmpeg conve
 Gemma 3n supports dynamic model slicing. Use this when you want one checkpoint to cover several memory and latency budgets:
 
 ```bash
-mistralrs run -m google/gemma-3n-E4B-it \
+hanzo run -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 ```
@@ -148,7 +148,7 @@ The bundled `matformer_configs/gemma3n.csv` includes the full E4B configuration,
 Mistral Small 3 checkpoints can do tool calling, but some model repos do not ship the correct chat template. Use the bundled template when you need tools:
 
 ```bash
-mistralrs serve -p 1234 --quant 4 \
+hanzo serve -p 1234 --quant 4 \
   --jinja-explicit chat_templates/mistral_small_tool_call.jinja \
   -m mistralai/Mistral-Small-3.2-24B-Instruct-2506
 ```
@@ -158,7 +158,7 @@ mistralrs serve -p 1234 --quant 4 \
 Mistral-backed LLaVA checkpoints usually work with the default template. Vicuna-backed checkpoints need the Vicuna template:
 
 ```bash
-mistralrs run -m llava-hf/llava-v1.6-vicuna-7b-hf \
+hanzo run -m llava-hf/llava-v1.6-vicuna-7b-hf \
   --quant 4 \
   -c ./chat_templates/vicuna.json \
   --image photo.jpg \
@@ -172,7 +172,7 @@ For most multimodal models, the text backbone contains most parameters. Device m
 For MoE Qwen3-VL and Qwen3.5 variants, combine ISQ with MoQE when expert memory dominates. This uses `--isq` because MoQE is an explicit runtime ISQ layout:
 
 ```bash
-mistralrs run -m Qwen/Qwen3-VL-235B-A22B-Instruct \
+hanzo run -m Qwen/Qwen3-VL-235B-A22B-Instruct \
   --isq 4 \
   --isq-organization moqe \
   --image photo.jpg \
@@ -187,4 +187,4 @@ Long-form SDK examples live in the repository so they can stay checked against t
 
 - Python: [`examples/python/`](https://github.com/EricLBuehler/mistral.rs/tree/master/examples/python)
 - HTTP/OpenAI clients: [`examples/server/`](https://github.com/EricLBuehler/mistral.rs/tree/master/examples/server)
-- Rust multimodal models: [`mistralrs/examples/models/multimodal_models/main.rs`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs)
+- Rust multimodal models: [`hanzo/examples/models/multimodal_models/main.rs`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs)

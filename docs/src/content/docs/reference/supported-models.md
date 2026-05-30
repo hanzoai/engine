@@ -10,8 +10,8 @@ Supported model architectures. Specific model sizes within each family are on Hu
 To run:
 
 ```bash
-mistralrs run -m <model>
-mistralrs serve -m <model>
+hanzo run -m <model>
+hanzo serve -m <model>
 ```
 
 Passing `--arch` is only necessary in rare cases.

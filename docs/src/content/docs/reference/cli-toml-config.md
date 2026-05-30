@@ -1,11 +1,11 @@
 ---
 title: CLI TOML configuration
-description: Schema for the config file that mistralrs from-config reads.
+description: Schema for the config file that hanzo from-config reads.
 sidebar:
   order: 2
 ---
 
-`mistralrs from-config -f <path>` reads a TOML file. The top level is tagged by the `command` field and selects either `serve` or `run`.
+`hanzo from-config -f <path>` reads a TOML file. The top level is tagged by the `command` field and selects either `serve` or `run`.
 
 ## Minimal example
 
@@ -24,7 +24,7 @@ model_id = "Qwen/Qwen3-4B"
 in_situ_quant = "4"
 ```
 
-`mistralrs from-config -f this.toml` runs the server.
+`hanzo from-config -f this.toml` runs the server.
 
 ## Top-level fields
 

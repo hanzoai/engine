@@ -31,7 +31,7 @@ Symptoms of a wrong template:
 Pass a Jinja template file with `--chat-template`:
 
 ```bash
-mistralrs run -m <model> --chat-template my-template.jinja
+hanzo run -m <model> --chat-template my-template.jinja
 ```
 
 The template uses standard Jinja2 with HuggingFace conventions (variables for messages, bos_token, eos_token). Copy the original from `tokenizer_config.json` and modify as a starting point.
@@ -41,7 +41,7 @@ The template uses standard Jinja2 with HuggingFace conventions (variables for me
 `--jinja-explicit` accepts an inline template string for one-off tests:
 
 ```bash
-mistralrs run -m <model> --jinja-explicit "{% for msg in messages %}..."
+hanzo run -m <model> --jinja-explicit "{% for msg in messages %}..."
 ```
 
 `--jinja-explicit` overrides `--chat-template` when both are set.
@@ -51,7 +51,7 @@ mistralrs run -m <model> --jinja-explicit "{% for msg in messages %}..."
 mistral.rs ships templates for common architectures in `chat_templates/`. For new models of a known architecture not auto-detected, point at the bundled template:
 
 ```bash
-mistralrs run -m <new-model> --chat-template chat_templates/llama3.jinja
+hanzo run -m <new-model> --chat-template chat_templates/llama3.jinja
 ```
 
 Bundled templates are looked up by name relative to the binary install location when not given as a full path.

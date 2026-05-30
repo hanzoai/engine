@@ -8,7 +8,7 @@ We provide some chat templates [here](https://github.com/hanzoai/engine/tree/mai
 To use this, add the `jinja-explicit` parameter to the various APIs
 
 ```bash
-mistralrs serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
+hanzo serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 ```
 
 ## Chat template overrides
@@ -19,7 +19,7 @@ We provide some chat templates [here](https://github.com/hanzoai/engine/tree/mai
 For example, to use the `chatml` template, `--chat-template` is specified *before* the model architecture. For example:
 
 ```bash
-mistralrs serve -p 1234 --log output.log --chat-template ./chat_templates/chatml.json -m meta-llama/Llama-3.2-3B-Instruct
+hanzo serve -p 1234 --log output.log --chat-template ./chat_templates/chatml.json -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
 > Note: For GGUF models, the chat template may be loaded directly from the GGUF file by omitting any other chat template sources.
@@ -31,12 +31,12 @@ Some models do not provide a `tokenizer.json` file although Hanzo Engine expects
 ```bash
 $ python3 scripts/get_tokenizers_json.py
 Enter model ID: microsoft/Orca-2-13b
-$ mistralrs serve -p 1234 --log output.log -m microsoft/Orca-2-13b --tokenizer-json tokenizer.json
+$ hanzo serve -p 1234 --log output.log -m microsoft/Orca-2-13b --tokenizer-json tokenizer.json
 ```
 
 Putting it all together, to run, for example, an [Orca](https://huggingface.co/microsoft/Orca-2-13b) model (which does not come with a `tokenizer.json` or chat template):
 1) Generate the `tokenizer.json` by running the script at `scripts/get_tokenizers_json.py`. This will output some files including `tokenizer.json` in the working directory.
 2) Find and copy the correct chat template from `chat-templates` to the working directory (eg., `cp chat_templates/chatml.json .`)
-3) Run `mistralrs serve`, specifying the tokenizer and chat template: `mistralrs serve -p 1234 --log output.txt --chat-template chatml.json -m microsoft/Orca-2-13b -t tokenizer.json`
+3) Run `hanzo serve`, specifying the tokenizer and chat template: `hanzo serve -p 1234 --log output.txt --chat-template chatml.json -m microsoft/Orca-2-13b -t tokenizer.json`
 
 > Note: For GGUF models, the tokenizer may be loaded directly from the GGUF file by omitting the tokenizer model ID.

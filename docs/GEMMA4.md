@@ -9,19 +9,19 @@ Pre-quantized UQFF models are available in the [mistralrs-community Gemma 4 coll
 ## Quick Start
 
 ```bash
-mistralrs run -m google/gemma-4-E4B-it --isq 8 --image photo.jpg -i "Describe this image"
+hanzo run -m google/gemma-4-E4B-it --isq 8 --image photo.jpg -i "Describe this image"
 ```
 
 With a video:
 
 ```bash
-mistralrs run -m google/gemma-4-E4B-it --isq 8 --video video.mp4 -i "Describe this video in detail."
+hanzo run -m google/gemma-4-E4B-it --isq 8 --video video.mp4 -i "Describe this video in detail."
 ```
 
 With audio:
 
 ```bash
-mistralrs run -m google/gemma-4-E4B-it --isq 8 --audio audio.mp3 -i "Transcribe this fully."
+hanzo run -m google/gemma-4-E4B-it --isq 8 --audio audio.mp3 -i "Transcribe this fully."
 ```
 
 ## Input Formats
@@ -38,7 +38,7 @@ The Rust SDK takes images from the [image](https://docs.rs/image/latest/image/in
 1) Start the server
 
 ```bash
-mistralrs serve -m google/gemma-4-E4B-it --isq 8 -p 1234
+hanzo serve -m google/gemma-4-E4B-it --isq 8 -p 1234
 ```
 
 2) Send a request
@@ -154,7 +154,7 @@ print(completion.choices[0].message.content)
 You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gemma4.py).
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
     which=Which.MultimodalPlain(
@@ -194,12 +194,12 @@ print(res.usage)
 
 You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs).
 
-This is a minimal example of running the Gemma 4 model with a video input. Video decoding uses the `parse_video_url` helper from `mistralrs-server-core`, which handles FFmpeg decoding and frame sampling automatically.
+This is a minimal example of running the Gemma 4 model with a video input. Video decoding uses the `parse_video_url` helper from `hanzo-server-core`, which handles FFmpeg decoding and frame sampling automatically.
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
-use mistralrs_server_core::video::parse_video_url;
+use hanzo::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+use hanzo_server_core::video::parse_video_url;
 
 #[tokio::main]
 async fn main() -> Result<()> {
