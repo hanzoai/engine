@@ -11,7 +11,7 @@ sidebar:
 
 **Multimodal inputs.** Gemma 4 E4B and E2B accept audio, image, and video parts in the same message. No separate variant or flag required.
 
-**HF license acceptance.** Gemma requires accepting a license on the Hugging Face model page before download. `mistralrs login` with an HF token suffices after acceptance.
+**HF license acceptance.** Gemma requires accepting a license on the Hugging Face model page before download. `hanzo login` with an HF token suffices after acceptance.
 
 ## Qwen3-VL
 

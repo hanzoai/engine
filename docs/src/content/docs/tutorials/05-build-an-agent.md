@@ -26,7 +26,7 @@ You will ask the agent to find population figures, calculate a percentage, and p
 The fastest way to start an agent is the `--agent` flag:
 
 ```bash
-mistralrs serve --agent -m Qwen/Qwen3-4B
+hanzo serve --agent -m Qwen/Qwen3-4B
 ```
 
 `--agent` (alias `--agentic`) desugars to `--enable-search --enable-code-execution`, runs the code-execution tool in a per-session temp working directory, and uses the built-in 256-turn agentic loop. The web UI is mounted at `/ui` by default; pass `--no-ui` to skip it.
@@ -34,7 +34,7 @@ mistralrs serve --agent -m Qwen/Qwen3-4B
 If you want to turn the pieces on individually -- for example, search without code execution -- use the underlying flags:
 
 ```bash
-mistralrs serve \
+hanzo serve \
   --enable-search \
   --enable-code-execution \
   -m Qwen/Qwen3-4B
@@ -191,7 +191,7 @@ for f in r.get("files", []):
 `Runner` enables both built-in tools in-process. Web search is enabled on the runner; code execution also requires a `CodeExecutionConfig`. Per-request, set `web_search_options`, `enable_code_execution`, and any required files on the `ChatCompletionRequest`.
 
 ```python
-from mistralrs import (
+from hanzo import (
     ChatCompletionRequest,
     CodeExecutionConfig,
     RequestedFile,
@@ -239,7 +239,7 @@ The Rust SDK supports the same tools in-process. Enable search and code executio
 ```rust
 use anyhow::Result;
 use futures::StreamExt;
-use mistralrs::{
+use hanzo::{
     CodeExecutionConfig, IsqBits, RequestBuilder, SearchEmbeddingModel, TextMessageRole,
     TextMessages, TextModelBuilder, WebSearchOptions,
 };
@@ -268,7 +268,7 @@ async fn main() -> Result<()> {
     let mut stream = model.stream_chat_request(request).await?;
     while let Some(event) = stream.next().await {
         match event {
-            mistralrs::Response::Chunk(chunk) => {
+            hanzo::Response::Chunk(chunk) => {
                 if let Some(text) = chunk
                     .choices
                     .first()
@@ -277,7 +277,7 @@ async fn main() -> Result<()> {
                     print!("{text}");
                 }
             }
-            mistralrs::Response::AgenticToolCallProgress { tool_name, .. } => {
+            hanzo::Response::AgenticToolCallProgress { tool_name, .. } => {
                 eprintln!("tool progress: {tool_name}");
             }
             _ => {}
@@ -316,7 +316,7 @@ The response gains a top-level `files` array; each entry has `id`, `name`, `mime
 Python SDK:
 
 ```python
-from mistralrs import ChatCompletionRequest, RequestedFile
+from hanzo import ChatCompletionRequest, RequestedFile
 
 response = runner.send_chat_completion_request(
     ChatCompletionRequest(
@@ -334,7 +334,7 @@ for f in response.files or []:
 Rust SDK:
 
 ```rust
-let request = mistralrs::RequestBuilder::from(messages)
+let request = hanzo::RequestBuilder::from(messages)
     .with_code_execution()
     .require_file("plot.png");
 

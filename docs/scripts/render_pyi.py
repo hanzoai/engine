@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Render mistralrs-pyo3/mistralrs.pyi as Starlight Markdown pages.
+Render hanzo-pyo3/mistralrs.pyi as Starlight Markdown pages.
 
 The .pyi file is the single source of truth for the Python API. This script
 parses it with `ast` and writes one Markdown file per logical group into
@@ -21,9 +21,9 @@ from textwrap import dedent
 SCRIPT_DIR = Path(__file__).resolve().parent
 WEBSITE_DIR = SCRIPT_DIR.parent
 REPO_DIR = WEBSITE_DIR.parent
-PYI_PATH = REPO_DIR / "mistralrs-pyo3" / "mistralrs.pyi"
+PYI_PATH = REPO_DIR / "hanzo-pyo3" / "hanzo.pyi"
 OUT_DIR = WEBSITE_DIR / "src" / "content" / "docs" / "reference" / "python"
-STUB_REL = "mistralrs-pyo3/mistralrs.pyi"
+STUB_REL = "hanzo-pyo3/mistralrs.pyi"
 
 # (title, slug, description, [class names to include])
 GROUPS = [
@@ -499,20 +499,20 @@ def _render_index() -> str:
     lines = [
         "---",
         "title: Python API",
-        'description: "The mistralrs Python package."',
+        'description: "The hanzo Python package."',
         "sidebar:",
         "  order: 6",
         "---",
         "",
-        "The `mistralrs` Python package exposes the same engine that powers the `mistralrs` CLI.",
+        "The `hanzo` Python package exposes the same engine that powers the `hanzo` CLI.",
         "",
         "## Install",
         "",
-        "One wheel per accelerator. All wheels expose the same `mistralrs` module.",
+        "One wheel per accelerator. All wheels expose the same `hanzo` module.",
         "",
         "| Accelerator | Package |",
         "| --- | --- |",
-        "| CPU (or Intel CPU with MKL) | `pip install mistralrs` |",
+        "| CPU (or Intel CPU with MKL) | `pip install hanzo` |",
         "| NVIDIA GPU | `pip install mistralrs-cuda` |",
         "| Apple Silicon | `pip install mistralrs-metal` |",
         "| Intel MKL (pinned) | `pip install mistralrs-mkl` |",

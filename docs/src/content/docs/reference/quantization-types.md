@@ -1,6 +1,6 @@
 ---
 title: Quantization types
-description: Every runtime ISQ type mistralrs supports, what hardware it works on, and how it compares.
+description: Every runtime ISQ type hanzo supports, what hardware it works on, and how it compares.
 sidebar:
   order: 13
 ---
@@ -91,7 +91,7 @@ Half-quadratic quantization.
 Not ISQ types, pre-quantized formats. Load directly when a Hugging Face model is available as GPTQ or AWQ:
 
 ```bash
-mistralrs run --format plain -m <gptq-or-awq-repo>
+hanzo run --format plain -m <gptq-or-awq-repo>
 ```
 
 mistral.rs detects the quantization from the model's config. No `--quant` or `--isq` required.

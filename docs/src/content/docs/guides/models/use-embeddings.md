@@ -15,7 +15,7 @@ Two regularly tested options:
 - `Qwen/Qwen3-Embedding-0.6B`: larger, higher-quality, higher cost.
 
 ```bash
-mistralrs serve -m google/embeddinggemma-300m
+hanzo serve -m google/embeddinggemma-300m
 ```
 
 Embedding models run fast on most hardware. A CPU-only install handles thousands of embeddings per minute on a small model.
@@ -23,7 +23,7 @@ Embedding models run fast on most hardware. A CPU-only install handles thousands
 Use `Qwen/Qwen3-Embedding-0.6B` the same way:
 
 ```bash
-mistralrs serve -m Qwen/Qwen3-Embedding-0.6B
+hanzo serve -m Qwen/Qwen3-Embedding-0.6B
 ```
 
 ## Requesting an embedding
@@ -122,7 +122,7 @@ Qwen3-Embedding does not require these prefixes, but task-specific prefixes can 
 EmbeddingGemma:
 
 ```python
-from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
+from hanzo import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
 
 runner = Runner(
     which=Which.Embedding(
@@ -146,7 +146,7 @@ print(len(embeddings), len(embeddings[0]))
 Qwen3-Embedding:
 
 ```python
-from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
+from hanzo import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
 
 runner = Runner(
     which=Which.Embedding(

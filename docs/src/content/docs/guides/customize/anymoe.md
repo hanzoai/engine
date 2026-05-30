@@ -13,7 +13,7 @@ AnyMoE is exposed through the **Rust SDK** (`AnyMoeModelBuilder`) and the **Pyth
 
 ## Rust SDK
 
-Use `AnyMoeModelBuilder` from the `mistralrs` crate. Working examples live in `examples/advanced/anymoe/` and `examples/advanced/anymoe_lora/` in the source repository.
+Use `AnyMoeModelBuilder` from the `hanzo` crate. Working examples live in `examples/advanced/anymoe/` and `examples/advanced/anymoe_lora/` in the source repository.
 
 ## Python SDK
 

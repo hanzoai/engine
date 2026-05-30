@@ -6,7 +6,7 @@ Usage:
 """
 
 import json
-from mistralrs import Runner, ToolChoice, Which, ChatCompletionRequest, Architecture
+from hanzo import Runner, ToolChoice, Which, ChatCompletionRequest, Architecture
 
 tools = [
     json.dumps(

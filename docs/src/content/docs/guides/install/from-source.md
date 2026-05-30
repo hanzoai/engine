@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-Build from a source checkout to pin a specific commit, apply a local patch, or use a feature combination not in the published binaries. For most installs, the install script or `cargo install mistralrs-cli` is sufficient.
+Build from a source checkout to pin a specific commit, apply a local patch, or use a feature combination not in the published binaries. For most installs, the install script or `cargo install hanzo-cli` is sufficient.
 
 ## Clone and build
 
@@ -14,14 +14,14 @@ git clone https://github.com/EricLBuehler/mistral.rs.git
 cd mistral.rs
 ```
 
-The CLI binary is in the `mistralrs-cli` crate:
+The CLI binary is in the `hanzo-cli` crate:
 
 ```bash
 # Release build in-place
-cargo build --release --features "cuda flash-attn cudnn" -p mistralrs-cli
+cargo build --release --features "cuda flash-attn cudnn" -p hanzo-cli
 
 # Or install globally from the checkout
-cargo install --path mistralrs-cli --features "cuda flash-attn cudnn"
+cargo install --path hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 The in-place build leaves the binary at `target/release/mistralrs`. The install variant copies it to `~/.cargo/bin/mistralrs`, which is on `PATH` after a rustup install.
@@ -41,12 +41,12 @@ Full list and per-flag effects: [cargo features reference](/mistral.rs/reference
 
 ## Developing against a local checkout
 
-Use `cargo build --release -p mistralrs-cli` for incremental development.
+Use `cargo build --release -p hanzo-cli` for incremental development.
 
 Some tests are gated behind feature flags. Core test suite:
 
 ```bash
-cargo test -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
+cargo test -p hanzo-engine -p hanzo-quant -p hanzo-vision
 ```
 
 In the quantization crate, some tests run only with a specific backend feature enabled.
@@ -57,7 +57,7 @@ Building the Python SDK from source requires `maturin`:
 
 ```bash
 pip install maturin[patchelf]
-cd mistralrs-pyo3
+cd hanzo-pyo3
 maturin develop --release --features "cuda flash-attn cudnn"
 ```
 
@@ -69,7 +69,7 @@ To depend on the workspace directly (e.g., to use an unreleased change), add a g
 
 ```toml
 [dependencies]
-mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs", branch = "master" }
+hanzo = { git = "https://github.com/EricLBuehler/mistral.rs", branch = "master" }
 ```
 
 For production, pin to a release tag or a specific commit SHA for reproducible builds.

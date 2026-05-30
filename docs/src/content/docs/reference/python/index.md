@@ -1,19 +1,19 @@
 ---
 title: Python API
-description: "The mistralrs Python package."
+description: "The hanzo Python package."
 sidebar:
   order: 6
 ---
 
-The `mistralrs` Python package exposes the same engine that powers the `mistralrs` CLI.
+The `hanzo` Python package exposes the same engine that powers the `hanzo` CLI.
 
 ## Install
 
-One wheel per accelerator. All wheels expose the same `mistralrs` module.
+One wheel per accelerator. All wheels expose the same `hanzo` module.
 
 | Accelerator | Package |
 | --- | --- |
-| CPU (or Intel CPU with MKL) | `pip install mistralrs` |
+| CPU (or Intel CPU with MKL) | `pip install hanzo` |
 | NVIDIA GPU | `pip install mistralrs-cuda` |
 | Apple Silicon | `pip install mistralrs-metal` |
 | Intel MKL (pinned) | `pip install mistralrs-mkl` |
@@ -40,4 +40,4 @@ See [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) for a walkthrough and the
 
 ---
 
-<small>Generated from [`mistralrs-pyo3/mistralrs.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/mistralrs.pyi).</small>
+<small>Generated from [`hanzo-pyo3/mistralrs.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo-pyo3/mistralrs.pyi).</small>
