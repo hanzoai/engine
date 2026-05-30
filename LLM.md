@@ -74,7 +74,7 @@ cargo install --path mistralrs-server --features <features>
 ### Testing & Quality
 ```bash
 # Run core tests
-cargo test -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
+cargo test -p mistralrs-core -p hanzo-quant -p mistralrs-vision
 
 # Format code (uses rustfmt, ruff, clang-format)
 make fmt
@@ -122,7 +122,7 @@ You should also look for a model.safetensors.index.json file for the model at ha
 - `mistralrs-pyo3/` - Python bindings (PyO3)
 - `mistralrs/` - High-level Rust API
 - `mistralrs-vision/` - Vision model support
-- `mistralrs-quant/` - Quantization implementations (ISQ, GGUF, GPTQ, etc.)
+- `hanzo-quant/` - Quantization implementations (ISQ, GGUF, GPTQ, etc.)
 - `mistralrs-paged-attn/` - PagedAttention implementation
 - `mistralrs-audio/` - Audio processing
 - `mistralrs-mcp/` - Model Context Protocol client
@@ -148,7 +148,7 @@ When adding new model architectures:
 5. Update CLI args in `mistralrs-server/src/main.rs`
 
 When adding new quantization methods:
-1. Implement in `mistralrs-quant/src/`
+1. Implement in `hanzo-quant/src/`
 2. Add to quantization loading logic in pipelines
 3. Update documentation in `docs/QUANTIZATION.md`
 

@@ -2441,6 +2441,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-quant"
+version = "0.8.1"
+dependencies = [
+ "byteorder",
+ "cudaforge",
+ "dispatch2",
+ "float8",
+ "half",
+ "hanzo-metal-kernels",
+ "hanzo-ml",
+ "hanzo-nn",
+ "hf-hub",
+ "lazy_static",
+ "memmap2",
+ "objc2-foundation",
+ "objc2-metal",
+ "paste",
+ "rayon",
+ "regex",
+ "safetensors 0.7.0",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "yoke 0.8.2",
+]
+
+[[package]]
 name = "hanzo-rocm-kernels"
 version = "0.10.2"
 dependencies = [
@@ -3580,6 +3609,7 @@ dependencies = [
  "hanzo-metal-kernels",
  "hanzo-ml",
  "hanzo-nn",
+ "hanzo-quant",
  "hashbrown 0.16.1",
  "hf-hub",
  "hound",
@@ -3599,7 +3629,6 @@ dependencies = [
  "mistralrs-audio",
  "mistralrs-mcp",
  "mistralrs-paged-attn",
- "mistralrs-quant",
  "mistralrs-vision",
  "num-traits",
  "objc",
@@ -3721,35 +3750,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "url",
-]
-
-[[package]]
-name = "mistralrs-quant"
-version = "0.8.1"
-dependencies = [
- "byteorder",
- "cudaforge",
- "dispatch2",
- "float8",
- "half",
- "hanzo-metal-kernels",
- "hanzo-ml",
- "hanzo-nn",
- "hf-hub",
- "lazy_static",
- "memmap2",
- "objc2-foundation",
- "objc2-metal",
- "paste",
- "rayon",
- "regex",
- "safetensors 0.7.0",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "yoke 0.8.2",
 ]
 
 [[package]]
