@@ -1,5 +1,5 @@
 [package]
-name = "mistralrs-web-chat"
+name = "hanzo-web-chat"
 publish = false
 version.workspace = true
 edition.workspace = true

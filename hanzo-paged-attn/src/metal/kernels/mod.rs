@@ -17,17 +17,17 @@ type ComputePipelineState = ComputePipeline;
 #[cfg(target_os = "macos")]
 const KERNELS: &[u8] = include_bytes!(concat!(
     env!("OUT_DIR"),
-    "/mistralrs_paged_attention.metallib"
+    "/hanzo_paged_attention.metallib"
 ));
 #[cfg(target_os = "ios")]
 const KERNELS: &[u8] = include_bytes!(concat!(
     env!("OUT_DIR"),
-    "/mistralrs_paged_attention_ios.metallib"
+    "/hanzo_paged_attention_ios.metallib"
 ));
 #[cfg(target_os = "tvos")]
 const KERNELS: &[u8] = include_bytes!(concat!(
     env!("OUT_DIR"),
-    "/mistralrs_paged_attention_tvos.metallib"
+    "/hanzo_paged_attention_tvos.metallib"
 ));
 
 #[derive(thiserror::Error, Debug)]

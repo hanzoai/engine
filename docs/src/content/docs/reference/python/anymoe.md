@@ -60,4 +60,4 @@ Note: if `training == True`, `loss_csv_path` has no effect. Otherwise, a CSV los
 
 ---
 
-<small>Generated from [`hanzo-pyo3/mistralrs.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo-pyo3/mistralrs.pyi).</small>
+<small>Generated from [`hanzo-pyo3/hanzo.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo-pyo3/hanzo.pyi).</small>

@@ -232,7 +232,7 @@ impl SpawnCtx {
 fn write_executor_script() -> anyhow::Result<(Arc<tempfile::TempDir>, PathBuf)> {
     let executor_dir = Arc::new(
         tempfile::Builder::new()
-            .prefix("mistralrs-executor-")
+            .prefix("hanzo-executor-")
             .tempdir()?,
     );
     let executor_script = executor_dir.path().join("executor.py");

@@ -38,7 +38,7 @@ use hanzo_engine::{
     DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams,
     EmbeddingLoaderBuilder, EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig,
     GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
-    LlguidanceGrammar, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder,
+    LlguidanceGrammar, Loader, MemoryGpuConfig, Hanzo, HanzoBuilder,
     MultimodalLoaderBuilder, MultimodalSpecificConfig, NormalLoaderBuilder, NormalRequest,
     NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, ReasoningEffort,
     Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
@@ -119,7 +119,7 @@ pub struct SpeechGenerationResponse {
 #[derive(Clone)]
 /// An object wrapping the underlying Rust system to handle requests and process conversations.
 struct Runner {
-    runner: Arc<MistralRs>,
+    runner: Arc<Hanzo>,
 }
 
 fn wrap_search_callback(cb: PyObject) -> Arc<SearchCallback> {
@@ -945,7 +945,7 @@ impl Runner {
             None => None,
         };
         let mut builder =
-            MistralRsBuilder::new(pipeline, scheduler_config, false, search_embedding_model);
+            HanzoBuilder::new(pipeline, scheduler_config, false, search_embedding_model);
         if let Some(cb) = cb {
             builder = builder.with_search_callback(cb);
         }
@@ -1373,7 +1373,7 @@ impl Runner {
 
             let runner = self.runner.clone();
             py.allow_threads(move || -> std::result::Result<Vec<Vec<f32>>, String> {
-                MistralRs::maybe_log_request(runner.clone(), debug_repr);
+                Hanzo::maybe_log_request(runner.clone(), debug_repr);
                 let sender = runner
                     .get_sender(model_id.as_deref())
                     .map_err(|e| e.to_string())?;

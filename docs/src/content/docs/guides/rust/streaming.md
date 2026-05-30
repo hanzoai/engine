@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
 - `Response::Done`: end of stream. Use to break the loop or collect final usage stats.
 - `Response::InternalError`: engine-level failure. The stream produces no further values.
 - `Response::ModelError`: model-level failure. Often accompanied by inspectable partial state.
-- Other variants for tool calls, logprobs, and multimodal responses; see [docs.rs/mistralrs](https://docs.rs/mistralrs).
+- Other variants for tool calls, logprobs, and multimodal responses; see [docs.rs/hanzo](https://docs.rs/hanzo).
 
 The example uses `_ => {}` for brevity. Production code should match the other variants explicitly.
 

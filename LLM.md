@@ -134,7 +134,7 @@ You should also look for a model.safetensors.index.json file for the model at ha
 
 2. **Model Loading**: Models are loaded through `Loader` traits that handle different formats and quantizations. See `hanzo-engine/src/loader.rs`.
 
-3. **Request Handling**: The server uses message passing with `MistralRs` struct managing a background thread pool. Requests flow through `hanzo-engine/src/engine/mod.rs`.
+3. **Request Handling**: The server uses message passing with `Hanzo` struct managing a background thread pool. Requests flow through `hanzo-engine/src/engine/mod.rs`.
 
 4. **Device Management**: Automatic and manual device mapping for multi-GPU setups handled in `hanzo-engine/src/device_map.rs`.
 

@@ -163,7 +163,7 @@ impl ModelPaths for DiffusionModelPaths {
 
 /// [`DiffusionLoader`] for a Flux Diffusion model.
 ///
-/// [`DiffusionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.DiffusionLoader.html
+/// [`DiffusionLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.DiffusionLoader.html
 pub struct FluxLoader {
     pub(crate) offload: bool,
 }

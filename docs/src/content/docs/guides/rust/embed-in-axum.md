@@ -7,8 +7,8 @@ sidebar:
 
 To add mistral.rs to an existing Axum app, mount the hanzo router under a sub-path. The pattern uses two builders from `hanzo-server-core`:
 
-- `MistralRsForServerBuilder` constructs the engine state (`SharedMistralRsState = Arc<MistralRs>`).
-- `MistralRsServerRouterBuilder` produces an Axum `Router` from that state.
+- `HanzoForServerBuilder` constructs the engine state (`SharedHanzoState = Arc<Hanzo>`).
+- `HanzoServerRouterBuilder` produces an Axum `Router` from that state.
 
 ## Dependencies
 
@@ -27,8 +27,8 @@ tokio = { version = "1", features = ["full"] }
 use axum::{Router, routing::get};
 use hanzo_engine::{AutoDeviceMapParams, ModelDType, ModelSelected};
 use hanzo_server_core::{
-    mistralrs_for_server_builder::MistralRsForServerBuilder,
-    hanzo_server_router_builder::MistralRsServerRouterBuilder,
+    hanzo_for_server_builder::HanzoForServerBuilder,
+    hanzo_server_router_builder::HanzoServerRouterBuilder,
 };
 
 #[tokio::main]
@@ -51,20 +51,20 @@ async fn main() -> anyhow::Result<()> {
         matformer_slice_name: None,
     };
 
-    let shared_mistralrs = MistralRsForServerBuilder::new()
+    let shared_hanzo = HanzoForServerBuilder::new()
         .with_model(model)
         .with_in_situ_quant("4".to_string())
         .build()
         .await?;
 
-    let mistralrs_router = MistralRsServerRouterBuilder::new()
-        .with_mistralrs(shared_mistralrs)
+    let hanzo_router = HanzoServerRouterBuilder::new()
+        .with_hanzo(shared_hanzo)
         .build()
         .await?;
 
     let app = Router::new()
         .route("/", get(|| async { "My app" }))
-        .nest("/ai", mistralrs_router);
+        .nest("/ai", hanzo_router);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     axum::serve(listener, app).await?;
@@ -76,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## Builder options
 
-`MistralRsServerRouterBuilder` exposes:
+`HanzoServerRouterBuilder` exposes:
 
 - `with_include_swagger_routes(bool)`
 - `with_base_path(&str)`
@@ -85,10 +85,10 @@ async fn main() -> anyhow::Result<()> {
 - `with_max_tool_rounds(usize)`
 - `with_tool_dispatch_url(String)`
 
-`MistralRsForServerBuilder` exposes engine-level options (`with_model`, `with_in_situ_quant`, `set_paged_attn`, etc.).
+`HanzoForServerBuilder` exposes engine-level options (`with_model`, `with_in_situ_quant`, `set_paged_attn`, etc.).
 
 ## Calling the model directly from a handler
 
-For custom request shapes, share the `SharedMistralRsState` directly with Axum handlers and use the lower-level helpers exposed by `hanzo-server-core`.
+For custom request shapes, share the `SharedHanzoState` directly with Axum handlers and use the lower-level helpers exposed by `hanzo-server-core`.
 
 A complete example (with custom OpenAPI integration) is in the `hanzo-server-core` crate-level documentation.

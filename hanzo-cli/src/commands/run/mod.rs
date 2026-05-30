@@ -9,7 +9,7 @@ use anyhow::Result;
 use tracing::info;
 
 use hanzo_engine::initialize_logging;
-use hanzo_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
+use hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder;
 
 #[cfg(feature = "code-execution")]
 use super::serve::build_code_exec_config;
@@ -58,8 +58,8 @@ pub async fn run_interactive(
     let (cpu, device_layers) = extract_device_settings(&model_type);
     let isq = extract_isq_setting(&model_type);
 
-    // Build the MistralRs instance
-    let mut builder = MistralRsForServerBuilder::new()
+    // Build the Hanzo instance
+    let mut builder = HanzoForServerBuilder::new()
         .with_model(model_selected)
         .with_max_seqs(runtime.max_seqs)
         .with_no_kv_cache(runtime.no_kv_cache)
