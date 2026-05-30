@@ -9,7 +9,7 @@ members = [
     "mistralrs",
     "mistralrs-bench",
     "mistralrs-vision",
-    "mistralrs-quant",
+    "hanzo-quant",
     "mistralrs-paged-attn",
     "mistralrs-web-chat",
     "mistralrs-audio",
@@ -189,7 +189,7 @@ statrs = "0.18.0"
 
 mistralrs-core = { path = "mistralrs-core", version = "0.8.1" }
 mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.8.1" }
-mistralrs-quant = { path = "mistralrs-quant", version = "0.8.1" }
+mistralrs-quant = { package = "hanzo-quant", path = "hanzo-quant", version = "0.8.1" }
 mistralrs-vision = { path = "mistralrs-vision", version = "0.8.1" }
 mistralrs-server-core = { path = "mistralrs-server-core", version = "0.8.1" }
 mistralrs = { path = "mistralrs", version = "0.8.1" }

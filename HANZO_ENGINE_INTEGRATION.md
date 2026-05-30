@@ -58,7 +58,7 @@ AFQ is the primary quantization method optimized for Metal, inspired by MLX's qu
 
 ### Metal Kernels
 
-The Metal kernels are located in `/Users/z/work/hanzo/engine/mistralrs-quant/src/metal_kernels/`:
+The Metal kernels are located in `/Users/z/work/hanzo/engine/hanzo-quant/src/metal_kernels/`:
 
 | File | Purpose |
 |------|---------|
