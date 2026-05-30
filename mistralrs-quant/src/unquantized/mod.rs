@@ -103,6 +103,11 @@ impl QuantMethod for UnquantLinear {
                     let matmul_result = a.matmul(&w.t()?)?;
                     matmul_result.broadcast_add(&b)
                 }
+                #[cfg(feature = "rocm")]
+                DeviceLocation::Rocm { .. } => {
+                    let matmul_result = a.matmul(&w.t()?)?;
+                    matmul_result.broadcast_add(&b)
+                }
                 DeviceLocation::Cpu => {
                     #[cfg(feature = "accelerate")]
                     {
@@ -141,6 +146,8 @@ impl QuantMethod for UnquantLinear {
                     }
                 }
                 DeviceLocation::Metal { .. } => a.matmul(&w.t()?),
+                #[cfg(feature = "rocm")]
+                DeviceLocation::Rocm { .. } => a.matmul(&w.t()?),
                 DeviceLocation::Cpu => {
                     #[cfg(feature = "accelerate")]
                     {
