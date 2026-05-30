@@ -18,7 +18,7 @@ To use this, simply specify the calibration data file in the various APIs as det
 
 ## With the CLI
 ```bash
-mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct --calibration-file calibration_data/calibration_datav3_small.txt
+hanzo run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct --calibration-file calibration_data/calibration_datav3_small.txt
 ```
 
 ## With the Rust SDK

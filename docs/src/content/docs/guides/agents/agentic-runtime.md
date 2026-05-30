@@ -49,13 +49,13 @@ CLI, the built-in UI, HTTP, Rust, and Python expose the same approval semantics:
 In interactive mode, `ask` prompts inline before each agent action. Choosing `always` approves later actions in the same CLI session.
 
 ```bash
-mistralrs run --agent -m google/gemma-4-E4B-it --agent-permission ask
+hanzo run --agent -m google/gemma-4-E4B-it --agent-permission ask
 ```
 
 `deny` is useful when you want to inspect proposed actions without letting them run:
 
 ```bash
-mistralrs run --agent -m google/gemma-4-E4B-it --agent-permission deny
+hanzo run --agent -m google/gemma-4-E4B-it --agent-permission deny
 ```
 
 ### Built-in UI
@@ -105,7 +105,7 @@ The approval endpoint returns `{"status":"resolved"}`, `{"status":"queued"}`, or
 For Python, set `agent_permission` and pass an `agent_approval_callback` on the request. The callback receives an `AgentToolApproval` with `approval_id`, `session_id`, `round`, stable `tool` metadata, `arguments_json`, and a convenience `code` field when the action is Python code. Return `True` or `False` for simple callbacks, or return `AgentToolApprovalDecision` for deny messages and `remember_for_session`.
 
 ```python
-from mistralrs import (
+from hanzo import (
     AgentPermission,
     AgentToolApprovalDecision,
     AgentToolKind,
@@ -143,7 +143,7 @@ For Rust, set `AgentPermission::Ask` and pass an `AgentToolApprovalCallback`. Th
 ```rust
 use std::sync::Arc;
 
-use mistralrs::{
+use hanzo::{
     AgentPermission, AgentToolApprovalCallback, AgentToolApprovalDecision, RequestBuilder,
 };
 
@@ -180,7 +180,7 @@ See the [Rust approval example](https://github.com/EricLBuehler/mistral.rs/blob/
 Start a server with the tools your app is allowed to use:
 
 ```bash
-mistralrs serve --agent -m google/gemma-4-E4B-it
+hanzo serve --agent -m google/gemma-4-E4B-it
 ```
 
 (`--agent` is a shorthand for `--enable-search --enable-code-execution`; the UI is on by default.)

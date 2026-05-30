@@ -38,4 +38,4 @@ Supported widths: 2, 3, 4, 5, 6, 8. Full bit-width by format support: [quantizat
 
 ## Automated selection
 
-`mistralrs tune -m <model>` recommends per-host quantization. See the [auto-tune guide](/mistral.rs/guides/perf/auto-tune/).
+`hanzo tune -m <model>` recommends per-host quantization. See the [auto-tune guide](/mistral.rs/guides/perf/auto-tune/).

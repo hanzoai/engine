@@ -4,7 +4,7 @@ A comprehensive index of all examples in the repository, organized by SDK and ca
 
 ## Python SDK
 
-Examples using the `mistralrs` Python package directly.
+Examples using the `hanzo` Python package directly.
 
 ### Getting Started
 
@@ -127,7 +127,7 @@ Examples using the `mistralrs` Python package directly.
 
 ## HTTP Server
 
-Examples using the OpenAI-compatible HTTP API (start the server with `mistralrs serve`).
+Examples using the OpenAI-compatible HTTP API (start the server with `hanzo serve`).
 
 ### Getting Started
 
@@ -223,7 +223,7 @@ Examples using the OpenAI-compatible HTTP API (start the server with `mistralrs 
 
 ## Rust SDK
 
-Examples using the `mistralrs` Rust crate (in `mistralrs/examples/`).
+Examples using the `hanzo` Rust crate (in `hanzo/examples/`).
 
 ### Getting Started
 

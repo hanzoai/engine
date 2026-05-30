@@ -5,7 +5,7 @@ Dia is a 1.6B parameter text to speech model created by Nari Labs. You can condi
 ## Quick Start
 
 ```bash
-mistralrs run speech -m nari-labs/Dia-1.6B -a dia
+hanzo run speech -m nari-labs/Dia-1.6B -a dia
 ```
 
 - Generate dialogue via the [S1] and [S2] tags
@@ -21,7 +21,7 @@ mistralrs run speech -m nari-labs/Dia-1.6B -a dia
 Start the server:
 
 ```
-mistralrs serve speech -m nari-labs/Dia-1.6B -a dia -p 1234
+hanzo serve speech -m nari-labs/Dia-1.6B -a dia -p 1234
 ```
 
 Send a request:
@@ -50,7 +50,7 @@ print(f"WAV audio written to {output_path.resolve()}")
 use std::time::Instant;
 
 use anyhow::Result;
-use mistralrs::{speech_utils, SpeechLoaderType, SpeechModelBuilder};
+use hanzo::{speech_utils, SpeechLoaderType, SpeechModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
 ## Python SDK
 
 ```py
-from mistralrs import (
+from hanzo import (
     Runner,
     Which,
     SpeechLoaderType,

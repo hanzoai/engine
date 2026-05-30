@@ -2,11 +2,11 @@
 Python SDK code-execution approval callback.
 
 Run with:
-    pip install -e mistralrs-pyo3 --features code-execution
+    pip install -e hanzo-pyo3 --features code-execution
     python examples/python/code_execution_approval.py
 """
 
-from mistralrs import (
+from hanzo import (
     AgentPermission,
     AgentToolApproval,
     AgentToolApprovalDecision,

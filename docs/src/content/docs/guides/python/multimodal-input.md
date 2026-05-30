@@ -10,7 +10,7 @@ The multimodal message format follows the OpenAI convention: `content` can be a 
 ## Sending an image
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
     which=Which.MultimodalPlain(
@@ -52,7 +52,7 @@ Multiple images per message work, include several `image_url` parts. The model s
 Gemma 4 E4B handles audio natively:
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
     which=Which.MultimodalPlain(

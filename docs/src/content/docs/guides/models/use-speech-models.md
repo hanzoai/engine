@@ -15,7 +15,7 @@ Voxtral is classified as a multimodal model (audio is one of its input modalitie
 ## Voxtral: audio in, text out
 
 ```bash
-mistralrs serve -m mistralai/Voxtral-Mini-3B-2507
+hanzo serve -m mistralai/Voxtral-Mini-3B-2507
 ```
 
 Voxtral fits the multimodal chat shape: audio is an input content part, the response is text.
@@ -42,7 +42,7 @@ Voxtral repos use Mistral's native layout (`params.json`, `consolidated.safetens
 Python SDK:
 
 ```python
-from mistralrs import ChatCompletionRequest, MultimodalArchitecture, Runner, Which
+from hanzo import ChatCompletionRequest, MultimodalArchitecture, Runner, Which
 
 runner = Runner(
     which=Which.MultimodalPlain(
@@ -75,7 +75,7 @@ print(response.choices[0].message.content)
 `/v1/audio/speech` matches OpenAI:
 
 ```bash
-mistralrs serve -m nari-labs/Dia-1.6B
+hanzo serve -m nari-labs/Dia-1.6B
 ```
 
 ```bash
@@ -100,7 +100,7 @@ import struct
 import wave
 from pathlib import Path
 
-from mistralrs import Runner, SpeechLoaderType, Which
+from hanzo import Runner, SpeechLoaderType, Which
 
 runner = Runner(
     which=Which.Speech(

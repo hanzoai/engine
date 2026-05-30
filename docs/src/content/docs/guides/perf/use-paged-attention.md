@@ -21,10 +21,10 @@ Paged attention is on by default when the engine detects it should help. Explici
 
 ```bash
 # Force on, with a specific KV cache memory budget in MB
-mistralrs serve --paged-attn on --pa-memory-mb 8192 -m <model>
+hanzo serve --paged-attn on --pa-memory-mb 8192 -m <model>
 
 # Force off
-mistralrs serve --paged-attn off -m <model>
+hanzo serve --paged-attn off -m <model>
 ```
 
 `--paged-attn` accepts `auto` (default), `on`, or `off`.

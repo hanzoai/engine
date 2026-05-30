@@ -12,13 +12,13 @@ When a model exceeds one GPU's memory after quantization, mistral.rs can split i
 The CLI detects available GPUs and splits across them when more than one is present:
 
 ```bash
-mistralrs serve -m Qwen/Qwen3-32B --quant 4
+hanzo serve -m Qwen/Qwen3-32B --quant 4
 ```
 
 To restrict the device set, use the CUDA convention:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 mistralrs serve -m Qwen/Qwen3-32B --quant 4
+CUDA_VISIBLE_DEVICES=0,1 hanzo serve -m Qwen/Qwen3-32B --quant 4
 ```
 
 ## Per-device layer counts
@@ -26,7 +26,7 @@ CUDA_VISIBLE_DEVICES=0,1 mistralrs serve -m Qwen/Qwen3-32B --quant 4
 `-n`/`--device-layers` specifies layers per GPU. Format: `ORD:NUM;ORD:NUM;...`.
 
 ```bash
-mistralrs serve -n "0:32;1:32" -m <model>
+hanzo serve -n "0:32;1:32" -m <model>
 ```
 
 For per-tensor or per-layer placement, see the [topology guide](/mistral.rs/guides/perf/topology/).

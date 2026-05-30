@@ -86,17 +86,17 @@ CLI usage is via the [TOML selector](TOML_SELECTOR.md#anymoe) where you can also
 
 For example, to use the demo fine-tuned expert:
 ```bash
-mistralrs from-config --file toml-selectors/anymoe.toml
+hanzo from-config --file toml-selectors/anymoe.toml
 ```
 
 To use the demo LoRA expert:
 ```bash
-mistralrs from-config --file toml-selectors/anymoe_lora.toml
+hanzo from-config --file toml-selectors/anymoe_lora.toml
 ```
 
 ## Python example
 ```py
-from mistralrs import (
+from hanzo import (
     Runner,
     Which,
     ChatCompletionRequest,
@@ -144,7 +144,7 @@ You can find this example [here](https://github.com/hanzoai/engine/blob/main/mis
 
 ```rust
 use anyhow::Result;
-use mistralrs::{
+use hanzo::{
     AnyMoeConfig, AnyMoeExpertType, AnyMoeModelBuilder, IsqType, PagedAttentionMetaBuilder,
     TextMessageRole, TextMessages, TextModelBuilder,
 };

@@ -1,25 +1,25 @@
 ---
 title: Call a model from Python
-description: Install the mistralrs Python package, load a model in-process, send a chat request, and stream tokens. About ten minutes.
+description: Install the hanzo Python package, load a model in-process, send a chat request, and stream tokens. About ten minutes.
 sidebar:
   order: 3
 ---
 
-The Python SDK loads the model in-process and wraps the same Rust engine that backs the `mistralrs` binary.
+The Python SDK loads the model in-process and wraps the same Rust engine that backs the `hanzo` binary.
 
 ## Installing the right wheel
 
 The Python package ships as one wheel per accelerator. Install the one matching your hardware:
 
 ```bash
-pip install mistralrs             # CPU, or Intel CPU with MKL
+pip install hanzo             # CPU, or Intel CPU with MKL
 pip install mistralrs-cuda        # NVIDIA GPUs
 pip install mistralrs-metal       # Apple Silicon
 pip install mistralrs-mkl         # Intel CPU, MKL wheel with symbols pinned
 pip install mistralrs-accelerate  # macOS, Accelerate framework
 ```
 
-Install only one. All wheels expose the same `from mistralrs import ...` API; they differ only in the compiled backend.
+Install only one. All wheels expose the same `from hanzo import ...` API; they differ only in the compiled backend.
 
 Python 3.10 or newer is required. Wheels are built for Linux, macOS (arm64), and Windows.
 
@@ -28,7 +28,7 @@ Python 3.10 or newer is required. Wheels are built for Linux, macOS (arm64), and
 Save as `hello.py`:
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest
+from hanzo import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),
@@ -61,7 +61,7 @@ Run with `python hello.py`. The first run downloads the weights into the Hugging
 Set `stream=True` to receive an iterator of chunks instead of a single response:
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest
+from hanzo import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),

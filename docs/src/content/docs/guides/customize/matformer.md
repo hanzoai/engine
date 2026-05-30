@@ -1,6 +1,6 @@
 ---
 title: MatFormer and elastic model sizing
-description: MatFormer-trained models in mistralrs.
+description: MatFormer-trained models in hanzo.
 sidebar:
   order: 3
 ---
@@ -19,13 +19,13 @@ Without these values, the model loads its default slice.
 ### CLI
 
 ```bash
-mistralrs run \
+hanzo run \
   -m google/gemma-3n-E4B-it \
   --matformer-config-path slices.json \
   --matformer-slice-name E2B
 ```
 
-The same `--matformer-config-path` / `--matformer-slice-name` flags are accepted by `mistralrs serve` and `mistralrs bench`.
+The same `--matformer-config-path` / `--matformer-slice-name` flags are accepted by `hanzo serve` and `hanzo bench`.
 
 ### TOML config
 
@@ -42,7 +42,7 @@ matformer_slice_name = "E2B"
 ### Python SDK
 
 ```python
-from mistralrs import Runner, Which, MultimodalArchitecture
+from hanzo import Runner, Which, MultimodalArchitecture
 
 runner = Runner(which=Which.MultimodalPlain(
     model_id="google/gemma-3n-E4B-it",
