@@ -225,7 +225,7 @@ pub(crate) enum WorkerTransferData {
 }
 
 pub(crate) fn ipc_name() -> anyhow::Result<Name<'static>> {
-    let printname = "mistralrs_daemon.sock";
+    let printname = "hanzo_daemon.sock";
     Ok(printname.to_ns_name::<GenericNamespaced>()?)
 }
 

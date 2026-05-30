@@ -85,7 +85,7 @@ pub struct AdapterOptions {
 #[derive(Args, Clone, Default, Deserialize)]
 pub struct QuantizationOptions {
     /// Quantization front-door. Numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) and ISQ
-    /// names prefer a prebuilt UQFF from `mistralrs-community/<model>-UQFF`, then
+    /// names prefer a prebuilt UQFF from `hanzo-community/<model>-UQFF`, then
     /// fall back to ISQ. `auto` is for `serve`, `run`, and `bench`; `tune` rejects
     /// it because `tune` is the recommender. Use `--isq` for the explicit knob.
     #[arg(long, conflicts_with_all = ["in_situ_quant", "from_uqff"])]

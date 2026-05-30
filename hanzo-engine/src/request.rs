@@ -213,7 +213,7 @@ impl WebSearchOptions {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-/// A normal request request to the `MistralRs`.
+/// A normal request request to the `Hanzo`.
 /// - `messages`: Messages for the request
 /// - `sampling_params`: Sampling parameters for generation
 /// - `response`: Object to send the result through
@@ -347,7 +347,7 @@ pub enum Request {
     ReIsq(IsqType),
     Tokenize(TokenizationRequest),
     Detokenize(DetokenizationRequest),
-    // Sending a terminate request causes the `run` function to return to the thread created in `MistralRs::new`,
+    // Sending a terminate request causes the `run` function to return to the thread created in `Hanzo::new`,
     // and then Engine will be dropped.
     Terminate,
     TerminateAllSeqsNextStep,

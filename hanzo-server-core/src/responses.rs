@@ -20,7 +20,7 @@ use axum::{
     },
 };
 use either::Either;
-use hanzo_engine::{ChatCompletionResponse, MistralRs, Request, Response};
+use hanzo_engine::{ChatCompletionResponse, Hanzo, Request, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -48,7 +48,7 @@ use crate::{
         resource::{ResponseError, ResponseResource, ResponseUsage},
     },
     streaming::{get_keep_alive_interval, DoneState},
-    types::{ExtractedMistralRsState, OnDoneCallback, SharedMistralRsState},
+    types::{ExtractedHanzoState, OnDoneCallback, SharedHanzoState},
     util::sanitize_error_message,
 };
 
@@ -728,7 +728,7 @@ pub struct OpenResponsesStreamer {
     /// Done state
     done_state: DoneState,
     /// Shared state
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     /// Streaming state for tracking events
     streaming_state: StreamingState,
     /// Metadata from the request
@@ -760,7 +760,7 @@ impl OpenResponsesStreamer {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         rx: Receiver<Response>,
-        state: SharedMistralRsState,
+        state: SharedHanzoState,
         response_id: String,
         model: String,
         metadata: Option<Value>,
@@ -925,7 +925,7 @@ impl futures::Stream for OpenResponsesStreamer {
         match self.rx.poll_recv(cx) {
             Poll::Ready(Some(resp)) => match resp {
                 Response::ModelError(msg, _) => {
-                    MistralRs::maybe_log_error(
+                    Hanzo::maybe_log_error(
                         self.state.clone(),
                         &ModelErrorMessage(msg.to_string()),
                     );
@@ -959,7 +959,7 @@ impl futures::Stream for OpenResponsesStreamer {
                     Poll::Ready(Some(Event::default().event("error").json_data(event)))
                 }
                 Response::InternalError(e) => {
-                    MistralRs::maybe_log_error(self.state.clone(), &*e);
+                    Hanzo::maybe_log_error(self.state.clone(), &*e);
                     let seq = self.streaming_state.next_sequence_number();
                     let event = OpenResponsesStreamEvent::Error {
                         sequence_number: seq,
@@ -1112,7 +1112,7 @@ impl futures::Stream for OpenResponsesStreamer {
                         self.done_state = DoneState::SendingDone;
                     }
 
-                    MistralRs::maybe_log_response(self.state.clone(), &chat_chunk);
+                    Hanzo::maybe_log_response(self.state.clone(), &chat_chunk);
 
                     // Return first event, queue the rest
                     if !events_to_emit.is_empty() {
@@ -1322,7 +1322,7 @@ fn chat_response_to_response_resource(
 /// Parse OpenResponses request into internal format
 async fn parse_openresponses_request(
     oairequest: OpenResponsesCreateRequest,
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     tx: Sender<Response>,
 ) -> Result<(
     Request,
@@ -1519,7 +1519,7 @@ async fn parse_openresponses_request(
     responses((status = 200, description = "Response created"))
 )]
 pub async fn create_response(
-    State(state): ExtractedMistralRsState,
+    State(state): ExtractedHanzoState,
     Json(oairequest): Json<OpenResponsesCreateRequest>,
 ) -> OpenResponsesResponder {
     let (tx, rx) = create_response_channel(None);
@@ -1755,7 +1755,7 @@ pub async fn create_response(
     responses((status = 200, description = "Response object"))
 )]
 pub async fn get_response(
-    State(_state): ExtractedMistralRsState,
+    State(_state): ExtractedHanzoState,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
     // First check background tasks
@@ -1787,7 +1787,7 @@ pub async fn get_response(
     responses((status = 200, description = "Response deleted"))
 )]
 pub async fn delete_response(
-    State(_state): ExtractedMistralRsState,
+    State(_state): ExtractedHanzoState,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
     // Delete from background tasks
@@ -1830,7 +1830,7 @@ pub async fn delete_response(
     responses((status = 200, description = "Response cancelled"))
 )]
 pub async fn cancel_response(
-    State(_state): ExtractedMistralRsState,
+    State(_state): ExtractedHanzoState,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
     let task_manager = get_background_task_manager();
@@ -1851,7 +1851,7 @@ pub async fn cancel_response(
 
 /// Handle errors
 fn handle_error(
-    state: SharedMistralRsState,
+    state: SharedHanzoState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> OpenResponsesResponder {
     handle_completion_error(state, e)

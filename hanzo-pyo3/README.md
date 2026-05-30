@@ -11,7 +11,7 @@ For full documentation, see:
 ## Quick Install
 
 ```bash
-pip install mistralrs-cuda   # NVIDIA GPUs
-pip install mistralrs-metal  # Apple Silicon
+pip install hanzo-cuda   # NVIDIA GPUs
+pip install hanzo-metal  # Apple Silicon
 pip install hanzo        # CPU only
 ```

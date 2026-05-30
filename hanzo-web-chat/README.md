@@ -1,11 +1,11 @@
 # Hanzo Engine Web Chat App
 
-> **Deprecated:** The standalone `mistralrs-web-chat` binary is deprecated. Use `hanzo serve --ui` instead for the same functionality.
+> **Deprecated:** The standalone `hanzo-web-chat` binary is deprecated. Use `hanzo serve --ui` instead for the same functionality.
 >
 > **Migration:**
 > ```bash
 > # Old
-> cargo run --release --features cuda --bin mistralrs-web-chat -- --text-model Qwen/Qwen3-4B
+> cargo run --release --features cuda --bin hanzo-web-chat -- --text-model Qwen/Qwen3-4B
 >
 > # New
 > hanzo serve --ui -m Qwen/Qwen3-4B
@@ -46,7 +46,7 @@ A minimal, fast, and modern web chat interface for [Hanzo Engine](https://github
 > Note: choose the features based on [this guide](../README.md#supported-accelerators).
 
 ```bash
-cargo run --release --features <specify feature(s) here> --bin mistralrs-web-chat -- \
+cargo run --release --features <specify feature(s) here> --bin hanzo-web-chat -- \
   --text-model Qwen/Qwen3-4B \
   --multimodal-model google/gemma-4-E4B-it \
   --speech-model nari-labs/Dia-1.6B
@@ -93,13 +93,13 @@ Options:
 
 Basic usage with a text model:
 ```bash
-cargo run --release --features cuda --bin mistralrs-web-chat -- \
+cargo run --release --features cuda --bin hanzo-web-chat -- \
   --text-model meta-llama/Llama-3.2-3B-Instruct
 ```
 
 With custom generation defaults:
 ```bash
-cargo run --release --features cuda --bin mistralrs-web-chat -- \
+cargo run --release --features cuda --bin hanzo-web-chat -- \
   --text-model Qwen/Qwen3-4B \
   --temperature 0.8 \
   --max-tokens 4096 \
@@ -108,7 +108,7 @@ cargo run --release --features cuda --bin mistralrs-web-chat -- \
 
 Multiple models with web search:
 ```bash
-cargo run --release --features cuda --bin mistralrs-web-chat -- \
+cargo run --release --features cuda --bin hanzo-web-chat -- \
   --text-model Qwen/Qwen3-4B \
   --multimodal-model google/gemma-4-E4B-it \
   --enable-search \
@@ -171,7 +171,7 @@ To update the system prompt:
 ### Frontend
 - Edit static/index.html and supporting JS/CSS.
 - Uses marked.js for markdown rendering.
-- Settings stored in localStorage under `mistralrs_settings`.
+- Settings stored in localStorage under `hanzo_settings`.
 
 ### Backend
 - See main.rs for server and model loading logic.

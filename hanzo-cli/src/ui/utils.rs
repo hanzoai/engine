@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 /// Determine the base cache directory for the UI.
-/// Uses XDG_CACHE_HOME or falls back to ~/.cache/mistralrs.
+/// Uses XDG_CACHE_HOME or falls back to ~/.cache/hanzo.
 pub fn get_cache_dir() -> PathBuf {
     let cache_home = std::env::var("XDG_CACHE_HOME")
         .map(PathBuf::from)

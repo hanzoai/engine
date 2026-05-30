@@ -14,10 +14,10 @@ One wheel per accelerator. All wheels expose the same `hanzo` module.
 | Accelerator | Package |
 | --- | --- |
 | CPU (or Intel CPU with MKL) | `pip install hanzo` |
-| NVIDIA GPU | `pip install mistralrs-cuda` |
-| Apple Silicon | `pip install mistralrs-metal` |
-| Intel MKL (pinned) | `pip install mistralrs-mkl` |
-| macOS Accelerate | `pip install mistralrs-accelerate` |
+| NVIDIA GPU | `pip install hanzo-cuda` |
+| Apple Silicon | `pip install hanzo-metal` |
+| Intel MKL (pinned) | `pip install hanzo-mkl` |
+| macOS Accelerate | `pip install hanzo-accelerate` |
 
 ## Pages
 
@@ -40,4 +40,4 @@ See [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) for a walkthrough and the
 
 ---
 
-<small>Generated from [`hanzo-pyo3/mistralrs.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo-pyo3/mistralrs.pyi).</small>
+<small>Generated from [`hanzo-pyo3/hanzo.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo-pyo3/hanzo.pyi).</small>

@@ -24,7 +24,7 @@ cargo build --release --features "cuda flash-attn cudnn" -p hanzo-cli
 cargo install --path hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
-The in-place build leaves the binary at `target/release/mistralrs`. The install variant copies it to `~/.cargo/bin/mistralrs`, which is on `PATH` after a rustup install.
+The in-place build leaves the binary at `target/release/hanzo`. The install variant copies it to `~/.cargo/bin/hanzo`, which is on `PATH` after a rustup install.
 
 ## Feature flag combinations
 

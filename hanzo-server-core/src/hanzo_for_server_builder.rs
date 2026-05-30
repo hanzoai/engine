@@ -8,12 +8,12 @@ use hanzo_engine::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
     parse_isq_value, AutoDeviceMapParams, DefaultSchedulerMethod, DeviceLayerMapMetadata,
     DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder, McpClientConfig, MemoryGpuConfig,
-    MistralRsBuilder, ModelLoaderConfig, ModelSelected, MtpConfig, PagedAttentionConfig,
+    HanzoBuilder, ModelLoaderConfig, ModelSelected, MtpConfig, PagedAttentionConfig,
     PagedCacheType, SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
 };
 use tracing::{debug, info, warn};
 
-use crate::types::{LoadedPipeline, SharedMistralRsState};
+use crate::types::{LoadedPipeline, SharedHanzoState};
 use std::collections::{HashMap, HashSet};
 
 /// Configuration for a single model in a multi-model setup
@@ -118,11 +118,11 @@ pub mod defaults {
 ///
 /// Basic usage:
 /// ```ignore
-/// use hanzo_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
+/// use hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder;
 ///
 /// let args = Args::parse();
 ///
-/// let hanzo = MistralRsForServerBuilder::new()
+/// let hanzo = HanzoForServerBuilder::new()
 ///        .with_model(args.model)
 ///        .with_max_seqs(args.max_seqs)
 ///        .with_no_kv_cache(args.no_kv_cache)
@@ -145,7 +145,7 @@ pub mod defaults {
 ///        .build()
 ///        .await?;
 /// ```
-pub struct MistralRsForServerBuilder {
+pub struct HanzoForServerBuilder {
     /// The Candle device to use for model execution (CPU, CUDA, Metal, etc.).
     device: Option<Device>,
 
@@ -252,7 +252,7 @@ pub struct MistralRsForServerBuilder {
     code_exec_config: Option<hanzo_engine::CodeExecutionConfig>,
 }
 
-impl Default for MistralRsForServerBuilder {
+impl Default for HanzoForServerBuilder {
     /// Creates a new builder with default configuration.
     fn default() -> Self {
         Self {
@@ -290,17 +290,17 @@ impl Default for MistralRsForServerBuilder {
     }
 }
 
-impl MistralRsForServerBuilder {
-    /// Creates a new `MistralRsForServerBuilder` with default settings.
+impl HanzoForServerBuilder {
+    /// Creates a new `HanzoForServerBuilder` with default settings.
     ///
     /// This is equivalent to calling `Default::default()`.
     ///
     /// ### Examples
     ///
     /// ```ignore
-    /// use hanzo_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
+    /// use hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder;
     ///
-    /// let builder = hanzo_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder::new();
+    /// let builder = hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder::new();
     /// ```
     pub fn new() -> Self {
         Default::default()
@@ -654,16 +654,16 @@ impl MistralRsForServerBuilder {
     /// ### Examples
     ///
     /// ```ignore
-    /// use hanzo_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
+    /// use hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder;
     ///
-    /// let shared_mistralrs = MistralRsForServerBuilder::new()
+    /// let shared_hanzo = HanzoForServerBuilder::new()
     ///     .with_model(model)
     ///     .with_in_situ_quant("8".to_string())
     ///     .set_paged_attn(Some(true))
     ///     .build()
     ///     .await?;
     /// ```
-    pub async fn build(self) -> Result<SharedMistralRsState> {
+    pub async fn build(self) -> Result<SharedHanzoState> {
         // Determine if we're in single-model or multi-model mode
         if !self.models.is_empty() {
             self.build_multi_model().await
@@ -673,7 +673,7 @@ impl MistralRsForServerBuilder {
     }
 
     /// Build a single-model instance (legacy mode)
-    async fn build_single_model(mut self) -> Result<SharedMistralRsState> {
+    async fn build_single_model(mut self) -> Result<SharedHanzoState> {
         let model = self.model.context("Model was None")?;
 
         let tgt_non_granular_index = get_tgt_non_granular_index(&model);
@@ -716,7 +716,7 @@ impl MistralRsForServerBuilder {
             .with_jinja_explicit(self.jinja_explicit)
             .build()?;
 
-        mistralrs_instance_info(&*loader);
+        hanzo_instance_info(&*loader);
 
         let isq = self
             .in_situ_quant
@@ -764,7 +764,7 @@ impl MistralRsForServerBuilder {
             mtp_config: self.mtp_config.clone(),
         };
 
-        let mut builder = MistralRsBuilder::new(
+        let mut builder = HanzoBuilder::new(
             pipeline,
             scheduler_config,
             !self.interactive_mode,
@@ -795,7 +795,7 @@ impl MistralRsForServerBuilder {
     }
 
     /// Build a multi-model instance
-    pub async fn build_multi_model(mut self) -> Result<SharedMistralRsState> {
+    pub async fn build_multi_model(mut self) -> Result<SharedHanzoState> {
         if self.models.is_empty() {
             anyhow::bail!("No models configured for multi-model mode");
         }
@@ -835,7 +835,7 @@ impl MistralRsForServerBuilder {
             )
             .build()?;
 
-        mistralrs_instance_info(&*loader);
+        hanzo_instance_info(&*loader);
 
         let mapper = init_mapper(
             &first_model
@@ -912,8 +912,8 @@ impl MistralRsForServerBuilder {
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
 
-        // Create the first MistralRs instance with the first model
-        let mut builder = MistralRsBuilder::new(
+        // Create the first Hanzo instance with the first model
+        let mut builder = HanzoBuilder::new(
             pipeline,
             scheduler_config.clone(),
             !self.interactive_mode,
@@ -1014,7 +1014,7 @@ impl MistralRsForServerBuilder {
                 );
             }
 
-            // Add the model to the MistralRs instance
+            // Add the model to the Hanzo instance
             let engine_config = hanzo_engine::EngineConfig {
                 no_kv_cache: self.no_kv_cache,
                 no_prefix_cache: false,
@@ -1158,7 +1158,7 @@ fn init_mapper(
 }
 
 /// Logs hardware feature information and the model's sampling strategy and kind.
-fn mistralrs_instance_info(loader: &dyn Loader) {
+fn hanzo_instance_info(loader: &dyn Loader) {
     debug!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
         candle_core::utils::with_avx(),

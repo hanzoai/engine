@@ -6,7 +6,7 @@ use hanzo_engine::{
     initialize_logging, Constraint, DrySamplingParams, NormalRequest, Request, RequestMessage,
     Response, SamplingParams, Usage,
 };
-use hanzo_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
+use hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 use tracing::info;
@@ -97,7 +97,7 @@ pub async fn run_bench(
     info!("Loading model for benchmarking...");
 
     // Build using the same infrastructure as serve
-    let builder = MistralRsForServerBuilder::new()
+    let builder = HanzoForServerBuilder::new()
         .with_model(model_selected)
         .with_max_seqs(1) // Single sequence for benchmarking
         .with_no_kv_cache(runtime.no_kv_cache)
@@ -223,7 +223,7 @@ fn calculate_stats(values: &[f32]) -> (f32, f32) {
 
 /// Run a single benchmark iteration.
 async fn run_single_bench(
-    hanzo: &Arc<hanzo_engine::MistralRs>,
+    hanzo: &Arc<hanzo_engine::Hanzo>,
     prompt_tokens: usize,
     gen_tokens: usize,
 ) -> Result<Usage> {

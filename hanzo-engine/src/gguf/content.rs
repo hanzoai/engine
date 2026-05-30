@@ -201,7 +201,7 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
     }
 
     /// Print metadata for these contents.
-    /// This will also log tensor name, shape and dtype to `mistralrs_gguf_tensors.txt` is DEBUG is enabled.
+    /// This will also log tensor name, shape and dtype to `hanzo_gguf_tensors.txt` is DEBUG is enabled.
     pub fn print_metadata(&self) -> anyhow::Result<()> {
         // Find the ct with general.architecture
         let mut keys = Vec::new();
@@ -240,11 +240,11 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
 
         if DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
             fs::write(
-                "mistralrs_gguf_tensors.txt",
+                "hanzo_gguf_tensors.txt",
                 serde_json::to_string_pretty(&tensors).expect("Serialization failed."),
             )?;
 
-            info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`.");
+            info!("Debug is enabled, wrote the names and information about each tensor to `hanzo_gguf_tensors.txt`.");
         }
 
         anyhow::Ok(())
