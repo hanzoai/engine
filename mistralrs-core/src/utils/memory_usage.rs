@@ -25,6 +25,13 @@ impl MemoryUsage {
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     pub fn get_memory_available(&self, device: &Device) -> Result<usize> {
         match device {
+            #[cfg(feature = "rocm")]
+            Device::Rocm(_) => {
+                // gfx1151 integrated GPU shares system memory
+                let mut sys = System::new_all();
+                sys.refresh_cpu_all();
+                Ok(usize::try_from(sys.available_memory())?)
+            }
             Device::Cpu => {
                 let mut sys = System::new_all();
                 sys.refresh_cpu_all();
@@ -73,6 +80,12 @@ impl MemoryUsage {
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     pub fn get_total_memory(&self, device: &Device) -> Result<usize> {
         match device {
+            #[cfg(feature = "rocm")]
+            Device::Rocm(_) => {
+                let mut sys = System::new_all();
+                sys.refresh_cpu_all();
+                Ok(usize::try_from(sys.total_memory())?)
+            }
             Device::Cpu => {
                 let mut sys = System::new_all();
                 sys.refresh_cpu_all();
