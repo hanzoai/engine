@@ -20,11 +20,11 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.8.1"
+version = "0.9.0"
 edition = "2021"
-description = "Fast, flexible LLM inference."
-homepage = "https://github.com/EricLBuehler/mistral.rs"
-repository = "https://github.com/EricLBuehler/mistral.rs"
+description = "Hanzo Engine — fast, flexible LLM inference (forked from mistral.rs)."
+homepage = "https://github.com/hanzoai/engine"
+repository = "https://github.com/hanzoai/engine"
 keywords = ["llm", "inference", "machine-learning", "ai", "transformers"]
 categories = ["science", "api-bindings", "text-processing"]
 license = "MIT"
@@ -189,27 +189,28 @@ landlock = "0.4.4"
 nix = { version = "0.31.3", default-features = false }
 itoa = "1.0.18"
 
-hanzo-engine = { path = "hanzo-engine", version = "0.8.1" }
-hanzo-paged-attn = { path = "hanzo-paged-attn", version = "0.8.1" }
-hanzo-quant = { path = "hanzo-quant", version = "0.8.1" }
-hanzo-vision = { path = "hanzo-vision", version = "0.8.1" }
-hanzo-server-core = { path = "hanzo-server-core", version = "0.8.1" }
-hanzo = { path = "hanzo", version = "0.8.1" }
-hanzo-audio = { path = "hanzo-audio", version = "0.8.1" }
-hanzo-llm-mcp = { path = "hanzo-llm-mcp", version = "0.8.1" }
-hanzo-macros = { path = "hanzo-macros", version = "0.8.1" }
-hanzo-code-exec = { path = "hanzo-code-exec", version = "0.8.1" }
-hanzo-sandbox = { path = "hanzo-sandbox", version = "0.8.1" }
+hanzo-engine = { path = "hanzo-engine", version = "0.9.0" }
+hanzo-paged-attn = { path = "hanzo-paged-attn", version = "0.9.0" }
+hanzo-quant = { path = "hanzo-quant", version = "0.9.0" }
+hanzo-vision = { path = "hanzo-vision", version = "0.9.0" }
+hanzo-server-core = { path = "hanzo-server-core", version = "0.9.0" }
+hanzo = { path = "hanzo", version = "0.9.0" }
+hanzo-audio = { path = "hanzo-audio", version = "0.9.0" }
+hanzo-llm-mcp = { path = "hanzo-llm-mcp", version = "0.9.0" }
+hanzo-macros = { path = "hanzo-macros", version = "0.9.0" }
+hanzo-code-exec = { path = "hanzo-code-exec", version = "0.9.0" }
+hanzo-sandbox = { path = "hanzo-sandbox", version = "0.9.0" }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
 
 [profile.release-with-debug]
 inherits = "release"
 debug = true
-
-# Makes release profiler faster to build
-# The improvement is negligible with it.
-# [profile.release]
-# lto = true
-# opt-level = 3
+strip = "none"
 
 [profile.dev]
 debug = true
