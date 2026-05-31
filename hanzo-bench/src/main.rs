@@ -209,6 +209,8 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
         Device::Cpu => "CPU",
         Device::Cuda(_) => "CUDA",
         Device::Metal(_) => "Metal",
+        #[cfg(feature = "rocm")]
+        Device::Rocm(_) => "ROCm",
         #[cfg(feature = "vulkan")]
         Device::Vulkan(_) => "Vulkan",
     };
