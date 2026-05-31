@@ -3,7 +3,7 @@ from openai import OpenAI
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 # Video input example for Gemma 4
-# Start the server with: mistralrs serve -m google/gemma-4-E4B-it
+# Start the server with: hanzo serve -m google/gemma-4-E4B-it
 
 completion = client.chat.completions.create(
     model="default",

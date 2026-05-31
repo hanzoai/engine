@@ -10,7 +10,7 @@ GPT-OSS is a Mixture of Experts (MoE) language model with specialized attention 
 ## Quick Start
 
 ```bash
-mistralrs run -m openai/gpt-oss-20b
+hanzo run -m openai/gpt-oss-20b
 ```
 
 > Note: GPT-OSS MoE experts are pre-quantized in MXFP4 format. ISQ can be applied to attention layers only.
@@ -21,7 +21,7 @@ mistralrs run -m openai/gpt-oss-20b
 You can find a more detailed example [here](https://github.com/hanzoai/engine/blob/main/examples/server/gpt_oss.py).
 
 ```bash
-mistralrs serve -p 1234 -m openai/gpt-oss-20b
+hanzo serve -p 1234 -m openai/gpt-oss-20b
 ```
 
 ```py
@@ -43,7 +43,7 @@ print(completion.choices[0].message.content)
 You can find a more detailed example [here](https://github.com/hanzoai/engine/blob/main/examples/python/gpt_oss.py).
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from hanzo import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.Plain(
@@ -69,11 +69,11 @@ print(res.usage)
 ```
 
 ## Rust SDK
-You can find a more detailed example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/models/text_models/main.rs).
+You can find a more detailed example [here](https://github.com/hanzoai/engine/blob/main/hanzo/examples/models/text_models/main.rs).
 
 ```rust
 use anyhow::Result;
-use mistralrs::{TextMessageRole, TextMessages, TextModelBuilder};
+use hanzo::{TextMessageRole, TextMessages, TextModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {

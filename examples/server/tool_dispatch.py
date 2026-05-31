@@ -7,7 +7,7 @@ back to the model automatically.
 
 Usage:
 1. Start the mistral.rs server with tool dispatch URL:
-   mistralrs serve -p 1234 --tool-dispatch-url http://localhost:8787/tools --max-tool-rounds 5 -m Qwen/Qwen3-4B
+   hanzo serve -p 1234 --tool-dispatch-url http://localhost:8787/tools --max-tool-rounds 5 -m Qwen/Qwen3-4B
 
 2. Then run this script (it starts a local tool server and sends a chat request):
    python examples/server/tool_dispatch.py
@@ -22,6 +22,7 @@ TOOL_SERVER_PORT = 8787
 
 
 # --- Tool implementations ---
+
 
 def get_weather(city: str, units: str = "celsius") -> str:
     """Simulated weather lookup."""
@@ -42,6 +43,7 @@ TOOLS = {
 
 
 # --- Lightweight HTTP tool server ---
+
 
 class ToolHandler(BaseHTTPRequestHandler):
     """Handles POST requests from mistral.rs tool dispatch.
@@ -81,6 +83,7 @@ def start_tool_server():
 
 
 # --- Main ---
+
 
 def main():
     # Start the tool dispatch server in a background thread
@@ -141,7 +144,7 @@ def main():
         print()
         print("Make sure the server is running with tool dispatch URL:")
         print(
-            f"mistralrs serve -p 1234 --tool-dispatch-url http://localhost:{TOOL_SERVER_PORT}/tools "
+            f"hanzo serve -p 1234 --tool-dispatch-url http://localhost:{TOOL_SERVER_PORT}/tools "
             "--max-tool-rounds 5 -m Qwen/Qwen3-4B"
         )
 
