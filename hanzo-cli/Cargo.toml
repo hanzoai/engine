@@ -55,6 +55,7 @@ walkdir = { workspace = true }
 [features]
 default = ["code-execution"]
 cuda = ["hanzo-engine/cuda", "hanzo-server-core/cuda"]
+vulkan = ["hanzo-engine/vulkan", "hanzo-server-core/vulkan"]
 nccl = ["hanzo-engine/nccl", "hanzo-server-core/nccl"]
 cudnn = ["hanzo-engine/cudnn", "hanzo-server-core/cudnn"]
 flash-attn = ["cuda", "hanzo-engine/flash-attn", "hanzo-server-core/flash-attn"]
