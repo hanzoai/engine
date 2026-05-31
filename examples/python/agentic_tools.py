@@ -13,7 +13,7 @@ Usage:
 """
 
 import json
-from mistralrs import (
+from hanzo import (
     Runner,
     Which,
     Architecture,

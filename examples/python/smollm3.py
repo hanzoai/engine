@@ -3,7 +3,7 @@
 Example of using SmolLM3 model with mistral.rs
 """
 
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from hanzo import Runner, Which, ChatCompletionRequest, Architecture
 
 # Create a SmolLM3 model runner
 runner = Runner(

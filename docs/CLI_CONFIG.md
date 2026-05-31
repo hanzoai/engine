@@ -1,11 +1,11 @@
-# mistralrs-cli TOML Config
+# hanzo-cli TOML Config
 
-`mistralrs-cli` can run entirely from a single TOML configuration file. This config supports multiple models and mirrors the CLI options.
+`hanzo-cli` can run entirely from a single TOML configuration file. This config supports multiple models and mirrors the CLI options.
 
 ## Usage
 
 ```bash
-mistralrs from-config --file path/to/config.toml
+hanzo from-config --file path/to/config.toml
 ```
 
 ## Quick Example
@@ -209,7 +209,7 @@ kind = "auto"
 model_id = "Qwen/Qwen3-4B"
 ```
 
-Set `thinking = true` to force thinking on, `thinking = false` to force thinking off. If omitted, `mistralrs from-config` defers to the chat template default. Templates with an explicit thinking toggle use the repository fallback of `true` when no override is provided.
+Set `thinking = true` to force thinking on, `thinking = false` to force thinking off. If omitted, `hanzo from-config` defers to the chat template default. Templates with an explicit thinking toggle use the repository fallback of `true` when no override is provided.
 
 ### GGUF Model
 

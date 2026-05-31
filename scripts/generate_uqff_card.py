@@ -1,7 +1,7 @@
 # Generate a UQFF Hugging Face model card .md file.
-# NOTE: This script is deprecated. The `mistralrs quantize` command now
+# NOTE: This script is deprecated. The `hanzo quantize` command now
 # automatically generates a README.md model card when using directory output mode.
-# Use `mistralrs quantize -m <model> --isq <level> -o <dir>/` instead.
+# Use `hanzo quantize -m <model> --isq <level> -o <dir>/` instead.
 
 msg = "This script is used to generate a Hugging Face model card."
 print("-" * len(msg))
@@ -43,7 +43,7 @@ print(
     " NOTE: If multiple quantizations were used: enter the quantization names, and then in the next prompt, the topology file used."
 )
 
-output += f"\n## Examples\n"
+output += "\n## Examples\n"
 
 output += "|Quantization type(s)|Example|\n|--|--|\n"
 
@@ -77,7 +77,7 @@ try:
         else:
             cmd = "plain"
 
-        output += f"`./mistralrs-server -i {cmd} -m {display_model_id} -f {file}`|\n"
+        output += f"`./hanzo-server -i {cmd} -m {display_model_id} -f {file}`|\n"
         n += 1
         print()
 except KeyboardInterrupt:

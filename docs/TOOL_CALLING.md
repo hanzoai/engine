@@ -19,7 +19,7 @@ All supported models respond according to the [OpenAI tool calling API](https://
 
 > Some models (e.g. Mistral Small/Nemo) require a specific chat template:
 > ```bash
-> mistralrs serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
+> hanzo serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 > ```
 
 ## Two modes of tool calling
@@ -148,7 +148,7 @@ The tool dispatch URL lets the server POST unhandled tool calls to your HTTP end
 
 ```bash
 # CLI: applies to all requests
-mistralrs serve -p 1234 --tool-dispatch-url https://my-service.com/tools --max-tool-rounds 5 -m google/gemma-4-E4B-it
+hanzo serve -p 1234 --tool-dispatch-url https://my-service.com/tools --max-tool-rounds 5 -m google/gemma-4-E4B-it
 ```
 
 ```rust
@@ -196,7 +196,7 @@ runner = Runner(
 )
 ```
 
-**Rust SDK:** Pass `.with_tool_callback(name, callback)` to the builder. See [tool_callback/main.rs](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/advanced/tool_callback/main.rs).
+**Rust SDK:** Pass `.with_tool_callback(name, callback)` to the builder. See [tool_callback/main.rs](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/tool_callback/main.rs).
 
 ### Search callbacks
 
@@ -212,8 +212,8 @@ Web search uses DuckDuckGo by default. Override it with a custom search function
 > OpenAI API reference: https://platform.openai.com/docs/api-reference/chat/create
 
 ### Rust SDK
-- [Tool calling](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/advanced/tools/main.rs)
-- [Tool callbacks](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/advanced/tool_callback/main.rs)
+- [Tool calling](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/tools/main.rs)
+- [Tool callbacks](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/tool_callback/main.rs)
 
 ### Python SDK
 - [Tool calling notebook](https://github.com/hanzoai/engine/blob/master/examples/python/tool_calling.ipynb)
