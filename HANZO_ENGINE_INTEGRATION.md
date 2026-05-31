@@ -16,14 +16,14 @@ Enable Metal support via Cargo features:
 # hanzo-engine/Cargo.toml
 [features]
 default = ["metal"]
-metal = ["mistralrs-core/metal"]
+metal = ["hanzo-engine/metal"]
 ```
 
 The `metal` feature enables:
 - `candle-core/metal` - Metal compute backend for tensor operations
 - `candle-nn/metal` - Neural network layers with Metal acceleration
-- `mistralrs-quant/metal` - Quantization kernels optimized for Metal
-- `mistralrs-paged-attn/metal` - Paged attention with Metal support
+- `hanzo-quant/metal` - Quantization kernels optimized for Metal
+- `hanzo-paged-attn/metal` - Paged attention with Metal support
 
 ### Building for Metal
 
@@ -132,7 +132,7 @@ cargo run --features metal --release -- \
 The Metal backend provides memory introspection:
 
 ```rust
-// From mistralrs-core/src/utils/memory_usage.rs
+// From hanzo-engine/src/utils/memory_usage.rs
 Device::Metal(dev) => {
     let max = dev.recommended_max_working_set_size();
     let alloc = dev.current_allocated_size();

@@ -5,7 +5,7 @@ The Gemma 3 model is a family of multimodal (text+vision) models with 128k conte
 ## Quick Start
 
 ```bash
-mistralrs run -m google/gemma-3-12b-it --isq 4 --image photo.jpg -i "Describe this image"
+hanzo run -m google/gemma-3-12b-it --isq 4 --image photo.jpg -i "Describe this image"
 ```
 
 ## Input Formats
@@ -20,7 +20,7 @@ The Rust SDK takes images from the [image](https://docs.rs/image/latest/image/in
 1) Start the server
 
 ```bash
-mistralrs serve -m google/gemma-3-12b-it --isq 4 -p 1234
+hanzo serve -m google/gemma-3-12b-it --isq 4 -p 1234
 ```
 
 2) Send a request
@@ -62,7 +62,7 @@ print(completion.choices[0].message.content)
 You can find this example [here](https://github.com/hanzoai/engine/blob/master/examples/python/gemma3.py).
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
     which=Which.MultimodalPlain(
@@ -103,11 +103,11 @@ print(res.usage)
 
 ## Rust SDK
 
-You can find this example [here](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/models/multimodal_models/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/master/hanzo/examples/models/multimodal_models/main.rs).
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+use hanzo::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {

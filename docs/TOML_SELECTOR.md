@@ -28,7 +28,7 @@ quantized_filename = "mistral-7b-instruct-v0.1.Q2_K.gguf"
 ```
 
 ```bash
-mistralrs from-config -f toml-selectors/speculative-gguf.toml
+hanzo from-config -f toml-selectors/speculative-gguf.toml
 ```
 
 ## AnyMoE
@@ -51,7 +51,7 @@ mistralrs from-config -f toml-selectors/speculative-gguf.toml
 - Target modules
 
 ```bash
-mistralrs from-config -f toml-selectors/anymoe.toml
+hanzo from-config -f toml-selectors/anymoe.toml
 ```
 
 ### With fine-tuned experts

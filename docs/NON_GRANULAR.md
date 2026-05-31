@@ -9,13 +9,13 @@ For the first $k$ generation steps, the scalings are calculated normally for eac
 ### Command line
 This can be enabled by passing `--tgt-non-granular-index` followed by $k$:
 ```bash
-mistralrs serve -p 1234 --xlora lamm-mit/x-lora --xlora-order orderings/xlora-paper-ordering.json --tgt-non-granular-index 5
+hanzo serve -p 1234 --xlora lamm-mit/x-lora --xlora-order orderings/xlora-paper-ordering.json --tgt-non-granular-index 5
 ```
 
 ### Python
 Set the `tgt_non_granular_index` attribute to a non-`None` value in the `Which` selection:
 ```py
-from mistralrs import Runner, Which
+from hanzo import Runner, Which
 
 runner = Runner(
     which=Which.XLoraGGUF(

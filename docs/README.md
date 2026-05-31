@@ -12,10 +12,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/hanzoai/e
 irm https://raw.githubusercontent.com/hanzoai/engine/master/install.ps1 | iex
 
 # Run a model interactively
-mistralrs run --isq 4 -m Qwen/Qwen3-4B
+hanzo run --isq 4 -m Qwen/Qwen3-4B
 
 # Or serve it as an OpenAI-compatible API with a web UI
-mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
+hanzo serve --ui --isq 4 -m Qwen/Qwen3-4B
 ```
 
 > **New to Hanzo Engine?** Follow the [Getting Started tutorial](GETTING_STARTED.md) for a guided walkthrough.
@@ -37,9 +37,9 @@ mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
 
 ## Highlights
 
-- **Zero config**: `mistralrs run -m <model>` auto-detects architecture, chat template, and hardware
+- **Zero config**: `hanzo run -m <model>` auto-detects architecture, chat template, and hardware
 - **Quantization control**: ISQ, GGUF, GPTQ, AWQ, HQQ, AFQ, FP8, MXFP4, or just `--isq 4`
-- **Auto-tuning**: `mistralrs tune` benchmarks your hardware and recommends optimal settings
+- **Auto-tuning**: `hanzo tune` benchmarks your hardware and recommends optimal settings
 - **Agentic**: Server-side tool calling loop, web search, MCP client, HTTP tool dispatch
 - **Multi-GPU**: Automatic tensor parallelism via NCCL, or cross-machine via Ring backend
 - **Web UI**: `--ui` flag for instant browser-based chat
