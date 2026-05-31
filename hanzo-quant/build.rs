@@ -107,15 +107,15 @@ fn main() -> Result<(), String> {
         // https://github.com/EricLBuehler/mistral.rs/issues/588
         let out_file = if target.contains("msvc") {
             // Windows case
-            build_dir.join("mistralrsquant.lib")
+            build_dir.join("hanzoquant.lib")
         } else {
-            build_dir.join("libmistralrsquant.a")
+            build_dir.join("libhanzoquant.a")
         };
         builder
             .build_lib(out_file)
             .expect("Build mistral quant lib failed!");
         println!("cargo:rustc-link-search={}", build_dir.display());
-        println!("cargo:rustc-link-lib=mistralrsquant");
+        println!("cargo:rustc-link-lib=hanzoquant");
         println!("cargo:rustc-link-lib=dylib=cudart");
 
         if target.contains("msvc") {
@@ -143,22 +143,25 @@ fn main() -> Result<(), String> {
         use std::process::Command;
         use std::{env, str};
 
-        const METAL_SOURCES: [&str; 15] = [
+        const METAL_SOURCES: [&str; 18] = [
             "bitwise",
             "blockwise_fp8",
             "bnb_dequantize",
             "f8q8",
+            "flash_attn",
             "fused_glu",
             "hqq_dequantize",
             "hqq_bitpack",
             "mxfp4",
             "quantized",
+            "rmsnorm_residual",
             "scalar_fp8",
             "scan",
             "sdpa_with_sinks",
             "softmax_with_sinks",
             "sort",
             "copy",
+            "topk_logits",
         ];
         const HEADER_SOURCES: [&str; 5] = ["utils", "bf16", "scan_impl", "sort_impl", "copy_impl"];
         // Include-only headers (not compiled directly, just tracked for changes)
@@ -187,9 +190,9 @@ fn main() -> Result<(), String> {
             );
             // Write a dummy metallib file to satisfy the include_bytes! macro
             let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
-            std::fs::write(out_dir.join("mistralrs_quant.metallib"), []).unwrap();
-            std::fs::write(out_dir.join("mistralrs_quant_ios.metallib"), []).unwrap();
-            std::fs::write(out_dir.join("mistralrs_quant_tvos.metallib"), []).unwrap();
+            std::fs::write(out_dir.join("hanzo_quant.metallib"), []).unwrap();
+            std::fs::write(out_dir.join("hanzo_quant_ios.metallib"), []).unwrap();
+            std::fs::write(out_dir.join("hanzo_quant_tvos.metallib"), []).unwrap();
             return Ok(());
         }
 
@@ -272,9 +275,9 @@ fn main() -> Result<(), String> {
 
             // Compile air to metallib
             let lib_name = match platform {
-                Platform::MacOS => "mistralrs_quant.metallib",
-                Platform::Ios => "mistralrs_quant_ios.metallib",
-                Platform::TvOS => "mistralrs_quant_tvos.metallib",
+                Platform::MacOS => "hanzo_quant.metallib",
+                Platform::Ios => "hanzo_quant_ios.metallib",
+                Platform::TvOS => "hanzo_quant_tvos.metallib",
             };
             let metallib = out_dir.join(lib_name);
             let mut compile_metallib_cmd = Command::new("xcrun");
