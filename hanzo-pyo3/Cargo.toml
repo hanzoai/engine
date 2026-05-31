@@ -44,6 +44,7 @@ pyo3-build-config.workspace = true
 [features]
 default = []
 cuda = ["candle-core/cuda", "hanzo-engine/cuda"]
+vulkan = ["candle-core/vulkan", "hanzo-engine/vulkan"]
 cudnn = ["candle-core/cudnn", "hanzo-engine/cudnn"]
 metal = ["candle-core/metal", "hanzo-engine/metal"]
 flash-attn = ["cuda", "hanzo-engine/flash-attn"]

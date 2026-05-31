@@ -12,9 +12,6 @@ categories.workspace = true
 license.workspace = true
 homepage.workspace = true
 
-[lib]
-name = "mistralrs_quant"
-
 [dependencies]
 candle-core.workspace = true
 candle-nn.workspace = true
