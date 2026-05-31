@@ -27,16 +27,16 @@ You can query multimodal models directly from the command line using `-i` with `
 
 ```bash
 # Image
-mistralrs run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
+hanzo run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
 
 # Video (requires FFmpeg for non-GIF formats, see VIDEO.md)
-mistralrs run -m google/gemma-4-E4B-it --video clip.mp4 -i "What happens in this video?"
+hanzo run -m google/gemma-4-E4B-it --video clip.mp4 -i "What happens in this video?"
 
 # Audio
-mistralrs run -m google/gemma-4-E4B-it --audio recording.wav -i "Transcribe this audio"
+hanzo run -m google/gemma-4-E4B-it --audio recording.wav -i "Transcribe this audio"
 
 # Multiple inputs
-mistralrs run -m google/gemma-4-E4B-it --image a.jpg --image b.jpg -i "Compare these images"
+hanzo run -m google/gemma-4-E4B-it --image a.jpg --image b.jpg -i "Compare these images"
 ```
 
 See the full [CLI reference](CLI.md) for all options.

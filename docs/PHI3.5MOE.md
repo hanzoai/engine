@@ -13,13 +13,13 @@ The Phi 3.5 MoE model is a 16x3.8B parameter decoder-only text-to-text mixture o
 ## Quick Start
 
 ```bash
-mistralrs run -m microsoft/Phi-3.5-MoE-instruct --isq 4 -i "Tell me a story about the Rust type system."
+hanzo run -m microsoft/Phi-3.5-MoE-instruct --isq 4 -i "Tell me a story about the Rust type system."
 ```
 
 With MoQE:
 
 ```bash
-mistralrs run -m microsoft/Phi-3.5-MoE-instruct --isq 4 --isq-organization moqe -i "Tell me a story about the Rust type system."
+hanzo run -m microsoft/Phi-3.5-MoE-instruct --isq 4 --isq-organization moqe -i "Tell me a story about the Rust type system."
 ```
 
 ## HTTP API
@@ -27,7 +27,7 @@ mistralrs run -m microsoft/Phi-3.5-MoE-instruct --isq 4 --isq-organization moqe 
 1) Start the server
 
 ```bash
-mistralrs serve -m microsoft/Phi-3.5-MoE-instruct --isq 4 -p 1234
+hanzo serve -m microsoft/Phi-3.5-MoE-instruct --isq 4 -p 1234
 ```
 
 2) Send a request
@@ -53,7 +53,7 @@ print(completion.choices[0].message.content)
 ## Python SDK
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from hanzo import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.Plain(
@@ -77,11 +77,11 @@ print(res.usage)
 
 ## Rust SDK
 
-You can find this example [here](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/models/text_models/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/master/hanzo/examples/models/text_models/main.rs).
 
 ```rust
 use anyhow::Result;
-use mistralrs::{
+use hanzo::{
     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
 };
 

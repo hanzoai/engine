@@ -3,21 +3,12 @@
 # Stage 1: Build environment
 FROM rust:latest AS builder
 
-# Set working directory
-WORKDIR /build
-
-# Copy ml dependency (must be present at ../ml relative to engine)
-COPY ml/ /build/ml/
-
-# Copy net dependency (hanzo-zap crate from github.com/hanzoai/hanzonet)
-COPY net/hanzo-zap/ /build/net/hanzo-zap/
-
-# Copy engine source
-COPY engine/ /build/engine/
+# Set working directory and copy files
+WORKDIR /mistralrs
+COPY . .
 
 # Build the project in release mode, excluding the specified workspace
-WORKDIR /build/engine
-RUN cargo build --release --workspace --exclude mistralrs-pyo3 --no-default-features
+RUN cargo build --release --workspace --exclude mistralrs-pyo3
 
 
 # Stage 2: Minimal runtime environment
@@ -38,19 +29,10 @@ RUN <<HEREDOC
 HEREDOC
 
 # Copy the built binaries from the builder stage
-COPY --chmod=755 --from=builder /build/engine/target/release/hanzo-engine /usr/local/bin/
-COPY --chmod=755 --from=builder /build/engine/target/release/mistralrs-server /usr/local/bin/
-COPY --chmod=755 --from=builder /build/engine/target/release/mistralrs-bench /usr/local/bin/
+COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-bench /usr/local/bin/
+COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-server /usr/local/bin/
 # Copy chat templates for users running models which may not include them
-COPY --from=builder /build/engine/chat_templates /chat_templates
+COPY --from=builder /mistralrs/chat_templates /chat_templates
 
 ENV HUGGINGFACE_HUB_CACHE=/data \
-    PORT=36900 \
-    RUST_LOG=info
-
-EXPOSE 36900
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:36900/health || exit 1
-
-ENTRYPOINT ["hanzo-engine"]
+    PORT=80

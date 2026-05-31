@@ -7,7 +7,7 @@ For a catalog of available embedding models and general usage tips, see [EMBEDDI
 ## Quick Start
 
 ```bash
-mistralrs serve embedding -m google/embeddinggemma-300m -p 1234
+hanzo serve embedding -m google/embeddinggemma-300m -p 1234
 ```
 
 ## Prompt Instructions
@@ -33,7 +33,7 @@ EmbeddingGemma can generate optimized embeddings for various use cases or for sp
 Start the server:
 
 ```bash
-mistralrs serve embedding -m google/embeddinggemma-300m -p 1234
+hanzo serve embedding -m google/embeddinggemma-300m -p 1234
 ```
 
 Send a request:
@@ -69,7 +69,7 @@ Instantiate `Runner` with the `Which.Embedding` selector and request EmbeddingGe
 `send_embedding_request` returns batched embeddings as Python lists.
 
 ```python
-from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
+from hanzo import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
 
 runner = Runner(
     which=Which.Embedding(
@@ -91,12 +91,12 @@ Refer to [this example](https://github.com/hanzoai/engine/blob/master/examples/p
 
 ## Rust SDK
 
-Use the `EmbeddingModelBuilder` helper from the `mistralrs` crate to create the model and submit an
+Use the `EmbeddingModelBuilder` helper from the `hanzo` crate to create the model and submit an
 `EmbeddingRequest`:
 
 ```rust
 use anyhow::Result;
-use mistralrs::{EmbeddingModelBuilder, EmbeddingRequest};
+use hanzo::{EmbeddingModelBuilder, EmbeddingRequest};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -117,8 +117,8 @@ async fn main() -> Result<()> {
 }
 ```
 
-This example lives [here](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/getting_started/embedding/main.rs), and can be run with:
+This example lives [here](https://github.com/hanzoai/engine/blob/master/hanzo/examples/getting_started/embedding/main.rs), and can be run with:
 
 ```bash
-cargo run --package mistralrs --example embedding_gemma
+cargo run --package hanzo --example embedding_gemma
 ```
