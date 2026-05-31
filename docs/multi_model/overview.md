@@ -1,6 +1,6 @@
 # Multi-Model Support
 
-The `mistralrs` CLI supports loading and serving multiple models simultaneously, allowing you to switch between different models in the same server instance.
+The `hanzo` CLI supports loading and serving multiple models simultaneously, allowing you to switch between different models in the same server instance.
 
 - Each model runs in its own engine thread
 - Models can have different configurations (quantization, device layers, etc.)
@@ -14,13 +14,13 @@ The `mistralrs` CLI supports loading and serving multiple models simultaneously,
 ### Single-Model Mode (Default)
 ```bash
 # Traditional usage - loads one model
-mistralrs serve -p 1234 -m meta-llama/Llama-3.2-3B-Instruct
+hanzo serve -p 1234 -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
 ### Multi-Model Mode
 ```bash
 # Load multiple models from configuration file
-mistralrs from-config --file config.toml
+hanzo from-config --file config.toml
 ```
 
 ## Configuration File Format
@@ -144,7 +144,7 @@ Use the `multi-model` subcommand with these options:
 
 **New syntax:**
 ```bash
-mistralrs from-config --file <CONFIG>
+hanzo from-config --file <CONFIG>
 ```
 
 ## Examples
@@ -304,14 +304,14 @@ Response:
 
 ## Rust SDK Usage
 
-The `mistralrs` crate provides `MultiModelBuilder` for loading multiple models and `Model` methods for multi-model management.
+The `hanzo` crate provides `MultiModelBuilder` for loading multiple models and `Model` methods for multi-model management.
 
 ### Loading Multiple Models
 
 By default, model IDs are the pipeline names (usually the HuggingFace model path, e.g., `"google/gemma-4-E4B-it"`). You can provide custom aliases with `add_model_with_alias` for shorter IDs.
 
 ```rust
-use mistralrs::{IsqType, MultiModelBuilder, TextModelBuilder, MultimodalModelBuilder, TextMessages, TextMessageRole};
+use hanzo::{IsqType, MultiModelBuilder, TextModelBuilder, MultimodalModelBuilder, TextMessages, TextMessageRole};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -395,7 +395,7 @@ The Python `Runner` class supports multi-model operations directly.
 ### Basic Usage
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture, Architecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture, Architecture
 
 # Create a runner with a multimodal model (Gemma 4 E4B)
 runner = Runner(

@@ -9,7 +9,7 @@ UQFF quantizations are also available.
 ## Quick Start
 
 ```bash
-mistralrs run -m HuggingFaceM4/Idefics3-8B-Llama3 --isq 4 --image photo.jpg -i "Describe this image"
+hanzo run -m HuggingFaceM4/Idefics3-8B-Llama3 --isq 4 --image photo.jpg -i "Describe this image"
 ```
 
 ## Input Formats
@@ -28,7 +28,7 @@ Simply substitute the Idefics 3 model ID (`HuggingFaceM4/Idefics3-8B-Llama3`) wi
 1) Start the server
 
 ```bash
-mistralrs serve -m HuggingFaceM4/Idefics3-8B-Llama3 --isq 4 -p 1234
+hanzo serve -m HuggingFaceM4/Idefics3-8B-Llama3 --isq 4 -p 1234
 ```
 
 2) Send a request
@@ -70,7 +70,7 @@ print(completion.choices[0].message.content)
 You can find this example [here](https://github.com/hanzoai/engine/blob/master/examples/python/idefics3.py).
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
     which=Which.MultimodalPlain(
@@ -111,11 +111,11 @@ print(res.usage)
 
 ## Rust SDK
 
-You can find this example [here](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/models/multimodal_models/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/master/hanzo/examples/models/multimodal_models/main.rs).
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+use hanzo::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 const MODEL_ID: &str = "HuggingFaceM4/Idefics3-8B-Llama3";
 

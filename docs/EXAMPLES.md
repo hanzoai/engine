@@ -4,7 +4,7 @@ A comprehensive index of all examples in the repository, organized by SDK and ca
 
 ## Python SDK
 
-Examples using the `mistralrs` Python package directly.
+Examples using the `hanzo` Python package directly.
 
 ### Getting Started
 
@@ -127,7 +127,7 @@ Examples using the `mistralrs` Python package directly.
 
 ## HTTP Server
 
-Examples using the OpenAI-compatible HTTP API (start the server with `mistralrs serve`).
+Examples using the OpenAI-compatible HTTP API (start the server with `hanzo serve`).
 
 ### Getting Started
 
@@ -223,96 +223,96 @@ Examples using the OpenAI-compatible HTTP API (start the server with `mistralrs 
 
 ## Rust SDK
 
-Examples using the `mistralrs` Rust crate (in `mistralrs/examples/`).
+Examples using the `hanzo` Rust crate (in `hanzo/examples/`).
 
 ### Getting Started
 
 | Example | Description |
 |---|---|
-| [text_generation](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/getting_started/text_generation) | Basic text generation with ISQ quantization and chat |
-| [streaming](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/getting_started/streaming) | Streaming text generation with token-by-token output |
-| [gguf](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/getting_started/gguf) | Load and run a GGUF-quantized model from Hugging Face |
-| [gguf_locally](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/getting_started/gguf_locally) | Load and run a GGUF model from a local file path |
-| [multimodal](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/getting_started/multimodal) | Simple multimodal "hello world" with image input |
-| [embedding](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/getting_started/embedding) | Generate text embeddings using an embedding model |
+| [text_generation](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/getting_started/text_generation) | Basic text generation with ISQ quantization and chat |
+| [streaming](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/getting_started/streaming) | Streaming text generation with token-by-token output |
+| [gguf](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/getting_started/gguf) | Load and run a GGUF-quantized model from Hugging Face |
+| [gguf_locally](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/getting_started/gguf_locally) | Load and run a GGUF model from a local file path |
+| [multimodal](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/getting_started/multimodal) | Simple multimodal "hello world" with image input |
+| [embedding](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/getting_started/embedding) | Generate text embeddings using an embedding model |
 
 ### Models
 
 | Example | Description |
 |---|---|
-| [text_models](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/text_models) | Unified text model example with all supported model IDs |
-| [multimodal_models](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/multimodal_models) | Unified multimodal model example with all supported model IDs |
-| [multimodal](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/multimodal) | Multimodal streaming with combined image and audio inputs |
-| [multimodal_multiturn](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/multimodal_multiturn) | Multi-turn conversation with a multimodal model |
-| [audio](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/audio) | Audio input processing with a multimodal model |
-| [asr](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/asr) | Automatic speech recognition (ASR) with Voxtral |
-| [speech](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/speech) | Text-to-speech synthesis using a speech model |
-| [diffusion](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/diffusion) | Image generation using a diffusion model |
+| [text_models](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/models/text_models) | Unified text model example with all supported model IDs |
+| [multimodal_models](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/models/multimodal_models) | Unified multimodal model example with all supported model IDs |
+| [multimodal](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/models/multimodal) | Multimodal streaming with combined image and audio inputs |
+| [multimodal_multiturn](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/models/multimodal_multiturn) | Multi-turn conversation with a multimodal model |
+| [audio](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/models/audio) | Audio input processing with a multimodal model |
+| [asr](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/models/asr) | Automatic speech recognition (ASR) with Voxtral |
+| [speech](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/models/speech) | Text-to-speech synthesis using a speech model |
+| [diffusion](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/models/diffusion) | Image generation using a diffusion model |
 
 ### Quantization
 
 | Example | Description |
 |---|---|
-| [isq](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/quantization/isq) | In-situ quantization with explicit and automatic type selection |
-| [imatrix](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/quantization/imatrix) | ISQ with importance-matrix calibration data |
-| [topology](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/quantization/topology) | Per-layer quantization control using a Topology |
-| [uqff](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/quantization/uqff) | Load a pre-quantized UQFF text model |
-| [uqff_multimodal](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/quantization/uqff_multimodal) | Load a pre-quantized UQFF multimodal model |
-| [mixture_of_quant_experts](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/quantization/mixture_of_quant_experts) | MoQE: quantize only MoE expert layers at a different precision |
+| [isq](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/quantization/isq) | In-situ quantization with explicit and automatic type selection |
+| [imatrix](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/quantization/imatrix) | ISQ with importance-matrix calibration data |
+| [topology](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/quantization/topology) | Per-layer quantization control using a Topology |
+| [uqff](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/quantization/uqff) | Load a pre-quantized UQFF text model |
+| [uqff_multimodal](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/quantization/uqff_multimodal) | Load a pre-quantized UQFF multimodal model |
+| [mixture_of_quant_experts](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/quantization/mixture_of_quant_experts) | MoQE: quantize only MoE expert layers at a different precision |
 
 ### Tools and Agents
 
 | Example | Description |
 |---|---|
-| [agent](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/agent) | Agentic loop with `#[tool]` macro and `AgentBuilder` (non-streaming) |
-| [agent_streaming](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/agent_streaming) | Agentic loop with streaming output and real-time events |
-| [tools](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/tools) | Tool calling (function calling) with manual tool definitions |
-| [tool_callback](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/tool_callback) | Tool callbacks for automatic server-side tool execution |
-| [web_search](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/web_search) | Web-search-augmented generation |
-| [search_callback](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/search_callback) | Custom search callback to override default web search |
-| [mcp_client](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/mcp_client) | MCP client connecting to an external tool server |
+| [agent](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/agent) | Agentic loop with `#[tool]` macro and `AgentBuilder` (non-streaming) |
+| [agent_streaming](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/agent_streaming) | Agentic loop with streaming output and real-time events |
+| [tools](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/tools) | Tool calling (function calling) with manual tool definitions |
+| [tool_callback](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/tool_callback) | Tool callbacks for automatic server-side tool execution |
+| [web_search](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/web_search) | Web-search-augmented generation |
+| [search_callback](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/search_callback) | Custom search callback to override default web search |
+| [mcp_client](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/mcp_client) | MCP client connecting to an external tool server |
 
 ### Constrained Generation
 
 | Example | Description |
 |---|---|
-| [json_schema](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/json_schema) | JSON schema-constrained generation for typed output |
-| [grammar](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/grammar) | Constrained generation using a GBNF grammar |
-| [llguidance](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/llguidance) | Constrained generation using an llguidance grammar |
+| [json_schema](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/json_schema) | JSON schema-constrained generation for typed output |
+| [grammar](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/grammar) | Constrained generation using a GBNF grammar |
+| [llguidance](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/llguidance) | Constrained generation using an llguidance grammar |
 
 ### Adapters and AnyMoE
 
 | Example | Description |
 |---|---|
-| [lora](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/lora) | Load and run a model with a LoRA adapter |
-| [xlora](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/xlora) | X-LoRA adapter mixing |
-| [anymoe](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/anymoe) | AnyMoE: create a MoE model from fine-tuned adapters |
-| [anymoe_lora](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/anymoe_lora) | AnyMoE with LoRA adapters for expert specialization |
+| [lora](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/lora) | Load and run a model with a LoRA adapter |
+| [xlora](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/xlora) | X-LoRA adapter mixing |
+| [anymoe](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/anymoe) | AnyMoE: create a MoE model from fine-tuned adapters |
+| [anymoe_lora](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/anymoe_lora) | AnyMoE with LoRA adapters for expert specialization |
 
 ### Advanced
 
 | Example | Description |
 |---|---|
-| [paged_attn](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/paged_attn) | Enable PagedAttention for efficient KV-cache memory management |
-| [speculative](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/speculative) | Speculative decoding with a smaller draft model |
-| [auto_device_map](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/auto_device_map) | Automatic device mapping across multiple GPUs |
-| [multi_model](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/multi_model) | Load and dispatch requests across multiple models |
-| [batching](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/batching) | Concurrent request batching with parallel requests |
-| [embeddings](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/embeddings) | Compute and compare embeddings with cosine similarity |
-| [batching_embeddings](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/batching_embeddings) | Batch multiple embedding requests for parallel encoding |
-| [logits_processor](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/logits_processor) | Custom logits processor to modify token probabilities |
-| [perplexity](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/perplexity) | Compute perplexity of a text file |
-| [error_handling](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/error_handling) | Error handling patterns with error variant matching |
-| [file_logging](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/file_logging) | Log model output to a file using the tracing framework |
+| [paged_attn](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/paged_attn) | Enable PagedAttention for efficient KV-cache memory management |
+| [speculative](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/speculative) | Speculative decoding with a smaller draft model |
+| [auto_device_map](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/auto_device_map) | Automatic device mapping across multiple GPUs |
+| [multi_model](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/multi_model) | Load and dispatch requests across multiple models |
+| [batching](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/batching) | Concurrent request batching with parallel requests |
+| [embeddings](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/embeddings) | Compute and compare embeddings with cosine similarity |
+| [batching_embeddings](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/batching_embeddings) | Batch multiple embedding requests for parallel encoding |
+| [logits_processor](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/logits_processor) | Custom logits processor to modify token probabilities |
+| [perplexity](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/perplexity) | Compute perplexity of a text file |
+| [error_handling](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/error_handling) | Error handling patterns with error variant matching |
+| [file_logging](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/advanced/file_logging) | Log model output to a file using the tracing framework |
 
 ### Cookbook
 
 | Example | Description |
 |---|---|
-| [agent](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/cookbook/agent) | Code review agent using `#[tool]` macro and `AgentBuilder` |
-| [multiturn](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/cookbook/multiturn) | Interactive multi-turn chatbot with streaming output |
-| [rag](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/cookbook/rag) | Simple RAG with embedding retrieval and text generation |
-| [structured](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/cookbook/structured) | Structured data extraction with `generate_structured<T>()` |
+| [agent](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/cookbook/agent) | Code review agent using `#[tool]` macro and `AgentBuilder` |
+| [multiturn](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/cookbook/multiturn) | Interactive multi-turn chatbot with streaming output |
+| [rag](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/cookbook/rag) | Simple RAG with embedding retrieval and text generation |
+| [structured](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples/cookbook/structured) | Structured data extraction with `generate_structured<T>()` |
 
 ---
 

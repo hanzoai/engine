@@ -8,7 +8,7 @@ Matformer allows you to dynamically resize transformer models at runtime, tradin
 
 ```bash
 # Run Gemma 3n with the E2.49B configuration (2.49B params instead of 3.98B)
-mistralrs run -m google/gemma-3n-E4B-it \
+hanzo run -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 ```
@@ -16,7 +16,7 @@ mistralrs run -m google/gemma-3n-E4B-it \
 ### Python
 
 ```python
-from mistralrs import Runner, Which, MultimodalArchitecture
+from hanzo import Runner, Which, MultimodalArchitecture
 
 runner = Runner(
     which=Which.MultimodalPlain(
@@ -31,7 +31,7 @@ runner = Runner(
 ### Rust
 
 ```rust
-use mistralrs::MultimodalModelBuilder;
+use hanzo::MultimodalModelBuilder;
 use std::path::PathBuf;
 
 let model = MultimodalModelBuilder::new("google/gemma-3n-E4B-it")
@@ -132,7 +132,7 @@ runner = Runner(
 Matformer works seamlessly with automatic device mapping:
 
 ```rust
-use mistralrs::{MultimodalModelBuilder, DeviceMapSetting, AutoDeviceMapParams};
+use hanzo::{MultimodalModelBuilder, DeviceMapSetting, AutoDeviceMapParams};
 
 let model = MultimodalModelBuilder::new("google/gemma-3n-E4B-it")
     .with_matformer_config_path(PathBuf::from("matformer_configs/gemma3n.csv"))
@@ -216,7 +216,7 @@ Which.MultimodalPlain(
 
 Enable logging to see Matformer details:
 ```bash
-RUST_LOG=mistralrs_core=info mistralrs ...
+RUST_LOG=hanzo_engine=info hanzo ...
 ```
 
 This shows:

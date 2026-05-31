@@ -1,6 +1,6 @@
-# mistralrs Python SDK
+# hanzo Python SDK
 
-Documentation for the `mistralrs` Python package.
+Documentation for the `hanzo` Python package.
 
 > **Installation:** See [Python Installation](PYTHON_INSTALLATION.md) for installation instructions.
 
@@ -16,12 +16,12 @@ Documentation for the `mistralrs` Python package.
 - [MCP Client](#mcp-client)
 - [Configuration Reference](#configuration-reference)
 
-Full API reference: [here](https://ericlbuehler.github.io/Hanzo Engine/pyo3/mistralrs.html)
+Full API reference: [here](https://ericlbuehler.github.io/Hanzo Engine/pyo3/hanzo.html)
 
 ## Quick Start
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest
+from hanzo import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),
@@ -94,7 +94,7 @@ runner = Runner(
 Set `stream=True` on the request and iterate over chunks:
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest
+from hanzo import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),
@@ -120,7 +120,7 @@ Constrain the model to produce valid JSON matching a schema. Works with Pydantic
 ```python
 import json
 from pydantic import BaseModel, Field
-from mistralrs import Runner, Which, ChatCompletionRequest
+from hanzo import Runner, Which, ChatCompletionRequest
 
 class City(BaseModel):
     name: str = Field(..., description="City name")
@@ -153,7 +153,7 @@ Define tools as JSON schemas and let the model call them:
 
 ```python
 import json
-from mistralrs import Runner, ToolChoice, Which, ChatCompletionRequest
+from hanzo import Runner, ToolChoice, Which, ChatCompletionRequest
 
 tools = [
     json.dumps({
@@ -200,7 +200,7 @@ For server-side tool execution (agentic loop), use `tool_callbacks` or `max_tool
 Send images, video, or audio using the OpenAI content format:
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
     which=Which.MultimodalPlain(
@@ -236,7 +236,7 @@ Image URLs can be web URLs, local file paths, or base64-encoded data URIs. Video
 ## Embeddings
 
 ```python
-from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
+from hanzo import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
 
 runner = Runner(
     which=Which.Embedding(
@@ -278,13 +278,13 @@ For server-based multi-model deployment, see [Multi-Model Support](multi_model/o
 Connect to external tool servers via the Model Context Protocol:
 
 ```python
-import mistralrs
+import hanzo
 
-mcp_config = mistralrs.McpClientConfigPy(
+mcp_config = hanzo.McpClientConfigPy(
     servers=[
-        mistralrs.McpServerConfigPy(
+        hanzo.McpServerConfigPy(
             name="Filesystem Tools",
-            source=mistralrs.McpServerSourcePy.Process(
+            source=hanzo.McpServerSourcePy.Process(
                 command="npx",
                 args=["@modelcontextprotocol/server-filesystem", "."],
             ),
@@ -293,8 +293,8 @@ mcp_config = mistralrs.McpClientConfigPy(
     auto_register_tools=True,
 )
 
-runner = mistralrs.Runner(
-    which=mistralrs.Which.Plain(model_id="Qwen/Qwen3-4B"),
+runner = hanzo.Runner(
+    which=hanzo.Which.Plain(model_id="Qwen/Qwen3-4B"),
     mcp_client_config=mcp_config,
 )
 ```
@@ -407,7 +407,7 @@ class Which(Enum):
 
 > Note: `truncate_sequence=True` trims prompts that exceed the model's maximum context length.
 
-Adapter variants (`XLora`, `Lora`, `XLoraGGUF`, `LoraGGUF`, `GGML`, `XLoraGGML`, `LoraGGML`) are also available. See the [full API reference](https://ericlbuehler.github.io/Hanzo Engine/pyo3/mistralrs.html) for details.
+Adapter variants (`XLora`, `Lora`, `XLoraGGUF`, `LoraGGUF`, `GGML`, `XLoraGGML`, `LoraGGML`) are also available. See the [full API reference](https://ericlbuehler.github.io/Hanzo Engine/pyo3/hanzo.html) for details.
 
 </details>
 

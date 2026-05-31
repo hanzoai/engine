@@ -1,4 +1,4 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 

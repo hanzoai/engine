@@ -78,17 +78,17 @@ Model topologies may be applied to all model types.
 ## CLI example
 
 ```
-mistralrs run -m microsoft/Phi-3-mini-128k-instruct --topology topologies/isq.yml
+hanzo run -m microsoft/Phi-3-mini-128k-instruct --topology topologies/isq.yml
 ```
 
 ## HTTP server example
 
 ```
-mistralrs serve -p 1234 -m microsoft/Phi-3-mini-128k-instruct --topology topologies/isq.yml
+hanzo serve -p 1234 -m microsoft/Phi-3-mini-128k-instruct --topology topologies/isq.yml
 ```
 
 ## Rust example
-Example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/topology/main.rs).
+Example [here](https://github.com/hanzoai/engine/blob/main/hanzo/examples/topology/main.rs).
 
 ## Python example
 Example [here](https://github.com/hanzoai/engine/blob/main/examples/python/topology.py).
