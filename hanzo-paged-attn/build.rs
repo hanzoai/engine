@@ -111,6 +111,7 @@ fn main() -> Result<(), String> {
     }
     println!("cargo::rerun-if-changed=src/metal/kernels/utils.metal");
     println!("cargo::rerun-if-changed=src/metal/kernels/float8.metal");
+    println!("cargo::rerun-if-changed=src/metal/kernels/function_constants.metal");
     println!("cargo::rerun-if-changed=build.rs");
 
     // Check if precompilation should be skipped
