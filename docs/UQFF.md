@@ -92,7 +92,7 @@ Large models produce multiple shard files (e.g., `q4k-0.uqff`, `q4k-1.uqff`, `q4
 For example, if a model has shards `q4k-0.uqff`, `q4k-1.uqff`, and `q4k-2.uqff`:
 ```bash
 # Just specify the first shard -- the rest are found automatically
-mistralrs run -m EricB/MyModel-UQFF --from-uqff q4k-0.uqff
+hanzo run -m EricB/MyModel-UQFF --from-uqff q4k-0.uqff
 ```
 
 This also works when multiple quantizations exist in the same repo (e.g., `q4k-*` and `q8_0-*`). Only the shards matching the specified prefix are loaded.
@@ -100,14 +100,14 @@ This also works when multiple quantizations exist in the same repo (e.g., `q4k-*
 ### Running with the CLI
 
 ```bash
-mistralrs run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-f8e4m3-0.uqff
+hanzo run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-f8e4m3-0.uqff
 ```
 
 ### Using with the Rust SDK
 
 Check out the following examples:
-- Normal: [uqff/main.rs](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/uqff/main.rs)
-- Multimodal: [uqff_multimodal/main.rs](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/quantization/uqff_multimodal/main.rs)
+- Normal: [uqff/main.rs](https://github.com/hanzoai/engine/blob/master/hanzo/examples/uqff/main.rs)
+- Multimodal: [uqff_multimodal/main.rs](https://github.com/hanzoai/engine/blob/master/hanzo/examples/quantization/uqff_multimodal/main.rs)
 
 ### Using the Python SDK
 Modify the `Which` instantiation as follows:
@@ -124,7 +124,7 @@ When loading a UQFF model, the quantization is already baked in, so ISQ settings
 
 **CLI example:**
 ```bash
-mistralrs run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-q4k.uqff --topology device_map.yml
+hanzo run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-q4k.uqff --topology device_map.yml
 ```
 
 **Topology file for device mapping only (`device_map.yml`):**
@@ -137,7 +137,7 @@ mistralrs run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instru
 
 **Rust SDK example:**
 ```rust
-use mistralrs::{UqffTextModelBuilder, Topology, LayerTopology, Device};
+use hanzo::{UqffTextModelBuilder, Topology, LayerTopology, Device};
 
 let model = UqffTextModelBuilder::new(
     "EricB/Phi-3.5-mini-instruct-UQFF",
@@ -179,12 +179,12 @@ UQFF model, and should be kept together or uploaded.
 
 **Single quantization (file output):**
 ```bash
-mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/phi3.5-mini-instruct-q4k.uqff
+hanzo quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/phi3.5-mini-instruct-q4k.uqff
 ```
 
 **Single quantization (directory output):**
 ```bash
-mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/
+hanzo quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/
 ```
 
 **Multiple quantizations at once (directory output):**
@@ -193,10 +193,10 @@ Generate multiple UQFF files by specifying multiple `--isq` types. All quantizat
 
 ```bash
 # Comma-separated ISQ types
-mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k,q8_0 -o phi3.5-uqff/
+hanzo quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k,q8_0 -o phi3.5-uqff/
 
 # Equivalent: repeated --isq flags
-mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k --isq q8_0 -o phi3.5-uqff/
+hanzo quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k --isq q8_0 -o phi3.5-uqff/
 ```
 
 This produces the following in `phi3.5-uqff/`:
@@ -214,14 +214,14 @@ When using directory output mode, the `quantize` command automatically generates
 By default, the command prompts interactively for the base model and HF repo ID. To bypass the interactive prompts (e.g. in CI or scripts), use `--uqff-base-model` and/or `--uqff-repo-id`:
 
 ```bash
-mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/ \
+hanzo quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/ \
     --uqff-base-model microsoft/Phi-3.5-mini-instruct \
     --uqff-repo-id EricB/Phi-3.5-mini-instruct-UQFF
 ```
 
 To skip model card generation entirely, use `--no-readme`:
 ```bash
-mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/ --no-readme
+hanzo quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/ --no-readme
 ```
 
 ### Uploading to Hugging Face

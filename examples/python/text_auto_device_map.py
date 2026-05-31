@@ -1,4 +1,4 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, TextAutoMapParams
+from hanzo import Runner, Which, ChatCompletionRequest, TextAutoMapParams
 
 runner = Runner(
     which=Which.Plain(

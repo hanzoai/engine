@@ -11,7 +11,7 @@ Phi 4 Multimodal also supports [audio inputs](#audio-input).
 ## Quick Start
 
 ```bash
-mistralrs run -m microsoft/Phi-4-multimodal-instruct --isq 4 --image photo.jpg -i "Describe this image"
+hanzo run -m microsoft/Phi-4-multimodal-instruct --isq 4 --image photo.jpg -i "Describe this image"
 ```
 
 ## Input Formats
@@ -33,7 +33,7 @@ Hanzo Engine automatically decodes the supplied audio (WAV/MP3/FLAC/OGG -- anyth
 1) Start the server
 
 ```bash
-mistralrs serve -m microsoft/Phi-4-multimodal-instruct --isq 4 -p 1234
+hanzo serve -m microsoft/Phi-4-multimodal-instruct --isq 4 -p 1234
 ```
 
 2) Send a request
@@ -97,7 +97,7 @@ print(completion.choices[0].message.content)
 You can find this example [here](https://github.com/hanzoai/engine/blob/master/examples/python/phi3v.py).
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
     which=Which.MultimodalPlain(
@@ -138,11 +138,11 @@ print(res.usage)
 
 ## Rust SDK
 
-You can find this example [here](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/models/multimodal_models/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/master/hanzo/examples/models/multimodal_models/main.rs).
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+use hanzo::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -183,7 +183,7 @@ async fn main() -> Result<()> {
 
 ```rust
 use anyhow::Result;
-use mistralrs::{AudioInput, IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+use hanzo::{AudioInput, IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
