@@ -255,6 +255,8 @@ all-features = true
 [features]
 # NVIDIA CUDA GPU support
 cuda = ["hanzo-engine/cuda"]
+# Vulkan GPU support (AMD APU via hanzo-ml vulkan backend)
+vulkan = ["hanzo-engine/vulkan"]
 # cuDNN acceleration (requires cuda)
 cudnn = ["hanzo-engine/cudnn"]
 # Apple Metal GPU support (macOS/iOS)
