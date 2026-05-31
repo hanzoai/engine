@@ -52,7 +52,7 @@ model_id = "meta-llama/Llama-3.2-1B-Instruct"
 Then run with:
 
 ```bash
-mistralrs run --from-toml speculative.toml
+hanzo run --from-toml speculative.toml
 ```
 
 The draft model can use any supported format (Plain, GGUF, etc.) and can have different quantization than the target model.
@@ -89,7 +89,7 @@ isq = "Q8_0"
 ## Using the Python SDK
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from hanzo import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.Plain(
@@ -129,11 +129,11 @@ print(res.usage)
 
 ## Using the Rust SDK
 
-You can find this example at `mistralrs/examples/advanced/speculative/main.rs`.
+You can find this example at `hanzo/examples/advanced/speculative/main.rs`.
 
 ```rust
 use anyhow::Result;
-use mistralrs::{
+use hanzo::{
     IsqType, RequestBuilder, SpeculativeConfig, TextMessageRole, TextMessages,
     TextModelBuilder, TextSpeculativeBuilder,
 };

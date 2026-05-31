@@ -11,7 +11,7 @@ UQFF quantizations are also available.
 ## Quick Start
 
 ```bash
-mistralrs run -m meta-llama/Llama-3.2-11B-Vision-Instruct --isq 4 --image photo.jpg -i "Describe this image"
+hanzo run -m meta-llama/Llama-3.2-11B-Vision-Instruct --isq 4 --image photo.jpg -i "Describe this image"
 ```
 
 ## Input Formats
@@ -29,7 +29,7 @@ We provide UQFF files ([EricB/Llama-3.2-11B-Vision-Instruct-UQFF](https://huggin
 
 For example:
 ```bash
-mistralrs run -m meta-llama/Llama-3.2-11B-Vision-Instruct --from-uqff EricB/Llama-3.2-11B-Vision-Instruct-UQFF/llama-3.2-11b-vision-q4k.uqff
+hanzo run -m meta-llama/Llama-3.2-11B-Vision-Instruct --from-uqff EricB/Llama-3.2-11B-Vision-Instruct-UQFF/llama-3.2-11b-vision-q4k.uqff
 ```
 
 ## HTTP API
@@ -37,7 +37,7 @@ mistralrs run -m meta-llama/Llama-3.2-11B-Vision-Instruct --from-uqff EricB/Llam
 1) Start the server
 
 ```bash
-mistralrs serve -m meta-llama/Llama-3.2-11B-Vision-Instruct --isq 4 -p 1234
+hanzo serve -m meta-llama/Llama-3.2-11B-Vision-Instruct --isq 4 -p 1234
 ```
 
 2) Send a request
@@ -79,7 +79,7 @@ print(completion.choices[0].message.content)
 You can find this example [here](https://github.com/hanzoai/engine/blob/master/examples/python/llama_vision.py).
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 MODEL_ID = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k"
 
@@ -122,11 +122,11 @@ print(res.usage)
 
 ## Rust SDK
 
-You can find this example [here](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/models/multimodal_models/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/master/hanzo/examples/models/multimodal_models/main.rs).
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+use hanzo::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 const MODEL_ID: &str = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k";
 

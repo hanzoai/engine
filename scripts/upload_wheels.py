@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Upload script for mistralrs Python wheels to PyPI.
+Upload script for hanzo Python wheels to PyPI.
 
 Supports both PyPI and TestPyPI, with automatic package name detection.
 
@@ -28,20 +28,20 @@ TESTPYPI_URL = "https://test.pypi.org/legacy/"
 
 # Valid package name prefixes (wheel names use underscores)
 VALID_PACKAGE_PREFIXES = {
-    "mistralrs",
-    "mistralrs_cuda",
-    "mistralrs_metal",
-    "mistralrs_accelerate",
-    "mistralrs_mkl",
+    "hanzo",
+    "hanzo_cuda",
+    "hanzo_metal",
+    "hanzo_accelerate",
+    "hanzo_mkl",
 }
 
 # Mapping from wheel name prefix to PyPI package name
 WHEEL_TO_PYPI = {
-    "mistralrs": "mistralrs",
-    "mistralrs_cuda": "mistralrs-cuda",
-    "mistralrs_metal": "mistralrs-metal",
-    "mistralrs_accelerate": "mistralrs-accelerate",
-    "mistralrs_mkl": "mistralrs-mkl",
+    "hanzo": "hanzo",
+    "hanzo_cuda": "hanzo-cuda",
+    "hanzo_metal": "hanzo-metal",
+    "hanzo_accelerate": "hanzo-accelerate",
+    "hanzo_mkl": "hanzo-mkl",
 }
 
 
@@ -189,7 +189,7 @@ def upload_wheels(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Upload mistralrs wheels to PyPI",
+        description="Upload hanzo wheels to PyPI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -206,7 +206,7 @@ Examples:
   python scripts/upload_wheels.py ./wheels --token pypi-xxx
 
   # Upload specific packages only
-  python scripts/upload_wheels.py ./wheels -p mistralrs-cuda
+  python scripts/upload_wheels.py ./wheels -p hanzo-cuda
         """,
     )
 
