@@ -209,6 +209,8 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
         Device::Cpu => "CPU",
         Device::Cuda(_) => "CUDA",
         Device::Metal(_) => "Metal",
+        #[cfg(feature = "vulkan")]
+        Device::Vulkan(_) => "Vulkan",
     };
     let results: Vec<Vec<CellStruct>> = results
         .into_iter()
