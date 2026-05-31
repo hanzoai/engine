@@ -23,7 +23,7 @@ The install script detects your hardware (CUDA, Metal, MKL) and builds with the 
 ## Step 2: Run Your First Model
 
 ```bash
-mistralrs run -m Qwen/Qwen3-4B
+hanzo run -m Qwen/Qwen3-4B
 ```
 
 That's it. mistral.rs auto-detects the model architecture, downloads weights from Hugging Face, and drops you into an interactive chat. Type a message and press Enter:
@@ -41,19 +41,19 @@ Use `/exit` to quit, `/clear` to reset the conversation, or `/help` for all comm
 Most models load in BF16 by default. If you're short on VRAM, quantize at load time with `--isq`:
 
 ```bash
-mistralrs run --isq 4 -m Qwen/Qwen3-4B
+hanzo run --isq 4 -m Qwen/Qwen3-4B
 ```
 
 The `--isq 4` flag quantizes weights to 4-bit as they load, so the full model never needs to fit in memory. mistral.rs picks the best quantization format for your hardware automatically (AFQ on Metal, Q4K on CUDA/CPU).
 
-> Not sure what settings to use? Run `mistralrs tune -m <model>` and it will analyze your hardware and recommend the best configuration.
+> Not sure what settings to use? Run `hanzo tune -m <model>` and it will analyze your hardware and recommend the best configuration.
 
 ## Step 4: Start an HTTP Server
 
 Serve any model as an OpenAI-compatible API:
 
 ```bash
-mistralrs serve --isq 4 -m Qwen/Qwen3-4B
+hanzo serve --isq 4 -m Qwen/Qwen3-4B
 ```
 
 The server starts on `http://localhost:1234`. Test it with curl:
@@ -83,20 +83,20 @@ print(response.choices[0].message.content)
 Add `--ui` to get a built-in web chat interface:
 
 ```bash
-mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
+hanzo serve --ui --isq 4 -m Qwen/Qwen3-4B
 # Visit http://localhost:1234/ui
 ```
 
 ## Step 5: Use the Python SDK
 
 ```bash
-pip install mistralrs        # CPU
-pip install mistralrs-cuda   # NVIDIA GPU
-pip install mistralrs-metal  # Apple Silicon
+pip install hanzo        # CPU
+pip install hanzo-cuda   # NVIDIA GPU
+pip install hanzo-metal  # Apple Silicon
 ```
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest
+from hanzo import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),
@@ -121,13 +121,13 @@ mistral.rs handles images, video, and audio out of the box:
 
 ```bash
 # Describe an image
-mistralrs run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
+hanzo run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
 
 # Analyze a video
-mistralrs run -m google/gemma-4-E4B-it --video clip.mp4 -i "What happens here?"
+hanzo run -m google/gemma-4-E4B-it --video clip.mp4 -i "What happens here?"
 
 # Process audio
-mistralrs run -m google/gemma-4-E4B-it --audio recording.wav -i "Transcribe this"
+hanzo run -m google/gemma-4-E4B-it --audio recording.wav -i "Transcribe this"
 ```
 
 In interactive mode, just paste file paths directly into your prompt. mistral.rs detects image, video, and audio files automatically.
@@ -137,14 +137,14 @@ In interactive mode, just paste file paths directly into your prompt. mistral.rs
 Let mistral.rs recommend the best configuration for your hardware:
 
 ```bash
-mistralrs tune -m Qwen/Qwen3-4B
+hanzo tune -m Qwen/Qwen3-4B
 ```
 
 This shows a table of quantization options with estimated VRAM usage, context length headroom, and quality trade-offs. Add `--emit-config config.toml` to save the recommended settings:
 
 ```bash
-mistralrs tune -m Qwen/Qwen3-4B --emit-config config.toml
-mistralrs from-config -f config.toml
+hanzo tune -m Qwen/Qwen3-4B --emit-config config.toml
+hanzo from-config -f config.toml
 ```
 
 ## Next Steps

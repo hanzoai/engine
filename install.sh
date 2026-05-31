@@ -199,8 +199,6 @@ build_features() {
     features=""
 
     if [ "$os" = "macos" ]; then
-        check_xcode_cli_tools
-        check_metal_toolchain
         features="metal"
         info "macOS detected - enabling metal"
     else
@@ -274,16 +272,16 @@ install_ffmpeg() {
     fi
 }
 
-# Install mistralrs-cli
-install_mistralrs() {
+# Install hanzo-cli
+install_hanzo() {
     features="$1"
 
     if [ -n "$features" ]; then
-        info "Installing mistralrs-cli with features: $features"
-        cargo install mistralrs-cli@0.8.1 --features "$features"
+        info "Installing hanzo-cli with features: $features"
+        cargo install hanzo-cli@0.8.1 --features "$features"
     else
-        info "Installing mistralrs-cli with default features"
-        cargo install mistralrs-cli@0.8.1
+        info "Installing hanzo-cli with default features"
+        cargo install hanzo-cli@0.8.1
     fi
 }
 
@@ -330,6 +328,12 @@ main() {
                 ;;
         esac
         install_rust
+    fi
+
+    # Run prereq installers outside any $() so xcodebuild stdout (asset paths with slashes) can't leak into the captured feature string.
+    if [ "$os" = "macos" ]; then
+        check_xcode_cli_tools
+        check_metal_toolchain
     fi
 
     echo ""
@@ -385,7 +389,7 @@ main() {
     esac
 
     echo ""
-    install_mistralrs "$features"
+    install_hanzo "$features"
 
     # Ensure cargo bin is in PATH for this session
     if [ -f "$HOME/.cargo/env" ]; then
@@ -398,9 +402,9 @@ main() {
     printf "${BOLD}Quick Start${NC}\n"
     echo "==========="
     echo ""
-    echo "  mistralrs run -m Qwen/Qwen3-4B"
+    echo "  hanzo run -m Qwen/Qwen3-4B"
     echo ""
-    echo "  mistralrs serve --ui -m google/gemma-4-E4B-it"
+    echo "  hanzo serve --agent -m google/gemma-4-E4B-it"
     echo ""
     echo "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
     echo ""
@@ -409,7 +413,7 @@ main() {
         printf "      https://github.com/EricLBuehler/mistral.rs/blob/master/docs/VIDEO.md\n"
         echo ""
     fi
-    printf "${YELLOW}Note:${NC} To use 'mistralrs' now, run: ${BOLD}. \"\$HOME/.cargo/env\"${NC}\n"
+    printf "${YELLOW}Note:${NC} To use 'hanzo' now, run: ${BOLD}. \"\$HOME/.cargo/env\"${NC}\n"
     printf "      Or restart your terminal.\n"
 }
 

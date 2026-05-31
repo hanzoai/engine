@@ -5,13 +5,13 @@ The Gemma 2 models are a family of text-to-text decoder-only LLMs.
 ## Quick Start
 
 ```bash
-mistralrs run --isq 4 -m google/gemma-2-9b-it
+hanzo run --isq 4 -m google/gemma-2-9b-it
 ```
 
 ## HTTP API
 
 ```bash
-mistralrs serve --isq 4 -p 1234 -m google/gemma-2-9b-it
+hanzo serve --isq 4 -p 1234 -m google/gemma-2-9b-it
 ```
 
 ```py
@@ -32,7 +32,7 @@ print(completion.choices[0].message.content)
 ## Python SDK
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from hanzo import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.Plain(
@@ -61,7 +61,7 @@ print(res.usage)
 
 ```rust
 use anyhow::Result;
-use mistralrs::{
+use hanzo::{
     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
 };
 

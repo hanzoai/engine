@@ -4,7 +4,7 @@ mistral.rs can execute tools on behalf of the model in a server-side loop, elimi
 
 Give a local model web search in one command:
 ```bash
-mistralrs run --enable-search -m Qwen/Qwen3-4B
+hanzo run --enable-search -m Qwen/Qwen3-4B
 ```
 
 Or use the standard OpenAI Python SDK. No custom client needed:
@@ -105,7 +105,7 @@ The simplest agentic feature: flip one flag and the model can search the web. mi
 
 **CLI:**
 ```bash
-mistralrs run --enable-search --isq 4 -m google/gemma-4-E4B-it
+hanzo run --enable-search --isq 4 -m google/gemma-4-E4B-it
 ```
 
 **HTTP API:**
@@ -126,7 +126,7 @@ print(response.choices[0].message.content)
 
 **Python SDK:**
 ```python
-from mistralrs import Runner, Which, Architecture, ChatCompletionRequest, WebSearchOptions
+from hanzo import Runner, Which, Architecture, ChatCompletionRequest, WebSearchOptions
 
 runner = Runner(
     which=Which.Plain(model_id="google/gemma-4-E4B-it"),
@@ -146,7 +146,7 @@ print(res.choices[0].message.content)
 
 **Rust SDK:**
 ```rust
-use mistralrs::{
+use hanzo::{
     IsqBits, ModelBuilder, RequestBuilder, SearchEmbeddingModel,
     TextMessageRole, TextMessages, WebSearchOptions,
 };
@@ -186,7 +186,7 @@ runner = Runner(
 ```rust
 let model = ModelBuilder::new("google/gemma-4-E4B-it")
     .with_auto_isq(IsqBits::Four)
-    .with_search_callback(Arc::new(|params: &mistralrs::SearchFunctionParameters| {
+    .with_search_callback(Arc::new(|params: &hanzo::SearchFunctionParameters| {
         // Return Vec<SearchResult> with title, description, url, content
         my_custom_search(&params.query)
     }))
@@ -206,7 +206,7 @@ Register named functions at model-build time. When the model calls a tool by tha
 
 ```python
 import json
-from mistralrs import Runner, Which, Architecture, ChatCompletionRequest, ToolChoice
+from hanzo import Runner, Which, Architecture, ChatCompletionRequest, ToolChoice
 
 def tool_callback(name: str, args: dict) -> str:
     """Dispatch tool calls to local implementations."""
@@ -266,7 +266,7 @@ print(response.choices[0].message.content)
 ### Tool callbacks: Rust SDK
 
 ```rust
-use mistralrs::{
+use hanzo::{
     CalledFunction, IsqBits, ModelBuilder, RequestBuilder,
     TextMessageRole, TextMessages, Tool, ToolChoice, ToolType,
 };
@@ -287,7 +287,7 @@ let model = ModelBuilder::new("Qwen/Qwen3-4B")
 
 let tool = Tool {
     tp: ToolType::Function,
-    function: mistralrs::Function {
+    function: hanzo::Function {
         description: Some("Get the current weather for a city.".to_string()),
         name: "get_weather".to_string(),
         parameters: Some(std::collections::HashMap::from([(
@@ -322,7 +322,7 @@ Annotate a function with `#[tool]` to generate tool definitions and callbacks au
 Both sync and async functions are supported. Sync tools run in `spawn_blocking`; async tools run natively.
 
 ```rust
-use mistralrs::tool;
+use hanzo::tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -366,7 +366,7 @@ async fn web_search(
 ### Building an agent
 
 ```rust
-use mistralrs::{AgentBuilder, IsqBits, ModelBuilder, PagedAttentionMetaBuilder};
+use hanzo::{AgentBuilder, IsqBits, ModelBuilder, PagedAttentionMetaBuilder};
 
 let model = ModelBuilder::new("Qwen/Qwen3-4B")
     .with_auto_isq(IsqBits::Four)
@@ -414,7 +414,7 @@ for (i, step) in response.steps.iter().enumerate() {
 ### Streaming execution
 
 ```rust
-use mistralrs::AgentEvent;
+use hanzo::AgentEvent;
 use std::io::Write;
 
 let mut stream = agent.run_stream("What's the weather in Boston?").await?;
@@ -476,7 +476,7 @@ Create `mcp-config.json`:
 
 Start the server:
 ```bash
-mistralrs serve -p 1234 --mcp-config mcp-config.json --max-tool-rounds 5 -m Qwen/Qwen3-4B
+hanzo serve -p 1234 --mcp-config mcp-config.json --max-tool-rounds 5 -m Qwen/Qwen3-4B
 ```
 
 MCP tools are now available to the model automatically.
@@ -484,7 +484,7 @@ MCP tools are now available to the model automatically.
 ### MCP: Rust SDK
 
 ```rust
-use mistralrs::{
+use hanzo::{
     IsqBits, McpClientConfig, McpServerConfig, McpServerSource,
     ModelBuilder, TextMessageRole, TextMessages,
 };
@@ -522,13 +522,13 @@ println!("{}", response.choices[0].message.content.as_ref().unwrap());
 
 ```python
 import asyncio
-import mistralrs
+import hanzo
 
-mcp_config = mistralrs.McpClientConfigPy(
+mcp_config = hanzo.McpClientConfigPy(
     servers=[
-        mistralrs.McpServerConfigPy(
+        hanzo.McpServerConfigPy(
             name="Filesystem Tools",
-            source=mistralrs.McpServerSourcePy.Process(
+            source=hanzo.McpServerSourcePy.Process(
                 command="npx",
                 args=["@modelcontextprotocol/server-filesystem", "."],
                 work_dir=None,
@@ -538,15 +538,15 @@ mcp_config = mistralrs.McpClientConfigPy(
     ]
 )
 
-runner = mistralrs.Runner(
-    which=mistralrs.Which.Plain(
+runner = hanzo.Runner(
+    which=hanzo.Which.Plain(
         model_id="Qwen/Qwen3-4B",
-        arch=mistralrs.Architecture.Qwen3,
+        arch=hanzo.Architecture.Qwen3,
     ),
     mcp_client_config=mcp_config,
 )
 
-request = mistralrs.ChatCompletionRequest(
+request = hanzo.ChatCompletionRequest(
     model="default",
     messages=[{"role": "user", "content": "List the files in the current directory."}],
     max_tokens=1000,
@@ -684,7 +684,7 @@ HTTPServer(("localhost", 8787), ToolHandler).serve_forever()
 
 **CLI:**
 ```bash
-mistralrs serve -p 1234 \
+hanzo serve -p 1234 \
     --tool-dispatch-url http://localhost:8787/tools \
     --max-tool-rounds 5 \
     -m Qwen/Qwen3-4B
@@ -785,7 +785,7 @@ let model = ModelBuilder::new("google/gemma-4-E4B-it")
 
 **CLI:**
 ```bash
-mistralrs serve -p 1234 \
+hanzo serve -p 1234 \
     --enable-search \
     --mcp-config mcp-config.json \
     --tool-dispatch-url http://localhost:8787/tools \
@@ -809,12 +809,12 @@ mistralrs serve -p 1234 \
 ### Examples
 
 **Rust SDK:**
-- [Agent (non-streaming)](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/agent/main.rs)
-- [Agent (streaming)](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/agent_streaming/main.rs)
-- [Tool callbacks](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/tool_callback/main.rs)
-- [Web search](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/web_search/main.rs)
-- [Custom search callback](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/search_callback/main.rs)
-- [MCP client](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/mcp_client/main.rs)
+- [Agent (non-streaming)](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/agent/main.rs)
+- [Agent (streaming)](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/agent_streaming/main.rs)
+- [Tool callbacks](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/tool_callback/main.rs)
+- [Web search](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/web_search/main.rs)
+- [Custom search callback](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/search_callback/main.rs)
+- [MCP client](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/mcp_client/main.rs)
 
 **Python SDK:**
 - [Agentic tools (callbacks)](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/agentic_tools.py)
