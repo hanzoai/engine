@@ -54,6 +54,15 @@ impl MemoryUsage {
                     free: usize::try_from(sys.available_memory())?,
                 })
             }
+            #[cfg(feature = "rocm")]
+            Device::Rocm(_) => {
+                // gfx1151 APU: unified memory shared with system RAM
+                let sys = System::new_all();
+                Ok(DeviceMemory::Discrete {
+                    total: usize::try_from(sys.total_memory())?,
+                    free: usize::try_from(sys.available_memory())?,
+                })
+            }
             #[cfg(feature = "cuda")]
             Device::Cuda(dev) => {
                 if super::normal::is_integrated_gpu(device) {
