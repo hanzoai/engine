@@ -27,6 +27,7 @@ cli-table.workspace = true
 [features]
 cuda = ["hanzo-engine/cuda"]
 vulkan = ["hanzo-engine/vulkan"]
+rocm = ["hanzo-engine/rocm"]
 cudnn = ["hanzo-engine/cudnn"]
 metal = ["hanzo-engine/metal"]
 flash-attn = ["cuda", "hanzo-engine/flash-attn"]
