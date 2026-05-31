@@ -34,6 +34,7 @@ async-trait.workspace = true
 
 [features]
 cuda = ["hanzo-engine/cuda", "hanzo-server-core/cuda"]
+vulkan = ["hanzo-engine/vulkan", "hanzo-server-core/vulkan"]
 cudnn = ["hanzo-engine/cudnn", "hanzo-server-core/cudnn"]
 metal = ["hanzo-engine/metal", "hanzo-server-core/metal"]
 flash-attn = [
