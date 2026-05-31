@@ -8,19 +8,19 @@ The DeepSeek V2 is a mixture of expert (MoE) model featuring ["Multi-head Latent
 ## Quick Start
 
 ```bash
-mistralrs run --isq 4 -m deepseek-ai/DeepSeek-V2-Lite
+hanzo run --isq 4 -m deepseek-ai/DeepSeek-V2-Lite
 ```
 
 > Note: This model supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
 
 ```bash
-mistralrs run --isq 4 -m deepseek-ai/DeepSeek-V2-Lite --isq-organization moqe
+hanzo run --isq 4 -m deepseek-ai/DeepSeek-V2-Lite --isq-organization moqe
 ```
 
 ## HTTP API
 
 ```bash
-mistralrs serve --isq 4 -p 1234 -m deepseek-ai/DeepSeek-V2-Lite
+hanzo serve --isq 4 -p 1234 -m deepseek-ai/DeepSeek-V2-Lite
 ```
 
 ```py
@@ -41,7 +41,7 @@ print(completion.choices[0].message.content)
 ## Python SDK
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from hanzo import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.Plain(
@@ -67,11 +67,11 @@ print(res.usage)
 ```
 
 ## Rust SDK
-You can find this example [here](https://github.com/hanzoai/engine/blob/main/mistralrs/examples/models/text_models/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/main/hanzo/examples/models/text_models/main.rs).
 
 ```rust
 use anyhow::Result;
-use mistralrs::{
+use hanzo::{
     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
 };
 

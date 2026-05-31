@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build script for mistralrs Python wheels.
+Build script for hanzo Python wheels.
 
 Auto-detects platform, architecture, and available accelerators.
 Builds appropriate wheels based on the detected environment.
@@ -8,7 +8,7 @@ Builds appropriate wheels based on the detected environment.
 Usage:
     python scripts/build_wheels.py --list                    # Show buildable packages
     python scripts/build_wheels.py --all                     # Build all supported
-    python scripts/build_wheels.py -p mistralrs mistralrs-cuda
+    python scripts/build_wheels.py -p hanzo hanzo-cuda
 """
 
 from __future__ import annotations
@@ -31,16 +31,16 @@ from typing import Optional
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 REPO_ROOT = SCRIPT_DIR.parent
-PYPROJECT_PATH = REPO_ROOT / "mistralrs-pyo3" / "pyproject.toml"
-CARGO_MANIFEST = REPO_ROOT / "mistralrs-pyo3" / "Cargo.toml"
+PYPROJECT_PATH = REPO_ROOT / "hanzo-pyo3" / "pyproject.toml"
+CARGO_MANIFEST = REPO_ROOT / "hanzo-pyo3" / "Cargo.toml"
 DOCKERFILE_PATH = REPO_ROOT / "Dockerfile.manylinux"
 
 PACKAGE_NAMES = [
-    "mistralrs",
-    "mistralrs-cuda",
-    "mistralrs-metal",
-    "mistralrs-accelerate",
-    "mistralrs-mkl",
+    "hanzo",
+    "hanzo-cuda",
+    "hanzo-metal",
+    "hanzo-accelerate",
+    "hanzo-mkl",
 ]
 
 
@@ -142,36 +142,36 @@ def _detect_cuda() -> bool:
 def get_package_configs() -> dict[str, PackageConfig]:
     """Define the build configuration for each package."""
     return {
-        "mistralrs": PackageConfig(
-            name="mistralrs",
+        "hanzo": PackageConfig(
+            name="hanzo",
             features=[],  # Features determined by platform
             supported_os=[OS.LINUX, OS.DARWIN, OS.WINDOWS],
             supported_arch=[Arch.X86_64, Arch.AARCH64],
             requires_accelerator=None,
         ),
-        "mistralrs-cuda": PackageConfig(
-            name="mistralrs-cuda",
+        "hanzo-cuda": PackageConfig(
+            name="hanzo-cuda",
             features=["cuda"],
             supported_os=[OS.LINUX, OS.WINDOWS],
             supported_arch=[Arch.X86_64, Arch.AARCH64],
             requires_accelerator="cuda",
         ),
-        "mistralrs-metal": PackageConfig(
-            name="mistralrs-metal",
+        "hanzo-metal": PackageConfig(
+            name="hanzo-metal",
             features=["metal"],
             supported_os=[OS.DARWIN],
             supported_arch=[Arch.AARCH64],
             requires_accelerator="metal",
         ),
-        "mistralrs-accelerate": PackageConfig(
-            name="mistralrs-accelerate",
+        "hanzo-accelerate": PackageConfig(
+            name="hanzo-accelerate",
             features=["accelerate"],
             supported_os=[OS.DARWIN],
             supported_arch=[Arch.AARCH64],
             requires_accelerator=None,  # Accelerate is always available on macOS
         ),
-        "mistralrs-mkl": PackageConfig(
-            name="mistralrs-mkl",
+        "hanzo-mkl": PackageConfig(
+            name="hanzo-mkl",
             features=["mkl"],
             supported_os=[OS.LINUX, OS.WINDOWS],
             supported_arch=[Arch.X86_64],
@@ -181,7 +181,7 @@ def get_package_configs() -> dict[str, PackageConfig]:
 
 
 def get_features_for_base_package(plat: Platform) -> list[str]:
-    """Get features for the 'mistralrs' base package based on platform."""
+    """Get features for the 'hanzo' base package based on platform."""
     if plat.os == OS.DARWIN and plat.arch == Arch.AARCH64:
         return ["metal"]  # macOS aarch64: Metal
     elif plat.arch == Arch.X86_64:
@@ -236,8 +236,8 @@ def modify_pyproject_name(name: str) -> None:
 
 
 def restore_pyproject_name() -> None:
-    """Restore project.name to default 'mistralrs'."""
-    modify_pyproject_name("mistralrs")
+    """Restore project.name to default 'hanzo'."""
+    modify_pyproject_name("hanzo")
 
 
 # ============================================================================
@@ -252,7 +252,7 @@ def build_wheel(
 ) -> Path:
     """Build a wheel for the given package configuration."""
     # Determine features
-    if package_config.name == "mistralrs":
+    if package_config.name == "hanzo":
         features = get_features_for_base_package(plat)
     else:
         features = package_config.features
@@ -307,7 +307,7 @@ def _build_with_maturin(features: list[str], output_dir: Path, plat: Platform) -
     # macOS-specific settings for Metal builds
     if plat.os == OS.DARWIN and "metal" in features:
         env["MACOSX_DEPLOYMENT_TARGET"] = "15.0"
-        print(f"  Setting MACOSX_DEPLOYMENT_TARGET=15.0 for Metal build")
+        print("  Setting MACOSX_DEPLOYMENT_TARGET=15.0 for Metal build")
 
     print(f"  Running: {' '.join(cmd)}")
     subprocess.run(cmd, check=True, env=env, cwd=REPO_ROOT)
@@ -322,7 +322,7 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
             "docker",
             "build",
             "-t",
-            "mistralrs-wheelmaker:latest",
+            "hanzo-wheelmaker:latest",
             "-f",
             "Dockerfile.manylinux",
             ".",
@@ -339,7 +339,7 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
         "-o",
         f"/io/wheels/{output_dir.name}",
         "-m",
-        "mistralrs-pyo3/Cargo.toml",
+        "hanzo-pyo3/Cargo.toml",
         "--interpreter",
         "python3.10",
     ]
@@ -358,9 +358,9 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
         "RUSTFLAGS=-C target-cpu=generic",
     ]
 
-    docker_cmd.extend(["mistralrs-wheelmaker:latest"] + maturin_args)
+    docker_cmd.extend(["hanzo-wheelmaker:latest"] + maturin_args)
 
-    print(f"  Running Docker build with RUSTFLAGS=-C target-cpu=generic")
+    print("  Running Docker build with RUSTFLAGS=-C target-cpu=generic")
     print(f"  Maturin args: {' '.join(maturin_args)}")
     subprocess.run(docker_cmd, check=True)
 
@@ -368,7 +368,7 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
     import getpass
 
     user = getpass.getuser()
-    print(f"  Fixing ownership of target/ directory...")
+    print("  Fixing ownership of target/ directory...")
     subprocess.run(
         ["sudo", "chown", "-R", f"{user}:{user}", "target/"], cwd=REPO_ROOT, check=False
     )
@@ -389,7 +389,7 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Build mistralrs Python wheels",
+        description="Build hanzo Python wheels",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -397,7 +397,7 @@ Examples:
   python scripts/build_wheels.py --all
 
   # Build specific packages
-  python scripts/build_wheels.py --packages mistralrs mistralrs-cuda
+  python scripts/build_wheels.py --packages hanzo hanzo-cuda
 
   # Specify output directory
   python scripts/build_wheels.py --all -o ./dist
@@ -454,7 +454,7 @@ Examples:
             cfg = configs[name]
             features = (
                 cfg.features
-                if cfg.name != "mistralrs"
+                if cfg.name != "hanzo"
                 else get_features_for_base_package(plat)
             )
             print(f"  - {name} (features: {features or 'none'})")

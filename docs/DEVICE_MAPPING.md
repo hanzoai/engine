@@ -22,7 +22,7 @@ These parameters do not translate to hard limits during runtime, they only contr
 
 ### Unified memory systems
 
-On integrated GPU systems (e.g. Apple Silicon, NVIDIA Grace Blackwell, Jetson) where GPU and CPU share the same physical RAM, the auto device mapper caps the GPU memory budget to a fraction of system RAM (75% by default for CUDA iGPUs, configurable via `MISTRALRS_IGPU_MEMORY_FRACTION`; Metal uses the `iogpu.wired_limit_mb` sysctl). CPU offload capacity is limited to the remaining fraction to prevent over-subscription of shared memory. Use `mistralrs doctor` to check whether your device is detected as unified memory.
+On integrated GPU systems (e.g. Apple Silicon, NVIDIA Grace Blackwell, Jetson) where GPU and CPU share the same physical RAM, the auto device mapper caps the GPU memory budget to a fraction of system RAM (75% by default for CUDA iGPUs, configurable via `MISTRALRS_IGPU_MEMORY_FRACTION`; Metal uses the `iogpu.wired_limit_mb` sysctl). CPU offload capacity is limited to the remaining fraction to prevent over-subscription of shared memory. Use `hanzo doctor` to check whether your device is detected as unified memory.
 
 > [!NOTE]
 > The maximum sequence length is also used to ensure that a KV cache will fit for with and without PagedAttention.
@@ -32,16 +32,16 @@ On integrated GPU systems (e.g. Apple Silicon, NVIDIA Grace Blackwell, Jetson) w
     - Text models [text_auto_device_map.py](https://github.com/hanzoai/engine/blob/master/examples/python/text_auto_device_map.py)
     - Multimodal models [multimodal_auto_device_map.py](https://github.com/hanzoai/engine/blob/master/examples/python/multimodal_auto_device_map.py)
 - Rust
-    - Text models [text_auto_device_map/main.rs](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs)
-    - Multimodal models [auto_device_map/main.rs](https://github.com/hanzoai/engine/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs)
+    - Text models [text_auto_device_map/main.rs](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/auto_device_map/main.rs)
+    - Multimodal models [auto_device_map/main.rs](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/auto_device_map/main.rs)
 - Server
     - Text models:
     ```bash
-    mistralrs run --isq 4 -m meta-llama/Llama-3.3-70B-Instruct --max-seq-len 4096 --max-batch-size 2
+    hanzo run --isq 4 -m meta-llama/Llama-3.3-70B-Instruct --max-seq-len 4096 --max-batch-size 2
     ```
     - Multimodal models:
     ```bash
-    mistralrs run --isq 4 -m meta-llama/Llama-3.2-11B-Vision-Instruct --max-seq-len 4096 --max-batch-size 2 --max-num-images 2 --max-image-length 1024
+    hanzo run --isq 4 -m meta-llama/Llama-3.2-11B-Vision-Instruct --max-seq-len 4096 --max-batch-size 2 --max-num-images 2 --max-image-length 1024
     ```
 
 ---
@@ -63,14 +63,14 @@ The format for the ordinals and number of layers is `ORD:NUM;...` where ORD is t
 
 ## Example of specifying ordinals
 ```
-mistralrs run -n "0:16;1:16" -m gradientai/Llama-3-8B-Instruct-262k
+hanzo run -n "0:16;1:16" -m gradientai/Llama-3-8B-Instruct-262k
 ```
 
 > Note: In the Python SDK, the "0:16;1:16" string is passed as the list `["0:16", "1:16"]`.
 
 ## Example of specifying the number of GPU layers
 ```
-mistralrs run -n 16 -m gradientai/Llama-3-8B-Instruct-262k
+hanzo run -n 16 -m gradientai/Llama-3-8B-Instruct-262k
 ```
 ## See Also
 
