@@ -45,6 +45,15 @@ impl MemoryUsage {
                     free: usize::try_from(sys.available_memory())?,
                 })
             }
+            #[cfg(feature = "vulkan")]
+            Device::Vulkan(_) => {
+                // 8060S APU: unified memory shared with system RAM
+                let sys = System::new_all();
+                Ok(DeviceMemory::Discrete {
+                    total: usize::try_from(sys.total_memory())?,
+                    free: usize::try_from(sys.available_memory())?,
+                })
+            }
             #[cfg(feature = "cuda")]
             Device::Cuda(dev) => {
                 if super::normal::is_integrated_gpu(device) {
