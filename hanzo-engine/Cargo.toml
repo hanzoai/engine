@@ -127,6 +127,7 @@ cuda = [
     "hanzo-paged-attn/cuda",
 ]
 cudnn = ["candle-core/cudnn"]
+vulkan = ["candle-core/vulkan", "candle-nn/vulkan", "hanzo-quant/vulkan"]
 metal = [
     "candle-core/metal",
     "candle-nn/metal",
