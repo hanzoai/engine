@@ -20,18 +20,18 @@ This file provides guidance to AI assistants working with the Hanzo Engine codeb
    - `InferenceEngine` trait: `fn infer(&self, model_id: &[u8;32], prompt: &[u8]) -> Result<Vec<u8>, EngineError>`
    - `EmbeddingEngine` trait: `fn embed(&self, dim: usize, text: &[u8]) -> Result<Vec<f32>, EngineError>`
    - Process-wide registry (`OnceLock`-backed): `register_inference_engine`, `register_embedding_engine`, `infer`, `embed`
-   - `MistralEngine` — real implementation backed by `mistralrs-core` (handles HF repos and local paths; derives `model_id` as SHA-256 of source)
+   - `MistralEngine` — real implementation backed by `hanzo-engine` (handles HF repos and local paths; derives `model_id` as SHA-256 of source)
    - Consumers: hanzo-vm precompiles `0x0201` (AI inference) and `0x0202` (AI embedding) — they call `hanzo_engine::infer` / `embed` synchronously through the registry
    - **NOT** the routing/pricing crate. The Hamiltonian-Hidden-Markov MarketMaker lives in `hanzo-hmm` (`~/work/hanzo/net/hanzo-hmm`) and prices heterogeneous compute; the EVM precompiles depend on `hanzo-engine`, not on `hanzo-hmm`.
 
 2. **Binary — `hanzo-engine`** (thin CLI wrapper):
-   - Shells out to `mistralrs-server` for the full HTTP server experience
+   - Shells out to `hanzo-server` for the full HTTP server experience
    - Use the library for programmatic / in-process integration
 
 ### Architecture
 
 Hanzo Engine is a Rust workspace containing:
-- All upstream mistral.rs workspace members (mistralrs-core, mistralrs-server, mistralrs, mistralrs-mcp, …)
+- All upstream mistral.rs workspace members (hanzo-engine, hanzo-server, hanzo, hanzo-llm-mcp, …)
 - **hanzo-engine/** — lib + bin: canonical Hanzo inference + embedding API
 - Local candle fork at `../ml/hanzo-{ml,nn,flash-attn,metal-kernels}` overrides upstream's `candle-*` crates via `[workspace.dependencies]` path overrides
 
@@ -67,14 +67,14 @@ cargo build --release --features "cuda flash-attn cudnn"
 # With Metal support (macOS)
 cargo build --release --features metal
 
-# Install mistralrs-server binary
-cargo install --path mistralrs-server --features <features>
+# Install hanzo-server binary
+cargo install --path hanzo-server --features <features>
 ```
 
 ### Testing & Quality
 ```bash
 # Run core tests
-cargo test -p mistralrs-core -p hanzo-quant -p mistralrs-vision
+cargo test -p hanzo-engine -p hanzo-quant -p hanzo-vision
 
 # Format code (uses rustfmt, ruff, clang-format)
 make fmt
@@ -116,36 +116,36 @@ You should also look for a model.safetensors.index.json file for the model at ha
   - Status: Compiles successfully with Metal backend (macOS)
 
 #### Core Components
-- `mistralrs-core/` - Core inference engine, model implementations, pipelines
-- `mistralrs-server/` - CLI binary entry point
-- `mistralrs-server-core/` - HTTP server routing, OpenAI API implementation
-- `mistralrs-pyo3/` - Python bindings (PyO3)
-- `mistralrs/` - High-level Rust API
-- `mistralrs-vision/` - Vision model support
+- `hanzo-engine/` - Core inference engine, model implementations, pipelines
+- `hanzo-server/` - CLI binary entry point
+- `hanzo-server-core/` - HTTP server routing, OpenAI API implementation
+- `hanzo-pyo3/` - Python bindings (PyO3)
+- `hanzo/` - High-level Rust API
+- `hanzo-vision/` - Vision model support
 - `hanzo-quant/` - Quantization implementations (ISQ, GGUF, GPTQ, etc.)
-- `mistralrs-paged-attn/` - PagedAttention implementation
-- `mistralrs-audio/` - Audio processing
-- `mistralrs-mcp/` - Model Context Protocol client
-- `mistralrs-bench/` - Benchmarking tools
+- `hanzo-paged-attn/` - PagedAttention implementation
+- `hanzo-audio/` - Audio processing
+- `hanzo-llm-mcp/` - Model Context Protocol client
+- `hanzo-bench/` - Benchmarking tools
 
 ### Key Design Patterns
 
-1. **Pipeline Architecture**: All models implement the `Pipeline` trait in `mistralrs-core/src/pipeline/mod.rs`. Different model types (Plain, GGUF, GGML, Vision) have their own pipeline implementations.
+1. **Pipeline Architecture**: All models implement the `Pipeline` trait in `hanzo-engine/src/pipeline/mod.rs`. Different model types (Plain, GGUF, GGML, Vision) have their own pipeline implementations.
 
-2. **Model Loading**: Models are loaded through `Loader` traits that handle different formats and quantizations. See `mistralrs-core/src/loader.rs`.
+2. **Model Loading**: Models are loaded through `Loader` traits that handle different formats and quantizations. See `hanzo-engine/src/loader.rs`.
 
-3. **Request Handling**: The server uses message passing with `MistralRs` struct managing a background thread pool. Requests flow through `mistralrs-core/src/engine/mod.rs`.
+3. **Request Handling**: The server uses message passing with `Hanzo` struct managing a background thread pool. Requests flow through `hanzo-engine/src/engine/mod.rs`.
 
-4. **Device Management**: Automatic and manual device mapping for multi-GPU setups handled in `mistralrs-core/src/device_map.rs`.
+4. **Device Management**: Automatic and manual device mapping for multi-GPU setups handled in `hanzo-engine/src/device_map.rs`.
 
 ### Adding New Features
 
 When adding new model architectures:
-1. Implement the model in `mistralrs-core/src/models/`
-2. Add pipeline support in `mistralrs-core/src/pipeline/`
-3. Update model detection in `mistralrs-core/src/pipeline/normal.rs`
-4. Add architecture enum variant in `mistralrs-core/src/lib.rs`
-5. Update CLI args in `mistralrs-server/src/main.rs`
+1. Implement the model in `hanzo-engine/src/models/`
+2. Add pipeline support in `hanzo-engine/src/pipeline/`
+3. Update model detection in `hanzo-engine/src/pipeline/normal.rs`
+4. Add architecture enum variant in `hanzo-engine/src/lib.rs`
+5. Update CLI args in `hanzo-server/src/main.rs`
 
 When adding new quantization methods:
 1. Implement in `hanzo-quant/src/`
@@ -154,11 +154,11 @@ When adding new quantization methods:
 
 ### Important Files to Know
 
-- `mistralrs-core/src/engine/mod.rs` - Main engine orchestration
-- `mistralrs-core/src/pipeline/mod.rs` - Pipeline trait and common logic
-- `mistralrs-server-core/src/routes.rs` - HTTP API endpoints
-- `mistralrs-pyo3/src/lib.rs` - Python API entry point
-- `mistralrs/examples/` - Usage examples for Rust API
+- `hanzo-engine/src/engine/mod.rs` - Main engine orchestration
+- `hanzo-engine/src/pipeline/mod.rs` - Pipeline trait and common logic
+- `hanzo-server-core/src/routes.rs` - HTTP API endpoints
+- `hanzo-pyo3/src/lib.rs` - Python API entry point
+- `hanzo/examples/` - Usage examples for Rust API
 
 ### Testing Approach
 
@@ -192,7 +192,7 @@ See `docs/` directory for detailed documentation on specific models and features
 
 ### Embeddings Implementation
 - **Status**: Temporarily disabled (backed up to `embeddings.rs.bak`)
-- **Issue**: The `embedding` module in `mistralrs_core` is private and not accessible through public API
+- **Issue**: The `embedding` module in `hanzo_engine` is private and not accessible through public API
 - **TODO**: Research proper way to implement embeddings using public API
 - **Previous attempt**: Used internal `BertEmbeddingModel` and `BertPipeline` which are not publicly exposed
 

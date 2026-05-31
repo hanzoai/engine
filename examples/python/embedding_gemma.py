@@ -1,4 +1,4 @@
-from mistralrs import EmbeddingRequest, Runner, Which, EmbeddingArchitecture
+from hanzo import EmbeddingRequest, Runner, Which, EmbeddingArchitecture
 
 
 def main() -> None:
