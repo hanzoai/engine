@@ -44,7 +44,7 @@ def search_callback(query: str) -> list[dict[str, str]]:
         # more results...
     ]
 
-from mistralrs import Runner, Which, Architecture
+from hanzo import Runner, Which, Architecture
 runner = Runner(
     which=Which.Plain(model_id="YourModel/ID", arch=Architecture.Mistral),
     enable_search=True,
@@ -58,15 +58,15 @@ runner = Runner(
 Here are some examples using various models. Note that this works for both streaming and completion requests, so interactive mode is featured here!
 
 ```bash
-mistralrs run --enable-search --isq 4 -m Qwen/Qwen3-4B
+hanzo run --enable-search --isq 4 -m Qwen/Qwen3-4B
 ```
 
 ```bash
-mistralrs serve --enable-search -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
+hanzo serve --enable-search -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 ```
 
 ```bash
-mistralrs run --enable-search --isq 4 -m NousResearch/Hermes-3-Llama-3.1-8B
+hanzo run --enable-search --isq 4 -m NousResearch/Hermes-3-Llama-3.1-8B
 ```
 
 ```py
@@ -101,7 +101,7 @@ if completion.choices[0].message.tool_calls is not None:
 
 ## Python SDK
 ```py
-from mistralrs import (
+from hanzo import (
     Runner,
     Which,
     ChatCompletionRequest,
@@ -155,7 +155,7 @@ print(res.usage)
 ## Rust SDK
 ```rust
 use anyhow::Result;
-use mistralrs::{
+use hanzo::{
     SearchEmbeddingModel, IsqType, RequestBuilder, TextMessageRole, TextMessages, TextModelBuilder,
     WebSearchOptions,
 };

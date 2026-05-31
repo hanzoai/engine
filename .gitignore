@@ -5,13 +5,13 @@
 .DS_Store
 .idea
 mistral.rs/
-mistralrs-web-chat/cache
+
+mistralrs-cli/webui/node_modules/
 
 # mdbook output
 docs/book/
 
-AGENTS.md
-CLAUDE.md
-GEMINI.md
-GROK.md
-QWEN.md
+# Starlight / Astro
+docs/node_modules/
+docs/dist/
+docs/.astro/

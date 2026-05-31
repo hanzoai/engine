@@ -6,7 +6,7 @@ GPT-OSS is a Mixture of Experts model with MXFP4 quantized experts
 and custom attention with per-head sinks.
 """
 
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from hanzo import Runner, Which, ChatCompletionRequest, Architecture
 
 # Create a GPT-OSS model runner
 runner = Runner(

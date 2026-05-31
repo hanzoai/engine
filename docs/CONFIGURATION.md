@@ -26,7 +26,7 @@ This document covers environment variables and server configuration for Hanzo En
 
 ## Server Defaults
 
-When running the HTTP server with `mistralrs serve`, these defaults apply:
+When running the HTTP server with `hanzo serve`, these defaults apply:
 
 | Setting | Default Value |
 |---------|---------------|
