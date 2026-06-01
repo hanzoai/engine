@@ -541,10 +541,10 @@ impl Pipeline for GGMLPipeline {
             seqlen_offsets,
             seqlen_offsets_full,
             context_lens,
-            position_ids: _,    // NOTE(EricLBuehler): ignore, it is for phi3
-            paged_attn_meta: _, // NOTE(EricLBuehler): ignore it for ggml
-            flash_meta,         // NOTE(EricLBuehler): ignore it for ggml dequant into f32
-            flash_meta_full,    // NOTE(EricLBuehler): ignore it for ggml dequant into f32
+            position_ids: _,    // NOTE(hanzoai): ignore, it is for phi3
+            paged_attn_meta: _, // NOTE(hanzoai): ignore it for ggml
+            flash_meta,         // NOTE(hanzoai): ignore it for ggml dequant into f32
+            flash_meta_full,    // NOTE(hanzoai): ignore it for ggml dequant into f32
         } = *inputs.downcast().expect("Downcast failed.");
         let logits = match self.model {
             Model::Llama(ref model) => {

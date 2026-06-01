@@ -23,21 +23,21 @@ One wheel per accelerator. All wheels expose the same `hanzo` module.
 
 | Page | Covers |
 | --- | --- |
-| [Runner](/mistral.rs/reference/python/runner/) | The main entry point. Load a model and send requests. |
-| [Which](/mistral.rs/reference/python/which/) | Variants that select which kind of model to load. |
-| [Requests](/mistral.rs/reference/python/requests/) | Request dataclasses passed to Runner methods. |
-| [Responses](/mistral.rs/reference/python/responses/) | Response and streaming types returned by the engine. |
-| [Enums](/mistral.rs/reference/python/enums/) | Architecture, dtype, and option enums. |
-| [Search](/mistral.rs/reference/python/search/) | Types for web-search tool configuration. |
-| [AnyMoE](/mistral.rs/reference/python/anymoe/) | AnyMoE expert and config types. |
-| [Code execution](/mistral.rs/reference/python/code-execution/) | Configuration for the built-in Python code executor. |
-| [Agent approvals](/mistral.rs/reference/python/agent-approvals/) | Request and decision types for agent action approval callbacks. |
-| [Files](/mistral.rs/reference/python/files/) | First-class output files surfaced from agentic runs. |
-| [MCP](/mistral.rs/reference/python/mcp/) | MCP client configuration types. |
-| [Auto-mapping](/mistral.rs/reference/python/automap/) | Hints for automatic device mapping. |
+| [Runner](/hanzo/reference/python/runner/) | The main entry point. Load a model and send requests. |
+| [Which](/hanzo/reference/python/which/) | Variants that select which kind of model to load. |
+| [Requests](/hanzo/reference/python/requests/) | Request dataclasses passed to Runner methods. |
+| [Responses](/hanzo/reference/python/responses/) | Response and streaming types returned by the engine. |
+| [Enums](/hanzo/reference/python/enums/) | Architecture, dtype, and option enums. |
+| [Search](/hanzo/reference/python/search/) | Types for web-search tool configuration. |
+| [AnyMoE](/hanzo/reference/python/anymoe/) | AnyMoE expert and config types. |
+| [Code execution](/hanzo/reference/python/code-execution/) | Configuration for the built-in Python code executor. |
+| [Agent approvals](/hanzo/reference/python/agent-approvals/) | Request and decision types for agent action approval callbacks. |
+| [Files](/hanzo/reference/python/files/) | First-class output files surfaced from agentic runs. |
+| [MCP](/hanzo/reference/python/mcp/) | MCP client configuration types. |
+| [Auto-mapping](/hanzo/reference/python/automap/) | Hints for automatic device mapping. |
 
-See [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) for a walkthrough and the [Python guides](/mistral.rs/guides/python/) for task-oriented recipes.
+See [Tutorial 3](/hanzo/tutorials/03-python-sdk/) for a walkthrough and the [Python guides](/hanzo/guides/python/) for task-oriented recipes.
 
 ---
 
-<small>Generated from [`hanzo-pyo3/hanzo.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo-pyo3/hanzo.pyi).</small>
+<small>Generated from [`hanzo-pyo3/hanzo.pyi`](https://github.com/hanzoai/engine/blob/master/hanzo-pyo3/hanzo.pyi).</small>

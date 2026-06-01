@@ -1,4 +1,4 @@
-//! ## mistral.rs server router builder.
+//! ## hanzo server router builder.
 
 use anyhow::Result;
 use axum::{
@@ -39,14 +39,14 @@ pub struct AgenticDefaults {
     pub approval_broker: ApprovalBroker,
 }
 
-// NOTE(EricLBuehler): Accept up to 50mb input
+// NOTE(hanzoai): Accept up to 50mb input
 const N_INPUT_SIZE: usize = 50;
 const MB_TO_B: usize = 1024 * 1024; // 1024 kb in a mb
 
 /// This is the axum default request body limit for the router. Accept up to 50mb input.
 pub const DEFAULT_MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 
-/// A builder for creating a mistral.rs server router with configurable options.
+/// A builder for creating a hanzo server router with configurable options.
 ///
 /// ### Examples
 ///
@@ -72,7 +72,7 @@ pub const DEFAULT_MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 ///     .await?;
 /// ```
 pub struct HanzoServerRouterBuilder {
-    /// The shared mistral.rs instance
+    /// The shared hanzo instance
     hanzo: Option<SharedHanzoState>,
     /// Whether to include Swagger/OpenAPI documentation routes.
     /// Only available when the `swagger-ui` feature is enabled.
@@ -122,7 +122,7 @@ impl HanzoServerRouterBuilder {
         Default::default()
     }
 
-    /// Sets the shared mistral.rs instance
+    /// Sets the shared hanzo instance
     pub fn with_hanzo(mut self, hanzo: SharedHanzoState) -> Self {
         self.hanzo = Some(hanzo);
         self
@@ -144,7 +144,7 @@ impl HanzoServerRouterBuilder {
     /// Sets a base path prefix for Swagger UI routes.
     ///
     /// When set, Swagger UI routes will be prefixed with the given path. This is
-    /// useful when including the mistral.rs server instance in another axum project.
+    /// useful when including the hanzo server instance in another axum project.
     ///
     /// Only available when the `swagger-ui` feature is enabled.
     #[cfg(feature = "swagger-ui")]

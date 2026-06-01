@@ -5,11 +5,11 @@ sidebar:
   order: 1
 ---
 
-Tool calling lets the model request external work via a structured invocation. mistral.rs supports both server-side and client-side tool loops, plus strict tool schemas for constraining generated arguments before a tool runs.
+Tool calling lets the model request external work via a structured invocation. hanzo supports both server-side and client-side tool loops, plus strict tool schemas for constraining generated arguments before a tool runs.
 
 ## The two modes
 
-**Server-side loop.** mistral.rs runs the entire tool loop inside one HTTP request. Tools are enabled with CLI flags; the client sends one request and receives one final reply.
+**Server-side loop.** hanzo runs the entire tool loop inside one HTTP request. Tools are enabled with CLI flags; the client sends one request and receives one final reply.
 
 **Client-side loop.** Standard OpenAI flow: the model emits a `tool_calls` field, the caller runs the tool, sends the result back as a `tool` message, and the model produces another response.
 
@@ -44,7 +44,7 @@ Tool definitions follow the OpenAI schema:
 }
 ```
 
-Set `function.strict` to `true` when you want mistral.rs to constrain the generated arguments to the tool's JSON Schema. See [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/) for HTTP, Python, and Rust examples.
+Set `function.strict` to `true` when you want hanzo to constrain the generated arguments to the tool's JSON Schema. See [strict tool calling](/hanzo/guides/agents/strict-tool-calling/) for HTTP, Python, and Rust examples.
 
 When the model calls the tool, the response carries a `tool_calls` array:
 
@@ -90,7 +90,7 @@ The caller invokes the real API and sends the result back:
 hanzo serve --enable-search --enable-code-execution -m <model>
 ```
 
-For custom tools, the cleanest path is to run them as an MCP server and connect hanzo as a client. See the [MCP client guide](/mistral.rs/guides/agents/connect-mcp-server/).
+For custom tools, the cleanest path is to run them as an MCP server and connect hanzo as a client. See the [MCP client guide](/hanzo/guides/agents/connect-mcp-server/).
 
 The SDKs can also register custom callbacks directly: Python uses `Runner(tool_callbacks=...)`; Rust builders use `with_tool_callback(...)` or `with_tool_callback_and_tool(...)`.
 
@@ -104,7 +104,7 @@ Built-in search, code execution, and file helper tools use strict schemas by def
 
 `"required"` is not supported. Use a specific function object to force tool use.
 
-## mistral.rs response extensions
+## hanzo response extensions
 
 When the server-side loop runs, the response includes an `agentic_tool_calls` array. Each entry: `round`, `name`, `arguments`, `result_content`, `result_images_base64`.
 

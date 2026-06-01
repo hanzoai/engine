@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-For the full TOML schema, see the [CLI TOML config reference](/mistral.rs/reference/cli-toml-config/). For prose, see the [HTTP server guide](/mistral.rs/guides/serve/http-server/).
+For the full TOML schema, see the [CLI TOML config reference](/hanzo/reference/cli-toml-config/). For prose, see the [HTTP server guide](/hanzo/guides/serve/http-server/).
 
 ## Binding
 
@@ -40,7 +40,7 @@ For the full TOML schema, see the [CLI TOML config reference](/mistral.rs/refere
 | `--code-exec-python` | `runtime.code_exec_python` | `python` on Windows, `python3` elsewhere | Python interpreter for code execution. |
 | `--code-exec-workdir` | `runtime.code_exec_workdir` | per-session temp dir | Code execution working directory. |
 | `--code-exec-timeout` | `runtime.code_exec_timeout` | 30 | Code execution timeout (seconds). |
-| `--agent-permission` | `runtime.agent_permission` | `auto` | `auto`, `ask`, or `deny`. Controls whether agent actions run automatically, require approval, or are denied. See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions). `--code-exec-permission` and `runtime.code_exec_permission` are accepted as aliases. |
+| `--agent-permission` | `runtime.agent_permission` | `auto` | `auto`, `ask`, or `deny`. Controls whether agent actions run automatically, require approval, or are denied. See [agent permissions](/hanzo/guides/agents/agentic-runtime/#agent-permissions). `--code-exec-permission` and `runtime.code_exec_permission` are accepted as aliases. |
 
 ## Paged attention
 
@@ -67,4 +67,4 @@ CORS allowed origins and the request body limit (default 50 MB) are configurable
 | `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` runs fully offline; only the local Hugging Face cache is consulted and no network calls are made. |
 | `MCP_CONFIG_PATH` | Alternative to `--mcp-config`. |
 
-Full list: [environment variables](/mistral.rs/reference/environment-variables/).
+Full list: [environment variables](/hanzo/reference/environment-variables/).

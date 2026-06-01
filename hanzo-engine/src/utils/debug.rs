@@ -9,7 +9,7 @@ static LOGGER: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 /// This should be called to initialize the debug flag and logging.
 /// This should not be called in hanzo-engine code due to Rust usage.
 pub fn initialize_logging() {
-    let is_debug = std::env::var("MISTRALRS_DEBUG")
+    let is_debug = std::env::var("HANZO_DEBUG")
         .unwrap_or_default()
         .contains('1');
     DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);

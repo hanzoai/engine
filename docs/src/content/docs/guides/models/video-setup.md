@@ -5,11 +5,11 @@ sidebar:
   order: 2
 ---
 
-Video input works with multimodal models that list video in the [supported models reference](/mistral.rs/reference/supported-models/). The commonly tested families are Qwen-VL and Gemma.
+Video input works with multimodal models that list video in the [supported models reference](/hanzo/reference/supported-models/). The commonly tested families are Qwen-VL and Gemma.
 
 ## Requirement
 
-Non-GIF video formats require the `ffmpeg` binary on the server `PATH`. mistral.rs uses FFmpeg at request time to decode video files into frames.
+Non-GIF video formats require the `ffmpeg` binary on the server `PATH`. hanzo uses FFmpeg at request time to decode video files into frames.
 
 GIF files are decoded natively and do not require FFmpeg.
 
@@ -98,7 +98,7 @@ Video URLs can be local `file://` paths or network `http(s)://` URLs.
 
 ## Frame handling
 
-mistral.rs decodes video into frames before passing them through the model's vision path. Per-request frame-sampling controls are not currently exposed.
+hanzo decodes video into frames before passing them through the model's vision path. Per-request frame-sampling controls are not currently exposed.
 
 ## Troubleshooting
 

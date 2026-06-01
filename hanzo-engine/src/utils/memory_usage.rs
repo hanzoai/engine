@@ -98,7 +98,7 @@ impl MemoryUsage {
 
                 // recommendedMaxWorkingSetSize is dynamic and can underreport on small/pressured Apple Silicon.
                 // Dividing by 2 here is a heuristic to indicate that we are now below an expected value.
-                // See: https://github.com/EricLBuehler/mistral.rs/issues/2127
+                // See: https://github.com/hanzoai/engine/issues/2127
                 if device_max < sysctl_floor / 2 {
                     warn!(
                         "Metal recommendedMaxWorkingSetSize ({} MB) is much smaller than the system-RAM floor ({} MB); currentAllocatedSize = {} MB. Using the floor.",
@@ -120,7 +120,7 @@ impl MemoryUsage {
 
 #[cfg(feature = "cuda")]
 fn igpu_memory_fraction() -> f64 {
-    std::env::var("MISTRALRS_IGPU_MEMORY_FRACTION")
+    std::env::var("HANZO_IGPU_MEMORY_FRACTION")
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
         .and_then(|f| {

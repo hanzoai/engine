@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-Embedding models map text to dense vectors for semantic search, reranking, clustering, and downstream retrieval. mistral.rs serves embeddings through the standard OpenAI `POST /v1/embeddings` endpoint, so any tool that already targets that endpoint (LangChain, LlamaIndex, vector stores) works unchanged.
+Embedding models map text to dense vectors for semantic search, reranking, clustering, and downstream retrieval. hanzo serves embeddings through the standard OpenAI `POST /v1/embeddings` endpoint, so any tool that already targets that endpoint (LangChain, LlamaIndex, vector stores) works unchanged.
 
 ## Loading an embedding model
 
@@ -73,7 +73,7 @@ The `data` array has one entry per input in input order.
 
 ## Normalization
 
-mistral.rs returns vectors as the model produces them. Normalize on the client when cosine similarity is computed as dot product.
+hanzo returns vectors as the model produces them. Normalize on the client when cosine similarity is computed as dot product.
 
 To normalize in Python:
 
@@ -174,4 +174,4 @@ Standard pipeline:
 4. Optionally rerank top results with a reranker.
 5. Feed retrieved documents as language model context.
 
-mistral.rs handles steps 1, 2, and (with a reranker) 4. The rest is the vector store and application logic. The [web search guide](/mistral.rs/guides/agents/web-search/) covers using embeddings to rerank search results within an agent.
+hanzo handles steps 1, 2, and (with a reranker) 4. The rest is the vector store and application logic. The [web search guide](/hanzo/guides/agents/web-search/) covers using embeddings to rerank search results within an agent.

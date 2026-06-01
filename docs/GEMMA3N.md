@@ -3,8 +3,8 @@
 Gemma 3n models are designed for efficient execution on low-resource devices. They are capable of multimodal input, handling text, image, video, and audio input, and generating text outputs. These models support over 140 spoken languages.
 
 Prequantized UQFF models:
-- [Gemma 3n E4B](https://huggingface.co/EricB/gemma-3n-E4B-it-UQFF)
-- [Gemma 3n E2B](https://huggingface.co/EricB/gemma-3n-E2B-it-UQFF)
+- [Gemma 3n E4B](https://huggingface.co/hanzoai/gemma-3n-E4B-it-UQFF)
+- [Gemma 3n E2B](https://huggingface.co/hanzoai/gemma-3n-E2B-it-UQFF)
 
 ## Quick Start
 

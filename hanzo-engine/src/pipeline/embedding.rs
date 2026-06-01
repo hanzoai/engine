@@ -296,7 +296,7 @@ impl Loader for EmbeddingLoader {
                         let total_tensors = ser_artifacts.tensors().len();
                         for (_, artifact) in ser_artifacts.tensors() {
                             let artifact = artifact.data();
-                            // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+                            // NOTE(hanzoai): isq type is ALWAYS byte 4 (5th) of the tensor.
                             let isq_type = artifact[hanzo_quant::UQFF_QUANT_TYPE_OFFSET];
                             let pack_factor = match QuantizedSerdeType::try_from(isq_type as usize)?
                             {
@@ -660,10 +660,10 @@ impl Loader for EmbeddingLoader {
                 llg_factory: None,
                 is_xlora: false,
                 no_prefix_cache: false,
-                num_hidden_layers: 1, // FIXME(EricLBuehler): we know this is only for caching, so its OK.
+                num_hidden_layers: 1, // FIXME(hanzoai): we know this is only for caching, so its OK.
                 eos_tok: vec![],
                 kind: ModelKind::Normal,
-                no_kv_cache: true, // NOTE(EricLBuehler): no cache for these.
+                no_kv_cache: true, // NOTE(hanzoai): no cache for these.
                 activation_dtype: dtype,
                 sliding_window: None,
                 cache_config: None,

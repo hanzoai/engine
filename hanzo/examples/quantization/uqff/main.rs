@@ -10,7 +10,7 @@ use hanzo::{
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = UqffTextModelBuilder::new(
-        "EricB/Phi-3.5-mini-instruct-UQFF",
+        "hanzoai/Phi-3.5-mini-instruct-UQFF",
         vec!["phi3.5-mini-instruct-q8_0.uqff".into()],
     )
     .into_inner()

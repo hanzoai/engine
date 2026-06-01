@@ -37,4 +37,4 @@ hanzo serve --topology topology.yaml -m <model>
 
 Embedding layers, LM head, and pre/post-norm are not individually addressable; they follow the first or last transformer layer's placement.
 
-For an introduction to per-layer quantization tradeoffs, see [the explanation page on quantization tradeoffs](/mistral.rs/explanation/quantization-tradeoffs/).
+For an introduction to per-layer quantization tradeoffs, see [the explanation page on quantization tradeoffs](/hanzo/explanation/quantization-tradeoffs/).

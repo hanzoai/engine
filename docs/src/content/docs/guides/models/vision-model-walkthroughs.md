@@ -84,7 +84,7 @@ Use `file://` URLs for local files, `https://` for remote files, and `data:image
 | LLaVA / LLaVA Next | `llava-hf/llava-v1.6-mistral-7b-hf` | `MultimodalArchitecture.LLaVANext` | image | Vicuna-backed checkpoints need the Vicuna chat template. |
 | Llama 3.2 Vision | `meta-llama/Llama-3.2-11B-Vision-Instruct` | `MultimodalArchitecture.VLlama` | image | Device mapping applies to the text backbone. |
 | Llama 4 | `meta-llama/Llama-4-Scout-17B-16E-Instruct` | `MultimodalArchitecture.Llama4` | image | Sparse multimodal model with tool calling and web-search support. |
-| MiniCPM-O 2.6 | `openbmb/MiniCPM-o-2_6` | `MultimodalArchitecture.MiniCpmO` | image, audio | Check the [supported models reference](/mistral.rs/reference/supported-models/) when modality support matters. |
+| MiniCPM-O 2.6 | `openbmb/MiniCPM-o-2_6` | `MultimodalArchitecture.MiniCpmO` | image, audio | Check the [supported models reference](/hanzo/reference/supported-models/) when modality support matters. |
 | Mistral Small 3 | `mistralai/Mistral-Small-3.2-24B-Instruct-2506` | `MultimodalArchitecture.Mistral3` | image | Tool calling requires the provided Mistral Small tool-call template. |
 | Phi 3.5 Vision | `microsoft/Phi-3.5-vision-instruct` | `MultimodalArchitecture.Phi3V` | image | Best with one image; multiple images are resized together. |
 | Phi 4 Multimodal | `microsoft/Phi-4-multimodal-instruct` | `MultimodalArchitecture.Phi4MM` | image, audio | Audio and image can be sent in the same message. |
@@ -110,7 +110,7 @@ hanzo run -m google/gemma-4-E4B-it --quant 8 --video clip.mp4 -i "Summarize this
 }
 ```
 
-FFmpeg requirements, supported containers, and platform install commands are centralized in [Set up video input](/mistral.rs/guides/models/video-setup/). Per-request frame-sampling controls are not currently exposed.
+FFmpeg requirements, supported containers, and platform install commands are centralized in [Set up video input](/hanzo/guides/models/video-setup/). Per-request frame-sampling controls are not currently exposed.
 
 ## Audio inside multimodal models
 
@@ -127,7 +127,7 @@ Gemma 4, Gemma 3n, Phi 4 Multimodal, MiniCPM-O, and Voxtral can accept audio con
 }
 ```
 
-WAV, MP3, FLAC, and OGG are decoded natively. Other formats require FFmpeg conversion; see [Set up video input](/mistral.rs/guides/models/video-setup/) for FFmpeg installation.
+WAV, MP3, FLAC, and OGG are decoded natively. Other formats require FFmpeg conversion; see [Set up video input](/hanzo/guides/models/video-setup/) for FFmpeg installation.
 
 ## Gemma 3n MatFormer
 
@@ -185,6 +185,6 @@ The same setting is `organization=IsqOrganization.MoQE` in `Which.MultimodalPlai
 
 Long-form SDK examples live in the repository so they can stay checked against the current APIs:
 
-- Python: [`examples/python/`](https://github.com/EricLBuehler/mistral.rs/tree/master/examples/python)
-- HTTP/OpenAI clients: [`examples/server/`](https://github.com/EricLBuehler/mistral.rs/tree/master/examples/server)
-- Rust multimodal models: [`hanzo/examples/models/multimodal_models/main.rs`](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/models/multimodal_models/main.rs)
+- Python: [`examples/python/`](https://github.com/hanzoai/engine/tree/master/examples/python)
+- HTTP/OpenAI clients: [`examples/server/`](https://github.com/hanzoai/engine/tree/master/examples/server)
+- Rust multimodal models: [`hanzo/examples/models/multimodal_models/main.rs`](https://github.com/hanzoai/engine/blob/master/hanzo/examples/models/multimodal_models/main.rs)

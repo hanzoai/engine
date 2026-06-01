@@ -661,7 +661,7 @@ pub trait IsqModel {
                         current_rayon_threads
                     }
                 };
-                if env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
+                if env::var("HANZO_ISQ_SINGLETHREAD").is_ok() {
                     minimum_max_threads = 1;
                 }
 
@@ -1156,7 +1156,7 @@ pub trait IsqModel {
                                 guard.clone(),
                             )?,
                             None => {
-                                // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+                                // NOTE(hanzoai): isq type is ALWAYS byte 4 (5th) of the tensor.
                                 let isq_type = artifact[hanzo_quant::UQFF_QUANT_TYPE_OFFSET];
                                 match QuantizedSerdeType::try_from(isq_type as usize)? {
                                     QuantizedSerdeType::Gguf => GgufMatMul::deserialize(
@@ -1241,7 +1241,7 @@ pub trait IsqModel {
                                 guard.clone(),
                             )?,
                             None => {
-                                // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+                                // NOTE(hanzoai): isq type is ALWAYS byte 4 (5th) of the tensor.
                                 let isq_type = artifact[hanzo_quant::UQFF_QUANT_TYPE_OFFSET];
                                 match QuantizedSerdeType::try_from(isq_type as usize)? {
                                     QuantizedSerdeType::Gguf => GgufMatMul::deserialize(

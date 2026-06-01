@@ -3,7 +3,7 @@ title: Reference
 description: Exhaustive lookup pages for flags, endpoints, schemas, and APIs.
 ---
 
-Reference pages are short, complete, and lookup-oriented. For narrative or motivation, see the [Guides](/mistral.rs/guides/) or [Explanation](/mistral.rs/explanation/) sections.
+Reference pages are short, complete, and lookup-oriented. For narrative or motivation, see the [Guides](/hanzo/guides/) or [Explanation](/hanzo/explanation/) sections.
 
 ## Contents
 
@@ -15,7 +15,7 @@ Reference pages are short, complete, and lookup-oriented. For narrative or motiv
 
 **OpenAI compatibility.** Which parts of OpenAI's Chat Completions and Responses surface are implemented, and which are not.
 
-**[Python API](/mistral.rs/reference/python/).** The public surface of the `hanzo` Python package, generated from the type stub: `Runner`, `Which`, request and response types.
+**[Python API](/hanzo/reference/python/).** The public surface of the `hanzo` Python package, generated from the type stub: `Runner`, `Which`, request and response types.
 
 **Rust API.** Canonical reference at [docs.rs/hanzo](https://docs.rs/hanzo).
 

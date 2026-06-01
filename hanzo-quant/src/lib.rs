@@ -216,7 +216,7 @@ pub fn set_immediate_isq_with_pool(
 /// - GGML types (Q2K-Q8K) and F8E4M3: `rayon::current_num_threads()` (CPU quantization)
 /// - HQQ/AFQ: 1 thread (GPU quantization, serialized by `QuantizeOntoGuard`)
 pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize) {
-    let num_threads = if std::env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
+    let num_threads = if std::env::var("HANZO_ISQ_SINGLETHREAD").is_ok() {
         1
     } else if let Some(ty) = ty {
         ty.get_max_isq_cpu_threads()
@@ -524,14 +524,14 @@ impl MatMul {
     /// Compute matrix-matrix product.
     /// The result will be divided by the `scale` parameter in an affine division.
     pub fn matmul_affine_div(&self, a: &Tensor, b: &Tensor, scale: f64) -> Result<Tensor> {
-        // TODO(EricLBuehler): Optimize this by using the gemm parameter?
+        // TODO(hanzoai): Optimize this by using the gemm parameter?
         self.matmul(a, b)? / scale
     }
 
     /// Compute matrix-matrix product.
     /// The result will be divided by the `scale` parameter in an affine multiplication.
     pub fn matmul_affine_mul(&self, a: &Tensor, b: &Tensor, scale: f64) -> Result<Tensor> {
-        // TODO(EricLBuehler): Optimize this by using the gemm parameter?
+        // TODO(hanzoai): Optimize this by using the gemm parameter?
         self.matmul(a, b)? * scale
     }
 

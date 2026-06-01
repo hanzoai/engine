@@ -1,6 +1,6 @@
 ---
 title: Install on macOS with Metal
-description: Get mistral.rs running on Apple Silicon. The install script handles the common case; this guide covers the rest.
+description: Get hanzo running on Apple Silicon. The install script handles the common case; this guide covers the rest.
 sidebar:
   order: 2
 ---
@@ -8,7 +8,7 @@ sidebar:
 On Apple Silicon (M1, M2, M3, M4), the install script detects the chip and builds with Metal support:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/hanzoai/engine/master/install.sh | sh
 ```
 
 For manual builds, follow the steps below.
@@ -18,7 +18,7 @@ For manual builds, follow the steps below.
 - macOS 13 (Ventura) or newer. Earlier Metal Performance Shaders versions lack required operations.
 - Xcode Command Line Tools. Install with `xcode-select --install`.
 - Rust 1.88 or newer via [rustup](https://rustup.rs).
-- Homebrew with FFmpeg for video input: `brew install ffmpeg`. See [Set up video input](/mistral.rs/guides/models/video-setup/) for the full checklist.
+- Homebrew with FFmpeg for video input: `brew install ffmpeg`. See [Set up video input](/hanzo/guides/models/video-setup/) for the full checklist.
 
 A full Xcode install is not required. The command-line tools include the Metal Shading Language compiler and required headers.
 
@@ -35,8 +35,8 @@ cargo install hanzo-cli --features "metal accelerate"
 From source:
 
 ```bash
-git clone https://github.com/EricLBuehler/mistral.rs.git
-cd mistral.rs
+git clone https://github.com/hanzoai/engine.git
+cd hanzo
 cargo install --path hanzo-cli --features "metal accelerate"
 ```
 
@@ -48,7 +48,7 @@ Apple Silicon uses unified memory; the GPU and CPU share physical RAM. Implicati
 
 - No separate VRAM budget. A model that fits in RAM fits on the GPU.
 - `hanzo doctor` reports total system memory rather than separate GPU memory.
-- Default paged attention block sizes are tuned for dedicated VRAM. See the [paged attention guide](/mistral.rs/guides/perf/use-paged-attention/) for tuning on unified memory.
+- Default paged attention block sizes are tuned for dedicated VRAM. See the [paged attention guide](/hanzo/guides/perf/use-paged-attention/) for tuning on unified memory.
 
 Total RAM caps model size. A 32 GB machine fits models up to ~20B parameters at 4-bit with moderate context. A 64 GB machine fits 70B-class models at 4-bit.
 
