@@ -521,9 +521,7 @@ pub fn qmatmul_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) 
     match qmatmul {
         QMatMul::QTensor(qtensor) => qtensor_indexed_moe_forward(qtensor, x, ids),
         QMatMul::Tensor(_) | QMatMul::TensorF16(_) => {
-            hanzo_ml::bail!(
-                "indexed_moe_forward is only supported for quantized tensors (QTensor)"
-            )
+            hanzo_ml::bail!("indexed_moe_forward is only supported for quantized tensors (QTensor)")
         }
     }
 }
@@ -671,8 +669,7 @@ fn quantize_input_q8_1_into(
         );
     }
     // Use fused half->Q8_1 kernels when input is BF16/F16 (avoids separate cast kernel)
-    if xs_contig.dtype() == hanzo_ml::DType::BF16 || xs_contig.dtype() == hanzo_ml::DType::F16
-    {
+    if xs_contig.dtype() == hanzo_ml::DType::BF16 || xs_contig.dtype() == hanzo_ml::DType::F16 {
         let (xs_storage, xs_layout) = xs_contig.storage_and_layout();
         let xs_cuda = match &*xs_storage {
             Storage::Cuda(c) => c,

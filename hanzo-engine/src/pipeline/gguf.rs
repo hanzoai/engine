@@ -48,10 +48,10 @@ use crate::{
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 use anyhow::{bail, Result};
-use hanzo_ml::{Device, Tensor};
 use either::Either;
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use hanzo_ml::{Device, Tensor};
 use hanzo_quant::IsqType;
+use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::path::PathBuf;

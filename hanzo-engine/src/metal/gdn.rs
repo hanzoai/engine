@@ -47,9 +47,7 @@ fn load_gdn_library(device: &MetalRawDevice) -> Result<Library> {
     };
     let lib = device
         .new_library_with_source(GDN_METAL_SOURCE, Some(&compile_options))
-        .map_err(|e| {
-            hanzo_ml::Error::Msg(format!("Failed to compile GDN Metal kernels: {e}"))
-        })?;
+        .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to compile GDN Metal kernels: {e}")))?;
     Ok(GDN_LIBRARY.get_or_init(|| lib).clone())
 }
 

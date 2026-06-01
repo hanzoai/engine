@@ -1,7 +1,7 @@
 use either::Either;
-use indexmap::IndexMap;
 use hanzo_audio::AudioInput;
 use hanzo_quant::IsqType;
+use indexmap::IndexMap;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::{pyclass, pymethods};
 use serde::{Deserialize, Serialize};
