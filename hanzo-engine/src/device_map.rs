@@ -191,7 +191,7 @@ impl DeviceMapSetting {
                                         .iter()
                                         .filter(|d| d.is_cuda())
                                         .map(|d| {
-                                            // should implement this in candle and get the ordinal back from the device location directly
+                                            // should implement this in hanzo-ml and get the ordinal back from the device location directly
                                             let ordinal = match d.location() {
                                                 DeviceLocation::Cpu => 0,
                                                 DeviceLocation::Cuda { gpu_id } => gpu_id,

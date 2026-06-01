@@ -1,9 +1,9 @@
-// https://github.com/huggingface/text-embeddings-inference/blob/cc1c510e8d8af8447c01e6b14c417473cf2dfda9/backends/candle/src/layers/cublaslt.rs
+// text-embeddings-inference (adapted)
 
 #![allow(unused_variables, unused_imports, dead_code)]
 
 use hanzo_ml::{Device, DeviceLocation, Result, Tensor};
-use hanzo_nn::Activation as CandleActivation;
+use hanzo_nn::Activation as HanzoActivation;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, Once};
 
@@ -145,13 +145,13 @@ impl CublasLtWrapper {
         alpha: Option<f32>,
         beta: Option<f32>,
         bias: Option<&Tensor>,
-        act: Option<CandleActivation>,
+        act: Option<HanzoActivation>,
     ) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         {
             let inner_act = act.map(|a| match a {
-                CandleActivation::Relu => matmul::Activation::Relu,
-                CandleActivation::Gelu => matmul::Activation::Gelu,
+                HanzoActivation::Relu => matmul::Activation::Relu,
+                HanzoActivation::Gelu => matmul::Activation::Gelu,
                 _ => unreachable!("Unsupported activation in cublaslt matmul"),
             });
             let mut result = fused_batch_matmul_f8(
@@ -168,7 +168,7 @@ impl CublasLtWrapper {
                 self.cublaslt.clone(),
             )?;
 
-            if Some(CandleActivation::Swiglu) == act {
+            if Some(HanzoActivation::Swiglu) == act {
                 result = hanzo_nn::ops::swiglu(&result)?;
             }
             Ok(result)
@@ -201,13 +201,13 @@ impl CublasLtWrapper {
         alpha: Option<f32>,
         beta: Option<f32>,
         bias: Option<&Tensor>,
-        act: Option<CandleActivation>,
+        act: Option<HanzoActivation>,
     ) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         {
             let inner_act = act.map(|a| match a {
-                CandleActivation::Relu => matmul::Activation::Relu,
-                CandleActivation::Gelu => matmul::Activation::Gelu,
+                HanzoActivation::Relu => matmul::Activation::Relu,
+                HanzoActivation::Gelu => matmul::Activation::Gelu,
                 _ => unreachable!("Unsupported activation in cublaslt matmul"),
             });
             let mut result = fused_batch_matmul(
@@ -221,7 +221,7 @@ impl CublasLtWrapper {
                 self.cublaslt.clone(),
             )?;
 
-            if Some(CandleActivation::Swiglu) == act {
+            if Some(HanzoActivation::Swiglu) == act {
                 result = hanzo_nn::ops::swiglu(&result)?;
             }
             Ok(result)

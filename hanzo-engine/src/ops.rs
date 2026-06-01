@@ -1986,7 +1986,7 @@ impl BincountOp for Tensor {
     }
 }
 
-// https://github.com/mokeyish/candle-ext/blob/ca4547c803469bd51c00ce5eda2f18dd249c8f10/src/triangular.rs#L21
+// an external reference implementation
 pub fn apply_triangular(xs: &Tensor, diagonal: isize, upper: bool) -> Result<Tensor> {
     let device = xs.device();
     let (l, s) = xs.dims2()?;
@@ -2030,7 +2030,7 @@ fn glu_activation_type(act: Activation) -> Option<hanzo_quant::GluActivationType
     }
 }
 
-fn candle_glu_activation_type(
+fn nn_glu_activation_type(
     act: hanzo_nn::Activation,
 ) -> Option<hanzo_quant::GluActivationType> {
     match act {
@@ -2063,10 +2063,10 @@ pub fn mul_and_act(a: &Tensor, b: &Tensor, act: Activation) -> Result<Tensor> {
     a.apply(&act)? * b
 }
 
-pub fn mul_and_candle_act(a: &Tensor, b: &Tensor, act: hanzo_nn::Activation) -> Result<Tensor> {
+pub fn mul_and_nn_act(a: &Tensor, b: &Tensor, act: hanzo_nn::Activation) -> Result<Tensor> {
     // Check if we can use the fused kernel (works on CUDA, Metal, and CPU)
     if matches!(a.dtype(), DType::F16 | DType::BF16 | DType::F32) && a.dtype() == b.dtype() {
-        if let Some(activation_type) = candle_glu_activation_type(act) {
+        if let Some(activation_type) = nn_glu_activation_type(act) {
             return hanzo_quant::fused_glu(a, b, activation_type);
         }
     }

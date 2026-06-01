@@ -1,5 +1,5 @@
 // Indexed MoE forward kernel for quantized weights
-// Adapted from llama.cpp ggml-cuda.cu and candle-kernels
+// Adapted from llama.cpp ggml-cuda.cu and hanzo-ml-kernels
 // https://github.com/ggerganov/llama.cpp/blob/master/ggml-cuda.cu
 
 #include "cuda_bf16.h"
