@@ -8,8 +8,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use hanzo_server_core::{
-    chat_completion::parse_request, handler_core::create_response_channel,
-    types::SharedHanzoState,
+    chat_completion::parse_request, handler_core::create_response_channel, types::SharedHanzoState,
 };
 
 // Import your existing types

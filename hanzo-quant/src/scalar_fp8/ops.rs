@@ -1,5 +1,5 @@
-use hanzo_ml::{CpuStorage, CustomOp1, DType, Result, Tensor};
 use float8::F8E4M3;
+use hanzo_ml::{CpuStorage, CustomOp1, DType, Result, Tensor};
 
 #[allow(dead_code)]
 struct Fp8ToDtype {
@@ -57,8 +57,8 @@ impl CustomOp1 for Fp8ToDtype {
         input_s: &hanzo_ml::CudaStorage,
         input_l: &hanzo_ml::Layout,
     ) -> Result<(hanzo_ml::CudaStorage, hanzo_ml::Shape)> {
-        use hanzo_ml::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
+        use hanzo_ml::{backend::BackendStorage, CudaStorage};
 
         use crate::utils::slice_ptr;
 
@@ -220,8 +220,8 @@ impl CustomOp1 for DtypeToFp8 {
         input_s: &hanzo_ml::CudaStorage,
         input_l: &hanzo_ml::Layout,
     ) -> Result<(hanzo_ml::CudaStorage, hanzo_ml::Shape)> {
-        use hanzo_ml::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
+        use hanzo_ml::{backend::BackendStorage, CudaStorage};
 
         use crate::utils::slice_ptr;
 

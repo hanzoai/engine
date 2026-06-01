@@ -306,10 +306,7 @@ async fn sandbox_for_config(
     let (sandbox, mut policy): (Arc<dyn Sandbox>, SandboxPolicy) =
         match config.sandbox_policy.clone() {
             Some(policy) => (Arc::from(hanzo_sandbox::detect()), policy),
-            None => (
-                Arc::from(hanzo_sandbox::null()),
-                SandboxPolicy::default(),
-            ),
+            None => (Arc::from(hanzo_sandbox::null()), SandboxPolicy::default()),
         };
 
     policy.extra_fs_read.push(executor_dir.to_path_buf());

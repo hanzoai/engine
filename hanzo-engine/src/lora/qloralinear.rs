@@ -1,11 +1,9 @@
 use std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
+use either::Either;
 use hanzo_ml::{quantized::QMatMul, Module, Result, Tensor};
 use hanzo_nn::Linear;
-use either::Either;
-use hanzo_quant::{
-    GgufMatMul, QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear,
-};
+use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear};
 
 use crate::layers::MatMul;
 
@@ -54,10 +52,12 @@ impl QLoraLinear {
                 b: None,
             })?),
             #[cfg(feature = "vulkan")]
-            QMatMul::VulkanQuant { qtensor, .. } => Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                q_weight: qtensor,
-                b: None,
-            })?),
+            QMatMul::VulkanQuant { qtensor, .. } => {
+                Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: qtensor,
+                    b: None,
+                })?)
+            }
             QMatMul::TensorF16(t) | QMatMul::Tensor(t) => Arc::new(UnquantLinear::new(
                 QuantMethodConfig::Unquantized(Linear::new(t, None)),
             )?),

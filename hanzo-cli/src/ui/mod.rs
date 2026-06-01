@@ -6,10 +6,10 @@ use axum::extract::DefaultBodyLimit;
 use axum::http::{Response, StatusCode};
 use axum::routing::{get, get_service, post};
 use axum::Router;
-use include_dir::{include_dir, Dir};
-use indexmap::IndexMap;
 use hanzo::{Model, SearchEmbeddingModel};
 use hanzo_engine::{Hanzo, ModelCategory, SupportedModality};
+use include_dir::{include_dir, Dir};
+use indexmap::IndexMap;
 use tokio::fs;
 use tower_http::services::ServeDir;
 

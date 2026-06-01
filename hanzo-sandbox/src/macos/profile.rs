@@ -179,12 +179,8 @@ mod tests {
         assert!(profile.contains("(allow file-read* (literal \"/tmp/hanzo workdir\"))"));
         assert!(profile.contains("(allow file-write* (literal \"/tmp/hanzo workdir\"))"));
         assert!(profile.contains("(allow file-write* (subpath \"/tmp/hanzo workdir\"))"));
-        assert!(
-            !profile.contains("(allow file-map-executable (literal \"/tmp/hanzo workdir\"))")
-        );
-        assert!(
-            !profile.contains("(allow file-map-executable (subpath \"/tmp/hanzo workdir\"))")
-        );
+        assert!(!profile.contains("(allow file-map-executable (literal \"/tmp/hanzo workdir\"))"));
+        assert!(!profile.contains("(allow file-map-executable (subpath \"/tmp/hanzo workdir\"))"));
     }
 
     #[test]

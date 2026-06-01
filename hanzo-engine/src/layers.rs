@@ -2,6 +2,8 @@
 
 use std::{f32::consts::PI, ops::Mul, str::FromStr, sync::Arc};
 
+use float8::F8E4M3;
+use half::{bf16, f16};
 use hanzo_ml::{
     quantized::{QMatMul, QTensor},
     Context, DType, Device, IndexOp, Result, Tensor, D,
@@ -10,8 +12,6 @@ use hanzo_nn::{
     BatchNorm, BatchNormConfig, Conv1d, Conv1dConfig, Conv2d, Conv2dConfig, Embedding, GroupNorm,
     LayerNorm, LayerNormConfig, Linear, Module,
 };
-use float8::F8E4M3;
-use half::{bf16, f16};
 use hanzo_quant::{
     AfqLayer, ColumnParallelLayer, Convolution, QuantMethod, QuantizedConfig, RowParallelLayer,
     ShardedVarBuilder,
@@ -1780,16 +1780,10 @@ impl DeepSeekV2RotaryEmbedding {
             for (i, offset) in seqlen_offsets.iter().enumerate() {
                 let cos = self.cos.narrow(0, *offset, seq_len)?;
                 let sin = self.sin.narrow(0, *offset, seq_len)?;
-                let q_embed = hanzo_nn::rotary_emb::rope_i(
-                    &q.i(i)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?;
-                let k_embed = hanzo_nn::rotary_emb::rope_i(
-                    &k.i(i)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?;
+                let q_embed =
+                    hanzo_nn::rotary_emb::rope_i(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                let k_embed =
+                    hanzo_nn::rotary_emb::rope_i(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
                 q_embeds.push(q_embed);
                 k_embeds.push(k_embed);
             }

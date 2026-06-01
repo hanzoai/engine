@@ -163,11 +163,7 @@ impl<'a, Q: QuantParams> ModelParams<'a, Q> {
 // Traits for the existing methods used across various model types to impl `from_ggml()` / `from_gguf()`
 // Basic:
 pub trait FromGGML {
-    fn from_ggml(
-        ct: ggml_file::Content,
-        gqa: usize,
-        dtype: DType,
-    ) -> Result<Self, hanzo_ml::Error>
+    fn from_ggml(ct: ggml_file::Content, gqa: usize, dtype: DType) -> Result<Self, hanzo_ml::Error>
     where
         Self: Sized;
 }

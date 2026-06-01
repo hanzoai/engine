@@ -1,6 +1,6 @@
 use anyhow::Result;
-use hanzo_ml::{Device, Tensor};
 use hanzo_audio::AudioInput;
+use hanzo_ml::{Device, Tensor};
 use rubato::Resampler;
 use rustfft::{num_complex::Complex32, FftPlanner};
 
@@ -382,8 +382,8 @@ impl AudioProcessor {
 
 #[cfg(test)]
 mod tests {
-    use hanzo_ml::Device;
     use hanzo_audio::AudioInput;
+    use hanzo_ml::Device;
 
     use crate::vision_models::preprocessor_config::PreProcessorConfig;
 

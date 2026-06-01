@@ -2,8 +2,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use hanzo_ml::{DType, Device, Result, Tensor, D};
 use config::Gemma3nConfig;
+use hanzo_ml::{DType, Device, Result, Tensor, D};
 use hanzo_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use text::TextModel;
 

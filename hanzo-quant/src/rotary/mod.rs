@@ -3,15 +3,14 @@ mod ffi;
 
 #[cfg(feature = "cuda")]
 mod cuda {
-    use hanzo_ml::{DType, Result, Storage, Tensor};
     use half::{bf16, f16};
+    use hanzo_ml::{DType, Result, Storage, Tensor};
     use std::ffi::{c_int, c_long};
 
     use crate::utils::slice_ptr;
 
     fn apply_rotary_<
-        T: hanzo_ml::cuda_backend::CudaDType
-            + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,
+        T: hanzo_ml::cuda_backend::CudaDType + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         query: &Tensor,
         key: &Tensor,
@@ -61,9 +60,7 @@ mod cuda {
         let sc_rank = sc_l.stride().len();
 
         if q_rank != 3 || k_rank != 3 {
-            hanzo_ml::bail!(
-                "apply-rotary expects input tensors of rank 3 (k: {q_l:?}, v: {k_l:?})"
-            )
+            hanzo_ml::bail!("apply-rotary expects input tensors of rank 3 (k: {q_l:?}, v: {k_l:?})")
         }
 
         if cc_rank != 2 || sc_rank != 2 {

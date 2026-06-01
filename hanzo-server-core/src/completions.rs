@@ -109,10 +109,7 @@ impl futures::Stream for CompletionStreamer {
         match self.rx.poll_recv(cx) {
             Poll::Ready(Some(resp)) => match resp {
                 Response::CompletionModelError(msg, _) => {
-                    Hanzo::maybe_log_error(
-                        self.state.clone(),
-                        &ModelErrorMessage(msg.to_string()),
-                    );
+                    Hanzo::maybe_log_error(self.state.clone(), &ModelErrorMessage(msg.to_string()));
                     // Done now, just need to send the [DONE]
                     self.done_state = DoneState::SendingDone;
                     Poll::Ready(Some(Ok(Event::default().data(msg))))

@@ -15,10 +15,10 @@ use crate::{
 };
 use anyhow::Result;
 use hanzo_ml::{Context, Device, IndexOp, Tensor};
-use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use hanzo_vision::{
     ApplyTensorTransforms, ApplyTransforms, Normalize, TensorTransforms, ToTensor, Transforms,
 };
+use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use std::{any::Any, sync::Arc};
 use tokenizers::Tokenizer;
 

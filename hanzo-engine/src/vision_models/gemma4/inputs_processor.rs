@@ -3,8 +3,8 @@
 use std::{any::Any, sync::Arc};
 
 use hanzo_ml::{Device, Result, Tensor};
-use image::{DynamicImage, GenericImageView};
 use hanzo_vision::{ApplyTransforms, Rescale, ToTensorNoNorm, Transforms};
+use image::{DynamicImage, GenericImageView};
 use tokenizers::Tokenizer;
 
 use crate::{

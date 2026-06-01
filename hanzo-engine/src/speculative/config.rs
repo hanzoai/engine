@@ -89,7 +89,8 @@ fn resolve_hf_mtp_path(id: &str) -> hanzo_ml::Result<PathBuf> {
     try_get_file(&api, model_id, "generation_config.json", revision)
         .map_err(|err| hanzo_ml::Error::Msg(err.to_string()))?;
 
-    config_path.parent().map(Path::to_path_buf).ok_or_else(|| {
-        hanzo_ml::Error::Msg(format!("config path has no parent: {config_path:?}"))
-    })
+    config_path
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| hanzo_ml::Error::Msg(format!("config path has no parent: {config_path:?}")))
 }
