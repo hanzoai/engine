@@ -1,0 +1,34 @@
+[package]
+name = "hanzo-quant"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Pure-Rust quantization library: BitDelta (1-bit), DeltaQuant (INT2/4/8), and DeltaSoup (Byzantine-robust aggregation). Port of zen/gym quantization."
+license = "Apache-2.0"
+
+[dependencies]
+# Use the engine workspace's candle-core path override (the hanzo-ml fork at
+# ../ml/hanzo-ml, exported as `candle-core` via [workspace.dependencies]).
+# Avoids the half 2.5 / 2.7 conflict that pinning a separate candle-core
+# version would create: mistralrs-core force-pulls half 2.7, candle-core <0.9
+# pulls half 2.5 through rand_distr, and the two cannot link in the same tree.
+# API surface used (Tensor, DType, Device, from_vec, flatten_all, sub, add,
+# to_vec1, to_dtype) is stable from 0.7 through the 0.9.x fork.
+candle-core = { workspace = true }
+bytes = "1.7"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "bitdelta_roundtrip"
+path = "examples/bitdelta_roundtrip.rs"
+
+[[example]]
+name = "deltasoup_byzantine"
+path = "examples/deltasoup_byzantine.rs"
