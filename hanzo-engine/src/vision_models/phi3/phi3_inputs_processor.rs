@@ -321,7 +321,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                     }
                 }
 
-                // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
+                // NOTE(hanzoai): Casting to u32 is fine, we don't care about the other toks
                 seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
                 seq.multimodal.has_changed_prompt = true;
 

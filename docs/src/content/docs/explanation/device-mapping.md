@@ -38,15 +38,15 @@ Cases for manual mapping:
 
 **Uneven GPU memory.** A 24 GB and 16 GB GPU pair (common in home setups) cannot use equal splitting on the smaller GPU. Use `-n`/`--device-layers` (format `0:N1;1:N2`) to put fewer layers there.
 
-**Sharing a machine.** When other processes use one of the GPUs, mark those layers unusable and put everything on the free GPU. `CUDA_VISIBLE_DEVICES` hides the busy GPU from mistral.rs entirely.
+**Sharing a machine.** When other processes use one of the GPUs, mark those layers unusable and put everything on the free GPU. `CUDA_VISIBLE_DEVICES` hides the busy GPU from hanzo entirely.
 
-**Specific performance needs.** Per-layer device placement for performance isolation. See the [topology guide](/mistral.rs/guides/perf/topology/).
+**Specific performance needs.** Per-layer device placement for performance isolation. See the [topology guide](/hanzo/guides/perf/topology/).
 
 ## Auto-detection limitations
 
 **Heterogeneous hardware.** CUDA GPUs of different generations or memory sizes can work together, but mapping is more complex. Auto-detection splits evenly, wasting the larger GPU's capacity.
 
-**Cross-machine setups.** NCCL-based tensor parallelism is single-machine only. For multiple machines, see the [ring backend guide](/mistral.rs/guides/perf/multi-machine-ring/).
+**Cross-machine setups.** NCCL-based tensor parallelism is single-machine only. For multiple machines, see the [ring backend guide](/hanzo/guides/perf/multi-machine-ring/).
 
 **NUMA effects.** Multi-socket servers with GPUs on different sockets pay a cross-socket transfer penalty. Auto-detection does not optimize for this; it uses any visible GPU regardless of topology.
 
@@ -68,4 +68,4 @@ Startup logs report the chosen layout at `INFO` level. When a topology file is i
 
 ## See also
 
-- Guide: [split a model across multiple GPUs](/mistral.rs/guides/perf/multi-gpu-tensor-parallel/), [configure model topology](/mistral.rs/guides/perf/topology/).
+- Guide: [split a model across multiple GPUs](/hanzo/guides/perf/multi-gpu-tensor-parallel/), [configure model topology](/hanzo/guides/perf/topology/).

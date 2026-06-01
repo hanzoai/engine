@@ -1,11 +1,11 @@
 ---
 title: Explanation
-description: Concepts, design decisions, and the reasoning behind mistral.rs.
+description: Concepts, design decisions, and the reasoning behind hanzo.
 ---
 
-Explanation pages cover mistral.rs internals and design tradeoffs.
+Explanation pages cover hanzo internals and design tradeoffs.
 
-For action-oriented documentation: [Tutorials](/mistral.rs/tutorials/), [Guides](/mistral.rs/guides/), [Reference](/mistral.rs/reference/).
+For action-oriented documentation: [Tutorials](/hanzo/tutorials/), [Guides](/hanzo/guides/), [Reference](/hanzo/reference/).
 
 ## Contents
 

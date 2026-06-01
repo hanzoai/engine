@@ -752,7 +752,7 @@ impl Pipeline for GGUFPipeline {
             seqlen_offsets,
             seqlen_offsets_full,
             context_lens,
-            position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
+            position_ids: _, // NOTE(hanzoai): ignore, it is for phi3
             paged_attn_meta,
             flash_meta,
             flash_meta_full,

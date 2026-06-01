@@ -542,7 +542,7 @@ impl Qwen3_5MoeTextModel {
 
         if !cfg.mlp_only_layers.is_empty() {
             hanzo_ml::bail!(
-                "Qwen3.5 MoE `mlp_only_layers` is not implemented yet in mistral.rs."
+                "Qwen3.5 MoE `mlp_only_layers` is not implemented yet in hanzo."
             );
         }
 

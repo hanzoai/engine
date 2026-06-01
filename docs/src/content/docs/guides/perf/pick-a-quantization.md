@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-mistral.rs supports multiple quantization formats. `--quant 4` is the common starting point.
+hanzo supports multiple quantization formats. `--quant 4` is the common starting point.
 
 ## Numeric shorthand
 
@@ -26,7 +26,7 @@ Explicit format names (e.g., `--quant q4k`, `--quant afq8`) request that format.
 
 | Format | When to use |
 |---|---|
-| UQFF | Native pre-quantized format. Loaded automatically by `--quant` when a sibling UQFF repo exists, or directly via `--from-uqff`. See [UQFF guide](/mistral.rs/guides/perf/use-uqff/). |
+| UQFF | Native pre-quantized format. Loaded automatically by `--quant` when a sibling UQFF repo exists, or directly via `--from-uqff`. See [UQFF guide](/hanzo/guides/perf/use-uqff/). |
 | GGUF | Loaded via `--format gguf -f <file>`. |
 | GPTQ, AWQ | Loaded directly with `--format plain` when the source repo is pre-quantized. |
 
@@ -34,8 +34,8 @@ Explicit format names (e.g., `--quant q4k`, `--quant afq8`) request that format.
 
 Independent of format. Fewer bits produces a smaller model.
 
-Supported widths: 2, 3, 4, 5, 6, 8. Full bit-width by format support: [quantization reference](/mistral.rs/reference/quantization-types/).
+Supported widths: 2, 3, 4, 5, 6, 8. Full bit-width by format support: [quantization reference](/hanzo/reference/quantization-types/).
 
 ## Automated selection
 
-`hanzo tune -m <model>` recommends per-host quantization. See the [auto-tune guide](/mistral.rs/guides/perf/auto-tune/).
+`hanzo tune -m <model>` recommends per-host quantization. See the [auto-tune guide](/hanzo/guides/perf/auto-tune/).

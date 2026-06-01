@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-mistral.rs serves diffusion models through `POST /v1/images/generations`. The main supported model is FLUX; see the [supported models reference](/mistral.rs/reference/supported-models/).
+hanzo serves diffusion models through `POST /v1/images/generations`. The main supported model is FLUX; see the [supported models reference](/hanzo/reference/supported-models/).
 
 ## Running FLUX
 
@@ -13,7 +13,7 @@ mistral.rs serves diffusion models through `POST /v1/images/generations`. The ma
 hanzo serve -m black-forest-labs/FLUX.1-schnell
 ```
 
-`FLUX.1-schnell` is permissively licensed. `FLUX.1-dev` requires Hugging Face license acceptance, same flow as [the Gemma setup](/mistral.rs/tutorials/02-serve-an-api/#accepting-the-gemma-license).
+`FLUX.1-schnell` is permissively licensed. `FLUX.1-dev` requires Hugging Face license acceptance, same flow as [the Gemma setup](/hanzo/tutorials/02-serve-an-api/#accepting-the-gemma-license).
 
 For low-memory hosts, use the offloaded architecture. It keeps far less on the GPU at the cost of much slower generation:
 

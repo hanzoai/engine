@@ -235,10 +235,10 @@ impl Loader for DiffusionLoader {
                 llg_factory: None,
                 is_xlora: false,
                 no_prefix_cache: false,
-                num_hidden_layers: 1, // FIXME(EricLBuehler): we know this is only for caching, so its OK.
+                num_hidden_layers: 1, // FIXME(hanzoai): we know this is only for caching, so its OK.
                 eos_tok: vec![],
                 kind: self.kind.clone(),
-                no_kv_cache: true, // NOTE(EricLBuehler): no cache for these.
+                no_kv_cache: true, // NOTE(hanzoai): no cache for these.
                 activation_dtype: dtype,
                 sliding_window: None,
                 cache_config: None,

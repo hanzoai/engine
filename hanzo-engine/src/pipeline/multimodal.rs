@@ -352,7 +352,7 @@ impl Loader for MultimodalLoader {
                         let total_tensors = ser_artifacts.tensors().len();
                         for (_, artifact) in ser_artifacts.tensors() {
                             let artifact = artifact.data();
-                            // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+                            // NOTE(hanzoai): isq type is ALWAYS byte 4 (5th) of the tensor.
                             let isq_type = artifact[hanzo_quant::UQFF_QUANT_TYPE_OFFSET];
                             let pack_factor = match QuantizedSerdeType::try_from(isq_type as usize)?
                             {

@@ -52,7 +52,7 @@ impl IntoResponse for SpeechGenerationResponder {
 /// Parses and validates a speech generation request.
 ///
 /// This function transforms a speech generation request into the
-/// request format used by mistral.rs.
+/// request format used by hanzo.
 pub fn parse_request(
     oairequest: SpeechGenerationRequest,
     state: Arc<Hanzo>,

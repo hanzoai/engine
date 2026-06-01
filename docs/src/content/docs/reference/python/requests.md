@@ -6,7 +6,7 @@ sidebar:
 ---
 ## `ChatCompletionRequest`
 
-A ChatCompletionRequest represents a request sent to the mistral.rs engine. It encodes information
+A ChatCompletionRequest represents a request sent to the hanzo engine. It encodes information
 about input data, sampling, and how to return the response.
 
 The messages type is as follows: (for normal chat completion, for chat completion with images, pretemplated prompt)
@@ -20,7 +20,7 @@ Agent permission fields:
   `AgentToolApproval`. Return `True`, `False`, or
   `AgentToolApprovalDecision`.
 
-See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions)
+See [agent permissions](/hanzo/guides/agents/agentic-runtime/#agent-permissions)
 for the shared CLI, HTTP, Python, and Rust behavior.
 
 | Field | Type | Default |
@@ -65,7 +65,7 @@ for the shared CLI, HTTP, Python, and Rust behavior.
 
 ## `CompletionRequest`
 
-A CompletionRequest represents a request sent to the mistral.rs engine. It encodes information
+A CompletionRequest represents a request sent to the hanzo engine. It encodes information
 about input data, sampling, and how to return the response.
 
 | Field | Type | Default |
@@ -108,4 +108,4 @@ An EmbeddingRequest represents a request to compute embeddings for the provided 
 
 ---
 
-<small>Generated from [`hanzo-pyo3/hanzo.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo-pyo3/hanzo.pyi).</small>
+<small>Generated from [`hanzo-pyo3/hanzo.pyi`](https://github.com/hanzoai/engine/blob/master/hanzo-pyo3/hanzo.pyi).</small>
