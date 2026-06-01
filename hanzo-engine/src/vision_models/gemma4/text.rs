@@ -106,7 +106,7 @@ impl ProportionalRotaryEmbedding {
             .reshape((max_position_embeddings, 1))?;
         let freqs = t.matmul(&inv_freq)?;
         // freqs shape: [max_pos, half_dim]
-        // candle's rope function expects cos/sin of shape [seq, half_dim]
+        // hanzo-ml's rope function expects cos/sin of shape [seq, half_dim]
         // (it handles the duplication internally)
         let cos = freqs.cos()?.to_dtype(dtype)?;
         let sin = freqs.sin()?.to_dtype(dtype)?;

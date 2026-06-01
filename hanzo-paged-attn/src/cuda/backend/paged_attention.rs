@@ -4,10 +4,9 @@ use crate::cuda::ffi::{
     paged_attention_v1_bf16, paged_attention_v1_f16, paged_attention_v1_f32,
     paged_attention_v2_bf16, paged_attention_v2_f16, paged_attention_v2_f32,
 };
-use candle::backend::BackendStorage;
-use candle::cuda_backend::cudarc::driver::{CudaSlice, DevicePtr};
-use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
-use hanzo_ml as candle;
+use hanzo_ml::backend::BackendStorage;
+use hanzo_ml::cuda_backend::cudarc::driver::{CudaSlice, DevicePtr};
+use hanzo_ml::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
 use hanzo_ml::cuda::cudarc::driver::DeviceSlice;
 use float8::F8E4M3;
 use half::{bf16, f16};
@@ -20,7 +19,7 @@ struct WorkspaceSlot {
     cap: usize,
 }
 
-type WsMap = Mutex<HashMap<candle::cuda_backend::DeviceId, &'static Mutex<WorkspaceSlot>>>;
+type WsMap = Mutex<HashMap<hanzo_ml::cuda_backend::DeviceId, &'static Mutex<WorkspaceSlot>>>;
 
 static PAGED_ATTN_V2_WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 
@@ -29,7 +28,7 @@ fn align_up(value: usize, alignment: usize) -> usize {
 }
 
 fn workspace_ensure(
-    dev: &candle::cuda_backend::CudaDevice,
+    dev: &hanzo_ml::cuda_backend::CudaDevice,
     bytes: usize,
 ) -> Result<(u64, std::sync::MutexGuard<'static, WorkspaceSlot>)> {
     let map = PAGED_ATTN_V2_WORKSPACE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -76,7 +75,7 @@ struct PagedAttention {
 
 impl PagedAttention {
     fn cuda_fwd_t<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: hanzo_ml::cuda_backend::CudaDType + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         &self,
         q: &CudaStorage,
@@ -88,7 +87,7 @@ impl PagedAttention {
             DType::BF16 => 1,
             DType::F32 => 2,
             DType::F8E4M3 => 3,
-            dtype => candle::bail!("cache dtype {dtype:?} is not supported"),
+            dtype => hanzo_ml::bail!("cache dtype {dtype:?} is not supported"),
         };
 
         let dev = q.device();
@@ -97,25 +96,25 @@ impl PagedAttention {
         let (kc, kc_l) = self.key_cache.storage_and_layout();
         let kc = match &*kc {
             Storage::Cuda(kc) => kc,
-            _ => candle::bail!("key_cache must be a cuda tensor"),
+            _ => hanzo_ml::bail!("key_cache must be a cuda tensor"),
         };
 
         let (vc, vc_l) = self.value_cache.storage_and_layout();
         let vc = match &*vc {
             Storage::Cuda(vc) => vc,
-            _ => candle::bail!("value_cache must be a cuda tensor"),
+            _ => hanzo_ml::bail!("value_cache must be a cuda tensor"),
         };
 
         let (bt, bt_l) = self.block_tables.storage_and_layout();
         let bt = match &*bt {
             Storage::Cuda(bt) => bt,
-            _ => candle::bail!("block_tables must be a cuda tensor"),
+            _ => hanzo_ml::bail!("block_tables must be a cuda tensor"),
         };
 
         let (cl, cl_l) = self.context_lens.storage_and_layout();
         let cl = match &*cl {
             Storage::Cuda(cl) => cl,
-            _ => candle::bail!("context_lens must be a cuda tensor"),
+            _ => hanzo_ml::bail!("context_lens must be a cuda tensor"),
         };
 
         let q_rank = q_l.stride().len();
@@ -123,21 +122,21 @@ impl PagedAttention {
         let vc_rank = vc_l.stride().len();
 
         if q_rank != 3 {
-            candle::bail!(
+            hanzo_ml::bail!(
                 "paged-attention expects `q` tensor to be of rank 3 \
                 (q: {q_l:?})"
             )
         }
 
         if kc_rank != 5 {
-            candle::bail!(
+            hanzo_ml::bail!(
                 "paged-attention expects `key_cache` tensor to be of rank 5 \
                 (key_cache: {kc_l:?})"
             )
         }
 
         if vc_rank != 4 {
-            candle::bail!(
+            hanzo_ml::bail!(
                 "paged-attention expects `value_cache` tensor to be of rank 4 \
                 (value_cache: {vc_l:?})"
             )
@@ -167,7 +166,7 @@ impl PagedAttention {
             let (alibi_s, alibi_s_l) = alibi_slopes.storage_and_layout();
             let alibi_s = match &*alibi_s {
                 Storage::Cuda(alibi_s) => alibi_s,
-                _ => candle::bail!("context_lens must be a cuda tensor"),
+                _ => hanzo_ml::bail!("context_lens must be a cuda tensor"),
             };
             let alibi_s = alibi_s.as_cuda_slice::<f32>()?;
             let (alibi_s_ptr, _alibi_s_guard) = slice_ptr(alibi_s, alibi_s_l.start_offset());
@@ -179,13 +178,13 @@ impl PagedAttention {
         let (k_scale_ptr, v_scale_ptr) =
             if let (Some(k_scale), Some(v_scale)) = (&self.k_scale, &self.v_scale) {
                 if !crate::cuda::USE_FP8 {
-                    candle::bail!("FP8 is not supported on this system.");
+                    hanzo_ml::bail!("FP8 is not supported on this system.");
                 }
 
                 let (ks, ks_l) = k_scale.storage_and_layout();
                 let ks = match &*ks {
                     Storage::Cuda(ks) => ks,
-                    _ => candle::bail!("k_scale must be a cuda tensor"),
+                    _ => hanzo_ml::bail!("k_scale must be a cuda tensor"),
                 };
                 let ks = ks.as_cuda_slice::<f32>()?;
                 let (ks, _ks_guard) = slice_ptr(ks, ks_l.start_offset());
@@ -193,7 +192,7 @@ impl PagedAttention {
                 let (vs, vs_l) = v_scale.storage_and_layout();
                 let vs = match &*vs {
                     Storage::Cuda(vs) => vs,
-                    _ => candle::bail!("v_scale must be a cuda tensor"),
+                    _ => hanzo_ml::bail!("v_scale must be a cuda tensor"),
                 };
                 let vs = vs.as_cuda_slice::<f32>()?;
                 let (vs, _vs_guard) = slice_ptr(vs, vs_l.start_offset());
@@ -207,7 +206,7 @@ impl PagedAttention {
             let (s, s_l) = sinks.storage_and_layout();
             let s = match &*s {
                 Storage::Cuda(s) => s,
-                _ => candle::bail!("sinks must be a cuda tensor"),
+                _ => hanzo_ml::bail!("sinks must be a cuda tensor"),
             };
             let s = s.as_cuda_slice::<f32>()?;
             let (s_ptr, _s_guard) = slice_ptr(s, s_l.start_offset());
@@ -232,7 +231,7 @@ impl PagedAttention {
         let (num_seqs_bt, max_num_blocks_per_seq) = bt_l.shape().dims2()?;
 
         if num_seqs_bt != num_seqs {
-            candle::bail!(
+            hanzo_ml::bail!(
                 "shape mismatch block_tables {:?}, expected {:?}",
                 bt_l.shape(),
                 (num_seqs, max_num_blocks_per_seq)
@@ -241,7 +240,7 @@ impl PagedAttention {
 
         let (num_blocks, num_kv_heads, head_size_kc, block_size, x) = kc_l.shape().dims5()?;
         if head_size_kc != head_size / x {
-            candle::bail!(
+            hanzo_ml::bail!(
                 "shape mismatch value_cache {:?}, expected {:?}",
                 vc_l.shape(),
                 (num_blocks, num_kv_heads, head_size / x, block_size, x)
@@ -249,7 +248,7 @@ impl PagedAttention {
         }
 
         if (num_blocks, num_kv_heads, head_size, block_size) != vc_l.shape().dims4()? {
-            candle::bail!(
+            hanzo_ml::bail!(
                 "shape mismatch key_cache {:?} and value_cache {:?}",
                 kc_l.shape(),
                 vc_l.shape()
@@ -257,7 +256,7 @@ impl PagedAttention {
         }
 
         if (num_seqs) != cl_l.shape().dims1()? {
-            candle::bail!(
+            hanzo_ml::bail!(
                 "shape mismatch context_lens {:?}, expected {:?}",
                 cl_l.shape(),
                 (num_seqs)
@@ -288,7 +287,7 @@ impl PagedAttention {
                 DType::F16 => paged_attention_v1_f16,
                 DType::BF16 => paged_attention_v1_bf16,
                 DType::F32 => paged_attention_v1_f32,
-                dtype => candle::bail!("dtype {dtype:?} is not supported"),
+                dtype => hanzo_ml::bail!("dtype {dtype:?} is not supported"),
             };
             unsafe {
                 paged_attention_v1_func(
@@ -337,7 +336,7 @@ impl PagedAttention {
                 DType::F16 => paged_attention_v2_f16,
                 DType::BF16 => paged_attention_v2_bf16,
                 DType::F32 => paged_attention_v2_f32,
-                dtype => candle::bail!("dtype {dtype:?} is not supported"),
+                dtype => hanzo_ml::bail!("dtype {dtype:?} is not supported"),
             };
             unsafe {
                 paged_attention_v2_func(
@@ -379,13 +378,13 @@ impl PagedAttention {
     }
 }
 
-impl candle::CustomOp1 for PagedAttention {
+impl hanzo_ml::CustomOp1 for PagedAttention {
     fn name(&self) -> &'static str {
         "paged-attention"
     }
 
     fn cpu_fwd(&self, _: &CpuStorage, _: &Layout) -> Result<(CpuStorage, Shape)> {
-        candle::bail!("no cpu support for paged-attention")
+        hanzo_ml::bail!("no cpu support for paged-attention")
     }
 
     fn cuda_fwd(&self, q: &CudaStorage, q_l: &Layout) -> Result<(CudaStorage, Shape)> {
@@ -393,7 +392,7 @@ impl candle::CustomOp1 for PagedAttention {
             DType::F32 => self.cuda_fwd_t::<f32>(q, q_l),
             DType::F16 => self.cuda_fwd_t::<f16>(q, q_l),
             DType::BF16 => self.cuda_fwd_t::<bf16>(q, q_l),
-            dt => candle::bail!("paged-attention is only supported for f32/f16/bf16 ({dt:?})"),
+            dt => hanzo_ml::bail!("paged-attention is only supported for f32/f16/bf16 ({dt:?})"),
         }
     }
 }
@@ -452,7 +451,7 @@ pub fn paged_attention(
 }
 
 fn update_cache<
-    T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+    T: hanzo_ml::cuda_backend::CudaDType + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,
 >(
     key: &Tensor,
     value: &Tensor,
@@ -468,7 +467,7 @@ fn update_cache<
         DType::F16 => 0,
         DType::BF16 => 1,
         DType::F32 => 2,
-        dtype => candle::bail!("dtype {dtype:?} is not supported"),
+        dtype => hanzo_ml::bail!("dtype {dtype:?} is not supported"),
     };
 
     let cache_dtype = match key_cache.dtype() {
@@ -476,37 +475,37 @@ fn update_cache<
         DType::BF16 => 1,
         DType::F32 => 2,
         DType::F8E4M3 => 3,
-        dtype => candle::bail!("cache dtype {dtype:?} is not supported"),
+        dtype => hanzo_ml::bail!("cache dtype {dtype:?} is not supported"),
     };
 
     let (k, k_l) = key.storage_and_layout();
     let k = match &*k {
         Storage::Cuda(k) => k,
-        _ => candle::bail!("key must be a cuda tensor"),
+        _ => hanzo_ml::bail!("key must be a cuda tensor"),
     };
 
     let (v, v_l) = value.storage_and_layout();
     let v = match &*v {
         Storage::Cuda(v) => v,
-        _ => candle::bail!("value must be a cuda tensor"),
+        _ => hanzo_ml::bail!("value must be a cuda tensor"),
     };
 
     let (kc, kc_l) = key_cache.storage_and_layout();
     let kc = match &*kc {
         Storage::Cuda(kc) => kc,
-        _ => candle::bail!("key_cache must be a cuda tensor"),
+        _ => hanzo_ml::bail!("key_cache must be a cuda tensor"),
     };
 
     let (vc, vc_l) = value_cache.storage_and_layout();
     let vc = match &*vc {
         Storage::Cuda(vc) => vc,
-        _ => candle::bail!("value_cache must be a cuda tensor"),
+        _ => hanzo_ml::bail!("value_cache must be a cuda tensor"),
     };
 
     let (s, s_l) = slot_mapping.storage_and_layout();
     let s = match &*s {
         Storage::Cuda(s) => s,
-        _ => candle::bail!("slot_mapping must be a cuda tensor"),
+        _ => hanzo_ml::bail!("slot_mapping must be a cuda tensor"),
     };
 
     let k_rank = k_l.stride().len();
@@ -515,18 +514,18 @@ fn update_cache<
     let vc_rank = vc_l.stride().len();
 
     if k_rank != 3 || v_rank != 3 {
-        candle::bail!("paged-attention expects input tensors of rank 3 (k: {k_l:?}, v: {v_l:?})")
+        hanzo_ml::bail!("paged-attention expects input tensors of rank 3 (k: {k_l:?}, v: {v_l:?})")
     }
 
     if kc_rank != 5 {
-        candle::bail!(
+        hanzo_ml::bail!(
             "paged-attention expects `key_cache` tensor to be of rank 5 \
                 (key_cache: {kc_l:?})"
         )
     }
 
     if vc_rank != 4 {
-        candle::bail!(
+        hanzo_ml::bail!(
             "paged-attention expects `value_cache` tensor to be of rank 4 \
                 (value_cache: {vc_l:?})"
         )
@@ -542,7 +541,7 @@ fn update_cache<
     // For FP8 cache, we need to get as u8 slices instead
     let ((kc_ptr, _kc_guard), (vc_ptr, _vc_guard)) = if cache_dtype == 3 {
         if !crate::cuda::USE_FP8 {
-            candle::bail!("FP8 is not supported on this system.");
+            hanzo_ml::bail!("FP8 is not supported on this system.");
         }
 
         let kc = kc.as_cuda_slice::<F8E4M3>()?;
@@ -567,13 +566,13 @@ fn update_cache<
 
     let (k_scale_ptr, v_scale_ptr) = if let (Some(k_scale), Some(v_scale)) = (k_scale, v_scale) {
         if !crate::cuda::USE_FP8 {
-            candle::bail!("FP8 is not supported on this system.");
+            hanzo_ml::bail!("FP8 is not supported on this system.");
         }
 
         let (ks, ks_l) = k_scale.storage_and_layout();
         let ks = match &*ks {
             Storage::Cuda(ks) => ks,
-            _ => candle::bail!("k_scale must be a cuda tensor"),
+            _ => hanzo_ml::bail!("k_scale must be a cuda tensor"),
         };
         let ks = ks.as_cuda_slice::<f32>()?;
         let (ks, _ks_guard) = slice_ptr(ks, ks_l.start_offset());
@@ -581,7 +580,7 @@ fn update_cache<
         let (vs, vs_l) = v_scale.storage_and_layout();
         let vs = match &*vs {
             Storage::Cuda(vs) => vs,
-            _ => candle::bail!("v_scale must be a cuda tensor"),
+            _ => hanzo_ml::bail!("v_scale must be a cuda tensor"),
         };
         let vs = vs.as_cuda_slice::<f32>()?;
         let (vs, _vs_guard) = slice_ptr(vs, vs_l.start_offset());
@@ -593,12 +592,12 @@ fn update_cache<
 
     let (num_tokens, num_heads, head_size) = k_l.shape().dims3()?;
     if (num_tokens, num_heads, head_size) != v_l.shape().dims3()? {
-        candle::bail!("shape mismatch k {:?} and v {:?}", k_l.shape(), v_l.shape())
+        hanzo_ml::bail!("shape mismatch k {:?} and v {:?}", k_l.shape(), v_l.shape())
     }
 
     let (num_blocks, num_heads_kc, head_size_kc, block_size, x) = kc_l.shape().dims5()?;
     if num_heads_kc != num_heads || head_size_kc != head_size / x {
-        candle::bail!(
+        hanzo_ml::bail!(
             "shape mismatch value_cache {:?}, expected {:?}",
             vc_l.shape(),
             (num_blocks, num_heads, head_size / x, block_size, x)
@@ -606,7 +605,7 @@ fn update_cache<
     }
 
     if (num_blocks, num_heads, head_size, block_size) != vc_l.shape().dims4()? {
-        candle::bail!(
+        hanzo_ml::bail!(
             "shape mismatch key_cache {:?} and value_cache {:?}",
             kc_l.shape(),
             vc_l.shape()
@@ -614,7 +613,7 @@ fn update_cache<
     }
 
     if (num_tokens) != s_l.shape().dims1()? {
-        candle::bail!(
+        hanzo_ml::bail!(
             "shape mismatch slot_mapping {:?}, expected {:?}",
             s_l.shape(),
             (num_tokens)
@@ -700,7 +699,7 @@ pub fn reshape_and_cache(
             slot_mapping,
         ),
         dt => {
-            candle::bail!("reshape_and_cache is only supported for f32, f16 and bf16 ({dt:?})")
+            hanzo_ml::bail!("reshape_and_cache is only supported for f32, f16 and bf16 ({dt:?})")
         }
     }
 }

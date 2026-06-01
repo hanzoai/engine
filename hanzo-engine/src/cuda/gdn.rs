@@ -21,8 +21,7 @@ pub fn gated_delta_rule_recurrence_cuda(
     beta: &Tensor,
     state: &mut Tensor,
 ) -> Result<Tensor> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
-    use hanzo_ml as candle;
+    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
 
     let (bh, seq_len, k_dim) = q.dims3()?;
     let v_dim = v.dim(2)?;
@@ -31,43 +30,43 @@ pub fn gated_delta_rule_recurrence_cuda(
 
     let (q_s, q_l) = q.storage_and_layout();
     let q_s = match &*q_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("q must be a cuda tensor"),
+        hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => hanzo_ml::bail!("q must be a cuda tensor"),
     };
     let q_offset = q_l.start_offset();
 
     let (k_s, k_l) = k.storage_and_layout();
     let k_s = match &*k_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("k must be a cuda tensor"),
+        hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => hanzo_ml::bail!("k must be a cuda tensor"),
     };
     let k_offset = k_l.start_offset();
 
     let (v_s, v_l) = v.storage_and_layout();
     let v_s = match &*v_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("v must be a cuda tensor"),
+        hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => hanzo_ml::bail!("v must be a cuda tensor"),
     };
     let v_offset = v_l.start_offset();
 
     let (g_s, g_l) = g.storage_and_layout();
     let g_s = match &*g_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("g must be a cuda tensor"),
+        hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => hanzo_ml::bail!("g must be a cuda tensor"),
     };
     let g_offset = g_l.start_offset();
 
     let (beta_s, beta_l) = beta.storage_and_layout();
     let beta_s = match &*beta_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("beta must be a cuda tensor"),
+        hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => hanzo_ml::bail!("beta must be a cuda tensor"),
     };
     let beta_offset = beta_l.start_offset();
 
     let (state_s, state_l) = state.storage_and_layout();
     let state_s = match &*state_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("state must be a cuda tensor"),
+        hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => hanzo_ml::bail!("state must be a cuda tensor"),
     };
     let state_offset = state_l.start_offset();
 
@@ -95,9 +94,9 @@ pub fn gated_delta_rule_recurrence_cuda(
     // The kernel wrote state in-place via the raw pointer; rewrap
     // (state tensor's underlying CudaSlice was modified directly)
 
-    let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
+    let output_storage = hanzo_ml::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
     Ok(Tensor::from((
-        candle::Storage::Cuda(output_storage),
+        hanzo_ml::Storage::Cuda(output_storage),
         (bh, seq_len, v_dim),
     )))
 }
@@ -134,8 +133,7 @@ pub fn chunked_gated_delta_rule_recurrence_cuda(
     beta: &Tensor,
     state: &mut Tensor,
 ) -> Result<Tensor> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
-    use hanzo_ml as candle;
+    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
 
     let (bh, seq_len, k_dim) = q.dims3()?;
     let v_dim = v.dim(2)?;
@@ -144,43 +142,43 @@ pub fn chunked_gated_delta_rule_recurrence_cuda(
 
     let (q_s, q_l) = q.storage_and_layout();
     let q_s = match &*q_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("q must be a cuda tensor"),
+        hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => hanzo_ml::bail!("q must be a cuda tensor"),
     };
     let q_offset = q_l.start_offset();
 
     let (k_s, k_l) = k.storage_and_layout();
     let k_s = match &*k_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("k must be a cuda tensor"),
+        hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => hanzo_ml::bail!("k must be a cuda tensor"),
     };
     let k_offset = k_l.start_offset();
 
     let (v_s, v_l) = v.storage_and_layout();
     let v_s = match &*v_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("v must be a cuda tensor"),
+        hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => hanzo_ml::bail!("v must be a cuda tensor"),
     };
     let v_offset = v_l.start_offset();
 
     let (g_s, g_l) = g.storage_and_layout();
     let g_s = match &*g_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("g must be a cuda tensor"),
+        hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => hanzo_ml::bail!("g must be a cuda tensor"),
     };
     let g_offset = g_l.start_offset();
 
     let (beta_s, beta_l) = beta.storage_and_layout();
     let beta_s = match &*beta_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("beta must be a cuda tensor"),
+        hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => hanzo_ml::bail!("beta must be a cuda tensor"),
     };
     let beta_offset = beta_l.start_offset();
 
     let (state_s, state_l) = state.storage_and_layout();
     let state_s = match &*state_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("state must be a cuda tensor"),
+        hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => hanzo_ml::bail!("state must be a cuda tensor"),
     };
     let state_offset = state_l.start_offset();
 
@@ -205,9 +203,9 @@ pub fn chunked_gated_delta_rule_recurrence_cuda(
         );
     }
 
-    let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
+    let output_storage = hanzo_ml::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
     Ok(Tensor::from((
-        candle::Storage::Cuda(output_storage),
+        hanzo_ml::Storage::Cuda(output_storage),
         (bh, seq_len, v_dim),
     )))
 }
@@ -243,11 +241,10 @@ pub fn causal_conv1d_cuda(
     kernel_size: usize,
     is_update: bool,
 ) -> Result<(Tensor, Tensor)> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
-    use hanzo_ml as candle;
+    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
     use core::ffi::c_void;
     fn cuda_fwd<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: hanzo_ml::cuda_backend::CudaDType + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         x: &Tensor,
         weight: &Tensor,
@@ -261,15 +258,15 @@ pub fn causal_conv1d_cuda(
 
         let (x_s, x_l) = x.storage_and_layout();
         let x_s = match &*x_s {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            _ => candle::bail!("x must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            _ => hanzo_ml::bail!("x must be a cuda tensor"),
         };
         let x_offset = x_l.start_offset();
 
         let (w_s, w_l) = weight.storage_and_layout();
         let w_s = match &*w_s {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            _ => candle::bail!("weight must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            _ => hanzo_ml::bail!("weight must be a cuda tensor"),
         };
         let w_offset = w_l.start_offset();
 
@@ -285,8 +282,8 @@ pub fn causal_conv1d_cuda(
             {
                 let (cs_s, cs_l) = conv_state_new.storage_and_layout();
                 let cs_s = match &*cs_s {
-                    candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-                    _ => candle::bail!("conv_state must be a cuda tensor"),
+                    hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+                    _ => hanzo_ml::bail!("conv_state must be a cuda tensor"),
                 };
                 let cs_offset = cs_l.start_offset();
 
@@ -305,9 +302,9 @@ pub fn causal_conv1d_cuda(
                 }
             }
 
-            let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
+            let output_storage = hanzo_ml::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
             let output = Tensor::from((
-                candle::Storage::Cuda(output_storage),
+                hanzo_ml::Storage::Cuda(output_storage),
                 (batch_size, conv_dim, 1usize),
             ));
 
@@ -332,15 +329,15 @@ pub fn causal_conv1d_cuda(
                 );
             }
 
-            let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
+            let output_storage = hanzo_ml::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
             let output = Tensor::from((
-                candle::Storage::Cuda(output_storage),
+                hanzo_ml::Storage::Cuda(output_storage),
                 (batch_size, conv_dim, seq_len),
             ));
 
-            let cs_storage = candle::CudaStorage::wrap_cuda_slice(cs_buf, dev.clone());
+            let cs_storage = hanzo_ml::CudaStorage::wrap_cuda_slice(cs_buf, dev.clone());
             let new_conv_state = Tensor::from((
-                candle::Storage::Cuda(cs_storage),
+                hanzo_ml::Storage::Cuda(cs_storage),
                 (batch_size, conv_dim, kernel_size),
             ));
 
@@ -382,12 +379,11 @@ pub fn fused_gdn_gating_cuda(
     a_log: &Tensor,
     dt_bias: &Tensor,
 ) -> Result<(Tensor, Tensor)> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
-    use hanzo_ml as candle;
+    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
     use core::ffi::c_void;
 
     fn cuda_fwd<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: hanzo_ml::cuda_backend::CudaDType + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         b: &Tensor,
         a: &Tensor,
@@ -402,29 +398,29 @@ pub fn fused_gdn_gating_cuda(
 
         let (b_s, b_l) = b.storage_and_layout();
         let b_s = match &*b_s {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            _ => candle::bail!("b must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            _ => hanzo_ml::bail!("b must be a cuda tensor"),
         };
         let b_offset = b_l.start_offset();
 
         let (a_s, a_l) = a.storage_and_layout();
         let a_s = match &*a_s {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            _ => candle::bail!("a must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            _ => hanzo_ml::bail!("a must be a cuda tensor"),
         };
         let a_offset = a_l.start_offset();
 
         let (alog_s, alog_l) = a_log.storage_and_layout();
         let alog_s = match &*alog_s {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-            _ => candle::bail!("a_log must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+            _ => hanzo_ml::bail!("a_log must be a cuda tensor"),
         };
         let alog_offset = alog_l.start_offset();
 
         let (dtb_s, dtb_l) = dt_bias.storage_and_layout();
         let dtb_s = match &*dtb_s {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-            _ => candle::bail!("dt_bias must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+            _ => hanzo_ml::bail!("dt_bias must be a cuda tensor"),
         };
         let dtb_offset = dtb_l.start_offset();
 
@@ -448,11 +444,11 @@ pub fn fused_gdn_gating_cuda(
             );
         }
 
-        let beta_storage = candle::CudaStorage::wrap_cuda_slice(beta_buf, dev.clone());
-        let beta = Tensor::from((candle::Storage::Cuda(beta_storage), shape.clone()));
+        let beta_storage = hanzo_ml::CudaStorage::wrap_cuda_slice(beta_buf, dev.clone());
+        let beta = Tensor::from((hanzo_ml::Storage::Cuda(beta_storage), shape.clone()));
 
-        let g_storage = candle::CudaStorage::wrap_cuda_slice(g_buf, dev.clone());
-        let g = Tensor::from((candle::Storage::Cuda(g_storage), shape));
+        let g_storage = hanzo_ml::CudaStorage::wrap_cuda_slice(g_buf, dev.clone());
+        let g = Tensor::from((hanzo_ml::Storage::Cuda(g_storage), shape));
 
         Ok((beta, g))
     }

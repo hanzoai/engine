@@ -2680,7 +2680,7 @@ impl CustomOp2 for FusedGlu {
                     .into_par_iter()
                     .map(|i| {
                         let a_val = a_slice[a_offset + i].to_f32();
-                        // Cast activation back to f16 before multiplying, matching candle's
+                        // Cast activation back to f16 before multiplying, matching the reference
                         // two-step behavior: unary op in f32 -> cast to f16 -> binary mul
                         let activated = f16::from_f32(apply_cpu_activation(a_val, activation));
                         f16::from_f32(activated.to_f32() * b_slice[b_offset + i].to_f32())
@@ -2698,7 +2698,7 @@ impl CustomOp2 for FusedGlu {
                     .into_par_iter()
                     .map(|i| {
                         let a_val = a_slice[a_offset + i].to_f32();
-                        // Cast activation back to bf16 before multiplying, matching candle's
+                        // Cast activation back to bf16 before multiplying, matching the reference
                         // two-step behavior: unary op in f32 -> cast to bf16 -> binary mul
                         let activated = bf16::from_f32(apply_cpu_activation(a_val, activation));
                         bf16::from_f32(activated.to_f32() * b_slice[b_offset + i].to_f32())
@@ -3199,7 +3199,7 @@ mod tests {
         use hanzo_ml::{Device, Tensor};
         let bits = HqqBits::Eight;
         let device = Device::new_cuda(0).unwrap();
-        // Use U8 tensor directly to avoid candle's to_dtype which may not have
+        // Use U8 tensor directly to avoid hanzo-ml's to_dtype which may not have
         // PTX compiled for newer GPU architectures (e.g., SM 120)
         let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 255, 0], (3, 2), &device).unwrap();
         let c = bits.bitpack_type()(wq.clone())
@@ -3471,11 +3471,11 @@ mod tests {
         }
     }
 
-    /// Test that fused_glu matches candle's fallback path (a.gelu() * b) for BF16.
+    /// Test that fused_glu matches hanzo-ml's fallback path (a.gelu() * b) for BF16.
     /// This was the exact scenario that caused model failure (Gemma 3 4B, BF16, GeluPytorchTanh).
     #[cfg(feature = "metal")]
     #[test]
-    fn test_fused_glu_matches_candle_fallback_bf16() {
+    fn test_fused_glu_matches_fallback_bf16() {
         use super::{fused_glu, GluActivationType};
         use hanzo_ml::{DType, Tensor};
 
@@ -3498,7 +3498,7 @@ mod tests {
         // Fused path
         let fused = fused_glu(&a_metal, &b_metal, GluActivationType::Gelu).unwrap();
 
-        // Candle's fallback: a.gelu() * b (the tanh-approx GELU)
+        // Hanzo's fallback: a.gelu() * b (the tanh-approx GELU)
         let fallback = (a_metal.gelu().unwrap() * &b_metal).unwrap();
 
         let fused_f32 = fused
@@ -3535,7 +3535,7 @@ mod tests {
         // This is acceptable since Metal compiler may keep intermediate precision
         assert!(
             max_diff <= 0.015625,
-            "BF16 Gelu fused vs candle fallback max_diff {max_diff} exceeds 1 BF16 ULP"
+            "BF16 Gelu fused vs reference fallback max_diff {max_diff} exceeds 1 BF16 ULP"
         );
     }
 
@@ -3677,7 +3677,7 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
-    fn test_fused_glu_matches_candle_fallback_bf16_cuda() {
+    fn test_fused_glu_matches_fallback_bf16_cuda() {
         use super::{fused_glu, GluActivationType};
         use hanzo_ml::{DType, Tensor};
 
@@ -3699,7 +3699,7 @@ mod tests {
         // Fused path
         let fused = fused_glu(&a_cuda, &b_cuda, GluActivationType::Gelu).unwrap();
 
-        // Candle's fallback: a.gelu() * b (the tanh-approx GELU)
+        // Hanzo's fallback: a.gelu() * b (the tanh-approx GELU)
         let fallback = (a_cuda.gelu().unwrap() * &b_cuda).unwrap();
 
         let fused_f32 = fused
@@ -3735,7 +3735,7 @@ mod tests {
         // Allow up to 1 BF16 ULP difference (0.015625 at values around 1-2)
         assert!(
             max_diff <= 0.015625,
-            "CUDA BF16 Gelu fused vs candle fallback max_diff {max_diff} exceeds 1 BF16 ULP"
+            "CUDA BF16 Gelu fused vs reference fallback max_diff {max_diff} exceeds 1 BF16 ULP"
         );
     }
 }

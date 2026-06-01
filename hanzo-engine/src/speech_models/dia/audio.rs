@@ -82,9 +82,9 @@ pub fn apply_audio_delay(
     assert_eq!(shape.len(), 3, "Expected 3D tensor for audio_bxtxc");
 
     // Gather values using precomputed indices
-    // Note: Candle may not have direct equivalent to PyTorch's advanced indexing,
-    // so we would need to implement this differently depending on Candle's capabilities
-    // This is a simplified approach - in practice would need to use Candle's indexing methods
+    // Note: Hanzo may not have direct equivalent to PyTorch's advanced indexing,
+    // so we would need to implement this differently depending on Hanzo's capabilities
+    // This is a simplified approach - in practice would need to use Hanzo's indexing methods
     let gathered_flat = gather_nd(audio_bxtxc, indices_btcx3)?;
     let gathered_bxtxc = gathered_flat.reshape(shape)?;
 
