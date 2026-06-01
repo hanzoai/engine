@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
+use hanzo_ml::{Context, DType, Device, IndexOp, Result, Tensor, D};
 use hanzo_quant::{QuantMethod, ShardedVarBuilder};
 use text::Qwen2_5VLTextModel;
 use vision::Qwen2_5VLVisionModel;
@@ -54,7 +54,7 @@ impl Qwen2_5VLModel {
     ) -> Result<Self> {
         if cfg.use_sliding_window {
             // TODO!
-            candle_core::bail!("Sliding window is unsupported for now!");
+            hanzo_ml::bail!("Sliding window is unsupported for now!");
         }
         // Support both HuggingFace naming (visual.*) and MLX naming (vision_tower.*)
         let vision_vb = if vb.contains_tensor("vision_tower.patch_embed.proj.weight") {
@@ -563,7 +563,7 @@ impl MultimodalModel for Qwen2_5VLModel {
             (None, Some(_)) => (None, pixel_values),
             (None, None) => (None, None),
             (Some(_), Some(_)) => {
-                candle_core::bail!("Images and videos cannot be provided together.")
+                hanzo_ml::bail!("Images and videos cannot be provided together.")
             }
         };
         // Use the complete grid (covering all images/videos including prefix-cached ones)

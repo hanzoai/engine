@@ -9,7 +9,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{DType, Device, Result, Tensor, D};
+use hanzo_ml::{DType, Device, Result, Tensor, D};
 pub use config::Idefics3Config;
 pub use inputs_processor::Idefics3Processor;
 use hanzo_quant::{NonZeroOp, ShardedVarBuilder};
@@ -338,7 +338,7 @@ impl MultimodalModel for Idefics3Model {
         model_specific_args: Box<dyn Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         let Idefics3SpecificArgs {
             pixel_attention_mask,
             image_hashes,

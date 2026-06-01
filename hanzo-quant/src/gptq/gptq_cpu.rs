@@ -2,7 +2,7 @@ use crate::{
     has_missing_required_tensors, make_dummy_or_error, IsqType, QuantMethod, QuantMethodConfig,
     QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, ShardedVarBuilder,
 };
-use candle_core::{DType, Device, Result, Tensor};
+use hanzo_ml::{DType, Device, Result, Tensor};
 use std::sync::{atomic::AtomicUsize, Arc};
 
 #[derive(Debug)]
@@ -15,7 +15,7 @@ impl QuantMethod for GptqLayer {
     {
         match method {
             QuantMethodConfig::GptqAwq { .. } => {
-                candle_core::bail!("GPTQ is only supported on CUDA.")
+                hanzo_ml::bail!("GPTQ is only supported on CUDA.")
             }
             QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(_)
@@ -48,7 +48,7 @@ impl QuantMethod for GptqLayer {
         todo!()
     }
 
-    fn dtype_and_device(&self) -> (DType, candle_core::Device) {
+    fn dtype_and_device(&self) -> (DType, hanzo_ml::Device) {
         todo!()
     }
 
@@ -89,7 +89,7 @@ pub fn gptq_linear(
         is_awq,
     } = config
     else {
-        candle_core::bail!("Unexpected quantization config.")
+        hanzo_ml::bail!("Unexpected quantization config.")
     };
 
     let is_awq = *is_awq;

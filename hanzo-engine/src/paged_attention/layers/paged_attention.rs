@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use candle_core::{DType, Device, Result, Tensor};
+use hanzo_ml::{DType, Device, Result, Tensor};
 #[allow(unused_imports)]
 use hanzo_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
 
@@ -17,7 +17,7 @@ use crate::{
 };
 
 fn resolve_tensor_for_device(
-    tensors: &HashMap<candle_core::DeviceLocation, Tensor>,
+    tensors: &HashMap<hanzo_ml::DeviceLocation, Tensor>,
     device: &Device,
     what: &str,
 ) -> Result<Tensor> {
@@ -27,7 +27,7 @@ fn resolve_tensor_for_device(
     if let Some(tensor) = tensors.values().next() {
         return tensor.to_device(device);
     }
-    candle_core::bail!("Missing {what} tensor for {:?}", device.location())
+    hanzo_ml::bail!("Missing {what} tensor for {:?}", device.location())
 }
 
 fn cumulative_seqlens_from_lengths(lengths: &[usize], device: &Device) -> Result<Tensor> {
@@ -179,14 +179,14 @@ impl PagedAttention {
         let use_full =
             sdpa_params.sliding_window.is_none() && input_metadata.full_block_tables.is_some();
 
-        let resolve_block_tables = |dev: &candle_core::DeviceLocation| -> Option<&Tensor> {
+        let resolve_block_tables = |dev: &hanzo_ml::DeviceLocation| -> Option<&Tensor> {
             if use_full {
                 input_metadata.full_block_tables.as_ref()?.get(dev)
             } else {
                 input_metadata.block_tables.as_ref()?.get(dev)
             }
         };
-        let resolve_context_lens = |dev: &candle_core::DeviceLocation| -> Option<&Tensor> {
+        let resolve_context_lens = |dev: &hanzo_ml::DeviceLocation| -> Option<&Tensor> {
             if use_full {
                 input_metadata.full_context_lens.as_ref()?.get(dev)
             } else {

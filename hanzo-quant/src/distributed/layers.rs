@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use candle_core::{Context, Device, IndexOp, Result, Tensor, D};
-use candle_nn::Linear;
+use hanzo_ml::{Context, Device, IndexOp, Result, Tensor, D};
+use hanzo_nn::Linear;
 
 use crate::{
     blockwise_fp8::{blockwise_fp8_linear_b, blockwise_fp8_moe},
@@ -66,7 +66,7 @@ impl RowParallelLayer {
                     | QuantizedConfig::Afq { .. }
             ) && comm.world_size() != 1
             {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "GPTQ and BNB and AFQ quantization types to not support tensor parallelism, but got a world size of {}",
                     comm.world_size()
                 );
@@ -160,7 +160,7 @@ impl RowParallelLayer {
         };
 
         if config.is_some() {
-            candle_core::bail!("Cannot load a matformer layer with a pre-quantized model.");
+            hanzo_ml::bail!("Cannot load a matformer layer with a pre-quantized model.");
         }
 
         let weight = if !vb.contains_tensor("weight") {
@@ -206,7 +206,7 @@ impl QuantMethod for RowParallelLayer {
     where
         Self: Sized,
     {
-        candle_core::bail!("RowParallelLayer should not be constructed with `QuantMethod::new`")
+        hanzo_ml::bail!("RowParallelLayer should not be constructed with `QuantMethod::new`")
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
@@ -231,7 +231,7 @@ impl QuantMethod for RowParallelLayer {
         self.weight.dequantize_w()
     }
 
-    fn dtype_and_device(&self) -> (candle_core::DType, candle_core::Device) {
+    fn dtype_and_device(&self) -> (hanzo_ml::DType, hanzo_ml::Device) {
         self.weight.dtype_and_device()
     }
 
@@ -245,7 +245,7 @@ impl QuantMethod for RowParallelLayer {
         self.weight.end_track_stats()
     }
 
-    fn quantized_act_type(&self) -> Option<candle_core::DType> {
+    fn quantized_act_type(&self) -> Option<hanzo_ml::DType> {
         self.weight.quantized_act_type()
     }
 
@@ -258,14 +258,14 @@ impl QuantMethod for RowParallelLayer {
     }
 
     #[cfg(feature = "cuda")]
-    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+    fn get_qtensor(&self) -> Option<&hanzo_ml::quantized::QTensor> {
         self.weight.get_qtensor()
     }
 
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<crate::IsqType>,
-        device: candle_core::Device,
+        device: hanzo_ml::Device,
         n_quantized: &std::sync::atomic::AtomicUsize,
         imatrix_weight: Option<Vec<f32>>,
         guard: QuantizeOntoGuard,
@@ -305,7 +305,7 @@ impl QuantizedSerde for RowParallelLayer {
     }
     fn deserialize(
         data: std::borrow::Cow<[u8]>,
-        device: &candle_core::Device,
+        device: &hanzo_ml::Device,
         comm: &Arc<crate::Comm>,
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
@@ -368,7 +368,7 @@ impl ColumnParallelLayer {
                     | QuantizedConfig::Afq { .. }
             ) && comm.world_size() != 1
             {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "GPTQ/AWQ and BNB and AFQ quantization types to not support tensor parallelism, but got a world size of {}",
                     comm.world_size()
                 );
@@ -474,7 +474,7 @@ impl ColumnParallelLayer {
         };
 
         if config.is_some() {
-            candle_core::bail!("Cannot load a matformer layer with a pre-quantized model.");
+            hanzo_ml::bail!("Cannot load a matformer layer with a pre-quantized model.");
         }
 
         let weight = if !vb.contains_tensor("weight") {
@@ -545,7 +545,7 @@ impl QuantMethod for ColumnParallelLayer {
     where
         Self: Sized,
     {
-        candle_core::bail!("ColumnParallelLayer should not be constructed with `QuantMethod::new`")
+        hanzo_ml::bail!("ColumnParallelLayer should not be constructed with `QuantMethod::new`")
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
@@ -568,7 +568,7 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.dequantize_w()
     }
 
-    fn dtype_and_device(&self) -> (candle_core::DType, candle_core::Device) {
+    fn dtype_and_device(&self) -> (hanzo_ml::DType, hanzo_ml::Device) {
         self.weight.dtype_and_device()
     }
 
@@ -582,7 +582,7 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.end_track_stats()
     }
 
-    fn quantized_act_type(&self) -> Option<candle_core::DType> {
+    fn quantized_act_type(&self) -> Option<hanzo_ml::DType> {
         self.weight.quantized_act_type()
     }
 
@@ -595,14 +595,14 @@ impl QuantMethod for ColumnParallelLayer {
     }
 
     #[cfg(feature = "cuda")]
-    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+    fn get_qtensor(&self) -> Option<&hanzo_ml::quantized::QTensor> {
         self.weight.get_qtensor()
     }
 
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<crate::IsqType>,
-        device: candle_core::Device,
+        device: hanzo_ml::Device,
         n_quantized: &std::sync::atomic::AtomicUsize,
         imatrix_weight: Option<Vec<f32>>,
         guard: QuantizeOntoGuard,
@@ -638,7 +638,7 @@ impl QuantizedSerde for ColumnParallelLayer {
     }
     fn deserialize(
         data: std::borrow::Cow<[u8]>,
-        device: &candle_core::Device,
+        device: &hanzo_ml::Device,
         _comm: &Arc<crate::Comm>,
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
@@ -814,7 +814,7 @@ impl ReplicatedLayer {
 
         let layer = if let Some(quant_conf) = &config {
             if kept_layers_indices.is_some() {
-                candle_core::bail!("Cannot load a matformer layer with a pre-quantized model.");
+                hanzo_ml::bail!("Cannot load a matformer layer with a pre-quantized model.");
             }
 
             match quant_conf {
@@ -897,7 +897,7 @@ impl QuantMethod for ReplicatedLayer {
     where
         Self: Sized,
     {
-        candle_core::bail!("ReplicatedLayer should not be constructed with `QuantMethod::new`")
+        hanzo_ml::bail!("ReplicatedLayer should not be constructed with `QuantMethod::new`")
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
@@ -912,7 +912,7 @@ impl QuantMethod for ReplicatedLayer {
         self.0.dequantize_w()
     }
 
-    fn dtype_and_device(&self) -> (candle_core::DType, candle_core::Device) {
+    fn dtype_and_device(&self) -> (hanzo_ml::DType, hanzo_ml::Device) {
         self.0.dtype_and_device()
     }
 
@@ -926,7 +926,7 @@ impl QuantMethod for ReplicatedLayer {
         self.0.end_track_stats()
     }
 
-    fn quantized_act_type(&self) -> Option<candle_core::DType> {
+    fn quantized_act_type(&self) -> Option<hanzo_ml::DType> {
         self.0.quantized_act_type()
     }
 
@@ -939,14 +939,14 @@ impl QuantMethod for ReplicatedLayer {
     }
 
     #[cfg(feature = "cuda")]
-    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+    fn get_qtensor(&self) -> Option<&hanzo_ml::quantized::QTensor> {
         self.0.get_qtensor()
     }
 
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<crate::IsqType>,
-        device: candle_core::Device,
+        device: hanzo_ml::Device,
         n_quantized: &std::sync::atomic::AtomicUsize,
         imatrix_weight: Option<Vec<f32>>,
         guard: QuantizeOntoGuard,
@@ -973,7 +973,7 @@ impl QuantizedSerde for ReplicatedLayer {
     }
     fn deserialize(
         data: std::borrow::Cow<[u8]>,
-        device: &candle_core::Device,
+        device: &hanzo_ml::Device,
         comm: &Arc<crate::Comm>,
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
@@ -1015,13 +1015,13 @@ impl PackedExperts {
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         if bias {
-            candle_core::bail!("PackedExperts does not support bias.");
+            hanzo_ml::bail!("PackedExperts does not support bias.");
         }
 
         let (gate_proj, up_proj, down_proj) = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
             if comm.world_size() != 1 {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "PackedExperts with quantization config does not support distributed (world size {}). Use ISQ.",
                     comm.world_size()
                 );
@@ -1032,7 +1032,7 @@ impl PackedExperts {
                     if !vb.contains_tensor("gate_up_proj")
                         || !vb.contains_tensor("gate_up_proj.weight")
                     {
-                        candle_core::bail!("PackedExperts with AFQ quantization config does not support `gate_up_proj` format.");
+                        hanzo_ml::bail!("PackedExperts with AFQ quantization config does not support `gate_up_proj` format.");
                     }
 
                     let base_vb = vb.clone();
@@ -1087,10 +1087,10 @@ impl PackedExperts {
                     // FP8 quantization for PackedExperts
                     // Keep weights as FP8 using BlockwiseFP8Linear to leverage native FP8 GEMM
                     let Some(weight_block_size) = weight_block_size else {
-                        candle_core::bail!("Blockwise FP8 for PackedExperts requires weight_block_size to be set.")
+                        hanzo_ml::bail!("Blockwise FP8 for PackedExperts requires weight_block_size to be set.")
                     };
                     if weight_block_size.len() != 2 {
-                        candle_core::bail!(
+                        hanzo_ml::bail!(
                             "Expected weight_block_size to have length 2, got {weight_block_size:?}"
                         );
                     }
@@ -1109,7 +1109,7 @@ impl PackedExperts {
                                 (num_local_experts, hidden_size, intermediate_size * 2),
                                 "gate_up_proj",
                                 Default::default(),
-                                candle_core::DType::F8E4M3,
+                                hanzo_ml::DType::F8E4M3,
                             )?;
                             let gate_up_scale = vb.get_with_hints_dtype(
                                 (
@@ -1119,7 +1119,7 @@ impl PackedExperts {
                                 ),
                                 "gate_up_proj.weight_scale_inv",
                                 Default::default(),
-                                candle_core::DType::F32,
+                                hanzo_ml::DType::F32,
                             )?;
 
                             // Load down_proj FP8 tensor and scale
@@ -1127,7 +1127,7 @@ impl PackedExperts {
                                 (num_local_experts, intermediate_size, hidden_size),
                                 "down_proj",
                                 Default::default(),
-                                candle_core::DType::F8E4M3,
+                                hanzo_ml::DType::F8E4M3,
                             )?;
                             let down_scale = vb.get_with_hints_dtype(
                                 (
@@ -1137,7 +1137,7 @@ impl PackedExperts {
                                 ),
                                 "down_proj.weight_scale_inv",
                                 Default::default(),
-                                candle_core::DType::F32,
+                                hanzo_ml::DType::F32,
                             )?;
 
                             // Split and create individual BlockwiseFP8Linear for each expert
@@ -1212,7 +1212,7 @@ impl PackedExperts {
 
                             (gs, us, ds)
                         } else {
-                            candle_core::bail!(
+                            hanzo_ml::bail!(
                                 "PackedExperts with FP8 requires weight_scale_inv tensors"
                             );
                         }
@@ -1230,7 +1230,7 @@ impl PackedExperts {
                                 (intermediate_size, hidden_size),
                                 "gate_proj.weight",
                                 Default::default(),
-                                candle_core::DType::F8E4M3,
+                                hanzo_ml::DType::F8E4M3,
                             )?;
                             let gate_scale = expert_vb.get_with_hints_dtype(
                                 (
@@ -1239,14 +1239,14 @@ impl PackedExperts {
                                 ),
                                 "gate_proj.weight_scale_inv",
                                 Default::default(),
-                                candle_core::DType::F32,
+                                hanzo_ml::DType::F32,
                             )?;
 
                             let up_fp8 = expert_vb.get_with_hints_dtype(
                                 (intermediate_size, hidden_size),
                                 "up_proj.weight",
                                 Default::default(),
-                                candle_core::DType::F8E4M3,
+                                hanzo_ml::DType::F8E4M3,
                             )?;
                             let up_scale = expert_vb.get_with_hints_dtype(
                                 (
@@ -1255,14 +1255,14 @@ impl PackedExperts {
                                 ),
                                 "up_proj.weight_scale_inv",
                                 Default::default(),
-                                candle_core::DType::F32,
+                                hanzo_ml::DType::F32,
                             )?;
 
                             let down_fp8 = expert_vb.get_with_hints_dtype(
                                 (hidden_size, intermediate_size),
                                 "down_proj.weight",
                                 Default::default(),
-                                candle_core::DType::F8E4M3,
+                                hanzo_ml::DType::F8E4M3,
                             )?;
                             let down_scale = expert_vb.get_with_hints_dtype(
                                 (
@@ -1271,7 +1271,7 @@ impl PackedExperts {
                                 ),
                                 "down_proj.weight_scale_inv",
                                 Default::default(),
-                                candle_core::DType::F32,
+                                hanzo_ml::DType::F32,
                             )?;
 
                             // Create BlockwiseFP8Linear for each projection
@@ -1345,7 +1345,7 @@ impl PackedExperts {
 
                     (vec![gate_proj], vec![up_proj], vec![down_proj])
                 }
-                _ => candle_core::bail!(
+                _ => hanzo_ml::bail!(
                     "PackedExperts with quantization config only allows AFQ, FP8, or MXFP4 quantization"
                 ),
             }
@@ -1558,12 +1558,12 @@ impl FusedExperts {
                 };
 
                 let Some(weight_block_size) = weight_block_size else {
-                    candle_core::bail!(
+                    hanzo_ml::bail!(
                         "Blockwise FP8 for stacked experts requires weight_block_size to be set."
                     )
                 };
                 if weight_block_size.len() != 2 {
-                    candle_core::bail!(
+                    hanzo_ml::bail!(
                         "Expected weight_block_size to have length 2, got {weight_block_size:?}"
                     );
                 }
@@ -1574,7 +1574,7 @@ impl FusedExperts {
                     (num_experts, hidden_size, moe_intermediate_size * 2),
                     "gate_up_proj",
                     Default::default(),
-                    candle_core::DType::F8E4M3,
+                    hanzo_ml::DType::F8E4M3,
                 )?;
                 let gate_up_scale = experts_vb.get_with_hints_dtype(
                     (
@@ -1584,7 +1584,7 @@ impl FusedExperts {
                     ),
                     "gate_up_proj.weight_scale_inv",
                     Default::default(),
-                    candle_core::DType::F32,
+                    hanzo_ml::DType::F32,
                 )?;
 
                 // Load down_proj FP8 tensor and scale
@@ -1593,7 +1593,7 @@ impl FusedExperts {
                     (num_experts, moe_intermediate_size, hidden_size),
                     "down_proj",
                     Default::default(),
-                    candle_core::DType::F8E4M3,
+                    hanzo_ml::DType::F8E4M3,
                 )?;
                 let down_scale = experts_vb.get_with_hints_dtype(
                     (
@@ -1603,7 +1603,7 @@ impl FusedExperts {
                     ),
                     "down_proj.weight_scale_inv",
                     Default::default(),
-                    candle_core::DType::F32,
+                    hanzo_ml::DType::F32,
                 )?;
 
                 // Split gate_up into gate and up
@@ -1850,12 +1850,12 @@ impl FusedExperts {
             };
 
             let Some(weight_block_size) = weight_block_size else {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Blockwise FP8 for per-expert format requires weight_block_size to be set."
                 )
             };
             if weight_block_size.len() != 2 {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Expected weight_block_size to have length 2, got {weight_block_size:?}"
                 );
             }
@@ -1875,7 +1875,7 @@ impl FusedExperts {
                     (moe_intermediate_size, hidden_size),
                     "gate_proj.weight",
                     Default::default(),
-                    candle_core::DType::F8E4M3,
+                    hanzo_ml::DType::F8E4M3,
                 )?;
                 let gate_scale = expert_vb.get_with_hints_dtype(
                     (
@@ -1884,14 +1884,14 @@ impl FusedExperts {
                     ),
                     "gate_proj.weight_scale_inv",
                     Default::default(),
-                    candle_core::DType::F32,
+                    hanzo_ml::DType::F32,
                 )?;
 
                 let up_fp8 = expert_vb.get_with_hints_dtype(
                     (moe_intermediate_size, hidden_size),
                     "up_proj.weight",
                     Default::default(),
-                    candle_core::DType::F8E4M3,
+                    hanzo_ml::DType::F8E4M3,
                 )?;
                 let up_scale = expert_vb.get_with_hints_dtype(
                     (
@@ -1900,14 +1900,14 @@ impl FusedExperts {
                     ),
                     "up_proj.weight_scale_inv",
                     Default::default(),
-                    candle_core::DType::F32,
+                    hanzo_ml::DType::F32,
                 )?;
 
                 let down_fp8 = expert_vb.get_with_hints_dtype(
                     (hidden_size, moe_intermediate_size),
                     "down_proj.weight",
                     Default::default(),
-                    candle_core::DType::F8E4M3,
+                    hanzo_ml::DType::F8E4M3,
                 )?;
                 let down_scale = expert_vb.get_with_hints_dtype(
                     (
@@ -1916,7 +1916,7 @@ impl FusedExperts {
                     ),
                     "down_proj.weight_scale_inv",
                     Default::default(),
-                    candle_core::DType::F32,
+                    hanzo_ml::DType::F32,
                 )?;
 
                 gate_fp8_vec.push(gate_fp8);

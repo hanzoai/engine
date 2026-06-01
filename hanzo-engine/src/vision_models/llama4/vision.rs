@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{LayerNorm, LayerNormConfig, Linear, Module};
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
+use hanzo_nn::{LayerNorm, LayerNormConfig, Linear, Module};
 use indicatif::MultiProgress;
 use hanzo_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
 
@@ -182,8 +182,8 @@ impl Llama4VisionAttention {
 
         // Apply rope
         {
-            q = candle_nn::rotary_emb::rope_i(&q, &self.freqs.cos, &self.freqs.sin)?;
-            k = candle_nn::rotary_emb::rope_i(&k, &self.freqs.cos, &self.freqs.sin)?;
+            q = hanzo_nn::rotary_emb::rope_i(&q, &self.freqs.cos, &self.freqs.sin)?;
+            k = hanzo_nn::rotary_emb::rope_i(&k, &self.freqs.cos, &self.freqs.sin)?;
         }
 
         let flash_params = FlashParams::empty(false);

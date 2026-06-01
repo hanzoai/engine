@@ -4,7 +4,7 @@ extern "C" {
         d_output: *mut u8,
         num_input_elements: usize,
         input_width: usize,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_pack_2bit_kernel(
@@ -12,7 +12,7 @@ extern "C" {
         d_output: *mut u8,
         num_input_elements: usize,
         input_width: usize,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_pack_3bit_kernel(
@@ -20,7 +20,7 @@ extern "C" {
         d_output: *mut i32,
         num_input_elements: usize,
         input_width: usize,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_pack_4bit_kernel(
@@ -28,13 +28,13 @@ extern "C" {
         d_output: *mut u8,
         num_input_elements: usize,
         input_width: usize,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_pack_8bit_kernel(
         d_input: *const u8,
         d_output: *mut u8,
         num_elements: usize,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 }

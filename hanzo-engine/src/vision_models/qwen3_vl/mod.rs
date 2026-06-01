@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
 use hanzo_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use text::Qwen3VLTextModel;
 use vision::Qwen3VLVisionModel;
@@ -77,7 +77,7 @@ pub(crate) fn get_rope_index(
             let mut data = Vec::with_capacity(raw.len());
             for row in raw {
                 if row.len() != 3 {
-                    candle_core::bail!("image_grid_thw entries must have length 3");
+                    hanzo_ml::bail!("image_grid_thw entries must have length 3");
                 }
                 data.push([row[0], row[1], row[2]]);
             }
@@ -91,7 +91,7 @@ pub(crate) fn get_rope_index(
             let mut repeated = Vec::new();
             for row in raw {
                 if row.len() != 3 {
-                    candle_core::bail!("video_grid_thw entries must have length 3");
+                    hanzo_ml::bail!("video_grid_thw entries must have length 3");
                 }
                 let repeat = row[0] as usize;
                 for _ in 0..repeat {
@@ -137,7 +137,7 @@ pub(crate) fn get_rope_index(
                         end_idx += 1;
                     }
                     if end_idx == filtered_tokens.len() {
-                        candle_core::bail!(
+                        hanzo_ml::bail!(
                             "vision_start_token_id without matching vision_end_token_id"
                         );
                     }
@@ -166,7 +166,7 @@ pub(crate) fn get_rope_index(
                 let placeholder_start = match placeholder_start {
                     Some(pos) => pos,
                     None => {
-                        candle_core::bail!("vision span missing image/video placeholder tokens");
+                        hanzo_ml::bail!("vision span missing image/video placeholder tokens");
                     }
                 };
 
@@ -184,23 +184,23 @@ pub(crate) fn get_rope_index(
                 let placeholder_token_id = filtered_tokens[placeholder_start];
                 let placeholder_slice = &filtered_tokens[placeholder_start..end_idx];
                 if placeholder_slice.is_empty() {
-                    candle_core::bail!("vision span placeholder slice is empty");
+                    hanzo_ml::bail!("vision span placeholder slice is empty");
                 }
                 if !placeholder_slice
                     .iter()
                     .all(|&tok| tok == placeholder_token_id)
                 {
-                    candle_core::bail!("Mixed placeholder tokens found within a vision span");
+                    hanzo_ml::bail!("Mixed placeholder tokens found within a vision span");
                 }
                 let placeholder_len = placeholder_slice.len();
 
                 let (grid_t, grid_h, grid_w) = match placeholder_token_id {
                     id if id == image_token_id => {
                         let Some(ref img_grid) = image_grid_data else {
-                            candle_core::bail!("image_grid_thw required for image placeholders");
+                            hanzo_ml::bail!("image_grid_thw required for image placeholders");
                         };
                         if image_index >= img_grid.len() {
-                            candle_core::bail!(
+                            hanzo_ml::bail!(
                                 "Not enough image_grid_thw entries for placeholders"
                             );
                         }
@@ -208,7 +208,7 @@ pub(crate) fn get_rope_index(
                         image_index += 1;
                         if merge_size == 0 || grid[1] % merge_size != 0 || grid[2] % merge_size != 0
                         {
-                            candle_core::bail!(
+                            hanzo_ml::bail!(
                                 "image grid dimensions must be divisible by spatial_merge_size"
                             );
                         }
@@ -220,10 +220,10 @@ pub(crate) fn get_rope_index(
                     }
                     id if id == video_token_id => {
                         let Some(ref vid_grid) = video_grid_data else {
-                            candle_core::bail!("video_grid_thw required for video placeholders");
+                            hanzo_ml::bail!("video_grid_thw required for video placeholders");
                         };
                         if video_index >= vid_grid.len() {
-                            candle_core::bail!(
+                            hanzo_ml::bail!(
                                 "Not enough video_grid_thw entries for placeholders"
                             );
                         }
@@ -231,7 +231,7 @@ pub(crate) fn get_rope_index(
                         video_index += 1;
                         if merge_size == 0 || grid[1] % merge_size != 0 || grid[2] % merge_size != 0
                         {
-                            candle_core::bail!(
+                            hanzo_ml::bail!(
                                 "video grid dimensions must be divisible by spatial_merge_size"
                             );
                         }
@@ -242,17 +242,17 @@ pub(crate) fn get_rope_index(
                         )
                     }
                     other => {
-                        candle_core::bail!("Unexpected placeholder token id {other}");
+                        hanzo_ml::bail!("Unexpected placeholder token id {other}");
                     }
                 };
 
                 if grid_t == 0 || grid_h == 0 || grid_w == 0 {
-                    candle_core::bail!("Zero-sized grid encountered in vision span");
+                    hanzo_ml::bail!("Zero-sized grid encountered in vision span");
                 }
 
                 let expected_len = grid_t * grid_h * grid_w;
                 if placeholder_len != expected_len {
-                    candle_core::bail!(
+                    hanzo_ml::bail!(
                         "Placeholder token count {placeholder_len} does not match expected {expected_len}"
                     );
                 }
@@ -292,7 +292,7 @@ pub(crate) fn get_rope_index(
             }
 
             if positions_for_valid.len() != valid_indices.len() {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Mismatch between computed positions ({}) and valid tokens ({})",
                     positions_for_valid.len(),
                     valid_indices.len()
@@ -437,7 +437,7 @@ impl Qwen3VLModel {
 
         if let Some(pixel_values) = &pixel_values {
             let Some(image_grid_thw_ref) = image_grid_thw.as_ref() else {
-                candle_core::bail!("pixel_values require image_grid_thw");
+                hanzo_ml::bail!("pixel_values require image_grid_thw");
             };
             let mut pixel_values = pixel_values.clone();
             let ndim = pixel_values.dims().len();
@@ -579,7 +579,7 @@ impl Qwen3VLModel {
                 .flat_map(|spans| spans.iter().map(|(s, e)| e - s))
                 .sum();
             if image_embeds.dim(0)? != total_expected {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Image embedding length {} does not match placeholder tokens {}",
                     image_embeds.dim(0)?,
                     total_expected
@@ -605,7 +605,7 @@ impl Qwen3VLModel {
 
         if let Some(pixel_values_videos) = &pixel_values_videos {
             let Some(video_grid_thw_ref) = video_grid_thw.as_ref() else {
-                candle_core::bail!("pixel_values_videos require video_grid_thw");
+                hanzo_ml::bail!("pixel_values_videos require video_grid_thw");
             };
             let mut pixel_values = pixel_values_videos.clone();
             let ndim = pixel_values.dims().len();
@@ -629,7 +629,7 @@ impl Qwen3VLModel {
                 .flat_map(|spans| spans.iter().map(|(s, e)| e - s))
                 .sum();
             if video_embeds.dim(0)? != total_expected {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Video embedding length {} does not match placeholder tokens {}",
                     video_embeds.dim(0)?,
                     total_expected
@@ -672,7 +672,7 @@ impl Qwen3VLModel {
                     .to_vec1::<u8>()?;
                 let num_visual = visual_indices_vec.len();
                 if image_deepstack.len() != video_deepstack.len() {
-                    candle_core::bail!(
+                    hanzo_ml::bail!(
                         "DeepStack image layers ({}) do not match video layers ({})",
                         image_deepstack.len(),
                         video_deepstack.len()
@@ -694,7 +694,7 @@ impl Qwen3VLModel {
                         }
                     }
                     if img_offset != img_layer.dim(0)? || vid_offset != vid_layer.dim(0)? {
-                        candle_core::bail!(
+                        hanzo_ml::bail!(
                                 "DeepStack feature alignment failed for images ({}/{}) or videos ({}/{})",
                                 img_offset,
                                 img_layer.dim(0)?,
@@ -813,7 +813,7 @@ impl MultimodalModel for Qwen3VLModel {
             (None, Some(_)) => (None, pixel_values),
             (None, None) => (None, None),
             (Some(_), Some(_)) => {
-                candle_core::bail!("Images and videos cannot be provided together.")
+                hanzo_ml::bail!("Images and videos cannot be provided together.")
             }
         };
         // Use the complete grid (covering all images/videos including prefix-cached ones)

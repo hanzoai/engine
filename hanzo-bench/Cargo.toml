@@ -15,7 +15,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-candle-core.workspace = true
+hanzo-ml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true

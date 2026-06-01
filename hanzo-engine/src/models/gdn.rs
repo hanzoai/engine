@@ -4,8 +4,8 @@
 //!
 //! Used by both Qwen3 Next (text-only) and Qwen3.5 MoE (multimodal) models.
 
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::Linear;
+use hanzo_ml::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use hanzo_nn::Linear;
 use hanzo_quant::{QuantMethod, QuantizedConfig, RowParallelLayer, ShardedVarBuilder};
 use std::sync::Arc;
 
@@ -61,7 +61,7 @@ impl RmsNormGated {
     pub fn forward(&self, x: &Tensor, gate: &Tensor) -> Result<Tensor> {
         let dtype = x.dtype();
         let x = x.to_dtype(DType::F32)?;
-        let gate = candle_nn::ops::silu(&gate.to_dtype(DType::F32)?)?;
+        let gate = hanzo_nn::ops::silu(&gate.to_dtype(DType::F32)?)?;
         let variance = x.sqr()?.mean_keepdim(D::Minus1)?;
         let normed = x.broadcast_div(&(variance + self.eps)?.sqrt()?)?;
         let out = normed
@@ -532,7 +532,7 @@ impl GatedDeltaNet {
     }
 
     fn compute_beta_g_cpu(&self, b: &Tensor, a: &Tensor, dtype: DType) -> Result<(Tensor, Tensor)> {
-        let beta = candle_nn::ops::sigmoid(b)?;
+        let beta = hanzo_nn::ops::sigmoid(b)?;
         let a_f = a.to_dtype(DType::F32)?;
         let dt_bias_expanded = self
             .dt_bias
@@ -783,7 +783,7 @@ impl GatedDeltaNet {
             conv_outputs.push(out);
         }
         let out = Tensor::stack(&conv_outputs, 2)?;
-        let out = candle_nn::ops::silu(&out)?;
+        let out = hanzo_nn::ops::silu(&out)?;
         out.transpose(1, 2)
     }
 
@@ -859,7 +859,7 @@ impl GatedDeltaNet {
             conv_outputs.push(out);
         }
         let out = Tensor::stack(&conv_outputs, 2)?;
-        let out = candle_nn::ops::silu(&out)?;
+        let out = hanzo_nn::ops::silu(&out)?;
         out.transpose(1, 2)
     }
 }

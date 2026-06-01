@@ -3,7 +3,7 @@
 use std::{any::Any, sync::Arc};
 
 use anyhow::Result;
-use candle_core::Device;
+use hanzo_ml::Device;
 use text_models_inputs_processor::PagedAttentionMeta;
 use tokenizers::Tokenizer;
 
@@ -53,7 +53,7 @@ pub mod text_models_inputs_processor {
     use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 
     use anyhow::Result;
-    use candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
+    use hanzo_ml::{DType, Device, DeviceLocation, Tensor, WithDType};
     use tokenizers::Tokenizer;
 
     use crate::{
@@ -130,7 +130,7 @@ pub mod text_models_inputs_processor {
     impl PagedAttentionInputMetadata {
         /// Create a dummy input metadata, assuming that this will NOT be used for decoding.
         /// This is used for the case of imatrix generation.
-        pub fn dummy(dev: &Device) -> candle_core::Result<Self> {
+        pub fn dummy(dev: &Device) -> hanzo_ml::Result<Self> {
             Ok(PagedAttentionInputMetadata {
                 block_tables: None,
                 context_lens: None,

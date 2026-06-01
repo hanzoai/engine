@@ -2,8 +2,8 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Embedding, Linear, Module};
+use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_nn::{Embedding, Linear, Module};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -140,7 +140,7 @@ impl MoeMlp {
         // Compute routing weights
         let router_logits = self.gate.forward(&xs_flat)?;
         let routing_weights =
-            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
+            hanzo_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
 
         // Get top-k experts
         let topk_ids = routing_weights
@@ -583,7 +583,7 @@ impl Qwen3VLMoETextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(
                     embed_tokens.embeddings(),
                     normal_loading_metadata.loading_isq,
@@ -704,7 +704,7 @@ impl Qwen3VLMoETextModel {
             return Ok(hidden_states);
         }
         if indices.len() != visual_embeds.dim(0)? {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Mismatch between DeepStack visual embeds ({}) and mask positions ({})",
                 visual_embeds.dim(0)?,
                 indices.len()

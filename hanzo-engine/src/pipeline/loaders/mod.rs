@@ -15,7 +15,7 @@ use std::{
 
 use anyhow::Result;
 use as_any::AsAny;
-use candle_core::{DType, Device};
+use hanzo_ml::{DType, Device};
 use hanzo_quant::{IsqType, QuantizedConfig};
 use serde::Deserialize;
 use tokio::sync::Mutex;
@@ -469,7 +469,7 @@ pub trait DeviceMappedModelLoader {
 /// # Example
 /// ```no_run
 /// use hanzo_engine::{Loader, TokenSource, DeviceMapSetting, AutoDeviceMapParams, ModelDType};
-/// use candle_core::Device;
+/// use hanzo_ml::Device;
 ///
 /// let loader: Box<dyn Loader> = todo!();
 /// let pipeline = loader.load_model_from_hf(

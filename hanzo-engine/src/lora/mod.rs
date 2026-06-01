@@ -2,8 +2,8 @@
 
 use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
-use candle_core::{quantized::QTensor, IndexOp, Result, Tensor, D};
-use candle_nn::{Linear, Module};
+use hanzo_ml::{quantized::QTensor, IndexOp, Result, Tensor, D};
+use hanzo_nn::{Linear, Module};
 use loralinear::LoraLinear;
 use hanzo_quant::{QuantMethod, ShardedVarBuilder};
 pub use qloralinear::QLoraLinear;
@@ -170,7 +170,7 @@ pub fn linear(
             .as_ref()
             .is_some_and(|target_modules| &cfg.target_modules != *target_modules)
         {
-            candle_core::bail!("Expected all target modules to be the same.");
+            hanzo_ml::bail!("Expected all target modules to be the same.");
         }
     }
 
@@ -222,7 +222,7 @@ pub fn linear_no_bias(
             .as_ref()
             .is_some_and(|target_modules| &cfg.target_modules != *target_modules)
         {
-            candle_core::bail!("Expected all target modules to be the same.");
+            hanzo_ml::bail!("Expected all target modules to be the same.");
         }
     }
 

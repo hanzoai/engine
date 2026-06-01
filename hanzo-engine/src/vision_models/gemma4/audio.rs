@@ -6,8 +6,8 @@
 //! scale offset, the attention uses an extra `per_dim_key_scale`, and several
 //! projections use optional clipping buffers from the checkpoint.
 
-use candle_core::{bail, DType, Module, Result, Tensor, D};
-use candle_nn::{Conv1d, Conv2d, Conv2dConfig, LayerNorm, LayerNormConfig, ModuleT};
+use hanzo_ml::{bail, DType, Module, Result, Tensor, D};
+use hanzo_nn::{Conv1d, Conv2d, Conv2dConfig, LayerNorm, LayerNormConfig, ModuleT};
 use hanzo_quant::{Convolution, QuantMethod, ShardedVarBuilder};
 use std::sync::Arc;
 
@@ -277,25 +277,25 @@ impl ClippableLinear {
         if let Some(v) = self.input_min {
             uvb.add_tensor(
                 "input_min",
-                Tensor::new(v as f32, &candle_core::Device::Cpu).unwrap(),
+                Tensor::new(v as f32, &hanzo_ml::Device::Cpu).unwrap(),
             );
         }
         if let Some(v) = self.input_max {
             uvb.add_tensor(
                 "input_max",
-                Tensor::new(v as f32, &candle_core::Device::Cpu).unwrap(),
+                Tensor::new(v as f32, &hanzo_ml::Device::Cpu).unwrap(),
             );
         }
         if let Some(v) = self.output_min {
             uvb.add_tensor(
                 "output_min",
-                Tensor::new(v as f32, &candle_core::Device::Cpu).unwrap(),
+                Tensor::new(v as f32, &hanzo_ml::Device::Cpu).unwrap(),
             );
         }
         if let Some(v) = self.output_max {
             uvb.add_tensor(
                 "output_max",
-                Tensor::new(v as f32, &candle_core::Device::Cpu).unwrap(),
+                Tensor::new(v as f32, &hanzo_ml::Device::Cpu).unwrap(),
             );
         }
         uvb.to_safetensors()
@@ -781,7 +781,7 @@ impl Gemma4AudioAttention {
 
         let invalid_logits = invalid_logits_tensor.broadcast_as(logits.shape())?;
         let masked_logits = final_condition_for_where.where_cond(&logits, &invalid_logits)?;
-        let probabilities = candle_nn::ops::softmax_last_dim(&masked_logits.to_dtype(DType::F32)?)?
+        let probabilities = hanzo_nn::ops::softmax_last_dim(&masked_logits.to_dtype(DType::F32)?)?
             .to_dtype(value_blocks.dtype())?;
 
         let (b_dim, n_dim, u_dim, w_dim, c_dim) = probabilities.dims5()?;
@@ -900,7 +900,7 @@ impl Gemma4AudioConformerFeedForward {
         let residual = x;
         let x = x.clamp(-self.gradient_clipping, self.gradient_clipping)?;
         let x = self.pre_layer_norm.forward(&x)?;
-        let x = candle_nn::ops::silu(&self.ffw_layer_1.forward(&x)?)?;
+        let x = hanzo_nn::ops::silu(&self.ffw_layer_1.forward(&x)?)?;
         let x = self
             .ffw_layer_2
             .forward(&x)?
@@ -938,7 +938,7 @@ impl Gemma4AudioConformerLightConv1d {
                 cfg.hidden_size,
                 cfg.hidden_size,
                 cfg.conf_conv_kernel_size,
-                candle_nn::Conv1dConfig {
+                hanzo_nn::Conv1dConfig {
                     stride: 1,
                     padding: 0,
                     dilation: 1,
@@ -964,7 +964,7 @@ impl Gemma4AudioConformerLightConv1d {
         let audio_encodings = self.pre_layer_norm.forward(audio_encodings)?;
         let audio_encodings = self.linear_start.forward(&audio_encodings)?;
         let chunks = audio_encodings.chunk(2, D::Minus1)?;
-        let audio_encodings = chunks[0].broadcast_mul(&candle_nn::ops::sigmoid(&chunks[1])?)?;
+        let audio_encodings = chunks[0].broadcast_mul(&hanzo_nn::ops::sigmoid(&chunks[1])?)?;
         let audio_encodings = audio_encodings.transpose(D::Minus1, D::Minus2)?;
         let audio_encodings = audio_encodings.pad_with_zeros(D::Minus1, self.causal_padding, 0)?;
         let audio_encodings = Convolution
@@ -976,7 +976,7 @@ impl Gemma4AudioConformerLightConv1d {
             .transpose(D::Minus2, D::Minus1)?
             .clamp(-self.gradient_clipping, self.gradient_clipping)?;
         let audio_encodings = self.conv_norm.forward(&audio_encodings)?;
-        let audio_encodings = candle_nn::ops::silu(&audio_encodings)?;
+        let audio_encodings = hanzo_nn::ops::silu(&audio_encodings)?;
         let audio_encodings = self.linear_end.forward(&audio_encodings)?;
         residual.broadcast_add(&audio_encodings)
     }

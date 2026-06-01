@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use candle_core::{Result, Tensor};
-use candle_nn::{Conv2dConfig, Linear, Module};
+use hanzo_ml::{Result, Tensor};
+use hanzo_nn::{Conv2dConfig, Linear, Module};
 use hanzo_quant::ShardedVarBuilder;
 
 use crate::layers;
@@ -19,7 +19,7 @@ pub struct NemoConvSubsampling {
 impl NemoConvSubsampling {
     pub fn new(cfg: &NemoConvConfig, vb: ShardedVarBuilder) -> Result<Self> {
         if !cfg.subsampling_factor.is_multiple_of(2) {
-            candle_core::bail!("Sampling factor should be a multiple of 2!");
+            hanzo_ml::bail!("Sampling factor should be a multiple of 2!");
         }
 
         let sampling_num = (cfg.subsampling_factor as f32).log2() as usize;
@@ -164,7 +164,7 @@ impl NemoConvSubsampling {
             let max_audio_length = x.dim(1)?;
             let feature_lens = mask.sum_keepdim(1)?;
             let padding_length = feature_lens.apply(&|t: &Tensor| {
-                (t.to_dtype(candle_core::DType::F32)? / self.subsampling_factor as f64)?.ceil()
+                (t.to_dtype(hanzo_ml::DType::F32)? / self.subsampling_factor as f64)?.ceil()
             })?;
 
             let device = x.device();

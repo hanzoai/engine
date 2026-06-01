@@ -1,6 +1,6 @@
 //! MLA forward pass functions for decode and cache operations.
 
-use candle_core::{Device, Result, Tensor};
+use hanzo_ml::{Device, Result, Tensor};
 
 use crate::{
     attention::{AttentionMask, SdpaParams},
@@ -10,7 +10,7 @@ use crate::{
 use super::MlaWeights;
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
-use candle_core::{DType, D};
+use hanzo_ml::{DType, D};
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::layers::Sdpa;
@@ -124,12 +124,12 @@ pub fn mla_decode_forward(
 ) -> Result<Tensor> {
     let ((key_cache, value_cache), input_metadata) = metadata
         .as_ref()
-        .ok_or_else(|| candle_core::Error::msg("paged attention metadata missing"))?;
+        .ok_or_else(|| hanzo_ml::Error::msg("paged attention metadata missing"))?;
     let device_location = q_nope.device().location();
     let slot_mapping = input_metadata
         .slot_mappings
         .get(&device_location)
-        .ok_or_else(|| candle_core::Error::msg("slot mapping missing"))?;
+        .ok_or_else(|| hanzo_ml::Error::msg("slot mapping missing"))?;
     let slot_mapping = if slot_mapping.dims().len() > 1 {
         slot_mapping.flatten(0, slot_mapping.dims().len())?
     } else {
@@ -139,37 +139,37 @@ pub fn mla_decode_forward(
         .paged_kv_indptr
         .as_ref()
         .and_then(|m| m.get(&device_location))
-        .ok_or_else(|| candle_core::Error::msg("paged_kv_indptr missing"))?;
+        .ok_or_else(|| hanzo_ml::Error::msg("paged_kv_indptr missing"))?;
     let paged_kv_indices = input_metadata
         .paged_kv_indices
         .as_ref()
         .and_then(|m| m.get(&device_location))
-        .ok_or_else(|| candle_core::Error::msg("paged_kv_indices missing"))?;
+        .ok_or_else(|| hanzo_ml::Error::msg("paged_kv_indices missing"))?;
     let paged_kv_last_page_len = input_metadata
         .paged_kv_last_page_len
         .as_ref()
         .and_then(|m| m.get(&device_location))
-        .ok_or_else(|| candle_core::Error::msg("paged_kv_last_page_len missing"))?;
+        .ok_or_else(|| hanzo_ml::Error::msg("paged_kv_last_page_len missing"))?;
     let paged_kv_request_indices = input_metadata
         .paged_kv_request_indices
         .as_ref()
         .and_then(|m| m.get(&device_location))
-        .ok_or_else(|| candle_core::Error::msg("paged_kv_request_indices missing"))?;
+        .ok_or_else(|| hanzo_ml::Error::msg("paged_kv_request_indices missing"))?;
     let paged_kv_tile_indices = input_metadata
         .paged_kv_tile_indices
         .as_ref()
         .and_then(|m| m.get(&device_location))
-        .ok_or_else(|| candle_core::Error::msg("paged_kv_tile_indices missing"))?;
+        .ok_or_else(|| hanzo_ml::Error::msg("paged_kv_tile_indices missing"))?;
     let paged_kv_o_indptr = input_metadata
         .paged_kv_o_indptr
         .as_ref()
         .and_then(|m| m.get(&device_location))
-        .ok_or_else(|| candle_core::Error::msg("paged_kv_o_indptr missing"))?;
+        .ok_or_else(|| hanzo_ml::Error::msg("paged_kv_o_indptr missing"))?;
     let paged_kv_chunk_size = input_metadata
         .paged_kv_chunk_size
         .as_ref()
         .and_then(|m| m.get(&device_location))
-        .ok_or_else(|| candle_core::Error::msg("paged_kv_chunk_size missing"))?;
+        .ok_or_else(|| hanzo_ml::Error::msg("paged_kv_chunk_size missing"))?;
 
     let ckv_flat = ckv.contiguous()?.reshape((bs * seq_len, kv_lora_rank))?;
     let k_pe_flat = k_pe
@@ -241,7 +241,7 @@ pub fn mla_decode_forward(
     _bs: usize,
     _seq_len: usize,
 ) -> Result<Tensor> {
-    candle_core::bail!("MLA decode requires CUDA support")
+    hanzo_ml::bail!("MLA decode requires CUDA support")
 }
 
 /// MLA cache forward pass for prefill with prefix caching support.
@@ -301,7 +301,7 @@ pub fn mla_cache_forward(
         let slot_mapping = meta
             .slot_mappings
             .get(&device_location)
-            .ok_or_else(|| candle_core::Error::msg("slot mapping missing"))?;
+            .ok_or_else(|| hanzo_ml::Error::msg("slot mapping missing"))?;
         let slot_mapping = if slot_mapping.dims().len() > 1 {
             slot_mapping.flatten(0, slot_mapping.dims().len())?
         } else {
@@ -345,7 +345,7 @@ pub fn mla_cache_forward(
         let slot_mapping = input_metadata
             .slot_mappings
             .get(&device_location)
-            .ok_or_else(|| candle_core::Error::msg("slot mapping missing"))?;
+            .ok_or_else(|| hanzo_ml::Error::msg("slot mapping missing"))?;
         let slot_mapping_cpu = slot_mapping.to_device(&Device::Cpu)?;
         let slot_mapping_cpu = if slot_mapping_cpu.dims().len() == 2 {
             slot_mapping_cpu
@@ -366,7 +366,7 @@ pub fn mla_cache_forward(
             .block_tables
             .as_ref()
             .and_then(|m| m.get(&device_location))
-            .ok_or_else(|| candle_core::Error::msg("block tables missing"))?;
+            .ok_or_else(|| hanzo_ml::Error::msg("block tables missing"))?;
         let block_tables_cpu = block_tables.to_device(&Device::Cpu)?;
         let (block_rows, block_stride) = block_tables_cpu.dims2()?;
         let block_tables_vec = block_tables_cpu.to_vec2::<u32>()?;
@@ -387,7 +387,7 @@ pub fn mla_cache_forward(
                 offset = offset.saturating_add(*len);
             }
         } else {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "unexpected block_tables rows: got {block_rows}, expected {bs} or {expected_rows}"
             );
         }
@@ -565,5 +565,5 @@ pub fn mla_cache_forward(
     _bs: usize,
     _seq_len: usize,
 ) -> Result<Tensor> {
-    candle_core::bail!("MLA cache requires CUDA support")
+    hanzo_ml::bail!("MLA cache requires CUDA support")
 }

@@ -1,6 +1,6 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{quantized::GgmlDType, Result, Tensor};
+use hanzo_ml::{quantized::GgmlDType, Result, Tensor};
 
 use crate::{
     get_immediate_isq, pending_layer, ImmediateIsqMatch, PendingIsqLayer, QuantMethod,
@@ -116,13 +116,13 @@ macro_rules! generate_isq {
                 }
             };
 
-            let initial = candle_core::quantized::QTensor::quantize(&$tensor, dtype)?;
+            let initial = hanzo_ml::quantized::QTensor::quantize(&$tensor, dtype)?;
             let data = initial.data()?;
 
             let _acquired_quantize_guard = $guard.acquire(&$device);
-            let qstorage = candle_core::quantized::QStorage::from_data(data, &$device, dtype)?;
+            let qstorage = hanzo_ml::quantized::QStorage::from_data(data, &$device, dtype)?;
 
-            Arc::new(candle_core::quantized::QTensor::new(qstorage, $tensor.shape())?)
+            Arc::new(hanzo_ml::quantized::QTensor::new(qstorage, $tensor.shape())?)
         }
     };
 }
@@ -145,7 +145,7 @@ macro_rules! generate_isq_imatrix {
                 }
             };
 
-            let initial = candle_core::quantized::QTensor::quantize_imatrix(&$tensor, &$imatrix, dtype)?;
+            let initial = hanzo_ml::quantized::QTensor::quantize_imatrix(&$tensor, &$imatrix, dtype)?;
             if !$tensor.device().is_cpu() {
                 // Short-circuit here, no need for fancy
                 Arc::new(initial)
@@ -153,9 +153,9 @@ macro_rules! generate_isq_imatrix {
                 let data = initial.data()?;
 
                 let _acquired_quantize_guard = $guard.acquire(&$device);
-                let qstorage = candle_core::quantized::QStorage::from_data(data, &$device, dtype)?;
+                let qstorage = hanzo_ml::quantized::QStorage::from_data(data, &$device, dtype)?;
 
-                Arc::new(candle_core::quantized::QTensor::new(qstorage, $tensor.shape())?)
+                Arc::new(hanzo_ml::quantized::QTensor::new(qstorage, $tensor.shape())?)
             }
         }
     };

@@ -2,11 +2,11 @@
 //!
 //! This dequantizes the weights and delegates to UnquantLinear's gather_forward.
 
-use candle_core::{
+use hanzo_ml::{
     quantized::{QMatMul, QTensor},
     Result, Tensor,
 };
-use candle_nn::Linear;
+use hanzo_nn::Linear;
 use std::sync::Arc;
 
 use crate::{QuantMethod, QuantMethodConfig, UnquantLinear};

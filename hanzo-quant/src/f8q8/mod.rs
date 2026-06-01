@@ -5,8 +5,8 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle_core::{DType, Device, Result, Shape, Tensor};
-use candle_nn::{Linear, Module};
+use hanzo_ml::{DType, Device, Result, Shape, Tensor};
+use hanzo_nn::{Linear, Module};
 use float8::F8E4M3;
 use half::f16;
 
@@ -46,7 +46,7 @@ impl BlockF8Q8 {
 }
 
 // Our own BlockQ8_0 with accessible fields for vec_dot kernels.
-// candle_core's BlockQ8_0 has pub(crate) fields we can't access.
+// hanzo_ml's BlockQ8_0 has pub(crate) fields we can't access.
 #[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct BlockQ8_0 {
@@ -60,7 +60,7 @@ const _: () = assert!(std::mem::size_of::<BlockQ8_0>() == 34);
 fn to_float(xs: &[BlockF8Q8], ys: &mut [f32]) -> Result<()> {
     let k = ys.len();
     if !k.is_multiple_of(QK8_0) {
-        candle_core::bail!("dequantize_row_f8q8: {k} is not divisible by {QK8_0}");
+        hanzo_ml::bail!("dequantize_row_f8q8: {k} is not divisible by {QK8_0}");
     }
 
     let nb = k / QK8_0;
@@ -78,11 +78,11 @@ fn to_float(xs: &[BlockF8Q8], ys: &mut [f32]) -> Result<()> {
 fn from_float(xs: &[f32], ys: &mut [BlockF8Q8]) -> Result<()> {
     let k = xs.len();
     if !k.is_multiple_of(QK8_0) {
-        candle_core::bail!("{k} is not divisible by {QK8_0}");
+        hanzo_ml::bail!("{k} is not divisible by {QK8_0}");
     }
     let nb = k / QK8_0;
     if ys.len() != nb {
-        candle_core::bail!("size mismatch {} {} {}", xs.len(), ys.len(), QK8_0)
+        hanzo_ml::bail!("size mismatch {} {} {}", xs.len(), ys.len(), QK8_0)
     }
     for (i, ys) in ys.iter_mut().enumerate() {
         let mut amax = 0f32;
@@ -119,7 +119,7 @@ fn vec_dot(n: usize, xs: &[BlockF8Q8], ys: &[BlockQ8_0]) -> Result<f32> {
 fn vec_dot_unopt(n: usize, xs: &[BlockF8Q8], ys: &[BlockQ8_0]) -> Result<f32> {
     let qk = QK8_0;
     if !n.is_multiple_of(QK8_0) {
-        candle_core::bail!("vec_dot_f8q8_q8_0: {n} is not divisible by {qk}")
+        hanzo_ml::bail!("vec_dot_f8q8_q8_0: {n} is not divisible by {qk}")
     }
 
     let mut sumf = 0f32;
@@ -149,7 +149,7 @@ fn matmul_i8mm(
     #[cfg(target_feature = "neon")]
     return neon::i8mm_f8q8_q8_0(n, xs_0, xs_1, ys_0, ys_1);
 
-    candle_core::bail!("Unsupported block type for i8mm");
+    hanzo_ml::bail!("Unsupported block type for i8mm");
 }
 
 // ---- F8Q8Linear ----
@@ -202,7 +202,7 @@ impl QuantMethod for F8Q8Linear {
         Self: Sized,
     {
         let _ = method;
-        candle_core::bail!("F8Q8Linear should be constructed via from_weight")
+        hanzo_ml::bail!("F8Q8Linear should be constructed via from_weight")
     }
 
     fn dequantize_w(&self) -> Result<Tensor> {
@@ -327,12 +327,12 @@ impl QuantizedSerde for F8Q8Linear {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(hanzo_ml::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::F8Q8 as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::F8Q8 as usize
             );
@@ -394,12 +394,12 @@ impl QuantizedSerde for F8Q8Linear {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(hanzo_ml::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::F8Q8 as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::F8Q8 as usize
             );

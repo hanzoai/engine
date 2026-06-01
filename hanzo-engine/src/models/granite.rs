@@ -1,8 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{Device, IndexOp, Result, Tensor};
-use candle_nn::{Embedding, Module};
+use hanzo_ml::{Device, IndexOp, Result, Tensor};
+use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -209,7 +209,7 @@ impl GraniteMlp {
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let projected = self.input_linear.forward(x)?;
-        let chunks = projected.chunk(2, candle_core::D::Minus1)?;
+        let chunks = projected.chunk(2, hanzo_ml::D::Minus1)?;
         let gated =
             crate::ops::mul_and_act(&chunks[0], &chunks[1], crate::layers::Activation::Silu)?;
         let res = self.output_linear.forward(&gated)?;
@@ -238,9 +238,9 @@ impl MlpLayer for GraniteMlp {
         crate::layers::Activation::Silu
     }
     fn new_added_delta(&self, _deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
-        candle_core::bail!("LoRA adapter not supported for GraniteMlp")
+        hanzo_ml::bail!("LoRA adapter not supported for GraniteMlp")
     }
-    fn dtype_device(&self) -> (candle_core::DType, candle_core::Device) {
+    fn dtype_device(&self) -> (hanzo_ml::DType, hanzo_ml::Device) {
         self.input_linear.dtype_and_device()
     }
 }
@@ -251,7 +251,7 @@ impl crate::amoe::AnyMoeTrainableLayer for GraniteMlp {}
 
 /// Top-K gating router for sparse MoE
 struct GraniteTopKGating {
-    layer: candle_nn::Linear,
+    layer: hanzo_nn::Linear,
     num_experts: usize,
     top_k: usize,
 }
@@ -264,7 +264,7 @@ impl GraniteTopKGating {
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let weight = vb.pp("layer").get((num_experts, input_size), "weight")?;
-        let layer = candle_nn::Linear::new(weight, None);
+        let layer = hanzo_nn::Linear::new(weight, None);
         Ok(Self {
             layer,
             num_experts,
@@ -286,11 +286,11 @@ impl GraniteTopKGating {
         let logits = self.layer.forward(x)?;
 
         // Softmax over experts
-        let gates = candle_nn::ops::softmax(&logits, candle_core::D::Minus1)?;
+        let gates = hanzo_nn::ops::softmax(&logits, hanzo_ml::D::Minus1)?;
 
         // Get top-k expert indices and gates per token
         let gates_vec: Vec<f32> = gates
-            .to_dtype(candle_core::DType::F32)?
+            .to_dtype(hanzo_ml::DType::F32)?
             .flatten_all()?
             .to_vec1()?;
 
@@ -449,7 +449,7 @@ impl GraniteMoE {
         let hidden = self.input_linear.forward(&expert_inputs, &expert_size)?;
 
         // Gated activation: silu(first_half) * second_half
-        let chunks = hidden.chunk(2, candle_core::D::Minus1)?;
+        let chunks = hidden.chunk(2, hanzo_ml::D::Minus1)?;
         let hidden =
             crate::ops::mul_and_act(&chunks[0], &chunks[1], crate::layers::Activation::Silu)?;
 
@@ -457,8 +457,8 @@ impl GraniteMoE {
         let expert_outputs = expert_outputs.broadcast_mul(&batch_gates.unsqueeze(1)?)?;
 
         // Scatter-add outputs back to token positions
-        let batch_index_vec: Vec<i64> = batch_index.to_dtype(candle_core::DType::I64)?.to_vec1()?;
-        let expert_outputs_f32 = expert_outputs.to_dtype(candle_core::DType::F32)?;
+        let batch_index_vec: Vec<i64> = batch_index.to_dtype(hanzo_ml::DType::I64)?.to_vec1()?;
+        let expert_outputs_f32 = expert_outputs.to_dtype(hanzo_ml::DType::F32)?;
         let num_outputs = expert_outputs_f32.dim(0)?;
 
         let expert_outputs_vec: Vec<Vec<f32>> = (0..num_outputs)
@@ -503,7 +503,7 @@ impl MambaLayerCache {
         n_heads: usize,
         head_dim: usize,
         d_state: usize,
-        dtype: candle_core::DType,
+        dtype: hanzo_ml::DType,
         device: &Device,
     ) -> Result<Self> {
         let conv_state = Tensor::zeros((batch_size, conv_dim, d_conv), dtype, device)?;
@@ -540,7 +540,7 @@ fn softplus(x: &Tensor) -> Result<Tensor> {
 fn create_mamba_cache(
     batch_size: usize,
     cfg: &Config,
-    dtype: candle_core::DType,
+    dtype: hanzo_ml::DType,
     device: &Device,
 ) -> Result<MambaLayerCache> {
     let conv_dim = cfg.mamba_conv_dim();
@@ -579,16 +579,16 @@ impl RmsNormGated {
 
     fn forward(&self, hidden_states: &Tensor, gate: Option<&Tensor>) -> Result<Tensor> {
         let dtype = hidden_states.dtype();
-        let mut hidden_states = hidden_states.to_dtype(candle_core::DType::F32)?;
+        let mut hidden_states = hidden_states.to_dtype(hanzo_ml::DType::F32)?;
 
         // Apply gating if provided
         if let Some(gate) = gate {
-            let gate = candle_nn::ops::silu(&gate.to_dtype(candle_core::DType::F32)?)?;
+            let gate = hanzo_nn::ops::silu(&gate.to_dtype(hanzo_ml::DType::F32)?)?;
             hidden_states = hidden_states.broadcast_mul(&gate)?;
         }
 
         // RMS normalization
-        let variance = hidden_states.sqr()?.mean_keepdim(candle_core::D::Minus1)?;
+        let variance = hidden_states.sqr()?.mean_keepdim(hanzo_ml::D::Minus1)?;
         let hidden_states = hidden_states.broadcast_div(&(variance + self.eps)?.sqrt()?)?;
 
         // Apply weight and convert back to original dtype
@@ -600,14 +600,14 @@ impl RmsNormGated {
 
 /// Mamba2-style mixer layer
 struct MambaLayer {
-    in_proj: candle_nn::Linear,
+    in_proj: hanzo_nn::Linear,
     conv1d_weight: Tensor,
     conv1d_bias: Option<Tensor>,
     dt_bias: Tensor,
     a_log: Tensor,
     d: Tensor,
     norm: RmsNormGated,
-    out_proj: candle_nn::Linear,
+    out_proj: hanzo_nn::Linear,
     num_heads: usize,
     head_dim: usize,
     intermediate_size: usize,
@@ -673,7 +673,7 @@ impl MambaLayer {
         };
 
         // When ISQ is enabled, move all Mamba weights to target GPU device
-        // This prevents device mismatch issues since Mamba layers use candle_nn::Linear
+        // This prevents device mismatch issues since Mamba layers use hanzo_nn::Linear
         // (not QuantMethod) and their weights don't get quantized/moved by ISQ pipeline
         if let Some(target_dev) = isq_target_device {
             tracing::debug!(
@@ -697,8 +697,8 @@ impl MambaLayer {
             }
         }
 
-        let in_proj = candle_nn::Linear::new(in_proj_weight, in_proj_bias);
-        let out_proj = candle_nn::Linear::new(out_proj_weight, out_proj_bias);
+        let in_proj = hanzo_nn::Linear::new(in_proj_weight, in_proj_bias);
+        let out_proj = hanzo_nn::Linear::new(out_proj_weight, out_proj_bias);
 
         Ok(Self {
             in_proj,
@@ -727,14 +727,14 @@ impl MambaLayer {
 
         // 1. Input projection
         let projected = self.in_proj.forward(x)?;
-        let gate = projected.narrow(candle_core::D::Minus1, 0, self.intermediate_size)?;
+        let gate = projected.narrow(hanzo_ml::D::Minus1, 0, self.intermediate_size)?;
         let hidden_states_b_c = projected.narrow(
-            candle_core::D::Minus1,
+            hanzo_ml::D::Minus1,
             self.intermediate_size,
             self.intermediate_size + 2 * groups_time_state_size,
         )?;
         let dt = projected.narrow(
-            candle_core::D::Minus1,
+            hanzo_ml::D::Minus1,
             self.intermediate_size + self.intermediate_size + 2 * groups_time_state_size,
             self.num_heads,
         )?;
@@ -782,30 +782,30 @@ impl MambaLayer {
         // weight: (conv_dim, 1, kernel_size) -> squeeze to (conv_dim, kernel_size)
         let weight = self.conv1d_weight.squeeze(1)?;
         let mut hidden_states_b_c =
-            (cache.conv_state.clone() * weight.unsqueeze(0)?)?.sum(candle_core::D::Minus1)?;
+            (cache.conv_state.clone() * weight.unsqueeze(0)?)?.sum(hanzo_ml::D::Minus1)?;
 
         if let Some(ref bias) = self.conv1d_bias {
             hidden_states_b_c = hidden_states_b_c.broadcast_add(bias)?;
         }
-        let hidden_states_b_c = candle_nn::ops::silu(&hidden_states_b_c)?;
+        let hidden_states_b_c = hanzo_nn::ops::silu(&hidden_states_b_c)?;
 
         // Split into hidden_states, B, C
         let hidden_states =
-            hidden_states_b_c.narrow(candle_core::D::Minus1, 0, self.intermediate_size)?;
+            hidden_states_b_c.narrow(hanzo_ml::D::Minus1, 0, self.intermediate_size)?;
         let b = hidden_states_b_c.narrow(
-            candle_core::D::Minus1,
+            hanzo_ml::D::Minus1,
             self.intermediate_size,
             groups_time_state_size,
         )?;
         let c = hidden_states_b_c.narrow(
-            candle_core::D::Minus1,
+            hanzo_ml::D::Minus1,
             self.intermediate_size + groups_time_state_size,
             groups_time_state_size,
         )?;
 
         // SSM computation for single token
         // A = -exp(A_log)
-        let a = self.a_log.to_dtype(candle_core::DType::F32)?.exp()?.neg()?;
+        let a = self.a_log.to_dtype(hanzo_ml::DType::F32)?.exp()?.neg()?;
 
         // dt with bias and softplus
         let dt_dtype = dt.dtype();
@@ -815,7 +815,7 @@ impl MambaLayer {
             .unsqueeze(0)?
             .expand((batch_size, self.num_heads))?;
         let dt = dt.broadcast_add(&dt_bias)?;
-        let dt = softplus(&dt.to_dtype(candle_core::DType::F32)?)?;
+        let dt = softplus(&dt.to_dtype(hanzo_ml::DType::F32)?)?;
         // Clamp dt
         let dt = dt.clamp(self.time_step_min, self.time_step_max)?;
 
@@ -830,19 +830,19 @@ impl MambaLayer {
             .unsqueeze(1)?
             .unsqueeze(2)?
             .expand((self.num_heads, self.head_dim, self.ssm_state_size))?
-            .to_dtype(candle_core::DType::F32)?;
+            .to_dtype(hanzo_ml::DType::F32)?;
 
         // dA = exp(dt * A): (batch, num_heads, head_dim, state_size)
         let da = dt
             .unsqueeze(3)?
-            .to_dtype(candle_core::DType::F32)?
+            .to_dtype(hanzo_ml::DType::F32)?
             .broadcast_mul(&a.unsqueeze(0)?)?
             .exp()?;
 
         // Reshape B: (batch, n_groups * state_size) -> (batch, num_heads, state_size)
         let b = b
             .reshape((batch_size, self.n_groups, self.ssm_state_size))?
-            .to_dtype(candle_core::DType::F32)?;
+            .to_dtype(hanzo_ml::DType::F32)?;
         let b = b
             .unsqueeze(2)?
             .expand((
@@ -854,13 +854,13 @@ impl MambaLayer {
             .reshape((batch_size, self.num_heads, self.ssm_state_size))?;
 
         // dB = dt * B: (batch, num_heads, head_dim, state_size)
-        let dt_f32 = dt.to_dtype(candle_core::DType::F32)?;
+        let dt_f32 = dt.to_dtype(hanzo_ml::DType::F32)?;
         let db = dt_f32.unsqueeze(3)?.broadcast_mul(&b.unsqueeze(2)?)?;
 
         // hidden_states: (batch, intermediate_size) -> (batch, num_heads, head_dim)
         let hidden_states = hidden_states
             .reshape((batch_size, self.num_heads, self.head_dim))?
-            .to_dtype(candle_core::DType::F32)?;
+            .to_dtype(hanzo_ml::DType::F32)?;
 
         // dBx = dB * x: (batch, num_heads, head_dim, state_size)
         let dbx = db.broadcast_mul(&hidden_states.unsqueeze(3)?)?;
@@ -868,7 +868,7 @@ impl MambaLayer {
         // Update SSM state: state = state * dA + dBx
         let ssm_state = cache
             .ssm_state
-            .to_dtype(candle_core::DType::F32)?
+            .to_dtype(hanzo_ml::DType::F32)?
             .broadcast_mul(&da)?
             .broadcast_add(&dbx)?;
         cache.ssm_state = ssm_state.to_dtype(cache.ssm_state.dtype())?;
@@ -876,7 +876,7 @@ impl MambaLayer {
         // Reshape C: (batch, n_groups * state_size) -> (batch, num_heads, state_size)
         let c = c
             .reshape((batch_size, self.n_groups, self.ssm_state_size))?
-            .to_dtype(candle_core::DType::F32)?;
+            .to_dtype(hanzo_ml::DType::F32)?;
         let c = c
             .unsqueeze(2)?
             .expand((
@@ -892,14 +892,14 @@ impl MambaLayer {
         // C: (batch, num_heads, state_size)
         let y = cache
             .ssm_state
-            .to_dtype(candle_core::DType::F32)?
+            .to_dtype(hanzo_ml::DType::F32)?
             .matmul(&c.unsqueeze(3)?)?
             .squeeze(3)?;
 
         // D skip connection: y = y + x * D
         let d = self
             .d
-            .to_dtype(candle_core::DType::F32)?
+            .to_dtype(hanzo_ml::DType::F32)?
             .unsqueeze(0)?
             .unsqueeze(2)?
             .expand((batch_size, self.num_heads, self.head_dim))?;
@@ -963,7 +963,7 @@ impl MambaLayer {
         let mut conv_outputs = Vec::with_capacity(seq_len);
         for i in 0..seq_len {
             let window = padded_t.narrow(2, i, self.conv_kernel_size)?;
-            let out = (window * weight.unsqueeze(0)?)?.sum(candle_core::D::Minus1)?;
+            let out = (window * weight.unsqueeze(0)?)?.sum(hanzo_ml::D::Minus1)?;
             conv_outputs.push(out);
         }
         let mut hidden_states_b_c = Tensor::stack(&conv_outputs, 1)?; // (batch, seq_len, conv_dim)
@@ -973,18 +973,18 @@ impl MambaLayer {
             hidden_states_b_c =
                 hidden_states_b_c.broadcast_add(&bias.unsqueeze(0)?.unsqueeze(0)?)?;
         }
-        let hidden_states_b_c = candle_nn::ops::silu(&hidden_states_b_c)?;
+        let hidden_states_b_c = hanzo_nn::ops::silu(&hidden_states_b_c)?;
 
         // Split into hidden_states, B, C
         let hidden_states =
-            hidden_states_b_c.narrow(candle_core::D::Minus1, 0, self.intermediate_size)?;
+            hidden_states_b_c.narrow(hanzo_ml::D::Minus1, 0, self.intermediate_size)?;
         let b = hidden_states_b_c.narrow(
-            candle_core::D::Minus1,
+            hanzo_ml::D::Minus1,
             self.intermediate_size,
             groups_time_state_size,
         )?;
         let c = hidden_states_b_c.narrow(
-            candle_core::D::Minus1,
+            hanzo_ml::D::Minus1,
             self.intermediate_size + groups_time_state_size,
             groups_time_state_size,
         )?;
@@ -992,16 +992,16 @@ impl MambaLayer {
         // Reshape for SSM first
         let hidden_states = hidden_states
             .reshape((batch_size, seq_len, self.num_heads, self.head_dim))?
-            .to_dtype(candle_core::DType::F32)?;
+            .to_dtype(hanzo_ml::DType::F32)?;
         let b = b
             .reshape((batch_size, seq_len, self.n_groups, self.ssm_state_size))?
-            .to_dtype(candle_core::DType::F32)?;
+            .to_dtype(hanzo_ml::DType::F32)?;
         let c = c
             .reshape((batch_size, seq_len, self.n_groups, self.ssm_state_size))?
-            .to_dtype(candle_core::DType::F32)?;
+            .to_dtype(hanzo_ml::DType::F32)?;
 
         // SSM computation
-        let a = self.a_log.to_dtype(candle_core::DType::F32)?.exp()?.neg()?;
+        let a = self.a_log.to_dtype(hanzo_ml::DType::F32)?.exp()?.neg()?;
 
         // Expand B and C from groups to num_heads
         let b = b
@@ -1037,10 +1037,10 @@ impl MambaLayer {
 
         if use_cuda {
             // CUDA kernel handles dt_bias + softplus + clamp internally
-            let dt_f32 = dt.to_dtype(candle_core::DType::F32)?;
-            let dt_bias_f32 = self.dt_bias.to_dtype(candle_core::DType::F32)?;
-            let d_f32 = self.d.to_dtype(candle_core::DType::F32)?;
-            let mut ssm_state = cache.ssm_state.to_dtype(candle_core::DType::F32)?;
+            let dt_f32 = dt.to_dtype(hanzo_ml::DType::F32)?;
+            let dt_bias_f32 = self.dt_bias.to_dtype(hanzo_ml::DType::F32)?;
+            let d_f32 = self.d.to_dtype(hanzo_ml::DType::F32)?;
+            let mut ssm_state = cache.ssm_state.to_dtype(hanzo_ml::DType::F32)?;
 
             let y = crate::cuda::ssm::selective_scan_cuda(
                 &hidden_states,
@@ -1060,10 +1060,10 @@ impl MambaLayer {
             y.reshape((batch_size, seq_len, self.intermediate_size))
         } else if use_metal {
             // Metal kernel handles dt_bias + softplus + clamp internally
-            let dt_f32 = dt.to_dtype(candle_core::DType::F32)?;
-            let dt_bias_f32 = self.dt_bias.to_dtype(candle_core::DType::F32)?;
-            let d_f32 = self.d.to_dtype(candle_core::DType::F32)?;
-            let mut ssm_state = cache.ssm_state.to_dtype(candle_core::DType::F32)?;
+            let dt_f32 = dt.to_dtype(hanzo_ml::DType::F32)?;
+            let dt_bias_f32 = self.dt_bias.to_dtype(hanzo_ml::DType::F32)?;
+            let d_f32 = self.d.to_dtype(hanzo_ml::DType::F32)?;
+            let mut ssm_state = cache.ssm_state.to_dtype(hanzo_ml::DType::F32)?;
 
             let y = crate::metal::ssm::selective_scan_metal(
                 &hidden_states,
@@ -1090,13 +1090,13 @@ impl MambaLayer {
                 .unsqueeze(0)?
                 .unsqueeze(0)?
                 .expand((batch_size, seq_len, self.num_heads))?;
-            let mut ssm_state = cache.ssm_state.to_dtype(candle_core::DType::F32)?;
+            let mut ssm_state = cache.ssm_state.to_dtype(hanzo_ml::DType::F32)?;
 
             let dt = dt.broadcast_add(&dt_bias)?;
-            let dt = softplus(&dt.to_dtype(candle_core::DType::F32)?)?;
+            let dt = softplus(&dt.to_dtype(hanzo_ml::DType::F32)?)?;
             let dt = dt.clamp(self.time_step_min, self.time_step_max)?;
 
-            let d_coeff = self.d.to_dtype(candle_core::DType::F32)?;
+            let d_coeff = self.d.to_dtype(hanzo_ml::DType::F32)?;
 
             let mut outputs = Vec::with_capacity(seq_len);
 
@@ -1193,7 +1193,7 @@ impl MambaBlock {
         comm: &Arc<hanzo_quant::Comm>,
     ) -> Result<Self> {
         // When ISQ is enabled, get the target device to move Mamba weights to GPU
-        // This prevents device mismatch since Mamba uses candle_nn::Linear (not QuantMethod)
+        // This prevents device mismatch since Mamba uses hanzo_nn::Linear (not QuantMethod)
         let isq_target_device = if loading_isq {
             mapper.device_for(layer_idx, false)
         } else {
@@ -1562,7 +1562,7 @@ impl GraniteHybridCache {
         layer_types: &[GraniteLayerType],
         cfg: &Config,
         device: &Device,
-        dtype: candle_core::DType,
+        dtype: hanzo_ml::DType,
     ) -> Result<Self> {
         let mut caches = Vec::with_capacity(layer_types.len());
         for layer_type in layer_types {
@@ -1691,7 +1691,7 @@ impl GraniteMoeHybrid {
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)?,
                 None,
             ))?
@@ -1852,7 +1852,7 @@ impl GraniteMoeHybrid {
                 &normal_loading_metadata.real_device,
             )
             .map_err(|e| {
-                candle_core::Error::Msg(format!("Failed to create hybrid cache: {}", e))
+                hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e))
             })?,
         ));
 
@@ -2079,7 +2079,7 @@ impl IsqModel for GraniteMoeHybrid {
                 }
                 DecoderLayer::Mamba(block) => {
                     // Mamba layers have MLP but no attention projections to quantize
-                    // The mamba in_proj/out_proj are candle_nn::Linear, not QuantMethod
+                    // The mamba in_proj/out_proj are hanzo_nn::Linear, not QuantMethod
                     tensors.extend(
                         block
                             .mlp
@@ -2099,7 +2099,7 @@ impl IsqModel for GraniteMoeHybrid {
         self.residual_tensors_m(uvb.pp("model"))
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         let mut names = Vec::new();
         // lm_head
         names.push(None);
@@ -2158,7 +2158,7 @@ impl NormalModel for GraniteMoeHybrid {
         _flash_params: &FlashParams,
         _flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
-        candle_core::bail!("GraniteMoeHybrid does not support X-LoRA forward")
+        hanzo_ml::bail!("GraniteMoeHybrid does not support X-LoRA forward")
     }
     fn cache(&self) -> &crate::pipeline::EitherCache {
         &self.kv_cache
@@ -2283,7 +2283,7 @@ impl AnyMoeBaseModelMixin for GraniteMoeHybrid {
                         )?));
                     }
                     AnyMoeExpertType::LoraAdapter { .. } => {
-                        candle_core::bail!("LoRA adapters not supported for GraniteMoeHybrid MLP")
+                        hanzo_ml::bail!("LoRA adapters not supported for GraniteMoeHybrid MLP")
                     }
                 }
             }

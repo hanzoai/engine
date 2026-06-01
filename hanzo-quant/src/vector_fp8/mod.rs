@@ -1,7 +1,7 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
-use candle_nn::Linear;
+use hanzo_ml::{quantized::GgmlDType, DType, Device, Result, Tensor};
+use hanzo_nn::Linear;
 
 mod ops;
 pub use ops::{fp8_vector_dequantize, fp8_vector_quantize};
@@ -28,7 +28,7 @@ pub struct VectorFP8Linear {
 }
 
 impl QuantMethod for VectorFP8Linear {
-    fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
+    fn new(method: QuantMethodConfig) -> hanzo_ml::Result<Self>
     where
         Self: Sized,
     {
@@ -47,7 +47,7 @@ impl QuantMethod for VectorFP8Linear {
         }
     }
 
-    fn dequantize_w(&self) -> Result<candle_core::Tensor> {
+    fn dequantize_w(&self) -> Result<hanzo_ml::Tensor> {
         ops::fp8_vector_dequantize(&self.weight, &self.weight_scale_inv, self.dequant_dtype)
     }
 
@@ -67,10 +67,10 @@ impl QuantMethod for VectorFP8Linear {
     }
 
     fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("VectorFP8Linear does not support add_delta_w")
+        hanzo_ml::bail!("VectorFP8Linear does not support add_delta_w")
     }
 
-    fn dtype_and_device(&self) -> (DType, candle_core::Device) {
+    fn dtype_and_device(&self) -> (DType, hanzo_ml::Device) {
         (DType::F8E4M3, self.weight.device().clone())
     }
 
@@ -88,7 +88,7 @@ impl QuantMethod for VectorFP8Linear {
             Some(IsqType::HQQ4 | IsqType::HQQ8) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
-                    candle_core::bail!("HQQ does not support imatrix.");
+                    hanzo_ml::bail!("HQQ does not support imatrix.");
                 }
 
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -118,7 +118,7 @@ impl QuantMethod for VectorFP8Linear {
             Some(IsqType::AFQ2 | IsqType::AFQ3 | IsqType::AFQ4 | IsqType::AFQ6 | IsqType::AFQ8) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
-                    candle_core::bail!("AFQ does not support imatrix.");
+                    hanzo_ml::bail!("AFQ does not support imatrix.");
                 }
 
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -169,7 +169,7 @@ impl QuantMethod for VectorFP8Linear {
             Some(IsqType::F8E4M3) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
-                    candle_core::bail!("F8E4M3 does not support imatrix.");
+                    hanzo_ml::bail!("F8E4M3 does not support imatrix.");
                 }
 
                 let w = weight.to_device(&device)?;
@@ -186,7 +186,7 @@ impl QuantMethod for VectorFP8Linear {
             Some(IsqType::F8Q8) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
-                    candle_core::bail!("F8Q8 does not support imatrix.");
+                    hanzo_ml::bail!("F8Q8 does not support imatrix.");
                 }
 
                 let w = weight.to_device(&device)?;
@@ -200,7 +200,7 @@ impl QuantMethod for VectorFP8Linear {
             Some(IsqType::MXFP4) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
-                    candle_core::bail!("MXFP4 does not support imatrix.");
+                    hanzo_ml::bail!("MXFP4 does not support imatrix.");
                 }
 
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -249,14 +249,14 @@ pub fn vector_fp8_linear_b(
 ) -> Result<Arc<dyn QuantMethod>> {
     // Check that dimensions are divisible by VECTOR_SIZE
     if !in_dim.is_multiple_of(VECTOR_SIZE) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Input dimension {} must be divisible by {} for vector FP8 quantization",
             in_dim,
             VECTOR_SIZE
         );
     }
     if !out_dim.is_multiple_of(VECTOR_SIZE) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Output dimension {} must be divisible by {} for vector FP8 quantization",
             out_dim,
             VECTOR_SIZE

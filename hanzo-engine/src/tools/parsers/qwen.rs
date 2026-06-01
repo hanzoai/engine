@@ -33,7 +33,7 @@ impl ToolFormatParser for QwenParser {
         )
     }
 
-    fn parse(&self, message: &str) -> candle_core::Result<Option<String>> {
+    fn parse(&self, message: &str) -> hanzo_ml::Result<Option<String>> {
         let re = QWEN_REGEX
             .get_or_init(|| Regex::new(r"(?s)<tool_call>(?P<inner>.*?)</tool_call>").unwrap());
 

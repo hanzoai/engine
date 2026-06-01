@@ -31,8 +31,8 @@ use crate::{
     xlora_models::XLoraQLlama,
 };
 use anyhow::Result;
-use candle_core::quantized::ggml_file;
-use candle_core::{Device, Tensor};
+use hanzo_ml::quantized::ggml_file;
+use hanzo_ml::{Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use hanzo_quant::IsqType;
 use rand_isaac::Isaac64Rng;
@@ -534,7 +534,7 @@ impl Pipeline for GGMLPipeline {
         &mut self,
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
-    ) -> Result<ForwardInputsResult, candle_core::Error> {
+    ) -> Result<ForwardInputsResult, hanzo_ml::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -575,7 +575,7 @@ impl Pipeline for GGMLPipeline {
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    ) -> Result<(), candle_core::Error> {
+    ) -> Result<(), hanzo_ml::Error> {
         sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {

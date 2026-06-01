@@ -2,7 +2,7 @@
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{Device, Module, Result, Tensor};
+use hanzo_ml::{Device, Module, Result, Tensor};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, RowParallelLayer, ShardedVarBuilder,
 };
@@ -289,7 +289,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: hanzo_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     sliding_window: Option<usize>,
@@ -331,7 +331,7 @@ impl Model {
             );
         }
         if !matches!(attention_mechanism, AttentionImplementation::Eager) {
-            candle_core::bail!("Expected AttentionImplementation::Eager");
+            hanzo_ml::bail!("Expected AttentionImplementation::Eager");
         }
 
         let mapper = normal_loading_metadata.mapper;
@@ -510,7 +510,7 @@ impl IsqModel for Model {
         uvb.to_safetensors()
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         // NOTE: dependant on the exact implementation in get_layers!
         let mut names = Vec::new();
         // lm_head
@@ -533,7 +533,7 @@ impl EmbeddingModel for Model {
         &self,
         input_ids: &Tensor,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         self.forward(input_ids, flash_params)
     }
     fn device(&self) -> &Device {

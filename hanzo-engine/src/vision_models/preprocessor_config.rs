@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use candle_core::Result;
+use hanzo_ml::Result;
 use image::imageops::FilterType;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -129,7 +129,7 @@ impl ToFilter for Option<usize> {
             Some(2) | None => Ok(FilterType::Triangle), // BiLinear
             Some(3) => Ok(FilterType::CatmullRom),      // BiCubic
             Some(4) => Ok(FilterType::Nearest),
-            Some(x) => candle_core::bail!("Filter number {x} not supported"),
+            Some(x) => hanzo_ml::bail!("Filter number {x} not supported"),
         }
     }
 }
