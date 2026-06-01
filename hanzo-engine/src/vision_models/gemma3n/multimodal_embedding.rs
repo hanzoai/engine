@@ -1,4 +1,4 @@
-use candle_core::{DType, Module, Result, Tensor};
+use hanzo_ml::{DType, Module, Result, Tensor};
 use hanzo_quant::{QuantMethod, ShardedVarBuilder};
 use std::sync::Arc;
 

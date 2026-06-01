@@ -7,8 +7,8 @@ use std::{
 
 use blockwise_fp8::blockwise_fp8_linear_b;
 #[cfg(feature = "metal")]
-use candle_core::D;
-use candle_core::{
+use hanzo_ml::D;
+use hanzo_ml::{
     quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
 };
@@ -99,7 +99,7 @@ pub use utils::{fused_glu, GluActivationType};
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 
-use candle_nn::{Conv1d, Conv2d, Linear, Module};
+use hanzo_nn::{Conv1d, Conv2d, Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Limits outstanding async ISQ jobs to prevent unbounded memory growth.
@@ -785,7 +785,7 @@ impl IsqType {
 }
 
 impl TryFrom<IsqType> for GgmlDType {
-    type Error = candle_core::Error;
+    type Error = hanzo_ml::Error;
 
     fn try_from(value: IsqType) -> Result<Self> {
         let tp = match value {
@@ -801,7 +801,7 @@ impl TryFrom<IsqType> for GgmlDType {
             IsqType::Q8K => Self::Q8K,
             IsqType::Q8_0 => Self::Q8_0,
             IsqType::Q8_1 => Self::Q8_1,
-            _ => candle_core::bail!("Expected valid GGML ISQ type."),
+            _ => hanzo_ml::bail!("Expected valid GGML ISQ type."),
         };
         #[cfg(feature = "cuda")]
         {
@@ -818,7 +818,7 @@ impl TryFrom<IsqType> for GgmlDType {
                     | GgmlDType::Q5K
                     | GgmlDType::Q6K
             ) {
-                candle_core::bail!("GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`")
+                hanzo_ml::bail!("GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`")
             }
         }
         Ok(tp)
@@ -826,7 +826,7 @@ impl TryFrom<IsqType> for GgmlDType {
 }
 
 impl TryFrom<GgmlDType> for IsqType {
-    type Error = candle_core::Error;
+    type Error = hanzo_ml::Error;
 
     fn try_from(value: GgmlDType) -> Result<Self> {
         match value {
@@ -843,7 +843,7 @@ impl TryFrom<GgmlDType> for IsqType {
             GgmlDType::Q8_1 => Ok(Self::Q8_1),
             GgmlDType::Q8K => Ok(Self::Q8K),
             GgmlDType::BF16 | GgmlDType::F32 | GgmlDType::F16 => {
-                candle_core::bail!("Expected valid GGML ISQ type.")
+                hanzo_ml::bail!("Expected valid GGML ISQ type.")
             }
         }
     }
@@ -861,7 +861,7 @@ pub enum QuantizedSerdeType {
 }
 
 impl TryFrom<usize> for QuantizedSerdeType {
-    type Error = candle_core::Error;
+    type Error = hanzo_ml::Error;
     fn try_from(value: usize) -> std::result::Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::Gguf),
@@ -871,7 +871,7 @@ impl TryFrom<usize> for QuantizedSerdeType {
             4 => Ok(Self::Afq),
             5 => Ok(Self::F8Q8),
             6 => Ok(Self::Mxfp4),
-            other => candle_core::bail!("QuantizedSerdeType {other} is invalid."),
+            other => hanzo_ml::bail!("QuantizedSerdeType {other} is invalid."),
         }
     }
 }
@@ -882,7 +882,7 @@ pub trait QuantizedSerde {
         false
     }
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
-        candle_core::bail!("`QuantizedSerde::serialize` is not supported.")
+        hanzo_ml::bail!("`QuantizedSerde::serialize` is not supported.")
     }
     fn deserialize(
         _data: Cow<[u8]>,
@@ -893,7 +893,7 @@ pub trait QuantizedSerde {
     where
         Self: Sized,
     {
-        candle_core::bail!("`QuantizedSerde::deserialize` is not supported.")
+        hanzo_ml::bail!("`QuantizedSerde::deserialize` is not supported.")
     }
     fn deserialize_ext_bias(
         _data: Cow<[u8]>,
@@ -903,11 +903,11 @@ pub trait QuantizedSerde {
     where
         Self: Sized,
     {
-        candle_core::bail!("`QuantizedSerde::deserialize_ext_bias` is not supported.")
+        hanzo_ml::bail!("`QuantizedSerde::deserialize_ext_bias` is not supported.")
     }
     /// NOT meant for external calling
     fn serialize_with_bias(&self, _bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
-        candle_core::bail!("`QuantizedSerde::serialize_with_bias` is not supported.")
+        hanzo_ml::bail!("`QuantizedSerde::serialize_with_bias` is not supported.")
     }
 }
 
@@ -1010,7 +1010,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     /// Raw gather matmul without dtype casting. Implementors override this.
     /// Callers should use `gather_forward` instead.
     fn gather_forward_raw(&self, _a: &Tensor, _indices: &Tensor) -> Result<Tensor> {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "{} does not support `gather_forward`. Please raise an issue.",
             self.name()
         )
@@ -1019,7 +1019,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     /// Get the underlying QTensor if this is a GGUF quantized layer.
     /// Used for direct kernel access in the grouped MoE prefill path.
     #[cfg(feature = "cuda")]
-    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+    fn get_qtensor(&self) -> Option<&hanzo_ml::quantized::QTensor> {
         None
     }
 
@@ -1058,12 +1058,12 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
 
     /// Begin tracking stats into an ImatrixLayerStats
     fn begin_track_stats(&mut self) -> Result<()> {
-        candle_core::bail!("`{}` does not support tracking stats.", self.name())
+        hanzo_ml::bail!("`{}` does not support tracking stats.", self.name())
     }
 
     /// End tracking stats into an ImatrixLayerStats. Returns the computed imatrix.
     fn end_track_stats(&self) -> Result<Tensor> {
-        candle_core::bail!("`{}` does not support tracking stats.", self.name())
+        hanzo_ml::bail!("`{}` does not support tracking stats.", self.name())
     }
 
     fn is_distributed(&self) -> Option<DistributedKind> {
@@ -1179,7 +1179,7 @@ pub fn try_fused_gate_up_metal(
     up: &dyn QuantMethod,
     activation: GluActivationType,
 ) -> Result<Option<Tensor>> {
-    use candle_core::{backend::BackendStorage, MetalStorage, Shape, Storage};
+    use hanzo_ml::{backend::BackendStorage, MetalStorage, Shape, Storage};
 
     if gate.has_bias() || up.has_bias() {
         return Ok(None);
@@ -1298,7 +1298,7 @@ pub fn try_fused_gate_up_metal(
         gi.group_size as usize,
         act_code,
     )
-    .map_err(candle_core::Error::wrap)?;
+    .map_err(hanzo_ml::Error::wrap)?;
 
     let out_t = Tensor::from((
         Storage::Metal(MetalStorage::new(
@@ -1321,7 +1321,7 @@ pub fn try_fused_qkv_metal(
     k: &dyn QuantMethod,
     v: &dyn QuantMethod,
 ) -> Result<Option<(Tensor, Tensor, Tensor)>> {
-    use candle_core::{backend::BackendStorage, MetalStorage, Shape, Storage};
+    use hanzo_ml::{backend::BackendStorage, MetalStorage, Shape, Storage};
 
     if q.has_bias() || k.has_bias() || v.has_bias() {
         return Ok(None);
@@ -1444,7 +1444,7 @@ pub fn try_fused_qkv_metal(
         qi.bits as usize,
         qi.group_size as usize,
     )
-    .map_err(candle_core::Error::wrap)?;
+    .map_err(hanzo_ml::Error::wrap)?;
 
     let q_t = Tensor::from((
         Storage::Metal(MetalStorage::new(
@@ -1505,7 +1505,7 @@ pub(crate) fn make_dummy_or_error(
 ) -> Result<Arc<dyn QuantMethod>> {
     let missing = missing_required_tensors(vb, required);
     if missing.is_empty() {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Internal error: requested DummyLayer for {context} without missing tensors"
         );
     }
@@ -1514,7 +1514,7 @@ pub(crate) fn make_dummy_or_error(
         .iter()
         .any(|name| safetensors::is_uqff_dummy_tensor(vb, name));
     if !has_uqff_placeholder {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Missing required tensor(s) for {context} at prefix `{}`: {}. Dummy layers are only allowed for tensors intentionally omitted while loading UQFF artifacts.",
             tensor_prefix(vb),
             missing.join(", ")

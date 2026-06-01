@@ -1,4 +1,4 @@
-use candle_core::{CudaStorage, Device, IndexOp, Result, Shape, Storage, Tensor};
+use hanzo_ml::{CudaStorage, Device, IndexOp, Result, Shape, Storage, Tensor};
 use half::{bf16, f16};
 
 use super::ffi;
@@ -20,7 +20,7 @@ pub fn mxfp4_matmul(
     bias: Option<&Tensor>,
 ) -> Result<Tensor> {
     if !ffi::HAVE_MXFP4_GEMM_KERNELS {
-        candle_core::bail!("MXFP4 GEMM kernels not available");
+        hanzo_ml::bail!("MXFP4 GEMM kernels not available");
     }
 
     let input = if input.is_contiguous() {
@@ -43,7 +43,7 @@ pub fn mxfp4_matmul(
     let weight_dims = weight.dims();
 
     if input_dims.len() != 2 {
-        candle_core::bail!("Expected input to be rank 2, got {:?}", input_dims);
+        hanzo_ml::bail!("Expected input to be rank 2, got {:?}", input_dims);
     }
 
     let m = input_dims[0];
@@ -51,7 +51,7 @@ pub fn mxfp4_matmul(
     let n = weight_dims[0];
 
     if weight_dims[1] != k / 2 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Weight shape mismatch: expected [N, K/2] = [{}, {}], got {:?}",
             n,
             k / 2,
@@ -61,7 +61,7 @@ pub fn mxfp4_matmul(
 
     let dev = match input.device() {
         Device::Cuda(dev) => dev,
-        _ => candle_core::bail!("Expected CUDA device"),
+        _ => hanzo_ml::bail!("Expected CUDA device"),
     };
 
     let input_l = input.layout();
@@ -74,11 +74,11 @@ pub fn mxfp4_matmul(
 
     let weight_s = match &*weight_storage {
         Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<u8>()?,
-        _ => candle_core::bail!("Expected CUDA storage for weight"),
+        _ => hanzo_ml::bail!("Expected CUDA storage for weight"),
     };
     let scale_s = match &*scale_storage {
         Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<u8>()?,
-        _ => candle_core::bail!("Expected CUDA storage for scale"),
+        _ => hanzo_ml::bail!("Expected CUDA storage for scale"),
     };
 
     let (weight_ptr, _weight_guard) = slice_ptr(weight_s, weight_l.start_offset());
@@ -87,12 +87,12 @@ pub fn mxfp4_matmul(
     let has_bias = bias.is_some();
 
     match input.dtype() {
-        candle_core::DType::F16 => {
+        hanzo_ml::DType::F16 => {
             let output = dev.alloc_zeros::<f16>(m * n)?;
 
             let input_s = match &*input_storage {
                 Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
-                _ => candle_core::bail!("Expected CUDA storage for input"),
+                _ => hanzo_ml::bail!("Expected CUDA storage for input"),
             };
             let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
             let (output_ptr, _output_guard) = slice_ptr(&output, 0);
@@ -103,7 +103,7 @@ pub fn mxfp4_matmul(
                 let b_storage = b.storage_and_layout().0;
                 let b_s = match &*b_storage {
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
-                    _ => candle_core::bail!("Expected CUDA storage for bias"),
+                    _ => hanzo_ml::bail!("Expected CUDA storage for bias"),
                 };
                 let (ptr, _guard) = slice_ptr(b_s, b_l.start_offset());
                 ptr as *const f16
@@ -148,12 +148,12 @@ pub fn mxfp4_matmul(
                 Shape::from((m, n)),
             )))
         }
-        candle_core::DType::BF16 => {
+        hanzo_ml::DType::BF16 => {
             let output = dev.alloc_zeros::<bf16>(m * n)?;
 
             let input_s = match &*input_storage {
                 Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
-                _ => candle_core::bail!("Expected CUDA storage for input"),
+                _ => hanzo_ml::bail!("Expected CUDA storage for input"),
             };
             let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
             let (output_ptr, _output_guard) = slice_ptr(&output, 0);
@@ -164,7 +164,7 @@ pub fn mxfp4_matmul(
                 let b_storage = b.storage_and_layout().0;
                 let b_s = match &*b_storage {
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
-                    _ => candle_core::bail!("Expected CUDA storage for bias"),
+                    _ => hanzo_ml::bail!("Expected CUDA storage for bias"),
                 };
                 let (ptr, _guard) = slice_ptr(b_s, b_l.start_offset());
                 ptr as *const bf16
@@ -209,7 +209,7 @@ pub fn mxfp4_matmul(
                 Shape::from((m, n)),
             )))
         }
-        _ => candle_core::bail!("Unsupported dtype for MXFP4 matmul: {:?}", input.dtype()),
+        _ => hanzo_ml::bail!("Unsupported dtype for MXFP4 matmul: {:?}", input.dtype()),
     }
 }
 
@@ -318,7 +318,7 @@ pub fn mxfp4_indexed_moe_gemm(
     indices: &Tensor,
 ) -> Result<Tensor> {
     if !ffi::HAVE_MXFP4_GEMM_KERNELS {
-        candle_core::bail!("MXFP4 GEMM kernels not available");
+        hanzo_ml::bail!("MXFP4 GEMM kernels not available");
     }
 
     let input = if input.is_contiguous() {
@@ -351,14 +351,14 @@ pub fn mxfp4_indexed_moe_gemm(
     } else if input_dims.len() == 3 {
         (input_dims[0], input_dims[1], input_dims[2], true)
     } else {
-        candle_core::bail!("Expected input to be rank 2 or 3, got {:?}", input_dims);
+        hanzo_ml::bail!("Expected input to be rank 2 or 3, got {:?}", input_dims);
     };
 
     let num_experts = weight_dims[0];
     let n = weight_dims[1];
 
     if weight_dims[2] != k / 2 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Weight shape mismatch: expected [num_experts, N, K/2], got {:?}",
             weight_dims
         );
@@ -399,7 +399,7 @@ pub fn mxfp4_indexed_moe_gemm(
 
     let dev = match input.device() {
         Device::Cuda(dev) => dev,
-        _ => candle_core::bail!("Expected CUDA device"),
+        _ => hanzo_ml::bail!("Expected CUDA device"),
     };
 
     let input_l = input.layout();
@@ -414,15 +414,15 @@ pub fn mxfp4_indexed_moe_gemm(
 
     let weight_s = match &*weight_storage {
         Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<u8>()?,
-        _ => candle_core::bail!("Expected CUDA storage for weight"),
+        _ => hanzo_ml::bail!("Expected CUDA storage for weight"),
     };
     let scale_s = match &*scale_storage {
         Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<u8>()?,
-        _ => candle_core::bail!("Expected CUDA storage for scale"),
+        _ => hanzo_ml::bail!("Expected CUDA storage for scale"),
     };
     let indices_s = match &*indices_storage {
         Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<u32>()?,
-        _ => candle_core::bail!("Expected CUDA storage for indices"),
+        _ => hanzo_ml::bail!("Expected CUDA storage for indices"),
     };
 
     let (weight_ptr, _weight_guard) = slice_ptr(weight_s, weight_l.start_offset());
@@ -432,12 +432,12 @@ pub fn mxfp4_indexed_moe_gemm(
     let has_bias = bias.is_some();
 
     match input.dtype() {
-        candle_core::DType::F16 => {
+        hanzo_ml::DType::F16 => {
             let output = dev.alloc_zeros::<f16>(num_tokens * topk * n)?;
 
             let input_s = match &*input_storage {
                 Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
-                _ => candle_core::bail!("Expected CUDA storage for input"),
+                _ => hanzo_ml::bail!("Expected CUDA storage for input"),
             };
             let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
             let (output_ptr, _output_guard) = slice_ptr(&output, 0);
@@ -447,7 +447,7 @@ pub fn mxfp4_indexed_moe_gemm(
                 let b_storage = b.storage_and_layout().0;
                 let b_s = match &*b_storage {
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
-                    _ => candle_core::bail!("Expected CUDA storage for bias"),
+                    _ => hanzo_ml::bail!("Expected CUDA storage for bias"),
                 };
                 let (ptr, _guard) = slice_ptr(b_s, 0);
                 ptr as *const f16
@@ -519,12 +519,12 @@ pub fn mxfp4_indexed_moe_gemm(
                 Shape::from((num_tokens, topk, n)),
             )))
         }
-        candle_core::DType::BF16 => {
+        hanzo_ml::DType::BF16 => {
             let output = dev.alloc_zeros::<bf16>(num_tokens * topk * n)?;
 
             let input_s = match &*input_storage {
                 Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
-                _ => candle_core::bail!("Expected CUDA storage for input"),
+                _ => hanzo_ml::bail!("Expected CUDA storage for input"),
             };
             let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
             let (output_ptr, _output_guard) = slice_ptr(&output, 0);
@@ -534,7 +534,7 @@ pub fn mxfp4_indexed_moe_gemm(
                 let b_storage = b.storage_and_layout().0;
                 let b_s = match &*b_storage {
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
-                    _ => candle_core::bail!("Expected CUDA storage for bias"),
+                    _ => hanzo_ml::bail!("Expected CUDA storage for bias"),
                 };
                 let (ptr, _guard) = slice_ptr(b_s, 0);
                 ptr as *const bf16
@@ -606,7 +606,7 @@ pub fn mxfp4_indexed_moe_gemm(
                 Shape::from((num_tokens, topk, n)),
             )))
         }
-        _ => candle_core::bail!(
+        _ => hanzo_ml::bail!(
             "Unsupported dtype for MXFP4 indexed MoE GEMM: {:?}",
             input.dtype()
         ),

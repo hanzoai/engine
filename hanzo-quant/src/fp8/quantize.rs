@@ -1,5 +1,5 @@
-use candle_core::{DType, Result, Tensor};
-use candle_nn::Linear;
+use hanzo_ml::{DType, Result, Tensor};
+use hanzo_nn::Linear;
 use float8::F8E4M3;
 
 use super::FP8Linear;
@@ -57,7 +57,7 @@ impl FP8Linear {
 #[cfg(test)]
 mod tests {
     #[cfg(not(feature = "metal"))]
-    use candle_core::{
+    use hanzo_ml::{
         quantized::{GgmlDType, QTensor},
         DType, Device, Result, Tensor,
     };

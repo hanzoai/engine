@@ -3,8 +3,8 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
-use candle_nn::Linear;
+use hanzo_ml::{quantized::GgmlDType, DType, Device, Result, Tensor};
+use hanzo_nn::Linear;
 
 mod ops;
 
@@ -38,7 +38,7 @@ pub struct PerTensorFP8Linear {
 }
 
 impl QuantMethod for PerTensorFP8Linear {
-    fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
+    fn new(method: QuantMethodConfig) -> hanzo_ml::Result<Self>
     where
         Self: Sized,
     {
@@ -84,7 +84,7 @@ impl QuantMethod for PerTensorFP8Linear {
     }
 
     fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("PerTensorFP8Linear does not support add_delta_w")
+        hanzo_ml::bail!("PerTensorFP8Linear does not support add_delta_w")
     }
 
     fn dtype_and_device(&self) -> (DType, Device) {
@@ -104,7 +104,7 @@ impl QuantMethod for PerTensorFP8Linear {
             Some(IsqType::HQQ4 | IsqType::HQQ8) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
-                    candle_core::bail!("HQQ does not support imatrix.");
+                    hanzo_ml::bail!("HQQ does not support imatrix.");
                 }
 
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -134,7 +134,7 @@ impl QuantMethod for PerTensorFP8Linear {
             Some(IsqType::AFQ2 | IsqType::AFQ3 | IsqType::AFQ4 | IsqType::AFQ6 | IsqType::AFQ8) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
-                    candle_core::bail!("AFQ does not support imatrix.");
+                    hanzo_ml::bail!("AFQ does not support imatrix.");
                 }
 
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -185,7 +185,7 @@ impl QuantMethod for PerTensorFP8Linear {
             Some(IsqType::F8E4M3) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
-                    candle_core::bail!("F8E4M3 does not support imatrix.");
+                    hanzo_ml::bail!("F8E4M3 does not support imatrix.");
                 }
 
                 let w = weight.to_device(&device)?;
@@ -202,7 +202,7 @@ impl QuantMethod for PerTensorFP8Linear {
             Some(IsqType::F8Q8) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
-                    candle_core::bail!("F8Q8 does not support imatrix.");
+                    hanzo_ml::bail!("F8Q8 does not support imatrix.");
                 }
 
                 let w = weight.to_device(&device)?;
@@ -216,7 +216,7 @@ impl QuantMethod for PerTensorFP8Linear {
             Some(IsqType::MXFP4) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
-                    candle_core::bail!("MXFP4 does not support imatrix.");
+                    hanzo_ml::bail!("MXFP4 does not support imatrix.");
                 }
 
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

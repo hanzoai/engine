@@ -3,8 +3,8 @@
 use crate::layers_masker::CausalMaskConfig;
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Device, IndexOp, Result, Tensor};
-use candle_nn::{Activation, Embedding, Module};
+use hanzo_ml::{Device, IndexOp, Result, Tensor};
+use hanzo_nn::{Activation, Embedding, Module};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -376,7 +376,7 @@ impl MLlamaTextCrossAttention {
 
             (k, v)
         } else {
-            candle_core::bail!("Cross attn cannot find k,v cache or cross attn hidden states!")
+            hanzo_ml::bail!("Cross attn cannot find k,v cache or cross attn hidden states!")
         };
 
         let repeated_mask = match attention_mask {
@@ -522,7 +522,7 @@ impl MLlamaTextModel {
             );
         }
         if !matches!(attention_mechanism, AttentionImplementation::Eager) {
-            candle_core::bail!("Expected eager attention implementation");
+            hanzo_ml::bail!("Expected eager attention implementation");
         }
         let mapper = normal_loading_metadata.mapper;
 
@@ -542,7 +542,7 @@ impl MLlamaTextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), false),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(embed_tokens.embeddings(), false)?,
                 None,
             ))?

@@ -1,4 +1,4 @@
-use candle_core::{Device, DeviceLocation};
+use hanzo_ml::{Device, DeviceLocation};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 

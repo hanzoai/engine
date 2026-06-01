@@ -1,5 +1,5 @@
-use candle_core::{DType, MetalStorage};
-use candle_metal_kernels::metal::{
+use hanzo_ml::{DType, MetalStorage};
+use hanzo_metal_kernels::metal::{
     Buffer, ComputeCommandEncoder, ComputePipeline, ConstantValues, Device, Function, Library,
     Value,
 };

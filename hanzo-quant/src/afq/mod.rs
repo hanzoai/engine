@@ -5,7 +5,7 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle_core::{DType, Device, Result, Tensor};
+use hanzo_ml::{DType, Device, Result, Tensor};
 
 use crate::{
     utils::{
@@ -33,7 +33,7 @@ pub enum AfqBits {
 }
 
 impl TryFrom<usize> for AfqBits {
-    type Error = candle_core::Error;
+    type Error = hanzo_ml::Error;
     fn try_from(value: usize) -> Result<Self> {
         match value {
             2 => Ok(Self::Two),
@@ -42,13 +42,13 @@ impl TryFrom<usize> for AfqBits {
             6 => Ok(Self::Six),
             8 => Ok(Self::Eight),
             40 => Ok(Self::Mxfp4),
-            x => candle_core::bail!("Invalid AFQ bits {x}."),
+            x => hanzo_ml::bail!("Invalid AFQ bits {x}."),
         }
     }
 }
 
 impl TryFrom<u8> for AfqBits {
-    type Error = candle_core::Error;
+    type Error = hanzo_ml::Error;
     fn try_from(value: u8) -> Result<Self> {
         Self::try_from(value as usize)
     }
@@ -64,19 +64,19 @@ pub enum AfqGroupSize {
 }
 
 impl TryFrom<usize> for AfqGroupSize {
-    type Error = candle_core::Error;
+    type Error = hanzo_ml::Error;
     fn try_from(value: usize) -> Result<Self> {
         match value {
             32 => Ok(Self::Low),
             64 => Ok(Self::Med),
             128 => Ok(Self::High),
-            x => candle_core::bail!("Invalid AFQ group size {x}."),
+            x => hanzo_ml::bail!("Invalid AFQ group size {x}."),
         }
     }
 }
 
 impl TryFrom<u8> for AfqGroupSize {
-    type Error = candle_core::Error;
+    type Error = hanzo_ml::Error;
     fn try_from(value: u8) -> Result<Self> {
         Self::try_from(value as usize)
     }
@@ -104,7 +104,7 @@ pub struct AfqInner<'a> {
 }
 
 impl QuantMethod for AfqLayer {
-    fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
+    fn new(method: QuantMethodConfig) -> hanzo_ml::Result<Self>
     where
         Self: Sized,
     {
@@ -139,7 +139,7 @@ impl QuantMethod for AfqLayer {
         }
     }
 
-    fn dequantize_w(&self) -> Result<candle_core::Tensor> {
+    fn dequantize_w(&self) -> Result<hanzo_ml::Tensor> {
         ops::afq_dequantize_op(
             &self.w_q,
             &self.scales,
@@ -202,7 +202,7 @@ impl QuantMethod for AfqLayer {
         })?))
     }
 
-    fn dtype_and_device(&self) -> (DType, candle_core::Device) {
+    fn dtype_and_device(&self) -> (DType, hanzo_ml::Device) {
         (self.scales.dtype(), self.scales.device().clone())
     }
 
@@ -236,12 +236,12 @@ impl AfqLayer {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(hanzo_ml::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Afq as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::Afq as usize
             );
@@ -268,7 +268,7 @@ impl AfqLayer {
             AfqBits::Four => Ok(IsqType::AFQ4),
             AfqBits::Six => Ok(IsqType::AFQ6),
             AfqBits::Eight => Ok(IsqType::AFQ8),
-            AfqBits::Mxfp4 => candle_core::bail!("mxfp4 is not supported as an ISQ type"),
+            AfqBits::Mxfp4 => hanzo_ml::bail!("mxfp4 is not supported as an ISQ type"),
         }
     }
 
@@ -280,7 +280,7 @@ impl AfqLayer {
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
         let QuantizedConfig::Afq { bits, group_size } = config else {
-            candle_core::bail!("Unexpected quantization config.")
+            hanzo_ml::bail!("Unexpected quantization config.")
         };
 
         let w_q = vb.get_with_hints_dtype(
@@ -319,7 +319,7 @@ impl AfqLayer {
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
         let QuantizedConfig::Afq { bits, group_size } = config else {
-            candle_core::bail!("Unexpected quantization config.")
+            hanzo_ml::bail!("Unexpected quantization config.")
         };
 
         let w_q = vb.get_with_hints_dtype(
@@ -407,12 +407,12 @@ impl QuantizedSerde for AfqLayer {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(hanzo_ml::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Afq as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::Afq as usize
             );
@@ -457,12 +457,12 @@ impl QuantizedSerde for AfqLayer {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(hanzo_ml::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Afq as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::Afq as usize
             );

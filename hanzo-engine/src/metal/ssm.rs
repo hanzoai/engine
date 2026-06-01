@@ -6,12 +6,12 @@
 #![allow(clippy::cast_possible_truncation)]
 
 #[cfg(feature = "metal")]
-use candle_core::backend::BackendStorage;
+use hanzo_ml::backend::BackendStorage;
 #[cfg(feature = "metal")]
-use candle_core::{DType, Device, Result, Storage, Tensor};
+use hanzo_ml::{DType, Device, Result, Storage, Tensor};
 
 #[cfg(feature = "metal")]
-use candle_metal_kernels::metal::{
+use hanzo_metal_kernels::metal::{
     Buffer, ComputeCommandEncoder, ComputePipeline, Device as MetalRawDevice, Library,
 };
 
@@ -49,7 +49,7 @@ fn load_ssm_library(device: &MetalRawDevice) -> Result<Library> {
     let lib = device
         .new_library_with_source(SSM_METAL_SOURCE, Some(&compile_options))
         .map_err(|e| {
-            candle_core::Error::Msg(format!("Failed to compile SSM Metal kernels: {e}"))
+            hanzo_ml::Error::Msg(format!("Failed to compile SSM Metal kernels: {e}"))
         })?;
     Ok(SSM_LIBRARY.get_or_init(|| lib).clone())
 }
@@ -60,7 +60,7 @@ fn load_pipeline(device: &MetalRawDevice, name: &str) -> Result<ComputePipeline>
 
     {
         let pipelines = pipelines_lock.read().map_err(|e| {
-            candle_core::Error::Msg(format!("Failed to lock SSM pipeline cache: {e}"))
+            hanzo_ml::Error::Msg(format!("Failed to lock SSM pipeline cache: {e}"))
         })?;
         if let Some(pipeline) = pipelines.get(name) {
             return Ok(pipeline.clone());
@@ -69,16 +69,16 @@ fn load_pipeline(device: &MetalRawDevice, name: &str) -> Result<ComputePipeline>
 
     let lib = load_ssm_library(device)?;
     let func = lib.get_function(name, None).map_err(|e| {
-        candle_core::Error::Msg(format!("Failed to load SSM Metal function '{name}': {e}"))
+        hanzo_ml::Error::Msg(format!("Failed to load SSM Metal function '{name}': {e}"))
     })?;
     let pipeline = device
         .new_compute_pipeline_state_with_function(&func)
         .map_err(|e| {
-            candle_core::Error::Msg(format!("Failed to create SSM pipeline for '{name}': {e}"))
+            hanzo_ml::Error::Msg(format!("Failed to create SSM pipeline for '{name}': {e}"))
         })?;
 
     let mut pipelines = pipelines_lock.write().map_err(|e| {
-        candle_core::Error::Msg(format!("Failed to lock SSM pipeline cache for write: {e}"))
+        hanzo_ml::Error::Msg(format!("Failed to lock SSM pipeline cache for write: {e}"))
     })?;
     pipelines.insert(name.to_string(), pipeline.clone());
     Ok(pipeline)
@@ -92,7 +92,7 @@ fn metal_buffer_and_offset(tensor: &Tensor) -> Result<(Buffer, usize)> {
             let offset = layout.start_offset() * m.dtype().size_in_bytes();
             Ok((m.buffer().clone(), offset))
         }
-        _ => candle_core::bail!("Expected Metal tensor"),
+        _ => hanzo_ml::bail!("Expected Metal tensor"),
     }
 }
 
@@ -141,7 +141,7 @@ pub fn selective_scan_metal(
     let c_flat = c.reshape((batch_size, seq_len, n_heads * d_state))?;
 
     let Device::Metal(dev) = x_flat.device() else {
-        candle_core::bail!("selective_scan_metal: expected Metal device");
+        hanzo_ml::bail!("selective_scan_metal: expected Metal device");
     };
 
     // Select kernel based on c_factor = ceil(d_state / 32)
@@ -217,16 +217,16 @@ pub fn selective_scan_metal(
 #[cfg(not(feature = "metal"))]
 #[allow(dead_code, clippy::too_many_arguments)]
 pub fn selective_scan_metal(
-    _x: &candle_core::Tensor,
-    _dt: &candle_core::Tensor,
-    _a: &candle_core::Tensor,
-    _b: &candle_core::Tensor,
-    _c: &candle_core::Tensor,
-    _d: &candle_core::Tensor,
-    _dt_bias: &candle_core::Tensor,
-    _state: &mut candle_core::Tensor,
+    _x: &hanzo_ml::Tensor,
+    _dt: &hanzo_ml::Tensor,
+    _a: &hanzo_ml::Tensor,
+    _b: &hanzo_ml::Tensor,
+    _c: &hanzo_ml::Tensor,
+    _d: &hanzo_ml::Tensor,
+    _dt_bias: &hanzo_ml::Tensor,
+    _state: &mut hanzo_ml::Tensor,
     _dt_min: f32,
     _dt_max: f32,
-) -> candle_core::Result<candle_core::Tensor> {
-    candle_core::bail!("selective_scan_metal requires the metal feature")
+) -> hanzo_ml::Result<hanzo_ml::Tensor> {
+    hanzo_ml::bail!("selective_scan_metal requires the metal feature")
 }

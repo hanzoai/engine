@@ -18,8 +18,8 @@ use crate::{
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
-use candle_core::IndexOp;
-use candle_core::{DType, Device, Module, Result, Tensor, D};
+use hanzo_ml::IndexOp;
+use hanzo_ml::{DType, Device, Module, Result, Tensor, D};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -109,7 +109,7 @@ impl RotaryEmbedding {
                 .unsqueeze(0)?
                 .contiguous()?;
             let xs_pass = xs.i((b, .., .., self.rotary_dim..))?.unsqueeze(0)?;
-            let xs_rot = candle_nn::rotary_emb::rope_i(&xs_rot, &cos, &sin).unwrap();
+            let xs_rot = hanzo_nn::rotary_emb::rope_i(&xs_rot, &cos, &sin).unwrap();
             let embed = Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?.contiguous()?;
             embeds.push(embed);
         }
@@ -411,7 +411,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: hanzo_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -536,7 +536,7 @@ impl Model {
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(
                     embed_tokens.embeddings(),
                     normal_loading_metadata.loading_isq,
@@ -701,7 +701,7 @@ impl IsqModel for Model {
         uvb.to_safetensors()
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         // NOTE: dependant on the exact implementation in get_layers!
         let mut names = Vec::new();
         // lm_head

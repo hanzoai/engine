@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use candle_core::{Device, Result, Tensor};
+use hanzo_ml::{Device, Result, Tensor};
 
 use crate::device_map::DeviceMapper;
 use crate::paged_attention::CacheEngine;
@@ -68,7 +68,7 @@ pub trait SpeculativeCacheAccess {
         outcomes: &[Option<SpeculativeCacheOutcome>],
     ) -> Result<()> {
         if guards.len() != seqs.len() || outcomes.len() != seqs.len() {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "speculative cache batch shape mismatch: guards={}, seqs={}, outcomes={}",
                 guards.len(),
                 seqs.len(),
@@ -172,14 +172,14 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
     ) -> Result<InputMetadata> {
         let verify_len = verify_tokens.len();
         if verify_len == 0 {
-            candle_core::bail!("speculative verification requires at least one token.");
+            hanzo_ml::bail!("speculative verification requires at least one token.");
         }
 
         let kv_mgr = crate::get_mut_arcmutex!(self.metadata.kv_cache_manager);
         let full_table = kv_mgr
             .get_block_ids(seq_id)
             .ok_or_else(|| {
-                candle_core::Error::Msg(format!(
+                hanzo_ml::Error::Msg(format!(
                     "speculative sequence {seq_id} has no paged-attention blocks"
                 ))
             })?
@@ -199,7 +199,7 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                 .get(token_pos / self.metadata.block_size)
                 .copied()
                 .ok_or_else(|| {
-                    candle_core::Error::Msg(format!(
+                    hanzo_ml::Error::Msg(format!(
                         "speculative verification block table is too small: token_pos={token_pos}, block_size={}, table_len={}",
                         self.metadata.block_size,
                         full_table.len()
@@ -209,7 +209,7 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                 .checked_mul(self.metadata.block_size)
                 .and_then(|v| v.checked_add(token_pos % self.metadata.block_size))
                 .ok_or_else(|| {
-                    candle_core::Error::Msg("speculative verification slot overflowed".to_string())
+                    hanzo_ml::Error::Msg("speculative verification slot overflowed".to_string())
                 })?;
             slot_mappings.push(slot as i64);
 
@@ -307,14 +307,14 @@ fn repeated_table_tensor(rows: &[Vec<usize>], max_len: usize, device: &Device) -
 
 fn usize_to_u32(value: usize, name: &str) -> Result<u32> {
     u32::try_from(value)
-        .map_err(|_| candle_core::Error::Msg(format!("{name} exceeds u32::MAX: {value}")))
+        .map_err(|_| hanzo_ml::Error::Msg(format!("{name} exceeds u32::MAX: {value}")))
 }
 
 fn map_to_devices(
     tensor: &Tensor,
     device: &Device,
     mapper: &dyn DeviceMapper,
-) -> Result<HashMap<candle_core::DeviceLocation, Tensor>> {
+) -> Result<HashMap<hanzo_ml::DeviceLocation, Tensor>> {
     let mut devices = mapper.get_unique_devices();
     if !devices
         .iter()

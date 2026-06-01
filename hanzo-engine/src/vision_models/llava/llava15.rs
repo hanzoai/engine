@@ -25,8 +25,8 @@ use crate::vision_models::clip::{ClipConfig, ClipVisionTransformer};
 use crate::vision_models::llava::config::Config;
 use crate::AnyMoeConfig;
 use crate::AnyMoeExpertType;
-use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{Activation, Linear};
+use hanzo_ml::{bail, DType, Device, IndexOp, Result, Tensor};
+use hanzo_nn::{Activation, Linear};
 use hanzo_quant::NonZeroOp;
 use hanzo_quant::ShardedVarBuilder;
 
@@ -323,7 +323,7 @@ impl MultimodalModel for Model {
         model_specific_args: Box<dyn std::any::Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         let LLaVAVisionSpecificArgs { image_hashes } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `LLaVAVisionSpecificArgs`");

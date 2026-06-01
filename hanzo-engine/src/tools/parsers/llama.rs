@@ -27,7 +27,7 @@ impl ToolFormatParser for LlamaParser {
         )
     }
 
-    fn parse(&self, message: &str) -> candle_core::Result<Option<String>> {
+    fn parse(&self, message: &str) -> hanzo_ml::Result<Option<String>> {
         if let Some(rest) = message.strip_prefix("<|python_tag|>") {
             Ok(Some(rest.to_string()))
         } else {

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use candle_core::{DType, Device};
+use hanzo_ml::{DType, Device};
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Cache, Repo, RepoType,

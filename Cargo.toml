@@ -38,11 +38,11 @@ rust-version = "1.88"
 # candle-flash-attn = { version = "0.10.2" }
 # candle-metal-kernels = { version = "0.10.2" }
 # Use local hanzo-ml dependencies (Hanzo fork of candle) — provides the vulkan/rocm GPU backends
-candle-core = { path = "../ml/hanzo-ml", package = "hanzo-ml" }
-candle-nn = { path = "../ml/hanzo-nn", package = "hanzo-nn" }
-candle-flash-attn = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
-candle-flash-attn-v3 = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
-candle-metal-kernels = { path = "../ml/hanzo-metal-kernels", package = "hanzo-metal-kernels" }
+hanzo-ml = { path = "../ml/hanzo-ml", package = "hanzo-ml" }
+hanzo-nn = { path = "../ml/hanzo-nn", package = "hanzo-nn" }
+hanzo-flash-attn = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
+hanzo-flash-attn-v3 = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
+hanzo-metal-kernels = { path = "../ml/hanzo-metal-kernels", package = "hanzo-metal-kernels" }
 # candle-core = { path = "../candle/candle-core" }
 # candle-nn = { path = "../candle/candle-nn" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }

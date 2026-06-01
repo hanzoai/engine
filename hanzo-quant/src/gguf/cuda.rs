@@ -8,7 +8,7 @@ use std::sync::{Mutex, OnceLock};
 
 use super::ffi;
 use crate::utils::slice_ptr;
-use candle_core::{
+use hanzo_ml::{
     cuda::cudarc::driver::{CudaSlice, DevicePtr},
     quantized::{GgmlDType, QMatMul, QTensor},
     CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
@@ -24,7 +24,7 @@ struct DispatchWorkspaceSlot {
 }
 
 type DispatchWsMap =
-    Mutex<HashMap<candle_core::cuda::DeviceId, &'static Mutex<DispatchWorkspaceSlot>>>;
+    Mutex<HashMap<hanzo_ml::cuda::DeviceId, &'static Mutex<DispatchWorkspaceSlot>>>;
 
 static MOE_DISPATCH_WORKSPACE: OnceLock<DispatchWsMap> = OnceLock::new();
 
@@ -38,8 +38,8 @@ struct F32WorkspaceSlot {
     cap: usize,
 }
 
-type U8WsMap = Mutex<HashMap<candle_core::cuda::DeviceId, &'static Mutex<U8WorkspaceSlot>>>;
-type F32WsMap = Mutex<HashMap<candle_core::cuda::DeviceId, &'static Mutex<F32WorkspaceSlot>>>;
+type U8WsMap = Mutex<HashMap<hanzo_ml::cuda::DeviceId, &'static Mutex<U8WorkspaceSlot>>>;
+type F32WsMap = Mutex<HashMap<hanzo_ml::cuda::DeviceId, &'static Mutex<F32WorkspaceSlot>>>;
 
 static MOE_DECODE_Q8_WORKSPACE: OnceLock<U8WsMap> = OnceLock::new();
 static MOE_DECODE_F32_WORKSPACE: OnceLock<F32WsMap> = OnceLock::new();
@@ -419,7 +419,7 @@ fn indexed_moe_forward_fused_q8_1_input(
                     stream,
                 );
             }
-            _ => candle_core::bail!("unsupported dtype for indexed_moe_forward {w_dtype:?}"),
+            _ => hanzo_ml::bail!("unsupported dtype for indexed_moe_forward {w_dtype:?}"),
         }
     }
 
@@ -466,7 +466,7 @@ pub fn qtensor_indexed_moe_forward(qtensor: &QTensor, x: &Tensor, ids: &Tensor) 
             | GgmlDType::Q5K
             | GgmlDType::Q6K
     ) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "The given quantized dtype {:?} is not supported for indexed_moe_forward!",
             dtype
         );
@@ -474,17 +474,17 @@ pub fn qtensor_indexed_moe_forward(qtensor: &QTensor, x: &Tensor, ids: &Tensor) 
 
     // Ensure tensors are on CUDA
     let Device::Cuda(dev) = qtensor.device() else {
-        candle_core::bail!("indexed_moe_forward requires CUDA device for weights");
+        hanzo_ml::bail!("indexed_moe_forward requires CUDA device for weights");
     };
 
     let (x_storage, _x_layout) = x.storage_and_layout();
     let Storage::Cuda(_) = &*x_storage else {
-        candle_core::bail!("indexed_moe_forward requires CUDA device for input");
+        hanzo_ml::bail!("indexed_moe_forward requires CUDA device for input");
     };
 
     let (ids_storage, _ids_layout) = ids.storage_and_layout();
     let Storage::Cuda(ids_cuda) = &*ids_storage else {
-        candle_core::bail!("indexed_moe_forward requires CUDA device for indices");
+        hanzo_ml::bail!("indexed_moe_forward requires CUDA device for indices");
     };
 
     // Get weight device pointer directly (no copy)
@@ -521,7 +521,7 @@ pub fn qmatmul_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) 
     match qmatmul {
         QMatMul::QTensor(qtensor) => qtensor_indexed_moe_forward(qtensor, x, ids),
         QMatMul::Tensor(_) | QMatMul::TensorF16(_) => {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "indexed_moe_forward is only supported for quantized tensors (QTensor)"
             )
         }
@@ -596,12 +596,12 @@ pub unsafe fn moe_weighted_reduce_flat(
 ) -> Result<Tensor> {
     let (total_assignments, hidden) = inputs.dims2()?;
     if total_assignments != num_tokens * topk {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "moe_weighted_reduce_flat: input rows {total_assignments} do not match num_tokens={num_tokens} * topk={topk}"
         );
     }
     if inputs.dtype() != DType::F32 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "moe_weighted_reduce_flat: input dtype must be F32, got {:?}",
             inputs.dtype()
         );
@@ -610,7 +610,7 @@ pub unsafe fn moe_weighted_reduce_flat(
     let inputs = inputs.contiguous()?;
     let (storage, layout) = inputs.storage_and_layout();
     let Storage::Cuda(cuda) = &*storage else {
-        candle_core::bail!("moe_weighted_reduce_flat: input must live on CUDA");
+        hanzo_ml::bail!("moe_weighted_reduce_flat: input must live on CUDA");
     };
     let input_slice = cuda.as_cuda_slice::<f32>()?;
     let out = unsafe { dev.alloc::<f32>(num_tokens * hidden)? };
@@ -665,23 +665,23 @@ fn quantize_input_q8_1_into(
     let k_padded = pad(k, MATRIX_ROW_PADDING);
     let y_size_in_bytes = q8_1_bytes(num_rows, k_padded);
     if input_quant.len() < y_size_in_bytes {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "quantize_input_q8_1_into: output buffer too small: {} < {y_size_in_bytes}",
             input_quant.len()
         );
     }
     // Use fused half->Q8_1 kernels when input is BF16/F16 (avoids separate cast kernel)
-    if xs_contig.dtype() == candle_core::DType::BF16 || xs_contig.dtype() == candle_core::DType::F16
+    if xs_contig.dtype() == hanzo_ml::DType::BF16 || xs_contig.dtype() == hanzo_ml::DType::F16
     {
         let (xs_storage, xs_layout) = xs_contig.storage_and_layout();
         let xs_cuda = match &*xs_storage {
             Storage::Cuda(c) => c,
-            _ => candle_core::bail!("expected CUDA tensor"),
+            _ => hanzo_ml::bail!("expected CUDA tensor"),
         };
         assert!(xs_layout.start_offset() == 0);
         let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
         let (out_ptr, _og) = slice_ptr(input_quant, 0);
-        if xs_contig.dtype() == candle_core::DType::BF16 {
+        if xs_contig.dtype() == hanzo_ml::DType::BF16 {
             let xs_slice = xs_cuda.as_cuda_slice::<half::bf16>()?;
             unsafe {
                 ffi::launch_quantize_q8_1_bf16(
@@ -707,11 +707,11 @@ fn quantize_input_q8_1_into(
             }
         }
     } else {
-        let xs_f32 = xs_contig.to_dtype(candle_core::DType::F32)?;
+        let xs_f32 = xs_contig.to_dtype(hanzo_ml::DType::F32)?;
         let (xs_storage, xs_layout) = xs_f32.storage_and_layout();
         let xs_cuda = match &*xs_storage {
             Storage::Cuda(c) => c,
-            _ => candle_core::bail!("expected CUDA tensor"),
+            _ => hanzo_ml::bail!("expected CUDA tensor"),
         };
         let xs_slice = xs_cuda.as_cuda_slice::<f32>()?;
         assert!(xs_layout.start_offset() == 0);
@@ -776,7 +776,7 @@ pub fn grouped_moe_gemm_prequantized(
                 GgmlDType::Q4K => ffi::launch_moe_grouped_gemm_q4k,
                 GgmlDType::Q5K => ffi::launch_moe_grouped_gemm_q5k,
                 GgmlDType::Q6K => ffi::launch_moe_grouped_gemm_q6k,
-                _ => candle_core::bail!("unsupported dtype: {dtype:?}"),
+                _ => hanzo_ml::bail!("unsupported dtype: {dtype:?}"),
             };
 
             launch_fn(
@@ -904,7 +904,7 @@ pub unsafe fn indexed_moe_fused_decode(
             GgmlDType::Q4K => ffi::launch_moe_gemv_fused_gate_up_q4k_q8_1,
             GgmlDType::Q5K => ffi::launch_moe_gemv_fused_gate_up_q5k_q8_1,
             GgmlDType::Q6K => ffi::launch_moe_gemv_fused_gate_up_q6k_q8_1,
-            _ => candle_core::bail!("unsupported dtype for fused MoE decode: {gate_up_dtype:?}"),
+            _ => hanzo_ml::bail!("unsupported dtype for fused MoE decode: {gate_up_dtype:?}"),
         };
 
         unsafe {
@@ -972,7 +972,7 @@ pub unsafe fn indexed_moe_fused_decode(
             GgmlDType::Q4K => ffi::launch_moe_gemv_down_aggregate_q4k_q8_1,
             GgmlDType::Q5K => ffi::launch_moe_gemv_down_aggregate_q5k_q8_1,
             GgmlDType::Q6K => ffi::launch_moe_gemv_down_aggregate_q6k_q8_1,
-            _ => candle_core::bail!("unsupported dtype for fused MoE decode: {down_dtype:?}"),
+            _ => hanzo_ml::bail!("unsupported dtype for fused MoE decode: {down_dtype:?}"),
         };
 
         unsafe {

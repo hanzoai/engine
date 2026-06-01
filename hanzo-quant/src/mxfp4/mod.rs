@@ -5,7 +5,7 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle_core::{DType, Device, Result, Tensor};
+use hanzo_ml::{DType, Device, Result, Tensor};
 
 use crate::{
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
@@ -40,7 +40,7 @@ pub struct MXFP4Layer {
 }
 
 impl QuantMethod for MXFP4Layer {
-    fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
+    fn new(method: QuantMethodConfig) -> hanzo_ml::Result<Self>
     where
         Self: Sized,
     {
@@ -67,7 +67,7 @@ impl QuantMethod for MXFP4Layer {
         }
     }
 
-    fn dequantize_w(&self) -> Result<candle_core::Tensor> {
+    fn dequantize_w(&self) -> Result<hanzo_ml::Tensor> {
         #[cfg(feature = "metal")]
         if self.blocks.device().is_metal() {
             use crate::afq::ops;
@@ -168,10 +168,10 @@ impl QuantMethod for MXFP4Layer {
     }
 
     fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("MXFP4Layer does not support add_delta_w")
+        hanzo_ml::bail!("MXFP4Layer does not support add_delta_w")
     }
 
-    fn dtype_and_device(&self) -> (DType, candle_core::Device) {
+    fn dtype_and_device(&self) -> (DType, hanzo_ml::Device) {
         (DType::BF16, self.scales.device().clone())
     }
 
@@ -183,7 +183,7 @@ impl QuantMethod for MXFP4Layer {
         _imatrix_weight: Option<Vec<f32>>,
         _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("MXFP4Layer does not support ISQ")
+        hanzo_ml::bail!("MXFP4Layer does not support ISQ")
     }
 }
 
@@ -213,7 +213,7 @@ impl MXFP4Layer {
         let (n, k) = (dims.0, dims.1);
 
         if k % MXFP4_BLOCK_SIZE != 0 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "MXFP4 quantization requires K ({k}) divisible by block size ({MXFP4_BLOCK_SIZE})"
             );
         }
@@ -330,11 +330,11 @@ impl MXFP4Layer {
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
         if !Self::device_supported(vb.device()) {
-            candle_core::bail!("MXFP4Layer requires CUDA or Metal device.");
+            hanzo_ml::bail!("MXFP4Layer requires CUDA or Metal device.");
         }
 
         let QuantizedConfig::MXFP4 {} = config else {
-            candle_core::bail!("Unexpected quantization config.")
+            hanzo_ml::bail!("Unexpected quantization config.")
         };
 
         let blocks = vb.get_with_hints_dtype(
@@ -372,11 +372,11 @@ impl MXFP4Layer {
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
         if !Self::device_supported(vb.device()) {
-            candle_core::bail!("MXFP4Layer requires CUDA or Metal device.");
+            hanzo_ml::bail!("MXFP4Layer requires CUDA or Metal device.");
         }
 
         let QuantizedConfig::MXFP4 {} = config else {
-            candle_core::bail!("Unexpected quantization config.")
+            hanzo_ml::bail!("Unexpected quantization config.")
         };
 
         let blocks = vb.get_with_hints_dtype(
@@ -422,7 +422,7 @@ impl MXFP4Layer {
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
         if !Self::device_supported(vb.device()) {
-            candle_core::bail!("MXFP4Layer requires CUDA or Metal device.");
+            hanzo_ml::bail!("MXFP4Layer requires CUDA or Metal device.");
         }
 
         let num_blocks = in_dim / MXFP4_BLOCK_SIZE;
@@ -781,12 +781,12 @@ impl QuantizedSerde for MXFP4Layer {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(hanzo_ml::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Mxfp4 as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::Mxfp4 as usize
             );

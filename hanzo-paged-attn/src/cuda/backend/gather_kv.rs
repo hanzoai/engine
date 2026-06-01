@@ -1,7 +1,7 @@
 use crate::cuda::backend::slice_ptr;
 use crate::cuda::ffi::gather_kv_cache as ffi_gather_kv_cache;
-use candle_core::backend::BackendStorage;
-use candle_core::{DType, IndexOp, Result, Storage, Tensor};
+use hanzo_ml::backend::BackendStorage;
+use hanzo_ml::{DType, IndexOp, Result, Storage, Tensor};
 use float8::F8E4M3;
 
 pub fn gather_kv_cache(
@@ -15,7 +15,7 @@ pub fn gather_kv_cache(
 ) -> Result<(Tensor, Tensor)> {
     let cache_dtype = key_cache.dtype();
     if value_cache.dtype() != cache_dtype {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "gather_kv_cache expects matching cache dtypes, got {:?} and {:?}",
             cache_dtype,
             value_cache.dtype()
@@ -26,13 +26,13 @@ pub fn gather_kv_cache(
     let cu_seq_lens = cu_seq_lens.contiguous()?;
 
     if !matches!(block_table.dtype(), DType::I32 | DType::U32) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "gather_kv_cache expects i32/u32 block_table (got {:?})",
             block_table.dtype()
         );
     }
     if !matches!(cu_seq_lens.dtype(), DType::I32 | DType::U32) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "gather_kv_cache expects i32/u32 cu_seq_lens (got {:?})",
             cu_seq_lens.dtype()
         );
@@ -76,7 +76,7 @@ pub fn gather_kv_cache(
         DType::F16 => 0,
         DType::BF16 => 1,
         DType::F32 => 2,
-        other => candle_core::bail!(
+        other => hanzo_ml::bail!(
             "gather_kv_cache only supports f16, bf16, f32 output (got {other:?})"
         ),
     };
@@ -85,7 +85,7 @@ pub fn gather_kv_cache(
         DType::BF16 => 1,
         DType::F32 => 2,
         DType::F8E4M3 => 3,
-        other => candle_core::bail!(
+        other => hanzo_ml::bail!(
             "gather_kv_cache only supports f16, bf16, f32, f8e4m3 cache (got {other:?})"
         ),
     };
@@ -95,12 +95,12 @@ pub fn gather_kv_cache(
         let (kc_s, kc_l) = key_cache.storage_and_layout();
         let kc_s = match &*kc_s {
             Storage::Cuda(s) => s,
-            _ => candle_core::bail!("key_cache must be a cuda tensor"),
+            _ => hanzo_ml::bail!("key_cache must be a cuda tensor"),
         };
         let (vc_s, vc_l) = value_cache.storage_and_layout();
         let vc_s = match &*vc_s {
             Storage::Cuda(s) => s,
-            _ => candle_core::bail!("value_cache must be a cuda tensor"),
+            _ => hanzo_ml::bail!("value_cache must be a cuda tensor"),
         };
 
         // Get cache pointers - handle FP8 vs regular dtype
@@ -129,12 +129,12 @@ pub fn gather_kv_cache(
         let (ko_s, ko_l) = k_out.storage_and_layout();
         let ko_s = match &*ko_s {
             Storage::Cuda(s) => s,
-            _ => candle_core::bail!("k_out must be a cuda tensor"),
+            _ => hanzo_ml::bail!("k_out must be a cuda tensor"),
         };
         let (vo_s, vo_l) = v_out.storage_and_layout();
         let vo_s = match &*vo_s {
             Storage::Cuda(s) => s,
-            _ => candle_core::bail!("v_out must be a cuda tensor"),
+            _ => hanzo_ml::bail!("v_out must be a cuda tensor"),
         };
         let (ko_ptr, _ko_guard) = match out_dtype {
             DType::F16 => slice_ptr(ko_s.as_cuda_slice::<half::f16>()?, ko_l.start_offset()),
@@ -153,14 +153,14 @@ pub fn gather_kv_cache(
         let (bt_s, bt_l) = block_table.storage_and_layout();
         let bt_s = match &*bt_s {
             Storage::Cuda(s) => s,
-            _ => candle_core::bail!("block_table must be a cuda tensor"),
+            _ => hanzo_ml::bail!("block_table must be a cuda tensor"),
         };
         let (bt_ptr, _bt_guard) = slice_ptr(bt_s.as_cuda_slice::<u32>()?, bt_l.start_offset());
 
         let (cu_s, cu_l) = cu_seq_lens.storage_and_layout();
         let cu_s = match &*cu_s {
             Storage::Cuda(s) => s,
-            _ => candle_core::bail!("cu_seq_lens must be a cuda tensor"),
+            _ => hanzo_ml::bail!("cu_seq_lens must be a cuda tensor"),
         };
         let (cu_ptr, _cu_guard) = if cu_seq_lens.dtype() == DType::I32 {
             slice_ptr(cu_s.as_cuda_slice::<i32>()?, cu_l.start_offset())
@@ -173,7 +173,7 @@ pub fn gather_kv_cache(
         let (k_scale_ptr, _ks_guard) = if let Some((ref s, l)) = _ks_storage {
             let s = match &**s {
                 Storage::Cuda(s) => s,
-                _ => candle_core::bail!("k_scale must be a cuda tensor"),
+                _ => hanzo_ml::bail!("k_scale must be a cuda tensor"),
             };
             let (ptr, guard) = slice_ptr(s.as_cuda_slice::<f32>()?, l.start_offset());
             (ptr as *const f32, Some(guard))
@@ -184,7 +184,7 @@ pub fn gather_kv_cache(
         let (v_scale_ptr, _vs_guard) = if let Some((ref s, l)) = _vs_storage {
             let s = match &**s {
                 Storage::Cuda(s) => s,
-                _ => candle_core::bail!("v_scale must be a cuda tensor"),
+                _ => hanzo_ml::bail!("v_scale must be a cuda tensor"),
             };
             let (ptr, guard) = slice_ptr(s.as_cuda_slice::<f32>()?, l.start_offset());
             (ptr as *const f32, Some(guard))

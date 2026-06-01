@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module};
+use hanzo_ml::{DType, Device, Result, Tensor};
+use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -462,7 +462,7 @@ impl Qwen3VLTextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(
                     embed_tokens.embeddings(),
                     normal_loading_metadata.loading_isq,
@@ -583,7 +583,7 @@ impl Qwen3VLTextModel {
             return Ok(hidden_states);
         }
         if indices.len() != visual_embeds.dim(0)? {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Mismatch between DeepStack visual embeds ({}) and mask positions ({})",
                 visual_embeds.dim(0)?,
                 indices.len()

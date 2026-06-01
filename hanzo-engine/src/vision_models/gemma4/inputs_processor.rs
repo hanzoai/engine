@@ -2,7 +2,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use candle_core::{Device, Result, Tensor};
+use hanzo_ml::{Device, Result, Tensor};
 use image::{DynamicImage, GenericImageView};
 use hanzo_vision::{ApplyTransforms, Rescale, ToTensorNoNorm, Transforms};
 use tokenizers::Tokenizer;
@@ -149,7 +149,7 @@ impl Gemma4ImageProcessor {
     /// case handling for extreme aspect ratios.
     fn compute_resize_dims(&self, orig_h: usize, orig_w: usize) -> Result<(usize, usize)> {
         if orig_h == 0 || orig_w == 0 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Gemma4 image resize: input dimensions must be non-zero, got {orig_h}x{orig_w}"
             );
         }
@@ -168,7 +168,7 @@ impl Gemma4ImageProcessor {
         let mut new_w = (ideal_w / grid_unit as f64).floor() as usize * grid_unit;
 
         if new_h == 0 && new_w == 0 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Gemma4 image resize: both dimensions round to 0 for input {orig_h}x{orig_w}"
             );
         }
@@ -184,7 +184,7 @@ impl Gemma4ImageProcessor {
         }
 
         if new_h * new_w > target_px {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Gemma4 image resize: {new_h}x{new_w} = {} pixels exceeds patch budget of {target_px} \
                  for input {orig_h}x{orig_w}",
                 new_h * new_w
@@ -223,7 +223,7 @@ impl Gemma4ImageProcessor {
     /// Compute resize dimensions for a video frame (uses smaller patch budget).
     fn compute_video_resize_dims(&self, orig_h: usize, orig_w: usize) -> Result<(usize, usize)> {
         if orig_h == 0 || orig_w == 0 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Gemma4 video resize: input dimensions must be non-zero, got {orig_h}x{orig_w}"
             );
         }
@@ -242,7 +242,7 @@ impl Gemma4ImageProcessor {
         let mut new_w = (ideal_w / grid_unit as f64).floor() as usize * grid_unit;
 
         if new_h == 0 && new_w == 0 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Gemma4 video resize: both dimensions round to 0 for input {orig_h}x{orig_w}"
             );
         }
@@ -258,7 +258,7 @@ impl Gemma4ImageProcessor {
         }
 
         if new_h * new_w > target_px {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Gemma4 video resize: {new_h}x{new_w} = {} pixels exceeds patch budget of {target_px} \
                  for input {orig_h}x{orig_w}",
                 new_h * new_w

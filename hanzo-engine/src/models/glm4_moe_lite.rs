@@ -3,8 +3,8 @@
 use crate::layers_masker::CausalMaskConfig;
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Embedding, Module};
+use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -501,7 +501,7 @@ impl MoeGate {
             .to_dtype(DType::F32)?
             .broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
         // GLM4MoeLite uses sigmoid scoring
-        let scores = candle_nn::ops::sigmoid(&logits)?;
+        let scores = hanzo_nn::ops::sigmoid(&logits)?;
 
         // NoAuxTc routing with e_score_correction_bias
         let scores_for_choice = scores
@@ -801,7 +801,7 @@ impl Glm4MoeLite {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(
                     embed_tokens.embeddings(),
                     normal_loading_metadata.loading_isq,

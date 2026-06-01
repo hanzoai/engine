@@ -6,8 +6,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::Embedding;
+use hanzo_ml::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use hanzo_nn::Embedding;
 use hanzo_quant::{
     ColumnParallelLayer, GgufMatMul, QuantMethod, QuantMethodConfig, ReplicatedLayer,
     RowParallelLayer, ShardedVarBuilder, UnquantLinear,
@@ -60,7 +60,7 @@ fn kv_shared_layer_index(cfg: &Gemma4TextConfig, layer_idx: usize) -> Result<Opt
         .rposition(|ty| ty == attention_type)
         .map(Some)
         .ok_or_else(|| {
-            candle_core::Error::Msg(format!(
+            hanzo_ml::Error::Msg(format!(
                 "Gemma4 layer {layer_idx} is configured to share KV without a prior `{attention_type}` donor layer."
             ))
         })
@@ -122,9 +122,9 @@ impl ProportionalRotaryEmbedding {
     pub(super) fn forward_q(&self, q: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
         let rope = if self.is_gpt_neox {
-            candle_nn::rotary_emb::rope
+            hanzo_nn::rotary_emb::rope
         } else {
-            candle_nn::rotary_emb::rope_i
+            hanzo_nn::rotary_emb::rope_i
         };
         if seqlen_offsets.len() == 1 {
             let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
@@ -189,7 +189,7 @@ impl ProportionalRotaryEmbedding {
 struct Gemma4Router {
     norm: RmsNorm,
     scale: Tensor,
-    proj: candle_nn::Linear,
+    proj: hanzo_nn::Linear,
     top_k: usize,
 }
 
@@ -203,7 +203,7 @@ impl Gemma4Router {
     ) -> Result<Self> {
         let scale = vb.get(hidden_size, "scale")?;
         let proj_w = vb.pp("proj").get((num_experts, hidden_size), "weight")?;
-        let proj = candle_nn::Linear::new(proj_w, None);
+        let proj = hanzo_nn::Linear::new(proj_w, None);
         // Pre-combine: weight = scale * hidden_size^(-0.5)
         let root_size = (hidden_size as f64).powf(-0.5);
         let combined_weight = (&scale * root_size)?;
@@ -224,7 +224,7 @@ impl Gemma4Router {
             .to_dtype(self.proj.weight().dtype())?
             .apply(&self.proj)?;
         let logits_f32 = logits.to_dtype(DType::F32)?.clamp(-1e4, 1e4)?;
-        let probs = candle_nn::ops::softmax_last_dim(&logits_f32)?;
+        let probs = hanzo_nn::ops::softmax_last_dim(&logits_f32)?;
 
         // Select top-k experts by PROBABILITY
         let topk = probs.topk(self.top_k)?;
@@ -356,7 +356,7 @@ impl Attention {
         // V norm: fused RmsNorm with weight=1.0 (no learned parameter)
         let v_dev = mapper
             .device_for(layer_idx, false)
-            .unwrap_or(&candle_core::Device::Cpu);
+            .unwrap_or(&hanzo_ml::Device::Cpu);
         let v_norm_weight = Tensor::ones(head_dim, vb.dtype(), v_dev)?;
         let v_norm_rms = RmsNorm::from_w(v_norm_weight, cfg.rms_norm_eps)?;
 
@@ -1346,9 +1346,9 @@ impl TextModel {
             let embed_weight = mapper.cast_nm_device(embed_tokens.embeddings(), false)?;
             if embed_weight.device().is_cuda() {
                 let w_f32 = embed_weight.to_dtype(DType::F32)?;
-                let q_weight = candle_core::quantized::QTensor::quantize(
+                let q_weight = hanzo_ml::quantized::QTensor::quantize(
                     &w_f32,
-                    candle_core::quantized::GgmlDType::Q8_0,
+                    hanzo_ml::quantized::GgmlDType::Q8_0,
                 )?;
                 Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: Arc::new(q_weight),
@@ -1356,7 +1356,7 @@ impl TextModel {
                 })?) as Arc<dyn QuantMethod>
             } else {
                 Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                    candle_nn::Linear::new(embed_weight, None),
+                    hanzo_nn::Linear::new(embed_weight, None),
                 ))?) as Arc<dyn QuantMethod>
             }
         };
@@ -1630,7 +1630,7 @@ impl TextModel {
                         &query_selection.num_cached_tokens,
                         &query_selection.query_lens,
                     )
-                    .map_err(|err| candle_core::Error::Msg(err.to_string()))?,
+                    .map_err(|err| hanzo_ml::Error::Msg(err.to_string()))?,
             )
         } else {
             None
@@ -1908,7 +1908,7 @@ impl TextModel {
         } else {
             is_image
         };
-        let is_vision_vec: Vec<u32> = is_vision.to_dtype(candle_core::DType::U32)?.to_vec1()?;
+        let is_vision_vec: Vec<u32> = is_vision.to_dtype(hanzo_ml::DType::U32)?.to_vec1()?;
         let mut group_ids = vec![-1i64; seq_len];
         let mut current_group: i64 = -1;
         for i in 0..seq_len {
@@ -1938,7 +1938,7 @@ impl TextModel {
 
         let override_mask = Tensor::from_vec(override_vals, (seq_len, total_len), device)?;
         let zero = Tensor::zeros((seq_len, total_len), dtype, device)?;
-        let override_bool = override_mask.to_dtype(candle_core::DType::U8)?;
+        let override_bool = override_mask.to_dtype(hanzo_ml::DType::U8)?;
         override_bool.where_cond(&zero, causal_mask)
     }
 }
@@ -2067,7 +2067,7 @@ impl IsqModel for TextModel {
         uvb_m.to_safetensors()
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         let mut names = Vec::new();
         // lm_head
         if !self.lm_head_is_tied {
@@ -2120,7 +2120,7 @@ impl MultimodalModel for TextModel {
         _model_specific_args: Box<dyn std::any::Any>,
         _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         _flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         unreachable!()
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {

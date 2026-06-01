@@ -2,8 +2,8 @@ use crate::cuda::backend::slice_ptr;
 use crate::cuda::ffi;
 use candle::backend::BackendStorage;
 use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
-use candle_core as candle;
-use candle_core::cuda::cudarc::driver::{DevicePtr, DeviceSlice};
+use hanzo_ml as candle;
+use hanzo_ml::cuda::cudarc::driver::{DevicePtr, DeviceSlice};
 use half::{bf16, f16};
 use std::ffi::{c_int, c_uint};
 

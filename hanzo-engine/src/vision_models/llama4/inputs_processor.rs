@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use candle_core::{Context, Device, IndexOp, Result, Tensor, D};
+use hanzo_ml::{Context, Device, IndexOp, Result, Tensor, D};
 use image::DynamicImage;
 use itertools::Itertools;
 use hanzo_vision::{
@@ -411,7 +411,7 @@ impl Llama4ImageProcessor {
         let height = size["height"];
         let width = size["width"];
         if height != width {
-            candle_core::bail!("Expected config size height==width ({height}!={width})");
+            hanzo_ml::bail!("Expected config size height==width ({height}!={width})");
         }
 
         let patch_size = height;
@@ -667,7 +667,7 @@ impl ImagePreProcessor for Llama4ImageProcessor {
                     let nt_w = image_size.1.max(max_upscaling_size).min(target_size.1);
                     (nt_h, nt_w)
                 } else {
-                    candle_core::bail!("Currently resize_to_max_canvas is assumed!");
+                    hanzo_ml::bail!("Currently resize_to_max_canvas is assumed!");
                 };
 
             // Resize to target_size while preserving aspect ratio

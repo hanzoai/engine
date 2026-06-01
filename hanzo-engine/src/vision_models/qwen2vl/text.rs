@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module};
+use hanzo_ml::{DType, Device, Result, Tensor};
+use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -311,7 +311,7 @@ impl Qwen2VLTextModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         if !matches!(attention_mechanism, AttentionImplementation::Eager) {
-            candle_core::bail!("Expected eager attention implementation");
+            hanzo_ml::bail!("Expected eager attention implementation");
         }
         let mapper = normal_loading_metadata.mapper;
         // Support both HuggingFace naming (model.*) and MLX naming (language_model.model.*)
@@ -384,7 +384,7 @@ impl Qwen2VLTextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(
                     embed_tokens.embeddings(),
                     normal_loading_metadata.loading_isq,

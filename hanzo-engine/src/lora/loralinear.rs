@@ -1,7 +1,7 @@
 use std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
-use candle_core::{Module, Result, Tensor};
-use candle_nn::Linear;
+use hanzo_ml::{Module, Result, Tensor};
+use hanzo_nn::Linear;
 use either::Either;
 use hanzo_quant::{QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear};
 

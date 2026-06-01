@@ -2,7 +2,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use candle_core::{Device, Result, Tensor};
+use hanzo_ml::{Device, Result, Tensor};
 use image::{DynamicImage, GenericImageView};
 use itertools::Itertools;
 use hanzo_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};

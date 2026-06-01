@@ -5,12 +5,12 @@
 #![allow(clippy::cast_possible_truncation)]
 
 #[cfg(feature = "metal")]
-use candle_core::backend::BackendStorage;
+use hanzo_ml::backend::BackendStorage;
 #[cfg(feature = "metal")]
-use candle_core::{DType, Device, Result, Storage, Tensor};
+use hanzo_ml::{DType, Device, Result, Storage, Tensor};
 
 #[cfg(feature = "metal")]
-use candle_metal_kernels::metal::{
+use hanzo_metal_kernels::metal::{
     Buffer, ComputeCommandEncoder, ComputePipeline, Device as MetalRawDevice, Library,
 };
 
@@ -48,7 +48,7 @@ fn load_gdn_library(device: &MetalRawDevice) -> Result<Library> {
     let lib = device
         .new_library_with_source(GDN_METAL_SOURCE, Some(&compile_options))
         .map_err(|e| {
-            candle_core::Error::Msg(format!("Failed to compile GDN Metal kernels: {e}"))
+            hanzo_ml::Error::Msg(format!("Failed to compile GDN Metal kernels: {e}"))
         })?;
     Ok(GDN_LIBRARY.get_or_init(|| lib).clone())
 }
@@ -61,7 +61,7 @@ fn load_pipeline(device: &MetalRawDevice, name: &str) -> Result<ComputePipeline>
     {
         let pipelines = pipelines_lock
             .read()
-            .map_err(|e| candle_core::Error::Msg(format!("Failed to lock pipeline cache: {e}")))?;
+            .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to lock pipeline cache: {e}")))?;
         if let Some(pipeline) = pipelines.get(name) {
             return Ok(pipeline.clone());
         }
@@ -70,16 +70,16 @@ fn load_pipeline(device: &MetalRawDevice, name: &str) -> Result<ComputePipeline>
     // Not found, compile and insert
     let lib = load_gdn_library(device)?;
     let func = lib.get_function(name, None).map_err(|e| {
-        candle_core::Error::Msg(format!("Failed to load Metal function '{name}': {e}"))
+        hanzo_ml::Error::Msg(format!("Failed to load Metal function '{name}': {e}"))
     })?;
     let pipeline = device
         .new_compute_pipeline_state_with_function(&func)
         .map_err(|e| {
-            candle_core::Error::Msg(format!("Failed to create pipeline for '{name}': {e}"))
+            hanzo_ml::Error::Msg(format!("Failed to create pipeline for '{name}': {e}"))
         })?;
 
     let mut pipelines = pipelines_lock.write().map_err(|e| {
-        candle_core::Error::Msg(format!("Failed to lock pipeline cache for write: {e}"))
+        hanzo_ml::Error::Msg(format!("Failed to lock pipeline cache for write: {e}"))
     })?;
     pipelines.insert(name.to_string(), pipeline.clone());
     Ok(pipeline)
@@ -94,7 +94,7 @@ fn metal_buffer_and_offset(tensor: &Tensor) -> Result<(Buffer, usize)> {
             let offset = layout.start_offset() * m.dtype().size_in_bytes();
             Ok((m.buffer().clone(), offset))
         }
-        _ => candle_core::bail!("Expected Metal tensor"),
+        _ => hanzo_ml::bail!("Expected Metal tensor"),
     }
 }
 
@@ -126,7 +126,7 @@ pub fn gated_delta_rule_recurrence_metal(
     let v_dim = v.dim(2)?;
 
     let Device::Metal(dev) = q.device() else {
-        candle_core::bail!("gated_delta_rule_recurrence_metal: expected Metal device");
+        hanzo_ml::bail!("gated_delta_rule_recurrence_metal: expected Metal device");
     };
 
     let kernel_name = match k_dim {
@@ -195,14 +195,14 @@ pub fn gated_delta_rule_recurrence_metal(
 #[cfg(not(feature = "metal"))]
 #[allow(dead_code)]
 pub fn gated_delta_rule_recurrence_metal(
-    _q: &candle_core::Tensor,
-    _k: &candle_core::Tensor,
-    _v: &candle_core::Tensor,
-    _g: &candle_core::Tensor,
-    _beta: &candle_core::Tensor,
-    _state: &mut candle_core::Tensor,
-) -> candle_core::Result<candle_core::Tensor> {
-    candle_core::bail!("gated_delta_rule_recurrence_metal requires the metal feature")
+    _q: &hanzo_ml::Tensor,
+    _k: &hanzo_ml::Tensor,
+    _v: &hanzo_ml::Tensor,
+    _g: &hanzo_ml::Tensor,
+    _beta: &hanzo_ml::Tensor,
+    _state: &mut hanzo_ml::Tensor,
+) -> hanzo_ml::Result<hanzo_ml::Tensor> {
+    hanzo_ml::bail!("gated_delta_rule_recurrence_metal requires the metal feature")
 }
 
 // ============================================================================
@@ -236,7 +236,7 @@ pub fn chunked_gated_delta_rule_recurrence_metal(
     let v_dim = v.dim(2)?;
 
     let Device::Metal(dev) = q.device() else {
-        candle_core::bail!("chunked_gated_delta_rule_recurrence_metal: expected Metal device");
+        hanzo_ml::bail!("chunked_gated_delta_rule_recurrence_metal: expected Metal device");
     };
 
     // BT=32 for all Metal variants (fits 32KB threadgroup memory)
@@ -299,14 +299,14 @@ pub fn chunked_gated_delta_rule_recurrence_metal(
 #[cfg(not(feature = "metal"))]
 #[allow(dead_code)]
 pub fn chunked_gated_delta_rule_recurrence_metal(
-    _q: &candle_core::Tensor,
-    _k: &candle_core::Tensor,
-    _v: &candle_core::Tensor,
-    _g: &candle_core::Tensor,
-    _beta: &candle_core::Tensor,
-    _state: &mut candle_core::Tensor,
-) -> candle_core::Result<candle_core::Tensor> {
-    candle_core::bail!("chunked_gated_delta_rule_recurrence_metal requires the metal feature")
+    _q: &hanzo_ml::Tensor,
+    _k: &hanzo_ml::Tensor,
+    _v: &hanzo_ml::Tensor,
+    _g: &hanzo_ml::Tensor,
+    _beta: &hanzo_ml::Tensor,
+    _state: &mut hanzo_ml::Tensor,
+) -> hanzo_ml::Result<hanzo_ml::Tensor> {
+    hanzo_ml::bail!("chunked_gated_delta_rule_recurrence_metal requires the metal feature")
 }
 
 // ============================================================================
@@ -335,13 +335,13 @@ pub fn causal_conv1d_metal(
     let type_suffix = match dtype {
         DType::F16 => "half",
         DType::BF16 => "bfloat16_t",
-        _ => candle_core::bail!(
+        _ => hanzo_ml::bail!(
             "causal_conv1d_metal: unsupported dtype {dtype:?}, expected F16 or BF16"
         ),
     };
 
     let Device::Metal(dev) = x.device() else {
-        candle_core::bail!("causal_conv1d_metal: expected Metal device");
+        hanzo_ml::bail!("causal_conv1d_metal: expected Metal device");
     };
 
     if is_update {
@@ -478,13 +478,13 @@ pub fn causal_conv1d_metal(
 #[cfg(not(feature = "metal"))]
 #[allow(dead_code)]
 pub fn causal_conv1d_metal(
-    _x: &candle_core::Tensor,
-    _weight: &candle_core::Tensor,
-    _conv_state: &candle_core::Tensor,
+    _x: &hanzo_ml::Tensor,
+    _weight: &hanzo_ml::Tensor,
+    _conv_state: &hanzo_ml::Tensor,
     _is_update: bool,
     _kernel_size: usize,
-) -> candle_core::Result<(candle_core::Tensor, candle_core::Tensor)> {
-    candle_core::bail!("causal_conv1d_metal requires the metal feature")
+) -> hanzo_ml::Result<(hanzo_ml::Tensor, hanzo_ml::Tensor)> {
+    hanzo_ml::bail!("causal_conv1d_metal requires the metal feature")
 }
 
 // ============================================================================
@@ -512,7 +512,7 @@ pub fn fused_gdn_gating_metal(
     let type_suffix = match dtype {
         DType::F16 => "half",
         DType::BF16 => "bfloat16_t",
-        _ => candle_core::bail!(
+        _ => hanzo_ml::bail!(
             "fused_gdn_gating_metal: unsupported dtype {dtype:?}, expected F16 or BF16"
         ),
     };
@@ -521,7 +521,7 @@ pub fn fused_gdn_gating_metal(
     let num_heads = a_log.elem_count();
 
     let Device::Metal(dev) = b.device() else {
-        candle_core::bail!("fused_gdn_gating_metal: expected Metal device");
+        hanzo_ml::bail!("fused_gdn_gating_metal: expected Metal device");
     };
 
     let kernel_name = format!("fused_gdn_gating_{type_suffix}");
@@ -571,10 +571,10 @@ pub fn fused_gdn_gating_metal(
 #[cfg(not(feature = "metal"))]
 #[allow(dead_code)]
 pub fn fused_gdn_gating_metal(
-    _b: &candle_core::Tensor,
-    _a: &candle_core::Tensor,
-    _a_log: &candle_core::Tensor,
-    _dt_bias: &candle_core::Tensor,
-) -> candle_core::Result<(candle_core::Tensor, candle_core::Tensor)> {
-    candle_core::bail!("fused_gdn_gating_metal requires the metal feature")
+    _b: &hanzo_ml::Tensor,
+    _a: &hanzo_ml::Tensor,
+    _a_log: &hanzo_ml::Tensor,
+    _dt_bias: &hanzo_ml::Tensor,
+) -> hanzo_ml::Result<(hanzo_ml::Tensor, hanzo_ml::Tensor)> {
+    hanzo_ml::bail!("fused_gdn_gating_metal requires the metal feature")
 }

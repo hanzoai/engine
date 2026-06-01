@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use candle_core::{DType, Result, Tensor};
+use hanzo_ml::{DType, Result, Tensor};
 use rand::Rng;
 use rand_isaac::Isaac64Rng;
 
@@ -171,7 +171,7 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
         let candidate_probs =
             sampler.speculative_candidate_probs(flat_logits(candidate_row)?, seq.get_toks())?;
         if target_probs.len() != candidate_probs.len() {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "speculative target/candidate vocab mismatch: target={}, candidate={}",
                 target_probs.len(),
                 candidate_probs.len()
@@ -268,17 +268,17 @@ fn logit_row(logits: &Tensor, row: usize) -> Result<Tensor> {
     match logits.dims() {
         [_, rows, _] => {
             if row >= *rows {
-                candle_core::bail!("speculative logit row {row} is out of range for {rows} rows");
+                hanzo_ml::bail!("speculative logit row {row} is out of range for {rows} rows");
             }
             logits.narrow(1, row, 1)
         }
         [rows, _] => {
             if row >= *rows {
-                candle_core::bail!("speculative logit row {row} is out of range for {rows} rows");
+                hanzo_ml::bail!("speculative logit row {row} is out of range for {rows} rows");
             }
             logits.narrow(0, row, 1)
         }
-        shape => candle_core::bail!("speculative logits have unsupported shape {shape:?}"),
+        shape => hanzo_ml::bail!("speculative logits have unsupported shape {shape:?}"),
     }
 }
 
@@ -287,7 +287,7 @@ fn flat_logits(logits: Tensor) -> Result<Tensor> {
         [1, 1, _] => logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32),
         [1, _] => logits.squeeze(0)?.to_dtype(DType::F32),
         [_] => logits.to_dtype(DType::F32),
-        dims => candle_core::bail!("speculative logit row must flatten to rank 1, got {dims:?}"),
+        dims => hanzo_ml::bail!("speculative logit row must flatten to rank 1, got {dims:?}"),
     }
 }
 
@@ -298,7 +298,7 @@ fn normalize_probs(probs: &mut [f32]) -> Result<()> {
         .filter(|prob| prob.is_finite() && *prob > 0.0)
         .sum();
     if sum <= 0.0 {
-        candle_core::bail!("all probabilities are zero in speculative adjusted distribution");
+        hanzo_ml::bail!("all probabilities are zero in speculative adjusted distribution");
     }
     for prob in probs.iter_mut() {
         if prob.is_finite() && *prob > 0.0 {

@@ -1,16 +1,16 @@
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle_core::{DType, Device, Result, Shape, Tensor};
+use hanzo_ml::{DType, Device, Result, Shape, Tensor};
 
 #[cfg(feature = "cuda")]
-use candle_core::{
+use hanzo_ml::{
     cuda::{cudarc::driver::DevicePtr, CudaStorageSlice},
     CudaStorage, Storage,
 };
 
 #[cfg(feature = "metal")]
-use candle_core::Storage;
+use hanzo_ml::Storage;
 
-use candle_nn::Linear;
+use hanzo_nn::Linear;
 #[cfg(feature = "cuda")]
 use half::{bf16, f16};
 use std::{
@@ -57,22 +57,22 @@ macro_rules! dequant_for_dtype {
         paste::paste! {
             let (wq, _) = $this.w_q.storage_and_layout();
             let wq = match &*wq {
-                candle_core::Storage::Cuda(s) => s,
-                _ => candle_core::bail!("wq must be a cuda tensor"),
+                hanzo_ml::Storage::Cuda(s) => s,
+                _ => hanzo_ml::bail!("wq must be a cuda tensor"),
             };
             let (w_slice, _w_guard) = crate::utils::slice_ptr(wq.as_cuda_slice::<$wq_t>()?, $this.w_q.layout().start_offset());
 
             let (scale, _) = $this.scales.storage_and_layout();
             let scale = match &*scale {
-                candle_core::Storage::Cuda(s) => s,
-                _ => candle_core::bail!("scale must be a cuda tensor"),
+                hanzo_ml::Storage::Cuda(s) => s,
+                _ => hanzo_ml::bail!("scale must be a cuda tensor"),
             };
             let (scale_slice, _scale_guard) = crate::utils::slice_ptr(scale.as_cuda_slice::<$scale_t>()?, $this.scales.layout().start_offset());
 
             let (zero, _) = $this.zeros.storage_and_layout();
             let zero = match &*zero {
-                candle_core::Storage::Cuda(s) => s,
-                _ => candle_core::bail!("zero must be a cuda tensor"),
+                hanzo_ml::Storage::Cuda(s) => s,
+                _ => hanzo_ml::bail!("zero must be a cuda tensor"),
             };
             let (zero_slice, _zero_guard) = crate::utils::slice_ptr(zero.as_cuda_slice::<$scale_t>()?, $this.zeros.layout().start_offset());
 
@@ -112,12 +112,12 @@ pub enum HqqAxis {
 }
 
 impl TryFrom<usize> for HqqAxis {
-    type Error = candle_core::Error;
+    type Error = hanzo_ml::Error;
     fn try_from(value: usize) -> std::result::Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::Zero),
             1 => Ok(Self::One),
-            other => candle_core::bail!("Unexpected value for HQQ axis {other}"),
+            other => hanzo_ml::bail!("Unexpected value for HQQ axis {other}"),
         }
     }
 }
@@ -132,7 +132,7 @@ pub enum HqqBits {
 }
 
 impl TryFrom<usize> for HqqBits {
-    type Error = candle_core::Error;
+    type Error = hanzo_ml::Error;
     fn try_from(value: usize) -> std::result::Result<Self, Self::Error> {
         match value {
             8 => Ok(Self::Eight),
@@ -140,7 +140,7 @@ impl TryFrom<usize> for HqqBits {
             3 => Ok(Self::Three),
             2 => Ok(Self::Two),
             1 => Ok(Self::One),
-            other => candle_core::bail!("Unexpected value for HQQ bits {other}"),
+            other => hanzo_ml::bail!("Unexpected value for HQQ bits {other}"),
         }
     }
 }
@@ -161,7 +161,7 @@ impl HqqBits {
                     let (wq_storage, _) = wq.storage_and_layout();
                     let wq_storage = match &*wq_storage {
                         Storage::Cuda(s) => s,
-                        _ => candle_core::bail!("Expected CUDA storage"),
+                        _ => hanzo_ml::bail!("Expected CUDA storage"),
                     };
 
                     let output_shape = wq.shape().clone();
@@ -190,7 +190,7 @@ impl HqqBits {
 
                 #[cfg(feature = "metal")]
                 if device.is_metal() {
-                    use candle_core::MetalStorage;
+                    use hanzo_ml::MetalStorage;
 
                     let dev = device.as_metal_device()?;
                     let encoder = dev.command_encoder()?;
@@ -199,7 +199,7 @@ impl HqqBits {
                     let (wq_storage, _wq_layout) = wq.storage_and_layout();
                     let wq_storage = match &*wq_storage {
                         Storage::Metal(s) => s,
-                        _ => candle_core::bail!("Expected Metal storage"),
+                        _ => hanzo_ml::bail!("Expected Metal storage"),
                     };
 
                     let output_shape = wq.shape().clone();
@@ -217,7 +217,7 @@ impl HqqBits {
                         &output,
                         output_shape.elem_count(),
                     )
-                    .map_err(candle_core::Error::wrap)?;
+                    .map_err(hanzo_ml::Error::wrap)?;
 
                     let storage = MetalStorage::new(
                         output,
@@ -244,7 +244,7 @@ impl HqqBits {
                     let (wq_storage, _) = wq.storage_and_layout();
                     let wq_storage = match &*wq_storage {
                         Storage::Cuda(s) => s,
-                        _ => candle_core::bail!("Expected CUDA storage"),
+                        _ => hanzo_ml::bail!("Expected CUDA storage"),
                     };
 
                     let output_height = wq.dims()[0] / 2;
@@ -275,7 +275,7 @@ impl HqqBits {
 
                 #[cfg(feature = "metal")]
                 if device.is_metal() {
-                    use candle_core::MetalStorage;
+                    use hanzo_ml::MetalStorage;
 
                     let dev = device.as_metal_device()?;
                     let encoder = dev.command_encoder()?;
@@ -285,7 +285,7 @@ impl HqqBits {
                     let (wq_storage, _wq_layout) = wq.storage_and_layout();
                     let wq_storage = match &*wq_storage {
                         Storage::Metal(s) => s,
-                        _ => candle_core::bail!("Expected Metal storage"),
+                        _ => hanzo_ml::bail!("Expected Metal storage"),
                     };
 
                     let output_height = wq.dims()[0] / 2;
@@ -305,7 +305,7 @@ impl HqqBits {
                         wq.dims()[0],
                         wq.dims()[1],
                     )
-                    .map_err(candle_core::Error::wrap)?;
+                    .map_err(hanzo_ml::Error::wrap)?;
 
                     let storage = MetalStorage::new(
                         output,
@@ -338,7 +338,7 @@ impl HqqBits {
                     let (wq_storage, _) = wq.storage_and_layout();
                     let wq_storage = match &*wq_storage {
                         Storage::Cuda(s) => s,
-                        _ => candle_core::bail!("Expected CUDA storage"),
+                        _ => hanzo_ml::bail!("Expected CUDA storage"),
                     };
 
                     let output_height = wq.dims()[0] / 4;
@@ -414,7 +414,7 @@ impl HqqBits {
                     let (wq_storage, _) = wq.storage_and_layout();
                     let wq_storage = match &*wq_storage {
                         Storage::Cuda(s) => s,
-                        _ => candle_core::bail!("Expected CUDA storage"),
+                        _ => hanzo_ml::bail!("Expected CUDA storage"),
                     };
 
                     let output_height = padded_height / 10;
@@ -487,7 +487,7 @@ impl HqqBits {
                     let (wq_storage, _) = wq.storage_and_layout();
                     let wq_storage = match &*wq_storage {
                         Storage::Cuda(s) => s,
-                        _ => candle_core::bail!("Expected CUDA storage"),
+                        _ => hanzo_ml::bail!("Expected CUDA storage"),
                     };
 
                     let output_height = wq.dims()[0] / 8;
@@ -594,15 +594,15 @@ impl HqqLayer {
         match (self.scales.dtype(), self.zeros.dtype()) {
             (DType::F16, DType::F16) | (DType::BF16, DType::BF16) | (DType::F32, DType::F32) => (),
             (a, b) => {
-                candle_core::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}).")
+                hanzo_ml::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}).")
             }
         }
         if !(self.w_q.is_contiguous() && self.scales.is_contiguous() && self.zeros.is_contiguous())
         {
-            candle_core::bail!("All tensors must be contiguous!");
+            hanzo_ml::bail!("All tensors must be contiguous!");
         }
         if self.cfg.axis as usize != 0 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "CPU HQQ dequantization requires axis == 0, got {}.",
                 self.cfg.axis as usize
             );
@@ -630,7 +630,7 @@ impl HqqLayer {
                 .w_q
                 .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant1Bit { h, w })?
                 .reshape(&self.w_shape),
-            b => candle_core::bail!("Unreachable bits {b}"),
+            b => hanzo_ml::bail!("Unreachable bits {b}"),
         }
     }
 
@@ -640,15 +640,15 @@ impl HqqLayer {
         match (self.scales.dtype(), self.zeros.dtype()) {
             (DType::F16, DType::F16) | (DType::BF16, DType::BF16) | (DType::F32, DType::F32) => (),
             (a, b) => {
-                candle_core::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}).")
+                hanzo_ml::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}).")
             }
         }
         if !(self.w_q.is_contiguous() && self.scales.is_contiguous() && self.zeros.is_contiguous())
         {
-            candle_core::bail!("All tensors must be contiguous!");
+            hanzo_ml::bail!("All tensors must be contiguous!");
         }
         if self.cfg.axis as usize != 0 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "CUDA HQQ dequantization requires axis == 0, got {}.",
                 self.cfg.axis as usize
             );
@@ -849,7 +849,7 @@ impl HqqLayer {
                     1bit_u8_kernel_bf16
                 )
             }
-            (bits, dtype) => candle_core::bail!("Unsupported bit width {bits} and dtype {dtype:?}"),
+            (bits, dtype) => hanzo_ml::bail!("Unsupported bit width {bits} and dtype {dtype:?}"),
         };
         inner.reshape(&self.w_shape)
     }
@@ -936,7 +936,7 @@ impl QuantMethod for HqqLayer {
     }
 
     fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("HQQ quantization does not support adding weight delta.")
+        hanzo_ml::bail!("HQQ quantization does not support adding weight delta.")
     }
 
     fn dtype_and_device(&self) -> (DType, Device) {
@@ -954,7 +954,7 @@ impl QuantMethod for HqqLayer {
         let _acquired_quantize_guard = guard.acquire(&device);
         if imatrix_weight.is_some() {
             // TODO just warn?
-            candle_core::bail!("HQQ does not support imatrix.");
+            hanzo_ml::bail!("HQQ does not support imatrix.");
         }
 
         n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -964,7 +964,7 @@ impl QuantMethod for HqqLayer {
             // Some(IsqType::HQQ3) => HqqBits::Three,
             // Some(IsqType::HQQ2) => HqqBits::Two,
             // Some(IsqType::HQQ1) => HqqBits::One,
-            _ => candle_core::bail!("Expected a HQQ ISQ type."),
+            _ => hanzo_ml::bail!("Expected a HQQ ISQ type."),
         };
         let cfg = HqqConfig {
             bits,
@@ -1052,7 +1052,7 @@ impl QuantizedSerde for HqqLayer {
         let w_shape = self.w_shape.dims();
         let shape_len = w_shape.len();
         if shape_len > u32::MAX as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Weight tensor has too many dimensions for UQFF format: {} exceeds u32::MAX",
                 shape_len
             );
@@ -1060,7 +1060,7 @@ impl QuantizedSerde for HqqLayer {
         buffer.extend((shape_len as u32).to_le_bytes());
         for dim in w_shape {
             if *dim > u32::MAX as usize {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Weight tensor dimension too large for UQFF format: {} exceeds u32::MAX",
                     dim
                 );
@@ -1072,7 +1072,7 @@ impl QuantizedSerde for HqqLayer {
         buffer.push(self.cfg.bits as u8);
         let group_size = <NonZeroUsize as Into<usize>>::into(self.cfg.group_size);
         if group_size > u32::MAX as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "HQQ group size too large for UQFF format: {} exceeds u32::MAX",
                 group_size
             );
@@ -1083,7 +1083,7 @@ impl QuantizedSerde for HqqLayer {
         // This is acceptable because 0 optimization steps would be functionally equivalent to None.
         let opt_steps = self.cfg.optimization_steps.unwrap_or(0);
         if opt_steps > u32::MAX as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "HQQ optimization steps too large for UQFF format: {} exceeds u32::MAX",
                 opt_steps
             );
@@ -1113,12 +1113,12 @@ impl QuantizedSerde for HqqLayer {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(hanzo_ml::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Hqq as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::Hqq as usize
             );
@@ -1186,12 +1186,12 @@ impl QuantizedSerde for HqqLayer {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(hanzo_ml::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Hqq as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::Hqq as usize
             );
@@ -1258,12 +1258,12 @@ impl HqqLayer {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(hanzo_ml::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Hqq as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::Hqq as usize
             );
@@ -1290,7 +1290,7 @@ impl HqqLayer {
             HqqBits::Eight => Ok(IsqType::HQQ8),
             HqqBits::Four => Ok(IsqType::HQQ4),
             HqqBits::One | HqqBits::Two | HqqBits::Three => {
-                candle_core::bail!("cannot convert hqq bits to isq type")
+                hanzo_ml::bail!("cannot convert hqq bits to isq type")
             }
         }
     }

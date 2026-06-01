@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use candle_core::Tensor;
+use hanzo_ml::Tensor;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::{pyclass, pymethods};
 use serde::Serialize;

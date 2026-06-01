@@ -6,7 +6,7 @@ use crate::paged_attention::{
 use crate::utils::debug::DeviceRepr;
 use crate::{DeviceLayerMapMetadata, DeviceMapMetadata, MemoryUsage, PagedAttentionConfig};
 use anyhow::{Context, Result};
-use candle_core::{DType, Device};
+use hanzo_ml::{DType, Device};
 use itertools::Itertools;
 use tracing::{info, warn};
 
