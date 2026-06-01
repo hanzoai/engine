@@ -1,7 +1,6 @@
 use crate::cuda::backend::slice_ptr;
 #[cfg(feature = "cuda")]
 use crate::cuda::ffi;
-use hanzo_ml as candle;
 use hanzo_ml::{DType, Result, Tensor};
 
 #[derive(Debug, Clone)]
@@ -10,17 +9,17 @@ struct KvScaleUpdate {
     v_scales: Tensor,
 }
 
-impl candle::InplaceOp2 for KvScaleUpdate {
+impl hanzo_ml::InplaceOp2 for KvScaleUpdate {
     fn name(&self) -> &'static str {
         "kvscale-update"
     }
 
     fn cpu_fwd(
         &self,
-        _: &mut candle::CpuStorage,
-        _: &candle::Layout,
-        _: &candle::CpuStorage,
-        _: &candle::Layout,
+        _: &mut hanzo_ml::CpuStorage,
+        _: &hanzo_ml::Layout,
+        _: &hanzo_ml::CpuStorage,
+        _: &hanzo_ml::Layout,
     ) -> Result<()> {
         panic!("kvscale-update is not implemented on CPU!")
     }
@@ -28,14 +27,14 @@ impl candle::InplaceOp2 for KvScaleUpdate {
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
-        k: &mut candle::CudaStorage,
-        k_layout: &candle::Layout,
-        v: &candle::CudaStorage,
-        _: &candle::Layout,
+        k: &mut hanzo_ml::CudaStorage,
+        k_layout: &hanzo_ml::Layout,
+        v: &hanzo_ml::CudaStorage,
+        _: &hanzo_ml::Layout,
     ) -> Result<()> {
-        use candle::backend::BackendStorage;
-        use candle::cuda_backend::cudarc::driver::DevicePtr;
-        use candle::cuda_backend::CudaStorageSlice;
+        use hanzo_ml::backend::BackendStorage;
+        use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
+        use hanzo_ml::cuda_backend::CudaStorageSlice;
         let dev = k.device();
         let elem_count = k_layout.shape().elem_count();
 
@@ -62,15 +61,15 @@ impl candle::InplaceOp2 for KvScaleUpdate {
 
         let (k_scales, k_scales_layout) = self.k_scales.storage_and_layout();
         let k_scales = match &*k_scales {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-            _ => candle::bail!("k_scales must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+            _ => hanzo_ml::bail!("k_scales must be a cuda tensor"),
         };
         let (k_scales, _) = slice_ptr(k_scales, k_scales_layout.start_offset());
 
         let (v_scales, v_scales_layout) = self.v_scales.storage_and_layout();
         let v_scales = match &*v_scales {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-            _ => candle::bail!("v_scales must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+            _ => hanzo_ml::bail!("v_scales must be a cuda tensor"),
         };
         let (v_scales, _) = slice_ptr(v_scales, v_scales_layout.start_offset());
 

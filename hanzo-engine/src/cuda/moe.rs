@@ -10,13 +10,12 @@ pub fn moe_gemm(
     topk: usize,
     is_prefill: bool,
 ) -> Result<Tensor> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
-    use hanzo_ml as candle;
+    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
     use hanzo_ml::DType;
     use half::{bf16, f16};
 
     fn cuda_fwd<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: hanzo_ml::cuda_backend::CudaDType + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         input: &Tensor,
         weights: &Tensor,
@@ -48,37 +47,37 @@ pub fn moe_gemm(
 
         let (input, input_l) = input.storage_and_layout();
         let input = match &*input {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            _ => candle::bail!("input must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            _ => hanzo_ml::bail!("input must be a cuda tensor"),
         };
         let input_offset = input_l.start_offset();
 
         let (weights, weights_l) = weights.storage_and_layout();
         let weights = match &*weights {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            _ => candle::bail!("weight must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            _ => hanzo_ml::bail!("weight must be a cuda tensor"),
         };
         let weights_offset = weights_l.start_offset();
 
         let (sorted_token_ids, sti_l) = sorted_token_ids.storage_and_layout();
         let sorted_token_ids = match &*sorted_token_ids {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
-            _ => candle::bail!("sorted_token_ids must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+            _ => hanzo_ml::bail!("sorted_token_ids must be a cuda tensor"),
         };
         let sti_offset = sti_l.start_offset();
 
         let (experts_ids, ei_l) = experts_ids.storage_and_layout();
         let experts_ids = match &*experts_ids {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
-            _ => candle::bail!("experts_ids must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+            _ => hanzo_ml::bail!("experts_ids must be a cuda tensor"),
         };
         let ei_offset = ei_l.start_offset();
 
         let topk_weights_ptr = if let Some(topk_weights) = &topk_weights {
             let (topk_weights, tw_l) = topk_weights.storage_and_layout();
             let topk_weights = match &*topk_weights {
-                candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-                _ => candle::bail!("topk_weights must be a cuda tensor"),
+                hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+                _ => hanzo_ml::bail!("topk_weights must be a cuda tensor"),
             };
             let tw_offset = tw_l.start_offset();
             let topk_w_ptr = topk_weights
@@ -143,8 +142,8 @@ pub fn moe_gemm(
             );
         }
 
-        let output = candle::CudaStorage::wrap_cuda_slice(output, dev.clone());
-        let output = Tensor::from((candle::Storage::Cuda(output), (size_m, size_n)));
+        let output = hanzo_ml::CudaStorage::wrap_cuda_slice(output, dev.clone());
+        let output = Tensor::from((hanzo_ml::Storage::Cuda(output), (size_m, size_n)));
 
         Ok(output)
     }
@@ -201,13 +200,12 @@ pub fn moe_gemm_transposed(
     topk: usize,
     is_prefill: bool,
 ) -> Result<Tensor> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
-    use hanzo_ml as candle;
+    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
     use hanzo_ml::DType;
     use half::{bf16, f16};
 
     fn cuda_fwd<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: hanzo_ml::cuda_backend::CudaDType + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         input: &Tensor,
         weights: &Tensor,
@@ -240,37 +238,37 @@ pub fn moe_gemm_transposed(
 
         let (input, input_l) = input.storage_and_layout();
         let input = match &*input {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            _ => candle::bail!("input must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            _ => hanzo_ml::bail!("input must be a cuda tensor"),
         };
         let input_offset = input_l.start_offset();
 
         let (weights, weights_l) = weights.storage_and_layout();
         let weights = match &*weights {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            _ => candle::bail!("weight must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            _ => hanzo_ml::bail!("weight must be a cuda tensor"),
         };
         let weights_offset = weights_l.start_offset();
 
         let (sorted_token_ids, sti_l) = sorted_token_ids.storage_and_layout();
         let sorted_token_ids = match &*sorted_token_ids {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
-            _ => candle::bail!("sorted_token_ids must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+            _ => hanzo_ml::bail!("sorted_token_ids must be a cuda tensor"),
         };
         let sti_offset = sti_l.start_offset();
 
         let (experts_ids, ei_l) = experts_ids.storage_and_layout();
         let experts_ids = match &*experts_ids {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
-            _ => candle::bail!("experts_ids must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+            _ => hanzo_ml::bail!("experts_ids must be a cuda tensor"),
         };
         let ei_offset = ei_l.start_offset();
 
         let topk_weights_ptr = if let Some(topk_weights) = &topk_weights {
             let (topk_weights, tw_l) = topk_weights.storage_and_layout();
             let topk_weights = match &*topk_weights {
-                candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-                _ => candle::bail!("topk_weights must be a cuda tensor"),
+                hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+                _ => hanzo_ml::bail!("topk_weights must be a cuda tensor"),
             };
             let tw_offset = tw_l.start_offset();
             let topk_w_ptr = topk_weights
@@ -335,8 +333,8 @@ pub fn moe_gemm_transposed(
             );
         }
 
-        let output = candle::CudaStorage::wrap_cuda_slice(output, dev.clone());
-        let output = Tensor::from((candle::Storage::Cuda(output), (size_m, size_n)));
+        let output = hanzo_ml::CudaStorage::wrap_cuda_slice(output, dev.clone());
+        let output = Tensor::from((hanzo_ml::Storage::Cuda(output), (size_m, size_n)));
 
         Ok(output)
     }

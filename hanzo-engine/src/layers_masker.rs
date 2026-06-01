@@ -20,7 +20,7 @@ pub struct CausalMaskConfig {
     pub force_custom: bool,
 }
 
-// https://github.com/mokeyish/candle-ext/blob/main/src/masked_fill.rs
+// an external reference implementation
 /// xs are on false (0), value is on true (1)
 pub fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result<Tensor> {
     let on_true = Tensor::full(value, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;

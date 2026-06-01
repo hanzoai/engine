@@ -14,7 +14,7 @@ use hanzo_ml::{
     CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
 };
 
-// Constants matching candle's quantized CUDA implementation
+// Constants matching hanzo-ml's quantized CUDA implementation
 pub const CUDA_QUANTIZE_BLOCK_SIZE: usize = 256;
 pub const MATRIX_ROW_PADDING: usize = 512;
 
@@ -536,7 +536,7 @@ pub fn qmatmul_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) 
 /// CudaSlices.
 /// Values are always non-negative so u32 and i32 are interchangeable.
 /// We use u32 so the sorted_token_ids can be wrapped directly into
-/// Candle tensors (which don't support i32).
+/// Hanzo tensors (which don't support i32).
 pub fn moe_dispatch_build(
     topk_ids_flat: &CudaSlice<u32>,
     total_assignments: usize,

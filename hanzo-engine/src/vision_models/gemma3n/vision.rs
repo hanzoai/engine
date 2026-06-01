@@ -823,7 +823,7 @@ impl MobileNetV5MultiScaleFusionAdapter {
             if h0 % out_h != 0 || w0 % out_w != 0 {
                 // Fallback to bilinear interpolation if input spatial dims are
                 // not integer multiples of the desired output size. We use
-                // Candle’s nearest-neighbour upsample as the closest available op.
+                // Hanzo’s nearest-neighbour upsample as the closest available op.
                 img = img.upsample_nearest2d(out_h, out_w)?;
             } else {
                 let h_stride = h0 / out_h;
