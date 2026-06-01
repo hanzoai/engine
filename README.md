@@ -298,7 +298,7 @@ Contributions welcome! Please [open an issue](https://github.com/hanzoai/engine/
 
 ## Credits
 
-This project would not be possible without the excellent work at [Candle](https://github.com/hanzoai/ml). Thank you to all [contributors](https://github.com/hanzoai/engine/graphs/contributors)!
+This project would not be possible without the excellent work at [Hanzo](https://github.com/hanzoai/ml). Thank you to all [contributors](https://github.com/hanzoai/engine/graphs/contributors)!
 
 hanzo is not affiliated with Mistral AI.
 
