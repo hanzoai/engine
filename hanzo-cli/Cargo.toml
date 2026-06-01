@@ -23,7 +23,7 @@ hanzo-engine = { workspace = true }
 hanzo-server-core = { workspace = true }
 hanzo = { workspace = true }
 hanzo-sandbox = { workspace = true }
-candle-core = { workspace = true }
+hanzo-ml = { workspace = true }
 
 clap = { workspace = true }
 clap_complete = "4.5"

@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Device, Module, Result, Tensor};
+use hanzo_ml::{Device, Module, Result, Tensor};
 use hanzo_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
 
 use crate::{
@@ -375,7 +375,7 @@ impl EmbeddingGemma {
         }
 
         if !matches!(attention_mechanism, AttentionImplementation::Eager) {
-            candle_core::bail!("Expected AttentionImplementation::Eager");
+            hanzo_ml::bail!("Expected AttentionImplementation::Eager");
         }
 
         let mapper = normal_loading_metadata.mapper;
@@ -567,7 +567,7 @@ impl IsqModel for EmbeddingGemma {
         uvb.to_safetensors()
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         // NOTE: dependant on the exact implementation in get_layers!
         let mut names = Vec::new();
         // lm_head
@@ -590,7 +590,7 @@ impl EmbeddingModel for EmbeddingGemma {
         &self,
         input_ids: &Tensor,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         self.forward_embeds(input_ids, self.embed_tokens(input_ids)?, flash_params)
     }
     fn device(&self) -> &Device {

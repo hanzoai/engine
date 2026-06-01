@@ -2,8 +2,8 @@
 
 pub(crate) mod idefics2_input_processor;
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
+use hanzo_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
 use hanzo_quant::{Convolution, ShardedVarBuilder};
 use serde::Deserialize;
 use std::{
@@ -449,7 +449,7 @@ impl Attention {
             attn_weights,
             &self.neg_inf,
         )?;
-        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        let attn_weights = hanzo_nn::ops::softmax_last_dim(&attn_weights)?;
         let mut attn_output = MatMul.matmul(&attn_weights, &v.contiguous()?)?;
 
         if self.q_proj.is_quant() {
@@ -804,7 +804,7 @@ impl PerceiverAttention {
             attn_weights,
             &self.neg_inf,
         )?;
-        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        let attn_weights = hanzo_nn::ops::softmax_last_dim(&attn_weights)?;
         let mut attn_output = MatMul.matmul(&attn_weights, &v.contiguous()?)?;
 
         if self.q_proj.is_quant() {
@@ -1333,7 +1333,7 @@ impl MultimodalModel for Idefics2 {
         model_specific_args: Box<dyn Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         let Idefics2SpecificArgs {
             pixel_attention_mask,
             image_hashes,

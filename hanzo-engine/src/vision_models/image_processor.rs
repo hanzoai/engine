@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{Device, Result, Tensor};
+use hanzo_ml::{Device, Result, Tensor};
 use image::DynamicImage;
 
 use crate::pipeline::InputsProcessor;

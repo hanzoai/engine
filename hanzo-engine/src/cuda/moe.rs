@@ -1,4 +1,4 @@
-use candle_core::{Result, Tensor};
+use hanzo_ml::{Result, Tensor};
 
 #[cfg(feature = "cuda")]
 pub fn moe_gemm(
@@ -11,8 +11,8 @@ pub fn moe_gemm(
     is_prefill: bool,
 ) -> Result<Tensor> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
-    use candle_core as candle;
-    use candle_core::DType;
+    use hanzo_ml as candle;
+    use hanzo_ml::DType;
     use half::{bf16, f16};
 
     fn cuda_fwd<
@@ -42,7 +42,7 @@ pub fn moe_gemm(
             DType::F16 => 0,
             DType::BF16 => 1,
             _ => {
-                candle_core::bail!("moe_gemm_wmma only accept f16/bf16 inputs!")
+                hanzo_ml::bail!("moe_gemm_wmma only accept f16/bf16 inputs!")
             }
         };
 
@@ -169,7 +169,7 @@ pub fn moe_gemm(
             is_prefill,
         ),
         _ => {
-            candle_core::bail!("moe_gemm only accept f16/bf16 inputs!")
+            hanzo_ml::bail!("moe_gemm only accept f16/bf16 inputs!")
         }
     }
 }
@@ -185,7 +185,7 @@ pub fn moe_gemm(
     _: usize,
     _: bool,
 ) -> Result<Tensor> {
-    candle_core::bail!("moe_gemm is not implemented on this platform!")
+    hanzo_ml::bail!("moe_gemm is not implemented on this platform!")
 }
 
 /// MoE GEMM for transposed weight layout [num_experts, K, N] instead of [num_experts, N, K].
@@ -202,8 +202,8 @@ pub fn moe_gemm_transposed(
     is_prefill: bool,
 ) -> Result<Tensor> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
-    use candle_core as candle;
-    use candle_core::DType;
+    use hanzo_ml as candle;
+    use hanzo_ml::DType;
     use half::{bf16, f16};
 
     fn cuda_fwd<
@@ -234,7 +234,7 @@ pub fn moe_gemm_transposed(
             DType::F16 => 0,
             DType::BF16 => 1,
             _ => {
-                candle_core::bail!("moe_gemm_transposed only accept f16/bf16 inputs!")
+                hanzo_ml::bail!("moe_gemm_transposed only accept f16/bf16 inputs!")
             }
         };
 
@@ -361,7 +361,7 @@ pub fn moe_gemm_transposed(
             is_prefill,
         ),
         _ => {
-            candle_core::bail!("moe_gemm_transposed only accept f16/bf16 inputs!")
+            hanzo_ml::bail!("moe_gemm_transposed only accept f16/bf16 inputs!")
         }
     }
 }
@@ -377,5 +377,5 @@ pub fn moe_gemm_transposed(
     _: usize,
     _: bool,
 ) -> Result<Tensor> {
-    candle_core::bail!("moe_gemm_transposed is not implemented on this platform!")
+    hanzo_ml::bail!("moe_gemm_transposed is not implemented on this platform!")
 }

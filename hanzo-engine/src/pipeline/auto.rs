@@ -9,7 +9,7 @@ use crate::utils::{progress::ProgressScopeGuard, tokens::get_token};
 use crate::Ordering;
 use crate::{DeviceMapSetting, IsqType, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
-use candle_core::Device;
+use hanzo_ml::Device;
 use hf_hub::{
     api::sync::{ApiBuilder, ApiError, ApiRepo},
     Cache, Repo, RepoType,

@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Embedding, Module};
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
+use hanzo_nn::{Embedding, Module};
 use hanzo_quant::ShardedVarBuilder;
 
 use crate::layers;
@@ -65,7 +65,7 @@ impl AbsolutePositionalEncoding {
     #[allow(unused)]
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         if xs.dim(1)? >= self.pe.dim(1)? {
-            candle_core::bail!("Need to recompute positional embeds");
+            hanzo_ml::bail!("Need to recompute positional embeds");
         }
 
         (xs * self.xscale)?.broadcast_add(&self.pe.i((.., ..xs.dim(1)?))?.to_dtype(xs.dtype())?)

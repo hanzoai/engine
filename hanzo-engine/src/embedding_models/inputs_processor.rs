@@ -3,7 +3,7 @@
 use std::{any::Any, fmt::Debug, sync::Arc};
 
 use anyhow::Result;
-use candle_core::{Device, Tensor, WithDType};
+use hanzo_ml::{Device, Tensor, WithDType};
 use tokenizers::Tokenizer;
 
 use crate::{

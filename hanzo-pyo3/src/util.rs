@@ -52,8 +52,8 @@ impl From<anyhow::Error> for PyApiErr {
     }
 }
 
-impl From<&candle_core::Error> for PyApiErr {
-    fn from(value: &candle_core::Error) -> Self {
+impl From<&hanzo_ml::Error> for PyApiErr {
+    fn from(value: &hanzo_ml::Error) -> Self {
         Self::from(value.to_string())
     }
 }

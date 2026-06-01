@@ -1,4 +1,4 @@
-use candle_core::{
+use hanzo_ml::{
     backend::BackendStorage, shape::Dim, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout,
     Result, Shape, Tensor, WithDType,
 };
@@ -13,7 +13,7 @@ use std::{
 #[cfg(feature = "cuda")]
 use crate::utils::{ffi, slice_ptr};
 #[cfg(feature = "cuda")]
-use candle_core::cuda::{cudarc::driver::DevicePtr, CudaStorage};
+use hanzo_ml::cuda::{cudarc::driver::DevicePtr, CudaStorage};
 #[cfg(feature = "cuda")]
 use std::ffi::c_void;
 
@@ -93,7 +93,7 @@ impl CustomOp1 for Leftshift {
     #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, s1: &CudaStorage, l1: &Layout) -> Result<(CudaStorage, Shape)> {
         if !l1.is_contiguous() {
-            candle_core::bail!("Input tensor s1 must be contiguous");
+            hanzo_ml::bail!("Input tensor s1 must be contiguous");
         }
         let dev = s1.device().clone();
         let (d_in1_ptr, _d_guard, elem_count) = match s1.dtype() {
@@ -148,11 +148,11 @@ impl CustomOp1 for Leftshift {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        s1: &candle_core::MetalStorage,
+        s1: &hanzo_ml::MetalStorage,
         l1: &Layout,
-    ) -> Result<(candle_core::MetalStorage, Shape)> {
+    ) -> Result<(hanzo_ml::MetalStorage, Shape)> {
         if !l1.is_contiguous() {
-            candle_core::bail!("Input tensor s1 must be contiguous");
+            hanzo_ml::bail!("Input tensor s1 must be contiguous");
         }
 
         let encoder = s1.device().command_encoder()?;
@@ -175,9 +175,9 @@ impl CustomOp1 for Leftshift {
             out_shape.elem_count(),
             &output,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
 
-        let newstorage = candle_core::MetalStorage::new(
+        let newstorage = hanzo_ml::MetalStorage::new(
             output,
             device.clone(),
             out_shape.elem_count(),
@@ -278,10 +278,10 @@ impl CustomOp2 for BitWise {
             });
         }
         if !l1.is_contiguous() {
-            candle_core::bail!("Input tensor s1 must be contiguous");
+            hanzo_ml::bail!("Input tensor s1 must be contiguous");
         }
         if !l2.is_contiguous() {
-            candle_core::bail!("Input tensor s2 must be contiguous");
+            hanzo_ml::bail!("Input tensor s2 must be contiguous");
         }
 
         match s1 {
@@ -382,10 +382,10 @@ impl CustomOp2 for BitWise {
             });
         }
         if !l1.is_contiguous() {
-            candle_core::bail!("Input tensor s1 must be contiguous");
+            hanzo_ml::bail!("Input tensor s1 must be contiguous");
         }
         if !l2.is_contiguous() {
-            candle_core::bail!("Input tensor s2 must be contiguous");
+            hanzo_ml::bail!("Input tensor s2 must be contiguous");
         }
 
         let dev = s1.device().clone();
@@ -575,11 +575,11 @@ impl CustomOp2 for BitWise {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        s1: &candle_core::MetalStorage,
+        s1: &hanzo_ml::MetalStorage,
         l1: &Layout,
-        s2: &candle_core::MetalStorage,
+        s2: &hanzo_ml::MetalStorage,
         l2: &Layout,
-    ) -> Result<(candle_core::MetalStorage, Shape)> {
+    ) -> Result<(hanzo_ml::MetalStorage, Shape)> {
         if l1.shape() != l2.shape() || l1.stride() != l2.stride() {
             return Err(Error::ShapeMismatchBinaryOp {
                 lhs: l1.shape().clone(),
@@ -595,10 +595,10 @@ impl CustomOp2 for BitWise {
             });
         }
         if !l1.is_contiguous() {
-            candle_core::bail!("Input tensor s1 must be contiguous");
+            hanzo_ml::bail!("Input tensor s1 must be contiguous");
         }
         if !l2.is_contiguous() {
-            candle_core::bail!("Input tensor s2 must be contiguous");
+            hanzo_ml::bail!("Input tensor s2 must be contiguous");
         }
 
         let encoder = s1.device().command_encoder()?;
@@ -623,7 +623,7 @@ impl CustomOp2 for BitWise {
                 out_shape.elem_count(),
                 &output,
             )
-            .map_err(candle_core::Error::wrap)?,
+            .map_err(hanzo_ml::Error::wrap)?,
             BitWiseBinaryOpEnum::And => crate::metal_kernels::call_bitwise_and(
                 device.device(),
                 &encoder,
@@ -636,7 +636,7 @@ impl CustomOp2 for BitWise {
                 out_shape.elem_count(),
                 &output,
             )
-            .map_err(candle_core::Error::wrap)?,
+            .map_err(hanzo_ml::Error::wrap)?,
             BitWiseBinaryOpEnum::Xor => crate::metal_kernels::call_bitwise_xor(
                 device.device(),
                 &encoder,
@@ -649,10 +649,10 @@ impl CustomOp2 for BitWise {
                 out_shape.elem_count(),
                 &output,
             )
-            .map_err(candle_core::Error::wrap)?,
+            .map_err(hanzo_ml::Error::wrap)?,
         }
 
-        let newstorage = candle_core::MetalStorage::new(
+        let newstorage = hanzo_ml::MetalStorage::new(
             output,
             device.clone(),
             out_shape.elem_count(),
@@ -687,7 +687,7 @@ impl CustomOp1 for BitWiseUnary {
 
     fn cpu_fwd(&self, s1: &CpuStorage, l1: &Layout) -> Result<(CpuStorage, Shape)> {
         if !l1.is_contiguous() {
-            candle_core::bail!("Input tensor s1 must be contiguous");
+            hanzo_ml::bail!("Input tensor s1 must be contiguous");
         }
 
         match s1 {
@@ -748,11 +748,11 @@ impl CustomOp1 for BitWiseUnary {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        s1: &candle_core::MetalStorage,
+        s1: &hanzo_ml::MetalStorage,
         l1: &Layout,
-    ) -> Result<(candle_core::MetalStorage, Shape)> {
+    ) -> Result<(hanzo_ml::MetalStorage, Shape)> {
         if !l1.is_contiguous() {
-            candle_core::bail!("Input tensor s1 must be contiguous");
+            hanzo_ml::bail!("Input tensor s1 must be contiguous");
         }
 
         let encoder = s1.device().command_encoder()?;
@@ -775,10 +775,10 @@ impl CustomOp1 for BitWiseUnary {
                 out_shape.elem_count(),
                 &output,
             )
-            .map_err(candle_core::Error::wrap)?,
+            .map_err(hanzo_ml::Error::wrap)?,
         }
 
-        let newstorage = candle_core::MetalStorage::new(
+        let newstorage = hanzo_ml::MetalStorage::new(
             output,
             device.clone(),
             out_shape.elem_count(),
@@ -835,25 +835,25 @@ impl CustomOp1 for ArgSort {
 
     // -------- CPU ------------------------------------------------------------
     fn cpu_fwd(&self, _s1: &CpuStorage, _l1: &Layout) -> Result<(CpuStorage, Shape)> {
-        candle_core::bail!("ArgSort is not implemented for the CPU backend");
+        hanzo_ml::bail!("ArgSort is not implemented for the CPU backend");
     }
 
     // -------- CUDA -----------------------------------------------------------
     #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
-        candle_core::bail!("ArgSort is not implemented for the CUDA backend");
+        hanzo_ml::bail!("ArgSort is not implemented for the CUDA backend");
     }
 
     // -------- Metal ----------------------------------------------------------
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        s1: &candle_core::MetalStorage,
+        s1: &hanzo_ml::MetalStorage,
         l1: &Layout,
-    ) -> Result<(candle_core::MetalStorage, Shape)> {
+    ) -> Result<(hanzo_ml::MetalStorage, Shape)> {
         // Require contiguous input (same as other metal ops in this file)
         if !l1.is_contiguous() {
-            candle_core::bail!("Input tensor s1 must be contiguous");
+            hanzo_ml::bail!("Input tensor s1 must be contiguous");
         }
 
         // Create a command encoder and label it for easy debugging in Xcode’s GPU frame‑capture
@@ -865,7 +865,7 @@ impl CustomOp1 for ArgSort {
         let elem_count = out_shape.elem_count();
 
         // Output buffer holds the sorted indices -> always `U32`
-        let output = device.new_buffer(elem_count, candle_core::DType::U32, "argsort")?;
+        let output = device.new_buffer(elem_count, hanzo_ml::DType::U32, "argsort")?;
 
         // ------------------------------------------------------------------
         // Obtain a scratch‑buffer set from the global LRU cache (cap=4)
@@ -905,7 +905,7 @@ impl CustomOp1 for ArgSort {
             out_strides: l1.stride(),
             in_contiguous: l1.is_contiguous(),
             in_ty: s1.dtype(),
-            out_ty: candle_core::DType::U32,
+            out_ty: hanzo_ml::DType::U32,
             src: s1.buffer(),
             src_offset: l1.start_offset(), // element offset
             dst: &output,
@@ -922,14 +922,14 @@ impl CustomOp1 for ArgSort {
             &sort_args,
             &scratch,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
 
         // Wrap and return as a new MetalStorage
-        let newstorage = candle_core::MetalStorage::new(
+        let newstorage = hanzo_ml::MetalStorage::new(
             output,
             device.clone(),
             elem_count,
-            candle_core::DType::U32,
+            hanzo_ml::DType::U32,
         );
         Ok((newstorage, out_shape))
     }
@@ -942,25 +942,25 @@ impl CustomOp1 for Sort {
 
     // -------- CPU ------------------------------------------------------------
     fn cpu_fwd(&self, _s1: &CpuStorage, _l1: &Layout) -> Result<(CpuStorage, Shape)> {
-        candle_core::bail!("Sort is not implemented for the CPU backend");
+        hanzo_ml::bail!("Sort is not implemented for the CPU backend");
     }
 
     // -------- CUDA -----------------------------------------------------------
     #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
-        candle_core::bail!("Sort is not implemented for the CUDA backend");
+        hanzo_ml::bail!("Sort is not implemented for the CUDA backend");
     }
 
     // -------- Metal ----------------------------------------------------------
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        s1: &candle_core::MetalStorage,
+        s1: &hanzo_ml::MetalStorage,
         l1: &Layout,
-    ) -> Result<(candle_core::MetalStorage, Shape)> {
+    ) -> Result<(hanzo_ml::MetalStorage, Shape)> {
         // Require contiguous input (same as other metal ops in this file)
         if !l1.is_contiguous() {
-            candle_core::bail!("Input tensor s1 must be contiguous");
+            hanzo_ml::bail!("Input tensor s1 must be contiguous");
         }
 
         // Create a command encoder and label it for easy debugging in Xcode’s GPU frame‑capture
@@ -1029,11 +1029,11 @@ impl CustomOp1 for Sort {
             &sort_args,
             &scratch,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
 
         // Wrap and return as a new MetalStorage
         let newstorage =
-            candle_core::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
+            hanzo_ml::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, out_shape))
     }
 }
@@ -1094,22 +1094,22 @@ mod cuda_ops_cccl2 {
     use super::*;
 
     pub(super) fn count_nonzero_cuda(
-        dtype: candle_core::DType,
+        dtype: hanzo_ml::DType,
         d_in: *const c_void,
         n: u32,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     ) -> u32 {
         unsafe {
             match dtype {
-                candle_core::DType::U8 => ffi::count_nonzero_u8(d_in, n, stream),
-                candle_core::DType::U32 => ffi::count_nonzero_u32(d_in, n, stream),
-                candle_core::DType::I64 => ffi::count_nonzero_i64(d_in, n, stream),
-                candle_core::DType::I16 => ffi::count_nonzero_i16(d_in, n, stream),
-                candle_core::DType::I32 => ffi::count_nonzero_i32(d_in, n, stream),
-                candle_core::DType::BF16 => ffi::count_nonzero_bf16(d_in, n, stream),
-                candle_core::DType::F16 => ffi::count_nonzero_f16(d_in, n, stream),
-                candle_core::DType::F32 => ffi::count_nonzero_f32(d_in, n, stream),
-                candle_core::DType::F64 => ffi::count_nonzero_f64(d_in, n, stream),
+                hanzo_ml::DType::U8 => ffi::count_nonzero_u8(d_in, n, stream),
+                hanzo_ml::DType::U32 => ffi::count_nonzero_u32(d_in, n, stream),
+                hanzo_ml::DType::I64 => ffi::count_nonzero_i64(d_in, n, stream),
+                hanzo_ml::DType::I16 => ffi::count_nonzero_i16(d_in, n, stream),
+                hanzo_ml::DType::I32 => ffi::count_nonzero_i32(d_in, n, stream),
+                hanzo_ml::DType::BF16 => ffi::count_nonzero_bf16(d_in, n, stream),
+                hanzo_ml::DType::F16 => ffi::count_nonzero_f16(d_in, n, stream),
+                hanzo_ml::DType::F32 => ffi::count_nonzero_f32(d_in, n, stream),
+                hanzo_ml::DType::F64 => ffi::count_nonzero_f64(d_in, n, stream),
                 _ => unreachable!(),
             }
         }
@@ -1117,42 +1117,42 @@ mod cuda_ops_cccl2 {
 
     #[allow(clippy::too_many_arguments)]
     pub(super) fn nonzero_cuda(
-        dtype: candle_core::DType,
+        dtype: hanzo_ml::DType,
         d_in: *const c_void,
         n: u32,
         num_nonzero: u32,
         dims: *const c_void,
         num_dims: u32,
         d_out: *mut c_void,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     ) {
         unsafe {
             match dtype {
-                candle_core::DType::U8 => {
+                hanzo_ml::DType::U8 => {
                     ffi::nonzero_u8(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::U32 => {
+                hanzo_ml::DType::U32 => {
                     ffi::nonzero_u32(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::I64 => {
+                hanzo_ml::DType::I64 => {
                     ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::I32 => {
+                hanzo_ml::DType::I32 => {
                     ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::I16 => {
+                hanzo_ml::DType::I16 => {
                     ffi::nonzero_i16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::BF16 => {
+                hanzo_ml::DType::BF16 => {
                     ffi::nonzero_bf16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::F16 => {
+                hanzo_ml::DType::F16 => {
                     ffi::nonzero_f16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::F32 => {
+                hanzo_ml::DType::F32 => {
                     ffi::nonzero_f32(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::F64 => {
+                hanzo_ml::DType::F64 => {
                     ffi::nonzero_f64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
                 _ => unreachable!(),
@@ -1166,22 +1166,22 @@ mod cuda_ops_cccl3 {
     use super::*;
 
     pub(super) fn count_nonzero_cuda(
-        dtype: candle_core::DType,
+        dtype: hanzo_ml::DType,
         d_in: *const c_void,
         n: u32,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     ) -> u32 {
         unsafe {
             match dtype {
-                candle_core::DType::U8 => ffi::count_nonzero_u8(d_in, n, stream),
-                candle_core::DType::U32 => ffi::count_nonzero_u32(d_in, n, stream),
-                candle_core::DType::I64 => ffi::count_nonzero_i64(d_in, n, stream),
-                candle_core::DType::I16 => ffi::count_nonzero_i16(d_in, n, stream),
-                candle_core::DType::I32 => ffi::count_nonzero_i32(d_in, n, stream),
-                candle_core::DType::BF16 => ffi::count_nonzero_bf16(d_in, n, stream),
-                candle_core::DType::F16 => ffi::count_nonzero_f16(d_in, n, stream),
-                candle_core::DType::F32 => ffi::count_nonzero_f32(d_in, n, stream),
-                candle_core::DType::F64 => ffi::count_nonzero_f64(d_in, n, stream),
+                hanzo_ml::DType::U8 => ffi::count_nonzero_u8(d_in, n, stream),
+                hanzo_ml::DType::U32 => ffi::count_nonzero_u32(d_in, n, stream),
+                hanzo_ml::DType::I64 => ffi::count_nonzero_i64(d_in, n, stream),
+                hanzo_ml::DType::I16 => ffi::count_nonzero_i16(d_in, n, stream),
+                hanzo_ml::DType::I32 => ffi::count_nonzero_i32(d_in, n, stream),
+                hanzo_ml::DType::BF16 => ffi::count_nonzero_bf16(d_in, n, stream),
+                hanzo_ml::DType::F16 => ffi::count_nonzero_f16(d_in, n, stream),
+                hanzo_ml::DType::F32 => ffi::count_nonzero_f32(d_in, n, stream),
+                hanzo_ml::DType::F64 => ffi::count_nonzero_f64(d_in, n, stream),
                 _ => unreachable!(),
             }
         }
@@ -1189,42 +1189,42 @@ mod cuda_ops_cccl3 {
 
     #[allow(clippy::too_many_arguments)]
     pub(super) fn nonzero_cuda(
-        dtype: candle_core::DType,
+        dtype: hanzo_ml::DType,
         d_in: *const c_void,
         n: u32,
         num_nonzero: u32,
         dims: *const c_void,
         num_dims: u32,
         d_out: *mut c_void,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     ) {
         unsafe {
             match dtype {
-                candle_core::DType::U8 => {
+                hanzo_ml::DType::U8 => {
                     ffi::nonzero_u8(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::U32 => {
+                hanzo_ml::DType::U32 => {
                     ffi::nonzero_u32(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::I64 => {
+                hanzo_ml::DType::I64 => {
                     ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::I32 => {
+                hanzo_ml::DType::I32 => {
                     ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::I16 => {
+                hanzo_ml::DType::I16 => {
                     ffi::nonzero_i16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::BF16 => {
+                hanzo_ml::DType::BF16 => {
                     ffi::nonzero_bf16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::F16 => {
+                hanzo_ml::DType::F16 => {
                     ffi::nonzero_f16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::F32 => {
+                hanzo_ml::DType::F32 => {
                     ffi::nonzero_f32(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
-                candle_core::DType::F64 => {
+                hanzo_ml::DType::F64 => {
                     ffi::nonzero_f64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
                 }
                 _ => unreachable!(),
@@ -1248,15 +1248,15 @@ impl CustomOp1 for NonZero {
             return Err(Error::RequiresContiguous { op: "nonzero" });
         }
         let result = match storage {
-            candle_core::CpuStorage::U8(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::U32(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::I16(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::I32(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::I64(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::BF16(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::F16(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::F32(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::F64(vs) => self.nonzero(vs, layout),
+            hanzo_ml::CpuStorage::U8(vs) => self.nonzero(vs, layout),
+            hanzo_ml::CpuStorage::U32(vs) => self.nonzero(vs, layout),
+            hanzo_ml::CpuStorage::I16(vs) => self.nonzero(vs, layout),
+            hanzo_ml::CpuStorage::I32(vs) => self.nonzero(vs, layout),
+            hanzo_ml::CpuStorage::I64(vs) => self.nonzero(vs, layout),
+            hanzo_ml::CpuStorage::BF16(vs) => self.nonzero(vs, layout),
+            hanzo_ml::CpuStorage::F16(vs) => self.nonzero(vs, layout),
+            hanzo_ml::CpuStorage::F32(vs) => self.nonzero(vs, layout),
+            hanzo_ml::CpuStorage::F64(vs) => self.nonzero(vs, layout),
             _ => unreachable!(),
         };
         let index_len = layout.dims().len();
@@ -1269,55 +1269,55 @@ impl CustomOp1 for NonZero {
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
-        storage: &candle_core::CudaStorage,
+        storage: &hanzo_ml::CudaStorage,
         layout: &Layout,
-    ) -> Result<(candle_core::CudaStorage, Shape)> {
+    ) -> Result<(hanzo_ml::CudaStorage, Shape)> {
         if !layout.is_contiguous() {
-            return Err(candle_core::Error::RequiresContiguous { op: "nonzero" });
+            return Err(hanzo_ml::Error::RequiresContiguous { op: "nonzero" });
         }
         let dev = storage.device().clone();
         let (d_in, _d_in_guard) = match storage.dtype() {
-            candle_core::DType::U8 => {
+            hanzo_ml::DType::U8 => {
                 let slice = storage.as_cuda_slice::<u8>()?;
                 let (d_in, d_in_guard) = slice_ptr(slice, 0);
                 (d_in as *const std::ffi::c_void, d_in_guard)
             }
-            candle_core::DType::U32 => {
+            hanzo_ml::DType::U32 => {
                 let slice = storage.as_cuda_slice::<u32>()?;
                 let (d_in, d_in_guard) = slice_ptr(slice, 0);
                 (d_in as *const std::ffi::c_void, d_in_guard)
             }
-            candle_core::DType::I32 => {
+            hanzo_ml::DType::I32 => {
                 let slice = storage.as_cuda_slice::<i32>()?;
                 let (d_in, d_in_guard) = slice_ptr(slice, 0);
                 (d_in as *const std::ffi::c_void, d_in_guard)
             }
-            candle_core::DType::I16 => {
+            hanzo_ml::DType::I16 => {
                 let slice = storage.as_cuda_slice::<i16>()?;
                 let (d_in, d_in_guard) = slice_ptr(slice, 0);
                 (d_in as *const std::ffi::c_void, d_in_guard)
             }
-            candle_core::DType::I64 => {
+            hanzo_ml::DType::I64 => {
                 let slice = storage.as_cuda_slice::<i64>()?;
                 let (d_in, d_in_guard) = slice_ptr(slice, 0);
                 (d_in as *const std::ffi::c_void, d_in_guard)
             }
-            candle_core::DType::BF16 => {
+            hanzo_ml::DType::BF16 => {
                 let slice = storage.as_cuda_slice::<half::bf16>()?;
                 let (d_in, d_in_guard) = slice_ptr(slice, 0);
                 (d_in as *const std::ffi::c_void, d_in_guard)
             }
-            candle_core::DType::F16 => {
+            hanzo_ml::DType::F16 => {
                 let slice = storage.as_cuda_slice::<half::f16>()?;
                 let (d_in, d_in_guard) = slice_ptr(slice, 0);
                 (d_in as *const std::ffi::c_void, d_in_guard)
             }
-            candle_core::DType::F32 => {
+            hanzo_ml::DType::F32 => {
                 let slice = storage.as_cuda_slice::<f32>()?;
                 let (d_in, d_in_guard) = slice_ptr(slice, 0);
                 (d_in as *const std::ffi::c_void, d_in_guard)
             }
-            candle_core::DType::F64 => {
+            hanzo_ml::DType::F64 => {
                 let slice = storage.as_cuda_slice::<f64>()?;
                 let (d_in, d_in_guard) = slice_ptr(slice, 0);
                 (d_in as *const std::ffi::c_void, d_in_guard)
@@ -1356,7 +1356,7 @@ impl CustomOp1 for NonZero {
             );
         }
         let shape = Shape::from_dims(&[num_nonzero as usize, layout.dims().len()]);
-        let dst = candle_core::CudaStorage::wrap_cuda_slice(d_out, dev);
+        let dst = hanzo_ml::CudaStorage::wrap_cuda_slice(d_out, dev);
         Ok((dst, shape))
     }
 }
@@ -1369,10 +1369,10 @@ impl NonZeroOp for Tensor {
     #[cfg(feature = "metal")]
     fn nonzero(&self) -> Result<Tensor> {
         if !self.is_contiguous() {
-            return Err(candle_core::Error::RequiresContiguous { op: "nonzero" });
+            return Err(hanzo_ml::Error::RequiresContiguous { op: "nonzero" });
         }
         let original_device = self.device();
-        self.to_device(&candle_core::Device::Cpu)?
+        self.to_device(&hanzo_ml::Device::Cpu)?
             .apply_op1_no_bwd(&NonZero)?
             .to_device(original_device)
     }
@@ -1380,7 +1380,7 @@ impl NonZeroOp for Tensor {
     #[cfg(not(feature = "metal"))]
     fn nonzero(&self) -> Result<Tensor> {
         if !self.is_contiguous() {
-            return Err(candle_core::Error::RequiresContiguous { op: "nonzero" });
+            return Err(hanzo_ml::Error::RequiresContiguous { op: "nonzero" });
         }
         self.apply_op1_no_bwd(&NonZero)
     }
@@ -1400,7 +1400,7 @@ impl CustomOp1 for CumSum {
     fn cpu_fwd(&self, s1: &CpuStorage, l1: &Layout) -> Result<(CpuStorage, Shape)> {
         use std::ops::Add;
         if !l1.is_contiguous() {
-            candle_core::bail!("Input tensor s1 must be contiguous");
+            hanzo_ml::bail!("Input tensor s1 must be contiguous");
         }
         let dims = l1.dims();
         let axis = self.axis;
@@ -1513,9 +1513,9 @@ impl CustomOp1 for CumSum {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        s1: &candle_core::MetalStorage,
+        s1: &hanzo_ml::MetalStorage,
         l1: &Layout,
-    ) -> Result<(candle_core::MetalStorage, Shape)> {
+    ) -> Result<(hanzo_ml::MetalStorage, Shape)> {
         use crate::metal_kernels::ScanType;
 
         let encoder = s1.device().command_encoder()?;
@@ -1542,9 +1542,9 @@ impl CustomOp1 for CumSum {
             self.inclusive,
             &output,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
 
-        let newstorage = candle_core::MetalStorage::new(
+        let newstorage = hanzo_ml::MetalStorage::new(
             output,
             device.clone(),
             out_shape.elem_count(),
@@ -1593,7 +1593,7 @@ pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -
     let up = up.contiguous()?;
 
     if gate.shape() != up.shape() {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "gptoss_swiglu: gate and up must have same shape, got {:?} vs {:?}",
             gate.shape(),
             up.shape()
@@ -1601,8 +1601,8 @@ pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -
     }
 
     let device = match gate.device() {
-        candle_core::Device::Cuda(dev) => dev,
-        _ => candle_core::bail!("gptoss_swiglu requires CUDA device"),
+        hanzo_ml::Device::Cuda(dev) => dev,
+        _ => hanzo_ml::bail!("gptoss_swiglu requires CUDA device"),
     };
 
     let n_elements = gate.elem_count();
@@ -1612,12 +1612,12 @@ pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -
     let up_storage = up.storage_and_layout().0;
 
     let gate_cuda = match &*gate_storage {
-        candle_core::Storage::Cuda(s) => s,
-        _ => candle_core::bail!("Expected CUDA storage for gate"),
+        hanzo_ml::Storage::Cuda(s) => s,
+        _ => hanzo_ml::bail!("Expected CUDA storage for gate"),
     };
     let up_cuda = match &*up_storage {
-        candle_core::Storage::Cuda(s) => s,
-        _ => candle_core::bail!("Expected CUDA storage for up"),
+        hanzo_ml::Storage::Cuda(s) => s,
+        _ => hanzo_ml::bail!("Expected CUDA storage for up"),
     };
 
     let stream = device.cuda_stream().cu_stream();
@@ -1647,7 +1647,7 @@ pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -
             drop(_o_guard);
             let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
             Ok(Tensor::from((
-                candle_core::Storage::Cuda(out_storage),
+                hanzo_ml::Storage::Cuda(out_storage),
                 gate.shape().clone(),
             )))
         }
@@ -1675,7 +1675,7 @@ pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -
             drop(_o_guard);
             let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
             Ok(Tensor::from((
-                candle_core::Storage::Cuda(out_storage),
+                hanzo_ml::Storage::Cuda(out_storage),
                 gate.shape().clone(),
             )))
         }
@@ -1703,11 +1703,11 @@ pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -
             drop(_o_guard);
             let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
             Ok(Tensor::from((
-                candle_core::Storage::Cuda(out_storage),
+                hanzo_ml::Storage::Cuda(out_storage),
                 gate.shape().clone(),
             )))
         }
-        _ => candle_core::bail!("gptoss_swiglu: unsupported dtype {:?}", dtype),
+        _ => hanzo_ml::bail!("gptoss_swiglu: unsupported dtype {:?}", dtype),
     }
 }
 
@@ -1736,7 +1736,7 @@ pub fn gptoss_swiglu_interleaved(
 
     let dims = gate_up.dims();
     if dims.len() != 3 || dims[2] != 2 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "gptoss_swiglu_interleaved: expected gate_up shape [N, intermediate_size, 2], got {:?}",
             dims
         );
@@ -1744,8 +1744,8 @@ pub fn gptoss_swiglu_interleaved(
 
     let n = dims[0]; // num_tokens * topk
     let device = match gate_up.device() {
-        candle_core::Device::Cuda(dev) => dev,
-        _ => candle_core::bail!("gptoss_swiglu_interleaved requires CUDA device"),
+        hanzo_ml::Device::Cuda(dev) => dev,
+        _ => hanzo_ml::bail!("gptoss_swiglu_interleaved requires CUDA device"),
     };
 
     let dtype = gate_up.dtype();
@@ -1753,8 +1753,8 @@ pub fn gptoss_swiglu_interleaved(
 
     let gate_up_storage = gate_up.storage_and_layout().0;
     let gate_up_cuda = match &*gate_up_storage {
-        candle_core::Storage::Cuda(s) => s,
-        _ => candle_core::bail!("Expected CUDA storage for gate_up"),
+        hanzo_ml::Storage::Cuda(s) => s,
+        _ => hanzo_ml::bail!("Expected CUDA storage for gate_up"),
     };
 
     let stream = device.cuda_stream().cu_stream();
@@ -1782,7 +1782,7 @@ pub fn gptoss_swiglu_interleaved(
             drop(_o_guard);
             let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
             Ok(Tensor::from((
-                candle_core::Storage::Cuda(out_storage),
+                hanzo_ml::Storage::Cuda(out_storage),
                 Shape::from(vec![n, intermediate_size]),
             )))
         }
@@ -1808,7 +1808,7 @@ pub fn gptoss_swiglu_interleaved(
             drop(_o_guard);
             let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
             Ok(Tensor::from((
-                candle_core::Storage::Cuda(out_storage),
+                hanzo_ml::Storage::Cuda(out_storage),
                 Shape::from(vec![n, intermediate_size]),
             )))
         }
@@ -1834,11 +1834,11 @@ pub fn gptoss_swiglu_interleaved(
             drop(_o_guard);
             let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
             Ok(Tensor::from((
-                candle_core::Storage::Cuda(out_storage),
+                hanzo_ml::Storage::Cuda(out_storage),
                 Shape::from(vec![n, intermediate_size]),
             )))
         }
-        _ => candle_core::bail!("gptoss_swiglu_interleaved: unsupported dtype {:?}", dtype),
+        _ => hanzo_ml::bail!("gptoss_swiglu_interleaved: unsupported dtype {:?}", dtype),
     }
 }
 
@@ -1877,8 +1877,8 @@ impl CustomOp1 for SoftmaxWithSinks {
 
         let sinks_data = self.sinks.storage_and_layout();
         let sinks_cpu = match &*sinks_data.0 {
-            candle_core::Storage::Cpu(s) => s,
-            _ => candle_core::bail!("softmax_with_sinks cpu_fwd: sinks must be on CPU"),
+            hanzo_ml::Storage::Cpu(s) => s,
+            _ => hanzo_ml::bail!("softmax_with_sinks cpu_fwd: sinks must be on CPU"),
         };
         let sinks_offset = sinks_data.1.start_offset();
 
@@ -1991,7 +1991,7 @@ impl CustomOp1 for SoftmaxWithSinks {
 
                 Ok((CpuStorage::BF16(result), out_shape))
             }
-            other => candle_core::bail!("softmax_with_sinks: unsupported dtype {:?}", other),
+            other => hanzo_ml::bail!("softmax_with_sinks: unsupported dtype {:?}", other),
         }
     }
 
@@ -2010,8 +2010,8 @@ impl CustomOp1 for SoftmaxWithSinks {
 
         let sinks_data = self.sinks.storage_and_layout();
         let sinks_cuda = match &*sinks_data.0 {
-            candle_core::Storage::Cuda(s) => s,
-            _ => candle_core::bail!("softmax_with_sinks cuda_fwd: sinks must be on CUDA"),
+            hanzo_ml::Storage::Cuda(s) => s,
+            _ => hanzo_ml::bail!("softmax_with_sinks cuda_fwd: sinks must be on CUDA"),
         };
         let sinks_offset = sinks_data.1.start_offset();
 
@@ -2100,16 +2100,16 @@ impl CustomOp1 for SoftmaxWithSinks {
                 let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
                 Ok((out_storage, out_shape))
             }
-            _ => candle_core::bail!("softmax_with_sinks: unsupported dtype {:?}", dtype),
+            _ => hanzo_ml::bail!("softmax_with_sinks: unsupported dtype {:?}", dtype),
         }
     }
 
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        storage: &candle_core::MetalStorage,
+        storage: &hanzo_ml::MetalStorage,
         layout: &Layout,
-    ) -> Result<(candle_core::MetalStorage, Shape)> {
+    ) -> Result<(hanzo_ml::MetalStorage, Shape)> {
         let dtype = storage.dtype();
         let n_elements = layout.shape().elem_count();
         let out_shape = layout.shape().clone();
@@ -2123,8 +2123,8 @@ impl CustomOp1 for SoftmaxWithSinks {
 
         let sinks_data = self.sinks.storage_and_layout();
         let sinks_metal = match &*sinks_data.0 {
-            candle_core::Storage::Metal(s) => s,
-            _ => candle_core::bail!("softmax_with_sinks metal_fwd: sinks must be on Metal"),
+            hanzo_ml::Storage::Metal(s) => s,
+            _ => hanzo_ml::bail!("softmax_with_sinks metal_fwd: sinks must be on Metal"),
         };
         let sinks_offset = sinks_data.1.start_offset() * self.sinks.dtype().size_in_bytes();
 
@@ -2143,9 +2143,9 @@ impl CustomOp1 for SoftmaxWithSinks {
             self.k_len as u32,
             total_rows,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
 
-        let newstorage = candle_core::MetalStorage::new(output, device.clone(), n_elements, dtype);
+        let newstorage = hanzo_ml::MetalStorage::new(output, device.clone(), n_elements, dtype);
         Ok((newstorage, out_shape))
     }
 }
@@ -2165,7 +2165,7 @@ pub fn softmax_with_sinks(
 
     let dims = logits.dims();
     if dims.len() != 4 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "softmax_with_sinks: expected logits to have 4 dims [b, h, q, k], got {:?}",
             dims
         );
@@ -2176,7 +2176,7 @@ pub fn softmax_with_sinks(
     let k_len = dims[3];
 
     if sinks.dims() != [num_heads] {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "softmax_with_sinks: expected sinks shape [{}], got {:?}",
             num_heads,
             sinks.dims()
@@ -2210,7 +2210,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
     }
 
     fn cpu_fwd(&self, _storage: &CpuStorage, _layout: &Layout) -> Result<(CpuStorage, Shape)> {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "flash_attn_sinks_metal: no CPU support, use softmax_with_sinks fallback"
         )
     }
@@ -2218,9 +2218,9 @@ impl CustomOp1 for FlashAttnSinksMetal {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        q_storage: &candle_core::MetalStorage,
+        q_storage: &hanzo_ml::MetalStorage,
         q_layout: &Layout,
-    ) -> Result<(candle_core::MetalStorage, Shape)> {
+    ) -> Result<(hanzo_ml::MetalStorage, Shape)> {
         let dtype = q_storage.dtype();
         let out_shape = q_layout.shape().clone();
         let (batch_size, num_heads, q_len, head_dim) = q_layout.shape().dims4()?;
@@ -2228,23 +2228,23 @@ impl CustomOp1 for FlashAttnSinksMetal {
         // Extract K storage
         let (k_s, k_l) = self.key.storage_and_layout();
         let k_metal = match &*k_s {
-            candle_core::Storage::Metal(s) => s,
-            _ => candle_core::bail!("flash_attn_sinks_metal: key must be a Metal tensor"),
+            hanzo_ml::Storage::Metal(s) => s,
+            _ => hanzo_ml::bail!("flash_attn_sinks_metal: key must be a Metal tensor"),
         };
         let (_, num_kv_heads, k_len, _) = k_l.shape().dims4()?;
 
         // Extract V storage
         let (v_s, v_l) = self.value.storage_and_layout();
         let v_metal = match &*v_s {
-            candle_core::Storage::Metal(s) => s,
-            _ => candle_core::bail!("flash_attn_sinks_metal: value must be a Metal tensor"),
+            hanzo_ml::Storage::Metal(s) => s,
+            _ => hanzo_ml::bail!("flash_attn_sinks_metal: value must be a Metal tensor"),
         };
 
         // Extract sinks storage
         let (s_s, s_l) = self.sinks.storage_and_layout();
         let sinks_metal = match &*s_s {
-            candle_core::Storage::Metal(s) => s,
-            _ => candle_core::bail!("flash_attn_sinks_metal: sinks must be a Metal tensor"),
+            hanzo_ml::Storage::Metal(s) => s,
+            _ => hanzo_ml::bail!("flash_attn_sinks_metal: sinks must be a Metal tensor"),
         };
         let sinks_offset = s_l.start_offset() * self.sinks.dtype().size_in_bytes();
 
@@ -2308,7 +2308,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
                     self.softmax_scale,
                     b,
                 )
-                .map_err(candle_core::Error::wrap)?;
+                .map_err(hanzo_ml::Error::wrap)?;
             } else {
                 // Single-pass
                 crate::metal_kernels::call_sdpa_vector_with_sinks(
@@ -2333,7 +2333,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
                     self.softmax_scale,
                     b,
                 )
-                .map_err(candle_core::Error::wrap)?;
+                .map_err(hanzo_ml::Error::wrap)?;
             }
         } else {
             // Prefill path: use flash_attn_sinks_kernel
@@ -2360,10 +2360,10 @@ impl CustomOp1 for FlashAttnSinksMetal {
                 head_dim,
                 self.window_size,
             )
-            .map_err(candle_core::Error::wrap)?;
+            .map_err(hanzo_ml::Error::wrap)?;
         }
 
-        let newstorage = candle_core::MetalStorage::new(output, device.clone(), elem_count, dtype);
+        let newstorage = hanzo_ml::MetalStorage::new(output, device.clone(), elem_count, dtype);
         Ok((newstorage, out_shape))
     }
 }
@@ -2436,15 +2436,15 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
     }
 
     fn cpu_fwd(&self, _storage: &CpuStorage, _layout: &Layout) -> Result<(CpuStorage, Shape)> {
-        candle_core::bail!("flash_attn_sinks_varlen_metal: no CPU support")
+        hanzo_ml::bail!("flash_attn_sinks_varlen_metal: no CPU support")
     }
 
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        q_storage: &candle_core::MetalStorage,
+        q_storage: &hanzo_ml::MetalStorage,
         q_layout: &Layout,
-    ) -> Result<(candle_core::MetalStorage, Shape)> {
+    ) -> Result<(hanzo_ml::MetalStorage, Shape)> {
         let dtype = q_storage.dtype();
         let out_shape = q_layout.shape().clone();
         let (batch_size, num_heads, max_q_len, head_dim) = q_layout.shape().dims4()?;
@@ -2452,31 +2452,31 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
         // Extract K storage [total_kv, num_kv_heads, D]
         let (k_s, k_l) = self.key.storage_and_layout();
         let k_metal = match &*k_s {
-            candle_core::Storage::Metal(s) => s,
-            _ => candle_core::bail!("flash_attn_sinks_varlen_metal: key must be a Metal tensor"),
+            hanzo_ml::Storage::Metal(s) => s,
+            _ => hanzo_ml::bail!("flash_attn_sinks_varlen_metal: key must be a Metal tensor"),
         };
         let (_, num_kv_heads, _) = k_l.shape().dims3()?;
 
         // Extract V storage
         let (v_s, v_l) = self.value.storage_and_layout();
         let v_metal = match &*v_s {
-            candle_core::Storage::Metal(s) => s,
-            _ => candle_core::bail!("flash_attn_sinks_varlen_metal: value must be a Metal tensor"),
+            hanzo_ml::Storage::Metal(s) => s,
+            _ => hanzo_ml::bail!("flash_attn_sinks_varlen_metal: value must be a Metal tensor"),
         };
 
         // Extract sinks storage
         let (s_s, s_l) = self.sinks.storage_and_layout();
         let sinks_metal = match &*s_s {
-            candle_core::Storage::Metal(s) => s,
-            _ => candle_core::bail!("flash_attn_sinks_varlen_metal: sinks must be a Metal tensor"),
+            hanzo_ml::Storage::Metal(s) => s,
+            _ => hanzo_ml::bail!("flash_attn_sinks_varlen_metal: sinks must be a Metal tensor"),
         };
         let sinks_offset = s_l.start_offset() * self.sinks.dtype().size_in_bytes();
 
         // Extract cu_seqlens_q storage
         let (csq_s, csq_l) = self.cu_seqlens_q.storage_and_layout();
         let csq_metal = match &*csq_s {
-            candle_core::Storage::Metal(s) => s,
-            _ => candle_core::bail!(
+            hanzo_ml::Storage::Metal(s) => s,
+            _ => hanzo_ml::bail!(
                 "flash_attn_sinks_varlen_metal: cu_seqlens_q must be a Metal tensor"
             ),
         };
@@ -2485,8 +2485,8 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
         // Extract cu_seqlens_k storage
         let (csk_s, csk_l) = self.cu_seqlens_k.storage_and_layout();
         let csk_metal = match &*csk_s {
-            candle_core::Storage::Metal(s) => s,
-            _ => candle_core::bail!(
+            hanzo_ml::Storage::Metal(s) => s,
+            _ => hanzo_ml::bail!(
                 "flash_attn_sinks_varlen_metal: cu_seqlens_k must be a Metal tensor"
             ),
         };
@@ -2531,9 +2531,9 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
             head_dim,
             self.window_size,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
 
-        let newstorage = candle_core::MetalStorage::new(output, device.clone(), elem_count, dtype);
+        let newstorage = hanzo_ml::MetalStorage::new(output, device.clone(), elem_count, dtype);
         Ok((newstorage, out_shape))
     }
 }
@@ -2621,7 +2621,7 @@ fn cpu_relu(x: f32) -> f32 {
 
 fn cpu_gelu_erf(x: f32) -> f32 {
     // gelu_erf: x * (1 + erf(x / sqrt(2))) / 2
-    x * (1.0 + candle_core::cpu::erf::erf_f32(x * std::f32::consts::FRAC_1_SQRT_2)) / 2.0
+    x * (1.0 + hanzo_ml::cpu::erf::erf_f32(x * std::f32::consts::FRAC_1_SQRT_2)) / 2.0
 }
 
 fn apply_cpu_activation(x: f32, activation: GluActivationType) -> f32 {
@@ -2706,7 +2706,7 @@ impl CustomOp2 for FusedGlu {
                     .collect();
                 CpuStorage::BF16(result)
             }
-            other => candle_core::bail!("fused_glu: unsupported dtype {:?}", other),
+            other => hanzo_ml::bail!("fused_glu: unsupported dtype {:?}", other),
         };
 
         Ok((result_storage, out_shape))
@@ -2804,18 +2804,18 @@ impl CustomOp2 for FusedGlu {
                 let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
                 Ok((out_storage, out_shape))
             }
-            _ => candle_core::bail!("fused_glu: unsupported dtype {:?}", dtype),
+            _ => hanzo_ml::bail!("fused_glu: unsupported dtype {:?}", dtype),
         }
     }
 
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        s1: &candle_core::MetalStorage,
+        s1: &hanzo_ml::MetalStorage,
         l1: &Layout,
-        s2: &candle_core::MetalStorage,
+        s2: &hanzo_ml::MetalStorage,
         l2: &Layout,
-    ) -> Result<(candle_core::MetalStorage, Shape)> {
+    ) -> Result<(hanzo_ml::MetalStorage, Shape)> {
         let activation = self.0;
         let n_elements = l1.shape().elem_count();
         let dtype = s1.dtype();
@@ -2840,9 +2840,9 @@ impl CustomOp2 for FusedGlu {
             activation as i32,
             &output,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
 
-        let newstorage = candle_core::MetalStorage::new(output, device.clone(), n_elements, dtype);
+        let newstorage = hanzo_ml::MetalStorage::new(output, device.clone(), n_elements, dtype);
         Ok((newstorage, out_shape))
     }
 }
@@ -2857,7 +2857,7 @@ pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resul
     let b = b.contiguous()?;
 
     if a.shape() != b.shape() {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fused_glu: a and b must have same shape, got {:?} vs {:?}",
             a.shape(),
             b.shape()
@@ -2883,8 +2883,8 @@ mod tests {
     #[test]
     fn test_cumsum_exclusive_forward_cpu() {
         use crate::utils::ops::CumSumOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::Cpu;
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::Cpu;
         let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
         let b = a.fast_cumsum(0).unwrap().to_vec1::<i64>().unwrap();
         assert_eq!(b, [0, 1, 3, 6]);
@@ -2893,8 +2893,8 @@ mod tests {
     #[test]
     fn test_cumsum_inclusive_forward_cpu() {
         use crate::utils::ops::CumSumOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::Cpu;
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::Cpu;
         let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
         let b = a
             .fast_cumsum_config(0, true, false)
@@ -2907,8 +2907,8 @@ mod tests {
     #[test]
     fn test_cumsum_exclusive_reverse_cpu() {
         use crate::utils::ops::CumSumOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::Cpu;
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::Cpu;
         let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
         let b = a
             .fast_cumsum_config(0, false, true)
@@ -2921,8 +2921,8 @@ mod tests {
     #[test]
     fn test_cumsum_inclusive_reverse_cpu() {
         use crate::utils::ops::CumSumOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::Cpu;
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::Cpu;
         let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
         let b = a
             .fast_cumsum_config(0, true, true)
@@ -2936,8 +2936,8 @@ mod tests {
     #[test]
     fn test_cumsum_exclusive_forward_metal() {
         use crate::utils::ops::CumSumOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::new_metal(0).unwrap();
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::new_metal(0).unwrap();
         let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
         let b = a.fast_cumsum(0).unwrap().to_vec1::<i64>().unwrap();
         assert_eq!(b, [0, 1, 3, 6]);
@@ -2947,8 +2947,8 @@ mod tests {
     #[test]
     fn test_cumsum_inclusive_forward_metal() {
         use crate::utils::ops::CumSumOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::new_metal(0).unwrap();
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::new_metal(0).unwrap();
         let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
         let b = a
             .fast_cumsum_config(0, true, false)
@@ -2962,8 +2962,8 @@ mod tests {
     #[test]
     fn test_cumsum_exclusive_reverse_metal() {
         use crate::utils::ops::CumSumOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::new_metal(0).unwrap();
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::new_metal(0).unwrap();
         let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
         let b = a
             .fast_cumsum_config(0, false, true)
@@ -2977,8 +2977,8 @@ mod tests {
     #[test]
     fn test_cumsum_inclusive_reverse_metal() {
         use crate::utils::ops::CumSumOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::new_metal(0).unwrap();
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::new_metal(0).unwrap();
         let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
         let b = a
             .fast_cumsum_config(0, true, true)
@@ -2991,8 +2991,8 @@ mod tests {
     #[test]
     fn test_nonzero_cpu() {
         use crate::utils::ops::NonZeroOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::Cpu;
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::Cpu;
         let a = Tensor::from_vec(
             vec![1f32, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0],
             &[2, 4],
@@ -3007,8 +3007,8 @@ mod tests {
     #[test]
     fn test_nonzero_cuda() {
         use crate::utils::ops::NonZeroOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::new_cuda(0).unwrap();
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::new_cuda(0).unwrap();
         let a = Tensor::from_vec(
             vec![1f32, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0],
             &[2, 4],
@@ -3022,8 +3022,8 @@ mod tests {
     #[test]
     fn test_bitwise_and_cpu() {
         use crate::utils::ops::BitWiseOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::Cpu;
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::Cpu;
         let a =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b =
@@ -3036,8 +3036,8 @@ mod tests {
     #[test]
     fn test_bitwise_and_cuda() {
         use crate::utils::ops::BitWiseOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::new_cuda(0).unwrap();
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::new_cuda(0).unwrap();
         let a =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b =
@@ -3049,8 +3049,8 @@ mod tests {
     #[test]
     fn test_bitwise_or_cpu() {
         use crate::utils::ops::BitWiseOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::Cpu;
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::Cpu;
         let a =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
@@ -3062,8 +3062,8 @@ mod tests {
     #[test]
     fn test_bitwise_or_cuda() {
         use crate::utils::ops::BitWiseOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::new_cuda(0).unwrap();
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::new_cuda(0).unwrap();
         let a =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
@@ -3074,8 +3074,8 @@ mod tests {
     #[test]
     fn test_bitwise_xor_cpu() {
         use crate::utils::ops::BitWiseOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::Cpu;
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::Cpu;
         let a =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
@@ -3087,8 +3087,8 @@ mod tests {
     #[test]
     fn test_bitwise_xor_cuda() {
         use crate::utils::ops::BitWiseOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::new_cuda(0).unwrap();
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::new_cuda(0).unwrap();
         let a =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
@@ -3099,7 +3099,7 @@ mod tests {
     #[test]
     fn test_nonzero_and() {
         use crate::utils::ops::{BitWiseOp, NonZeroOp};
-        use candle_core::{Device, Tensor};
+        use hanzo_ml::{Device, Tensor};
 
         let input1 = Tensor::from_vec(
             vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7],
@@ -3144,7 +3144,7 @@ mod tests {
     #[test]
     fn nonzero_and_cuda() {
         use crate::utils::ops::{BitWiseOp, NonZeroOp};
-        use candle_core::{Device, Tensor};
+        use hanzo_ml::{Device, Tensor};
 
         let device = Device::new_cuda(0).unwrap();
         let input1 =
@@ -3181,7 +3181,7 @@ mod tests {
     #[test]
     fn test_bitpack_8bit_cpu() {
         use crate::HqqBits;
-        use candle_core::{Device, Tensor};
+        use hanzo_ml::{Device, Tensor};
         let bits = HqqBits::Eight;
         let device = Device::Cpu;
         let wq = Tensor::from_vec(vec![257_i32, 258, 259, 260, 511, 512], (3, 2), &device).unwrap();
@@ -3196,7 +3196,7 @@ mod tests {
     #[test]
     fn test_bitpack_8bit_cuda() {
         use crate::HqqBits;
-        use candle_core::{Device, Tensor};
+        use hanzo_ml::{Device, Tensor};
         let bits = HqqBits::Eight;
         let device = Device::new_cuda(0).unwrap();
         // Use U8 tensor directly to avoid candle's to_dtype which may not have
@@ -3213,7 +3213,7 @@ mod tests {
     #[test]
     fn test_bitpack_8bit_metal() {
         use crate::HqqBits;
-        use candle_core::{Device, Tensor};
+        use hanzo_ml::{Device, Tensor};
         let bits = HqqBits::Eight;
         let device = Device::new_metal(0).unwrap();
         let wq = Tensor::from_vec(vec![257_i32, 258, 259, 260, 511, 512], (3, 2), &device).unwrap();
@@ -3227,7 +3227,7 @@ mod tests {
     #[test]
     fn test_bitpack_4bit() {
         use crate::HqqBits;
-        use candle_core::{Device, Tensor};
+        use hanzo_ml::{Device, Tensor};
         let bits = HqqBits::Four;
         let device = Device::Cpu;
         let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
@@ -3242,7 +3242,7 @@ mod tests {
     #[test]
     fn test_bitpack_4bit_cuda() {
         use crate::HqqBits;
-        use candle_core::{Device, Tensor};
+        use hanzo_ml::{Device, Tensor};
         let bits = HqqBits::Four;
         let device = Device::new_cuda(0).unwrap();
         let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
@@ -3257,7 +3257,7 @@ mod tests {
     #[test]
     fn test_bitpack_4bit_metal() {
         use crate::HqqBits;
-        use candle_core::{Device, Tensor};
+        use hanzo_ml::{Device, Tensor};
         let bits = HqqBits::Four;
         let device = Device::new_metal(0).unwrap();
         let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
@@ -3272,9 +3272,9 @@ mod tests {
     #[test]
     fn test_sort_and_argsort_vector_metal() {
         use crate::utils::ops::SortOp;
-        use candle_core::Tensor;
+        use hanzo_ml::Tensor;
 
-        let device = candle_core::Device::new_metal(0).unwrap();
+        let device = hanzo_ml::Device::new_metal(0).unwrap();
         let a = Tensor::from_vec(vec![3i32, 1, 4, 2], &[4], &device).unwrap();
 
         // sort (ascending)
@@ -3290,9 +3290,9 @@ mod tests {
     #[test]
     fn test_sort_and_argsort_matrix_axis1_metal() {
         use crate::utils::ops::SortOp;
-        use candle_core::Tensor;
+        use hanzo_ml::Tensor;
 
-        let device = candle_core::Device::new_metal(0).unwrap();
+        let device = hanzo_ml::Device::new_metal(0).unwrap();
         // 2 × 3 matrix:
         // [[3, 1, 2],
         //  [0, 4, 5]]
@@ -3312,11 +3312,11 @@ mod tests {
     #[test]
     fn test_sort_and_argsort_vector_2048_metal() {
         use crate::utils::ops::SortOp;
-        use candle_core::Tensor;
+        use hanzo_ml::Tensor;
 
         const N: usize = 4096;
 
-        let device = candle_core::Device::new_metal(0).expect("Metal device");
+        let device = hanzo_ml::Device::new_metal(0).expect("Metal device");
 
         // Create a descending vector [4095, 4094, …, 0]
         let vals: Vec<i32> = (0..N as i32).rev().collect();
@@ -3339,10 +3339,10 @@ mod tests {
     #[test]
     fn test_fused_glu_metal_silu_f32() {
         use super::{fused_glu, GluActivationType};
-        use candle_core::Tensor;
+        use hanzo_ml::Tensor;
 
-        let cpu = candle_core::Device::Cpu;
-        let metal = candle_core::Device::new_metal(0).unwrap();
+        let cpu = hanzo_ml::Device::Cpu;
+        let metal = hanzo_ml::Device::new_metal(0).unwrap();
 
         let a_data: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 64.0).collect();
         let b_data: Vec<f32> = (0..256).map(|i| (i as f32 * 0.7 - 90.0) / 50.0).collect();
@@ -3378,10 +3378,10 @@ mod tests {
     #[test]
     fn test_fused_glu_metal_silu_f16() {
         use super::{fused_glu, GluActivationType};
-        use candle_core::{DType, Tensor};
+        use hanzo_ml::{DType, Tensor};
 
-        let cpu = candle_core::Device::Cpu;
-        let metal = candle_core::Device::new_metal(0).unwrap();
+        let cpu = hanzo_ml::Device::Cpu;
+        let metal = hanzo_ml::Device::new_metal(0).unwrap();
 
         let a_data: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 64.0).collect();
         let b_data: Vec<f32> = (0..256).map(|i| (i as f32 * 0.7 - 90.0) / 50.0).collect();
@@ -3431,10 +3431,10 @@ mod tests {
     #[test]
     fn test_fused_glu_metal_all_activations() {
         use super::{fused_glu, GluActivationType};
-        use candle_core::Tensor;
+        use hanzo_ml::Tensor;
 
-        let cpu = candle_core::Device::Cpu;
-        let metal = candle_core::Device::new_metal(0).unwrap();
+        let cpu = hanzo_ml::Device::Cpu;
+        let metal = hanzo_ml::Device::new_metal(0).unwrap();
 
         let a_data: Vec<f32> = (0..128).map(|i| (i as f32 - 64.0) / 32.0).collect();
         let b_data: Vec<f32> = (0..128).map(|i| (i as f32 * 0.5 - 32.0) / 20.0).collect();
@@ -3477,9 +3477,9 @@ mod tests {
     #[test]
     fn test_fused_glu_matches_candle_fallback_bf16() {
         use super::{fused_glu, GluActivationType};
-        use candle_core::{DType, Tensor};
+        use hanzo_ml::{DType, Tensor};
 
-        let metal = candle_core::Device::new_metal(0).unwrap();
+        let metal = hanzo_ml::Device::new_metal(0).unwrap();
 
         // Use realistic-sized data matching model dimensions
         let n = 10240;
@@ -3543,10 +3543,10 @@ mod tests {
     #[test]
     fn test_fused_glu_cuda_silu_f32() {
         use super::{fused_glu, GluActivationType};
-        use candle_core::Tensor;
+        use hanzo_ml::Tensor;
 
-        let cpu = candle_core::Device::Cpu;
-        let cuda = candle_core::Device::new_cuda(0).unwrap();
+        let cpu = hanzo_ml::Device::Cpu;
+        let cuda = hanzo_ml::Device::new_cuda(0).unwrap();
 
         let a_data: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 64.0).collect();
         let b_data: Vec<f32> = (0..256).map(|i| (i as f32 * 0.7 - 90.0) / 50.0).collect();
@@ -3582,10 +3582,10 @@ mod tests {
     #[test]
     fn test_fused_glu_cuda_silu_f16() {
         use super::{fused_glu, GluActivationType};
-        use candle_core::{DType, Tensor};
+        use hanzo_ml::{DType, Tensor};
 
-        let cpu = candle_core::Device::Cpu;
-        let cuda = candle_core::Device::new_cuda(0).unwrap();
+        let cpu = hanzo_ml::Device::Cpu;
+        let cuda = hanzo_ml::Device::new_cuda(0).unwrap();
 
         let a_data: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 64.0).collect();
         let b_data: Vec<f32> = (0..256).map(|i| (i as f32 * 0.7 - 90.0) / 50.0).collect();
@@ -3635,10 +3635,10 @@ mod tests {
     #[test]
     fn test_fused_glu_cuda_all_activations() {
         use super::{fused_glu, GluActivationType};
-        use candle_core::Tensor;
+        use hanzo_ml::Tensor;
 
-        let cpu = candle_core::Device::Cpu;
-        let cuda = candle_core::Device::new_cuda(0).unwrap();
+        let cpu = hanzo_ml::Device::Cpu;
+        let cuda = hanzo_ml::Device::new_cuda(0).unwrap();
 
         let a_data: Vec<f32> = (0..128).map(|i| (i as f32 - 64.0) / 32.0).collect();
         let b_data: Vec<f32> = (0..128).map(|i| (i as f32 * 0.5 - 32.0) / 20.0).collect();
@@ -3679,9 +3679,9 @@ mod tests {
     #[test]
     fn test_fused_glu_matches_candle_fallback_bf16_cuda() {
         use super::{fused_glu, GluActivationType};
-        use candle_core::{DType, Tensor};
+        use hanzo_ml::{DType, Tensor};
 
-        let cuda = candle_core::Device::new_cuda(0).unwrap();
+        let cuda = hanzo_ml::Device::new_cuda(0).unwrap();
 
         let n = 10240;
         let a_data: Vec<f32> = (0..n).map(|i| (i as f32 - 5120.0) / 2560.0).collect();

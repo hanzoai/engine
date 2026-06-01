@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{bail, DType, Module, Result, Tensor, D};
-use candle_nn::{Conv1d, Conv1dConfig, Conv2d, Conv2dConfig, ModuleT};
+use hanzo_ml::{bail, DType, Module, Result, Tensor, D};
+use hanzo_nn::{Conv1d, Conv1dConfig, Conv2d, Conv2dConfig, ModuleT};
 use hanzo_quant::{Convolution, QuantMethod, ShardedVarBuilder};
 use std::sync::Arc;
 
@@ -801,7 +801,7 @@ impl Gemma3nAudioAttention {
 
         // For the actual attention computation after logits are computed, we can still optimize
         // by using the fused softmax and matmul operations
-        let probabilities = candle_nn::ops::softmax_last_dim(&logits.to_dtype(DType::F32)?)?
+        let probabilities = hanzo_nn::ops::softmax_last_dim(&logits.to_dtype(DType::F32)?)?
             .to_dtype(value_blocks.dtype())?;
 
         // Compute context vectors
@@ -1128,7 +1128,7 @@ impl Gemma3nAudioConformerFeedForward {
         let residual = x;
         let x = self.pre_layer_norm.forward(x)?;
         let x = self.ffw_layer_1.forward(&x)?;
-        let x = candle_nn::ops::silu(&x)?;
+        let x = hanzo_nn::ops::silu(&x)?;
         let x = self.ffw_layer_2.forward(&x)?;
         let x = self.post_layer_norm.forward(&x)?;
 
@@ -1206,7 +1206,7 @@ impl Gemma3nAudioConformerLightConv1d {
         let audio_encodings = self.linear_start.forward(&audio_encodings)?;
         // Implement GLU manually: split tensor in half and apply gating
         let chunks = audio_encodings.chunk(2, D::Minus1)?;
-        let audio_encodings = chunks[0].broadcast_mul(&candle_nn::ops::sigmoid(&chunks[1])?)?;
+        let audio_encodings = chunks[0].broadcast_mul(&hanzo_nn::ops::sigmoid(&chunks[1])?)?;
 
         // Permute for Conv1d: [B, T, D] -> [B, D, T]
         let audio_encodings_transposed = audio_encodings.transpose(D::Minus1, D::Minus2)?;
@@ -1225,7 +1225,7 @@ impl Gemma3nAudioConformerLightConv1d {
         let audio_encodings = audio_encodings_conv.transpose(D::Minus2, D::Minus1)?;
 
         let audio_encodings = self.conv_norm.forward(&audio_encodings)?;
-        let audio_encodings = candle_nn::ops::silu(&audio_encodings)?;
+        let audio_encodings = hanzo_nn::ops::silu(&audio_encodings)?;
         let audio_encodings = self.linear_end.forward(&audio_encodings)?;
 
         audio_encodings_residual.broadcast_add(&audio_encodings)

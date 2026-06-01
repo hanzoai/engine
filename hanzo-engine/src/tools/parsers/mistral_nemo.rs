@@ -27,7 +27,7 @@ impl ToolFormatParser for MistralNemoParser {
         )
     }
 
-    fn parse(&self, message: &str) -> candle_core::Result<Option<String>> {
+    fn parse(&self, message: &str) -> hanzo_ml::Result<Option<String>> {
         if let Some(inner) = message
             .strip_prefix("[TOOL_CALLS][")
             .and_then(|s| s.strip_suffix("]"))

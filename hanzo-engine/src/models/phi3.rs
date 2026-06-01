@@ -3,7 +3,7 @@
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{DType, Device, Module, Result, Tensor, D};
+use hanzo_ml::{DType, Device, Module, Result, Tensor, D};
 use hanzo_quant::{QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder};
 use std::{collections::HashMap, sync::Arc};
 
@@ -393,7 +393,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: hanzo_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -483,7 +483,7 @@ impl Model {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(
                     embed_tokens.embeddings(),
                     normal_loading_metadata.loading_isq,
@@ -617,7 +617,7 @@ impl IsqModel for Model {
         uvb.to_safetensors()
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         // NOTE: dependant on the exact implementation in get_layers!
         let mut names = Vec::new();
         // lm_head

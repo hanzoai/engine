@@ -1,4 +1,4 @@
-use candle_core::{DType, Result, Tensor};
+use hanzo_ml::{DType, Result, Tensor};
 
 use crate::scalar_fp8::ops::fp8_to_dtype;
 

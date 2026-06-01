@@ -1,8 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::LayerNorm;
+use hanzo_ml::{Device, IndexOp, Module, Result, Tensor, D};
+use hanzo_nn::LayerNorm;
 use hanzo_quant::{
     ColumnParallelLayer, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer,
     RowParallelLayer, ShardedVarBuilder,
@@ -313,7 +313,7 @@ impl Mlp {
 }
 
 struct MoeMlp {
-    gate: candle_nn::Linear,
+    gate: hanzo_nn::Linear,
     experts: Vec<Mlp>,
     router_jitter_noise: f64,
     num_experts: usize,
@@ -361,7 +361,7 @@ impl MoeMlp {
         let masked_gates = masked_fill(scores, &mask_logits_threshold, f64::NEG_INFINITY)?;
 
         // Compute scores
-        let masked_gates = candle_nn::ops::softmax_last_dim(&masked_gates)?;
+        let masked_gates = hanzo_nn::ops::softmax_last_dim(&masked_gates)?;
         let multiplier = masked_gates.gather(&selected_experts, D::Minus1)?;
 
         // Mask out first expert
@@ -385,7 +385,7 @@ impl MoeMlp {
         // Apply mask
         let masked_gates_top2 =
             masked_fill(&masked_scores, &mask_logits_threshold, f64::NEG_INFINITY)?;
-        let masked_gates_top2 = candle_nn::ops::softmax_last_dim(&masked_gates_top2)?;
+        let masked_gates_top2 = hanzo_nn::ops::softmax_last_dim(&masked_gates_top2)?;
         let multiplier_top2 = masked_gates_top2.gather(&selected_experts_top2, D::Minus1)?;
 
         let multiplier = Tensor::cat(&[multiplier, multiplier_top2], D::Minus1)?;
@@ -416,7 +416,7 @@ impl MoeMlp {
         // One hot encode the selected experts to create an expert mask
         // this will be used to easily index which expert to activate
         let experts_mask =
-            candle_nn::encoding::one_hot(selected_experts, self.num_experts, 1u8, 0u8)?
+            hanzo_nn::encoding::one_hot(selected_experts, self.num_experts, 1u8, 0u8)?
                 .permute((2, 1, 0))?;
 
         // Loop over all avail experts in the model and perform the computation on each expert
@@ -547,7 +547,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: hanzo_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: LayerNorm,
     lm_head: Arc<dyn QuantMethod>,

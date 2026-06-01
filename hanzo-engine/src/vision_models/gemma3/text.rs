@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Device, Module, Result, Tensor};
+use hanzo_ml::{Device, Module, Result, Tensor};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -511,7 +511,7 @@ impl TextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(
                     embed_tokens.embeddings(),
                     normal_loading_metadata.loading_isq,
@@ -752,7 +752,7 @@ impl TextModel {
         // is_image: (seq_len,) boolean - true where token is an image token
         let is_image = input_ids_1d
             .eq(image_token_index as f64)?
-            .to_dtype(candle_core::DType::U32)?;
+            .to_dtype(hanzo_ml::DType::U32)?;
 
         // Compute image group IDs via contiguous block detection
         // is_prev_image: shift right by 1, pad left with 0
@@ -796,7 +796,7 @@ impl TextModel {
         // Where override is 1, set mask to 0.0 (attend); otherwise keep original causal mask.
         // We use where_cond instead of multiplication to avoid NaN from -inf * 0.
         let zero = Tensor::zeros((seq_len, total_len), dtype, device)?;
-        let override_bool = override_mask.to_dtype(candle_core::DType::U8)?;
+        let override_bool = override_mask.to_dtype(hanzo_ml::DType::U8)?;
         override_bool.where_cond(&zero, causal_mask)
     }
 }
@@ -859,7 +859,7 @@ impl IsqModel for TextModel {
         uvb.to_safetensors()
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         // NOTE: dependant on the exact implementation in get_layers!
         let mut names = Vec::new();
         // lm_head
@@ -890,7 +890,7 @@ impl MultimodalModel for TextModel {
         _model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
         _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         _flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         unreachable!()
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {

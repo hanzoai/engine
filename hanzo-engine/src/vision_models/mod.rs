@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use candle_core::Tensor;
+use hanzo_ml::Tensor;
 
 pub(crate) mod clip;
 pub(crate) mod conformer;

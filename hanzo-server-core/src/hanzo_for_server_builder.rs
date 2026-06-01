@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use candle_core::Device;
+use hanzo_ml::Device;
 use hanzo_engine::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
     parse_isq_value, AutoDeviceMapParams, DefaultSchedulerMethod, DeviceLayerMapMetadata,
@@ -83,7 +83,7 @@ pub mod defaults {
 
     use hanzo_engine::PagedCacheType;
 
-    pub const DEVICE: Option<candle_core::Device> = None;
+    pub const DEVICE: Option<hanzo_ml::Device> = None;
     pub const SEED: Option<u64> = None;
     pub const LOG: Option<String> = None;
     pub const MODEL: Option<hanzo_engine::ModelSelected> = None;
@@ -1091,7 +1091,7 @@ impl HanzoForServerBuilder {
 
 // TODO: replace with best device?
 /// Initializes the device to be used for computation, optionally forcing CPU usage and setting a seed.
-fn init_device(force_cpu: bool, seed: Option<u64>) -> Result<candle_core::Device> {
+fn init_device(force_cpu: bool, seed: Option<u64>) -> Result<hanzo_ml::Device> {
     #[cfg(feature = "vulkan")]
     let device = if force_cpu {
         Device::Cpu
@@ -1173,10 +1173,10 @@ fn init_mapper(
 fn hanzo_instance_info(loader: &dyn Loader) {
     debug!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
-        candle_core::utils::with_avx(),
-        candle_core::utils::with_neon(),
-        candle_core::utils::with_simd128(),
-        candle_core::utils::with_f16c()
+        hanzo_ml::utils::with_avx(),
+        hanzo_ml::utils::with_neon(),
+        hanzo_ml::utils::with_simd128(),
+        hanzo_ml::utils::with_f16c()
     );
 
     debug!("Sampling method: penalties -> temperature -> topk -> topp -> minp -> multinomial");

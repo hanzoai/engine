@@ -2,8 +2,8 @@
 
 #![allow(unused_variables, unused_imports, dead_code)]
 
-use candle_core::{Device, DeviceLocation, Result, Tensor};
-use candle_nn::Activation as CandleActivation;
+use hanzo_ml::{Device, DeviceLocation, Result, Tensor};
+use hanzo_nn::Activation as CandleActivation;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, Once};
 
@@ -169,13 +169,13 @@ impl CublasLtWrapper {
             )?;
 
             if Some(CandleActivation::Swiglu) == act {
-                result = candle_nn::ops::swiglu(&result)?;
+                result = hanzo_nn::ops::swiglu(&result)?;
             }
             Ok(result)
         }
         #[cfg(not(feature = "cuda"))]
         {
-            candle_core::bail!("`cuda` feature is not enabled")
+            hanzo_ml::bail!("`cuda` feature is not enabled")
         }
     }
 
@@ -222,13 +222,13 @@ impl CublasLtWrapper {
             )?;
 
             if Some(CandleActivation::Swiglu) == act {
-                result = candle_nn::ops::swiglu(&result)?;
+                result = hanzo_nn::ops::swiglu(&result)?;
             }
             Ok(result)
         }
         #[cfg(not(feature = "cuda"))]
         {
-            candle_core::bail!("`cuda` feature is not enabled")
+            hanzo_ml::bail!("`cuda` feature is not enabled")
         }
     }
 }

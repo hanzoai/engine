@@ -14,7 +14,7 @@ use crate::{
     utils::progress::NiceProgressBar,
 };
 /// Mistral LLM, https://github.com/mistralai/mistral-src
-use candle_core::{DType, Device, Module, Result, Tensor};
+use hanzo_ml::{DType, Device, Module, Result, Tensor};
 use hanzo_quant::{QuantMethod, ShardedVarBuilder};
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
@@ -391,7 +391,7 @@ impl DecoderLayer {
 }
 
 pub struct XLoraModel {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: hanzo_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -525,7 +525,7 @@ impl XLoraModel {
         )?;
         if xlora_config.is_some() && lm_head.is_lora() {
             // This is why we can pass dummy values (..., None, 1.0, None)?
-            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+            hanzo_ml::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
         }
         Ok(Self {
             embed_tokens,

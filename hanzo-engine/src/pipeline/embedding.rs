@@ -38,8 +38,8 @@ use crate::{
 };
 use anyhow::Context;
 use anyhow::Result;
-use candle_core::{Device, Tensor};
-use candle_nn::{Linear, Module};
+use hanzo_ml::{Device, Tensor};
+use hanzo_nn::{Linear, Module};
 use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use hanzo_quant::log::once_log_info;
@@ -257,9 +257,9 @@ impl Loader for EmbeddingLoader {
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
-            vec![candle_core::Device::new_cuda_with_stream(worker_rank + 1)?]
+            vec![hanzo_ml::Device::new_cuda_with_stream(worker_rank + 1)?]
         } else if use_nccl || use_ring() {
-            vec![candle_core::Device::new_cuda_with_stream(0)?]
+            vec![hanzo_ml::Device::new_cuda_with_stream(0)?]
         } else {
             device_map::get_all_similar_devices(device)?
         };
@@ -290,7 +290,7 @@ impl Loader for EmbeddingLoader {
                 if let Some(serialized) = &*self.from_uqff.read().unwrap() {
                     let weight_pack_factor = {
                         let ser_artifacts = unsafe {
-                            candle_core::safetensors::MmapedSafetensors::multi(serialized)?
+                            hanzo_ml::safetensors::MmapedSafetensors::multi(serialized)?
                         };
                         let mut total_pack_factors = 0;
                         let total_tensors = ser_artifacts.tensors().len();
@@ -778,7 +778,7 @@ impl Pipeline for EmbeddingPipeline {
         &mut self,
         inputs: Box<dyn Any>,
         _return_raw_logits: bool,
-    ) -> candle_core::Result<ForwardInputsResult> {
+    ) -> hanzo_ml::Result<ForwardInputsResult> {
         let ModelInputs {
             input_ids,
             flash_meta,
@@ -798,7 +798,7 @@ impl Pipeline for EmbeddingPipeline {
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    ) -> Result<(), candle_core::Error> {
+    ) -> Result<(), hanzo_ml::Error> {
         sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {

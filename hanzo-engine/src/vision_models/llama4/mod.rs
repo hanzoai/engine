@@ -4,8 +4,8 @@ mod text;
 
 use std::sync::{Arc, Mutex};
 
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Linear, Module};
+use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_nn::{Linear, Module};
 use hanzo_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use text::TextModel;
 use vision::Llama4VisionModel;
@@ -200,7 +200,7 @@ impl NormalModel for Llama4Model {
         _position_ids: Vec<usize>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         self.forward(
             input_ids,
             None,
@@ -257,7 +257,7 @@ impl MultimodalModel for Llama4Model {
         model_specific_args: Box<dyn std::any::Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         let Llama4ModelSpecificArgs { image_hashes } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Llama4ModelSpecificArgs`");

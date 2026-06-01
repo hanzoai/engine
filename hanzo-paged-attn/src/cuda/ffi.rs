@@ -1,6 +1,6 @@
 use core::ffi::{c_int, c_long, c_uint, c_void};
 
-use candle_core::cuda::cudarc::driver::sys::CUstream;
+use hanzo_ml::cuda::cudarc::driver::sys::CUstream;
 
 extern "C" {
     pub fn reshape_and_cache(
