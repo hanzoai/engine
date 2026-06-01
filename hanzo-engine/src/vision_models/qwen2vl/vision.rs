@@ -1,8 +1,8 @@
 use crate::attention::AttentionMask;
 use std::sync::Arc;
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{LayerNorm, Linear, Module};
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
+use hanzo_nn::{LayerNorm, Linear, Module};
 use hanzo_quant::{ColumnParallelLayer, QuantMethod, ShardedVarBuilder};
 
 use crate::{
@@ -24,7 +24,7 @@ struct PatchEmbed {
 impl PatchEmbed {
     fn new(cfg: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         if cfg.temporal_patch_size != 2 {
-            candle_core::bail!("Only support temporal patch size of 2");
+            hanzo_ml::bail!("Only support temporal patch size of 2");
         }
         Ok(Self {
             proj: Conv3dNoBias::new(
@@ -150,7 +150,7 @@ impl VisionAttention {
                 AttentionMask::Custom(m) => att.broadcast_add(m)?,
                 _ => att,
             };
-            att = candle_nn::ops::softmax_last_dim(&att)?;
+            att = hanzo_nn::ops::softmax_last_dim(&att)?;
             MatMul
                 .matmul(&att, &v)?
                 .transpose(0, 1)?

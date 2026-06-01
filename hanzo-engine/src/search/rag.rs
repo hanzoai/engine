@@ -4,7 +4,7 @@ use std::{cmp::Ordering, sync::Arc};
 
 use anyhow::{Context, Result};
 use bm25::{Embedder as Bm25Embedder, EmbedderBuilder, Language, Scorer};
-use candle_core::{DType, Device, Error as E};
+use hanzo_ml::{DType, Device, Error as E};
 use hanzo_quant::log::once_log_info;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex as TokioMutex;

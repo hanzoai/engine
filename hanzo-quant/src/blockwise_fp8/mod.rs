@@ -1,7 +1,7 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
-use candle_nn::Linear;
+use hanzo_ml::{quantized::GgmlDType, DType, Device, Result, Tensor};
+use hanzo_nn::Linear;
 
 mod ops;
 pub use ops::{fp8_blockwise_dequantize, fp8_blockwise_quantize};
@@ -30,7 +30,7 @@ pub struct BlockwiseFP8Linear {
 }
 
 impl QuantMethod for BlockwiseFP8Linear {
-    fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
+    fn new(method: QuantMethodConfig) -> hanzo_ml::Result<Self>
     where
         Self: Sized,
     {
@@ -60,7 +60,7 @@ impl QuantMethod for BlockwiseFP8Linear {
             }),
         }
     }
-    fn dequantize_w(&self) -> Result<candle_core::Tensor> {
+    fn dequantize_w(&self) -> Result<hanzo_ml::Tensor> {
         ops::fp8_blockwise_dequantize(
             &self.weight,
             &self.weight_scale_inv,
@@ -73,7 +73,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         // Try to use native FP8 GEMM kernel on CUDA
         #[cfg(feature = "cuda")]
         {
-            if matches!(x.device(), candle_core::Device::Cuda(_))
+            if matches!(x.device(), hanzo_ml::Device::Cuda(_))
                 && ffi::HAVE_BLOCKWISE_GEMM_KERNELS
             {
                 // Handle batched inputs by flattening to 2D
@@ -131,7 +131,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         // Try to use native FP8 indexed MoE GEMM kernel on CUDA
         #[cfg(feature = "cuda")]
         {
-            if matches!(x.device(), candle_core::Device::Cuda(_))
+            if matches!(x.device(), hanzo_ml::Device::Cuda(_))
                 && ffi::HAVE_BLOCKWISE_GEMM_KERNELS
             {
                 // Use native FP8 indexed MoE GEMM kernel (expects U32 indices)
@@ -206,10 +206,10 @@ impl QuantMethod for BlockwiseFP8Linear {
     }
 
     fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("BlockwiseFP8Linear does not support add_delta_w")
+        hanzo_ml::bail!("BlockwiseFP8Linear does not support add_delta_w")
     }
 
-    fn dtype_and_device(&self) -> (DType, candle_core::Device) {
+    fn dtype_and_device(&self) -> (DType, hanzo_ml::Device) {
         (DType::F8E4M3, self.weight.device().clone())
     }
 
@@ -233,7 +233,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
                     // TODO just warn?
-                    candle_core::bail!("HQQ does not support imatrix.");
+                    hanzo_ml::bail!("HQQ does not support imatrix.");
                 }
 
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -267,7 +267,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
                     // TODO just warn?
-                    candle_core::bail!("AFQ does not support imatrix.");
+                    hanzo_ml::bail!("AFQ does not support imatrix.");
                 }
 
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -319,7 +319,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
                     // TODO just warn?
-                    candle_core::bail!("F8E4M3 does not support imatrix.");
+                    hanzo_ml::bail!("F8E4M3 does not support imatrix.");
                 }
 
                 let w = weight.to_device(&device)?;
@@ -336,7 +336,7 @@ impl QuantMethod for BlockwiseFP8Linear {
             Some(IsqType::F8Q8) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
-                    candle_core::bail!("F8Q8 does not support imatrix.");
+                    hanzo_ml::bail!("F8Q8 does not support imatrix.");
                 }
 
                 let w = weight.to_device(&device)?;
@@ -350,7 +350,7 @@ impl QuantMethod for BlockwiseFP8Linear {
             Some(IsqType::MXFP4) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
-                    candle_core::bail!("MXFP4 does not support imatrix.");
+                    hanzo_ml::bail!("MXFP4 does not support imatrix.");
                 }
 
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -437,7 +437,7 @@ pub fn blockwise_fp8_linear_b(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let QuantizedConfig::Fp8 { weight_block_size } = config else {
-        candle_core::bail!("Unexpected quantization config.")
+        hanzo_ml::bail!("Unexpected quantization config.")
     };
 
     // Handle the case where we actually have an unquantized layer
@@ -451,10 +451,10 @@ pub fn blockwise_fp8_linear_b(
 
     // Blockwise FP8 requires weight_block_size to be set
     let Some(weight_block_size) = weight_block_size else {
-        candle_core::bail!("Blockwise FP8 requires weight_block_size to be set. Use per-tensor FP8 for models without block sizes.")
+        hanzo_ml::bail!("Blockwise FP8 requires weight_block_size to be set. Use per-tensor FP8 for models without block sizes.")
     };
     if weight_block_size.len() != 2 {
-        candle_core::bail!("Expected weight_block_size to have length 2, got {weight_block_size:?}")
+        hanzo_ml::bail!("Expected weight_block_size to have length 2, got {weight_block_size:?}")
     }
     let weight = vb.get_with_hints_dtype((out_dim, in_dim), "weight", hints, DType::F8E4M3)?;
     let weight_scale_inv = vb.get_with_hints_dtype(

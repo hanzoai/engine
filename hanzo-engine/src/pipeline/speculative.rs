@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::Result as anyhowResult;
-use candle_core::{Device, IndexOp, Result, Tensor};
+use hanzo_ml::{Device, IndexOp, Result, Tensor};
 use hanzo_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
@@ -227,7 +227,7 @@ impl SpeculativePipeline {
         if get_mut_arcmutex!(target)
             .tokenizer()
             .as_ref()
-            .ok_or(candle_core::Error::Msg(
+            .ok_or(hanzo_ml::Error::Msg(
                 "`SpeculativePipeline::new` requires the target pipeline to have a token trie"
                     .to_string(),
             ))?
@@ -235,16 +235,16 @@ impl SpeculativePipeline {
             != get_mut_arcmutex!(draft)
                 .tokenizer()
                 .as_ref()
-                .ok_or(candle_core::Error::Msg(
+                .ok_or(hanzo_ml::Error::Msg(
                     "`SpeculativePipeline::new` requires the draft pipeline to have a token trie"
                         .to_string(),
                 ))?
                 .get_vocab(true)
         {
-            candle_core::bail!("Target and draft models' tokenizer vocab do not match. This is required for speculative decoding.");
+            hanzo_ml::bail!("Target and draft models' tokenizer vocab do not match. This is required for speculative decoding.");
         }
         if get_mut_arcmutex!(target).category() != get_mut_arcmutex!(draft).category() {
-            candle_core::bail!("Target and draft models' category do not match. This is required for speculative decoding.");
+            hanzo_ml::bail!("Target and draft models' category do not match. This is required for speculative decoding.");
         }
         if get_mut_arcmutex!(target)
             .get_processor()
@@ -255,7 +255,7 @@ impl SpeculativePipeline {
                 .inputs_processor()
                 .get_type()
         {
-            candle_core::bail!("Target and draft models' input processors do not match. This is required for speculative decoding.");
+            hanzo_ml::bail!("Target and draft models' input processors do not match. This is required for speculative decoding.");
         }
         let metadata = get_mut_arcmutex!(target).get_metadata().clone();
         let category = get_mut_arcmutex!(target).category();
@@ -506,7 +506,7 @@ impl Pipeline for SpeculativePipeline {
         }
 
         if gamma == 0 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Speculative decoding could not reserve paged-attention slots for sequence {seq_id}."
             );
         }
@@ -540,7 +540,7 @@ impl Pipeline for SpeculativePipeline {
                 .get(seq.id())
                 .copied()
                 .ok_or_else(|| {
-                    candle_core::Error::Msg(format!(
+                    hanzo_ml::Error::Msg(format!(
                         "Hybrid draft is missing recurrent slot for sequence {}",
                         seq.id()
                     ))
@@ -585,7 +585,7 @@ impl Pipeline for SpeculativePipeline {
             #[allow(irrefutable_let_patterns)]
             let ForwardInputsResult::CausalGeneration { logits } = logits
             else {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Speculative decoding requires `CausalGeneration` forward results"
                 );
             };
@@ -639,7 +639,7 @@ impl Pipeline for SpeculativePipeline {
         // Snapshot target recurrent state before target forward
         let target_recurrent_snapshot: Option<Vec<RecurrentStateSnapshot>> = if target_is_hybrid {
             let slot_idx = seq.recurrent_state_idx().ok_or_else(|| {
-                candle_core::Error::Msg(format!(
+                hanzo_ml::Error::Msg(format!(
                     "Hybrid target is missing recurrent slot for sequence {}",
                     seq.id()
                 ))
@@ -682,7 +682,7 @@ impl Pipeline for SpeculativePipeline {
         #[allow(irrefutable_let_patterns)]
         let ForwardInputsResult::CausalGeneration { logits } = logits
         else {
-            candle_core::bail!("Speculative decoding requires `CausalGeneration` forward results");
+            hanzo_ml::bail!("Speculative decoding requires `CausalGeneration` forward results");
         };
 
         // Reset the prefill tokens
@@ -714,7 +714,7 @@ impl Pipeline for SpeculativePipeline {
                     .get(seq.id())
                     .copied()
                     .ok_or_else(|| {
-                        candle_core::Error::Msg(format!(
+                        hanzo_ml::Error::Msg(format!(
                             "Hybrid draft is missing recurrent slot for sequence {}",
                             seq.id()
                         ))
@@ -773,7 +773,7 @@ impl Pipeline for SpeculativePipeline {
                     for cache in &mut *normal.lock().unwrap().0 {
                         cache
                             .set_len(cache.current_seq_len() - n_not_accepted)
-                            .map_err(|_| candle_core::Error::msg("KV cache set_len failed."))?;
+                            .map_err(|_| hanzo_ml::Error::msg("KV cache set_len failed."))?;
                     }
                 }
                 EitherCache::Hybrid(_) => unreachable!(),
@@ -788,7 +788,7 @@ impl Pipeline for SpeculativePipeline {
                     }
                 }
                 EitherCache::Normal(_) | EitherCache::Hybrid(_) => {
-                    candle_core::bail!(
+                    hanzo_ml::bail!(
                         "Speculative decoding X-LoRA path requires full cache backend."
                     )
                 }
@@ -797,7 +797,7 @@ impl Pipeline for SpeculativePipeline {
         if target_is_hybrid {
             if n_not_accepted > 0 {
                 let slot_idx = seq.recurrent_state_idx().ok_or_else(|| {
-                    candle_core::Error::Msg(format!(
+                    hanzo_ml::Error::Msg(format!(
                         "Hybrid target is missing recurrent slot for sequence {}",
                         seq.id()
                     ))
@@ -856,7 +856,7 @@ impl Pipeline for SpeculativePipeline {
                     for cache in &mut *normal.lock().unwrap().0 {
                         cache
                             .set_len(cache.current_seq_len() - n_not_accepted)
-                            .map_err(|_| candle_core::Error::msg("KV cache set_len failed."))?;
+                            .map_err(|_| hanzo_ml::Error::msg("KV cache set_len failed."))?;
                     }
                 }
                 EitherCache::Hybrid(_) => unreachable!(),
@@ -871,7 +871,7 @@ impl Pipeline for SpeculativePipeline {
                     }
                 }
                 EitherCache::Normal(_) | EitherCache::Hybrid(_) => {
-                    candle_core::bail!(
+                    hanzo_ml::bail!(
                         "Speculative decoding X-LoRA path requires full cache backend."
                     )
                 }

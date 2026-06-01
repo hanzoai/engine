@@ -4,7 +4,7 @@ use crate::layers_masker::CausalMaskConfig;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use candle_core::{DType, Module, Result, Tensor};
+use hanzo_ml::{DType, Module, Result, Tensor};
 use hanzo_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
@@ -206,8 +206,8 @@ impl EncoderLayer {
 /// - SwiGLU FFN
 /// - RMSNorm
 pub struct VoxtralEncoder {
-    pub(super) conv1: candle_nn::Conv1d,
-    pub(super) conv2: candle_nn::Conv1d,
+    pub(super) conv1: hanzo_nn::Conv1d,
+    pub(super) conv2: hanzo_nn::Conv1d,
     pub(super) layers: Vec<EncoderLayer>,
     pub(super) norm: RmsNorm,
     cache: Arc<Mutex<NormalCache>>,
@@ -229,24 +229,24 @@ impl VoxtralEncoder {
         // Conv1d weights stored as F32 (CUDA Conv1d does not support BF16).
         // Causal padding: left-pad by (kernel_size - 1) * dilation, padding=0 in Conv1d.
         let vb_c1 = vb.pp("conv_layers").pp("0").pp("conv");
-        let conv1 = candle_nn::Conv1d::new(
+        let conv1 = hanzo_nn::Conv1d::new(
             vb_c1
                 .get((cfg.dim, n_mels, 3), "weight")?
                 .to_dtype(DType::F32)?,
             Some(vb_c1.get(cfg.dim, "bias")?.to_dtype(DType::F32)?),
-            candle_nn::Conv1dConfig {
+            hanzo_nn::Conv1dConfig {
                 padding: 0,
                 stride: 1,
                 ..Default::default()
             },
         );
         let vb_c2 = vb.pp("conv_layers").pp("1").pp("conv");
-        let conv2 = candle_nn::Conv1d::new(
+        let conv2 = hanzo_nn::Conv1d::new(
             vb_c2
                 .get((cfg.dim, cfg.dim, 3), "weight")?
                 .to_dtype(DType::F32)?,
             Some(vb_c2.get(cfg.dim, "bias")?.to_dtype(DType::F32)?),
-            candle_nn::Conv1dConfig {
+            hanzo_nn::Conv1dConfig {
                 padding: 0,
                 stride: 2,
                 ..Default::default()

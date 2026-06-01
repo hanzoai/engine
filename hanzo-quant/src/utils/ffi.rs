@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 
-use candle_core::cuda::cudarc::driver::sys::CUstream;
+use hanzo_ml::cuda::cudarc::driver::sys::CUstream;
 
 #[allow(dead_code)]
 extern "C" {

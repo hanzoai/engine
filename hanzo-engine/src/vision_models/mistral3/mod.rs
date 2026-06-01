@@ -19,8 +19,8 @@ use crate::{
     utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
 };
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Linear, Module};
+use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_nn::{Linear, Module};
 pub use config::Mistral3Config;
 pub use inputs_processor::Mistral3Processor;
 use hanzo_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
@@ -266,7 +266,7 @@ impl Mistral3Model {
                         } else {
                             per_image.push(Tensor::zeros(
                                 1,
-                                candle_core::DType::F32,
+                                hanzo_ml::DType::F32,
                                 pixel_values.device(),
                             )?);
                             miss_indices.push(i);
@@ -343,7 +343,7 @@ impl IsqModel for Mistral3Model {
         uvb.to_safetensors()
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         self.text_model.imatrix_names()
     }
 }
@@ -367,7 +367,7 @@ impl MultimodalModel for Mistral3Model {
         model_specific_args: Box<dyn std::any::Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         let Mistral3SpecificArgs {
             image_sizes,
             image_hashes,

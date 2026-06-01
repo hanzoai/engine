@@ -1,8 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{LayerNorm, Linear};
+use hanzo_ml::{DType, Device, Module, Result, Tensor};
+use hanzo_nn::{LayerNorm, Linear};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig, RowParallelLayer,
     ShardedVarBuilder, UnquantLinear,
@@ -391,7 +391,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: hanzo_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: LayerNorm,
     lm_head: Arc<dyn QuantMethod>,

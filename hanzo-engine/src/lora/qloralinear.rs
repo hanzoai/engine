@@ -1,7 +1,7 @@
 use std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
-use candle_core::{quantized::QMatMul, Module, Result, Tensor};
-use candle_nn::Linear;
+use hanzo_ml::{quantized::QMatMul, Module, Result, Tensor};
+use hanzo_nn::Linear;
 use either::Either;
 use hanzo_quant::{
     GgufMatMul, QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear,
@@ -44,7 +44,7 @@ impl QLoraLinear {
                 .as_ref()
                 .is_some_and(|target_modules| &cfg.target_modules != *target_modules)
             {
-                candle_core::bail!("Expected all target modules to be the same.");
+                hanzo_ml::bail!("Expected all target modules to be the same.");
             }
         }
 

@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, fs::File, sync::Arc};
 
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::Module;
+use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_nn::Module;
 use hf_hub::api::sync::{Api, ApiBuilder};
 use hanzo_quant::ShardedVarBuilder;
 use tokenizers::Tokenizer;
@@ -90,19 +90,19 @@ fn fetch_repo_file(
     repo_id: &str,
     revision: &str,
     file: &str,
-) -> candle_core::Result<std::path::PathBuf> {
+) -> hanzo_ml::Result<std::path::PathBuf> {
     if crate::pipeline::hf::is_hf_hub_offline() {
         return crate::pipeline::hf::offline_cache_repo(std::path::Path::new(repo_id), revision)
             .get(file)
             .ok_or_else(|| {
-                candle_core::Error::msg(crate::pipeline::hf::offline_missing_file_error(
+                hanzo_ml::Error::msg(crate::pipeline::hf::offline_missing_file_error(
                     std::path::Path::new(repo_id),
                     file,
                     revision,
                 ))
             });
     }
-    api_repo.get(file).map_err(candle_core::Error::msg)
+    api_repo.get(file).map_err(hanzo_ml::Error::msg)
 }
 
 fn get_t5_model(
@@ -111,7 +111,7 @@ fn get_t5_model(
     device: &Device,
     silent: bool,
     offloaded: bool,
-) -> candle_core::Result<T5EncoderModel> {
+) -> hanzo_ml::Result<T5EncoderModel> {
     let repo_id = "EricB/t5-v1_1-xxl-enc-only";
     let revision = "main";
     let repo = api.repo(hf_hub::Repo::with_revision(
@@ -124,7 +124,7 @@ fn get_t5_model(
         T5_XXL_SAFETENSOR_FILES
             .iter()
             .map(|f| fetch_repo_file(&repo, repo_id, revision, f))
-            .collect::<candle_core::Result<Vec<_>>>()?,
+            .collect::<hanzo_ml::Result<Vec<_>>>()?,
         vec![],
         Some(dtype),
         device,
@@ -136,7 +136,7 @@ fn get_t5_model(
     )?;
     let config_filename = fetch_repo_file(&repo, repo_id, revision, "config.json")?;
     let config = std::fs::read_to_string(config_filename)?;
-    let config: t5::Config = serde_json::from_str(&config).map_err(candle_core::Error::msg)?;
+    let config: t5::Config = serde_json::from_str(&config).map_err(hanzo_ml::Error::msg)?;
 
     t5::T5EncoderModel::load(vb, &config, device, offloaded)
 }
@@ -176,7 +176,7 @@ fn get_clip_model_and_tokenizer(
 fn get_tokenization(tok: &Tokenizer, prompts: Vec<String>, device: &Device) -> Result<Tensor> {
     Tensor::new(
         tok.encode_batch(prompts, true)
-            .map_err(|e| candle_core::Error::Msg(e.to_string()))?
+            .map_err(|e| hanzo_ml::Error::Msg(e.to_string()))?
             .into_iter()
             .map(|e| e.get_ids().to_vec())
             .collect::<Vec<_>>(),
@@ -228,7 +228,7 @@ impl DiffusionModel for FluxStepper {
         if !self.is_guidance {
             match t5_input_ids.dim(1)?.cmp(&256) {
                 Ordering::Greater => {
-                    candle_core::bail!("T5 embedding length greater than 256, please shrink the prompt or use the -dev (with guidance distillation) version.")
+                    hanzo_ml::bail!("T5 embedding length greater than 256, please shrink the prompt or use the -dev (with guidance distillation) version.")
                 }
                 Ordering::Less | Ordering::Equal => {
                     t5_input_ids =

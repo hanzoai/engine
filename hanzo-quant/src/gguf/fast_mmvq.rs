@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use candle_core::cuda::cudarc::driver::{CudaSlice, DevicePtr};
-use candle_core::{
+use hanzo_ml::cuda::cudarc::driver::{CudaSlice, DevicePtr};
+use hanzo_ml::{
     quantized::{GgmlDType, QTensor},
     CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
 };
@@ -53,7 +53,7 @@ struct WorkspaceSlot {
     cap: usize,
 }
 
-type WsMap = Mutex<HashMap<candle_core::cuda::DeviceId, &'static Mutex<WorkspaceSlot>>>;
+type WsMap = Mutex<HashMap<hanzo_ml::cuda::DeviceId, &'static Mutex<WorkspaceSlot>>>;
 
 static WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 
@@ -244,37 +244,37 @@ fn fused_qkv_launcher(input_ty: DType, dtype: GgmlDType) -> Option<FusedQkvLaunc
 pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     let dtype = w.dtype();
     if !supports(dtype) {
-        candle_core::bail!("fast_mmvq: unsupported quant dtype {dtype:?}");
+        hanzo_ml::bail!("fast_mmvq: unsupported quant dtype {dtype:?}");
     }
     let Device::Cuda(dev) = w.device() else {
-        candle_core::bail!("fast_mmvq: weight must live on CUDA");
+        hanzo_ml::bail!("fast_mmvq: weight must live on CUDA");
     };
     let (nrows, ncols) = w.shape().dims2()?;
 
     let (b_size, k) = match xs.dims() {
         [b, k] => (*b, *k),
         [b, m, k] => (*b * *m, *k),
-        other => candle_core::bail!("fast_mmvq: unexpected input rank {other:?}"),
+        other => hanzo_ml::bail!("fast_mmvq: unexpected input rank {other:?}"),
     };
     if k != ncols {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmvq: shape mismatch — weight [{nrows}, {ncols}] vs input tail {k}"
         );
     }
     if b_size == 0 || b_size > MMVQ_MAX_BATCH {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmvq: batch size {b_size} out of supported range 1..={MMVQ_MAX_BATCH}"
         );
     }
     let input_ty = xs.dtype();
     if !matches!(input_ty, DType::BF16 | DType::F16 | DType::F32) {
-        candle_core::bail!("fast_mmvq: input dtype must be BF16, F16, or F32, got {input_ty:?}");
+        hanzo_ml::bail!("fast_mmvq: input dtype must be BF16, F16, or F32, got {input_ty:?}");
     }
 
     let xs = xs.contiguous()?;
     let (xs_storage, xs_layout) = xs.storage_and_layout();
     let Storage::Cuda(xs_cuda) = &*xs_storage else {
-        candle_core::bail!("fast_mmvq: input must live on CUDA");
+        hanzo_ml::bail!("fast_mmvq: input must live on CUDA");
     };
     // `contiguous()` can preserve a non-zero start offset.
     let xs_offset = xs_layout.start_offset();
@@ -424,30 +424,30 @@ pub fn fused_glu(
 ) -> Result<Tensor> {
     let dtype = gate_w.dtype();
     if dtype != up_w.dtype() {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmvq fused_glu: gate/up dtype mismatch {:?} vs {:?}",
             dtype,
             up_w.dtype()
         );
     }
     let Some(launcher) = fused_glu_launcher(xs.dtype(), dtype) else {
-        candle_core::bail!("fast_mmvq fused_glu: unsupported dtype combination");
+        hanzo_ml::bail!("fast_mmvq fused_glu: unsupported dtype combination");
     };
 
     let Device::Cuda(dev) = gate_w.device() else {
-        candle_core::bail!("fast_mmvq fused_glu: gate weight must live on CUDA");
+        hanzo_ml::bail!("fast_mmvq fused_glu: gate weight must live on CUDA");
     };
     let Device::Cuda(up_dev) = up_w.device() else {
-        candle_core::bail!("fast_mmvq fused_glu: up weight must live on CUDA");
+        hanzo_ml::bail!("fast_mmvq fused_glu: up weight must live on CUDA");
     };
     if dev.id() != up_dev.id() {
-        candle_core::bail!("fast_mmvq fused_glu: gate/up weights are on different CUDA devices");
+        hanzo_ml::bail!("fast_mmvq fused_glu: gate/up weights are on different CUDA devices");
     }
 
     let (nrows, ncols) = gate_w.shape().dims2()?;
     let (up_nrows, up_ncols) = up_w.shape().dims2()?;
     if (nrows, ncols) != (up_nrows, up_ncols) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmvq fused_glu: gate/up shape mismatch [{nrows}, {ncols}] vs [{up_nrows}, {up_ncols}]"
         );
     }
@@ -455,21 +455,21 @@ pub fn fused_glu(
     let (b_size, k) = match xs.dims() {
         [b, k] => (*b, *k),
         [b, m, k] => (*b * *m, *k),
-        other => candle_core::bail!("fast_mmvq fused_glu: unexpected input rank {other:?}"),
+        other => hanzo_ml::bail!("fast_mmvq fused_glu: unexpected input rank {other:?}"),
     };
     if k != ncols {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmvq fused_glu: shape mismatch — weight [{nrows}, {ncols}] vs input tail {k}"
         );
     }
     if b_size == 0 || b_size > MMVQ_MAX_BATCH {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmvq fused_glu: batch size {b_size} out of supported range 1..={MMVQ_MAX_BATCH}"
         );
     }
     let input_ty = xs.dtype();
     if !matches!(input_ty, DType::BF16 | DType::F16 | DType::F32) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmvq fused_glu: input dtype must be BF16, F16, or F32, got {input_ty:?}"
         );
     }
@@ -477,7 +477,7 @@ pub fn fused_glu(
     let xs = xs.contiguous()?;
     let (xs_storage, xs_layout) = xs.storage_and_layout();
     let Storage::Cuda(xs_cuda) = &*xs_storage else {
-        candle_core::bail!("fast_mmvq fused_glu: input must live on CUDA");
+        hanzo_ml::bail!("fast_mmvq fused_glu: input must live on CUDA");
     };
     let xs_offset = xs_layout.start_offset();
 
@@ -628,7 +628,7 @@ pub fn fused_qkv(
 ) -> Result<(Tensor, Tensor, Tensor)> {
     let dtype = q_w.dtype();
     if dtype != k_w.dtype() || dtype != v_w.dtype() {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmvq fused_qkv: q/k/v dtype mismatch {:?}, {:?}, {:?}",
             dtype,
             k_w.dtype(),
@@ -636,27 +636,27 @@ pub fn fused_qkv(
         );
     }
     let Some(launcher) = fused_qkv_launcher(xs.dtype(), dtype) else {
-        candle_core::bail!("fast_mmvq fused_qkv: unsupported dtype combination");
+        hanzo_ml::bail!("fast_mmvq fused_qkv: unsupported dtype combination");
     };
 
     let Device::Cuda(dev) = q_w.device() else {
-        candle_core::bail!("fast_mmvq fused_qkv: q weight must live on CUDA");
+        hanzo_ml::bail!("fast_mmvq fused_qkv: q weight must live on CUDA");
     };
     let Device::Cuda(k_dev) = k_w.device() else {
-        candle_core::bail!("fast_mmvq fused_qkv: k weight must live on CUDA");
+        hanzo_ml::bail!("fast_mmvq fused_qkv: k weight must live on CUDA");
     };
     let Device::Cuda(v_dev) = v_w.device() else {
-        candle_core::bail!("fast_mmvq fused_qkv: v weight must live on CUDA");
+        hanzo_ml::bail!("fast_mmvq fused_qkv: v weight must live on CUDA");
     };
     if dev.id() != k_dev.id() || dev.id() != v_dev.id() {
-        candle_core::bail!("fast_mmvq fused_qkv: q/k/v weights are on different CUDA devices");
+        hanzo_ml::bail!("fast_mmvq fused_qkv: q/k/v weights are on different CUDA devices");
     }
 
     let (q_nrows, ncols) = q_w.shape().dims2()?;
     let (k_nrows, k_ncols) = k_w.shape().dims2()?;
     let (v_nrows, v_ncols) = v_w.shape().dims2()?;
     if ncols != k_ncols || ncols != v_ncols {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmvq fused_qkv: q/k/v ncols mismatch {ncols}, {k_ncols}, {v_ncols}"
         );
     }
@@ -664,21 +664,21 @@ pub fn fused_qkv(
     let (b_size, k) = match xs.dims() {
         [b, k] => (*b, *k),
         [b, m, k] => (*b * *m, *k),
-        other => candle_core::bail!("fast_mmvq fused_qkv: unexpected input rank {other:?}"),
+        other => hanzo_ml::bail!("fast_mmvq fused_qkv: unexpected input rank {other:?}"),
     };
     if k != ncols {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmvq fused_qkv: shape mismatch — weight ncols {ncols} vs input tail {k}"
         );
     }
     if b_size == 0 || b_size > MMVQ_MAX_BATCH {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmvq fused_qkv: batch size {b_size} out of supported range 1..={MMVQ_MAX_BATCH}"
         );
     }
     let input_ty = xs.dtype();
     if !matches!(input_ty, DType::BF16 | DType::F16 | DType::F32) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmvq fused_qkv: input dtype must be BF16, F16, or F32, got {input_ty:?}"
         );
     }
@@ -686,7 +686,7 @@ pub fn fused_qkv(
     let xs = xs.contiguous()?;
     let (xs_storage, xs_layout) = xs.storage_and_layout();
     let Storage::Cuda(xs_cuda) = &*xs_storage else {
-        candle_core::bail!("fast_mmvq fused_qkv: input must live on CUDA");
+        hanzo_ml::bail!("fast_mmvq fused_qkv: input must live on CUDA");
     };
     let xs_offset = xs_layout.start_offset();
 

@@ -1,4 +1,4 @@
-use candle_core::{Result, Tensor};
+use hanzo_ml::{Result, Tensor};
 use hanzo_quant::MatMul;
 
 use crate::{

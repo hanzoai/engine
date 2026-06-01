@@ -8,8 +8,8 @@
 use crate::layers_masker::CausalMaskConfig;
 use std::sync::Arc;
 
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module};
+use hanzo_ml::{DType, Device, Result, Tensor};
+use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, QuantMethodConfig, RowParallelLayer, ShardedVarBuilder,
     UnquantLinear,

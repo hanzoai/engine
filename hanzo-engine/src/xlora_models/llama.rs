@@ -13,8 +13,8 @@ use crate::{
     },
     utils::progress::NiceProgressBar,
 };
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module};
+use hanzo_ml::{DType, Device, Result, Tensor};
+use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{QuantMethod, ShardedVarBuilder};
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
@@ -202,7 +202,7 @@ impl Mlp {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let x = (candle_nn::ops::silu(&self.c_fc1.lora_forward(
+        let x = (hanzo_nn::ops::silu(&self.c_fc1.lora_forward(
             x,
             scalings.clone(),
             global_scaling_weight,
@@ -553,7 +553,7 @@ impl XLoraLlama {
         )?;
         if xlora_config.is_some() && lm_head.is_lora() {
             // This is why we can pass dummy values (..., None, 1.0, None)?
-            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+            hanzo_ml::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
         }
         let ln_f = RmsNorm::new(
             cfg.hidden_size,

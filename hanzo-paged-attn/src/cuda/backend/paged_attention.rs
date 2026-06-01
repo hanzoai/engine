@@ -7,8 +7,8 @@ use crate::cuda::ffi::{
 use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::{CudaSlice, DevicePtr};
 use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
-use candle_core as candle;
-use candle_core::cuda::cudarc::driver::DeviceSlice;
+use hanzo_ml as candle;
+use hanzo_ml::cuda::cudarc::driver::DeviceSlice;
 use float8::F8E4M3;
 use half::{bf16, f16};
 use std::collections::HashMap;
@@ -226,7 +226,7 @@ impl PagedAttention {
             || head_size == 256
             || head_size == 512)
         {
-            candle_core::bail!("`head_size` must be one of 64, 80, 96, 112, 128, 192, 256 or 512");
+            hanzo_ml::bail!("`head_size` must be one of 64, 80, 96, 112, 128, 192, 256 or 512");
         }
 
         let (num_seqs_bt, max_num_blocks_per_seq) = bt_l.shape().dims2()?;
@@ -445,7 +445,7 @@ pub fn paged_attention(
         k_scale: k_scale.cloned(),
         v_scale: v_scale.cloned(),
         sinks: sinks
-            .map(|s| s.to_dtype(candle_core::DType::F32))
+            .map(|s| s.to_dtype(hanzo_ml::DType::F32))
             .transpose()?,
     };
     q.apply_op1(op)

@@ -1,8 +1,8 @@
 use crate::cuda::backend::slice_ptr;
 #[cfg(feature = "cuda")]
 use crate::cuda::ffi;
-use candle_core as candle;
-use candle_core::{DType, Result, Tensor};
+use hanzo_ml as candle;
+use hanzo_ml::{DType, Result, Tensor};
 
 #[derive(Debug, Clone)]
 struct KvScaleUpdate {
