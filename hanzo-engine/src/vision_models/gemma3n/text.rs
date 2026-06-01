@@ -1,8 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::Linear;
+use hanzo_ml::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use hanzo_nn::Linear;
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -852,7 +852,7 @@ pub(crate) fn handle_matformer_slicing(
     match matformer_slicing_config {
         Some(slicing_config) => {
             let matformer_slice = slicing_config.get_slicing().ok_or_else(|| {
-                candle_core::Error::Msg(format!(
+                hanzo_ml::Error::Msg(format!(
                     "Matformer slice '{}' not found in config",
                     slicing_config.slice_name
                 ))
@@ -868,7 +868,7 @@ pub(crate) fn handle_matformer_slicing(
             if layers_skipped.contains(&local_kv_sharing_layer_idx)
                 || layers_skipped.contains(&global_kv_sharing_layer_idx)
             {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Layers {} and {} are reserved.",
                     local_kv_sharing_layer_idx,
                     global_kv_sharing_layer_idx
@@ -983,7 +983,7 @@ impl TextModel {
             );
         }
         if !matches!(attention_mechanism, AttentionImplementation::Eager) {
-            candle_core::bail!("Expected eager attention implementation");
+            hanzo_ml::bail!("Expected eager attention implementation");
         }
         let mapper = normal_loading_metadata.mapper;
 
@@ -1149,7 +1149,7 @@ impl TextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(
                     embed_tokens.embeddings(),
                     normal_loading_metadata.loading_isq,
@@ -1567,7 +1567,7 @@ impl IsqModel for TextModel {
         uvb.to_safetensors()
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         todo!()
     }
 }
@@ -1585,7 +1585,7 @@ impl MultimodalModel for TextModel {
         _model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
         _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         _flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         unreachable!()
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {

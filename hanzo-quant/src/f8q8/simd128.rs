@@ -1,5 +1,5 @@
 use super::{BlockF8Q8, BlockQ8_0, QK8_0};
-use candle_core::Result;
+use hanzo_ml::Result;
 use core::arch::wasm32::*;
 use half::f16;
 
@@ -7,7 +7,7 @@ use half::f16;
 pub(crate) fn vec_dot_f8q8_q8_0(n: usize, xs: &[BlockF8Q8], ys: &[BlockQ8_0]) -> Result<f32> {
     let qk = QK8_0;
     if n % QK8_0 != 0 {
-        candle_core::bail!("vec_dot_f8q8_q8_0: {n} is not divisible by {qk}")
+        hanzo_ml::bail!("vec_dot_f8q8_q8_0: {n} is not divisible by {qk}")
     }
     unsafe {
         let mut acc = f32x4_splat(0.0f32);

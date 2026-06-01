@@ -5,7 +5,7 @@ macro_rules! api_dir_list {
         let model_path = std::path::Path::new($model_id);
         let files =
             $crate::pipeline::hf::list_repo_files(&$api, model_path, $should_panic, $revision)
-                .map_err(candle_core::Error::msg)?;
+                .map_err(hanzo_ml::Error::msg)?;
         files.into_iter()
     }};
 }
@@ -16,7 +16,7 @@ macro_rules! api_get_file {
     ($api:expr, $file:expr, $model_id:expr, $revision:expr) => {{
         let model_path = std::path::Path::new($model_id);
         $crate::pipeline::hf::get_file(&$api, model_path, $file, $revision)
-            .map_err(candle_core::Error::msg)?
+            .map_err(hanzo_ml::Error::msg)?
     }};
 }
 

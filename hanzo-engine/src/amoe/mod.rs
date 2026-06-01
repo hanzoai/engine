@@ -5,8 +5,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use candle_core::{safetensors, DType, Device, Result, Tensor, Var, D};
-use candle_nn::{Linear, ModuleT, VarMap};
+use hanzo_ml::{safetensors, DType, Device, Result, Tensor, Var, D};
+use hanzo_nn::{Linear, ModuleT, VarMap};
 use hanzo_quant::{QuantMethod, ShardedSafeTensors, ShardedVarBuilder};
 use serde::{Deserialize, Serialize};
 
@@ -79,7 +79,7 @@ pub trait AnyMoeBaseModelMixin {
         _expert_type: AnyMoeExpertType,
         _gate_vb: Option<ShardedVarBuilder>,
     ) -> Result<()> {
-        candle_core::bail!("Model does not support AnyMoE layers");
+        hanzo_ml::bail!("Model does not support AnyMoE layers");
     }
     fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
         panic!("Model does not support AnyMoE layers");
@@ -167,9 +167,9 @@ impl ModuleT for MoeGate {
     fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor> {
         let hidden_states = xs.apply(&self.lin)?;
         if train {
-            candle_nn::ops::softmax(&hidden_states, D::Minus1)
+            hanzo_nn::ops::softmax(&hidden_states, D::Minus1)
         } else {
-            candle_nn::ops::softmax_last_dim(&hidden_states)
+            hanzo_nn::ops::softmax_last_dim(&hidden_states)
         }
     }
 }
@@ -209,7 +209,7 @@ impl MoeMlp {
 
         let vars = var_map.all_vars();
         if vars.is_empty() && !inference {
-            candle_core::bail!("No vars to train in MoeMlp, perhaps there are no layers?");
+            hanzo_ml::bail!("No vars to train in MoeMlp, perhaps there are no layers?");
         }
         Ok(Self {
             experts,

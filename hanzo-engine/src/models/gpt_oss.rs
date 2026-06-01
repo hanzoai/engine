@@ -1,8 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{Device, Module, Result, Tensor, D};
-use candle_nn::Linear;
+use hanzo_ml::{Device, Module, Result, Tensor, D};
+use hanzo_nn::Linear;
 use hanzo_quant::{
     ColumnParallelLayer, MXFP4Layer, QuantMethod, QuantizedConfig, ReplicatedLayer,
     RowParallelLayer, ShardedVarBuilder,
@@ -129,7 +129,7 @@ fn gptoss_swiglu(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -> Result<T
     let up_clamped = up.clamp(-limit_d, limit_d)?;
 
     let gate_scaled = (&gate_clamped * alpha as f64)?;
-    let sigmoid_val = candle_nn::ops::sigmoid(&gate_scaled)?;
+    let sigmoid_val = hanzo_nn::ops::sigmoid(&gate_scaled)?;
     let glu = (&gate_clamped * &sigmoid_val)?;
 
     let up_plus_one = (&up_clamped + 1.0)?;
@@ -396,10 +396,10 @@ impl GptOssMoE {
         #[cfg(not(feature = "cuda"))]
         let (topk_weights, topk_ids) = {
             use crate::ops::TopKLastDimOp;
-            use candle_core::DType;
+            use hanzo_ml::DType;
             let router_f32 = router_logits.to_dtype(DType::F32)?;
             let topk_result = router_f32.topk(self.num_experts_per_tok)?;
-            let topk_weights = candle_nn::ops::softmax_last_dim(&topk_result.values)?;
+            let topk_weights = hanzo_nn::ops::softmax_last_dim(&topk_result.values)?;
             (topk_weights, topk_result.indices)
         };
 
@@ -533,7 +533,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: hanzo_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -665,7 +665,7 @@ impl Model {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(
                     embed_tokens.embeddings(),
                     normal_loading_metadata.loading_isq,
@@ -859,7 +859,7 @@ impl NormalModel for Model {
         _flash_params: &FlashParams,
         _flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
-        candle_core::bail!("GPT-OSS does not support X-LoRA")
+        hanzo_ml::bail!("GPT-OSS does not support X-LoRA")
     }
 
     fn cache(&self) -> &EitherCache {

@@ -1,7 +1,7 @@
 use std::{io::Cursor, sync::Arc};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
-use candle_core::Tensor;
+use hanzo_ml::Tensor;
 use image::DynamicImage;
 use uuid::Uuid;
 
@@ -13,9 +13,9 @@ use crate::{
 pub async fn send_image_responses(
     input_seqs: &mut [&mut Sequence],
     images: Vec<DynamicImage>,
-) -> candle_core::Result<()> {
+) -> hanzo_ml::Result<()> {
     if input_seqs.len() != images.len() {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Input seqs len ({}) does not match images generated len ({})",
             input_seqs.len(),
             images.len()
@@ -34,7 +34,7 @@ pub async fn send_image_responses(
                 };
                 image
                     .save_with_format(&saved_file, image::ImageFormat::Png)
-                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    .map_err(|e| hanzo_ml::Error::Msg(e.to_string()))?;
                 ImageChoice {
                     url: Some(saved_file),
                     b64_json: None,
@@ -65,7 +65,7 @@ pub async fn send_image_responses(
                 seq.responder(),
             )
             .await
-            .map_err(candle_core::Error::msg)?;
+            .map_err(hanzo_ml::Error::msg)?;
 
         seq.set_state(SequenceState::Done(StopReason::GeneratedImage));
     }
@@ -78,9 +78,9 @@ pub async fn send_speech_responses(
     pcms: &[Arc<Vec<f32>>],
     rates: &[usize],
     channels: &[usize],
-) -> candle_core::Result<()> {
+) -> hanzo_ml::Result<()> {
     if input_seqs.len() != pcms.len() {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Input seqs len ({}) does not match pcms generated len ({})",
             input_seqs.len(),
             pcms.len()
@@ -97,7 +97,7 @@ pub async fn send_speech_responses(
         group
             .maybe_send_speech_response(seq.responder())
             .await
-            .map_err(candle_core::Error::msg)?;
+            .map_err(hanzo_ml::Error::msg)?;
 
         seq.set_state(SequenceState::Done(StopReason::GeneratedSpeech));
     }
@@ -108,11 +108,11 @@ pub async fn send_speech_responses(
 pub async fn send_raw_responses(
     input_seqs: &mut [&mut Sequence],
     logits_chunks: Vec<Vec<Tensor>>,
-) -> candle_core::Result<()> {
+) -> hanzo_ml::Result<()> {
     let logits_chunks = if logits_chunks.len() == 1 {
         logits_chunks[0].clone()
     } else {
-        candle_core::bail!("Raw response only supports batch size of 1.");
+        hanzo_ml::bail!("Raw response only supports batch size of 1.");
     };
     assert_eq!(input_seqs.len(), 1);
 
@@ -124,7 +124,7 @@ pub async fn send_raw_responses(
     group
         .maybe_send_raw_done_response(seq.responder())
         .await
-        .map_err(candle_core::Error::msg)?;
+        .map_err(hanzo_ml::Error::msg)?;
 
     seq.set_state(SequenceState::Done(StopReason::Length(0)));
 
@@ -134,9 +134,9 @@ pub async fn send_raw_responses(
 pub async fn send_embedding_responses(
     input_seqs: &mut [&mut Sequence],
     embedings: Vec<Vec<f32>>,
-) -> candle_core::Result<()> {
+) -> hanzo_ml::Result<()> {
     if embedings.len() != input_seqs.len() {
-        candle_core::bail!("Number of embeddings must match number of sequences..");
+        hanzo_ml::bail!("Number of embeddings must match number of sequences..");
     }
 
     for (seq, embeddings) in input_seqs.iter_mut().zip(embedings) {
@@ -146,7 +146,7 @@ pub async fn send_embedding_responses(
         group
             .maybe_send_embedding_done_response(seq.responder())
             .await
-            .map_err(candle_core::Error::msg)?;
+            .map_err(hanzo_ml::Error::msg)?;
 
         seq.set_state(SequenceState::Done(StopReason::Length(0)));
     }

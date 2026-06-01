@@ -3,12 +3,12 @@
 use std::fmt::Debug;
 
 #[cfg(feature = "cuda")]
-use candle_core::cuda::{
+use hanzo_ml::cuda::{
     cudarc::driver::{sys::CUstream, CudaSlice, DeviceRepr, ValidAsZeroBits},
     CudaDevice,
 };
 
-use candle_core::{
+use hanzo_ml::{
     backend::BackendStorage, CpuStorage, CustomOp3, Result, Shape, Tensor, WithDType,
 };
 
@@ -243,14 +243,14 @@ impl CustomOp3 for DequantizeOp {
     fn cpu_fwd(
         &self,
         input_s: &CpuStorage,
-        input_l: &candle_core::Layout,
+        input_l: &hanzo_ml::Layout,
         absmax_s: &CpuStorage,
-        absmax_l: &candle_core::Layout,
+        absmax_l: &hanzo_ml::Layout,
         code_s: &CpuStorage,
-        code_l: &candle_core::Layout,
-    ) -> candle_core::Result<(CpuStorage, candle_core::Shape)> {
+        code_l: &hanzo_ml::Layout,
+    ) -> hanzo_ml::Result<(CpuStorage, hanzo_ml::Shape)> {
         if !(input_l.is_contiguous() && absmax_l.is_contiguous() && code_l.is_contiguous()) {
-            candle_core::bail!("All inputs must be contiguous");
+            hanzo_ml::bail!("All inputs must be contiguous");
         }
         match (input_s, absmax_s, code_s, self.out_ty) {
             (
@@ -280,7 +280,7 @@ impl CustomOp3 for DequantizeOp {
                 CpuStorage::F32(self.dequantize_cpu(input, absmax, code, self.quant_ty)),
                 self.shape.clone(),
             )),
-            (i, a, c, t) => candle_core::bail!(
+            (i, a, c, t) => hanzo_ml::bail!(
                 "Unsupported dtypes for cpu dequant: {:?} input, {:?} absmax, {:?} code, {:?} out",
                 i.dtype(),
                 a.dtype(),
@@ -293,22 +293,22 @@ impl CustomOp3 for DequantizeOp {
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
-        input_s: &candle_core::CudaStorage,
-        input_l: &candle_core::Layout,
-        absmax_s: &candle_core::CudaStorage,
-        absmax_l: &candle_core::Layout,
-        code_s: &candle_core::CudaStorage,
-        code_l: &candle_core::Layout,
-    ) -> Result<(candle_core::CudaStorage, Shape)> {
+        input_s: &hanzo_ml::CudaStorage,
+        input_l: &hanzo_ml::Layout,
+        absmax_s: &hanzo_ml::CudaStorage,
+        absmax_l: &hanzo_ml::Layout,
+        code_s: &hanzo_ml::CudaStorage,
+        code_l: &hanzo_ml::Layout,
+    ) -> Result<(hanzo_ml::CudaStorage, Shape)> {
         if !(input_l.is_contiguous() && absmax_l.is_contiguous() && code_l.is_contiguous()) {
-            candle_core::bail!("All inputs must be contiguous");
+            hanzo_ml::bail!("All inputs must be contiguous");
         }
         let input_slice = input_s.as_cuda_slice::<u8>()?;
         let absmax_slice = absmax_s.as_cuda_slice::<f32>()?;
         let code_slice = code_s.as_cuda_slice::<f32>()?;
         let dev = input_s.device().clone();
         let out = match (self.out_ty, self.quant_ty) {
-            (BnbDType::F32, BnbQuantType::Nf4) => candle_core::CudaStorage::wrap_cuda_slice(
+            (BnbDType::F32, BnbQuantType::Nf4) => hanzo_ml::CudaStorage::wrap_cuda_slice(
                 self.dispatch_cuda_kernel::<f32>(
                     input_slice,
                     code_slice,
@@ -318,7 +318,7 @@ impl CustomOp3 for DequantizeOp {
                 )?,
                 dev,
             ),
-            (BnbDType::F16, BnbQuantType::Nf4) => candle_core::CudaStorage::wrap_cuda_slice(
+            (BnbDType::F16, BnbQuantType::Nf4) => hanzo_ml::CudaStorage::wrap_cuda_slice(
                 self.dispatch_cuda_kernel::<half::f16>(
                     input_slice,
                     code_slice,
@@ -328,7 +328,7 @@ impl CustomOp3 for DequantizeOp {
                 )?,
                 dev,
             ),
-            (BnbDType::BF16, BnbQuantType::Nf4) => candle_core::CudaStorage::wrap_cuda_slice(
+            (BnbDType::BF16, BnbQuantType::Nf4) => hanzo_ml::CudaStorage::wrap_cuda_slice(
                 self.dispatch_cuda_kernel::<half::bf16>(
                     input_slice,
                     code_slice,
@@ -339,7 +339,7 @@ impl CustomOp3 for DequantizeOp {
                 dev,
             ),
 
-            (BnbDType::F32, BnbQuantType::Fp4) => candle_core::CudaStorage::wrap_cuda_slice(
+            (BnbDType::F32, BnbQuantType::Fp4) => hanzo_ml::CudaStorage::wrap_cuda_slice(
                 self.dispatch_cuda_kernel::<f32>(
                     input_slice,
                     code_slice,
@@ -349,7 +349,7 @@ impl CustomOp3 for DequantizeOp {
                 )?,
                 dev,
             ),
-            (BnbDType::F16, BnbQuantType::Fp4) => candle_core::CudaStorage::wrap_cuda_slice(
+            (BnbDType::F16, BnbQuantType::Fp4) => hanzo_ml::CudaStorage::wrap_cuda_slice(
                 self.dispatch_cuda_kernel::<half::f16>(
                     input_slice,
                     code_slice,
@@ -359,7 +359,7 @@ impl CustomOp3 for DequantizeOp {
                 )?,
                 dev,
             ),
-            (BnbDType::BF16, BnbQuantType::Fp4) => candle_core::CudaStorage::wrap_cuda_slice(
+            (BnbDType::BF16, BnbQuantType::Fp4) => hanzo_ml::CudaStorage::wrap_cuda_slice(
                 self.dispatch_cuda_kernel::<half::bf16>(
                     input_slice,
                     code_slice,
@@ -370,7 +370,7 @@ impl CustomOp3 for DequantizeOp {
                 dev,
             ),
 
-            (BnbDType::F32, BnbQuantType::Int8) => candle_core::CudaStorage::wrap_cuda_slice(
+            (BnbDType::F32, BnbQuantType::Int8) => hanzo_ml::CudaStorage::wrap_cuda_slice(
                 self.dispatch_cuda_kernel::<f32>(
                     input_slice,
                     code_slice,
@@ -380,7 +380,7 @@ impl CustomOp3 for DequantizeOp {
                 )?,
                 dev,
             ),
-            (BnbDType::F16, BnbQuantType::Int8) => candle_core::CudaStorage::wrap_cuda_slice(
+            (BnbDType::F16, BnbQuantType::Int8) => hanzo_ml::CudaStorage::wrap_cuda_slice(
                 self.dispatch_cuda_kernel::<half::f16>(
                     input_slice,
                     code_slice,
@@ -390,7 +390,7 @@ impl CustomOp3 for DequantizeOp {
                 )?,
                 dev,
             ),
-            (BnbDType::BF16, BnbQuantType::Int8) => candle_core::CudaStorage::wrap_cuda_slice(
+            (BnbDType::BF16, BnbQuantType::Int8) => hanzo_ml::CudaStorage::wrap_cuda_slice(
                 self.dispatch_cuda_kernel::<half::bf16>(
                     input_slice,
                     code_slice,
@@ -408,17 +408,17 @@ impl CustomOp3 for DequantizeOp {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        input_s: &candle_core::MetalStorage,
-        input_l: &candle_core::Layout,
-        absmax_s: &candle_core::MetalStorage,
-        absmax_l: &candle_core::Layout,
-        code_s: &candle_core::MetalStorage,
-        code_l: &candle_core::Layout,
-    ) -> Result<(candle_core::MetalStorage, Shape)> {
-        use candle_core::DType;
+        input_s: &hanzo_ml::MetalStorage,
+        input_l: &hanzo_ml::Layout,
+        absmax_s: &hanzo_ml::MetalStorage,
+        absmax_l: &hanzo_ml::Layout,
+        code_s: &hanzo_ml::MetalStorage,
+        code_l: &hanzo_ml::Layout,
+    ) -> Result<(hanzo_ml::MetalStorage, Shape)> {
+        use hanzo_ml::DType;
 
         if !(input_l.is_contiguous() && absmax_l.is_contiguous() && code_l.is_contiguous()) {
-            candle_core::bail!("All inputs must be contiguous");
+            hanzo_ml::bail!("All inputs must be contiguous");
         }
 
         let encoder = input_s.device().command_encoder()?;
@@ -433,13 +433,13 @@ impl CustomOp3 for DequantizeOp {
         )?;
 
         if input_s.dtype() != DType::U8 {
-            candle_core::bail!("input must be u8");
+            hanzo_ml::bail!("input must be u8");
         }
         if code_s.dtype() != DType::F32 {
-            candle_core::bail!("code must be f32");
+            hanzo_ml::bail!("code must be f32");
         }
         if absmax_s.dtype() != DType::F32 {
-            candle_core::bail!("absmax must be f32");
+            hanzo_ml::bail!("absmax must be f32");
         }
 
         match self.quant_ty {
@@ -455,7 +455,7 @@ impl CustomOp3 for DequantizeOp {
                 self.blocksize,
                 self.n,
             )
-            .map_err(candle_core::Error::wrap)?,
+            .map_err(hanzo_ml::Error::wrap)?,
             BnbQuantType::Fp4 => crate::metal_kernels::call_dequant_bnb_fp4(
                 device.device(),
                 &encoder,
@@ -468,7 +468,7 @@ impl CustomOp3 for DequantizeOp {
                 self.blocksize,
                 self.n,
             )
-            .map_err(candle_core::Error::wrap)?,
+            .map_err(hanzo_ml::Error::wrap)?,
             BnbQuantType::Int8 => crate::metal_kernels::call_dequant_bnb_int8(
                 device.device(),
                 &encoder,
@@ -481,10 +481,10 @@ impl CustomOp3 for DequantizeOp {
                 self.blocksize,
                 self.n,
             )
-            .map_err(candle_core::Error::wrap)?,
+            .map_err(hanzo_ml::Error::wrap)?,
         };
 
-        let newstorage = candle_core::MetalStorage::new(
+        let newstorage = hanzo_ml::MetalStorage::new(
             output,
             device.clone(),
             self.shape.elem_count(),

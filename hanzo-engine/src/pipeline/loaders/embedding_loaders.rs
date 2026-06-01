@@ -23,7 +23,7 @@ use crate::{
     utils::varbuilder_utils::DeviceForLoadTensor,
 };
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor};
+use hanzo_ml::{DType, Device, Tensor};
 use hanzo_quant::log::once_log_debug;
 
 use hanzo_quant::ShardedVarBuilder;
@@ -41,7 +41,7 @@ pub trait EmbeddingModel: IsqModel + AnyMoeBaseModelMixin {
         &self,
         input_ids: &Tensor,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor>;
+    ) -> hanzo_ml::Result<Tensor>;
     fn device(&self) -> &Device;
 }
 

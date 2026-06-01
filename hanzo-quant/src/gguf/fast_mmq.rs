@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use candle_core::cuda::cudarc::driver::{CudaSlice, DevicePtr};
-use candle_core::{
+use hanzo_ml::cuda::cudarc::driver::{CudaSlice, DevicePtr};
+use hanzo_ml::{
     quantized::{GgmlDType, QTensor},
     CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
 };
@@ -201,7 +201,7 @@ struct WorkspaceSlot {
     cap: usize,
 }
 
-type WsMap = Mutex<HashMap<candle_core::cuda::DeviceId, &'static Mutex<WorkspaceSlot>>>;
+type WsMap = Mutex<HashMap<hanzo_ml::cuda::DeviceId, &'static Mutex<WorkspaceSlot>>>;
 
 static MMQ_WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 static FIXUP_WORKSPACE: OnceLock<WsMap> = OnceLock::new();
@@ -214,11 +214,11 @@ struct DeviceInfo {
     warp_size: i32,
 }
 
-static DEVICE_INFO: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, DeviceInfo>>> =
+static DEVICE_INFO: OnceLock<Mutex<HashMap<hanzo_ml::cuda::DeviceId, DeviceInfo>>> =
     OnceLock::new();
 
 fn get_device_info(dev: &CudaDevice) -> DeviceInfo {
-    use candle_core::cuda::cudarc::driver::{result, sys};
+    use hanzo_ml::cuda::cudarc::driver::{result, sys};
     let map = DEVICE_INFO.get_or_init(|| Mutex::new(HashMap::new()));
     let key = dev.id();
     let mut guard = map.lock().unwrap();
@@ -310,41 +310,41 @@ fn workspace_ensure(
 pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     let dtype = w.dtype();
     if !supports(dtype) {
-        candle_core::bail!("fast_mmq: unsupported quant dtype {dtype:?}");
+        hanzo_ml::bail!("fast_mmq: unsupported quant dtype {dtype:?}");
     }
     let Device::Cuda(dev) = w.device() else {
-        candle_core::bail!("fast_mmq: weight must live on CUDA");
+        hanzo_ml::bail!("fast_mmq: weight must live on CUDA");
     };
     let (nrows, ncols) = w.shape().dims2()?;
 
     let (b_size, k) = match xs.dims() {
         [b, k] => (*b, *k),
         [b, m, k] => (*b * *m, *k),
-        other => candle_core::bail!("fast_mmq: unexpected input rank {other:?}"),
+        other => hanzo_ml::bail!("fast_mmq: unexpected input rank {other:?}"),
     };
     if k != ncols {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmq: shape mismatch — weight [{nrows}, {ncols}] vs input tail {k}"
         );
     }
     if b_size == 0 {
-        candle_core::bail!("fast_mmq: batch size must be > 0");
+        hanzo_ml::bail!("fast_mmq: batch size must be > 0");
     }
 
     let qk = qk_for(dtype);
     if k % qk != 0 {
-        candle_core::bail!("fast_mmq: k={k} not divisible by qk={qk}");
+        hanzo_ml::bail!("fast_mmq: k={k} not divisible by qk={qk}");
     }
 
     let input_ty = xs.dtype();
     if !matches!(input_ty, DType::BF16 | DType::F16 | DType::F32) {
-        candle_core::bail!("fast_mmq: input dtype must be BF16, F16, or F32, got {input_ty:?}");
+        hanzo_ml::bail!("fast_mmq: input dtype must be BF16, F16, or F32, got {input_ty:?}");
     }
 
     let xs = xs.contiguous()?;
     let (xs_storage, xs_layout) = xs.storage_and_layout();
     let Storage::Cuda(xs_cuda) = &*xs_storage else {
-        candle_core::bail!("fast_mmq: input must live on CUDA");
+        hanzo_ml::bail!("fast_mmq: input must live on CUDA");
     };
     let xs_offset = xs_layout.start_offset();
     let type_x = match input_ty {
@@ -547,30 +547,30 @@ pub fn grouped(
 ) -> Result<Tensor> {
     let dtype = weight.dtype();
     if !supports(dtype) {
-        candle_core::bail!("fast_mmq grouped: unsupported quant dtype {dtype:?}");
+        hanzo_ml::bail!("fast_mmq grouped: unsupported quant dtype {dtype:?}");
     }
 
     let (_, k) = xs.dims2()?;
 
     let (weight_experts, nrows, ncols) = weight.shape().dims3()?;
     if weight_experts != num_experts {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmq grouped: expected {num_experts} experts, got {weight_experts}"
         );
     }
     if k != ncols {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmq grouped: shape mismatch — weight cols {ncols} vs input tail {k}"
         );
     }
     let qk = qk_for(dtype);
     if k % qk != 0 {
-        candle_core::bail!("fast_mmq grouped: k={k} not divisible by qk={qk}");
+        hanzo_ml::bail!("fast_mmq grouped: k={k} not divisible by qk={qk}");
     }
 
     let input_ty = xs.dtype();
     if !matches!(input_ty, DType::BF16 | DType::F16 | DType::F32) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmq grouped: input dtype must be BF16, F16, or F32, got {input_ty:?}"
         );
     }
@@ -578,7 +578,7 @@ pub fn grouped(
     let xs = xs.contiguous()?;
     let (xs_storage, xs_layout) = xs.storage_and_layout();
     let Storage::Cuda(xs_cuda) = &*xs_storage else {
-        candle_core::bail!("fast_mmq grouped: input must live on CUDA");
+        hanzo_ml::bail!("fast_mmq grouped: input must live on CUDA");
     };
     let xs_offset = xs_layout.start_offset();
     let type_x = match input_ty {
@@ -734,20 +734,20 @@ pub fn grouped_from_glu_pair(
 ) -> Result<Tensor> {
     let dtype = weight.dtype();
     if !supports(dtype) {
-        candle_core::bail!("fast_mmq grouped_from_glu_pair: unsupported quant dtype {dtype:?}");
+        hanzo_ml::bail!("fast_mmq grouped_from_glu_pair: unsupported quant dtype {dtype:?}");
     }
 
     let (gate_rows, k) = gate.dims2()?;
     let (up_rows, up_k) = up.dims2()?;
     if gate_rows != total_assignments || up_rows != total_assignments || up_k != k {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmq grouped_from_glu_pair: gate/up shape mismatch {:?} vs {:?}, total_assignments={total_assignments}",
             gate.shape(),
             up.shape()
         );
     }
     if gate.dtype() != DType::F32 || up.dtype() != DType::F32 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmq grouped_from_glu_pair: gate/up must be F32, got {:?} and {:?}",
             gate.dtype(),
             up.dtype()
@@ -756,29 +756,29 @@ pub fn grouped_from_glu_pair(
 
     let (weight_experts, nrows, ncols) = weight.shape().dims3()?;
     if weight_experts != num_experts {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmq grouped_from_glu_pair: expected {num_experts} experts, got {weight_experts}"
         );
     }
     if k != ncols {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmq grouped_from_glu_pair: shape mismatch — weight cols {ncols} vs input tail {k}"
         );
     }
     let qk = qk_for(dtype);
     if k % qk != 0 {
-        candle_core::bail!("fast_mmq grouped_from_glu_pair: k={k} not divisible by qk={qk}");
+        hanzo_ml::bail!("fast_mmq grouped_from_glu_pair: k={k} not divisible by qk={qk}");
     }
 
     let gate = gate.contiguous()?;
     let up = up.contiguous()?;
     let (gate_storage, gate_layout) = gate.storage_and_layout();
     let Storage::Cuda(gate_cuda) = &*gate_storage else {
-        candle_core::bail!("fast_mmq grouped_from_glu_pair: gate must live on CUDA");
+        hanzo_ml::bail!("fast_mmq grouped_from_glu_pair: gate must live on CUDA");
     };
     let (up_storage, up_layout) = up.storage_and_layout();
     let Storage::Cuda(up_cuda) = &*up_storage else {
-        candle_core::bail!("fast_mmq grouped_from_glu_pair: up must live on CUDA");
+        hanzo_ml::bail!("fast_mmq grouped_from_glu_pair: up must live on CUDA");
     };
 
     let stream_ptr = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
@@ -886,19 +886,19 @@ pub fn grouped_pair(
 ) -> Result<(Tensor, Tensor)> {
     let dtype = gate.dtype();
     if dtype != up.dtype() {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmq grouped_pair requires matching gate/up dtypes, got {:?} and {:?}",
             dtype,
             up.dtype()
         );
     }
     if !supports(dtype) {
-        candle_core::bail!("fast_mmq grouped_pair: unsupported quant dtype {dtype:?}");
+        hanzo_ml::bail!("fast_mmq grouped_pair: unsupported quant dtype {dtype:?}");
     }
 
     let (num_tokens, k) = xs.dims2()?;
     if total_assignments != num_tokens * topk {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmq grouped_pair: total_assignments={total_assignments} does not match num_tokens={num_tokens} * topk={topk}"
         );
     }
@@ -906,30 +906,30 @@ pub fn grouped_pair(
     let (gate_experts, nrows, ncols) = gate.shape().dims3()?;
     let (up_experts, up_nrows, up_ncols) = up.shape().dims3()?;
     if gate_experts != num_experts || up_experts != num_experts {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmq grouped_pair: expected {num_experts} experts, got gate={gate_experts} up={up_experts}"
         );
     }
     if nrows != up_nrows || ncols != up_ncols {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmq grouped_pair: gate/up shape mismatch {:?} vs {:?}",
             gate.shape(),
             up.shape()
         );
     }
     if k != ncols {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmq grouped_pair: shape mismatch — weight cols {ncols} vs input tail {k}"
         );
     }
     let qk = qk_for(dtype);
     if k % qk != 0 {
-        candle_core::bail!("fast_mmq grouped_pair: k={k} not divisible by qk={qk}");
+        hanzo_ml::bail!("fast_mmq grouped_pair: k={k} not divisible by qk={qk}");
     }
 
     let input_ty = xs.dtype();
     if !matches!(input_ty, DType::BF16 | DType::F16 | DType::F32) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "fast_mmq grouped_pair: input dtype must be BF16, F16, or F32, got {input_ty:?}"
         );
     }
@@ -937,7 +937,7 @@ pub fn grouped_pair(
     let xs = xs.contiguous()?;
     let (xs_storage, xs_layout) = xs.storage_and_layout();
     let Storage::Cuda(xs_cuda) = &*xs_storage else {
-        candle_core::bail!("fast_mmq grouped_pair: input must live on CUDA");
+        hanzo_ml::bail!("fast_mmq grouped_pair: input must live on CUDA");
     };
     let xs_offset = xs_layout.start_offset();
     let type_x = match input_ty {

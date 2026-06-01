@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{Result, Tensor, D};
-use candle_nn::{Conv2d, GroupNorm};
+use hanzo_ml::{Result, Tensor, D};
+use hanzo_nn::{Conv2d, GroupNorm};
 use hanzo_quant::{Convolution, ShardedVarBuilder};
 use serde::Deserialize;
 
@@ -23,7 +23,7 @@ fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Te
     let dim = q.dim(D::Minus1)?;
     let scale_factor = 1.0 / (dim as f64).sqrt();
     let attn_weights = (MatMul.matmul(q, &k.t()?)? * scale_factor)?;
-    MatMul.matmul(&candle_nn::ops::softmax_last_dim(&attn_weights)?, v)
+    MatMul.matmul(&hanzo_nn::ops::softmax_last_dim(&attn_weights)?, v)
 }
 
 #[derive(Debug, Clone)]
@@ -52,7 +52,7 @@ impl AttnBlock {
     }
 }
 
-impl candle_core::Module for AttnBlock {
+impl hanzo_ml::Module for AttnBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let init_xs = xs;
         let normed = self.norm.forward(xs)?;
@@ -81,7 +81,7 @@ struct ResnetBlock {
 
 impl ResnetBlock {
     fn new(in_c: usize, out_c: usize, vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
-        let conv_cfg = candle_nn::Conv2dConfig {
+        let conv_cfg = hanzo_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
         };
@@ -110,13 +110,13 @@ impl ResnetBlock {
     }
 }
 
-impl candle_core::Module for ResnetBlock {
+impl hanzo_ml::Module for ResnetBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let mut h = self.norm1.forward(xs)?;
-        h = candle_nn::Activation::Swish.forward(&h)?;
+        h = hanzo_nn::Activation::Swish.forward(&h)?;
         h = Convolution.forward_2d(&self.conv1, &h)?;
         h = self.norm2.forward(&h)?;
-        h = candle_nn::Activation::Swish.forward(&h)?;
+        h = hanzo_nn::Activation::Swish.forward(&h)?;
         h = Convolution.forward_2d(&self.conv2, &h)?;
         match self.nin_shortcut.as_ref() {
             None => xs + h,
@@ -132,7 +132,7 @@ struct Downsample {
 
 impl Downsample {
     fn new(in_c: usize, vb: ShardedVarBuilder) -> Result<Self> {
-        let conv_cfg = candle_nn::Conv2dConfig {
+        let conv_cfg = hanzo_nn::Conv2dConfig {
             stride: 2,
             ..Default::default()
         };
@@ -141,7 +141,7 @@ impl Downsample {
     }
 }
 
-impl candle_core::Module for Downsample {
+impl hanzo_ml::Module for Downsample {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs = xs.pad_with_zeros(D::Minus1, 0, 1)?;
         let xs = xs.pad_with_zeros(D::Minus2, 0, 1)?;
@@ -156,7 +156,7 @@ struct Upsample {
 
 impl Upsample {
     fn new(in_c: usize, vb: ShardedVarBuilder) -> Result<Self> {
-        let conv_cfg = candle_nn::Conv2dConfig {
+        let conv_cfg = hanzo_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
         };
@@ -165,7 +165,7 @@ impl Upsample {
     }
 }
 
-impl candle_core::Module for Upsample {
+impl hanzo_ml::Module for Upsample {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (_, _, h, w) = xs.dims4()?;
         let upsampled = xs.upsample_nearest2d(h * 2, w * 2)?;
@@ -192,7 +192,7 @@ pub struct Encoder {
 
 impl Encoder {
     pub fn new(cfg: &Config, vb: ShardedVarBuilder) -> Result<Self> {
-        let conv_cfg = candle_nn::Conv2dConfig {
+        let conv_cfg = hanzo_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
         };
@@ -249,7 +249,7 @@ impl Encoder {
     }
 }
 
-impl candle_nn::Module for Encoder {
+impl hanzo_nn::Module for Encoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let mut h = Convolution.forward_2d(&self.conv_in, xs)?;
         for block in self.down.iter() {
@@ -264,7 +264,7 @@ impl candle_nn::Module for Encoder {
         h = self.mid_attn_1.forward(&h)?;
         h = self.mid_block_2.forward(&h)?;
         h = self.norm_out.forward(&h)?;
-        h = candle_nn::Activation::Swish.forward(&h)?;
+        h = hanzo_nn::Activation::Swish.forward(&h)?;
         Convolution.forward_2d(&self.conv_out, &h)
     }
 }
@@ -288,7 +288,7 @@ pub struct Decoder {
 
 impl Decoder {
     pub fn new(cfg: &Config, vb: ShardedVarBuilder) -> Result<Self> {
-        let conv_cfg = candle_nn::Conv2dConfig {
+        let conv_cfg = hanzo_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
         };
@@ -335,7 +335,7 @@ impl Decoder {
     }
 }
 
-impl candle_nn::Module for Decoder {
+impl hanzo_nn::Module for Decoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let mut h = Convolution.forward_2d(&self.conv_in, xs)?;
         h = self.mid_block_1.forward(&h)?;
@@ -350,7 +350,7 @@ impl candle_nn::Module for Decoder {
             }
         }
         h = self.norm_out.forward(&h)?;
-        h = candle_nn::Activation::Swish.forward(&h)?;
+        h = hanzo_nn::Activation::Swish.forward(&h)?;
         Convolution.forward_2d(&self.conv_out, &h)
     }
 }
@@ -367,7 +367,7 @@ impl DiagonalGaussian {
     }
 }
 
-impl candle_nn::Module for DiagonalGaussian {
+impl hanzo_nn::Module for DiagonalGaussian {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let chunks = xs.chunk(2, self.chunk_dim)?;
         if self.sample {
@@ -412,7 +412,7 @@ impl AutoEncoder {
     }
 }
 
-impl candle_core::Module for AutoEncoder {
+impl hanzo_ml::Module for AutoEncoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         self.decode(&self.encode(xs)?)
     }

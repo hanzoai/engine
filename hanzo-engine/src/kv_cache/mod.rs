@@ -1,7 +1,7 @@
 use crate::attention::AttentionMask;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use candle_core::{Result, Tensor, D};
+use hanzo_ml::{Result, Tensor, D};
 
 use crate::{
     get_mut_arcmutex,
@@ -154,7 +154,7 @@ impl KvCache {
                 (Some(out_k), Some(out_v))
             }
             Self::Shared { owner } => {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "attempted to append KV data to shared cache owned by layer {owner}"
                 );
             }
@@ -282,7 +282,7 @@ impl KvCache {
                     v: post_v,
                 }) = post_forward_layer
                 else {
-                    candle_core::bail!(
+                    hanzo_ml::bail!(
                         "rotating cache speculative rollback requires post-forward rotating layer"
                     );
                 };
@@ -307,7 +307,7 @@ impl KvCache {
                 *layer = KvCache::Shared { owner: *owner };
             }
             _ => {
-                candle_core::bail!("kv-cache speculative rollback snapshot kind mismatch");
+                hanzo_ml::bail!("kv-cache speculative rollback snapshot kind mismatch");
             }
         }
         Ok(())
@@ -328,7 +328,7 @@ impl KvCache {
     }
 
     /// Returns Ok if the length reassignment was successful, otherwise returns Err.
-    pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
+    pub fn set_len(&mut self, len: usize) -> hanzo_ml::Result<()> {
         match self {
             Self::Normal { k, v } => {
                 k.set_len(len)?;
@@ -344,7 +344,7 @@ impl KvCache {
         }
     }
 
-    pub fn try_set_len(&self, len: usize) -> candle_core::Result<()> {
+    pub fn try_set_len(&self, len: usize) -> hanzo_ml::Result<()> {
         match self {
             Self::Normal { k, v } => {
                 k.try_set_len(len)?;
@@ -1394,7 +1394,7 @@ fn try_kv_append_dual_metal(
     k_src: &Tensor,
     v_src: &Tensor,
 ) -> Result<bool> {
-    use candle_core::{backend::BackendStorage, Storage};
+    use hanzo_ml::{backend::BackendStorage, Storage};
 
     // Layout requirements: dim=2, rank=4, source [b=1, n_kv, src_seq, head_dim],
     // dst (cache) [b=1, n_kv, max_seq, head_dim], both BF16/F16/F32.
@@ -1406,7 +1406,7 @@ fn try_kv_append_dual_metal(
     }
     if !matches!(
         k_src.dtype(),
-        candle_core::DType::BF16 | candle_core::DType::F16 | candle_core::DType::F32
+        hanzo_ml::DType::BF16 | hanzo_ml::DType::F16 | hanzo_ml::DType::F32
     ) {
         return Ok(false);
     }
@@ -1481,7 +1481,7 @@ fn try_kv_append_dual_metal(
         max_seq,
         kc.current_seq_len,
     )
-    .map_err(candle_core::Error::wrap)?;
+    .map_err(hanzo_ml::Error::wrap)?;
 
     kc.current_seq_len += src_seq;
     vc.current_seq_len += src_seq;
@@ -1495,7 +1495,7 @@ fn try_kv_append_rotating_metal(
     k_src: &Tensor,
     v_src: &Tensor,
 ) -> Result<Option<(Tensor, Tensor)>> {
-    use candle_core::{backend::BackendStorage, Storage};
+    use hanzo_ml::{backend::BackendStorage, Storage};
 
     // Decode steady-state only: window is already full, one new token at a time.
     // Anything else falls back so the existing shift-based code handles it.
@@ -1507,7 +1507,7 @@ fn try_kv_append_rotating_metal(
     }
     if !matches!(
         k_src.dtype(),
-        candle_core::DType::BF16 | candle_core::DType::F16 | candle_core::DType::F32
+        hanzo_ml::DType::BF16 | hanzo_ml::DType::F16 | hanzo_ml::DType::F32
     ) || k_src.dtype() != v_src.dtype()
     {
         return Ok(None);
@@ -1581,7 +1581,7 @@ fn try_kv_append_rotating_metal(
             max_seq,
             slot,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
     }
 
     kc.current_seq_len += src_seq;

@@ -34,7 +34,7 @@ impl MtpConfig {
         }
     }
 
-    pub fn resolve_path(&self) -> candle_core::Result<PathBuf> {
+    pub fn resolve_path(&self) -> hanzo_ml::Result<PathBuf> {
         let path = PathBuf::from(&self.model);
         if path.exists() || self.model.starts_with('.') || self.model.starts_with('/') {
             Ok(path)
@@ -44,20 +44,20 @@ impl MtpConfig {
     }
 }
 
-fn build_hf_api(id: &str, revision: &str) -> candle_core::Result<ApiRepo> {
+fn build_hf_api(id: &str, revision: &str) -> hanzo_ml::Result<ApiRepo> {
     let cache = GLOBAL_HF_CACHE
         .get()
         .cloned()
         .unwrap_or_else(|| hf_hub_cache_dir().map(Cache::new).unwrap_or_default());
     let mut api = ApiBuilder::from_cache(cache)
         .with_progress(true)
-        .with_token(get_token(&TokenSource::CacheToken).map_err(candle_core::Error::msg)?);
+        .with_token(get_token(&TokenSource::CacheToken).map_err(hanzo_ml::Error::msg)?);
     if let Some(cache_dir) = hf_hub_cache_dir() {
         api = api.with_cache_dir(cache_dir);
     }
     Ok(api
         .build()
-        .map_err(candle_core::Error::msg)?
+        .map_err(hanzo_ml::Error::msg)?
         .repo(Repo::with_revision(
             id.to_string(),
             RepoType::Model,
@@ -65,14 +65,14 @@ fn build_hf_api(id: &str, revision: &str) -> candle_core::Result<ApiRepo> {
         )))
 }
 
-fn resolve_hf_mtp_path(id: &str) -> candle_core::Result<PathBuf> {
+fn resolve_hf_mtp_path(id: &str) -> hanzo_ml::Result<PathBuf> {
     let revision = "main";
     let api = build_hf_api(id, revision)?;
     let model_id = Path::new(id);
 
     let config_path =
-        get_file(&api, model_id, "config.json", revision).map_err(candle_core::Error::msg)?;
-    let files = list_repo_files(&api, model_id, true, revision).map_err(candle_core::Error::msg)?;
+        get_file(&api, model_id, "config.json", revision).map_err(hanzo_ml::Error::msg)?;
+    let files = list_repo_files(&api, model_id, true, revision).map_err(hanzo_ml::Error::msg)?;
     let mut weight_files = files
         .iter()
         .filter(|file| file.ends_with(".safetensors"))
@@ -80,16 +80,16 @@ fn resolve_hf_mtp_path(id: &str) -> candle_core::Result<PathBuf> {
         .collect::<Vec<_>>();
     weight_files.sort();
     if weight_files.is_empty() {
-        candle_core::bail!("MTP model `{id}` does not contain safetensors weights");
+        hanzo_ml::bail!("MTP model `{id}` does not contain safetensors weights");
     }
     for file in weight_files {
-        get_file(&api, model_id, &file, revision).map_err(candle_core::Error::msg)?;
+        get_file(&api, model_id, &file, revision).map_err(hanzo_ml::Error::msg)?;
     }
 
     try_get_file(&api, model_id, "generation_config.json", revision)
-        .map_err(|err| candle_core::Error::Msg(err.to_string()))?;
+        .map_err(|err| hanzo_ml::Error::Msg(err.to_string()))?;
 
     config_path.parent().map(Path::to_path_buf).ok_or_else(|| {
-        candle_core::Error::Msg(format!("config path has no parent: {config_path:?}"))
+        hanzo_ml::Error::Msg(format!("config path has no parent: {config_path:?}"))
     })
 }

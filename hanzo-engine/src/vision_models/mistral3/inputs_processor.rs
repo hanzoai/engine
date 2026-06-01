@@ -2,7 +2,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use candle_core::{Device, Result, Tensor};
+use hanzo_ml::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use hanzo_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
 use tokenizers::Tokenizer;
@@ -390,7 +390,7 @@ impl ImagePreProcessor for Mistral3ImageProcessor {
         } else if size.contains_key("height") && size.contains_key("width") {
             (size["height"] as usize, size["width"] as usize)
         } else {
-            candle_core::bail!("Size must be a map of `longest_edge` or `height` and `width`.");
+            hanzo_ml::bail!("Size must be a map of `longest_edge` or `height` and `width`.");
         };
 
         for image in images.iter_mut() {

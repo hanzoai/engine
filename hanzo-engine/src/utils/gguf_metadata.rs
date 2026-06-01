@@ -1,8 +1,8 @@
 use akin::akin;
 use anyhow::ensure;
 use anyhow::Result;
-use candle_core::quantized::gguf_file;
-use candle_core::DType;
+use hanzo_ml::quantized::gguf_file;
+use hanzo_ml::DType;
 use std::collections::HashMap;
 use std::fs;
 use tracing::warn;
@@ -169,14 +169,14 @@ impl ContentMetadata<'_> {
 // These traits below are a workaround for converting candles GGUF `Value` enum type wrapper.
 // A better upstream approach would instead be to provide serialize/deserialize support?
 pub trait TryFromValue {
-    fn try_from_value(value: gguf_file::Value) -> Result<Self, candle_core::Error>
+    fn try_from_value(value: gguf_file::Value) -> Result<Self, hanzo_ml::Error>
     where
         Self: Sized;
 }
 
 // Value wrapped types, each has a different conversion method:
 // NOTE: Type conversion methods internally bail with "not a <into type> <input value>"
-// https://docs.rs/candle-core/latest/candle_core/quantized/gguf_file/enum.Value.html#variants
+// https://docs.rs/candle-core/latest/hanzo_ml/quantized/gguf_file/enum.Value.html#variants
 akin! {
     let &types = [String, bool, f32, f64, i8, i16, i32, i64, u8, u16, u32, u64];
     let &to_type = [
@@ -195,18 +195,18 @@ akin! {
     ];
 
     impl TryFromValue for *types {
-        fn try_from_value(value: gguf_file::Value) -> Result<Self, candle_core::Error> {
-            *to_type.or_else(|_| candle_core::bail!("value is not a `*types`"))
+        fn try_from_value(value: gguf_file::Value) -> Result<Self, hanzo_ml::Error> {
+            *to_type.or_else(|_| hanzo_ml::bail!("value is not a `*types`"))
         }
     }
 }
 
 // Vec<Value> to Vec<T> from above types:
 impl<T: TryFromValue> TryFromValue for Vec<T> {
-    fn try_from_value(value_vec: gguf_file::Value) -> Result<Self, candle_core::Error> {
+    fn try_from_value(value_vec: gguf_file::Value) -> Result<Self, hanzo_ml::Error> {
         value_vec
             .to_vec()
-            .or_else(|_| candle_core::bail!("value is not a `Vec`"))?
+            .or_else(|_| hanzo_ml::bail!("value is not a `Vec`"))?
             .clone()
             .into_iter()
             .map(|item| T::try_from_value(item))
@@ -215,20 +215,20 @@ impl<T: TryFromValue> TryFromValue for Vec<T> {
 }
 
 pub trait TryValueInto<T>: Sized {
-    fn try_value_into(self) -> Result<T, candle_core::Error>;
+    fn try_value_into(self) -> Result<T, hanzo_ml::Error>;
 }
 
 impl<T: TryFromValue> TryValueInto<T> for gguf_file::Value {
-    fn try_value_into(self) -> Result<T, candle_core::Error> {
+    fn try_value_into(self) -> Result<T, hanzo_ml::Error> {
         T::try_from_value(self)
     }
 }
 
 impl<T: TryFromValue> TryValueInto<T> for Option<gguf_file::Value> {
-    fn try_value_into(self) -> Result<T, candle_core::Error> {
+    fn try_value_into(self) -> Result<T, hanzo_ml::Error> {
         match self {
             Some(value) => value.try_value_into(),
-            None => candle_core::bail!("Expected `Option<gguf_file::Value>` to contain a value"),
+            None => hanzo_ml::bail!("Expected `Option<gguf_file::Value>` to contain a value"),
         }
     }
 }

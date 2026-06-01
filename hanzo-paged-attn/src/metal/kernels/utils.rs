@@ -1,4 +1,4 @@
-use candle_metal_kernels::metal::{CommandBuffer, CommandsGuard, ComputeCommandEncoder};
+use hanzo_metal_kernels::metal::{CommandBuffer, CommandsGuard, ComputeCommandEncoder};
 use std::ffi::c_void;
 
 pub trait RawBytesEncoder {

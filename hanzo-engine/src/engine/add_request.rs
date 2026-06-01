@@ -6,7 +6,7 @@ use crate::{
     tools::{ToolCallingMatcher, ToolChoice},
     ModelCategory, RequestMessage, Response,
 };
-use candle_core::Tensor;
+use hanzo_ml::Tensor;
 use either::Either;
 use std::{
     ops::Deref,

@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use candle_core::{DType, IndexOp, Result, Tensor, D};
-use candle_nn::{BatchNorm, Conv1d, Conv1dConfig, LayerNorm, Linear, ModuleT};
+use hanzo_ml::{DType, IndexOp, Result, Tensor, D};
+use hanzo_nn::{BatchNorm, Conv1d, Conv1dConfig, LayerNorm, Linear, ModuleT};
 use hanzo_quant::{Convolution, QuantMethod, ShardedVarBuilder};
 
 use crate::{
@@ -695,7 +695,7 @@ fn unfold_tensor(xs_pad: &Tensor, max_seq_len: usize) -> Result<Tensor> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::Device;
+    use hanzo_ml::Device;
 
     #[test]
     fn test_unfold_tensor() -> Result<()> {

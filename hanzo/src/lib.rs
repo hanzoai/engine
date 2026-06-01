@@ -267,8 +267,8 @@ pub use speech_model::SpeechModelBuilder;
 pub use text_model::{PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder};
 pub use xlora_model::XLoraModelBuilder;
 
-pub use candle_core::{DType, Device, Result, Tensor};
-pub use candle_nn::loss::cross_entropy as cross_entropy_loss;
+pub use hanzo_ml::{DType, Device, Result, Tensor};
+pub use hanzo_nn::loss::cross_entropy as cross_entropy_loss;
 
 /// Low-level types and internals re-exported from `hanzo_engine`.
 ///

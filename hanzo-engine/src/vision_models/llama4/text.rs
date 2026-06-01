@@ -1,8 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Embedding, Module};
+use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{
     linear_no_bias, ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer,
     RowParallelLayer, ShardedVarBuilder,
@@ -367,7 +367,7 @@ impl TextMoe {
             indices: router_indices,
         } = router_logits.topk(self.topk)?;
 
-        let router_scores = candle_nn::ops::sigmoid(&router_top_value.to_dtype(DType::F32)?)?
+        let router_scores = hanzo_nn::ops::sigmoid(&router_top_value.to_dtype(DType::F32)?)?
             .to_dtype(router_top_value.dtype())?;
 
         // Forward through routed experts (is_prefill determined internally)
@@ -575,7 +575,7 @@ impl TextModel {
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)?,
                 None,
             ))?

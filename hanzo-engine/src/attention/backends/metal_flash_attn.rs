@@ -1,4 +1,4 @@
-use candle_core::{backend::BackendStorage, DType, MetalStorage, Result, Shape, Storage, Tensor};
+use hanzo_ml::{backend::BackendStorage, DType, MetalStorage, Result, Shape, Storage, Tensor};
 use hanzo_quant::metal_kernels::{
     call_flash_attn_ext_bf16_dk512, call_flash_attn_ext_vec_bf16_dk512,
     flash_attn_ext_blk_scratch_size, Kernels, FA_NCPSG,
@@ -127,7 +127,7 @@ pub(crate) fn try_flash_attn_ext_bf16_dk512(
         mask_stride,
         scale,
     )
-    .map_err(candle_core::Error::wrap)?;
+    .map_err(hanzo_ml::Error::wrap)?;
 
     let out = Tensor::from((
         Storage::Metal(MetalStorage::new(
@@ -269,7 +269,7 @@ pub(crate) fn try_flash_attn_ext_vec_bf16_dk512(
         &mask_stride,
         scale,
     )
-    .map_err(candle_core::Error::wrap)?;
+    .map_err(hanzo_ml::Error::wrap)?;
 
     let out = Tensor::from((
         Storage::Metal(MetalStorage::new(
