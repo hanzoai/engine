@@ -1,6 +1,9 @@
 [workspace]
 members = [
     "hanzo-engine",
+    "hanzo-federation",
+    "hanzo-quant",
+    "hanzo-zen5",
     "mistralrs-server-core",
     "mistralrs-server",
     "mistralrs-cli",
@@ -21,6 +24,7 @@ resolver = "2"
 [workspace.package]
 version = "0.8.1"
 edition = "2021"
+authors = ["Hanzo AI <dev@hanzo.ai>"]
 description = "Fast, flexible LLM inference."
 homepage = "https://github.com/hanzoai/engine"
 repository = "https://github.com/hanzoai/engine"
@@ -197,6 +201,11 @@ mistralrs-audio = { path = "mistralrs-audio", version = "0.8.1" }
 mistralrs-mcp = { path = "mistralrs-mcp", version = "0.8.1" }
 mistralrs-macros = { path = "mistralrs-macros", version = "0.8.1" }
 hanzo-zap = { path = "../net/hanzo-zap", version = "0.6.75" }
+
+# Hanzo native-ML extension crates (federated training, quantization, zen5 inference)
+hex = "0.4.3"
+serde_yaml = "0.9.34"
+tempfile = "3.19"
 
 [profile.release-with-debug]
 inherits = "release"
