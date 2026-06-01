@@ -31,7 +31,6 @@ pub fn selective_scan_cuda(
     dt_min: f32,
     dt_max: f32,
 ) -> hanzo_ml::Result<hanzo_ml::Tensor> {
-    use hanzo_ml as candle;
     use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
 
     let x = x.contiguous()?;
@@ -62,8 +61,8 @@ pub fn selective_scan_cuda(
         ($tensor:expr) => {{
             let (s, l) = $tensor.storage_and_layout();
             let s = match &*s {
-                candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-                _ => candle::bail!("selective_scan_cuda: tensor must be on CUDA"),
+                hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+                _ => hanzo_ml::bail!("selective_scan_cuda: tensor must be on CUDA"),
             };
             let ptr = s.slice(l.start_offset()..).device_ptr(s.stream()).0 as *const f32;
             ptr
@@ -81,8 +80,8 @@ pub fn selective_scan_cuda(
     // State is mutable
     let (state_s, state_l) = state.storage_and_layout();
     let state_s = match &*state_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("selective_scan_cuda: state must be on CUDA"),
+        hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => hanzo_ml::bail!("selective_scan_cuda: state must be on CUDA"),
     };
     let state_ptr = {
         let ptr = state_s
@@ -126,9 +125,9 @@ pub fn selective_scan_cuda(
         );
     }
 
-    let y_storage = candle::CudaStorage::wrap_cuda_slice(y_buf, dev.clone());
+    let y_storage = hanzo_ml::CudaStorage::wrap_cuda_slice(y_buf, dev.clone());
     let y = hanzo_ml::Tensor::from((
-        candle::Storage::Cuda(y_storage),
+        hanzo_ml::Storage::Cuda(y_storage),
         (batch_size, seq_len, n_heads, head_dim),
     ));
 
