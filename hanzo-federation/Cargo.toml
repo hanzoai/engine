@@ -1,0 +1,38 @@
+[package]
+name = "hanzo-federation"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Vendor-neutral federated training transport, scheduler, and coordinator. Pure-Rust port of zen/gym distributed."
+license = "Apache-2.0"
+
+[features]
+default = []
+# Opt-in BitDelta wire codec. Enables `src/codec_bitdelta.rs` and the
+# compression integration tests. Workers without this feature negotiate
+# down to the canonical bf16 path — back-compat is guaranteed.
+compression = ["dep:hanzo-quant"]
+
+[dependencies]
+hanzo-quant = { path = "../hanzo-quant", optional = true }
+axum = { workspace = true, features = ["http2", "tokio"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "fs", "io-util", "net", "sync", "time", "signal"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }
+ring = "0.17"
+bytes = "1.7"
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+hex = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { workspace = true, features = ["trace"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+tempfile = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
