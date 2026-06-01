@@ -58,7 +58,7 @@ impl IntoResponse for EmbeddingResponder {
 #[utoipa::path(
     post,
     tag = "Mistral.rs",
-    path = "/v1/embeddings",
+    path = "/embeddings",
     request_body = EmbeddingRequest,
     responses((status = 200, description = "Embeddings", body = EmbeddingResponse))
 )]

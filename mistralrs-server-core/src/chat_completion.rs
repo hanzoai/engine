@@ -929,7 +929,7 @@ pub async fn parse_request(
 #[utoipa::path(
     post,
     tag = "Mistral.rs",
-    path = "/v1/chat/completions",
+    path = "/chat/completions",
     request_body = ChatCompletionRequest,
     responses((status = 200, description = "Chat completions"))
 )]

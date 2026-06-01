@@ -157,6 +157,11 @@ struct Args {
     /// MCP client configuration file path
     #[arg(long)]
     mcp_config: Option<String>,
+
+    /// Prefix under which the OpenAI-compatible API is mounted (matches the Hanzo `/v1/<service>`
+    /// convention). `/health` stays at the root for liveness probes. Defaults to `/v1/engine`.
+    #[arg(long)]
+    api_prefix: Option<String>,
 }
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
@@ -456,6 +461,7 @@ async fn main() -> Result<()> {
 
         let app = MistralRsServerRouterBuilder::new()
             .with_mistralrs(mistralrs)
+            .with_api_prefix_optional(args.api_prefix.clone())
             .build()
             .await?;
 

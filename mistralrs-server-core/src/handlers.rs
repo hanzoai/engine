@@ -38,7 +38,7 @@ impl From<TuneProfileRequest> for TuneProfile {
 #[utoipa::path(
   get,
   tag = "Mistral.rs",
-  path = "/v1/models",
+  path = "/models",
   responses((status = 200, description = "Served model info", body = ModelObjects))
 )]
 pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects> {
@@ -170,7 +170,7 @@ pub struct ModelStatusResponse {
 #[utoipa::path(
   post,
   tag = "Mistral.rs",
-  path = "/v1/models/unload",
+  path = "/models/unload",
   request_body = ModelOperationRequest,
   responses(
     (status = 200, description = "Model unloaded successfully", body = ModelStatusResponse),
@@ -207,7 +207,7 @@ pub async fn unload_model(
 #[utoipa::path(
   post,
   tag = "Mistral.rs",
-  path = "/v1/models/reload",
+  path = "/models/reload",
   request_body = ModelOperationRequest,
   responses(
     (status = 200, description = "Model reloaded successfully", body = ModelStatusResponse),
@@ -247,7 +247,7 @@ pub async fn reload_model(
 #[utoipa::path(
   post,
   tag = "Mistral.rs",
-  path = "/v1/models/status",
+  path = "/models/status",
   request_body = ModelOperationRequest,
   responses(
     (status = 200, description = "Model status", body = ModelStatusResponse),
@@ -393,7 +393,7 @@ pub async fn tune_model(
 #[utoipa::path(
     get,
     tag = "Mistral.rs",
-    path = "/v1/sessions/{session_id}",
+    path = "/sessions/{session_id}",
     params(("session_id" = String, Path, description = "Session ID to export")),
     responses(
         (status = 200, description = "Serialized agentic session", body = SerializedSession),
@@ -418,7 +418,7 @@ pub async fn get_session(
 #[utoipa::path(
     put,
     tag = "Mistral.rs",
-    path = "/v1/sessions/{session_id}",
+    path = "/sessions/{session_id}",
     params(("session_id" = String, Path, description = "Session ID to import as")),
     request_body = SerializedSession,
     responses(
@@ -441,7 +441,7 @@ pub async fn put_session(
 #[utoipa::path(
     delete,
     tag = "Mistral.rs",
-    path = "/v1/sessions/{session_id}",
+    path = "/sessions/{session_id}",
     params(("session_id" = String, Path, description = "Session ID to delete")),
     responses((status = 200, description = "Session deleted (or did not exist)"))
 )]

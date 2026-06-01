@@ -32,6 +32,12 @@ pub struct ServerOptions {
     #[arg(long)]
     #[serde(default)]
     pub tool_dispatch_url: Option<String>,
+
+    /// Prefix under which the OpenAI-compatible API is mounted (matches the Hanzo `/v1/<service>`
+    /// convention). `/health` stays at the root for liveness probes. Defaults to `/v1/engine`.
+    #[arg(long, env = "MISTRALRS_API_PREFIX")]
+    #[serde(default)]
+    pub api_prefix: Option<String>,
 }
 
 impl Default for ServerOptions {
@@ -42,6 +48,7 @@ impl Default for ServerOptions {
             no_ui: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
+            api_prefix: None,
         }
     }
 }
