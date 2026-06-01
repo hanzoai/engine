@@ -3,10 +3,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
 pub use config::MiniCpmOConfig;
-pub use inputs_processor::MiniCpmOProcessor;
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
 use hanzo_quant::{CollectedImatrixData, QuantMethod, ShardedVarBuilder};
+pub use inputs_processor::MiniCpmOProcessor;
 use resampler::Resampler;
 
 use crate::attention::AttentionMask;

@@ -21,10 +21,10 @@ use crate::utils::{
 use crate::{DeviceMapSetting, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
 use hanzo_ml::{DType, Device, Tensor};
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use image::{DynamicImage, RgbImage};
 use hanzo_quant::log::once_log_info;
 use hanzo_quant::IsqType;
+use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use image::{DynamicImage, RgbImage};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::sync::Arc;

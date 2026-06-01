@@ -257,9 +257,7 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
         other => hanzo_ml::bail!("fast_mmvq: unexpected input rank {other:?}"),
     };
     if k != ncols {
-        hanzo_ml::bail!(
-            "fast_mmvq: shape mismatch — weight [{nrows}, {ncols}] vs input tail {k}"
-        );
+        hanzo_ml::bail!("fast_mmvq: shape mismatch — weight [{nrows}, {ncols}] vs input tail {k}");
     }
     if b_size == 0 || b_size > MMVQ_MAX_BATCH {
         hanzo_ml::bail!(
@@ -656,9 +654,7 @@ pub fn fused_qkv(
     let (k_nrows, k_ncols) = k_w.shape().dims2()?;
     let (v_nrows, v_ncols) = v_w.shape().dims2()?;
     if ncols != k_ncols || ncols != v_ncols {
-        hanzo_ml::bail!(
-            "fast_mmvq fused_qkv: q/k/v ncols mismatch {ncols}, {k_ncols}, {v_ncols}"
-        );
+        hanzo_ml::bail!("fast_mmvq fused_qkv: q/k/v ncols mismatch {ncols}, {k_ncols}, {v_ncols}");
     }
 
     let (b_size, k) = match xs.dims() {

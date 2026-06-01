@@ -1,12 +1,12 @@
+use float8::F8E4M3;
 use hanzo_ml::cuda::cudarc::driver::{DevicePtr, DeviceRepr};
 use hanzo_ml::cuda::CudaDType;
-use float8::F8E4M3;
 use std::ffi::c_int;
 
+use half::{bf16, f16};
 use hanzo_ml::backend::BackendStorage;
 use hanzo_ml::cuda_backend::WrapErr;
 use hanzo_ml::{CpuStorage, DType, Device, Layout, Result, Shape, Storage, Tensor, WithDType};
-use half::{bf16, f16};
 use std::sync::Arc;
 
 use crate::cublaslt::matmul::MatmulShared;
@@ -339,9 +339,9 @@ impl hanzo_ml::CustomOp3 for CublasLTBatchMatmulF8Scalar {
             hanzo_ml::DType::F8E4M3 => {
                 self.fwd_f8e4m3_scalar(a, a_l, b, b_l, Some(bias), Some(bias_l))
             }
-            dt => hanzo_ml::bail!(
-                "cublaslt-batch-matmul-add is only supported for f8e4m3 ({dt:?})"
-            ),
+            dt => {
+                hanzo_ml::bail!("cublaslt-batch-matmul-add is only supported for f8e4m3 ({dt:?})")
+            }
         }
     }
 }
@@ -483,9 +483,7 @@ impl hanzo_ml::CustomOp2 for CublasLTBatchMatmul {
             hanzo_ml::DType::BF16 => self.fwd::<bf16>(a, a_l, b, b_l, None, None),
             hanzo_ml::DType::F32 => self.fwd::<f32>(a, a_l, b, b_l, None, None),
             dt => {
-                hanzo_ml::bail!(
-                    "cublaslt-batch-matmul is only supported for f16/bf16/f32 ({dt:?})"
-                )
+                hanzo_ml::bail!("cublaslt-batch-matmul is only supported for f16/bf16/f32 ({dt:?})")
             }
         }
     }

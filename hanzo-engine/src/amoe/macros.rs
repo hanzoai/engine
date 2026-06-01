@@ -28,9 +28,10 @@ macro_rules! merge_delta {
             QMatMul::TensorF16(w) => QMatMul::TensorF16((w + $delta)?),
             QMatMul::QTensor(w) => {
                 let (w, dtype) = (w.dequantize(&w.device())?, w.dtype());
-                QMatMul::QTensor(std::sync::Arc::new(
-                    hanzo_ml::quantized::QTensor::quantize(&(w + $delta)?, dtype)?,
-                ))
+                QMatMul::QTensor(std::sync::Arc::new(hanzo_ml::quantized::QTensor::quantize(
+                    &(w + $delta)?,
+                    dtype,
+                )?))
             }
         }
     };

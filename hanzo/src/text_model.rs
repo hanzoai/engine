@@ -1,6 +1,6 @@
-use hanzo_ml::Device;
 use hanzo_engine::*;
 use hanzo_engine::{SearchCallback, Tool, ToolCallback, ToolCallbackKind};
+use hanzo_ml::Device;
 
 use crate::{IsqBits, IsqSetting};
 use std::collections::HashMap;

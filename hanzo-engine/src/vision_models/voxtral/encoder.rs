@@ -42,14 +42,10 @@ impl EncoderAttention {
 
         // Per-linear bias flags matching actual weight structure:
         // wq, wv, wo have bias; wk does NOT
-        let wq =
-            hanzo_quant::linear_b(dim, num_heads * head_dim, use_bias, &None, vb.pp("wq"))?;
-        let wk =
-            hanzo_quant::linear_b(dim, num_kv_heads * head_dim, false, &None, vb.pp("wk"))?;
-        let wv =
-            hanzo_quant::linear_b(dim, num_kv_heads * head_dim, use_bias, &None, vb.pp("wv"))?;
-        let wo =
-            hanzo_quant::linear_b(num_heads * head_dim, dim, use_bias, &None, vb.pp("wo"))?;
+        let wq = hanzo_quant::linear_b(dim, num_heads * head_dim, use_bias, &None, vb.pp("wq"))?;
+        let wk = hanzo_quant::linear_b(dim, num_kv_heads * head_dim, false, &None, vb.pp("wk"))?;
+        let wv = hanzo_quant::linear_b(dim, num_kv_heads * head_dim, use_bias, &None, vb.pp("wv"))?;
+        let wo = hanzo_quant::linear_b(num_heads * head_dim, dim, use_bias, &None, vb.pp("wo"))?;
 
         Ok(Self {
             wq,

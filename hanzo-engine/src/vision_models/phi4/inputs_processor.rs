@@ -3,8 +3,8 @@
 use std::{any::Any, collections::HashSet, sync::Arc};
 
 use hanzo_ml::{DType, Device, IndexOp, Result, Tensor};
-use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
 use hanzo_vision::{ApplyTransforms, Normalize, ToTensor, Transforms};
+use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
 use regex::Regex;
 use tokenizers::Tokenizer;
 

@@ -17,9 +17,9 @@
 //! See <https://hanzoai.github.io/engine/guides/models/video-setup/> for full details.
 
 use anyhow::{bail, Context, Result};
+use hanzo_engine::{sample_frame_indices, VideoInput};
 use image::codecs::gif::GifDecoder;
 use image::{AnimationDecoder, DynamicImage};
-use hanzo_engine::{sample_frame_indices, VideoInput};
 use std::io::Cursor;
 use std::path::Path;
 use tokio::{

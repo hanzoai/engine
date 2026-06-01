@@ -231,9 +231,8 @@ impl DiaPipeline {
             return logits.argmax(D::Minus1)?.to_vec1();
         }
 
-        let logits = hanzo_nn::ops::softmax_last_dim(
-            &(logits.to_dtype(DType::F32)? / temperature as f64)?,
-        )?;
+        let logits =
+            hanzo_nn::ops::softmax_last_dim(&(logits.to_dtype(DType::F32)? / temperature as f64)?)?;
         let batch_logits: Vec<Vec<f32>> = logits.to_vec2::<f32>()?;
 
         let mut sampled = Vec::with_capacity(batch_logits.len());

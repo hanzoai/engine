@@ -59,10 +59,7 @@ pub async fn list_files(State(state): ExtractedHanzoState) -> Response {
     Json(serde_json::json!({ "object": "list", "data": data })).into_response()
 }
 
-pub async fn delete_file(
-    State(state): ExtractedHanzoState,
-    Path(id): Path<String>,
-) -> Response {
+pub async fn delete_file(State(state): ExtractedHanzoState, Path(id): Path<String>) -> Response {
     if !state.remove_file(&id) {
         return not_found(&id);
     }
