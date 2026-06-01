@@ -32,7 +32,7 @@ pub(crate) fn version_is_compatible(version: u32) -> Result<()> {
 
     // Check minor version for forward compatibility
     if minor > UQFF_VERSION_MINOR {
-        hanzo_ml::bail!("Minor version of ISQ artifact file ({major}.{minor}.{patch}) is newer than this build supports ({UQFF_VERSION_MAJOR}.{UQFF_VERSION_MINOR}.{UQFF_VERSION_PATCH}). Please update mistral.rs.");
+        hanzo_ml::bail!("Minor version of ISQ artifact file ({major}.{minor}.{patch}) is newer than this build supports ({UQFF_VERSION_MAJOR}.{UQFF_VERSION_MINOR}.{UQFF_VERSION_PATCH}). Please update hanzo.");
     }
 
     Ok(())

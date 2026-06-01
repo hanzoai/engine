@@ -75,7 +75,7 @@ pub struct FluxStepper {
 }
 
 fn get_t5_tokenizer(api: &Api) -> anyhow::Result<Tokenizer> {
-    let repo_id = "EricB/t5_tokenizer";
+    let repo_id = "hanzoai/t5_tokenizer";
     let revision = "main";
     let repo = api.model(repo_id.to_string());
     let tokenizer_filename =
@@ -112,7 +112,7 @@ fn get_t5_model(
     silent: bool,
     offloaded: bool,
 ) -> hanzo_ml::Result<T5EncoderModel> {
-    let repo_id = "EricB/t5-v1_1-xxl-enc-only";
+    let repo_id = "hanzoai/t5-v1_1-xxl-enc-only";
     let revision = "main";
     let repo = api.repo(hf_hub::Repo::with_revision(
         repo_id.to_string(),

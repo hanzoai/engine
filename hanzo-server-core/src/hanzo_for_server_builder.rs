@@ -1,4 +1,4 @@
-//! ## mistral.rs instance for server builder.
+//! ## hanzo instance for server builder.
 
 use std::sync::Arc;
 
@@ -76,7 +76,7 @@ impl ModelConfig {
 
 pub mod defaults {
     use super::SearchEmbeddingModel;
-    // Provides the default values used for the mistral.rs instance for server.
+    // Provides the default values used for the hanzo instance for server.
     // These defaults can be used for CLI argument fallbacks, config loading, or general initialization.
 
     use std::sync::Arc;
@@ -112,7 +112,7 @@ pub mod defaults {
     pub const MTP_CONFIG: Option<hanzo_engine::MtpConfig> = None;
 }
 
-/// A builder for creating a mistral.rs instance with configured options for the mistral.rs server.
+/// A builder for creating a hanzo instance with configured options for the hanzo server.
 ///
 /// ### Examples
 ///
@@ -649,7 +649,7 @@ impl HanzoForServerBuilder {
         self
     }
 
-    /// Builds the configured mistral.rs instance.
+    /// Builds the configured hanzo instance.
     ///
     /// ### Examples
     ///

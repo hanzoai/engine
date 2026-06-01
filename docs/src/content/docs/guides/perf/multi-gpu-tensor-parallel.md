@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-When a model exceeds one GPU's memory after quantization, mistral.rs can split it across multiple GPUs on the same host.
+When a model exceeds one GPU's memory after quantization, hanzo can split it across multiple GPUs on the same host.
 
 ## Auto-detection
 
@@ -29,8 +29,8 @@ CUDA_VISIBLE_DEVICES=0,1 hanzo serve -m Qwen/Qwen3-32B --quant 4
 hanzo serve -n "0:32;1:32" -m <model>
 ```
 
-For per-tensor or per-layer placement, see the [topology guide](/mistral.rs/guides/perf/topology/).
+For per-tensor or per-layer placement, see the [topology guide](/hanzo/guides/perf/topology/).
 
 ## Multi-machine
 
-For cross-machine splitting, see the [ring backend guide](/mistral.rs/guides/perf/multi-machine-ring/).
+For cross-machine splitting, see the [ring backend guide](/hanzo/guides/perf/multi-machine-ring/).

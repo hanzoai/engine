@@ -146,12 +146,12 @@ completion = client.chat.completions.create(
 print(completion.choices[0].message.content)
 ```
 
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/hanzoai/engine/blob/master/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/hanzoai/engine/blob/master/examples/server/phi3v_local_img.py).
 
 ## Python SDK
 
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gemma4.py).
+You can find this example [here](https://github.com/hanzoai/engine/blob/master/examples/python/gemma4.py).
 
 ```py
 from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
@@ -192,7 +192,7 @@ print(res.usage)
 
 ## Rust SDK
 
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/models/multimodal_models/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/master/hanzo/examples/models/multimodal_models/main.rs).
 
 This is a minimal example of running the Gemma 4 model with a video input. Video decoding uses the `parse_video_url` helper from `hanzo-server-core`, which handles FFmpeg decoding and frame sampling automatically.
 

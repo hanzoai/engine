@@ -51,7 +51,7 @@ impl IntoResponse for ImageGenerationResponder {
 /// Parses and validates a image generation request.
 ///
 /// This function transforms a image generation request into the
-/// request format used by mistral.rs.
+/// request format used by hanzo.
 pub fn parse_request(
     oairequest: ImageGenerationRequest,
     state: Arc<Hanzo>,

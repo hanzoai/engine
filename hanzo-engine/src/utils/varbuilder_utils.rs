@@ -15,7 +15,7 @@ use crate::lora::LoraConfig;
 use crate::utils::progress::IterWithProgress;
 use derive_new::new;
 
-const MISTRALRS_NO_MMAP: &str = "MISTRALRS_NO_MMAP";
+const HANZO_NO_MMAP: &str = "HANZO_NO_MMAP";
 
 trait TensorLoaderBackend {
     fn get_names(&self) -> Vec<String>;
@@ -76,7 +76,7 @@ pub(crate) fn from_mmaped_safetensors(
     predicate: impl Fn(String) -> bool + Send + Sync + Clone + 'static,
     get_device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>,
 ) -> Result<ShardedVarBuilder> {
-    let use_no_mmap = std::env::var(MISTRALRS_NO_MMAP).is_ok_and(|x| x == "1");
+    let use_no_mmap = std::env::var(HANZO_NO_MMAP).is_ok_and(|x| x == "1");
     if xlora_paths.is_empty() && !use_no_mmap {
         if !silent {
             tracing::debug!("Loading model using mmap strategy.");
@@ -177,7 +177,7 @@ pub(crate) fn from_mmaped_safetensors(
 
     let backend = Box::new(ws);
 
-    // TODO(EricLBuehler): separation of concerns.
+    // TODO(hanzoai): separation of concerns.
     // This is to have WNA16 for GPTQ which is required. No bf16 for GPTQ
     Ok(ShardedSafeTensors::wrap_with_dummy_regexes(
         backend,
@@ -210,7 +210,7 @@ pub(crate) fn load_preload_adapters(
 
             let backend = Box::new(loaded_tensors);
 
-            // TODO(EricLBuehler): separation of concerns.
+            // TODO(hanzoai): separation of concerns.
             // This is to have WNA16 for GPTQ which is required. No bf16 for GPTQ
             let vb = ShardedSafeTensors::wrap(backend, dtype, device.clone());
 

@@ -27,7 +27,7 @@ hanzo run -m google/gemma-4-E4B-it --quant 8 \
   --mtp-n-predict 6
 ```
 
-`--mtp-n-predict` controls how many assistant tokens are proposed per step. If it is omitted, mistral.rs reads `num_assistant_tokens` from the assistant `generation_config.json` and falls back to 6.
+`--mtp-n-predict` controls how many assistant tokens are proposed per step. If it is omitted, hanzo reads `num_assistant_tokens` from the assistant `generation_config.json` and falls back to 6.
 
 ## Python
 

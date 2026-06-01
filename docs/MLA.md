@@ -49,7 +49,7 @@ MLA provides two key optimizations:
 If you encounter issues or want to compare performance, you can disable MLA by setting the environment variable:
 
 ```bash
-MISTRALRS_NO_MLA=1 hanzo ...
+HANZO_NO_MLA=1 hanzo ...
 ```
 
 When disabled, the model falls back to standard PagedAttention with full KV cache storage.

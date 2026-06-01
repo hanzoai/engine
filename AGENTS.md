@@ -1,7 +1,7 @@
 <!-- AGENTS.md: Guidance for AI agents to navigate, build, test, and contribute to this repository -->
 # AGENTS
 
-This file provides instructions for AI agents to understand the layout of the `mistral.rs` repository, run builds/tests, and follow project conventions.
+This file provides instructions for AI agents to understand the layout of the `hanzo` repository, run builds/tests, and follow project conventions.
 
 ## Repository Structure
 

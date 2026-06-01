@@ -4,9 +4,9 @@
 *.a
 .DS_Store
 .idea
-mistral.rs/
+hanzo/
 
-mistralrs-cli/webui/node_modules/
+hanzo-cli/webui/node_modules/
 
 # mdbook output
 docs/book/
