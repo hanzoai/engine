@@ -108,7 +108,7 @@ pub fn parse_request(
 #[utoipa::path(
     post,
     tag = "Mistral.rs",
-    path = "/v1/images/generations",
+    path = "/images/generations",
     request_body = ImageGenerationRequest,
     responses((status = 200, description = "Image generation"))
 )]

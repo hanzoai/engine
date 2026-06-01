@@ -46,6 +46,15 @@ const MB_TO_B: usize = 1024 * 1024; // 1024 kb in a mb
 /// This is the axum default request body limit for the router. Accept up to 50mb input.
 pub const DEFAULT_MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 
+/// Default prefix under which the OpenAI-compatible API is mounted. Matches the Hanzo
+/// platform convention where every service lives at `/v1/<service>`.
+pub const DEFAULT_API_PREFIX: &str = "/v1/engine";
+
+/// Routes that are always served at the root, regardless of `api_prefix`. Liveness probes
+/// hit `/health`, so these must never move under the prefix. Shared with the OpenAPI doc so
+/// the rendered spec keeps them at the root too.
+pub const ROOT_PATHS: &[&str] = &["/", "/health", "/re_isq"];
+
 /// A builder for creating a mistral.rs server router with configurable options.
 ///
 /// ### Examples
@@ -82,6 +91,9 @@ pub struct MistralRsServerRouterBuilder {
     /// Only available when the `swagger-ui` feature is enabled.
     #[cfg(feature = "swagger-ui")]
     base_path: Option<String>,
+    /// Prefix under which the OpenAI-compatible API routes are mounted. Defaults to
+    /// `DEFAULT_API_PREFIX` (`/v1/engine`). `ROOT_PATHS` (`/health`, `/`, `/re_isq`) ignore this.
+    api_prefix: Option<String>,
     /// Optional CORS allowed origins
     allowed_origins: Option<Vec<String>>,
     /// Optional axum default request body limit
@@ -99,6 +111,7 @@ impl Default for MistralRsServerRouterBuilder {
             include_swagger_routes: true,
             #[cfg(feature = "swagger-ui")]
             base_path: None,
+            api_prefix: None,
             allowed_origins: None,
             max_body_limit: None,
             agentic_defaults: AgenticDefaults::default(),
@@ -150,6 +163,23 @@ impl MistralRsServerRouterBuilder {
     #[cfg(feature = "swagger-ui")]
     pub fn with_base_path(mut self, base_path: &str) -> Self {
         self.base_path = Some(base_path.to_owned());
+        self
+    }
+
+    /// Sets the prefix under which the OpenAI-compatible API routes are mounted.
+    ///
+    /// Defaults to `DEFAULT_API_PREFIX` (`/v1/engine`). Pass an empty string to mount the
+    /// routes at the root. `ROOT_PATHS` (`/health`, `/`, `/re_isq`) are never prefixed.
+    pub fn with_api_prefix(mut self, api_prefix: &str) -> Self {
+        self.api_prefix = Some(api_prefix.to_owned());
+        self
+    }
+
+    /// Sets the API prefix if provided, otherwise keeps the default.
+    pub fn with_api_prefix_optional(mut self, api_prefix: Option<String>) -> Self {
+        if let Some(api_prefix) = api_prefix {
+            self.api_prefix = Some(api_prefix);
+        }
         self
     }
 
@@ -227,18 +257,25 @@ impl MistralRsServerRouterBuilder {
             anyhow::anyhow!("`mistralrs` instance must be set. Use `with_mistralrs`.")
         })?;
 
+        let api_prefix = self
+            .api_prefix
+            .as_deref()
+            .unwrap_or(DEFAULT_API_PREFIX)
+            .to_string();
+
         #[allow(unused_mut)]
         let mut router = init_router(
             mistralrs,
             self.allowed_origins,
             self.max_body_limit,
             self.agentic_defaults,
+            &api_prefix,
         )?;
 
         #[cfg(feature = "swagger-ui")]
         if self.include_swagger_routes {
-            let prefix = self.base_path.as_deref().unwrap_or("");
-            let doc = get_openapi_doc(None);
+            let prefix = self.base_path.as_deref().unwrap_or(&api_prefix);
+            let doc = get_openapi_doc(Some(&api_prefix));
             router = router.merge(
                 SwaggerUi::new(format!("{prefix}/docs"))
                     .url(format!("{prefix}/api-doc/openapi.json"), doc),
@@ -247,6 +284,15 @@ impl MistralRsServerRouterBuilder {
 
         Ok(router)
     }
+}
+
+/// Joins the configured `api_prefix` with a route path that is relative to it. `ROOT_PATHS`
+/// are returned unchanged so liveness/util endpoints stay at the root.
+fn prefixed(api_prefix: &str, path: &str) -> String {
+    if ROOT_PATHS.contains(&path) {
+        return path.to_string();
+    }
+    format!("{api_prefix}{path}")
 }
 
 /// Initializes and configures the underlying axum router with MistralRs API endpoints.
@@ -258,6 +304,7 @@ fn init_router(
     allowed_origins: Option<Vec<String>>,
     max_body_limit: Option<usize>,
     agentic_defaults: AgenticDefaults,
+    api_prefix: &str,
 ) -> Result<Router> {
     let allow_origin = if let Some(origins) = allowed_origins {
         let parsed_origins: Result<Vec<_>, _> = origins.into_iter().map(|o| o.parse()).collect();
@@ -278,37 +325,40 @@ fn init_router(
         .allow_origin(allow_origin);
 
     let router = Router::new()
-        .route("/v1/chat/completions", post(chatcompletions))
-        .route("/v1/messages", post(crate::anthropic::messages))
-        .route("/v1/completions", post(completions))
-        .route("/v1/embeddings", post(embeddings))
-        .route("/v1/models", get(models))
-        .route("/v1/models/unload", post(unload_model))
-        .route("/v1/models/reload", post(reload_model))
-        .route("/v1/models/status", post(get_model_status))
-        .route("/v1/models/tune", post(tune_model))
-        .route("/v1/system/info", get(system_info))
-        .route("/v1/system/doctor", post(system_doctor))
+        .route(&prefixed(api_prefix, "/chat/completions"), post(chatcompletions))
+        .route(&prefixed(api_prefix, "/messages"), post(crate::anthropic::messages))
+        .route(&prefixed(api_prefix, "/completions"), post(completions))
+        .route(&prefixed(api_prefix, "/embeddings"), post(embeddings))
+        .route(&prefixed(api_prefix, "/models"), get(models))
+        .route(&prefixed(api_prefix, "/models/unload"), post(unload_model))
+        .route(&prefixed(api_prefix, "/models/reload"), post(reload_model))
+        .route(&prefixed(api_prefix, "/models/status"), post(get_model_status))
+        .route(&prefixed(api_prefix, "/models/tune"), post(tune_model))
+        .route(&prefixed(api_prefix, "/system/info"), get(system_info))
+        .route(&prefixed(api_prefix, "/system/doctor"), post(system_doctor))
         .route("/health", get(health))
         .route("/", get(health))
         .route("/re_isq", post(re_isq))
-        .route("/v1/images/generations", post(image_generation))
-        .route("/v1/files", get(list_files))
-        .route("/v1/files/{id}", get(get_file).delete(delete_file))
-        .route("/v1/files/{id}/content", get(get_file_content))
-        .route("/v1/audio/speech", post(speech_generation))
+        .route(&prefixed(api_prefix, "/images/generations"), post(image_generation))
+        .route(&prefixed(api_prefix, "/files"), get(list_files))
+        .route(&prefixed(api_prefix, "/files/{id}"), get(get_file).delete(delete_file))
+        .route(&prefixed(api_prefix, "/files/{id}/content"), get(get_file_content))
+        .route(&prefixed(api_prefix, "/audio/speech"), post(speech_generation))
         .route(
-            "/v1/agent/approvals/{approval_id}",
+            &prefixed(api_prefix, "/agent/approvals/{approval_id}"),
             post(resolve_agent_approval),
         )
-        .route("/v1/responses", post(create_response))
+        .route(&prefixed(api_prefix, "/responses"), post(create_response))
         .route(
-            "/v1/responses/{response_id}",
+            &prefixed(api_prefix, "/responses/{response_id}"),
             get(get_response).delete(delete_response),
         )
-        .route("/v1/responses/{response_id}/cancel", post(cancel_response))
         .route(
-            "/v1/sessions/{session_id}",
+            &prefixed(api_prefix, "/responses/{response_id}/cancel"),
+            post(cancel_response),
+        )
+        .route(
+            &prefixed(api_prefix, "/sessions/{session_id}"),
             get(get_session).put(put_session).delete(delete_session),
         )
         .layer(cors_layer)

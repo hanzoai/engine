@@ -286,7 +286,7 @@ pub fn parse_request(
 #[utoipa::path(
     post,
     tag = "Mistral.rs",
-    path = "/v1/completions",
+    path = "/completions",
     request_body = CompletionRequest,
     responses((status = 200, description = "Completions"))
 )]

@@ -1514,7 +1514,7 @@ async fn parse_openresponses_request(
 #[utoipa::path(
     post,
     tag = "Mistral.rs",
-    path = "/v1/responses",
+    path = "/responses",
     request_body = OpenResponsesCreateRequest,
     responses((status = 200, description = "Response created"))
 )]
@@ -1750,7 +1750,7 @@ pub async fn create_response(
 #[utoipa::path(
     get,
     tag = "Mistral.rs",
-    path = "/v1/responses/{response_id}",
+    path = "/responses/{response_id}",
     params(("response_id" = String, Path, description = "The ID of the response to retrieve")),
     responses((status = 200, description = "Response object"))
 )]
@@ -1782,7 +1782,7 @@ pub async fn get_response(
 #[utoipa::path(
     delete,
     tag = "Mistral.rs",
-    path = "/v1/responses/{response_id}",
+    path = "/responses/{response_id}",
     params(("response_id" = String, Path, description = "The ID of the response to delete")),
     responses((status = 200, description = "Response deleted"))
 )]
@@ -1825,7 +1825,7 @@ pub async fn delete_response(
 #[utoipa::path(
     post,
     tag = "Mistral.rs",
-    path = "/v1/responses/{response_id}/cancel",
+    path = "/responses/{response_id}/cancel",
     params(("response_id" = String, Path, description = "The ID of the response to cancel")),
     responses((status = 200, description = "Response cancelled"))
 )]
