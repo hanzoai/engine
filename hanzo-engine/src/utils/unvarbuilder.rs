@@ -100,6 +100,8 @@ impl ToTensors for QLinear {
                 }
             }
             QMatMul::QTensor(_) => return HashMap::new(),
+            #[cfg(feature = "vulkan")]
+            QMatMul::VulkanQuant { .. } => return HashMap::new(),
         }
         map
     }
