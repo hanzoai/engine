@@ -1,8 +1,8 @@
 use crate::attention::AttentionMask;
 use std::sync::Mutex;
 
-use candle_core::{Result, Tensor, D};
-use candle_nn::Module;
+use hanzo_ml::{Result, Tensor, D};
+use hanzo_nn::Module;
 use hanzo_quant::ShardedVarBuilder;
 
 use crate::{
@@ -26,13 +26,13 @@ pub struct Phi4MMImageAudioEmbedding {
     audio_embed: Option<AudioEmbedding>,
     image_embed: Option<ImageEmbedding>,
     image_input_id: f64,
-    wte: candle_nn::Embedding,
+    wte: hanzo_nn::Embedding,
 }
 
 impl Phi4MMImageAudioEmbedding {
     pub fn new(
         cfg: &Phi4MMConfig,
-        wte: candle_nn::Embedding,
+        wte: hanzo_nn::Embedding,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let image_embed = if let Some(img_embd_config) = &cfg.embd_layer.image_embd_layer {

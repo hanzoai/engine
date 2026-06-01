@@ -20,19 +20,19 @@
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn selective_scan_cuda(
-    x: &candle_core::Tensor,
-    dt: &candle_core::Tensor,
-    a: &candle_core::Tensor,
-    b: &candle_core::Tensor,
-    c: &candle_core::Tensor,
-    d: &candle_core::Tensor,
-    dt_bias: &candle_core::Tensor,
-    state: &mut candle_core::Tensor,
+    x: &hanzo_ml::Tensor,
+    dt: &hanzo_ml::Tensor,
+    a: &hanzo_ml::Tensor,
+    b: &hanzo_ml::Tensor,
+    c: &hanzo_ml::Tensor,
+    d: &hanzo_ml::Tensor,
+    dt_bias: &hanzo_ml::Tensor,
+    state: &mut hanzo_ml::Tensor,
     dt_min: f32,
     dt_max: f32,
-) -> candle_core::Result<candle_core::Tensor> {
-    use candle_core as candle;
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+) -> hanzo_ml::Result<hanzo_ml::Tensor> {
+    use hanzo_ml as candle;
+    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
 
     let x = x.contiguous()?;
     let dt = dt.contiguous()?;
@@ -127,7 +127,7 @@ pub fn selective_scan_cuda(
     }
 
     let y_storage = candle::CudaStorage::wrap_cuda_slice(y_buf, dev.clone());
-    let y = candle_core::Tensor::from((
+    let y = hanzo_ml::Tensor::from((
         candle::Storage::Cuda(y_storage),
         (batch_size, seq_len, n_heads, head_dim),
     ));
@@ -138,16 +138,16 @@ pub fn selective_scan_cuda(
 #[cfg(not(feature = "cuda"))]
 #[allow(clippy::too_many_arguments)]
 pub fn selective_scan_cuda(
-    _x: &candle_core::Tensor,
-    _dt: &candle_core::Tensor,
-    _a: &candle_core::Tensor,
-    _b: &candle_core::Tensor,
-    _c: &candle_core::Tensor,
-    _d: &candle_core::Tensor,
-    _dt_bias: &candle_core::Tensor,
-    _state: &mut candle_core::Tensor,
+    _x: &hanzo_ml::Tensor,
+    _dt: &hanzo_ml::Tensor,
+    _a: &hanzo_ml::Tensor,
+    _b: &hanzo_ml::Tensor,
+    _c: &hanzo_ml::Tensor,
+    _d: &hanzo_ml::Tensor,
+    _dt_bias: &hanzo_ml::Tensor,
+    _state: &mut hanzo_ml::Tensor,
     _dt_min: f32,
     _dt_max: f32,
-) -> candle_core::Result<candle_core::Tensor> {
-    candle_core::bail!("selective_scan_cuda requires the cuda feature")
+) -> hanzo_ml::Result<hanzo_ml::Tensor> {
+    hanzo_ml::bail!("selective_scan_cuda requires the cuda feature")
 }

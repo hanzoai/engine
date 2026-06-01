@@ -1,4 +1,4 @@
-use candle_core::Device;
+use hanzo_ml::Device;
 use hanzo_engine::*;
 use hanzo_engine::{SearchCallback, Tool, ToolCallback};
 use std::collections::HashMap;

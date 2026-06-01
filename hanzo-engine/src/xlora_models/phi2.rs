@@ -20,8 +20,8 @@ use crate::{
 /// There is an alternative implementation of the phi model in mixformers.rs.
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, LayerNorm};
+use hanzo_ml::{DType, Device, Result, Tensor};
+use hanzo_nn::{Embedding, LayerNorm};
 use hanzo_quant::{QuantMethod, ShardedVarBuilder};
 use tqdm::Iter;
 use tracing::info;
@@ -495,7 +495,7 @@ impl Model {
         )?;
         if xlora_config.is_some() && lm_head.is_lora() {
             // This is why we can pass dummy values (..., None, 1.0, None)?
-            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+            hanzo_ml::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
         }
         Ok(Self {
             embed_tokens,

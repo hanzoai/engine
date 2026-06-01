@@ -48,7 +48,7 @@ use crate::{
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 use anyhow::{bail, Result};
-use candle_core::{Device, Tensor};
+use hanzo_ml::{Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use hanzo_quant::IsqType;
@@ -375,9 +375,9 @@ impl Loader for GGUFLoader {
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
-            vec![candle_core::Device::new_cuda(worker_rank + 1)?]
+            vec![hanzo_ml::Device::new_cuda(worker_rank + 1)?]
         } else if use_nccl {
-            vec![candle_core::Device::new_cuda(0)?]
+            vec![hanzo_ml::Device::new_cuda(0)?]
         } else {
             device_map::get_all_similar_devices(device)?
         };
@@ -745,7 +745,7 @@ impl Pipeline for GGUFPipeline {
         &mut self,
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
-    ) -> Result<ForwardInputsResult, candle_core::Error> {
+    ) -> Result<ForwardInputsResult, hanzo_ml::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -762,11 +762,11 @@ impl Pipeline for GGUFPipeline {
             (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
             (Some(_), None) => {
                 // This can happen if Rust-side user code is wrong
-                candle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
+                hanzo_ml::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
             }
             (None, Some(_)) => {
                 // This should never happen but we handle it anyway
-                candle_core::bail!("Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue.")
+                hanzo_ml::bail!("Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue.")
             }
             (None, None) => None,
         };
@@ -828,7 +828,7 @@ impl Pipeline for GGUFPipeline {
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    ) -> Result<(), candle_core::Error> {
+    ) -> Result<(), hanzo_ml::Error> {
         sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {

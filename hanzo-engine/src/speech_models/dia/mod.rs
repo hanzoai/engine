@@ -4,8 +4,8 @@ use std::{sync::Arc, time::Instant};
 
 use audio::{apply_audio_delay, build_delay_indices, build_revert_indices, revert_audio_delay};
 use cache::DiaKvCache;
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::VarBuilder;
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
+use hanzo_nn::VarBuilder;
 use hanzo_quant::{BitWiseOp, ShardedVarBuilder};
 use model::DiaModel;
 use rand::{
@@ -231,7 +231,7 @@ impl DiaPipeline {
             return logits.argmax(D::Minus1)?.to_vec1();
         }
 
-        let logits = candle_nn::ops::softmax_last_dim(
+        let logits = hanzo_nn::ops::softmax_last_dim(
             &(logits.to_dtype(DType::F32)? / temperature as f64)?,
         )?;
         let batch_logits: Vec<Vec<f32>> = logits.to_vec2::<f32>()?;
@@ -268,7 +268,7 @@ impl DiaPipeline {
                 }
             }
 
-            let distr = WeightedIndex::new(&probs).map_err(candle_core::Error::msg)?;
+            let distr = WeightedIndex::new(&probs).map_err(hanzo_ml::Error::msg)?;
             sampled.push(distr.sample(rng) as u32);
         }
         Ok(sampled)

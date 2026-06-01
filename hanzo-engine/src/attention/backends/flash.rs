@@ -1,4 +1,4 @@
-use candle_core::{Result, Tensor};
+use hanzo_ml::{Result, Tensor};
 
 use crate::attention::SdpaParams;
 
@@ -28,7 +28,7 @@ fn flash_attn_v2(
             let v = v.flatten_to(1)?;
 
             if let Some(softcap) = sdpa_params.softcap {
-                return candle_flash_attn::flash_attn_varlen_alibi_windowed_softcap(
+                return hanzo_flash_attn::flash_attn_varlen_alibi_windowed_softcap(
                     &q,
                     &k,
                     &v,
@@ -44,7 +44,7 @@ fn flash_attn_v2(
                 )?
                 .reshape(qshape);
             } else {
-                return candle_flash_attn::flash_attn_varlen_windowed(
+                return hanzo_flash_attn::flash_attn_varlen_windowed(
                     &q,
                     &k,
                     &v,
@@ -65,7 +65,7 @@ fn flash_attn_v2(
     let causal = flash_params.map_or(default_causal, |p| p.causal);
     let window_size_right = if causal { Some(0) } else { None };
     if let Some(softcap) = sdpa_params.softcap {
-        candle_flash_attn::flash_attn_alibi_windowed_softcap(
+        hanzo_flash_attn::flash_attn_alibi_windowed_softcap(
             q,
             k,
             v,
@@ -76,7 +76,7 @@ fn flash_attn_v2(
             softcap,
         )
     } else {
-        candle_flash_attn::flash_attn_windowed(
+        hanzo_flash_attn::flash_attn_windowed(
             q,
             k,
             v,
@@ -116,7 +116,7 @@ fn flash_attn_v3(
             let window_size_left = sdpa_params.sliding_window;
             let window_size_right = if params.causal { Some(0) } else { None };
 
-            return candle_flash_attn_v3::flash_attn_varlen_windowed(
+            return hanzo_flash_attn_v3::flash_attn_varlen_windowed(
                 &q,
                 &k,
                 &v,
@@ -135,7 +135,7 @@ fn flash_attn_v3(
 
     // Non-varlen path: use flash_params.causal if provided, otherwise default (seq_len > 1).
     let causal = flash_params.map_or(default_causal, |p| p.causal);
-    candle_flash_attn_v3::flash_attn(q, k, v, sdpa_params.softmax_scale, causal, true)
+    hanzo_flash_attn_v3::flash_attn(q, k, v, sdpa_params.softmax_scale, causal, true)
 }
 
 #[cfg(feature = "flash-attn-v3")]

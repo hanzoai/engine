@@ -13,6 +13,6 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-candle-core.workspace = true
+hanzo-ml.workspace = true
 image.workspace = true
 rayon.workspace = true

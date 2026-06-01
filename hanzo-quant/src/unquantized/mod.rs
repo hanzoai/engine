@@ -5,8 +5,8 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle_core::{quantized::GgmlDType, DType, Device, DeviceLocation, Result, Shape, Tensor, D};
-use candle_nn::Linear;
+use hanzo_ml::{quantized::GgmlDType, DType, Device, DeviceLocation, Result, Shape, Tensor, D};
+use hanzo_nn::Linear;
 
 use crate::{
     cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_CONTROLLER},
@@ -25,7 +25,7 @@ pub struct UnquantLinear {
 }
 
 impl QuantMethod for UnquantLinear {
-    fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
+    fn new(method: QuantMethodConfig) -> hanzo_ml::Result<Self>
     where
         Self: Sized,
     {
@@ -242,7 +242,7 @@ impl QuantMethod for UnquantLinear {
                 if num_tokens != indices_num_tokens
                     || num_experts_per_tok != indices_num_experts_per_tok
                 {
-                    candle_core::bail!(
+                    hanzo_ml::bail!(
                         "UnquantLinear::gather_forward: input shape {:?} does not match indices shape {:?}",
                         a.dims(),
                         indices.dims()
@@ -261,7 +261,7 @@ impl QuantMethod for UnquantLinear {
                 result.reshape((num_tokens, num_experts_per_tok, out_features))
             }
             dims => {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "UnquantLinear::gather_forward: unsupported input shape {:?}",
                     dims
                 );
@@ -281,7 +281,7 @@ impl QuantMethod for UnquantLinear {
         }))
     }
 
-    fn dtype_and_device(&self) -> (DType, candle_core::Device) {
+    fn dtype_and_device(&self) -> (DType, hanzo_ml::Device) {
         (self.w.dtype(), self.w.device().clone())
     }
 
@@ -299,7 +299,7 @@ impl QuantMethod for UnquantLinear {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
                     // TODO just warn?
-                    candle_core::bail!("HQQ does not support imatrix.");
+                    hanzo_ml::bail!("HQQ does not support imatrix.");
                 }
 
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -333,7 +333,7 @@ impl QuantMethod for UnquantLinear {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
                     // TODO just warn?
-                    candle_core::bail!("AFQ does not support imatrix.");
+                    hanzo_ml::bail!("AFQ does not support imatrix.");
                 }
 
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -385,7 +385,7 @@ impl QuantMethod for UnquantLinear {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
                     // TODO just warn?
-                    candle_core::bail!("F8E4M3 does not support imatrix.");
+                    hanzo_ml::bail!("F8E4M3 does not support imatrix.");
                 }
 
                 let w = self.w.to_device(&device)?;
@@ -402,7 +402,7 @@ impl QuantMethod for UnquantLinear {
             Some(IsqType::MXFP4) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
-                    candle_core::bail!("MXFP4 does not support imatrix.");
+                    hanzo_ml::bail!("MXFP4 does not support imatrix.");
                 }
 
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -413,7 +413,7 @@ impl QuantMethod for UnquantLinear {
             Some(IsqType::F8Q8) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
-                    candle_core::bail!("F8Q8 does not support imatrix.");
+                    hanzo_ml::bail!("F8Q8 does not support imatrix.");
                 }
 
                 let w = self.w.to_device(&device)?;
@@ -456,7 +456,7 @@ impl QuantMethod for UnquantLinear {
             stats.clear()?;
             Ok(imatrix)
         } else {
-            candle_core::bail!("`{}` does not support tracking stats.", self.name())
+            hanzo_ml::bail!("`{}` does not support tracking stats.", self.name())
         }
     }
 }
@@ -522,12 +522,12 @@ impl QuantizedSerde for UnquantLinear {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(hanzo_ml::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Unquant as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::Unquant as usize
             );
@@ -558,12 +558,12 @@ impl QuantizedSerde for UnquantLinear {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(hanzo_ml::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Unquant as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::Unquant as usize
             );

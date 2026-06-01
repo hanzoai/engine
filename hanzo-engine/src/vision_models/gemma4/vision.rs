@@ -1,8 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::attention::AttentionMask;
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::Module;
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
+use hanzo_nn::Module;
 use hanzo_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use std::sync::Arc;
 
@@ -106,25 +106,25 @@ impl ClippableLinear {
         if let Some(v) = self.input_min {
             uvb.add_tensor(
                 "input_min",
-                Tensor::new(v as f32, &candle_core::Device::Cpu).unwrap(),
+                Tensor::new(v as f32, &hanzo_ml::Device::Cpu).unwrap(),
             );
         }
         if let Some(v) = self.input_max {
             uvb.add_tensor(
                 "input_max",
-                Tensor::new(v as f32, &candle_core::Device::Cpu).unwrap(),
+                Tensor::new(v as f32, &hanzo_ml::Device::Cpu).unwrap(),
             );
         }
         if let Some(v) = self.output_min {
             uvb.add_tensor(
                 "output_min",
-                Tensor::new(v as f32, &candle_core::Device::Cpu).unwrap(),
+                Tensor::new(v as f32, &hanzo_ml::Device::Cpu).unwrap(),
             );
         }
         if let Some(v) = self.output_max {
             uvb.add_tensor(
                 "output_max",
-                Tensor::new(v as f32, &candle_core::Device::Cpu).unwrap(),
+                Tensor::new(v as f32, &hanzo_ml::Device::Cpu).unwrap(),
             );
         }
         uvb.to_safetensors()

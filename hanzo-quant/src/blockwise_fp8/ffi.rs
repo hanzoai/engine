@@ -16,7 +16,7 @@ extern "C" {
         scale_stride: i32,
         weight_block_size_y: i32,
         weight_block_size_x: i32,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_dequant_fp8_blockwise_kernel_f16(
@@ -29,7 +29,7 @@ extern "C" {
         scale_stride: i32,
         weight_block_size_y: i32,
         weight_block_size_x: i32,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_dequant_fp8_blockwise_kernel_bf16(
@@ -42,7 +42,7 @@ extern "C" {
         scale_stride: i32,
         weight_block_size_y: i32,
         weight_block_size_x: i32,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_quant_fp8_blockwise_kernel_f32(
@@ -55,7 +55,7 @@ extern "C" {
         scale_stride: i32,
         weight_block_size_y: i32,
         weight_block_size_x: i32,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_quant_fp8_blockwise_kernel_f16(
@@ -68,7 +68,7 @@ extern "C" {
         scale_stride: i32,
         weight_block_size_y: i32,
         weight_block_size_x: i32,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_quant_fp8_blockwise_kernel_bf16(
@@ -81,7 +81,7 @@ extern "C" {
         scale_stride: i32,
         weight_block_size_y: i32,
         weight_block_size_x: i32,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     // FP8 Matmul kernels (for forward method)
@@ -96,7 +96,7 @@ extern "C" {
         scale_row_stride: i32,
         block_size_y: i32,
         block_size_x: i32,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_fp8_matmul_bf16(
@@ -110,7 +110,7 @@ extern "C" {
         scale_row_stride: i32,
         block_size_y: i32,
         block_size_x: i32,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     // FP8 Indexed MoE GEMM kernels (for gather_forward method)
@@ -129,7 +129,7 @@ extern "C" {
         block_size_y: i32,
         block_size_x: i32,
         input_has_topk_dim: bool,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_fp8_indexed_moe_gemm_bf16(
@@ -147,6 +147,6 @@ extern "C" {
         block_size_y: i32,
         block_size_x: i32,
         input_has_topk_dim: bool,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 }

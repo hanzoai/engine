@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module};
+use hanzo_ml::{DType, Device, Result, Tensor};
+use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 use crate::attention::{AttentionMask, SdpaParams};
@@ -167,7 +167,7 @@ pub(crate) struct PropsGGUF {
 }
 
 fn verify_qwen_arch(
-    metadata: &HashMap<String, candle_core::quantized::gguf_file::Value>,
+    metadata: &HashMap<String, hanzo_ml::quantized::gguf_file::Value>,
     expected_archs: &[&str],
 ) -> Result<String> {
     use crate::utils::gguf_metadata::TryValueInto;
@@ -177,7 +177,7 @@ fn verify_qwen_arch(
         .try_value_into()?;
 
     if !expected_archs.contains(&actual_arch.as_str()) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Expected `{:?}` architecture, got `{actual_arch}`.",
             expected_archs
         );
@@ -259,7 +259,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             rope_freq_base,
             key_length,
             value_length,
-        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
+        } = PropsGGUF::try_from(metadata).or_else(|err| hanzo_ml::bail!("{err}"))?;
 
         let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = qtok_embeddings.dequantize(device)?;
@@ -273,7 +273,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let head_dim = key_length;
         if key_length != value_length {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Expected key_length == value_length, got {key_length} != {value_length}"
             );
         }

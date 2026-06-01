@@ -3,8 +3,8 @@
 use crate::layers_masker::CausalMaskConfig;
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Embedding, Module};
+use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -486,8 +486,8 @@ impl MoeGate {
             .to_dtype(DType::F32)?
             .broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
         let scores = match self.cfg.scoring_func {
-            ScoringFunc::Softmax => candle_nn::ops::softmax_last_dim(&logits)?,
-            ScoringFunc::Sigmoid => candle_nn::ops::sigmoid(&logits)?,
+            ScoringFunc::Softmax => hanzo_nn::ops::softmax_last_dim(&logits)?,
+            ScoringFunc::Sigmoid => hanzo_nn::ops::sigmoid(&logits)?,
         };
 
         // Select top-k experts
@@ -498,7 +498,7 @@ impl MoeGate {
             }
             TopkMethod::NoAuxTc => {
                 let Some(e_score_correction_bias) = &self.e_score_correction_bias else {
-                    candle_core::bail!("Expected e_score_correction_bias")
+                    hanzo_ml::bail!("Expected e_score_correction_bias")
                 };
                 let scores_for_choice = scores
                     .reshape((bs * seq_len, ()))?
@@ -829,7 +829,7 @@ impl DeepSeekV3 {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(
                     embed_tokens.embeddings(),
                     normal_loading_metadata.loading_isq,

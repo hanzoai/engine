@@ -5,7 +5,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use candle_core::{DType, Device, Module, Result, Tensor};
+use hanzo_ml::{DType, Device, Module, Result, Tensor};
 use hanzo_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
@@ -332,7 +332,7 @@ pub struct VoxtralSpecificArgs {
 }
 
 pub struct VoxtralModel {
-    tok_embeddings: candle_nn::Embedding,
+    tok_embeddings: hanzo_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     output: Arc<dyn QuantMethod>,
@@ -714,7 +714,7 @@ impl IsqModel for VoxtralModel {
         uvb.to_safetensors()
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         let mut names = Vec::new();
         // output / lm_head
         names.push(None);
@@ -745,7 +745,7 @@ impl MultimodalModel for VoxtralModel {
         model_specific_args: Box<dyn Any>,
         _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         let args = model_specific_args
             .downcast::<VoxtralSpecificArgs>()
             .expect("Downcast to VoxtralSpecificArgs failed");

@@ -2,7 +2,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use candle_core::{Device, Result, Tensor};
+use hanzo_ml::{Device, Result, Tensor};
 use image::{DynamicImage, GenericImageView};
 use indexmap::IndexMap;
 use hanzo_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
@@ -339,7 +339,7 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
                 } else if size.contains_key("height") && size.contains_key("width") {
                     (size["height"] as usize, size["width"] as usize)
                 } else {
-                    candle_core::bail!("Size must be a map of `shortest_edge` and `longest_edge` or `height` and `width`.");
+                    hanzo_ml::bail!("Size must be a map of `shortest_edge` and `longest_edge` or `height` and `width`.");
                 };
 
                 *image = image.resize_exact(w as u32, h as u32, config.resampling.to_filter()?);

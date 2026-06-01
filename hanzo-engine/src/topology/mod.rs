@@ -1,6 +1,6 @@
 use std::{fs, io::Read, ops::Range, path::Path};
 
-use candle_core::Device;
+use hanzo_ml::Device;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use hanzo_quant::IsqType;

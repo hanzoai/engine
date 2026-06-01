@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use candle_core::{DType, Device, Result, Tensor, D};
+use hanzo_ml::{DType, Device, Result, Tensor, D};
 use config::Gemma4Config;
 use hanzo_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use text::TextModel;
@@ -555,7 +555,7 @@ impl IsqModel for Gemma4Model {
         uvb.to_safetensors()
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         self.language_model.imatrix_names()
     }
 }
@@ -571,7 +571,7 @@ impl MultimodalModel for Gemma4Model {
         model_specific_args: Box<dyn std::any::Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         let args = model_specific_args
             .downcast::<Gemma4SpecificArgs>()
             .expect("Downcast to Gemma4SpecificArgs failed");
@@ -644,7 +644,7 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
     fn attach_speculative(
         &mut self,
         config: SpeculativeConfig,
-    ) -> candle_core::Result<Option<SpeculativeAttachInfo>> {
+    ) -> hanzo_ml::Result<Option<SpeculativeAttachInfo>> {
         let SpeculativeConfig::Mtp(config) = config else {
             *self.mtp.lock().expect("MTP mutex poisoned") = None;
             return Ok(None);
@@ -676,7 +676,7 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
     fn speculative_propose(
         &mut self,
         ctx: SpeculativeProposeBatchCtx<'_>,
-    ) -> candle_core::Result<Option<SpeculativeProposalBatch>> {
+    ) -> hanzo_ml::Result<Option<SpeculativeProposalBatch>> {
         let embedder = |token: &Tensor| self.language_model.embed_tokens(token);
         let mut guard = self.mtp.lock().expect("MTP mutex poisoned");
         let Some(runtime) = guard.as_mut() else {
@@ -688,9 +688,9 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
     fn speculative_target_hiddens(
         &self,
         rows: &[(usize, usize)],
-    ) -> candle_core::Result<Option<Tensor>> {
+    ) -> hanzo_ml::Result<Option<Tensor>> {
         let hidden = self.language_model.last_spec_hidden().ok_or_else(|| {
-            candle_core::Error::Msg(
+            hanzo_ml::Error::Msg(
                 "MTP target hidden state was not captured before proposal.".to_string(),
             )
         })?;
@@ -702,12 +702,12 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
                 let mut gathered = Vec::with_capacity(rows.len());
                 for &(batch_idx, row) in rows {
                     if batch_idx >= *batch {
-                        candle_core::bail!(
+                        hanzo_ml::bail!(
                             "MTP hidden batch {batch_idx} is out of range for {batch}"
                         );
                     }
                     if row >= *row_count {
-                        candle_core::bail!(
+                        hanzo_ml::bail!(
                             "MTP hidden row {row} is out of range for {row_count} rows"
                         );
                     }
@@ -719,12 +719,12 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
                 let mut gathered = Vec::with_capacity(rows.len());
                 for &(batch_idx, row) in rows {
                     if batch_idx != 0 {
-                        candle_core::bail!(
+                        hanzo_ml::bail!(
                             "MTP hidden batch {batch_idx} is out of range for single-batch hidden state"
                         );
                     }
                     if row >= *row_count {
-                        candle_core::bail!(
+                        hanzo_ml::bail!(
                             "MTP hidden row {row} is out of range for {row_count} rows"
                         );
                     }
@@ -732,7 +732,7 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
                 }
                 Tensor::cat(&gathered, 0).map(Some)
             }
-            shape => candle_core::bail!("MTP hidden state has unsupported shape {shape:?}"),
+            shape => hanzo_ml::bail!("MTP hidden state has unsupported shape {shape:?}"),
         }
     }
 }

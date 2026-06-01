@@ -1,12 +1,12 @@
 #![allow(unused)]
 
-use candle_core::{backend::BackendStorage, DType, Result, Shape, Storage, Tensor, D};
+use hanzo_ml::{backend::BackendStorage, DType, Result, Shape, Storage, Tensor, D};
 
 #[cfg(feature = "metal")]
-use candle_core::MetalStorage;
+use hanzo_ml::MetalStorage;
 
 #[cfg(feature = "cuda")]
-use candle_core::{
+use hanzo_ml::{
     cuda::{cudarc::driver::DevicePtr, CudaStorageSlice},
     CudaStorage,
 };
@@ -26,10 +26,10 @@ pub(crate) fn afq_quantize_op(
     let bits = bits as usize;
 
     if w.rank() < 2 {
-        candle_core::bail!("AFQ quantize expects weight matrix of at least rank 2");
+        hanzo_ml::bail!("AFQ quantize expects weight matrix of at least rank 2");
     }
     if w.dim(D::Minus1)? % group_size != 0 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Last dim of weight matrix ({:?}) must be divisible by group size {group_size}.",
             w.dims()
         );
@@ -39,7 +39,7 @@ pub(crate) fn afq_quantize_op(
     {
         let w_s = w.storage_and_layout().0;
         let Storage::Metal(w_s) = &*w_s else {
-            candle_core::bail!("expected metal")
+            hanzo_ml::bail!("expected metal")
         };
         let device = w_s.device();
 
@@ -75,7 +75,7 @@ pub(crate) fn afq_quantize_op(
             group_size,
             bits,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
 
         let output = Tensor::from((
             Storage::Metal(MetalStorage::new(
@@ -127,22 +127,22 @@ pub(crate) fn afq_dequantize_op(
     let bits = bits as usize;
 
     if w_q.rank() < 2 || scales.rank() < 2 || biases.rank() < 2 {
-        candle_core::bail!("AFQ dequantize expects all matrices of at least rank 2");
+        hanzo_ml::bail!("AFQ dequantize expects all matrices of at least rank 2");
     }
 
     #[cfg(feature = "metal")]
     {
         let wq_s = w_q.storage_and_layout().0;
         let Storage::Metal(wq_s) = &*wq_s else {
-            candle_core::bail!("expected metal")
+            hanzo_ml::bail!("expected metal")
         };
         let s_s = scales.storage_and_layout().0;
         let Storage::Metal(s_s) = &*s_s else {
-            candle_core::bail!("expected metal")
+            hanzo_ml::bail!("expected metal")
         };
         let b_s = biases.storage_and_layout().0;
         let Storage::Metal(b_s) = &*b_s else {
-            candle_core::bail!("expected metal")
+            hanzo_ml::bail!("expected metal")
         };
 
         let device = wq_s.device();
@@ -157,7 +157,7 @@ pub(crate) fn afq_dequantize_op(
         if out_size != scales.dim(D::Minus1)? * group_size
             || out_size != biases.dim(D::Minus1)? * group_size
         {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Scales and biases do not match the matrix given dequantization parameters."
             );
         }
@@ -188,7 +188,7 @@ pub(crate) fn afq_dequantize_op(
             group_size,
             bits,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
 
         let output = Tensor::from((
             Storage::Metal(MetalStorage::new(
@@ -246,13 +246,13 @@ pub(crate) fn afq_mm_op(
 
     let w_outer_dims = {
         if w.dtype() != DType::U32 {
-            candle_core::bail!("AFQ weight matrix must be u32");
+            hanzo_ml::bail!("AFQ weight matrix must be u32");
         }
         if scales.dims() != biases.dims() {
-            candle_core::bail!("Scales and biases should have the same shapes");
+            hanzo_ml::bail!("Scales and biases should have the same shapes");
         }
         if w.dim(D::Minus1)? * 32 / bits != scales.dim(D::Minus1)? * group_size {
-            candle_core::bail!("Last dims of w and scales must be compatible.");
+            hanzo_ml::bail!("Last dims of w and scales must be compatible.");
         }
 
         let x_inner_dims = x.dim(D::Minus1)?;
@@ -270,7 +270,7 @@ pub(crate) fn afq_mm_op(
         };
 
         if w_inner_dims != x_inner_dims {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "w inner dims ({:?}) must match x inner dims ({:?}). transpose={transpose}",
                 w.dims(),
                 x.dims()
@@ -284,19 +284,19 @@ pub(crate) fn afq_mm_op(
     {
         let x_s = x.storage_and_layout().0;
         let Storage::Metal(x_s) = &*x_s else {
-            candle_core::bail!("expected metal")
+            hanzo_ml::bail!("expected metal")
         };
         let w_s = w.storage_and_layout().0;
         let Storage::Metal(w_s) = &*w_s else {
-            candle_core::bail!("expected metal")
+            hanzo_ml::bail!("expected metal")
         };
         let s_s = scales.storage_and_layout().0;
         let Storage::Metal(s_s) = &*s_s else {
-            candle_core::bail!("expected metal")
+            hanzo_ml::bail!("expected metal")
         };
         let b_s = biases.storage_and_layout().0;
         let Storage::Metal(b_s) = &*b_s else {
-            candle_core::bail!("expected metal")
+            hanzo_ml::bail!("expected metal")
         };
 
         let device = w_s.device();
@@ -317,7 +317,7 @@ pub(crate) fn afq_mm_op(
             assert_eq!(lhs_indices.layout().start_offset(), 0);
             assert_eq!(rhs_indices.layout().start_offset(), 0);
             if lhs_indices.dtype() != DType::U32 || rhs_indices.dtype() != DType::U32 {
-                candle_core::bail!("lhs and rhs indices must be u32.")
+                hanzo_ml::bail!("lhs and rhs indices must be u32.")
             }
             // Broadcast the indices if applicable.
             {
@@ -331,11 +331,11 @@ pub(crate) fn afq_mm_op(
 
             let li_s = lhs_indices.storage_and_layout().0;
             let Storage::Metal(li_s) = &*li_s else {
-                candle_core::bail!("expected metal")
+                hanzo_ml::bail!("expected metal")
             };
             let ri_s = rhs_indices.storage_and_layout().0;
             let Storage::Metal(ri_s) = &*ri_s else {
-                candle_core::bail!("expected metal")
+                hanzo_ml::bail!("expected metal")
             };
 
             let mut out_shape = lhs_indices.dims().to_vec();
@@ -373,7 +373,7 @@ pub(crate) fn afq_mm_op(
                 bits,
                 group_size,
             )
-            .map_err(candle_core::Error::wrap)?;
+            .map_err(hanzo_ml::Error::wrap)?;
 
             (output, out_shape)
         } else {
@@ -428,7 +428,7 @@ pub(crate) fn afq_mm_op(
                         bits,
                         group_size,
                     )
-                    .map_err(candle_core::Error::wrap)?;
+                    .map_err(hanzo_ml::Error::wrap)?;
 
                     let intermediate_tensor = Tensor::from((
                         Storage::Metal(MetalStorage::new(
@@ -474,7 +474,7 @@ pub(crate) fn afq_mm_op(
                 bits,
                 group_size,
             )
-            .map_err(candle_core::Error::wrap)?;
+            .map_err(hanzo_ml::Error::wrap)?;
 
             (output, out_shape)
         };
@@ -523,7 +523,7 @@ pub(crate) fn afq_mm_op(
 #[cfg(feature = "metal")]
 #[cfg(test)]
 mod metal_tests {
-    use candle_core::{DType, Device, Result, Tensor, D};
+    use hanzo_ml::{DType, Device, Result, Tensor, D};
 
     use crate::{afq::ops::afq_dequantize_op, AfqBits, AfqGroupSize};
 
@@ -656,7 +656,7 @@ mod metal_tests {
 // ============================================================
 mod cpu_backend {
     use super::*;
-    use candle_core::{DType, Device, Result, Tensor, D};
+    use hanzo_ml::{DType, Device, Result, Tensor, D};
 
     /// Simple scalar (reference) quantiser: per‑`group_size` affine.
     pub(crate) fn afq_quantize_op(
@@ -666,7 +666,7 @@ mod cpu_backend {
     ) -> Result<(Tensor, Tensor, Tensor)> {
         if bits == 40 {
             // mxfp4 is not supported in CPU backend
-            candle_core::bail!("mxfp4 quantization is only supported on Metal backend");
+            hanzo_ml::bail!("mxfp4 quantization is only supported on Metal backend");
         }
         let device = w.device().clone();
         let levels = ((1u32 << bits) - 1) as f32;
@@ -763,7 +763,7 @@ mod cpu_backend {
     ) -> Result<Tensor> {
         if _bits == 40 {
             // mxfp4 is not supported in CPU backend
-            candle_core::bail!("mxfp4 dequantization is only supported on Metal backend");
+            hanzo_ml::bail!("mxfp4 dequantization is only supported on Metal backend");
         }
         let device = w_q.device().clone();
         let codes = w_q.flatten_all()?.to_vec1::<u32>()?;
@@ -832,7 +832,7 @@ mod cpu_backend {
     ) -> Result<Tensor> {
         if bits == 40 {
             // mxfp4 is not supported in CPU backend
-            candle_core::bail!("mxfp4 matmul is only supported on Metal backend");
+            hanzo_ml::bail!("mxfp4 matmul is only supported on Metal backend");
         }
         let w_f32 = afq_dequantize_op(w, scales, biases, group_size, bits)?.to_dtype(x.dtype())?;
         if transpose {
@@ -850,7 +850,7 @@ mod cpu_backend {
 mod cuda_backend {
     use super::*;
     use crate::afq::ffi;
-    use candle_core::{cuda::cudarc::driver::DevicePtr, CudaStorage, DType, Result, Tensor, D};
+    use hanzo_ml::{cuda::cudarc::driver::DevicePtr, CudaStorage, DType, Result, Tensor, D};
     use half::{bf16, f16};
 
     /// CUDA-accelerated AFQ quantization
@@ -860,7 +860,7 @@ mod cuda_backend {
         bits: usize,
     ) -> Result<(Tensor, Tensor, Tensor)> {
         if bits == 40 {
-            candle_core::bail!("mxfp4 quantization is not supported on CUDA backend");
+            hanzo_ml::bail!("mxfp4 quantization is not supported on CUDA backend");
         }
         if bits == 3 || bits == 6 {
             // Non-power-of-2 bit widths fall back to CPU for quantization
@@ -899,7 +899,7 @@ mod cuda_backend {
 
                 let (w_s, _) = w.storage_and_layout();
                 let Storage::Cuda(w_s) = &*w_s else {
-                    candle_core::bail!("Expected CUDA storage");
+                    hanzo_ml::bail!("Expected CUDA storage");
                 };
                 let (w_ptr, _w_guard) =
                     crate::utils::slice_ptr(w_s.as_cuda_slice::<f16>()?, w.layout().start_offset());
@@ -981,7 +981,7 @@ mod cuda_backend {
                             rows as i32,
                             cols as i32,
                         ),
-                        _ => candle_core::bail!(
+                        _ => hanzo_ml::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
                         ),
                     }
@@ -993,19 +993,19 @@ mod cuda_backend {
                 let w_q_storage = CudaStorage::wrap_cuda_slice(w_q_buf, dev.clone());
                 let w_q = Tensor::from((
                     Storage::Cuda(w_q_storage),
-                    candle_core::Shape::from(w_q_shape),
+                    hanzo_ml::Shape::from(w_q_shape),
                 ));
 
                 let scales_storage = CudaStorage::wrap_cuda_slice(scales_buf, dev.clone());
                 let scales = Tensor::from((
                     Storage::Cuda(scales_storage),
-                    candle_core::Shape::from(s_shape.clone()),
+                    hanzo_ml::Shape::from(s_shape.clone()),
                 ));
 
                 let biases_storage = CudaStorage::wrap_cuda_slice(biases_buf, dev.clone());
                 let biases = Tensor::from((
                     Storage::Cuda(biases_storage),
-                    candle_core::Shape::from(s_shape),
+                    hanzo_ml::Shape::from(s_shape),
                 ));
 
                 Ok((w_q, scales, biases))
@@ -1017,7 +1017,7 @@ mod cuda_backend {
 
                 let (w_s, _) = w.storage_and_layout();
                 let Storage::Cuda(w_s) = &*w_s else {
-                    candle_core::bail!("Expected CUDA storage");
+                    hanzo_ml::bail!("Expected CUDA storage");
                 };
                 let (w_ptr, _w_guard) =
                     crate::utils::slice_ptr(w_s.as_cuda_slice::<f32>()?, w.layout().start_offset());
@@ -1099,7 +1099,7 @@ mod cuda_backend {
                             rows as i32,
                             cols as i32,
                         ),
-                        _ => candle_core::bail!(
+                        _ => hanzo_ml::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
                         ),
                     }
@@ -1111,19 +1111,19 @@ mod cuda_backend {
                 let w_q_storage = CudaStorage::wrap_cuda_slice(w_q_buf, dev.clone());
                 let w_q = Tensor::from((
                     Storage::Cuda(w_q_storage),
-                    candle_core::Shape::from(w_q_shape),
+                    hanzo_ml::Shape::from(w_q_shape),
                 ));
 
                 let scales_storage = CudaStorage::wrap_cuda_slice(scales_buf, dev.clone());
                 let scales = Tensor::from((
                     Storage::Cuda(scales_storage),
-                    candle_core::Shape::from(s_shape.clone()),
+                    hanzo_ml::Shape::from(s_shape.clone()),
                 ));
 
                 let biases_storage = CudaStorage::wrap_cuda_slice(biases_buf, dev.clone());
                 let biases = Tensor::from((
                     Storage::Cuda(biases_storage),
-                    candle_core::Shape::from(s_shape),
+                    hanzo_ml::Shape::from(s_shape),
                 ));
 
                 Ok((w_q, scales, biases))
@@ -1135,7 +1135,7 @@ mod cuda_backend {
 
                 let (w_s, _) = w.storage_and_layout();
                 let Storage::Cuda(w_s) = &*w_s else {
-                    candle_core::bail!("Expected CUDA storage");
+                    hanzo_ml::bail!("Expected CUDA storage");
                 };
                 let (w_ptr, _w_guard) = crate::utils::slice_ptr(
                     w_s.as_cuda_slice::<bf16>()?,
@@ -1219,7 +1219,7 @@ mod cuda_backend {
                             rows as i32,
                             cols as i32,
                         ),
-                        _ => candle_core::bail!(
+                        _ => hanzo_ml::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
                         ),
                     }
@@ -1231,24 +1231,24 @@ mod cuda_backend {
                 let w_q_storage = CudaStorage::wrap_cuda_slice(w_q_buf, dev.clone());
                 let w_q = Tensor::from((
                     Storage::Cuda(w_q_storage),
-                    candle_core::Shape::from(w_q_shape),
+                    hanzo_ml::Shape::from(w_q_shape),
                 ));
 
                 let scales_storage = CudaStorage::wrap_cuda_slice(scales_buf, dev.clone());
                 let scales = Tensor::from((
                     Storage::Cuda(scales_storage),
-                    candle_core::Shape::from(s_shape.clone()),
+                    hanzo_ml::Shape::from(s_shape.clone()),
                 ));
 
                 let biases_storage = CudaStorage::wrap_cuda_slice(biases_buf, dev.clone());
                 let biases = Tensor::from((
                     Storage::Cuda(biases_storage),
-                    candle_core::Shape::from(s_shape),
+                    hanzo_ml::Shape::from(s_shape),
                 ));
 
                 Ok((w_q, scales, biases))
             }
-            other => candle_core::bail!("Unsupported dtype for AFQ CUDA quantization: {other:?}"),
+            other => hanzo_ml::bail!("Unsupported dtype for AFQ CUDA quantization: {other:?}"),
         }
     }
 
@@ -1261,7 +1261,7 @@ mod cuda_backend {
         bits: usize,
     ) -> Result<Tensor> {
         if bits == 40 {
-            candle_core::bail!("mxfp4 dequantization is not supported on CUDA backend");
+            hanzo_ml::bail!("mxfp4 dequantization is not supported on CUDA backend");
         }
 
         let dev = crate::utils::get_cuda_device(w_q)?;
@@ -1279,15 +1279,15 @@ mod cuda_backend {
 
         let (wq_s, _) = w_q.storage_and_layout();
         let Storage::Cuda(wq_s) = &*wq_s else {
-            candle_core::bail!("Expected CUDA storage");
+            hanzo_ml::bail!("Expected CUDA storage");
         };
         let (s_s, _) = scales.storage_and_layout();
         let Storage::Cuda(s_s) = &*s_s else {
-            candle_core::bail!("Expected CUDA storage");
+            hanzo_ml::bail!("Expected CUDA storage");
         };
         let (b_s, _) = biases.storage_and_layout();
         let Storage::Cuda(b_s) = &*b_s else {
-            candle_core::bail!("Expected CUDA storage");
+            hanzo_ml::bail!("Expected CUDA storage");
         };
 
         let (wq_ptr, _wq_guard) =
@@ -1428,7 +1428,7 @@ mod cuda_backend {
                             rows as i32,
                             cols as i32,
                         ),
-                        _ => candle_core::bail!(
+                        _ => hanzo_ml::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
                         ),
                     }
@@ -1438,7 +1438,7 @@ mod cuda_backend {
                 let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
                 let output = Tensor::from((
                     Storage::Cuda(output_storage),
-                    candle_core::Shape::from(out_shape),
+                    hanzo_ml::Shape::from(out_shape),
                 ));
                 Ok(output)
             }
@@ -1576,7 +1576,7 @@ mod cuda_backend {
                             rows as i32,
                             cols as i32,
                         ),
-                        _ => candle_core::bail!(
+                        _ => hanzo_ml::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
                         ),
                     }
@@ -1586,7 +1586,7 @@ mod cuda_backend {
                 let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
                 let output = Tensor::from((
                     Storage::Cuda(output_storage),
-                    candle_core::Shape::from(out_shape),
+                    hanzo_ml::Shape::from(out_shape),
                 ));
                 Ok(output)
             }
@@ -1724,7 +1724,7 @@ mod cuda_backend {
                             rows as i32,
                             cols as i32,
                         ),
-                        _ => candle_core::bail!(
+                        _ => hanzo_ml::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
                         ),
                     }
@@ -1734,11 +1734,11 @@ mod cuda_backend {
                 let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
                 let output = Tensor::from((
                     Storage::Cuda(output_storage),
-                    candle_core::Shape::from(out_shape),
+                    hanzo_ml::Shape::from(out_shape),
                 ));
                 Ok(output)
             }
-            other => candle_core::bail!("Unsupported dtype for AFQ CUDA dequantization: {other:?}"),
+            other => hanzo_ml::bail!("Unsupported dtype for AFQ CUDA dequantization: {other:?}"),
         }
     }
 
@@ -1756,7 +1756,7 @@ mod cuda_backend {
         transpose: bool,
     ) -> Result<Tensor> {
         if bits == 40 {
-            candle_core::bail!("mxfp4 matmul is not supported on CUDA backend");
+            hanzo_ml::bail!("mxfp4 matmul is not supported on CUDA backend");
         }
 
         // For indexed matmul, fall back to dequantize + matmul for now
@@ -1792,7 +1792,7 @@ mod cuda_backend {
         let actual_k = groups_per_row * group_size;
 
         if k != actual_k {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "x inner dim ({k}) does not match w inner dim ({actual_k}) for transposed matmul"
             );
         }
@@ -1805,19 +1805,19 @@ mod cuda_backend {
 
         let (x_s, _) = x.storage_and_layout();
         let Storage::Cuda(x_s) = &*x_s else {
-            candle_core::bail!("Expected CUDA storage");
+            hanzo_ml::bail!("Expected CUDA storage");
         };
         let (w_s, _) = w.storage_and_layout();
         let Storage::Cuda(w_s) = &*w_s else {
-            candle_core::bail!("Expected CUDA storage");
+            hanzo_ml::bail!("Expected CUDA storage");
         };
         let (s_s, _) = scales.storage_and_layout();
         let Storage::Cuda(s_s) = &*s_s else {
-            candle_core::bail!("Expected CUDA storage");
+            hanzo_ml::bail!("Expected CUDA storage");
         };
         let (b_s, _) = biases.storage_and_layout();
         let Storage::Cuda(b_s) = &*b_s else {
-            candle_core::bail!("Expected CUDA storage");
+            hanzo_ml::bail!("Expected CUDA storage");
         };
 
         let (wq_ptr, _wq_guard) =
@@ -1991,7 +1991,7 @@ mod cuda_backend {
                             n as i32,
                             k as i32,
                         ),
-                        _ => candle_core::bail!(
+                        _ => hanzo_ml::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
                         ),
                     }
@@ -2001,7 +2001,7 @@ mod cuda_backend {
                 let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
                 let output = Tensor::from((
                     Storage::Cuda(output_storage),
-                    candle_core::Shape::from(out_shape),
+                    hanzo_ml::Shape::from(out_shape),
                 ));
                 Ok(output)
             }
@@ -2171,7 +2171,7 @@ mod cuda_backend {
                             n as i32,
                             k as i32,
                         ),
-                        _ => candle_core::bail!(
+                        _ => hanzo_ml::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
                         ),
                     }
@@ -2181,7 +2181,7 @@ mod cuda_backend {
                 let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
                 let output = Tensor::from((
                     Storage::Cuda(output_storage),
-                    candle_core::Shape::from(out_shape),
+                    hanzo_ml::Shape::from(out_shape),
                 ));
                 Ok(output)
             }
@@ -2354,7 +2354,7 @@ mod cuda_backend {
                             n as i32,
                             k as i32,
                         ),
-                        _ => candle_core::bail!(
+                        _ => hanzo_ml::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
                         ),
                     }
@@ -2364,11 +2364,11 @@ mod cuda_backend {
                 let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
                 let output = Tensor::from((
                     Storage::Cuda(output_storage),
-                    candle_core::Shape::from(out_shape),
+                    hanzo_ml::Shape::from(out_shape),
                 ));
                 Ok(output)
             }
-            other => candle_core::bail!("Unsupported dtype for AFQ CUDA matmul: {other:?}"),
+            other => hanzo_ml::bail!("Unsupported dtype for AFQ CUDA matmul: {other:?}"),
         }
     }
 }

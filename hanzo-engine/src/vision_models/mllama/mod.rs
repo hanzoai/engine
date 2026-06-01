@@ -17,8 +17,8 @@ pub(crate) use inputs_processor::MLlamaProcessor;
 use text::MLlamaTextModel;
 use vision::MLlamaVisionModel;
 
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Linear, Module};
+use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_nn::{Linear, Module};
 use hanzo_quant::{CollectedImatrixData, QuantMethod, ShardedVarBuilder};
 
 use crate::attention::AttentionMask;
@@ -136,10 +136,10 @@ impl MLlamaModel {
     ) -> Result<Tensor> {
         let cross_attn_states = if let Some(pixel_values) = pixel_values {
             let Some(aspect_ratio_mask) = aspect_ratio_mask else {
-                candle_core::bail!("`aspect_ratio_mask` must be specified if `pixel_values` is.");
+                hanzo_ml::bail!("`aspect_ratio_mask` must be specified if `pixel_values` is.");
             };
             let Some(aspect_ratio_ids) = aspect_ratio_ids else {
-                candle_core::bail!("`aspect_ratio_ids` must be specified if `pixel_values` is.");
+                hanzo_ml::bail!("`aspect_ratio_ids` must be specified if `pixel_values` is.");
             };
 
             let n_images = image_hashes.len();
@@ -157,7 +157,7 @@ impl MLlamaModel {
                         } else {
                             per_image.push(Tensor::zeros(
                                 1,
-                                candle_core::DType::F32,
+                                hanzo_ml::DType::F32,
                                 pixel_values.device(),
                             )?);
                             miss_indices.push(i);
@@ -359,7 +359,7 @@ impl IsqModel for MLlamaModel {
     }
 
     /// End stats tracking and return the imatrix data
-    fn extract_imatrix_data(&mut self) -> candle_core::Result<CollectedImatrixData> {
+    fn extract_imatrix_data(&mut self) -> hanzo_ml::Result<CollectedImatrixData> {
         let layers = self
             .language_model
             .get_layers()
