@@ -146,7 +146,7 @@ pub mod defaults {
 ///        .await?;
 /// ```
 pub struct HanzoForServerBuilder {
-    /// The Candle device to use for model execution (CPU, CUDA, Metal, etc.).
+    /// The Hanzo device to use for model execution (CPU, CUDA, Metal, etc.).
     device: Option<Device>,
 
     /// Integer seed to ensure reproducible random number generation.
@@ -306,7 +306,7 @@ impl HanzoForServerBuilder {
         Default::default()
     }
 
-    /// Sets the Candle device to use for model execution.
+    /// Sets the Hanzo device to use for model execution.
     pub fn with_device(mut self, device: Device) -> Self {
         self.device = Some(device);
         self

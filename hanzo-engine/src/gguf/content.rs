@@ -15,10 +15,10 @@ use crate::DEBUG;
 
 use super::GGUFArchitecture;
 
-/// List of all GgmlDType variants from Candle.
+/// List of all GgmlDType variants from Hanzo.
 /// This should be kept in sync with hanzo_ml::quantized::GgmlDType.
-/// If Candle adds new dtype variants, add them here to include in error messages.
-/// Reference: candle-core/src/quantized/mod.rs in the Candle repository.
+/// If Hanzo adds new dtype variants, add them here to include in error messages.
+/// Reference: hanzo-ml/src/quantized/mod.rs in the hanzo-ml repository.
 const KNOWN_DTYPES: &[GgmlDType] = &[
     GgmlDType::F32,
     GgmlDType::F16,
@@ -35,7 +35,7 @@ const KNOWN_DTYPES: &[GgmlDType] = &[
     GgmlDType::Q5K,
     GgmlDType::Q6K,
     GgmlDType::Q8K,
-    // Add newer ones here if Candle adds more
+    // Add newer ones here if Hanzo adds more
 ];
 
 fn get_supported_gguf_dtypes() -> String {
@@ -95,7 +95,7 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
                                 "Critical failure loading model part {}\n\
                                 Verify you are using a supported quantization type\n\
                                 Supported types: {}\n\
-                                Candle error: {}",
+                                Hanzo error: {}",
                                 i,
                                 get_supported_gguf_dtypes(),
                                 e

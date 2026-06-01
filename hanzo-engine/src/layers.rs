@@ -1476,7 +1476,7 @@ impl Qwen3VLRotaryEmbedding {
         }
 
         // cos/sin from freqs_t -> (batch, seq_len, head_dim/2)
-        // candle's rope() expects half-dim cos/sin and handles both halves internally
+        // hanzo-ml's rope() expects half-dim cos/sin and handles both halves internally
         let cos = freqs_t.cos()?.to_dtype(dtype)?.contiguous()?;
         let sin = freqs_t.sin()?.to_dtype(dtype)?.contiguous()?;
         Ok((cos, sin))
