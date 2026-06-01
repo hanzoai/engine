@@ -7,7 +7,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use candle_core::{pickle::PthTensors, DType, Device, Result, Tensor};
+use hanzo_ml::{pickle::PthTensors, DType, Device, Result, Tensor};
 use hanzo_quant::{safetensors::MmapedSafetensors, ShardedSafeTensors, ShardedVarBuilder};
 use regex::Regex;
 
@@ -46,7 +46,7 @@ impl TensorLoaderBackend for PickleBackend {
     fn load_name(&self, name: &str, device: &Device, _dtype: Option<DType>) -> Result<Tensor> {
         self.0
             .get(name)?
-            .ok_or(candle_core::Error::Msg(format!(
+            .ok_or(hanzo_ml::Error::Msg(format!(
                 "Could not load tensor {name}"
             )))?
             .to_device(device)
@@ -246,9 +246,9 @@ trait LoadTensors {
                 MmapedSafetensors::new(path)?
             })),
             "pth" | "pt" | "bin" => Box::new(PickleBackend(
-                candle_core::pickle::PthTensors::new(path, None)?
+                hanzo_ml::pickle::PthTensors::new(path, None)?
             )),
-            other => candle_core::bail!("Unexpected extension `{other}`, this should have been handled by `get_model_paths`."),
+            other => hanzo_ml::bail!("Unexpected extension `{other}`, this should have been handled by `get_model_paths`."),
         };
 
         // Extracts the tensor name and processes it, filtering tensors and deriving the key name:

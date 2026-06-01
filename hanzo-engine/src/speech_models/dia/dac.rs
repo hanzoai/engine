@@ -4,8 +4,8 @@
 //!
 /// An efficient neural codec for compressing/decompressing audio
 ///
-use candle_core::{IndexOp, Result, Tensor, D};
-use candle_nn::{Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, VarBuilder};
+use hanzo_ml::{IndexOp, Result, Tensor, D};
+use hanzo_nn::{Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, VarBuilder};
 use hanzo_quant::Convolution;
 
 // Applies weight norm for inference by recomputing the weight tensor. This
@@ -15,7 +15,7 @@ fn conv1d_weight_norm(
     in_c: usize,
     out_c: usize,
     kernel_size: usize,
-    config: candle_nn::Conv1dConfig,
+    config: hanzo_nn::Conv1dConfig,
     vb: VarBuilder,
 ) -> Result<Conv1d> {
     let weight_g = vb.get((out_c, 1, 1), "weight_g")?;
@@ -31,7 +31,7 @@ fn conv_transpose1d_weight_norm(
     out_c: usize,
     kernel_size: usize,
     bias: bool,
-    config: candle_nn::ConvTranspose1dConfig,
+    config: hanzo_nn::ConvTranspose1dConfig,
     vb: VarBuilder,
 ) -> Result<ConvTranspose1d> {
     let weight_g = vb.get((in_c, 1, 1), "weight_g")?;
@@ -75,7 +75,7 @@ impl Snake1d {
     }
 }
 
-impl candle_core::Module for Snake1d {
+impl hanzo_ml::Module for Snake1d {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs_shape = xs.shape();
         let xs = xs.flatten_from(2)?;
@@ -115,7 +115,7 @@ impl ResidualUnit {
     }
 }
 
-impl candle_core::Module for ResidualUnit {
+impl hanzo_ml::Module for ResidualUnit {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let mut ys = self.snake1.forward(xs)?;
         ys = Convolution.forward_1d(&self.conv1, &ys)?;
@@ -163,7 +163,7 @@ impl DecoderBlock {
     }
 }
 
-impl candle_nn::Module for DecoderBlock {
+impl hanzo_nn::Module for DecoderBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         xs.apply(&self.snake1)?
             .apply(&self.conv_tr1)?
@@ -211,7 +211,7 @@ impl Decoder {
     }
 }
 
-impl candle_core::Module for Decoder {
+impl hanzo_ml::Module for Decoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let mut xs = Convolution.forward_1d(&self.conv1, xs)?;
         for block in self.blocks.iter() {
@@ -227,7 +227,7 @@ impl candle_core::Module for Decoder {
 pub struct VectorQuantizer {
     in_proj: Conv1d,
     out_proj: Conv1d,
-    codebook: candle_nn::Embedding,
+    codebook: hanzo_nn::Embedding,
 }
 
 impl VectorQuantizer {
@@ -235,7 +235,7 @@ impl VectorQuantizer {
         let in_proj = conv1d_weight_norm(in_dim, cb_dim, 1, Default::default(), vb.pp("in_proj"))?;
         let out_proj =
             conv1d_weight_norm(cb_dim, in_dim, 1, Default::default(), vb.pp("out_proj"))?;
-        let codebook = candle_nn::embedding(cb_size, cb_dim, vb.pp("codebook"))?;
+        let codebook = hanzo_nn::embedding(cb_size, cb_dim, vb.pp("codebook"))?;
         Ok(Self {
             in_proj,
             out_proj,
@@ -286,7 +286,7 @@ impl ResidualVectorQuantizer {
         }
         match sum {
             Some(s) => Ok(s),
-            None => candle_core::bail!("empty codebooks"),
+            None => hanzo_ml::bail!("empty codebooks"),
         }
     }
 }

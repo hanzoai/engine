@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use candle_core::{Result, Tensor};
+use hanzo_ml::{Result, Tensor};
 use hanzo_quant::{QuantMethod, ShardedVarBuilder};
 
 /// Temporal adapter that performs 4x downsampling via reshape + MLP.

@@ -1,4 +1,4 @@
-use candle_core::{Result, Tensor};
+use hanzo_ml::{Result, Tensor};
 
 /// Pad an image of shape (c, h, w) to (c, max_h, max_w) by padding with zeros on the right and bottom.
 pub fn pad(image: &Tensor, max_h: usize, max_w: usize) -> Result<Tensor> {

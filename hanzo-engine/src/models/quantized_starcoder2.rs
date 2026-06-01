@@ -14,10 +14,10 @@ use crate::pipeline::{EitherCache, KvCache, NormalCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
-use candle_core::quantized::QMatMul;
-use candle_core::quantized::QTensor;
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
-use candle_nn::{Embedding, LayerNorm};
+use hanzo_ml::quantized::QMatMul;
+use hanzo_ml::quantized::QTensor;
+use hanzo_ml::{DType, Device, IndexOp, Module, Result, Tensor};
+use hanzo_nn::{Embedding, LayerNorm};
 use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 #[derive(Clone)]
@@ -32,7 +32,7 @@ impl Module for Mlp {
             &self
                 .ffn_up
                 .forward(xs)?
-                .apply(&candle_nn::Activation::GeluPytorchTanh)?,
+                .apply(&hanzo_nn::Activation::GeluPytorchTanh)?,
         )
     }
 }
@@ -205,7 +205,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             layer_norm_epsilon,
             context_window,
             rope_freq_base,
-        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
+        } = PropsGGUF::try_from(metadata).or_else(|err| hanzo_ml::bail!("{err}"))?;
 
         let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;

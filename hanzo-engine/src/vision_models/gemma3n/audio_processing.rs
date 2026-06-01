@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle_core::{Device, Tensor};
+use hanzo_ml::{Device, Tensor};
 use hanzo_audio::AudioInput;
 use rubato::Resampler;
 use rustfft::{num_complex::Complex32, FftPlanner};
@@ -114,7 +114,7 @@ impl AudioProcessor {
         let mel_tensor = Tensor::from_vec(mel_data, (1, num_frames, self.feature_size), device)?;
 
         // Create mask (all valid for now)
-        let mask = Tensor::zeros((1, num_frames), candle_core::DType::F32, device)?;
+        let mask = Tensor::zeros((1, num_frames), hanzo_ml::DType::F32, device)?;
 
         Ok((mel_tensor, mask))
     }

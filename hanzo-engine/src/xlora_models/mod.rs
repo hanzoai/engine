@@ -17,7 +17,7 @@ use crate::{
     lora::Ordering,
     pipeline::{text_models_inputs_processor::FlashParams, EitherCache},
 };
-use candle_core::{DType, Device, Result, Tensor};
+use hanzo_ml::{DType, Device, Result, Tensor};
 pub(crate) use config::XLoraConfig;
 pub(crate) use gemma::XLoraModel as XLoraGemma;
 pub(crate) use gemma2::Model as XLoraGemma2;
@@ -143,7 +143,7 @@ fn verify_sanity_adapters(ordering: &Ordering, supported_layers: &[&str]) -> Res
     }
     for path in ordering.layers.as_ref().unwrap().keys() {
         if !supported_layers.iter().any(|layer| path.ends_with(layer)) {
-            candle_core::bail!("Got a layer name `{path}` in the ordering, expected it to end with one of {supported_layers:?}");
+            hanzo_ml::bail!("Got a layer name `{path}` in the ordering, expected it to end with one of {supported_layers:?}");
         }
     }
     Ok(())

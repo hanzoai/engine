@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use candle_core::{DType, Device, Result, Tensor};
+use hanzo_ml::{DType, Device, Result, Tensor};
 use serde::{Deserialize, Serialize};
 
 use super::config::{KvCacheLayout, ModelConfigLike};
@@ -110,7 +110,7 @@ impl CacheEngine {
                     let key_blocks = if let Device::Metal(dev) = &device {
                         #[cfg(feature = "metal")]
                         {
-                            use candle_core::{MetalStorage, Shape, Storage};
+                            use hanzo_ml::{MetalStorage, Shape, Storage};
 
                             let elem_count = cache_config.num_gpu_blocks
                                 * key_block_shape.0
@@ -159,7 +159,7 @@ impl CacheEngine {
                     let value_blocks = if let Device::Metal(dev) = &device {
                         #[cfg(feature = "metal")]
                         {
-                            use candle_core::{MetalStorage, Shape, Storage};
+                            use hanzo_ml::{MetalStorage, Shape, Storage};
 
                             let elem_count = cache_config.num_gpu_blocks
                                 * value_block_shape.0
@@ -211,7 +211,7 @@ impl CacheEngine {
                     let key_blocks = if let Device::Metal(dev) = &device {
                         #[cfg(feature = "metal")]
                         {
-                            use candle_core::{MetalStorage, Shape, Storage};
+                            use hanzo_ml::{MetalStorage, Shape, Storage};
 
                             let elem_count = cache_config.num_gpu_blocks
                                 * cache_config.block_size
@@ -254,7 +254,7 @@ impl CacheEngine {
                     let value_blocks = if let Device::Metal(dev) = &device {
                         #[cfg(feature = "metal")]
                         {
-                            use candle_core::{MetalStorage, Shape, Storage};
+                            use hanzo_ml::{MetalStorage, Shape, Storage};
 
                             let elem_count = cache_config.num_gpu_blocks
                                 * cache_config.block_size

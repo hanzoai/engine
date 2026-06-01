@@ -1,5 +1,5 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-use candle_core::Device;
+use hanzo_ml::Device;
 use engine::Engine;
 pub use engine::{
     agentic_session::{AgenticSessionStore, SerializedSession, SerializedVideo},

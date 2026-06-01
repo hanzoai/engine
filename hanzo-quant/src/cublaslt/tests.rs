@@ -1,5 +1,5 @@
 use super::*;
-use candle_core::{DType, Device, IndexOp};
+use hanzo_ml::{DType, Device, IndexOp};
 use float8::F8E4M3;
 
 #[test]

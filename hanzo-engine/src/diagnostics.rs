@@ -8,7 +8,7 @@ use sysinfo::{Disks, System};
 #[cfg(any(feature = "cuda", feature = "metal"))]
 use crate::MemoryUsage;
 #[cfg(any(feature = "cuda", feature = "metal"))]
-use candle_core::Device;
+use hanzo_ml::Device;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CpuInfo {
@@ -175,7 +175,7 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
 
     #[cfg(feature = "metal")]
     {
-        let total = candle_metal_kernels::metal::Device::all().len();
+        let total = hanzo_metal_kernels::metal::Device::all().len();
         for ord in 0..total {
             if let Ok(dev) = Device::new_metal(ord) {
                 let mem = MemoryUsage.query(&dev).ok();

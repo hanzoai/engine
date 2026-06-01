@@ -1,5 +1,5 @@
-use candle_core::{DType, Device, Error, IndexOp, Result, Shape, Storage, Tensor, WithDType};
-use candle_nn::var_builder::{Backend, SimpleBackend, VarBuilderArgs};
+use hanzo_ml::{DType, Device, Error, IndexOp, Result, Shape, Storage, Tensor, WithDType};
+use hanzo_nn::var_builder::{Backend, SimpleBackend, VarBuilderArgs};
 use float8::F8E4M3;
 use regex::Regex;
 use safetensors::tensor as st;
@@ -177,31 +177,31 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
     let storage = match device {
         Device::Cpu => {
             let cpu_storage = match dtype {
-                DType::F6E2M3 => candle_core::cpu_backend::CpuStorage::F6E2M3(data.to_vec()),
-                DType::F6E3M2 => candle_core::cpu_backend::CpuStorage::F6E3M2(data.to_vec()),
-                DType::F4 => candle_core::cpu_backend::CpuStorage::F4(data.to_vec()),
-                DType::F8E8M0 => candle_core::cpu_backend::CpuStorage::F8E8M0(data.to_vec()),
+                DType::F6E2M3 => hanzo_ml::cpu_backend::CpuStorage::F6E2M3(data.to_vec()),
+                DType::F6E3M2 => hanzo_ml::cpu_backend::CpuStorage::F6E3M2(data.to_vec()),
+                DType::F4 => hanzo_ml::cpu_backend::CpuStorage::F4(data.to_vec()),
+                DType::F8E8M0 => hanzo_ml::cpu_backend::CpuStorage::F8E8M0(data.to_vec()),
                 _ => unreachable!(),
             };
             Storage::Cpu(cpu_storage)
         }
         #[cfg(feature = "rocm")]
-        Device::Rocm(_) => candle_core::bail!("dummy MX dtypes (F4/F6/F8) are not supported on rocm yet"),
+        Device::Rocm(_) => hanzo_ml::bail!("dummy MX dtypes (F4/F6/F8) are not supported on rocm yet"),
         #[cfg(feature = "vulkan")]
-        Device::Vulkan(_) => candle_core::bail!("dummy MX dtypes (F4/F6/F8) are not supported on vulkan yet"),
+        Device::Vulkan(_) => hanzo_ml::bail!("dummy MX dtypes (F4/F6/F8) are not supported on vulkan yet"),
         #[cfg(feature = "cuda")]
         Device::Cuda(device) => {
             let mut slice = unsafe { device.alloc::<u8>(data.len())? };
             device.memcpy_htod(data, &mut slice)?;
 
             let slice = match dtype {
-                DType::F6E2M3 => candle_core::cuda_backend::CudaStorageSlice::F6E2M3(slice),
-                DType::F6E3M2 => candle_core::cuda_backend::CudaStorageSlice::F6E3M2(slice),
-                DType::F4 => candle_core::cuda_backend::CudaStorageSlice::F4(slice),
-                DType::F8E8M0 => candle_core::cuda_backend::CudaStorageSlice::F8E8M0(slice),
+                DType::F6E2M3 => hanzo_ml::cuda_backend::CudaStorageSlice::F6E2M3(slice),
+                DType::F6E3M2 => hanzo_ml::cuda_backend::CudaStorageSlice::F6E3M2(slice),
+                DType::F4 => hanzo_ml::cuda_backend::CudaStorageSlice::F4(slice),
+                DType::F8E8M0 => hanzo_ml::cuda_backend::CudaStorageSlice::F8E8M0(slice),
                 _ => unreachable!(),
             };
-            let storage = candle_core::cuda_backend::CudaStorage {
+            let storage = hanzo_ml::cuda_backend::CudaStorage {
                 slice,
                 device: device.clone(),
             };
@@ -215,7 +215,7 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
         Device::Metal(device) => {
             let buffer = device.new_buffer_with_data(data)?;
 
-            let storage = candle_core::metal_backend::MetalStorage::new(
+            let storage = hanzo_ml::metal_backend::MetalStorage::new(
                 buffer,
                 device.clone(),
                 data.len(),
@@ -335,13 +335,13 @@ impl SimpleBackend for MmapedSafetensors {
         &self,
         s: Shape,
         name: &str,
-        _: candle_nn::Init,
+        _: hanzo_nn::Init,
         dtype: DType,
         dev: &Device,
     ) -> Result<Tensor> {
         let tensor = self.get_unchecked(name, dtype, dev)?;
         if tensor.shape() != &s {
-            Err(candle_core::Error::UnexpectedShape {
+            Err(hanzo_ml::Error::UnexpectedShape {
                 msg: format!("shape mismatch for {name}"),
                 expected: s,
                 got: tensor.shape().clone(),
@@ -485,7 +485,7 @@ impl Shard {
                 } else if dim == 2 {
                     tensor.i((.., .., start..stop))
                 } else {
-                    candle_core::bail!("Got sharded on dimensions != 0 or 1 or 2")
+                    hanzo_ml::bail!("Got sharded on dimensions != 0 or 1 or 2")
                 }
             }
             Shard::Offset { dim, offset, len } => {
@@ -499,7 +499,7 @@ impl Shard {
                 } else if dim == 2 {
                     tensor.i((.., .., start..stop))
                 } else {
-                    candle_core::bail!("Got sharded on dimensions != 0 or 1 or 2")
+                    hanzo_ml::bail!("Got sharded on dimensions != 0 or 1 or 2")
                 }
             }
         }
@@ -649,7 +649,7 @@ impl Backend for ShardedSafeTensors {
                                 ))
                             })?
                         } else {
-                            candle_core::bail!("Got sharded on dimensions != 0 or 1 or 2")
+                            hanzo_ml::bail!("Got sharded on dimensions != 0 or 1 or 2")
                         };
 
                         shape[dim] = block_size;
@@ -716,7 +716,7 @@ impl Backend for ShardedSafeTensors {
                                 ))
                             })?
                         } else {
-                            candle_core::bail!("Got sharded on dimensions != 0 or 1 or 2")
+                            hanzo_ml::bail!("Got sharded on dimensions != 0 or 1 or 2")
                         };
 
                         shape[dim] = len;

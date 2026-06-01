@@ -9,7 +9,7 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-use candle_core::{
+use hanzo_ml::{
     cuda::{
         cudarc::{
             cublas::{result::hgemm, sys::cublasOperation_t},
@@ -88,7 +88,7 @@ impl GptqLayer {
         use_exllama: bool,
     ) -> Result<Tensor> {
         if !a.is_contiguous() {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Expected `a` to be contiguous, got strides {:?}",
                 a.layout().stride()
             )
@@ -104,8 +104,8 @@ impl GptqLayer {
         // a
         let (a, a_l) = a.storage_and_layout();
         let a = match &*a {
-            candle_core::Storage::Cuda(s) => s,
-            _ => candle_core::bail!("a must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(s) => s,
+            _ => hanzo_ml::bail!("a must be a cuda tensor"),
         };
         let (a, _a_guard) = crate::utils::slice_ptr(a.as_cuda_slice::<f16>()?, a_l.start_offset());
         let a_ptr = a as *const f16;
@@ -114,8 +114,8 @@ impl GptqLayer {
         // qweight
         let (q_weight, _) = self.q_weight.storage_and_layout();
         let q_weight = match &*q_weight {
-            candle_core::Storage::Cuda(s) => s,
-            _ => candle_core::bail!("q_weight must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(s) => s,
+            _ => hanzo_ml::bail!("q_weight must be a cuda tensor"),
         };
         let (q_weight, _q_weight_guard) = crate::utils::slice_ptr(
             q_weight.as_cuda_slice::<i32>()?,
@@ -127,8 +127,8 @@ impl GptqLayer {
         // qzeros
         let (qzeros, qzeros_l) = qzeros.storage_and_layout();
         let qzeros = match &*qzeros {
-            candle_core::Storage::Cuda(s) => s,
-            _ => candle_core::bail!("qzeros must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(s) => s,
+            _ => hanzo_ml::bail!("qzeros must be a cuda tensor"),
         };
         let (qzeros, _qzeros_guard) =
             crate::utils::slice_ptr(qzeros.as_cuda_slice::<i32>()?, qzeros_l.start_offset());
@@ -137,8 +137,8 @@ impl GptqLayer {
         // scales
         let (scales, _) = self.scales.storage_and_layout();
         let scales = match &*scales {
-            candle_core::Storage::Cuda(s) => s,
-            _ => candle_core::bail!("scales must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(s) => s,
+            _ => hanzo_ml::bail!("scales must be a cuda tensor"),
         };
         let (scales, _scales_guard) = crate::utils::slice_ptr(
             scales.as_cuda_slice::<f16>()?,
@@ -149,8 +149,8 @@ impl GptqLayer {
         // g_idx
         let (g_idx, g_idx_l) = g_idx.storage_and_layout();
         let g_idx = match &*g_idx {
-            candle_core::Storage::Cuda(s) => s,
-            _ => candle_core::bail!("g_idx must be a cuda tensor"),
+            hanzo_ml::Storage::Cuda(s) => s,
+            _ => hanzo_ml::bail!("g_idx must be a cuda tensor"),
         };
         let (g_idx, _g_idx_guard) =
             crate::utils::slice_ptr(g_idx.as_cuda_slice::<i32>()?, g_idx_l.start_offset());
@@ -351,7 +351,7 @@ impl QuantMethod for GptqLayer {
 
     fn dequantize_w(&self) -> Result<Tensor> {
         // TODO
-        candle_core::bail!("GptqLayer cannot be dequantized!");
+        hanzo_ml::bail!("GptqLayer cannot be dequantized!");
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
@@ -365,7 +365,7 @@ impl QuantMethod for GptqLayer {
         );
         let reshaped_a = a.reshape(((), a.dim(D::Minus1)?))?;
         if !reshaped_a.device().is_cuda() {
-            candle_core::bail!("Expected CUDA input to GptqLayer");
+            hanzo_ml::bail!("Expected CUDA input to GptqLayer");
         }
 
         let out = match (self.g_idx.as_ref(), self.qzeros.as_ref(), self.is_marlin) {
@@ -402,7 +402,7 @@ impl QuantMethod for GptqLayer {
     }
 
     fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("GPTQ quantization does not support adding weight delta.")
+        hanzo_ml::bail!("GPTQ quantization does not support adding weight delta.")
     }
 
     fn dtype_and_device(&self) -> (DType, Device) {
@@ -417,7 +417,7 @@ impl QuantMethod for GptqLayer {
         _imatrix_weight: Option<Vec<f32>>,
         _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("GPTQ quantization does not support ISQ.")
+        hanzo_ml::bail!("GPTQ quantization does not support ISQ.")
     }
 }
 
@@ -446,7 +446,7 @@ pub fn gptq_linear(
         is_awq,
     } = config
     else {
-        candle_core::bail!("Unexpected quantization config.")
+        hanzo_ml::bail!("Unexpected quantization config.")
     };
 
     let is_awq = *is_awq;

@@ -1,7 +1,7 @@
 use std::{any::Any, sync::Arc};
 
 use anyhow::Result;
-use candle_core::{Context, Device, IndexOp, Tensor};
+use hanzo_ml::{Context, Device, IndexOp, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use hanzo_vision::{
     ApplyTensorTransforms, ApplyTransforms, Normalize, TensorTransforms, ToTensor, Transforms,
@@ -672,16 +672,16 @@ impl Qwen2VLImageProcessor {
         factor: usize,
         min_pixels: usize,
         max_pixels: usize,
-    ) -> candle_core::Result<(usize, usize)> {
+    ) -> hanzo_ml::Result<(usize, usize)> {
         if height < factor || width < factor {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "height:{} or width:{} must be larger than factor:{}",
                 height,
                 width,
                 factor
             );
         } else if (height.max(width) as f64 / height.min(width) as f64) > 200.0 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "absolute aspect ratio must be smaller than 200, got {:.2}",
                 height.max(width) as f64 / height.min(width) as f64
             );
@@ -710,7 +710,7 @@ impl Qwen2VLImageProcessor {
         config: &PreProcessorConfig,
         device: &Device,
         (mut height, mut width): (u32, u32),
-    ) -> candle_core::Result<(Tensor, (u32, u32, u32))> {
+    ) -> hanzo_ml::Result<(Tensor, (u32, u32, u32))> {
         let mut processed_images = Vec::new();
 
         for mut image in images {
@@ -819,7 +819,7 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
         config: &PreProcessorConfig,
         device: &Device,
         (_, _): (usize, usize),
-    ) -> candle_core::Result<PreprocessedImages> {
+    ) -> hanzo_ml::Result<PreprocessedImages> {
         let mut pixel_values = Vec::new();
         let mut vision_grid_thw = Vec::new();
 

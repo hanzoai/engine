@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
 };
 
-use candle_core::{Device, Error, Result, Tensor};
+use hanzo_ml::{Device, Error, Result, Tensor};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -242,7 +242,7 @@ impl DrySamplingParamsInner {
 /// ```rust
 /// use std::{sync::Arc, ops::Mul};
 /// use hanzo_engine::CustomLogitsProcessor;
-/// use candle_core::{Result, Tensor};
+/// use hanzo_ml::{Result, Tensor};
 ///
 /// struct ThresholdLogitsProcessor;
 /// impl CustomLogitsProcessor for ThresholdLogitsProcessor {
@@ -652,7 +652,7 @@ impl Sampler {
             return Ok(logits);
         }
         if context.is_empty() {
-            candle_core::bail!("Penalty context is empty, this should not happen.");
+            hanzo_ml::bail!("Penalty context is empty, this should not happen.");
         }
 
         let vocab_size = logits.elem_count();
@@ -701,7 +701,7 @@ impl Sampler {
         let packed = topk.packed.to_vec1::<f32>()?;
         let k = topk.k;
         if packed.len() != 2 * k + 2 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "invalid CUDA top-k packed output length {}, expected {}",
                 packed.len(),
                 2 * k + 2
@@ -717,7 +717,7 @@ impl Sampler {
         let denom = softmax_info[0];
         let global_max = softmax_info[1];
         if denom <= 0.0 || !denom.is_finite() || !global_max.is_finite() {
-            candle_core::bail!("invalid CUDA top-k softmax normalizer");
+            hanzo_ml::bail!("invalid CUDA top-k softmax normalizer");
         }
 
         let inv_temperature = (1.0 / temperature) as f32;
@@ -849,7 +849,7 @@ impl Sampler {
         let packed = topk.packed.to_vec1::<f32>()?;
         let k = topk.k;
         if packed.len() != 2 * k + 2 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "invalid Metal top-k packed output length {}, expected {}",
                 packed.len(),
                 2 * k + 2
@@ -864,7 +864,7 @@ impl Sampler {
         let denom = softmax_info[0];
         let global_max = softmax_info[1];
         if denom <= 0.0 || !denom.is_finite() || !global_max.is_finite() {
-            candle_core::bail!("invalid Metal top-k softmax normalizer");
+            hanzo_ml::bail!("invalid Metal top-k softmax normalizer");
         }
 
         let inv_temperature = (1.0 / temperature) as f32;
@@ -977,7 +977,7 @@ impl Sampler {
             .filter(|prob| prob.is_finite() && *prob > 0.0)
             .sum();
         if sum <= 0.0 {
-            candle_core::bail!("all probabilities are zero in speculative sampling");
+            hanzo_ml::bail!("all probabilities are zero in speculative sampling");
         }
         for prob in probs.iter_mut() {
             if prob.is_finite() && *prob > 0.0 {
@@ -1021,7 +1021,7 @@ impl Sampler {
             }
             Some(temperature) => {
                 let logits = (&logits / temperature)?;
-                candle_nn::ops::softmax_last_dim(&logits)?.to_vec1::<f32>()?
+                hanzo_nn::ops::softmax_last_dim(&logits)?.to_vec1::<f32>()?
             }
         };
         self.filter_top_kp_min_p(&mut probs);
@@ -1138,7 +1138,7 @@ impl Sampler {
 
     fn apply_penalties(&self, mut logits: Vec<f32>, context: &[u32]) -> Result<Tensor> {
         if context.is_empty() {
-            candle_core::bail!("Penalty context is empty, this should not happen.");
+            hanzo_ml::bail!("Penalty context is empty, this should not happen.");
         }
 
         // Dry penalty
@@ -1336,7 +1336,7 @@ impl Sampler {
                 )?,
                 Some(temperature) => {
                     let logits = (&logits / temperature)?;
-                    let probs = candle_nn::ops::softmax_last_dim(&logits)?;
+                    let probs = hanzo_nn::ops::softmax_last_dim(&logits)?;
 
                     self.sample_speculative_top_kp_min_p(
                         probs,
@@ -1352,7 +1352,7 @@ impl Sampler {
                 None => self.sample_argmax(logits, return_logprobs)?,
                 Some(temperature) => {
                     let logits = (&logits / temperature)?;
-                    let probs = candle_nn::ops::softmax_last_dim(&logits)?;
+                    let probs = hanzo_nn::ops::softmax_last_dim(&logits)?;
                     let mut probs: Vec<f32> = probs.to_vec1()?;
 
                     self.sample_top_kp_min_p(
@@ -1377,7 +1377,7 @@ mod tests {
     #[test]
     fn test_argmax() {
         use super::Sampler;
-        use candle_core::{Device, Tensor};
+        use hanzo_ml::{Device, Tensor};
         use rand::SeedableRng;
         use rand_isaac::Isaac64Rng;
         use std::sync::Arc;
@@ -1417,7 +1417,7 @@ mod tests {
     #[test]
     fn test_gumbel_speculative() {
         use super::Sampler;
-        use candle_core::{Device, Tensor};
+        use hanzo_ml::{Device, Tensor};
         use rand::SeedableRng;
         use rand_isaac::Isaac64Rng;
         use std::sync::Arc;
@@ -1457,7 +1457,7 @@ mod tests {
     #[test]
     fn test_speculative_candidate_probs_use_sampling_filters() {
         use super::Sampler;
-        use candle_core::{Device, Tensor};
+        use hanzo_ml::{Device, Tensor};
 
         let sampler = Sampler::new(
             Some(1.0),

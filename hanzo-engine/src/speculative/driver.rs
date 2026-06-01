@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use candle_core::{Result, Tensor};
+use hanzo_ml::{Result, Tensor};
 use rand_isaac::Isaac64Rng;
 
 use crate::pipeline::sampling::{finish_or_add_toks_to_seq, sample_sequence};
@@ -363,7 +363,7 @@ where
         return Ok(());
     };
     if proposal_batch.proposals.len() != active_indices.len() {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "speculative proposer returned {} proposals for {} active sequences",
             proposal_batch.proposals.len(),
             active_indices.len()

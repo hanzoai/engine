@@ -1,5 +1,5 @@
-use candle_core::{Result, Tensor};
-use candle_nn::Module;
+use hanzo_ml::{Result, Tensor};
+use hanzo_nn::Module;
 use hanzo_quant::ShardedVarBuilder;
 
 use crate::{

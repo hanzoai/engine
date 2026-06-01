@@ -1,4 +1,4 @@
-use candle_core::{Device, Result};
+use hanzo_ml::{Device, Result};
 use sysinfo::System;
 #[cfg(feature = "metal")]
 use tracing::warn;
@@ -77,8 +77,8 @@ impl MemoryUsage {
                         allocated: budget.saturating_sub(free),
                     })
                 } else {
-                    use candle_core::cuda::cudarc::driver::result;
-                    use candle_core::cuda_backend::WrapErr;
+                    use hanzo_ml::cuda::cudarc::driver::result;
+                    use hanzo_ml::cuda_backend::WrapErr;
 
                     dev.cuda_stream().context().bind_to_thread().w()?;
                     let (free, total) = result::mem_get_info().w()?;
@@ -87,7 +87,7 @@ impl MemoryUsage {
             }
             #[cfg(not(feature = "cuda"))]
             Device::Cuda(_) => {
-                candle_core::bail!("Cannot query memory for CUDA device")
+                hanzo_ml::bail!("Cannot query memory for CUDA device")
             }
             #[cfg(feature = "metal")]
             Device::Metal(dev) => {
@@ -112,7 +112,7 @@ impl MemoryUsage {
             }
             #[cfg(not(feature = "metal"))]
             Device::Metal(_) => {
-                candle_core::bail!("Cannot query memory for Metal device")
+                hanzo_ml::bail!("Cannot query memory for Metal device")
             }
         }
     }
@@ -150,7 +150,7 @@ fn metal_sysctl_floor_bytes() -> Result<usize> {
         x if x <= 36 * 1024 => (system_ram_mb * 2) / 3,
         x if x > 36 * 1024 => (system_ram_mb * 3) / 4,
         x => {
-            return Err(candle_core::Error::Msg(format!(
+            return Err(hanzo_ml::Error::Msg(format!(
                 "Invalid system ram mb value {x}."
             )))
         }

@@ -2,7 +2,7 @@ mod static_lora;
 
 use std::{cell::RefCell, collections::HashSet};
 
-use candle_core::{DType, Result, Tensor};
+use hanzo_ml::{DType, Result, Tensor};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 pub use static_lora::linear_no_bias_static_lora;
@@ -67,7 +67,7 @@ pub(crate) fn merge_lora_weights(
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("|");
-        let regex = Regex::new(&target_modules).map_err(candle_core::Error::msg)?;
+        let regex = Regex::new(&target_modules).map_err(hanzo_ml::Error::msg)?;
         if !regex.is_match(&vb.prefix()) {
             continue;
         }

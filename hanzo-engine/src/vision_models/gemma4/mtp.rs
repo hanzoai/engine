@@ -5,8 +5,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::Linear;
+use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_nn::Linear;
 use hanzo_quant::ShardedVarBuilder;
 use rand_isaac::Isaac64Rng;
 use serde::Deserialize;
@@ -80,44 +80,44 @@ impl Gemma4MtpRuntime {
         let path = config.resolve_path()?;
         let config_path = path.join("config.json");
         let raw_config = fs::read_to_string(&config_path).map_err(|e| {
-            candle_core::Error::Msg(format!(
+            hanzo_ml::Error::Msg(format!(
                 "failed to read MTP config at {}: {e}",
                 config_path.display()
             ))
         })?;
         let assistant_cfg: Gemma4AssistantConfig =
-            serde_json::from_str(&raw_config).map_err(candle_core::Error::msg)?;
+            serde_json::from_str(&raw_config).map_err(hanzo_ml::Error::msg)?;
 
         if assistant_cfg.model_type != "gemma4_assistant" {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "MTP model_type mismatch: expected `gemma4_assistant`, got `{}`",
                 assistant_cfg.model_type
             );
         }
         if assistant_cfg.backbone_hidden_size != target_cfg.hidden_size {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "MTP backbone hidden size mismatch: assistant {}, target {}",
                 assistant_cfg.backbone_hidden_size,
                 target_cfg.hidden_size
             );
         }
         if assistant_cfg.text_config.vocab_size != target_cfg.vocab_size {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "MTP vocab size mismatch: assistant {}, target {}",
                 assistant_cfg.text_config.vocab_size,
                 target_cfg.vocab_size
             );
         }
         if !assistant_cfg.tie_word_embeddings {
-            candle_core::bail!("MTP currently expects tied assistant word embeddings.");
+            hanzo_ml::bail!("MTP currently expects tied assistant word embeddings.");
         }
         if !assistant_cfg.use_ordered_embeddings {
-            candle_core::bail!("MTP currently requires ordered centroid embeddings.");
+            hanzo_ml::bail!("MTP currently requires ordered centroid embeddings.");
         }
 
         let mut weight_paths = fs::read_dir(&path)
             .map_err(|e| {
-                candle_core::Error::Msg(format!(
+                hanzo_ml::Error::Msg(format!(
                     "failed to list MTP model directory {}: {e}",
                     path.display()
                 ))
@@ -127,7 +127,7 @@ impl Gemma4MtpRuntime {
             .collect::<Vec<_>>();
         weight_paths.sort();
         if weight_paths.is_empty() {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "MTP model directory {} has no safetensors weights.",
                 path.display()
             );
@@ -172,7 +172,7 @@ impl Gemma4MtpRuntime {
             return Ok(Vec::new());
         }
         if seq_ids.len() != batch || base_lens.len() != batch || sequences.len() != batch {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "MTP batch shape mismatch: sampled={}, seq_ids={}, base_lens={}, sequences={}",
                 batch,
                 seq_ids.len(),
@@ -181,7 +181,7 @@ impl Gemma4MtpRuntime {
             );
         }
         if target_hiddens.dim(0)? != batch {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "MTP hidden batch mismatch: hidden={}, sampled={}",
                 target_hiddens.dim(0)?,
                 batch
@@ -273,7 +273,7 @@ fn sample_draft_tokens(
 ) -> Result<Tensor> {
     let batch = sequences.len();
     if contexts.len() != batch {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "MTP sampling context batch mismatch: contexts={}, sequences={batch}",
             contexts.len()
         );
@@ -308,12 +308,12 @@ impl SpeculativeProposer for Gemma4MtpRuntime {
         target_embedder: Option<&TargetTokenEmbedder<'_>>,
     ) -> Result<SpeculativeProposalBatch> {
         let target_hiddens = ctx.target_hiddens.ok_or_else(|| {
-            candle_core::Error::Msg(
+            hanzo_ml::Error::Msg(
                 "MTP requires target hidden state for speculative proposal.".to_string(),
             )
         })?;
         let target_embedder = target_embedder.ok_or_else(|| {
-            candle_core::Error::Msg(
+            hanzo_ml::Error::Msg(
                 "MTP requires a target token embedder for speculative proposal.".to_string(),
             )
         })?;
@@ -347,13 +347,13 @@ fn read_generation_n_predict(path: &Path) -> Result<Option<usize>> {
         return Ok(None);
     }
     let raw = fs::read_to_string(&path).map_err(|e| {
-        candle_core::Error::Msg(format!(
+        hanzo_ml::Error::Msg(format!(
             "failed to read MTP generation config at {}: {e}",
             path.display()
         ))
     })?;
     let cfg: AssistantGenerationConfig =
-        serde_json::from_str(&raw).map_err(candle_core::Error::msg)?;
+        serde_json::from_str(&raw).map_err(hanzo_ml::Error::msg)?;
     Ok(cfg.num_assistant_tokens)
 }
 
@@ -501,7 +501,7 @@ fn donor_indices(
             .iter()
             .rposition(|layer_type| layer_type == draft_layer_type)
         else {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "MTP draft layer {draft_idx} has type `{draft_layer_type}` but the target has no non-shared donor layer of that type."
             );
         };
@@ -711,7 +711,7 @@ impl Gemma4MtpAttention {
             } => {
                 let (key_cache, value_cache) =
                     kv_cache.get(self.donor_layer_idx).ok_or_else(|| {
-                        candle_core::Error::Msg(format!(
+                        hanzo_ml::Error::Msg(format!(
                             "MTP donor layer {} is missing from the target paged KV cache",
                             self.donor_layer_idx
                         ))
@@ -841,9 +841,9 @@ fn topk_indices_u32(logits: &Tensor, top_k: usize) -> Result<Tensor> {
     let width = rows
         .first()
         .map(Vec::len)
-        .ok_or_else(|| candle_core::Error::Msg("empty top-k logits".into()))?;
+        .ok_or_else(|| hanzo_ml::Error::Msg("empty top-k logits".into()))?;
     if top_k > width {
-        candle_core::bail!("top-k {top_k} exceeds logits width {width}");
+        hanzo_ml::bail!("top-k {top_k} exceeds logits width {width}");
     }
 
     let mut indices = Vec::with_capacity(rows.len() * top_k);
@@ -884,7 +884,7 @@ fn make_mtp_decode_metadata(
     device: &Device,
 ) -> Result<PagedAttentionInputMetadata> {
     if seq_ids.len() != context_lens.len() {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "MTP metadata batch mismatch: seq_ids={}, context_lens={}",
             seq_ids.len(),
             context_lens.len()
@@ -898,7 +898,7 @@ fn make_mtp_decode_metadata(
             kv_mgr
                 .get_block_ids(*seq_id)
                 .ok_or_else(|| {
-                    candle_core::Error::Msg(format!(
+                    hanzo_ml::Error::Msg(format!(
                         "MTP sequence {seq_id} has no paged attention blocks"
                     ))
                 })
@@ -1026,7 +1026,7 @@ fn paged_kv_tensors(
     for (table, context_len) in tables.iter().zip(context_lens.iter().copied()) {
         nnz = nnz
             .checked_add(usize_to_i32(table.len(), "paged table length")?)
-            .ok_or_else(|| candle_core::Error::Msg("paged table nnz overflowed".to_string()))?;
+            .ok_or_else(|| hanzo_ml::Error::Msg("paged table nnz overflowed".to_string()))?;
         indptr.push(nnz);
         for value in table {
             indices.push(usize_to_i32(*value, "paged block index")?);
@@ -1050,10 +1050,10 @@ fn paged_kv_tensors(
 
 fn usize_to_u32(value: usize, name: &str) -> Result<u32> {
     u32::try_from(value)
-        .map_err(|_| candle_core::Error::Msg(format!("{name} exceeds u32::MAX: {value}")))
+        .map_err(|_| hanzo_ml::Error::Msg(format!("{name} exceeds u32::MAX: {value}")))
 }
 
 fn usize_to_i32(value: usize, name: &str) -> Result<i32> {
     i32::try_from(value)
-        .map_err(|_| candle_core::Error::Msg(format!("{name} exceeds i32::MAX: {value}")))
+        .map_err(|_| hanzo_ml::Error::Msg(format!("{name} exceeds i32::MAX: {value}")))
 }

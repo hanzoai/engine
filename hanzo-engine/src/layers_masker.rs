@@ -2,7 +2,7 @@
 
 use std::ops::Add;
 
-use candle_core::{DType, Device, Result, Tensor, WithDType};
+use hanzo_ml::{DType, Device, Result, Tensor, WithDType};
 
 use crate::pipeline::KvCache;
 
@@ -170,7 +170,7 @@ impl CausalMasker {
     pub fn calculate_past_kv_len(
         &self,
         cache: &[Option<(Tensor, Tensor)>],
-    ) -> candle_core::Result<usize> {
+    ) -> hanzo_ml::Result<usize> {
         let kv_cache_1 = &cache[0];
         if kv_cache_1.is_none() {
             return Ok(0);

@@ -21,7 +21,7 @@ pub(crate) use uqff::{
 };
 
 #[cfg(feature = "cuda")]
-use candle_core::{
+use hanzo_ml::{
     cuda::cudarc::{
         self,
         driver::{CudaSlice, DevicePtr, DeviceRepr},
@@ -30,10 +30,10 @@ use candle_core::{
 };
 
 #[cfg(feature = "cuda")]
-pub(crate) fn get_cuda_device(x: &Tensor) -> candle_core::Result<&CudaDevice> {
+pub(crate) fn get_cuda_device(x: &Tensor) -> hanzo_ml::Result<&CudaDevice> {
     match x.device() {
         Device::Cuda(dev) => Ok(dev),
-        _ => candle_core::bail!("Expected CUDA device"),
+        _ => hanzo_ml::bail!("Expected CUDA device"),
     }
 }
 
