@@ -269,9 +269,7 @@ pub fn parse_text_tools(
     let mut text_new = Some(raw_text);
 
     if let Some(ref matcher) = matcher {
-        let calls = matcher
-            .get_call(raw_text)
-            .map_err(hanzo_ml::Error::msg)?;
+        let calls = matcher.get_call(raw_text).map_err(hanzo_ml::Error::msg)?;
         if !calls.is_empty() {
             text_new = None;
             tool_calls = calls;

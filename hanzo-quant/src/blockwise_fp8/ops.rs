@@ -1,5 +1,5 @@
-use hanzo_ml::{CpuStorage, CustomOp1, CustomOp2, DType, Result, Tensor, WithDType};
 use float8::F8E4M3;
+use hanzo_ml::{CpuStorage, CustomOp1, CustomOp2, DType, Result, Tensor, WithDType};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 struct Fp8BlockwiseDequantize {
@@ -117,8 +117,8 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
         weight_s: &hanzo_ml::CudaStorage,
         weight_l: &hanzo_ml::Layout,
     ) -> Result<(hanzo_ml::CudaStorage, hanzo_ml::Shape)> {
-        use hanzo_ml::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
+        use hanzo_ml::{backend::BackendStorage, CudaStorage};
 
         use crate::{blockwise_fp8::ffi, utils::slice_ptr};
 
@@ -466,8 +466,8 @@ impl CustomOp1 for Fp8BlockwiseQuantize {
         input_s: &hanzo_ml::CudaStorage,
         input_l: &hanzo_ml::Layout,
     ) -> Result<(hanzo_ml::CudaStorage, hanzo_ml::Shape)> {
-        use hanzo_ml::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
+        use hanzo_ml::{backend::BackendStorage, CudaStorage};
 
         use crate::{blockwise_fp8::ffi, utils::slice_ptr};
 
@@ -593,8 +593,8 @@ pub fn fp8_blockwise_quantize(
     // Let's implement this using the CUDA kernels directly
     #[cfg(feature = "cuda")]
     {
-        use hanzo_ml::{CudaStorage, Device, Storage};
         use half::{bf16, f16};
+        use hanzo_ml::{CudaStorage, Device, Storage};
 
         use crate::{blockwise_fp8::ffi, utils::slice_ptr};
 
@@ -746,8 +746,8 @@ pub fn fp8_blockwise_matmul(
     scales: &Tensor,
     weight_block_size: &[usize],
 ) -> Result<Tensor> {
-    use hanzo_ml::{CudaStorage, Device, Storage};
     use half::{bf16, f16};
+    use hanzo_ml::{CudaStorage, Device, Storage};
 
     use crate::{blockwise_fp8::ffi, utils::slice_ptr};
 
@@ -904,8 +904,8 @@ pub fn fp8_indexed_moe_gemm(
     indices: &Tensor,
     weight_block_size: &[usize],
 ) -> Result<Tensor> {
-    use hanzo_ml::{CudaStorage, Device, Storage};
     use half::{bf16, f16};
+    use hanzo_ml::{CudaStorage, Device, Storage};
 
     use crate::{blockwise_fp8::ffi, utils::slice_ptr};
 
@@ -1088,9 +1088,9 @@ pub fn fp8_indexed_moe_gemm(
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
+    use half::bf16;
     use hanzo_ml::{DType, Device, Result, Tensor};
     use hanzo_nn::{Linear, Module};
-    use half::bf16;
     use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 
     use crate::{blockwise_fp8::ops, safetensors::MmapedSafetensors};

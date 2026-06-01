@@ -5,8 +5,8 @@ use std::{
 
 use hanzo_ml::{quantized::QMatMul, Tensor};
 use hanzo_nn::{Conv2d, Embedding, LayerNorm, Linear};
-use itertools::Itertools;
 use hanzo_quant::QuantMethod;
+use itertools::Itertools;
 
 use crate::layers::{F32RmsNorm, GemmaRmsNorm, QLinear, RmsNorm, ScaledEmbedding};
 

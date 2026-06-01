@@ -188,12 +188,8 @@ impl Gemma3nAudioRelativePositionEmbedding {
         };
         let _max_forward = config.conf_attention_context_right;
 
-        let pos_proj = hanzo_quant::linear_no_bias(
-            channels,
-            num_heads * head_dim,
-            &None,
-            vb.pp("pos_proj"),
-        )?;
+        let pos_proj =
+            hanzo_quant::linear_no_bias(channels, num_heads * head_dim, &None, vb.pp("pos_proj"))?;
 
         // Create inverse timescales
         let min_timescale = 1.0_f32;
@@ -450,24 +446,12 @@ impl Gemma3nAudioAttention {
         // per_dim_scale is a learnable parameter, not zeros
         let per_dim_scale = vb.get(head_dim, "per_dim_scale")?;
 
-        let q_proj = hanzo_quant::linear_no_bias(
-            hidden_size,
-            num_heads * head_dim,
-            &None,
-            vb.pp("q_proj"),
-        )?;
-        let k_proj = hanzo_quant::linear_no_bias(
-            hidden_size,
-            num_heads * head_dim,
-            &None,
-            vb.pp("k_proj"),
-        )?;
-        let v_proj = hanzo_quant::linear_no_bias(
-            hidden_size,
-            num_heads * head_dim,
-            &None,
-            vb.pp("v_proj"),
-        )?;
+        let q_proj =
+            hanzo_quant::linear_no_bias(hidden_size, num_heads * head_dim, &None, vb.pp("q_proj"))?;
+        let k_proj =
+            hanzo_quant::linear_no_bias(hidden_size, num_heads * head_dim, &None, vb.pp("k_proj"))?;
+        let v_proj =
+            hanzo_quant::linear_no_bias(hidden_size, num_heads * head_dim, &None, vb.pp("v_proj"))?;
 
         let q_scale = (head_dim as f64).powf(-0.5);
         let r_softplus_0 = 1.0 / (1.0_f64 + 0.0_f64.exp()).ln(); // 1 / ln(2)

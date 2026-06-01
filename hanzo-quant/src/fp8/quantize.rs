@@ -1,6 +1,6 @@
+use float8::F8E4M3;
 use hanzo_ml::{DType, Result, Tensor};
 use hanzo_nn::Linear;
-use float8::F8E4M3;
 
 use super::FP8Linear;
 

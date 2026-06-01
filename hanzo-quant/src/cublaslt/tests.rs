@@ -1,6 +1,6 @@
 use super::*;
-use hanzo_ml::{DType, Device, IndexOp};
 use float8::F8E4M3;
+use hanzo_ml::{DType, Device, IndexOp};
 
 #[test]
 fn test_fused_batch_matmul_f8e4m3_nobias() -> Result<()> {

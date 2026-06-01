@@ -3,9 +3,9 @@
 use std::{any::Any, sync::Arc};
 
 use hanzo_ml::{Device, Result, Tensor};
+use hanzo_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
 use image::{DynamicImage, GenericImageView};
 use indexmap::IndexMap;
-use hanzo_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
 use tokenizers::Tokenizer;
 
 use crate::{

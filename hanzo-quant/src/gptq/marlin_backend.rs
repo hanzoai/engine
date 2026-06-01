@@ -4,10 +4,10 @@ use super::marlin_ffi::{
     awq_marlin_repack, gptq_marlin_repack, marlin_awq_4bit_bf16, marlin_awq_4bit_f16,
     marlin_gptq_4bit_bf16, marlin_gptq_4bit_f16, HAVE_MARLIN_KERNELS,
 };
+use half::{bf16, f16};
 use hanzo_ml::backend::BackendStorage;
 use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
 use hanzo_ml::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
-use half::{bf16, f16};
 
 struct MarlinMatMul {
     workspace: Tensor,

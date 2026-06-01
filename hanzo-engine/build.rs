@@ -79,8 +79,7 @@ fn main() {
         println!("cargo:rerun-if-changed=src/rocm/sort.hip.cpp");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
-        let rocm_path =
-            std::env::var("ROCM_PATH").unwrap_or_else(|_| "/opt/rocm".to_string());
+        let rocm_path = std::env::var("ROCM_PATH").unwrap_or_else(|_| "/opt/rocm".to_string());
         let hipcc = {
             let p = PathBuf::from(&rocm_path).join("bin/hipcc");
             if p.exists() {
@@ -89,8 +88,7 @@ fn main() {
                 "hipcc".to_string()
             }
         };
-        let gfx =
-            std::env::var("ROCM_GFX_ARCH").unwrap_or_else(|_| "gfx1151".to_string());
+        let gfx = std::env::var("ROCM_GFX_ARCH").unwrap_or_else(|_| "gfx1151".to_string());
 
         // Compile the HIP sort/topk kernels into a relocatable object.
         let obj = build_dir.join("sort.hip.o");
@@ -102,7 +100,10 @@ fn main() {
             .arg(&obj)
             .status()
             .expect("failed to invoke hipcc for src/rocm/sort.hip.cpp");
-        assert!(status.success(), "hipcc failed to compile src/rocm/sort.hip.cpp");
+        assert!(
+            status.success(),
+            "hipcc failed to compile src/rocm/sort.hip.cpp"
+        );
 
         // Archive into a static library so the Rust linker pulls in the fatbin.
         let lib = build_dir.join("libhanzorocm.a");

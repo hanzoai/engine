@@ -37,11 +37,7 @@ use super::{AutoDeviceMapParams, DeviceMappedModelLoader};
 
 pub trait EmbeddingModel: IsqModel + AnyMoeBaseModelMixin {
     #[allow(clippy::too_many_arguments)]
-    fn forward(
-        &self,
-        input_ids: &Tensor,
-        flash_params: &FlashParams,
-    ) -> hanzo_ml::Result<Tensor>;
+    fn forward(&self, input_ids: &Tensor, flash_params: &FlashParams) -> hanzo_ml::Result<Tensor>;
     fn device(&self) -> &Device;
 }
 

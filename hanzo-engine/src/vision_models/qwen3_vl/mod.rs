@@ -200,9 +200,7 @@ pub(crate) fn get_rope_index(
                             hanzo_ml::bail!("image_grid_thw required for image placeholders");
                         };
                         if image_index >= img_grid.len() {
-                            hanzo_ml::bail!(
-                                "Not enough image_grid_thw entries for placeholders"
-                            );
+                            hanzo_ml::bail!("Not enough image_grid_thw entries for placeholders");
                         }
                         let grid = img_grid[image_index];
                         image_index += 1;
@@ -223,9 +221,7 @@ pub(crate) fn get_rope_index(
                             hanzo_ml::bail!("video_grid_thw required for video placeholders");
                         };
                         if video_index >= vid_grid.len() {
-                            hanzo_ml::bail!(
-                                "Not enough video_grid_thw entries for placeholders"
-                            );
+                            hanzo_ml::bail!("Not enough video_grid_thw entries for placeholders");
                         }
                         let grid = vid_grid[video_index];
                         video_index += 1;

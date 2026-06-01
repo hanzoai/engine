@@ -57,9 +57,7 @@ impl PythonSession {
             std::fs::create_dir_all(dir)?;
             dir.to_path_buf()
         } else {
-            let dir = tempfile::Builder::new()
-                .prefix("hanzo-code-")
-                .tempdir()?;
+            let dir = tempfile::Builder::new().prefix("hanzo-code-").tempdir()?;
             #[allow(deprecated)]
             dir.into_path()
         };

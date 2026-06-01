@@ -3,9 +3,7 @@
 //! Run with: `cargo run --release --example mixture_of_quant_experts -p hanzo`
 
 use anyhow::Result;
-use hanzo::{
-    IsqBits, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
-};
+use hanzo::{IsqBits, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {

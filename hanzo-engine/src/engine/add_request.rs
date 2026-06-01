@@ -6,8 +6,8 @@ use crate::{
     tools::{ToolCallingMatcher, ToolChoice},
     ModelCategory, RequestMessage, Response,
 };
-use hanzo_ml::Tensor;
 use either::Either;
+use hanzo_ml::Tensor;
 use std::{
     ops::Deref,
     sync::{atomic::Ordering, Arc},

@@ -47,12 +47,12 @@ use crate::{
 };
 use anyhow::Result;
 use hanzo_ml::{Device, Tensor, Var};
-use hf_hub::Cache;
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use hanzo_quant::log::once_log_info;
 use hanzo_quant::{
     AfqLayer, GgufMatMul, HqqLayer, ImmediateIsqOverride, IsqType, QuantizedSerdeType,
 };
+use hf_hub::Cache;
+use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
@@ -369,9 +369,8 @@ impl Loader for NormalLoader {
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 if let Some(serialized) = &*self.from_uqff.read().unwrap() {
                     let weight_pack_factor = {
-                        let ser_artifacts = unsafe {
-                            hanzo_ml::safetensors::MmapedSafetensors::multi(serialized)?
-                        };
+                        let ser_artifacts =
+                            unsafe { hanzo_ml::safetensors::MmapedSafetensors::multi(serialized)? };
                         let mut total_pack_factors = 0;
                         let total_tensors = ser_artifacts.tensors().len();
                         for (_, artifact) in ser_artifacts.tensors() {

@@ -16,15 +16,15 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use either::Either;
-use image::DynamicImage;
-use indexmap::IndexMap;
-use itertools::Itertools;
 use hanzo_engine::{
     AgentPermission, AgentToolApprovalHandler, AgentToolApprovalNotifier, AgenticToolCallData,
     AgenticToolCallPhase, AgenticToolCallRecord, ChatCompletionChunkResponse,
     ChatCompletionResponse, Constraint, Hanzo, ModelCategory, NormalRequest, ReasoningEffort,
     Request, RequestMessage, Response, SamplingParams,
 };
+use image::DynamicImage;
+use indexmap::IndexMap;
+use itertools::Itertools;
 use serde_json::{json, Value};
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -343,10 +343,7 @@ impl futures::Stream for ChatCompletionStreamer {
         match self.rx.poll_recv(cx) {
             Poll::Ready(Some(resp)) => match resp {
                 Response::ModelError(msg, _) => {
-                    Hanzo::maybe_log_error(
-                        self.state.clone(),
-                        &ModelErrorMessage(msg.to_string()),
-                    );
+                    Hanzo::maybe_log_error(self.state.clone(), &ModelErrorMessage(msg.to_string()));
                     // Done now, just need to send the [DONE]
                     self.done_state = DoneState::SendingDone;
                     Poll::Ready(Some(Ok(Event::default().data(msg))))

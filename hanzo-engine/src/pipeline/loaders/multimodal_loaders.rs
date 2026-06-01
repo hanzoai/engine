@@ -6,10 +6,10 @@ use std::{fmt::Debug, str::FromStr};
 use anyhow::Result;
 use hanzo_ml::{DType, Device, Tensor, D};
 use hanzo_nn::Conv2dConfig;
-use image::{ColorType, DynamicImage};
-use itertools::Itertools;
 use hanzo_quant::log::once_log_debug;
 use hanzo_quant::ShardedVarBuilder;
+use image::{ColorType, DynamicImage};
+use itertools::Itertools;
 
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;

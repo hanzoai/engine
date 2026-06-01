@@ -317,7 +317,10 @@ mod tests {
     fn load_missing_returns_none() {
         let tmp = tempfile::tempdir().unwrap();
         let cache = DiskKvCache::new(tmp.path(), 64).unwrap();
-        assert!(cache.load("0000000000000000000000000000000000000000").unwrap().is_none());
+        assert!(cache
+            .load("0000000000000000000000000000000000000000")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
