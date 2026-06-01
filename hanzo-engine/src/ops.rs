@@ -945,9 +945,7 @@ pub fn cuda_apply_sparse_penalties_f32(
     if !token_ids.device().same_device(input.device())
         || !counts.device().same_device(input.device())
     {
-        hanzo_ml::bail!(
-            "cuda_apply_sparse_penalties_f32 tensors must be on the same CUDA device"
-        );
+        hanzo_ml::bail!("cuda_apply_sparse_penalties_f32 tensors must be on the same CUDA device");
     }
 
     let input = input.contiguous()?;
@@ -1190,9 +1188,7 @@ pub fn cuda_rms_norm_residual(
     }
     let nrows = elem_count / ncols;
     if nrows > i32::MAX as usize || ncols > i32::MAX as usize {
-        hanzo_ml::bail!(
-            "cuda_rms_norm_residual input is too large: nrows={nrows}, ncols={ncols}"
-        );
+        hanzo_ml::bail!("cuda_rms_norm_residual input is too large: nrows={nrows}, ncols={ncols}");
     }
     let nrows_i32 = i32::try_from(nrows).map_err(hanzo_ml::Error::wrap)?;
     let ncols_i32 = i32::try_from(ncols).map_err(hanzo_ml::Error::wrap)?;
@@ -1289,10 +1285,7 @@ pub fn cuda_rms_norm_residual(
                 slice: CudaStorageSlice::$variant(out),
                 device: dev.clone(),
             };
-            Ok(Tensor::from((
-                hanzo_ml::Storage::Cuda(out_storage),
-                shape,
-            )))
+            Ok(Tensor::from((hanzo_ml::Storage::Cuda(out_storage), shape)))
         }};
     }
 
@@ -1781,10 +1774,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
                     slice: CudaStorageSlice::$variant(k_out_buf),
                     device: dev.clone(),
                 };
-                Some(Tensor::from((
-                    hanzo_ml::Storage::Cuda(k_storage),
-                    k_shape,
-                )))
+                Some(Tensor::from((hanzo_ml::Storage::Cuda(k_storage), k_shape)))
             } else {
                 None
             };
@@ -2030,9 +2020,7 @@ fn glu_activation_type(act: Activation) -> Option<hanzo_quant::GluActivationType
     }
 }
 
-fn nn_glu_activation_type(
-    act: hanzo_nn::Activation,
-) -> Option<hanzo_quant::GluActivationType> {
+fn nn_glu_activation_type(act: hanzo_nn::Activation) -> Option<hanzo_quant::GluActivationType> {
     match act {
         hanzo_nn::Activation::Silu | hanzo_nn::Activation::Swish => {
             Some(hanzo_quant::GluActivationType::Silu)
@@ -2089,9 +2077,7 @@ pub fn split_mul_and_act_order(
         hanzo_ml::bail!("split_mul_and_act split size overflow: {split_size}");
     };
     if last_dim != expected_last_dim {
-        hanzo_ml::bail!(
-            "split_mul_and_act expected last dim {expected_last_dim}, got {last_dim}"
-        );
+        hanzo_ml::bail!("split_mul_and_act expected last dim {expected_last_dim}, got {last_dim}");
     }
 
     let first = xs.narrow(D::Minus1, 0, split_size)?;
@@ -2121,9 +2107,7 @@ pub(crate) fn quantized_ffn(
 
     #[cfg(feature = "metal")]
     if let Some(activation_type) = glu_activation_type(act) {
-        if let Some(inter) =
-            hanzo_quant::try_fused_gate_up_metal(xs, gate, up, activation_type)?
-        {
+        if let Some(inter) = hanzo_quant::try_fused_gate_up_metal(xs, gate, up, activation_type)? {
             return down.forward(&inter);
         }
     }

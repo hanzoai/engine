@@ -52,13 +52,13 @@ impl safetensors::tensor::View for CowBytesView<'_> {
 
 use anyhow::Result;
 use hanzo_ml::{quantized, Context, Device, Tensor};
-use indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
-use itertools::Itertools;
 use hanzo_quant::{
     AfqLayer, CollectedImatrixData, ColumnParallelLayer, DistributedKind, F8Q8Linear, FP8Linear,
     GgufMatMul, HqqLayer, IsqBits, IsqType, MXFP4Layer, QuantMethod, QuantizeOntoGuard,
     QuantizedSerde, QuantizedSerdeType, ReplicatedLayer, RowParallelLayer, UnquantLinear,
 };
+use indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
+use itertools::Itertools;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use regex::Regex;
 use serde::Deserialize;
@@ -422,9 +422,7 @@ pub trait IsqModel {
 
     /// Corresponds to `IsqOrganization::MoeExpertsOnly`
     /// End stats tracking and return the imatrix data
-    fn extract_imatrix_data_moe_experts_only(
-        &mut self,
-    ) -> hanzo_ml::Result<CollectedImatrixData> {
+    fn extract_imatrix_data_moe_experts_only(&mut self) -> hanzo_ml::Result<CollectedImatrixData> {
         let layers = self
             .get_layers()
             .0
@@ -987,8 +985,7 @@ pub trait IsqModel {
                         preprocessor_out.display()
                     );
 
-                    let cfg =
-                        std::fs::read(preprocessor_config).map_err(hanzo_ml::Error::msg)?;
+                    let cfg = std::fs::read(preprocessor_config).map_err(hanzo_ml::Error::msg)?;
                     std::fs::write(&preprocessor_out, cfg).map_err(hanzo_ml::Error::msg)?;
                 }
 

@@ -1,3 +1,7 @@
+use core::ffi::c_int;
+use core::mem;
+use float8::F8E4M3;
+use half::{bf16, f16};
 use hanzo_ml::cuda::cudarc::cublaslt::result::set_matrix_layout_attribute;
 use hanzo_ml::cuda::cudarc::cublaslt::{result, result::CublasError, sys};
 use hanzo_ml::cuda::cudarc::driver::sys::{CUdevice_attribute, CUdeviceptr, CUstream};
@@ -6,10 +10,6 @@ use hanzo_ml::cuda::cudarc::driver::{
 };
 use hanzo_ml::cuda::CudaDType;
 use hanzo_ml::DType;
-use core::ffi::c_int;
-use core::mem;
-use float8::F8E4M3;
-use half::{bf16, f16};
 use std::sync::Arc;
 
 /// Wrapper around [sys::cublasLtHandle_t]

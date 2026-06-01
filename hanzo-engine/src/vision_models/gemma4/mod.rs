@@ -2,8 +2,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use hanzo_ml::{DType, Device, Result, Tensor, D};
 use config::Gemma4Config;
+use hanzo_ml::{DType, Device, Result, Tensor, D};
 use hanzo_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use text::TextModel;
 
@@ -702,9 +702,7 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
                 let mut gathered = Vec::with_capacity(rows.len());
                 for &(batch_idx, row) in rows {
                     if batch_idx >= *batch {
-                        hanzo_ml::bail!(
-                            "MTP hidden batch {batch_idx} is out of range for {batch}"
-                        );
+                        hanzo_ml::bail!("MTP hidden batch {batch_idx} is out of range for {batch}");
                     }
                     if row >= *row_count {
                         hanzo_ml::bail!(

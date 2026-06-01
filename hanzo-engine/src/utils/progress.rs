@@ -1,8 +1,8 @@
+use hanzo_quant::get_immediate_isq;
 use indicatif::{
     MultiProgress, ProgressBar, ProgressBarIter, ProgressDrawTarget, ProgressIterator,
     ProgressStyle,
 };
-use hanzo_quant::get_immediate_isq;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rayon::prelude::*;
 use std::iter::Iterator;

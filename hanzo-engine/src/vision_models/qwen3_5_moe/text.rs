@@ -541,9 +541,7 @@ impl Qwen3_5MoeTextModel {
         )?;
 
         if !cfg.mlp_only_layers.is_empty() {
-            hanzo_ml::bail!(
-                "Qwen3.5 MoE `mlp_only_layers` is not implemented yet in hanzo."
-            );
+            hanzo_ml::bail!("Qwen3.5 MoE `mlp_only_layers` is not implemented yet in hanzo.");
         }
 
         let layer_types = cfg.layer_types();
@@ -706,9 +704,7 @@ impl Qwen3_5MoeTextModel {
                 vb_m.dtype(),
                 &normal_loading_metadata.real_device,
             )
-            .map_err(|e| {
-                hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e))
-            })?,
+            .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e)))?,
         ));
 
         Ok(Self {

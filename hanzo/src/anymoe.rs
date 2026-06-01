@@ -1,6 +1,4 @@
-use hanzo_engine::{
-    AnyMoeConfig, AnyMoeLoader, Loader, NormalLoaderBuilder, NormalSpecificConfig,
-};
+use hanzo_engine::{AnyMoeConfig, AnyMoeLoader, Loader, NormalLoaderBuilder, NormalSpecificConfig};
 
 use crate::{
     model_builder_trait::{

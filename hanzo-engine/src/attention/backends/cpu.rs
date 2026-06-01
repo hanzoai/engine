@@ -325,9 +325,7 @@ where
                     .map(|v| (*v).to_f32())
                     .collect::<Vec<f32>>()
             } else {
-                return Err(hanzo_ml::Error::Msg(
-                    "Expected CPU storage for mask".into(),
-                ));
+                return Err(hanzo_ml::Error::Msg("Expected CPU storage for mask".into()));
             }
         };
         mask_buffer = Some(buffer);

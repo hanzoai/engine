@@ -1,8 +1,8 @@
-use hanzo_ml::{DType, MetalStorage};
 use hanzo_metal_kernels::metal::{
     Buffer, ComputeCommandEncoder, ComputePipeline, ConstantValues, Device, Function, Library,
     Value,
 };
+use hanzo_ml::{DType, MetalStorage};
 use objc2_metal::{MTLCompileOptions, MTLDevice, MTLLanguageVersion, MTLMathMode, MTLSize};
 use std::sync::{OnceLock, RwLock};
 use std::{collections::HashMap, ffi::c_void};
@@ -15,10 +15,7 @@ type ComputeCommandEncoderRef = ComputeCommandEncoder;
 type ComputePipelineState = ComputePipeline;
 
 #[cfg(target_os = "macos")]
-const KERNELS: &[u8] = include_bytes!(concat!(
-    env!("OUT_DIR"),
-    "/hanzo_paged_attention.metallib"
-));
+const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/hanzo_paged_attention.metallib"));
 #[cfg(target_os = "ios")]
 const KERNELS: &[u8] = include_bytes!(concat!(
     env!("OUT_DIR"),

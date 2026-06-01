@@ -1,7 +1,7 @@
-use hanzo_ml::{Device, Result, Tensor};
 use either::Either;
 use futures::future::join_all;
 use hanzo_engine::*;
+use hanzo_ml::{Device, Result, Tensor};
 use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll};
 use std::{path::PathBuf, sync::Arc};
@@ -797,10 +797,7 @@ impl Model {
 
     /// Retrieve some information about a specific model.
     /// If `model_id` is `None`, returns config for the default model.
-    pub fn config_with_model(
-        &self,
-        model_id: Option<&str>,
-    ) -> crate::error::Result<HanzoConfig> {
+    pub fn config_with_model(&self, model_id: Option<&str>) -> crate::error::Result<HanzoConfig> {
         self.runner
             .config(model_id)
             .map_err(|e| SdkError::Inference(e.into()))

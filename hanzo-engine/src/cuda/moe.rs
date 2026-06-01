@@ -10,9 +10,9 @@ pub fn moe_gemm(
     topk: usize,
     is_prefill: bool,
 ) -> Result<Tensor> {
+    use half::{bf16, f16};
     use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
     use hanzo_ml::DType;
-    use half::{bf16, f16};
 
     fn cuda_fwd<
         T: hanzo_ml::cuda_backend::CudaDType + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,
@@ -200,9 +200,9 @@ pub fn moe_gemm_transposed(
     topk: usize,
     is_prefill: bool,
 ) -> Result<Tensor> {
+    use half::{bf16, f16};
     use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
     use hanzo_ml::DType;
-    use half::{bf16, f16};
 
     fn cuda_fwd<
         T: hanzo_ml::cuda_backend::CudaDType + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,

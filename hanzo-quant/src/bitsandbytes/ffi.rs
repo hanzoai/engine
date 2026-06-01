@@ -1,5 +1,5 @@
-use hanzo_ml::cuda::cudarc::driver::sys::CUstream;
 use half::{bf16, f16};
+use hanzo_ml::cuda::cudarc::driver::sys::CUstream;
 
 #[allow(dead_code)]
 extern "C" {
