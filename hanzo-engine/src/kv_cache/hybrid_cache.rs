@@ -7,7 +7,7 @@
 //! The key insight is that recurrent state is accessed via `state_indices` which map
 //! each sequence in the current batch to its slot in the pool.
 
-use candle_core::{Device, IndexOp, Result, Tensor};
+use hanzo_ml::{Device, IndexOp, Result, Tensor};
 
 use super::KvCache;
 use crate::layers_masker::PastKvLenCache;
@@ -37,7 +37,7 @@ pub struct RecurrentStatePool {
     conv_dim: usize,
     conv_width: usize,
     state_dims: Vec<usize>,
-    dtype: candle_core::DType,
+    dtype: hanzo_ml::DType,
     device: Device,
 }
 
@@ -54,7 +54,7 @@ impl RecurrentStatePool {
         conv_dim: usize,
         conv_width: usize,
         state_dims: Vec<usize>,
-        dtype: candle_core::DType,
+        dtype: hanzo_ml::DType,
         device: &Device,
     ) -> Result<Self> {
         let capacity = INITIAL_POOL_CAPACITY;
@@ -226,7 +226,7 @@ impl RecurrentStatePool {
         &self.device
     }
 
-    pub fn dtype(&self) -> candle_core::DType {
+    pub fn dtype(&self) -> hanzo_ml::DType {
         self.dtype
     }
 }
@@ -342,7 +342,7 @@ impl HybridCache {
 
     pub fn new(
         config: HybridCacheConfig,
-        dtype: candle_core::DType,
+        dtype: hanzo_ml::DType,
         device: &Device,
     ) -> Result<Self> {
         let mut caches = Vec::with_capacity(config.layer_types.len());

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Result};
-use candle_nn::Linear;
+use hanzo_ml::{DType, Result};
+use hanzo_nn::Linear;
 use regex::Regex;
 
 use crate::{
@@ -30,7 +30,7 @@ pub fn linear_no_bias_static_lora(
                 vb.get_with_hints((out_dim, in_dim), "base_layer.weight", Default::default())?;
 
             for (name, lora_cfg) in loras {
-                let regex = Regex::new(&lora_cfg.layer).map_err(candle_core::Error::msg)?;
+                let regex = Regex::new(&lora_cfg.layer).map_err(hanzo_ml::Error::msg)?;
                 if !regex.is_match(&vb.prefix()) {
                     continue;
                 }

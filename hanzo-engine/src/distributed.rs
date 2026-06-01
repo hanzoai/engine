@@ -1,5 +1,5 @@
 use anyhow::Context;
-use candle_core::{DType, Device};
+use hanzo_ml::{DType, Device};
 use core::ffi::c_char;
 use interprocess::local_socket::traits::{Listener, Stream};
 use interprocess::local_socket::{GenericNamespaced, Name, ToNsName};

@@ -5,8 +5,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Embedding, Linear};
+use hanzo_ml::{DType, Device, Module, Result, Tensor, D};
+use hanzo_nn::{Embedding, Linear};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -252,7 +252,7 @@ impl FullAttention {
         };
 
         // Apply output gate: y = y * sigmoid(gate)
-        let gate = candle_nn::ops::sigmoid(&gate.to_dtype(y.dtype())?)?;
+        let gate = hanzo_nn::ops::sigmoid(&gate.to_dtype(y.dtype())?)?;
         y = y.broadcast_mul(&gate)?;
 
         let res = self.o_proj.forward(&y)?;
@@ -405,7 +405,7 @@ impl SparseMoeBlock {
 
         let router_logits = self.gate.forward(&xs_flat)?;
         let routing_weights =
-            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
+            hanzo_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
 
         let topk_ids = routing_weights
             .arg_sort_last_dim(false)?
@@ -422,7 +422,7 @@ impl SparseMoeBlock {
         y = y.reshape((b_size, seq_len, hidden_dim))?;
 
         let shared_out = self.shared_expert.forward(xs)?;
-        let shared_gate = candle_nn::ops::sigmoid(
+        let shared_gate = hanzo_nn::ops::sigmoid(
             &self
                 .shared_expert_gate
                 .forward(&xs.reshape(((), hidden_dim))?)?,
@@ -467,7 +467,7 @@ impl DecoderLayer {
     ) -> Result<Tensor> {
         let attn = match &self.layer_impl {
             LayerImpl::FullAttention(attn) => attn,
-            _ => candle_core::bail!("Expected full attention layer"),
+            _ => hanzo_ml::bail!("Expected full attention layer"),
         };
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
@@ -489,7 +489,7 @@ impl DecoderLayer {
     fn forward_linear(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let gdn = match &self.layer_impl {
             LayerImpl::LinearAttention(gdn) => gdn,
-            _ => candle_core::bail!("Expected linear attention layer"),
+            _ => hanzo_ml::bail!("Expected linear attention layer"),
         };
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
@@ -541,7 +541,7 @@ impl Qwen3_5MoeTextModel {
         )?;
 
         if !cfg.mlp_only_layers.is_empty() {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Qwen3.5 MoE `mlp_only_layers` is not implemented yet in mistral.rs."
             );
         }
@@ -668,7 +668,7 @@ impl Qwen3_5MoeTextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(
                     embed_tokens.embeddings(),
                     normal_loading_metadata.loading_isq,
@@ -707,7 +707,7 @@ impl Qwen3_5MoeTextModel {
                 &normal_loading_metadata.real_device,
             )
             .map_err(|e| {
-                candle_core::Error::Msg(format!("Failed to create hybrid cache: {}", e))
+                hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e))
             })?,
         ));
 
@@ -762,7 +762,7 @@ impl Qwen3_5MoeTextModel {
             .any(|lt| matches!(lt, LayerType::LinearAttention))
             && state_indices.is_none()
         {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Hybrid recurrent state indices are required for linear-attention layers."
             );
         }
@@ -800,7 +800,7 @@ impl Qwen3_5MoeTextModel {
             if indices.is_empty() {
                 None
             } else {
-                let hidden = xs.dim(candle_core::D::Minus1)?;
+                let hidden = xs.dim(hanzo_ml::D::Minus1)?;
                 let n = indices.len();
                 let idx = Tensor::from_vec(indices, (n,), &self.device)?;
                 let idx_expanded = idx.unsqueeze(1)?.repeat((1, hidden))?;
@@ -835,7 +835,7 @@ impl Qwen3_5MoeTextModel {
                         );
                         let indices_vec: Vec<u32> = indices.to_vec1()?;
                         if indices_vec.is_empty() {
-                            candle_core::bail!("Hybrid recurrent state indices are empty.");
+                            hanzo_ml::bail!("Hybrid recurrent state indices are empty.");
                         }
 
                         let first_offset = pool.get_seqlen_offset(indices_vec[0] as usize);
@@ -843,7 +843,7 @@ impl Qwen3_5MoeTextModel {
                             .iter()
                             .any(|&idx| pool.get_seqlen_offset(idx as usize) != first_offset)
                         {
-                            candle_core::bail!(
+                            hanzo_ml::bail!(
                                 "Hybrid recurrent seqlen offsets diverged within a batch for layer {i}."
                             );
                         }
@@ -868,7 +868,7 @@ impl Qwen3_5MoeTextModel {
                             pool.set_seqlen_offset(idx as usize, updated);
                         }
                     } else {
-                        candle_core::bail!(
+                        hanzo_ml::bail!(
                             "Hybrid cache layer {i} is not recurrent for a linear-attention layer."
                         );
                     }
@@ -906,7 +906,7 @@ impl Qwen3_5MoeTextModel {
         let hidden_flat = hidden_states.reshape((total, hidden))?;
 
         if idx.dim(0)? != visual_embeds.dim(0)? {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Mismatch between DeepStack visual embeds ({}) and mask positions ({})",
                 visual_embeds.dim(0)?,
                 idx.dim(0)?

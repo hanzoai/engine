@@ -14,7 +14,7 @@ use crate::{
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
     ImageGenerationResponse, ImageGenerationResponseFormat,
 };
-use candle_core::Tensor;
+use hanzo_ml::Tensor;
 use std::{
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},

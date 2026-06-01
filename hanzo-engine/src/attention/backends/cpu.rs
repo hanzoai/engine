@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{Context, Device, Result, Storage, Tensor, WithDType};
+use hanzo_ml::{Context, Device, Result, Storage, Tensor, WithDType};
 
 use half::bf16;
 use half::f16;
@@ -294,21 +294,21 @@ where
         let data = cpu.as_slice::<T>().context("Expected CPU storage for q")?;
         &data[q_layout.start_offset()..]
     } else {
-        return Err(candle_core::Error::Msg("Expected CPU storage for q".into()));
+        return Err(hanzo_ml::Error::Msg("Expected CPU storage for q".into()));
     };
     let (k_guard, k_layout) = k.storage_and_layout();
     let k_data: &[T] = if let Storage::Cpu(cpu) = &*k_guard {
         let data = cpu.as_slice::<T>().context("Expected CPU storage for k")?;
         &data[k_layout.start_offset()..]
     } else {
-        return Err(candle_core::Error::Msg("Expected CPU storage for k".into()));
+        return Err(hanzo_ml::Error::Msg("Expected CPU storage for k".into()));
     };
     let (v_guard, v_layout) = v.storage_and_layout();
     let v_data: &[T] = if let Storage::Cpu(cpu) = &*v_guard {
         let data = cpu.as_slice::<T>().context("Expected CPU storage for v")?;
         &data[v_layout.start_offset()..]
     } else {
-        return Err(candle_core::Error::Msg("Expected CPU storage for v".into()));
+        return Err(hanzo_ml::Error::Msg("Expected CPU storage for v".into()));
     };
     let mut mask_buffer: Option<Vec<f32>> = None;
     let mut mask_dims: Option<Vec<usize>> = None;
@@ -325,7 +325,7 @@ where
                     .map(|v| (*v).to_f32())
                     .collect::<Vec<f32>>()
             } else {
-                return Err(candle_core::Error::Msg(
+                return Err(hanzo_ml::Error::Msg(
                     "Expected CPU storage for mask".into(),
                 ));
             }
@@ -725,10 +725,10 @@ where
 mod tests {
     use super::*;
     use crate::attention::SdpaParams;
-    use candle_core::{Device, Tensor, D};
-    use candle_nn::ops::softmax;
+    use hanzo_ml::{Device, Tensor, D};
+    use hanzo_nn::ops::softmax;
 
-    use candle_core::Result as CandleResult;
+    use hanzo_ml::Result as CandleResult;
 
     const EPS: f32 = 1e-4;
 

@@ -6,7 +6,7 @@ mod mla;
 mod paged_attention;
 mod scale_update;
 pub use cache::{copy_blocks, swap_blocks};
-use candle_core::cuda::cudarc::{
+use hanzo_ml::cuda::cudarc::{
     self,
     driver::{CudaSlice, DevicePtr, DeviceRepr},
 };

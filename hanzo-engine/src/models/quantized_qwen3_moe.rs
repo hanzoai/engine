@@ -15,9 +15,9 @@ use crate::pipeline::{extract_logits, EitherCache, KvCache, NormalCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
-use candle_core::quantized::QMatMul;
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Embedding, Module};
+use hanzo_ml::quantized::QMatMul;
+use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 // Default fallback for models that don't specify context_length
@@ -54,7 +54,7 @@ impl FusedMoe {
         let original_dtype = xs.dtype();
         let (num_tokens, hidden_dim) = xs.dims2()?;
         let router_logits = self.gate.forward(&xs.to_dtype(DType::F32)?)?;
-        let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
+        let routing_weights = hanzo_nn::ops::softmax_last_dim(&router_logits)?;
 
         let TopKOutput {
             values: mut scores,
@@ -232,7 +232,7 @@ pub(crate) struct PropsGGUF {
 }
 
 fn verify_qwen3_arch(
-    metadata: &HashMap<String, candle_core::quantized::gguf_file::Value>,
+    metadata: &HashMap<String, hanzo_ml::quantized::gguf_file::Value>,
 ) -> Result<String> {
     use crate::utils::gguf_metadata::TryValueInto;
     let actual_arch: String = metadata
@@ -241,7 +241,7 @@ fn verify_qwen3_arch(
         .try_value_into()?;
 
     if actual_arch != "qwen3" && actual_arch != "qwen3moe" {
-        candle_core::bail!("Expected `qwen3` architecture, got `{actual_arch}`.");
+        hanzo_ml::bail!("Expected `qwen3` architecture, got `{actual_arch}`.");
     }
     Ok(actual_arch)
 }
@@ -331,7 +331,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             key_length,
             value_length,
             moe_cfg,
-        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
+        } = PropsGGUF::try_from(metadata).or_else(|err| hanzo_ml::bail!("{err}"))?;
 
         let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = qtok_embeddings.dequantize(device)?;
@@ -345,7 +345,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let head_dim = key_length;
         if key_length != value_length {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Expected key_length == value_length, got {key_length} != {value_length}"
             );
         }

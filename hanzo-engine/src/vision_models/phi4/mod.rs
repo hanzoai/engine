@@ -7,8 +7,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{Device, Result, Tensor, D};
-use candle_nn::Module;
+use hanzo_ml::{Device, Result, Tensor, D};
+use hanzo_nn::Module;
 use hanzo_quant::{QuantMethod, ReplicatedLayer, ShardedVarBuilder};
 use mm_embedding::{InputMode, Phi4MMImageAudioEmbedding};
 
@@ -315,7 +315,7 @@ impl DecoderLayer {
 }
 
 pub struct Phi4MMModel {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: hanzo_nn::Embedding,
     embed_tokens_extend: Phi4MMImageAudioEmbedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
@@ -401,7 +401,7 @@ impl Phi4MMModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(
                     embed_tokens.embeddings(),
                     normal_loading_metadata.loading_isq,

@@ -1,6 +1,6 @@
 use crate::layers::{linear, linear_no_bias};
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{activation, ops::softmax_last_dim, Dropout, Linear, Module, ModuleT};
+use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_nn::{activation, ops::softmax_last_dim, Dropout, Linear, Module, ModuleT};
 use hanzo_quant::ShardedVarBuilder;
 
 use crate::ops::{TopKLastDimOp, TopKOutput};
@@ -37,7 +37,7 @@ impl XLoraClassifier {
         is_quantized: bool,
     ) -> Result<Self> {
         if config.enable_softmax_topk {
-            candle_core::bail!("`enable_softmax_topk` is not implemented");
+            hanzo_ml::bail!("`enable_softmax_topk` is not implemented");
         }
 
         let (last, inner): (Linear, Vec<Box<dyn ModuleT + Send + Sync>>) = if config.xlora_depth

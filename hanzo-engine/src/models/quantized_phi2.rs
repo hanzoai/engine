@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use candle_core::quantized::QMatMul;
-use candle_core::quantized::QTensor;
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{Embedding, LayerNorm};
+use hanzo_ml::quantized::QMatMul;
+use hanzo_ml::quantized::QTensor;
+use hanzo_ml::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use hanzo_nn::{Embedding, LayerNorm};
 use hanzo_quant::GgufMatMul;
 use hanzo_quant::QuantMethod;
 use hanzo_quant::QuantMethodConfig;
@@ -66,7 +66,7 @@ impl LayerWeights {
             let cos = self.cos.narrow(0, *offset, seq_len)?;
             let sin = self.sin.narrow(0, *offset, seq_len)?;
             let xs_rot =
-                candle_nn::rotary_emb::rope(&xs_rot.i(b)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                hanzo_nn::rotary_emb::rope(&xs_rot.i(b)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
             chunks.push(Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?);
         }
         Tensor::cat(&chunks, 0)?.contiguous()
@@ -240,7 +240,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             rope_dim,
             ln_eps,
             max_seq_len,
-        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
+        } = PropsGGUF::try_from(metadata).or_else(|err| hanzo_ml::bail!("{err}"))?;
 
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, max_seq_len, dtype)?;
 

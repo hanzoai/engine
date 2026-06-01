@@ -2,10 +2,10 @@ use std::{collections::HashMap, iter::zip};
 
 use crate::cuda::backend::slice_ptr;
 use crate::cuda::ffi::{copy_blocks_bf16, copy_blocks_f16, copy_blocks_f32};
-use candle_core::backend::BackendDevice;
-use candle_core::cuda_backend::CudaStorageSlice;
-use candle_core::Result;
-use candle_core::{
+use hanzo_ml::backend::BackendDevice;
+use hanzo_ml::cuda_backend::CudaStorageSlice;
+use hanzo_ml::Result;
+use hanzo_ml::{
     cuda_backend::cudarc::driver::CudaSlice, DType, Device, IndexOp, Storage, Tensor,
 };
 
@@ -19,14 +19,14 @@ pub fn copy_blocks(
         panic!("Expected the key caches to be on a CUDA device.")
     };
     if !cache_dev.same_device(value_caches.first().unwrap().device()) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "`key` and `value` caches have different devices, got {:?} and {:?} respectively.",
             cache_dev,
             value_caches.first().unwrap().device()
         );
     }
     if key_caches.first().unwrap().dtype() != value_caches.first().unwrap().dtype() {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Key and value caches have different types, got {:?} and {:?}.",
             key_caches.first().unwrap().dtype(),
             value_caches.first().unwrap().dtype()
@@ -86,7 +86,7 @@ pub fn copy_blocks(
                 (ptr_key, ptr_value)
             }
             _ => {
-                candle_core::bail!("only f32, f16 and bf16 input data type supported!",);
+                hanzo_ml::bail!("only f32, f16 and bf16 input data type supported!",);
             }
         };
         key_cache_ptrs.push(key_ptr + key_offset);
@@ -128,7 +128,7 @@ pub fn copy_blocks(
         .unwrap();
 
     match dtype {
-        candle_core::DType::BF16 => unsafe {
+        hanzo_ml::DType::BF16 => unsafe {
             copy_blocks_bf16(
                 key_cache_ptr,
                 value_cache_ptr,
@@ -140,7 +140,7 @@ pub fn copy_blocks(
                 dev.cuda_stream().cu_stream() as i64,
             );
         },
-        candle_core::DType::F16 => unsafe {
+        hanzo_ml::DType::F16 => unsafe {
             copy_blocks_f16(
                 key_cache_ptr,
                 value_cache_ptr,
@@ -152,7 +152,7 @@ pub fn copy_blocks(
                 dev.cuda_stream().cu_stream() as i64,
             );
         },
-        candle_core::DType::F32 => unsafe {
+        hanzo_ml::DType::F32 => unsafe {
             copy_blocks_f32(
                 key_cache_ptr,
                 value_cache_ptr,
@@ -182,7 +182,7 @@ pub unsafe fn swap_blocks(
     match (src.device(), dst.device()) {
         (Device::Cuda(src_dev), Device::Cuda(dst_dev)) => {
             if src_dev.location() != dst_dev.location() {
-                candle_core::bail!("Tensors must be on the same device to copy, got locations {:?} (src) and {:?} (dst).", src_dev.location(), dst_dev.location());
+                hanzo_ml::bail!("Tensors must be on the same device to copy, got locations {:?} (src) and {:?} (dst).", src_dev.location(), dst_dev.location());
             }
             let (src_storage, src_layout) = src.storage_and_layout();
             let (dst_storage, dst_layout) = dst.storage_and_layout();
@@ -211,7 +211,7 @@ pub unsafe fn swap_blocks(
                     (ptr_src, ptr_dst)
                 }
                 _ => {
-                    candle_core::bail!("only f32, f16 and bf16 input data type supported!")
+                    hanzo_ml::bail!("only f32, f16 and bf16 input data type supported!")
                 }
             };
 
@@ -267,7 +267,7 @@ pub unsafe fn swap_blocks(
             }
         }
         (src, dst) => {
-            candle_core::bail!("Tensors must be on either the GPU or CPU to swap, got {src:?} (src) and {dst:?} (dst).");
+            hanzo_ml::bail!("Tensors must be on either the GPU or CPU to swap, got {src:?} (src) and {dst:?} (dst).");
         }
     }
 

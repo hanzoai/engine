@@ -4,8 +4,8 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
 };
 
-use candle_core::{shape::ShapeWithOneHole, DType, Device, IndexOp, Result, Shape, Tensor, D};
-use candle_nn::Module;
+use hanzo_ml::{shape::ShapeWithOneHole, DType, Device, IndexOp, Result, Shape, Tensor, D};
+use hanzo_nn::Module;
 use hanzo_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 
 use crate::{
@@ -45,7 +45,7 @@ impl ModuleWithMetadata for QuantMethodWrapper {
     }
 }
 
-impl ModuleWithMetadata for candle_nn::Activation {
+impl ModuleWithMetadata for hanzo_nn::Activation {
     fn device(&self) -> Device {
         unreachable!()
     }
@@ -59,10 +59,10 @@ struct BigShapeWithOneHole((usize, usize, usize, usize, usize, ()));
 
 fn hole_size(el_count: usize, prod_d: usize, s: &dyn std::fmt::Debug) -> Result<usize> {
     if prod_d == 0 {
-        candle_core::bail!("cannot reshape tensor of {el_count} elements to {s:?}")
+        hanzo_ml::bail!("cannot reshape tensor of {el_count} elements to {s:?}")
     }
     if !el_count.is_multiple_of(prod_d) {
-        candle_core::bail!("cannot reshape tensor with {el_count} elements to {s:?}")
+        hanzo_ml::bail!("cannot reshape tensor with {el_count} elements to {s:?}")
     }
     Ok(el_count / prod_d)
 }
@@ -100,7 +100,7 @@ pub(crate) static PHI4_MM_VISION_CFG: LazyLock<SiglipVisionConfig> =
     });
 
 pub struct ImageEmbedding {
-    wte: candle_nn::Embedding,
+    wte: hanzo_nn::Embedding,
     image_dim_out: usize,
     num_img_tokens: usize,
     glb_gn: Option<Tensor>,
@@ -123,7 +123,7 @@ impl ImageEmbedding {
     pub fn new(
         cfg: &Phi4MMConfig,
         img_embd_config: &Phi4MMImageEmbedConfig,
-        wte: candle_nn::Embedding,
+        wte: hanzo_nn::Embedding,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let hidden_size = img_embd_config.n_embd.unwrap_or(cfg.hidden_size);
@@ -163,7 +163,7 @@ impl ImageEmbedding {
                     Some(base_feat_height_target / 2),
                 ),
                 None => (None, 2_usize, None),
-                _ => candle_core::bail!("Unexpected image_token_compression_cls"),
+                _ => hanzo_ml::bail!("Unexpected image_token_compression_cls"),
             };
 
         assert_eq!(use_hd_transform, with_learnable_separator);
@@ -233,7 +233,7 @@ impl ImageEmbedding {
                     }
                     vec![
                         Box::new(QuantMethodWrapper(a)),
-                        Box::new(candle_nn::Activation::Gelu),
+                        Box::new(hanzo_nn::Activation::Gelu),
                         Box::new(QuantMethodWrapper(b)),
                     ]
                 }
@@ -265,12 +265,12 @@ impl ImageEmbedding {
                     }
                     vec![
                         Box::new(QuantMethodWrapper(a)),
-                        Box::new(candle_nn::Activation::Gelu),
+                        Box::new(hanzo_nn::Activation::Gelu),
                         Box::new(QuantMethodWrapper(b)),
                     ]
                 }
                 _ => {
-                    candle_core::bail!("projection_cls=`{projection_cls}` not implemented.");
+                    hanzo_ml::bail!("projection_cls=`{projection_cls}` not implemented.");
                 }
             };
 
@@ -375,7 +375,7 @@ impl ImageEmbedding {
             }
             Ok(img_feature)
         } else {
-            candle_core::bail!("Unsupported image feature type {}", self.type_feature)
+            hanzo_ml::bail!("Unsupported image feature type {}", self.type_feature)
         }
     }
 
@@ -671,7 +671,7 @@ impl ImageEmbedding {
                                     )?);
                                 }
                                 other => {
-                                    candle_core::bail!("Invalid hd_transform_order=`{other}`");
+                                    hanzo_ml::bail!("Invalid hd_transform_order=`{other}`");
                                 }
                             }
 

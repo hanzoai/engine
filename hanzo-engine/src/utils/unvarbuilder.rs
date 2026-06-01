@@ -3,8 +3,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use candle_core::{quantized::QMatMul, Tensor};
-use candle_nn::{Conv2d, Embedding, LayerNorm, Linear};
+use hanzo_ml::{quantized::QMatMul, Tensor};
+use hanzo_nn::{Conv2d, Embedding, LayerNorm, Linear};
 use itertools::Itertools;
 use hanzo_quant::QuantMethod;
 
@@ -78,7 +78,7 @@ impl ToTensors for Conv2d {
     }
 }
 
-impl ToTensors for candle_nn::Conv1d {
+impl ToTensors for hanzo_nn::Conv1d {
     fn to_tensors(&self) -> HashMap<String, Tensor> {
         let mut map = HashMap::new();
         map.insert("weight".to_string(), self.weight().clone());

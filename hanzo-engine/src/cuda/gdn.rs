@@ -1,9 +1,9 @@
 #![allow(clippy::cast_possible_truncation)]
 
-use candle_core::{Result, Tensor};
+use hanzo_ml::{Result, Tensor};
 
 #[cfg(feature = "cuda")]
-use candle_core::DType;
+use hanzo_ml::DType;
 
 /// CUDA-accelerated gated delta rule recurrence.
 ///
@@ -22,7 +22,7 @@ pub fn gated_delta_rule_recurrence_cuda(
     state: &mut Tensor,
 ) -> Result<Tensor> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
-    use candle_core as candle;
+    use hanzo_ml as candle;
 
     let (bh, seq_len, k_dim) = q.dims3()?;
     let v_dim = v.dim(2)?;
@@ -112,7 +112,7 @@ pub fn gated_delta_rule_recurrence_cuda(
     _beta: &Tensor,
     _state: &mut Tensor,
 ) -> Result<Tensor> {
-    candle_core::bail!("gated_delta_rule_recurrence_cuda requires the cuda feature")
+    hanzo_ml::bail!("gated_delta_rule_recurrence_cuda requires the cuda feature")
 }
 
 /// CUDA-accelerated chunked gated delta rule recurrence (prefill optimization).
@@ -135,7 +135,7 @@ pub fn chunked_gated_delta_rule_recurrence_cuda(
     state: &mut Tensor,
 ) -> Result<Tensor> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
-    use candle_core as candle;
+    use hanzo_ml as candle;
 
     let (bh, seq_len, k_dim) = q.dims3()?;
     let v_dim = v.dim(2)?;
@@ -222,7 +222,7 @@ pub fn chunked_gated_delta_rule_recurrence_cuda(
     _beta: &Tensor,
     _state: &mut Tensor,
 ) -> Result<Tensor> {
-    candle_core::bail!("chunked_gated_delta_rule_recurrence_cuda requires the cuda feature")
+    hanzo_ml::bail!("chunked_gated_delta_rule_recurrence_cuda requires the cuda feature")
 }
 
 /// CUDA-accelerated causal conv1d (both update and full paths).
@@ -244,7 +244,7 @@ pub fn causal_conv1d_cuda(
     is_update: bool,
 ) -> Result<(Tensor, Tensor)> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
-    use candle_core as candle;
+    use hanzo_ml as candle;
     use core::ffi::c_void;
     fn cuda_fwd<
         T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
@@ -351,7 +351,7 @@ pub fn causal_conv1d_cuda(
     match x.dtype() {
         DType::F16 => cuda_fwd::<half::f16>(x, weight, conv_state, kernel_size, is_update, 0),
         DType::BF16 => cuda_fwd::<half::bf16>(x, weight, conv_state, kernel_size, is_update, 1),
-        other => candle_core::bail!("causal_conv1d_cuda only supports f16/bf16, got {:?}", other),
+        other => hanzo_ml::bail!("causal_conv1d_cuda only supports f16/bf16, got {:?}", other),
     }
 }
 
@@ -364,7 +364,7 @@ pub fn causal_conv1d_cuda(
     _kernel_size: usize,
     _is_update: bool,
 ) -> Result<(Tensor, Tensor)> {
-    candle_core::bail!("causal_conv1d_cuda requires the cuda feature")
+    hanzo_ml::bail!("causal_conv1d_cuda requires the cuda feature")
 }
 
 /// CUDA-accelerated fused GDN gating computation.
@@ -383,7 +383,7 @@ pub fn fused_gdn_gating_cuda(
     dt_bias: &Tensor,
 ) -> Result<(Tensor, Tensor)> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
-    use candle_core as candle;
+    use hanzo_ml as candle;
     use core::ffi::c_void;
 
     fn cuda_fwd<
@@ -460,7 +460,7 @@ pub fn fused_gdn_gating_cuda(
     match b.dtype() {
         DType::F16 => cuda_fwd::<half::f16>(b, a, a_log, dt_bias, 0),
         DType::BF16 => cuda_fwd::<half::bf16>(b, a, a_log, dt_bias, 1),
-        other => candle_core::bail!(
+        other => hanzo_ml::bail!(
             "fused_gdn_gating_cuda only supports f16/bf16, got {:?}",
             other
         ),
@@ -475,5 +475,5 @@ pub fn fused_gdn_gating_cuda(
     _a_log: &Tensor,
     _dt_bias: &Tensor,
 ) -> Result<(Tensor, Tensor)> {
-    candle_core::bail!("fused_gdn_gating_cuda requires the cuda feature")
+    hanzo_ml::bail!("fused_gdn_gating_cuda requires the cuda feature")
 }

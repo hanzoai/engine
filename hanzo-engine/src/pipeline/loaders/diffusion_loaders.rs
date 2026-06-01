@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use candle_core::{Device, Tensor};
+use hanzo_ml::{Device, Tensor};
 
 use hf_hub::api::sync::ApiRepo;
 use hanzo_quant::ShardedVarBuilder;
@@ -35,7 +35,7 @@ pub trait DiffusionModel {
         &mut self,
         prompts: Vec<String>,
         params: DiffusionGenerationParams,
-    ) -> candle_core::Result<Tensor>;
+    ) -> hanzo_ml::Result<Tensor>;
     fn device(&self) -> &Device;
     fn max_seq_len(&self) -> usize;
 }

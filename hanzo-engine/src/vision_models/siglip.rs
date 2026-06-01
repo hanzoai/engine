@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
+use hanzo_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
 use hanzo_quant::{Convolution, QuantMethod, ShardedVarBuilder};
 use std::{ops::Mul, sync::Arc};
 
