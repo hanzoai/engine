@@ -55,10 +55,10 @@ Server-level:
 
 ## MCP tools
 
-Connected MCP server tools (see [connect-mcp-server](/mistral.rs/guides/agents/connect-mcp-server/)) merge into the tool set. They share the `--max-tool-rounds` cap.
+Connected MCP server tools (see [connect-mcp-server](/hanzo/guides/agents/connect-mcp-server/)) merge into the tool set. They share the `--max-tool-rounds` cap.
 
 ## Streaming progress events
 
 Tool rounds emit `agentic_tool_call_progress` SSE events with `phase: "calling"` before and `phase: "complete"` after each tool. The event `data` includes tool-type-specific fields (e.g., `code`, `stdout`, `stderr`, `images_base64` for code execution).
 
-For the full app-facing event shape, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
+For the full app-facing event shape, see [agentic runtime for apps](/hanzo/guides/agents/agentic-runtime/).

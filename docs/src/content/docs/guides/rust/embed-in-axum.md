@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-To add mistral.rs to an existing Axum app, mount the hanzo router under a sub-path. The pattern uses two builders from `hanzo-server-core`:
+To add hanzo to an existing Axum app, mount the hanzo router under a sub-path. The pattern uses two builders from `hanzo-server-core`:
 
 - `HanzoForServerBuilder` constructs the engine state (`SharedHanzoState = Arc<Hanzo>`).
 - `HanzoServerRouterBuilder` produces an Axum `Router` from that state.

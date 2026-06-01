@@ -1,5 +1,5 @@
 """
-MCP (Model Context Protocol) client usage with mistral.rs Python API.
+MCP (Model Context Protocol) client usage with hanzo Python API.
 
 Connects to an MCP server, auto-discovers tools, and makes them available
 to the model during conversations.

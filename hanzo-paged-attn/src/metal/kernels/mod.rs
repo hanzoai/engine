@@ -82,7 +82,7 @@ impl Kernels {
                 // Load precompiled metallib directly from embedded bytes via DispatchData.
                 // This avoids writing to a temp file, which can fail in sandboxed
                 // environments (e.g. macOS apps distributed via TestFlight).
-                // https://github.com/EricLBuehler/mistral.rs/issues/1897
+                // https://github.com/hanzoai/engine/issues/1897
                 let data = dispatch2::DispatchData::from_static_bytes(KERNELS);
 
                 let raw_lib = device
@@ -96,7 +96,7 @@ impl Kernels {
                 Library::new(raw_lib)
             } else {
                 // Fall back to runtime compilation if precompiled lib is not available
-                // (e.g., when MISTRALRS_METAL_PRECOMPILE=0)
+                // (e.g., when HANZO_METAL_PRECOMPILE=0)
                 self.compile_kernels_at_runtime(device)?
             };
             Ok(LIBRARY.get_or_init(|| lib).clone())

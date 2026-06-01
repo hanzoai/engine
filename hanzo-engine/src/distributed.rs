@@ -23,7 +23,7 @@ use crate::pipeline::{DeviceMappedModelLoader, IsqModelLoader};
 use crate::utils::varbuilder_utils::{self, DeviceForLoadTensor};
 use crate::{DeviceMapSetting, IsqOrganization, ModelPaths, Request};
 
-pub(crate) const IS_DAEMON_FLAG: &str = "__MISTRALRS_DAEMON_INTERNAL";
+pub(crate) const IS_DAEMON_FLAG: &str = "__HANZO_DAEMON_INTERNAL";
 
 pub fn is_daemon() -> bool {
     if cfg!(feature = "cuda") && !cfg!(feature = "ring") {
@@ -251,8 +251,8 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
     // NCCL case!
 
     let local_world_size = available_devices.len();
-    let global_world_size = if let Ok(x) = std::env::var("MISTRALRS_MN_GLOBAL_WORLD_SIZE") {
-        usize::from_str(&x).context("MISTRALRS_MN_GLOBAL_WORLD_SIZE")?
+    let global_world_size = if let Ok(x) = std::env::var("HANZO_MN_GLOBAL_WORLD_SIZE") {
+        usize::from_str(&x).context("HANZO_MN_GLOBAL_WORLD_SIZE")?
     } else {
         // global world size is always >= local world size
         std::cmp::max(
@@ -261,9 +261,9 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
         )
     };
 
-    let use_multi_node = std::env::var("MISTRALRS_MN_GLOBAL_WORLD_SIZE").is_ok();
+    let use_multi_node = std::env::var("HANZO_MN_GLOBAL_WORLD_SIZE").is_ok();
     if use_multi_node {
-        info!("MISTRALRS_MN_GLOBAL_WORLD_SIZE is set, entering multi-node.");
+        info!("HANZO_MN_GLOBAL_WORLD_SIZE is set, entering multi-node.");
     }
 
     if global_world_size < local_world_size || global_world_size % local_world_size != 0 {
@@ -338,11 +338,11 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
     };
 
     if use_multi_node {
-        if let Ok(n_nodes) = env::var("MISTRALRS_MN_HEAD_NUM_WORKERS") {
-            let n_nodes = usize::from_str(&n_nodes).context("MISTRALRS_MN_HEAD_NUM_WORKERS")?;
+        if let Ok(n_nodes) = env::var("HANZO_MN_HEAD_NUM_WORKERS") {
+            let n_nodes = usize::from_str(&n_nodes).context("HANZO_MN_HEAD_NUM_WORKERS")?;
             info!("Head node managing {n_nodes} workers.");
-            let Ok(port) = env::var("MISTRALRS_MN_HEAD_PORT") else {
-                anyhow::bail!("Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT");
+            let Ok(port) = env::var("HANZO_MN_HEAD_PORT") else {
+                anyhow::bail!("Got HANZO_MN_HEAD_NUM_WORKERS, expected HANZO_MN_HEAD_PORT");
             };
             info!("Head node initializing connection on {port}.");
             let server = hanzo_quant::Server::new(
@@ -352,7 +352,7 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
             )?;
 
             server.broadcast_id(&id)?;
-        } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
+        } else if let Ok(addr) = env::var("HANZO_MN_WORKER_SERVER_ADDR") {
             info!("Worker node connecting to {addr}.");
             let client = hanzo_quant::Client::new(addr.parse()?, local_world_size)?;
 
@@ -360,11 +360,11 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
         }
     }
 
-    let rank_offset = if env::var("MISTRALRS_MN_WORKER_SERVER_ADDR").is_ok() {
-        let Ok(node_id) = env::var("MISTRALRS_MN_WORKER_ID") else {
-            anyhow::bail!("Got MISTRALRS_MN_WORKER_SERVER_ADDR, expected MISTRALRS_MN_WORKER_ID");
+    let rank_offset = if env::var("HANZO_MN_WORKER_SERVER_ADDR").is_ok() {
+        let Ok(node_id) = env::var("HANZO_MN_WORKER_ID") else {
+            anyhow::bail!("Got HANZO_MN_WORKER_SERVER_ADDR, expected HANZO_MN_WORKER_ID");
         };
-        let node_id = usize::from_str(&node_id).context("MISTRALRS_MN_WORKER_ID")?;
+        let node_id = usize::from_str(&node_id).context("HANZO_MN_WORKER_ID")?;
         info!("Worker ID is {node_id}.");
         (node_id + 1) * local_world_size
     } else {

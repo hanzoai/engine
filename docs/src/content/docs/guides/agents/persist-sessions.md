@@ -67,4 +67,4 @@ Sessions with code execution hold a Python subprocess. The subprocess is not par
 Both SDKs expose the same session operations as the HTTP endpoints: `export_session`, `import_session`, `delete_session`, `list_session_ids`.
 
 - **Rust:** [`Model`](https://docs.rs/hanzo/latest/hanzo/struct.Model.html). Request-level `session_id` is set via `RequestBuilder::with_session_id`.
-- **Python:** [`Runner`](/mistral.rs/reference/python/runner/). Request-level `session_id` is set via the `session_id` keyword on `ChatCompletionRequest`.
+- **Python:** [`Runner`](/hanzo/reference/python/runner/). Request-level `session_id` is set via the `session_id` keyword on `ChatCompletionRequest`.

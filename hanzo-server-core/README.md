@@ -1,5 +1,5 @@
 # `hanzo-server-core`
 
-Core crate that powers `mistral.rs server`.
+Core crate that powers `hanzo server`.
 
 Documentation: https://docs.rs/hanzo-server-core/

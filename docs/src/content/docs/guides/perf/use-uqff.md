@@ -38,4 +38,4 @@ A README is generated alongside the output unless `--no-readme` is passed. `--uq
 
 ## Format details
 
-Binary layout: [UQFF format reference](/mistral.rs/reference/uqff-format/).
+Binary layout: [UQFF format reference](/hanzo/reference/uqff-format/).

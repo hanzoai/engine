@@ -42,15 +42,15 @@ The subprocess always runs as the same user as hanzo. What constrains it on top 
 
 ### CLI and TOML default
 
-`hanzo serve` and `hanzo from-config` default to `--sandbox auto`, which enables the [OS-level sandbox](/mistral.rs/reference/sandbox/) on Linux and macOS and is a no-op with a warning on other platforms. On Linux that means env scrubbing, user/IPC/UTS (and optional NET) namespaces, a Landlock FS allowlist, `setrlimit` caps, a seccomp deny-list, and optional cgroup v2 limits. On macOS it means Seatbelt (`sandbox-exec`) with a deny-by-default profile plus env scrubbing.
+`hanzo serve` and `hanzo from-config` default to `--sandbox auto`, which enables the [OS-level sandbox](/hanzo/reference/sandbox/) on Linux and macOS and is a no-op with a warning on other platforms. On Linux that means env scrubbing, user/IPC/UTS (and optional NET) namespaces, a Landlock FS allowlist, `setrlimit` caps, a seccomp deny-list, and optional cgroup v2 limits. On macOS it means Seatbelt (`sandbox-exec`) with a deny-by-default profile plus env scrubbing.
 
 `--sandbox on` promotes any missing sandbox layer (no Landlock, no seccomp, no namespaces) into a hard error at code-execution init, instead of falling back to whatever layers are available.
 
-`--sandbox off` and `MISTRALRS_SANDBOX=off` disable all sandbox layers: the subprocess then has the same filesystem, network, and syscall access as any Python process running as the hanzo user. A startup warning is logged so the choice is visible in logs.
+`--sandbox off` and `HANZO_SANDBOX=off` disable all sandbox layers: the subprocess then has the same filesystem, network, and syscall access as any Python process running as the hanzo user. A startup warning is logged so the choice is visible in logs.
 
 ### Python and Rust API behavior
 
-The programmatic `CodeExecutionConfig` defaults to no sandbox. Passing `sandbox_policy=None` (Python) or `sandbox_policy: None` (Rust) is equivalent to `--sandbox off`: the subprocess inherits the host environment unchanged. The sandbox engages only when a `SandboxPolicy` is constructed and attached to the config. This matters when embedding mistral.rs as a library: the safer CLI default is not inherited, so an embedding application is responsible for choosing a policy.
+The programmatic `CodeExecutionConfig` defaults to no sandbox. Passing `sandbox_policy=None` (Python) or `sandbox_policy: None` (Rust) is equivalent to `--sandbox off`: the subprocess inherits the host environment unchanged. The sandbox engages only when a `SandboxPolicy` is constructed and attached to the config. This matters when embedding hanzo as a library: the safer CLI default is not inherited, so an embedding application is responsible for choosing a policy.
 
 ### Threat model and limitations
 
@@ -67,5 +67,5 @@ For high-assurance deployments (multi-tenant, untrusted prompts, regulated data)
 
 ## See also
 
-- Reference: [sandbox](/mistral.rs/reference/sandbox/) for the per-layer details and tuning knobs.
-- Guide: [enable code execution](/mistral.rs/guides/agents/enable-code-execution/).
+- Reference: [sandbox](/hanzo/reference/sandbox/) for the per-layer details and tuning knobs.
+- Guide: [enable code execution](/hanzo/guides/agents/enable-code-execution/).

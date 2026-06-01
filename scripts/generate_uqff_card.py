@@ -17,7 +17,7 @@ is_multimodal = input("Is this a multimodal model (yes/no): ").strip().lower() =
 output = f"""---
 tags:
   - uqff
-  - mistral.rs
+  - hanzo
 base_model: {model_id}
 base_model_relation: quantized
 ---
@@ -30,7 +30,7 @@ base_model_relation: quantized
 output += f"# `{model_id}`, UQFF quantization\n\n"
 
 output += """
-Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation: [UQFF docs](https://github.com/EricLBuehler/mistral.rs/blob/master/docs/UQFF.md).
+Run with [hanzo](https://github.com/hanzoai/engine). Documentation: [UQFF docs](https://github.com/hanzoai/engine/blob/master/docs/UQFF.md).
 
 1) **Flexible** 🌀: Multiple quantization formats in *one* file format with *one* framework to run them all.
 2) **Reliable** 🔒: Compatibility ensured with *embedded* and *checked* semantic versioning information from day 1.

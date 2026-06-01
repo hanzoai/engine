@@ -1,6 +1,6 @@
 import type { AgentPermission } from "../types";
 
-const STORAGE_KEY = "mistralrs_settings";
+const STORAGE_KEY = "hanzo_settings";
 
 interface StoredSettings {
   temperature: number;
@@ -16,7 +16,7 @@ interface StoredSettings {
 }
 
 // Stale keys from previous UI versions — clean them up on load
-const LEGACY_KEYS = ["mistralrs-settings", "theme"];
+const LEGACY_KEYS = ["hanzo-settings", "theme"];
 
 function loadStored(): Partial<StoredSettings> {
   // Clean up legacy keys from prior UI versions

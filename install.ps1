@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# mistral.rs Installation Script for Windows
+# hanzo Installation Script for Windows
 # Automatic hardware detection and feature configuration
 
 $ErrorActionPreference = "Stop"
@@ -198,16 +198,16 @@ function Get-Features {
     return $features -join " "
 }
 
-# Install mistralrs-cli
+# Install hanzo-cli
 function Install-MistralRS {
     param([string]$Features)
 
     if ($Features) {
-        Write-Info "Installing mistralrs-cli with features: $Features"
-        & cargo install mistralrs-cli@0.8.0 --features "$Features"
+        Write-Info "Installing hanzo-cli with features: $Features"
+        & cargo install hanzo-cli@0.8.0 --features "$Features"
     } else {
-        Write-Info "Installing mistralrs-cli with default features"
-        & cargo install mistralrs-cli@0.8.0
+        Write-Info "Installing hanzo-cli with default features"
+        & cargo install hanzo-cli@0.8.0
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -233,7 +233,7 @@ function Main {
             Write-Host ""
             $response = Read-Host "Would you like to update Rust now? [Y/n]"
             if ($response -match "^[Nn]") {
-                Write-Err "Rust $RequiredRustVersion or newer is required to install mistral.rs"
+                Write-Err "Rust $RequiredRustVersion or newer is required to install hanzo"
             }
             Update-Rust
             # Re-check version after update
@@ -247,7 +247,7 @@ function Main {
         Write-Host ""
         $response = Read-Host "Would you like to install Rust now? [Y/n]"
         if ($response -match "^[Nn]") {
-            Write-Err "Rust is required to install mistral.rs"
+            Write-Err "Rust is required to install hanzo"
         }
         Install-Rust
     }
@@ -281,19 +281,19 @@ function Main {
     Install-MistralRS -Features $features
 
     Write-Host ""
-    Write-Success "mistral.rs installed successfully!"
+    Write-Success "hanzo installed successfully!"
     Write-Host ""
     Write-Host "Quick Start" -ForegroundColor White
     Write-Host "===========" -ForegroundColor White
     Write-Host ""
-    Write-Host "  mistralrs run -m Qwen/Qwen3-4B"
+    Write-Host "  hanzo run -m Qwen/Qwen3-4B"
     Write-Host ""
-    Write-Host "  mistralrs serve --agent -m google/gemma-4-E4B-it"
+    Write-Host "  hanzo serve --agent -m google/gemma-4-E4B-it"
     Write-Host ""
-    Write-Host "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
+    Write-Host "For more information, visit: https://github.com/hanzoai/engine"
     Write-Host ""
     Write-Host "Note: " -ForegroundColor Yellow -NoNewline
-    Write-Host "Restart your terminal to use the 'mistralrs' command."
+    Write-Host "Restart your terminal to use the 'hanzo' command."
 }
 
 # Run main

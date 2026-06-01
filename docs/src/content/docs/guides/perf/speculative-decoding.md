@@ -5,13 +5,13 @@ sidebar:
   order: 8
 ---
 
-Speculative decoding lets a smaller assistant propose future tokens while the target model verifies them in parallel. mistral.rs exposes this through the generic MTP API.
+Speculative decoding lets a smaller assistant propose future tokens while the target model verifies them in parallel. hanzo exposes this through the generic MTP API.
 
 ## Support Matrix
 
 | Mode | Target models | Assistant model | Status | Guide |
 |---|---|---|---|---|
-| MTP | Gemma 4 | Gemma 4 assistant checkpoints | Supported with PagedAttention | [Gemma 4 MTP](/mistral.rs/guides/perf/gemma4-mtp/) |
+| MTP | Gemma 4 | Gemma 4 assistant checkpoints | Supported with PagedAttention | [Gemma 4 MTP](/hanzo/guides/perf/gemma4-mtp/) |
 
 Legacy target/draft speculative decoding has been removed. New speculative decoding features should use the MTP proposer/target path.
 
@@ -25,7 +25,7 @@ hanzo run -m <target-model> \
   --mtp-n-predict 6
 ```
 
-`--mtp-n-predict` controls how many assistant tokens are proposed per step. If it is omitted, mistral.rs reads `num_assistant_tokens` from the assistant `generation_config.json` and falls back to 6.
+`--mtp-n-predict` controls how many assistant tokens are proposed per step. If it is omitted, hanzo reads `num_assistant_tokens` from the assistant `generation_config.json` and falls back to 6.
 
 ## Python
 

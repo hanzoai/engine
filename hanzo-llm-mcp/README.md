@@ -1,6 +1,6 @@
 # hanzo-llm-mcp
 
-Model Context Protocol (MCP) client implementation for mistral.rs.
+Model Context Protocol (MCP) client implementation for hanzo.
 
 This crate provides a client library for connecting to MCP servers and integrating external tools with language models. It supports multiple transport protocols (HTTP, WebSocket, Process) and provides automatic tool discovery and registration.
 

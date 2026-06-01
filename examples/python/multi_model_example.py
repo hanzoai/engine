@@ -1,5 +1,5 @@
 """
-Example demonstrating multi-model usage with mistral.rs Python bindings.
+Example demonstrating multi-model usage with hanzo Python bindings.
 
 This example shows how to:
 1. Load a model using Runner

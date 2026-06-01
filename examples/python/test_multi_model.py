@@ -1,5 +1,5 @@
 """
-Simple test script to verify multi-model functionality in mistral.rs
+Simple test script to verify multi-model functionality in hanzo
 
 This script tests the core multi-model operations:
 - Listing models
@@ -236,7 +236,7 @@ def test_error_handling():
 
 
 if __name__ == "__main__":
-    print("mistral.rs Multi-Model Test Suite")
+    print("hanzo Multi-Model Test Suite")
     print("=" * 60)
 
     all_passed = True

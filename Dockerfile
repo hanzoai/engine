@@ -4,11 +4,11 @@
 FROM rust:latest AS builder
 
 # Set working directory and copy files
-WORKDIR /mistralrs
+WORKDIR /hanzo
 COPY . .
 
 # Build the project in release mode, excluding the specified workspace
-RUN cargo build --release --workspace --exclude mistralrs-pyo3
+RUN cargo build --release --workspace --exclude hanzo-pyo3
 
 
 # Stage 2: Minimal runtime environment
@@ -29,10 +29,10 @@ RUN <<HEREDOC
 HEREDOC
 
 # Copy the built binaries from the builder stage
-COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-bench /usr/local/bin/
-COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-server /usr/local/bin/
+COPY --chmod=755 --from=builder /hanzo/target/release/hanzo-bench /usr/local/bin/
+COPY --chmod=755 --from=builder /hanzo/target/release/hanzo-server /usr/local/bin/
 # Copy chat templates for users running models which may not include them
-COPY --from=builder /mistralrs/chat_templates /chat_templates
+COPY --from=builder /hanzo/chat_templates /chat_templates
 
 ENV HUGGINGFACE_HUB_CACHE=/data \
     PORT=80

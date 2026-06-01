@@ -1595,7 +1595,7 @@ impl TextModel {
         metadata: Option<&PagedAttentionInputMetadata>,
         has_bidirectional: bool,
     ) -> Result<Option<KvSharingFastPrefillPlan>> {
-        if std::env::var("MISTRALRS_GEMMA4_DISABLE_FAST_PREFILL").is_ok() || has_bidirectional {
+        if std::env::var("HANZO_GEMMA4_DISABLE_FAST_PREFILL").is_ok() || has_bidirectional {
             return Ok(None);
         }
         let (b_sz, q_len) = input_ids.dims2()?;

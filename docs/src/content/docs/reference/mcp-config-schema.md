@@ -5,7 +5,7 @@ sidebar:
   order: 8
 ---
 
-When mistral.rs acts as an MCP client (see [connect to MCP server](/mistral.rs/guides/agents/connect-mcp-server/)), it reads a JSON config describing servers to connect to.
+When hanzo acts as an MCP client (see [connect to MCP server](/hanzo/guides/agents/connect-mcp-server/)), it reads a JSON config describing servers to connect to.
 
 ## Top-level fields
 
