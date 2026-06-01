@@ -50,6 +50,8 @@ pub fn qtensor_indexed_moe_forward(
 pub fn cpu_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
     match qmatmul {
         QMatMul::QTensor(qtensor) => qtensor_indexed_moe_forward(qtensor, x, ids),
+        #[cfg(feature = "vulkan")]
+        QMatMul::VulkanQuant { qtensor, .. } => qtensor_indexed_moe_forward(qtensor, x, ids),
         QMatMul::Tensor(t) | QMatMul::TensorF16(t) => {
             // For non-quantized tensors, use UnquantLinear directly
             let unquant =
