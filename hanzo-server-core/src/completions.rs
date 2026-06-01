@@ -199,7 +199,7 @@ impl IntoResponse for CompletionResponder {
 /// Parses and validates a completion request.
 ///
 /// This function transforms an OpenAI-compatible completion request into the
-/// request format used by mistral.rs.
+/// request format used by hanzo.
 pub fn parse_request(
     oairequest: CompletionRequest,
     state: Arc<Hanzo>,

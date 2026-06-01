@@ -25,7 +25,7 @@ Multiple images in one request are encoded as a batch.
 
 Video is decoded to frames before model preprocessing. Each selected frame then flows through the image path.
 
-Supported containers and FFmpeg installation are covered in [Set up video input](/mistral.rs/guides/models/video-setup/).
+Supported containers and FFmpeg installation are covered in [Set up video input](/hanzo/guides/models/video-setup/).
 
 ## Audio path
 
@@ -44,6 +44,6 @@ The cache is LRU with a fixed capacity per model. Hit and miss counters are expo
 
 ## See also
 
-- Guide: [work with vision and video input](/mistral.rs/guides/models/use-vision-input/).
-- Setup: [set up video input](/mistral.rs/guides/models/video-setup/).
-- Reference: [supported models](/mistral.rs/reference/supported-models/).
+- Guide: [work with vision and video input](/hanzo/guides/models/use-vision-input/).
+- Setup: [set up video input](/hanzo/guides/models/video-setup/).
+- Reference: [supported models](/hanzo/reference/supported-models/).

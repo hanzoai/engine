@@ -476,7 +476,7 @@ fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
 /// Parses and validates a chat completion request.
 ///
 /// This function transforms an OpenAI-compatible chat completion request into the
-/// request format used by mistral.rs.
+/// request format used by hanzo.
 pub async fn parse_request(
     oairequest: ChatCompletionRequest,
     state: SharedHanzoState,

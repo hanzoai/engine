@@ -8,7 +8,7 @@ use hanzo::{IsqBits, MultimodalMessages, TextMessageRole, UqffMultimodalModelBui
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = UqffMultimodalModelBuilder::new(
-        "EricB/Phi-3.5-vision-instruct-UQFF",
+        "hanzoai/Phi-3.5-vision-instruct-UQFF",
         vec!["phi3.5-vision-instruct-q8_0.uqff".into()],
     )
     .into_inner()

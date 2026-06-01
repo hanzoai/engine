@@ -1,4 +1,4 @@
-// GDN (Gated Delta Net) Metal kernels for mistral.rs
+// GDN (Gated Delta Net) Metal kernels for hanzo
 // Ported from CUDA kernels in cuda/gdn.cu
 
 #include <metal_stdlib>

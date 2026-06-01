@@ -19,7 +19,7 @@ Multiple adapters: semicolon-separated.
 hanzo run -m <base-model> --lora "<lora-repo-1>;<lora-repo-2>"
 ```
 
-mistral.rs reads `adapter_config.json` from the LoRA repo for targeted modules and rank.
+hanzo reads `adapter_config.json` from the LoRA repo for targeted modules and rank.
 
 ## X-LoRA
 

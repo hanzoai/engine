@@ -1,4 +1,4 @@
-# Multimodal model support in mistral.rs
+# Multimodal model support in hanzo
 
 Mistral.rs supports various modalities of models, including multimodal models. Multimodal models take images, audio, and text as input and have the capability to reason over all of them.
 
@@ -42,4 +42,4 @@ hanzo run -m google/gemma-4-E4B-it --image a.jpg --image b.jpg -i "Compare these
 See the full [CLI reference](CLI.md) for all options.
 
 > Note for the Python and HTTP APIs:
-> We follow the OpenAI specification for structuring the image messages and allow both base64 encoded images as well as a URL/path to the image. There are many examples of this, see [this Python example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py).
+> We follow the OpenAI specification for structuring the image messages and allow both base64 encoded images as well as a URL/path to the image. There are many examples of this, see [this Python example](https://github.com/hanzoai/engine/blob/master/examples/python/phi3v.py).

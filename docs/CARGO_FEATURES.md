@@ -175,15 +175,15 @@ Enables multi-GPU distributed inference using NVIDIA NCCL (NVIDIA Collective Com
 cargo build --release --features "cuda nccl"
 
 # Run with specific GPU count
-MISTRALRS_MN_LOCAL_WORLD_SIZE=2 hanzo serve -m Qwen/Qwen3-30B-A3B-Instruct
+HANZO_MN_LOCAL_WORLD_SIZE=2 hanzo serve -m Qwen/Qwen3-30B-A3B-Instruct
 ```
 
 **Environment Variables:**
 
 | Variable | Description |
 |----------|-------------|
-| `MISTRALRS_MN_LOCAL_WORLD_SIZE` | Number of GPUs to use (defaults to all) |
-| `MISTRALRS_NO_NCCL=1` | Disable NCCL and use device mapping instead |
+| `HANZO_MN_LOCAL_WORLD_SIZE` | Number of GPUs to use (defaults to all) |
+| `HANZO_NO_NCCL=1` | Disable NCCL and use device mapping instead |
 
 **Multi-node setup** requires additional environment variables. See [NCCL documentation](DISTRIBUTED/NCCL.md) for details.
 

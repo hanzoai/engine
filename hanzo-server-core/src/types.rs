@@ -1,11 +1,11 @@
-//! ## Custom types used in mistral.rs server core.
+//! ## Custom types used in hanzo server core.
 
 use std::sync::Arc;
 
 use axum::extract::State;
 use hanzo_engine::{Hanzo, Pipeline};
 
-/// This is the underlying instance of mistral.rs.
+/// This is the underlying instance of hanzo.
 pub type SharedHanzoState = Arc<Hanzo>;
 
 /// This is the `SharedHanzoState` that has been extracted for an axum handler.

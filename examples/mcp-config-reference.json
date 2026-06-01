@@ -1,5 +1,5 @@
 {
-  "_comment": "MCP Client Configuration Reference for mistral.rs",
+  "_comment": "MCP Client Configuration Reference for hanzo",
   
   "servers": [
     {
@@ -11,7 +11,7 @@
         "url": "https://hf.co/mcp",
         "timeout_secs": 30,
         "headers": {
-          "User-Agent": "mistral-rs/0.6.0"
+          "User-Agent": "hanzo/0.6.0"
         }
       },
       "enabled": false,
@@ -46,7 +46,7 @@
         "url": "wss://api.example.com/mcp",
         "timeout_secs": 30,
         "headers": {
-          "Origin": "https://mistral.rs"
+          "Origin": "https://hanzo"
         }
       },
       "enabled": false,

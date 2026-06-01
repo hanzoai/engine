@@ -1,4 +1,4 @@
-//! Audio utilities for `mistral.rs`.
+//! Audio utilities for `hanzo`.
 //!
 //! This crate mirrors the `hanzo-vision` crate and focuses on audio specific
 //! functionality such as reading audio data, resampling and computing

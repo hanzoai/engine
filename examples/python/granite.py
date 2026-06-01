@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Example of using IBM Granite 4.0 model with mistral.rs
+Example of using IBM Granite 4.0 model with hanzo
 """
 
 from hanzo import Runner, Which, ChatCompletionRequest, Architecture
