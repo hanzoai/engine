@@ -62,7 +62,7 @@ impl EncoderCacheManager {
     /// Look up a cached encoder output by modality + content hash.
     ///
     /// On hit the entry is moved to the back (most-recently-used position)
-    /// and the tensors are cloned (cheap, Candle tensors are `Arc`-backed).
+    /// and the tensors are cloned (cheap, Hanzo tensors are `Arc`-backed).
     pub fn get(&mut self, modality: CacheModality, content_hash: u64) -> Option<Vec<Tensor>> {
         let key = (modality, content_hash);
         // `shift_remove` + re-insert moves the entry to the back.

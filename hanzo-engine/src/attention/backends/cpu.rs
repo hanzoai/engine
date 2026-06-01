@@ -573,7 +573,7 @@ where
 }
 
 /// Main forward flash-attention CPU routine.
-/// Shapes follow Candle convention: (B, S, H, D)
+/// Shapes follow Hanzo convention: (B, S, H, D)
 #[allow(clippy::too_many_arguments)]
 fn flash_attn_cpu<T>(
     q_data: &[T],
@@ -728,12 +728,12 @@ mod tests {
     use hanzo_ml::{Device, Tensor, D};
     use hanzo_nn::ops::softmax;
 
-    use hanzo_ml::Result as CandleResult;
+    use hanzo_ml::Result as HanzoResult;
 
     const EPS: f32 = 1e-4;
 
     #[test]
-    fn test_flash_attn_cpu_single_q() -> CandleResult<()> {
+    fn test_flash_attn_cpu_single_q() -> HanzoResult<()> {
         // Test for q_len == 1 (single Q)
         let b = 1;
         let h = 2;
@@ -791,7 +791,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_full_q() -> CandleResult<()> {
+    fn test_flash_attn_cpu_full_q() -> HanzoResult<()> {
         // Test for q_len > 1 (full Q)
         let b = 1;
         let q_len = 2;
@@ -851,7 +851,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_single_q_softcap() -> CandleResult<()> {
+    fn test_flash_attn_cpu_single_q_softcap() -> HanzoResult<()> {
         // Test for q_len == 1 (single Q) with softcap
         let b = 1;
         let h = 2;
@@ -912,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_full_q_softcap() -> CandleResult<()> {
+    fn test_flash_attn_cpu_full_q_softcap() -> HanzoResult<()> {
         // Test for q_len > 1 (full Q) with softcap
         let b = 1;
         let q_len = 2;

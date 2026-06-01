@@ -166,7 +166,7 @@ impl ContentMetadata<'_> {
     }
 }
 
-// These traits below are a workaround for converting candles GGUF `Value` enum type wrapper.
+// These traits below are a workaround for converting the GGUF `Value` enum type wrapper.
 // A better upstream approach would instead be to provide serialize/deserialize support?
 pub trait TryFromValue {
     fn try_from_value(value: gguf_file::Value) -> Result<Self, hanzo_ml::Error>
