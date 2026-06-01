@@ -1,4 +1,4 @@
-use candle_core::Device;
+use hanzo_ml::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use hanzo_engine::{
@@ -412,10 +412,10 @@ async fn main() -> anyhow::Result<()> {
     let token_source = TokenSource::CacheToken;
     info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
-        candle_core::utils::with_avx(),
-        candle_core::utils::with_neon(),
-        candle_core::utils::with_simd128(),
-        candle_core::utils::with_f16c()
+        hanzo_ml::utils::with_avx(),
+        hanzo_ml::utils::with_neon(),
+        hanzo_ml::utils::with_simd128(),
+        hanzo_ml::utils::with_f16c()
     );
     info!("Sampling method: penalties -> temperature -> topk -> topp -> minp -> multinomial");
     info!("Model kind is: {}", loader.get_kind().to_string());

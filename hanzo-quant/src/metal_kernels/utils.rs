@@ -3,7 +3,7 @@
 // Licensed under the Apache License 2.0
 // Copyright © 2023 Apple Inc.
 
-use candle_metal_kernels::metal::{
+use hanzo_metal_kernels::metal::{
     Buffer, CommandBuffer, CommandsGuard, ComputeCommandEncoder, ComputePipeline,
 };
 use objc2_metal::MTLSize;

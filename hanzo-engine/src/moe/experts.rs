@@ -6,8 +6,8 @@
 //! - Handles backend selection (fused/fast/slow)
 //! - Manages tensor parallelism with all-reduce
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::Linear;
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
+use hanzo_nn::Linear;
 use hanzo_quant::{
     apply_immediate_isq, should_apply_immediate_isq, DummyLayer, FusedExperts, PackedExperts,
     QuantMethod, QuantMethodConfig, QuantizedConfig, ShardedVarBuilder, SumAllReduce,
@@ -593,13 +593,13 @@ impl MoEExperts {
             let down = down_proj_packed.i(i)?.transpose(0, 1)?.contiguous()?;
 
             let mut gate_layer: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(candle_nn::Linear::new(gate, None)),
+                QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(gate, None)),
             )?);
             let mut up_layer: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(candle_nn::Linear::new(up, None)),
+                QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(up, None)),
             )?);
             let mut down_layer: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(candle_nn::Linear::new(down, None)),
+                QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(down, None)),
             )?);
 
             gate_layer = apply_immediate_isq(gate_layer, vb_gate_up.clone())?;
@@ -901,7 +901,7 @@ impl MoEExperts {
         num_tokens: usize,
         original_dtype: DType,
     ) -> Result<Option<Tensor>> {
-        use candle_core::cuda::cudarc::driver::DevicePtr;
+        use hanzo_ml::cuda::cudarc::driver::DevicePtr;
 
         let dev = xs_flat.device().as_cuda_device()?;
 
@@ -923,7 +923,7 @@ impl MoEExperts {
         let topk_ids_flat = topk_ids.flatten_all()?.contiguous()?;
         let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
         let ti_cuda = match &*ti_storage {
-            candle_core::Storage::Cuda(c) => c,
+            hanzo_ml::Storage::Cuda(c) => c,
             _ => return Ok(None),
         };
         let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
@@ -936,7 +936,7 @@ impl MoEExperts {
             .contiguous()?;
         let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
         let tw_cuda = match &*tw_storage {
-            candle_core::Storage::Cuda(c) => c,
+            hanzo_ml::Storage::Cuda(c) => c,
             _ => return Ok(None),
         };
         let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;
@@ -995,7 +995,7 @@ impl MoEExperts {
         let topk_ids_flat = topk_ids.flatten_all()?.contiguous()?;
         let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
         let ti_cuda = match &*ti_storage {
-            candle_core::Storage::Cuda(c) => c,
+            hanzo_ml::Storage::Cuda(c) => c,
             _ => return Ok(None),
         };
         let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
@@ -1085,14 +1085,14 @@ impl MoEExperts {
         };
 
         // Get topk_weights pointer
-        use candle_core::cuda::cudarc::driver::DevicePtr;
+        use hanzo_ml::cuda::cudarc::driver::DevicePtr;
         let tw_f32 = topk_weights
             .flatten_all()?
             .to_dtype(DType::F32)?
             .contiguous()?;
         let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
         let tw_cuda = match &*tw_storage {
-            candle_core::Storage::Cuda(c) => c,
+            hanzo_ml::Storage::Cuda(c) => c,
             _ => return Ok(None),
         };
         let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;

@@ -11,7 +11,7 @@ mod llama;
 mod mistral_nemo;
 mod qwen;
 
-use candle_core::Result;
+use hanzo_ml::Result;
 use llguidance::api::TopLevelGrammar;
 
 use crate::Tool;

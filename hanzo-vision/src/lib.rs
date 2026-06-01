@@ -4,7 +4,7 @@
 //!
 //! ## Example
 //! ```rust
-//! use candle_core::Device;
+//! use hanzo_ml::Device;
 //! use image::{ColorType, DynamicImage};
 //! use hanzo_vision::{ApplyTransforms, Normalize, ToTensor, Transforms};
 //!
@@ -20,7 +20,7 @@
 //! assert_eq!(transformed.dims(), &[3, 4, 3]);
 //! ```
 
-use candle_core::{Device, Result, Tensor};
+use hanzo_ml::{Device, Result, Tensor};
 use image::DynamicImage;
 mod ops;
 mod pad;

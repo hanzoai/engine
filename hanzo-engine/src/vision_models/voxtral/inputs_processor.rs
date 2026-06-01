@@ -2,7 +2,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use candle_core::Device;
+use hanzo_ml::Device;
 use tokenizers::Tokenizer;
 
 use crate::{
@@ -141,7 +141,7 @@ impl InputsProcessor for VoxtralInputsProcessor {
                 }
             }
             if !mel_accum.is_empty() {
-                let t = candle_core::Tensor::cat(&mel_accum, 1).map_err(anyhow::Error::from)?;
+                let t = hanzo_ml::Tensor::cat(&mel_accum, 1).map_err(anyhow::Error::from)?;
                 Some(t)
             } else {
                 None

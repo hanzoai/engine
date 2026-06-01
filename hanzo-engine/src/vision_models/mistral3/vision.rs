@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use hanzo_ml::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use hanzo_quant::{linear_b, Convolution, QuantMethod, ShardedVarBuilder};
 
 use crate::attention::AttentionMask;
@@ -10,8 +10,8 @@ use crate::{
     utils::unvarbuilder::UnVarBuilder,
 };
 
-fn default_act() -> candle_nn::Activation {
-    candle_nn::Activation::Silu
+fn default_act() -> hanzo_nn::Activation {
+    hanzo_nn::Activation::Silu
 }
 
 fn default_hidden_size() -> usize {
@@ -65,7 +65,7 @@ pub struct Mistral3VisionConfig {
     #[serde(default = "default_num_attention_heads")]
     pub num_attention_heads: usize,
     #[serde(default = "default_act")]
-    pub hidden_act: candle_nn::Activation,
+    pub hidden_act: hanzo_nn::Activation,
 }
 
 impl Mistral3VisionConfig {
@@ -140,7 +140,7 @@ impl Attention {
             AttentionMask::Custom(mask) => attn_weights.broadcast_add(mask)?,
         };
 
-        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        let attn_weights = hanzo_nn::ops::softmax_last_dim(&attn_weights)?;
 
         self.o_proj.forward(
             &attn_weights
@@ -156,7 +156,7 @@ struct Mlp {
     gate_proj: Arc<dyn QuantMethod>,
     up_proj: Arc<dyn QuantMethod>,
     down_proj: Arc<dyn QuantMethod>,
-    act_fn: candle_nn::Activation,
+    act_fn: hanzo_nn::Activation,
 }
 
 impl Mlp {
@@ -327,15 +327,15 @@ impl RotaryEmbedding {
                 &self.sin.index_select(pos, 0)?,
             ),
         };
-        let q_embed = candle_nn::rotary_emb::rope(q, cos, sin)?;
-        let k_embed = candle_nn::rotary_emb::rope(k, cos, sin)?;
+        let q_embed = hanzo_nn::rotary_emb::rope(q, cos, sin)?;
+        let k_embed = hanzo_nn::rotary_emb::rope(k, cos, sin)?;
         Ok((q_embed, k_embed))
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Mistral3VisionModel {
-    patch_conv: candle_nn::Conv2d,
+    patch_conv: hanzo_nn::Conv2d,
     ln_pre: RmsNorm,
     transformer: Transformer,
     patch_positional_embedding: RotaryEmbedding,
@@ -350,7 +350,7 @@ impl Mistral3VisionModel {
         vb: ShardedVarBuilder,
         normal_loading_metadata: &NormalLoadingMetadata,
     ) -> Result<Self> {
-        let conv2d_cfg = candle_nn::Conv2dConfig {
+        let conv2d_cfg = hanzo_nn::Conv2dConfig {
             stride: cfg.patch_size,
             ..Default::default()
         };

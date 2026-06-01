@@ -1,4 +1,4 @@
-use candle_core::{Device, Result};
+use hanzo_ml::{Device, Result};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use tracing::info;
@@ -393,19 +393,19 @@ impl PrefixCacheManagerV2 {
 
 #[cfg(test)]
 mod tests {
-    use candle_core::{DType, Device, Tensor};
+    use hanzo_ml::{DType, Device, Tensor};
 
     use super::{CacheElement, MatchingCache, PrefixCacheManagerV2};
     use crate::kv_cache::{KvCache, RotatingCache, SingleCache};
 
-    fn make_cache_tensor(len: usize) -> candle_core::Result<Tensor> {
+    fn make_cache_tensor(len: usize) -> hanzo_ml::Result<Tensor> {
         Tensor::zeros((1, 1, len, 1), DType::F32, &Device::Cpu)
     }
 
     fn make_rotating_kv_cache(
         logical_len: usize,
         sliding_window: usize,
-    ) -> candle_core::Result<KvCache> {
+    ) -> hanzo_ml::Result<KvCache> {
         let src = make_cache_tensor(logical_len)?;
         let mut k = RotatingCache::new(2, sliding_window, sliding_window);
         let mut v = RotatingCache::new(2, sliding_window, sliding_window);
@@ -414,7 +414,7 @@ mod tests {
         Ok(KvCache::Rotating { k, v })
     }
 
-    fn make_normal_kv_cache(logical_len: usize) -> candle_core::Result<KvCache> {
+    fn make_normal_kv_cache(logical_len: usize) -> hanzo_ml::Result<KvCache> {
         let src = make_cache_tensor(logical_len)?;
         let mut k = SingleCache::new(2, logical_len, logical_len);
         let mut v = SingleCache::new(2, logical_len, logical_len);
@@ -424,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn skips_rolled_over_rotating_candidate_that_cannot_rewind() -> candle_core::Result<()> {
+    fn skips_rolled_over_rotating_candidate_that_cannot_rewind() -> hanzo_ml::Result<()> {
         let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
 
         prefix_cacher.caches.insert(
@@ -467,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn allows_exact_extension_from_rolled_over_rotating_cache() -> candle_core::Result<()> {
+    fn allows_exact_extension_from_rolled_over_rotating_cache() -> hanzo_ml::Result<()> {
         let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
 
         prefix_cacher.caches.insert(

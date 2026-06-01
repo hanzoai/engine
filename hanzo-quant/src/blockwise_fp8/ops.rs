@@ -1,4 +1,4 @@
-use candle_core::{CpuStorage, CustomOp1, CustomOp2, DType, Result, Tensor, WithDType};
+use hanzo_ml::{CpuStorage, CustomOp1, CustomOp2, DType, Result, Tensor, WithDType};
 use float8::F8E4M3;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
@@ -12,9 +12,9 @@ impl Fp8BlockwiseDequantize {
         &self,
         weight: &[F8E4M3],
         scale: &[f32],
-        weight_l: &candle_core::Layout,
-        scale_l: &candle_core::Layout,
-    ) -> candle_core::Result<Vec<T>> {
+        weight_l: &hanzo_ml::Layout,
+        scale_l: &hanzo_ml::Layout,
+    ) -> hanzo_ml::Result<Vec<T>> {
         let grid_y = weight_l.dim(0)?.div_ceil(self.weight_block_size[0]);
         let grid_x = weight_l.dim(1)?.div_ceil(self.weight_block_size[1]);
 
@@ -66,28 +66,28 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
 
     fn cpu_fwd(
         &self,
-        scale_s: &candle_core::CpuStorage,
-        scale_l: &candle_core::Layout,
-        weight_s: &candle_core::CpuStorage,
-        weight_l: &candle_core::Layout,
-    ) -> candle_core::Result<(candle_core::CpuStorage, candle_core::Shape)> {
-        let candle_core::CpuStorage::F8E4M3(weight) = weight_s else {
-            candle_core::bail!("Expected F8E4M3 weight!");
+        scale_s: &hanzo_ml::CpuStorage,
+        scale_l: &hanzo_ml::Layout,
+        weight_s: &hanzo_ml::CpuStorage,
+        weight_l: &hanzo_ml::Layout,
+    ) -> hanzo_ml::Result<(hanzo_ml::CpuStorage, hanzo_ml::Shape)> {
+        let hanzo_ml::CpuStorage::F8E4M3(weight) = weight_s else {
+            hanzo_ml::bail!("Expected F8E4M3 weight!");
         };
-        let candle_core::CpuStorage::F32(scale) = scale_s else {
-            candle_core::bail!("Expected F8E4M3 weight!");
+        let hanzo_ml::CpuStorage::F32(scale) = scale_s else {
+            hanzo_ml::bail!("Expected F8E4M3 weight!");
         };
         if weight_l.start_offset() != 0 || !weight_l.is_contiguous() {
-            candle_core::bail!("Expected weight to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected weight to have start offset 0, continuous");
         }
         if scale_l.start_offset() != 0 || !scale_l.is_contiguous() {
-            candle_core::bail!("Expected scales to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected scales to have start offset 0, continuous");
         }
         if weight_l.dims().len() != 2 {
-            candle_core::bail!("Expected weight to be rank 2");
+            hanzo_ml::bail!("Expected weight to be rank 2");
         }
         if scale_l.dims().len() != 2 || self.weight_block_size.len() != 2 {
-            candle_core::bail!("Expected scale to be rank 2");
+            hanzo_ml::bail!("Expected scale to be rank 2");
         }
 
         match self.out_ty {
@@ -105,38 +105,38 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
                 CpuStorage::F16(self.dispatch_dequant_blockwise(weight, scale, weight_l, scale_l)?),
                 weight_l.shape().clone(),
             )),
-            other => candle_core::bail!("unexpected out type of fp8 blockwise dequant {other:?}"),
+            other => hanzo_ml::bail!("unexpected out type of fp8 blockwise dequant {other:?}"),
         }
     }
 
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
-        scale_s: &candle_core::CudaStorage,
-        scale_l: &candle_core::Layout,
-        weight_s: &candle_core::CudaStorage,
-        weight_l: &candle_core::Layout,
-    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
-        use candle_core::{backend::BackendStorage, CudaStorage};
+        scale_s: &hanzo_ml::CudaStorage,
+        scale_l: &hanzo_ml::Layout,
+        weight_s: &hanzo_ml::CudaStorage,
+        weight_l: &hanzo_ml::Layout,
+    ) -> Result<(hanzo_ml::CudaStorage, hanzo_ml::Shape)> {
+        use hanzo_ml::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
 
         use crate::{blockwise_fp8::ffi, utils::slice_ptr};
 
         if !ffi::HAVE_BLOCKWISE_DEQUANT_KERNELS {
-            candle_core::bail!("Do not have blockwise FP8 dequant kernels.");
+            hanzo_ml::bail!("Do not have blockwise FP8 dequant kernels.");
         }
 
         if weight_l.start_offset() != 0 || !weight_l.is_contiguous() {
-            candle_core::bail!("Expected weight to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected weight to have start offset 0, continuous");
         }
         if scale_l.start_offset() != 0 || !scale_l.is_contiguous() {
-            candle_core::bail!("Expected scales to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected scales to have start offset 0, continuous");
         }
         if weight_l.dims().len() != 2 {
-            candle_core::bail!("Expected weight to be rank 2");
+            hanzo_ml::bail!("Expected weight to be rank 2");
         }
         if scale_l.dims().len() != 2 || self.weight_block_size.len() != 2 {
-            candle_core::bail!("Expected scale to be rank 2");
+            hanzo_ml::bail!("Expected scale to be rank 2");
         }
 
         let dev = weight_s.device();
@@ -220,7 +220,7 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
                 drop(output_guard);
                 CudaStorage::wrap_cuda_slice(output, weight_s.device().clone())
             }
-            other => candle_core::bail!("unexpected out type of fp8 blockwise dequant {other:?}"),
+            other => hanzo_ml::bail!("unexpected out type of fp8 blockwise dequant {other:?}"),
         };
 
         Ok((res, weight_l.shape().clone()))
@@ -229,28 +229,28 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        scale_s: &candle_core::MetalStorage,
-        scale_l: &candle_core::Layout,
-        weight_s: &candle_core::MetalStorage,
-        weight_l: &candle_core::Layout,
-    ) -> Result<(candle_core::MetalStorage, candle_core::Shape)> {
-        use candle_core::backend::BackendStorage;
+        scale_s: &hanzo_ml::MetalStorage,
+        scale_l: &hanzo_ml::Layout,
+        weight_s: &hanzo_ml::MetalStorage,
+        weight_l: &hanzo_ml::Layout,
+    ) -> Result<(hanzo_ml::MetalStorage, hanzo_ml::Shape)> {
+        use hanzo_ml::backend::BackendStorage;
 
         if weight_l.start_offset() != 0
             || !weight_l.is_contiguous()
             || weight_s.dtype() != DType::F8E4M3
         {
-            candle_core::bail!("Expected f8e4m3 weight to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected f8e4m3 weight to have start offset 0, continuous");
         }
         if scale_l.start_offset() != 0 || !scale_l.is_contiguous() || scale_s.dtype() != DType::F32
         {
-            candle_core::bail!("Expected f32 scales to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected f32 scales to have start offset 0, continuous");
         }
         if weight_l.dims().len() != 2 {
-            candle_core::bail!("Expected weight to be rank 2");
+            hanzo_ml::bail!("Expected weight to be rank 2");
         }
         if scale_l.dims().len() != 2 || self.weight_block_size.len() != 2 {
-            candle_core::bail!("Expected scale to be rank 2");
+            hanzo_ml::bail!("Expected scale to be rank 2");
         }
 
         let encoder = weight_s.device().command_encoder()?;
@@ -288,9 +288,9 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
             weight_block_size_y,
             weight_block_size_x,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
 
-        let newstorage = candle_core::MetalStorage::new(
+        let newstorage = hanzo_ml::MetalStorage::new(
             output,
             device.clone(),
             out_shape.elem_count(),
@@ -329,8 +329,8 @@ impl Fp8BlockwiseQuantize {
     fn dispatch_quant_blockwise<T: WithDType>(
         &self,
         input: &[T],
-        input_l: &candle_core::Layout,
-    ) -> candle_core::Result<(Vec<F8E4M3>, Vec<f32>)> {
+        input_l: &hanzo_ml::Layout,
+    ) -> hanzo_ml::Result<(Vec<F8E4M3>, Vec<f32>)> {
         let grid_y = input_l.dim(0)?.div_ceil(self.weight_block_size[0]);
         let grid_x = input_l.dim(1)?.div_ceil(self.weight_block_size[1]);
 
@@ -418,17 +418,17 @@ impl CustomOp1 for Fp8BlockwiseQuantize {
 
     fn cpu_fwd(
         &self,
-        input_s: &candle_core::CpuStorage,
-        input_l: &candle_core::Layout,
-    ) -> candle_core::Result<(candle_core::CpuStorage, candle_core::Shape)> {
+        input_s: &hanzo_ml::CpuStorage,
+        input_l: &hanzo_ml::Layout,
+    ) -> hanzo_ml::Result<(hanzo_ml::CpuStorage, hanzo_ml::Shape)> {
         if input_l.start_offset() != 0 || !input_l.is_contiguous() {
-            candle_core::bail!("Expected input to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected input to have start offset 0, continuous");
         }
         if input_l.dims().len() != 2 {
-            candle_core::bail!("Expected input to be rank 2");
+            hanzo_ml::bail!("Expected input to be rank 2");
         }
         if self.weight_block_size.len() != 2 {
-            candle_core::bail!("Expected weight_block_size to have length 2");
+            hanzo_ml::bail!("Expected weight_block_size to have length 2");
         }
 
         let grid_y = input_l.dim(0)?.div_ceil(self.weight_block_size[0]);
@@ -438,7 +438,7 @@ impl CustomOp1 for Fp8BlockwiseQuantize {
             CpuStorage::F32(input) => self.dispatch_quant_blockwise(input, input_l)?,
             CpuStorage::F16(input) => self.dispatch_quant_blockwise(input, input_l)?,
             CpuStorage::BF16(input) => self.dispatch_quant_blockwise(input, input_l)?,
-            other => candle_core::bail!("unexpected input type for fp8 blockwise quant: {other:?}"),
+            other => hanzo_ml::bail!("unexpected input type for fp8 blockwise quant: {other:?}"),
         };
 
         // Return both weight and scale tensors packed into a single storage
@@ -453,7 +453,7 @@ impl CustomOp1 for Fp8BlockwiseQuantize {
 
         Ok((
             CpuStorage::F8E4M3(packed),
-            candle_core::Shape::from_dims(&[
+            hanzo_ml::Shape::from_dims(&[
                 input_l.dims()[0] + grid_y,
                 input_l.dims()[1].max(grid_x),
             ]),
@@ -463,26 +463,26 @@ impl CustomOp1 for Fp8BlockwiseQuantize {
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
-        input_s: &candle_core::CudaStorage,
-        input_l: &candle_core::Layout,
-    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
-        use candle_core::{backend::BackendStorage, CudaStorage};
+        input_s: &hanzo_ml::CudaStorage,
+        input_l: &hanzo_ml::Layout,
+    ) -> Result<(hanzo_ml::CudaStorage, hanzo_ml::Shape)> {
+        use hanzo_ml::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
 
         use crate::{blockwise_fp8::ffi, utils::slice_ptr};
 
         if !ffi::HAVE_BLOCKWISE_QUANT_KERNELS {
-            candle_core::bail!("Do not have blockwise FP8 quant kernels.");
+            hanzo_ml::bail!("Do not have blockwise FP8 quant kernels.");
         }
 
         if input_l.start_offset() != 0 || !input_l.is_contiguous() {
-            candle_core::bail!("Expected input to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected input to have start offset 0, continuous");
         }
         if input_l.dims().len() != 2 {
-            candle_core::bail!("Expected input to be rank 2");
+            hanzo_ml::bail!("Expected input to be rank 2");
         }
         if self.weight_block_size.len() != 2 {
-            candle_core::bail!("Expected weight_block_size to have length 2");
+            hanzo_ml::bail!("Expected weight_block_size to have length 2");
         }
 
         let dev = input_s.device();
@@ -559,7 +559,7 @@ impl CustomOp1 for Fp8BlockwiseQuantize {
                     )
                 };
             }
-            other => candle_core::bail!("unexpected input type for fp8 blockwise quant: {other:?}"),
+            other => hanzo_ml::bail!("unexpected input type for fp8 blockwise quant: {other:?}"),
         }
 
         drop(weight_guard);
@@ -573,10 +573,10 @@ impl CustomOp1 for Fp8BlockwiseQuantize {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        _input_s: &candle_core::MetalStorage,
-        _input_l: &candle_core::Layout,
-    ) -> Result<(candle_core::MetalStorage, candle_core::Shape)> {
-        candle_core::bail!("FP8 blockwise quantization not yet implemented for Metal");
+        _input_s: &hanzo_ml::MetalStorage,
+        _input_l: &hanzo_ml::Layout,
+    ) -> Result<(hanzo_ml::MetalStorage, hanzo_ml::Shape)> {
+        hanzo_ml::bail!("FP8 blockwise quantization not yet implemented for Metal");
     }
 }
 
@@ -593,28 +593,28 @@ pub fn fp8_blockwise_quantize(
     // Let's implement this using the CUDA kernels directly
     #[cfg(feature = "cuda")]
     {
-        use candle_core::{CudaStorage, Device, Storage};
+        use hanzo_ml::{CudaStorage, Device, Storage};
         use half::{bf16, f16};
 
         use crate::{blockwise_fp8::ffi, utils::slice_ptr};
 
         if !matches!(input.device(), Device::Cuda(_)) {
-            candle_core::bail!("FP8 blockwise quantization only supported on CUDA for now");
+            hanzo_ml::bail!("FP8 blockwise quantization only supported on CUDA for now");
         }
 
         if !ffi::HAVE_BLOCKWISE_QUANT_KERNELS {
-            candle_core::bail!("Do not have blockwise FP8 quant kernels.");
+            hanzo_ml::bail!("Do not have blockwise FP8 quant kernels.");
         }
 
         let input_l = input.layout();
         if input_l.start_offset() != 0 || !input_l.is_contiguous() {
-            candle_core::bail!("Expected input to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected input to have start offset 0, continuous");
         }
         if input.dims().len() != 2 {
-            candle_core::bail!("Expected input to be rank 2");
+            hanzo_ml::bail!("Expected input to be rank 2");
         }
         if weight_block_size.len() != 2 {
-            candle_core::bail!("Expected weight_block_size to have length 2");
+            hanzo_ml::bail!("Expected weight_block_size to have length 2");
         }
 
         let dev = match input.device() {
@@ -644,7 +644,7 @@ pub fn fp8_blockwise_quantize(
                 let input_storage = input.storage_and_layout().0;
                 let input_s = match &*input_storage {
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f32>()?,
-                    _ => candle_core::bail!("Expected CUDA storage"),
+                    _ => hanzo_ml::bail!("Expected CUDA storage"),
                 };
                 let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
                 unsafe {
@@ -666,7 +666,7 @@ pub fn fp8_blockwise_quantize(
                 let input_storage = input.storage_and_layout().0;
                 let input_s = match &*input_storage {
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
-                    _ => candle_core::bail!("Expected CUDA storage"),
+                    _ => hanzo_ml::bail!("Expected CUDA storage"),
                 };
                 let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
                 unsafe {
@@ -688,7 +688,7 @@ pub fn fp8_blockwise_quantize(
                 let input_storage = input.storage_and_layout().0;
                 let input_s = match &*input_storage {
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
-                    _ => candle_core::bail!("Expected CUDA storage"),
+                    _ => hanzo_ml::bail!("Expected CUDA storage"),
                 };
                 let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
                 unsafe {
@@ -706,7 +706,7 @@ pub fn fp8_blockwise_quantize(
                     )
                 };
             }
-            other => candle_core::bail!("unexpected input type for fp8 blockwise quant: {other:?}"),
+            other => hanzo_ml::bail!("unexpected input type for fp8 blockwise quant: {other:?}"),
         }
 
         // Drop guards before moving the buffers
@@ -721,7 +721,7 @@ pub fn fp8_blockwise_quantize(
         let scale_storage = CudaStorage::wrap_cuda_slice(scale_output, dev.clone());
         let scale = Tensor::from((
             Storage::Cuda(scale_storage),
-            candle_core::Shape::from_dims(&[grid_y, grid_x]),
+            hanzo_ml::Shape::from_dims(&[grid_y, grid_x]),
         ));
 
         Ok((weight, scale))
@@ -729,7 +729,7 @@ pub fn fp8_blockwise_quantize(
 
     #[cfg(not(feature = "cuda"))]
     {
-        candle_core::bail!("FP8 blockwise quantization requires CUDA feature");
+        hanzo_ml::bail!("FP8 blockwise quantization requires CUDA feature");
     }
 }
 
@@ -746,17 +746,17 @@ pub fn fp8_blockwise_matmul(
     scales: &Tensor,
     weight_block_size: &[usize],
 ) -> Result<Tensor> {
-    use candle_core::{CudaStorage, Device, Storage};
+    use hanzo_ml::{CudaStorage, Device, Storage};
     use half::{bf16, f16};
 
     use crate::{blockwise_fp8::ffi, utils::slice_ptr};
 
     if !ffi::HAVE_BLOCKWISE_GEMM_KERNELS {
-        candle_core::bail!("Do not have blockwise FP8 GEMM kernels.");
+        hanzo_ml::bail!("Do not have blockwise FP8 GEMM kernels.");
     }
 
     if !matches!(input.device(), Device::Cuda(_)) {
-        candle_core::bail!("FP8 blockwise matmul only supported on CUDA");
+        hanzo_ml::bail!("FP8 blockwise matmul only supported on CUDA");
     }
 
     let input = input.contiguous()?;
@@ -764,13 +764,13 @@ pub fn fp8_blockwise_matmul(
     let scales = scales.contiguous()?;
 
     if input.dims().len() != 2 {
-        candle_core::bail!("Expected input to be rank 2, got {:?}", input.dims());
+        hanzo_ml::bail!("Expected input to be rank 2, got {:?}", input.dims());
     }
     if weight.dims().len() != 2 {
-        candle_core::bail!("Expected weight to be rank 2, got {:?}", weight.dims());
+        hanzo_ml::bail!("Expected weight to be rank 2, got {:?}", weight.dims());
     }
     if weight.dtype() != DType::F8E4M3 {
-        candle_core::bail!("Expected FP8 weight, got {:?}", weight.dtype());
+        hanzo_ml::bail!("Expected FP8 weight, got {:?}", weight.dtype());
     }
 
     let m = input.dim(0)? as i32;
@@ -778,7 +778,7 @@ pub fn fp8_blockwise_matmul(
     let n = weight.dim(0)? as i32;
 
     if weight.dim(1)? as i32 != k {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Weight K dimension {} doesn't match input K dimension {}",
             weight.dim(1)?,
             k
@@ -804,11 +804,11 @@ pub fn fp8_blockwise_matmul(
 
     let weight_s = match &*weight_storage {
         Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<F8E4M3>()?,
-        _ => candle_core::bail!("Expected CUDA storage for weight"),
+        _ => hanzo_ml::bail!("Expected CUDA storage for weight"),
     };
     let scales_s = match &*scales_storage {
         Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f32>()?,
-        _ => candle_core::bail!("Expected CUDA storage for scales"),
+        _ => hanzo_ml::bail!("Expected CUDA storage for scales"),
     };
 
     let (weight_ptr, _weight_guard) = slice_ptr(weight_s, weight_l.start_offset());
@@ -820,7 +820,7 @@ pub fn fp8_blockwise_matmul(
 
             let input_s = match &*input_storage {
                 Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
-                _ => candle_core::bail!("Expected CUDA storage for input"),
+                _ => hanzo_ml::bail!("Expected CUDA storage for input"),
             };
 
             {
@@ -847,7 +847,7 @@ pub fn fp8_blockwise_matmul(
             let output_storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
             Ok(Tensor::from((
                 Storage::Cuda(output_storage),
-                candle_core::Shape::from_dims(&[m as usize, n as usize]),
+                hanzo_ml::Shape::from_dims(&[m as usize, n as usize]),
             )))
         }
         DType::BF16 => {
@@ -855,7 +855,7 @@ pub fn fp8_blockwise_matmul(
 
             let input_s = match &*input_storage {
                 Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
-                _ => candle_core::bail!("Expected CUDA storage for input"),
+                _ => hanzo_ml::bail!("Expected CUDA storage for input"),
             };
 
             {
@@ -882,10 +882,10 @@ pub fn fp8_blockwise_matmul(
             let output_storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
             Ok(Tensor::from((
                 Storage::Cuda(output_storage),
-                candle_core::Shape::from_dims(&[m as usize, n as usize]),
+                hanzo_ml::Shape::from_dims(&[m as usize, n as usize]),
             )))
         }
-        other => candle_core::bail!("Unsupported input dtype for FP8 matmul: {:?}", other),
+        other => hanzo_ml::bail!("Unsupported input dtype for FP8 matmul: {:?}", other),
     }
 }
 
@@ -904,17 +904,17 @@ pub fn fp8_indexed_moe_gemm(
     indices: &Tensor,
     weight_block_size: &[usize],
 ) -> Result<Tensor> {
-    use candle_core::{CudaStorage, Device, Storage};
+    use hanzo_ml::{CudaStorage, Device, Storage};
     use half::{bf16, f16};
 
     use crate::{blockwise_fp8::ffi, utils::slice_ptr};
 
     if !ffi::HAVE_BLOCKWISE_GEMM_KERNELS {
-        candle_core::bail!("Do not have blockwise FP8 GEMM kernels.");
+        hanzo_ml::bail!("Do not have blockwise FP8 GEMM kernels.");
     }
 
     if !matches!(input.device(), Device::Cuda(_)) {
-        candle_core::bail!("FP8 indexed MoE GEMM only supported on CUDA");
+        hanzo_ml::bail!("FP8 indexed MoE GEMM only supported on CUDA");
     }
 
     let input = input.contiguous()?;
@@ -931,13 +931,13 @@ pub fn fp8_indexed_moe_gemm(
         let dims = input.dims2()?;
         (dims.0, false, dims.1)
     } else {
-        candle_core::bail!("Expected input to be rank 2 or 3, got {:?}", input.dims());
+        hanzo_ml::bail!("Expected input to be rank 2 or 3, got {:?}", input.dims());
     };
 
     // Get topk from indices
     let (indices_tokens, topk) = indices.dims2()?;
     if indices_tokens != num_tokens {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Indices num_tokens {} doesn't match input num_tokens {}",
             indices_tokens,
             num_tokens
@@ -946,11 +946,11 @@ pub fn fp8_indexed_moe_gemm(
 
     // Weights shape: [num_experts, N, K]
     if weights.dims().len() != 3 {
-        candle_core::bail!("Expected weights to be rank 3, got {:?}", weights.dims());
+        hanzo_ml::bail!("Expected weights to be rank 3, got {:?}", weights.dims());
     }
     let (num_experts, n, weight_k) = weights.dims3()?;
     if weight_k != k {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Weights K dimension {} doesn't match input K dimension {}",
             weight_k,
             k
@@ -958,7 +958,7 @@ pub fn fp8_indexed_moe_gemm(
     }
 
     if weights.dtype() != DType::F8E4M3 {
-        candle_core::bail!("Expected FP8 weights, got {:?}", weights.dtype());
+        hanzo_ml::bail!("Expected FP8 weights, got {:?}", weights.dtype());
     }
 
     let dev = match input.device() {
@@ -984,15 +984,15 @@ pub fn fp8_indexed_moe_gemm(
 
     let weights_s = match &*weights_storage {
         Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<F8E4M3>()?,
-        _ => candle_core::bail!("Expected CUDA storage for weights"),
+        _ => hanzo_ml::bail!("Expected CUDA storage for weights"),
     };
     let scales_s = match &*scales_storage {
         Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f32>()?,
-        _ => candle_core::bail!("Expected CUDA storage for scales"),
+        _ => hanzo_ml::bail!("Expected CUDA storage for scales"),
     };
     let indices_s = match &*indices_storage {
         Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<u32>()?,
-        _ => candle_core::bail!("Expected CUDA storage for indices"),
+        _ => hanzo_ml::bail!("Expected CUDA storage for indices"),
     };
 
     let (weights_ptr, _weights_guard) = slice_ptr(weights_s, weights_l.start_offset());
@@ -1005,7 +1005,7 @@ pub fn fp8_indexed_moe_gemm(
 
             let input_s = match &*input_storage {
                 Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
-                _ => candle_core::bail!("Expected CUDA storage for input"),
+                _ => hanzo_ml::bail!("Expected CUDA storage for input"),
             };
 
             {
@@ -1036,7 +1036,7 @@ pub fn fp8_indexed_moe_gemm(
             let output_storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
             Ok(Tensor::from((
                 Storage::Cuda(output_storage),
-                candle_core::Shape::from_dims(&[num_tokens, topk, n]),
+                hanzo_ml::Shape::from_dims(&[num_tokens, topk, n]),
             )))
         }
         DType::BF16 => {
@@ -1044,7 +1044,7 @@ pub fn fp8_indexed_moe_gemm(
 
             let input_s = match &*input_storage {
                 Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
-                _ => candle_core::bail!("Expected CUDA storage for input"),
+                _ => hanzo_ml::bail!("Expected CUDA storage for input"),
             };
 
             {
@@ -1075,10 +1075,10 @@ pub fn fp8_indexed_moe_gemm(
             let output_storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
             Ok(Tensor::from((
                 Storage::Cuda(output_storage),
-                candle_core::Shape::from_dims(&[num_tokens, topk, n]),
+                hanzo_ml::Shape::from_dims(&[num_tokens, topk, n]),
             )))
         }
-        other => candle_core::bail!(
+        other => hanzo_ml::bail!(
             "Unsupported input dtype for FP8 indexed MoE GEMM: {:?}",
             other
         ),
@@ -1088,8 +1088,8 @@ pub fn fp8_indexed_moe_gemm(
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
-    use candle_core::{DType, Device, Result, Tensor};
-    use candle_nn::{Linear, Module};
+    use hanzo_ml::{DType, Device, Result, Tensor};
+    use hanzo_nn::{Linear, Module};
     use half::bf16;
     use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 

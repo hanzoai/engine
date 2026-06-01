@@ -1,4 +1,4 @@
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor};
 
 pub struct DiaKvCache {
     k: Tensor,

@@ -1,5 +1,5 @@
-use candle_core::{Result, Tensor};
-use candle_nn::{Activation, Conv2d, Conv2dConfig, Module};
+use hanzo_ml::{Result, Tensor};
+use hanzo_nn::{Activation, Conv2d, Conv2dConfig, Module};
 use hanzo_quant::{Convolution, ShardedVarBuilder};
 use tracing::warn;
 
@@ -150,7 +150,7 @@ impl RMSNormAct2d {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let mut x = candle_nn::ops::rms_norm(
+        let mut x = hanzo_nn::ops::rms_norm(
             &x.permute((0, 2, 3, 1))?.contiguous()?,
             &self.norm.weight,
             self.norm.eps as f32,

@@ -3,7 +3,7 @@ pub(crate) mod parsers;
 mod request;
 mod response;
 
-use candle_core::Result;
+use hanzo_ml::Result;
 pub use request::*;
 pub use response::*;
 use serde::de::{self, Deserializer, MapAccess, Visitor};
@@ -156,7 +156,7 @@ impl ToolCallingMatcher {
             return Ok((false, false));
         }
         let message_prefix = process_model_specific_message(message_prefix)?;
-        let message_prefix = fix_broken_json(&message_prefix).map_err(candle_core::Error::msg)?;
+        let message_prefix = fix_broken_json(&message_prefix).map_err(hanzo_ml::Error::msg)?;
 
         // Check if the prefix could be a JSON serialization of any of the following types.
         Ok([
@@ -271,7 +271,7 @@ pub fn parse_text_tools(
     if let Some(ref matcher) = matcher {
         let calls = matcher
             .get_call(raw_text)
-            .map_err(candle_core::Error::msg)?;
+            .map_err(hanzo_ml::Error::msg)?;
         if !calls.is_empty() {
             text_new = None;
             tool_calls = calls;

@@ -5,8 +5,8 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Linear, Module};
+use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_nn::{Linear, Module};
 use quantize::QuantizationResult;
 
 mod quantize;
@@ -31,7 +31,7 @@ pub struct FP8Linear {
 }
 
 impl QuantMethod for FP8Linear {
-    fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
+    fn new(method: QuantMethodConfig) -> hanzo_ml::Result<Self>
     where
         Self: Sized,
     {
@@ -62,7 +62,7 @@ impl QuantMethod for FP8Linear {
             }
         }
     }
-    fn dequantize_w(&self) -> Result<candle_core::Tensor> {
+    fn dequantize_w(&self) -> Result<hanzo_ml::Tensor> {
         Ok(self.dequantize(DType::F32)?.weight().clone())
     }
 
@@ -74,7 +74,7 @@ impl QuantMethod for FP8Linear {
             Some(handle) => {
                 let n_dims = x.dims().len();
                 if n_dims < 3 {
-                    candle_core::bail!(
+                    hanzo_ml::bail!(
                         "FP8Linear `matmul` via cuBLASlt expects `x` to have at least 3 dimensions"
                     );
                 }
@@ -144,7 +144,7 @@ impl QuantMethod for FP8Linear {
         })?))
     }
 
-    fn dtype_and_device(&self) -> (DType, candle_core::Device) {
+    fn dtype_and_device(&self) -> (DType, hanzo_ml::Device) {
         (DType::F8E4M3, self.lin.weight().device().clone())
     }
 
@@ -247,12 +247,12 @@ impl QuantizedSerde for FP8Linear {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(hanzo_ml::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Fp8 as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::Fp8 as usize
             );
@@ -296,12 +296,12 @@ impl QuantizedSerde for FP8Linear {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(hanzo_ml::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Fp8 as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::Fp8 as usize
             );

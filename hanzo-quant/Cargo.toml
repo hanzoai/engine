@@ -13,8 +13,8 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-candle-core.workspace = true
-candle-nn.workspace = true
+hanzo-ml.workspace = true
+hanzo-nn.workspace = true
 half.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -27,7 +27,7 @@ float8.workspace = true
 objc2-metal = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
 dispatch2 = { workspace = true, optional = true }
-candle-metal-kernels = { workspace = true, optional = true }
+hanzo-metal-kernels = { workspace = true, optional = true }
 thiserror.workspace = true
 yoke.workspace = true
 memmap2.workspace = true
@@ -38,22 +38,22 @@ tokio.workspace = true
 
 [features]
 cuda = [
-    "candle-core/cuda",
-    "candle-nn/cuda",
+    "hanzo-ml/cuda",
+    "hanzo-nn/cuda",
     "dep:cudaforge"
 ]
-nccl = ["cuda", "candle-core/nccl"]
-rocm = ["candle-core/rocm", "candle-nn/rocm"]
-vulkan = ["candle-core/vulkan", "candle-nn/vulkan"]
+nccl = ["cuda", "hanzo-ml/nccl"]
+rocm = ["hanzo-ml/rocm", "hanzo-nn/rocm"]
+vulkan = ["hanzo-ml/vulkan", "hanzo-nn/vulkan"]
 metal = [
-    "candle-core/metal",
-    "candle-nn/metal",
+    "hanzo-ml/metal",
+    "hanzo-nn/metal",
     "dep:objc2-metal",
     "dep:objc2-foundation",
     "dep:dispatch2",
-    "dep:candle-metal-kernels",
+    "dep:hanzo-metal-kernels",
 ]
-accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
+accelerate = ["hanzo-ml/accelerate", "hanzo-nn/accelerate"]
 arm-nightly-feat = []
 ring = []
 

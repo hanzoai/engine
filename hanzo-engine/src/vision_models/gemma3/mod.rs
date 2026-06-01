@@ -3,7 +3,7 @@
 use crate::attention::AttentionMask;
 use std::sync::{Arc, Mutex};
 
-use candle_core::{Context, DType, Device, Result, Tensor, D};
+use hanzo_ml::{Context, DType, Device, Result, Tensor, D};
 use config::Gemma3Config;
 use hanzo_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use mmproj::Gemma3MultiModalProjector;
@@ -199,7 +199,7 @@ impl IsqModel for Gemma3Model {
         }
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         self.language_model.imatrix_names()
     }
 }
@@ -221,7 +221,7 @@ impl MultimodalModel for Gemma3Model {
         model_specific_args: Box<dyn std::any::Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         let Gemma3SpecificArgs { image_hashes } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Gemma3SpecificArgs`");

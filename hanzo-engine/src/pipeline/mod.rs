@@ -103,7 +103,7 @@ use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 
 use anyhow::Result;
-use candle_core::{DType, Device, IndexOp, Tensor, Var};
+use hanzo_ml::{DType, Device, IndexOp, Tensor, Var};
 
 use crate::sequence::Sequence;
 
@@ -233,7 +233,7 @@ pub trait AnyMoePipelineMixin {
     fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
         unreachable!()
     }
-    fn amoe_finish_training(&mut self, _gate_model_id: Option<String>) -> candle_core::Result<()> {
+    fn amoe_finish_training(&mut self, _gate_model_id: Option<String>) -> hanzo_ml::Result<()> {
         unreachable!()
     }
     fn amoe_base_model_trainable_params(&self) -> usize {
@@ -262,7 +262,7 @@ pub trait AnyMoePipelineMixin {
         _expert_type: AnyMoeExpertType,
         _silent: bool,
         _gate_model_id: Option<String>,
-    ) -> candle_core::Result<()> {
+    ) -> hanzo_ml::Result<()> {
         unreachable!()
     }
     /// Pre-train the gating layers
@@ -276,7 +276,7 @@ pub trait AnyMoePipelineMixin {
         _revision: Option<String>,
         _layers: Vec<usize>,
         _silent: bool,
-    ) -> Result<Option<AnyMoeTrainingResult>, candle_core::Error> {
+    ) -> Result<Option<AnyMoeTrainingResult>, hanzo_ml::Error> {
         unreachable!()
     }
 }
@@ -381,7 +381,7 @@ pub enum ForwardInputsResult {
 }
 
 impl ForwardInputsResult {
-    fn index_bs(&self, bs_idx: usize) -> candle_core::Result<Self> {
+    fn index_bs(&self, bs_idx: usize) -> hanzo_ml::Result<Self> {
         match self {
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
                 logits: logits.i(bs_idx)?,
@@ -407,7 +407,7 @@ impl ForwardInputsResult {
         }
     }
 
-    fn to_device(&self, device: &Device) -> candle_core::Result<Self> {
+    fn to_device(&self, device: &Device) -> hanzo_ml::Result<Self> {
         match self {
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
                 logits: logits.to_device(device)?,
@@ -443,13 +443,13 @@ pub trait Pipeline:
         &mut self,
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
-    ) -> Result<ForwardInputsResult, candle_core::Error>;
+    ) -> Result<ForwardInputsResult, hanzo_ml::Error>;
 
     fn attach_speculative(
         &mut self,
         _config: crate::speculative::SpeculativeConfig,
-    ) -> Result<(), candle_core::Error> {
-        candle_core::bail!("This pipeline does not support speculative decoding attachment.")
+    ) -> Result<(), hanzo_ml::Error> {
+        hanzo_ml::bail!("This pipeline does not support speculative decoding attachment.")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -461,7 +461,7 @@ pub trait Pipeline:
         _disable_eos_stop: bool,
         _rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         _metadata: Option<PagedAttentionMeta>,
-    ) -> Result<bool, candle_core::Error> {
+    ) -> Result<bool, hanzo_ml::Error> {
         Ok(false)
     }
 
@@ -476,7 +476,7 @@ pub trait Pipeline:
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         backend_metadata: CacheBackendMetadata,
-    ) -> Result<Duration, candle_core::Error> {
+    ) -> Result<Duration, hanzo_ml::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
                 if !is_prompt && !return_raw_logits {
@@ -509,7 +509,7 @@ pub trait Pipeline:
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
-                    } = inputs.map_err(candle_core::Error::msg)?;
+                    } = inputs.map_err(hanzo_ml::Error::msg)?;
                     if i == 0 {
                         match pre_op {
                             CacheInstruction::In => self.clone_in_cache(input_seqs),
@@ -609,7 +609,7 @@ pub trait Pipeline:
                             Ok(l)
                         }
                     })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
+                    .collect::<hanzo_ml::Result<Vec<_>>>()?;
 
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. }
@@ -777,7 +777,7 @@ pub trait Pipeline:
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
-                    } = inputs.map_err(candle_core::Error::msg)?;
+                    } = inputs.map_err(hanzo_ml::Error::msg)?;
 
                     let start = Instant::now();
                     let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
@@ -846,7 +846,7 @@ pub trait Pipeline:
                             Ok(l)
                         }
                     })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
+                    .collect::<hanzo_ml::Result<Vec<_>>>()?;
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. }
                     | ForwardInputsResult::Embeddings { .. } => unreachable!(),
@@ -965,7 +965,7 @@ pub trait Pipeline:
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    ) -> Result<(), candle_core::Error>;
+    ) -> Result<(), hanzo_ml::Error>;
 
     fn category(&self) -> ModelCategory;
 
@@ -978,7 +978,7 @@ pub trait Pipeline:
 pub(crate) fn extract_logits(
     logits: &Tensor,
     context_lens: Vec<(usize, usize)>,
-) -> candle_core::Result<Tensor> {
+) -> hanzo_ml::Result<Tensor> {
     let mut toks = Vec::new();
     for (dim, (start, len)) in logits.chunk(logits.dims()[0], 0)?.iter().zip(context_lens) {
         toks.push(dim.narrow(1, start, len)?);

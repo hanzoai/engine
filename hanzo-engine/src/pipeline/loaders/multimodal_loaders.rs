@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::{fmt::Debug, str::FromStr};
 
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor, D};
-use candle_nn::Conv2dConfig;
+use hanzo_ml::{DType, Device, Tensor, D};
+use hanzo_nn::Conv2dConfig;
 use image::{ColorType, DynamicImage};
 use itertools::Itertools;
 use hanzo_quant::log::once_log_debug;
@@ -91,7 +91,7 @@ pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMi
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor>;
+    ) -> hanzo_ml::Result<Tensor>;
     fn device(&self) -> &Device;
     fn cache(&self) -> &EitherCache;
     fn cache_mut(&mut self) -> &mut EitherCache;

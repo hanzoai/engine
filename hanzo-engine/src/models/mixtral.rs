@@ -4,7 +4,7 @@
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{DType, Device, Module, Result, Tensor};
+use hanzo_ml::{DType, Device, Module, Result, Tensor};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -319,7 +319,7 @@ impl Module for SparseMoeBlock {
         let xs = xs.reshape(((), hidden_dim))?;
 
         let router_logits = self.gate.forward(&xs)?;
-        let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
+        let routing_weights = hanzo_nn::ops::softmax_last_dim(&router_logits)?;
 
         // In order to extract topk, we extract the data from the tensor and manipulate it
         // directly. Maybe we will want to use some custom ops instead at some point.
@@ -453,7 +453,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: hanzo_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -553,7 +553,7 @@ impl Model {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(
                     embed_tokens.embeddings(),
                     normal_loading_metadata.loading_isq,

@@ -1,5 +1,5 @@
-use candle_core::{IndexOp, Result, Tensor, D};
-use candle_nn::Module;
+use hanzo_ml::{IndexOp, Result, Tensor, D};
+use hanzo_nn::Module;
 use serde::Deserialize;
 
 /// Pooling layer
@@ -19,10 +19,10 @@ impl Module for Pooling {
     // https://github.com/huggingface/sentence-transformers/blob/85ec64559f4414aa536eca4bf53538291e0a333f/sentence_transformers/models/Pooling.py#L26
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         if !self.include_prompt {
-            candle_core::bail!("Only support include_prompt==true");
+            hanzo_ml::bail!("Only support include_prompt==true");
         }
         if xs.dim(D::Minus1)? != self.word_embedding_dimension {
-            candle_core::bail!("xs does not match the expected embedding dimension.");
+            hanzo_ml::bail!("xs does not match the expected embedding dimension.");
         }
 
         let mut outputs = Vec::new();

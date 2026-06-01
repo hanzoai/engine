@@ -1,4 +1,4 @@
-use candle_core::{CpuStorage, CustomOp2, DType, Result, Tensor, WithDType};
+use hanzo_ml::{CpuStorage, CustomOp2, DType, Result, Tensor, WithDType};
 use float8::F8E4M3;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
@@ -13,14 +13,14 @@ impl Fp8VectorDequantize {
         &self,
         weight: &[F8E4M3],
         scale: &[f32],
-        _weight_l: &candle_core::Layout,
-        scale_l: &candle_core::Layout,
-    ) -> candle_core::Result<Vec<T>> {
+        _weight_l: &hanzo_ml::Layout,
+        scale_l: &hanzo_ml::Layout,
+    ) -> hanzo_ml::Result<Vec<T>> {
         let num_elements = weight.len();
         let num_vectors = num_elements.div_ceil(VECTOR_SIZE);
 
         if scale.len() != num_vectors {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Scale length {} doesn't match expected number of vectors {}",
                 scale.len(),
                 num_vectors
@@ -56,22 +56,22 @@ impl CustomOp2 for Fp8VectorDequantize {
 
     fn cpu_fwd(
         &self,
-        scale_s: &candle_core::CpuStorage,
-        scale_l: &candle_core::Layout,
-        weight_s: &candle_core::CpuStorage,
-        weight_l: &candle_core::Layout,
-    ) -> candle_core::Result<(candle_core::CpuStorage, candle_core::Shape)> {
-        let candle_core::CpuStorage::F8E4M3(weight) = weight_s else {
-            candle_core::bail!("Expected F8E4M3 weight!");
+        scale_s: &hanzo_ml::CpuStorage,
+        scale_l: &hanzo_ml::Layout,
+        weight_s: &hanzo_ml::CpuStorage,
+        weight_l: &hanzo_ml::Layout,
+    ) -> hanzo_ml::Result<(hanzo_ml::CpuStorage, hanzo_ml::Shape)> {
+        let hanzo_ml::CpuStorage::F8E4M3(weight) = weight_s else {
+            hanzo_ml::bail!("Expected F8E4M3 weight!");
         };
-        let candle_core::CpuStorage::F32(scale) = scale_s else {
-            candle_core::bail!("Expected F32 scale!");
+        let hanzo_ml::CpuStorage::F32(scale) = scale_s else {
+            hanzo_ml::bail!("Expected F32 scale!");
         };
         if weight_l.start_offset() != 0 || !weight_l.is_contiguous() {
-            candle_core::bail!("Expected weight to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected weight to have start offset 0, continuous");
         }
         if scale_l.start_offset() != 0 || !scale_l.is_contiguous() {
-            candle_core::bail!("Expected scales to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected scales to have start offset 0, continuous");
         }
 
         match self.out_ty {
@@ -87,32 +87,32 @@ impl CustomOp2 for Fp8VectorDequantize {
                 CpuStorage::F16(self.dispatch_dequant_vector(weight, scale, weight_l, scale_l)?),
                 weight_l.shape().clone(),
             )),
-            other => candle_core::bail!("unexpected out type of fp8 vector dequant {other:?}"),
+            other => hanzo_ml::bail!("unexpected out type of fp8 vector dequant {other:?}"),
         }
     }
 
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
-        scale_s: &candle_core::CudaStorage,
-        scale_l: &candle_core::Layout,
-        weight_s: &candle_core::CudaStorage,
-        weight_l: &candle_core::Layout,
-    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
-        use candle_core::{backend::BackendStorage, CudaStorage};
+        scale_s: &hanzo_ml::CudaStorage,
+        scale_l: &hanzo_ml::Layout,
+        weight_s: &hanzo_ml::CudaStorage,
+        weight_l: &hanzo_ml::Layout,
+    ) -> Result<(hanzo_ml::CudaStorage, hanzo_ml::Shape)> {
+        use hanzo_ml::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
 
         use crate::{utils::slice_ptr, vector_fp8::ffi};
 
         if !ffi::HAVE_VECTOR_DEQUANT_KERNELS {
-            candle_core::bail!("Do not have vector FP8 dequant kernels.");
+            hanzo_ml::bail!("Do not have vector FP8 dequant kernels.");
         }
 
         if weight_l.start_offset() != 0 || !weight_l.is_contiguous() {
-            candle_core::bail!("Expected weight to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected weight to have start offset 0, continuous");
         }
         if scale_l.start_offset() != 0 || !scale_l.is_contiguous() {
-            candle_core::bail!("Expected scales to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected scales to have start offset 0, continuous");
         }
 
         let dev = weight_s.device();
@@ -169,7 +169,7 @@ impl CustomOp2 for Fp8VectorDequantize {
                 drop(output_guard);
                 CudaStorage::wrap_cuda_slice(output, dev.clone())
             }
-            other => candle_core::bail!("unexpected out type of fp8 vector dequant {other:?}"),
+            other => hanzo_ml::bail!("unexpected out type of fp8 vector dequant {other:?}"),
         };
 
         Ok((res, weight_l.shape().clone()))
@@ -178,18 +178,18 @@ impl CustomOp2 for Fp8VectorDequantize {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        scale_s: &candle_core::MetalStorage,
-        scale_l: &candle_core::Layout,
-        weight_s: &candle_core::MetalStorage,
-        weight_l: &candle_core::Layout,
-    ) -> Result<(candle_core::MetalStorage, candle_core::Shape)> {
-        use candle_core::backend::BackendStorage;
+        scale_s: &hanzo_ml::MetalStorage,
+        scale_l: &hanzo_ml::Layout,
+        weight_s: &hanzo_ml::MetalStorage,
+        weight_l: &hanzo_ml::Layout,
+    ) -> Result<(hanzo_ml::MetalStorage, hanzo_ml::Shape)> {
+        use hanzo_ml::backend::BackendStorage;
 
         if weight_l.start_offset() != 0 || !weight_l.is_contiguous() {
-            candle_core::bail!("Expected weight to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected weight to have start offset 0, continuous");
         }
         if scale_l.start_offset() != 0 || !scale_l.is_contiguous() {
-            candle_core::bail!("Expected scales to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected scales to have start offset 0, continuous");
         }
 
         let device = weight_s.device();
@@ -211,10 +211,10 @@ impl CustomOp2 for Fp8VectorDequantize {
             &output,
             num_elements,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
 
         let newstorage =
-            candle_core::MetalStorage::new(output, device.clone(), num_elements, self.out_ty);
+            hanzo_ml::MetalStorage::new(output, device.clone(), num_elements, self.out_ty);
         Ok((newstorage, out_shape))
     }
 }
@@ -235,7 +235,7 @@ pub fn fp8_vector_dequantize(
 fn cpu_vector_quantize<T: WithDType>(
     input: &[T],
     num_elements: usize,
-) -> candle_core::Result<(Vec<F8E4M3>, Vec<f32>)> {
+) -> hanzo_ml::Result<(Vec<F8E4M3>, Vec<f32>)> {
     let num_vectors = num_elements.div_ceil(VECTOR_SIZE);
 
     let weight = vec![F8E4M3::from_f32(0.0); num_elements];
@@ -304,7 +304,7 @@ fn cpu_fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
             let data = input.to_vec1::<half::bf16>()?;
             cpu_vector_quantize(&data, num_elements)?
         }
-        other => candle_core::bail!("unexpected input type for fp8 vector quant: {other:?}"),
+        other => hanzo_ml::bail!("unexpected input type for fp8 vector quant: {other:?}"),
     };
 
     // Create tensors from the raw data
@@ -324,7 +324,7 @@ pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
     // Check that tensor size is divisible by 128
     let num_elements = input.shape().elem_count();
     if !num_elements.is_multiple_of(VECTOR_SIZE) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Tensor size {} must be divisible by {} for vector FP8 quantization",
             num_elements,
             VECTOR_SIZE
@@ -332,25 +332,25 @@ pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
     }
 
     // Check if we should use CPU implementation
-    if matches!(input.device(), candle_core::Device::Cpu) {
+    if matches!(input.device(), hanzo_ml::Device::Cpu) {
         return cpu_fp8_vector_quantize(input);
     }
 
     #[cfg(feature = "cuda")]
     {
-        use candle_core::{CudaStorage, Device, Storage};
+        use hanzo_ml::{CudaStorage, Device, Storage};
         use half::{bf16, f16};
 
         use crate::{utils::slice_ptr, vector_fp8::ffi};
 
         if matches!(input.device(), Device::Cuda(_)) {
             if !ffi::HAVE_VECTOR_QUANT_KERNELS {
-                candle_core::bail!("Do not have vector FP8 quant kernels.");
+                hanzo_ml::bail!("Do not have vector FP8 quant kernels.");
             }
 
             let input_l = input.layout();
             if input_l.start_offset() != 0 || !input_l.is_contiguous() {
-                candle_core::bail!("Expected input to have start offset 0, continuous");
+                hanzo_ml::bail!("Expected input to have start offset 0, continuous");
             }
 
             let dev = match input.device() {
@@ -372,7 +372,7 @@ pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
                     let input_storage = input.storage_and_layout().0;
                     let input_s = match &*input_storage {
                         Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f32>()?,
-                        _ => candle_core::bail!("Expected CUDA storage"),
+                        _ => hanzo_ml::bail!("Expected CUDA storage"),
                     };
                     let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
                     unsafe {
@@ -389,7 +389,7 @@ pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
                     let input_storage = input.storage_and_layout().0;
                     let input_s = match &*input_storage {
                         Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
-                        _ => candle_core::bail!("Expected CUDA storage"),
+                        _ => hanzo_ml::bail!("Expected CUDA storage"),
                     };
                     let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
                     unsafe {
@@ -406,7 +406,7 @@ pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
                     let input_storage = input.storage_and_layout().0;
                     let input_s = match &*input_storage {
                         Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
-                        _ => candle_core::bail!("Expected CUDA storage"),
+                        _ => hanzo_ml::bail!("Expected CUDA storage"),
                     };
                     let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
                     unsafe {
@@ -420,7 +420,7 @@ pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
                     };
                 }
                 other => {
-                    candle_core::bail!("unexpected input type for fp8 vector quant: {other:?}")
+                    hanzo_ml::bail!("unexpected input type for fp8 vector quant: {other:?}")
                 }
             }
 
@@ -436,25 +436,25 @@ pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
             let scale_storage = CudaStorage::wrap_cuda_slice(scale_output, dev.clone());
             let scale = Tensor::from((
                 Storage::Cuda(scale_storage),
-                candle_core::Shape::from_dims(&[num_vectors]),
+                hanzo_ml::Shape::from_dims(&[num_vectors]),
             ));
 
             Ok((weight, scale))
         } else {
-            candle_core::bail!("Expected CUDA device.");
+            hanzo_ml::bail!("Expected CUDA device.");
         }
     }
 
     #[cfg(not(feature = "cuda"))]
     {
-        candle_core::bail!("FP8 vector quantization on non-CPU devices requires CUDA feature");
+        hanzo_ml::bail!("FP8 vector quantization on non-CPU devices requires CUDA feature");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::{DType, Device, Result, Tensor};
+    use hanzo_ml::{DType, Device, Result, Tensor};
 
     #[test]
     fn test_fp8_vector_dequant() -> Result<()> {

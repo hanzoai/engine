@@ -1,4 +1,4 @@
-use candle_core::{Result, Tensor};
+use hanzo_ml::{Result, Tensor};
 
 use super::{
     logging::log_attach, SpeculativeAttachInfo, SpeculativeConfig, SpeculativeProposalBatch,
@@ -12,7 +12,7 @@ pub trait SpeculativeTargetMixin {
     ) -> Result<Option<SpeculativeAttachInfo>> {
         match config {
             SpeculativeConfig::Off => Ok(None),
-            _ => candle_core::bail!("This model does not support speculative decoding."),
+            _ => hanzo_ml::bail!("This model does not support speculative decoding."),
         }
     }
 

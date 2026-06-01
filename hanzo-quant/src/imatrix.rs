@@ -7,7 +7,7 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use candle_core::{Context, DType, Device, Result, Tensor, D};
+use hanzo_ml::{Context, DType, Device, Result, Tensor, D};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
@@ -60,7 +60,7 @@ impl CollectedImatrixData {
     pub fn save_imatrix<P: AsRef<Path>>(&self, fname: P) -> Result<()> {
         if let Some(ext) = fname.as_ref().extension() {
             if ext != "cimatrix" {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Expected a .cimatrix file to save collectd imatrix data to, got {:?}",
                     ext
                 );
