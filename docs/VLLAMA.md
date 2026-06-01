@@ -25,11 +25,11 @@ The Rust SDK takes images from the [image](https://docs.rs/image/latest/image/in
 
 [UQFF](UQFF.md) is a quantized file format similar to GGUF based on ISQ. It removes the memory and compute requirements that come with ISQ by providing ready-made quantizations. The key advantage over GGUF is the flexibility to store multiple quantizations in one file.
 
-We provide UQFF files ([EricB/Llama-3.2-11B-Vision-Instruct-UQFF](https://huggingface.co/EricB/Llama-3.2-11B-Vision-Instruct-UQFF)) for this Llama 3.2 Vision model.
+We provide UQFF files ([hanzoai/Llama-3.2-11B-Vision-Instruct-UQFF](https://huggingface.co/hanzoai/Llama-3.2-11B-Vision-Instruct-UQFF)) for this Llama 3.2 Vision model.
 
 For example:
 ```bash
-hanzo run -m meta-llama/Llama-3.2-11B-Vision-Instruct --from-uqff EricB/Llama-3.2-11B-Vision-Instruct-UQFF/llama-3.2-11b-vision-q4k.uqff
+hanzo run -m meta-llama/Llama-3.2-11B-Vision-Instruct --from-uqff hanzoai/Llama-3.2-11B-Vision-Instruct-UQFF/llama-3.2-11b-vision-q4k.uqff
 ```
 
 ## HTTP API

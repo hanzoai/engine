@@ -5,7 +5,7 @@ sidebar:
   order: 12
 ---
 
-UQFF is the native mistral.rs quantized file format. To use UQFF models, see the [UQFF guide](/mistral.rs/guides/perf/use-uqff/); knowledge of the binary layout is not required.
+UQFF is the native hanzo quantized file format. To use UQFF models, see the [UQFF guide](/hanzo/guides/perf/use-uqff/); knowledge of the binary layout is not required.
 
 ## File structure
 
@@ -19,7 +19,7 @@ A loader is pointed at one or more shard files (`from_uqff`); the residual safet
 
 ## Sharded files
 
-The output path passed to mistral.rs must end in `.uqff`. The writer emits `<stem>-0.uqff`, `<stem>-1.uqff`, ... in the same directory, splitting by cumulative size with a soft cap of 10 GiB per shard.
+The output path passed to hanzo must end in `.uqff`. The writer emits `<stem>-0.uqff`, `<stem>-1.uqff`, ... in the same directory, splitting by cumulative size with a soft cap of 10 GiB per shard.
 
 ## Version compatibility
 

@@ -1,5 +1,5 @@
 """
-mistral.rs Python code executor.
+hanzo Python code executor.
 
 This script is embedded into the hanzo-code-exec Rust crate and runs as a
 persistent subprocess. It communicates with the Rust host via line-delimited
@@ -263,9 +263,9 @@ _FORMAT_MIME = {
 }
 
 
-# Max size of a declared output file we'll read into memory. Larger files become an error placeholder. Override via MISTRALRS_MAX_OUTPUT_BYTES.
+# Max size of a declared output file we'll read into memory. Larger files become an error placeholder. Override via HANZO_MAX_OUTPUT_BYTES.
 MAX_OUTPUT_BYTES = int(
-    os.environ.get("MISTRALRS_MAX_OUTPUT_BYTES", str(256 * 1024 * 1024))
+    os.environ.get("HANZO_MAX_OUTPUT_BYTES", str(256 * 1024 * 1024))
 )
 
 

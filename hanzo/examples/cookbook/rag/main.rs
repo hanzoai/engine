@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
     let documents = [
         "Rust is a systems programming language focused on safety, speed, and concurrency.",
         "Python is widely used for data science, machine learning, and scripting.",
-        "mistral.rs is a blazing-fast LLM inference engine written in Rust.",
+        "hanzo is a blazing-fast LLM inference engine written in Rust.",
         "The Eiffel Tower is a wrought-iron lattice tower in Paris, France.",
     ];
 
@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
     }
 
     // ---- Step 3: Embed the query and find the best match ----
-    let query = "What is mistral.rs?";
+    let query = "What is hanzo?";
     let query_emb = embed_model
         .generate_embeddings(EmbeddingRequest::builder().add_prompt(format!("query: {query}")))
         .await?;

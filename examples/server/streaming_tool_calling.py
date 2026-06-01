@@ -1,7 +1,7 @@
 """
 Streaming tool calling example.
 
-This demonstrates how to use streaming with tool calls in mistral.rs.
+This demonstrates how to use streaming with tool calls in hanzo.
 Tool calls are accumulated during streaming and sent in the final chunk
 with finish_reason="tool_calls".
 

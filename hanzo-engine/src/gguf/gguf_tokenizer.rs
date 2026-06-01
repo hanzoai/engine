@@ -173,7 +173,7 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
     };
 
     // Decoder + Normalizer config reference:
-    // https://github.com/EricLBuehler/mistral.rs/pull/389#discussion_r1630620763
+    // https://github.com/hanzoai/engine/pull/389#discussion_r1630620763
     let decoder = Decoder::Sequence(vec![
         Decoder::Replace("▁", " "),
         Decoder::ByteFallback,
@@ -202,7 +202,7 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
 
 fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
     // BPE merges have each string item as a space-delimited pair:
-    // https://github.com/EricLBuehler/mistral.rs/pull/397#discussion_r1631988370
+    // https://github.com/hanzoai/engine/pull/397#discussion_r1631988370
     let merges = p
         .merges
         .as_ref()
@@ -391,7 +391,7 @@ mod tests {
             TokenizerType::Llama => {
                 let api = ApiBuilder::new().with_progress(true).build().unwrap();
                 let api = api.repo(Repo::with_revision(
-                    "EricB/mistralrs_tests".to_string(),
+                    "hanzoai/mistralrs_tests".to_string(),
                     RepoType::Model,
                     "main".to_string(),
                 ));
@@ -403,7 +403,7 @@ mod tests {
             TokenizerType::Gpt2 => {
                 let api = ApiBuilder::new().with_progress(true).build().unwrap();
                 let api = api.repo(Repo::with_revision(
-                    "EricB/mistralrs_tests".to_string(),
+                    "hanzoai/mistralrs_tests".to_string(),
                     RepoType::Model,
                     "main".to_string(),
                 ));
@@ -421,7 +421,7 @@ mod tests {
             TokenizerType::Llama => {
                 let api = ApiBuilder::new().with_progress(true).build().unwrap();
                 let api = api.repo(Repo::with_revision(
-                    "EricB/mistralrs_tests".to_string(),
+                    "hanzoai/mistralrs_tests".to_string(),
                     RepoType::Model,
                     "main".to_string(),
                 ));
@@ -432,7 +432,7 @@ mod tests {
             TokenizerType::Gpt2 => {
                 let api = ApiBuilder::new().with_progress(true).build().unwrap();
                 let api = api.repo(Repo::with_revision(
-                    "EricB/mistralrs_tests".to_string(),
+                    "hanzoai/mistralrs_tests".to_string(),
                     RepoType::Model,
                     "main".to_string(),
                 ));

@@ -8,7 +8,7 @@ Qwen3-Coder-Next is a coding-focused language model using a hybrid Gated Delta N
 hanzo run --isq 4 -m Qwen/Qwen3-Coder-Next
 ```
 
-> Note: mistral.rs can load the [FP8 pre-quantized version](https://huggingface.co/Qwen/Qwen3-Coder-Next-FP8) natively! Simply replace the model ID.
+> Note: hanzo can load the [FP8 pre-quantized version](https://huggingface.co/Qwen/Qwen3-Coder-Next-FP8) natively! Simply replace the model ID.
 
 GGUF quantized models are also supported:
 
@@ -17,7 +17,7 @@ hanzo run --format gguf -m Qwen/Qwen3-Coder-Next-GGUF -f <filename>
 ```
 
 ## HTTP API
-You can find a more detailed example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_next.py).
+You can find a more detailed example [here](https://github.com/hanzoai/engine/blob/master/examples/server/qwen3_next.py).
 
 ```bash
 hanzo serve --isq 4 -p 1234 -m Qwen/Qwen3-Coder-Next
@@ -39,7 +39,7 @@ print(completion.choices[0].message.content)
 ```
 
 ## Python SDK
-You can find a more detailed example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_next.py).
+You can find a more detailed example [here](https://github.com/hanzoai/engine/blob/master/examples/python/qwen3_next.py).
 
 ```py
 from hanzo import Runner, Which, ChatCompletionRequest, Architecture
@@ -69,7 +69,7 @@ print(res.usage)
 ```
 
 ## Rust SDK
-You can find a more detailed example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/models/text_models/main.rs).
+You can find a more detailed example [here](https://github.com/hanzoai/engine/blob/master/hanzo/examples/models/text_models/main.rs).
 
 ```rust
 use anyhow::Result;

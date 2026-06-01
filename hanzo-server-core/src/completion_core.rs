@@ -38,7 +38,7 @@ pub(crate) fn handle_completion_error<R, S>(
     BaseCompletionResponder::InternalError(sanitized_error.into())
 }
 
-/// Helper function to convert from the OpenAI stop tokens to the mistral.rs
+/// Helper function to convert from the OpenAI stop tokens to the hanzo
 /// internal stop tokens.
 pub(crate) fn convert_stop_tokens(stop_seqs: Option<StopTokens>) -> Option<InternalStopTokens> {
     match stop_seqs {

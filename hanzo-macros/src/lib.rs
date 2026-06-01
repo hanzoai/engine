@@ -1,7 +1,7 @@
-//! Proc macros for ergonomic tool definition in mistral.rs
+//! Proc macros for ergonomic tool definition in hanzo
 //!
 //! This crate provides the `#[tool]` attribute macro for defining tools
-//! that can be used with the mistral.rs agentic loop.
+//! that can be used with the hanzo agentic loop.
 //!
 //! # Example
 //!
@@ -83,7 +83,7 @@ impl ParamArgs {
 /// The `#[tool]` attribute macro for defining tools.
 ///
 /// This macro transforms a regular Rust function into a tool that can be
-/// used with the mistral.rs agentic loop. It generates:
+/// used with the hanzo agentic loop. It generates:
 ///
 /// - `{fn_name}_tool()` - Returns the `Tool` definition
 /// - `{fn_name}_callback()` - Returns an `Arc<ToolCallback>` that wraps the function

@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-Sessions on the HTTP server are keyed by session id and persist message history, tool-call records, images, and (when applicable) the Python code-execution subprocess. See the [persist-sessions guide](/mistral.rs/guides/agents/persist-sessions/) for the underlying behavior.
+Sessions on the HTTP server are keyed by session id and persist message history, tool-call records, images, and (when applicable) the Python code-execution subprocess. See the [persist-sessions guide](/hanzo/guides/agents/persist-sessions/) for the underlying behavior.
 
 ## In-process with Runner
 
