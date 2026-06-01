@@ -1,0 +1,3 @@
+[submodule "hanzo-zen5/zen5-engine-src"]
+	path = hanzo-zen5/zen5-engine-src
+	url = https://github.com/zenlm/zen5-engine
