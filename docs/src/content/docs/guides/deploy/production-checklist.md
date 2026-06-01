@@ -9,7 +9,7 @@ Use this page when a `hanzo serve` deployment will receive traffic from users or
 
 ## Baseline server shape
 
-Run the inference process behind a proxy and bind mistral.rs to loopback unless the host network is already private:
+Run the inference process behind a proxy and bind hanzo to loopback unless the host network is already private:
 
 ```bash
 hanzo serve --host 127.0.0.1 --port 8080 --quant 4 -m <model>
@@ -25,9 +25,9 @@ Use `hanzo tune -m <model>` on the target host before selecting quantization, co
 
 ## Authentication and TLS
 
-mistral.rs has no built-in authentication. Run behind a reverse proxy (nginx, Caddy, Traefik) terminating TLS and validating credentials.
+hanzo has no built-in authentication. Run behind a reverse proxy (nginx, Caddy, Traefik) terminating TLS and validating credentials.
 
-`Authorization: Bearer ...` from OpenAI clients is not validated by mistral.rs. The proxy is the component that interprets it.
+`Authorization: Bearer ...` from OpenAI clients is not validated by hanzo. The proxy is the component that interprets it.
 
 ## Body limit and CORS
 
@@ -42,7 +42,7 @@ For multi-model serving, readiness should check the specific model id required b
 
 ## Logging
 
-By default, the CLI shows curated `INFO` startup logs from mistral.rs and warnings from dependencies. Use `-v` for debug details, `-vv` for trace-level file/cache internals, or `RUST_LOG` for an explicit filter.
+By default, the CLI shows curated `INFO` startup logs from hanzo and warnings from dependencies. Use `-v` for debug details, `-vv` for trace-level file/cache internals, or `RUST_LOG` for an explicit filter.
 
 ```bash
 hanzo serve -v -m <model>
@@ -63,4 +63,4 @@ Sessions are in-memory with a 30-minute idle TTL and 128-entry capacity. They do
 
 ## Multi-model
 
-For multi-model serving, use `hanzo from-config -f config.toml` with `[[models]]` entries. See [running multiple models](/mistral.rs/guides/serve/multiple-models/).
+For multi-model serving, use `hanzo from-config -f config.toml` with `[[models]]` entries. See [running multiple models](/hanzo/guides/serve/multiple-models/).

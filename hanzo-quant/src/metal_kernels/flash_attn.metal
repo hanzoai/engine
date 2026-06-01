@@ -588,7 +588,7 @@ kernel void kernel_flash_attn_ext_bf16_dk512_dv512(
     if (iq1 + j >= args.ne01)
       break;
 
-    // mistralrs output layout is [b, n_heads, q_seq, DV] (heads before
+    // hanzo output layout is [b, n_heads, q_seq, DV] (heads before
     // tokens). ggml's FA writes [b, tokens, heads, DV]; swap the iq2 and
     // (iq1+j) factors to land in the right slot here.
     device bfloat4 *dst4 =
@@ -621,7 +621,7 @@ kernel void kernel_flash_attn_ext_bf16_dk512_dv512(
 //   NE = 2: each simdgroup handles 2 K cols per pass; threads-per-K = 16.
 //   Per-thread O accumulator holds DV4/NL = 128/16 = 8 bfloat4 lanes.
 // NSG (simdgroups per threadgroup) is set via threads_per_threadgroup.y at
-// dispatch time. Output layout: [b, n_heads, q_seq, DV] (mistralrs convention;
+// dispatch time. Output layout: [b, n_heads, q_seq, DV] (hanzo convention;
 // llama's iq2 vs (iq1+j) factors are swapped here, same fix as the prefill
 // kernel above).
 kernel void kernel_flash_attn_ext_vec_bf16_dk512_dv512(
@@ -833,7 +833,7 @@ kernel void kernel_flash_attn_ext_vec_bf16_dk512_dv512(
     threadgroup_barrier(mem_flags::mem_threadgroup);
   }
 
-  // Final write. Output layout [b, n_heads, q_seq, DV] (mistralrs convention).
+  // Final write. Output layout [b, n_heads, q_seq, DV] (hanzo convention).
   if (sgitg == 0) {
     const float S = ss[0];
     const float inv = (S == 0.0f) ? 0.0f : (1.0f / S);

@@ -50,9 +50,9 @@ print(response.choices[0].message.content)
 
 Run with `python hello.py`. The first run downloads the weights into the Hugging Face cache.
 
-[`Runner`](/mistral.rs/reference/python/runner/) owns the loaded model. Construction loads the weights; reuse one `Runner` for the lifetime of the process to avoid reloading.
+[`Runner`](/hanzo/reference/python/runner/) owns the loaded model. Construction loads the weights; reuse one `Runner` for the lifetime of the process to avoid reloading.
 
-[`Which`](/mistral.rs/reference/python/which/) selects the model loader. `Which.Plain(model_id="...")` is correct for standard text models. Other variants exist for multimodal models (`Which.MultimodalPlain`), GGUF checkpoints (`Which.GGUF`), and LoRA adapters (`Which.Lora`).
+[`Which`](/hanzo/reference/python/which/) selects the model loader. `Which.Plain(model_id="...")` is correct for standard text models. Other variants exist for multimodal models (`Which.MultimodalPlain`), GGUF checkpoints (`Which.GGUF`), and LoRA adapters (`Which.Lora`).
 
 `in_situ_quant="4"` is the equivalent of the CLI's `--isq 4`. It quantizes weights to 4 bits at load time. Omit it for full precision.
 
@@ -92,10 +92,10 @@ The Runner keeps the model in memory for the process lifetime. Requests can be s
 
 Chat history is not tracked. Each call to `send_chat_completion_request` is independent. Multi-turn conversation requires assembling the `messages` list manually, appending each new user question and prior assistant reply.
 
-The full Python surface (embeddings, speech, image generation, multimodal requests) is documented in the [Python reference](/mistral.rs/reference/python/).
+The full Python surface (embeddings, speech, image generation, multimodal requests) is documented in the [Python reference](/hanzo/reference/python/).
 
 ## Next steps
 
-- [Tutorial 4](/mistral.rs/tutorials/04-rust-sdk/): the equivalent flow from Rust.
-- [Tutorial 5](/mistral.rs/tutorials/05-build-an-agent/): add tool calling, web search, and code execution.
-- The [Python SDK guides](/mistral.rs/guides/python/streaming/) cover async streaming, multimodal input, and persistent agent sessions.
+- [Tutorial 4](/hanzo/tutorials/04-rust-sdk/): the equivalent flow from Rust.
+- [Tutorial 5](/hanzo/tutorials/05-build-an-agent/): add tool calling, web search, and code execution.
+- The [Python SDK guides](/hanzo/guides/python/streaming/) cover async streaming, multimodal input, and persistent agent sessions.

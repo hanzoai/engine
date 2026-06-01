@@ -62,4 +62,4 @@ runner = Runner(which=Which.MultimodalPlain(
 
 ## Further reading
 
-The MatFormer paper is linked from the mistral.rs README. Gemma 3n's model card documents its specific MatFormer configuration.
+The MatFormer paper is linked from the hanzo README. Gemma 3n's model card documents its specific MatFormer configuration.

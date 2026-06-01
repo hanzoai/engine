@@ -58,5 +58,5 @@ At the end of a successful agentic turn, the expanded message list is written ba
 
 ## See also
 
-- Guide: [persist sessions](/mistral.rs/guides/agents/persist-sessions/).
-- Reference: [HTTP API `/v1/sessions/{id}`](/mistral.rs/reference/http-api/).
+- Guide: [persist sessions](/hanzo/guides/agents/persist-sessions/).
+- Reference: [HTTP API `/v1/sessions/{id}`](/hanzo/reference/http-api/).

@@ -17,31 +17,31 @@ User-facing environment variables read by `hanzo` or its build scripts. Standard
 | `HF_HUB_TOKEN` | Auth token fallback when `HF_TOKEN` is not set. |
 | `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` (or `true`/`yes`/`on`) disables all network calls to the Hugging Face Hub. Files and repo listings are served from `$HF_HUB_CACHE`/`$HF_HOME/hub` only; missing files fail fast with a clear error. The `hanzo doctor` connectivity check is also skipped. |
 
-If `--token-source env:NAME` is used, mistral.rs reads the environment variable named by `NAME` as the token source.
+If `--token-source env:NAME` is used, hanzo reads the environment variable named by `NAME` as the token source.
 
 ### Fully offline operation
 
-Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Face Hub. mistral.rs will only resolve files from the local cache (`$HF_HUB_CACHE`, falling back to `$HF_HOME/hub`, falling back to `~/.cache/huggingface/hub`). Pre-download the model on a machine with network access (e.g. with `huggingface-cli download <repo>` or by running mistral.rs once online), then launch with `HF_HUB_OFFLINE=1`. A local model path (`-m /path/to/dir`) always reads from disk and never hits the network, so it works in offline mode without any cache lookup.
+Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Face Hub. hanzo will only resolve files from the local cache (`$HF_HUB_CACHE`, falling back to `$HF_HOME/hub`, falling back to `~/.cache/huggingface/hub`). Pre-download the model on a machine with network access (e.g. with `huggingface-cli download <repo>` or by running hanzo once online), then launch with `HF_HUB_OFFLINE=1`. A local model path (`-m /path/to/dir`) always reads from disk and never hits the network, so it works in offline mode without any cache lookup.
 
 ## Logging
 
 | Variable | Purpose |
 |---|---|
 | `RUST_LOG` | Override the `tracing` log filter. Examples: `hanzo_engine=debug,tower_http=info`, `trace`. CLI users can usually use `-v` or `-vv` instead. |
-| `MISTRALRS_DEBUG` | `MISTRALRS_DEBUG=1` enables extra debug-level engine tracing. |
+| `HANZO_DEBUG` | `HANZO_DEBUG=1` enables extra debug-level engine tracing. |
 
 ## Quantization and loading
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_NO_MMAP` | `MISTRALRS_NO_MMAP=1` loads safetensors without mmap. |
-| `MISTRALRS_ISQ_SINGLETHREAD` | If set, runs ISQ quantization single-threaded. |
+| `HANZO_NO_MMAP` | `HANZO_NO_MMAP=1` loads safetensors without mmap. |
+| `HANZO_ISQ_SINGLETHREAD` | If set, runs ISQ quantization single-threaded. |
 
 ## Sandbox
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_SANDBOX` | `auto`, `on`, or `off`. Overrides the sandbox only when the resolved mode is `auto`; `on` and `off` in CLI/TOML win. See [sandbox reference](/mistral.rs/reference/sandbox/). |
+| `HANZO_SANDBOX` | `auto`, `on`, or `off`. Overrides the sandbox only when the resolved mode is `auto`; `on` and `off` in CLI/TOML win. See [sandbox reference](/hanzo/reference/sandbox/). |
 
 ## Server and UI
 
@@ -56,28 +56,28 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_NO_MLA` | `MISTRALRS_NO_MLA=1` disables the MLA-specific attention path for DeepSeek V2/V3. Generic attention is used instead. |
+| `HANZO_NO_MLA` | `HANZO_NO_MLA=1` disables the MLA-specific attention path for DeepSeek V2/V3. Generic attention is used instead. |
 
 ## Multi-GPU and multi-node
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_NO_NCCL` | `MISTRALRS_NO_NCCL=1` disables NCCL. Falls back to the ring backend. |
-| `MISTRALRS_MN_GLOBAL_WORLD_SIZE` | Total world size across nodes. Presence of this variable enables multi-node mode. |
-| `MISTRALRS_MN_LOCAL_WORLD_SIZE` | Local TP size override on a single node. |
-| `MISTRALRS_MN_HEAD_NUM_WORKERS` | Set on the head node: number of worker nodes. |
-| `MISTRALRS_MN_HEAD_PORT` | Set on the head node: listening port for worker connections. |
-| `MISTRALRS_MN_WORKER_SERVER_ADDR` | Set on worker nodes: address of the head node. |
-| `MISTRALRS_MN_WORKER_ID` | Set on worker nodes: worker index (0-based). |
+| `HANZO_NO_NCCL` | `HANZO_NO_NCCL=1` disables NCCL. Falls back to the ring backend. |
+| `HANZO_MN_GLOBAL_WORLD_SIZE` | Total world size across nodes. Presence of this variable enables multi-node mode. |
+| `HANZO_MN_LOCAL_WORLD_SIZE` | Local TP size override on a single node. |
+| `HANZO_MN_HEAD_NUM_WORKERS` | Set on the head node: number of worker nodes. |
+| `HANZO_MN_HEAD_PORT` | Set on the head node: listening port for worker connections. |
+| `HANZO_MN_WORKER_SERVER_ADDR` | Set on worker nodes: address of the head node. |
+| `HANZO_MN_WORKER_ID` | Set on worker nodes: worker index (0-based). |
 | `RING_CONFIG` | Path to the ring backend JSON config. Presence of this variable enables the ring backend when built with the `ring` feature. |
 
-See the [multi-machine ring guide](/mistral.rs/guides/perf/multi-machine-ring/) for use.
+See the [multi-machine ring guide](/hanzo/guides/perf/multi-machine-ring/) for use.
 
 ## GPU memory
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_IGPU_MEMORY_FRACTION` | Fraction of integrated GPU memory usable on CUDA systems with iGPUs. Default 0.75. |
+| `HANZO_IGPU_MEMORY_FRACTION` | Fraction of integrated GPU memory usable on CUDA systems with iGPUs. Default 0.75. |
 
 ## Build-time
 
@@ -85,9 +85,9 @@ These are read by build scripts, not at runtime.
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_METAL_PRECOMPILE` | `MISTRALRS_METAL_PRECOMPILE=0` skips Metal kernel precompilation at build time; kernels are compiled at runtime on first use. |
+| `HANZO_METAL_PRECOMPILE` | `HANZO_METAL_PRECOMPILE=0` skips Metal kernel precompilation at build time; kernels are compiled at runtime on first use. |
 | `CUDA_NVCC_FLAGS` | Extra compiler options passed to CUDA builds. |
-| `MISTRALRS_GIT_REVISION` | Git revision embedded in the binary by the build script. |
+| `HANZO_GIT_REVISION` | Git revision embedded in the binary by the build script. |
 
 ## Internal
 
@@ -95,4 +95,4 @@ Not intended for direct use.
 
 | Variable | Purpose |
 |---|---|
-| `__MISTRALRS_DAEMON_INTERNAL` | Set by the engine on spawned worker processes. |
+| `__HANZO_DAEMON_INTERNAL` | Set by the engine on spawned worker processes. |

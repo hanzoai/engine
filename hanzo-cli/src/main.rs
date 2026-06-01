@@ -1,4 +1,4 @@
-//! hanzo-cli - Clean command-line interface for mistral.rs
+//! hanzo-cli - Clean command-line interface for hanzo
 //!
 //! A new CLI design with:
 //! - Orthogonal flags (format, adapter, modality are independent)
@@ -22,7 +22,7 @@ use commands::{
     run_login, run_quantize, run_server, run_tune, BenchRunConfig,
 };
 
-const MISTRALRS_LOG_TARGETS: &[&str] = &[
+const HANZO_LOG_TARGETS: &[&str] = &[
     "hanzo",
     "hanzo_audio",
     "hanzo_code_exec",
@@ -175,7 +175,7 @@ fn default_filter(verbose: u8) -> EnvFilter {
         1 => ("warn", "debug"),
         _ => ("warn,hf_hub=info", "trace"),
     };
-    MISTRALRS_LOG_TARGETS
+    HANZO_LOG_TARGETS
         .iter()
         .fold(EnvFilter::new(base), |filter, target| {
             filter.add_directive(

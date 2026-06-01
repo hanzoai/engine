@@ -1,4 +1,4 @@
-//! ## General mistral.rs server route handlers.
+//! ## General hanzo server route handlers.
 
 use anyhow::Result;
 use axum::extract::Path;

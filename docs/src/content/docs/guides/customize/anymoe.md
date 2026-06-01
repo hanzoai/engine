@@ -23,4 +23,4 @@ Use `AnyMoeModelBuilder` from the `hanzo` crate. Working examples live in `examp
 
 Expert checkpoints must share the base model architecture. A small calibration dataset is required to train the per-routed-module router.
 
-For the underlying technique and tradeoffs, the AnyMoE paper is linked from the mistral.rs README.
+For the underlying technique and tradeoffs, the AnyMoE paper is linked from the hanzo README.

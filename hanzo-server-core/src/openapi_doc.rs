@@ -28,12 +28,12 @@ use hanzo_engine::{
 };
 
 /// This is used to generate the OpenAPI docs.
-/// The mistral.rs server router will include these by default, but if you're
-/// including the mistral.rs server core into another project, you can generate the
+/// The hanzo server router will include these by default, but if you're
+/// including the hanzo server core into another project, you can generate the
 /// OpenAPI docs separately to merge with the other project OpenAPI docs.
 ///
 /// ### Arguments
-/// * `base_path` - the base path of the mistral.rs server instance (in case the mistral.rs server is being included in another axum project)
+/// * `base_path` - the base path of the hanzo server instance (in case the hanzo server is being included in another axum project)
 ///
 /// ### Example
 /// ```ignore

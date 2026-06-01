@@ -1,4 +1,4 @@
-// Selective SSM (Mamba-2 style) Metal kernel for mistral.rs
+// Selective SSM (Mamba-2 style) Metal kernel for hanzo
 // Ported from CUDA kernel in cuda/ssm.cu
 //
 // This kernel implements the selective scan operation:

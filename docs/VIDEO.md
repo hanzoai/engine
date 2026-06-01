@@ -1,6 +1,6 @@
 # Video Input Support
 
-mistral.rs supports video input for compatible multimodal models. Videos are decoded into frames and passed through the model's vision encoder alongside any image or audio inputs.
+hanzo supports video input for compatible multimodal models. Videos are decoded into frames and passed through the model's vision encoder alongside any image or audio inputs.
 
 **Supported models:** Gemma 4
 

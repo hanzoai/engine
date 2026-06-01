@@ -7,7 +7,7 @@ sidebar:
 
 Before debugging setup issues, run `hanzo doctor`. It reports detected hardware, compiled accelerator features, and Hugging Face connectivity.
 
-For unlisted issues, file an issue on [GitHub](https://github.com/EricLBuehler/mistral.rs/issues) with a reproducer.
+For unlisted issues, file an issue on [GitHub](https://github.com/hanzoai/engine/issues) with a reproducer.
 
 ## Installation and build
 

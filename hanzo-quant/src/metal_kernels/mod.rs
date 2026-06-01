@@ -75,7 +75,7 @@ impl Kernels {
 
     /// Load the library from precompiled metallib, falling back to runtime compilation if needed.
     /// If this has been previously loaded it will just fetch it from cache.
-    #[allow(clippy::const_is_empty)] // KERNELS can be empty when MISTRALRS_METAL_PRECOMPILE=0
+    #[allow(clippy::const_is_empty)] // KERNELS can be empty when HANZO_METAL_PRECOMPILE=0
     pub fn load_library(&self, device: &Device) -> Result<Library, MetalKernelError> {
         if let Some(lib) = LIBRARY.get() {
             Ok(lib.clone())
@@ -85,7 +85,7 @@ impl Kernels {
                 // Load precompiled metallib directly from embedded bytes via DispatchData.
                 // This avoids writing to a temp file, which can fail in sandboxed
                 // environments (e.g. macOS apps distributed via TestFlight).
-                // https://github.com/EricLBuehler/mistral.rs/issues/1897
+                // https://github.com/hanzoai/engine/issues/1897
                 let data = dispatch2::DispatchData::from_static_bytes(KERNELS);
 
                 let raw_lib = device
@@ -99,7 +99,7 @@ impl Kernels {
                 Library::new(raw_lib)
             } else {
                 // Fall back to runtime compilation if precompiled lib is not available
-                // (e.g., when MISTRALRS_METAL_PRECOMPILE=0)
+                // (e.g., when HANZO_METAL_PRECOMPILE=0)
                 self.compile_kernels_at_runtime(device)?
             };
             Ok(LIBRARY.get_or_init(|| lib).clone())

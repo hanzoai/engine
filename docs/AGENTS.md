@@ -1,6 +1,6 @@
 # Agentic Features Guide
 
-mistral.rs can execute tools on behalf of the model in a server-side loop, eliminating client round-trips. This guide walks through each agentic capability from simplest to most advanced.
+hanzo can execute tools on behalf of the model in a server-side loop, eliminating client round-trips. This guide walks through each agentic capability from simplest to most advanced.
 
 Give a local model web search in one command:
 ```bash
@@ -99,7 +99,7 @@ Agentic features work with any model that supports tool calling. See [TOOL_CALLI
 
 ## Web Search
 
-The simplest agentic feature: flip one flag and the model can search the web. mistral.rs uses DuckDuckGo for search and [EmbeddingGemma](https://huggingface.co/google/embeddinggemma-300m) for result reranking. No tool schemas needed from the user; the search tools are injected automatically.
+The simplest agentic feature: flip one flag and the model can search the web. hanzo uses DuckDuckGo for search and [EmbeddingGemma](https://huggingface.co/google/embeddinggemma-300m) for result reranking. No tool schemas needed from the user; the search tools are injected automatically.
 
 ### Enabling web search
 
@@ -758,7 +758,7 @@ Per-request values override the server default.
 
 ### Grammar enforcement and strict mode
 
-When tools are provided, mistral.rs automatically constrains output to valid tool call syntax using [llguidance](https://github.com/guidance-ai/llguidance). No configuration needed.
+When tools are provided, hanzo automatically constrains output to valid tool call syntax using [llguidance](https://github.com/guidance-ai/llguidance). No configuration needed.
 
 For stricter argument validation, set `"strict": true` on the function definition. This enforces the tool's JSON schema on the generated arguments: only declared property names, correct types, valid enum values, and required fields. See [TOOL_CALLING.md](TOOL_CALLING.md#strict-mode) for details.
 
@@ -809,20 +809,20 @@ hanzo serve -p 1234 \
 ### Examples
 
 **Rust SDK:**
-- [Agent (non-streaming)](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/agent/main.rs)
-- [Agent (streaming)](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/agent_streaming/main.rs)
-- [Tool callbacks](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/tool_callback/main.rs)
-- [Web search](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/web_search/main.rs)
-- [Custom search callback](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/search_callback/main.rs)
-- [MCP client](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/mcp_client/main.rs)
+- [Agent (non-streaming)](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/agent/main.rs)
+- [Agent (streaming)](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/agent_streaming/main.rs)
+- [Tool callbacks](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/tool_callback/main.rs)
+- [Web search](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/web_search/main.rs)
+- [Custom search callback](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/search_callback/main.rs)
+- [MCP client](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/mcp_client/main.rs)
 
 **Python SDK:**
-- [Agentic tools (callbacks)](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/agentic_tools.py)
-- [Web search](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/web_search.py)
-- [Custom search callback](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_search.py)
-- [MCP client](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/mcp_client.py)
+- [Agentic tools (callbacks)](https://github.com/hanzoai/engine/blob/master/examples/python/agentic_tools.py)
+- [Web search](https://github.com/hanzoai/engine/blob/master/examples/python/web_search.py)
+- [Custom search callback](https://github.com/hanzoai/engine/blob/master/examples/python/custom_search.py)
+- [MCP client](https://github.com/hanzoai/engine/blob/master/examples/python/mcp_client.py)
 
 **HTTP API:**
-- [Basic tool calling](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/tool_calling.py)
-- [Tool dispatch URL](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/tool_dispatch.py)
-- [Agentic tool rounds](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/agentic_tool_rounds.py)
+- [Basic tool calling](https://github.com/hanzoai/engine/blob/master/examples/server/tool_calling.py)
+- [Tool dispatch URL](https://github.com/hanzoai/engine/blob/master/examples/server/tool_dispatch.py)
+- [Agentic tool rounds](https://github.com/hanzoai/engine/blob/master/examples/server/agentic_tool_rounds.py)

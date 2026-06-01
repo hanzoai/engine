@@ -98,7 +98,7 @@ pub async fn send_request_with_model(
 ) -> Result<()> {
     let sender = state
         .get_sender(model_id)
-        .context("mistral.rs sender not available.")?;
+        .context("hanzo sender not available.")?;
 
     sender
         .send(request)

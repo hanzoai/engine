@@ -96,7 +96,7 @@ fn main() -> Result<(), String> {
         };
         builder = builder.exclude(&excluded_files);
 
-        // https://github.com/EricLBuehler/mistral.rs/issues/286
+        // https://github.com/hanzoai/engine/issues/286
         if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
             builder = builder.arg("--compiler-options");
             builder = builder.arg(cuda_nvcc_flags_env);
@@ -104,7 +104,7 @@ fn main() -> Result<(), String> {
 
         let target = std::env::var("TARGET").unwrap();
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-        // https://github.com/EricLBuehler/mistral.rs/issues/588
+        // https://github.com/hanzoai/engine/issues/588
         let out_file = if target.contains("msvc") {
             // Windows case
             build_dir.join("hanzoquant.lib")
@@ -178,15 +178,15 @@ fn main() -> Result<(), String> {
         println!("cargo::rerun-if-changed=build.rs");
 
         // Check if precompilation should be skipped
-        // https://github.com/EricLBuehler/mistral.rs/pull/1311#issuecomment-3001309885
-        println!("cargo:rerun-if-env-changed=MISTRALRS_METAL_PRECOMPILE");
-        let skip_precompile = env::var("MISTRALRS_METAL_PRECOMPILE")
+        // https://github.com/hanzoai/engine/pull/1311#issuecomment-3001309885
+        println!("cargo:rerun-if-env-changed=HANZO_METAL_PRECOMPILE");
+        let skip_precompile = env::var("HANZO_METAL_PRECOMPILE")
             .map(|v| v == "0" || v.to_lowercase() == "false")
             .unwrap_or(false);
 
         if skip_precompile {
             println!(
-                "cargo:warning=Skipping Metal kernel precompilation (MISTRALRS_METAL_PRECOMPILE=0)"
+                "cargo:warning=Skipping Metal kernel precompilation (HANZO_METAL_PRECOMPILE=0)"
             );
             // Write a dummy metallib file to satisfy the include_bytes! macro
             let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
@@ -214,7 +214,7 @@ fn main() -> Result<(), String> {
             fn metal_std(&self) -> &str {
                 // Use Metal 3.1 unified standard for all platforms.
                 // This fixes Xcode 26+ where the default Metal standard may be too low.
-                // https://github.com/EricLBuehler/mistral.rs/issues/1844
+                // https://github.com/hanzoai/engine/issues/1844
                 //
                 // Note: tvOS devices with A15+ (Apple TV 4K 3rd gen) support Metal 3.1.
                 match self {

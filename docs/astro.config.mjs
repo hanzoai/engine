@@ -1,21 +1,21 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
-// Deployed at https://ericlbuehler.github.io/mistral.rs/
-// Adjust `site` + `base` if we move to docs.mistral.rs.
+// Deployed at https://hanzoai.github.io/engine/
+// Adjust `site` + `base` if we move to docs.hanzo.
 export default defineConfig({
-  site: 'https://ericlbuehler.github.io',
-  base: '/mistral.rs',
+  site: 'https://hanzoai.github.io',
+  base: '/hanzo',
   integrations: [
     starlight({
-      title: 'mistral.rs',
+      title: 'hanzo',
       description: 'Fast, flexible LLM inference engine written in Rust.',
       social: [
-        { icon: 'github', label: 'GitHub', href: 'https://github.com/EricLBuehler/mistral.rs' },
+        { icon: 'github', label: 'GitHub', href: 'https://github.com/hanzoai/engine' },
         { icon: 'discord', label: 'Discord', href: 'https://discord.gg/SZrecqK8qw' },
       ],
       editLink: {
-        baseUrl: 'https://github.com/EricLBuehler/mistral.rs/edit/master/docs/',
+        baseUrl: 'https://github.com/hanzoai/engine/edit/master/docs/',
       },
       sidebar: [
         {

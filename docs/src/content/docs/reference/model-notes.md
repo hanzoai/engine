@@ -29,11 +29,11 @@ sidebar:
 
 ## Phi 3.5 MoE
 
-**MoE routing.** Phi 3.5 MoE routes per-token to experts. Outputs for the same seed vary across quantization levels due to router sensitivity to numerical noise. See the [explanation on quantization tradeoffs](/mistral.rs/explanation/quantization-tradeoffs/).
+**MoE routing.** Phi 3.5 MoE routes per-token to experts. Outputs for the same seed vary across quantization levels due to router sensitivity to numerical noise. See the [explanation on quantization tradeoffs](/hanzo/explanation/quantization-tradeoffs/).
 
 ## Gemma 3n
 
-**MatFormer slice.** Gemma 3n is MatFormer-trained. Select a size variant with `--matformer-config-path` and `--matformer-slice-name` (or the matching SDK/TOML fields). Without configuration, the default slice loads. See the [MatFormer guide](/mistral.rs/guides/customize/matformer/).
+**MatFormer slice.** Gemma 3n is MatFormer-trained. Select a size variant with `--matformer-config-path` and `--matformer-slice-name` (or the matching SDK/TOML fields). Without configuration, the default slice loads. See the [MatFormer guide](/hanzo/guides/customize/matformer/).
 
 ## Llama 4
 
@@ -47,4 +47,4 @@ sidebar:
 
 ## Reporting issues
 
-File an issue on [GitHub](https://github.com/EricLBuehler/mistral.rs/issues), with a reproducer when possible.
+File an issue on [GitHub](https://github.com/hanzoai/engine/issues), with a reproducer when possible.

@@ -15,7 +15,7 @@ pub fn make_pixel_mask(image: &Tensor, h: usize, w: usize) -> Result<Tensor> {
     let (_c, max_h, max_w) = image.dims3()?;
     let mask = Tensor::ones((h, w), image.dtype(), image.device())?;
     let zeros = Tensor::zeros((max_h, max_w), image.dtype(), image.device())?;
-    // TODO(EricLBuehler): https://github.com/huggingface/candle/pull/2223 will make this nicer
+    // TODO(hanzoai): https://github.com/hanzoai/ml/pull/2223 will make this nicer
     zeros.slice_assign(&[0..h, 0..w], &mask)
 }
 

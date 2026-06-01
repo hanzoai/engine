@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Example of using GPT-OSS model with mistral.rs
+Example of using GPT-OSS model with hanzo
 
 GPT-OSS is a Mixture of Experts model with MXFP4 quantized experts
 and custom attention with per-head sinks.

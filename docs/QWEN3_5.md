@@ -69,12 +69,12 @@ completion = client.chat.completions.create(
 print(completion.choices[0].message.content)
 ```
 
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/hanzoai/engine/blob/master/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/hanzoai/engine/blob/master/examples/server/phi3v_local_img.py).
 
 ## Python SDK
 
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_5.py).
+You can find this example [here](https://github.com/hanzoai/engine/blob/master/examples/python/qwen3_5.py).
 
 ```py
 from hanzo import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
@@ -125,12 +125,12 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/hanzoai/engine/blob/master/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/hanzoai/engine/blob/master/examples/python/phi3v_local_img.py).
 
 ## Rust SDK
 
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/models/multimodal_models/main.rs).
+You can find this example [here](https://github.com/hanzoai/engine/blob/master/hanzo/examples/models/multimodal_models/main.rs).
 
 ```rust
 use anyhow::Result;

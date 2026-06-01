@@ -5,9 +5,9 @@ sidebar:
   order: 3
 ---
 
-`--enable-code-execution` registers a code execution tool with the model. The tool runs Python in a subprocess; on Linux and macOS it is wrapped in an [OS-level sandbox](/mistral.rs/reference/sandbox/) by default (`--sandbox auto`).
+`--enable-code-execution` registers a code execution tool with the model. The tool runs Python in a subprocess; on Linux and macOS it is wrapped in an [OS-level sandbox](/hanzo/reference/sandbox/) by default (`--sandbox auto`).
 
-The code execution and file helper tools use [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/) by default, so generated arguments are constrained to the declared JSON Schema before the tool runs.
+The code execution and file helper tools use [strict tool calling](/hanzo/guides/agents/strict-tool-calling/) by default, so generated arguments are constrained to the declared JSON Schema before the tool runs.
 
 ## Turning it on
 
@@ -35,12 +35,12 @@ Server startup makes the tool available. HTTP requests opt into it per request w
 
 ## Programmatic use and examples
 
-- Server and HTTP: [build an agent](/mistral.rs/tutorials/05-build-an-agent/#from-http) shows the request shape, streaming events, declared files, and sessions.
-- Server runtime details: [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/) documents request fields, SSE progress events, and file output behavior.
-- Web UI: [use the built-in web UI](/mistral.rs/guides/serve/with-web-ui/) covers the browser interface and how tool results render.
-- Python: see the [Python code execution example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/code_execution.py), the [Python SDK flow](/mistral.rs/tutorials/05-build-an-agent/#from-the-python-sdk), and the [Python API reference](/mistral.rs/reference/python/code-execution/).
-- Rust: see the [Rust code execution example](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/code_execution/main.rs), the [Rust file-output example](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/code_execution_files/main.rs), and the [Rust SDK flow](/mistral.rs/tutorials/05-build-an-agent/#from-the-rust-sdk).
-- CLI config: [cli-config.toml](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/cli-config.toml) includes the same runtime and sandbox settings in file form.
+- Server and HTTP: [build an agent](/hanzo/tutorials/05-build-an-agent/#from-http) shows the request shape, streaming events, declared files, and sessions.
+- Server runtime details: [agentic runtime for apps](/hanzo/guides/agents/agentic-runtime/) documents request fields, SSE progress events, and file output behavior.
+- Web UI: [use the built-in web UI](/hanzo/guides/serve/with-web-ui/) covers the browser interface and how tool results render.
+- Python: see the [Python code execution example](https://github.com/hanzoai/engine/blob/master/examples/python/code_execution.py), the [Python SDK flow](/hanzo/tutorials/05-build-an-agent/#from-the-python-sdk), and the [Python API reference](/hanzo/reference/python/code-execution/).
+- Rust: see the [Rust code execution example](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/code_execution/main.rs), the [Rust file-output example](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/code_execution_files/main.rs), and the [Rust SDK flow](/hanzo/tutorials/05-build-an-agent/#from-the-rust-sdk).
+- CLI config: [cli-config.toml](https://github.com/hanzoai/engine/blob/master/examples/cli-config.toml) includes the same runtime and sandbox settings in file form.
 
 ## Declaring outputs
 
@@ -108,7 +108,7 @@ for f in &resp.files {
 
 The `hanzo_execute_python` tool also accepts an `outputs` parameter so the model can list files it wrote that were not declared on the request. The runtime always surfaces files declared in `request.files`, regardless of whether the model lists them.
 
-For full schema, size limits, and the `read_file` / `list_files` model tools, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/#files).
+For full schema, size limits, and the `read_file` / `list_files` model tools, see [agentic runtime for apps](/hanzo/guides/agents/agentic-runtime/#files).
 
 ## Configuration
 
@@ -118,9 +118,9 @@ For full schema, size limits, and the `read_file` / `list_files` model tools, se
 | `--code-exec-timeout <secs>` | 30 | Per-call timeout in seconds. |
 | `--code-exec-workdir <path>` | per-session temp dir | Working directory for Python and produced files. |
 | `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`. Controls whether model-requested agent actions run automatically, require approval, or are denied. |
-| `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`. See [sandbox reference](/mistral.rs/reference/sandbox/) for the full set of sandbox knobs. |
+| `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`. See [sandbox reference](/hanzo/reference/sandbox/) for the full set of sandbox knobs. |
 
-`--agent-permission` is separate from the sandbox. Permission mode decides whether the runtime may execute a model-requested action. The sandbox decides what Python can access after it starts. For the centralized permission model, each API surface, and approval examples, see [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions).
+`--agent-permission` is separate from the sandbox. Permission mode decides whether the runtime may execute a model-requested action. The sandbox decides what Python can access after it starts. For the centralized permission model, each API surface, and approval examples, see [agent permissions](/hanzo/guides/agents/agentic-runtime/#agent-permissions).
 
 ## Sessions and state
 
@@ -144,7 +144,7 @@ With `--code-exec-workdir /path`, all sessions share the directory.
 
 ## Isolation
 
-On Linux and macOS the subprocess is wrapped in an OS-level sandbox by default (`--sandbox auto`). Layers include env scrubbing, namespace isolation, Landlock FS allowlist, `setrlimit`-based caps, a seccomp deny-list, and optional cgroup v2 limits on Linux; macOS uses Seatbelt and env scrubbing, without rlimit caps. The threat model is **model misbehavior**. For higher-assurance deployments, also run mistral.rs in a container or VM with a dedicated low-privilege user and constrained network egress.
+On Linux and macOS the subprocess is wrapped in an OS-level sandbox by default (`--sandbox auto`). Layers include env scrubbing, namespace isolation, Landlock FS allowlist, `setrlimit`-based caps, a seccomp deny-list, and optional cgroup v2 limits on Linux; macOS uses Seatbelt and env scrubbing, without rlimit caps. The threat model is **model misbehavior**. For higher-assurance deployments, also run hanzo in a container or VM with a dedicated low-privilege user and constrained network egress.
 
 Example with explicit sandbox settings:
 
@@ -164,7 +164,7 @@ hanzo serve \
 
 Resource limit flags such as `--sb-max-memory-mb` are enforced on Linux. On macOS, the same command still applies Seatbelt filesystem and network isolation, but hard memory, CPU, and process-count caps require an outer container or VM.
 
-See the full [sandbox reference](/mistral.rs/reference/sandbox/) for what each layer does, how to tune the limits, and how to disable it (`--sandbox off`).
+See the full [sandbox reference](/hanzo/reference/sandbox/) for what each layer does, how to tune the limits, and how to disable it (`--sandbox off`).
 
 Programmatic sandbox configuration:
 
@@ -199,6 +199,6 @@ Omit `sandbox_policy` (or pass `None`) to disable the sandbox entirely.
 
 ## See also
 
-- [Persist sessions](/mistral.rs/guides/agents/persist-sessions/).
-- [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
-- [Code execution design](/mistral.rs/explanation/code-execution-design/).
+- [Persist sessions](/hanzo/guides/agents/persist-sessions/).
+- [Agentic runtime for apps](/hanzo/guides/agents/agentic-runtime/).
+- [Code execution design](/hanzo/explanation/code-execution-design/).

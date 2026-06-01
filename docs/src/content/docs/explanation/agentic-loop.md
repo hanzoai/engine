@@ -46,7 +46,7 @@ Event shape:
 
 ## Files
 
-The loop also produces typed `File` outputs alongside the tool-call records. When the request declares `files: [...]` or a tool writes into the working directory and lists the file in its `outputs` parameter, the runtime captures it, attributes it to the producing round, and emits it as a `file_produced` SSE event during streaming or as a top-level `files[]` entry on the non-streaming response. Each `agentic_tool_calls[*].file_ids` lists the ids attributable to that round. See [agentic runtime: files](/mistral.rs/guides/agents/agentic-runtime/#files).
+The loop also produces typed `File` outputs alongside the tool-call records. When the request declares `files: [...]` or a tool writes into the working directory and lists the file in its `outputs` parameter, the runtime captures it, attributes it to the producing round, and emits it as a `file_produced` SSE event during streaming or as a top-level `files[]` entry on the non-streaming response. Each `agentic_tool_calls[*].file_ids` lists the ids attributable to that round. See [agentic runtime: files](/hanzo/guides/agents/agentic-runtime/#files).
 
 ## Session interaction
 
@@ -58,5 +58,5 @@ If none of the entry conditions are met, the request is dispatched directly. The
 
 ## See also
 
-- Guide: [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/), [tool calling basics](/mistral.rs/guides/agents/tool-calling-basics/), [configure the tool loop](/mistral.rs/guides/agents/configure-tool-loop/).
-- Reference: [HTTP API](/mistral.rs/reference/http-api/).
+- Guide: [agentic runtime for apps](/hanzo/guides/agents/agentic-runtime/), [tool calling basics](/hanzo/guides/agents/tool-calling-basics/), [configure the tool loop](/hanzo/guides/agents/configure-tool-loop/).
+- Reference: [HTTP API](/hanzo/reference/http-api/).

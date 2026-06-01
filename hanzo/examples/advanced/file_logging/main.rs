@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
     info!("Completed inference run.");
 
     let captured_logs = fs::read_to_string(LOG_FILE)?;
-    println!("\n--- Captured mistral.rs logs ---\n{captured_logs}");
+    println!("\n--- Captured hanzo logs ---\n{captured_logs}");
 
     Ok(())
 }

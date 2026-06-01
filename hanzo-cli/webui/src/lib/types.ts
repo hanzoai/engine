@@ -122,7 +122,7 @@ export interface FileSource {
 }
 
 /**
- * Mirrors `mistralrs_core::File`. Body fields (`text`, `preview`,
+ * Mirrors `hanzo_core::File`. Body fields (`text`, `preview`,
  * `data_base64`, `error`) are flattened from `FileContent` on the wire.
  */
 export interface File {
