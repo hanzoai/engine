@@ -80,7 +80,7 @@ response = runner.send_chat_completion_request(
 print(response.choices[0].message.content)
 ```
 
-Audio parts use the same URL forms as images. Native formats: `.wav`, `.mp3`, `.flac`, `.ogg`. Other formats require FFmpeg; see [Set up video input](/mistral.rs/guides/models/video-setup/) for installation.
+Audio parts use the same URL forms as images. Native formats: `.wav`, `.mp3`, `.flac`, `.ogg`. Other formats require FFmpeg; see [Set up video input](/hanzo/guides/models/video-setup/) for installation.
 
 ## Sending video
 
@@ -103,7 +103,7 @@ response = runner.send_chat_completion_request(
 )
 ```
 
-Video setup, supported containers, and FFmpeg installation are covered in [Set up video input](/mistral.rs/guides/models/video-setup/). The engine decodes frames, encodes them, and passes them to the model. Per-request sampling controls are not currently exposed.
+Video setup, supported containers, and FFmpeg installation are covered in [Set up video input](/hanzo/guides/models/video-setup/). The engine decodes frames, encodes them, and passes them to the model. Per-request sampling controls are not currently exposed.
 
 ## Mixing modalities in one request
 
@@ -124,7 +124,7 @@ messages=[
 
 Requires a model supporting both modalities. Gemma 4 handles images, audio, and video in one message; Qwen3-VL handles images plus video.
 
-Per-model modality support: [supported models reference](/mistral.rs/reference/supported-models/).
+Per-model modality support: [supported models reference](/hanzo/reference/supported-models/).
 
 ## Programmatic attachments
 

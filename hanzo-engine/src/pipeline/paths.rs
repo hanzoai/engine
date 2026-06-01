@@ -99,7 +99,7 @@ pub fn get_xlora_paths(
                 .transpose()?;
 
             // Get the path for the xlora config by checking all for valid versions.
-            // NOTE(EricLBuehler): Remove this functionality because all configs should be deserializable
+            // NOTE(hanzoai): Remove this functionality because all configs should be deserializable
             let xlora_configs = &dir_list
                 .clone()
                 .into_iter()

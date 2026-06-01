@@ -13,7 +13,7 @@
 >
 > The new built-in UI provides the same features and is accessible at `/ui` when running the server.
 
-A minimal, fast, and modern web chat interface for [Hanzo Engine](https://github.com/EricBuehler/Hanzo Engine), supporting text, multimodal, and speech models with drag-and-drop image and file upload, markdown rendering, and multi-model selection.
+A minimal, fast, and modern web chat interface for [Hanzo Engine](https://github.com/hanzoai/engine), supporting text, multimodal, and speech models with drag-and-drop image and file upload, markdown rendering, and multi-model selection.
 
 <img src="../res/chat.gif" alt="Demonstration" />
 

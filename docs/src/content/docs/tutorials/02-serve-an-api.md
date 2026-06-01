@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-`hanzo serve` exposes a model over an OpenAI-compatible HTTP API. The model used here is Google's [Gemma 4](https://huggingface.co/google/gemma-4-E4B-it). If you prefer to stay on the Qwen model from [Tutorial 1](/mistral.rs/tutorials/01-install-and-run/), substitute `Qwen/Qwen3-4B` for `google/gemma-4-E4B-it` throughout and skip the license step below.
+`hanzo serve` exposes a model over an OpenAI-compatible HTTP API. The model used here is Google's [Gemma 4](https://huggingface.co/google/gemma-4-E4B-it). If you prefer to stay on the Qwen model from [Tutorial 1](/hanzo/tutorials/01-install-and-run/), substitute `Qwen/Qwen3-4B` for `google/gemma-4-E4B-it` throughout and skip the license step below.
 
 ## Accepting the Gemma license
 
@@ -13,7 +13,7 @@ Gemma weights are gated on Hugging Face. One-time setup per account:
 
 1. Open [huggingface.co/google/gemma-4-E4B-it](https://huggingface.co/google/gemma-4-E4B-it), sign in, and accept the license at the top of the page.
 2. Create a read-only access token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
-3. Pass the token to mistral.rs:
+3. Pass the token to hanzo:
 
 ```bash
 hanzo login
@@ -106,12 +106,12 @@ Open `http://localhost:1234/ui`. The UI provides a chat window with markdown ren
 
 ## Notes
 
-The server implements the Chat Completions, legacy Completions, and Responses APIs. The [OpenAI compatibility reference](/mistral.rs/reference/openai-compatibility/) lists the supported and ignored fields.
+The server implements the Chat Completions, legacy Completions, and Responses APIs. The [OpenAI compatibility reference](/hanzo/reference/openai-compatibility/) lists the supported and ignored fields.
 
 The `default` model name is special-cased server-side: when the request's `model` field is `"default"` or absent, the server uses the configured default model. `GET /v1/models` lists the real model id.
 
 ## Next steps
 
-- [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/): load a model directly inside a Python program, without an HTTP server.
-- [Tutorial 5](/mistral.rs/tutorials/05-build-an-agent/): enable tool calling, web search, and code execution on the running server.
-- The [serving guides](/mistral.rs/guides/serve/http-server/) cover multi-model serving and configuration.
+- [Tutorial 3](/hanzo/tutorials/03-python-sdk/): load a model directly inside a Python program, without an HTTP server.
+- [Tutorial 5](/hanzo/tutorials/05-build-an-agent/): enable tool calling, web search, and code execution on the running server.
+- The [serving guides](/hanzo/guides/serve/http-server/) cover multi-model serving and configuration.

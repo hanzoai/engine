@@ -687,7 +687,7 @@ inline Bfloat8_ fp8_convert<Bfloat8_, Uchar8_>(const thread Uchar8_ &in,
 
 // ========================================== Dot product utilities
 
-// TODO(EricLBuehler): optimize with vectorization
+// TODO(hanzoai): optimize with vectorization
 template <int THREAD_GROUP_SIZE, typename Vec, int N>
 inline float qk_dot_(const threadgroup Vec (&q)[N], const thread Vec (&k)[N]) {
   // Compute the parallel products for Q*K^T (treat vector lanes separately).

@@ -1,4 +1,4 @@
-//! MCP (Model Context Protocol) client usage with mistral.rs.
+//! MCP (Model Context Protocol) client usage with hanzo.
 //!
 //! Connects to an MCP server, auto-discovers tools, and makes them available
 //! to the model during conversations.

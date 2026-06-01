@@ -595,7 +595,7 @@ pub struct ChatCompletionRequest {
     #[schema(value_type = Option<Vec<serde_json::Value>>)]
     pub files: Option<Vec<hanzo_engine::RequestedFile>>,
 
-    // mistral.rs additional
+    // hanzo additional
     #[schema(example = json!(Option::None::<usize>))]
     pub top_k: Option<usize>,
     #[schema(example = json!(Option::None::<Grammar>))]
@@ -718,7 +718,7 @@ pub struct CompletionRequest {
     #[schema(example = json!(Option::None::<ToolChoice>))]
     pub tool_choice: Option<ToolChoice>,
 
-    // mistral.rs additional
+    // hanzo additional
     #[schema(example = json!(Option::None::<usize>))]
     pub top_k: Option<usize>,
     #[schema(example = json!(Option::None::<Grammar>))]
@@ -836,7 +836,7 @@ pub struct EmbeddingRequest {
     #[serde(rename = "user")]
     pub _user: Option<String>,
 
-    // mistral.rs additional
+    // hanzo additional
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,
@@ -1094,7 +1094,7 @@ pub struct ResponsesCreateRequest {
     #[schema(example = json!(Option::None::<Vec<String>>))]
     pub truncation: Option<HashMap<String, Value>>,
 
-    // mistral.rs additional
+    // hanzo additional
     #[schema(example = json!(Option::None::<usize>))]
     pub top_k: Option<usize>,
     #[schema(example = json!(Option::None::<Grammar>))]

@@ -2,7 +2,7 @@
 extend-exclude = [
     ".git/",
     "calibration_data/",
-    "examples/server/phi3_duckduckgo_mistral.rs.ipynb",
+    "examples/server/phi3_duckduckgo_hanzo.ipynb",
     "hanzo-cli/static/",
     "CLAUDE.md",
 ]

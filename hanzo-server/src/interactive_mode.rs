@@ -33,7 +33,7 @@ fn terminate_handler() {
 
 fn history_file_path() -> PathBuf {
     // Replace these with your own org/app identifiers.
-    let proj_dirs = ProjectDirs::from("com", "", "mistral.rs")
+    let proj_dirs = ProjectDirs::from("com", "", "hanzo")
         .expect("Could not determine project directories");
     let config_dir = proj_dirs.config_dir();
 

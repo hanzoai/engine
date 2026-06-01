@@ -5,9 +5,9 @@ sidebar:
   order: 7
 ---
 
-mistral.rs can act as an MCP client, connecting to one or more MCP servers at startup and merging their tools into the model's available set.
+hanzo can act as an MCP client, connecting to one or more MCP servers at startup and merging their tools into the model's available set.
 
-MCP tools automatically use [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/) when the MCP server provides an input schema.
+MCP tools automatically use [strict tool calling](/hanzo/guides/agents/strict-tool-calling/) when the MCP server provides an input schema.
 
 ## Starting with a config file
 
@@ -37,7 +37,7 @@ Minimal config:
 }
 ```
 
-Full schema: [MCP config schema reference](/mistral.rs/reference/mcp-config-schema/).
+Full schema: [MCP config schema reference](/hanzo/reference/mcp-config-schema/).
 
 ## Transports
 

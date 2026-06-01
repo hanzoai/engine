@@ -407,13 +407,13 @@ pub struct RequestContext {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum IncludeOption {
-    /// Include file search results (not currently supported by mistral.rs)
+    /// Include file search results (not currently supported by hanzo)
     #[serde(rename = "file_search_call.results")]
     FileSearchCallResults,
     /// Include message input image URLs in the response
     #[serde(rename = "message.input_image.image_url")]
     MessageInputImageUrl,
-    /// Include computer call output image URLs (not currently supported by mistral.rs)
+    /// Include computer call output image URLs (not currently supported by hanzo)
     #[serde(rename = "computer_call_output.output.image_url")]
     ComputerCallOutputImageUrl,
     /// Include reasoning encrypted content
@@ -534,14 +534,14 @@ pub struct OpenResponsesCreateRequest {
     /// Whether to allow parallel tool calls.
     ///
     /// NOTE: Only `true` (default) or `None` is supported. Setting this to `false`
-    /// will return an error as mistral.rs does not support disabling parallel tool calls.
+    /// will return an error as hanzo does not support disabling parallel tool calls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parallel_tool_calls: Option<bool>,
 
     /// Maximum number of tool calls allowed.
     ///
     /// NOTE: This parameter is not supported. Setting any value will return an error
-    /// as mistral.rs does not support limiting the number of tool calls.
+    /// as hanzo does not support limiting the number of tool calls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tool_calls: Option<usize>,
 
@@ -559,7 +559,7 @@ pub struct OpenResponsesCreateRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncation: Option<crate::responses_types::enums::TruncationStrategy>,
 
-    // ===== mistral.rs Extensions (non-standard) =====
+    // ===== hanzo Extensions (non-standard) =====
     /// Stop sequences to end generation
     #[serde(rename = "stop", skip_serializing_if = "Option::is_none")]
     pub stop_seqs: Option<crate::openai::StopTokens>,
@@ -580,39 +580,39 @@ pub struct OpenResponsesCreateRequest {
     #[serde(rename = "n", default = "default_1usize")]
     pub n_choices: usize,
 
-    /// Repetition penalty (mistral.rs extension)
+    /// Repetition penalty (hanzo extension)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repetition_penalty: Option<f32>,
 
-    /// Top-k sampling (mistral.rs extension)
+    /// Top-k sampling (hanzo extension)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_k: Option<usize>,
 
-    /// Grammar for constrained generation (mistral.rs extension)
+    /// Grammar for constrained generation (hanzo extension)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grammar: Option<crate::openai::Grammar>,
 
-    /// Min-p sampling (mistral.rs extension)
+    /// Min-p sampling (hanzo extension)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_p: Option<f64>,
 
-    /// DRY multiplier (mistral.rs extension)
+    /// DRY multiplier (hanzo extension)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_multiplier: Option<f32>,
 
-    /// DRY base (mistral.rs extension)
+    /// DRY base (hanzo extension)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_base: Option<f32>,
 
-    /// DRY allowed length (mistral.rs extension)
+    /// DRY allowed length (hanzo extension)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_allowed_length: Option<usize>,
 
-    /// DRY sequence breakers (mistral.rs extension)
+    /// DRY sequence breakers (hanzo extension)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_sequence_breakers: Option<Vec<String>>,
 
-    /// Web search options (mistral.rs extension)
+    /// Web search options (hanzo extension)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web_search_options: Option<hanzo_engine::WebSearchOptions>,
 }
@@ -1336,7 +1336,7 @@ async fn parse_openresponses_request(
     if let Some(false) = oairequest.parallel_tool_calls {
         anyhow::bail!(
             "parallel_tool_calls=false is not supported. \
-             mistral.rs does not currently support disabling parallel tool calls."
+             hanzo does not currently support disabling parallel tool calls."
         );
     }
 
@@ -1344,7 +1344,7 @@ async fn parse_openresponses_request(
     if oairequest.max_tool_calls.is_some() {
         anyhow::bail!(
             "max_tool_calls is not supported. \
-             mistral.rs does not currently support limiting the number of tool calls."
+             hanzo does not currently support limiting the number of tool calls."
         );
     }
 
