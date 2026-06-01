@@ -179,7 +179,7 @@ impl Module for Mlp {
         let lhs = self.gate_proj.forward(xs)?;
         let rhs = self.up_proj.forward(xs)?;
         self.down_proj
-            .forward(&crate::ops::mul_and_candle_act(&lhs, &rhs, self.act_fn)?)
+            .forward(&crate::ops::mul_and_nn_act(&lhs, &rhs, self.act_fn)?)
     }
 }
 

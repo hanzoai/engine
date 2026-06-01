@@ -13,7 +13,7 @@
 #define QK_K 256
 #define K_SCALE_SIZE 12
 
-// Matches candle's MATRIX_ROW_PADDING.
+// Matches hanzo-ml's MATRIX_ROW_PADDING.
 #define MATRIX_ROW_PADDING 512
 
 typedef uint16_t ggml_fp16_t;

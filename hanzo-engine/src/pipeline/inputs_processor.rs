@@ -338,7 +338,7 @@ pub mod text_models_inputs_processor {
 
         // Create tensors on CPU first to avoid CUDA context issues when copying
         // between different GPU devices. Each GPU has its own CUDA context, and
-        // candle/cudarc doesn't properly switch contexts when doing GPU-to-GPU
+        // cudarc doesn't properly switch contexts when doing GPU-to-GPU
         // transfers (which go through CPU). By creating on CPU first, we avoid
         // the cross-context memory access that causes CUDA_ERROR_INVALID_VALUE.
         let cumulative_seqlens = Tensor::new(lengths, &Device::Cpu)?

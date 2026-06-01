@@ -820,7 +820,7 @@ __device__ __forceinline__ float glu_gelu(float x) {
 // ReLU activation: max(0, x)
 __device__ __forceinline__ float glu_relu(float x) { return fmaxf(x, 0.0f); }
 
-// GELU (exact ERF version): x * normcdf(x), matching candle's CUDA impl
+// GELU (exact ERF version): x * normcdf(x), matching hanzo-ml's CUDA impl
 __device__ __forceinline__ float glu_gelu_erf(float x) {
   return x * normcdff(x);
 }
@@ -851,7 +851,7 @@ __global__ void fused_glu_kernel(const T *__restrict__ a, // input to activation
     return;
 
   float a_val = (float)a[idx];
-  // Cast activation back to T before multiplying, matching candle's
+  // Cast activation back to T before multiplying, matching hanzo-ml's
   // two-step behavior: unary op in float32 -> cast to T -> binary mul in T
   T activated = (T)apply_glu_activation(a_val, activation);
   output[idx] = activated * b[idx];
@@ -876,7 +876,7 @@ __global__ void fused_glu_kernel_vec4(const T4 *__restrict__ a,
   float a2 = (float)((T *)&a4)[2];
   float a3 = (float)((T *)&a4)[3];
 
-  // Cast activation back to T before multiplying, matching candle's
+  // Cast activation back to T before multiplying, matching hanzo-ml's
   // two-step behavior: unary op in float32 -> cast to T -> binary mul in T
   T act0 = (T)apply_glu_activation(a0, activation);
   T act1 = (T)apply_glu_activation(a1, activation);

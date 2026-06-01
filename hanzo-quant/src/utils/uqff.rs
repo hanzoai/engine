@@ -266,7 +266,7 @@ fn bytes_to_data<T: WithDType>(
 
 #[cfg(test)]
 mod tests {
-    /// Guard against candle adding new `DType` variants without updating our match arms.
+    /// Guard against hanzo-ml adding new `DType` variants without updating our match arms.
     /// `DType` is `#[non_exhaustive]` now.
     #[test]
     fn dtype_variant_count_unchanged() {

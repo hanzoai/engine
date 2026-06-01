@@ -17,7 +17,7 @@
 
 // ============================================================================
 // Decode: sdpa_vector_with_sinks
-// Based on candle's sdpa_vector with sink integration after the K/V loop.
+// Based on hanzo-ml's sdpa_vector with sink integration after the K/V loop.
 // ============================================================================
 
 template <typename T, int D>

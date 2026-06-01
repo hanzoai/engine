@@ -50,7 +50,7 @@ impl QuantMethod for PerTensorFP8Linear {
                 bias,
                 dequant_dtype,
             } => {
-                // Dequantize immediately since Candle FP8 is storage-only (no ops)
+                // Dequantize immediately since Hanzo FP8 is storage-only (no ops)
                 let dequant_weight =
                     ops::fp8_pertensor_dequantize(&weight, &weight_scale_inv, dequant_dtype)?;
                 Ok(Self {
@@ -346,7 +346,7 @@ pub fn pertensor_fp8_linear_b(
     // Use the bias dtype if available, otherwise default to BF16.
     let dequant_dtype = bias.as_ref().map(|b| b.dtype()).unwrap_or(DType::BF16);
 
-    // Use new() which handles dequantization (Candle FP8 is storage-only)
+    // Use new() which handles dequantization (Hanzo FP8 is storage-only)
     Ok(Arc::new(PerTensorFP8Linear::new(
         QuantMethodConfig::PerTensorFP8 {
             weight,

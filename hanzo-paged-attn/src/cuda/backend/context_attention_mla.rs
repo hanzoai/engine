@@ -2,7 +2,7 @@ use hanzo_ml::{Result, Tensor};
 
 use super::mla::gather_mla_cache;
 
-/// Softmax over the last dimension (no candle-nn dependency).
+/// Softmax over the last dimension (no hanzo-nn dependency).
 fn softmax_last_dim(t: &Tensor) -> Result<Tensor> {
     let max = t.max_keepdim(hanzo_ml::D::Minus1)?;
     let shifted = t.broadcast_sub(&max)?;
