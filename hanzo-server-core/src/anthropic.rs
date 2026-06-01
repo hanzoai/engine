@@ -917,7 +917,7 @@ mod tests {
             model: "test-model".to_string(),
             system_fingerprint: "local".to_string(),
             object: "chat.completion.chunk".to_string(),
-            usage: finish.is_some().then(|| Usage {
+            usage: finish.is_some().then_some(Usage {
                 completion_tokens: 5,
                 prompt_tokens: 3,
                 total_tokens: 8,
