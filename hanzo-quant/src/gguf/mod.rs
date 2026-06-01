@@ -202,12 +202,26 @@ impl QuantMethod for GgufMatMul {
                 ));
                 Ok(Arc::new(Self { w, b: b.clone() }))
             }
+            #[cfg(feature = "vulkan")]
+            Self {
+                w: QMatMul::VulkanQuant { qtensor, .. },
+                b,
+            } => {
+                let (wd, dtype) = (qtensor.dequantize(&qtensor.device())?, qtensor.dtype());
+                let w = QMatMul::from_qtensor(candle_core::quantized::QTensor::quantize(
+                    &(wd + delta)?,
+                    dtype,
+                )?)?;
+                Ok(Arc::new(Self { w, b: b.clone() }))
+            }
         }
     }
 
     fn dtype_and_device(&self) -> (DType, candle_core::Device) {
         match &self.w {
             QMatMul::QTensor(q) => (DType::F32, q.device()),
+            #[cfg(feature = "vulkan")]
+            QMatMul::VulkanQuant { qtensor, .. } => (DType::F32, qtensor.device()),
             QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
         }
     }
@@ -225,6 +239,8 @@ impl QuantMethod for GgufMatMul {
             if dtype == IsqType::F8Q8 {
                 let t = match &self.w {
                     QMatMul::QTensor(q) => q.dequantize(&q.device())?,
+                    #[cfg(feature = "vulkan")]
+                    QMatMul::VulkanQuant { qtensor, .. } => qtensor.dequantize(&qtensor.device())?,
                     QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
                 };
                 let t = t.to_device(&device)?;
@@ -236,6 +252,8 @@ impl QuantMethod for GgufMatMul {
             }
             let t = match &self.w {
                 QMatMul::QTensor(q) => q.dequantize(&q.device())?,
+                #[cfg(feature = "vulkan")]
+                QMatMul::VulkanQuant { qtensor, .. } => qtensor.dequantize(&qtensor.device())?,
                 QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
             };
             let dtype = dtype.try_into()?;
@@ -254,6 +272,11 @@ impl QuantMethod for GgufMatMul {
                     &q.dequantize(&device)?,
                     q.dtype(),
                 )?)),
+                #[cfg(feature = "vulkan")]
+                QMatMul::VulkanQuant { qtensor, .. } => QMatMul::from_qtensor(QTensor::quantize(
+                    &qtensor.dequantize(&device)?,
+                    qtensor.dtype(),
+                )?)?,
                 QMatMul::Tensor(t) => QMatMul::Tensor(t.to_device(&device)?),
                 QMatMul::TensorF16(t) => QMatMul::TensorF16(t.to_device(&device)?),
             };
@@ -304,8 +327,20 @@ impl QuantizedSerde for GgufMatMul {
         self.serialize_with_bias(self.b.clone())
     }
     fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
-        let mut buffer = match &self.w {
-            QMatMul::QTensor(qw) => {
+        // VulkanQuant carries the same quantized QTensor; serialize it identically.
+        #[cfg(feature = "vulkan")]
+        let qw_opt = match &self.w {
+            QMatMul::QTensor(qw) => Some(qw),
+            QMatMul::VulkanQuant { qtensor, .. } => Some(qtensor),
+            _ => None,
+        };
+        #[cfg(not(feature = "vulkan"))]
+        let qw_opt = match &self.w {
+            QMatMul::QTensor(qw) => Some(qw),
+            _ => None,
+        };
+        let mut buffer = if let Some(qw) = qw_opt {
+            {
                 let w = qw.data()?.to_vec();
                 let w_shape = qw.shape().dims();
                 let dtype: u32 = match qw.dtype() {
@@ -355,9 +390,8 @@ impl QuantizedSerde for GgufMatMul {
 
                 buffer
             }
-            QMatMul::TensorF16(_) | QMatMul::Tensor(_) => {
-                candle_core::bail!("Cannot serialize non-quantized")
-            }
+        } else {
+            candle_core::bail!("Cannot serialize non-quantized")
         };
 
         if let Some(b) = bias.as_ref() {
