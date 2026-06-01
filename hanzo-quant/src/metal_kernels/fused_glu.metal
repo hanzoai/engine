@@ -12,7 +12,7 @@ constant int GLU_GELU_ERF = 3;
 // SiLU activation: x * sigmoid(x) = x / (1 + exp(-x))
 inline float glu_silu(float x) { return x / (1.0f + exp(-x)); }
 
-// GELU activation (tanh approximation), matching candle's unary.metal gelu<T>
+// GELU activation (tanh approximation), matching hanzo-ml's unary.metal gelu<T>
 // exactly
 inline float glu_gelu(float x) {
   if (x > 5) {
@@ -29,7 +29,7 @@ inline float glu_gelu(float x) {
 // ReLU activation: max(0, x)
 inline float glu_relu(float x) { return max(x, 0.0f); }
 
-// erf implementation matching candle's unary.metal erf<T> (Abramowitz &
+// erf implementation matching hanzo-ml's unary.metal erf<T> (Abramowitz &
 // Stegun 7.1.26)
 inline float glu_erf(float in) {
   float x = in;
@@ -49,7 +49,7 @@ inline float glu_erf(float in) {
   return float(sign * y);
 }
 
-// GELU (exact ERF version), matching candle's unary.metal gelu_erf<T> exactly
+// GELU (exact ERF version), matching hanzo-ml's unary.metal gelu_erf<T> exactly
 inline float glu_gelu_erf(float x) {
   return float(x * (1 + glu_erf(x * M_SQRT1_2_F)) / 2);
 }
@@ -80,7 +80,7 @@ template <typename T>
                           uint tid [[thread_position_in_grid]]) {
   if (tid < n_elements) {
     float a_val = float(a[tid]);
-    // Cast activation back to T before multiplying, matching candle's
+    // Cast activation back to T before multiplying, matching hanzo-ml's
     // two-step behavior: unary op in float32 -> cast to T -> binary mul in T
     T activated = T(apply_activation(a_val, activation));
     output[tid] = activated * b[tid];

@@ -114,7 +114,7 @@ impl QuantMethod for GgufMatMul {
             }
         }
 
-        // Fallback: Candle QMatMul requires F32
+        // Fallback: Hanzo QMatMul requires F32
         let original_dtype = a.dtype();
         let a_f32 = if original_dtype == DType::F32 {
             a.clone()
