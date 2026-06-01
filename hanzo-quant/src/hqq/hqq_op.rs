@@ -96,12 +96,8 @@ impl CustomOp3 for Dequant8Bit {
         )
         .map_err(hanzo_ml::Error::wrap)?;
 
-        let newstorage = hanzo_ml::MetalStorage::new(
-            output,
-            device.clone(),
-            out_shape.elem_count(),
-            s.dtype(),
-        );
+        let newstorage =
+            hanzo_ml::MetalStorage::new(output, device.clone(), out_shape.elem_count(), s.dtype());
         Ok((newstorage, out_shape))
     }
 }
@@ -207,12 +203,8 @@ impl CustomOp3 for Dequant4Bit {
         )
         .map_err(hanzo_ml::Error::wrap)?;
 
-        let newstorage = hanzo_ml::MetalStorage::new(
-            output,
-            device.clone(),
-            out_shape.elem_count(),
-            s.dtype(),
-        );
+        let newstorage =
+            hanzo_ml::MetalStorage::new(output, device.clone(), out_shape.elem_count(), s.dtype());
         Ok((newstorage, out_shape))
     }
 }
@@ -320,12 +312,8 @@ impl CustomOp3 for Dequant2Bit {
         )
         .map_err(hanzo_ml::Error::wrap)?;
 
-        let newstorage = hanzo_ml::MetalStorage::new(
-            output,
-            device.clone(),
-            out_shape.elem_count(),
-            s.dtype(),
-        );
+        let newstorage =
+            hanzo_ml::MetalStorage::new(output, device.clone(), out_shape.elem_count(), s.dtype());
         Ok((newstorage, out_shape))
     }
 }
@@ -437,12 +425,8 @@ impl CustomOp3 for Dequant1Bit {
         )
         .map_err(hanzo_ml::Error::wrap)?;
 
-        let newstorage = hanzo_ml::MetalStorage::new(
-            output,
-            device.clone(),
-            out_shape.elem_count(),
-            s.dtype(),
-        );
+        let newstorage =
+            hanzo_ml::MetalStorage::new(output, device.clone(), out_shape.elem_count(), s.dtype());
         Ok((newstorage, out_shape))
     }
 }
@@ -556,12 +540,8 @@ impl CustomOp3 for Dequant3Bit {
         )
         .map_err(hanzo_ml::Error::wrap)?;
 
-        let newstorage = hanzo_ml::MetalStorage::new(
-            output,
-            device.clone(),
-            out_shape.elem_count(),
-            s.dtype(),
-        );
+        let newstorage =
+            hanzo_ml::MetalStorage::new(output, device.clone(), out_shape.elem_count(), s.dtype());
         Ok((newstorage, out_shape))
     }
 }

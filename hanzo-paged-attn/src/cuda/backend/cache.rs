@@ -5,9 +5,7 @@ use crate::cuda::ffi::{copy_blocks_bf16, copy_blocks_f16, copy_blocks_f32};
 use hanzo_ml::backend::BackendDevice;
 use hanzo_ml::cuda_backend::CudaStorageSlice;
 use hanzo_ml::Result;
-use hanzo_ml::{
-    cuda_backend::cudarc::driver::CudaSlice, DType, Device, IndexOp, Storage, Tensor,
-};
+use hanzo_ml::{cuda_backend::cudarc::driver::CudaSlice, DType, Device, IndexOp, Storage, Tensor};
 
 pub fn copy_blocks(
     key_caches: Vec<&mut Tensor>,

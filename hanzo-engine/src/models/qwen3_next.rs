@@ -826,9 +826,7 @@ impl Model {
                 vb_m.dtype(),
                 &normal_loading_metadata.real_device,
             )
-            .map_err(|e| {
-                hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e))
-            })?,
+            .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e)))?,
         ));
 
         let num_attention_heads = cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size();

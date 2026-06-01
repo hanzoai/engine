@@ -7,12 +7,12 @@ use std::{
 };
 
 use hanzo_ml::{Context, Device, IndexOp, Result, Tensor, D};
-use image::DynamicImage;
-use itertools::Itertools;
 use hanzo_vision::{
     ApplyTensorTransforms, ApplyTransforms, Normalize, Rescale, TensorTransforms, ToTensorNoNorm,
     Transforms,
 };
+use image::DynamicImage;
+use itertools::Itertools;
 use ordered_float::NotNan;
 use tokenizers::Tokenizer;
 

@@ -3,9 +3,9 @@
 use std::{any::Any, sync::Arc};
 
 use hanzo_ml::{Device, Result, Tensor};
+use hanzo_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
 use image::{DynamicImage, GenericImageView};
 use itertools::Itertools;
-use hanzo_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
 use regex::Regex;
 use tokenizers::Tokenizer;
 

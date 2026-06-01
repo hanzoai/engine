@@ -30,15 +30,14 @@ use util::{
     send_request_and_wait, send_request_with_optional_stream, PyApiErr, PyApiResult,
 };
 
-use hanzo_ml::{Device, Result};
 use hanzo_engine::{
     initialize_logging, paged_attn_supported, parse_isq_value, AgentToolApprovalHandler,
     AnyMoeLoader, AutoDeviceMapParams, ChatCompletionResponse, CompletionResponse, Constraint,
     DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata,
     DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams,
     EmbeddingLoaderBuilder, EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
-    LlguidanceGrammar, Loader, MemoryGpuConfig, Hanzo, HanzoBuilder,
+    GGUFLoaderBuilder, GGUFSpecificConfig, Hanzo, HanzoBuilder, ImageGenerationResponse,
+    ImageGenerationResponseFormat, LlguidanceGrammar, Loader, MemoryGpuConfig,
     MultimodalLoaderBuilder, MultimodalSpecificConfig, NormalLoaderBuilder, NormalRequest,
     NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, ReasoningEffort,
     Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
@@ -50,6 +49,7 @@ use hanzo_engine::{
     ToolCallbacks,
 };
 use hanzo_llm_mcp::{McpClientConfig, McpServerConfig, McpServerSource};
+use hanzo_ml::{Device, Result};
 #[cfg(not(feature = "code-execution"))]
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;

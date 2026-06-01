@@ -1,13 +1,13 @@
-use hanzo_ml::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use hanzo_engine::{
     get_auto_device_map_params, get_model_dtype, initialize_logging, paged_attn_supported,
     parse_isq_value, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, DrySamplingParams, Loader, LoaderBuilder, MemoryGpuConfig, Hanzo,
-    HanzoBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, PagedCacheType, Request,
+    DeviceMapSetting, DrySamplingParams, Hanzo, HanzoBuilder, Loader, LoaderBuilder,
+    MemoryGpuConfig, ModelSelected, NormalRequest, PagedAttentionConfig, PagedCacheType, Request,
     RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
+use hanzo_ml::Device;
 use std::fmt::Display;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
@@ -382,9 +382,7 @@ async fn main() -> anyhow::Result<()> {
     let mut args = Args::parse();
     initialize_logging();
 
-    warn!(
-        "hanzo-bench is deprecated. Please use `hanzo bench` from hanzo-cli instead."
-    );
+    warn!("hanzo-bench is deprecated. Please use `hanzo bench` from hanzo-cli instead.");
 
     args.concurrency = Some(args.concurrency.unwrap_or(vec![1]));
 

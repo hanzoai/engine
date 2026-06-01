@@ -217,11 +217,7 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn load(
-        vb: ShardedVarBuilder,
-        cfg: &Config,
-        comm: &Arc<hanzo_quant::Comm>,
-    ) -> Result<Self> {
+    fn load(vb: ShardedVarBuilder, cfg: &Config, comm: &Arc<hanzo_quant::Comm>) -> Result<Self> {
         let h_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
         let c_fc1 = ColumnParallelLayer::new(

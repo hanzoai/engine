@@ -582,9 +582,7 @@ impl Qwen3_5TextModel {
                 vb_m.dtype(),
                 &normal_loading_metadata.real_device,
             )
-            .map_err(|e| {
-                hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e))
-            })?,
+            .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e)))?,
         ));
 
         Ok(Self {

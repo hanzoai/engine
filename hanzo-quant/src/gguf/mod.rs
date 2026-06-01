@@ -240,7 +240,9 @@ impl QuantMethod for GgufMatMul {
                 let t = match &self.w {
                     QMatMul::QTensor(q) => q.dequantize(&q.device())?,
                     #[cfg(feature = "vulkan")]
-                    QMatMul::VulkanQuant { qtensor, .. } => qtensor.dequantize(&qtensor.device())?,
+                    QMatMul::VulkanQuant { qtensor, .. } => {
+                        qtensor.dequantize(&qtensor.device())?
+                    }
                     QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
                 };
                 let t = t.to_device(&device)?;

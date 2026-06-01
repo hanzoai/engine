@@ -33,8 +33,8 @@ use crate::{
 use anyhow::Result;
 use hanzo_ml::quantized::ggml_file;
 use hanzo_ml::{Device, Tensor};
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use hanzo_quant::IsqType;
+use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;

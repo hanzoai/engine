@@ -323,9 +323,7 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
         other => hanzo_ml::bail!("fast_mmq: unexpected input rank {other:?}"),
     };
     if k != ncols {
-        hanzo_ml::bail!(
-            "fast_mmq: shape mismatch — weight [{nrows}, {ncols}] vs input tail {k}"
-        );
+        hanzo_ml::bail!("fast_mmq: shape mismatch — weight [{nrows}, {ncols}] vs input tail {k}");
     }
     if b_size == 0 {
         hanzo_ml::bail!("fast_mmq: batch size must be > 0");
@@ -554,14 +552,10 @@ pub fn grouped(
 
     let (weight_experts, nrows, ncols) = weight.shape().dims3()?;
     if weight_experts != num_experts {
-        hanzo_ml::bail!(
-            "fast_mmq grouped: expected {num_experts} experts, got {weight_experts}"
-        );
+        hanzo_ml::bail!("fast_mmq grouped: expected {num_experts} experts, got {weight_experts}");
     }
     if k != ncols {
-        hanzo_ml::bail!(
-            "fast_mmq grouped: shape mismatch — weight cols {ncols} vs input tail {k}"
-        );
+        hanzo_ml::bail!("fast_mmq grouped: shape mismatch — weight cols {ncols} vs input tail {k}");
     }
     let qk = qk_for(dtype);
     if k % qk != 0 {
