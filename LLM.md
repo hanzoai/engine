@@ -33,7 +33,7 @@ This file provides guidance to AI assistants working with the Hanzo Engine codeb
 Hanzo Engine is a Rust workspace containing:
 - All upstream hanzo workspace members (hanzo-engine, hanzo-server, hanzo, hanzo-llm-mcp, …)
 - **hanzo-engine/** — lib + bin: canonical Hanzo inference + embedding API
-- Local candle fork at `../ml/hanzo-{ml,nn,flash-attn,metal-kernels}` overrides upstream's `candle-*` crates via `[workspace.dependencies]` path overrides
+- Local hanzo-ml fork at `../ml/hanzo-{ml,nn,flash-attn,metal-kernels}` overrides upstream's `hanzo-ml-*` crates via `[workspace.dependencies]` path overrides
 
 The engine provides comprehensive LLM inference with support for text, multimodal (incl. video), image generation, speech, and embeddings through multiple APIs (Rust, Python, OpenAI HTTP, MCP).
 
@@ -100,7 +100,7 @@ cargo run --release --features <features> -- --port 1234 <model_args>
 
 ## Models
 
-When integrating a new model, make sure it respects all of the varbuilder `.pp` calls. In Candle, a VarBuilder maintains an internal path vector that acts like a “current working directory” for model weights; every call to pp("sub") (alias for push_prefix) clones the builder and appends sub, so successive calls accumulate a dotted prefix such as transformer.h.0 while leaving the original builder untouched . When you eventually call get(...), Candle joins that prefix with the tensor name (prefix + "." + name) and looks it up in the checkpoint backend, producing keys that exactly match the dot-separated names emitted by PyTorch’s state_dict/named_parameters, which means PyTorch-trained weights can be loaded without any renaming  ￼. This lets you recreate the PyTorch module tree in Rust by “walking” it: e.g. vb.pp("word_embeddings") grabs word_embeddings.*, while a chain like vb.pp("encoder").pp("layers").pp(i.to_string()) targets keys such as encoder.layers.0.*, exactly as shown in community tutorials porting Transformers models to Candle  ￼. As one maintainer put it, the prefix system lets you “cd” around the parameter hierarchy, giving a lightweight namespace mechanism that keeps Candle fully compatible with PyTorch naming conventions while remaining ergonomic to use.
+When integrating a new model, make sure it respects all of the varbuilder `.pp` calls. In Hanzo, a VarBuilder maintains an internal path vector that acts like a “current working directory” for model weights; every call to pp("sub") (alias for push_prefix) clones the builder and appends sub, so successive calls accumulate a dotted prefix such as transformer.h.0 while leaving the original builder untouched . When you eventually call get(...), Hanzo joins that prefix with the tensor name (prefix + "." + name) and looks it up in the checkpoint backend, producing keys that exactly match the dot-separated names emitted by PyTorch’s state_dict/named_parameters, which means PyTorch-trained weights can be loaded without any renaming  ￼. This lets you recreate the PyTorch module tree in Rust by “walking” it: e.g. vb.pp("word_embeddings") grabs word_embeddings.*, while a chain like vb.pp("encoder").pp("layers").pp(i.to_string()) targets keys such as encoder.layers.0.*, exactly as shown in community tutorials porting Transformers models to Hanzo  ￼. As one maintainer put it, the prefix system lets you “cd” around the parameter hierarchy, giving a lightweight namespace mechanism that keeps Hanzo fully compatible with PyTorch naming conventions while remaining ergonomic to use.
 
 You should also look for a model.safetensors.index.json file for the model at hand to verify correct structure.
 
@@ -198,7 +198,7 @@ See `docs/` directory for detailed documentation on specific models and features
 
 ### Dependencies
 Current `hanzo-engine/Cargo.toml` needs these dependencies for embeddings:
-- `candle-core` (from workspace)
+- `hanzo-ml` (from workspace)
 - `tokenizers` (from workspace)
 - May need to re-export or use different approach
 
