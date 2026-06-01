@@ -5,9 +5,9 @@ sidebar:
   order: 2
 ---
 
-Strict tool calling constrains the arguments the model can generate for a tool. When a tool definition has `function.strict: true`, mistral.rs uses the tool's `parameters` JSON Schema during decoding instead of only parsing tool-call JSON after generation.
+Strict tool calling constrains the arguments the model can generate for a tool. When a tool definition has `function.strict: true`, hanzo uses the tool's `parameters` JSON Schema during decoding instead of only parsing tool-call JSON after generation.
 
-Use strict mode when malformed or extra arguments would be expensive, unsafe, or annoying to handle in application code. It works with both client-side OpenAI tool calling and the mistral.rs server-side tool loop.
+Use strict mode when malformed or extra arguments would be expensive, unsafe, or annoying to handle in application code. It works with both client-side OpenAI tool calling and the hanzo server-side tool loop.
 
 Strict mode does not force the model to call a tool. Use `tool_choice` for that. It only constrains the argument object if the model calls a strict tool.
 
@@ -50,7 +50,7 @@ Add `strict: true` inside the OpenAI-compatible function definition:
 }
 ```
 
-For a tight schema, include `required`, `enum`, nested object schemas, array item schemas, and `additionalProperties: false` where appropriate. If `strict` is omitted or `false`, mistral.rs still parses tool calls but does not constrain arguments to the tool's schema.
+For a tight schema, include `required`, `enum`, nested object schemas, array item schemas, and `additionalProperties: false` where appropriate. If `strict` is omitted or `false`, hanzo still parses tool calls but does not constrain arguments to the tool's schema.
 
 ## Built-in agentic tools
 
@@ -99,7 +99,7 @@ response = runner.send_chat_completion_request(
 )
 ```
 
-If you want mistral.rs to execute the tool server-side in Python, register a matching `tool_callbacks` entry on `Runner`; otherwise inspect `response.choices[0].message.tool_calls` and run the tool in your own code.
+If you want hanzo to execute the tool server-side in Python, register a matching `tool_callbacks` entry on `Runner`; otherwise inspect `response.choices[0].message.tool_calls` and run the tool in your own code.
 
 ## Rust
 
@@ -158,4 +158,4 @@ For server-side Rust callbacks, register the callback together with the strict `
 
 Strict tool calling is separate from `response_format: {"type": "json_schema", ...}`. Tool strictness constrains the arguments for a tool call; response-format schemas constrain the assistant's final text response.
 
-Strict mode has an effect when the tool has a `parameters` schema. If a tool is marked strict without a schema, mistral.rs falls back to a generic object schema.
+Strict mode has an effect when the tool has a `parameters` schema. If a tool is marked strict without a schema, hanzo falls back to a generic object schema.

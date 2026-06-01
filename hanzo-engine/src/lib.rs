@@ -30,7 +30,7 @@ use std::{
 use tokio::sync::mpsc::{channel, Sender};
 use tracing::{debug, info, warn};
 
-pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISION") {
+pub const HANZO_GIT_REVISION: &str = match option_env!("HANZO_GIT_REVISION") {
     Some(value) => value,
     None => "unknown",
 };
@@ -316,7 +316,7 @@ pub use utils::{paged_attn_supported, using_flash_attn};
 // re-export llguidance for easier LlguidanceGrammar construction
 pub use llguidance;
 
-/// `true` if `MISTRALRS_DEBUG=1`
+/// `true` if `HANZO_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
 pub static GLOBAL_HF_CACHE: OnceLock<Cache> = OnceLock::new();
 
@@ -460,7 +460,7 @@ struct EngineInstance {
 }
 
 /// The Hanzo struct handles sending requests to multiple engines.
-/// It is the core multi-threaded component of mistral.rs, and uses `mpsc`
+/// It is the core multi-threaded component of hanzo, and uses `mpsc`
 /// `Sender` and `Receiver` primitives to send and receive requests to the
 /// appropriate engine based on model ID.
 ///
@@ -1004,7 +1004,7 @@ impl Hanzo {
                         warn!("  Sandbox: OFF. Network and filesystem are NOT restricted.");
                         warn!("  Pass a sandbox_policy (or --sandbox on at the CLI) to enable isolation.");
                     }
-                    warn!("  See: https://ericlbuehler.github.io/mistral.rs/reference/sandbox/");
+                    warn!("  See: https://hanzoai.github.io/engine/reference/sandbox/");
                     warn!("============================================================");
                     info!("Code execution initialized with {count} tools");
                 }
@@ -1017,7 +1017,7 @@ impl Hanzo {
     }
 
     async fn new(config: HanzoBuilder) -> Arc<Self> {
-        info!("git revision: {MISTRALRS_GIT_REVISION}");
+        info!("git revision: {HANZO_GIT_REVISION}");
         let HanzoBuilder {
             pipeline,
             method,

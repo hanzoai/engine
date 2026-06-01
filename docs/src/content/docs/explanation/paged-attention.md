@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-mistral.rs's paged attention splits the KV cache into fixed-size blocks drawn from a central pool, instead of allocating one contiguous slab per sequence.
+hanzo's paged attention splits the KV cache into fixed-size blocks drawn from a central pool, instead of allocating one contiguous slab per sequence.
 
 ## Block size
 
@@ -48,5 +48,5 @@ MLA's latent cache is supported through a dedicated kernel path.
 
 ## See also
 
-- Guide: [use paged attention](/mistral.rs/guides/perf/use-paged-attention/).
-- Reference: [CLI `--pa-*` flags](/mistral.rs/reference/cli/).
+- Guide: [use paged attention](/hanzo/guides/perf/use-paged-attention/).
+- Reference: [CLI `--pa-*` flags](/hanzo/reference/cli/).

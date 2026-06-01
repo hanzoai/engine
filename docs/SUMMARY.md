@@ -9,7 +9,7 @@
 - [Cargo Features](CARGO_FEATURES.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
 
-# Using mistral.rs
+# Using hanzo
 
 - [CLI Reference](CLI.md)
 - [CLI TOML Configuration](CLI_CONFIG.md)

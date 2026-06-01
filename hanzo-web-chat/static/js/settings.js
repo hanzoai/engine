@@ -45,7 +45,7 @@ async function loadSettings() {
   }
 
   // Load user overrides from localStorage
-  const stored = localStorage.getItem('mistralrs_settings');
+  const stored = localStorage.getItem('hanzo_settings');
   if (stored) {
     try {
       const parsed = JSON.parse(stored);
@@ -63,7 +63,7 @@ async function loadSettings() {
  * Save user settings to localStorage
  */
 function saveSettings() {
-  localStorage.setItem('mistralrs_settings', JSON.stringify(userSettings));
+  localStorage.setItem('hanzo_settings', JSON.stringify(userSettings));
 }
 
 /**

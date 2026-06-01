@@ -80,7 +80,7 @@ be loaded locally or from Hugging Face based on the model ID.
 - `phi3.5-mini-instruct-q4k-0.uqff`
 - `../UQFF/phi3.5-mini-instruct-q4k-0.uqff`
 
-You can find a [collection of UQFF models here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c), which each include a simple
+You can find a [collection of UQFF models here](https://huggingface.co/collections/hanzoai/uqff-670e4a49d56ecdd3f7f0fd4c), which each include a simple
 command to get started.
 
 > Note: when loading an UQFF model, *any* ISQ setting will be ignored.
@@ -92,7 +92,7 @@ Large models produce multiple shard files (e.g., `q4k-0.uqff`, `q4k-1.uqff`, `q4
 For example, if a model has shards `q4k-0.uqff`, `q4k-1.uqff`, and `q4k-2.uqff`:
 ```bash
 # Just specify the first shard -- the rest are found automatically
-hanzo run -m EricB/MyModel-UQFF --from-uqff q4k-0.uqff
+hanzo run -m hanzoai/MyModel-UQFF --from-uqff q4k-0.uqff
 ```
 
 This also works when multiple quantizations exist in the same repo (e.g., `q4k-*` and `q8_0-*`). Only the shards matching the specified prefix are loaded.
@@ -100,7 +100,7 @@ This also works when multiple quantizations exist in the same repo (e.g., `q4k-*
 ### Running with the CLI
 
 ```bash
-hanzo run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-f8e4m3-0.uqff
+hanzo run -m hanzoai/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-f8e4m3-0.uqff
 ```
 
 ### Using with the Rust SDK
@@ -113,7 +113,7 @@ Check out the following examples:
 Modify the `Which` instantiation as follows:
 ```diff
 Which.Plain(
-    model_id="EricB/Phi-3.5-mini-instruct-UQFF",
+    model_id="hanzoai/Phi-3.5-mini-instruct-UQFF",
 +   from_uqff="phi3.5-mini-instruct-q4k-0.uqff"
 ),
 ```
@@ -124,7 +124,7 @@ When loading a UQFF model, the quantization is already baked in, so ISQ settings
 
 **CLI example:**
 ```bash
-hanzo run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-q4k.uqff --topology device_map.yml
+hanzo run -m hanzoai/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-q4k.uqff --topology device_map.yml
 ```
 
 **Topology file for device mapping only (`device_map.yml`):**
@@ -140,7 +140,7 @@ hanzo run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-q
 use hanzo::{UqffTextModelBuilder, Topology, LayerTopology, Device};
 
 let model = UqffTextModelBuilder::new(
-    "EricB/Phi-3.5-mini-instruct-UQFF",
+    "hanzoai/Phi-3.5-mini-instruct-UQFF",
     vec!["phi3.5-mini-instruct-q4k.uqff".into()],
 )
 .into_inner()
@@ -157,7 +157,7 @@ let model = UqffTextModelBuilder::new(
 ```python
 runner = Runner(
     which=Which.Plain(
-        model_id="EricB/Phi-3.5-mini-instruct-UQFF",
+        model_id="hanzoai/Phi-3.5-mini-instruct-UQFF",
         from_uqff="phi3.5-mini-instruct-q4k.uqff",
         topology="device_map.yml",
     ),
@@ -216,7 +216,7 @@ By default, the command prompts interactively for the base model and HF repo ID.
 ```bash
 hanzo quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/ \
     --uqff-base-model microsoft/Phi-3.5-mini-instruct \
-    --uqff-repo-id EricB/Phi-3.5-mini-instruct-UQFF
+    --uqff-repo-id hanzoai/Phi-3.5-mini-instruct-UQFF
 ```
 
 To skip model card generation entirely, use `--no-readme`:
@@ -242,7 +242,7 @@ After this, you can use Git to track, commit, and push files.
 
 ## List of models
 
-You can find a list of models in the [Hugging Face model collection](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
+You can find a list of models in the [Hugging Face model collection](https://huggingface.co/collections/hanzoai/uqff-670e4a49d56ecdd3f7f0fd4c).
 
 Have you created a UQFF model on Hugging Face? If so, please [create an issue](https://github.com/hanzoai/engine/issues/new).
 

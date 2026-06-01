@@ -1,5 +1,5 @@
 """
-Example demonstrating multi-model usage with mistral.rs server HTTP API.
+Example demonstrating multi-model usage with hanzo server HTTP API.
 
 This example shows how to:
 1. List available models from the server

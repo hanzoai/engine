@@ -646,7 +646,7 @@ impl Model {
         let mapper = normal_loading_metadata.mapper;
 
         if !cfg.mlp_only_layers.is_empty() {
-            hanzo_ml::bail!("Qwen3Next `mlp_only_layers` is not implemented yet in mistral.rs.");
+            hanzo_ml::bail!("Qwen3Next `mlp_only_layers` is not implemented yet in hanzo.");
         }
 
         let embed_tokens = embedding(

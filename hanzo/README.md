@@ -1,9 +1,9 @@
 # hanzo — Blazing-Fast LLM Inference in Rust
 
-The Rust SDK for [mistral.rs](https://github.com/EricLBuehler/mistral.rs), a high-performance
+The Rust SDK for [hanzo](https://github.com/hanzoai/engine), a high-performance
 LLM inference engine supporting text, multimodal, speech, image generation, and embedding models.
 
-[API Docs](https://docs.rs/hanzo) | [GitHub](https://github.com/EricLBuehler/mistral.rs) | [Examples](https://github.com/EricLBuehler/mistral.rs/tree/master/hanzo/examples) | [Discord](https://discord.gg/SZrecqK8qw)
+[API Docs](https://docs.rs/hanzo) | [GitHub](https://github.com/hanzoai/engine) | [Examples](https://github.com/hanzoai/engine/tree/master/hanzo/examples) | [Discord](https://discord.gg/SZrecqK8qw)
 
 ## Quick Start
 

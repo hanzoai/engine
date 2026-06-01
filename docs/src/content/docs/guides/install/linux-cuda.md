@@ -1,6 +1,6 @@
 ---
 title: Install on Linux with CUDA
-description: Get mistral.rs running on an NVIDIA GPU under Linux, including which features to enable for your card.
+description: Get hanzo running on an NVIDIA GPU under Linux, including which features to enable for your card.
 sidebar:
   order: 1
 ---
@@ -8,7 +8,7 @@ sidebar:
 The install script handles most Linux-with-CUDA cases:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/hanzoai/engine/master/install.sh | sh
 ```
 
 The rest of this guide covers non-default cases: unusual CUDA toolchain layouts, manual feature selection, and verifying the install.
@@ -20,7 +20,7 @@ The rest of this guide covers non-default cases: unusual CUDA toolchain layouts,
 3. `libssl-dev` and `pkg-config`. On Ubuntu/Debian: `sudo apt install libssl-dev pkg-config`. On Fedora/RHEL: `sudo dnf install openssl-devel pkgconfig`.
 4. Rust 1.88 or newer via [rustup](https://rustup.rs).
 
-For video input, install FFmpeg (`sudo apt install ffmpeg` or equivalent). It is optional; without it, video features error at request time. The full checklist is in [Set up video input](/mistral.rs/guides/models/video-setup/).
+For video input, install FFmpeg (`sudo apt install ffmpeg` or equivalent). It is optional; without it, video features error at request time. The full checklist is in [Set up video input](/hanzo/guides/models/video-setup/).
 
 ## Feature selection
 
@@ -44,8 +44,8 @@ cargo install hanzo-cli --features "cuda flash-attn cudnn"
 From a source checkout:
 
 ```bash
-git clone https://github.com/EricLBuehler/mistral.rs.git
-cd mistral.rs
+git clone https://github.com/hanzoai/engine.git
+cd hanzo
 cargo install --path hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
@@ -86,4 +86,4 @@ If `cuda` is missing from build features, rebuild with the feature. If no CUDA d
 
 ## Troubleshooting
 
-Most build-time failures are one of: missing CUDA toolkit, `pkg-config` cannot find OpenSSL, or outdated Rust. Specific fixes are in the [troubleshooting reference](/mistral.rs/reference/troubleshooting/).
+Most build-time failures are one of: missing CUDA toolkit, `pkg-config` cannot find OpenSSL, or outdated Rust. Specific fixes are in the [troubleshooting reference](/hanzo/reference/troubleshooting/).

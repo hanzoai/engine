@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-mistral.rs is a blazing-fast LLM inference engine written in Rust. It supports text, multimodal, image generation, and speech models with Rust and Python SDKs, plus OpenAI HTTP and MCP APIs.
+hanzo is a blazing-fast LLM inference engine written in Rust. It supports text, multimodal, image generation, and speech models with Rust and Python SDKs, plus OpenAI HTTP and MCP APIs.
 
 ## Essential Commands
 

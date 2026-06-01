@@ -5,7 +5,7 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 messages = [
     {
         "role": "user",
-        "content": "Can you show me some code using mistral.rs for running Llama 3.2 Vision?",
+        "content": "Can you show me some code using hanzo for running Llama 3.2 Vision?",
     }
 ]
 

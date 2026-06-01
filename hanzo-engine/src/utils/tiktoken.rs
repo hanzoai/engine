@@ -214,7 +214,7 @@ mod tests {
     fn test_tiktoken_conversion() -> anyhow::Result<()> {
         let api = ApiBuilder::new().with_progress(true).build().unwrap();
         let api = api.repo(Repo::with_revision(
-            "EricB/mistralrs_tests".to_string(),
+            "hanzoai/mistralrs_tests".to_string(),
             RepoType::Model,
             "main".to_string(),
         ));

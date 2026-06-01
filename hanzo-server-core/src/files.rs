@@ -14,7 +14,7 @@ use crate::types::{ExtractedHanzoState, SharedHanzoState};
 
 const PURPOSE: &str = "agent_output";
 
-/// OpenAI file metadata + mistral.rs extensions (`format`, `mime_type`, `source`, `truncated`).
+/// OpenAI file metadata + hanzo extensions (`format`, `mime_type`, `source`, `truncated`).
 #[derive(Serialize)]
 pub struct FileMetadata {
     pub id: String,

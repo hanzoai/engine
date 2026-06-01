@@ -7,7 +7,7 @@ sidebar:
 
 `--enable-search` exposes a `web_search` tool to the model.
 
-The built-in search and extraction tools use [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/) by default, so generated queries and URLs are constrained to the declared JSON Schema.
+The built-in search and extraction tools use [strict tool calling](/hanzo/guides/agents/strict-tool-calling/) by default, so generated queries and URLs are constrained to the declared JSON Schema.
 
 ## Turning it on
 

@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libraries work against mistral.rs unchanged. This page lists the exceptions.
+hanzo targets field-level OpenAI API compatibility. Most OpenAI client libraries work against hanzo unchanged. This page lists the exceptions.
 
 ## Chat Completions fields
 
@@ -29,12 +29,12 @@ mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libr
 ### Implemented with deviation
 
 - `tool_choice`: `"auto"`, `"none"`, and specific function objects work. `"required"` is unsupported; use a specific function object to force tool use.
-- `tools[*].function.strict`: accepted on function tools. When `true`, mistral.rs constrains generated tool arguments to the tool's `parameters` JSON Schema. See [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/).
+- `tools[*].function.strict`: accepted on function tools. When `true`, hanzo constrains generated tool arguments to the tool's `parameters` JSON Schema. See [strict tool calling](/hanzo/guides/agents/strict-tool-calling/).
 - `response_format` with `json_schema`: uses llguidance for constrained decoding. Output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted.
 
 ### Silently ignored
 
-`seed`, `user`, `stream_options`, `metadata`, `service_tier`, `parallel_tool_calls`, `store`. The request body accepts these fields (unknown fields are not rejected) but no behavior is wired to them. Use mistral.rs `session_id` for persistence.
+`seed`, `user`, `stream_options`, `metadata`, `service_tier`, `parallel_tool_calls`, `store`. The request body accepts these fields (unknown fields are not rejected) but no behavior is wired to them. Use hanzo `session_id` for persistence.
 
 ### hanzo extensions
 
@@ -52,7 +52,7 @@ Accepted alongside OpenAI fields. OpenAI ignores them:
 
 ## Responses API fields
 
-See the [Responses guide](/mistral.rs/guides/serve/openai-responses-api/). Notable exceptions:
+See the [Responses guide](/hanzo/guides/serve/openai-responses-api/). Notable exceptions:
 
 - `parallel_tool_calls` must be `true` or omitted. `false` returns an error.
 - `max_tool_calls` returns an error for any value.
@@ -96,27 +96,27 @@ OpenAI's `size` string (e.g. `"1024x1024"`) is not supported. Use the `height` a
 
 ### `/v1/audio/transcriptions` and `/v1/audio/translations`
 
-Not exposed as dedicated endpoints. Voxtral and similar STT models go through `/v1/chat/completions` with audio content parts. See [speech models guide](/mistral.rs/guides/models/use-speech-models/).
+Not exposed as dedicated endpoints. Voxtral and similar STT models go through `/v1/chat/completions` with audio content parts. See [speech models guide](/hanzo/guides/models/use-speech-models/).
 
 ## Moderation
 
-Not supported. mistral.rs has no built-in moderation model; run one as a separate service if needed.
+Not supported. hanzo has no built-in moderation model; run one as a separate service if needed.
 
 ## Files and Assistants APIs
 
-File uploads (OpenAI's `POST /v1/files`) are not supported. mistral.rs exposes `GET /v1/files`, `GET /v1/files/{id}`, `GET /v1/files/{id}/content`, and `DELETE /v1/files/{id}` for files produced by the agentic loop. The Assistants API is not supported; the mistral.rs equivalent is the session-based agentic loop on the chat completions endpoint.
+File uploads (OpenAI's `POST /v1/files`) are not supported. hanzo exposes `GET /v1/files`, `GET /v1/files/{id}`, `GET /v1/files/{id}/content`, and `DELETE /v1/files/{id}` for files produced by the agentic loop. The Assistants API is not supported; the hanzo equivalent is the session-based agentic loop on the chat completions endpoint.
 
 ## Fine-tuning and Batch
 
-Not supported. mistral.rs is an inference engine, not a training platform.
+Not supported. hanzo is an inference engine, not a training platform.
 
 ## Tokenization
 
-mistral.rs does not expose `/v1/tokenize` or `/v1/detokenize` HTTP endpoints. Tokenizer access is available through the SDKs (`tokenize_text` / `detokenize_text` in Python; `tokenize_with_model` / `detokenize_with_model` in Rust).
+hanzo does not expose `/v1/tokenize` or `/v1/detokenize` HTTP endpoints. Tokenizer access is available through the SDKs (`tokenize_text` / `detokenize_text` in Python; `tokenize_with_model` / `detokenize_with_model` in Rust).
 
 ## Authentication
 
-OpenAI requires an `Authorization: Bearer ...` header. mistral.rs does not validate it. Clients that require an API key for initialization can send any non-empty string. For real authentication, place an authenticating reverse proxy in front.
+OpenAI requires an `Authorization: Bearer ...` header. hanzo does not validate it. Clients that require an API key for initialization can send any non-empty string. For real authentication, place an authenticating reverse proxy in front.
 
 ## Response headers
 

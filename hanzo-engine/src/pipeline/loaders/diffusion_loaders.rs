@@ -183,7 +183,7 @@ impl DiffusionModelLoader for FluxLoader {
         let flux_file = api_get_file!(api, &flux_name, model_id, revision);
         let ae_file = api_get_file!(api, "ae.safetensors", model_id, revision);
 
-        // NOTE(EricLBuehler): disgusting way of doing this but the 0th path is the flux, 1 is ae
+        // NOTE(hanzoai): disgusting way of doing this but the 0th path is the flux, 1 is ae
         Ok(vec![flux_file, ae_file])
     }
     fn get_config_filenames(
@@ -195,7 +195,7 @@ impl DiffusionModelLoader for FluxLoader {
         let flux_file = api_get_file!(api, "transformer/config.json", model_id, revision);
         let ae_file = api_get_file!(api, "vae/config.json", model_id, revision);
 
-        // NOTE(EricLBuehler): disgusting way of doing this but the 0th path is the flux, 1 is ae
+        // NOTE(hanzoai): disgusting way of doing this but the 0th path is the flux, 1 is ae
         Ok(vec![flux_file, ae_file])
     }
     fn force_cpu_vb(&self) -> Vec<bool> {
