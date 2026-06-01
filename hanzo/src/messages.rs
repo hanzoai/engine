@@ -618,9 +618,8 @@ impl RequestBuilder {
         mut self,
         callback: hanzo_engine::AgentToolApprovalCallback,
     ) -> Self {
-        self.agent_approval_handler = Some(hanzo_engine::AgentToolApprovalHandler::from_sync(
-            callback,
-        ));
+        self.agent_approval_handler =
+            Some(hanzo_engine::AgentToolApprovalHandler::from_sync(callback));
         self
     }
 
@@ -632,9 +631,8 @@ impl RequestBuilder {
         let callback = Arc::new(move |approval| {
             Box::pin(callback(approval)) as hanzo_engine::AgentToolApprovalFuture
         });
-        self.agent_approval_handler = Some(hanzo_engine::AgentToolApprovalHandler::from_async(
-            callback,
-        ));
+        self.agent_approval_handler =
+            Some(hanzo_engine::AgentToolApprovalHandler::from_async(callback));
         self
     }
 

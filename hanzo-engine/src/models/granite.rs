@@ -178,11 +178,7 @@ pub struct GraniteMlp {
 }
 
 impl GraniteMlp {
-    pub fn new(
-        vb: ShardedVarBuilder,
-        cfg: &Config,
-        comm: &Arc<hanzo_quant::Comm>,
-    ) -> Result<Self> {
+    pub fn new(vb: ShardedVarBuilder, cfg: &Config, comm: &Arc<hanzo_quant::Comm>) -> Result<Self> {
         let shared_intermediate_size = cfg.shared_intermediate_size();
         let input_linear = ColumnParallelLayer::new(
             cfg.hidden_size,
@@ -1851,9 +1847,7 @@ impl GraniteMoeHybrid {
                 vb_m.dtype(),
                 &normal_loading_metadata.real_device,
             )
-            .map_err(|e| {
-                hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e))
-            })?,
+            .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e)))?,
         ));
 
         let num_attention_heads = cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size();

@@ -3,9 +3,7 @@
 //! Run with: `cargo run --release --example json_schema -p hanzo`
 
 use anyhow::Result;
-use hanzo::{
-    IsqBits, ModelBuilder, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole,
-};
+use hanzo::{IsqBits, ModelBuilder, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole};
 use serde_json::json;
 
 #[tokio::main]

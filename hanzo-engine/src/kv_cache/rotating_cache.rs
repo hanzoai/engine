@@ -107,9 +107,10 @@ impl RotatingCache {
         if accepted_len == 0 {
             return Ok(None);
         }
-        let appended = self.last_append_result.as_ref().ok_or_else(|| {
-            hanzo_ml::Error::Msg("missing rotating cache append result".into())
-        })?;
+        let appended = self
+            .last_append_result
+            .as_ref()
+            .ok_or_else(|| hanzo_ml::Error::Msg("missing rotating cache append result".into()))?;
         let dim0 = appended.dim(0)?;
         if batch_len == 0 || dim0 % batch_len != 0 {
             hanzo_ml::bail!(

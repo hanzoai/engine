@@ -237,11 +237,6 @@ pub use embedding_model::{EmbeddingModelBuilder, UqffEmbeddingModelBuilder};
 pub use gguf::GgufModelBuilder;
 pub use gguf_lora_model::GgufLoraModelBuilder;
 pub use gguf_xlora_model::GgufXLoraModelBuilder;
-pub use lora_model::LoraModelBuilder;
-pub use messages::{
-    EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, MultimodalMessages,
-    RequestBuilder, RequestLike, TextMessageRole, TextMessages,
-};
 pub use hanzo_engine::{
     AgentPermission, AgentToolApproval, AgentToolApprovalAsyncCallback, AgentToolApprovalCallback,
     AgentToolApprovalDecision, AgentToolApprovalFuture, AgentToolApprovalHandler, AgentToolKind,
@@ -252,14 +247,17 @@ pub use hanzo_engine::{
     AgenticToolCallRecord, File, FileContent, FileSource, RequestedFile, MODEL_INLINE_BYTES,
     WIRE_EMBED_LIMIT_BYTES,
 };
-pub use hanzo_engine::{
-    McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
-};
+pub use hanzo_engine::{McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo};
 pub use hanzo_engine::{
     MultimodalToolCallback, SearchCallback, SearchResult, ToolCallContext, ToolCallback,
     ToolCallbackKind, ToolOutput,
 };
 pub use hanzo_engine::{SerializedSession, SerializedVideo};
+pub use lora_model::LoraModelBuilder;
+pub use messages::{
+    EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, MultimodalMessages,
+    RequestBuilder, RequestLike, TextMessageRole, TextMessages,
+};
 pub use model::{best_device, Model};
 pub use model_builder_trait::{AnyModelBuilder, MultiModelBuilder};
 pub use multimodal_model::{MultimodalModelBuilder, UqffMultimodalModelBuilder};
@@ -295,7 +293,7 @@ pub use hanzo_engine::{
 
 // ========== Config Types ==========
 pub use hanzo_engine::{
-    DefaultSchedulerMethod, IsqType, MemoryGpuConfig, HanzoConfig, ModelDType,
+    DefaultSchedulerMethod, HanzoConfig, IsqType, MemoryGpuConfig, ModelDType,
     PagedAttentionConfig, PagedCacheType, SchedulerConfig, WebSearchOptions,
 };
 
@@ -341,7 +339,7 @@ pub use hanzo_engine::{MultimodalLoaderType, NormalLoaderType};
 pub use hanzo_engine::TokenSource;
 
 // ========== Engine (Advanced) ==========
-pub use hanzo_engine::{IntervalLogger, Hanzo, RequestMessage, ResponseOk};
+pub use hanzo_engine::{Hanzo, IntervalLogger, RequestMessage, ResponseOk};
 
 // ========== Utilities ==========
 pub use hanzo_engine::{initialize_logging, paged_attn_supported, parse_isq_value};

@@ -1006,10 +1006,7 @@ mod ring_ops {
                     unsafe { std::slice::from_raw_parts(send_piece.as_ptr() as *const u8, nbytes) };
                 {
                     let mut rg = right.lock().map_err(|e| {
-                        hanzo_ml::Error::msg(format!(
-                            "Failed to lock right stream mutex: {:?}",
-                            e
-                        ))
+                        hanzo_ml::Error::msg(format!("Failed to lock right stream mutex: {:?}", e))
                     })?;
                     rg.write_all(bytes)
                         .map_err(|e| hanzo_ml::Error::msg(format!("write error: {:?}", e)))?;
@@ -1022,10 +1019,7 @@ mod ring_ops {
                 let buf = bg.entry(nbytes).or_insert_with(|| vec![0u8; nbytes]);
                 {
                     let mut lg = left.lock().map_err(|e| {
-                        hanzo_ml::Error::msg(format!(
-                            "Failed to lock left stream mutex: {:?}",
-                            e
-                        ))
+                        hanzo_ml::Error::msg(format!("Failed to lock left stream mutex: {:?}", e))
                     })?;
                     lg.read_exact(buf)
                         .map_err(|e| hanzo_ml::Error::msg(format!("read error: {:?}", e)))?;

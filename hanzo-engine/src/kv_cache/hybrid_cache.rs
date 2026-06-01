@@ -340,11 +340,7 @@ pub struct HybridCache {
 impl HybridCache {
     pub const CACHE_GROW_SIZE: usize = 512;
 
-    pub fn new(
-        config: HybridCacheConfig,
-        dtype: hanzo_ml::DType,
-        device: &Device,
-    ) -> Result<Self> {
+    pub fn new(config: HybridCacheConfig, dtype: hanzo_ml::DType, device: &Device) -> Result<Self> {
         let mut caches = Vec::with_capacity(config.layer_types.len());
 
         for layer_type in &config.layer_types {

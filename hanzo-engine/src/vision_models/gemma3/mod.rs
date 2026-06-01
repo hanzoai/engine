@@ -3,8 +3,8 @@
 use crate::attention::AttentionMask;
 use std::sync::{Arc, Mutex};
 
-use hanzo_ml::{Context, DType, Device, Result, Tensor, D};
 use config::Gemma3Config;
+use hanzo_ml::{Context, DType, Device, Result, Tensor, D};
 use hanzo_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use mmproj::Gemma3MultiModalProjector;
 use text::TextModel;

@@ -1,8 +1,8 @@
 use std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
+use either::Either;
 use hanzo_ml::{Module, Result, Tensor};
 use hanzo_nn::Linear;
-use either::Either;
 use hanzo_quant::{QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear};
 
 use crate::layers::MatMul;

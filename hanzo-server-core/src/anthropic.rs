@@ -77,10 +77,7 @@ pub enum AnthropicContentBlock {
         input: Value,
     },
     #[serde(rename = "tool_result")]
-    ToolResult {
-        tool_use_id: String,
-        content: Value,
-    },
+    ToolResult { tool_use_id: String, content: Value },
 }
 
 #[derive(Debug, Serialize)]
@@ -342,7 +339,12 @@ impl StreamBuilder {
         Self::default()
     }
 
-    pub(crate) fn start(&mut self, model: String, id: String, input_tokens: u32) -> Vec<NamedEvent> {
+    pub(crate) fn start(
+        &mut self,
+        model: String,
+        id: String,
+        input_tokens: u32,
+    ) -> Vec<NamedEvent> {
         self.started = true;
         let msg = json!({
             "type": "message_start",
@@ -498,17 +500,21 @@ impl StreamBuilder {
                 "usage": {"output_tokens": output_tokens},
             }),
         ));
-        out.push((
-            "message_stop".to_string(),
-            json!({"type": "message_stop"}),
-        ));
+        out.push(("message_stop".to_string(), json!({"type": "message_stop"})));
         out
     }
 
     pub(crate) fn ingest_chunk(&mut self, chunk: &ChatCompletionChunkResponse) -> Vec<NamedEvent> {
         let mut events = Vec::new();
         if !self.started {
-            let id = format!("msg_{}", if chunk.id.is_empty() { Uuid::new_v4().to_string() } else { chunk.id.clone() });
+            let id = format!(
+                "msg_{}",
+                if chunk.id.is_empty() {
+                    Uuid::new_v4().to_string()
+                } else {
+                    chunk.id.clone()
+                }
+            );
             let input_tokens = chunk
                 .usage
                 .as_ref()
@@ -556,12 +562,15 @@ impl StreamBuilder {
     ) -> Vec<NamedEvent> {
         let mut events = Vec::new();
         if !self.started {
-            let id = format!("msg_{}", if resp.id.is_empty() { Uuid::new_v4().to_string() } else { resp.id.clone() });
-            events.extend(self.start(
-                resp.model.clone(),
-                id,
-                resp.usage.prompt_tokens as u32,
-            ));
+            let id = format!(
+                "msg_{}",
+                if resp.id.is_empty() {
+                    Uuid::new_v4().to_string()
+                } else {
+                    resp.id.clone()
+                }
+            );
+            events.extend(self.start(resp.model.clone(), id, resp.usage.prompt_tokens as u32));
         }
         let finish = resp.choices.first().map(|c| c.finish_reason.as_str());
         if let Some(c) = resp.choices.first() {
@@ -658,10 +667,7 @@ impl futures::Stream for MessagesStreamer {
                     return Poll::Ready(None);
                 }
                 Poll::Ready(Some(Response::ModelError(msg, _))) => {
-                    Hanzo::maybe_log_error(
-                        self.state.clone(),
-                        &ModelErrorMessage(msg.clone()),
-                    );
+                    Hanzo::maybe_log_error(self.state.clone(), &ModelErrorMessage(msg.clone()));
                     let err = json!({
                         "type": "error",
                         "error": {"type": "api_error", "message": msg},
@@ -1051,7 +1057,10 @@ mod tests {
 
     #[test]
     fn event_framing_serializes_event_name_and_json_data() {
-        let pair: NamedEvent = ("message_start".to_string(), json!({"type": "message_start"}));
+        let pair: NamedEvent = (
+            "message_start".to_string(),
+            json!({"type": "message_start"}),
+        );
         let ev = to_event(pair.clone());
         let formatted = format!("{ev:?}");
         assert!(

@@ -9,8 +9,8 @@ use axum::{
     response::IntoResponse,
 };
 use hanzo_engine::{
-    Constraint, DiffusionGenerationParams, ImageGenerationResponse, Hanzo, NormalRequest,
-    Request, RequestMessage, Response, SamplingParams,
+    Constraint, DiffusionGenerationParams, Hanzo, ImageGenerationResponse, NormalRequest, Request,
+    RequestMessage, Response, SamplingParams,
 };
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -150,10 +150,7 @@ pub async fn process_non_streaming_response(
 }
 
 /// Matches and processes different types of model responses into appropriate image generation responses.
-pub fn match_responses(
-    state: SharedHanzoState,
-    response: Response,
-) -> ImageGenerationResponder {
+pub fn match_responses(state: SharedHanzoState, response: Response) -> ImageGenerationResponder {
     match response {
         Response::InternalError(e) => {
             Hanzo::maybe_log_error(state, &*e);

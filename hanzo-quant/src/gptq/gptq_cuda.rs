@@ -9,6 +9,7 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
+use half::f16;
 use hanzo_ml::{
     cuda::{
         cudarc::{
@@ -19,7 +20,6 @@ use hanzo_ml::{
     },
     Context, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
-use half::f16;
 
 use crate::{
     gptq::marlin_backend::{marlin_matmul, marlin_weight_repack},

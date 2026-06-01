@@ -529,11 +529,7 @@ impl IsqModel for Model {
 }
 
 impl EmbeddingModel for Model {
-    fn forward(
-        &self,
-        input_ids: &Tensor,
-        flash_params: &FlashParams,
-    ) -> hanzo_ml::Result<Tensor> {
+    fn forward(&self, input_ids: &Tensor, flash_params: &FlashParams) -> hanzo_ml::Result<Tensor> {
         self.forward(input_ids, flash_params)
     }
     fn device(&self) -> &Device {
