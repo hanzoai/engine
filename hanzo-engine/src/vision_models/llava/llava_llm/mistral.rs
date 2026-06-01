@@ -4,7 +4,7 @@ use crate::layers_masker::CausalMaskConfig;
 use std::sync::Arc;
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
-use candle_core::{DType, Device, Module, Result, Tensor};
+use hanzo_ml::{DType, Device, Module, Result, Tensor};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, QuantMethodConfig, RowParallelLayer, ShardedVarBuilder,
     UnquantLinear,
@@ -396,7 +396,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: hanzo_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,

@@ -2,8 +2,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use candle_core::Result;
-use candle_core::{DType, Device, Tensor};
+use hanzo_ml::Result;
+use hanzo_ml::{DType, Device, Tensor};
 use image::GenericImageView;
 use image::Rgb;
 use itertools::Itertools;
@@ -371,11 +371,11 @@ impl ImagePreProcessor for LLaVAInputProcessor {
         images: Vec<image::DynamicImage>,
         videos: Vec<Vec<image::DynamicImage>>,
         config: &preprocessor_config::PreProcessorConfig,
-        device: &candle_core::Device,
+        device: &hanzo_ml::Device,
         (_, _): (usize, usize),
-    ) -> candle_core::Result<image_processor::PreprocessedImages> {
+    ) -> hanzo_ml::Result<image_processor::PreprocessedImages> {
         if images.len() > 1 {
-            candle_core::bail!("Can only process one image per batch"); // This is no different from phi3_input_processor
+            hanzo_ml::bail!("Can only process one image per batch"); // This is no different from phi3_input_processor
         };
         assert!(videos.is_empty());
         let resized_size = *config.size.as_ref().unwrap().get("shortest_edge").unwrap() as usize;

@@ -4,8 +4,8 @@ use crate::layers_masker::CausalMaskConfig;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::serde_default_fn;
-use candle_core::{Device, Module, Result, Tensor};
-use candle_nn::Linear;
+use hanzo_ml::{Device, Module, Result, Tensor};
+use hanzo_nn::Linear;
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig, RowParallelLayer,
     ShardedVarBuilder, UnquantLinear,
@@ -65,7 +65,7 @@ impl Config {
                 // If both are set just use hidden_act
                 Ok(act)
             }
-            (None, None) => candle_core::bail!("none of hidden_act and hidden_activation are set"),
+            (None, None) => hanzo_ml::bail!("none of hidden_act and hidden_activation are set"),
         }
     }
 }
@@ -360,7 +360,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: hanzo_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: GemmaRmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -622,7 +622,7 @@ impl IsqModel for Model {
         uvb.to_safetensors()
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         // NOTE: dependant on the exact implementation in get_layers!
         let mut names = Vec::new();
         // lm_head

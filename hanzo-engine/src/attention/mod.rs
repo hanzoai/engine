@@ -2,7 +2,7 @@
 
 use crate::{attention::backends::cpu, pipeline::text_models_inputs_processor::FlashParams};
 
-use candle_core::{DType, Device, Result, Tensor};
+use hanzo_ml::{DType, Device, Result, Tensor};
 
 /// Attention mask passed to [`Sdpa::run_attention`].
 ///
@@ -199,7 +199,7 @@ impl Sdpa {
                         );
                     }
                     _ => {
-                        return Err(candle_core::Error::Msg("Unsupported data type".into()));
+                        return Err(hanzo_ml::Error::Msg("Unsupported data type".into()));
                     }
                 }
             } else {
@@ -308,7 +308,7 @@ impl Sdpa {
             // the per-query position, skipping the upper triangle of Q*K^T
             // entirely (roughly halves matmul cost for prefill).
             let do_causal = seq_len > 1 && causal;
-            return candle_nn::ops::sdpa(
+            return hanzo_nn::ops::sdpa(
                 q,
                 k,
                 v,
@@ -363,7 +363,7 @@ impl Sdpa {
                             Some(mask.broadcast_as(tgt_shape)?.flatten(0, 1)?)
                         }
                         Some(mask) => {
-                            candle_core::bail!("cublaslt attn mask: rank must be 3 or 4")
+                            hanzo_ml::bail!("cublaslt attn mask: rank must be 3 or 4")
                         }
                         None => None,
                     };
@@ -397,7 +397,7 @@ impl Sdpa {
                     if scores_dtype == DType::BF16 || scores_dtype == DType::F16 {
                         attention_scores = attention_scores.to_dtype(DType::F32)?;
                     }
-                    attention_scores = candle_nn::ops::softmax_last_dim(&attention_scores)?;
+                    attention_scores = hanzo_nn::ops::softmax_last_dim(&attention_scores)?;
                     if attention_scores.dtype() != scores_dtype {
                         attention_scores = attention_scores.to_dtype(scores_dtype)?;
                     }
@@ -419,7 +419,7 @@ impl Sdpa {
             }
             #[cfg(not(feature = "cuda"))]
             {
-                candle_core::bail!("`cuda` feature is not enabled")
+                hanzo_ml::bail!("`cuda` feature is not enabled")
             }
         } else {
             naive_sdpa(q, &k, &v, mask, sdpa_params)

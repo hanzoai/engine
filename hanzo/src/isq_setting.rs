@@ -37,7 +37,7 @@ impl From<IsqType> for IsqSetting {
 /// Resolve an [`IsqSetting`] to a concrete [`IsqType`] given the target device.
 pub(crate) fn resolve_isq(
     setting: &IsqSetting,
-    device: &candle_core::Device,
+    device: &hanzo_ml::Device,
 ) -> anyhow::Result<IsqType> {
     match setting {
         IsqSetting::Auto(bits) => Ok(bits.resolve(device)),

@@ -19,8 +19,8 @@ use crate::{
     SpeechGenerationConfig, TryIntoDType,
 };
 use anyhow::Result;
-use candle_core::{Device, Tensor};
-use candle_nn::VarBuilder;
+use hanzo_ml::{Device, Tensor};
+use hanzo_nn::VarBuilder;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indexmap::IndexMap;
 use hanzo_quant::IsqType;
@@ -268,9 +268,9 @@ impl Loader for SpeechLoader {
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
-            vec![candle_core::Device::new_cuda(worker_rank + 1)?]
+            vec![hanzo_ml::Device::new_cuda(worker_rank + 1)?]
         } else if use_nccl || use_ring() {
-            vec![candle_core::Device::new_cuda(0)?]
+            vec![hanzo_ml::Device::new_cuda(0)?]
         } else {
             device_map::get_all_similar_devices(device)?
         };
@@ -399,7 +399,7 @@ impl Pipeline for SpeechPipeline {
         &mut self,
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
-    ) -> candle_core::Result<ForwardInputsResult> {
+    ) -> hanzo_ml::Result<ForwardInputsResult> {
         assert!(!return_raw_logits);
 
         let ModelInputs { prompts } = *inputs.downcast().expect("Downcast failed.");
@@ -431,8 +431,8 @@ impl Pipeline for SpeechPipeline {
         _prefix_cacher: &mut PrefixCacheManagerV2,
         _disable_eos_stop: bool,
         _srng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    ) -> Result<(), candle_core::Error> {
-        candle_core::bail!("`sample_causal_gen` is incompatible with `SpeechPipeline`");
+    ) -> Result<(), hanzo_ml::Error> {
+        hanzo_ml::bail!("`sample_causal_gen` is incompatible with `SpeechPipeline`");
     }
 
     fn category(&self) -> ModelCategory {

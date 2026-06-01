@@ -2,11 +2,11 @@
 
 use std::{f32::consts::PI, ops::Mul, str::FromStr, sync::Arc};
 
-use candle_core::{
+use hanzo_ml::{
     quantized::{QMatMul, QTensor},
     Context, DType, Device, IndexOp, Result, Tensor, D,
 };
-use candle_nn::{
+use hanzo_nn::{
     BatchNorm, BatchNormConfig, Conv1d, Conv1dConfig, Conv2d, Conv2dConfig, Embedding, GroupNorm,
     LayerNorm, LayerNormConfig, Linear, Module,
 };
@@ -77,7 +77,7 @@ pub fn batch_norm<C: Into<BatchNormConfig>>(
 ) -> Result<BatchNorm> {
     let config = config.into();
     if config.eps < 0. {
-        candle_core::bail!("batch-norm eps cannot be negative {}", config.eps)
+        hanzo_ml::bail!("batch-norm eps cannot be negative {}", config.eps)
     }
     let running_mean = vb.get(num_features, "running_mean")?;
     let running_var = vb.get(num_features, "running_var")?;
@@ -275,7 +275,7 @@ impl RmsNorm {
 
 impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        hanzo_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }
 
@@ -316,7 +316,7 @@ fn rms_norm_forward_residual(
         }
     }
 
-    let normed = candle_nn::ops::rms_norm(&x.contiguous()?, weight, eps as f32)?;
+    let normed = hanzo_nn::ops::rms_norm(&x.contiguous()?, weight, eps as f32)?;
     let out = (residual + normed)?;
     if let Some(scale) = scale {
         out.broadcast_mul(scale)
@@ -377,7 +377,7 @@ impl GemmaRmsNorm {
 
 impl Module for GemmaRmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        hanzo_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }
 
@@ -434,7 +434,7 @@ impl QRmsNorm {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        hanzo_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }
 
@@ -463,14 +463,14 @@ pub enum ScaledRopeType {
 }
 
 impl FromStr for ScaledRopeType {
-    type Err = candle_core::Error;
+    type Err = hanzo_ml::Error;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "su" | "longrope" => Ok(Self::Su),
             "yarn" => Ok(Self::Yarn),
             "linear" => Ok(Self::Linear),
             "dynamic" => Ok(Self::Dynamic),
-            _ => Err(candle_core::Error::Msg(
+            _ => Err(hanzo_ml::Error::Msg(
                 "Expected either `su` or `yarn` scaled RoPE type.".to_string(),
             )),
         }
@@ -528,7 +528,7 @@ impl PhiRotaryEmbedding {
                     (1.0 + scale.ln() / (cfg.original_max_position_embeddings as f64).ln()).sqrt()
                 }
                 ScaledRopeType::Yarn => 0.1 * scale.ln() + 1.0,
-                _ => candle_core::bail!("Expected either `su` or `yarn` RoPE"),
+                _ => hanzo_ml::bail!("Expected either `su` or `yarn` RoPE"),
             }
         };
 
@@ -615,18 +615,18 @@ impl PhiRotaryEmbedding {
         let dim = (cfg.head_dim as f64 * cfg.partial_rotary_factor.unwrap_or(1.)) as usize;
 
         if !matches!(scaling_type, ScaledRopeType::Su) {
-            candle_core::bail!("Scaled Phi3 RoPE (non-classic scaled, with mscales) must have type `su`/`longrope`.");
+            hanzo_ml::bail!("Scaled Phi3 RoPE (non-classic scaled, with mscales) must have type `su`/`longrope`.");
         }
 
         if short_factor.len() != dim / 2 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Misaligned length {}, expected {} for `su`/`longrope` short rescale factors",
                 short_factor.len(),
                 dim / 2
             );
         }
         if long_factor.len() != dim / 2 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Misaligned length {}, expected {} for `su`/`longrope` long rescale factors",
                 long_factor.len(),
                 dim / 2
@@ -747,8 +747,8 @@ impl PhiRotaryEmbedding {
             let (q_rot, k_rot) = if seqlen_offsets.len() == 1 {
                 let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
                 let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
-                let q_embed = candle_nn::rotary_emb::rope(&q_rot.contiguous()?, &cos, &sin)?;
-                let k_embed = candle_nn::rotary_emb::rope(&k_rot.contiguous()?, &cos, &sin)?;
+                let q_embed = hanzo_nn::rotary_emb::rope(&q_rot.contiguous()?, &cos, &sin)?;
+                let k_embed = hanzo_nn::rotary_emb::rope(&k_rot.contiguous()?, &cos, &sin)?;
                 (q_embed, k_embed)
             } else {
                 let mut q_embeds = Vec::new();
@@ -756,12 +756,12 @@ impl PhiRotaryEmbedding {
                 for (i, offset) in seqlen_offsets.iter().enumerate() {
                     let cos = cos.narrow(0, *offset, seq_len)?;
                     let sin = sin.narrow(0, *offset, seq_len)?;
-                    let q_embed = candle_nn::rotary_emb::rope(
+                    let q_embed = hanzo_nn::rotary_emb::rope(
                         &q_rot.i(i)?.unsqueeze(0)?.contiguous()?,
                         &cos,
                         &sin,
                     )?;
-                    let k_embed = candle_nn::rotary_emb::rope(
+                    let k_embed = hanzo_nn::rotary_emb::rope(
                         &k_rot.i(i)?.unsqueeze(0)?.contiguous()?,
                         &cos,
                         &sin,
@@ -781,8 +781,8 @@ impl PhiRotaryEmbedding {
         } else if seqlen_offsets.len() == 1 {
             let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
             let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-            let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
+            let q_embed = hanzo_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
+            let k_embed = hanzo_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
             Ok((q_embed, k_embed))
         } else {
             let mut q_embeds = Vec::new();
@@ -791,9 +791,9 @@ impl PhiRotaryEmbedding {
                 let cos = cos.narrow(0, *offset, seq_len)?;
                 let sin = sin.narrow(0, *offset, seq_len)?;
                 let q_embed =
-                    candle_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                    hanzo_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
                 let k_embed =
-                    candle_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                    hanzo_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
                 q_embeds.push(q_embed);
                 k_embeds.push(k_embed);
             }
@@ -1101,7 +1101,7 @@ impl Llama3RotaryEmbedding {
             Some(MLlamaRopeScaling {
                 rope_type: other, ..
             }) => {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "MLlama doesn't support any other RoPE type than `llama3`, got {other:?}"
                 )
             }
@@ -1373,8 +1373,8 @@ impl Qwen2VLRotaryEmbedding {
         q: &mut Tensor,
         k: &mut Tensor,
     ) -> Result<()> {
-        *q = candle_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
-        *k = candle_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
+        *q = hanzo_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
+        *k = hanzo_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
         Ok(())
     }
 
@@ -1488,8 +1488,8 @@ impl Qwen3VLRotaryEmbedding {
         q: &mut Tensor,
         k: &mut Tensor,
     ) -> Result<()> {
-        *q = candle_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
-        *k = candle_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
+        *q = hanzo_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
+        *k = hanzo_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
         Ok(())
     }
 
@@ -1578,8 +1578,8 @@ impl Qwen2_5VLRotaryEmbedding {
         q: &mut Tensor,
         k: &mut Tensor,
     ) -> Result<()> {
-        *q = candle_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
-        *k = candle_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
+        *q = hanzo_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
+        *k = hanzo_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
         Ok(())
     }
 }
@@ -1736,7 +1736,7 @@ impl DeepSeekV2RotaryEmbedding {
             Some(DeepSeekV2RopeScaling::LinearOrDynamic {
                 scaling_type: _,
                 factor: _,
-            }) => candle_core::bail!("linear and dynamic rope are not implemented yet!"),
+            }) => hanzo_ml::bail!("linear and dynamic rope are not implemented yet!"),
             Some(DeepSeekV2RopeScaling::Yarn {
                 original_max_position_embeddings,
                 beta_fast,
@@ -1771,8 +1771,8 @@ impl DeepSeekV2RotaryEmbedding {
         if seqlen_offsets.len() == 1 {
             let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
             let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = candle_nn::rotary_emb::rope_i(&q.contiguous()?, &cos, &sin)?;
-            let k_embed = candle_nn::rotary_emb::rope_i(&k.contiguous()?, &cos, &sin)?;
+            let q_embed = hanzo_nn::rotary_emb::rope_i(&q.contiguous()?, &cos, &sin)?;
+            let k_embed = hanzo_nn::rotary_emb::rope_i(&k.contiguous()?, &cos, &sin)?;
             Ok((q_embed, k_embed))
         } else {
             let mut q_embeds = Vec::new();
@@ -1780,12 +1780,12 @@ impl DeepSeekV2RotaryEmbedding {
             for (i, offset) in seqlen_offsets.iter().enumerate() {
                 let cos = self.cos.narrow(0, *offset, seq_len)?;
                 let sin = self.sin.narrow(0, *offset, seq_len)?;
-                let q_embed = candle_nn::rotary_emb::rope_i(
+                let q_embed = hanzo_nn::rotary_emb::rope_i(
                     &q.i(i)?.unsqueeze(0)?.contiguous()?,
                     &cos,
                     &sin,
                 )?;
-                let k_embed = candle_nn::rotary_emb::rope_i(
+                let k_embed = hanzo_nn::rotary_emb::rope_i(
                     &k.i(i)?.unsqueeze(0)?.contiguous()?,
                     &cos,
                     &sin,
@@ -1960,8 +1960,8 @@ impl Phi4MMRotaryEmbedding {
         let (q_rot, k_rot) = if seqlen_offsets.len() == 1 {
             let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
             let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = candle_nn::rotary_emb::rope(&q_rot.contiguous()?, &cos, &sin)?;
-            let k_embed = candle_nn::rotary_emb::rope(&k_rot.contiguous()?, &cos, &sin)?;
+            let q_embed = hanzo_nn::rotary_emb::rope(&q_rot.contiguous()?, &cos, &sin)?;
+            let k_embed = hanzo_nn::rotary_emb::rope(&k_rot.contiguous()?, &cos, &sin)?;
             (q_embed, k_embed)
         } else {
             let mut q_embeds = Vec::new();
@@ -1969,12 +1969,12 @@ impl Phi4MMRotaryEmbedding {
             for (i, offset) in seqlen_offsets.iter().enumerate() {
                 let cos = cos.narrow(0, *offset, seq_len)?;
                 let sin = sin.narrow(0, *offset, seq_len)?;
-                let q_embed = candle_nn::rotary_emb::rope(
+                let q_embed = hanzo_nn::rotary_emb::rope(
                     &q_rot.i(i)?.unsqueeze(0)?.contiguous()?,
                     &cos,
                     &sin,
                 )?;
-                let k_embed = candle_nn::rotary_emb::rope(
+                let k_embed = hanzo_nn::rotary_emb::rope(
                     &k_rot.i(i)?.unsqueeze(0)?.contiguous()?,
                     &cos,
                     &sin,
@@ -2400,7 +2400,7 @@ fn selected_rope_cache(
         ))
     } else {
         if seqlen_offsets.len() != batch {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "RoPE offset count {} does not match batch size {batch}",
                 seqlen_offsets.len()
             );
@@ -2447,12 +2447,12 @@ pub fn qk_rms_norm_rope(
     }
 
     let rope = if is_gpt_neox {
-        candle_nn::rotary_emb::rope
+        hanzo_nn::rotary_emb::rope
     } else {
-        candle_nn::rotary_emb::rope_i
+        hanzo_nn::rotary_emb::rope_i
     };
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
-    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
+    let q = hanzo_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let k = hanzo_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
 
     #[cfg(feature = "cuda")]
     if q.device().is_cuda() && q.dim(1)? == k.dim(1)? && cos.dim(0)? == batch * seq_len {
@@ -2529,11 +2529,11 @@ pub fn q_rms_norm_rope(
     }
 
     let rope = if is_gpt_neox {
-        candle_nn::rotary_emb::rope
+        hanzo_nn::rotary_emb::rope
     } else {
-        candle_nn::rotary_emb::rope_i
+        hanzo_nn::rotary_emb::rope_i
     };
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let q = hanzo_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
     if seqlen_offsets.len() == 1 {
         rope(&q.contiguous()?, &cos, &sin)
     } else {
@@ -2574,7 +2574,7 @@ pub fn qk_rms_norm_mrope(
                 cos.reshape((batch * seq_len, ()))?
             }
             [cos_rows, _] if *cos_rows == seq_len || *cos_rows == batch * seq_len => cos.clone(),
-            _ => candle_core::bail!(
+            _ => hanzo_ml::bail!(
                 "MRoPE cos shape {:?} is incompatible with q shape {:?}",
                 cos.shape(),
                 q.shape()
@@ -2585,7 +2585,7 @@ pub fn qk_rms_norm_mrope(
                 sin.reshape((batch * seq_len, ()))?
             }
             [sin_rows, _] if *sin_rows == seq_len || *sin_rows == batch * seq_len => sin.clone(),
-            _ => candle_core::bail!(
+            _ => hanzo_ml::bail!(
                 "MRoPE sin shape {:?} is incompatible with q shape {:?}",
                 sin.shape(),
                 q.shape()
@@ -2607,12 +2607,12 @@ pub fn qk_rms_norm_mrope(
     }
 
     let rope = if is_gpt_neox {
-        candle_nn::rotary_emb::rope
+        hanzo_nn::rotary_emb::rope
     } else {
-        candle_nn::rotary_emb::rope_i
+        hanzo_nn::rotary_emb::rope_i
     };
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
-    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
+    let q = hanzo_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let k = hanzo_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
     if rot_width < head_dim {
         let q_rot = q.narrow(D::Minus1, 0, rot_width)?;
         let q_pass = q.narrow(D::Minus1, rot_width, head_dim - rot_width)?;
@@ -2746,9 +2746,9 @@ impl RotaryEmbedding {
         let (_b_sz, kh, _seq_len, __n_embd) = k.dims4()?;
 
         let rope = if self.is_gpt_neox {
-            candle_nn::rotary_emb::rope
+            hanzo_nn::rotary_emb::rope
         } else {
-            candle_nn::rotary_emb::rope_i
+            hanzo_nn::rotary_emb::rope_i
         };
 
         if cfg!(feature = "cuda") && qh == kh {
@@ -2812,9 +2812,9 @@ impl RotaryEmbedding {
     pub fn forward_q(&self, q: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
         let rope = if self.is_gpt_neox {
-            candle_nn::rotary_emb::rope
+            hanzo_nn::rotary_emb::rope
         } else {
-            candle_nn::rotary_emb::rope_i
+            hanzo_nn::rotary_emb::rope_i
         };
         if seqlen_offsets.len() == 1 {
             let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
@@ -2993,12 +2993,12 @@ impl GptOssRotaryEmbedding {
             return Ok((q, k));
         }
 
-        // CPU fallback using candle_nn's rope (GPT-NeoX/chunked style)
+        // CPU fallback using hanzo_nn's rope (GPT-NeoX/chunked style)
         if seqlen_offsets.len() == 1 {
             let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
             let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-            let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
+            let q_embed = hanzo_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
+            let k_embed = hanzo_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
             Ok((q_embed, k_embed))
         } else {
             let mut q_embeds = Vec::new();
@@ -3007,9 +3007,9 @@ impl GptOssRotaryEmbedding {
                 let cos = self.cos.narrow(0, *offset, seq_len)?;
                 let sin = self.sin.narrow(0, *offset, seq_len)?;
                 let q_embed =
-                    candle_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                    hanzo_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
                 let k_embed =
-                    candle_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                    hanzo_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
                 q_embeds.push(q_embed);
                 k_embeds.push(k_embed);
             }
@@ -3052,39 +3052,39 @@ impl Module for Activation {
             Self::Relu2 => xs.relu()?.sqr(),
             Self::Relu6 => xs.clamp(0f32, 6f32),
             Self::Silu => xs.silu(),
-            Self::Sigmoid => candle_nn::ops::sigmoid(xs),
-            Self::HardSigmoid => candle_nn::ops::hard_sigmoid(xs),
-            Self::Swiglu => candle_nn::ops::swiglu(xs),
-            Self::Swish => xs * candle_nn::ops::sigmoid(xs)?,
-            Self::HardSwish => xs * candle_nn::ops::hard_sigmoid(xs)?,
+            Self::Sigmoid => hanzo_nn::ops::sigmoid(xs),
+            Self::HardSigmoid => hanzo_nn::ops::hard_sigmoid(xs),
+            Self::Swiglu => hanzo_nn::ops::swiglu(xs),
+            Self::Swish => xs * hanzo_nn::ops::sigmoid(xs)?,
+            Self::HardSwish => xs * hanzo_nn::ops::hard_sigmoid(xs)?,
             &Self::Elu(alpha) => xs.elu(alpha),
-            &Self::LeakyRelu(negative_slope) => candle_nn::ops::leaky_relu(xs, negative_slope),
+            &Self::LeakyRelu(negative_slope) => hanzo_nn::ops::leaky_relu(xs, negative_slope),
             Self::GeluPytorchTanh => xs.gelu(),
-            Self::QuickGelu => xs * candle_nn::ops::sigmoid(&(xs * 1.702f64)?),
+            Self::QuickGelu => xs * hanzo_nn::ops::sigmoid(&(xs * 1.702f64)?),
         }
     }
 }
 
-impl TryInto<candle_nn::Activation> for Activation {
-    type Error = candle_core::Error;
+impl TryInto<hanzo_nn::Activation> for Activation {
+    type Error = hanzo_ml::Error;
 
-    fn try_into(self) -> Result<candle_nn::Activation> {
+    fn try_into(self) -> Result<hanzo_nn::Activation> {
         match self {
-            Self::Gelu => Ok(candle_nn::Activation::Gelu),
-            Self::Relu => Ok(candle_nn::Activation::Relu),
-            Self::Silu => Ok(candle_nn::Activation::Silu),
-            Self::NewGelu => Ok(candle_nn::Activation::NewGelu),
-            Self::Relu2 => Ok(candle_nn::Activation::Relu2),
-            Self::Relu6 => Ok(candle_nn::Activation::Relu6),
-            Self::Sigmoid => Ok(candle_nn::Activation::Sigmoid),
-            Self::HardSigmoid => Ok(candle_nn::Activation::HardSigmoid),
-            Self::Swiglu => Ok(candle_nn::Activation::Swiglu),
-            Self::Swish => Ok(candle_nn::Activation::Swish),
-            Self::HardSwish => Ok(candle_nn::Activation::HardSwish),
-            Self::Elu(x) => Ok(candle_nn::Activation::Elu(x)),
-            Self::LeakyRelu(x) => Ok(candle_nn::Activation::LeakyRelu(x)),
-            Self::GeluPytorchTanh => Ok(candle_nn::Activation::GeluPytorchTanh),
-            Self::QuickGelu => candle_core::bail!("No mapping to candle_nn for QuickGelu"),
+            Self::Gelu => Ok(hanzo_nn::Activation::Gelu),
+            Self::Relu => Ok(hanzo_nn::Activation::Relu),
+            Self::Silu => Ok(hanzo_nn::Activation::Silu),
+            Self::NewGelu => Ok(hanzo_nn::Activation::NewGelu),
+            Self::Relu2 => Ok(hanzo_nn::Activation::Relu2),
+            Self::Relu6 => Ok(hanzo_nn::Activation::Relu6),
+            Self::Sigmoid => Ok(hanzo_nn::Activation::Sigmoid),
+            Self::HardSigmoid => Ok(hanzo_nn::Activation::HardSigmoid),
+            Self::Swiglu => Ok(hanzo_nn::Activation::Swiglu),
+            Self::Swish => Ok(hanzo_nn::Activation::Swish),
+            Self::HardSwish => Ok(hanzo_nn::Activation::HardSwish),
+            Self::Elu(x) => Ok(hanzo_nn::Activation::Elu(x)),
+            Self::LeakyRelu(x) => Ok(hanzo_nn::Activation::LeakyRelu(x)),
+            Self::GeluPytorchTanh => Ok(hanzo_nn::Activation::GeluPytorchTanh),
+            Self::QuickGelu => hanzo_ml::bail!("No mapping to hanzo_nn for QuickGelu"),
         }
     }
 }
@@ -3215,7 +3215,7 @@ impl TensorInfExtend for Tensor {
             DType::F64 => Ok(sum.to_scalar::<f64>()? == 0.),
             DType::F8E4M3 => Ok(sum.to_scalar::<F8E4M3>()? == F8E4M3::ZERO),
             DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 | _ => {
-                candle_core::bail!("dtype {:?} is not supported with .any", self.dtype())
+                hanzo_ml::bail!("dtype {:?} is not supported with .any", self.dtype())
             }
         }
     }
@@ -3234,7 +3234,7 @@ pub fn clamp_for_f16(xs: &Tensor) -> Result<Tensor> {
         DType::F64 => f64::MAX as f32 - 1000.,
         DType::F8E4M3 => F8E4M3::MAX.to_f32() - 1000.,
         DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 | _ => {
-            candle_core::bail!("dtype {:?} is not supported with clamp_for_f16", xs.dtype())
+            hanzo_ml::bail!("dtype {:?} is not supported with clamp_for_f16", xs.dtype())
         }
     };
     if xs.is_inf()?.any()? {
@@ -3291,7 +3291,7 @@ impl GetFloatInfo for DType {
                 dtype: DType::F8E4M3,
             },
             other => {
-                candle_core::bail!("Expected a float type for `GetFloatInfo`, got {other:?}");
+                hanzo_ml::bail!("Expected a float type for `GetFloatInfo`, got {other:?}");
             }
         };
         Ok(finfo)

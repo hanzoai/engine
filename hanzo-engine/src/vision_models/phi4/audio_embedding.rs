@@ -1,8 +1,8 @@
 use crate::attention::AttentionMask;
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
-use candle_nn::Module;
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor};
+use hanzo_nn::Module;
 use hanzo_quant::{NonZeroOp, ShardedVarBuilder};
 
 use crate::{
@@ -21,7 +21,7 @@ use super::Phi4MMConfig;
 pub(super) const AUDIO_SPECIAL_TOKEN_ID: f64 = 200011.;
 
 pub struct AudioEmbedding {
-    wte: candle_nn::Embedding,
+    wte: hanzo_nn::Embedding,
     proj: HashMap<InputMode, Vec<Arc<dyn Module + Send + Sync>>>,
     encoder: ConformerEncoder,
     target_device_dtype: (Device, DType),
@@ -30,7 +30,7 @@ pub struct AudioEmbedding {
 impl AudioEmbedding {
     pub fn new(
         cfg: &Phi4MMConfig,
-        wte: candle_nn::Embedding,
+        wte: hanzo_nn::Embedding,
         audio_embd_config: &Phi4MMAudioEmbedConfig,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
@@ -38,7 +38,7 @@ impl AudioEmbedding {
 
         let conformer_config = match &cfg.audio_processor {
             Some(Phi4MMAudioConfig { config, name }) if name == "cascades" => config,
-            _ => candle_core::bail!("Must have audio processor (`cascades`)"),
+            _ => hanzo_ml::bail!("Must have audio processor (`cascades`)"),
         };
         let encoder = ConformerEncoder::new(conformer_config.clone(), vb.pp("encoder"))?;
 
@@ -110,7 +110,7 @@ impl AudioEmbedding {
 
         // Apply projection based on mode
         let projection_layers = self.proj.get(input_mode).ok_or_else(|| {
-            candle_core::Error::Msg(format!("Projection mode {input_mode:?} not found"))
+            hanzo_ml::Error::Msg(format!("Projection mode {input_mode:?} not found"))
         })?;
 
         let mut audio_set_tensor = audio_features;
@@ -169,7 +169,7 @@ impl AudioEmbedding {
         // Verify that audio_embed_sizes sum matches positions count
         let total_audio_tokens = audio_embed_sizes.iter().sum::<usize>();
         if total_audio_tokens != positions.dim(0)? {
-            return Err(candle_core::Error::Msg(format!(
+            return Err(hanzo_ml::Error::Msg(format!(
                 "Audio embed sizes sum ({}) doesn't match positions count ({})",
                 total_audio_tokens,
                 positions.dim(0)?

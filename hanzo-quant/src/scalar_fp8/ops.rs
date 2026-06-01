@@ -1,4 +1,4 @@
-use candle_core::{CpuStorage, CustomOp1, DType, Result, Tensor};
+use hanzo_ml::{CpuStorage, CustomOp1, DType, Result, Tensor};
 use float8::F8E4M3;
 
 #[allow(dead_code)]
@@ -13,14 +13,14 @@ impl CustomOp1 for Fp8ToDtype {
 
     fn cpu_fwd(
         &self,
-        input_s: &candle_core::CpuStorage,
-        input_l: &candle_core::Layout,
-    ) -> candle_core::Result<(candle_core::CpuStorage, candle_core::Shape)> {
+        input_s: &hanzo_ml::CpuStorage,
+        input_l: &hanzo_ml::Layout,
+    ) -> hanzo_ml::Result<(hanzo_ml::CpuStorage, hanzo_ml::Shape)> {
         let CpuStorage::F8E4M3(input) = input_s else {
-            candle_core::bail!("Expected F8E4M3 input!");
+            hanzo_ml::bail!("Expected F8E4M3 input!");
         };
         if input_l.start_offset() != 0 || !input_l.is_contiguous() {
-            candle_core::bail!("Expected input to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected input to have start offset 0, continuous");
         }
 
         let output = match self.target_dtype {
@@ -45,7 +45,7 @@ impl CustomOp1 for Fp8ToDtype {
                 }
                 CpuStorage::BF16(output)
             }
-            other => candle_core::bail!("Unsupported target dtype for FP8 conversion: {other:?}"),
+            other => hanzo_ml::bail!("Unsupported target dtype for FP8 conversion: {other:?}"),
         };
 
         Ok((output, input_l.shape().clone()))
@@ -54,20 +54,20 @@ impl CustomOp1 for Fp8ToDtype {
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
-        input_s: &candle_core::CudaStorage,
-        input_l: &candle_core::Layout,
-    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
-        use candle_core::{backend::BackendStorage, CudaStorage};
+        input_s: &hanzo_ml::CudaStorage,
+        input_l: &hanzo_ml::Layout,
+    ) -> Result<(hanzo_ml::CudaStorage, hanzo_ml::Shape)> {
+        use hanzo_ml::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
 
         use crate::utils::slice_ptr;
 
         if !super::ffi::HAVE_SCALAR_FP8_KERNELS {
-            candle_core::bail!("Do not have scalar FP8 kernels.");
+            hanzo_ml::bail!("Do not have scalar FP8 kernels.");
         }
 
         if input_l.start_offset() != 0 || !input_l.is_contiguous() {
-            candle_core::bail!("Expected input to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected input to have start offset 0, continuous");
         }
 
         let dev = input_s.device();
@@ -119,7 +119,7 @@ impl CustomOp1 for Fp8ToDtype {
                 drop(output_guard);
                 CudaStorage::wrap_cuda_slice(output, dev.clone())
             }
-            other => candle_core::bail!("Unsupported target dtype for FP8 conversion: {other:?}"),
+            other => hanzo_ml::bail!("Unsupported target dtype for FP8 conversion: {other:?}"),
         };
 
         Ok((res, input_l.shape().clone()))
@@ -128,13 +128,13 @@ impl CustomOp1 for Fp8ToDtype {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        input_s: &candle_core::MetalStorage,
-        input_l: &candle_core::Layout,
-    ) -> Result<(candle_core::MetalStorage, candle_core::Shape)> {
-        use candle_core::backend::BackendStorage;
+        input_s: &hanzo_ml::MetalStorage,
+        input_l: &hanzo_ml::Layout,
+    ) -> Result<(hanzo_ml::MetalStorage, hanzo_ml::Shape)> {
+        use hanzo_ml::backend::BackendStorage;
 
         if input_l.start_offset() != 0 || !input_l.is_contiguous() {
-            candle_core::bail!("Expected input to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected input to have start offset 0, continuous");
         }
 
         let device = input_s.device();
@@ -155,10 +155,10 @@ impl CustomOp1 for Fp8ToDtype {
             &output,
             num_elements,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
 
         let newstorage =
-            candle_core::MetalStorage::new(output, device.clone(), num_elements, self.target_dtype);
+            hanzo_ml::MetalStorage::new(output, device.clone(), num_elements, self.target_dtype);
         Ok((newstorage, out_shape))
     }
 }
@@ -174,11 +174,11 @@ impl CustomOp1 for DtypeToFp8 {
 
     fn cpu_fwd(
         &self,
-        input_s: &candle_core::CpuStorage,
-        input_l: &candle_core::Layout,
-    ) -> candle_core::Result<(candle_core::CpuStorage, candle_core::Shape)> {
+        input_s: &hanzo_ml::CpuStorage,
+        input_l: &hanzo_ml::Layout,
+    ) -> hanzo_ml::Result<(hanzo_ml::CpuStorage, hanzo_ml::Shape)> {
         if input_l.start_offset() != 0 || !input_l.is_contiguous() {
-            candle_core::bail!("Expected input to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected input to have start offset 0, continuous");
         }
 
         let output = match (self.source_dtype, input_s) {
@@ -208,7 +208,7 @@ impl CustomOp1 for DtypeToFp8 {
                 }
                 CpuStorage::F8E4M3(output)
             }
-            _ => candle_core::bail!("Mismatched source dtype and storage type"),
+            _ => hanzo_ml::bail!("Mismatched source dtype and storage type"),
         };
 
         Ok((output, input_l.shape().clone()))
@@ -217,20 +217,20 @@ impl CustomOp1 for DtypeToFp8 {
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
-        input_s: &candle_core::CudaStorage,
-        input_l: &candle_core::Layout,
-    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
-        use candle_core::{backend::BackendStorage, CudaStorage};
+        input_s: &hanzo_ml::CudaStorage,
+        input_l: &hanzo_ml::Layout,
+    ) -> Result<(hanzo_ml::CudaStorage, hanzo_ml::Shape)> {
+        use hanzo_ml::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
 
         use crate::utils::slice_ptr;
 
         if !super::ffi::HAVE_SCALAR_FP8_KERNELS {
-            candle_core::bail!("Do not have scalar FP8 kernels.");
+            hanzo_ml::bail!("Do not have scalar FP8 kernels.");
         }
 
         if input_l.start_offset() != 0 || !input_l.is_contiguous() {
-            candle_core::bail!("Expected input to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected input to have start offset 0, continuous");
         }
 
         let dev = input_s.device();
@@ -276,7 +276,7 @@ impl CustomOp1 for DtypeToFp8 {
                     );
                 }
             }
-            other => candle_core::bail!("Unsupported source dtype for FP8 conversion: {other:?}"),
+            other => hanzo_ml::bail!("Unsupported source dtype for FP8 conversion: {other:?}"),
         }
 
         drop(output_guard);
@@ -287,13 +287,13 @@ impl CustomOp1 for DtypeToFp8 {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        input_s: &candle_core::MetalStorage,
-        input_l: &candle_core::Layout,
-    ) -> Result<(candle_core::MetalStorage, candle_core::Shape)> {
-        use candle_core::backend::BackendStorage;
+        input_s: &hanzo_ml::MetalStorage,
+        input_l: &hanzo_ml::Layout,
+    ) -> Result<(hanzo_ml::MetalStorage, hanzo_ml::Shape)> {
+        use hanzo_ml::backend::BackendStorage;
 
         if input_l.start_offset() != 0 || !input_l.is_contiguous() {
-            candle_core::bail!("Expected input to have start offset 0, continuous");
+            hanzo_ml::bail!("Expected input to have start offset 0, continuous");
         }
 
         let device = input_s.device();
@@ -314,10 +314,10 @@ impl CustomOp1 for DtypeToFp8 {
             &output,
             num_elements,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
 
         let newstorage =
-            candle_core::MetalStorage::new(output, device.clone(), num_elements, DType::F8E4M3);
+            hanzo_ml::MetalStorage::new(output, device.clone(), num_elements, DType::F8E4M3);
         Ok((newstorage, out_shape))
     }
 }
@@ -326,7 +326,7 @@ impl CustomOp1 for DtypeToFp8 {
 #[allow(dead_code)]
 pub(crate) fn fp8_to_dtype(input: &Tensor, target_dtype: DType) -> Result<Tensor> {
     if input.dtype() != DType::F8E4M3 {
-        candle_core::bail!("Input tensor must be F8E4M3, got {:?}", input.dtype());
+        hanzo_ml::bail!("Input tensor must be F8E4M3, got {:?}", input.dtype());
     }
     input.apply_op1_no_bwd(&Fp8ToDtype { target_dtype })
 }
@@ -335,7 +335,7 @@ pub(crate) fn fp8_to_dtype(input: &Tensor, target_dtype: DType) -> Result<Tensor
 pub(crate) fn dtype_to_fp8(input: &Tensor) -> Result<Tensor> {
     let source_dtype = input.dtype();
     if !matches!(source_dtype, DType::F32 | DType::F16 | DType::BF16) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Input tensor must be F32, F16, or BF16, got {:?}",
             source_dtype
         );

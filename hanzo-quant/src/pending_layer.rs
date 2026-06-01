@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use candle_core::{DType, Device, Result, Tensor};
+use hanzo_ml::{DType, Device, Result, Tensor};
 
 use crate::{
     DistributedKind, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde,
@@ -43,7 +43,7 @@ impl PendingIsqLayer {
         match &*state {
             PendingState::Ready(layer) => Ok(layer.clone()),
             PendingState::Taken => {
-                candle_core::bail!("PendingIsqLayer is in an invalid transitional state")
+                hanzo_ml::bail!("PendingIsqLayer is in an invalid transitional state")
             }
             PendingState::Pending(_) => {
                 // Take the receiver out so we can receive without holding the
@@ -52,7 +52,7 @@ impl PendingIsqLayer {
                 if let PendingState::Pending(rx) = old {
                     let result = rx
                         .recv()
-                        .map_err(|e| candle_core::Error::Msg(format!("ISQ channel error: {e}")))?;
+                        .map_err(|e| hanzo_ml::Error::Msg(format!("ISQ channel error: {e}")))?;
                     match result {
                         Ok(layer) => {
                             *state = PendingState::Ready(layer.clone());
@@ -113,7 +113,7 @@ impl QuantMethod for PendingIsqLayer {
     where
         Self: Sized,
     {
-        candle_core::bail!("PendingIsqLayer cannot be created via QuantMethodConfig")
+        hanzo_ml::bail!("PendingIsqLayer cannot be created via QuantMethodConfig")
     }
 
     fn dequantize_w(&self) -> Result<Tensor> {
@@ -169,11 +169,11 @@ impl QuantMethod for PendingIsqLayer {
 
     fn begin_track_stats(&mut self) -> Result<()> {
         // Immediate ISQ is the no-imatrix path, so stats tracking is never used.
-        candle_core::bail!("`PendingIsqLayer` does not support tracking stats.")
+        hanzo_ml::bail!("`PendingIsqLayer` does not support tracking stats.")
     }
 
     fn end_track_stats(&self) -> Result<Tensor> {
-        candle_core::bail!("`PendingIsqLayer` does not support tracking stats.")
+        hanzo_ml::bail!("`PendingIsqLayer` does not support tracking stats.")
     }
 
     fn is_distributed(&self) -> Option<DistributedKind> {

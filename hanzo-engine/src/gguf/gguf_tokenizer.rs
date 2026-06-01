@@ -6,7 +6,7 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::DEBUG;
 use ahash::AHashMap;
 use anyhow::Result;
-use candle_core::quantized::gguf_file::Value;
+use hanzo_ml::quantized::gguf_file::Value;
 use itertools::Itertools;
 use tokenizers::pre_tokenizers::{
     sequence::Sequence,
@@ -75,7 +75,7 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
     };
 
     let md_get = |s: &str| match metadata.metadata.get(s) {
-        None => candle_core::bail!("cannot find {s} in metadata"),
+        None => hanzo_ml::bail!("cannot find {s} in metadata"),
         Some(v) => Ok(v),
     };
 

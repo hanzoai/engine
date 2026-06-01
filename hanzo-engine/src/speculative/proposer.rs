@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use candle_core::{Result, Tensor};
+use hanzo_ml::{Result, Tensor};
 use rand_isaac::Isaac64Rng;
 
 use crate::pipeline::text_models_inputs_processor::PagedAttentionMeta;

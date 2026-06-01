@@ -2,7 +2,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use candle_core::{Device, Result, Tensor};
+use hanzo_ml::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
 use itertools::Itertools;
 use hanzo_vision::{ApplyTransforms, Normalize, ToTensor, Transforms};
@@ -585,7 +585,7 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             num_img_tokens.push(num_image_tokens);
         }
         if padded_images.len() > 1 {
-            candle_core::bail!("Can only process one image per batch");
+            hanzo_ml::bail!("Can only process one image per batch");
         }
         let image_sizes = image_sizes[0];
 

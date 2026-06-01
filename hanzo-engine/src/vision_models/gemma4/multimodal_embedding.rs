@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{Module, Result, Tensor};
+use hanzo_ml::{Module, Result, Tensor};
 use hanzo_quant::{QuantMethod, ShardedVarBuilder};
 use std::sync::Arc;
 

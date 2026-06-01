@@ -303,7 +303,7 @@ mod tests {
     fn test_sanitize_error_message_with_backtrace() {
         // Test error with backtrace
         let error_with_backtrace = "Failed to parse Forge Provider response: A weight is negative, too large or not a valid number
-  0: candle_core::error::Error::bt
+  0: hanzo_ml::error::Error::bt
   1: hanzo_engine::sampler::Sampler::sample_multinomial
   2: hanzo_engine::sampler::Sampler::sample_top_kp_min_p
   3: hanzo_engine::sampler::Sampler::sample

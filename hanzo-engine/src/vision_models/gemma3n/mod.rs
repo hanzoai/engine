@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use candle_core::{DType, Device, Result, Tensor, D};
+use hanzo_ml::{DType, Device, Result, Tensor, D};
 use config::Gemma3nConfig;
 use hanzo_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use text::TextModel;
@@ -492,7 +492,7 @@ impl IsqModel for Gemma3nModel {
         uvb.to_safetensors()
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         self.language_model.imatrix_names()
     }
 }
@@ -518,7 +518,7 @@ impl MultimodalModel for Gemma3nModel {
         model_specific_args: Box<dyn std::any::Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         let args = model_specific_args
             .downcast::<Gemma3nSpecificArgs>()
             .expect("Downcast to Gemma3nSpecificArgs failed");

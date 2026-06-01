@@ -16,7 +16,7 @@ use crate::{
 /// Mixtral Model
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
-use candle_core::{DType, Device, Module, Result, Tensor};
+use hanzo_ml::{DType, Device, Module, Result, Tensor};
 use hanzo_quant::{QuantMethod, ShardedVarBuilder};
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
@@ -359,7 +359,7 @@ impl SparseMoeBlock {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
+        let routing_weights = hanzo_nn::ops::softmax_last_dim(&router_logits)?;
 
         // In order to extract topk, we extract the data from the tensor and manipulate it
         // directly. Maybe we will want to use some custom ops instead at some point.
@@ -520,7 +520,7 @@ impl DecoderLayer {
 }
 
 pub struct XLoraModel {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: hanzo_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -654,7 +654,7 @@ impl XLoraModel {
         )?;
         if xlora_config.is_some() && lm_head.is_lora() {
             // This is why we can pass dummy values (..., None, 1.0, None)?
-            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+            hanzo_ml::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
         }
         Ok(Self {
             embed_tokens,

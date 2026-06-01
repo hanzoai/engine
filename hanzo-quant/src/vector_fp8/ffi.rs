@@ -10,7 +10,7 @@ extern "C" {
         d_scale: *const f32,
         d_output: *mut f32,
         num_elements: usize,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_dequant_fp8_vector_kernel_f16(
@@ -18,7 +18,7 @@ extern "C" {
         d_scale: *const f32,
         d_output: *mut f16,
         num_elements: usize,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_dequant_fp8_vector_kernel_bf16(
@@ -26,7 +26,7 @@ extern "C" {
         d_scale: *const f32,
         d_output: *mut bf16,
         num_elements: usize,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_quant_fp8_vector_kernel_f32(
@@ -34,7 +34,7 @@ extern "C" {
         d_weight: *mut F8E4M3,
         d_scale: *mut f32,
         num_elements: usize,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_quant_fp8_vector_kernel_f16(
@@ -42,7 +42,7 @@ extern "C" {
         d_weight: *mut F8E4M3,
         d_scale: *mut f32,
         num_elements: usize,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_quant_fp8_vector_kernel_bf16(
@@ -50,6 +50,6 @@ extern "C" {
         d_weight: *mut F8E4M3,
         d_scale: *mut f32,
         num_elements: usize,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 }

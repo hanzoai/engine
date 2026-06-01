@@ -30,7 +30,7 @@ use util::{
     send_request_and_wait, send_request_with_optional_stream, PyApiErr, PyApiResult,
 };
 
-use candle_core::{Device, Result};
+use hanzo_ml::{Device, Result};
 use hanzo_engine::{
     initialize_logging, paged_attn_supported, parse_isq_value, AgentToolApprovalHandler,
     AnyMoeLoader, AutoDeviceMapParams, ChatCompletionResponse, CompletionResponse, Constraint,

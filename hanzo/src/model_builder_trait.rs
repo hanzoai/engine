@@ -1,6 +1,6 @@
 //! Multi-model builder and pipeline construction utilities.
 
-use candle_core::Device;
+use hanzo_ml::Device;
 use hanzo_engine::{
     AddModelConfig, DefaultSchedulerMethod, EngineConfig, IsqType, Pipeline, SchedulerConfig,
     SearchCallback, SearchEmbeddingModel, ToolCallbackWithTool,

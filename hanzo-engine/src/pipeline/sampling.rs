@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use candle_core::{DType, Result, Tensor};
+use hanzo_ml::{DType, Result, Tensor};
 use rand_isaac::Isaac64Rng;
 
 use crate::{
@@ -35,7 +35,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 ) -> Result<()> {
     let mut is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_seq_len);
     let metadata = this.get_metadata();
-    let tok_env = metadata.tok_env().ok_or(candle_core::Error::Msg(
+    let tok_env = metadata.tok_env().ok_or(hanzo_ml::Error::Msg(
         "`finish_or_add_toks_to_seq` requires the pipeline to have a token trie".to_string(),
     ))?;
     // Include special tokens when tool calling is active (so tool parsers can see
@@ -141,7 +141,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         )
                     } else {
                         let (text_new, _) = parse_text_tools(delta.as_str(), seq.tools.clone())
-                            .map_err(candle_core::Error::msg)?;
+                            .map_err(hanzo_ml::Error::msg)?;
                         (text_new.map(ToString::to_string), None)
                     };
 
@@ -173,7 +173,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     } else {
                         // Not in Harmony mode - parse text for tool calls
                         let (_, tool_calls) = parse_text_tools(delta.as_str(), seq.tools.clone())
-                            .map_err(candle_core::Error::msg)?;
+                            .map_err(hanzo_ml::Error::msg)?;
                         if !tool_calls.is_empty() {
                             is_done = Some(StopReason::ToolCalls);
                         }
@@ -282,7 +282,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         token: crate::handle_seq_error_ok!(
                         tokenizer
                         .as_ref()
-                        .ok_or(candle_core::Error::Msg(
+                        .ok_or(hanzo_ml::Error::Msg(
                             "`finish_or_add_toks_to_seq` requires the pipeline to have a tokenizer"
                                 .to_string(),
                         ))?.decode(&[logprob.token], false),
@@ -322,7 +322,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 }
                 crate::sequence::StopReason::GeneratedImage
                 | crate::sequence::StopReason::GeneratedSpeech => {
-                    candle_core::bail!("Stop reason was `GeneratedImage`.")
+                    hanzo_ml::bail!("Stop reason was `GeneratedImage`.")
                 }
             };
 
@@ -350,7 +350,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             .collect()
                     } else if let Some(ref content) = final_content {
                         let (_, tc) = parse_text_tools(content.as_str(), seq.tools.clone())
-                            .map_err(candle_core::Error::msg)?;
+                            .map_err(hanzo_ml::Error::msg)?;
                         tc
                     } else {
                         vec![]
@@ -359,7 +359,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     (final_content, tool_calls, reasoning)
                 } else {
                     let (text_new, tool_calls) = parse_text_tools(text.as_str(), seq.tools.clone())
-                        .map_err(candle_core::Error::msg)?;
+                        .map_err(hanzo_ml::Error::msg)?;
                     (text_new.map(ToString::to_string), tool_calls, None)
                 };
 
@@ -422,7 +422,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         seq.responder(),
                     )
                     .await
-                    .map_err(candle_core::Error::msg)?;
+                    .map_err(hanzo_ml::Error::msg)?;
             } else {
                 group
                     .maybe_send_completion_done_response(
@@ -438,7 +438,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         seq.responder(),
                     )
                     .await
-                    .map_err(candle_core::Error::msg)?;
+                    .map_err(hanzo_ml::Error::msg)?;
             }
         }
         this.reset_non_granular_state();
@@ -542,7 +542,7 @@ pub async fn sample_sequence(
             {
                 None
             } else {
-                let mask = llg.compute_mask_or_eos().map_err(candle_core::Error::msg)?;
+                let mask = llg.compute_mask_or_eos().map_err(hanzo_ml::Error::msg)?;
                 if mask.is_allowed(first_lobprobs_response.token) {
                     // shouldn't really happen, except for EOS
                     None
@@ -597,7 +597,7 @@ pub async fn sample_sequence(
         SequenceRecognizer::Llguidance(ref mut llg) => {
             if !llg.is_stopped() {
                 llg.consume_token(second_logprobs_response.token)
-                    .map_err(candle_core::Error::msg)?;
+                    .map_err(hanzo_ml::Error::msg)?;
             }
         }
         SequenceRecognizer::None => {}

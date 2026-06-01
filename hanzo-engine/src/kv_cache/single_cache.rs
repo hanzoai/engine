@@ -1,4 +1,4 @@
-use candle_core::{Result, Tensor};
+use hanzo_ml::{Result, Tensor};
 
 use super::NormalCache;
 
@@ -73,7 +73,7 @@ impl SingleCache {
                 .is_some_and(|len| len <= self.max_seq_len)
     }
 
-    pub fn rollback_to(&mut self, keep_len: usize) -> candle_core::Result<()> {
+    pub fn rollback_to(&mut self, keep_len: usize) -> hanzo_ml::Result<()> {
         self.set_len(keep_len)
     }
 
@@ -82,9 +82,9 @@ impl SingleCache {
         self.all_data = None;
     }
 
-    pub fn try_set_len(&self, len: usize) -> candle_core::Result<()> {
+    pub fn try_set_len(&self, len: usize) -> hanzo_ml::Result<()> {
         if len > self.capacity_seq_len {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "kv-cache: requested length ({}) exceeds current capacity ({})",
                 len,
                 self.capacity_seq_len
@@ -93,7 +93,7 @@ impl SingleCache {
         Ok(())
     }
 
-    pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
+    pub fn set_len(&mut self, len: usize) -> hanzo_ml::Result<()> {
         self.try_set_len(len)?;
         self.current_seq_len = len;
         Ok(())
@@ -116,7 +116,7 @@ impl SingleCache {
             let n_blocks_needed = diff.div_ceil(NormalCache::CACHE_GROW_SIZE);
             self.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;
             if self.capacity_seq_len > self.max_seq_len {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "kv-cache: requested capacity ({}) above max seq len ({})",
                     self.capacity_seq_len,
                     self.max_seq_len

@@ -15,7 +15,7 @@ homepage.workspace = true
 [dependencies]
 anyhow.workspace = true
 axum = { workspace = true, features = ["tokio"] }
-candle-core.workspace = true
+hanzo-ml.workspace = true
 data-url.workspace = true
 either.workspace = true
 futures.workspace = true

@@ -11,7 +11,7 @@ pub(crate) use sinks::sinks_attn;
 
 #[cfg(not(feature = "metal"))]
 pub(crate) mod metal_flash_attn {
-    use candle_core::{Result, Tensor};
+    use hanzo_ml::{Result, Tensor};
     pub fn try_flash_attn_ext_bf16_dk512(
         _q: &Tensor,
         _k: &Tensor,

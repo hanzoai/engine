@@ -1,4 +1,4 @@
-use candle_core::{
+use hanzo_ml::{
     backend::BackendStorage, CpuStorage, DType, Layout, MetalStorage, Result, Shape, Storage,
     Tensor,
 };
@@ -21,13 +21,13 @@ struct PagedAttention {
     sinks: Option<Tensor>,
 }
 
-impl candle_core::CustomOp1 for PagedAttention {
+impl hanzo_ml::CustomOp1 for PagedAttention {
     fn name(&self) -> &'static str {
         "paged-attention"
     }
 
     fn cpu_fwd(&self, _: &CpuStorage, _: &Layout) -> Result<(CpuStorage, Shape)> {
-        candle_core::bail!("no cpu support for paged-attention")
+        hanzo_ml::bail!("no cpu support for paged-attention")
     }
 
     fn metal_fwd(&self, q: &MetalStorage, q_l: &Layout) -> Result<(MetalStorage, Shape)> {
@@ -35,14 +35,14 @@ impl candle_core::CustomOp1 for PagedAttention {
             DType::F16 => PagedAttentionDType::F16,
             DType::BF16 => PagedAttentionDType::BF16,
             DType::F32 => PagedAttentionDType::F32,
-            dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
+            dtype => hanzo_ml::bail!("dtype {dtype:?} is not supported"),
         };
         let cache_ty = match self.key_cache.dtype() {
             DType::F16 => PagedAttentionDType::F16,
             DType::BF16 => PagedAttentionDType::BF16,
             DType::F32 => PagedAttentionDType::F32,
             DType::F8E4M3 => PagedAttentionDType::F8E4M3,
-            dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
+            dtype => hanzo_ml::bail!("dtype {dtype:?} is not supported"),
         };
 
         let dev = q.device();
@@ -51,25 +51,25 @@ impl candle_core::CustomOp1 for PagedAttention {
         let (kc, kc_l) = self.key_cache.storage_and_layout();
         let kc = match &*kc {
             Storage::Metal(kc) => kc,
-            _ => candle_core::bail!("key_cache must be a metal tensor"),
+            _ => hanzo_ml::bail!("key_cache must be a metal tensor"),
         };
 
         let (vc, vc_l) = self.value_cache.storage_and_layout();
         let vc = match &*vc {
             Storage::Metal(vc) => vc,
-            _ => candle_core::bail!("value_cache must be a metal tensor"),
+            _ => hanzo_ml::bail!("value_cache must be a metal tensor"),
         };
 
         let (bt, bt_l) = self.block_tables.storage_and_layout();
         let bt = match &*bt {
             Storage::Metal(bt) => bt,
-            _ => candle_core::bail!("block_tables must be a metal tensor"),
+            _ => hanzo_ml::bail!("block_tables must be a metal tensor"),
         };
 
         let (cl, cl_l) = self.context_lens.storage_and_layout();
         let cl = match &*cl {
             Storage::Metal(cl) => cl,
-            _ => candle_core::bail!("context_lens must be a metal tensor"),
+            _ => hanzo_ml::bail!("context_lens must be a metal tensor"),
         };
 
         let q_rank = q_l.stride().len();
@@ -77,21 +77,21 @@ impl candle_core::CustomOp1 for PagedAttention {
         let vc_rank = vc_l.stride().len();
 
         if q_rank != 3 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "paged-attention expects `q` tensor to be of rank 3 \
                 (q: {q_l:?})"
             )
         }
 
         if kc_rank != 5 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "paged-attention expects `key_cache` tensor to be of rank 5 \
                 (key_cache: {kc_l:?})"
             )
         }
 
         if vc_rank != 4 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "paged-attention expects `value_cache` tensor to be of rank 4 \
                 (value_cache: {vc_l:?})"
             )
@@ -101,7 +101,7 @@ impl candle_core::CustomOp1 for PagedAttention {
             let (alibi_s, alibi_s_l) = alibi_slopes.storage_and_layout();
             let alibi_s = match &*alibi_s {
                 Storage::Metal(alibi_s) => alibi_s,
-                _ => candle_core::bail!("context_lens must be a metal tensor"),
+                _ => hanzo_ml::bail!("context_lens must be a metal tensor"),
             };
             Some((
                 alibi_s.clone(),
@@ -121,13 +121,13 @@ impl candle_core::CustomOp1 for PagedAttention {
             || head_size == 256
             || head_size == 512)
         {
-            candle_core::bail!("`head_size` must be one of 64, 80, 96, 112, 128, 192, 256 or 512");
+            hanzo_ml::bail!("`head_size` must be one of 64, 80, 96, 112, 128, 192, 256 or 512");
         }
 
         let (num_seqs_bt, max_num_blocks_per_seq) = bt_l.shape().dims2()?;
 
         if num_seqs_bt != num_seqs {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "shape mismatch block_tables {:?}, expected {:?}",
                 bt_l.shape(),
                 (num_seqs, max_num_blocks_per_seq)
@@ -136,7 +136,7 @@ impl candle_core::CustomOp1 for PagedAttention {
 
         let (num_blocks, num_kv_heads, head_size_kc, block_size, x) = kc_l.shape().dims5()?;
         if head_size_kc != head_size / x {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "shape mismatch value_cache {:?}, expected {:?}",
                 vc_l.shape(),
                 (num_blocks, num_kv_heads, head_size / x, block_size, x)
@@ -144,7 +144,7 @@ impl candle_core::CustomOp1 for PagedAttention {
         }
 
         if (num_blocks, num_kv_heads, head_size, block_size) != vc_l.shape().dims4()? {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "shape mismatch key_cache {:?} and value_cache {:?}",
                 kc_l.shape(),
                 vc_l.shape()
@@ -152,7 +152,7 @@ impl candle_core::CustomOp1 for PagedAttention {
         }
 
         if (num_seqs) != cl_l.shape().dims1()? {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "shape mismatch context_lens {:?}, expected {:?}",
                 cl_l.shape(),
                 (num_seqs)
@@ -161,22 +161,22 @@ impl candle_core::CustomOp1 for PagedAttention {
 
         let k_v_scale = if let (Some(k_scale), Some(v_scale)) = (&self.k_scale, &self.v_scale) {
             if k_scale.elem_count() != 1 || v_scale.elem_count() != 1 {
-                candle_core::bail!("k_scale and v_scale must be scalars");
+                hanzo_ml::bail!("k_scale and v_scale must be scalars");
             }
             if k_scale.dtype() != DType::F32 || v_scale.dtype() != DType::F32 {
-                candle_core::bail!("k_scale and v_scale must be f32");
+                hanzo_ml::bail!("k_scale and v_scale must be f32");
             }
 
             let (k_scale, _) = k_scale.storage_and_layout();
             let k_scale = match &*k_scale {
                 Storage::Metal(k_scale) => k_scale,
-                _ => candle_core::bail!("k_scale must be a metal tensor"),
+                _ => hanzo_ml::bail!("k_scale must be a metal tensor"),
             };
 
             let (v_scale, _) = v_scale.storage_and_layout();
             let v_scale = match &*v_scale {
                 Storage::Metal(v_scale) => v_scale,
-                _ => candle_core::bail!("v_scale must be a metal tensor"),
+                _ => hanzo_ml::bail!("v_scale must be a metal tensor"),
             };
 
             Some((k_scale.buffer().clone(), v_scale.buffer().clone()))
@@ -188,7 +188,7 @@ impl candle_core::CustomOp1 for PagedAttention {
             let (s, s_l) = sinks.storage_and_layout();
             let s = match &*s {
                 Storage::Metal(s) => s,
-                _ => candle_core::bail!("sinks must be a metal tensor"),
+                _ => hanzo_ml::bail!("sinks must be a metal tensor"),
             };
             Some((
                 s.buffer().clone(),
@@ -250,7 +250,7 @@ impl candle_core::CustomOp1 for PagedAttention {
                     .as_ref()
                     .map(|(b, o)| (b as &_, *o)),
             )
-            .map_err(candle_core::Error::wrap)?;
+            .map_err(hanzo_ml::Error::wrap)?;
         } else {
             let tmp_out_shape = Shape::from((num_seqs, num_heads, max_num_partitions, head_size));
             let exp_sums_shape = Shape::from((num_seqs, num_heads, max_num_partitions));
@@ -308,11 +308,11 @@ impl candle_core::CustomOp1 for PagedAttention {
                     .as_ref()
                     .map(|(b, o)| (b as &_, *o)),
             )
-            .map_err(candle_core::Error::wrap)?;
+            .map_err(hanzo_ml::Error::wrap)?;
         }
 
         let newstorage =
-            candle_core::MetalStorage::new(out, q.device().clone(), elem_count, q.dtype());
+            hanzo_ml::MetalStorage::new(out, q.device().clone(), elem_count, q.dtype());
         Ok((newstorage, out_shape))
     }
 }
@@ -364,7 +364,7 @@ pub fn paged_attention(
         k_scale: k_scale.cloned(),
         v_scale: v_scale.cloned(),
         sinks: sinks
-            .map(|s| s.to_dtype(candle_core::DType::F32))
+            .map(|s| s.to_dtype(hanzo_ml::DType::F32))
             .transpose()?,
     };
     q.apply_op1(op)
@@ -393,64 +393,64 @@ pub fn reshape_and_cache(
         DType::F16 => PagedAttentionDType::F16,
         DType::BF16 => PagedAttentionDType::BF16,
         DType::F32 => PagedAttentionDType::F32,
-        dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
+        dtype => hanzo_ml::bail!("dtype {dtype:?} is not supported"),
     };
     let cache_ty = match key_cache.dtype() {
         DType::F16 => PagedAttentionDType::F16,
         DType::BF16 => PagedAttentionDType::BF16,
         DType::F32 => PagedAttentionDType::F32,
         DType::F8E4M3 => PagedAttentionDType::F8E4M3,
-        dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
+        dtype => hanzo_ml::bail!("dtype {dtype:?} is not supported"),
     };
 
     let (k, k_l) = key.storage_and_layout();
     let k = match &*k {
         Storage::Metal(k) => k,
-        _ => candle_core::bail!("key must be a metal tensor"),
+        _ => hanzo_ml::bail!("key must be a metal tensor"),
     };
 
     let (v, v_l) = value.storage_and_layout();
     let v = match &*v {
         Storage::Metal(v) => v,
-        _ => candle_core::bail!("value must be a metal tensor"),
+        _ => hanzo_ml::bail!("value must be a metal tensor"),
     };
 
     let (kc, kc_l) = key_cache.storage_and_layout();
     let kc = match &*kc {
         Storage::Metal(kc) => kc,
-        _ => candle_core::bail!("key_cache must be a metal tensor"),
+        _ => hanzo_ml::bail!("key_cache must be a metal tensor"),
     };
 
     let (vc, vc_l) = value_cache.storage_and_layout();
     let vc = match &*vc {
         Storage::Metal(vc) => vc,
-        _ => candle_core::bail!("value_cache must be a metal tensor"),
+        _ => hanzo_ml::bail!("value_cache must be a metal tensor"),
     };
 
     let (s, s_l) = slot_mapping.storage_and_layout();
     let s = match &*s {
         Storage::Metal(s) => s,
-        _ => candle_core::bail!("slot_mapping must be a metal tensor"),
+        _ => hanzo_ml::bail!("slot_mapping must be a metal tensor"),
     };
 
     let k_v_scale = if let (Some(k_scale), Some(v_scale)) = (k_scale, v_scale) {
         if k_scale.elem_count() != 1 || v_scale.elem_count() != 1 {
-            candle_core::bail!("k_scale and v_scale must be scalars");
+            hanzo_ml::bail!("k_scale and v_scale must be scalars");
         }
         if k_scale.dtype() != DType::F32 || v_scale.dtype() != DType::F32 {
-            candle_core::bail!("k_scale and v_scale must be f32");
+            hanzo_ml::bail!("k_scale and v_scale must be f32");
         }
 
         let (k_scale, _) = k_scale.storage_and_layout();
         let k_scale = match &*k_scale {
             Storage::Metal(k_scale) => k_scale,
-            _ => candle_core::bail!("k_scale must be a metal tensor"),
+            _ => hanzo_ml::bail!("k_scale must be a metal tensor"),
         };
 
         let (v_scale, _) = v_scale.storage_and_layout();
         let v_scale = match &*v_scale {
             Storage::Metal(v_scale) => v_scale,
-            _ => candle_core::bail!("v_scale must be a metal tensor"),
+            _ => hanzo_ml::bail!("v_scale must be a metal tensor"),
         };
 
         Some((k_scale.buffer().clone(), v_scale.buffer().clone()))
@@ -464,20 +464,20 @@ pub fn reshape_and_cache(
     let vc_rank = vc_l.stride().len();
 
     if k_rank != 3 || v_rank != 3 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "paged-attention expects input tensors of rank 3 (k: {k_l:?}, v: {v_l:?})"
         )
     }
 
     if kc_rank != 5 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "paged-attention expects `key_cache` tensor to be of rank 5 \
                 (key_cache: {kc_l:?})"
         )
     }
 
     if vc_rank != 4 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "paged-attention expects `value_cache` tensor to be of rank 4 \
                 (value_cache: {vc_l:?})"
         )
@@ -485,12 +485,12 @@ pub fn reshape_and_cache(
 
     let (num_tokens, num_heads, head_size) = k_l.shape().dims3()?;
     if (num_tokens, num_heads, head_size) != v_l.shape().dims3()? {
-        candle_core::bail!("shape mismatch k {:?} and v {:?}", k_l.shape(), v_l.shape())
+        hanzo_ml::bail!("shape mismatch k {:?} and v {:?}", k_l.shape(), v_l.shape())
     }
 
     let (num_blocks, num_heads_kc, head_size_kc, block_size, x) = kc_l.shape().dims5()?;
     if num_heads_kc != num_heads || head_size_kc != head_size / x {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "shape mismatch value_cache {:?}, expected {:?}",
             vc_l.shape(),
             (num_blocks, num_heads, head_size / x, block_size, x)
@@ -498,7 +498,7 @@ pub fn reshape_and_cache(
     }
 
     if (num_blocks, num_heads, head_size, block_size) != vc_l.shape().dims4()? {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "shape mismatch key_cache {:?} and value_cache {:?}",
             kc_l.shape(),
             vc_l.shape()
@@ -506,7 +506,7 @@ pub fn reshape_and_cache(
     }
 
     if (num_tokens) != s_l.shape().dims1()? {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "shape mismatch slot_mapping {:?}, expected {:?}",
             s_l.shape(),
             (num_tokens)
@@ -546,7 +546,7 @@ pub fn reshape_and_cache(
         key_stride,
         value_stride,
     )
-    .map_err(candle_core::Error::wrap)?;
+    .map_err(hanzo_ml::Error::wrap)?;
 
     Ok(())
 }

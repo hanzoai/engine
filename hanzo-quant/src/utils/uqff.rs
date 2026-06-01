@@ -1,6 +1,6 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use candle_core::{DType, Device, Result, Tensor, WithDType};
+use hanzo_ml::{DType, Device, Result, Tensor, WithDType};
 use float8::F8E4M3;
 use half::{bf16, f16};
 
@@ -27,12 +27,12 @@ pub(crate) fn version_is_compatible(version: u32) -> Result<()> {
     let patch = version & 0xFF;
 
     if major != UQFF_VERSION_MAJOR {
-        candle_core::bail!("Major version of ISQ artifact file ({major}) does not match the implementation in this build ({UQFF_VERSION_MAJOR})");
+        hanzo_ml::bail!("Major version of ISQ artifact file ({major}) does not match the implementation in this build ({UQFF_VERSION_MAJOR})");
     }
 
     // Check minor version for forward compatibility
     if minor > UQFF_VERSION_MINOR {
-        candle_core::bail!("Minor version of ISQ artifact file ({major}.{minor}.{patch}) is newer than this build supports ({UQFF_VERSION_MAJOR}.{UQFF_VERSION_MINOR}.{UQFF_VERSION_PATCH}). Please update mistral.rs.");
+        hanzo_ml::bail!("Minor version of ISQ artifact file ({major}.{minor}.{patch}) is newer than this build supports ({UQFF_VERSION_MAJOR}.{UQFF_VERSION_MINOR}.{UQFF_VERSION_PATCH}). Please update mistral.rs.");
     }
 
     Ok(())
@@ -79,7 +79,7 @@ pub(crate) fn read_dtype<R: std::io::Read>(buffer: &mut R) -> Result<DType> {
         11 => DType::F6E3M2,
         12 => DType::F4,
         13 => DType::F8E8M0,
-        _ => candle_core::bail!("unknown dtype for quantized tensor {dtype}"),
+        _ => hanzo_ml::bail!("unknown dtype for quantized tensor {dtype}"),
     };
     Ok(dtype)
 }
@@ -116,17 +116,17 @@ pub(crate) fn serialize_tensor(buffer: &mut Vec<u8>, tensor: &Tensor) -> Result<
         DType::F64 => data_to_bytes::<f64>(tensor.to_vec1()?),
         DType::F8E4M3 => data_to_bytes::<F8E4M3>(tensor.to_vec1()?),
         DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
-            candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors cannot be serialized.")
+            hanzo_ml::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors cannot be serialized.")
         }
         other => {
-            candle_core::bail!("Unsupported dtype for UQFF tensor serialization: {other:?}")
+            hanzo_ml::bail!("Unsupported dtype for UQFF tensor serialization: {other:?}")
         }
     };
 
     // Check for potential overflow when converting usize to u32
     let data_len = bias.len();
     if data_len > u32::MAX as usize {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Tensor data too large for UQFF format: {} bytes exceeds u32::MAX",
             data_len
         );
@@ -139,7 +139,7 @@ pub(crate) fn serialize_tensor(buffer: &mut Vec<u8>, tensor: &Tensor) -> Result<
     // Shape
     let shape_len = b_shape.len();
     if shape_len > u32::MAX as usize {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Tensor has too many dimensions for UQFF format: {} exceeds u32::MAX",
             shape_len
         );
@@ -147,7 +147,7 @@ pub(crate) fn serialize_tensor(buffer: &mut Vec<u8>, tensor: &Tensor) -> Result<
     buffer.extend((shape_len as u32).to_le_bytes());
     for dim in b_shape {
         if *dim > u32::MAX as usize {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Tensor dimension too large for UQFF format: {} exceeds u32::MAX",
                 dim
             );
@@ -191,10 +191,10 @@ pub(crate) fn deserialize_tensor<R: std::io::Read>(
         DType::U8 => bytes_to_data::<u8>(&tensor_data, &dims, device),
         DType::F8E4M3 => bytes_to_data::<F8E4M3>(&tensor_data, &dims, device),
         DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
-            candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors cannot be deserialized.")
+            hanzo_ml::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors cannot be deserialized.")
         }
         other => {
-            candle_core::bail!("Unsupported dtype for UQFF tensor deserialization: {other:?}")
+            hanzo_ml::bail!("Unsupported dtype for UQFF tensor deserialization: {other:?}")
         }
     }
 }
@@ -238,7 +238,7 @@ fn data_to_bytes<T: WithDType>(mut vs: Vec<T>) -> Vec<u8> {
 fn bytes_to_data<T: WithDType>(
     data: &[u8],
     shape: &[usize],
-    device: &candle_core::Device,
+    device: &hanzo_ml::Device,
 ) -> Result<Tensor> {
     let size_in_bytes = T::DTYPE.size_in_bytes();
     let elem_count = data.len() / size_in_bytes;
@@ -271,27 +271,27 @@ mod tests {
     #[test]
     fn dtype_variant_count_unchanged() {
         assert_eq!(
-            std::mem::size_of::<candle_core::DType>(),
+            std::mem::size_of::<hanzo_ml::DType>(),
             1,
             "DType repr size changed, check if the discriminant size is the same"
         );
         // If DType grows beyond 14 variants its discriminant may still fit in 1 byte, so also verify the exact count.
         const EXPECTED_VARIANTS: usize = 14;
         let count = [
-            candle_core::DType::U8,
-            candle_core::DType::U32,
-            candle_core::DType::I16,
-            candle_core::DType::I32,
-            candle_core::DType::I64,
-            candle_core::DType::BF16,
-            candle_core::DType::F16,
-            candle_core::DType::F32,
-            candle_core::DType::F64,
-            candle_core::DType::F8E4M3,
-            candle_core::DType::F6E2M3,
-            candle_core::DType::F6E3M2,
-            candle_core::DType::F4,
-            candle_core::DType::F8E8M0,
+            hanzo_ml::DType::U8,
+            hanzo_ml::DType::U32,
+            hanzo_ml::DType::I16,
+            hanzo_ml::DType::I32,
+            hanzo_ml::DType::I64,
+            hanzo_ml::DType::BF16,
+            hanzo_ml::DType::F16,
+            hanzo_ml::DType::F32,
+            hanzo_ml::DType::F64,
+            hanzo_ml::DType::F8E4M3,
+            hanzo_ml::DType::F6E2M3,
+            hanzo_ml::DType::F6E3M2,
+            hanzo_ml::DType::F4,
+            hanzo_ml::DType::F8E8M0,
         ]
         .len();
         assert_eq!(
