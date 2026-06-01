@@ -199,7 +199,10 @@ impl DiskKvCache {
                         "kvc text_len exceeds cache budget",
                     ));
                 }
-                let mut rendered_text = vec![0u8; text_len as usize];
+                let text_len = usize::try_from(text_len).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "kvc text_len too large")
+                })?;
+                let mut rendered_text = vec![0u8; text_len];
                 f.read_exact(&mut rendered_text)?;
                 if header.payload_bytes > self.budget_bytes {
                     return Err(io::Error::new(
@@ -207,7 +210,10 @@ impl DiskKvCache {
                         "kvc payload_bytes exceeds cache budget",
                     ));
                 }
-                let mut payload = vec![0u8; header.payload_bytes as usize];
+                let payload_len = usize::try_from(header.payload_bytes).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "kvc payload_bytes too large")
+                })?;
+                let mut payload = vec![0u8; payload_len];
                 f.read_exact(&mut payload)?;
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)

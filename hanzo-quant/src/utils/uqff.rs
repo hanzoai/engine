@@ -1,3 +1,4 @@
+#![allow(unreachable_patterns)]
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use float8::F8E4M3;
