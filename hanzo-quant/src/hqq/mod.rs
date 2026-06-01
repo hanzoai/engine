@@ -10,9 +10,9 @@ use hanzo_ml::{
 #[cfg(feature = "metal")]
 use hanzo_ml::Storage;
 
-use hanzo_nn::Linear;
 #[cfg(feature = "cuda")]
 use half::{bf16, f16};
+use hanzo_nn::Linear;
 use std::{
     borrow::Cow,
     io::Cursor,

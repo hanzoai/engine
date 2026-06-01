@@ -1,5 +1,5 @@
-use hanzo_ml::{CpuStorage, CustomOp2, DType, Result, Tensor, WithDType};
 use float8::F8E4M3;
+use hanzo_ml::{CpuStorage, CustomOp2, DType, Result, Tensor, WithDType};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use super::VECTOR_SIZE;
@@ -99,8 +99,8 @@ impl CustomOp2 for Fp8VectorDequantize {
         weight_s: &hanzo_ml::CudaStorage,
         weight_l: &hanzo_ml::Layout,
     ) -> Result<(hanzo_ml::CudaStorage, hanzo_ml::Shape)> {
-        use hanzo_ml::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
+        use hanzo_ml::{backend::BackendStorage, CudaStorage};
 
         use crate::{utils::slice_ptr, vector_fp8::ffi};
 
@@ -338,8 +338,8 @@ pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
 
     #[cfg(feature = "cuda")]
     {
-        use hanzo_ml::{CudaStorage, Device, Storage};
         use half::{bf16, f16};
+        use hanzo_ml::{CudaStorage, Device, Storage};
 
         use crate::{utils::slice_ptr, vector_fp8::ffi};
 

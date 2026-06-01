@@ -925,10 +925,7 @@ impl futures::Stream for OpenResponsesStreamer {
         match self.rx.poll_recv(cx) {
             Poll::Ready(Some(resp)) => match resp {
                 Response::ModelError(msg, _) => {
-                    Hanzo::maybe_log_error(
-                        self.state.clone(),
-                        &ModelErrorMessage(msg.to_string()),
-                    );
+                    Hanzo::maybe_log_error(self.state.clone(), &ModelErrorMessage(msg.to_string()));
 
                     let seq = self.streaming_state.next_sequence_number();
                     let mut response = self.build_current_response(ResponseStatus::Failed);

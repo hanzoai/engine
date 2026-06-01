@@ -7,8 +7,8 @@ use std::{
 use anyhow::{Context, Result};
 use hanzo_ml::{Device, Tensor};
 
-use hf_hub::api::sync::ApiRepo;
 use hanzo_quant::ShardedVarBuilder;
+use hf_hub::api::sync::ApiRepo;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 

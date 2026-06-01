@@ -1,5 +1,5 @@
-use hanzo_ml::{CudaStorage, Device, IndexOp, Result, Shape, Storage, Tensor};
 use half::{bf16, f16};
+use hanzo_ml::{CudaStorage, Device, IndexOp, Result, Shape, Storage, Tensor};
 
 use super::ffi;
 use crate::utils::slice_ptr;

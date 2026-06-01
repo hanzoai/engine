@@ -7,12 +7,12 @@ use std::{
 };
 
 use hanzo_ml::{Context, DType, Device, Result, Tensor};
-use image::{imageops::FilterType, DynamicImage};
-use itertools::Itertools;
 use hanzo_vision::{
     ApplyTensorTransforms, ApplyTransforms, Normalize, Rescale, TensorTransforms, ToTensorNoNorm,
     Transforms,
 };
+use image::{imageops::FilterType, DynamicImage};
+use itertools::Itertools;
 use tokenizers::Tokenizer;
 
 use crate::{

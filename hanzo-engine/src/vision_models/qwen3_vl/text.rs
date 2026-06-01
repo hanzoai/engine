@@ -28,11 +28,7 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(
-        cfg: &TextConfig,
-        vb: ShardedVarBuilder,
-        comm: &Arc<hanzo_quant::Comm>,
-    ) -> Result<Self> {
+    fn new(cfg: &TextConfig, vb: ShardedVarBuilder, comm: &Arc<hanzo_quant::Comm>) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
         let gate_proj = ColumnParallelLayer::new(

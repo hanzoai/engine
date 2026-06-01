@@ -2,8 +2,8 @@ use std::{cmp::Ordering, fs::File, sync::Arc};
 
 use hanzo_ml::{DType, Device, Result, Tensor, D};
 use hanzo_nn::Module;
-use hf_hub::api::sync::{Api, ApiBuilder};
 use hanzo_quant::ShardedVarBuilder;
+use hf_hub::api::sync::{Api, ApiBuilder};
 use tokenizers::Tokenizer;
 use tracing::info;
 

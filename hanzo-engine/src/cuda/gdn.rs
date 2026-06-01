@@ -241,8 +241,8 @@ pub fn causal_conv1d_cuda(
     kernel_size: usize,
     is_update: bool,
 ) -> Result<(Tensor, Tensor)> {
-    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
     use core::ffi::c_void;
+    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
     fn cuda_fwd<
         T: hanzo_ml::cuda_backend::CudaDType + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,
     >(
@@ -379,8 +379,8 @@ pub fn fused_gdn_gating_cuda(
     a_log: &Tensor,
     dt_bias: &Tensor,
 ) -> Result<(Tensor, Tensor)> {
-    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
     use core::ffi::c_void;
+    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
 
     fn cuda_fwd<
         T: hanzo_ml::cuda_backend::CudaDType + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,

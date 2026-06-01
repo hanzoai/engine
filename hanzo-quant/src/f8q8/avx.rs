@@ -1,6 +1,6 @@
 use super::{BlockF8Q8, BlockQ8_0, QK8_0};
-use hanzo_ml::Result;
 use half::f16;
+use hanzo_ml::Result;
 
 #[cfg(target_arch = "x86")]
 use core::arch::x86::*;

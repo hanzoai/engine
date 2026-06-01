@@ -1,5 +1,5 @@
-use hanzo_ml::Device;
 use hanzo_engine::*;
+use hanzo_ml::Device;
 
 use crate::{IsqBits, IsqSetting};
 use std::{

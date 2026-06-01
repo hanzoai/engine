@@ -13,10 +13,10 @@ use crate::{
     sequence::{SeqStepType, StopReason},
     tools, CompletionResponse, SchedulerConfig, DEBUG,
 };
+use hanzo_quant::RingConfig;
 use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::ParserFactory;
 pub use logger::IntervalLogger;
-use hanzo_quant::RingConfig;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use serde::{Deserialize, Serialize};
