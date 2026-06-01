@@ -1,6 +1,6 @@
 use hanzo_ml::Device;
-use image::{ColorType, DynamicImage};
 use hanzo_vision::{ApplyTransforms, InterpolateResize, Normalize, ToTensor, Transforms};
+use image::{ColorType, DynamicImage};
 
 #[test]
 fn normalize() {

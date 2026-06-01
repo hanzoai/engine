@@ -223,9 +223,9 @@ impl HanzoServerRouterBuilder {
     ///     .await?;
     /// ```
     pub async fn build(self) -> Result<Router> {
-        let hanzo = self.hanzo.ok_or_else(|| {
-            anyhow::anyhow!("`hanzo` instance must be set. Use `with_hanzo`.")
-        })?;
+        let hanzo = self
+            .hanzo
+            .ok_or_else(|| anyhow::anyhow!("`hanzo` instance must be set. Use `with_hanzo`."))?;
 
         #[allow(unused_mut)]
         let mut router = init_router(

@@ -1,11 +1,11 @@
 use anyhow::Context;
-use hanzo_ml::{DType, Device};
 use core::ffi::c_char;
+use hanzo_ml::{DType, Device};
+pub use hanzo_quant::distributed::{use_nccl, use_ring};
+use hanzo_quant::{RingConfig, ShardedVarBuilder};
 use interprocess::local_socket::traits::{Listener, Stream};
 use interprocess::local_socket::{GenericNamespaced, Name, ToNsName};
 use interprocess::local_socket::{ListenerOptions, Stream as LocalStream};
-pub use hanzo_quant::distributed::{use_nccl, use_ring};
-use hanzo_quant::{RingConfig, ShardedVarBuilder};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use std::env;
@@ -345,11 +345,8 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
                 anyhow::bail!("Got HANZO_MN_HEAD_NUM_WORKERS, expected HANZO_MN_HEAD_PORT");
             };
             info!("Head node initializing connection on {port}.");
-            let server = hanzo_quant::Server::new(
-                &format!("0.0.0.0:{port}"),
-                n_nodes,
-                local_world_size,
-            )?;
+            let server =
+                hanzo_quant::Server::new(&format!("0.0.0.0:{port}"), n_nodes, local_world_size)?;
 
             server.broadcast_id(&id)?;
         } else if let Ok(addr) = env::var("HANZO_MN_WORKER_SERVER_ADDR") {
@@ -373,12 +370,8 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
 
     // They each block on each other
     // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
-    let comm = hanzo_quant::Comm::from_device(
-        id,
-        device,
-        local_rank + rank_offset,
-        global_world_size,
-    )?;
+    let comm =
+        hanzo_quant::Comm::from_device(id, device, local_rank + rank_offset, global_world_size)?;
 
     let make_dummy_regexes = if loading_isq && from_uqff {
         // Dummy weights for the layers which will be overwritten...

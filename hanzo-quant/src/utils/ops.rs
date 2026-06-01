@@ -177,12 +177,8 @@ impl CustomOp1 for Leftshift {
         )
         .map_err(hanzo_ml::Error::wrap)?;
 
-        let newstorage = hanzo_ml::MetalStorage::new(
-            output,
-            device.clone(),
-            out_shape.elem_count(),
-            s1.dtype(),
-        );
+        let newstorage =
+            hanzo_ml::MetalStorage::new(output, device.clone(), out_shape.elem_count(), s1.dtype());
         Ok((newstorage, out_shape))
     }
 }
@@ -652,12 +648,8 @@ impl CustomOp2 for BitWise {
             .map_err(hanzo_ml::Error::wrap)?,
         }
 
-        let newstorage = hanzo_ml::MetalStorage::new(
-            output,
-            device.clone(),
-            out_shape.elem_count(),
-            s1.dtype(),
-        );
+        let newstorage =
+            hanzo_ml::MetalStorage::new(output, device.clone(), out_shape.elem_count(), s1.dtype());
         Ok((newstorage, out_shape))
     }
 }
@@ -778,12 +770,8 @@ impl CustomOp1 for BitWiseUnary {
             .map_err(hanzo_ml::Error::wrap)?,
         }
 
-        let newstorage = hanzo_ml::MetalStorage::new(
-            output,
-            device.clone(),
-            out_shape.elem_count(),
-            s1.dtype(),
-        );
+        let newstorage =
+            hanzo_ml::MetalStorage::new(output, device.clone(), out_shape.elem_count(), s1.dtype());
         Ok((newstorage, out_shape))
     }
 }
@@ -925,12 +913,8 @@ impl CustomOp1 for ArgSort {
         .map_err(hanzo_ml::Error::wrap)?;
 
         // Wrap and return as a new MetalStorage
-        let newstorage = hanzo_ml::MetalStorage::new(
-            output,
-            device.clone(),
-            elem_count,
-            hanzo_ml::DType::U32,
-        );
+        let newstorage =
+            hanzo_ml::MetalStorage::new(output, device.clone(), elem_count, hanzo_ml::DType::U32);
         Ok((newstorage, out_shape))
     }
 }
@@ -1544,12 +1528,8 @@ impl CustomOp1 for CumSum {
         )
         .map_err(hanzo_ml::Error::wrap)?;
 
-        let newstorage = hanzo_ml::MetalStorage::new(
-            output,
-            device.clone(),
-            out_shape.elem_count(),
-            s1.dtype(),
-        );
+        let newstorage =
+            hanzo_ml::MetalStorage::new(output, device.clone(), out_shape.elem_count(), s1.dtype());
         Ok((newstorage, out_shape))
     }
 }
@@ -2210,9 +2190,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
     }
 
     fn cpu_fwd(&self, _storage: &CpuStorage, _layout: &Layout) -> Result<(CpuStorage, Shape)> {
-        hanzo_ml::bail!(
-            "flash_attn_sinks_metal: no CPU support, use softmax_with_sinks fallback"
-        )
+        hanzo_ml::bail!("flash_attn_sinks_metal: no CPU support, use softmax_with_sinks fallback")
     }
 
     #[cfg(feature = "metal")]

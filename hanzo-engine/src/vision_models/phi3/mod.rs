@@ -5,10 +5,8 @@ pub(crate) mod phi3_inputs_processor;
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use crate::layers_masker::CausalMaskConfig;
-use hanzo_ml::{
-    shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape, Tensor, D,
-};
 use either::Either;
+use hanzo_ml::{shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape, Tensor, D};
 use hanzo_quant::{
     BitWiseOp, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder,
 };

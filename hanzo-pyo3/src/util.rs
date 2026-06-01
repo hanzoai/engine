@@ -6,12 +6,12 @@ use std::{
 };
 
 use either::Either;
+use hanzo_engine::{
+    AudioInput, ChatCompletionResponse, CompletionResponse, Hanzo, Request, Response, ResponseErr,
+    VideoInput,
+};
 use image::codecs::gif::GifDecoder;
 use image::{AnimationDecoder, DynamicImage};
-use hanzo_engine::{
-    AudioInput, ChatCompletionResponse, CompletionResponse, Hanzo, Request, Response,
-    ResponseErr, VideoInput,
-};
 use pyo3::{exceptions::PyValueError, PyErr};
 use tokio::sync::mpsc::Receiver;
 

@@ -4,13 +4,13 @@
 
 use directories::ProjectDirs;
 use either::Either;
-use indexmap::IndexMap;
 use hanzo_engine::{
     speech_utils, AgentPermission, AgentToolKind, Constraint, DiffusionGenerationParams,
-    DrySamplingParams, ImageGenerationResponseFormat, MessageContent, Hanzo, ModelCategory,
+    DrySamplingParams, Hanzo, ImageGenerationResponseFormat, MessageContent, ModelCategory,
     NormalRequest, Request, RequestMessage, Response, ResponseOk, SamplingParams, Usage,
     WebSearchOptions, TERMINATE_ALL_NEXT_STEP,
 };
+use indexmap::IndexMap;
 use regex::Regex;
 use rustyline::{error::ReadlineError, history::History, DefaultEditor, Editor, Helper};
 use serde_json::Value;
@@ -47,8 +47,8 @@ fn terminate_handler() {
 }
 
 fn history_file_path() -> PathBuf {
-    let proj_dirs = ProjectDirs::from("com", "", "hanzo")
-        .expect("Could not determine project directories");
+    let proj_dirs =
+        ProjectDirs::from("com", "", "hanzo").expect("Could not determine project directories");
     let config_dir = proj_dirs.config_dir();
 
     // Ensure the directory exists:
@@ -229,12 +229,7 @@ async fn oneshot_text(
     let start_ttft = Instant::now();
     match stream_assistant_response(&mut rx, start_ttft).await {
         Ok((_, first_token_duration, last_usage)) => {
-            print_stats(
-                &hanzo,
-                &sampling_params,
-                first_token_duration,
-                last_usage,
-            );
+            print_stats(&hanzo, &sampling_params, first_token_duration, last_usage);
         }
         Err(e) => {
             error!("{e}");
@@ -401,12 +396,7 @@ async fn oneshot_multimodal(
     let start_ttft = Instant::now();
     match stream_assistant_response(&mut rx, start_ttft).await {
         Ok((_, first_token_duration, last_usage)) => {
-            print_stats(
-                &hanzo,
-                &sampling_params,
-                first_token_duration,
-                last_usage,
-            );
+            print_stats(&hanzo, &sampling_params, first_token_duration, last_usage);
         }
         Err(e) => {
             error!("{e}");
