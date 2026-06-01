@@ -1,6 +1,6 @@
+use float8::F8E4M3;
 use hanzo_ml::{DType, Device, Error, IndexOp, Result, Shape, Storage, Tensor, WithDType};
 use hanzo_nn::var_builder::{Backend, SimpleBackend, VarBuilderArgs};
-use float8::F8E4M3;
 use regex::Regex;
 use safetensors::tensor as st;
 use safetensors::tensor::SafeTensors;
@@ -186,9 +186,13 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
             Storage::Cpu(cpu_storage)
         }
         #[cfg(feature = "rocm")]
-        Device::Rocm(_) => hanzo_ml::bail!("dummy MX dtypes (F4/F6/F8) are not supported on rocm yet"),
+        Device::Rocm(_) => {
+            hanzo_ml::bail!("dummy MX dtypes (F4/F6/F8) are not supported on rocm yet")
+        }
         #[cfg(feature = "vulkan")]
-        Device::Vulkan(_) => hanzo_ml::bail!("dummy MX dtypes (F4/F6/F8) are not supported on vulkan yet"),
+        Device::Vulkan(_) => {
+            hanzo_ml::bail!("dummy MX dtypes (F4/F6/F8) are not supported on vulkan yet")
+        }
         #[cfg(feature = "cuda")]
         Device::Cuda(device) => {
             let mut slice = unsafe { device.alloc::<u8>(data.len())? };

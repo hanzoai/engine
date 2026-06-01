@@ -619,12 +619,10 @@ impl BenchRuntimeOptions {
     }
 
     pub fn mtp_config(&self) -> Option<hanzo_engine::MtpConfig> {
-        self.mtp_model
-            .clone()
-            .map(|model| hanzo_engine::MtpConfig {
-                model,
-                n_predict: self.mtp_n_predict,
-            })
+        self.mtp_model.clone().map(|model| hanzo_engine::MtpConfig {
+            model,
+            n_predict: self.mtp_n_predict,
+        })
     }
 }
 
@@ -669,12 +667,10 @@ impl RuntimeOptions {
     }
 
     pub fn mtp_config(&self) -> Option<hanzo_engine::MtpConfig> {
-        self.mtp_model
-            .clone()
-            .map(|model| hanzo_engine::MtpConfig {
-                model,
-                n_predict: self.mtp_n_predict,
-            })
+        self.mtp_model.clone().map(|model| hanzo_engine::MtpConfig {
+            model,
+            n_predict: self.mtp_n_predict,
+        })
     }
 }
 

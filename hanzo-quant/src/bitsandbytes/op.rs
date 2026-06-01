@@ -8,9 +8,7 @@ use hanzo_ml::cuda::{
     CudaDevice,
 };
 
-use hanzo_ml::{
-    backend::BackendStorage, CpuStorage, CustomOp3, Result, Shape, Tensor, WithDType,
-};
+use hanzo_ml::{backend::BackendStorage, CpuStorage, CustomOp3, Result, Shape, Tensor, WithDType};
 
 #[cfg(feature = "cuda")]
 use crate::bitsandbytes::ffi;

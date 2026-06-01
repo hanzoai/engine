@@ -1,8 +1,8 @@
 use crate::cuda::backend::slice_ptr;
 use crate::cuda::ffi::gather_kv_cache as ffi_gather_kv_cache;
+use float8::F8E4M3;
 use hanzo_ml::backend::BackendStorage;
 use hanzo_ml::{DType, IndexOp, Result, Storage, Tensor};
-use float8::F8E4M3;
 
 pub fn gather_kv_cache(
     key_cache: &Tensor,   // [num_blocks, kv_heads, head_size/x, block_size, x]
@@ -76,9 +76,9 @@ pub fn gather_kv_cache(
         DType::F16 => 0,
         DType::BF16 => 1,
         DType::F32 => 2,
-        other => hanzo_ml::bail!(
-            "gather_kv_cache only supports f16, bf16, f32 output (got {other:?})"
-        ),
+        other => {
+            hanzo_ml::bail!("gather_kv_cache only supports f16, bf16, f32 output (got {other:?})")
+        }
     };
     let cache_dtype_code: u32 = match cache_dtype {
         DType::F16 => 0,

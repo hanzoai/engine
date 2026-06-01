@@ -25,8 +25,8 @@ use anyhow::Result;
 use hanzo_ml::{DType, Device, Tensor};
 use hanzo_quant::log::once_log_debug;
 
-use indicatif::MultiProgress;
 use hanzo_quant::ShardedVarBuilder;
+use indicatif::MultiProgress;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 

@@ -1,5 +1,4 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-use hanzo_ml::Device;
 use engine::Engine;
 pub use engine::{
     agentic_session::{AgenticSessionStore, SerializedSession, SerializedVideo},
@@ -7,6 +6,7 @@ pub use engine::{
     EngineInstruction, IntervalLogger, SearchEmbeddingModel, DEFAULT_MAX_TOOL_ROUNDS,
     ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
 };
+use hanzo_ml::Device;
 use hf_hub::Cache;
 pub use lora::Ordering;
 pub use pipeline::ModelCategory;
@@ -48,9 +48,9 @@ pub use model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
 };
 pub use video_input::{sample_frame_indices, VideoInput};
+pub mod disk_kv_cache;
 mod embedding_models;
 mod kv_cache;
-pub mod disk_kv_cache;
 mod search;
 
 mod model_selected;
@@ -908,18 +908,16 @@ impl Hanzo {
         if let Some(code_exec_cfg) = code_exec_config {
             let approval_callback = code_exec_cfg.approval_callback.as_ref().map(|callback| {
                 let callback = Arc::clone(callback);
-                Arc::new(
-                    move |approval: &hanzo_code_exec::CodeExecutionApproval| {
-                        let approval = CodeExecutionApproval {
-                            approval_id: approval.approval_id.clone(),
-                            session_id: approval.session_id.clone(),
-                            code: approval.code.clone(),
-                            outputs: approval.outputs.clone(),
-                            working_directory: approval.working_directory.clone(),
-                        };
-                        callback(&approval)
-                    },
-                ) as Arc<hanzo_code_exec::CodeExecutionApprovalCallback>
+                Arc::new(move |approval: &hanzo_code_exec::CodeExecutionApproval| {
+                    let approval = CodeExecutionApproval {
+                        approval_id: approval.approval_id.clone(),
+                        session_id: approval.session_id.clone(),
+                        code: approval.code.clone(),
+                        outputs: approval.outputs.clone(),
+                        working_directory: approval.working_directory.clone(),
+                    };
+                    callback(&approval)
+                }) as Arc<hanzo_code_exec::CodeExecutionApprovalCallback>
             });
             let exec_config = hanzo_code_exec::CodeExecutionConfig {
                 python_path: code_exec_cfg.python_path.clone(),
@@ -927,15 +925,9 @@ impl Hanzo {
                 working_directory: code_exec_cfg.working_directory.clone(),
                 sandbox_policy: code_exec_cfg.sandbox_policy.clone(),
                 permission: match code_exec_cfg.permission {
-                    CodeExecutionPermission::Auto => {
-                        hanzo_code_exec::CodeExecutionPermission::Auto
-                    }
-                    CodeExecutionPermission::Ask => {
-                        hanzo_code_exec::CodeExecutionPermission::Ask
-                    }
-                    CodeExecutionPermission::Deny => {
-                        hanzo_code_exec::CodeExecutionPermission::Deny
-                    }
+                    CodeExecutionPermission::Auto => hanzo_code_exec::CodeExecutionPermission::Auto,
+                    CodeExecutionPermission::Ask => hanzo_code_exec::CodeExecutionPermission::Ask,
+                    CodeExecutionPermission::Deny => hanzo_code_exec::CodeExecutionPermission::Deny,
                 },
                 approval_callback,
             };
@@ -1037,9 +1029,7 @@ impl Hanzo {
             code_exec_config,
         } = config;
 
-        hanzo_quant::cublaslt::maybe_init_cublas_lt_wrapper(
-            get_mut_arcmutex!(pipeline).device(),
-        );
+        hanzo_quant::cublaslt::maybe_init_cublas_lt_wrapper(get_mut_arcmutex!(pipeline).device());
 
         let no_kv_cache = no_kv_cache.unwrap_or(false);
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
@@ -1602,10 +1592,7 @@ impl Hanzo {
     }
 
     /// Get the interval logger for a specific model. If model_id is None, uses default engine.
-    pub fn get_logger(
-        &self,
-        model_id: Option<&str>,
-    ) -> Result<Arc<IntervalLogger>, HanzoError> {
+    pub fn get_logger(&self, model_id: Option<&str>) -> Result<Arc<IntervalLogger>, HanzoError> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         let engines = self
@@ -1620,10 +1607,7 @@ impl Hanzo {
     }
 
     /// Get model category for a specific model. If model_id is None, uses default engine.
-    pub fn get_model_category(
-        &self,
-        model_id: Option<&str>,
-    ) -> Result<ModelCategory, HanzoError> {
+    pub fn get_model_category(&self, model_id: Option<&str>) -> Result<ModelCategory, HanzoError> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         let engines = self
@@ -1638,10 +1622,7 @@ impl Hanzo {
     }
 
     /// Get the maximum supported sequence length for a model, if applicable.
-    pub fn max_sequence_length(
-        &self,
-        model_id: Option<&str>,
-    ) -> Result<Option<usize>, HanzoError> {
+    pub fn max_sequence_length(&self, model_id: Option<&str>) -> Result<Option<usize>, HanzoError> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         let engines = self
@@ -2011,9 +1992,7 @@ impl Hanzo {
                 .read()
                 .map_err(|_| HanzoError::EnginePoisoned)?;
             if unloaded.contains_key(&resolved_model_id) {
-                return Err(HanzoError::ModelAlreadyUnloaded(
-                    resolved_model_id.clone(),
-                ));
+                return Err(HanzoError::ModelAlreadyUnloaded(resolved_model_id.clone()));
             }
         }
 

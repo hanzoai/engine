@@ -48,9 +48,7 @@ fn load_ssm_library(device: &MetalRawDevice) -> Result<Library> {
     };
     let lib = device
         .new_library_with_source(SSM_METAL_SOURCE, Some(&compile_options))
-        .map_err(|e| {
-            hanzo_ml::Error::Msg(format!("Failed to compile SSM Metal kernels: {e}"))
-        })?;
+        .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to compile SSM Metal kernels: {e}")))?;
     Ok(SSM_LIBRARY.get_or_init(|| lib).clone())
 }
 
@@ -59,9 +57,9 @@ fn load_pipeline(device: &MetalRawDevice, name: &str) -> Result<ComputePipeline>
     let pipelines_lock = SSM_PIPELINES.get_or_init(|| RwLock::new(Pipelines::new()));
 
     {
-        let pipelines = pipelines_lock.read().map_err(|e| {
-            hanzo_ml::Error::Msg(format!("Failed to lock SSM pipeline cache: {e}"))
-        })?;
+        let pipelines = pipelines_lock
+            .read()
+            .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to lock SSM pipeline cache: {e}")))?;
         if let Some(pipeline) = pipelines.get(name) {
             return Ok(pipeline.clone());
         }

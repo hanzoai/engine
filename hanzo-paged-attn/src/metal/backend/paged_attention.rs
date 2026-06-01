@@ -464,9 +464,7 @@ pub fn reshape_and_cache(
     let vc_rank = vc_l.stride().len();
 
     if k_rank != 3 || v_rank != 3 {
-        hanzo_ml::bail!(
-            "paged-attention expects input tensors of rank 3 (k: {k_l:?}, v: {v_l:?})"
-        )
+        hanzo_ml::bail!("paged-attention expects input tensors of rank 3 (k: {k_l:?}, v: {v_l:?})")
     }
 
     if kc_rank != 5 {

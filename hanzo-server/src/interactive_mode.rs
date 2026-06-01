@@ -1,12 +1,12 @@
 use directories::ProjectDirs;
 use either::Either;
-use indexmap::IndexMap;
 use hanzo_engine::{
-    speech_utils, Constraint, DiffusionGenerationParams, DrySamplingParams,
-    ImageGenerationResponseFormat, MessageContent, Hanzo, ModelCategory, NormalRequest,
-    Request, RequestMessage, Response, ResponseOk, SamplingParams, WebSearchOptions,
+    speech_utils, Constraint, DiffusionGenerationParams, DrySamplingParams, Hanzo,
+    ImageGenerationResponseFormat, MessageContent, ModelCategory, NormalRequest, Request,
+    RequestMessage, Response, ResponseOk, SamplingParams, WebSearchOptions,
     TERMINATE_ALL_NEXT_STEP,
 };
+use indexmap::IndexMap;
 use regex::Regex;
 use rustyline::{error::ReadlineError, history::History, DefaultEditor, Editor, Helper};
 use serde_json::Value;
@@ -33,8 +33,8 @@ fn terminate_handler() {
 
 fn history_file_path() -> PathBuf {
     // Replace these with your own org/app identifiers.
-    let proj_dirs = ProjectDirs::from("com", "", "hanzo")
-        .expect("Could not determine project directories");
+    let proj_dirs =
+        ProjectDirs::from("com", "", "hanzo").expect("Could not determine project directories");
     let config_dir = proj_dirs.config_dir();
 
     // Ensure the directory exists:
@@ -74,22 +74,14 @@ fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>) -> String {
 static CTRLC_HANDLER: LazyLock<Mutex<&'static (dyn Fn() + Sync)>> =
     LazyLock::new(|| Mutex::new(&exit_handler));
 
-pub async fn interactive_mode(
-    hanzo: Arc<Hanzo>,
-    do_search: bool,
-    enable_thinking: Option<bool>,
-) {
+pub async fn interactive_mode(hanzo: Arc<Hanzo>, do_search: bool, enable_thinking: Option<bool>) {
     match hanzo.get_model_category(None) {
-        Ok(ModelCategory::Text) => {
-            text_interactive_mode(hanzo, do_search, enable_thinking).await
-        }
+        Ok(ModelCategory::Text) => text_interactive_mode(hanzo, do_search, enable_thinking).await,
         Ok(ModelCategory::Multimodal { .. }) => {
             multimodal_interactive_mode(hanzo, do_search, enable_thinking).await
         }
         Ok(ModelCategory::Diffusion) => diffusion_interactive_mode(hanzo, do_search).await,
-        Ok(ModelCategory::Audio) => {
-            audio_interactive_mode(hanzo, do_search, enable_thinking).await
-        }
+        Ok(ModelCategory::Audio) => audio_interactive_mode(hanzo, do_search, enable_thinking).await,
         Ok(ModelCategory::Speech) => speech_interactive_mode(hanzo, do_search).await,
         Ok(ModelCategory::Embedding) => error!(
             "Embedding models do not support interactive mode. Use the server or Python/Rust APIs."
@@ -234,11 +226,7 @@ fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -
     false
 }
 
-async fn text_interactive_mode(
-    hanzo: Arc<Hanzo>,
-    do_search: bool,
-    enable_thinking: Option<bool>,
-) {
+async fn text_interactive_mode(hanzo: Arc<Hanzo>, do_search: bool, enable_thinking: Option<bool>) {
     let sender = hanzo.get_sender(None).unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
 

@@ -230,9 +230,7 @@ pub async fn reload_model(
                 HanzoError::ModelNotFound(_) => (ModelStatus::NotFound, None),
                 HanzoError::ModelReloading(_) => (ModelStatus::Reloading, None),
                 HanzoError::ModelAlreadyLoaded(_) => (ModelStatus::Loaded, None),
-                HanzoError::ReloadFailed(msg) => {
-                    (ModelStatus::InternalError, Some(msg.clone()))
-                }
+                HanzoError::ReloadFailed(msg) => (ModelStatus::InternalError, Some(msg.clone())),
                 _ => (ModelStatus::InternalError, Some(e.to_string())),
             };
             Json(ModelStatusResponse {
