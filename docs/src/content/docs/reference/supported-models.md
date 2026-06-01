@@ -1,6 +1,6 @@
 ---
 title: Supported models
-description: Architectures supported by mistral.rs.
+description: Architectures supported by hanzo.
 sidebar:
   order: 9
 ---
@@ -97,8 +97,8 @@ Text, multimodal, speech, and embedding models support ISQ at load time. Diffusi
 
 | Mode | Target architecture | Assistant checkpoint family | Guide |
 |---|---|---|---|
-| MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Gemma 4 MTP](/mistral.rs/guides/perf/gemma4-mtp/) |
+| MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Gemma 4 MTP](/hanzo/guides/perf/gemma4-mtp/) |
 
 ## Model notes
 
-For non-standard behavior, see [model notes](/mistral.rs/reference/model-notes/).
+For non-standard behavior, see [model notes](/hanzo/reference/model-notes/).

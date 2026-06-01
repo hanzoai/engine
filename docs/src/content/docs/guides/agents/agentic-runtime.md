@@ -5,15 +5,15 @@ sidebar:
   order: 5
 ---
 
-mistral.rs can act as a local-first runtime for agent applications. A runtime request can include model generation, server-side tool execution, Python code execution that is [sandboxed by default](/mistral.rs/reference/sandbox/) on Linux and macOS, web search, generated images or video frames, and persistent session state.
+hanzo can act as a local-first runtime for agent applications. A runtime request can include model generation, server-side tool execution, Python code execution that is [sandboxed by default](/hanzo/reference/sandbox/) on Linux and macOS, web search, generated images or video frames, and persistent session state.
 
-The most complete app-facing event stream today is `/v1/chat/completions` with `stream: true`. It emits normal OpenAI-compatible chunks plus mistral.rs `agentic_tool_call_progress` events.
+The most complete app-facing event stream today is `/v1/chat/completions` with `stream: true`. It emits normal OpenAI-compatible chunks plus hanzo `agentic_tool_call_progress` events.
 
-Built-in runtime tools use [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/) by default. Web search, code execution, and file helper calls are constrained to their declared JSON Schemas before dispatch.
+Built-in runtime tools use [strict tool calling](/hanzo/guides/agents/strict-tool-calling/) by default. Web search, code execution, and file helper calls are constrained to their declared JSON Schemas before dispatch.
 
 ## What the runtime does
 
-| Runtime part | What mistral.rs provides |
+| Runtime part | What hanzo provides |
 |---|---|
 | Model output | Chat-completion responses and streaming chunks. |
 | Tool execution | Built-in search, code execution, MCP tools, callbacks, or HTTP tool dispatch. |
@@ -24,7 +24,7 @@ This is the lane for applications that want local inference and local action in 
 
 ## Agent permissions
 
-`agent_permission` controls whether mistral.rs may run an agent action after the model asks for one. It applies to all server-executed actions, not just Python: code execution, web search, file tools, registered callbacks, and external tool dispatch.
+`agent_permission` controls whether hanzo may run an agent action after the model asks for one. It applies to all server-executed actions, not just Python: code execution, web search, file tools, registered callbacks, and external tool dispatch.
 
 | Mode | Behavior |
 |---|---|
@@ -34,7 +34,7 @@ This is the lane for applications that want local inference and local action in 
 
 The server or runner policy is a floor. A request can tighten it, for example from `auto` to `ask` or `deny`, but cannot loosen a server started with `--agent-permission ask` or `--agent-permission deny`. `code_execution_permission` and `--code-exec-permission` are compatibility aliases for code-execution-focused apps; prefer `agent_permission` for new code.
 
-Permissioning is separate from sandboxing. Permission mode decides whether an action may start. The [sandbox](/mistral.rs/reference/sandbox/) controls what generated Python can access after it starts.
+Permissioning is separate from sandboxing. Permission mode decides whether an action may start. The [sandbox](/hanzo/reference/sandbox/) controls what generated Python can access after it starts.
 
 CLI, the built-in UI, HTTP, Rust, and Python expose the same approval semantics:
 
@@ -98,7 +98,7 @@ Resolve it with `POST /v1/agent/approvals/{approval_id}`:
 
 If an approval is not resolved, the action is denied after five minutes.
 
-The approval endpoint returns `{"status":"resolved"}`, `{"status":"queued"}`, or `{"status":"not_found"}`. See the [HTTP API reference](/mistral.rs/reference/http-api/) for the exact wire schema and [the HTTP approval example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/code_execution_approval.py) for a complete client.
+The approval endpoint returns `{"status":"resolved"}`, `{"status":"queued"}`, or `{"status":"not_found"}`. See the [HTTP API reference](/hanzo/reference/http-api/) for the exact wire schema and [the HTTP approval example](https://github.com/hanzoai/engine/blob/master/examples/server/code_execution_approval.py) for a complete client.
 
 ### Python SDK
 
@@ -134,7 +134,7 @@ request = ChatCompletionRequest(
 )
 ```
 
-See the [Python approval example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/code_execution_approval.py) and the [Python agent approval reference](/mistral.rs/reference/python/agent-approvals/).
+See the [Python approval example](https://github.com/hanzoai/engine/blob/master/examples/python/code_execution_approval.py) and the [Python agent approval reference](/hanzo/reference/python/agent-approvals/).
 
 ### Rust SDK
 
@@ -173,7 +173,7 @@ let request = RequestBuilder::from(messages)
     });
 ```
 
-See the [Rust approval example](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/code_execution_approval/main.rs).
+See the [Rust approval example](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/code_execution_approval/main.rs).
 
 ## HTTP run stream
 
@@ -355,4 +355,4 @@ Use `session_id` when your app needs continuity across requests. Sessions can pr
 
 ## Security
 
-Code execution runs with the permissions of the configured Python interpreter. Use `agent_permission: "ask"` or `"deny"` per request when an app needs tighter control over any server-executed agent action; a server-wide `--agent-permission ask` or `deny` cannot be loosened by the request. HTTP `"ask"` approval is app-driven over SSE, not a server terminal prompt. For untrusted users, run mistral.rs in a container or VM, use a low-privilege user, and constrain network access.
+Code execution runs with the permissions of the configured Python interpreter. Use `agent_permission: "ask"` or `"deny"` per request when an app needs tighter control over any server-executed agent action; a server-wide `--agent-permission ask` or `deny` cannot be loosened by the request. HTTP `"ask"` approval is app-driven over SSE, not a server terminal prompt. For untrusted users, run hanzo in a container or VM, use a low-privilege user, and constrain network access.

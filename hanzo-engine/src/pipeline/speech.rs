@@ -207,7 +207,7 @@ impl Loader for SpeechLoader {
                     .dac_model_id
                     .clone()
                     .unwrap_or_else(|| match self.arch {
-                        SpeechLoaderType::Dia => "EricB/dac_44khz".to_string(),
+                        SpeechLoaderType::Dia => "hanzoai/dac_44khz".to_string(),
                     });
 
                 let api = api.repo(Repo::with_revision(
@@ -310,10 +310,10 @@ impl Loader for SpeechLoader {
                 llg_factory: None,
                 is_xlora: false,
                 no_prefix_cache: false,
-                num_hidden_layers: 1, // FIXME(EricLBuehler): we know this is only for caching, so its OK.
+                num_hidden_layers: 1, // FIXME(hanzoai): we know this is only for caching, so its OK.
                 eos_tok: vec![],
                 kind: ModelKind::Normal,
-                no_kv_cache: true, // NOTE(EricLBuehler): no cache for these.
+                no_kv_cache: true, // NOTE(hanzoai): no cache for these.
                 activation_dtype: dtype,
                 sliding_window: None,
                 cache_config: None,

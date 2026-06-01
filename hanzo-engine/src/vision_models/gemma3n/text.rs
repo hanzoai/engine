@@ -410,7 +410,7 @@ impl Attention {
         {
             let shared_cache = &kv_caches[kv_shared_layer_index];
             // Cast device because kv cache on prev layer might be different device
-            // https://github.com/EricLBuehler/mistral.rs/pull/1650#issuecomment-3393222444
+            // https://github.com/hanzoai/engine/pull/1650#issuecomment-3393222444
             (
                 (
                     shared_cache.k()?.unwrap().to_device(q.device())?,

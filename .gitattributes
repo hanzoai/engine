@@ -14,6 +14,6 @@
 # - `.sh` (LF) / `.bat` (CRLF) and similar scripts that are platform specific.
 # - Scripts that utilize a shebang (`#!/usr/bin/env python3`) to hint the interpreter to run.
 # - `Dockerfile` (base image environment may require LF):
-#   https://github.com/EricLBuehler/mistral.rs/pull/361
+#   https://github.com/hanzoai/engine/pull/361
 
 Dockerfile* eol=lf

@@ -105,7 +105,7 @@ request = ChatCompletionRequest(
 
 Qwen3 also has FP8 pre-quantized checkpoints. Use the FP8 model ID directly when you want the pre-quantized weights instead of runtime ISQ.
 
-Qwen3 supports the same tool-calling and web-search surface as the agent guides. See [tool calling basics](/mistral.rs/guides/agents/tool-calling-basics/) and [web search](/mistral.rs/guides/agents/web-search/) when you need tool use rather than plain chat.
+Qwen3 supports the same tool-calling and web-search surface as the agent guides. See [tool calling basics](/hanzo/guides/agents/tool-calling-basics/) and [web search](/hanzo/guides/agents/web-search/) when you need tool use rather than plain chat.
 
 ## MoE and MoQE
 
@@ -159,15 +159,15 @@ hanzo run --format gguf -m Qwen/Qwen3-Coder-Next-GGUF -f <filename>
 When a pre-quantized UQFF repo exists, load it directly:
 
 ```bash
-hanzo run -m EricB/SmolLM3-3B-UQFF --from-uqff smollm33b-q4k-0.uqff
+hanzo run -m hanzoai/SmolLM3-3B-UQFF --from-uqff smollm33b-q4k-0.uqff
 ```
 
-See [UQFF format](/mistral.rs/reference/uqff-format/) for file layout and [use pre-quantized UQFF models](/mistral.rs/guides/perf/use-uqff/) for runtime usage.
+See [UQFF format](/hanzo/reference/uqff-format/) for file layout and [use pre-quantized UQFF models](/hanzo/guides/perf/use-uqff/) for runtime usage.
 
 ## Example files
 
 Long-form SDK examples live in the repository so they can compile with the Rust and Python APIs:
 
-- Python: [`examples/python/`](https://github.com/EricLBuehler/mistral.rs/tree/master/examples/python)
-- HTTP/OpenAI clients: [`examples/server/`](https://github.com/EricLBuehler/mistral.rs/tree/master/examples/server)
-- Rust text models: [`hanzo/examples/models/text_models/main.rs`](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/models/text_models/main.rs)
+- Python: [`examples/python/`](https://github.com/hanzoai/engine/tree/master/examples/python)
+- HTTP/OpenAI clients: [`examples/server/`](https://github.com/hanzoai/engine/tree/master/examples/server)
+- Rust text models: [`hanzo/examples/models/text_models/main.rs`](https://github.com/hanzoai/engine/blob/master/hanzo/examples/models/text_models/main.rs)

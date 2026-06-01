@@ -3,11 +3,11 @@ title: Sandbox
 description: OS-level sandbox applied to model-generated code execution.
 ---
 
-mistral.rs runs model-generated Python code in a persistent kernel. To keep that code from doing damage, the spawned Python process is hardened with an OS-level sandbox.
+hanzo runs model-generated Python code in a persistent kernel. To keep that code from doing damage, the spawned Python process is hardened with an OS-level sandbox.
 
 This is only supported on macOS and Linux environments.
 
-The sandbox is not the same as permissioning. `--agent-permission ask` or `deny` decides whether model-requested agent actions are allowed to start. The sandbox controls what the subprocess can access after it starts. See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions) for the cross-API approval model.
+The sandbox is not the same as permissioning. `--agent-permission ask` or `deny` decides whether model-requested agent actions are allowed to start. The sandbox controls what the subprocess can access after it starts. See [agent permissions](/hanzo/guides/agents/agentic-runtime/#agent-permissions) for the cross-API approval model.
 
 ## Threat model
 
@@ -20,7 +20,7 @@ This is primarily to avoid cases where a confused or jailbroken model generating
 - attach to host processes via `ptrace`
 - load kernel modules, manipulate mounts, etc.
 
-For high-assurance deployments, also isolate the mistral.rs process itself with a container or VM, a dedicated low-privilege user, and constrained network egress.
+For high-assurance deployments, also isolate the hanzo process itself with a container or VM, a dedicated low-privilege user, and constrained network egress.
 
 ## Defaults
 
@@ -84,7 +84,7 @@ hanzo serve \
 default `auto` mode):
 
 ```
-MISTRALRS_SANDBOX={auto|on|off}
+HANZO_SANDBOX={auto|on|off}
 ```
 
 ## Linux details
@@ -125,17 +125,17 @@ The profile also allows the native startup operations CPython and extension modu
 
 Network follows the configured policy: `none` emits no network rules, `loopback` allows localhost endpoints, and `full` allows `network*`.
 
-Resource rlimits are not applied on macOS. Applying them from the server requires a `pre_exec` hook, which forces a fork path from an already-running multithreaded process before Python starts. mistral.rs keeps the Seatbelt sandbox for filesystem and network isolation; use a container or VM when macOS deployments need hard memory, CPU, or process-count caps.
+Resource rlimits are not applied on macOS. Applying them from the server requires a `pre_exec` hook, which forces a fork path from an already-running multithreaded process before Python starts. hanzo keeps the Seatbelt sandbox for filesystem and network isolation; use a container or VM when macOS deployments need hard memory, CPU, or process-count caps.
 
 ## Disabling
 
-Set `mode = "off"` in the TOML, `--sandbox off` on the CLI, or `MISTRALRS_SANDBOX=off` in the env.
+Set `mode = "off"` in the TOML, `--sandbox off` on the CLI, or `HANZO_SANDBOX=off` in the env.
 
 A startup warning is logged. With all sandbox layers off, model-generated code has full filesystem, network, and subprocess access as the hanzo user.
 
 ## Programmatic use
 
-For end-to-end code execution setup, see [enable code execution](/mistral.rs/guides/agents/enable-code-execution/). The checked-in examples cover [Python](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/code_execution.py), [Rust](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/code_execution/main.rs), and [Rust file outputs](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo/examples/advanced/code_execution_files/main.rs). Python types are documented in the [Python API reference](/mistral.rs/reference/python/code-execution/).
+For end-to-end code execution setup, see [enable code execution](/hanzo/guides/agents/enable-code-execution/). The checked-in examples cover [Python](https://github.com/hanzoai/engine/blob/master/examples/python/code_execution.py), [Rust](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/code_execution/main.rs), and [Rust file outputs](https://github.com/hanzoai/engine/blob/master/hanzo/examples/advanced/code_execution_files/main.rs). Python types are documented in the [Python API reference](/hanzo/reference/python/code-execution/).
 
 Rust:
 

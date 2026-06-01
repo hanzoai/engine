@@ -23,9 +23,9 @@ The default allowed origin is any. The default body limit is 50 MB. Allowed meth
 
 ## Authentication
 
-mistral.rs does not implement authentication. The intended pattern is a reverse proxy (nginx, Caddy, Traefik) handling authentication and TLS.
+hanzo does not implement authentication. The intended pattern is a reverse proxy (nginx, Caddy, Traefik) handling authentication and TLS.
 
-OpenAI-protocol clients always send an `Authorization: Bearer ...` header because the OpenAI SDK requires an API key at initialization. mistral.rs does not validate the header.
+OpenAI-protocol clients always send an `Authorization: Bearer ...` header because the OpenAI SDK requires an API key at initialization. hanzo does not validate the header.
 
 ## Logging
 
@@ -39,7 +39,7 @@ Use `-vv` for trace-level file/cache internals. Module filters are still availab
 
 Most CLI flags have a TOML config equivalent. Run with `hanzo from-config -f config.toml`.
 
-Full schema: [CLI TOML config reference](/mistral.rs/reference/cli-toml-config/). Minimal example:
+Full schema: [CLI TOML config reference](/hanzo/reference/cli-toml-config/). Minimal example:
 
 ```toml
 command = "serve"
@@ -62,6 +62,6 @@ in_situ_quant = "4"
 
 ## See also
 
-- [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
-- [Running multiple models](/mistral.rs/guides/serve/multiple-models/).
-- [Production checklist](/mistral.rs/guides/deploy/production-checklist/).
+- [Agentic runtime for apps](/hanzo/guides/agents/agentic-runtime/).
+- [Running multiple models](/hanzo/guides/serve/multiple-models/).
+- [Production checklist](/hanzo/guides/deploy/production-checklist/).

@@ -312,7 +312,7 @@ impl QuantizedSerde for RowParallelLayer {
     where
         Self: Sized,
     {
-        // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+        // NOTE(hanzoai): isq type is ALWAYS byte 4 (5th) of the tensor.
         let isq_type = data[crate::UQFF_QUANT_TYPE_OFFSET];
         let (weight, bias) = match QuantizedSerdeType::try_from(isq_type as usize)? {
             QuantizedSerdeType::Gguf => GgufMatMul::deserialize_ext_bias(data, device, guard)?,
@@ -645,7 +645,7 @@ impl QuantizedSerde for ColumnParallelLayer {
     where
         Self: Sized,
     {
-        // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+        // NOTE(hanzoai): isq type is ALWAYS byte 4 (5th) of the tensor.
         let isq_type = data[crate::UQFF_QUANT_TYPE_OFFSET];
         let (weight, bias) = match QuantizedSerdeType::try_from(isq_type as usize)? {
             QuantizedSerdeType::Gguf => GgufMatMul::deserialize_ext_bias(data, device, guard)?,
@@ -980,7 +980,7 @@ impl QuantizedSerde for ReplicatedLayer {
     where
         Self: Sized,
     {
-        // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+        // NOTE(hanzoai): isq type is ALWAYS byte 4 (5th) of the tensor.
         let isq_type = data[crate::UQFF_QUANT_TYPE_OFFSET];
         let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
             QuantizedSerdeType::Gguf => GgufMatMul::deserialize(data, device, comm, guard)?,

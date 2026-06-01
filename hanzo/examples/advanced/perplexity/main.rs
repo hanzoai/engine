@@ -21,7 +21,7 @@ struct Args {
     model_id: String,
 
     /// Filename to text to run the model on. This is recommended to be the Wikitext 2 dataset:
-    /// https://huggingface.co/datasets/EricB/wikitext2
+    /// https://huggingface.co/datasets/hanzoai/wikitext2
     #[arg(short, long)]
     file: String,
 

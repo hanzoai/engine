@@ -2,7 +2,7 @@
 name = "hanzo-server"
 publish = false
 readme = "../README.md"
-authors = ["Eric Buehler"]
+authors = ["Hanzo AI"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

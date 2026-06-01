@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-The mistral.rs repository ships several Dockerfiles for common deployment targets.
+The hanzo repository ships several Dockerfiles for common deployment targets.
 
 - `Dockerfile`: default. Multi-stage build producing a Debian-based CPU-only image with the server binary.
 - `Dockerfile.cuda-all`: CUDA variant for NVIDIA GPUs with flash attention.
@@ -73,7 +73,7 @@ The generous `--start-period` matters, first-run model loading can take minutes.
 
 **Resource limits.** Set `--memory` and `--gpus` on `docker run` to bound the container's resources.
 
-**Video input.** Install FFmpeg inside the image when serving video-capable models. See [Set up video input](/mistral.rs/guides/models/video-setup/) for the Docker snippet and runtime check.
+**Video input.** Install FFmpeg inside the image when serving video-capable models. See [Set up video input](/hanzo/guides/models/video-setup/) for the Docker snippet and runtime check.
 
 ## Kubernetes
 
@@ -88,5 +88,5 @@ There is no official Helm chart. Contributions welcome.
 
 ## See also
 
-- [Production checklist](/mistral.rs/guides/deploy/production-checklist/): operational concerns regardless of container layer.
-- [HTTP server guide](/mistral.rs/guides/serve/http-server/): config options.
+- [Production checklist](/hanzo/guides/deploy/production-checklist/): operational concerns regardless of container layer.
+- [HTTP server guide](/hanzo/guides/serve/http-server/): config options.

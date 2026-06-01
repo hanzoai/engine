@@ -48,7 +48,7 @@ fn initialize_params() -> Value {
             "tools": {}
         },
         "clientInfo": {
-            "name": "mistral.rs",
+            "name": "hanzo",
             "version": env!("CARGO_PKG_VERSION"),
         }
     })

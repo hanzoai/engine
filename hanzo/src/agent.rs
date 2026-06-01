@@ -1,4 +1,4 @@
-//! Agentic loop implementation for mistral.rs
+//! Agentic loop implementation for hanzo
 //!
 //! This module provides an `Agent` that runs an agentic loop with tool calling.
 //! The agent takes a model, registers tools, and automatically handles the

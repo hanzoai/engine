@@ -1,13 +1,13 @@
-//! > **mistral.rs server core**
+//! > **hanzo server core**
 //!
 //! ## About
 //!
-//! This crate powers mistral.rs server. It exposes the underlying functionality
+//! This crate powers hanzo server. It exposes the underlying functionality
 //! allowing others to implement and extend the server implementation.
 //!
 //! ### Features
-//! 1. Incorporate mistral.rs server into another axum.rs project.
-//! 2. Hook into the mistral.rs server lifecycle.
+//! 1. Incorporate hanzo server into another axum.rs project.
+//! 2. Hook into the hanzo server lifecycle.
 //!
 //! ### Example
 //! ```no_run

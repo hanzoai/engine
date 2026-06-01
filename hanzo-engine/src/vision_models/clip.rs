@@ -3,7 +3,7 @@
 use crate::attention::AttentionMask;
 use std::sync::Arc;
 
-// Sourced from https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/clip/vision_model.rs
+// Sourced from https://github.com/hanzoai/ml/blob/main/candle-transformers/src/models/clip/vision_model.rs
 use hanzo_ml::{IndexOp, Result, Shape, Tensor, D};
 use hanzo_nn::{Conv2dConfig, Module};
 use hanzo_quant::{Convolution, QuantMethod, ShardedVarBuilder};

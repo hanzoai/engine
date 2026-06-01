@@ -767,7 +767,7 @@ impl ScalingsMaker for Model {
         context_lens: &[usize],
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        // NOTE(EricLBuehler): hacky yes, but passing the context lens to start the position ids calculation works
+        // NOTE(hanzoai): hacky yes, but passing the context lens to start the position ids calculation works
         self.inner_forward(
             input_ids,
             seqlen_offsets,

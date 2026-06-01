@@ -1,4 +1,4 @@
-//! This crate provides vision utilities for mistral.rs inspired by torchvision.
+//! This crate provides vision utilities for hanzo inspired by torchvision.
 //! In particular, it represents transformations on some `Self` type which are applied
 //! sequentially.
 //!

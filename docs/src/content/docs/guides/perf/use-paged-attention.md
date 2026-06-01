@@ -43,4 +43,4 @@ Paged attention composes with flash attention. Both can be on simultaneously.
 
 ## Further reading
 
-The [explanation page](/mistral.rs/explanation/paged-attention/) covers the design.
+The [explanation page](/hanzo/explanation/paged-attention/) covers the design.

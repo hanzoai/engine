@@ -488,7 +488,7 @@ def _render_page(
     footer = [
         "---",
         "",
-        f"<small>Generated from [`{STUB_REL}`](https://github.com/EricLBuehler/mistral.rs/blob/master/{STUB_REL}).</small>",
+        f"<small>Generated from [`{STUB_REL}`](https://github.com/hanzoai/engine/blob/master/{STUB_REL}).</small>",
         "",
     ]
 
@@ -524,16 +524,16 @@ def _render_index() -> str:
         "| --- | --- |",
     ]
     for title, slug, desc, _ in GROUPS:
-        lines.append(f"| [{title}](/mistral.rs/reference/python/{slug}/) | {desc} |")
+        lines.append(f"| [{title}](/hanzo/reference/python/{slug}/) | {desc} |")
     lines.append("")
     lines.append(
-        "See [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) for a walkthrough and the [Python guides](/mistral.rs/guides/python/) for task-oriented recipes."
+        "See [Tutorial 3](/hanzo/tutorials/03-python-sdk/) for a walkthrough and the [Python guides](/hanzo/guides/python/) for task-oriented recipes."
     )
     lines.append("")
     lines.append("---")
     lines.append("")
     lines.append(
-        f"<small>Generated from [`{STUB_REL}`](https://github.com/EricLBuehler/mistral.rs/blob/master/{STUB_REL}).</small>"
+        f"<small>Generated from [`{STUB_REL}`](https://github.com/hanzoai/engine/blob/master/{STUB_REL}).</small>"
     )
     lines.append("")
     return "\n".join(lines)

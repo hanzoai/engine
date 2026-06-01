@@ -1058,12 +1058,12 @@ pub struct VisionTower {
 impl VisionTower {
     pub fn new(vb: ShardedVarBuilder) -> Result<Self> {
         // Some models have invalid vision tower weights from the old gemma 3n upload
-        // https://github.com/EricLBuehler/mistral.rs/issues/1592
+        // https://github.com/hanzoai/engine/issues/1592
         let old_vision_tower = !vb.contains_tensor("conv_stem.conv.bias");
         if old_vision_tower {
             warn!(
                 "This model contains invalid vision tower weights from an old Gemma 3n upload.
-See: https://github.com/EricLBuehler/mistral.rs/issues/1592
+See: https://github.com/hanzoai/engine/issues/1592
 
 The vision tower for this model will still be loaded, but you might experience degraded quality."
             );
@@ -1182,7 +1182,7 @@ The vision tower for this model will still be loaded, but you might experience d
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let mut x = if self.old_vision_tower {
             // Some models have invalid vision tower weights from the old gemma 3n upload
-            // https://github.com/EricLBuehler/mistral.rs/issues/1592
+            // https://github.com/hanzoai/engine/issues/1592
 
             // This is a hack necessary because the weights for Gemma 3n are broken and require the image to be rotated.
             x.t()?

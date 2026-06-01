@@ -1,6 +1,6 @@
 ---
 title: Your first model
-description: Install mistral.rs, download a small language model, and have a conversation with it in your terminal. About five minutes.
+description: Install hanzo, download a small language model, and have a conversation with it in your terminal. About five minutes.
 sidebar:
   order: 1
 ---
@@ -12,13 +12,13 @@ The install script detects your accelerator (NVIDIA GPU, Apple Silicon, Intel CP
 Linux or macOS:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/hanzoai/engine/master/install.sh | sh
 ```
 
 Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/hanzoai/engine/master/install.ps1 | iex
 ```
 
 The binary is installed to `~/.cargo/bin/hanzo`. The installer adds that directory to your `PATH`, but the change does not apply to the current shell. Start a new shell, or run `source "$HOME/.cargo/env"`. Then verify:
@@ -33,11 +33,11 @@ If the command prints a version, installation succeeded. To check detected hardw
 hanzo doctor
 ```
 
-For "command not found" or missing-toolkit errors, see the per-platform [installation guides](/mistral.rs/guides/install/linux-cuda/).
+For "command not found" or missing-toolkit errors, see the per-platform [installation guides](/hanzo/guides/install/linux-cuda/).
 
 ## Running a model
 
-[Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B) is used here. The native BF16 weights are about 8 GB and fit on a 12 GB GPU. The license does not require acceptance on Hugging Face. On smaller GPUs the download succeeds but the model will not fit at native precision; see [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/) for quantization.
+[Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B) is used here. The native BF16 weights are about 8 GB and fit on a 12 GB GPU. The license does not require acceptance on Hugging Face. On smaller GPUs the download succeeds but the model will not fit at native precision; see [Tutorial 6](/hanzo/tutorials/06-quantize-a-model/) for quantization.
 
 ```bash
 hanzo run -m Qwen/Qwen3-4B
@@ -64,12 +64,12 @@ A few commands are available at the prompt: `/clear` resets the conversation, `/
 
 ## Notes
 
-The model loads at native precision (BF16 for Qwen3-4B), so the full weights must fit in GPU memory. For larger models that do not fit, use `--quant 4`: it prefers a prebuilt UQFF from `hanzo-community` if one exists, otherwise applies ISQ at 4 bits. `--quant auto` benchmarks your hardware and picks. See [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/) for the details.
+The model loads at native precision (BF16 for Qwen3-4B), so the full weights must fit in GPU memory. For larger models that do not fit, use `--quant 4`: it prefers a prebuilt UQFF from `hanzo-community` if one exists, otherwise applies ISQ at 4 bits. `--quant auto` benchmarks your hardware and picks. See [Tutorial 6](/hanzo/tutorials/06-quantize-a-model/) for the details.
 
 `hanzo` infers the model architecture, chat template, and target device from the Hugging Face repository. Every inferred choice can be overridden with a flag.
 
 ## Next steps
 
-- [Serving a model as an API](/mistral.rs/tutorials/02-serve-an-api/): put the same model behind an OpenAI-compatible HTTP endpoint.
-- [Using the Python SDK](/mistral.rs/tutorials/03-python-sdk/): embed a model in a Python program.
-- [Quantizing a model](/mistral.rs/tutorials/06-quantize-a-model/): run larger models on the same hardware.
+- [Serving a model as an API](/hanzo/tutorials/02-serve-an-api/): put the same model behind an OpenAI-compatible HTTP endpoint.
+- [Using the Python SDK](/hanzo/tutorials/03-python-sdk/): embed a model in a Python program.
+- [Quantizing a model](/hanzo/tutorials/06-quantize-a-model/): run larger models on the same hardware.

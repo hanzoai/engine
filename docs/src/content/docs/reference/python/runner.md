@@ -90,7 +90,7 @@ send_chat_completion_request(
 ) -> ChatCompletionResponse | Iterator[ChatCompletionChunkResponse]
 ```
 
-Send a chat completion request to the mistral.rs engine, returning the response object or a generator
+Send a chat completion request to the hanzo engine, returning the response object or a generator
 over chunk objects.
 
 **Parameters**
@@ -109,7 +109,7 @@ send_completion_request(
 ) -> CompletionResponse
 ```
 
-Send a completion request to the mistral.rs engine, returning the response object.
+Send a completion request to the hanzo engine, returning the response object.
 
 **Parameters**
 
@@ -448,4 +448,4 @@ file was wire-truncated in the response payload.
 
 ---
 
-<small>Generated from [`hanzo-pyo3/hanzo.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/hanzo-pyo3/hanzo.pyi).</small>
+<small>Generated from [`hanzo-pyo3/hanzo.pyi`](https://github.com/hanzoai/engine/blob/master/hanzo-pyo3/hanzo.pyi).</small>

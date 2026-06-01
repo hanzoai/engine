@@ -29,7 +29,7 @@ pub struct BaseStreamer<R, C, D> {
     pub rx: Receiver<Response>,
     /// Current state of the streaming operation
     pub done_state: DoneState,
-    /// Underlying mistral.rs instance
+    /// Underlying hanzo instance
     pub state: SharedHanzoState,
     /// Whether to store chunks for the completion callback
     pub store_chunks: bool,

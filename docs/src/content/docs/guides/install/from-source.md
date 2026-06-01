@@ -1,6 +1,6 @@
 ---
 title: Build from source
-description: Compile mistral.rs from a repository checkout with exactly the feature flags you want.
+description: Compile hanzo from a repository checkout with exactly the feature flags you want.
 sidebar:
   order: 4
 ---
@@ -10,8 +10,8 @@ Build from a source checkout to pin a specific commit, apply a local patch, or u
 ## Clone and build
 
 ```bash
-git clone https://github.com/EricLBuehler/mistral.rs.git
-cd mistral.rs
+git clone https://github.com/hanzoai/engine.git
+cd hanzo
 ```
 
 The CLI binary is in the `hanzo-cli` crate:
@@ -37,7 +37,7 @@ Per-hardware recommendations:
 - Intel CPU with MKL: `mkl`
 - Generic CPU: no features (SIMD on by default)
 
-Full list and per-flag effects: [cargo features reference](/mistral.rs/reference/cargo-features/).
+Full list and per-flag effects: [cargo features reference](/hanzo/reference/cargo-features/).
 
 ## Developing against a local checkout
 
@@ -69,7 +69,7 @@ To depend on the workspace directly (e.g., to use an unreleased change), add a g
 
 ```toml
 [dependencies]
-hanzo = { git = "https://github.com/EricLBuehler/mistral.rs", branch = "master" }
+hanzo = { git = "https://github.com/hanzoai/engine", branch = "master" }
 ```
 
 For production, pin to a release tag or a specific commit SHA for reproducible builds.
