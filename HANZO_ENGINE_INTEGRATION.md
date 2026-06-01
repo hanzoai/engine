@@ -20,8 +20,8 @@ metal = ["hanzo-engine/metal"]
 ```
 
 The `metal` feature enables:
-- `candle-core/metal` - Metal compute backend for tensor operations
-- `candle-nn/metal` - Neural network layers with Metal acceleration
+- `hanzo-ml/metal` - Metal compute backend for tensor operations
+- `hanzo-nn/metal` - Neural network layers with Metal acceleration
 - `hanzo-quant/metal` - Quantization kernels optimized for Metal
 - `hanzo-paged-attn/metal` - Paged attention with Metal support
 

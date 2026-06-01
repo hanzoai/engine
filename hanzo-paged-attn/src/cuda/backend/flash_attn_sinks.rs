@@ -1,8 +1,7 @@
 use crate::cuda::backend::slice_ptr;
 use crate::cuda::ffi;
-use candle::backend::BackendStorage;
-use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
-use hanzo_ml as candle;
+use hanzo_ml::backend::BackendStorage;
+use hanzo_ml::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
 use hanzo_ml::cuda::cudarc::driver::{DevicePtr, DeviceSlice};
 use half::{bf16, f16};
 use std::ffi::{c_int, c_uint};
@@ -17,7 +16,7 @@ struct FlashAttnSinks {
 
 impl FlashAttnSinks {
     fn cuda_fwd_t<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: hanzo_ml::cuda_backend::CudaDType + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         &self,
         q: &CudaStorage,
@@ -32,7 +31,7 @@ impl FlashAttnSinks {
         let (k_s, k_l) = self.key.storage_and_layout();
         let k_cuda = match &*k_s {
             Storage::Cuda(s) => s,
-            _ => candle::bail!("flash_attn_sinks: key must be a cuda tensor"),
+            _ => hanzo_ml::bail!("flash_attn_sinks: key must be a cuda tensor"),
         };
         let (_, num_kv_heads, kv_len, _) = k_l.shape().dims4()?;
 
@@ -40,7 +39,7 @@ impl FlashAttnSinks {
         let (v_s, v_l) = self.value.storage_and_layout();
         let v_cuda = match &*v_s {
             Storage::Cuda(s) => s,
-            _ => candle::bail!("flash_attn_sinks: value must be a cuda tensor"),
+            _ => hanzo_ml::bail!("flash_attn_sinks: value must be a cuda tensor"),
         };
 
         // Validate head_dim
@@ -52,7 +51,7 @@ impl FlashAttnSinks {
             || head_dim == 192
             || head_dim == 256)
         {
-            candle::bail!(
+            hanzo_ml::bail!(
                 "flash_attn_sinks: head_dim must be one of 64, 80, 96, 112, 128, 192, 256, got {head_dim}"
             );
         }
@@ -75,7 +74,7 @@ impl FlashAttnSinks {
             let (s_s, s_l) = sinks.storage_and_layout();
             let s_cuda = match &*s_s {
                 Storage::Cuda(s) => s,
-                _ => candle::bail!("flash_attn_sinks: sinks must be a cuda tensor"),
+                _ => hanzo_ml::bail!("flash_attn_sinks: sinks must be a cuda tensor"),
             };
             let s_slice = s_cuda.as_cuda_slice::<f32>()?;
             let (s_ptr, _s_guard) = slice_ptr(s_slice, s_l.start_offset());
@@ -94,7 +93,7 @@ impl FlashAttnSinks {
             DType::F16 => ffi::flash_attn_sinks_f16,
             DType::BF16 => ffi::flash_attn_sinks_bf16,
             DType::F32 => ffi::flash_attn_sinks_f32,
-            dt => candle::bail!("flash_attn_sinks: unsupported dtype {dt:?}"),
+            dt => hanzo_ml::bail!("flash_attn_sinks: unsupported dtype {dt:?}"),
         };
 
         unsafe {
@@ -122,13 +121,13 @@ impl FlashAttnSinks {
     }
 }
 
-impl candle::CustomOp1 for FlashAttnSinks {
+impl hanzo_ml::CustomOp1 for FlashAttnSinks {
     fn name(&self) -> &'static str {
         "flash-attn-sinks"
     }
 
     fn cpu_fwd(&self, _: &CpuStorage, _: &Layout) -> Result<(CpuStorage, Shape)> {
-        candle::bail!("no cpu support for flash-attn-sinks")
+        hanzo_ml::bail!("no cpu support for flash-attn-sinks")
     }
 
     fn cuda_fwd(&self, q: &CudaStorage, q_l: &Layout) -> Result<(CudaStorage, Shape)> {
@@ -136,7 +135,7 @@ impl candle::CustomOp1 for FlashAttnSinks {
             DType::F32 => self.cuda_fwd_t::<f32>(q, q_l),
             DType::F16 => self.cuda_fwd_t::<f16>(q, q_l),
             DType::BF16 => self.cuda_fwd_t::<bf16>(q, q_l),
-            dt => candle::bail!("flash-attn-sinks only supports f32/f16/bf16 ({dt:?})"),
+            dt => hanzo_ml::bail!("flash-attn-sinks only supports f32/f16/bf16 ({dt:?})"),
         }
     }
 }
@@ -153,9 +152,9 @@ struct FlashAttnSinksVarlen {
 
 impl FlashAttnSinksVarlen {
     fn cuda_fwd_t<
-        T: candle::cuda_backend::CudaDType
-            + candle::cuda_backend::cudarc::driver::DeviceRepr
-            + candle::cuda_backend::cudarc::driver::ValidAsZeroBits,
+        T: hanzo_ml::cuda_backend::CudaDType
+            + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr
+            + hanzo_ml::cuda_backend::cudarc::driver::ValidAsZeroBits,
     >(
         &self,
         q: &CudaStorage,
@@ -170,7 +169,7 @@ impl FlashAttnSinksVarlen {
         let (k_s, k_l) = self.key.storage_and_layout();
         let k_cuda = match &*k_s {
             Storage::Cuda(s) => s,
-            _ => candle::bail!("flash_attn_sinks_varlen: key must be a cuda tensor"),
+            _ => hanzo_ml::bail!("flash_attn_sinks_varlen: key must be a cuda tensor"),
         };
         let (_, num_kv_heads, _) = k_l.shape().dims3()?;
 
@@ -178,7 +177,7 @@ impl FlashAttnSinksVarlen {
         let (v_s, v_l) = self.value.storage_and_layout();
         let v_cuda = match &*v_s {
             Storage::Cuda(s) => s,
-            _ => candle::bail!("flash_attn_sinks_varlen: value must be a cuda tensor"),
+            _ => hanzo_ml::bail!("flash_attn_sinks_varlen: value must be a cuda tensor"),
         };
 
         // Validate head_dim
@@ -190,7 +189,7 @@ impl FlashAttnSinksVarlen {
             || head_dim == 192
             || head_dim == 256)
         {
-            candle::bail!(
+            hanzo_ml::bail!(
                 "flash_attn_sinks_varlen: head_dim must be one of 64, 80, 96, 112, 128, 192, 256, got {head_dim}"
             );
         }
@@ -212,7 +211,7 @@ impl FlashAttnSinksVarlen {
         let (csq_s, csq_l) = self.cu_seqlens_q.storage_and_layout();
         let csq_cuda = match &*csq_s {
             Storage::Cuda(s) => s,
-            _ => candle::bail!("flash_attn_sinks_varlen: cu_seqlens_q must be a cuda tensor"),
+            _ => hanzo_ml::bail!("flash_attn_sinks_varlen: cu_seqlens_q must be a cuda tensor"),
         };
         let csq_slice = csq_cuda.as_cuda_slice::<u32>()?;
         let (csq_ptr, _csq_guard) = slice_ptr(csq_slice, csq_l.start_offset());
@@ -221,7 +220,7 @@ impl FlashAttnSinksVarlen {
         let (csk_s, csk_l) = self.cu_seqlens_k.storage_and_layout();
         let csk_cuda = match &*csk_s {
             Storage::Cuda(s) => s,
-            _ => candle::bail!("flash_attn_sinks_varlen: cu_seqlens_k must be a cuda tensor"),
+            _ => hanzo_ml::bail!("flash_attn_sinks_varlen: cu_seqlens_k must be a cuda tensor"),
         };
         let csk_slice = csk_cuda.as_cuda_slice::<u32>()?;
         let (csk_ptr, _csk_guard) = slice_ptr(csk_slice, csk_l.start_offset());
@@ -231,7 +230,7 @@ impl FlashAttnSinksVarlen {
             let (s_s, s_l) = sinks.storage_and_layout();
             let s_cuda = match &*s_s {
                 Storage::Cuda(s) => s,
-                _ => candle::bail!("flash_attn_sinks_varlen: sinks must be a cuda tensor"),
+                _ => hanzo_ml::bail!("flash_attn_sinks_varlen: sinks must be a cuda tensor"),
             };
             let s_slice = s_cuda.as_cuda_slice::<f32>()?;
             let (s_ptr, _s_guard) = slice_ptr(s_slice, s_l.start_offset());
@@ -249,7 +248,7 @@ impl FlashAttnSinksVarlen {
             DType::F16 => ffi::flash_attn_sinks_varlen_f16,
             DType::BF16 => ffi::flash_attn_sinks_varlen_bf16,
             DType::F32 => ffi::flash_attn_sinks_varlen_f32,
-            dt => candle::bail!("flash_attn_sinks_varlen: unsupported dtype {dt:?}"),
+            dt => hanzo_ml::bail!("flash_attn_sinks_varlen: unsupported dtype {dt:?}"),
         };
 
         unsafe {
@@ -278,13 +277,13 @@ impl FlashAttnSinksVarlen {
     }
 }
 
-impl candle::CustomOp1 for FlashAttnSinksVarlen {
+impl hanzo_ml::CustomOp1 for FlashAttnSinksVarlen {
     fn name(&self) -> &'static str {
         "flash-attn-sinks-varlen"
     }
 
     fn cpu_fwd(&self, _: &CpuStorage, _: &Layout) -> Result<(CpuStorage, Shape)> {
-        candle::bail!("no cpu support for flash-attn-sinks-varlen")
+        hanzo_ml::bail!("no cpu support for flash-attn-sinks-varlen")
     }
 
     fn cuda_fwd(&self, q: &CudaStorage, q_l: &Layout) -> Result<(CudaStorage, Shape)> {
@@ -292,7 +291,7 @@ impl candle::CustomOp1 for FlashAttnSinksVarlen {
             DType::F32 => self.cuda_fwd_t::<f32>(q, q_l),
             DType::F16 => self.cuda_fwd_t::<f16>(q, q_l),
             DType::BF16 => self.cuda_fwd_t::<bf16>(q, q_l),
-            dt => candle::bail!("flash-attn-sinks-varlen only supports f32/f16/bf16 ({dt:?})"),
+            dt => hanzo_ml::bail!("flash-attn-sinks-varlen only supports f32/f16/bf16 ({dt:?})"),
         }
     }
 }
