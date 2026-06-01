@@ -1,8 +1,8 @@
 //! ## General utilities.
 
-use image::DynamicImage;
 use hanzo_engine::AudioInput;
 use hanzo_engine::Hanzo;
+use image::DynamicImage;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::{
@@ -147,10 +147,7 @@ pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::E
 /// ### Returns
 ///
 /// Returns `Ok(())` if the model is available or if "default" is specified, otherwise returns an error.
-pub fn validate_model_name(
-    requested_model: &str,
-    state: Arc<Hanzo>,
-) -> Result<(), anyhow::Error> {
+pub fn validate_model_name(requested_model: &str, state: Arc<Hanzo>) -> Result<(), anyhow::Error> {
     // Allow "default" as a special case to bypass validation
     if requested_model == "default" {
         return Ok(());

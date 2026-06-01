@@ -1,8 +1,8 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use hanzo_ml::{DType, Device, Result, Tensor, WithDType};
 use float8::F8E4M3;
 use half::{bf16, f16};
+use hanzo_ml::{DType, Device, Result, Tensor, WithDType};
 
 // v0.1.0: initial release
 // v0.1.1: add i16 dtype

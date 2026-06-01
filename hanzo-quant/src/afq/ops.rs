@@ -850,8 +850,8 @@ mod cpu_backend {
 mod cuda_backend {
     use super::*;
     use crate::afq::ffi;
-    use hanzo_ml::{cuda::cudarc::driver::DevicePtr, CudaStorage, DType, Result, Tensor, D};
     use half::{bf16, f16};
+    use hanzo_ml::{cuda::cudarc::driver::DevicePtr, CudaStorage, DType, Result, Tensor, D};
 
     /// CUDA-accelerated AFQ quantization
     pub(crate) fn afq_quantize_op(
@@ -991,10 +991,8 @@ mod cuda_backend {
                 drop(b_guard);
 
                 let w_q_storage = CudaStorage::wrap_cuda_slice(w_q_buf, dev.clone());
-                let w_q = Tensor::from((
-                    Storage::Cuda(w_q_storage),
-                    hanzo_ml::Shape::from(w_q_shape),
-                ));
+                let w_q =
+                    Tensor::from((Storage::Cuda(w_q_storage), hanzo_ml::Shape::from(w_q_shape)));
 
                 let scales_storage = CudaStorage::wrap_cuda_slice(scales_buf, dev.clone());
                 let scales = Tensor::from((
@@ -1109,10 +1107,8 @@ mod cuda_backend {
                 drop(b_guard);
 
                 let w_q_storage = CudaStorage::wrap_cuda_slice(w_q_buf, dev.clone());
-                let w_q = Tensor::from((
-                    Storage::Cuda(w_q_storage),
-                    hanzo_ml::Shape::from(w_q_shape),
-                ));
+                let w_q =
+                    Tensor::from((Storage::Cuda(w_q_storage), hanzo_ml::Shape::from(w_q_shape)));
 
                 let scales_storage = CudaStorage::wrap_cuda_slice(scales_buf, dev.clone());
                 let scales = Tensor::from((
@@ -1229,10 +1225,8 @@ mod cuda_backend {
                 drop(b_guard);
 
                 let w_q_storage = CudaStorage::wrap_cuda_slice(w_q_buf, dev.clone());
-                let w_q = Tensor::from((
-                    Storage::Cuda(w_q_storage),
-                    hanzo_ml::Shape::from(w_q_shape),
-                ));
+                let w_q =
+                    Tensor::from((Storage::Cuda(w_q_storage), hanzo_ml::Shape::from(w_q_shape)));
 
                 let scales_storage = CudaStorage::wrap_cuda_slice(scales_buf, dev.clone());
                 let scales = Tensor::from((

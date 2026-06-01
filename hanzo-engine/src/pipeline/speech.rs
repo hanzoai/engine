@@ -21,9 +21,9 @@ use crate::{
 use anyhow::Result;
 use hanzo_ml::{Device, Tensor};
 use hanzo_nn::VarBuilder;
+use hanzo_quant::IsqType;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indexmap::IndexMap;
-use hanzo_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use regex::Regex;
 use std::any::Any;
