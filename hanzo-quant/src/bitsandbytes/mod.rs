@@ -3,7 +3,7 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-use candle_core::{Context, DType, Device, Result, Shape, Tensor};
+use hanzo_ml::{Context, DType, Device, Result, Shape, Tensor};
 use serde::Deserialize;
 
 use crate::{
@@ -87,7 +87,7 @@ impl BnbLinear {
         if !vb_w.contains_tensor("quant_state.bitsandbytes__nf4")
             && !vb_w.contains_tensor("quant_state.bitsandbytes__fp4")
         {
-            candle_core::bail!("`BnbLinear` expects either `...__nf4` or `...__fp4` tensors, this means the layer is not 4bit.");
+            hanzo_ml::bail!("`BnbLinear` expects either `...__nf4` or `...__fp4` tensors, this means the layer is not 4bit.");
         }
 
         let bias = if bias {
@@ -114,12 +114,12 @@ impl BnbLinear {
             BnbQuantType::Int8 => None,
         };
         let Some(state) = state else {
-            candle_core::bail!("Only fp8/nf4 quantization is supported for now.")
+            hanzo_ml::bail!("Only fp8/nf4 quantization is supported for now.")
         };
 
         let state_str = String::from_utf8(state.to_vec1::<u8>()?)?;
         let state: BnbQuantState =
-            serde_json::from_str(&state_str).map_err(candle_core::Error::msg)?;
+            serde_json::from_str(&state_str).map_err(hanzo_ml::Error::msg)?;
 
         let nested = if vb_w.contains_tensor("nested_absmax") {
             // TODO: can `nested_blocksize` be None, default to 64 like bnb?
@@ -180,7 +180,7 @@ impl BnbLinear {
         let out_dtype: DType = params.dtype.into();
 
         if !SUPPORTED_BLOCKSIZE.contains(&params.blocksize) {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Blocksize of {} is not supported, {SUPPORTED_BLOCKSIZE:?} are.",
                 params.blocksize
             );
@@ -200,7 +200,7 @@ impl BnbLinear {
 }
 
 impl QuantMethod for BnbLinear {
-    fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
+    fn new(method: QuantMethodConfig) -> hanzo_ml::Result<Self>
     where
         Self: Sized,
     {
@@ -250,7 +250,7 @@ impl QuantMethod for BnbLinear {
     }
 
     fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("HQQ quantization does not support adding weight delta.")
+        hanzo_ml::bail!("HQQ quantization does not support adding weight delta.")
     }
 
     fn dtype_and_device(&self) -> (DType, Device) {
@@ -277,7 +277,7 @@ impl QuantizedSerde for BnbLinear {
         "bnb-linear"
     }
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
-        candle_core::bail!("BitsAndBytes quantization does not support UQFF serialization")
+        hanzo_ml::bail!("BitsAndBytes quantization does not support UQFF serialization")
     }
 
     fn deserialize(
@@ -289,6 +289,6 @@ impl QuantizedSerde for BnbLinear {
     where
         Self: Sized,
     {
-        candle_core::bail!("BitsAndBytes quantization does not support UQFF deserialization")
+        hanzo_ml::bail!("BitsAndBytes quantization does not support UQFF deserialization")
     }
 }

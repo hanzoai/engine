@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use candle_core::{DType, IndexOp, Result, Tensor, D};
-use candle_nn::{Embedding, Linear, Module};
+use hanzo_ml::{DType, IndexOp, Result, Tensor, D};
+use hanzo_nn::{Embedding, Linear, Module};
 use hanzo_quant::{
     apply_immediate_isq, QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear,
 };

@@ -1,4 +1,4 @@
-use candle_core::Device;
+use hanzo_ml::Device;
 use image::{ColorType, DynamicImage};
 use hanzo_vision::{ApplyTransforms, InterpolateResize, Normalize, ToTensor, Transforms};
 

@@ -6,8 +6,8 @@
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
-use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{Activation, Linear};
+use hanzo_ml::{bail, DType, Device, IndexOp, Result, Tensor};
+use hanzo_nn::{Activation, Linear};
 use hanzo_quant::{NonZeroOp, ShardedVarBuilder};
 
 use crate::amoe::{AnyMoeBaseModelMixin, MlpLayer};
@@ -459,7 +459,7 @@ impl MultimodalModel for Model {
         model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         let LLaVANextVisionSpecificArgs {
             image_sizes,
             num_image_tokens,

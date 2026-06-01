@@ -14,7 +14,7 @@ extern "C" {
         n: i32,
         k: i32,
         has_bias: bool,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_mxfp4_matmul_bf16(
@@ -27,7 +27,7 @@ extern "C" {
         n: i32,
         k: i32,
         has_bias: bool,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_mxfp4_matmul_wmma_f16(
@@ -40,7 +40,7 @@ extern "C" {
         n: i32,
         k: i32,
         has_bias: bool,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_mxfp4_matmul_wmma_bf16(
@@ -53,7 +53,7 @@ extern "C" {
         n: i32,
         k: i32,
         has_bias: bool,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_mxfp4_indexed_moe_gemm_f16(
@@ -70,7 +70,7 @@ extern "C" {
         k: i32,
         has_bias: bool,
         input_has_topk_dim: bool,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_mxfp4_indexed_moe_gemm_bf16(
@@ -87,7 +87,7 @@ extern "C" {
         k: i32,
         has_bias: bool,
         input_has_topk_dim: bool,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn mxfp4_get_max_smem_optin() -> i32;
@@ -106,7 +106,7 @@ extern "C" {
         k: i32,
         has_bias: bool,
         input_has_topk_dim: bool,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_mxfp4_moe_grouped_gemm_bf16(
@@ -123,7 +123,7 @@ extern "C" {
         k: i32,
         has_bias: bool,
         input_has_topk_dim: bool,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_mxfp4_moe_grouped_gemm_wmma_f16(
@@ -140,7 +140,7 @@ extern "C" {
         k: i32,
         has_bias: bool,
         input_has_topk_dim: bool,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_mxfp4_moe_grouped_gemm_wmma_bf16(
@@ -157,6 +157,6 @@ extern "C" {
         k: i32,
         has_bias: bool,
         input_has_topk_dim: bool,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 }

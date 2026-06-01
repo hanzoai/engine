@@ -2,8 +2,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{LayerNorm, Linear};
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
+use hanzo_nn::{LayerNorm, Linear};
 use hanzo_quant::{MatMul, ShardedVarBuilder};
 
 use crate::{
@@ -325,7 +325,7 @@ impl MultiheadAttention {
                 }
                 None => att,
             };
-            att = candle_nn::ops::softmax_last_dim(&att)?;
+            att = hanzo_nn::ops::softmax_last_dim(&att)?;
             MatMul.matmul(&att, &v)?
         };
 

@@ -22,7 +22,7 @@ use crate::{
     xlora_models::NonGranularState,
 };
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor};
+use hanzo_ml::{DType, Device, Tensor};
 use hanzo_quant::log::once_log_debug;
 
 use indicatif::MultiProgress;
@@ -50,7 +50,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin 
         position_ids: Vec<usize>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor>;
+    ) -> hanzo_ml::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]
     fn xlora_forward(
         &self,
@@ -64,7 +64,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin 
         position_ids: Vec<usize>,
         flash_params: &FlashParams,
         flash_params_full: &FlashParams,
-    ) -> candle_core::Result<Tensor>;
+    ) -> hanzo_ml::Result<Tensor>;
     fn is_xlora(&self) -> bool;
     fn device(&self) -> &Device;
     fn cache(&self) -> &EitherCache;

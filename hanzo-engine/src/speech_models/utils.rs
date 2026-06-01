@@ -2,7 +2,7 @@
 
 use std::io::Write;
 
-use candle_core::{Result, Tensor};
+use hanzo_ml::{Result, Tensor};
 
 use super::bs1770;
 

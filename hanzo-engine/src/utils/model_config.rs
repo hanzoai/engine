@@ -2,7 +2,7 @@ use super::varbuilder_utils::{
     from_mmaped_safetensors, load_preload_adapters, DeviceForLoadTensor,
 };
 use anyhow::Result;
-use candle_core::{quantized::ggml_file, DType};
+use hanzo_ml::{quantized::ggml_file, DType};
 use hanzo_quant::ShardedVarBuilder;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
@@ -24,7 +24,7 @@ pub struct FileGGML {
 
 #[derive(derive_more::From)]
 pub struct Device<'a> {
-    device: &'a candle_core::Device,
+    device: &'a hanzo_ml::Device,
     pub mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
@@ -44,7 +44,7 @@ impl<'a> Adapter<'a> {
     #[allow(clippy::borrowed_box)]
     pub fn try_new<'b: 'a>(
         paths: &'b Box<dyn ModelPaths>,
-        device: &'b candle_core::Device,
+        device: &'b hanzo_ml::Device,
         silent: bool,
         is_xlora: bool,
     ) -> Result<Self> {
@@ -64,7 +64,7 @@ impl<'a> Adapter<'a> {
         let ordering = xlora_order.as_ref().unwrap();
         let preload_adapters = load_preload_adapters(
             lora_preload_adapter_info,
-            candle_core::DType::F32,
+            hanzo_ml::DType::F32,
             device,
             silent,
         )?;
@@ -85,7 +85,7 @@ impl<'a> Adapter<'a> {
                 .iter()
                 .map(|(_, x)| (*x).to_owned())
                 .collect::<Vec<_>>(),
-            Some(candle_core::DType::F32),
+            Some(hanzo_ml::DType::F32),
             device,
             vec![None],
             silent,
@@ -167,7 +167,7 @@ pub trait FromGGML {
         ct: ggml_file::Content,
         gqa: usize,
         dtype: DType,
-    ) -> Result<Self, candle_core::Error>
+    ) -> Result<Self, hanzo_ml::Error>
     where
         Self: Sized;
 }
@@ -175,11 +175,11 @@ pub trait FromGGML {
 pub trait FromGGUF {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: Content<'_, R>,
-        device: &candle_core::Device,
+        device: &hanzo_ml::Device,
         mapper: Box<dyn DeviceMapper + Send + Sync>,
         attention_mechanism: AttentionImplementation,
         dtype: DType,
-    ) -> Result<Self, candle_core::Error>
+    ) -> Result<Self, hanzo_ml::Error>
     where
         Self: Sized;
 }
@@ -196,7 +196,7 @@ pub trait FromAdapterGGML {
         xlora_config: Option<XLoraConfig>,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         dtype: DType,
-    ) -> Result<Self, candle_core::Error>
+    ) -> Result<Self, hanzo_ml::Error>
     where
         Self: Sized;
 }
@@ -204,7 +204,7 @@ pub trait FromAdapterGGUF {
     #[allow(clippy::too_many_arguments)]
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: Content<'_, R>,
-        device: &candle_core::Device,
+        device: &hanzo_ml::Device,
         lora_config: &[((String, String), LoraConfig)],
         vb: &ShardedVarBuilder,
         ordering: &Ordering,
@@ -212,14 +212,14 @@ pub trait FromAdapterGGUF {
         mapper: Box<dyn DeviceMapper + Send + Sync>,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         dtype: DType,
-    ) -> Result<Self, candle_core::Error>
+    ) -> Result<Self, hanzo_ml::Error>
     where
         Self: Sized;
 }
 
 // NOTE: Below is a workaround to proxy params to the existing API methods `get_gguf()` / `get_gmml()` traits covered above.
 impl Config<ParamsGGML, NoAdapter> {
-    pub fn try_into_model<T: FromGGML>(self) -> Result<T, candle_core::Error> {
+    pub fn try_into_model<T: FromGGML>(self) -> Result<T, hanzo_ml::Error> {
         // Destructure props:
         let ParamsGGML(FileGGML { ct, gqa, dtype }) = self.quant;
 
@@ -229,7 +229,7 @@ impl Config<ParamsGGML, NoAdapter> {
 }
 
 impl Config<ParamsGGML, Adapter<'_>> {
-    pub fn try_into_model<T: FromAdapterGGML>(self) -> Result<T, candle_core::Error> {
+    pub fn try_into_model<T: FromAdapterGGML>(self) -> Result<T, hanzo_ml::Error> {
         // Destructure props:
         let ParamsGGML(FileGGML { ct, gqa, dtype }) = self.quant;
 
@@ -256,7 +256,7 @@ impl Config<ParamsGGML, Adapter<'_>> {
 }
 
 impl<R: std::io::Seek + std::io::Read> Config<ParamsGGUF<'_, R>, NoAdapter> {
-    pub fn try_into_model<T: FromGGUF>(self) -> Result<T, candle_core::Error> {
+    pub fn try_into_model<T: FromGGUF>(self) -> Result<T, hanzo_ml::Error> {
         // Destructure props:
         let ParamsGGUF(ct, Device { device, mapper }, attention_implementation, dtype) = self.quant;
 
@@ -266,7 +266,7 @@ impl<R: std::io::Seek + std::io::Read> Config<ParamsGGUF<'_, R>, NoAdapter> {
 }
 
 impl<R: std::io::Seek + std::io::Read> Config<ParamsGGUF<'_, R>, Adapter<'_>> {
-    pub fn try_into_model<T: FromAdapterGGUF>(self) -> Result<T, candle_core::Error> {
+    pub fn try_into_model<T: FromAdapterGGUF>(self) -> Result<T, hanzo_ml::Error> {
         // Destructure props:
         let ParamsGGUF(ct, Device { device, mapper }, _attention_implementation, dtype) =
             self.quant;
@@ -307,7 +307,7 @@ use crate::{
 use akin::akin;
 
 impl TryFrom<ModelParams<'_, ParamsGGML>> for QLlama {
-    type Error = candle_core::Error;
+    type Error = hanzo_ml::Error;
 
     fn try_from(params: ModelParams<'_, ParamsGGML>) -> Result<Self, Self::Error> {
         let config = params.expect_quantized("`Config` should be GGML Quantized");
@@ -316,7 +316,7 @@ impl TryFrom<ModelParams<'_, ParamsGGML>> for QLlama {
 }
 
 impl TryFrom<ModelParams<'_, ParamsGGML>> for XLoraQLlama {
-    type Error = candle_core::Error;
+    type Error = hanzo_ml::Error;
 
     fn try_from(params: ModelParams<'_, ParamsGGML>) -> Result<Self, Self::Error> {
         let config = params.expect_adapted("`Config` should be GGML Quantized with an Adapter");
@@ -328,7 +328,7 @@ akin! {
     let &models_gguf = [QLlama, QPhi, QPhi3, QStarcoder2, QQwen, QQwen3, QQwen3MoE];
 
     impl<R: std::io::Seek + std::io::Read> TryFrom<ModelParams<'_, ParamsGGUF<'_, R>>> for *models_gguf {
-        type Error = candle_core::Error;
+        type Error = hanzo_ml::Error;
 
         fn try_from(params: ModelParams<'_, ParamsGGUF<'_, R>>) -> Result<Self, Self::Error> {
             let config = params.expect_quantized("`Config` should be GGUF Quantized");
@@ -341,7 +341,7 @@ akin! {
     let &models_gguf_a = [XLoraQLlama, XLoraQPhi3];
 
     impl<R: std::io::Seek + std::io::Read> TryFrom<ModelParams<'_, ParamsGGUF<'_, R>>> for *models_gguf_a {
-        type Error = candle_core::Error;
+        type Error = hanzo_ml::Error;
 
         fn try_from(params: ModelParams<'_, ParamsGGUF<'_, R>>) -> Result<Self, Self::Error> {
             let config = params.expect_adapted("`Config` should be GGUF Quantized with an Adapter");

@@ -2,7 +2,7 @@
 
 use crate::MemoryUsage;
 
-use candle_core::{Device, Result, Tensor};
+use hanzo_ml::{Device, Result, Tensor};
 use hanzo_quant::MatMul;
 
 use crate::attention::{chunked_attention, SdpaParams};
@@ -47,10 +47,10 @@ pub(crate) fn naive_sdpa(
 
         // Compute softmax in F32 for precision (BF16 exp() loses information).
         let att_dtype = att.dtype();
-        if att_dtype == candle_core::DType::BF16 || att_dtype == candle_core::DType::F16 {
-            att = att.to_dtype(candle_core::DType::F32)?;
+        if att_dtype == hanzo_ml::DType::BF16 || att_dtype == hanzo_ml::DType::F16 {
+            att = att.to_dtype(hanzo_ml::DType::F32)?;
         }
-        att = candle_nn::ops::softmax_last_dim(&att)?;
+        att = hanzo_nn::ops::softmax_last_dim(&att)?;
         if att.dtype() != att_dtype {
             att = att.to_dtype(att_dtype)?;
         }

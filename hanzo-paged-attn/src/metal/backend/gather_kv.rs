@@ -1,4 +1,4 @@
-use candle_core::{DType, IndexOp, Result, Storage, Tensor};
+use hanzo_ml::{DType, IndexOp, Result, Storage, Tensor};
 
 use crate::metal::kernels::{self, PagedAttentionDType};
 
@@ -13,7 +13,7 @@ pub fn gather_kv_cache(
 ) -> Result<(Tensor, Tensor)> {
     let cache_dtype = key_cache.dtype();
     if value_cache.dtype() != cache_dtype {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "gather_kv_cache expects matching cache dtypes, got {:?} and {:?}",
             cache_dtype,
             value_cache.dtype()
@@ -24,13 +24,13 @@ pub fn gather_kv_cache(
     let cu_seq_lens = cu_seq_lens.contiguous()?;
 
     if !matches!(block_table.dtype(), DType::I32 | DType::U32) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "gather_kv_cache expects i32/u32 block_table (got {:?})",
             block_table.dtype()
         );
     }
     if !matches!(cu_seq_lens.dtype(), DType::I32 | DType::U32) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "gather_kv_cache expects i32/u32 cu_seq_lens (got {:?})",
             cu_seq_lens.dtype()
         );
@@ -41,13 +41,13 @@ pub fn gather_kv_cache(
         DType::BF16 => PagedAttentionDType::BF16,
         DType::F32 => PagedAttentionDType::F32,
         DType::F8E4M3 => PagedAttentionDType::F8E4M3,
-        other => candle_core::bail!("unsupported cache dtype {other:?}"),
+        other => hanzo_ml::bail!("unsupported cache dtype {other:?}"),
     };
     let out_ty = match out_dtype {
         DType::F16 => PagedAttentionDType::F16,
         DType::BF16 => PagedAttentionDType::BF16,
         DType::F32 => PagedAttentionDType::F32,
-        other => candle_core::bail!("unsupported output dtype {other:?}"),
+        other => hanzo_ml::bail!("unsupported output dtype {other:?}"),
     };
 
     // Extract dimensions
@@ -90,32 +90,32 @@ pub fn gather_kv_cache(
         let (kc_s, kc_l) = key_cache.storage_and_layout();
         let kc = match &*kc_s {
             Storage::Metal(s) => s,
-            _ => candle_core::bail!("key_cache must be a metal tensor"),
+            _ => hanzo_ml::bail!("key_cache must be a metal tensor"),
         };
         let (vc_s, vc_l) = value_cache.storage_and_layout();
         let vc = match &*vc_s {
             Storage::Metal(s) => s,
-            _ => candle_core::bail!("value_cache must be a metal tensor"),
+            _ => hanzo_ml::bail!("value_cache must be a metal tensor"),
         };
         let (ko_s, ko_l) = k_out.storage_and_layout();
         let ko = match &*ko_s {
             Storage::Metal(s) => s,
-            _ => candle_core::bail!("k_out must be a metal tensor"),
+            _ => hanzo_ml::bail!("k_out must be a metal tensor"),
         };
         let (vo_s, vo_l) = v_out.storage_and_layout();
         let vo = match &*vo_s {
             Storage::Metal(s) => s,
-            _ => candle_core::bail!("v_out must be a metal tensor"),
+            _ => hanzo_ml::bail!("v_out must be a metal tensor"),
         };
         let (bt_s, bt_l) = block_table.storage_and_layout();
         let bt = match &*bt_s {
             Storage::Metal(s) => s,
-            _ => candle_core::bail!("block_table must be a metal tensor"),
+            _ => hanzo_ml::bail!("block_table must be a metal tensor"),
         };
         let (cu_s, cu_l) = cu_seq_lens.storage_and_layout();
         let cu = match &*cu_s {
             Storage::Metal(s) => s,
-            _ => candle_core::bail!("cu_seq_lens must be a metal tensor"),
+            _ => hanzo_ml::bail!("cu_seq_lens must be a metal tensor"),
         };
 
         // Scale buffers - guards must live as long as k_v_scale
@@ -125,12 +125,12 @@ pub fn gather_kv_cache(
             ks_guard = ks.storage_and_layout();
             let ks = match &*ks_guard.0 {
                 Storage::Metal(s) => s,
-                _ => candle_core::bail!("k_scale must be a metal tensor"),
+                _ => hanzo_ml::bail!("k_scale must be a metal tensor"),
             };
             vs_guard = vs.storage_and_layout();
             let vs = match &*vs_guard.0 {
                 Storage::Metal(s) => s,
-                _ => candle_core::bail!("v_scale must be a metal tensor"),
+                _ => hanzo_ml::bail!("v_scale must be a metal tensor"),
             };
             Some((ks.buffer(), vs.buffer()))
         } else {
@@ -170,7 +170,7 @@ pub fn gather_kv_cache(
             head_size as i32,
             x as i32,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
     }
 
     Ok((k_out, v_out))

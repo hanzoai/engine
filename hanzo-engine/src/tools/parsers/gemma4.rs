@@ -2,7 +2,7 @@
 //!
 //! Format: `<|tool_call>call:NAME{key:<|"|>value<|"|>,key2:42}<tool_call|>`
 
-use candle_core::Result;
+use hanzo_ml::Result;
 use llguidance::api::{GrammarWithLexer, TopLevelGrammar};
 use serde_json::Value;
 
@@ -125,15 +125,15 @@ pub(crate) fn parse_gemma4_tool_calls(message: &str) -> Result<Option<String>> {
         return Ok(None);
     }
 
-    let json = serde_json::to_string(&calls).map_err(candle_core::Error::msg)?;
+    let json = serde_json::to_string(&calls).map_err(hanzo_ml::Error::msg)?;
     Ok(Some(json))
 }
 
 /// Parse Gemma 4's `<|"|>`-delimited arg format into a `Value`. Not JSON, so we build the tree directly to avoid escaping pain.
 /// Example input: `code:<|"|>print("hello\nworld")<|"|>,count:42`
-pub(crate) fn gemma4_args_to_json(raw: &str) -> std::result::Result<Value, candle_core::Error> {
+pub(crate) fn gemma4_args_to_json(raw: &str) -> std::result::Result<Value, hanzo_ml::Error> {
     parse_gemma4_value(&format!("{{{raw}}}")).map_err(|e| {
-        candle_core::Error::Msg(format!(
+        hanzo_ml::Error::Msg(format!(
             "Failed to parse Gemma 4 tool call arguments: {e}\nRaw: {raw}"
         ))
     })

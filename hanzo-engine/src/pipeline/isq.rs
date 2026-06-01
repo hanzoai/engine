@@ -51,7 +51,7 @@ impl safetensors::tensor::View for CowBytesView<'_> {
 }
 
 use anyhow::Result;
-use candle_core::{quantized, Context, Device, Tensor};
+use hanzo_ml::{quantized, Context, Device, Tensor};
 use indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use hanzo_quant::{
@@ -378,7 +378,7 @@ pub trait IsqModel {
     }
 
     /// End stats tracking and return the imatrix data
-    fn extract_imatrix_data(&mut self) -> candle_core::Result<CollectedImatrixData> {
+    fn extract_imatrix_data(&mut self) -> hanzo_ml::Result<CollectedImatrixData> {
         let layers = self
             .get_layers()
             .0
@@ -424,7 +424,7 @@ pub trait IsqModel {
     /// End stats tracking and return the imatrix data
     fn extract_imatrix_data_moe_experts_only(
         &mut self,
-    ) -> candle_core::Result<CollectedImatrixData> {
+    ) -> hanzo_ml::Result<CollectedImatrixData> {
         let layers = self
             .get_layers()
             .0
@@ -445,9 +445,9 @@ pub trait IsqModel {
     ///
     /// - This is only for loading from a llama.cpp imatrix file.
     /// - Corresponds to `IsqOrganization::Default`
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         // TODO: make this required.
-        candle_core::bail!("This model does not support quantizing with an imatrix.");
+        hanzo_ml::bail!("This model does not support quantizing with an imatrix.");
     }
 
     /// Residual tensors for generating a UQFF file. Counterpart to [`get_layers`].
@@ -475,14 +475,14 @@ pub trait IsqModel {
         write_artifacts: Option<&PathBuf>,
         full_ser: UqffFullSer<'_>,
         multi_progress: Arc<MultiProgress>,
-    ) -> candle_core::Result<()> {
+    ) -> hanzo_ml::Result<()> {
         {
             let mut imatrix_source = imatrix_source;
             let mut imatrix_to_weight_map: Option<HashMap<usize, Option<Vec<f32>>>> =
                 if apply_quantization {
                     match imatrix_source.take() {
                         Some(ImatrixDataSource::File(imatrix)) => {
-                            let ext = imatrix.extension().ok_or(candle_core::Error::msg(
+                            let ext = imatrix.extension().ok_or(hanzo_ml::Error::msg(
                                 "Expected an extension for the imatrix source file.",
                             ))?;
                             if ext == "cimatrix" {
@@ -675,7 +675,7 @@ pub trait IsqModel {
                 let pool = rayon::ThreadPoolBuilder::new()
                     .num_threads(minimum_max_threads)
                     .build()
-                    .map_err(candle_core::Error::msg)?;
+                    .map_err(hanzo_ml::Error::msg)?;
 
                 let guard = QuantizeOntoGuard::new();
 
@@ -747,7 +747,7 @@ pub trait IsqModel {
                 );
 
                 if serialized.extension().is_none_or(|ext| ext != "uqff") {
-                    candle_core::bail!("UQFF output path extension must be `.uqff`",);
+                    hanzo_ml::bail!("UQFF output path extension must be `.uqff`",);
                 }
 
                 let bar = ProgressBar::new(total_tensors as u64);
@@ -762,7 +762,7 @@ pub trait IsqModel {
                 // Metal and CUDA require serialization on the current thread because GPU contexts are thread-local.
                 // Using a rayon thread pool (even with n_threads=1) creates a new thread without the GPU context.
                 #[cfg(any(feature = "metal", feature = "cuda"))]
-                let quantized_values: candle_core::Result<Vec<_>> = {
+                let quantized_values: hanzo_ml::Result<Vec<_>> = {
                     tensors
                         .iter()
                         .enumerate()
@@ -783,11 +783,11 @@ pub trait IsqModel {
                 };
 
                 #[cfg(not(any(feature = "metal", feature = "cuda")))]
-                let quantized_values: candle_core::Result<Vec<_>> = {
+                let quantized_values: hanzo_ml::Result<Vec<_>> = {
                     let pool = rayon::ThreadPoolBuilder::new()
                         .num_threads(2)
                         .build()
-                        .map_err(candle_core::Error::msg)?;
+                        .map_err(hanzo_ml::Error::msg)?;
 
                     pool.install(|| {
                         use rayon::iter::IntoParallelRefIterator;
@@ -805,7 +805,7 @@ pub trait IsqModel {
                                         },
                                     ))
                                 })
-                                .collect::<candle_core::Result<Vec<_>>>()
+                                .collect::<hanzo_ml::Result<Vec<_>>>()
                         } else {
                             tensors
                                 .par_iter()
@@ -821,7 +821,7 @@ pub trait IsqModel {
                                         },
                                     ))
                                 })
-                                .collect::<candle_core::Result<Vec<_>>>()
+                                .collect::<hanzo_ml::Result<Vec<_>>>()
                         }
                     })
                 };
@@ -921,11 +921,11 @@ pub trait IsqModel {
                 info!("Serializing tokenizer to `{}`.", tokenizer_out.display());
 
                 serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer)
-                    .map_err(candle_core::Error::msg)?;
+                    .map_err(hanzo_ml::Error::msg)?;
 
                 if let Some(template_filename) = template_filename {
                     let template =
-                        std::fs::read(template_filename).map_err(candle_core::Error::msg)?;
+                        std::fs::read(template_filename).map_err(hanzo_ml::Error::msg)?;
 
                     if template_filename.extension().map(|e| e.to_str()) == Some(Some("jinja")) {
                         info!(
@@ -933,7 +933,7 @@ pub trait IsqModel {
                             chat_template_jinja_out.display()
                         );
                         std::fs::write(&chat_template_jinja_out, template)
-                            .map_err(candle_core::Error::msg)?;
+                            .map_err(hanzo_ml::Error::msg)?;
 
                         // When the chat template is a .jinja file, also save the
                         // tokenizer_config.json that lives alongside it. This file
@@ -949,7 +949,7 @@ pub trait IsqModel {
                                 tokenizer_cfg_out.display()
                             );
                             std::fs::copy(&cfg_path, &tokenizer_cfg_out)
-                                .map_err(candle_core::Error::msg)?;
+                                .map_err(hanzo_ml::Error::msg)?;
                         }
                     } else {
                         info!(
@@ -957,7 +957,7 @@ pub trait IsqModel {
                             tokenizer_cfg_out.display()
                         );
                         std::fs::write(&tokenizer_cfg_out, template)
-                            .map_err(candle_core::Error::msg)?;
+                            .map_err(hanzo_ml::Error::msg)?;
                     }
                 }
 
@@ -967,8 +967,8 @@ pub trait IsqModel {
                         gen_cfg_out.display()
                     );
 
-                    let cfg = std::fs::read(generation_config).map_err(candle_core::Error::msg)?;
-                    std::fs::write(&gen_cfg_out, cfg).map_err(candle_core::Error::msg)?;
+                    let cfg = std::fs::read(generation_config).map_err(hanzo_ml::Error::msg)?;
+                    std::fs::write(&gen_cfg_out, cfg).map_err(hanzo_ml::Error::msg)?;
                 }
 
                 if let Some(processor_config) = processor_filename {
@@ -977,8 +977,8 @@ pub trait IsqModel {
                         processor_out.display()
                     );
 
-                    let cfg = std::fs::read(processor_config).map_err(candle_core::Error::msg)?;
-                    std::fs::write(&processor_out, cfg).map_err(candle_core::Error::msg)?;
+                    let cfg = std::fs::read(processor_config).map_err(hanzo_ml::Error::msg)?;
+                    std::fs::write(&processor_out, cfg).map_err(hanzo_ml::Error::msg)?;
                 }
 
                 if let Some(preprocessor_config) = preprocessor_filename {
@@ -988,8 +988,8 @@ pub trait IsqModel {
                     );
 
                     let cfg =
-                        std::fs::read(preprocessor_config).map_err(candle_core::Error::msg)?;
-                    std::fs::write(&preprocessor_out, cfg).map_err(candle_core::Error::msg)?;
+                        std::fs::read(preprocessor_config).map_err(hanzo_ml::Error::msg)?;
+                    std::fs::write(&preprocessor_out, cfg).map_err(hanzo_ml::Error::msg)?;
                 }
 
                 if let Some(modules) = modules {
@@ -998,7 +998,7 @@ pub trait IsqModel {
                         modules_out.display()
                     );
 
-                    std::fs::write(&modules_out, modules).map_err(candle_core::Error::msg)?;
+                    std::fs::write(&modules_out, modules).map_err(hanzo_ml::Error::msg)?;
 
                     if let Some(module_paths) = module_paths {
                         for module in module_paths {
@@ -1012,26 +1012,26 @@ pub trait IsqModel {
                                     }
                                     let module_dir = parent.join(path.as_str());
                                     std::fs::create_dir_all(&module_dir)
-                                        .map_err(candle_core::Error::msg)?;
+                                        .map_err(hanzo_ml::Error::msg)?;
 
                                     match module {
                                         EmbeddingModulePaths::Pooling { config, .. } => {
                                             let dest = module_dir.join("config.json");
                                             if config != &dest {
                                                 std::fs::copy(config, &dest)
-                                                    .map_err(candle_core::Error::msg)?;
+                                                    .map_err(hanzo_ml::Error::msg)?;
                                             }
                                         }
                                         EmbeddingModulePaths::Dense { config, model, .. } => {
                                             let dest_cfg = module_dir.join("config.json");
                                             if config != &dest_cfg {
                                                 std::fs::copy(config, &dest_cfg)
-                                                    .map_err(candle_core::Error::msg)?;
+                                                    .map_err(hanzo_ml::Error::msg)?;
                                             }
                                             let dest_model = module_dir.join("model.safetensors");
                                             if model != &dest_model {
                                                 std::fs::copy(model, &dest_model)
-                                                    .map_err(candle_core::Error::msg)?;
+                                                    .map_err(hanzo_ml::Error::msg)?;
                                             }
                                         }
                                         EmbeddingModulePaths::Transformer { .. }
@@ -1053,7 +1053,7 @@ pub trait IsqModel {
         topology: Option<&Topology>,
         silent: bool,
         artifacts: &[PathBuf],
-    ) -> candle_core::Result<()> {
+    ) -> hanzo_ml::Result<()> {
         let (tensors, mapper) = self.get_layers();
         let total_tensors = tensors.len();
 
@@ -1090,7 +1090,7 @@ pub trait IsqModel {
             comms.push(mapper.get_comm_for(layer_num.unwrap_or(0))?)
         }
 
-        let artifacts = unsafe { candle_core::safetensors::MmapedSafetensors::multi(artifacts)? };
+        let artifacts = unsafe { hanzo_ml::safetensors::MmapedSafetensors::multi(artifacts)? };
 
         let artifact_isqs = artifacts
             .tensors()
@@ -1105,7 +1105,7 @@ pub trait IsqModel {
             .collect::<HashMap<_, _>>();
 
         if artifact_isqs.len() != total_tensors {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Number of artifacts ({}) does not match the number of ISQ layers ({total_tensors})",
                 artifact_isqs.len(),
             );
@@ -1208,7 +1208,7 @@ pub trait IsqModel {
                     }
                     Ok(())
                 })
-                .collect::<candle_core::Result<Vec<_>>>()?;
+                .collect::<hanzo_ml::Result<Vec<_>>>()?;
         } else {
             (0..tensors.len())
                 .into_par_iter()
@@ -1293,7 +1293,7 @@ pub trait IsqModel {
                     }
                     Ok(())
                 })
-                .collect::<candle_core::Result<Vec<_>>>()?;
+                .collect::<hanzo_ml::Result<Vec<_>>>()?;
         }
 
         // Verify no DummyLayers remain after deserialization
@@ -1306,7 +1306,7 @@ pub trait IsqModel {
                     } else {
                         "the UQFF artifact set did not contain an entry for this layer index"
                     };
-                    candle_core::bail!(
+                    hanzo_ml::bail!(
                         "UQFF placeholder was not replaced at artifact index {i}, model layer {layer_num:?}: {artifact_note}. {}",
                         info.message("UQFF artifact loading")
                     );

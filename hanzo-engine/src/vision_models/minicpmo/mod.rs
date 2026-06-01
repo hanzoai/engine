@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
 pub use config::MiniCpmOConfig;
 pub use inputs_processor::MiniCpmOProcessor;
 use hanzo_quant::{CollectedImatrixData, QuantMethod, ShardedVarBuilder};
@@ -447,7 +447,7 @@ impl IsqModel for MiniCpmOModel {
     }
 
     /// End stats tracking and return the imatrix data
-    fn extract_imatrix_data(&mut self) -> candle_core::Result<CollectedImatrixData> {
+    fn extract_imatrix_data(&mut self) -> hanzo_ml::Result<CollectedImatrixData> {
         self.llm.extract_imatrix_data()
     }
 }

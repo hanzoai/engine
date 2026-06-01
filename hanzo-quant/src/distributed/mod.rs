@@ -1,6 +1,6 @@
 use std::{fmt::Debug, fs::File, sync::Barrier};
 
-use candle_core::Result;
+use hanzo_ml::Result;
 pub mod layers;
 pub mod socket;
 
@@ -75,8 +75,8 @@ pub fn get_global_tp_size_from_devices() -> Result<usize> {
             use std::str::FromStr;
             Ok(usize::from_str(&x).expect("Not a number for MISTRALRS_MN_LOCAL_WORLD_SIZE!"))
         } else {
-            use candle_core::cuda::WrapErr;
-            candle_core::cuda::cudarc::driver::result::device::get_count()
+            use hanzo_ml::cuda::WrapErr;
+            hanzo_ml::cuda::cudarc::driver::result::device::get_count()
                 .w()
                 .map(|x| x as usize)
         }
@@ -109,7 +109,7 @@ pub enum Comm {
 impl Comm {
     pub fn from_device(
         id: Id,
-        dev: &candle_core::Device,
+        dev: &hanzo_ml::Device,
         rank: usize,
         world_size: usize,
     ) -> Result<Self> {
@@ -199,12 +199,12 @@ impl Default for Id {
 }
 
 #[cfg(all(feature = "cuda", feature = "nccl"))]
-use candle_core::cuda::cudarc;
+use hanzo_ml::cuda::cudarc;
 
 // NCCL backend implementation
 #[cfg(all(feature = "cuda", feature = "nccl"))]
 mod nccl {
-    use candle_core::{cuda::cudarc, Device, Result};
+    use hanzo_ml::{cuda::cudarc, Device, Result};
 
     #[derive(Debug)]
     pub struct NcclComm {
@@ -219,10 +219,10 @@ mod nccl {
             world_size: usize,
         ) -> Result<Self> {
             if !super::use_nccl() {
-                candle_core::bail!("NCCL is disabled but NCCL Comm was requested");
+                hanzo_ml::bail!("NCCL is disabled but NCCL Comm was requested");
             }
             if !world_size.is_power_of_two() {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "NCCL backend requires world_size to be a power of 2, got {}",
                     world_size
                 );
@@ -230,7 +230,7 @@ mod nccl {
             let stream = dev.as_cuda_device()?.cuda_stream();
             let device_ordinal = stream.context().ordinal();
             if rank != device_ordinal {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "NCCL rank {} must match device ordinal, but device ordinal is {}. \
                      Ensure GPUs are visible in the correct order (check CUDA_VISIBLE_DEVICES).",
                     rank,
@@ -239,7 +239,7 @@ mod nccl {
             }
             let nccl_id = match id {
                 super::Id::Nccl(id) => id,
-                _ => candle_core::bail!("Expected NCCL Id variant for NCCL Comm initialization"),
+                _ => hanzo_ml::bail!("Expected NCCL Id variant for NCCL Comm initialization"),
             };
             tracing::info!(
                 "Initializing NCCL communicator: rank={}, world_size={}, device={}",
@@ -248,7 +248,7 @@ mod nccl {
                 device_ordinal
             );
             let comm = cudarc::nccl::Comm::from_rank(stream, rank, world_size, nccl_id)
-                .map_err(|e| candle_core::Error::debug(e.0))?;
+                .map_err(|e| hanzo_ml::Error::debug(e.0))?;
             Ok(Self { comm })
         }
 
@@ -274,7 +274,7 @@ mod nccl {
 #[cfg(feature = "ring")]
 mod ring {
     use super::RingConfig;
-    use candle_core::{Device, Result};
+    use hanzo_ml::{Device, Result};
 
     #[derive(Debug)]
     pub struct RingComm {
@@ -291,20 +291,20 @@ mod ring {
             let config = RingConfig::load();
             // Validate ring configuration
             if config.world_size < 2 {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Ring backend requires world_size >= 2, got {}",
                     config.world_size
                 );
             }
             if config.rank >= config.world_size {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Ring backend invalid config: rank {} >= world_size {}",
                     config.rank,
                     config.world_size
                 );
             }
             if !config.world_size.is_power_of_two() {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Ring backend requires world_size to be a power of 2, got {}",
                     config.world_size
                 );
@@ -328,7 +328,7 @@ mod ring {
 
 // Dummy backend implementation
 mod dummy {
-    use candle_core::{Device, Result};
+    use hanzo_ml::{Device, Result};
 
     #[derive(Debug)]
     pub struct DummyComm;
@@ -392,7 +392,7 @@ impl SumAllReduce {
         }
     }
 
-    pub fn sum_all_reduce(&self, xs: &candle_core::Tensor) -> Result<candle_core::Tensor> {
+    pub fn sum_all_reduce(&self, xs: &hanzo_ml::Tensor) -> Result<hanzo_ml::Tensor> {
         #[cfg(all(feature = "cuda", feature = "nccl"))]
         if let Some(ref nccl) = self.nccl {
             return nccl.sum_all_reduce(xs);
@@ -404,7 +404,7 @@ impl SumAllReduce {
         if let Some(ref dummy) = self.dummy {
             return dummy.sum_all_reduce(xs);
         }
-        candle_core::bail!("No valid SumAllReduce implementation available")
+        hanzo_ml::bail!("No valid SumAllReduce implementation available")
     }
 }
 
@@ -446,7 +446,7 @@ impl AllGather {
         }
     }
 
-    pub fn all_gather(&self, xs: &candle_core::Tensor) -> Result<candle_core::Tensor> {
+    pub fn all_gather(&self, xs: &hanzo_ml::Tensor) -> Result<hanzo_ml::Tensor> {
         #[cfg(all(feature = "cuda", feature = "nccl"))]
         if let Some(ref nccl) = self.nccl {
             return nccl.all_gather(xs);
@@ -458,7 +458,7 @@ impl AllGather {
         if let Some(ref dummy) = self.dummy {
             return dummy.all_gather(xs);
         }
-        candle_core::bail!("No valid AllGather implementation available")
+        hanzo_ml::bail!("No valid AllGather implementation available")
     }
 }
 
@@ -467,7 +467,7 @@ impl AllGather {
 mod nccl_ops {
     use std::{fmt::Debug, sync::Arc};
 
-    use candle_core::{
+    use hanzo_ml::{
         backend::BackendStorage, cuda::cudarc, CpuStorage, CustomOp1, DType, Layout, Result, Shape,
         Tensor,
     };
@@ -495,14 +495,14 @@ mod nccl_ops {
         }
 
         fn cpu_fwd(&self, _s: &CpuStorage, _l: &Layout) -> Result<(CpuStorage, Shape)> {
-            candle_core::bail!("SumAllReduce is never used on cpu")
+            hanzo_ml::bail!("SumAllReduce is never used on cpu")
         }
 
         fn cuda_fwd(
             &self,
-            s: &candle_core::CudaStorage,
+            s: &hanzo_ml::CudaStorage,
             l: &Layout,
-        ) -> Result<(candle_core::CudaStorage, Shape)> {
+        ) -> Result<(hanzo_ml::CudaStorage, Shape)> {
             use cudarc::nccl::ReduceOp;
             use half::{bf16, f16};
 
@@ -516,14 +516,14 @@ mod nccl_ops {
                             let s = s.as_cuda_slice::<bf16>()?;
                             let s = match l.contiguous_offsets() {
                                 Some((0, l)) if l == s.len() => s,
-                                Some(_) | None => candle_core::bail!("input has to be contiguous"),
+                                Some(_) | None => hanzo_ml::bail!("input has to be contiguous"),
                             };
                             if elem_count == 0 {
-                                candle_core::bail!("NCCL all_reduce: elem_count must be > 0");
+                                hanzo_ml::bail!("NCCL all_reduce: elem_count must be > 0");
                             }
                             let device_ordinal = dev.cuda_stream().context().ordinal();
                             if device_ordinal != nccl_comm.rank() {
-                                candle_core::bail!(
+                                hanzo_ml::bail!(
                                     "NCCL device mismatch: tensor on device {} but NCCL rank is {}. \
                                      Ensure each rank uses the correct GPU.",
                                     device_ordinal,
@@ -540,21 +540,21 @@ mod nccl_ops {
                             nccl_comm
                                 .inner()
                                 .all_reduce(s, &mut dst, &ReduceOp::Sum)
-                                .map_err(candle_core::Error::debug)?;
-                            candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                                .map_err(hanzo_ml::Error::debug)?;
+                            hanzo_ml::CudaStorage::wrap_cuda_slice(dst, dev)
                         }
                         DType::F16 => {
                             let s = s.as_cuda_slice::<f16>()?;
                             let s = match l.contiguous_offsets() {
                                 Some((0, l)) if l == s.len() => s,
-                                Some(_) | None => candle_core::bail!("input has to be contiguous"),
+                                Some(_) | None => hanzo_ml::bail!("input has to be contiguous"),
                             };
                             if elem_count == 0 {
-                                candle_core::bail!("NCCL all_reduce: elem_count must be > 0");
+                                hanzo_ml::bail!("NCCL all_reduce: elem_count must be > 0");
                             }
                             let device_ordinal = dev.cuda_stream().context().ordinal();
                             if device_ordinal != nccl_comm.rank() {
-                                candle_core::bail!(
+                                hanzo_ml::bail!(
                                     "NCCL device mismatch: tensor on device {} but NCCL rank is {}. \
                                      Ensure each rank uses the correct GPU.",
                                     device_ordinal,
@@ -571,21 +571,21 @@ mod nccl_ops {
                             nccl_comm
                                 .inner()
                                 .all_reduce(s, &mut dst, &ReduceOp::Sum)
-                                .map_err(candle_core::Error::debug)?;
-                            candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                                .map_err(hanzo_ml::Error::debug)?;
+                            hanzo_ml::CudaStorage::wrap_cuda_slice(dst, dev)
                         }
                         DType::F32 => {
                             let s = s.as_cuda_slice::<f32>()?;
                             let s = match l.contiguous_offsets() {
                                 Some((0, l)) if l == s.len() => s,
-                                Some(_) | None => candle_core::bail!("input has to be contiguous"),
+                                Some(_) | None => hanzo_ml::bail!("input has to be contiguous"),
                             };
                             if elem_count == 0 {
-                                candle_core::bail!("NCCL all_reduce: elem_count must be > 0");
+                                hanzo_ml::bail!("NCCL all_reduce: elem_count must be > 0");
                             }
                             let device_ordinal = dev.cuda_stream().context().ordinal();
                             if device_ordinal != nccl_comm.rank() {
-                                candle_core::bail!(
+                                hanzo_ml::bail!(
                                     "NCCL device mismatch: tensor on device {} but NCCL rank is {}. \
                                      Ensure each rank uses the correct GPU.",
                                     device_ordinal,
@@ -602,14 +602,14 @@ mod nccl_ops {
                             nccl_comm
                                 .inner()
                                 .all_reduce(s, &mut dst, &ReduceOp::Sum)
-                                .map_err(candle_core::Error::debug)?;
-                            candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                                .map_err(hanzo_ml::Error::debug)?;
+                            hanzo_ml::CudaStorage::wrap_cuda_slice(dst, dev)
                         }
-                        dtype => candle_core::bail!("unsupported dtype {dtype:?}"),
+                        dtype => hanzo_ml::bail!("unsupported dtype {dtype:?}"),
                     };
                     Ok((dst, l.shape().clone()))
                 }
-                _ => candle_core::bail!("SumAllReduce requires NCCL backend"),
+                _ => hanzo_ml::bail!("SumAllReduce requires NCCL backend"),
             }
         }
     }
@@ -641,14 +641,14 @@ mod nccl_ops {
         }
 
         fn cpu_fwd(&self, _s: &CpuStorage, _l: &Layout) -> Result<(CpuStorage, Shape)> {
-            candle_core::bail!("AllGather is never used on cpu")
+            hanzo_ml::bail!("AllGather is never used on cpu")
         }
 
         fn cuda_fwd(
             &self,
-            s: &candle_core::CudaStorage,
+            s: &hanzo_ml::CudaStorage,
             l: &Layout,
-        ) -> Result<(candle_core::CudaStorage, Shape)> {
+        ) -> Result<(hanzo_ml::CudaStorage, Shape)> {
             use half::{bf16, f16};
 
             let mut out_shape = l.shape().dims().to_vec();
@@ -665,14 +665,14 @@ mod nccl_ops {
                             let s = s.as_cuda_slice::<bf16>()?;
                             let s = match l.contiguous_offsets() {
                                 Some((0, l)) if l == s.len() => s,
-                                Some(_) | None => candle_core::bail!("input has to be contiguous"),
+                                Some(_) | None => hanzo_ml::bail!("input has to be contiguous"),
                             };
                             if elem_count == 0 {
-                                candle_core::bail!("NCCL all_gather: elem_count must be > 0");
+                                hanzo_ml::bail!("NCCL all_gather: elem_count must be > 0");
                             }
                             let device_ordinal = dev.cuda_stream().context().ordinal();
                             if device_ordinal != nccl_comm.rank() {
-                                candle_core::bail!(
+                                hanzo_ml::bail!(
                                     "NCCL device mismatch: tensor on device {} but NCCL rank is {}. \
                                      Ensure each rank uses the correct GPU.",
                                     device_ordinal,
@@ -689,21 +689,21 @@ mod nccl_ops {
                             nccl_comm
                                 .inner()
                                 .all_gather(s, &mut dst)
-                                .map_err(candle_core::Error::debug)?;
-                            candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                                .map_err(hanzo_ml::Error::debug)?;
+                            hanzo_ml::CudaStorage::wrap_cuda_slice(dst, dev)
                         }
                         DType::F16 => {
                             let s = s.as_cuda_slice::<f16>()?;
                             let s = match l.contiguous_offsets() {
                                 Some((0, l)) if l == s.len() => s,
-                                Some(_) | None => candle_core::bail!("input has to be contiguous"),
+                                Some(_) | None => hanzo_ml::bail!("input has to be contiguous"),
                             };
                             if elem_count == 0 {
-                                candle_core::bail!("NCCL all_gather: elem_count must be > 0");
+                                hanzo_ml::bail!("NCCL all_gather: elem_count must be > 0");
                             }
                             let device_ordinal = dev.cuda_stream().context().ordinal();
                             if device_ordinal != nccl_comm.rank() {
-                                candle_core::bail!(
+                                hanzo_ml::bail!(
                                     "NCCL device mismatch: tensor on device {} but NCCL rank is {}. \
                                      Ensure each rank uses the correct GPU.",
                                     device_ordinal,
@@ -720,21 +720,21 @@ mod nccl_ops {
                             nccl_comm
                                 .inner()
                                 .all_gather(s, &mut dst)
-                                .map_err(candle_core::Error::debug)?;
-                            candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                                .map_err(hanzo_ml::Error::debug)?;
+                            hanzo_ml::CudaStorage::wrap_cuda_slice(dst, dev)
                         }
                         DType::F32 => {
                             let s = s.as_cuda_slice::<f32>()?;
                             let s = match l.contiguous_offsets() {
                                 Some((0, l)) if l == s.len() => s,
-                                Some(_) | None => candle_core::bail!("input has to be contiguous"),
+                                Some(_) | None => hanzo_ml::bail!("input has to be contiguous"),
                             };
                             if elem_count == 0 {
-                                candle_core::bail!("NCCL all_gather: elem_count must be > 0");
+                                hanzo_ml::bail!("NCCL all_gather: elem_count must be > 0");
                             }
                             let device_ordinal = dev.cuda_stream().context().ordinal();
                             if device_ordinal != nccl_comm.rank() {
-                                candle_core::bail!(
+                                hanzo_ml::bail!(
                                     "NCCL device mismatch: tensor on device {} but NCCL rank is {}. \
                                      Ensure each rank uses the correct GPU.",
                                     device_ordinal,
@@ -751,14 +751,14 @@ mod nccl_ops {
                             nccl_comm
                                 .inner()
                                 .all_gather(s, &mut dst)
-                                .map_err(candle_core::Error::debug)?;
-                            candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                                .map_err(hanzo_ml::Error::debug)?;
+                            hanzo_ml::CudaStorage::wrap_cuda_slice(dst, dev)
                         }
-                        dtype => candle_core::bail!("unsupported dtype {dtype:?}"),
+                        dtype => hanzo_ml::bail!("unsupported dtype {dtype:?}"),
                     };
                     Ok((dst, out_shape))
                 }
-                _ => candle_core::bail!("AllGather requires NCCL backend"),
+                _ => hanzo_ml::bail!("AllGather requires NCCL backend"),
             }
         }
     }
@@ -780,7 +780,7 @@ mod ring_ops {
     type SharedTcpStream = Arc<Mutex<TcpStream>>;
     type LeftRight = (SharedTcpStream, SharedTcpStream);
 
-    use candle_core::{
+    use hanzo_ml::{
         backend::BackendStorage, CpuStorage, Device, Result, Storage, Tensor, WithDType,
     };
 
@@ -865,7 +865,7 @@ mod ring_ops {
 
             // Re‑use (or allocate) a receive buffer of identical size.
             let mut buffers_guard = self.buffers.lock().map_err(|e| {
-                candle_core::Error::msg(format!("Failed to lock buffers mutex: {:?}", e))
+                hanzo_ml::Error::msg(format!("Failed to lock buffers mutex: {:?}", e))
             })?;
             let recv_buf = buffers_guard
                 .entry(nbytes)
@@ -873,10 +873,10 @@ mod ring_ops {
 
             // Lock both sockets once to avoid per-call mutex overhead.
             let mut right_guard = right.lock().map_err(|e| {
-                candle_core::Error::msg(format!("Failed to lock right stream mutex: {:?}", e))
+                hanzo_ml::Error::msg(format!("Failed to lock right stream mutex: {:?}", e))
             })?;
             let mut left_guard = left.lock().map_err(|e| {
-                candle_core::Error::msg(format!("Failed to lock left stream mutex: {:?}", e))
+                hanzo_ml::Error::msg(format!("Failed to lock left stream mutex: {:?}", e))
             })?;
 
             // For the typical tensor size we see (~ 6 KiB) a single
@@ -887,11 +887,11 @@ mod ring_ops {
                 // --- fast path: one shot ------------------------------------
                 right_guard
                     .write_all(data_bytes)
-                    .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))?;
+                    .map_err(|e| hanzo_ml::Error::msg(format!("write error: {:?}", e)))?;
 
                 left_guard
                     .read_exact(recv_buf)
-                    .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))?;
+                    .map_err(|e| hanzo_ml::Error::msg(format!("read error: {:?}", e)))?;
             } else {
                 // --- slow path: chunked ping‑pong ---------------------------
                 const CHUNK_SIZE: usize = 64 * 1024; // 64 KiB
@@ -903,12 +903,12 @@ mod ring_ops {
                     // send this chunk to the right neighbour
                     right_guard
                         .write_all(&data_bytes[offset..offset + len])
-                        .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))?;
+                        .map_err(|e| hanzo_ml::Error::msg(format!("write error: {:?}", e)))?;
 
                     // receive the matching chunk from the left neighbour
                     left_guard
                         .read_exact(&mut recv_buf[offset..offset + len])
-                        .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))?;
+                        .map_err(|e| hanzo_ml::Error::msg(format!("read error: {:?}", e)))?;
 
                     offset += len;
                 }
@@ -937,7 +937,7 @@ mod ring_ops {
                 CpuStorage::BF16(x) => self.run(x.as_slice(), xs.dims(), xs.device())?,
                 CpuStorage::F32(x) => self.run(x.as_slice(), xs.dims(), xs.device())?,
                 CpuStorage::F16(x) => self.run(x.as_slice(), xs.dims(), xs.device())?,
-                _ => candle_core::bail!("Unsupported dtype for ring backend"),
+                _ => hanzo_ml::bail!("Unsupported dtype for ring backend"),
             };
 
             xs + delta
@@ -980,7 +980,7 @@ mod ring_ops {
         ) -> Result<Tensor> {
             // Validate gather dimension
             if self.dim >= dims.len() {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "AllGather: invalid dimension {} for tensor of rank {}",
                     self.dim,
                     dims.len()
@@ -1006,29 +1006,29 @@ mod ring_ops {
                     unsafe { std::slice::from_raw_parts(send_piece.as_ptr() as *const u8, nbytes) };
                 {
                     let mut rg = right.lock().map_err(|e| {
-                        candle_core::Error::msg(format!(
+                        hanzo_ml::Error::msg(format!(
                             "Failed to lock right stream mutex: {:?}",
                             e
                         ))
                     })?;
                     rg.write_all(bytes)
-                        .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))?;
+                        .map_err(|e| hanzo_ml::Error::msg(format!("write error: {:?}", e)))?;
                 }
 
                 // ---------- receive from the left ----------
                 let mut bg = self.buffers.lock().map_err(|e| {
-                    candle_core::Error::msg(format!("Failed to lock buffers mutex: {:?}", e))
+                    hanzo_ml::Error::msg(format!("Failed to lock buffers mutex: {:?}", e))
                 })?;
                 let buf = bg.entry(nbytes).or_insert_with(|| vec![0u8; nbytes]);
                 {
                     let mut lg = left.lock().map_err(|e| {
-                        candle_core::Error::msg(format!(
+                        hanzo_ml::Error::msg(format!(
                             "Failed to lock left stream mutex: {:?}",
                             e
                         ))
                     })?;
                     lg.read_exact(buf)
-                        .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))?;
+                        .map_err(|e| hanzo_ml::Error::msg(format!("read error: {:?}", e)))?;
                 }
                 let recv_piece: &[T] =
                     unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const T, elem_cnt) };
@@ -1059,7 +1059,7 @@ mod ring_ops {
                 CpuStorage::BF16(x) => self.run(x.as_slice(), xs.dims(), xs.device()),
                 CpuStorage::F32(x) => self.run(x.as_slice(), xs.dims(), xs.device()),
                 CpuStorage::F16(x) => self.run(x.as_slice(), xs.dims(), xs.device()),
-                _ => candle_core::bail!("Unsupported dtype for ring backend"),
+                _ => hanzo_ml::bail!("Unsupported dtype for ring backend"),
             }
         }
     }
@@ -1067,7 +1067,7 @@ mod ring_ops {
 
 // Dummy operations
 mod dummy_ops {
-    use candle_core::{Result, Tensor};
+    use hanzo_ml::{Result, Tensor};
     use std::sync::Arc;
 
     #[derive(Clone, Debug)]

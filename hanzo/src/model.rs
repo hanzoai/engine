@@ -1,4 +1,4 @@
-use candle_core::{Device, Result, Tensor};
+use hanzo_ml::{Device, Result, Tensor};
 use either::Either;
 use futures::future::join_all;
 use hanzo_engine::*;

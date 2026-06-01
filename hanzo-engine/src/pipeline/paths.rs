@@ -71,7 +71,7 @@ pub fn get_xlora_paths(
                 if let Some(cache_dir) = crate::hf_hub_cache_dir() {
                     api = api.with_cache_dir(cache_dir);
                 }
-                api.build().map_err(candle_core::Error::msg)?
+                api.build().map_err(hanzo_ml::Error::msg)?
             };
             let api = api.repo(Repo::with_revision(
                 xlora_id.clone(),
@@ -93,7 +93,7 @@ pub fn get_xlora_paths(
             let xlora_classifier = xlora_classifier.first();
 
             let classifier_path = xlora_classifier
-                .map(|xlora_classifier| -> candle_core::Result<_> {
+                .map(|xlora_classifier| -> hanzo_ml::Result<_> {
                     Ok(api_get_file!(api, xlora_classifier, model_id, &revision))
                 })
                 .transpose()?;
@@ -285,7 +285,7 @@ pub fn get_xlora_paths(
                     if let Some(cache_dir) = crate::hf_hub_cache_dir() {
                         api = api.with_cache_dir(cache_dir);
                     }
-                    api.build().map_err(candle_core::Error::msg)?
+                    api.build().map_err(hanzo_ml::Error::msg)?
                 };
                 let api = api.repo(Repo::with_revision(
                     adapter_id.clone(),
@@ -347,7 +347,7 @@ pub fn get_model_paths(
                     if let Some(cache_dir) = crate::hf_hub_cache_dir() {
                         api = api.with_cache_dir(cache_dir);
                     }
-                    api.build().map_err(candle_core::Error::msg)?
+                    api.build().map_err(hanzo_ml::Error::msg)?
                 };
                 let qapi = qapi.repo(Repo::with_revision(
                     id.to_string(),

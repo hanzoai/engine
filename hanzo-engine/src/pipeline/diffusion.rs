@@ -20,7 +20,7 @@ use crate::utils::{
 };
 use crate::{DeviceMapSetting, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor};
+use hanzo_ml::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use image::{DynamicImage, RgbImage};
 use hanzo_quant::log::once_log_info;
@@ -170,9 +170,9 @@ impl Loader for DiffusionLoader {
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
-            vec![candle_core::Device::new_cuda(worker_rank + 1)?]
+            vec![hanzo_ml::Device::new_cuda(worker_rank + 1)?]
         } else if use_nccl || use_ring() {
-            vec![candle_core::Device::new_cuda(0)?]
+            vec![hanzo_ml::Device::new_cuda(0)?]
         } else {
             device_map::get_all_similar_devices(device)?
         };
@@ -207,7 +207,7 @@ impl Loader for DiffusionLoader {
                             Arc::new(|_| DeviceForLoadTensor::Base),
                         )
                     })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
+                    .collect::<hanzo_ml::Result<Vec<_>>>()?;
 
                 self.inner.load(
                     configs,
@@ -321,7 +321,7 @@ impl Pipeline for DiffusionPipeline {
         &mut self,
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
-    ) -> candle_core::Result<ForwardInputsResult> {
+    ) -> hanzo_ml::Result<ForwardInputsResult> {
         assert!(!return_raw_logits);
 
         let ModelInputs { prompts, params } = *inputs.downcast().expect("Downcast failed.");
@@ -331,12 +331,12 @@ impl Pipeline for DiffusionPipeline {
         for b_img in img.chunk(img.dim(0)?, 0)? {
             let flattened = b_img.squeeze(0)?.permute((1, 2, 0))?.flatten_all()?;
             if c != 3 {
-                candle_core::bail!("Expected 3 channels in image output");
+                hanzo_ml::bail!("Expected 3 channels in image output");
             }
             #[allow(clippy::cast_possible_truncation)]
             images.push(DynamicImage::ImageRgb8(
                 RgbImage::from_raw(w as u32, h as u32, flattened.to_vec1::<u8>()?).ok_or(
-                    candle_core::Error::Msg("RgbImage has invalid capacity.".to_string()),
+                    hanzo_ml::Error::Msg("RgbImage has invalid capacity.".to_string()),
                 )?,
             ));
         }
@@ -349,8 +349,8 @@ impl Pipeline for DiffusionPipeline {
         _prefix_cacher: &mut PrefixCacheManagerV2,
         _disable_eos_stop: bool,
         _srng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    ) -> Result<(), candle_core::Error> {
-        candle_core::bail!("`sample_causal_gen` is incompatible with `DiffusionPipeline`");
+    ) -> Result<(), hanzo_ml::Error> {
+        hanzo_ml::bail!("`sample_causal_gen` is incompatible with `DiffusionPipeline`");
     }
     fn category(&self) -> ModelCategory {
         ModelCategory::Diffusion
