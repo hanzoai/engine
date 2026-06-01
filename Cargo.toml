@@ -22,7 +22,7 @@ resolver = "2"
 [workspace.package]
 version = "0.9.0"
 edition = "2021"
-description = "Hanzo Engine — fast, flexible LLM inference (forked from mistral.rs)."
+description = "Hanzo Engine - fast, flexible LLM inference engine written in Rust."
 homepage = "https://github.com/hanzoai/engine"
 repository = "https://github.com/hanzoai/engine"
 keywords = ["llm", "inference", "machine-learning", "ai", "transformers"]

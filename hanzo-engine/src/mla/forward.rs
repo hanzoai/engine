@@ -20,18 +20,18 @@ use crate::ops::SplitOp;
 
 /// Environment variable to disable MLA optimization.
 #[cfg(all(feature = "cuda", target_family = "unix"))]
-const MISTRALRS_NO_MLA: &str = "MISTRALRS_NO_MLA";
+const HANZO_NO_MLA: &str = "HANZO_NO_MLA";
 
 /// Check if MLA is disabled via environment variable.
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 fn is_mla_disabled() -> bool {
-    std::env::var(MISTRALRS_NO_MLA).is_ok_and(|x| x == "1")
+    std::env::var(HANZO_NO_MLA).is_ok_and(|x| x == "1")
 }
 
 /// Check if MLA decode should be used for single-token generation.
 ///
 /// MLA decode is used when:
-/// - `MISTRALRS_NO_MLA` is not set to "1"
+/// - `HANZO_NO_MLA` is not set to "1"
 /// - No attention mask (single-token decode)
 /// - Sequence length is 1
 /// - Paged attention is enabled
@@ -70,7 +70,7 @@ pub fn should_use_mla_decode(
 /// Check if MLA cache forward should be used for prefill with prefix caching.
 ///
 /// MLA cache is used when:
-/// - `MISTRALRS_NO_MLA` is not set to "1"
+/// - `HANZO_NO_MLA` is not set to "1"
 /// - Paged attention is enabled
 /// - Running on CUDA
 #[cfg(all(feature = "cuda", target_family = "unix"))]

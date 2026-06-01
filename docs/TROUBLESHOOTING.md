@@ -7,7 +7,7 @@ Common issues and solutions for Hanzo Engine.
 Enable debug mode for more information:
 
 ```bash
-MISTRALRS_DEBUG=1 hanzo run -m <model>
+HANZO_DEBUG=1 hanzo run -m <model>
 ```
 
 Debug mode causes:
@@ -70,13 +70,13 @@ This checks your system configuration and reports any issues.
 - By default, Metal kernels are precompiled during build time for better performance
 - To skip precompilation (useful for CI or when Metal is not needed):
   ```bash
-  MISTRALRS_METAL_PRECOMPILE=0 cargo build --release --features metal
+  HANZO_METAL_PRECOMPILE=0 cargo build --release --features metal
   ```
 
 ### Memory Issues
 
 **Disabling mmap loading:**
-- Set `MISTRALRS_NO_MMAP=1` to disable memory-mapped file loading
+- Set `HANZO_NO_MMAP=1` to disable memory-mapped file loading
 - Forces all tensor data into memory
 - Useful if you're seeing mmap-related errors
 
@@ -233,7 +233,7 @@ If you omit the `--thinking` flag, the chat template's default behavior applies.
 Docker does not expose GPUs by default. You must pass the `--gpus all` flag (requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)):
 
 ```bash
-docker run --gpus all -p 1234:1234 ghcr.io/ericlbuehler/Hanzo Engine:latest \
+docker run --gpus all -p 1234:1234 ghcr.io/hanzoai/engine:latest \
   serve -m Qwen/Qwen3-4B
 ```
 
@@ -247,7 +247,7 @@ The container needs a writable directory for downloading model files. Mount a ho
 docker run --gpus all \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   -p 1234:1234 \
-  ghcr.io/ericlbuehler/Hanzo Engine:latest \
+  ghcr.io/hanzoai/engine:latest \
   serve -m Qwen/Qwen3-4B
 ```
 
@@ -282,7 +282,7 @@ hanzo run -m <model> --token-source env:HF_TOKEN
 If you're still stuck:
 
 - [Discord](https://discord.gg/SZrecqK8qw): Community support
-- [Matrix](https://matrix.to/#/#Hanzo Engine:matrix.org): Alternative chat
+- [Matrix](https://matrix.to/#/#hanzo:matrix.org): Alternative chat
 - [GitHub Issues](https://github.com/hanzoai/engine/issues): Bug reports and feature requests
 
 When reporting issues, please include:

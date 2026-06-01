@@ -8,8 +8,8 @@ This file provides guidance to AI assistants working with the Hanzo Engine codeb
 
 ### Integration Status
 
-- **Last Sync Date**: 2026-05-06 — merged upstream mistral.rs `2d4ba4f16`
-- **Remote**: Configured as `upstream` (EricLBuehler/mistral.rs) in git
+- **Last Sync Date**: 2026-05-06 — merged upstream hanzo `2d4ba4f16`
+- **Remote**: Configured as `upstream` (hanzoai/engine) in git
 - **Workspace version**: 0.8.1 (synced with upstream)
 
 ### Hanzo-Specific Components
@@ -31,7 +31,7 @@ This file provides guidance to AI assistants working with the Hanzo Engine codeb
 ### Architecture
 
 Hanzo Engine is a Rust workspace containing:
-- All upstream mistral.rs workspace members (hanzo-engine, hanzo-server, hanzo, hanzo-llm-mcp, …)
+- All upstream hanzo workspace members (hanzo-engine, hanzo-server, hanzo, hanzo-llm-mcp, …)
 - **hanzo-engine/** — lib + bin: canonical Hanzo inference + embedding API
 - Local candle fork at `../ml/hanzo-{ml,nn,flash-attn,metal-kernels}` overrides upstream's `candle-*` crates via `[workspace.dependencies]` path overrides
 

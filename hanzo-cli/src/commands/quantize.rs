@@ -258,14 +258,14 @@ fn generate_model_card(
         r#"---
 tags:
   - uqff
-  - mistral.rs
+  - hanzo
 base_model: {base_model}
 base_model_relation: quantized
 ---
 
 # `{base_model}`, UQFF quantization
 
-Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation: [UQFF docs](https://ericlbuehler.github.io/mistral.rs/guides/perf/use-uqff/).
+Run with [hanzo](https://github.com/hanzoai/engine). Documentation: [UQFF docs](https://hanzoai.github.io/engine/guides/perf/use-uqff/).
 
 1) **Flexible** 🌀: Multiple quantization formats in *one* file format with *one* framework to run them all.
 2) **Reliable** 🔒: Compatibility ensured with *embedded* and *checked* semantic versioning information from day 1.
@@ -274,16 +274,16 @@ Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation
 
 ## Install
 
-Install [mistral.rs](https://github.com/EricLBuehler/mistral.rs) ([full guide](https://ericlbuehler.github.io/mistral.rs/guides/install/)):
+Install [hanzo](https://github.com/hanzoai/engine) ([full guide](https://hanzoai.github.io/engine/guides/install/)):
 
 **Linux/macOS:**
 ```
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/hanzoai/engine/master/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 ```
-irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/hanzoai/engine/master/install.ps1 | iex
 ```
 
 ## Examples

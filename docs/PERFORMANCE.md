@@ -18,7 +18,7 @@ For precise recommendations, use `hanzo tune -m <model>` which analyzes your ava
 
 ## The Performance Stack
 
-mistral.rs has several independent optimization layers. You can use any combination:
+hanzo has several independent optimization layers. You can use any combination:
 
 - **Quantization**: Reduces model weight memory (ISQ, GGUF, UQFF)
 - **FlashAttention**: Accelerates prompt processing (prefill phase)
@@ -28,7 +28,7 @@ mistral.rs has several independent optimization layers. You can use any combinat
 
 ## Quantization: Choosing a Method
 
-Quantization reduces model size by using lower-precision weights. mistral.rs offers several approaches:
+Quantization reduces model size by using lower-precision weights. hanzo offers several approaches:
 
 | Method | When to use | Details |
 |---|---|---|
@@ -117,7 +117,7 @@ MLA compresses the KV cache for DeepSeek V2/V3 and GLM-4.7-Flash models, reducin
 - PagedAttention is enabled
 - Running on CUDA
 
-Disable with `MISTRALRS_NO_MLA=1` if needed.
+Disable with `HANZO_NO_MLA=1` if needed.
 
 > Full reference: [MLA](MLA.md)
 
@@ -125,20 +125,20 @@ Disable with `MISTRALRS_NO_MLA=1` if needed.
 
 **Single machine, multiple GPUs:**
 
-mistral.rs auto-detects multiple CUDA GPUs and uses tensor parallelism via NCCL. No configuration needed:
+hanzo auto-detects multiple CUDA GPUs and uses tensor parallelism via NCCL. No configuration needed:
 
 ```bash
 # Uses all available GPUs automatically
 hanzo serve -m <large-model>
 
 # Or specify GPU count
-MISTRALRS_MN_LOCAL_WORLD_SIZE=2 hanzo serve -m <large-model>
+HANZO_MN_LOCAL_WORLD_SIZE=2 hanzo serve -m <large-model>
 ```
 
 If the model doesn't fit on GPUs even with parallelism, disable NCCL to use automatic device mapping (GPU + CPU offloading):
 
 ```bash
-MISTRALRS_NO_NCCL=1 hanzo serve --isq 4 -m <large-model>
+HANZO_NO_NCCL=1 hanzo serve --isq 4 -m <large-model>
 ```
 
 **Multiple machines:** Use the [Ring backend](DISTRIBUTED/RING.md) for cross-machine inference over TCP.

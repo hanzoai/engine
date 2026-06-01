@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Example of using SmolLM3 model with mistral.rs
+Example of using SmolLM3 model with hanzo
 """
 
 from hanzo import Runner, Which, ChatCompletionRequest, Architecture

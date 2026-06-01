@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-mistral.rs supports two speech-related model families:
+hanzo supports two speech-related model families:
 
 - **Voxtral**: multimodal model accepting audio input. Used for transcription and audio understanding through `/v1/chat/completions`.
 - **Dia**: dedicated text-to-speech model served via `/v1/audio/speech`.

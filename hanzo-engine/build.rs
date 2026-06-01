@@ -34,7 +34,7 @@ fn main() {
             }
         }
 
-        // https://github.com/EricLBuehler/mistral.rs/issues/286
+        // https://github.com/hanzoai/engine/issues/286
         if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
             builder = builder.arg("--compiler-options");
             builder = builder.arg(cuda_nvcc_flags_env);
@@ -42,7 +42,7 @@ fn main() {
 
         let target = std::env::var("TARGET").unwrap();
 
-        // https://github.com/EricLBuehler/mistral.rs/issues/588
+        // https://github.com/hanzoai/engine/issues/588
         let out_file = if target.contains("msvc") {
             // Windows case
             build_dir.join("hanzocuda.lib")
@@ -105,7 +105,7 @@ fn main() {
         assert!(status.success(), "hipcc failed to compile src/rocm/sort.hip.cpp");
 
         // Archive into a static library so the Rust linker pulls in the fatbin.
-        let lib = build_dir.join("libmistralrsrocm.a");
+        let lib = build_dir.join("libhanzorocm.a");
         let _ = std::fs::remove_file(&lib);
         let status = Command::new("ar")
             .arg("rcs")
@@ -116,7 +116,7 @@ fn main() {
         assert!(status.success(), "ar failed to archive sort.hip.o");
 
         println!("cargo:rustc-link-search=native={}", build_dir.display());
-        println!("cargo:rustc-link-lib=static=mistralrsrocm");
+        println!("cargo:rustc-link-lib=static=hanzorocm");
         println!("cargo:rustc-link-search=native={rocm_path}/lib");
         println!("cargo:rustc-link-lib=dylib=amdhip64");
         println!("cargo:rustc-link-lib=dylib=stdc++");
@@ -139,7 +139,7 @@ fn set_git_revision() {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".to_string());
 
-    println!("cargo:rustc-env=MISTRALRS_GIT_REVISION={commit}");
+    println!("cargo:rustc-env=HANZO_GIT_REVISION={commit}");
     println!("cargo:rerun-if-changed=.git/HEAD");
     if let Ok(head) = std::fs::read_to_string(".git/HEAD") {
         if let Some(ref_path) = head.strip_prefix("ref:") {

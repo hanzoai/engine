@@ -5,7 +5,7 @@ sidebar:
   order: 9
 ---
 
-mistral.rs can expose itself as an MCP server.
+hanzo can expose itself as an MCP server.
 
 ## Starting an MCP server
 

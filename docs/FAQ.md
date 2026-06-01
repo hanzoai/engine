@@ -4,7 +4,7 @@
 
 ### How much VRAM do I need?
 
-It depends on the model, quantization level, context length, and batch size. The best way to find out is to let mistral.rs analyze your hardware:
+It depends on the model, quantization level, context length, and batch size. The best way to find out is to let hanzo analyze your hardware:
 
 ```bash
 hanzo tune -m <model>
@@ -14,7 +14,7 @@ This shows a table of quantization options with estimated memory usage, context 
 
 ### Which quantization should I use?
 
-- **Just want it to work?** Use `--isq 4`. mistral.rs picks the best format for your hardware.
+- **Just want it to work?** Use `--isq 4`. hanzo picks the best format for your hardware.
 - **Have plenty of VRAM?** Use `--isq 8` for near-lossless quality.
 - **Want the fastest loading?** Use a pre-quantized [UQFF](UQFF.md) or [GGUF](QUANTS.md#using-a-gguf-quantized-model) model. No quantization happens at load time.
 - **Need per-layer control?** Use a [topology file](TOPOLOGY.md) to set different quantization per layer.
@@ -26,7 +26,7 @@ See the [Quantization Overview](QUANTS.md) for all options.
 
 - **ISQ** quantizes at load time. Any HF model works, but loading is slower because quantization happens on the fly.
 - **GGUF** is a pre-quantized format from the llama.cpp ecosystem. Download a GGUF file and load it directly.
-- **UQFF** is mistral.rs's own pre-quantized format. Supports more quantization types than GGUF (HQQ, FP8, AFQ, etc.) and loads instantly.
+- **UQFF** is hanzo's own pre-quantized format. Supports more quantization types than GGUF (HQQ, FP8, AFQ, etc.) and loads instantly.
 
 ### Can I use models from local files?
 
@@ -50,12 +50,12 @@ hanzo run -m /path/to/model
 
 Alternatively, use `--token-source env:HF_TOKEN` with a Hugging Face token in your environment.
 
-### How do I update mistral.rs?
+### How do I update hanzo?
 
 Re-run the install script to build the latest version:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/hanzoai/engine/master/install.sh | sh
 ```
 
 Or if installed via cargo:
@@ -63,7 +63,7 @@ Or if installed via cargo:
 cargo install hanzo-cli --features "<your-features>" --force
 ```
 
-### Does mistral.rs work on WSL?
+### Does hanzo work on WSL?
 
 Yes. WSL2 with CUDA support works well. Install the [NVIDIA CUDA toolkit for WSL](https://developer.nvidia.com/cuda-downloads) and build with `--features cuda`.
 
@@ -75,7 +75,7 @@ Yes, but **WSL2 is recommended** for the best experience. Native Windows builds 
 
 ### Why is the first request slow?
 
-mistral.rs performs a warmup run when loading a model. It sends a short dummy request to initialize CUDA kernels and caches. You'll see "Beginning dummy run..." and "Dummy run completed" in the logs. After this, subsequent requests are much faster.
+hanzo performs a warmup run when loading a model. It sends a short dummy request to initialize CUDA kernels and caches. You'll see "Beginning dummy run..." and "Dummy run completed" in the logs. After this, subsequent requests are much faster.
 
 ### How do I increase throughput?
 
@@ -111,18 +111,18 @@ hanzo serve -m <model> --pa-memory-fraction 0.5
 
 ### Can I use OpenAI client libraries?
 
-Yes. mistral.rs provides an OpenAI-compatible HTTP API. Use the standard `openai` Python package:
+Yes. hanzo provides an OpenAI-compatible HTTP API. Use the standard `openai` Python package:
 
 ```python
 from openai import OpenAI
 client = OpenAI(base_url="http://localhost:1234/v1/", api_key="foobar")
 ```
 
-The `api_key` can be any non-empty string. mistral.rs doesn't validate it.
+The `api_key` can be any non-empty string. hanzo doesn't validate it.
 
 ### Can I use LangChain or LlamaIndex?
 
-Yes. Point them at your mistral.rs server as an OpenAI-compatible endpoint:
+Yes. Point them at your hanzo server as an OpenAI-compatible endpoint:
 
 ```python
 from langchain_openai import ChatOpenAI
@@ -131,7 +131,7 @@ llm = ChatOpenAI(base_url="http://localhost:1234/v1/", api_key="foobar")
 
 ### Which models are supported?
 
-See [Supported Models](SUPPORTED_MODELS.md) for the complete list. Architecture is auto-detected, so just point mistral.rs at the model and it works.
+See [Supported Models](SUPPORTED_MODELS.md) for the complete list. Architecture is auto-detected, so just point hanzo at the model and it works.
 
 ### Can I run multiple models at once?
 

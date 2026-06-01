@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-# mistral.rs Installation Script
+# hanzo Installation Script
 # Cross-platform installer for Linux and macOS with automatic hardware detection
 
 # Check if we can prompt the user (stdin is a tty or we have /dev/tty)
@@ -307,7 +307,7 @@ main() {
             read_input
             case "$REPLY" in
                 [Nn]*)
-                    error "Rust $REQUIRED_RUST_VERSION or newer is required to install mistral.rs"
+                    error "Rust $REQUIRED_RUST_VERSION or newer is required to install hanzo"
                     ;;
             esac
             update_rust
@@ -324,7 +324,7 @@ main() {
         read_input
         case "$REPLY" in
             [Nn]*)
-                error "Rust is required to install mistral.rs"
+                error "Rust is required to install hanzo"
                 ;;
         esac
         install_rust
@@ -397,7 +397,7 @@ main() {
     fi
 
     echo ""
-    success "mistral.rs installed successfully!"
+    success "hanzo installed successfully!"
     echo ""
     printf "${BOLD}Quick Start${NC}\n"
     echo "==========="
@@ -406,11 +406,11 @@ main() {
     echo ""
     echo "  hanzo serve --agent -m google/gemma-4-E4B-it"
     echo ""
-    echo "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
+    echo "For more information, visit: https://github.com/hanzoai/engine"
     echo ""
     if [ -n "$FFMPEG_SKIPPED" ]; then
         printf "${YELLOW}Note:${NC} FFmpeg was not installed. To enable video input support later, see:\n"
-        printf "      https://github.com/EricLBuehler/mistral.rs/blob/master/docs/VIDEO.md\n"
+        printf "      https://github.com/hanzoai/engine/blob/master/docs/VIDEO.md\n"
         echo ""
     fi
     printf "${YELLOW}Note:${NC} To use 'hanzo' now, run: ${BOLD}. \"\$HOME/.cargo/env\"${NC}\n"

@@ -100,7 +100,7 @@ async def stream(prompt: str):
     return StreamingResponse(iter(), media_type="text/event-stream")
 ```
 
-For production, run hanzo as an HTTP server (see [Tutorial 2](/mistral.rs/tutorials/02-serve-an-api/)) and call it with the OpenAI Python client rather than loading the model in the web app process. The HTTP server's streaming is more robust under load.
+For production, run hanzo as an HTTP server (see [Tutorial 2](/hanzo/tutorials/02-serve-an-api/)) and call it with the OpenAI Python client rather than loading the model in the web app process. The HTTP server's streaming is more robust under load.
 
 ## Catching errors during streaming
 

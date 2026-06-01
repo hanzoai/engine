@@ -5,9 +5,9 @@ sidebar:
   order: 4
 ---
 
-mistral.rs implements the OpenAI Chat Completions API, the Responses API, and a few mistral.rs-specific endpoints. This page lists every path with its request and response shape.
+hanzo implements the OpenAI Chat Completions API, the Responses API, and a few hanzo-specific endpoints. This page lists every path with its request and response shape.
 
-Fields not documented here are either standard OpenAI fields (pass through unchanged) or ignored. mistral.rs-specific extensions are called out explicitly.
+Fields not documented here are either standard OpenAI fields (pass through unchanged) or ignored. hanzo-specific extensions are called out explicitly.
 
 ## Core endpoints
 
@@ -32,7 +32,7 @@ Chat completion request.
 }
 ```
 
-`tools` accepts OpenAI-compatible function tool definitions. mistral.rs also honors `tools[*].function.strict: true`, which constrains generated tool arguments to the tool's `parameters` JSON Schema. See [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/).
+`tools` accepts OpenAI-compatible function tool definitions. hanzo also honors `tools[*].function.strict: true`, which constrains generated tool arguments to the tool's `parameters` JSON Schema. See [strict tool calling](/hanzo/guides/agents/strict-tool-calling/).
 
 Response (non-streaming):
 
@@ -49,13 +49,13 @@ Response (non-streaming):
 }
 ```
 
-mistral.rs-specific request fields include `session_id`, `web_search_options`, `enable_code_execution`, `agent_permission`, `max_tool_rounds`, and `files`. The server must be started with the corresponding capabilities, such as `--enable-search` or `--enable-code-execution`.
+hanzo-specific request fields include `session_id`, `web_search_options`, `enable_code_execution`, `agent_permission`, `max_tool_rounds`, and `files`. The server must be started with the corresponding capabilities, such as `--enable-search` or `--enable-code-execution`.
 
-`agent_permission` accepts `"auto"`, `"ask"`, or `"deny"` and applies to server-executed agent actions: code execution, web search, file tools, registered callbacks, and external tool dispatch. `code_execution_permission` is accepted as a compatibility alias. See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions) for the shared behavior across CLI, HTTP, Python, and Rust.
+`agent_permission` accepts `"auto"`, `"ask"`, or `"deny"` and applies to server-executed agent actions: code execution, web search, file tools, registered callbacks, and external tool dispatch. `code_execution_permission` is accepted as a compatibility alias. See [agent permissions](/hanzo/guides/agents/agentic-runtime/#agent-permissions) for the shared behavior across CLI, HTTP, Python, and Rust.
 
 Over HTTP, `"ask"` requires `stream: true`. The stream emits a named `agentic_tool_approval_required` event when an action needs approval, then waits for the app to approve or deny it with `POST /v1/agent/approvals/{approval_id}`. Non-streaming chat requests with `"ask"` return a validation error.
 
-mistral.rs-specific response fields: `session_id` (string), `agentic_tool_calls` (array of tool-call records from the agentic loop, each with a `file_ids` array), `files` (array of `File` objects produced during the request).
+hanzo-specific response fields: `session_id` (string), `agentic_tool_calls` (array of tool-call records from the agentic loop, each with a `file_ids` array), `files` (array of `File` objects produced during the request).
 
 When `stream: true`, the response is Server-Sent Events: unnamed `data:` lines carry chat completion chunks, named `agentic_tool_call_progress` events carry tool-loop milestones, named `agentic_tool_approval_required` events carry pending agent approvals, and named `file_produced` events carry each typed file emitted during the run. Stream terminates with `data: [DONE]`.
 
@@ -81,7 +81,7 @@ Unanswered approvals are denied after five minutes.
 
 The endpoint returns `{"status":"resolved"}` when the waiting tool call was released, `{"status":"queued"}` if the app answered before the runtime started waiting, and `{"status":"not_found"}` for an unknown or expired approval ID.
 
-For app-facing tool timelines, generated media fields, and sessions, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
+For app-facing tool timelines, generated media fields, and sessions, see [agentic runtime for apps](/hanzo/guides/agents/agentic-runtime/).
 
 ### `POST /v1/completions`
 
@@ -93,7 +93,7 @@ Embedding request. `input`, `encoding_format` (`"float"` or `"base64"`) supporte
 
 ### `POST /v1/images/generations`
 
-Image generation. Uses `height` and `width` in place of OpenAI's `size`. `response_format` defaults to `"Url"`. See the [image generation guide](/mistral.rs/guides/models/use-image-generation/).
+Image generation. Uses `height` and `width` in place of OpenAI's `size`. `response_format` defaults to `"Url"`. See the [image generation guide](/hanzo/guides/models/use-image-generation/).
 
 ### `POST /v1/audio/speech`
 
@@ -129,7 +129,7 @@ Status values: `loaded`, `unloaded`, `reloading`.
 
 ### `POST /v1/responses`
 
-OpenAI Responses API. Schema matches OpenAI's spec. See the [Responses guide](/mistral.rs/guides/serve/openai-responses-api/) for supported and unsupported fields.
+OpenAI Responses API. Schema matches OpenAI's spec. See the [Responses guide](/hanzo/guides/serve/openai-responses-api/) for supported and unsupported fields.
 
 Function tools in Responses requests also accept `strict: true` and use the same strict tool-calling path as Chat Completions.
 
@@ -225,7 +225,7 @@ Tool-progress `data.tool_type` is `code_execution`, `web_search`, or `custom`. C
 
 ## Files
 
-mistral.rs returns typed file outputs from agentic runs as first-class objects, separate from the model transcript.
+hanzo returns typed file outputs from agentic runs as first-class objects, separate from the model transcript.
 
 ### Request schema
 
@@ -344,4 +344,4 @@ File metadata shape:
 
 ## OpenAI compatibility
 
-See the [OpenAI compatibility reference](/mistral.rs/reference/openai-compatibility/) for the supported and unsupported fields.
+See the [OpenAI compatibility reference](/hanzo/reference/openai-compatibility/) for the supported and unsupported fields.

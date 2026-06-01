@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Example demonstrating how to start a mistral.rs HTTP server with MCP client support
+Example demonstrating how to start a hanzo HTTP server with MCP client support
 and then interact with it using the OpenAI API format.
 
 This example shows how to:
-1. Start the mistral.rs server with MCP configuration via JSON config file
+1. Start the hanzo server with MCP configuration via JSON config file
 2. Send chat requests that can automatically use MCP tools
 3. Parse responses to see tool calls made to MCP servers
 
 Usage:
-1. First, start the mistral.rs server with MCP config:
+1. First, start the hanzo server with MCP config:
    hanzo serve -p 1234 --mcp-config examples/mcp-simple-config.json -m Qwen/Qwen3-4B
 
 2. Then run this script:
@@ -20,18 +20,18 @@ from openai import OpenAI
 
 
 def main():
-    # Connect to the mistral.rs server
+    # Connect to the hanzo server
     # Note: Make sure to start the server with MCP configuration first!
     client = OpenAI(
         base_url="http://localhost:1234/v1",
-        api_key="placeholder",  # mistral.rs doesn't require a real API key
+        api_key="placeholder",  # hanzo doesn't require a real API key
     )
 
     print("MCP Client HTTP Server Example")
     print("==============================")
     print()
     print(
-        "This example demonstrates using mistral.rs HTTP server with MCP client support."
+        "This example demonstrates using hanzo HTTP server with MCP client support."
     )
     print("The server should be started with MCP configuration like:")
     print(
@@ -60,7 +60,7 @@ def main():
         },
     ]
 
-    print("Sending chat request to mistral.rs server with MCP support...")
+    print("Sending chat request to hanzo server with MCP support...")
     print(
         "The model will automatically use MCP tools if needed to answer the question."
     )
@@ -109,7 +109,7 @@ def main():
     except Exception as e:
         print(f"Error making request: {e}")
         print()
-        print("Make sure the mistral.rs server is running with MCP configuration:")
+        print("Make sure the hanzo server is running with MCP configuration:")
         print(
             "hanzo serve -p 1234 --mcp-config examples/mcp-simple-config.json -m Qwen/Qwen3-4B"
         )

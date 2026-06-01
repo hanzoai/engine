@@ -40,7 +40,7 @@ Server-side tool calling runs in the outer engine loop:
 5. The engine resumes inference with the updated history.
 6. The loop repeats until the model produces a non-tool-call response or the round cap is hit.
 
-All of this happens inside one HTTP request. See [the agentic loop](/mistral.rs/explanation/agentic-loop/).
+All of this happens inside one HTTP request. See [the agentic loop](/hanzo/explanation/agentic-loop/).
 
 ## Session store
 
@@ -48,7 +48,7 @@ Agentic requests are stateful. State lives in an in-memory store keyed by sessio
 
 On each request, an explicit `session_id` triggers a session lookup. Without one, a content-based match on user-visible messages is the fallback; if nothing matches, a new session is created.
 
-See [session memory](/mistral.rs/explanation/session-memory/) for the merging behavior.
+See [session memory](/hanzo/explanation/session-memory/) for the merging behavior.
 
 ## Multi-model
 
@@ -58,7 +58,7 @@ Unloaded models remain in the router with a stopped engine thread. A request for
 
 ## See also
 
-- [The agentic loop](/mistral.rs/explanation/agentic-loop/).
-- [Session memory](/mistral.rs/explanation/session-memory/).
-- [PagedAttention](/mistral.rs/explanation/paged-attention/).
-- [Device mapping](/mistral.rs/explanation/device-mapping/).
+- [The agentic loop](/hanzo/explanation/agentic-loop/).
+- [Session memory](/hanzo/explanation/session-memory/).
+- [PagedAttention](/hanzo/explanation/paged-attention/).
+- [Device mapping](/hanzo/explanation/device-mapping/).
