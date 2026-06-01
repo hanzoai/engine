@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
 use hanzo_nn::{LayerNorm, LayerNormConfig, Linear, Module};
-use indicatif::MultiProgress;
 use hanzo_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
+use indicatif::MultiProgress;
 
 use crate::{
     attention::{AttentionMask, SdpaParams},

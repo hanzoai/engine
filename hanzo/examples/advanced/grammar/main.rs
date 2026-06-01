@@ -3,9 +3,7 @@
 //! Run with: `cargo run --release --example grammar -p hanzo`
 
 use anyhow::Result;
-use hanzo::{
-    IsqBits, ModelBuilder, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole,
-};
+use hanzo::{IsqBits, ModelBuilder, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole};
 
 #[tokio::main]
 async fn main() -> Result<()> {

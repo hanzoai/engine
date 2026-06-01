@@ -73,9 +73,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         // Try to use native FP8 GEMM kernel on CUDA
         #[cfg(feature = "cuda")]
         {
-            if matches!(x.device(), hanzo_ml::Device::Cuda(_))
-                && ffi::HAVE_BLOCKWISE_GEMM_KERNELS
-            {
+            if matches!(x.device(), hanzo_ml::Device::Cuda(_)) && ffi::HAVE_BLOCKWISE_GEMM_KERNELS {
                 // Handle batched inputs by flattening to 2D
                 let orig_dims = x.dims().to_vec();
                 let x_2d = if orig_dims.len() > 2 {
@@ -131,9 +129,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         // Try to use native FP8 indexed MoE GEMM kernel on CUDA
         #[cfg(feature = "cuda")]
         {
-            if matches!(x.device(), hanzo_ml::Device::Cuda(_))
-                && ffi::HAVE_BLOCKWISE_GEMM_KERNELS
-            {
+            if matches!(x.device(), hanzo_ml::Device::Cuda(_)) && ffi::HAVE_BLOCKWISE_GEMM_KERNELS {
                 // Use native FP8 indexed MoE GEMM kernel (expects U32 indices)
                 let result = ops::fp8_indexed_moe_gemm(
                     x,

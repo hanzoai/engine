@@ -1003,14 +1003,13 @@ impl MoEExperts {
 
         // Build dispatch tables on GPU (no CPU-GPU sync)
         // moe_dispatch_build takes u32 and casts to i32 internally for the CUDA kernel
-        let (expert_bounds, sorted_token_ids, sorted_source_ids) =
-            hanzo_quant::moe_dispatch_build(
-                ti_u32_slice,
-                total_assignments,
-                num_experts,
-                topk,
-                dev,
-            )?;
+        let (expert_bounds, sorted_token_ids, sorted_source_ids) = hanzo_quant::moe_dispatch_build(
+            ti_u32_slice,
+            total_assignments,
+            num_experts,
+            topk,
+            dev,
+        )?;
 
         // Use the pre-quantized Q8_0 grouped kernel path
         let gate_qt = match weights.fused_gate_proj.get_qtensor() {
@@ -1111,10 +1110,9 @@ impl MoEExperts {
             _ => None,
         };
 
-        let down = if let (true, Some(glu_activation)) = (
-            hanzo_quant::supports_mmq(down_qt.dtype()),
-            glu_activation,
-        ) {
+        let down = if let (true, Some(glu_activation)) =
+            (hanzo_quant::supports_mmq(down_qt.dtype()), glu_activation)
+        {
             let down_assignments = hanzo_quant::grouped_moe_mmq_from_glu_pair(
                 down_qt,
                 &gate,

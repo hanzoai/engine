@@ -7,12 +7,12 @@ use std::{
 };
 
 use base64::{engine::general_purpose, Engine};
+use either::Either;
 use hanzo_ml::{DType, Device, Tensor};
 use hanzo_nn::{AdamW, Optimizer, ParamsAdamW};
-use either::Either;
+use hanzo_quant::IsqType;
 use image::DynamicImage;
 use indexmap::IndexMap;
-use hanzo_quant::IsqType;
 use rand::{rng, seq::SliceRandom};
 use rand_isaac::Isaac64Rng;
 use tracing::{info, warn};
@@ -532,9 +532,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
             let mut header = vec![format!("Step")];
             header.extend((0..all_losses[0].len()).map(|i| format!("Gating layer {i}")));
-            writer
-                .write_record(&header)
-                .map_err(hanzo_ml::Error::msg)?;
+            writer.write_record(&header).map_err(hanzo_ml::Error::msg)?;
 
             for (i, row) in all_losses.into_iter().enumerate() {
                 let mut new_row = vec![format!("Step {i}")];

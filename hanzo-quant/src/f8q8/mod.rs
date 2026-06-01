@@ -5,10 +5,10 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use hanzo_ml::{DType, Device, Result, Shape, Tensor};
-use hanzo_nn::{Linear, Module};
 use float8::F8E4M3;
 use half::f16;
+use hanzo_ml::{DType, Device, Result, Shape, Tensor};
+use hanzo_nn::{Linear, Module};
 
 use crate::{
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},

@@ -86,8 +86,7 @@ impl ToolFormatParser for DeepSeekParser {
                 .map_err(hanzo_ml::Error::msg)?
                 .as_str()
                 .trim();
-            let arguments: Value =
-                serde_json::from_str(json_str).map_err(hanzo_ml::Error::msg)?;
+            let arguments: Value = serde_json::from_str(json_str).map_err(hanzo_ml::Error::msg)?;
             calls.push(ToolCall { name, arguments });
         }
 
