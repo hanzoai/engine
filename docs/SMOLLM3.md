@@ -10,12 +10,12 @@ hanzo run --isq 8 -m HuggingFaceTB/SmolLM3-3B
 
 **UQFF prequantized:**
 ```bash
-hanzo run -m EricB/SmolLM3-3B-UQFF --from-uqff smollm33b-q4k-0.uqff
+hanzo run -m hanzoai/SmolLM3-3B-UQFF --from-uqff smollm33b-q4k-0.uqff
 ```
 
 > Note: tool calling support is fully implemented for the SmolLM3 models, including agentic web search.
 
-> Check out prequantized UQFF SmolLM3 here: https://huggingface.co/EricB/SmolLM3-3B-UQFF
+> Check out prequantized UQFF SmolLM3 here: https://huggingface.co/hanzoai/SmolLM3-3B-UQFF
 
 ## Enabling thinking
 The SmolLM3 models are hybrid reasoning models which can be controlled at inference-time. **By default, reasoning is enabled for these models.** To dynamically control this, it is recommended to either add `/no_think` or `/think` to your prompt. Alternatively, you can specify the `enable_thinking` flag as detailed by the API-specific examples.

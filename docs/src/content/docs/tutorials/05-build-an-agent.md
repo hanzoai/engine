@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-The agentic loop lets the server handle tool calls inside a single request: the model requests a tool, the server runs it, feeds the result back, and continues until the model produces a normal reply. Unlike a plain OpenAI-compatible model server, mistral.rs can run the tool loop locally and stream both model text and tool progress from the same request.
+The agentic loop lets the server handle tool calls inside a single request: the model requests a tool, the server runs it, feeds the result back, and continues until the model produces a normal reply. Unlike a plain OpenAI-compatible model server, hanzo can run the tool loop locally and stream both model text and tool progress from the same request.
 
 This tutorial builds one local agent that can search the web, run Python, stream tool progress, return structured files, and keep state across requests. The model is Qwen3-4B.
 
@@ -40,7 +40,7 @@ hanzo serve \
   -m Qwen/Qwen3-4B
 ```
 
-`--enable-search` enables the built-in web search tool. `--enable-code-execution` enables a Python subprocess that persists across calls within a session. On Linux and macOS, code execution is [sandboxed by default](/mistral.rs/reference/sandbox/) with `--sandbox auto`.
+`--enable-search` enables the built-in web search tool. `--enable-code-execution` enables a Python subprocess that persists across calls within a session. On Linux and macOS, code execution is [sandboxed by default](/hanzo/reference/sandbox/) with `--sandbox auto`.
 
 Open `http://localhost:1234/ui` once the server is ready.
 
@@ -64,7 +64,7 @@ Everything between the question and the final reply happens inside a single HTTP
 
 ## From HTTP
 
-Apps can make the output contract explicit by declaring files up front. This request asks the model to save a PNG chart and tells mistral.rs to surface it as a typed file:
+Apps can make the output contract explicit by declaring files up front. This request asks the model to save a PNG chart and tells hanzo to surface it as a typed file:
 
 ```bash
 curl http://localhost:1234/v1/chat/completions \
@@ -91,7 +91,7 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-The response body keeps the normal OpenAI-compatible `choices` array and adds mistral.rs fields for tool work, files, and session state:
+The response body keeps the normal OpenAI-compatible `choices` array and adds hanzo fields for tool work, files, and session state:
 
 ```json
 {
@@ -154,7 +154,7 @@ event: file_produced
 data: {"id":"file_tokyo_r1_0","name":"tokyo-population.png","format":"png","mime_type":"image/png","bytes":14823}
 ```
 
-The full schema is in the [HTTP API reference](/mistral.rs/reference/http-api/) and the [agentic runtime guide](/mistral.rs/guides/agents/agentic-runtime/).
+The full schema is in the [HTTP API reference](/hanzo/reference/http-api/) and the [agentic runtime guide](/hanzo/guides/agents/agentic-runtime/).
 
 Minimal Python client that calls the HTTP server and prints the tool trace:
 
@@ -228,9 +228,9 @@ for file in response.files or []:
     print(f"saved {file.name} ({file.bytes} bytes)")
 ```
 
-`CodeExecutionConfig` accepts `python_path`, `timeout_secs`, and `working_directory`. Use request-level `agent_permission` and `agent_approval_callback` when an app needs to approve or deny agent actions. See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions).
+`CodeExecutionConfig` accepts `python_path`, `timeout_secs`, and `working_directory`. Use request-level `agent_permission` and `agent_approval_callback` when an app needs to approve or deny agent actions. See [agent permissions](/hanzo/guides/agents/agentic-runtime/#agent-permissions).
 
-For custom tools, pass `tool_callbacks={name: callable}` to `Runner`; each callable receives the tool name and a dict of arguments and returns a string. See [`Runner`](/mistral.rs/reference/python/runner/).
+For custom tools, pass `tool_callbacks={name: callable}` to `Runner`; each callable receives the tool name and a dict of arguments and returns a string. See [`Runner`](/hanzo/reference/python/runner/).
 
 ## From the Rust SDK
 
@@ -345,7 +345,7 @@ for f in response.files.as_deref().unwrap_or_default() {
 }
 ```
 
-Full schema, size policy, the `read_file` / `list_files` model tools, and the streaming `file_produced` event are documented in [agentic runtime: files](/mistral.rs/guides/agents/agentic-runtime/#files).
+Full schema, size policy, the `read_file` / `list_files` model tools, and the streaming `file_produced` event are documented in [agentic runtime: files](/hanzo/guides/agents/agentic-runtime/#files).
 
 ## Sessions
 
@@ -364,19 +364,19 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-If no `session_id` is passed, the server creates one and returns it in the response. See the [persistent sessions guide](/mistral.rs/guides/agents/persist-sessions/) for export, import, deletion, TTLs, and SDK methods.
+If no `session_id` is passed, the server creates one and returns it in the response. See the [persistent sessions guide](/hanzo/guides/agents/persist-sessions/) for export, import, deletion, TTLs, and SDK methods.
 
 ## Notes
 
 Enabling the flags does not force tool use. The model is given the tools and their descriptions and decides when to call them.
 
-Code execution runs in a subprocess as the same OS user as mistral.rs. It is not a sandbox. For untrusted users, run mistral.rs in a container or VM, use a low-privilege user, and constrain network access.
+Code execution runs in a subprocess as the same OS user as hanzo. It is not a sandbox. For untrusted users, run hanzo in a container or VM, use a low-privilege user, and constrain network access.
 
-The two flags above enable the built-in tools only. To expose custom tools (calendar API, vector search, shell), implement them as MCP servers and connect mistral.rs as a client, or register tool callbacks through the Rust or Python SDK. See the [agent guides](/mistral.rs/guides/agents/).
+The two flags above enable the built-in tools only. To expose custom tools (calendar API, vector search, shell), implement them as MCP servers and connect hanzo as a client, or register tool callbacks through the Rust or Python SDK. See the [agent guides](/hanzo/guides/agents/).
 
 ## Next steps
 
-- [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/): fit larger models on the available GPU.
-- [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/): consume the runtime event stream in an application.
-- [The MCP client guide](/mistral.rs/guides/agents/connect-mcp-server/): connect to a third-party MCP server.
-- [The persistent sessions guide](/mistral.rs/guides/agents/persist-sessions/): keep state across separate requests.
+- [Tutorial 6](/hanzo/tutorials/06-quantize-a-model/): fit larger models on the available GPU.
+- [Agentic runtime for apps](/hanzo/guides/agents/agentic-runtime/): consume the runtime event stream in an application.
+- [The MCP client guide](/hanzo/guides/agents/connect-mcp-server/): connect to a third-party MCP server.
+- [The persistent sessions guide](/hanzo/guides/agents/persist-sessions/): keep state across separate requests.

@@ -9,16 +9,16 @@ Use this page to pick the first document to read. Most workflows start with auto
 
 | If you need to... | Start here | Then read |
 |---|---|---|
-| Chat with a model on one machine | [Your first model](/mistral.rs/tutorials/01-install-and-run/) | [Pick a quantization method](/mistral.rs/guides/perf/pick-a-quantization/) |
-| Verify install, GPU support, or Hugging Face access | [Your first model](/mistral.rs/tutorials/01-install-and-run/) | [Troubleshooting](/mistral.rs/reference/troubleshooting/) |
-| Expose an OpenAI-compatible endpoint | [Serve a model as an API](/mistral.rs/tutorials/02-serve-an-api/) | [Configure the HTTP server](/mistral.rs/guides/serve/http-server/) |
-| Use the built-in browser UI | [Serve a model as an API](/mistral.rs/tutorials/02-serve-an-api/) | [Use the built-in web UI](/mistral.rs/guides/serve/with-web-ui/) |
-| Call mistral.rs from Python in-process | [Call a model from Python](/mistral.rs/tutorials/03-python-sdk/) | [Python API reference](/mistral.rs/reference/python/) |
-| Embed mistral.rs in Rust | [Call a model from Rust](/mistral.rs/tutorials/04-rust-sdk/) | [Rust API on docs.rs](https://docs.rs/hanzo) |
-| Build a local agent app with tools, code execution, web search, multimodal inputs, or session state | [Build an agent](/mistral.rs/tutorials/05-build-an-agent/) | [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/) |
-| Fit a larger model on the same hardware | [Quantize a model](/mistral.rs/tutorials/06-quantize-a-model/) | [Auto-tune with hanzo tune](/mistral.rs/guides/perf/auto-tune/) |
-| Split a model across GPUs or machines | [Performance](/mistral.rs/guides/perf/) | [Split a model across multiple GPUs](/mistral.rs/guides/perf/multi-gpu-tensor-parallel/) |
-| Run a server for real traffic | [Run hanzo in Docker](/mistral.rs/guides/deploy/docker/) | [Production checklist](/mistral.rs/guides/deploy/production-checklist/) |
+| Chat with a model on one machine | [Your first model](/hanzo/tutorials/01-install-and-run/) | [Pick a quantization method](/hanzo/guides/perf/pick-a-quantization/) |
+| Verify install, GPU support, or Hugging Face access | [Your first model](/hanzo/tutorials/01-install-and-run/) | [Troubleshooting](/hanzo/reference/troubleshooting/) |
+| Expose an OpenAI-compatible endpoint | [Serve a model as an API](/hanzo/tutorials/02-serve-an-api/) | [Configure the HTTP server](/hanzo/guides/serve/http-server/) |
+| Use the built-in browser UI | [Serve a model as an API](/hanzo/tutorials/02-serve-an-api/) | [Use the built-in web UI](/hanzo/guides/serve/with-web-ui/) |
+| Call hanzo from Python in-process | [Call a model from Python](/hanzo/tutorials/03-python-sdk/) | [Python API reference](/hanzo/reference/python/) |
+| Embed hanzo in Rust | [Call a model from Rust](/hanzo/tutorials/04-rust-sdk/) | [Rust API on docs.rs](https://docs.rs/hanzo) |
+| Build a local agent app with tools, code execution, web search, multimodal inputs, or session state | [Build an agent](/hanzo/tutorials/05-build-an-agent/) | [Agentic runtime for apps](/hanzo/guides/agents/agentic-runtime/) |
+| Fit a larger model on the same hardware | [Quantize a model](/hanzo/tutorials/06-quantize-a-model/) | [Auto-tune with hanzo tune](/hanzo/guides/perf/auto-tune/) |
+| Split a model across GPUs or machines | [Performance](/hanzo/guides/perf/) | [Split a model across multiple GPUs](/hanzo/guides/perf/multi-gpu-tensor-parallel/) |
+| Run a server for real traffic | [Run hanzo in Docker](/hanzo/guides/deploy/docker/) | [Production checklist](/hanzo/guides/deploy/production-checklist/) |
 
 ## Choose by runtime mode
 
@@ -33,4 +33,4 @@ Use this page to pick the first document to read. Most workflows start with auto
 
 ## If unsure
 
-Start with [Your first model](/mistral.rs/tutorials/01-install-and-run/), then [Serve a model as an API](/mistral.rs/tutorials/02-serve-an-api/). Those two pages exercise the default local and server paths and make later choices easier to evaluate.
+Start with [Your first model](/hanzo/tutorials/01-install-and-run/), then [Serve a model as an API](/hanzo/tutorials/02-serve-an-api/). Those two pages exercise the default local and server paths and make later choices easier to evaluate.

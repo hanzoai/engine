@@ -1,6 +1,6 @@
-# Getting Started with mistral.rs
+# Getting Started with hanzo
 
-mistral.rs is a fast, flexible LLM inference engine. It supports 40+ model families (text, vision, audio, speech, image generation, and embeddings) with an OpenAI-compatible API, Python SDK, and Rust SDK.
+hanzo is a fast, flexible LLM inference engine. It supports 40+ model families (text, vision, audio, speech, image generation, and embeddings) with an OpenAI-compatible API, Python SDK, and Rust SDK.
 
 This tutorial takes you from zero to running models in about 5 minutes.
 
@@ -8,12 +8,12 @@ This tutorial takes you from zero to running models in about 5 minutes.
 
 **Linux/macOS:**
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/hanzoai/engine/master/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/hanzoai/engine/master/install.ps1 | iex
 ```
 
 The install script detects your hardware (CUDA, Metal, MKL) and builds with the right features automatically.
@@ -26,7 +26,7 @@ The install script detects your hardware (CUDA, Metal, MKL) and builds with the 
 hanzo run -m Qwen/Qwen3-4B
 ```
 
-That's it. mistral.rs auto-detects the model architecture, downloads weights from Hugging Face, and drops you into an interactive chat. Type a message and press Enter:
+That's it. hanzo auto-detects the model architecture, downloads weights from Hugging Face, and drops you into an interactive chat. Type a message and press Enter:
 
 ```
 > What is Rust's ownership model?
@@ -44,7 +44,7 @@ Most models load in BF16 by default. If you're short on VRAM, quantize at load t
 hanzo run --isq 4 -m Qwen/Qwen3-4B
 ```
 
-The `--isq 4` flag quantizes weights to 4-bit as they load, so the full model never needs to fit in memory. mistral.rs picks the best quantization format for your hardware automatically (AFQ on Metal, Q4K on CUDA/CPU).
+The `--isq 4` flag quantizes weights to 4-bit as they load, so the full model never needs to fit in memory. hanzo picks the best quantization format for your hardware automatically (AFQ on Metal, Q4K on CUDA/CPU).
 
 > Not sure what settings to use? Run `hanzo tune -m <model>` and it will analyze your hardware and recommend the best configuration.
 
@@ -117,7 +117,7 @@ print(res.choices[0].message.content)
 
 ## Step 6: Try a Multimodal Model
 
-mistral.rs handles images, video, and audio out of the box:
+hanzo handles images, video, and audio out of the box:
 
 ```bash
 # Describe an image
@@ -130,11 +130,11 @@ hanzo run -m google/gemma-4-E4B-it --video clip.mp4 -i "What happens here?"
 hanzo run -m google/gemma-4-E4B-it --audio recording.wav -i "Transcribe this"
 ```
 
-In interactive mode, just paste file paths directly into your prompt. mistral.rs detects image, video, and audio files automatically.
+In interactive mode, just paste file paths directly into your prompt. hanzo detects image, video, and audio files automatically.
 
 ## Step 7: Auto-Tune Your Setup
 
-Let mistral.rs recommend the best configuration for your hardware:
+Let hanzo recommend the best configuration for your hardware:
 
 ```bash
 hanzo tune -m Qwen/Qwen3-4B

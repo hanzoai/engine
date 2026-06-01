@@ -1,11 +1,11 @@
 ---
 title: Use the OpenAI Responses API
-description: The newer /v1/responses endpoint shape, alongside the classic /v1/chat/completions one. When to use each, and what mistral.rs supports.
+description: The newer /v1/responses endpoint shape, alongside the classic /v1/chat/completions one. When to use each, and what hanzo supports.
 sidebar:
   order: 4
 ---
 
-mistral.rs implements the OpenAI Responses API at `/v1/responses` alongside Chat Completions. Responses is OpenAI's shape for agentic workloads with tool calls, background processing, and cancellation.
+hanzo implements the OpenAI Responses API at `/v1/responses` alongside Chat Completions. Responses is OpenAI's shape for agentic workloads with tool calls, background processing, and cancellation.
 
 Both endpoints run on the same server.
 
@@ -20,7 +20,7 @@ Both endpoints run on the same server.
 
 Responses supports polling, mid-flight cancellation via `/cancel`, and background processing. Chat Completions returns the full response on a single connection.
 
-Function tools use the same OpenAI-compatible definitions as Chat Completions, including `strict: true` for JSON-Schema-constrained tool arguments. See [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/).
+Function tools use the same OpenAI-compatible definitions as Chat Completions, including `strict: true` for JSON-Schema-constrained tool arguments. See [strict tool calling](/hanzo/guides/agents/strict-tool-calling/).
 
 ## Supported fields
 
@@ -29,7 +29,7 @@ A few fields are accepted for compatibility but reject non-default values:
 - `parallel_tool_calls` must be `true` (default) or omitted. `false` returns an error.
 - `max_tool_calls` is unsupported; any value returns an error. To cap tool rounds, use the server-level `--max-tool-rounds` flag (applies to both Chat Completions and Responses).
 
-## mistral.rs extensions
+## hanzo extensions
 
 Non-OpenAI fields accepted in Responses requests (also accepted on Chat Completions):
 
@@ -39,7 +39,7 @@ Non-OpenAI fields accepted in Responses requests (also accepted on Chat Completi
 - `grammar`: constrained generation via llguidance.
 - `web_search_options`: per-request search behavior (matches OpenAI's syntax).
 
-Full field reference: [HTTP API reference](/mistral.rs/reference/http-api/).
+Full field reference: [HTTP API reference](/hanzo/reference/http-api/).
 
 ## Example
 

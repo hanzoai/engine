@@ -1,5 +1,5 @@
 # `hanzo-engine`
 
-Core crate of `mistral.rs` including the models and associated executors.
+Core crate of `hanzo` including the models and associated executors.
 
 Documentation: https://docs.rs/hanzo-engine/

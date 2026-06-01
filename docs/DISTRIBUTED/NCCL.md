@@ -18,34 +18,34 @@ See the following environment variables:
 
 |Name|Function|Usage|
 |--|--|--|
-|`MISTRALRS_NO_NCCL=1`|Disable TP and NCCL|If the model does not fit on the available CUDA devices, disabling NCCL will re-enable automatic device mapping|
+|`HANZO_NO_NCCL=1`|Disable TP and NCCL|If the model does not fit on the available CUDA devices, disabling NCCL will re-enable automatic device mapping|
 
 ## Single-Node Support
 
-Set the number of ranks using `MISTRALRS_MN_LOCAL_WORLD_SIZE`, e.g.,
+Set the number of ranks using `HANZO_MN_LOCAL_WORLD_SIZE`, e.g.,
 
 ```bash
-MISTRALRS_MN_LOCAL_WORLD_SIZE=2 hanzo serve -p 8000 -m Qwen/Qwen3-30B-A3B-Instruct-2507
+HANZO_MN_LOCAL_WORLD_SIZE=2 hanzo serve -p 8000 -m Qwen/Qwen3-30B-A3B-Instruct-2507
 ```
 
-where, if no `MISTRALRS_MN_LOCAL_WORLD_SIZE` env given, Hanzo Engine will split the model across all available devices.
+where, if no `HANZO_MN_LOCAL_WORLD_SIZE` env given, Hanzo Engine will split the model across all available devices.
 
 ## Multi-node support
 
 ```
 # Head node:
-MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_HEAD_NUM_WORKERS=1 MISTRALRS_MN_HEAD_PORT=<PORT> hanzo run -m ...
+HANZO_MN_GLOBAL_WORLD_SIZE=32 HANZO_MN_HEAD_NUM_WORKERS=1 HANZO_MN_HEAD_PORT=<PORT> hanzo run -m ...
 
 # For the worker nodes:
-MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=0 MISTRALRS_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> hanzo run -m ...
-MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=1 MISTRALRS_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> hanzo run -m ...
-MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=2 MISTRALRS_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> hanzo run -m ...
+HANZO_MN_GLOBAL_WORLD_SIZE=32 HANZO_MN_WORKER_ID=0 HANZO_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> hanzo run -m ...
+HANZO_MN_GLOBAL_WORLD_SIZE=32 HANZO_MN_WORKER_ID=1 HANZO_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> hanzo run -m ...
+HANZO_MN_GLOBAL_WORLD_SIZE=32 HANZO_MN_WORKER_ID=2 HANZO_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> hanzo run -m ...
 ```
 
 Multi-node support in Hanzo Engine divides the nodes into two groups: a "head" node, and multiple "worker" nodes. Head node choice is arbitrary.
 For example, if a system has 8 nodes, there will be 1 "head" node, and 7 "worker" nodes. 
 
-To enable multi-node, set the `MISTRALRS_MN_GLOBAL_WORLD_SIZE=<number>` environment variable to the total number of GPUs in all nodes, including "head" and "worker"s. **Note**: This number must be a power of 2.
+To enable multi-node, set the `HANZO_MN_GLOBAL_WORLD_SIZE=<number>` environment variable to the total number of GPUs in all nodes, including "head" and "worker"s. **Note**: This number must be a power of 2.
 
 It is recommended to use server mode with Hanzo Engine when in multi-node. **Currently, you must send requests to every node!**
 
@@ -55,12 +55,12 @@ The following environment variables must be set for each node:
 
 |Name|Function|Usage|
 |--|--|--|
-|`MISTRALRS_MN_HEAD_NUM_WORKERS=<number>`|The number of worker nodes which will be connected.|This should be the number of nodes in the system, minus 1 for the head node.|
-|`MISTRALRS_MN_HEAD_PORT=<PORT>`|The port on which to communicate with the worker nodes.|Worker nodes will connect to this port via TCP sockets|
+|`HANZO_MN_HEAD_NUM_WORKERS=<number>`|The number of worker nodes which will be connected.|This should be the number of nodes in the system, minus 1 for the head node.|
+|`HANZO_MN_HEAD_PORT=<PORT>`|The port on which to communicate with the worker nodes.|Worker nodes will connect to this port via TCP sockets|
 
 **Worker node:**
 
 |Name|Function|Usage|
 |--|--|--|
-|`MISTRALRS_MN_WORKER_ID=<number>`|The 0-indexed worker ID for this worker node.|If there are 4 nodes (1 head, 3 workers), then the worker ids will be 0, 1, and 2|
-|`MISTRALRS_MN_WORKER_SERVER_ADDR=<ADDR>:<PORT>`|The IP address and port to connect to the server.|This is used to establish communication with the head node.|
+|`HANZO_MN_WORKER_ID=<number>`|The 0-indexed worker ID for this worker node.|If there are 4 nodes (1 head, 3 workers), then the worker ids will be 0, 1, and 2|
+|`HANZO_MN_WORKER_SERVER_ADDR=<ADDR>:<PORT>`|The IP address and port to connect to the server.|This is used to establish communication with the head node.|

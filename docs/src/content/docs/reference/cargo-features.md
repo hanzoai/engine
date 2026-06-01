@@ -5,7 +5,7 @@ sidebar:
   order: 11
 ---
 
-mistral.rs uses Cargo features to gate platform-specific and optional functionality.
+hanzo uses Cargo features to gate platform-specific and optional functionality.
 
 ## Accelerator features
 

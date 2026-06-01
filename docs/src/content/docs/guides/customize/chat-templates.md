@@ -5,11 +5,11 @@ sidebar:
   order: 4
 ---
 
-A chat template formats messages into the string the model receives. Different models use different formats, and the wrong format produces output that is coherent but degraded. mistral.rs auto-detects the template for almost every supported model. This guide covers manual override.
+A chat template formats messages into the string the model receives. Different models use different formats, and the wrong format produces output that is coherent but degraded. hanzo auto-detects the template for almost every supported model. This guide covers manual override.
 
 ## Auto-detection
 
-mistral.rs checks, in order:
+hanzo checks, in order:
 
 1. The `chat_template` field in the model's `tokenizer_config.json` on Hugging Face. Most modern models include this.
 2. A bundled template in `chat_templates/` keyed by architecture.
@@ -48,7 +48,7 @@ hanzo run -m <model> --jinja-explicit "{% for msg in messages %}..."
 
 ## Picking a bundled template
 
-mistral.rs ships templates for common architectures in `chat_templates/`. For new models of a known architecture not auto-detected, point at the bundled template:
+hanzo ships templates for common architectures in `chat_templates/`. For new models of a known architecture not auto-detected, point at the bundled template:
 
 ```bash
 hanzo run -m <new-model> --chat-template chat_templates/llama3.jinja

@@ -107,7 +107,7 @@ class AgentToolApprovalDecision:
 @dataclass
 class ChatCompletionRequest:
     """
-    A ChatCompletionRequest represents a request sent to the mistral.rs engine. It encodes information
+    A ChatCompletionRequest represents a request sent to the hanzo engine. It encodes information
     about input data, sampling, and how to return the response.
 
     The messages type is as follows: (for normal chat completion, for chat completion with images, pretemplated prompt)
@@ -121,7 +121,7 @@ class ChatCompletionRequest:
       `AgentToolApproval`. Return `True`, `False`, or
       `AgentToolApprovalDecision`.
 
-    See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions)
+    See [agent permissions](/hanzo/guides/agents/agentic-runtime/#agent-permissions)
     for the shared CLI, HTTP, Python, and Rust behavior.
     """
 
@@ -169,7 +169,7 @@ class ChatCompletionRequest:
 @dataclass
 class CompletionRequest:
     """
-    A CompletionRequest represents a request sent to the mistral.rs engine. It encodes information
+    A CompletionRequest represents a request sent to the hanzo engine. It encodes information
     about input data, sampling, and how to return the response.
     """
 
@@ -636,7 +636,7 @@ class Runner:
         self, request: ChatCompletionRequest, model_id: str | None = None
     ) -> ChatCompletionResponse | Iterator[ChatCompletionChunkResponse]:
         """
-        Send a chat completion request to the mistral.rs engine, returning the response object or a generator
+        Send a chat completion request to the hanzo engine, returning the response object or a generator
         over chunk objects.
 
         Args:
@@ -648,7 +648,7 @@ class Runner:
         self, request: CompletionRequest, model_id: str | None = None
     ) -> CompletionResponse:
         """
-        Send a completion request to the mistral.rs engine, returning the response object.
+        Send a completion request to the hanzo engine, returning the response object.
 
         Args:
             request: The completion request.

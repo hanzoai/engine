@@ -16,7 +16,7 @@ Documentation for the `hanzo` Python package.
 - [MCP Client](#mcp-client)
 - [Configuration Reference](#configuration-reference)
 
-Full API reference: [here](https://ericlbuehler.github.io/Hanzo Engine/pyo3/hanzo.html)
+Full API reference: [here](https://hanzoai.github.io/engine/pyo3/hanzo.html)
 
 ## Quick Start
 
@@ -83,7 +83,7 @@ runner = Runner(
 ```python
 runner = Runner(
     which=Which.Plain(
-        model_id="EricB/Phi-3.5-mini-instruct-UQFF",
+        model_id="hanzoai/Phi-3.5-mini-instruct-UQFF",
         from_uqff="phi3.5-mini-instruct-q4k-0.uqff",
     )
 )
@@ -407,7 +407,7 @@ class Which(Enum):
 
 > Note: `truncate_sequence=True` trims prompts that exceed the model's maximum context length.
 
-Adapter variants (`XLora`, `Lora`, `XLoraGGUF`, `LoraGGUF`, `GGML`, `XLoraGGML`, `LoraGGML`) are also available. See the [full API reference](https://ericlbuehler.github.io/Hanzo Engine/pyo3/hanzo.html) for details.
+Adapter variants (`XLora`, `Lora`, `XLoraGGUF`, `LoraGGUF`, `GGML`, `XLoraGGML`, `LoraGGML`) are also available. See the [full API reference](https://hanzoai.github.io/engine/pyo3/hanzo.html) for details.
 
 </details>
 

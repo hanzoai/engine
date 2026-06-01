@@ -176,7 +176,7 @@ pub trait TryFromValue {
 
 // Value wrapped types, each has a different conversion method:
 // NOTE: Type conversion methods internally bail with "not a <into type> <input value>"
-// https://docs.rs/candle-core/latest/hanzo_ml/quantized/gguf_file/enum.Value.html#variants
+// https://docs.rs/hanzo-ml/latest/hanzo_ml/quantized/gguf_file/enum.Value.html#variants
 akin! {
     let &types = [String, bool, f32, f64, i8, i16, i32, i64, u8, u16, u32, u64];
     let &to_type = [

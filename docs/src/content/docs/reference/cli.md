@@ -112,11 +112,11 @@ Accepted by `serve` and `run`. `bench` rejects these flags at startup.
 | `--code-exec-python <path>` | `python` on Windows, `python3` elsewhere | Python interpreter for code execution. |
 | `--code-exec-timeout <secs>` | 30 | Code execution timeout in seconds. |
 | `--code-exec-workdir <path>` | per-session temp dir | Code execution working directory. |
-| `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`. Controls whether agent actions run automatically, require approval, or are denied. See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions). `--code-exec-permission` is accepted as an alias. |
+| `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`. Controls whether agent actions run automatically, require approval, or are denied. See [agent permissions](/hanzo/guides/agents/agentic-runtime/#agent-permissions). `--code-exec-permission` is accepted as an alias. |
 
 ## Sandbox
 
-OS-level isolation applied to the code-execution subprocess. See [sandbox reference](/mistral.rs/reference/sandbox/) for the layering and threat model.
+OS-level isolation applied to the code-execution subprocess. See [sandbox reference](/hanzo/reference/sandbox/) for the layering and threat model.
 
 | Flag | Default | Purpose |
 |---|---|---|
@@ -237,6 +237,6 @@ Common ones:
 | `HF_TOKEN` | Override the cached token at runtime. |
 | `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` disables all network calls to the Hugging Face Hub; files are loaded from the local cache only. |
 | `MCP_CONFIG_PATH` | MCP config path (alternative to `--mcp-config`). |
-| `MISTRALRS_SANDBOX` | `auto`/`on`/`off`. Overrides the sandbox only when the resolved mode is `auto`; `on` and `off` win. |
+| `HANZO_SANDBOX` | `auto`/`on`/`off`. Overrides the sandbox only when the resolved mode is `auto`; `on` and `off` win. |
 
-See [environment variables](/mistral.rs/reference/environment-variables/) for the full list.
+See [environment variables](/hanzo/reference/environment-variables/) for the full list.

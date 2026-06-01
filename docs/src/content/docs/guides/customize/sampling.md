@@ -62,7 +62,7 @@ When multiple filters are active, application order is:
 
 All parameters work on the HTTP API, in SDK request types, and in interactive-mode slash commands (`/temperature`, `/topk`, `/topp`). Slash-command values persist between requests; per-request API values override them.
 
-For deployment-wide defaults, the [CLI TOML config](/mistral.rs/reference/cli-toml-config/) has a `[sampling]` section applied to requests not specifying a parameter.
+For deployment-wide defaults, the [CLI TOML config](/hanzo/reference/cli-toml-config/) has a `[sampling]` section applied to requests not specifying a parameter.
 
 ## Seeds
 

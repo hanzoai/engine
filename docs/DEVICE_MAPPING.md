@@ -5,7 +5,7 @@ by default in the CLI/server and Python SDK and does not make any changes when t
 
 > [!NOTE]
 > If your system has more than one CUDA device, Hanzo Engine will automatically use [tensor parallelism](DISTRIBUTED/DISTRIBUTED.md). If the model does not
-> completely fit on the available GPUs, or you wish to use automatic device mapping, you can disable tensor parallelism by setting `MISTRALRS_NO_NCCL=1`.
+> completely fit on the available GPUs, or you wish to use automatic device mapping, you can disable tensor parallelism by setting `HANZO_NO_NCCL=1`.
 
 Automatic device mapping works by prioritizing loading models into GPU memory, and any remaining parts are loaded into CPU memory.
 Models architectures such as multimodal models which greatly benefit from GPU acceleration also automatically prioritize keeping those
@@ -22,7 +22,7 @@ These parameters do not translate to hard limits during runtime, they only contr
 
 ### Unified memory systems
 
-On integrated GPU systems (e.g. Apple Silicon, NVIDIA Grace Blackwell, Jetson) where GPU and CPU share the same physical RAM, the auto device mapper caps the GPU memory budget to a fraction of system RAM (75% by default for CUDA iGPUs, configurable via `MISTRALRS_IGPU_MEMORY_FRACTION`; Metal uses the `iogpu.wired_limit_mb` sysctl). CPU offload capacity is limited to the remaining fraction to prevent over-subscription of shared memory. Use `hanzo doctor` to check whether your device is detected as unified memory.
+On integrated GPU systems (e.g. Apple Silicon, NVIDIA Grace Blackwell, Jetson) where GPU and CPU share the same physical RAM, the auto device mapper caps the GPU memory budget to a fraction of system RAM (75% by default for CUDA iGPUs, configurable via `HANZO_IGPU_MEMORY_FRACTION`; Metal uses the `iogpu.wired_limit_mb` sysctl). CPU offload capacity is limited to the remaining fraction to prevent over-subscription of shared memory. Use `hanzo doctor` to check whether your device is detected as unified memory.
 
 > [!NOTE]
 > The maximum sequence length is also used to ensure that a KV cache will fit for with and without PagedAttention.

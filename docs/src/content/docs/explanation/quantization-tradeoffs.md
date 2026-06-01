@@ -69,5 +69,5 @@ UQFF files are a serialized form of an ISQ-quantized model. `hanzo quantize` run
 
 ## See also
 
-- Guide: [pick a quantization](/mistral.rs/guides/perf/pick-a-quantization/).
-- Reference: [quantization types](/mistral.rs/reference/quantization-types/), [UQFF format](/mistral.rs/reference/uqff-format/).
+- Guide: [pick a quantization](/hanzo/guides/perf/pick-a-quantization/).
+- Reference: [quantization types](/hanzo/reference/quantization-types/), [UQFF format](/hanzo/reference/uqff-format/).

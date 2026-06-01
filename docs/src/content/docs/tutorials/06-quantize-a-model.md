@@ -33,9 +33,9 @@ hanzo run --quant afq4 -m google/gemma-4-E4B-it    # AFQ4, Metal-optimized
 hanzo run --quant q8_0 -m google/gemma-4-E4B-it    # Q8_0, the GGUF standard
 ```
 
-Use `--isq` instead only when you want to force runtime ISQ and skip the UQFF lookup. The full list is in the [quantization reference](/mistral.rs/reference/quantization-types/).
+Use `--isq` instead only when you want to force runtime ISQ and skip the UQFF lookup. The full list is in the [quantization reference](/hanzo/reference/quantization-types/).
 
-## Letting mistral.rs decide
+## Letting hanzo decide
 
 Use `--quant auto` to pick a quantization level for the current host:
 
@@ -75,14 +75,14 @@ Both accept the same values as the lower-level `--isq` CLI flag.
 
 ## Notes
 
-Runtime ISQ runs at model load time. The engine quantizes weights in parallel and on-the-fly as they arrive into the target format, so loading can take longer than loading an unquantized model. To avoid the conversion on repeated loads, save the result in UQFF format. See the [UQFF guide](/mistral.rs/guides/perf/use-uqff/).
+Runtime ISQ runs at model load time. The engine quantizes weights in parallel and on-the-fly as they arrive into the target format, so loading can take longer than loading an unquantized model. To avoid the conversion on repeated loads, save the result in UQFF format. See the [UQFF guide](/hanzo/guides/perf/use-uqff/).
 
 Not every ISQ format works on every accelerator. Q*K works on all backends; AFQ formats require Metal; FP8 formats require an NVIDIA GPU with compute capability 8.9+. Loading an incompatible format returns an error. The numeric shorthand picks a compatible format for the detected backend.
 
-Pre-quantized GGUF files are a separate path from ISQ. They load directly without conversion. See the [GGUF guide](/mistral.rs/guides/perf/pick-a-quantization/).
+Pre-quantized GGUF files are a separate path from ISQ. They load directly without conversion. See the [GGUF guide](/hanzo/guides/perf/pick-a-quantization/).
 
 ## See also
 
-- [Guides](/mistral.rs/guides/) for specific tasks.
-- [Reference](/mistral.rs/reference/) for flags and APIs.
-- [Troubleshooting](/mistral.rs/reference/troubleshooting/).
+- [Guides](/hanzo/guides/) for specific tasks.
+- [Reference](/hanzo/reference/) for flags and APIs.
+- [Troubleshooting](/hanzo/reference/troubleshooting/).
