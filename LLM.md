@@ -37,6 +37,16 @@ Hanzo Engine is a Rust workspace containing:
 
 The engine provides comprehensive LLM inference with support for text, multimodal (incl. video), image generation, speech, and embeddings through multiple APIs (Rust, Python, OpenAI HTTP, MCP).
 
+## Native ML Pipeline
+
+Three sibling crates live alongside `hanzo-engine/` and share the workspace's pinned candle (`hanzo-ml 0.9.2-alpha.2`, `half 2.7.1`) — single source of truth:
+
+- **`hanzo-federation/`** — Vendor-neutral federated-training transport, scheduler, and coordinator. Pure-Rust port of `zen/gym/src/gym/distributed` with byte-identical wire format (canonical BF16 delta blob + HMAC-SHA256 auth). Public surface: `Coordinator::new(lab).serve(addr)`, `Worker::new(cfg).run(step, params, apply, data)`, `TransportClient`. Built on the engine workspace's axum 0.8 / reqwest 0.13 / tower-http 0.6.
+- **`hanzo-quant/`** — Pure-Rust quantization: `BitDelta` (1-bit signs + per-tensor scale, ~32x), `DeltaQuant` (INT2/4/8 grouped symmetric), `DeltaSoup` (Byzantine-robust trim-mean aggregation). Uses workspace `candle-core` (the `hanzo-ml` fork) so no version split.
+- **`hanzo-zen5/`** — Zen5 inference adapter. Default `ffi` feature wraps the vendored `zen5-engine` C runtime (Metal / CUDA / CPU); `native` feature swaps in a candle-rs DeepSeek V4 Flash scaffold using workspace `candle-core` / `candle-nn` plus the local `hanzo-transformers` fork.
+
+Composition with `hanzo-engine`: `hanzo-federation` ships the cross-host training fabric; `hanzo-quant` produces the delta blobs that travel on it; `hanzo-zen5` plugs zen5 model variants into the `InferenceEngine` trait registry alongside `MistralEngine`. hanzod (in `~/work/hanzo/node`) pulls all four via workspace paths (`hanzo-federation = { path = "../engine/hanzo-federation" }`, etc.).
+
 ## Essential Commands
 
 ### Building Hanzo Engine

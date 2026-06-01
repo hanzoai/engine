@@ -38,6 +38,7 @@
 
 pub mod api;
 pub mod mistral_engine;
+pub mod zen5_engine;
 
 pub use api::{
     embed, embedding_engine_registered, infer, inference_engine_registered,
@@ -45,3 +46,7 @@ pub use api::{
     InferenceEngine,
 };
 pub use mistral_engine::MistralEngine;
+pub use zen5_engine::{
+    build_registry as build_zen5_registry, model_id_for as zen5_model_id_for,
+    register_zen5_engines_at_startup, Zen5InferenceAdapter, Zen5Registry, DEFAULT_VARIANTS,
+};
