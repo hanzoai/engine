@@ -4,8 +4,8 @@ use crate::attention::AttentionMask;
 use std::sync::Arc;
 
 // Sourced from https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/clip/vision_model.rs
-use candle_core::{IndexOp, Result, Shape, Tensor, D};
-use candle_nn::{Conv2dConfig, Module};
+use hanzo_ml::{IndexOp, Result, Shape, Tensor, D};
+use hanzo_nn::{Conv2dConfig, Module};
 use hanzo_quant::{Convolution, QuantMethod, ShardedVarBuilder};
 
 use crate::{
@@ -22,7 +22,7 @@ pub enum Activation {
 impl Module for Activation {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
-            Activation::QuickGelu => xs * candle_nn::ops::sigmoid(&(xs * 1.702f64)?),
+            Activation::QuickGelu => xs * hanzo_nn::ops::sigmoid(&(xs * 1.702f64)?),
         }
     }
 }
@@ -59,10 +59,10 @@ pub struct ClipConfig {
 // https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L112
 #[derive(Clone, Debug)]
 struct ClipVisionEmbeddings {
-    patch_embedding: candle_nn::Conv2d,
+    patch_embedding: hanzo_nn::Conv2d,
     position_ids: Tensor,
     class_embedding: Tensor,
-    position_embedding: candle_nn::Embedding,
+    position_embedding: hanzo_nn::Embedding,
 }
 
 impl ClipVisionEmbeddings {
@@ -186,7 +186,7 @@ impl ClipAttention {
                 attn_weights
             };
 
-        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        let attn_weights = hanzo_nn::ops::softmax_last_dim(&attn_weights)?;
 
         let attn_output = MatMul.matmul(&attn_weights, &value_states)?;
         let attn_output = attn_output
@@ -227,9 +227,9 @@ impl ClipMlp {
 #[derive(Clone, Debug)]
 struct ClipEncoderLayer {
     self_attn: ClipAttention,
-    layer_norm1: candle_nn::LayerNorm,
+    layer_norm1: hanzo_nn::LayerNorm,
     mlp: ClipMlp,
-    layer_norm2: candle_nn::LayerNorm,
+    layer_norm2: hanzo_nn::LayerNorm,
 }
 
 impl ClipEncoderLayer {
@@ -296,8 +296,8 @@ impl ClipEncoder {
 pub struct ClipVisionTransformer {
     embeddings: ClipVisionEmbeddings,
     encoder: ClipEncoder,
-    pre_layer_norm: candle_nn::LayerNorm,
-    final_layer_norm: candle_nn::LayerNorm,
+    pre_layer_norm: hanzo_nn::LayerNorm,
+    final_layer_norm: hanzo_nn::LayerNorm,
 }
 
 impl ClipVisionTransformer {

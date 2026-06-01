@@ -7,7 +7,7 @@ use super::marlin_ffi::{
 use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
 use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
-use candle_core as candle;
+use hanzo_ml as candle;
 use half::{bf16, f16};
 
 struct MarlinMatMul {
@@ -91,7 +91,7 @@ impl MarlinMatMul {
             (size_k / scale_shape[0]) as i32
         };
         if !HAVE_MARLIN_KERNELS {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Marlin INT4xF16 matmul kernels were not compiled, please raise an issue."
             )
         }
@@ -296,7 +296,7 @@ impl MarlinRepack {
                 }
             }
         } else {
-            candle_core::bail!("Not compiled with marlin kernels, but attempted to use one. Please raise an issue.");
+            hanzo_ml::bail!("Not compiled with marlin kernels, but attempted to use one. Please raise an issue.");
         }
 
         drop(out_guard);

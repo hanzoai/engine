@@ -13,10 +13,10 @@ use crate::pipeline::{EitherCache, KvCache, NormalCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
-use candle_core::quantized::QMatMul;
-use candle_core::quantized::QTensor;
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::Embedding;
+use hanzo_ml::quantized::QMatMul;
+use hanzo_ml::quantized::QTensor;
+use hanzo_ml::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use hanzo_nn::Embedding;
 use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 #[derive(Clone)]
@@ -67,7 +67,7 @@ impl LayerWeights {
         for (i, offset) in seqlen_offsets.iter().enumerate() {
             let cos = self.cos.narrow(0, *offset, seq_len)?;
             let sin = self.sin.narrow(0, *offset, seq_len)?;
-            outputs.push(candle_nn::rotary_emb::rope(
+            outputs.push(hanzo_nn::rotary_emb::rope(
                 &xs.i(i)?.unsqueeze(0)?.contiguous()?,
                 &cos,
                 &sin,
@@ -251,7 +251,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             rope_dim,
             rms_eps,
             context_window,
-        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
+        } = PropsGGUF::try_from(metadata).or_else(|err| hanzo_ml::bail!("{err}"))?;
 
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, context_window, dtype)?;
 

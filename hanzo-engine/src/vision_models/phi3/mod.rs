@@ -5,7 +5,7 @@ pub(crate) mod phi3_inputs_processor;
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{
+use hanzo_ml::{
     shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape, Tensor, D,
 };
 use either::Either;
@@ -132,7 +132,7 @@ impl ModuleWithMetadata for QuantMethodWrapper {
     }
 }
 
-impl ModuleWithMetadata for candle_nn::Activation {
+impl ModuleWithMetadata for hanzo_nn::Activation {
     fn device(&self) -> Device {
         unreachable!()
     }
@@ -146,10 +146,10 @@ struct BigShapeWithOneHole((usize, usize, usize, usize, usize, ()));
 
 fn hole_size(el_count: usize, prod_d: usize, s: &dyn std::fmt::Debug) -> Result<usize> {
     if prod_d == 0 {
-        candle_core::bail!("cannot reshape tensor of {el_count} elements to {s:?}")
+        hanzo_ml::bail!("cannot reshape tensor of {el_count} elements to {s:?}")
     }
     if !el_count.is_multiple_of(prod_d) {
-        candle_core::bail!("cannot reshape tensor with {el_count} elements to {s:?}")
+        hanzo_ml::bail!("cannot reshape tensor with {el_count} elements to {s:?}")
     }
     Ok(el_count / prod_d)
 }
@@ -505,7 +505,7 @@ impl Module for EmbeddingLayers {
 
 #[derive(Debug)]
 pub struct ImageEmbedding {
-    wte: candle_nn::Embedding,
+    wte: hanzo_nn::Embedding,
     image_dim_out: usize,
     num_img_tokens: usize,
     glb_gn: Option<Tensor>,
@@ -534,13 +534,13 @@ pub(crate) const PHI3V_CLIP_CONFIG: ClipConfig = ClipConfig {
 impl ImageEmbedding {
     fn new(
         config: &Config,
-        wte: candle_nn::Embedding,
+        wte: hanzo_nn::Embedding,
         embed_config: &EmbedLayerConfig,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let hidden_size = config.hidden_size;
         if config.img_processor.name != "clip_vision_model" {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "img_processor=`{}` nor supported.",
                 config.img_processor.name
             );
@@ -620,7 +620,7 @@ impl ImageEmbedding {
                     }
                     vec![
                         Box::new(QuantMethodWrapper(a)),
-                        Box::new(candle_nn::Activation::Gelu),
+                        Box::new(hanzo_nn::Activation::Gelu),
                         Box::new(QuantMethodWrapper(b)),
                     ]
                 }
@@ -652,12 +652,12 @@ impl ImageEmbedding {
                     }
                     vec![
                         Box::new(QuantMethodWrapper(a)),
-                        Box::new(candle_nn::Activation::Gelu),
+                        Box::new(hanzo_nn::Activation::Gelu),
                         Box::new(QuantMethodWrapper(b)),
                     ]
                 }
                 _ => {
-                    candle_core::bail!("projection_cls=`{projection_cls}` not implemented.");
+                    hanzo_ml::bail!("projection_cls=`{projection_cls}` not implemented.");
                 }
             };
 
@@ -696,7 +696,7 @@ impl ImageEmbedding {
         } else if self.type_feature == "cls_patch" {
             Ok(img_feature)
         } else {
-            candle_core::bail!("Unsupported image feature type {}", self.type_feature)
+            hanzo_ml::bail!("Unsupported image feature type {}", self.type_feature)
         }
     }
 
@@ -867,7 +867,7 @@ impl ImageEmbedding {
                                 1,
                             )?,
                             other => {
-                                candle_core::bail!("Invalid hd_transform_order=`{other}`");
+                                hanzo_ml::bail!("Invalid hd_transform_order=`{other}`");
                             }
                         };
 
@@ -1028,7 +1028,7 @@ impl ImageEmbedding {
 
 pub struct Model {
     vision_embed_tokens: ImageEmbedding,
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: hanzo_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -1118,7 +1118,7 @@ impl Model {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
                 mapper.cast_nm_device(
                     embed_tokens.embeddings(),
                     normal_loading_metadata.loading_isq,

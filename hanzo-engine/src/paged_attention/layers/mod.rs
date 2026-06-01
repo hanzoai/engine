@@ -5,7 +5,7 @@ pub use paged_attention::PagedAttention;
 
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 pub mod paged_attention {
-    use candle_core::{Device, Result, Tensor};
+    use hanzo_ml::{Device, Result, Tensor};
 
     use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
     use crate::{
@@ -21,7 +21,7 @@ pub mod paged_attention {
             _device: &Device,
             _alibi_slopes: Option<Vec<f32>>,
         ) -> Result<Self> {
-            candle_core::bail!("Paged attention requires the CUDA or Metal feature flags.");
+            hanzo_ml::bail!("Paged attention requires the CUDA or Metal feature flags.");
         }
 
         #[allow(clippy::too_many_arguments)]
@@ -38,7 +38,7 @@ pub mod paged_attention {
             _sdpa_params: &SdpaParams,
             _flash_params: Option<&FlashParams>,
         ) -> Result<Tensor> {
-            candle_core::bail!("Paged attention requires the CUDA or Metal feature flags.");
+            hanzo_ml::bail!("Paged attention requires the CUDA or Metal feature flags.");
         }
 
         #[allow(clippy::too_many_arguments)]
@@ -53,7 +53,7 @@ pub mod paged_attention {
             _sdpa_params: &SdpaParams,
             _flash_params: Option<&FlashParams>,
         ) -> Result<Tensor> {
-            candle_core::bail!("Paged attention requires the CUDA or Metal feature flags.");
+            hanzo_ml::bail!("Paged attention requires the CUDA or Metal feature flags.");
         }
     }
 }

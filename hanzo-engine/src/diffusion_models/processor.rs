@@ -1,7 +1,7 @@
 use std::{any::Any, sync::Arc};
 
 use anyhow::{Context, Result};
-use candle_core::Device;
+use hanzo_ml::Device;
 use indexmap::IndexMap;
 use tokenizers::Tokenizer;
 

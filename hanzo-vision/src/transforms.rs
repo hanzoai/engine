@@ -1,5 +1,5 @@
 use crate::utils::image_to_pixels;
-use candle_core::{Device, Result, Tensor, D};
+use hanzo_ml::{Device, Result, Tensor, D};
 use image::DynamicImage;
 
 use crate::ImageTransform;
@@ -47,7 +47,7 @@ impl ImageTransform for Normalize {
     fn map(&self, x: &Self::Input, _: &Device) -> Result<Self::Output> {
         let num_channels = x.dim(D::Minus(3))?;
         if self.mean.len() != num_channels || self.std.len() != num_channels {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Num channels ({}) must match number of mean ({}) and std ({}).",
                 num_channels,
                 self.mean.len(),
@@ -127,7 +127,7 @@ impl ImageTransform for Rescale {
 mod tests {
     #[test]
     fn test_to_tensor() {
-        use candle_core::Device;
+        use hanzo_ml::Device;
         use image::{ColorType, DynamicImage};
 
         use crate::ImageTransform;
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn test_normalize() {
         use crate::{ImageTransform, Normalize};
-        use candle_core::{Device, Tensor};
+        use hanzo_ml::{Device, Tensor};
 
         let image = Tensor::randn(1f32, 0f32, (3, 5, 4), &Device::Cpu).unwrap();
         let res = Normalize {

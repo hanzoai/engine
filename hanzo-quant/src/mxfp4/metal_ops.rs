@@ -1,4 +1,4 @@
-use candle_core::{backend::BackendStorage, MetalStorage, Result, Shape, Storage, Tensor};
+use hanzo_ml::{backend::BackendStorage, MetalStorage, Result, Shape, Storage, Tensor};
 
 use super::MXFP4_BLOCK_SIZE;
 
@@ -21,10 +21,10 @@ pub fn mxfp4_matmul(
     let scale_dims = scale.dims();
 
     if input_dims.len() != 2 {
-        candle_core::bail!("Expected input to be rank 2, got {:?}", input_dims);
+        hanzo_ml::bail!("Expected input to be rank 2, got {:?}", input_dims);
     }
     if weight_dims.len() != 2 || scale_dims.len() != 2 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Expected weight and scale to be rank 2, got {:?} and {:?}",
             weight_dims,
             scale_dims
@@ -36,13 +36,13 @@ pub fn mxfp4_matmul(
     let n = weight_dims[0];
 
     if k % MXFP4_BLOCK_SIZE != 0 {
-        candle_core::bail!("MXFP4 requires K divisible by {MXFP4_BLOCK_SIZE}, got K={k}");
+        hanzo_ml::bail!("MXFP4 requires K divisible by {MXFP4_BLOCK_SIZE}, got K={k}");
     }
     if k % 2 != 0 {
-        candle_core::bail!("MXFP4 requires K divisible by 2, got K={k}");
+        hanzo_ml::bail!("MXFP4 requires K divisible by 2, got K={k}");
     }
     if weight_dims[1] != k / 2 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Weight shape mismatch: expected [N, K/2] = [{}, {}], got {:?}",
             n,
             k / 2,
@@ -50,7 +50,7 @@ pub fn mxfp4_matmul(
         );
     }
     if scale_dims[0] != n || scale_dims[1] != k / MXFP4_BLOCK_SIZE {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Scale shape mismatch: expected [N, K/32] = [{}, {}], got {:?}",
             n,
             k / MXFP4_BLOCK_SIZE,
@@ -63,13 +63,13 @@ pub fn mxfp4_matmul(
     let scale_s = scale.storage_and_layout().0;
 
     let Storage::Metal(input_s) = &*input_s else {
-        candle_core::bail!("Expected Metal storage for input")
+        hanzo_ml::bail!("Expected Metal storage for input")
     };
     let Storage::Metal(weight_s) = &*weight_s else {
-        candle_core::bail!("Expected Metal storage for weight")
+        hanzo_ml::bail!("Expected Metal storage for weight")
     };
     let Storage::Metal(scale_s) = &*scale_s else {
-        candle_core::bail!("Expected Metal storage for scale")
+        hanzo_ml::bail!("Expected Metal storage for scale")
     };
 
     let device = input_s.device();
@@ -101,17 +101,17 @@ pub fn mxfp4_matmul(
     if let Some(bias) = &bias {
         let bias_s = bias.storage_and_layout().0;
         let Storage::Metal(bias_s) = &*bias_s else {
-            candle_core::bail!("Expected Metal storage for bias")
+            hanzo_ml::bail!("Expected Metal storage for bias")
         };
         if bias.dtype() != input.dtype() {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Bias dtype mismatch: input={:?}, bias={:?}",
                 input.dtype(),
                 bias.dtype()
             );
         }
         if bias.dims() != [n] {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Bias shape mismatch: expected [N]=[{n}], got {:?}",
                 bias.dims()
             );
@@ -136,7 +136,7 @@ pub fn mxfp4_matmul(
             k,
             true,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
     } else {
         // Any valid buffer is fine as long as has_bias=false.
         let dummy_bias = (input_s.buffer(), 0usize);
@@ -156,7 +156,7 @@ pub fn mxfp4_matmul(
             k,
             false,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
     }
 
     Ok(Tensor::from((
@@ -188,7 +188,7 @@ pub fn mxfp4_indexed_moe_gemm(
 
     let indices_dims = indices.dims();
     if indices_dims.len() != 2 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Expected indices to be rank 2 [num_tokens, topk], got {:?}",
             indices_dims
         );
@@ -200,7 +200,7 @@ pub fn mxfp4_indexed_moe_gemm(
     let (k, input_has_topk_dim) = match input_dims {
         [t, kk] => {
             if *t != num_tokens {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Input/indices mismatch: input num_tokens={t}, indices num_tokens={num_tokens}"
                 );
             }
@@ -208,26 +208,26 @@ pub fn mxfp4_indexed_moe_gemm(
         }
         [t, tk, kk] => {
             if *t != num_tokens || *tk != topk {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Input/indices mismatch: input dims={input_dims:?}, indices dims={indices_dims:?}"
                 );
             }
             (*kk, true)
         }
-        _ => candle_core::bail!("Expected input to be rank 2 or 3, got {:?}", input_dims),
+        _ => hanzo_ml::bail!("Expected input to be rank 2 or 3, got {:?}", input_dims),
     };
 
     if k % MXFP4_BLOCK_SIZE != 0 {
-        candle_core::bail!("MXFP4 requires K divisible by {MXFP4_BLOCK_SIZE}, got K={k}");
+        hanzo_ml::bail!("MXFP4 requires K divisible by {MXFP4_BLOCK_SIZE}, got K={k}");
     }
     if k % 2 != 0 {
-        candle_core::bail!("MXFP4 requires K divisible by 2, got K={k}");
+        hanzo_ml::bail!("MXFP4 requires K divisible by 2, got K={k}");
     }
 
     let w_dims = weights.dims();
     let s_dims = weight_scales.dims();
     if w_dims.len() != 3 || s_dims.len() != 3 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Expected weights and scales to be rank 3 [E, N, *], got {:?} and {:?}",
             w_dims,
             s_dims
@@ -237,7 +237,7 @@ pub fn mxfp4_indexed_moe_gemm(
     let n = w_dims[1];
 
     if w_dims[2] != k / 2 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Weights shape mismatch: expected [E, N, K/2] = [{}, {}, {}], got {:?}",
             num_experts,
             n,
@@ -246,7 +246,7 @@ pub fn mxfp4_indexed_moe_gemm(
         );
     }
     if s_dims[0] != num_experts || s_dims[1] != n || s_dims[2] != k / MXFP4_BLOCK_SIZE {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Scales shape mismatch: expected [E, N, K/32] = [{}, {}, {}], got {:?}",
             num_experts,
             n,
@@ -261,16 +261,16 @@ pub fn mxfp4_indexed_moe_gemm(
     let indices_s = indices.storage_and_layout().0;
 
     let Storage::Metal(input_s) = &*input_s else {
-        candle_core::bail!("Expected Metal storage for input")
+        hanzo_ml::bail!("Expected Metal storage for input")
     };
     let Storage::Metal(weights_s) = &*weights_s else {
-        candle_core::bail!("Expected Metal storage for weights")
+        hanzo_ml::bail!("Expected Metal storage for weights")
     };
     let Storage::Metal(scales_s) = &*scales_s else {
-        candle_core::bail!("Expected Metal storage for weight scales")
+        hanzo_ml::bail!("Expected Metal storage for weight scales")
     };
     let Storage::Metal(indices_s) = &*indices_s else {
-        candle_core::bail!("Expected Metal storage for indices")
+        hanzo_ml::bail!("Expected Metal storage for indices")
     };
 
     let device = input_s.device();
@@ -306,14 +306,14 @@ pub fn mxfp4_indexed_moe_gemm(
 
     if let Some(biases) = &biases {
         if biases.dtype() != input.dtype() {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Bias dtype mismatch: input={:?}, bias={:?}",
                 input.dtype(),
                 biases.dtype()
             );
         }
         if biases.dims() != [num_experts, n] {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Bias shape mismatch: expected [E, N]=[{num_experts}, {n}], got {:?}",
                 biases.dims()
             );
@@ -321,7 +321,7 @@ pub fn mxfp4_indexed_moe_gemm(
 
         let b_s = biases.storage_and_layout().0;
         let Storage::Metal(b_s) = &*b_s else {
-            candle_core::bail!("Expected Metal storage for bias")
+            hanzo_ml::bail!("Expected Metal storage for bias")
         };
         let bias = (
             b_s.buffer(),
@@ -348,7 +348,7 @@ pub fn mxfp4_indexed_moe_gemm(
             input_has_topk_dim,
             reuse_topk,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
     } else {
         // Any valid buffer is fine as long as has_bias=false.
         let dummy_biases = (input_s.buffer(), 0usize);
@@ -373,7 +373,7 @@ pub fn mxfp4_indexed_moe_gemm(
             input_has_topk_dim,
             reuse_topk,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
     }
 
     Ok(Tensor::from((

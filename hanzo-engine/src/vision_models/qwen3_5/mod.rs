@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor};
 use hanzo_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use text::Qwen3_5TextModel;
 
@@ -137,7 +137,7 @@ impl Qwen3_5Model {
 
         if let Some(pixel_values) = &pixel_values {
             let Some(image_grid_thw_ref) = image_grid_thw.as_ref() else {
-                candle_core::bail!("pixel_values require image_grid_thw");
+                hanzo_ml::bail!("pixel_values require image_grid_thw");
             };
             let mut pixel_values = pixel_values.clone();
             let ndim = pixel_values.dims().len();
@@ -273,7 +273,7 @@ impl Qwen3_5Model {
                 .flat_map(|spans| spans.iter().map(|(s, e)| e - s))
                 .sum();
             if image_embeds.dim(0)? != total_expected {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Image embedding length {} does not match placeholder tokens {}",
                     image_embeds.dim(0)?,
                     total_expected
@@ -299,7 +299,7 @@ impl Qwen3_5Model {
 
         if let Some(pixel_values_videos) = &pixel_values_videos {
             let Some(video_grid_thw_ref) = video_grid_thw.as_ref() else {
-                candle_core::bail!("pixel_values_videos require video_grid_thw");
+                hanzo_ml::bail!("pixel_values_videos require video_grid_thw");
             };
             let mut pixel_values = pixel_values_videos.clone();
             let ndim = pixel_values.dims().len();
@@ -323,7 +323,7 @@ impl Qwen3_5Model {
                 .flat_map(|spans| spans.iter().map(|(s, e)| e - s))
                 .sum();
             if video_embeds.dim(0)? != total_expected {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "Video embedding length {} does not match placeholder tokens {}",
                     video_embeds.dim(0)?,
                     total_expected
@@ -366,7 +366,7 @@ impl Qwen3_5Model {
                     .to_vec1::<u8>()?;
                 let num_visual = visual_indices_vec.len();
                 if image_deepstack.len() != video_deepstack.len() {
-                    candle_core::bail!(
+                    hanzo_ml::bail!(
                         "DeepStack image layers ({}) do not match video layers ({})",
                         image_deepstack.len(),
                         video_deepstack.len()
@@ -388,7 +388,7 @@ impl Qwen3_5Model {
                         }
                     }
                     if img_offset != img_layer.dim(0)? || vid_offset != vid_layer.dim(0)? {
-                        candle_core::bail!(
+                        hanzo_ml::bail!(
                                 "DeepStack feature alignment failed for images ({}/{}) or videos ({}/{})",
                                 img_offset,
                                 img_layer.dim(0)?,
@@ -414,7 +414,7 @@ impl Qwen3_5Model {
         let max_seqlens = *seqlens
             .iter()
             .max()
-            .ok_or(candle_core::Error::Msg("seqlens is empty".to_string()))?;
+            .ok_or(hanzo_ml::Error::Msg("seqlens is empty".to_string()))?;
         for len in &seqlens {
             ropeidx_attn_mask_bs.push(Tensor::new(
                 [vec![1f32; *len], vec![0f32; max_seqlens - len]].concat(),
@@ -495,7 +495,7 @@ impl MultimodalModel for Qwen3_5Model {
             (None, Some(_)) => (None, pixel_values),
             (None, None) => (None, None),
             (Some(_), Some(_)) => {
-                candle_core::bail!("Images and videos cannot be provided together.")
+                hanzo_ml::bail!("Images and videos cannot be provided together.")
             }
         };
         let rope_img = rope_img_grid_thw.or(image_grid_thw.clone());

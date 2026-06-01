@@ -1,4 +1,4 @@
-use candle_core::cuda::cudarc::driver::sys::CUstream;
+use hanzo_ml::cuda::cudarc::driver::sys::CUstream;
 use half::{bf16, f16};
 
 #[allow(dead_code)]

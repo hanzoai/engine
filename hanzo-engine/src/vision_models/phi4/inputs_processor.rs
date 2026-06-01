@@ -2,7 +2,7 @@
 
 use std::{any::Any, collections::HashSet, sync::Arc};
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
 use hanzo_vision::{ApplyTransforms, Normalize, ToTensor, Transforms};
 use regex::Regex;
@@ -476,7 +476,7 @@ impl Phi4MMInputsProcessor {
         } else if fs > 8000 && fs < 16000 {
             8000
         } else if fs < 8000 {
-            return Err(candle_core::Error::Msg(format!(
+            return Err(hanzo_ml::Error::Msg(format!(
                 "Unsupported sample rate: {fs}"
             )));
         } else {
@@ -505,12 +505,12 @@ impl Phi4MMInputsProcessor {
                 wav.len(),
                 1, // mono
             )
-            .map_err(|e| candle_core::Error::Msg(format!("Resampler creation failed: {e}")))?;
+            .map_err(|e| hanzo_ml::Error::Msg(format!("Resampler creation failed: {e}")))?;
 
             let input = vec![wav.to_vec()];
             let output = resampler
                 .process(&input, None)
-                .map_err(|e| candle_core::Error::Msg(format!("Resampling failed: {e}")))?;
+                .map_err(|e| hanzo_ml::Error::Msg(format!("Resampling failed: {e}")))?;
 
             return Ok((output[0].clone(), 16000));
         }
@@ -533,12 +533,12 @@ impl Phi4MMInputsProcessor {
             wav.len(),
             1, // mono
         )
-        .map_err(|e| candle_core::Error::Msg(format!("Resampler creation failed: {e}")))?;
+        .map_err(|e| hanzo_ml::Error::Msg(format!("Resampler creation failed: {e}")))?;
 
         let input = vec![wav.to_vec()];
         let output = resampler
             .process(&input, None)
-            .map_err(|e| candle_core::Error::Msg(format!("Resampling failed: {e}")))?;
+            .map_err(|e| hanzo_ml::Error::Msg(format!("Resampling failed: {e}")))?;
 
         Ok((output[0].clone(), target_fs))
     }
@@ -550,7 +550,7 @@ impl Phi4MMInputsProcessor {
         } else if fs == 16000 {
             (512, 400, 160)
         } else {
-            return Err(candle_core::Error::Msg(format!(
+            return Err(hanzo_ml::Error::Msg(format!(
                 "Unsupported sample rate: {fs}"
             )));
         };
@@ -804,7 +804,7 @@ impl Phi4MMInputsProcessor {
                         audio_frames_list.push(audio_frames);
                     }
                 } else {
-                    candle_core::bail!("No audios in `process_audio_for_sequences`");
+                    hanzo_ml::bail!("No audios in `process_audio_for_sequences`");
                 };
             }
         }
@@ -982,7 +982,7 @@ impl Phi4MMInputsProcessor {
 
         // Guard against extreme aspect ratios resulting in too-small dimensions
         if new_size.1.min(target_height) < 10 || new_size.0.min(target_width) < 10 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Image aspect ratio too extreme; resulting size below minimum threshold",
             );
         }
@@ -1025,7 +1025,7 @@ impl Phi4MMInputsProcessor {
         // Ensure the attention mask is non-empty
         let mask_sum: u32 = attention_mask.sum_all()?.to_scalar::<u32>()?;
         if mask_sum == 0 {
-            candle_core::bail!("dynamic_preprocess produced an attention mask with zero sum",);
+            hanzo_ml::bail!("dynamic_preprocess produced an attention mask with zero sum",);
         }
 
         image = image.resize_exact(new_size.0 as u32, new_size.1 as u32, FilterType::Nearest);

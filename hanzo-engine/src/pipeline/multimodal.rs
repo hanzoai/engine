@@ -43,7 +43,7 @@ use crate::{
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::Result;
-use candle_core::{Device, Tensor, Var};
+use hanzo_ml::{Device, Tensor, Var};
 use either::Either;
 use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -287,9 +287,9 @@ impl Loader for MultimodalLoader {
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
             // Use new_cuda instead of new_cuda_with_stream for NCCL compatibility
             // NCCL manages its own streams, so explicit stream creation can cause conflicts
-            vec![candle_core::Device::new_cuda(worker_rank + 1)?]
+            vec![hanzo_ml::Device::new_cuda(worker_rank + 1)?]
         } else if use_nccl || use_ring() {
-            vec![candle_core::Device::new_cuda(0)?]
+            vec![hanzo_ml::Device::new_cuda(0)?]
         } else {
             device_map::get_all_similar_devices(device)?
         };
@@ -346,7 +346,7 @@ impl Loader for MultimodalLoader {
                 if let Some(serialized) = &*self.from_uqff.read().unwrap() {
                     let weight_pack_factor = {
                         let ser_artifacts = unsafe {
-                            candle_core::safetensors::MmapedSafetensors::multi(serialized)?
+                            hanzo_ml::safetensors::MmapedSafetensors::multi(serialized)?
                         };
                         let mut total_pack_factors = 0;
                         let total_tensors = ser_artifacts.tensors().len();
@@ -1085,21 +1085,21 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
     fn speculative_target_hiddens(
         &self,
         rows: &[(usize, usize)],
-    ) -> candle_core::Result<Option<Tensor>> {
+    ) -> hanzo_ml::Result<Option<Tensor>> {
         self.model.speculative_target_hiddens(rows)
     }
 
     fn speculative_propose(
         &mut self,
         ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
-    ) -> candle_core::Result<Option<crate::speculative::SpeculativeProposalBatch>> {
+    ) -> hanzo_ml::Result<Option<crate::speculative::SpeculativeProposalBatch>> {
         self.model.speculative_propose(ctx)
     }
 
     fn build_speculative_verify_inputs(
         &self,
         input_meta: InputMetadata,
-    ) -> candle_core::Result<Box<dyn Any>> {
+    ) -> hanzo_ml::Result<Box<dyn Any>> {
         let model_specific_args = self.model.default_model_specific_args(&input_meta.input);
         Ok(Box::new(ModelInputs {
             input_ids: input_meta.input,
@@ -1120,7 +1120,7 @@ impl Pipeline for MultimodalPipeline {
         &mut self,
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
-    ) -> candle_core::Result<ForwardInputsResult> {
+    ) -> hanzo_ml::Result<ForwardInputsResult> {
         let ModelInputs {
             input_ids,
             seqlen_offsets,
@@ -1136,11 +1136,11 @@ impl Pipeline for MultimodalPipeline {
             (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
             (Some(_), None) => {
                 // This can happen if Rust-side user code is wrong
-                candle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
+                hanzo_ml::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
             }
             (None, Some(_)) => {
                 // This should never happen but we handle it anyway
-                candle_core::bail!("Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue.")
+                hanzo_ml::bail!("Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue.")
             }
             (None, None) => None,
         };
@@ -1164,11 +1164,11 @@ impl Pipeline for MultimodalPipeline {
     fn attach_speculative(
         &mut self,
         config: crate::speculative::SpeculativeConfig,
-    ) -> candle_core::Result<()> {
+    ) -> hanzo_ml::Result<()> {
         if matches!(config, crate::speculative::SpeculativeConfig::Mtp(_))
             && self.get_metadata().cache_engine.is_none()
         {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "MTP speculative decoding currently requires PagedAttention for this pipeline."
             );
         }
@@ -1187,7 +1187,7 @@ impl Pipeline for MultimodalPipeline {
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         metadata: Option<crate::pipeline::text_models_inputs_processor::PagedAttentionMeta>,
-    ) -> candle_core::Result<bool> {
+    ) -> hanzo_ml::Result<bool> {
         if !self.model.has_speculative_proposer() {
             crate::speculative::driver::clear_staged_speculative_tokens(seqs);
             return Ok(false);
@@ -1226,7 +1226,7 @@ impl Pipeline for MultimodalPipeline {
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    ) -> Result<(), candle_core::Error> {
+    ) -> Result<(), hanzo_ml::Error> {
         sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {
@@ -1246,7 +1246,7 @@ impl Pipeline for MultimodalPipeline {
 }
 
 impl AnyMoePipelineMixin for MultimodalPipeline {
-    fn amoe_finish_training(&mut self, gate_model_id: Option<String>) -> candle_core::Result<()> {
+    fn amoe_finish_training(&mut self, gate_model_id: Option<String>) -> hanzo_ml::Result<()> {
         self.model.finish_training(gate_model_id)
     }
     fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
@@ -1265,17 +1265,17 @@ impl AnyMoePipelineMixin for MultimodalPipeline {
         revision: Option<String>,
         match_regex: &str,
         config: crate::amoe::AnyMoeConfig,
-        dtype: candle_core::DType,
+        dtype: hanzo_ml::DType,
         dev: &Device,
         (prefix, mlp): (String, String),
         layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
         silent: bool,
         gate_model_id: Option<String>,
-    ) -> candle_core::Result<()> {
+    ) -> hanzo_ml::Result<()> {
         let mut vbs = Vec::new();
         // Precompile regex here
-        let regex = Regex::new(match_regex).map_err(candle_core::Error::msg)?;
+        let regex = Regex::new(match_regex).map_err(hanzo_ml::Error::msg)?;
         for model_id in model_ids {
             let model_id_str = &model_id;
             let model_id = Path::new(&model_id);
@@ -1284,11 +1284,11 @@ impl AnyMoePipelineMixin for MultimodalPipeline {
                 let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
                 let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
-                    .with_token(get_token(token).map_err(candle_core::Error::msg)?);
+                    .with_token(get_token(token).map_err(hanzo_ml::Error::msg)?);
                 if let Some(cache_dir) = crate::hf_hub_cache_dir() {
                     api = api.with_cache_dir(cache_dir);
                 }
-                api.build().map_err(candle_core::Error::msg)?
+                api.build().map_err(hanzo_ml::Error::msg)?
             };
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
@@ -1342,11 +1342,11 @@ impl AnyMoePipelineMixin for MultimodalPipeline {
                 let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
                 let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
-                    .with_token(get_token(token).map_err(candle_core::Error::msg)?);
+                    .with_token(get_token(token).map_err(hanzo_ml::Error::msg)?);
                 if let Some(cache_dir) = crate::hf_hub_cache_dir() {
                     api = api.with_cache_dir(cache_dir);
                 }
-                api.build().map_err(candle_core::Error::msg)?
+                api.build().map_err(hanzo_ml::Error::msg)?
             };
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(

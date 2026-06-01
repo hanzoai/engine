@@ -8,8 +8,8 @@
 //! - thenlper/gte-small
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Embedding, LayerNorm, LayerNormConfig, Linear};
+use hanzo_ml::{DType, Device, Module, Result, Tensor, D};
+use hanzo_nn::{Embedding, LayerNorm, LayerNormConfig, Linear};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -142,7 +142,7 @@ impl BertEmbeddings {
     }
 }
 
-/// BERT self-attention (using candle_nn::Linear instead of QuantMethod)
+/// BERT self-attention (using hanzo_nn::Linear instead of QuantMethod)
 struct BertSelfAttention {
     query: Linear,
     key: Linear,
@@ -215,7 +215,7 @@ impl BertSelfAttention {
             None => attention_scores,
         };
 
-        let attention_probs = candle_nn::ops::softmax(&attention_scores, D::Minus1)?;
+        let attention_probs = hanzo_nn::ops::softmax(&attention_scores, D::Minus1)?;
 
         let context = attention_probs.matmul(&value)?;
         let context = context.transpose(1, 2)?;
@@ -388,7 +388,7 @@ impl BertEmbeddingModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         if !matches!(attention_mechanism, AttentionImplementation::Eager) {
-            candle_core::bail!("BERT embedding model only supports Eager attention");
+            hanzo_ml::bail!("BERT embedding model only supports Eager attention");
         }
 
         let mapper = normal_loading_metadata.mapper;
@@ -441,7 +441,7 @@ impl EmbeddingModel for BertEmbeddingModel {
         &self,
         input_ids: &Tensor,
         _flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         tracing::debug!(
             "BertEmbeddingModel forward - input_ids shape: {:?}",
             input_ids.shape()
@@ -495,7 +495,7 @@ impl IsqModel for BertEmbeddingModel {
         Vec::new()
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+    fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         Ok(Vec::new())
     }
 }
