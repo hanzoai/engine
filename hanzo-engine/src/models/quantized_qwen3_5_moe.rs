@@ -788,7 +788,12 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     gate_experts: QMatMul::from_qtensor(gate_experts)?,
                     up_experts: QMatMul::from_qtensor(up_experts)?,
                     down_experts: QMatMul::from_qtensor(down_experts)?,
-                    shared_gate: QMatMul::from_qtensor(shared_gate)?,
+                    // ffn_gate_inp_shexp is a hidden->1 shared-expert gate stored 1D [hidden]; the
+                    // matmul needs 2D, so dequantize and reshape to [1, hidden].
+                    shared_gate: {
+                        let w = shared_gate.dequantize(dev)?;
+                        QMatMul::Tensor(if w.rank() == 1 { w.unsqueeze(0)? } else { w })
+                    },
                     shared_gate_proj,
                     shared_up_proj,
                     shared_down_proj,
