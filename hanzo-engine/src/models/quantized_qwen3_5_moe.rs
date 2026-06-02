@@ -572,9 +572,17 @@ impl PropsGGUF {
 
         Ok(Self {
             head_count,
-            head_count_kv: c
-                .get_value::<u32>("attention.head_count_kv")
-                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize,
+            head_count_kv: {
+                // hybrid layers store head_count_kv as a per-layer array; take the max (attention layers)
+                let key = "attention.head_count_kv";
+                c.get_value::<u32>(key)
+                    .map(|n| n as usize)
+                    .or_else(|_| {
+                        c.get_value::<Vec<u32>>(key)
+                            .map(|v| v.into_iter().max().unwrap_or(0) as usize)
+                    })
+                    .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
+            },
             block_count: c
                 .get_value::<u32>("block_count")
                 .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize,
