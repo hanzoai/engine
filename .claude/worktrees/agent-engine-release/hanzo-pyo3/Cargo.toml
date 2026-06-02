@@ -1,0 +1,60 @@
+[package]
+name = "hanzo-pyo3"
+publish = false
+authors = ["Hanzo AI"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "hanzo"
+crate-type = ["cdylib"]
+doc = false
+
+[dependencies]
+pyo3.workspace = true
+hanzo-engine = { workspace = true, features = ["pyo3_macros"] }
+hanzo-llm-mcp = { workspace = true, features = ["pyo3_macros"] }
+serde.workspace = true
+serde_json.workspace = true
+hanzo-ml.workspace = true
+indexmap.workspace = true
+accelerate-src = { workspace = true, optional = true }
+intel-mkl-src = { workspace = true, optional = true }
+either.workspace = true
+futures.workspace = true
+tokio.workspace = true
+image.workspace = true
+reqwest.workspace = true
+base64.workspace = true
+url.workspace = true
+data-url.workspace = true
+anyhow.workspace = true
+itertools.workspace = true
+
+[build-dependencies]
+pyo3-build-config.workspace = true
+
+[features]
+default = []
+cuda = ["hanzo-ml/cuda", "hanzo-engine/cuda"]
+vulkan = ["hanzo-ml/vulkan", "hanzo-engine/vulkan"]
+rocm = ["hanzo-ml/rocm", "hanzo-engine/rocm"]
+cudnn = ["hanzo-ml/cudnn", "hanzo-engine/cudnn"]
+metal = ["hanzo-ml/metal", "hanzo-engine/metal"]
+flash-attn = ["cuda", "hanzo-engine/flash-attn"]
+accelerate = ["hanzo-engine/accelerate"]
+mkl = ["hanzo-engine/mkl"]
+nccl = ["hanzo-engine/nccl"]
+ring = ["hanzo-engine/ring"]
+code-execution = ["hanzo-engine/code-execution"]
+
+[package.metadata.maturin]
+include = ["hanzo.pyi", "py.typed"]
+sdist-include = ["hanzo.pyi", "py.typed"]
