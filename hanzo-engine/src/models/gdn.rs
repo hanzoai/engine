@@ -162,6 +162,10 @@ pub fn gated_delta_rule_recurrence(
     }
     #[cfg(feature = "metal")]
     if state.device().is_metal() {
+        // seq==1 decode: skip the flatten/unflatten transposes, step the fused kernel in place.
+        if q.dim(1)? == 1 && q.dim(0)? == 1 && state.dtype() == DType::F32 {
+            return recurrence_metal_step(q, k, v, g, beta, state);
+        }
         return recurrence_metal(q, k, v, g, beta, state);
     }
     // Native Vulkan single-step decode: state stays in VRAM across tokens, no per-token readback.
@@ -302,6 +306,33 @@ fn recurrence_metal(
         )?
     };
     recurrence_unflatten(&out_bh, &s, q, v, state)
+}
+
+/// Native Metal single decode step (seq==1, batch==1). Mirrors `recurrence_vulkan_step`: cheap
+/// reshapes (no transpose) into the [BH, ..] layout, applies the 1/sqrt(k_dim) q-scale, steps the
+/// fused kernel with the state updated in place, and reshapes y back to (1, 1, v_heads, v_dim).
+#[cfg(feature = "metal")]
+fn recurrence_metal_step(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state: &mut Tensor,
+) -> Result<Tensor> {
+    let (b, _s, nh, kd) = q.dims4()?;
+    let vd = v.dim(D::Minus1)?;
+    let bh = b * nh;
+    let scale = 1.0 / (kd as f64).sqrt();
+    let q = (q.reshape((bh, kd))?.to_dtype(DType::F32)? * scale)?.contiguous()?;
+    let k = k.reshape((bh, kd))?.to_dtype(DType::F32)?.contiguous()?;
+    let v = v.reshape((bh, vd))?.to_dtype(DType::F32)?.contiguous()?;
+    let g = g.reshape(bh)?.to_dtype(DType::F32)?.contiguous()?;
+    let beta = beta.reshape(bh)?.to_dtype(DType::F32)?.contiguous()?;
+    let mut s = state.reshape((bh, kd, vd))?.contiguous()?;
+    let y = crate::metal::gdn::gated_delta_rule_step_metal(&q, &k, &v, &g, &beta, &mut s)?;
+    *state = s.reshape((b, nh, kd, vd))?.to_dtype(state.dtype())?;
+    y.reshape((b, 1, nh, vd))
 }
 
 /// Portable f32 reference scan. Serves CPU, Vulkan, and any backend without a fused kernel.
