@@ -843,7 +843,11 @@ impl TryFrom<GgmlDType> for IsqType {
             GgmlDType::Q8_1 => Ok(Self::Q8_1),
             GgmlDType::Q8K => Ok(Self::Q8K),
             GgmlDType::MXFP4 => Ok(Self::MXFP4),
-            GgmlDType::BF16 | GgmlDType::F32 | GgmlDType::F16 => {
+            GgmlDType::IQ4_NL
+            | GgmlDType::IQ4_XS
+            | GgmlDType::BF16
+            | GgmlDType::F32
+            | GgmlDType::F16 => {
                 hanzo_ml::bail!("Expected valid GGML ISQ type.")
             }
         }
