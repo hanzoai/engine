@@ -7,3 +7,8 @@ pub use cuda::*;
 mod metal;
 #[cfg(feature = "metal")]
 pub use metal::*;
+
+#[cfg(feature = "vulkan")]
+mod vulkan;
+#[cfg(feature = "vulkan")]
+pub use vulkan::*;

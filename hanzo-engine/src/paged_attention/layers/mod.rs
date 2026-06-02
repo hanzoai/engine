@@ -1,9 +1,9 @@
-#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
+#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal", feature = "vulkan"))]
 pub mod paged_attention;
-#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
+#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal", feature = "vulkan"))]
 pub use paged_attention::PagedAttention;
 
-#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
+#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal", feature = "vulkan")))]
 pub mod paged_attention {
     use hanzo_ml::{Device, Result, Tensor};
 
@@ -58,5 +58,5 @@ pub mod paged_attention {
     }
 }
 
-#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
+#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal", feature = "vulkan")))]
 pub use paged_attention::PagedAttention;

@@ -127,7 +127,13 @@ cuda = [
     "hanzo-paged-attn/cuda",
 ]
 cudnn = ["hanzo-ml/cudnn"]
-vulkan = ["hanzo-ml/vulkan", "hanzo-nn/vulkan", "hanzo-quant/vulkan"]
+vulkan = [
+    "hanzo-ml/vulkan",
+    "hanzo-nn/vulkan",
+    "hanzo-quant/vulkan",
+    "dep:hanzo-paged-attn",
+    "hanzo-paged-attn/vulkan",
+]
 rocm = ["hanzo-ml/rocm", "hanzo-nn/rocm", "hanzo-quant/rocm"]
 metal = [
     "hanzo-ml/metal",
