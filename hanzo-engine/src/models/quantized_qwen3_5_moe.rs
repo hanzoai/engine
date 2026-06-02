@@ -854,8 +854,10 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     if conv1d_weight.rank() == 3 {
                         conv1d_weight = conv1d_weight.squeeze(1)?;
                     }
+                    // GGUF conversions name this `ssm_dt.bias` (Unsloth/llama.cpp) or `ssm_dt`; accept both.
                     let dt_bias = ct
-                        .tensor(&format!("{prefix}.ssm_dt"), dev)?
+                        .tensor(&format!("{prefix}.ssm_dt.bias"), dev)
+                        .or_else(|_| ct.tensor(&format!("{prefix}.ssm_dt"), dev))?
                         .dequantize(dev)?
                         .to_dtype(DType::F32)?;
                     let a = ct
