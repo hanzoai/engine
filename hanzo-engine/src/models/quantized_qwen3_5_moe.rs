@@ -369,14 +369,7 @@ impl QGatedDeltaNet {
         let q = l2_norm(&q, L2_NORM_EPS)?;
         let k = l2_norm(&k, L2_NORM_EPS)?;
 
-        // 7. Recurrent gated delta rule: fused CUDA kernel on GPU, portable path otherwise.
-        #[cfg(feature = "cuda")]
-        let y = if q.device().is_cuda() {
-            self.recurrence_cuda(&q, &k, &v, &g, &beta, batch_size, seq_len, cache)?
-        } else {
-            gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?
-        };
-        #[cfg(not(feature = "cuda"))]
+        // 7. Recurrent gated delta rule (dispatches to the fused per-backend kernel internally).
         let y = gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?;
         cache.seqlen_offset += seq_len;
 
@@ -389,74 +382,6 @@ impl QGatedDeltaNet {
         let y = y.reshape((batch_size, seq_len, self.value_dim))?;
 
         self.out_proj.forward(&y)?.to_dtype(orig_dtype)
-    }
-
-    #[cfg(feature = "cuda")]
-    #[allow(clippy::too_many_arguments)]
-    fn recurrence_cuda(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        v: &Tensor,
-        g: &Tensor,
-        beta: &Tensor,
-        batch_size: usize,
-        seq_len: usize,
-        cache: &mut GdnLayerCache,
-    ) -> Result<Tensor> {
-        let nh = self.num_v_heads;
-        let kd = self.head_k_dim;
-        let vd = self.head_v_dim;
-        let scale = 1.0 / (kd as f64).sqrt();
-        let q_bh = (q.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)? * scale)?
-            .reshape((batch_size * nh, seq_len, kd))?
-            .contiguous()?;
-        let k_bh = k
-            .transpose(1, 2)?
-            .contiguous()?
-            .to_dtype(DType::F32)?
-            .reshape((batch_size * nh, seq_len, kd))?
-            .contiguous()?;
-        let v_bh = v
-            .transpose(1, 2)?
-            .contiguous()?
-            .to_dtype(DType::F32)?
-            .reshape((batch_size * nh, seq_len, vd))?
-            .contiguous()?;
-        let g_bh = g
-            .to_dtype(DType::F32)?
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((batch_size * nh, seq_len))?
-            .contiguous()?;
-        let beta_bh = beta
-            .to_dtype(DType::F32)?
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((batch_size * nh, seq_len))?
-            .contiguous()?;
-        let mut state_flat = cache
-            .recurrent_state
-            .to_dtype(DType::F32)?
-            .reshape((batch_size * nh, kd, vd))?
-            .contiguous()?;
-        const CHUNK_THRESHOLD: usize = 64;
-        let out_bh = if seq_len >= CHUNK_THRESHOLD {
-            crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
-                &q_bh, &k_bh, &v_bh, &g_bh, &beta_bh, &mut state_flat,
-            )?
-        } else {
-            crate::cuda::gdn::gated_delta_rule_recurrence_cuda(
-                &q_bh, &k_bh, &v_bh, &g_bh, &beta_bh, &mut state_flat,
-            )?
-        };
-        cache.recurrent_state = state_flat
-            .reshape((batch_size, nh, kd, vd))?
-            .to_dtype(cache.recurrent_state.dtype())?;
-        out_bh
-            .reshape((batch_size, nh, seq_len, vd))?
-            .transpose(1, 2)?
-            .contiguous()
     }
 
     fn causal_conv1d_update(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
