@@ -368,6 +368,7 @@ impl QuantizedSerde for GgufMatMul {
                     GgmlDType::Q8K => 15,
                     // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
                     GgmlDType::BF16 => 30,
+                    GgmlDType::MXFP4 => 39,
                 };
 
                 let mut buffer = Vec::new();
