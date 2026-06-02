@@ -74,7 +74,7 @@ hanzo run --agent -m Qwen/Qwen3-4B
 hanzo serve -m google/gemma-4-E4B-it
 ```
 
-For the server command, visit `http://localhost:1234/ui` for the web chat interface.
+For the server command, visit `http://localhost:1234/ui` for the web chat interface. OpenAI-compatible clients use `http://localhost:1234/v1`; Anthropic-compatible clients use `http://localhost:1234`.
 
 ### The `hanzo` CLI
 
@@ -99,7 +99,7 @@ hanzo doctor
 [Full CLI documentation](https://hanzoai.github.io/engine/reference/cli/)
 
 <details open>
-  <summary><b>Web Chat Demo</b></summary>
+  <summary><b>UI Demo</b></summary>
   <br>
   <img src="https://raw.githubusercontent.com/hanzoai/engine/master/res/chat.gif" alt="Web Chat UI Demo" />
 </details>
