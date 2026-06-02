@@ -164,8 +164,9 @@ impl RecurrentStatePool {
     /// Scatter conv states back to the pool for the given slot indices
     pub fn scatter_conv_state(&mut self, state_indices: &Tensor, values: &Tensor) -> Result<()> {
         let indices: Vec<u32> = state_indices.to_vec1()?;
+        let dt = self.conv_state.dtype();
         for (batch_idx, &slot_idx) in indices.iter().enumerate() {
-            let value = values.i(batch_idx)?.unsqueeze(0)?.contiguous()?;
+            let value = values.i(batch_idx)?.unsqueeze(0)?.contiguous()?.to_dtype(dt)?;
             self.conv_state.slice_set(&value, 0, slot_idx as usize)?;
         }
         Ok(())
@@ -178,8 +179,9 @@ impl RecurrentStatePool {
         values: &Tensor,
     ) -> Result<()> {
         let indices: Vec<u32> = state_indices.to_vec1()?;
+        let dt = self.recurrent_state.dtype();
         for (batch_idx, &slot_idx) in indices.iter().enumerate() {
-            let value = values.i(batch_idx)?.unsqueeze(0)?.contiguous()?;
+            let value = values.i(batch_idx)?.unsqueeze(0)?.contiguous()?.to_dtype(dt)?;
             self.recurrent_state
                 .slice_set(&value, 0, slot_idx as usize)?;
         }
