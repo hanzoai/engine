@@ -10,7 +10,10 @@ use crate::distributed::{use_ring, WorkerTransferData};
 use crate::pipeline::{ChatTemplate, EmbeddingModulePaths, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::speech_models::{DiaConfig, DiaPipeline, SpeechGenerationOutput, SpeechLoaderType};
+use crate::speech_models::{
+    CodecConfig, DiaConfig, DiaPipeline, Qwen3TtsConfig, Qwen3TtsPipeline, SpeechGenerationOutput,
+    SpeechLoaderType,
+};
 use crate::utils::progress::ProgressScopeGuard;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
@@ -37,6 +40,7 @@ use tokio::sync::Mutex;
 pub struct SpeechModelPaths {
     weights: Vec<PathBuf>,
     config: PathBuf,
+    dac_config: Option<PathBuf>,
 }
 
 impl ModelPaths for SpeechModelPaths {
@@ -141,9 +145,34 @@ impl InputsProcessor for SpeechInputsProcessor {
     }
 }
 
+enum SpeechModel {
+    Dia(DiaPipeline),
+    Qwen3Tts(Qwen3TtsPipeline),
+}
+
+impl SpeechModel {
+    fn generate(
+        &self,
+        prompt: &str,
+        cfg: &SpeechGenerationConfig,
+    ) -> hanzo_ml::Result<SpeechGenerationOutput> {
+        match self {
+            Self::Dia(m) => m.generate(prompt, cfg),
+            Self::Qwen3Tts(m) => m.generate(prompt, cfg),
+        }
+    }
+
+    fn device(&self) -> &Device {
+        match self {
+            Self::Dia(m) => m.device(),
+            Self::Qwen3Tts(m) => m.device(),
+        }
+    }
+}
+
 pub struct SpeechPipeline {
     model_id: String,
-    model: DiaPipeline,
+    model: SpeechModel,
     metadata: Arc<GeneralMetadata>,
     dummy_cache: EitherCache,
     cfg: SpeechGenerationConfig,
@@ -208,6 +237,9 @@ impl Loader for SpeechLoader {
                     .clone()
                     .unwrap_or_else(|| match self.arch {
                         SpeechLoaderType::Dia => "hanzoai/dac_44khz".to_string(),
+                        SpeechLoaderType::Qwen3Tts => {
+                            "Qwen/Qwen3-TTS-Tokenizer-12Hz".to_string()
+                        }
                     });
 
                 let api = api.repo(Repo::with_revision(
@@ -219,9 +251,20 @@ impl Loader for SpeechLoader {
 
                 let weight = api_get_file!(api, "model.safetensors", &model_id, &revision);
                 weights.push(weight);
-            }
 
-            Ok(Box::new(SpeechModelPaths { weights, config }))
+                let dac_config = match self.arch {
+                    SpeechLoaderType::Qwen3Tts => {
+                        Some(api_get_file!(api, "config.json", &model_id, &revision))
+                    }
+                    SpeechLoaderType::Dia => None,
+                };
+
+                Ok(Box::new(SpeechModelPaths {
+                    weights,
+                    config,
+                    dac_config,
+                }))
+            }
         };
         self.load_model_from_path(
             &paths?,
@@ -258,7 +301,7 @@ impl Loader for SpeechLoader {
 
         hanzo_quant::set_immediate_isq(in_situ_quant, vec![Regex::new(".*")?]);
 
-        let cfg: DiaConfig = serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
+        let config_str = std::fs::read_to_string(&paths.config)?;
 
         #[cfg(feature = "cuda")]
         if let Device::Cuda(dev) = &device {
@@ -293,14 +336,39 @@ impl Loader for SpeechLoader {
             Arc::new(|_| DeviceForLoadTensor::Base),
         )?;
 
-        let dac_vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[paths.weights.last().unwrap()], dtype, device)?
+        let dac_path = paths.weights.last().unwrap();
+
+        let model = match self.arch {
+            SpeechLoaderType::Dia => {
+                let cfg: DiaConfig = serde_json::from_str(&config_str)?;
+                let dac_vb = unsafe {
+                    VarBuilder::from_mmaped_safetensors(&[dac_path], dtype, device)?
+                };
+                SpeechModel::Dia(DiaPipeline::new(&cfg, vb, dac_vb)?)
+            }
+            SpeechLoaderType::Qwen3Tts => {
+                let cfg: Qwen3TtsConfig = serde_json::from_str(&config_str)?;
+                let codec_config_str = std::fs::read_to_string(
+                    paths
+                        .dac_config
+                        .as_ref()
+                        .expect("Qwen3-TTS requires a codec config.json"),
+                )?;
+                let codec_cfg: CodecConfig = serde_json::from_str(&codec_config_str)?;
+                let codec_vb = from_mmaped_safetensors(
+                    vec![dac_path.clone()],
+                    Vec::new(),
+                    Some(dtype),
+                    device,
+                    vec![None],
+                    silent,
+                    None,
+                    |_| true,
+                    Arc::new(|_| DeviceForLoadTensor::Base),
+                )?;
+                SpeechModel::Qwen3Tts(Qwen3TtsPipeline::new(&cfg, &codec_cfg, vb, codec_vb)?)
+            }
         };
-
-        // Only Dia is supported for now.
-        assert_eq!(self.arch, SpeechLoaderType::Dia);
-
-        let model = DiaPipeline::new(&cfg, vb, dac_vb)?;
 
         Ok(Arc::new(Mutex::new(SpeechPipeline {
             model_id: self.model_id.clone(),
