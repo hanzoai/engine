@@ -44,7 +44,7 @@ pub use embedding_loaders::{
 
 pub use diffusion_loaders::{
     DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, DiffusionModelPaths,
-    DiffusionModelPathsInner, FluxLoader,
+    DiffusionModelPathsInner, FluxLoader, QwenImageLoader,
 };
 
 use crate::{
