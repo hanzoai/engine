@@ -49,6 +49,13 @@ pub fn qtensor_indexed_moe_forward(
 /// Output tensor [batch, topk, n]
 pub fn cpu_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
     match qmatmul {
+        // Metal keeps the [E,n,k] GGUF bank quantized in unified memory and runs a per-expert,
+        // router-gathered quant matvec straight out of it (QMetalStorage::indexed_moe_forward) -- no
+        // whole-bank dequant, which on Metal materializes the multi-GB f32 bank per token and OOMs.
+        // CPU has no resident-buffer win, so it stays on the dequantize-then-gather path.
+        QMatMul::QTensor(qtensor) if qtensor.device().is_metal() => {
+            qmatmul.indexed_moe_forward(x, ids)
+        }
         QMatMul::QTensor(qtensor) => qtensor_indexed_moe_forward(qtensor, x, ids),
         #[cfg(feature = "vulkan")]
         QMatMul::VulkanQuant { qtensor, .. } => qtensor_indexed_moe_forward(qtensor, x, ids),
