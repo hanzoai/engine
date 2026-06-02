@@ -1,0 +1,16 @@
+services:
+  engine:
+    image: ghcr.io/hanzoai/engine:latest
+    ports:
+      - "36900:36900"
+    volumes:
+      - ~/.cache/huggingface:/data
+    environment:
+      - RUST_LOG=info
+      - PORT=36900
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:36900/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3

@@ -20,7 +20,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "1.0.2"
+version = "0.6.1"
 edition = "2021"
 description = "Hanzo Engine - fast, flexible LLM inference engine written in Rust."
 homepage = "https://github.com/hanzoai/engine"
@@ -38,11 +38,11 @@ rust-version = "1.88"
 # hanzo-flash-attn = { version = "0.10.2" }
 # hanzo-metal-kernels = { version = "0.10.2" }
 # Use local hanzo-ml dependencies (Hanzo fork of hanzo-ml) — provides the vulkan/rocm GPU backends
-hanzo-ml = { path = "../ml/hanzo-ml", package = "hanzo-ml" }
-hanzo-nn = { path = "../ml/hanzo-nn", package = "hanzo-nn" }
-hanzo-flash-attn = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
-hanzo-flash-attn-v3 = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
-hanzo-metal-kernels = { path = "../ml/hanzo-metal-kernels", package = "hanzo-metal-kernels" }
+hanzo-ml = { path = "../ml/hanzo-ml", package = "hanzo-ml", version = "0.10.2" }
+hanzo-nn = { path = "../ml/hanzo-nn", package = "hanzo-nn", version = "0.10.2" }
+hanzo-flash-attn = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn", version = "0.10.2" }
+hanzo-flash-attn-v3 = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn", version = "0.10.2" }
+hanzo-metal-kernels = { path = "../ml/hanzo-metal-kernels", package = "hanzo-metal-kernels", version = "0.10.2" }
 # hanzo-ml = { path = "../hanzo-ml/hanzo-ml" }
 # hanzo-nn = { path = "../hanzo-ml/hanzo-nn" }
 # hanzo-flash-attn-v3 = { path = "../hanzo-ml/hanzo-flash-attn-v3" }
@@ -191,17 +191,17 @@ landlock = "0.4.4"
 nix = { version = "0.31.3", default-features = false }
 itoa = "1.0.18"
 
-hanzo-engine = { path = "hanzo-engine", version = "1.0.2" }
-hanzo-paged-attn = { path = "hanzo-paged-attn", version = "1.0.2" }
-hanzo-quant = { path = "hanzo-quant", version = "1.0.2" }
-hanzo-vision = { path = "hanzo-vision", version = "1.0.2" }
-hanzo-server-core = { path = "hanzo-server-core", version = "1.0.2" }
-hanzo = { path = "hanzo", version = "1.0.2" }
-hanzo-audio = { path = "hanzo-audio", version = "1.0.2" }
-hanzo-llm-mcp = { path = "hanzo-llm-mcp", version = "1.0.2" }
-hanzo-macros = { path = "hanzo-macros", version = "1.0.2" }
-hanzo-code-exec = { path = "hanzo-code-exec", version = "1.0.2" }
-hanzo-sandbox = { path = "hanzo-sandbox", version = "1.0.2" }
+hanzo-engine = { path = "hanzo-engine", version = "0.6.1" }
+hanzo-paged-attn = { path = "hanzo-paged-attn", version = "0.6.1" }
+hanzo-quant = { path = "hanzo-quant", version = "0.6.1" }
+hanzo-vision = { path = "hanzo-vision", version = "0.6.1" }
+hanzo-server-core = { path = "hanzo-server-core", version = "0.6.1" }
+hanzo = { path = "hanzo", version = "0.6.1" }
+hanzo-audio = { path = "hanzo-audio", version = "0.6.1" }
+hanzo-llm-mcp = { path = "hanzo-llm-mcp", version = "0.6.1" }
+hanzo-macros = { path = "hanzo-macros", version = "0.6.1" }
+hanzo-code-exec = { path = "hanzo-code-exec", version = "0.6.1" }
+hanzo-sandbox = { path = "hanzo-sandbox", version = "0.6.1" }
 
 [profile.release]
 lto = "fat"
@@ -215,8 +215,5 @@ debug = true
 strip = "none"
 
 [profile.dev]
-# opt-level 1 + line-tables: much faster compiles for CI/dev. opt-level 3 here meant
-# full optimization on EVERY test build (the single biggest unforced CI cost). Bump
-# locally if you need dev runtime speed.
-debug = "line-tables-only"
-opt-level = 1
+debug = true
+opt-level = 3
