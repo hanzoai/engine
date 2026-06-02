@@ -1725,20 +1725,25 @@ impl TextModel {
             // supported. PagedAttention still needs a non-None prompt mask
             // (CausalFlash is enough) to route prompt chunks through SDPA
             // before writing to the paged cache.
+            let is_first = metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true);
+            // #2183: a paged prefill *continuation* chunk (q_len > 1, not the
+            // first chunk) must keep a materialized custom mask on CPU instead
+            // of dropping to AttentionMask::None — otherwise the SWA corner
+            // chunking case computes the wrong attention.
+            let is_paged_prefill_chunk = metadata.is_some() && input_ids.dim(1)? > 1 && !is_first;
             let attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
                 mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig {
-                    force_custom: force_eager_full_attention,
+                    force_custom: force_eager_full_attention || is_paged_prefill_chunk,
                     ..Default::default()
                 },
             )?;
-            let is_first = metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true);
-            let attention_mask = if is_first {
+            let attention_mask = if is_first || is_paged_prefill_chunk {
                 attention_mask
             } else {
                 AttentionMask::None
@@ -1749,10 +1754,10 @@ impl TextModel {
                 xs.dtype(),
                 &CausalMaskConfig {
                     sliding_window: Some(self.sliding_window),
-                    ..Default::default()
+                    force_custom: is_paged_prefill_chunk,
                 },
             )?;
-            let sliding_attention_mask = if is_first {
+            let sliding_attention_mask = if is_first || is_paged_prefill_chunk {
                 sliding_attention_mask
             } else {
                 AttentionMask::None

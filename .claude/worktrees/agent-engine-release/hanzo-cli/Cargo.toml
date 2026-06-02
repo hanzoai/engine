@@ -1,0 +1,68 @@
+[package]
+name = "hanzo-cli"
+readme = "../README.md"
+authors = ["Hanzo AI"]
+version.workspace = true
+edition.workspace = true
+description = "Command-line interface for hanzo LLM inference"
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+rust-version.workspace = true
+default-run = "hanzo"
+
+[[bin]]
+name = "hanzo"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+hanzo-engine = { workspace = true }
+hanzo-server-core = { workspace = true }
+hanzo = { workspace = true }
+hanzo-sandbox = { workspace = true }
+hanzo-ml = { workspace = true }
+
+clap = { workspace = true }
+clap_complete = "4.5"
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+ctrlc = { workspace = true }
+rustyline = { workspace = true }
+directories = { workspace = true }
+axum = { workspace = true, features = ["multipart", "ws"] }
+either = { workspace = true }
+indexmap = { workspace = true }
+regex = { workspace = true }
+include_dir = { workspace = true }
+mime_guess = { workspace = true }
+tower-http = { workspace = true, features = ["fs"] }
+uuid = { workspace = true, features = ["v4"] }
+chrono = { workspace = true }
+futures-util = { workspace = true }
+image = { workspace = true }
+comfy-table = "7"
+dirs = { workspace = true }
+walkdir = { workspace = true }
+
+[features]
+default = ["code-execution"]
+cuda = ["hanzo-engine/cuda", "hanzo-server-core/cuda"]
+vulkan = ["hanzo-engine/vulkan", "hanzo-server-core/vulkan"]
+rocm = ["hanzo-engine/rocm", "hanzo-server-core/rocm"]
+nccl = ["hanzo-engine/nccl", "hanzo-server-core/nccl"]
+cudnn = ["hanzo-engine/cudnn", "hanzo-server-core/cudnn"]
+flash-attn = ["cuda", "hanzo-engine/flash-attn", "hanzo-server-core/flash-attn"]
+flash-attn-v3 = ["cuda", "hanzo-engine/flash-attn-v3", "hanzo-server-core/flash-attn-v3"]
+accelerate = ["hanzo-engine/accelerate", "hanzo-server-core/accelerate"]
+metal = ["hanzo-engine/metal", "hanzo-server-core/metal"]
+mkl = ["hanzo-engine/mkl", "hanzo-server-core/mkl"]
+ring = ["hanzo-engine/ring", "hanzo-server-core/ring"]
+code-execution = ["hanzo-engine/code-execution", "hanzo-server-core/code-execution"]
