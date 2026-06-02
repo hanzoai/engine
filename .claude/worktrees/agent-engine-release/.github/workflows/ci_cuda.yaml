@@ -1,0 +1,62 @@
+name: CI / cuda
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  test-cuda:
+    name: CI / cuda (${{ matrix.name }})
+
+    # For security, only run automatically for:
+    # - PRs from the same repo (not forks)
+    # - manual workflow dispatch
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
+
+    concurrency:
+      group: ${{ github.workflow }}-${{ matrix.name }}-${{ github.head_ref || github.run_id }}
+      cancel-in-progress: true
+
+    runs-on: [self-hosted, Linux, ARM64, gpu, cuda]
+
+    strategy:
+      matrix:
+        include:
+          - name: cuda
+            features: cuda,nccl
+          # - name: cuda+nccl
+          #   features: cuda,nccl
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl build-essential libssl-dev protobuf-compiler pkg-config
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Pin CUDA toolkit to 13.0
+        run: |
+          if [ ! -d /usr/local/cuda-13.0 ]; then
+            echo "::error::/usr/local/cuda-13.0 not found on runner"
+            exit 1
+          fi
+          echo "/usr/local/cuda-13.0/bin" >> $GITHUB_PATH
+          echo "CUDA_HOME=/usr/local/cuda-13.0" >> $GITHUB_ENV
+          echo "CUDA_PATH=/usr/local/cuda-13.0" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+
+      - name: CUDA sanity
+        run: |
+          nvidia-smi || true
+          nvcc --version || true
+
+      - name: Clippy
+        run: cargo clippy --features ${{ matrix.features }}
+
+      - name: Test
+        run: cargo test --features ${{ matrix.features }}
