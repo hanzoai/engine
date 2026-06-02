@@ -41,9 +41,18 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
             num_attn_heads: metadata[&format!("{arch}.attention.head_count")]
                 .to_u64()
                 .unwrap() as usize,
-            num_kv_heads: metadata[&format!("{arch}.attention.head_count_kv")]
-                .to_u64()
-                .unwrap() as usize,
+            num_kv_heads: {
+                // hybrid archs (qwen35moe) store per-layer head_count_kv as an array; take the max
+                let v = &metadata[&format!("{arch}.attention.head_count_kv")];
+                v.to_u64().map(|n| n as usize).unwrap_or_else(|_| {
+                    v.to_vec()
+                        .unwrap()
+                        .iter()
+                        .filter_map(|x| x.to_u64().ok())
+                        .max()
+                        .unwrap_or(0) as usize
+                })
+            },
             num_layers: metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize,
             key_length: metadata
                 .get(&format!("{arch}.attention.key_length"))
@@ -330,6 +339,22 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                 token_embd + output_norm + output
             }
             GGUFArchitecture::Qwen2 | GGUFArchitecture::Qwen3 | GGUFArchitecture::Qwen3MoE => {
+                let token_embd = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("token_embd.weight")?,
+                    DType::F32
+                );
+                let output_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("output_norm.weight")?,
+                    DType::F32
+                );
+                let output = if !self.model.has_tensor("output.weight") {
+                    tensor_info_size_in_bytes!(self.model.tensor_info("token_embd.weight")?)
+                } else {
+                    tensor_info_size_in_bytes!(self.model.tensor_info("output.weight")?)
+                };
+                token_embd + output_norm + output
+            }
+            GGUFArchitecture::Qwen35 | GGUFArchitecture::Qwen35MoE => {
                 let token_embd = tensor_info_size_in_bytes!(
                     self.model.tensor_info("token_embd.weight")?,
                     DType::F32
@@ -643,6 +668,17 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                     + ffn_up
                     + ffn_down
                     + ffn_gate
+            }
+
+            GGUFArchitecture::Qwen35 | GGUFArchitecture::Qwen35MoE => {
+                // Hybrid (GDN + full-attention) layers have very different per-layer sizes, so a
+                // uniform estimate would mis-balance an auto device map. Require explicit mapping
+                // (single device or a topology) for these architectures.
+                anyhow::bail!(
+                    "Automatic device mapping is not supported for qwen35/qwen35moe GGUF (hybrid \
+                     GDN+attention layers have non-uniform sizes). Run on a single device or pass \
+                     an explicit device map / topology."
+                );
             }
 
             _ => unimplemented!(),
