@@ -1,0 +1,37 @@
+[package]
+name = "hanzo-bench"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow.workspace = true
+hanzo-ml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+hanzo-engine.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+cli-table.workspace = true
+
+[features]
+cuda = ["hanzo-engine/cuda"]
+vulkan = ["hanzo-engine/vulkan"]
+rocm = ["hanzo-engine/rocm"]
+cudnn = ["hanzo-engine/cudnn"]
+metal = ["hanzo-engine/metal"]
+flash-attn = ["cuda", "hanzo-engine/flash-attn"]
+accelerate = ["hanzo-engine/accelerate"]
+mkl = ["hanzo-engine/mkl"]
+nccl = ["hanzo-engine/nccl"]
+ring = ["hanzo-engine/ring"]
