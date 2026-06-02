@@ -5,7 +5,9 @@ use std::sync::Arc;
 use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
-use crate::layers::{CausalMaskConfig, CausalMasker, MatMul, RmsNorm, Sdpa};
+use crate::layers::{
+    apply_rotary_positions_q, CausalMaskConfig, CausalMasker, MatMul, RmsNorm, Sdpa,
+};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -113,8 +115,15 @@ impl LayerWeights {
             (q, k, v)
         };
 
-        let q = self.apply_rotary_emb(&q, seqlen_offsets)?;
-        let k = self.apply_rotary_emb(&k, seqlen_offsets)?;
+        let positions = seqlen_offsets
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(candle_core::Error::wrap)?;
+        let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
+        let q = self.apply_rotary_emb_positions(&q, &positions)?;
+        let k = self.apply_rotary_emb_positions(&k, &positions)?;
         let y = match &self.paged_attn {
             Some(paged_attn) => {
                 let ((key_cache, value_cache), input_metadata) = metadata.unwrap();

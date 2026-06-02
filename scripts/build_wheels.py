@@ -43,6 +43,8 @@ PACKAGE_NAMES = [
     "hanzo-mkl",
 ]
 
+TRUTHY = {"1", "true", "yes", "on"}
+
 
 class OS(Enum):
     LINUX = "linux"
@@ -132,6 +134,86 @@ def _detect_cuda() -> bool:
         os.environ.get("CUDA_PATH", ""),
     ]
     return any(Path(p).exists() for p in cuda_paths if p)
+
+
+def _cuda_version() -> Optional[tuple[int, int]]:
+    """Detect the CUDA toolkit (major, minor) from nvcc, if available."""
+    nvcc = shutil.which("nvcc")
+    if not nvcc:
+        for home in (os.environ.get("CUDA_HOME"), os.environ.get("CUDA_PATH"), "/usr/local/cuda"):
+            cand = Path(home) / "bin" / "nvcc" if home else None
+            if cand and cand.exists():
+                nvcc = str(cand)
+                break
+    if not nvcc:
+        return None
+    try:
+        out = subprocess.run([nvcc, "--version"], capture_output=True, text=True, timeout=5)
+        m = re.search(r"release (\d+)\.(\d+)", out.stdout)
+        if m:
+            return (int(m.group(1)), int(m.group(2)))
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        pass
+    return None
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").lower() in TRUTHY
+
+
+def _detect_nccl() -> bool:
+    if platform.system().lower() != "linux":
+        return False
+
+    for home in (
+        os.environ.get("NCCL_ROOT"),
+        os.environ.get("NCCL_HOME"),
+        os.environ.get("CUDA_HOME"),
+        os.environ.get("CUDA_PATH"),
+        "/usr/local/cuda",
+    ):
+        if not home:
+            continue
+        root = Path(home)
+        for subdir in ("lib", "lib64", "lib/x86_64-linux-gnu"):
+            if any((root / subdir).glob("libnccl.so*")):
+                return True
+
+    for libdir in (
+        "/usr/lib/x86_64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu",
+        "/usr/local/lib",
+        "/usr/local/lib64",
+        "/usr/lib64",
+    ):
+        if any(Path(libdir).glob("libnccl.so*")):
+            return True
+
+    if shutil.which("ldconfig"):
+        try:
+            result = subprocess.run(
+                ["ldconfig", "-p"], capture_output=True, text=True, timeout=5
+            )
+            return result.returncode == 0 and "libnccl.so" in result.stdout
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
+            pass
+
+    return False
+
+
+def _cuda_features() -> list[str]:
+    """Features for the CUDA wheel; NCCL is enabled by default when available."""
+    features = ["cuda"]
+    if (
+        platform.system().lower() == "linux"
+        and not _env_truthy("MISTRALRS_BUILD_NO_NCCL")
+        and (_detect_nccl() or _env_truthy("MISTRALRS_BUILD_NCCL"))
+    ):
+        features.append("nccl")
+    version = _cuda_version()
+    if version is not None and version >= (13, 1):
+        features.append("cutile")
+    return features
 
 
 # ============================================================================
