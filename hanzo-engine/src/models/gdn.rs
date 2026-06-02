@@ -1037,4 +1037,93 @@ mod tests {
         }
         Ok(())
     }
+
+    // Tiny prefill (seq>1) reproduction of the recurrence shape contract on a given device. Built so a
+    // human can repro the qwen35moe Vulkan `unexpected rank, expected: 2, got: 1 ([2048])` prompt-step
+    // crash in seconds instead of loading a 22GB GGUF. Inputs are constructed on CPU (deterministic,
+    // identical per device) then moved to `dev`, so the CPU and Vulkan runs are bit-for-bit comparable.
+    fn run_gdn_recurrence_shapes(dev: &Device) -> Result<()> {
+        let (batch, nvh, hkd, hvd, seq) = (1usize, 4usize, 8usize, 4usize, 3usize);
+
+        let gen = |n: usize, seed: usize| -> Vec<f32> {
+            (0..n)
+                .map(|i| (((i * 1103515245 + seed * 12345 + 7) % 2000) as f32 / 1000.0) - 1.0)
+                .collect()
+        };
+        let on = |v: Vec<f32>, shape: (usize, usize, usize, usize)| -> Result<Tensor> {
+            Tensor::from_vec(v, shape, &Device::Cpu)?.to_device(dev)
+        };
+        let on3 = |v: Vec<f32>, shape: (usize, usize, usize)| -> Result<Tensor> {
+            Tensor::from_vec(v, shape, &Device::Cpu)?.to_device(dev)
+        };
+
+        let q = on(gen(batch * seq * nvh * hkd, 1), (batch, seq, nvh, hkd))?;
+        let k = on(gen(batch * seq * nvh * hkd, 2), (batch, seq, nvh, hkd))?;
+        let v = on(gen(batch * seq * nvh * hvd, 3), (batch, seq, nvh, hvd))?;
+        let g = on3(
+            gen(batch * seq * nvh, 4).iter().map(|x| x * 0.5 - 0.5).collect(),
+            (batch, seq, nvh),
+        )?;
+        let beta = on3(
+            gen(batch * seq * nvh, 5).iter().map(|x| (x + 1.0) * 0.5).collect(),
+            (batch, seq, nvh),
+        )?;
+        let mut state =
+            Tensor::from_vec(gen(batch * nvh * hkd * hvd, 6), (batch, nvh, hkd, hvd), &Device::Cpu)?
+                .to_device(dev)?;
+        let state_shape_before = state.dims().to_vec();
+
+        let y = gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut state)?;
+
+        assert_eq!(
+            y.dims(),
+            &[batch, seq, nvh, hvd],
+            "recurrence output rank/shape wrong on {dev:?}"
+        );
+        assert_eq!(
+            state.dims(),
+            state_shape_before.as_slice(),
+            "recurrence mutated state shape on {dev:?}"
+        );
+        // Mirror the qwen35moe post-recurrence reshape (model step 8): collapse to (tokens, head_v_dim)
+        // then read the rank. This is where the GGUF forward consumes the output, so it catches a
+        // collapsed/extra dim escaping the recurrence as well as a bug inside it.
+        let y2 = y.reshape(((), hvd))?;
+        assert_eq!(y2.dims().len(), 2, "post-recurrence reshape lost a dim on {dev:?}");
+        assert_eq!(y2.dims(), &[batch * seq * nvh, hvd], "post-recurrence shape wrong on {dev:?}");
+
+        // Force a readback so any deferred Vulkan dispatch actually executes (lazy backends can defer
+        // the bad op until the buffer is read); also pins that the result is finite.
+        let host = y.flatten_all()?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+        assert_eq!(host.len(), batch * seq * nvh * hvd);
+        assert!(host.iter().all(|x| x.is_finite()), "non-finite recurrence output on {dev:?}");
+        Ok(())
+    }
+
+    // CPU twin: must always pass. Directly comparable to the Vulkan test below.
+    #[test]
+    fn gdn_recurrence_cpu_shapes() -> Result<()> {
+        run_gdn_recurrence_shapes(&Device::Cpu)
+    }
+
+    // Fast Vulkan reproduction of the qwen35moe prompt-step recurrence shape crash. Skips cleanly with
+    // no GPU. Run on a Vulkan box with:
+    //   cargo test --features vulkan -p hanzo-engine gdn_recurrence_vulkan_shapes -- --nocapture --include-ignored
+    #[test]
+    #[cfg_attr(not(feature = "vulkan"), ignore = "requires vulkan feature")]
+    fn gdn_recurrence_vulkan_shapes() -> Result<()> {
+        #[cfg(feature = "vulkan")]
+        {
+            let Ok(dev) = Device::new_vulkan(0) else {
+                eprintln!("skip: no vulkan device");
+                return Ok(());
+            };
+            return run_gdn_recurrence_shapes(&dev);
+        }
+        #[cfg(not(feature = "vulkan"))]
+        {
+            eprintln!("skip: built without the vulkan feature");
+            Ok(())
+        }
+    }
 }
