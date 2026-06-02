@@ -365,9 +365,15 @@ impl QGatedDeltaNet {
         let q = l2_norm(&q, L2_NORM_EPS)?;
         let k = l2_norm(&k, L2_NORM_EPS)?;
 
-        // 7. Recurrent gated delta rule (CPU/portable path; CUDA/Metal fused kernels live in gdn.rs
-        //    on the GatedDeltaNet struct and are not reused here for the quantized loader).
-        let y = gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?;
+        // 7. Recurrent gated delta rule. Decode (seq_len==1) on a Vulkan device runs the native
+        //    single-step kernel, keeping the recurrent state in VRAM across tokens; prefill (seq>1)
+        //    stays on the portable CPU/Tensor scan. CUDA/Metal fused kernels live in gdn.rs on the
+        //    GatedDeltaNet struct and are not reused here for the quantized loader.
+        let y = if seq_len == 1 && q.device().is_vulkan() && cache.recurrent_state.dtype() == DType::F32 {
+            self.recurrence_vulkan_step(&q, &k, &v, &g, &beta, batch_size, cache)?
+        } else {
+            gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?
+        };
         cache.seqlen_offset += seq_len;
 
         // 8. Gated RMSNorm with z, then output projection.
@@ -381,8 +387,48 @@ impl QGatedDeltaNet {
         self.out_proj.forward(&y)
     }
 
+    // Single decode step (seq_len==1) of the gated delta rule on Vulkan. q,k,v,g,beta arrive shaped
+    // (1, 1, num_v_heads, ..) / (1, 1, num_v_heads); the recurrent state is (1, num_v_heads, head_k_dim,
+    // head_v_dim) and is updated in place in VRAM (it aliases the pool buffer, so no readback per token).
+    // Applies the 1/sqrt(head_k_dim) q-scale that gated_delta_rule_recurrence does internally, then
+    // returns y shaped (1, 1, num_v_heads, head_v_dim). batch_size is asserted to 1 by the caller's
+    // seq_len==1 decode contract (the recurrent pool gathers one state row per active sequence).
+    #[allow(clippy::too_many_arguments)]
+    fn recurrence_vulkan_step(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        g: &Tensor,
+        beta: &Tensor,
+        batch_size: usize,
+        cache: &mut GdnLayerCache,
+    ) -> Result<Tensor> {
+        let bh = batch_size * self.num_v_heads;
+        let scale = 1.0 / (self.head_k_dim as f64).sqrt();
+
+        let q = (q.reshape((bh, self.head_k_dim))?.to_dtype(DType::F32)? * scale)?.contiguous()?;
+        let k = k.reshape((bh, self.head_k_dim))?.to_dtype(DType::F32)?.contiguous()?;
+        let v = v.reshape((bh, self.head_v_dim))?.to_dtype(DType::F32)?.contiguous()?;
+        let g = g.reshape(bh)?.to_dtype(DType::F32)?.contiguous()?;
+        let beta = beta.reshape(bh)?.to_dtype(DType::F32)?.contiguous()?;
+
+        let mut state = cache
+            .recurrent_state
+            .reshape((bh, self.head_k_dim, self.head_v_dim))?;
+        let y = crate::vulkan::gdn::gdn_step_vulkan(&q, &k, &v, &g, &beta, &mut state)?;
+        cache.recurrent_state = state.reshape((batch_size, self.num_v_heads, self.head_k_dim, self.head_v_dim))?;
+
+        y.reshape((batch_size, 1, self.num_v_heads, self.head_v_dim))
+    }
+
     fn causal_conv1d_update(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (_batch, seq_len, _conv_dim) = x.dims3()?;
+
+        if seq_len == 1 && x.device().is_vulkan() && cache.conv_state.dtype() == DType::F32 {
+            return self.causal_conv1d_update_vulkan(x, cache);
+        }
+
         let x_t = x.transpose(1, 2)?.contiguous()?;
 
         let state_len = cache.conv_state.dim(2)?;
@@ -401,6 +447,23 @@ impl QGatedDeltaNet {
         let out = Tensor::stack(&conv_outputs, 2)?;
         let out = hanzo_nn::ops::silu(&out)?;
         out.transpose(1, 2)
+    }
+
+    // Single decode step (seq_len==1, batch==1) of the causal conv1d on Vulkan. conv_state is
+    // (1, conv_dim, k) -- it stores k columns; the step drops the oldest and appends x, exactly as
+    // the CPU causal_conv1d_update does. conv_state is updated in place in VRAM (aliases the pool
+    // buffer); x is (1, 1, conv_dim). Returns silu(conv) as (1, 1, conv_dim). The GGUF conv1d_weight
+    // is (conv_dim, k) with no bias.
+    fn causal_conv1d_update_vulkan(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
+        let conv_dim = self.conv1d_weight.dim(0)?;
+        let x_flat = x.reshape(conv_dim)?.to_dtype(DType::F32)?.contiguous()?;
+        let weight = self.conv1d_weight.to_dtype(DType::F32)?.contiguous()?;
+        let mut conv_state = cache
+            .conv_state
+            .reshape((conv_dim, self.conv_kernel_size))?;
+        let out = crate::vulkan::gdn::gdn_conv1d_step_vulkan(&mut conv_state, &x_flat, &weight)?;
+        cache.conv_state = conv_state.reshape((1, conv_dim, self.conv_kernel_size))?;
+        out.reshape((1, 1, conv_dim))
     }
 
     fn causal_conv1d_full(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
