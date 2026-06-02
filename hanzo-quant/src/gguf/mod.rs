@@ -469,8 +469,10 @@ impl QuantizedSerde for GgufMatMul {
         };
 
         let w = qtensor_from_ggml(dtype, &tensor_data, dims, device)?;
+        // `from_arc` keeps Q8_0 weights quantized in VRAM on Vulkan (native Q8 decode matvec);
+        // on every other backend it is identical to `QMatMul::QTensor` for a quantized weight.
         Ok(Arc::new(Self {
-            w: QMatMul::QTensor(w.into()),
+            w: QMatMul::from_arc(w.into())?,
             b,
         }))
     }
@@ -541,7 +543,7 @@ impl QuantizedSerde for GgufMatMul {
         let w = qtensor_from_ggml(dtype, &tensor_data, dims, device)?;
         Ok((
             Arc::new(Self {
-                w: QMatMul::QTensor(w.into()),
+                w: QMatMul::from_arc(w.into())?,
                 b: None,
             }),
             b,
