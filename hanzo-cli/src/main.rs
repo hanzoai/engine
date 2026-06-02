@@ -25,14 +25,14 @@ use commands::{
 const HANZO_LOG_TARGETS: &[&str] = &[
     "hanzo",
     "hanzo_audio",
-    "hanzo_code_exec",
+    "hanzo_exec",
     "hanzo_engine",
-    "hanzo_llm_mcp",
+    "hanzo_mcp",
     "hanzo_paged_attn",
     "hanzo_quant",
     "hanzo_sandbox",
     "hanzo_server",
-    "hanzo_server_core",
+    "hanzo_http",
     "hanzo_vision",
 ];
 

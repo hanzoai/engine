@@ -194,12 +194,12 @@ print(res.usage)
 
 You can find this example [here](https://github.com/hanzoai/engine/blob/master/hanzo/examples/models/multimodal_models/main.rs).
 
-This is a minimal example of running the Gemma 4 model with a video input. Video decoding uses the `parse_video_url` helper from `hanzo-server-core`, which handles FFmpeg decoding and frame sampling automatically.
+This is a minimal example of running the Gemma 4 model with a video input. Video decoding uses the `parse_video_url` helper from `hanzo-http`, which handles FFmpeg decoding and frame sampling automatically.
 
 ```rust
 use anyhow::Result;
 use hanzo::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
-use hanzo_server_core::video::parse_video_url;
+use hanzo_http::video::parse_video_url;
 
 #[tokio::main]
 async fn main() -> Result<()> {

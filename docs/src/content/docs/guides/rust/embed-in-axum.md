@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-To add hanzo to an existing Axum app, mount the hanzo router under a sub-path. The pattern uses two builders from `hanzo-server-core`:
+To add hanzo to an existing Axum app, mount the hanzo router under a sub-path. The pattern uses two builders from `hanzo-http`:
 
 - `HanzoForServerBuilder` constructs the engine state (`SharedHanzoState = Arc<Hanzo>`).
 - `HanzoServerRouterBuilder` produces an Axum `Router` from that state.
@@ -16,7 +16,7 @@ To add hanzo to an existing Axum app, mount the hanzo router under a sub-path. T
 [dependencies]
 hanzo = "0.8"
 hanzo-engine = "0.8"
-hanzo-server-core = "0.8"
+hanzo-http = "0.8"
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 ```
@@ -26,7 +26,7 @@ tokio = { version = "1", features = ["full"] }
 ```rust
 use axum::{Router, routing::get};
 use hanzo_engine::{AutoDeviceMapParams, ModelDType, ModelSelected};
-use hanzo_server_core::{
+use hanzo_http::{
     hanzo_for_server_builder::HanzoForServerBuilder,
     hanzo_server_router_builder::HanzoServerRouterBuilder,
 };
@@ -89,6 +89,6 @@ async fn main() -> anyhow::Result<()> {
 
 ## Calling the model directly from a handler
 
-For custom request shapes, share the `SharedHanzoState` directly with Axum handlers and use the lower-level helpers exposed by `hanzo-server-core`.
+For custom request shapes, share the `SharedHanzoState` directly with Axum handlers and use the lower-level helpers exposed by `hanzo-http`.
 
-A complete example (with custom OpenAPI integration) is in the `hanzo-server-core` crate-level documentation.
+A complete example (with custom OpenAPI integration) is in the `hanzo-http` crate-level documentation.

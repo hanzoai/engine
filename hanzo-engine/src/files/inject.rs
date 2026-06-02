@@ -1,6 +1,6 @@
 //! Helpers for surfacing `File`s to the model and adding the required-files contract to the code-exec tool.
 
-use hanzo_llm_mcp::ToolFile;
+use hanzo_mcp::ToolFile;
 use serde_json::Value;
 
 use crate::tools::ToolCallResponse;

@@ -104,13 +104,13 @@ pub use device_map::{
 };
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 pub use hanzo_audio::AudioInput;
-pub use hanzo_llm_mcp::{
+pub use hanzo_mcp::{
     AgentPermission, AgentToolApprovalNotifier, AgentToolApprovalRequest, AgentToolKind,
     AgentToolMetadata, AgentToolSource, CalledFunction, CodeExecutionApprovalNotifier,
     CodeExecutionApprovalRequest, CodeExecutionPermission, Function, MultimodalToolCallback, Tool,
     ToolCallContext, ToolCallback, ToolCallbackKind, ToolCallbackWithTool, ToolOutput, ToolType,
 };
-pub use hanzo_llm_mcp::{
+pub use hanzo_mcp::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
 pub use hanzo_quant::{IsqBits, IsqType, MULTI_LORA_DELIMITER};
@@ -909,7 +909,7 @@ impl Hanzo {
         if let Some(code_exec_cfg) = code_exec_config {
             let approval_callback = code_exec_cfg.approval_callback.as_ref().map(|callback| {
                 let callback = Arc::clone(callback);
-                Arc::new(move |approval: &hanzo_code_exec::CodeExecutionApproval| {
+                Arc::new(move |approval: &hanzo_exec::CodeExecutionApproval| {
                     let approval = CodeExecutionApproval {
                         approval_id: approval.approval_id.clone(),
                         session_id: approval.session_id.clone(),
@@ -918,23 +918,23 @@ impl Hanzo {
                         working_directory: approval.working_directory.clone(),
                     };
                     callback(&approval)
-                }) as Arc<hanzo_code_exec::CodeExecutionApprovalCallback>
+                }) as Arc<hanzo_exec::CodeExecutionApprovalCallback>
             });
-            let exec_config = hanzo_code_exec::CodeExecutionConfig {
+            let exec_config = hanzo_exec::CodeExecutionConfig {
                 python_path: code_exec_cfg.python_path.clone(),
                 timeout_secs: code_exec_cfg.timeout_secs,
                 working_directory: code_exec_cfg.working_directory.clone(),
                 sandbox_policy: code_exec_cfg.sandbox_policy.clone(),
                 permission: match code_exec_cfg.permission {
-                    CodeExecutionPermission::Auto => hanzo_code_exec::CodeExecutionPermission::Auto,
-                    CodeExecutionPermission::Ask => hanzo_code_exec::CodeExecutionPermission::Ask,
-                    CodeExecutionPermission::Deny => hanzo_code_exec::CodeExecutionPermission::Deny,
+                    CodeExecutionPermission::Auto => hanzo_exec::CodeExecutionPermission::Auto,
+                    CodeExecutionPermission::Ask => hanzo_exec::CodeExecutionPermission::Ask,
+                    CodeExecutionPermission::Deny => hanzo_exec::CodeExecutionPermission::Deny,
                 },
                 approval_callback,
             };
-            match hanzo_code_exec::CodeExecutionManager::new(exec_config).await {
+            match hanzo_exec::CodeExecutionManager::new(exec_config).await {
                 Ok(manager) => {
-                    let input_modalities: Vec<hanzo_code_exec::InputModality> = {
+                    let input_modalities: Vec<hanzo_exec::InputModality> = {
                         let pipe = get_mut_arcmutex!(pipeline);
                         pipe.get_metadata()
                             .modalities
@@ -942,16 +942,16 @@ impl Hanzo {
                             .iter()
                             .filter_map(|m| match m {
                                 pipeline::SupportedModality::Text => {
-                                    Some(hanzo_code_exec::InputModality::Text)
+                                    Some(hanzo_exec::InputModality::Text)
                                 }
                                 pipeline::SupportedModality::Vision => {
-                                    Some(hanzo_code_exec::InputModality::Vision)
+                                    Some(hanzo_exec::InputModality::Vision)
                                 }
                                 pipeline::SupportedModality::Audio => {
-                                    Some(hanzo_code_exec::InputModality::Audio)
+                                    Some(hanzo_exec::InputModality::Audio)
                                 }
                                 pipeline::SupportedModality::Video => {
-                                    Some(hanzo_code_exec::InputModality::Video)
+                                    Some(hanzo_exec::InputModality::Video)
                                 }
                                 _ => None,
                             })
@@ -1925,7 +1925,7 @@ impl Hanzo {
                 !search::search_tool_called(name) && {
                     #[cfg(feature = "code-execution")]
                     {
-                        !hanzo_code_exec::code_exec_tool_called(name)
+                        !hanzo_exec::code_exec_tool_called(name)
                     }
                     #[cfg(not(feature = "code-execution"))]
                     {

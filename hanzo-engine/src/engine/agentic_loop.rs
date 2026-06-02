@@ -241,7 +241,7 @@ use super::tool_dispatch;
 
 #[cfg(feature = "code-execution")]
 fn is_code_exec_tool(name: &str) -> bool {
-    hanzo_code_exec::code_exec_tool_called(name)
+    hanzo_exec::code_exec_tool_called(name)
 }
 #[cfg(not(feature = "code-execution"))]
 fn is_code_exec_tool(_name: &str) -> bool {
@@ -250,7 +250,7 @@ fn is_code_exec_tool(_name: &str) -> bool {
 
 #[cfg(feature = "code-execution")]
 fn is_read_file_tool(name: &str) -> bool {
-    name == hanzo_code_exec::READ_FILE_TOOL_NAME
+    name == hanzo_exec::READ_FILE_TOOL_NAME
 }
 #[cfg(not(feature = "code-execution"))]
 fn is_read_file_tool(_name: &str) -> bool {
@@ -259,7 +259,7 @@ fn is_read_file_tool(_name: &str) -> bool {
 
 #[cfg(feature = "code-execution")]
 fn is_list_files_tool(name: &str) -> bool {
-    name == hanzo_code_exec::LIST_FILES_TOOL_NAME
+    name == hanzo_exec::LIST_FILES_TOOL_NAME
 }
 #[cfg(not(feature = "code-execution"))]
 fn is_list_files_tool(_name: &str) -> bool {
@@ -420,7 +420,7 @@ async fn approve_agent_tool(
                 arguments: tool_arguments(tc),
             };
             if let Some(notifier) = &ctx.tool_call_ctx.agent_approval_notifier {
-                notifier(hanzo_llm_mcp::AgentToolApprovalRequest {
+                notifier(hanzo_mcp::AgentToolApprovalRequest {
                     approval_id: approval.approval_id.clone(),
                     session_id: approval.session_id.clone(),
                     round: approval.round,
@@ -486,7 +486,7 @@ struct DispatchCtx<'a> {
     dispatch_url: Option<&'a str>,
     supports_vision: bool,
     supports_video: bool,
-    tool_call_ctx: &'a hanzo_llm_mcp::ToolCallContext,
+    tool_call_ctx: &'a hanzo_mcp::ToolCallContext,
     run_id: &'a str,
     turn: usize,
     session_id: &'a str,
@@ -871,7 +871,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
 
     let this_clone = this.clone();
     let handle = tokio::spawn(async move {
-        let tool_call_ctx = hanzo_llm_mcp::ToolCallContext {
+        let tool_call_ctx = hanzo_mcp::ToolCallContext {
             session_id: Some(session_id.clone()),
             round: None,
             tool_name: None,

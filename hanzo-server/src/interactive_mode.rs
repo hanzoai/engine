@@ -20,8 +20,8 @@ use std::{
 use tokio::sync::mpsc::channel;
 use tracing::{error, info};
 
-use hanzo_server_core::util;
-use hanzo_server_core::video::parse_video_url;
+use hanzo_http::util;
+use hanzo_http::video::parse_video_url;
 
 fn exit_handler() {
     std::process::exit(0);

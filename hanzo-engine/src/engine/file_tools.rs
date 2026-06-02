@@ -1,4 +1,4 @@
-//! Engine-side dispatch for the `read_file` / `list_files` tools. Schemas live in `hanzo-code-exec`.
+//! Engine-side dispatch for the `read_file` / `list_files` tools. Schemas live in `hanzo-exec`.
 
 use serde_json::Value;
 

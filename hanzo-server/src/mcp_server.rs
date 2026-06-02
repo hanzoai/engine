@@ -7,7 +7,7 @@ use std::io;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
-use hanzo_server_core::{
+use hanzo_http::{
     chat_completion::parse_request, handler_core::create_response_channel, types::SharedHanzoState,
 };
 
@@ -159,7 +159,7 @@ impl McpTool for ChatTool {
         state: &SharedHanzoState,
     ) -> std::result::Result<CallToolResult, CallToolError> {
         // Translate to the internal ChatCompletionRequest.
-        let chat_req: hanzo_server_core::openai::ChatCompletionRequest =
+        let chat_req: hanzo_http::openai::ChatCompletionRequest =
             serde_json::from_value(args).map_err(CallToolError::new)?;
 
         // Execute the request using existing helper utilities.
@@ -168,7 +168,7 @@ impl McpTool for ChatTool {
             .await
             .map_err(|e| CallToolError::new(io::Error::other(e.to_string())))?;
 
-        hanzo_server_core::handler_core::send_request(state, request)
+        hanzo_http::handler_core::send_request(state, request)
             .await
             .map_err(|e| CallToolError::new(io::Error::other(e.to_string())))?;
 

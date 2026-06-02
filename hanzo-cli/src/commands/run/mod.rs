@@ -9,7 +9,7 @@ use anyhow::Result;
 use tracing::info;
 
 use hanzo_engine::initialize_logging;
-use hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder;
+use hanzo_http::hanzo_for_server_builder::HanzoForServerBuilder;
 
 #[cfg(feature = "code-execution")]
 use super::serve::build_code_exec_config;

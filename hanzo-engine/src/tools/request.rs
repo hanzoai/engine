@@ -1,4 +1,4 @@
-use hanzo_llm_mcp::Tool;
+use hanzo_mcp::Tool;
 
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]

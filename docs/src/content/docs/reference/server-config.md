@@ -55,7 +55,7 @@ For the full TOML schema, see the [CLI TOML config reference](/hanzo/reference/c
 
 ## Not exposed via CLI
 
-CORS allowed origins and the request body limit (default 50 MB) are configurable only programmatically through `HanzoServerRouterBuilder` in `hanzo-server-core`.
+CORS allowed origins and the request body limit (default 50 MB) are configurable only programmatically through `HanzoServerRouterBuilder` in `hanzo-http`.
 
 ## Environment variables
 

@@ -11,10 +11,10 @@ hanzo uses Cargo features to gate platform-specific and optional functionality.
 
 | Feature | Crates | Purpose |
 |---|---|---|
-| `cuda` | `hanzo-cli`, `hanzo`, `hanzo-engine`, `hanzo-server-core` | NVIDIA GPU support via CUDA. |
+| `cuda` | `hanzo-cli`, `hanzo`, `hanzo-engine`, `hanzo-http` | NVIDIA GPU support via CUDA. |
 | `cudnn` | as above | cuDNN-accelerated kernels. |
 | `flash-attn` | as above | Flash attention v2 (Ampere+, requires `cuda`). |
-| `flash-attn-v3` | `hanzo-cli`, `hanzo-engine`, `hanzo-server-core` | Flash attention v3 (Hopper, requires `cuda`). Not exposed by the top-level `hanzo` crate. |
+| `flash-attn-v3` | `hanzo-cli`, `hanzo-engine`, `hanzo-http` | Flash attention v3 (Hopper, requires `cuda`). Not exposed by the top-level `hanzo` crate. |
 | `metal` | as above | Apple Silicon GPU support via Metal. |
 | `accelerate` | as above | Apple Accelerate framework for CPU math. |
 | `mkl` | as above | Intel MKL for CPU math. |
@@ -32,9 +32,9 @@ Typical combinations:
 
 | Feature | Crates | Purpose |
 |---|---|---|
-| `code-execution` | `hanzo-cli`, `hanzo`, `hanzo-engine`, `hanzo-server-core` | Python code execution tool. In `hanzo-cli` defaults. |
+| `code-execution` | `hanzo-cli`, `hanzo`, `hanzo-engine`, `hanzo-http` | Python code execution tool. In `hanzo-cli` defaults. |
 | `ring` | as above | Multi-machine ring distributed inference. |
-| `swagger-ui` | `hanzo-server-core` | Mounts Swagger UI on the HTTP server. |
+| `swagger-ui` | `hanzo-http` | Mounts Swagger UI on the HTTP server. |
 
 ## Enabling features
 

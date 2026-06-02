@@ -254,13 +254,13 @@ pub struct NormalRequest {
     #[serde(default)]
     pub code_execution_permission: Option<CodeExecutionPermission>,
     #[serde(skip)]
-    pub code_execution_approval_notifier: Option<Arc<hanzo_llm_mcp::CodeExecutionApprovalNotifier>>,
+    pub code_execution_approval_notifier: Option<Arc<hanzo_mcp::CodeExecutionApprovalNotifier>>,
     #[serde(default)]
     pub agent_permission: Option<AgentPermission>,
     #[serde(skip)]
     pub agent_approval_handler: Option<AgentToolApprovalHandler>,
     #[serde(skip)]
-    pub agent_approval_notifier: Option<Arc<hanzo_llm_mcp::AgentToolApprovalNotifier>>,
+    pub agent_approval_notifier: Option<Arc<hanzo_mcp::AgentToolApprovalNotifier>>,
     pub max_tool_rounds: Option<usize>,
     /// URL to POST `{"name": ..., "arguments": ...}` to when no server-side callback is registered. Expects `{"content": "..."}` back.
     pub tool_dispatch_url: Option<String>,

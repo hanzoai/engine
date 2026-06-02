@@ -9,7 +9,7 @@ use crate::{
     sequence::{Sequence, SequenceRecognizer, SequenceState, StopReason},
     tools::{parse_text_tools, ToolCallResponse, ToolCallType},
 };
-use hanzo_llm_mcp::CalledFunction;
+use hanzo_mcp::CalledFunction;
 
 use super::Pipeline;
 

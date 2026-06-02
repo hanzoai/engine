@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use tokio::join;
 use tracing::{error, info, warn};
 
-use hanzo_server_core::{
+use hanzo_http::{
     hanzo_for_server_builder::{
         configure_paged_attn_from_flags, defaults, get_search_embedding_model,
         HanzoForServerBuilder, ModelConfig,

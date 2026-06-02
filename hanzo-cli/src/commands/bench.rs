@@ -6,7 +6,7 @@ use hanzo_engine::{
     initialize_logging, Constraint, DrySamplingParams, NormalRequest, Request, RequestMessage,
     Response, SamplingParams, Usage,
 };
-use hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder;
+use hanzo_http::hanzo_for_server_builder::HanzoForServerBuilder;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 use tracing::info;

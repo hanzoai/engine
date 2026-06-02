@@ -8,7 +8,7 @@ use hanzo_engine::{
     initialize_logging, DiffusionLoaderType, McpClientConfig, ModelSelected, PagedCacheType,
     SpeechLoaderType,
 };
-use hanzo_server_core::{
+use hanzo_http::{
     approvals::ApprovalBroker, hanzo_for_server_builder::HanzoForServerBuilder,
     hanzo_server_router_builder::HanzoServerRouterBuilder,
 };

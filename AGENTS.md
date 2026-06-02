@@ -12,7 +12,7 @@ This file provides instructions for AI agents to understand the layout of the `h
 - `/hanzo-paged-attn/`: PagedAttention implementation
 - `/hanzo-pyo3/`      : Python bindings (PyO3)
 - `/hanzo-cli/`       : Unified CLI binary (commands: run, serve, bench, from-config)
-- `/hanzo-server-core/`: Shared server core logic
+- `/hanzo-http/`: Shared server core logic
 - `/hanzo-bench/`     : (Deprecated) Use `hanzo bench` instead
 - `/docs/`             : Astro/Starlight documentation site (deployed to GitHub Pages)
 - `/examples/`            : Usage examples (Rust, Python, server samples, notebooks)

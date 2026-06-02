@@ -20,7 +20,7 @@ doc = false
 [dependencies]
 pyo3.workspace = true
 hanzo-engine = { workspace = true, features = ["pyo3_macros"] }
-hanzo-llm-mcp = { workspace = true, features = ["pyo3_macros"] }
+hanzo-mcp = { workspace = true, features = ["pyo3_macros"] }
 serde.workspace = true
 serde_json.workspace = true
 hanzo-ml.workspace = true

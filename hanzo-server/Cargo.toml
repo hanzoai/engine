@@ -22,7 +22,7 @@ directories.workspace = true
 either.workspace = true
 indexmap.workspace = true
 hanzo-engine.workspace = true
-hanzo-server-core.workspace = true
+hanzo-http.workspace = true
 regex.workspace = true
 rustyline.workspace = true
 serde.workspace = true
@@ -33,23 +33,23 @@ rust-mcp-sdk.workspace = true
 async-trait.workspace = true
 
 [features]
-cuda = ["hanzo-engine/cuda", "hanzo-server-core/cuda"]
-vulkan = ["hanzo-engine/vulkan", "hanzo-server-core/vulkan"]
-rocm = ["hanzo-engine/rocm", "hanzo-server-core/rocm"]
-cudnn = ["hanzo-engine/cudnn", "hanzo-server-core/cudnn"]
-metal = ["hanzo-engine/metal", "hanzo-server-core/metal"]
+cuda = ["hanzo-engine/cuda", "hanzo-http/cuda"]
+vulkan = ["hanzo-engine/vulkan", "hanzo-http/vulkan"]
+rocm = ["hanzo-engine/rocm", "hanzo-http/rocm"]
+cudnn = ["hanzo-engine/cudnn", "hanzo-http/cudnn"]
+metal = ["hanzo-engine/metal", "hanzo-http/metal"]
 flash-attn = [
   "cuda",
   "hanzo-engine/flash-attn",
-  "hanzo-server-core/flash-attn",
+  "hanzo-http/flash-attn",
 ]
 flash-attn-v3 = [
   "cuda",
   "hanzo-engine/flash-attn-v3",
-  "hanzo-server-core/flash-attn-v3",
+  "hanzo-http/flash-attn-v3",
 ]
-accelerate = ["hanzo-engine/accelerate", "hanzo-server-core/accelerate"]
-mkl = ["hanzo-engine/mkl", "hanzo-server-core/mkl"]
-nccl = ["hanzo-engine/nccl", "hanzo-server-core/nccl"]
-ring = ["hanzo-engine/ring", "hanzo-server-core/ring"]
+accelerate = ["hanzo-engine/accelerate", "hanzo-http/accelerate"]
+mkl = ["hanzo-engine/mkl", "hanzo-http/mkl"]
+nccl = ["hanzo-engine/nccl", "hanzo-http/nccl"]
+ring = ["hanzo-engine/ring", "hanzo-http/ring"]
 mcp-server = ["rust-mcp-sdk/server", "rust-mcp-sdk/hyper-server"]

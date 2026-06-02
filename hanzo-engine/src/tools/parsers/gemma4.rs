@@ -573,7 +573,7 @@ mod tests {
         // When no tools are strict, the grammar uses the non-branching
         // TOOL_NAME path.  This test guards the structural invariant
         // (single Lark grammar, no json_schema).
-        use hanzo_llm_mcp::{Function, ToolType};
+        use hanzo_mcp::{Function, ToolType};
         let tools = vec![crate::Tool {
             tp: ToolType::Function,
             function: Function {

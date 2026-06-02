@@ -31,7 +31,7 @@ This file provides guidance to AI assistants working with the Hanzo Engine codeb
 ### Architecture
 
 Hanzo Engine is a Rust workspace containing:
-- All upstream hanzo workspace members (hanzo-engine, hanzo-server, hanzo, hanzo-llm-mcp, …)
+- All upstream hanzo workspace members (hanzo-engine, hanzo-server, hanzo, hanzo-mcp, …)
 - **hanzo-engine/** — lib + bin: canonical Hanzo inference + embedding API
 - Local hanzo-ml fork at `../ml/hanzo-{ml,nn,flash-attn,metal-kernels}` overrides upstream's `hanzo-ml-*` crates via `[workspace.dependencies]` path overrides
 
@@ -118,14 +118,14 @@ You should also look for a model.safetensors.index.json file for the model at ha
 #### Core Components
 - `hanzo-engine/` - Core inference engine, model implementations, pipelines
 - `hanzo-server/` - CLI binary entry point
-- `hanzo-server-core/` - HTTP server routing, OpenAI API implementation
+- `hanzo-http/` - HTTP server routing, OpenAI API implementation
 - `hanzo-pyo3/` - Python bindings (PyO3)
 - `hanzo/` - High-level Rust API
 - `hanzo-vision/` - Vision model support
 - `hanzo-quant/` - Quantization implementations (ISQ, GGUF, GPTQ, etc.)
 - `hanzo-paged-attn/` - PagedAttention implementation
 - `hanzo-audio/` - Audio processing
-- `hanzo-llm-mcp/` - Model Context Protocol client
+- `hanzo-mcp/` - Model Context Protocol client
 - `hanzo-bench/` - Benchmarking tools
 
 ### Key Design Patterns
@@ -156,7 +156,7 @@ When adding new quantization methods:
 
 - `hanzo-engine/src/engine/mod.rs` - Main engine orchestration
 - `hanzo-engine/src/pipeline/mod.rs` - Pipeline trait and common logic
-- `hanzo-server-core/src/routes.rs` - HTTP API endpoints
+- `hanzo-http/src/routes.rs` - HTTP API endpoints
 - `hanzo-pyo3/src/lib.rs` - Python API entry point
 - `hanzo/examples/` - Usage examples for Rust API
 

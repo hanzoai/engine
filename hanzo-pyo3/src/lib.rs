@@ -48,7 +48,7 @@ use hanzo_engine::{
     CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
     ToolCallbacks,
 };
-use hanzo_llm_mcp::{McpClientConfig, McpServerConfig, McpServerSource};
+use hanzo_mcp::{McpClientConfig, McpServerConfig, McpServerSource};
 use hanzo_ml::{Device, Result};
 #[cfg(not(feature = "code-execution"))]
 use pyo3::exceptions::PyValueError;

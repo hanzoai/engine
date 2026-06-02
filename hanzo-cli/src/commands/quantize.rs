@@ -8,7 +8,7 @@ use anyhow::Result;
 use tracing::{info, warn};
 
 use hanzo_engine::{expand_isq_value, initialize_logging, IsqType, ModelSelected};
-use hanzo_server_core::hanzo_for_server_builder::{defaults, HanzoForServerBuilder};
+use hanzo_http::hanzo_for_server_builder::{defaults, HanzoForServerBuilder};
 
 use crate::args::{GlobalOptions, QuantizeModelType};
 

@@ -274,7 +274,7 @@ fn lark_escape_str(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hanzo_llm_mcp::{Function, ToolType};
+    use hanzo_mcp::{Function, ToolType};
 
     fn strict_weather_tool() -> crate::Tool {
         crate::Tool {

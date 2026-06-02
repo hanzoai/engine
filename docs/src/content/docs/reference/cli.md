@@ -156,7 +156,7 @@ OS-level isolation applied to the code-execution subprocess. See [sandbox refere
 | `--max-tool-rounds <n>` | not set | Cap on agentic tool loop rounds. |
 | `--tool-dispatch-url <url>` | not set | External URL for tool execution. |
 
-CORS allowed origins and the request body limit (default 50 MB) are not exposed as CLI flags. They can be configured programmatically through `HanzoServerRouterBuilder` in `hanzo-server-core`.
+CORS allowed origins and the request body limit (default 50 MB) are not exposed as CLI flags. They can be configured programmatically through `HanzoServerRouterBuilder` in `hanzo-http`.
 
 ## `hanzo run` flags
 

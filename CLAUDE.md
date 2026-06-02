@@ -67,14 +67,14 @@ You should also look for a model.safetensors.index.json file for the model at ha
 ### Workspace Structure
 - `hanzo-engine/` - Core inference engine, model implementations, pipelines
 - `hanzo-cli/` - Unified CLI binary (commands: run, serve, bench, from-config)
-- `hanzo-server-core/` - HTTP server routing, OpenAI API implementation
+- `hanzo-http/` - HTTP server routing, OpenAI API implementation
 - `hanzo-pyo3/` - Python SDK (PyO3 bindings)
 - `hanzo/` - Rust SDK (high-level crate)
 - `hanzo-vision/` - Image processing utilities
 - `hanzo-quant/` - Quantization implementations (ISQ, GGUF, GPTQ, etc.)
 - `hanzo-paged-attn/` - PagedAttention implementation
 - `hanzo-audio/` - Audio processing
-- `hanzo-llm-mcp/` - Model Context Protocol client
+- `hanzo-mcp/` - Model Context Protocol client
 - `hanzo-bench/` - (Deprecated) Use `hanzo bench` instead
 
 ### Key Design Patterns
@@ -105,7 +105,7 @@ When adding new quantization methods:
 
 - `hanzo-engine/src/engine/mod.rs` - Main engine orchestration
 - `hanzo-engine/src/pipeline/mod.rs` - Pipeline trait and common logic
-- `hanzo-server-core/src/routes.rs` - HTTP API endpoints
+- `hanzo-http/src/routes.rs` - HTTP API endpoints
 - `hanzo-pyo3/src/lib.rs` - Python SDK entry point
 - `hanzo/examples/` - Usage examples for Rust SDK
 

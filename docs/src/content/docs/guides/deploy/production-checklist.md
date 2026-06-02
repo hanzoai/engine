@@ -31,7 +31,7 @@ hanzo has no built-in authentication. Run behind a reverse proxy (nginx, Caddy, 
 
 ## Body limit and CORS
 
-The default body limit is 50 MB and the default CORS allows any origin. Both are not configurable via the CLI; use `HanzoServerRouterBuilder` (`hanzo-server-core`) for custom values.
+The default body limit is 50 MB and the default CORS allows any origin. Both are not configurable via the CLI; use `HanzoServerRouterBuilder` (`hanzo-http`) for custom values.
 
 ## Health and readiness
 

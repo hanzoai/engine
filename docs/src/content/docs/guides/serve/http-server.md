@@ -17,7 +17,7 @@ hanzo serve --host 127.0.0.1 --port 8080 -m <model>
 
 ## CORS and body limit
 
-CORS allowed origins and the request body limit are not exposed as CLI flags. They can be configured programmatically through `HanzoServerRouterBuilder` in `hanzo-server-core`.
+CORS allowed origins and the request body limit are not exposed as CLI flags. They can be configured programmatically through `HanzoServerRouterBuilder` in `hanzo-http`.
 
 The default allowed origin is any. The default body limit is 50 MB. Allowed methods are `GET`, `POST`, `PUT`, `DELETE`; allowed headers include `Content-Type` and `Authorization`.
 

@@ -15,7 +15,7 @@ impl std::fmt::Display for ToolCallType {
     }
 }
 
-use hanzo_llm_mcp::CalledFunction;
+use hanzo_mcp::CalledFunction;
 
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]

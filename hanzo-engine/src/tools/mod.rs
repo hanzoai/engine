@@ -13,9 +13,9 @@ use std::fmt;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use hanzo_llm_mcp::CalledFunction;
+use hanzo_mcp::CalledFunction;
 
-pub use hanzo_llm_mcp::{ToolCallback, ToolCallbackWithTool};
+pub use hanzo_mcp::{ToolCallback, ToolCallbackWithTool};
 
 /// Collection of callbacks keyed by tool name.
 pub type ToolCallbacks = HashMap<String, Arc<ToolCallback>>;

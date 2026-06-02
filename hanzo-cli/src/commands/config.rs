@@ -4,7 +4,7 @@ use anyhow::Result;
 use tracing::info;
 
 use hanzo_engine::initialize_logging;
-use hanzo_server_core::{
+use hanzo_http::{
     hanzo_for_server_builder::{HanzoForServerBuilder, ModelConfig},
     hanzo_server_router_builder::HanzoServerRouterBuilder,
 };

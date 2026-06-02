@@ -20,7 +20,7 @@ doc = false
 
 [dependencies]
 hanzo-engine = { workspace = true }
-hanzo-server-core = { workspace = true }
+hanzo-http = { workspace = true }
 hanzo = { workspace = true }
 hanzo-sandbox = { workspace = true }
 hanzo-ml = { workspace = true }
@@ -54,15 +54,15 @@ walkdir = { workspace = true }
 
 [features]
 default = ["code-execution"]
-cuda = ["hanzo-engine/cuda", "hanzo-server-core/cuda"]
-vulkan = ["hanzo-engine/vulkan", "hanzo-server-core/vulkan"]
-rocm = ["hanzo-engine/rocm", "hanzo-server-core/rocm"]
-nccl = ["hanzo-engine/nccl", "hanzo-server-core/nccl"]
-cudnn = ["hanzo-engine/cudnn", "hanzo-server-core/cudnn"]
-flash-attn = ["cuda", "hanzo-engine/flash-attn", "hanzo-server-core/flash-attn"]
-flash-attn-v3 = ["cuda", "hanzo-engine/flash-attn-v3", "hanzo-server-core/flash-attn-v3"]
-accelerate = ["hanzo-engine/accelerate", "hanzo-server-core/accelerate"]
-metal = ["hanzo-engine/metal", "hanzo-server-core/metal"]
-mkl = ["hanzo-engine/mkl", "hanzo-server-core/mkl"]
-ring = ["hanzo-engine/ring", "hanzo-server-core/ring"]
-code-execution = ["hanzo-engine/code-execution", "hanzo-server-core/code-execution"]
+cuda = ["hanzo-engine/cuda", "hanzo-http/cuda"]
+vulkan = ["hanzo-engine/vulkan", "hanzo-http/vulkan"]
+rocm = ["hanzo-engine/rocm", "hanzo-http/rocm"]
+nccl = ["hanzo-engine/nccl", "hanzo-http/nccl"]
+cudnn = ["hanzo-engine/cudnn", "hanzo-http/cudnn"]
+flash-attn = ["cuda", "hanzo-engine/flash-attn", "hanzo-http/flash-attn"]
+flash-attn-v3 = ["cuda", "hanzo-engine/flash-attn-v3", "hanzo-http/flash-attn-v3"]
+accelerate = ["hanzo-engine/accelerate", "hanzo-http/accelerate"]
+metal = ["hanzo-engine/metal", "hanzo-http/metal"]
+mkl = ["hanzo-engine/mkl", "hanzo-http/mkl"]
+ring = ["hanzo-engine/ring", "hanzo-http/ring"]
+code-execution = ["hanzo-engine/code-execution", "hanzo-http/code-execution"]

@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "hanzo-server-core",
+    "hanzo-http",
     "hanzo-server",
     "hanzo-cli",
     "hanzo-engine",
@@ -12,9 +12,9 @@ members = [
     "hanzo-paged-attn",
 
     "hanzo-audio",
-    "hanzo-llm-mcp",
+    "hanzo-mcp",
     "hanzo-macros",
-    "hanzo-code-exec",
+    "hanzo-exec",
     "hanzo-sandbox",
 ]
 resolver = "2"
@@ -195,12 +195,12 @@ hanzo-engine = { path = "hanzo-engine", version = "1.0.2" }
 hanzo-paged-attn = { path = "hanzo-paged-attn", version = "1.0.2" }
 hanzo-quant = { path = "hanzo-quant", version = "1.0.2" }
 hanzo-vision = { path = "hanzo-vision", version = "1.0.2" }
-hanzo-server-core = { path = "hanzo-server-core", version = "1.0.2" }
+hanzo-http = { path = "hanzo-http", version = "1.0.2" }
 hanzo = { path = "hanzo", version = "1.0.2" }
 hanzo-audio = { path = "hanzo-audio", version = "1.0.2" }
-hanzo-llm-mcp = { path = "hanzo-llm-mcp", version = "1.0.2" }
+hanzo-mcp = { path = "hanzo-mcp", version = "1.0.2" }
 hanzo-macros = { path = "hanzo-macros", version = "1.0.2" }
-hanzo-code-exec = { path = "hanzo-code-exec", version = "1.0.2" }
+hanzo-exec = { path = "hanzo-exec", version = "1.0.2" }
 hanzo-sandbox = { path = "hanzo-sandbox", version = "1.0.2" }
 
 [profile.release]
