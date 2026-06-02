@@ -28,6 +28,8 @@ Typical combinations:
 - Apple Silicon: `metal accelerate`
 - Intel CPU with MKL: `mkl`
 
+For Linux CUDA multi-GPU, add `nccl` when NCCL is installed. The Linux installer and CUDA wheel builder add it automatically when they detect `libnccl`.
+
 ## Functional features
 
 | Feature | Crates | Purpose |
