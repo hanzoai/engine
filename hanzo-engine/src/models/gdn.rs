@@ -868,3 +868,173 @@ impl GatedDeltaNet {
         out.transpose(1, 2)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Scalar reimplementation of the Vulkan gdn_step.comp single-step math (one (bh, v) state column,
+    // looping k). q is pre-scaled by the caller, exactly as gated_delta_rule_recurrence applies the
+    // 1/sqrt(k_dim) scale internally and as our engine wrapper does before the kernel. State layout is
+    // [bh][k][v] at k*v_dim + v, matching the CPU reference's (heads, k_dim, v_dim) contiguous order.
+    #[allow(clippy::too_many_arguments)]
+    fn gdn_step_scalar(
+        q: &[f32],    // [bh, k]  (pre-scaled)
+        k: &[f32],    // [bh, k]
+        v: &[f32],    // [bh, v]
+        g: &[f32],    // [bh]
+        beta: &[f32], // [bh]
+        state: &mut [f32], // [bh, k, v]
+        bh: usize,
+        k_dim: usize,
+        v_dim: usize,
+    ) -> Vec<f32> {
+        let mut out = vec![0f32; bh * v_dim];
+        for b in 0..bh {
+            let qk_base = b * k_dim;
+            let state_base = b * k_dim * v_dim;
+            let decay = g[b].exp();
+            let beta_t = beta[b];
+            for v_idx in 0..v_dim {
+                let v_t = v[b * v_dim + v_idx];
+                let mut s = vec![0f32; k_dim];
+                let mut kv_mem = 0f32;
+                for j in 0..k_dim {
+                    let sj = state[state_base + j * v_dim + v_idx] * decay;
+                    s[j] = sj;
+                    kv_mem += sj * k[qk_base + j];
+                }
+                let delta = (v_t - kv_mem) * beta_t;
+                let mut y_t = 0f32;
+                for j in 0..k_dim {
+                    let sj = s[j] + k[qk_base + j] * delta;
+                    state[state_base + j * v_dim + v_idx] = sj;
+                    y_t += sj * q[qk_base + j];
+                }
+                out[b * v_dim + v_idx] = y_t;
+            }
+        }
+        out
+    }
+
+    // The Vulkan single-step kernel must reproduce gated_delta_rule_recurrence for seq_len==1. This
+    // pins the shader's arithmetic against the portable reference on the CPU (the shader is a literal
+    // GLSL transliteration of gdn_step_scalar), independent of any GPU.
+    #[test]
+    fn gdn_step_matches_reference_seq1() -> Result<()> {
+        let dev = Device::Cpu;
+        let heads = 4usize;
+        let k_dim = 6usize;
+        let v_dim = 5usize;
+
+        // Deterministic pseudo-random inputs in [-1, 1]-ish ranges.
+        let gen = |n: usize, seed: usize| -> Vec<f32> {
+            (0..n)
+                .map(|i| (((i * 1103515245 + seed * 12345 + 7) % 2000) as f32 / 1000.0) - 1.0)
+                .collect()
+        };
+
+        // Reference tensors: q,k (1,1,heads,k_dim); v (1,1,heads,v_dim); g,beta (1,1,heads);
+        // state (1,heads,k_dim,v_dim).
+        let q_v = gen(heads * k_dim, 1);
+        let k_v = gen(heads * k_dim, 2);
+        let v_v = gen(heads * v_dim, 3);
+        let g_v: Vec<f32> = gen(heads, 4).iter().map(|x| x * 0.5 - 0.5).collect(); // g < 0 (decay<1)
+        let beta_v: Vec<f32> = gen(heads, 5).iter().map(|x| (x + 1.0) * 0.5).collect(); // [0,1]
+        let state_v = gen(heads * k_dim * v_dim, 6);
+
+        let q = Tensor::from_vec(q_v.clone(), (1, 1, heads, k_dim), &dev)?;
+        let k = Tensor::from_vec(k_v.clone(), (1, 1, heads, k_dim), &dev)?;
+        let v = Tensor::from_vec(v_v.clone(), (1, 1, heads, v_dim), &dev)?;
+        let g = Tensor::from_vec(g_v.clone(), (1, 1, heads), &dev)?;
+        let beta = Tensor::from_vec(beta_v.clone(), (1, 1, heads), &dev)?;
+        let mut state_ref = Tensor::from_vec(state_v.clone(), (1, heads, k_dim, v_dim), &dev)?;
+
+        let y_ref = gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut state_ref)?;
+        let y_ref = y_ref.flatten_all()?.to_vec1::<f32>()?;
+        let state_ref = state_ref.flatten_all()?.to_vec1::<f32>()?;
+
+        // Shader-equivalent scalar path: q pre-scaled by 1/sqrt(k_dim) (the reference does this
+        // internally; the engine wrapper does it before the kernel).
+        let scale = 1.0 / (k_dim as f32).sqrt();
+        let q_scaled: Vec<f32> = q_v.iter().map(|x| x * scale).collect();
+        let mut state_shader = state_v.clone();
+        let y_shader = gdn_step_scalar(
+            &q_scaled,
+            &k_v,
+            &v_v,
+            &g_v,
+            &beta_v,
+            &mut state_shader,
+            heads,
+            k_dim,
+            v_dim,
+        );
+
+        for (a, b) in y_ref.iter().zip(y_shader.iter()) {
+            assert!((a - b).abs() < 1e-5, "y mismatch: ref={a} shader={b}");
+        }
+        for (a, b) in state_ref.iter().zip(state_shader.iter()) {
+            assert!((a - b).abs() < 1e-5, "state mismatch: ref={a} shader={b}");
+        }
+        Ok(())
+    }
+
+    // The Vulkan conv1d single-step kernel must reproduce causal_conv1d_update for seq_len==1 with a
+    // conv_state of width k (drop oldest column, append x), including the silu. Pins that arithmetic
+    // on the CPU; the shader is a literal transliteration.
+    #[test]
+    fn gdn_conv1d_step_matches_reference_seq1() -> Result<()> {
+        let dev = Device::Cpu;
+        let conv_dim = 7usize;
+        let k = 4usize;
+
+        let gen = |n: usize, seed: usize| -> Vec<f32> {
+            (0..n)
+                .map(|i| (((i * 2654435761 + seed * 40503 + 11) % 2000) as f32 / 1000.0) - 1.0)
+                .collect()
+        };
+        let cs_v = gen(conv_dim * k, 1); // conv_state [conv_dim, k]
+        let x_v = gen(conv_dim, 2); // new column [conv_dim]
+        let w_v = gen(conv_dim * k, 3); // weight [conv_dim, k]
+
+        // Reference: replicate causal_conv1d_update for seq=1 via tensor ops. conv_state (1,conv_dim,k),
+        // x (1,1,conv_dim). window = [conv_state | x][:, :, 1..k+1]; out = silu(sum(window*weight)).
+        let conv_state = Tensor::from_vec(cs_v.clone(), (1, conv_dim, k), &dev)?;
+        let x_t = Tensor::from_vec(x_v.clone(), (1, conv_dim, 1), &dev)?;
+        let weight = Tensor::from_vec(w_v.clone(), (conv_dim, k), &dev)?;
+        let hidden = Tensor::cat(&[&conv_state, &x_t], 2)?; // (1, conv_dim, k+1)
+        let window = hidden.narrow(2, 1, k)?; // (1, conv_dim, k)
+        let out_ref = (window.clone() * weight.unsqueeze(0)?)?.sum(D::Minus1)?; // (1, conv_dim)
+        let out_ref = hanzo_nn::ops::silu(&out_ref)?.flatten_all()?.to_vec1::<f32>()?;
+        let new_state_ref = window.flatten_all()?.to_vec1::<f32>()?; // new conv_state == window
+
+        // Shader-equivalent scalar path (matches gdn_conv1d_step.comp).
+        let mut cs = cs_v.clone();
+        let mut out_shader = vec![0f32; conv_dim];
+        for c in 0..conv_dim {
+            let base = c * k;
+            let mut win = vec![0f32; k];
+            for j in 0..k - 1 {
+                win[j] = cs[base + j + 1];
+            }
+            win[k - 1] = x_v[c];
+            let mut acc = 0f32;
+            for j in 0..k {
+                acc += win[j] * w_v[base + j];
+            }
+            out_shader[c] = acc / (1.0 + (-acc).exp());
+            for j in 0..k {
+                cs[base + j] = win[j];
+            }
+        }
+
+        for (a, b) in out_ref.iter().zip(out_shader.iter()) {
+            assert!((a - b).abs() < 1e-5, "conv out mismatch: ref={a} shader={b}");
+        }
+        for (a, b) in new_state_ref.iter().zip(cs.iter()) {
+            assert!((a - b).abs() < 1e-5, "conv state mismatch: ref={a} shader={b}");
+        }
+        Ok(())
+    }
+}
