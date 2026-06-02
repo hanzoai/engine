@@ -19,6 +19,7 @@ jobs:
   build-and-test:
     name: Build and Test
     runs-on: hanzo-build-linux-amd64
+    timeout-minutes: 45
 
     steps:
     - uses: actions/checkout@v4
@@ -93,6 +94,7 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.cross == true }}
+    timeout-minutes: 90
 
     steps:
     - uses: actions/checkout@v4
@@ -134,6 +136,7 @@ jobs:
 
     - name: Build binary
       shell: bash
+      timeout-minutes: 75
       run: |
         FEATURES="${{ matrix.features }}"
         if [ -n "$FEATURES" ]; then
@@ -175,6 +178,7 @@ jobs:
     needs: build-binaries
     if: always() && !cancelled()
     runs-on: hanzo-build-linux-amd64
+    timeout-minutes: 15
 
     steps:
     - uses: actions/checkout@v4
