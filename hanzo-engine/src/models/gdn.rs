@@ -58,6 +58,11 @@ impl RmsNormGated {
         Ok(Self { weight, eps })
     }
 
+    /// Build directly from an already-materialized weight (e.g. a dequantized GGUF tensor).
+    pub fn from_weight(weight: Tensor, eps: f64) -> Self {
+        Self { weight, eps }
+    }
+
     pub fn forward(&self, x: &Tensor, gate: &Tensor) -> Result<Tensor> {
         let dtype = x.dtype();
         let x = x.to_dtype(DType::F32)?;
