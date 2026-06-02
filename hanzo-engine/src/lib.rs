@@ -44,6 +44,7 @@ mod model_loader;
 mod moe;
 mod ops;
 mod video_input;
+mod vulkan;
 pub use model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
 };
