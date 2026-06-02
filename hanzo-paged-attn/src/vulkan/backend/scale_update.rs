@@ -1,10 +1,11 @@
-// Vulkan kv_scale_update: STUB. Updates running fp8 K/V quantization scales from observed
-// key/value magnitudes (CUDA update_kvscales.cu / Metal kv_scale_update.metal). Only invoked by
-// the engine when the KV cache dtype is F8E4M3; the Vulkan scaffold uses an f32 cache, so this is
-// never reached on the happy path. Bails if called.
+// Vulkan kv_scale_update: bailing stub. Updates running fp8 K/V quantization scales from observed
+// key/value magnitudes (mirrors CUDA update_kvscales.cu / Metal kv_scale_update.metal). The engine
+// only calls this when the KV cache dtype is F8E4M3; the Vulkan scaffold uses an f32 cache, so this
+// is never reached on the happy path.
 //
-// TODO: implement alongside an fp8 Vulkan KV cache (a reduce-max kernel over key/value, writing the
-// per-tensor scale), at which point paged_attention/reshape_and_cache also need fp8 dequant/quant.
+// TODO(vulkan-pagedattn): needs a real GPU reduce-max kernel over key/value writing the per-tensor
+// scale, landed alongside an fp8 Vulkan KV cache (paged_attention/reshape_and_cache would then also
+// need in-shader fp8 dequant/quant). Not expressible with existing Tensor ops in-place.
 
 use hanzo_ml::{Result, Tensor};
 
