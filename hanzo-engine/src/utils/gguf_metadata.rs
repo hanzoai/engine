@@ -41,9 +41,18 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
             num_attn_heads: metadata[&format!("{arch}.attention.head_count")]
                 .to_u64()
                 .unwrap() as usize,
-            num_kv_heads: metadata[&format!("{arch}.attention.head_count_kv")]
-                .to_u64()
-                .unwrap() as usize,
+            num_kv_heads: {
+                // hybrid archs (qwen35moe) store per-layer head_count_kv as an array; take the max
+                let v = &metadata[&format!("{arch}.attention.head_count_kv")];
+                v.to_u64().map(|n| n as usize).unwrap_or_else(|_| {
+                    v.to_vec()
+                        .unwrap()
+                        .iter()
+                        .filter_map(|x| x.to_u64().ok())
+                        .max()
+                        .unwrap_or(0) as usize
+                })
+            },
             num_layers: metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize,
             key_length: metadata
                 .get(&format!("{arch}.attention.key_length"))
