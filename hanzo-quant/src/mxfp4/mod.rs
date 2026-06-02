@@ -13,6 +13,7 @@ use crate::{
     QuantizedSerdeType, ShardedVarBuilder,
 };
 
+pub(crate) mod dp4a;
 #[cfg(feature = "cuda")]
 pub(crate) mod ffi;
 #[cfg(feature = "metal")]
@@ -128,6 +129,13 @@ impl QuantMethod for MXFP4Layer {
                     return result.reshape(new_dims);
                 }
                 return Ok(result);
+            }
+        }
+
+        // int8/dp4a path (scaffold): returns None today, so we fall through to the f32 dequant.
+        if self.blocks.dims().len() == 2 {
+            if let Some(out) = dp4a::mxfp4_matmul_dp4a(x, &self.blocks, &self.scales, self.bias.as_ref())? {
+                return Ok(out);
             }
         }
 
