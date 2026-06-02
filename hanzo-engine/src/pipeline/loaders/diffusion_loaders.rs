@@ -23,6 +23,10 @@ use crate::{
             self,
             stepper::{FluxStepper, FluxStepperConfig},
         },
+        qwen_image::{
+            self,
+            stepper::{QwenImageStepper, QwenImageStepperConfig},
+        },
         DiffusionGenerationParams,
     },
     paged_attention::AttentionImplementation,
@@ -56,6 +60,12 @@ pub trait DiffusionModelLoader: Send + Sync {
         revision: &str,
     ) -> Result<Vec<PathBuf>>;
     fn force_cpu_vb(&self) -> Vec<bool>;
+    /// Groups the flat `get_model_paths` output into one safetensors set per VarBuilder.
+    /// Default: one file per VarBuilder (matches `force_cpu_vb().len()` 1:1 with `filenames`).
+    /// Sharded models (e.g. Qwen-Image) override this to merge shards into a single VB.
+    fn group_model_paths(&self, filenames: &[PathBuf]) -> Vec<Vec<PathBuf>> {
+        filenames.iter().map(|f| vec![f.clone()]).collect()
+    }
     // `configs` and `vbs` should be corresponding. It is up to the implementer to maintain this invaraint.
     fn load(
         &self,
@@ -75,6 +85,8 @@ pub enum DiffusionLoaderType {
     Flux,
     #[serde(rename = "flux-offloaded")]
     FluxOffloaded,
+    #[serde(rename = "qwen-image")]
+    QwenImage,
 }
 
 impl FromStr for DiffusionLoaderType {
@@ -83,8 +95,9 @@ impl FromStr for DiffusionLoaderType {
         match s {
             "flux" => Ok(Self::Flux),
             "flux-offloaded" => Ok(Self::FluxOffloaded),
+            "qwen-image" => Ok(Self::QwenImage),
             a => Err(format!(
-                "Unknown architecture `{a}`. Possible architectures: `flux`."
+                "Unknown architecture `{a}`. Possible architectures: `flux`, `flux-offloaded`, `qwen-image`."
             )),
         }
     }
@@ -94,10 +107,24 @@ impl DiffusionLoaderType {
     /// Auto-detect diffusion loader type from a repo file listing.
     /// Extend this when adding new diffusion pipelines.
     pub fn auto_detect_from_files(files: &[String]) -> Option<Self> {
+        if Self::matches_qwen_image(files) {
+            return Some(Self::QwenImage);
+        }
         if Self::matches_flux(files) {
             return Some(Self::Flux);
         }
         None
+    }
+
+    fn matches_qwen_image(files: &[String]) -> bool {
+        let has_transformer = files.iter().any(|f| f == "transformer/config.json");
+        let has_vae = files.iter().any(|f| f == "vae/config.json");
+        let has_text_encoder = files
+            .iter()
+            .any(|f| f.starts_with("text_encoder/") && f.ends_with(".json"));
+        // Qwen-Image ships a Qwen2.5-VL text encoder dir and a `vae/`; it has no flux `ae.safetensors`.
+        let has_flux_ae = files.iter().any(|f| f == "ae.safetensors");
+        has_transformer && has_vae && has_text_encoder && !has_flux_ae
     }
 
     fn matches_flux(files: &[String]) -> bool {
@@ -231,6 +258,92 @@ impl DiffusionModelLoader for FluxLoader {
             &normal_loading_metadata.real_device,
             silent,
             self.offload,
+        )?))
+    }
+}
+
+// ======================== Qwen-Image loader
+
+/// [`DiffusionLoader`] for a Qwen-Image (`QwenImageTransformer2DModel`) diffusion model.
+pub struct QwenImageLoader;
+
+impl DiffusionModelLoader for QwenImageLoader {
+    fn get_model_paths(
+        &self,
+        api: &ApiRepo,
+        model_id: &Path,
+        revision: &str,
+    ) -> Result<Vec<PathBuf>> {
+        let transformer_regex = Regex::new(r"^transformer/.*\.safetensors$")?;
+        let vae_regex = Regex::new(r"^vae/.*\.safetensors$")?;
+        let mut transformer_files = Vec::new();
+        let mut vae_files = Vec::new();
+        for f in api_dir_list!(api, model_id, true, revision) {
+            if transformer_regex.is_match(&f) {
+                transformer_files.push(api_get_file!(api, &f, model_id, revision));
+            } else if vae_regex.is_match(&f) {
+                vae_files.push(api_get_file!(api, &f, model_id, revision));
+            }
+        }
+        if transformer_files.is_empty() {
+            anyhow::bail!("Expected at least 1 transformer/*.safetensors for Qwen-Image.");
+        }
+        if vae_files.is_empty() {
+            anyhow::bail!("Expected at least 1 vae/*.safetensors for Qwen-Image.");
+        }
+        // Convention: transformer shards first, then VAE shards. Counts are recovered via configs.
+        let mut out = transformer_files;
+        out.extend(vae_files);
+        Ok(out)
+    }
+    fn get_config_filenames(
+        &self,
+        api: &ApiRepo,
+        model_id: &Path,
+        revision: &str,
+    ) -> Result<Vec<PathBuf>> {
+        let transformer = api_get_file!(api, "transformer/config.json", model_id, revision);
+        let vae = api_get_file!(api, "vae/config.json", model_id, revision);
+        Ok(vec![transformer, vae])
+    }
+    fn force_cpu_vb(&self) -> Vec<bool> {
+        // One VB per loaded safetensors group: transformer + vae.
+        vec![false, false]
+    }
+    fn group_model_paths(&self, filenames: &[PathBuf]) -> Vec<Vec<PathBuf>> {
+        // Group shards by their HF subfolder so transformer/* and vae/* each form one VB.
+        let is_vae = |p: &PathBuf| {
+            p.parent()
+                .and_then(|d| d.file_name())
+                .map(|n| n == "vae")
+                .unwrap_or(false)
+        };
+        let transformer: Vec<PathBuf> = filenames.iter().filter(|p| !is_vae(p)).cloned().collect();
+        let vae: Vec<PathBuf> = filenames.iter().filter(|p| is_vae(p)).cloned().collect();
+        vec![transformer, vae]
+    }
+    fn load(
+        &self,
+        mut configs: Vec<String>,
+        mut vbs: Vec<ShardedVarBuilder>,
+        normal_loading_metadata: NormalLoadingMetadata,
+        _attention_mechanism: AttentionImplementation,
+        _silent: bool,
+    ) -> Result<Box<dyn DiffusionModel + Send + Sync>> {
+        let (vae_cfg, vae_vb) = (configs.remove(1), vbs.remove(1));
+        let (transformer_cfg, transformer_vb) = (configs.remove(0), vbs.remove(0));
+
+        let vae_cfg: qwen_image::autoencoder::Config = serde_json::from_str(&vae_cfg)?;
+        let transformer_cfg: qwen_image::model::Config = serde_json::from_str(&transformer_cfg)?;
+
+        let dtype = transformer_vb.dtype();
+
+        Ok(Box::new(QwenImageStepper::new(
+            QwenImageStepperConfig::default(),
+            (transformer_vb, &transformer_cfg),
+            (vae_vb, &vae_cfg),
+            dtype,
+            &normal_loading_metadata.real_device,
         )?))
     }
 }
