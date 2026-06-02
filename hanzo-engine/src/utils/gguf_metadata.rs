@@ -345,6 +345,22 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                 };
                 token_embd + output_norm + output
             }
+            GGUFArchitecture::Qwen35 | GGUFArchitecture::Qwen35MoE => {
+                let token_embd = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("token_embd.weight")?,
+                    DType::F32
+                );
+                let output_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("output_norm.weight")?,
+                    DType::F32
+                );
+                let output = if !self.model.has_tensor("output.weight") {
+                    tensor_info_size_in_bytes!(self.model.tensor_info("token_embd.weight")?)
+                } else {
+                    tensor_info_size_in_bytes!(self.model.tensor_info("output.weight")?)
+                };
+                token_embd + output_norm + output
+            }
             GGUFArchitecture::Starcoder2 => {
                 let token_embd = tensor_info_size_in_bytes!(
                     self.model.tensor_info("token_embd.weight")?,
@@ -643,6 +659,17 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                     + ffn_up
                     + ffn_down
                     + ffn_gate
+            }
+
+            GGUFArchitecture::Qwen35 | GGUFArchitecture::Qwen35MoE => {
+                // Hybrid (GDN + full-attention) layers have very different per-layer sizes, so a
+                // uniform estimate would mis-balance an auto device map. Require explicit mapping
+                // (single device or a topology) for these architectures.
+                anyhow::bail!(
+                    "Automatic device mapping is not supported for qwen35/qwen35moe GGUF (hybrid \
+                     GDN+attention layers have non-uniform sizes). Run on a single device or pass \
+                     an explicit device map / topology."
+                );
             }
 
             _ => unimplemented!(),
