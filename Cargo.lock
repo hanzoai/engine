@@ -473,16 +473,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bindgen_cuda"
-version = "0.1.7"
-source = "git+https://github.com/guoqingbao/bindgen_cuda.git#c568a81b4d9e272d7c7902c0e572cffbb6d552ad"
-dependencies = [
- "glob",
- "num_cpus",
- "rayon",
-]
-
-[[package]]
 name = "bit-set"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2504,6 +2494,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-bindgen-cuda"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "202df0871f0b56488003aa8f3ecffc6ed579918ea5b2f1852bd1b41268559bff"
+dependencies = [
+ "glob",
+ "num_cpus",
+ "rayon",
+]
+
+[[package]]
 name = "hanzo-cli"
 version = "0.9.0"
 dependencies = [
@@ -2667,19 +2668,19 @@ dependencies = [
 
 [[package]]
 name = "hanzo-flash-attn"
-version = "0.9.2-alpha.2"
+version = "0.9.2"
 dependencies = [
  "anyhow",
- "bindgen_cuda 0.1.6",
+ "bindgen_cuda",
  "half",
  "hanzo-ml",
 ]
 
 [[package]]
 name = "hanzo-kernels"
-version = "0.9.2-alpha.2"
+version = "0.9.2"
 dependencies = [
- "bindgen_cuda 0.1.7",
+ "hanzo-bindgen-cuda",
 ]
 
 [[package]]
@@ -2716,7 +2717,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-metal-kernels"
-version = "0.9.2-alpha.2"
+version = "0.9.2"
 dependencies = [
  "half",
  "objc2",
@@ -2729,7 +2730,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.9.2-alpha.3"
+version = "0.9.2"
 dependencies = [
  "accelerate-src",
  "ash",
@@ -2762,7 +2763,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-nn"
-version = "0.9.2-alpha.2"
+version = "0.9.2"
 dependencies = [
  "accelerate-src",
  "half",
@@ -2931,7 +2932,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ug"
-version = "0.9.2-alpha.2"
+version = "0.9.2"
 dependencies = [
  "ug",
  "ug-cuda",
