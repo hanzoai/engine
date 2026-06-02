@@ -311,6 +311,9 @@ pub struct ModelWeights {
     dtype: DType,
 }
 
+// Some fields mirror the full deepseek2 GGUF metadata surface but aren't needed at load time (GGUF
+// tensors carry their own shapes); kept for clarity and future paged-MLA wiring.
+#[allow(dead_code)]
 pub(crate) struct PropsGGUF {
     pub head_count: usize,
     pub block_count: usize,
@@ -629,11 +632,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     down: gguf_linear(ct.tensor(&format!("{prefix}.ffn_down.weight"), device)?)?,
                 })
             };
-
-            let _ = props.moe_intermediate_size;
-            let _ = props.dense_intermediate_size;
-            let _ = props.first_k_dense_replace;
-            let _ = props.expert_weights_scale;
 
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
