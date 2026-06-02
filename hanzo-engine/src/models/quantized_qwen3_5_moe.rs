@@ -531,9 +531,15 @@ impl PropsGGUF {
                     })
                     .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
             },
-            block_count: c
+            // block_count includes trailing MTP (multi-token-prediction) layers in some exports
+            // (e.g. the MXFP4 gguf: block_count=41, nextn_predict_layers=1). MTP is ignored for
+            // text-only inference, so the transformer depth is block_count - nextn_predict_layers.
+            block_count: (c
                 .get_value::<u32>("block_count")
-                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize,
+                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
+                .saturating_sub(
+                    c.get_value::<u32>("nextn_predict_layers").unwrap_or(0),
+                )) as usize,
             embedding_length: embed_len,
             rms_norm_eps: c
                 .get_value("attention.layer_norm_rms_epsilon")
