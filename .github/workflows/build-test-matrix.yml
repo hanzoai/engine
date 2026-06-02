@@ -1,0 +1,74 @@
+name: build-test-matrix
+
+# Build + smoke-test hanzo across every self-hosted machine/arch in parallel.
+# Targets the auto-applied self-hosted labels (self-hosted + os + arch), so no
+# custom runner labels are required. The engine has a path-dep on ../ml, so each
+# job checks out the engine and clones the matching ml branch as a sibling.
+
+on:
+  push:
+    branches: [feat/vulkan-quant-q4k]
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: spark-cuda-arm64
+            runs-on: [self-hosted, linux, ARM64]
+            features: cuda
+            env_line: "CUDA_COMPUTE_CAP=121 LD_LIBRARY_PATH=/usr/local/cuda/lib64"
+            path_add: "/usr/local/cuda/bin"
+          - name: evo-vulkan-win-x64
+            runs-on: [self-hosted, windows, X64]
+            features: vulkan
+            env_line: ""
+            path_add: ""
+          - name: dbc-metal-arm64
+            runs-on: [self-hosted, macOS, ARM64]
+            features: metal
+            env_line: ""
+            path_add: ""
+          - name: linux-cpu-x64
+            runs-on: [self-hosted, linux, X64]
+            features: ""
+            env_line: ""
+            path_add: ""
+    runs-on: ${{ matrix.runs-on }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout engine
+        uses: actions/checkout@v4
+        with:
+          path: engine
+
+      - name: Clone ml sibling (matching branch)
+        run: |
+          rm -rf ml
+          git clone --depth 1 -b "${GITHUB_REF_NAME}" git@github.com:hanzoai/ml.git ml \
+            || git clone --depth 1 git@github.com:hanzoai/ml.git ml
+          echo "ml at: $(git -C ml rev-parse --short HEAD)"
+
+      - name: Build hanzo-cli (${{ matrix.features || 'cpu' }})
+        run: |
+          export PATH="$HOME/.cargo/bin:${{ matrix.path_add }}:$PATH"
+          [ -n "${{ matrix.env_line }}" ] && export ${{ matrix.env_line }}
+          cd engine
+          if [ -n "${{ matrix.features }}" ]; then
+            cargo build --release -p hanzo-cli --features "${{ matrix.features }}"
+          else
+            cargo build --release -p hanzo-cli
+          fi
+
+      - name: Smoke test (doctor)
+        run: |
+          export PATH="$HOME/.cargo/bin:${{ matrix.path_add }}:$PATH"
+          [ -n "${{ matrix.env_line }}" ] && export ${{ matrix.env_line }}
+          BIN=engine/target/release/hanzo
+          [ -f "$BIN.exe" ] && BIN="$BIN.exe"
+          "$BIN" doctor
