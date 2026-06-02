@@ -215,5 +215,8 @@ debug = true
 strip = "none"
 
 [profile.dev]
-debug = true
-opt-level = 3
+# opt-level 1 + line-tables: much faster compiles for CI/dev. opt-level 3 here meant
+# full optimization on EVERY test build (the single biggest unforced CI cost). Bump
+# locally if you need dev runtime speed.
+debug = "line-tables-only"
+opt-level = 1
