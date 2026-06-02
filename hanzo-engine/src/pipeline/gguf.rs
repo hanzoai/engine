@@ -37,6 +37,7 @@ use crate::{
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
 use crate::{
+    models::quantized_deepseek2::ModelWeights as QDeepSeek2,
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
     models::quantized_phi3::ModelWeights as QPhi3,
@@ -74,6 +75,7 @@ enum Model {
     Qwen3(QQwen3),
     Qwen3MoE(QQwen3MoE),
     Qwen35(QQwen35),
+    Deepseek2(QDeepSeek2),
 }
 
 pub struct GGUFPipeline {
@@ -488,6 +490,9 @@ impl Loader for GGUFLoader {
                 GGUFArchitecture::Qwen35 | GGUFArchitecture::Qwen35MoE => {
                     Model::Qwen35(QQwen35::try_from(model_config)?)
                 }
+                GGUFArchitecture::Deepseek2 => {
+                    Model::Deepseek2(QDeepSeek2::try_from(model_config)?)
+                }
                 a => bail!("Unsupported architecture `{a:?}` for GGUF"),
             },
             ModelKind::GgufAdapter { adapter, .. } => match arch {
@@ -555,6 +560,7 @@ impl Loader for GGUFLoader {
             Model::Qwen3(ref p) => p.max_seq_len,
             Model::Qwen3MoE(ref p) => p.max_seq_len,
             Model::Qwen35(ref p) => p.max_seq_len,
+            Model::Deepseek2(ref p) => p.max_seq_len,
         };
         let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model {
@@ -568,6 +574,7 @@ impl Loader for GGUFLoader {
             Model::Qwen3(ref model) => model.cache.normal().0.len(),
             Model::Qwen3MoE(ref model) => model.cache.normal().0.len(),
             Model::Qwen35(ref model) => model.cache.hybrid().num_layers(),
+            Model::Deepseek2(ref model) => model.cache.normal().0.len(),
         };
 
         if chat_template.bos_token.is_none() {
@@ -713,6 +720,7 @@ impl CacheManagerMixin for GGUFPipeline {
             Model::Qwen3(ref model) => &model.cache,
             Model::Qwen3MoE(ref model) => &model.cache,
             Model::Qwen35(ref model) => &model.cache,
+            Model::Deepseek2(ref model) => &model.cache,
         }
     }
 }
@@ -730,6 +738,7 @@ impl MetadataMixin for GGUFPipeline {
             Model::Qwen3(ref model) => model.device.clone(),
             Model::Qwen3MoE(ref model) => model.device.clone(),
             Model::Qwen35(ref model) => model.device.clone(),
+            Model::Deepseek2(ref model) => model.device.clone(),
         }
     }
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
@@ -831,6 +840,9 @@ impl Pipeline for GGUFPipeline {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
             Model::Qwen35(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
+            }
+            Model::Deepseek2(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
         };
