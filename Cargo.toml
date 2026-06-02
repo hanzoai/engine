@@ -209,6 +209,12 @@ codegen-units = 1
 panic = "abort"
 strip = "symbols"
 
+[profile.quick]
+inherits = "release"
+lto = false
+codegen-units = 256
+incremental = true
+
 [profile.release-with-debug]
 inherits = "release"
 debug = true
