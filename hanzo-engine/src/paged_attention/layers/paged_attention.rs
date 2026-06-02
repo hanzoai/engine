@@ -461,6 +461,15 @@ impl PagedAttention {
                 other => other.clone(),
             };
 
+            // Fix corner chunking case for paged-attn SWA prefill (#2183): the
+            // packed-varlen path also needs the KV-length-adjusted mask, not the
+            // raw attention mask. Compute it once, up front, for both branches.
+            let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
+            let adjusted_mask = match attention_mask {
+                AttentionMask::Custom(t) => AttentionMask::Custom(adjust_kv_mask(t, max_kv)?),
+                other => other.clone(),
+            };
+
             if supports_packed_varlen_sdpa(query) {
                 let cu_q = if let Some(fp) = flash_params {
                     if !fp.cumulative_seqlens_q.is_empty() {

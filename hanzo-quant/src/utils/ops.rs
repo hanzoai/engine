@@ -2847,9 +2847,9 @@ pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resul
         );
     }
 
-    // ROCm has no fused-glu kernel; decompose to eager `activation(a) * b`
-    // (uses the real bf16 unary + multiply HIP kernels).
-    if a.device().is_rocm() {
+    // ROCm and Vulkan have no fused-glu kernel; decompose to eager `activation(a) * b`
+    // (uses the backend's native unary + multiply kernels).
+    if a.device().is_rocm() || a.device().is_vulkan() {
         let act = match activation {
             GluActivationType::Silu => a.silu()?,
             GluActivationType::Gelu => a.gelu()?,
