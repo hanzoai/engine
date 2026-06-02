@@ -48,14 +48,18 @@
 //!   ssm.group_count (=linear_num_key_heads), ssm.time_step_rank (=linear_num_value_heads),
 //!   ssm.inner_size (=value_dim), expert_count, expert_used_count, expert_feed_forward_length.
 //!
-//! KEY ASSUMPTION (V-head ordering): llama.cpp's qwen3.5 converter (_LinearAttentionVReorderBase)
-//! REORDERS the V heads of in_proj_qkv(v part) / in_proj_z / in_proj_a / in_proj_b / out_proj /
-//! conv1d(v part) / A_log / dt_bias from HF grouped order [G0_v0..vr, G1_v0..vr, ...] into TILED
-//! order [v0_G0, v0_G1, ..., v1_G0, ...] so a plain repeat works. The hanzo `gdn.rs` recurrence
-//! does its own grouped repeat_interleave (v_per_group repeat). When num_k_heads == num_v_heads
-//! (no grouping, the common Qwen3.5 case) the reorder is a no-op and the layouts coincide. When
-//! num_k_heads != num_v_heads, the GGUF tiled order does NOT match gdn.rs's grouped expectation;
-//! this path is NOT handled here and would need an explicit re-permute (see `needs_v_regroup`).
+//! V-head ordering: llama.cpp's qwen3.5 converter (_LinearAttentionVReorderBase) REORDERS the V
+//! heads of in_proj_qkv(v part) / in_proj_z / in_proj_a / in_proj_b / out_proj / conv1d(v part) /
+//! A_log / dt_bias from HF grouped order [K0_v0..v{r-1}, K1_v0..v{r-1}, ...] into TILED order
+//! [v0_K0..v0_K{K-1}, v1_K0..v1_K{K-1}, ...]. We do NOT undo this at load; instead the recurrence
+//! consumes tiled order natively. Every per-V-head tensor (v, z, beta, g, conv V-channels) comes
+//! straight from a GGUF projection in tiled order, and out_proj's input columns are tiled too, so
+//! the layer is self-consistent end-to-end. The only place that mixes K-indexed and V-indexed
+//! tensors is the q/k repeat in `QGatedDeltaNet::forward`, which TILES q/k (V head j -> K head
+//! j % num_k_heads) to match. When num_k_heads == num_v_heads the reorder is a no-op and the tile
+//! collapses to identity, leaving the original (verified) path unchanged. The shared safetensors
+//! `gdn.rs` recurrence instead consumes HF grouped order (it repeats grouped: j -> j / v_per_group);
+//! that path is untouched and still correct for its grouped inputs.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -337,15 +341,20 @@ impl QGatedDeltaNet {
             .broadcast_mul(&softplus(&a.to_dtype(DType::F32)?.broadcast_add(&dt_bias)?)?)?
             .to_dtype(dtype)?;
 
-        // 5. If num_v_heads > num_k_heads, repeat q,k per group to match v heads.
+        // 5. If num_v_heads > num_k_heads, tile q,k to V-head count. The GGUF lays out every per-V-head
+        //    tensor (v, z, beta, g, conv V-channels, out_proj columns) in tiled order [v0_K0..v0_K{K-1},
+        //    v1_K0..], so V head j pairs with K head j % num_k_heads. Tiling K (insert axis BEFORE the
+        //    K axis, repeat, flatten) reproduces that j -> j % num_k_heads pairing; a grouped repeat
+        //    (j -> j / v_per_group) would mismatch. The whole layer then stays in tiled order through
+        //    out_proj, so no weights need re-permuting at load.
         let (q, k) = if v_per_group > 1 {
             let q = q
-                .unsqueeze(3)?
-                .repeat((1, 1, 1, v_per_group, 1))?
+                .unsqueeze(2)?
+                .repeat((1, 1, v_per_group, 1, 1))?
                 .reshape((batch_size, seq_len, self.num_v_heads, self.head_k_dim))?;
             let k = k
-                .unsqueeze(3)?
-                .repeat((1, 1, 1, v_per_group, 1))?
+                .unsqueeze(2)?
+                .repeat((1, 1, v_per_group, 1, 1))?
                 .reshape((batch_size, seq_len, self.num_v_heads, self.head_k_dim))?;
             (q, k)
         } else {
@@ -646,14 +655,14 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let value_dim = props.num_v_heads * props.head_v_dim;
         let conv_dim = key_dim * 2 + value_dim;
 
-        // gdn.rs's grouped repeat_interleave only coincides with the GGUF tiled V-head order when
-        // num_k_heads == num_v_heads. Bail loudly otherwise (rather than emit garbage silently).
-        if props.num_k_heads != props.num_v_heads {
+        // GGUF stores V heads in tiled order (converter's _LinearAttentionVReorderBase). The K==V
+        // case is a no-op reorder; for V = m*K we consume tiled order directly (QGatedDeltaNet
+        // tiles q/k to match). Only a non-integer V/K split is genuinely unsupported.
+        if props.num_v_heads % props.num_k_heads != 0 {
             hanzo_ml::bail!(
-                "qwen35 GGUF GDN with num_k_heads ({}) != num_v_heads ({}) needs explicit V-head \
-                 regrouping (GGUF stores tiled order); not yet implemented in the quantized loader.",
-                props.num_k_heads,
-                props.num_v_heads
+                "qwen35 GGUF GDN requires num_v_heads ({}) to be a multiple of num_k_heads ({}).",
+                props.num_v_heads,
+                props.num_k_heads
             );
         }
 
