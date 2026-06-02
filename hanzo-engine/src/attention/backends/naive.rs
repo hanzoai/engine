@@ -7,8 +7,13 @@ use hanzo_quant::MatMul;
 
 use crate::attention::{chunked_attention, SdpaParams};
 
-/// Not *really* sure why this is necessary but it is.
+/// Low-VRAM synchronize guard: a CUDA-specific OOM workaround. Off CUDA the `MemoryUsage::query`
+/// it calls is expensive (a full system scan) and ran once per attention layer (~28x/token on a
+/// small model) -- the dominant decode-time cost. The guard is meaningless off CUDA, so skip it.
 pub(crate) fn maybe_synchronize(device: &Device) -> Result<()> {
+    if !device.is_cuda() {
+        return Ok(());
+    }
     // If less that 4 GB available, synchronize
     #[cfg(target_pointer_width = "64")]
     const FOUR_GIB: usize = 4 * 1024 * 1024 * 1024;
