@@ -299,6 +299,10 @@ struct QGatedDeltaNet {
 
 impl QGatedDeltaNet {
     fn forward(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
+        // GDN recurrence + gates run in f32 end-to-end to avoid bf16/f32 boundary mismatches;
+        // input is lifted to f32 here and the out_proj result cast back to the model dtype.
+        let orig_dtype = x.dtype();
+        let x = &x.to_dtype(DType::F32)?;
         let (batch_size, seq_len, _hidden) = x.dims3()?;
         let dtype = x.dtype();
         let v_per_group = self.num_v_heads / self.num_k_heads;
@@ -378,7 +382,7 @@ impl QGatedDeltaNet {
         let y = y.reshape(z_shape)?;
         let y = y.reshape((batch_size, seq_len, self.value_dim))?;
 
-        self.out_proj.forward(&y)
+        self.out_proj.forward(&y)?.to_dtype(orig_dtype)
     }
 
     fn causal_conv1d_update(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
@@ -386,7 +390,8 @@ impl QGatedDeltaNet {
         let x_t = x.transpose(1, 2)?.contiguous()?;
 
         let state_len = cache.conv_state.dim(2)?;
-        let hidden_new = Tensor::cat(&[cache.conv_state.clone(), x_t], 2)?;
+        let conv_state = cache.conv_state.to_dtype(x_t.dtype())?;
+        let hidden_new = Tensor::cat(&[conv_state, x_t], 2)?;
         let new_len = hidden_new.dim(2)?;
         cache.conv_state = hidden_new.narrow(2, new_len - state_len, state_len)?;
 
@@ -787,7 +792,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                         conv1d_weight = conv1d_weight.squeeze(1)?;
                     }
                     let dt_bias = ct
-                        .tensor(&format!("{prefix}.ssm_dt.bias"), dev)?
+                        .tensor(&format!("{prefix}.ssm_dt"), dev)?
                         .dequantize(dev)?
                         .to_dtype(DType::F32)?;
                     let a = ct
