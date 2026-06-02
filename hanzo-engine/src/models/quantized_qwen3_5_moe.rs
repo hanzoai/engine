@@ -369,24 +369,8 @@ impl QGatedDeltaNet {
         let q = l2_norm(&q, L2_NORM_EPS)?;
         let k = l2_norm(&k, L2_NORM_EPS)?;
 
-        // 7. Recurrent gated delta rule. Decode (seq_len==1) on a Vulkan device runs the native
-        //    single-step kernel, keeping the recurrent state in VRAM across tokens; prefill (seq>1)
-        //    stays on the portable CPU/Tensor scan. CUDA/Metal fused kernels live in gdn.rs on the
-        //    GatedDeltaNet struct and are not reused here for the quantized loader.
-        #[cfg(feature = "cuda")]
-        let y = if q.device().is_cuda() {
-            self.recurrence_cuda(&q, &k, &v, &g, &beta, batch_size, seq_len, cache)?
-        } else if seq_len == 1 && q.device().is_vulkan() && cache.recurrent_state.dtype() == DType::F32 {
-            self.recurrence_vulkan_step(&q, &k, &v, &g, &beta, batch_size, cache)?
-        } else {
-            gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?
-        };
-        #[cfg(not(feature = "cuda"))]
-        let y = if seq_len == 1 && q.device().is_vulkan() && cache.recurrent_state.dtype() == DType::F32 {
-            self.recurrence_vulkan_step(&q, &k, &v, &g, &beta, batch_size, cache)?
-        } else {
-            gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?
-        };
+        // 7. Recurrent gated delta rule (dispatches to the fused per-backend kernel internally).
+        let y = gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?;
         cache.seqlen_offset += seq_len;
 
         // 8. Gated RMSNorm with z, then output projection.
@@ -398,109 +382,6 @@ impl QGatedDeltaNet {
         let y = y.reshape((batch_size, seq_len, self.value_dim))?;
 
         self.out_proj.forward(&y)?.to_dtype(orig_dtype)
-    }
-
-    #[cfg(feature = "cuda")]
-    #[allow(clippy::too_many_arguments)]
-    fn recurrence_cuda(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        v: &Tensor,
-        g: &Tensor,
-        beta: &Tensor,
-        batch_size: usize,
-        seq_len: usize,
-        cache: &mut GdnLayerCache,
-    ) -> Result<Tensor> {
-        let nh = self.num_v_heads;
-        let kd = self.head_k_dim;
-        let vd = self.head_v_dim;
-        let scale = 1.0 / (kd as f64).sqrt();
-        let q_bh = (q.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)? * scale)?
-            .reshape((batch_size * nh, seq_len, kd))?
-            .contiguous()?;
-        let k_bh = k
-            .transpose(1, 2)?
-            .contiguous()?
-            .to_dtype(DType::F32)?
-            .reshape((batch_size * nh, seq_len, kd))?
-            .contiguous()?;
-        let v_bh = v
-            .transpose(1, 2)?
-            .contiguous()?
-            .to_dtype(DType::F32)?
-            .reshape((batch_size * nh, seq_len, vd))?
-            .contiguous()?;
-        let g_bh = g
-            .to_dtype(DType::F32)?
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((batch_size * nh, seq_len))?
-            .contiguous()?;
-        let beta_bh = beta
-            .to_dtype(DType::F32)?
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((batch_size * nh, seq_len))?
-            .contiguous()?;
-        let mut state_flat = cache
-            .recurrent_state
-            .to_dtype(DType::F32)?
-            .reshape((batch_size * nh, kd, vd))?
-            .contiguous()?;
-        const CHUNK_THRESHOLD: usize = 64;
-        let out_bh = if seq_len >= CHUNK_THRESHOLD {
-            crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
-                &q_bh, &k_bh, &v_bh, &g_bh, &beta_bh, &mut state_flat,
-            )?
-        } else {
-            crate::cuda::gdn::gated_delta_rule_recurrence_cuda(
-                &q_bh, &k_bh, &v_bh, &g_bh, &beta_bh, &mut state_flat,
-            )?
-        };
-        cache.recurrent_state = state_flat
-            .reshape((batch_size, nh, kd, vd))?
-            .to_dtype(cache.recurrent_state.dtype())?;
-        out_bh
-            .reshape((batch_size, nh, seq_len, vd))?
-            .transpose(1, 2)?
-            .contiguous()
-    }
-
-    // Single decode step (seq_len==1) of the gated delta rule on Vulkan. q,k,v,g,beta arrive shaped
-    // (1, 1, num_v_heads, ..) / (1, 1, num_v_heads); the recurrent state is (1, num_v_heads, head_k_dim,
-    // head_v_dim) and is updated in place in VRAM (it aliases the pool buffer, so no readback per token).
-    // Applies the 1/sqrt(head_k_dim) q-scale that gated_delta_rule_recurrence does internally, then
-    // returns y shaped (1, 1, num_v_heads, head_v_dim). batch_size is asserted to 1 by the caller's
-    // seq_len==1 decode contract (the recurrent pool gathers one state row per active sequence).
-    #[allow(clippy::too_many_arguments)]
-    fn recurrence_vulkan_step(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        v: &Tensor,
-        g: &Tensor,
-        beta: &Tensor,
-        batch_size: usize,
-        cache: &mut GdnLayerCache,
-    ) -> Result<Tensor> {
-        let bh = batch_size * self.num_v_heads;
-        let scale = 1.0 / (self.head_k_dim as f64).sqrt();
-
-        let q = (q.reshape((bh, self.head_k_dim))?.to_dtype(DType::F32)? * scale)?.contiguous()?;
-        let k = k.reshape((bh, self.head_k_dim))?.to_dtype(DType::F32)?.contiguous()?;
-        let v = v.reshape((bh, self.head_v_dim))?.to_dtype(DType::F32)?.contiguous()?;
-        let g = g.reshape(bh)?.to_dtype(DType::F32)?.contiguous()?;
-        let beta = beta.reshape(bh)?.to_dtype(DType::F32)?.contiguous()?;
-
-        let mut state = cache
-            .recurrent_state
-            .reshape((bh, self.head_k_dim, self.head_v_dim))?;
-        let y = crate::vulkan::gdn::gdn_step_vulkan(&q, &k, &v, &g, &beta, &mut state)?;
-        cache.recurrent_state = state.reshape((batch_size, self.num_v_heads, self.head_k_dim, self.head_v_dim))?;
-
-        y.reshape((batch_size, 1, self.num_v_heads, self.head_v_dim))
     }
 
     fn causal_conv1d_update(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
