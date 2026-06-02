@@ -70,7 +70,7 @@ use crate::gguf::Content;
 use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, Qwen3VLRotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::models::gdn::{
-    gated_delta_rule_recurrence, l2_norm, softplus, GdnLayerCache, RmsNormGated,
+    causal_conv1d, gated_delta_rule_recurrence, l2_norm, softplus, GdnLayerCache, RmsNormGated,
 };
 use crate::ops::{TopKLastDimOp, TopKOutput};
 use crate::paged_attention::AttentionImplementation;
@@ -318,11 +318,14 @@ impl QGatedDeltaNet {
         let a = a.reshape((batch_size, seq_len, self.num_v_heads))?;
 
         // 2. Causal conv1d over the concatenated qkv (includes silu).
-        let mixed_qkv = if cache.seqlen_offset > 0 && seq_len == 1 {
-            self.causal_conv1d_update(&mixed_qkv, cache)?
-        } else {
-            self.causal_conv1d_full(&mixed_qkv, cache)?
-        };
+        let decode = cache.seqlen_offset > 0 && seq_len == 1;
+        let mixed_qkv = causal_conv1d(
+            &mixed_qkv,
+            &self.conv1d_weight,
+            &mut cache.conv_state,
+            self.conv_kernel_size,
+            decode,
+        )?;
 
         // 3. Split conv output back into per-head q, k, v.
         let q = mixed_qkv.narrow(D::Minus1, 0, self.key_dim)?;
@@ -382,87 +385,6 @@ impl QGatedDeltaNet {
         let y = y.reshape((batch_size, seq_len, self.value_dim))?;
 
         self.out_proj.forward(&y)?.to_dtype(orig_dtype)
-    }
-
-    fn causal_conv1d_update(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
-        let (_batch, seq_len, _conv_dim) = x.dims3()?;
-
-        if seq_len == 1 && x.device().is_vulkan() && cache.conv_state.dtype() == DType::F32 {
-            return self.causal_conv1d_update_vulkan(x, cache);
-        }
-
-        let x_t = x.transpose(1, 2)?.contiguous()?;
-
-        let state_len = cache.conv_state.dim(2)?;
-        let conv_state = cache.conv_state.to_dtype(x_t.dtype())?;
-        let hidden_new = Tensor::cat(&[conv_state, x_t], 2)?;
-        let new_len = hidden_new.dim(2)?;
-        cache.conv_state = hidden_new.narrow(2, new_len - state_len, state_len)?;
-
-        let weight = self.conv1d_weight.to_dtype(hidden_new.dtype())?;
-        let mut conv_outputs = Vec::with_capacity(seq_len);
-        let total_len = hidden_new.dim(2)?;
-        for i in (total_len - seq_len)..total_len {
-            let window = hidden_new.narrow(2, i + 1 - self.conv_kernel_size, self.conv_kernel_size)?;
-            let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
-            conv_outputs.push(out);
-        }
-        let out = Tensor::stack(&conv_outputs, 2)?;
-        let out = hanzo_nn::ops::silu(&out)?;
-        out.transpose(1, 2)
-    }
-
-    // Single decode step (seq_len==1, batch==1) of the causal conv1d on Vulkan. conv_state is
-    // (1, conv_dim, k) -- it stores k columns; the step drops the oldest and appends x, exactly as
-    // the CPU causal_conv1d_update does. conv_state is updated in place in VRAM (aliases the pool
-    // buffer); x is (1, 1, conv_dim). Returns silu(conv) as (1, 1, conv_dim). The GGUF conv1d_weight
-    // is (conv_dim, k) with no bias.
-    fn causal_conv1d_update_vulkan(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
-        let conv_dim = self.conv1d_weight.dim(0)?;
-        let x_flat = x.reshape(conv_dim)?.to_dtype(DType::F32)?.contiguous()?;
-        let weight = self.conv1d_weight.to_dtype(DType::F32)?.contiguous()?;
-        let mut conv_state = cache
-            .conv_state
-            .reshape((conv_dim, self.conv_kernel_size))?;
-        let out = crate::vulkan::gdn::gdn_conv1d_step_vulkan(&mut conv_state, &x_flat, &weight)?;
-        cache.conv_state = conv_state.reshape((1, conv_dim, self.conv_kernel_size))?;
-        out.reshape((1, 1, conv_dim))
-    }
-
-    fn causal_conv1d_full(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
-        let (batch_size, seq_len, conv_dim) = x.dims3()?;
-        let x_t = x.transpose(1, 2)?.contiguous()?;
-
-        let pad_width = self.conv_kernel_size.saturating_sub(seq_len);
-        cache.conv_state = if pad_width > 0 {
-            let zeros = Tensor::zeros((batch_size, conv_dim, pad_width), x_t.dtype(), x_t.device())?;
-            Tensor::cat(&[zeros, x_t.clone()], 2)?
-        } else {
-            x_t.narrow(2, seq_len - self.conv_kernel_size, self.conv_kernel_size)?
-        };
-
-        let padded_t = Tensor::cat(
-            &[
-                Tensor::zeros(
-                    (batch_size, conv_dim, self.conv_kernel_size - 1),
-                    x_t.dtype(),
-                    x_t.device(),
-                )?,
-                x_t,
-            ],
-            2,
-        )?;
-
-        let weight = self.conv1d_weight.to_dtype(padded_t.dtype())?;
-        let mut conv_outputs = Vec::with_capacity(seq_len);
-        for i in 0..seq_len {
-            let window = padded_t.narrow(2, i, self.conv_kernel_size)?;
-            let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
-            conv_outputs.push(out);
-        }
-        let out = Tensor::stack(&conv_outputs, 2)?;
-        let out = hanzo_nn::ops::silu(&out)?;
-        out.transpose(1, 2)
     }
 }
 
