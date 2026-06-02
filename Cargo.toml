@@ -20,7 +20,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.9.0"
+version = "1.0.2"
 edition = "2021"
 description = "Hanzo Engine - fast, flexible LLM inference engine written in Rust."
 homepage = "https://github.com/hanzoai/engine"
@@ -191,17 +191,17 @@ landlock = "0.4.4"
 nix = { version = "0.31.3", default-features = false }
 itoa = "1.0.18"
 
-hanzo-engine = { path = "hanzo-engine", version = "0.9.0" }
-hanzo-paged-attn = { path = "hanzo-paged-attn", version = "0.9.0" }
-hanzo-quant = { path = "hanzo-quant", version = "0.9.0" }
-hanzo-vision = { path = "hanzo-vision", version = "0.9.0" }
-hanzo-server-core = { path = "hanzo-server-core", version = "0.9.0" }
-hanzo = { path = "hanzo", version = "0.9.0" }
-hanzo-audio = { path = "hanzo-audio", version = "0.9.0" }
-hanzo-llm-mcp = { path = "hanzo-llm-mcp", version = "0.9.0" }
-hanzo-macros = { path = "hanzo-macros", version = "0.9.0" }
-hanzo-code-exec = { path = "hanzo-code-exec", version = "0.9.0" }
-hanzo-sandbox = { path = "hanzo-sandbox", version = "0.9.0" }
+hanzo-engine = { path = "hanzo-engine", version = "1.0.2" }
+hanzo-paged-attn = { path = "hanzo-paged-attn", version = "1.0.2" }
+hanzo-quant = { path = "hanzo-quant", version = "1.0.2" }
+hanzo-vision = { path = "hanzo-vision", version = "1.0.2" }
+hanzo-server-core = { path = "hanzo-server-core", version = "1.0.2" }
+hanzo = { path = "hanzo", version = "1.0.2" }
+hanzo-audio = { path = "hanzo-audio", version = "1.0.2" }
+hanzo-llm-mcp = { path = "hanzo-llm-mcp", version = "1.0.2" }
+hanzo-macros = { path = "hanzo-macros", version = "1.0.2" }
+hanzo-code-exec = { path = "hanzo-code-exec", version = "1.0.2" }
+hanzo-sandbox = { path = "hanzo-sandbox", version = "1.0.2" }
 
 [profile.release]
 lto = "fat"
