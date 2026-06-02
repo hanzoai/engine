@@ -16,9 +16,8 @@ use crate::{
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -137,25 +136,11 @@ impl MoeMlp {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
-        // Compute routing weights
         let router_logits = self.gate.forward(&xs_flat)?;
         let routing_weights =
             hanzo_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
 
-        // Get top-k experts
-        let topk_ids = routing_weights
-            .arg_sort_last_dim(false)?
-            .narrow(D::Minus1, 0, self.num_experts_per_tok)?
-            .contiguous()?;
-
-        let mut topk_weights = routing_weights.gather(&topk_ids, D::Minus1)?;
-
-        if self.norm_topk_prob {
-            topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
-        }
-
-        // Forward through experts (is_prefill determined internally based on seq_len)
-        let ys = self.experts.forward(xs, topk_weights, &topk_ids)?;
+        let ys = self.experts.forward(xs, topk.values, &topk.indices)?;
 
         ys.reshape((b_size, seq_len, hidden_dim))
     }
@@ -225,7 +210,7 @@ impl Attention {
             cfg.num_key_value_heads,
             cfg.hidden_size / cfg.num_attention_heads,
             comm,
-        );
+        )?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * cfg.head_dim,
@@ -279,7 +264,7 @@ impl Attention {
                     cfg.num_key_value_heads,
                     cfg.num_attention_heads,
                     comm,
-                ),
+                )?,
                 softcap: None,
                 softmax_scale: 1.0 / (cfg.head_dim as f32).sqrt(),
                 sliding_window: None,
@@ -629,9 +614,7 @@ impl Qwen3VLMoETextModel {
         mut xs: Tensor,
         attention_mask: &AttentionMask,
         position_ids: &Tensor,
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &ModelForwardContext<'_>,
         visual_pos_masks: Option<&Tensor>,
         deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
@@ -649,10 +632,8 @@ impl Qwen3VLMoETextModel {
                 &attention_mask.get(xs.device()),
                 &cos_sin,
                 &mut cache[i],
-                metadata
-                    .as_ref()
-                    .map(|(kv_cache, meta)| (kv_cache[i].clone(), *meta)),
-                flash_params,
+                ctx.paged_layer(i),
+                ctx.flash_params(),
             )?;
 
             // Integrate DeepStack visual features when provided.
@@ -666,7 +647,7 @@ impl Qwen3VLMoETextModel {
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
     }
 

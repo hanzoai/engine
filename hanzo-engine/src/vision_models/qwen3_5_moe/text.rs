@@ -24,9 +24,8 @@ use crate::{
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalLoadingMetadata,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -407,18 +406,7 @@ impl SparseMoeBlock {
         let routing_weights =
             hanzo_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
 
-        let topk_ids = routing_weights
-            .arg_sort_last_dim(false)?
-            .narrow(D::Minus1, 0, self.num_experts_per_tok)?
-            .contiguous()?;
-
-        let mut topk_weights = routing_weights.gather(&topk_ids, D::Minus1)?;
-
-        if self.norm_topk_prob {
-            topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
-        }
-
-        let mut y = self.experts.forward(xs, topk_weights, &topk_ids)?;
+        let mut y = self.experts.forward(xs, topk.values, &topk.indices)?;
         y = y.reshape((b_size, seq_len, hidden_dim))?;
 
         let shared_out = self.shared_expert.forward(xs)?;
@@ -744,9 +732,7 @@ impl Qwen3_5MoeTextModel {
         attention_mask: &AttentionMask,
         position_ids: &Tensor,
         _seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &ModelForwardContext<'_>,
         visual_pos_masks: Option<&Tensor>,
         deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
@@ -817,10 +803,8 @@ impl Qwen3_5MoeTextModel {
                             &attention_mask.get(xs.device()),
                             &cos_sin,
                             kv_cache,
-                            metadata
-                                .as_ref()
-                                .map(|(kv_cache, meta)| (kv_cache[i].clone(), *meta)),
-                            flash_params,
+                            ctx.paged_layer(i),
+                            ctx.flash_params(),
                         )?;
                     }
                 }
@@ -882,7 +866,7 @@ impl Qwen3_5MoeTextModel {
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
     }
 
