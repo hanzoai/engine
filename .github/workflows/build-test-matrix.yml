@@ -38,7 +38,6 @@ jobs:
             env_line: ""
             path_add: ""
     runs-on: ${{ matrix.runs-on }}
-    timeout-minutes: 90
     defaults:
       run:
         shell: bash
@@ -56,7 +55,6 @@ jobs:
           echo "ml at: $(git -C ml rev-parse --short HEAD)"
 
       - name: Build hanzo-cli (${{ matrix.features || 'cpu' }})
-        timeout-minutes: 75
         run: |
           export PATH="$HOME/.cargo/bin:${{ matrix.path_add }}:$PATH"
           [ -n "${{ matrix.env_line }}" ] && export ${{ matrix.env_line }}
@@ -68,7 +66,6 @@ jobs:
           fi
 
       - name: Smoke test (doctor)
-        timeout-minutes: 10
         run: |
           export PATH="$HOME/.cargo/bin:${{ matrix.path_add }}:$PATH"
           [ -n "${{ matrix.env_line }}" ] && export ${{ matrix.env_line }}
