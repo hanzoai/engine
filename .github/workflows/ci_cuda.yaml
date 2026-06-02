@@ -18,6 +18,7 @@ jobs:
       cancel-in-progress: true
 
     runs-on: [self-hosted, Linux, ARM64, gpu, cuda]
+    timeout-minutes: 90
 
     strategy:
       matrix:
