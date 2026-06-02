@@ -137,7 +137,13 @@ cuda = [
 ]
 cudnn = ["hanzo-ml/cudnn"]
 cutile = ["cuda", "hanzo-quant/cutile"]
-vulkan = ["hanzo-ml/vulkan", "hanzo-nn/vulkan", "hanzo-quant/vulkan"]
+vulkan = [
+    "hanzo-ml/vulkan",
+    "hanzo-nn/vulkan",
+    "hanzo-quant/vulkan",
+    "dep:hanzo-paged-attn",
+    "hanzo-paged-attn/vulkan",
+]
 wgpu = ["hanzo-ml/wgpu", "hanzo-quant/wgpu"]
 rocm = [
     "hanzo-ml/rocm",
