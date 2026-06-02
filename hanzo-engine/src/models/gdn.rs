@@ -386,8 +386,10 @@ pub fn causal_conv1d(
         return conv1d_vulkan_step(x, weight, conv_state, kernel_size);
     }
     let x_t = x.transpose(1, 2)?.contiguous()?;
+    // The fused CUDA/Metal conv kernels are f16/bf16 only; f32 (GGUF f32-root forward) falls to the
+    // portable path below (a cheap per-token op at decode) rather than bailing in the kernel.
     #[cfg(feature = "cuda")]
-    if x_t.device().is_cuda() {
+    if x_t.device().is_cuda() && x_t.dtype() != DType::F32 {
         let w = weight.to_dtype(x_t.dtype())?.contiguous()?;
         let state = conv_state.contiguous()?;
         let (out, new_state) =
@@ -396,7 +398,7 @@ pub fn causal_conv1d(
         return out.transpose(1, 2);
     }
     #[cfg(feature = "metal")]
-    if x_t.device().is_metal() {
+    if x_t.device().is_metal() && x_t.dtype() != DType::F32 {
         let w = weight.to_dtype(x_t.dtype())?.contiguous()?;
         let state = conv_state.contiguous()?;
         let (out, new_state) =
