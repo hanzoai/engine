@@ -58,6 +58,11 @@ impl RmsNormGated {
         Ok(Self { weight, eps })
     }
 
+    /// Build directly from an already-materialized weight (e.g. a dequantized GGUF tensor).
+    pub fn from_weight(weight: Tensor, eps: f64) -> Self {
+        Self { weight, eps }
+    }
+
     pub fn forward(&self, x: &Tensor, gate: &Tensor) -> Result<Tensor> {
         let dtype = x.dtype();
         let x = x.to_dtype(DType::F32)?;
@@ -138,17 +143,169 @@ pub fn softplus(x: &Tensor) -> Result<Tensor> {
     (Tensor::ones_like(x)? + x.exp()?)?.log()
 }
 
-/// Recurrent gated delta rule (used for both prefill and decode).
-/// Matches torch_recurrent_gated_delta_rule from the reference implementation.
-///
-/// q, k: (batch, seq, num_v_heads, head_k_dim)
-/// v:    (batch, seq, num_v_heads, head_v_dim)
-/// g:    (batch, seq, num_v_heads)
-/// beta: (batch, seq, num_v_heads)
-/// state: (batch, num_v_heads, head_k_dim, head_v_dim)
-///
-/// Returns: (batch, seq, num_v_heads, head_v_dim)
+/// Recurrent gated delta rule for prefill and decode. q,k: (b, s, v_heads, k_dim); v: (b, s,
+/// v_heads, v_dim); g,beta: (b, s, v_heads); state: (b, v_heads, k_dim, v_dim), updated in place.
+/// Returns (b, s, v_heads, v_dim). Single dispatch point: routes to the fused per-backend kernel
+/// where one exists, else the portable scan (which also serves Vulkan/CPU). Dispatch is once per
+/// call, so callers stay one backend-agnostic line at no per-element cost.
 pub fn gated_delta_rule_recurrence(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state: &mut Tensor,
+) -> Result<Tensor> {
+    #[cfg(feature = "cuda")]
+    if state.device().is_cuda() {
+        return recurrence_cuda(q, k, v, g, beta, state);
+    }
+    #[cfg(feature = "metal")]
+    if state.device().is_metal() {
+        return recurrence_metal(q, k, v, g, beta, state);
+    }
+    // Native Vulkan single-step decode: state stays in VRAM across tokens, no per-token readback.
+    if q.dim(1)? == 1 && state.device().is_vulkan() && state.dtype() == DType::F32 {
+        return recurrence_vulkan_step(q, k, v, g, beta, state);
+    }
+    recurrence_portable(q, k, v, g, beta, state)
+}
+
+/// Native Vulkan single decode step (seq==1). q,k,v,g,beta arrive (1, 1, v_heads, ..); the state
+/// (1, v_heads, k_dim, v_dim) is updated in place in VRAM. Applies the 1/sqrt(k_dim) q-scale that
+/// the portable scan does internally, then returns y (1, 1, v_heads, v_dim).
+fn recurrence_vulkan_step(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state: &mut Tensor,
+) -> Result<Tensor> {
+    let (b, _s, nh, kd) = q.dims4()?;
+    let vd = v.dim(D::Minus1)?;
+    let bh = b * nh;
+    let scale = 1.0 / (kd as f64).sqrt();
+    let q = (q.reshape((bh, kd))?.to_dtype(DType::F32)? * scale)?.contiguous()?;
+    let k = k.reshape((bh, kd))?.to_dtype(DType::F32)?.contiguous()?;
+    let v = v.reshape((bh, vd))?.to_dtype(DType::F32)?.contiguous()?;
+    let g = g.reshape(bh)?.to_dtype(DType::F32)?.contiguous()?;
+    let beta = beta.reshape(bh)?.to_dtype(DType::F32)?.contiguous()?;
+    let mut s = state.reshape((bh, kd, vd))?;
+    let y = crate::vulkan::gdn::gdn_step_vulkan(&q, &k, &v, &g, &beta, &mut s)?;
+    *state = s.reshape((b, nh, kd, vd))?;
+    y.reshape((b, 1, nh, vd))
+}
+
+/// Flatten (b, s, heads, dim) -> (b*heads, s, dim) in f32 contiguous, the layout the fused
+/// CUDA/Metal kernels expect. state (b, heads, k, v) flattens to (b*heads, k, v) the same way.
+#[cfg(any(feature = "cuda", feature = "metal"))]
+fn recurrence_flatten(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state: &Tensor,
+) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)> {
+    let (b, s, nh, kd) = q.dims4()?;
+    let vd = v.dim(D::Minus1)?;
+    let bh = b * nh;
+    let scale = 1.0 / (kd as f64).sqrt();
+    let seq_dim = |t: &Tensor, d: usize| -> Result<Tensor> {
+        t.transpose(1, 2)?
+            .contiguous()?
+            .to_dtype(DType::F32)?
+            .reshape((bh, s, d))?
+            .contiguous()
+    };
+    let scalar = |t: &Tensor| -> Result<Tensor> {
+        t.to_dtype(DType::F32)?
+            .transpose(1, 2)?
+            .contiguous()?
+            .reshape((bh, s))?
+            .contiguous()
+    };
+    Ok((
+        (seq_dim(q, kd)? * scale)?,
+        seq_dim(k, kd)?,
+        seq_dim(v, vd)?,
+        scalar(g)?,
+        scalar(beta)?,
+        state.to_dtype(DType::F32)?.reshape((bh, kd, vd))?.contiguous()?,
+    ))
+}
+
+/// Reshape a fused kernel's (b*heads, s, v_dim) output back to (b, s, heads, v_dim), write the
+/// (b*heads, k, v) state back into `state`, and restore the input dtype.
+#[cfg(any(feature = "cuda", feature = "metal"))]
+fn recurrence_unflatten(
+    out_bh: &Tensor,
+    state_flat: &Tensor,
+    q: &Tensor,
+    v: &Tensor,
+    state: &mut Tensor,
+) -> Result<Tensor> {
+    let (b, s, nh, kd) = q.dims4()?;
+    let vd = v.dim(D::Minus1)?;
+    *state = state_flat.reshape((b, nh, kd, vd))?.to_dtype(state.dtype())?;
+    out_bh
+        .reshape((b, nh, s, vd))?
+        .transpose(1, 2)?
+        .contiguous()?
+        .to_dtype(q.dtype())
+}
+
+/// Fused CUDA recurrence: chunked scan for prefill (seq >= 64), single-pass for short/decode.
+#[cfg(feature = "cuda")]
+fn recurrence_cuda(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state: &mut Tensor,
+) -> Result<Tensor> {
+    const CHUNK_THRESHOLD: usize = 64;
+    let (q_bh, k_bh, v_bh, g_bh, beta_bh, mut s) = recurrence_flatten(q, k, v, g, beta, state)?;
+    let out_bh = if q.dim(1)? >= CHUNK_THRESHOLD {
+        crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
+            &q_bh, &k_bh, &v_bh, &g_bh, &beta_bh, &mut s,
+        )?
+    } else {
+        crate::cuda::gdn::gated_delta_rule_recurrence_cuda(
+            &q_bh, &k_bh, &v_bh, &g_bh, &beta_bh, &mut s,
+        )?
+    };
+    recurrence_unflatten(&out_bh, &s, q, v, state)
+}
+
+/// Fused Metal recurrence (mirrors the CUDA path).
+#[cfg(feature = "metal")]
+fn recurrence_metal(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state: &mut Tensor,
+) -> Result<Tensor> {
+    const CHUNK_THRESHOLD: usize = 64;
+    let (q_bh, k_bh, v_bh, g_bh, beta_bh, mut s) = recurrence_flatten(q, k, v, g, beta, state)?;
+    let out_bh = if q.dim(1)? >= CHUNK_THRESHOLD {
+        crate::metal::gdn::chunked_gated_delta_rule_recurrence_metal(
+            &q_bh, &k_bh, &v_bh, &g_bh, &beta_bh, &mut s,
+        )?
+    } else {
+        crate::metal::gdn::gated_delta_rule_recurrence_metal(
+            &q_bh, &k_bh, &v_bh, &g_bh, &beta_bh, &mut s,
+        )?
+    };
+    recurrence_unflatten(&out_bh, &s, q, v, state)
+}
+
+/// Portable f32 reference scan. Serves CPU, Vulkan, and any backend without a fused kernel.
+fn recurrence_portable(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
@@ -492,28 +649,7 @@ impl GatedDeltaNet {
         let k = l2_norm(&k, 1e-6)?;
 
         // 9. Apply recurrence
-        let y = {
-            #[cfg(feature = "cuda")]
-            {
-                if q.device().is_cuda() {
-                    self.recurrence_cuda(&q, &k, &v, &g, &beta, batch_size, seq_len, cache, dtype)?
-                } else {
-                    gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?
-                }
-            }
-            #[cfg(feature = "metal")]
-            {
-                if q.device().is_metal() {
-                    self.recurrence_metal(&q, &k, &v, &g, &beta, batch_size, seq_len, cache, dtype)?
-                } else {
-                    gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?
-                }
-            }
-            #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            {
-                gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?
-            }
-        };
+        let y = gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?;
 
         cache.seqlen_offset += seq_len;
 
@@ -549,176 +685,6 @@ impl GatedDeltaNet {
             .broadcast_mul(&softplus(&a_f.broadcast_add(&dt_bias_expanded)?)?)?
             .to_dtype(dtype)?;
         Ok((beta, g))
-    }
-
-    #[cfg(feature = "cuda")]
-    #[allow(clippy::too_many_arguments)]
-    fn recurrence_cuda(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        v: &Tensor,
-        g: &Tensor,
-        beta: &Tensor,
-        batch_size: usize,
-        seq_len: usize,
-        cache: &mut GdnLayerCache,
-        dtype: DType,
-    ) -> Result<Tensor> {
-        let num_heads = self.num_v_heads;
-        let k_head = self.head_k_dim;
-        let v_head = self.head_v_dim;
-        let scale = 1.0 / (k_head as f64).sqrt();
-
-        let q_bh = (q.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)? * scale)?
-            .reshape((batch_size * num_heads, seq_len, k_head))?
-            .contiguous()?;
-        let k_bh = k
-            .transpose(1, 2)?
-            .contiguous()?
-            .to_dtype(DType::F32)?
-            .reshape((batch_size * num_heads, seq_len, k_head))?
-            .contiguous()?;
-        let v_bh = v
-            .transpose(1, 2)?
-            .contiguous()?
-            .to_dtype(DType::F32)?
-            .reshape((batch_size * num_heads, seq_len, v_head))?
-            .contiguous()?;
-        let g_bh = g
-            .to_dtype(DType::F32)?
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((batch_size * num_heads, seq_len))?
-            .contiguous()?;
-        let beta_bh = beta
-            .to_dtype(DType::F32)?
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((batch_size * num_heads, seq_len))?
-            .contiguous()?;
-
-        let mut state_flat = cache
-            .recurrent_state
-            .to_dtype(DType::F32)?
-            .reshape((batch_size * num_heads, k_head, v_head))?
-            .contiguous()?;
-
-        const CHUNK_THRESHOLD: usize = 64;
-        let out_bh = if seq_len >= CHUNK_THRESHOLD {
-            crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
-                &q_bh,
-                &k_bh,
-                &v_bh,
-                &g_bh,
-                &beta_bh,
-                &mut state_flat,
-            )?
-        } else {
-            crate::cuda::gdn::gated_delta_rule_recurrence_cuda(
-                &q_bh,
-                &k_bh,
-                &v_bh,
-                &g_bh,
-                &beta_bh,
-                &mut state_flat,
-            )?
-        };
-
-        cache.recurrent_state = state_flat
-            .reshape((batch_size, num_heads, k_head, v_head))?
-            .to_dtype(cache.recurrent_state.dtype())?;
-
-        out_bh
-            .reshape((batch_size, num_heads, seq_len, v_head))?
-            .transpose(1, 2)?
-            .contiguous()?
-            .to_dtype(dtype)
-    }
-
-    #[cfg(feature = "metal")]
-    #[allow(clippy::too_many_arguments)]
-    fn recurrence_metal(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        v: &Tensor,
-        g: &Tensor,
-        beta: &Tensor,
-        batch_size: usize,
-        seq_len: usize,
-        cache: &mut GdnLayerCache,
-        dtype: DType,
-    ) -> Result<Tensor> {
-        let num_heads = self.num_v_heads;
-        let k_head = self.head_k_dim;
-        let v_head = self.head_v_dim;
-        let scale = 1.0 / (k_head as f64).sqrt();
-
-        let q_bh = (q.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)? * scale)?
-            .reshape((batch_size * num_heads, seq_len, k_head))?
-            .contiguous()?;
-        let k_bh = k
-            .transpose(1, 2)?
-            .contiguous()?
-            .to_dtype(DType::F32)?
-            .reshape((batch_size * num_heads, seq_len, k_head))?
-            .contiguous()?;
-        let v_bh = v
-            .transpose(1, 2)?
-            .contiguous()?
-            .to_dtype(DType::F32)?
-            .reshape((batch_size * num_heads, seq_len, v_head))?
-            .contiguous()?;
-        let g_bh = g
-            .to_dtype(DType::F32)?
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((batch_size * num_heads, seq_len))?
-            .contiguous()?;
-        let beta_bh = beta
-            .to_dtype(DType::F32)?
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((batch_size * num_heads, seq_len))?
-            .contiguous()?;
-
-        let mut state_flat = cache
-            .recurrent_state
-            .to_dtype(DType::F32)?
-            .reshape((batch_size * num_heads, k_head, v_head))?
-            .contiguous()?;
-
-        const CHUNK_THRESHOLD: usize = 64;
-        let out_bh = if seq_len >= CHUNK_THRESHOLD {
-            crate::metal::gdn::chunked_gated_delta_rule_recurrence_metal(
-                &q_bh,
-                &k_bh,
-                &v_bh,
-                &g_bh,
-                &beta_bh,
-                &mut state_flat,
-            )?
-        } else {
-            crate::metal::gdn::gated_delta_rule_recurrence_metal(
-                &q_bh,
-                &k_bh,
-                &v_bh,
-                &g_bh,
-                &beta_bh,
-                &mut state_flat,
-            )?
-        };
-
-        cache.recurrent_state = state_flat
-            .reshape((batch_size, num_heads, k_head, v_head))?
-            .to_dtype(cache.recurrent_state.dtype())?;
-
-        out_bh
-            .reshape((batch_size, num_heads, seq_len, v_head))?
-            .transpose(1, 2)?
-            .contiguous()?
-            .to_dtype(dtype)
     }
 
     /// Single-step causal conv1d update for decode.
@@ -861,5 +827,175 @@ impl GatedDeltaNet {
         let out = Tensor::stack(&conv_outputs, 2)?;
         let out = hanzo_nn::ops::silu(&out)?;
         out.transpose(1, 2)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Scalar reimplementation of the Vulkan gdn_step.comp single-step math (one (bh, v) state column,
+    // looping k). q is pre-scaled by the caller, exactly as gated_delta_rule_recurrence applies the
+    // 1/sqrt(k_dim) scale internally and as our engine wrapper does before the kernel. State layout is
+    // [bh][k][v] at k*v_dim + v, matching the CPU reference's (heads, k_dim, v_dim) contiguous order.
+    #[allow(clippy::too_many_arguments)]
+    fn gdn_step_scalar(
+        q: &[f32],    // [bh, k]  (pre-scaled)
+        k: &[f32],    // [bh, k]
+        v: &[f32],    // [bh, v]
+        g: &[f32],    // [bh]
+        beta: &[f32], // [bh]
+        state: &mut [f32], // [bh, k, v]
+        bh: usize,
+        k_dim: usize,
+        v_dim: usize,
+    ) -> Vec<f32> {
+        let mut out = vec![0f32; bh * v_dim];
+        for b in 0..bh {
+            let qk_base = b * k_dim;
+            let state_base = b * k_dim * v_dim;
+            let decay = g[b].exp();
+            let beta_t = beta[b];
+            for v_idx in 0..v_dim {
+                let v_t = v[b * v_dim + v_idx];
+                let mut s = vec![0f32; k_dim];
+                let mut kv_mem = 0f32;
+                for j in 0..k_dim {
+                    let sj = state[state_base + j * v_dim + v_idx] * decay;
+                    s[j] = sj;
+                    kv_mem += sj * k[qk_base + j];
+                }
+                let delta = (v_t - kv_mem) * beta_t;
+                let mut y_t = 0f32;
+                for j in 0..k_dim {
+                    let sj = s[j] + k[qk_base + j] * delta;
+                    state[state_base + j * v_dim + v_idx] = sj;
+                    y_t += sj * q[qk_base + j];
+                }
+                out[b * v_dim + v_idx] = y_t;
+            }
+        }
+        out
+    }
+
+    // The Vulkan single-step kernel must reproduce gated_delta_rule_recurrence for seq_len==1. This
+    // pins the shader's arithmetic against the portable reference on the CPU (the shader is a literal
+    // GLSL transliteration of gdn_step_scalar), independent of any GPU.
+    #[test]
+    fn gdn_step_matches_reference_seq1() -> Result<()> {
+        let dev = Device::Cpu;
+        let heads = 4usize;
+        let k_dim = 6usize;
+        let v_dim = 5usize;
+
+        // Deterministic pseudo-random inputs in [-1, 1]-ish ranges.
+        let gen = |n: usize, seed: usize| -> Vec<f32> {
+            (0..n)
+                .map(|i| (((i * 1103515245 + seed * 12345 + 7) % 2000) as f32 / 1000.0) - 1.0)
+                .collect()
+        };
+
+        // Reference tensors: q,k (1,1,heads,k_dim); v (1,1,heads,v_dim); g,beta (1,1,heads);
+        // state (1,heads,k_dim,v_dim).
+        let q_v = gen(heads * k_dim, 1);
+        let k_v = gen(heads * k_dim, 2);
+        let v_v = gen(heads * v_dim, 3);
+        let g_v: Vec<f32> = gen(heads, 4).iter().map(|x| x * 0.5 - 0.5).collect(); // g < 0 (decay<1)
+        let beta_v: Vec<f32> = gen(heads, 5).iter().map(|x| (x + 1.0) * 0.5).collect(); // [0,1]
+        let state_v = gen(heads * k_dim * v_dim, 6);
+
+        let q = Tensor::from_vec(q_v.clone(), (1, 1, heads, k_dim), &dev)?;
+        let k = Tensor::from_vec(k_v.clone(), (1, 1, heads, k_dim), &dev)?;
+        let v = Tensor::from_vec(v_v.clone(), (1, 1, heads, v_dim), &dev)?;
+        let g = Tensor::from_vec(g_v.clone(), (1, 1, heads), &dev)?;
+        let beta = Tensor::from_vec(beta_v.clone(), (1, 1, heads), &dev)?;
+        let mut state_ref = Tensor::from_vec(state_v.clone(), (1, heads, k_dim, v_dim), &dev)?;
+
+        let y_ref = gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut state_ref)?;
+        let y_ref = y_ref.flatten_all()?.to_vec1::<f32>()?;
+        let state_ref = state_ref.flatten_all()?.to_vec1::<f32>()?;
+
+        // Shader-equivalent scalar path: q pre-scaled by 1/sqrt(k_dim) (the reference does this
+        // internally; the engine wrapper does it before the kernel).
+        let scale = 1.0 / (k_dim as f32).sqrt();
+        let q_scaled: Vec<f32> = q_v.iter().map(|x| x * scale).collect();
+        let mut state_shader = state_v.clone();
+        let y_shader = gdn_step_scalar(
+            &q_scaled,
+            &k_v,
+            &v_v,
+            &g_v,
+            &beta_v,
+            &mut state_shader,
+            heads,
+            k_dim,
+            v_dim,
+        );
+
+        for (a, b) in y_ref.iter().zip(y_shader.iter()) {
+            assert!((a - b).abs() < 1e-5, "y mismatch: ref={a} shader={b}");
+        }
+        for (a, b) in state_ref.iter().zip(state_shader.iter()) {
+            assert!((a - b).abs() < 1e-5, "state mismatch: ref={a} shader={b}");
+        }
+        Ok(())
+    }
+
+    // The Vulkan conv1d single-step kernel must reproduce causal_conv1d_update for seq_len==1 with a
+    // conv_state of width k (drop oldest column, append x), including the silu. Pins that arithmetic
+    // on the CPU; the shader is a literal transliteration.
+    #[test]
+    fn gdn_conv1d_step_matches_reference_seq1() -> Result<()> {
+        let dev = Device::Cpu;
+        let conv_dim = 7usize;
+        let k = 4usize;
+
+        let gen = |n: usize, seed: usize| -> Vec<f32> {
+            (0..n)
+                .map(|i| (((i * 2654435761 + seed * 40503 + 11) % 2000) as f32 / 1000.0) - 1.0)
+                .collect()
+        };
+        let cs_v = gen(conv_dim * k, 1); // conv_state [conv_dim, k]
+        let x_v = gen(conv_dim, 2); // new column [conv_dim]
+        let w_v = gen(conv_dim * k, 3); // weight [conv_dim, k]
+
+        // Reference: replicate causal_conv1d_update for seq=1 via tensor ops. conv_state (1,conv_dim,k),
+        // x (1,1,conv_dim). window = [conv_state | x][:, :, 1..k+1]; out = silu(sum(window*weight)).
+        let conv_state = Tensor::from_vec(cs_v.clone(), (1, conv_dim, k), &dev)?;
+        let x_t = Tensor::from_vec(x_v.clone(), (1, conv_dim, 1), &dev)?;
+        let weight = Tensor::from_vec(w_v.clone(), (conv_dim, k), &dev)?;
+        let hidden = Tensor::cat(&[&conv_state, &x_t], 2)?; // (1, conv_dim, k+1)
+        let window = hidden.narrow(2, 1, k)?; // (1, conv_dim, k)
+        let out_ref = (window.clone() * weight.unsqueeze(0)?)?.sum(D::Minus1)?; // (1, conv_dim)
+        let out_ref = hanzo_nn::ops::silu(&out_ref)?.flatten_all()?.to_vec1::<f32>()?;
+        let new_state_ref = window.flatten_all()?.to_vec1::<f32>()?; // new conv_state == window
+
+        // Shader-equivalent scalar path (matches gdn_conv1d_step.comp).
+        let mut cs = cs_v.clone();
+        let mut out_shader = vec![0f32; conv_dim];
+        for c in 0..conv_dim {
+            let base = c * k;
+            let mut win = vec![0f32; k];
+            for j in 0..k - 1 {
+                win[j] = cs[base + j + 1];
+            }
+            win[k - 1] = x_v[c];
+            let mut acc = 0f32;
+            for j in 0..k {
+                acc += win[j] * w_v[base + j];
+            }
+            out_shader[c] = acc / (1.0 + (-acc).exp());
+            for j in 0..k {
+                cs[base + j] = win[j];
+            }
+        }
+
+        for (a, b) in out_ref.iter().zip(out_shader.iter()) {
+            assert!((a - b).abs() < 1e-5, "conv out mismatch: ref={a} shader={b}");
+        }
+        for (a, b) in new_state_ref.iter().zip(cs.iter()) {
+            assert!((a - b).abs() < 1e-5, "conv state mismatch: ref={a} shader={b}");
+        }
+        Ok(())
     }
 }
