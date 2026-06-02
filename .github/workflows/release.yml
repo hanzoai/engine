@@ -79,10 +79,6 @@ jobs:
             name: hanzoai-linux-arm64
             features: "vendored-openssl"
             cross: true
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            name: hanzoai-macos-amd64
-            features: metal
           - target: aarch64-apple-darwin
             os: macos-14
             name: hanzoai-macos-arm64
