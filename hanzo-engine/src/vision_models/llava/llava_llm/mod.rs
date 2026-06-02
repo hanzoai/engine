@@ -1,10 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use hanzo_ml::{DType, Device, Result, Tensor};
 
-use crate::pipeline::{
-    text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-    IsqModel, NormalModel,
-};
+use crate::pipeline::{IsqModel, ModelForwardContext, NormalModel};
 
 pub(crate) trait LLaVALLM: IsqModel + NormalModel + Sync + Send {
     //Normal model without anymoe, but add embed and forward_input_embed. This is only a temporary solution. Finally when the rope problem solved for normal LLM models, we should refactor this.
@@ -14,10 +11,7 @@ pub(crate) trait LLaVALLM: IsqModel + NormalModel + Sync + Send {
         &self,
         input_ids: &Tensor,  // only for masking
         input_embed: Tensor, // we don't want to clone, so we pass it in
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor>;
 }
 
