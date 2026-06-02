@@ -17,7 +17,8 @@ jobs:
             compute_capability: [80, 86, 89, 90]
           fail-fast: false
         runs-on: ubuntu-latest
-        
+        timeout-minutes: 90
+
         permissions:
             contents: write
             packages: write
