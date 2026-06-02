@@ -246,14 +246,14 @@ macro_rules! serde_default_fn {
     };
 }
 
-/// `true` if built with CUDA (requires Unix) /Metal
-#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
+/// `true` if built with CUDA (requires Unix) / Metal / Vulkan
+#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal", feature = "vulkan"))]
 pub const fn paged_attn_supported() -> bool {
     true
 }
 
-/// `true` if built with CUDA (requires Unix) /Metal
-#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
+/// `true` if built with CUDA (requires Unix) / Metal / Vulkan
+#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal", feature = "vulkan")))]
 pub const fn paged_attn_supported() -> bool {
     false
 }

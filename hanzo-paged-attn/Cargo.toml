@@ -29,3 +29,4 @@ anyhow.workspace = true
 [features]
 cuda = ["dep:cudaforge", "hanzo-ml/cuda"]
 metal = ["dep:objc2-metal", "dep:objc2-foundation", "dep:dispatch2", "dep:hanzo-metal-kernels"]
+vulkan = ["hanzo-ml/vulkan"]
