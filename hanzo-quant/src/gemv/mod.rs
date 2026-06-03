@@ -67,7 +67,7 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
         return false;
     }
 
-    let candle_core::Device::Cuda(_) = x.device() else {
+    let hanzo_ml::Device::Cuda(_) = x.device() else {
         return false;
     };
 

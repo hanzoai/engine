@@ -1,5 +1,5 @@
-use candle_core::{Result, Tensor};
-use mistralrs_quant::ShardedVarBuilder;
+use hanzo_ml::{Result, Tensor};
+use hanzo_quant::ShardedVarBuilder;
 use std::sync::Arc;
 
 use crate::moe::shard;
@@ -10,7 +10,7 @@ use super::config::MoEExpertsConfig;
 pub(super) struct ExpertCheckpoint<'a> {
     pub(super) cfg: &'a MoEExpertsConfig,
     vb: ShardedVarBuilder,
-    comm: &'a Arc<mistralrs_quant::Comm>,
+    comm: &'a Arc<hanzo_quant::Comm>,
     pub(super) combined: bool,
 }
 
@@ -18,7 +18,7 @@ impl<'a> ExpertCheckpoint<'a> {
     pub(super) fn new(
         cfg: &'a MoEExpertsConfig,
         vb: ShardedVarBuilder,
-        comm: &'a Arc<mistralrs_quant::Comm>,
+        comm: &'a Arc<hanzo_quant::Comm>,
     ) -> Self {
         let combined = vb.contains_tensor("gate_up_proj");
         Self {

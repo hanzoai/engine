@@ -4,7 +4,8 @@ use crate::layers_masker::CausalMaskConfig;
 use std::{collections::HashMap, sync::Arc};
 
 use hanzo_ml::{DType, Device, Module, Result, Tensor};
-use hanzo_quant::{QuantMethod, ShardedVarBuilder};
+use hanzo_quant::{
+    softcap,QuantMethod, ShardedVarBuilder};
 use tqdm::Iter;
 use tracing::info;
 
@@ -278,7 +279,7 @@ impl Attention {
             .copied()
             .map(u32::try_from)
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(candle_core::Error::wrap)?;
+            .map_err(hanzo_ml::Error::wrap)?;
         let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
         let (q, k) = self.rotary_emb.forward_positions(&q, &k, &positions)?;
 

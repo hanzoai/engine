@@ -208,7 +208,7 @@ impl Attention {
 
         let rope_positions = ctx
             .rope_positions(q.device())?
-            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+            .ok_or_else(|| hanzo_ml::Error::msg("missing RoPE positions"))?;
         (q, k) = self.rotary_emb.forward_qk_norm_positions(
             &q,
             &k,
