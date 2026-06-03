@@ -2875,7 +2875,7 @@ impl CustomOp1 for Softcap {
         let cap = self.0;
 
         let DType::F32 = s1.dtype() else {
-            candle_core::bail!("softcap: unsupported dtype {:?}", s1.dtype());
+            hanzo_ml::bail!("softcap: unsupported dtype {:?}", s1.dtype());
         };
         let input = s1.as_slice::<f32>()?;
         let offset = l1.start_offset();
@@ -2918,7 +2918,7 @@ impl CustomOp1 for Softcap {
             DType::F32 => launch!(f32, ffi::softcap_f32),
             DType::F16 => launch!(half::f16, ffi::softcap_f16_to_f32),
             DType::BF16 => launch!(half::bf16, ffi::softcap_bf16_to_f32),
-            dtype => candle_core::bail!("softcap: unsupported dtype {dtype:?}"),
+            dtype => hanzo_ml::bail!("softcap: unsupported dtype {dtype:?}"),
         }
 
         drop(_output_guard);
@@ -2931,14 +2931,14 @@ impl CustomOp1 for Softcap {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        s1: &candle_core::MetalStorage,
+        s1: &hanzo_ml::MetalStorage,
         l1: &Layout,
-    ) -> Result<(candle_core::MetalStorage, Shape)> {
+    ) -> Result<(hanzo_ml::MetalStorage, Shape)> {
         let n_elements = l1.shape().elem_count();
         let out_shape = l1.shape().clone();
         let dtype = s1.dtype();
         let DType::F32 = dtype else {
-            candle_core::bail!("softcap: unsupported dtype {:?}", dtype);
+            hanzo_ml::bail!("softcap: unsupported dtype {:?}", dtype);
         };
 
         let device = s1.device();
@@ -2957,10 +2957,10 @@ impl CustomOp1 for Softcap {
             self.0,
             &output,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
 
         Ok((
-            candle_core::MetalStorage::new(output, device.clone(), n_elements, dtype),
+            hanzo_ml::MetalStorage::new(output, device.clone(), n_elements, dtype),
             out_shape,
         ))
     }
@@ -2968,7 +2968,7 @@ impl CustomOp1 for Softcap {
 
 pub fn softcap(input: &Tensor, cap: f32) -> Result<Tensor> {
     if !cap.is_finite() || cap <= 0.0 {
-        candle_core::bail!("softcap requires a positive finite cap");
+        hanzo_ml::bail!("softcap requires a positive finite cap");
     }
 
     let input = input.contiguous()?;
@@ -2994,9 +2994,9 @@ mod tests {
     #[test]
     fn test_softcap_cpu_f32() {
         use super::softcap;
-        use candle_core::Tensor;
+        use hanzo_ml::Tensor;
 
-        let device = candle_core::Device::Cpu;
+        let device = hanzo_ml::Device::Cpu;
         let cap = 30.0;
         let data: Vec<f32> = (-64..64).map(|i| i as f32 * 0.75).collect();
         let expected: Vec<f32> = data.iter().map(|x| (x / cap).tanh() * cap).collect();
@@ -3015,10 +3015,10 @@ mod tests {
     #[test]
     fn test_softcap_cuda_f32() {
         use super::softcap;
-        use candle_core::Tensor;
+        use hanzo_ml::Tensor;
 
-        let cpu = candle_core::Device::Cpu;
-        let cuda = candle_core::Device::new_cuda(0).unwrap();
+        let cpu = hanzo_ml::Device::Cpu;
+        let cuda = hanzo_ml::Device::new_cuda(0).unwrap();
         let cap = 30.0;
         let data: Vec<f32> = (-128..128).map(|i| i as f32 * 0.5).collect();
         let input = Tensor::from_vec(data, &[4, 64], &cuda).unwrap();
@@ -3046,10 +3046,10 @@ mod tests {
     #[test]
     fn test_softcap_metal_f32() {
         use super::softcap;
-        use candle_core::Tensor;
+        use hanzo_ml::Tensor;
 
-        let cpu = candle_core::Device::Cpu;
-        let metal = candle_core::Device::new_metal(0).unwrap();
+        let cpu = hanzo_ml::Device::Cpu;
+        let metal = hanzo_ml::Device::new_metal(0).unwrap();
         let cap = 30.0;
         let data: Vec<f32> = (-128..128).map(|i| i as f32 * 0.5).collect();
         let input = Tensor::from_vec(data, &[4, 64], &metal).unwrap();

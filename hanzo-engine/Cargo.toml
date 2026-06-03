@@ -11,28 +11,9 @@ license = "MIT"
 name = "hanzo_engine"
 path = "src/lib.rs"
 
-[[bin]]
-name = "hanzo-engine"
-path = "src/bin/hanzo-engine.rs"
-
 [dependencies]
-# Inference backend: high-level Rust facade + low-level core.
-# Path is the workspace fork (kept in sync with upstream 0.8.x); version is
-# the matching crates.io release so the manifest is publishable.
-mistralrs = { version = "0.8.1", path = "../mistralrs" }
-mistralrs-core = { version = "0.8.1", path = "../mistralrs-core" }
-
-# Zen5 family adapter — wraps `hanzo_zen5::Zen5Engine` behind the
-# canonical `InferenceEngine` trait so hanzod can serve zen-5-flash/pro/
-# mini/coder through the same registry as MistralEngine. Default-features
-# off so the C runtime is opt-in: `cargo build -p hanzo-engine --features
-# zen5-ffi` to actually link `libds4`; without the feature, the adapter
-# compiles against the trait but `open()` errors with "no backend enabled".
-hanzo-zen5 = { path = "../hanzo-zen5", default-features = false }
-
 # Lib internals
 anyhow = { workspace = true }
-futures = { workspace = true }
 sha2 = "0.10"
 thiserror = { workspace = true }
 tokio = { version = "1.47", features = ["rt-multi-thread", "macros", "sync"] }
@@ -42,18 +23,19 @@ tracing = { workspace = true }
 tempfile = { workspace = true }
 
 [features]
-default = ["metal"]
-cuda = ["mistralrs-core/cuda"]
-metal = ["mistralrs-core/metal"]
-flash-attn = ["mistralrs-core/flash-attn"]
-mkl = ["mistralrs-core/mkl"]
+# Stub backend until canonical hanzo-engine src tree is restored.
+# Real inference + embedding lived in `mistralrs-core` and `hanzo`
+# (the SDK facade). Both are currently mid-rename and don't compile,
+# so this crate ships as a stub: the registry + traits compile but
+# `MistralEngine::from_hf_repo` and friends return "engine not built
+# with backend" at runtime. Re-enable with `--features real-engine`
+# once the engine source tree is back in shape.
+default = []
+real-engine = []
+cuda = []
+metal = []
+flash-attn = []
+mkl = []
 no-cuda = []
-# Enables tests that actually load a model. Gated because the model file
-# is large and slow to load.
+# Tests that load an actual model; gated because models are large.
 real-model = []
-# Enable Zen5 FFI backend. Requires the vendored `libds4` C runtime to
-# build cleanly (build.rs in hanzo-zen5 takes care of it on macOS/Linux).
-zen5-ffi = ["hanzo-zen5/ffi"]
-# Enable Zen5 native candle backend (CPU/Metal). Useful in CI where you
-# don't want a C toolchain on the path.
-zen5-native = ["hanzo-zen5/native"]
