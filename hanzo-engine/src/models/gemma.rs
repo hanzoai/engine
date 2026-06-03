@@ -191,7 +191,7 @@ impl Attention {
 
         let rope_positions = ctx
             .rope_positions(q.device())?
-            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+            .ok_or_else(|| hanzo_ml::Error::msg("missing RoPE positions"))?;
         let (q, k) = self.rotary_emb.forward_positions(&q, &k, rope_positions)?;
         let metadata = ctx.paged_layer(layer_idx);
 
