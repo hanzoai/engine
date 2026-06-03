@@ -176,7 +176,7 @@ impl Attention {
             .copied()
             .map(u32::try_from)
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(candle_core::Error::wrap)?;
+            .map_err(hanzo_ml::Error::wrap)?;
         let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
         let (q, k) = self.rotary_emb.forward_positions(&q, &k, &positions)?;
 
@@ -365,7 +365,22 @@ impl SparseMoeBlock {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let routing_weights = hanzo_nn::ops::softmax_last_dim(&router_logits)?;
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.num_experts_per_tok,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: true,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
+        let selected_experts = topk.indices.to_vec2::<u32>()?;
+        let routing_weights = topk.values.to_dtype(DType::F32)?.to_vec2::<f32>()?;
 
         let mut top_x = vec![vec![]; self.experts.len()];
         let mut selected_rws = vec![vec![]; self.experts.len()];

@@ -2011,16 +2011,16 @@ impl FusedExperts {
 
 fn validate_tp_kv_heads(total_num_kv_heads: usize, tensor_parallel_size: usize) -> Result<()> {
     if total_num_kv_heads == 0 {
-        candle_core::bail!("Total number of KV heads must be greater than 0.");
+        hanzo_ml::bail!("Total number of KV heads must be greater than 0.");
     }
     if tensor_parallel_size <= total_num_kv_heads {
         if !total_num_kv_heads.is_multiple_of(tensor_parallel_size) {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "Total number of KV heads ({total_num_kv_heads}) must be divisible by tensor parallel size ({tensor_parallel_size}) when KV heads are partitioned."
             );
         }
     } else if !tensor_parallel_size.is_multiple_of(total_num_kv_heads) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Tensor parallel size ({tensor_parallel_size}) must be divisible by total number of KV heads ({total_num_kv_heads}) when KV heads are replicated."
         );
     }
@@ -2033,10 +2033,10 @@ pub fn validate_tp_head_layout(
     tensor_parallel_size: usize,
 ) -> Result<()> {
     if total_num_attention_heads == 0 {
-        candle_core::bail!("Total number of attention heads must be greater than 0.");
+        hanzo_ml::bail!("Total number of attention heads must be greater than 0.");
     }
     if !total_num_attention_heads.is_multiple_of(tensor_parallel_size) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "Total number of attention heads ({total_num_attention_heads}) must be divisible by tensor parallel size ({tensor_parallel_size})."
         );
     }

@@ -197,7 +197,7 @@ impl Attention {
         let position_ids = ctx.position_ids_vec();
         let rope_positions = ctx
             .rope_positions(q.device())?
-            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+            .ok_or_else(|| hanzo_ml::Error::msg("missing RoPE positions"))?;
         let (q, k) = self
             .rotary_emb
             .forward_positions(&q, &k, rope_positions, &position_ids)?;

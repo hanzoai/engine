@@ -393,7 +393,7 @@ fn rms_norm_forward_residual_then_rms_norm(
     }
 
     let xs = rms_norm_forward_residual(x, residual, residual_weight, residual_eps, scale)?;
-    let normed = candle_nn::ops::rms_norm(&xs.contiguous()?, norm_weight, norm_eps as f32)?;
+    let normed = hanzo_nn::ops::rms_norm(&xs.contiguous()?, norm_weight, norm_eps as f32)?;
     Ok((xs, normed))
 }
 
@@ -844,71 +844,15 @@ impl PhiRotaryEmbedding {
         apply_rotary_selected_qk(q, k, &cos, &sin, true)
     }
 
-        let rot_dim = cos.dim(D::Minus1)? * 2;
-
-        // Case for Phi 3 / Phi 4 mini
-        if rot_dim != q.dim(D::Minus1)? {
-            let rot_dim = cos.dim(D::Minus1)? * 2;
-            let q_rot = q.narrow(D::Minus1, 0, rot_dim)?;
-            let q_pass = q.narrow(D::Minus1, rot_dim, q.dim(D::Minus1)? - rot_dim)?;
-            let k_rot = k.narrow(D::Minus1, 0, rot_dim)?;
-            let k_pass = k.narrow(D::Minus1, rot_dim, k.dim(D::Minus1)? - rot_dim)?;
-
-            let (q_rot, k_rot) = if seqlen_offsets.len() == 1 {
-                let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
-                let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
-                let q_embed = hanzo_nn::rotary_emb::rope(&q_rot.contiguous()?, &cos, &sin)?;
-                let k_embed = hanzo_nn::rotary_emb::rope(&k_rot.contiguous()?, &cos, &sin)?;
-                (q_embed, k_embed)
-            } else {
-                let mut q_embeds = Vec::new();
-                let mut k_embeds = Vec::new();
-                for (i, offset) in seqlen_offsets.iter().enumerate() {
-                    let cos = cos.narrow(0, *offset, seq_len)?;
-                    let sin = sin.narrow(0, *offset, seq_len)?;
-                    let q_embed = hanzo_nn::rotary_emb::rope(
-                        &q_rot.i(i)?.unsqueeze(0)?.contiguous()?,
-                        &cos,
-                        &sin,
-                    )?;
-                    let k_embed = hanzo_nn::rotary_emb::rope(
-                        &k_rot.i(i)?.unsqueeze(0)?.contiguous()?,
-                        &cos,
-                        &sin,
-                    )?;
-                    q_embeds.push(q_embed);
-                    k_embeds.push(k_embed);
-                }
-                let q_rot = Tensor::cat(&q_embeds, 0)?;
-                let k_rot = Tensor::cat(&k_embeds, 0)?;
-                (q_rot, k_rot)
-            };
-
-            Ok((
-                Tensor::cat(&[q_rot, q_pass], D::Minus1)?.contiguous()?,
-                Tensor::cat(&[k_rot, k_pass], D::Minus1)?.contiguous()?,
-            ))
-        } else if seqlen_offsets.len() == 1 {
-            let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = hanzo_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-            let k_embed = hanzo_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
-            Ok((q_embed, k_embed))
-        } else {
-            let mut q_embeds = Vec::new();
-            let mut k_embeds = Vec::new();
-            for (i, offset) in seqlen_offsets.iter().enumerate() {
-                let cos = cos.narrow(0, *offset, seq_len)?;
-                let sin = sin.narrow(0, *offset, seq_len)?;
-                let q_embed =
-                    hanzo_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                let k_embed =
-                    hanzo_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                q_embeds.push(q_embed);
-                k_embeds.push(k_embed);
-            }
-            Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
-        }
+    pub fn forward_positions(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        positions: &Tensor,
+        position_ids: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        let (sin, cos) = self.get_long_or_short_sin_cos(position_ids);
+        apply_rotary_positions_qk(q, k, cos, sin, positions, true)
     }
 }
 
@@ -1951,27 +1895,13 @@ impl DeepSeekV2RotaryEmbedding {
         apply_rotary_selected_qk(q, k, &cos, &sin, false)
     }
 
-        if seqlen_offsets.len() == 1 {
-            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = hanzo_nn::rotary_emb::rope_i(&q.contiguous()?, &cos, &sin)?;
-            let k_embed = hanzo_nn::rotary_emb::rope_i(&k.contiguous()?, &cos, &sin)?;
-            Ok((q_embed, k_embed))
-        } else {
-            let mut q_embeds = Vec::new();
-            let mut k_embeds = Vec::new();
-            for (i, offset) in seqlen_offsets.iter().enumerate() {
-                let cos = self.cos.narrow(0, *offset, seq_len)?;
-                let sin = self.sin.narrow(0, *offset, seq_len)?;
-                let q_embed =
-                    hanzo_nn::rotary_emb::rope_i(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                let k_embed =
-                    hanzo_nn::rotary_emb::rope_i(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                q_embeds.push(q_embed);
-                k_embeds.push(k_embed);
-            }
-            Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
-        }
+    pub fn forward_positions(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        positions: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
+        apply_rotary_positions_qk(q, k, &self.cos, &self.sin, positions, false)
     }
 }
 
@@ -2131,46 +2061,15 @@ impl Phi4MMRotaryEmbedding {
         apply_rotary_selected_qk(q, k, &cos, &sin, true)
     }
 
-        let rot_dim = cos.dim(D::Minus1)? * 2;
-        let q_rot = q.narrow(D::Minus1, 0, rot_dim)?;
-        let q_pass = q.narrow(D::Minus1, rot_dim, q.dim(D::Minus1)? - rot_dim)?;
-        let k_rot = k.narrow(D::Minus1, 0, rot_dim)?;
-        let k_pass = k.narrow(D::Minus1, rot_dim, k.dim(D::Minus1)? - rot_dim)?;
-
-        let (q_rot, k_rot) = if seqlen_offsets.len() == 1 {
-            let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = hanzo_nn::rotary_emb::rope(&q_rot.contiguous()?, &cos, &sin)?;
-            let k_embed = hanzo_nn::rotary_emb::rope(&k_rot.contiguous()?, &cos, &sin)?;
-            (q_embed, k_embed)
-        } else {
-            let mut q_embeds = Vec::new();
-            let mut k_embeds = Vec::new();
-            for (i, offset) in seqlen_offsets.iter().enumerate() {
-                let cos = cos.narrow(0, *offset, seq_len)?;
-                let sin = sin.narrow(0, *offset, seq_len)?;
-                let q_embed = hanzo_nn::rotary_emb::rope(
-                    &q_rot.i(i)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?;
-                let k_embed = hanzo_nn::rotary_emb::rope(
-                    &k_rot.i(i)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?;
-                q_embeds.push(q_embed);
-                k_embeds.push(k_embed);
-            }
-            let q_rot = Tensor::cat(&q_embeds, 0)?;
-            let k_rot = Tensor::cat(&k_embeds, 0)?;
-            (q_rot, k_rot)
-        };
-
-        Ok((
-            Tensor::cat(&[q_rot, q_pass], D::Minus1)?.contiguous()?,
-            Tensor::cat(&[k_rot, k_pass], D::Minus1)?.contiguous()?,
-        ))
+    pub fn forward_positions(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        positions: &Tensor,
+        position_ids: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        let (sin, cos) = self.get_long_or_short_sin_cos(position_ids);
+        apply_rotary_positions_qk(q, k, cos, sin, positions, true)
     }
 }
 
@@ -2679,7 +2578,7 @@ pub(crate) fn apply_rotary_selected_qk(
     sin: &Tensor,
     is_gpt_neox: bool,
 ) -> Result<(Tensor, Tensor)> {
-    let (q, k) = mistralrs_quant::rotary::apply_rotary_qk(q, k, cos, sin, is_gpt_neox)?;
+    let (q, k) = hanzo_quant::rotary::apply_rotary_qk(q, k, cos, sin, is_gpt_neox)?;
     Ok((post_rope_output(q)?, post_rope_output(k)?))
 }
 
@@ -2689,7 +2588,7 @@ pub(crate) fn apply_rotary_selected_q(
     sin: &Tensor,
     is_gpt_neox: bool,
 ) -> Result<Tensor> {
-    post_rope_output(mistralrs_quant::rotary::apply_rotary_q(
+    post_rope_output(hanzo_quant::rotary::apply_rotary_q(
         q,
         cos,
         sin,
@@ -2706,7 +2605,7 @@ pub(crate) fn apply_rotary_positions_qk(
     is_gpt_neox: bool,
 ) -> Result<(Tensor, Tensor)> {
     let (q, k) =
-        mistralrs_quant::rotary::apply_rotary_qk_positions(q, k, cos, sin, positions, is_gpt_neox)?;
+        hanzo_quant::rotary::apply_rotary_qk_positions(q, k, cos, sin, positions, is_gpt_neox)?;
     Ok((post_rope_output(q)?, post_rope_output(k)?))
 }
 
@@ -2717,7 +2616,7 @@ pub(crate) fn apply_rotary_positions_q(
     positions: &Tensor,
     is_gpt_neox: bool,
 ) -> Result<Tensor> {
-    post_rope_output(mistralrs_quant::rotary::apply_rotary_q_positions(
+    post_rope_output(hanzo_quant::rotary::apply_rotary_q_positions(
         q,
         cos,
         sin,
@@ -2860,10 +2759,6 @@ pub fn q_rms_norm_rope(
         }
         Tensor::cat(&q_embeds, 0)
     }
-
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
-    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
-    apply_rotary_positions_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2901,9 +2796,9 @@ pub fn qkv_rms_norm_rope_positions(
         return Ok((q, k, v));
     }
 
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
-    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
-    let v = candle_nn::ops::rms_norm(&v.contiguous()?, v_weight, v_eps as f32)?;
+    let q = hanzo_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let k = hanzo_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
+    let v = hanzo_nn::ops::rms_norm(&v.contiguous()?, v_weight, v_eps as f32)?;
     let (q, k) = apply_rotary_positions_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox)?;
     Ok((q, k, v))
 }
@@ -2934,8 +2829,42 @@ pub fn q_rms_norm_rope_positions(
         return Ok(q);
     }
 
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let q = hanzo_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
     apply_rotary_positions_q(&q, cos_cache, sin_cache, positions, is_gpt_neox)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn qk_rms_norm_rope_positions(
+    q: &Tensor,
+    k: &Tensor,
+    q_weight: &Tensor,
+    k_weight: &Tensor,
+    q_eps: f64,
+    k_eps: f64,
+    cos_cache: &Tensor,
+    sin_cache: &Tensor,
+    is_gpt_neox: bool,
+    positions: &Tensor,
+) -> Result<(Tensor, Tensor)> {
+    #[cfg(feature = "cuda")]
+    if let Some((q, Some(k))) = crate::ops::try_cuda_qk_rms_norm_rope_positions(
+        q,
+        Some(k),
+        q_weight,
+        Some(k_weight),
+        q_eps as f32,
+        k_eps as f32,
+        cos_cache,
+        sin_cache,
+        positions,
+        is_gpt_neox,
+    )? {
+        return Ok((q, k));
+    }
+
+    let q = hanzo_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let k = hanzo_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
+    apply_rotary_positions_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2950,6 +2879,9 @@ pub fn qk_rms_norm_mrope(
     sin: &Tensor,
     is_gpt_neox: bool,
 ) -> Result<(Tensor, Tensor)> {
+    let (_, _q_heads, _, head_dim) = q.dims4()?;
+    let rot_width = cos.dim(D::Minus1)? * 2;
+
     #[cfg(feature = "cuda")]
     {
         let (batch, _, seq_len, _) = q.dims4()?;
@@ -3419,69 +3351,13 @@ impl GptOssRotaryEmbedding {
         self.rotary.forward(q, k, seqlen_offsets)
     }
 
-        // Use CUDA optimized kernel when available and q/k have same number of heads
-        // The CUDA kernel uses is_neox=true for chunked/GPT-NeoX style rotary
-        #[cfg(feature = "cuda")]
-        if q.device().is_cuda() && qh == k.dim(1)? {
-            let (cos, sin) = if seqlen_offsets.len() == 1 {
-                (
-                    self.cos.narrow(0, seqlen_offsets[0], seq_len)?,
-                    self.sin.narrow(0, seqlen_offsets[0], seq_len)?,
-                )
-            } else {
-                let mut cos_s = Vec::new();
-                let mut sin_s = Vec::new();
-                for offset in seqlen_offsets {
-                    cos_s.push(self.cos.narrow(0, *offset, seq_len)?);
-                    sin_s.push(self.sin.narrow(0, *offset, seq_len)?);
-                }
-                (Tensor::cat(&cos_s, 0)?, Tensor::cat(&sin_s, 0)?)
-            };
-
-            // Reshape for CUDA kernel: [b, h, seq, dim] -> [b*seq, h, dim]
-            let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
-            let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
-
-            // Apply rotary with is_neox=true for chunked style
-            hanzo_quant::rotary::apply_rotary_inplace(&q_embed, &k_embed, &cos, &sin, true)?;
-
-            // Reshape back: [b*seq, h, dim] -> [b, h, seq, dim]
-            let mut q = q_embed
-                .reshape((b_sz, seq_len, qh, n_embd))?
-                .transpose(1, 2)?;
-            let mut k = k_embed
-                .reshape((b_sz, seq_len, kh, n_embd))?
-                .transpose(1, 2)?;
-
-            if !(cfg!(feature = "flash-attn") || cfg!(feature = "flash-attn-v3")) {
-                q = q.contiguous()?;
-                k = k.contiguous()?;
-            }
-            return Ok((q, k));
-        }
-
-        // CPU fallback using hanzo_nn's rope (GPT-NeoX/chunked style)
-        if seqlen_offsets.len() == 1 {
-            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = hanzo_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-            let k_embed = hanzo_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
-            Ok((q_embed, k_embed))
-        } else {
-            let mut q_embeds = Vec::new();
-            let mut k_embeds = Vec::new();
-            for (i, offset) in seqlen_offsets.iter().enumerate() {
-                let cos = self.cos.narrow(0, *offset, seq_len)?;
-                let sin = self.sin.narrow(0, *offset, seq_len)?;
-                let q_embed =
-                    hanzo_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                let k_embed =
-                    hanzo_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                q_embeds.push(q_embed);
-                k_embeds.push(k_embed);
-            }
-            Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
-        }
+    pub fn forward_positions(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        positions: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
+        self.rotary.forward_positions(q, k, positions)
     }
 }
 
