@@ -11,6 +11,7 @@ use hanzo_engine::{
 use hanzo_server_core::{
     approvals::ApprovalBroker, hanzo_for_server_builder::HanzoForServerBuilder,
     hanzo_server_router_builder::HanzoServerRouterBuilder,
+    route_registry::{RouteInfo, RouteKind, MISTRALRS_API_ROUTES},
 };
 
 use crate::args::{
