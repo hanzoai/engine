@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use candle_core::{Device, DeviceLocation, Result, Tensor};
+use hanzo_ml::{Device, DeviceLocation, Result, Tensor};
 
 use super::{mappers::DeviceMapper, peer::CudaPeerAccess};
 

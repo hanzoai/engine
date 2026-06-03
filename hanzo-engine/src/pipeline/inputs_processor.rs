@@ -408,9 +408,9 @@ pub mod text_models_inputs_processor {
         map: Option<&'a HashMap<DeviceLocation, Tensor>>,
         device: &DeviceLocation,
         missing_msg: &'static str,
-    ) -> candle_core::Result<&'a Tensor> {
+    ) -> hanzo_ml::Result<&'a Tensor> {
         map.and_then(|tensors| tensors.get(device))
-            .ok_or_else(|| candle_core::Error::msg(missing_msg))
+            .ok_or_else(|| hanzo_ml::Error::msg(missing_msg))
     }
 
     impl PagedAttentionInputMetadata {
@@ -420,7 +420,7 @@ pub mod text_models_inputs_processor {
             device: &DeviceLocation,
             use_full: bool,
             _use_tensor_cores: bool,
-        ) -> candle_core::Result<FlashInferDecodeMetadata<'_>> {
+        ) -> hanzo_ml::Result<FlashInferDecodeMetadata<'_>> {
             let paged_kv_indptr = if use_full {
                 self.full_paged_kv_indptr.as_ref()
             } else {
@@ -517,7 +517,7 @@ pub mod text_models_inputs_processor {
             &self,
             device: &DeviceLocation,
             use_full: bool,
-        ) -> candle_core::Result<FlashInferPrefillMetadata<'_>> {
+        ) -> hanzo_ml::Result<FlashInferPrefillMetadata<'_>> {
             let paged_kv_indptr = if use_full {
                 self.full_paged_kv_indptr.as_ref()
             } else {

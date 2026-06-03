@@ -12,6 +12,7 @@ use std::{
 use hanzo_ml::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use hanzo_nn::Embedding;
 use hanzo_quant::{
+    softcap,
     ColumnParallelLayer, GgufMatMul, QuantMethod, QuantMethodConfig, ReplicatedLayer,
     RowParallelLayer, ShardedVarBuilder, UnquantLinear,
 };
@@ -196,6 +197,37 @@ impl ProportionalRotaryEmbedding {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn forward_qkv_norm_positions(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        q_weight: &Tensor,
+        k_weight: &Tensor,
+        v_weight: &Tensor,
+        q_eps: f64,
+        k_eps: f64,
+        v_eps: f64,
+        positions: &Tensor,
+    ) -> Result<(Tensor, Tensor, Tensor)> {
+        crate::layers::qkv_rms_norm_rope_positions(
+            q,
+            k,
+            v,
+            q_weight,
+            k_weight,
+            v_weight,
+            q_eps,
+            k_eps,
+            v_eps,
+            &self.cos,
+            &self.sin,
+            self.is_gpt_neox,
+            positions,
+        )
+    }
+
     pub(super) fn forward_q_positions(&self, q: &Tensor, positions: &Tensor) -> Result<Tensor> {
         crate::layers::apply_rotary_positions_q(
             q,
@@ -332,7 +364,7 @@ impl Attention {
             comm,
             vb.pp("q_proj"),
         )?;
-        let kv_shard = hanzo_quant::compute_kv_shard(num_kv_heads, head_dim, comm);
+        let kv_shard = hanzo_quant::compute_kv_shard(num_kv_heads, head_dim, comm)?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
@@ -1893,15 +1925,12 @@ impl TextModel {
             // supported. PagedAttention still needs a non-None prompt mask
             // (CausalFlash is enough) to route prompt chunks through SDPA
             // before writing to the paged cache.
-            let is_first = metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true);
+            let is_first = ctx.is_first_prompt_chunk();
             // #2183: a paged prefill *continuation* chunk (q_len > 1, not the
             // first chunk) must keep a materialized custom mask on CPU instead
             // of dropping to AttentionMask::None — otherwise the SWA corner
             // chunking case computes the wrong attention.
-            let is_paged_prefill_chunk = metadata.is_some() && input_ids.dim(1)? > 1 && !is_first;
+            let is_paged_prefill_chunk = ctx.is_paged() && input_ids.dim(1)? > 1 && !is_first;
             let attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
                 &mask_cache,
@@ -2004,7 +2033,7 @@ impl TextModel {
                     .expect("missing active fast prefill plan");
                 if let Some(metadata) = plan.paged_metadata.as_ref() {
                     crate::pipeline::metadata_rope_positions(metadata, xs.device())
-                        .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+                        .ok_or_else(|| hanzo_ml::Error::msg("missing RoPE positions"))?
                         .clone()
                 } else {
                     ctx.rope_positions_from_offsets(
@@ -2014,7 +2043,7 @@ impl TextModel {
                 }
             } else {
                 ctx.rope_positions(xs.device())?
-                    .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+                    .ok_or_else(|| hanzo_ml::Error::msg("missing RoPE positions"))?
                     .clone()
             };
             let (layer_attention_mask, layer_sliding_attention_mask) = if reduced_to_logits {
@@ -2305,8 +2334,7 @@ impl MultimodalModel for TextModel {
         _input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
         _model_specific_args: Box<dyn std::any::Any>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        _flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> hanzo_ml::Result<Tensor> {
         unreachable!()
     }

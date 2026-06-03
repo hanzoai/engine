@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use super::llava_llm::{LLaVALLM, Llama, Mistral};
 use crate::amoe::AnyMoeBaseModelMixin;
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::amoe::MlpLayer;
 use crate::device_map::DeviceMapper;
 use crate::layers;
@@ -299,8 +300,7 @@ impl MultimodalModel for Model {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> hanzo_ml::Result<Tensor> {
         let LLaVAVisionSpecificArgs { image_hashes } = *model_specific_args
             .downcast()

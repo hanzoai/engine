@@ -1,23 +1,21 @@
 [workspace]
 members = [
+    "hanzo",
     "hanzo-engine",
-    "hanzo-federation",
+    "hanzo-server-core",
+    "hanzo-server",
+    "hanzo-cli",
+    "hanzo-pyo3",
+    "hanzo-bench",
+    "hanzo-vision",
     "hanzo-quant",
-    "hanzo-zen5",
-    "mistralrs-server-core",
-    "mistralrs-server",
-    "mistralrs-cli",
-    "mistralrs-core",
-    "mistralrs-pyo3",
-    "mistralrs",
-    "mistralrs-bench",
-    "mistralrs-vision",
-    "mistralrs-quant",
-    "mistralrs-paged-attn",
-    "mistralrs-web-chat",
-    "mistralrs-audio",
-    "mistralrs-mcp",
-    "mistralrs-macros",
+    "hanzo-paged-attn",
+    "hanzo-web-chat",
+    "hanzo-audio",
+    "hanzo-llm-mcp",
+    "hanzo-macros",
+    "hanzo-sandbox",
+    "hanzo-code-exec",
 ]
 resolver = "2"
 
@@ -47,6 +45,10 @@ candle-nn = { path = "../ml/hanzo-nn", package = "hanzo-nn" }
 candle-flash-attn = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
 candle-flash-attn-v3 = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
 candle-metal-kernels = { path = "../ml/hanzo-metal-kernels", package = "hanzo-metal-kernels" }
+# Canonical-named aliases for the candle fork (crates reference these directly).
+hanzo-ml = { path = "../ml/hanzo-ml" }
+hanzo-nn = { path = "../ml/hanzo-nn" }
+hanzo-metal-kernels = { path = "../ml/hanzo-metal-kernels" }
 # candle-core = { path = "../candle/candle-core" }
 # candle-nn = { path = "../candle/candle-nn" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }
@@ -185,21 +187,35 @@ hyper = "1.8.1"
 rust-mcp-sdk = { version = "0.8.2", default-features = false, features = ["server", "hyper-server"] }
 rust-mcp-schema = { version = "0.9.5", default-features = false, features = ["schema_utils", "latest"] }
 cudaforge = "0.1.2"
+cutile = "0.1.0"
+cutile-compiler = "0.1.0"
+cutile-ir = "0.1.0"
+cuda-core = "0.1.0"
+cuda-async = "0.1.0"
+cuda-bindings = "0.1.0"
 rubato = "0.16.2"
 rustfft = "6.4.1"
 hound = "3.5.1"
 apodize = "1.0.0"
 statrs = "0.18.0"
+# Sandbox (hanzo-sandbox) host deps; Linux-gated in the crate.
+itoa = "1.0.18"
+nix = { version = "0.31.3", default-features = false }
+landlock = "0.4.4"
+seccompiler = "0.5.0"
 
-mistralrs-core = { path = "mistralrs-core", version = "0.8.1" }
-mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.8.1" }
-mistralrs-quant = { path = "mistralrs-quant", version = "0.8.1" }
-mistralrs-vision = { path = "mistralrs-vision", version = "0.8.1" }
-mistralrs-server-core = { path = "mistralrs-server-core", version = "0.8.1" }
-mistralrs = { path = "mistralrs", version = "0.8.1" }
-mistralrs-audio = { path = "mistralrs-audio", version = "0.8.1" }
-mistralrs-mcp = { path = "mistralrs-mcp", version = "0.8.1" }
-mistralrs-macros = { path = "mistralrs-macros", version = "0.8.1" }
+# Canonical Hanzo crates (mistralrs-* lineage renamed to hanzo-*).
+hanzo = { path = "hanzo" }
+hanzo-engine = { path = "hanzo-engine" }
+hanzo-server-core = { path = "hanzo-server-core" }
+hanzo-paged-attn = { path = "hanzo-paged-attn" }
+hanzo-quant = { path = "hanzo-quant" }
+hanzo-vision = { path = "hanzo-vision" }
+hanzo-audio = { path = "hanzo-audio" }
+hanzo-llm-mcp = { path = "hanzo-llm-mcp" }
+hanzo-macros = { path = "hanzo-macros" }
+hanzo-sandbox = { path = "hanzo-sandbox" }
+hanzo-code-exec = { path = "hanzo-code-exec" }
 hanzo-zap = { path = "../net/hanzo-zap", version = "0.6.75" }
 
 # Hanzo native-ML extension crates (federated training, quantization, zen5 inference)
