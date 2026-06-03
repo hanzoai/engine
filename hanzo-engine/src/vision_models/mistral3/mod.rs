@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
@@ -352,8 +353,7 @@ impl MultimodalModel for Mistral3Model {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> hanzo_ml::Result<Tensor> {
         let Mistral3SpecificArgs {
             image_sizes,

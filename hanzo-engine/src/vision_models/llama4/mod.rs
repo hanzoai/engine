@@ -17,7 +17,7 @@ use crate::{
     paged_attention::encoder_cache::{cached_encode_images, CacheModality, EncoderCacheManager},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, ModelForwardContext,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata}, EitherCache, IsqModel, ModelForwardContext,
         MultimodalModel, NormalLoadingMetadata, NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
@@ -185,21 +185,9 @@ impl NormalModel for Llama4Model {
     fn forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> hanzo_ml::Result<Tensor> {
-        self.forward(
-            input_ids,
-            None,
-            &[],
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.forward(input_ids, None, &[], ctx)
     }
     fn xlora_forward(
         &self,
@@ -246,8 +234,7 @@ impl MultimodalModel for Llama4Model {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> hanzo_ml::Result<Tensor> {
         let Llama4ModelSpecificArgs { image_hashes } = *model_specific_args
             .downcast()

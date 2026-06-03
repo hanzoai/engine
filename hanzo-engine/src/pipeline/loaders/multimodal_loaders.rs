@@ -29,6 +29,7 @@ use crate::paged_attention::{AttentionImplementation, ModelConfigLike, ModelConf
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::loaders::AutoDeviceMapParams;
 use crate::pipeline::{
+    text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
     EitherCache, IsqModel, Modalities, ModelForwardContext, MultimodalPromptPrefixer, Processor,
     ProcessorCreator, SupportedModality,
 };
@@ -84,8 +85,7 @@ pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMi
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> hanzo_ml::Result<Tensor>;
     fn device(&self) -> &Device;
     fn cache(&self) -> &EitherCache;

@@ -1,4 +1,4 @@
-use candle_core::Tensor;
+use hanzo_ml::Tensor;
 
 use crate::pipeline::text_models_inputs_processor::FLASHINFER_PREFILL_MAX_GROUP_SIZE;
 
@@ -23,7 +23,7 @@ impl AttentionBackendKind {
     pub fn from_cache(key_cache: &Tensor, value_cache: &Tensor) -> Self {
         #[cfg(all(feature = "cuda", target_family = "unix"))]
         {
-            if mistralrs_paged_attn::is_flashinfer_cache(key_cache, value_cache) {
+            if hanzo_paged_attn::is_flashinfer_cache(key_cache, value_cache) {
                 return Self::FlashInfer;
             }
         }

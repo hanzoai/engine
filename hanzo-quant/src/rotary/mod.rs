@@ -1,7 +1,7 @@
 #[cfg(feature = "cuda")]
 mod ffi;
 
-use candle_core::{
+use hanzo_ml::{
     backend::BackendStorage, CpuStorage, CustomOp3, Layout, Result, Shape, Storage, Tensor,
     WithDType,
 };
@@ -20,29 +20,29 @@ impl RotaryEmb {
             [cos_batch, cos_seq, dim] if *cos_batch == batch && *cos_seq == seq_len => {
                 (batch * seq_len, *dim)
             }
-            _ => candle_core::bail!("invalid RoPE cos shape {:?}", l_cos.shape()),
+            _ => hanzo_ml::bail!("invalid RoPE cos shape {:?}", l_cos.shape()),
         };
         let (sin_rows, sin_dim) = match l_sin.shape().dims() {
             [rows, dim] => (*rows, *dim),
             [sin_batch, sin_seq, dim] if *sin_batch == batch && *sin_seq == seq_len => {
                 (batch * seq_len, *dim)
             }
-            _ => candle_core::bail!("invalid RoPE sin shape {:?}", l_sin.shape()),
+            _ => hanzo_ml::bail!("invalid RoPE sin shape {:?}", l_sin.shape()),
         };
         if (cos_rows, rot_dim) != (sin_rows, sin_dim) {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "RoPE cos/sin shape mismatch {:?} {:?}",
                 l_cos.shape(),
                 l_sin.shape()
             );
         }
         if cos_rows != seq_len && cos_rows != batch * seq_len {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "RoPE cache rows {cos_rows} are incompatible with batch {batch} and seq {seq_len}"
             );
         }
         if rot_dim == 0 || rot_dim * 2 > head_dim {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "RoPE rot dim {} is incompatible with head dim {head_dim}",
                 rot_dim * 2
             );
@@ -85,15 +85,15 @@ impl CustomOp3 for RotaryEmb {
         {
             let src = match l_src.contiguous_offsets() {
                 Some((o1, o2)) => &src[o1..o2],
-                None => candle_core::bail!("RoPE input must be contiguous"),
+                None => hanzo_ml::bail!("RoPE input must be contiguous"),
             };
             let cos = match l_cos.contiguous_offsets() {
                 Some((o1, o2)) => &cos[o1..o2],
-                None => candle_core::bail!("RoPE cos must be contiguous"),
+                None => hanzo_ml::bail!("RoPE cos must be contiguous"),
             };
             let sin = match l_sin.contiguous_offsets() {
                 Some((o1, o2)) => &sin[o1..o2],
-                None => candle_core::bail!("RoPE sin must be contiguous"),
+                None => hanzo_ml::bail!("RoPE sin must be contiguous"),
             };
             let (batch, heads, seq_len, head_dim) = l_src.shape().dims4()?;
             let (cache_rows, rot_dim) = RotaryEmb { is_neox }.cache_dims(l_src, l_cos, l_sin)?;
@@ -132,7 +132,7 @@ impl CustomOp3 for RotaryEmb {
             (F16(s1), F16(s2), F16(s3)) => inner(s1, l1, s2, l2, s3, l3, self.is_neox),
             (F32(s1), F32(s2), F32(s3)) => inner(s1, l1, s2, l2, s3, l3, self.is_neox),
             (F64(s1), F64(s2), F64(s3)) => inner(s1, l1, s2, l2, s3, l3, self.is_neox),
-            _ => candle_core::bail!(
+            _ => hanzo_ml::bail!(
                 "unsupported RoPE dtype {:?} {:?} {:?}",
                 s1.dtype(),
                 s2.dtype(),
@@ -144,18 +144,18 @@ impl CustomOp3 for RotaryEmb {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        s1: &candle_core::MetalStorage,
+        s1: &hanzo_ml::MetalStorage,
         l1: &Layout,
-        s2: &candle_core::MetalStorage,
+        s2: &hanzo_ml::MetalStorage,
         l2: &Layout,
-        s3: &candle_core::MetalStorage,
+        s3: &hanzo_ml::MetalStorage,
         l3: &Layout,
-    ) -> Result<(candle_core::MetalStorage, Shape)> {
+    ) -> Result<(hanzo_ml::MetalStorage, Shape)> {
         let (batch, heads, seq_len, head_dim) = l1.shape().dims4()?;
         let (cache_rows, rot_dim) = self.cache_dims(l1, l2, l3)?;
         let dtype = s1.dtype();
         if s2.dtype() != dtype || s3.dtype() != dtype {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "RoPE dtype mismatch {:?} {:?} {:?}",
                 dtype,
                 s2.dtype(),
@@ -188,9 +188,9 @@ impl CustomOp3 for RotaryEmb {
             self.is_neox,
             &output,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(hanzo_ml::Error::wrap)?;
 
-        let storage = candle_core::MetalStorage::new(output, device.clone(), elem_count, dtype);
+        let storage = hanzo_ml::MetalStorage::new(output, device.clone(), elem_count, dtype);
         Ok((storage, l1.shape().clone()))
     }
 }
@@ -224,7 +224,7 @@ fn rotary_dims(x: &Tensor, cos: &Tensor, sin: &Tensor, positioned: bool) -> Resu
             [cos_batch, cos_seq, dim] if *cos_batch == batch && *cos_seq == seq_len => {
                 (batch * seq_len, *dim)
             }
-            _ => candle_core::bail!("invalid RoPE cos shape {:?}", cos.shape()),
+            _ => hanzo_ml::bail!("invalid RoPE cos shape {:?}", cos.shape()),
         }
     };
     let (sin_rows, sin_dim) = if positioned {
@@ -235,23 +235,23 @@ fn rotary_dims(x: &Tensor, cos: &Tensor, sin: &Tensor, positioned: bool) -> Resu
             [sin_batch, sin_seq, dim] if *sin_batch == batch && *sin_seq == seq_len => {
                 (batch * seq_len, *dim)
             }
-            _ => candle_core::bail!("invalid RoPE sin shape {:?}", sin.shape()),
+            _ => hanzo_ml::bail!("invalid RoPE sin shape {:?}", sin.shape()),
         }
     };
     if (cache_rows, rot_dim) != (sin_rows, sin_dim) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "RoPE cos/sin shape mismatch {:?} {:?}",
             cos.shape(),
             sin.shape()
         );
     }
     if !positioned && cache_rows != seq_len && cache_rows != batch * seq_len {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "RoPE cache rows {cache_rows} are incompatible with batch {batch} and seq {seq_len}"
         );
     }
     if rot_dim == 0 || rot_dim * 2 > head_dim {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "RoPE rot dim {} is incompatible with head dim {head_dim}",
             rot_dim * 2
         );
@@ -270,7 +270,7 @@ fn check_qk_shape(q: &Tensor, k: &Tensor) -> Result<usize> {
     let (batch, _, seq_len, head_dim) = q.dims4()?;
     let (k_batch, k_heads, k_seq_len, k_head_dim) = k.dims4()?;
     if (k_batch, k_seq_len, k_head_dim) != (batch, seq_len, head_dim) {
-        candle_core::bail!("q/k RoPE shape mismatch {:?} {:?}", q.shape(), k.shape());
+        hanzo_ml::bail!("q/k RoPE shape mismatch {:?} {:?}", q.shape(), k.shape());
     }
     Ok(k_heads)
 }
@@ -278,7 +278,7 @@ fn check_qk_shape(q: &Tensor, k: &Tensor) -> Result<usize> {
 fn typed_slice<'a, T>(xs: &'a [T], layout: &Layout, name: &'static str) -> Result<&'a [T]> {
     match layout.contiguous_offsets() {
         Some((start, end)) => Ok(&xs[start..end]),
-        None => candle_core::bail!("{name} must be contiguous for RoPE"),
+        None => hanzo_ml::bail!("{name} must be contiguous for RoPE"),
     }
 }
 
@@ -289,7 +289,7 @@ fn cpu_positions<'a>(
         return Ok(None);
     };
     let Storage::Cpu(CpuStorage::U32(positions)) = &**storage else {
-        candle_core::bail!("RoPE positions must be CPU u32");
+        hanzo_ml::bail!("RoPE positions must be CPU u32");
     };
     Ok(Some(typed_slice(positions, layout, "positions")?))
 }
@@ -337,14 +337,14 @@ where
             RotaryEmb { is_neox }.cache_dims(src_l, cos_l, sin_l)?
         };
         if positioned && sin_l.shape().dims2()? != (cache_rows, rot_dim) {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "RoPE cos/sin shape mismatch {:?} {:?}",
                 cos_l.shape(),
                 sin_l.shape()
             );
         }
         if rot_dim == 0 || rot_dim * 2 > head_dim {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "RoPE rot dim {} is incompatible with head dim {head_dim}",
                 rot_dim * 2
             );
@@ -353,14 +353,14 @@ where
     };
     if let Some(positions) = positions {
         if positions.len() != batch {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "RoPE positions length {} does not match batch {batch}",
                 positions.len()
             );
         }
         for position in positions {
             if *position as usize + seq_len > cache_rows {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "RoPE position {} with seq {seq_len} exceeds cache rows {}",
                     position,
                     cache_rows
@@ -396,7 +396,7 @@ where
                 dst[y_idx] = y * cos + x * sin;
             }
         });
-    Tensor::from_vec(dst, src_l.shape().clone(), &candle_core::Device::Cpu)
+    Tensor::from_vec(dst, src_l.shape().clone(), &hanzo_ml::Device::Cpu)
 }
 
 fn cpu_apply_rotary_q(
@@ -473,7 +473,7 @@ fn cpu_apply_rotary_q(
             positions,
             is_neox,
         }),
-        _ => candle_core::bail!(
+        _ => hanzo_ml::bail!(
             "unsupported CPU RoPE dtype {:?} {:?} {:?}",
             q.dtype(),
             cos.dtype(),
@@ -491,7 +491,7 @@ fn cpu_apply_rotary_qk(
     is_neox: bool,
 ) -> Result<(Tensor, Tensor)> {
     if q.dtype() != k.dtype() {
-        candle_core::bail!("q/k dtype mismatch {:?} {:?}", q.dtype(), k.dtype());
+        hanzo_ml::bail!("q/k dtype mismatch {:?} {:?}", q.dtype(), k.dtype());
     }
     check_qk_shape(q, k)?;
     let (q_out, k_out) = rayon::join(
@@ -543,7 +543,7 @@ fn cuda_apply_rotary_qk(
     let (batch, q_heads, seq_len, head_dim) = q.dims4()?;
     let (k_batch, k_heads, k_seq_len, k_head_dim) = k.dims4()?;
     if (k_batch, k_seq_len, k_head_dim) != (batch, seq_len, head_dim) {
-        candle_core::bail!("q/k RoPE shape mismatch {:?} {:?}", q.shape(), k.shape());
+        hanzo_ml::bail!("q/k RoPE shape mismatch {:?} {:?}", q.shape(), k.shape());
     }
     let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
     let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
@@ -571,7 +571,7 @@ fn metal_apply_rotary_q(
     positions: Option<&Tensor>,
     is_neox: bool,
 ) -> Result<Tensor> {
-    use candle_core::MetalStorage;
+    use hanzo_ml::MetalStorage;
 
     let q = q.contiguous()?;
     let cos = cos.contiguous()?;
@@ -579,8 +579,8 @@ fn metal_apply_rotary_q(
     let positions = positions.map(Tensor::contiguous).transpose()?;
     let dims = rotary_dims(&q, &cos, &sin, positions.is_some())?;
     if let Some(positions) = positions.as_ref() {
-        if positions.dtype() != candle_core::DType::U32 || positions.dims1()? != dims.batch {
-            candle_core::bail!("RoPE positions must be u32 with length {}", dims.batch);
+        if positions.dtype() != hanzo_ml::DType::U32 || positions.dims1()? != dims.batch {
+            hanzo_ml::bail!("RoPE positions must be u32 with length {}", dims.batch);
         }
     }
 
@@ -589,15 +589,15 @@ fn metal_apply_rotary_q(
     let (sin_s, sin_l) = sin.storage_and_layout();
     let q_s = match &*q_s {
         Storage::Metal(storage) => storage,
-        _ => candle_core::bail!("q must be a Metal tensor"),
+        _ => hanzo_ml::bail!("q must be a Metal tensor"),
     };
     let cos_s = match &*cos_s {
         Storage::Metal(storage) => storage,
-        _ => candle_core::bail!("cos must be a Metal tensor"),
+        _ => hanzo_ml::bail!("cos must be a Metal tensor"),
     };
     let sin_s = match &*sin_s {
         Storage::Metal(storage) => storage,
-        _ => candle_core::bail!("sin must be a Metal tensor"),
+        _ => hanzo_ml::bail!("sin must be a Metal tensor"),
     };
     let device = q_s.device();
     let output = device.new_buffer(q_l.shape().elem_count(), q_s.dtype(), "rotary-q")?;
@@ -608,7 +608,7 @@ fn metal_apply_rotary_q(
         let (positions_s, positions_l) = positions.storage_and_layout();
         let positions_s = match &*positions_s {
             Storage::Metal(storage) => storage,
-            _ => candle_core::bail!("positions must be a Metal tensor"),
+            _ => hanzo_ml::bail!("positions must be a Metal tensor"),
         };
         crate::metal_kernels::call_rotary_q_positions(
             device.device(),
@@ -653,7 +653,7 @@ fn metal_apply_rotary_q(
             &output,
         )
     }
-    .map_err(candle_core::Error::wrap)?;
+    .map_err(hanzo_ml::Error::wrap)?;
 
     Ok(metal_tensor(
         Storage::Metal(MetalStorage::new(
@@ -675,7 +675,7 @@ fn metal_apply_rotary_qk(
     positions: Option<&Tensor>,
     is_neox: bool,
 ) -> Result<(Tensor, Tensor)> {
-    use candle_core::MetalStorage;
+    use hanzo_ml::MetalStorage;
 
     let q = q.contiguous()?;
     let k = k.contiguous()?;
@@ -685,8 +685,8 @@ fn metal_apply_rotary_qk(
     let dims = rotary_dims(&q, &cos, &sin, positions.is_some())?;
     let k_heads = check_qk_shape(&q, &k)?;
     if let Some(positions) = positions.as_ref() {
-        if positions.dtype() != candle_core::DType::U32 || positions.dims1()? != dims.batch {
-            candle_core::bail!("RoPE positions must be u32 with length {}", dims.batch);
+        if positions.dtype() != hanzo_ml::DType::U32 || positions.dims1()? != dims.batch {
+            hanzo_ml::bail!("RoPE positions must be u32 with length {}", dims.batch);
         }
     }
 
@@ -696,19 +696,19 @@ fn metal_apply_rotary_qk(
     let (sin_s, sin_l) = sin.storage_and_layout();
     let q_s = match &*q_s {
         Storage::Metal(storage) => storage,
-        _ => candle_core::bail!("q must be a Metal tensor"),
+        _ => hanzo_ml::bail!("q must be a Metal tensor"),
     };
     let k_s = match &*k_s {
         Storage::Metal(storage) => storage,
-        _ => candle_core::bail!("k must be a Metal tensor"),
+        _ => hanzo_ml::bail!("k must be a Metal tensor"),
     };
     let cos_s = match &*cos_s {
         Storage::Metal(storage) => storage,
-        _ => candle_core::bail!("cos must be a Metal tensor"),
+        _ => hanzo_ml::bail!("cos must be a Metal tensor"),
     };
     let sin_s = match &*sin_s {
         Storage::Metal(storage) => storage,
-        _ => candle_core::bail!("sin must be a Metal tensor"),
+        _ => hanzo_ml::bail!("sin must be a Metal tensor"),
     };
     let device = q_s.device();
     let q_out = device.new_buffer(q_l.shape().elem_count(), q_s.dtype(), "rotary-q")?;
@@ -720,7 +720,7 @@ fn metal_apply_rotary_qk(
         let (positions_s, positions_l) = positions.storage_and_layout();
         let positions_s = match &*positions_s {
             Storage::Metal(storage) => storage,
-            _ => candle_core::bail!("positions must be a Metal tensor"),
+            _ => hanzo_ml::bail!("positions must be a Metal tensor"),
         };
         crate::metal_kernels::call_rotary_qk_positions(
             device.device(),
@@ -773,7 +773,7 @@ fn metal_apply_rotary_qk(
             &k_out,
         )
     }
-    .map_err(candle_core::Error::wrap)?;
+    .map_err(hanzo_ml::Error::wrap)?;
 
     Ok((
         metal_tensor(
@@ -859,7 +859,7 @@ fn apply_rotary_qk_inner(
     is_neox: bool,
 ) -> Result<(Tensor, Tensor)> {
     if q.dtype() != k.dtype() {
-        candle_core::bail!("q/k dtype mismatch {:?} {:?}", q.dtype(), k.dtype());
+        hanzo_ml::bail!("q/k dtype mismatch {:?} {:?}", q.dtype(), k.dtype());
     }
     #[cfg(feature = "cuda")]
     if q.device().is_cuda() {
@@ -880,7 +880,16 @@ mod cuda {
 
     use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
-    fn apply_rotary_<
+    fn dtype_code(dtype: DType) -> Result<u32> {
+        match dtype {
+            DType::F16 => Ok(0),
+            DType::BF16 => Ok(1),
+            DType::F32 => Ok(2),
+            dtype => hanzo_ml::bail!("dtype {dtype:?} is not supported"),
+        }
+    }
+
+    fn apply_rotary_inner<
         T: hanzo_ml::cuda_backend::CudaDType + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         query: &Tensor,
@@ -890,23 +899,7 @@ mod cuda {
         is_neox: bool,
     ) -> Result<()> {
         let dtype = query.dtype();
-        if key.dtype() != dtype || cos_cache.dtype() != dtype || sin_cache.dtype() != dtype {
-            hanzo_ml::bail!("apply-rotary expects all tensors to have the same dtype");
-        }
-        let op = RotaryInplace { is_neox };
-        query.inplace_op3(cos_cache, sin_cache, &op)?;
-        if let Some(key) = key {
-            key.inplace_op3(cos_cache, sin_cache, &op)?;
-        }
-        Ok(())
-    }
-
-        let internal_type = match dtype {
-            DType::F16 => 0,
-            DType::BF16 => 1,
-            DType::F32 => 2,
-            dtype => hanzo_ml::bail!("dtype {dtype:?} is not supported"),
-        };
+        let internal_type = dtype_code(dtype)?;
 
         let (q, q_l) = query.storage_and_layout();
         let q = match &*q {
@@ -914,6 +907,7 @@ mod cuda {
             _ => hanzo_ml::bail!("query must be a cuda tensor"),
         };
 
+        let key = key.unwrap_or(query);
         let (k, k_l) = key.storage_and_layout();
         let k = match &*k {
             Storage::Cuda(k) => k,
@@ -947,17 +941,16 @@ mod cuda {
             )
         }
 
-        // Get cuda slices for all tensors
         let q = q.as_cuda_slice::<T>()?;
         let k = k.as_cuda_slice::<T>()?;
         let cc = cc.as_cuda_slice::<T>()?;
         let sc = sc.as_cuda_slice::<T>()?;
+        let stream = q.stream().clone();
 
-        // Get cuda views for all tensors
-        let (q, _q_guard) = slice_ptr(q, q_l.start_offset());
-        let (k, _k_guard) = slice_ptr(k, k_l.start_offset());
-        let (cc, _cc_guard) = slice_ptr(cc, cc_l.start_offset());
-        let (sc, _sc_guard) = slice_ptr(sc, sc_l.start_offset());
+        let (q, _q_guard) = slice_ptr_on_stream(q, q_l.start_offset(), &stream);
+        let (k, _k_guard) = slice_ptr_on_stream(k, k_l.start_offset(), &stream);
+        let (cc, _cc_guard) = slice_ptr_on_stream(cc, cc_l.start_offset(), &stream);
+        let (sc, _sc_guard) = slice_ptr_on_stream(sc, sc_l.start_offset(), &stream);
 
         let (num_tokens, num_heads, head_size) = q_l.shape().dims3()?;
         let (num_tokens_kv, num_kv_heads, head_size_kv) = k_l.shape().dims3()?;
@@ -1003,9 +996,138 @@ mod cuda {
                 query_stride as c_long,
                 key_stride as c_long,
                 internal_type,
+                stream.cu_stream() as c_long,
             )
         }
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_rotary_positions_inner<
+        T: hanzo_ml::cuda_backend::CudaDType + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,
+    >(
+        query: &Tensor,
+        key: Option<&Tensor>,
+        cos_cache: &Tensor,
+        sin_cache: &Tensor,
+        positions: &Tensor,
+        is_neox: bool,
+    ) -> Result<()> {
+        let dtype = query.dtype();
+        let internal_type = dtype_code(dtype)?;
+
+        let (q, q_l) = query.storage_and_layout();
+        let q = match &*q {
+            Storage::Cuda(q) => q,
+            _ => hanzo_ml::bail!("query must be a cuda tensor"),
+        };
+
+        let key = key.unwrap_or(query);
+        let (k, k_l) = key.storage_and_layout();
+        let k = match &*k {
+            Storage::Cuda(k) => k,
+            _ => hanzo_ml::bail!("key must be a cuda tensor"),
+        };
+
+        let (cc, cc_l) = cos_cache.storage_and_layout();
+        let cc = match &*cc {
+            Storage::Cuda(cc) => cc,
+            _ => hanzo_ml::bail!("cos_cache must be a cuda tensor"),
+        };
+
+        let (sc, sc_l) = sin_cache.storage_and_layout();
+        let sc = match &*sc {
+            Storage::Cuda(sc) => sc,
+            _ => hanzo_ml::bail!("sin_cache must be a cuda tensor"),
+        };
+
+        let (pos, pos_l) = positions.storage_and_layout();
+        let pos = match &*pos {
+            Storage::Cuda(pos) => pos,
+            _ => hanzo_ml::bail!("positions must be a cuda tensor"),
+        };
+
+        let q = q.as_cuda_slice::<T>()?;
+        let k = k.as_cuda_slice::<T>()?;
+        let cc = cc.as_cuda_slice::<T>()?;
+        let sc = sc.as_cuda_slice::<T>()?;
+        let pos = pos.as_cuda_slice::<u32>()?;
+        let stream = q.stream().clone();
+
+        let (q, _q_guard) = slice_ptr_on_stream(q, q_l.start_offset(), &stream);
+        let (k, _k_guard) = slice_ptr_on_stream(k, k_l.start_offset(), &stream);
+        let (cc, _cc_guard) = slice_ptr_on_stream(cc, cc_l.start_offset(), &stream);
+        let (sc, _sc_guard) = slice_ptr_on_stream(sc, sc_l.start_offset(), &stream);
+        let (pos, _pos_guard) = slice_ptr_on_stream(pos, pos_l.start_offset(), &stream);
+
+        let (num_tokens, num_heads, head_size) = q_l.shape().dims3()?;
+        let (_num_tokens_kv, num_kv_heads, _head_size_kv) = k_l.shape().dims3()?;
+        let seq_len = pos_l.dims()[0];
+        let rot_dim = cc_l.dims()[1];
+
+        let query_stride = q_l.stride()[0];
+        let key_stride = k_l.stride()[0];
+
+        let neox = if is_neox { 1 } else { 0 };
+
+        unsafe {
+            super::ffi::rotary_embedding_positions(
+                q as *const core::ffi::c_void,
+                k as *const core::ffi::c_void,
+                cc as *const core::ffi::c_void,
+                sc as *const core::ffi::c_void,
+                pos as *const core::ffi::c_void,
+                neox,
+                head_size as c_int,
+                num_tokens as c_long,
+                rot_dim as c_int,
+                seq_len as c_int,
+                num_heads as c_int,
+                num_kv_heads as c_int,
+                query_stride as c_long,
+                key_stride as c_long,
+                internal_type,
+                stream.cu_stream() as c_long,
+            )
+        }
+        Ok(())
+    }
+
+    fn apply_rotary_(
+        query: &Tensor,
+        key: Option<&Tensor>,
+        cos_cache: &Tensor,
+        sin_cache: &Tensor,
+        is_neox: bool,
+    ) -> Result<()> {
+        match query.dtype() {
+            DType::F16 => apply_rotary_inner::<f16>(query, key, cos_cache, sin_cache, is_neox),
+            DType::BF16 => apply_rotary_inner::<bf16>(query, key, cos_cache, sin_cache, is_neox),
+            DType::F32 => apply_rotary_inner::<f32>(query, key, cos_cache, sin_cache, is_neox),
+            dt => hanzo_ml::bail!("apply_rotary is only supported for f32, f16 and bf16 ({dt:?})"),
+        }
+    }
+
+    fn apply_rotary_positions_(
+        query: &Tensor,
+        key: Option<&Tensor>,
+        cos_cache: &Tensor,
+        sin_cache: &Tensor,
+        positions: &Tensor,
+        is_neox: bool,
+    ) -> Result<()> {
+        match query.dtype() {
+            DType::F16 => {
+                apply_rotary_positions_inner::<f16>(query, key, cos_cache, sin_cache, positions, is_neox)
+            }
+            DType::BF16 => {
+                apply_rotary_positions_inner::<bf16>(query, key, cos_cache, sin_cache, positions, is_neox)
+            }
+            DType::F32 => {
+                apply_rotary_positions_inner::<f32>(query, key, cos_cache, sin_cache, positions, is_neox)
+            }
+            dt => hanzo_ml::bail!("apply_rotary is only supported for f32, f16 and bf16 ({dt:?})"),
+        }
     }
 
     /// Apply Rotary position encoding inplace
@@ -1029,7 +1151,7 @@ mod cuda {
                 apply_rotary_(query, Some(key), cos_cache, sin_cache, is_neox)
             }
             dt => {
-                candle_core::bail!("apply_rotary is only supported for f32, f16 and bf16 ({dt:?})")
+                hanzo_ml::bail!("apply_rotary is only supported for f32, f16 and bf16 ({dt:?})")
             }
         }
     }
@@ -1045,7 +1167,7 @@ mod cuda {
                 apply_rotary_(query, None, cos_cache, sin_cache, is_neox)
             }
             dt => {
-                candle_core::bail!("apply_rotary is only supported for f32, f16 and bf16 ({dt:?})")
+                hanzo_ml::bail!("apply_rotary is only supported for f32, f16 and bf16 ({dt:?})")
             }
         }
     }
@@ -1063,7 +1185,7 @@ mod cuda {
                 apply_rotary_positions_(query, Some(key), cos_cache, sin_cache, positions, is_neox)
             }
             dt => {
-                candle_core::bail!("apply_rotary is only supported for f32, f16 and bf16 ({dt:?})")
+                hanzo_ml::bail!("apply_rotary is only supported for f32, f16 and bf16 ({dt:?})")
             }
         }
     }
@@ -1111,33 +1233,33 @@ pub fn apply_rotary_inplace(
 
 #[cfg(not(feature = "cuda"))]
 pub fn apply_rotary_inplace_q(
-    _query: &candle_core::Tensor,
-    _cos_cache: &candle_core::Tensor,
-    _sin_cache: &candle_core::Tensor,
+    _query: &hanzo_ml::Tensor,
+    _cos_cache: &hanzo_ml::Tensor,
+    _sin_cache: &hanzo_ml::Tensor,
     _is_neox: bool,
-) -> candle_core::Result<()> {
-    candle_core::bail!("apply_rotary is only supported for cuda");
+) -> hanzo_ml::Result<()> {
+    hanzo_ml::bail!("apply_rotary is only supported for cuda");
 }
 
 #[cfg(not(feature = "cuda"))]
 pub fn apply_rotary_inplace_positions(
-    _query: &candle_core::Tensor,
-    _key: &candle_core::Tensor,
-    _cos_cache: &candle_core::Tensor,
-    _sin_cache: &candle_core::Tensor,
-    _positions: &candle_core::Tensor,
+    _query: &hanzo_ml::Tensor,
+    _key: &hanzo_ml::Tensor,
+    _cos_cache: &hanzo_ml::Tensor,
+    _sin_cache: &hanzo_ml::Tensor,
+    _positions: &hanzo_ml::Tensor,
     _is_neox: bool,
-) -> candle_core::Result<()> {
-    candle_core::bail!("apply_rotary is only supported for cuda");
+) -> hanzo_ml::Result<()> {
+    hanzo_ml::bail!("apply_rotary is only supported for cuda");
 }
 
 #[cfg(not(feature = "cuda"))]
 pub fn apply_rotary_inplace_q_positions(
-    _query: &candle_core::Tensor,
-    _cos_cache: &candle_core::Tensor,
-    _sin_cache: &candle_core::Tensor,
-    _positions: &candle_core::Tensor,
+    _query: &hanzo_ml::Tensor,
+    _cos_cache: &hanzo_ml::Tensor,
+    _sin_cache: &hanzo_ml::Tensor,
+    _positions: &hanzo_ml::Tensor,
     _is_neox: bool,
-) -> candle_core::Result<()> {
-    candle_core::bail!("apply_rotary is only supported for cuda");
+) -> hanzo_ml::Result<()> {
+    hanzo_ml::bail!("apply_rotary is only supported for cuda");
 }

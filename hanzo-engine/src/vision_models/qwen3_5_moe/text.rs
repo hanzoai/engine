@@ -101,7 +101,7 @@ impl FullAttention {
             comm,
             vb_sa.pp("q_proj"),
         )?;
-        let kv_shard = hanzo_quant::compute_kv_shard(num_kv_heads, head_dim, comm);
+        let kv_shard = hanzo_quant::compute_kv_shard(num_kv_heads, head_dim, comm)?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             cfg.hidden_size,
             num_kv_heads * head_dim,
@@ -146,7 +146,7 @@ impl FullAttention {
             rotary_emb,
             paged_attn,
             sdpa_params: SdpaParams {
-                n_kv_groups: hanzo_quant::compute_n_kv_groups(num_kv_heads, num_heads, comm),
+                n_kv_groups: hanzo_quant::compute_n_kv_groups(num_kv_heads, num_heads, comm)?,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
@@ -403,8 +403,20 @@ impl SparseMoeBlock {
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
         let router_logits = self.gate.forward(&xs_flat)?;
-        let routing_weights =
-            hanzo_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.num_experts_per_tok,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: self.norm_topk_prob,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
 
         let mut y = self.experts.forward(xs, topk.values, &topk.indices)?;
         y = y.reshape((b_size, seq_len, hidden_dim))?;
