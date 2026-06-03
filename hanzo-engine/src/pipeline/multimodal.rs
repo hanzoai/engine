@@ -333,7 +333,7 @@ impl Loader for MultimodalLoader {
         let device = if use_nccl || use_ring() {
             available_devices[0].clone()
         } else {
-            device
+            device.clone()
         };
 
         // Load matformer slicing config if provided
@@ -1169,7 +1169,7 @@ impl MultimodalPipeline {
         position_ids: &[usize],
         paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_meta: &FlashParams,
-    ) -> candle_core::Result<Option<Tensor>> {
+    ) -> hanzo_ml::Result<Option<Tensor>> {
         if !cuda_decode_graphs_enabled() || !self.model.supports_cuda_decode_graphs() {
             return Ok(None);
         }
@@ -1270,15 +1270,15 @@ impl MultimodalPipeline {
         metadata: &PagedAttentionInputMetadata,
         flash_meta: &FlashParams,
         block_size: usize,
-    ) -> candle_core::Result<MultimodalCudaDecodeGraphEntry> {
-        use candle_core::cuda_backend::cudarc::driver::sys;
+    ) -> hanzo_ml::Result<MultimodalCudaDecodeGraphEntry> {
+        use hanzo_ml::cuda_backend::cudarc::driver::sys;
 
         let input_ids = Var::from_tensor(input_ids)?;
         let (metadata_buffers, metadata) =
             CudaDecodeGraphMetadataBuffers::new(metadata, seqlen_offsets, block_size)?;
         let graph_input_ids = input_ids.as_detached_tensor();
         let Device::Cuda(cuda_device) = graph_input_ids.device() else {
-            candle_core::bail!("CUDA graph decode expected CUDA input ids");
+            hanzo_ml::bail!("CUDA graph decode expected CUDA input ids");
         };
         let stream = cuda_device.cuda_stream();
         let restore_event_tracking = disable_event_tracking_for_capture(&stream);
@@ -1289,7 +1289,7 @@ impl MultimodalPipeline {
         {
             restore_event_tracking_after_capture(&stream, restore_event_tracking);
             return Err(
-                candle_core::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
+                hanzo_ml::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
             );
         }
         let mut ctx = ModelForwardContext::new(
@@ -1317,7 +1317,7 @@ impl MultimodalPipeline {
             Ok(Some(graph)) => graph,
             Ok(None) => {
                 restore_event_tracking_after_capture(&stream, restore_event_tracking);
-                return Err(candle_core::Error::msg(
+                return Err(hanzo_ml::Error::msg(
                     "CUDA graph capture returned no graph",
                 ));
             }
@@ -1340,7 +1340,7 @@ impl MultimodalPipeline {
         })
     }
 
-    fn disable_cuda_decode_graph(&self, err: &candle_core::Error) {
+    fn disable_cuda_decode_graph(&self, err: &hanzo_ml::Error) {
         let mut state = self
             .cuda_decode_graph
             .lock()
