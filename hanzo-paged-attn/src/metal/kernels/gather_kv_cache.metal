@@ -1,4 +1,5 @@
 #include "utils.metal"
+#include "function_constants.metal"
 #include <metal_stdlib>
 
 using namespace metal;
@@ -25,7 +26,7 @@ template <> inline bfloat16_t from_cache<uchar, bfloat16_t>(uchar v) {
   return (bfloat16_t)fp8_e4m3_to_float(v);
 }
 
-constant bool use_fp8_scales [[function_constant(10)]];
+// use_fp8_scales declared in function_constants.metal (index 30).
 
 /// Gather K and V from paged KV cache into contiguous output tensors.
 ///
