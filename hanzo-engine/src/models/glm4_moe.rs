@@ -116,23 +116,21 @@ impl RotaryEmbedding {
         })
     }
 
-    fn apply_rotary_emb(&self, xs: &Tensor, input_positions: &[usize]) -> Result<Tensor> {
-        let (b_size, _num_heads, seq_len, _headdim) = xs.dims4()?;
-        let mut embeds = Vec::new();
-        for (b, seqlen_offset) in zip(0..b_size, input_positions) {
-            let (s, e) = (*seqlen_offset, *seqlen_offset + seq_len);
-            let cos = self.cos.i((s..e, ..))?.contiguous()?;
-            let sin = self.sin.i((s..e, ..))?.contiguous()?;
-            let xs_rot = xs
-                .i((b, .., .., ..self.rotary_dim))?
-                .unsqueeze(0)?
-                .contiguous()?;
-            let xs_pass = xs.i((b, .., .., self.rotary_dim..))?.unsqueeze(0)?;
-            let xs_rot = hanzo_nn::rotary_emb::rope_i(&xs_rot, &cos, &sin).unwrap();
-            let embed = Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?.contiguous()?;
-            embeds.push(embed);
-        }
-        Tensor::cat(&embeds, 0)
+    fn apply_rotary_emb_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        crate::layers::apply_rotary_positions_q(xs, &self.cos, &self.sin, positions, false)
+    }
+
+    fn forward_qk_norm_positions(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        q_norm: &RmsNorm,
+        k_norm: &RmsNorm,
+        positions: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
+        let q = q_norm.forward(q)?;
+        let k = k_norm.forward(k)?;
+        crate::layers::apply_rotary_positions_qk(&q, &k, &self.cos, &self.sin, positions, false)
     }
 }
 
@@ -283,7 +281,7 @@ impl Attention {
         {
             let positions = ctx
                 .rope_positions(q.device())?
-                .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+                .ok_or_else(|| hanzo_ml::Error::msg("missing RoPE positions"))?;
             if let (Some(q_norm), Some(k_norm)) = (&self.q_norm, &self.k_norm) {
                 (q, k) = self
                     .rotary_emb

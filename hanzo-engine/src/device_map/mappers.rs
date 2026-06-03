@@ -1,8 +1,8 @@
 use std::{fmt::Debug, sync::Arc};
 
 use crate::TryIntoDType;
-use candle_core::{DType, Device, Result, Tensor};
-use mistralrs_quant::ShardedVarBuilder;
+use hanzo_ml::{DType, Device, Result, Tensor};
+use hanzo_quant::ShardedVarBuilder;
 
 use super::peer::CudaPeerAccess;
 
@@ -20,7 +20,7 @@ pub trait DeviceMapper: Debug {
     fn cast_nm_device(&self, x: &Tensor, loading_isq: bool) -> Result<Tensor>;
     fn set_nm_device(&self, varbuilder: ShardedVarBuilder, loading_isq: bool) -> ShardedVarBuilder;
     fn num_device_mapping_layers(&self) -> usize;
-    fn get_comm_for(&self, layer_idx: usize) -> Result<Arc<mistralrs_quant::Comm>>;
+    fn get_comm_for(&self, layer_idx: usize) -> Result<Arc<hanzo_quant::Comm>>;
 
     fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType>;
 }
@@ -93,14 +93,14 @@ impl DeviceMapper for LayerDeviceMapper {
     fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType> {
         dtype
             .try_into_dtype(&self.mappings.iter().collect::<Vec<_>>())
-            .map_err(candle_core::Error::msg)
+            .map_err(hanzo_ml::Error::msg)
     }
     fn num_device_mapping_layers(&self) -> usize {
         self.mappings.len()
     }
-    fn get_comm_for(&self, layer_idx: usize) -> Result<Arc<mistralrs_quant::Comm>> {
-        let id = mistralrs_quant::Id::new();
-        Ok(Arc::new(mistralrs_quant::Comm::from_device(
+    fn get_comm_for(&self, layer_idx: usize) -> Result<Arc<hanzo_quant::Comm>> {
+        let id = hanzo_quant::Id::new();
+        Ok(Arc::new(hanzo_quant::Comm::from_device(
             id,
             self.device_for(layer_idx, false).unwrap_or(&self.nm_device),
             0,
@@ -159,14 +159,14 @@ impl DeviceMapper for DummyDeviceMapper {
     fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType> {
         dtype
             .try_into_dtype(&[&self.nm_device])
-            .map_err(candle_core::Error::msg)
+            .map_err(hanzo_ml::Error::msg)
     }
     fn num_device_mapping_layers(&self) -> usize {
         1
     }
-    fn get_comm_for(&self, layer_idx: usize) -> Result<Arc<mistralrs_quant::Comm>> {
-        let id = mistralrs_quant::Id::new();
-        Ok(Arc::new(mistralrs_quant::Comm::from_device(
+    fn get_comm_for(&self, layer_idx: usize) -> Result<Arc<hanzo_quant::Comm>> {
+        let id = hanzo_quant::Id::new();
+        Ok(Arc::new(hanzo_quant::Comm::from_device(
             id,
             self.device_for(layer_idx, false).unwrap_or(&self.nm_device),
             0,
@@ -179,14 +179,14 @@ impl DeviceMapper for DummyDeviceMapper {
 pub struct NcclDeviceMapper {
     nm_device: Device,
     model_layers: usize,
-    comm: Option<Arc<mistralrs_quant::Comm>>,
+    comm: Option<Arc<hanzo_quant::Comm>>,
 }
 
 impl NcclDeviceMapper {
     pub(super) fn new(
         nm_device: Device,
         model_layers: usize,
-        comm: Option<Arc<mistralrs_quant::Comm>>,
+        comm: Option<Arc<hanzo_quant::Comm>>,
     ) -> Self {
         Self {
             nm_device,
@@ -235,17 +235,17 @@ impl DeviceMapper for NcclDeviceMapper {
     fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType> {
         dtype
             .try_into_dtype(&[&self.nm_device])
-            .map_err(candle_core::Error::msg)
+            .map_err(hanzo_ml::Error::msg)
     }
     fn num_device_mapping_layers(&self) -> usize {
         self.model_layers
     }
-    fn get_comm_for(&self, layer_idx: usize) -> Result<Arc<mistralrs_quant::Comm>> {
+    fn get_comm_for(&self, layer_idx: usize) -> Result<Arc<hanzo_quant::Comm>> {
         if let Some(comm) = &self.comm {
             Ok(comm.clone())
         } else {
-            let id = mistralrs_quant::Id::new();
-            Ok(Arc::new(mistralrs_quant::Comm::from_device(
+            let id = hanzo_quant::Id::new();
+            Ok(Arc::new(hanzo_quant::Comm::from_device(
                 id,
                 self.device_for(layer_idx, false).unwrap_or(&self.nm_device),
                 0,
@@ -258,7 +258,7 @@ impl DeviceMapper for NcclDeviceMapper {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct NcclPipelineParallelMapper {
-    mappings: Vec<(Arc<mistralrs_quant::Comm>, Device)>,
+    mappings: Vec<(Arc<hanzo_quant::Comm>, Device)>,
     nm_device: Device,
     cuda_peer_access: CudaPeerAccess,
 }
@@ -312,12 +312,12 @@ impl DeviceMapper for NcclPipelineParallelMapper {
     fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType> {
         dtype
             .try_into_dtype(&self.mappings.iter().map(|(_, x)| x).collect::<Vec<_>>())
-            .map_err(candle_core::Error::msg)
+            .map_err(hanzo_ml::Error::msg)
     }
     fn num_device_mapping_layers(&self) -> usize {
         self.mappings.len()
     }
-    fn get_comm_for(&self, layer_idx: usize) -> Result<Arc<mistralrs_quant::Comm>> {
+    fn get_comm_for(&self, layer_idx: usize) -> Result<Arc<hanzo_quant::Comm>> {
         Ok(self.mappings[layer_idx].0.clone())
     }
 }
