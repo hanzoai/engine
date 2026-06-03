@@ -14,6 +14,7 @@ mod ui;
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use clap_complete::generate;
+use tracing_subscriber::{prelude::*, EnvFilter};
 
 use args::{resolve_model_type, resolve_quantize_model_type, CacheCommand, Cli, Command};
 use commands::{
