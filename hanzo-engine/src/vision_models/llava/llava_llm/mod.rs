@@ -45,6 +45,14 @@ impl OrdinaryRoPE {
         let sin = sin.narrow(0, index_pos, seq_len)?;
         hanzo_nn::rotary_emb::rope(x, &cos, &sin)
     }
+    fn forward_positions(
+        x: &Tensor,
+        positions: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor> {
+        crate::layers::apply_rotary_positions_q(x, cos, sin, positions, true)
+    }
 }
 pub(crate) mod llama;
 pub(crate) mod mistral;

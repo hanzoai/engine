@@ -1,4 +1,4 @@
-use candle_core::{DType, Tensor};
+use hanzo_ml::{DType, Tensor};
 
 use crate::layers::Activation;
 

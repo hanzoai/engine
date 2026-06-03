@@ -214,7 +214,7 @@ impl Attention {
 
         let rope_positions = ctx
             .rope_positions(q.device())?
-            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+            .ok_or_else(|| hanzo_ml::Error::msg("missing RoPE positions"))?;
         (q, k) = self.rotary_emb.forward_qk_norm_positions(
             &q,
             &k,
@@ -395,8 +395,20 @@ impl MoeMlp {
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
         let router_logits = self.gate.forward(&xs_flat)?;
-        let routing_weights =
-            hanzo_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.num_experts_per_tok,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: self.norm_topk_prob,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
 
         let ys = self.experts.forward(xs, topk.values, &topk.indices)?;
 

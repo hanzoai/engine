@@ -60,6 +60,7 @@ fn flash_attn_v2(
                 )?
                 .reshape(qshape);
             }
+            }
         }
     }
 
@@ -128,7 +129,8 @@ fn flash_attn_v3(
                 window_size_right,
                 true,
             )?
-            .reshape(qshape);
+                .reshape(qshape);
+            }
         }
     }
 
