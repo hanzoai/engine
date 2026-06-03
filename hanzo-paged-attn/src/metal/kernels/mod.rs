@@ -121,6 +121,10 @@ impl Kernels {
         );
         file_system.insert("utils.metal", include_str!("utils.metal"));
         file_system.insert("float8.metal", include_str!("float8.metal"));
+        file_system.insert(
+            "function_constants.metal",
+            include_str!("function_constants.metal"),
+        );
 
         // Recursive include preprocessor
         fn preprocess_includes(
@@ -438,7 +442,7 @@ pub fn call_reshape_and_cache(
     );
 
     let constants = Some(ConstantValues::new(vec![(
-        10,
+        30,
         Value::Bool(/* use_fp8_scales */ k_v_scale.is_some()),
     )]));
 
@@ -872,7 +876,7 @@ pub fn call_gather_kv_cache(
     );
 
     let constants = Some(ConstantValues::new(vec![(
-        10,
+        30,
         Value::Bool(/* use_fp8_scales */ k_v_scale.is_some()),
     )]));
 
