@@ -8,6 +8,7 @@ use axum::routing::{get, get_service, post};
 use axum::Router;
 use hanzo::{Model, SearchEmbeddingModel};
 use hanzo_engine::{Hanzo, ModelCategory, SupportedModality};
+use hanzo_server_core::route_registry::{RouteInfo, RouteKind};
 use include_dir::{include_dir, Dir};
 use indexmap::IndexMap;
 use tokio::fs;
