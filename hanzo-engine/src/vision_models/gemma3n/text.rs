@@ -4,6 +4,7 @@ use crate::layers_masker::CausalMaskConfig;
 use hanzo_ml::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use hanzo_nn::Linear;
 use hanzo_quant::{
+    softcap,
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
 use statrs::distribution::{ContinuousCDF, Normal};
@@ -19,7 +20,7 @@ use crate::{
     matformer::MatformerSliceConfig,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata}, EitherCache, IsqModel, KvCache,
         ModelForwardContext, MultimodalModel, NormalCache, NormalCacheType, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -311,7 +312,7 @@ impl Attention {
             self.rotary_emb_global.get_cos_sin()?
         };
         let dtype = xs.dtype();
-        mistralrs_quant::rotary::apply_rotary_q_positions(
+        hanzo_quant::rotary::apply_rotary_q_positions(
             &xs.transpose(1, 2)?.to_dtype(DType::F32)?,
             &cos.to_dtype(DType::F32)?,
             &sin.to_dtype(DType::F32)?,
@@ -355,7 +356,7 @@ impl Attention {
         q = q.apply(&self.q_norm)?;
         let rope_positions = ctx
             .rope_positions(q.device())?
-            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+            .ok_or_else(|| hanzo_ml::Error::msg("missing RoPE positions"))?
             .clone();
         q = self.apply_rope_positions(&q, &rope_positions)?;
         q = q.transpose(1, 2)?;
@@ -1531,8 +1532,7 @@ impl MultimodalModel for TextModel {
         _input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
         _model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        _flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> hanzo_ml::Result<Tensor> {
         unreachable!()
     }
