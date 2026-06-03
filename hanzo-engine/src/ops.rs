@@ -1,4 +1,5 @@
 use hanzo_ml::{shape::Dim, DType, Result, Tensor, D};
+use std::sync::Arc;
 
 #[cfg(feature = "cuda")]
 use crate::cuda::ffi;
@@ -249,8 +250,8 @@ pub fn moe_router_topk(
     };
     let scores = match config.score_function {
         MoeRouterScoreFunction::Raw => logits.clone(),
-        MoeRouterScoreFunction::Softmax => candle_nn::ops::softmax_last_dim(&logits)?,
-        MoeRouterScoreFunction::Sigmoid => candle_nn::ops::sigmoid(&logits)?,
+        MoeRouterScoreFunction::Softmax => hanzo_nn::ops::softmax_last_dim(&logits)?,
+        MoeRouterScoreFunction::Sigmoid => hanzo_nn::ops::sigmoid(&logits)?,
     };
     let selection_scores = if let Some(selection_bias) = selection_bias {
         scores.broadcast_add(&selection_bias.to_dtype(DType::F32)?)?
@@ -270,10 +271,10 @@ pub fn moe_router_topk(
     let mut values = match config.selected_weight {
         MoeRouterSelectedWeight::Score => scores.gather(&indices, D::Minus1)?,
         MoeRouterSelectedWeight::Softmax => {
-            candle_nn::ops::softmax_last_dim(selected_logits.as_ref().unwrap())?
+            hanzo_nn::ops::softmax_last_dim(selected_logits.as_ref().unwrap())?
         }
         MoeRouterSelectedWeight::Sigmoid => {
-            candle_nn::ops::sigmoid(selected_logits.as_ref().unwrap())?
+            hanzo_nn::ops::sigmoid(selected_logits.as_ref().unwrap())?
         }
     };
 
@@ -341,38 +342,38 @@ pub fn cuda_moe_router_topk(
     selection_bias: Option<&Tensor>,
     expert_scale: Option<&Tensor>,
 ) -> Result<TopKOutput> {
-    use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
-    use candle_core::cuda_backend::CudaStorageSlice;
+    use hanzo_ml::backend::BackendStorage;
+    use hanzo_ml::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use hanzo_ml::cuda_backend::CudaStorageSlice;
     use std::ffi::c_void;
 
     let logits = logits.contiguous()?;
     let dims = logits.dims();
     let n_experts = *dims
         .last()
-        .ok_or_else(|| candle_core::Error::Msg("empty dims".to_string()))?;
+        .ok_or_else(|| hanzo_ml::Error::Msg("empty dims".to_string()))?;
     if config.top_k == 0 || config.top_k > n_experts {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "cuda_moe_router_topk top_k={} must be in [1, {}]",
             config.top_k,
             n_experts
         );
     }
     if !cuda_moe_router_topk_supports_experts(n_experts) {
-        candle_core::bail!("cuda_moe_router_topk unsupported expert count {n_experts}");
+        hanzo_ml::bail!("cuda_moe_router_topk unsupported expert count {n_experts}");
     }
 
     let selection_bias = selection_bias.map(Tensor::contiguous).transpose()?;
     if let Some(selection_bias) = &selection_bias {
         if selection_bias.dtype() != DType::F32 || selection_bias.elem_count() != n_experts {
-            candle_core::bail!("cuda_moe_router_topk selection_bias must be F32 [n_experts]");
+            hanzo_ml::bail!("cuda_moe_router_topk selection_bias must be F32 [n_experts]");
         }
     }
 
     let expert_scale = expert_scale.map(Tensor::contiguous).transpose()?;
     if let Some(expert_scale) = &expert_scale {
         if expert_scale.dtype() != DType::F32 || expert_scale.elem_count() != n_experts {
-            candle_core::bail!("cuda_moe_router_topk expert_scale must be F32 [n_experts]");
+            hanzo_ml::bail!("cuda_moe_router_topk expert_scale must be F32 [n_experts]");
         }
     }
     let selection_bias_storage_and_layout = selection_bias.as_ref().map(|t| t.storage_and_layout());
@@ -385,8 +386,8 @@ pub fn cuda_moe_router_topk(
 
     let (logits_storage, _logits_layout) = logits.storage_and_layout();
     let logits_storage = match &*logits_storage {
-        candle_core::Storage::Cuda(s) => s,
-        _ => candle_core::bail!("cuda_moe_router_topk requires CUDA logits"),
+        hanzo_ml::Storage::Cuda(s) => s,
+        _ => hanzo_ml::bail!("cuda_moe_router_topk requires CUDA logits"),
     };
 
     let dev = logits_storage.device();
@@ -406,7 +407,7 @@ pub fn cuda_moe_router_topk(
     macro_rules! launch {
         ($variant:ident, $ffi_fn:ident) => {{
             let CudaStorageSlice::$variant(logits_src) = &logits_storage.slice else {
-                candle_core::bail!("cuda_moe_router_topk logits dtype mismatch");
+                hanzo_ml::bail!("cuda_moe_router_topk logits dtype mismatch");
             };
             let (logits_ptr, _logits_guard) = logits_src.device_ptr(&stream);
 
@@ -414,11 +415,11 @@ pub fn cuda_moe_router_topk(
                 &selection_bias_storage_and_layout
             {
                 let storage = match &**storage {
-                    candle_core::Storage::Cuda(s) => s,
-                    _ => candle_core::bail!("cuda_moe_router_topk requires CUDA selection_bias"),
+                    hanzo_ml::Storage::Cuda(s) => s,
+                    _ => hanzo_ml::bail!("cuda_moe_router_topk requires CUDA selection_bias"),
                 };
                 let CudaStorageSlice::F32(src) = &storage.slice else {
-                    candle_core::bail!("cuda_moe_router_topk selection_bias dtype mismatch");
+                    hanzo_ml::bail!("cuda_moe_router_topk selection_bias dtype mismatch");
                 };
                 let (ptr, guard) = src.device_ptr(&stream);
                 (ptr as *const c_void, Some(guard))
@@ -429,11 +430,11 @@ pub fn cuda_moe_router_topk(
             let (expert_scale_ptr, _expert_scale_guard) =
                 if let Some((storage, _layout)) = &expert_scale_storage_and_layout {
                     let storage = match &**storage {
-                        candle_core::Storage::Cuda(s) => s,
-                        _ => candle_core::bail!("cuda_moe_router_topk requires CUDA expert_scale"),
+                        hanzo_ml::Storage::Cuda(s) => s,
+                        _ => hanzo_ml::bail!("cuda_moe_router_topk requires CUDA expert_scale"),
                     };
                     let CudaStorageSlice::F32(src) = &storage.slice else {
-                        candle_core::bail!("cuda_moe_router_topk expert_scale dtype mismatch");
+                        hanzo_ml::bail!("cuda_moe_router_topk expert_scale dtype mismatch");
                     };
                     let (ptr, guard) = src.device_ptr(&stream);
                     (ptr as *const c_void, Some(guard))
@@ -469,28 +470,28 @@ pub fn cuda_moe_router_topk(
         DType::BF16 => launch!(BF16, moe_router_topk_bf16),
         DType::F16 => launch!(F16, moe_router_topk_f16),
         DType::F32 => launch!(F32, moe_router_topk_f32),
-        dt => candle_core::bail!("cuda_moe_router_topk unsupported dtype: {:?}", dt),
+        dt => hanzo_ml::bail!("cuda_moe_router_topk unsupported dtype: {:?}", dt),
     }
 
     drop(weights_guard);
     drop(ids_guard);
 
-    let weights_storage = candle_core::cuda_backend::CudaStorage {
+    let weights_storage = hanzo_ml::cuda_backend::CudaStorage {
         slice: CudaStorageSlice::F32(weights_dst),
         device: dev.clone(),
     };
-    let ids_storage = candle_core::cuda_backend::CudaStorage {
+    let ids_storage = hanzo_ml::cuda_backend::CudaStorage {
         slice: CudaStorageSlice::U32(ids_dst),
         device: dev.clone(),
     };
 
     Ok(TopKOutput {
         values: Tensor::from((
-            candle_core::Storage::Cuda(weights_storage),
+            hanzo_ml::Storage::Cuda(weights_storage),
             Shape::from_dims(&out_dims),
         )),
         indices: Tensor::from((
-            candle_core::Storage::Cuda(ids_storage),
+            hanzo_ml::Storage::Cuda(ids_storage),
             Shape::from_dims(&out_dims),
         )),
     })
@@ -805,10 +806,10 @@ pub fn cuda_topk_logits_f32_packed(
 pub struct CudaTop1LogitsWorkspace {
     ncols: usize,
     nblocks: usize,
-    location: candle_core::DeviceLocation,
-    block_values: candle_core::cuda_backend::cudarc::driver::CudaSlice<f32>,
-    block_indices: candle_core::cuda_backend::cudarc::driver::CudaSlice<u32>,
-    packed: candle_core::cuda_backend::cudarc::driver::CudaSlice<f32>,
+    location: hanzo_ml::DeviceLocation,
+    block_values: hanzo_ml::cuda_backend::cudarc::driver::CudaSlice<f32>,
+    block_indices: hanzo_ml::cuda_backend::cudarc::driver::CudaSlice<u32>,
+    packed: hanzo_ml::cuda_backend::cudarc::driver::CudaSlice<f32>,
 }
 
 #[cfg(feature = "cuda")]
@@ -819,11 +820,11 @@ fn final_logits_row(input: &Tensor) -> Result<Tensor> {
     }
     let vocab = *dims.last().expect("rank checked above");
     if vocab == 0 {
-        candle_core::bail!("logits last dimension is empty");
+        hanzo_ml::bail!("logits last dimension is empty");
     }
     let rows = input.elem_count() / vocab;
     if rows == 0 {
-        candle_core::bail!("logits tensor is empty");
+        hanzo_ml::bail!("logits tensor is empty");
     }
     input
         .reshape((rows, vocab))?
@@ -1504,9 +1505,9 @@ pub(crate) fn try_cuda_rms_norm_strided_4d(
     weight: &Tensor,
     eps: f32,
 ) -> Result<Option<Tensor>> {
-    use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
-    use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
+    use hanzo_ml::backend::BackendStorage;
+    use hanzo_ml::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use hanzo_ml::cuda_backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 
     if !input.device().is_cuda() || input.rank() != 4 {
@@ -1523,7 +1524,7 @@ pub(crate) fn try_cuda_rms_norm_strided_4d(
 
     let (batch, heads, seq_len, head_dim) = input.dims4()?;
     if weight.dims1()? != head_dim {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "cuda_rms_norm_strided_4d weight size {} does not match head dim {head_dim}",
             weight.dims1()?
         );
@@ -1538,7 +1539,7 @@ pub(crate) fn try_cuda_rms_norm_strided_4d(
         ("head_dim", head_dim),
     ] {
         if value > i32::MAX as usize {
-            candle_core::bail!("cuda_rms_norm_strided_4d {name} is too large: {value}");
+            hanzo_ml::bail!("cuda_rms_norm_strided_4d {name} is too large: {value}");
         }
     }
 
@@ -1547,13 +1548,13 @@ pub(crate) fn try_cuda_rms_norm_strided_4d(
         return Ok(None);
     }
     let input_storage = match &*input_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
     let weight = weight.contiguous()?;
     let (weight_storage, weight_layout) = weight.storage_and_layout();
     let weight_storage = match &*weight_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
 
@@ -1563,18 +1564,18 @@ pub(crate) fn try_cuda_rms_norm_strided_4d(
     let shape = input.shape().clone();
     let elem_count = input.elem_count();
     let stride = input_layout.stride();
-    let batch_i32 = i32::try_from(batch).map_err(candle_core::Error::wrap)?;
-    let heads_i32 = i32::try_from(heads).map_err(candle_core::Error::wrap)?;
-    let seq_len_i32 = i32::try_from(seq_len).map_err(candle_core::Error::wrap)?;
-    let head_dim_i32 = i32::try_from(head_dim).map_err(candle_core::Error::wrap)?;
+    let batch_i32 = i32::try_from(batch).map_err(hanzo_ml::Error::wrap)?;
+    let heads_i32 = i32::try_from(heads).map_err(hanzo_ml::Error::wrap)?;
+    let seq_len_i32 = i32::try_from(seq_len).map_err(hanzo_ml::Error::wrap)?;
+    let head_dim_i32 = i32::try_from(head_dim).map_err(hanzo_ml::Error::wrap)?;
 
     macro_rules! launch {
         ($variant:ident, $ty:ty, $ffi_fn:ident) => {{
             let CudaStorageSlice::$variant(src) = &input_storage.slice else {
-                candle_core::bail!("cuda_rms_norm_strided_4d input dtype mismatch");
+                hanzo_ml::bail!("cuda_rms_norm_strided_4d input dtype mismatch");
             };
             let CudaStorageSlice::$variant(weight_src) = &weight_storage.slice else {
-                candle_core::bail!("cuda_rms_norm_strided_4d weight dtype mismatch");
+                hanzo_ml::bail!("cuda_rms_norm_strided_4d weight dtype mismatch");
             };
             let mut out = unsafe { dev.alloc::<$ty>(elem_count) }?;
             let (src_ptr, src_guard) = src.device_ptr(&stream);
@@ -1611,7 +1612,7 @@ pub(crate) fn try_cuda_rms_norm_strided_4d(
                 device: dev.clone(),
             };
             Ok(Some(Tensor::from((
-                candle_core::Storage::Cuda(out_storage),
+                hanzo_ml::Storage::Cuda(out_storage),
                 shape,
             ))))
         }};
@@ -2002,13 +2003,13 @@ pub fn cuda_rms_norm_residual_then_rms_norm(
     residual_eps: f32,
     norm_eps: f32,
 ) -> Result<(Tensor, Tensor)> {
-    use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
-    use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
+    use hanzo_ml::backend::BackendStorage;
+    use hanzo_ml::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use hanzo_ml::cuda_backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 
     if input.shape() != residual.shape() {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "cuda_rms_norm_residual_then_rms_norm input/residual shape mismatch: {:?} vs {:?}",
             input.shape(),
             residual.shape()
@@ -2018,7 +2019,7 @@ pub fn cuda_rms_norm_residual_then_rms_norm(
         || input.dtype() != residual_weight.dtype()
         || input.dtype() != norm_weight.dtype()
     {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "cuda_rms_norm_residual_then_rms_norm dtype mismatch: input {:?}, residual {:?}, residual_weight {:?}, norm_weight {:?}",
             input.dtype(),
             residual.dtype(),
@@ -2027,7 +2028,7 @@ pub fn cuda_rms_norm_residual_then_rms_norm(
         );
     }
     if !matches!(input.dtype(), DType::BF16 | DType::F16 | DType::F32) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "cuda_rms_norm_residual_then_rms_norm only supports BF16/F16/F32, got {:?}",
             input.dtype()
         );
@@ -2036,26 +2037,26 @@ pub fn cuda_rms_norm_residual_then_rms_norm(
         || !residual_weight.device().same_device(input.device())
         || !norm_weight.device().same_device(input.device())
     {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "cuda_rms_norm_residual_then_rms_norm tensors must be on the same CUDA device"
         );
     }
     if let Some(scale) = scale {
         if scale.elem_count() != 1 {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "cuda_rms_norm_residual_then_rms_norm scale must have one element, got {}",
                 scale.elem_count()
             );
         }
         if scale.dtype() != input.dtype() {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "cuda_rms_norm_residual_then_rms_norm scale dtype mismatch: input {:?}, scale {:?}",
                 input.dtype(),
                 scale.dtype()
             );
         }
         if !scale.device().same_device(input.device()) {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "cuda_rms_norm_residual_then_rms_norm scale must be on the same CUDA device"
             );
         }
@@ -2063,29 +2064,29 @@ pub fn cuda_rms_norm_residual_then_rms_norm(
 
     let ncols = input.dim(D::Minus1)?;
     if residual_weight.dims1()? != ncols {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "cuda_rms_norm_residual_then_rms_norm residual weight size {} does not match last dim {ncols}",
             residual_weight.dims1()?
         );
     }
     if norm_weight.dims1()? != ncols {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "cuda_rms_norm_residual_then_rms_norm norm weight size {} does not match last dim {ncols}",
             norm_weight.dims1()?
         );
     }
     let elem_count = input.elem_count();
     if elem_count == 0 {
-        candle_core::bail!("cuda_rms_norm_residual_then_rms_norm got empty input");
+        hanzo_ml::bail!("cuda_rms_norm_residual_then_rms_norm got empty input");
     }
     let nrows = elem_count / ncols;
     if nrows > i32::MAX as usize || ncols > i32::MAX as usize {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "cuda_rms_norm_residual_then_rms_norm input is too large: nrows={nrows}, ncols={ncols}"
         );
     }
-    let nrows_i32 = i32::try_from(nrows).map_err(candle_core::Error::wrap)?;
-    let ncols_i32 = i32::try_from(ncols).map_err(candle_core::Error::wrap)?;
+    let nrows_i32 = i32::try_from(nrows).map_err(hanzo_ml::Error::wrap)?;
+    let ncols_i32 = i32::try_from(ncols).map_err(hanzo_ml::Error::wrap)?;
 
     let input = input.contiguous()?;
     let residual = residual.contiguous()?;
@@ -2095,25 +2096,25 @@ pub fn cuda_rms_norm_residual_then_rms_norm(
 
     let (input_storage, input_layout) = input.storage_and_layout();
     let input_storage = match &*input_storage {
-        candle_core::Storage::Cuda(s) => s,
-        _ => candle_core::bail!("cuda_rms_norm_residual_then_rms_norm requires CUDA input"),
+        hanzo_ml::Storage::Cuda(s) => s,
+        _ => hanzo_ml::bail!("cuda_rms_norm_residual_then_rms_norm requires CUDA input"),
     };
     let (residual_storage, residual_layout) = residual.storage_and_layout();
     let residual_storage = match &*residual_storage {
-        candle_core::Storage::Cuda(s) => s,
-        _ => candle_core::bail!("cuda_rms_norm_residual_then_rms_norm requires CUDA residual"),
+        hanzo_ml::Storage::Cuda(s) => s,
+        _ => hanzo_ml::bail!("cuda_rms_norm_residual_then_rms_norm requires CUDA residual"),
     };
     let (residual_weight_storage, residual_weight_layout) = residual_weight.storage_and_layout();
     let residual_weight_storage = match &*residual_weight_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => {
-            candle_core::bail!("cuda_rms_norm_residual_then_rms_norm requires CUDA residual weight")
+            hanzo_ml::bail!("cuda_rms_norm_residual_then_rms_norm requires CUDA residual weight")
         }
     };
     let (norm_weight_storage, norm_weight_layout) = norm_weight.storage_and_layout();
     let norm_weight_storage = match &*norm_weight_storage {
-        candle_core::Storage::Cuda(s) => s,
-        _ => candle_core::bail!("cuda_rms_norm_residual_then_rms_norm requires CUDA norm weight"),
+        hanzo_ml::Storage::Cuda(s) => s,
+        _ => hanzo_ml::bail!("cuda_rms_norm_residual_then_rms_norm requires CUDA norm weight"),
     };
     let scale_storage_and_layout = scale.as_ref().map(|scale| scale.storage_and_layout());
 
@@ -2125,19 +2126,19 @@ pub fn cuda_rms_norm_residual_then_rms_norm(
     macro_rules! launch {
         ($variant:ident, $ty:ty, $ffi_fn:ident) => {{
             let CudaStorageSlice::$variant(src) = &input_storage.slice else {
-                candle_core::bail!("cuda_rms_norm_residual_then_rms_norm input dtype mismatch");
+                hanzo_ml::bail!("cuda_rms_norm_residual_then_rms_norm input dtype mismatch");
             };
             let CudaStorageSlice::$variant(residual_src) = &residual_storage.slice else {
-                candle_core::bail!("cuda_rms_norm_residual_then_rms_norm residual dtype mismatch");
+                hanzo_ml::bail!("cuda_rms_norm_residual_then_rms_norm residual dtype mismatch");
             };
             let CudaStorageSlice::$variant(residual_weight_src) = &residual_weight_storage.slice
             else {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "cuda_rms_norm_residual_then_rms_norm residual weight dtype mismatch"
                 );
             };
             let CudaStorageSlice::$variant(norm_weight_src) = &norm_weight_storage.slice else {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "cuda_rms_norm_residual_then_rms_norm norm weight dtype mismatch"
                 );
             };
@@ -2145,13 +2146,13 @@ pub fn cuda_rms_norm_residual_then_rms_norm(
                 &scale_storage_and_layout
             {
                 let scale_storage = match &**scale_storage {
-                    candle_core::Storage::Cuda(s) => s,
-                    _ => candle_core::bail!(
+                    hanzo_ml::Storage::Cuda(s) => s,
+                    _ => hanzo_ml::bail!(
                         "cuda_rms_norm_residual_then_rms_norm requires CUDA scale"
                     ),
                 };
                 let CudaStorageSlice::$variant(scale_src) = &scale_storage.slice else {
-                    candle_core::bail!("cuda_rms_norm_residual_then_rms_norm scale dtype mismatch");
+                    hanzo_ml::bail!("cuda_rms_norm_residual_then_rms_norm scale dtype mismatch");
                 };
                 let (scale_ptr, scale_guard) = scale_src.device_ptr(&stream);
                 (
@@ -2216,8 +2217,8 @@ pub fn cuda_rms_norm_residual_then_rms_norm(
                 device: dev.clone(),
             };
             Ok((
-                Tensor::from((candle_core::Storage::Cuda(residual_storage), shape.clone())),
-                Tensor::from((candle_core::Storage::Cuda(norm_storage), shape)),
+                Tensor::from((hanzo_ml::Storage::Cuda(residual_storage), shape.clone())),
+                Tensor::from((hanzo_ml::Storage::Cuda(norm_storage), shape)),
             ))
         }};
     }
@@ -2227,7 +2228,7 @@ pub fn cuda_rms_norm_residual_then_rms_norm(
         DType::F16 => launch!(F16, half::f16, rms_norm_residual_then_rms_norm_f16),
         DType::F32 => launch!(F32, f32, rms_norm_residual_then_rms_norm_f32),
         dtype => {
-            candle_core::bail!("cuda_rms_norm_residual_then_rms_norm unsupported dtype {dtype:?}")
+            hanzo_ml::bail!("cuda_rms_norm_residual_then_rms_norm unsupported dtype {dtype:?}")
         }
     }
 }
@@ -2555,9 +2556,9 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
     positions: &Tensor,
     is_neox: bool,
 ) -> Result<Option<(Tensor, Option<Tensor>)>> {
-    use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
-    use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
+    use hanzo_ml::backend::BackendStorage;
+    use hanzo_ml::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use hanzo_ml::cuda_backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 
     if !q.device().is_cuda() {
@@ -2587,7 +2588,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
 
     let (batch, q_heads, seq_len, head_dim) = q.dims4()?;
     if positions.dims1()? != batch {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "positions length {} does not match batch size {batch}",
             positions.dims1()?
         );
@@ -2596,17 +2597,17 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
     let (k_heads, k_elem_count) = if let Some(k) = k {
         let (k_batch, k_heads, k_seq_len, k_head_dim) = k.dims4()?;
         if (k_batch, k_seq_len, k_head_dim) != (batch, seq_len, head_dim) {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "q/k shape mismatch for fused qk norm rope positions: {:?} vs {:?}",
                 q.shape(),
                 k.shape()
             );
         }
         let Some(k_weight) = k_weight else {
-            candle_core::bail!("missing k norm weight for fused qk norm rope positions");
+            hanzo_ml::bail!("missing k norm weight for fused qk norm rope positions");
         };
         if k_weight.dims1()? != head_dim {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "k norm weight size {} does not match head dim {head_dim}",
                 k_weight.dims1()?
             );
@@ -2617,7 +2618,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
     };
 
     if q_weight.dims1()? != head_dim {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "q norm weight size {} does not match head dim {head_dim}",
             q_weight.dims1()?
         );
@@ -2625,7 +2626,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
 
     let (cos_rows, rot_dim) = cos.dims2()?;
     if sin.dims2()? != (cos_rows, rot_dim) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "cos/sin shape mismatch for fused qk norm rope positions: {:?} vs {:?}",
             cos.shape(),
             sin.shape()
@@ -2644,15 +2645,15 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
         ("rot_dim", rot_dim),
     ] {
         if value > i32::MAX as usize {
-            candle_core::bail!("fused qk norm rope positions {name} is too large: {value}");
+            hanzo_ml::bail!("fused qk norm rope positions {name} is too large: {value}");
         }
     }
-    let batch_i32 = i32::try_from(batch).map_err(candle_core::Error::wrap)?;
-    let q_heads_i32 = i32::try_from(q_heads).map_err(candle_core::Error::wrap)?;
-    let k_heads_i32 = i32::try_from(k_heads).map_err(candle_core::Error::wrap)?;
-    let seq_len_i32 = i32::try_from(seq_len).map_err(candle_core::Error::wrap)?;
-    let head_dim_i32 = i32::try_from(head_dim).map_err(candle_core::Error::wrap)?;
-    let rot_dim_i32 = i32::try_from(rot_dim).map_err(candle_core::Error::wrap)?;
+    let batch_i32 = i32::try_from(batch).map_err(hanzo_ml::Error::wrap)?;
+    let q_heads_i32 = i32::try_from(q_heads).map_err(hanzo_ml::Error::wrap)?;
+    let k_heads_i32 = i32::try_from(k_heads).map_err(hanzo_ml::Error::wrap)?;
+    let seq_len_i32 = i32::try_from(seq_len).map_err(hanzo_ml::Error::wrap)?;
+    let head_dim_i32 = i32::try_from(head_dim).map_err(hanzo_ml::Error::wrap)?;
+    let rot_dim_i32 = i32::try_from(rot_dim).map_err(hanzo_ml::Error::wrap)?;
 
     let cos = cos.contiguous()?;
     let sin = sin.contiguous()?;
@@ -2662,29 +2663,29 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
 
     let (q_storage, q_layout) = q.storage_and_layout();
     let q_storage = match &*q_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
     let k_storage_and_layout = k.map(Tensor::storage_and_layout);
     let (q_weight_storage, q_weight_layout) = q_weight.storage_and_layout();
     let q_weight_storage = match &*q_weight_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
     let k_weight_storage_and_layout = k_weight.as_ref().map(Tensor::storage_and_layout);
     let (cos_storage, cos_layout) = cos.storage_and_layout();
     let cos_storage = match &*cos_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
     let (sin_storage, sin_layout) = sin.storage_and_layout();
     let sin_storage = match &*sin_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
     let (positions_storage, positions_layout) = positions.storage_and_layout();
     let positions_storage = match &*positions_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
 
@@ -2704,19 +2705,19 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
     macro_rules! launch {
         ($variant:ident, $ty:ty, $dtype_id:expr) => {{
             let CudaStorageSlice::$variant(q_src) = &q_storage.slice else {
-                candle_core::bail!("fused qk norm rope positions q dtype mismatch");
+                hanzo_ml::bail!("fused qk norm rope positions q dtype mismatch");
             };
             let CudaStorageSlice::$variant(q_weight_src) = &q_weight_storage.slice else {
-                candle_core::bail!("fused qk norm rope positions q weight dtype mismatch");
+                hanzo_ml::bail!("fused qk norm rope positions q weight dtype mismatch");
             };
             let CudaStorageSlice::$variant(cos_src) = &cos_storage.slice else {
-                candle_core::bail!("fused qk norm rope positions cos dtype mismatch");
+                hanzo_ml::bail!("fused qk norm rope positions cos dtype mismatch");
             };
             let CudaStorageSlice::$variant(sin_src) = &sin_storage.slice else {
-                candle_core::bail!("fused qk norm rope positions sin dtype mismatch");
+                hanzo_ml::bail!("fused qk norm rope positions sin dtype mismatch");
             };
             let CudaStorageSlice::U32(positions_src) = &positions_storage.slice else {
-                candle_core::bail!("fused qk norm rope positions dtype mismatch");
+                hanzo_ml::bail!("fused qk norm rope positions dtype mismatch");
             };
 
             let mut q_out_buf = unsafe { dev.alloc::<$ty>(q_elem_count) }?;
@@ -2742,11 +2743,11 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
             let mut k_guard = None;
             let k_ptr = if let Some((k_storage, k_layout)) = &k_storage_and_layout {
                 let k_storage = match &**k_storage {
-                    candle_core::Storage::Cuda(s) => s,
+                    hanzo_ml::Storage::Cuda(s) => s,
                     _ => return Ok(None),
                 };
                 let CudaStorageSlice::$variant(k_src) = &k_storage.slice else {
-                    candle_core::bail!("fused qk norm rope positions k dtype mismatch");
+                    hanzo_ml::bail!("fused qk norm rope positions k dtype mismatch");
                 };
                 let (ptr, guard) = k_src.device_ptr(&stream);
                 k_guard = Some(guard);
@@ -2759,11 +2760,11 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
             let k_weight_ptr =
                 if let Some((k_weight_storage, k_weight_layout)) = &k_weight_storage_and_layout {
                     let k_weight_storage = match &**k_weight_storage {
-                        candle_core::Storage::Cuda(s) => s,
+                        hanzo_ml::Storage::Cuda(s) => s,
                         _ => return Ok(None),
                     };
                     let CudaStorageSlice::$variant(k_weight_src) = &k_weight_storage.slice else {
-                        candle_core::bail!("fused qk norm rope positions k weight dtype mismatch");
+                        hanzo_ml::bail!("fused qk norm rope positions k weight dtype mismatch");
                     };
                     let (ptr, guard) = k_weight_src.device_ptr(&stream);
                     k_weight_guard = Some(guard);
@@ -2829,7 +2830,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
                 slice: CudaStorageSlice::$variant(q_out_buf),
                 device: dev.clone(),
             };
-            let q_tensor = Tensor::from((candle_core::Storage::Cuda(q_storage), q_shape));
+            let q_tensor = Tensor::from((hanzo_ml::Storage::Cuda(q_storage), q_shape));
 
             let k_tensor = if let Some(k_out_buf) = k_out_buf {
                 let k_storage = CudaStorage {
@@ -2837,7 +2838,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
                     device: dev.clone(),
                 };
                 Some(Tensor::from((
-                    candle_core::Storage::Cuda(k_storage),
+                    hanzo_ml::Storage::Cuda(k_storage),
                     k_shape,
                 )))
             } else {
@@ -2873,9 +2874,9 @@ pub(crate) fn try_cuda_qkv_rms_norm_rope_positions(
     positions: &Tensor,
     is_neox: bool,
 ) -> Result<Option<(Tensor, Tensor, Tensor)>> {
-    use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
-    use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
+    use hanzo_ml::backend::BackendStorage;
+    use hanzo_ml::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use hanzo_ml::cuda_backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 
     if !q.device().is_cuda() {
@@ -2914,7 +2915,7 @@ pub(crate) fn try_cuda_qkv_rms_norm_rope_positions(
     if (k_batch, k_seq_len, k_head_dim) != (batch, seq_len, head_dim)
         || (v_batch, v_heads, v_seq_len, v_head_dim) != (batch, k_heads, seq_len, head_dim)
     {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "q/k/v shape mismatch for fused qkv norm rope positions: {:?}, {:?}, {:?}",
             q.shape(),
             k.shape(),
@@ -2922,7 +2923,7 @@ pub(crate) fn try_cuda_qkv_rms_norm_rope_positions(
         );
     }
     if positions.dims1()? != batch {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "positions length {} does not match batch size {batch}",
             positions.dims1()?
         );
@@ -2931,12 +2932,12 @@ pub(crate) fn try_cuda_qkv_rms_norm_rope_positions(
         || k_weight.dims1()? != head_dim
         || v_weight.dims1()? != head_dim
     {
-        candle_core::bail!("qkv norm weight size does not match head dim {head_dim}");
+        hanzo_ml::bail!("qkv norm weight size does not match head dim {head_dim}");
     }
 
     let (cos_rows, rot_dim) = cos.dims2()?;
     if sin.dims2()? != (cos_rows, rot_dim) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "cos/sin shape mismatch for fused qkv norm rope positions: {:?} vs {:?}",
             cos.shape(),
             sin.shape()
@@ -2955,15 +2956,15 @@ pub(crate) fn try_cuda_qkv_rms_norm_rope_positions(
         ("rot_dim", rot_dim),
     ] {
         if value > i32::MAX as usize {
-            candle_core::bail!("fused qkv norm rope positions {name} is too large: {value}");
+            hanzo_ml::bail!("fused qkv norm rope positions {name} is too large: {value}");
         }
     }
-    let batch_i32 = i32::try_from(batch).map_err(candle_core::Error::wrap)?;
-    let q_heads_i32 = i32::try_from(q_heads).map_err(candle_core::Error::wrap)?;
-    let k_heads_i32 = i32::try_from(k_heads).map_err(candle_core::Error::wrap)?;
-    let seq_len_i32 = i32::try_from(seq_len).map_err(candle_core::Error::wrap)?;
-    let head_dim_i32 = i32::try_from(head_dim).map_err(candle_core::Error::wrap)?;
-    let rot_dim_i32 = i32::try_from(rot_dim).map_err(candle_core::Error::wrap)?;
+    let batch_i32 = i32::try_from(batch).map_err(hanzo_ml::Error::wrap)?;
+    let q_heads_i32 = i32::try_from(q_heads).map_err(hanzo_ml::Error::wrap)?;
+    let k_heads_i32 = i32::try_from(k_heads).map_err(hanzo_ml::Error::wrap)?;
+    let seq_len_i32 = i32::try_from(seq_len).map_err(hanzo_ml::Error::wrap)?;
+    let head_dim_i32 = i32::try_from(head_dim).map_err(hanzo_ml::Error::wrap)?;
+    let rot_dim_i32 = i32::try_from(rot_dim).map_err(hanzo_ml::Error::wrap)?;
 
     let cos = cos.contiguous()?;
     let sin = sin.contiguous()?;
@@ -2974,47 +2975,47 @@ pub(crate) fn try_cuda_qkv_rms_norm_rope_positions(
 
     let (q_storage, q_layout) = q.storage_and_layout();
     let q_storage = match &*q_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
     let (k_storage, k_layout) = k.storage_and_layout();
     let k_storage = match &*k_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
     let (v_storage, v_layout) = v.storage_and_layout();
     let v_storage = match &*v_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
     let (q_weight_storage, q_weight_layout) = q_weight.storage_and_layout();
     let q_weight_storage = match &*q_weight_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
     let (k_weight_storage, k_weight_layout) = k_weight.storage_and_layout();
     let k_weight_storage = match &*k_weight_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
     let (v_weight_storage, v_weight_layout) = v_weight.storage_and_layout();
     let v_weight_storage = match &*v_weight_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
     let (cos_storage, cos_layout) = cos.storage_and_layout();
     let cos_storage = match &*cos_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
     let (sin_storage, sin_layout) = sin.storage_and_layout();
     let sin_storage = match &*sin_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
     let (positions_storage, positions_layout) = positions.storage_and_layout();
     let positions_storage = match &*positions_storage {
-        candle_core::Storage::Cuda(s) => s,
+        hanzo_ml::Storage::Cuda(s) => s,
         _ => return Ok(None),
     };
 
@@ -3033,31 +3034,31 @@ pub(crate) fn try_cuda_qkv_rms_norm_rope_positions(
     macro_rules! launch {
         ($variant:ident, $ty:ty, $dtype_id:expr) => {{
             let CudaStorageSlice::$variant(q_src) = &q_storage.slice else {
-                candle_core::bail!("fused qkv norm rope positions q dtype mismatch");
+                hanzo_ml::bail!("fused qkv norm rope positions q dtype mismatch");
             };
             let CudaStorageSlice::$variant(k_src) = &k_storage.slice else {
-                candle_core::bail!("fused qkv norm rope positions k dtype mismatch");
+                hanzo_ml::bail!("fused qkv norm rope positions k dtype mismatch");
             };
             let CudaStorageSlice::$variant(v_src) = &v_storage.slice else {
-                candle_core::bail!("fused qkv norm rope positions v dtype mismatch");
+                hanzo_ml::bail!("fused qkv norm rope positions v dtype mismatch");
             };
             let CudaStorageSlice::$variant(q_weight_src) = &q_weight_storage.slice else {
-                candle_core::bail!("fused qkv norm rope positions q weight dtype mismatch");
+                hanzo_ml::bail!("fused qkv norm rope positions q weight dtype mismatch");
             };
             let CudaStorageSlice::$variant(k_weight_src) = &k_weight_storage.slice else {
-                candle_core::bail!("fused qkv norm rope positions k weight dtype mismatch");
+                hanzo_ml::bail!("fused qkv norm rope positions k weight dtype mismatch");
             };
             let CudaStorageSlice::$variant(v_weight_src) = &v_weight_storage.slice else {
-                candle_core::bail!("fused qkv norm rope positions v weight dtype mismatch");
+                hanzo_ml::bail!("fused qkv norm rope positions v weight dtype mismatch");
             };
             let CudaStorageSlice::$variant(cos_src) = &cos_storage.slice else {
-                candle_core::bail!("fused qkv norm rope positions cos dtype mismatch");
+                hanzo_ml::bail!("fused qkv norm rope positions cos dtype mismatch");
             };
             let CudaStorageSlice::$variant(sin_src) = &sin_storage.slice else {
-                candle_core::bail!("fused qkv norm rope positions sin dtype mismatch");
+                hanzo_ml::bail!("fused qkv norm rope positions sin dtype mismatch");
             };
             let CudaStorageSlice::U32(positions_src) = &positions_storage.slice else {
-                candle_core::bail!("fused qkv norm rope positions dtype mismatch");
+                hanzo_ml::bail!("fused qkv norm rope positions dtype mismatch");
             };
 
             let mut q_out_buf = unsafe { dev.alloc::<$ty>(q_elem_count) }?;
@@ -3158,9 +3159,9 @@ pub(crate) fn try_cuda_qkv_rms_norm_rope_positions(
                 device: dev.clone(),
             };
             Ok(Some((
-                Tensor::from((candle_core::Storage::Cuda(q_storage), q_shape)),
-                Tensor::from((candle_core::Storage::Cuda(k_storage), kv_shape.clone())),
-                Tensor::from((candle_core::Storage::Cuda(v_storage), kv_shape)),
+                Tensor::from((hanzo_ml::Storage::Cuda(q_storage), q_shape)),
+                Tensor::from((hanzo_ml::Storage::Cuda(k_storage), kv_shape.clone())),
+                Tensor::from((hanzo_ml::Storage::Cuda(v_storage), kv_shape)),
             )))
         }};
     }
@@ -3472,16 +3473,16 @@ pub fn split_mul_and_act_order(
 
 #[derive(Clone)]
 pub(crate) struct MergedDenseProjection {
-    proj: Arc<dyn mistralrs_quant::QuantMethod>,
+    proj: Arc<dyn hanzo_quant::QuantMethod>,
     output_dims: Vec<usize>,
 }
 
 impl MergedDenseProjection {
-    pub(crate) fn new(projs: &[&dyn mistralrs_quant::QuantMethod]) -> Result<Option<Self>> {
+    pub(crate) fn new(projs: &[&dyn hanzo_quant::QuantMethod]) -> Result<Option<Self>> {
         let mut weights = Vec::with_capacity(projs.len());
         let mut output_dims = Vec::with_capacity(projs.len());
         let mut input_dim = None;
-        let mut dtype_device: Option<(DType, candle_core::Device)> = None;
+        let mut dtype_device: Option<(DType, hanzo_ml::Device)> = None;
 
         for proj in projs {
             if proj.has_bias() {
@@ -3517,8 +3518,8 @@ impl MergedDenseProjection {
 
         let weight_refs = weights.iter().collect::<Vec<_>>();
         let weight = Tensor::cat(&weight_refs, 0)?;
-        let proj = <mistralrs_quant::UnquantLinear as mistralrs_quant::QuantMethod>::new(
-            mistralrs_quant::QuantMethodConfig::Unquantized(Linear::new(weight, None)),
+        let proj = <hanzo_quant::UnquantLinear as hanzo_quant::QuantMethod>::new(
+            hanzo_quant::QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(weight, None)),
         )?;
 
         Ok(Some(Self {

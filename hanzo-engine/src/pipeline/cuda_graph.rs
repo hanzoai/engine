@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::cuda_backend::cudarc::driver::{sys, CudaStream};
-use candle_core::{DType, Device, DeviceLocation, Tensor, Var};
+use hanzo_ml::cuda_backend::cudarc::driver::{sys, CudaStream};
+use hanzo_ml::{DType, Device, DeviceLocation, Tensor, Var};
 
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 
@@ -33,11 +33,11 @@ impl Drop for CudaGraphHandle {
 }
 
 impl CudaGraphHandle {
-    pub(crate) fn end_capture(stream: &Arc<CudaStream>) -> candle_core::Result<Option<Self>> {
+    pub(crate) fn end_capture(stream: &Arc<CudaStream>) -> hanzo_ml::Result<Option<Self>> {
         let mut graph = std::ptr::null_mut();
         let result = unsafe { sys::cuStreamEndCapture(stream.cu_stream(), &mut graph) };
         if result != sys::CUresult::CUDA_SUCCESS {
-            return Err(candle_core::Error::msg(format!("{result:?}"))
+            return Err(hanzo_ml::Error::msg(format!("{result:?}"))
                 .context("CUDA graph stream end capture failed"));
         }
         if graph.is_null() {
@@ -50,7 +50,7 @@ impl CudaGraphHandle {
         };
         if result != sys::CUresult::CUDA_SUCCESS {
             let _ = unsafe { sys::cuGraphDestroy(graph) };
-            return Err(candle_core::Error::msg(format!("{result:?}"))
+            return Err(hanzo_ml::Error::msg(format!("{result:?}"))
                 .context("CUDA graph instantiate failed"));
         }
 
@@ -61,22 +61,22 @@ impl CudaGraphHandle {
         }))
     }
 
-    pub(crate) fn upload(&self) -> candle_core::Result<()> {
+    pub(crate) fn upload(&self) -> hanzo_ml::Result<()> {
         let result = unsafe { sys::cuGraphUpload(self.exec, self.stream.cu_stream()) };
         if result != sys::CUresult::CUDA_SUCCESS {
             return Err(
-                candle_core::Error::msg(format!("{result:?}")).context("CUDA graph upload failed")
+                hanzo_ml::Error::msg(format!("{result:?}")).context("CUDA graph upload failed")
             );
         }
         let _ = self.stream.context().check_err();
         Ok(())
     }
 
-    pub(crate) fn launch(&self) -> candle_core::Result<()> {
+    pub(crate) fn launch(&self) -> hanzo_ml::Result<()> {
         let result = unsafe { sys::cuGraphLaunch(self.exec, self.stream.cu_stream()) };
         if result != sys::CUresult::CUDA_SUCCESS {
             return Err(
-                candle_core::Error::msg(format!("{result:?}")).context("CUDA graph launch failed")
+                hanzo_ml::Error::msg(format!("{result:?}")).context("CUDA graph launch failed")
             );
         }
         let _ = self.stream.context().check_err();
@@ -136,7 +136,7 @@ impl CudaDecodeGraphKey {
         input_ids: &Tensor,
         metadata: &PagedAttentionInputMetadata,
         block_size: usize,
-    ) -> candle_core::Result<Self> {
+    ) -> hanzo_ml::Result<Self> {
         let mut tensors = Vec::new();
         push_graph_tensor_keys("slot_mappings", Some(&metadata.slot_mappings), &mut tensors);
         push_graph_tensor_keys("block_tables", metadata.block_tables.as_ref(), &mut tensors);
@@ -256,7 +256,7 @@ impl CudaDecodeGraphMetadataBuffers {
         metadata: &PagedAttentionInputMetadata,
         seqlen_offsets: &[usize],
         block_size: usize,
-    ) -> candle_core::Result<(Self, PagedAttentionInputMetadata)> {
+    ) -> hanzo_ml::Result<(Self, PagedAttentionInputMetadata)> {
         let slot_mappings = var_map_from_tensor_map(&metadata.slot_mappings)?;
         let rope_positions = rope_positions_var_map(&metadata.slot_mappings, seqlen_offsets)?;
         let buffers = Self {
@@ -319,7 +319,7 @@ impl CudaDecodeGraphMetadataBuffers {
         &mut self,
         metadata: &PagedAttentionInputMetadata,
         seqlen_offsets: &[usize],
-    ) -> candle_core::Result<()> {
+    ) -> hanzo_ml::Result<()> {
         let block_tables_changed =
             signature_changed(&self.block_table_signature, &metadata.block_table_signature);
         let full_block_tables_changed = signature_changed(
@@ -580,7 +580,7 @@ fn signature_changed(previous: &Option<Vec<u64>>, current: &Option<Vec<u64>>) ->
 
 fn var_map_from_tensor_map(
     map: &HashMap<DeviceLocation, Tensor>,
-) -> candle_core::Result<CudaGraphVarMap> {
+) -> hanzo_ml::Result<CudaGraphVarMap> {
     map.iter()
         .map(|(location, tensor)| Ok((*location, Var::from_tensor(tensor)?)))
         .collect()
@@ -588,7 +588,7 @@ fn var_map_from_tensor_map(
 
 fn option_var_map_from_tensor_map(
     map: Option<&HashMap<DeviceLocation, Tensor>>,
-) -> candle_core::Result<Option<CudaGraphVarMap>> {
+) -> hanzo_ml::Result<Option<CudaGraphVarMap>> {
     map.map(var_map_from_tensor_map).transpose()
 }
 
@@ -608,14 +608,14 @@ fn copy_var_map(
     dst: &CudaGraphVarMap,
     src: &HashMap<DeviceLocation, Tensor>,
     name: &str,
-) -> candle_core::Result<()> {
+) -> hanzo_ml::Result<()> {
     if dst.len() != src.len() {
-        candle_core::bail!("{name} device count changed during CUDA graph replay");
+        hanzo_ml::bail!("{name} device count changed during CUDA graph replay");
     }
     for (location, dst) in dst {
         let src = src
             .get(location)
-            .ok_or_else(|| candle_core::Error::msg(format!("{name} missing {location:?}")))?;
+            .ok_or_else(|| hanzo_ml::Error::msg(format!("{name} missing {location:?}")))?;
         dst.set(src)?;
     }
     Ok(())
@@ -625,18 +625,18 @@ fn copy_option_var_map(
     dst: &Option<CudaGraphVarMap>,
     src: Option<&HashMap<DeviceLocation, Tensor>>,
     name: &str,
-) -> candle_core::Result<()> {
+) -> hanzo_ml::Result<()> {
     match (dst, src) {
         (Some(dst), Some(src)) => copy_var_map(dst, src, name),
         (None, None) => Ok(()),
-        _ => candle_core::bail!("{name} changed optional state during CUDA graph replay"),
+        _ => hanzo_ml::bail!("{name} changed optional state during CUDA graph replay"),
     }
 }
 
-fn rope_positions_tensor(seqlen_offsets: &[usize], device: &Device) -> candle_core::Result<Tensor> {
+fn rope_positions_tensor(seqlen_offsets: &[usize], device: &Device) -> hanzo_ml::Result<Tensor> {
     let mut positions = Vec::with_capacity(seqlen_offsets.len());
     for offset in seqlen_offsets {
-        positions.push(u32::try_from(*offset).map_err(candle_core::Error::wrap)?);
+        positions.push(u32::try_from(*offset).map_err(hanzo_ml::Error::wrap)?);
     }
     Tensor::from_vec(positions, (seqlen_offsets.len(),), device)
 }
@@ -644,7 +644,7 @@ fn rope_positions_tensor(seqlen_offsets: &[usize], device: &Device) -> candle_co
 fn rope_positions_var_map(
     slot_mappings: &HashMap<DeviceLocation, Tensor>,
     seqlen_offsets: &[usize],
-) -> candle_core::Result<CudaGraphVarMap> {
+) -> hanzo_ml::Result<CudaGraphVarMap> {
     slot_mappings
         .iter()
         .map(|(location, tensor)| {
@@ -654,7 +654,7 @@ fn rope_positions_var_map(
         .collect()
 }
 
-fn copy_rope_positions(dst: &CudaGraphVarMap, seqlen_offsets: &[usize]) -> candle_core::Result<()> {
+fn copy_rope_positions(dst: &CudaGraphVarMap, seqlen_offsets: &[usize]) -> hanzo_ml::Result<()> {
     for dst in dst.values() {
         let positions = rope_positions_tensor(seqlen_offsets, dst.device())?;
         dst.set(&positions)?;
