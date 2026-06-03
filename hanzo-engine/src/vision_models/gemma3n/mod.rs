@@ -15,7 +15,8 @@ use crate::{
         AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -119,7 +120,10 @@ impl Gemma3nModel {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        ctx: &mut ModelForwardContext<'_>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
         audio_mel: Option<&Tensor>,
         audio_mel_mask: Option<&Tensor>,
         image_hashes: &[u64],
@@ -382,9 +386,14 @@ impl Gemma3nModel {
             input_ids.lt(self.cfg.text_config.vocab_size_per_layer_input as f64)?;
         let ple_input_ids = ple_inputs_mask.where_cond(input_ids, &input_ids.zeros_like()?)?;
 
-        let res =
-            self.language_model
-                .forward_embeds(input_ids, &ple_input_ids, input_embeds, ctx)?;
+        let res = self.language_model.forward_embeds(
+            input_ids,
+            &ple_input_ids,
+            input_embeds,
+            seqlen_offsets,
+            context_lens,
+            flash_params,
+        )?;
         Ok(res)
     }
 }
@@ -503,6 +512,9 @@ impl MultimodalModel for Gemma3nModel {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -514,7 +526,10 @@ impl MultimodalModel for Gemma3nModel {
         self.forward(
             input_ids,
             pixel_values,
-            ctx,
+            seqlen_offsets,
+            context_lens,
+            metadata,
+            flash_params,
             args.audio_mel.as_ref(),
             args.audio_mel_mask.as_ref(),
             &args.image_hashes,

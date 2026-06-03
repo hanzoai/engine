@@ -26,8 +26,8 @@ use crate::{
         AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
-        NormalModel,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata, NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
@@ -1097,13 +1097,17 @@ impl Idefics2 {
         Ok(new_inputs_embeds)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward_inner(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
         pixel_attention_mask: Option<Tensor>,
         image_hashes: &[u64],
-        ctx: &mut ModelForwardContext<'_>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let input_embeds = if let Some(pixel_values) = pixel_values {
             // == START VISUAL INPUTS INTEGRATION ==
@@ -1243,7 +1247,14 @@ impl Idefics2 {
             self.text_model.get_input_embeddings(input_ids)?
         };
 
-        self.text_model.forward_embeds(input_ids, input_embeds, ctx)
+        self.text_model.forward_embeds(
+            input_ids,
+            input_embeds,
+            seqlen_offsets,
+            context_lens,
+            metadata,
+            flash_params,
+        )
     }
 }
 
@@ -1316,6 +1327,9 @@ impl MultimodalModel for Idefics2 {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        _: Vec<usize>, // Ignore, it is for phi3
         model_specific_args: Box<dyn Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -1329,9 +1343,12 @@ impl MultimodalModel for Idefics2 {
         self.forward_inner(
             input_ids,
             pixel_values,
+            seqlen_offsets,
+            context_lens,
             pixel_attention_mask,
             &image_hashes,
-            ctx,
+            metadata,
+            flash_params,
         )
     }
     fn cache(&self) -> &EitherCache {

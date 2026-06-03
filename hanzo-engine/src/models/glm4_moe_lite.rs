@@ -19,6 +19,7 @@ use crate::{
         embedding, Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RotaryEmbedding, Mlp,
         RmsNorm, Sdpa,
     },
+    layers_masker::PastKvLenCache,
     mla::{
         mla_cache_forward, mla_decode_forward, should_use_mla_cache, should_use_mla_decode,
         MlaWeights,
@@ -27,9 +28,9 @@ use crate::{
     ops::{SplitOp, TopKLastDimOp},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
+        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
-        NormalModel,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -223,9 +224,10 @@ impl Attention {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
+        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        ctx: &mut ModelForwardContext<'_>,
-        layer_idx: usize,
+        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (bs, seq_len, _) = xs.dims3()?;
 
@@ -253,15 +255,8 @@ impl Attention {
 
         let ckv = self.kv_a_layernorm.forward(&compressed_kv)?;
 
-        {
-            let positions = ctx
-                .rope_positions(q_pe.device())?
-                .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
-            (q_pe, k_pe) = self.rotary_emb.forward_positions(&q_pe, &k_pe, positions)?;
-        }
+        (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
 
-        let metadata = ctx.paged_layer(layer_idx);
-        let flash_params = ctx.flash_params();
         let use_mla_decode = should_use_mla_decode(
             attention_mask,
             seq_len,
@@ -314,7 +309,6 @@ impl Attention {
             let use_mla_cache = should_use_mla_cache(self.paged_attn.is_some(), q.device());
 
             if use_mla_cache {
-                let seqlen_offsets = ctx.seqlen_offsets();
                 mla_cache_forward(
                     &q,
                     &k,
@@ -744,15 +738,21 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
+        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        ctx: &mut ModelForwardContext<'_>,
-        layer_idx: usize,
+        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self
-            .attn
-            .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
+        let xs = self.attn.forward(
+            &xs,
+            attention_mask,
+            seqlen_offsets,
+            kv_cache,
+            metadata,
+            flash_params,
+        )?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self
@@ -925,17 +925,32 @@ impl Glm4MoeLite {
         })
     }
 
-    pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+    ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let cache = &mut self.cache.normal().0;
-        let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
-            &mask_cache,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(cache as &dyn PastKvLenCache),
             xs.dtype(),
             &CausalMaskConfig::default(),
         )?;
-        let attention_mask = if ctx.is_first_prompt_chunk() {
+        // PagedAttention prompt chunking
+        let attention_mask = if metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true)
+        {
             attention_mask
         } else {
             AttentionMask::None
@@ -943,11 +958,20 @@ impl Glm4MoeLite {
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
-            xs = layer.forward(&xs, &attention_mask.get(xs.device()), &mut cache[i], ctx, i)?;
+            xs = layer.forward(
+                &xs,
+                &attention_mask.get(xs.device()),
+                seqlen_offsets,
+                &mut cache[i],
+                metadata
+                    .as_ref()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                flash_params,
+            )?;
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = ctx.logits(&xs)?;
+        let xs = extract_logits(&xs, context_lens)?;
         self.lm_head.forward(&xs)
     }
 }
@@ -1113,8 +1137,22 @@ impl IsqModel for Glm4MoeLite {
 impl crate::speculative::SpeculativeTargetMixin for Glm4MoeLite {}
 
 impl NormalModel for Glm4MoeLite {
-    fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
-        self.forward(input_ids, ctx)
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+    ) -> Result<Tensor> {
+        self.forward(
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            metadata,
+            flash_params,
+        )
     }
     fn xlora_forward(
         &self,

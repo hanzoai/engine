@@ -19,11 +19,12 @@ use crate::{
     layers::{
         embedding, Activation, CausalMasker, GemmaRmsNorm, MatMul, Mlp, RotaryEmbedding, Sdpa,
     },
+    layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
+        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
-        NormalModel,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -108,7 +109,7 @@ impl Attention {
             cfg.num_key_value_heads,
             cfg.hidden_size / cfg.num_attention_heads,
             comm,
-        )?;
+        );
         let k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
@@ -157,7 +158,7 @@ impl Attention {
                     cfg.num_key_value_heads,
                     cfg.num_attention_heads,
                     comm,
-                )?,
+                ),
                 softcap: cfg.attn_logit_softcapping.map(|x| x as f32),
                 softmax_scale: 1.0 / (cfg.query_pre_attn_scalar as f32).sqrt(),
                 sliding_window,
@@ -166,14 +167,16 @@ impl Attention {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
         sliding_attention_mask: &AttentionMask,
+        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        ctx: &mut ModelForwardContext<'_>,
-        layer_idx: usize,
+        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -197,11 +200,7 @@ impl Attention {
             (q, k, v)
         };
 
-        let rope_positions = ctx
-            .rope_positions(q.device())?
-            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
-        let (q, k) = self.rotary_emb.forward_positions(&q, &k, rope_positions)?;
-        let metadata = ctx.paged_layer(layer_idx);
+        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
         let mask = if self.use_sliding_window {
             sliding_attention_mask
@@ -220,7 +219,7 @@ impl Attention {
                     Some(value_cache),
                     input_metadata,
                     &self.sdpa_params,
-                    Some(ctx.flash_params()),
+                    Some(flash_params),
                 )?,
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -237,7 +236,7 @@ impl Attention {
                         None,
                         &input_metadata,
                         &self.sdpa_params,
-                        Some(ctx.flash_params()),
+                        Some(flash_params),
                     )?
                 }
             },
@@ -245,14 +244,7 @@ impl Attention {
                 // self.sliding_window is None if !self.use_sliding_window
                 let (k, v) = kv_cache.append(&k, &v)?;
 
-                Sdpa.run_attention(
-                    &q,
-                    &k,
-                    &v,
-                    mask,
-                    Some(ctx.flash_params()),
-                    &self.sdpa_params,
-                )?
+                Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?
             }
         };
 
@@ -333,14 +325,16 @@ impl DecoderLayer {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
         sliding_attention_mask: &AttentionMask,
+        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        ctx: &mut ModelForwardContext<'_>,
-        layer_idx: usize,
+        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -348,15 +342,18 @@ impl DecoderLayer {
             &xs,
             attention_mask,
             sliding_attention_mask,
+            seqlen_offsets,
             kv_cache,
-            ctx,
-            layer_idx,
+            metadata,
+            flash_params,
         )?;
-        let (xs, mlp_in) = self
+        let xs = self
             .post_attention_layernorm
-            .forward_residual_then_rms_norm(&xs, residual, &self.pre_feedforward_layernorm)?;
+            .forward_residual(&xs, residual)?;
         let residual = &xs;
-        let xs = self.mlp.forward(&mlp_in)?;
+        let xs = self
+            .mlp
+            .forward(&xs.apply(&self.pre_feedforward_layernorm)?)?;
         self.post_feedforward_layernorm
             .forward_residual(&xs, residual)
     }
@@ -495,27 +492,39 @@ impl Model {
     pub fn forward(
         &self,
         input_ids: &Tensor,
-        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         let cache = &mut self.cache.normal().0;
-        let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
-            &mask_cache,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(cache as &dyn PastKvLenCache),
             xs.dtype(),
             &CausalMaskConfig::default(),
         )?;
         // PagedAttention prompt chunking
-        let attention_mask = if ctx.is_first_prompt_chunk() {
+        let attention_mask = if metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true)
+        {
             attention_mask
         } else {
             AttentionMask::None
         };
         let sliding_attention_mask = CausalMasker.make_causal_mask(
             input_ids,
-            &mask_cache,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(cache as &dyn PastKvLenCache),
             xs.dtype(),
             &CausalMaskConfig {
                 sliding_window: Some(self.sliding_window),
@@ -523,7 +532,11 @@ impl Model {
             },
         )?;
         // PagedAttention prompt chunking
-        let sliding_attention_mask = if ctx.is_first_prompt_chunk() {
+        let sliding_attention_mask = if metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true)
+        {
             sliding_attention_mask
         } else {
             AttentionMask::None
@@ -536,19 +549,23 @@ impl Model {
                 &xs,
                 &attention_mask.get(xs.device()),
                 &sliding_attention_mask.get(xs.device()),
+                seqlen_offsets,
                 &mut cache[i],
-                ctx,
-                i,
+                metadata
+                    .as_ref()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                flash_params,
             )?;
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = ctx.logits(&xs)?;
+        let xs = extract_logits(&xs, context_lens)?;
         let mut xs = self.lm_head.forward(&xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            let dtype = xs.dtype();
-            xs = softcap(&xs, final_logit_softcapping as f32)?.to_dtype(dtype)?;
+            xs = (xs / final_logit_softcapping)?;
+            xs = xs.tanh()?;
+            xs = (xs * final_logit_softcapping)?;
         }
 
         Ok(xs)
@@ -629,9 +646,19 @@ impl NormalModel for Model {
     fn forward(
         &self,
         input_ids: &Tensor,
-        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        self.forward(input_ids, ctx)
+        self.forward(
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            metadata,
+            flash_params,
+        )
     }
     fn xlora_forward(
         &self,
@@ -665,10 +692,6 @@ impl NormalModel for Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
-    }
-    #[cfg(feature = "cuda")]
-    fn supports_cuda_decode_graphs(&self) -> bool {
-        true
     }
 }
 

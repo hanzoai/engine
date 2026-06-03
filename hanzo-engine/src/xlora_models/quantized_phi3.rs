@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
+use crate::layers::RmsNorm;
 use crate::layers::Sdpa;
-use crate::layers::{apply_rotary_positions_q, RmsNorm};
 use crate::layers::{CausalMaskConfig, CausalMasker};
 use crate::lora::get_lora_cfg;
 use crate::lora::LinearLayerLike;
@@ -156,17 +156,8 @@ impl LayerWeights {
             (q, k, v)
         };
 
-        let positions = seqlen_offsets
-            .iter()
-            .copied()
-            .map(u32::try_from)
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(candle_core::Error::wrap)?;
-        let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
-        let q = self
-            .apply_rotary_emb_positions(&q, &positions)?
-            .contiguous()?;
-        let k = self.apply_rotary_emb_positions(&k, &positions)?;
+        let q = self.apply_rotary_emb(&q, seqlen_offsets)?.contiguous()?;
+        let k = self.apply_rotary_emb(&k, seqlen_offsets)?;
 
         let (k, v, attn_mask) =
             Cache::update_kv_cache_sliding_window(kv_cache, k, v, mask, Some(self.sliding_window))?;

@@ -17,8 +17,9 @@ use crate::{
     models::gemma2::Config,
     paged_attention::ModelConfigMetadata,
     pipeline::{
-        extract_logits, text_models_inputs_processor::FlashParams, Cache, EitherCache, IsqModel,
-        NormalLoadingMetadata, NormalModel,
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        Cache, EitherCache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     utils::progress::NiceProgressBar,
     Ordering,
@@ -273,14 +274,7 @@ impl Attention {
             (q, k, v)
         };
 
-        let positions = seqlen_offsets
-            .iter()
-            .copied()
-            .map(u32::try_from)
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(candle_core::Error::wrap)?;
-        let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
-        let (q, k) = self.rotary_emb.forward_positions(&q, &k, &positions)?;
+        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
         let mask = if self.use_sliding_window {
             sliding_attention_mask
@@ -664,8 +658,9 @@ impl Model {
         let mut xs = self.lm_head.lora_forward(&xs, None, 1.0, None)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            let dtype = xs.dtype();
-            xs = softcap(&xs, final_logit_softcapping as f32)?.to_dtype(dtype)?;
+            xs = (xs / final_logit_softcapping)?;
+            xs = xs.tanh()?;
+            xs = (xs * final_logit_softcapping)?;
         }
 
         Ok(xs)
@@ -810,7 +805,11 @@ impl NormalModel for Model {
     fn forward(
         &self,
         _input_ids: &Tensor,
-        _ctx: &mut crate::pipeline::ModelForwardContext<'_>,
+        _seqlen_offsets: &[usize],
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unreachable!()
     }

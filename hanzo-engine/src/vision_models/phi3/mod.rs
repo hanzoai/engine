@@ -26,13 +26,15 @@ use crate::{
         self, Activation, CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig,
         PhiRotaryEmbedding, RmsNorm, Sdpa,
     },
+    layers_masker::PastKvLenCache,
     paged_attention::{
         encoder_cache::{CacheModality, EncoderCacheManager},
         AttentionImplementation, ModelConfigMetadata, PagedAttention,
     },
     pipeline::{
-        text_models_inputs_processor::PagedAttentionInputMetadata, EitherCache, IsqModel, KvCache,
-        ModelForwardContext, MultimodalModel, NormalCache, NormalLoadingMetadata,
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        EitherCache, IsqModel, KvCache, MultimodalModel, NormalCache, NormalLoadingMetadata,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -221,9 +223,11 @@ impl Attention {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
+        seqlen_offsets: &[usize],
+        position_ids: &[usize],
         kv_cache: &mut KvCache,
-        ctx: &mut ModelForwardContext<'_>,
-        layer_idx: usize,
+        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -255,16 +259,10 @@ impl Attention {
             (q, k, v)
         };
 
-        let position_ids = ctx.position_ids_vec();
-        let positions = ctx
-            .rope_positions(q.device())?
-            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
         let (q, k) = self
             .rotary_emb
-            .forward_positions(&q, &k, positions, &position_ids)?;
+            .forward(&q, &k, seqlen_offsets, position_ids)?;
 
-        let metadata = ctx.paged_layer(layer_idx);
-        let flash_params = ctx.flash_params();
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -450,19 +448,31 @@ impl DecoderLayer {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
+        seqlen_offsets: &[usize],
+        position_ids: &[usize],
         kv_cache: &mut KvCache,
-        ctx: &mut ModelForwardContext<'_>,
-        layer_idx: usize,
+        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
         let xs = self
             .self_attn
-            .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
+            .forward(
+                &xs,
+                attention_mask,
+                seqlen_offsets,
+                position_ids,
+                kv_cache,
+                metadata,
+                flash_params,
+            )
+            .unwrap();
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self
@@ -1146,13 +1156,18 @@ impl Model {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        ctx: &mut ModelForwardContext<'_>,
+        seqlen_offsets: &[usize],
+        position_ids: &[usize],
+        context_lens: Vec<(usize, usize)>,
         image_sizes: Option<Vec<(usize, usize)>>,
         image_hashes: &[u64],
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = if let Some(ref pixel_values) = pixel_values {
             self.vision_embed_tokens.forward(
@@ -1166,17 +1181,23 @@ impl Model {
             self.embed_tokens.forward(input_ids)?
         };
         let cache = &mut self.cache.normal().0;
-        let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
-            &mask_cache,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(&*cache as &dyn PastKvLenCache),
             xs.dtype(),
             &CausalMaskConfig {
                 sliding_window: self.sliding_window,
                 ..Default::default()
             },
         )?;
-        let attention_mask = if ctx.is_first_prompt_chunk() {
+        let attention_mask = if metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true)
+        {
             attention_mask
         } else {
             AttentionMask::None
@@ -1185,11 +1206,21 @@ impl Model {
 
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
-            xs = layer.forward(&xs, &attention_mask.get(xs.device()), &mut cache[i], ctx, i)?
+            xs = layer.forward(
+                &xs,
+                &attention_mask.get(xs.device()),
+                seqlen_offsets,
+                position_ids,
+                &mut cache[i],
+                metadata
+                    .as_ref()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                flash_params,
+            )?
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = ctx.logits(&xs)?;
+        let xs = extract_logits(&xs, context_lens)?;
         self.lm_head.forward(&xs)
     }
 }
@@ -1253,8 +1284,12 @@ impl MultimodalModel for Model {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        ctx: &mut ModelForwardContext<'_>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let Phi3VisionSpecificArgs {
             image_sizes,
@@ -1262,7 +1297,17 @@ impl MultimodalModel for Model {
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Phi3VisionSpecificArgs`");
-        self.forward(input_ids, pixel_values, ctx, image_sizes, &image_hashes)
+        self.forward(
+            input_ids,
+            pixel_values,
+            seqlen_offsets,
+            &position_ids,
+            context_lens,
+            image_sizes,
+            &image_hashes,
+            metadata,
+            flash_params,
+        )
     }
     fn cache(&self) -> &EitherCache {
         &self.cache
