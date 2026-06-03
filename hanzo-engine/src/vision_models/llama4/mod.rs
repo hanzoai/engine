@@ -17,8 +17,8 @@ use crate::{
     paged_attention::encoder_cache::{cached_encode_images, CacheModality, EncoderCacheManager},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, ModelForwardContext,
-        MultimodalModel, NormalLoadingMetadata, NormalModel,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata, NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -95,12 +95,16 @@ impl Llama4Model {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         image_hashes: &[u64],
-        ctx: &mut ModelForwardContext<'_>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut input_embeds = self.language_model.get_input_embeddings(input_ids)?;
 
@@ -138,8 +142,14 @@ impl Llama4Model {
             input_embeds = x_flat.reshape(input_embeds.shape())?;
         }
 
-        self.language_model
-            .forward_embeds(input_ids, input_embeds, ctx)
+        self.language_model.forward_embeds(
+            input_ids,
+            input_embeds,
+            seqlen_offsets,
+            context_lens,
+            metadata,
+            flash_params,
+        )
     }
 }
 
@@ -234,10 +244,6 @@ impl NormalModel for Llama4Model {
     fn max_seq_len(&self) -> usize {
         self.language_model.max_seq_len()
     }
-    #[cfg(feature = "cuda")]
-    fn supports_cuda_decode_graphs(&self) -> bool {
-        true
-    }
 }
 
 impl MultimodalModel for Llama4Model {
@@ -245,6 +251,9 @@ impl MultimodalModel for Llama4Model {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -252,7 +261,15 @@ impl MultimodalModel for Llama4Model {
         let Llama4ModelSpecificArgs { image_hashes } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Llama4ModelSpecificArgs`");
-        self.forward(input_ids, pixel_values, &image_hashes, ctx)
+        self.forward(
+            input_ids,
+            pixel_values,
+            &image_hashes,
+            seqlen_offsets,
+            context_lens,
+            metadata,
+            flash_params,
+        )
     }
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
@@ -273,10 +290,6 @@ impl MultimodalModel for Llama4Model {
         Box::new(Llama4ModelSpecificArgs {
             image_hashes: vec![],
         })
-    }
-    #[cfg(feature = "cuda")]
-    fn supports_cuda_decode_graphs(&self) -> bool {
-        true
     }
     fn encoder_cache_counters(
         &self,

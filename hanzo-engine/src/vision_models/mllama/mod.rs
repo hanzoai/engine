@@ -33,7 +33,8 @@ use crate::{
         AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -130,7 +131,8 @@ impl MLlamaModel {
         aspect_ratio_ids: Option<&Tensor>,
         cross_attn_mask: Option<&Tensor>,
         image_hashes: &[u64],
-        ctx: &mut ModelForwardContext<'_>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         let cross_attn_states = if let Some(pixel_values) = pixel_values {
             let Some(aspect_ratio_mask) = aspect_ratio_mask else {
@@ -229,7 +231,8 @@ impl MLlamaModel {
             cross_attn_states.as_ref(),
             &cross_attn_mask_enum,
             full_text_row_masked_out_mask.as_ref(),
-            ctx,
+            seqlen_offsets,
+            context_lens,
         )
     }
 }
@@ -264,8 +267,12 @@ impl MultimodalModel for MLlamaModel {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let MLlamaSpecificArgs {
             aspect_ratio_ids,
@@ -282,7 +289,8 @@ impl MultimodalModel for MLlamaModel {
             aspect_ratio_ids.as_ref(),
             cross_attn_mask.as_ref(),
             &image_hashes,
-            ctx,
+            seqlen_offsets,
+            context_lens,
         )
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {

@@ -19,11 +19,12 @@ use crate::{
         embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, Sdpa, SmolLm3RopeConfig,
         SmolLm3RotaryEmbedding,
     },
+    layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
+        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
-        NormalModel,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -80,13 +81,15 @@ struct CausalSelfAttention {
 }
 
 impl CausalSelfAttention {
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         x: &Tensor,
         attention_mask: &AttentionMask,
+        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        ctx: &mut ModelForwardContext<'_>,
-        layer_idx: usize,
+        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
@@ -111,12 +114,8 @@ impl CausalSelfAttention {
         };
 
         if let Some(rotary_emb) = &self.rotary_emb {
-            let rope_positions = ctx
-                .rope_positions(q.device())?
-                .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
-            (q, k) = rotary_emb.forward_positions(&q, &k, rope_positions)?;
+            (q, k) = rotary_emb.forward(&q, &k, seqlen_offsets)?;
         }
-        let metadata = ctx.paged_layer(layer_idx);
 
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
@@ -129,7 +128,7 @@ impl CausalSelfAttention {
                     Some(value_cache),
                     input_metadata,
                     &self.sdpa_params,
-                    Some(ctx.flash_params()),
+                    Some(flash_params),
                 )?,
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -146,7 +145,7 @@ impl CausalSelfAttention {
                         None,
                         &input_metadata,
                         &self.sdpa_params,
-                        Some(ctx.flash_params()),
+                        Some(flash_params),
                     )?
                 }
             },
@@ -158,7 +157,7 @@ impl CausalSelfAttention {
                     &k,
                     &v,
                     attention_mask,
-                    Some(ctx.flash_params()),
+                    Some(flash_params),
                     &self.sdpa_params,
                 )?
             }
@@ -195,7 +194,7 @@ impl CausalSelfAttention {
             cfg.num_key_value_heads,
             cfg.hidden_size / cfg.num_attention_heads,
             comm,
-        )?;
+        );
         let k_proj = ColumnParallelLayer::new_with_shard(
             size_in,
             size_kv,
@@ -238,7 +237,7 @@ impl CausalSelfAttention {
                     cfg.num_key_value_heads,
                     cfg.num_attention_heads,
                     comm,
-                )?,
+                ),
                 softcap: None,
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
                 sliding_window: None,
@@ -256,20 +255,26 @@ struct Block {
 }
 
 impl Block {
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         x: &Tensor,
         attention_mask: &AttentionMask,
+        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        ctx: &mut ModelForwardContext<'_>,
-        layer_idx: usize,
+        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
-        let x = (self
-            .attn
-            .forward(&x, attention_mask, kv_cache, ctx, layer_idx)?
-            + residual)?;
+        let x = (self.attn.forward(
+            &x,
+            attention_mask,
+            seqlen_offsets,
+            kv_cache,
+            metadata,
+            flash_params,
+        )? + residual)?;
         let residual = &x;
         let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
         Ok(x)
@@ -477,28 +482,48 @@ impl SmolLm3 {
     pub fn forward(
         &self,
         input_ids: &Tensor,
-        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        self.forward_embeds(input_ids, self.wte.forward(input_ids)?, ctx)
+        self.forward_embeds(
+            input_ids,
+            self.wte.forward(input_ids)?,
+            seqlen_offsets,
+            context_lens,
+            metadata,
+            flash_params,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward_embeds(
         &self,
         input_ids: &Tensor,
         input_embeds: Tensor,
-        ctx: &mut ModelForwardContext<'_>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut x = input_embeds;
         let cache = &mut self.kv_cache.normal().0;
-        let mask_cache = ctx.mask_cache(cache);
         let mask = CausalMasker.make_causal_mask(
             input_ids,
-            &mask_cache,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(cache as &dyn PastKvLenCache),
             x.dtype(),
             &CausalMaskConfig::default(),
         )?;
         // PagedAttention prompt chunking
-        let mask = if ctx.is_first_prompt_chunk() {
+        let mask = if metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true)
+        {
             mask
         } else {
             AttentionMask::None
@@ -507,11 +532,20 @@ impl SmolLm3 {
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
             let mask_for_layer = &mask.get(x.device());
-            x = block.forward(&x, mask_for_layer, &mut cache[block_idx], ctx, block_idx)?;
+            x = block.forward(
+                &x,
+                mask_for_layer,
+                seqlen_offsets,
+                &mut cache[block_idx],
+                metadata
+                    .as_ref()
+                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), *metadata)),
+                flash_params,
+            )?;
         }
         let x = x.to_device(&self.device)?;
         let x = self.ln_f.forward(&x)?;
-        let x = ctx.logits(&x)?;
+        let x = extract_logits(&x, context_lens)?;
         self.lm_head.forward(&x)
     }
 
@@ -584,9 +618,19 @@ impl NormalModel for SmolLm3 {
     fn forward(
         &self,
         input_ids: &Tensor,
-        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        self.forward(input_ids, ctx)
+        self.forward(
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            metadata,
+            flash_params,
+        )
     }
     fn xlora_forward(
         &self,
@@ -620,10 +664,6 @@ impl NormalModel for SmolLm3 {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
-    }
-    #[cfg(feature = "cuda")]
-    fn supports_cuda_decode_graphs(&self) -> bool {
-        true
     }
 }
 

@@ -13,8 +13,8 @@ use crate::{
     layers::{self, Activation, F32RmsNorm, Qwen2_5VLRotaryEmbedding, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
-        ModelForwardContext, NormalCache, NormalLoadingMetadata,
+        extract_logits, text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
+        NormalCache, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -108,7 +108,7 @@ impl Attention {
             cfg.num_key_value_heads,
             cfg.hidden_size / cfg.num_attention_heads,
             comm,
-        )?;
+        );
         let k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
@@ -149,7 +149,7 @@ impl Attention {
                     cfg.num_key_value_heads,
                     cfg.num_attention_heads,
                     comm,
-                )?,
+                ),
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
@@ -433,7 +433,8 @@ impl Qwen2_5VLTextModel {
         mut xs: Tensor,
         attention_mask: &AttentionMask,
         position_ids: &Tensor,
-        ctx: &ModelForwardContext<'_>,
+        context_lens: Vec<(usize, usize)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let cache = &mut self.cache.normal().0;
         let cos_sin = self.layers[0]
@@ -449,12 +450,12 @@ impl Qwen2_5VLTextModel {
                 &attention_mask.get(xs.device()),
                 &cos_sin,
                 &mut cache[i],
-                ctx.flash_params(),
+                flash_params,
             )?
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = ctx.logits(&xs)?;
+        let xs = extract_logits(&xs, context_lens)?;
         self.lm_head.forward(&xs)
     }
 }

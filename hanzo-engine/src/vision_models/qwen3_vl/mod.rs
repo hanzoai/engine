@@ -22,7 +22,8 @@ use crate::{
         AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
     },
 };
 
@@ -396,10 +397,12 @@ impl Qwen3VLModel {
         seqlens: Vec<usize>,
         continuous_img_pad: Vec<Vec<(usize, usize)>>,
         continuous_vid_pad: Vec<Vec<(usize, usize)>>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
         image_hashes: &[u64],
-        ctx: &ModelForwardContext<'_>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let seqlen_offsets = ctx.seqlen_offsets();
         let mut attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &seqlen_offsets as &dyn PastKvLenCache,
@@ -409,7 +412,10 @@ impl Qwen3VLModel {
                 ..Default::default()
             },
         )?;
-        let is_first_chunk = ctx.is_first_prompt_chunk();
+        let is_first_chunk = metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true);
         attention_mask = if is_first_chunk {
             attention_mask
         } else {
@@ -746,7 +752,9 @@ impl Qwen3VLModel {
             input_embeds,
             &attention_mask,
             &position_ids,
-            ctx,
+            context_lens,
+            metadata,
+            flash_params,
             visual_pos_masks.as_ref(),
             deepstack_visual_embeds.as_deref(),
         )?;
@@ -776,8 +784,12 @@ impl MultimodalModel for Qwen3VLModel {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let Qwen3VLVisionSpecificArgs {
             input_ids_full,
@@ -816,8 +828,11 @@ impl MultimodalModel for Qwen3VLModel {
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
+            seqlen_offsets,
+            context_lens,
             &image_hashes,
-            ctx,
+            metadata,
+            flash_params,
         )
     }
     fn cache(&self) -> &EitherCache {

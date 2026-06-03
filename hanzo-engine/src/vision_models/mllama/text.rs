@@ -16,7 +16,7 @@ use crate::{
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
+        extract_logits, EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -148,7 +148,7 @@ impl MLlamaTextSelfAttention {
         &self,
         hidden_states: &Tensor,
         attention_mask: &AttentionMask,
-        ctx: &mut ModelForwardContext<'_>,
+        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
@@ -177,11 +177,7 @@ impl MLlamaTextSelfAttention {
             (q, k, v)
         };
 
-        let positions = ctx
-            .rope_positions(q.device())?
-            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
-            .clone();
-        let (q, mut k) = self.rope.forward_positions(&q, &k, &positions)?;
+        let (q, mut k) = self.rope.forward(&q, &k, seqlen_offsets)?;
 
         (k, v) = kv_cache.append(&k, &v)?;
 
@@ -255,16 +251,16 @@ impl MLlamaSelfAttentionDecoderLayer {
         &self,
         hidden_states: &Tensor,
         attention_mask: &AttentionMask,
-        ctx: &mut ModelForwardContext<'_>,
+        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let residual = hidden_states;
 
         let mut hidden_states = self.input_layernorm.forward(hidden_states)?;
 
-        hidden_states = self
-            .attn
-            .forward(&hidden_states, attention_mask, ctx, kv_cache)?;
+        hidden_states =
+            self.attn
+                .forward(&hidden_states, attention_mask, seqlen_offsets, kv_cache)?;
         hidden_states = (residual + hidden_states)?;
 
         let residual = &hidden_states;
@@ -645,15 +641,15 @@ impl MLlamaTextModel {
         cross_attn_states: Option<&Tensor>,
         cross_attention_mask: &AttentionMask,
         full_text_row_masked_out_mask: Option<&Tensor>,
-        ctx: &mut ModelForwardContext<'_>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         let mut hidden_states = self.embed_tokens.forward(input_ids)?;
 
         let cache = &mut self.cache.normal().0;
-        let mask_cache = ctx.mask_cache(cache);
         let self_mask = CausalMasker.make_causal_mask(
             input_ids,
-            &mask_cache as &dyn PastKvLenCache,
+            cache as &dyn PastKvLenCache,
             hidden_states.dtype(),
             &CausalMaskConfig::default(),
         )?;
@@ -675,7 +671,7 @@ impl MLlamaTextModel {
                     hidden_states = attn.forward(
                         &hidden_states,
                         &self_mask.get(hidden_states.device()),
-                        ctx,
+                        seqlen_offsets,
                         &mut cache[i],
                     )?;
                 }
@@ -704,7 +700,9 @@ impl MLlamaTextModel {
         hidden_states = hidden_states.to_device(&self.device)?;
         hidden_states = self.norm.forward(&hidden_states)?;
 
-        hidden_states = self.lm_head.forward(&ctx.logits(&hidden_states)?)?;
+        hidden_states = self
+            .lm_head
+            .forward(&extract_logits(&hidden_states, context_lens)?)?;
 
         Ok(hidden_states)
     }

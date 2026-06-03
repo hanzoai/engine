@@ -10,24 +10,22 @@ fn flash_attn_v2(
     flash_params: Option<&crate::pipeline::text_models_inputs_processor::FlashParams>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    let (b_sz, seq_len, _n_attn_heads, _head_dim) = q.dims4()?;
+    let (_b_sz, _n_attn_heads, seq_len, _head_dim) = q.dims4()?;
     let window_size_left = sdpa_params.sliding_window;
     let default_causal = seq_len > 1;
-    let use_varlen = b_sz > 1 || seq_len != k.dim(1)?;
 
-    if use_varlen {
-        if let Some(params) = flash_params {
-            if let Some(cumulative_seqlens_q) =
-                params.cumulative_seqlens_q.get(&q.device().location())
-            {
-                let k_meta = &params.logical_k;
-                let cumulative_seqlens_k = &k_meta.cumulative_seqlens[&q.device().location()];
+    // If flash_params provides cumulative_seqlens for this device, use the varlen path.
+    if let Some(params) = flash_params {
+        if let Some(cumulative_seqlens_q) = params.cumulative_seqlens_q.get(&q.device().location())
+        {
+            let k_meta = &params.logical_k;
+            let cumulative_seqlens_k = &k_meta.cumulative_seqlens[&q.device().location()];
 
-                let window_size_right = if params.causal { Some(0) } else { None };
-                let qshape = q.shape();
-                let q = q.flatten_to(1)?;
-                let k = k.flatten_to(1)?;
-                let v = v.flatten_to(1)?;
+            let window_size_right = if params.causal { Some(0) } else { None };
+            let qshape = q.shape();
+            let q = q.flatten_to(1)?;
+            let k = k.flatten_to(1)?;
+            let v = v.flatten_to(1)?;
 
             if let Some(softcap) = sdpa_params.softcap {
                 return hanzo_flash_attn::flash_attn_varlen_alibi_windowed_softcap(
@@ -63,6 +61,7 @@ fn flash_attn_v2(
         }
     }
 
+    // Non-varlen path: use flash_params.causal if provided, otherwise default (seq_len > 1).
     let causal = flash_params.map_or(default_causal, |p| p.causal);
     let window_size_right = if causal { Some(0) } else { None };
     if let Some(softcap) = sdpa_params.softcap {
@@ -96,24 +95,26 @@ fn flash_attn_v3(
     flash_params: Option<&crate::pipeline::text_models_inputs_processor::FlashParams>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    let (b_sz, seq_len, _n_attn_heads, _head_dim) = q.dims4()?;
+    let (_b_sz, _n_attn_heads, seq_len, _head_dim) = q.dims4()?;
     let default_causal = seq_len > 1;
-    let use_varlen = b_sz > 1 || seq_len != k.dim(1)?;
 
-    if use_varlen {
-        if let Some(params) = flash_params {
-            if let Some(cumulative_seqlens_q) =
-                params.cumulative_seqlens_q.get(&q.device().location())
-            {
-                let k_meta = &params.logical_k;
-                let cumulative_seqlens_k = &k_meta.cumulative_seqlens[&q.device().location()];
-                let qshape = q.shape();
-                let q = q.flatten_to(1)?;
-                let k = k.flatten_to(1)?;
-                let v = v.flatten_to(1)?;
+    // If flash_params provides cumulative_seqlens for this device, use the varlen path.
+    if let Some(params) = flash_params {
+        if let Some(cumulative_seqlens_q) = params.cumulative_seqlens_q.get(&q.device().location())
+        {
+            // Always use logical_k (full KV length) for the varlen kernel.
+            // The sliding window is handled by window_size_left/right — using
+            // sliding_k here would truncate the declared KV length, causing
+            // queries beyond the window boundary to attend to wrong positions.
+            let k_meta = &params.logical_k;
+            let cumulative_seqlens_k = &k_meta.cumulative_seqlens[&q.device().location()];
+            let qshape = q.shape();
+            let q = q.flatten_to(1)?;
+            let k = k.flatten_to(1)?;
+            let v = v.flatten_to(1)?;
 
-                let window_size_left = sdpa_params.sliding_window;
-                let window_size_right = if params.causal { Some(0) } else { None };
+            let window_size_left = sdpa_params.sliding_window;
+            let window_size_right = if params.causal { Some(0) } else { None };
 
             return hanzo_flash_attn_v3::flash_attn_varlen_windowed(
                 &q,
@@ -132,6 +133,7 @@ fn flash_attn_v3(
         }
     }
 
+    // Non-varlen path: use flash_params.causal if provided, otherwise default (seq_len > 1).
     let causal = flash_params.map_or(default_causal, |p| p.causal);
     hanzo_flash_attn_v3::flash_attn(q, k, v, sdpa_params.softmax_scale, causal, true)
 }

@@ -23,8 +23,9 @@ use crate::{
     models::gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
+        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalLoadingMetadata,
+        EitherCache, IsqModel, KvCache, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -621,7 +622,9 @@ impl Qwen3_5TextModel {
         attention_mask: &AttentionMask,
         position_ids: &Tensor,
         _seqlen_offsets: &[usize],
-        ctx: &ModelForwardContext<'_>,
+        context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
         visual_pos_masks: Option<&Tensor>,
         deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
@@ -692,8 +695,10 @@ impl Qwen3_5TextModel {
                             &attention_mask.get(xs.device()),
                             &cos_sin,
                             kv_cache,
-                            ctx.paged_layer(i),
-                            ctx.flash_params(),
+                            metadata
+                                .as_ref()
+                                .map(|(kv_cache, meta)| (kv_cache[i].clone(), *meta)),
+                            flash_params,
                         )?;
                     }
                 }
@@ -755,7 +760,7 @@ impl Qwen3_5TextModel {
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = ctx.logits(&xs)?;
+        let xs = extract_logits(&xs, context_lens)?;
         self.lm_head.forward(&xs)
     }
 
