@@ -163,7 +163,7 @@ fn gather_kv_cache_for_layout(
                 unreachable!("FlashInfer cache is only available with CUDA")
             }
         }
-        AttentionBackendKind::Standard => mistralrs_paged_attn::gather_kv_cache(
+        AttentionBackendKind::Standard => hanzo_paged_attn::gather_kv_cache(
             key_cache,
             value_cache,
             k_scale,
@@ -315,7 +315,7 @@ impl PagedAttention {
             (key_value_heads, kv_head_size)
         };
         if kv_head_size != head_size {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "paged attention query/cache head dim mismatch: query={head_size}, kv={kv_head_size}"
             );
         }
@@ -651,7 +651,7 @@ impl PagedAttention {
                     .into_iter()
                     .map(|len| len as usize)
                     .collect(),
-                other => candle_core::bail!("unexpected context_lens dtype {other:?}"),
+                other => hanzo_ml::bail!("unexpected context_lens dtype {other:?}"),
             };
             let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, query.device())?;
             let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
@@ -722,7 +722,7 @@ impl PagedAttention {
         #[cfg(all(feature = "cuda", target_family = "unix"))]
         if attention_backend == AttentionBackendKind::FlashInfer {
             if alibi_slopes.is_some() || sdpa_params.sinks.is_some() {
-                candle_core::bail!("FlashInfer paged attention does not support alibi/sinks");
+                hanzo_ml::bail!("FlashInfer paged attention does not support alibi/sinks");
             }
             let use_tensor_cores = FLASHINFER_TENSOR_CORE_DECODE_ENABLED
                 && head_size <= FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE

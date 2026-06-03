@@ -108,7 +108,7 @@ use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 
 use anyhow::Result;
-use hanzo_ml::{DType, Device, IndexOp, Tensor, Var};
+use hanzo_ml::{DType, Device, DeviceLocation, IndexOp, Tensor, Var};
 
 use crate::sequence::Sequence;
 
@@ -212,7 +212,7 @@ pub(crate) enum ForwardMaskCache<'a> {
 }
 
 impl PastKvLenCache for ForwardMaskCache<'_> {
-    fn get_past_kv_len(&self) -> candle_core::Result<usize> {
+    fn get_past_kv_len(&self) -> hanzo_ml::Result<usize> {
         match self {
             Self::Normal(cache) => Ok(cache
                 .iter()
@@ -331,7 +331,7 @@ impl<'a> ModelForwardContext<'a> {
     pub(crate) fn rope_positions(
         &mut self,
         device: &Device,
-    ) -> candle_core::Result<Option<&Tensor>> {
+    ) -> hanzo_ml::Result<Option<&Tensor>> {
         if self.cache.rope_positions(device).is_some() {
             return Ok(self.cache.rope_positions(device));
         }
@@ -347,7 +347,7 @@ impl<'a> ModelForwardContext<'a> {
                 .copied()
                 .map(u32::try_from)
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(candle_core::Error::wrap)?;
+                .map_err(hanzo_ml::Error::wrap)?;
             entry.insert(Tensor::from_vec(positions, seqlen_offsets.len(), device)?);
         }
         Ok(self.rope_positions.get(&location))
@@ -357,13 +357,13 @@ impl<'a> ModelForwardContext<'a> {
         &self,
         seqlen_offsets: &[usize],
         device: &Device,
-    ) -> candle_core::Result<Tensor> {
+    ) -> hanzo_ml::Result<Tensor> {
         let positions = seqlen_offsets
             .iter()
             .copied()
             .map(u32::try_from)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(candle_core::Error::wrap)?;
+            .map_err(hanzo_ml::Error::wrap)?;
         Tensor::from_vec(positions, seqlen_offsets.len(), device)
     }
 
@@ -378,7 +378,7 @@ impl<'a> ModelForwardContext<'a> {
         }
     }
 
-    pub(crate) fn logits(&self, logits: &Tensor) -> candle_core::Result<Tensor> {
+    pub(crate) fn logits(&self, logits: &Tensor) -> hanzo_ml::Result<Tensor> {
         LogitsSelection::from_context_lens(logits, self.context_lens, &[logits.device().clone()])?
             .select(logits)
     }
@@ -403,28 +403,28 @@ impl LogitsSelection {
         source: &Tensor,
         context_lens: &[(usize, usize)],
         devices: &[Device],
-    ) -> candle_core::Result<Self> {
+    ) -> hanzo_ml::Result<Self> {
         let dims = source.dims();
         if dims.len() < 2 {
-            candle_core::bail!("logits selection source must have rank >= 2");
+            hanzo_ml::bail!("logits selection source must have rank >= 2");
         }
         let batch = dims[0];
         let seq_len = dims[1];
         if context_lens.len() != batch {
-            candle_core::bail!(
+            hanzo_ml::bail!(
                 "logits selection batch mismatch: {} spans for batch {batch}",
                 context_lens.len()
             );
         }
         let Some((first_start, first_len)) = context_lens.first().copied() else {
-            candle_core::bail!("logits selection requires at least one span");
+            hanzo_ml::bail!("logits selection requires at least one span");
         };
         for (start, len) in context_lens.iter().copied() {
             let end = start
                 .checked_add(len)
-                .ok_or_else(|| candle_core::Error::msg("logits selection span overflow"))?;
+                .ok_or_else(|| hanzo_ml::Error::msg("logits selection span overflow"))?;
             if end > seq_len {
-                candle_core::bail!(
+                hanzo_ml::bail!(
                     "logits selection span ({start}, {len}) exceeds sequence length {seq_len}"
                 );
             }
@@ -443,7 +443,7 @@ impl LogitsSelection {
         }
 
         if context_lens.iter().any(|(_, len)| *len != first_len) {
-            candle_core::bail!("ragged logits selection spans are not supported");
+            hanzo_ml::bail!("ragged logits selection spans are not supported");
         }
 
         let mut flat_indices = Vec::with_capacity(batch * first_len);
@@ -453,8 +453,8 @@ impl LogitsSelection {
                 let idx = batch_idx
                     .checked_mul(seq_len)
                     .and_then(|idx| idx.checked_add(pos))
-                    .ok_or_else(|| candle_core::Error::msg("logits selection index overflow"))?;
-                flat_indices.push(u32::try_from(idx).map_err(candle_core::Error::wrap)?);
+                    .ok_or_else(|| hanzo_ml::Error::msg("logits selection index overflow"))?;
+                flat_indices.push(u32::try_from(idx).map_err(hanzo_ml::Error::wrap)?);
             }
         }
 
@@ -470,7 +470,7 @@ impl LogitsSelection {
         })
     }
 
-    pub(crate) fn select(&self, logits: &Tensor) -> candle_core::Result<Tensor> {
+    pub(crate) fn select(&self, logits: &Tensor) -> hanzo_ml::Result<Tensor> {
         match self {
             Self::All => Ok(logits.clone()),
             Self::Decode { start, len } => {
@@ -488,13 +488,13 @@ impl LogitsSelection {
             } => {
                 let (logits_batch, seq_len, hidden) = logits.dims3()?;
                 if logits_batch != *batch {
-                    candle_core::bail!(
+                    hanzo_ml::bail!(
                         "logits selection batch mismatch: logits batch {logits_batch}, selection batch {batch}"
                     );
                 }
                 let indices = indices
                     .get(&logits.device().location())
-                    .ok_or_else(|| candle_core::Error::msg("missing logits selection indices"))?;
+                    .ok_or_else(|| hanzo_ml::Error::msg("missing logits selection indices"))?;
                 let flat = logits.reshape((logits_batch * seq_len, hidden))?;
                 flat.index_select(indices, 0)?
                     .reshape((*batch, *len, hidden))
@@ -1191,12 +1191,63 @@ pub trait Pipeline:
                                 seq.set_prefill_toks(originals[seq_idx].0[..end].to_vec());
                             }
 
-                let mut exec_duration = Duration::ZERO;
-                for (i, inputs) in inputs_iter.into_iter().enumerate() {
-                    let InputProcessorOutput {
-                        inputs,
-                        seq_indices,
-                    } = inputs.map_err(hanzo_ml::Error::msg)?;
+                            let mut active_input_seqs = input_seqs
+                                .iter_mut()
+                                .enumerate()
+                                .filter_map(|(idx, seq)| {
+                                    active_indices.contains(&idx).then_some(&mut **seq)
+                                })
+                                .collect::<Vec<_>>();
+                            let mut processed =
+                                self.get_processor().inputs_processor().process_inputs(
+                                    self.tokenizer(),
+                                    active_input_seqs.as_mut_slice(),
+                                    is_prompt,
+                                    self.get_metadata().is_xlora,
+                                    &self.device(),
+                                    self.get_metadata().no_kv_cache,
+                                    None,
+                                    return_raw_logits,
+                                    self.get_metadata().sliding_window,
+                                    self.get_input_processor_config(),
+                                    Some(metadata.clone()),
+                                    self.device_mapper(),
+                                );
+                            drop(active_input_seqs);
+                            if let Ok(processed) = &mut processed {
+                                for seq_idx in &mut processed.seq_indices {
+                                    *seq_idx = active_indices[*seq_idx];
+                                }
+                            }
+                            inputs.push(processed);
+                            for &seq_idx in &active_indices {
+                                starts[seq_idx] =
+                                    (starts[seq_idx] + chunk_size).min(total_lens[seq_idx]);
+                            }
+                        }
+                        for (seq, (tokens, prefix_len)) in
+                            input_seqs.iter_mut().zip(originals.iter())
+                        {
+                            seq.set_prefix_cache_len(*prefix_len);
+                            seq.set_prefill_toks(tokens.clone());
+                        }
+                        inputs
+                    } else {
+                        vec![self.get_processor().inputs_processor().process_inputs(
+                            self.tokenizer(),
+                            input_seqs,
+                            is_prompt,
+                            self.get_metadata().is_xlora,
+                            &self.device(),
+                            self.get_metadata().no_kv_cache,
+                            None,
+                            return_raw_logits,
+                            self.get_metadata().sliding_window,
+                            self.get_input_processor_config(),
+                            Some(metadata),
+                            self.device_mapper(),
+                        )]
+                    };
 
                     let mut logits = vec![None; input_seqs.len()];
                     let len_inputs = inputs_iter.len();
@@ -1208,7 +1259,7 @@ pub trait Pipeline:
                         let InputProcessorOutput {
                             inputs,
                             seq_indices,
-                        } = inputs.map_err(candle_core::Error::msg)?;
+                        } = inputs.map_err(hanzo_ml::Error::msg)?;
 
                         let start = Instant::now();
                         let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;

@@ -10,8 +10,8 @@ pub use mask::DeviceMappedMask;
 use std::sync::Arc;
 
 use crate::{pipeline::AutoDeviceMapParams, utils::debug::DeviceRepr, MemoryUsage, Topology};
-use candle_core::{Device, DeviceLocation, Result};
-use mistralrs_quant::log::once_log_info;
+use hanzo_ml::{Device, DeviceLocation, Result};
+use hanzo_quant::log::once_log_info;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -36,7 +36,7 @@ pub enum DeviceMapSetting {
     /// Real device mapping for a NCCL pipeline
     Nccl {
         nm_device: Device,
-        comm: Arc<mistralrs_quant::Comm>,
+        comm: Arc<hanzo_quant::Comm>,
     },
 }
 
@@ -108,7 +108,7 @@ impl DeviceMapMetadata {
             .host_layers
             .unwrap_or(model_layers.saturating_sub(n_device_layers));
         if n_device_layers + n_host_layers != model_layers {
-            candle_core::bail!("Expected the total number of GPU ({n_device_layers}) and host layers ({n_host_layers}) to sum to the number of model hidden layers ({model_layers})");
+            hanzo_ml::bail!("Expected the total number of GPU ({n_device_layers}) and host layers ({n_host_layers}) to sum to the number of model hidden layers ({model_layers})");
         }
         once_log_info(format!("Model has {model_layers} repeating layers."));
 
@@ -220,7 +220,7 @@ impl DeviceMapSetting {
                 metadata.build_mapper(model_layers, device, topology, all_devices)
             }
             Self::Auto(_) => {
-                candle_core::bail!(".into_mapper does not work on Auto device map, convert it to a Map with DeviceMappedModelLoader::get_device_layers")
+                hanzo_ml::bail!(".into_mapper does not work on Auto device map, convert it to a Map with DeviceMappedModelLoader::get_device_layers")
             }
         }
     }
@@ -254,7 +254,7 @@ fn mapped_device_for_ordinal(
             .find(|d| d.is_cuda() && device_ordinal(d) == ordinal)
             .cloned()
             .ok_or_else(|| {
-                candle_core::Error::msg(format!(
+                hanzo_ml::Error::msg(format!(
                     "Could not find cuda device with ordinal {ordinal}"
                 ))
             }),
@@ -313,7 +313,7 @@ pub fn get_all_similar_devices(base: &Device) -> Result<Vec<Device>> {
         Device::Cuda(_) => {
             let mut ord = 0;
             let DeviceLocation::Cuda { gpu_id: base_ord } = base.location() else {
-                candle_core::bail!("location and device do not match");
+                hanzo_ml::bail!("location and device do not match");
             };
             loop {
                 if base_ord == ord {
@@ -332,17 +332,17 @@ pub fn get_all_similar_devices(base: &Device) -> Result<Vec<Device>> {
         }
         #[cfg(not(feature = "metal"))]
         Device::Metal(_) => {
-            candle_core::bail!("Not compiled with metal features, but have a metal device.");
+            hanzo_ml::bail!("Not compiled with metal features, but have a metal device.");
         }
         #[cfg(feature = "metal")]
         Device::Metal(_) => {
             #[cfg(feature = "metal")]
-            let total_ords = candle_metal_kernels::metal::Device::all().len();
+            let total_ords = hanzo_metal_kernels::metal::Device::all().len();
             #[cfg(not(feature = "metal"))]
             let total_ords = 0;
             let mut ord = 0;
             let DeviceLocation::Metal { gpu_id: base_ord } = base.location() else {
-                candle_core::bail!("location and device do not match");
+                hanzo_ml::bail!("location and device do not match");
             };
             loop {
                 if base_ord == ord {

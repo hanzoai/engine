@@ -169,7 +169,7 @@ impl CausalSelfAttention {
         if self.use_rope {
             let rope_positions = ctx
                 .rope_positions(q.device())?
-                .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+                .ok_or_else(|| hanzo_ml::Error::msg("missing RoPE positions"))?;
             (q, k) = self.rotary_emb.forward_positions(&q, &k, rope_positions)?;
         }
 
@@ -379,8 +379,8 @@ impl TextMoe {
             None,
         )?;
 
-        let router_scores = hanzo_nn::ops::sigmoid(&router_top_value.to_dtype(DType::F32)?)?
-            .to_dtype(router_top_value.dtype())?;
+        let router_scores = hanzo_nn::ops::sigmoid(&topk.values.to_dtype(DType::F32)?)?
+            .to_dtype(topk.values.dtype())?;
 
         // Forward through routed experts (is_prefill determined internally)
         let routed_out = self
@@ -681,7 +681,7 @@ impl TextModel {
         let cache = &mut self.kv_cache.normal().0;
         let position_ids = ctx
             .rope_positions(input_ids.device())?
-            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+            .ok_or_else(|| hanzo_ml::Error::msg("missing RoPE positions"))?
             .to_dtype(DType::I32)?;
         let mask_cache = ctx.mask_cache(cache);
 

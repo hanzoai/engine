@@ -1,5 +1,5 @@
-use candle_core::{DType, Device};
-use mistralrs_quant::QuantizedConfig;
+use hanzo_ml::{DType, Device};
+use hanzo_quant::QuantizedConfig;
 
 use crate::layers::Activation;
 
@@ -50,7 +50,7 @@ impl BackendChoice {
             dtype,
             loading_isq,
             quantized: quantization_config.is_some(),
-            immediate_isq: mistralrs_quant::get_immediate_isq().is_some(),
+            immediate_isq: hanzo_quant::get_immediate_isq().is_some(),
             act,
         }
     }
@@ -97,7 +97,7 @@ impl MoEExpertsBackend {
 #[cfg(feature = "cutile")]
 fn cutile_arch_supported(device: &Device) -> bool {
     match device {
-        Device::Cuda(dev) => mistralrs_quant::cutile::device_supported(dev),
+        Device::Cuda(dev) => hanzo_quant::cutile::device_supported(dev),
         _ => false,
     }
 }
