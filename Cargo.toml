@@ -227,6 +227,12 @@ tempfile = "3.19"
 inherits = "release"
 debug = true
 
+[profile.quick]
+inherits = "release"
+lto = false
+codegen-units = 256
+incremental = true
+
 # Makes release profiler faster to build
 # The improvement is negligible with it.
 # [profile.release]
