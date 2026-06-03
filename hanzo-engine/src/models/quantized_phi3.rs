@@ -63,19 +63,8 @@ struct LayerWeights {
 }
 
 impl LayerWeights {
-    fn apply_rotary_emb(&self, xs: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
-        let (_b_sz, _h, seq_len, _n_embd) = xs.dims4()?;
-        let mut outputs = Vec::new();
-        for (i, offset) in seqlen_offsets.iter().enumerate() {
-            let cos = self.cos.narrow(0, *offset, seq_len)?;
-            let sin = self.sin.narrow(0, *offset, seq_len)?;
-            outputs.push(hanzo_nn::rotary_emb::rope(
-                &xs.i(i)?.unsqueeze(0)?.contiguous()?,
-                &cos,
-                &sin,
-            )?);
-        }
-        Tensor::cat(&outputs, 0)
+    fn apply_rotary_emb_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        apply_rotary_positions_q(xs, &self.cos, &self.sin, positions, true)
     }
 
     fn forward_attn(
@@ -120,7 +109,7 @@ impl LayerWeights {
             .copied()
             .map(u32::try_from)
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(candle_core::Error::wrap)?;
+            .map_err(hanzo_ml::Error::wrap)?;
         let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
         let q = self.apply_rotary_emb_positions(&q, &positions)?;
         let k = self.apply_rotary_emb_positions(&k, &positions)?;

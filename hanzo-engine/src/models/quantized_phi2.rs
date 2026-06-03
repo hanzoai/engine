@@ -56,19 +56,8 @@ struct LayerWeights {
 }
 
 impl LayerWeights {
-    fn forward(&self, xs: &Tensor, start_offsets: &[usize]) -> Result<Tensor> {
-        let (_b_sz, _n_head, seq_len, _n_embd) = xs.dims4()?;
-        let xs_rot = xs.i((.., .., .., ..self.rope_dim))?;
-        let xs_pass = xs.i((.., .., .., self.rope_dim..))?;
-        let mut chunks = Vec::new();
-        for (b, offset) in (0..xs.dim(0)?).zip(start_offsets) {
-            let cos = self.cos.narrow(0, *offset, seq_len)?;
-            let sin = self.sin.narrow(0, *offset, seq_len)?;
-            let xs_rot =
-                hanzo_nn::rotary_emb::rope(&xs_rot.i(b)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-            chunks.push(Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?);
-        }
-        Tensor::cat(&chunks, 0)?.contiguous()
+    fn forward_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        apply_rotary_positions_q(xs, &self.cos, &self.sin, positions, true)
     }
 
     fn forward_attn(
@@ -99,7 +88,7 @@ impl LayerWeights {
             .copied()
             .map(u32::try_from)
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(candle_core::Error::wrap)?;
+            .map_err(hanzo_ml::Error::wrap)?;
         let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
         let q = self.forward_positions(&q, &positions)?.contiguous()?;
         let k = self.forward_positions(&k, &positions)?;
