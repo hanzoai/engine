@@ -1,4 +1,5 @@
 #include "utils.metal"
+#include "function_constants.metal"
 #include <metal_stdlib>
 
 using namespace metal;
@@ -26,7 +27,7 @@ template <> inline bfloat16_t to_cache<bfloat16_t, bfloat16_t>(bfloat16_t v) {
 
 template <> inline half to_cache<half, half>(half v) { return v; }
 
-constant bool use_fp8_scales [[function_constant(10)]];
+// use_fp8_scales declared in function_constants.metal (index 30).
 
 template <typename KV_T, typename CACHE_T>
 [[kernel]] void reshape_and_cache(
