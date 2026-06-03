@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use hanzo_ml::{Device, Module, Result, Tensor};
 use hanzo_quant::{
+    softcap,
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
 
@@ -198,7 +199,7 @@ impl Attention {
         {
             let positions = ctx
                 .rope_positions(q.device())?
-                .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+                .ok_or_else(|| hanzo_ml::Error::msg("missing RoPE positions"))?;
             (q, k) = match self.use_sliding_window {
                 true => self.rotary_emb_local.forward_qk_norm_positions(
                     &q,
@@ -866,8 +867,7 @@ impl MultimodalModel for TextModel {
         _input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
         _model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        _flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> hanzo_ml::Result<Tensor> {
         unreachable!()
     }

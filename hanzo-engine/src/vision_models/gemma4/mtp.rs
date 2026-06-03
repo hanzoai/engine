@@ -701,7 +701,7 @@ impl Gemma4MtpAttention {
             .copied()
             .map(u32::try_from)
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(candle_core::Error::wrap)?;
+            .map_err(hanzo_ml::Error::wrap)?;
         let positions = Tensor::from_vec(positions, b_sz, q.device())?;
         q = if let Some(rotary) = &self.rotary_emb_local {
             rotary.forward_q_positions(&q, &positions)?

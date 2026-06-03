@@ -32,6 +32,7 @@ pub fn initialize_logging() {
         .unwrap_or_default()
         .contains('1');
     DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
+}
 
 pub fn initialize_mistralrs_logging(verbosity: LogVerbosity) {
     let filter =

@@ -221,7 +221,7 @@ impl CacheEngine {
                     let key_blocks = if let Device::Metal(dev) = &device {
                         #[cfg(feature = "metal")]
                         {
-                            use candle_core::{MetalStorage, Shape, Storage};
+                            use hanzo_ml::{MetalStorage, Shape, Storage};
 
                             let elem_count = cache_config.num_gpu_blocks
                                 * key_block_shape.0

@@ -11,6 +11,7 @@ use hanzo_nn::{Activation, Linear};
 use hanzo_quant::{NonZeroOp, ShardedVarBuilder};
 
 use crate::amoe::{AnyMoeBaseModelMixin, MlpLayer};
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::device_map::DeviceMapper;
 use crate::paged_attention::encoder_cache::{CacheModality, EncoderCacheManager};
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
@@ -436,8 +437,7 @@ impl MultimodalModel for Model {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> hanzo_ml::Result<Tensor> {
         let LLaVANextVisionSpecificArgs {
             image_sizes,

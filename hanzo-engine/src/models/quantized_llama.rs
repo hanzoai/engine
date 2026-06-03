@@ -61,7 +61,22 @@ impl MlpOrMoe {
                 let (b_size, seq_len, hidden_dim) = xs.dims3()?;
                 let xs = xs.reshape(((), hidden_dim))?;
                 let router_logits = feed_forward_gate_inp.forward(&xs)?;
-                let routing_weights = hanzo_nn::ops::softmax_last_dim(&router_logits)?;
+                let topk = crate::ops::moe_router_topk(
+                    &router_logits,
+                    crate::ops::MoeRouterTopKConfig {
+                        top_k: *n_expert_used,
+                        score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                        selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                        renormalize: true,
+                        norm_min: 0.0,
+                        output_scale: 1.0,
+                        logit_clip: None,
+                    },
+                    None,
+                    None,
+                )?;
+                let selected_experts = topk.indices.to_vec2::<u32>()?;
+                let routing_weights = topk.values.to_dtype(DType::F32)?.to_vec2::<f32>()?;
 
                 let mut top_x = vec![vec![]; experts.len()];
                 let mut selected_rws = vec![vec![]; experts.len()];
