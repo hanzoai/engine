@@ -1,7 +1,6 @@
 //! # Hanzo Engine
 //!
-//! Canonical inference + embedding engine for the Hanzo stack, built on
-//! top of `mistralrs-core`.
+//! Canonical inference + embedding engine for the Hanzo stack.
 //!
 //! Consumers (hanzo-vm precompiles, RPC handlers, agents) call
 //! [`infer`] / [`embed`] which dispatch through a process-wide registry.
@@ -9,24 +8,15 @@
 //! [`EmbeddingEngine`] — typically a [`MistralEngine`] loaded from a
 //! Hugging Face repo or a local path.
 //!
-//! ```no_run
-//! use std::sync::Arc;
-//! use hanzo_engine::{MistralEngine, register_inference_engine, infer};
+//! ## Build status
 //!
-//! # async fn boot() -> anyhow::Result<()> {
-//! // 1) Load a model
-//! let engine = MistralEngine::from_hf_repo("Qwen/Qwen3-4B").await?;
-//! let id = *engine.model_id();
-//!
-//! // 2) Register it globally
-//! register_inference_engine(Arc::new(engine))?;
-//!
-//! // 3) Sync call sites (EVM precompiles, etc.) dispatch through `infer`
-//! let bytes = infer(&id, b"What is Rust?").unwrap();
-//! println!("{}", String::from_utf8_lossy(&bytes));
-//! # Ok(())
-//! # }
-//! ```
+//! This crate currently ships the registry + traits + stub backends.
+//! The real model loader lived in `mistralrs-core` and the SDK facade
+//! `hanzo`, both of which are mid-rename and don't compile. Until the
+//! engine source tree is restored, `MistralEngine::from_hf_repo` and
+//! `register_zen5_engines_at_startup` return / log "no backend" — the
+//! HTTP API still boots, the precompiles still dispatch, they just
+//! report a runtime error instead of producing tokens.
 //!
 //! ## Why a registry?
 //!
@@ -48,5 +38,5 @@ pub use api::{
 pub use mistral_engine::MistralEngine;
 pub use zen5_engine::{
     build_registry as build_zen5_registry, model_id_for as zen5_model_id_for,
-    register_zen5_engines_at_startup, Zen5InferenceAdapter, Zen5Registry, DEFAULT_VARIANTS,
+    register_zen5_engines_at_startup, DEFAULT_VARIANTS,
 };
