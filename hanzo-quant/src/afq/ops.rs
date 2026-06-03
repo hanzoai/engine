@@ -528,49 +528,49 @@ pub(crate) fn afq_mm_op(
 #[cfg(feature = "metal")]
 pub fn metal_arg_sort_u32_1d(keys: &Tensor) -> Result<Tensor> {
     use std::sync::OnceLock;
-    static KERNELS: OnceLock<candle_metal_kernels::Kernels> = OnceLock::new();
+    static KERNELS: OnceLock<hanzo_metal_kernels::Kernels> = OnceLock::new();
 
     if keys.rank() != 1 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "metal_arg_sort_u32_1d expects rank 1; got {:?}",
             keys.dims()
         );
     }
     if keys.dtype() != DType::U32 {
-        candle_core::bail!("metal_arg_sort_u32_1d expects u32; got {:?}", keys.dtype());
+        hanzo_ml::bail!("metal_arg_sort_u32_1d expects u32; got {:?}", keys.dtype());
     }
     if !keys.is_contiguous() {
-        candle_core::bail!("metal_arg_sort_u32_1d expects contiguous input");
+        hanzo_ml::bail!("metal_arg_sort_u32_1d expects contiguous input");
     }
 
     let n = keys.dim(0)?;
     let storage = keys.storage_and_layout().0;
     let Storage::Metal(s) = &*storage else {
-        candle_core::bail!("expected metal storage");
+        hanzo_ml::bail!("expected metal storage");
     };
     let device = s.device();
     let dst = device.new_buffer(n, DType::U32, "argsort-perm")?;
 
-    let cmk_device: &candle_metal_kernels::metal::Device = device.device();
-    let kernels = KERNELS.get_or_init(candle_metal_kernels::Kernels::new);
+    let cmk_device: &hanzo_metal_kernels::metal::Device = device.device();
+    let kernels = KERNELS.get_or_init(hanzo_metal_kernels::Kernels::new);
     let encoder = device.command_encoder()?;
     encoder.set_label("mlx-argsort");
     let src_offset = keys.layout().start_offset() * DType::U32.size_in_bytes();
-    let src = candle_metal_kernels::BufferOffset {
+    let src = hanzo_metal_kernels::BufferOffset {
         buffer: s.buffer(),
         offset_in_bytes: src_offset,
     };
-    candle_metal_kernels::call_mlx_arg_sort(
+    hanzo_metal_kernels::call_mlx_arg_sort(
         cmk_device,
         &encoder,
         kernels,
-        candle_metal_kernels::DType::U32,
+        hanzo_metal_kernels::DType::U32,
         /* nrows */ 1,
         /* ncols */ n,
         src,
         &dst,
     )
-    .map_err(candle_core::Error::wrap)?;
+    .map_err(hanzo_ml::Error::wrap)?;
 
     Ok(Tensor::from((
         Storage::Metal(MetalStorage::new(dst, device.clone(), n, DType::U32)),
@@ -590,7 +590,7 @@ pub fn metal_moe_weighted_reduce_flat(
     topk: usize,
 ) -> Result<Tensor> {
     if inputs.rank() != 2 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "metal_moe_weighted_reduce_flat: inputs must be rank 2 [M,H], got {:?}",
             inputs.dims()
         );
@@ -598,18 +598,18 @@ pub fn metal_moe_weighted_reduce_flat(
     let total_assignments = inputs.dim(0)?;
     let hidden = inputs.dim(1)?;
     if total_assignments != num_tokens * topk {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "metal_moe_weighted_reduce_flat: input rows {total_assignments} != num_tokens {num_tokens} * topk {topk}"
         );
     }
     if topk_weights.elem_count() != total_assignments {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "metal_moe_weighted_reduce_flat: topk_weights must have {total_assignments} elements, got {}",
             topk_weights.elem_count()
         );
     }
     if !matches!(inputs.dtype(), DType::F32 | DType::F16 | DType::BF16) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "metal_moe_weighted_reduce_flat: unsupported input dtype {:?}",
             inputs.dtype()
         );
@@ -622,11 +622,11 @@ pub fn metal_moe_weighted_reduce_flat(
         .contiguous()?;
     let (in_storage, in_layout) = inputs.storage_and_layout();
     let Storage::Metal(in_s) = &*in_storage else {
-        candle_core::bail!("metal_moe_weighted_reduce_flat: inputs must live on Metal");
+        hanzo_ml::bail!("metal_moe_weighted_reduce_flat: inputs must live on Metal");
     };
     let (tw_storage, tw_layout) = topk_weights.storage_and_layout();
     let Storage::Metal(tw_s) = &*tw_storage else {
-        candle_core::bail!("metal_moe_weighted_reduce_flat: topk_weights must live on Metal");
+        hanzo_ml::bail!("metal_moe_weighted_reduce_flat: topk_weights must live on Metal");
     };
 
     let device = in_s.device();
@@ -650,7 +650,7 @@ pub fn metal_moe_weighted_reduce_flat(
         hidden,
         topk,
     )
-    .map_err(candle_core::Error::wrap)?;
+    .map_err(hanzo_ml::Error::wrap)?;
 
     Ok(Tensor::from((
         Storage::Metal(MetalStorage::new(output, device.clone(), out_elems, dtype)),
@@ -679,25 +679,25 @@ pub fn afq_gather_qmm_rhs_sorted(
     let bits = bits as usize;
 
     if w.dtype() != DType::U32 {
-        candle_core::bail!("AFQ weight matrix must be u32");
+        hanzo_ml::bail!("AFQ weight matrix must be u32");
     }
     if scales.dims() != biases.dims() {
-        candle_core::bail!("Scales and biases must share shape");
+        hanzo_ml::bail!("Scales and biases must share shape");
     }
     if x_sorted.rank() != 2 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "afq_gather_qmm_rhs_sorted expects x_sorted rank 2 [M,K]; got {:?}",
             x_sorted.dims()
         );
     }
     if w.rank() != 3 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "afq_gather_qmm_rhs_sorted expects w rank 3 [E,N,K] (transpose=true); got {:?}",
             w.dims()
         );
     }
     if sorted_expert_ids.dtype() != DType::U32 || sorted_expert_ids.rank() != 1 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "sorted_expert_ids must be u32 rank-1; got dtype={:?} rank={}",
             sorted_expert_ids.dtype(),
             sorted_expert_ids.rank()
@@ -709,10 +709,10 @@ pub fn afq_gather_qmm_rhs_sorted(
     let n = w.dim(1)?;
     let k_w = w.dim(2)? * 32 / bits;
     if k != k_w {
-        candle_core::bail!("x_sorted K ({k}) must match w K ({k_w})");
+        hanzo_ml::bail!("x_sorted K ({k}) must match w K ({k_w})");
     }
     if sorted_expert_ids.dim(0)? != m {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "sorted_expert_ids len ({}) must match M ({m})",
             sorted_expert_ids.dim(0)?
         );
@@ -725,23 +725,23 @@ pub fn afq_gather_qmm_rhs_sorted(
 
     let x_s = x_sorted.storage_and_layout().0;
     let Storage::Metal(x_s) = &*x_s else {
-        candle_core::bail!("expected metal x_sorted")
+        hanzo_ml::bail!("expected metal x_sorted")
     };
     let w_s = w.storage_and_layout().0;
     let Storage::Metal(w_s) = &*w_s else {
-        candle_core::bail!("expected metal w")
+        hanzo_ml::bail!("expected metal w")
     };
     let s_s = scales.storage_and_layout().0;
     let Storage::Metal(s_s) = &*s_s else {
-        candle_core::bail!("expected metal scales")
+        hanzo_ml::bail!("expected metal scales")
     };
     let b_s = biases.storage_and_layout().0;
     let Storage::Metal(b_s) = &*b_s else {
-        candle_core::bail!("expected metal biases")
+        hanzo_ml::bail!("expected metal biases")
     };
     let i_s = sorted_expert_ids.storage_and_layout().0;
     let Storage::Metal(i_s) = &*i_s else {
-        candle_core::bail!("expected metal sorted_expert_ids")
+        hanzo_ml::bail!("expected metal sorted_expert_ids")
     };
 
     let device = w_s.device();
@@ -768,7 +768,7 @@ pub fn afq_gather_qmm_rhs_sorted(
         bits,
         group_size,
     )
-    .map_err(candle_core::Error::wrap)?;
+    .map_err(hanzo_ml::Error::wrap)?;
 
     Ok(Tensor::from((
         Storage::Metal(MetalStorage::new(
@@ -804,24 +804,24 @@ pub fn afq_gather_qmm_rhs_sorted_gate_up(
     let bits = bits as usize;
 
     if x_sorted.rank() != 2 {
-        candle_core::bail!("expects x_sorted rank 2 [M,K]; got {:?}", x_sorted.dims());
+        hanzo_ml::bail!("expects x_sorted rank 2 [M,K]; got {:?}", x_sorted.dims());
     }
     for (name, w) in [("w_gate", w_gate), ("w_up", w_up)] {
         if w.dtype() != DType::U32 {
-            candle_core::bail!("{name} must be u32");
+            hanzo_ml::bail!("{name} must be u32");
         }
         if w.rank() != 3 {
-            candle_core::bail!("{name} expects rank 3 [E,N,K]; got {:?}", w.dims());
+            hanzo_ml::bail!("{name} expects rank 3 [E,N,K]; got {:?}", w.dims());
         }
     }
     if scales_gate.dims() != biases_gate.dims() || scales_up.dims() != biases_up.dims() {
-        candle_core::bail!("Scales/biases shape mismatch");
+        hanzo_ml::bail!("Scales/biases shape mismatch");
     }
     if w_gate.dims() != w_up.dims() || scales_gate.dims() != scales_up.dims() {
-        candle_core::bail!("Gate and up weight shapes must match");
+        hanzo_ml::bail!("Gate and up weight shapes must match");
     }
     if sorted_expert_ids.dtype() != DType::U32 || sorted_expert_ids.rank() != 1 {
-        candle_core::bail!("sorted_expert_ids must be u32 rank-1");
+        hanzo_ml::bail!("sorted_expert_ids must be u32 rank-1");
     }
 
     let m = x_sorted.dim(0)?;
@@ -829,10 +829,10 @@ pub fn afq_gather_qmm_rhs_sorted_gate_up(
     let n = w_gate.dim(1)?;
     let k_w = w_gate.dim(2)? * 32 / bits;
     if k != k_w {
-        candle_core::bail!("x K ({k}) must match w K ({k_w})");
+        hanzo_ml::bail!("x K ({k}) must match w K ({k_w})");
     }
     if sorted_expert_ids.dim(0)? != m {
-        candle_core::bail!("sorted_expert_ids len must be M");
+        hanzo_ml::bail!("sorted_expert_ids len must be M");
     }
     for t in [
         x_sorted,
@@ -850,7 +850,7 @@ pub fn afq_gather_qmm_rhs_sorted_gate_up(
     let extract = |t: &Tensor, lbl: &str| -> Result<_> {
         let s = t.storage_and_layout().0;
         let Storage::Metal(s) = &*s else {
-            candle_core::bail!("expected metal {lbl}")
+            hanzo_ml::bail!("expected metal {lbl}")
         };
         Ok(s.clone())
     };
@@ -895,7 +895,7 @@ pub fn afq_gather_qmm_rhs_sorted_gate_up(
         group_size,
         act_idx,
     )
-    .map_err(candle_core::Error::wrap)?;
+    .map_err(hanzo_ml::Error::wrap)?;
 
     Ok(Tensor::from((
         Storage::Metal(MetalStorage::new(

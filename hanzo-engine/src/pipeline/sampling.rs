@@ -30,7 +30,7 @@ fn parse_text_and_tool_calls(
     matcher: Option<Arc<crate::tools::ToolCallingMatcher>>,
 ) -> Result<(Option<String>, Vec<ToolCallResponse>)> {
     let (text_new, tool_calls) =
-        parse_text_tools(raw_text, matcher).map_err(candle_core::Error::msg)?;
+        parse_text_tools(raw_text, matcher).map_err(hanzo_ml::Error::msg)?;
     Ok((text_new.map(ToString::to_string), tool_calls))
 }
 
@@ -157,9 +157,11 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             let delta_result = seq.get_delta();
             if let Some(delta) = crate::handle_seq_error_ok!(delta_result, seq.responder()) {
                 if seq.get_mut_group().is_chat {
-                    let has_reasoning_parser = seq.reasoning_mode().is_some();
-                    let reasoning_delta = if has_reasoning_parser {
-                        seq.get_reasoning_content_delta()
+                    let (content_delta, reasoning_delta) = if seq.reasoning_mode().is_some() {
+                        (
+                            seq.get_response_content_delta(),
+                            seq.get_reasoning_content_delta(),
+                        )
                     } else {
                         let (text_new, _) = parse_text_tools(delta.as_str(), seq.tools.clone())
                             .map_err(hanzo_ml::Error::msg)?;
@@ -372,9 +374,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             .map_err(hanzo_ml::Error::msg)?;
                         tc
                     } else {
-                        let (text_new, tool_calls) =
-                            parse_text_and_tool_calls(text.as_str(), seq.tools.clone())?;
-                        (text_new, tool_calls, None)
+                        vec![]
                     };
 
                     (final_content, tool_calls, reasoning)
@@ -643,7 +643,7 @@ pub async fn sample_sequence(
 mod tests {
     use std::sync::Arc;
 
-    use mistralrs_mcp::{Function, Tool, ToolType};
+    use hanzo_llm_mcp::{Function, Tool, ToolType};
 
     use super::*;
     use crate::tools::{ToolCallingMatcher, ToolChoice};

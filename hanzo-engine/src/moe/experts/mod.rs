@@ -9,8 +9,8 @@ mod checkpoint;
 mod config;
 mod forward;
 
-use candle_core::{Device, Result, Tensor};
-use mistralrs_quant::{QuantMethod, QuantizedConfig, ShardedVarBuilder, SumAllReduce};
+use hanzo_ml::{Device, Result, Tensor};
+use hanzo_quant::{QuantMethod, QuantizedConfig, ShardedVarBuilder, SumAllReduce};
 use std::sync::Arc;
 
 use crate::layers::Activation;
@@ -101,7 +101,7 @@ impl MoEExperts {
         cfg: &MoEExpertsConfig,
         vb: ShardedVarBuilder,
         layer_device: Device,
-        comm: &Arc<mistralrs_quant::Comm>,
+        comm: &Arc<hanzo_quant::Comm>,
         loading_isq: bool,
         quantization_config: &Option<QuantizedConfig>,
         act: Activation,
@@ -145,7 +145,7 @@ impl MoEExperts {
     pub fn new_direct(
         cfg: &MoEExpertsConfig,
         experts_vb: ShardedVarBuilder,
-        comm: &Arc<mistralrs_quant::Comm>,
+        comm: &Arc<hanzo_quant::Comm>,
         loading_isq: bool,
         quantization_config: &Option<QuantizedConfig>,
         act: Activation,
@@ -204,7 +204,7 @@ impl MoEExperts {
     fn from_backend(
         backend: MoEExpertsBackendImpl,
         cfg: &MoEExpertsConfig,
-        comm: &Arc<mistralrs_quant::Comm>,
+        comm: &Arc<hanzo_quant::Comm>,
         act: Activation,
     ) -> Self {
         Self {
