@@ -1,6 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::attention::AttentionMask;
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use std::sync::{Arc, Mutex};
 
 use config::Gemma3Config;
@@ -205,8 +206,7 @@ impl MultimodalModel for Gemma3Model {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> hanzo_ml::Result<Tensor> {
         let Gemma3SpecificArgs { image_hashes } = *model_specific_args
             .downcast()

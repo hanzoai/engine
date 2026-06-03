@@ -1,6 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -141,7 +142,7 @@ impl DecoderAttention {
 
         let positions = ctx
             .rope_positions(q.device())?
-            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+            .ok_or_else(|| hanzo_ml::Error::msg("missing RoPE positions"))?
             .clone();
         let (q, k) = self.rotary_emb.forward_positions(&q, &k, &positions)?;
 
@@ -738,8 +739,7 @@ impl MultimodalModel for VoxtralModel {
         input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
         model_specific_args: Box<dyn Any>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> hanzo_ml::Result<Tensor> {
         let args = model_specific_args
             .downcast::<VoxtralSpecificArgs>()

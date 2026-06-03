@@ -1,6 +1,6 @@
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::Linear;
-use mistralrs_quant::{
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
+use hanzo_nn::Linear;
+use hanzo_quant::{
     apply_immediate_isq, should_apply_immediate_isq, DummyLayer, FusedExperts, PackedExperts,
     QuantMethod, QuantMethodConfig, QuantizedConfig, ShardedVarBuilder, UnquantLinear,
 };
@@ -62,7 +62,7 @@ impl StackedExpertWeights {
 impl CutileExpertsWeights {
     pub(super) fn from_checkpoint(ckpt: &ExpertCheckpoint) -> Result<CutileExpertsWeights> {
         let w = StackedExpertWeights::from_checkpoint(ckpt)?;
-        mistralrs_quant::cutile::register_moe_shape(
+        hanzo_quant::cutile::register_moe_shape(
             w.gate_up.clone(),
             w.down.clone(),
             ckpt.cfg.num_experts,
@@ -180,7 +180,7 @@ impl FastExpertsWeights {
 
         // Real per-expert weights: load, stack, and optionally ISQ
         let load_experts_vb =
-            if mistralrs_quant::get_immediate_isq().is_some() && !experts_vb.device().is_cpu() {
+            if hanzo_quant::get_immediate_isq().is_some() && !experts_vb.device().is_cpu() {
                 experts_vb.clone().set_device(Device::Cpu)
             } else {
                 experts_vb.clone()
@@ -296,13 +296,13 @@ impl SlowExpertsWeights {
             let down = down_proj_packed.i(i)?.transpose(0, 1)?.contiguous()?;
 
             let mut gate_layer: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(candle_nn::Linear::new(gate, None)),
+                QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(gate, None)),
             )?);
             let mut up_layer: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(candle_nn::Linear::new(up, None)),
+                QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(up, None)),
             )?);
             let mut down_layer: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(candle_nn::Linear::new(down, None)),
+                QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(down, None)),
             )?);
 
             gate_layer = apply_immediate_isq(gate_layer, vb_gate_up.clone())?;
@@ -355,7 +355,7 @@ impl SlowExpertsWeights {
     pub(super) fn load(
         cfg: &MoEExpertsConfig,
         experts_vb: ShardedVarBuilder,
-        comm: &Arc<mistralrs_quant::Comm>,
+        comm: &Arc<hanzo_quant::Comm>,
         quantization_config: &Option<QuantizedConfig>,
     ) -> Result<SlowExpertsWeights> {
         let experts = PackedExperts::new(
@@ -432,7 +432,7 @@ impl CutileExpertsWeights {
         forward: &MoEForward,
         config: MoEForwardConfig,
     ) -> Result<Tensor> {
-        use candle_core::Storage;
+        use hanzo_ml::Storage;
 
         let dev = forward.xs_flat.device().as_cuda_device()?;
         let num_tokens = forward.shape.num_tokens;
@@ -441,17 +441,17 @@ impl CutileExpertsWeights {
         let inter = self.w.w_size_n;
         let num_valid = num_tokens * topk;
 
-        let cfg = mistralrs_quant::cutile::get_default_config(num_tokens, num_experts);
+        let cfg = hanzo_quant::cutile::get_default_config(num_tokens, num_experts);
 
         let ti_flat = forward.topk_ids.flatten_all()?.contiguous()?;
         let (ti_storage, ti_layout) = ti_flat.storage_and_layout();
         let ti_slice = match &*ti_storage {
             Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
-            _ => candle_core::bail!("topk_ids must be a cuda tensor"),
+            _ => hanzo_ml::bail!("topk_ids must be a cuda tensor"),
         };
         assert_eq!(ti_layout.start_offset(), 0, "expected contiguous topk_ids");
 
-        let (sids, eids, ntpp, em) = mistralrs_quant::moe::cuda::moe_align(
+        let (sids, eids, ntpp, em) = hanzo_quant::moe::cuda::moe_align(
             ti_slice,
             num_tokens,
             num_experts,
@@ -460,7 +460,7 @@ impl CutileExpertsWeights {
             dev,
         )?;
 
-        let ic1 = mistralrs_quant::cutile::cutile_grouped_gemm(
+        let ic1 = hanzo_quant::cutile::cutile_grouped_gemm(
             forward.xs_flat,
             &self.w.gate_up,
             &sids,
@@ -475,7 +475,7 @@ impl CutileExpertsWeights {
             dev,
         )?;
 
-        let ic2 = mistralrs_quant::moe::cuda::gelu_tanh_and_mul(&ic1, inter, dev)?;
+        let ic2 = hanzo_quant::moe::cuda::gelu_tanh_and_mul(&ic1, inter, dev)?;
 
         let tw_flat = forward
             .topk_weights
@@ -485,7 +485,7 @@ impl CutileExpertsWeights {
         let (tw_storage, tw_layout) = tw_flat.storage_and_layout();
         let tw_slice = match &*tw_storage {
             Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-            _ => candle_core::bail!("topk_weights must be a cuda tensor"),
+            _ => hanzo_ml::bail!("topk_weights must be a cuda tensor"),
         };
         assert_eq!(
             tw_layout.start_offset(),
@@ -493,7 +493,7 @@ impl CutileExpertsWeights {
             "expected contiguous topk_weights"
         );
 
-        let ic3 = mistralrs_quant::cutile::cutile_grouped_gemm(
+        let ic3 = hanzo_quant::cutile::cutile_grouped_gemm(
             &ic2,
             &self.w.down,
             &sids,
@@ -508,7 +508,7 @@ impl CutileExpertsWeights {
             dev,
         )?;
 
-        mistralrs_quant::moe::cuda::moe_sum_bf16(&ic3, num_tokens, topk, dev)
+        hanzo_quant::moe::cuda::moe_sum_bf16(&ic3, num_tokens, topk, dev)
     }
 }
 
@@ -608,7 +608,7 @@ impl FastExpertsWeights {
         forward: &MoEForward,
         config: MoEForwardConfig,
     ) -> Result<Option<Tensor>> {
-        use candle_core::cuda::cudarc::driver::DevicePtr;
+        use hanzo_ml::cuda::cudarc::driver::DevicePtr;
 
         let dev = forward.xs_flat.device().as_cuda_device()?;
 
@@ -630,7 +630,7 @@ impl FastExpertsWeights {
         let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
         let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
         let ti_cuda = match &*ti_storage {
-            candle_core::Storage::Cuda(c) => c,
+            hanzo_ml::Storage::Cuda(c) => c,
             _ => return Ok(None),
         };
         let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
@@ -644,7 +644,7 @@ impl FastExpertsWeights {
             .contiguous()?;
         let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
         let tw_cuda = match &*tw_storage {
-            candle_core::Storage::Cuda(c) => c,
+            hanzo_ml::Storage::Cuda(c) => c,
             _ => return Ok(None),
         };
         let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;
@@ -655,14 +655,14 @@ impl FastExpertsWeights {
 
         // Map activation to CUDA kernel act_type
         let act_type = match config.act {
-            Activation::GeluPytorchTanh => mistralrs_quant::ACT_GELU_PYTORCH_TANH,
-            Activation::Silu | Activation::Swish => mistralrs_quant::ACT_SILU,
+            Activation::GeluPytorchTanh => hanzo_quant::ACT_GELU_PYTORCH_TANH,
+            Activation::Silu | Activation::Swish => hanzo_quant::ACT_SILU,
             _ => return Ok(None), // Fall back for unsupported activations
         };
 
         // SAFETY: tw_ptr is a valid device pointer obtained from the topk_weights tensor above.
         let result = unsafe {
-            mistralrs_quant::indexed_moe_fused_decode(
+            hanzo_quant::indexed_moe_fused_decode(
                 gate_qt,
                 up_qt,
                 down_qt,
@@ -696,7 +696,7 @@ impl FastExpertsWeights {
         let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
         let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
         let ti_cuda = match &*ti_storage {
-            candle_core::Storage::Cuda(c) => c,
+            hanzo_ml::Storage::Cuda(c) => c,
             _ => return Ok(None),
         };
         let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
@@ -705,7 +705,7 @@ impl FastExpertsWeights {
         // Build dispatch tables on GPU (no CPU-GPU sync)
         // moe_dispatch_build takes u32 and casts to i32 internally for the CUDA kernel
         let (expert_bounds, sorted_token_ids, sorted_source_ids) =
-            mistralrs_quant::moe_dispatch_build(
+            hanzo_quant::moe_dispatch_build(
                 ti_u32_slice,
                 total_assignments,
                 num_experts,
@@ -728,10 +728,10 @@ impl FastExpertsWeights {
         };
 
         let use_mmq_gate_up =
-            gate_qt.dtype() == up_qt.dtype() && mistralrs_quant::supports_mmq(gate_qt.dtype());
+            gate_qt.dtype() == up_qt.dtype() && hanzo_quant::supports_mmq(gate_qt.dtype());
 
         let (gate, up, down_input_dim1) = if use_mmq_gate_up {
-            let (gate, up) = mistralrs_quant::grouped_moe_mmq_pair(
+            let (gate, up) = hanzo_quant::grouped_moe_mmq_pair(
                 gate_qt,
                 up_qt,
                 forward.xs_flat,
@@ -748,10 +748,10 @@ impl FastExpertsWeights {
             // Quantize input to Q8_1 ONCE, shared between gate and up.
             // quantize_input_q8_1 accepts BF16/F16/F32 directly (no conversion needed).
             let (input_q8, k, k_padded) =
-                mistralrs_quant::quantize_input_q8_1(forward.xs_flat, dev)?;
+                hanzo_quant::quantize_input_q8_1(forward.xs_flat, dev)?;
 
             // Gate projection using pre-quantized input
-            let gate = mistralrs_quant::grouped_moe_gemm_prequantized(
+            let gate = hanzo_quant::grouped_moe_gemm_prequantized(
                 gate_qt,
                 &input_q8,
                 k,
@@ -767,7 +767,7 @@ impl FastExpertsWeights {
             )?;
 
             // Up projection reusing same pre-quantized input
-            let up = mistralrs_quant::grouped_moe_gemm_prequantized(
+            let up = hanzo_quant::grouped_moe_gemm_prequantized(
                 up_qt,
                 &input_q8,
                 k,
@@ -787,7 +787,7 @@ impl FastExpertsWeights {
         };
 
         // Get topk_weights pointer
-        use candle_core::cuda::cudarc::driver::DevicePtr;
+        use hanzo_ml::cuda::cudarc::driver::DevicePtr;
         let tw_f32 = forward
             .topk_weights
             .flatten_all()?
@@ -795,7 +795,7 @@ impl FastExpertsWeights {
             .contiguous()?;
         let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
         let tw_cuda = match &*tw_storage {
-            candle_core::Storage::Cuda(c) => c,
+            hanzo_ml::Storage::Cuda(c) => c,
             _ => return Ok(None),
         };
         let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;
@@ -805,20 +805,20 @@ impl FastExpertsWeights {
             .0 as *const f32;
 
         let glu_activation = match config.act {
-            Activation::Silu | Activation::Swish => Some(mistralrs_quant::GluActivationType::Silu),
+            Activation::Silu | Activation::Swish => Some(hanzo_quant::GluActivationType::Silu),
             Activation::NewGelu | Activation::GeluPytorchTanh => {
-                Some(mistralrs_quant::GluActivationType::Gelu)
+                Some(hanzo_quant::GluActivationType::Gelu)
             }
-            Activation::Gelu => Some(mistralrs_quant::GluActivationType::GeluErf),
-            Activation::Relu => Some(mistralrs_quant::GluActivationType::Relu),
+            Activation::Gelu => Some(hanzo_quant::GluActivationType::GeluErf),
+            Activation::Relu => Some(hanzo_quant::GluActivationType::Relu),
             _ => None,
         };
 
         let down = if let (true, Some(glu_activation)) = (
-            mistralrs_quant::supports_mmq(down_qt.dtype()),
+            hanzo_quant::supports_mmq(down_qt.dtype()),
             glu_activation,
         ) {
-            let down_assignments = mistralrs_quant::grouped_moe_mmq_from_glu_pair(
+            let down_assignments = hanzo_quant::grouped_moe_mmq_from_glu_pair(
                 down_qt,
                 &gate,
                 &up,
@@ -833,7 +833,7 @@ impl FastExpertsWeights {
             )?;
             if forward.original_dtype == DType::BF16 {
                 unsafe {
-                    mistralrs_quant::moe_weighted_reduce_flat_bf16(
+                    hanzo_quant::moe_weighted_reduce_flat_bf16(
                         &down_assignments,
                         tw_ptr,
                         forward.shape.num_tokens,
@@ -843,7 +843,7 @@ impl FastExpertsWeights {
                 }
             } else {
                 unsafe {
-                    mistralrs_quant::moe_weighted_reduce_flat(
+                    hanzo_quant::moe_weighted_reduce_flat(
                         &down_assignments,
                         tw_ptr,
                         forward.shape.num_tokens,
@@ -858,10 +858,10 @@ impl FastExpertsWeights {
 
             // Quantize down projection input
             let (down_input_q8, down_k, down_k_padded) =
-                mistralrs_quant::quantize_input_q8_1(&activated, dev)?;
+                hanzo_quant::quantize_input_q8_1(&activated, dev)?;
 
             // Down projection with topk_weights + atomicAdd
-            mistralrs_quant::grouped_moe_gemm_prequantized(
+            hanzo_quant::grouped_moe_gemm_prequantized(
                 down_qt,
                 &down_input_q8,
                 down_k,
