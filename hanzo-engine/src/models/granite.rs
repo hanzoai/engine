@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::ops::TopKLastDimOp;
 use crate::layers_masker::CausalMaskConfig;
 use hanzo_ml::{Device, IndexOp, Result, Tensor};
 use hanzo_nn::{Embedding, Module};
@@ -283,10 +284,9 @@ impl GraniteTopKGating {
         let gates = hanzo_nn::ops::softmax(&logits, hanzo_ml::D::Minus1)?;
 
         // Get top-k expert indices and gates per token
-        let gates_vec: Vec<f32> = gates
-            .to_dtype(hanzo_ml::DType::F32)?
-            .flatten_all()?
-            .to_vec1()?;
+        let topk = gates.topk(self.top_k)?;
+        let selected_experts = topk.indices.to_dtype(hanzo_ml::DType::U32)?.to_vec2::<u32>()?;
+        let routing_weights = topk.values.to_dtype(hanzo_ml::DType::F32)?.to_vec2::<f32>()?;
 
         // Collect (expert_idx, token_idx, gate) tuples
         let mut expert_token_gates: Vec<(usize, usize, f32)> = Vec::new();
@@ -1277,7 +1277,7 @@ impl CausalSelfAttention {
         (q, k) = if let Some(ref rotary_emb) = self.rotary_emb {
             let positions = ctx
                 .rope_positions(q.device())?
-                .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+                .ok_or_else(|| hanzo_ml::Error::msg("missing RoPE positions"))?;
             rotary_emb.forward_positions(&q, &k, positions)?
         } else {
             (q, k)
@@ -1356,7 +1356,7 @@ impl CausalSelfAttention {
             vb.pp("q_proj"),
         )?;
         let kv_shard =
-            hanzo_quant::compute_kv_shard(cfg.num_key_value_heads(), cfg.head_dim(), comm);
+            hanzo_quant::compute_kv_shard(cfg.num_key_value_heads(), cfg.head_dim(), comm)?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             size_in,
             size_kv,

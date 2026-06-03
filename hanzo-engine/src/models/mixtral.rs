@@ -170,7 +170,7 @@ impl Attention {
 
         let rope_positions = ctx
             .rope_positions(q.device())?
-            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+            .ok_or_else(|| hanzo_ml::Error::msg("missing RoPE positions"))?;
         let (q, k) = self.rotary_emb.forward_positions(&q, &k, rope_positions)?;
         let metadata = ctx.paged_layer(layer_idx);
 
@@ -320,7 +320,22 @@ impl Module for SparseMoeBlock {
         let xs = xs.reshape(((), hidden_dim))?;
 
         let router_logits = self.gate.forward(&xs)?;
-        let routing_weights = hanzo_nn::ops::softmax_last_dim(&router_logits)?;
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.num_experts_per_tok,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: true,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
+        let selected_experts = topk.indices.to_vec2::<u32>()?;
+        let routing_weights = topk.values.to_dtype(DType::F32)?.to_vec2::<f32>()?;
 
         let mut top_x = vec![vec![]; self.experts.len()];
         let mut selected_rws = vec![vec![]; self.experts.len()];

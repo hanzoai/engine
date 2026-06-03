@@ -1,6 +1,6 @@
 #[cfg(feature = "cuda")]
-use candle_core::DeviceLocation;
-use candle_core::{Device, Result, Tensor};
+use hanzo_ml::DeviceLocation;
+use hanzo_ml::{Device, Result, Tensor};
 #[cfg(feature = "cuda")]
 use tracing::{info, warn};
 
@@ -56,7 +56,7 @@ impl CudaPeerAccess {
 
     #[cfg(feature = "cuda")]
     fn new_cuda(devices: &[Device]) -> Result<Self> {
-        use candle_core::cuda::cudarc::driver::{result, sys};
+        use hanzo_ml::cuda::cudarc::driver::{result, sys};
 
         let mut cuda_devices = Vec::new();
         for device in devices {
