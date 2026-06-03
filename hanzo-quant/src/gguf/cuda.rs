@@ -653,12 +653,12 @@ pub unsafe fn moe_weighted_reduce_flat_bf16(
 ) -> Result<Tensor> {
     let (total_assignments, hidden) = inputs.dims2()?;
     if total_assignments != num_tokens * topk {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "moe_weighted_reduce_flat_bf16: input rows {total_assignments} do not match num_tokens={num_tokens} * topk={topk}"
         );
     }
     if inputs.dtype() != DType::F32 {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "moe_weighted_reduce_flat_bf16: input dtype must be F32, got {:?}",
             inputs.dtype()
         );
@@ -667,7 +667,7 @@ pub unsafe fn moe_weighted_reduce_flat_bf16(
     let inputs = inputs.contiguous()?;
     let (storage, layout) = inputs.storage_and_layout();
     let Storage::Cuda(cuda) = &*storage else {
-        candle_core::bail!("moe_weighted_reduce_flat_bf16: input must live on CUDA");
+        hanzo_ml::bail!("moe_weighted_reduce_flat_bf16: input must live on CUDA");
     };
     let input_slice = cuda.as_cuda_slice::<f32>()?;
     let out = unsafe { dev.alloc::<half::bf16>(num_tokens * hidden)? };

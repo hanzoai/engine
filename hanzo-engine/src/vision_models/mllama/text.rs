@@ -179,7 +179,7 @@ impl MLlamaTextSelfAttention {
 
         let positions = ctx
             .rope_positions(q.device())?
-            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+            .ok_or_else(|| hanzo_ml::Error::msg("missing RoPE positions"))?
             .clone();
         let (q, mut k) = self.rope.forward_positions(&q, &k, &positions)?;
 
