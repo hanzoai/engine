@@ -1,10 +1,11 @@
+/// This is the lower-level manager of the cache. It manages swapping and copying the blocks and
+/// actually allocates the KV cache for the CPU and GPU. It is used by the LLMEngine to execute
+/// operations issued by the scheduler.
+mod attention_backend;
 /// Content-addressable block hashing for prefix caching (vLLM v1 approach).
 pub mod block_hash;
 /// Flat block pool with LRU free list for KV cache block management (vLLM v1 approach).
 pub mod block_pool;
-/// This is the lower-level manager of the cache. It manages swapping and copying the blocks and
-/// actually allocates the KV cache for the CPU and GPU. It is used by the LLMEngine to execute
-/// operations issued by the scheduler.
 mod cache_engine;
 mod config;
 /// Encoder output cache for multimodal models (vision/audio encoder outputs).
@@ -15,6 +16,16 @@ mod layers;
 mod scheduler;
 pub const _PAD_SLOT_ID: i64 = -1;
 
+pub use attention_backend::AttentionBackendKind;
+#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
+pub use attention_backend::{
+    FLASHINFER_DECODE_MAX_HEAD_SIZE, STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE,
+};
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+pub use attention_backend::{
+    FLASHINFER_PREFILL_MAX_HEAD_SIZE, FLASHINFER_TENSOR_CORE_DECODE_ENABLED,
+    FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE,
+};
 pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
 pub use config::{KvCacheLayout, ModelConfigLike, ModelConfigMetadata};
 use hanzo_ml::{DType, Device};
