@@ -6,7 +6,7 @@ This document covers environment variables and server configuration for Hanzo En
 
 | Variable | Description |
 |----------|-------------|
-| `HANZO_DEBUG=1` | Enable debug mode: outputs tensor info files for GGUF/GGML models, increases logging verbosity |
+| `DEBUG=1` | Enable debug mode: outputs tensor info files for GGUF/GGML models, increases logging verbosity |
 | `HANZO_NO_MMAP=1` | Disable memory-mapped file loading, forcing all tensor data into memory |
 | `HANZO_NO_MLA=1` | Disable [MLA](MLA.md) (Multi-head Latent Attention) optimization for DeepSeek V2/V3 and GLM-4.7-Flash |
 | `HANZO_ISQ_SINGLETHREAD=1` | Force ISQ (In-Situ Quantization) to run single-threaded |

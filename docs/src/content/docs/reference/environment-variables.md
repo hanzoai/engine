@@ -28,7 +28,7 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 | Variable | Purpose |
 |---|---|
 | `RUST_LOG` | Override the `tracing` log filter. Examples: `hanzo_engine=debug,tower_http=info`, `trace`. CLI users can usually use `-v` or `-vv` instead. |
-| `HANZO_DEBUG` | `HANZO_DEBUG=1` enables extra debug-level engine tracing. |
+| `DEBUG` | `DEBUG=1` enables extra debug-level engine tracing. |
 
 ## Quantization and loading
 
