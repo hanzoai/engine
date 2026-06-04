@@ -147,7 +147,7 @@ pub async fn run_bench(
     );
 
     #[cfg(feature = "cuda")]
-    let cuda_profiler_range = std::env::var_os("MISTRALRS_BENCH_CUDA_PROFILER_RANGE").is_some();
+    let cuda_profiler_range = std::env::var_os("HANZO_BENCH_CUDA_PROFILER_RANGE").is_some();
     #[cfg(feature = "cuda")]
     if cuda_profiler_range {
         unsafe {

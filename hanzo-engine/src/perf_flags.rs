@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
-const CUDA_GRAPHS_ENV: &str = "MISTRALRS_CUDA_GRAPHS";
-const FLASHINFER_DECODE_ENV: &str = "MISTRALRS_FLASHINFER_DECODE";
+const CUDA_GRAPHS_ENV: &str = "HANZO_CUDA_GRAPHS";
+const FLASHINFER_DECODE_ENV: &str = "HANZO_FLASHINFER_DECODE";
 
 static CUDA_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 static FLASHINFER_DECODE_ENABLED: OnceLock<bool> = OnceLock::new();
