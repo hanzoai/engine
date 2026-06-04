@@ -300,6 +300,12 @@ pub enum ModelKind {
 
     #[strum(to_string = "anymoe: target: `{target}`")]
     AnyMoe { target: Box<ModelKind> },
+
+    #[strum(to_string = "speculative: target: `{target}`, draft: `{draft}`")]
+    Speculative {
+        target: Box<ModelKind>,
+        draft: Box<ModelKind>,
+    },
 }
 
 #[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
@@ -354,6 +360,11 @@ impl ModelKind {
             Normal | Adapter { .. } => vec![None],
             GgufQuantized { quant } | GgufAdapter { quant, .. } => vec![Some(*quant)],
             AnyMoe { target } => target.quantized_kind(),
+            Speculative { target, draft } => {
+                let mut v = target.quantized_kind();
+                v.extend(draft.quantized_kind());
+                v
+            }
         }
     }
 
@@ -373,6 +384,11 @@ impl ModelKind {
             Normal | GgufQuantized { .. } => vec![None],
             Adapter { adapter } | GgufAdapter { adapter, .. } => vec![Some(*adapter)],
             AnyMoe { target } => target.adapted_kind(),
+            Speculative { target, draft } => {
+                let mut v = target.adapted_kind();
+                v.extend(draft.adapted_kind());
+                v
+            }
         }
     }
 }
