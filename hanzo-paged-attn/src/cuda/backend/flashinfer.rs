@@ -4,8 +4,8 @@ use crate::cuda::ffi::{
     gather_kv_cache_flashinfer as ffi_gather_kv_cache_flashinfer,
     reshape_and_cache_flashinfer as ffi_reshape_and_cache_flashinfer,
 };
-use candle_core::backend::BackendStorage;
-use candle_core::{DType, IndexOp, Result, Storage, Tensor};
+use hanzo_ml::backend::BackendStorage;
+use hanzo_ml::{DType, IndexOp, Result, Storage, Tensor};
 
 const FLASHINFER_PREFILL_SUPPORTED_HEAD_SIZES: &[usize] = &[64, 128, 256];
 
@@ -14,7 +14,7 @@ fn dtype_code(dtype: DType, op: &str) -> Result<u32> {
         DType::F16 => Ok(0),
         DType::BF16 => Ok(1),
         DType::F32 => Ok(2),
-        other => candle_core::bail!("{op} only supports f16, bf16, f32 (got {other:?})"),
+        other => hanzo_ml::bail!("{op} only supports f16, bf16, f32 (got {other:?})"),
     }
 }
 
@@ -34,7 +34,7 @@ pub fn reshape_and_cache_flashinfer(
 ) -> Result<()> {
     let dtype = key.dtype();
     if value.dtype() != dtype || key_cache.dtype() != dtype || value_cache.dtype() != dtype {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "reshape_and_cache_flashinfer expects matching dtypes, got key={:?}, value={:?}, key_cache={:?}, value_cache={:?}",
             key.dtype(),
             value.dtype(),
@@ -43,12 +43,12 @@ pub fn reshape_and_cache_flashinfer(
         );
     }
     if slot_mapping.dtype() != DType::I64 {
-        candle_core::bail!("reshape_and_cache_flashinfer expects i64 slot_mapping");
+        hanzo_ml::bail!("reshape_and_cache_flashinfer expects i64 slot_mapping");
     }
 
     let (num_tokens, num_heads, head_size) = key.dims3()?;
     if value.dims3()? != (num_tokens, num_heads, head_size) {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "reshape_and_cache_flashinfer key/value shape mismatch: {:?} vs {:?}",
             key.shape(),
             value.shape()
@@ -56,17 +56,17 @@ pub fn reshape_and_cache_flashinfer(
     }
     let (_, cache_heads, block_size, cache_head_size) = key_cache.dims4()?;
     if value_cache.dims4()? != key_cache.dims4()? {
-        candle_core::bail!("reshape_and_cache_flashinfer cache shape mismatch");
+        hanzo_ml::bail!("reshape_and_cache_flashinfer cache shape mismatch");
     }
     if cache_heads != num_heads || cache_head_size != head_size {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "reshape_and_cache_flashinfer cache shape {:?} incompatible with key {:?}",
             key_cache.shape(),
             key.shape()
         );
     }
     if slot_mapping.dims1()? != num_tokens {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "reshape_and_cache_flashinfer slot_mapping length mismatch: expected {num_tokens}, got {}",
             slot_mapping.dims1()?
         );
@@ -80,23 +80,23 @@ pub fn reshape_and_cache_flashinfer(
 
     let key_s = match &*key_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("key must be a cuda tensor"),
+        _ => hanzo_ml::bail!("key must be a cuda tensor"),
     };
     let value_s = match &*value_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("value must be a cuda tensor"),
+        _ => hanzo_ml::bail!("value must be a cuda tensor"),
     };
     let key_cache_s = match &*key_cache_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("key_cache must be a cuda tensor"),
+        _ => hanzo_ml::bail!("key_cache must be a cuda tensor"),
     };
     let value_cache_s = match &*value_cache_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("value_cache must be a cuda tensor"),
+        _ => hanzo_ml::bail!("value_cache must be a cuda tensor"),
     };
     let slot_s = match &*slot_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("slot_mapping must be a cuda tensor"),
+        _ => hanzo_ml::bail!("slot_mapping must be a cuda tensor"),
     };
 
     let (key_ptr, _key_guard) = match dtype {
@@ -190,7 +190,7 @@ pub fn flashinfer_decode(
 ) -> Result<Tensor> {
     let dtype = query.dtype();
     if key_cache.dtype() != dtype || value_cache.dtype() != dtype {
-        candle_core::bail!("flashinfer_decode expects query/cache dtypes to match");
+        hanzo_ml::bail!("flashinfer_decode expects query/cache dtypes to match");
     }
     for (name, tensor) in [
         ("paged_kv_indptr", paged_kv_indptr),
@@ -202,17 +202,17 @@ pub fn flashinfer_decode(
         ("kv_chunk_size", kv_chunk_size),
     ] {
         if tensor.dtype() != DType::I32 {
-            candle_core::bail!("flashinfer_decode expects {name} to be i32");
+            hanzo_ml::bail!("flashinfer_decode expects {name} to be i32");
         }
     }
     if block_valid_mask.dtype() != DType::U8 {
-        candle_core::bail!("flashinfer_decode expects block_valid_mask to be u8");
+        hanzo_ml::bail!("flashinfer_decode expects block_valid_mask to be u8");
     }
 
     let (batch_size, num_qo_heads, head_size) = query.dims3()?;
     let (_, num_kv_heads, page_size, cache_head_size) = key_cache.dims4()?;
     if value_cache.dims4()? != key_cache.dims4()? || cache_head_size != head_size {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "flashinfer_decode cache shape {:?}/{:?} incompatible with query {:?}",
             key_cache.shape(),
             value_cache.shape(),
@@ -228,7 +228,7 @@ pub fn flashinfer_decode(
         || kv_chunk_size.dims1()? != 1
         || block_valid_mask.dims1()? != padded_batch_size
     {
-        candle_core::bail!("flashinfer_decode metadata shapes are invalid");
+        hanzo_ml::bail!("flashinfer_decode metadata shapes are invalid");
     }
 
     let out =
@@ -249,51 +249,51 @@ pub fn flashinfer_decode(
 
     let q_s = match &*q_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("query must be a cuda tensor"),
+        _ => hanzo_ml::bail!("query must be a cuda tensor"),
     };
     let kc_s = match &*kc_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("key_cache must be a cuda tensor"),
+        _ => hanzo_ml::bail!("key_cache must be a cuda tensor"),
     };
     let vc_s = match &*vc_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("value_cache must be a cuda tensor"),
+        _ => hanzo_ml::bail!("value_cache must be a cuda tensor"),
     };
     let indptr_s = match &*indptr_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("paged_kv_indptr must be a cuda tensor"),
+        _ => hanzo_ml::bail!("paged_kv_indptr must be a cuda tensor"),
     };
     let indices_s = match &*indices_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("paged_kv_indices must be a cuda tensor"),
+        _ => hanzo_ml::bail!("paged_kv_indices must be a cuda tensor"),
     };
     let last_s = match &*last_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("paged_kv_last_page_len must be a cuda tensor"),
+        _ => hanzo_ml::bail!("paged_kv_last_page_len must be a cuda tensor"),
     };
     let request_s = match &*request_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("request_indices must be a cuda tensor"),
+        _ => hanzo_ml::bail!("request_indices must be a cuda tensor"),
     };
     let tile_s = match &*tile_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("kv_tile_indices must be a cuda tensor"),
+        _ => hanzo_ml::bail!("kv_tile_indices must be a cuda tensor"),
     };
     let o_indptr_s = match &*o_indptr_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("o_indptr must be a cuda tensor"),
+        _ => hanzo_ml::bail!("o_indptr must be a cuda tensor"),
     };
     let chunk_s = match &*chunk_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("kv_chunk_size must be a cuda tensor"),
+        _ => hanzo_ml::bail!("kv_chunk_size must be a cuda tensor"),
     };
     let mask_s = match &*mask_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("block_valid_mask must be a cuda tensor"),
+        _ => hanzo_ml::bail!("block_valid_mask must be a cuda tensor"),
     };
     let out_s = match &*out_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("out must be a cuda tensor"),
+        _ => hanzo_ml::bail!("out must be a cuda tensor"),
     };
 
     let (q_ptr, _q_guard) = match dtype {
@@ -364,7 +364,7 @@ pub fn flashinfer_decode(
     let (tmp_v_ptr, _tmp_v_guard) = if let Some((tmp_v_s, tmp_v_l)) = tmp_v_storage.as_ref() {
         let tmp_v_s = match &**tmp_v_s {
             Storage::Cuda(s) => s,
-            _ => candle_core::bail!("tmp_v must be a cuda tensor"),
+            _ => hanzo_ml::bail!("tmp_v must be a cuda tensor"),
         };
         match dtype {
             DType::F16 => {
@@ -394,7 +394,7 @@ pub fn flashinfer_decode(
     let (tmp_s_ptr, _tmp_s_guard) = if let Some((tmp_s_s, tmp_s_l)) = tmp_s_storage.as_ref() {
         let tmp_s_s = match &**tmp_s_s {
             Storage::Cuda(s) => s,
-            _ => candle_core::bail!("tmp_s must be a cuda tensor"),
+            _ => hanzo_ml::bail!("tmp_s must be a cuda tensor"),
         };
         let (ptr, guard) = slice_ptr(tmp_s_s.as_cuda_slice::<f32>()?, tmp_s_l.start_offset());
         (ptr, Some(guard))
@@ -460,10 +460,10 @@ pub fn flashinfer_prefill(
 ) -> Result<Tensor> {
     let dtype = query.dtype();
     if dtype == DType::F32 {
-        candle_core::bail!("flashinfer_prefill only supports f16/bf16 query tensors");
+        hanzo_ml::bail!("flashinfer_prefill only supports f16/bf16 query tensors");
     }
     if key_cache.dtype() != dtype || value_cache.dtype() != dtype {
-        candle_core::bail!("flashinfer_prefill expects query/cache dtypes to match");
+        hanzo_ml::bail!("flashinfer_prefill expects query/cache dtypes to match");
     }
     for (name, tensor) in [
         ("paged_kv_indptr", paged_kv_indptr),
@@ -477,20 +477,20 @@ pub fn flashinfer_prefill(
         ("kv_chunk_size", kv_chunk_size),
     ] {
         if tensor.dtype() != DType::I32 {
-            candle_core::bail!("flashinfer_prefill expects {name} to be i32");
+            hanzo_ml::bail!("flashinfer_prefill expects {name} to be i32");
         }
     }
     if block_valid_mask.dtype() != DType::U8 {
-        candle_core::bail!("flashinfer_prefill expects block_valid_mask to be u8");
+        hanzo_ml::bail!("flashinfer_prefill expects block_valid_mask to be u8");
     }
 
     let (total_q, num_qo_heads, head_size) = query.dims3()?;
     if !FLASHINFER_PREFILL_SUPPORTED_HEAD_SIZES.contains(&head_size) {
-        candle_core::bail!("flashinfer_prefill received unsupported head_size {head_size}");
+        hanzo_ml::bail!("flashinfer_prefill received unsupported head_size {head_size}");
     }
     let (_, num_kv_heads, page_size, cache_head_size) = key_cache.dims4()?;
     if value_cache.dims4()? != key_cache.dims4()? || cache_head_size != head_size {
-        candle_core::bail!(
+        hanzo_ml::bail!(
             "flashinfer_prefill cache shape {:?}/{:?} incompatible with query {:?}",
             key_cache.shape(),
             value_cache.shape(),
@@ -507,7 +507,7 @@ pub fn flashinfer_prefill(
         || kv_chunk_size.dims1()? != 1
         || block_valid_mask.dims1()? != padded_batch_size
     {
-        candle_core::bail!("flashinfer_prefill metadata shapes are invalid");
+        hanzo_ml::bail!("flashinfer_prefill metadata shapes are invalid");
     }
 
     let out = unsafe { Tensor::empty((total_q, num_qo_heads, head_size), dtype, query.device())? };
@@ -529,59 +529,59 @@ pub fn flashinfer_prefill(
 
     let q_s = match &*q_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("query must be a cuda tensor"),
+        _ => hanzo_ml::bail!("query must be a cuda tensor"),
     };
     let kc_s = match &*kc_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("key_cache must be a cuda tensor"),
+        _ => hanzo_ml::bail!("key_cache must be a cuda tensor"),
     };
     let vc_s = match &*vc_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("value_cache must be a cuda tensor"),
+        _ => hanzo_ml::bail!("value_cache must be a cuda tensor"),
     };
     let indptr_s = match &*indptr_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("paged_kv_indptr must be a cuda tensor"),
+        _ => hanzo_ml::bail!("paged_kv_indptr must be a cuda tensor"),
     };
     let indices_s = match &*indices_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("paged_kv_indices must be a cuda tensor"),
+        _ => hanzo_ml::bail!("paged_kv_indices must be a cuda tensor"),
     };
     let last_s = match &*last_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("paged_kv_last_page_len must be a cuda tensor"),
+        _ => hanzo_ml::bail!("paged_kv_last_page_len must be a cuda tensor"),
     };
     let q_indptr_s = match &*q_indptr_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("q_indptr must be a cuda tensor"),
+        _ => hanzo_ml::bail!("q_indptr must be a cuda tensor"),
     };
     let request_s = match &*request_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("request_indices must be a cuda tensor"),
+        _ => hanzo_ml::bail!("request_indices must be a cuda tensor"),
     };
     let qo_tile_s = match &*qo_tile_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("qo_tile_indices must be a cuda tensor"),
+        _ => hanzo_ml::bail!("qo_tile_indices must be a cuda tensor"),
     };
     let kv_tile_s = match &*kv_tile_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("kv_tile_indices must be a cuda tensor"),
+        _ => hanzo_ml::bail!("kv_tile_indices must be a cuda tensor"),
     };
     let o_indptr_s = match &*o_indptr_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("o_indptr must be a cuda tensor"),
+        _ => hanzo_ml::bail!("o_indptr must be a cuda tensor"),
     };
     let chunk_s = match &*chunk_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("kv_chunk_size must be a cuda tensor"),
+        _ => hanzo_ml::bail!("kv_chunk_size must be a cuda tensor"),
     };
     let mask_s = match &*mask_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("block_valid_mask must be a cuda tensor"),
+        _ => hanzo_ml::bail!("block_valid_mask must be a cuda tensor"),
     };
     let out_s = match &*out_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("out must be a cuda tensor"),
+        _ => hanzo_ml::bail!("out must be a cuda tensor"),
     };
 
     let (q_ptr, _q_guard) = match dtype {
@@ -660,7 +660,7 @@ pub fn flashinfer_prefill(
         )
     };
     if status != 0 {
-        candle_core::bail!("flashinfer_prefill failed with status {status}");
+        hanzo_ml::bail!("flashinfer_prefill failed with status {status}");
     }
 
     Ok(out.clone())
@@ -675,12 +675,12 @@ pub fn gather_kv_cache_flashinfer(
 ) -> Result<(Tensor, Tensor)> {
     let dtype = key_cache.dtype();
     if value_cache.dtype() != dtype || out_dtype != dtype {
-        candle_core::bail!("gather_kv_cache_flashinfer expects matching cache/output dtypes");
+        hanzo_ml::bail!("gather_kv_cache_flashinfer expects matching cache/output dtypes");
     }
 
     let (_, num_kv_heads, block_size, head_size) = key_cache.dims4()?;
     if value_cache.dims4()? != key_cache.dims4()? {
-        candle_core::bail!("gather_kv_cache_flashinfer cache shape mismatch");
+        hanzo_ml::bail!("gather_kv_cache_flashinfer cache shape mismatch");
     }
 
     let block_table = block_table.contiguous()?;
@@ -688,7 +688,7 @@ pub fn gather_kv_cache_flashinfer(
     if !matches!(block_table.dtype(), DType::I32 | DType::U32)
         || !matches!(cu_seq_lens.dtype(), DType::I32 | DType::U32)
     {
-        candle_core::bail!("gather_kv_cache_flashinfer expects i32/u32 metadata");
+        hanzo_ml::bail!("gather_kv_cache_flashinfer expects i32/u32 metadata");
     }
 
     let cu_len = cu_seq_lens.dims1()?;
@@ -726,27 +726,27 @@ pub fn gather_kv_cache_flashinfer(
 
     let kc_s = match &*kc_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("key_cache must be a cuda tensor"),
+        _ => hanzo_ml::bail!("key_cache must be a cuda tensor"),
     };
     let vc_s = match &*vc_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("value_cache must be a cuda tensor"),
+        _ => hanzo_ml::bail!("value_cache must be a cuda tensor"),
     };
     let ko_s = match &*ko_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("k_out must be a cuda tensor"),
+        _ => hanzo_ml::bail!("k_out must be a cuda tensor"),
     };
     let vo_s = match &*vo_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("v_out must be a cuda tensor"),
+        _ => hanzo_ml::bail!("v_out must be a cuda tensor"),
     };
     let bt_s = match &*bt_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("block_table must be a cuda tensor"),
+        _ => hanzo_ml::bail!("block_table must be a cuda tensor"),
     };
     let cu_s = match &*cu_s {
         Storage::Cuda(s) => s,
-        _ => candle_core::bail!("cu_seq_lens must be a cuda tensor"),
+        _ => hanzo_ml::bail!("cu_seq_lens must be a cuda tensor"),
     };
 
     let (kc_ptr, _kc_guard) = match dtype {

@@ -23,7 +23,7 @@ hanzo-ml.workspace = true
 hanzo-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-flash-attn = { workspace = true, optional = true }
+hanzo-flash-attn = { workspace = true, optional = true }
 dirs.workspace = true
 hf-hub.workspace = true
 thiserror.workspace = true
@@ -86,7 +86,7 @@ float8.workspace = true
 llguidance.workspace = true
 toktrie_hf_tokenizers.workspace = true
 toktrie.workspace = true
-candle-flash-attn-v3 = { workspace = true, optional = true }
+hanzo-flash-attn-v3 = { workspace = true, optional = true }
 safetensors.workspace = true
 serde-big-array.workspace = true
 interprocess.workspace = true
@@ -118,7 +118,7 @@ openai-harmony = "0.0.8"
 [target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))'.dependencies]
 objc = { workspace = true, optional = true }
 objc2-metal = { workspace = true, optional = true }
-candle-metal-kernels = { workspace = true, optional = true }
+hanzo-metal-kernels = { workspace = true, optional = true }
 
 [features]
 pyo3_macros = ["pyo3", "hanzo-llm-mcp/pyo3_macros"]
@@ -139,14 +139,14 @@ metal = [
     "hanzo-ml/metal",
     "hanzo-nn/metal",
     "hanzo-quant/metal",
-    "dep:candle-metal-kernels",
+    "dep:hanzo-metal-kernels",
     "dep:objc",
     "dep:hanzo-paged-attn",
     "hanzo-paged-attn/metal",
     "dep:objc2-metal"
 ]
-flash-attn = ["cuda", "dep:candle-flash-attn"]
-flash-attn-v3 = ["cuda", "dep:candle-flash-attn-v3"]
+flash-attn = ["cuda", "dep:hanzo-flash-attn"]
+flash-attn-v3 = ["cuda", "dep:hanzo-flash-attn-v3"]
 accelerate = ["hanzo-ml/accelerate", "hanzo-nn/accelerate", "hanzo-quant/accelerate"]
 mkl = ["hanzo-ml/mkl", "hanzo-nn/mkl"]
 nccl = ["cuda", "hanzo-quant/nccl"]
