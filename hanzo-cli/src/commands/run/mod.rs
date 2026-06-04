@@ -90,6 +90,7 @@ pub async fn run_interactive(
         .with_paged_ctxt_len_optional(paged_ctxt_len)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_mtp_config_optional(runtime.mtp_config())
+        .with_draft_model_optional(runtime.draft_model_selected(), runtime.gamma())
         .with_paged_attn_cache_type(paged_cache_type);
 
     if let Some(model) = runtime.search_embedding_model {
