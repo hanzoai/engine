@@ -7,7 +7,7 @@ Common issues and solutions for Hanzo Engine.
 Enable debug mode for more information:
 
 ```bash
-HANZO_DEBUG=1 hanzo run -m <model>
+DEBUG=1 hanzo run -m <model>
 ```
 
 Debug mode causes:
