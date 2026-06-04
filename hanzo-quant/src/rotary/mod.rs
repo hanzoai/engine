@@ -53,7 +53,7 @@ impl RotaryEmb {
 
 impl CustomOp3 for RotaryEmb {
     fn name(&self) -> &'static str {
-        "mistralrs-rotary"
+        "hanzo-rotary"
     }
 
     fn cpu_fwd(
