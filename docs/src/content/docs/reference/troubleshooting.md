@@ -17,7 +17,7 @@ The binary is at `~/.cargo/bin/hanzo`. The directory is added to `PATH` by `rust
 
 ### Build fails with `flash-attn` feature enabled
 
-Flash attention requires compute capability 8.0+. On older GPUs, drop `flash-attn` from features and rebuild with `cuda cudnn`.
+Flash attention requires compute capability 8.0+. On older GPUs, drop `flash-attn` from features and rebuild with `cuda nccl cudnn` on Linux when NCCL is installed, or `cuda cudnn` otherwise.
 
 ### `hanzo login` rejects the token
 
@@ -38,6 +38,14 @@ Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `
 ### Generation slower than expected
 
 Verify accelerator features are compiled in with `hanzo doctor`. If `cuda` is missing, the binary was built without GPU support.
+
+For CUDA decode throughput, also check whether PagedAttention is active. FlashInfer paged decode and CUDA graphs are enabled by default for compatible CUDA paged decode paths.
+
+### CUDA graphs do not appear to help
+
+CUDA graphs apply to supported single-token decode steps only. They do not speed up prompt prefill. The first time a graph shape is seen, mistral.rs pays warmup and capture overhead; steady-state decode is the part that can improve.
+
+If graph capture or replay fails, mistral.rs logs a warning and disables CUDA graphs for that loaded pipeline. Set `MISTRALRS_CUDA_GRAPHS=0` to compare with the normal CUDA path.
 
 ### Response cut off
 
