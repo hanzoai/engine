@@ -6,7 +6,7 @@ use crate::DEBUG;
 
 static LOGGER: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
-pub const HANZO_LOG_TARGET_PREFIX: &str = "hanzo";
+pub const LOG_TARGET_PREFIX: &str = "hanzo";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LogVerbosity {
@@ -28,7 +28,7 @@ impl LogVerbosity {
 /// This should be called to initialize the debug flag and logging.
 /// This should not be called in hanzo-engine code due to Rust usage.
 pub fn initialize_logging() {
-    let is_debug = std::env::var("HANZO_DEBUG")
+    let is_debug = std::env::var("DEBUG")
         .unwrap_or_default()
         .contains('1');
     DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
@@ -54,14 +54,14 @@ pub fn default_hanzo_filter(verbosity: LogVerbosity) -> EnvFilter {
         LogVerbosity::Trace => ("warn,hf_hub=info", "trace"),
     };
     EnvFilter::new(base).add_directive(
-        format!("{HANZO_LOG_TARGET_PREFIX}={level}")
+        format!("{LOG_TARGET_PREFIX}={level}")
             .parse()
             .expect("valid default log directive"),
     )
 }
 
 fn is_debug_env() -> bool {
-    std::env::var("HANZO_DEBUG")
+    std::env::var("DEBUG")
         .unwrap_or_default()
         .contains('1')
 }
