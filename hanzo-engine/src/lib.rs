@@ -290,6 +290,7 @@ pub use pipeline::{
     SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality, TokenSource,
     UQFF_MULTI_FILE_DELIMITER,
 };
+pub use pipeline::{DraftSpeculativeConfig, SpeculativeLoader};
 pub use request::{
     ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
     LlguidanceGrammar, MessageContent, NormalRequest, ReasoningEffort, Request, RequestMessage,

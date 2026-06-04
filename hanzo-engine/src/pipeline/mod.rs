@@ -42,6 +42,7 @@ pub use isq::{
     IsqOrganization, UQFF_MULTI_FILE_DELIMITER,
 };
 use llguidance::toktrie::TokEnv;
+pub use speculative::{SpeculativeConfig as DraftSpeculativeConfig, SpeculativeLoader};
 pub use loaders::{
     AdapterKind, AutoDeviceMapParams, AutoEmbeddingLoader, AutoMultimodalLoader, AutoNormalLoader,
     DeepSeekV2Loader, DeepSeekV3Loader, DeviceMappedModelLoader, DiffusionLoaderType,
