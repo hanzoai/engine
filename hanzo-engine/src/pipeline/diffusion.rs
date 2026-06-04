@@ -3,7 +3,7 @@ use super::{
     AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType, DiffusionModel,
     DiffusionModelLoader, EitherCache, FluxLoader, ForwardInputsResult, GeneralMetadata,
     IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
-    PreProcessingMixin, Processor, TokenSource,
+    PreProcessingMixin, Processor, QwenImageLoader, TokenSource,
 };
 use crate::device_map::{self, DeviceMapper};
 use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
@@ -66,6 +66,7 @@ impl DiffusionLoaderBuilder {
         let loader: Box<dyn DiffusionModelLoader> = match loader {
             DiffusionLoaderType::Flux => Box::new(FluxLoader { offload: false }),
             DiffusionLoaderType::FluxOffloaded => Box::new(FluxLoader { offload: true }),
+            DiffusionLoaderType::QwenImage => Box::new(QwenImageLoader),
         };
         Box::new(DiffusionLoader {
             inner: loader,
@@ -189,14 +190,14 @@ impl Loader for DiffusionLoader {
 
         let model = match self.kind {
             ModelKind::Normal => {
-                let vbs = paths
-                    .filenames
-                    .iter()
+                let groups = self.inner.group_model_paths(&paths.filenames);
+                let vbs = groups
+                    .into_iter()
                     .zip(self.inner.force_cpu_vb())
-                    .map(|(path, force_cpu)| {
+                    .map(|(group, force_cpu)| {
                         let dev = if force_cpu { &Device::Cpu } else { device };
                         from_mmaped_safetensors(
-                            vec![path.clone()],
+                            group,
                             Vec::new(),
                             Some(dtype),
                             dev,
