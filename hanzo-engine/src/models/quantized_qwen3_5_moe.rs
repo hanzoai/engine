@@ -609,9 +609,15 @@ impl PropsGGUF {
                     })
                     .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
             },
-            block_count: c
+            // block_count includes trailing MTP (multi-token-prediction) layers in some exports
+            // (e.g. the MXFP4 gguf: block_count=41, nextn_predict_layers=1). MTP is ignored for
+            // text-only inference, so the transformer depth is block_count - nextn_predict_layers.
+            block_count: (c
                 .get_value::<u32>("block_count")
-                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize,
+                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
+                .saturating_sub(
+                    c.get_value::<u32>("nextn_predict_layers").unwrap_or(0),
+                )) as usize,
             embedding_length: embed_len,
             rms_norm_eps: c
                 .get_value("attention.layer_norm_rms_epsilon")
@@ -866,7 +872,12 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     gate_experts: QMatMul::from_qtensor(gate_experts)?,
                     up_experts: QMatMul::from_qtensor(up_experts)?,
                     down_experts: QMatMul::from_qtensor(down_experts)?,
-                    shared_gate: QMatMul::from_qtensor(shared_gate)?,
+                    // ffn_gate_inp_shexp is a hidden->1 shared-expert gate stored 1D [hidden]; the
+                    // matmul needs 2D, so dequantize and reshape to [1, hidden].
+                    shared_gate: {
+                        let w = shared_gate.dequantize(dev)?;
+                        QMatMul::Tensor(if w.rank() == 1 { w.unsqueeze(0)? } else { w })
+                    },
                     shared_gate_proj,
                     shared_up_proj,
                     shared_down_proj,
