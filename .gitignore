@@ -4,7 +4,6 @@
 *.a
 .DS_Store
 .idea
-hanzo/
 
 hanzo-cli/webui/node_modules/
 
@@ -14,4 +13,14 @@ docs/book/
 # Starlight / Astro
 docs/node_modules/
 docs/dist/
-docs/.astro/
+docs/.astro/target/
+**/target/
+*.so
+*.a
+*.rlib
+*.safetensors
+*.gguf
+*.pt
+*.metallib
+.DS_Store
+.claude/
