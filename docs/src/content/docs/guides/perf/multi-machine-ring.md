@@ -1,8 +1,8 @@
 ---
 title: Run across multiple machines
-description: The ring backend for distributed inference across hosts.
+description: Use the ring backend for distributed inference across hosts.
 sidebar:
-  order: 6
+  order: 9
 ---
 
 When a model exceeds one machine's GPU memory, hanzo can split it across multiple hosts via a ring backend.
@@ -14,6 +14,8 @@ The `ring` feature must be compiled in:
 ```bash
 cargo install --path hanzo-cli --features "cuda flash-attn ring"
 ```
+
+If the binary is also built with `nccl`, set `MISTRALRS_NO_NCCL=1` when launching so `Comm::from_device` selects the ring backend.
 
 ## Configuration
 
@@ -35,9 +37,9 @@ Config shape:
 
 Non-master ranks (`rank != 0`) must specify `master_ip`. The master rank (`rank = 0`) is reachable via `master_ip`.
 
-## Multi-node environment variables
+## Environment
 
-Multi-node coordination is controlled through environment variables, not CLI flags:
+Ring backend selection is controlled by `RING_CONFIG`:
 
 | Variable | Purpose |
 |---|---|

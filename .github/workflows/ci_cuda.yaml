@@ -18,7 +18,6 @@ jobs:
       cancel-in-progress: true
 
     runs-on: [self-hosted, Linux, ARM64, gpu, cuda]
-
     timeout-minutes: 90
 
     strategy:
@@ -26,6 +25,11 @@ jobs:
         include:
           - name: cuda
             features: cuda,nccl
+            cuda: "13.0"
+          # cuTile's JIT tool (tileiras) ships with CUDA 13.1+, so this job needs >= 13.1.
+          - name: cuda+cutile
+            features: cuda,cutile
+            cuda: "13.1"
           # - name: cuda+nccl
           #   features: cuda,nccl
 
@@ -41,16 +45,18 @@ jobs:
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Pin CUDA toolkit to 13.0
+      - name: Pin CUDA toolkit to ${{ matrix.cuda }}
         run: |
-          if [ ! -d /usr/local/cuda-13.0 ]; then
-            echo "::error::/usr/local/cuda-13.0 not found on runner"
+          CUDA_DIR=/usr/local/cuda-${{ matrix.cuda }}
+          if [ ! -d "$CUDA_DIR" ]; then
+            echo "::error::$CUDA_DIR not found on runner"
             exit 1
           fi
-          echo "/usr/local/cuda-13.0/bin" >> $GITHUB_PATH
-          echo "CUDA_HOME=/usr/local/cuda-13.0" >> $GITHUB_ENV
-          echo "CUDA_PATH=/usr/local/cuda-13.0" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+          echo "$CUDA_DIR/bin" >> $GITHUB_PATH
+          echo "CUDA_HOME=$CUDA_DIR" >> $GITHUB_ENV
+          echo "CUDA_PATH=$CUDA_DIR" >> $GITHUB_ENV
+          echo "CUDA_TOOLKIT_PATH=$CUDA_DIR" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$CUDA_DIR/lib64:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
 
       - name: CUDA sanity
         run: |
@@ -58,9 +64,7 @@ jobs:
           nvcc --version || true
 
       - name: Clippy
-        timeout-minutes: 60
         run: cargo clippy --features ${{ matrix.features }}
 
       - name: Test
-        timeout-minutes: 30
         run: cargo test --features ${{ matrix.features }}
