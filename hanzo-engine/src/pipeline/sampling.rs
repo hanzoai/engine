@@ -617,3 +617,42 @@ pub async fn sample_sequence(
 
     Ok(second_logprobs_response)
 }
+
+#[derive(Clone)]
+pub struct SpeculativeSample {
+    pub sample: Logprobs,
+}
+
+/// Verify `draft_samples` against the target `logits` (one column per drafted token), accepting the
+/// matching prefix (classic speculative sampling). Rolls back the grammar constraint by `n_toks`
+/// first, then advances only for accepted tokens. Used by the draft+target speculative pipeline.
+pub async fn sample_target_sequence_speculative(
+    logits: Tensor,
+    seq: &mut Sequence,
+    return_logprobs: bool,
+    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    draft_samples: &[SpeculativeSample],
+) -> Result<Vec<SpeculativeSample>> {
+    let n_toks = draft_samples.len();
+    match &mut seq.recognizer {
+        SequenceRecognizer::Llguidance(ref mut llg) => {
+            llg.rollback(n_toks).map_err(hanzo_ml::Error::msg)?;
+        }
+        SequenceRecognizer::None => {}
+    }
+    let mut sampled = Vec::new();
+    for (chunk, draft) in logits
+        .chunk(n_toks, 1)?
+        .into_iter()
+        .zip(draft_samples.iter())
+    {
+        let sample =
+            sample_sequence(chunk, seq, return_logprobs, rng.clone(), true, true, false).await?;
+        let sampled_token = sample.token;
+        sampled.push(SpeculativeSample { sample });
+        if sampled_token != draft.sample.token {
+            break;
+        }
+    }
+    Ok(sampled)
+}

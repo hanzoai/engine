@@ -17,6 +17,7 @@ mod paths;
 mod processing;
 mod response;
 pub(crate) mod sampling;
+mod speculative;
 mod speech;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
