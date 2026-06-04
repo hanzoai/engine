@@ -30,7 +30,7 @@ use std::{
 use tokio::sync::mpsc::{channel, Sender};
 use tracing::{debug, info, warn};
 
-pub const HANZO_GIT_REVISION: &str = match option_env!("HANZO_GIT_REVISION") {
+pub const GIT_REVISION: &str = match option_env!("GIT_REVISION") {
     Some(value) => value,
     None => "unknown",
 };
@@ -1042,7 +1042,7 @@ impl Hanzo {
     }
 
     async fn new(config: HanzoBuilder) -> Arc<Self> {
-        info!("git revision: {HANZO_GIT_REVISION}");
+        info!("git revision: {GIT_REVISION}");
         let HanzoBuilder {
             pipeline,
             method,

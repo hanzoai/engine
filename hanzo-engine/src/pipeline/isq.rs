@@ -659,7 +659,7 @@ pub trait IsqModel {
                         current_rayon_threads
                     }
                 };
-                if env::var("HANZO_ISQ_SINGLETHREAD").is_ok() {
+                if env::var("ISQ_SINGLETHREAD").is_ok() {
                     minimum_max_threads = 1;
                 }
 
