@@ -223,6 +223,12 @@ hex = "0.4.3"
 serde_yaml = "0.9.34"
 tempfile = "3.19"
 
+[profile.quick]
+inherits = "release"
+lto = false
+codegen-units = 256
+incremental = true
+
 [profile.release-with-debug]
 inherits = "release"
 debug = true
