@@ -16,6 +16,7 @@ pub use inputs_processor::Idefics3Processor;
 use vision::{Idefics3Connector, Idefics3VisionTransformer};
 
 use crate::attention::AttentionMask;
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
@@ -25,8 +26,8 @@ use crate::{
         AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
+        NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
@@ -99,17 +100,13 @@ impl Idefics3Model {
         x_flat.reshape(input_embeds.shape())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward_inner(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
         pixel_attention_mask: Option<Tensor>,
         image_hashes: &[u64],
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let input_embeds = if let Some(pixel_values) = pixel_values {
             let input_embeds = self.text_model.get_input_embeddings(input_ids)?;
@@ -252,14 +249,7 @@ impl Idefics3Model {
             self.text_model.get_input_embeddings(input_ids)?
         };
 
-        self.text_model.forward_embeds(
-            input_ids,
-            input_embeds,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.text_model.forward_embeds(input_ids, input_embeds, ctx)
     }
 }
 
@@ -332,12 +322,8 @@ impl MultimodalModel for Idefics3Model {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _: Vec<usize>, // Ignore, it is for phi3
         model_specific_args: Box<dyn Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> hanzo_ml::Result<Tensor> {
         let Idefics3SpecificArgs {
             pixel_attention_mask,
@@ -348,12 +334,9 @@ impl MultimodalModel for Idefics3Model {
         self.forward_inner(
             input_ids,
             pixel_values,
-            seqlen_offsets,
-            context_lens,
             pixel_attention_mask,
             &image_hashes,
-            metadata,
-            flash_params,
+            ctx,
         )
     }
     fn cache(&self) -> &EitherCache {

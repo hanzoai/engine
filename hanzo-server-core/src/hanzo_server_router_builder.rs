@@ -3,7 +3,7 @@
 use anyhow::Result;
 use axum::{
     extract::DefaultBodyLimit,
-    http::{self, Method},
+    http::{self, header::HeaderName, Method},
     routing::{get, post},
     Extension, Router,
 };
@@ -25,6 +25,14 @@ use crate::{
     },
     image_generation::image_generation,
     responses::{cancel_response, create_response, delete_response, get_response},
+    route_registry::{
+        AGENT_APPROVAL_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE, ANTHROPIC_MESSAGES_ROUTE,
+        CANCEL_RESPONSE_ROUTE, CHAT_COMPLETIONS_ROUTE, COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE,
+        FILES_ROUTE, FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE,
+        MODELS_ROUTE, MODEL_STATUS_ROUTE, RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE,
+        RE_ISQ_ROUTE, ROOT_ROUTE, SESSION_ROUTE, SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE,
+        SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE,
+    },
     speech_generation::speech_generation,
     types::SharedHanzoState,
 };
@@ -274,7 +282,13 @@ fn init_router(
 
     let cors_layer = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-        .allow_headers([http::header::CONTENT_TYPE, http::header::AUTHORIZATION])
+        .allow_headers([
+            http::header::CONTENT_TYPE,
+            http::header::AUTHORIZATION,
+            HeaderName::from_static("x-api-key"),
+            HeaderName::from_static("anthropic-version"),
+            HeaderName::from_static("anthropic-beta"),
+        ])
         .allow_origin(allow_origin);
 
     let router = Router::new()
@@ -297,18 +311,32 @@ fn init_router(
         .route("/v1/files/{id}", get(get_file).delete(delete_file))
         .route("/v1/files/{id}/content", get(get_file_content))
         .route("/v1/audio/speech", post(speech_generation))
+        .route(COMPLETIONS_ROUTE.path, post(completions))
+        .route(EMBEDDINGS_ROUTE.path, post(embeddings))
+        .route(MODELS_ROUTE.path, get(models))
+        .route(UNLOAD_MODEL_ROUTE.path, post(unload_model))
+        .route(RELOAD_MODEL_ROUTE.path, post(reload_model))
+        .route(MODEL_STATUS_ROUTE.path, post(get_model_status))
+        .route(TUNE_MODEL_ROUTE.path, post(tune_model))
+        .route(SYSTEM_INFO_ROUTE.path, get(system_info))
+        .route(SYSTEM_DOCTOR_ROUTE.path, post(system_doctor))
+        .route(HEALTH_ROUTE.path, get(health))
+        .route(ROOT_ROUTE.path, get(health))
+        .route(RE_ISQ_ROUTE.path, post(re_isq))
+        .route(IMAGE_GENERATION_ROUTE.path, post(image_generation))
+        .route(FILES_ROUTE.path, get(list_files))
+        .route(FILE_ROUTE.path, get(get_file).delete(delete_file))
+        .route(FILE_CONTENT_ROUTE.path, get(get_file_content))
+        .route(SPEECH_GENERATION_ROUTE.path, post(speech_generation))
+        .route(AGENT_APPROVAL_ROUTE.path, post(resolve_agent_approval))
+        .route(RESPONSES_ROUTE.path, post(create_response))
         .route(
-            "/v1/agent/approvals/{approval_id}",
-            post(resolve_agent_approval),
-        )
-        .route("/v1/responses", post(create_response))
-        .route(
-            "/v1/responses/{response_id}",
+            RESPONSE_ROUTE.path,
             get(get_response).delete(delete_response),
         )
-        .route("/v1/responses/{response_id}/cancel", post(cancel_response))
+        .route(CANCEL_RESPONSE_ROUTE.path, post(cancel_response))
         .route(
-            "/v1/sessions/{session_id}",
+            SESSION_ROUTE.path,
             get(get_session).put(put_session).delete(delete_session),
         )
         .layer(cors_layer)

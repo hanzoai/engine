@@ -25,6 +25,29 @@ macro_rules! fixup_sentencepiece {
     };
 }
 
+fn parse_text_and_tool_calls(
+    raw_text: &str,
+    matcher: Option<Arc<crate::tools::ToolCallingMatcher>>,
+) -> Result<(Option<String>, Vec<ToolCallResponse>)> {
+    let (text_new, tool_calls) =
+        parse_text_tools(raw_text, matcher).map_err(hanzo_ml::Error::msg)?;
+    Ok((text_new.map(ToString::to_string), tool_calls))
+}
+
+fn parse_streaming_text_and_tool_calls(
+    content_delta: Option<String>,
+    raw_delta: &str,
+    has_reasoning_parser: bool,
+    matcher: Option<Arc<crate::tools::ToolCallingMatcher>>,
+) -> Result<(Option<String>, Vec<ToolCallResponse>)> {
+    let raw_text = match content_delta {
+        Some(content_delta) => content_delta,
+        None if has_reasoning_parser => return Ok((None, Vec::new())),
+        None => raw_delta.to_string(),
+    };
+    parse_text_and_tool_calls(raw_text.as_str(), matcher)
+}
+
 pub(crate) async fn finish_or_add_toks_to_seq(
     this: &dyn Pipeline,
     prefix_cacher: &mut PrefixCacheManagerV2,
@@ -145,7 +168,6 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         (text_new.map(ToString::to_string), None)
                     };
 
-                    // Detect tool calls
                     let tool_calls = if seq.is_harmony_mode() {
                         // In Harmony mode, only finalize tool calls when the sequence is done
                         // (EOS token or stop string), not when we first detect a tool call.
@@ -327,11 +349,10 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             };
 
             if seq.get_mut_group().is_chat {
-                let (text_new, tool_calls, reasoning_content) = if let Some(mode) =
-                    seq.reasoning_mode()
-                {
-                    let final_content = seq.get_response_content();
-                    let reasoning = seq.get_reasoning_content();
+                let (text_new, tool_calls, reasoning_content) =
+                    if let Some(mode) = seq.reasoning_mode() {
+                        let final_content = seq.get_response_content();
+                        let reasoning = seq.get_reasoning_content();
 
                     let tool_calls = if mode == crate::reasoning_parsers::ReasoningMode::Harmony {
                         let harmony_tool_calls = seq.get_harmony_tool_calls();
@@ -616,4 +637,67 @@ pub async fn sample_sequence(
     }
 
     Ok(second_logprobs_response)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use hanzo_llm_mcp::{Function, Tool, ToolType};
+
+    use super::*;
+    use crate::tools::{ToolCallingMatcher, ToolChoice};
+
+    fn weather_tool() -> Tool {
+        Tool {
+            tp: ToolType::Function,
+            function: Function {
+                description: Some("Get the current weather for a city.".to_string()),
+                name: "get_weather".to_string(),
+                parameters: None,
+                strict: None,
+            },
+        }
+    }
+
+    #[test]
+    fn gemma4_tool_call_suppresses_raw_content_without_suffix() {
+        let tool = weather_tool();
+        let matcher = Arc::new(ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool])).unwrap());
+        let raw = r#"<|tool_call>call:get_weather{city:<|"|>Paris<|"|>}"#;
+
+        let (content, tool_calls) = parse_text_and_tool_calls(raw, Some(matcher)).unwrap();
+
+        assert_eq!(content, None);
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].function.name, "get_weather");
+        assert_eq!(tool_calls[0].function.arguments, r#"{"city":"Paris"}"#);
+    }
+
+    #[test]
+    fn reasoning_stream_does_not_fallback_to_raw_delta() {
+        let tool = weather_tool();
+        let matcher = Arc::new(ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool])).unwrap());
+        let raw = r#"<|tool_call>call:get_weather{city:<|"|>Paris<|"|>}"#;
+
+        let (content, tool_calls) =
+            parse_streaming_text_and_tool_calls(None, raw, true, Some(matcher)).unwrap();
+
+        assert_eq!(content, None);
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn non_reasoning_stream_uses_raw_delta() {
+        let tool = weather_tool();
+        let matcher = Arc::new(ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool])).unwrap());
+        let raw = r#"<|tool_call>call:get_weather{city:<|"|>Paris<|"|>}"#;
+
+        let (content, tool_calls) =
+            parse_streaming_text_and_tool_calls(None, raw, false, Some(matcher)).unwrap();
+
+        assert_eq!(content, None);
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].function.name, "get_weather");
+    }
 }
