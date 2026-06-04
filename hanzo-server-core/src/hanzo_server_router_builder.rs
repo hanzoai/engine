@@ -14,7 +14,6 @@ use utoipa_swagger_ui::SwaggerUi;
 #[cfg(feature = "swagger-ui")]
 use crate::openapi_doc::get_openapi_doc;
 use crate::{
-    anthropic::{anthropic_count_tokens, anthropic_messages},
     approvals::{resolve_agent_approval, ApprovalBroker},
     chat_completion::chatcompletions,
     completions::completions,
@@ -312,10 +311,6 @@ fn init_router(
         .route("/v1/files/{id}", get(get_file).delete(delete_file))
         .route("/v1/files/{id}/content", get(get_file_content))
         .route("/v1/audio/speech", post(speech_generation))
-        .route(
-            ANTHROPIC_COUNT_TOKENS_ROUTE.path,
-            post(anthropic_count_tokens),
-        )
         .route(COMPLETIONS_ROUTE.path, post(completions))
         .route(EMBEDDINGS_ROUTE.path, post(embeddings))
         .route(MODELS_ROUTE.path, get(models))
