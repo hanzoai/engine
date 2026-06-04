@@ -1,11 +1,11 @@
 # Example ~/.codex/config.toml snippet for a local mistral.rs server.
 # Start the server with:
-#   mistralrs serve -p 1234 -m Qwen/Qwen3-Coder-Next
+#   hanzo serve -p 1234 -m Qwen/Qwen3-Coder-Next
 #
 # Codex provider config belongs in user-level ~/.codex/config.toml.
 
 model = "default"
-model_provider = "mistralrs"
+model_provider = "hanzo"
 model_context_window = 32768
 model_reasoning_summary = "none"
 model_supports_reasoning_summaries = false
@@ -23,4 +23,4 @@ stream_idle_timeout_ms = 300000
 
 [profiles.mistralrs]
 model = "default"
-model_provider = "mistralrs"
+model_provider = "hanzo"
