@@ -856,6 +856,7 @@ impl TryFrom<GgmlDType> for IsqType {
             GgmlDType::MXFP4 => Ok(Self::MXFP4),
             GgmlDType::IQ4_NL
             | GgmlDType::IQ4_XS
+            | GgmlDType::TQ2_0
             | GgmlDType::BF16
             | GgmlDType::F32
             | GgmlDType::F16 => {
