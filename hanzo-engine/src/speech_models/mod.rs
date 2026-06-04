@@ -1,11 +1,45 @@
 mod bs1770;
 mod dia;
+pub mod qwen3_asr;
 pub mod utils;
 
 use std::{str::FromStr, sync::Arc};
 
 pub use dia::{DiaConfig, DiaPipeline};
+pub use qwen3_asr::{Qwen3AsrConfig, Qwen3AsrModel};
 use serde::{Deserialize, Serialize};
+
+/// Audio-understanding (speech -> text) model families. Distinct from
+/// [`SpeechLoaderType`], which covers speech *generation* (text -> PCM): ASR
+/// emits token logits through the LM, not a waveform.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+pub enum AsrLoaderType {
+    #[serde(rename = "qwen3_asr")]
+    Qwen3Asr,
+}
+
+impl FromStr for AsrLoaderType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "qwen3_asr" | "qwen3-asr" => Ok(Self::Qwen3Asr),
+            a => Err(format!(
+                "Unknown ASR architecture `{a}`. Possible architectures: `qwen3_asr`."
+            )),
+        }
+    }
+}
+
+impl AsrLoaderType {
+    /// Auto-detect an ASR loader type from a config.json string.
+    /// Extend this when adding new ASR pipelines.
+    pub fn auto_detect_from_config(config: &str) -> Option<Self> {
+        if serde_json::from_str::<Qwen3AsrConfig>(config).is_ok() {
+            return Some(Self::Qwen3Asr);
+        }
+        None
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 pub enum SpeechLoaderType {

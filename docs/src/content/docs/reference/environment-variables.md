@@ -52,7 +52,7 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 | `XDG_CACHE_HOME` | Base cache directory for web UI state. The UI uses `$XDG_CACHE_HOME/hanzo`. |
 | `HOME` | Fallback for web UI cache path when `XDG_CACHE_HOME` is not set. |
 
-## Attention kernels
+## CUDA and attention kernels
 
 | Variable | Purpose |
 |---|---|
