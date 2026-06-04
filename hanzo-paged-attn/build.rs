@@ -87,7 +87,7 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variants.cuh");
 
     let header_hash_arg = format!(
-        "-DMISTRALRS_CUDA_HEADER_HASH={:016x}",
+        "-DHANZO_CUDA_HEADER_HASH={:016x}",
         cuda_header_hash("src/cuda")?
     );
 

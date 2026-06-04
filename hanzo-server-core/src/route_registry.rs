@@ -9,7 +9,7 @@ pub struct RouteInfo {
 pub enum RouteKind {
     OpenAi,
     Anthropic,
-    MistralRs,
+    Hanzo,
     Docs,
     Ui,
 }
@@ -35,20 +35,20 @@ pub const COMPLETIONS_ROUTE: RouteInfo =
 pub const EMBEDDINGS_ROUTE: RouteInfo = RouteInfo::new("/v1/embeddings", "POST", RouteKind::OpenAi);
 pub const MODELS_ROUTE: RouteInfo = RouteInfo::new("/v1/models", "GET", RouteKind::OpenAi);
 pub const UNLOAD_MODEL_ROUTE: RouteInfo =
-    RouteInfo::new("/v1/models/unload", "POST", RouteKind::MistralRs);
+    RouteInfo::new("/v1/models/unload", "POST", RouteKind::Hanzo);
 pub const RELOAD_MODEL_ROUTE: RouteInfo =
-    RouteInfo::new("/v1/models/reload", "POST", RouteKind::MistralRs);
+    RouteInfo::new("/v1/models/reload", "POST", RouteKind::Hanzo);
 pub const MODEL_STATUS_ROUTE: RouteInfo =
-    RouteInfo::new("/v1/models/status", "POST", RouteKind::MistralRs);
+    RouteInfo::new("/v1/models/status", "POST", RouteKind::Hanzo);
 pub const TUNE_MODEL_ROUTE: RouteInfo =
-    RouteInfo::new("/v1/models/tune", "POST", RouteKind::MistralRs);
+    RouteInfo::new("/v1/models/tune", "POST", RouteKind::Hanzo);
 pub const SYSTEM_INFO_ROUTE: RouteInfo =
-    RouteInfo::new("/v1/system/info", "GET", RouteKind::MistralRs);
+    RouteInfo::new("/v1/system/info", "GET", RouteKind::Hanzo);
 pub const SYSTEM_DOCTOR_ROUTE: RouteInfo =
-    RouteInfo::new("/v1/system/doctor", "POST", RouteKind::MistralRs);
-pub const HEALTH_ROUTE: RouteInfo = RouteInfo::new("/health", "GET", RouteKind::MistralRs);
-pub const ROOT_ROUTE: RouteInfo = RouteInfo::new("/", "GET", RouteKind::MistralRs);
-pub const RE_ISQ_ROUTE: RouteInfo = RouteInfo::new("/re_isq", "POST", RouteKind::MistralRs);
+    RouteInfo::new("/v1/system/doctor", "POST", RouteKind::Hanzo);
+pub const HEALTH_ROUTE: RouteInfo = RouteInfo::new("/health", "GET", RouteKind::Hanzo);
+pub const ROOT_ROUTE: RouteInfo = RouteInfo::new("/", "GET", RouteKind::Hanzo);
+pub const RE_ISQ_ROUTE: RouteInfo = RouteInfo::new("/re_isq", "POST", RouteKind::Hanzo);
 pub const IMAGE_GENERATION_ROUTE: RouteInfo =
     RouteInfo::new("/v1/images/generations", "POST", RouteKind::OpenAi);
 pub const FILES_ROUTE: RouteInfo = RouteInfo::new("/v1/files", "GET", RouteKind::OpenAi);
@@ -61,7 +61,7 @@ pub const SPEECH_GENERATION_ROUTE: RouteInfo =
 pub const AGENT_APPROVAL_ROUTE: RouteInfo = RouteInfo::new(
     "/v1/agent/approvals/{approval_id}",
     "POST",
-    RouteKind::MistralRs,
+    RouteKind::Hanzo,
 );
 pub const RESPONSES_ROUTE: RouteInfo = RouteInfo::new("/v1/responses", "POST", RouteKind::OpenAi);
 pub const RESPONSE_ROUTE: RouteInfo = RouteInfo::new(
@@ -77,10 +77,10 @@ pub const CANCEL_RESPONSE_ROUTE: RouteInfo = RouteInfo::new(
 pub const SESSION_ROUTE: RouteInfo = RouteInfo::new(
     "/v1/sessions/{session_id}",
     "GET, PUT, DELETE",
-    RouteKind::MistralRs,
+    RouteKind::Hanzo,
 );
 
-pub const MISTRALRS_API_ROUTES: &[RouteInfo] = &[
+pub const HANZO_API_ROUTES: &[RouteInfo] = &[
     ROOT_ROUTE,
     HEALTH_ROUTE,
     MODELS_ROUTE,
@@ -109,7 +109,7 @@ pub const MISTRALRS_API_ROUTES: &[RouteInfo] = &[
 ];
 
 #[cfg(feature = "swagger-ui")]
-pub const MISTRALRS_SWAGGER_ROUTES: &[RouteInfo] = &[
+pub const HANZO_SWAGGER_ROUTES: &[RouteInfo] = &[
     RouteInfo::new("/api-doc/openapi.json", "GET", RouteKind::Docs),
     RouteInfo::new("/docs", "GET", RouteKind::Docs),
     RouteInfo::new("/docs/", "GET", RouteKind::Docs),
