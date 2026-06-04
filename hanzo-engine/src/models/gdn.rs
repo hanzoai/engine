@@ -400,178 +400,6 @@ fn recurrence_portable(
     out.transpose(1, 2)?.contiguous()?.to_dtype(dtype)
 }
 
-/// Causal depthwise conv1d with fused silu, single dispatch point for both modes:
-/// `decode` true is the seq==1 ring-buffer step (decode), false is the full prefill conv.
-/// x: (b, s, conv_dim); weight: (conv_dim, kernel) 2D (callers pre-squeeze); conv_state:
-/// (b, conv_dim, kernel), updated in place. Routes to the fused per-backend kernel where one
-/// exists, else the portable path. Returns (b, s, conv_dim).
-pub fn causal_conv1d(
-    x: &Tensor,
-    weight: &Tensor,
-    conv_state: &mut Tensor,
-    kernel_size: usize,
-    decode: bool,
-) -> Result<Tensor> {
-    if decode && x.dim(1)? == 1 && conv_state.device().is_vulkan() && conv_state.dtype() == DType::F32
-    {
-        return conv1d_vulkan_step(x, weight, conv_state, kernel_size);
-    }
-    let x_t = x.transpose(1, 2)?.contiguous()?;
-    // The fused CUDA/Metal conv kernels are f16/bf16 only; f32 (GGUF f32-root forward) falls to the
-    // portable path below (a cheap per-token op at decode) rather than bailing in the kernel.
-    #[cfg(feature = "cuda")]
-    if x_t.device().is_cuda() && x_t.dtype() != DType::F32 {
-        let w = weight.to_dtype(x_t.dtype())?.contiguous()?;
-        let state = conv_state.contiguous()?;
-        let (out, new_state) =
-            crate::cuda::gdn::causal_conv1d_cuda(&x_t, &w, &state, kernel_size, decode)?;
-        *conv_state = new_state;
-        return out.transpose(1, 2);
-    }
-    #[cfg(feature = "metal")]
-    if x_t.device().is_metal() && x_t.dtype() != DType::F32 {
-        let w = weight.to_dtype(x_t.dtype())?.contiguous()?;
-        let state = conv_state.contiguous()?;
-        let (out, new_state) =
-            crate::metal::gdn::causal_conv1d_metal(&x_t, &w, &state, decode, kernel_size)?;
-        *conv_state = new_state;
-        return out.transpose(1, 2);
-    }
-    if decode {
-        conv1d_portable_update(&x_t, weight, conv_state, kernel_size)
-    } else {
-        conv1d_portable_full(&x_t, weight, conv_state, kernel_size)
-    }
-}
-
-/// Native Vulkan single conv1d decode step: conv_state (1, conv_dim, k) drops its oldest column and
-/// appends x, updated in place in VRAM. weight (conv_dim, k); x (1, 1, conv_dim). Returns silu(conv).
-fn conv1d_vulkan_step(
-    x: &Tensor,
-    weight: &Tensor,
-    conv_state: &mut Tensor,
-    kernel_size: usize,
-) -> Result<Tensor> {
-    let conv_dim = weight.dim(0)?;
-    let x_flat = x.reshape(conv_dim)?.to_dtype(DType::F32)?.contiguous()?;
-    let w = weight.to_dtype(DType::F32)?.contiguous()?;
-    let mut s = conv_state.reshape((conv_dim, kernel_size))?;
-    let out = crate::vulkan::gdn::gdn_conv1d_step_vulkan(&mut s, &x_flat, &w)?;
-    *conv_state = s.reshape((1, conv_dim, kernel_size))?;
-    out.reshape((1, 1, conv_dim))
-}
-
-/// Portable decode step: cat the new tokens onto the ring buffer, keep the trailing window per token.
-/// x_t is (b, conv_dim, s).
-fn conv1d_portable_update(
-    x_t: &Tensor,
-    weight: &Tensor,
-    conv_state: &mut Tensor,
-    kernel_size: usize,
-) -> Result<Tensor> {
-    let seq_len = x_t.dim(2)?;
-    let state_len = conv_state.dim(2)?;
-    let cs = conv_state.to_dtype(x_t.dtype())?;
-    let hidden_new = Tensor::cat(&[&cs, x_t], 2)?;
-    let new_len = hidden_new.dim(2)?;
-    *conv_state = hidden_new.narrow(2, new_len - state_len, state_len)?;
-    let w = weight.to_dtype(hidden_new.dtype())?;
-    let total_len = hidden_new.dim(2)?;
-    let mut outs = Vec::with_capacity(seq_len);
-    for i in (total_len - seq_len)..total_len {
-        let window = hidden_new.narrow(2, i + 1 - kernel_size, kernel_size)?;
-        outs.push((window * w.unsqueeze(0)?)?.sum(D::Minus1)?);
-    }
-    let out = Tensor::stack(&outs, 2)?;
-    hanzo_nn::ops::silu(&out)?.transpose(1, 2)
-}
-
-/// Portable prefill: left-pad by kernel-1, slide a window of `kernel_size`; seed conv_state with the
-/// last kernel columns (zero-padded when seq < kernel). x_t is (b, conv_dim, s).
-fn conv1d_portable_full(
-    x_t: &Tensor,
-    weight: &Tensor,
-    conv_state: &mut Tensor,
-    kernel_size: usize,
-) -> Result<Tensor> {
-    let (batch_size, conv_dim, seq_len) = x_t.dims3()?;
-    let pad_width = kernel_size.saturating_sub(seq_len);
-    *conv_state = if pad_width > 0 {
-        let zeros = Tensor::zeros((batch_size, conv_dim, pad_width), x_t.dtype(), x_t.device())?;
-        Tensor::cat(&[&zeros, x_t], 2)?
-    } else {
-        x_t.narrow(2, seq_len - kernel_size, kernel_size)?
-    };
-    let lead = Tensor::zeros((batch_size, conv_dim, kernel_size - 1), x_t.dtype(), x_t.device())?;
-    let padded_t = Tensor::cat(&[&lead, x_t], 2)?;
-    let w = weight.to_dtype(padded_t.dtype())?;
-    let mut outs = Vec::with_capacity(seq_len);
-    for i in 0..seq_len {
-        let window = padded_t.narrow(2, i, kernel_size)?;
-        outs.push((window * w.unsqueeze(0)?)?.sum(D::Minus1)?);
-    }
-    let out = Tensor::stack(&outs, 2)?;
-    hanzo_nn::ops::silu(&out)?.transpose(1, 2)
-}
-
-/// GDN input gating, single dispatch point. beta = sigmoid(b); g = -exp(a_log) * softplus(a + dt_bias).
-/// b, a: (.., num_v_heads); a_log, dt_bias: (num_v_heads,). Routes to the fused per-backend kernel
-/// where one exists, else the portable path. Returns (beta, g) shaped like b.
-pub fn gdn_gating(
-    b: &Tensor,
-    a: &Tensor,
-    a_log: &Tensor,
-    dt_bias: &Tensor,
-) -> Result<(Tensor, Tensor)> {
-    #[cfg(feature = "cuda")]
-    if b.device().is_cuda() {
-        return gating_fused(b, a, a_log, dt_bias, crate::cuda::gdn::fused_gdn_gating_cuda);
-    }
-    #[cfg(feature = "metal")]
-    if b.device().is_metal() {
-        return gating_fused(b, a, a_log, dt_bias, crate::metal::gdn::fused_gdn_gating_metal);
-    }
-    gating_portable(b, a, a_log, dt_bias)
-}
-
-/// Shared wrapper around the fused CUDA/Metal gating kernels: flatten inputs, call, reshape back.
-#[cfg(any(feature = "cuda", feature = "metal"))]
-fn gating_fused(
-    b: &Tensor,
-    a: &Tensor,
-    a_log: &Tensor,
-    dt_bias: &Tensor,
-    kernel: impl Fn(&Tensor, &Tensor, &Tensor, &Tensor) -> Result<(Tensor, Tensor)>,
-) -> Result<(Tensor, Tensor)> {
-    let b_flat = b.contiguous()?.flatten_all()?;
-    let a_flat = a.contiguous()?.flatten_all()?;
-    let a_log_f32 = a_log.to_dtype(DType::F32)?.contiguous()?;
-    let dt_bias_f32 = dt_bias.to_dtype(DType::F32)?.contiguous()?;
-    let (beta_flat, g_flat) = kernel(&b_flat, &a_flat, &a_log_f32, &dt_bias_f32)?;
-    let shape = b.shape();
-    Ok((beta_flat.reshape(shape)?, g_flat.reshape(shape)?))
-}
-
-/// Portable gating. Serves CPU, Vulkan, and any backend without a fused kernel.
-fn gating_portable(
-    b: &Tensor,
-    a: &Tensor,
-    a_log: &Tensor,
-    dt_bias: &Tensor,
-) -> Result<(Tensor, Tensor)> {
-    let beta = hanzo_nn::ops::sigmoid(b)?;
-    let dt_bias = dt_bias.to_dtype(DType::F32)?.unsqueeze(0)?.unsqueeze(0)?;
-    let g = a_log
-        .to_dtype(DType::F32)?
-        .exp()?
-        .neg()?
-        .unsqueeze(0)?
-        .unsqueeze(0)?
-        .broadcast_mul(&softplus(&a.to_dtype(DType::F32)?.broadcast_add(&dt_bias)?)?)?
-        .to_dtype(b.dtype())?;
-    Ok((beta, g))
-}
-
 // ====================== Gated Delta Net layer ======================
 
 pub struct GatedDeltaNet {
@@ -726,6 +554,7 @@ impl GatedDeltaNet {
 
     pub fn forward(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (batch_size, seq_len, _hidden) = x.dims3()?;
+        let dtype = x.dtype();
         let v_per_group = self.num_v_heads / self.num_k_heads;
 
         // 1. Project input
@@ -770,14 +599,11 @@ impl GatedDeltaNet {
         let mixed_qkv = Tensor::cat(&[&q, &k, &v_flat], D::Minus1)?;
 
         // 4. Apply causal conv1d (includes silu activation)
-        let decode = cache.seqlen_offset > 0 && seq_len == 1;
-        let mixed_qkv = causal_conv1d(
-            &mixed_qkv,
-            &self.conv1d_weight.squeeze(1)?,
-            &mut cache.conv_state,
-            self.conv_kernel_size,
-            decode,
-        )?;
+        let mixed_qkv = if cache.seqlen_offset > 0 && seq_len == 1 {
+            self.causal_conv1d_update(&mixed_qkv, cache)?
+        } else {
+            self.causal_conv1d_full(&mixed_qkv, cache)?
+        };
 
         // 5. Split back after conv and reshape to per-head
         let q = mixed_qkv.narrow(D::Minus1, 0, self.key_dim)?;
@@ -789,7 +615,50 @@ impl GatedDeltaNet {
         let v = v.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
 
         // 6. Compute beta and g
-        let (beta, g) = gdn_gating(&b, &a, &self.a_log, &self.dt_bias)?;
+        let (beta, g) = {
+            #[cfg(feature = "cuda")]
+            {
+                if b.device().is_cuda() {
+                    let b_flat = b.contiguous()?.flatten_all()?;
+                    let a_flat = a.contiguous()?.flatten_all()?;
+                    let a_log_f32 = self.a_log.to_dtype(DType::F32)?.contiguous()?;
+                    let dt_bias_f32 = self.dt_bias.to_dtype(DType::F32)?.contiguous()?;
+                    let (beta_flat, g_flat) = crate::cuda::gdn::fused_gdn_gating_cuda(
+                        &b_flat,
+                        &a_flat,
+                        &a_log_f32,
+                        &dt_bias_f32,
+                    )?;
+                    let shape = b.shape();
+                    (beta_flat.reshape(shape)?, g_flat.reshape(shape)?)
+                } else {
+                    self.compute_beta_g_cpu(&b, &a, dtype)?
+                }
+            }
+            #[cfg(feature = "metal")]
+            {
+                if b.device().is_metal() {
+                    let b_flat = b.contiguous()?.flatten_all()?;
+                    let a_flat = a.contiguous()?.flatten_all()?;
+                    let a_log_f32 = self.a_log.to_dtype(DType::F32)?.contiguous()?;
+                    let dt_bias_f32 = self.dt_bias.to_dtype(DType::F32)?.contiguous()?;
+                    let (beta_flat, g_flat) = crate::metal::gdn::fused_gdn_gating_metal(
+                        &b_flat,
+                        &a_flat,
+                        &a_log_f32,
+                        &dt_bias_f32,
+                    )?;
+                    let shape = b.shape();
+                    (beta_flat.reshape(shape)?, g_flat.reshape(shape)?)
+                } else {
+                    self.compute_beta_g_cpu(&b, &a, dtype)?
+                }
+            }
+            #[cfg(not(any(feature = "cuda", feature = "metal")))]
+            {
+                self.compute_beta_g_cpu(&b, &a, dtype)?
+            }
+        };
 
         // 7. If num_v_heads > num_k_heads, repeat_interleave q and k
         let (q, k) = if v_per_group > 1 {
@@ -827,6 +696,180 @@ impl GatedDeltaNet {
         let y_proj = y;
         let res = self.out_proj.forward(&y_proj)?;
         Ok(res)
+    }
+
+    fn compute_beta_g_cpu(&self, b: &Tensor, a: &Tensor, dtype: DType) -> Result<(Tensor, Tensor)> {
+        let beta = hanzo_nn::ops::sigmoid(b)?;
+        let a_f = a.to_dtype(DType::F32)?;
+        let dt_bias_expanded = self
+            .dt_bias
+            .to_dtype(DType::F32)?
+            .unsqueeze(0)?
+            .unsqueeze(0)?;
+        let g = self
+            .a_log
+            .to_dtype(DType::F32)?
+            .exp()?
+            .neg()?
+            .unsqueeze(0)?
+            .unsqueeze(0)?
+            .broadcast_mul(&softplus(&a_f.broadcast_add(&dt_bias_expanded)?)?)?
+            .to_dtype(dtype)?;
+        Ok((beta, g))
+    }
+
+    /// Single-step causal conv1d update for decode.
+    fn causal_conv1d_update(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
+        let (_batch, seq_len, _conv_dim) = x.dims3()?;
+
+        // Native Vulkan single decode step: conv_state stays in VRAM, no per-token readback.
+        if x.device().is_vulkan() && x.dtype() == DType::F32 && x.dim(0)? == 1 && x.dim(1)? == 1 {
+            let weight = self.conv1d_weight.squeeze(1)?.to_dtype(DType::F32)?.contiguous()?;
+            let conv_dim = weight.dim(0)?;
+            let x_flat = x.reshape(conv_dim)?.contiguous()?;
+            let mut s = cache.conv_state.reshape((conv_dim, self.conv_kernel_size))?;
+            let out = crate::vulkan::gdn::gdn_conv1d_step_vulkan(&mut s, &x_flat, &weight)?;
+            cache.conv_state = s.reshape((1, conv_dim, self.conv_kernel_size))?;
+            return out.reshape((1, 1, conv_dim));
+        }
+
+        let x_t = x.transpose(1, 2)?.contiguous()?;
+
+        #[cfg(feature = "cuda")]
+        if x_t.device().is_cuda() {
+            let weight = self
+                .conv1d_weight
+                .squeeze(1)?
+                .to_dtype(x_t.dtype())?
+                .contiguous()?;
+            let conv_state = cache.conv_state.contiguous()?;
+            let (output, new_conv_state) = crate::cuda::gdn::causal_conv1d_cuda(
+                &x_t,
+                &weight,
+                &conv_state,
+                self.conv_kernel_size,
+                true,
+            )?;
+            cache.conv_state = new_conv_state;
+            return output.transpose(1, 2);
+        }
+
+        #[cfg(feature = "metal")]
+        if x_t.device().is_metal() {
+            let weight = self
+                .conv1d_weight
+                .squeeze(1)?
+                .to_dtype(x_t.dtype())?
+                .contiguous()?;
+            let conv_state = cache.conv_state.contiguous()?;
+            let (output, new_conv_state) = crate::metal::gdn::causal_conv1d_metal(
+                &x_t,
+                &weight,
+                &conv_state,
+                true,
+                self.conv_kernel_size,
+            )?;
+            cache.conv_state = new_conv_state;
+            return output.transpose(1, 2);
+        }
+
+        // CPU fallback
+        let state_len = cache.conv_state.dim(2)?;
+        let hidden_new = Tensor::cat(&[cache.conv_state.clone(), x_t], 2)?;
+        let new_len = hidden_new.dim(2)?;
+        cache.conv_state = hidden_new.narrow(2, new_len - state_len, state_len)?;
+
+        let weight = self
+            .conv1d_weight
+            .squeeze(1)?
+            .to_dtype(hidden_new.dtype())?;
+        let mut conv_outputs = Vec::with_capacity(seq_len);
+        let total_len = hidden_new.dim(2)?;
+        for i in (total_len - seq_len)..total_len {
+            let window =
+                hidden_new.narrow(2, i + 1 - self.conv_kernel_size, self.conv_kernel_size)?;
+            let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
+            conv_outputs.push(out);
+        }
+        let out = Tensor::stack(&conv_outputs, 2)?;
+        let out = hanzo_nn::ops::silu(&out)?;
+        out.transpose(1, 2)
+    }
+
+    /// Full sequence causal conv1d for prefill.
+    fn causal_conv1d_full(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
+        let (batch_size, seq_len, conv_dim) = x.dims3()?;
+        let x_t = x.transpose(1, 2)?.contiguous()?;
+
+        #[cfg(feature = "cuda")]
+        if x_t.device().is_cuda() {
+            let weight = self
+                .conv1d_weight
+                .squeeze(1)?
+                .to_dtype(x_t.dtype())?
+                .contiguous()?;
+            let (output, new_conv_state) = crate::cuda::gdn::causal_conv1d_cuda(
+                &x_t,
+                &weight,
+                &cache.conv_state,
+                self.conv_kernel_size,
+                false,
+            )?;
+            cache.conv_state = new_conv_state;
+            return output.transpose(1, 2);
+        }
+
+        #[cfg(feature = "metal")]
+        if x_t.device().is_metal() {
+            let weight = self
+                .conv1d_weight
+                .squeeze(1)?
+                .to_dtype(x_t.dtype())?
+                .contiguous()?;
+            let (output, new_conv_state) = crate::metal::gdn::causal_conv1d_metal(
+                &x_t,
+                &weight,
+                &cache.conv_state,
+                false,
+                self.conv_kernel_size,
+            )?;
+            cache.conv_state = new_conv_state;
+            return output.transpose(1, 2);
+        }
+
+        // CPU fallback
+        let pad_width = self.conv_kernel_size.saturating_sub(seq_len);
+        cache.conv_state = if pad_width > 0 {
+            let zeros =
+                Tensor::zeros((batch_size, conv_dim, pad_width), x_t.dtype(), x_t.device())?;
+            Tensor::cat(&[zeros, x_t.clone()], 2)?
+        } else {
+            x_t.narrow(2, seq_len - self.conv_kernel_size, self.conv_kernel_size)?
+        };
+
+        let padded_t = Tensor::cat(
+            &[
+                Tensor::zeros(
+                    (batch_size, conv_dim, self.conv_kernel_size - 1),
+                    x_t.dtype(),
+                    x_t.device(),
+                )?,
+                x_t,
+            ],
+            2,
+        )?;
+
+        let weight = self.conv1d_weight.squeeze(1)?.to_dtype(padded_t.dtype())?;
+
+        let mut conv_outputs = Vec::with_capacity(seq_len);
+        for i in 0..seq_len {
+            let window = padded_t.narrow(2, i, self.conv_kernel_size)?;
+            let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
+            conv_outputs.push(out);
+        }
+        let out = Tensor::stack(&conv_outputs, 2)?;
+        let out = hanzo_nn::ops::silu(&out)?;
+        out.transpose(1, 2)
     }
 }
 
