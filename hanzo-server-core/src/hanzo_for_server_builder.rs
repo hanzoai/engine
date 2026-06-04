@@ -245,6 +245,11 @@ pub struct HanzoForServerBuilder {
     /// Optional MTP assistant configuration.
     mtp_config: Option<MtpConfig>,
 
+    /// Optional draft model for classic draft+target speculative decoding (works with GGUF), plus
+    /// gamma = number of draft tokens proposed per target verification step.
+    draft_model: Option<ModelSelected>,
+    draft_gamma: usize,
+
     /// Disable EOS token stopping (generate until max_len regardless of EOS)
     disable_eos_stop: bool,
 
@@ -284,6 +289,8 @@ impl Default for HanzoForServerBuilder {
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
             mtp_config: defaults::MTP_CONFIG,
+            draft_model: None,
+            draft_gamma: 4,
             disable_eos_stop: false,
             code_exec_config: None,
         }
@@ -563,6 +570,20 @@ impl HanzoForServerBuilder {
     }
 
     /// Attach an MTP assistant after the target model loads.
+    /// Attach a draft model for classic draft+target speculative decoding (works with GGUF).
+    pub fn with_draft_model(mut self, draft: ModelSelected, gamma: usize) -> Self {
+        self.draft_model = Some(draft);
+        self.draft_gamma = gamma.max(1);
+        self
+    }
+
+    pub fn with_draft_model_optional(mut self, draft: Option<ModelSelected>, gamma: usize) -> Self {
+        if let Some(draft) = draft {
+            self = self.with_draft_model(draft, gamma);
+        }
+        self
+    }
+
     pub fn with_mtp_config(mut self, config: MtpConfig) -> Self {
         self.mtp_config = Some(config);
         self
@@ -710,11 +731,25 @@ impl HanzoForServerBuilder {
         let jinja_explicit_for_config = self.jinja_explicit.clone();
 
         // Configure this last to prevent arg moves
-        let loader: Box<dyn Loader> = LoaderBuilder::new(model)
+        let mut loader: Box<dyn Loader> = LoaderBuilder::new(model)
             .with_no_kv_cache(self.no_kv_cache)
             .with_chat_template(self.chat_template)
             .with_jinja_explicit(self.jinja_explicit)
             .build()?;
+
+        // Classic draft+target speculative decoding (works with GGUF): wrap the target loader and a
+        // draft loader so load_model_from_hf builds a SpeculativePipeline (draft proposes gamma
+        // tokens, target verifies in one forward).
+        if let Some(draft_model) = self.draft_model.take() {
+            let draft_loader = LoaderBuilder::new(draft_model).build()?;
+            loader = Box::new(hanzo_engine::SpeculativeLoader {
+                target: loader,
+                draft: draft_loader,
+                config: hanzo_engine::DraftSpeculativeConfig {
+                    gamma: self.draft_gamma,
+                },
+            });
+        }
 
         hanzo_instance_info(&*loader);
 
