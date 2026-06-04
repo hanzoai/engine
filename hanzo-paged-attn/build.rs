@@ -172,13 +172,13 @@ fn main() -> Result<(), String> {
 
     // Check if precompilation should be skipped
     // https://github.com/hanzoai/engine/pull/1311#issuecomment-3001309885
-    println!("cargo:rerun-if-env-changed=HANZO_METAL_PRECOMPILE");
-    let skip_precompile = env::var("HANZO_METAL_PRECOMPILE")
+    println!("cargo:rerun-if-env-changed=METAL_PRECOMPILE");
+    let skip_precompile = env::var("METAL_PRECOMPILE")
         .map(|v| v == "0" || v.to_lowercase() == "false")
         .unwrap_or(false);
 
     if skip_precompile {
-        println!("cargo:warning=Skipping Metal kernel precompilation (HANZO_METAL_PRECOMPILE=0)");
+        println!("cargo:warning=Skipping Metal kernel precompilation (METAL_PRECOMPILE=0)");
         // Write a dummy metallib file to satisfy the include_bytes! macro
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
         std::fs::write(out_dir.join("hanzo_paged_attention.metallib"), []).unwrap();
