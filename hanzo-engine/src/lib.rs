@@ -11,6 +11,12 @@ use hf_hub::Cache;
 pub use lora::Ordering;
 pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
+// Brand aliases: the upstream/master merge reintroduced `MistralRs*` names, but the hanzo SDK +
+// server-core consume the `Hanzo*` public API. Alias until the brand scrub renames the definitions.
+pub use crate::{
+    MistralRs as Hanzo, MistralRsBuilder as HanzoBuilder, MistralRsConfig as HanzoConfig,
+    MistralRsError as HanzoError,
+};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
 use std::collections::{HashMap, HashSet};

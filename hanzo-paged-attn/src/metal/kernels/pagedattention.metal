@@ -9,6 +9,7 @@
 // Copyright contributors to the vLLM project
 
 #include "utils.metal"
+#include "function_constants.metal"
 #include <metal_simdgroup>
 #include <metal_stdlib>
 
@@ -756,10 +757,8 @@ inline float block_sum(threadgroup float *red_smem, float sum, uint simd_tid,
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define DIVIDE_ROUND_UP(a, b) (((a) + (b) - 1) / (b))
 
-constant bool use_partitioning [[function_constant(10)]];
-constant bool use_alibi [[function_constant(20)]];
-constant bool use_fp8_scales [[function_constant(30)]];
-constant bool use_sinks [[function_constant(40)]];
+// use_partitioning / use_alibi / use_fp8_scales / use_sinks declared in
+// function_constants.metal (shared so indices stay consistent across kernels).
 
 template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
           int NUM_THREADS, int NUM_SIMD_LANES, int PARTITION_SIZE = 0>
