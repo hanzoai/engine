@@ -260,6 +260,8 @@ fn mapped_device_for_ordinal(
             }),
         DeviceLocation::Metal { gpu_id } if gpu_id == ordinal => Ok(device.clone()),
         DeviceLocation::Metal { .. } => Device::new_metal(ordinal),
+        #[cfg(feature = "vulkan")]
+        DeviceLocation::Vulkan { .. } => Ok(device.clone()),
     }
 }
 
@@ -268,6 +270,8 @@ fn device_ordinal(device: &Device) -> usize {
         DeviceLocation::Cpu => 0,
         DeviceLocation::Cuda { gpu_id } => gpu_id,
         DeviceLocation::Metal { gpu_id } => gpu_id,
+        #[cfg(feature = "vulkan")]
+        DeviceLocation::Vulkan { gpu_id } => gpu_id,
     }
 }
 
@@ -361,6 +365,8 @@ pub fn get_all_similar_devices(base: &Device) -> Result<Vec<Device>> {
                 }
             }
         }
+        #[cfg(feature = "vulkan")]
+        Device::Vulkan(_) => return Ok(vec![base.clone()]),
     }
     Ok(devices)
 }

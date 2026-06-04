@@ -807,9 +807,18 @@ extern "C" void launch_quantize_q8_1_f16(const void *x, void *vy, int kx,
   quantize_q8_1_f16<<<grid, block, 0, s>>>((const half *)x, vy, kx, kx_padded);
 }
 
-// indexed_moe_forward template
+// Output rows computed per block (tile). The launchers set
+// gridDim.x = ceil_div(n, INDEXED_MOE_ROWS_PER_BLOCK).
+#define INDEXED_MOE_ROWS_PER_BLOCK 4
+
+// indexed_moe_forward template. `rows_per_cuda_block` lets one block compute a
+// tile of output rows per task, reading the q8_1 input vector once and reusing
+// it across the tile. On a high-SM GPU (GB10) this amortizes the per-block fixed
+// cost (input reads + inter-warp shared reduction + __syncthreads) and cuts
+// gridDim.x by `rows_per_cuda_block`. The dot-product math is unchanged (mirrors
+// mul_mat_vec_q); total weight bandwidth is unchanged (each row reads its row).
 template <int qk, int qi, typename block_q_t, int vdr,
-          vec_dot_q_cuda_t vec_dot_q_cuda>
+          vec_dot_q_cuda_t vec_dot_q_cuda, int rows_per_cuda_block = 1>
 __device__ void indexed_moe_forward(const void *__restrict__ all_weights,
                                     const void *__restrict__ all_inputs,
                                     const unsigned int *__restrict__ indices,
@@ -844,9 +853,7 @@ __device__ void indexed_moe_forward(const void *__restrict__ all_weights,
       (const char *)all_weights + expert_id * weight_expert_stride_bytes;
   float *current_output_ptr = all_outputs + task_id * output_task_stride_elems;
 
-  constexpr int ncols_y = 1;
   constexpr int nwarps = 4;
-  constexpr int rows_per_cuda_block = 1;
 
   const int tid = WARP_SIZE * threadIdx.y + threadIdx.x;
   const int row0 = rows_per_cuda_block * blockIdx.x;
@@ -856,10 +863,9 @@ __device__ void indexed_moe_forward(const void *__restrict__ all_weights,
   }
 
   const int blocks_per_row_x = (k + qk - 1) / qk;
-  const int blocks_per_col_y = k_padded / QK8_1;
   constexpr int blocks_per_iter = vdr * nwarps * WARP_SIZE / qi;
 
-  float tmp = 0.0f;
+  float tmp[rows_per_cuda_block] = {0.0f};
 
   const block_q_t *w = (const block_q_t *)current_weight_ptr;
   const block_q8_1 *x = (const block_q8_1 *)current_input_ptr;
@@ -868,23 +874,42 @@ __device__ void indexed_moe_forward(const void *__restrict__ all_weights,
        kbx += blocks_per_iter) {
     const int kby = kbx * (qk / QK8_1);
     const int kqs = vdr * (tid % (qi / vdr));
-    tmp += vec_dot_q_cuda(&w[kbx + row0 * blocks_per_row_x], &x[kby], kqs);
+#pragma unroll
+    for (int i = 0; i < rows_per_cuda_block; ++i) {
+      const int row = row0 + i;
+      if (rows_per_cuda_block == 1 || row < n) {
+        tmp[i] += vec_dot_q_cuda(&w[kbx + (size_t)row * blocks_per_row_x],
+                                 &x[kby], kqs);
+      }
+    }
   }
 
-  __shared__ float tmp_shared[nwarps - 1][WARP_SIZE];
+  __shared__ float
+      tmp_shared[nwarps - 1 > 0 ? nwarps - 1 : 1][rows_per_cuda_block]
+                [WARP_SIZE];
   if (threadIdx.y > 0) {
-    tmp_shared[threadIdx.y - 1][threadIdx.x] = tmp;
+#pragma unroll
+    for (int i = 0; i < rows_per_cuda_block; ++i) {
+      tmp_shared[threadIdx.y - 1][i][threadIdx.x] = tmp[i];
+    }
   }
   __syncthreads();
 
-  if (threadIdx.y == 0) {
+  if (threadIdx.y != 0) {
+    return;
+  }
+
+#pragma unroll
+  for (int i = 0; i < rows_per_cuda_block; ++i) {
     for (int l = 0; l < nwarps - 1; ++l) {
-      tmp += tmp_shared[l][threadIdx.x];
+      tmp[i] += tmp_shared[l][i][threadIdx.x];
     }
-    tmp = warp_reduce_sum(tmp);
-    if (threadIdx.x == 0) {
-      current_output_ptr[row0] = tmp;
-    }
+    tmp[i] = warp_reduce_sum(tmp[i]);
+  }
+
+  if (threadIdx.x < rows_per_cuda_block &&
+      (rows_per_cuda_block == 1 || row0 + threadIdx.x < n)) {
+    current_output_ptr[row0 + threadIdx.x] = tmp[threadIdx.x];
   }
 }
 
@@ -895,7 +920,7 @@ extern "C" __global__ void indexed_moe_forward_q4_0_q8_1(
     const int n, const int k, const int batch, const int topk,
     const int k_padded, const int input_dim1) {
   indexed_moe_forward<QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ,
-                      vec_dot_q4_0_q8_1>(all_weights, all_inputs, indices,
+                      vec_dot_q4_0_q8_1, INDEXED_MOE_ROWS_PER_BLOCK>(all_weights, all_inputs, indices,
                                          all_outputs, n, k, batch, topk,
                                          k_padded, input_dim1);
 }
@@ -906,7 +931,7 @@ extern "C" __global__ void indexed_moe_forward_q4_1_q8_1(
     const int n, const int k, const int batch, const int topk,
     const int k_padded, const int input_dim1) {
   indexed_moe_forward<QK4_1, QI4_1, block_q4_1, VDR_Q4_1_Q8_1_MMVQ,
-                      vec_dot_q4_1_q8_1>(all_weights, all_inputs, indices,
+                      vec_dot_q4_1_q8_1, INDEXED_MOE_ROWS_PER_BLOCK>(all_weights, all_inputs, indices,
                                          all_outputs, n, k, batch, topk,
                                          k_padded, input_dim1);
 }
@@ -917,7 +942,7 @@ extern "C" __global__ void indexed_moe_forward_q5_0_q8_1(
     const int n, const int k, const int batch, const int topk,
     const int k_padded, const int input_dim1) {
   indexed_moe_forward<QK5_0, QI5_0, block_q5_0, VDR_Q5_0_Q8_1_MMVQ,
-                      vec_dot_q5_0_q8_1>(all_weights, all_inputs, indices,
+                      vec_dot_q5_0_q8_1, INDEXED_MOE_ROWS_PER_BLOCK>(all_weights, all_inputs, indices,
                                          all_outputs, n, k, batch, topk,
                                          k_padded, input_dim1);
 }
@@ -928,7 +953,7 @@ extern "C" __global__ void indexed_moe_forward_q5_1_q8_1(
     const int n, const int k, const int batch, const int topk,
     const int k_padded, const int input_dim1) {
   indexed_moe_forward<QK5_1, QI5_1, block_q5_1, VDR_Q5_1_Q8_1_MMVQ,
-                      vec_dot_q5_1_q8_1>(all_weights, all_inputs, indices,
+                      vec_dot_q5_1_q8_1, INDEXED_MOE_ROWS_PER_BLOCK>(all_weights, all_inputs, indices,
                                          all_outputs, n, k, batch, topk,
                                          k_padded, input_dim1);
 }
@@ -939,7 +964,7 @@ extern "C" __global__ void indexed_moe_forward_q8_1_q8_1(
     const int n, const int k, const int batch, const int topk,
     const int k_padded, const int input_dim1) {
   indexed_moe_forward<QK8_1, QI8_1, block_q8_1, VDR_Q8_1_Q8_1_MMVQ,
-                      vec_dot_q8_1_q8_1>(all_weights, all_inputs, indices,
+                      vec_dot_q8_1_q8_1, INDEXED_MOE_ROWS_PER_BLOCK>(all_weights, all_inputs, indices,
                                          all_outputs, n, k, batch, topk,
                                          k_padded, input_dim1);
 }
@@ -951,7 +976,7 @@ extern "C" __global__ void indexed_moe_forward_q2k_q8_1(
     const int n, const int k, const int batch, const int topk,
     const int k_padded, const int input_dim1) {
   indexed_moe_forward<QK_K, QI2_K, block_q2_K, VDR_Q2_K_Q8_1_MMVQ,
-                      vec_dot_q2_K_q8_1>(all_weights, all_inputs, indices,
+                      vec_dot_q2_K_q8_1, INDEXED_MOE_ROWS_PER_BLOCK>(all_weights, all_inputs, indices,
                                          all_outputs, n, k, batch, topk,
                                          k_padded, input_dim1);
 }
@@ -962,7 +987,7 @@ extern "C" __global__ void indexed_moe_forward_q3k_q8_1(
     const int n, const int k, const int batch, const int topk,
     const int k_padded, const int input_dim1) {
   indexed_moe_forward<QK_K, QI3_K, block_q3_K, VDR_Q3_K_Q8_1_MMVQ,
-                      vec_dot_q3_K_q8_1>(all_weights, all_inputs, indices,
+                      vec_dot_q3_K_q8_1, INDEXED_MOE_ROWS_PER_BLOCK>(all_weights, all_inputs, indices,
                                          all_outputs, n, k, batch, topk,
                                          k_padded, input_dim1);
 }
@@ -973,7 +998,7 @@ extern "C" __global__ void indexed_moe_forward_q4k_q8_1(
     const int n, const int k, const int batch, const int topk,
     const int k_padded, const int input_dim1) {
   indexed_moe_forward<QK_K, QI4_K, block_q4_K, VDR_Q4_K_Q8_1_MMVQ,
-                      vec_dot_q4_K_q8_1>(all_weights, all_inputs, indices,
+                      vec_dot_q4_K_q8_1, INDEXED_MOE_ROWS_PER_BLOCK>(all_weights, all_inputs, indices,
                                          all_outputs, n, k, batch, topk,
                                          k_padded, input_dim1);
 }
@@ -984,7 +1009,7 @@ extern "C" __global__ void indexed_moe_forward_q5k_q8_1(
     const int n, const int k, const int batch, const int topk,
     const int k_padded, const int input_dim1) {
   indexed_moe_forward<QK_K, QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ,
-                      vec_dot_q5_K_q8_1>(all_weights, all_inputs, indices,
+                      vec_dot_q5_K_q8_1, INDEXED_MOE_ROWS_PER_BLOCK>(all_weights, all_inputs, indices,
                                          all_outputs, n, k, batch, topk,
                                          k_padded, input_dim1);
 }
@@ -995,7 +1020,7 @@ extern "C" __global__ void indexed_moe_forward_q6k_q8_1(
     const int n, const int k, const int batch, const int topk,
     const int k_padded, const int input_dim1) {
   indexed_moe_forward<QK_K, QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ,
-                      vec_dot_q6_K_q8_1>(all_weights, all_inputs, indices,
+                      vec_dot_q6_K_q8_1, INDEXED_MOE_ROWS_PER_BLOCK>(all_weights, all_inputs, indices,
                                          all_outputs, n, k, batch, topk,
                                          k_padded, input_dim1);
 }
@@ -1006,7 +1031,7 @@ extern "C" __global__ void indexed_moe_forward_q8_0_q8_1(
     const int n, const int k, const int batch, const int topk,
     const int k_padded, const int input_dim1) {
   indexed_moe_forward<QK8_0, QI8_0, block_q8_0, VDR_Q8_0_Q8_1_MMVQ,
-                      vec_dot_q8_0_q8_1>(all_weights, all_inputs, indices,
+                      vec_dot_q8_0_q8_1, INDEXED_MOE_ROWS_PER_BLOCK>(all_weights, all_inputs, indices,
                                          all_outputs, n, k, batch, topk,
                                          k_padded, input_dim1);
 }
@@ -1026,7 +1051,8 @@ extern "C" void launch_indexed_moe_forward_q2k_q8_1(
     const void *all_weights, const void *all_inputs,
     const unsigned int *indices, float *all_outputs, int n, int k, int batch,
     int topk, int k_padded, int input_dim1, void *stream) {
-  dim3 grid(n, batch, topk);
+  dim3 grid((n + INDEXED_MOE_ROWS_PER_BLOCK - 1) / INDEXED_MOE_ROWS_PER_BLOCK,
+            batch, topk);
   dim3 block(WARP_SIZE, 4, 1);
   cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
   indexed_moe_forward_q2k_q8_1<<<grid, block, 0, cuda_stream>>>(
@@ -1038,7 +1064,8 @@ extern "C" void launch_indexed_moe_forward_q3k_q8_1(
     const void *all_weights, const void *all_inputs,
     const unsigned int *indices, float *all_outputs, int n, int k, int batch,
     int topk, int k_padded, int input_dim1, void *stream) {
-  dim3 grid(n, batch, topk);
+  dim3 grid((n + INDEXED_MOE_ROWS_PER_BLOCK - 1) / INDEXED_MOE_ROWS_PER_BLOCK,
+            batch, topk);
   dim3 block(WARP_SIZE, 4, 1);
   cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
   indexed_moe_forward_q3k_q8_1<<<grid, block, 0, cuda_stream>>>(
@@ -1050,7 +1077,8 @@ extern "C" void launch_indexed_moe_forward_q4k_q8_1(
     const void *all_weights, const void *all_inputs,
     const unsigned int *indices, float *all_outputs, int n, int k, int batch,
     int topk, int k_padded, int input_dim1, void *stream) {
-  dim3 grid(n, batch, topk);
+  dim3 grid((n + INDEXED_MOE_ROWS_PER_BLOCK - 1) / INDEXED_MOE_ROWS_PER_BLOCK,
+            batch, topk);
   dim3 block(WARP_SIZE, 4, 1);
   cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
   indexed_moe_forward_q4k_q8_1<<<grid, block, 0, cuda_stream>>>(
@@ -1062,7 +1090,8 @@ extern "C" void launch_indexed_moe_forward_q5k_q8_1(
     const void *all_weights, const void *all_inputs,
     const unsigned int *indices, float *all_outputs, int n, int k, int batch,
     int topk, int k_padded, int input_dim1, void *stream) {
-  dim3 grid(n, batch, topk);
+  dim3 grid((n + INDEXED_MOE_ROWS_PER_BLOCK - 1) / INDEXED_MOE_ROWS_PER_BLOCK,
+            batch, topk);
   dim3 block(WARP_SIZE, 4, 1);
   cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
   indexed_moe_forward_q5k_q8_1<<<grid, block, 0, cuda_stream>>>(
@@ -1074,7 +1103,8 @@ extern "C" void launch_indexed_moe_forward_q6k_q8_1(
     const void *all_weights, const void *all_inputs,
     const unsigned int *indices, float *all_outputs, int n, int k, int batch,
     int topk, int k_padded, int input_dim1, void *stream) {
-  dim3 grid(n, batch, topk);
+  dim3 grid((n + INDEXED_MOE_ROWS_PER_BLOCK - 1) / INDEXED_MOE_ROWS_PER_BLOCK,
+            batch, topk);
   dim3 block(WARP_SIZE, 4, 1);
   cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
   indexed_moe_forward_q6k_q8_1<<<grid, block, 0, cuda_stream>>>(
@@ -1086,7 +1116,8 @@ extern "C" void launch_indexed_moe_forward_q8_0_q8_1(
     const void *all_weights, const void *all_inputs,
     const unsigned int *indices, float *all_outputs, int n, int k, int batch,
     int topk, int k_padded, int input_dim1, void *stream) {
-  dim3 grid(n, batch, topk);
+  dim3 grid((n + INDEXED_MOE_ROWS_PER_BLOCK - 1) / INDEXED_MOE_ROWS_PER_BLOCK,
+            batch, topk);
   dim3 block(WARP_SIZE, 4, 1);
   cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
   indexed_moe_forward_q8_0_q8_1<<<grid, block, 0, cuda_stream>>>(
@@ -1098,7 +1129,8 @@ extern "C" void launch_indexed_moe_forward_q4_0_q8_1(
     const void *all_weights, const void *all_inputs,
     const unsigned int *indices, float *all_outputs, int n, int k, int batch,
     int topk, int k_padded, int input_dim1, void *stream) {
-  dim3 grid(n, batch, topk);
+  dim3 grid((n + INDEXED_MOE_ROWS_PER_BLOCK - 1) / INDEXED_MOE_ROWS_PER_BLOCK,
+            batch, topk);
   dim3 block(WARP_SIZE, 4, 1);
   cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
   indexed_moe_forward_q4_0_q8_1<<<grid, block, 0, cuda_stream>>>(
@@ -1110,7 +1142,8 @@ extern "C" void launch_indexed_moe_forward_q4_1_q8_1(
     const void *all_weights, const void *all_inputs,
     const unsigned int *indices, float *all_outputs, int n, int k, int batch,
     int topk, int k_padded, int input_dim1, void *stream) {
-  dim3 grid(n, batch, topk);
+  dim3 grid((n + INDEXED_MOE_ROWS_PER_BLOCK - 1) / INDEXED_MOE_ROWS_PER_BLOCK,
+            batch, topk);
   dim3 block(WARP_SIZE, 4, 1);
   cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
   indexed_moe_forward_q4_1_q8_1<<<grid, block, 0, cuda_stream>>>(
@@ -1122,7 +1155,8 @@ extern "C" void launch_indexed_moe_forward_q5_0_q8_1(
     const void *all_weights, const void *all_inputs,
     const unsigned int *indices, float *all_outputs, int n, int k, int batch,
     int topk, int k_padded, int input_dim1, void *stream) {
-  dim3 grid(n, batch, topk);
+  dim3 grid((n + INDEXED_MOE_ROWS_PER_BLOCK - 1) / INDEXED_MOE_ROWS_PER_BLOCK,
+            batch, topk);
   dim3 block(WARP_SIZE, 4, 1);
   cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
   indexed_moe_forward_q5_0_q8_1<<<grid, block, 0, cuda_stream>>>(
@@ -1134,7 +1168,8 @@ extern "C" void launch_indexed_moe_forward_q5_1_q8_1(
     const void *all_weights, const void *all_inputs,
     const unsigned int *indices, float *all_outputs, int n, int k, int batch,
     int topk, int k_padded, int input_dim1, void *stream) {
-  dim3 grid(n, batch, topk);
+  dim3 grid((n + INDEXED_MOE_ROWS_PER_BLOCK - 1) / INDEXED_MOE_ROWS_PER_BLOCK,
+            batch, topk);
   dim3 block(WARP_SIZE, 4, 1);
   cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
   indexed_moe_forward_q5_1_q8_1<<<grid, block, 0, cuda_stream>>>(
@@ -1146,7 +1181,8 @@ extern "C" void launch_indexed_moe_forward_q8_1_q8_1(
     const void *all_weights, const void *all_inputs,
     const unsigned int *indices, float *all_outputs, int n, int k, int batch,
     int topk, int k_padded, int input_dim1, void *stream) {
-  dim3 grid(n, batch, topk);
+  dim3 grid((n + INDEXED_MOE_ROWS_PER_BLOCK - 1) / INDEXED_MOE_ROWS_PER_BLOCK,
+            batch, topk);
   dim3 block(WARP_SIZE, 4, 1);
   cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
   indexed_moe_forward_q8_1_q8_1<<<grid, block, 0, cuda_stream>>>(
