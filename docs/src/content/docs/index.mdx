@@ -4,7 +4,7 @@ description: Fast, flexible LLM inference engine written in Rust. Run 40+ model 
 template: splash
 hero:
   title: Fast, flexible LLM inference.
-  tagline: A single binary for local inference, OpenAI-compatible serving, and agentic workloads.
+  tagline: A single binary for local inference, OpenAI-compatible serving, Anthropic-compatible Messages serving, and agentic workloads.
   actions:
     - text: Get started
       link: /hanzo/start-here/
@@ -73,6 +73,8 @@ hanzo run --quant 4 -m Qwen/Qwen3-4B
 hanzo serve --quant 4 -m Qwen/Qwen3-4B
 ```
 
+OpenAI-compatible clients use `http://localhost:1234/v1`; Anthropic-compatible clients use `http://localhost:1234`.
+
 ## Documentation sections
 
 <CardGrid>
@@ -130,8 +132,8 @@ hanzo serve --quant 4 -m Qwen/Qwen3-4B
     execution, MCP, generated media, and sessions.
   </Card>
   <Card title="Multi-GPU" icon="seti:hex">
-    Tensor parallelism across local GPUs via NCCL, or across machines via the
-    built-in ring backend.
+    NCCL tensor parallelism, layer/P2P mapping, multi-node NCCL, and the ring
+    backend.
   </Card>
   <Card title="Web UI" icon="laptop">
     Mounted at `/ui` by default. Browser chat with reasoning blocks, tool and
