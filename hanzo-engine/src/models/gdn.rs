@@ -162,6 +162,10 @@ pub fn gated_delta_rule_recurrence(
     }
     #[cfg(feature = "metal")]
     if state.device().is_metal() {
+        // seq==1 decode: skip the flatten/unflatten transposes, step the fused kernel in place.
+        if q.dim(1)? == 1 && q.dim(0)? == 1 && state.dtype() == DType::F32 {
+            return recurrence_metal_step(q, k, v, g, beta, state);
+        }
         return recurrence_metal(q, k, v, g, beta, state);
     }
     // Native Vulkan single-step decode: state stays in VRAM across tokens, no per-token readback.
@@ -302,6 +306,33 @@ fn recurrence_metal(
         )?
     };
     recurrence_unflatten(&out_bh, &s, q, v, state)
+}
+
+/// Native Metal single decode step (seq==1, batch==1). Mirrors `recurrence_vulkan_step`: cheap
+/// reshapes (no transpose) into the [BH, ..] layout, applies the 1/sqrt(k_dim) q-scale, steps the
+/// fused kernel with the state updated in place, and reshapes y back to (1, 1, v_heads, v_dim).
+#[cfg(feature = "metal")]
+fn recurrence_metal_step(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state: &mut Tensor,
+) -> Result<Tensor> {
+    let (b, _s, nh, kd) = q.dims4()?;
+    let vd = v.dim(D::Minus1)?;
+    let bh = b * nh;
+    let scale = 1.0 / (kd as f64).sqrt();
+    let q = (q.reshape((bh, kd))?.to_dtype(DType::F32)? * scale)?.contiguous()?;
+    let k = k.reshape((bh, kd))?.to_dtype(DType::F32)?.contiguous()?;
+    let v = v.reshape((bh, vd))?.to_dtype(DType::F32)?.contiguous()?;
+    let g = g.reshape(bh)?.to_dtype(DType::F32)?.contiguous()?;
+    let beta = beta.reshape(bh)?.to_dtype(DType::F32)?.contiguous()?;
+    let mut s = state.reshape((bh, kd, vd))?.contiguous()?;
+    let y = crate::metal::gdn::gated_delta_rule_step_metal(&q, &k, &v, &g, &beta, &mut s)?;
+    *state = s.reshape((b, nh, kd, vd))?.to_dtype(state.dtype())?;
+    y.reshape((b, 1, nh, vd))
 }
 
 /// Portable f32 reference scan. Serves CPU, Vulkan, and any backend without a fused kernel.
@@ -690,6 +721,18 @@ impl GatedDeltaNet {
     /// Single-step causal conv1d update for decode.
     fn causal_conv1d_update(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (_batch, seq_len, _conv_dim) = x.dims3()?;
+
+        // Native Vulkan single decode step: conv_state stays in VRAM, no per-token readback.
+        if x.device().is_vulkan() && x.dtype() == DType::F32 && x.dim(0)? == 1 && x.dim(1)? == 1 {
+            let weight = self.conv1d_weight.squeeze(1)?.to_dtype(DType::F32)?.contiguous()?;
+            let conv_dim = weight.dim(0)?;
+            let x_flat = x.reshape(conv_dim)?.contiguous()?;
+            let mut s = cache.conv_state.reshape((conv_dim, self.conv_kernel_size))?;
+            let out = crate::vulkan::gdn::gdn_conv1d_step_vulkan(&mut s, &x_flat, &weight)?;
+            cache.conv_state = s.reshape((1, conv_dim, self.conv_kernel_size))?;
+            return out.reshape((1, 1, conv_dim));
+        }
+
         let x_t = x.transpose(1, 2)?.contiguous()?;
 
         #[cfg(feature = "cuda")]
