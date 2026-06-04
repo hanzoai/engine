@@ -190,7 +190,7 @@ fn set_git_revision() {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".to_string());
 
-    println!("cargo:rustc-env=HANZO_GIT_REVISION={commit}");
+    println!("cargo:rustc-env=GIT_REVISION={commit}");
     println!("cargo:rerun-if-changed=.git/HEAD");
     if let Ok(head) = std::fs::read_to_string(".git/HEAD") {
         if let Some(ref_path) = head.strip_prefix("ref:") {
