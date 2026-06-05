@@ -78,24 +78,42 @@ fn main() {
         println!("cargo:rerun-if-changed=build.rs");
         println!("cargo:rerun-if-changed=src/rocm/sort.hip.cpp");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+        let target = std::env::var("TARGET").unwrap_or_default();
+        let is_msvc = target.contains("msvc");
 
         let rocm_path = std::env::var("ROCM_PATH").unwrap_or_else(|_| "/opt/rocm".to_string());
-        let hipcc = {
-            let p = PathBuf::from(&rocm_path).join("bin/hipcc");
-            if p.exists() {
-                p.to_string_lossy().into_owned()
+        let bin = PathBuf::from(&rocm_path).join("bin");
+        let tool = |name: &str| {
+            let exe = bin.join(format!("{name}.exe"));
+            if is_msvc && exe.exists() {
+                exe.to_string_lossy().into_owned()
             } else {
-                "hipcc".to_string()
+                let plain = bin.join(name);
+                if plain.exists() {
+                    plain.to_string_lossy().into_owned()
+                } else {
+                    name.to_string()
+                }
             }
         };
+        let hipcc = tool("hipcc");
         let gfx = std::env::var("ROCM_GFX_ARCH").unwrap_or_else(|_| "gfx1151".to_string());
 
-        // Compile the HIP sort/topk kernels into a relocatable object.
-        let obj = build_dir.join("sort.hip.o");
-        let status = Command::new(&hipcc)
-            .args(["-c", "-std=c++17", "-O3", "-fPIC"])
+        // hipcc on Windows is a cmd.exe wrapper that can't cd into a UNC working dir (\\wsl.localhost\..),
+        // so copy the source into OUT_DIR (a real C: path) and compile with absolute in/out paths.
+        let src = build_dir.join("sort.hip.cpp");
+        std::fs::copy("src/rocm/sort.hip.cpp", &src).expect("failed to stage src/rocm/sort.hip.cpp");
+
+        // Compile the HIP sort/topk kernels into a relocatable object. MSVC wants COFF (no -fPIC).
+        let obj = build_dir.join(if is_msvc { "sort.hip.obj" } else { "sort.hip.o" });
+        let mut cmd = Command::new(&hipcc);
+        cmd.args(["-c", "-std=c++17", "-O3"]);
+        if !is_msvc {
+            cmd.arg("-fPIC");
+        }
+        let status = cmd
             .arg(format!("--offload-arch={gfx}"))
-            .arg("src/rocm/sort.hip.cpp")
+            .arg(&src)
             .arg("-o")
             .arg(&obj)
             .status()
@@ -106,21 +124,29 @@ fn main() {
         );
 
         // Archive into a static library so the Rust linker pulls in the fatbin.
-        let lib = build_dir.join("libhanzorocm.a");
+        // ROCm ships llvm-ar on both platforms; MSVC linker reads the COFF archive as a .lib.
+        let lib = build_dir.join(if is_msvc {
+            "hanzorocm.lib"
+        } else {
+            "libhanzorocm.a"
+        });
         let _ = std::fs::remove_file(&lib);
-        let status = Command::new("ar")
+        let archiver = tool("llvm-ar");
+        let status = Command::new(&archiver)
             .arg("rcs")
             .arg(&lib)
             .arg(&obj)
             .status()
-            .expect("failed to invoke ar to archive sort.hip.o");
-        assert!(status.success(), "ar failed to archive sort.hip.o");
+            .unwrap_or_else(|_| panic!("failed to invoke {archiver} to archive {obj:?}"));
+        assert!(status.success(), "llvm-ar failed to archive sort.hip object");
 
         println!("cargo:rustc-link-search=native={}", build_dir.display());
         println!("cargo:rustc-link-lib=static=hanzorocm");
         println!("cargo:rustc-link-search=native={rocm_path}/lib");
         println!("cargo:rustc-link-lib=dylib=amdhip64");
-        println!("cargo:rustc-link-lib=dylib=stdc++");
+        if !is_msvc {
+            println!("cargo:rustc-link-lib=dylib=stdc++");
+        }
     }
 }
 
