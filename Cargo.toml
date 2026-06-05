@@ -203,6 +203,11 @@ hanzo-macros = { path = "hanzo-macros", version = "1.0.2" }
 hanzo-code-exec = { path = "hanzo-code-exec", version = "1.0.2" }
 hanzo-sandbox = { path = "hanzo-sandbox", version = "1.0.2" }
 
+# Vendored rocm-rs drops the MIOpen module: AMD's Windows ROCm ships no miopen.h and
+# upstream build.rs parses it unconditionally. We never use MIOpen (conv-only).
+[patch.crates-io]
+rocm-rs = { path = "../vendor/rocm-rs" }
+
 [profile.release]
 lto = "fat"
 codegen-units = 1
