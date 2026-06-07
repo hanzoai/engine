@@ -2492,8 +2492,11 @@ pub fn qk_rms_norm_rope(
         return Ok((q, k));
     }
 
+    // Transpose-free q/k norm+rope on Vulkan: one fused kernel in [b,h,s,d] layout, eliminating the
+    // generic path's transpose/flatten/reshape copies (the dominant decode strided_copy source:
+    // 217 -> 73/token). Default on coopmat/subgroup Vulkan for NeoX rope; falls through otherwise.
     #[cfg(feature = "vulkan")]
-    if is_gpt_neox && q.device().is_vulkan() && std::env::var("HANZO_VK_FUSED_QKNORM").is_ok() {
+    if is_gpt_neox && q.device().is_vulkan() {
         if let Some(res) =
             vulkan_qk_rms_norm_rope(q, k, q_weight, k_weight, q_eps, k_eps, &cos, &sin)?
         {
