@@ -2864,7 +2864,60 @@ pub fn qk_rms_norm_rope_positions(
 
     let q = hanzo_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
     let k = hanzo_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
+
+    // ROCm has no fused positions kernel in hanzo-quant (that path falls back to
+    // `cpu_apply_rotary_qk`, which bails on ROCm storage). Instead, gather the
+    // per-token cos/sin rows from the DEVICE `positions` tensor with
+    // `index_select` and apply the existing ROCm-capable `rope` op. This is
+    // numerically identical to the host-offset `selected_rope_cache` path, but
+    // the position indices live in device memory, so no host seqlen value is
+    // baked into the launch (the stage-3 hipGraph capture prerequisite).
+    if q.device().is_rocm() {
+        return rope_positions_via_gather(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox);
+    }
+
     apply_rotary_positions_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox)
+}
+
+/// Apply RoPE to already-normalized q/k by gathering per-token cos/sin rows from
+/// a DEVICE `positions` tensor (u32 `[batch*seq_len]`) and dispatching to the
+/// standard `rope`/`rope_i` op. Used on backends without a fused positions RoPE
+/// kernel (ROCm). `cos_cache`/`sin_cache` are the full `[max_pos, head_dim/2]`
+/// tables; `positions` selects one row per (batch, token).
+fn rope_positions_via_gather(
+    q: &Tensor,
+    k: &Tensor,
+    cos_cache: &Tensor,
+    sin_cache: &Tensor,
+    positions: &Tensor,
+    is_gpt_neox: bool,
+) -> Result<(Tensor, Tensor)> {
+    let (batch, _q_heads, seq_len, _head_dim) = q.dims4()?;
+    let positions = positions.to_dtype(DType::U32)?;
+    let n_pos = positions.dims1()?;
+    if n_pos != batch * seq_len {
+        hanzo_ml::bail!(
+            "RoPE positions length {n_pos} != batch*seq_len ({batch}*{seq_len})"
+        );
+    }
+    // Gather the live cos/sin rows: [batch*seq_len, head_dim/2].
+    let cos = cos_cache.index_select(&positions, 0)?;
+    let sin = sin_cache.index_select(&positions, 0)?;
+    // Reshape to the batched 3-D layout [batch, seq_len, head_dim/2] so the rope
+    // kernel applies a per-batch stride (matches `selected_rope_cache` + the
+    // batched branch of `qk_rms_norm_rope`).
+    let half = cos.dim(D::Minus1)?;
+    let cos = cos.reshape((batch, seq_len, half))?;
+    let sin = sin.reshape((batch, seq_len, half))?;
+    let rope = if is_gpt_neox {
+        hanzo_nn::rotary_emb::rope
+    } else {
+        hanzo_nn::rotary_emb::rope_i
+    };
+    Ok((
+        rope(&q.contiguous()?, &cos, &sin)?,
+        rope(&k.contiguous()?, &cos, &sin)?,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]

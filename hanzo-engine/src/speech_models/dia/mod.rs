@@ -387,10 +387,7 @@ impl DiaPipeline {
             temperature,
             top_p,
             top_k,
-        } = cfg
-        else {
-            hanzo_ml::bail!("DiaPipeline requires a SpeechGenerationConfig::Dia");
-        };
+        } = cfg;
 
         let audio_pad_value = self.cfg.data.audio_pad_value as u32;
         let audio_eos_value = self.cfg.data.audio_eos_value as u32;
