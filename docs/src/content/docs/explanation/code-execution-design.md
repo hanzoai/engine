@@ -46,7 +46,7 @@ The subprocess always runs as the same user as hanzo. What constrains it on top 
 
 `--sandbox on` promotes any missing sandbox layer (no Landlock, no seccomp, no namespaces) into a hard error at code-execution init, instead of falling back to whatever layers are available.
 
-`--sandbox off` and `SANDBOX=off` disable all sandbox layers: the subprocess then has the same filesystem, network, and syscall access as any Python process running as the hanzo user. A startup warning is logged so the choice is visible in logs.
+`--sandbox off` and `HANZO_SANDBOX=off` disable all sandbox layers: the subprocess then has the same filesystem, network, and syscall access as any Python process running as the hanzo user. A startup warning is logged so the choice is visible in logs.
 
 ### Python and Rust API behavior
 

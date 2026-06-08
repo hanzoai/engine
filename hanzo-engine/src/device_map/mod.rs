@@ -262,6 +262,8 @@ fn mapped_device_for_ordinal(
         DeviceLocation::Metal { .. } => Device::new_metal(ordinal),
         #[cfg(feature = "vulkan")]
         DeviceLocation::Vulkan { .. } => Ok(device.clone()),
+        #[cfg(feature = "rocm")]
+        DeviceLocation::Rocm { .. } => Ok(device.clone()),
     }
 }
 
@@ -272,6 +274,8 @@ fn device_ordinal(device: &Device) -> usize {
         DeviceLocation::Metal { gpu_id } => gpu_id,
         #[cfg(feature = "vulkan")]
         DeviceLocation::Vulkan { gpu_id } => gpu_id,
+        #[cfg(feature = "rocm")]
+        DeviceLocation::Rocm { gpu_id } => gpu_id,
     }
 }
 
@@ -314,6 +318,8 @@ pub fn get_all_similar_devices(base: &Device) -> Result<Vec<Device>> {
     let mut devices = Vec::new();
     match base {
         Device::Cpu => return Ok(vec![Device::Cpu]),
+        #[cfg(feature = "rocm")]
+        Device::Rocm(_) => return Ok(vec![base.clone()]),
         Device::Cuda(_) => {
             let mut ord = 0;
             let DeviceLocation::Cuda { gpu_id: base_ord } = base.location() else {
