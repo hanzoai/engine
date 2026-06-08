@@ -350,7 +350,11 @@ impl Sdpa {
                 && sdpa_params.softcap.is_none_or(|x| x == 1.0)
         });
         let valid_head_dims: &[usize] = &[32, 64, 72, 80, 96, 128, 256, 512];
-        // Metal SDPA full kernel requires q_seq <= k_seq when a mask is present.
+        // The Metal steel_attention (full) kernel handles q_seq != kv_seq via its qL_off, so the
+        // non-square masked case (speculative-decode verify: gamma+1 queries vs a longer cache)
+        // can use the fast kernel as long as q_seq <= kv_seq. The single-query decode path
+        // (seq_len==1) keeps using the vector kernel. q_seq > kv_seq has no valid qL_off and stays
+        // on naive_sdpa.
         let metal_supports_mask = mask.is_none() || seq_len <= k.dim(2)?;
 
         // Metal FA path for DK=512 BF16 with a mask. Two specializations:
