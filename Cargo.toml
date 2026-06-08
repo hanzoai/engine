@@ -33,12 +33,26 @@ rust-version = "1.88"
 
 [workspace.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
-# Hanzo ML crates.
+# Upstream candle versions (for reference, not used):
+# candle-core = { version = "0.10.2" }
+# candle-nn = { version = "0.10.2" }
+# candle-flash-attn-v3 = { version = "0.10.2" }
+# candle-flash-attn = { version = "0.10.2" }
+# candle-metal-kernels = { version = "0.10.2" }
+# Use local hanzo-ml dependencies (Hanzo fork of candle)
+candle-core = { path = "../ml/hanzo-ml", package = "hanzo-ml" }
+candle-nn = { path = "../ml/hanzo-nn", package = "hanzo-nn" }
+candle-flash-attn = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
+candle-flash-attn-v3 = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
+candle-metal-kernels = { path = "../ml/hanzo-metal-kernels", package = "hanzo-metal-kernels" }
+# Canonical-named aliases for the candle fork (crates reference these directly).
 hanzo-ml = { path = "../ml/hanzo-ml" }
 hanzo-nn = { path = "../ml/hanzo-nn" }
-hanzo-flash-attn = { path = "../ml/hanzo-flash-attn" }
-hanzo-flash-attn-v3 = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
 hanzo-metal-kernels = { path = "../ml/hanzo-metal-kernels" }
+# candle-core = { path = "../candle/candle-core" }
+# candle-nn = { path = "../candle/candle-nn" }
+# candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }
+# candle-flash-attn = { path = "../candle/candle-flash-attn" }
 # Add hanzo-ml-inference support  
 hanzo-ml-inference = { path = "../ml/hanzo-ml-inference", version = "0.1.0" }
 
@@ -190,7 +204,7 @@ nix = { version = "0.31.3", default-features = false }
 landlock = "0.4.4"
 seccompiler = "0.5.0"
 
-# Canonical Hanzo crates (hanzo crates).
+# Canonical Hanzo crates (mistralrs-* lineage renamed to hanzo-*).
 hanzo = { path = "hanzo" }
 hanzo-engine = { path = "hanzo-engine" }
 hanzo-server-core = { path = "hanzo-server-core" }
