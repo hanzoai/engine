@@ -4,6 +4,11 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// Apple Metal 3.1+ exposes hardware bf16 as `bfloat`; the GDN kernels (ported from CUDA) refer to it
+// as `bfloat16_t`. Alias it here (the SDPA kernel does the same) so the conv1d/gdn-gating
+// instantiations resolve -- without this the whole Qwen3.5-hybrid GDN path fails to compile on Metal.
+typedef bfloat bfloat16_t;
+
 // ============================================================================
 // Kernel 1: gated_delta_rule_recurrence
 //
