@@ -147,7 +147,7 @@ pub async fn run_bench(
     );
 
     #[cfg(feature = "cuda")]
-    let cuda_profiler_range = std::env::var_os("BENCH_CUDA_PROFILER_RANGE").is_some();
+    let cuda_profiler_range = std::env::var_os("MISTRALRS_BENCH_CUDA_PROFILER_RANGE").is_some();
     #[cfg(feature = "cuda")]
     if cuda_profiler_range {
         unsafe {
@@ -231,6 +231,20 @@ pub async fn run_bench(
     // Print results
     print_results(&model_id, iterations, &results);
 
+    // Also write results to a file when HANZO_BENCH_OUT is set, so the numbers
+    // survive when stdout is redirected/block-buffered (e.g. headless runs that
+    // exit before the stdout buffer flushes).
+    if let Ok(path) = std::env::var("HANZO_BENCH_OUT") {
+        let mut s = format!("model={model_id} iterations={iterations}\n");
+        for r in &results {
+            s.push_str(&format!(
+                "{}: {:.2} tok/s (+/-{:.2}), {:.3} ms\n",
+                r.test_name, r.tok_per_sec, r.std_dev, r.latency_ms
+            ));
+        }
+        let _ = std::fs::write(&path, s);
+    }
+
     Ok(())
 }
 
@@ -297,6 +311,9 @@ async fn run_single_bench(
             Some(Response::InternalError(e)) => anyhow::bail!("Internal error: {e:?}"),
             Some(Response::ModelError(e, _)) => anyhow::bail!("Model error: {e}"),
             Some(Response::ValidationError(e)) => anyhow::bail!("Validation error: {e:?}"),
+            Some(Response::CompletionModelError(e, _)) => {
+                anyhow::bail!("Completion model error: {e}")
+            }
             Some(_) => anyhow::bail!("Unexpected response type"),
             None => anyhow::bail!("No response received"),
         }

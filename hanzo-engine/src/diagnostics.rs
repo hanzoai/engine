@@ -118,7 +118,7 @@ fn build_info() -> BuildInfo {
         flash_attn_v3: cfg!(feature = "flash-attn-v3"),
         accelerate: cfg!(feature = "accelerate"),
         mkl: cfg!(feature = "mkl"),
-        git_revision: crate::GIT_REVISION.to_string(),
+        git_revision: crate::HANZO_GIT_REVISION.to_string(),
     }
 }
 

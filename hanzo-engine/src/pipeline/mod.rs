@@ -4,6 +4,10 @@ pub mod chat_template;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda_graph;
 mod diffusion;
+#[cfg(feature = "metal")]
+pub(crate) mod metal_graph;
+#[cfg(feature = "rocm")]
+pub(crate) mod rocm_graph;
 mod embedding;
 mod ggml;
 mod gguf;
