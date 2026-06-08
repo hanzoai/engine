@@ -93,7 +93,7 @@ impl Kernels {
                 Library::new(raw_lib)
             } else {
                 // Fall back to runtime compilation if precompiled lib is not available
-                // (e.g., when METAL_PRECOMPILE=0)
+                // (e.g., when HANZO_METAL_PRECOMPILE=0)
                 self.compile_kernels_at_runtime(device)?
             };
             Ok(LIBRARY.get_or_init(|| lib).clone())
