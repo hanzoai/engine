@@ -6,12 +6,28 @@ use hanzo_ml::{Device, Result, Tensor};
 use hanzo_quant::MatMul;
 
 use crate::attention::{chunked_attention, SdpaParams};
+use std::sync::atomic::{AtomicU8, Ordering};
 
-/// Low-VRAM synchronize guard: a CUDA-specific OOM workaround. Off CUDA the `MemoryUsage::query`
-/// it calls is expensive (a full system scan) and ran once per attention layer (~28x/token on a
-/// small model) -- the dominant decode-time cost. The guard is meaningless off CUDA, so skip it.
+// 0 = unknown, 1 = unified, 2 = discrete; caches is_integrated_gpu so the per-layer guard stays cheap.
+static UNIFIED_MEM: AtomicU8 = AtomicU8::new(0);
+
+fn is_unified_memory_device(device: &Device) -> bool {
+    match UNIFIED_MEM.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let unified = crate::utils::normal::is_integrated_gpu(device);
+            UNIFIED_MEM.store(if unified { 1 } else { 2 }, Ordering::Relaxed);
+            unified
+        }
+    }
+}
+
+/// Low-VRAM synchronize guard (CUDA OOM workaround). `MemoryUsage::query` runs a ~110ms sysinfo
+/// scan; called per attention layer it left the GPU idle ~94% of prefill on a unified-memory GPU --
+/// and the guard is meaningless there (no separate VRAM pool). Skip off-CUDA and on unified CUDA.
 pub(crate) fn maybe_synchronize(device: &Device) -> Result<()> {
-    if !device.is_cuda() {
+    if !device.is_cuda() || is_unified_memory_device(device) {
         return Ok(());
     }
     // If less that 4 GB available, synchronize
