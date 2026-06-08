@@ -15,7 +15,7 @@ The KV cache stores the latent vector rather than full K and V. A projection ste
 
 On CUDA (Unix), hanzo uses a specialized MLA decode kernel when all of the following hold:
 
-- `NO_MLA` is not set to `"1"`.
+- `HANZO_NO_MLA` is not set to `"1"`.
 - The attention mask is empty (single-token decode: prefill falls back to the generic path).
 - Sequence length is 1.
 - Paged attention is enabled.
@@ -28,7 +28,7 @@ A parallel fast path exists for prefill with prefix caching (paged attention ena
 
 ## Opting out
 
-`NO_MLA=1` forces the generic path. Use when debugging suspected MLA kernel issues.
+`HANZO_NO_MLA=1` forces the generic path. Use when debugging suspected MLA kernel issues.
 
 ## Models
 
