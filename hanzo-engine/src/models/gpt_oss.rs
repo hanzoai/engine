@@ -846,7 +846,7 @@ impl NormalModel for Model {
         &self.cfg_metadata
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "metal"))]
     fn supports_cuda_decode_graphs(&self) -> bool {
         true
     }
