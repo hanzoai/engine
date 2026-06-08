@@ -1,6 +1,8 @@
 use super::llg::build_llg_factory;
 use super::{
-    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
+    get_model_paths, get_xlora_paths,
+    text_models_inputs_processor::{InputMetadata, ModelInputs},
+    AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind,
     TokenSource,
 };
@@ -86,6 +88,7 @@ pub struct GGUFPipeline {
     metadata: Arc<GeneralMetadata>,
     generation_defaults: Option<crate::ModelGenerationDefaults>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    mtp: std::sync::Mutex<Option<crate::speculative::mtp_quantized::QuantizedMtpRuntime>>,
 }
 
 /// Loader for a GGUF model.
@@ -626,6 +629,7 @@ impl Loader for GGUFLoader {
             }),
             generation_defaults,
             mapper: pipeline_mapper,
+            mtp: std::sync::Mutex::new(None),
         })))
     }
 
@@ -840,6 +844,35 @@ impl Pipeline for GGUFPipeline {
             Ok(ForwardInputsResult::CausalGeneration { logits })
         }
     }
+    fn attach_speculative(
+        &mut self,
+        config: crate::speculative::SpeculativeConfig,
+    ) -> hanzo_ml::Result<()> {
+        use crate::speculative::mtp_quantized::QuantizedMtpRuntime;
+        use crate::speculative::{SpeculativeAttachInfo, SpeculativeConfig};
+
+        let SpeculativeConfig::Mtp(mtp_config) = config else {
+            *self.mtp.lock().expect("MTP mutex poisoned") = None;
+            return Ok(());
+        };
+
+        let Model::Qwen35(ref model) = self.model else {
+            hanzo_ml::bail!(
+                "Native MTP speculative decoding is only supported for qwen35moe GGUF models."
+            );
+        };
+        if !model.has_mtp() {
+            hanzo_ml::bail!(
+                "This GGUF has no nextn/MTP layers (nextn_predict_layers=0); cannot attach MTP."
+            );
+        }
+        let runtime = QuantizedMtpRuntime::new(model.mtp_n_predict_default(), mtp_config.n_predict);
+        let info = SpeculativeAttachInfo::mtp(mtp_config.model.clone(), runtime.proposal_len());
+        crate::speculative::logging::log_attach(&info);
+        *self.mtp.lock().expect("MTP mutex poisoned") = Some(runtime);
+        Ok(())
+    }
+
     async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],
@@ -852,6 +885,96 @@ impl Pipeline for GGUFPipeline {
     }
     fn category(&self) -> ModelCategory {
         ModelCategory::Text
+    }
+}
+
+impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
+    fn has_speculative_proposer(&self) -> bool {
+        self.mtp.lock().is_ok_and(|m| m.is_some())
+    }
+
+    fn speculative_proposal_len(&self) -> Option<usize> {
+        self.mtp
+            .lock()
+            .ok()
+            .and_then(|m| m.as_ref().map(|r| r.proposal_len()))
+    }
+
+    fn speculative_target_hiddens(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> hanzo_ml::Result<Option<Tensor>> {
+        let Model::Qwen35(ref model) = self.model else {
+            return Ok(None);
+        };
+        let hidden = model.last_spec_hidden().ok_or_else(|| {
+            hanzo_ml::Error::Msg("MTP target hidden state was not captured before proposal.".into())
+        })?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        // Quantized hybrid decode runs one sequence; gather the requested rows from (rows, hidden).
+        match hidden.dims() {
+            [row_count, _] => {
+                let mut gathered = Vec::with_capacity(rows.len());
+                for &(batch_idx, row) in rows {
+                    if batch_idx != 0 {
+                        hanzo_ml::bail!("MTP hidden batch {batch_idx} out of range (single-batch)");
+                    }
+                    if row >= *row_count {
+                        hanzo_ml::bail!("MTP hidden row {row} out of range for {row_count} rows");
+                    }
+                    gathered.push(hidden.narrow(0, row, 1)?);
+                }
+                Tensor::cat(&gathered, 0).map(Some)
+            }
+            [batch, row_count, _] => {
+                let mut gathered = Vec::with_capacity(rows.len());
+                for &(batch_idx, row) in rows {
+                    if batch_idx >= *batch {
+                        hanzo_ml::bail!("MTP hidden batch {batch_idx} out of range for {batch}");
+                    }
+                    if row >= *row_count {
+                        hanzo_ml::bail!("MTP hidden row {row} out of range for {row_count} rows");
+                    }
+                    gathered.push(hidden.narrow(0, batch_idx, 1)?.narrow(1, row, 1)?.squeeze(1)?);
+                }
+                Tensor::cat(&gathered, 0).map(Some)
+            }
+            shape => hanzo_ml::bail!("MTP hidden state has unsupported shape {shape:?}"),
+        }
+    }
+
+    fn speculative_propose(
+        &mut self,
+        ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
+    ) -> hanzo_ml::Result<Option<crate::speculative::SpeculativeProposalBatch>> {
+        let Model::Qwen35(ref model) = self.model else {
+            return Ok(None);
+        };
+        let guard = self.mtp.lock().expect("MTP mutex poisoned");
+        let Some(runtime) = guard.as_ref() else {
+            return Ok(None);
+        };
+        let embedder = |token: &Tensor| model.mtp_embed(token);
+        runtime.propose(model, ctx, &embedder).map(Some)
+    }
+
+    fn build_speculative_verify_inputs(
+        &self,
+        input_meta: InputMetadata,
+    ) -> hanzo_ml::Result<Box<dyn Any>> {
+        Ok(Box::new(ModelInputs {
+            input_ids: input_meta.input,
+            input_ids_full: None,
+            seqlen_offsets: input_meta.positions,
+            seqlen_offsets_full: None,
+            context_lens: input_meta.context_lens,
+            position_ids: input_meta.position_ids,
+            paged_attn_meta: input_meta.paged_attn_meta,
+            flash_meta: input_meta.flash_meta,
+            flash_meta_full: None,
+        }))
     }
 }
 

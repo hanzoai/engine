@@ -274,6 +274,72 @@ impl GatedFullAttention {
 
         self.attn_o.forward(&y.to_dtype(x.dtype())?)
     }
+
+    /// Single-token MTP attention over a donor layer's cached K/V (read-only).
+    /// `x` is one position; Q is computed here and attends over `[donor_kv, own_new_kv]`.
+    /// `position` is the absolute index of the new token (donor cache holds `position` prior keys).
+    fn forward_donor(
+        &self,
+        x: &Tensor,
+        donor_k: &Tensor,
+        donor_v: &Tensor,
+        position: usize,
+    ) -> Result<Tensor> {
+        let (b_sz, seq_len, _) = x.dims3()?;
+        debug_assert_eq!(seq_len, 1, "MTP donor attention is single-token");
+
+        let q_gate = self.attn_q.forward(x)?;
+        let k = self.attn_k.forward(x)?;
+        let v = self.attn_v.forward(x)?;
+
+        let q_gate = q_gate.reshape((b_sz, seq_len, self.n_head, self.head_dim * 2))?;
+        let q = q_gate.narrow(D::Minus1, 0, self.head_dim)?;
+        let gate = q_gate.narrow(D::Minus1, self.head_dim, self.head_dim)?;
+        let gate = gate.reshape((b_sz, seq_len, self.n_head * self.head_dim))?;
+
+        let q = q.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
+        let k = k.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+        let v = v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+
+        // mRoPE at the new token's absolute position (donor keys were RoPE'd at their own positions).
+        let cos_sin = self.rotary.compute_cos_sin(
+            &mtp_position_ids(position, &q.device().clone())?,
+            x.dtype(),
+        )?;
+        let (q, k) = self.rotary.forward_qk_norm(
+            &cos_sin,
+            &q,
+            &k,
+            self.q_norm.weight(),
+            self.k_norm.weight(),
+            self.q_norm.eps(),
+            self.k_norm.eps(),
+        )?;
+
+        let (q, k, v) = (
+            q.to_dtype(self.dtype)?,
+            k.to_dtype(self.dtype)?,
+            v.to_dtype(self.dtype)?,
+        );
+
+        // Context = donor cache (positions 0..position) ++ this token's own K/V.
+        let k = Tensor::cat(&[donor_k, &k], 2)?.contiguous()?;
+        let v = Tensor::cat(&[donor_v, &v], 2)?.contiguous()?;
+
+        // Single query sees the whole context, so no causal mask is needed.
+        let y = Sdpa.run_attention(&q, &k, &v, &AttentionMask::None, None, &self.sdpa_params)?;
+        let y = y.reshape((b_sz, seq_len, ()))?;
+
+        let gate = hanzo_nn::ops::sigmoid(&gate.to_dtype(y.dtype())?)?;
+        let y = y.broadcast_mul(&gate)?;
+
+        self.attn_o.forward(&y.to_dtype(x.dtype())?)
+    }
+}
+
+fn mtp_position_ids(position: usize, device: &Device) -> Result<Tensor> {
+    let pos = Tensor::from_vec(vec![position as u32], (1, 1), device)?;
+    Tensor::stack(&[&pos, &pos, &pos], 0)
 }
 
 // ===================== Gated DeltaNet (linear-attention) layer =====================
@@ -402,6 +468,31 @@ struct DecoderLayer {
     mlp: MoeOrMlp,
 }
 
+// ===================== MTP (nextn / multi-token-prediction) block =====================
+
+/// A single trailing nextn block. Structurally a full-attention MoE transformer layer plus the
+/// nextn fusion (enorm/hnorm/eh_proj) and its own LM head (shared_head_norm/shared_head_head).
+/// Mirrors llama.cpp `qwen35moe.cpp` `graph_mtp`. The attention reads the donor (last main
+/// attention layer) KV cache read-only; the nextn block never updates the target KV cache.
+pub struct MtpLayer {
+    enorm: QRmsNorm,
+    hnorm: QRmsNorm,
+    eh_proj: Arc<dyn QuantMethod>,
+    attn_norm: QRmsNorm,
+    attn: GatedFullAttention,
+    post_attention_norm: QRmsNorm,
+    mlp: MoeOrMlp,
+    shared_head_norm: QRmsNorm,
+    shared_head: Arc<dyn QuantMethod>,
+    embed_tokens: Option<Embedding>,
+}
+
+pub struct MtpLayers {
+    layers: Vec<MtpLayer>,
+    /// Donor layer index whose KV cache the nextn attention reads (last main full-attention layer).
+    donor_layer: usize,
+}
+
 // ===================== Config extraction =====================
 
 #[allow(dead_code)]
@@ -409,6 +500,7 @@ struct PropsGGUF {
     head_count: usize,
     head_count_kv: usize,
     block_count: usize,
+    nextn_predict_layers: usize,
     embedding_length: usize,
     rms_norm_eps: f32,
     max_seq_len: usize,
@@ -532,14 +624,16 @@ impl PropsGGUF {
                     .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
             },
             // block_count includes trailing MTP (multi-token-prediction) layers in some exports
-            // (e.g. the MXFP4 gguf: block_count=41, nextn_predict_layers=1). MTP is ignored for
-            // text-only inference, so the transformer depth is block_count - nextn_predict_layers.
+            // (e.g. the MXFP4 gguf: block_count=41, nextn_predict_layers=1). The main transformer
+            // depth is block_count - nextn_predict_layers; the trailing nextn blocks are loaded
+            // separately into MtpLayers for speculative decoding.
             block_count: (c
                 .get_value::<u32>("block_count")
                 .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
                 .saturating_sub(
                     c.get_value::<u32>("nextn_predict_layers").unwrap_or(0),
                 )) as usize,
+            nextn_predict_layers: c.get_value::<u32>("nextn_predict_layers").unwrap_or(0) as usize,
             embedding_length: embed_len,
             rms_norm_eps: c
                 .get_value("attention.layer_norm_rms_epsilon")
@@ -586,6 +680,8 @@ pub struct ModelWeights {
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     dtype: DType,
+    mtp: Option<MtpLayers>,
+    last_spec_hidden: Mutex<Option<Tensor>>,
 }
 
 fn gguf_qmm(q: hanzo_ml::quantized::QTensor) -> Result<Arc<dyn QuantMethod>> {
@@ -843,6 +939,36 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {e}")))?,
         ));
 
+        // Trailing nextn/MTP blocks, if present. Indices [block_count .. block_count + nextn).
+        let mtp = if props.nextn_predict_layers > 0 && is_moe {
+            let donor_layer = layer_types
+                .iter()
+                .rposition(|lt| matches!(lt, LayerType::FullAttention))
+                .ok_or_else(|| {
+                    hanzo_ml::Error::Msg(
+                        "MTP requires at least one full-attention layer to donate its KV cache."
+                            .to_string(),
+                    )
+                })?;
+            let mut mtp_layers = Vec::with_capacity(props.nextn_predict_layers);
+            for offset in 0..props.nextn_predict_layers {
+                let layer_idx = props.block_count + offset;
+                let prefix = format!("blk.{layer_idx}");
+                let dev = mapper.device_for(layer_idx, false).unwrap_or(device);
+                let rotary = ropes
+                    .get(&dev.location())
+                    .cloned()
+                    .unwrap_or_else(|| default_rotary.clone());
+                mtp_layers.push(load_mtp_layer(&mut ct, &prefix, dev, &props, &rotary, dtype)?);
+            }
+            Some(MtpLayers {
+                layers: mtp_layers,
+                donor_layer,
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, props.embedding_length),
             layers,
@@ -855,8 +981,124 @@ impl ModelConfig::FromGGUF for ModelWeights {
             max_seq_len: props.max_seq_len,
             mapper: Some(mapper),
             dtype,
+            mtp,
+            last_spec_hidden: Mutex::new(None),
         })
     }
+}
+
+fn load_mtp_layer<R: std::io::Seek + std::io::Read>(
+    ct: &mut Content<'_, R>,
+    prefix: &str,
+    dev: &Device,
+    props: &PropsGGUF,
+    rotary: &Arc<Qwen3VLRotaryEmbedding>,
+    dtype: DType,
+) -> Result<MtpLayer> {
+    let enorm = QRmsNorm::new(
+        ct.tensor(&format!("{prefix}.nextn.enorm.weight"), dev)?,
+        props.rms_norm_eps,
+    )?;
+    let hnorm = QRmsNorm::new(
+        ct.tensor(&format!("{prefix}.nextn.hnorm.weight"), dev)?,
+        props.rms_norm_eps,
+    )?;
+    let eh_proj = gguf_qmm(ct.tensor(&format!("{prefix}.nextn.eh_proj.weight"), dev)?)?;
+
+    // The nextn block reuses the standard full-attention + MoE tensor names within its own blk.
+    let attn_norm = QRmsNorm::new(
+        ct.tensor(&format!("{prefix}.attn_norm.weight"), dev)?,
+        props.rms_norm_eps,
+    )?;
+    let attn = GatedFullAttention {
+        attn_q: gguf_qmm(ct.tensor(&format!("{prefix}.attn_q.weight"), dev)?)?,
+        attn_k: gguf_qmm(ct.tensor(&format!("{prefix}.attn_k.weight"), dev)?)?,
+        attn_v: gguf_qmm(ct.tensor(&format!("{prefix}.attn_v.weight"), dev)?)?,
+        attn_o: gguf_qmm(ct.tensor(&format!("{prefix}.attn_output.weight"), dev)?)?,
+        q_norm: QRmsNorm::new(
+            ct.tensor(&format!("{prefix}.attn_q_norm.weight"), dev)?,
+            props.rms_norm_eps,
+        )?,
+        k_norm: QRmsNorm::new(
+            ct.tensor(&format!("{prefix}.attn_k_norm.weight"), dev)?,
+            props.rms_norm_eps,
+        )?,
+        n_head: props.head_count,
+        n_kv_head: props.head_count_kv,
+        head_dim: props.head_dim,
+        rotary: rotary.clone(),
+        sdpa_params: SdpaParams {
+            n_kv_groups: props.head_count / props.head_count_kv,
+            softcap: None,
+            softmax_scale: 1.0 / (props.head_dim as f32).sqrt(),
+            sliding_window: None,
+            sinks: None,
+        },
+        dtype,
+    };
+    let post_attention_norm = QRmsNorm::new(
+        ct.tensor(&format!("{prefix}.post_attention_norm.weight"), dev)?,
+        props.rms_norm_eps,
+    )?;
+
+    let gate = ct.tensor(&format!("{prefix}.ffn_gate_inp.weight"), dev)?;
+    let gate_experts = ct.tensor(&format!("{prefix}.ffn_gate_exps.weight"), dev)?;
+    let up_experts = ct.tensor(&format!("{prefix}.ffn_up_exps.weight"), dev)?;
+    let down_experts = ct.tensor(&format!("{prefix}.ffn_down_exps.weight"), dev)?;
+    let shared_gate = ct.tensor(&format!("{prefix}.ffn_gate_inp_shexp.weight"), dev)?;
+    let shared_gate_proj = gguf_qmm(ct.tensor(&format!("{prefix}.ffn_gate_shexp.weight"), dev)?)?;
+    let shared_up_proj = gguf_qmm(ct.tensor(&format!("{prefix}.ffn_up_shexp.weight"), dev)?)?;
+    let shared_down_proj = gguf_qmm(ct.tensor(&format!("{prefix}.ffn_down_shexp.weight"), dev)?)?;
+    let mlp = MoeOrMlp::FusedMoe(Box::new(FusedMoe {
+        gate: QMatMul::from_qtensor(gate)?,
+        gate_experts: QMatMul::from_qtensor(gate_experts)?,
+        up_experts: QMatMul::from_qtensor(up_experts)?,
+        down_experts: QMatMul::from_qtensor(down_experts)?,
+        shared_gate: {
+            let w = shared_gate.dequantize(dev)?;
+            QMatMul::Tensor(if w.rank() == 1 { w.unsqueeze(0)? } else { w })
+        },
+        shared_gate_proj,
+        shared_up_proj,
+        shared_down_proj,
+        norm_topk_prob: true,
+        num_experts_per_tok: props.num_experts_per_tok,
+    }));
+
+    // LM head: nextn.shared_head_norm / nextn.shared_head_head, falling back to model output.
+    let shared_head_norm = QRmsNorm::new(
+        ct.tensor(&format!("{prefix}.nextn.shared_head_norm.weight"), dev)
+            .or_else(|_| ct.tensor("output_norm.weight", dev))?,
+        props.rms_norm_eps,
+    )?;
+    let shared_head = if ct.has_tensor(&format!("{prefix}.nextn.shared_head_head.weight")) {
+        gguf_qmm(ct.tensor(&format!("{prefix}.nextn.shared_head_head.weight"), dev)?)?
+    } else if ct.has_tensor("output.weight") {
+        gguf_qmm(ct.tensor("output.weight", dev)?)?
+    } else {
+        gguf_qmm(ct.tensor("token_embd.weight", dev)?)?
+    };
+    let embed_tokens = if ct.has_tensor(&format!("{prefix}.nextn.embed_tokens.weight")) {
+        let w = ct
+            .tensor(&format!("{prefix}.nextn.embed_tokens.weight"), dev)?
+            .dequantize(dev)?;
+        Some(Embedding::new(w, props.embedding_length))
+    } else {
+        None
+    };
+
+    Ok(MtpLayer {
+        enorm,
+        hnorm,
+        eh_proj,
+        attn_norm,
+        attn,
+        post_attention_norm,
+        mlp,
+        shared_head_norm,
+        shared_head,
+        embed_tokens,
+    })
 }
 
 impl ModelWeights {
@@ -961,9 +1203,101 @@ impl ModelWeights {
         }
 
         let x = x.to_device(&self.device)?;
+
+        // Capture the pre-final-norm residual hidden for MTP (matches llama.cpp's nextn `h` input,
+        // which is the unnormalized residual stream, re-normalized by the nextn block's hnorm).
+        if self.mtp.is_some() {
+            if let Ok(mut guard) = self.last_spec_hidden.lock() {
+                *guard = Some(extract_logits(&x, context_lens.clone())?);
+            }
+        }
+
         let x = self.norm.forward(&x)?;
         let x = extract_logits(&x, context_lens)?;
         self.output.forward(&x.contiguous()?)
+    }
+
+    pub fn has_mtp(&self) -> bool {
+        self.mtp.is_some()
+    }
+
+    pub fn mtp_n_predict_default(&self) -> usize {
+        self.mtp.as_ref().map(|m| m.layers.len()).unwrap_or(0)
+    }
+
+    /// Embed token ids through the nextn block's own embedding if present, else the main embedding.
+    pub fn mtp_embed(&self, input_ids: &Tensor) -> Result<Tensor> {
+        match self.mtp.as_ref().and_then(|m| m.layers.first()) {
+            Some(layer) => match &layer.embed_tokens {
+                Some(e) => e.forward(input_ids),
+                None => self.tok_embeddings.forward(input_ids),
+            },
+            None => self.tok_embeddings.forward(input_ids),
+        }
+    }
+
+    pub fn last_spec_hidden(&self) -> Option<Tensor> {
+        self.last_spec_hidden.lock().ok().and_then(|h| h.clone())
+    }
+
+    /// Read the donor layer's cached K/V (positions 0..len) for one sequence, returning
+    /// `(k, v)` shaped `(1, n_kv_head, len, head_dim)` for the nextn attention to attend over.
+    pub fn mtp_donor_kv(&self) -> Result<(Tensor, Tensor)> {
+        let mtp = self
+            .mtp
+            .as_ref()
+            .ok_or_else(|| hanzo_ml::Error::Msg("model has no MTP layers".to_string()))?;
+        let mut hybrid_cache = self.cache.hybrid();
+        let Some(HybridLayerCache::Attention(kv)) = hybrid_cache.get_mut(mtp.donor_layer) else {
+            hanzo_ml::bail!("MTP donor layer {} is not an attention layer", mtp.donor_layer);
+        };
+        let k = kv
+            .k()?
+            .ok_or_else(|| hanzo_ml::Error::Msg("MTP donor K cache is empty".to_string()))?;
+        let v = kv
+            .v()?
+            .ok_or_else(|| hanzo_ml::Error::Msg("MTP donor V cache is empty".to_string()))?;
+        Ok((k, v))
+    }
+
+    /// One nextn forward step. Mirrors llama.cpp `qwen35moe.cpp` `graph_mtp`:
+    /// fuse (enorm(tok_embd), hnorm(hidden)) via eh_proj, run the gated attention over the donor
+    /// KV cache, MoE FFN, then the nextn LM head. Returns `(logits, next_hidden)` where
+    /// `next_hidden` is the pre-final-norm residual to seed the following step.
+    pub fn mtp_step(
+        &self,
+        input_embed: &Tensor,
+        hidden: &Tensor,
+        donor_k: &Tensor,
+        donor_v: &Tensor,
+        position: usize,
+    ) -> Result<(Tensor, Tensor)> {
+        let mtp = self
+            .mtp
+            .as_ref()
+            .ok_or_else(|| hanzo_ml::Error::Msg("model has no MTP layers".to_string()))?;
+        let layer = &mtp.layers[0];
+
+        let e_norm = layer.enorm.forward(input_embed)?;
+        let h_norm = layer.hnorm.forward(hidden)?;
+        let concat = Tensor::cat(&[&e_norm, &h_norm], D::Minus1)?;
+        let cur = layer.eh_proj.forward(&concat.contiguous()?)?;
+
+        let residual = cur.clone();
+        let normed = layer.attn_norm.forward(&cur)?;
+        let attn_out = layer
+            .attn
+            .forward_donor(&normed, donor_k, donor_v, position)?;
+        let cur = (attn_out + residual)?;
+
+        let residual = &cur;
+        let normed = layer.post_attention_norm.forward(&cur)?;
+        let ffn_out = layer.mlp.forward(&normed)?;
+        let next_hidden = (ffn_out + residual)?;
+
+        let normed = layer.shared_head_norm.forward(&next_hidden)?;
+        let logits = layer.shared_head.forward(&normed.contiguous()?)?;
+        Ok((logits, next_hidden))
     }
 
     /// Build text-only mRoPE cos/sin. position_ids shape (3, batch, seq) with all three temporal/
