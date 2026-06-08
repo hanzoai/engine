@@ -602,7 +602,7 @@ impl NormalModel for Llama {
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
     }
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "metal"))]
     fn supports_cuda_decode_graphs(&self) -> bool {
         true
     }
