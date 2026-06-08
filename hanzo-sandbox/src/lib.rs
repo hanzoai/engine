@@ -34,7 +34,7 @@ pub use null::NullSandbox;
 
 /// Environment variable that overrides the configured sandbox mode at runtime.
 /// Accepted values: `auto`, `on`, `off`. Case-insensitive.
-pub const SANDBOX_ENV_VAR: &str = "SANDBOX";
+pub const SANDBOX_ENV_VAR: &str = "HANZO_SANDBOX";
 pub const DEFAULT_MAX_MEMORY_MB: u64 = 2048;
 pub const DEFAULT_MAX_CPU_SECS: u64 = 300;
 pub const DEFAULT_MAX_PROCS: u32 = 64;
