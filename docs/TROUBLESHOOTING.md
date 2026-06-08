@@ -7,7 +7,7 @@ Common issues and solutions for Hanzo Engine.
 Enable debug mode for more information:
 
 ```bash
-DEBUG=1 hanzo run -m <model>
+HANZO_DEBUG=1 hanzo run -m <model>
 ```
 
 Debug mode causes:
@@ -70,13 +70,13 @@ This checks your system configuration and reports any issues.
 - By default, Metal kernels are precompiled during build time for better performance
 - To skip precompilation (useful for CI or when Metal is not needed):
   ```bash
-  METAL_PRECOMPILE=0 cargo build --release --features metal
+  HANZO_METAL_PRECOMPILE=0 cargo build --release --features metal
   ```
 
 ### Memory Issues
 
 **Disabling mmap loading:**
-- Set `NO_MMAP=1` to disable memory-mapped file loading
+- Set `HANZO_NO_MMAP=1` to disable memory-mapped file loading
 - Forces all tensor data into memory
 - Useful if you're seeing mmap-related errors
 
