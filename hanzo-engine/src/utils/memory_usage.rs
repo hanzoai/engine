@@ -120,7 +120,7 @@ impl MemoryUsage {
 
 #[cfg(feature = "cuda")]
 fn igpu_memory_fraction() -> f64 {
-    std::env::var("IGPU_MEMORY_FRACTION")
+    std::env::var("HANZO_IGPU_MEMORY_FRACTION")
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
         .and_then(|f| {
