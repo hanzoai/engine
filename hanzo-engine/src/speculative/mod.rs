@@ -2,6 +2,7 @@ pub mod cache;
 pub mod config;
 pub mod driver;
 pub mod logging;
+pub mod mtp_quantized;
 pub mod proposer;
 pub(crate) mod staging;
 pub mod target;
