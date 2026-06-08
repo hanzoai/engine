@@ -94,6 +94,7 @@ reqwest = { version = "0.13.1", default-features = false, features = [
     "http2",
 ] }
 base64 = "0.22.1"
+ed25519-dalek = { version = "2.1.1", default-features = false, features = ["rand_core"] }
 half = "2.7.1"
 rayon = "1.11.0"
 url = "2.5.8"
