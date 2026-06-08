@@ -29,12 +29,17 @@ use crate::pipeline::cuda_graph::{
     restore_event_tracking_after_capture, CudaDecodeGraphKey, CudaDecodeGraphMetadataBuffers,
     CudaGraphHandle, CUDA_DECODE_GRAPH_CACHE_CAPACITY,
 };
+#[cfg(feature = "metal")]
+use crate::pipeline::metal_graph::{
+    metal_decode_graphs_enabled, MetalDecodeGraphKey, MetalDecodeGraphMetadataBuffers,
+    METAL_DECODE_GRAPH_CACHE_CAPACITY,
+};
 use crate::pipeline::isq::{UqffFullSer, WeightLoadingMode, WeightLoadingState};
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::{make_prompt_chunk, InputMetadata};
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "metal"))]
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{get_chat_template, Modalities, ModelForwardContext, SupportedModality};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
@@ -67,7 +72,7 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "metal"))]
 use std::sync::Mutex as StdMutex;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -89,6 +94,8 @@ pub struct NormalPipeline {
     organization: IsqOrganization,
     #[cfg(feature = "cuda")]
     cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
+    #[cfg(feature = "metal")]
+    metal_decode_graph: StdMutex<MetalDecodeGraphState>,
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
     generation_config: Option<PathBuf>,
@@ -113,6 +120,23 @@ struct CudaDecodeGraphEntry {
     metadata_buffers: CudaDecodeGraphMetadataBuffers,
     _metadata: PagedAttentionInputMetadata,
     logits: Tensor,
+}
+
+#[cfg(feature = "metal")]
+#[derive(Default)]
+struct MetalDecodeGraphState {
+    entries: Vec<MetalDecodeGraphEntry>,
+    disabled: bool,
+}
+
+#[cfg(feature = "metal")]
+struct MetalDecodeGraphEntry {
+    key: MetalDecodeGraphKey,
+    input_ids: Var,
+    metadata_buffers: MetalDecodeGraphMetadataBuffers,
+    /// Owns the rebound metadata that references the stable device buffers. Kept
+    /// alive so the cached tensors (and thus the Metal buffers) outlive the entry.
+    metadata: PagedAttentionInputMetadata,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -1062,6 +1086,8 @@ impl Loader for NormalLoader {
             organization: self.config.organization,
             #[cfg(feature = "cuda")]
             cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
+            #[cfg(feature = "metal")]
+            metal_decode_graph: StdMutex::new(MetalDecodeGraphState::default()),
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
             generation_defaults,
@@ -1188,6 +1214,14 @@ impl MetadataMixin for NormalPipeline {
             self.cuda_decode_graph
                 .lock()
                 .expect("CUDA graph mutex poisoned")
+                .entries
+                .clear();
+        }
+        #[cfg(feature = "metal")]
+        {
+            self.metal_decode_graph
+                .lock()
+                .expect("Metal graph mutex poisoned")
                 .entries
                 .clear();
         }
@@ -1428,6 +1462,130 @@ impl NormalPipeline {
     }
 }
 
+#[cfg(feature = "metal")]
+impl NormalPipeline {
+    /// Metal decode fast path, mirroring [`Self::try_cuda_decode_graph_forward`].
+    ///
+    /// Unlike CUDA, there is no `cudaGraphLaunch` analog: a "replay" re-runs the model
+    /// forward with the cached, stable metadata buffers whose contents were refreshed
+    /// in place by [`MetalDecodeGraphMetadataBuffers::copy_from`]. Because the bucketed
+    /// key guarantees identical shapes/dtypes/launch geometry, the re-encoded command
+    /// stream is identical to the warmed step, and the per-token CPU cost is the cheap
+    /// re-encode plus the in-place buffer updates rather than rebuilding metadata
+    /// tensors. See `metal_graph.rs` for the rationale and validation notes.
+    fn try_metal_decode_graph_forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        position_ids: &[usize],
+        paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_meta: &FlashParams,
+    ) -> hanzo_ml::Result<Option<Tensor>> {
+        if !metal_decode_graphs_enabled() || !self.model.supports_metal_decode_graphs() {
+            return Ok(None);
+        }
+        if self.model.has_speculative_proposer() {
+            return Ok(None);
+        }
+        let Some((kv_cache, metadata)) = paged_attn_meta else {
+            return Ok(None);
+        };
+        if metadata.is_first_prompt_chunk
+            || metadata.disable_cuda_graphs
+            || metadata.num_cached_tokens.is_some()
+        {
+            return Ok(None);
+        }
+        let (batch, q_len) = input_ids.dims2()?;
+        if q_len != 1
+            || seqlen_offsets.len() != batch
+            || context_lens.len() != batch
+            || position_ids.len() != batch
+            || !input_ids.device().is_metal()
+        {
+            return Ok(None);
+        }
+        let Some(cache_config) = self.metadata.cache_config.as_ref() else {
+            return Ok(None);
+        };
+        let key = MetalDecodeGraphKey::new(input_ids, metadata, cache_config.block_size)?;
+
+        let mut state = self
+            .metal_decode_graph
+            .lock()
+            .expect("Metal graph mutex poisoned");
+        if state.disabled {
+            return Ok(None);
+        }
+
+        if let Some(pos) = state.entries.iter().position(|entry| entry.key == key) {
+            // Replay: refresh the stable buffers in place, then re-run the forward.
+            let mut entry = state.entries.remove(pos);
+            entry.input_ids.set(input_ids)?;
+            entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
+            let graph_input_ids = entry.input_ids.as_detached_tensor();
+            let mut ctx = ModelForwardContext::new(
+                seqlen_offsets,
+                context_lens,
+                position_ids,
+                Some((kv_cache.as_slice(), &entry.metadata)),
+                flash_meta,
+            );
+            let logits = self.model.forward(&graph_input_ids, &mut ctx)?;
+            state.entries.push(entry);
+            return Ok(Some(logits));
+        }
+
+        // Warm a new entry: allocate the stable device buffers and rebind metadata to
+        // them, run the forward once so all pipelines/buffers are realized + cached,
+        // then cache the entry. Mirrors the CUDA warmup forward that precedes capture.
+        let Device::Metal(_) = input_ids.device() else {
+            return Ok(None);
+        };
+        let warm_input_ids = Var::from_tensor(input_ids)?;
+        let (metadata_buffers, bound_metadata) = MetalDecodeGraphMetadataBuffers::new(
+            metadata,
+            seqlen_offsets,
+            cache_config.block_size,
+        )?;
+        let entry = MetalDecodeGraphEntry {
+            key,
+            input_ids: warm_input_ids,
+            metadata_buffers,
+            metadata: bound_metadata,
+        };
+        let graph_input_ids = entry.input_ids.as_detached_tensor();
+        let mut ctx = ModelForwardContext::new(
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            Some((kv_cache.as_slice(), &entry.metadata)),
+            flash_meta,
+        );
+        let warmup_logits = self.model.forward(&graph_input_ids, &mut ctx)?;
+        input_ids.device().synchronize()?;
+
+        if state.entries.len() >= METAL_DECODE_GRAPH_CACHE_CAPACITY {
+            state.entries.remove(0);
+        }
+        state.entries.push(entry);
+        Ok(Some(warmup_logits))
+    }
+
+    fn disable_metal_decode_graph(&self, err: &hanzo_ml::Error) {
+        let mut state = self
+            .metal_decode_graph
+            .lock()
+            .expect("Metal graph mutex poisoned");
+        if !state.disabled {
+            warn!("Metal decode graphs disabled after warm/replay error: {err}");
+        }
+        state.disabled = true;
+        state.entries.clear();
+    }
+}
+
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
     fn forward_inputs(
@@ -1480,6 +1638,24 @@ impl Pipeline for NormalPipeline {
                         }
                         Ok(None) => {}
                         Err(err) => self.disable_cuda_decode_graph(&err),
+                    }
+                }
+
+                #[cfg(feature = "metal")]
+                if !return_raw_logits {
+                    match self.try_metal_decode_graph_forward(
+                        &input_ids,
+                        &seqlen_offsets,
+                        &context_lens,
+                        &position_ids,
+                        paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
+                        &flash_meta,
+                    ) {
+                        Ok(Some(logits)) => {
+                            return Ok(ForwardInputsResult::CausalGeneration { logits })
+                        }
+                        Ok(None) => {}
+                        Err(err) => self.disable_metal_decode_graph(&err),
                     }
                 }
 
