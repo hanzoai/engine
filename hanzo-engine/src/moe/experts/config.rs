@@ -58,7 +58,7 @@ impl BackendChoice {
 
 impl MoEExpertsBackend {
     fn from_env() -> Option<Self> {
-        let force = std::env::var("MOE_BACKEND").ok()?;
+        let force = std::env::var("MISTRALRS_MOE_BACKEND").ok()?;
         Some(match force.as_str() {
             "fused" | "native" | "legacy" | "wmma" => Self::Fused,
             "fast" => Self::Fast,

@@ -117,7 +117,7 @@ MLA compresses the KV cache for DeepSeek V2/V3 and GLM-4.7-Flash models, reducin
 - PagedAttention is enabled
 - Running on CUDA
 
-Disable with `NO_MLA=1` if needed.
+Disable with `HANZO_NO_MLA=1` if needed.
 
 > Full reference: [MLA](MLA.md)
 
@@ -132,13 +132,13 @@ hanzo auto-detects multiple CUDA GPUs and uses tensor parallelism via NCCL. No c
 hanzo serve -m <large-model>
 
 # Or specify GPU count
-MN_LOCAL_WORLD_SIZE=2 hanzo serve -m <large-model>
+HANZO_MN_LOCAL_WORLD_SIZE=2 hanzo serve -m <large-model>
 ```
 
 If the model doesn't fit on GPUs even with parallelism, disable NCCL to use automatic device mapping (GPU + CPU offloading):
 
 ```bash
-NO_NCCL=1 hanzo serve --isq 4 -m <large-model>
+HANZO_NO_NCCL=1 hanzo serve --isq 4 -m <large-model>
 ```
 
 **Multiple machines:** Use the [Ring backend](DISTRIBUTED/RING.md) for cross-machine inference over TCP.
