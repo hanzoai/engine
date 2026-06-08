@@ -84,20 +84,32 @@ fn main() {
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
         let rocm_path = std::env::var("ROCM_PATH").unwrap_or_else(|_| "/opt/rocm".to_string());
+        // The Windows ROCm SDK ships hipcc.exe / hipcc.bat (not an extensionless
+        // `hipcc`), so probe the real filenames before falling back to PATH.
         let hipcc = {
-            let p = PathBuf::from(&rocm_path).join("bin/hipcc");
-            if p.exists() {
-                p.to_string_lossy().into_owned()
-            } else {
-                "hipcc".to_string()
-            }
+            let bin = PathBuf::from(&rocm_path).join("bin");
+            ["hipcc.exe", "hipcc.bat", "hipcc"]
+                .iter()
+                .map(|n| bin.join(n))
+                .find(|p| p.exists())
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "hipcc".to_string())
         };
         let gfx = std::env::var("ROCM_GFX_ARCH").unwrap_or_else(|_| "gfx1151".to_string());
 
         // Compile the HIP sort/topk kernels into a relocatable object.
+        // `-fPIC` is rejected by the windows-msvc clang target ("unsupported
+        // option '-fPIC'"); code there is position-independent by default.
+        let is_windows = std::env::var("CARGO_CFG_TARGET_OS")
+            .map(|s| s == "windows")
+            .unwrap_or(cfg!(windows));
         let obj = build_dir.join("sort.hip.o");
-        let status = Command::new(&hipcc)
-            .args(["-c", "-std=c++17", "-O3", "-fPIC"])
+        let mut cmd = Command::new(&hipcc);
+        cmd.args(["-c", "-std=c++17", "-O3"]);
+        if !is_windows {
+            cmd.arg("-fPIC");
+        }
+        let status = cmd
             .arg(format!("--offload-arch={gfx}"))
             .arg("src/rocm/sort.hip.cpp")
             .arg("-o")
@@ -110,21 +122,45 @@ fn main() {
         );
 
         // Archive into a static library so the Rust linker pulls in the fatbin.
-        let lib = build_dir.join("libhanzorocm.a");
+        // windows-msvc rustc resolves `static=hanzorocm` to `hanzorocm.lib`, while
+        // GNU targets want `libhanzorocm.a`. The Windows ROCm SDK ships `llvm-ar`
+        // (there is no Unix `ar`); llvm-ar writes a COFF archive link.exe accepts.
+        let is_windows = std::env::var("CARGO_CFG_TARGET_OS")
+            .map(|s| s == "windows")
+            .unwrap_or(cfg!(windows));
+        let lib = build_dir.join(if is_windows { "hanzorocm.lib" } else { "libhanzorocm.a" });
         let _ = std::fs::remove_file(&lib);
-        let status = Command::new("ar")
+        let ar = {
+            let bin = PathBuf::from(&rocm_path).join("bin");
+            let cands: &[&str] = if is_windows {
+                &["llvm-ar.exe", "llvm-ar"]
+            } else {
+                &["ar"]
+            };
+            cands
+                .iter()
+                .map(|n| bin.join(n))
+                .find(|p| p.exists())
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| if is_windows { "llvm-ar".into() } else { "ar".into() })
+        };
+        let status = Command::new(&ar)
             .arg("rcs")
             .arg(&lib)
             .arg(&obj)
             .status()
-            .expect("failed to invoke ar to archive sort.hip.o");
-        assert!(status.success(), "ar failed to archive sort.hip.o");
+            .expect("failed to invoke ar/llvm-ar to archive sort.hip.o");
+        assert!(status.success(), "ar/llvm-ar failed to archive sort.hip.o");
 
         println!("cargo:rustc-link-search=native={}", build_dir.display());
         println!("cargo:rustc-link-lib=static=hanzorocm");
         println!("cargo:rustc-link-search=native={rocm_path}/lib");
         println!("cargo:rustc-link-lib=dylib=amdhip64");
-        println!("cargo:rustc-link-lib=dylib=stdc++");
+        // libstdc++ is the HIP/clang C++ runtime on GNU targets; windows-msvc
+        // links the MSVC C++ runtime automatically and ships no stdc++.lib.
+        if !is_windows {
+            println!("cargo:rustc-link-lib=dylib=stdc++");
+        }
     }
 }
 
@@ -190,7 +226,7 @@ fn set_git_revision() {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".to_string());
 
-    println!("cargo:rustc-env=GIT_REVISION={commit}");
+    println!("cargo:rustc-env=HANZO_GIT_REVISION={commit}");
     println!("cargo:rerun-if-changed=.git/HEAD");
     if let Ok(head) = std::fs::read_to_string(".git/HEAD") {
         if let Some(ref_path) = head.strip_prefix("ref:") {

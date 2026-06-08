@@ -57,11 +57,13 @@ struct LayerWeights {
 }
 
 impl LayerWeights {
+    #[allow(clippy::too_many_arguments)]
     fn forward_attn(
         &self,
         x: &Tensor,
         mask: &AttentionMask,
         start_offsets: &[usize],
+        positions: &Tensor,
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
@@ -89,15 +91,39 @@ impl LayerWeights {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary.forward_qk_norm(
-            &q,
-            &k,
-            self.q_norm.weight(),
-            self.k_norm.weight(),
-            self.q_norm.eps(),
-            self.k_norm.eps(),
-            start_offsets,
-        )?;
+        // Decode (single new token) uses a DEVICE positions tensor so the RoPE
+        // index is read from device memory rather than baked into the launch
+        // from a host `start_offsets` scalar — the prerequisite for capturing
+        // the decode step (paged attention already reads context_lens on the
+        // device). The prompt/prefill path keeps the host-offset form, which
+        // feeds the same offsets into the causal mask.
+        let (q, k) = if seq_len == 1 {
+            // Keep positions on the same device as q/k (handles device mapping).
+            let positions = if positions.device().same_device(q.device()) {
+                positions.clone()
+            } else {
+                positions.to_device(q.device())?
+            };
+            self.rotary.forward_qk_norm_positions(
+                &q,
+                &k,
+                self.q_norm.weight(),
+                self.k_norm.weight(),
+                self.q_norm.eps(),
+                self.k_norm.eps(),
+                &positions,
+            )?
+        } else {
+            self.rotary.forward_qk_norm(
+                &q,
+                &k,
+                self.q_norm.weight(),
+                self.k_norm.weight(),
+                self.q_norm.eps(),
+                self.k_norm.eps(),
+                start_offsets,
+            )?
+        };
 
         let (q, k, v) = (
             q.to_dtype(self.dtype)?,
@@ -107,6 +133,17 @@ impl LayerWeights {
 
         let y = match &self.paged_attn {
             Some(paged_attn) => {
+                // One-time confirmation that the Qwen3 GGUF decode is running
+                // through PagedAttention (not the SingleCache + Sdpa eager path)
+                // and that the decode RoPE uses device positions. Emitted once.
+                if seq_len == 1 {
+                    static PAGED_DECODE_ONCE: std::sync::Once = std::sync::Once::new();
+                    PAGED_DECODE_ONCE.call_once(|| {
+                        eprintln!(
+                            "[hanzo] qwen3 GGUF decode: PagedAttention ACTIVE; RoPE via device positions (graph-safe)"
+                        );
+                    });
+                }
                 let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
                 paged_attn.forward(
                     &q,
@@ -404,6 +441,35 @@ impl ModelWeights {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut layer_in = self.tok_embeddings.forward(x)?;
+        // Build the RoPE positions tensor once per step on the model device from
+        // the host `start_offsets` (one position per sequence). The decode path
+        // (seq_len == 1) reads these from device memory instead of baking the
+        // offset into the launch; mirrors ModelForwardContext::rope_positions_from_offsets.
+        //
+        // When the caller supplies `metadata.rope_positions` (the ROCm/CUDA decode
+        // graph path), use that *stable* device tensor verbatim instead of
+        // synthesizing a fresh allocation here: a graph captures the kernels reading
+        // a fixed buffer, and the graph runner refreshes that buffer's contents in
+        // place between replays (see pipeline/rocm_graph.rs). Synthesizing a new
+        // tensor each forward would freeze the captured positions at the warmup
+        // value and corrupt every replayed token. Falls back to the host-offset
+        // form for prefill and the non-graph decode path.
+        let positions = match metadata
+            .as_ref()
+            .and_then(|(_, meta)| meta.rope_positions.as_ref())
+            .and_then(|positions| positions.get(&self.device.location()))
+        {
+            Some(positions) => positions.clone(),
+            None => {
+                let pos = start_offsets
+                    .iter()
+                    .copied()
+                    .map(u32::try_from)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(hanzo_ml::Error::wrap)?;
+                Tensor::from_vec(pos, start_offsets.len(), &self.device)?
+            }
+        };
         let cache = &mut self.cache.normal().0;
         let mask = CausalMasker.make_causal_mask(
             x,
@@ -439,6 +505,7 @@ impl ModelWeights {
                 &x,
                 &mask.get(x.device()),
                 start_offsets,
+                &positions,
                 &mut cache[i],
                 metadata
                     .as_ref()

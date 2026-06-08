@@ -29,7 +29,7 @@ pub fn packed_shape(height: usize, width: usize) -> (usize, usize, usize) {
 }
 
 // Unpack (b, frame*ph*pw, z_dim*patch^2) back to a latent (b, z_dim, frame, h, w).
-// Images use frame=1, so we fold frame into batch to stay within the 6-dim reshape limit.
+// Images use frame=1, so we fold frame into batch to stay within candle's 6-dim reshape limit.
 pub fn unpack(xs: &Tensor, height: usize, width: usize, z_dim: usize) -> Result<Tensor> {
     let (b, _seq, _c) = xs.dims3()?;
     let (frame, ph, pw) = packed_shape(height, width);
