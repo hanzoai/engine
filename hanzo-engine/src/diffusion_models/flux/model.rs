@@ -5,7 +5,9 @@ use hanzo_nn::{LayerNorm, Linear, RmsNorm};
 use hanzo_quant::ShardedVarBuilder;
 use serde::Deserialize;
 
+use crate::attention::{AttentionMask, Sdpa, SdpaParams};
 use crate::layers::{self, MatMul};
+use crate::pipeline::text_models_inputs_processor::FlashParams;
 
 const MLP_RATIO: f64 = 4.;
 const HIDDEN_SIZE: usize = 3072;
@@ -44,6 +46,37 @@ fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Te
     attn_scores.reshape(batch_dims)
 }
 
+// Flux joint attention is full bidirectional (non-causal, no mask) over [text; image] tokens. Route
+// through the engine's fused Sdpa (the Metal steel/flash kernel for head_dim in {32,64,72,80,96,128,
+// 256}) instead of the unfused matmul+softmax+matmul. q,k,v are [B, n_head, seq, head_dim]; the
+// kernel needs them contiguous and same-dtype (it natively supports f16/bf16/f32). Falls back to the
+// generic SDPA for any shape/dtype the fused path can't take, preserving correctness.
+fn sdpa_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+    let head_dim = q.dim(D::Minus1)?;
+    let sdpa_params = SdpaParams {
+        n_kv_groups: 1,
+        sliding_window: None,
+        softcap: None,
+        softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+        sinks: None,
+    };
+    let flash_params = FlashParams::empty(false);
+    let q = q.contiguous()?;
+    let k = k.contiguous()?;
+    let v = v.contiguous()?;
+    match Sdpa.run_attention(
+        &q,
+        &k,
+        &v,
+        &AttentionMask::None,
+        Some(&flash_params),
+        &sdpa_params,
+    ) {
+        Ok(out) => Ok(out),
+        Err(_) => scaled_dot_product_attention(&q, &k, &v),
+    }
+}
+
 fn rope(pos: &Tensor, dim: usize, theta: usize) -> Result<Tensor> {
     if dim % 2 == 1 {
         hanzo_ml::bail!("dim {dim} is odd")
@@ -79,7 +112,7 @@ fn apply_rope(x: &Tensor, freq_cis: &Tensor) -> Result<Tensor> {
 fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> {
     let q = apply_rope(q, pe)?.contiguous()?;
     let k = apply_rope(k, pe)?.contiguous()?;
-    let x = scaled_dot_product_attention(&q, &k, v)?;
+    let x = sdpa_attention(&q, &k, v)?;
     x.transpose(1, 2)?.flatten_from(2)
 }
 
