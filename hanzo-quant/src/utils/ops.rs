@@ -2847,7 +2847,22 @@ pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resul
         );
     }
 
-    // ROCm, Vulkan, and wgpu have no fused-glu kernel; decompose to eager `activation(a) * b`
+    // ROCm has a fused silu(a)*b kernel (the SwiGLU hot path); use it for Silu, otherwise decompose.
+    #[cfg(feature = "rocm")]
+    if a.device().is_rocm() {
+        if matches!(activation, GluActivationType::Silu) {
+            return hanzo_nn::ops::silu_mul(&a, &b);
+        }
+        let act = match activation {
+            GluActivationType::Silu => unreachable!(),
+            GluActivationType::Gelu => a.gelu()?,
+            GluActivationType::GeluErf => a.gelu_erf()?,
+            GluActivationType::Relu => a.relu()?,
+        };
+        return act.mul(&b);
+    }
+
+    // Vulkan and wgpu have no fused-glu kernel; decompose to eager `activation(a) * b`
     // (uses the backend's native unary + multiply kernels).
     if a.device().is_rocm() || a.device().is_vulkan() || a.device().is_wgpu() {
         let act = match activation {
