@@ -31,6 +31,8 @@ pub async fn run_server(
     sandbox: SandboxOptions,
     global: GlobalOptions,
 ) -> Result<()> {
+    enforce_license_or_abort();
+
     initialize_logging();
 
     agent_options.apply_to(&mut runtime);
@@ -161,6 +163,37 @@ pub async fn run_server(
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// License gate. With `license-enforce`, verify a valid Hanzo license for this build's app or
+/// hard-exit before doing any work. Without it (dev/CLI/perf), this is a no-op (a one-line note).
+/// Called before `initialize_logging()`, so it uses stderr rather than `tracing`.
+#[cfg(feature = "license-enforce")]
+fn enforce_license_or_abort() {
+    match hanzo_engine::load_and_verify_license() {
+        Ok(license) => {
+            eprintln!(
+                "license OK: app={} holder={} exp={}",
+                license.app_id, license.holder, license.exp
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "FATAL: engine license verification failed: {e}. \
+                 This engine build ({}) requires a valid Hanzo-issued license token \
+                 (set {} or {}). Refusing to start.",
+                hanzo_engine::LICENSE_EXPECTED_APP_ID,
+                hanzo_engine::license::LICENSE_TOKEN_ENV,
+                hanzo_engine::license::LICENSE_FILE_ENV,
+            );
+            std::process::exit(78); // EX_CONFIG
+        }
+    }
+}
+
+#[cfg(not(feature = "license-enforce"))]
+fn enforce_license_or_abort() {
+    eprintln!("license enforcement disabled (dev build)");
 }
 
 pub(crate) fn log_api_surfaces(host: &str, port: u16) {
