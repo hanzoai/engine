@@ -87,7 +87,7 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variants.cuh");
 
     let header_hash_arg = format!(
-        "-DCUDA_HEADER_HASH={:016x}",
+        "-DMISTRALRS_CUDA_HEADER_HASH={:016x}",
         cuda_header_hash("src/cuda")?
     );
 
@@ -172,13 +172,13 @@ fn main() -> Result<(), String> {
 
     // Check if precompilation should be skipped
     // https://github.com/hanzoai/engine/pull/1311#issuecomment-3001309885
-    println!("cargo:rerun-if-env-changed=METAL_PRECOMPILE");
-    let skip_precompile = env::var("METAL_PRECOMPILE")
+    println!("cargo:rerun-if-env-changed=HANZO_METAL_PRECOMPILE");
+    let skip_precompile = env::var("HANZO_METAL_PRECOMPILE")
         .map(|v| v == "0" || v.to_lowercase() == "false")
         .unwrap_or(false);
 
     if skip_precompile {
-        println!("cargo:warning=Skipping Metal kernel precompilation (METAL_PRECOMPILE=0)");
+        println!("cargo:warning=Skipping Metal kernel precompilation (HANZO_METAL_PRECOMPILE=0)");
         // Write a dummy metallib file to satisfy the include_bytes! macro
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
         std::fs::write(out_dir.join("hanzo_paged_attention.metallib"), []).unwrap();
@@ -315,7 +315,125 @@ fn main() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
+// ROCm/HIP backend: compile the v1 decode + reshape_and_cache HIP kernels with
+// hipcc --offload-arch=$ROCM_GFX_ARCH and archive them into a static lib that
+// the Rust linker pulls in. Mirrors hanzo-engine/build.rs's sort.hip.cpp path.
+#[cfg(feature = "rocm")]
+fn main() -> Result<()> {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    println!("cargo::rustc-check-cfg=cfg(has_fp8)");
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src/rocm/paged_attention.hip.cpp");
+    println!("cargo:rerun-if-changed=src/rocm/reshape_and_cache.hip.cpp");
+    println!("cargo:rerun-if-env-changed=ROCM_PATH");
+    println!("cargo:rerun-if-env-changed=ROCM_GFX_ARCH");
+
+    let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let rocm_path = std::env::var("ROCM_PATH")
+        .or_else(|_| std::env::var("HIP_PATH"))
+        .unwrap_or_else(|_| "/opt/rocm".to_string());
+
+    // The Windows ROCm SDK ships hipcc.exe / hipcc.bat (not an extensionless
+    // `hipcc`), so probe the real filenames before falling back to PATH.
+    let hipcc = {
+        let bin = PathBuf::from(&rocm_path).join("bin");
+        ["hipcc.exe", "hipcc.bat", "hipcc"]
+            .iter()
+            .map(|n| bin.join(n))
+            .find(|p| p.exists())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "hipcc".to_string())
+    };
+    let gfx = std::env::var("ROCM_GFX_ARCH").unwrap_or_else(|_| "gfx1151".to_string());
+
+    let is_windows = std::env::var("CARGO_CFG_TARGET_OS")
+        .map(|s| s == "windows")
+        .unwrap_or(cfg!(windows));
+
+    let sources = ["paged_attention", "reshape_and_cache"];
+    let mut objs: Vec<PathBuf> = Vec::new();
+    for src in sources {
+        // `-fPIC` is rejected by the windows-msvc clang target ("unsupported
+        // option '-fPIC'"); code there is position-independent by default.
+        let obj = build_dir.join(format!("{src}.hip.o"));
+        let mut cmd = Command::new(&hipcc);
+        cmd.args(["-c", "-std=c++17", "-O3"]);
+        if !is_windows {
+            cmd.arg("-fPIC");
+        }
+        let status = cmd
+            .arg(format!("--offload-arch={gfx}"))
+            .arg(format!("src/rocm/{src}.hip.cpp"))
+            .arg("-o")
+            .arg(&obj)
+            .status()
+            .unwrap_or_else(|e| panic!("failed to invoke hipcc for src/rocm/{src}.hip.cpp: {e}"));
+        assert!(
+            status.success(),
+            "hipcc failed to compile src/rocm/{src}.hip.cpp"
+        );
+        objs.push(obj);
+    }
+
+    // Archive into a static library so the Rust linker pulls in the fatbin.
+    // windows-msvc rustc resolves `static=hanzopagedattnrocm` to a `.lib`, GNU
+    // targets want `lib*.a`. The Windows ROCm SDK ships `llvm-ar` (no Unix `ar`).
+    let lib = build_dir.join(if is_windows {
+        "hanzopagedattnrocm.lib"
+    } else {
+        "libhanzopagedattnrocm.a"
+    });
+    let _ = std::fs::remove_file(&lib);
+    let ar = {
+        let bin = PathBuf::from(&rocm_path).join("bin");
+        let cands: &[&str] = if is_windows {
+            &["llvm-ar.exe", "llvm-ar"]
+        } else {
+            &["ar"]
+        };
+        cands
+            .iter()
+            .map(|n| bin.join(n))
+            .find(|p| p.exists())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| if is_windows { "llvm-ar".into() } else { "ar".into() })
+    };
+    let mut ar_cmd = Command::new(&ar);
+    ar_cmd.arg("rcs").arg(&lib);
+    for obj in &objs {
+        ar_cmd.arg(obj);
+    }
+    let status = ar_cmd
+        .status()
+        .expect("failed to invoke ar/llvm-ar to archive hip objects");
+    assert!(status.success(), "ar/llvm-ar failed to archive hip objects");
+
+    println!("cargo:rustc-link-search=native={}", build_dir.display());
+    println!("cargo:rustc-link-lib=static=hanzopagedattnrocm");
+    println!("cargo:rustc-link-search=native={rocm_path}/lib");
+    println!("cargo:rustc-link-lib=dylib=amdhip64");
+    // rocm-rs (pulled in transitively via hanzo-ml/rocm) only emits its
+    // cargo:rustc-link-lib directives when bindgen runs; with SKIP_BINDGEN=1
+    // (required to build on Windows ROCm 7.x) its build script returns early and
+    // emits nothing, so the ROCm math libs it references go unresolved at the
+    // final link. Emit them here from the leaf crate's build script. MIOpen is
+    // intentionally omitted: it does not ship in the Windows ROCm 7.x SDK.
+    for lib in ["rocblas", "rocfft", "rocsparse", "rocrand"] {
+        println!("cargo:rustc-link-lib=dylib={lib}");
+    }
+    if !is_windows {
+        println!("cargo:rustc-link-lib=dylib=stdc++");
+    }
+    Ok(())
+}
+
+#[cfg(not(any(
+    all(feature = "cuda", target_family = "unix"),
+    feature = "metal",
+    feature = "rocm"
+)))]
 fn main() -> Result<()> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_fp8)");
