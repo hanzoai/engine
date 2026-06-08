@@ -217,13 +217,15 @@ pub fn calculate_eos_tokens(
 
     let mut eos_toks = Vec::new();
     for eos_tok in eos_tok_ids {
-        eos_toks.push(
-            tokenizer
-                .get_vocab(true)
-                .get(&eos_tok)
-                .copied()
-                .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token.")),
-        )
+        // dbc-validation: skip unresolved EOS instead of panicking. Some Qwen3.6
+        // MoE GGUFs carry a chat-template EOS string that is not present in the
+        // tokenizer vocab (decodes to garbage e.g. the bytes "หนัง"); the upstream
+        // code panics here, blocking the model from loading at all. Skip-with-warn
+        // so the MoE compute path can be exercised.
+        match tokenizer.get_vocab(true).get(&eos_tok).copied() {
+            Some(id) => eos_toks.push(id),
+            None => tracing::warn!("[dbc-validation] skipping unresolved EOS token `{eos_tok}`"),
+        }
     }
     eos_toks
 }

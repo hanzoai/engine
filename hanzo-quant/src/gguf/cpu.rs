@@ -57,6 +57,8 @@ pub fn cpu_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) -> R
             qmatmul.indexed_moe_forward(x, ids)
         }
         QMatMul::QTensor(qtensor) => qtensor_indexed_moe_forward(qtensor, x, ids),
+        #[cfg(feature = "rocm")]
+        QMatMul::RocmQuant { qtensor, .. } => qtensor_indexed_moe_forward(qtensor, x, ids),
         #[cfg(feature = "vulkan")]
         QMatMul::VulkanQuant { qtensor, .. } => qtensor_indexed_moe_forward(qtensor, x, ids),
         // Resident MoE bank: delegate to the GPU keep-quantized path (per-expert banked matvec/matmul,
