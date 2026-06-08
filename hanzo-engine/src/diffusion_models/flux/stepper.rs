@@ -20,8 +20,7 @@ use crate::{
 
 use super::{autoencoder::AutoEncoder, model::Flux};
 
-const T5_XXL_SAFETENSOR_FILES: &[&str] =
-    &["t5_xxl-shard-0.safetensors", "t5_xxl-shard-1.safetensors"];
+const T5_XXL_SAFETENSOR_FILES: &[&str] = &["model.safetensors"];
 
 #[derive(Clone, Copy, Debug)]
 pub struct FluxStepperShift {
@@ -75,11 +74,10 @@ pub struct FluxStepper {
 }
 
 fn get_t5_tokenizer(api: &Api) -> anyhow::Result<Tokenizer> {
-    let repo_id = "hanzoai/t5_tokenizer";
+    let repo_id = "google/flan-t5-xxl";
     let revision = "main";
     let repo = api.model(repo_id.to_string());
-    let tokenizer_filename =
-        fetch_repo_file(&repo, repo_id, revision, "t5-v1_1-xxl.tokenizer.json")?;
+    let tokenizer_filename = fetch_repo_file(&repo, repo_id, revision, "tokenizer.json")?;
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
 
     Ok(tokenizer)
@@ -112,7 +110,7 @@ fn get_t5_model(
     silent: bool,
     offloaded: bool,
 ) -> hanzo_ml::Result<T5EncoderModel> {
-    let repo_id = "hanzoai/t5-v1_1-xxl-enc-only";
+    let repo_id = "city96/t5-v1_1-xxl-encoder-bf16";
     let revision = "main";
     let repo = api.repo(hf_hub::Repo::with_revision(
         repo_id.to_string(),
