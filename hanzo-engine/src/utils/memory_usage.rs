@@ -32,6 +32,20 @@ impl DeviceMemory {
     }
 }
 
+/// `(total, available)` system RAM in bytes via a memory-only `sysinfo` refresh.
+/// `System::new_all()` also scans every process/CPU (~110ms on GB10); we only need memory.
+#[cfg(feature = "cuda")]
+fn system_memory_bytes() -> Result<(usize, usize)> {
+    use sysinfo::{MemoryRefreshKind, RefreshKind};
+    let sys = System::new_with_specifics(
+        RefreshKind::nothing().with_memory(MemoryRefreshKind::nothing().with_ram()),
+    );
+    Ok((
+        usize::try_from(sys.total_memory())?,
+        usize::try_from(sys.available_memory())?,
+    ))
+}
+
 pub struct MemoryUsage;
 
 impl MemoryUsage {
@@ -66,9 +80,7 @@ impl MemoryUsage {
             #[cfg(feature = "cuda")]
             Device::Cuda(dev) => {
                 if super::normal::is_integrated_gpu(device) {
-                    let sys = System::new_all();
-                    let total_bytes = usize::try_from(sys.total_memory())?;
-                    let avail_bytes = usize::try_from(sys.available_memory())?;
+                    let (total_bytes, avail_bytes) = system_memory_bytes()?;
                     let fraction = igpu_memory_fraction();
                     let budget = (total_bytes as f64 * fraction) as usize;
                     let free = (avail_bytes as f64 * fraction) as usize;
