@@ -4,7 +4,8 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use hanzo_ml::cuda::cudarc::driver::{CudaSlice, DevicePtr};
+use hanzo_ml::cuda::cudarc::driver::{CudaSlice, DevicePtr, DeviceRepr};
+use hanzo_ml::cuda::CudaDType;
 use hanzo_ml::{
     quantized::{GgmlDType, QTensor},
     CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,

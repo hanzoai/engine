@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use hanzo_ml::cuda::cudarc::driver::{CudaSlice, DevicePtr};
+use hanzo_ml::cuda::cudarc::driver::{CudaSlice, CudaStream, DevicePtr, DevicePtrMut, SyncOnDrop};
 use hanzo_ml::{
     quantized::{GgmlDType, QTensor},
     CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
@@ -88,6 +88,17 @@ fn workspace_ensure<'a>(
         slot.cap = bytes;
     }
     Ok(WorkspaceGuard { slot, stream })
+}
+
+struct WorkspaceGuard<'a> {
+    slot: MutexGuard<'a, WorkspaceSlot>,
+    stream: &'a CudaStream,
+}
+
+impl<'a> WorkspaceGuard<'a> {
+    fn ptr_mut(&mut self) -> (u64, SyncOnDrop<'_>) {
+        self.slot.slice.device_ptr_mut(self.stream)
+    }
 }
 
 // Launcher dispatch by weight and output dtype.
