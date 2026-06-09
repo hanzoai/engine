@@ -6,14 +6,12 @@
 //! still uses the full VAE so the UNet latent space is unchanged. Quality parity requires the
 //! distilled `taesd_decoder` weights trained against the same VAE latent space.
 
-use hanzo_ml::{Result, Tensor};
+use hanzo_ml::{DType, Result, Tensor};
 use hanzo_nn::{Conv2d, Conv2dConfig, Module};
 use hanzo_quant::{Convolution, ShardedVarBuilder};
 
 use crate::layers::{conv2d, conv2d_no_bias};
 
-const TAESD_LATENT_MAGNITUDE: f64 = 3.0;
-const TAESD_LATENT_SHIFT: f64 = 0.5;
 const HIDDEN: usize = 64;
 
 fn conv3(in_c: usize, out_c: usize, vb: ShardedVarBuilder) -> Result<Conv2d> {
@@ -42,7 +40,13 @@ impl Block {
         let skip = if in_c == out_c {
             None
         } else {
-            Some(conv2d_no_bias(in_c, out_c, 1, Default::default(), vb.pp("skip"))?)
+            Some(conv2d_no_bias(
+                in_c,
+                out_c,
+                1,
+                Default::default(),
+                vb.pp("skip"),
+            )?)
         };
         Ok(Self {
             conv1,
@@ -77,7 +81,12 @@ pub struct TaesdDecoder {
 }
 
 impl TaesdDecoder {
-    pub fn new(latent_channels: usize, out_channels: usize, scaling_factor: f64, vb: ShardedVarBuilder) -> Result<Self> {
+    pub fn new(
+        latent_channels: usize,
+        out_channels: usize,
+        scaling_factor: f64,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         // Flat Sequential layout matching the reference: index 1 conv_in, then per stage 3 blocks +
         // upsample-conv, then a final block + conv_out. We index the Sequential explicitly.
         let conv_in = conv3(latent_channels, HIDDEN, vb.pp(1))?;
@@ -90,7 +99,16 @@ impl TaesdDecoder {
                 idx += 1;
             }
             idx += 1; // Upsample (parameter-free nn.Upsample)
-            upsamplers.push(conv2d_no_bias(HIDDEN, HIDDEN, 3, Conv2dConfig { padding: 1, ..Default::default() }, vb.pp(idx))?);
+            upsamplers.push(conv2d_no_bias(
+                HIDDEN,
+                HIDDEN,
+                3,
+                Conv2dConfig {
+                    padding: 1,
+                    ..Default::default()
+                },
+                vb.pp(idx),
+            )?);
             idx += 1;
         }
         blocks.push(Block::new(HIDDEN, HIDDEN, vb.pp(idx))?);
@@ -105,17 +123,12 @@ impl TaesdDecoder {
         })
     }
 
-    /// Map a full-VAE-scaled latent (scaled by `vae.scaling_factor`) into TAESD's expected range.
-    /// TAESD trains on latents normalized to roughly [0,1] via `z/(2*mag)+shift`; the MuseTalk
-    /// UNet emits latents in the full-VAE scaled space, so we undo that scale first.
-    fn scale_latents(&self, latents: &Tensor) -> Result<Tensor> {
-        let raw = (latents / self.scaling_factor)?;
-        ((raw / (2.0 * TAESD_LATENT_MAGNITUDE))? + TAESD_LATENT_SHIFT)?
-            .clamp(0f32, 1f32)
-    }
-
+    /// TAESD decodes RAW SD-VAE latents. The MuseTalk UNet emits latents in the full-VAE scaled
+    /// space (encode multiplies by `scaling_factor`), so undo that scale before the tiny decoder.
+    /// The 0-1 magnitude/shift transform in the TAESD repo is only for the uint8 preview, not the
+    /// decoder input, so it is intentionally not applied here.
     pub fn decode(&self, latents: &Tensor) -> Result<Tensor> {
-        let mut h = self.scale_latents(latents)?.to_dtype(latents.dtype())?;
+        let mut h = (latents / self.scaling_factor)?.to_dtype(latents.dtype())?;
         h = Convolution.forward_2d(&self.conv_in, &h)?.relu()?;
         let mut bi = 0usize;
         for up in self.upsamplers.iter() {
@@ -128,9 +141,10 @@ impl TaesdDecoder {
             h = Convolution.forward_2d(up, &h)?;
         }
         h = self.blocks[bi].forward(&h)?;
-        // TAESD outputs in [0,1]; MuseTalk's denormalize expects a [-1,1]-ish image (img*0.5+0.5),
-        // so map [0,1] -> [-1,1] to share the pipeline denormalize.
-        let out = Convolution.forward_2d(&self.conv_out, &h)?;
-        ((out * 2.0)? - 1.0)?.to_dtype(latents.dtype())
+        // TAESD's final conv emits the RGB image directly in [0,1] (no tanh/denorm needed).
+        Convolution
+            .forward_2d(&self.conv_out, &h)?
+            .to_dtype(DType::F32)?
+            .clamp(0f32, 1f32)
     }
 }
