@@ -19,6 +19,7 @@ mod paths;
 mod processing;
 mod response;
 pub(crate) mod sampling;
+mod speculative;
 mod speech;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
@@ -62,6 +63,7 @@ pub use loaders::{
     Qwen3_5MoeLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
     VoxtralLoader,
 };
+pub use speculative::{SpeculativeConfig as DraftSpeculativeConfig, SpeculativeLoader};
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
     loader: &dyn loaders::DeviceMappedModelLoader,

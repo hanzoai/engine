@@ -3424,6 +3424,12 @@ pub enum GatedActivationOrder {
 }
 
 pub fn mul_and_act(a: &Tensor, b: &Tensor, act: Activation) -> Result<Tensor> {
+    // Vulkan has a fused silu_mul kernel but no general fused_glu; route Silu (the common SwiGLU
+    // case) to it so the FFN gate does one dispatch instead of silu + mul (a dispatch + barrier each).
+    #[cfg(feature = "vulkan")]
+    if a.device().is_vulkan() && a.dtype() == b.dtype() && matches!(act, Activation::Silu) {
+        return hanzo_nn::ops::silu_mul(a, b);
+    }
     // Check if we can use the fused kernel (works on CUDA, Metal, and CPU)
     if matches!(a.dtype(), DType::F16 | DType::BF16 | DType::F32) && a.dtype() == b.dtype() {
         if let Some(activation_type) = glu_activation_type(act) {

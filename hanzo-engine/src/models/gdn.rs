@@ -236,7 +236,10 @@ fn recurrence_flatten(
         seq_dim(v, vd)?,
         scalar(g)?,
         scalar(beta)?,
-        state.to_dtype(DType::F32)?.reshape((bh, kd, vd))?.contiguous()?,
+        state
+            .to_dtype(DType::F32)?
+            .reshape((bh, kd, vd))?
+            .contiguous()?,
     ))
 }
 
@@ -252,7 +255,9 @@ fn recurrence_unflatten(
 ) -> Result<Tensor> {
     let (b, s, nh, kd) = q.dims4()?;
     let vd = v.dim(D::Minus1)?;
-    *state = state_flat.reshape((b, nh, kd, vd))?.to_dtype(state.dtype())?;
+    *state = state_flat
+        .reshape((b, nh, kd, vd))?
+        .to_dtype(state.dtype())?;
     out_bh
         .reshape((b, nh, s, vd))?
         .transpose(1, 2)?
@@ -883,11 +888,11 @@ mod tests {
     // [bh][k][v] at k*v_dim + v, matching the CPU reference's (heads, k_dim, v_dim) contiguous order.
     #[allow(clippy::too_many_arguments)]
     fn gdn_step_scalar(
-        q: &[f32],    // [bh, k]  (pre-scaled)
-        k: &[f32],    // [bh, k]
-        v: &[f32],    // [bh, v]
-        g: &[f32],    // [bh]
-        beta: &[f32], // [bh]
+        q: &[f32],         // [bh, k]  (pre-scaled)
+        k: &[f32],         // [bh, k]
+        v: &[f32],         // [bh, v]
+        g: &[f32],         // [bh]
+        beta: &[f32],      // [bh]
         state: &mut [f32], // [bh, k, v]
         bh: usize,
         k_dim: usize,
@@ -1010,7 +1015,9 @@ mod tests {
         let hidden = Tensor::cat(&[&conv_state, &x_t], 2)?; // (1, conv_dim, k+1)
         let window = hidden.narrow(2, 1, k)?; // (1, conv_dim, k)
         let out_ref = (window.clone() * weight.unsqueeze(0)?)?.sum(D::Minus1)?; // (1, conv_dim)
-        let out_ref = hanzo_nn::ops::silu(&out_ref)?.flatten_all()?.to_vec1::<f32>()?;
+        let out_ref = hanzo_nn::ops::silu(&out_ref)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
         let new_state_ref = window.flatten_all()?.to_vec1::<f32>()?; // new conv_state == window
 
         // Shader-equivalent scalar path (matches gdn_conv1d_step.comp).
@@ -1034,10 +1041,16 @@ mod tests {
         }
 
         for (a, b) in out_ref.iter().zip(out_shader.iter()) {
-            assert!((a - b).abs() < 1e-5, "conv out mismatch: ref={a} shader={b}");
+            assert!(
+                (a - b).abs() < 1e-5,
+                "conv out mismatch: ref={a} shader={b}"
+            );
         }
         for (a, b) in new_state_ref.iter().zip(cs.iter()) {
-            assert!((a - b).abs() < 1e-5, "conv state mismatch: ref={a} shader={b}");
+            assert!(
+                (a - b).abs() < 1e-5,
+                "conv state mismatch: ref={a} shader={b}"
+            );
         }
         Ok(())
     }

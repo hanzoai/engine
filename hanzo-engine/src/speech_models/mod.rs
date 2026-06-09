@@ -1,14 +1,14 @@
 mod bs1770;
 mod dia;
 pub mod qwen3_asr;
-mod qwen3_tts;
+pub mod qwen3_tts;
 pub mod utils;
 
 use std::{str::FromStr, sync::Arc};
 
 pub use dia::{DiaConfig, DiaPipeline};
-pub use qwen3_asr::{Qwen3AsrConfig, Qwen3AsrModel};
-pub use qwen3_tts::{CodecConfig, Qwen3TtsConfig, Qwen3TtsPipeline};
+pub use qwen3_asr::{Qwen3AsrConfig, Qwen3AsrModel, Qwen3AsrPipeline};
+pub use qwen3_tts::{CodecConfig as Qwen3TtsCodecConfig, Qwen3TtsConfig, Qwen3TtsPipeline};
 use serde::{Deserialize, Serialize};
 
 /// Audio-understanding (speech -> text) model families. Distinct from
@@ -47,7 +47,7 @@ impl AsrLoaderType {
 pub enum SpeechLoaderType {
     #[serde(rename = "dia")]
     Dia,
-    #[serde(rename = "qwen3_tts")]
+    #[serde(rename = "qwen3-tts")]
     Qwen3Tts,
 }
 
@@ -56,9 +56,9 @@ impl FromStr for SpeechLoaderType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "dia" => Ok(Self::Dia),
-            "qwen3_tts" | "qwen3-tts" => Ok(Self::Qwen3Tts),
+            "qwen3-tts" | "qwen3_tts" => Ok(Self::Qwen3Tts),
             a => Err(format!(
-                "Unknown architecture `{a}`. Possible architectures: `dia`, `qwen3_tts`."
+                "Unknown architecture `{a}`. Possible architectures: `dia`, `qwen3-tts`."
             )),
         }
     }
@@ -69,7 +69,7 @@ impl SpeechLoaderType {
     /// Extend this when adding new speech pipelines.
     pub fn auto_detect_from_config(config: &str) -> Option<Self> {
         if let Ok(cfg) = serde_json::from_str::<Qwen3TtsConfig>(config) {
-            if cfg.model_type == "qwen3_tts" {
+            if cfg.is_qwen3_tts() {
                 return Some(Self::Qwen3Tts);
             }
         }
@@ -94,6 +94,7 @@ pub enum SpeechGenerationConfig {
         temperature: f32,
         top_p: f32,
         top_k: Option<usize>,
+        repetition_penalty: f32,
     },
 }
 
@@ -107,12 +108,17 @@ impl SpeechGenerationConfig {
                 top_p: 0.95,
                 top_k: Some(35),
             },
-            SpeechLoaderType::Qwen3Tts => Self::Qwen3Tts {
-                max_tokens: None,
-                temperature: 0.9,
-                top_p: 0.95,
-                top_k: Some(50),
-            },
+            SpeechLoaderType::Qwen3Tts => Self::default_qwen3_tts(),
+        }
+    }
+
+    pub fn default_qwen3_tts() -> Self {
+        Self::Qwen3Tts {
+            max_tokens: None,
+            temperature: 0.9,
+            top_p: 0.95,
+            top_k: Some(50),
+            repetition_penalty: 1.05,
         }
     }
 }

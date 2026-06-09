@@ -80,8 +80,6 @@ impl DeviceRepr for Device {
             DeviceLocation::Rocm { gpu_id } => format!("rocm[{gpu_id}]"),
             #[cfg(feature = "vulkan")]
             DeviceLocation::Vulkan { gpu_id } => format!("vulkan[{gpu_id}]"),
-            #[cfg(feature = "wgpu")]
-            DeviceLocation::Wgpu { gpu_id } => format!("wgpu[{gpu_id}]"),
         }
     }
 }

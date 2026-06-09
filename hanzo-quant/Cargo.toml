@@ -52,7 +52,6 @@ cuda = [
 nccl = ["cuda", "hanzo-ml/nccl"]
 rocm = ["hanzo-ml/rocm", "hanzo-nn/rocm"]
 vulkan = ["hanzo-ml/vulkan", "hanzo-nn/vulkan"]
-wgpu = ["hanzo-ml/wgpu"]
 metal = [
     "hanzo-ml/metal",
     "hanzo-nn/metal",
