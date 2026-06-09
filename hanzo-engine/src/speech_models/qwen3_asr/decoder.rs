@@ -69,7 +69,7 @@ impl Attention {
         })
     }
 
-    fn forward(&self, xs: &Tensor, mask: &AttentionMask, positions: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, mask: &AttentionMask, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
         let q = self
             .q_proj
@@ -87,15 +87,16 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        // Per-head RMSNorm on Q and K, then NeoX-style RoPE.
-        let (q, k) = self.rotary_emb.forward_qk_norm_positions(
+        // Per-head RMSNorm on Q and K, then NeoX-style RoPE. `seqlen_offsets` is one start
+        // offset per batch row; the cache is walked `offset..offset+seq_len` internally.
+        let (q, k) = self.rotary_emb.forward_qk_norm(
             &q,
             &k,
             self.q_norm.weight(),
             self.k_norm.weight(),
             self.q_norm.eps(),
             self.k_norm.eps(),
-            positions,
+            seqlen_offsets,
         )?;
 
         let attn = Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?;
@@ -159,10 +160,10 @@ impl DecoderLayer {
         })
     }
 
-    fn forward(&self, xs: &Tensor, mask: &AttentionMask, positions: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, mask: &AttentionMask, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.self_attn.forward(&xs, mask, positions)?;
+        let xs = self.self_attn.forward(&xs, mask, seqlen_offsets)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self.post_attention_layernorm.forward(&xs)?;
@@ -241,9 +242,17 @@ impl Qwen3AsrTextDecoder {
     }
 
     /// Run the decoder over precomputed input embeddings (audio already merged in).
-    /// `positions` is a 1-D `[seq_len]` u32 tensor of absolute positions.
+    /// `positions` is a 1-D u32 tensor of per-batch-row RoPE start offsets; perf's
+    /// `forward_qk_norm` walks `offset..offset+seq_len` internally, so a prefill from
+    /// position 0 is expressed as `[0]`.
     pub fn forward_embeds(&self, input_embeds: &Tensor, positions: &Tensor) -> Result<Tensor> {
         let (b_sz, seq_len, _) = input_embeds.dims3()?;
+        let seqlen_offsets = positions
+            .to_dtype(DType::U32)?
+            .to_vec1::<u32>()?
+            .into_iter()
+            .map(|p| p as usize)
+            .collect::<Vec<_>>();
         let dummy = Tensor::zeros((b_sz, seq_len), DType::U32, input_embeds.device())?;
         let mask = CausalMasker.make_causal_mask(
             &dummy,
@@ -257,7 +266,7 @@ impl Qwen3AsrTextDecoder {
 
         let mut xs = input_embeds.clone();
         for layer in &self.layers {
-            xs = layer.forward(&xs, &mask, positions)?;
+            xs = layer.forward(&xs, &mask, &seqlen_offsets)?;
         }
         let xs = self.norm.forward(&xs)?;
         self.lm_head.forward(&xs)

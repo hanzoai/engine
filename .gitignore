@@ -14,6 +14,7 @@ docs/book/
 docs/node_modules/
 docs/dist/
 docs/.astro/target/
+docs/.astro/zentts_out.wav
 **/target/
 *.so
 *.a
@@ -22,5 +23,6 @@ docs/.astro/target/
 *.gguf
 *.pt
 *.metallib
+*.wav
 .DS_Store
 .claude/

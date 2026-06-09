@@ -911,6 +911,17 @@ impl Sequence {
         self.prefill_prompt_toks = None
     }
 
+    /// Append a provisional token (e.g. a drafted speculative token) to the raw token list, to be
+    /// confirmed or rolled back via `remove_tmp_tok`. Used by the draft+target speculative pipeline.
+    pub(crate) fn add_tmp_tok(&mut self, tok: u32) {
+        self.tokens.push(tok);
+    }
+
+    /// Remove the last `n` provisional tokens added by `add_tmp_tok`.
+    pub(crate) fn remove_tmp_tok(&mut self, n: usize) {
+        self.tokens.truncate(self.tokens.len() - n);
+    }
+
     pub fn add_token(
         &mut self,
         tok: Logprobs,

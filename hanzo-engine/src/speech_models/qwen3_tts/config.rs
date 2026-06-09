@@ -122,6 +122,12 @@ pub struct Qwen3TtsConfig {
     pub assistant_token_id: u32,
 }
 
+impl Qwen3TtsConfig {
+    pub fn is_qwen3_tts(&self) -> bool {
+        self.model_type == "qwen3_tts"
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodecDecoderConfig {
     pub latent_dim: usize,
