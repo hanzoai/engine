@@ -208,6 +208,9 @@ impl Loader for SpeechLoader {
                     .clone()
                     .unwrap_or_else(|| match self.arch {
                         SpeechLoaderType::Dia => "hanzoai/dac_44khz".to_string(),
+                        SpeechLoaderType::Qwen3Tts => {
+                            unimplemented!("Qwen3-TTS loading is not yet wired into the speech loader")
+                        }
                     });
 
                 let api = api.repo(Repo::with_revision(
