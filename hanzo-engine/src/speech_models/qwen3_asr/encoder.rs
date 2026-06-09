@@ -5,7 +5,7 @@ use hanzo_nn::{Conv2d, Conv2dConfig, LayerNorm, Linear};
 use hanzo_quant::ShardedVarBuilder;
 
 use crate::attention::{AttentionMask, Sdpa, SdpaParams};
-use crate::layers::{conv2d, layer_norm, linear, Activation};
+use crate::layers::{conv2d, layer_norm, linear, linear_no_bias, Activation};
 
 use super::config::AudioEncoderConfig;
 
@@ -158,6 +158,7 @@ pub struct Qwen3AsrAudioEncoder {
     conv3: Conv2d,
     conv_out: Linear,
     layers: Vec<EncoderLayer>,
+    ln_post: LayerNorm,
     proj1: Linear,
     proj2: Linear,
     pos_embed: Tensor,
@@ -195,9 +196,10 @@ impl Qwen3AsrAudioEncoder {
             layers.push(EncoderLayer::new(cfg, vb_layers.pp(i))?);
         }
 
-        // Flattened conv-stem features -> d_model (`thinker.audio_tower.conv_out`).
-        let conv_out = linear(cfg.conv_feature_dim(), cfg.d_model, vb.pp("conv_out"))?;
+        // Flattened conv-stem features -> d_model. `conv_out` ships no bias.
+        let conv_out = linear_no_bias(cfg.conv_feature_dim(), cfg.d_model, vb.pp("conv_out"))?;
 
+        let ln_post = layer_norm(cfg.d_model, 1e-5, vb.pp("ln_post"))?;
         let proj1 = linear(cfg.d_model, cfg.d_model, vb.pp("proj1"))?;
         let proj2 = linear(cfg.d_model, cfg.output_dim, vb.pp("proj2"))?;
 
@@ -210,6 +212,7 @@ impl Qwen3AsrAudioEncoder {
             conv3,
             conv_out,
             layers,
+            ln_post,
             proj1,
             proj2,
             pos_embed,
@@ -242,6 +245,7 @@ impl Qwen3AsrAudioEncoder {
             hidden = layer.forward(&hidden)?;
         }
 
+        let hidden = self.ln_post.forward(&hidden)?;
         let hidden = self.proj1.forward(&hidden)?.gelu_erf()?;
         self.proj2.forward(&hidden)
     }
