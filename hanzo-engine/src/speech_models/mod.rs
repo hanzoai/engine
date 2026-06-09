@@ -7,7 +7,7 @@ pub mod utils;
 use std::{str::FromStr, sync::Arc};
 
 pub use dia::{DiaConfig, DiaPipeline};
-pub use qwen3_asr::{Qwen3AsrConfig, Qwen3AsrModel};
+pub use qwen3_asr::{Qwen3AsrConfig, Qwen3AsrModel, Qwen3AsrPipeline};
 pub use qwen3_tts::{CodecConfig as Qwen3TtsCodecConfig, Qwen3TtsConfig, Qwen3TtsPipeline};
 use serde::{Deserialize, Serialize};
 
