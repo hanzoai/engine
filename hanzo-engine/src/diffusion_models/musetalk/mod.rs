@@ -348,6 +348,112 @@ mod tests {
         Ok(())
     }
 
+    fn time_frame_streaming(
+        model: &MuseTalk,
+        face: &Tensor,
+        audio: &Tensor,
+        reference: &super::pipeline::RefLatents,
+        dev: &Device,
+    ) -> Result<Stage> {
+        use std::time::Instant;
+        dev.synchronize()?;
+        let t0 = Instant::now();
+        let latents = model.latents_for_unet_with_ref(face, reference)?;
+        dev.synchronize()?;
+        let t1 = Instant::now();
+        let b = latents.dim(0)?;
+        let ts = Tensor::zeros(b, DType::F32, dev)?;
+        let pred = model.unet_forward(&latents, &ts, audio)?;
+        dev.synchronize()?;
+        let t2 = Instant::now();
+        let _img = model.decode_latents(&pred)?;
+        dev.synchronize()?;
+        let t3 = Instant::now();
+        Ok(Stage {
+            encode: (t1 - t0).as_secs_f64() * 1e3,
+            unet: (t2 - t1).as_secs_f64() * 1e3,
+            decode: (t3 - t2).as_secs_f64() * 1e3,
+        })
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_streaming_frame() -> Result<()> {
+        let dev = pick_device()?;
+        let dtype = pick_dtype();
+        let iters: usize = std::env::var("MUSETALK_ITERS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30);
+        let cfg = MuseTalkConfig::default();
+        let model = MuseTalk::new(
+            cfg.clone(),
+            seeded_vb(0x1234_5678, dtype, &dev),
+            seeded_vb(0x9abc_def0, dtype, &dev),
+            &dev,
+            dtype,
+        )?;
+        let sz = cfg.resized_img;
+        let face = seeded_input(0x55, &[1, 3, sz, sz], &dev)?;
+        let audio = seeded_input(0xAA, &[1, 50, cfg.unet.cross_attention_dim], &dev)?
+            .to_dtype(dtype)?;
+        let reference = model.encode_reference(&face)?;
+
+        let _ = time_frame_streaming(&model, &face, &audio, &reference, &dev)?;
+        let _ = time_frame_streaming(&model, &face, &audio, &reference, &dev)?;
+
+        let (mut e, mut u, mut d) = (0f64, 0f64, 0f64);
+        let mut total_min = f64::MAX;
+        for _ in 0..iters {
+            let s = time_frame_streaming(&model, &face, &audio, &reference, &dev)?;
+            e += s.encode;
+            u += s.unet;
+            d += s.decode;
+            total_min = total_min.min(s.encode + s.unet + s.decode);
+        }
+        let n = iters as f64;
+        let (e, u, d) = (e / n, u / n, d / n);
+        let total = e + u + d;
+        println!("\n==== MuseTalk STREAMING (cached-ref) bench  dev={:?} dtype={:?} iters={} ====", dev.location(), dtype, iters);
+        println!("vae-encode(x1): {:8.3} ms", e);
+        println!("unet-1step:     {:8.3} ms", u);
+        println!("vae-decode:     {:8.3} ms", d);
+        println!("total/frame:    {:8.3} ms  (best {:.3} ms)", total, total_min);
+        println!("fps(mean):      {:8.2}", 1000.0 / total);
+        println!("fps(best):      {:8.2}", 1000.0 / total_min);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore]
+    fn verify_streaming_vs_full() -> Result<()> {
+        let dev = pick_device()?;
+        let dtype = pick_dtype();
+        let cfg = MuseTalkConfig::default();
+        let model = MuseTalk::new(
+            cfg.clone(),
+            seeded_vb(0x1234_5678, dtype, &dev),
+            seeded_vb(0x9abc_def0, dtype, &dev),
+            &dev,
+            dtype,
+        )?;
+        let sz = cfg.resized_img;
+        let face = seeded_input(0x55, &[1, 3, sz, sz], &dev)?;
+        let audio = seeded_input(0xAA, &[1, 50, cfg.unet.cross_attention_dim], &dev)?
+            .to_dtype(dtype)?;
+
+        let full = model.forward(&face, &audio)?;
+        let reference = model.encode_reference(&face)?;
+        let streamed = model.forward_streaming(&face, &audio, &reference)?;
+
+        let (psnr, cos) = psnr_cosine(&full, &streamed)?;
+        println!("\n==== MuseTalk streaming-vs-full (same ref face)  dtype={:?} ====", dtype);
+        println!("full-forward vs cached-ref forward: PSNR {psnr:.3} dB  cosine {cos:.6}");
+        assert!(cos > 0.9999, "cached-ref diverges from full: cosine={cos}");
+        assert!(psnr > 50.0, "cached-ref PSNR too low: {psnr} dB");
+        Ok(())
+    }
+
     fn time_batch(
         model: &MuseTalk,
         faces: &Tensor,
