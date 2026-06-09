@@ -137,7 +137,8 @@ impl FusedMoe {
             let gate = self.gate_experts.indexed_moe_forward(&xs_e, &indices)?;
             let up = self.up_experts.indexed_moe_forward(&xs_e, &indices)?;
             let activated = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
-            self.down_experts.indexed_moe_forward(&activated, &indices)?
+            self.down_experts
+                .indexed_moe_forward(&activated, &indices)?
         };
         let routed = routed
             .broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
@@ -149,8 +150,9 @@ impl FusedMoe {
         let shared_act =
             crate::ops::mul_and_act(&shared_g, &shared_u, crate::layers::Activation::Silu)?;
         let shared_out = self.shared_down_proj.forward(&shared_act)?;
-        let shared_gate = hanzo_nn::ops::sigmoid(&self.shared_gate.forward(&xs.to_dtype(DType::F32)?)?)?
-            .to_dtype(shared_out.dtype())?;
+        let shared_gate =
+            hanzo_nn::ops::sigmoid(&self.shared_gate.forward(&xs.to_dtype(DType::F32)?)?)?
+                .to_dtype(shared_out.dtype())?;
         let shared_out = shared_out.broadcast_mul(&shared_gate)?;
 
         (routed + shared_out)?
@@ -302,10 +304,9 @@ impl GatedFullAttention {
         let v = v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
 
         // mRoPE at the new token's absolute position (donor keys were RoPE'd at their own positions).
-        let cos_sin = self.rotary.compute_cos_sin(
-            &mtp_position_ids(position, &q.device().clone())?,
-            x.dtype(),
-        )?;
+        let cos_sin = self
+            .rotary
+            .compute_cos_sin(&mtp_position_ids(position, &q.device().clone())?, x.dtype())?;
         let (q, k) = self.rotary.forward_qk_norm(
             &cos_sin,
             &q,
@@ -405,13 +406,19 @@ impl QGatedDeltaNet {
         // 4. beta = sigmoid(b); g = -exp(A_log) * softplus(a + dt_bias).
         //    The GGUF `ssm_a` already stores -exp(A_log), so we multiply directly (no neg/exp here).
         let beta = hanzo_nn::ops::sigmoid(&b)?;
-        let dt_bias = self.dt_bias.to_dtype(DType::F32)?.unsqueeze(0)?.unsqueeze(0)?;
+        let dt_bias = self
+            .dt_bias
+            .to_dtype(DType::F32)?
+            .unsqueeze(0)?
+            .unsqueeze(0)?;
         let g = self
             .a
             .to_dtype(DType::F32)?
             .unsqueeze(0)?
             .unsqueeze(0)?
-            .broadcast_mul(&softplus(&a.to_dtype(DType::F32)?.broadcast_add(&dt_bias)?)?)?
+            .broadcast_mul(&softplus(
+                &a.to_dtype(DType::F32)?.broadcast_add(&dt_bias)?,
+            )?)?
             .to_dtype(dtype)?;
 
         // 5. If num_v_heads > num_k_heads, tile q,k to V-head count. The GGUF lays out every per-V-head
@@ -599,7 +606,8 @@ impl PropsGGUF {
             (
                 Some(
                     c.get_value::<u32>("expert_count")
-                        .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize,
+                        .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
+                        as usize,
                 ),
                 c.get_value::<u32>("expert_used_count")
                     .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize,
@@ -630,9 +638,8 @@ impl PropsGGUF {
             block_count: (c
                 .get_value::<u32>("block_count")
                 .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
-                .saturating_sub(
-                    c.get_value::<u32>("nextn_predict_layers").unwrap_or(0),
-                )) as usize,
+                .saturating_sub(c.get_value::<u32>("nextn_predict_layers").unwrap_or(0)))
+                as usize,
             nextn_predict_layers: c.get_value::<u32>("nextn_predict_layers").unwrap_or(0) as usize,
             embedding_length: embed_len,
             rms_norm_eps: c
@@ -653,7 +660,8 @@ impl PropsGGUF {
                 .unwrap_or(DEFAULT_FULL_ATTENTION_INTERVAL),
             conv_kernel: c
                 .get_value::<u32>("ssm.conv_kernel")
-                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize,
+                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
+                as usize,
             head_k_dim,
             head_v_dim,
             num_k_heads,
@@ -788,7 +796,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     let attn_q = gguf_qmm(ct.tensor(&format!("{prefix}.attn_q.weight"), dev)?)?;
                     let attn_k = gguf_qmm(ct.tensor(&format!("{prefix}.attn_k.weight"), dev)?)?;
                     let attn_v = gguf_qmm(ct.tensor(&format!("{prefix}.attn_v.weight"), dev)?)?;
-                    let attn_o = gguf_qmm(ct.tensor(&format!("{prefix}.attn_output.weight"), dev)?)?;
+                    let attn_o =
+                        gguf_qmm(ct.tensor(&format!("{prefix}.attn_output.weight"), dev)?)?;
                     let q_norm = QRmsNorm::new(
                         ct.tensor(&format!("{prefix}.attn_q_norm.weight"), dev)?,
                         props.rms_norm_eps,
@@ -830,8 +839,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     let out_proj = gguf_qmm(ct.tensor(&format!("{prefix}.ssm_out.weight"), dev)?)?;
 
                     // conv1d / dt / a are small f32 params kept dequantized.
-                    let mut conv1d_weight =
-                        ct.tensor(&format!("{prefix}.ssm_conv1d.weight"), dev)?.dequantize(dev)?;
+                    let mut conv1d_weight = ct
+                        .tensor(&format!("{prefix}.ssm_conv1d.weight"), dev)?
+                        .dequantize(dev)?;
                     // GGUF squeezes conv1d to 2D (conv_dim, kernel); ensure 2D.
                     if conv1d_weight.rank() == 3 {
                         conv1d_weight = conv1d_weight.squeeze(1)?;
@@ -959,7 +969,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     .get(&dev.location())
                     .cloned()
                     .unwrap_or_else(|| default_rotary.clone());
-                mtp_layers.push(load_mtp_layer(&mut ct, &prefix, dev, &props, &rotary, dtype)?);
+                mtp_layers.push(load_mtp_layer(
+                    &mut ct, &prefix, dev, &props, &rotary, dtype,
+                )?);
             }
             Some(MtpLayers {
                 layers: mtp_layers,
@@ -1120,7 +1132,9 @@ impl ModelWeights {
             .any(|lt| matches!(lt, LayerType::LinearAttention))
             && state_indices.is_none()
         {
-            hanzo_ml::bail!("Hybrid recurrent state indices are required for linear-attention layers.");
+            hanzo_ml::bail!(
+                "Hybrid recurrent state indices are required for linear-attention layers."
+            );
         }
 
         let mask = CausalMasker.make_causal_mask(
@@ -1249,7 +1263,10 @@ impl ModelWeights {
             .ok_or_else(|| hanzo_ml::Error::Msg("model has no MTP layers".to_string()))?;
         let mut hybrid_cache = self.cache.hybrid();
         let Some(HybridLayerCache::Attention(kv)) = hybrid_cache.get_mut(mtp.donor_layer) else {
-            hanzo_ml::bail!("MTP donor layer {} is not an attention layer", mtp.donor_layer);
+            hanzo_ml::bail!(
+                "MTP donor layer {} is not an attention layer",
+                mtp.donor_layer
+            );
         };
         let k = kv
             .k()?

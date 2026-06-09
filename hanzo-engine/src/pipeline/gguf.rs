@@ -2,9 +2,8 @@ use super::llg::build_llg_factory;
 use super::{
     get_model_paths, get_xlora_paths,
     text_models_inputs_processor::{InputMetadata, ModelInputs},
-    AdapterKind,
-    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind,
-    TokenSource,
+    AdapterKind, CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName,
+    QuantizationKind, TokenSource,
 };
 use super::{
     AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqPipelineMixin,
@@ -937,7 +936,12 @@ impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
                     if row >= *row_count {
                         hanzo_ml::bail!("MTP hidden row {row} out of range for {row_count} rows");
                     }
-                    gathered.push(hidden.narrow(0, batch_idx, 1)?.narrow(1, row, 1)?.squeeze(1)?);
+                    gathered.push(
+                        hidden
+                            .narrow(0, batch_idx, 1)?
+                            .narrow(1, row, 1)?
+                            .squeeze(1)?,
+                    );
                 }
                 Tensor::cat(&gathered, 0).map(Some)
             }
