@@ -1,0 +1,33 @@
+[package]
+name = "zen3-serving"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Standalone CPU harness exercising the engine's zen3-ASR + zen3-TTS speech pipelines on real weights."
+
+[[bin]]
+name = "zen3-serving"
+path = "src/main.rs"
+
+[dependencies]
+hanzo-engine = { path = "../../hanzo-engine" }
+hanzo-ml = { path = "../../../ml/hanzo-ml" }
+hanzo-nn = { path = "../../../ml/hanzo-nn" }
+hanzo-quant = { path = "../../hanzo-quant" }
+hanzo-audio = { path = "../../hanzo-audio" }
+
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+serde_json = "1"
+ahash = "0.8"
+hound = "3.5"
+
+[features]
+cuda = ["hanzo-engine/cuda", "hanzo-ml/cuda", "hanzo-nn/cuda", "hanzo-quant/cuda"]
+metal = ["hanzo-engine/metal", "hanzo-ml/metal", "hanzo-nn/metal", "hanzo-quant/metal"]
+
+[profile.release]
+opt-level = 3
+
+[workspace]
