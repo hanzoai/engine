@@ -1,5 +1,6 @@
 pub(crate) mod clip;
 pub(crate) mod flux;
+pub(crate) mod musetalk;
 pub(crate) mod processor;
 pub(crate) mod qwen_image;
 pub(crate) mod t5;
