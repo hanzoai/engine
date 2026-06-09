@@ -19,6 +19,8 @@ serde_default_fn!(usize, default_n_mels, 128);
 serde_default_fn!(usize, default_hop_length, 160);
 serde_default_fn!(usize, default_window_size, 400);
 serde_default_fn!(usize, default_conv_channels, 480);
+serde_default_fn!(usize, default_n_window, 50);
+serde_default_fn!(usize, default_n_window_infer, 800);
 
 /// AuT audio encoder configuration (`thinker.audio_tower`).
 ///
@@ -54,6 +56,14 @@ pub struct AudioEncoderConfig {
     pub hop_length: usize,
     #[serde(default = "default_window_size")]
     pub window_size: usize,
+    /// Half the conv-chunk size, in raw mel frames. The mel is split into
+    /// `n_window * 2`-frame chunks before the conv stem (HF `n_window`).
+    #[serde(default = "default_n_window")]
+    pub n_window: usize,
+    /// Inference attention-window size, in raw mel frames. Post-CNN features are
+    /// attended block-diagonally in windows of this size (HF `n_window_infer`).
+    #[serde(default = "default_n_window_infer")]
+    pub n_window_infer: usize,
 }
 
 /// Generous cap for the precomputed sinusoidal table: 8x Conv2d downsampling of
@@ -79,6 +89,17 @@ impl AudioEncoderConfig {
     pub fn conv_feature_dim(&self) -> usize {
         let f = Self::conv_freq_step(Self::conv_freq_step(Self::conv_freq_step(self.n_mels)));
         self.conv_channels * f
+    }
+
+    /// Post-CNN time length for a single conv chunk of `frames` raw mel frames.
+    /// One `k=3 s=2 p=1` Conv2d gives `floor((L-1)/2)+1`; applied 3x.
+    pub fn conv_time_len(frames: usize) -> usize {
+        Self::conv_freq_step(Self::conv_freq_step(Self::conv_freq_step(frames)))
+    }
+
+    /// Raw chunk size in mel frames (`n_window * 2`).
+    pub fn chunk_size(&self) -> usize {
+        self.n_window * 2
     }
 }
 
