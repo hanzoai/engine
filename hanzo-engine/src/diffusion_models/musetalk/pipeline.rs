@@ -17,6 +17,7 @@ pub struct MuseTalk {
     device: Device,
     dtype: DType,
     mask: Tensor,
+    timestep: Tensor,
 }
 
 impl MuseTalk {
@@ -30,6 +31,7 @@ impl MuseTalk {
         let vae = AutoencoderKl::new(&cfg.vae, vae_vb)?;
         let unet = UNet2DConditionModel::new(&cfg.unet, unet_vb)?;
         let mask = Self::build_mask(cfg.resized_img, device, dtype)?;
+        let timestep = Tensor::zeros(1, DType::F32, device)?;
         Ok(Self {
             vae,
             unet,
@@ -37,6 +39,7 @@ impl MuseTalk {
             device: device.clone(),
             dtype,
             mask,
+            timestep,
         })
     }
 
@@ -56,17 +59,17 @@ impl MuseTalk {
 
     pub fn latents_for_unet(&self, face: &Tensor) -> Result<Tensor> {
         let face = self.normalize(face)?;
+        let b = face.dim(0)?;
         let masked = face.broadcast_mul(&self.mask.unsqueeze(0)?.unsqueeze(0)?)?;
-        let masked_latents = self.vae.encode_mode(&masked)?;
-        let ref_latents = self.vae.encode_mode(&face)?;
+        let latents = self.vae.encode_mode(&Tensor::cat(&[&masked, &face], 0)?)?;
+        let masked_latents = latents.narrow(0, 0, b)?;
+        let ref_latents = latents.narrow(0, b, b)?;
         Tensor::cat(&[masked_latents, ref_latents], 1)
     }
 
     pub fn forward(&self, face: &Tensor, audio_feat: &Tensor) -> Result<Tensor> {
         let latent_input = self.latents_for_unet(face)?;
-        let b = latent_input.dim(0)?;
-        let timestep = Tensor::zeros(b, DType::F32, &self.device)?;
-        let pred_latents = self.unet.forward(&latent_input, &timestep, audio_feat)?;
+        let pred_latents = self.unet.forward(&latent_input, &self.timestep, audio_feat)?;
         let image = self.vae.decode(&pred_latents)?;
         self.denormalize(&image)
     }
@@ -78,6 +81,15 @@ impl MuseTalk {
         audio_feat: &Tensor,
     ) -> Result<Tensor> {
         self.unet.forward(latent_input, timestep, audio_feat)
+    }
+
+    pub fn decode_latents(&self, pred_latents: &Tensor) -> Result<Tensor> {
+        let image = self.vae.decode(pred_latents)?;
+        self.denormalize(&image)
+    }
+
+    pub fn dtype(&self) -> DType {
+        self.dtype
     }
 
     pub fn blend(&self, original: &Tensor, generated: &Tensor) -> Result<Tensor> {
