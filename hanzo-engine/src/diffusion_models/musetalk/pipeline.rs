@@ -55,8 +55,12 @@ impl MuseTalk {
     }
 
     pub fn latents_for_unet(&self, face: &Tensor) -> Result<Tensor> {
+        // `face` is in [0,1]. Mask the lower half to black BEFORE normalizing (MuseTalk's
+        // preprocess_img masks the raw [0,1] image, so the masked region encodes as -1 after
+        // normalize, not 0). Masking the normalized tensor would gray the mouth region and the
+        // VAE inpaints a flat patch.
+        let masked = self.normalize(&face.broadcast_mul(&self.mask.unsqueeze(0)?.unsqueeze(0)?)?)?;
         let face = self.normalize(face)?;
-        let masked = face.broadcast_mul(&self.mask.unsqueeze(0)?.unsqueeze(0)?)?;
         let masked_latents = self.vae.encode_mode(&masked)?;
         let ref_latents = self.vae.encode_mode(&face)?;
         Tensor::cat(&[masked_latents, ref_latents], 1)
