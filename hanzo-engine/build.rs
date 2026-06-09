@@ -102,10 +102,15 @@ fn main() {
         // hipcc on Windows is a cmd.exe wrapper that can't cd into a UNC working dir (\\wsl.localhost\..),
         // so copy the source into OUT_DIR (a real C: path) and compile with absolute in/out paths.
         let src = build_dir.join("sort.hip.cpp");
-        std::fs::copy("src/rocm/sort.hip.cpp", &src).expect("failed to stage src/rocm/sort.hip.cpp");
+        std::fs::copy("src/rocm/sort.hip.cpp", &src)
+            .expect("failed to stage src/rocm/sort.hip.cpp");
 
         // Compile the HIP sort/topk kernels into a relocatable object. MSVC wants COFF (no -fPIC).
-        let obj = build_dir.join(if is_msvc { "sort.hip.obj" } else { "sort.hip.o" });
+        let obj = build_dir.join(if is_msvc {
+            "sort.hip.obj"
+        } else {
+            "sort.hip.o"
+        });
         let mut cmd = Command::new(&hipcc);
         cmd.args(["-c", "-std=c++17", "-O3"]);
         if !is_msvc {
@@ -138,7 +143,10 @@ fn main() {
             .arg(&obj)
             .status()
             .unwrap_or_else(|_| panic!("failed to invoke {archiver} to archive {obj:?}"));
-        assert!(status.success(), "llvm-ar failed to archive sort.hip object");
+        assert!(
+            status.success(),
+            "llvm-ar failed to archive sort.hip object"
+        );
 
         println!("cargo:rustc-link-search=native={}", build_dir.display());
         println!("cargo:rustc-link-lib=static=hanzorocm");

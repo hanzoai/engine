@@ -18,7 +18,9 @@ use crate::{
     layers_masker::PastKvLenCache,
     pipeline::{
         inputs_processor::text_models_inputs_processor::{FlashParams, ModelInputs},
-        sampling::{finish_or_add_toks_to_seq, sample_sequence, sample_target_sequence_speculative},
+        sampling::{
+            finish_or_add_toks_to_seq, sample_sequence, sample_target_sequence_speculative,
+        },
     },
     prefix_cacher::PrefixCacheManagerV2,
     sampler::Logprobs,
@@ -941,9 +943,7 @@ impl Pipeline for SpeculativePipeline {
                     }
                 }
                 EitherCache::Normal(_) | EitherCache::Hybrid(_) => {
-                    hanzo_ml::bail!(
-                        "Speculative decoding X-LoRA path requires full cache backend."
-                    )
+                    hanzo_ml::bail!("Speculative decoding X-LoRA path requires full cache backend.")
                 }
             }
         }
@@ -1024,9 +1024,7 @@ impl Pipeline for SpeculativePipeline {
                     }
                 }
                 EitherCache::Normal(_) | EitherCache::Hybrid(_) => {
-                    hanzo_ml::bail!(
-                        "Speculative decoding X-LoRA path requires full cache backend."
-                    )
+                    hanzo_ml::bail!("Speculative decoding X-LoRA path requires full cache backend.")
                 }
             }
         }

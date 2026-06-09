@@ -232,7 +232,10 @@ fn recurrence_flatten(
         seq_dim(v, vd)?,
         scalar(g)?,
         scalar(beta)?,
-        state.to_dtype(DType::F32)?.reshape((bh, kd, vd))?.contiguous()?,
+        state
+            .to_dtype(DType::F32)?
+            .reshape((bh, kd, vd))?
+            .contiguous()?,
     ))
 }
 
@@ -248,7 +251,9 @@ fn recurrence_unflatten(
 ) -> Result<Tensor> {
     let (b, s, nh, kd) = q.dims4()?;
     let vd = v.dim(D::Minus1)?;
-    *state = state_flat.reshape((b, nh, kd, vd))?.to_dtype(state.dtype())?;
+    *state = state_flat
+        .reshape((b, nh, kd, vd))?
+        .to_dtype(state.dtype())?;
     out_bh
         .reshape((b, nh, s, vd))?
         .transpose(1, 2)?
@@ -381,7 +386,10 @@ pub fn causal_conv1d(
     kernel_size: usize,
     decode: bool,
 ) -> Result<Tensor> {
-    if decode && x.dim(1)? == 1 && conv_state.device().is_vulkan() && conv_state.dtype() == DType::F32
+    if decode
+        && x.dim(1)? == 1
+        && conv_state.device().is_vulkan()
+        && conv_state.dtype() == DType::F32
     {
         return conv1d_vulkan_step(x, weight, conv_state, kernel_size);
     }
@@ -471,7 +479,11 @@ fn conv1d_portable_full(
     } else {
         x_t.narrow(2, seq_len - kernel_size, kernel_size)?
     };
-    let lead = Tensor::zeros((batch_size, conv_dim, kernel_size - 1), x_t.dtype(), x_t.device())?;
+    let lead = Tensor::zeros(
+        (batch_size, conv_dim, kernel_size - 1),
+        x_t.dtype(),
+        x_t.device(),
+    )?;
     let padded_t = Tensor::cat(&[&lead, x_t], 2)?;
     let w = weight.to_dtype(padded_t.dtype())?;
     let mut outs = Vec::with_capacity(seq_len);
@@ -494,11 +506,23 @@ pub fn gdn_gating(
 ) -> Result<(Tensor, Tensor)> {
     #[cfg(feature = "cuda")]
     if b.device().is_cuda() {
-        return gating_fused(b, a, a_log, dt_bias, crate::cuda::gdn::fused_gdn_gating_cuda);
+        return gating_fused(
+            b,
+            a,
+            a_log,
+            dt_bias,
+            crate::cuda::gdn::fused_gdn_gating_cuda,
+        );
     }
     #[cfg(feature = "metal")]
     if b.device().is_metal() {
-        return gating_fused(b, a, a_log, dt_bias, crate::metal::gdn::fused_gdn_gating_metal);
+        return gating_fused(
+            b,
+            a,
+            a_log,
+            dt_bias,
+            crate::metal::gdn::fused_gdn_gating_metal,
+        );
     }
     gating_portable(b, a, a_log, dt_bias)
 }
@@ -536,7 +560,9 @@ fn gating_portable(
         .neg()?
         .unsqueeze(0)?
         .unsqueeze(0)?
-        .broadcast_mul(&softplus(&a.to_dtype(DType::F32)?.broadcast_add(&dt_bias)?)?)?
+        .broadcast_mul(&softplus(
+            &a.to_dtype(DType::F32)?.broadcast_add(&dt_bias)?,
+        )?)?
         .to_dtype(b.dtype())?;
     Ok((beta, g))
 }
@@ -809,11 +835,11 @@ mod tests {
     // [bh][k][v] at k*v_dim + v, matching the CPU reference's (heads, k_dim, v_dim) contiguous order.
     #[allow(clippy::too_many_arguments)]
     fn gdn_step_scalar(
-        q: &[f32],    // [bh, k]  (pre-scaled)
-        k: &[f32],    // [bh, k]
-        v: &[f32],    // [bh, v]
-        g: &[f32],    // [bh]
-        beta: &[f32], // [bh]
+        q: &[f32],         // [bh, k]  (pre-scaled)
+        k: &[f32],         // [bh, k]
+        v: &[f32],         // [bh, v]
+        g: &[f32],         // [bh]
+        beta: &[f32],      // [bh]
         state: &mut [f32], // [bh, k, v]
         bh: usize,
         k_dim: usize,
@@ -936,7 +962,9 @@ mod tests {
         let hidden = Tensor::cat(&[&conv_state, &x_t], 2)?; // (1, conv_dim, k+1)
         let window = hidden.narrow(2, 1, k)?; // (1, conv_dim, k)
         let out_ref = (window.clone() * weight.unsqueeze(0)?)?.sum(D::Minus1)?; // (1, conv_dim)
-        let out_ref = hanzo_nn::ops::silu(&out_ref)?.flatten_all()?.to_vec1::<f32>()?;
+        let out_ref = hanzo_nn::ops::silu(&out_ref)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
         let new_state_ref = window.flatten_all()?.to_vec1::<f32>()?; // new conv_state == window
 
         // Shader-equivalent scalar path (matches gdn_conv1d_step.comp).
@@ -960,10 +988,16 @@ mod tests {
         }
 
         for (a, b) in out_ref.iter().zip(out_shader.iter()) {
-            assert!((a - b).abs() < 1e-5, "conv out mismatch: ref={a} shader={b}");
+            assert!(
+                (a - b).abs() < 1e-5,
+                "conv out mismatch: ref={a} shader={b}"
+            );
         }
         for (a, b) in new_state_ref.iter().zip(cs.iter()) {
-            assert!((a - b).abs() < 1e-5, "conv state mismatch: ref={a} shader={b}");
+            assert!(
+                (a - b).abs() < 1e-5,
+                "conv state mismatch: ref={a} shader={b}"
+            );
         }
         Ok(())
     }

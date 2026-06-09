@@ -53,12 +53,16 @@ impl QuantizedMtpRuntime {
         // per-row block tables, which this non-paged path does not carry.
         if batch != 1 {
             return Ok(SpeculativeProposalBatch::new(
-                (0..batch).map(|_| SpeculativeProposal::new(Vec::new())).collect(),
+                (0..batch)
+                    .map(|_| SpeculativeProposal::new(Vec::new()))
+                    .collect(),
             ));
         }
 
         let target_hiddens = ctx.target_hiddens.ok_or_else(|| {
-            hanzo_ml::Error::Msg("MTP requires target hidden state for speculative proposal.".into())
+            hanzo_ml::Error::Msg(
+                "MTP requires target hidden state for speculative proposal.".into(),
+            )
         })?;
         if target_hiddens.dim(0)? != batch {
             hanzo_ml::bail!(
@@ -78,7 +82,8 @@ impl QuantizedMtpRuntime {
             context.push(ctx.sampled_tokens[0]);
         }
 
-        let mut last_token = Tensor::from_vec(ctx.sampled_tokens.to_vec(), (batch, 1), &model.device)?;
+        let mut last_token =
+            Tensor::from_vec(ctx.sampled_tokens.to_vec(), (batch, 1), &model.device)?;
         let mut hidden = target_hiddens;
         let mut tokens = Vec::with_capacity(self.n_predict);
         let mut logits_rows = Vec::with_capacity(self.n_predict);
