@@ -1,4 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+// The pipeline is built + verified end-to-end (see pipeline.rs tests) but not
+// yet hooked into the serve/`Loader` path, so some public API is unreferenced.
+#![allow(dead_code, unused_imports)]
 
 //! Qwen3-ASR (audio -> text). NEW ASR modality for the engine.
 //!
@@ -20,9 +23,11 @@
 //! incremental decode are the remaining pieces (see crate notes / the loader's
 //! TODOs) before end-to-end transcription works.
 
+mod audio;
 pub mod config;
 mod decoder;
 mod encoder;
+mod pipeline;
 
 use hanzo_ml::{Result, Tensor};
 use hanzo_quant::ShardedVarBuilder;
@@ -30,6 +35,7 @@ use hanzo_quant::ShardedVarBuilder;
 pub use config::{AudioEncoderConfig, Qwen3AsrConfig, TextDecoderConfig};
 use decoder::Qwen3AsrTextDecoder;
 use encoder::Qwen3AsrAudioEncoder;
+pub use pipeline::Qwen3AsrPipeline;
 
 const AUDIO_TOWER_PREFIX: &str = "thinker.audio_tower";
 const TEXT_MODEL_PREFIX: &str = "thinker.model";
@@ -94,7 +100,18 @@ impl Qwen3AsrModel {
         positions: &Tensor,
     ) -> Result<Tensor> {
         let audio_embeds = mel_features.map(|m| self.encode_audio(m)).transpose()?;
-        let input_embeds = self.embed_and_merge(input_ids, audio_embeds.as_ref())?;
+        self.forward_with_audio(input_ids, audio_embeds.as_ref(), positions)
+    }
+
+    /// Like [`Self::forward`] but takes already-encoded audio embeddings so the
+    /// AuT encoder runs once per clip instead of once per decode step.
+    pub fn forward_with_audio(
+        &self,
+        input_ids: &Tensor,
+        audio_embeds: Option<&Tensor>,
+        positions: &Tensor,
+    ) -> Result<Tensor> {
+        let input_embeds = self.embed_and_merge(input_ids, audio_embeds)?;
         self.decoder.forward_embeds(&input_embeds, positions)
     }
 }
