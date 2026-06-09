@@ -16,7 +16,7 @@ use hanzo_ml::{DType, Device};
 use hanzo_quant::{ShardedSafeTensors, ShardedVarBuilder};
 use hanzo_engine::speech_models::{
     Qwen3AsrConfig, Qwen3AsrPipeline, Qwen3TtsCodecConfig, Qwen3TtsConfig, Qwen3TtsPipeline,
-    SpeechGenerationConfig,
+    SpeechGenerationConfig, SpeechLoaderType,
 };
 use tokenizers::Tokenizer;
 
@@ -203,17 +203,36 @@ fn run_tts(model: &Path, text: &str, out: &Path, max_tokens: usize) -> Result<()
     let pipeline =
         Qwen3TtsPipeline::new(&cfg, &codec_cfg, vb, codec_vb).context("build TTS pipeline")?;
 
-    let mut gen = SpeechGenerationConfig::default_qwen3_tts();
-    if let SpeechGenerationConfig::Qwen3Tts {
-        max_tokens: ref mut mt,
-        ..
-    } = gen
-    {
-        *mt = Some(max_tokens);
-    }
+    // The pipeline `generate` entry expects the already-tokenized prompt as a space-separated
+    // u32 id stream (it leaves BPE tokenization to the caller). Build the chat-template prompt
+    // `<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n` and tokenize it here.
+    let tok = load_tokenizer(model)?;
+    let prompt = format!(
+        "<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n"
+    );
+    let enc = tok.encode(prompt, false).map_err(anyhow::Error::msg)?;
+    let id_stream: String = enc
+        .get_ids()
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    eprintln!("[tts] prompt tokenized to {} ids", enc.get_ids().len());
+
+    let gen = match SpeechGenerationConfig::default(SpeechLoaderType::Qwen3Tts) {
+        SpeechGenerationConfig::Qwen3Tts { temperature, top_p, top_k, .. } => {
+            SpeechGenerationConfig::Qwen3Tts {
+                max_tokens: Some(max_tokens),
+                temperature,
+                top_p,
+                top_k,
+            }
+        }
+        other => other,
+    };
 
     let t0 = std::time::Instant::now();
-    let outp = pipeline.generate(text, &gen).context("tts generate")?;
+    let outp = pipeline.generate(&id_stream, &gen).context("tts generate")?;
     eprintln!(
         "[tts] generated {} samples @ {} Hz in {:.1}s",
         outp.pcm.len(),
