@@ -1,10 +1,12 @@
 pub mod config;
 pub mod pipeline;
+pub mod taesd;
 pub mod unet;
 pub mod vae;
 
 pub use config::{MuseTalkConfig, UNetConfig, VaeConfig};
-pub use pipeline::MuseTalk;
+pub use pipeline::{MuseTalk, RefLatents};
+pub use taesd::TaesdDecoder;
 pub use unet::UNet2DConditionModel;
 pub use vae::AutoencoderKl;
 
@@ -74,7 +76,14 @@ mod tests {
     }
 
     impl SimpleBackend for SeededBackend {
-        fn get(&self, s: Shape, name: &str, _h: Init, dtype: DType, dev: &Device) -> Result<Tensor> {
+        fn get(
+            &self,
+            s: Shape,
+            name: &str,
+            _h: Init,
+            dtype: DType,
+            dev: &Device,
+        ) -> Result<Tensor> {
             let n: usize = s.elem_count();
             if name.ends_with("bias") {
                 return Tensor::zeros(s, dtype, dev);
@@ -120,7 +129,11 @@ mod tests {
             nb += y * y;
         }
         mse /= a.len() as f64;
-        let psnr = if mse <= 1e-12 { 120.0 } else { 10.0 * (1.0 / mse).log10() };
+        let psnr = if mse <= 1e-12 {
+            120.0
+        } else {
+            10.0 * (1.0 / mse).log10()
+        };
         let cosine = dot / (na.sqrt() * nb.sqrt() + 1e-12);
         Ok((psnr, cosine))
     }
@@ -137,10 +150,7 @@ mod tests {
                     "CrossAttnDownBlock2D".to_string(),
                     "DownBlock2D".to_string(),
                 ],
-                up_block_types: vec![
-                    "UpBlock2D".to_string(),
-                    "CrossAttnUpBlock2D".to_string(),
-                ],
+                up_block_types: vec!["UpBlock2D".to_string(), "CrossAttnUpBlock2D".to_string()],
                 cross_attention_dim: 384,
                 attention_head_dim: 8,
                 norm_num_groups: 32,
@@ -169,7 +179,10 @@ mod tests {
         assert_eq!(bad, 0, "found {bad} non-finite values in tensor");
         let max = v.iter().cloned().fold(f32::MIN, f32::max);
         let min = v.iter().cloned().fold(f32::MAX, f32::min);
-        assert!(max != min, "output is constant (degenerate), min==max=={min}");
+        assert!(
+            max != min,
+            "output is constant (degenerate), min==max=={min}"
+        );
         Ok(())
     }
 
@@ -320,8 +333,8 @@ mod tests {
         )?;
         let sz = cfg.resized_img;
         let face = seeded_input(0x55, &[1, 3, sz, sz], &dev)?;
-        let audio = seeded_input(0xAA, &[1, 50, cfg.unet.cross_attention_dim], &dev)?
-            .to_dtype(dtype)?;
+        let audio =
+            seeded_input(0xAA, &[1, 50, cfg.unet.cross_attention_dim], &dev)?.to_dtype(dtype)?;
 
         let _ = time_frame(&model, &face, &audio, &dev)?;
         let _ = time_frame(&model, &face, &audio, &dev)?;
@@ -338,11 +351,19 @@ mod tests {
         let n = iters as f64;
         let (e, u, d) = (e / n, u / n, d / n);
         let total = e + u + d;
-        println!("\n==== MuseTalk bench  dev={:?} dtype={:?} iters={} ====", dev.location(), dtype, iters);
+        println!(
+            "\n==== MuseTalk bench  dev={:?} dtype={:?} iters={} ====",
+            dev.location(),
+            dtype,
+            iters
+        );
         println!("vae-encode(x2): {:8.3} ms", e);
         println!("unet-1step:     {:8.3} ms", u);
         println!("vae-decode:     {:8.3} ms", d);
-        println!("total/frame:    {:8.3} ms  (best {:.3} ms)", total, total_min);
+        println!(
+            "total/frame:    {:8.3} ms  (best {:.3} ms)",
+            total, total_min
+        );
         println!("fps(mean):      {:8.2}", 1000.0 / total);
         println!("fps(best):      {:8.2}", 1000.0 / total_min);
         Ok(())
@@ -395,8 +416,8 @@ mod tests {
         )?;
         let sz = cfg.resized_img;
         let face = seeded_input(0x55, &[1, 3, sz, sz], &dev)?;
-        let audio = seeded_input(0xAA, &[1, 50, cfg.unet.cross_attention_dim], &dev)?
-            .to_dtype(dtype)?;
+        let audio =
+            seeded_input(0xAA, &[1, 50, cfg.unet.cross_attention_dim], &dev)?.to_dtype(dtype)?;
         let reference = model.encode_reference(&face)?;
 
         let _ = time_frame_streaming(&model, &face, &audio, &reference, &dev)?;
@@ -414,11 +435,19 @@ mod tests {
         let n = iters as f64;
         let (e, u, d) = (e / n, u / n, d / n);
         let total = e + u + d;
-        println!("\n==== MuseTalk STREAMING (cached-ref) bench  dev={:?} dtype={:?} iters={} ====", dev.location(), dtype, iters);
+        println!(
+            "\n==== MuseTalk STREAMING (cached-ref) bench  dev={:?} dtype={:?} iters={} ====",
+            dev.location(),
+            dtype,
+            iters
+        );
         println!("vae-encode(x1): {:8.3} ms", e);
         println!("unet-1step:     {:8.3} ms", u);
         println!("vae-decode:     {:8.3} ms", d);
-        println!("total/frame:    {:8.3} ms  (best {:.3} ms)", total, total_min);
+        println!(
+            "total/frame:    {:8.3} ms  (best {:.3} ms)",
+            total, total_min
+        );
         println!("fps(mean):      {:8.2}", 1000.0 / total);
         println!("fps(best):      {:8.2}", 1000.0 / total_min);
         Ok(())
@@ -439,27 +468,152 @@ mod tests {
         )?;
         let sz = cfg.resized_img;
         let face = seeded_input(0x55, &[1, 3, sz, sz], &dev)?;
-        let audio = seeded_input(0xAA, &[1, 50, cfg.unet.cross_attention_dim], &dev)?
-            .to_dtype(dtype)?;
+        let audio =
+            seeded_input(0xAA, &[1, 50, cfg.unet.cross_attention_dim], &dev)?.to_dtype(dtype)?;
 
         let full = model.forward(&face, &audio)?;
         let reference = model.encode_reference(&face)?;
         let streamed = model.forward_streaming(&face, &audio, &reference)?;
 
         let (psnr, cos) = psnr_cosine(&full, &streamed)?;
-        println!("\n==== MuseTalk streaming-vs-full (same ref face)  dtype={:?} ====", dtype);
+        println!(
+            "\n==== MuseTalk streaming-vs-full (same ref face)  dtype={:?} ====",
+            dtype
+        );
         println!("full-forward vs cached-ref forward: PSNR {psnr:.3} dB  cosine {cos:.6}");
         assert!(cos > 0.9999, "cached-ref diverges from full: cosine={cos}");
         assert!(psnr > 50.0, "cached-ref PSNR too low: {psnr} dB");
         Ok(())
     }
 
-    fn time_batch(
-        model: &MuseTalk,
-        faces: &Tensor,
-        audio: &Tensor,
-        dev: &Device,
-    ) -> Result<Stage> {
+    #[test]
+    #[ignore]
+    fn bench_taesd_decode() -> Result<()> {
+        use std::time::Instant;
+        let dev = pick_device()?;
+        let dtype = pick_dtype();
+        let iters: usize = std::env::var("MUSETALK_ITERS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30);
+        let cfg = MuseTalkConfig::default();
+        let model = MuseTalk::new(
+            cfg.clone(),
+            seeded_vb(0x1234_5678, dtype, &dev),
+            seeded_vb(0x9abc_def0, dtype, &dev),
+            &dev,
+            dtype,
+        )?
+        .with_taesd(seeded_vb(0x0bad_f00d, dtype, &dev))?;
+
+        let lat_ch = cfg.vae.latent_channels;
+        let lat_sz = cfg.unet.sample_size;
+        let pred = seeded_input(0x77, &[1, lat_ch, lat_sz, lat_sz], &dev)?.to_dtype(dtype)?;
+
+        let time = |f: &dyn Fn() -> Result<Tensor>| -> Result<f64> {
+            f()?;
+            f()?;
+            dev.synchronize()?;
+            let mut best = f64::MAX;
+            for _ in 0..iters {
+                dev.synchronize()?;
+                let t0 = Instant::now();
+                let _ = f()?;
+                dev.synchronize()?;
+                best = best.min((Instant::now() - t0).as_secs_f64() * 1e3);
+            }
+            Ok(best)
+        };
+
+        let full = time(&|| model.decode_latents(&pred))?;
+        let taesd = time(&|| model.decode_latents_fast(&pred))?;
+        println!(
+            "\n==== MuseTalk DECODE: full-VAE vs TAESD  dev={:?} dtype={:?} ====",
+            dev.location(),
+            dtype
+        );
+        println!("full-VAE decode: {full:8.3} ms");
+        println!(
+            "TAESD   decode:  {taesd:8.3} ms   ({:.1}x faster)",
+            full / taesd
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_streaming_taesd_frame() -> Result<()> {
+        let dev = pick_device()?;
+        let dtype = pick_dtype();
+        let iters: usize = std::env::var("MUSETALK_ITERS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30);
+        let cfg = MuseTalkConfig::default();
+        let model = MuseTalk::new(
+            cfg.clone(),
+            seeded_vb(0x1234_5678, dtype, &dev),
+            seeded_vb(0x9abc_def0, dtype, &dev),
+            &dev,
+            dtype,
+        )?
+        .with_taesd(seeded_vb(0x0bad_f00d, dtype, &dev))?;
+        let sz = cfg.resized_img;
+        let face = seeded_input(0x55, &[1, 3, sz, sz], &dev)?;
+        let audio =
+            seeded_input(0xAA, &[1, 50, cfg.unet.cross_attention_dim], &dev)?.to_dtype(dtype)?;
+        let reference = model.encode_reference(&face)?;
+
+        let frame = |dev: &Device| -> Result<Stage> {
+            use std::time::Instant;
+            dev.synchronize()?;
+            let t0 = Instant::now();
+            let latents = model.latents_for_unet_with_ref(&face, &reference)?;
+            dev.synchronize()?;
+            let t1 = Instant::now();
+            let ts = Tensor::zeros(latents.dim(0)?, DType::F32, dev)?;
+            let pred = model.unet_forward(&latents, &ts, &audio)?;
+            dev.synchronize()?;
+            let t2 = Instant::now();
+            let _img = model.decode_latents_fast(&pred)?;
+            dev.synchronize()?;
+            let t3 = Instant::now();
+            Ok(Stage {
+                encode: (t1 - t0).as_secs_f64() * 1e3,
+                unet: (t2 - t1).as_secs_f64() * 1e3,
+                decode: (t3 - t2).as_secs_f64() * 1e3,
+            })
+        };
+        let _ = frame(&dev)?;
+        let _ = frame(&dev)?;
+        let (mut e, mut u, mut d) = (0f64, 0f64, 0f64);
+        let mut total_min = f64::MAX;
+        for _ in 0..iters {
+            let s = frame(&dev)?;
+            e += s.encode;
+            u += s.unet;
+            d += s.decode;
+            total_min = total_min.min(s.encode + s.unet + s.decode);
+        }
+        let n = iters as f64;
+        let (e, u, d) = (e / n, u / n, d / n);
+        let total = e + u + d;
+        println!(
+            "\n==== MuseTalk STREAMING + TAESD bench  dev={:?} dtype={:?} iters={} ====",
+            dev.location(),
+            dtype,
+            iters
+        );
+        println!("vae-encode(x1): {e:8.3} ms",);
+        println!("unet-1step:     {u:8.3} ms",);
+        println!("taesd-decode:   {d:8.3} ms",);
+        println!("total/frame:    {total:8.3} ms  (best {total_min:.3} ms)");
+        println!("fps(mean):      {:8.2}", 1000.0 / total);
+        println!("fps(best):      {:8.2}", 1000.0 / total_min);
+        Ok(())
+    }
+
+    fn time_batch(model: &MuseTalk, faces: &Tensor, audio: &Tensor, dev: &Device) -> Result<Stage> {
         use std::time::Instant;
         dev.synchronize()?;
         let t0 = Instant::now();
@@ -505,8 +659,16 @@ mod tests {
         let sz = cfg.resized_img;
         let cad = cfg.unet.cross_attention_dim;
 
-        println!("\n==== MuseTalk BATCHED throughput  dev={:?} dtype={:?} iters={} ====", dev.location(), dtype, iters);
-        println!("{:>4}  {:>10}  {:>10}  {:>10}  {:>11}  {:>10}  {:>9}", "N", "enc(ms)", "unet(ms)", "dec(ms)", "lat/best(ms)", "ms/frame", "fps");
+        println!(
+            "\n==== MuseTalk BATCHED throughput  dev={:?} dtype={:?} iters={} ====",
+            dev.location(),
+            dtype,
+            iters
+        );
+        println!(
+            "{:>4}  {:>10}  {:>10}  {:>10}  {:>11}  {:>10}  {:>9}",
+            "N", "enc(ms)", "unet(ms)", "dec(ms)", "lat/best(ms)", "ms/frame", "fps"
+        );
         let mut best_fps = 0f64;
         let mut best_n = 0usize;
         let mut best_lat = 0f64;
@@ -536,8 +698,13 @@ mod tests {
                 best_lat = best;
             }
         }
-        println!("---- peak: {best_fps:.2} fps at N={best_n}  (latency {best_lat:.1} ms/batch) ----");
-        println!("---- realtime(>=30fps): {} ----", if best_fps >= 30.0 { "YES" } else { "NO" });
+        println!(
+            "---- peak: {best_fps:.2} fps at N={best_n}  (latency {best_lat:.1} ms/batch) ----"
+        );
+        println!(
+            "---- realtime(>=30fps): {} ----",
+            if best_fps >= 30.0 { "YES" } else { "NO" }
+        );
         Ok(())
     }
 
@@ -567,7 +734,12 @@ mod tests {
         let batched = model.forward_batched(&faces, &audio)?;
         assert_eq!(batched.dims(), &[n, 3, sz, sz]);
 
-        println!("\n==== MuseTalk batched-vs-single  dev={:?} dtype={:?} N={} ====", dev.location(), dtype, n);
+        println!(
+            "\n==== MuseTalk batched-vs-single  dev={:?} dtype={:?} N={} ====",
+            dev.location(),
+            dtype,
+            n
+        );
         let (mut min_psnr, mut min_cos) = (f64::MAX, f64::MAX);
         for i in 0..n {
             let face_i = faces.narrow(0, i, 1)?;
@@ -580,7 +752,10 @@ mod tests {
             min_cos = min_cos.min(cos);
         }
         println!("---- worst-frame: PSNR {min_psnr:.3} dB  cosine {min_cos:.6} ----");
-        assert!(min_cos > 0.999, "batched diverges from single: cosine={min_cos}");
+        assert!(
+            min_cos > 0.999,
+            "batched diverges from single: cosine={min_cos}"
+        );
         assert!(min_psnr > 40.0, "batched PSNR too low: {min_psnr} dB");
         Ok(())
     }
@@ -613,8 +788,8 @@ mod tests {
             dtype,
         )?;
         let face_gpu = seeded_input(0x55, &[1, 3, sz, sz], &gpu)?;
-        let audio_gpu = seeded_input(0xAA, &[1, 50, cfg.unet.cross_attention_dim], &gpu)?
-            .to_dtype(dtype)?;
+        let audio_gpu =
+            seeded_input(0xAA, &[1, 50, cfg.unet.cross_attention_dim], &gpu)?.to_dtype(dtype)?;
         let gpu_img = model_gpu.forward(&face_gpu, &audio_gpu)?;
 
         let (psnr, cosine) = psnr_cosine(&ref_img, &gpu_img.to_device(&cpu)?)?;
@@ -712,7 +887,11 @@ mod tests {
 
         let cmp = |name: &str, a: &Tensor, b: &Tensor| -> Result<()> {
             let (psnr, cosine) = psnr_cosine(&a.to_dtype(DType::F32)?, &b.to_dtype(DType::F32)?)?;
-            println!("{name:<22} PSNR {psnr:8.3} dB  cosine {cosine:.6}  rmsA {:.5} rmsB {:.5}", rms(a)?, rms(b)?);
+            println!(
+                "{name:<22} PSNR {psnr:8.3} dB  cosine {cosine:.6}  rmsA {:.5} rmsB {:.5}",
+                rms(a)?,
+                rms(b)?
+            );
             Ok(())
         };
 
@@ -731,7 +910,10 @@ mod tests {
         cmp("decode(shared latents)", &d32, &dshared)?;
 
         let (psnr, cosine) = psnr_cosine(&d32.to_dtype(DType::F32)?, &d16.to_dtype(DType::F32)?)?;
-        assert!(cosine > 0.99, "f16 vs f32 structural divergence: cosine={cosine}");
+        assert!(
+            cosine > 0.99,
+            "f16 vs f32 structural divergence: cosine={cosine}"
+        );
         assert!(psnr > 30.0, "f16 vs f32 PSNR too low: {psnr} dB");
         Ok(())
     }
