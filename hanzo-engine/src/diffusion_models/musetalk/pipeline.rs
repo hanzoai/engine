@@ -10,6 +10,18 @@ use super::vae::AutoencoderKl;
 const NORM_MEAN: f64 = 0.5;
 const NORM_STD: f64 = 0.5;
 
+/// Cached VAE latent of the static reference face, reused across all frames of a stream.
+#[derive(Debug, Clone)]
+pub struct RefLatents {
+    latent: Tensor,
+}
+
+impl RefLatents {
+    pub fn latent(&self) -> &Tensor {
+        &self.latent
+    }
+}
+
 pub struct MuseTalk {
     vae: AutoencoderKl,
     unet: UNet2DConditionModel,
@@ -65,6 +77,43 @@ impl MuseTalk {
         let masked_latents = latents.narrow(0, 0, b)?;
         let ref_latents = latents.narrow(0, b, b)?;
         Tensor::cat(&[masked_latents, ref_latents], 1)
+    }
+
+    /// VAE-encode just the (static) reference face into its latent, for caching across a stream.
+    /// The reference latent is the unmasked-face half of the UNet input; in streaming it never
+    /// changes, so encoding it once and reusing it halves the per-frame VAE-encode work.
+    pub fn encode_reference(&self, face: &Tensor) -> Result<RefLatents> {
+        let face = self.normalize(face)?;
+        let latent = self.vae.encode_mode(&face)?;
+        Ok(RefLatents { latent })
+    }
+
+    /// Like `latents_for_unet` but encodes only the masked frame (N images instead of 2N),
+    /// concatenating the precomputed reference latent. Byte-identical to `latents_for_unet`
+    /// for the same reference face (the VAE-encode is per-image, no cross-frame mixing).
+    pub fn latents_for_unet_with_ref(&self, face: &Tensor, reference: &RefLatents) -> Result<Tensor> {
+        let face = self.normalize(face)?;
+        let masked = face.broadcast_mul(&self.mask.unsqueeze(0)?.unsqueeze(0)?)?;
+        let masked_latents = self.vae.encode_mode(&masked)?;
+        let ref_latents = if reference.latent.dim(0)? == masked_latents.dim(0)? {
+            reference.latent.clone()
+        } else {
+            reference.latent.broadcast_as(masked_latents.shape())?.contiguous()?
+        };
+        Tensor::cat(&[&masked_latents, &ref_latents], 1)
+    }
+
+    /// Streaming forward with a cached reference latent: encodes only the masked frame.
+    pub fn forward_streaming(
+        &self,
+        face: &Tensor,
+        audio_feat: &Tensor,
+        reference: &RefLatents,
+    ) -> Result<Tensor> {
+        let latent_input = self.latents_for_unet_with_ref(face, reference)?;
+        let pred_latents = self.unet.forward(&latent_input, &self.timestep, audio_feat)?;
+        let image = self.vae.decode(&pred_latents)?;
+        self.denormalize(&image)
     }
 
     pub fn forward(&self, face: &Tensor, audio_feat: &Tensor) -> Result<Tensor> {
