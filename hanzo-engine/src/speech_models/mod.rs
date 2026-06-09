@@ -6,7 +6,7 @@ pub mod utils;
 use std::{str::FromStr, sync::Arc};
 
 pub use dia::{DiaConfig, DiaPipeline};
-pub use qwen3_asr::{Qwen3AsrConfig, Qwen3AsrModel};
+pub use qwen3_asr::{Qwen3AsrConfig, Qwen3AsrModel, Qwen3AsrPipeline};
 use serde::{Deserialize, Serialize};
 
 /// Audio-understanding (speech -> text) model families. Distinct from
