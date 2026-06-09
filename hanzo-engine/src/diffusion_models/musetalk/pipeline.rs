@@ -4,6 +4,7 @@ use hanzo_ml::{DType, Device, Result, Tensor, D};
 use hanzo_quant::ShardedVarBuilder;
 
 use super::config::MuseTalkConfig;
+use super::taesd::TaesdDecoder;
 use super::unet::UNet2DConditionModel;
 use super::vae::AutoencoderKl;
 
@@ -25,6 +26,7 @@ impl RefLatents {
 pub struct MuseTalk {
     vae: AutoencoderKl,
     unet: UNet2DConditionModel,
+    taesd: Option<TaesdDecoder>,
     cfg: MuseTalkConfig,
     device: Device,
     dtype: DType,
@@ -47,12 +49,40 @@ impl MuseTalk {
         Ok(Self {
             vae,
             unet,
+            taesd: None,
             cfg,
             device: device.clone(),
             dtype,
             mask,
             timestep,
         })
+    }
+
+    /// Attach a TAESD decoder to use as the fast decode path. The full VAE encoder is still used,
+    /// so the UNet latent space is unchanged; only `vae.decode` is replaced by the tiny decoder.
+    pub fn with_taesd(mut self, taesd_vb: ShardedVarBuilder) -> Result<Self> {
+        let taesd = TaesdDecoder::new(
+            self.cfg.vae.latent_channels,
+            self.cfg.vae.out_channels,
+            self.cfg.vae.scaling_factor,
+            taesd_vb,
+        )?;
+        self.taesd = Some(taesd);
+        Ok(self)
+    }
+
+    pub fn has_taesd(&self) -> bool {
+        self.taesd.is_some()
+    }
+
+    /// Decode latents through TAESD if attached, else fall back to the full VAE decoder.
+    /// TAESD already emits the image in [0,1]; the full-VAE path needs denormalize. Both return
+    /// an [N,3,H,W] f32 image in [0,1].
+    pub fn decode_latents_fast(&self, pred_latents: &Tensor) -> Result<Tensor> {
+        match self.taesd.as_ref() {
+            Some(t) => t.decode(pred_latents),
+            None => self.decode_latents(pred_latents),
+        }
     }
 
     fn build_mask(size: usize, device: &Device, dtype: DType) -> Result<Tensor> {
@@ -91,14 +121,21 @@ impl MuseTalk {
     /// Like `latents_for_unet` but encodes only the masked frame (N images instead of 2N),
     /// concatenating the precomputed reference latent. Byte-identical to `latents_for_unet`
     /// for the same reference face (the VAE-encode is per-image, no cross-frame mixing).
-    pub fn latents_for_unet_with_ref(&self, face: &Tensor, reference: &RefLatents) -> Result<Tensor> {
+    pub fn latents_for_unet_with_ref(
+        &self,
+        face: &Tensor,
+        reference: &RefLatents,
+    ) -> Result<Tensor> {
         let face = self.normalize(face)?;
         let masked = face.broadcast_mul(&self.mask.unsqueeze(0)?.unsqueeze(0)?)?;
         let masked_latents = self.vae.encode_mode(&masked)?;
         let ref_latents = if reference.latent.dim(0)? == masked_latents.dim(0)? {
             reference.latent.clone()
         } else {
-            reference.latent.broadcast_as(masked_latents.shape())?.contiguous()?
+            reference
+                .latent
+                .broadcast_as(masked_latents.shape())?
+                .contiguous()?
         };
         Tensor::cat(&[&masked_latents, &ref_latents], 1)
     }
@@ -111,14 +148,18 @@ impl MuseTalk {
         reference: &RefLatents,
     ) -> Result<Tensor> {
         let latent_input = self.latents_for_unet_with_ref(face, reference)?;
-        let pred_latents = self.unet.forward(&latent_input, &self.timestep, audio_feat)?;
+        let pred_latents = self
+            .unet
+            .forward(&latent_input, &self.timestep, audio_feat)?;
         let image = self.vae.decode(&pred_latents)?;
         self.denormalize(&image)
     }
 
     pub fn forward(&self, face: &Tensor, audio_feat: &Tensor) -> Result<Tensor> {
         let latent_input = self.latents_for_unet(face)?;
-        let pred_latents = self.unet.forward(&latent_input, &self.timestep, audio_feat)?;
+        let pred_latents = self
+            .unet
+            .forward(&latent_input, &self.timestep, audio_feat)?;
         let image = self.vae.decode(&pred_latents)?;
         self.denormalize(&image)
     }
@@ -129,7 +170,9 @@ impl MuseTalk {
     /// per-frame to calling `forward` once per frame.
     pub fn forward_batched(&self, faces: &Tensor, audio_feat: &Tensor) -> Result<Tensor> {
         let latent_input = self.latents_for_unet(faces)?;
-        let pred_latents = self.unet.forward(&latent_input, &self.timestep, audio_feat)?;
+        let pred_latents = self
+            .unet
+            .forward(&latent_input, &self.timestep, audio_feat)?;
         let image = self.vae.decode(&pred_latents)?;
         self.denormalize(&image)
     }
