@@ -348,6 +348,137 @@ mod tests {
         Ok(())
     }
 
+    fn time_batch(
+        model: &MuseTalk,
+        faces: &Tensor,
+        audio: &Tensor,
+        dev: &Device,
+    ) -> Result<Stage> {
+        use std::time::Instant;
+        dev.synchronize()?;
+        let t0 = Instant::now();
+        let latents = model.latents_for_unet(faces)?;
+        dev.synchronize()?;
+        let t1 = Instant::now();
+        let b = latents.dim(0)?;
+        let ts = Tensor::zeros(b, DType::F32, dev)?;
+        let pred = model.unet_forward(&latents, &ts, audio)?;
+        dev.synchronize()?;
+        let t2 = Instant::now();
+        let _img = model.decode_latents(&pred)?;
+        dev.synchronize()?;
+        let t3 = Instant::now();
+        Ok(Stage {
+            encode: (t1 - t0).as_secs_f64() * 1e3,
+            unet: (t2 - t1).as_secs_f64() * 1e3,
+            decode: (t3 - t2).as_secs_f64() * 1e3,
+        })
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_batched_throughput() -> Result<()> {
+        let dev = pick_device()?;
+        let dtype = pick_dtype();
+        let iters: usize = std::env::var("MUSETALK_ITERS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10);
+        let batches: Vec<usize> = std::env::var("MUSETALK_BATCHES")
+            .ok()
+            .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+            .unwrap_or_else(|| vec![1, 2, 4, 8, 16, 32]);
+        let cfg = MuseTalkConfig::default();
+        let model = MuseTalk::new(
+            cfg.clone(),
+            seeded_vb(0x1234_5678, dtype, &dev),
+            seeded_vb(0x9abc_def0, dtype, &dev),
+            &dev,
+            dtype,
+        )?;
+        let sz = cfg.resized_img;
+        let cad = cfg.unet.cross_attention_dim;
+
+        println!("\n==== MuseTalk BATCHED throughput  dev={:?} dtype={:?} iters={} ====", dev.location(), dtype, iters);
+        println!("{:>4}  {:>10}  {:>10}  {:>10}  {:>11}  {:>10}  {:>9}", "N", "enc(ms)", "unet(ms)", "dec(ms)", "lat/best(ms)", "ms/frame", "fps");
+        let mut best_fps = 0f64;
+        let mut best_n = 0usize;
+        let mut best_lat = 0f64;
+        for &n in batches.iter() {
+            let faces = seeded_input(0x55, &[n, 3, sz, sz], &dev)?;
+            let audio = seeded_input(0xAA, &[n, 50, cad], &dev)?.to_dtype(dtype)?;
+            // warmup
+            let _ = time_batch(&model, &faces, &audio, &dev)?;
+            let _ = time_batch(&model, &faces, &audio, &dev)?;
+            let (mut e, mut u, mut d) = (0f64, 0f64, 0f64);
+            let mut best = f64::MAX;
+            for _ in 0..iters {
+                let s = time_batch(&model, &faces, &audio, &dev)?;
+                e += s.encode;
+                u += s.unet;
+                d += s.decode;
+                best = best.min(s.encode + s.unet + s.decode);
+            }
+            let it = iters as f64;
+            let (e, u, d) = (e / it, u / it, d / it);
+            let ms_per_frame = best / n as f64;
+            let fps = 1000.0 * n as f64 / best;
+            println!("{n:>4}  {e:>10.3}  {u:>10.3}  {d:>10.3}  {best:>11.3}  {ms_per_frame:>10.3}  {fps:>9.2}");
+            if fps > best_fps {
+                best_fps = fps;
+                best_n = n;
+                best_lat = best;
+            }
+        }
+        println!("---- peak: {best_fps:.2} fps at N={best_n}  (latency {best_lat:.1} ms/batch) ----");
+        println!("---- realtime(>=30fps): {} ----", if best_fps >= 30.0 { "YES" } else { "NO" });
+        Ok(())
+    }
+
+    #[test]
+    #[ignore]
+    fn verify_batched_vs_single() -> Result<()> {
+        let dev = pick_device()?;
+        let dtype = pick_dtype();
+        let cfg = MuseTalkConfig::default();
+        let model = MuseTalk::new(
+            cfg.clone(),
+            seeded_vb(0x1234_5678, dtype, &dev),
+            seeded_vb(0x9abc_def0, dtype, &dev),
+            &dev,
+            dtype,
+        )?;
+        let sz = cfg.resized_img;
+        let cad = cfg.unet.cross_attention_dim;
+        let n = std::env::var("MUSETALK_N")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(8usize);
+
+        let faces = seeded_input(0x55, &[n, 3, sz, sz], &dev)?;
+        let audio = seeded_input(0xAA, &[n, 50, cad], &dev)?.to_dtype(dtype)?;
+
+        let batched = model.forward_batched(&faces, &audio)?;
+        assert_eq!(batched.dims(), &[n, 3, sz, sz]);
+
+        println!("\n==== MuseTalk batched-vs-single  dev={:?} dtype={:?} N={} ====", dev.location(), dtype, n);
+        let (mut min_psnr, mut min_cos) = (f64::MAX, f64::MAX);
+        for i in 0..n {
+            let face_i = faces.narrow(0, i, 1)?;
+            let audio_i = audio.narrow(0, i, 1)?;
+            let single_i = model.forward(&face_i, &audio_i)?;
+            let batched_i = batched.narrow(0, i, 1)?;
+            let (psnr, cos) = psnr_cosine(&single_i, &batched_i)?;
+            println!("frame {i:>2}: PSNR {psnr:8.3} dB  cosine {cos:.6}");
+            min_psnr = min_psnr.min(psnr);
+            min_cos = min_cos.min(cos);
+        }
+        println!("---- worst-frame: PSNR {min_psnr:.3} dB  cosine {min_cos:.6} ----");
+        assert!(min_cos > 0.999, "batched diverges from single: cosine={min_cos}");
+        assert!(min_psnr > 40.0, "batched PSNR too low: {min_psnr} dB");
+        Ok(())
+    }
+
     #[test]
     #[ignore]
     fn verify_gpu_vs_cpu() -> Result<()> {

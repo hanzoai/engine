@@ -74,6 +74,17 @@ impl MuseTalk {
         self.denormalize(&image)
     }
 
+    /// Process N frames in a single forward. `faces` is [N,3,H,W], `audio_feat` is [N,seq,dim]
+    /// (one audio context per frame). The VAE-encode runs on the 2N masked+ref stack, the UNet
+    /// single-step and VAE-decode run on the N-frame batch. Output is [N,3,H,W], identical
+    /// per-frame to calling `forward` once per frame.
+    pub fn forward_batched(&self, faces: &Tensor, audio_feat: &Tensor) -> Result<Tensor> {
+        let latent_input = self.latents_for_unet(faces)?;
+        let pred_latents = self.unet.forward(&latent_input, &self.timestep, audio_feat)?;
+        let image = self.vae.decode(&pred_latents)?;
+        self.denormalize(&image)
+    }
+
     pub fn unet_forward(
         &self,
         latent_input: &Tensor,
