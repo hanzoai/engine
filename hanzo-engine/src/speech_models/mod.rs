@@ -1,12 +1,12 @@
 mod bs1770;
 mod dia;
-mod qwen3_tts;
+pub mod qwen3_tts;
 pub mod utils;
 
 use std::{str::FromStr, sync::Arc};
 
 pub use dia::{DiaConfig, DiaPipeline};
-pub use qwen3_tts::{Qwen3TtsCodecConfig, Qwen3TtsConfig, Qwen3TtsPipeline};
+pub use qwen3_tts::{CodecConfig as Qwen3TtsCodecConfig, Qwen3TtsConfig, Qwen3TtsPipeline};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
@@ -56,7 +56,11 @@ pub enum SpeechGenerationConfig {
         top_k: Option<usize>,
     },
     Qwen3Tts {
-        max_frames: Option<usize>,
+        max_tokens: Option<usize>,
+        temperature: f32,
+        top_p: f32,
+        top_k: Option<usize>,
+        repetition_penalty: f32,
     },
 }
 
@@ -70,7 +74,17 @@ impl SpeechGenerationConfig {
                 top_p: 0.95,
                 top_k: Some(35),
             },
-            SpeechLoaderType::Qwen3Tts => Self::Qwen3Tts { max_frames: None },
+            SpeechLoaderType::Qwen3Tts => Self::default_qwen3_tts(),
+        }
+    }
+
+    pub fn default_qwen3_tts() -> Self {
+        Self::Qwen3Tts {
+            max_tokens: None,
+            temperature: 0.9,
+            top_p: 0.95,
+            top_k: Some(50),
+            repetition_penalty: 1.05,
         }
     }
 }
