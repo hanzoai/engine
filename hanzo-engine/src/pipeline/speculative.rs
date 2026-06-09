@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::Result as anyhowResult;
-use hanzo_ml::{Device, IndexOp, Result, Tensor};
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor};
 use hanzo_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
@@ -16,10 +16,14 @@ use crate::{
     get_mut_arcmutex,
     kv_cache::{CacheManager, HybridCacheManager, NormalCacheManager, RecurrentStateSnapshot},
     layers_masker::PastKvLenCache,
-    pipeline::sampling::{
-        finish_or_add_toks_to_seq, sample_sequence, sample_target_sequence_speculative,
+    pipeline::{
+        inputs_processor::text_models_inputs_processor::{FlashParams, ModelInputs},
+        sampling::{
+            finish_or_add_toks_to_seq, sample_sequence, sample_target_sequence_speculative,
+        },
     },
     prefix_cacher::PrefixCacheManagerV2,
+    sampler::Logprobs,
     sequence::Sequence,
     DeviceMapSetting, Loader, ModelKind, PagedAttentionConfig, Pipeline, TokenSource, TryIntoDType,
 };
@@ -32,6 +36,32 @@ use super::{
     GeneralMetadata, IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths,
     PreProcessingMixin,
 };
+
+/// Set to `1` to print per-step draft/verify timing for speculative decode.
+const SPEC_TIMING_ENV: &str = "HANZO_SPEC_TIMING";
+
+fn spec_timing_enabled() -> bool {
+    std::env::var(SPEC_TIMING_ENV).is_ok_and(|v| v == "1")
+}
+
+/// Build the minimal `ModelInputs` for one incremental (kv-cached, seq_len=1) draft step without
+/// going through the full inputs_processor. Only the token id (`input_ids`, a `[1,1]` tensor on the
+/// device) and its absolute position (`seqlen_offsets = [position]`, used solely for RoPE) change
+/// between steps. Valid only for the non-paged Normal-cache decode path; the causal mask is `None`
+/// for seq_len=1 and flash params are unused on this path, so both are left empty/default.
+fn draft_decode_inputs(input_ids: Tensor, position: usize) -> ModelInputs {
+    ModelInputs {
+        input_ids,
+        input_ids_full: None,
+        seqlen_offsets: vec![position],
+        seqlen_offsets_full: None,
+        context_lens: vec![(0, 1)],
+        position_ids: vec![1],
+        paged_attn_meta: None,
+        flash_meta: FlashParams::empty(true),
+        flash_meta_full: None,
+    }
+}
 
 /// A loader for a speculative pipeline using 2 [`Loader`]s.
 pub struct SpeculativeLoader {
@@ -557,53 +587,166 @@ impl Pipeline for SpeculativePipeline {
 
         // ======================= Run draft model gamma times producing tokens ============================
         // ======================= Sample the `gamma` logits. ============================
-        let mut draft_samples = Vec::new();
-        for i in 0..gamma {
-            let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
-            let device = get_mut_arcmutex!(self.draft).device();
-            let no_kv_cache = get_mut_arcmutex!(self.draft).get_metadata().no_kv_cache;
-            let inputs = self
-                .get_processor()
-                .inputs_processor()
-                .process_inputs(
-                    self.tokenizer(),
-                    &mut [seq],
-                    is_prompt && i == 0, // Only prompt (no kv cache) if first
-                    is_xlora,
-                    &device,
-                    no_kv_cache,
-                    None,
-                    false,
-                    get_mut_arcmutex!(self.draft).get_metadata().sliding_window,
-                    None,
-                    paged_attn_metadata.clone(),
-                    get_mut_arcmutex!(self.draft).device_mapper(),
-                )
-                .unwrap()
-                .inputs;
-            let logits = get_mut_arcmutex!(self.draft).forward_inputs(inputs, false)?;
-            #[allow(irrefutable_let_patterns)]
-            let ForwardInputsResult::CausalGeneration { logits } = logits
-            else {
-                hanzo_ml::bail!(
-                    "Speculative decoding requires `CausalGeneration` forward results"
-                );
-            };
+        let timing = spec_timing_enabled();
+        let draft_start = Instant::now();
 
-            let sample = sample_sequence(
-                logits.clone(),
-                seq,
-                seq.return_logprobs(),
-                rng.clone(),
-                false, // todo tune
-                true,
-                false,
-            )
-            .await?;
-            seq.add_tmp_tok(sample.token);
-            draft_samples.push(SpeculativeSample { sample });
+        // Fast path: non-paged Normal-cache draft. Each incremental draft step changes only the
+        // single new token id and its position, so we skip the full inputs_processor (which does a
+        // CPU->GPU sync per step via Tensor::new) and skip the heavyweight sampler (full logits
+        // GPU->CPU readback per step). The greedy argmax is computed on-GPU and fed straight back
+        // as the next step's input tensor, so the gamma forwards run back-to-back with no host
+        // round-trips; the gamma proposed token ids are read back once at the end of the chain.
+        let draft_is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
+        let draft_no_kv_cache = get_mut_arcmutex!(self.draft).get_metadata().no_kv_cache;
+        let can_fast_draft = paged_attn_metadata.is_none()
+            && !draft_is_hybrid
+            && !draft_is_xlora
+            && !draft_no_kv_cache;
+
+        let mut draft_samples = Vec::with_capacity(gamma);
+        if can_fast_draft {
+            let device = get_mut_arcmutex!(self.draft).device();
+            // Position (for RoPE) of the first new draft token. In decode mode the draft cache holds
+            // base_seq_len-1 tokens and we feed the last real token; in prompt mode step 0 is a full
+            // prefill handled below, after which the cache holds base_seq_len tokens.
+            let mut position = base_seq_len - 1;
+            let mut draft_tok_tensors: Vec<Tensor> = Vec::with_capacity(gamma);
+
+            // First forward: full prefill in prompt mode, single last-token step otherwise.
+            let first_logits = if is_prompt {
+                let sliding_window = get_mut_arcmutex!(self.draft).get_metadata().sliding_window;
+                let inputs = self
+                    .get_processor()
+                    .inputs_processor()
+                    .process_inputs(
+                        self.tokenizer(),
+                        &mut [seq],
+                        true,
+                        draft_is_xlora,
+                        &device,
+                        draft_no_kv_cache,
+                        None,
+                        false,
+                        sliding_window,
+                        None,
+                        None,
+                        get_mut_arcmutex!(self.draft).device_mapper(),
+                    )
+                    .unwrap()
+                    .inputs;
+                position = base_seq_len;
+                get_mut_arcmutex!(self.draft).forward_inputs(inputs, false)?
+            } else {
+                let last_tok = *seq.get_toks().last().unwrap();
+                let input_ids = Tensor::from_vec(vec![last_tok], (1, 1), &device)?;
+                let inputs: Box<dyn Any> = Box::new(draft_decode_inputs(input_ids, position));
+                position += 1;
+                get_mut_arcmutex!(self.draft).forward_inputs(inputs, false)?
+            };
+            #[allow(irrefutable_let_patterns)]
+            let ForwardInputsResult::CausalGeneration { logits } = first_logits
+            else {
+                hanzo_ml::bail!("Speculative decoding requires `CausalGeneration` forward results");
+            };
+            // [1,1,vocab] -> [vocab] -> argmax -> [1,1] u32, kept on-GPU as the next input.
+            let mut cur_tok = logits
+                .squeeze(0)?
+                .squeeze(0)?
+                .to_dtype(DType::F32)?
+                .argmax(0)?
+                .reshape((1, 1))?;
+            draft_tok_tensors.push(cur_tok.clone());
+
+            for _ in 1..gamma {
+                let inputs: Box<dyn Any> = Box::new(draft_decode_inputs(cur_tok.clone(), position));
+                position += 1;
+                let logits = get_mut_arcmutex!(self.draft).forward_inputs(inputs, false)?;
+                #[allow(irrefutable_let_patterns)]
+                let ForwardInputsResult::CausalGeneration { logits } = logits
+                else {
+                    hanzo_ml::bail!(
+                        "Speculative decoding requires `CausalGeneration` forward results"
+                    );
+                };
+                cur_tok = logits
+                    .squeeze(0)?
+                    .squeeze(0)?
+                    .to_dtype(DType::F32)?
+                    .argmax(0)?
+                    .reshape((1, 1))?;
+                draft_tok_tensors.push(cur_tok.clone());
+            }
+
+            // Single readback of all gamma proposed token ids (one sync for the whole chain).
+            let toks: Vec<u32> = Tensor::cat(&draft_tok_tensors, 0)?
+                .reshape((gamma,))?
+                .to_vec1()?;
+            for token in toks {
+                draft_samples.push(SpeculativeSample {
+                    sample: Logprobs {
+                        token,
+                        logprob: 0.0,
+                        bytes: None,
+                        top_logprobs: None,
+                    },
+                });
+            }
+        } else {
+            for i in 0..gamma {
+                // Extract everything needing the draft lock into locals FIRST: two get_mut_arcmutex!
+                // calls inside one process_inputs(..) arg list would both hold the (non-reentrant)
+                // draft mutex for the duration of the call -> self-deadlock. Each `let` releases its
+                // guard.
+                let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
+                let device = get_mut_arcmutex!(self.draft).device();
+                let no_kv_cache = get_mut_arcmutex!(self.draft).get_metadata().no_kv_cache;
+                let sliding_window = get_mut_arcmutex!(self.draft).get_metadata().sliding_window;
+                let inputs = self
+                    .get_processor()
+                    .inputs_processor()
+                    .process_inputs(
+                        self.tokenizer(),
+                        &mut [seq],
+                        is_prompt && i == 0, // Only prompt (no kv cache) if first
+                        is_xlora,
+                        &device,
+                        no_kv_cache,
+                        None,
+                        false,
+                        sliding_window,
+                        None,
+                        paged_attn_metadata.clone(),
+                        get_mut_arcmutex!(self.draft).device_mapper(),
+                    )
+                    .unwrap()
+                    .inputs;
+                let logits = get_mut_arcmutex!(self.draft).forward_inputs(inputs, false)?;
+                #[allow(irrefutable_let_patterns)]
+                let ForwardInputsResult::CausalGeneration { logits } = logits
+                else {
+                    hanzo_ml::bail!(
+                        "Speculative decoding requires `CausalGeneration` forward results"
+                    );
+                };
+
+                let sample = sample_sequence(
+                    logits.clone(),
+                    seq,
+                    seq.return_logprobs(),
+                    rng.clone(),
+                    false, // todo tune
+                    true,
+                    false,
+                )
+                .await?;
+                seq.add_tmp_tok(sample.token);
+                draft_samples.push(SpeculativeSample { sample });
+            }
+            seq.remove_tmp_tok(gamma);
         }
-        seq.remove_tmp_tok(gamma);
+
+        let draft_ms = draft_start.elapsed().as_secs_f64() * 1000.0;
+        let verify_start = Instant::now();
 
         // ======================= Add all draft tokens but the last one. Add the last from the seq. ============================
         let mut draft_prefill_tokens = if is_prompt {
@@ -658,6 +801,9 @@ impl Pipeline for SpeculativePipeline {
         let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
         let device = get_mut_arcmutex!(self.target).device();
         let no_kv_cache = get_mut_arcmutex!(self.target).get_metadata().no_kv_cache;
+        // Same anti-deadlock rule as the draft path: extract all target-lock values into locals so no
+        // two get_mut_arcmutex!(self.target) guards are alive at once inside process_inputs(..).
+        let sliding_window = get_mut_arcmutex!(self.target).get_metadata().sliding_window;
         let inputs = self
             .get_processor()
             .inputs_processor()
@@ -670,7 +816,7 @@ impl Pipeline for SpeculativePipeline {
                 no_kv_cache,
                 Some((gamma, initial_cache_len)), // Get the last gamma, see above
                 false,
-                get_mut_arcmutex!(self.target).get_metadata().sliding_window,
+                sliding_window,
                 None,
                 paged_attn_metadata.clone(),
                 get_mut_arcmutex!(self.target).device_mapper(),
@@ -701,6 +847,15 @@ impl Pipeline for SpeculativePipeline {
         .await?;
 
         let accepted_tokens = samples.into_iter().map(|s| s.sample).collect::<Vec<_>>();
+
+        if timing {
+            let verify_ms = verify_start.elapsed().as_secs_f64() * 1000.0;
+            tracing::info!(
+                "spec: gamma={gamma} draft={draft_ms:.2}ms ({:.2}ms/tok) verify={verify_ms:.2}ms accepted={}",
+                draft_ms / gamma as f64,
+                accepted_tokens.len(),
+            );
+        }
 
         // ======================= Narrow caches to account for rejections ============================
         let n_not_accepted = gamma - accepted_tokens.len();
@@ -788,9 +943,7 @@ impl Pipeline for SpeculativePipeline {
                     }
                 }
                 EitherCache::Normal(_) | EitherCache::Hybrid(_) => {
-                    hanzo_ml::bail!(
-                        "Speculative decoding X-LoRA path requires full cache backend."
-                    )
+                    hanzo_ml::bail!("Speculative decoding X-LoRA path requires full cache backend.")
                 }
             }
         }
@@ -871,9 +1024,7 @@ impl Pipeline for SpeculativePipeline {
                     }
                 }
                 EitherCache::Normal(_) | EitherCache::Hybrid(_) => {
-                    hanzo_ml::bail!(
-                        "Speculative decoding X-LoRA path requires full cache backend."
-                    )
+                    hanzo_ml::bail!("Speculative decoding X-LoRA path requires full cache backend.")
                 }
             }
         }

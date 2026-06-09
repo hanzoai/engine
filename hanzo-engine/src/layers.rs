@@ -2626,6 +2626,58 @@ pub(crate) fn apply_rotary_positions_q(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "vulkan")]
+fn vulkan_qk_rms_norm_rope(
+    q: &Tensor,
+    k: &Tensor,
+    q_weight: &Tensor,
+    k_weight: &Tensor,
+    q_eps: f64,
+    k_eps: f64,
+    cos: &Tensor,
+    sin: &Tensor,
+) -> Result<Option<(Tensor, Tensor)>> {
+    use hanzo_ml::{Device, Storage};
+    let (b, h, s, d) = q.dims4()?;
+    let hkv = k.dim(1)?;
+    if cos.dim(cos.rank() - 1)? != d / 2 {
+        return Ok(None); // only the standard [s, d/2] half-rotary cache
+    }
+    let dev = match q.device() {
+        Device::Vulkan(dv) => dv.clone(),
+        _ => return Ok(None),
+    };
+    let q = q.contiguous()?;
+    let k = k.contiguous()?;
+    let qw = q_weight.contiguous()?;
+    let kw = k_weight.contiguous()?;
+    let cos = cos.contiguous()?;
+    let sin = sin.contiguous()?;
+    let (qs, _) = q.storage_and_layout();
+    let (ks, _) = k.storage_and_layout();
+    let (qws, _) = qw.storage_and_layout();
+    let (kws, _) = kw.storage_and_layout();
+    let (cs, _) = cos.storage_and_layout();
+    let (sis, _) = sin.storage_and_layout();
+    let (
+        Storage::Vulkan(qv),
+        Storage::Vulkan(kv),
+        Storage::Vulkan(qwv),
+        Storage::Vulkan(kwv),
+        Storage::Vulkan(cv),
+        Storage::Vulkan(siv),
+    ) = (&*qs, &*ks, &*qws, &*kws, &*cs, &*sis)
+    else {
+        return Ok(None);
+    };
+    let qo = dev.qk_norm_rope_gpu(qv, qwv, cv, siv, b * h * s, d, s, q_eps as f32)?;
+    let ko = dev.qk_norm_rope_gpu(kv, kwv, cv, siv, b * hkv * s, d, s, k_eps as f32)?;
+    Ok(Some((
+        Tensor::from((Storage::Vulkan(qo), (b, h, s, d))),
+        Tensor::from((Storage::Vulkan(ko), (b, hkv, s, d))),
+    )))
+}
+
 pub fn qk_rms_norm_rope(
     q: &Tensor,
     k: &Tensor,
@@ -2654,6 +2706,18 @@ pub fn qk_rms_norm_rope(
         is_gpt_neox,
     )? {
         return Ok((q, k));
+    }
+
+    // Transpose-free q/k norm+rope on Vulkan: one fused kernel in [b,h,s,d] layout, eliminating the
+    // generic path's transpose/flatten/reshape copies (the dominant decode strided_copy source:
+    // 217 -> 73/token). Default on coopmat/subgroup Vulkan for NeoX rope; falls through otherwise.
+    #[cfg(feature = "vulkan")]
+    if is_gpt_neox && q.device().is_vulkan() {
+        if let Some(res) =
+            vulkan_qk_rms_norm_rope(q, k, q_weight, k_weight, q_eps, k_eps, &cos, &sin)?
+        {
+            return Ok(res);
+        }
     }
 
     let rope = if is_gpt_neox {

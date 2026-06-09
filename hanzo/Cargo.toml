@@ -92,6 +92,10 @@ name = "speech"
 path = "examples/models/speech/main.rs"
 
 [[example]]
+name = "zentts"
+path = "examples/models/zentts/main.rs"
+
+[[example]]
 name = "asr"
 path = "examples/models/asr/main.rs"
 

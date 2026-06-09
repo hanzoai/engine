@@ -120,6 +120,51 @@ fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
     }
 }
 
+// Vulkan single-query (decode) attention: one fused on-GPU kernel (online softmax, GQA-aware) in
+// place of repeat_kv + QK^T bmm + softmax + *V bmm + the contiguous glue (~10 dispatches/layer -> 1).
+// Returns None (caller falls back to eager) unless: on Vulkan, q_len==1, head_dim is a power of two
+// <= 128, and there's no softcap/sliding-window (the kernel handles neither). q:[B,H,1,D] attends the
+// full cache k/v:[B,Hkv,L,D]; a lone decode query sees only past keys so no mask is needed.
+#[cfg(feature = "vulkan")]
+fn vulkan_decode_attn(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    sdpa_params: &SdpaParams,
+) -> Result<Option<Tensor>> {
+    use hanzo_ml::{Device, Storage};
+    let (b, h, q_len, d) = q.dims4()?;
+    if q_len != 1
+        || d == 0
+        || d > 128
+        || (d & (d - 1)) != 0
+        || sdpa_params.softcap.is_some()
+        || sdpa_params.sliding_window.is_some()
+    {
+        return Ok(None);
+    }
+    let dev = match q.device() {
+        Device::Vulkan(dv) => dv.clone(),
+        _ => return Ok(None),
+    };
+    let hkv = k.dim(1)?;
+    let l = k.dim(2)?;
+    if h % hkv != 0 {
+        return Ok(None);
+    }
+    let q = q.contiguous()?;
+    let k = k.contiguous()?;
+    let v = v.contiguous()?;
+    let (qs, _) = q.storage_and_layout();
+    let (ks, _) = k.storage_and_layout();
+    let (vs, _) = v.storage_and_layout();
+    let (Storage::Vulkan(qv), Storage::Vulkan(kv), Storage::Vulkan(vv)) = (&*qs, &*ks, &*vs) else {
+        return Ok(None);
+    };
+    let out = dev.attn_decode_gpu(qv, kv, vv, b, h, hkv, l, d, sdpa_params.softmax_scale)?;
+    Ok(Some(Tensor::from((Storage::Vulkan(out), (b, h, 1, d)))))
+}
+
 pub struct SdpaParams {
     pub n_kv_groups: usize,
     pub softcap: Option<f32>,
@@ -160,6 +205,15 @@ impl Sdpa {
                 _ => None,
             };
             return sinks_attn(q, k, v, sinks, mask_tensor, flash_params, sdpa_params);
+        }
+
+        // Vulkan decode fast-path: one fused kernel replaces repeat_kv + QK^T bmm + softmax + *V bmm
+        // + contiguous glue. Plain causal/no-mask single-query only; else falls through to eager.
+        #[cfg(feature = "vulkan")]
+        if matches!(mask, AttentionMask::None | AttentionMask::CausalFlash) {
+            if let Some(out) = vulkan_decode_attn(q, k, v, sdpa_params)? {
+                return Ok(out);
+            }
         }
 
         // The mask carries causality already; the kernel-level do_causal
@@ -239,7 +293,11 @@ impl Sdpa {
                 && sdpa_params.softcap.is_none_or(|x| x == 1.0)
         });
         let valid_head_dims: &[usize] = &[32, 64, 72, 80, 96, 128, 256, 512];
-        // Metal SDPA full kernel requires q_seq <= k_seq when a mask is present.
+        // The Metal steel_attention (full) kernel handles q_seq != kv_seq via its qL_off, so the
+        // non-square masked case (speculative-decode verify: gamma+1 queries vs a longer cache)
+        // can use the fast kernel as long as q_seq <= kv_seq. The single-query decode path
+        // (seq_len==1) keeps using the vector kernel. q_seq > kv_seq has no valid qL_off and stays
+        // on naive_sdpa.
         let metal_supports_mask = mask.is_none() || seq_len <= k.dim(2)?;
 
         // Metal FA path for DK=512 BF16 with a mask. Two specializations:
