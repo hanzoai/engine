@@ -88,6 +88,8 @@ fn main() -> Result<()> {
 
     let header_hash_arg = format!("-DCUDA_HEADER_HASH={:016x}", cuda_header_hash("src/cuda")?);
 
+    ensure_real_nvcc();
+
     let mut builder = cudaforge::KernelBuilder::new()
         .source_glob("src/cuda/*.cu")
         .arg("-std=c++17")
@@ -441,4 +443,28 @@ fn main() -> Result<()> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_fp8)");
     Ok(())
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+fn ensure_real_nvcc() {
+    use std::path::PathBuf;
+    if std::env::var_os("NVCC").is_some() {
+        return;
+    }
+    let from_root = ["CUDA_HOME", "CUDA_PATH", "CUDA_ROOT"]
+        .iter()
+        .filter_map(|k| std::env::var_os(k))
+        .map(|r| PathBuf::from(r).join("bin").join("nvcc"))
+        .find(|p| p.exists());
+    let from_path = std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|d| d.join("nvcc"))
+            .find(|p| p.exists())
+    });
+    if let Some(nvcc) = from_root.or(from_path) {
+        if let Ok(real) = std::fs::canonicalize(&nvcc) {
+            println!("cargo:warning=hanzo: pinning NVCC to {}", real.display());
+            std::env::set_var("NVCC", real);
+        }
+    }
 }
