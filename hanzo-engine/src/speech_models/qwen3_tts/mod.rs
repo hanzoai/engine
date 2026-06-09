@@ -15,7 +15,8 @@ mod config;
 mod model;
 
 pub use config::{CodecConfig, Qwen3TtsConfig};
-use model::{causal_mask, Qwen3TtsModel};
+pub use model::{CodePredictor, Qwen3TtsModel, Talker};
+use model::causal_mask;
 
 use super::{SpeechGenerationConfig, SpeechGenerationOutput};
 
