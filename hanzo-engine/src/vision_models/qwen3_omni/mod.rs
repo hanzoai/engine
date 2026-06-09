@@ -26,9 +26,9 @@ use hanzo_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::layers;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{
-    EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
-    SupportedModality,
+    EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata, SupportedModality,
 };
 use crate::vision_models::qwen3_5_moe::Qwen3_5MoeModel;
 use crate::vision_models::qwen3_vl::Qwen3VLVisionSpecificArgs;
@@ -174,13 +174,18 @@ impl Qwen3OmniModel {
     /// Omni forward skeleton: route the multimodal inputs through the Thinker, optionally encode
     /// audio, and return the Thinker's text logits. The speech (Talker) branch is reachable via
     /// [`Self::generate_speech_from_hidden`] but is NOT driven from here yet.
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         audio_features: Option<Tensor>,
         thinker_args: Qwen3VLVisionSpecificArgs,
-        ctx: &mut ModelForwardContext<'_>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         if let Some(audio) = audio_features.as_ref() {
             // BRIDGE PLACEHOLDER: audio is encoded to Thinker width then dropped (see encode_audio).
@@ -188,7 +193,17 @@ impl Qwen3OmniModel {
         }
 
         // Vision + video + text all route through the Thinker (it owns the Qwen3-VL vision tower).
-        MultimodalModel::forward(&self.thinker, input_ids, pixel_values, Box::new(thinker_args), ctx)
+        MultimodalModel::forward(
+            &self.thinker,
+            input_ids,
+            pixel_values,
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            Box::new(thinker_args),
+            metadata,
+            flash_params,
+        )
     }
 
     /// SPEECH OUTPUT (scaffold): given Thinker hidden states for the response, project them into the
@@ -215,12 +230,17 @@ impl Qwen3OmniModel {
 impl crate::speculative::SpeculativeTargetMixin for Qwen3OmniModel {}
 
 impl MultimodalModel for Qwen3OmniModel {
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        ctx: &mut ModelForwardContext<'_>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let Qwen3OmniSpecificArgs {
             thinker_args,
@@ -229,7 +249,17 @@ impl MultimodalModel for Qwen3OmniModel {
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Qwen3OmniSpecificArgs`");
-        self.forward(input_ids, pixel_values, audio_features, thinker_args, ctx)
+        self.forward(
+            input_ids,
+            pixel_values,
+            audio_features,
+            thinker_args,
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            metadata,
+            flash_params,
+        )
     }
     fn cache(&self) -> &EitherCache {
         self.thinker.cache()
