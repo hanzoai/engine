@@ -10,8 +10,13 @@ use crate::attention::{chunked_attention, SdpaParams};
 /// Low-VRAM synchronize guard: a CUDA-specific OOM workaround. Off CUDA the `MemoryUsage::query`
 /// it calls is expensive (a full system scan) and ran once per attention layer (~28x/token on a
 /// small model) -- the dominant decode-time cost. The guard is meaningless off CUDA, so skip it.
+/// On integrated/unified-memory CUDA GPUs (GB10) `MemoryUsage::query` also does a full `sysinfo`
+/// scan (~110ms) AND there is no separate VRAM pool to exhaust, so skip the guard there too.
 pub(crate) fn maybe_synchronize(device: &Device) -> Result<()> {
     if !device.is_cuda() {
+        return Ok(());
+    }
+    if is_unified_memory_device(device) {
         return Ok(());
     }
     // If less that 4 GB available, synchronize
@@ -23,6 +28,19 @@ pub(crate) fn maybe_synchronize(device: &Device) -> Result<()> {
         device.synchronize()?;
     }
     Ok(())
+}
+
+/// Cached `is_integrated_gpu` check so the per-layer guard never re-runs the CUDA attribute query.
+fn is_unified_memory_device(device: &Device) -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static CACHED: AtomicU8 = AtomicU8::new(u8::MAX);
+    let cached = CACHED.load(Ordering::Relaxed);
+    if cached != u8::MAX {
+        return cached == 1;
+    }
+    let unified = crate::utils::normal::is_integrated_gpu(device);
+    CACHED.store(u8::from(unified), Ordering::Relaxed);
+    unified
 }
 
 /// Computes softmax(QK^T*sqrt(d_k))V
