@@ -8,9 +8,12 @@ use hanzo_quant::{
 
 use crate::{
     attention::{naive_sdpa, SdpaParams},
+    kv_cache::KvCache,
     layers::{self, repeat_kv, RmsNorm, RotaryEmbedding},
     utils::progress::{new_multi_progress, NiceProgressBar},
 };
+
+const KV_CACHE_GROW: usize = 256;
 
 use super::config::{
     CodePredictorConfig, CodecConfig, CodecDecoderConfig, Qwen3TtsConfig, TalkerConfig,
@@ -89,6 +92,7 @@ impl Qwen3Attention {
         xs: &Tensor,
         seqlen_offsets: &[usize],
         mask: Option<&Tensor>,
+        cache: &mut KvCache,
     ) -> Result<Tensor> {
         let (b, t, _d) = xs.dims3()?;
 
@@ -113,6 +117,8 @@ impl Qwen3Attention {
         k = k.transpose(1, 2)?.contiguous()?;
 
         let (q, k) = self.rope.forward(&q, &k, seqlen_offsets)?;
+
+        let (k, v) = cache.append(&k.contiguous()?, &v.contiguous()?)?;
 
         let k = repeat_kv(k, self.sdpa_params.n_kv_groups)?;
         let v = repeat_kv(v, self.sdpa_params.n_kv_groups)?;
@@ -198,10 +204,11 @@ impl Qwen3DecoderLayer {
         xs: &Tensor,
         seqlen_offsets: &[usize],
         mask: Option<&Tensor>,
+        cache: &mut KvCache,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.self_attn.forward(&xs, seqlen_offsets, mask)?;
+        let xs = self.self_attn.forward(&xs, seqlen_offsets, mask, cache)?;
         let xs = (residual + xs)?;
         let residual = &xs;
         let xs = self.mlp.forward(&self.post_attention_layernorm.forward(&xs)?)?;
@@ -217,6 +224,7 @@ pub struct Talker {
     layers: Vec<Qwen3DecoderLayer>,
     norm: RmsNorm,
     codec_head: Arc<dyn QuantMethod>,
+    max_seq_len: usize,
 }
 
 impl Talker {
@@ -271,7 +279,14 @@ impl Talker {
             layers,
             norm,
             codec_head,
+            max_seq_len: cfg.max_position_embeddings.max(32768),
         })
+    }
+
+    pub fn make_cache(&self) -> Vec<KvCache> {
+        (0..self.layers.len())
+            .map(|_| KvCache::new_normal(2, self.max_seq_len, KV_CACHE_GROW))
+            .collect()
     }
 
     pub fn embed_text(&self, ids: &Tensor) -> Result<Tensor> {
@@ -288,10 +303,11 @@ impl Talker {
         inputs_embeds: &Tensor,
         seqlen_offsets: &[usize],
         mask: Option<&Tensor>,
+        cache: &mut [KvCache],
     ) -> Result<(Tensor, Tensor)> {
         let mut xs = inputs_embeds.clone();
-        for layer in &self.layers {
-            xs = layer.forward(&xs, seqlen_offsets, mask)?;
+        for (layer, c) in self.layers.iter().zip(cache.iter_mut()) {
+            xs = layer.forward(&xs, seqlen_offsets, mask, c)?;
         }
         let hidden = self.norm.forward(&xs)?;
         let logits = self.codec_head.forward(&hidden)?;
@@ -307,6 +323,7 @@ pub struct CodePredictor {
     layers: Vec<Qwen3DecoderLayer>,
     norm: RmsNorm,
     heads: Vec<Arc<dyn QuantMethod>>,
+    max_seq_len: usize,
 }
 
 impl CodePredictor {
@@ -367,7 +384,14 @@ impl CodePredictor {
             layers,
             norm,
             heads,
+            max_seq_len: cfg.max_position_embeddings.max(cfg.num_code_groups.max(1)),
         })
+    }
+
+    pub fn make_cache(&self) -> Vec<KvCache> {
+        (0..self.layers.len())
+            .map(|_| KvCache::new_normal(2, self.max_seq_len, KV_CACHE_GROW))
+            .collect()
     }
 
     pub fn project(&self, talker_hidden: &Tensor) -> Result<Tensor> {
@@ -381,10 +405,11 @@ impl CodePredictor {
         seqlen_offsets: &[usize],
         mask: Option<&Tensor>,
         group_idx: usize,
+        cache: &mut [KvCache],
     ) -> Result<Tensor> {
         let mut xs = inputs_embeds.clone();
-        for layer in &self.layers {
-            xs = layer.forward(&xs, seqlen_offsets, mask)?;
+        for (layer, c) in self.layers.iter().zip(cache.iter_mut()) {
+            xs = layer.forward(&xs, seqlen_offsets, mask, c)?;
         }
         let hidden = self.norm.forward(&xs)?;
         let head = &self.heads[group_idx.min(self.heads.len() - 1)];

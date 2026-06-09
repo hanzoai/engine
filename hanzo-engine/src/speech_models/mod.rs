@@ -1,12 +1,14 @@
 mod bs1770;
 mod dia;
 pub mod qwen3_asr;
+pub mod qwen3_tts;
 pub mod utils;
 
 use std::{str::FromStr, sync::Arc};
 
 pub use dia::{DiaConfig, DiaPipeline};
 pub use qwen3_asr::{Qwen3AsrConfig, Qwen3AsrModel};
+pub use qwen3_tts::{CodecConfig as Qwen3TtsCodecConfig, Qwen3TtsConfig, Qwen3TtsPipeline};
 use serde::{Deserialize, Serialize};
 
 /// Audio-understanding (speech -> text) model families. Distinct from
@@ -79,6 +81,13 @@ pub enum SpeechGenerationConfig {
         top_p: f32,
         top_k: Option<usize>,
     },
+    Qwen3Tts {
+        max_tokens: Option<usize>,
+        temperature: f32,
+        top_p: f32,
+        top_k: Option<usize>,
+        repetition_penalty: f32,
+    },
 }
 
 impl SpeechGenerationConfig {
@@ -91,6 +100,16 @@ impl SpeechGenerationConfig {
                 top_p: 0.95,
                 top_k: Some(35),
             },
+        }
+    }
+
+    pub fn default_qwen3_tts() -> Self {
+        Self::Qwen3Tts {
+            max_tokens: None,
+            temperature: 0.9,
+            top_p: 0.95,
+            top_k: Some(50),
+            repetition_penalty: 1.05,
         }
     }
 }
