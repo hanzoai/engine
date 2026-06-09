@@ -66,7 +66,7 @@ pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_sele
 mod amoe;
 mod attention;
 mod diagnostics;
-mod diffusion_models;
+pub mod diffusion_models;
 pub mod distributed;
 pub mod files;
 mod gguf;
@@ -87,7 +87,7 @@ mod sampler;
 mod scheduler;
 mod sequence;
 pub mod speculative;
-mod speech_models;
+pub mod speech_models;
 mod toml_selector;
 mod tools;
 mod topology;
