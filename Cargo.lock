@@ -2728,7 +2728,7 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "thiserror 2.0.18",
- "tokenizers",
+ "tokenizers 0.21.4",
  "tokio",
  "tokio-rayon",
  "tokio-tungstenite 0.28.0",
@@ -2747,7 +2747,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-flash-attn"
-version = "0.9.2"
+version = "0.10.2"
 dependencies = [
  "anyhow",
  "bindgen_cuda",
@@ -2758,7 +2758,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-flash-attn-build"
-version = "0.9.2"
+version = "0.10.2"
 dependencies = [
  "anyhow",
  "flate2",
@@ -2768,8 +2768,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-kernels"
-version = "0.9.2"
+version = "0.10.2"
 dependencies = [
+ "glob",
  "hanzo-bindgen-cuda",
 ]
 
@@ -2807,8 +2808,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-metal-kernels"
-version = "0.9.2"
+version = "0.10.2"
 dependencies = [
+ "block2",
  "half",
  "objc2",
  "objc2-foundation",
@@ -2820,7 +2822,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.9.2"
+version = "0.10.3"
 dependencies = [
  "accelerate-src",
  "ash",
@@ -2847,13 +2849,14 @@ dependencies = [
  "rocm-rs",
  "safetensors 0.7.0",
  "thiserror 2.0.18",
+ "tokenizers 0.22.2",
  "yoke 0.8.2",
- "zip 7.2.0",
+ "zip 8.6.0",
 ]
 
 [[package]]
 name = "hanzo-nn"
-version = "0.9.2"
+version = "0.10.2"
 dependencies = [
  "accelerate-src",
  "half",
@@ -3029,7 +3032,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ug"
-version = "0.9.2"
+version = "0.10.2"
 dependencies = [
  "ug",
  "ug-cuda",
@@ -4549,6 +4552,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "onig"
+version = "6.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cc3cbf698f9438986c11a880c90a6d04b9de27575afd28bbf45b154b6c709e2"
+dependencies = [
+ "bitflags 2.12.1",
+ "libc",
+ "once_cell",
+ "onig_sys",
+]
+
+[[package]]
+name = "onig_sys"
+version = "69.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e68317604e77e53b85896388e1a803c1d21b74c899ec9e5e1112db90735edd7"
+dependencies = [
+ "cc",
+ "pkg-config",
+]
+
+[[package]]
 name = "openai-harmony"
 version = "0.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4761,6 +4786,12 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
+name = "pkg-config"
+version = "0.3.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "png"
@@ -6964,6 +6995,40 @@ dependencies = [
  "log",
  "macro_rules_attribute",
  "monostate",
+ "onig",
+ "paste",
+ "rand 0.9.4",
+ "rayon",
+ "rayon-cond",
+ "regex",
+ "regex-syntax",
+ "serde",
+ "serde_json",
+ "spm_precompiled",
+ "thiserror 2.0.18",
+ "unicode-normalization-alignments",
+ "unicode-segmentation",
+ "unicode_categories",
+]
+
+[[package]]
+name = "tokenizers"
+version = "0.22.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b238e22d44a15349529690fb07bd645cf58149a1b1e44d6cb5bd1641ff1a6223"
+dependencies = [
+ "ahash",
+ "aho-corasick",
+ "compact_str",
+ "dary_heap",
+ "derive_builder",
+ "esaxx-rs",
+ "getrandom 0.3.4",
+ "itertools 0.14.0",
+ "log",
+ "macro_rules_attribute",
+ "monostate",
+ "onig",
  "paste",
  "rand 0.9.4",
  "rayon",
@@ -7109,7 +7174,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
- "tokenizers",
+ "tokenizers 0.21.4",
  "toktrie",
 ]
 
@@ -8539,6 +8604,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "zen3-serving"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "clap",
+ "hanzo-audio",
+ "hanzo-engine",
+ "hanzo-ml",
+ "hanzo-nn",
+ "hanzo-quant",
+ "hound",
+ "serde_json",
+ "tokenizers 0.21.4",
+]
+
+[[package]]
 name = "zerocopy"
 version = "0.8.50"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8634,9 +8716,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "7.2.0"
+version = "8.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c42e33efc22a0650c311c2ef19115ce232583abbe80850bc8b66509ebef02de0"
+checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
 dependencies = [
  "crc32fast",
  "indexmap 2.14.0",

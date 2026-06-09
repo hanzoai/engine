@@ -16,6 +16,7 @@ members = [
     "hanzo-macros",
     "hanzo-sandbox",
     "hanzo-code-exec",
+    "native/zen3-serving",
 ]
 resolver = "2"
 

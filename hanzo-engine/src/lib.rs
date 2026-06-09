@@ -81,7 +81,7 @@ mod sampler;
 mod scheduler;
 mod sequence;
 pub mod speculative;
-mod speech_models;
+pub mod speech_models;
 mod toml_selector;
 mod tools;
 mod topology;

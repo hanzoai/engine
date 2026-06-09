@@ -857,6 +857,7 @@ impl TryFrom<GgmlDType> for IsqType {
             GgmlDType::BF16 | GgmlDType::F32 | GgmlDType::F16 => {
                 hanzo_ml::bail!("Expected valid GGML ISQ type.")
             }
+            other => hanzo_ml::bail!("Expected valid GGML ISQ type, got {other:?}."),
         }
     }
 }
