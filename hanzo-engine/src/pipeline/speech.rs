@@ -38,6 +38,8 @@ use tokio::sync::Mutex;
 
 // The zen3-tts repos ship a byte-level BPE as vocab.json + merges.txt (Qwen tokenizer), with no
 // tokenizer.json. Reconstruct an equivalent ByteLevel BPE tokenizer from those two files.
+// Unused while the realtime Qwen3-TTS path tokenizes upstream; kept for when it is wired in.
+#[allow(dead_code)]
 fn build_qwen_bpe_tokenizer(
     vocab: &std::path::Path,
     merges: &std::path::Path,
@@ -204,13 +206,7 @@ impl SpeechModelInner {
     ) -> hanzo_ml::Result<SpeechGenerationOutput> {
         match self {
             SpeechModelInner::Dia(m) => m.generate(prompt, cfg),
-            SpeechModelInner::Qwen3Tts(m) => {
-                let max_frames = match cfg {
-                    SpeechGenerationConfig::Qwen3Tts { max_frames } => *max_frames,
-                    _ => None,
-                };
-                m.generate(prompt, max_frames)
-            }
+            SpeechModelInner::Qwen3Tts(m) => m.generate(prompt, cfg),
         }
     }
 
@@ -452,12 +448,8 @@ impl Loader for SpeechLoader {
                     |_| true,
                     Arc::new(|_| DeviceForLoadTensor::Base),
                 )?;
-                let tokenizer = build_qwen_bpe_tokenizer(
-                    paths.vocab.as_ref().expect("vocab.json"),
-                    paths.merges.as_ref().expect("merges.txt"),
-                )?;
                 SpeechModelInner::Qwen3Tts(Box::new(Qwen3TtsPipeline::new(
-                    &cfg, &codec_cfg, vb, codec_vb, tokenizer, dtype, device,
+                    &cfg, &codec_cfg, vb, codec_vb,
                 )?))
             }
         };
