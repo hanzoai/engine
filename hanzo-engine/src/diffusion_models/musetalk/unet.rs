@@ -8,14 +8,14 @@ use crate::layers::{conv2d, group_norm, layer_norm, linear, linear_no_bias, MatM
 
 use super::config::UNetConfig;
 
-const TIME_EMBED_FACTOR: f64 = 1000.;
 const MAX_PERIOD: f64 = 10000.;
 
-fn timestep_embedding(t: &Tensor, dim: usize, flip_sin_to_cos: bool, dtype: DType) -> Result<Tensor> {
-    let dev = t.device();
-    let half = dim / 2;
+fn timestep_freqs(half: usize, dev: &hanzo_ml::Device) -> Result<Tensor> {
     let arange = Tensor::arange(0, half as u32, dev)?.to_dtype(DType::F32)?;
-    let freqs = (arange * (-MAX_PERIOD.ln() / half as f64))?.exp()?;
+    (arange * (-MAX_PERIOD.ln() / half as f64))?.exp()
+}
+
+fn timestep_embedding(t: &Tensor, freqs: &Tensor, flip_sin_to_cos: bool, dtype: DType) -> Result<Tensor> {
     let args = t
         .unsqueeze(1)?
         .to_dtype(DType::F32)?
@@ -412,7 +412,7 @@ pub struct UNet2DConditionModel {
     conv_norm_out: GroupNorm,
     conv_out: Conv2d,
     cfg: UNetConfig,
-    time_proj_dim: usize,
+    temb: Tensor,
 }
 
 impl UNet2DConditionModel {
@@ -544,6 +544,12 @@ impl UNet2DConditionModel {
         };
         let conv_out = conv2d(base, cfg.out_channels, 3, conv_out_cfg, vb.pp("conv_out"))?;
 
+        let dtype = conv_in.weight().dtype();
+        let freqs = timestep_freqs(time_proj_dim / 2, vb.device())?;
+        let zero_t = Tensor::zeros(1, DType::F32, vb.device())?;
+        let temb_in = timestep_embedding(&zero_t, &freqs, cfg.flip_sin_to_cos, dtype)?;
+        let temb = time_embedding.forward(&temb_in)?;
+
         Ok(Self {
             conv_in,
             time_embedding,
@@ -553,21 +559,15 @@ impl UNet2DConditionModel {
             conv_norm_out,
             conv_out,
             cfg: cfg.clone(),
-            time_proj_dim,
+            temb,
         })
     }
 
-    pub fn forward(&self, sample: &Tensor, timestep: &Tensor, context: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, sample: &Tensor, _timestep: &Tensor, context: &Tensor) -> Result<Tensor> {
         let dtype = self.conv_in.weight().dtype();
         let sample = sample.to_dtype(dtype)?;
         let context = context.to_dtype(dtype)?;
-        let temb = timestep_embedding(
-            timestep,
-            self.time_proj_dim,
-            self.cfg.flip_sin_to_cos,
-            dtype,
-        )?;
-        let temb = self.time_embedding.forward(&temb)?;
+        let temb = &self.temb;
 
         let mut h = Convolution.forward_2d(&self.conv_in, &sample)?;
         let mut skips: Vec<Tensor> = vec![h.clone()];
