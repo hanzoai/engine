@@ -858,7 +858,19 @@ impl TryFrom<GgmlDType> for IsqType {
             | GgmlDType::IQ4_XS
             | GgmlDType::BF16
             | GgmlDType::F32
-            | GgmlDType::F16 => {
+            | GgmlDType::F16
+            // IQ / ternary / 1-bit / NVFP4 codec types are decode-only, not ISQ targets.
+            | GgmlDType::IQ2_XXS
+            | GgmlDType::IQ2_XS
+            | GgmlDType::IQ3_XXS
+            | GgmlDType::IQ1_S
+            | GgmlDType::IQ3_S
+            | GgmlDType::IQ2_S
+            | GgmlDType::IQ1_M
+            | GgmlDType::TQ1_0
+            | GgmlDType::TQ2_0
+            | GgmlDType::NVFP4
+            | GgmlDType::Q1_0 => {
                 hanzo_ml::bail!("Expected valid GGML ISQ type.")
             }
         }
