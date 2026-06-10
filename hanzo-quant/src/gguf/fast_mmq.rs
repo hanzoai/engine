@@ -29,7 +29,9 @@ fn output_shape(xs: &Tensor, nrows: usize) -> Shape {
     Shape::from(out_dims)
 }
 
-fn wrap_cuda_output<T: CudaDType + DeviceRepr>(
+fn wrap_cuda_output<
+    T: hanzo_ml::cuda_backend::CudaDType + hanzo_ml::cuda_backend::cudarc::driver::DeviceRepr,
+>(
     out: CudaSlice<T>,
     dev: &CudaDevice,
     shape: Shape,
