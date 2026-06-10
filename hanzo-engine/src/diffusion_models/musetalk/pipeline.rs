@@ -84,6 +84,21 @@ impl MuseTalk {
         self.unet.forward(latent_input, timestep, audio_feat)
     }
 
+    /// VAE-encode an ALREADY-normalized image to its scaled latent mean (PyTorch
+    /// `scaling_factor * vae.encode(x).latent_dist.mode()`). Caller applied mean=std=0.5.
+    pub fn vae_encode_mode(&self, normalized_img: &Tensor) -> Result<Tensor> {
+        self.vae.encode_mode(&normalized_img.to_dtype(self.dtype)?)
+    }
+
+    /// VAE-decode to the RAW decoder output, pre-`denormalize` (PyTorch `vae.decode(z).sample`).
+    pub fn vae_decode_raw(&self, pred_latents: &Tensor) -> Result<Tensor> {
+        self.vae.decode(pred_latents)
+    }
+
+    pub fn dtype(&self) -> DType {
+        self.dtype
+    }
+
     pub fn blend(&self, original: &Tensor, generated: &Tensor) -> Result<Tensor> {
         let mask = self.mask.unsqueeze(0)?.unsqueeze(0)?.to_dtype(DType::F32)?;
         let lower = (1f64 - &mask)?;

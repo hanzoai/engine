@@ -249,7 +249,10 @@ struct Transformer2D {
 
 impl Transformer2D {
     fn new(channels: usize, cfg: &UNetConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let heads = channels / cfg.attention_head_dim;
+        // diffusers reads `attention_head_dim` as the NUMBER of heads (constant across blocks),
+        // so per-head dim is channels/heads. Real MuseTalk weights need this: `channels/head_dim`
+        // changes the head split and silently breaks real-weight numerics (shapes still line up).
+        let heads = cfg.attention_head_dim;
         let norm = group_norm(cfg.norm_num_groups, channels, 1e-6, vb.pp("norm"))?;
         let proj_in = linear(channels, channels, vb.pp("proj_in"))?;
         let blocks = vec![BasicTransformerBlock::new(
