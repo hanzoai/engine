@@ -165,20 +165,25 @@ pub fn calculate_cache_config(
         min_mem_gpu = min_mem_gpu.min(mem_gpu);
     }
 
-    // On Metal (unified memory), cap KV cache to what the model can actually use.
-    // Unlike CUDA with dedicated VRAM where unused memory is wasted, Metal's wired
-    // buffers compete with the OS and CPU for the same physical RAM.
+    // On Metal/ROCm (unified memory), cap KV cache to what the model can actually use.
+    // Unlike CUDA with dedicated VRAM where unused memory is wasted, unified-memory wired
+    // buffers compete with the OS and CPU for the same physical RAM; grabbing ~90% of it for
+    // KV cache hangs the allocation (notably ROCm under WSL: an 88 GB alloc never returns).
     // On CUDA, all available memory is used for maximum request concurrency (vLLM approach).
     #[allow(unused_mut, unused_variables)]
     let mut mem_gpu = min_mem_gpu;
-    if device.is_metal() {
+    #[cfg(feature = "rocm")]
+    let unified_memory = device.is_metal() || device.is_rocm();
+    #[cfg(not(feature = "rocm"))]
+    let unified_memory = device.is_metal();
+    if unified_memory {
         let max_tokens = max_num_tokens.unwrap_or(config.max_seq_len());
         let mem_for_tokens =
             ctxt_to_blocks!(max_tokens, dtype_size, block_size, config) / SIZE_IN_MB;
         if mem_for_tokens < mem_gpu {
             if !silent {
                 info!(
-                    "Metal: capping KV cache from {} MB to {} MB ({} tokens).",
+                    "Unified memory: capping KV cache from {} MB to {} MB ({} tokens).",
                     mem_gpu, mem_for_tokens, max_tokens
                 );
             }
