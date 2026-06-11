@@ -104,6 +104,10 @@ pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMi
     /// Reset model-specific state (e.g. cached audio embeddings) between requests.
     /// Called when the pipeline's non-granular state is reset.
     fn reset_model_specific_state(&self) {}
+    /// Whether this model is safe to run under the CUDA decode-graph capture path.
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        false
+    }
 }
 
 pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {
