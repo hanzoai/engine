@@ -119,6 +119,12 @@ fn get_dtypes() -> Vec<DType> {
 }
 
 fn determine_auto_dtype_all(devices: &[&Device]) -> hanzo_ml::Result<DType> {
+    // RDNA3.5 (ROCm) has fast f16 matrix cores (WMMA) but no fast bf16 matmul path; bf16
+    // "works" but runs ~4x slower, so prefer f16 there.
+    #[cfg(feature = "rocm")]
+    if devices.iter().any(|d| d.is_rocm()) {
+        return Ok(DType::F16);
+    }
     // We can safely use bf16 for accelerate because we cast up to f32 in all matmuls anyway.
     #[cfg(feature = "accelerate")]
     return Ok(DType::BF16);
