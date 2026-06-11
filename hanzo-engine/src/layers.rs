@@ -2872,11 +2872,69 @@ pub fn qk_rms_norm_rope_positions(
     // numerically identical to the host-offset `selected_rope_cache` path, but
     // the position indices live in device memory, so no host seqlen value is
     // baked into the launch (the stage-3 hipGraph capture prerequisite).
+    #[cfg(feature = "rocm")]
+    if q.device().is_rocm() {
+        return rocm_rope_positions_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox);
+    }
     if q.device().is_rocm() {
         return rope_positions_via_gather(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox);
     }
 
     apply_rotary_positions_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox)
+}
+
+/// Native on-device ROCm positions-aware RoPE for q and k. Computes per-token cache rows
+/// (positions[batch_idx] + seq_idx) IN-KERNEL from the device `positions` tensor, so there
+/// is no host index build / GPU round-trip. `cos_cache`/`sin_cache` are the full
+/// `[max_pos, head_dim/2]` tables. Numerically matches `rope_positions_via_gather`.
+#[cfg(feature = "rocm")]
+fn rocm_rope_positions_qk(
+    q: &Tensor,
+    k: &Tensor,
+    cos_cache: &Tensor,
+    sin_cache: &Tensor,
+    positions: &Tensor,
+    is_gpt_neox: bool,
+) -> Result<(Tensor, Tensor)> {
+    use hanzo_ml::Storage;
+
+    let (batch, _q_heads, seq_len, _head_dim) = q.dims4()?;
+    let q = q.contiguous()?;
+    let k = k.contiguous()?;
+    let cos_cache = cos_cache.contiguous()?;
+    let sin_cache = sin_cache.contiguous()?;
+    let positions = positions.to_dtype(DType::U32)?;
+    let n_pos = positions.dims1()?;
+    if n_pos != batch {
+        // The kernel expects per-sequence start offsets (length == batch). Other callers may
+        // already pass per-token indices; fall back to the gather path for those.
+        return rope_positions_via_gather(&q, &k, &cos_cache, &sin_cache, &positions, is_gpt_neox);
+    }
+    let _ = seq_len;
+
+    let (q_s, q_l) = q.storage_and_layout();
+    let (k_s, k_l) = k.storage_and_layout();
+    let (cos_s, cos_l) = cos_cache.storage_and_layout();
+    let (sin_s, sin_l) = sin_cache.storage_and_layout();
+    let (pos_s, pos_l) = positions.storage_and_layout();
+    let (
+        Storage::Rocm(q_s),
+        Storage::Rocm(k_s),
+        Storage::Rocm(cos_s),
+        Storage::Rocm(sin_s),
+        Storage::Rocm(pos_s),
+    ) = (&*q_s, &*k_s, &*cos_s, &*sin_s, &*pos_s)
+    else {
+        hanzo_ml::bail!("rocm_rope_positions_qk requires ROCm tensors");
+    };
+
+    let (q_out, k_out) = q_s.rope_positions(
+        q_l, k_s, k_l, cos_s, cos_l, sin_s, sin_l, pos_s, pos_l, is_gpt_neox,
+    )?;
+    Ok((
+        Tensor::from((Storage::Rocm(q_out), q_l.shape().clone())),
+        Tensor::from((Storage::Rocm(k_out), k_l.shape().clone())),
+    ))
 }
 
 /// Apply RoPE to already-normalized q/k by gathering per-token cos/sin rows from
@@ -2895,14 +2953,26 @@ fn rope_positions_via_gather(
     let (batch, _q_heads, seq_len, _head_dim) = q.dims4()?;
     let positions = positions.to_dtype(DType::U32)?;
     let n_pos = positions.dims1()?;
-    if n_pos != batch * seq_len {
-        hanzo_ml::bail!(
-            "RoPE positions length {n_pos} != batch*seq_len ({batch}*{seq_len})"
-        );
-    }
+    // `positions` is the per-sequence start offset (length == batch), matching the CPU path's
+    // `positions[batch_idx] + seq_idx` cache indexing; expand it to per-token rows. Some callers
+    // already pass per-token indices (length batch*seq_len), so accept those directly too.
+    let idx = if n_pos == batch {
+        let offsets = positions.to_vec1::<u32>()?;
+        let mut idx = Vec::with_capacity(batch * seq_len);
+        for off in offsets {
+            for s in 0..seq_len as u32 {
+                idx.push(off + s);
+            }
+        }
+        Tensor::from_vec(idx, batch * seq_len, q.device())?
+    } else if n_pos == batch * seq_len {
+        positions
+    } else {
+        hanzo_ml::bail!("RoPE positions length {n_pos} != batch ({batch}) or batch*seq_len");
+    };
     // Gather the live cos/sin rows: [batch*seq_len, head_dim/2].
-    let cos = cos_cache.index_select(&positions, 0)?;
-    let sin = sin_cache.index_select(&positions, 0)?;
+    let cos = cos_cache.index_select(&idx, 0)?;
+    let sin = sin_cache.index_select(&idx, 0)?;
     // Reshape to the batched 3-D layout [batch, seq_len, head_dim/2] so the rope
     // kernel applies a per-batch stride (matches `selected_rope_cache` + the
     // batched branch of `qk_rms_norm_rope`).
