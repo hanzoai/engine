@@ -17,7 +17,7 @@ use hanzo_ml::Shape;
 #[allow(clippy::cast_possible_truncation)]
 fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
     use hanzo_ml::backend::BackendStorage;
-    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
+    use hanzo_ml::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use hanzo_ml::cuda_backend::CudaStorageSlice;
     use std::ffi::c_void;
 
@@ -506,7 +506,7 @@ pub fn cuda_topk_logits_f32(
     temperature: f64,
 ) -> Result<TopKLogitsOutput> {
     use hanzo_ml::backend::BackendStorage;
-    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
+    use hanzo_ml::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use hanzo_ml::cuda_backend::CudaStorageSlice;
 
     const MAX_K: usize = 128;
@@ -667,7 +667,7 @@ pub fn cuda_topk_logits_f32_packed(
     temperature: f64,
 ) -> Result<TopKLogitsPackedOutput> {
     use hanzo_ml::backend::BackendStorage;
-    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
+    use hanzo_ml::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use hanzo_ml::cuda_backend::CudaStorageSlice;
 
     const MAX_K: usize = 128;
@@ -836,36 +836,48 @@ fn final_logits_row(input: &Tensor) -> Result<Tensor> {
 #[cfg(feature = "cuda")]
 #[allow(clippy::cast_possible_truncation)]
 pub fn cuda_topk_softmax(input: &Tensor, k: usize) -> Result<TopKOutput> {
-    use hanzo_ml::backend::BackendStorage;
-    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
-    use hanzo_ml::cuda_backend::CudaStorageSlice;
-    use std::ffi::c_void;
+    // The topk_softmax CUDA kernels (topk_softmax_{bf16,f16,f32}) are unimplemented on this
+    // branch (no .cu entry point, no FFI decl). This helper is only reachable from the gpt-oss
+    // MoE router, which the speech path never exercises; bail rather than call phantom symbols.
+    let _ = (input, k);
+    hanzo_ml::bail!("cuda_topk_softmax is not implemented on this build")
+}
 
-    // Validate k to prevent shared memory issues in the CUDA kernel
-    const MAX_K: usize = 256;
-    if k == 0 || k > MAX_K {
-        hanzo_ml::bail!("cuda_topk_softmax: k={} must be in range [1, {}]", k, MAX_K);
-    }
+/// Cached single-pass top-1 over F32 logits, returning the packed [logit, index] pair.
+/// Reuses a per-device workspace across calls. Used by the CUDA top_k==1 sampler fast path.
+#[cfg(feature = "cuda")]
+#[allow(clippy::cast_possible_truncation)]
+pub fn cuda_top1_logits_f32_cached(
+    input: &Tensor,
+    cache: &mut Option<CudaTop1LogitsWorkspace>,
+) -> Result<[f32; 2]> {
+    use hanzo_ml::backend::{BackendDevice, BackendStorage};
+    use hanzo_ml::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use hanzo_ml::cuda_backend::CudaStorageSlice;
+
+    const CHUNK_SIZE: usize = 2048;
 
     let input = input.contiguous()?;
-    let dims = input.dims();
-    let ncols = *dims
-        .last()
-        .ok_or_else(|| hanzo_ml::Error::Msg("empty dims".to_string()))?;
-    let nrows = (input.elem_count() / ncols) as i32;
-    let ncols_i32 = ncols as i32;
-    let k_i32 = k as i32;
-
+    if input.dtype() != DType::F32 {
+        hanzo_ml::bail!("cuda_top1_logits_f32_cached requires F32 logits");
+    }
+    let ncols = input.elem_count();
+    if ncols == 0 {
+        hanzo_ml::bail!("cuda_top1_logits_f32_cached got empty logits");
+    }
     let nblocks = ncols.div_ceil(CHUNK_SIZE);
 
     let (storage, _layout) = input.storage_and_layout();
     let storage = match &*storage {
         hanzo_ml::Storage::Cuda(s) => s,
-        _ => hanzo_ml::bail!("cuda_topk_softmax requires CUDA tensor"),
+        _ => hanzo_ml::bail!("cuda_top1_logits_f32_cached requires CUDA tensor"),
     };
 
     let dev = storage.device();
     let location = dev.location();
+    let stream = dev.cuda_stream();
+    let stream_raw = stream.cu_stream() as i64;
+
     let needs_alloc = cache.as_ref().is_none_or(|workspace| {
         workspace.ncols != ncols || workspace.nblocks != nblocks || workspace.location != location
     });
@@ -880,136 +892,9 @@ pub fn cuda_topk_softmax(input: &Tensor, k: usize) -> Result<TopKOutput> {
         });
     }
 
-    let (src_ptr, _src_guard) = match &storage.slice {
-        CudaStorageSlice::BF16(inp) => inp.device_ptr(inp.stream()),
-        CudaStorageSlice::F16(inp) => inp.device_ptr(inp.stream()),
+    let (src_ptr, src_guard) = match &storage.slice {
         CudaStorageSlice::F32(inp) => inp.device_ptr(inp.stream()),
-        _ => hanzo_ml::bail!("cuda_topk_softmax only supports BF16/F16/F32"),
-    };
-    let src_ptr = src_ptr as *const c_void;
-
-    let indices_dst = unsafe { dev.alloc::<u32>(out_elem_count) }?;
-    let (indices_ptr, indices_guard) = indices_dst.device_ptr(indices_dst.stream());
-
-    let (weights_tensor, indices_tensor) = match input.dtype() {
-        DType::BF16 => {
-            let weights_dst = unsafe { dev.alloc::<half::bf16>(out_elem_count) }?;
-            let (weights_ptr, weights_guard) = weights_dst.device_ptr(weights_dst.stream());
-
-            unsafe {
-                ffi::topk_softmax_bf16(
-                    src_ptr,
-                    weights_ptr as *mut c_void,
-                    indices_ptr as *mut c_void,
-                    nrows,
-                    ncols_i32,
-                    k_i32,
-                    stream,
-                );
-            }
-
-            drop(weights_guard);
-            drop(indices_guard);
-
-            let weights_storage = hanzo_ml::cuda_backend::CudaStorage {
-                slice: CudaStorageSlice::BF16(weights_dst),
-                device: dev.clone(),
-            };
-            let indices_storage = hanzo_ml::cuda_backend::CudaStorage {
-                slice: CudaStorageSlice::U32(indices_dst),
-                device: dev.clone(),
-            };
-
-            (
-                Tensor::from((
-                    hanzo_ml::Storage::Cuda(weights_storage),
-                    Shape::from_dims(&out_dims),
-                )),
-                Tensor::from((
-                    hanzo_ml::Storage::Cuda(indices_storage),
-                    Shape::from_dims(&out_dims),
-                )),
-            )
-        }
-        DType::F16 => {
-            let weights_dst = unsafe { dev.alloc::<half::f16>(out_elem_count) }?;
-            let (weights_ptr, weights_guard) = weights_dst.device_ptr(weights_dst.stream());
-
-            unsafe {
-                ffi::topk_softmax_f16(
-                    src_ptr,
-                    weights_ptr as *mut c_void,
-                    indices_ptr as *mut c_void,
-                    nrows,
-                    ncols_i32,
-                    k_i32,
-                    stream,
-                );
-            }
-
-            drop(weights_guard);
-            drop(indices_guard);
-
-            let weights_storage = hanzo_ml::cuda_backend::CudaStorage {
-                slice: CudaStorageSlice::F16(weights_dst),
-                device: dev.clone(),
-            };
-            let indices_storage = hanzo_ml::cuda_backend::CudaStorage {
-                slice: CudaStorageSlice::U32(indices_dst),
-                device: dev.clone(),
-            };
-
-            (
-                Tensor::from((
-                    hanzo_ml::Storage::Cuda(weights_storage),
-                    Shape::from_dims(&out_dims),
-                )),
-                Tensor::from((
-                    hanzo_ml::Storage::Cuda(indices_storage),
-                    Shape::from_dims(&out_dims),
-                )),
-            )
-        }
-        DType::F32 => {
-            let weights_dst = unsafe { dev.alloc::<f32>(out_elem_count) }?;
-            let (weights_ptr, weights_guard) = weights_dst.device_ptr(weights_dst.stream());
-
-            unsafe {
-                ffi::topk_softmax_f32(
-                    src_ptr,
-                    weights_ptr as *mut c_void,
-                    indices_ptr as *mut c_void,
-                    nrows,
-                    ncols_i32,
-                    k_i32,
-                    stream,
-                );
-            }
-
-            drop(weights_guard);
-            drop(indices_guard);
-
-            let weights_storage = hanzo_ml::cuda_backend::CudaStorage {
-                slice: CudaStorageSlice::F32(weights_dst),
-                device: dev.clone(),
-            };
-            let indices_storage = hanzo_ml::cuda_backend::CudaStorage {
-                slice: CudaStorageSlice::U32(indices_dst),
-                device: dev.clone(),
-            };
-
-            (
-                Tensor::from((
-                    hanzo_ml::Storage::Cuda(weights_storage),
-                    Shape::from_dims(&out_dims),
-                )),
-                Tensor::from((
-                    hanzo_ml::Storage::Cuda(indices_storage),
-                    Shape::from_dims(&out_dims),
-                )),
-            )
-        }
-        dt => hanzo_ml::bail!("cuda_topk_softmax unsupported dtype: {:?}", dt),
+        _ => hanzo_ml::bail!("cuda_top1_logits_f32_cached only supports F32"),
     };
 
     let workspace = cache
@@ -1071,7 +956,7 @@ impl hanzo_ml::CustomOp1 for ArgSort {
         layout: &hanzo_ml::Layout,
     ) -> Result<(hanzo_ml::CudaStorage, hanzo_ml::Shape)> {
         use hanzo_ml::backend::BackendStorage;
-        use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
+        use hanzo_ml::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
         use hanzo_ml::cuda_backend::CudaStorageSlice;
 
         let dev = storage.device();
@@ -1238,59 +1123,11 @@ pub struct TopKLogitsPackedOutput {
 
 #[cfg(feature = "cuda")]
 pub fn cuda_softcap_f32(input: &Tensor, cap: f32) -> Result<Tensor> {
-    use hanzo_ml::backend::BackendStorage;
-    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
-    use hanzo_ml::cuda_backend::{CudaStorage, CudaStorageSlice};
-    use std::ffi::c_void;
-
-    if input.dtype() != DType::F32 {
-        hanzo_ml::bail!("cuda_softcap_f32 requires F32 input");
-    }
-    if !cap.is_finite() || cap <= 0.0 {
-        hanzo_ml::bail!("cuda_softcap_f32 requires a positive finite cap");
-    }
-
-    let input = input.contiguous()?;
-    let elem_count = input.elem_count();
-    if elem_count > i32::MAX as usize {
-        hanzo_ml::bail!("cuda_softcap_f32 input is too large: {elem_count} elements");
-    }
-    let elem_count_i32 = i32::try_from(elem_count).map_err(hanzo_ml::Error::wrap)?;
-
-    let (storage, layout) = input.storage_and_layout();
-    let storage = match &*storage {
-        hanzo_ml::Storage::Cuda(s) => s,
-        _ => hanzo_ml::bail!("cuda_softcap_f32 requires CUDA tensor"),
-    };
-    let CudaStorageSlice::F32(src) = &storage.slice else {
-        hanzo_ml::bail!("cuda_softcap_f32 only supports F32");
-    };
-    let dev = storage.device();
-    let out = unsafe { dev.alloc::<f32>(elem_count) }?;
-
-    let (src_ptr, _src_guard) = src.device_ptr(src.stream());
-    let (out_ptr, _out_guard) = out.device_ptr(out.stream());
-    let src_ptr = unsafe { (src_ptr as *const f32).add(layout.start_offset()) };
-    unsafe {
-        ffi::softcap_f32(
-            src_ptr as *const c_void,
-            out_ptr as *mut c_void,
-            elem_count_i32,
-            cap,
-            dev.cuda_stream().cu_stream() as i64,
-        );
-    }
-    drop(_src_guard);
-    drop(_out_guard);
-
-    let out_storage = CudaStorage {
-        slice: CudaStorageSlice::F32(out),
-        device: dev.clone(),
-    };
-    Ok(Tensor::from((
-        hanzo_ml::Storage::Cuda(out_storage),
-        input.shape().clone(),
-    )))
+    // The `softcap_f32` CUDA kernel is unimplemented on this branch (no .cu entry point, no FFI
+    // decl) and this helper has no callers; bail rather than reference a phantom symbol. The
+    // device-agnostic tanh-softcap path is available via `Tensor` ops where needed.
+    let _ = (input, cap);
+    hanzo_ml::bail!("cuda_softcap_f32 is not implemented on this build")
 }
 
 #[cfg(feature = "cuda")]
@@ -1303,7 +1140,7 @@ pub fn cuda_apply_sparse_penalties_f32(
     repetition_penalty: f32,
 ) -> Result<Tensor> {
     use hanzo_ml::backend::BackendStorage;
-    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
+    use hanzo_ml::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use hanzo_ml::cuda_backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 
@@ -1635,7 +1472,7 @@ pub fn cuda_rms_norm_residual(
     eps: f32,
 ) -> Result<Tensor> {
     use hanzo_ml::backend::BackendStorage;
-    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
+    use hanzo_ml::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use hanzo_ml::cuda_backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 
@@ -2247,7 +2084,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
     is_neox: bool,
 ) -> Result<Option<(Tensor, Option<Tensor>)>> {
     use hanzo_ml::backend::BackendStorage;
-    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
+    use hanzo_ml::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use hanzo_ml::cuda_backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 

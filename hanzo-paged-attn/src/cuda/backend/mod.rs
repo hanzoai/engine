@@ -16,7 +16,7 @@ pub use flashinfer::{
 pub use gather_kv::gather_kv_cache;
 use hanzo_ml::cuda::cudarc::{
     self,
-    driver::{CudaSlice, DevicePtr, DeviceRepr},
+    driver::{CudaSlice, CudaStream, DevicePtr, DeviceRepr},
 };
 pub use mla::{concat_and_cache_mla, flashinfer_mla_decode, gather_mla_cache};
 pub use paged_attention::{paged_attention, reshape_and_cache};
