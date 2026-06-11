@@ -21,8 +21,14 @@ use hanzo_engine::speech_models::{
 use tokenizers::Tokenizer;
 
 #[derive(Parser)]
-#[command(name = "zen3-serving", about = "zen3-ASR + zen3-TTS standalone harness (CPU)")]
+#[command(name = "zen3-serving", about = "zen3-ASR + zen3-TTS standalone harness")]
 struct Cli {
+    /// Run on CUDA (GB10 etc.). Requires the `cuda` build feature; falls back to CPU if absent.
+    #[arg(long, global = true)]
+    cuda: bool,
+    /// CUDA device ordinal (0-based) when `--cuda` is set.
+    #[arg(long, global = true, default_value_t = 0)]
+    cuda_device: usize,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -40,6 +46,11 @@ enum Cmd {
         /// Max new tokens to decode.
         #[arg(long, default_value_t = 256)]
         max_new: usize,
+        /// Force the output language (e.g. "Chinese", "English"); teacher-forces the
+        /// model's `language <Lang><asr_text>` prefix so it can't mis-ID and decode
+        /// the wrong language. Omit to let the model auto-detect.
+        #[arg(long)]
+        lang: Option<String>,
     },
     /// Synthesize text to a 24 kHz wav with zen3-TTS.
     Tts {
@@ -58,8 +69,21 @@ enum Cmd {
     },
 }
 
-fn device() -> Device {
-    Device::Cpu
+fn device(cuda: bool, ordinal: usize) -> Result<Device> {
+    if !cuda {
+        return Ok(Device::Cpu);
+    }
+    #[cfg(feature = "cuda")]
+    {
+        let dev = Device::new_cuda(ordinal)?;
+        eprintln!("[device] CUDA:{ordinal}");
+        Ok(dev)
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        let _ = ordinal;
+        anyhow::bail!("--cuda requested but binary was built without the `cuda` feature");
+    }
 }
 
 /// mmap a set of safetensors files into a `ShardedVarBuilder` at the requested dtype.
@@ -147,8 +171,7 @@ fn write_wav(path: &Path, pcm: &[f32], rate: u32) -> Result<()> {
     Ok(())
 }
 
-fn run_asr(model: &Path, audio: &Path, max_new: usize) -> Result<()> {
-    let dev = device();
+fn run_asr(model: &Path, audio: &Path, max_new: usize, lang: Option<&str>, dev: &Device) -> Result<()> {
     let cfg: Qwen3AsrConfig =
         serde_json::from_str(&std::fs::read_to_string(model.join("config.json"))?)
             .context("parse ASR config.json")?;
@@ -162,7 +185,7 @@ fn run_asr(model: &Path, audio: &Path, max_new: usize) -> Result<()> {
         cfg.text_config.vocab_size,
     );
 
-    let vb = load_vb(&[model.join("model.safetensors")], DType::F32, &dev)?;
+    let vb = load_vb(&[model.join("model.safetensors")], DType::F32, dev)?;
     let pipeline = Qwen3AsrPipeline::new(&cfg, vb).context("build ASR pipeline")?;
     let tok = load_tokenizer(model)?;
 
@@ -175,17 +198,19 @@ fn run_asr(model: &Path, audio: &Path, max_new: usize) -> Result<()> {
         audio.samples.len() as f32 / (audio.sample_rate as f32 * audio.channels as f32),
     );
 
+    if let Some(l) = lang {
+        eprintln!("[asr] forcing language={l:?}");
+    }
     let t0 = std::time::Instant::now();
     let text = pipeline
-        .transcribe(&audio, &tok, None, Some(max_new))
+        .transcribe_with_language(&audio, &tok, None, lang, Some(max_new))
         .context("transcribe")?;
     eprintln!("[asr] decode took {:.1}s", t0.elapsed().as_secs_f32());
     println!("{text}");
     Ok(())
 }
 
-fn run_tts(model: &Path, text: &str, out: &Path, max_tokens: usize) -> Result<()> {
-    let dev = device();
+fn run_tts(model: &Path, text: &str, out: &Path, max_tokens: usize, dev: &Device) -> Result<()> {
     let cfg: Qwen3TtsConfig =
         serde_json::from_str(&std::fs::read_to_string(model.join("config.json"))?)
             .context("parse TTS config.json")?;
@@ -194,11 +219,11 @@ fn run_tts(model: &Path, text: &str, out: &Path, max_tokens: usize) -> Result<()
     )?)
     .context("parse codec speech_tokenizer/config.json")?;
 
-    let vb = load_vb(&[model.join("model.safetensors")], DType::F32, &dev)?;
+    let vb = load_vb(&[model.join("model.safetensors")], DType::F32, dev)?;
     let codec_vb = load_vb(
         &[model.join("speech_tokenizer").join("model.safetensors")],
         DType::F32,
-        &dev,
+        dev,
     )?;
     let pipeline =
         Qwen3TtsPipeline::new(&cfg, &codec_cfg, vb, codec_vb).context("build TTS pipeline")?;
@@ -246,8 +271,11 @@ fn run_tts(model: &Path, text: &str, out: &Path, max_tokens: usize) -> Result<()
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let dev = device(cli.cuda, cli.cuda_device)?;
     match cli.cmd {
-        Cmd::Asr { model, audio, max_new } => run_asr(&model, &audio, max_new),
-        Cmd::Tts { model, text, out, max_tokens } => run_tts(&model, &text, &out, max_tokens),
+        Cmd::Asr { model, audio, max_new, lang } => {
+            run_asr(&model, &audio, max_new, lang.as_deref(), &dev)
+        }
+        Cmd::Tts { model, text, out, max_tokens } => run_tts(&model, &text, &out, max_tokens, &dev),
     }
 }
