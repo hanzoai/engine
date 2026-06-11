@@ -18,7 +18,7 @@ permissions:
 jobs:
   build-and-test:
     name: Build and Test
-    runs-on: hanzo-build-linux-amd64
+    runs-on: [self-hosted, linux, amd64]
 
     steps:
     - uses: actions/checkout@v4
@@ -70,28 +70,28 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: hanzo-build-linux-amd64
+            os: '["self-hosted", "linux", "amd64"]'
             name: hanzoai-linux-amd64
             features: ""
           - target: aarch64-unknown-linux-gnu
-            os: hanzo-build-linux-amd64
+            os: '["self-hosted", "linux", "amd64"]'
             name: hanzoai-linux-arm64
             features: "vendored-openssl"
             cross: true
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: '"macos-latest"'
             name: hanzoai-macos-amd64
             features: metal
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: '"macos-14"'
             name: hanzoai-macos-arm64
             features: metal
           - target: x86_64-pc-windows-msvc
-            os: windows-latest
+            os: '"windows-latest"'
             name: hanzoai-windows-amd64.exe
             features: ""
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ fromJson(matrix.os) }}
     continue-on-error: ${{ matrix.cross == true }}
 
     steps:
@@ -146,7 +146,7 @@ jobs:
       shell: bash
       run: |
         cd engine/target/${{ matrix.target }}/release
-        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+        if [[ "${{ matrix.target }}" == *"windows"* ]]; then
           mv hanzo-engine.exe hanzoai.exe
         else
           mv hanzo-engine hanzoai
@@ -156,7 +156,7 @@ jobs:
       shell: bash
       run: |
         cd engine/target/${{ matrix.target }}/release
-        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+        if [[ "${{ matrix.target }}" == *"windows"* ]]; then
           7z a ../../../../${{ matrix.name }}.zip hanzoai.exe
         else
           tar -czf ../../../../${{ matrix.name }}.tar.gz hanzoai
@@ -174,7 +174,7 @@ jobs:
     name: Create Release
     needs: build-binaries
     if: always() && !cancelled()
-    runs-on: hanzo-build-linux-amd64
+    runs-on: [self-hosted, linux, amd64]
 
     steps:
     - uses: actions/checkout@v4
