@@ -51,6 +51,14 @@ impl GgufMatMul {
         )
     }
 
+    /// True when weights are held in the ROCm native-quant path (`QMatMul::RocmQuant`), whose
+    /// matmul/matvec kernels consume the activation in its native float dtype. Used to skip the
+    /// F32 activation round-trip in `forward` / `forward_raw`.
+    #[cfg(feature = "rocm")]
+    fn uses_rocm_quant(&self) -> bool {
+        matches!(&self.w, QMatMul::RocmQuant { .. })
+    }
+
     #[cfg(feature = "cuda")]
     fn try_fast_forward(&self, a: &Tensor) -> Result<Option<Tensor>> {
         if !self.uses_fast_mmvq() || !matches!(a.dtype(), DType::BF16 | DType::F16 | DType::F32) {
@@ -114,6 +122,23 @@ impl QuantMethod for GgufMatMul {
             }
         }
 
+        // The ROCm RocmQuant matmul handles bf16/f16/f32 activations natively (it casts to the
+        // dtype its kernels need in-kernel), so feed the activation straight through -- the
+        // BF16->F32->...->BF16 round-trip here was pure overhead on the launch-bound decode.
+        // The Q8_0 decode/prefill arms already return the input dtype; defensively restore it for
+        // the non-Q8_0 fallback (which returns f16) so downstream residual math stays consistent.
+        #[cfg(feature = "rocm")]
+        if self.uses_rocm_quant() {
+            let original_dtype = a.dtype();
+            let x = self.w.forward(a)?;
+            let x = if x.dtype() == original_dtype {
+                x
+            } else {
+                x.to_dtype(original_dtype)?
+            };
+            return self.add_bias(x);
+        }
+
         // Fallback: Hanzo QMatMul requires F32
         let original_dtype = a.dtype();
         let a_f32 = if original_dtype == DType::F32 {
@@ -169,6 +194,15 @@ impl QuantMethod for GgufMatMul {
                 return None;
             }
         }
+        // The ROCm RocmQuant path consumes the activation in its native float dtype (the on-GPU
+        // quant matvec/gemm cast to f16/bf16 in-kernel as needed). Returning None here skips the
+        // outer BF16->F32 + F32->BF16 cast launches around `forward`, which dominate decode.
+        #[cfg(feature = "rocm")]
+        {
+            if self.uses_rocm_quant() {
+                return None;
+            }
+        }
         Some(DType::F32)
     }
 
@@ -202,6 +236,18 @@ impl QuantMethod for GgufMatMul {
                 ));
                 Ok(Arc::new(Self { w, b: b.clone() }))
             }
+            #[cfg(feature = "rocm")]
+            Self {
+                w: QMatMul::RocmQuant { qtensor, .. },
+                b,
+            } => {
+                let (wd, dtype) = (qtensor.dequantize(&qtensor.device())?, qtensor.dtype());
+                let w = QMatMul::from_qtensor(hanzo_ml::quantized::QTensor::quantize(
+                    &(wd + delta)?,
+                    dtype,
+                )?)?;
+                Ok(Arc::new(Self { w, b: b.clone() }))
+            }
             #[cfg(feature = "vulkan")]
             Self {
                 w: QMatMul::VulkanQuant { qtensor, .. } | QMatMul::VulkanQuantBank { qtensor, .. },
@@ -220,6 +266,8 @@ impl QuantMethod for GgufMatMul {
     fn dtype_and_device(&self) -> (DType, hanzo_ml::Device) {
         match &self.w {
             QMatMul::QTensor(q) => (DType::F32, q.device()),
+            #[cfg(feature = "rocm")]
+            QMatMul::RocmQuant { qtensor, .. } => (DType::F32, qtensor.device()),
             #[cfg(feature = "vulkan")]
             QMatMul::VulkanQuant { qtensor, .. } | QMatMul::VulkanQuantBank { qtensor, .. } => {
                 (DType::F32, qtensor.device())
@@ -241,6 +289,8 @@ impl QuantMethod for GgufMatMul {
             if dtype == IsqType::F8Q8 {
                 let t = match &self.w {
                     QMatMul::QTensor(q) => q.dequantize(&q.device())?,
+                    #[cfg(feature = "rocm")]
+                    QMatMul::RocmQuant { qtensor, .. } => qtensor.dequantize(&qtensor.device())?,
                     #[cfg(feature = "vulkan")]
                     QMatMul::VulkanQuant { qtensor, .. }
                     | QMatMul::VulkanQuantBank { qtensor, .. } => {
@@ -257,6 +307,8 @@ impl QuantMethod for GgufMatMul {
             }
             let t = match &self.w {
                 QMatMul::QTensor(q) => q.dequantize(&q.device())?,
+                #[cfg(feature = "rocm")]
+                QMatMul::RocmQuant { qtensor, .. } => qtensor.dequantize(&qtensor.device())?,
                 #[cfg(feature = "vulkan")]
                 QMatMul::VulkanQuant { qtensor, .. }
                 | QMatMul::VulkanQuantBank { qtensor, .. } => {
@@ -280,6 +332,10 @@ impl QuantMethod for GgufMatMul {
                     &q.dequantize(&device)?,
                     q.dtype(),
                 )?)),
+                #[cfg(feature = "rocm")]
+                QMatMul::RocmQuant { qtensor, .. } => QMatMul::from_qtensor(
+                    QTensor::quantize(&qtensor.dequantize(&device)?, qtensor.dtype())?,
+                )?,
                 #[cfg(feature = "vulkan")]
                 QMatMul::VulkanQuant { qtensor, .. }
                 | QMatMul::VulkanQuantBank { qtensor, .. } => QMatMul::from_qtensor(
@@ -371,6 +427,18 @@ impl QuantizedSerde for GgufMatMul {
                     GgmlDType::MXFP4 => 39,
                     GgmlDType::IQ4_NL => 20,
                     GgmlDType::IQ4_XS => 23,
+                    // IQ / ternary / 1-bit / NVFP4 codec types (ggml.h GGML_TYPE_* ids).
+                    GgmlDType::IQ2_XXS => 16,
+                    GgmlDType::IQ2_XS => 17,
+                    GgmlDType::IQ3_XXS => 18,
+                    GgmlDType::IQ1_S => 19,
+                    GgmlDType::IQ3_S => 21,
+                    GgmlDType::IQ2_S => 22,
+                    GgmlDType::IQ1_M => 29,
+                    GgmlDType::TQ1_0 => 34,
+                    GgmlDType::TQ2_0 => 35,
+                    GgmlDType::NVFP4 => 40,
+                    GgmlDType::Q1_0 => 41,
                 };
 
                 let mut buffer = Vec::new();
