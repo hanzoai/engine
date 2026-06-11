@@ -90,6 +90,23 @@ impl Qwen3AsrPipeline {
         system: Option<&str>,
         max_new_tokens: Option<usize>,
     ) -> Result<String> {
+        self.transcribe_with_language(audio, tok, system, None, max_new_tokens)
+    }
+
+    /// Like [`Self::transcribe`] but optionally teacher-forces the output
+    /// language. The model emits `language <Lang><asr_text><transcript>`, doing
+    /// its own (autoregressive) language ID first; on some clips that ID is wrong
+    /// (e.g. a Chinese clip decoded as `language English`), which derails the
+    /// whole transcript. Passing `language` (e.g. `"Chinese"`) seeds the assistant
+    /// turn with `language <Lang><asr_text>` so decode is pinned to that language.
+    pub fn transcribe_with_language(
+        &self,
+        audio: &AudioInput,
+        tok: &Tokenizer,
+        system: Option<&str>,
+        language: Option<&str>,
+        max_new_tokens: Option<usize>,
+    ) -> Result<String> {
         let mel = self.processor.process(audio, &self.device)?;
         let audio_embeds = self.model.encode_audio(&mel)?;
         let n_audio = audio_embeds.dim(1)?;
@@ -97,6 +114,17 @@ impl Qwen3AsrPipeline {
         let system = system.unwrap_or(DEFAULT_SYSTEM);
         let max_new = max_new_tokens.unwrap_or(DEFAULT_MAX_NEW_TOKENS);
         let mut ids = self.build_prompt(tok, system, n_audio)?;
+
+        // Teacher-force `language <Lang><asr_text>` so the model can't mis-ID the
+        // language and decode the wrong-language transcript. These prefix tokens
+        // are not part of the returned transcript (the `<asr_text>` split drops them).
+        if let Some(lang) = language {
+            let enc = |s: &str| -> Result<Vec<u32>> {
+                Ok(tok.encode(s, false).map_err(hanzo_ml::Error::msg)?.get_ids().to_vec())
+            };
+            ids.extend(enc(&format!("language {lang}"))?);
+            ids.push(ASR_TEXT);
+        }
 
         let mut generated = Vec::new();
         for _ in 0..max_new {
@@ -118,6 +146,13 @@ impl Qwen3AsrPipeline {
             ids.push(next);
         }
 
+        if std::env::var("ZEN3_ASR_DEBUG").is_ok() {
+            eprintln!("[asr-dbg] n_audio={} generated_ids={:?}", n_audio, generated);
+            eprintln!(
+                "[asr-dbg] raw_decode={:?}",
+                tok.decode(&generated, false).unwrap_or_default()
+            );
+        }
         // The model prefixes the transcript with `language <LANG><asr_text>`.
         // Return only the transcript: drop everything up to and including the
         // last `<asr_text>` marker (if the model emitted one).

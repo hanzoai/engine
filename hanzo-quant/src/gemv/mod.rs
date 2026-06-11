@@ -15,7 +15,8 @@ mod ffi;
 
 #[cfg(feature = "cuda")]
 use hanzo_ml::{
-    cuda::cudarc::driver::DevicePtr, CudaDevice, CudaStorage, DType, Result, Shape, Storage, Tensor,
+    cuda::cudarc::driver::{DevicePtr, DevicePtrMut},
+    CudaDevice, CudaStorage, DType, Result, Shape, Storage, Tensor,
 };
 
 #[cfg(feature = "cuda")]

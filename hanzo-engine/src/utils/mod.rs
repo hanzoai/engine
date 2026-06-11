@@ -259,10 +259,12 @@ macro_rules! serde_default_fn {
 }
 
 /// `true` if built with CUDA (requires Unix) / Metal / ROCm
+// ROCm intentionally excluded: the HIP PagedAttention v1 kernel compiles but hangs at runtime on
+// gfx1151 (unverified kernel + an oversized unified-memory KV alloc), so ROCm uses non-paged
+// attention until that path is debugged. Re-add `feature = "rocm"` here to re-enable it.
 #[cfg(any(
     all(feature = "cuda", target_family = "unix"),
-    feature = "metal",
-    feature = "rocm"
+    feature = "metal"
 ))]
 pub const fn paged_attn_supported() -> bool {
     true
@@ -271,8 +273,7 @@ pub const fn paged_attn_supported() -> bool {
 /// `true` if built with CUDA (requires Unix) / Metal / ROCm
 #[cfg(not(any(
     all(feature = "cuda", target_family = "unix"),
-    feature = "metal",
-    feature = "rocm"
+    feature = "metal"
 )))]
 pub const fn paged_attn_supported() -> bool {
     false
