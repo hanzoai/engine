@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use hanzo_ml::cuda::cudarc::driver::{CudaSlice, DevicePtr};
+use hanzo_ml::cuda::cudarc;
+use hanzo_ml::cuda::cudarc::driver::{CudaSlice, CudaStream, DevicePtr};
 use hanzo_ml::{
     quantized::{GgmlDType, QTensor},
     CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
@@ -54,6 +55,17 @@ pub const MMVQ_MAX_BATCH: usize = 8;
 struct WorkspaceSlot {
     slice: CudaSlice<u8>,
     cap: usize,
+}
+
+struct WorkspaceGuard<'a> {
+    slot: MutexGuard<'a, WorkspaceSlot>,
+    stream: &'a CudaStream,
+}
+
+impl WorkspaceGuard<'_> {
+    fn ptr_mut(&mut self) -> (u64, cudarc::driver::SyncOnDrop<'_>) {
+        slice_ptr_mut_on_stream(&mut self.slot.slice, 0, self.stream)
+    }
 }
 
 type WsMap = Mutex<HashMap<hanzo_ml::cuda::DeviceId, &'static Mutex<WorkspaceSlot>>>;

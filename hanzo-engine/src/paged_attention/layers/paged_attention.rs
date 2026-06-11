@@ -26,6 +26,10 @@ use crate::{
     },
     pipeline::text_models_inputs_processor::FLASHINFER_PREFILL_MAX_GROUP_SIZE,
 };
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use hanzo_paged_attn::{
+    flashinfer_decode, gather_kv_cache_flashinfer, reshape_and_cache_flashinfer,
+};
 
 fn resolve_tensor_for_device(
     tensors: &HashMap<hanzo_ml::DeviceLocation, Tensor>,
