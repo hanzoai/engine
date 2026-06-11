@@ -342,40 +342,87 @@ mod codec_validation {
         a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max)
     }
 
-    /// Validates the Rust codec decoder against PyTorch reference tensors captured from the real
-    /// zen-3-tts-0.6B speech_tokenizer. Set the env vars to enable (otherwise the test no-ops):
-    ///   ZEN3_CODEC_WEIGHTS=.../speech_tokenizer/model.safetensors
-    ///   ZEN3_CODEC_CONFIG=.../speech_tokenizer/config.json
-    ///   ZEN3_CODES_QT=.../codes_QT.i64      (Q*T row-major i64)
-    ///   ZEN3_T=37  ZEN3_Q=16
-    ///   ZEN3_REF_QUANT/ZEN3_REF_PRETRANS/ZEN3_REF_UPSAMPLE/ZEN3_REF_WAV (raw f32, optional)
-    #[test]
-    fn codec_matches_reference() {
-        let Ok(weights) = std::env::var("ZEN3_CODEC_WEIGHTS") else {
-            eprintln!("ZEN3_CODEC_WEIGHTS unset; skipping codec validation");
-            return;
-        };
-        let cfg_path = std::env::var("ZEN3_CODEC_CONFIG").unwrap();
-        let codes_path = std::env::var("ZEN3_CODES_QT").unwrap();
-        let q: usize = std::env::var("ZEN3_Q").unwrap().parse().unwrap();
-        let t: usize = std::env::var("ZEN3_T").unwrap().parse().unwrap();
+    // ---- committed PyTorch reference fixtures (no python at test time) ----
+    // These tensors were dumped ONCE, offline, by reference/dump_tts_ref.py running the real
+    // QwenLM/Qwen3-TTS PyTorch model on a fixed prompt+seed with a fully greedy decode, then
+    // committed under tests/fixtures/zen3_tts/. The tests load the committed bytes and compare;
+    // nothing spawns python. To re-bless after a deliberate math change, re-run dump_tts_ref.py
+    // and re-copy its output here. The dims below are from that dump's meta.txt.
+    const FX_TALKER_T: usize = 19; // talker prefill length (T_ids=17 + 2 role/codec-bos)
+    const FX_GEN_T: usize = 48; // greedy frames generated (== codec T)
+    const FX_Q: usize = 16; // residual code groups
+    const FX_LANG_ID: u32 = 2050; // english language token id used to build the prefill
 
-        let device = Device::Cpu;
-        let codec_cfg: CodecConfig =
-            serde_json::from_str(&std::fs::read_to_string(&cfg_path).unwrap()).unwrap();
-        let vb = from_mmaped_safetensors(
-            vec![PathBuf::from(&weights)],
+    fn fixture_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zen3_tts")
+    }
+    /// Resolve a reference tensor: prefer an explicit `$env` override (used by the offline
+    /// re-bless flow), else the committed fixture `tests/fixtures/zen3_tts/<file>`.
+    fn ref_path(env: &str, file: &str) -> String {
+        std::env::var(env).unwrap_or_else(|_| fixture_dir().join(file).to_string_lossy().into_owned())
+    }
+    /// The zen-3-tts model dir (1.8GB safetensors -- env-gated, NOT committed). Defaults to the
+    /// spark layout. Returns None (test skips) if the weights are not on disk.
+    fn tts_dir() -> Option<PathBuf> {
+        let d = PathBuf::from(
+            std::env::var("ZEN3_TTS_DIR")
+                .unwrap_or_else(|_| "/home/z/work/zen/hf/zen-3-tts-0.6B".to_string()),
+        );
+        d.join("model.safetensors").is_file().then_some(d)
+    }
+    /// `$ZEN3_MAIN_WEIGHTS` override (re-bless flow) else `<tts_dir>/model.safetensors`.
+    fn main_weights(dir: &std::path::Path) -> String {
+        std::env::var("ZEN3_MAIN_WEIGHTS")
+            .unwrap_or_else(|_| dir.join("model.safetensors").to_string_lossy().into_owned())
+    }
+    fn main_config(dir: &std::path::Path) -> String {
+        std::env::var("ZEN3_MAIN_CONFIG")
+            .unwrap_or_else(|_| dir.join("config.json").to_string_lossy().into_owned())
+    }
+    fn codec_weights(dir: &std::path::Path) -> String {
+        std::env::var("ZEN3_CODEC_WEIGHTS").unwrap_or_else(|_| {
+            dir.join("speech_tokenizer/model.safetensors").to_string_lossy().into_owned()
+        })
+    }
+    fn codec_config(dir: &std::path::Path) -> String {
+        std::env::var("ZEN3_CODEC_CONFIG").unwrap_or_else(|_| {
+            dir.join("speech_tokenizer/config.json").to_string_lossy().into_owned()
+        })
+    }
+    fn load_vb(path: &str, device: &Device) -> ShardedVarBuilder {
+        from_mmaped_safetensors(
+            vec![PathBuf::from(path)],
             Vec::new(),
             Some(DType::F32),
-            &device,
+            device,
             vec![None],
             true,
             None,
             |_| true,
             std::sync::Arc::new(|_| DeviceForLoadTensor::Base),
         )
-        .unwrap();
-        let codec = CodecDecoder::new(&codec_cfg, vb).unwrap();
+        .unwrap()
+    }
+
+    /// Validates the Rust codec decoder against committed PyTorch reference tensors captured from
+    /// the real zen-3-tts-0.6B speech_tokenizer. Reference tensors are committed fixtures (no
+    /// python); only the codec weights are loaded from disk (env-gated via ZEN3_TTS_DIR).
+    #[test]
+    fn codec_matches_reference() {
+        let Some(dir) = tts_dir() else {
+            eprintln!("zen-3-tts weights absent (set ZEN3_TTS_DIR); skipping codec validation");
+            return;
+        };
+        let weights = codec_weights(&dir);
+        let cfg_path = codec_config(&dir);
+        let codes_path = ref_path("ZEN3_CODES_QT", "codes_QT.i64");
+        let q: usize = FX_Q;
+        let t: usize = FX_GEN_T;
+
+        let device = Device::Cpu;
+        let codec_cfg: CodecConfig =
+            serde_json::from_str(&std::fs::read_to_string(&cfg_path).unwrap()).unwrap();
+        let codec = CodecDecoder::new(&codec_cfg, load_vb(&weights, &device)).unwrap();
 
         let codes_i64 = read_i64(&codes_path);
         assert_eq!(codes_i64.len(), q * t, "codes len mismatch");
@@ -384,27 +431,27 @@ mod codec_validation {
 
         let (quant, _pc, pretrans, up, wav) = codec.decode_debug(&codes).unwrap();
 
-        let check = |name: &str, env: &str, got: &Tensor| {
-            if let Ok(p) = std::env::var(env) {
-                let refv = read_f32(&p);
-                let gotv: Vec<f32> = got
-                    .flatten_all()
-                    .unwrap()
-                    .to_dtype(DType::F32)
-                    .unwrap()
-                    .to_vec1::<f32>()
-                    .unwrap();
-                assert_eq!(gotv.len(), refv.len(), "{name} len {} vs ref {}", gotv.len(), refv.len());
-                let cos = cosine(&gotv, &refv);
-                let mad = max_abs_diff(&gotv, &refv);
-                eprintln!("[codec] {name}: cos={cos:.6} max_abs_diff={mad:.6} (n={})", gotv.len());
-                assert!(cos > 0.99, "{name} cosine {cos} below 0.99");
-            }
+        // Every stage is checked against its committed fixture (the offline re-bless flow may
+        // override the path via the matching ZEN3_REF_* env).
+        let check = |name: &str, env: &str, file: &str, got: &Tensor| {
+            let refv = read_f32(&ref_path(env, file));
+            let gotv: Vec<f32> = got
+                .flatten_all()
+                .unwrap()
+                .to_dtype(DType::F32)
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
+            assert_eq!(gotv.len(), refv.len(), "{name} len {} vs ref {}", gotv.len(), refv.len());
+            let cos = cosine(&gotv, &refv);
+            let mad = max_abs_diff(&gotv, &refv);
+            eprintln!("[codec] {name}: cos={cos:.6} max_abs_diff={mad:.6} (n={})", gotv.len());
+            assert!(cos > 0.99, "{name} cosine {cos} below 0.99");
         };
-        check("quant", "ZEN3_REF_QUANT", &quant);
-        check("pretrans", "ZEN3_REF_PRETRANS", &pretrans);
-        check("upsample", "ZEN3_REF_UPSAMPLE", &up);
-        check("wav", "ZEN3_REF_WAV", &wav);
+        check("quant", "ZEN3_REF_QUANT", "ref_quant.f32", &quant);
+        check("pretrans", "ZEN3_REF_PRETRANS", "ref_pretrans.f32", &pretrans);
+        check("upsample", "ZEN3_REF_UPSAMPLE", "ref_upsample.f32", &up);
+        check("wav", "ZEN3_REF_WAV", "ref_wav.f32", &wav);
 
         if let Ok(out) = std::env::var("ZEN3_OUT_WAV") {
             let samples: Vec<f32> = wav
@@ -429,30 +476,20 @@ mod codec_validation {
     ///   ZEN3_TK_FRAME0=.../tk_frame0_codes.i64 (16 i64, optional)
     #[test]
     fn talker_matches_reference() {
-        let Ok(weights) = std::env::var("ZEN3_MAIN_WEIGHTS") else {
-            eprintln!("ZEN3_MAIN_WEIGHTS unset; skipping talker validation");
+        let Some(dir) = tts_dir() else {
+            eprintln!("zen-3-tts weights absent (set ZEN3_TTS_DIR); skipping talker validation");
             return;
         };
-        let cfg_path = std::env::var("ZEN3_MAIN_CONFIG").unwrap();
-        let prefill_path = std::env::var("ZEN3_TK_PREFILL").unwrap();
-        let pt: usize = std::env::var("ZEN3_TK_T").unwrap().parse().unwrap();
+        let weights = main_weights(&dir);
+        let cfg_path = main_config(&dir);
+        let prefill_path = ref_path("ZEN3_TK_PREFILL", "tk_prefill.f32");
+        let pt: usize = FX_TALKER_T;
 
         let device = Device::Cpu;
         let cfg: Qwen3TtsConfig =
             serde_json::from_str(&std::fs::read_to_string(&cfg_path).unwrap()).unwrap();
         let h = cfg.talker_config.hidden_size;
-        let vb = from_mmaped_safetensors(
-            vec![PathBuf::from(&weights)],
-            Vec::new(),
-            Some(DType::F32),
-            &device,
-            vec![None],
-            true,
-            None,
-            |_| true,
-            std::sync::Arc::new(|_| DeviceForLoadTensor::Base),
-        )
-        .unwrap();
+        let vb = load_vb(&weights, &device);
         let talker = model::Talker::new(&cfg.talker_config, vb.pp("talker")).unwrap();
         let code_predictor = model::CodePredictor::new(
             &cfg.talker_config.code_predictor_config,
@@ -470,19 +507,17 @@ mod codec_validation {
         let mask = causal_mask(pt, DType::F32, &device).unwrap();
         let (hidden, logits) = talker.forward(&prefill, &[0], Some(&mask)).unwrap();
 
-        let cmp = |name: &str, env: &str, got: &Tensor| {
-            if let Ok(p) = std::env::var(env) {
-                let refv = read_f32(&p);
-                let gotv: Vec<f32> = got.flatten_all().unwrap().to_vec1::<f32>().unwrap();
-                assert_eq!(gotv.len(), refv.len(), "{name} len");
-                let cos = cosine(&gotv, &refv);
-                let mad = max_abs_diff(&gotv, &refv);
-                eprintln!("[talker] {name}: cos={cos:.6} max_abs_diff={mad:.6}");
-                assert!(cos > 0.999, "{name} cosine {cos}");
-            }
+        let cmp = |name: &str, env: &str, file: &str, got: &Tensor| {
+            let refv = read_f32(&ref_path(env, file));
+            let gotv: Vec<f32> = got.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            assert_eq!(gotv.len(), refv.len(), "{name} len");
+            let cos = cosine(&gotv, &refv);
+            let mad = max_abs_diff(&gotv, &refv);
+            eprintln!("[talker] {name}: cos={cos:.6} max_abs_diff={mad:.6}");
+            assert!(cos > 0.999, "{name} cosine {cos}");
         };
-        cmp("hidden", "ZEN3_TK_HIDDEN", &hidden);
-        cmp("logits", "ZEN3_TK_LOGITS", &logits);
+        cmp("hidden", "ZEN3_TK_HIDDEN", "tk_hidden.f32", &hidden);
+        cmp("logits", "ZEN3_TK_LOGITS", "tk_logits.f32", &logits);
 
         // greedy frame-0: argmax code0, then greedy groups 1..G via code_predictor.
         let groups = cfg.talker_config.num_code_groups;
@@ -508,12 +543,12 @@ mod codec_validation {
             }
         }
         eprintln!("[talker] rust greedy frame0: {frame:?}");
-        if let Ok(p) = std::env::var("ZEN3_TK_FRAME0") {
-            let refc = read_i64(&p);
-            let refc: Vec<u32> = refc.iter().map(|&v| v as u32).collect();
-            assert_eq!(frame, refc, "frame0 codes mismatch");
-            eprintln!("[talker] frame0 codes MATCH reference");
-        }
+        let refc: Vec<u32> = read_i64(&ref_path("ZEN3_TK_FRAME0", "tk_frame0_codes.i64"))
+            .iter()
+            .map(|&v| v as u32)
+            .collect();
+        assert_eq!(frame, refc, "frame0 codes mismatch");
+        eprintln!("[talker] frame0 codes MATCH reference");
     }
 
     /// Validates the Rust prefill construction against PyTorch's `tk_prefill`. Builds the full
@@ -523,37 +558,25 @@ mod codec_validation {
     ///   ZEN3_TK_PREFILL=.../tk_prefill.f32  ZEN3_TK_T=20
     #[test]
     fn prefill_matches_reference() {
-        let Ok(main_w) = std::env::var("ZEN3_PREFILL_CHECK") else {
-            eprintln!("ZEN3_PREFILL_CHECK unset; skipping prefill validation");
+        let Some(dir) = tts_dir() else {
+            eprintln!("zen-3-tts weights absent (set ZEN3_TTS_DIR); skipping prefill validation");
             return;
         };
-        let _ = main_w;
-        let weights = std::env::var("ZEN3_MAIN_WEIGHTS").unwrap();
-        let cfg_path = std::env::var("ZEN3_MAIN_CONFIG").unwrap();
-        let codec_w = std::env::var("ZEN3_CODEC_WEIGHTS").unwrap();
-        let codec_c = std::env::var("ZEN3_CODEC_CONFIG").unwrap();
-        let ids_path = std::env::var("ZEN3_INPUT_IDS").unwrap();
-        let lang_id: u32 = std::env::var("ZEN3_LANG_ID").unwrap().parse().unwrap();
-        let prefill_path = std::env::var("ZEN3_TK_PREFILL").unwrap();
-        let pt: usize = std::env::var("ZEN3_TK_T").unwrap().parse().unwrap();
+        let weights = main_weights(&dir);
+        let cfg_path = main_config(&dir);
+        let codec_w = codec_weights(&dir);
+        let codec_c = codec_config(&dir);
+        let ids_path = ref_path("ZEN3_INPUT_IDS", "input_ids.i64");
+        let lang_id: u32 = FX_LANG_ID;
+        let prefill_path = ref_path("ZEN3_TK_PREFILL", "tk_prefill.f32");
+        let pt: usize = FX_TALKER_T;
 
         let device = Device::Cpu;
         let cfg: Qwen3TtsConfig =
             serde_json::from_str(&std::fs::read_to_string(&cfg_path).unwrap()).unwrap();
         let codec_cfg: CodecConfig =
             serde_json::from_str(&std::fs::read_to_string(&codec_c).unwrap()).unwrap();
-        let vb = from_mmaped_safetensors(
-            vec![PathBuf::from(&weights)],
-            Vec::new(),
-            Some(DType::F32),
-            &device,
-            vec![None],
-            true,
-            None,
-            |_| true,
-            std::sync::Arc::new(|_| DeviceForLoadTensor::Base),
-        )
-        .unwrap();
+        let vb = load_vb(&weights, &device);
         let cvb = from_mmaped_safetensors(
             vec![PathBuf::from(&codec_w)],
             Vec::new(),
@@ -588,44 +611,30 @@ mod codec_validation {
     ///   ZEN3_INPUT_IDS, ZEN3_LANG_ID, ZEN3_GREEDY_TQ (T*Q i64), ZEN3_GREEDY_T, ZEN3_GREEDY_Q
     #[test]
     fn full_generation_greedy_matches_reference() {
-        let Ok(_) = std::env::var("ZEN3_FULLGEN_CHECK") else {
-            eprintln!("ZEN3_FULLGEN_CHECK unset; skipping full-generation validation");
+        let Some(dir) = tts_dir() else {
+            eprintln!("zen-3-tts weights absent (set ZEN3_TTS_DIR); skipping full-generation validation");
             return;
         };
-        let weights = std::env::var("ZEN3_MAIN_WEIGHTS").unwrap();
-        let cfg_path = std::env::var("ZEN3_MAIN_CONFIG").unwrap();
-        let codec_w = std::env::var("ZEN3_CODEC_WEIGHTS").unwrap();
-        let codec_c = std::env::var("ZEN3_CODEC_CONFIG").unwrap();
-        let ids_path = std::env::var("ZEN3_INPUT_IDS").unwrap();
-        let lang_id: u32 = std::env::var("ZEN3_LANG_ID").unwrap().parse().unwrap();
-        let ref_path = std::env::var("ZEN3_GREEDY_TQ").unwrap();
-        let rt: usize = std::env::var("ZEN3_GREEDY_T").unwrap().parse().unwrap();
-        let rq: usize = std::env::var("ZEN3_GREEDY_Q").unwrap().parse().unwrap();
+        let weights = main_weights(&dir);
+        let cfg_path = main_config(&dir);
+        let codec_w = codec_weights(&dir);
+        let codec_c = codec_config(&dir);
+        let ids_path = ref_path("ZEN3_INPUT_IDS", "input_ids.i64");
+        let lang_id: u32 = FX_LANG_ID;
+        let greedy_path = ref_path("ZEN3_GREEDY_TQ", "greedy_TQ.i64");
+        let rt: usize = FX_GEN_T;
+        let rq: usize = FX_Q;
 
         let device = Device::Cpu;
         let cfg: Qwen3TtsConfig =
             serde_json::from_str(&std::fs::read_to_string(&cfg_path).unwrap()).unwrap();
         let codec_cfg: CodecConfig =
             serde_json::from_str(&std::fs::read_to_string(&codec_c).unwrap()).unwrap();
-        let mk = |p: &str, dt| {
-            from_mmaped_safetensors(
-                vec![PathBuf::from(p)],
-                Vec::new(),
-                Some(dt),
-                &device,
-                vec![None],
-                true,
-                None,
-                |_| true,
-                std::sync::Arc::new(|_| DeviceForLoadTensor::Base),
-            )
-            .unwrap()
-        };
         let pipe = Qwen3TtsPipeline::new(
             &cfg,
             &codec_cfg,
-            mk(&weights, DType::F32),
-            mk(&codec_w, DType::F32),
+            load_vb(&weights, &device),
+            load_vb(&codec_w, &device),
         )
         .unwrap();
 
@@ -635,7 +644,7 @@ mod codec_validation {
         let got_t = grouped[0].len();
         eprintln!("[fullgen] rust produced {} frames (ref {})", got_t, rt);
 
-        let refc = read_i64(&ref_path);
+        let refc = read_i64(&greedy_path);
         // ref is (T, Q) row-major; compare codebook-0 column over min length.
         let n = got_t.min(rt);
         let mut col0_matches = 0;
