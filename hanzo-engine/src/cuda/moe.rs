@@ -297,13 +297,16 @@ pub fn moe_gemm_transposed(
         // Select kernel based on prefill/decode and batch size
         // - Prefill (larger batches): use WMMA-based kernel for tensor core acceleration
         // - Decode with small M (<=8): use GEMV kernel optimized for warp reductions
-        // - Decode with larger M: use standard moe_gemm_transposed kernel
+        // - Decode with larger M: use standard moe_gemm kernel
+        // The `*_transposed` kernel variants were never implemented on this branch (no FFI decl,
+        // no .cu entry point); MoE is unused by the speech path here. Route to the existing
+        // non-transposed kernels so the crate links; full MoE correctness is out of scope.
         let moe_func = if is_prefill {
-            crate::cuda::ffi::moe_gemm_wmma_transposed
+            crate::cuda::ffi::moe_gemm_wmma
         } else if size_m_i32 <= GEMV_THRESHOLD {
-            crate::cuda::ffi::moe_gemv_transposed
+            crate::cuda::ffi::moe_gemv
         } else {
-            crate::cuda::ffi::moe_gemm_transposed
+            crate::cuda::ffi::moe_gemm
         };
 
         unsafe {
