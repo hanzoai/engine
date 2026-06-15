@@ -492,6 +492,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "fixtures not mirrored: hanzoai/mistralrs_tests does not exist on HF (404); upstream EricBuehler/mistralrs_tests is also not public"]
     fn test_encode_decode_llama() -> Result<()> {
         if std::env::var("HF_TOKEN").map_or(true, |t| t.is_empty()) {
             eprintln!("skipping: HF_TOKEN not set (gated hanzoai/mistralrs_tests repo)");
@@ -538,6 +539,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "fixtures not mirrored: hanzoai/mistralrs_tests does not exist on HF (404); upstream EricBuehler/mistralrs_tests is also not public"]
     fn test_encode_decode_gpt2() -> Result<()> {
         if std::env::var("HF_TOKEN").map_or(true, |t| t.is_empty()) {
             eprintln!("skipping: HF_TOKEN not set (gated hanzoai/mistralrs_tests repo)");
