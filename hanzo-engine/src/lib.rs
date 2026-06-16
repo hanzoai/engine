@@ -55,6 +55,12 @@ mod search;
 
 mod model_selected;
 pub use model_selected::ModelSelected;
+
+mod mistral_engine;
+pub use mistral_engine::{
+    embedding_engine, inference_engine, register_embedding_engine, register_inference_engine,
+    EmbeddingEngine, InferenceEngine, MistralEngine,
+};
 pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_selected_model_dtype};
 
 mod amoe;
