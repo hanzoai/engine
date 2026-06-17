@@ -51,6 +51,11 @@ pub use model_loader::{
 pub use video_input::{sample_frame_indices, VideoInput};
 mod embedding_models;
 mod kv_cache;
+pub mod license;
+pub use license::{
+    load_and_verify as load_and_verify_license, verify_license, License, LicenseError,
+    EXPECTED_APP_ID as LICENSE_EXPECTED_APP_ID, HANZO_LICENSE_PUBKEY,
+};
 mod search;
 
 mod model_selected;
