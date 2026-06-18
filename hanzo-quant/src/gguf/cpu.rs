@@ -49,9 +49,22 @@ pub fn qtensor_indexed_moe_forward(
 /// Output tensor [batch, topk, n]
 pub fn cpu_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
     match qmatmul {
+        // Metal keeps the [E,n,k] GGUF bank quantized in unified memory and runs a per-expert,
+        // router-gathered quant matvec straight out of it (QMetalStorage::indexed_moe_forward) -- no
+        // whole-bank dequant, which on Metal materializes the multi-GB f32 bank per token and OOMs.
+        // CPU has no resident-buffer win, so it stays on the dequantize-then-gather path.
+        QMatMul::QTensor(qtensor) if qtensor.device().is_metal() => {
+            qmatmul.indexed_moe_forward(x, ids)
+        }
         QMatMul::QTensor(qtensor) => qtensor_indexed_moe_forward(qtensor, x, ids),
+        #[cfg(feature = "rocm")]
+        QMatMul::RocmQuant { qtensor, .. } => qtensor_indexed_moe_forward(qtensor, x, ids),
         #[cfg(feature = "vulkan")]
         QMatMul::VulkanQuant { qtensor, .. } => qtensor_indexed_moe_forward(qtensor, x, ids),
+        // Resident MoE bank: delegate to the GPU keep-quantized path (per-expert banked matvec/matmul,
+        // no whole-bank dequant). Dequantizing the [E,n,k] bank here would be the ~140GB f32 OOM.
+        #[cfg(feature = "vulkan")]
+        QMatMul::VulkanQuantBank { .. } => qmatmul.indexed_moe_forward(x, ids),
         QMatMul::Tensor(t) | QMatMul::TensorF16(t) => {
             // For non-quantized tensors, use UnquantLinear directly
             let unquant =

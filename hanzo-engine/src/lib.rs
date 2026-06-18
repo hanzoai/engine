@@ -1,4 +1,5 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+use hanzo_ml::Device;
 use engine::Engine;
 pub use engine::{
     agentic_session::{AgenticSessionStore, SerializedSession, SerializedVideo},
@@ -6,7 +7,6 @@ pub use engine::{
     EngineInstruction, IntervalLogger, SearchEmbeddingModel, DEFAULT_MAX_TOOL_ROUNDS,
     ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
 };
-use hanzo_ml::Device;
 use hf_hub::Cache;
 pub use lora::Ordering;
 pub use pipeline::ModelCategory;
@@ -30,7 +30,7 @@ use std::{
 use tokio::sync::mpsc::{channel, Sender};
 use tracing::{debug, info, warn};
 
-pub const HANZO_GIT_REVISION: &str = match option_env!("HANZO_GIT_REVISION") {
+pub const GIT_REVISION: &str = match option_env!("GIT_REVISION") {
     Some(value) => value,
     None => "unknown",
 };
@@ -49,9 +49,13 @@ pub use model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
 };
 pub use video_input::{sample_frame_indices, VideoInput};
-pub mod disk_kv_cache;
 mod embedding_models;
 mod kv_cache;
+pub mod license;
+pub use license::{
+    load_and_verify as load_and_verify_license, verify_license, License, LicenseError,
+    EXPECTED_APP_ID as LICENSE_EXPECTED_APP_ID, HANZO_LICENSE_PUBKEY,
+};
 mod search;
 
 mod model_selected;
@@ -72,6 +76,7 @@ pub mod matformer;
 mod mla;
 mod models;
 mod paged_attention;
+mod perf_flags;
 mod pipeline;
 mod prefix_cacher;
 pub mod reasoning_parsers;
@@ -309,7 +314,10 @@ use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
 pub use tools::{ToolCallResponse, ToolCallType, ToolCallbacks, ToolChoice};
 pub use topology::{LayerTopology, Topology};
-pub use utils::debug::initialize_logging;
+pub use utils::debug::{
+    default_hanzo_filter, initialize_logging, initialize_logging_with_filter,
+    initialize_hanzo_logging, LogVerbosity,
+};
 pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};
 pub use utils::{paged_attn_supported, using_flash_attn};
@@ -317,7 +325,7 @@ pub use utils::{paged_attn_supported, using_flash_attn};
 // re-export llguidance for easier LlguidanceGrammar construction
 pub use llguidance;
 
-/// `true` if `HANZO_DEBUG=1`
+/// `true` if `DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
 pub static GLOBAL_HF_CACHE: OnceLock<Cache> = OnceLock::new();
 
@@ -460,8 +468,17 @@ struct EngineInstance {
     pub(crate) file_store: files::FileStore,
 }
 
+impl Drop for EngineInstance {
+    fn drop(&mut self) {
+        // Free decode graphs (they capture the engine thread's cuTile modules) before it exits when `sender` drops.
+        if let Ok(pipeline) = self.reboot_state.pipeline.try_lock() {
+            pipeline.cleanup_cuda_graphs();
+        }
+    }
+}
+
 /// The Hanzo struct handles sending requests to multiple engines.
-/// It is the core multi-threaded component of hanzo, and uses `mpsc`
+/// It is the core multi-threaded component of mistral.rs, and uses `mpsc`
 /// `Sender` and `Receiver` primitives to send and receive requests to the
 /// appropriate engine based on model ID.
 ///
@@ -762,6 +779,10 @@ impl Hanzo {
         let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
         drop(pipeline_guard);
 
+        // cuTile kernels JIT-compile into a thread-local cache, so warmup must run on the engine thread.
+        #[cfg(feature = "cutile")]
+        let warmup_device = device.clone();
+
         let logger = Arc::new(IntervalLogger::new(
             Duration::from_secs(5),
             encoder_cache_counters,
@@ -814,6 +835,10 @@ impl Hanzo {
                         file_store_for_engine,
                     )
                     .expect("Engine creation failed.");
+                    #[cfg(feature = "cutile")]
+                    if let Err(err) = hanzo_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                        warn!("Failed to warm up cuTile MoE kernels: {err}");
+                    }
                     Arc::new(engine).run().await;
                 })
             });
@@ -841,6 +866,10 @@ impl Hanzo {
                         file_store_for_engine,
                     )
                     .expect("Engine creation failed.");
+                    #[cfg(feature = "cutile")]
+                    if let Err(err) = hanzo_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                        warn!("Failed to warm up cuTile MoE kernels: {err}");
+                    }
                     Arc::new(engine).run().await;
                 })
             }
@@ -909,16 +938,18 @@ impl Hanzo {
         if let Some(code_exec_cfg) = code_exec_config {
             let approval_callback = code_exec_cfg.approval_callback.as_ref().map(|callback| {
                 let callback = Arc::clone(callback);
-                Arc::new(move |approval: &hanzo_code_exec::CodeExecutionApproval| {
-                    let approval = CodeExecutionApproval {
-                        approval_id: approval.approval_id.clone(),
-                        session_id: approval.session_id.clone(),
-                        code: approval.code.clone(),
-                        outputs: approval.outputs.clone(),
-                        working_directory: approval.working_directory.clone(),
-                    };
-                    callback(&approval)
-                }) as Arc<hanzo_code_exec::CodeExecutionApprovalCallback>
+                Arc::new(
+                    move |approval: &hanzo_code_exec::CodeExecutionApproval| {
+                        let approval = CodeExecutionApproval {
+                            approval_id: approval.approval_id.clone(),
+                            session_id: approval.session_id.clone(),
+                            code: approval.code.clone(),
+                            outputs: approval.outputs.clone(),
+                            working_directory: approval.working_directory.clone(),
+                        };
+                        callback(&approval)
+                    },
+                ) as Arc<hanzo_code_exec::CodeExecutionApprovalCallback>
             });
             let exec_config = hanzo_code_exec::CodeExecutionConfig {
                 python_path: code_exec_cfg.python_path.clone(),
@@ -926,9 +957,15 @@ impl Hanzo {
                 working_directory: code_exec_cfg.working_directory.clone(),
                 sandbox_policy: code_exec_cfg.sandbox_policy.clone(),
                 permission: match code_exec_cfg.permission {
-                    CodeExecutionPermission::Auto => hanzo_code_exec::CodeExecutionPermission::Auto,
-                    CodeExecutionPermission::Ask => hanzo_code_exec::CodeExecutionPermission::Ask,
-                    CodeExecutionPermission::Deny => hanzo_code_exec::CodeExecutionPermission::Deny,
+                    CodeExecutionPermission::Auto => {
+                        hanzo_code_exec::CodeExecutionPermission::Auto
+                    }
+                    CodeExecutionPermission::Ask => {
+                        hanzo_code_exec::CodeExecutionPermission::Ask
+                    }
+                    CodeExecutionPermission::Deny => {
+                        hanzo_code_exec::CodeExecutionPermission::Deny
+                    }
                 },
                 approval_callback,
             };
@@ -997,7 +1034,7 @@ impl Hanzo {
                         warn!("  Sandbox: OFF. Network and filesystem are NOT restricted.");
                         warn!("  Pass a sandbox_policy (or --sandbox on at the CLI) to enable isolation.");
                     }
-                    warn!("  See: https://hanzoai.github.io/engine/reference/sandbox/");
+                    warn!("  See: https://ericlbuehler.github.io/mistral.rs/reference/sandbox/");
                     warn!("============================================================");
                     info!("Code execution initialized with {count} tools");
                 }
@@ -1010,7 +1047,7 @@ impl Hanzo {
     }
 
     async fn new(config: HanzoBuilder) -> Arc<Self> {
-        info!("git revision: {HANZO_GIT_REVISION}");
+        info!("git revision: {GIT_REVISION}");
         let HanzoBuilder {
             pipeline,
             method,
@@ -1030,7 +1067,8 @@ impl Hanzo {
             code_exec_config,
         } = config;
 
-        hanzo_quant::cublaslt::maybe_init_cublas_lt_wrapper(get_mut_arcmutex!(pipeline).device());
+        let device = get_mut_arcmutex!(pipeline).device();
+        hanzo_quant::cublaslt::maybe_init_cublas_lt_wrapper(device.clone());
 
         let no_kv_cache = no_kv_cache.unwrap_or(false);
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
@@ -1593,7 +1631,10 @@ impl Hanzo {
     }
 
     /// Get the interval logger for a specific model. If model_id is None, uses default engine.
-    pub fn get_logger(&self, model_id: Option<&str>) -> Result<Arc<IntervalLogger>, HanzoError> {
+    pub fn get_logger(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<Arc<IntervalLogger>, HanzoError> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         let engines = self
@@ -1608,7 +1649,10 @@ impl Hanzo {
     }
 
     /// Get model category for a specific model. If model_id is None, uses default engine.
-    pub fn get_model_category(&self, model_id: Option<&str>) -> Result<ModelCategory, HanzoError> {
+    pub fn get_model_category(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<ModelCategory, HanzoError> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         let engines = self
@@ -1623,7 +1667,10 @@ impl Hanzo {
     }
 
     /// Get the maximum supported sequence length for a model, if applicable.
-    pub fn max_sequence_length(&self, model_id: Option<&str>) -> Result<Option<usize>, HanzoError> {
+    pub fn max_sequence_length(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<Option<usize>, HanzoError> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         let engines = self
@@ -1993,7 +2040,9 @@ impl Hanzo {
                 .read()
                 .map_err(|_| HanzoError::EnginePoisoned)?;
             if unloaded.contains_key(&resolved_model_id) {
-                return Err(HanzoError::ModelAlreadyUnloaded(resolved_model_id.clone()));
+                return Err(HanzoError::ModelAlreadyUnloaded(
+                    resolved_model_id.clone(),
+                ));
             }
         }
 

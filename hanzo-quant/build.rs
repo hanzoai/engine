@@ -56,6 +56,7 @@ fn main() -> Result<(), String> {
         const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
         println!("cargo:rerun-if-changed=build.rs");
+        println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
         let mut builder = cudaforge::KernelBuilder::new()
@@ -134,6 +135,23 @@ fn main() -> Result<(), String> {
         let (major, minor) = cuda_version_from_build_system();
         println!("cargo:rustc-cfg=feature=\"cuda-{major}0{minor}0\"");
 
+        // cuTile needs CUDA >= 13.1: its JIT toolchain (`tileiras`) ships with 13.1+, not 13.0, so a
+        // 13.0 build compiles but fails to JIT at runtime.
+        let cuda_ge_131 = major > 13 || (major == 13 && minor >= 1);
+        if std::env::var("CARGO_FEATURE_CUTILE").is_ok() {
+            if !cuda_ge_131 {
+                panic!(
+                    "the `cutile` feature requires CUDA >= 13.1 to build (found {major}.{minor}); \
+                     build without `--features cutile`"
+                );
+            }
+        } else if cuda_ge_131 {
+            println!(
+                "cargo:warning=CUDA {major}.{minor} detected: enable the `cutile` feature for \
+                 optimized kernels."
+            );
+        }
+
         Ok(())
     }
 
@@ -143,7 +161,7 @@ fn main() -> Result<(), String> {
         use std::process::Command;
         use std::{env, str};
 
-        const METAL_SOURCES: [&str; 18] = [
+        const METAL_SOURCES: [&str; 21] = [
             "bitwise",
             "blockwise_fp8",
             "bnb_dequantize",
@@ -152,12 +170,15 @@ fn main() -> Result<(), String> {
             "fused_glu",
             "hqq_dequantize",
             "hqq_bitpack",
+            "moe",
             "mxfp4",
             "quantized",
+            "rotary",
             "rmsnorm_residual",
             "scalar_fp8",
             "scan",
             "sdpa_with_sinks",
+            "softcap",
             "softmax_with_sinks",
             "sort",
             "copy",
@@ -179,14 +200,14 @@ fn main() -> Result<(), String> {
 
         // Check if precompilation should be skipped
         // https://github.com/hanzoai/engine/pull/1311#issuecomment-3001309885
-        println!("cargo:rerun-if-env-changed=HANZO_METAL_PRECOMPILE");
-        let skip_precompile = env::var("HANZO_METAL_PRECOMPILE")
+        println!("cargo:rerun-if-env-changed=METAL_PRECOMPILE");
+        let skip_precompile = env::var("METAL_PRECOMPILE")
             .map(|v| v == "0" || v.to_lowercase() == "false")
             .unwrap_or(false);
 
         if skip_precompile {
             println!(
-                "cargo:warning=Skipping Metal kernel precompilation (HANZO_METAL_PRECOMPILE=0)"
+                "cargo:warning=Skipping Metal kernel precompilation (METAL_PRECOMPILE=0)"
             );
             // Write a dummy metallib file to satisfy the include_bytes! macro
             let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);

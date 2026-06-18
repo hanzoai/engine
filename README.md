@@ -76,33 +76,7 @@ hanzo run --agent -m Qwen/Qwen3-4B
 hanzo serve -m google/gemma-4-E4B-it
 ```
 
-For the server command, visit `http://localhost:1234/ui` for the web chat interface. OpenAI-compatible clients use `http://localhost:1234/v1`; Anthropic-compatible clients (including Claude Code) point at `http://localhost:1234`.
-
-### Anthropic Messages API
-
-`hanzo serve` exposes an Anthropic-compatible `POST /v1/messages` endpoint in addition to the OpenAI-compatible `/v1` routes. It accepts the standard Anthropic request shape (`model`, `max_tokens`, `system`, `messages`, `tools`, `tool_choice`, `stream`) and returns Anthropic-style content blocks (`text`, `tool_use`). Streaming responses emit the usual server-sent events: `message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, and `message_stop`. Anthropic model ids (e.g. `claude-sonnet-4-5-*`) are routed to the loaded model, so existing Claude Code / Anthropic SDK clients work without changes.
-
-```bash
-hanzo serve -p 1234 -m Qwen/Qwen3-4B
-```
-
-```bash
-curl http://localhost:1234/v1/messages \
-  -H "content-type: application/json" \
-  -H "x-api-key: local" \
-  -H "anthropic-version: 2023-06-01" \
-  -d '{
-        "model": "default",
-        "max_tokens": 256,
-        "messages": [{"role": "user", "content": "Hello!"}]
-      }'
-```
-
-Runnable Python examples live under [`examples/server/`](examples/server/):
-
-- [`anthropic_chat.py`](examples/server/anthropic_chat.py) — basic non-streaming Messages request
-- [`anthropic_streaming.py`](examples/server/anthropic_streaming.py) — streaming via server-sent events
-- [`anthropic_tool_calling.py`](examples/server/anthropic_tool_calling.py) — client-side tool use round-trip
+For the server command, visit `http://localhost:1234/ui` for the web chat interface. OpenAI-compatible clients use `http://localhost:1234/v1`; Anthropic-compatible clients use `http://localhost:1234`.
 
 ### The `hanzo` CLI
 
@@ -127,7 +101,7 @@ hanzo doctor
 [Full CLI documentation](https://hanzoai.github.io/engine/reference/cli/)
 
 <details open>
-  <summary><b>Web Chat Demo</b></summary>
+  <summary><b>UI Demo</b></summary>
   <br>
   <img src="https://raw.githubusercontent.com/hanzoai/engine/master/res/chat.gif" alt="Web Chat UI Demo" />
 </details>

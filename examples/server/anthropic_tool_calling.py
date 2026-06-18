@@ -2,7 +2,7 @@
 Basic client-side tool calling with the Anthropic Messages API.
 
 Run the server:
-    hanzo serve -p 1234 --quant 4 -m Qwen/Qwen3-4B
+    mistralrs serve -p 1234 --quant 4 -m Qwen/Qwen3-4B
 
 Then run:
     python3 examples/server/anthropic_tool_calling.py
@@ -12,7 +12,7 @@ import json
 import os
 import urllib.request
 
-BASE_URL = os.environ.get("HANZO_BASE_URL", "http://localhost:1234")
+BASE_URL = os.environ.get("MISTRALRS_BASE_URL", "http://localhost:1234")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "local")
 
 

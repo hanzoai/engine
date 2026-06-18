@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
-use tracing::info;
+use tracing::{debug, info};
 
 use hanzo_engine::{
     initialize_logging, DiffusionLoaderType, McpClientConfig, ModelSelected, PagedCacheType,
@@ -11,6 +11,7 @@ use hanzo_engine::{
 use hanzo_server_core::{
     approvals::ApprovalBroker, hanzo_for_server_builder::HanzoForServerBuilder,
     hanzo_server_router_builder::HanzoServerRouterBuilder,
+    route_registry::{RouteInfo, RouteKind, API_ROUTES},
 };
 
 use crate::args::{
@@ -30,6 +31,8 @@ pub async fn run_server(
     sandbox: SandboxOptions,
     global: GlobalOptions,
 ) -> Result<()> {
+    enforce_license_or_abort();
+
     initialize_logging();
 
     agent_options.apply_to(&mut runtime);
@@ -155,10 +158,72 @@ pub async fn run_server(
         tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
 
     info!("Server listening on http://{}:{}", server.host, server.port);
+    log_api_surfaces(&server.host, server.port);
 
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// License gate. With `license-enforce`, verify a valid Hanzo license for this build's app or
+/// hard-exit before doing any work. Without it (dev/CLI/perf), this is a no-op (a one-line note).
+/// Called before `initialize_logging()`, so it uses stderr rather than `tracing`.
+#[cfg(feature = "license-enforce")]
+fn enforce_license_or_abort() {
+    match hanzo_engine::load_and_verify_license() {
+        Ok(license) => {
+            eprintln!(
+                "license OK: app={} holder={} exp={}",
+                license.app_id, license.holder, license.exp
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "FATAL: engine license verification failed: {e}. \
+                 This engine build ({}) requires a valid Hanzo-issued license token \
+                 (set {} or {}). Refusing to start.",
+                hanzo_engine::LICENSE_EXPECTED_APP_ID,
+                hanzo_engine::license::LICENSE_TOKEN_ENV,
+                hanzo_engine::license::LICENSE_FILE_ENV,
+            );
+            std::process::exit(78); // EX_CONFIG
+        }
+    }
+}
+
+#[cfg(not(feature = "license-enforce"))]
+fn enforce_license_or_abort() {
+    eprintln!("license enforcement disabled (dev build)");
+}
+
+pub(crate) fn log_api_surfaces(host: &str, port: u16) {
+    let client_host = match host {
+        "0.0.0.0" => "localhost",
+        "::" => "[::1]",
+        host => host,
+    };
+    let root = format!("http://{client_host}:{port}");
+
+    info!("OpenAI-compatible API: {root}/v1");
+    info!("Anthropic-compatible API: {root}");
+    info!("Swagger UI docs: {root}/docs");
+
+    debug!("Available OpenAI-compatible routes:");
+    log_routes(API_ROUTES, RouteKind::OpenAi);
+    debug!("Available Anthropic-compatible routes:");
+    log_routes(API_ROUTES, RouteKind::Anthropic);
+    debug!("Available additional mistral.rs routes:");
+    log_routes(API_ROUTES, RouteKind::Hanzo);
+}
+
+fn log_routes(routes: &[RouteInfo], kind: RouteKind) {
+    for route in routes.iter().filter(|route| route.kind == kind) {
+        log_route(route);
+    }
+}
+
+fn log_route(route: &RouteInfo) {
+    debug!("  Route: {}, Methods: {}", route.path, route.methods);
 }
 
 /// Convert our clean ModelType to the legacy ModelSelected enum

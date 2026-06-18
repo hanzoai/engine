@@ -93,7 +93,7 @@ impl Kernels {
                 Library::new(raw_lib)
             } else {
                 // Fall back to runtime compilation if precompiled lib is not available
-                // (e.g., when HANZO_METAL_PRECOMPILE=0)
+                // (e.g., when METAL_PRECOMPILE=0)
                 self.compile_kernels_at_runtime(device)?
             };
             Ok(LIBRARY.get_or_init(|| lib).clone())
@@ -121,6 +121,10 @@ impl Kernels {
         );
         file_system.insert("utils.metal", include_str!("utils.metal"));
         file_system.insert("float8.metal", include_str!("float8.metal"));
+        file_system.insert(
+            "function_constants.metal",
+            include_str!("function_constants.metal"),
+        );
 
         // Recursive include preprocessor
         fn preprocess_includes(
@@ -438,7 +442,7 @@ pub fn call_reshape_and_cache(
     );
 
     let constants = Some(ConstantValues::new(vec![(
-        10,
+        30,
         Value::Bool(/* use_fp8_scales */ k_v_scale.is_some()),
     )]));
 
@@ -872,7 +876,7 @@ pub fn call_gather_kv_cache(
     );
 
     let constants = Some(ConstantValues::new(vec![(
-        10,
+        30,
         Value::Bool(/* use_fp8_scales */ k_v_scale.is_some()),
     )]));
 

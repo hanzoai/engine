@@ -15,7 +15,7 @@ use hanzo_metal_kernels::metal::{
 };
 
 #[cfg(feature = "metal")]
-use objc2_metal::{MTLCompileOptions, MTLMathMode, MTLSize};
+use objc2_metal::{MTLCompileOptions, MTLLanguageVersion, MTLMathMode, MTLSize};
 
 #[cfg(feature = "metal")]
 use std::collections::HashMap;
@@ -42,6 +42,7 @@ fn load_gdn_library(device: &MetalRawDevice) -> Result<Library> {
     }
     let compile_options = {
         let opts = MTLCompileOptions::new();
+        opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
         opts.setMathMode(MTLMathMode::Fast);
         opts
     };
@@ -305,6 +306,45 @@ pub fn chunked_gated_delta_rule_recurrence_metal(
     _state: &mut hanzo_ml::Tensor,
 ) -> hanzo_ml::Result<hanzo_ml::Tensor> {
     hanzo_ml::bail!("chunked_gated_delta_rule_recurrence_metal requires the metal feature")
+}
+
+/// Single decode step (seq_len==1) on Metal, mirroring `gdn_step_vulkan`.
+///
+/// Inputs are already flattened to the [BH, ..] layout (no per-token transpose): q,k [BH, K]; v
+/// [BH, V]; g,beta [BH]; state [BH, K, V] (updated in place). q must already be 1/sqrt(K)-scaled.
+/// Reuses the fused recurrence kernel with S=1, then returns y [BH, V]. The win over the general
+/// `recurrence_metal` path is skipping `recurrence_flatten`/`recurrence_unflatten`'s transposes.
+#[cfg(feature = "metal")]
+pub fn gated_delta_rule_step_metal(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state: &mut Tensor,
+) -> Result<Tensor> {
+    let (bh, k_dim) = q.dims2()?;
+    let v_dim = v.dim(1)?;
+    let q = q.reshape((bh, 1, k_dim))?;
+    let k = k.reshape((bh, 1, k_dim))?;
+    let v = v.reshape((bh, 1, v_dim))?;
+    let g = g.reshape((bh, 1))?;
+    let beta = beta.reshape((bh, 1))?;
+    let y = gated_delta_rule_recurrence_metal(&q, &k, &v, &g, &beta, state)?;
+    y.reshape((bh, v_dim))
+}
+
+#[cfg(not(feature = "metal"))]
+#[allow(dead_code)]
+pub fn gated_delta_rule_step_metal(
+    _q: &hanzo_ml::Tensor,
+    _k: &hanzo_ml::Tensor,
+    _v: &hanzo_ml::Tensor,
+    _g: &hanzo_ml::Tensor,
+    _beta: &hanzo_ml::Tensor,
+    _state: &mut hanzo_ml::Tensor,
+) -> hanzo_ml::Result<hanzo_ml::Tensor> {
+    hanzo_ml::bail!("gated_delta_rule_step_metal requires the metal feature")
 }
 
 // ============================================================================

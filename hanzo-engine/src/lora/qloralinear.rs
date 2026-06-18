@@ -52,12 +52,19 @@ impl QLoraLinear {
                 b: None,
             })?),
             #[cfg(feature = "vulkan")]
-            QMatMul::VulkanQuant { qtensor, .. } => {
+            QMatMul::VulkanQuant { qtensor, .. } | QMatMul::VulkanQuantBank { qtensor, .. } => {
                 Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: qtensor,
                     b: None,
                 })?)
             }
+            #[cfg(feature = "rocm")]
+            QMatMul::RocmQuant { qtensor, .. } => Arc::new(GgufMatMul::new(
+                QuantMethodConfig::Gguf {
+                    q_weight: qtensor,
+                    b: None,
+                },
+            )?),
             QMatMul::TensorF16(t) | QMatMul::Tensor(t) => Arc::new(UnquantLinear::new(
                 QuantMethodConfig::Unquantized(Linear::new(t, None)),
             )?),

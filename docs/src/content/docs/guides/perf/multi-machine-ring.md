@@ -1,8 +1,8 @@
 ---
 title: Run across multiple machines
-description: The ring backend for distributed inference across hosts.
+description: Use the ring backend for distributed inference across hosts.
 sidebar:
-  order: 6
+  order: 9
 ---
 
 When a model exceeds one machine's GPU memory, hanzo can split it across multiple hosts via a ring backend.
@@ -14,6 +14,8 @@ The `ring` feature must be compiled in:
 ```bash
 cargo install --path hanzo-cli --features "cuda flash-attn ring"
 ```
+
+If the binary is also built with `nccl`, set `MISTRALRS_NO_NCCL=1` when launching so `Comm::from_device` selects the ring backend.
 
 ## Configuration
 
@@ -35,20 +37,20 @@ Config shape:
 
 Non-master ranks (`rank != 0`) must specify `master_ip`. The master rank (`rank = 0`) is reachable via `master_ip`.
 
-## Multi-node environment variables
+## Environment
 
-Multi-node coordination is controlled through environment variables, not CLI flags:
+Ring backend selection is controlled by `RING_CONFIG`:
 
 | Variable | Purpose |
 |---|---|
 | `RING_CONFIG` | Path to the per-rank ring JSON config. |
-| `HANZO_MN_GLOBAL_WORLD_SIZE` | Total world size across nodes. |
-| `HANZO_MN_LOCAL_WORLD_SIZE` | Local TP size override on the node. |
-| `HANZO_MN_HEAD_NUM_WORKERS` | Number of worker nodes (set on head). |
-| `HANZO_MN_HEAD_PORT` | Head node port. |
-| `HANZO_MN_WORKER_SERVER_ADDR` | Head node address (set on workers). |
-| `HANZO_MN_WORKER_ID` | Worker node id. |
-| `HANZO_NO_NCCL=1` | Disable NCCL fallback. |
+| `MN_GLOBAL_WORLD_SIZE` | Total world size across nodes. |
+| `MN_LOCAL_WORLD_SIZE` | Local TP size override on the node. |
+| `MN_HEAD_NUM_WORKERS` | Number of worker nodes (set on head). |
+| `MN_HEAD_PORT` | Head node port. |
+| `MN_WORKER_SERVER_ADDR` | Head node address (set on workers). |
+| `MN_WORKER_ID` | Worker node id. |
+| `NO_NCCL=1` | Disable NCCL fallback. |
 
 Full env var reference: [environment variables](/hanzo/reference/environment-variables/).
 
