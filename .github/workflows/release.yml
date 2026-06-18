@@ -13,12 +13,12 @@ on:
 permissions:
   contents: write
   packages: write
-  id-token: write
+  id-token: write   # required for cosign keyless (Sigstore / GitHub OIDC) signing
 
 jobs:
   build-and-test:
     name: Build and Test
-    runs-on: [self-hosted, linux, amd64]
+    runs-on: hanzoai-amd64
 
     steps:
     - uses: actions/checkout@v4
@@ -62,125 +62,111 @@ jobs:
     - name: Run clippy
       run: cargo clippy --manifest-path engine/Cargo.toml --package hanzo-engine --no-default-features -- -D warnings
 
+  # Native build + cosign signing on the self-hosted fleet (one canonical way).
+  # Every release artifact is built NATIVELY on its target platform's runner — no
+  # cross-compile, no GitHub-hosted runners — and signed with cosign (keyless OIDC).
+  #
+  # The reusable workflow does a single `actions/checkout` of THIS repo, then runs
+  # the one `build` command below on each platform. The engine has a hard Cargo
+  # path-dep on ../ml (hanzo-ml / hanzo-nn / hanzo-flash-attn / hanzo-metal-kernels),
+  # so the build clones hanzoai/ml (and hanzoai/node, kept for parity) as siblings,
+  # installs the Rust toolchain (ARC runner images are minimal), then builds with the
+  # per-platform feature flags, renames hanzo-engine -> hanzoai, and packages the same
+  # tar.gz / .zip artifacts the release has always shipped. The `artifacts` glob is
+  # signed by cosign and uploaded (binary + .sig + .pem) per platform.
   build-binaries:
-    name: Build ${{ matrix.target }}
+    name: Build Native + Sign
     needs: build-and-test
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: '["self-hosted", "linux", "amd64"]'
-            name: hanzoai-linux-amd64
-            features: ""
-          - target: aarch64-unknown-linux-gnu
-            os: '["self-hosted", "linux", "amd64"]'
-            name: hanzoai-linux-arm64
-            features: "vendored-openssl"
-            cross: true
-          - target: x86_64-apple-darwin
-            os: '"macos-latest"'
-            name: hanzoai-macos-amd64
-            features: metal
-          - target: aarch64-apple-darwin
-            os: '"macos-14"'
-            name: hanzoai-macos-arm64
-            features: metal
-          - target: x86_64-pc-windows-msvc
-            os: '"windows-latest"'
-            name: hanzoai-windows-amd64.exe
-            features: ""
+    permissions:
+      contents: read
+      id-token: write   # cosign keyless signing needs the OIDC token on the caller
+    uses: hanzoai/arc/.github/workflows/build-matrix.yml@main
+    with:
+      # Native fleet runners. linux-arm64 now builds NATIVELY on spark via the
+      # hanzoai-arm64 ARC scale-set (was a flaky cross-compile + continue-on-error).
+      platforms: >-
+        [{"name":"hanzoai-linux-amd64","runsOn":"hanzoai-amd64"},
+         {"name":"hanzoai-linux-arm64","runsOn":"hanzoai-arm64"},
+         {"name":"hanzoai-macos-arm64","runsOn":["self-hosted","macOS","ARM64"]},
+         {"name":"hanzoai-windows-amd64","runsOn":["self-hosted","Windows","X64"]}]
+      # One portable build script; per-platform feature flags + packaging are derived
+      # from $RUNNER_OS / $RUNNER_ARCH. Keeps the metal feature on macOS exactly as
+      # before; linux/windows build CPU release binaries, matching today's artifacts.
+      build: |
+        set -euo pipefail
 
-    runs-on: ${{ fromJson(matrix.os) }}
-    continue-on-error: ${{ matrix.cross == true }}
+        # --- sibling deps: engine path-deps on ../ml; ../node kept for parity ---
+        WS="$(cd .. && pwd)"
+        for dep in ml node; do
+          if [ ! -d "$WS/$dep" ]; then
+            git clone --depth 1 "https://github.com/hanzoai/$dep.git" "$WS/$dep"
+          fi
+        done
 
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        path: engine
-    - uses: actions/checkout@v4
-      with:
-        repository: hanzoai/ml
-        path: ml
-    - uses: actions/checkout@v4
-      with:
-        repository: hanzoai/node
-        path: node
+        # --- toolchain (ARC linux images are minimal; macOS/Windows runners have it) ---
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq build-essential pkg-config libssl-dev curl git
+          fi
+        fi
+        if ! command -v cargo >/dev/null 2>&1; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+          source "$HOME/.cargo/env"
+        fi
+        export PATH="$HOME/.cargo/bin:$PATH"
 
-    - name: Install build tools (Linux)
-      if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq build-essential pkg-config libssl-dev curl
-
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: ${{ matrix.target }}
-
-    - name: Install cross-compilation tools
-      if: matrix.target == 'aarch64-unknown-linux-gnu'
-      run: |
-        sudo apt-get install -y -qq gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-        echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
-        echo "OPENSSL_NO_PKG_CONFIG=1" >> $GITHUB_ENV
-        echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
-        echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-        echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
-        echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar" >> $GITHUB_ENV
-        mkdir -p engine/.cargo
-        echo '[target.aarch64-unknown-linux-gnu]' >> engine/.cargo/config.toml
-        echo 'linker = "aarch64-linux-gnu-gcc"' >> engine/.cargo/config.toml
-
-    - name: Build binary
-      shell: bash
-      run: |
-        FEATURES="${{ matrix.features }}"
-        if [ -n "$FEATURES" ]; then
-          cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --release --target ${{ matrix.target }} --no-default-features --features "$FEATURES"
-        else
-          cargo build --manifest-path engine/Cargo.toml --package hanzo-engine --release --target ${{ matrix.target }} --no-default-features
+        # --- per-platform feature flags (preserve metal on Apple Silicon) ---
+        FEATURES=""
+        if [ "$RUNNER_OS" = "macOS" ]; then
+          FEATURES="metal"
         fi
 
-    - name: Rename binary to hanzoai
-      shell: bash
-      run: |
-        cd engine/target/${{ matrix.target }}/release
-        if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+        # --- native build (no --target: builds for the host triple) ---
+        if [ -n "$FEATURES" ]; then
+          cargo build --package hanzo-engine --release --no-default-features --features "$FEATURES"
+        else
+          cargo build --package hanzo-engine --release --no-default-features
+        fi
+
+        # --- rename hanzo-engine -> hanzoai and package (same artifacts as before) ---
+        case "$RUNNER_ARCH" in
+          X64)   ARCH=amd64 ;;
+          ARM64) ARCH=arm64 ;;
+          *)     ARCH="$(echo "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')" ;;
+        esac
+        cd target/release
+        if [ "$RUNNER_OS" = "Windows" ]; then
           mv hanzo-engine.exe hanzoai.exe
+          NAME="hanzoai-windows-${ARCH}"
+          7z a "$GITHUB_WORKSPACE/${NAME}.zip" hanzoai.exe
         else
           mv hanzo-engine hanzoai
+          OS="$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')"  # linux / macos? -> normalize
+          [ "$OS" = "macos" ] || OS="linux"
+          NAME="hanzoai-${OS}-${ARCH}"
+          tar -czf "$GITHUB_WORKSPACE/${NAME}.tar.gz" hanzoai
         fi
-
-    - name: Package binary
-      shell: bash
-      run: |
-        cd engine/target/${{ matrix.target }}/release
-        if [[ "${{ matrix.target }}" == *"windows"* ]]; then
-          7z a ../../../../${{ matrix.name }}.zip hanzoai.exe
-        else
-          tar -czf ../../../../${{ matrix.name }}.tar.gz hanzoai
-        fi
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ matrix.name }}
-        path: |
-          *.tar.gz
-          *.zip
+      # No test step here: the build-and-test gate above already runs the full
+      # check/test/fmt/clippy suite before any binary is built.
+      test: ''
+      artifacts: '*.tar.gz *.zip'
+      sign: true   # cosign keyless (Sigstore / GitHub OIDC); see PR notes on validation
+    secrets: inherit
 
   create-release:
     name: Create Release
     needs: build-binaries
     if: always() && !cancelled()
-    runs-on: [self-hosted, linux, amd64]
+    runs-on: hanzoai-amd64
 
     steps:
     - uses: actions/checkout@v4
       with:
         path: engine
 
+    # Downloads every per-platform artifact bundle uploaded by build-matrix.yml,
+    # i.e. ./artifacts/<platform>/hanzoai-*.{tar.gz,zip} plus the cosign .sig/.pem.
     - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
@@ -206,6 +192,17 @@ jobs:
         echo '# Download for your platform' >> CHANGELOG.md
         echo 'curl -L https://github.com/hanzoai/engine/releases/latest/download/hanzoai-$(uname -s | tr "[:upper:]" "[:lower:]")-$(uname -m).tar.gz | tar -xz' >> CHANGELOG.md
         echo 'sudo mv hanzo-engine /usr/local/bin/hanzoai' >> CHANGELOG.md
+        echo '```' >> CHANGELOG.md
+        echo "" >> CHANGELOG.md
+        echo "## Verifying signatures" >> CHANGELOG.md
+        echo "Artifacts are cosign-signed (keyless, Sigstore / GitHub OIDC). Each \`<artifact>\` ships a \`<artifact>.sig\` + \`<artifact>.pem\`:" >> CHANGELOG.md
+        echo '```bash' >> CHANGELOG.md
+        echo 'cosign verify-blob \' >> CHANGELOG.md
+        echo '  --certificate hanzoai-linux-amd64.tar.gz.pem \' >> CHANGELOG.md
+        echo '  --signature   hanzoai-linux-amd64.tar.gz.sig \' >> CHANGELOG.md
+        echo '  --certificate-identity-regexp "https://github.com/hanzoai/.*" \' >> CHANGELOG.md
+        echo '  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \' >> CHANGELOG.md
+        echo '  hanzoai-linux-amd64.tar.gz' >> CHANGELOG.md
         echo '```' >> CHANGELOG.md
 
     - name: Create Release
