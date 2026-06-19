@@ -450,6 +450,50 @@ impl IncludeConfig {
     }
 }
 
+/// Accept Responses-API tools in either the flat shape ({type,name,parameters,...})
+/// the OpenAI Responses API (and codex/hanzo-dev) sends, or the chat shape
+/// ({type,function:{...}}). Flat function tools are nested so they deserialize into
+/// the engine's chat-style `Tool`.
+fn deserialize_responses_tools<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<hanzo_engine::Tool>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Option<Vec<Value>> = Option::deserialize(deserializer)?;
+    let Some(items) = raw else {
+        return Ok(None);
+    };
+    let mut tools = Vec::with_capacity(items.len());
+    for item in items {
+        // The engine only models function tools. codex/hanzo-dev also send other
+        // Responses tool types (e.g. "namespace" for code-mode grouping); skip any
+        // non-function type, and silently drop anything that still won't deserialize,
+        // so a rich client tool set never 422s the request.
+        let ty = item
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("function");
+        if ty != "function" {
+            continue;
+        }
+        let normalized = match item {
+            Value::Object(mut obj) if !obj.contains_key("function") => {
+                obj.remove("type");
+                let mut wrapper = serde_json::Map::new();
+                wrapper.insert("type".to_string(), Value::String("function".to_string()));
+                wrapper.insert("function".to_string(), Value::Object(obj));
+                Value::Object(wrapper)
+            }
+            other => other,
+        };
+        if let Ok(tool) = serde_json::from_value(normalized) {
+            tools.push(tool);
+        }
+    }
+    Ok(Some(tools))
+}
+
 /// OpenResponses API create request
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct OpenResponsesCreateRequest {
@@ -524,7 +568,11 @@ pub struct OpenResponsesCreateRequest {
 
     // ===== Tool Calling =====
     /// Tool definitions available for the model to call
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "deserialize_responses_tools"
+    )]
     pub tools: Option<Vec<hanzo_engine::Tool>>,
 
     /// Controls how the model uses tools
