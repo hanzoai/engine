@@ -170,6 +170,9 @@ fn determine_auto_dtype_all(devices: &[&Device]) -> hanzo_ml::Result<DType> {
 impl TryIntoDType for ModelDType {
     fn try_into_dtype(&self, devices: &[&Device]) -> Result<DType> {
         let dtype = match self {
+            // Vulkan stores all floats as f32; auto bf16/f16 would force a CPU roundtrip on every
+            // to_dtype cast-back. Explicit --dtype still honored (only Auto is steered here).
+            Self::Auto if devices.iter().any(|d| d.is_vulkan()) => DType::F32,
             Self::Auto => determine_auto_dtype_all(devices).map_err(anyhow::Error::msg)?,
             Self::BF16 => DType::BF16,
             Self::F16 => DType::F16,
