@@ -956,7 +956,7 @@ impl hanzo_ml::CustomOp1 for ArgSort {
         layout: &hanzo_ml::Layout,
     ) -> Result<(hanzo_ml::CudaStorage, hanzo_ml::Shape)> {
         use hanzo_ml::backend::BackendStorage;
-        use hanzo_ml::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+        use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
         use hanzo_ml::cuda_backend::CudaStorageSlice;
 
         let dev = storage.device();
