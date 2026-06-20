@@ -2604,6 +2604,11 @@ pub(crate) fn apply_rotary_positions_qk(
     positions: &Tensor,
     is_gpt_neox: bool,
 ) -> Result<(Tensor, Tensor)> {
+    // Vulkan has no fused positions kernel in hanzo-quant (the cpu fallback bails on
+    // non-CPU storage); gather the per-token cos/sin rows and apply the vulkan `rope` op.
+    if q.device().is_vulkan() {
+        return rope_positions_via_gather(q, k, cos, sin, positions, is_gpt_neox);
+    }
     let (q, k) =
         hanzo_quant::rotary::apply_rotary_qk_positions(q, k, cos, sin, positions, is_gpt_neox)?;
     Ok((post_rope_output(q)?, post_rope_output(k)?))
@@ -2865,10 +2870,10 @@ pub fn qk_rms_norm_rope_positions(
     let q = hanzo_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
     let k = hanzo_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
 
-    // ROCm has no fused positions kernel in hanzo-quant (that path falls back to
-    // `cpu_apply_rotary_qk`, which bails on ROCm storage). Instead, gather the
-    // per-token cos/sin rows from the DEVICE `positions` tensor with
-    // `index_select` and apply the existing ROCm-capable `rope` op. This is
+    // ROCm and Vulkan have no fused positions kernel in hanzo-quant (that path falls
+    // back to `cpu_apply_rotary_qk`, which bails on non-CPU storage). Instead, gather
+    // the per-token cos/sin rows from the DEVICE `positions` tensor with
+    // `index_select` and apply the existing ROCm/Vulkan-capable `rope` op. This is
     // numerically identical to the host-offset `selected_rope_cache` path, but
     // the position indices live in device memory, so no host seqlen value is
     // baked into the launch (the stage-3 hipGraph capture prerequisite).
@@ -2876,7 +2881,7 @@ pub fn qk_rms_norm_rope_positions(
     if q.device().is_rocm() {
         return rocm_rope_positions_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox);
     }
-    if q.device().is_rocm() {
+    if q.device().is_rocm() || q.device().is_vulkan() {
         return rope_positions_via_gather(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox);
     }
 
