@@ -28,20 +28,20 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 | Variable | Purpose |
 |---|---|
 | `RUST_LOG` | Override the `tracing` log filter. Examples: `hanzo_engine=debug,tower_http=info`, `trace`. CLI users can usually use `-v` or `-vv` instead. |
-| `HANZO_DEBUG` | `HANZO_DEBUG=1` enables extra debug-level engine tracing. |
+| `DEBUG` | `DEBUG=1` enables extra debug-level engine tracing. |
 
 ## Quantization and loading
 
 | Variable | Purpose |
 |---|---|
-| `HANZO_NO_MMAP` | `HANZO_NO_MMAP=1` loads safetensors without mmap. |
-| `HANZO_ISQ_SINGLETHREAD` | If set, runs ISQ quantization single-threaded. |
+| `NO_MMAP` | `NO_MMAP=1` loads safetensors without mmap. |
+| `ISQ_SINGLETHREAD` | If set, runs ISQ quantization single-threaded. |
 
 ## Sandbox
 
 | Variable | Purpose |
 |---|---|
-| `HANZO_SANDBOX` | `auto`, `on`, or `off`. Overrides the sandbox only when the resolved mode is `auto`; `on` and `off` in CLI/TOML win. See [sandbox reference](/hanzo/reference/sandbox/). |
+| `SANDBOX` | `auto`, `on`, or `off`. Overrides the sandbox only when the resolved mode is `auto`; `on` and `off` in CLI/TOML win. See [sandbox reference](/hanzo/reference/sandbox/). |
 
 ## Server and UI
 
@@ -56,19 +56,19 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 
 | Variable | Purpose |
 |---|---|
-| `HANZO_NO_MLA` | `HANZO_NO_MLA=1` disables the MLA-specific attention path for DeepSeek V2/V3. Generic attention is used instead. |
+| `NO_MLA` | `NO_MLA=1` disables the MLA-specific attention path for DeepSeek V2/V3. Generic attention is used instead. |
 
 ## Multi-GPU and multi-node
 
 | Variable | Purpose |
 |---|---|
-| `HANZO_NO_NCCL` | `HANZO_NO_NCCL=1` disables NCCL. Falls back to the ring backend. |
-| `HANZO_MN_GLOBAL_WORLD_SIZE` | Total world size across nodes. Presence of this variable enables multi-node mode. |
-| `HANZO_MN_LOCAL_WORLD_SIZE` | Local TP size override on a single node. |
-| `HANZO_MN_HEAD_NUM_WORKERS` | Set on the head node: number of worker nodes. |
-| `HANZO_MN_HEAD_PORT` | Set on the head node: listening port for worker connections. |
-| `HANZO_MN_WORKER_SERVER_ADDR` | Set on worker nodes: address of the head node. |
-| `HANZO_MN_WORKER_ID` | Set on worker nodes: worker index (0-based). |
+| `NO_NCCL` | `NO_NCCL=1` disables NCCL. Falls back to the ring backend. |
+| `MN_GLOBAL_WORLD_SIZE` | Total world size across nodes. Presence of this variable enables multi-node mode. |
+| `MN_LOCAL_WORLD_SIZE` | Local TP size override on a single node. |
+| `MN_HEAD_NUM_WORKERS` | Set on the head node: number of worker nodes. |
+| `MN_HEAD_PORT` | Set on the head node: listening port for worker connections. |
+| `MN_WORKER_SERVER_ADDR` | Set on worker nodes: address of the head node. |
+| `MN_WORKER_ID` | Set on worker nodes: worker index (0-based). |
 | `RING_CONFIG` | Path to the ring backend JSON config. Presence of this variable enables the ring backend when built with the `ring` feature. |
 
 See the [multi-machine ring guide](/hanzo/guides/perf/multi-machine-ring/) for use.
@@ -77,7 +77,7 @@ See the [multi-machine ring guide](/hanzo/guides/perf/multi-machine-ring/) for u
 
 | Variable | Purpose |
 |---|---|
-| `HANZO_IGPU_MEMORY_FRACTION` | Fraction of integrated GPU memory usable on CUDA systems with iGPUs. Default 0.75. |
+| `IGPU_MEMORY_FRACTION` | Fraction of integrated GPU memory usable on CUDA systems with iGPUs. Default 0.75. |
 
 ## Build-time
 
@@ -85,9 +85,9 @@ These are read by build scripts, not at runtime.
 
 | Variable | Purpose |
 |---|---|
-| `HANZO_METAL_PRECOMPILE` | `HANZO_METAL_PRECOMPILE=0` skips Metal kernel precompilation at build time; kernels are compiled at runtime on first use. |
+| `METAL_PRECOMPILE` | `METAL_PRECOMPILE=0` skips Metal kernel precompilation at build time; kernels are compiled at runtime on first use. |
 | `CUDA_NVCC_FLAGS` | Extra compiler options passed to CUDA builds. |
-| `HANZO_GIT_REVISION` | Git revision embedded in the binary by the build script. |
+| `GIT_REVISION` | Git revision embedded in the binary by the build script. |
 
 ## Internal
 
@@ -95,4 +95,4 @@ Not intended for direct use.
 
 | Variable | Purpose |
 |---|---|
-| `__HANZO_DAEMON_INTERNAL` | Set by the engine on spawned worker processes. |
+| `__DAEMON_INTERNAL` | Set by the engine on spawned worker processes. |
