@@ -250,7 +250,7 @@ impl QuantMethod for GgufMatMul {
             }
             #[cfg(feature = "vulkan")]
             Self {
-                w: QMatMul::VulkanQuant { qtensor, .. } | QMatMul::VulkanQuantBank { qtensor, .. },
+                w: QMatMul::VulkanQuant { qtensor, .. },
                 b,
             } => {
                 let (wd, dtype) = (qtensor.dequantize(&qtensor.device())?, qtensor.dtype());
@@ -269,7 +269,7 @@ impl QuantMethod for GgufMatMul {
             #[cfg(feature = "rocm")]
             QMatMul::RocmQuant { qtensor, .. } => (DType::F32, qtensor.device()),
             #[cfg(feature = "vulkan")]
-            QMatMul::VulkanQuant { qtensor, .. } | QMatMul::VulkanQuantBank { qtensor, .. } => {
+            QMatMul::VulkanQuant { qtensor, .. } => {
                 (DType::F32, qtensor.device())
             }
             QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
@@ -292,8 +292,7 @@ impl QuantMethod for GgufMatMul {
                     #[cfg(feature = "rocm")]
                     QMatMul::RocmQuant { qtensor, .. } => qtensor.dequantize(&qtensor.device())?,
                     #[cfg(feature = "vulkan")]
-                    QMatMul::VulkanQuant { qtensor, .. }
-                    | QMatMul::VulkanQuantBank { qtensor, .. } => {
+                    QMatMul::VulkanQuant { qtensor, .. } => {
                         qtensor.dequantize(&qtensor.device())?
                     }
                     QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
@@ -310,8 +309,7 @@ impl QuantMethod for GgufMatMul {
                 #[cfg(feature = "rocm")]
                 QMatMul::RocmQuant { qtensor, .. } => qtensor.dequantize(&qtensor.device())?,
                 #[cfg(feature = "vulkan")]
-                QMatMul::VulkanQuant { qtensor, .. }
-                | QMatMul::VulkanQuantBank { qtensor, .. } => {
+                QMatMul::VulkanQuant { qtensor, .. } => {
                     qtensor.dequantize(&qtensor.device())?
                 }
                 QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
@@ -337,8 +335,7 @@ impl QuantMethod for GgufMatMul {
                     QTensor::quantize(&qtensor.dequantize(&device)?, qtensor.dtype())?,
                 )?,
                 #[cfg(feature = "vulkan")]
-                QMatMul::VulkanQuant { qtensor, .. }
-                | QMatMul::VulkanQuantBank { qtensor, .. } => QMatMul::from_qtensor(
+                QMatMul::VulkanQuant { qtensor, .. } => QMatMul::from_qtensor(
                     QTensor::quantize(&qtensor.dequantize(&device)?, qtensor.dtype())?,
                 )?,
                 QMatMul::Tensor(t) => QMatMul::Tensor(t.to_device(&device)?),
