@@ -59,7 +59,7 @@ impl QLoraLinear {
                 })?)
             }
             #[cfg(feature = "vulkan")]
-            QMatMul::VulkanQuant { qtensor, .. } | QMatMul::VulkanQuantBank { qtensor, .. } => {
+            QMatMul::VulkanQuant { qtensor, .. } => {
                 Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: qtensor,
                     b: None,
