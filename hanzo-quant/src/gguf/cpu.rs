@@ -61,10 +61,6 @@ pub fn cpu_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) -> R
         QMatMul::RocmQuant { qtensor, .. } => qtensor_indexed_moe_forward(qtensor, x, ids),
         #[cfg(feature = "vulkan")]
         QMatMul::VulkanQuant { qtensor, .. } => qtensor_indexed_moe_forward(qtensor, x, ids),
-        // Resident MoE bank: delegate to the GPU keep-quantized path (per-expert banked matvec/matmul,
-        // no whole-bank dequant). Dequantizing the [E,n,k] bank here would be the ~140GB f32 OOM.
-        #[cfg(feature = "vulkan")]
-        QMatMul::VulkanQuantBank { .. } => qmatmul.indexed_moe_forward(x, ids),
         QMatMul::Tensor(t) | QMatMul::TensorF16(t) => {
             // For non-quantized tensors, use UnquantLinear directly
             let unquant =
