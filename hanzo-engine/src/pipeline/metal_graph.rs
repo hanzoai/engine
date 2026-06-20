@@ -11,10 +11,10 @@
 //! * An `MTLIndirectCommandBuffer` (ICB) *can* be replayed with
 //!   `executeCommandsInBuffer`, but only for commands explicitly encoded into the
 //!   ICB through `MTLIndirectComputeCommand`. In this codebase every kernel — the
-//!   candle matmul/softmax/RoPE/norm ops and the `hanzo-metal-kernels` paged-attn
+//!   hanzo-ml matmul/softmax/RoPE/norm ops and the `hanzo-metal-kernels` paged-attn
 //!   kernels — dispatches into the shared auto-committing compute encoder
 //!   (`hanzo_metal_kernels::metal::Commands`), *not* into an ICB. Re-targeting all
-//!   of them to an ICB would be an engine-wide rewrite of candle + the kernel crate
+//!   of them to an ICB would be an engine-wide rewrite of hanzo-ml + the kernel crate
 //!   + paged-attn, and ICBs additionally cannot express the per-dispatch
 //!   `setThreadgroupMemoryLength` that paged-attn v1/v2 require. ICB is therefore
 //!   the wrong tool for a decode-graph *port*.
@@ -39,7 +39,7 @@
 //!
 //! * [`MetalDecodeGraphKey`]   ~ `CudaDecodeGraphKey`
 //! * [`MetalDecodeGraphMetadataBuffers`] ~ `CudaDecodeGraphMetadataBuffers`
-//! * [`metal_decode_graphs_enabled`] (gated on `MISTRALRS_METAL_GRAPHS`)
+//! * [`metal_decode_graphs_enabled`] (gated on `METAL_GRAPHS`)
 //!
 //! The pipeline gate in `normal.rs` mirrors the CUDA gate one-for-one behind
 //! `#[cfg(feature = "metal")]`: `metal_decode_graphs_enabled()` +
@@ -502,7 +502,7 @@ impl MetalDecodeGraphMetadataBuffers {
     }
 }
 
-/// Whether Metal decode graphs are enabled. Gated on `MISTRALRS_METAL_GRAPHS`
+/// Whether Metal decode graphs are enabled. Gated on `METAL_GRAPHS`
 /// (default on), mirroring `cuda_decode_graphs_enabled`.
 pub(crate) fn metal_decode_graphs_enabled() -> bool {
     crate::perf_flags::metal_graphs_enabled()
