@@ -51,6 +51,14 @@ pub(crate) fn naive_sdpa(
     mask: Option<&Tensor>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
+    if std::env::var("HANZO_DBG_PATH").is_ok() {
+        eprintln!(
+            "[SDPA] q {:?} dims {:?} dtype {:?}",
+            q.device().location(),
+            q.dims(),
+            q.dtype()
+        );
+    }
     maybe_synchronize(q.device())?;
 
     // Use chunked attention with a closure that captures the necessary parameters

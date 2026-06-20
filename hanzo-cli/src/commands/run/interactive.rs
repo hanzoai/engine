@@ -170,6 +170,13 @@ pub async fn oneshot_mode(
         )
         .await;
     }
+    // ROCm/HIP library destructors SIGSEGV at process teardown under WSL (the output is already
+    // fully produced above). The one-shot run is complete, so exit now and skip global Drop/teardown
+    // -- the OS reclaims everything. Interactive mode already exits this way via its Ctrl-C/D handlers.
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(0);
 }
 
 async fn oneshot_text(
