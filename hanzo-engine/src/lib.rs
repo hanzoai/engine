@@ -11,12 +11,6 @@ use hf_hub::Cache;
 pub use lora::Ordering;
 pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
-// Brand aliases: the upstream/master merge reintroduced `MistralRs*` names, but the hanzo SDK +
-// server-core consume the `Hanzo*` public API. Alias until the brand scrub renames the definitions.
-pub use crate::{
-    MistralRs as Hanzo, MistralRsBuilder as HanzoBuilder, MistralRsConfig as HanzoConfig,
-    MistralRsError as HanzoError,
-};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
 use std::collections::{HashMap, HashSet};
@@ -36,7 +30,7 @@ use std::{
 use tokio::sync::mpsc::{channel, Sender};
 use tracing::{debug, info, warn};
 
-pub const HANZO_GIT_REVISION: &str = match option_env!("HANZO_GIT_REVISION") {
+pub const GIT_REVISION: &str = match option_env!("GIT_REVISION") {
     Some(value) => value,
     None => "unknown",
 };
@@ -323,8 +317,8 @@ use toml_selector::{TomlLoaderArgs, TomlSelector};
 pub use tools::{ToolCallResponse, ToolCallType, ToolCallbacks, ToolChoice};
 pub use topology::{LayerTopology, Topology};
 pub use utils::debug::{
-    default_mistralrs_filter, initialize_logging, initialize_logging_with_filter,
-    initialize_mistralrs_logging, LogVerbosity,
+    default_hanzo_filter, initialize_logging, initialize_logging_with_filter,
+    initialize_hanzo_logging, LogVerbosity,
 };
 pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};
@@ -333,7 +327,7 @@ pub use utils::{paged_attn_supported, using_flash_attn};
 // re-export llguidance for easier LlguidanceGrammar construction
 pub use llguidance;
 
-/// `true` if `MISTRALRS_DEBUG=1`
+/// `true` if `DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
 pub static GLOBAL_HF_CACHE: OnceLock<Cache> = OnceLock::new();
 
@@ -365,7 +359,7 @@ impl Default for EngineConfig {
     }
 }
 
-/// Configuration for adding a model to MistralRs
+/// Configuration for adding a model to Hanzo
 #[derive(Clone)]
 pub struct AddModelConfig {
     pub engine_config: EngineConfig,
@@ -405,7 +399,7 @@ impl AddModelConfig {
 }
 
 #[derive(Clone)]
-pub struct MistralRsConfig {
+pub struct HanzoConfig {
     pub kind: ModelKind,
     pub device: Device,
     pub category: ModelCategory,
@@ -459,7 +453,7 @@ pub struct UnloadedModelState {
     /// Model category (Text, Multimodal, etc.)
     pub category: ModelCategory,
     /// Model metadata configuration
-    pub mistralrs_config: MistralRsConfig,
+    pub hanzo_config: HanzoConfig,
 }
 
 /// Internal structure to hold per-engine state
@@ -467,7 +461,7 @@ struct EngineInstance {
     sender: Sender<Request>,
     engine_handler: JoinHandle<()>,
     reboot_state: RebootState,
-    config: MistralRsConfig,
+    config: HanzoConfig,
     category: ModelCategory,
     logger: Arc<IntervalLogger>,
     /// Shared with the engine so the SDK/HTTP layer can read/write sessions out of band.
@@ -485,7 +479,7 @@ impl Drop for EngineInstance {
     }
 }
 
-/// The MistralRs struct handles sending requests to multiple engines.
+/// The Hanzo struct handles sending requests to multiple engines.
 /// It is the core multi-threaded component of mistral.rs, and uses `mpsc`
 /// `Sender` and `Receiver` primitives to send and receive requests to the
 /// appropriate engine based on model ID.
@@ -501,7 +495,7 @@ impl Drop for EngineInstance {
 /// 5. `model_aliases`
 ///
 /// Use scope-based lock management and explicit `drop()` calls.
-pub struct MistralRs {
+pub struct Hanzo {
     engines: RwLock<HashMap<String, EngineInstance>>,
     /// Models that have been unloaded but can be reloaded on demand
     unloaded_models: RwLock<HashMap<String, UnloadedModelState>>,
@@ -552,7 +546,7 @@ impl std::fmt::Display for ModelStatus {
 }
 
 #[derive(Debug)]
-pub enum MistralRsError {
+pub enum HanzoError {
     EnginePoisoned,
     SenderPoisoned,
     /// The requested model was not found (neither loaded nor unloaded)
@@ -571,25 +565,25 @@ pub enum MistralRsError {
     Other(String),
 }
 
-impl std::fmt::Display for MistralRsError {
+impl std::fmt::Display for HanzoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", &self)
     }
 }
 
-impl std::error::Error for MistralRsError {}
+impl std::error::Error for HanzoError {}
 
 #[cfg(feature = "pyo3_macros")]
-impl From<MistralRsError> for pyo3::PyErr {
-    fn from(value: MistralRsError) -> Self {
+impl From<HanzoError> for pyo3::PyErr {
+    fn from(value: HanzoError) -> Self {
         PyValueError::new_err(format!("{value:?}"))
     }
 }
 
-/// The MistralRsBuilder takes the pipeline and a scheduler method and constructs
-/// an Engine and a MistralRs instance. The Engine runs on a separate thread, and the MistralRs
+/// The HanzoBuilder takes the pipeline and a scheduler method and constructs
+/// an Engine and a Hanzo instance. The Engine runs on a separate thread, and the Hanzo
 /// instance stays on the calling thread.
-pub struct MistralRsBuilder {
+pub struct HanzoBuilder {
     pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     method: SchedulerConfig,
     model_id_override: Option<String>,
@@ -607,7 +601,7 @@ pub struct MistralRsBuilder {
     code_exec_config: Option<CodeExecutionConfig>,
 }
 
-impl MistralRsBuilder {
+impl HanzoBuilder {
     /// Creates a new builder with the given pipeline, scheduler method, logging flag,
     /// and optional embedding model for web search. To override the search callback,
     /// use `.with_search_callback(...)` on the builder.
@@ -636,7 +630,7 @@ impl MistralRsBuilder {
         }
     }
 
-    /// Override the model ID used by MistralRs. Defaults to the pipeline name.
+    /// Override the model ID used by Hanzo. Defaults to the pipeline name.
     pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
         self.model_id_override = Some(model_id.into());
         self
@@ -746,12 +740,12 @@ impl MistralRsBuilder {
         self
     }
 
-    pub async fn build(self) -> Arc<MistralRs> {
-        MistralRs::new(self).await
+    pub async fn build(self) -> Arc<Hanzo> {
+        Hanzo::new(self).await
     }
 }
 
-impl Drop for MistralRs {
+impl Drop for Hanzo {
     fn drop(&mut self) {
         // Terminate all engines
         if let Ok(engines) = self.engines.read() {
@@ -763,7 +757,7 @@ impl Drop for MistralRs {
     }
 }
 
-impl MistralRs {
+impl Hanzo {
     /// Create an engine instance with the given configuration
     fn create_engine_instance(
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
@@ -800,7 +794,7 @@ impl MistralRs {
         info!("Pipeline input modalities are {:?}", &modalities.input);
         info!("Pipeline output modalities are {:?}", &modalities.output);
 
-        let mistralrs_config = MistralRsConfig {
+        let hanzo_config = HanzoConfig {
             kind,
             device,
             category: category.clone(),
@@ -887,7 +881,7 @@ impl MistralRs {
             sender: tx,
             engine_handler,
             reboot_state,
-            config: mistralrs_config,
+            config: hanzo_config,
             category,
             logger,
             session_store,
@@ -896,7 +890,7 @@ impl MistralRs {
     }
 
     /// Initialize MCP and code-execution tool callbacks and merge them into `tool_callbacks`.
-    /// Used by both `MistralRsBuilder::new` and `add_model` so dynamically added models pick up
+    /// Used by both `HanzoBuilder::new` and `add_model` so dynamically added models pick up
     /// the same external tools as the boot-time model.
     async fn init_external_tool_callbacks(
         #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))] pipeline: &Arc<
@@ -1054,9 +1048,9 @@ impl MistralRs {
         }
     }
 
-    async fn new(config: MistralRsBuilder) -> Arc<Self> {
-        info!("git revision: {HANZO_GIT_REVISION}");
-        let MistralRsBuilder {
+    async fn new(config: HanzoBuilder) -> Arc<Self> {
+        info!("git revision: {GIT_REVISION}");
+        let HanzoBuilder {
             pipeline,
             method,
             model_id_override,
@@ -1243,10 +1237,10 @@ impl MistralRs {
     }
 
     /// Attempts to reboot a specific engine by model_id
-    fn reboot_engine(&self, model_id: &str) -> Result<(), MistralRsError> {
+    fn reboot_engine(&self, model_id: &str) -> Result<(), HanzoError> {
         let mut engines = self.engines.write().map_err(|_| {
             tracing::warn!("Couldn't get write lock on engines during reboot attempt");
-            MistralRsError::EnginePoisoned
+            HanzoError::EnginePoisoned
         })?;
 
         if let Some(engine_instance) = engines.get(model_id) {
@@ -1274,33 +1268,33 @@ impl MistralRs {
             )
             .map_err(|e| {
                 tracing::error!("Failed to create new engine instance: {}", e);
-                MistralRsError::EnginePoisoned
+                HanzoError::EnginePoisoned
             })?;
 
             engines.insert(model_id.to_string(), new_engine_instance);
             tracing::info!("Successfully rebooted engine {}", model_id);
             Ok(())
         } else {
-            Err(MistralRsError::EnginePoisoned)
+            Err(HanzoError::EnginePoisoned)
         }
     }
 
-    fn engine_dead(&self, model_id: &str) -> Result<bool, MistralRsError> {
+    fn engine_dead(&self, model_id: &str) -> Result<bool, HanzoError> {
         let engines = self.engines.read().map_err(|_| {
             tracing::warn!("Couldn't get read lock on engines!");
-            MistralRsError::EnginePoisoned
+            HanzoError::EnginePoisoned
         })?;
 
         if let Some(engine_instance) = engines.get(model_id) {
             Ok(engine_instance.engine_handler.is_finished())
         } else {
-            Err(MistralRsError::EnginePoisoned)
+            Err(HanzoError::EnginePoisoned)
         }
     }
 
     /// Get sender for a specific model. If model_id is None, uses default engine.
     /// If the model is unloaded, it will be automatically reloaded before returning the sender.
-    pub fn get_sender(&self, model_id: Option<&str>) -> Result<Sender<Request>, MistralRsError> {
+    pub fn get_sender(&self, model_id: Option<&str>) -> Result<Sender<Request>, HanzoError> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         // Check if model is loaded
@@ -1308,7 +1302,7 @@ impl MistralRs {
             let engines = self
                 .engines
                 .read()
-                .map_err(|_| MistralRsError::SenderPoisoned)?;
+                .map_err(|_| HanzoError::SenderPoisoned)?;
             engines.contains_key(&resolved_model_id)
         };
 
@@ -1322,7 +1316,7 @@ impl MistralRs {
             let engines = self
                 .engines
                 .read()
-                .map_err(|_| MistralRsError::SenderPoisoned)?;
+                .map_err(|_| HanzoError::SenderPoisoned)?;
             if let Some(engine_instance) = engines.get(&resolved_model_id) {
                 return Ok(engine_instance.sender.clone());
             }
@@ -1333,7 +1327,7 @@ impl MistralRs {
             let unloaded = self
                 .unloaded_models
                 .read()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
+                .map_err(|_| HanzoError::EnginePoisoned)?;
             unloaded.contains_key(&resolved_model_id)
         };
 
@@ -1348,13 +1342,13 @@ impl MistralRs {
             let engines = self
                 .engines
                 .read()
-                .map_err(|_| MistralRsError::SenderPoisoned)?;
+                .map_err(|_| HanzoError::SenderPoisoned)?;
             if let Some(engine_instance) = engines.get(&resolved_model_id) {
                 return Ok(engine_instance.sender.clone());
             }
         }
 
-        Err(MistralRsError::ModelNotFound(resolved_model_id))
+        Err(HanzoError::ModelNotFound(resolved_model_id))
     }
 
     /// Look up a file across all loaded engines. `None` if missing or expired.
@@ -1397,29 +1391,29 @@ impl MistralRs {
     pub fn get_session_store(
         &self,
         model_id: Option<&str>,
-    ) -> Result<Arc<std::sync::Mutex<engine::agentic_session::AgenticSessionStore>>, MistralRsError>
+    ) -> Result<Arc<std::sync::Mutex<engine::agentic_session::AgenticSessionStore>>, HanzoError>
     {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
         let engines = self
             .engines
             .read()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+            .map_err(|_| HanzoError::SenderPoisoned)?;
         engines
             .get(&resolved_model_id)
             .map(|e| Arc::clone(&e.session_store))
-            .ok_or(MistralRsError::ModelNotFound(resolved_model_id))
+            .ok_or(HanzoError::ModelNotFound(resolved_model_id))
     }
 
-    fn get_file_store(&self, model_id: Option<&str>) -> Result<files::FileStore, MistralRsError> {
+    fn get_file_store(&self, model_id: Option<&str>) -> Result<files::FileStore, HanzoError> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
         let engines = self
             .engines
             .read()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+            .map_err(|_| HanzoError::SenderPoisoned)?;
         engines
             .get(&resolved_model_id)
             .map(|e| e.file_store.clone())
-            .ok_or(MistralRsError::ModelNotFound(resolved_model_id))
+            .ok_or(HanzoError::ModelNotFound(resolved_model_id))
     }
 
     /// Export an agentic session by ID. Bundles the session's files (full bodies). `None` if missing.
@@ -1427,13 +1421,13 @@ impl MistralRs {
         &self,
         model_id: Option<&str>,
         session_id: &str,
-    ) -> Result<Option<engine::agentic_session::SerializedSession>, MistralRsError> {
+    ) -> Result<Option<engine::agentic_session::SerializedSession>, HanzoError> {
         let store = self.get_session_store(model_id)?;
         let exported = {
-            let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+            let mut guard = store.lock().map_err(|_| HanzoError::SenderPoisoned)?;
             guard
                 .export(session_id)
-                .map_err(|e| MistralRsError::Other(e.to_string()))?
+                .map_err(|e| HanzoError::Other(e.to_string()))?
         };
         let Some(mut session) = exported else {
             return Ok(None);
@@ -1453,14 +1447,14 @@ impl MistralRs {
         model_id: Option<&str>,
         session_id: String,
         session: engine::agentic_session::SerializedSession,
-    ) -> Result<(), MistralRsError> {
+    ) -> Result<(), HanzoError> {
         let files = session.files.clone();
         let store = self.get_session_store(model_id)?;
         {
-            let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+            let mut guard = store.lock().map_err(|_| HanzoError::SenderPoisoned)?;
             guard
                 .import(session_id.clone(), session)
-                .map_err(|e| MistralRsError::Other(e.to_string()))?;
+                .map_err(|e| HanzoError::Other(e.to_string()))?;
         }
         let file_store = self.get_file_store(model_id)?;
         for f in files {
@@ -1478,12 +1472,12 @@ impl MistralRs {
         src_session_id: &str,
         dest_session_id: String,
         num_turns: usize,
-    ) -> Result<(), MistralRsError> {
+    ) -> Result<(), HanzoError> {
         let store = self.get_session_store(model_id)?;
-        let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+        let mut guard = store.lock().map_err(|_| HanzoError::SenderPoisoned)?;
         guard
             .fork(src_session_id, dest_session_id, num_turns)
-            .map_err(|e| MistralRsError::Other(e.to_string()))
+            .map_err(|e| HanzoError::Other(e.to_string()))
     }
 
     /// Delete an agentic session. Returns whether the session existed.
@@ -1491,16 +1485,16 @@ impl MistralRs {
         &self,
         model_id: Option<&str>,
         session_id: &str,
-    ) -> Result<bool, MistralRsError> {
+    ) -> Result<bool, HanzoError> {
         let store = self.get_session_store(model_id)?;
-        let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+        let mut guard = store.lock().map_err(|_| HanzoError::SenderPoisoned)?;
         Ok(guard.delete(session_id))
     }
 
     /// All stored session IDs. SDK-only, not exposed via HTTP.
-    pub fn list_session_ids(&self, model_id: Option<&str>) -> Result<Vec<String>, MistralRsError> {
+    pub fn list_session_ids(&self, model_id: Option<&str>) -> Result<Vec<String>, HanzoError> {
         let store = self.get_session_store(model_id)?;
-        let guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+        let guard = store.lock().map_err(|_| HanzoError::SenderPoisoned)?;
         Ok(guard.list_ids())
     }
 
@@ -1512,11 +1506,11 @@ impl MistralRs {
         self.creation_time
     }
 
-    fn resolve_alias(&self, model_id: &str) -> Result<String, MistralRsError> {
+    fn resolve_alias(&self, model_id: &str) -> Result<String, HanzoError> {
         let aliases = self
             .model_aliases
             .read()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+            .map_err(|_| HanzoError::SenderPoisoned)?;
         if let Some(primary_id) = aliases.get(model_id) {
             Ok(primary_id.clone())
         } else {
@@ -1524,17 +1518,17 @@ impl MistralRs {
         }
     }
 
-    fn resolve_alias_or_default(&self, model_id: Option<&str>) -> Result<String, MistralRsError> {
+    fn resolve_alias_or_default(&self, model_id: Option<&str>) -> Result<String, HanzoError> {
         match model_id {
             Some(id) => self.resolve_alias(id),
             None => {
                 let default_lock = self
                     .default_engine_id
                     .read()
-                    .map_err(|_| MistralRsError::SenderPoisoned)?;
+                    .map_err(|_| HanzoError::SenderPoisoned)?;
                 Ok(default_lock
                     .as_ref()
-                    .ok_or(MistralRsError::EnginePoisoned)?
+                    .ok_or(HanzoError::EnginePoisoned)?
                     .clone())
             }
         }
@@ -1606,13 +1600,13 @@ impl MistralRs {
     }
 
     /// Check if a model is known (loaded, unloaded, or reloading), resolving aliases if needed.
-    pub fn model_exists(&self, model_id: &str) -> Result<bool, MistralRsError> {
+    pub fn model_exists(&self, model_id: &str) -> Result<bool, HanzoError> {
         let resolved_model_id = self.resolve_alias(model_id)?;
 
         let reloading = self
             .reloading_models
             .read()
-            .map_err(|_| MistralRsError::EnginePoisoned)?;
+            .map_err(|_| HanzoError::EnginePoisoned)?;
         if reloading.contains(&resolved_model_id) {
             return Ok(true);
         }
@@ -1621,7 +1615,7 @@ impl MistralRs {
         let engines = self
             .engines
             .read()
-            .map_err(|_| MistralRsError::EnginePoisoned)?;
+            .map_err(|_| HanzoError::EnginePoisoned)?;
         if engines.contains_key(&resolved_model_id) {
             return Ok(true);
         }
@@ -1630,7 +1624,7 @@ impl MistralRs {
         let unloaded = self
             .unloaded_models
             .read()
-            .map_err(|_| MistralRsError::EnginePoisoned)?;
+            .map_err(|_| HanzoError::EnginePoisoned)?;
         if unloaded.contains_key(&resolved_model_id) {
             return Ok(true);
         }
@@ -1642,17 +1636,17 @@ impl MistralRs {
     pub fn get_logger(
         &self,
         model_id: Option<&str>,
-    ) -> Result<Arc<IntervalLogger>, MistralRsError> {
+    ) -> Result<Arc<IntervalLogger>, HanzoError> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         let engines = self
             .engines
             .read()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+            .map_err(|_| HanzoError::SenderPoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.logger.clone())
         } else {
-            Err(MistralRsError::EnginePoisoned)
+            Err(HanzoError::EnginePoisoned)
         }
     }
 
@@ -1660,17 +1654,17 @@ impl MistralRs {
     pub fn get_model_category(
         &self,
         model_id: Option<&str>,
-    ) -> Result<ModelCategory, MistralRsError> {
+    ) -> Result<ModelCategory, HanzoError> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         let engines = self
             .engines
             .read()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+            .map_err(|_| HanzoError::SenderPoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.category.clone())
         } else {
-            Err(MistralRsError::EnginePoisoned)
+            Err(HanzoError::EnginePoisoned)
         }
     }
 
@@ -1678,17 +1672,17 @@ impl MistralRs {
     pub fn max_sequence_length(
         &self,
         model_id: Option<&str>,
-    ) -> Result<Option<usize>, MistralRsError> {
+    ) -> Result<Option<usize>, HanzoError> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         let engines = self
             .engines
             .read()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+            .map_err(|_| HanzoError::SenderPoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.config.max_seq_len)
         } else {
-            Err(MistralRsError::EnginePoisoned)
+            Err(HanzoError::EnginePoisoned)
         }
     }
 
@@ -1700,7 +1694,7 @@ impl MistralRs {
         last_v
     }
 
-    /// Add a new model engine to the MistralRs instance
+    /// Add a new model engine to the Hanzo instance
     pub async fn add_model(
         &self,
         model_id: String,
@@ -1794,7 +1788,7 @@ impl MistralRs {
         Ok(())
     }
 
-    /// Remove a model engine from the MistralRs instance
+    /// Remove a model engine from the Hanzo instance
     pub fn remove_model(&self, model_id: &str) -> Result<(), String> {
         let resolved_model_id = self.resolve_alias(model_id).map_err(|e| e.to_string())?;
         let mut engines = self
@@ -1803,7 +1797,7 @@ impl MistralRs {
             .map_err(|_| "Failed to acquire write lock on engines")?;
 
         if engines.len() <= 1 {
-            return Err("Cannot remove the last model from MistralRs".to_string());
+            return Err("Cannot remove the last model from Hanzo".to_string());
         }
 
         if let Some(engine_instance) = engines.remove(&resolved_model_id) {
@@ -1884,7 +1878,7 @@ impl MistralRs {
     }
 
     /// Dispatch a request to the appropriate engine based on the model_id in the request
-    pub fn send_request(&self, mut request: Request) -> Result<(), MistralRsError> {
+    pub fn send_request(&self, mut request: Request) -> Result<(), HanzoError> {
         let model_id = match &mut request {
             Request::Normal(normal_req) => normal_req.model_id.as_deref(),
             _ => None, // Other request types don't specify model_id
@@ -1893,7 +1887,7 @@ impl MistralRs {
         let sender = self.get_sender(model_id)?;
         sender
             .blocking_send(request)
-            .map_err(|_| MistralRsError::SenderPoisoned)
+            .map_err(|_| HanzoError::SenderPoisoned)
     }
 
     pub fn maybe_log_request(this: Arc<Self>, repr: String) {
@@ -2017,7 +2011,7 @@ impl MistralRs {
     }
 
     /// Get config for a specific model
-    pub fn config(&self, model_id: Option<&str>) -> Result<MistralRsConfig, String> {
+    pub fn config(&self, model_id: Option<&str>) -> Result<HanzoConfig, String> {
         let resolved_model_id = self
             .resolve_alias_or_default(model_id)
             .map_err(|e| e.to_string())?;
@@ -2038,17 +2032,17 @@ impl MistralRs {
     /// using `reload_model()`.
     ///
     /// Note: The model must have been added with a `ModelLoaderConfig` for auto-reload to work.
-    /// Models added via `MistralRsBuilder` without explicit loader config cannot be reloaded.
-    pub fn unload_model(&self, model_id: &str) -> Result<(), MistralRsError> {
+    /// Models added via `HanzoBuilder` without explicit loader config cannot be reloaded.
+    pub fn unload_model(&self, model_id: &str) -> Result<(), HanzoError> {
         let resolved_model_id = self.resolve_alias(model_id)?;
         // Check if already unloaded
         {
             let unloaded = self
                 .unloaded_models
                 .read()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
+                .map_err(|_| HanzoError::EnginePoisoned)?;
             if unloaded.contains_key(&resolved_model_id) {
-                return Err(MistralRsError::ModelAlreadyUnloaded(
+                return Err(HanzoError::ModelAlreadyUnloaded(
                     resolved_model_id.clone(),
                 ));
             }
@@ -2058,18 +2052,18 @@ impl MistralRs {
         let mut engines = self
             .engines
             .write()
-            .map_err(|_| MistralRsError::EnginePoisoned)?;
+            .map_err(|_| HanzoError::EnginePoisoned)?;
 
         let engine_instance = engines
             .remove(&resolved_model_id)
-            .ok_or_else(|| MistralRsError::ModelNotFound(resolved_model_id.clone()))?;
+            .ok_or_else(|| HanzoError::ModelNotFound(resolved_model_id.clone()))?;
 
         // Check if we have loader config for reloading
         let loader_config = engine_instance
             .reboot_state
             .loader_config
             .clone()
-            .ok_or_else(|| MistralRsError::NoLoaderConfig(resolved_model_id.clone()))?;
+            .ok_or_else(|| HanzoError::NoLoaderConfig(resolved_model_id.clone()))?;
 
         // Create the unloaded state
         let unloaded_state = UnloadedModelState {
@@ -2087,7 +2081,7 @@ impl MistralRs {
             },
             mcp_client_config: engine_instance.reboot_state.mcp_client_config.clone(),
             category: engine_instance.category.clone(),
-            mistralrs_config: engine_instance.config.clone(),
+            hanzo_config: engine_instance.config.clone(),
         };
 
         // Send terminate signal to the engine
@@ -2099,21 +2093,21 @@ impl MistralRs {
         let mut unloaded = self
             .unloaded_models
             .write()
-            .map_err(|_| MistralRsError::EnginePoisoned)?;
+            .map_err(|_| HanzoError::EnginePoisoned)?;
         unloaded.insert(resolved_model_id.to_string(), unloaded_state);
 
         // Update default if needed
         let mut default_lock = self
             .default_engine_id
             .write()
-            .map_err(|_| MistralRsError::EnginePoisoned)?;
+            .map_err(|_| HanzoError::EnginePoisoned)?;
         if let Some(ref default_id) = *default_lock {
             if default_id == &resolved_model_id {
                 // Set the first available engine as the new default
                 let engines = self
                     .engines
                     .read()
-                    .map_err(|_| MistralRsError::EnginePoisoned)?;
+                    .map_err(|_| HanzoError::EnginePoisoned)?;
                 *default_lock = engines.keys().next().cloned();
             }
         }
@@ -2124,16 +2118,16 @@ impl MistralRs {
 
     /// Manually reload a previously unloaded model.
     /// This is also called automatically by `get_sender()` when a request targets an unloaded model.
-    pub async fn reload_model(&self, model_id: &str) -> Result<(), MistralRsError> {
+    pub async fn reload_model(&self, model_id: &str) -> Result<(), HanzoError> {
         let resolved_model_id = self.resolve_alias(model_id)?;
         // Check if already reloading
         {
             let reloading = self
                 .reloading_models
                 .read()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
+                .map_err(|_| HanzoError::EnginePoisoned)?;
             if reloading.contains(&resolved_model_id) {
-                return Err(MistralRsError::ModelReloading(resolved_model_id.clone()));
+                return Err(HanzoError::ModelReloading(resolved_model_id.clone()));
             }
         }
 
@@ -2142,7 +2136,7 @@ impl MistralRs {
             let mut reloading = self
                 .reloading_models
                 .write()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
+                .map_err(|_| HanzoError::EnginePoisoned)?;
             reloading.insert(resolved_model_id.clone());
         }
 
@@ -2151,11 +2145,11 @@ impl MistralRs {
             let unloaded = self
                 .unloaded_models
                 .read()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
+                .map_err(|_| HanzoError::EnginePoisoned)?;
             unloaded
                 .get(&resolved_model_id)
                 .cloned()
-                .ok_or_else(|| MistralRsError::ModelNotFound(resolved_model_id.clone()))?
+                .ok_or_else(|| HanzoError::ModelNotFound(resolved_model_id.clone()))?
         };
 
         // Attempt to reload
@@ -2168,7 +2162,7 @@ impl MistralRs {
             let mut reloading = self
                 .reloading_models
                 .write()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
+                .map_err(|_| HanzoError::EnginePoisoned)?;
             reloading.remove(&resolved_model_id);
         }
 
@@ -2180,7 +2174,7 @@ impl MistralRs {
         &self,
         model_id: &str,
         unloaded_state: UnloadedModelState,
-    ) -> Result<(), MistralRsError> {
+    ) -> Result<(), HanzoError> {
         use crate::model_loader::LoaderBuilder;
 
         info!("Reloading model: {}", model_id);
@@ -2192,7 +2186,7 @@ impl MistralRs {
             .with_chat_template(loader_config.chat_template.clone())
             .with_jinja_explicit(loader_config.jinja_explicit.clone())
             .build()
-            .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to build loader: {e}")))?;
+            .map_err(|e| HanzoError::ReloadFailed(format!("Failed to build loader: {e}")))?;
 
         // Load the model
         let pipeline = loader
@@ -2206,14 +2200,14 @@ impl MistralRs {
                 loader_config.isq,
                 loader_config.paged_attn_config,
             )
-            .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to load model: {e}")))?;
+            .map_err(|e| HanzoError::ReloadFailed(format!("Failed to load model: {e}")))?;
 
         if let Some(mtp_config) = loader_config.mtp_config.clone() {
             pipeline
                 .blocking_lock()
                 .attach_speculative(SpeculativeConfig::Mtp(mtp_config))
                 .map_err(|e| {
-                    MistralRsError::ReloadFailed(format!(
+                    HanzoError::ReloadFailed(format!(
                         "Failed to attach MTP speculative decoding: {e}"
                     ))
                 })?;
@@ -2241,14 +2235,14 @@ impl MistralRs {
             unloaded_state.engine_config,
             reboot_state,
         )
-        .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to create engine: {e}")))?;
+        .map_err(|e| HanzoError::ReloadFailed(format!("Failed to create engine: {e}")))?;
 
         // Add to engines map
         {
             let mut engines = self
                 .engines
                 .write()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
+                .map_err(|_| HanzoError::EnginePoisoned)?;
             engines.insert(model_id.to_string(), engine_instance);
         }
 
@@ -2257,7 +2251,7 @@ impl MistralRs {
             let mut unloaded = self
                 .unloaded_models
                 .write()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
+                .map_err(|_| HanzoError::EnginePoisoned)?;
             unloaded.remove(model_id);
         }
 
@@ -2271,11 +2265,11 @@ impl MistralRs {
     /// - If called from a multi-threaded tokio runtime, uses `block_in_place`
     /// - If called from a single-threaded runtime, returns an error (use `reload_model()` instead)
     /// - If called outside any runtime, creates a temporary runtime
-    pub fn reload_model_blocking(&self, model_id: &str) -> Result<(), MistralRsError> {
+    pub fn reload_model_blocking(&self, model_id: &str) -> Result<(), HanzoError> {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread {
-                    Err(MistralRsError::ReloadFailed(
+                    Err(HanzoError::ReloadFailed(
                         "Cannot reload model blocking from single-threaded runtime. Use reload_model() instead.".to_string()
                     ))
                 } else {
@@ -2284,7 +2278,7 @@ impl MistralRs {
             }
             Err(_) => {
                 let rt = tokio::runtime::Runtime::new().map_err(|e| {
-                    MistralRsError::ReloadFailed(format!("Failed to create runtime: {e}"))
+                    HanzoError::ReloadFailed(format!("Failed to create runtime: {e}"))
                 })?;
                 rt.block_on(self.reload_model(model_id))
             }
@@ -2292,33 +2286,33 @@ impl MistralRs {
     }
 
     /// List all unloaded model IDs
-    pub fn list_unloaded_models(&self) -> Result<Vec<String>, MistralRsError> {
+    pub fn list_unloaded_models(&self) -> Result<Vec<String>, HanzoError> {
         let unloaded = self
             .unloaded_models
             .read()
-            .map_err(|_| MistralRsError::EnginePoisoned)?;
+            .map_err(|_| HanzoError::EnginePoisoned)?;
         Ok(unloaded.keys().cloned().collect())
     }
 
     /// Check if a model is currently loaded (as opposed to unloaded)
-    pub fn is_model_loaded(&self, model_id: &str) -> Result<bool, MistralRsError> {
+    pub fn is_model_loaded(&self, model_id: &str) -> Result<bool, HanzoError> {
         let resolved_model_id = self.resolve_alias(model_id)?;
         let engines = self
             .engines
             .read()
-            .map_err(|_| MistralRsError::EnginePoisoned)?;
+            .map_err(|_| HanzoError::EnginePoisoned)?;
         Ok(engines.contains_key(&resolved_model_id))
     }
 
     /// Get the status of a model, or None if not found
-    pub fn get_model_status(&self, model_id: &str) -> Result<Option<ModelStatus>, MistralRsError> {
+    pub fn get_model_status(&self, model_id: &str) -> Result<Option<ModelStatus>, HanzoError> {
         let resolved_model_id = self.resolve_alias(model_id)?;
         // Check if reloading
         {
             let reloading = self
                 .reloading_models
                 .read()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
+                .map_err(|_| HanzoError::EnginePoisoned)?;
             if reloading.contains(&resolved_model_id) {
                 return Ok(Some(ModelStatus::Reloading));
             }
@@ -2329,7 +2323,7 @@ impl MistralRs {
             let engines = self
                 .engines
                 .read()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
+                .map_err(|_| HanzoError::EnginePoisoned)?;
             if engines.contains_key(&resolved_model_id) {
                 return Ok(Some(ModelStatus::Loaded));
             }
@@ -2340,7 +2334,7 @@ impl MistralRs {
             let unloaded = self
                 .unloaded_models
                 .read()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
+                .map_err(|_| HanzoError::EnginePoisoned)?;
             if unloaded.contains_key(&resolved_model_id) {
                 return Ok(Some(ModelStatus::Unloaded));
             }
@@ -2350,14 +2344,14 @@ impl MistralRs {
     }
 
     /// List all models with their status
-    pub fn list_models_with_status(&self) -> Result<Vec<(String, ModelStatus)>, MistralRsError> {
+    pub fn list_models_with_status(&self) -> Result<Vec<(String, ModelStatus)>, HanzoError> {
         let mut result = Vec::new();
 
         // Get reloading models
         let reloading = self
             .reloading_models
             .read()
-            .map_err(|_| MistralRsError::EnginePoisoned)?;
+            .map_err(|_| HanzoError::EnginePoisoned)?;
         for model_id in reloading.iter() {
             result.push((model_id.clone(), ModelStatus::Reloading));
         }
@@ -2367,7 +2361,7 @@ impl MistralRs {
         let engines = self
             .engines
             .read()
-            .map_err(|_| MistralRsError::EnginePoisoned)?;
+            .map_err(|_| HanzoError::EnginePoisoned)?;
         for model_id in engines.keys() {
             result.push((model_id.clone(), ModelStatus::Loaded));
         }
@@ -2377,7 +2371,7 @@ impl MistralRs {
         let unloaded = self
             .unloaded_models
             .read()
-            .map_err(|_| MistralRsError::EnginePoisoned)?;
+            .map_err(|_| HanzoError::EnginePoisoned)?;
         for model_id in unloaded.keys() {
             // Skip if already in reloading
             if !result.iter().any(|(id, _)| id == model_id) {

@@ -429,7 +429,7 @@ pub(crate) fn begin_rocm_capture(device: &RocmDevice) -> hanzo_ml::Result<()> {
     Ok(())
 }
 
-/// Extracts the [`RocmDevice`] from a candle [`Device`], or errors if it is not
+/// Extracts the [`RocmDevice`] from a hanzo-ml [`Device`], or errors if it is not
 /// a ROCm device.
 pub(crate) fn rocm_device(device: &Device) -> hanzo_ml::Result<RocmDevice> {
     match device {

@@ -10,7 +10,7 @@ use hanzo_ml::{Result, Tensor};
 /// q must already be scaled by 1/sqrt(K), matching gated_delta_rule_recurrence and the CUDA wrapper.
 ///
 /// Returns: output y [BH, V].
-// Canonical hanzo-ml (candle 0.10.2) has not yet ported the GDN Vulkan kernels
+// Canonical hanzo-ml 0.10.2 has not yet ported the GDN Vulkan kernels
 // (VulkanStorage::gdn_step / gdn_conv1d_step). Bail until they land; only Qwen3.5/3.6
 // hybrid-MoE decode uses these, so dense/standard models are unaffected.
 #[cfg(feature = "vulkan")]
