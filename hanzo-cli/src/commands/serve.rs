@@ -11,7 +11,7 @@ use hanzo_engine::{
 use hanzo_server_core::{
     approvals::ApprovalBroker, hanzo_for_server_builder::HanzoForServerBuilder,
     hanzo_server_router_builder::HanzoServerRouterBuilder,
-    route_registry::{RouteInfo, RouteKind, MISTRALRS_API_ROUTES},
+    route_registry::{RouteInfo, RouteKind, API_ROUTES},
 };
 
 use crate::args::{
@@ -208,12 +208,11 @@ pub(crate) fn log_api_surfaces(host: &str, port: u16) {
     info!("Anthropic-compatible API: {root}");
     info!("Swagger UI docs: {root}/docs");
 
-    debug!("Available OpenAI-compatible routes:");
-    log_routes(MISTRALRS_API_ROUTES, RouteKind::OpenAi);
+    log_routes(API_ROUTES, RouteKind::OpenAi);
     debug!("Available Anthropic-compatible routes:");
-    log_routes(MISTRALRS_API_ROUTES, RouteKind::Anthropic);
-    debug!("Available additional mistral.rs routes:");
-    log_routes(MISTRALRS_API_ROUTES, RouteKind::MistralRs);
+    log_routes(API_ROUTES, RouteKind::Anthropic);
+    debug!("Available additional Hanzo routes:");
+    log_routes(API_ROUTES, RouteKind::Hanzo);
 }
 
 fn log_routes(routes: &[RouteInfo], kind: RouteKind) {
