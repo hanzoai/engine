@@ -100,10 +100,10 @@ impl ToTensors for QLinear {
                 }
             }
             QMatMul::QTensor(_) => return HashMap::new(),
-            #[cfg(feature = "rocm")]
-            QMatMul::RocmQuant { .. } => return HashMap::new(),
             #[cfg(feature = "vulkan")]
             QMatMul::VulkanQuant { .. } | QMatMul::VulkanQuantBank { .. } => return HashMap::new(),
+            #[cfg(feature = "rocm")]
+            QMatMul::RocmQuant { .. } => return HashMap::new(),
         }
         map
     }

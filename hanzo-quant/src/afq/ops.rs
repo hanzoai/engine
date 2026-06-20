@@ -520,7 +520,7 @@ pub(crate) fn afq_mm_op(
     )
 }
 
-/// Stable wrapper around candle's `call_mlx_arg_sort` for u32 keys. Candle's
+/// Stable wrapper around hanzo-ml's `call_mlx_arg_sort` for u32 keys. hanzo-ml's
 /// `Tensor::arg_sort_last_dim` uses a single-threadgroup bitonic sort that
 /// silently returns garbage for n > 1024 on Metal; this routes around it by
 /// calling the multi-block sort directly. Returns u32 perm of shape [n].

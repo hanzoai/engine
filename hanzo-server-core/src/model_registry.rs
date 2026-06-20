@@ -8,10 +8,9 @@
 //! Three things live here:
 //!   1. The canonical Zen SKU set served by zen-gateway and listed in
 //!      `pricing/src/models.mjs::zenCatalog`.
-//!   2. The HF source repo (under `zenlm/`) for each SKU. Repos are the
-//!      actual published artifacts (verified to resolve), e.g. the GGUF mirrors
-//!      carry a `-gguf` suffix and the Zen3 VL/ASR/TTS weights live under
-//!      `zen3-*` / `zen-*-instruct` names.
+//!   2. The HF source repo (under `zenlm/`) for each SKU. Text/embedding/vision
+//!      repos are research's verified-to-resolve artifacts (GGUF mirrors carry a
+//!      `-gguf` suffix); ASR/TTS repos follow canon's published-artifact names.
 //!   3. The arch kind:
 //!        - `Supported(NormalLoaderType)` — text models loadable by the normal
 //!          (text) loader.
@@ -153,7 +152,8 @@ fn zen_sku_table() -> &'static [ZenSku] {
             modality: Modality::Text,
         },
         // Zen5 Pro/Max ride on DeepSeek V4 (Flash / Pro). DS4 is not on main;
-        // flip to Supported once the deepseek-v4 arch lands in hanzo-engine.
+        // flip to Supported once the deepseek-v4 arch (hanzo-engine zen5.rs)
+        // lands in hanzo-engine.
         ZenSku {
             sku: "zen5-pro",
             hf_repo: "zenlm/zen-5-pro-gguf",
@@ -266,55 +266,56 @@ fn zen_sku_table() -> &'static [ZenSku] {
             quant: None,
             modality: Modality::Text,
         },
-        // Zen3 ASR: qwen3-asr IS ported (speech_models/qwen3_asr). Weights under
-        // the `zen-3-asr*` repos.
+        // Zen3 ASR: qwen3-asr IS ported (speech_models/qwen3_asr,
+        // AsrLoaderType::Qwen3Asr). Repos follow canon's published `zen-asr-*`
+        // artifact names.
         ZenSku {
             sku: "zen3-asr",
-            hf_repo: "zenlm/zen-3-asr",
+            hf_repo: "zenlm/zen-asr-1.7b",
             arch: ArchKind::SupportedAudio("qwen3-asr"),
             quant: None,
             modality: Modality::Audio,
         },
         ZenSku {
             sku: "zen3-asr-0.6B",
-            hf_repo: "zenlm/zen-3-asr-0.6B",
+            hf_repo: "zenlm/zen-asr-0.6b",
             arch: ArchKind::SupportedAudio("qwen3-asr"),
             quant: None,
             modality: Modality::Audio,
         },
         ZenSku {
             sku: "zen3-asr-aligner",
-            hf_repo: "zenlm/zen-3-asr-aligner",
+            hf_repo: "zenlm/zen-asr-aligner-0.6b",
             arch: ArchKind::SupportedAudio("qwen3-asr"),
             quant: None,
             modality: Modality::Audio,
         },
-        // Zen3 TTS: qwen3-tts not yet ported; Unsupported. Repos corrected to
-        // the real `zen-3-tts*` artifacts so they load once the arch lands.
+        // Zen3 TTS: qwen3-tts not yet ported; Unsupported. Repos follow canon's
+        // published `zen-tts-*` artifact names.
         ZenSku {
             sku: "zen3-tts",
-            hf_repo: "zenlm/zen-3-tts",
+            hf_repo: "zenlm/zen-tts-1.7b",
             arch: ArchKind::Unsupported("qwen3-tts"),
             quant: None,
             modality: Modality::Audio,
         },
         ZenSku {
             sku: "zen3-tts-0.6B",
-            hf_repo: "zenlm/zen-3-tts-0.6B",
+            hf_repo: "zenlm/zen-tts-0.6b",
             arch: ArchKind::Unsupported("qwen3-tts"),
             quant: None,
             modality: Modality::Audio,
         },
         ZenSku {
             sku: "zen3-tts-voice-design",
-            hf_repo: "zenlm/zen-3-tts-voice-design",
+            hf_repo: "zenlm/zen-tts-voicedesign-1.7b",
             arch: ArchKind::Unsupported("qwen3-tts"),
             quant: None,
             modality: Modality::Audio,
         },
         ZenSku {
             sku: "zen3-tts-custom-voice",
-            hf_repo: "zenlm/zen-3-tts-custom-voice",
+            hf_repo: "zenlm/zen-tts-customvoice-1.7b",
             arch: ArchKind::Unsupported("qwen3-tts"),
             quant: None,
             modality: Modality::Audio,

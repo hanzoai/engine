@@ -84,7 +84,7 @@ hanzo serve \
 default `auto` mode):
 
 ```
-HANZO_SANDBOX={auto|on|off}
+SANDBOX={auto|on|off}
 ```
 
 ## Linux details
@@ -129,7 +129,7 @@ Resource rlimits are not applied on macOS. Applying them from the server require
 
 ## Disabling
 
-Set `mode = "off"` in the TOML, `--sandbox off` on the CLI, or `HANZO_SANDBOX=off` in the env.
+Set `mode = "off"` in the TOML, `--sandbox off` on the CLI, or `SANDBOX=off` in the env.
 
 A startup warning is logged. With all sandbox layers off, model-generated code has full filesystem, network, and subprocess access as the hanzo user.
 
