@@ -902,7 +902,7 @@ impl GGUFPipeline {
             // (argmax != fixed 0) — the AutoFreeOnLaunch stale-buffer signature
             // is a constant argmax=0. Reads to host force a stream sync, so this
             // is debug-only and off the hot path.
-            if std::env::var("MISTRALRS_ROCM_GRAPH_DEBUG").is_ok() {
+            if std::env::var("ROCM_GRAPH_DEBUG").is_ok() {
                 let flat = logits.flatten_all().ok();
                 let amax = flat
                     .as_ref()
