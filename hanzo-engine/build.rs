@@ -125,9 +125,6 @@ fn main() {
         // windows-msvc rustc resolves `static=hanzorocm` to `hanzorocm.lib`, while
         // GNU targets want `libhanzorocm.a`. The Windows ROCm SDK ships `llvm-ar`
         // (there is no Unix `ar`); llvm-ar writes a COFF archive link.exe accepts.
-        let is_windows = std::env::var("CARGO_CFG_TARGET_OS")
-            .map(|s| s == "windows")
-            .unwrap_or(cfg!(windows));
         let lib = build_dir.join(if is_windows { "hanzorocm.lib" } else { "libhanzorocm.a" });
         let _ = std::fs::remove_file(&lib);
         let ar = {
@@ -226,7 +223,7 @@ fn set_git_revision() {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".to_string());
 
-    println!("cargo:rustc-env=HANZO_GIT_REVISION={commit}");
+    println!("cargo:rustc-env=GIT_REVISION={commit}");
     println!("cargo:rerun-if-changed=.git/HEAD");
     if let Ok(head) = std::fs::read_to_string(".git/HEAD") {
         if let Some(ref_path) = head.strip_prefix("ref:") {
