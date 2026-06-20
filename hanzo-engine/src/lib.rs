@@ -99,6 +99,8 @@ mod topology;
 mod utils;
 mod vision_models;
 mod xlora_models;
+#[cfg(feature = "zap")]
+pub mod zap;
 
 pub use diagnostics::{
     check_hf_gated_access, collect_system_info, run_doctor, BuildInfo, CpuInfo, DeviceInfo,
