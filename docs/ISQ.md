@@ -71,7 +71,7 @@ Immediate ISQ quantizes each weight as it is loaded during model construction ra
 
 Quantization is parallelized across a thread pool on all devices. Multiple weights are quantized concurrently on CPU during loading, then moved to the target device. The number of threads depends on the ISQ type: GGML types (Q2K-Q8K) use all available CPU threads, while GPU-quantized types (HQQ, AFQ) use a single thread since the GPU work is serialized by a guard.
 
-Set `HANZO_ISQ_SINGLETHREAD=1` to force single-threaded quantization.
+Set `ISQ_SINGLETHREAD=1` to force single-threaded quantization.
 
 ### Deferred ISQ
 
