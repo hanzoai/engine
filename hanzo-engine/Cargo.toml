@@ -123,6 +123,10 @@ hanzo-metal-kernels = { workspace = true, optional = true }
 
 [features]
 pyo3_macros = ["pyo3", "hanzo-llm-mcp/pyo3_macros"]
+# ZAP internal RPC surface (binary wire for engine<>node). Message + adapter
+# layer only; no capnp build dep. The real capnp-rpc wire is a `zap-capnp`
+# sub-feature, see src/zap/transport.rs.
+zap = []
 cuda = [
     "hanzo-ml/cuda",
     "hanzo-nn/cuda",
