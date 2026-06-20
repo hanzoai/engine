@@ -26,7 +26,7 @@ concurrency:
 jobs:
   build:
     if: github.repository == 'hanzoai/engine'
-    runs-on: ubuntu-latest
+    runs-on: hanzo-build-linux-amd64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,7 +72,7 @@ jobs:
   deploy:
     if: github.repository == 'hanzoai/engine' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: hanzo-deploy-linux-amd64
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
