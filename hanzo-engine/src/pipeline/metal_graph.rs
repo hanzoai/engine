@@ -32,7 +32,7 @@
 //! that machinery so the decode step re-encodes an identical command stream into the
 //! existing `Commands` pipeline; with stable buffers the per-token CPU work is the
 //! cheap, identical re-encode rather than rebuilding metadata tensors, and the
-//! command-buffer batching (`CANDLE_METAL_COMPUTE_PER_BUFFER`) is what coalesces the
+//! command-buffer batching (`METAL_COMPUTE_PER_BUFFER`) is what coalesces the
 //! dispatches per step.
 //!
 //! Concretely this module provides the Metal counterparts of the CUDA types:
@@ -678,6 +678,6 @@ fn copy_rope_positions(dst: &MetalGraphVarMap, seqlen_offsets: &[usize]) -> hanz
 //
 // 4. If on-device profiling shows the remaining win requires fewer command-buffer
 //    commits per step, the follow-up (out of scope for this port) is to raise
-//    `CANDLE_METAL_COMPUTE_PER_BUFFER` for the decode step or to expose a
+//    `METAL_COMPUTE_PER_BUFFER` for the decode step or to expose a
 //    non-blocking `Commands::flush` on `MetalDevice` so the step commits once.
 //    Neither requires changing this module's types.
