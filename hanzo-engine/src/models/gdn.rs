@@ -168,10 +168,9 @@ pub fn gated_delta_rule_recurrence(
         }
         return recurrence_metal(q, k, v, g, beta, state);
     }
-    // Native Vulkan single-step decode: state stays in VRAM across tokens, no per-token readback.
-    if q.dim(1)? == 1 && state.device().is_vulkan() && state.dtype() == DType::F32 {
-        return recurrence_vulkan_step(q, k, v, g, beta, state);
-    }
+    // The Vulkan single-step kernel (gdn_step_vulkan) isn't ported to canonical hanzo-ml yet, so
+    // don't intercept the Vulkan decode path -- fall through to recurrence_portable, which is
+    // documented to "serve CPU, Vulkan, and any backend without a fused kernel".
     recurrence_portable(q, k, v, g, beta, state)
 }
 
