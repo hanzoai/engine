@@ -671,14 +671,17 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
             }
 
             GGUFArchitecture::Qwen35 | GGUFArchitecture::Qwen35MoE => {
-                // Hybrid (GDN + full-attention) layers have very different per-layer sizes, so a
-                // uniform estimate would mis-balance an auto device map. Require explicit mapping
-                // (single device or a topology) for these architectures.
-                anyhow::bail!(
-                    "Automatic device mapping is not supported for qwen35/qwen35moe GGUF (hybrid \
-                     GDN+attention layers have non-uniform sizes). Run on a single device or pass \
-                     an explicit device map / topology."
-                );
+                // Hybrid (GDN + full-attention) layers have non-uniform sizes, so a single
+                // representative layer can't stand in. Sum each block's real tensor bytes instead
+                // -- correct for both single-device and multi-GPU auto mapping.
+                let n = self.num_layers(config)?;
+                let sizes: Vec<usize> = (0..n)
+                    .map(|i| {
+                        self.model
+                            .tensors_size_in_bytes_with_prefix(&format!("blk.{i}."))
+                    })
+                    .collect();
+                return Ok(sizes);
             }
 
             _ => unimplemented!(),
