@@ -180,6 +180,22 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
         hanzo_ml::bail!("Cannot find tensor info for {name}")
     }
 
+    /// Sum the on-disk byte size of every tensor whose name starts with `prefix`, across all GGUF
+    /// shards. Used by device mapping for architectures whose layers have non-uniform sizes
+    /// (e.g. Qwen3.5/3.6 hybrid GDN+attention), where one representative layer can't stand in.
+    pub fn tensors_size_in_bytes_with_prefix(&self, prefix: &str) -> usize {
+        let mut total = 0usize;
+        for ct in &self.contents {
+            for (name, info) in &ct.tensor_infos {
+                if name.starts_with(prefix) {
+                    total += info.shape.elem_count() / info.ggml_dtype.block_size()
+                        * info.ggml_dtype.type_size();
+                }
+            }
+        }
+        total
+    }
+
     /// Retrieve a tensor, searching through each content.
     pub fn tensor(&mut self, name: &str, device: &Device) -> Result<QTensor> {
         for (ct, reader) in self.contents.iter().zip(self.readers.iter_mut()) {
