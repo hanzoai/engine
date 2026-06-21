@@ -395,9 +395,8 @@ impl QGatedDeltaNet {
     fn causal_conv1d_update(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (_batch, seq_len, _conv_dim) = x.dims3()?;
 
-        if seq_len == 1 && x.device().is_vulkan() && cache.conv_state.dtype() == DType::F32 {
-            return self.causal_conv1d_update_vulkan(x, cache);
-        }
+        // Vulkan conv1d single-step kernel (gdn_conv1d_step_vulkan) isn't ported to canonical
+        // hanzo-ml yet; the portable candle path below runs correctly on the Vulkan device.
 
         let x_t = x.transpose(1, 2)?.contiguous()?;
 
