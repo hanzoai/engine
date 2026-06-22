@@ -801,13 +801,18 @@ impl GGUFPipeline {
     /// the ROCm decode graph captures. XLora and the alternate-signature variants
     /// (Phi3/Starcoder2) are excluded from the graph fast path for v1.
     fn model_supports_rocm_decode_graph(&self) -> bool {
-        // MoE variants are intentionally excluded. Their decode forward (per-layer router sort/top-k
-        // + on-device-ids expert gather across all layers) captures into a graph well past the
-        // ~200-kernel-node count where the ROCm HIP runtime's `GraphExec::UpdateStreams` fails on
-        // every `hipGraphLaunch` (ROCm/hip#3887, RDNA, no fix): the replay reads stale state and
-        // drifts, then aborts in the WSL HSA thunk. Dense variants stay under that threshold and
-        // replay correctly (Qwen3-0.6B-Q8_0: 104 T/s, byte-coherent). MoE decodes eager instead,
-        // which is both correct and faster here than the broken graph path.
+        // MoE variants are excluded because their decode forward (per-layer router sort/top-k +
+        // on-device expert gather across ~48 layers) captures into a graph whose single replay
+        // PM4 indirect-buffer is large enough to overrun the WSL/WDDM thunk's AQL->PM4 queue ring
+        // (`wsl::thunk::ComputeQueue::AqlToPm4Thread`): replay is numerically correct for the first
+        // tokens, then the ring desyncs -- output drifts into stale repetition and the thunk aborts
+        // in `VendorSpecificAqlToPm4` (`packet->ven_hdr == AMD_AQL_FORMAT_PM4_IB`). This is a
+        // graph-IB-size limit in the closed thunk, not a hanzo capture/refresh bug: the per-token
+        // input refresh reaches the buffers, the captured forward is single-stream (the runtime's
+        // `UpdateStreams failed` log is benign -- dense logs it too and replays cleanly), and
+        // device-sync-per-launch / AMD_DIRECT_DISPATCH do not help. Dense variants stay under the
+        // ring limit and replay byte-coherent (Qwen3-0.6B-Q8_0: 105 T/s, 325 coherent tokens). MoE
+        // decodes eager instead -- correct and fast here (377 coherent tokens, 31-55 T/s).
         matches!(
             self.model,
             Model::Llama(_) | Model::Phi2(_) | Model::Qwen(_) | Model::Qwen3(_)
