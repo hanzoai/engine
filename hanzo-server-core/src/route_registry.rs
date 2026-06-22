@@ -80,7 +80,7 @@ pub const SESSION_ROUTE: RouteInfo = RouteInfo::new(
     RouteKind::MistralRs,
 );
 
-pub const MISTRALRS_API_ROUTES: &[RouteInfo] = &[
+pub const HANZO_API_ROUTES: &[RouteInfo] = &[
     ROOT_ROUTE,
     HEALTH_ROUTE,
     MODELS_ROUTE,
@@ -109,7 +109,7 @@ pub const MISTRALRS_API_ROUTES: &[RouteInfo] = &[
 ];
 
 #[cfg(feature = "swagger-ui")]
-pub const MISTRALRS_SWAGGER_ROUTES: &[RouteInfo] = &[
+pub const HANZO_SWAGGER_ROUTES: &[RouteInfo] = &[
     RouteInfo::new("/api-doc/openapi.json", "GET", RouteKind::Docs),
     RouteInfo::new("/docs", "GET", RouteKind::Docs),
     RouteInfo::new("/docs/", "GET", RouteKind::Docs),

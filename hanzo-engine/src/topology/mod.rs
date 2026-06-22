@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::parse_isq_value;
 
-const DEVICE_PATTERN: &str = r"^(cpu|cuda\[(\d+)\]|metal\[(\d+)\])$";
+const DEVICE_PATTERN: &str = r"^(cpu|(cuda|metal|rocm|vulkan)\[(\d+)\])$";
 
 #[derive(Deserialize)]
 pub struct DeserLayerTopology {
@@ -122,13 +122,18 @@ impl Topology {
                         "Device specifier must match regex {DEVICE_PATTERN}. Examples: `cpu`, `cuda[ORD]`, `metal[ORD]`"
                     );
                 };
-                let device = if let Some(val) = captures.get(2).or(captures.get(3)) {
-                    let ord = val.as_str().parse::<usize>()?;
-                    let device = device.split('[').collect::<Vec<_>>()[0];
-                    match device {
+                let device = if let (Some(kind), Some(ord)) = (captures.get(2), captures.get(3)) {
+                    let ord = ord.as_str().parse::<usize>()?;
+                    match kind.as_str() {
                         "cuda" => Device::new_cuda(ord)?,
                         "metal" => Device::new_metal(ord)?,
-                        _ => unreachable!(),
+                        #[cfg(feature = "rocm")]
+                        "rocm" => Device::new_rocm(ord)?,
+                        #[cfg(feature = "vulkan")]
+                        "vulkan" => Device::new_vulkan(ord)?,
+                        other => anyhow::bail!(
+                            "Device `{other}` is not supported by this build (missing the corresponding feature)."
+                        ),
                     }
                 } else {
                     Device::Cpu

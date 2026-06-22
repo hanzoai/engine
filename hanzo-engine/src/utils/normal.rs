@@ -184,12 +184,15 @@ impl TryIntoDType for ModelDType {
 /// share the same physical memory. This includes:
 /// - Metal (Apple Silicon)
 /// - CUDA integrated GPUs (e.g. NVIDIA Grace Hopper, Grace Blackwell)
+/// - ROCm APUs (e.g. AMD Strix Halo / Ryzen AI Max)
 ///
 /// On such systems, loading tensors to CPU first provides no memory benefit.
 pub fn is_integrated_gpu(device: &Device) -> bool {
     match device {
         #[cfg(feature = "metal")]
         Device::Metal(_) => true,
+        #[cfg(feature = "rocm")]
+        Device::Rocm(dev) => dev.is_integrated(),
         #[cfg(feature = "cuda")]
         Device::Cuda(dev) => {
             use hanzo_ml::cuda::cudarc::driver::{result, sys};

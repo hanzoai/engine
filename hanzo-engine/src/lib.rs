@@ -331,7 +331,7 @@ pub use utils::{paged_attn_supported, using_flash_attn};
 // re-export llguidance for easier LlguidanceGrammar construction
 pub use llguidance;
 
-/// `true` if `MISTRALRS_DEBUG=1`
+/// `true` if `HANZO_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
 pub static GLOBAL_HF_CACHE: OnceLock<Cache> = OnceLock::new();
 

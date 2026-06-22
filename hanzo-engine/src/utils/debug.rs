@@ -6,7 +6,7 @@ use crate::DEBUG;
 
 static LOGGER: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
-pub const MISTRALRS_LOG_TARGET_PREFIX: &str = "mistralrs";
+pub const HANZO_LOG_TARGET_PREFIX: &str = "mistralrs";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LogVerbosity {
@@ -54,14 +54,14 @@ pub fn default_mistralrs_filter(verbosity: LogVerbosity) -> EnvFilter {
         LogVerbosity::Trace => ("warn,hf_hub=info", "trace"),
     };
     EnvFilter::new(base).add_directive(
-        format!("{MISTRALRS_LOG_TARGET_PREFIX}={level}")
+        format!("{HANZO_LOG_TARGET_PREFIX}={level}")
             .parse()
             .expect("valid default log directive"),
     )
 }
 
 fn is_debug_env() -> bool {
-    std::env::var("MISTRALRS_DEBUG")
+    std::env::var("HANZO_DEBUG")
         .unwrap_or_default()
         .contains('1')
 }

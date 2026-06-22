@@ -1,11 +1,11 @@
 use std::sync::OnceLock;
 
-const CUDA_GRAPHS_ENV: &str = "MISTRALRS_CUDA_GRAPHS";
+const CUDA_GRAPHS_ENV: &str = "HANZO_CUDA_GRAPHS";
 #[cfg(feature = "metal")]
-const METAL_GRAPHS_ENV: &str = "MISTRALRS_METAL_GRAPHS";
+const METAL_GRAPHS_ENV: &str = "HANZO_METAL_GRAPHS";
 #[cfg(feature = "rocm")]
-const ROCM_GRAPHS_ENV: &str = "MISTRALRS_ROCM_GRAPHS";
-const FLASHINFER_DECODE_ENV: &str = "MISTRALRS_FLASHINFER_DECODE";
+const ROCM_GRAPHS_ENV: &str = "HANZO_ROCM_GRAPHS";
+const FLASHINFER_DECODE_ENV: &str = "HANZO_FLASHINFER_DECODE";
 
 static CUDA_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "metal")]
@@ -83,7 +83,7 @@ pub(crate) fn rocm_graphs_enabled() -> bool {
     // swiglu/bf16-matvec) the decode is no longer launch-bound, so collapsing the
     // remaining per-token launch overhead via hipGraph buys nothing here; paged
     // decode (12.7) also sits below the non-paged eager floor (~20.5). Flip
-    // `MISTRALRS_ROCM_GRAPHS=1` to use the (now-coherent) graph path.
+    // `HANZO_ROCM_GRAPHS=1` to use the (now-coherent) graph path.
     *ROCM_GRAPHS_ENABLED.get_or_init(|| env_flag(ROCM_GRAPHS_ENV, false))
 }
 

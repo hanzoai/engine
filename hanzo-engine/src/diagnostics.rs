@@ -5,9 +5,9 @@ use hf_hub::{api::sync::ApiBuilder, Cache};
 use serde::{Deserialize, Serialize};
 use sysinfo::{Disks, System};
 
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm", feature = "vulkan"))]
 use crate::MemoryUsage;
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm", feature = "vulkan"))]
 use hanzo_ml::Device;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +52,8 @@ pub struct DeviceInfo {
 pub struct BuildInfo {
     pub cuda: bool,
     pub metal: bool,
+    pub rocm: bool,
+    pub vulkan: bool,
     pub cudnn: bool,
     pub flash_attn: bool,
     pub flash_attn_v3: bool,
@@ -113,6 +115,8 @@ fn build_info() -> BuildInfo {
     BuildInfo {
         cuda: cfg!(feature = "cuda"),
         metal: cfg!(feature = "metal"),
+        rocm: cfg!(feature = "rocm"),
+        vulkan: cfg!(feature = "vulkan"),
         cudnn: cfg!(feature = "cudnn"),
         flash_attn: cfg!(feature = "flash-attn"),
         flash_attn_v3: cfg!(feature = "flash-attn-v3"),
@@ -193,6 +197,46 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
                     unified_memory: Some(true),        // Apple Silicon always uses unified memory
                 });
             }
+        }
+    }
+
+    #[cfg(feature = "rocm")]
+    {
+        let mut ord = 0;
+        while let Ok(dev) = Device::new_rocm(ord) {
+            let mem = MemoryUsage.query(&dev).ok();
+            devices.push(DeviceInfo {
+                kind: "rocm".to_string(),
+                ordinal: Some(ord),
+                name: None,
+                total_memory_bytes: mem.map(|m| m.total() as u64),
+                available_memory_bytes: mem.map(|m| m.available() as u64),
+                compute_capability: None,
+                flash_attn_compatible: None,
+                flash_attn_v3_compatible: None,
+                unified_memory: Some(crate::utils::normal::is_integrated_gpu(&dev)),
+            });
+            ord += 1;
+        }
+    }
+
+    #[cfg(feature = "vulkan")]
+    {
+        let mut ord = 0;
+        while let Ok(dev) = Device::new_vulkan(ord) {
+            let mem = MemoryUsage.query(&dev).ok();
+            devices.push(DeviceInfo {
+                kind: "vulkan".to_string(),
+                ordinal: Some(ord),
+                name: None,
+                total_memory_bytes: mem.map(|m| m.total() as u64),
+                available_memory_bytes: mem.map(|m| m.available() as u64),
+                compute_capability: None,
+                flash_attn_compatible: None,
+                flash_attn_v3_compatible: None,
+                unified_memory: None,
+            });
+            ord += 1;
         }
     }
 
@@ -639,6 +683,26 @@ pub fn run_doctor() -> DoctorReport {
             status: DoctorStatus::Warn,
             message: "CUDA support is enabled but no CUDA devices were found.".to_string(),
             suggestion: Some("Check NVIDIA driver installation.".to_string()),
+        });
+    }
+
+    if system.build.rocm && !system.devices.iter().any(|d| d.kind == "rocm") {
+        checks.push(DoctorCheck {
+            name: "rocm_devices".to_string(),
+            status: DoctorStatus::Warn,
+            message: "ROCm support is enabled but no ROCm devices were found.".to_string(),
+            suggestion: Some(
+                "Check ROCm install; under WSL2 ensure librocdxg + /dev/dxg are present.".to_string(),
+            ),
+        });
+    }
+
+    if system.build.vulkan && !system.devices.iter().any(|d| d.kind == "vulkan") {
+        checks.push(DoctorCheck {
+            name: "vulkan_devices".to_string(),
+            status: DoctorStatus::Warn,
+            message: "Vulkan support is enabled but no Vulkan devices were found.".to_string(),
+            suggestion: Some("Check the Vulkan ICD/driver installation.".to_string()),
         });
     }
 

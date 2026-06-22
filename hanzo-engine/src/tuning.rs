@@ -116,6 +116,10 @@ enum TuneBackend {
     Cpu,
     Cuda,
     Metal,
+    #[cfg(feature = "rocm")]
+    Rocm,
+    #[cfg(feature = "vulkan")]
+    Vulkan,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -127,12 +131,20 @@ enum TuneKind {
 
 fn backend_from_devices(devices: &[Device]) -> TuneBackend {
     if devices.iter().any(|d| matches!(d, Device::Cuda(_))) {
-        TuneBackend::Cuda
-    } else if devices.iter().any(|d| matches!(d, Device::Metal(_))) {
-        TuneBackend::Metal
-    } else {
-        TuneBackend::Cpu
+        return TuneBackend::Cuda;
     }
+    #[cfg(feature = "rocm")]
+    if devices.iter().any(|d| matches!(d, Device::Rocm(_))) {
+        return TuneBackend::Rocm;
+    }
+    #[cfg(feature = "vulkan")]
+    if devices.iter().any(|d| matches!(d, Device::Vulkan(_))) {
+        return TuneBackend::Vulkan;
+    }
+    if devices.iter().any(|d| matches!(d, Device::Metal(_))) {
+        return TuneBackend::Metal;
+    }
+    TuneBackend::Cpu
 }
 
 fn backend_name(backend: TuneBackend) -> String {
@@ -140,6 +152,10 @@ fn backend_name(backend: TuneBackend) -> String {
         TuneBackend::Cpu => "cpu".to_string(),
         TuneBackend::Cuda => "cuda".to_string(),
         TuneBackend::Metal => "metal".to_string(),
+        #[cfg(feature = "rocm")]
+        TuneBackend::Rocm => "rocm".to_string(),
+        #[cfg(feature = "vulkan")]
+        TuneBackend::Vulkan => "vulkan".to_string(),
     }
 }
 
@@ -151,6 +167,20 @@ fn select_devices(force_cpu: bool) -> Result<Vec<Device>> {
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     {
         if let Ok(dev) = Device::new_cuda(0) {
+            return Ok(crate::device_map::get_all_similar_devices(&dev)?);
+        }
+    }
+
+    #[cfg(feature = "rocm")]
+    {
+        if let Ok(dev) = Device::new_rocm(0) {
+            return Ok(crate::device_map::get_all_similar_devices(&dev)?);
+        }
+    }
+
+    #[cfg(feature = "vulkan")]
+    {
+        if let Ok(dev) = Device::new_vulkan(0) {
             return Ok(crate::device_map::get_all_similar_devices(&dev)?);
         }
     }

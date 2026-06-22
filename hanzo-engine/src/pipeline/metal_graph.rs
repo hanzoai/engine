@@ -39,7 +39,7 @@
 //!
 //! * [`MetalDecodeGraphKey`]   ~ `CudaDecodeGraphKey`
 //! * [`MetalDecodeGraphMetadataBuffers`] ~ `CudaDecodeGraphMetadataBuffers`
-//! * [`metal_decode_graphs_enabled`] (gated on `MISTRALRS_METAL_GRAPHS`)
+//! * [`metal_decode_graphs_enabled`] (gated on `HANZO_METAL_GRAPHS`)
 //!
 //! The pipeline gate in `normal.rs` mirrors the CUDA gate one-for-one behind
 //! `#[cfg(feature = "metal")]`: `metal_decode_graphs_enabled()` +
@@ -502,7 +502,7 @@ impl MetalDecodeGraphMetadataBuffers {
     }
 }
 
-/// Whether Metal decode graphs are enabled. Gated on `MISTRALRS_METAL_GRAPHS`
+/// Whether Metal decode graphs are enabled. Gated on `HANZO_METAL_GRAPHS`
 /// (default on), mirroring `cuda_decode_graphs_enabled`.
 pub(crate) fn metal_decode_graphs_enabled() -> bool {
     crate::perf_flags::metal_graphs_enabled()
