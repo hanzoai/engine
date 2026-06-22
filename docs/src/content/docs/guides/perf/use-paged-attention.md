@@ -47,13 +47,13 @@ Long CUDA prompts are chunked internally with a 4096-token default chunk size. T
 To compare with the non-FlashInfer paged decode path, disable the FlashInfer cache layout:
 
 ```bash
-MISTRALRS_FLASHINFER_DECODE=0 mistralrs serve --paged-attn on -m <model>
+HANZO_FLASHINFER_DECODE=0 mistralrs serve --paged-attn on -m <model>
 ```
 
 CUDA graphs require paged attention and are enabled by default for supported CUDA decode paths. To disable them:
 
 ```bash
-MISTRALRS_CUDA_GRAPHS=0 mistralrs serve --paged-attn on -m <model>
+HANZO_CUDA_GRAPHS=0 mistralrs serve --paged-attn on -m <model>
 ```
 
 See [Use CUDA graphs](/mistral.rs/guides/perf/use-cuda-graphs/).

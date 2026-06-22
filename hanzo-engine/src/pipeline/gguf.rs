@@ -4,6 +4,13 @@ use super::{
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind,
     TokenSource,
 };
+#[cfg(feature = "rocm")]
+use crate::pipeline::rocm_graph::{
+    rocm_decode_graphs_enabled, RocmDecodeGraphKey, RocmDecodeGraphMetadataBuffers, RocmGraphHandle,
+    ROCM_DECODE_GRAPH_CACHE_CAPACITY,
+};
+#[cfg(feature = "rocm")]
+use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use super::{
     AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqPipelineMixin,
     MetadataMixin, ModelCategory, PreProcessingMixin,
@@ -51,6 +58,8 @@ use crate::{
 use anyhow::{bail, Result};
 use either::Either;
 use hanzo_ml::{Device, Tensor};
+#[cfg(feature = "rocm")]
+use hanzo_ml::Var;
 use hanzo_quant::IsqType;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
@@ -86,6 +95,34 @@ pub struct GGUFPipeline {
     metadata: Arc<GeneralMetadata>,
     generation_defaults: Option<crate::ModelGenerationDefaults>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    /// Captured ROCm/HIP decode graphs, keyed by decode bucket. See
+    /// [`crate::pipeline::rocm_graph`]. Mirrors `NormalPipeline::cuda_decode_graph`.
+    #[cfg(feature = "rocm")]
+    rocm_decode_graph: std::sync::Mutex<RocmDecodeGraphState>,
+}
+
+#[cfg(feature = "rocm")]
+#[derive(Default)]
+struct RocmDecodeGraphState {
+    entries: Vec<RocmDecodeGraphEntry>,
+    disabled: bool,
+}
+
+#[cfg(feature = "rocm")]
+struct RocmDecodeGraphEntry {
+    key: RocmDecodeGraphKey,
+    graph: RocmGraphHandle,
+    /// Stable input-ids buffer the captured `tok_embeddings` reads; refreshed in
+    /// place each replay.
+    input_ids: Var,
+    metadata_buffers: RocmDecodeGraphMetadataBuffers,
+    /// Owns the rebound metadata referencing the stable device buffers so the
+    /// cached tensors outlive the entry (mirrors the CUDA `_metadata` field).
+    _metadata: PagedAttentionInputMetadata,
+    /// The warmup logits tensor. Because the graph writes its output into this
+    /// tensor's (stable) storage every replay, cloning it after a launch yields
+    /// the current token's logits.
+    logits: Tensor,
 }
 
 /// Loader for a GGUF model.
@@ -626,6 +663,8 @@ impl Loader for GGUFLoader {
             }),
             generation_defaults,
             mapper: pipeline_mapper,
+            #[cfg(feature = "rocm")]
+            rocm_decode_graph: std::sync::Mutex::new(RocmDecodeGraphState::default()),
         })))
     }
 
@@ -755,6 +794,265 @@ impl MetadataMixin for GGUFPipeline {
     }
 }
 
+#[cfg(feature = "rocm")]
+impl GGUFPipeline {
+    /// Whether the active model variant runs the standard
+    /// `(input_ids, seqlen_offsets, context_lens, paged_meta)` decode forward that
+    /// the ROCm decode graph captures. XLora and the alternate-signature variants
+    /// (Phi3/Starcoder2) are excluded from the graph fast path for v1.
+    fn model_supports_rocm_decode_graph(&self) -> bool {
+        matches!(
+            self.model,
+            Model::Llama(_)
+                | Model::Phi2(_)
+                | Model::Qwen(_)
+                | Model::Qwen3(_)
+                | Model::Qwen3MoE(_)
+                | Model::Qwen35(_)
+        )
+    }
+
+    /// Runs the decode forward for the graph-eligible variants with the supplied
+    /// (rebound) paged metadata. Mirrors the eager dispatch in `forward_inputs`
+    /// exactly so the captured forward is identical to what the eager path runs.
+    fn run_rocm_decode_forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+    ) -> Result<Tensor, hanzo_ml::Error> {
+        match self.model {
+            Model::Llama(ref model) => {
+                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
+            }
+            Model::Phi2(ref model) => {
+                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
+            }
+            Model::Qwen(ref model) => {
+                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
+            }
+            Model::Qwen3(ref model) => {
+                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
+            }
+            Model::Qwen3MoE(ref model) => {
+                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
+            }
+            Model::Qwen35(ref model) => {
+                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
+            }
+            _ => hanzo_ml::bail!("ROCm decode graph: unsupported model variant"),
+        }
+    }
+
+    /// Attempts to satisfy a single decode step via a captured HIP graph. Returns
+    /// `Ok(None)` when the graph path does not apply (caller runs eager). Mirrors
+    /// `NormalPipeline::try_cuda_decode_graph_forward`.
+    fn try_rocm_decode_graph_forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        kv_cache: &[(Tensor, Tensor)],
+        metadata: &PagedAttentionInputMetadata,
+    ) -> Result<Option<Tensor>, hanzo_ml::Error> {
+        if !rocm_decode_graphs_enabled() || !self.model_supports_rocm_decode_graph() {
+            return Ok(None);
+        }
+        // Mirror the CUDA gate: only steady-state single-token decode with paged
+        // metadata present and no prefix-cache prefill in flight.
+        if metadata.is_first_prompt_chunk
+            || metadata.disable_cuda_graphs
+            || metadata.num_cached_tokens.is_some()
+        {
+            return Ok(None);
+        }
+        let (batch, q_len) = input_ids.dims2()?;
+        if q_len != 1
+            || seqlen_offsets.len() != batch
+            || context_lens.len() != batch
+            || !input_ids.device().is_rocm()
+        {
+            return Ok(None);
+        }
+        let Some(cache_config) = self.metadata.cache_config.as_ref() else {
+            return Ok(None);
+        };
+        let block_size = cache_config.block_size;
+        let key = RocmDecodeGraphKey::new(input_ids, metadata, block_size)?;
+
+        let mut state = self
+            .rocm_decode_graph
+            .lock()
+            .expect("ROCm graph mutex poisoned");
+        if state.disabled {
+            return Ok(None);
+        }
+
+        // Cache hit: refresh the stable buffers in place and replay in one launch.
+        if let Some(pos) = state.entries.iter().position(|entry| entry.key == key) {
+            let mut entry = state.entries.remove(pos);
+            entry.input_ids.set(input_ids)?;
+            entry
+                .metadata_buffers
+                .copy_from(metadata, seqlen_offsets)?;
+            entry.graph.launch()?;
+            let logits = entry.logits.clone();
+            // Env-gated replay diagnostic: confirm the replayed logits advance
+            // (argmax != fixed 0) — the AutoFreeOnLaunch stale-buffer signature
+            // is a constant argmax=0. Reads to host force a stream sync, so this
+            // is debug-only and off the hot path.
+            if std::env::var("ROCM_GRAPH_DEBUG").is_ok() {
+                let flat = logits.flatten_all().ok();
+                let amax = flat
+                    .as_ref()
+                    .and_then(|t| t.argmax(hanzo_ml::D::Minus1).ok())
+                    .and_then(|t| t.to_scalar::<u32>().ok());
+                tracing::info!(
+                    "[graph-replay] in_tok={:?} argmax={:?}",
+                    input_ids.flatten_all().ok().and_then(|t| t.to_vec1::<u32>().ok()),
+                    amax
+                );
+            }
+            state.entries.push(entry);
+            return Ok(Some(logits));
+        }
+
+        // Cache miss: run a real (eager) warmup forward first so the caller gets a
+        // correct first token, then capture a graph for subsequent tokens.
+        let warmup_logits = self.run_rocm_decode_forward(
+            input_ids,
+            seqlen_offsets,
+            context_lens.to_vec(),
+            Some((kv_cache.to_vec(), metadata)),
+        )?;
+        input_ids.device().synchronize()?;
+
+        // The warmup logits are a fully valid result for this token. If capture
+        // fails we must NOT lose them: disable the graph path (so later tokens run
+        // eager) and return the warmup logits. `capture_rocm_decode_graph` always
+        // drains the stream on failure, so the eager fallback continues coherently.
+        match self.capture_rocm_decode_graph(
+            key,
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            kv_cache,
+            metadata,
+            block_size,
+        ) {
+            Ok(entry) => {
+                if state.entries.len() >= ROCM_DECODE_GRAPH_CACHE_CAPACITY {
+                    state.entries.remove(0);
+                }
+                state.entries.push(entry);
+            }
+            Err(err) => {
+                if !state.disabled {
+                    warn!("ROCm decode graph capture failed; falling back to eager decode: {err}");
+                }
+                state.disabled = true;
+                state.entries.clear();
+            }
+        }
+        Ok(Some(warmup_logits))
+    }
+
+    /// Captures the decode forward into a HIP graph against stable metadata
+    /// buffers. Mirrors `NormalPipeline::capture_cuda_decode_graph`.
+    #[allow(clippy::too_many_arguments)]
+    fn capture_rocm_decode_graph(
+        &self,
+        key: RocmDecodeGraphKey,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        kv_cache: &[(Tensor, Tensor)],
+        metadata: &PagedAttentionInputMetadata,
+        block_size: usize,
+    ) -> Result<RocmDecodeGraphEntry, hanzo_ml::Error> {
+        use crate::pipeline::rocm_graph::{
+            begin_rocm_capture, end_rocm_capture_discard, rocm_device,
+        };
+
+        let input_ids_var = Var::from_tensor(input_ids)?;
+        let (metadata_buffers, rebound_metadata) =
+            RocmDecodeGraphMetadataBuffers::new(metadata, seqlen_offsets, block_size)?;
+        let graph_input_ids = input_ids_var.as_detached_tensor();
+        let device = rocm_device(graph_input_ids.device())?;
+
+        // Open the caching-pool reservation scope BEFORE capture begins and keep
+        // it open until capture ends. Every output buffer the captured forward
+        // allocates (including the final `logits` tensor) is then reserved out of
+        // the pool for good, so no later eager allocation can reuse a device
+        // pointer baked into the graph and corrupt a replay. Without this the
+        // graph replays against recycled scratch and the logits never advance
+        // (the fluent-but-stale single-token loop). See `wrappers::PoolInner`.
+        device.begin_graph_capture_scope();
+
+        begin_rocm_capture(&device)?;
+        let logits = match self.run_rocm_decode_forward(
+            &graph_input_ids,
+            seqlen_offsets,
+            context_lens.to_vec(),
+            Some((kv_cache.to_vec(), &rebound_metadata)),
+        ) {
+            Ok(logits) => logits,
+            Err(err) => {
+                end_rocm_capture_discard(&device);
+                device.end_graph_capture_scope();
+                return Err(err);
+            }
+        };
+
+        let graph = match RocmGraphHandle::end_capture(&device) {
+            Ok(Some(graph)) => graph,
+            Ok(None) => {
+                // Capture began but produced no graph; drain so the stream is
+                // usable for the eager fallback.
+                let _ = device.synchronize();
+                device.end_graph_capture_scope();
+                return Err(hanzo_ml::Error::msg("ROCm graph capture returned no graph"));
+            }
+            Err(err) => {
+                end_rocm_capture_discard(&device);
+                device.end_graph_capture_scope();
+                return Err(err);
+            }
+        };
+        // Capture is finished; the graph now owns the reserved pointers. Close the
+        // reservation scope so steady-state eager allocations (sampling, next
+        // token prep) recycle from the pool as usual.
+        device.end_graph_capture_scope();
+
+        graph.upload()?;
+
+        Ok(RocmDecodeGraphEntry {
+            key,
+            graph,
+            input_ids: input_ids_var,
+            metadata_buffers,
+            _metadata: rebound_metadata,
+            logits,
+        })
+    }
+
+    /// Disables the ROCm decode graph fast path after a capture/replay failure and
+    /// clears the cache so the pipeline falls back to eager. Mirrors
+    /// `NormalPipeline::disable_cuda_decode_graph`.
+    fn disable_rocm_decode_graph(&self, err: &hanzo_ml::Error) {
+        let mut state = self
+            .rocm_decode_graph
+            .lock()
+            .expect("ROCm graph mutex poisoned");
+        if !state.disabled {
+            warn!("ROCm decode graphs disabled after capture/replay error: {err}");
+        }
+        state.disabled = true;
+        state.entries.clear();
+    }
+}
+
 #[async_trait::async_trait]
 impl Pipeline for GGUFPipeline {
     fn forward_inputs(
@@ -786,6 +1084,34 @@ impl Pipeline for GGUFPipeline {
             }
             (None, None) => None,
         };
+        // ROCm/HIP decode graph fast path. On a steady-state single-token decode
+        // with paged metadata present, replay the captured graph (or capture it on
+        // the first such step) instead of re-launching every kernel eagerly. On any
+        // capture/replay error we disable the path and fall through to eager so a
+        // stale-state replay can never silently corrupt tokens. Other devices and
+        // non-decode steps skip straight to the eager dispatch below.
+        #[cfg(feature = "rocm")]
+        {
+            if let Some((ref kv_cache, meta)) = paged_attn_meta {
+                match self.try_rocm_decode_graph_forward(
+                    &input_ids,
+                    &seqlen_offsets,
+                    &context_lens,
+                    kv_cache,
+                    meta,
+                ) {
+                    Ok(Some(logits)) => {
+                        return if return_raw_logits {
+                            Ok(ForwardInputsResult::RawLogits { logits })
+                        } else {
+                            Ok(ForwardInputsResult::CausalGeneration { logits })
+                        };
+                    }
+                    Ok(None) => {}
+                    Err(err) => self.disable_rocm_decode_graph(&err),
+                }
+            }
+        }
         let logits = match self.model {
             Model::Llama(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?

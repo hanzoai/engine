@@ -51,6 +51,11 @@ pub use model_loader::{
 pub use video_input::{sample_frame_indices, VideoInput};
 mod embedding_models;
 mod kv_cache;
+pub mod license;
+pub use license::{
+    load_and_verify as load_and_verify_license, verify_license, License, LicenseError,
+    EXPECTED_APP_ID as LICENSE_EXPECTED_APP_ID, HANZO_LICENSE_PUBKEY,
+};
 mod search;
 
 mod model_selected;
@@ -60,7 +65,7 @@ pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_sele
 mod amoe;
 mod attention;
 mod diagnostics;
-mod diffusion_models;
+pub mod diffusion_models;
 pub mod distributed;
 pub mod files;
 mod gguf;
@@ -82,13 +87,15 @@ mod sampler;
 mod scheduler;
 mod sequence;
 pub mod speculative;
-mod speech_models;
+pub mod speech_models;
 mod toml_selector;
 mod tools;
 mod topology;
 mod utils;
 mod vision_models;
 mod xlora_models;
+#[cfg(feature = "zap")]
+pub mod zap;
 
 pub use diagnostics::{
     check_hf_gated_access, collect_system_info, run_doctor, BuildInfo, CpuInfo, DeviceInfo,

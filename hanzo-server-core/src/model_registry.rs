@@ -8,14 +8,22 @@
 //! Three things live here:
 //!   1. The canonical Zen SKU set served by zen-gateway and listed in
 //!      `pricing/src/models.mjs::zenCatalog`.
-//!   2. The HF source repo (under `zenlm/`) for each SKU.
-//!   3. The arch kind, which is either `Supported(NormalLoaderType)` or
-//!      `Unsupported(name)` for archs not yet ported. The server uses the
-//!      latter to return a clean 501 instead of a 500 deep in the loader.
+//!   2. The HF source repo (under `zenlm/`) for each SKU. Text/embedding/vision
+//!      repos are research's verified-to-resolve artifacts (GGUF mirrors carry a
+//!      `-gguf` suffix); ASR/TTS repos follow canon's published-artifact names.
+//!   3. The arch kind:
+//!        - `Supported(NormalLoaderType)` — text models loadable by the normal
+//!          (text) loader.
+//!        - `SupportedVision(MultimodalLoaderType)` — vision models loadable by
+//!          the multimodal pipeline (qwen3-vl is ported: `Qwen3VLLoader` /
+//!          `Qwen3VLMoELoader`).
+//!        - `SupportedAudio(AsrLoaderType)` — speech models loadable by the ASR
+//!          pipeline (qwen3-asr is ported: `speech_models/qwen3_asr`).
+//!        - `Unsupported(name)` — arch not yet ported (qwen3-omni, qwen3-tts,
+//!          deepseek-v4-flash/pro); handlers return a clean 501.
 //!
-//! Adding a new SKU is a one-line change in `zen_sku_table()`. Porting a new
-//! arch (qwen3-vl, qwen3-asr, ...) is out of scope for this registry; once the
-//! arch lands in `hanzo-engine`, flip the `Unsupported` to `Supported`.
+//! Adding a new SKU is a one-line change in `zen_sku_table()`. When a new arch
+//! lands in `hanzo-engine`, flip its `Unsupported` to the matching `Supported*`.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -29,27 +37,34 @@ pub enum Modality {
     Embedding,
 }
 
-/// Which arch loads this SKU.
+/// Which arch loads this SKU, and via which loader family.
 ///
-/// `Supported` carries the engine's NormalLoaderType name (the same string
-/// `NormalLoaderType::from_str` accepts). `Unsupported` carries a free-form
-/// placeholder so handlers can produce a 501 with a useful message and a
-/// pointer to the planned arch name.
+/// Each `Supported*` carries the loader name string the engine accepts:
+/// `Supported` = `NormalLoaderType` (text), `SupportedVision` =
+/// `MultimodalLoaderType`, `SupportedAudio` = the ASR loader. `Unsupported`
+/// carries a free-form placeholder so handlers can produce a 501 with a useful
+/// message and a pointer to the planned arch name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArchKind {
     Supported(&'static str),
+    SupportedVision(&'static str),
+    SupportedAudio(&'static str),
     Unsupported(&'static str),
 }
 
 impl ArchKind {
     pub fn name(&self) -> &'static str {
         match self {
-            ArchKind::Supported(n) | ArchKind::Unsupported(n) => n,
+            ArchKind::Supported(n)
+            | ArchKind::SupportedVision(n)
+            | ArchKind::SupportedAudio(n)
+            | ArchKind::Unsupported(n) => n,
         }
     }
 
+    /// True if the engine can load this arch (via any loader family).
     pub fn is_supported(&self) -> bool {
-        matches!(self, ArchKind::Supported(_))
+        !matches!(self, ArchKind::Unsupported(_))
     }
 }
 
@@ -71,72 +86,74 @@ pub struct ZenSku {
 ///
 /// Source of truth is the intersection of zen-gateway `config.yaml::model_list`
 /// and pricing `models.mjs::zenCatalog`. Add/edit rows here, then run
-/// `cargo check -p hanzo-server-core`.
+/// `cargo check -p hanzo-server-core`. HF repo ids are the actual published
+/// artifacts (verified 2026-06-06 against huggingface.co/zenlm).
 fn zen_sku_table() -> &'static [ZenSku] {
     &[
         // ---- Zen5 ladder (canonical) ---------------------------------------
-        // zen5-nano-*: Zen VL dense edge tier. Multimodal but qwen3-vl arch is
-        // not yet ported; mark Unsupported until the encoder lands.
+        // zen5-nano-*: Zen VL dense edge tier (Qwen3-VL arch). The multimodal
+        // pipeline (Qwen3VLLoader) is ported, so these are SupportedVision.
         ZenSku {
             sku: "zen5-nano-0.8B",
-            hf_repo: "zenlm/zen-5-nano-0.8b",
-            arch: ArchKind::Unsupported("qwen3-vl"),
+            hf_repo: "zenlm/zen-5-nano-0.8B-gguf",
+            arch: ArchKind::SupportedVision("qwen3-vl"),
             quant: None,
             modality: Modality::Vision,
         },
         ZenSku {
             sku: "zen5-nano-2B",
-            hf_repo: "zenlm/zen-5-nano-2b",
-            arch: ArchKind::Unsupported("qwen3-vl"),
+            hf_repo: "zenlm/zen-5-nano-2B-gguf",
+            arch: ArchKind::SupportedVision("qwen3-vl"),
             quant: None,
             modality: Modality::Vision,
         },
         ZenSku {
             sku: "zen5-nano-4B",
-            hf_repo: "zenlm/zen-5-nano-4b",
-            arch: ArchKind::Unsupported("qwen3-vl"),
+            hf_repo: "zenlm/zen-5-nano-4B-gguf",
+            arch: ArchKind::SupportedVision("qwen3-vl"),
             quant: None,
             modality: Modality::Vision,
         },
         ZenSku {
             sku: "zen5-nano-9B",
-            hf_repo: "zenlm/zen-5-nano-9b",
-            arch: ArchKind::Unsupported("qwen3-vl"),
+            hf_repo: "zenlm/zen-5-nano-9B-gguf",
+            arch: ArchKind::SupportedVision("qwen3-vl"),
             quant: None,
             modality: Modality::Vision,
         },
-        // Text-only Zen5 ladder. qwen3 / qwen3moe are in tree.
+        // Text-only Zen5 ladder. qwen3 / qwen3moe are in tree. GGUF mirrors
+        // carry the `-gguf` suffix.
         ZenSku {
             sku: "zen5-flash",
-            hf_repo: "zenlm/zen-5-flash",
+            hf_repo: "zenlm/zen-5-flash-gguf",
             arch: ArchKind::Supported("qwen3"),
             quant: None,
             modality: Modality::Text,
         },
         ZenSku {
             sku: "zen5-mini",
-            hf_repo: "zenlm/zen-5-mini",
+            hf_repo: "zenlm/zen-5-mini-gguf",
             arch: ArchKind::Supported("qwen3moe"),
             quant: None,
             modality: Modality::Text,
         },
         ZenSku {
             sku: "zen5",
-            hf_repo: "zenlm/zen-5",
+            hf_repo: "zenlm/zen-5-gguf",
             arch: ArchKind::Supported("qwen3moe"),
             quant: None,
             modality: Modality::Text,
         },
         ZenSku {
             sku: "zen5-coder",
-            hf_repo: "zenlm/zen-5-coder",
+            hf_repo: "zenlm/zen-5-coder-gguf",
             arch: ArchKind::Supported("qwen3moe"),
             quant: None,
             modality: Modality::Text,
         },
-        // Zen5 Pro/Max/Ultra ride on DeepSeek V4 (zen5 branch arch, "Zen5"
-        // internally). DS4 is not on main; flip to Supported once
-        // hanzo-engine/src/models/zen5.rs lands here.
+        // Zen5 Pro/Max ride on DeepSeek V4 (Flash / Pro). DS4 is not on main;
+        // flip to Supported once the deepseek-v4 arch (hanzo-engine zen5.rs)
+        // lands in hanzo-engine.
         ZenSku {
             sku: "zen5-pro",
             hf_repo: "zenlm/zen-5-pro-gguf",
@@ -151,26 +168,26 @@ fn zen_sku_table() -> &'static [ZenSku] {
             quant: Some("Q4_K_M"),
             modality: Modality::Text,
         },
-        // Zen5 embeddings. qwen3 backbone is in tree but the embedding head
-        // is served by `hanzo-engine::pipeline::embedding`, which already
-        // wraps qwen3-style backbones.
+        // Zen5 embeddings. qwen3 backbone is in tree; the embedding head is
+        // served by `hanzo-engine::pipeline::embedding`. Weights live under the
+        // `zen-embedding-*` repos (GGUF mirrors are `-GGUF`).
         ZenSku {
             sku: "zen5-embedding-0.6B",
-            hf_repo: "zenlm/zen-5-embedding-0.6b",
+            hf_repo: "zenlm/zen-embedding-0.6B-GGUF",
             arch: ArchKind::Supported("qwen3"),
             quant: None,
             modality: Modality::Embedding,
         },
         ZenSku {
             sku: "zen5-embedding-4B",
-            hf_repo: "zenlm/zen-5-embedding-4b",
+            hf_repo: "zenlm/zen-embedding-4B",
             arch: ArchKind::Supported("qwen3"),
             quant: None,
             modality: Modality::Embedding,
         },
         ZenSku {
             sku: "zen5-embedding-8B",
-            hf_repo: "zenlm/zen-5-embedding-8b",
+            hf_repo: "zenlm/zen-embedding-8B-GGUF",
             arch: ArchKind::Supported("qwen3"),
             quant: None,
             modality: Modality::Embedding,
@@ -183,6 +200,7 @@ fn zen_sku_table() -> &'static [ZenSku] {
         // them directly. Use the zen5 ladder instead.
 
         // ---- Zen3 family (multimodal + specialty) --------------------------
+        // qwen3-omni is not ported (no qwen3_omni in vision_models); Unsupported.
         ZenSku {
             sku: "zen3-omni",
             hf_repo: "zenlm/zen-omni",
@@ -190,38 +208,44 @@ fn zen_sku_table() -> &'static [ZenSku] {
             quant: None,
             modality: Modality::Vision,
         },
+        // qwen3-vl IS ported (Qwen3VLLoader / Qwen3VLMoELoader). Real weights
+        // live under `zen3-vl` and the `zen-vl-*-instruct` repos.
         ZenSku {
             sku: "zen3-vl",
-            hf_repo: "zenlm/zen-vl",
-            arch: ArchKind::Unsupported("qwen3-vl"),
+            hf_repo: "zenlm/zen3-vl",
+            arch: ArchKind::SupportedVision("qwen3-vl"),
             quant: None,
             modality: Modality::Vision,
         },
+        // zen3-vl-2B: no public 2B weights yet (registry repo 401); arch is
+        // supported, so this will load once a 2B repo is published.
         ZenSku {
             sku: "zen3-vl-2B",
             hf_repo: "zenlm/zen-vl-2b",
-            arch: ArchKind::Unsupported("qwen3-vl"),
+            arch: ArchKind::SupportedVision("qwen3-vl"),
             quant: None,
             modality: Modality::Vision,
         },
         ZenSku {
             sku: "zen3-vl-8B",
-            hf_repo: "zenlm/zen-vl-8b",
-            arch: ArchKind::Unsupported("qwen3-vl"),
+            hf_repo: "zenlm/zen-vl-8b-instruct",
+            arch: ArchKind::SupportedVision("qwen3-vl"),
             quant: None,
             modality: Modality::Vision,
         },
+        // zen3-vl-32B: closest published artifact is the 30B instruct repo.
         ZenSku {
             sku: "zen3-vl-32B",
-            hf_repo: "zenlm/zen-vl-32b",
-            arch: ArchKind::Unsupported("qwen3-vl"),
+            hf_repo: "zenlm/zen-vl-30b-instruct",
+            arch: ArchKind::SupportedVision("qwen3-vl"),
             quant: None,
             modality: Modality::Vision,
         },
+        // zen3-vl-235B-A22B: no public weights yet (registry repo 401).
         ZenSku {
             sku: "zen3-vl-235B-A22B",
             hf_repo: "zenlm/zen-vl-235b-a22b",
-            arch: ArchKind::Unsupported("qwen3-vl"),
+            arch: ArchKind::SupportedVision("qwen3-vl"),
             quant: None,
             modality: Modality::Vision,
         },
@@ -242,28 +266,32 @@ fn zen_sku_table() -> &'static [ZenSku] {
             quant: None,
             modality: Modality::Text,
         },
-        // Zen3 ASR / TTS — encoders not ported.
+        // Zen3 ASR: qwen3-asr IS ported (speech_models/qwen3_asr,
+        // AsrLoaderType::Qwen3Asr). Repos follow canon's published `zen-asr-*`
+        // artifact names.
         ZenSku {
             sku: "zen3-asr",
             hf_repo: "zenlm/zen-asr-1.7b",
-            arch: ArchKind::Unsupported("qwen3-asr"),
+            arch: ArchKind::SupportedAudio("qwen3-asr"),
             quant: None,
             modality: Modality::Audio,
         },
         ZenSku {
             sku: "zen3-asr-0.6B",
             hf_repo: "zenlm/zen-asr-0.6b",
-            arch: ArchKind::Unsupported("qwen3-asr"),
+            arch: ArchKind::SupportedAudio("qwen3-asr"),
             quant: None,
             modality: Modality::Audio,
         },
         ZenSku {
             sku: "zen3-asr-aligner",
             hf_repo: "zenlm/zen-asr-aligner-0.6b",
-            arch: ArchKind::Unsupported("qwen3-asr"),
+            arch: ArchKind::SupportedAudio("qwen3-asr"),
             quant: None,
             modality: Modality::Audio,
         },
+        // Zen3 TTS: qwen3-tts not yet ported; Unsupported. Repos follow canon's
+        // published `zen-tts-*` artifact names.
         ZenSku {
             sku: "zen3-tts",
             hf_repo: "zenlm/zen-tts-1.7b",
@@ -391,24 +419,57 @@ mod tests {
 
     #[test]
     fn unsupported_arches_are_explicit() {
+        // DeepSeek-V4 (zen5-pro/max), qwen3-omni, qwen3-tts are not yet ported.
         let pro = lookup("zen5-pro").unwrap();
         assert!(!pro.arch.is_supported());
         assert_eq!(pro.arch.name(), "deepseek-v4-flash");
-        let vl = lookup("zen3-vl").unwrap();
-        assert!(!vl.arch.is_supported());
-        assert_eq!(vl.arch.name(), "qwen3-vl");
+        let omni = lookup("zen3-omni").unwrap();
+        assert!(!omni.arch.is_supported());
+        assert_eq!(omni.arch.name(), "qwen3-omni");
+        let tts = lookup("zen3-tts").unwrap();
+        assert!(!tts.arch.is_supported());
+        assert_eq!(tts.arch.name(), "qwen3-tts");
     }
 
     #[test]
-    fn supported_arch_names_match_normal_loader() {
-        for e in all().iter().filter(|e| e.arch.is_supported()) {
-            match e.arch.name() {
-                "qwen3" | "qwen3moe" | "deepseekv3" | "glm4moe" | "llama" | "mixtral"
-                | "gpt_oss" => {}
-                other => panic!(
-                    "SKU `{}` uses arch `{}` not in NormalLoaderType",
-                    e.sku, other
+    fn ported_multimodal_and_asr_are_supported() {
+        // qwen3-vl (Qwen3VLLoader) and qwen3-asr (speech_models/qwen3_asr) ARE
+        // ported — they load via the multimodal / ASR pipelines, not the text
+        // loader.
+        let vl = lookup("zen3-vl").unwrap();
+        assert!(vl.arch.is_supported());
+        assert_eq!(vl.arch, ArchKind::SupportedVision("qwen3-vl"));
+        let asr = lookup("zen3-asr").unwrap();
+        assert!(asr.arch.is_supported());
+        assert_eq!(asr.arch, ArchKind::SupportedAudio("qwen3-asr"));
+    }
+
+    #[test]
+    fn supported_arch_names_match_loaders() {
+        for e in all() {
+            match &e.arch {
+                // Text loaders: NormalLoaderType names.
+                ArchKind::Supported(name) => match *name {
+                    "qwen3" | "qwen3moe" | "deepseekv3" | "glm4moe" | "llama" | "mixtral"
+                    | "gpt_oss" => {}
+                    other => panic!(
+                        "SKU `{}` uses text arch `{}` not in NormalLoaderType",
+                        e.sku, other
+                    ),
+                },
+                // Multimodal loaders: MultimodalLoaderType arch names.
+                ArchKind::SupportedVision(name) => assert_eq!(
+                    *name, "qwen3-vl",
+                    "SKU `{}` uses unexpected vision arch `{}`",
+                    e.sku, name
                 ),
+                // ASR loaders.
+                ArchKind::SupportedAudio(name) => assert_eq!(
+                    *name, "qwen3-asr",
+                    "SKU `{}` uses unexpected audio arch `{}`",
+                    e.sku, name
+                ),
+                ArchKind::Unsupported(_) => {}
             }
         }
     }

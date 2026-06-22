@@ -49,20 +49,20 @@ pub fn qtensor_indexed_moe_forward(
 /// Output tensor [batch, topk, n]
 pub fn cpu_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
     match qmatmul {
-        // Metal keeps the [E,n,k] GGUF bank quantized in unified memory and runs a per-expert,
-        // router-gathered quant matvec straight out of it (QMetalStorage::indexed_moe_forward) -- no
-        // whole-bank dequant, which on Metal materializes the multi-GB f32 bank per token and OOMs.
-        // CPU has no resident-buffer win, so it stays on the dequantize-then-gather path.
-        QMatMul::QTensor(qtensor) if qtensor.device().is_metal() => {
+        // Metal and ROCm keep the [E,n,k] GGUF bank quantized in VRAM and run a router-gathered quant
+        // matvec straight out of it (Q*Storage::indexed_moe_forward) -- no whole-bank dequant, which
+        // would materialize the multi-GB f32 bank every token (OOM on Metal; the ~16x dequant + GPU
+        // round-trip that tanks ROCm decode and makes HIP-graph capture illegal). On ROCm the 3D bank
+        // is a `QTensor` (from_arc keeps a wired 3D bank quantized rather than as `RocmQuant`), so this
+        // is the arm the FFN hits. CPU has no resident-buffer win, so it stays on dequantize-then-gather.
+        QMatMul::QTensor(qtensor) if qtensor.device().is_metal() || qtensor.device().is_rocm() => {
             qmatmul.indexed_moe_forward(x, ids)
         }
         QMatMul::QTensor(qtensor) => qtensor_indexed_moe_forward(qtensor, x, ids),
+        #[cfg(feature = "rocm")]
+        QMatMul::RocmQuant { qtensor, .. } => qtensor_indexed_moe_forward(qtensor, x, ids),
         #[cfg(feature = "vulkan")]
         QMatMul::VulkanQuant { qtensor, .. } => qtensor_indexed_moe_forward(qtensor, x, ids),
-        // Resident MoE bank: delegate to the GPU keep-quantized path (per-expert banked matvec/matmul,
-        // no whole-bank dequant). Dequantizing the [E,n,k] bank here would be the ~140GB f32 OOM.
-        #[cfg(feature = "vulkan")]
-        QMatMul::VulkanQuantBank { .. } => qmatmul.indexed_moe_forward(x, ids),
         QMatMul::Tensor(t) | QMatMul::TensorF16(t) => {
             // For non-quantized tensors, use UnquantLinear directly
             let unquant =

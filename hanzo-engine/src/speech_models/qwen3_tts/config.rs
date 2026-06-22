@@ -12,6 +12,9 @@ fn default_head_dim() -> usize {
     128
 }
 
+/// The sub-talker (MTP) that predicts codebooks 1..num_code_groups from the talker hidden state.
+/// In the real checkpoint this is `talker.code_predictor.{model,lm_head}` with per-group embeddings
+/// and per-group linear heads. `small_to_mtp_projection` is absent because hidden_size == talker hidden_size.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodePredictorConfig {
     pub hidden_size: usize,
@@ -51,6 +54,8 @@ pub struct RopeScaling {
     pub rope_type: String,
 }
 
+/// The autoregressive talker backbone. Note `text_hidden_size` (2048) differs from `hidden_size`
+/// (1024): text token embeddings live in 2048-d and are projected down to 1024-d by `text_projection`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TalkerConfig {
     pub hidden_size: usize,
@@ -61,7 +66,6 @@ pub struct TalkerConfig {
     pub num_code_groups: usize,
     pub vocab_size: usize,
     pub text_vocab_size: usize,
-    #[serde(default)]
     pub text_hidden_size: usize,
     #[serde(default = "default_head_dim")]
     pub head_dim: usize,
@@ -122,6 +126,21 @@ pub struct Qwen3TtsConfig {
     pub assistant_token_id: u32,
 }
 
+fn default_head_dim_64() -> usize {
+    64
+}
+
+fn default_codec_rms_eps() -> f64 {
+    1e-5
+}
+
+fn default_codec_rope_theta() -> f64 {
+    10000.0
+}
+
+/// The speech-tokenizer (codec) decoder config (`speech_tokenizer/config.json` -> `decoder_config`).
+/// This drives the SplitRVQ + pre_transformer + upsample + conv decoder that turns codec indices
+/// into a 24 kHz waveform.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodecDecoderConfig {
     pub latent_dim: usize,
@@ -138,7 +157,7 @@ pub struct CodecDecoderConfig {
     pub semantic_codebook_size: usize,
     #[serde(default = "default_head_dim_64")]
     pub head_dim: usize,
-    #[serde(default)]
+    #[serde(default = "default_codec_rope_theta")]
     pub rope_theta: f64,
     #[serde(default = "default_codec_rms_eps")]
     pub rms_norm_eps: f64,
@@ -151,14 +170,12 @@ pub struct CodecDecoderConfig {
     pub vector_quantization_hidden_dimension: usize,
     #[serde(default)]
     pub layer_scale_initial_scale: f64,
+    #[serde(default = "default_codec_act")]
+    pub hidden_act: String,
 }
 
-fn default_head_dim_64() -> usize {
-    64
-}
-
-fn default_codec_rms_eps() -> f64 {
-    1e-5
+fn default_codec_act() -> String {
+    "silu".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -171,4 +188,3 @@ pub struct CodecConfig {
     pub encoder_valid_num_quantizers: usize,
     pub decoder_config: CodecDecoderConfig,
 }
-
