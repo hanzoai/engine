@@ -152,7 +152,8 @@ fn check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
         .chain(ref_h.iter())
         .fold(0f32, |m, &v| m.max(v.abs()))
         .max(1.0);
-    let tol = 0.01 * scale; // 1% of magnitude: far below any layout/packing/scale bug, above f32 reorder.
+    let tol = 0.01 * scale; // f16: 1% of magnitude, far below any layout/packing/scale bug, above f32 reorder.
+    let tol_b = 0.02 * scale; // bf16 has ~3 fewer mantissa bits than f16; 2% gate covers its worst-case rounding at large k.
 
     let mut max_err_h = 0f32;
     let mut max_err_b = 0f32;
@@ -162,7 +163,7 @@ fn check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
         let eb = (yb[i] - ref_b[i]).abs();
         max_err_h = max_err_h.max(eh);
         max_err_b = max_err_b.max(eb);
-        if eh > tol || eb > tol {
+        if eh > tol || eb > tol_b {
             nbad += 1;
         }
     }
@@ -263,7 +264,9 @@ fn moe_check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
     let wbank = dev.storage_from_slice(&bank).expect("upload bank");
 
     // Router ids: each slot picks an expert (round-robin + a twist so repeats + spread both occur).
+    // Uploaded to the device: the batched MoE kernels index experts ON-DEVICE (no host ids loop).
     let ids: Vec<u32> = (0..nrows).map(|s| ((s * 3 + 1) % e_cnt) as u32).collect();
+    let ids_dev = dev.storage_from_slice(&ids).expect("upload ids");
 
     // Activation matrix [nrows, k], f16 and bf16.
     let xf: Vec<f32> = (0..nrows * k).map(val).collect();
@@ -274,8 +277,8 @@ fn moe_check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
     let xst_h = dev.storage_from_slice(&xh).expect("upload x f16");
     let xst_b = dev.storage_from_slice(&xbf).expect("upload x bf16");
 
-    let y_h = dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids, nrows, n, k).expect("moe f16");
-    let y_b = dev.moe_matvec_quant(qt, &wbank, &xst_b, &ids, nrows, n, k).expect("moe bf16");
+    let y_h = dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k).expect("moe f16");
+    let y_b = dev.moe_matvec_quant(qt, &wbank, &xst_b, &ids_dev, nrows, n, k).expect("moe bf16");
     let yh = to_f32(&y_h);
     let yb = to_f32(&y_b);
 
@@ -323,6 +326,12 @@ fn moe_matvec_unified_numeric() {
     // Q8_0 MoE (the other proven type) to show MoE is per-type generic via the same core.
     moe_check::<BlockQ8_0, _>(&dev, &mut log, "Q8_0", RocmQuantType::Q8_0, 8, 16, 128, 512, 32, 34, |blk, r, b| {
         put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
+    });
+    // Q6_K MoE: the mixed-precision down-proj type in Qwen3-30B-A3B-Q4_K_M. Exercises the batched
+    // on-device-ids `moe_qmatvecu_q6k_*` kernel (experts on grid.y) against the CPU oracle. Small d
+    // keeps worst-case rows inside f16 range, same as the single-expert Q6_K gate above.
+    moe_check::<BlockQ6K, _>(&dev, &mut log, "Q6_K", RocmQuantType::Q6K, 8, 16, 128, 512, 256, 210, |blk, r, b| {
+        put_d(blk, 208, r, b, 0.0078125, 0.00390625, 5);
     });
 
     let _ = std::fs::File::create("C:\\moe-unified-test.txt")
