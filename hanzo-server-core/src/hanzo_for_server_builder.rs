@@ -5,10 +5,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use hanzo_engine::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
-    parse_isq_value, AutoDeviceMapParams, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, DeviceMapSetting, HanzoBuilder, Loader, LoaderBuilder, McpClientConfig,
-    MemoryGpuConfig, ModelLoaderConfig, ModelSelected, MtpConfig, PagedAttentionConfig,
-    PagedCacheType, SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
+    parse_isq_value, AddModelConfig, AutoDeviceMapParams, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, EngineConfig, Hanzo, HanzoBuilder,
+    Loader, LoaderBuilder, McpClientConfig, MemoryGpuConfig, ModelLoaderConfig, ModelSelected,
+    MtpConfig, PagedAttentionConfig, PagedCacheType, SchedulerConfig, SearchCallback,
+    SearchEmbeddingModel, TokenSource,
 };
 use hanzo_ml::Device;
 use tracing::{debug, info, warn};
@@ -1087,6 +1088,173 @@ impl HanzoForServerBuilder {
         }
         Ok(hanzo)
     }
+}
+
+/// Load one model into a LIVE [`Hanzo`] engine at runtime and return its routable
+/// model id.
+///
+/// This is the runtime twin of the additional-model arm of
+/// [`HanzoForServerBuilder::build_multi_model`] (see the loop over
+/// `self.models.iter().skip(1)`): it performs the exact same per-model load
+/// sequence — `LoaderBuilder` → `load_model_from_hf` → `Hanzo::add_model` →
+/// optional `register_model_alias` — by calling the very same private helpers
+/// (`init_device`, `init_mapper`, `configure_paged_attn`, `init_cache_config`,
+/// `init_scheduler_config`). One load path, two callers (startup builder and
+/// runtime operator); no duplicated device/cache/scheduler logic.
+///
+/// Engine-level defaults match the builder's (`max_seqs = 16`,
+/// `prefix_cache_n = 16`, KV cache on, EOS-stop on, throughput logging on,
+/// `TokenSource::CacheToken`, automatic PagedAttention per device). The model's
+/// own [`ModelConfig`] overrides (chat template, jinja, device layers, ISQ) are
+/// honored. A `ModelLoaderConfig` is attached so the runtime-loaded model gets
+/// full unload/reload support, matching the single-model build path.
+///
+/// `config.alias` (when set) becomes the routable id; otherwise the pipeline's
+/// own `name()` is used. The returned id is exactly what
+/// `hanzo_engine::infer` / `embed` (and the FFI) route on.
+///
+/// Fails secure: name/alias conflicts are rejected by
+/// [`Hanzo::add_model`] / [`Hanzo::register_model_alias`], which return `Err`
+/// rather than overwriting a live model.
+pub async fn load_model_at_runtime(hanzo: &Arc<Hanzo>, config: ModelConfig) -> Result<String> {
+    // Same defaults the builder uses when none are overridden.
+    const MAX_SEQS: usize = defaults::MAX_SEQS;
+    const NO_KV_CACHE: bool = defaults::NO_KV_CACHE;
+    const PREFIX_CACHE_N: usize = defaults::PREFIX_CACHE_N;
+
+    let model = config.model.clone();
+    let dtype = get_model_dtype(&model)?;
+    let auto_device_map_params = get_auto_device_map_params(&model)?;
+
+    // Recompute device exactly as build() does (no carried-over builder state at
+    // runtime). On this build (no GPU feature / no CUDA) this resolves to CPU,
+    // identical to the device the startup engine was built on.
+    let device = init_device(defaults::CPU, defaults::SEED)?;
+    let paged_attn = configure_paged_attn(&device, defaults::PAGED_ATTN);
+    let cache_config = init_cache_config(
+        defaults::PAGED_ATTN_BLOCK_SIZE,
+        defaults::PAGED_ATTN_GPU_MEM,
+        defaults::PAGED_ATTN_GPU_MEM_USAGE,
+        defaults::PAGED_CTXT_LEN,
+        defaults::PAGED_CACHE_TYPE,
+        !paged_attn,
+    )?;
+
+    let mapper = init_mapper(&config.num_device_layers, &auto_device_map_params);
+    let isq = config
+        .in_situ_quant
+        .as_ref()
+        .map(|isq| parse_isq_value(isq, Some(&device)).map_err(|e| anyhow::anyhow!("{e}")))
+        .transpose()?;
+
+    // Keep the values needed for the unload/reload loader config before `model`
+    // is moved into the loader.
+    let model_for_config = model.clone();
+    let chat_template = config.chat_template.clone();
+    let jinja_explicit = config.jinja_explicit.clone();
+
+    let loader: Box<dyn Loader> = LoaderBuilder::new(model)
+        .with_no_kv_cache(NO_KV_CACHE)
+        .with_chat_template(config.chat_template.clone())
+        .with_jinja_explicit(config.jinja_explicit.clone())
+        .build()?;
+
+    hanzo_instance_info(&*loader);
+
+    let pipeline: LoadedPipeline = loader.load_model_from_hf(
+        None,
+        defaults::TOKEN_SOURCE,
+        &dtype,
+        &device,
+        false,
+        mapper.clone(),
+        isq,
+        cache_config,
+    )?;
+
+    let scheduler_config = init_scheduler_config(&cache_config, &pipeline, MAX_SEQS).await;
+
+    let pipeline_name = pipeline.lock().await.name();
+    let primary_id = config.alias.clone().unwrap_or_else(|| pipeline_name.clone());
+
+    let engine_config = EngineConfig {
+        no_kv_cache: NO_KV_CACHE,
+        no_prefix_cache: false,
+        prefix_cache_n: PREFIX_CACHE_N,
+        disable_eos_stop: false,
+        throughput_logging_enabled: true,
+        search_embedding_model: None,
+        search_callback: None,
+        tool_callbacks: HashMap::new(),
+    };
+
+    // Attach the loader config so the runtime-loaded model supports unload/reload,
+    // matching the single-model build path.
+    let loader_config = ModelLoaderConfig {
+        model_selected: model_for_config,
+        token_source: defaults::TOKEN_SOURCE,
+        hf_revision: None,
+        dtype,
+        device: device.clone(),
+        device_map_setting: mapper,
+        isq,
+        paged_attn_config: cache_config,
+        silent: false,
+        chat_template,
+        jinja_explicit,
+        mtp_config: None,
+    };
+
+    let add_model_config = AddModelConfig::new(engine_config).with_loader_config(loader_config);
+
+    hanzo
+        .add_model(
+            primary_id.clone(),
+            pipeline,
+            scheduler_config,
+            add_model_config,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to add model `{}` at runtime: {}", primary_id, e))?;
+
+    // The model is already live and routable by `primary_id` (the engines map
+    // key) the moment `add_model` succeeds — that is the contract of a runtime
+    // load. The extra `pipeline_name -> primary_id` back-reference alias is a
+    // convenience so the model's intrinsic name also resolves; it is NOT
+    // required for routing. Registering it can legitimately conflict (e.g. two
+    // runtime-loaded models share a `source`, hence the same `pipeline_name`, so
+    // the alias slot is already taken by the first one). That conflict must NOT
+    // fail the load: doing so would return an error while leaving a fully
+    // registered, resource-consuming model behind — a non-atomic load that
+    // reports failure for a success and that the caller cannot reconcile (a
+    // re-load hits the dup check and also fails). Register the alias
+    // best-effort and keep the load successful.
+    if let Some(alias) = config.alias.as_ref() {
+        if alias != &pipeline_name {
+            if let Err(e) = hanzo.register_model_alias(pipeline_name.clone(), &primary_id) {
+                warn!(
+                    "Runtime-loaded model `{}` is live and routable; its intrinsic-name \
+                     alias `{}` was not registered ({}). This is expected when models share \
+                     a source; address the model by `{}`.",
+                    primary_id, pipeline_name, e, primary_id
+                );
+            }
+        }
+    }
+
+    if primary_id == pipeline_name {
+        info!(
+            "Runtime-loaded model `{}` (config key: {})",
+            primary_id, config.model_id
+        );
+    } else {
+        info!(
+            "Runtime-loaded model `{}` (pipeline: `{}`; config key: {})",
+            primary_id, pipeline_name, config.model_id
+        );
+    }
+
+    Ok(primary_id)
 }
 
 // TODO: replace with best device?
