@@ -801,21 +801,22 @@ impl GGUFPipeline {
     /// the ROCm decode graph captures. XLora and the alternate-signature variants
     /// (Phi3/Starcoder2) are excluded from the graph fast path for v1.
     fn model_supports_rocm_decode_graph(&self) -> bool {
-        // MoE variants are excluded because their decode forward (per-layer router sort/top-k +
-        // on-device expert gather across ~48 layers) captures into a graph whose single replay
-        // PM4 indirect-buffer is large enough to overrun the WSL/WDDM thunk's AQL->PM4 queue ring
-        // (`wsl::thunk::ComputeQueue::AqlToPm4Thread`): replay is numerically correct for the first
-        // tokens, then the ring desyncs -- output drifts into stale repetition and the thunk aborts
-        // in `VendorSpecificAqlToPm4` (`packet->ven_hdr == AMD_AQL_FORMAT_PM4_IB`). This is a
-        // graph-IB-size limit in the closed thunk, not a hanzo capture/refresh bug: the per-token
-        // input refresh reaches the buffers, the captured forward is single-stream (the runtime's
-        // `UpdateStreams failed` log is benign -- dense logs it too and replays cleanly), and
-        // device-sync-per-launch / AMD_DIRECT_DISPATCH do not help. Dense variants stay under the
-        // ring limit and replay byte-coherent (Qwen3-0.6B-Q8_0: 105 T/s, 325 coherent tokens). MoE
-        // decodes eager instead -- correct and fast here (377 coherent tokens, 31-55 T/s).
+        // Graph-eligible variants run their decode RoPE off a stable device positions tensor
+        // (`metadata.rope_positions`), so capture bakes a buffer the graph runner refreshes in place
+        // every token instead of a frozen host offset. Qwen3MoE qualifies once its attention reads
+        // those positions like the dense path; before that fix its RoPE froze at the warmup position
+        // and every replayed token rotated wrong -> attention drifted into stale repetition.
+        // Qwen35 (Qwen3-VL mRoPE + non-paged Sdpa decode) still derives its cos/sin from a fresh
+        // per-forward positions tensor, which would freeze under capture, so it stays eager until its
+        // mRoPE is threaded through `rope_positions` too. XLora and the alternate-signature variants
+        // (Phi3/Starcoder2) are excluded from the graph fast path for v1.
         matches!(
             self.model,
-            Model::Llama(_) | Model::Phi2(_) | Model::Qwen(_) | Model::Qwen3(_)
+            Model::Llama(_)
+                | Model::Phi2(_)
+                | Model::Qwen(_)
+                | Model::Qwen3(_)
+                | Model::Qwen3MoE(_)
         )
     }
 
