@@ -1,0 +1,22 @@
+[package]
+name = "hanzo-engine-ffi"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "C ABI over the Hanzo native inference engine, for cgo/FFI callers (Go EVM precompiles)."
+
+[lib]
+name = "hanzo_engine_ffi"
+# cdylib for cgo dynamic linking; staticlib for fully-static embedding.
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+hanzo-engine = { path = "../hanzo-engine" }
+hanzo-server-core = { path = "../hanzo-server-core", default-features = false }
+tokio = { workspace = true }
+
+[features]
+# Forward GPU/CPU backends to the engine. The Go bench builds with `accelerate`.
+accelerate = ["hanzo-engine/accelerate", "hanzo-server-core/accelerate"]
+metal = ["hanzo-engine/metal", "hanzo-server-core/metal"]
+cuda = ["hanzo-engine/cuda", "hanzo-server-core/cuda"]
