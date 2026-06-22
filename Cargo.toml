@@ -21,7 +21,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "1.1.5"
+version = "1.2.0"
 edition = "2021"
 authors = ["Hanzo AI <dev@hanzo.ai>"]
 description = "Fast, flexible LLM inference."
@@ -234,4 +234,4 @@ opt-level = 3
 # hardcoded u32 — correct on Linux (u32) AND native Windows/MSVC (i32) — plus
 # edition-2024 unsafe blocks and a gated amdgcn GPU-sort kernel. No-op on Linux;
 # unblocks the native-Windows ROCm build. Upstream: github.com/RustNSparks/rocm-rs
-rocm-rs = { git = "https://github.com/hanzoai/rocm-rs", rev = "09d39b0" }
+rocm-rs = { git = "https://github.com/hanzoai/rocm-rs", tag = "v0.5.2" }
