@@ -19,10 +19,10 @@ mistral.rs has four ways to spread one model beyond a single GPU. They solve dif
 With a CUDA build and no manual mapping:
 
 1. One visible GPU runs the model on that GPU.
-2. Multiple visible GPUs use NCCL tensor parallelism when the binary has `cuda nccl` and `MISTRALRS_NO_NCCL` is not set.
+2. Multiple visible GPUs use NCCL tensor parallelism when the binary has `cuda nccl` and `HANZO_NO_NCCL` is not set.
 3. If NCCL is unavailable or disabled, mistral.rs uses layer mapping. CUDA pairs use P2P when the driver allows it; otherwise transfers stage through CPU.
-4. If `MISTRALRS_MN_GLOBAL_WORLD_SIZE` is set, NCCL tensor parallelism is extended across nodes.
-5. If `RING_CONFIG` is set and the binary has `ring`, the ring backend is available. If the binary also has NCCL, set `MISTRALRS_NO_NCCL=1` to force ring.
+4. If `HANZO_MN_GLOBAL_WORLD_SIZE` is set, NCCL tensor parallelism is extended across nodes.
+5. If `RING_CONFIG` is set and the binary has `ring`, the ring backend is available. If the binary also has NCCL, set `HANZO_NO_NCCL=1` to force ring.
 
 ## Start Here
 

@@ -16,7 +16,7 @@ When a model exceeds one GPU's memory after quantization, hanzo can split it acr
 With no manual mapping flags:
 
 1. One visible GPU runs the whole model on that GPU.
-2. Multiple visible CUDA GPUs use NCCL tensor parallelism when the binary was built with `cuda nccl` and `MISTRALRS_NO_NCCL` is not set.
+2. Multiple visible CUDA GPUs use NCCL tensor parallelism when the binary was built with `cuda nccl` and `HANZO_NO_NCCL` is not set.
 3. If NCCL is unavailable or disabled, mistral.rs uses layer mapping across the visible GPUs.
 
 The selected layout is printed in the startup logs.
@@ -37,10 +37,10 @@ If NCCL is not installed, omit `nccl`:
 cargo install mistralrs-cli --features "cuda flash-attn cudnn"
 ```
 
-To force the installer decision, use `MISTRALRS_INSTALL_NCCL=1` or `MISTRALRS_INSTALL_NO_NCCL=1`. To disable NCCL at runtime without rebuilding:
+To force the installer decision, use `HANZO_INSTALL_NCCL=1` or `HANZO_INSTALL_NO_NCCL=1`. To disable NCCL at runtime without rebuilding:
 
 ```bash
-MISTRALRS_NO_NCCL=1 mistralrs serve -m Qwen/Qwen3-32B --quant 4
+HANZO_NO_NCCL=1 mistralrs serve -m Qwen/Qwen3-32B --quant 4
 ```
 
 ## Select GPUs
