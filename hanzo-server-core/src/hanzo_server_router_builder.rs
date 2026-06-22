@@ -291,26 +291,15 @@ fn init_router(
         ])
         .allow_origin(allow_origin);
 
+    // One registration per route, keyed by the canonical `route_registry`
+    // constants (single source of truth). A prior merge left a parallel block of
+    // hardcoded path literals that overlapped these constants 1:1, which made
+    // axum panic ("Overlapping method route"). chat/completions and the
+    // Anthropic messages endpoint have no entry in the constant block below, so
+    // they lead here.
     let router = Router::new()
-        .route("/v1/chat/completions", post(chatcompletions))
-        .route("/v1/messages", post(crate::anthropic::messages))
-        .route("/v1/completions", post(completions))
-        .route("/v1/embeddings", post(embeddings))
-        .route("/v1/models", get(models))
-        .route("/v1/models/unload", post(unload_model))
-        .route("/v1/models/reload", post(reload_model))
-        .route("/v1/models/status", post(get_model_status))
-        .route("/v1/models/tune", post(tune_model))
-        .route("/v1/system/info", get(system_info))
-        .route("/v1/system/doctor", post(system_doctor))
-        .route("/health", get(health))
-        .route("/", get(health))
-        .route("/re_isq", post(re_isq))
-        .route("/v1/images/generations", post(image_generation))
-        .route("/v1/files", get(list_files))
-        .route("/v1/files/{id}", get(get_file).delete(delete_file))
-        .route("/v1/files/{id}/content", get(get_file_content))
-        .route("/v1/audio/speech", post(speech_generation))
+        .route(CHAT_COMPLETIONS_ROUTE.path, post(chatcompletions))
+        .route(ANTHROPIC_MESSAGES_ROUTE.path, post(crate::anthropic::messages))
         .route(COMPLETIONS_ROUTE.path, post(completions))
         .route(EMBEDDINGS_ROUTE.path, post(embeddings))
         .route(MODELS_ROUTE.path, get(models))
