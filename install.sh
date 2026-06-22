@@ -62,9 +62,9 @@ detect_os() {
 
 # Minimum required Rust version
 REQUIRED_RUST_VERSION="1.88"
-MISTRALRS_REPO_URL="https://github.com/EricLBuehler/mistral.rs"
-MISTRALRS_BRANCH="master"
-MISTRALRS_CLI_PACKAGE="mistralrs-cli"
+HANZO_REPO_URL="https://github.com/EricLBuehler/mistral.rs"
+HANZO_BRANCH="master"
+HANZO_CLI_PACKAGE="mistralrs-cli"
 
 # Check if Rust is installed
 check_rust() {
@@ -249,16 +249,16 @@ build_features() {
             cc_minor=$(echo "$cuda_cc" | cut -c2-)
             info "CUDA detected (compute capability: ${cc_major}.${cc_minor})"
 
-            if [ "${MISTRALRS_INSTALL_NO_NCCL:-}" = "1" ]; then
-                info "MISTRALRS_INSTALL_NO_NCCL=1 set - skipping nccl"
+            if [ "${HANZO_INSTALL_NO_NCCL:-}" = "1" ]; then
+                info "HANZO_INSTALL_NO_NCCL=1 set - skipping nccl"
             elif detect_nccl; then
                 features="$features nccl"
                 info "NCCL detected - enabling nccl for CUDA multi-GPU tensor parallelism"
-            elif [ "${MISTRALRS_INSTALL_NCCL:-}" = "1" ]; then
+            elif [ "${HANZO_INSTALL_NCCL:-}" = "1" ]; then
                 features="$features nccl"
-                warn "MISTRALRS_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless libnccl is on the linker path"
+                warn "HANZO_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless libnccl is on the linker path"
             else
-                warn "NCCL not found - skipping nccl. Install NCCL or set MISTRALRS_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
+                warn "NCCL not found - skipping nccl. Install NCCL or set HANZO_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
             fi
 
             # Check for cuDNN
