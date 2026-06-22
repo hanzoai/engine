@@ -2960,8 +2960,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-engine-ffi"
+version = "0.1.0"
+dependencies = [
+ "hanzo-engine",
+ "hanzo-server-core",
+ "tokio",
+]
+
+[[package]]
 name = "hanzo-flash-attn"
-version = "0.10.2"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "bindgen_cuda",
@@ -2972,7 +2981,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-flash-attn-build"
-version = "0.10.2"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "flate2",
@@ -2982,7 +2991,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-kernels"
-version = "0.10.2"
+version = "0.11.0"
 dependencies = [
  "glob",
  "hanzo-bindgen-cuda",
@@ -3022,7 +3031,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-metal-kernels"
-version = "0.10.2"
+version = "0.11.0"
 dependencies = [
  "block2",
  "half",
@@ -3036,7 +3045,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.10.3"
+version = "0.11.0"
 dependencies = [
  "accelerate-src",
  "ash",
@@ -3072,7 +3081,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-nn"
-version = "0.10.2"
+version = "0.11.0"
 dependencies = [
  "accelerate-src",
  "half",
@@ -3168,7 +3177,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-rocm-kernels"
-version = "0.10.2"
+version = "0.11.0"
 dependencies = [
  "dirs 5.0.1",
  "half",
@@ -3248,7 +3257,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ug"
-version = "0.10.2"
+version = "0.11.0"
 dependencies = [
  "ug",
  "ug-cuda",
