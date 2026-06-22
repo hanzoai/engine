@@ -227,7 +227,7 @@ pub fn set_immediate_isq_with_pool(
 /// - GGML types (Q2K-Q8K) and F8E4M3: `rayon::current_num_threads()` (CPU quantization)
 /// - HQQ/AFQ: 1 thread (GPU quantization, serialized by `QuantizeOntoGuard`)
 pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize) {
-    let num_threads = if std::env::var("ISQ_SINGLETHREAD").is_ok() {
+    let num_threads = if std::env::var("HANZO_ISQ_SINGLETHREAD").is_ok() {
         1
     } else if let Some(ty) = ty {
         ty.get_max_isq_cpu_threads()
@@ -854,10 +854,25 @@ impl TryFrom<GgmlDType> for IsqType {
             GgmlDType::Q8_1 => Ok(Self::Q8_1),
             GgmlDType::Q8K => Ok(Self::Q8K),
             GgmlDType::MXFP4 => Ok(Self::MXFP4),
-            // ISQ is a fixed allowlist (the arms above); every other dtype
-            // (IQ*/TQ*/NVFP4/Q1_0/BF16/F16/F32/IQ4_NL/IQ4_XS) is not an ISQ
-            // target. Catch-all so new codec types reject cleanly, not break the build.
-            _ => hanzo_ml::bail!("Expected valid GGML ISQ type."),
+            GgmlDType::IQ4_NL
+            | GgmlDType::IQ4_XS
+            | GgmlDType::BF16
+            | GgmlDType::F32
+            | GgmlDType::F16
+            // IQ / ternary / 1-bit / NVFP4 codec types are decode-only, not ISQ targets.
+            | GgmlDType::IQ2_XXS
+            | GgmlDType::IQ2_XS
+            | GgmlDType::IQ3_XXS
+            | GgmlDType::IQ1_S
+            | GgmlDType::IQ3_S
+            | GgmlDType::IQ2_S
+            | GgmlDType::IQ1_M
+            | GgmlDType::TQ1_0
+            | GgmlDType::TQ2_0
+            | GgmlDType::NVFP4
+            | GgmlDType::Q1_0 => {
+                hanzo_ml::bail!("Expected valid GGML ISQ type.")
+            }
         }
     }
 }
