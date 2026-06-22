@@ -351,27 +351,10 @@ impl QuantizedSerde for GgufMatMul {
             {
                 let w = qw.data()?.to_vec();
                 let w_shape = qw.shape().dims();
-                let dtype: u32 = match qw.dtype() {
-                    GgmlDType::F32 => 0,
-                    GgmlDType::F16 => 1,
-                    GgmlDType::Q4_0 => 2,
-                    GgmlDType::Q4_1 => 3,
-                    GgmlDType::Q5_0 => 6,
-                    GgmlDType::Q5_1 => 7,
-                    GgmlDType::Q8_0 => 8,
-                    GgmlDType::Q8_1 => 9,
-                    GgmlDType::Q2K => 10,
-                    GgmlDType::Q3K => 11,
-                    GgmlDType::Q4K => 12,
-                    GgmlDType::Q5K => 13,
-                    GgmlDType::Q6K => 14,
-                    GgmlDType::Q8K => 15,
-                    // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
-                    GgmlDType::BF16 => 30,
-                    GgmlDType::MXFP4 => 39,
-                    GgmlDType::IQ4_NL => 20,
-                    GgmlDType::IQ4_XS => 23,
-                };
+                // GGML type id from the single source of truth (the
+                // `for_each_quant!` table in hanzo-ml); a hand-rolled match here
+                // drifts and silently drops new quant types.
+                let dtype: u32 = qw.dtype().to_u32();
 
                 let mut buffer = Vec::new();
 

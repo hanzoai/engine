@@ -854,13 +854,10 @@ impl TryFrom<GgmlDType> for IsqType {
             GgmlDType::Q8_1 => Ok(Self::Q8_1),
             GgmlDType::Q8K => Ok(Self::Q8K),
             GgmlDType::MXFP4 => Ok(Self::MXFP4),
-            GgmlDType::IQ4_NL
-            | GgmlDType::IQ4_XS
-            | GgmlDType::BF16
-            | GgmlDType::F32
-            | GgmlDType::F16 => {
-                hanzo_ml::bail!("Expected valid GGML ISQ type.")
-            }
+            // ISQ is a fixed allowlist (the arms above); every other dtype
+            // (IQ*/TQ*/NVFP4/Q1_0/BF16/F16/F32/IQ4_NL/IQ4_XS) is not an ISQ
+            // target. Catch-all so new codec types reject cleanly, not break the build.
+            _ => hanzo_ml::bail!("Expected valid GGML ISQ type."),
         }
     }
 }
