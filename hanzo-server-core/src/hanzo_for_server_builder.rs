@@ -17,6 +17,37 @@ use tracing::{debug, info, warn};
 use crate::types::{LoadedPipeline, SharedHanzoState};
 use std::collections::{HashMap, HashSet};
 
+/// License gate for every embedder of the engine (node, CLI, pyo3) that goes through the server
+/// builder. With `license-enforce`, a missing/invalid/expired/wrong-app license aborts the build so
+/// the engine never opens its listener. Without it (dev), this is a no-op note.
+#[cfg(feature = "license-enforce")]
+fn enforce_license() -> Result<()> {
+    match hanzo_engine::load_and_verify_license() {
+        Ok(license) => {
+            info!(
+                "license OK: app={} holder={} exp={}",
+                license.app_id, license.holder, license.exp
+            );
+            Ok(())
+        }
+        Err(e) => {
+            anyhow::bail!(
+                "engine license verification failed: {e}. This engine build ({}) requires a valid \
+                 Hanzo-issued license token (set {} or {}). Refusing to start.",
+                hanzo_engine::LICENSE_EXPECTED_APP_ID,
+                hanzo_engine::license::LICENSE_TOKEN_ENV,
+                hanzo_engine::license::LICENSE_FILE_ENV,
+            )
+        }
+    }
+}
+
+#[cfg(not(feature = "license-enforce"))]
+fn enforce_license() -> Result<()> {
+    debug!("license enforcement disabled (dev build)");
+    Ok(())
+}
+
 /// Configuration for a single model in a multi-model setup
 #[derive(Clone, serde::Deserialize)]
 pub struct ModelConfig {
@@ -104,6 +135,7 @@ pub mod defaults {
     pub const PAGED_ATTN_CPU: bool = false;
     pub const PAGED_ATTN_CUDA: bool = true;
     pub const PAGED_ATTN_METAL: bool = false;
+    pub const PAGED_ATTN_ROCM: bool = true;
     pub const CPU: bool = false;
     pub const ENABLE_SEARCH: bool = false;
     pub const SEARCH_EMBEDDING_MODEL: Option<SearchEmbeddingModel> = None;
@@ -665,6 +697,7 @@ impl HanzoForServerBuilder {
     ///     .await?;
     /// ```
     pub async fn build(self) -> Result<SharedHanzoState> {
+        enforce_license()?;
         // Determine if we're in single-model or multi-model mode
         if !self.models.is_empty() {
             self.build_multi_model().await
@@ -1379,6 +1412,8 @@ fn configure_paged_attn(device: &Device, paged_attn: Option<bool>) -> bool {
         paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA)
     } else if device.is_metal() {
         paged_attn.unwrap_or(defaults::PAGED_ATTN_METAL)
+    } else if device.is_rocm() {
+        paged_attn.unwrap_or(defaults::PAGED_ATTN_ROCM)
     } else {
         false
     }

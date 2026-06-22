@@ -66,9 +66,29 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin 
     fn cache_mut(&mut self) -> &mut EitherCache;
     fn max_seq_len(&self) -> usize;
     fn config(&self) -> &ModelConfigMetadata;
-    #[cfg(feature = "cuda")]
+    /// Whether this decoder is safe to run under a decode-graph fast path (CUDA
+    /// graph capture/replay, or the Metal equivalent in `metal_graph.rs`).
+    ///
+    /// The prerequisite is that the per-token forward is position/length invariant
+    /// given stable device metadata buffers: paged attention reads context length
+    /// from a device buffer, RoPE positions are sourced from a device buffer, and
+    /// there is no host-shape-dependent control flow. Models implementing this set
+    /// it to `true`; the attribute is enabled for both CUDA and Metal so the same
+    /// answer drives both backends.
+    ///
+    /// Compiled in for `cuda` or `metal` only (the only backends with a decode-graph
+    /// fast path). Defaults to `false`.
+    #[cfg(any(feature = "cuda", feature = "metal"))]
     fn supports_cuda_decode_graphs(&self) -> bool {
         false
+    }
+    /// Metal-backend counterpart gate. Defaults to the backend-agnostic
+    /// [`Self::supports_cuda_decode_graphs`] answer so a decoder vetted as
+    /// graph-safe is eligible on Metal too; override to `false` for models with
+    /// Metal-specific hazards.
+    #[cfg(feature = "metal")]
+    fn supports_metal_decode_graphs(&self) -> bool {
+        self.supports_cuda_decode_graphs()
     }
     fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
         Arc::new(self.config().clone())

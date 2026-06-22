@@ -11,8 +11,8 @@ use crate::pipeline::{ChatTemplate, EmbeddingModulePaths, Modalities, SupportedM
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::speech_models::{
-    CodecConfig, DiaConfig, DiaPipeline, Qwen3TtsConfig, Qwen3TtsPipeline, SpeechGenerationOutput,
-    SpeechLoaderType,
+    DiaConfig, DiaPipeline, Qwen3TtsCodecConfig, Qwen3TtsConfig, Qwen3TtsPipeline,
+    SpeechGenerationOutput, SpeechLoaderType,
 };
 use crate::utils::progress::ProgressScopeGuard;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
@@ -40,7 +40,68 @@ use tokio::sync::Mutex;
 pub struct SpeechModelPaths {
     weights: Vec<PathBuf>,
     config: PathBuf,
-    dac_config: Option<PathBuf>,
+    /// For qwen3_tts: the speech_tokenizer (codec) config.json. None for Dia.
+    codec_config: Option<PathBuf>,
+    /// For qwen3_tts: the BPE tokenizer files (tokenizer.json or vocab.json+merges.txt dir).
+    tokenizer_dir: Option<PathBuf>,
+}
+
+enum SpeechModel {
+    Dia(DiaPipeline),
+    Qwen3Tts {
+        pipeline: Qwen3TtsPipeline,
+        tokenizer: Tokenizer,
+    },
+}
+
+/// Build the Qwen3 ByteLevel-BPE tokenizer from a directory containing `vocab.json` + `merges.txt`
+/// + `tokenizer_config.json`. Special tokens (`<|im_start|>`, `<tts_pad>`, ...) are registered from
+/// `added_tokens_decoder` so the assistant chat template tokenizes to the same ids as transformers.
+fn load_qwen3_tts_tokenizer(dir: &std::path::Path) -> anyhow::Result<Tokenizer> {
+    use tokenizers::{
+        decoders::byte_level::ByteLevel as ByteLevelDecoder,
+        models::bpe::BPE,
+        pre_tokenizers::byte_level::ByteLevel,
+        tokenizer::{AddedToken, Tokenizer},
+    };
+
+    // If a prebuilt tokenizer.json exists, prefer it.
+    let tok_json = dir.join("tokenizer.json");
+    if tok_json.exists() {
+        return Tokenizer::from_file(&tok_json).map_err(anyhow::Error::msg);
+    }
+
+    let vocab = dir.join("vocab.json");
+    let merges = dir.join("merges.txt");
+    let bpe = BPE::from_file(
+        vocab.to_str().unwrap(),
+        merges.to_str().unwrap(),
+    )
+    .unk_token("<|endoftext|>".to_string())
+    .build()
+    .map_err(anyhow::Error::msg)?;
+
+    let mut tokenizer = Tokenizer::new(bpe);
+    // Qwen uses ByteLevel pre-tokenizer/decoder with add_prefix_space=false.
+    tokenizer.with_pre_tokenizer(Some(ByteLevel::new(false, true, true)));
+    tokenizer.with_decoder(Some(ByteLevelDecoder::new(true, true, true)));
+
+    // Register special tokens from tokenizer_config.json's added_tokens_decoder.
+    let cfg_path = dir.join("tokenizer_config.json");
+    if let Ok(s) = std::fs::read_to_string(&cfg_path) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+            if let Some(map) = v.get("added_tokens_decoder").and_then(|m| m.as_object()) {
+                let mut added = Vec::new();
+                for (_id, info) in map {
+                    if let Some(content) = info.get("content").and_then(|c| c.as_str()) {
+                        added.push(AddedToken::from(content.to_string(), true));
+                    }
+                }
+                tokenizer.add_special_tokens(&added);
+            }
+        }
+    }
+    Ok(tokenizer)
 }
 
 impl ModelPaths for SpeechModelPaths {
@@ -145,31 +206,6 @@ impl InputsProcessor for SpeechInputsProcessor {
     }
 }
 
-enum SpeechModel {
-    Dia(DiaPipeline),
-    Qwen3Tts(Qwen3TtsPipeline),
-}
-
-impl SpeechModel {
-    fn generate(
-        &self,
-        prompt: &str,
-        cfg: &SpeechGenerationConfig,
-    ) -> hanzo_ml::Result<SpeechGenerationOutput> {
-        match self {
-            Self::Dia(m) => m.generate(prompt, cfg),
-            Self::Qwen3Tts(m) => m.generate(prompt, cfg),
-        }
-    }
-
-    fn device(&self) -> &Device {
-        match self {
-            Self::Dia(m) => m.device(),
-            Self::Qwen3Tts(m) => m.device(),
-        }
-    }
-}
-
 pub struct SpeechPipeline {
     model_id: String,
     model: SpeechModel,
@@ -200,8 +236,10 @@ impl Loader for SpeechLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         let paths: anyhow::Result<Box<dyn ModelPaths>> = {
-            // Main weights first, DAC is the final one.
+            // Main weights first, codec/DAC is the final one.
             let mut weights = Vec::new();
+            let mut codec_config = None;
+            let mut tokenizer_dir = None;
 
             // Main model
             let config = {
@@ -223,48 +261,59 @@ impl Loader for SpeechLoader {
                 config
             };
 
-            // DAC model
-            {
-                let api = ApiBuilder::new()
-                    .with_progress(!silent)
-                    .with_token(get_token(&token_source)?)
-                    .build()?;
-                let revision = revision.unwrap_or("main".to_string());
-
-                // Apply default here
-                let dac_model = self
-                    .dac_model_id
-                    .clone()
-                    .unwrap_or_else(|| match self.arch {
-                        SpeechLoaderType::Dia => "hanzoai/dac_44khz".to_string(),
-                        SpeechLoaderType::Qwen3Tts => {
-                            "Qwen/Qwen3-TTS-Tokenizer-12Hz".to_string()
-                        }
-                    });
-
-                let api = api.repo(Repo::with_revision(
-                    dac_model.clone(),
-                    RepoType::Model,
-                    revision.clone(),
-                ));
-                let model_id = std::path::Path::new(&dac_model);
-
-                let weight = api_get_file!(api, "model.safetensors", &model_id, &revision);
-                weights.push(weight);
-
-                let dac_config = match self.arch {
-                    SpeechLoaderType::Qwen3Tts => {
-                        Some(api_get_file!(api, "config.json", &model_id, &revision))
-                    }
-                    SpeechLoaderType::Dia => None,
-                };
-
-                Ok(Box::new(SpeechModelPaths {
-                    weights,
-                    config,
-                    dac_config,
-                }))
+            match self.arch {
+                SpeechLoaderType::Dia => {
+                    // DAC model lives in a separate repo.
+                    let api = ApiBuilder::new()
+                        .with_progress(!silent)
+                        .with_token(get_token(&token_source)?)
+                        .build()?;
+                    let revision = revision.unwrap_or("main".to_string());
+                    let dac_model = self
+                        .dac_model_id
+                        .clone()
+                        .unwrap_or_else(|| "hanzoai/dac_44khz".to_string());
+                    let api = api.repo(Repo::with_revision(
+                        dac_model.clone(),
+                        RepoType::Model,
+                        revision.clone(),
+                    ));
+                    let model_id = std::path::Path::new(&dac_model);
+                    let weight = api_get_file!(api, "model.safetensors", &model_id, &revision);
+                    weights.push(weight);
+                }
+                SpeechLoaderType::Qwen3Tts => {
+                    // The codec ("speech_tokenizer") + BPE tokenizer live in the SAME repo.
+                    let api = ApiBuilder::new()
+                        .with_progress(!silent)
+                        .with_token(get_token(&token_source)?)
+                        .build()?;
+                    let revision = revision.unwrap_or("main".to_string());
+                    let api = api.repo(Repo::with_revision(
+                        self.model_id.to_string(),
+                        RepoType::Model,
+                        revision.clone(),
+                    ));
+                    let model_id = std::path::Path::new(&self.model_id);
+                    let codec_weight =
+                        api_get_file!(api, "speech_tokenizer/model.safetensors", &model_id, &revision);
+                    let codec_cfg =
+                        api_get_file!(api, "speech_tokenizer/config.json", &model_id, &revision);
+                    let vocab = api_get_file!(api, "vocab.json", &model_id, &revision);
+                    let _merges = api_get_file!(api, "merges.txt", &model_id, &revision);
+                    let _tok_cfg = api_get_file!(api, "tokenizer_config.json", &model_id, &revision);
+                    weights.push(codec_weight);
+                    codec_config = Some(codec_cfg);
+                    tokenizer_dir = Some(vocab.parent().unwrap().to_path_buf());
+                }
             }
+
+            Ok(Box::new(SpeechModelPaths {
+                weights,
+                config,
+                codec_config,
+                tokenizer_dir,
+            }))
         };
         self.load_model_from_path(
             &paths?,
@@ -301,8 +350,6 @@ impl Loader for SpeechLoader {
 
         hanzo_quant::set_immediate_isq(in_situ_quant, vec![Regex::new(".*")?]);
 
-        let config_str = std::fs::read_to_string(&paths.config)?;
-
         #[cfg(feature = "cuda")]
         if let Device::Cuda(dev) = &device {
             unsafe { dev.disable_event_tracking() };
@@ -322,7 +369,7 @@ impl Loader for SpeechLoader {
             DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None, &available_devices)?;
         let dtype = mapper.get_min_dtype(dtype)?;
 
-        // Last weight is the dac.
+        // Last weight is the codec (DAC for Dia, speech_tokenizer for qwen3_tts).
         let model_weights = paths.weights[..paths.weights.len() - 1].to_vec();
         let vb = from_mmaped_safetensors(
             model_weights,
@@ -336,29 +383,33 @@ impl Loader for SpeechLoader {
             Arc::new(|_| DeviceForLoadTensor::Base),
         )?;
 
-        let dac_path = paths.weights.last().unwrap();
-
         let model = match self.arch {
             SpeechLoaderType::Dia => {
-                let cfg: DiaConfig = serde_json::from_str(&config_str)?;
+                let cfg: DiaConfig = serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
                 let dac_vb = unsafe {
-                    VarBuilder::from_mmaped_safetensors(&[dac_path], dtype, device)?
+                    VarBuilder::from_mmaped_safetensors(
+                        &[paths.weights.last().unwrap()],
+                        dtype,
+                        device,
+                    )?
                 };
-                SpeechModel::Dia(DiaPipeline::new(&cfg, vb, dac_vb)?)
+                let pipeline = DiaPipeline::new(&cfg, vb, dac_vb)?;
+                SpeechModel::Dia(pipeline)
             }
             SpeechLoaderType::Qwen3Tts => {
-                let cfg: Qwen3TtsConfig = serde_json::from_str(&config_str)?;
-                let codec_config_str = std::fs::read_to_string(
-                    paths
-                        .dac_config
-                        .as_ref()
-                        .expect("Qwen3-TTS requires a codec config.json"),
-                )?;
-                let codec_cfg: CodecConfig = serde_json::from_str(&codec_config_str)?;
+                let cfg: Qwen3TtsConfig =
+                    serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
+                let codec_cfg_path = paths
+                    .codec_config
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("qwen3_tts requires speech_tokenizer config"))?;
+                let codec_cfg: Qwen3TtsCodecConfig =
+                    serde_json::from_str(&std::fs::read_to_string(codec_cfg_path)?)?;
+                // The codec decoder ships f32 weights; load it in f32 for numerical fidelity.
                 let codec_vb = from_mmaped_safetensors(
-                    vec![dac_path.clone()],
+                    vec![paths.weights.last().unwrap().clone()],
                     Vec::new(),
-                    Some(dtype),
+                    Some(hanzo_ml::DType::F32),
                     device,
                     vec![None],
                     silent,
@@ -366,7 +417,14 @@ impl Loader for SpeechLoader {
                     |_| true,
                     Arc::new(|_| DeviceForLoadTensor::Base),
                 )?;
-                SpeechModel::Qwen3Tts(Qwen3TtsPipeline::new(&cfg, &codec_cfg, vb, codec_vb)?)
+                let tokenizer = load_qwen3_tts_tokenizer(
+                    paths
+                        .tokenizer_dir
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("qwen3_tts requires a tokenizer"))?,
+                )?;
+                let pipeline = Qwen3TtsPipeline::new(&cfg, &codec_cfg, vb, codec_vb)?;
+                SpeechModel::Qwen3Tts { pipeline, tokenizer }
             }
         };
 
@@ -444,7 +502,10 @@ impl CacheManagerMixin for SpeechPipeline {
 
 impl MetadataMixin for SpeechPipeline {
     fn device(&self) -> Device {
-        self.model.device().clone()
+        match &self.model {
+            SpeechModel::Dia(m) => m.device().clone(),
+            SpeechModel::Qwen3Tts { pipeline, .. } => pipeline.device().clone(),
+        }
     }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
@@ -479,7 +540,25 @@ impl Pipeline for SpeechPipeline {
                 pcm,
                 rate,
                 channels,
-            } = self.model.generate(&prompt, &self.cfg)?;
+            } = match &self.model {
+                SpeechModel::Dia(m) => m.generate(&prompt, &self.cfg)?,
+                SpeechModel::Qwen3Tts { pipeline, tokenizer } => {
+                    // Apply the assistant chat template, tokenize, and pass the id stream through.
+                    let templated = format!(
+                        "<|im_start|>assistant\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+                    );
+                    let enc = tokenizer
+                        .encode_fast(templated, false)
+                        .map_err(hanzo_ml::Error::msg)?;
+                    let id_stream = enc
+                        .get_ids()
+                        .iter()
+                        .map(|i| i.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    pipeline.generate(&id_stream, &self.cfg)?
+                }
+            };
             pcms.push(pcm);
             rates.push(rate);
             channels_all.push(channels);

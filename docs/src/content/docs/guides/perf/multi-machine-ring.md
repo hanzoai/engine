@@ -15,7 +15,7 @@ The `ring` feature must be compiled in:
 cargo install --path hanzo-cli --features "cuda flash-attn ring"
 ```
 
-If the binary is also built with `nccl`, set `MISTRALRS_NO_NCCL=1` when launching so `Comm::from_device` selects the ring backend.
+If the binary is also built with `nccl`, set `HANZO_NO_NCCL=1` when launching so `Comm::from_device` selects the ring backend.
 
 ## Configuration
 

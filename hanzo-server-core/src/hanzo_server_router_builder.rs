@@ -291,15 +291,12 @@ fn init_router(
         ])
         .allow_origin(allow_origin);
 
-    // One registration per route, keyed by the canonical `route_registry`
-    // constants (single source of truth). A prior merge left a parallel block of
-    // hardcoded path literals that overlapped these constants 1:1, which made
-    // axum panic ("Overlapping method route"). chat/completions and the
-    // Anthropic messages endpoint have no entry in the constant block below, so
-    // they lead here.
     let router = Router::new()
-        .route(CHAT_COMPLETIONS_ROUTE.path, post(chatcompletions))
-        .route(ANTHROPIC_MESSAGES_ROUTE.path, post(crate::anthropic::messages))
+        // chat/completions + messages have no route-registry constant yet, so
+        // they stay as literals; everything else is registered once via its
+        // *_ROUTE constant below (duplicating them here panics axum).
+        .route("/v1/chat/completions", post(chatcompletions))
+        .route("/v1/messages", post(crate::anthropic::messages))
         .route(COMPLETIONS_ROUTE.path, post(completions))
         .route(EMBEDDINGS_ROUTE.path, post(embeddings))
         .route(MODELS_ROUTE.path, get(models))
