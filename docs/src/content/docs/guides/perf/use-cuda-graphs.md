@@ -12,7 +12,7 @@ CUDA graphs capture a fixed decode step once and replay it with new token and me
 CUDA graphs are enabled by default for supported CUDA decode paths. To disable them for comparison or debugging:
 
 ```bash
-MISTRALRS_CUDA_GRAPHS=0 mistralrs serve --paged-attn on -m <model>
+HANZO_CUDA_GRAPHS=0 mistralrs serve --paged-attn on -m <model>
 ```
 
 They require a CUDA build and a CUDA device. They currently apply to decode, not prompt prefill.
@@ -44,7 +44,7 @@ CUDA graphs are most useful with PagedAttention because the paged metadata gives
 On CUDA, PagedAttention uses FlashInfer-backed paged kernels for supported decode paths by default. CUDA graphs can replay those kernels as part of the decode graph. To compare against the non-FlashInfer paged path:
 
 ```bash
-MISTRALRS_FLASHINFER_DECODE=0 mistralrs serve --paged-attn on -m <model>
+HANZO_FLASHINFER_DECODE=0 mistralrs serve --paged-attn on -m <model>
 ```
 
 ## When it helps
