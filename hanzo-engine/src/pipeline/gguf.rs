@@ -801,14 +801,16 @@ impl GGUFPipeline {
     /// the ROCm decode graph captures. XLora and the alternate-signature variants
     /// (Phi3/Starcoder2) are excluded from the graph fast path for v1.
     fn model_supports_rocm_decode_graph(&self) -> bool {
+        // MoE variants are intentionally excluded. Their decode forward (per-layer router sort/top-k
+        // + on-device-ids expert gather across all layers) captures into a graph well past the
+        // ~200-kernel-node count where the ROCm HIP runtime's `GraphExec::UpdateStreams` fails on
+        // every `hipGraphLaunch` (ROCm/hip#3887, RDNA, no fix): the replay reads stale state and
+        // drifts, then aborts in the WSL HSA thunk. Dense variants stay under that threshold and
+        // replay correctly (Qwen3-0.6B-Q8_0: 104 T/s, byte-coherent). MoE decodes eager instead,
+        // which is both correct and faster here than the broken graph path.
         matches!(
             self.model,
-            Model::Llama(_)
-                | Model::Phi2(_)
-                | Model::Qwen(_)
-                | Model::Qwen3(_)
-                | Model::Qwen3MoE(_)
-                | Model::Qwen35(_)
+            Model::Llama(_) | Model::Phi2(_) | Model::Qwen(_) | Model::Qwen3(_)
         )
     }
 
