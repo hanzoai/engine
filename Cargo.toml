@@ -227,3 +227,8 @@ debug = true
 [profile.dev]
 debug = true
 opt-level = 3
+
+[patch.crates-io]
+# hanzoai/rocm-rs fork: rocblas_status FFI return uses the bindgen type instead of
+# a hardcoded u32, so it's correct on Linux (u32) AND native Windows/MSVC (i32).
+rocm-rs = { path = "../rocm-rs" }
