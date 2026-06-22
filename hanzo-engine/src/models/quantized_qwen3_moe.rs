@@ -119,6 +119,7 @@ impl LayerWeights {
         x: &Tensor,
         mask: &AttentionMask,
         start_offsets: &[usize],
+        positions: &Tensor,
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
@@ -146,15 +147,39 @@ impl LayerWeights {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary.forward_qk_norm(
-            &q,
-            &k,
-            self.q_norm.weight(),
-            self.k_norm.weight(),
-            self.q_norm.eps(),
-            self.k_norm.eps(),
-            start_offsets,
-        )?;
+        // Decode (single new token) reads the RoPE index from a DEVICE positions
+        // tensor instead of baking the host `start_offsets` scalar into the launch,
+        // so a captured decode graph replays with the advancing position (the graph
+        // runner refreshes the positions buffer in place each token). Without this
+        // the captured RoPE freezes at the warmup position and every replayed token
+        // is rotated wrong -> attention drifts into garbage. Mirrors the dense
+        // `quantized_qwen3` path; prompt/prefill keeps the host-offset form.
+        let (q, k) = if seq_len == 1 {
+            let positions = if positions.device().same_device(q.device()) {
+                positions.clone()
+            } else {
+                positions.to_device(q.device())?
+            };
+            self.rotary.forward_qk_norm_positions(
+                &q,
+                &k,
+                self.q_norm.weight(),
+                self.k_norm.weight(),
+                self.q_norm.eps(),
+                self.k_norm.eps(),
+                &positions,
+            )?
+        } else {
+            self.rotary.forward_qk_norm(
+                &q,
+                &k,
+                self.q_norm.weight(),
+                self.k_norm.weight(),
+                self.q_norm.eps(),
+                self.k_norm.eps(),
+                start_offsets,
+            )?
+        };
 
         let (q, k, v) = (
             q.to_dtype(self.dtype)?,
@@ -508,6 +533,28 @@ impl ModelWeights {
     ) -> Result<Tensor> {
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let cache = &mut self.cache.normal().0;
+        // Decode reads RoPE positions from a stable device tensor so a captured
+        // graph replays with the advancing position; when the caller supplies
+        // `metadata.rope_positions` (the ROCm/CUDA decode graph path) use that
+        // buffer verbatim (the graph runner refreshes it in place). Synthesizing a
+        // fresh tensor each forward would freeze the captured positions at the
+        // warmup value and corrupt every replayed token. Mirrors `quantized_qwen3`.
+        let positions = match metadata
+            .as_ref()
+            .and_then(|(_, meta)| meta.rope_positions.as_ref())
+            .and_then(|positions| positions.get(&self.device.location()))
+        {
+            Some(positions) => positions.clone(),
+            None => {
+                let pos = start_offsets
+                    .iter()
+                    .copied()
+                    .map(u32::try_from)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(hanzo_ml::Error::wrap)?;
+                Tensor::from_vec(pos, start_offsets.len(), &self.device)?
+            }
+        };
         let mask = CausalMasker.make_causal_mask(
             x,
             metadata
@@ -542,6 +589,7 @@ impl ModelWeights {
                 &x,
                 &mask.get(x.device()),
                 start_offsets,
+                &positions,
                 &mut cache[i],
                 metadata
                     .as_ref()
