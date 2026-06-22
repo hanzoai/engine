@@ -206,8 +206,8 @@ def _cuda_features() -> list[str]:
     features = ["cuda"]
     if (
         platform.system().lower() == "linux"
-        and not _env_truthy("MISTRALRS_BUILD_NO_NCCL")
-        and (_detect_nccl() or _env_truthy("MISTRALRS_BUILD_NCCL"))
+        and not _env_truthy("HANZO_BUILD_NO_NCCL")
+        and (_detect_nccl() or _env_truthy("HANZO_BUILD_NCCL"))
     ):
         features.append("nccl")
     version = _cuda_version()
