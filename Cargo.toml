@@ -2,6 +2,7 @@
 members = [
     "hanzo",
     "hanzo-engine",
+    "hanzo-engine-ffi",
     "hanzo-server-core",
     "hanzo-server",
     "hanzo-cli",

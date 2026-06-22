@@ -48,16 +48,43 @@ fn system_memory_bytes() -> Result<(usize, usize)> {
 
 pub struct MemoryUsage;
 
+/// macOS total physical RAM via the `hw.memsize` sysctl. Used as a fallback when
+/// sysinfo reports 0 on macOS 26 (see `MemoryUsage::query` `Device::Cpu` arm).
+#[cfg(target_os = "macos")]
+fn macos_total_memory() -> Option<usize> {
+    let out = std::process::Command::new("sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()?;
+    String::from_utf8(out.stdout).ok()?.trim().parse::<usize>().ok()
+}
+
 impl MemoryUsage {
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     pub fn query(&self, device: &Device) -> Result<DeviceMemory> {
         match device {
             Device::Cpu => {
                 let sys = System::new_all();
-                Ok(DeviceMemory::Discrete {
-                    total: usize::try_from(sys.total_memory())?,
-                    free: usize::try_from(sys.available_memory())?,
-                })
+                #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+                let mut total = usize::try_from(sys.total_memory())?;
+                #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+                let mut free = usize::try_from(sys.available_memory())?;
+                // sysinfo 0.36 reports 0 for system RAM on macOS 26 (the mach
+                // host_statistics path it uses returns nothing there), which makes
+                // auto device mapping think nothing fits. `total` and `available`
+                // can each independently read 0, so patch them separately: total
+                // from the `hw.memsize` sysctl (always works), and available as
+                // ~90% of total (a safe device-fit budget on a 64GB box).
+                #[cfg(target_os = "macos")]
+                {
+                    if total == 0 {
+                        total = macos_total_memory().unwrap_or(0);
+                    }
+                    if free == 0 {
+                        free = total - total / 10;
+                    }
+                }
+                Ok(DeviceMemory::Discrete { total, free })
             }
             #[cfg(feature = "vulkan")]
             Device::Vulkan(_) => {
