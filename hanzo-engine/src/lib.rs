@@ -80,6 +80,7 @@ mod perf_flags;
 mod pipeline;
 mod prefix_cacher;
 pub mod reasoning_parsers;
+pub mod precompile_bridge;
 mod request;
 mod response;
 mod sampler;
@@ -296,6 +297,10 @@ pub use pipeline::{
     NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
     SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality, TokenSource,
     UQFF_MULTI_FILE_DELIMITER,
+};
+pub use precompile_bridge::{
+    embed, embedding_engine_registered, engine_handle, infer, inference_engine_registered,
+    parse_model_spec, register_engine, EngineError,
 };
 pub use request::{
     ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
@@ -1801,8 +1806,14 @@ impl Hanzo {
         }
 
         if let Some(engine_instance) = engines.remove(&resolved_model_id) {
-            // Send terminate signal to the engine
-            let _ = engine_instance.sender.blocking_send(Request::Terminate);
+            // Send terminate signal to the engine. Use try_send (not
+            // blocking_send): the model is already detached from the map, the
+            // channel has ample capacity (10_000) so a single Terminate never
+            // blocks in practice, and blocking_send panics if this is ever
+            // reached from within a Tokio runtime (matching `unload_model` and
+            // the engine's own try_send convention). A full/closed channel just
+            // means the engine is already winding down — removal still stands.
+            let _ = engine_instance.sender.try_send(Request::Terminate);
 
             // If this was the default engine, set a new default
             let mut default_lock = self
