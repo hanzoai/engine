@@ -224,6 +224,13 @@ hex = "0.4.3"
 serde_yaml = "0.9.34"
 tempfile = "3.19"
 
+[patch.crates-io]
+# hanzoai/rocm-rs fork: rocblas/rocrand/rocfft status+enum FFI types use the
+# bindgen type instead of a hardcoded u32 — correct on Linux (u32) AND native
+# Windows/MSVC (i32) — plus edition-2024 unsafe blocks and a gated amdgcn
+# GPU-sort kernel. No-op on Linux; unblocks the native-Windows ROCm build.
+rocm-rs = { git = "https://github.com/hanzoai/rocm-rs", rev = "09d39b0" }
+
 [profile.quick]
 inherits = "release"
 lto = false

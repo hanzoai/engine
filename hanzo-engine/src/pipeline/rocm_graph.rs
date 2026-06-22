@@ -93,14 +93,26 @@ impl RocmGraphHandle {
             // A capture invalidated mid-flight (e.g. hipErrorStreamCaptureImplicit from a
             // host-syncing op) is terminated by this single call. Do NOT call
             // hipStreamEndCapture again -- a second call on a stream the runtime still
-            // flags as capturing SIGSEGVs inside libamdhip64 on the WSL path. Drain the
-            // device here so the eager fallback starts from a clean state, and let the
-            // caller treat the returned Err as "fell back to eager" without re-discarding.
+            // flags as capturing SIGSEGVs inside libamdhip64 on the WSL path.
+            //
+            // Recovery MUST be device-wide, not stream-level: a STREAM sync
+            // (`device.synchronize()`) on a stream the runtime still flags as capturing
+            // returns hipErrorStreamCaptureUnsupported and leaves the poison in place, so
+            // the next eager launch cascades to HIP 901 (StreamCaptureInvalidated) and
+            // SIGSEGVs. `hipDeviceSynchronize` is capture-agnostic and drains the whole
+            // device; `hipGetLastError` clears the sticky error the aborted capture
+            // latched, so the eager fallback resumes from a clean slate. A discarded
+            // graph handle must also be destroyed (EndCapture can hand back a non-null
+            // invalid graph).
+            if !graph.is_null() {
+                unsafe {
+                    let _ = hip::hipGraphDestroy(graph);
+                }
+            }
             unsafe {
                 let _ = hip::hipDeviceSynchronize();
                 let _ = hip::hipGetLastError();
             }
-            let _ = device.synchronize();
             return Err(hanzo_ml::Error::msg(format!("{result:?}"))
                 .context("ROCm graph stream end capture failed (capture invalidated)"));
         }

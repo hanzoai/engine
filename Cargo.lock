@@ -5886,8 +5886,7 @@ dependencies = [
 [[package]]
 name = "rocm-rs"
 version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98a18e8f29858c4500ba06282a64ce3f5f1844b652e3b4c0773daf372ce9b931"
+source = "git+https://github.com/hanzoai/rocm-rs?rev=09d39b0#09d39b010cdb0e98ea9df0e76f3a80f5f969aeaa"
 dependencies = [
  "bindgen 0.71.1",
  "paste",
