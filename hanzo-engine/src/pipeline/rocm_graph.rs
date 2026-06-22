@@ -90,8 +90,19 @@ impl RocmGraphHandle {
         let mut graph: hip::hipGraph_t = std::ptr::null_mut();
         let result = unsafe { hip::hipStreamEndCapture(stream, &mut graph) };
         if result != hip::hipError_t_hipSuccess {
+            // A capture invalidated mid-flight (e.g. hipErrorStreamCaptureImplicit from a
+            // host-syncing op) is terminated by this single call. Do NOT call
+            // hipStreamEndCapture again -- a second call on a stream the runtime still
+            // flags as capturing SIGSEGVs inside libamdhip64 on the WSL path. Drain the
+            // device here so the eager fallback starts from a clean state, and let the
+            // caller treat the returned Err as "fell back to eager" without re-discarding.
+            unsafe {
+                let _ = hip::hipDeviceSynchronize();
+                let _ = hip::hipGetLastError();
+            }
+            let _ = device.synchronize();
             return Err(hanzo_ml::Error::msg(format!("{result:?}"))
-                .context("ROCm graph stream end capture failed"));
+                .context("ROCm graph stream end capture failed (capture invalidated)"));
         }
         if graph.is_null() {
             return Ok(None);
@@ -384,20 +395,17 @@ pub(crate) fn rocm_decode_graphs_enabled() -> bool {
 pub(crate) fn end_rocm_capture_discard(device: &RocmDevice) {
     let stream = device.stream().as_raw();
     unsafe {
-        // A capture invalidated mid-flight (e.g. by hipErrorStreamCaptureImplicit)
-        // stays in the capturing state until `hipStreamEndCapture` terminates it.
-        // The terminating call itself returns the invalidation error and may need
-        // to be repeated until the stream reports it is no longer capturing, so we
-        // loop (bounded) rather than calling it once.
-        for _ in 0..8 {
-            let mut status: hip::hipStreamCaptureStatus =
-                hip::hipStreamCaptureStatus_hipStreamCaptureStatusNone;
-            let info = hip::hipStreamIsCapturing(stream, &mut status);
-            if info != hip::hipError_t_hipSuccess
-                || status == hip::hipStreamCaptureStatus_hipStreamCaptureStatusNone
-            {
-                break;
-            }
+        // Terminate an in-flight capture exactly ONCE. A capture invalidated mid-flight
+        // (e.g. hipErrorStreamCaptureImplicit) stays flagged as capturing, but calling
+        // hipStreamEndCapture a second time on it SIGSEGVs inside libamdhip64 on the WSL
+        // path -- so we end once (if capturing) and then reset the device via a sync,
+        // never repeating the terminating call.
+        let mut status: hip::hipStreamCaptureStatus =
+            hip::hipStreamCaptureStatus_hipStreamCaptureStatusNone;
+        let info = hip::hipStreamIsCapturing(stream, &mut status);
+        if info == hip::hipError_t_hipSuccess
+            && status != hip::hipStreamCaptureStatus_hipStreamCaptureStatusNone
+        {
             let mut graph: hip::hipGraph_t = std::ptr::null_mut();
             let _ = hip::hipStreamEndCapture(stream, &mut graph);
             if !graph.is_null() {

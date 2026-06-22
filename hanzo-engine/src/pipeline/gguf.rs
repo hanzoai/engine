@@ -902,7 +902,7 @@ impl GGUFPipeline {
             // (argmax != fixed 0) — the AutoFreeOnLaunch stale-buffer signature
             // is a constant argmax=0. Reads to host force a stream sync, so this
             // is debug-only and off the hot path.
-            if std::env::var("MISTRALRS_ROCM_GRAPH_DEBUG").is_ok() {
+            if std::env::var("HANZO_ROCM_GRAPH_DEBUG").is_ok() {
                 let flat = logits.flatten_all().ok();
                 let amax = flat
                     .as_ref()
@@ -1015,7 +1015,8 @@ impl GGUFPipeline {
                 return Err(hanzo_ml::Error::msg("ROCm graph capture returned no graph"));
             }
             Err(err) => {
-                end_rocm_capture_discard(&device);
+                // end_capture already terminated + drained the invalidated capture; calling
+                // end_rocm_capture_discard here would re-invoke hipStreamEndCapture and SIGSEGV.
                 device.end_graph_capture_scope();
                 return Err(err);
             }
