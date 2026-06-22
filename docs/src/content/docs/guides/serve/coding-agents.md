@@ -67,7 +67,7 @@ Then launch Codex with the `mistralrs` profile:
 codex --profile mistralrs
 ```
 
-If a reverse proxy enforces authentication, add `env_key = "MISTRALRS_API_KEY"`
+If a reverse proxy enforces authentication, add `env_key = "HANZO_API_KEY"`
 under `[model_providers.mistralrs]` and export that variable before launching
 Codex. The local mistral.rs server itself does not validate API keys.
 
