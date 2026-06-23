@@ -2730,7 +2730,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2756,7 +2756,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-audio"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "apodize",
@@ -2766,7 +2766,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-bench"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2792,7 +2792,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-cli"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -2831,7 +2831,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-code-exec"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2849,7 +2849,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-engine"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -3001,7 +3001,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-llm-mcp"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3023,7 +3023,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-macros"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -3049,9 +3049,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.11.3"
+version = "0.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bde3b94ea8ea854148802f8224bcebf6236ab4982d62c22d181ee9e36fdb547"
+checksum = "58c4e7567e4c8be41dbae7aa7c68dd0ddfd6ab994a42238f451b8b2b74fb946b"
 dependencies = [
  "accelerate-src",
  "ash",
@@ -3062,6 +3062,7 @@ dependencies = [
  "half",
  "hanzo-kernels",
  "hanzo-metal-kernels",
+ "hanzo-rocm",
  "hanzo-rocm-kernels",
  "hanzo-ug",
  "intel-mkl-src",
@@ -3076,7 +3077,6 @@ dependencies = [
  "rand 0.9.4",
  "rand_distr 0.5.1",
  "rayon",
- "rocm-rs",
  "safetensors 0.7.0",
  "thiserror 2.0.18",
  "tokenizers 0.22.2",
@@ -3107,7 +3107,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-paged-attn"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "cudaforge",
@@ -3123,7 +3123,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-pyo3"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3149,7 +3149,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-quant"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "byteorder",
  "cuda-async",
@@ -3184,14 +3184,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "hanzo-rocm-kernels"
-version = "0.11.3"
+name = "hanzo-rocm"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfee68fd3f5db4481778c1f2320a6821774da4848461a44174203ff4e58b0f66"
+checksum = "0dbfef9cc690175e1da724aa4880e1500e02f63b65ce4fdc56961e091c6d4392"
+dependencies = [
+ "bindgen 0.71.1",
+ "paste",
+ "rocm_kernel_macros",
+]
+
+[[package]]
+name = "hanzo-rocm-kernels"
+version = "0.11.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49041ee35603b8aeb8323d5b29158b6f4e4aa40d122d84ef47e528866893e23f"
 dependencies = [
  "dirs 5.0.1",
  "half",
- "rocm-rs",
+ "hanzo-rocm",
  "sha2",
  "thiserror 2.0.18",
  "tracing",
@@ -3199,7 +3210,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-sandbox"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "itoa",
@@ -3215,7 +3226,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3238,7 +3249,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server-core"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3278,7 +3289,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-vision"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "hanzo-ml",
  "image",
@@ -3287,7 +3298,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-web-chat"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -5867,16 +5878,6 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "rocm-rs"
-version = "0.5.2"
-source = "git+https://github.com/hanzoai/rocm-rs?tag=v0.5.2#67973910b0820451d45ba242f3ab4fadaf9989be"
-dependencies = [
- "bindgen 0.71.1",
- "paste",
- "rocm_kernel_macros",
 ]
 
 [[package]]
