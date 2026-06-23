@@ -35,12 +35,18 @@ impl AutoEncoder {
         let dev = vb.device();
         let z = cfg.z_dim;
         let latents_mean = Tensor::from_vec(
-            cfg.latents_mean.iter().map(|v| *v as f32).collect::<Vec<_>>(),
+            cfg.latents_mean
+                .iter()
+                .map(|v| *v as f32)
+                .collect::<Vec<_>>(),
             (1, z, 1, 1, 1),
             dev,
         )?;
         let latents_std = Tensor::from_vec(
-            cfg.latents_std.iter().map(|v| *v as f32).collect::<Vec<_>>(),
+            cfg.latents_std
+                .iter()
+                .map(|v| *v as f32)
+                .collect::<Vec<_>>(),
             (1, z, 1, 1, 1),
             dev,
         )?;
@@ -65,6 +71,8 @@ impl AutoEncoder {
     // TODO(qwen-image): port QwenImageDecoder3d (CausalConv3d mid/up blocks + RMS norm) to map
     // (b, z_dim, f, h, w) latents to RGB frames. Until then decode is unimplemented.
     pub fn decode(&self, _z: &Tensor, _device: &Device) -> Result<Tensor> {
-        hanzo_ml::bail!("QwenImage VAE decode is not yet implemented (3D causal-conv decoder pending)")
+        hanzo_ml::bail!(
+            "QwenImage VAE decode is not yet implemented (3D causal-conv decoder pending)"
+        )
     }
 }

@@ -56,7 +56,11 @@ fn macos_total_memory() -> Option<usize> {
         .args(["-n", "hw.memsize"])
         .output()
         .ok()?;
-    String::from_utf8(out.stdout).ok()?.trim().parse::<usize>().ok()
+    String::from_utf8(out.stdout)
+        .ok()?
+        .trim()
+        .parse::<usize>()
+        .ok()
 }
 
 impl MemoryUsage {

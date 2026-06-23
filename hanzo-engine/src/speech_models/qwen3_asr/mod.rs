@@ -78,15 +78,16 @@ impl Qwen3AsrModel {
             let Some(start) = row.iter().position(|&t| t == self.audio_token_id) else {
                 continue;
             };
-            let len = row[start..].iter().take_while(|&&t| t == self.audio_token_id).count();
+            let len = row[start..]
+                .iter()
+                .take_while(|&&t| t == self.audio_token_id)
+                .count();
             let avail = audio_embeds.dim(1)?;
             let len = len.min(avail);
             let chunk = audio_embeds.narrow(0, batch.min(audio_embeds.dim(0)? - 1), 1)?;
             let chunk = chunk.narrow(1, 0, len)?;
-            input_embeds = input_embeds.slice_assign(
-                &[batch..batch + 1, start..start + len, 0..hidden],
-                &chunk,
-            )?;
+            input_embeds = input_embeds
+                .slice_assign(&[batch..batch + 1, start..start + len, 0..hidden], &chunk)?;
         }
         Ok(input_embeds)
     }
