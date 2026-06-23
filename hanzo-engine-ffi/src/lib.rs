@@ -15,6 +15,8 @@
 //! The first entry is the default model. Example:
 //!   `HANZO_FFI_MODELS="zen-nano=gguf:/tmp/zen5-weights/zen-5-flash.gguf;zen-embed=embedding:/tmp/zen-embedding-0.6B"`
 
+#![allow(clippy::doc_lazy_continuation, clippy::doc_overindented_list_items)]
+
 use std::ffi::c_int;
 use std::sync::OnceLock;
 
