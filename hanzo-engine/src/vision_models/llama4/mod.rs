@@ -17,9 +17,8 @@ use crate::{
     paged_attention::encoder_cache::{cached_encode_images, CacheModality, EncoderCacheManager},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
-        NormalModel,
+        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, ModelForwardContext,
+        MultimodalModel, NormalLoadingMetadata, NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
 };

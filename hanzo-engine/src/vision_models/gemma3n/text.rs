@@ -19,9 +19,8 @@ use crate::{
     matformer::MatformerSliceConfig,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, ModelForwardContext, MultimodalModel, NormalCache,
-        NormalCacheType, NormalLoadingMetadata,
+        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
+        ModelForwardContext, MultimodalModel, NormalCache, NormalCacheType, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -1532,7 +1531,7 @@ impl MultimodalModel for TextModel {
         _input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
         _model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
-        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
+        _ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> hanzo_ml::Result<Tensor> {
         unreachable!()
     }

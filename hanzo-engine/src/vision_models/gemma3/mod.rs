@@ -1,7 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::attention::AttentionMask;
-use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use std::sync::{Arc, Mutex};
 
 use config::Gemma3Config;
