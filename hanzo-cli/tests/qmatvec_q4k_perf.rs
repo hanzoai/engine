@@ -67,7 +67,12 @@ fn qmatvec_q4k_perf() {
     let mut log = String::new();
     let dev = RocmDevice::new(0).expect("rocm device");
     let iters = 300;
-    for &(n, k) in &[(5120usize, 5120usize), (17408, 5120), (1024, 5120), (151936, 5120)] {
+    for &(n, k) in &[
+        (5120usize, 5120usize),
+        (17408, 5120),
+        (1024, 5120),
+        (151936, 5120),
+    ] {
         let (us4, gb4) = time_q4k(&dev, n, k, iters);
         let (us8, gb8) = time_q8(&dev, n, k, iters);
         log.push_str(&format!(
@@ -76,6 +81,7 @@ fn qmatvec_q4k_perf() {
             (n * (k / 32) * 34) as f64 / 1048576.0,
         ));
     }
-    let _ = std::fs::File::create("C:\\qmatvec-q4k-perf.txt").and_then(|mut f| f.write_all(log.as_bytes()));
+    let _ = std::fs::File::create("C:\\qmatvec-q4k-perf.txt")
+        .and_then(|mut f| f.write_all(log.as_bytes()));
     eprintln!("{log}");
 }

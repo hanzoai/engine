@@ -4,8 +4,7 @@ use crate::layers_masker::CausalMaskConfig;
 use std::{collections::HashMap, sync::Arc};
 
 use hanzo_ml::{DType, Device, Module, Result, Tensor};
-use hanzo_quant::{
-    softcap,QuantMethod, ShardedVarBuilder};
+use hanzo_quant::{softcap, QuantMethod, ShardedVarBuilder};
 use tqdm::Iter;
 use tracing::info;
 

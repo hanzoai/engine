@@ -11,7 +11,12 @@ use super::config::UNetConfig;
 const TIME_EMBED_FACTOR: f64 = 1000.;
 const MAX_PERIOD: f64 = 10000.;
 
-fn timestep_embedding(t: &Tensor, dim: usize, flip_sin_to_cos: bool, dtype: DType) -> Result<Tensor> {
+fn timestep_embedding(
+    t: &Tensor,
+    dim: usize,
+    flip_sin_to_cos: bool,
+    dtype: DType,
+) -> Result<Tensor> {
     let dev = t.device();
     let half = dim / 2;
     let arange = Tensor::arange(0, half as u32, dev)?.to_dtype(DType::F32)?;
@@ -85,7 +90,13 @@ impl ResnetBlock2D {
         let conv_shortcut = if in_c == out_c {
             None
         } else {
-            Some(conv2d(in_c, out_c, 1, Default::default(), vb.pp("conv_shortcut"))?)
+            Some(conv2d(
+                in_c,
+                out_c,
+                1,
+                Default::default(),
+                vb.pp("conv_shortcut"),
+            )?)
         };
         Ok(Self {
             norm1,
@@ -234,7 +245,10 @@ impl BasicTransformerBlock {
 
     fn forward(&self, xs: &Tensor, context: &Tensor) -> Result<Tensor> {
         let xs = (self.attn1.forward(&self.norm1.forward(xs)?, None)? + xs)?;
-        let xs = (self.attn2.forward(&self.norm2.forward(&xs)?, Some(context))? + &xs)?;
+        let xs = (self
+            .attn2
+            .forward(&self.norm2.forward(&xs)?, Some(context))?
+            + &xs)?;
         self.ff.forward(&self.norm3.forward(&xs)?)? + xs
     }
 }
@@ -373,7 +387,9 @@ impl UpBlock {
     ) -> Result<Tensor> {
         let mut h = xs.clone();
         for (i, resnet) in self.resnets.iter().enumerate() {
-            let skip = skips.pop().expect("up block expects matching skip connection");
+            let skip = skips
+                .pop()
+                .expect("up block expects matching skip connection");
             h = Tensor::cat(&[&h, &skip], 1)?;
             h = resnet.forward(&h, temb)?;
             if let Some(attn) = self.attentions.get(i) {
@@ -461,10 +477,7 @@ impl UNet2DConditionModel {
                 None
             } else {
                 skip_channels.push(out_ch);
-                Some(Downsample2D::new(
-                    out_ch,
-                    vb_i.pp("downsamplers").pp(0),
-                )?)
+                Some(Downsample2D::new(out_ch, vb_i.pp("downsamplers").pp(0))?)
             };
             down_blocks.push(DownBlock {
                 resnets,
@@ -506,8 +519,14 @@ impl UNet2DConditionModel {
             let vb_res = vb_i.pp("resnets");
             let vb_attn = vb_i.pp("attentions");
             for j in 0..cfg.layers_per_block + 1 {
-                let res_skip = skip_channels.pop().expect("up block skip channel underflow");
-                let in_c = if j == 0 { prev_up + res_skip } else { out_ch + res_skip };
+                let res_skip = skip_channels
+                    .pop()
+                    .expect("up block skip channel underflow");
+                let in_c = if j == 0 {
+                    prev_up + res_skip
+                } else {
+                    out_ch + res_skip
+                };
                 resnets.push(ResnetBlock2D::new(
                     in_c,
                     out_ch,

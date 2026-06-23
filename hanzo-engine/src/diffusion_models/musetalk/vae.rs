@@ -40,7 +40,13 @@ impl ResnetBlock {
         let conv_shortcut = if in_c == out_c {
             None
         } else {
-            Some(conv2d(in_c, out_c, 1, Default::default(), vb.pp("conv_shortcut"))?)
+            Some(conv2d(
+                in_c,
+                out_c,
+                1,
+                Default::default(),
+                vb.pp("conv_shortcut"),
+            )?)
         };
         Ok(Self {
             norm1,
@@ -83,7 +89,13 @@ impl AttnBlock {
         let to_q = conv2d(channels, channels, 1, Default::default(), vb.pp("to_q"))?;
         let to_k = conv2d(channels, channels, 1, Default::default(), vb.pp("to_k"))?;
         let to_v = conv2d(channels, channels, 1, Default::default(), vb.pp("to_v"))?;
-        let to_out = conv2d(channels, channels, 1, Default::default(), vb.pp("to_out").pp(0))?;
+        let to_out = conv2d(
+            channels,
+            channels,
+            1,
+            Default::default(),
+            vb.pp("to_out").pp(0),
+        )?;
         Ok(Self {
             group_norm,
             to_q,
@@ -221,7 +233,12 @@ impl Encoder {
             let vb_res = vb_i.pp("resnets");
             for j in 0..cfg.layers_per_block {
                 let in_c = if j == 0 { prev_ch } else { out_ch };
-                resnets.push(ResnetBlock::new(in_c, out_ch, cfg.norm_num_groups, vb_res.pp(j))?);
+                resnets.push(ResnetBlock::new(
+                    in_c,
+                    out_ch,
+                    cfg.norm_num_groups,
+                    vb_res.pp(j),
+                )?);
             }
             let downsampler = if is_last {
                 None
@@ -238,7 +255,13 @@ impl Encoder {
         let mid_ch = *cfg.block_out_channels.last().unwrap();
         let mid_block = MidBlock::new(mid_ch, cfg.norm_num_groups, vb.pp("mid_block"))?;
         let conv_norm_out = group_norm(cfg.norm_num_groups, mid_ch, 1e-6, vb.pp("conv_norm_out"))?;
-        let conv_out = conv2d(mid_ch, 2 * cfg.latent_channels, 3, conv_cfg, vb.pp("conv_out"))?;
+        let conv_out = conv2d(
+            mid_ch,
+            2 * cfg.latent_channels,
+            3,
+            conv_cfg,
+            vb.pp("conv_out"),
+        )?;
         Ok(Self {
             conv_in,
             down_blocks,
@@ -303,17 +326,19 @@ impl Decoder {
             let vb_res = vb_i.pp("resnets");
             for j in 0..cfg.layers_per_block + 1 {
                 let in_c = if j == 0 { prev_ch } else { out_ch };
-                resnets.push(ResnetBlock::new(in_c, out_ch, cfg.norm_num_groups, vb_res.pp(j))?);
+                resnets.push(ResnetBlock::new(
+                    in_c,
+                    out_ch,
+                    cfg.norm_num_groups,
+                    vb_res.pp(j),
+                )?);
             }
             let upsampler = if is_last {
                 None
             } else {
                 Some(Upsample::new(out_ch, vb_i.pp("upsamplers").pp(0))?)
             };
-            up_blocks.push(DecUpBlock {
-                resnets,
-                upsampler,
-            });
+            up_blocks.push(DecUpBlock { resnets, upsampler });
             prev_ch = out_ch;
         }
 
