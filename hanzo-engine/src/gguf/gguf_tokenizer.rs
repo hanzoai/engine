@@ -389,7 +389,7 @@ mod tests {
     fn get_gguf_tokenizer(tokenizer: TokenizerType) -> Result<Tokenizer> {
         match tokenizer {
             TokenizerType::Llama => {
-                let api = ApiBuilder::new().with_progress(true).build().unwrap();
+                let api = ApiBuilder::new().with_token(std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty())).with_progress(true).build().unwrap();
                 let api = api.repo(Repo::with_revision(
                     "hanzoai/mistralrs_tests".to_string(),
                     RepoType::Model,
@@ -401,7 +401,7 @@ mod tests {
                 Ok(tokenizer)
             }
             TokenizerType::Gpt2 => {
-                let api = ApiBuilder::new().with_progress(true).build().unwrap();
+                let api = ApiBuilder::new().with_token(std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty())).with_progress(true).build().unwrap();
                 let api = api.repo(Repo::with_revision(
                     "hanzoai/mistralrs_tests".to_string(),
                     RepoType::Model,
@@ -419,7 +419,7 @@ mod tests {
     fn get_hf_tokenizer(tokenizer: TokenizerType) -> Result<Tokenizer> {
         match tokenizer {
             TokenizerType::Llama => {
-                let api = ApiBuilder::new().with_progress(true).build().unwrap();
+                let api = ApiBuilder::new().with_token(std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty())).with_progress(true).build().unwrap();
                 let api = api.repo(Repo::with_revision(
                     "hanzoai/mistralrs_tests".to_string(),
                     RepoType::Model,
@@ -430,7 +430,7 @@ mod tests {
                 Ok(Tokenizer::from_file(tokenizer_filename).unwrap())
             }
             TokenizerType::Gpt2 => {
-                let api = ApiBuilder::new().with_progress(true).build().unwrap();
+                let api = ApiBuilder::new().with_token(std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty())).with_progress(true).build().unwrap();
                 let api = api.repo(Repo::with_revision(
                     "hanzoai/mistralrs_tests".to_string(),
                     RepoType::Model,
@@ -477,6 +477,10 @@ mod tests {
 
     #[test]
     fn test_encode_decode_llama() -> Result<()> {
+        if std::env::var("HF_TOKEN").map_or(true, |t| t.is_empty()) {
+            eprintln!("skipping: HF_TOKEN not set (gated hanzoai/mistralrs_tests repo)");
+            return Ok(());
+        }
         use rand::rng;
         use rand::seq::SliceRandom;
 
@@ -519,6 +523,10 @@ mod tests {
 
     #[test]
     fn test_encode_decode_gpt2() -> Result<()> {
+        if std::env::var("HF_TOKEN").map_or(true, |t| t.is_empty()) {
+            eprintln!("skipping: HF_TOKEN not set (gated hanzoai/mistralrs_tests repo)");
+            return Ok(());
+        }
         use rand::rng;
         use rand::seq::SliceRandom;
 
