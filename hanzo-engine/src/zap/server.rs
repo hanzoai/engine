@@ -63,15 +63,11 @@ impl ZapInferenceServer {
         while let Some(resp) = rx.recv().await {
             match resp {
                 Response::Done(r) => return Ok(ChatResponse::from_completion(r)),
-                Response::ModelError(msg, _) => {
-                    return Err(infer_err(InferErrorKind::Model, msg))
-                }
+                Response::ModelError(msg, _) => return Err(infer_err(InferErrorKind::Model, msg)),
                 Response::ValidationError(e) => {
                     return Err(infer_err(InferErrorKind::Validation, e))
                 }
-                Response::InternalError(e) => {
-                    return Err(infer_err(InferErrorKind::Internal, e))
-                }
+                Response::InternalError(e) => return Err(infer_err(InferErrorKind::Internal, e)),
                 // Ignore mid-stream/agentic progress events for the non-streaming path.
                 _ => continue,
             }
@@ -167,15 +163,11 @@ impl ZapInferenceServer {
                     });
                 }
                 Response::Done(r) => return Ok(ChatResponse::from_completion(r)),
-                Response::ModelError(msg, _) => {
-                    return Err(infer_err(InferErrorKind::Model, msg))
-                }
+                Response::ModelError(msg, _) => return Err(infer_err(InferErrorKind::Model, msg)),
                 Response::ValidationError(e) => {
                     return Err(infer_err(InferErrorKind::Validation, e))
                 }
-                Response::InternalError(e) => {
-                    return Err(infer_err(InferErrorKind::Internal, e))
-                }
+                Response::InternalError(e) => return Err(infer_err(InferErrorKind::Internal, e)),
                 _ => continue,
             }
         }

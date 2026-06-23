@@ -23,7 +23,16 @@ fn to_f32_vec(t: &Tensor) -> Vec<f32> {
         .expect("vec1")
 }
 
-fn check(dev: &Device, log: &mut String, b: usize, h: usize, t: usize, d: usize, dtype: DType, tol: f32) {
+fn check(
+    dev: &Device,
+    log: &mut String,
+    b: usize,
+    h: usize,
+    t: usize,
+    d: usize,
+    dtype: DType,
+    tol: f32,
+) {
     let n = b * h * t * d;
     let xf: Vec<f32> = (0..n).map(val).collect();
     // cos/sin are [t, d/2]; build a realistic rotary table (theta_j over positions).
@@ -88,10 +97,10 @@ fn rope_numeric() {
     // Decode shape: t=1 (single new token), Qwen3-8B head dim 128.
     check(&dev, &mut log, 1, 32, 1, 128, DType::BF16, 2e-2);
     check(&dev, &mut log, 1, 8, 1, 128, DType::BF16, 2e-2); // kv heads
-    // Prefill-ish: many positions.
+                                                            // Prefill-ish: many positions.
     check(&dev, &mut log, 1, 32, 512, 128, DType::BF16, 2e-2);
     check(&dev, &mut log, 2, 4, 7, 64, DType::BF16, 2e-2); // batch>1, small
-    // F16 + F32 dtypes.
+                                                           // F16 + F32 dtypes.
     check(&dev, &mut log, 1, 32, 16, 128, DType::F16, 2e-2);
     check(&dev, &mut log, 1, 32, 16, 128, DType::F32, 1e-4);
     check(&dev, &mut log, 1, 16, 33, 96, DType::F32, 1e-4); // non-pow2 t, d=96

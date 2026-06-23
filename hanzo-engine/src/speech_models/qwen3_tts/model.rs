@@ -187,7 +187,9 @@ impl Qwen3DecoderLayer {
         let xs = self.self_attn.forward(&xs, seqlen_offsets, mask)?;
         let xs = (residual + xs)?;
         let residual = &xs;
-        let xs = self.mlp.forward(&self.post_attention_layernorm.forward(&xs)?)?;
+        let xs = self
+            .mlp
+            .forward(&self.post_attention_layernorm.forward(&xs)?)?;
         residual + xs
     }
 }
@@ -280,7 +282,8 @@ impl Talker {
         })?;
 
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_model.pp("norm"))?;
-        let codec_head = layers::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("codec_head"))?;
+        let codec_head =
+            layers::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("codec_head"))?;
 
         Ok(Self {
             text_embed,
@@ -463,7 +466,8 @@ impl CausalConv1d {
 
     fn extra_padding(&self, len: usize) -> usize {
         let n_frames = (len + self.pad_left - self.eff_kernel) as f64 / self.stride as f64 + 1.0;
-        let ideal = (n_frames.ceil() as usize - 1) * self.stride + (self.eff_kernel - self.pad_left);
+        let ideal =
+            (n_frames.ceil() as usize - 1) * self.stride + (self.eff_kernel - self.pad_left);
         ideal.saturating_sub(len)
     }
 
@@ -493,7 +497,10 @@ impl CausalTransConv1d {
         stride: usize,
         dtype: DType,
     ) -> Result<Self> {
-        let weight = vb.pp("conv").get((in_c, out_c, kernel), "weight")?.to_dtype(dtype)?;
+        let weight = vb
+            .pp("conv")
+            .get((in_c, out_c, kernel), "weight")?
+            .to_dtype(dtype)?;
         let bias = vb.pp("conv").get(out_c, "bias")?.to_dtype(dtype)?;
         Ok(Self {
             weight,
@@ -872,8 +879,14 @@ impl DecoderBlock {
     ) -> Result<Self> {
         let vb_b = vb.pp("block");
         let pre_act = SnakeBeta::new(vb_b.pp(0), in_dim)?;
-        let upconv =
-            CausalTransConv1d::new(vb_b.pp(1), in_dim, out_dim, 2 * upsample_rate, upsample_rate, dtype)?;
+        let upconv = CausalTransConv1d::new(
+            vb_b.pp(1),
+            in_dim,
+            out_dim,
+            2 * upsample_rate,
+            upsample_rate,
+            dtype,
+        )?;
         let mut res_units = Vec::with_capacity(3);
         for (j, dilation) in [1usize, 3, 9].into_iter().enumerate() {
             res_units.push(DecoderResidualUnit::new(vb_b.pp(2 + j), out_dim, dilation)?);
@@ -944,26 +957,47 @@ impl CodecDecoder {
         let vb_d = vb.pp("decoder");
 
         let quantizer = SplitResidualVectorQuantizer::new(vb_d.pp("quantizer"), dc)?;
-        let pre_conv = CausalConv1d::new(vb_d.pp("pre_conv"), dc.codebook_dim, dc.latent_dim, 3, 1, 1, 1)?;
+        let pre_conv = CausalConv1d::new(
+            vb_d.pp("pre_conv"),
+            dc.codebook_dim,
+            dc.latent_dim,
+            3,
+            1,
+            1,
+            1,
+        )?;
         let pre_transformer = CodecPreTransformer::new(vb_d.pp("pre_transformer"), dc)?;
 
         let vb_up = vb_d.pp("upsample");
         let mut upsample = Vec::with_capacity(dc.upsampling_ratios.len());
         for (i, &factor) in dc.upsampling_ratios.iter().enumerate() {
             let vb_i = vb_up.pp(i);
-            let tconv =
-                CausalTransConv1d::new(vb_i.pp(0), dc.latent_dim, dc.latent_dim, factor, factor, dtype)?;
+            let tconv = CausalTransConv1d::new(
+                vb_i.pp(0),
+                dc.latent_dim,
+                dc.latent_dim,
+                factor,
+                factor,
+                dtype,
+            )?;
             let cnx = ConvNeXtBlock::new(vb_i.pp(1), dc.latent_dim)?;
             upsample.push((tconv, cnx));
         }
 
         let vb_dec = vb_d.pp("decoder");
-        let decoder_in = CausalConv1d::new(vb_dec.pp(0), dc.latent_dim, dc.decoder_dim, 7, 1, 1, 1)?;
+        let decoder_in =
+            CausalConv1d::new(vb_dec.pp(0), dc.latent_dim, dc.decoder_dim, 7, 1, 1, 1)?;
         let mut decoder_blocks = Vec::with_capacity(dc.upsample_rates.len());
         for (i, &rate) in dc.upsample_rates.iter().enumerate() {
             let in_dim = dc.decoder_dim >> i;
             let out_dim = dc.decoder_dim >> (i + 1);
-            decoder_blocks.push(DecoderBlock::new(vb_dec.pp(i + 1), in_dim, out_dim, rate, dtype)?);
+            decoder_blocks.push(DecoderBlock::new(
+                vb_dec.pp(i + 1),
+                in_dim,
+                out_dim,
+                rate,
+                dtype,
+            )?);
         }
         let out_dim = dc.decoder_dim >> dc.upsample_rates.len();
         let tail_idx = dc.upsample_rates.len() + 1;
@@ -990,7 +1024,12 @@ impl CodecDecoder {
         h = h.transpose(1, 2)?.contiguous()?;
 
         let t = h.dim(1)?;
-        let mask = causal_mask_sliding(t, self.pre_transformer.sliding_window(), DType::F32, h.device())?;
+        let mask = causal_mask_sliding(
+            t,
+            self.pre_transformer.sliding_window(),
+            DType::F32,
+            h.device(),
+        )?;
         h = self.pre_transformer.forward(&h, Some(&mask))?;
 
         h = h.transpose(1, 2)?.contiguous()?;
@@ -1010,16 +1049,17 @@ impl CodecDecoder {
     /// Decode that also returns intermediate stages for numerical validation against the reference:
     /// (quant, pre_conv-transposed, pre_transformer-out, post-upsample, final wav).
     #[cfg(test)]
-    pub fn decode_debug(
-        &self,
-        codes: &Tensor,
-    ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
+    pub fn decode_debug(&self, codes: &Tensor) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
         let quant = self.quantizer.decode(codes)?;
         let pc = self.pre_conv.forward(&quant)?;
         let pc_t = pc.transpose(1, 2)?.contiguous()?;
         let t = pc_t.dim(1)?;
-        let mask =
-            causal_mask_sliding(t, self.pre_transformer.sliding_window(), DType::F32, pc_t.device())?;
+        let mask = causal_mask_sliding(
+            t,
+            self.pre_transformer.sliding_window(),
+            DType::F32,
+            pc_t.device(),
+        )?;
         let pt = self.pre_transformer.forward(&pc_t, Some(&mask))?;
         let mut h = pt.transpose(1, 2)?.contiguous()?;
         for (tconv, cnx) in &self.upsample {

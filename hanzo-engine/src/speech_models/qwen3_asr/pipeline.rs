@@ -54,7 +54,11 @@ impl Qwen3AsrPipeline {
     /// `<|audio_pad|>` placeholders between audio start/end) + assistant cue.
     fn build_prompt(&self, tok: &Tokenizer, system: &str, n_audio: usize) -> Result<Vec<u32>> {
         let enc = |s: &str| -> Result<Vec<u32>> {
-            Ok(tok.encode(s, false).map_err(hanzo_ml::Error::msg)?.get_ids().to_vec())
+            Ok(tok
+                .encode(s, false)
+                .map_err(hanzo_ml::Error::msg)?
+                .get_ids()
+                .to_vec())
         };
         let mut ids = Vec::new();
         ids.push(IM_START);
@@ -120,7 +124,11 @@ impl Qwen3AsrPipeline {
         // are not part of the returned transcript (the `<asr_text>` split drops them).
         if let Some(lang) = language {
             let enc = |s: &str| -> Result<Vec<u32>> {
-                Ok(tok.encode(s, false).map_err(hanzo_ml::Error::msg)?.get_ids().to_vec())
+                Ok(tok
+                    .encode(s, false)
+                    .map_err(hanzo_ml::Error::msg)?
+                    .get_ids()
+                    .to_vec())
             };
             ids.extend(enc(&format!("language {lang}"))?);
             ids.push(ASR_TEXT);
@@ -134,11 +142,14 @@ impl Qwen3AsrPipeline {
             // No KV-cache reuse: every step re-runs the full prompt, so the audio
             // features must be re-merged into the placeholder span each time.
             // Encoder already ran once above; reuse `audio_embeds`.
-            let logits = self
-                .model
-                .forward_with_audio(&input_ids, Some(&audio_embeds), &positions)?;
+            let logits =
+                self.model
+                    .forward_with_audio(&input_ids, Some(&audio_embeds), &positions)?;
             let last = logits.i((0, seq - 1))?;
-            let next = last.to_dtype(DType::F32)?.argmax(D::Minus1)?.to_scalar::<u32>()?;
+            let next = last
+                .to_dtype(DType::F32)?
+                .argmax(D::Minus1)?
+                .to_scalar::<u32>()?;
             if next == IM_END || next == ENDOFTEXT {
                 break;
             }
@@ -147,7 +158,10 @@ impl Qwen3AsrPipeline {
         }
 
         if std::env::var("ZEN3_ASR_DEBUG").is_ok() {
-            eprintln!("[asr-dbg] n_audio={} generated_ids={:?}", n_audio, generated);
+            eprintln!(
+                "[asr-dbg] n_audio={} generated_ids={:?}",
+                n_audio, generated
+            );
             eprintln!(
                 "[asr-dbg] raw_decode={:?}",
                 tok.decode(&generated, false).unwrap_or_default()
@@ -330,8 +344,15 @@ mod tests {
 
         // Step-0 logits / argmax cross-check against the HF reference.
         let n_audio = feats.dim(1).unwrap();
-        let ids = pipeline.build_prompt(&tok, DEFAULT_SYSTEM, n_audio).unwrap();
-        eprintln!("prompt len {} head {:?} tail {:?}", ids.len(), &ids[..12.min(ids.len())], &ids[ids.len().saturating_sub(12)..]);
+        let ids = pipeline
+            .build_prompt(&tok, DEFAULT_SYSTEM, n_audio)
+            .unwrap();
+        eprintln!(
+            "prompt len {} head {:?} tail {:?}",
+            ids.len(),
+            &ids[..12.min(ids.len())],
+            &ids[ids.len().saturating_sub(12)..]
+        );
         let seq = ids.len();
         let input_ids = Tensor::from_vec(ids.clone(), (1, seq), &device).unwrap();
         let positions = pipeline.positions().unwrap();
@@ -339,7 +360,11 @@ mod tests {
             .model
             .forward_with_audio(&input_ids, Some(&feats), &positions)
             .unwrap();
-        let last = logits.i((0, seq - 1)).unwrap().to_dtype(DType::F32).unwrap();
+        let last = logits
+            .i((0, seq - 1))
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap();
         let lv: Vec<f32> = last.to_vec1().unwrap();
         let mut idx: Vec<usize> = (0..lv.len()).collect();
         idx.sort_by(|&a, &b| lv[b].partial_cmp(&lv[a]).unwrap());
@@ -399,7 +424,9 @@ mod tests {
         let ref_embeds = Tensor::from_vec(floats, (1, n_audio, hidden), &device).unwrap();
         eprintln!("ref embeds: [1, {n_audio}, {hidden}]");
 
-        let ids = pipeline.build_prompt(&tok, DEFAULT_SYSTEM, n_audio).unwrap();
+        let ids = pipeline
+            .build_prompt(&tok, DEFAULT_SYSTEM, n_audio)
+            .unwrap();
         let mut cur = ids.clone();
         let mut generated: Vec<u32> = Vec::new();
         for step in 0..48 {
@@ -410,7 +437,11 @@ mod tests {
                 .model
                 .forward_with_audio(&input_ids, Some(&ref_embeds), &positions)
                 .unwrap();
-            let last = logits.i((0, seq - 1)).unwrap().to_dtype(DType::F32).unwrap();
+            let last = logits
+                .i((0, seq - 1))
+                .unwrap()
+                .to_dtype(DType::F32)
+                .unwrap();
             let lv: Vec<f32> = last.to_vec1().unwrap();
             if step == 0 {
                 let mut idx: Vec<usize> = (0..lv.len()).collect();
@@ -433,9 +464,6 @@ mod tests {
             cur.push(next);
         }
         eprintln!("RUST(decoder, ref-embeds) generated ids: {generated:?}");
-        eprintln!(
-            "transcription: {:?}",
-            tok.decode(&generated, true).unwrap()
-        );
+        eprintln!("transcription: {:?}", tok.decode(&generated, true).unwrap());
     }
 }

@@ -116,12 +116,30 @@ impl EmbedRope {
     }
 
     // Returns (vid_freqs, txt_freqs) each as (seq, sum(axes_dim)/2, 2).
-    fn forward(&self, frame: usize, height: usize, width: usize, txt_len: usize) -> Result<(Tensor, Tensor)> {
+    fn forward(
+        &self,
+        frame: usize,
+        height: usize,
+        width: usize,
+        txt_len: usize,
+    ) -> Result<(Tensor, Tensor)> {
         let (h2, w2) = (height, width);
         let f_freq = self.pos_table(0, frame)?; // (frame, d0/2, 2)
         let (h_freq, w_freq) = if self.scale_rope {
-            let h = Tensor::cat(&[&self.neg_table(1, h2 / 2)?, &self.pos_table(1, h2 / 2 + h2 % 2)?], 0)?;
-            let w = Tensor::cat(&[&self.neg_table(2, w2 / 2)?, &self.pos_table(2, w2 / 2 + w2 % 2)?], 0)?;
+            let h = Tensor::cat(
+                &[
+                    &self.neg_table(1, h2 / 2)?,
+                    &self.pos_table(1, h2 / 2 + h2 % 2)?,
+                ],
+                0,
+            )?;
+            let w = Tensor::cat(
+                &[
+                    &self.neg_table(2, w2 / 2)?,
+                    &self.pos_table(2, w2 / 2 + w2 % 2)?,
+                ],
+                0,
+            )?;
             (h, w)
         } else {
             (self.pos_table(1, h2)?, self.pos_table(2, w2)?)
@@ -129,9 +147,15 @@ impl EmbedRope {
         let d_f = f_freq.dim(1)?;
         let d_h = h_freq.dim(1)?;
         let d_w = w_freq.dim(1)?;
-        let f = f_freq.reshape((frame, 1, 1, d_f, 2))?.broadcast_as((frame, h2, w2, d_f, 2))?;
-        let h = h_freq.reshape((1, h2, 1, d_h, 2))?.broadcast_as((frame, h2, w2, d_h, 2))?;
-        let w = w_freq.reshape((1, 1, w2, d_w, 2))?.broadcast_as((frame, h2, w2, d_w, 2))?;
+        let f = f_freq
+            .reshape((frame, 1, 1, d_f, 2))?
+            .broadcast_as((frame, h2, w2, d_f, 2))?;
+        let h = h_freq
+            .reshape((1, h2, 1, d_h, 2))?
+            .broadcast_as((frame, h2, w2, d_h, 2))?;
+        let w = w_freq
+            .reshape((1, 1, w2, d_w, 2))?
+            .broadcast_as((frame, h2, w2, d_w, 2))?;
         let vid = Tensor::cat(&[&f, &h, &w], 3)?.reshape((frame * h2 * w2, d_f + d_h + d_w, 2))?;
 
         let max_vid_index = if self.scale_rope {
@@ -139,7 +163,9 @@ impl EmbedRope {
         } else {
             h2.max(w2)
         };
-        let txt_index: Vec<i64> = (0..txt_len as i64).map(|i| i + max_vid_index as i64).collect();
+        let txt_index: Vec<i64> = (0..txt_len as i64)
+            .map(|i| i + max_vid_index as i64)
+            .collect();
         let total_dim: usize = self.axes_dim.iter().sum();
         let txt = rope_axis(&txt_index, total_dim, self.theta, &self.device)?;
         Ok((vid, txt))

@@ -7,14 +7,14 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use http::{Response, StatusCode};
-use hyper::Uri;
-use include_dir::{include_dir, Dir};
-use indexmap::IndexMap;
 use hanzo::{
     best_device, parse_isq_value, IsqType, MultimodalModelBuilder, SearchEmbeddingModel,
     SpeechLoaderType, SpeechModelBuilder, TextModelBuilder,
 };
+use http::{Response, StatusCode};
+use hyper::Uri;
+use include_dir::{include_dir, Dir};
+use indexmap::IndexMap;
 use std::sync::Arc;
 use tokio::{fs, net::TcpListener};
 use tower_http::services::ServeDir;
@@ -52,7 +52,9 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    eprintln!("⚠️  hanzo-web-chat is deprecated. Please use `hanzo serve --ui` from hanzo-cli instead.");
+    eprintln!(
+        "⚠️  hanzo-web-chat is deprecated. Please use `hanzo serve --ui` from hanzo-cli instead."
+    );
 
     let cli = Cli::parse();
     if cli.text_models.is_empty()

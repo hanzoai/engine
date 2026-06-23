@@ -86,10 +86,7 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variant_helper.cuh");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variants.cuh");
 
-    let header_hash_arg = format!(
-        "-DCUDA_HEADER_HASH={:016x}",
-        cuda_header_hash("src/cuda")?
-    );
+    let header_hash_arg = format!("-DCUDA_HEADER_HASH={:016x}", cuda_header_hash("src/cuda")?);
 
     let mut builder = cudaforge::KernelBuilder::new()
         .source_glob("src/cuda/*.cu")
@@ -398,7 +395,13 @@ fn main() -> Result<()> {
             .map(|n| bin.join(n))
             .find(|p| p.exists())
             .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| if is_windows { "llvm-ar".into() } else { "ar".into() })
+            .unwrap_or_else(|| {
+                if is_windows {
+                    "llvm-ar".into()
+                } else {
+                    "ar".into()
+                }
+            })
     };
     let mut ar_cmd = Command::new(&ar);
     ar_cmd.arg("rcs").arg(&lib);
