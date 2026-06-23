@@ -322,7 +322,7 @@ impl Loader for MultimodalLoader {
         } else if use_nccl || use_ring() {
             vec![hanzo_ml::Device::new_cuda(0)?]
         } else {
-            device_map::get_all_similar_devices(&device)?
+            device_map::get_all_similar_devices(device)?
         };
         #[cfg(feature = "cuda")]
         for device in &available_devices {

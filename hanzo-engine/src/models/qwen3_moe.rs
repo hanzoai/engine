@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use hanzo_ml::{DType, Device, Module, Result, Tensor, D};
+use hanzo_ml::{Device, Module, Result, Tensor};
 use hanzo_nn::Linear;
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,

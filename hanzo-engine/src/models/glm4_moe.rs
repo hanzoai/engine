@@ -3,7 +3,7 @@
 use crate::layers_masker::CausalMaskConfig;
 use std::{collections::HashMap, sync::Arc};
 
-use hanzo_ml::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use hanzo_ml::{DType, Device, Module, Result, Tensor, D};
 use hanzo_nn::Embedding;
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
@@ -15,7 +15,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    layers::{apply_rotary_positions_q, embedding, Activation, CausalMasker, Mlp, RmsNorm, Sdpa},
+    layers::{embedding, Activation, CausalMasker, Mlp, RmsNorm, Sdpa},
     moe::{MoEExperts, MoEExpertsConfig},
     ops::TopKLastDimOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},

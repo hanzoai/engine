@@ -1041,9 +1041,7 @@ mod tests {
                 acc += win[j] * w_v[base + j];
             }
             out_shader[c] = acc / (1.0 + (-acc).exp());
-            for j in 0..k {
-                cs[base + j] = win[j];
-            }
+            cs[base..(k + base)].copy_from_slice(&win[..k]);
         }
 
         for (a, b) in out_ref.iter().zip(out_shader.iter()) {
