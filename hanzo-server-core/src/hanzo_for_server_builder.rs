@@ -1208,7 +1208,10 @@ pub async fn load_model_at_runtime(hanzo: &Arc<Hanzo>, config: ModelConfig) -> R
     let scheduler_config = init_scheduler_config(&cache_config, &pipeline, MAX_SEQS).await;
 
     let pipeline_name = pipeline.lock().await.name();
-    let primary_id = config.alias.clone().unwrap_or_else(|| pipeline_name.clone());
+    let primary_id = config
+        .alias
+        .clone()
+        .unwrap_or_else(|| pipeline_name.clone());
 
     let engine_config = EngineConfig {
         no_kv_cache: NO_KV_CACHE,

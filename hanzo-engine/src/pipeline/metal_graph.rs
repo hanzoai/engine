@@ -331,7 +331,11 @@ impl MetalDecodeGraphMetadataBuffers {
             &metadata.full_block_table_signature,
         );
 
-        copy_var_map(&self.slot_mappings, &metadata.slot_mappings, "slot_mappings")?;
+        copy_var_map(
+            &self.slot_mappings,
+            &metadata.slot_mappings,
+            "slot_mappings",
+        )?;
         copy_option_var_map(
             &self.context_lens,
             metadata.context_lens.as_ref(),
@@ -473,11 +477,15 @@ impl MetalDecodeGraphMetadataBuffers {
             ),
             paged_kv_q_indptr: metadata.paged_kv_q_indptr.clone(),
             paged_kv_qo_tile_indices: metadata.paged_kv_qo_tile_indices.clone(),
-            paged_kv_request_indices: option_tensor_map_from_var_map(&self.paged_kv_request_indices),
+            paged_kv_request_indices: option_tensor_map_from_var_map(
+                &self.paged_kv_request_indices,
+            ),
             paged_kv_tile_indices: option_tensor_map_from_var_map(&self.paged_kv_tile_indices),
             paged_kv_o_indptr: option_tensor_map_from_var_map(&self.paged_kv_o_indptr),
             paged_kv_chunk_size: option_tensor_map_from_var_map(&self.paged_kv_chunk_size),
-            paged_kv_block_valid_mask: option_tensor_map_from_var_map(&self.paged_kv_block_valid_mask),
+            paged_kv_block_valid_mask: option_tensor_map_from_var_map(
+                &self.paged_kv_block_valid_mask,
+            ),
             block_table_signature: self.block_table_signature.clone(),
             full_paged_kv_q_indptr: metadata.full_paged_kv_q_indptr.clone(),
             full_paged_kv_qo_tile_indices: metadata.full_paged_kv_qo_tile_indices.clone(),
@@ -488,7 +496,9 @@ impl MetalDecodeGraphMetadataBuffers {
                 &self.full_paged_kv_tile_indices,
             ),
             full_paged_kv_o_indptr: option_tensor_map_from_var_map(&self.full_paged_kv_o_indptr),
-            full_paged_kv_chunk_size: option_tensor_map_from_var_map(&self.full_paged_kv_chunk_size),
+            full_paged_kv_chunk_size: option_tensor_map_from_var_map(
+                &self.full_paged_kv_chunk_size,
+            ),
             full_paged_kv_block_valid_mask: option_tensor_map_from_var_map(
                 &self.full_paged_kv_block_valid_mask,
             ),
@@ -540,7 +550,10 @@ fn bucket_context_len(
         .map(|blocks| blocks * block_size)
 }
 
-fn bucket_context_len_from_vars(map: &Option<MetalGraphVarMap>, block_size: usize) -> Option<usize> {
+fn bucket_context_len_from_vars(
+    map: &Option<MetalGraphVarMap>,
+    block_size: usize,
+) -> Option<usize> {
     map.as_ref()
         .and_then(|map| map.values().next())
         .and_then(|var| var.as_tensor().dims().last().copied())

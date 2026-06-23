@@ -28,9 +28,7 @@ impl LogVerbosity {
 /// This should be called to initialize the debug flag and logging.
 /// This should not be called in hanzo-engine code due to Rust usage.
 pub fn initialize_logging() {
-    let is_debug = std::env::var("DEBUG")
-        .unwrap_or_default()
-        .contains('1');
+    let is_debug = std::env::var("DEBUG").unwrap_or_default().contains('1');
     DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -61,9 +59,7 @@ pub fn default_hanzo_filter(verbosity: LogVerbosity) -> EnvFilter {
 }
 
 fn is_debug_env() -> bool {
-    std::env::var("DEBUG")
-        .unwrap_or_default()
-        .contains('1')
+    std::env::var("DEBUG").unwrap_or_default().contains('1')
 }
 
 pub(crate) trait DeviceRepr {

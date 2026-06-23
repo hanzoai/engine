@@ -349,10 +349,11 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             };
 
             if seq.get_mut_group().is_chat {
-                let (text_new, tool_calls, reasoning_content) =
-                    if let Some(mode) = seq.reasoning_mode() {
-                        let final_content = seq.get_response_content();
-                        let reasoning = seq.get_reasoning_content();
+                let (text_new, tool_calls, reasoning_content) = if let Some(mode) =
+                    seq.reasoning_mode()
+                {
+                    let final_content = seq.get_response_content();
+                    let reasoning = seq.get_reasoning_content();
 
                     let tool_calls = if mode == crate::reasoning_parsers::ReasoningMode::Harmony {
                         let harmony_tool_calls = seq.get_harmony_tool_calls();

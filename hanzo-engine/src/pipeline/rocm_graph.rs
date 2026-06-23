@@ -275,7 +275,11 @@ impl RocmDecodeGraphMetadataBuffers {
         // Models without a sliding window (Qwen3) read full_context_lens in the
         // paged-attn kernel via the `use_full` path, so it MUST advance too —
         // freezing it pins attention to the warmup span and decode degenerates.
-        copy_var_map(&self.slot_mappings, &metadata.slot_mappings, "slot_mappings")?;
+        copy_var_map(
+            &self.slot_mappings,
+            &metadata.slot_mappings,
+            "slot_mappings",
+        )?;
         copy_option_var_map(
             &self.context_lens,
             metadata.context_lens.as_ref(),
@@ -333,10 +337,7 @@ impl RocmDecodeGraphMetadataBuffers {
             // capacity (position-invariant), matching CUDA.
             full_block_tables: option_tensor_map_from_var_map(&self.full_block_tables),
             full_context_lens: option_tensor_map_from_var_map(&self.full_context_lens),
-            full_max_context_len: bucket_context_len_from_vars(
-                &self.full_block_tables,
-                block_size,
-            ),
+            full_max_context_len: bucket_context_len_from_vars(&self.full_block_tables, block_size),
             is_first_prompt_chunk: metadata.is_first_prompt_chunk,
             disable_cuda_graphs: metadata.disable_cuda_graphs,
             paged_kv_indptr: metadata.paged_kv_indptr.clone(),
