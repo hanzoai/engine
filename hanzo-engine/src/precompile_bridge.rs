@@ -145,14 +145,8 @@ pub fn embed(model: &str, text: &[u8]) -> Result<Vec<f32>, EngineError> {
     run_blocking(move || {
         let messages = RequestMessage::Embedding { prompt };
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let mut req = NormalRequest::new_simple(
-            messages,
-            SamplingParams::deterministic(),
-            tx,
-            0,
-            None,
-            None,
-        );
+        let mut req =
+            NormalRequest::new_simple(messages, SamplingParams::deterministic(), tx, 0, None, None);
         req.model_id = model_id;
         hanzo
             .send_request(Request::Normal(Box::new(req)))

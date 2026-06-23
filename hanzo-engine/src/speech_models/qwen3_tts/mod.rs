@@ -104,7 +104,11 @@ impl Qwen3TtsPipeline {
         let sp = self.special_embeds()?;
 
         let codec_prefill_0: Vec<u32> = match language_id {
-            None => vec![tc.codec_nothink_id, tc.codec_think_bos_id, tc.codec_think_eos_id],
+            None => vec![
+                tc.codec_nothink_id,
+                tc.codec_think_bos_id,
+                tc.codec_think_eos_id,
+            ],
             Some(lid) => vec![
                 tc.codec_think_id,
                 tc.codec_think_bos_id,
@@ -122,7 +126,10 @@ impl Qwen3TtsPipeline {
         let role = self.text_proj(&self.ids(&text_ids[0..3])?)?;
 
         // [tts_pad*(n-2), tts_bos] + codec_input_embedding[:, :-1]
-        let pad_rep = sp.tts_pad.broadcast_as((1, n - 2, sp.tts_pad.dim(2)?))?.contiguous()?;
+        let pad_rep = sp
+            .tts_pad
+            .broadcast_as((1, n - 2, sp.tts_pad.dim(2)?))?
+            .contiguous()?;
         let text_head = Tensor::cat(&[&pad_rep, &sp.tts_bos], 1)?;
         let codec_head = codec_input_embedding.narrow(1, 0, n - 1)?;
         let body = (text_head + codec_head)?;
@@ -153,9 +160,8 @@ impl Qwen3TtsPipeline {
         if temperature == 0. {
             return Ok(logits.argmax(D::Minus1)?.to_scalar::<u32>()?);
         }
-        let probs = hanzo_nn::ops::softmax_last_dim(
-            &(logits.to_dtype(DType::F32)? / temperature as f64)?,
-        )?;
+        let probs =
+            hanzo_nn::ops::softmax_last_dim(&(logits.to_dtype(DType::F32)? / temperature as f64)?)?;
         let probs: Vec<f32> = probs.to_vec1()?;
         let distr = WeightedIndex::new(&probs).map_err(hanzo_ml::Error::msg)?;
         Ok(distr.sample(rng) as u32)
@@ -201,7 +207,10 @@ impl Qwen3TtsPipeline {
             let id = self.sample(&last, temperature, rng)?;
             codes.push(id);
             if group < groups - 1 {
-                let emb = self.model.code_predictor.embed_group(group, &self.ids(&[id])?)?;
+                let emb = self
+                    .model
+                    .code_predictor
+                    .embed_group(group, &self.ids(&[id])?)?;
                 seq = Tensor::cat(&[&seq, &emb], 1)?;
             }
         }
@@ -227,7 +236,10 @@ impl Qwen3TtsPipeline {
 
         for _ in 0..max_tokens {
             let mask = causal_mask(inputs_embeds.dim(1)?, self.dtype, &self.device)?;
-            let (hidden, logits) = self.model.talker.forward(&inputs_embeds, &[0], Some(&mask))?;
+            let (hidden, logits) = self
+                .model
+                .talker
+                .forward(&inputs_embeds, &[0], Some(&mask))?;
             let last_hidden = hidden.i((.., hidden.dim(1)? - 1.., ..))?;
             let last_logits = logits.i((0, logits.dim(1)? - 1, ..))?;
             let last_logits = self.suppress_specials(&last_logits)?;
@@ -240,7 +252,11 @@ impl Qwen3TtsPipeline {
             // next talker input = sum of all group embeddings + trailing_text_hidden (tts_pad here)
             let mut summed = self.model.talker.embed_codec(&self.ids(&[code0])?)?;
             for (group, &id) in frame.iter().enumerate().skip(1) {
-                summed = (summed + self.model.code_predictor.embed_group(group, &self.ids(&[id])?)?)?;
+                summed = (summed
+                    + self
+                        .model
+                        .code_predictor
+                        .embed_group(group, &self.ids(&[id])?)?)?;
             }
             let next = summed.broadcast_add(&trailing_pad)?;
             all_codes.push(frame);
@@ -297,7 +313,10 @@ impl Qwen3TtsPipeline {
             .filter_map(|s| s.parse::<u32>().ok())
             .collect();
         if text_ids.len() < 9 {
-            hanzo_ml::bail!("Qwen3TtsPipeline: prompt id stream too short ({})", text_ids.len());
+            hanzo_ml::bail!(
+                "Qwen3TtsPipeline: prompt id stream too short ({})",
+                text_ids.len()
+            );
         }
         let grouped = self.generate_codes(&text_ids, None, max_tokens, *temperature, 0)?;
         let pcm = self.decode_codes(&grouped)?;
@@ -339,7 +358,10 @@ mod codec_validation {
         (dot / (na.sqrt() * nb.sqrt() + 1e-12)) as f32
     }
     fn max_abs_diff(a: &[f32], b: &[f32]) -> f32 {
-        a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max)
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0f32, f32::max)
     }
 
     // ---- committed PyTorch reference fixtures (no python at test time) ----
@@ -359,7 +381,8 @@ mod codec_validation {
     /// Resolve a reference tensor: prefer an explicit `$env` override (used by the offline
     /// re-bless flow), else the committed fixture `tests/fixtures/zen3_tts/<file>`.
     fn ref_path(env: &str, file: &str) -> String {
-        std::env::var(env).unwrap_or_else(|_| fixture_dir().join(file).to_string_lossy().into_owned())
+        std::env::var(env)
+            .unwrap_or_else(|_| fixture_dir().join(file).to_string_lossy().into_owned())
     }
     /// The zen-3-tts model dir (1.8GB safetensors -- env-gated, NOT committed). Defaults to the
     /// spark layout. Returns None (test skips) if the weights are not on disk.
@@ -381,12 +404,16 @@ mod codec_validation {
     }
     fn codec_weights(dir: &std::path::Path) -> String {
         std::env::var("ZEN3_CODEC_WEIGHTS").unwrap_or_else(|_| {
-            dir.join("speech_tokenizer/model.safetensors").to_string_lossy().into_owned()
+            dir.join("speech_tokenizer/model.safetensors")
+                .to_string_lossy()
+                .into_owned()
         })
     }
     fn codec_config(dir: &std::path::Path) -> String {
         std::env::var("ZEN3_CODEC_CONFIG").unwrap_or_else(|_| {
-            dir.join("speech_tokenizer/config.json").to_string_lossy().into_owned()
+            dir.join("speech_tokenizer/config.json")
+                .to_string_lossy()
+                .into_owned()
         })
     }
     fn load_vb(path: &str, device: &Device) -> ShardedVarBuilder {
@@ -442,23 +469,33 @@ mod codec_validation {
                 .unwrap()
                 .to_vec1::<f32>()
                 .unwrap();
-            assert_eq!(gotv.len(), refv.len(), "{name} len {} vs ref {}", gotv.len(), refv.len());
+            assert_eq!(
+                gotv.len(),
+                refv.len(),
+                "{name} len {} vs ref {}",
+                gotv.len(),
+                refv.len()
+            );
             let cos = cosine(&gotv, &refv);
             let mad = max_abs_diff(&gotv, &refv);
-            eprintln!("[codec] {name}: cos={cos:.6} max_abs_diff={mad:.6} (n={})", gotv.len());
+            eprintln!(
+                "[codec] {name}: cos={cos:.6} max_abs_diff={mad:.6} (n={})",
+                gotv.len()
+            );
             assert!(cos > 0.99, "{name} cosine {cos} below 0.99");
         };
         check("quant", "ZEN3_REF_QUANT", "ref_quant.f32", &quant);
-        check("pretrans", "ZEN3_REF_PRETRANS", "ref_pretrans.f32", &pretrans);
+        check(
+            "pretrans",
+            "ZEN3_REF_PRETRANS",
+            "ref_pretrans.f32",
+            &pretrans,
+        );
         check("upsample", "ZEN3_REF_UPSAMPLE", "ref_upsample.f32", &up);
         check("wav", "ZEN3_REF_WAV", "ref_wav.f32", &wav);
 
         if let Ok(out) = std::env::var("ZEN3_OUT_WAV") {
-            let samples: Vec<f32> = wav
-                .flatten_all()
-                .unwrap()
-                .to_vec1::<f32>()
-                .unwrap();
+            let samples: Vec<f32> = wav.flatten_all().unwrap().to_vec1::<f32>().unwrap();
             let mut bytes = Vec::with_capacity(samples.len() * 4);
             for s in samples {
                 bytes.extend_from_slice(&s.to_le_bytes());
@@ -522,7 +559,11 @@ mod codec_validation {
         // greedy frame-0: argmax code0, then greedy groups 1..G via code_predictor.
         let groups = cfg.talker_config.num_code_groups;
         let last_logits = logits.i((0, pt - 1, ..)).unwrap();
-        let code0 = last_logits.argmax(D::Minus1).unwrap().to_scalar::<u32>().unwrap();
+        let code0 = last_logits
+            .argmax(D::Minus1)
+            .unwrap()
+            .to_scalar::<u32>()
+            .unwrap();
         let last_hidden = hidden.i((.., pt - 1.., ..)).unwrap();
         let mut frame = vec![code0];
         let ids = |v: u32| Tensor::new(&[v], &device).unwrap().unsqueeze(0).unwrap();
@@ -612,7 +653,9 @@ mod codec_validation {
     #[test]
     fn full_generation_greedy_matches_reference() {
         let Some(dir) = tts_dir() else {
-            eprintln!("zen-3-tts weights absent (set ZEN3_TTS_DIR); skipping full-generation validation");
+            eprintln!(
+                "zen-3-tts weights absent (set ZEN3_TTS_DIR); skipping full-generation validation"
+            );
             return;
         };
         let weights = main_weights(&dir);
@@ -640,7 +683,9 @@ mod codec_validation {
 
         let ids: Vec<u32> = read_i64(&ids_path).iter().map(|&v| v as u32).collect();
         // temperature 0 = greedy
-        let grouped = pipe.generate_codes(&ids, Some(lang_id), rt + 8, 0.0, 0).unwrap();
+        let grouped = pipe
+            .generate_codes(&ids, Some(lang_id), rt + 8, 0.0, 0)
+            .unwrap();
         let got_t = grouped[0].len();
         eprintln!("[fullgen] rust produced {} frames (ref {})", got_t, rt);
 
@@ -669,12 +714,19 @@ mod codec_validation {
                 full_frame_ok += 1;
             }
         }
-        eprintln!("[fullgen] full-frame (all 16 codes) matches {full_frame_ok}/{}", n.min(8));
+        eprintln!(
+            "[fullgen] full-frame (all 16 codes) matches {full_frame_ok}/{}",
+            n.min(8)
+        );
         // The first frames must match bit-exact (validates the loop, feedback embed, trailing pad,
         // and code_predictor). Beyond that, greedy argmax is sensitive to f32 accumulation order on
         // near-tie logits (this degenerate greedy sequence has long runs of repeated codes), so we
         // allow a small number of late tie-break flips rather than requiring a perfect prefix.
-        assert_eq!(full_frame_ok, n.min(8), "early full-frame codes diverged (logic error)");
+        assert_eq!(
+            full_frame_ok,
+            n.min(8),
+            "early full-frame codes diverged (logic error)"
+        );
         assert!(
             col0_matches as f32 >= 0.9 * n as f32,
             "codebook-0 diverged too early: {col0_matches}/{n}"

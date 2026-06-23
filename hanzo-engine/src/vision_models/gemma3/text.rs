@@ -2,8 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use hanzo_ml::{Device, Module, Result, Tensor};
 use hanzo_quant::{
-    softcap,
-    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+    softcap, ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
 
 use crate::{

@@ -9,8 +9,11 @@ use hanzo_ml::{DType, Device, Tensor};
 use std::io::Write;
 
 fn val(i: usize, salt: usize) -> f32 {
-    let x = ((i.wrapping_mul(2654435761).wrapping_add(salt.wrapping_mul(40503)) >> 8) & 0xffff)
-        as f32
+    let x = ((i
+        .wrapping_mul(2654435761)
+        .wrapping_add(salt.wrapping_mul(40503))
+        >> 8)
+        & 0xffff) as f32
         / 65535.0; // [0,1)
     (x - 0.5) * 8.0 // [-4,4]
 }

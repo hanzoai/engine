@@ -269,9 +269,7 @@ impl QuantMethod for GgufMatMul {
             #[cfg(feature = "rocm")]
             QMatMul::RocmQuant { qtensor, .. } => (DType::F32, qtensor.device()),
             #[cfg(feature = "vulkan")]
-            QMatMul::VulkanQuant { qtensor, .. } => {
-                (DType::F32, qtensor.device())
-            }
+            QMatMul::VulkanQuant { qtensor, .. } => (DType::F32, qtensor.device()),
             QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
         }
     }
@@ -309,9 +307,7 @@ impl QuantMethod for GgufMatMul {
                 #[cfg(feature = "rocm")]
                 QMatMul::RocmQuant { qtensor, .. } => qtensor.dequantize(&qtensor.device())?,
                 #[cfg(feature = "vulkan")]
-                QMatMul::VulkanQuant { qtensor, .. } => {
-                    qtensor.dequantize(&qtensor.device())?
-                }
+                QMatMul::VulkanQuant { qtensor, .. } => qtensor.dequantize(&qtensor.device())?,
                 QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
             };
             let dtype = dtype.try_into()?;
@@ -325,22 +321,23 @@ impl QuantMethod for GgufMatMul {
                 b: self.b.clone(),
             })?))
         } else {
-            let w = match &self.w {
-                QMatMul::QTensor(q) => QMatMul::QTensor(Arc::new(QTensor::quantize(
-                    &q.dequantize(&device)?,
-                    q.dtype(),
-                )?)),
-                #[cfg(feature = "rocm")]
-                QMatMul::RocmQuant { qtensor, .. } => QMatMul::from_qtensor(
-                    QTensor::quantize(&qtensor.dequantize(&device)?, qtensor.dtype())?,
-                )?,
-                #[cfg(feature = "vulkan")]
-                QMatMul::VulkanQuant { qtensor, .. } => QMatMul::from_qtensor(
-                    QTensor::quantize(&qtensor.dequantize(&device)?, qtensor.dtype())?,
-                )?,
-                QMatMul::Tensor(t) => QMatMul::Tensor(t.to_device(&device)?),
-                QMatMul::TensorF16(t) => QMatMul::TensorF16(t.to_device(&device)?),
-            };
+            let w =
+                match &self.w {
+                    QMatMul::QTensor(q) => QMatMul::QTensor(Arc::new(QTensor::quantize(
+                        &q.dequantize(&device)?,
+                        q.dtype(),
+                    )?)),
+                    #[cfg(feature = "rocm")]
+                    QMatMul::RocmQuant { qtensor, .. } => QMatMul::from_qtensor(
+                        QTensor::quantize(&qtensor.dequantize(&device)?, qtensor.dtype())?,
+                    )?,
+                    #[cfg(feature = "vulkan")]
+                    QMatMul::VulkanQuant { qtensor, .. } => QMatMul::from_qtensor(
+                        QTensor::quantize(&qtensor.dequantize(&device)?, qtensor.dtype())?,
+                    )?,
+                    QMatMul::Tensor(t) => QMatMul::Tensor(t.to_device(&device)?),
+                    QMatMul::TensorF16(t) => QMatMul::TensorF16(t.to_device(&device)?),
+                };
             let b = if let Some(b) = &self.b {
                 Some(b.to_device(&device)?)
             } else {
