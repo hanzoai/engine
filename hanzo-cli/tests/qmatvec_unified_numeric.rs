@@ -478,3 +478,142 @@ fn moe_matvec_unified_numeric() {
         .and_then(|mut f| f.write_all(log.as_bytes()));
     eprintln!("{log}");
 }
+
+// dp4a-vs-scalar A/B gate: the int8-dp4a decode core (`qdp4a<WTYPE>`) must equal the scalar
+// `qmatvec_core<WTYPE>` (the byte-faithful CPU-oracle reference) for every dp4a-capable type. Sets
+// the per-type `HANZO_<T>_FALLBACK` env to force the scalar core, unset to take dp4a, and asserts the
+// two agree to a tight f16/bf16-reorder tolerance (both accumulate in f32; only the summation ORDER
+// differs). Covers both the single-expert matvec and the indexed-MoE path. This proves the speedup
+// changed nothing numeric -- the whole point of the bit-faithful dp4a port.
+fn ab_matvec<F: Fn(&mut [u8], usize, usize)>(
+    dev: &RocmDevice,
+    log: &mut String,
+    name: &str,
+    qt: RocmQuantType,
+    fb_env: &str,
+    n: usize,
+    k: usize,
+    blk: usize,
+    tsz: usize,
+    fill: F,
+) {
+    let xf: Vec<f32> = (0..k).map(val).collect();
+    let xh: Vec<f16> = xf.iter().map(|&v| f16::from_f32(v)).collect();
+    let xbf: Vec<bf16> = xf.iter().map(|&v| bf16::from_f32(v)).collect();
+    let xst_h = dev.storage_from_slice(&xh).expect("upload x f16");
+    let xst_b = dev.storage_from_slice(&xbf).expect("upload x bf16");
+    let wq_bytes = build_bytes(n, k, blk, tsz, fill);
+    let wst = dev.storage_from_slice(&wq_bytes).expect("upload w");
+
+    // dp4a path (fallback unset).
+    std::env::remove_var(fb_env);
+    let dp4a_h = to_f32(&dev.matvec_quant(qt, &wst, &xst_h, n, k).expect("dp4a f16"));
+    let dp4a_b = to_f32(&dev.matvec_quant(qt, &wst, &xst_b, n, k).expect("dp4a bf16"));
+    // scalar path (fallback set) -- the byte-faithful reference core.
+    std::env::set_var(fb_env, "1");
+    let scal_h = to_f32(&dev.matvec_quant(qt, &wst, &xst_h, n, k).expect("scalar f16"));
+    let scal_b = to_f32(&dev.matvec_quant(qt, &wst, &xst_b, n, k).expect("scalar bf16"));
+    std::env::remove_var(fb_env);
+
+    let scale = scal_h
+        .iter()
+        .chain(scal_b.iter())
+        .fold(0f32, |m, &v| m.max(v.abs()))
+        .max(1.0);
+    let tol = 0.01 * scale;
+    let mut nbad = 0usize;
+    let mut max_err = 0f32;
+    for i in 0..n {
+        let eh = (dp4a_h[i] - scal_h[i]).abs();
+        let eb = (dp4a_b[i] - scal_b[i]).abs();
+        max_err = max_err.max(eh).max(eb);
+        if eh > tol || eb > tol {
+            nbad += 1;
+        }
+    }
+    log.push_str(&format!(
+        "{name:8} dp4a-vs-scalar n={n} k={k} nbad={nbad}/{n} max_err={max_err:.5} (tol {tol:.5})\n"
+    ));
+    assert!(nbad == 0, "{name} dp4a != scalar core: nbad={nbad} max_err={max_err} tol={tol}");
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ab_moe<F: Fn(&mut [u8], usize, usize)>(
+    dev: &RocmDevice,
+    log: &mut String,
+    name: &str,
+    qt: RocmQuantType,
+    fb_env: &str,
+    e_cnt: usize,
+    nrows: usize,
+    n: usize,
+    k: usize,
+    blk: usize,
+    tsz: usize,
+    fill: F,
+) {
+    let nblk = k / blk;
+    let expert_bytes = n * nblk * tsz;
+    let mut bank: Vec<u8> = Vec::with_capacity(e_cnt * expert_bytes);
+    for e in 0..e_cnt {
+        bank.extend_from_slice(&build_bytes(n, k, blk, tsz, |b, r, bb| fill(b, r * (e + 1) + e, bb)));
+    }
+    let wbank = dev.storage_from_slice(&bank).expect("upload bank");
+    let ids: Vec<u32> = (0..nrows).map(|s| ((s * 3 + 1) % e_cnt) as u32).collect();
+    let ids_dev = dev.storage_from_slice(&ids).expect("upload ids");
+    let xf: Vec<f32> = (0..nrows * k).map(val).collect();
+    let xh: Vec<f16> = xf.iter().map(|&v| f16::from_f32(v)).collect();
+    let xst_h = dev.storage_from_slice(&xh).expect("upload x f16");
+
+    std::env::remove_var(fb_env);
+    let dp4a = to_f32(&dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k).expect("moe dp4a"));
+    std::env::set_var(fb_env, "1");
+    let scal = to_f32(&dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k).expect("moe scalar"));
+    std::env::remove_var(fb_env);
+
+    let scale = scal.iter().fold(0f32, |m, &v| m.max(v.abs())).max(1.0);
+    let tol = 0.01 * scale;
+    let mut nbad = 0usize;
+    let mut max_err = 0f32;
+    for i in 0..nrows * n {
+        let e = (dp4a[i] - scal[i]).abs();
+        max_err = max_err.max(e);
+        if e > tol {
+            nbad += 1;
+        }
+    }
+    log.push_str(&format!(
+        "{name:8} MoE dp4a-vs-scalar nbad={nbad}/{} max_err={max_err:.5} (tol {tol:.5})\n",
+        nrows * n
+    ));
+    assert!(nbad == 0, "{name} MoE dp4a != scalar core: nbad={nbad} max_err={max_err} tol={tol}");
+}
+
+#[test]
+fn qmatvec_dp4a_vs_scalar() {
+    let mut log = String::new();
+    let dev = RocmDevice::new(0).expect("rocm device");
+    let shapes: &[(usize, usize)] = &[(64, 256), (4096, 4096), (1024, 3072), (17, 4096), (4096, 256)];
+
+    // Q4_K (ASYMMETRIC) and Q6_K (SYMMETRIC 6-bit) are the dp4a-capable types; each must match its
+    // scalar core bit-faithfully. Same small exact-f16 scales the oracle gate uses.
+    for &(n, k) in shapes {
+        ab_matvec(&dev, &mut log, "Q4_K", RocmQuantType::Q4K, "HANZO_Q4K_FALLBACK", n, k, 256, 144, |blk, r, b| {
+            put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
+            put_d(blk, 2, r, b, 0.03125, 0.015625, 4);
+        });
+        ab_matvec(&dev, &mut log, "Q6_K", RocmQuantType::Q6K, "HANZO_Q6K_FALLBACK", n, k, 256, 210, |blk, r, b| {
+            put_d(blk, 208, r, b, 0.0078125, 0.00390625, 5);
+        });
+    }
+    // MoE A/B for both (8 experts, 16 slots, n=128, k=512).
+    ab_moe(&dev, &mut log, "Q4_K", RocmQuantType::Q4K, "HANZO_Q4K_FALLBACK", 8, 16, 128, 512, 256, 144, |blk, r, b| {
+        put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
+        put_d(blk, 2, r, b, 0.03125, 0.015625, 4);
+    });
+    ab_moe(&dev, &mut log, "Q6_K", RocmQuantType::Q6K, "HANZO_Q6K_FALLBACK", 8, 16, 128, 512, 256, 210, |blk, r, b| {
+        put_d(blk, 208, r, b, 0.0078125, 0.00390625, 5);
+    });
+
+    eprintln!("{log}");
+}
