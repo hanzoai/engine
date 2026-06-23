@@ -32,6 +32,7 @@ pub enum GGUFArchitecture {
     Qwen35,
     Qwen35MoE,
     Mistral3,
+    Deepseek2,
 }
 
 // Wraps from_str() for some convenience:
