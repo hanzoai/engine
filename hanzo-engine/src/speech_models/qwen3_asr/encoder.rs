@@ -19,7 +19,12 @@ const SINUSOID_BASE: f64 = 10_000.0;
 /// Matches HF `SinusoidsPositionEmbedding`: the log-timescale increment is
 /// divided by `(channels/2 - 1)` (NOT `channels`), and the layout is
 /// `[sin(pos*inv), cos(pos*inv)]` concatenated along the channel axis.
-fn sinusoidal_embedding(max_pos: usize, dim: usize, device: &Device, dtype: DType) -> Result<Tensor> {
+fn sinusoidal_embedding(
+    max_pos: usize,
+    dim: usize,
+    device: &Device,
+    dtype: DType,
+) -> Result<Tensor> {
     let half = dim / 2;
     // log_timescale_increment = ln(base) / (half - 1); inv = exp(-incr * i).
     let increment = SINUSOID_BASE.ln() / (half as f64 - 1.0);
@@ -188,7 +193,13 @@ impl Qwen3AsrAudioEncoder {
             stride: CONV_STRIDE,
             ..Default::default()
         };
-        let conv1 = conv2d(1, cfg.conv_channels, CONV_KERNEL, conv_cfg, vb.pp("conv2d1"))?;
+        let conv1 = conv2d(
+            1,
+            cfg.conv_channels,
+            CONV_KERNEL,
+            conv_cfg,
+            vb.pp("conv2d1"),
+        )?;
         let conv2 = conv2d(
             cfg.conv_channels,
             cfg.conv_channels,

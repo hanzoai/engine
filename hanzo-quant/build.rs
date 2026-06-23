@@ -206,9 +206,7 @@ fn main() -> Result<(), String> {
             .unwrap_or(false);
 
         if skip_precompile {
-            println!(
-                "cargo:warning=Skipping Metal kernel precompilation (METAL_PRECOMPILE=0)"
-            );
+            println!("cargo:warning=Skipping Metal kernel precompilation (METAL_PRECOMPILE=0)");
             // Write a dummy metallib file to satisfy the include_bytes! macro
             let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
             std::fs::write(out_dir.join("hanzo_quant.metallib"), []).unwrap();

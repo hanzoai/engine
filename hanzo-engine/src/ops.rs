@@ -411,21 +411,20 @@ pub fn cuda_moe_router_topk(
             };
             let (logits_ptr, _logits_guard) = logits_src.device_ptr(&stream);
 
-            let (selection_bias_ptr, _selection_bias_guard) = if let Some((storage, _layout)) =
-                &selection_bias_storage_and_layout
-            {
-                let storage = match &**storage {
-                    hanzo_ml::Storage::Cuda(s) => s,
-                    _ => hanzo_ml::bail!("cuda_moe_router_topk requires CUDA selection_bias"),
+            let (selection_bias_ptr, _selection_bias_guard) =
+                if let Some((storage, _layout)) = &selection_bias_storage_and_layout {
+                    let storage = match &**storage {
+                        hanzo_ml::Storage::Cuda(s) => s,
+                        _ => hanzo_ml::bail!("cuda_moe_router_topk requires CUDA selection_bias"),
+                    };
+                    let CudaStorageSlice::F32(src) = &storage.slice else {
+                        hanzo_ml::bail!("cuda_moe_router_topk selection_bias dtype mismatch");
+                    };
+                    let (ptr, guard) = src.device_ptr(&stream);
+                    (ptr as *const c_void, Some(guard))
+                } else {
+                    (std::ptr::null(), None)
                 };
-                let CudaStorageSlice::F32(src) = &storage.slice else {
-                    hanzo_ml::bail!("cuda_moe_router_topk selection_bias dtype mismatch");
-                };
-                let (ptr, guard) = src.device_ptr(&stream);
-                (ptr as *const c_void, Some(guard))
-            } else {
-                (std::ptr::null(), None)
-            };
 
             let (expert_scale_ptr, _expert_scale_guard) =
                 if let Some((storage, _layout)) = &expert_scale_storage_and_layout {
@@ -1975,18 +1974,16 @@ pub fn cuda_rms_norm_residual_then_rms_norm(
                 );
             };
             let CudaStorageSlice::$variant(norm_weight_src) = &norm_weight_storage.slice else {
-                hanzo_ml::bail!(
-                    "cuda_rms_norm_residual_then_rms_norm norm weight dtype mismatch"
-                );
+                hanzo_ml::bail!("cuda_rms_norm_residual_then_rms_norm norm weight dtype mismatch");
             };
             let (scale_ptr, scale_guard) = if let Some((scale_storage, scale_layout)) =
                 &scale_storage_and_layout
             {
                 let scale_storage = match &**scale_storage {
                     hanzo_ml::Storage::Cuda(s) => s,
-                    _ => hanzo_ml::bail!(
-                        "cuda_rms_norm_residual_then_rms_norm requires CUDA scale"
-                    ),
+                    _ => {
+                        hanzo_ml::bail!("cuda_rms_norm_residual_then_rms_norm requires CUDA scale")
+                    }
                 };
                 let CudaStorageSlice::$variant(scale_src) = &scale_storage.slice else {
                     hanzo_ml::bail!("cuda_rms_norm_residual_then_rms_norm scale dtype mismatch");
@@ -2674,10 +2671,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
                     slice: CudaStorageSlice::$variant(k_out_buf),
                     device: dev.clone(),
                 };
-                Some(Tensor::from((
-                    hanzo_ml::Storage::Cuda(k_storage),
-                    k_shape,
-                )))
+                Some(Tensor::from((hanzo_ml::Storage::Cuda(k_storage), k_shape)))
             } else {
                 None
             };

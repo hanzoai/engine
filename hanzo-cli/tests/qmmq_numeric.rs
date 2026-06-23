@@ -102,7 +102,8 @@ fn qmmq_numeric() {
     }
     log.push('\n');
 
-    let _ = std::fs::File::create("C:\\qmmq-test.txt").and_then(|mut f| f.write_all(log.as_bytes()));
+    let _ =
+        std::fs::File::create("C:\\qmmq-test.txt").and_then(|mut f| f.write_all(log.as_bytes()));
     eprintln!("{log}");
     assert!(nbad == 0, "qmmq mismatch: {nbad} bad, max_err {max_err}");
 }

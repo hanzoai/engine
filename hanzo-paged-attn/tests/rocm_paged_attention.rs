@@ -55,7 +55,9 @@ fn run_case(
         ((seed >> 8) as f32 / (1u32 << 24) as f32) - 0.5 // [-0.5, 0.5)
     };
 
-    let q_host: Vec<f32> = (0..NUM_SEQS * NUM_HEADS * HEAD_SIZE).map(|_| rnd()).collect();
+    let q_host: Vec<f32> = (0..NUM_SEQS * NUM_HEADS * HEAD_SIZE)
+        .map(|_| rnd())
+        .collect();
 
     let mut k_ref = vec![vec![vec![0f32; HEAD_SIZE]; context_len]; NUM_KV_HEADS];
     let mut v_ref = vec![vec![vec![0f32; HEAD_SIZE]; context_len]; NUM_KV_HEADS];
@@ -145,12 +147,18 @@ fn run_case(
         dev,
     )?;
     let key_cache = Tensor::from_vec(
-        kc_host.iter().map(|&x| f16::from_f32(x)).collect::<Vec<_>>(),
+        kc_host
+            .iter()
+            .map(|&x| f16::from_f32(x))
+            .collect::<Vec<_>>(),
         (NUM_BLOCKS, NUM_KV_HEADS, HEAD_SIZE / X, BLOCK_SIZE, X),
         dev,
     )?;
     let value_cache = Tensor::from_vec(
-        vc_host.iter().map(|&x| f16::from_f32(x)).collect::<Vec<_>>(),
+        vc_host
+            .iter()
+            .map(|&x| f16::from_f32(x))
+            .collect::<Vec<_>>(),
         (NUM_BLOCKS, NUM_KV_HEADS, HEAD_SIZE, BLOCK_SIZE),
         dev,
     )?;
@@ -190,7 +198,9 @@ fn run_case(
             if err > atol + rtol * want.abs() {
                 nbad += 1;
                 if nbad <= 8 {
-                    eprintln!("mismatch ctx={context_len} h={h} d={d}: got={got} want={want} err={err}");
+                    eprintln!(
+                        "mismatch ctx={context_len} h={h} d={d}: got={got} want={want} err={err}"
+                    );
                 }
             }
         }
@@ -204,7 +214,10 @@ fn rocm_paged_attention_v1_matches_reference() -> Result<(), Box<dyn std::error:
     // context_len = 40 spans 3 blocks (16 + 16 + 8), last block partial.
     let (nbad, max_err) = run_case(&dev, 40, 40)?;
     eprintln!("nbad={nbad} max_err={max_err}");
-    assert_eq!(nbad, 0, "ROCm paged_attention v1 mismatch (max_err={max_err})");
+    assert_eq!(
+        nbad, 0,
+        "ROCm paged_attention v1 mismatch (max_err={max_err})"
+    );
     Ok(())
 }
 

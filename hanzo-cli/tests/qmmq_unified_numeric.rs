@@ -57,7 +57,13 @@ fn as_blocks<T: Clone>(bytes: &[u8]) -> Vec<T> {
 // Build a valid GGML weight tensor's raw bytes for `n` rows x `k` cols of type T. Body bytes are
 // pseudo-random; the leading per-block f16 scale(s) are forced to small exact-f16 magnitudes (via
 // `fill`) so reference and kernel scales agree to the last bit and outputs stay O(1..10s).
-fn build_bytes<F: Fn(&mut [u8], usize, usize)>(n: usize, k: usize, blk: usize, tsz: usize, fill: F) -> Vec<u8> {
+fn build_bytes<F: Fn(&mut [u8], usize, usize)>(
+    n: usize,
+    k: usize,
+    blk: usize,
+    tsz: usize,
+    fill: F,
+) -> Vec<u8> {
     assert_eq!(k % blk, 0);
     let nblk = k / blk;
     let mut out = vec![0u8; n * nblk * tsz];
@@ -100,7 +106,14 @@ fn requant_row(x: &[f32]) -> Vec<f32> {
 }
 
 // to_float(weight row n) . activation row (sequential within each on-disk block).
-fn reference_row<T: GgmlType>(wq: &[u8], nn: usize, nblk: usize, blk: usize, tsz: usize, x: &[f32]) -> f32 {
+fn reference_row<T: GgmlType>(
+    wq: &[u8],
+    nn: usize,
+    nblk: usize,
+    blk: usize,
+    tsz: usize,
+    x: &[f32],
+) -> f32 {
     let mut acc = 0f32;
     let mut deq = vec![0f32; blk];
     for b in 0..nblk {
@@ -142,7 +155,11 @@ fn check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
 
     // Native prefill GEMM through the unified core (rows = m > 1).
     let y = dev.qmmq_quant(qt, &xst, &wst, m, n, k).expect("qmmq_quant");
-    assert_eq!(y.dtype(), hanzo_ml::DType::F16, "{name}: prefill returns f16");
+    assert_eq!(
+        y.dtype(),
+        hanzo_ml::DType::F16,
+        "{name}: prefill returns f16"
+    );
     let yg = to_f32(&y); // [m, n]
 
     // Oracle: per row, requantize that activation row to int8 (as the kernel does) and dot the real
@@ -186,46 +203,122 @@ fn qmmq_unified_numeric() {
     // Shapes exercise: partial tiles (m,n not mult-128), production prefill width (512 tok x 4096),
     // wide-K FFN, and a tall/narrow case. Each type runs the full set (multi-tile, double-buffer,
     // partial tails). k is a multiple of the type's block (32 / 256).
-    let shapes_32: &[(usize, usize, usize)] = &[(200, 160, 128), (130, 130, 256), (256, 512, 1024), (64, 256, 4096)];
-    let shapes_256: &[(usize, usize, usize)] = &[(200, 160, 256), (130, 130, 512), (64, 256, 1024), (37, 320, 768)];
+    let shapes_32: &[(usize, usize, usize)] = &[
+        (200, 160, 128),
+        (130, 130, 256),
+        (256, 512, 1024),
+        (64, 256, 4096),
+    ];
+    let shapes_256: &[(usize, usize, usize)] = &[
+        (200, 160, 256),
+        (130, 130, 512),
+        (64, 256, 1024),
+        (37, 320, 768),
+    ];
 
     // Q8_0: 34 B, 32 elems. SYMMETRIC -- the proven prefill, re-validated through the unified core.
     for &(m, n, k) in shapes_32 {
-        check::<BlockQ8_0, _>(&dev, &mut log, "Q8_0", RocmQuantType::Q8_0, m, n, k, 32, 34, |blk, r, b| {
-            put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
-        });
+        check::<BlockQ8_0, _>(
+            &dev,
+            &mut log,
+            "Q8_0",
+            RocmQuantType::Q8_0,
+            m,
+            n,
+            k,
+            32,
+            34,
+            |blk, r, b| {
+                put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
+            },
+        );
     }
     // Q4_0: 18 B, 32 elems. SYMMETRIC nibble-8.
     for &(m, n, k) in shapes_32 {
-        check::<BlockQ4_0, _>(&dev, &mut log, "Q4_0", RocmQuantType::Q4_0, m, n, k, 32, 18, |blk, r, b| {
-            put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
-        });
+        check::<BlockQ4_0, _>(
+            &dev,
+            &mut log,
+            "Q4_0",
+            RocmQuantType::Q4_0,
+            m,
+            n,
+            k,
+            32,
+            18,
+            |blk, r, b| {
+                put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
+            },
+        );
     }
     // Q4_K: 144 B, 256 elems. ASYMMETRIC (d at 0, dmin at 2) -- the min-bias path via the q8_1 sum.
     for &(m, n, k) in shapes_256 {
-        check::<BlockQ4K, _>(&dev, &mut log, "Q4_K", RocmQuantType::Q4K, m, n, k, 256, 144, |blk, r, b| {
-            put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
-            put_d(blk, 2, r, b, 0.03125, 0.015625, 4);
-        });
+        check::<BlockQ4K, _>(
+            &dev,
+            &mut log,
+            "Q4_K",
+            RocmQuantType::Q4K,
+            m,
+            n,
+            k,
+            256,
+            144,
+            |blk, r, b| {
+                put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
+                put_d(blk, 2, r, b, 0.03125, 0.015625, 4);
+            },
+        );
     }
     // Q6_K: 210 B, 256 elems. SYMMETRIC, signed per-16 scales -> the 2-scales-per-32 path. Small d
     // (~0.008, exact-f16) keeps the +-127-magnitude worst-case rows inside f16, as the decode gate does.
     for &(m, n, k) in shapes_256 {
-        check::<BlockQ6K, _>(&dev, &mut log, "Q6_K", RocmQuantType::Q6K, m, n, k, 256, 210, |blk, r, b| {
-            put_d(blk, 208, r, b, 0.0078125, 0.00390625, 5);
-        });
+        check::<BlockQ6K, _>(
+            &dev,
+            &mut log,
+            "Q6_K",
+            RocmQuantType::Q6K,
+            m,
+            n,
+            k,
+            256,
+            210,
+            |blk, r, b| {
+                put_d(blk, 208, r, b, 0.0078125, 0.00390625, 5);
+            },
+        );
     }
     // IQ4_XS: 136 B, 256 elems. SYMMETRIC codebook (LUT). d at 0; scales_h u16 at 2; scales_l[4] at 4.
     for &(m, n, k) in shapes_256 {
-        check::<BlockIQ4xs, _>(&dev, &mut log, "IQ4_XS", RocmQuantType::IQ4_XS, m, n, k, 256, 136, |blk, r, b| {
-            put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
-        });
+        check::<BlockIQ4xs, _>(
+            &dev,
+            &mut log,
+            "IQ4_XS",
+            RocmQuantType::IQ4_XS,
+            m,
+            n,
+            k,
+            256,
+            136,
+            |blk, r, b| {
+                put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
+            },
+        );
     }
     // TQ2_0: 66 B, 256 elems. SYMMETRIC ternary 2-bit. qs[64] at 0; d at 64.
     for &(m, n, k) in shapes_256 {
-        check::<BlockTQ2_0, _>(&dev, &mut log, "TQ2_0", RocmQuantType::TQ2_0, m, n, k, 256, 66, |blk, r, b| {
-            put_d(blk, 64, r, b, 0.0625, 0.03125, 5);
-        });
+        check::<BlockTQ2_0, _>(
+            &dev,
+            &mut log,
+            "TQ2_0",
+            RocmQuantType::TQ2_0,
+            m,
+            n,
+            k,
+            256,
+            66,
+            |blk, r, b| {
+                put_d(blk, 64, r, b, 0.0625, 0.03125, 5);
+            },
+        );
     }
 
     let _ = std::fs::File::create("C:\\qmmq-unified-test.txt")

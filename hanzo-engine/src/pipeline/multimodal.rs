@@ -1317,9 +1317,7 @@ impl MultimodalPipeline {
             Ok(Some(graph)) => graph,
             Ok(None) => {
                 restore_event_tracking_after_capture(&stream, restore_event_tracking);
-                return Err(hanzo_ml::Error::msg(
-                    "CUDA graph capture returned no graph",
-                ));
+                return Err(hanzo_ml::Error::msg("CUDA graph capture returned no graph"));
             }
             Err(err) => {
                 restore_event_tracking_after_capture(&stream, restore_event_tracking);

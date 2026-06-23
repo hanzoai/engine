@@ -17,16 +17,16 @@
 //! `transport` documents the wiring; it is intentionally not compiled here so
 //! the engine gains no `capnp`/`capnpc` build dependency before that step.
 
+mod client;
 mod message;
 mod server;
-mod client;
 pub mod transport;
 
 pub use client::ZapInference;
 pub use message::{
     ChatChunk, ChatRequest, ChatResponse, Constraint, DetokenizeRequest, HealthStatus, InferError,
-    InferErrorKind, Message, ModelInfo, ModelList, ReIsqRequest, Role, SamplingParams, Tool,
-    ToolCall, ToolChoiceKind, TokenizeRequest, Usage,
+    InferErrorKind, Message, ModelInfo, ModelList, ReIsqRequest, Role, SamplingParams,
+    TokenizeRequest, Tool, ToolCall, ToolChoiceKind, Usage,
 };
 pub use server::ZapInferenceServer;
 
