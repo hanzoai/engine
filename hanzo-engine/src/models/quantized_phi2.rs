@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use hanzo_ml::quantized::QMatMul;
 use hanzo_ml::quantized::QTensor;
-use hanzo_ml::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use hanzo_ml::{DType, Device, IndexOp, Module, Result, Tensor};
 use hanzo_nn::{Embedding, LayerNorm};
 use hanzo_quant::GgufMatMul;
 use hanzo_quant::QuantMethod;

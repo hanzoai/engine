@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_ml::{DType, Device, Result, Tensor};
 use hanzo_nn::{Embedding, Linear, Module};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,

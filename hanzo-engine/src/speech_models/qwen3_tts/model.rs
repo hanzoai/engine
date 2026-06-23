@@ -1081,6 +1081,7 @@ impl CodecDecoder {
         self.cfg.output_sample_rate
     }
 
+    #[allow(dead_code)]
     pub fn total_upsample(&self) -> usize {
         let dc = &self.cfg.decoder_config;
         dc.upsample_rates.iter().product::<usize>() * dc.upsampling_ratios.iter().product::<usize>()

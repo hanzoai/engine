@@ -379,7 +379,7 @@ impl TextMoe {
             None,
         )?;
 
-        let router_scores = hanzo_nn::ops::sigmoid(&topk.values.to_dtype(DType::F32)?)?
+        let _router_scores = hanzo_nn::ops::sigmoid(&topk.values.to_dtype(DType::F32)?)?
             .to_dtype(topk.values.dtype())?;
 
         // Forward through routed experts (is_prefill determined internally)

@@ -8,6 +8,7 @@ use crate::layers::{conv2d, group_norm, layer_norm, linear, linear_no_bias, MatM
 
 use super::config::UNetConfig;
 
+#[allow(dead_code)]
 const TIME_EMBED_FACTOR: f64 = 1000.;
 const MAX_PERIOD: f64 = 10000.;
 

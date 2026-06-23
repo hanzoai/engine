@@ -866,7 +866,7 @@ impl MultimodalModel for TextModel {
         _input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
         _model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
-        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
+        _ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> hanzo_ml::Result<Tensor> {
         unreachable!()
     }
