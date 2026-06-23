@@ -14,9 +14,8 @@ use crate::{
     lora::{LoraConfig, Ordering},
     paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata},
     pipeline::{
-        isq::IsqModelLoader,
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, ModelForwardContext,
+        isq::IsqModelLoader, text_models_inputs_processor::FlashParams, EitherCache, IsqModel,
+        ModelForwardContext,
     },
     utils::varbuilder_utils::DeviceForLoadTensor,
     xlora_models::NonGranularState,

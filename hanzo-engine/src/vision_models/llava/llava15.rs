@@ -15,7 +15,6 @@ use crate::paged_attention::encoder_cache::{
     cached_encode_images, CacheModality, EncoderCacheManager,
 };
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
-use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::IsqModel;
 use crate::pipeline::ModelForwardContext;
 use crate::pipeline::MultimodalModel;

@@ -6,9 +6,7 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
-    layers::{
-        apply_rotary_positions_q, embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, Sdpa,
-    },
+    layers::{embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -18,8 +16,7 @@ use crate::{
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
-use hanzo_ml::IndexOp;
-use hanzo_ml::{DType, Device, Module, Result, Tensor, D};
+use hanzo_ml::{DType, Device, Module, Result, Tensor};
 use hanzo_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,

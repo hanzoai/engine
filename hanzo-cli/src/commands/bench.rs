@@ -3,8 +3,8 @@
 use anyhow::Result;
 use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 use hanzo_engine::{
-    initialize_logging, Constraint, DrySamplingParams, NormalRequest, Request, RequestMessage,
-    Response, SamplingParams, Usage,
+    initialize_logging, Constraint, NormalRequest, Request, RequestMessage, Response,
+    SamplingParams, Usage,
 };
 use hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder;
 use std::sync::Arc;
