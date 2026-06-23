@@ -125,7 +125,11 @@ fn main() {
         // windows-msvc rustc resolves `static=hanzorocm` to `hanzorocm.lib`, while
         // GNU targets want `libhanzorocm.a`. The Windows ROCm SDK ships `llvm-ar`
         // (there is no Unix `ar`); llvm-ar writes a COFF archive link.exe accepts.
-        let lib = build_dir.join(if is_windows { "hanzorocm.lib" } else { "libhanzorocm.a" });
+        let lib = build_dir.join(if is_windows {
+            "hanzorocm.lib"
+        } else {
+            "libhanzorocm.a"
+        });
         let _ = std::fs::remove_file(&lib);
         let ar = {
             let bin = PathBuf::from(&rocm_path).join("bin");
@@ -139,7 +143,13 @@ fn main() {
                 .map(|n| bin.join(n))
                 .find(|p| p.exists())
                 .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|| if is_windows { "llvm-ar".into() } else { "ar".into() })
+                .unwrap_or_else(|| {
+                    if is_windows {
+                        "llvm-ar".into()
+                    } else {
+                        "ar".into()
+                    }
+                })
         };
         let status = Command::new(&ar)
             .arg("rcs")

@@ -9,7 +9,8 @@ use hanzo_engine::{
     SpeechLoaderType,
 };
 use hanzo_server_core::{
-    approvals::ApprovalBroker, hanzo_for_server_builder::HanzoForServerBuilder,
+    approvals::ApprovalBroker,
+    hanzo_for_server_builder::HanzoForServerBuilder,
     hanzo_server_router_builder::HanzoServerRouterBuilder,
     route_registry::{RouteInfo, RouteKind, API_ROUTES},
 };

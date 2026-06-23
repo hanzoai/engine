@@ -32,7 +32,9 @@ pub fn gdn_conv1d_step_vulkan(
     _x: &Tensor,
     _weight: &Tensor,
 ) -> Result<Tensor> {
-    hanzo_ml::bail!("gdn_conv1d_step_vulkan: GDN Vulkan kernels not yet ported to canonical hanzo-ml")
+    hanzo_ml::bail!(
+        "gdn_conv1d_step_vulkan: GDN Vulkan kernels not yet ported to canonical hanzo-ml"
+    )
 }
 
 #[cfg(not(feature = "vulkan"))]

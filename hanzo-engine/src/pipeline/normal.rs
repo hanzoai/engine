@@ -29,14 +29,14 @@ use crate::pipeline::cuda_graph::{
     restore_event_tracking_after_capture, CudaDecodeGraphKey, CudaDecodeGraphMetadataBuffers,
     CudaGraphHandle, CUDA_DECODE_GRAPH_CACHE_CAPACITY,
 };
+use crate::pipeline::isq::{UqffFullSer, WeightLoadingMode, WeightLoadingState};
+use crate::pipeline::loaders::auto_device_map;
+use crate::pipeline::loaders::QuantizationConfigShim;
 #[cfg(feature = "metal")]
 use crate::pipeline::metal_graph::{
     metal_decode_graphs_enabled, MetalDecodeGraphKey, MetalDecodeGraphMetadataBuffers,
     METAL_DECODE_GRAPH_CACHE_CAPACITY,
 };
-use crate::pipeline::isq::{UqffFullSer, WeightLoadingMode, WeightLoadingState};
-use crate::pipeline::loaders::auto_device_map;
-use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::{make_prompt_chunk, InputMetadata};
 #[cfg(any(feature = "cuda", feature = "metal"))]
@@ -1426,9 +1426,7 @@ impl NormalPipeline {
             Ok(Some(graph)) => graph,
             Ok(None) => {
                 restore_event_tracking_after_capture(&stream, restore_event_tracking);
-                return Err(hanzo_ml::Error::msg(
-                    "CUDA graph capture returned no graph",
-                ));
+                return Err(hanzo_ml::Error::msg("CUDA graph capture returned no graph"));
             }
             Err(err) => {
                 restore_event_tracking_after_capture(&stream, restore_event_tracking);

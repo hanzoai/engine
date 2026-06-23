@@ -41,7 +41,8 @@ use tokio::sync::mpsc::channel;
 
 const PROMPT_FRANCE: &str = "The capital of France is";
 // 16 greedy tokens of completion appended after PROMPT_FRANCE (no leading space: GGUF byte-BPE).
-const REF_FRANCE_COMPLETION: &str = "Paris. The capital of Italy is Rome. The capital of Spain is Madrid.";
+const REF_FRANCE_COMPLETION: &str =
+    "Paris. The capital of Italy is Rome. The capital of Spain is Madrid.";
 
 const PROMPT_COUNT: &str = "1 2 3 4 5 6 7 8 9";
 // 12 greedy tokens after PROMPT_COUNT: the model should keep counting.
@@ -64,7 +65,9 @@ fn model_path() -> Option<PathBuf> {
 }
 
 fn bless() -> bool {
-    std::env::var("HANZO_TEST_BLESS").map(|v| v == "1").unwrap_or(false)
+    std::env::var("HANZO_TEST_BLESS")
+        .map(|v| v == "1")
+        .unwrap_or(false)
 }
 
 fn split_dir_file(path: &Path) -> (String, String) {
@@ -101,9 +104,19 @@ async fn load(path: &Path) -> Arc<Hanzo> {
     };
 
     // CPU unless a GPU feature is enabled; greedy decode of a 0.6B model is fast enough on CPU.
-    #[cfg(any(feature = "cuda", feature = "metal", feature = "rocm", feature = "vulkan"))]
+    #[cfg(any(
+        feature = "cuda",
+        feature = "metal",
+        feature = "rocm",
+        feature = "vulkan"
+    ))]
     let cpu = false;
-    #[cfg(not(any(feature = "cuda", feature = "metal", feature = "rocm", feature = "vulkan")))]
+    #[cfg(not(any(
+        feature = "cuda",
+        feature = "metal",
+        feature = "rocm",
+        feature = "vulkan"
+    )))]
     let cpu = true;
 
     HanzoForServerBuilder::new()
@@ -194,7 +207,9 @@ async fn greedy_complete(
             Some(Response::ValidationError(e)) => panic!("validation error: {e:?}"),
             Some(Response::ModelError(e, _)) => panic!("model error: {e}"),
             Some(Response::AgenticToolCallProgress { .. }) | Some(Response::File(_)) => continue,
-            Some(_) => panic!("unexpected non-terminal response variant for a non-streaming completion request"),
+            Some(_) => panic!(
+                "unexpected non-terminal response variant for a non-streaming completion request"
+            ),
             None => panic!("response channel closed with no completion"),
         }
     }
@@ -219,7 +234,9 @@ fn assert_finite(label: &str, logprobs: &[(String, f32)]) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deterministic_greedy_output() {
     let Some(path) = model_path() else {
-        eprintln!("SKIP deterministic_greedy_output: set HANZO_TEST_GGUF to a local Qwen3/zen-eco GGUF");
+        eprintln!(
+            "SKIP deterministic_greedy_output: set HANZO_TEST_GGUF to a local Qwen3/zen-eco GGUF"
+        );
         return;
     };
     let hanzo = load(&path).await;
@@ -273,7 +290,11 @@ async fn quant_path_no_nan_coherent() {
     let gen = greedy_complete(&hanzo, PROMPT_FRANCE, 24, true).await;
 
     if bless() {
-        eprintln!("\n[bless] quant path produced {} tokens, text = {:?}", gen.logprobs.len(), gen.text);
+        eprintln!(
+            "\n[bless] quant path produced {} tokens, text = {:?}",
+            gen.logprobs.len(),
+            gen.text
+        );
         return;
     }
 
@@ -283,7 +304,8 @@ async fn quant_path_no_nan_coherent() {
     assert!(!text.is_empty(), "quant path produced empty output");
     // Coherent decode = printable text, not replacement chars / control-byte garbage.
     assert!(
-        text.chars().all(|c| c.is_ascii_graphic() || c == ' ' || c == '\n'),
+        text.chars()
+            .all(|c| c.is_ascii_graphic() || c == ' ' || c == '\n'),
         "quant path produced non-printable output (garbled decode?): {text:?}"
     );
     assert!(
@@ -315,7 +337,11 @@ async fn sanity_logits_and_perplexity() {
     // 3a. Trivial arithmetic: greedy continuation of "2 + 2 =" must contain "4".
     let math = greedy_complete(&hanzo, PROMPT_MATH, 4, true).await;
     if bless() {
-        eprintln!("[bless] math: text={:?} first_tok={:?}", math.text, math.logprobs.first());
+        eprintln!(
+            "[bless] math: text={:?} first_tok={:?}",
+            math.text,
+            math.logprobs.first()
+        );
     }
     assert_finite("math", &math.logprobs);
     if !bless() {
@@ -338,7 +364,10 @@ async fn sanity_logits_and_perplexity() {
     let ppl = (-sum_lp / n).exp();
 
     if bless() {
-        eprintln!("[bless] perplexity over {} greedy steps = {:.4}", n as usize, ppl);
+        eprintln!(
+            "[bless] perplexity over {} greedy steps = {:.4}",
+            n as usize, ppl
+        );
         return;
     }
 
