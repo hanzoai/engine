@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use hanzo_ml::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use hanzo_ml::{DType, Device, IndexOp, Module, Result, Tensor};
 use hanzo_nn::Embedding;
 use hanzo_quant::{
     softcap, ColumnParallelLayer, GgufMatMul, QuantMethod, QuantMethodConfig, ReplicatedLayer,
@@ -125,6 +125,7 @@ impl ProportionalRotaryEmbedding {
     }
 
     /// Apply RoPE to Q only (skip K rotation for shared KV layers).
+    #[allow(dead_code)]
     pub(super) fn forward_q(&self, q: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
         let rope = if self.is_gpt_neox {
@@ -148,6 +149,7 @@ impl ProportionalRotaryEmbedding {
         }
     }
 
+    #[allow(dead_code, clippy::too_many_arguments)]
     fn forward_qk_norm(
         &self,
         q: &Tensor,
@@ -279,7 +281,7 @@ impl Gemma4Router {
             .to_dtype(self.proj.weight().dtype())?
             .apply(&self.proj)?;
         let logits_f32 = logits.to_dtype(DType::F32)?.clamp(-1e4, 1e4)?;
-        let probs = hanzo_nn::ops::softmax_last_dim(&logits_f32)?;
+        let _probs = hanzo_nn::ops::softmax_last_dim(&logits_f32)?;
 
         let topk = crate::ops::moe_router_topk(
             &logits,
@@ -1878,7 +1880,7 @@ impl TextModel {
             .iter()
             .any(|layer| !layer.self_attn.is_sliding && layer.self_attn.head_dim > 512);
         let is_paged_decode = ctx.is_paged() && q_len == 1 && !ctx.is_first_prompt_chunk();
-        let is_paged_prefill_chunk = ctx.is_paged() && q_len > 1 && !ctx.is_first_prompt_chunk();
+        let _is_paged_prefill_chunk = ctx.is_paged() && q_len > 1 && !ctx.is_first_prompt_chunk();
 
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
             let attention_mask = CausalMasker.make_causal_mask(
@@ -2333,7 +2335,7 @@ impl MultimodalModel for TextModel {
         _input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
         _model_specific_args: Box<dyn std::any::Any>,
-        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
+        _ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> hanzo_ml::Result<Tensor> {
         unreachable!()
     }
