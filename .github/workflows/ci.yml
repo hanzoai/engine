@@ -12,25 +12,10 @@ on:
 name: Continuous integration
 
 jobs:
-  check:
-    name: Check
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
-        rust: [stable]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check
-
-  check-metal:
-    name: Check (metal)
-    runs-on: macOS-latest
+  check-linux:
+    name: Check (linux)
+    runs-on: hanzo-build-linux-amd64
+    container: buildpack-deps:bookworm
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -38,21 +23,44 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace --features metal
+      - run: cargo check
 
-  test:
-    name: Test Suite
-    runs-on: ${{ matrix.os }}
+  check-windows:
+    name: Check (windows)
+    runs-on: [self-hosted, windows, X64]
     timeout-minutes: 90
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
-        rust: [stable]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ matrix.rust }}
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check
+
+  test-linux:
+    name: Test Suite (linux)
+    runs-on: hanzo-build-linux-amd64
+    container: buildpack-deps:bookworm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p hanzo-engine -p hanzo-quant -p hanzo-vision
+        env:
+          TESTS_HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+  test-windows:
+    name: Test Suite (windows)
+    runs-on: [self-hosted, windows, X64]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p hanzo-engine -p hanzo-quant -p hanzo-vision
         env:
