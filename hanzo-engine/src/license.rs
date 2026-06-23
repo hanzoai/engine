@@ -225,15 +225,31 @@ mod tests {
     const DEV_APP: &str = "hanzo";
     const ONE_DAY: i64 = 86_400;
 
-    // Load the gitignored dev signing seed (base64url, 32 bytes) used to mint test tokens. The
-    // matching public key is HANZO_LICENSE_PUBKEY embedded above.
-    fn dev_signing_key() -> SigningKey {
-        let b64 = include_str!("../../license-dev-key/dev_signing_key.b64");
-        let seed = URL_SAFE_NO_PAD
-            .decode(b64.trim())
-            .expect("dev seed is valid base64url");
-        let seed: [u8; 32] = seed.try_into().expect("dev seed is 32 bytes");
-        SigningKey::from_bytes(&seed)
+    // The dev signing seed (base64url, 32 bytes) mints test tokens; its public half is the
+    // HANZO_LICENSE_PUBKEY embedded above. The seed is a secret (never committed), read at
+    // runtime from $HANZO_DEV_SIGNING_SEED or the gitignored license-dev-key file — so builds
+    // without it still compile and the seed-dependent tests skip (see `dev_signing_key!`).
+    fn dev_signing_key_opt() -> Option<SigningKey> {
+        let b64 = std::env::var("HANZO_DEV_SIGNING_SEED").ok().or_else(|| {
+            std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../license-dev-key/dev_signing_key.b64"
+            ))
+            .ok()
+        })?;
+        let seed: [u8; 32] = URL_SAFE_NO_PAD.decode(b64.trim()).ok()?.try_into().ok()?;
+        Some(SigningKey::from_bytes(&seed))
+    }
+
+    // Yields the dev SigningKey, or returns from the test early when the seed isn't available
+    // (e.g. CI without the secret) — the test is skipped rather than failing.
+    macro_rules! dev_signing_key {
+        () => {{
+            match dev_signing_key_opt() {
+                Some(k) => k,
+                None => return,
+            }
+        }};
     }
 
     fn make_license(app_id: &str, iat: i64, exp: i64) -> License {
@@ -251,7 +267,7 @@ mod tests {
     // Sanity: the embedded public key const is exactly the public half of the dev signing seed.
     #[test]
     fn dev_keypair_matches_embedded_pubkey() {
-        let vk = dev_signing_key().verifying_key();
+        let vk = dev_signing_key!().verifying_key();
         assert_eq!(vk.to_bytes(), HANZO_LICENSE_PUBKEY);
     }
 
@@ -260,7 +276,7 @@ mod tests {
     fn valid_token_verifies() {
         let now = 1_700_000_000;
         let lic = make_license(DEV_APP, now, now + ONE_DAY);
-        let token = encode_license(&lic, &dev_signing_key());
+        let token = encode_license(&lic, &dev_signing_key!());
 
         let verified =
             verify_license(&token, &HANZO_LICENSE_PUBKEY, DEV_APP, now).expect("should verify");
@@ -274,7 +290,7 @@ mod tests {
     fn tampered_signature_is_bad_sig() {
         let now = 1_700_000_000;
         let lic = make_license(DEV_APP, now, now + ONE_DAY);
-        let token = encode_license(&lic, &dev_signing_key());
+        let token = encode_license(&lic, &dev_signing_key!());
 
         // Flip one base64url char in the signature segment (after the '.').
         let (payload_b64, sig_b64) = token.split_once('.').unwrap();
@@ -291,7 +307,7 @@ mod tests {
     fn tampered_payload_is_bad_sig() {
         let now = 1_700_000_000;
         let lic = make_license(DEV_APP, now, now + ONE_DAY);
-        let token = encode_license(&lic, &dev_signing_key());
+        let token = encode_license(&lic, &dev_signing_key!());
         let (_payload_b64, sig_b64) = token.split_once('.').unwrap();
 
         // Re-encode a payload that grants extra time, keep the original signature.
@@ -309,7 +325,7 @@ mod tests {
         let iat = 1_700_000_000;
         let exp = iat + ONE_DAY;
         let lic = make_license(DEV_APP, iat, exp);
-        let token = encode_license(&lic, &dev_signing_key());
+        let token = encode_license(&lic, &dev_signing_key!());
 
         let now = exp + 1; // one second past expiry
         let err = verify_license(&token, &HANZO_LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
@@ -321,7 +337,7 @@ mod tests {
     fn wrong_app_is_wrong_app() {
         let now = 1_700_000_000;
         let lic = make_license("zoo", now, now + ONE_DAY);
-        let token = encode_license(&lic, &dev_signing_key());
+        let token = encode_license(&lic, &dev_signing_key!());
 
         // Build expects "hanzo"; the token is for "zoo".
         let err = verify_license(&token, &HANZO_LICENSE_PUBKEY, "hanzo", now).unwrap_err();
@@ -353,7 +369,7 @@ mod tests {
         let now = 1_700_000_000;
         let iat = now + 10 * IAT_SKEW_SECS;
         let lic = make_license(DEV_APP, iat, iat + ONE_DAY);
-        let token = encode_license(&lic, &dev_signing_key());
+        let token = encode_license(&lic, &dev_signing_key!());
 
         let err = verify_license(&token, &HANZO_LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
         assert_eq!(err, LicenseError::NotYetValid);
@@ -365,7 +381,7 @@ mod tests {
         let now = 1_700_000_000;
         let mut lic = make_license(DEV_APP, now, now + ONE_DAY);
         lic.v = 99;
-        let token = encode_license(&lic, &dev_signing_key());
+        let token = encode_license(&lic, &dev_signing_key!());
 
         let err = verify_license(&token, &HANZO_LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
         assert_eq!(err, LicenseError::Malformed);

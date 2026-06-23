@@ -25,6 +25,7 @@ macro_rules! fixup_sentencepiece {
     };
 }
 
+#[allow(dead_code)]
 fn parse_text_and_tool_calls(
     raw_text: &str,
     matcher: Option<Arc<crate::tools::ToolCallingMatcher>>,
@@ -34,6 +35,7 @@ fn parse_text_and_tool_calls(
     Ok((text_new.map(ToString::to_string), tool_calls))
 }
 
+#[allow(dead_code)]
 fn parse_streaming_text_and_tool_calls(
     content_delta: Option<String>,
     raw_delta: &str,

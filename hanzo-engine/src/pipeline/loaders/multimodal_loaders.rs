@@ -29,7 +29,6 @@ use crate::paged_attention::{AttentionImplementation, ModelConfigLike, ModelConf
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::loaders::AutoDeviceMapParams;
 use crate::pipeline::{
-    text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
     EitherCache, IsqModel, Modalities, ModelForwardContext, MultimodalPromptPrefixer, Processor,
     ProcessorCreator, SupportedModality,
 };
@@ -105,6 +104,7 @@ pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMi
     /// Called when the pipeline's non-granular state is reset.
     fn reset_model_specific_state(&self) {}
     /// Whether this model is safe to run under the CUDA decode-graph capture path.
+    #[allow(dead_code)]
     fn supports_cuda_decode_graphs(&self) -> bool {
         false
     }
