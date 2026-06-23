@@ -21,7 +21,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "1.2.1"
+version = "1.2.2"
 edition = "2021"
 authors = ["Hanzo AI <dev@hanzo.ai>"]
 description = "Fast, flexible LLM inference."
@@ -35,7 +35,7 @@ rust-version = "1.88"
 [workspace.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 # Hanzo ML crates.
-hanzo-ml = { version = "0.11.3" }
+hanzo-ml = { version = "0.11.4" }
 hanzo-nn = { version = "0.11.3" }
 hanzo-flash-attn = { version = "0.11.3" }
 hanzo-flash-attn-v3 = { version = "0.11.3", package = "hanzo-flash-attn" }
@@ -229,9 +229,3 @@ debug = true
 debug = true
 opt-level = 3
 
-[patch.crates-io]
-# hanzoai/rocm-rs fork: status+enum FFI types use the bindgen type instead of a
-# hardcoded u32 — correct on Linux (u32) AND native Windows/MSVC (i32) — plus
-# edition-2024 unsafe blocks and a gated amdgcn GPU-sort kernel. No-op on Linux;
-# unblocks the native-Windows ROCm build. Upstream: github.com/RustNSparks/rocm-rs
-rocm-rs = { git = "https://github.com/hanzoai/rocm-rs", tag = "v0.5.2" }
