@@ -45,7 +45,10 @@ impl hanzo_ml::CustomOp1 for PagedAttention {
 
     fn vulkan_fwd(&self, q: &VulkanStorage, q_l: &Layout) -> Result<(VulkanStorage, Shape)> {
         if !matches!(q.dtype(), DType::F32 | DType::F16 | DType::BF16) {
-            hanzo_ml::bail!("vulkan paged-attention only supports f32/f16/bf16, got {:?}", q.dtype());
+            hanzo_ml::bail!(
+                "vulkan paged-attention only supports f32/f16/bf16, got {:?}",
+                q.dtype()
+            );
         }
         if self.alibi_slopes.is_some() {
             hanzo_ml::bail!("vulkan paged-attention: alibi_slopes not yet supported");
@@ -154,7 +157,10 @@ pub fn reshape_and_cache(
     slot_mapping: &Tensor,
 ) -> Result<()> {
     if !matches!(key.dtype(), DType::F32 | DType::F16 | DType::BF16) {
-        hanzo_ml::bail!("vulkan reshape_and_cache only supports f32/f16/bf16, got {:?}", key.dtype());
+        hanzo_ml::bail!(
+            "vulkan reshape_and_cache only supports f32/f16/bf16, got {:?}",
+            key.dtype()
+        );
     }
     if key_cache.dtype() == DType::F8E4M3 {
         hanzo_ml::bail!("vulkan reshape_and_cache: fp8 KV cache not yet supported");

@@ -389,7 +389,11 @@ mod tests {
     fn get_gguf_tokenizer(tokenizer: TokenizerType) -> Result<Tokenizer> {
         match tokenizer {
             TokenizerType::Llama => {
-                let api = ApiBuilder::new().with_token(std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty())).with_progress(true).build().unwrap();
+                let api = ApiBuilder::new()
+                    .with_token(std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty()))
+                    .with_progress(true)
+                    .build()
+                    .unwrap();
                 let api = api.repo(Repo::with_revision(
                     "hanzoai/mistralrs_tests".to_string(),
                     RepoType::Model,
@@ -401,7 +405,11 @@ mod tests {
                 Ok(tokenizer)
             }
             TokenizerType::Gpt2 => {
-                let api = ApiBuilder::new().with_token(std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty())).with_progress(true).build().unwrap();
+                let api = ApiBuilder::new()
+                    .with_token(std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty()))
+                    .with_progress(true)
+                    .build()
+                    .unwrap();
                 let api = api.repo(Repo::with_revision(
                     "hanzoai/mistralrs_tests".to_string(),
                     RepoType::Model,
@@ -419,7 +427,11 @@ mod tests {
     fn get_hf_tokenizer(tokenizer: TokenizerType) -> Result<Tokenizer> {
         match tokenizer {
             TokenizerType::Llama => {
-                let api = ApiBuilder::new().with_token(std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty())).with_progress(true).build().unwrap();
+                let api = ApiBuilder::new()
+                    .with_token(std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty()))
+                    .with_progress(true)
+                    .build()
+                    .unwrap();
                 let api = api.repo(Repo::with_revision(
                     "hanzoai/mistralrs_tests".to_string(),
                     RepoType::Model,
@@ -430,7 +442,11 @@ mod tests {
                 Ok(Tokenizer::from_file(tokenizer_filename).unwrap())
             }
             TokenizerType::Gpt2 => {
-                let api = ApiBuilder::new().with_token(std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty())).with_progress(true).build().unwrap();
+                let api = ApiBuilder::new()
+                    .with_token(std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty()))
+                    .with_progress(true)
+                    .build()
+                    .unwrap();
                 let api = api.repo(Repo::with_revision(
                     "hanzoai/mistralrs_tests".to_string(),
                     RepoType::Model,
