@@ -80,11 +80,7 @@ pub(crate) fn dp4a_block(a: &[i8; MXFP4_BLOCK_SIZE], b: &[i8; MXFP4_BLOCK_SIZE])
 /// CPU int8-path reference matmul: `out[m,n] = x[m,k] @ W[n,k]^T` where W is MXFP4
 /// (`blocks` = [N, K/2] packed bytes, `scales` = [N, K/32] E8M0). Numerically equivalent to the
 /// f32 dequant matmul up to the activation int8 rounding; exists to validate a future dp4a kernel.
-pub(crate) fn matmul_i8_reference(
-    x: &Tensor,
-    blocks: &Tensor,
-    scales: &Tensor,
-) -> Result<Tensor> {
+pub(crate) fn matmul_i8_reference(x: &Tensor, blocks: &Tensor, scales: &Tensor) -> Result<Tensor> {
     let x = x.to_dtype(DType::F32)?.to_device(&Device::Cpu)?;
     let (m, k) = x.dims2()?;
     let bdims = blocks.dims();
@@ -108,8 +104,10 @@ pub(crate) fn matmul_i8_reference(
     for t in 0..m {
         for blk in 0..nblk {
             let c0 = blk * MXFP4_BLOCK_SIZE;
-            sx[t * nblk + blk] =
-                quantize_act_block_i8(&x_data[t * k + c0..t * k + c0 + MXFP4_BLOCK_SIZE], &mut xq[t * nblk + blk]);
+            sx[t * nblk + blk] = quantize_act_block_i8(
+                &x_data[t * k + c0..t * k + c0 + MXFP4_BLOCK_SIZE],
+                &mut xq[t * nblk + blk],
+            );
         }
     }
 

@@ -333,14 +333,14 @@ mod tests {
     fn malformed_tokens_are_malformed() {
         let now = 1_700_000_000;
         for bad in [
-            "",                       // empty
-            "no-dot-here",            // missing '.'
-            ".",                      // empty halves
-            "abc.",                   // empty sig
-            ".abc",                   // empty payload
-            "!!!.@@@",                // invalid base64url
-            "a.b.c",                  // too many segments
-            "eyJhIjoxfQ.AAAA",        // valid b64 but wrong sig length
+            "",                // empty
+            "no-dot-here",     // missing '.'
+            ".",               // empty halves
+            "abc.",            // empty sig
+            ".abc",            // empty payload
+            "!!!.@@@",         // invalid base64url
+            "a.b.c",           // too many segments
+            "eyJhIjoxfQ.AAAA", // valid b64 but wrong sig length
         ] {
             let err = verify_license(bad, &HANZO_LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
             assert_eq!(err, LicenseError::Malformed, "input was {bad:?}");

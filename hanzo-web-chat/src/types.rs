@@ -1,6 +1,6 @@
 use clap::Parser;
-use indexmap::IndexMap;
 use hanzo::SearchEmbeddingModel;
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 

@@ -46,7 +46,12 @@ fn time_shift(mu: f64, sigma: f64, t: f64) -> f64 {
 }
 
 // FlowMatchEulerDiscrete schedule with resolution-dependent shift, matching FLUX/Qwen-Image.
-pub fn get_schedule(num_steps: usize, image_seq_len: usize, base_shift: f64, max_shift: f64) -> Vec<f64> {
+pub fn get_schedule(
+    num_steps: usize,
+    image_seq_len: usize,
+    base_shift: f64,
+    max_shift: f64,
+) -> Vec<f64> {
     let timesteps: Vec<f64> = (0..=num_steps)
         .map(|v| v as f64 / num_steps as f64)
         .rev()
@@ -55,7 +60,10 @@ pub fn get_schedule(num_steps: usize, image_seq_len: usize, base_shift: f64, max
     let m = (max_shift - base_shift) / (x2 - x1);
     let b = base_shift - m * x1;
     let mu = m * image_seq_len as f64 + b;
-    timesteps.into_iter().map(|v| time_shift(mu, 1., v)).collect()
+    timesteps
+        .into_iter()
+        .map(|v| time_shift(mu, 1., v))
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
