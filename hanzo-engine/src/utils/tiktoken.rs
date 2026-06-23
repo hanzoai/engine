@@ -216,7 +216,11 @@ mod tests {
             eprintln!("skipping: HF_TOKEN not set (gated hanzoai/mistralrs_tests repo)");
             return Ok(());
         }
-        let api = ApiBuilder::new().with_token(std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty())).with_progress(true).build().unwrap();
+        let api = ApiBuilder::new()
+            .with_token(std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty()))
+            .with_progress(true)
+            .build()
+            .unwrap();
         let api = api.repo(Repo::with_revision(
             "hanzoai/mistralrs_tests".to_string(),
             RepoType::Model,
