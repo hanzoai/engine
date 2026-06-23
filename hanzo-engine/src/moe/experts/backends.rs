@@ -704,14 +704,13 @@ impl FastExpertsWeights {
 
         // Build dispatch tables on GPU (no CPU-GPU sync)
         // moe_dispatch_build takes u32 and casts to i32 internally for the CUDA kernel
-        let (expert_bounds, sorted_token_ids, sorted_source_ids) =
-            hanzo_quant::moe_dispatch_build(
-                ti_u32_slice,
-                total_assignments,
-                num_experts,
-                topk,
-                dev,
-            )?;
+        let (expert_bounds, sorted_token_ids, sorted_source_ids) = hanzo_quant::moe_dispatch_build(
+            ti_u32_slice,
+            total_assignments,
+            num_experts,
+            topk,
+            dev,
+        )?;
 
         // Use the pre-quantized Q8_0 grouped kernel path
         let gate_qt = match self.fused_gate_proj.get_qtensor() {
@@ -747,8 +746,7 @@ impl FastExpertsWeights {
         } else {
             // Quantize input to Q8_1 ONCE, shared between gate and up.
             // quantize_input_q8_1 accepts BF16/F16/F32 directly (no conversion needed).
-            let (input_q8, k, k_padded) =
-                hanzo_quant::quantize_input_q8_1(forward.xs_flat, dev)?;
+            let (input_q8, k, k_padded) = hanzo_quant::quantize_input_q8_1(forward.xs_flat, dev)?;
 
             // Gate projection using pre-quantized input
             let gate = hanzo_quant::grouped_moe_gemm_prequantized(
@@ -814,10 +812,9 @@ impl FastExpertsWeights {
             _ => None,
         };
 
-        let down = if let (true, Some(glu_activation)) = (
-            hanzo_quant::supports_mmq(down_qt.dtype()),
-            glu_activation,
-        ) {
+        let down = if let (true, Some(glu_activation)) =
+            (hanzo_quant::supports_mmq(down_qt.dtype()), glu_activation)
+        {
             let down_assignments = hanzo_quant::grouped_moe_mmq_from_glu_pair(
                 down_qt,
                 &gate,

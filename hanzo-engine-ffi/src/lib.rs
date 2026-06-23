@@ -37,7 +37,8 @@ fn ensure_engine() -> Result<(), String> {
         let mut builder = HanzoForServerBuilder::new();
         for (name, model) in configs {
             // alias == name makes `name` the routable model id (get_sender).
-            builder = builder.add_model_config(ModelConfig::new(name.clone(), model).with_alias(name));
+            builder =
+                builder.add_model_config(ModelConfig::new(name.clone(), model).with_alias(name));
         }
         builder = builder.with_default_model_id(default_id);
 

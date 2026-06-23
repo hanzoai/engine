@@ -7,9 +7,8 @@ use crate::serde_default_fn;
 use hanzo_ml::{Device, Module, Result, Tensor};
 use hanzo_nn::Linear;
 use hanzo_quant::{
-    softcap,
-    ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig, RowParallelLayer,
-    ShardedVarBuilder, UnquantLinear,
+    softcap, ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig,
+    RowParallelLayer, ShardedVarBuilder, UnquantLinear,
 };
 
 use crate::{

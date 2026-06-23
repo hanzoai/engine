@@ -236,7 +236,10 @@ fn recurrence_flatten(
         seq_dim(v, vd)?,
         scalar(g)?,
         scalar(beta)?,
-        state.to_dtype(DType::F32)?.reshape((bh, kd, vd))?.contiguous()?,
+        state
+            .to_dtype(DType::F32)?
+            .reshape((bh, kd, vd))?
+            .contiguous()?,
     ))
 }
 
@@ -252,7 +255,9 @@ fn recurrence_unflatten(
 ) -> Result<Tensor> {
     let (b, s, nh, kd) = q.dims4()?;
     let vd = v.dim(D::Minus1)?;
-    *state = state_flat.reshape((b, nh, kd, vd))?.to_dtype(state.dtype())?;
+    *state = state_flat
+        .reshape((b, nh, kd, vd))?
+        .to_dtype(state.dtype())?;
     out_bh
         .reshape((b, nh, s, vd))?
         .transpose(1, 2)?
@@ -724,10 +729,16 @@ impl GatedDeltaNet {
 
         // Native Vulkan single decode step: conv_state stays in VRAM, no per-token readback.
         if x.device().is_vulkan() && x.dtype() == DType::F32 && x.dim(0)? == 1 && x.dim(1)? == 1 {
-            let weight = self.conv1d_weight.squeeze(1)?.to_dtype(DType::F32)?.contiguous()?;
+            let weight = self
+                .conv1d_weight
+                .squeeze(1)?
+                .to_dtype(DType::F32)?
+                .contiguous()?;
             let conv_dim = weight.dim(0)?;
             let x_flat = x.reshape(conv_dim)?.contiguous()?;
-            let mut s = cache.conv_state.reshape((conv_dim, self.conv_kernel_size))?;
+            let mut s = cache
+                .conv_state
+                .reshape((conv_dim, self.conv_kernel_size))?;
             let out = crate::vulkan::gdn::gdn_conv1d_step_vulkan(&mut s, &x_flat, &weight)?;
             cache.conv_state = s.reshape((1, conv_dim, self.conv_kernel_size))?;
             return out.reshape((1, 1, conv_dim));
@@ -883,11 +894,11 @@ mod tests {
     // [bh][k][v] at k*v_dim + v, matching the CPU reference's (heads, k_dim, v_dim) contiguous order.
     #[allow(clippy::too_many_arguments)]
     fn gdn_step_scalar(
-        q: &[f32],    // [bh, k]  (pre-scaled)
-        k: &[f32],    // [bh, k]
-        v: &[f32],    // [bh, v]
-        g: &[f32],    // [bh]
-        beta: &[f32], // [bh]
+        q: &[f32],         // [bh, k]  (pre-scaled)
+        k: &[f32],         // [bh, k]
+        v: &[f32],         // [bh, v]
+        g: &[f32],         // [bh]
+        beta: &[f32],      // [bh]
         state: &mut [f32], // [bh, k, v]
         bh: usize,
         k_dim: usize,
@@ -1010,7 +1021,9 @@ mod tests {
         let hidden = Tensor::cat(&[&conv_state, &x_t], 2)?; // (1, conv_dim, k+1)
         let window = hidden.narrow(2, 1, k)?; // (1, conv_dim, k)
         let out_ref = (window.clone() * weight.unsqueeze(0)?)?.sum(D::Minus1)?; // (1, conv_dim)
-        let out_ref = hanzo_nn::ops::silu(&out_ref)?.flatten_all()?.to_vec1::<f32>()?;
+        let out_ref = hanzo_nn::ops::silu(&out_ref)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
         let new_state_ref = window.flatten_all()?.to_vec1::<f32>()?; // new conv_state == window
 
         // Shader-equivalent scalar path (matches gdn_conv1d_step.comp).
@@ -1034,10 +1047,16 @@ mod tests {
         }
 
         for (a, b) in out_ref.iter().zip(out_shader.iter()) {
-            assert!((a - b).abs() < 1e-5, "conv out mismatch: ref={a} shader={b}");
+            assert!(
+                (a - b).abs() < 1e-5,
+                "conv out mismatch: ref={a} shader={b}"
+            );
         }
         for (a, b) in new_state_ref.iter().zip(cs.iter()) {
-            assert!((a - b).abs() < 1e-5, "conv state mismatch: ref={a} shader={b}");
+            assert!(
+                (a - b).abs() < 1e-5,
+                "conv state mismatch: ref={a} shader={b}"
+            );
         }
         Ok(())
     }
@@ -1065,16 +1084,25 @@ mod tests {
         let k = on(gen(batch * seq * nvh * hkd, 2), (batch, seq, nvh, hkd))?;
         let v = on(gen(batch * seq * nvh * hvd, 3), (batch, seq, nvh, hvd))?;
         let g = on3(
-            gen(batch * seq * nvh, 4).iter().map(|x| x * 0.5 - 0.5).collect(),
+            gen(batch * seq * nvh, 4)
+                .iter()
+                .map(|x| x * 0.5 - 0.5)
+                .collect(),
             (batch, seq, nvh),
         )?;
         let beta = on3(
-            gen(batch * seq * nvh, 5).iter().map(|x| (x + 1.0) * 0.5).collect(),
+            gen(batch * seq * nvh, 5)
+                .iter()
+                .map(|x| (x + 1.0) * 0.5)
+                .collect(),
             (batch, seq, nvh),
         )?;
-        let mut state =
-            Tensor::from_vec(gen(batch * nvh * hkd * hvd, 6), (batch, nvh, hkd, hvd), &Device::Cpu)?
-                .to_device(dev)?;
+        let mut state = Tensor::from_vec(
+            gen(batch * nvh * hkd * hvd, 6),
+            (batch, nvh, hkd, hvd),
+            &Device::Cpu,
+        )?
+        .to_device(dev)?;
         let state_shape_before = state.dims().to_vec();
 
         let y = gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut state)?;
@@ -1093,14 +1121,25 @@ mod tests {
         // then read the rank. This is where the GGUF forward consumes the output, so it catches a
         // collapsed/extra dim escaping the recurrence as well as a bug inside it.
         let y2 = y.reshape(((), hvd))?;
-        assert_eq!(y2.dims().len(), 2, "post-recurrence reshape lost a dim on {dev:?}");
-        assert_eq!(y2.dims(), &[batch * seq * nvh, hvd], "post-recurrence shape wrong on {dev:?}");
+        assert_eq!(
+            y2.dims().len(),
+            2,
+            "post-recurrence reshape lost a dim on {dev:?}"
+        );
+        assert_eq!(
+            y2.dims(),
+            &[batch * seq * nvh, hvd],
+            "post-recurrence shape wrong on {dev:?}"
+        );
 
         // Force a readback so any deferred Vulkan dispatch actually executes (lazy backends can defer
         // the bad op until the buffer is read); also pins that the result is finite.
         let host = y.flatten_all()?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
         assert_eq!(host.len(), batch * seq * nvh * hvd);
-        assert!(host.iter().all(|x| x.is_finite()), "non-finite recurrence output on {dev:?}");
+        assert!(
+            host.iter().all(|x| x.is_finite()),
+            "non-finite recurrence output on {dev:?}"
+        );
         Ok(())
     }
 

@@ -254,9 +254,7 @@ fn mapped_device_for_ordinal(
             .find(|d| d.is_cuda() && device_ordinal(d) == ordinal)
             .cloned()
             .ok_or_else(|| {
-                hanzo_ml::Error::msg(format!(
-                    "Could not find cuda device with ordinal {ordinal}"
-                ))
+                hanzo_ml::Error::msg(format!("Could not find cuda device with ordinal {ordinal}"))
             }),
         DeviceLocation::Metal { gpu_id } if gpu_id == ordinal => Ok(device.clone()),
         DeviceLocation::Metal { .. } => Device::new_metal(ordinal),

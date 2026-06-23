@@ -4,13 +4,6 @@ use super::{
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind,
     TokenSource,
 };
-#[cfg(feature = "rocm")]
-use crate::pipeline::rocm_graph::{
-    rocm_decode_graphs_enabled, RocmDecodeGraphKey, RocmDecodeGraphMetadataBuffers, RocmGraphHandle,
-    ROCM_DECODE_GRAPH_CACHE_CAPACITY,
-};
-#[cfg(feature = "rocm")]
-use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use super::{
     AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqPipelineMixin,
     MetadataMixin, ModelCategory, PreProcessingMixin,
@@ -29,7 +22,14 @@ use crate::paged_attention::{
 };
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 use crate::pipeline::loaders::DeviceMappedModelLoader;
+#[cfg(feature = "rocm")]
+use crate::pipeline::rocm_graph::{
+    rocm_decode_graphs_enabled, RocmDecodeGraphKey, RocmDecodeGraphMetadataBuffers,
+    RocmGraphHandle, ROCM_DECODE_GRAPH_CACHE_CAPACITY,
+};
 use crate::pipeline::sampling::sample_and_add_toks;
+#[cfg(feature = "rocm")]
+use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::ChatTemplate;
 use crate::pipeline::{get_chat_template, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
@@ -58,9 +58,9 @@ use crate::{
 };
 use anyhow::{bail, Result};
 use either::Either;
-use hanzo_ml::{Device, Tensor};
 #[cfg(feature = "rocm")]
 use hanzo_ml::Var;
+use hanzo_ml::{Device, Tensor};
 use hanzo_quant::IsqType;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
@@ -910,9 +910,7 @@ impl GGUFPipeline {
         if let Some(pos) = state.entries.iter().position(|entry| entry.key == key) {
             let mut entry = state.entries.remove(pos);
             entry.input_ids.set(input_ids)?;
-            entry
-                .metadata_buffers
-                .copy_from(metadata, seqlen_offsets)?;
+            entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
             entry.graph.launch()?;
             let logits = entry.logits.clone();
             // Env-gated replay diagnostic: confirm the replayed logits advance
@@ -927,7 +925,10 @@ impl GGUFPipeline {
                     .and_then(|t| t.to_scalar::<u32>().ok());
                 tracing::info!(
                     "[graph-replay] in_tok={:?} argmax={:?}",
-                    input_ids.flatten_all().ok().and_then(|t| t.to_vec1::<u32>().ok()),
+                    input_ids
+                        .flatten_all()
+                        .ok()
+                        .and_then(|t| t.to_vec1::<u32>().ok()),
                     amax
                 );
             }

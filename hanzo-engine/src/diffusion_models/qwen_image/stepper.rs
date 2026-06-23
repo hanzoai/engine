@@ -43,7 +43,8 @@ impl QwenImageStepper {
         dtype: DType,
         device: &Device,
     ) -> anyhow::Result<Self> {
-        let transformer = QwenImageTransformer::new(transformer_cfg, transformer_vb, device.clone())?;
+        let transformer =
+            QwenImageTransformer::new(transformer_cfg, transformer_vb, device.clone())?;
         let vae = AutoEncoder::new(vae_cfg, vae_vb)?;
         Ok(Self {
             cfg,

@@ -3,8 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use hanzo_ml::{Device, Module, Result, Tensor};
-use hanzo_quant::{
-    softcap,ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
+use hanzo_quant::{softcap, ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
