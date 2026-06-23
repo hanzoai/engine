@@ -39,6 +39,7 @@ impl OrdinaryRoPE {
         let sin = idx_theta.sin()?.to_dtype(dtype)?;
         Result::Ok((cos, sin))
     }
+    #[allow(dead_code)]
     fn forward(x: &Tensor, index_pos: usize, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
         let (_b_sz, _, seq_len, _hidden_size) = x.dims4()?;
         let cos = cos.narrow(0, index_pos, seq_len)?;

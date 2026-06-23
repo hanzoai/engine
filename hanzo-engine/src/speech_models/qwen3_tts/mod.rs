@@ -158,7 +158,7 @@ impl Qwen3TtsPipeline {
 
     fn sample(&self, logits: &Tensor, temperature: f32, rng: &mut Isaac64Rng) -> Result<u32> {
         if temperature == 0. {
-            return Ok(logits.argmax(D::Minus1)?.to_scalar::<u32>()?);
+            return logits.argmax(D::Minus1)?.to_scalar::<u32>();
         }
         let probs =
             hanzo_nn::ops::softmax_last_dim(&(logits.to_dtype(DType::F32)? / temperature as f64)?)?;

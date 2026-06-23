@@ -46,6 +46,7 @@ pub struct SpeechModelPaths {
     tokenizer_dir: Option<PathBuf>,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum SpeechModel {
     Dia(DiaPipeline),
     Qwen3Tts {
@@ -57,6 +58,7 @@ enum SpeechModel {
 /// Build the Qwen3 ByteLevel-BPE tokenizer from a directory containing `vocab.json` + `merges.txt`
 /// + `tokenizer_config.json`. Special tokens (`<|im_start|>`, `<tts_pad>`, ...) are registered from
 /// `added_tokens_decoder` so the assistant chat template tokenizes to the same ids as transformers.
+#[allow(clippy::doc_lazy_continuation)]
 fn load_qwen3_tts_tokenizer(dir: &std::path::Path) -> anyhow::Result<Tokenizer> {
     use tokenizers::{
         decoders::byte_level::ByteLevel as ByteLevelDecoder,
