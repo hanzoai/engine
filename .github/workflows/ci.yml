@@ -74,6 +74,8 @@ jobs:
   clippy:
     name: Clippy
     runs-on: hanzo-build-linux-amd64
+    # self-hosted runner image lacks a C toolchain; run in an image that has build-essential
+    container: buildpack-deps:bookworm
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -87,6 +89,8 @@ jobs:
   docs:
     name: Docs
     runs-on: hanzo-build-linux-amd64
+    # self-hosted runner image lacks a C toolchain; run in an image that has build-essential
+    container: buildpack-deps:bookworm
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -123,6 +127,8 @@ jobs:
   msrv:
     name: MSRV Check (1.90)
     runs-on: hanzo-build-linux-amd64
+    # self-hosted runner image lacks a C toolchain; run in an image that has build-essential
+    container: buildpack-deps:bookworm
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
