@@ -35,11 +35,11 @@ rust-version = "1.88"
 [workspace.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 # Hanzo ML crates.
-hanzo-ml = { path = "../ml/hanzo-ml" }
-hanzo-nn = { path = "../ml/hanzo-nn" }
-hanzo-flash-attn = { path = "../ml/hanzo-flash-attn" }
-hanzo-flash-attn-v3 = { path = "../ml/hanzo-flash-attn", package = "hanzo-flash-attn" }
-hanzo-metal-kernels = { path = "../ml/hanzo-metal-kernels" }
+hanzo-ml = { version = "0.11.3" }
+hanzo-nn = { version = "0.11.3" }
+hanzo-flash-attn = { version = "0.11.3" }
+hanzo-flash-attn-v3 = { version = "0.11.3", package = "hanzo-flash-attn" }
+hanzo-metal-kernels = { version = "0.11.3" }
 
 axum = "0.8.8"
 anyhow = "1.0.100"
@@ -202,7 +202,7 @@ hanzo-llm-mcp = { path = "hanzo-llm-mcp" }
 hanzo-macros = { path = "hanzo-macros" }
 hanzo-sandbox = { path = "hanzo-sandbox" }
 hanzo-code-exec = { path = "hanzo-code-exec" }
-hanzo-zap = { path = "../net/hanzo-zap", version = "0.6.75" }
+hanzo-zap = { version = "0.2.1" }
 
 # Hanzo native-ML extension crates (federated training, quantization, zen5 inference)
 hex = "0.4.3"
