@@ -20,7 +20,8 @@ pub use attention_backend::AttentionBackendKind;
 #[cfg(any(
     all(feature = "cuda", target_family = "unix"),
     feature = "metal",
-    feature = "rocm"
+    feature = "rocm",
+    feature = "vulkan"
 ))]
 pub use attention_backend::{
     FLASHINFER_DECODE_MAX_HEAD_SIZE, STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE,
