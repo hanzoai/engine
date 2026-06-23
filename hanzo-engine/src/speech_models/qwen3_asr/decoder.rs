@@ -37,7 +37,11 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(cfg: &TextDecoderConfig, rotary_emb: Arc<RotaryEmbedding>, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(
+        cfg: &TextDecoderConfig,
+        rotary_emb: Arc<RotaryEmbedding>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         let hidden = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -142,10 +146,15 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(cfg: &TextDecoderConfig, rotary_emb: Arc<RotaryEmbedding>, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(
+        cfg: &TextDecoderConfig,
+        rotary_emb: Arc<RotaryEmbedding>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         let self_attn = Attention::new(cfg, rotary_emb, vb.pp("self_attn"))?;
         let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
-        let input_layernorm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let input_layernorm =
+            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -188,7 +197,12 @@ impl Qwen3AsrTextDecoder {
     pub fn new(cfg: &TextDecoderConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let device = vb.device().clone();
         let dtype = vb.dtype();
-        let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"), &None)?;
+        let embed_tokens = embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            vb.pp("embed_tokens"),
+            &None,
+        )?;
 
         let rotary_emb = Arc::new(RotaryEmbedding::new(
             cfg.rope_theta as f32,

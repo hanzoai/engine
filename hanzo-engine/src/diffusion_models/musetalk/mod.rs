@@ -64,10 +64,7 @@ mod tests {
                     "CrossAttnDownBlock2D".to_string(),
                     "DownBlock2D".to_string(),
                 ],
-                up_block_types: vec![
-                    "UpBlock2D".to_string(),
-                    "CrossAttnUpBlock2D".to_string(),
-                ],
+                up_block_types: vec!["UpBlock2D".to_string(), "CrossAttnUpBlock2D".to_string()],
                 cross_attention_dim: 384,
                 attention_head_dim: 8,
                 norm_num_groups: 32,
@@ -96,7 +93,10 @@ mod tests {
         assert_eq!(bad, 0, "found {bad} non-finite values in tensor");
         let max = v.iter().cloned().fold(f32::MIN, f32::max);
         let min = v.iter().cloned().fold(f32::MAX, f32::min);
-        assert!(max != min, "output is constant (degenerate), min==max=={min}");
+        assert!(
+            max != min,
+            "output is constant (degenerate), min==max=={min}"
+        );
         Ok(())
     }
 

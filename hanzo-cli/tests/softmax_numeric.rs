@@ -86,7 +86,7 @@ fn softmax_numeric() {
     check(&dev, &mut log, 16, 512, DType::F32, 1e-5);
     check(&dev, &mut log, 4, 4097, DType::F32, 1e-5); // non-pow2 long
 
-    let _ = std::fs::File::create("C:\\softmax-test.txt")
-        .and_then(|mut f| f.write_all(log.as_bytes()));
+    let _ =
+        std::fs::File::create("C:\\softmax-test.txt").and_then(|mut f| f.write_all(log.as_bytes()));
     eprintln!("{log}");
 }
