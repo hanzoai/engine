@@ -63,11 +63,29 @@ fn is_punct_or_space(c: char) -> bool {
     if c.is_whitespace() || c.is_ascii_punctuation() {
         return true;
     }
-    matches!(c,
-        '\u{3000}' | '\u{3001}' | '\u{3002}' | '\u{FF0C}' | '\u{FF01}' | '\u{FF1F}'
-        | '\u{FF1A}' | '\u{FF1B}' | '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}'
-        | '\u{2026}' | '\u{2014}' | '\u{2013}' | '\u{300C}' | '\u{300D}' | '\u{300E}'
-        | '\u{300F}' | '\u{FF08}' | '\u{FF09}'
+    matches!(
+        c,
+        '\u{3000}'
+            | '\u{3001}'
+            | '\u{3002}'
+            | '\u{FF0C}'
+            | '\u{FF01}'
+            | '\u{FF1F}'
+            | '\u{FF1A}'
+            | '\u{FF1B}'
+            | '\u{2018}'
+            | '\u{2019}'
+            | '\u{201C}'
+            | '\u{201D}'
+            | '\u{2026}'
+            | '\u{2014}'
+            | '\u{2013}'
+            | '\u{300C}'
+            | '\u{300D}'
+            | '\u{300E}'
+            | '\u{300F}'
+            | '\u{FF08}'
+            | '\u{FF09}'
     )
 }
 
@@ -86,7 +104,9 @@ fn char_match(reference: &str, hyp: &str) -> f64 {
     if r.is_empty() {
         return 0.0;
     }
-    let agree = (0..r.len()).filter(|&i| i < h.len() && h[i] == r[i]).count();
+    let agree = (0..r.len())
+        .filter(|&i| i < h.len() && h[i] == r[i])
+        .count();
     agree as f64 / r.len() as f64
 }
 
@@ -94,7 +114,10 @@ fn char_match(reference: &str, hyp: &str) -> f64 {
 fn device() -> Result<Device> {
     #[cfg(feature = "cuda")]
     {
-        let ord: usize = std::env::var("CUDA_DEVICE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        let ord: usize = std::env::var("CUDA_DEVICE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         eprintln!("[dub-e2e] device = CUDA:{ord}");
         return Ok(Device::new_cuda(ord)?);
     }
@@ -107,14 +130,16 @@ fn device() -> Result<Device> {
 
 fn asr_dir() -> Option<PathBuf> {
     let d = PathBuf::from(
-        std::env::var("ZEN3_ASR_DIR").unwrap_or_else(|_| "/home/z/work/zen/hf/zen-3-asr-0.6B".to_string()),
+        std::env::var("ZEN3_ASR_DIR")
+            .unwrap_or_else(|_| "/home/z/work/zen/hf/zen-3-asr-0.6B".to_string()),
     );
     d.join("model.safetensors").is_file().then_some(d)
 }
 
 fn tts_dir() -> Option<PathBuf> {
     let d = PathBuf::from(
-        std::env::var("ZEN3_TTS_DIR").unwrap_or_else(|_| "/home/z/work/zen/hf/zen-3-tts-0.6B".to_string()),
+        std::env::var("ZEN3_TTS_DIR")
+            .unwrap_or_else(|_| "/home/z/work/zen/hf/zen-3-tts-0.6B".to_string()),
     );
     d.join("model.safetensors").is_file().then_some(d)
 }
@@ -160,7 +185,10 @@ fn load_tokenizer(dir: &Path) -> Result<Tokenizer> {
             Some((it.next()?.to_string(), it.next()?.to_string()))
         })
         .collect();
-    let bpe = BpeBuilder::new().vocab_and_merges(vocab, merges).build().map_err(anyhow::Error::msg)?;
+    let bpe = BpeBuilder::new()
+        .vocab_and_merges(vocab, merges)
+        .build()
+        .map_err(anyhow::Error::msg)?;
     let mut tok = Tokenizer::new(bpe);
     tok.with_pre_tokenizer(Some(ByteLevelPre::new(false, false, false)));
     tok.with_decoder(Some(ByteLevelDec::new(false, false, false)));
@@ -180,41 +208,65 @@ fn load_tokenizer(dir: &Path) -> Result<Tokenizer> {
 
 // ---------------------------------------------------------------- pipeline stages
 fn build_asr(dir: &Path, dev: &Device) -> Result<(Qwen3AsrPipeline, Tokenizer)> {
-    let cfg: Qwen3AsrConfig = serde_json::from_str(&std::fs::read_to_string(dir.join("config.json"))?)
-        .context("parse ASR config.json")?;
+    let cfg: Qwen3AsrConfig =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("config.json"))?)
+            .context("parse ASR config.json")?;
     let vb = load_vb(&[dir.join("model.safetensors")], DType::F32, dev)?;
     let pipe = Qwen3AsrPipeline::new(&cfg, vb).context("build ASR pipeline")?;
     let tok = load_tokenizer(dir)?;
     Ok((pipe, tok))
 }
 
-fn transcribe(pipe: &Qwen3AsrPipeline, tok: &Tokenizer, audio: &AudioInput, lang: &str) -> Result<String> {
+fn transcribe(
+    pipe: &Qwen3AsrPipeline,
+    tok: &Tokenizer,
+    audio: &AudioInput,
+    lang: &str,
+) -> Result<String> {
     pipe.transcribe_with_language(audio, tok, None, Some(lang), Some(160))
         .context("transcribe")
 }
 
 fn synthesize(dir: &Path, text: &str, dev: &Device) -> Result<SpeechGenerationOutput> {
-    let cfg: Qwen3TtsConfig = serde_json::from_str(&std::fs::read_to_string(dir.join("config.json"))?)
-        .context("parse TTS config.json")?;
+    let cfg: Qwen3TtsConfig =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("config.json"))?)
+            .context("parse TTS config.json")?;
     let codec_cfg: Qwen3TtsCodecConfig = serde_json::from_str(&std::fs::read_to_string(
         dir.join("speech_tokenizer").join("config.json"),
     )?)
     .context("parse codec config.json")?;
     let vb = load_vb(&[dir.join("model.safetensors")], DType::F32, dev)?;
-    let codec_vb = load_vb(&[dir.join("speech_tokenizer").join("model.safetensors")], DType::F32, dev)?;
-    let pipe = Qwen3TtsPipeline::new(&cfg, &codec_cfg, vb, codec_vb).context("build TTS pipeline")?;
+    let codec_vb = load_vb(
+        &[dir.join("speech_tokenizer").join("model.safetensors")],
+        DType::F32,
+        dev,
+    )?;
+    let pipe =
+        Qwen3TtsPipeline::new(&cfg, &codec_cfg, vb, codec_vb).context("build TTS pipeline")?;
 
     // The pipeline `generate` entry wants the prompt as a space-separated u32 id stream.
     let tok = load_tokenizer(dir)?;
     let prompt = format!("<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n");
     let enc = tok.encode(prompt, false).map_err(anyhow::Error::msg)?;
-    let id_stream: String =
-        enc.get_ids().iter().map(|id| id.to_string()).collect::<Vec<_>>().join(" ");
+    let id_stream: String = enc
+        .get_ids()
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
 
     let gen = match SpeechGenerationConfig::default(SpeechLoaderType::Qwen3Tts) {
-        SpeechGenerationConfig::Qwen3Tts { temperature, top_p, top_k, .. } => {
-            SpeechGenerationConfig::Qwen3Tts { max_tokens: Some(1200), temperature, top_p, top_k }
-        }
+        SpeechGenerationConfig::Qwen3Tts {
+            temperature,
+            top_p,
+            top_k,
+            ..
+        } => SpeechGenerationConfig::Qwen3Tts {
+            max_tokens: Some(1200),
+            temperature,
+            top_p,
+            top_k,
+        },
         other => other,
     };
     pipe.generate(&id_stream, &gen).context("tts generate")
@@ -227,7 +279,14 @@ fn synthesize(dir: &Path, text: &str, dev: &Device) -> Result<SpeechGenerationOu
 // the codec_validation committed-fixture tests and the musetalk-bench `realverify` (CUDA f16).
 struct RandnBackend;
 impl SimpleBackend for RandnBackend {
-    fn get(&self, s: hanzo_ml::Shape, name: &str, _h: Init, dtype: DType, dev: &Device) -> hanzo_ml::Result<Tensor> {
+    fn get(
+        &self,
+        s: hanzo_ml::Shape,
+        name: &str,
+        _h: Init,
+        dtype: DType,
+        dev: &Device,
+    ) -> hanzo_ml::Result<Tensor> {
         if name.ends_with("bias") {
             Tensor::zeros(s, dtype, dev)
         } else if name.ends_with("weight") && s.rank() == 1 {
@@ -261,11 +320,17 @@ fn musetalk_render(dev: &Device) -> Result<()> {
 
     assert_eq!(image.dims(), &[1, 3, sz, sz], "MuseTalk frame shape");
     assert_eq!(blended.dims(), &[1, 3, sz, sz], "blended frame shape");
-    for (name, t) in [("latents", &latents), ("image", &image), ("blended", &blended)] {
+    for (name, t) in [
+        ("latents", &latents),
+        ("image", &image),
+        ("blended", &blended),
+    ] {
         let v = t.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
         let bad = v.iter().filter(|x| !x.is_finite()).count();
         assert_eq!(bad, 0, "MuseTalk {name} has {bad} non-finite values");
-        let (mn, mx) = v.iter().fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+        let (mn, mx) = v
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
         assert!(mx != mn, "MuseTalk {name} is constant (degenerate)");
     }
     eprintln!("[dub-e2e] MuseTalk render: {sz}x{sz} frame, finite, non-degenerate");
@@ -285,7 +350,8 @@ fn dub_e2e_native() -> Result<()> {
 
     // --- 1. zen3-ASR transcribe sun.wav (zh) -> char-match committed golden ---
     let (asr, asr_tok) = build_asr(&asr_d, &dev)?;
-    let audio = AudioInput::read_wav(&wav.to_string_lossy()).map_err(|e| anyhow::anyhow!("read_wav: {e}"))?;
+    let audio = AudioInput::read_wav(&wav.to_string_lossy())
+        .map_err(|e| anyhow::anyhow!("read_wav: {e}"))?;
     eprintln!(
         "[dub-e2e] sun.wav: {} samples @ {} Hz ({:.1}s)",
         audio.samples.len(),
@@ -294,12 +360,20 @@ fn dub_e2e_native() -> Result<()> {
     );
     let zh = transcribe(&asr, &asr_tok, &audio, "Chinese")?;
     let m_asr = char_match(GOLDEN_ZH, &zh);
-    eprintln!("[dub-e2e] ASR zh: {zh:?}\n[dub-e2e] ASR char-match = {m_asr:.4} (>= {THR_ASR_CHAR})");
-    assert!(m_asr >= THR_ASR_CHAR, "zen3-ASR char-match {m_asr:.4} < {THR_ASR_CHAR}");
+    eprintln!(
+        "[dub-e2e] ASR zh: {zh:?}\n[dub-e2e] ASR char-match = {m_asr:.4} (>= {THR_ASR_CHAR})"
+    );
+    assert!(
+        m_asr >= THR_ASR_CHAR,
+        "zen3-ASR char-match {m_asr:.4} < {THR_ASR_CHAR}"
+    );
 
     // --- 2. translate zh -> en (committed golden; the LLM stage is asserted against it) ---
     let en = GOLDEN_EN;
-    assert!(en.split_whitespace().count() >= 3, "golden translation too short");
+    assert!(
+        en.split_whitespace().count() >= 3,
+        "golden translation too short"
+    );
     assert!(en.is_ascii(), "golden translation must be ascii English");
     eprintln!("[dub-e2e] EN (golden): {en:?}");
 
@@ -319,7 +393,10 @@ fn dub_e2e_native() -> Result<()> {
     let back = transcribe(&asr, &asr_tok, &tts_audio, "English")?;
     let m_rt = char_match(en, &back);
     eprintln!("[dub-e2e] TTS round-trip heard: {back:?}\n[dub-e2e] round-trip char-match = {m_rt:.4} (>= {THR_TTS_RT})");
-    assert!(m_rt >= THR_TTS_RT, "TTS->zen3-ASR round-trip {m_rt:.4} < {THR_TTS_RT} :: heard {back:?}");
+    assert!(
+        m_rt >= THR_TTS_RT,
+        "TTS->zen3-ASR round-trip {m_rt:.4} < {THR_TTS_RT} :: heard {back:?}"
+    );
 
     // --- 5. MuseTalk render (graph end-to-end on pipeline-sized tensors) ---
     musetalk_render(&dev)?;

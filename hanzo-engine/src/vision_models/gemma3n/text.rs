@@ -4,8 +4,7 @@ use crate::layers_masker::CausalMaskConfig;
 use hanzo_ml::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use hanzo_nn::Linear;
 use hanzo_quant::{
-    softcap,
-    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+    softcap, ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
 use statrs::distribution::{ContinuousCDF, Normal};
 
@@ -20,8 +19,9 @@ use crate::{
     matformer::MatformerSliceConfig,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata}, EitherCache, IsqModel, KvCache,
-        ModelForwardContext, MultimodalModel, NormalCache, NormalCacheType, NormalLoadingMetadata,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        EitherCache, IsqModel, KvCache, ModelForwardContext, MultimodalModel, NormalCache,
+        NormalCacheType, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };

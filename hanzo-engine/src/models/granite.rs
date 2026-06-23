@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use crate::ops::TopKLastDimOp;
 use crate::layers_masker::CausalMaskConfig;
+use crate::ops::TopKLastDimOp;
 use hanzo_ml::{Device, IndexOp, Result, Tensor};
 use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{
@@ -285,8 +285,14 @@ impl GraniteTopKGating {
 
         // Get top-k expert indices and gates per token
         let topk = gates.topk(self.top_k)?;
-        let selected_experts = topk.indices.to_dtype(hanzo_ml::DType::U32)?.to_vec2::<u32>()?;
-        let routing_weights = topk.values.to_dtype(hanzo_ml::DType::F32)?.to_vec2::<f32>()?;
+        let selected_experts = topk
+            .indices
+            .to_dtype(hanzo_ml::DType::U32)?
+            .to_vec2::<u32>()?;
+        let routing_weights = topk
+            .values
+            .to_dtype(hanzo_ml::DType::F32)?
+            .to_vec2::<f32>()?;
 
         // Collect (expert_idx, token_idx, gate) tuples
         let mut expert_token_gates: Vec<(usize, usize, f32)> = Vec::new();
