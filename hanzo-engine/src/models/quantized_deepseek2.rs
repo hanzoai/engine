@@ -151,7 +151,8 @@ impl FusedMoe {
             let gate = self.gate_experts.indexed_moe_forward(&xs3, &topk_idx)?;
             let up = self.up_experts.indexed_moe_forward(&xs3, &topk_idx)?;
             let activated = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
-            self.down_experts.indexed_moe_forward(&activated, &topk_idx)?
+            self.down_experts
+                .indexed_moe_forward(&activated, &topk_idx)?
         };
         let mut y = ys
             .broadcast_mul(&topk_weight.to_dtype(ys.dtype())?.unsqueeze(D::Minus1)?)?
@@ -368,7 +369,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             "attention.layer_norm_rms_epsilon",
             "attention.kv_lora_rank",
             "attention.key_length", // qk_nope_head_dim (llama.cpp sets key_length = nope dim)
-            "rope.dimension_count",  // qk_rope_head_dim
+            "rope.dimension_count", // qk_rope_head_dim
             "expert_count",
             "expert_used_count",
         ];
@@ -441,7 +442,10 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
                 .ok()
                 .map(|x| x as usize)
                 .unwrap_or(1),
-            norm_topk_prob: c.get_value::<bool>("expert_weights_norm").ok().unwrap_or(true),
+            norm_topk_prob: c
+                .get_value::<bool>("expert_weights_norm")
+                .ok()
+                .unwrap_or(true),
             sigmoid_scoring,
             rope_scaling_factor: c.get_value::<f32>("rope.scaling.factor").ok(),
             rope_yarn_orig_ctx: c
@@ -495,15 +499,17 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let rope_cfg = DeepSeekV2RopeConfig {
             rope_scaling: props.rope_scaling_factor.and_then(|factor| {
-                props.rope_yarn_orig_ctx.map(|orig| DeepSeekV2RopeScaling::Yarn {
-                    original_max_position_embeddings: orig,
-                    beta_fast: 32.0,
-                    beta_slow: 1.0,
-                    factor,
-                    mscale: 1.0,
-                    mscale_all_dim: 1.0,
-                    scaling_type: ScaledRopeType::Yarn,
-                })
+                props
+                    .rope_yarn_orig_ctx
+                    .map(|orig| DeepSeekV2RopeScaling::Yarn {
+                        original_max_position_embeddings: orig,
+                        beta_fast: 32.0,
+                        beta_slow: 1.0,
+                        factor,
+                        mscale: 1.0,
+                        mscale_all_dim: 1.0,
+                        scaling_type: ScaledRopeType::Yarn,
+                    })
             }),
             max_position_embeddings: props.max_seq_len,
             rope_theta: props.rope_freq_base,
@@ -515,7 +521,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             ropes.insert(
                 device.location(),
-                Arc::new(DeepSeekV2RotaryEmbedding::new(&rope_cfg, DType::F32, device)?),
+                Arc::new(DeepSeekV2RotaryEmbedding::new(
+                    &rope_cfg,
+                    DType::F32,
+                    device,
+                )?),
             );
         }
 
@@ -535,12 +545,16 @@ impl ModelConfig::FromGGUF for ModelWeights {
             // Q: low-rank (attn_q_a/attn_q_b) if q_lora_rank set, else plain attn_q.
             let (q_a_proj, q_a_norm, q_b_proj, q_proj) = if props.q_lora_rank.is_some() {
                 (
-                    Some(gguf_linear(ct.tensor(&format!("{prefix}.attn_q_a.weight"), device)?)?),
+                    Some(gguf_linear(
+                        ct.tensor(&format!("{prefix}.attn_q_a.weight"), device)?,
+                    )?),
                     Some(QRmsNorm::new(
                         ct.tensor(&format!("{prefix}.attn_q_a_norm.weight"), device)?,
                         props.rms_norm_eps,
                     )?),
-                    Some(gguf_linear(ct.tensor(&format!("{prefix}.attn_q_b.weight"), device)?)?),
+                    Some(gguf_linear(
+                        ct.tensor(&format!("{prefix}.attn_q_b.weight"), device)?,
+                    )?),
                     None,
                 )
             } else {
@@ -548,7 +562,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     None,
                     None,
                     None,
-                    Some(gguf_linear(ct.tensor(&format!("{prefix}.attn_q.weight"), device)?)?),
+                    Some(gguf_linear(
+                        ct.tensor(&format!("{prefix}.attn_q.weight"), device)?,
+                    )?),
                 )
             };
 
@@ -558,10 +574,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 ct.tensor(&format!("{prefix}.attn_kv_a_norm.weight"), device)?,
                 props.rms_norm_eps,
             )?;
-            let kv_b_proj =
-                gguf_linear(ct.tensor(&format!("{prefix}.attn_kv_b.weight"), device)?)?;
-            let o_proj =
-                gguf_linear(ct.tensor(&format!("{prefix}.attn_output.weight"), device)?)?;
+            let kv_b_proj = gguf_linear(ct.tensor(&format!("{prefix}.attn_kv_b.weight"), device)?)?;
+            let o_proj = gguf_linear(ct.tensor(&format!("{prefix}.attn_output.weight"), device)?)?;
 
             let attn_norm = QRmsNorm::new(
                 ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?,
@@ -573,15 +587,12 @@ impl ModelConfig::FromGGUF for ModelWeights {
             )?;
 
             // Layer is MoE when idx >= leading_dense_block_count and experts exist.
-            let is_moe = props.n_routed_experts > 0
-                && layer_idx >= props.leading_dense_block_count;
+            let is_moe = props.n_routed_experts > 0 && layer_idx >= props.leading_dense_block_count;
             let mlp = if is_moe {
                 let gate = ct.tensor(&format!("{prefix}.ffn_gate_inp.weight"), device)?;
-                let gate_experts =
-                    ct.tensor(&format!("{prefix}.ffn_gate_exps.weight"), device)?;
+                let gate_experts = ct.tensor(&format!("{prefix}.ffn_gate_exps.weight"), device)?;
                 let up_experts = ct.tensor(&format!("{prefix}.ffn_up_exps.weight"), device)?;
-                let down_experts =
-                    ct.tensor(&format!("{prefix}.ffn_down_exps.weight"), device)?;
+                let down_experts = ct.tensor(&format!("{prefix}.ffn_down_exps.weight"), device)?;
                 let e_score_correction_bias = if props.sigmoid_scoring
                     && ct.has_tensor(&format!("{prefix}.exp_probs_b.bias"))
                 {

@@ -59,7 +59,8 @@ impl MuseTalk {
         // preprocess_img masks the raw [0,1] image, so the masked region encodes as -1 after
         // normalize, not 0). Masking the normalized tensor would gray the mouth region and the
         // VAE inpaints a flat patch.
-        let masked = self.normalize(&face.broadcast_mul(&self.mask.unsqueeze(0)?.unsqueeze(0)?)?)?;
+        let masked =
+            self.normalize(&face.broadcast_mul(&self.mask.unsqueeze(0)?.unsqueeze(0)?)?)?;
         let face = self.normalize(face)?;
         let masked_latents = self.vae.encode_mode(&masked)?;
         let ref_latents = self.vae.encode_mode(&face)?;

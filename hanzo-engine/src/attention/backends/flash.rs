@@ -29,37 +29,37 @@ fn flash_attn_v2(
                 let k = k.flatten_to(1)?;
                 let v = v.flatten_to(1)?;
 
-            if let Some(softcap) = sdpa_params.softcap {
-                return hanzo_flash_attn::flash_attn_varlen_alibi_windowed_softcap(
-                    &q,
-                    &k,
-                    &v,
-                    None,
-                    cumulative_seqlens_q,
-                    cumulative_seqlens_k,
-                    params.max_q as usize,
-                    k_meta.max as usize,
-                    sdpa_params.softmax_scale,
-                    window_size_left,
-                    window_size_right,
-                    softcap,
-                )?
-                .reshape(qshape);
-            } else {
-                return hanzo_flash_attn::flash_attn_varlen_windowed(
-                    &q,
-                    &k,
-                    &v,
-                    cumulative_seqlens_q,
-                    cumulative_seqlens_k,
-                    params.max_q as usize,
-                    k_meta.max as usize,
-                    sdpa_params.softmax_scale,
-                    window_size_left,
-                    window_size_right,
-                )?
-                .reshape(qshape);
-            }
+                if let Some(softcap) = sdpa_params.softcap {
+                    return hanzo_flash_attn::flash_attn_varlen_alibi_windowed_softcap(
+                        &q,
+                        &k,
+                        &v,
+                        None,
+                        cumulative_seqlens_q,
+                        cumulative_seqlens_k,
+                        params.max_q as usize,
+                        k_meta.max as usize,
+                        sdpa_params.softmax_scale,
+                        window_size_left,
+                        window_size_right,
+                        softcap,
+                    )?
+                    .reshape(qshape);
+                } else {
+                    return hanzo_flash_attn::flash_attn_varlen_windowed(
+                        &q,
+                        &k,
+                        &v,
+                        cumulative_seqlens_q,
+                        cumulative_seqlens_k,
+                        params.max_q as usize,
+                        k_meta.max as usize,
+                        sdpa_params.softmax_scale,
+                        window_size_left,
+                        window_size_right,
+                    )?
+                    .reshape(qshape);
+                }
             }
         }
     }
@@ -116,19 +116,19 @@ fn flash_attn_v3(
                 let window_size_left = sdpa_params.sliding_window;
                 let window_size_right = if params.causal { Some(0) } else { None };
 
-            return hanzo_flash_attn_v3::flash_attn_varlen_windowed(
-                &q,
-                &k,
-                &v,
-                cumulative_seqlens_q,
-                cumulative_seqlens_k,
-                params.max_q as usize,
-                k_meta.max as usize,
-                sdpa_params.softmax_scale,
-                window_size_left,
-                window_size_right,
-                true,
-            )?
+                return hanzo_flash_attn_v3::flash_attn_varlen_windowed(
+                    &q,
+                    &k,
+                    &v,
+                    cumulative_seqlens_q,
+                    cumulative_seqlens_k,
+                    params.max_q as usize,
+                    k_meta.max as usize,
+                    sdpa_params.softmax_scale,
+                    window_size_left,
+                    window_size_right,
+                    true,
+                )?
                 .reshape(qshape);
             }
         }

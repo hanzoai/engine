@@ -40,10 +40,8 @@ pub const RELOAD_MODEL_ROUTE: RouteInfo =
     RouteInfo::new("/v1/models/reload", "POST", RouteKind::Hanzo);
 pub const MODEL_STATUS_ROUTE: RouteInfo =
     RouteInfo::new("/v1/models/status", "POST", RouteKind::Hanzo);
-pub const TUNE_MODEL_ROUTE: RouteInfo =
-    RouteInfo::new("/v1/models/tune", "POST", RouteKind::Hanzo);
-pub const SYSTEM_INFO_ROUTE: RouteInfo =
-    RouteInfo::new("/v1/system/info", "GET", RouteKind::Hanzo);
+pub const TUNE_MODEL_ROUTE: RouteInfo = RouteInfo::new("/v1/models/tune", "POST", RouteKind::Hanzo);
+pub const SYSTEM_INFO_ROUTE: RouteInfo = RouteInfo::new("/v1/system/info", "GET", RouteKind::Hanzo);
 pub const SYSTEM_DOCTOR_ROUTE: RouteInfo =
     RouteInfo::new("/v1/system/doctor", "POST", RouteKind::Hanzo);
 pub const HEALTH_ROUTE: RouteInfo = RouteInfo::new("/health", "GET", RouteKind::Hanzo);

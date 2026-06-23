@@ -4,10 +4,6 @@ pub mod chat_template;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda_graph;
 mod diffusion;
-#[cfg(feature = "metal")]
-pub(crate) mod metal_graph;
-#[cfg(feature = "rocm")]
-pub(crate) mod rocm_graph;
 mod embedding;
 mod ggml;
 mod gguf;
@@ -17,11 +13,15 @@ mod isq;
 pub(crate) mod llg;
 mod loaders;
 mod macros;
+#[cfg(feature = "metal")]
+pub(crate) mod metal_graph;
 mod multimodal;
 mod normal;
 mod paths;
 mod processing;
 mod response;
+#[cfg(feature = "rocm")]
+pub(crate) mod rocm_graph;
 pub(crate) mod sampling;
 mod speech;
 
@@ -54,7 +54,6 @@ pub use loaders::{
     DiffusionModel, DiffusionModelLoader, EmbeddingGemmaLoader, EmbeddingLoaderType,
     EmbeddingModel, EmbeddingModelLoader, EmbeddingModelPaths, EmbeddingModule,
     EmbeddingModulePaths, EmbeddingModuleType, FluxLoader, GLM4Loader, GLM4MoeLiteLoader,
-    QwenImageLoader,
     GLM4MoeLoader, Gemma2Loader, Gemma3Loader, Gemma3nLoader, Gemma4Loader, GemmaLoader,
     GptOssLoader, GraniteMoeHybridLoader, Idefics2Loader, Idefics3Loader, LLaVALoader,
     LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, Mistral3Loader,
@@ -63,8 +62,8 @@ pub use loaders::{
     Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName,
     QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3EmbeddingLoader,
     Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader,
-    Qwen3_5MoeLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
-    VoxtralLoader,
+    Qwen3_5MoeLoader, QwenImageLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader,
+    VLlamaLoader, VoxtralLoader,
 };
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
@@ -332,10 +331,7 @@ impl<'a> ModelForwardContext<'a> {
         self.cache.paged_layer(layer_idx)
     }
 
-    pub(crate) fn rope_positions(
-        &mut self,
-        device: &Device,
-    ) -> hanzo_ml::Result<Option<&Tensor>> {
+    pub(crate) fn rope_positions(&mut self, device: &Device) -> hanzo_ml::Result<Option<&Tensor>> {
         if self.cache.rope_positions(device).is_some() {
             return Ok(self.cache.rope_positions(device));
         }

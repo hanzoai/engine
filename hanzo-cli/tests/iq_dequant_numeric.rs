@@ -33,7 +33,12 @@ fn read_ref(name: &str) -> (Vec<u8>, Vec<f32>) {
     let n_floats = rd_u32(&raw, &mut p) as usize;
     let mut floats = Vec::with_capacity(n_floats);
     for _ in 0..n_floats {
-        floats.push(f32::from_le_bytes([raw[p], raw[p + 1], raw[p + 2], raw[p + 3]]));
+        floats.push(f32::from_le_bytes([
+            raw[p],
+            raw[p + 1],
+            raw[p + 2],
+            raw[p + 3],
+        ]));
         p += 4;
     }
     (bytes, floats)
@@ -112,8 +117,7 @@ fn iq_dequant_numeric() {
         eprint!("{line}");
     }
 
-    let _ =
-        std::fs::File::create(RESULT_PATH).and_then(|mut fh| fh.write_all(summary.as_bytes()));
+    let _ = std::fs::File::create(RESULT_PATH).and_then(|mut fh| fh.write_all(summary.as_bytes()));
     eprintln!("--- wrote {RESULT_PATH} ---\n{summary}");
 
     assert!(

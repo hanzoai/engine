@@ -1117,15 +1117,15 @@ mod cuda {
         is_neox: bool,
     ) -> Result<()> {
         match query.dtype() {
-            DType::F16 => {
-                apply_rotary_positions_inner::<f16>(query, key, cos_cache, sin_cache, positions, is_neox)
-            }
-            DType::BF16 => {
-                apply_rotary_positions_inner::<bf16>(query, key, cos_cache, sin_cache, positions, is_neox)
-            }
-            DType::F32 => {
-                apply_rotary_positions_inner::<f32>(query, key, cos_cache, sin_cache, positions, is_neox)
-            }
+            DType::F16 => apply_rotary_positions_inner::<f16>(
+                query, key, cos_cache, sin_cache, positions, is_neox,
+            ),
+            DType::BF16 => apply_rotary_positions_inner::<bf16>(
+                query, key, cos_cache, sin_cache, positions, is_neox,
+            ),
+            DType::F32 => apply_rotary_positions_inner::<f32>(
+                query, key, cos_cache, sin_cache, positions, is_neox,
+            ),
             dt => hanzo_ml::bail!("apply_rotary is only supported for f32, f16 and bf16 ({dt:?})"),
         }
     }
