@@ -134,7 +134,9 @@ impl QuantMethod for MXFP4Layer {
 
         // int8/dp4a path (scaffold): returns None today, so we fall through to the f32 dequant.
         if self.blocks.dims().len() == 2 {
-            if let Some(out) = dp4a::mxfp4_matmul_dp4a(x, &self.blocks, &self.scales, self.bias.as_ref())? {
+            if let Some(out) =
+                dp4a::mxfp4_matmul_dp4a(x, &self.blocks, &self.scales, self.bias.as_ref())?
+            {
                 return Ok(out);
             }
         }

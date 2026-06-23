@@ -169,7 +169,10 @@ impl PagedAttention {
             )
         }
         if num_seqs != cl_l.shape().dims1()? {
-            hanzo_ml::bail!("shape mismatch context_lens {:?}, expected ({num_seqs})", cl_l.shape())
+            hanzo_ml::bail!(
+                "shape mismatch context_lens {:?}, expected ({num_seqs})",
+                cl_l.shape()
+            )
         }
 
         let q_stride = q_l.stride()[0];
@@ -188,9 +191,8 @@ impl PagedAttention {
                     RocmStorageSlice::$variant(m) => m,
                     _ => unreachable!(),
                 };
-                let q_ptr = unsafe {
-                    q_mem.offset_ptr(q_l.start_offset()) as *const std::ffi::c_void
-                };
+                let q_ptr =
+                    unsafe { q_mem.offset_ptr(q_l.start_offset()) as *const std::ffi::c_void };
                 let out = dev.alloc::<$ty>(elem_count)?;
                 let out_ptr = out.as_ptr() as *const std::ffi::c_void;
                 unsafe {
@@ -385,7 +387,10 @@ fn update_cache(
         )
     }
     if num_tokens != s_l.shape().dims1()? {
-        hanzo_ml::bail!("shape mismatch slot_mapping {:?}, expected ({num_tokens})", s_l.shape())
+        hanzo_ml::bail!(
+            "shape mismatch slot_mapping {:?}, expected ({num_tokens})",
+            s_l.shape()
+        )
     }
 
     let key_stride = k_l.stride()[0] as c_int;

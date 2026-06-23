@@ -124,10 +124,13 @@ fn qmmq_q4_0_numeric() {
     }
     log.push('\n');
 
-    let _ =
-        std::fs::File::create("C:\\qmmq-q4_0-test.txt").and_then(|mut f| f.write_all(log.as_bytes()));
+    let _ = std::fs::File::create("C:\\qmmq-q4_0-test.txt")
+        .and_then(|mut f| f.write_all(log.as_bytes()));
     eprintln!("{log}");
-    assert!(nbad == 0, "qmmq_q4_0 mismatch: {nbad} bad, max_err {max_err}");
+    assert!(
+        nbad == 0,
+        "qmmq_q4_0 mismatch: {nbad} bad, max_err {max_err}"
+    );
 }
 
 fn to_f32(s: &RocmStorage) -> Vec<f32> {
