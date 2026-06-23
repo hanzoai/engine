@@ -230,17 +230,57 @@ pub struct MoeRouterTopKConfig {
     pub logit_clip: Option<(f32, f32)>,
 }
 
+/// Process-wide PROOF-DETERMINISTIC mode for MoE expert routing. When ON, `moe_router_topk`
+/// takes a single canonical, backend-independent path (F32 CPU scores + a canonical tie-break),
+/// so a prover and a re-executing verifier on DIFFERENT hardware select the IDENTICAL experts.
+/// OFF by default — normal inference keeps the fast (CUDA/candle) path unchanged. Routing
+/// determinism is a Proof-of-AI prerequisite: a different expert is a different sub-network, so a
+/// non-canonical tie-break (or a CPU-F32 vs CUDA-bf16 disagreement) would diverge the output and
+/// false-reject an honest run.
+static MOE_PROOF_DETERMINISTIC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Enable/disable proof-deterministic MoE routing process-wide (set ON for proof-bearing runs).
+pub fn set_moe_proof_deterministic(on: bool) {
+    MOE_PROOF_DETERMINISTIC.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether proof-deterministic MoE routing is currently enabled.
+pub fn moe_proof_deterministic() -> bool {
+    MOE_PROOF_DETERMINISTIC.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Deterministic top-k expert selection with a CANONICAL, backend-independent tie-break: order
+/// each row by (score DESC, expert-index ASC) using f32 total ordering (NaN-safe), take the first
+/// `k`. Unlike candle's `.topk()` (whose tie-break is unspecified) and the separate CUDA bf16/f16
+/// router kernel, this yields the SAME experts on every machine — the routing analog of the
+/// lowest-id argmax tie-break the sampler now uses. `top_k <= num_experts` for every MoE config.
+fn deterministic_topk_indices(scores: &Tensor, k: usize) -> Result<Tensor> {
+    let rows = scores.to_vec2::<f32>()?;
+    let device = scores.device();
+    let mut out: Vec<u32> = Vec::with_capacity(rows.len() * k);
+    for row in &rows {
+        let mut idx: Vec<u32> = (0..row.len() as u32).collect();
+        idx.sort_by(|&a, &b| row[b as usize].total_cmp(&row[a as usize]).then(a.cmp(&b)));
+        out.extend_from_slice(&idx[..k]);
+    }
+    Tensor::from_vec(out, (rows.len(), k), device)
+}
+
 pub fn moe_router_topk(
     logits: &Tensor,
     config: MoeRouterTopKConfig,
     selection_bias: Option<&Tensor>,
     expert_scale: Option<&Tensor>,
 ) -> Result<TopKOutput> {
+    let proof = moe_proof_deterministic();
+    // Proof mode forces the single canonical CPU path so prover and verifier never disagree.
     #[cfg(feature = "cuda")]
-    if let Some(topk) =
-        cuda_moe_router_topk_if_supported(logits, config, selection_bias, expert_scale)?
-    {
-        return Ok(topk);
+    if !proof {
+        if let Some(topk) =
+            cuda_moe_router_topk_if_supported(logits, config, selection_bias, expert_scale)?
+        {
+            return Ok(topk);
+        }
     }
 
     let logits = logits.to_dtype(DType::F32)?;
@@ -258,10 +298,12 @@ pub fn moe_router_topk(
     } else {
         scores.clone()
     };
-    let indices = selection_scores
-        .topk(config.top_k)?
-        .indices
-        .to_dtype(DType::U32)?;
+    let indices = if proof {
+        // canonical, backend-independent expert selection (Proof-of-AI)
+        deterministic_topk_indices(&selection_scores, config.top_k)?
+    } else {
+        selection_scores.topk(config.top_k)?.indices.to_dtype(DType::U32)?
+    };
     let selected_logits = match config.selected_weight {
         MoeRouterSelectedWeight::Score => None,
         MoeRouterSelectedWeight::Softmax | MoeRouterSelectedWeight::Sigmoid => {
@@ -3425,6 +3467,31 @@ pub(crate) fn qkv_projections(
 }
 
 mod tests {
+    #[test]
+    fn test_deterministic_moe_routing_tie_break_lowest_expert() {
+        // Proof-of-AI: on equal/near-equal router scores, expert selection MUST be canonical
+        // (lowest expert index) and backend-independent, or a re-executing verifier routes to a
+        // different sub-network and an honest run false-rejects.
+        use super::deterministic_topk_indices;
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::Cpu;
+        // Row 0: experts 1 and 3 tie at 5.0 (the two highest) -> top-2 = [1, 3], lower index
+        //        ordered first (tests tie ORDERING).
+        // Row 1: all five equal at 7.0 -> top-2 = [0, 1], the two LOWEST indices (tests the
+        //        boundary tie-break: which of the equal experts make the cut).
+        let scores = Tensor::from_vec(
+            vec![1.0f32, 5.0, 2.0, 5.0, 4.0, /* row1 */ 7.0, 7.0, 7.0, 7.0, 7.0],
+            (2, 5),
+            &device,
+        )
+        .unwrap();
+        let idx = deterministic_topk_indices(&scores, 2).unwrap();
+        assert_eq!(idx.to_vec2::<u32>().unwrap(), vec![vec![1u32, 3], vec![0u32, 1]]);
+        // Determinism: identical inputs -> identical selection, every time.
+        let idx2 = deterministic_topk_indices(&scores, 2).unwrap();
+        assert_eq!(idx.to_vec2::<u32>().unwrap(), idx2.to_vec2::<u32>().unwrap());
+    }
+
     #[test]
     fn test_topk() {
         use crate::ops::{TopKLastDimOp, TopKOutput};
