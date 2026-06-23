@@ -1,5 +1,4 @@
 use hanzo_ml::{Device, DeviceLocation};
-use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
 use crate::DEBUG;

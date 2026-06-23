@@ -413,7 +413,7 @@ impl AutoencoderKl {
         let h = self.encoder.forward(xs)?;
         let moments = Convolution.forward_2d(&self.quant_conv, &h)?;
         let mean = moments.chunk(2, 1)?[0].clone();
-        Ok((mean * self.scaling_factor)?)
+        mean * self.scaling_factor
     }
 
     pub fn decode(&self, latents: &Tensor) -> Result<Tensor> {

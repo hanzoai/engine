@@ -16,7 +16,6 @@ pub use inputs_processor::Idefics3Processor;
 use vision::{Idefics3Connector, Idefics3VisionTransformer};
 
 use crate::attention::AttentionMask;
-use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,

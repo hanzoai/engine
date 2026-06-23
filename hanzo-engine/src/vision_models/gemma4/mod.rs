@@ -7,7 +7,6 @@ use hanzo_ml::{DType, Device, Result, Tensor, D};
 use hanzo_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use text::TextModel;
 
-use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,

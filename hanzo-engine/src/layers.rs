@@ -2582,6 +2582,7 @@ pub(crate) fn apply_rotary_selected_qk(
     Ok((post_rope_output(q)?, post_rope_output(k)?))
 }
 
+#[allow(dead_code)]
 pub(crate) fn apply_rotary_selected_q(
     q: &Tensor,
     cos: &Tensor,
