@@ -12,3 +12,8 @@ pub use metal::*;
 mod rocm;
 #[cfg(feature = "rocm")]
 pub use rocm::*;
+
+#[cfg(feature = "vulkan")]
+mod vulkan;
+#[cfg(feature = "vulkan")]
+pub use vulkan::*;

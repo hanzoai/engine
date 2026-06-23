@@ -5,7 +5,8 @@ use crate::pipeline::text_models_inputs_processor::FLASHINFER_PREFILL_MAX_GROUP_
 #[cfg(any(
     all(feature = "cuda", target_family = "unix"),
     feature = "metal",
-    feature = "rocm"
+    feature = "rocm",
+    feature = "vulkan"
 ))]
 pub const STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE: usize = 256;
 #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -13,7 +14,8 @@ pub const FLASHINFER_PREFILL_MAX_HEAD_SIZE: usize = 256;
 #[cfg(any(
     all(feature = "cuda", target_family = "unix"),
     feature = "metal",
-    feature = "rocm"
+    feature = "rocm",
+    feature = "vulkan"
 ))]
 pub const FLASHINFER_DECODE_MAX_HEAD_SIZE: usize = 512;
 #[cfg(all(feature = "cuda", target_family = "unix"))]
