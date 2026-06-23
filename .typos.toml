@@ -5,6 +5,8 @@ extend-exclude = [
     "examples/server/phi3_duckduckgo_hanzo.ipynb",
     "hanzo-cli/static/",
     "CLAUDE.md",
+    "hanzo-web-chat/static/",
+    "examples/server/phi3_duckduckgo_mistral.rs.ipynb",
 ]
 ignore-hidden = false
 
@@ -48,6 +50,9 @@ extend-ignore-re = [
 "layrnorm" = "layrnorm"
 "ot" = "ot"
 "thr" = "thr"
+"mis" = "mis"
+"Hel" = "Hel"
+"nothink" = "nothink"
 
 [type.rust.extend-identifiers]
 "arange" = "arange"
@@ -75,3 +80,4 @@ extend-ignore-re = [
 "layrnorm" = "layrnorm"
 "pre_layrnorm" = "pre_layrnorm"
 "numer_denom_ms" = "numer_denom_ms"
+"temperal_downsample" = "temperal_downsample"
