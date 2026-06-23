@@ -1,7 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
