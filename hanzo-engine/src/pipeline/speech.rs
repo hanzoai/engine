@@ -73,13 +73,10 @@ fn load_qwen3_tts_tokenizer(dir: &std::path::Path) -> anyhow::Result<Tokenizer> 
 
     let vocab = dir.join("vocab.json");
     let merges = dir.join("merges.txt");
-    let bpe = BPE::from_file(
-        vocab.to_str().unwrap(),
-        merges.to_str().unwrap(),
-    )
-    .unk_token("<|endoftext|>".to_string())
-    .build()
-    .map_err(anyhow::Error::msg)?;
+    let bpe = BPE::from_file(vocab.to_str().unwrap(), merges.to_str().unwrap())
+        .unk_token("<|endoftext|>".to_string())
+        .build()
+        .map_err(anyhow::Error::msg)?;
 
     let mut tokenizer = Tokenizer::new(bpe);
     // Qwen uses ByteLevel pre-tokenizer/decoder with add_prefix_space=false.
@@ -295,13 +292,18 @@ impl Loader for SpeechLoader {
                         revision.clone(),
                     ));
                     let model_id = std::path::Path::new(&self.model_id);
-                    let codec_weight =
-                        api_get_file!(api, "speech_tokenizer/model.safetensors", &model_id, &revision);
+                    let codec_weight = api_get_file!(
+                        api,
+                        "speech_tokenizer/model.safetensors",
+                        &model_id,
+                        &revision
+                    );
                     let codec_cfg =
                         api_get_file!(api, "speech_tokenizer/config.json", &model_id, &revision);
                     let vocab = api_get_file!(api, "vocab.json", &model_id, &revision);
                     let _merges = api_get_file!(api, "merges.txt", &model_id, &revision);
-                    let _tok_cfg = api_get_file!(api, "tokenizer_config.json", &model_id, &revision);
+                    let _tok_cfg =
+                        api_get_file!(api, "tokenizer_config.json", &model_id, &revision);
                     weights.push(codec_weight);
                     codec_config = Some(codec_cfg);
                     tokenizer_dir = Some(vocab.parent().unwrap().to_path_buf());
@@ -385,7 +387,8 @@ impl Loader for SpeechLoader {
 
         let model = match self.arch {
             SpeechLoaderType::Dia => {
-                let cfg: DiaConfig = serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
+                let cfg: DiaConfig =
+                    serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
                 let dac_vb = unsafe {
                     VarBuilder::from_mmaped_safetensors(
                         &[paths.weights.last().unwrap()],
@@ -424,7 +427,10 @@ impl Loader for SpeechLoader {
                         .ok_or_else(|| anyhow::anyhow!("qwen3_tts requires a tokenizer"))?,
                 )?;
                 let pipeline = Qwen3TtsPipeline::new(&cfg, &codec_cfg, vb, codec_vb)?;
-                SpeechModel::Qwen3Tts { pipeline, tokenizer }
+                SpeechModel::Qwen3Tts {
+                    pipeline,
+                    tokenizer,
+                }
             }
         };
 
@@ -542,7 +548,10 @@ impl Pipeline for SpeechPipeline {
                 channels,
             } = match &self.model {
                 SpeechModel::Dia(m) => m.generate(&prompt, &self.cfg)?,
-                SpeechModel::Qwen3Tts { pipeline, tokenizer } => {
+                SpeechModel::Qwen3Tts {
+                    pipeline,
+                    tokenizer,
+                } => {
                     // Apply the assistant chat template, tokenize, and pass the id stream through.
                     let templated = format!(
                         "<|im_start|>assistant\n{prompt}<|im_end|>\n<|im_start|>assistant\n"

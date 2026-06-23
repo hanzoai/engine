@@ -64,9 +64,12 @@ impl Qwen3AsrAudioProcessor {
             oversampling_factor: 256,
             window: rubato::WindowFunction::BlackmanHarris2,
         };
-        let mut rs = rubato::SincFixedIn::<f32>::new(to as f64 / from as f64, 2.0, params, samples.len(), 1)
+        let mut rs =
+            rubato::SincFixedIn::<f32>::new(to as f64 / from as f64, 2.0, params, samples.len(), 1)
+                .map_err(hanzo_ml::Error::msg)?;
+        let out = rs
+            .process(&[samples.to_vec()], None)
             .map_err(hanzo_ml::Error::msg)?;
-        let out = rs.process(&[samples.to_vec()], None).map_err(hanzo_ml::Error::msg)?;
         Ok(out[0].clone())
     }
 
@@ -171,7 +174,9 @@ impl Qwen3AsrAudioProcessor {
         let mel_min = Self::hertz_to_mel(0.0);
         let mel_max = Self::hertz_to_mel(sr / 2.0);
         let pts: Vec<f32> = (0..n_mels + 2)
-            .map(|i| Self::mel_to_hertz(mel_min + (mel_max - mel_min) * i as f32 / (n_mels + 1) as f32))
+            .map(|i| {
+                Self::mel_to_hertz(mel_min + (mel_max - mel_min) * i as f32 / (n_mels + 1) as f32)
+            })
             .collect();
         let diff: Vec<f32> = pts.windows(2).map(|w| w[1] - w[0]).collect();
 

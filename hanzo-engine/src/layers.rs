@@ -2934,7 +2934,16 @@ fn rocm_rope_positions_qk(
     };
 
     let (q_out, k_out) = q_s.rope_positions(
-        q_l, k_s, k_l, cos_s, cos_l, sin_s, sin_l, pos_s, pos_l, is_gpt_neox,
+        q_l,
+        k_s,
+        k_l,
+        cos_s,
+        cos_l,
+        sin_s,
+        sin_l,
+        pos_s,
+        pos_l,
+        is_gpt_neox,
     )?;
     Ok((
         Tensor::from((Storage::Rocm(q_out), q_l.shape().clone())),

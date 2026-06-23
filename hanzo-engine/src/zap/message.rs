@@ -146,7 +146,11 @@ impl ChatRequest {
     /// capnp `ResponseStream` / RPC return plays on the wire).
     pub fn into_request(self, response: Sender<Response>) -> crate::Request {
         let messages = RequestMessage::Chat {
-            messages: self.messages.into_iter().map(Message::into_engine).collect(),
+            messages: self
+                .messages
+                .into_iter()
+                .map(Message::into_engine)
+                .collect(),
             enable_thinking: self.enable_thinking,
             reasoning_effort: None,
         };
@@ -425,7 +429,12 @@ mod tests {
         let tools = n.tools.expect("tools forwarded");
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].function.name, "search");
-        let RequestMessage::Chat { messages, enable_thinking, .. } = n.messages else {
+        let RequestMessage::Chat {
+            messages,
+            enable_thinking,
+            ..
+        } = n.messages
+        else {
             panic!("expected chat messages");
         };
         assert_eq!(enable_thinking, Some(true));
