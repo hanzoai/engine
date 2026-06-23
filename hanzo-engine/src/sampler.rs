@@ -348,14 +348,25 @@ fn partial_sort_top_k(probs: &mut [f32], k: usize, zero_rest: bool) -> Vec<(u32,
 }
 
 /// Find the index of the maximum element in a slice. O(n) scan.
+///
+/// Tie-break is the LOWEST index (smallest token id), via a strict `>` that only
+/// advances on a strictly greater value. This is a determinism requirement for
+/// Proof-of-AI: a re-executing verifier (or another node) must select the identical
+/// token on equal logits, or re-execution false-rejects an honest run. Rust's
+/// `Iterator::max_by` returns the LAST maximal element, i.e. the highest id — the
+/// opposite of what reproducible consensus needs. NaNs are skipped (any `>` against
+/// NaN is false), matching the old `partial_cmp(...).unwrap_or(Equal)` intent.
 #[inline]
 fn argmax_f32(values: &[f32]) -> u32 {
-    values
-        .iter()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(i, _)| i as u32)
-        .unwrap_or(0)
+    let mut best_i: u32 = 0;
+    let mut best_v: f32 = f32::NEG_INFINITY;
+    for (i, &v) in values.iter().enumerate() {
+        if v > best_v {
+            best_v = v;
+            best_i = i as u32;
+        }
+    }
+    best_i
 }
 
 impl Sampler {
@@ -1419,6 +1430,18 @@ mod tests {
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
         assert_eq!(res.logprob, 1023f64.log(10.) as f32)
+    }
+
+    #[test]
+    fn test_argmax_tie_breaks_to_lowest_id() {
+        // Determinism contract (Proof-of-AI): on equal logits, select the SMALLEST token
+        // id, so a re-executing verifier picks the identical token. Rust's max_by would
+        // return the highest (last) — this guards against that regression.
+        use super::argmax_f32;
+        assert_eq!(argmax_f32(&[1.0, 5.0, 2.0, 5.0, 3.0]), 1, "tie at 5.0 -> lowest index 1");
+        assert_eq!(argmax_f32(&[7.0, 7.0, 7.0]), 0, "all equal -> index 0");
+        assert_eq!(argmax_f32(&[0.0, 1.0, 2.0, 3.0]), 3, "strict max unaffected");
+        assert_eq!(argmax_f32(&[f32::NAN, 2.0, f32::NAN, 2.0]), 1, "NaNs skipped, tie -> lowest finite");
     }
 
     #[test]

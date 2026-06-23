@@ -43,6 +43,7 @@ mod metal;
 mod model_loader;
 mod moe;
 mod ops;
+pub mod poi;
 mod video_input;
 mod vulkan;
 pub use model_loader::{
