@@ -46,6 +46,7 @@ mod ops;
 pub mod poi;
 pub mod poi_transcript;
 pub mod poi_forward;
+pub mod poi_graph;
 mod video_input;
 mod vulkan;
 pub use model_loader::{
