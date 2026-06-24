@@ -66,6 +66,52 @@ pub enum OpKind {
     TopKRoute,
     /// Gather rows: `out[i] = x[idx[i]]` (expert dispatch / token routing), a committed permutation.
     Gather,
+    /// Row-wise softmax in DETERMINISTIC fixed-point integer arithmetic ([`int_softmax`]) — the
+    /// attention normalization. Recomputed (not Freivalds-checked): it is a pure integer function of
+    /// its input, so prover and challenger compute the byte-identical output.
+    Softmax,
+}
+
+/// Fixed-point fractional bits for [`int_softmax`] (Q16): probabilities are integers `≈ 2^16` per row.
+pub const SOFTMAX_FRAC: u32 = 16;
+const SM_ONE: i64 = 1 << SOFTMAX_FRAC; // 65536
+const SM_LN2: i64 = 45426; // ln2 · 2^16
+// I-BERT integer exp poly: exp(p) ≈ a·(p+b)² + c on p ∈ (−ln2, 0], coefficients · 2^16.
+const SM_A: i64 = 23499; // 0.3585
+const SM_B: i64 = 88670; // 1.3530
+const SM_C: i64 = 22544; // 0.3440
+
+/// `exp(x)` for `x ≤ 0`, input and output in Q16 fixed point, PURE integer (I-BERT scheme):
+/// write `x = -k·ln2 + p` with integer `k ≥ 0` and `p ∈ (−ln2, 0]`; then
+/// `exp(x) = 2^{-k}·exp(p)` and `exp(p)` is a fixed 2nd-order polynomial. Bit-reproducible.
+fn fixed_exp_neg(x: i64) -> i64 {
+    if x >= 0 {
+        return SM_ONE;
+    }
+    let k = (-x) / SM_LN2; // integer part, ≥ 0
+    let p = x + k * SM_LN2; // remainder in (−ln2, 0], Q16
+    let pb = p + SM_B; // (p + b), Q16
+    let sq = (pb * pb) >> SOFTMAX_FRAC; // (p+b)², Q16
+    let poly = ((SM_A * sq) >> SOFTMAX_FRAC) + SM_C; // a(p+b)²+c, Q16
+    poly >> k // · 2^{-k}
+}
+
+/// Deterministic integer softmax over each row. Input `logits` are Q16 fixed point (real value =
+/// `logit / 2^16`); output probabilities are Q16 integers summing to `≈ 2^16` per row. PURE integer
+/// (max-shift for stability, [`fixed_exp_neg`], integer normalize) so it is bit-identical across
+/// backends — the prover commits it and the challenger recomputes it by the SAME function.
+pub fn int_softmax(logits: &Mat) -> Mat {
+    let mut out = vec![0i64; logits.rows * logits.cols];
+    for r in 0..logits.rows {
+        let row = &logits.data[r * logits.cols..(r + 1) * logits.cols];
+        let m = *row.iter().max().unwrap_or(&0);
+        let exps: Vec<i64> = row.iter().map(|&x| fixed_exp_neg(x - m)).collect();
+        let sum: i64 = exps.iter().sum::<i64>().max(1);
+        for c in 0..logits.cols {
+            out[r * logits.cols + c] = (exps[c] << SOFTMAX_FRAC) / sum;
+        }
+    }
+    Mat::new(logits.rows, logits.cols, out)
 }
 
 /// One op: its kind, the commitments of its input activations, any inline params, and the
@@ -106,6 +152,7 @@ impl Op {
             OpKind::Scale => 4,
             OpKind::TopKRoute => 5,
             OpKind::Gather => 6,
+            OpKind::Softmax => 7,
         }
     }
 }
@@ -230,6 +277,15 @@ impl GraphTrace {
         (oc, out)
     }
 
+    /// Row-wise deterministic integer softmax (attention normalization).
+    pub fn softmax(&mut self, x: &Mat, xc: [u8; 32]) -> ([u8; 32], Mat) {
+        let out = int_softmax(x);
+        let oc = act_commit(&out);
+        let op = Op { kind: OpKind::Softmax, inputs: vec![xc], output: oc, weight: None, scalars: vec![] };
+        self.push(op, vec![x.clone()], out.clone());
+        (oc, out)
+    }
+
     pub fn len(&self) -> usize {
         self.ops.len()
     }
@@ -349,6 +405,7 @@ pub fn verify_graph_op(root: &[u8; 32], beacon: &[u8], op: &GraphOpening, k: usi
             }
             op.output_mat == Mat::new(idx.len(), x.cols, data)
         }
+        OpKind::Softmax => int_softmax(&op.input_mats[0]) == op.output_mat,
     }
 }
 
@@ -443,13 +500,41 @@ mod tests {
         let kt = rmat(d, tk, &mut s); // Kᵀ
         let (sc_c, sc) = t.matmul(&q, qc, &kt); // scores [tk × tk]
         let (scl_c, scl) = t.scale(&sc, sc_c, 1, 3); // /√d-ish integer scale
+        let (sm_c, sm) = t.softmax(&scl, scl_c); // attention weights (deterministic int softmax)
         let v = rmat(tk, d, &mut s);
-        let (_ctx_c, _ctx) = t.matmul(&scl, scl_c, &v); // ctx [tk × d]
-        assert!(t.verify_chaining(), "attention spine chains");
+        let (_ctx_c, _ctx) = t.matmul(&sm, sm_c, &v); // ctx = softmax(QKᵀ/√d)·V  [tk × d]
+        assert!(t.verify_chaining(), "full attention block (incl. softmax) chains");
         let root = t.root();
         for i in 0..t.len() {
             assert!(verify_graph_op(&root, b"beacon:attn", &t.open(i), 2), "attention op {i} verifies");
         }
+    }
+
+    #[test]
+    fn test_int_softmax_is_a_valid_distribution() {
+        // Each row sums to ≈ 2^16, larger logits get larger weight, and it is bit-reproducible.
+        let logits = Mat::new(2, 4, vec![0, SM_ONE, 2 * SM_ONE, 0, /**/ 5 * SM_ONE, 0, 0, 0]);
+        let p = int_softmax(&logits);
+        for r in 0..2 {
+            let sum: i64 = p.data[r * 4..(r + 1) * 4].iter().sum();
+            assert!((sum - SM_ONE).abs() <= 8, "row {r} sums to ≈2^16 (got {sum})");
+        }
+        assert!(p.data[2] > p.data[1] && p.data[1] > p.data[0], "monotone in the logit");
+        assert!(p.data[4] > p.data[5], "the peaked row concentrates mass on the max");
+        assert_eq!(int_softmax(&logits), int_softmax(&logits), "deterministic / bit-reproducible");
+    }
+
+    #[test]
+    fn attack_forged_softmax_is_caught() {
+        let mut s = 0x50F7;
+        let mut t = GraphTrace::new();
+        let logits = rmat(3, 5, &mut s);
+        let lc = t.input(&logits);
+        t.softmax(&logits, lc);
+        let root = t.root();
+        let mut op = t.open(0);
+        op.output_mat.data[0] += 1; // tamper the attention weights
+        assert!(!verify_graph_op(&root, b"beacon", &op, 2), "a forged softmax output is caught by recompute");
     }
 
     // ---- ADVERSARIAL: break the chain, fabricate ops -----------------------------------------
