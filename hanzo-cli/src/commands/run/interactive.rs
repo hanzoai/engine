@@ -236,6 +236,11 @@ async fn oneshot_text(
         }
     }
     println!();
+    // The one-shot is done; all output is flushed. Skip the racy ROCm-runtime atexit teardown
+    // (a cosmetic post-output SIGSEGV/exit-139) by exiting cleanly here.
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    std::process::exit(0);
 }
 
 async fn oneshot_multimodal(
@@ -403,6 +408,11 @@ async fn oneshot_multimodal(
         }
     }
     println!();
+    // The one-shot is done; all output is flushed. Skip the racy ROCm-runtime atexit teardown
+    // (a cosmetic post-output SIGSEGV/exit-139) by exiting cleanly here.
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    std::process::exit(0);
 }
 
 fn print_stats(

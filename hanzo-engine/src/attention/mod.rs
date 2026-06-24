@@ -51,6 +51,23 @@ pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn}
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
 
+/// Cached `HANZO_ROCM_FLASH_ATTN` gate (default on); set to `0` to force the eager rocBLAS path.
+#[cfg(feature = "rocm")]
+fn rocm_flash_attn_enabled() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static CACHED: AtomicU8 = AtomicU8::new(u8::MAX);
+    let cached = CACHED.load(Ordering::Relaxed);
+    if cached != u8::MAX {
+        return cached == 1;
+    }
+    let enabled = !matches!(
+        std::env::var("HANZO_ROCM_FLASH_ATTN").as_deref(),
+        Ok("0") | Ok("false")
+    );
+    CACHED.store(u8::from(enabled), Ordering::Relaxed);
+    enabled
+}
+
 /// Generic chunked attention computation that can be used by different backends
 pub(crate) fn chunked_attention<F>(
     q: &Tensor,
@@ -165,6 +182,38 @@ impl Sdpa {
         // The mask carries causality already; the kernel-level do_causal
         // early-exit is safe to enable only when the request is known causal.
         let do_causal = flash_params.is_some_and(|p| p.causal);
+
+        // ROCm WMMA flash-attention: causal prefill at long sequences wins 1.23-1.49x over
+        // rocBLAS+softmax on gfx1151. A non-SWA causal mask (Custom from the causal masker) or
+        // CausalFlash is full-causal, so the kernel applies causality internally and the explicit
+        // mask is dropped. SWA, non-causal (None+!do_causal), short seqs, and head_dim != 128 fall
+        // through to the eager path. The kernel does GQA, so it takes the un-expanded k/v.
+        #[cfg(feature = "rocm")]
+        if q.device().is_rocm()
+            && rocm_flash_attn_enabled()
+            && !matches!(mask, AttentionMask::None if !do_causal)
+        {
+            const ROCM_FLASH_MIN_SEQ: usize = 768;
+            let (_, _, seq_len, head_dim) = q.dims4()?;
+            let is_full_causal = matches!(mask, AttentionMask::CausalFlash)
+                || (mask.is_custom() && sdpa_params.sliding_window.is_none());
+            if is_full_causal
+                && seq_len >= ROCM_FLASH_MIN_SEQ
+                && head_dim == 128
+                && k.dim(3)? == 128
+                && v.dim(3)? == 128
+                && matches!(q.dtype(), DType::F16 | DType::BF16)
+                && sdpa_params.softcap.is_none_or(|x| x == 1.0)
+            {
+                return hanzo_nn::attention::rocm_flash_attn(
+                    q,
+                    k,
+                    v,
+                    sdpa_params.softmax_scale,
+                    true,
+                );
+            }
+        }
 
         // Custom mask, eager attention (flash can't use arbitrary mask tensors)
         if let AttentionMask::Custom(mask_tensor) = mask {
