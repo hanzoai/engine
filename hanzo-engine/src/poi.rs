@@ -88,7 +88,7 @@ pub fn exact_matmul(a: &Mat, b: &Mat) -> Mat {
 }
 
 /// A dense row-major integer matrix (the int8 path's exact i32/i64 accumulators).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mat {
     pub rows: usize,
     pub cols: usize,
