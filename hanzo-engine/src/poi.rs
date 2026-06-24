@@ -26,9 +26,66 @@
 //! expansion here (splitmix64) has the identical soundness for the unit test, where what
 //! matters is that `r` is fixed and reproducible by both sides.
 
+use sha3::{Digest, Keccak256};
+
 /// The Mersenne prime field modulus `p = 2^61 - 1`. Bounds the int8 accumulator and the
 /// Freivalds intermediates within 61 bits, so a single `u128` multiply never overflows.
 pub const P: u64 = (1u64 << 61) - 1;
+
+/// Ethereum keccak-256 (legacy Keccak, `0x01` padding) — byte-identical to the chain's
+/// `crypto.Keccak256` (luxfi/crypto) and Solidity `keccak256`, so a commitment built here
+/// verifies on the Go verifier and on-chain without re-hashing.
+pub fn keccak256(bytes: &[u8]) -> [u8; 32] {
+    let mut h = Keccak256::new();
+    h.update(bytes);
+    h.finalize().into()
+}
+
+/// Derive `k` challenge vectors of length `n` over `F_p` from `seed`, BYTE-FOR-BYTE identical to
+/// the Go verifier `crypto/poi.DeriveChallenges`: for each `(j,i)`, `idx = BE32(j) ‖ BE64(i)`,
+/// `h = keccak256(seed ‖ idx)`, `r[j][i] = BE_u64(h[:8]) mod p`. In production
+/// `seed = keccak(beacon ‖ task ‖ transcriptRoot)` — unpredictable before the prover commits — so
+/// the prover cannot pre-fit `(A,B,C)` to a known `r`. This is the canonical cross-language
+/// derivation the prover (Rust), verifier (Go), and precompile (C++) all share; the `splitmix64`
+/// {derive_challenges} below is retained only for the isolated soundness unit tests.
+pub fn derive_challenges_keccak(seed: &[u8], n: usize, k: usize) -> Vec<Vec<u64>> {
+    (0..k)
+        .map(|j| {
+            (0..n)
+                .map(|i| {
+                    let mut buf = Vec::with_capacity(seed.len() + 12);
+                    buf.extend_from_slice(seed);
+                    buf.extend_from_slice(&(j as u32).to_be_bytes());
+                    buf.extend_from_slice(&(i as u64).to_be_bytes());
+                    let h = keccak256(&buf);
+                    u64::from_be_bytes(h[0..8].try_into().unwrap()) % P
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// The EXACT-INTEGER matmul `C = A·B` on a whole-`K` `i64` accumulator — no cross-block `f32`
+/// rescale, so the result is bit-identical across CPU/GPU/backends and is exactly what
+/// {freivalds_verify} checks (zero false-reject). This is the proof-bearing GEMM: a tier that
+/// opts into compute proofs runs its matmuls here (quantized `i8` operands widened to `i64`),
+/// trading the `f32` fast path's throughput for the reproducibility the proof needs. `A` is
+/// `[t×k]`, `B` is `[k×n]`, `C` is `[t×n]`. (`i8·i8` over realistic `k` stays far inside `i64`.)
+pub fn exact_matmul(a: &Mat, b: &Mat) -> Mat {
+    assert_eq!(a.cols, b.rows, "exact_matmul dim mismatch: a.cols != b.rows");
+    let (t, k, n) = (a.rows, a.cols, b.cols);
+    let mut c = vec![0i64; t * n];
+    for i in 0..t {
+        for j in 0..n {
+            let mut acc: i64 = 0;
+            for x in 0..k {
+                acc += a.data[i * k + x] * b.data[x * n + j];
+            }
+            c[i * n + j] = acc;
+        }
+    }
+    Mat::new(t, n, c)
+}
 
 /// A dense row-major integer matrix (the int8 path's exact i32/i64 accumulators).
 #[derive(Clone, Debug)]
@@ -217,5 +274,27 @@ mod tests {
         bad[7 * n + 11] += 1; // one entry off by one
         let c_bad = Mat::new(t, n, bad);
         assert!(!freivalds_verify_multi(&a, &b, &c_bad, &ch), "off-by-one in one entry is caught");
+    }
+
+    #[test]
+    fn test_derive_challenges_keccak_golden_parity() {
+        // CROSS-LANGUAGE PARITY with the Go verifier (crypto/poi TestDeriveChallengesGolden):
+        // the SAME seed must yield byte-identical challenges. If keccak or the BE32(j)‖BE64(i)
+        // encoding drifts on either side, one of the two suites breaks — so a Rust-emitted proof
+        // is guaranteed to verify against the Go chain verifier. The pinned hex is the canonical
+        // value emitted by the Go path and asserted there too.
+        let ch = derive_challenges_keccak(b"poi-parity-seed", 4, 2);
+        let mut bytes = Vec::new();
+        for row in &ch {
+            for &v in row {
+                bytes.extend_from_slice(&v.to_be_bytes());
+            }
+        }
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "1b3c3bb2aa818c7e0b75620eafd2e35206f000322286987412a71a33da4219920934404c5bc1635a1b934a274b2eaa4801b82451d55b616d142238c54b6a7d51",
+            "Rust derive_challenges_keccak must match the Go verifier byte-for-byte"
+        );
     }
 }
