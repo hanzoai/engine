@@ -70,6 +70,11 @@ pub enum OpKind {
     /// attention normalization. Recomputed (not Freivalds-checked): it is a pure integer function of
     /// its input, so prover and challenger compute the byte-identical output.
     Softmax,
+    /// Matrix transpose `out[j][i] = x[i][j]`. The one op a BACKWARD pass needs that a forward does
+    /// not: gradients are `dA = dC·Bᵀ`, `dB = Aᵀ·dC`. With it, a training step is just a longer graph
+    /// of the SAME ops — so the proof covers training with no new machinery (inference, embedding, and
+    /// training are graphs, not separate proof systems).
+    Transpose,
 }
 
 /// Fixed-point fractional bits for [`int_softmax`] (Q16): probabilities are integers `≈ 2^16` per row.
@@ -153,6 +158,7 @@ impl Op {
             OpKind::TopKRoute => 5,
             OpKind::Gather => 6,
             OpKind::Softmax => 7,
+            OpKind::Transpose => 8,
         }
     }
 }
@@ -174,7 +180,7 @@ pub struct GraphOpening {
 pub struct GraphTrace {
     ops: Vec<Op>,
     op_mats: Vec<(Vec<Mat>, Mat)>, // (inputs, output) tensors kept for opening
-    input_commit: Option<[u8; 32]>, // the trace's declared input (first activation)
+    declared: Vec<[u8; 32]>, // the trace's declared inputs (prompt, weights, upstream gradient…)
 }
 
 impl GraphTrace {
@@ -182,11 +188,12 @@ impl GraphTrace {
         Self::default()
     }
 
-    /// Declare the trace's input activation (the embedded, quantized prompt). Returns its commitment.
+    /// Declare a trace input activation (a prompt, a weight tensor, an upstream gradient — a graph
+    /// has a SET of inputs, not one). Returns its commitment, usable as an op input.
     pub fn input(&mut self, x: &Mat) -> [u8; 32] {
         let c = act_commit(x);
-        if self.input_commit.is_none() {
-            self.input_commit = Some(c);
+        if !self.declared.contains(&c) {
+            self.declared.push(c);
         }
         c
     }
@@ -211,6 +218,16 @@ impl GraphTrace {
             scalars: vec![],
         };
         self.push(op, vec![a.clone()], c.clone());
+        (oc, c)
+    }
+
+    /// `C = A·B` where BOTH operands are activations (the backward pass: `dW = Xᵀ·dY`). The forward's
+    /// inline-weight {matmul} and this share one op kind and one Freivalds check.
+    pub fn matmul_act(&mut self, a: &Mat, ac: [u8; 32], b: &Mat, bc: [u8; 32]) -> ([u8; 32], Mat) {
+        let c = exact_matmul(a, b);
+        let oc = act_commit(&c);
+        let op = Op { kind: OpKind::MatMul, inputs: vec![ac, bc], output: oc, weight: None, scalars: vec![] };
+        self.push(op, vec![a.clone(), b.clone()], c.clone());
         (oc, c)
     }
 
@@ -286,6 +303,15 @@ impl GraphTrace {
         (oc, out)
     }
 
+    /// Matrix transpose (the op a backward pass adds).
+    pub fn transpose(&mut self, x: &Mat, xc: [u8; 32]) -> ([u8; 32], Mat) {
+        let out = transpose(x);
+        let oc = act_commit(&out);
+        let op = Op { kind: OpKind::Transpose, inputs: vec![xc], output: oc, weight: None, scalars: vec![] };
+        self.push(op, vec![x.clone()], out.clone());
+        (oc, out)
+    }
+
     pub fn len(&self) -> usize {
         self.ops.len()
     }
@@ -319,8 +345,8 @@ impl GraphTrace {
     /// unrelated activation fails here. Returns false on the first dangling reference.
     pub fn verify_chaining(&self) -> bool {
         let mut produced: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
-        if let Some(ic) = self.input_commit {
-            produced.insert(ic);
+        for ic in &self.declared {
+            produced.insert(*ic);
         }
         for op in &self.ops {
             for inp in &op.inputs {
@@ -358,9 +384,12 @@ pub fn verify_graph_op(root: &[u8; 32], beacon: &[u8], op: &GraphOpening, k: usi
     // (3) the op is locally correct
     match op.op.kind {
         OpKind::MatMul => {
+            // B is either an inline weight (forward: activation × parameter) or a second activation
+            // (backward: Xᵀ × dY). Same op, same Freivalds check — training is not a special case.
             let a = &op.input_mats[0];
             let b = match &op.op.weight {
                 Some(w) => w,
+                None if op.input_mats.len() == 2 => &op.input_mats[1],
                 None => return false,
             };
             if a.cols != b.rows || b.cols != op.output_mat.cols || a.rows != op.output_mat.rows {
@@ -406,7 +435,19 @@ pub fn verify_graph_op(root: &[u8; 32], beacon: &[u8], op: &GraphOpening, k: usi
             op.output_mat == Mat::new(idx.len(), x.cols, data)
         }
         OpKind::Softmax => int_softmax(&op.input_mats[0]) == op.output_mat,
+        OpKind::Transpose => transpose(&op.input_mats[0]) == op.output_mat,
     }
+}
+
+/// `out[j][i] = x[i][j]` — deterministic, exact.
+pub fn transpose(x: &Mat) -> Mat {
+    let mut out = vec![0i64; x.rows * x.cols];
+    for i in 0..x.rows {
+        for j in 0..x.cols {
+            out[j * x.rows + i] = x.data[i * x.cols + j];
+        }
+    }
+    Mat::new(x.cols, x.rows, out)
 }
 
 fn recompute_eq(out: &Mat, rows: usize, cols: usize, f: impl FnOnce() -> Vec<i64>) -> bool {
@@ -535,6 +576,39 @@ mod tests {
         let mut op = t.open(0);
         op.output_mat.data[0] += 1; // tamper the attention weights
         assert!(!verify_graph_op(&root, b"beacon", &op, 2), "a forged softmax output is caught by recompute");
+    }
+
+    // PROOF-OF-AI covers TRAINING with no new machinery: an SGD step on a linear layer is a graph of
+    // the SAME ops. Forward Y = X·W; backward dW = Xᵀ·dY, dX = dY·Wᵀ; update W' = W − lr·dW. Every op
+    // verifies, the graph chains, and a fabricated gradient is caught by Freivalds — exactly as for
+    // inference. (Embedding is likewise a forward graph; only the graph SHAPE differs, not the proof.)
+    #[test]
+    fn test_training_step_is_just_a_graph() {
+        let mut s = 0x713;
+        let mut t = GraphTrace::new();
+        let x = rmat(4, 8, &mut s);
+        let xc = t.input(&x);
+        let w = rmat(8, 6, &mut s);
+        let wc = t.input(&w); // W is a value (activation): transposable in backward, updatable in step
+        let _ = t.matmul_act(&x, xc, &w, wc); // 0: forward  Y = X·W
+        let dy = rmat(4, 6, &mut s); // upstream gradient from the loss
+        let dyc = t.input(&dy);
+        let (xt_c, xt) = t.transpose(&x, xc); // 1: Xᵀ
+        let (dw_c, dw) = t.matmul_act(&xt, xt_c, &dy, dyc); // 2: dW = Xᵀ·dY
+        let (wt_c, wt) = t.transpose(&w, wc); // 3: Wᵀ
+        let _ = t.matmul_act(&dy, dyc, &wt, wt_c); // 4: dX = dY·Wᵀ
+        let (neg_c, neg) = t.scale(&dw, dw_c, -1, 100); // 5: −lr·dW   (lr = 1/100)
+        let _ = t.add(&w, wc, &neg, neg_c); // 6: W' = W − lr·dW
+
+        assert!(t.verify_chaining(), "a training step is a well-formed graph");
+        let root = t.root();
+        for i in 0..t.len() {
+            assert!(verify_graph_op(&root, b"beacon:train", &t.open(i), 2), "training op {i} verifies");
+        }
+        // fabricate the weight gradient (op 2) → caught by Freivalds, same as a faked inference output.
+        let mut bad = t.open(2);
+        bad.output_mat.data[0] += 1;
+        assert!(!verify_graph_op(&root, b"beacon:train", &bad, 2), "a fabricated gradient is caught");
     }
 
     // ---- ADVERSARIAL: break the chain, fabricate ops -----------------------------------------
