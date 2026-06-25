@@ -325,3 +325,105 @@ fn qmmq_unified_numeric() {
         .and_then(|mut f| f.write_all(log.as_bytes()));
     eprintln!("{log}");
 }
+
+// FUSED indexed-MoE PREFILL GEMM gate (`qmmq_core<WTYPE,true>` via moe_qmmq_quant). Builds an E-expert
+// [E,n,k] bank, routes nslots tokens to experts, runs the expert-grouped WMMA GEMM, and asserts every
+// output row equals the SAME exact oracle as the dense gate -- per slot s with expert eid: requantize
+// x[s] to int8 (as the kernel does) and dot it against the real to_float-dequantized rows of expert
+// eid. The fused kernel gathers tokens by expert and SCATTERS results back to original slot order, so
+// y[s] must match slot s's expert regardless of routing. nbad==0 required.
+#[allow(clippy::too_many_arguments)]
+fn moe_check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
+    dev: &RocmDevice,
+    log: &mut String,
+    name: &str,
+    qt: RocmQuantType,
+    e_cnt: usize,
+    nslots: usize,
+    n: usize,
+    k: usize,
+    blk: usize,
+    tsz: usize,
+    fill: F,
+) {
+    assert_eq!(k % blk, 0, "{name}: k must be a multiple of {blk}");
+    let nblk = k / blk;
+    let expert_bytes = n * nblk * tsz;
+
+    let mut bank: Vec<u8> = Vec::with_capacity(e_cnt * expert_bytes);
+    for e in 0..e_cnt {
+        let eb = build_bytes(n, k, blk, tsz, |b, r, bb| fill(b, r * (e + 1) + e, bb));
+        assert_eq!(eb.len(), expert_bytes);
+        bank.extend_from_slice(&eb);
+    }
+    let wbank = dev.storage_from_slice(&bank).expect("upload bank");
+
+    // Routing: a spread + repeats so multiple tokens land on the same expert (the amortization the
+    // fused kernel exploits) AND some experts get 0 tokens (empty-tile / offset edge cases).
+    let ids: Vec<u32> = (0..nslots).map(|s| ((s * 5 + 3) % e_cnt) as u32).collect();
+    let ids_dev = dev.storage_from_slice(&ids).expect("upload ids");
+
+    let xf: Vec<f32> = (0..nslots * k).map(val).collect();
+    let xh: Vec<f16> = xf.iter().map(|&v| f16::from_f32(v)).collect();
+    let xf_h: Vec<f32> = xh.iter().map(|v| v.to_f32()).collect();
+    let xst = dev.storage_from_slice(&xh).expect("upload x");
+
+    let y = dev
+        .moe_qmmq_quant(qt, &wbank, &xst, &ids_dev, nslots, n, k)
+        .expect("moe_qmmq_quant");
+    assert_eq!(y.dtype(), hanzo_ml::DType::F16, "{name}: moe prefill returns f16");
+    let yg = to_f32(&y); // [nslots, n]
+
+    let mut nbad = 0usize;
+    let mut max_err = 0f32;
+    let mut scale = 1f32;
+    for (s, &eid) in ids.iter().enumerate() {
+        let eb = &bank[eid as usize * expert_bytes..(eid as usize + 1) * expert_bytes];
+        let xr = requant_row(&xf_h[s * k..s * k + k]);
+        for nn in 0..n {
+            let r = reference_row::<T>(eb, nn, nblk, blk, tsz, &xr);
+            scale = scale.max(r.abs());
+            let e = (yg[s * n + nn] - r).abs();
+            max_err = max_err.max(e);
+            if e > 0.01 * scale.max(1.0) {
+                nbad += 1;
+            }
+        }
+    }
+    log.push_str(&format!(
+        "{name:8} MoE E={e_cnt} nslots={nslots} n={n} k={k} nbad={nbad}/{} max_err={max_err:.5} scale={scale:.3}\n",
+        nslots * n
+    ));
+    assert!(nbad == 0, "{name} MoE prefill mismatch: nbad={nbad} max_err={max_err}");
+}
+
+#[test]
+fn moe_qmmq_numeric() {
+    let mut log = String::new();
+    let dev = RocmDevice::new(0).expect("rocm device");
+
+    // E=8 experts, 300 routed slots (multi-tile per expert + partial tails + some empty experts),
+    // production-ish FFN widths. Q4_K (gate/up) + Q6_K (down) = the Qwen3-30B-A3B-Q4_K_M MoE spread,
+    // plus Q8_0 as the symmetric proof.
+    moe_check::<BlockQ4K, _>(
+        &dev, &mut log, "Q4_K", RocmQuantType::Q4K, 8, 300, 256, 1024, 256, 144,
+        |blk, r, b| {
+            put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
+            put_d(blk, 2, r, b, 0.03125, 0.015625, 4);
+        },
+    );
+    moe_check::<BlockQ6K, _>(
+        &dev, &mut log, "Q6_K", RocmQuantType::Q6K, 8, 300, 256, 768, 256, 210,
+        |blk, r, b| {
+            put_d(blk, 208, r, b, 0.0078125, 0.00390625, 5);
+        },
+    );
+    moe_check::<BlockQ8_0, _>(
+        &dev, &mut log, "Q8_0", RocmQuantType::Q8_0, 8, 300, 256, 512, 32, 34,
+        |blk, r, b| {
+            put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
+        },
+    );
+
+    eprintln!("{log}");
+}
