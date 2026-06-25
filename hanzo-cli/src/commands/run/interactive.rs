@@ -227,20 +227,23 @@ async fn oneshot_text(
     }));
     sender.send(req).await.unwrap();
     let start_ttft = Instant::now();
-    match stream_assistant_response(&mut rx, start_ttft).await {
+    let ok = match stream_assistant_response(&mut rx, start_ttft).await {
         Ok((_, first_token_duration, last_usage)) => {
             print_stats(&hanzo, &sampling_params, first_token_duration, last_usage);
+            true
         }
         Err(e) => {
             error!("{e}");
+            false
         }
-    }
+    };
     println!();
     // The one-shot is done; all output is flushed. Skip the racy ROCm-runtime atexit teardown
-    // (a cosmetic post-output SIGSEGV/exit-139) by exiting cleanly here.
+    // (a cosmetic post-output SIGSEGV/exit-139) by exiting here, but preserve the real status
+    // so scripts/CI can detect a failed generation.
     use std::io::Write;
     let _ = std::io::stdout().flush();
-    std::process::exit(0);
+    std::process::exit(if ok { 0 } else { 1 });
 }
 
 async fn oneshot_multimodal(
@@ -399,20 +402,23 @@ async fn oneshot_multimodal(
     }));
     sender.send(req).await.unwrap();
     let start_ttft = Instant::now();
-    match stream_assistant_response(&mut rx, start_ttft).await {
+    let ok = match stream_assistant_response(&mut rx, start_ttft).await {
         Ok((_, first_token_duration, last_usage)) => {
             print_stats(&hanzo, &sampling_params, first_token_duration, last_usage);
+            true
         }
         Err(e) => {
             error!("{e}");
+            false
         }
-    }
+    };
     println!();
     // The one-shot is done; all output is flushed. Skip the racy ROCm-runtime atexit teardown
-    // (a cosmetic post-output SIGSEGV/exit-139) by exiting cleanly here.
+    // (a cosmetic post-output SIGSEGV/exit-139) by exiting here, but preserve the real status
+    // so scripts/CI can detect a failed generation.
     use std::io::Write;
     let _ = std::io::stdout().flush();
-    std::process::exit(0);
+    std::process::exit(if ok { 0 } else { 1 });
 }
 
 fn print_stats(

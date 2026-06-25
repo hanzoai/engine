@@ -182,6 +182,12 @@ impl Sdpa {
         // The mask carries causality already; the kernel-level do_causal
         // early-exit is safe to enable only when the request is known causal.
         let do_causal = flash_params.is_some_and(|p| p.causal);
+        // A request is explicitly NON-causal only when flash_params is present and says so:
+        // bidirectional vision/audio encoders pass `FlashParams::empty(false)`. A causal decoder
+        // passes `None` (quantized text models) or `causal = true`. This lets us tell a causal
+        // Custom mask from a bidirectional one without inspecting the tensor, so we never apply
+        // causal masking to a bidirectional encoder (which would corrupt its output).
+        let explicitly_noncausal = flash_params.is_some_and(|p| !p.causal);
 
         // ROCm WMMA flash-attention: causal prefill at long sequences wins 1.23-1.49x over
         // rocBLAS+softmax on gfx1151. A non-SWA causal mask (Custom from the causal masker) or
@@ -196,7 +202,9 @@ impl Sdpa {
             const ROCM_FLASH_MIN_SEQ: usize = 768;
             let (_, _, seq_len, head_dim) = q.dims4()?;
             let is_full_causal = matches!(mask, AttentionMask::CausalFlash)
-                || (mask.is_custom() && sdpa_params.sliding_window.is_none());
+                || (mask.is_custom()
+                    && sdpa_params.sliding_window.is_none()
+                    && !explicitly_noncausal);
             if is_full_causal
                 && seq_len >= ROCM_FLASH_MIN_SEQ
                 && head_dim == 128
