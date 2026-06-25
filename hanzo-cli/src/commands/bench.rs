@@ -245,7 +245,13 @@ pub async fn run_bench(
         let _ = std::fs::write(&path, s);
     }
 
-    Ok(())
+    // All results are printed/flushed; this is a terminal one-shot command. Skip the racy
+    // ROCm-runtime atexit teardown (a post-results "double free or corruption"/SIGSEGV on
+    // gfx1151) by exiting cleanly here. Reaching this point means the bench succeeded; any
+    // earlier failure already returned via `?`.
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    std::process::exit(0)
 }
 
 /// Calculate mean and standard deviation
