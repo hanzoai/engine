@@ -73,8 +73,7 @@ impl FusedMoe {
             self.down_experts
                 .indexed_moe_forward(&activated, &indices)?
         };
-        ys.broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
-            .sum(D::Minus2)?
+        hanzo_ml::quantized::moe_combine(&ys, &scores)?
             .reshape((batch, seq_len, hidden_dim))?
             .to_dtype(original_dtype)
     }
