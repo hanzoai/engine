@@ -77,14 +77,18 @@ pub(crate) fn rocm_graphs_enabled() -> bool {
     //      `full_max_context_len` as the bucketed capacity — mirroring the CUDA
     //      path exactly. Verified replay-vs-eager max_abs_diff = 0.0.
     //
-    // Default stays OFF: the fix is correct and non-regressing, but on this box
-    // the captured graph gives NO decode speedup (decode ~12.7 t/s graphs-ON ==
-    // graphs-OFF, both paged). After the fused-kernel work (rmsnorm/rope/softmax/
-    // swiglu/bf16-matvec) the decode is no longer launch-bound, so collapsing the
-    // remaining per-token launch overhead via hipGraph buys nothing here; paged
-    // decode (12.7) also sits below the non-paged eager floor (~20.5). Flip
-    // `ROCM_GRAPHS=1` to use the (now-coherent) graph path.
-    *ROCM_GRAPHS_ENABLED.get_or_init(|| env_flag(ROCM_GRAPHS_ENV, false))
+    // Default ON. The "no speedup" measurement that previously kept this OFF predates the
+    // Q6_K dp4a decode core, the inline dims/strides change, and the librocdxg AqlToPm4 ring
+    // fix. Re-profiled on native Linux gfx1151 (Radeon 8060S, ROCm 7.13): eager MoE decode is
+    // ~62% GPU-busy with ~38% inter-kernel launch gap (rocprofv3: 2671 kernel launches/token,
+    // ~2us median gap, 2.79s of 7.29s wall spent in gaps). The captured graph collapses those
+    // launches into one submission. Canonical bench (Qwen3-30B-A3B-Q4_K_M, pp1024/tg128@d4):
+    // decode 35.1 -> ~42 T/s (+18-20%), run-to-run variance halved, output bit-identical to
+    // eager (393-token coherent generation, token-for-token match, past the historical
+    // ~token-12 drift point). Only `model_supports_rocm_decode_graph` variants use this path
+    // (mRoPE Qwen35/Qwen3-VL stay eager), and `disable_rocm_decode_graph` falls back to eager
+    // on any capture/replay error. Set `ROCM_GRAPHS=0` to force the eager path.
+    *ROCM_GRAPHS_ENABLED.get_or_init(|| env_flag(ROCM_GRAPHS_ENV, true))
 }
 
 pub(crate) fn flashinfer_decode_enabled() -> bool {
