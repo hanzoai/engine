@@ -325,8 +325,6 @@ fn qmatvec_unified_numeric() {
         );
     }
 
-    let _ = std::fs::File::create("C:\\qmatvec-unified-test.txt")
-        .and_then(|mut f| f.write_all(log.as_bytes()));
     eprintln!("{log}");
 }
 
@@ -474,8 +472,6 @@ fn moe_matvec_unified_numeric() {
         },
     );
 
-    let _ = std::fs::File::create("C:\\moe-unified-test.txt")
-        .and_then(|mut f| f.write_all(log.as_bytes()));
     eprintln!("{log}");
 }
 
