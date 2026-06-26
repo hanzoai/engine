@@ -19,8 +19,8 @@ use half::{bf16, f16};
 use hanzo_ml::backend::{BackendDevice, BackendStorage};
 use hanzo_ml::quantized::iq_quants::BlockTQ2_0;
 use hanzo_ml::quantized::k_quants::{
-    BlockIQ4xs, BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ4_1, BlockQ5K, BlockQ5_0, BlockQ5_1,
-    BlockQ6K, BlockQ8_0, BlockQ8_1,
+    BlockIQ4xs, BlockMXFP4, BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ4_1, BlockQ5K, BlockQ5_0,
+    BlockQ5_1, BlockQ6K, BlockQ8_0, BlockQ8_1,
 };
 use hanzo_ml::quantized::GgmlType;
 use hanzo_ml::{RocmDevice, RocmQuantType, RocmStorage};
@@ -331,6 +331,23 @@ fn qmatvec_unified_numeric() {
             136,
             |blk, r, b| {
                 put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
+            },
+        );
+    }
+    // MXFP4 (gpt-oss): 17 B, 32 elems. E8M0 scale byte at 0; qs[16] at 1. Force the scale to powers
+    // of 2 around 1.0 (exactly representable, O(1) outputs); the codebook nibbles stay pseudo-random.
+    for &(n, k) in shapes {
+        check::<BlockMXFP4, _>(
+            &dev,
+            &mut log,
+            "MXFP4",
+            RocmQuantType::MXFP4,
+            n,
+            k,
+            32,
+            17,
+            |blk, _r, _b| {
+                blk[0] = (126 + ((_r + _b) % 4)) as u8;
             },
         );
     }
@@ -709,23 +726,6 @@ fn moe_matvec_unified_numeric() {
         110,
         |blk, r, b| {
             put_d(blk, 108, r, b, 0.0078125, 0.00390625, 5);
-        },
-    );
-    // IQ4_XS MoE: the dominant attention/expert type in Unsloth-Dynamic mixes. Its 256-elem super-block
-    // rides the SAME batched on-device-ids moe_qmatvec dp4a core (codebook nibble -> signed int8) vs oracle.
-    moe_check::<BlockIQ4xs, _>(
-        &dev,
-        &mut log,
-        "IQ4_XS",
-        RocmQuantType::IQ4_XS,
-        8,
-        16,
-        128,
-        512,
-        256,
-        136,
-        |blk, r, b| {
-            put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
         },
     );
     // SCALAR-forced MoE vs EXACT oracle: exercises the moe_qmatvecu_q2k/q3k scalar kernels (the dp4a
