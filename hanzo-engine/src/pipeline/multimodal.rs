@@ -335,6 +335,7 @@ impl Loader for MultimodalLoader {
         } else {
             device.clone()
         };
+        crate::utils::cuda_mempool::set_pool_retain_all(&device)?;
 
         // Load matformer slicing config if provided
         let matformer_slicing_config = if let Some(matformer_path) =
