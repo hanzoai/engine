@@ -281,6 +281,7 @@ impl Loader for GGMLLoader {
         if let Device::Cuda(dev) = &device {
             unsafe { dev.disable_event_tracking() };
         }
+        crate::utils::cuda_mempool::set_pool_retain_all(&device)?;
 
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
         let model = ggml_file::Content::read(&mut file, device)
