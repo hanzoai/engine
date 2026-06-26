@@ -609,6 +609,23 @@ impl HanzoForServerBuilder {
         self
     }
 
+    /// Classic draft+target speculative decode. The engine's `SpeculativeConfig` currently exposes
+    /// only the MTP draft-head path, so a standalone draft model is not yet wired; accept the args
+    /// for CLI/forward-compat and warn rather than silently changing behavior.
+    pub fn with_draft_model_optional(
+        self,
+        draft_model: Option<hanzo_engine::ModelSelected>,
+        gamma: usize,
+    ) -> Self {
+        if draft_model.is_some() {
+            tracing::warn!(
+                "--draft-model/--gamma (classic draft+target spec decode, gamma={gamma}) is not yet \
+                 wired into SpeculativeConfig (only MTP is supported); the draft model is ignored"
+            );
+        }
+        self
+    }
+
     /// Disable EOS token stopping (generate until max_len regardless of EOS).
     pub fn with_disable_eos_stop(mut self, disable: bool) -> Self {
         self.disable_eos_stop = disable;
