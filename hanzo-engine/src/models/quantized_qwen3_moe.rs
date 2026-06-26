@@ -1,6 +1,5 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use crate::ops::{TopKLastDimOp, TopKOutput};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -16,7 +15,7 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 use hanzo_ml::quantized::QMatMul;
-use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_ml::{DType, Device, Result, Tensor};
 use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
@@ -54,16 +53,11 @@ impl FusedMoe {
         let original_dtype = xs.dtype();
         let (num_tokens, hidden_dim) = xs.dims2()?;
         let router_logits = self.gate.forward(&xs.to_dtype(DType::F32)?)?;
-        let routing_weights = hanzo_nn::ops::softmax_last_dim(&router_logits)?;
-
-        let TopKOutput {
-            values: mut scores,
-            indices,
-        } = routing_weights.topk(self.num_experts_per_tok)?;
-
-        if self.norm_topk_prob {
-            scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
-        }
+        let (indices, scores) = hanzo_ml::quantized::moe_route(
+            &router_logits,
+            self.num_experts_per_tok,
+            self.norm_topk_prob,
+        )?;
 
         let ys = {
             let xs = xs.reshape((num_tokens, 1, hidden_dim))?;
