@@ -61,8 +61,12 @@ impl FusedMoe {
 
         let ys = {
             let xs = xs.reshape((num_tokens, 1, hidden_dim))?;
-            let gate = self.gate_experts.indexed_moe_forward(&xs, &indices)?;
-            let up = self.up_experts.indexed_moe_forward(&xs, &indices)?;
+            let (gate, up) = hanzo_ml::quantized::moe_gate_up(
+                &xs,
+                &indices,
+                &self.gate_experts,
+                &self.up_experts,
+            )?;
             let activated = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
             self.down_experts
                 .indexed_moe_forward(&activated, &indices)?
@@ -588,11 +592,10 @@ impl ModelWeights {
                     .as_ref()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
             )?;
-            let x = (attn + residual)?;
-
-            // MLP
-            let residual = &x;
-            let x = layer.ffn_norm.forward(&x)?;
+            // Fused residual-add + ffn_norm: sum = attn + residual (the new residual stream), x =
+            // rmsnorm(sum). One ROCm launch instead of a separate add then rmsnorm.
+            let (sum, x) = layer.ffn_norm.forward_of_sum(&attn, residual)?;
+            let residual = &sum;
             let x = layer.mlp.forward(&x)?;
             let x = (x + residual)?;
             layer_in = x;
