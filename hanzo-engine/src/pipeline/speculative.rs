@@ -559,9 +559,13 @@ impl Pipeline for SpeculativePipeline {
         // ======================= Sample the `gamma` logits. ============================
         let mut draft_samples = Vec::new();
         for i in 0..gamma {
+            // Extract everything needing the draft lock into locals FIRST: two get_mut_arcmutex!
+            // calls inside one process_inputs(..) arg list would both hold the (non-reentrant) draft
+            // mutex for the duration of the call -> self-deadlock. Each `let` releases its guard.
             let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
             let device = get_mut_arcmutex!(self.draft).device();
             let no_kv_cache = get_mut_arcmutex!(self.draft).get_metadata().no_kv_cache;
+            let sliding_window = get_mut_arcmutex!(self.draft).get_metadata().sliding_window;
             let inputs = self
                 .get_processor()
                 .inputs_processor()
@@ -574,7 +578,7 @@ impl Pipeline for SpeculativePipeline {
                     no_kv_cache,
                     None,
                     false,
-                    get_mut_arcmutex!(self.draft).get_metadata().sliding_window,
+                    sliding_window,
                     None,
                     paged_attn_metadata.clone(),
                     get_mut_arcmutex!(self.draft).device_mapper(),
@@ -658,6 +662,9 @@ impl Pipeline for SpeculativePipeline {
         let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
         let device = get_mut_arcmutex!(self.target).device();
         let no_kv_cache = get_mut_arcmutex!(self.target).get_metadata().no_kv_cache;
+        // Same anti-deadlock rule as the draft path: extract all target-lock values into locals so no
+        // two get_mut_arcmutex!(self.target) guards are alive at once inside process_inputs(..).
+        let sliding_window = get_mut_arcmutex!(self.target).get_metadata().sliding_window;
         let inputs = self
             .get_processor()
             .inputs_processor()
@@ -670,7 +677,7 @@ impl Pipeline for SpeculativePipeline {
                 no_kv_cache,
                 Some((gamma, initial_cache_len)), // Get the last gamma, see above
                 false,
-                get_mut_arcmutex!(self.target).get_metadata().sliding_window,
+                sliding_window,
                 None,
                 paged_attn_metadata.clone(),
                 get_mut_arcmutex!(self.target).device_mapper(),
