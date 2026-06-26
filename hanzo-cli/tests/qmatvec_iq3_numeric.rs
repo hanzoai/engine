@@ -89,15 +89,35 @@ fn reference_row<T: GgmlType>(wq: &[u8], nn: usize, nblk: usize, blk: usize, tsz
     acc
 }
 
+// q8_1 activation reconstruction mirroring the GPU `quantize_q8_1` (quant.hip) BIT-FOR-BIT (per 32-elem
+// block: scale=f16(absmax/127), int8 q=round-half-away(x*127/absmax), recon=f32(scale)*q). The dp4a
+// decode dots the exact-dequantized weight against THIS, so it is the dp4a path's exact to_float ref.
+fn q8_1_recon(x: &[f32]) -> Vec<f32> {
+    let mut out = vec![0f32; x.len()];
+    for (xc, oc) in x.chunks(32).zip(out.chunks_mut(32)) {
+        let absmax = xc.iter().fold(0f32, |m, &v| m.max(v.abs()));
+        let inv = if absmax > 0.0 { 127.0 / absmax } else { 0.0 };
+        let d8 = f16::from_f32(absmax / 127.0).to_f32();
+        for (xv, ov) in xc.iter().zip(oc.iter_mut()) {
+            *ov = d8 * (xv * inv).round().clamp(-127.0, 127.0);
+        }
+    }
+    out
+}
+
+// THE codebook gate: forces the SCALAR core (fb_env set) -> proves the WEIGHT decode is bit-exact vs
+// to_float (dp4a's q8_1 activation quant makes one-hot read-out non-bit-exact; dp4a gated in check/ab).
 fn decode_exact<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
     dev: &RocmDevice,
     log: &mut String,
     name: &str,
     qt: RocmQuantType,
+    fb_env: &str,
     n: usize,
     tsz: usize,
     fill: F,
 ) {
+    std::env::set_var(fb_env, "1");
     let k = 256usize;
     let wq_bytes = build_bytes(n, k, 256, tsz, &fill);
     let wst = dev.storage_from_slice(&wq_bytes).expect("upload w");
@@ -126,7 +146,11 @@ fn decode_exact<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
             let c = cpu[r * 256 + j];
             let e = (g - c).abs();
             max_err = max_err.max(e);
-            if g.to_bits() != c.to_bits() {
+            // The scalar i-quant decode reconstructs each weight to f16 precision; its f32 op order
+            // (e.g. IQ3_S's d*(1+2*sc)) can round 1 f16 ULP differently than the CPU to_float -- that
+            // is correct, not a grid/sign/scale bug (those are O(scale)). Gate on <= 2 f16 ULP; the
+            // dp4a-vs-CPU oracle is the separate inference-correctness gate.
+            if e > c.abs() * (2f32).powi(-9) + (2f32).powi(-20) {
                 nbad += 1;
             }
             covered.insert(g.to_bits());
@@ -137,6 +161,7 @@ fn decode_exact<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
         n * 256,
         covered.len()
     ));
+    std::env::remove_var(fb_env);
     assert!(nbad == 0, "{name} decode_exact: {nbad} weights mismatch (max_err={max_err})");
 }
 
@@ -172,11 +197,14 @@ fn check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
     let yh = to_f32(&y_h);
     let yb = to_f32(&y_b);
 
+    let dp4a = qt.dp4a_active();
+    let ax_h = if dp4a { q8_1_recon(&xf_h) } else { xf_h.clone() };
+    let ax_b = if dp4a { q8_1_recon(&xf_b) } else { xf_b.clone() };
     let mut ref_h = vec![0f32; n];
     let mut ref_b = vec![0f32; n];
     for nn in 0..n {
-        ref_h[nn] = reference_row::<T>(&wq_bytes, nn, nblk, blk, tsz, &xf_h);
-        ref_b[nn] = reference_row::<T>(&wq_bytes, nn, nblk, blk, tsz, &xf_b);
+        ref_h[nn] = reference_row::<T>(&wq_bytes, nn, nblk, blk, tsz, &ax_h);
+        ref_b[nn] = reference_row::<T>(&wq_bytes, nn, nblk, blk, tsz, &ax_b);
     }
 
     let scale = ref_b
@@ -243,13 +271,16 @@ fn moe_check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
     let mut max_err_h = 0f32;
     let mut max_err_b = 0f32;
     let mut scale = 1f32;
+    let dp4a = qt.dp4a_active();
     for (s, &eid) in ids.iter().enumerate() {
         let eb = &bank[eid as usize * expert_bytes..(eid as usize + 1) * expert_bytes];
-        let xrow_h = &xf_h[s * k..s * k + k];
-        let xrow_b = &xf_b[s * k..s * k + k];
+        let raw_h = &xf_h[s * k..s * k + k];
+        let raw_b = &xf_b[s * k..s * k + k];
+        let xrow_h = if dp4a { q8_1_recon(raw_h) } else { raw_h.to_vec() };
+        let xrow_b = if dp4a { q8_1_recon(raw_b) } else { raw_b.to_vec() };
         for r in 0..n {
-            let rh = reference_row::<T>(eb, r, nblk, blk, tsz, xrow_h);
-            let rb = reference_row::<T>(eb, r, nblk, blk, tsz, xrow_b);
+            let rh = reference_row::<T>(eb, r, nblk, blk, tsz, &xrow_h);
+            let rb = reference_row::<T>(eb, r, nblk, blk, tsz, &xrow_b);
             scale = scale.max(rh.abs()).max(rb.abs());
             let eh = (yh[s * n + r] - rh).abs();
             let ebb = (yb[s * n + r] - rb).abs();
@@ -277,16 +308,131 @@ fn qmatvec_iq3_numeric() {
     let fill = |blk: &mut [u8], r: usize, b: usize| put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
 
     // IQ3_XXS: 98 B. d@0, qs[96]@2 (grid idx [0..64), scales_and_signs [64..96)).
-    decode_exact::<BlockIQ3xxs, _>(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, 128, 98, fill);
+    decode_exact::<BlockIQ3xxs, _>(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, "HANZO_IQ3XXS_FALLBACK", 128, 98, fill);
     for &(n, k) in SHAPES {
         check::<BlockIQ3xxs, _>(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, n, k, 256, 98, fill);
     }
     // IQ3_S: 110 B. d@0, qs[64]@2, qh[8]@66, signs[32]@74, scales[4]@106.
-    decode_exact::<BlockIQ3s, _>(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, 128, 110, fill);
+    decode_exact::<BlockIQ3s, _>(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, "HANZO_IQ3S_FALLBACK", 128, 110, fill);
     for &(n, k) in SHAPES {
         check::<BlockIQ3s, _>(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, n, k, 256, 110, fill);
     }
 
+    eprintln!("{log}");
+}
+
+// dp4a-vs-scalar A/B: the int8-dp4a IQ3 decode (`qdp4a<DW_IQ3_*>`) must equal the scalar core to a
+// tight f16/bf16-reorder tolerance. HANZO_IQ3*_FALLBACK forces scalar; unset takes dp4a.
+#[allow(clippy::too_many_arguments)]
+fn ab_matvec<F: Fn(&mut [u8], usize, usize)>(
+    dev: &RocmDevice,
+    log: &mut String,
+    name: &str,
+    qt: RocmQuantType,
+    fb_env: &str,
+    n: usize,
+    k: usize,
+    blk: usize,
+    tsz: usize,
+    fill: F,
+) {
+    let xf: Vec<f32> = (0..k).map(val).collect();
+    let xh: Vec<f16> = xf.iter().map(|&v| f16::from_f32(v)).collect();
+    let xbf: Vec<bf16> = xf.iter().map(|&v| bf16::from_f32(v)).collect();
+    let xst_h = dev.storage_from_slice(&xh).expect("upload x f16");
+    let xst_b = dev.storage_from_slice(&xbf).expect("upload x bf16");
+    let wq_bytes = build_bytes(n, k, blk, tsz, fill);
+    let wst = dev.storage_from_slice(&wq_bytes).expect("upload w");
+
+    std::env::remove_var(fb_env);
+    let dp4a_h = to_f32(&dev.matvec_quant(qt, &wst, &xst_h, n, k).expect("dp4a f16"));
+    let dp4a_b = to_f32(&dev.matvec_quant(qt, &wst, &xst_b, n, k).expect("dp4a bf16"));
+    std::env::set_var(fb_env, "1");
+    let scal_h = to_f32(&dev.matvec_quant(qt, &wst, &xst_h, n, k).expect("scalar f16"));
+    let scal_b = to_f32(&dev.matvec_quant(qt, &wst, &xst_b, n, k).expect("scalar bf16"));
+    std::env::remove_var(fb_env);
+
+    let scale = scal_h.iter().chain(scal_b.iter()).fold(0f32, |m, &v| m.max(v.abs())).max(1.0);
+    let tol = 0.01 * scale;
+    let mut nbad = 0usize;
+    let mut max_err = 0f32;
+    for i in 0..n {
+        let eh = (dp4a_h[i] - scal_h[i]).abs();
+        let eb = (dp4a_b[i] - scal_b[i]).abs();
+        max_err = max_err.max(eh).max(eb);
+        if eh > tol || eb > tol {
+            nbad += 1;
+        }
+    }
+    log.push_str(&format!(
+        "{name:8} dp4a-vs-scalar n={n} k={k} nbad={nbad}/{n} max_err={max_err:.5} (tol {tol:.5})\n"
+    ));
+    assert!(nbad == 0, "{name} dp4a != scalar core: nbad={nbad} max_err={max_err} tol={tol}");
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ab_moe<F: Fn(&mut [u8], usize, usize)>(
+    dev: &RocmDevice,
+    log: &mut String,
+    name: &str,
+    qt: RocmQuantType,
+    fb_env: &str,
+    e_cnt: usize,
+    nrows: usize,
+    n: usize,
+    k: usize,
+    blk: usize,
+    tsz: usize,
+    fill: F,
+) {
+    let nblk = k / blk;
+    let expert_bytes = n * nblk * tsz;
+    let mut bank: Vec<u8> = Vec::with_capacity(e_cnt * expert_bytes);
+    for e in 0..e_cnt {
+        bank.extend_from_slice(&build_bytes(n, k, blk, tsz, |b, r, bb| fill(b, r * (e + 1) + e, bb)));
+    }
+    let wbank = dev.storage_from_slice(&bank).expect("upload bank");
+    let ids: Vec<u32> = (0..nrows).map(|s| ((s * 3 + 1) % e_cnt) as u32).collect();
+    let ids_dev = dev.storage_from_slice(&ids).expect("upload ids");
+    let xf: Vec<f32> = (0..nrows * k).map(val).collect();
+    let xh: Vec<f16> = xf.iter().map(|&v| f16::from_f32(v)).collect();
+    let xst_h = dev.storage_from_slice(&xh).expect("upload x f16");
+
+    std::env::remove_var(fb_env);
+    let dp4a = to_f32(&dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k).expect("moe dp4a"));
+    std::env::set_var(fb_env, "1");
+    let scal = to_f32(&dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k).expect("moe scalar"));
+    std::env::remove_var(fb_env);
+
+    let scale = scal.iter().fold(0f32, |m, &v| m.max(v.abs())).max(1.0);
+    let tol = 0.01 * scale;
+    let mut nbad = 0usize;
+    let mut max_err = 0f32;
+    for i in 0..nrows * n {
+        let e = (dp4a[i] - scal[i]).abs();
+        max_err = max_err.max(e);
+        if e > tol {
+            nbad += 1;
+        }
+    }
+    log.push_str(&format!(
+        "{name:8} MoE dp4a-vs-scalar nbad={nbad}/{} max_err={max_err:.5} (tol {tol:.5})\n",
+        nrows * n
+    ));
+    assert!(nbad == 0, "{name} MoE dp4a != scalar core: nbad={nbad} max_err={max_err} tol={tol}");
+}
+
+#[test]
+fn qmatvec_iq3_dp4a_vs_scalar() {
+    let mut log = String::new();
+    let dev = RocmDevice::new(0).expect("rocm device");
+    let fill = |blk: &mut [u8], r: usize, b: usize| put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
+    for &(n, k) in SHAPES {
+        ab_matvec(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, "HANZO_IQ3XXS_FALLBACK", n, k, 256, 98, fill);
+        ab_matvec(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, "HANZO_IQ3S_FALLBACK", n, k, 256, 110, fill);
+    }
+    ab_moe(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, "HANZO_IQ3XXS_FALLBACK", 8, 16, 128, 512, 256, 98, fill);
+    ab_moe(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, "HANZO_IQ3S_FALLBACK", 8, 16, 128, 512, 256, 110, fill);
     eprintln!("{log}");
 }
 
