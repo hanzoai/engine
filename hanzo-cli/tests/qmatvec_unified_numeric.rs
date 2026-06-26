@@ -567,6 +567,24 @@ fn moe_check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
     let yh = to_f32(&y_h);
     let yb = to_f32(&y_b);
 
+    // moe_matvec_pair (the gate+up shared-quantize fusion) must be BYTE-IDENTICAL to two independent
+    // moe_matvec_quant calls: with gate==up==bank, pair(bank,bank) == (y, y). Proves quantizing the
+    // shared routed activation once and matvec-ing both banks reproduces the unfused result exactly.
+    let (yp_gh, yp_uh) = dev
+        .moe_matvec_pair(qt, &wbank, &wbank, &xst_h, &ids_dev, nrows, n, k)
+        .expect("moe pair f16");
+    let (yp_gb, yp_ub) = dev
+        .moe_matvec_pair(qt, &wbank, &wbank, &xst_b, &ids_dev, nrows, n, k)
+        .expect("moe pair bf16");
+    assert!(
+        to_f32(&yp_gh) == yh && to_f32(&yp_uh) == yh,
+        "{name} moe_matvec_pair f16 != moe_matvec_quant"
+    );
+    assert!(
+        to_f32(&yp_gb) == yb && to_f32(&yp_ub) == yb,
+        "{name} moe_matvec_pair bf16 != moe_matvec_quant"
+    );
+
     // Reference: per slot, dequantize expert eid and dot with that slot's activation row.
     let mut nbad = 0usize;
     let mut max_err_h = 0f32;
