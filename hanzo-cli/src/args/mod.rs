@@ -486,6 +486,21 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub mtp_n_predict: Option<usize>,
 
+    /// Draft model id/path for classic draft+target speculative decoding (works with GGUF).
+    #[arg(long)]
+    #[serde(default)]
+    pub draft_model: Option<String>,
+
+    /// Draft GGUF filename (used with --draft-model when the draft is a GGUF model).
+    #[arg(long)]
+    #[serde(default)]
+    pub draft_quantized_file: Option<String>,
+
+    /// Speculative gamma: draft tokens proposed per target verification step (default 4).
+    #[arg(long)]
+    #[serde(default)]
+    pub gamma: Option<usize>,
+
     /// Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset.
     #[arg(long)]
     #[serde(default)]
@@ -608,6 +623,18 @@ pub struct BenchRuntimeOptions {
     /// Number of MTP draft tokens to propose per target step.
     #[arg(long)]
     pub mtp_n_predict: Option<usize>,
+
+    /// Draft model id/path for classic draft+target speculative decoding (works with GGUF).
+    #[arg(long)]
+    pub draft_model: Option<String>,
+
+    /// Draft GGUF filename (used with --draft-model when the draft is a GGUF model).
+    #[arg(long)]
+    pub draft_quantized_file: Option<String>,
+
+    /// Speculative gamma: draft tokens proposed per target verification step (default 4).
+    #[arg(long)]
+    pub gamma: Option<usize>,
 }
 
 impl BenchRuntimeOptions {
@@ -623,6 +650,23 @@ impl BenchRuntimeOptions {
             model,
             n_predict: self.mtp_n_predict,
         })
+    }
+
+    pub fn draft_model_selected(&self) -> Option<hanzo_engine::ModelSelected> {
+        let quantized_model_id = self.draft_model.clone()?;
+        Some(hanzo_engine::ModelSelected::GGUF {
+            tok_model_id: None,
+            quantized_model_id,
+            quantized_filename: self.draft_quantized_file.clone().unwrap_or_default(),
+            dtype: hanzo_engine::ModelDType::Auto,
+            topology: None,
+            max_seq_len: 4096,
+            max_batch_size: 1,
+        })
+    }
+
+    pub fn gamma(&self) -> usize {
+        self.gamma.unwrap_or(4)
     }
 }
 
@@ -671,6 +715,25 @@ impl RuntimeOptions {
             model,
             n_predict: self.mtp_n_predict,
         })
+    }
+
+    /// Build the draft model selector for classic draft+target speculative decoding, if a draft was
+    /// requested. GGUF draft (the common case): `--draft-model <dir/id>` + `--draft-quantized-file`.
+    pub fn draft_model_selected(&self) -> Option<hanzo_engine::ModelSelected> {
+        let quantized_model_id = self.draft_model.clone()?;
+        Some(hanzo_engine::ModelSelected::GGUF {
+            tok_model_id: None,
+            quantized_model_id,
+            quantized_filename: self.draft_quantized_file.clone().unwrap_or_default(),
+            dtype: hanzo_engine::ModelDType::Auto,
+            topology: None,
+            max_seq_len: 4096,
+            max_batch_size: 1,
+        })
+    }
+
+    pub fn gamma(&self) -> usize {
+        self.gamma.unwrap_or(4)
     }
 }
 
@@ -737,6 +800,9 @@ impl Default for RuntimeOptions {
             matformer_slice_name: None,
             mtp_model: None,
             mtp_n_predict: None,
+            draft_model: None,
+            draft_quantized_file: None,
+            gamma: None,
             mcp_config: None,
             agent: false,
             enable_search: false,

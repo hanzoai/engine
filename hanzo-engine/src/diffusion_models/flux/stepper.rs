@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, fs::File, sync::Arc};
+use std::{cmp::Ordering, fs::File, sync::Arc, time::Instant};
 
 use hanzo_ml::{DType, Device, Result, Tensor, D};
 use hanzo_nn::Module;
@@ -20,8 +20,7 @@ use crate::{
 
 use super::{autoencoder::AutoEncoder, model::Flux};
 
-const T5_XXL_SAFETENSOR_FILES: &[&str] =
-    &["t5_xxl-shard-0.safetensors", "t5_xxl-shard-1.safetensors"];
+const T5_XXL_SAFETENSOR_FILES: &[&str] = &["model.safetensors"];
 
 #[derive(Clone, Copy, Debug)]
 pub struct FluxStepperShift {
@@ -64,6 +63,7 @@ pub struct FluxStepper {
     t5_tok: Tokenizer,
     clip_tok: Tokenizer,
     clip_text: ClipTextTransformer,
+    t5_encoder: Option<T5EncoderModel>,
     flux_model: Flux,
     flux_vae: AutoEncoder,
     is_guidance: bool,
@@ -75,11 +75,10 @@ pub struct FluxStepper {
 }
 
 fn get_t5_tokenizer(api: &Api) -> anyhow::Result<Tokenizer> {
-    let repo_id = "hanzoai/t5_tokenizer";
+    let repo_id = "google/flan-t5-xxl";
     let revision = "main";
     let repo = api.model(repo_id.to_string());
-    let tokenizer_filename =
-        fetch_repo_file(&repo, repo_id, revision, "t5-v1_1-xxl.tokenizer.json")?;
+    let tokenizer_filename = fetch_repo_file(&repo, repo_id, revision, "tokenizer.json")?;
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
 
     Ok(tokenizer)
@@ -112,7 +111,7 @@ fn get_t5_model(
     silent: bool,
     offloaded: bool,
 ) -> hanzo_ml::Result<T5EncoderModel> {
-    let repo_id = "hanzoai/t5-v1_1-xxl-enc-only";
+    let repo_id = "city96/t5-v1_1-xxl-encoder-bf16";
     let revision = "main";
     let repo = api.repo(hf_hub::Repo::with_revision(
         repo_id.to_string(),
@@ -206,6 +205,7 @@ impl FluxStepper {
             t5_tok: t5_tokenizer,
             clip_tok: clip_tokenizer,
             clip_text: clip_encoder,
+            t5_encoder: None,
             flux_model: Flux::new(flux_cfg, flux_vb, device.clone(), offloaded)?,
             flux_vae: AutoEncoder::new(flux_ae_cfg, flux_ae_vb)?,
             is_guidance: cfg.is_guidance,
@@ -237,17 +237,29 @@ impl DiffusionModel for FluxStepper {
             }
         }
 
-        let t5_embed = {
-            info!("Hotloading T5 XXL model.");
-            let mut t5_encoder = get_t5_model(
+        let t5_load_secs = if self.t5_encoder.is_none() {
+            info!("Loading T5 XXL model.");
+            let t = Instant::now();
+            self.t5_encoder = Some(get_t5_model(
                 &self.api,
                 self.dtype,
                 &self.device,
                 self.silent,
                 self.offloaded,
-            )?;
-            t5_encoder.forward(&t5_input_ids)?
+            )?);
+            t.elapsed().as_secs_f32()
+        } else {
+            0.0
         };
+
+        let t5_start = Instant::now();
+        let t5_embed = self
+            .t5_encoder
+            .as_mut()
+            .expect("T5 encoder loaded above")
+            .forward(&t5_input_ids)?;
+        self.device.synchronize()?;
+        let t5_secs = t5_start.elapsed().as_secs_f32();
 
         let clip_input_ids = get_tokenization(&self.clip_tok, prompts, &self.device)?;
         let clip_embed = self
@@ -271,6 +283,7 @@ impl DiffusionModel for FluxStepper {
                 .map(|s| (state.img.dims()[1], s.base_shift, s.max_shift)),
         );
 
+        let denoise_start = Instant::now();
         let img = if let Some(guidance_cfg) = &self.cfg.guidance_config {
             flux::sampling::denoise(
                 &mut self.flux_model,
@@ -293,12 +306,21 @@ impl DiffusionModel for FluxStepper {
                 &timesteps,
             )?
         };
+        self.device.synchronize()?;
+        let denoise_secs = denoise_start.elapsed().as_secs_f32();
 
+        let vae_start = Instant::now();
         let latent_img = flux::sampling::unpack(&img, params.height, params.width)?;
 
         let img = self.flux_vae.decode(&latent_img)?;
 
         let normalized_img = ((img.clamp(-1f32, 1f32)? + 1.0)? * 127.5)?.to_dtype(DType::U8)?;
+        self.device.synchronize()?;
+        let vae_secs = vae_start.elapsed().as_secs_f32();
+
+        info!(
+            "Flux stage breakdown: t5_load={t5_load_secs:.2}s t5={t5_secs:.2}s denoise={denoise_secs:.2}s vae={vae_secs:.2}s"
+        );
 
         Ok(normalized_img)
     }
