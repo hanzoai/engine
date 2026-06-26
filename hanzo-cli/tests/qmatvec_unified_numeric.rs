@@ -18,10 +18,12 @@
 use half::{bf16, f16};
 use hanzo_ml::backend::{BackendDevice, BackendStorage};
 use hanzo_ml::quantized::iq_quants::BlockTQ2_0;
-use hanzo_ml::quantized::k_quants::{BlockIQ4xs, BlockQ4K, BlockQ4_0, BlockQ6K, BlockQ8_0};
+use hanzo_ml::quantized::k_quants::{
+    BlockIQ4xs, BlockQ4K, BlockQ4_0, BlockQ4_1, BlockQ5K, BlockQ5_0, BlockQ5_1, BlockQ6K, BlockQ8_0,
+    BlockQ8_1,
+};
 use hanzo_ml::quantized::GgmlType;
 use hanzo_ml::{RocmDevice, RocmQuantType, RocmStorage};
-use std::io::Write;
 
 // Deterministic activation value in roughly [-3, 3] (same generator as the Q4_K / Q8_0 gates).
 fn val(i: usize) -> f32 {
@@ -324,6 +326,91 @@ fn qmatvec_unified_numeric() {
             },
         );
     }
+    // Q5_K: 176 B, 256 elems. d (f16) at 0, dmin (f16) at 2. ASYMMETRIC 5-bit (Q4_K + qh 5th bit).
+    // dp4a-capable, so check() exercises the dp4a path vs the to_float oracle (scalar gated in the A/B
+    // below). Small exact-f16 d/dmin keep the 5-bit*6-bit-scale worst case inside f16 range.
+    for &(n, k) in shapes {
+        check::<BlockQ5K, _>(
+            &dev,
+            &mut log,
+            "Q5_K",
+            RocmQuantType::Q5K,
+            n,
+            k,
+            256,
+            176,
+            |blk, r, b| {
+                put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
+                put_d(blk, 2, r, b, 0.00390625, 0.001953125, 4);
+            },
+        );
+    }
+    // Q4_1: 20 B, 32 elems. d (f16) at 0, m (f16) at 2. ASYMMETRIC legacy (val = nib*d + m).
+    for &(n, k) in shapes {
+        check::<BlockQ4_1, _>(
+            &dev,
+            &mut log,
+            "Q4_1",
+            RocmQuantType::Q4_1,
+            n,
+            k,
+            32,
+            20,
+            |blk, r, b| {
+                put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
+                put_d(blk, 2, r, b, 0.03125, 0.015625, 4);
+            },
+        );
+    }
+    // Q5_0: 22 B, 32 elems. d (f16) at 0; qh[4] at 2; qs[16] at 6. symmetric 5-bit (val = (q5-16)*d).
+    for &(n, k) in shapes {
+        check::<BlockQ5_0, _>(
+            &dev,
+            &mut log,
+            "Q5_0",
+            RocmQuantType::Q5_0,
+            n,
+            k,
+            32,
+            22,
+            |blk, r, b| {
+                put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
+            },
+        );
+    }
+    // Q5_1: 24 B, 32 elems. d (f16) at 0; m (f16) at 2; qh[4] at 4; qs[16] at 8. ASYMMETRIC 5-bit.
+    for &(n, k) in shapes {
+        check::<BlockQ5_1, _>(
+            &dev,
+            &mut log,
+            "Q5_1",
+            RocmQuantType::Q5_1,
+            n,
+            k,
+            32,
+            24,
+            |blk, r, b| {
+                put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
+                put_d(blk, 2, r, b, 0.03125, 0.015625, 4);
+            },
+        );
+    }
+    // Q8_1: 36 B, 32 elems. d (f16) at 0; s (f16, sum, unused for dequant) at 2; qs[32] at 4. SYM 8-bit.
+    for &(n, k) in shapes {
+        check::<BlockQ8_1, _>(
+            &dev,
+            &mut log,
+            "Q8_1",
+            RocmQuantType::Q8_1,
+            n,
+            k,
+            32,
+            36,
+            |blk, r, b| {
+                put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
+            },
+        );
+    }
 
     eprintln!("{log}");
 }
@@ -469,6 +556,50 @@ fn moe_matvec_unified_numeric() {
         210,
         |blk, r, b| {
             put_d(blk, 208, r, b, 0.0078125, 0.00390625, 5);
+        },
+    );
+    // Q5_K MoE (ASYMMETRIC 5-bit) -- dp4a expert-bank path (moe_qmatvec_dp4a_q5k) vs the CPU oracle.
+    moe_check::<BlockQ5K, _>(
+        &dev,
+        &mut log,
+        "Q5_K",
+        RocmQuantType::Q5K,
+        8,
+        16,
+        128,
+        512,
+        256,
+        176,
+        |blk, r, b| {
+            put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
+            put_d(blk, 2, r, b, 0.00390625, 0.001953125, 4);
+        },
+    );
+    // Legacy 32-elem MoE types via the scalar moe_qmatvecu_* core (experts on grid.y).
+    moe_check::<BlockQ4_1, _>(
+        &dev, &mut log, "Q4_1", RocmQuantType::Q4_1, 8, 16, 128, 512, 32, 20,
+        |blk, r, b| {
+            put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
+            put_d(blk, 2, r, b, 0.03125, 0.015625, 4);
+        },
+    );
+    moe_check::<BlockQ5_0, _>(
+        &dev, &mut log, "Q5_0", RocmQuantType::Q5_0, 8, 16, 128, 512, 32, 22,
+        |blk, r, b| {
+            put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
+        },
+    );
+    moe_check::<BlockQ5_1, _>(
+        &dev, &mut log, "Q5_1", RocmQuantType::Q5_1, 8, 16, 128, 512, 32, 24,
+        |blk, r, b| {
+            put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
+            put_d(blk, 2, r, b, 0.03125, 0.015625, 4);
+        },
+    );
+    moe_check::<BlockQ8_1, _>(
+        &dev, &mut log, "Q8_1", RocmQuantType::Q8_1, 8, 16, 128, 512, 32, 36,
+        |blk, r, b| {
+            put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
         },
     );
 
@@ -649,6 +780,21 @@ fn qmatvec_dp4a_vs_scalar() {
                 put_d(blk, 208, r, b, 0.0078125, 0.00390625, 5);
             },
         );
+        ab_matvec(
+            &dev,
+            &mut log,
+            "Q5_K",
+            RocmQuantType::Q5K,
+            "HANZO_Q5K_FALLBACK",
+            n,
+            k,
+            256,
+            176,
+            |blk, r, b| {
+                put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
+                put_d(blk, 2, r, b, 0.00390625, 0.001953125, 4);
+            },
+        );
     }
     // MoE A/B for both (8 experts, 16 slots, n=128, k=512).
     ab_moe(
@@ -682,6 +828,23 @@ fn qmatvec_dp4a_vs_scalar() {
         210,
         |blk, r, b| {
             put_d(blk, 208, r, b, 0.0078125, 0.00390625, 5);
+        },
+    );
+    ab_moe(
+        &dev,
+        &mut log,
+        "Q5_K",
+        RocmQuantType::Q5K,
+        "HANZO_Q5K_FALLBACK",
+        8,
+        16,
+        128,
+        512,
+        256,
+        176,
+        |blk, r, b| {
+            put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
+            put_d(blk, 2, r, b, 0.00390625, 0.001953125, 4);
         },
     );
 
