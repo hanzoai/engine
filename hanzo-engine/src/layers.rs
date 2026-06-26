@@ -2900,12 +2900,90 @@ pub fn qk_rms_norm_rope_positions(
         return Ok((q, k));
     }
 
+    // ROCm: one fused kernel does q/k RMSNorm + RoPE (vs two rms_norm launches + the rope launch).
+    #[cfg(feature = "rocm")]
+    if let Some(qk) = rocm_qk_rms_norm_rope_positions(
+        q, k, q_weight, k_weight, q_eps as f32, k_eps as f32, cos_cache, sin_cache, positions,
+        is_gpt_neox,
+    )? {
+        return Ok(qk);
+    }
+
     let q = hanzo_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
     let k = hanzo_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
 
     // Device dispatch (ROCm-native fused / on-device gather / CPU custom op) lives
     // in `apply_rotary_positions_qk`, shared by every rope-positions caller.
     apply_rotary_positions_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox)
+}
+
+/// ROCm fused q/k RMSNorm + positions-RoPE (one kernel). Applies only when positions are per-sequence
+/// start offsets (length == batch, the decode/prefill graph path) and head_dim is even <= 1024; other
+/// shapes (or HANZO_QK_NORM_ROPE_FALLBACK) return None so the caller runs the unfused rms_norm + rope.
+#[cfg(feature = "rocm")]
+#[allow(clippy::too_many_arguments)]
+fn rocm_qk_rms_norm_rope_positions(
+    q: &Tensor,
+    k: &Tensor,
+    q_weight: &Tensor,
+    k_weight: &Tensor,
+    q_eps: f32,
+    k_eps: f32,
+    cos_cache: &Tensor,
+    sin_cache: &Tensor,
+    positions: &Tensor,
+    is_gpt_neox: bool,
+) -> Result<Option<(Tensor, Tensor)>> {
+    use hanzo_ml::Storage;
+    if !q.device().is_rocm() || std::env::var_os("HANZO_QK_NORM_ROPE_FALLBACK").is_some() {
+        return Ok(None);
+    }
+    let (batch, _q_heads, _seq_len, head_dim) = q.dims4()?;
+    if head_dim % 2 != 0 || head_dim > 1024 {
+        return Ok(None);
+    }
+    let positions = positions.to_dtype(DType::U32)?;
+    if positions.dims1()? != batch {
+        return Ok(None);
+    }
+    if q_weight.dtype() != q.dtype() || k_weight.dtype() != q.dtype() || k.dtype() != q.dtype() {
+        return Ok(None);
+    }
+    let q = q.contiguous()?;
+    let k = k.contiguous()?;
+    let q_weight = q_weight.contiguous()?;
+    let k_weight = k_weight.contiguous()?;
+    let cos_cache = cos_cache.contiguous()?;
+    let sin_cache = sin_cache.contiguous()?;
+
+    let (q_s, q_l) = q.storage_and_layout();
+    let (k_s, k_l) = k.storage_and_layout();
+    let (qw_s, _) = q_weight.storage_and_layout();
+    let (kw_s, _) = k_weight.storage_and_layout();
+    let (cos_s, cos_l) = cos_cache.storage_and_layout();
+    let (sin_s, sin_l) = sin_cache.storage_and_layout();
+    let (pos_s, pos_l) = positions.storage_and_layout();
+    let (
+        Storage::Rocm(q_s),
+        Storage::Rocm(k_s),
+        Storage::Rocm(qw_s),
+        Storage::Rocm(kw_s),
+        Storage::Rocm(cos_s),
+        Storage::Rocm(sin_s),
+        Storage::Rocm(pos_s),
+    ) = (&*q_s, &*k_s, &*qw_s, &*kw_s, &*cos_s, &*sin_s, &*pos_s)
+    else {
+        return Ok(None);
+    };
+
+    let (q_out, k_out) = q_s.rope_norm_positions(
+        q_l, k_s, k_l, qw_s, kw_s, q_eps, k_eps, cos_s, cos_l, sin_s, sin_l, pos_s, pos_l,
+        is_gpt_neox,
+    )?;
+    Ok(Some((
+        Tensor::from((Storage::Rocm(q_out), q_l.shape().clone())),
+        Tensor::from((Storage::Rocm(k_out), k_l.shape().clone())),
+    )))
 }
 
 /// Native on-device ROCm positions-aware RoPE for q and k. Computes per-token cache rows
