@@ -22,7 +22,6 @@ use hanzo_ml::quantized::iq_quants::BlockTQ2_0;
 use hanzo_ml::quantized::k_quants::{BlockIQ4xs, BlockQ4K, BlockQ4_0, BlockQ6K, BlockQ8_0};
 use hanzo_ml::quantized::GgmlType;
 use hanzo_ml::{RocmDevice, RocmQuantType, RocmStorage};
-use std::io::Write;
 
 // Deterministic activation value ~[-3,3] (same generator as the decode/Q4_K gates).
 fn val(i: usize) -> f32 {
@@ -321,8 +320,6 @@ fn qmmq_unified_numeric() {
         );
     }
 
-    let _ = std::fs::File::create("C:\\qmmq-unified-test.txt")
-        .and_then(|mut f| f.write_all(log.as_bytes()));
     eprintln!("{log}");
 }
 
