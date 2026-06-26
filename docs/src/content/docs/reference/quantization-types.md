@@ -56,9 +56,22 @@ Supported for GGUF compatibility:
 |---|---|
 | `q4_0`, `q4_1` | 4 |
 | `q5_0`, `q5_1` | 5 |
-| `q8_0` | 8 |
+| `q8_0`, `q8_1` | 8 |
 
 GGUF files using these types load correctly.
+
+### ROCm native GGUF decode (RDNA3.5 APUs)
+
+On AMD `gfx1151` (Strix Halo / Radeon 8060S) the **full GGUF quant zoo decodes resident** -- weights stay quantized, no dequant-to-f16 -- through a single unified compute core, every type bit-exact:
+
+| Family | Types |
+|---|---|
+| K-quants | `q2k` `q3k` `q4k` `q5k` `q6k` |
+| Legacy | `q4_0` `q4_1` `q5_0` `q5_1` `q8_0` `q8_1` |
+| I-quants | `iq1_s` `iq1_m` `iq2_xxs` `iq2_xs` `iq2_s` `iq3_xxs` `iq3_s` `iq4_xs` `iq4_nl` |
+| Ternary | `tq1_0` `tq2_0` |
+
+Adding a format is one decode function + one traits row (no per-format kernel). See [ROCm GGUF decode on RDNA3.5 APUs](/hanzo/guides/perf/rocm-apu-gguf/) for the architecture and measured performance vs llama.cpp.
 
 ### FP8
 
