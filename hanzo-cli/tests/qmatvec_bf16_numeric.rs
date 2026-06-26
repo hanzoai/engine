@@ -10,7 +10,6 @@
 use half::{bf16, f16};
 use hanzo_ml::backend::{BackendDevice, BackendStorage};
 use hanzo_ml::{RocmDevice, RocmStorage};
-use std::io::Write;
 
 // Deterministic value in roughly [-3, 3], varying per index.
 fn val(i: usize) -> f32 {
@@ -111,7 +110,5 @@ fn qmatvec_bf16_numeric() {
     check(&dev, &mut log, 1024, 12288); // wide-k FFN-ish
     check(&dev, &mut log, 17, 4096); // n not a multiple of 8 (partial last block)
 
-    let _ = std::fs::File::create("C:\\qmatvec-bf16-test.txt")
-        .and_then(|mut f| f.write_all(log.as_bytes()));
     eprintln!("{log}");
 }

@@ -15,7 +15,6 @@
 use half::{bf16, f16};
 use hanzo_ml::backend::{BackendDevice, BackendStorage};
 use hanzo_ml::{RocmDevice, RocmStorage};
-use std::io::Write;
 
 const QK_K: usize = 256;
 const Q4K_BYTES: usize = 144; // 2 (d) + 2 (dmin) + 12 (scales) + 128 (qs)
@@ -187,7 +186,5 @@ fn qmatvec_q4k_numeric() {
     check(&dev, &mut log, 17, 4096); // n not a multiple of 8 (partial last warp-row block)
     check(&dev, &mut log, 151936, 4096); // vocab-sized output (lm_head shape), partial tail
 
-    let _ = std::fs::File::create("C:\\qmatvec-q4k-test.txt")
-        .and_then(|mut f| f.write_all(log.as_bytes()));
     eprintln!("{log}");
 }
