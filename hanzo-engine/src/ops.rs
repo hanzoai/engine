@@ -1685,6 +1685,61 @@ pub fn cuda_rms_norm_residual(
     }
 }
 
+/// Fused residual-add + rmsnorm: returns Some((sum = input + residual, normed = rmsnorm(sum)*weight))
+/// in one ROCm launch, or None (caller falls back to a separate add + rms_norm) for any case the fused
+/// f32 kernel does not cover. Distinct from `cuda_rms_norm_residual` (which is `residual + rmsnorm(x)`):
+/// this normalizes the SUM, the pre-norm-transformer pattern.
+#[cfg(feature = "rocm")]
+pub fn rocm_rms_norm_of_sum(
+    input: &Tensor,
+    residual: &Tensor,
+    weight: &Tensor,
+    eps: f32,
+) -> Result<Option<(Tensor, Tensor)>> {
+    if std::env::var("HANZO_ADD_RMSNORM_FALLBACK").is_ok() {
+        return Ok(None);
+    }
+    if input.dtype() != DType::F32 || residual.dtype() != DType::F32 || weight.dtype() != DType::F32 {
+        return Ok(None);
+    }
+    if !input.device().is_rocm()
+        || !residual.device().same_device(input.device())
+        || !weight.device().same_device(input.device())
+    {
+        return Ok(None);
+    }
+    if input.shape() != residual.shape() {
+        hanzo_ml::bail!(
+            "rocm_rms_norm_of_sum input/residual shape mismatch: {:?} vs {:?}",
+            input.shape(),
+            residual.shape()
+        );
+    }
+    let input = input.contiguous()?;
+    let residual = residual.contiguous()?;
+    let weight = weight.contiguous()?;
+    let (xs, xl) = input.storage_and_layout();
+    let xr = match &*xs {
+        hanzo_ml::Storage::Rocm(r) => r,
+        _ => return Ok(None),
+    };
+    let (rs, rl) = residual.storage_and_layout();
+    let rr = match &*rs {
+        hanzo_ml::Storage::Rocm(r) => r,
+        _ => return Ok(None),
+    };
+    let (ws, wl) = weight.storage_and_layout();
+    let wr = match &*ws {
+        hanzo_ml::Storage::Rocm(r) => r,
+        _ => return Ok(None),
+    };
+    let (sum, normed) = xr.add_rms_norm(xl, rr, rl, wr, wl, eps)?;
+    let shape = input.shape().clone();
+    let sum_t = Tensor::from((hanzo_ml::Storage::Rocm(sum), shape.clone()));
+    let normed_t = Tensor::from((hanzo_ml::Storage::Rocm(normed), shape));
+    Ok(Some((sum_t, normed_t)))
+}
+
 #[cfg(feature = "metal")]
 pub fn metal_rms_norm_residual(
     input: &Tensor,
