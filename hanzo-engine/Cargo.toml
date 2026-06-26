@@ -165,6 +165,8 @@ metal = [
 ]
 flash-attn = ["cuda", "dep:hanzo-flash-attn"]
 flash-attn-v3 = ["cuda", "dep:hanzo-flash-attn-v3"]
+# Max-opt CUDA in one feature (bare `cuda` omits these). metal/vulkan bundle their opts already.
+cuda-full = ["cuda", "flash-attn", "cudnn"]
 accelerate = ["hanzo-ml/accelerate", "hanzo-nn/accelerate", "hanzo-quant/accelerate"]
 mkl = ["hanzo-ml/mkl", "hanzo-nn/mkl"]
 nccl = ["cuda", "hanzo-quant/nccl"]

@@ -1,0 +1,37 @@
+# zen-3-tts reference dump
+model=/home/z/work/zen/hf/zen-3-tts-0.6B
+text='Everyone becomes calm with age and lives naturally.'
+language=english lang_id=2050
+seed=0 device=cpu
+T_ids=17
+talker T=19 H=1024 V=3072
+num_code_groups G=16
+T_gen=48 Q=16
+codebook_dim=512 latent_dim=1024 upsample_ratio_product=4
+wav_samples=92160 sample_rate=24000
+stagewise_vs_forward_wav_max_abs_diff=0.000000e+00
+
+# ---- export this to enable the engine codec_validation cargo tests ----
+export ZEN3_MAIN_WEIGHTS=/home/z/work/zen/hf/zen-3-tts-0.6B/model.safetensors
+export ZEN3_MAIN_CONFIG=/home/z/work/zen/hf/zen-3-tts-0.6B/config.json
+export ZEN3_CODEC_WEIGHTS=/home/z/work/zen/hf/zen-3-tts-0.6B/speech_tokenizer/model.safetensors
+export ZEN3_CODEC_CONFIG=/home/z/work/zen/hf/zen-3-tts-0.6B/speech_tokenizer/config.json
+export ZEN3_INPUT_IDS=/home/z/work/zen-dub-run/tts-ref/input_ids.i64
+export ZEN3_LANG_ID=2050
+export ZEN3_TK_PREFILL=/home/z/work/zen-dub-run/tts-ref/tk_prefill.f32
+export ZEN3_TK_T=19
+export ZEN3_TK_HIDDEN=/home/z/work/zen-dub-run/tts-ref/tk_hidden.f32
+export ZEN3_TK_LOGITS=/home/z/work/zen-dub-run/tts-ref/tk_logits.f32
+export ZEN3_TK_FRAME0=/home/z/work/zen-dub-run/tts-ref/tk_frame0_codes.i64
+export ZEN3_GREEDY_TQ=/home/z/work/zen-dub-run/tts-ref/greedy_TQ.i64
+export ZEN3_GREEDY_T=48
+export ZEN3_GREEDY_Q=16
+export ZEN3_CODES_QT=/home/z/work/zen-dub-run/tts-ref/codes_QT.i64
+export ZEN3_T=48
+export ZEN3_Q=16
+export ZEN3_REF_QUANT=/home/z/work/zen-dub-run/tts-ref/ref_quant.f32
+export ZEN3_REF_PRETRANS=/home/z/work/zen-dub-run/tts-ref/ref_pretrans.f32
+export ZEN3_REF_UPSAMPLE=/home/z/work/zen-dub-run/tts-ref/ref_upsample.f32
+export ZEN3_REF_WAV=/home/z/work/zen-dub-run/tts-ref/ref_wav.f32
+export ZEN3_PREFILL_CHECK=1
+export ZEN3_FULLGEN_CHECK=1
