@@ -543,6 +543,21 @@ impl QRmsNorm {
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         hanzo_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
     }
+
+    /// Fused (x + residual) then rmsnorm: returns (sum, normed) where sum = x + residual is the new
+    /// residual-stream value and normed = rmsnorm(sum) * weight. One ROCm launch (`add_rmsnorm`) vs a
+    /// separate add + rmsnorm; bit-identical to the fallback below on any other backend/dtype.
+    pub fn forward_of_sum(&self, x: &Tensor, residual: &Tensor) -> Result<(Tensor, Tensor)> {
+        #[cfg(feature = "rocm")]
+        if let Some(out) =
+            crate::ops::rocm_rms_norm_of_sum(x, residual, &self.weight, self.eps as f32)?
+        {
+            return Ok(out);
+        }
+        let sum = (x + residual)?;
+        let normed = hanzo_nn::ops::rms_norm(&sum.contiguous()?, &self.weight, self.eps as f32)?;
+        Ok((sum, normed))
+    }
 }
 
 /// RoPE supporting LongRope
