@@ -525,6 +525,11 @@ impl ModelWeights {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut layer_in = self.tok_embeddings.forward(x)?;
+        // Decode runs the residual in the attention dtype so the f32<->f16 attention-boundary
+        // casts (q/k/v in, output out) collapse to no-ops; the quant matvecs propagate dtype.
+        if layer_in.dim(1)? == 1 && layer_in.dtype() != self.dtype {
+            layer_in = layer_in.to_dtype(self.dtype)?;
+        }
         let cache = &mut self.cache.normal().0;
         // Decode reads RoPE positions from a stable device tensor so a captured
         // graph replays with the advancing position; when the caller supplies
