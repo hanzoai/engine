@@ -711,6 +711,23 @@ fn moe_matvec_unified_numeric() {
             put_d(blk, 108, r, b, 0.0078125, 0.00390625, 5);
         },
     );
+    // IQ4_XS MoE: the dominant attention/expert type in Unsloth-Dynamic mixes. Its 256-elem super-block
+    // rides the SAME batched on-device-ids moe_qmatvec dp4a core (codebook nibble -> signed int8) vs oracle.
+    moe_check::<BlockIQ4xs, _>(
+        &dev,
+        &mut log,
+        "IQ4_XS",
+        RocmQuantType::IQ4_XS,
+        8,
+        16,
+        128,
+        512,
+        256,
+        136,
+        |blk, r, b| {
+            put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
+        },
+    );
     // SCALAR-forced MoE vs EXACT oracle: exercises the moe_qmatvecu_q2k/q3k scalar kernels (the dp4a
     // runs above used the q8_1 reference). Bit-exact weight decode through the batched expert path.
     std::env::set_var("HANZO_Q2K_FALLBACK", "1");
