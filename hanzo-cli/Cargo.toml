@@ -65,6 +65,9 @@ nccl = ["hanzo-engine/nccl", "hanzo-server-core/nccl"]
 cudnn = ["hanzo-engine/cudnn", "hanzo-server-core/cudnn"]
 flash-attn = ["cuda", "hanzo-engine/flash-attn", "hanzo-server-core/flash-attn"]
 flash-attn-v3 = ["cuda", "hanzo-engine/flash-attn-v3", "hanzo-server-core/flash-attn-v3"]
+# Convenience: build CUDA with every optimization on (flash-attn + cuDNN) so a max-opt build can't
+# accidentally omit them. `cuda` alone is the bare backend. metal/vulkan already bundle their opts.
+cuda-full = ["cuda", "flash-attn", "cudnn"]
 accelerate = ["hanzo-engine/accelerate", "hanzo-server-core/accelerate"]
 metal = ["hanzo-engine/metal", "hanzo-server-core/metal"]
 mkl = ["hanzo-engine/mkl", "hanzo-server-core/mkl"]
