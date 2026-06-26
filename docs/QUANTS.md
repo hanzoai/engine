@@ -17,9 +17,11 @@ Hanzo Engine supports the following quantization:
     - Supported in GGUF/GGML and GGUF/GGML adapter models
     - Supported in all plain/multimodal and adapter models
     - Imatrix quantization is supported
-    - I quants coming!
-    - CPU, CUDA, Metal (all supported devices)
-    - 2, 3, 4, 5, 6, 8 bit
+    - I-quants (IQ1/IQ2/IQ3/IQ4) decode natively + bit-exact on ROCm (RDNA3.5 APUs)
+    - CPU, CUDA, Metal, ROCm (all supported devices)
+    - 1, 2, 3, 4, 5, 6, 8 bit
+    - On `gfx1151` the full GGUF zoo (22 types: Q/K, legacy, IQ, TQ) decodes resident
+      through one unified compute core -- see [ROCm GGUF decode on RDNA3.5 APUs](src/content/docs/guides/perf/rocm-apu-gguf.md)
 - GPTQ (convert with [this script](https://github.com/hanzoai/engine/blob/master/scripts/convert_to_gptq.py))
     - Supported in all plain/multimodal and adapter models
     - CUDA only
