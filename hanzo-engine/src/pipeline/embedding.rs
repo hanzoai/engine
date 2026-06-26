@@ -274,6 +274,7 @@ impl Loader for EmbeddingLoader {
         } else {
             device.clone()
         };
+        crate::utils::cuda_mempool::set_pool_retain_all(&device)?;
 
         // If auto, convert to Map if not using nccl
         if use_nccl || use_ring() {
