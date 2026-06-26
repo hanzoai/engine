@@ -19,8 +19,8 @@ use half::{bf16, f16};
 use hanzo_ml::backend::{BackendDevice, BackendStorage};
 use hanzo_ml::quantized::iq_quants::BlockTQ2_0;
 use hanzo_ml::quantized::k_quants::{
-    BlockIQ4xs, BlockQ4K, BlockQ4_0, BlockQ4_1, BlockQ5K, BlockQ5_0, BlockQ5_1, BlockQ6K, BlockQ8_0,
-    BlockQ8_1,
+    BlockIQ4xs, BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ4_1, BlockQ5K, BlockQ5_0, BlockQ5_1,
+    BlockQ6K, BlockQ8_0, BlockQ8_1,
 };
 use hanzo_ml::quantized::GgmlType;
 use hanzo_ml::{RocmDevice, RocmQuantType, RocmStorage};
@@ -103,6 +103,24 @@ fn put_d(block: &mut [u8], off: usize, r: usize, b: usize, lo: f32, step: f32, m
     block[off + 1] = bytes[1];
 }
 
+// q8_1 activation reconstruction mirroring the GPU `quantize_q8_1` (quant.hip) BIT-FOR-BIT: per
+// 32-elem block, scale = f16(absmax/127), int8 q = round-half-away(x*127/absmax) clamped to [-127,127],
+// recon = f32(scale)*q. The dp4a decode dots the EXACT-dequantized weight against THIS reconstructed
+// activation, so it is the dp4a path's exact reference (the q8_1-vs-f16 gap is the activation
+// quantization, orthogonal to the weight decode the scalar path proves bit-exact against to_float).
+fn q8_1_recon(x: &[f32]) -> Vec<f32> {
+    let mut out = vec![0f32; x.len()];
+    for (xc, oc) in x.chunks(32).zip(out.chunks_mut(32)) {
+        let absmax = xc.iter().fold(0f32, |m, &v| m.max(v.abs()));
+        let inv = if absmax > 0.0 { 127.0 / absmax } else { 0.0 };
+        let d8 = f16::from_f32(absmax / 127.0).to_f32();
+        for (xv, ov) in xc.iter().zip(oc.iter_mut()) {
+            *ov = d8 * (xv * inv).round().clamp(-127.0, 127.0);
+        }
+    }
+    out
+}
+
 // Exact CPU reference: dequantize the SAME bytes via the real GgmlType::to_float, then dot row `nn`
 // against the dtype-rounded activation `x`. Accumulation order: per block, sequential within block.
 fn reference_row<T: GgmlType>(
@@ -173,11 +191,17 @@ fn check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
     let yh = to_f32(&y_h);
     let yb = to_f32(&y_b);
 
+    // dp4a-path types dot the weight against the q8_1-reconstructed activation; the scalar path uses
+    // the exact f16/bf16 activation. Match the reference to whichever the GPU actually ran so nbad=0
+    // means bit-exact (not "within a q8_1 fudge"). dp4a_active() reflects the HANZO_<T>_FALLBACK env.
+    let dp4a = qt.dp4a_active();
+    let ax_h = if dp4a { q8_1_recon(&xf_h) } else { xf_h.clone() };
+    let ax_b = if dp4a { q8_1_recon(&xf_b) } else { xf_b.clone() };
     let mut ref_h = vec![0f32; n];
     let mut ref_b = vec![0f32; n];
     for nn in 0..n {
-        ref_h[nn] = reference_row::<T>(&wq_bytes, nn, nblk, blk, tsz, &xf_h);
-        ref_b[nn] = reference_row::<T>(&wq_bytes, nn, nblk, blk, tsz, &xf_b);
+        ref_h[nn] = reference_row::<T>(&wq_bytes, nn, nblk, blk, tsz, &ax_h);
+        ref_b[nn] = reference_row::<T>(&wq_bytes, nn, nblk, blk, tsz, &ax_b);
     }
 
     let scale = ref_b
@@ -326,6 +350,81 @@ fn qmatvec_unified_numeric() {
             },
         );
     }
+    // Q2_K: 84 B, 256 elems. scales[16] at 0, qs[64] at 16, d (f16) at 80, dmin (f16) at 82.
+    // ASYMMETRIC (4-bit scale + 4-bit min per 16-elem sub-block; q in 0..3). Random scale bytes
+    // exercise the full 4-bit scale/min range; small exact-f16 d/dmin keep outputs in f16 range.
+    for &(n, k) in shapes {
+        check::<BlockQ2K, _>(
+            &dev,
+            &mut log,
+            "Q2_K",
+            RocmQuantType::Q2K,
+            n,
+            k,
+            256,
+            84,
+            |blk, r, b| {
+                put_d(blk, 80, r, b, 0.0625, 0.03125, 5);
+                put_d(blk, 82, r, b, 0.03125, 0.015625, 4);
+            },
+        );
+    }
+    // Q3_K: 110 B, 256 elems. hmask[32] at 0, qs[64] at 32, scales[12] at 96, d (f16) at 108.
+    // SYMMETRIC 3-bit (signed 6-bit per-16 scale, q in -4..3). Random hmask/qs/scale bytes exercise
+    // the high-bit + signed-scale reconstruction; small exact-f16 d keeps outputs in f16 range.
+    for &(n, k) in shapes {
+        check::<BlockQ3K, _>(
+            &dev,
+            &mut log,
+            "Q3_K",
+            RocmQuantType::Q3K,
+            n,
+            k,
+            256,
+            110,
+            |blk, r, b| {
+                put_d(blk, 108, r, b, 0.0078125, 0.00390625, 5);
+            },
+        );
+    }
+    // SCALAR-forced (HANZO_<T>_FALLBACK) vs the EXACT oracle: the ground-truth bit-exact weight-decode
+    // gate for the low-bit k-quants. With the fallback set, dp4a_active() is false so `check` runs the
+    // scalar core AND references the exact (non-q8_1) activation -- proving the decode itself is exact.
+    std::env::set_var("HANZO_Q2K_FALLBACK", "1");
+    for &(n, k) in shapes {
+        check::<BlockQ2K, _>(
+            &dev,
+            &mut log,
+            "Q2_K-scal",
+            RocmQuantType::Q2K,
+            n,
+            k,
+            256,
+            84,
+            |blk, r, b| {
+                put_d(blk, 80, r, b, 0.0625, 0.03125, 5);
+                put_d(blk, 82, r, b, 0.03125, 0.015625, 4);
+            },
+        );
+    }
+    std::env::remove_var("HANZO_Q2K_FALLBACK");
+    std::env::set_var("HANZO_Q3K_FALLBACK", "1");
+    for &(n, k) in shapes {
+        check::<BlockQ3K, _>(
+            &dev,
+            &mut log,
+            "Q3_K-scal",
+            RocmQuantType::Q3K,
+            n,
+            k,
+            256,
+            110,
+            |blk, r, b| {
+                put_d(blk, 108, r, b, 0.0078125, 0.00390625, 5);
+            },
+        );
+    }
+    std::env::remove_var("HANZO_Q3K_FALLBACK");
     // Q5_K: 176 B, 256 elems. d (f16) at 0, dmin (f16) at 2. ASYMMETRIC 5-bit (Q4_K + qh 5th bit).
     // dp4a-capable, so check() exercises the dp4a path vs the to_float oracle (scalar gated in the A/B
     // below). Small exact-f16 d/dmin keep the 5-bit*6-bit-scale worst case inside f16 range.
@@ -473,13 +572,16 @@ fn moe_check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
     let mut max_err_h = 0f32;
     let mut max_err_b = 0f32;
     let mut scale = 1f32;
+    let dp4a = qt.dp4a_active();
     for (s, &eid) in ids.iter().enumerate() {
         let eb = &bank[eid as usize * expert_bytes..(eid as usize + 1) * expert_bytes];
-        let xrow_h = &xf_h[s * k..s * k + k];
-        let xrow_b = &xf_b[s * k..s * k + k];
+        let raw_h = &xf_h[s * k..s * k + k];
+        let raw_b = &xf_b[s * k..s * k + k];
+        let xrow_h = if dp4a { q8_1_recon(raw_h) } else { raw_h.to_vec() };
+        let xrow_b = if dp4a { q8_1_recon(raw_b) } else { raw_b.to_vec() };
         for r in 0..n {
-            let rh = reference_row::<T>(eb, r, nblk, blk, tsz, xrow_h);
-            let rb = reference_row::<T>(eb, r, nblk, blk, tsz, xrow_b);
+            let rh = reference_row::<T>(eb, r, nblk, blk, tsz, &xrow_h);
+            let rb = reference_row::<T>(eb, r, nblk, blk, tsz, &xrow_b);
             scale = scale.max(rh.abs()).max(rb.abs());
             let eh = (yh[s * n + r] - rh).abs();
             let ebb = (yb[s * n + r] - rb).abs();
@@ -558,6 +660,76 @@ fn moe_matvec_unified_numeric() {
             put_d(blk, 208, r, b, 0.0078125, 0.00390625, 5);
         },
     );
+    // Q2_K MoE (ASYMMETRIC) + Q3_K MoE (symmetric 3-bit): the decode-only k-quants run their experts
+    // through the SAME batched on-device-ids moe_qmatvec core (dp4a here) against the CPU oracle.
+    moe_check::<BlockQ2K, _>(
+        &dev,
+        &mut log,
+        "Q2_K",
+        RocmQuantType::Q2K,
+        8,
+        16,
+        128,
+        512,
+        256,
+        84,
+        |blk, r, b| {
+            put_d(blk, 80, r, b, 0.0625, 0.03125, 5);
+            put_d(blk, 82, r, b, 0.03125, 0.015625, 4);
+        },
+    );
+    moe_check::<BlockQ3K, _>(
+        &dev,
+        &mut log,
+        "Q3_K",
+        RocmQuantType::Q3K,
+        8,
+        16,
+        128,
+        512,
+        256,
+        110,
+        |blk, r, b| {
+            put_d(blk, 108, r, b, 0.0078125, 0.00390625, 5);
+        },
+    );
+    // SCALAR-forced MoE vs EXACT oracle: exercises the moe_qmatvecu_q2k/q3k scalar kernels (the dp4a
+    // runs above used the q8_1 reference). Bit-exact weight decode through the batched expert path.
+    std::env::set_var("HANZO_Q2K_FALLBACK", "1");
+    moe_check::<BlockQ2K, _>(
+        &dev,
+        &mut log,
+        "Q2_K-scal",
+        RocmQuantType::Q2K,
+        8,
+        16,
+        128,
+        512,
+        256,
+        84,
+        |blk, r, b| {
+            put_d(blk, 80, r, b, 0.0625, 0.03125, 5);
+            put_d(blk, 82, r, b, 0.03125, 0.015625, 4);
+        },
+    );
+    std::env::remove_var("HANZO_Q2K_FALLBACK");
+    std::env::set_var("HANZO_Q3K_FALLBACK", "1");
+    moe_check::<BlockQ3K, _>(
+        &dev,
+        &mut log,
+        "Q3_K-scal",
+        RocmQuantType::Q3K,
+        8,
+        16,
+        128,
+        512,
+        256,
+        110,
+        |blk, r, b| {
+            put_d(blk, 108, r, b, 0.0078125, 0.00390625, 5);
+        },
+    );
+    std::env::remove_var("HANZO_Q3K_FALLBACK");
     // Q5_K MoE (ASYMMETRIC 5-bit) -- dp4a expert-bank path (moe_qmatvec_dp4a_q5k) vs the CPU oracle.
     moe_check::<BlockQ5K, _>(
         &dev,
