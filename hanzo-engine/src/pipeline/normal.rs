@@ -405,6 +405,7 @@ impl Loader for NormalLoader {
         } else {
             device.clone()
         };
+        crate::utils::cuda_mempool::set_pool_retain_all(&device)?;
 
         // If auto, convert to Map if not using nccl
         let mut max_kv_tokens: Option<usize> = None;
