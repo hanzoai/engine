@@ -363,3 +363,73 @@ impl OmniAudioTower {
         self.proj2.forward(&hidden)
     }
 }
+
+#[cfg(test)]
+mod audio_tower_tests {
+    use super::*;
+    use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
+    use hanzo_ml::{Device, Tensor};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn read_f32_le(p: &str) -> Vec<f32> {
+        std::fs::read(p).unwrap().chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    }
+    fn cosine(a: &[f32], b: &[f32]) -> f32 {
+        let (mut d, mut na, mut nb) = (0f64, 0f64, 0f64);
+        for (x, y) in a.iter().zip(b) { d += (*x as f64)*(*y as f64); na += (*x as f64).powi(2); nb += (*y as f64).powi(2); }
+        (d / (na.sqrt()*nb.sqrt())) as f32
+    }
+
+    /// Run the FIXED mel through the real `thinker.audio_tower.*` weights and assert the embeddings
+    /// match the HF Qwen3OmniMoeAudioEncoder reference (cosine > 0.99). Env-gated on the checkpoint.
+    #[test]
+    fn omni_audio_tower_matches_reference() {
+        let dir = std::env::var("ZEN_OMNI_DIR")
+            .unwrap_or_else(|_| "/home/z/work/zen/hf/zen-omni-30b-instruct".to_string());
+        let fix = std::env::var("OMNI_FIX_DIR")
+            .unwrap_or_else(|_| "/home/z/work/zen/hf/omni_fixtures".to_string());
+        let dirp = PathBuf::from(&dir);
+        let index = dirp.join("model.safetensors.index.json");
+        if !index.is_file() || !PathBuf::from(&fix).join("audio_emb.f32").is_file() {
+            eprintln!("zen-omni weights/fixtures absent; skipping audio_tower validation");
+            return;
+        }
+        let device = Device::Cpu;
+        let cfg: super::super::config::Qwen3OmniConfig =
+            serde_json::from_str(&std::fs::read_to_string(dirp.join("config.json")).unwrap()).unwrap();
+        let ac = &cfg.thinker_config.audio_config;
+
+        let index_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&index).unwrap()).unwrap();
+        let mut shards = std::collections::BTreeSet::new();
+        for v in index_json["weight_map"].as_object().unwrap().values() {
+            shards.insert(v.as_str().unwrap().to_string());
+        }
+        let paths: Vec<PathBuf> = shards.iter().map(|s| dirp.join(s)).collect();
+        let vb = from_mmaped_safetensors(
+            paths, Vec::new(), Some(DType::F32), &device, vec![None], true, None,
+            |n: String| n.starts_with("thinker.audio_tower."),
+            Arc::new(|_| DeviceForLoadTensor::Base),
+        ).unwrap();
+
+        let model = OmniAudioTower::new(ac, vb.pp("thinker").pp("audio_tower"), &device).unwrap();
+
+        // Fixed mel [1, 128, 200] from the oracle (audio_mel.f32 is row-major [128,200]).
+        let mel_v = read_f32_le(&format!("{fix}/audio_mel.f32"));
+        let n_mels = ac.num_mel_bins;
+        let t = mel_v.len() / n_mels;
+        let mel = Tensor::from_vec(mel_v, (1, n_mels, t), &device).unwrap();
+
+        let emb = model.forward(&mel).unwrap();
+        let got: Vec<f32> = emb.flatten_all().unwrap().to_dtype(DType::F32).unwrap().to_vec1().unwrap();
+        let refv = read_f32_le(&format!("{fix}/audio_emb.f32"));
+        eprintln!("[audio_tower] got {} vals, ref {} vals, emb shape {:?}", got.len(), refv.len(), emb.dims());
+        let n = got.len().min(refv.len());
+        let cos = cosine(&got[..n], &refv[..n]);
+        eprintln!("[audio_tower] emb cosine = {cos:.6}");
+        assert_eq!(got.len(), refv.len(), "audio emb length mismatch");
+        assert!(cos > 0.99, "audio_tower emb cosine {cos} < 0.99");
+    }
+}

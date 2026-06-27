@@ -588,3 +588,77 @@ impl OmniCode2Wav {
         SAMPLE_RATE
     }
 }
+
+#[cfg(test)]
+mod code2wav_tests {
+    use super::*;
+    use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
+    use hanzo_ml::{Device, Tensor};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn read_f32_le(p: &str) -> Vec<f32> {
+        std::fs::read(p).unwrap().chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    }
+    fn read_i64_le(p: &str) -> Vec<i64> {
+        std::fs::read(p).unwrap().chunks_exact(8)
+            .map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect()
+    }
+    fn cosine(a: &[f32], b: &[f32]) -> f32 {
+        let (mut d, mut na, mut nb) = (0f64, 0f64, 0f64);
+        for (x, y) in a.iter().zip(b) { d += (*x as f64)*(*y as f64); na += (*x as f64).powi(2); nb += (*y as f64).powi(2); }
+        (d / (na.sqrt()*nb.sqrt())) as f32
+    }
+
+    /// Decode the FIXED codes fixture with the real `code2wav.*` weights and assert the waveform
+    /// matches the HF Qwen3OmniMoeCode2Wav reference (cosine > 0.99). Env-gated on the checkpoint.
+    #[test]
+    fn omni_code2wav_matches_reference() {
+        let dir = std::env::var("ZEN_OMNI_DIR")
+            .unwrap_or_else(|_| "/home/z/work/zen/hf/zen-omni-30b-instruct".to_string());
+        let fix = std::env::var("OMNI_FIX_DIR")
+            .unwrap_or_else(|_| "/home/z/work/zen/hf/omni_fixtures".to_string());
+        let dirp = PathBuf::from(&dir);
+        let index = dirp.join("model.safetensors.index.json");
+        if !index.is_file() || !PathBuf::from(&fix).join("c2w_wav.f32").is_file() {
+            eprintln!("zen-omni weights/fixtures absent; skipping code2wav validation");
+            return;
+        }
+        let device = Device::Cpu;
+        let cfg: super::super::config::Qwen3OmniConfig =
+            serde_json::from_str(&std::fs::read_to_string(dirp.join("config.json")).unwrap()).unwrap();
+
+        let index_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&index).unwrap()).unwrap();
+        let mut shards = std::collections::BTreeSet::new();
+        for v in index_json["weight_map"].as_object().unwrap().values() {
+            shards.insert(v.as_str().unwrap().to_string());
+        }
+        let paths: Vec<PathBuf> = shards.iter().map(|s| dirp.join(s)).collect();
+        let vb = from_mmaped_safetensors(
+            paths, Vec::new(), Some(DType::F32), &device, vec![None], true, None,
+            |n: String| n.starts_with("code2wav."),
+            Arc::new(|_| DeviceForLoadTensor::Base),
+        ).unwrap();
+
+        let model = OmniCode2Wav::new(&cfg.code2wav_config, vb.pp("code2wav"), &device).unwrap();
+
+        // Fixed codes [1, 16, 32] from the oracle.
+        let codes_i64 = read_i64_le(&format!("{fix}/c2w_codes.i64"));
+        let q = cfg.code2wav_config.num_quantizers;
+        let t = codes_i64.len() / q;
+        let codes_u32: Vec<u32> = codes_i64.iter().map(|&v| v as u32).collect();
+        let codes = Tensor::from_vec(codes_u32, (1, q, t), &device).unwrap();
+
+        let wav = model.decode(&codes).unwrap();
+        let got: Vec<f32> = wav.flatten_all().unwrap().to_dtype(DType::F32).unwrap().to_vec1().unwrap();
+        let refv = read_f32_le(&format!("{fix}/c2w_wav.f32"));
+        eprintln!("[code2wav] got {} samples, ref {} samples", got.len(), refv.len());
+        let n = got.len().min(refv.len());
+        let cos = cosine(&got[..n], &refv[..n]);
+        eprintln!("[code2wav] wav cosine = {cos:.6} (len got={} ref={})", got.len(), refv.len());
+        assert!((got.len() as i64 - refv.len() as i64).abs() <= 8, "wav length mismatch");
+        assert!(cos > 0.99, "code2wav wav cosine {cos} < 0.99");
+    }
+}
