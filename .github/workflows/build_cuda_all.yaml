@@ -14,10 +14,10 @@ jobs:
     build-and-push-image:
         strategy:
           matrix:
-            compute_capability: [80, 86, 89, 90]
+            compute_capability: [80, 86, 89, 90, 120, 121]
           fail-fast: false
         runs-on: hanzo-build-linux-amd64
-        timeout-minutes: 90
+        timeout-minutes: 210
         
         permissions:
             contents: write
@@ -73,7 +73,7 @@ jobs:
               uses: docker/build-push-action@v6
               with:
                 context: .
-                file: Dockerfile.cuda-all
+                file: Dockerfile.cuda
                 push: ${{ github.event_name != 'pull_request' }}
                 platforms: 'linux/amd64'
                 tags: ${{ steps.meta-cuda.outputs.tags }}
