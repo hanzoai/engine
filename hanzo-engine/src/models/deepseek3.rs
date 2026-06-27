@@ -1194,3 +1194,117 @@ impl NormalModel for DeepSeekV3 {
 }
 
 impl AnyMoeBaseModelMixin for DeepSeekV3 {}
+
+#[cfg(test)]
+mod deepseek_v32_tests {
+    use super::{DeepSeekV3Config, ScoringFunc, TopkMethod};
+
+    /// The real `deepseek-ai/DeepSeek-V3.2` `config.json`, verbatim.
+    ///
+    /// DeepSeek-V3.2 is pure DSA over V3-byte-identical MLA/MoE, so its config
+    /// must deserialize into the existing [`DeepSeekV3Config`] with V3-identical
+    /// dims. The four V3.2-only fields (`index_n_heads`, `index_head_dim`,
+    /// `index_topk`, `num_nextn_predict_layers`) — plus the other HF bookkeeping
+    /// keys — are simply ignored: [`DeepSeekV3Config`] is not
+    /// `#[serde(deny_unknown_fields)]`, and the dense path never reads them.
+    const DEEPSEEK_V32_CONFIG: &str = r#"{
+  "architectures": [
+    "DeepseekV32ForCausalLM"
+  ],
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "bos_token_id": 0,
+  "eos_token_id": 1,
+  "ep_size": 1,
+  "first_k_dense_replace": 3,
+  "hidden_act": "silu",
+  "hidden_size": 7168,
+  "index_head_dim": 128,
+  "index_n_heads": 64,
+  "index_topk": 2048,
+  "initializer_range": 0.02,
+  "intermediate_size": 18432,
+  "kv_lora_rank": 512,
+  "max_position_embeddings": 163840,
+  "model_type": "deepseek_v32",
+  "moe_intermediate_size": 2048,
+  "moe_layer_freq": 1,
+  "n_group": 8,
+  "n_routed_experts": 256,
+  "n_shared_experts": 1,
+  "norm_topk_prob": true,
+  "num_attention_heads": 128,
+  "num_experts_per_tok": 8,
+  "num_hidden_layers": 61,
+  "num_key_value_heads": 128,
+  "num_nextn_predict_layers": 1,
+  "q_lora_rank": 1536,
+  "qk_nope_head_dim": 128,
+  "qk_rope_head_dim": 64,
+  "quantization_config": {
+    "activation_scheme": "dynamic",
+    "fmt": "e4m3",
+    "quant_method": "fp8",
+    "scale_fmt": "ue8m0",
+    "weight_block_size": [
+      128,
+      128
+    ]
+  },
+  "rms_norm_eps": 1e-06,
+  "rope_scaling": {
+    "beta_fast": 32,
+    "beta_slow": 1,
+    "factor": 40,
+    "mscale": 1.0,
+    "mscale_all_dim": 1.0,
+    "original_max_position_embeddings": 4096,
+    "type": "yarn"
+  },
+  "rope_theta": 10000,
+  "routed_scaling_factor": 2.5,
+  "scoring_func": "sigmoid",
+  "tie_word_embeddings": false,
+  "topk_group": 4,
+  "topk_method": "noaux_tc",
+  "torch_dtype": "bfloat16",
+  "transformers_version": "4.44.2",
+  "use_cache": true,
+  "v_head_dim": 128,
+  "vocab_size": 129280
+}"#;
+
+    #[test]
+    fn deepseek_v32_config_parses() {
+        let cfg: DeepSeekV3Config = serde_json::from_str(DEEPSEEK_V32_CONFIG)
+            .expect("DeepSeek-V3.2 config must deserialize into DeepSeekV3Config");
+
+        // MLA dims — byte-identical to DeepSeek-V3.
+        assert_eq!(cfg.hidden_size, 7168);
+        assert_eq!(cfg.vocab_size, 129280);
+        assert_eq!(cfg.num_hidden_layers, 61);
+        assert_eq!(cfg.num_attention_heads, 128);
+        assert_eq!(cfg.q_lora_rank, Some(1536));
+        assert_eq!(cfg.kv_lora_rank, 512);
+        assert_eq!(cfg.qk_nope_head_dim, 128);
+        assert_eq!(cfg.qk_rope_head_dim, 64);
+        assert_eq!(cfg.v_head_dim, 128);
+        assert_eq!(cfg.q_head_dim(), 192);
+
+        // MoE (NoAuxTc sigmoid gate) — byte-identical to DeepSeek-V3.
+        assert_eq!(cfg.n_routed_experts, Some(256));
+        assert_eq!(cfg.n_shared_experts, Some(1));
+        assert_eq!(cfg.num_experts_per_tok, Some(8));
+        assert_eq!(cfg.moe_intermediate_size, 2048);
+        assert_eq!(cfg.first_k_dense_replace, 3);
+        assert_eq!(cfg.n_group, 8);
+        assert_eq!(cfg.topk_group, 4);
+        assert!(matches!(cfg.topk_method, TopkMethod::NoAuxTc));
+        assert!(matches!(cfg.scoring_func, ScoringFunc::Sigmoid));
+
+        // RoPE (yarn scaling) + fp8 block quant survive deserialization.
+        assert_eq!(cfg.rope_theta, 10000.0);
+        assert!(cfg.rope_scaling.is_some());
+        assert!(cfg.quantization_config.is_some());
+    }
+}
