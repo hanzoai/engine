@@ -7080,19 +7080,33 @@ impl MultimodalModelLoader for Qwen3OmniLoader {
         &self,
         model_config: &str,
         _processor_config: Option<ProcessorConfig>,
-        _preprocessor_config: PreProcessorConfig,
+        preprocessor_config: PreProcessorConfig,
         _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
-        // The Omni processor applies the Qwen chat template + tokenizes (text), and expands `<|AUDIO|>`
-        // placeholders into the right Thinker-token count while producing the log-mel payloads the
-        // validated audio tower consumes. Image/video placeholder expansion is the documented
-        // follow-up (model side — encoders + 3D mRoPE — is wired). On a malformed config this falls
-        // back to text-only so the loader never panics.
+        // The Omni processor applies the Qwen chat template + tokenizes (text), expands `<|AUDIO|>`,
+        // `<|IMAGE|>` and `<|VIDEO|>` placeholders into the right Thinker-token count, and produces the
+        // log-mel / patch-pixel payloads the validated audio + vision towers consume (image and video
+        // patchifying reuse the shared Qwen3-VL image processor). On a malformed config this falls back
+        // to text-only so the loader never panics.
         match serde_json::from_str::<Qwen3OmniConfig>(model_config) {
-            Ok(cfg) => Arc::new(crate::vision_models::qwen3_omni::Qwen3OmniProcessor::new(
-                cfg.thinker_config.audio_token_id,
-                cfg.thinker_config.audio_config,
-            )),
+            Ok(cfg) => {
+                let tc = &cfg.thinker_config;
+                let vc = &tc.vision_config;
+                // Patch geometry is taken from the model's vision config (authoritative), not a
+                // possibly-absent preprocessor_config, so the patchifier always matches the tower.
+                let mut pc = preprocessor_config;
+                pc.patch_size = Some(vc.patch_size);
+                pc.merge_size = Some(vc.spatial_merge_size);
+                pc.temporal_patch_size = Some(vc.temporal_patch_size);
+                Arc::new(crate::vision_models::qwen3_omni::Qwen3OmniProcessor::new(
+                    tc.audio_token_id,
+                    tc.image_token_id,
+                    tc.video_token_id,
+                    vc.spatial_merge_size,
+                    tc.audio_config.clone(),
+                    pc,
+                ))
+            }
             Err(_) => Arc::new(Qwen3VLProcessor::new(None)),
         }
     }
@@ -7106,13 +7120,19 @@ impl MultimodalModelLoader for Qwen3OmniLoader {
         Arc::new(Qwen3OmniPrefixer)
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
-        // Text + Audio are served end-to-end (input processor expands `<|AUDIO|>` placeholders, mel ->
-        // audio tower -> `fuse_modalities` -> Thinker). The model also has validated vision encoders
-        // and 3D-mRoPE serving wired, but image/video input processing is the documented follow-up,
-        // so Vision is not yet advertised (advertising it without placeholder expansion would break
-        // image requests).
+        // Text + Audio + Vision + Video are served end-to-end: the input processor expands `<|AUDIO|>`
+        // / `<|IMAGE|>` / `<|VIDEO|>` placeholders and produces mel / patch-pixel payloads (video from
+        // pre-extracted frames), which `fuse_modalities` scatters into the Thinker (image/video grids
+        // drive 3D mRoPE via `omni_get_rope_index`). Separate audio + video in one request works; only
+        // the interleaved `use_audio_in_video` layout remains. Output is text (speech synthesis is the
+        // validated Talker/Code2Wav stack, not yet wired as a served output modality).
         Ok(Modalities {
-            input: vec![SupportedModality::Text, SupportedModality::Audio],
+            input: vec![
+                SupportedModality::Text,
+                SupportedModality::Audio,
+                SupportedModality::Vision,
+                SupportedModality::Video,
+            ],
             output: vec![SupportedModality::Text],
         })
     }
