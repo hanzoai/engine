@@ -1,6 +1,6 @@
-name: build_cuda_all
+name: build_cuda
 
-# gh workflow run build_cuda_all
+# gh workflow run build_cuda
 # This also runs on release deploy
 on:
   workflow_dispatch:
