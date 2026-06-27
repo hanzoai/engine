@@ -1,6 +1,6 @@
 # Multimodal model support in hanzo
 
-Mistral.rs supports various modalities of models, including multimodal models. Multimodal models take images, audio, and text as input and have the capability to reason over all of them.
+Hanzo Engine supports various modalities of models, including multimodal models. Multimodal models take images, audio, and text as input and have the capability to reason over all of them.
 
 Please see docs for the following model types:
 
