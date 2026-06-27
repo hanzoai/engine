@@ -11,9 +11,9 @@ Reference pages are short, complete, and lookup-oriented. For narrative or motiv
 
 **TOML configuration.** The schema for the config file `hanzo from-config` reads.
 
-**HTTP API.** Endpoint-by-endpoint server documentation, with OpenAI-compatible, Anthropic-compatible, and mistral.rs-specific request and response schemas.
+**HTTP API.** Endpoint-by-endpoint server documentation, with OpenAI-compatible, Anthropic-compatible, and Hanzo Engine-specific request and response schemas.
 
-**OpenAI compatibility.** Which parts of OpenAI's Chat Completions and Responses surface are implemented, and which are not. For setup, see [OpenAI-compatible APIs](/mistral.rs/guides/serve/openai-compatible-apis/).
+**OpenAI compatibility.** Which parts of OpenAI's Chat Completions and Responses surface are implemented, and which are not. For setup, see [OpenAI-compatible APIs](/hanzo/guides/serve/openai-compatible-apis/).
 
 **Anthropic Messages API.** The Anthropic-compatible Messages surface, including streaming, tool use, token counting, and server-side agent tools.
 
