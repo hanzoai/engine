@@ -238,6 +238,12 @@ where
         )
         .await?;
         let accepted_all = outcome.accepted_drafts == outcome.proposed_drafts;
+        tracing::debug!(
+            seq_id = *seq.id(),
+            accepted = outcome.accepted_drafts,
+            proposed = outcome.proposed_drafts,
+            "speculative verify step"
+        );
         cache_outcomes.push(Some(SpeculativeCacheOutcome {
             keep_len: outcome.keep_len,
             accepted_all,
@@ -329,13 +335,10 @@ where
         return Ok(());
     }
 
-    let target_hiddens = match target.speculative_target_hiddens(hidden_rows)? {
-        Some(hidden) => Some(hidden),
-        None => {
-            clear_active_staged(seqs, active_indices);
-            return Ok(());
-        }
-    };
+    // `Ok(None)` means the proposer does not need target hidden state (e.g. a standalone draft
+    // model), not a failure: pass it through and let the proposer decide. MTP returns `Some` when
+    // active and its `propose` errors if hiddens are missing.
+    let target_hiddens = target.speculative_target_hiddens(hidden_rows)?;
 
     let seq_ids = active_indices
         .iter()
