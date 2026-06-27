@@ -21,7 +21,7 @@ This file provides instructions for AI agents to understand the layout of the `h
   
 ## Feature Organization
 
-Mistral.rs supports multiple model types and advanced features via dedicated crates and CLI subcommands:
+Hanzo Engine supports multiple model types and advanced features via dedicated crates and CLI subcommands:
 
 - **Text Inference**
   - Crate: `hanzo-engine` (low-level ops), `hanzo` (API wrapper)
