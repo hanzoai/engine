@@ -1,11 +1,11 @@
 use hanzo_ml::{Device, Result};
 use indexmap::IndexMap;
 use itertools::Itertools;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::{
-    disk_kv_cache::{key_for_bytes, DiskKvCache, KvcHeader, SaveReason},
-    kv_cache::{ByteReader, RecurrentStateSnapshot},
+    disk_kv_cache::DiskKvCache,
+    kv_cache::RecurrentStateSnapshot,
     paged_attention::block_hash::BlockHash,
     pipeline::KvCache,
     sequence::Sequence,
