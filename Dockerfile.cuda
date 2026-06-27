@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Stage 1: Build environment
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:13.0.3-cudnn-devel-ubuntu24.04 AS builder
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -29,12 +29,12 @@ ARG CUDA_COMPUTE_CAP=80
 ARG RAYON_NUM_THREADS=4
 ARG RUST_NUM_THREADS=4
 ARG RUSTFLAGS="-Z threads=${RUST_NUM_THREADS}"
-ARG WITH_FEATURES="cuda,cudnn"
+ARG WITH_FEATURES="cuda,cudnn,flash-attn"
 RUN cargo build --release --workspace --exclude hanzo-pyo3 --features "${WITH_FEATURES}"
 
 
 # Stage 2: Minimal runtime environment
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS runtime
+FROM nvidia/cuda:13.0.3-cudnn-runtime-ubuntu24.04 AS runtime
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
 ARG DEBIAN_FRONTEND=noninteractive
