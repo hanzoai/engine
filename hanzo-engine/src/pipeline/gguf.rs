@@ -871,7 +871,12 @@ impl GGUFPipeline {
     /// This is the single source of truth for decode-graph eligibility, shared by the
     /// CUDA and ROCm graph paths (both capture the identical device-generic model forward).
     fn model_supports_decode_graph(&self) -> bool {
-        matches!(self.model, Model::Qwen3(_) | Model::Qwen3MoE(_))
+        // Multi-GPU device mapping freezes RoPE under capture: layers on a non-primary device do
+        // `positions.to_device()` -> a fresh per-forward tensor that `copy_rope_positions` never
+        // refreshes. Restrict capture to single-device so that frozen class is structurally
+        // impossible (multi-GPU decode falls back to the always-correct eager path).
+        self.mapper.get_unique_devices().len() <= 1
+            && matches!(self.model, Model::Qwen3(_) | Model::Qwen3MoE(_))
     }
 
     /// Runs the decode forward for the graph-eligible variants with the supplied
