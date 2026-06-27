@@ -1,0 +1,329 @@
+#!/usr/bin/env python3
+"""hanzo-engine-guard - keep the local Hanzo engine alive, safely, anywhere.
+
+Two bounded jobs (neither can DoS the machine):
+
+  * circuit breaker  - kill the legacy `mistralrs-server` recursion on sight;
+                       if `hanzo serve` procs exceed RUNAWAY_CEILING, kill all.
+  * keepalive        - respawn an engine port that was healthy and then died,
+                       but ONLY while a desktop/node is running, with per-port
+                       exponential BACKOFF and a GIVE-UP cap, replaying the
+                       exact command last seen (never guessing).
+
+Decomplected: the daemon (`run`) is one OS-agnostic policy; installation is a
+thin per-OS adapter (`install`/`uninstall`) -> systemd-user (Linux), launchd
+LaunchAgent (macOS), Task Scheduler (Windows). All user-level; no admin.
+
+Usage:  hanzo-engine-guard run | install | uninstall | status
+"""
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+
+try:
+    import psutil  # cross-platform proc ops; optional (Unix falls back to pgrep/pkill)
+except Exception:
+    psutil = None
+
+APP = "hanzo-engine-guard"
+LABEL = "ai.hanzo.engine-guard"           # launchd label / windows task name base
+CYCLE = 5
+RUNAWAY_CEILING = int(os.environ.get("HANZO_ENGINE_RUNAWAY_CEILING", "256"))
+BACKOFF = [15, 30, 60, 120, 300]
+MAX_FAILS = 8
+ENGINE_PAT = "release/hanzo serve"        # native engine; never matches mistralrs
+BOMB_PAT = "mistralrs-server"
+DESKTOP_PATS = ("hanzo-desktop", "zoo-desktop", "lux-desktop", "hanzo-node")
+
+# ---------------------------------------------------------------- platform layer
+IS_WIN = os.name == "nt"
+
+
+def _log(msg):
+    if IS_WIN:
+        print(f"[{APP}] {msg}", flush=True)
+    else:
+        subprocess.run(["logger", "-t", APP, msg], check=False)
+
+
+def _procs_matching(pat):
+    """[(pid, cmdline)] of processes whose command line contains pat."""
+    if psutil:
+        out = []
+        for p in psutil.process_iter(["pid", "cmdline"]):
+            cl = " ".join(p.info.get("cmdline") or [])
+            if pat in cl:
+                out.append((p.info["pid"], cl))
+        return out
+    res = subprocess.run(["pgrep", "-af", pat], capture_output=True, text=True).stdout
+    out = []
+    for line in res.splitlines():
+        parts = line.split(" ", 1)
+        if len(parts) == 2 and "pgrep" not in parts[1]:
+            out.append((int(parts[0]), parts[1]))
+    return out
+
+
+def _kill_matching(pat):
+    if psutil:
+        for pid, _ in _procs_matching(pat):
+            try:
+                psutil.Process(pid).kill()
+            except Exception:
+                pass
+    else:
+        subprocess.run(["pkill", "-9", "-f", pat], check=False)
+
+
+def _bomb_procs():
+    """Processes that ARE the legacy mistralrs-server binary - matched precisely
+    by exe/argv0 basename or comm, NOT by a substring of the command line (which
+    would wrongly kill editors, greps, scripts, etc. that merely mention it)."""
+    if psutil:
+        out = []
+        for p in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
+            cl = p.info.get("cmdline") or []
+            a0 = cl[0] if cl else ""
+            if (os.path.basename(p.info.get("exe") or "") == BOMB_PAT
+                    or os.path.basename(a0) == BOMB_PAT
+                    or (p.info.get("name") or "") in (BOMB_PAT, BOMB_PAT[:15])):
+                out.append((p.info["pid"], " ".join(cl)))
+        return out
+    res = subprocess.run(["pgrep", "-x", BOMB_PAT[:15]], capture_output=True, text=True).stdout
+    return [(int(x), "") for x in res.split()]
+
+
+def _kill_bomb():
+    if psutil:
+        for pid, _ in _bomb_procs():
+            try:
+                psutil.Process(pid).kill()
+            except Exception:
+                pass
+    else:
+        subprocess.run(["pkill", "-9", "-x", BOMB_PAT[:15]], check=False)
+
+
+def _any_running(pats):
+    for pat in pats:
+        if _procs_matching(pat):
+            return True
+    return False
+
+
+def _proc_context(pid):
+    """Capture (cwd, environ) of a live engine so a respawn replays its exact
+    runtime context (HF cache, CUDA libs, PATH, etc.). The command alone is not
+    enough - the daemon's own env is minimal and the engine would die on launch."""
+    try:
+        pr = psutil.Process(pid)
+        return pr.cwd(), dict(pr.environ())
+    except Exception:
+        return None, None
+
+
+def _spawn_detached(argv, cwd=None, env=None):
+    kw = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+    if IS_WIN:
+        kw["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kw["start_new_session"] = True
+    if cwd:
+        kw["cwd"] = cwd
+    if env:
+        kw["env"] = env
+    subprocess.Popen(argv, **kw)
+
+
+def _health(port):
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def _port_of(cmdline):
+    m = re.search(r"-p\s+(\d+)", cmdline)
+    return int(m.group(1)) if m else None
+
+
+# ---------------------------------------------------------------- daemon (run)
+def run():
+    _log(f"started (ceiling={RUNAWAY_CEILING} backoff={BACKOFF} max_fails={MAX_FAILS} psutil={'y' if psutil else 'n'})")
+    state = {}            # port -> {cmd, fails, last, gaveup}
+    gaveup_logged = set()
+    while True:
+        _kill_bomb()
+        procs = _procs_matching(ENGINE_PAT)
+        if len(procs) > RUNAWAY_CEILING:
+            _log(f"RUNAWAY {len(procs)} > ceiling {RUNAWAY_CEILING}; killing all engines")
+            _kill_matching(ENGINE_PAT)
+            time.sleep(CYCLE)
+            continue
+
+        live = {}
+        for pid, cmd in procs:
+            p = _port_of(cmd)
+            if p is not None:
+                live[p] = (pid, cmd)
+        for p, (pid, cmd) in live.items():
+            if _health(p):
+                st = state.setdefault(p, {})
+                st.update(cmd=cmd.split(), fails=0, gaveup=False)
+                cwd, env = _proc_context(pid)
+                if cwd:
+                    st["cwd"] = cwd
+                if env:
+                    st["env"] = env
+                gaveup_logged.discard(p)
+
+        if _any_running(DESKTOP_PATS):
+            now = time.time()
+            for p, st in state.items():
+                if "cmd" not in st or (p in live and _health(p)):
+                    continue
+                if st.get("gaveup"):
+                    if p not in gaveup_logged:
+                        _log(f"gave up on :{p} after {MAX_FAILS} fails; manual fix needed")
+                        gaveup_logged.add(p)
+                    continue
+                fails = st.get("fails", 0)
+                if fails >= MAX_FAILS:
+                    st["gaveup"] = True
+                    continue
+                if now - st.get("last", 0) < BACKOFF[min(fails, len(BACKOFF) - 1)]:
+                    continue
+                _log(f"respawning :{p} (attempt {fails + 1}/{MAX_FAILS})")
+                _spawn_detached(st["cmd"], st.get("cwd"), st.get("env"))
+                st["last"], st["fails"] = now, fails + 1
+        time.sleep(CYCLE)
+
+
+# ---------------------------------------------------------------- install (per-OS)
+def _self_cmd():
+    return [os.path.abspath(sys.executable), os.path.abspath(__file__), "run"]
+
+
+def install_linux():
+    d = os.path.expanduser("~/.config/systemd/user")
+    os.makedirs(d, exist_ok=True)
+    unit = os.path.join(d, f"{APP}.service")
+    exec_start = " ".join(_self_cmd())
+    with open(unit, "w") as f:
+        f.write(f"""[Unit]
+Description=Hanzo engine guard (circuit breaker + safe keepalive)
+After=default.target
+
+[Service]
+ExecStart={exec_start}
+Restart=always
+RestartSec=3
+# KillMode=process: a guard restart/stop must NOT kill the engines it spawned
+# (they run in this cgroup as detached children). No MemoryMax here -- it would
+# count a respawned engine's multi-GB RAM and cgroup-OOM it.
+KillMode=process
+OOMScoreAdjust=-700
+
+[Install]
+WantedBy=default.target
+""")
+    subprocess.run(["loginctl", "enable-linger", os.environ.get("USER", "")], check=False)
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+    subprocess.run(["systemctl", "--user", "enable", "--now", f"{APP}.service"], check=False)
+    print(f"installed systemd --user service: {unit}\n  systemctl --user status {APP}")
+
+
+def uninstall_linux():
+    subprocess.run(["systemctl", "--user", "disable", "--now", f"{APP}.service"], check=False)
+    unit = os.path.expanduser(f"~/.config/systemd/user/{APP}.service")
+    if os.path.exists(unit):
+        os.remove(unit)
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+    print("uninstalled systemd --user service")
+
+
+def install_macos():
+    d = os.path.expanduser("~/Library/LaunchAgents")
+    os.makedirs(d, exist_ok=True)
+    plist = os.path.join(d, f"{LABEL}.plist")
+    args = "".join(f"    <string>{a}</string>\n" for a in _self_cmd())
+    with open(plist, "w") as f:
+        f.write(f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>{LABEL}</string>
+  <key>ProgramArguments</key><array>
+{args}  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Background</string>
+</dict></plist>
+""")
+    subprocess.run(["launchctl", "unload", plist], check=False)
+    subprocess.run(["launchctl", "load", "-w", plist], check=False)
+    print(f"installed launchd LaunchAgent: {plist}\n  launchctl list | grep {LABEL}")
+
+
+def uninstall_macos():
+    plist = os.path.expanduser(f"~/Library/LaunchAgents/{LABEL}.plist")
+    subprocess.run(["launchctl", "unload", "-w", plist], check=False)
+    if os.path.exists(plist):
+        os.remove(plist)
+    print("uninstalled launchd LaunchAgent")
+
+
+def install_windows():
+    task = "HanzoEngineGuard"
+    pyw = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "pythonw.exe")
+    runner = pyw if os.path.exists(pyw) else os.path.abspath(sys.executable)
+    tr = f'"{runner}" "{os.path.abspath(__file__)}" run'
+    subprocess.run(["schtasks", "/Create", "/F", "/SC", "ONLOGON", "/RL", "LIMITED",
+                    "/TN", task, "/TR", tr], check=False)
+    subprocess.run(["schtasks", "/Run", "/TN", task], check=False)
+    print(f"installed Task Scheduler task: {task} (runs at logon)\n  schtasks /Query /TN {task}")
+
+
+def uninstall_windows():
+    subprocess.run(["schtasks", "/End", "/TN", "HanzoEngineGuard"], check=False)
+    subprocess.run(["schtasks", "/Delete", "/F", "/TN", "HanzoEngineGuard"], check=False)
+    print("uninstalled Task Scheduler task")
+
+
+def _dispatch(action):
+    plat = "windows" if IS_WIN else ("macos" if sys.platform == "darwin" else "linux")
+    fn = globals().get(f"{action}_{plat}")
+    if not fn:
+        sys.exit(f"{action} not supported on {plat}")
+    fn()
+
+
+def status():
+    procs = _procs_matching(ENGINE_PAT)
+    ports = sorted({_port_of(c) for _, c in procs} - {None})
+    print(f"{APP}: {len(procs)} engine proc(s); ports {ports or '-'}")
+    for p in ports:
+        print(f"  :{p} health={'UP' if _health(p) else 'down'}")
+    print(f"  desktop/node running: {_any_running(DESKTOP_PATS)}")
+    bombs = _bomb_procs()
+    if bombs:
+        print(f"  WARNING {len(bombs)} '{BOMB_PAT}' procs present (will be killed)")
+
+
+def main():
+    action = sys.argv[1] if len(sys.argv) > 1 else "run"
+    if action == "run":
+        run()
+    elif action in ("install", "uninstall"):
+        _dispatch(action)
+    elif action == "status":
+        status()
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main()
