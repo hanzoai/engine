@@ -87,7 +87,7 @@ For app-facing tool timelines, generated media fields, and sessions, see [agenti
 
 Anthropic-compatible Messages API. It uses the same local model path as Chat
 Completions, but request and response bodies follow Anthropic's Messages shape.
-See the [Anthropic Messages API guide](/mistral.rs/guides/serve/anthropic-messages-api/).
+See the [Anthropic Messages API guide](/hanzo/guides/serve/anthropic-messages-api/).
 
 ```json
 {
@@ -148,7 +148,7 @@ The endpoint also accepts Anthropic server-tool declarations:
 `enable_code_execution`. Server capabilities still apply: start with `--agent`,
 `--enable-search`, or `--enable-code-execution` as needed.
 
-The endpoint also routes mistral.rs chat extensions for sampling, constraints,
+The endpoint also routes Hanzo Engine chat extensions for sampling, constraints,
 and reasoning: `logit_bias`, `logprobs`, `top_logprobs`, `presence_penalty`,
 `frequency_penalty`, `repetition_penalty`, `min_p`, `top_k`, `response_format`,
 `grammar`, `dry_multiplier`, `dry_base`, `dry_allowed_length`,
