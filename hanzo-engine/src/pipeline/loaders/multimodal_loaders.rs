@@ -7060,14 +7060,20 @@ impl MultimodalModelLoader for Qwen3OmniLoader {
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
-        _attention_mechanism: AttentionImplementation,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: Qwen3OmniConfig = serde_json::from_str(config)?;
-        // The validated Thinker uses `naive_sdpa` + the engine `NormalCache` (no paged attention),
-        // so the attention mechanism is fixed by the model, not the loader.
+        // The Thinker text decoder serves logits through its cache-aware forward and is paged-attn
+        // capable; `attention_mechanism` selects the paged kernel vs. the `naive_sdpa` cache fallback.
         let device = normal_loading_metadata.real_device.clone();
         let comm = normal_loading_metadata.mapper.get_comm_for(0)?;
-        Ok(Box::new(Qwen3OmniModel::new(&cfg, vb, &device, &comm)?))
+        Ok(Box::new(Qwen3OmniModel::new(
+            &cfg,
+            vb,
+            &device,
+            &comm,
+            attention_mechanism,
+        )?))
     }
     fn is_gptx(&self, _config: &str) -> bool {
         true
@@ -7083,11 +7089,11 @@ impl MultimodalModelLoader for Qwen3OmniLoader {
         preprocessor_config: PreProcessorConfig,
         _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
-        // The Omni processor applies the Qwen chat template + tokenizes (text), expands `<|AUDIO|>`
-        // and `<|IMAGE|>` placeholders into the right Thinker-token count, and produces the log-mel /
-        // patch-pixel payloads the validated audio + vision towers consume (image patchifying reuses
-        // the shared Qwen3-VL image processor). On a malformed config this falls back to text-only so
-        // the loader never panics.
+        // The Omni processor applies the Qwen chat template + tokenizes (text), expands `<|AUDIO|>`,
+        // `<|IMAGE|>` and `<|VIDEO|>` placeholders into the right Thinker-token count, and produces the
+        // log-mel / patch-pixel payloads the validated audio + vision towers consume (image and video
+        // patchifying reuse the shared Qwen3-VL image processor). On a malformed config this falls back
+        // to text-only so the loader never panics.
         match serde_json::from_str::<Qwen3OmniConfig>(model_config) {
             Ok(cfg) => {
                 let tc = &cfg.thinker_config;
@@ -7111,7 +7117,9 @@ impl MultimodalModelLoader for Qwen3OmniLoader {
         }
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        false
+        // The Thinker text decoder is paged-attn capable (see `qwen3_omni::thinker`); when paged
+        // metadata is absent it falls back to the validated cache + `naive_sdpa` path.
+        true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         false
@@ -7120,15 +7128,18 @@ impl MultimodalModelLoader for Qwen3OmniLoader {
         Arc::new(Qwen3OmniPrefixer)
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
-        // Text + Audio + Vision are served end-to-end: the input processor expands `<|AUDIO|>` /
-        // `<|IMAGE|>` placeholders and produces mel / patch-pixel payloads, which `fuse_modalities`
-        // scatters into the Thinker (image positions drive 3D mRoPE via `omni_get_rope_index`). Video
-        // understanding (frame extraction) is the remaining gap.
+        // Text + Audio + Vision + Video are served end-to-end: the input processor expands `<|AUDIO|>`
+        // / `<|IMAGE|>` / `<|VIDEO|>` placeholders and produces mel / patch-pixel payloads (video from
+        // pre-extracted frames), which `fuse_modalities` scatters into the Thinker (image/video grids
+        // drive 3D mRoPE via `omni_get_rope_index`). Separate audio + video in one request works; only
+        // the interleaved `use_audio_in_video` layout remains. Output is text (speech synthesis is the
+        // validated Talker/Code2Wav stack, not yet wired as a served output modality).
         Ok(Modalities {
             input: vec![
                 SupportedModality::Text,
                 SupportedModality::Audio,
                 SupportedModality::Vision,
+                SupportedModality::Video,
             ],
             output: vec![SupportedModality::Text],
         })
