@@ -27,8 +27,14 @@ use crate::pipeline::rocm_graph::{
     rocm_decode_graphs_enabled, RocmDecodeGraphKey, RocmDecodeGraphMetadataBuffers,
     RocmGraphHandle, ROCM_DECODE_GRAPH_CACHE_CAPACITY,
 };
+#[cfg(feature = "cuda")]
+use crate::pipeline::cuda_graph::{
+    cuda_decode_graphs_enabled, disable_event_tracking_for_capture, end_cuda_capture_discard,
+    restore_event_tracking_after_capture, CudaDecodeGraphKey, CudaDecodeGraphMetadataBuffers,
+    CudaGraphHandle, CUDA_DECODE_GRAPH_CACHE_CAPACITY,
+};
 use crate::pipeline::sampling::sample_and_add_toks;
-#[cfg(feature = "rocm")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::ChatTemplate;
 use crate::pipeline::{get_chat_template, Modalities, SupportedModality};
@@ -58,7 +64,7 @@ use crate::{
 };
 use anyhow::{bail, Result};
 use either::Either;
-#[cfg(feature = "rocm")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use hanzo_ml::Var;
 use hanzo_ml::{Device, Tensor};
 use hanzo_quant::IsqType;
@@ -102,6 +108,11 @@ pub struct GGUFPipeline {
     /// [`crate::pipeline::rocm_graph`]. Mirrors `NormalPipeline::cuda_decode_graph`.
     #[cfg(feature = "rocm")]
     rocm_decode_graph: std::sync::Mutex<RocmDecodeGraphState>,
+    /// Captured CUDA decode graphs, keyed by decode bucket. The GGUF analog of
+    /// `NormalPipeline::cuda_decode_graph` (which only wires the safetensors path);
+    /// reuses the same `cuda_graph` machinery for the quantized decode forward.
+    #[cfg(feature = "cuda")]
+    cuda_decode_graph: std::sync::Mutex<CudaDecodeGraphState>,
 }
 
 #[cfg(feature = "rocm")]
@@ -125,6 +136,23 @@ struct RocmDecodeGraphEntry {
     /// The warmup logits tensor. Because the graph writes its output into this
     /// tensor's (stable) storage every replay, cloning it after a launch yields
     /// the current token's logits.
+    logits: Tensor,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Default)]
+struct CudaDecodeGraphState {
+    entries: Vec<CudaDecodeGraphEntry>,
+    disabled: bool,
+}
+
+#[cfg(feature = "cuda")]
+struct CudaDecodeGraphEntry {
+    key: CudaDecodeGraphKey,
+    graph: CudaGraphHandle,
+    input_ids: Var,
+    metadata_buffers: CudaDecodeGraphMetadataBuffers,
+    _metadata: PagedAttentionInputMetadata,
     logits: Tensor,
 }
 
@@ -675,6 +703,8 @@ impl Loader for GGUFLoader {
             draft_proposer: None,
             #[cfg(feature = "rocm")]
             rocm_decode_graph: std::sync::Mutex::new(RocmDecodeGraphState::default()),
+            #[cfg(feature = "cuda")]
+            cuda_decode_graph: std::sync::Mutex::new(CudaDecodeGraphState::default()),
         })))
     }
 
@@ -795,6 +825,24 @@ impl MetadataMixin for GGUFPipeline {
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }
+    fn cleanup_cuda_graphs(&self) {
+        #[cfg(feature = "cuda")]
+        {
+            self.cuda_decode_graph
+                .lock()
+                .expect("CUDA graph mutex poisoned")
+                .entries
+                .clear();
+        }
+        #[cfg(feature = "rocm")]
+        {
+            self.rocm_decode_graph
+                .lock()
+                .expect("ROCm graph mutex poisoned")
+                .entries
+                .clear();
+        }
+    }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
     }
@@ -806,36 +854,36 @@ impl MetadataMixin for GGUFPipeline {
     }
 }
 
-#[cfg(feature = "rocm")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl GGUFPipeline {
-    /// Whether the active model variant runs the standard
-    /// `(input_ids, seqlen_offsets, context_lens, paged_meta)` decode forward that
-    /// the ROCm decode graph captures. XLora and the alternate-signature variants
-    /// (Phi3/Starcoder2) are excluded from the graph fast path for v1.
-    fn model_supports_rocm_decode_graph(&self) -> bool {
-        // Graph-eligible variants run their decode RoPE off a stable device positions tensor
-        // (`metadata.rope_positions`), so capture bakes a buffer the graph runner refreshes in place
-        // every token instead of a frozen host offset. Qwen3MoE qualifies once its attention reads
-        // those positions like the dense path; before that fix its RoPE froze at the warmup position
-        // and every replayed token rotated wrong -> attention drifted into stale repetition.
-        // Qwen35 (Qwen3-VL mRoPE + non-paged Sdpa decode) still derives its cos/sin from a fresh
-        // per-forward positions tensor, which would freeze under capture, so it stays eager until its
-        // mRoPE is threaded through `rope_positions` too. XLora and the alternate-signature variants
-        // (Phi3/Starcoder2) are excluded from the graph fast path for v1.
-        matches!(
-            self.model,
-            Model::Llama(_)
-                | Model::Phi2(_)
-                | Model::Qwen(_)
-                | Model::Qwen3(_)
-                | Model::Qwen3MoE(_)
-        )
+    /// Whether the active model variant's decode forward is position-invariant under
+    /// graph capture, i.e. it reads its RoPE rotation from the device `metadata.rope_positions`
+    /// tensor (refreshed in place between replays) rather than baking a host `seqlen_offset`.
+    ///
+    /// Only Qwen3 and Qwen3MoE qualify: their `forward` honors `metadata.rope_positions`
+    /// (`apply_rotary_positions_qk` -> on-device cos/sin gather; the nsys-visible
+    /// `qk_rms_norm_rope_positions_kernel`). Llama/Phi2/Qwen(2) take the host path
+    /// `RotaryEmbedding::forward` -> `selected_rope_cache` -> `cos.narrow(0, seqlen_offset, 1)`,
+    /// a view whose storage offset is FROZEN at capture and never advances on replay
+    /// (the classic frozen-position bug -> garbage from ~token 2). They are excluded so
+    /// they fall back to the always-correct eager path. XLora / Phi3 / Starcoder2 / Qwen35
+    /// (mRoPE) are excluded for the same position-invariance reason or signature mismatch.
+    /// This is the single source of truth for decode-graph eligibility, shared by the
+    /// CUDA and ROCm graph paths (both capture the identical device-generic model forward).
+    fn model_supports_decode_graph(&self) -> bool {
+        // Multi-GPU device mapping freezes RoPE under capture: layers on a non-primary device do
+        // `positions.to_device()` -> a fresh per-forward tensor that `copy_rope_positions` never
+        // refreshes. Restrict capture to single-device so that frozen class is structurally
+        // impossible (multi-GPU decode falls back to the always-correct eager path).
+        self.mapper.get_unique_devices().len() <= 1
+            && matches!(self.model, Model::Qwen3(_) | Model::Qwen3MoE(_))
     }
 
     /// Runs the decode forward for the graph-eligible variants with the supplied
     /// (rebound) paged metadata. Mirrors the eager dispatch in `forward_inputs`
     /// exactly so the captured forward is identical to what the eager path runs.
-    fn run_rocm_decode_forward(
+    /// Device-agnostic: the captured kernels are the same for CUDA and ROCm.
+    fn run_decode_forward(
         &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
@@ -843,28 +891,217 @@ impl GGUFPipeline {
         paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor, hanzo_ml::Error> {
         match self.model {
-            Model::Llama(ref model) => {
-                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
-            }
-            Model::Phi2(ref model) => {
-                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
-            }
-            Model::Qwen(ref model) => {
-                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
-            }
             Model::Qwen3(ref model) => {
                 model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
             }
             Model::Qwen3MoE(ref model) => {
                 model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
             }
-            Model::Qwen35(ref model) => {
-                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
-            }
-            _ => hanzo_ml::bail!("ROCm decode graph: unsupported model variant"),
+            _ => hanzo_ml::bail!("decode graph: unsupported model variant"),
         }
     }
+}
 
+#[cfg(feature = "cuda")]
+impl GGUFPipeline {
+    /// Attempts to satisfy a single decode step via a captured CUDA graph. Returns
+    /// `Ok(None)` when the graph path does not apply (caller runs eager). The GGUF
+    /// analog of `NormalPipeline::try_cuda_decode_graph_forward`, structured like the
+    /// ROCm path below: on a capture failure it disables the path and returns the
+    /// already-correct warmup logits instead of propagating (no lost/recomputed token).
+    fn try_cuda_decode_graph_forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        kv_cache: &[(Tensor, Tensor)],
+        metadata: &PagedAttentionInputMetadata,
+    ) -> Result<Option<Tensor>, hanzo_ml::Error> {
+        if !cuda_decode_graphs_enabled() || !self.model_supports_decode_graph() {
+            return Ok(None);
+        }
+        if self.draft_proposer.is_some() {
+            return Ok(None);
+        }
+        if metadata.is_first_prompt_chunk
+            || metadata.disable_cuda_graphs
+            || metadata.num_cached_tokens.is_some()
+        {
+            return Ok(None);
+        }
+        let (batch, q_len) = input_ids.dims2()?;
+        if q_len != 1
+            || seqlen_offsets.len() != batch
+            || context_lens.len() != batch
+            || !input_ids.device().is_cuda()
+        {
+            return Ok(None);
+        }
+        let Some(cache_config) = self.metadata.cache_config.as_ref() else {
+            return Ok(None);
+        };
+        let block_size = cache_config.block_size;
+        let key = CudaDecodeGraphKey::new(input_ids, metadata, block_size)?;
+
+        let mut state = self
+            .cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned");
+        if state.disabled {
+            return Ok(None);
+        }
+
+        // Cache hit: refresh the stable buffers in place and replay in one launch.
+        if let Some(pos) = state.entries.iter().position(|entry| entry.key == key) {
+            let mut entry = state.entries.remove(pos);
+            entry.input_ids.set(input_ids)?;
+            entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
+            entry.graph.launch()?;
+            let logits = entry.logits.clone();
+            state.entries.push(entry);
+            return Ok(Some(logits));
+        }
+
+        // Cache miss: run a real (eager) warmup forward first so the caller gets a
+        // correct first token, then capture a graph for subsequent tokens. Hold the
+        // HtoD cache guard across both warmup and capture so any host->device copies
+        // in the forward use stable staging the captured graph can replay against
+        // (mirrors `NormalPipeline::try_cuda_decode_graph_forward`).
+        let Device::Cuda(cuda_device) = input_ids.device() else {
+            return Ok(None);
+        };
+        let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+
+        let warmup_logits = self.run_decode_forward(
+            input_ids,
+            seqlen_offsets,
+            context_lens.to_vec(),
+            Some((kv_cache.to_vec(), metadata)),
+        )?;
+        input_ids.device().synchronize()?;
+
+        match self.capture_cuda_decode_graph(
+            key,
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            kv_cache,
+            metadata,
+            block_size,
+        ) {
+            Ok(entry) => {
+                if state.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
+                    state.entries.remove(0);
+                }
+                state.entries.push(entry);
+            }
+            Err(err) => {
+                if !state.disabled {
+                    warn!("CUDA decode graph capture failed; falling back to eager decode: {err}");
+                }
+                state.disabled = true;
+                state.entries.clear();
+            }
+        }
+        Ok(Some(warmup_logits))
+    }
+
+    /// Captures the decode forward into a CUDA graph against stable metadata buffers.
+    /// Mirrors `NormalPipeline::capture_cuda_decode_graph` but dispatches the GGUF
+    /// `run_decode_forward` (no position_ids/flash_meta) instead of the safetensors
+    /// `ModelForwardContext`. The CUDA backend has a graph-ordered allocator, so unlike
+    /// the ROCm path this needs no manual pool-reservation scope (the AUTO_FREE_ON_LAUNCH
+    /// instantiate flag handles per-launch temporaries).
+    #[allow(clippy::too_many_arguments)]
+    fn capture_cuda_decode_graph(
+        &self,
+        key: CudaDecodeGraphKey,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        kv_cache: &[(Tensor, Tensor)],
+        metadata: &PagedAttentionInputMetadata,
+        block_size: usize,
+    ) -> Result<CudaDecodeGraphEntry, hanzo_ml::Error> {
+        use hanzo_ml::cuda_backend::cudarc::driver::sys;
+
+        let input_ids_var = Var::from_tensor(input_ids)?;
+        let (metadata_buffers, rebound_metadata) =
+            CudaDecodeGraphMetadataBuffers::new(metadata, seqlen_offsets, block_size)?;
+        let graph_input_ids = input_ids_var.as_detached_tensor();
+        let Device::Cuda(cuda_device) = graph_input_ids.device() else {
+            hanzo_ml::bail!("CUDA decode graph expected a CUDA device");
+        };
+        let stream = cuda_device.cuda_stream();
+        let restore_event_tracking = disable_event_tracking_for_capture(&stream);
+        let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+
+        if let Err(err) =
+            stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+        {
+            restore_event_tracking_after_capture(&stream, restore_event_tracking);
+            return Err(
+                hanzo_ml::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
+            );
+        }
+
+        let logits = match self.run_decode_forward(
+            &graph_input_ids,
+            seqlen_offsets,
+            context_lens.to_vec(),
+            Some((kv_cache.to_vec(), &rebound_metadata)),
+        ) {
+            Ok(logits) => logits,
+            Err(err) => {
+                end_cuda_capture_discard(&stream);
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(err);
+            }
+        };
+
+        let graph = match CudaGraphHandle::end_capture(&stream) {
+            Ok(Some(graph)) => graph,
+            Ok(None) => {
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(hanzo_ml::Error::msg("CUDA graph capture returned no graph"));
+            }
+            Err(err) => {
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(err);
+            }
+        };
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+
+        graph.upload()?;
+
+        Ok(CudaDecodeGraphEntry {
+            key,
+            graph,
+            input_ids: input_ids_var,
+            metadata_buffers,
+            _metadata: rebound_metadata,
+            logits,
+        })
+    }
+
+    /// Disables the CUDA decode graph fast path after a capture/replay failure and
+    /// clears the cache so the pipeline falls back to eager. Mirrors
+    /// `NormalPipeline::disable_cuda_decode_graph`.
+    fn disable_cuda_decode_graph(&self, err: &hanzo_ml::Error) {
+        let mut state = self
+            .cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned");
+        if !state.disabled {
+            warn!("CUDA decode graphs disabled after capture/replay error: {err}");
+        }
+        state.disabled = true;
+        state.entries.clear();
+    }
+}
+
+#[cfg(feature = "rocm")]
+impl GGUFPipeline {
     /// Attempts to satisfy a single decode step via a captured HIP graph. Returns
     /// `Ok(None)` when the graph path does not apply (caller runs eager). Mirrors
     /// `NormalPipeline::try_cuda_decode_graph_forward`.
@@ -876,7 +1113,7 @@ impl GGUFPipeline {
         kv_cache: &[(Tensor, Tensor)],
         metadata: &PagedAttentionInputMetadata,
     ) -> Result<Option<Tensor>, hanzo_ml::Error> {
-        if !rocm_decode_graphs_enabled() || !self.model_supports_rocm_decode_graph() {
+        if !rocm_decode_graphs_enabled() || !self.model_supports_decode_graph() {
             return Ok(None);
         }
         // Mirror the CUDA gate: only steady-state single-token decode with paged
@@ -941,7 +1178,7 @@ impl GGUFPipeline {
 
         // Cache miss: run a real (eager) warmup forward first so the caller gets a
         // correct first token, then capture a graph for subsequent tokens.
-        let warmup_logits = self.run_rocm_decode_forward(
+        let warmup_logits = self.run_decode_forward(
             input_ids,
             seqlen_offsets,
             context_lens.to_vec(),
@@ -1012,7 +1249,7 @@ impl GGUFPipeline {
         device.begin_graph_capture_scope();
 
         begin_rocm_capture(&device)?;
-        let logits = match self.run_rocm_decode_forward(
+        let logits = match self.run_decode_forward(
             &graph_input_ids,
             seqlen_offsets,
             context_lens.to_vec(),
@@ -1130,6 +1367,33 @@ impl Pipeline for GGUFPipeline {
                     }
                     Ok(None) => {}
                     Err(err) => self.disable_rocm_decode_graph(&err),
+                }
+            }
+        }
+        // CUDA decode graph fast path. Same contract as the ROCm block above: on a
+        // steady-state single-token decode with paged metadata present, replay (or
+        // capture) the graph instead of re-launching ~hundreds of kernels eagerly.
+        // On any capture/replay error, disable the path and fall through to eager so
+        // a stale-state replay can never silently corrupt tokens.
+        #[cfg(feature = "cuda")]
+        {
+            if let Some((ref kv_cache, meta)) = paged_attn_meta {
+                match self.try_cuda_decode_graph_forward(
+                    &input_ids,
+                    &seqlen_offsets,
+                    &context_lens,
+                    kv_cache,
+                    meta,
+                ) {
+                    Ok(Some(logits)) => {
+                        return if return_raw_logits {
+                            Ok(ForwardInputsResult::RawLogits { logits })
+                        } else {
+                            Ok(ForwardInputsResult::CausalGeneration { logits })
+                        };
+                    }
+                    Ok(None) => {}
+                    Err(err) => self.disable_cuda_decode_graph(&err),
                 }
             }
         }
