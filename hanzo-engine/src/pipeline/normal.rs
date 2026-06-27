@@ -103,6 +103,7 @@ pub struct NormalPipeline {
     config: String,
     imatrix: Option<PathBuf>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    draft_proposer: Option<crate::speculative::DraftModelProposer>,
 }
 
 #[cfg(feature = "cuda")]
@@ -1095,6 +1096,7 @@ impl Loader for NormalLoader {
             config,
             imatrix: self.config.imatrix.clone(),
             mapper: pipeline_mapper,
+            draft_proposer: None,
         })))
     }
 
@@ -1240,17 +1242,24 @@ impl MetadataMixin for NormalPipeline {
 
 impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
     fn has_speculative_proposer(&self) -> bool {
-        self.model.has_speculative_proposer()
+        self.draft_proposer.is_some() || self.model.has_speculative_proposer()
     }
 
     fn speculative_proposal_len(&self) -> Option<usize> {
-        self.model.speculative_proposal_len()
+        use crate::speculative::SpeculativeProposer;
+        match self.draft_proposer.as_ref() {
+            Some(proposer) => Some(proposer.proposal_len()),
+            None => self.model.speculative_proposal_len(),
+        }
     }
 
     fn speculative_target_hiddens(
         &self,
         rows: &[(usize, usize)],
     ) -> hanzo_ml::Result<Option<Tensor>> {
+        if self.draft_proposer.is_some() {
+            return Ok(None);
+        }
         self.model.speculative_target_hiddens(rows)
     }
 
@@ -1258,6 +1267,10 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
         &mut self,
         ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
     ) -> hanzo_ml::Result<Option<crate::speculative::SpeculativeProposalBatch>> {
+        use crate::speculative::SpeculativeProposer;
+        if let Some(proposer) = self.draft_proposer.as_mut() {
+            return Ok(Some(proposer.propose(ctx, None)?));
+        }
         self.model.speculative_propose(ctx)
     }
 
@@ -1692,17 +1705,47 @@ impl Pipeline for NormalPipeline {
         &mut self,
         config: crate::speculative::SpeculativeConfig,
     ) -> hanzo_ml::Result<()> {
-        if matches!(config, crate::speculative::SpeculativeConfig::Mtp(_))
-            && self.get_metadata().cache_engine.is_none()
+        if self.get_metadata().cache_engine.is_none()
+            && !matches!(config, crate::speculative::SpeculativeConfig::Off)
         {
             hanzo_ml::bail!(
-                "MTP speculative decoding currently requires PagedAttention for this pipeline."
+                "speculative decoding currently requires PagedAttention for this pipeline."
             );
+        }
+        if let crate::speculative::SpeculativeConfig::DraftModel { draft, gamma } = config {
+            {
+                let target_tok = self.tokenizer().ok_or_else(|| {
+                    hanzo_ml::Error::msg("target pipeline has no tokenizer for speculative decoding")
+                })?;
+                let draft_guard = draft.try_lock().map_err(|_| {
+                    hanzo_ml::Error::msg("draft pipeline is not exclusively owned")
+                })?;
+                let draft_tok = draft_guard.tokenizer().ok_or_else(|| {
+                    hanzo_ml::Error::msg("draft pipeline has no tokenizer for speculative decoding")
+                })?;
+                if target_tok.get_vocab(true) != draft_tok.get_vocab(true) {
+                    hanzo_ml::bail!(
+                        "target and draft tokenizer vocabularies differ; classic speculative decoding requires identical tokenizers."
+                    );
+                }
+            }
+            let proposer = crate::speculative::DraftModelProposer::new(draft, gamma)?;
+            let info = crate::speculative::SpeculativeAttachInfo::draft_model(gamma);
+            crate::speculative::logging::log_attach(&info);
+            self.draft_proposer = Some(proposer);
+            return Ok(());
         }
         if let Some(info) = self.model.attach_speculative(config)? {
             self.model.log_speculative_attach(&info);
         }
         Ok(())
+    }
+
+    fn retain_speculative_seqs(&mut self, live: &[usize]) {
+        use crate::speculative::SpeculativeProposer;
+        if let Some(proposer) = self.draft_proposer.as_mut() {
+            proposer.retain_seqs(live);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1715,7 +1758,8 @@ impl Pipeline for NormalPipeline {
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         metadata: Option<crate::pipeline::text_models_inputs_processor::PagedAttentionMeta>,
     ) -> hanzo_ml::Result<bool> {
-        if !self.model.has_speculative_proposer() {
+        use crate::speculative::driver::SpeculativePipelineExt;
+        if !self.has_speculative_proposer() {
             crate::speculative::driver::clear_staged_speculative_tokens(seqs);
             return Ok(false);
         }
