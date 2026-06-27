@@ -373,13 +373,20 @@ mod audio_tower_tests {
     use std::sync::Arc;
 
     fn read_f32_le(p: &str) -> Vec<f32> {
-        std::fs::read(p).unwrap().chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+        std::fs::read(p)
+            .unwrap()
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect()
     }
     fn cosine(a: &[f32], b: &[f32]) -> f32 {
         let (mut d, mut na, mut nb) = (0f64, 0f64, 0f64);
-        for (x, y) in a.iter().zip(b) { d += (*x as f64)*(*y as f64); na += (*x as f64).powi(2); nb += (*y as f64).powi(2); }
-        (d / (na.sqrt()*nb.sqrt())) as f32
+        for (x, y) in a.iter().zip(b) {
+            d += (*x as f64) * (*y as f64);
+            na += (*x as f64).powi(2);
+            nb += (*y as f64).powi(2);
+        }
+        (d / (na.sqrt() * nb.sqrt())) as f32
     }
 
     /// Run the FIXED mel through the real `thinker.audio_tower.*` weights and assert the embeddings
@@ -398,7 +405,8 @@ mod audio_tower_tests {
         }
         let device = Device::Cpu;
         let cfg: super::super::config::Qwen3OmniConfig =
-            serde_json::from_str(&std::fs::read_to_string(dirp.join("config.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(dirp.join("config.json")).unwrap())
+                .unwrap();
         let ac = &cfg.thinker_config.audio_config;
 
         let index_json: serde_json::Value =
@@ -409,10 +417,17 @@ mod audio_tower_tests {
         }
         let paths: Vec<PathBuf> = shards.iter().map(|s| dirp.join(s)).collect();
         let vb = from_mmaped_safetensors(
-            paths, Vec::new(), Some(DType::F32), &device, vec![None], true, None,
+            paths,
+            Vec::new(),
+            Some(DType::F32),
+            &device,
+            vec![None],
+            true,
+            None,
             |n: String| n.starts_with("thinker.audio_tower."),
             Arc::new(|_| DeviceForLoadTensor::Base),
-        ).unwrap();
+        )
+        .unwrap();
 
         let model = OmniAudioTower::new(ac, vb.pp("thinker").pp("audio_tower"), &device).unwrap();
 
@@ -423,9 +438,20 @@ mod audio_tower_tests {
         let mel = Tensor::from_vec(mel_v, (1, n_mels, t), &device).unwrap();
 
         let emb = model.forward(&mel).unwrap();
-        let got: Vec<f32> = emb.flatten_all().unwrap().to_dtype(DType::F32).unwrap().to_vec1().unwrap();
+        let got: Vec<f32> = emb
+            .flatten_all()
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec1()
+            .unwrap();
         let refv = read_f32_le(&format!("{fix}/audio_emb.f32"));
-        eprintln!("[audio_tower] got {} vals, ref {} vals, emb shape {:?}", got.len(), refv.len(), emb.dims());
+        eprintln!(
+            "[audio_tower] got {} vals, ref {} vals, emb shape {:?}",
+            got.len(),
+            refv.len(),
+            emb.dims()
+        );
         let n = got.len().min(refv.len());
         let cos = cosine(&got[..n], &refv[..n]);
         eprintln!("[audio_tower] emb cosine = {cos:.6}");

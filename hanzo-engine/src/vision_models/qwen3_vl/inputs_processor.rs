@@ -25,11 +25,18 @@ use tokenizers::Tokenizer;
 use super::Qwen3VLVisionSpecificArgs;
 
 // Input processor
-struct Qwen3VLImageProcessor {
+pub(crate) struct Qwen3VLImageProcessor {
     max_edge: Option<u32>,
 }
 
 impl Qwen3VLImageProcessor {
+    /// Construct the shared Qwen3-VL-family image patchifier. Sibling multimodal models (e.g.
+    /// Qwen3-Omni) reuse it via [`ImagePreProcessor::preprocess`] so the patch layout is computed in
+    /// exactly one place.
+    pub(crate) fn new(max_edge: Option<u32>) -> Self {
+        Self { max_edge }
+    }
+
     const DEFAULT_PATCH_SIZE: usize = 14;
     const DEFAULT_MERGE_SIZE: usize = 2;
     const DEFAULT_TEMPORAL_PATCH_SIZE: usize = 2;
