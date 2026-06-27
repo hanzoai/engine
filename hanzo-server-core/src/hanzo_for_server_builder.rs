@@ -143,6 +143,8 @@ pub mod defaults {
     pub const SEARCH_CALLBACK: Option<Arc<hanzo_engine::SearchCallback>> = None;
     pub const PAGED_CACHE_TYPE: PagedCacheType = PagedCacheType::Auto;
     pub const MTP_CONFIG: Option<hanzo_engine::MtpConfig> = None;
+    pub const DRAFT_MODEL: Option<hanzo_engine::ModelSelected> = None;
+    pub const GAMMA: usize = 4;
 }
 
 /// A builder for creating a hanzo instance with configured options for the hanzo server.
@@ -278,6 +280,12 @@ pub struct HanzoForServerBuilder {
     /// Optional MTP assistant configuration.
     mtp_config: Option<MtpConfig>,
 
+    /// Optional draft model for classic draft+target speculative decoding.
+    draft_model: Option<ModelSelected>,
+
+    /// Draft tokens proposed per target verification step.
+    gamma: usize,
+
     /// Disable EOS token stopping (generate until max_len regardless of EOS)
     disable_eos_stop: bool,
 
@@ -317,6 +325,8 @@ impl Default for HanzoForServerBuilder {
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
             mtp_config: defaults::MTP_CONFIG,
+            draft_model: defaults::DRAFT_MODEL,
+            gamma: defaults::GAMMA,
             disable_eos_stop: false,
             code_exec_config: None,
         }
@@ -609,19 +619,21 @@ impl HanzoForServerBuilder {
         self
     }
 
-    /// Classic draft+target speculative decode. The engine's `SpeculativeConfig` currently exposes
-    /// only the MTP draft-head path, so a standalone draft model is not yet wired; accept the args
-    /// for CLI/forward-compat and warn rather than silently changing behavior.
+    /// Attach a standalone draft model for classic draft+target speculative decoding.
+    pub fn with_draft_model(mut self, draft_model: ModelSelected, gamma: usize) -> Self {
+        self.draft_model = Some(draft_model);
+        self.gamma = gamma;
+        self
+    }
+
+    /// Attach a draft model for classic draft+target speculative decoding if one was requested.
     pub fn with_draft_model_optional(
-        self,
+        mut self,
         draft_model: Option<hanzo_engine::ModelSelected>,
         gamma: usize,
     ) -> Self {
-        if draft_model.is_some() {
-            tracing::warn!(
-                "--draft-model/--gamma (classic draft+target spec decode, gamma={gamma}) is not yet \
-                 wired into SpeculativeConfig (only MTP is supported); the draft model is ignored"
-            );
+        if let Some(draft_model) = draft_model {
+            self = self.with_draft_model(draft_model, gamma);
         }
         self
     }
@@ -787,7 +799,25 @@ impl HanzoForServerBuilder {
         )?;
         info!("Model loaded.");
 
-        if let Some(mtp_config) = self.mtp_config.clone() {
+        if let Some(draft_model) = self.draft_model.clone() {
+            let draft_loader = LoaderBuilder::new(draft_model).build()?;
+            let draft_pipeline = draft_loader.load_model_from_hf(
+                None,
+                token_source_for_config.clone(),
+                &dtype,
+                &device,
+                false,
+                mapper_for_config.clone(),
+                isq,
+                None,
+            )?;
+            pipeline.lock().await.attach_speculative(
+                hanzo_engine::SpeculativeConfig::DraftModel {
+                    draft: draft_pipeline,
+                    gamma: self.gamma,
+                },
+            )?;
+        } else if let Some(mtp_config) = self.mtp_config.clone() {
             pipeline
                 .lock()
                 .await
@@ -916,6 +946,7 @@ impl HanzoForServerBuilder {
         let mut loaded_model_ids = Vec::new();
         let mut registered_ids = HashSet::new();
 
+        let draft_mapper = self.draft_model.as_ref().map(|_| mapper.clone());
         let pipeline: LoadedPipeline = loader.load_model_from_hf(
             None,
             self.token_source.clone(),
@@ -926,7 +957,25 @@ impl HanzoForServerBuilder {
             isq,
             cache_config,
         )?;
-        if let Some(mtp_config) = self.mtp_config.clone() {
+        if let Some(draft_model) = self.draft_model.clone() {
+            let draft_loader = LoaderBuilder::new(draft_model).build()?;
+            let draft_pipeline = draft_loader.load_model_from_hf(
+                None,
+                self.token_source.clone(),
+                &dtype,
+                &device,
+                false,
+                draft_mapper.expect("draft mapper cloned when draft model present"),
+                isq,
+                None,
+            )?;
+            pipeline.lock().await.attach_speculative(
+                hanzo_engine::SpeculativeConfig::DraftModel {
+                    draft: draft_pipeline,
+                    gamma: self.gamma,
+                },
+            )?;
+        } else if let Some(mtp_config) = self.mtp_config.clone() {
             pipeline
                 .lock()
                 .await
