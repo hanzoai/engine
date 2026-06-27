@@ -97,6 +97,7 @@ pub struct GGUFPipeline {
     metadata: Arc<GeneralMetadata>,
     generation_defaults: Option<crate::ModelGenerationDefaults>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    draft_proposer: Option<crate::speculative::DraftModelProposer>,
     /// Captured ROCm/HIP decode graphs, keyed by decode bucket. See
     /// [`crate::pipeline::rocm_graph`]. Mirrors `NormalPipeline::cuda_decode_graph`.
     #[cfg(feature = "rocm")]
@@ -671,6 +672,7 @@ impl Loader for GGUFLoader {
             }),
             generation_defaults,
             mapper: pipeline_mapper,
+            draft_proposer: None,
             #[cfg(feature = "rocm")]
             rocm_decode_graph: std::sync::Mutex::new(RocmDecodeGraphState::default()),
         })))
@@ -1188,6 +1190,87 @@ impl Pipeline for GGUFPipeline {
             Ok(ForwardInputsResult::CausalGeneration { logits })
         }
     }
+    fn attach_speculative(
+        &mut self,
+        config: crate::speculative::SpeculativeConfig,
+    ) -> Result<(), hanzo_ml::Error> {
+        match config {
+            crate::speculative::SpeculativeConfig::Off => Ok(()),
+            crate::speculative::SpeculativeConfig::DraftModel { draft, gamma } => {
+                if self.metadata.cache_engine.is_none() {
+                    hanzo_ml::bail!(
+                        "draft-model speculative decoding currently requires PagedAttention for this pipeline."
+                    );
+                }
+                {
+                    let target_tok = self.tokenizer().ok_or_else(|| {
+                        hanzo_ml::Error::msg("target pipeline has no tokenizer for speculative decoding")
+                    })?;
+                    let draft_guard = draft.try_lock().map_err(|_| {
+                        hanzo_ml::Error::msg("draft pipeline is not exclusively owned")
+                    })?;
+                    let draft_tok = draft_guard.tokenizer().ok_or_else(|| {
+                        hanzo_ml::Error::msg("draft pipeline has no tokenizer for speculative decoding")
+                    })?;
+                    if target_tok.get_vocab(true) != draft_tok.get_vocab(true) {
+                        hanzo_ml::bail!(
+                            "target and draft tokenizer vocabularies differ; classic speculative decoding requires identical tokenizers."
+                        );
+                    }
+                }
+                let proposer = crate::speculative::DraftModelProposer::new(draft, gamma)?;
+                let info = crate::speculative::SpeculativeAttachInfo::draft_model(gamma);
+                crate::speculative::logging::log_attach(&info);
+                self.draft_proposer = Some(proposer);
+                Ok(())
+            }
+            other => hanzo_ml::bail!(
+                "GGUF pipeline supports only draft-model speculative decoding, got {other:?}"
+            ),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn try_sample_speculative_causal_gen(
+        &mut self,
+        seqs: &mut [&mut Sequence],
+        logits: &[Tensor],
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        metadata: Option<crate::pipeline::text_models_inputs_processor::PagedAttentionMeta>,
+    ) -> Result<bool, hanzo_ml::Error> {
+        if self.draft_proposer.is_none() {
+            crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+            return Ok(false);
+        }
+
+        let general_metadata = self.get_metadata();
+        if let Some(cache_engine) = general_metadata.cache_engine.as_ref() {
+            let Some(metadata) = metadata else {
+                crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+                return Ok(false);
+            };
+            let cache = crate::speculative::cache::PagedSpeculativeCacheAccess::new(
+                &metadata,
+                cache_engine,
+            );
+            return crate::speculative::driver::try_sample_speculative_causal_gen(
+                self,
+                seqs,
+                logits,
+                prefix_cacher,
+                disable_eos_stop,
+                rng,
+                &cache,
+            )
+            .await;
+        }
+
+        crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+        Ok(false)
+    }
+
     async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],
@@ -1200,6 +1283,52 @@ impl Pipeline for GGUFPipeline {
     }
     fn category(&self) -> ModelCategory {
         ModelCategory::Text
+    }
+}
+
+impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
+    fn has_speculative_proposer(&self) -> bool {
+        self.draft_proposer.is_some()
+    }
+
+    fn speculative_proposal_len(&self) -> Option<usize> {
+        use crate::speculative::SpeculativeProposer;
+        self.draft_proposer.as_ref().map(|p| p.proposal_len())
+    }
+
+    fn speculative_target_hiddens(
+        &self,
+        _rows: &[(usize, usize)],
+    ) -> hanzo_ml::Result<Option<Tensor>> {
+        Ok(None)
+    }
+
+    fn speculative_propose(
+        &mut self,
+        ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
+    ) -> hanzo_ml::Result<Option<crate::speculative::SpeculativeProposalBatch>> {
+        use crate::speculative::SpeculativeProposer;
+        match self.draft_proposer.as_mut() {
+            Some(proposer) => Ok(Some(proposer.propose(ctx, None)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn build_speculative_verify_inputs(
+        &self,
+        input_meta: crate::pipeline::text_models_inputs_processor::InputMetadata,
+    ) -> hanzo_ml::Result<Box<dyn Any>> {
+        Ok(Box::new(ModelInputs {
+            input_ids: input_meta.input,
+            input_ids_full: None,
+            seqlen_offsets: input_meta.positions,
+            seqlen_offsets_full: None,
+            context_lens: input_meta.context_lens,
+            position_ids: input_meta.position_ids,
+            paged_attn_meta: input_meta.paged_attn_meta,
+            flash_meta: input_meta.flash_meta,
+            flash_meta_full: None,
+        }))
     }
 }
 

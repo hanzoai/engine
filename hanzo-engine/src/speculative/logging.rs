@@ -1,6 +1,7 @@
 #[derive(Clone, Debug)]
 pub enum SpeculativeAttachKind {
     Mtp { assistant: String, n_predict: usize },
+    DraftModel { gamma: usize },
 }
 
 #[derive(Clone, Debug)]
@@ -17,6 +18,12 @@ impl SpeculativeAttachInfo {
             },
         }
     }
+
+    pub fn draft_model(gamma: usize) -> Self {
+        Self {
+            kind: SpeculativeAttachKind::DraftModel { gamma },
+        }
+    }
 }
 
 pub fn log_attach(info: &SpeculativeAttachInfo) {
@@ -26,6 +33,9 @@ pub fn log_attach(info: &SpeculativeAttachInfo) {
             n_predict,
         } => tracing::info!(
             "Speculative decoding enabled: MTP assistant `{assistant}` with n_predict={n_predict}"
+        ),
+        SpeculativeAttachKind::DraftModel { gamma } => tracing::info!(
+            "Speculative decoding enabled: classic draft+target with gamma={gamma}"
         ),
     }
 }

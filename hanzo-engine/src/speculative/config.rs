@@ -14,10 +14,25 @@ use crate::{
     GLOBAL_HF_CACHE,
 };
 
-#[derive(Clone, Debug)]
+use super::draft::DraftPipeline;
+
+#[derive(Clone)]
 pub enum SpeculativeConfig {
     Off,
     Mtp(MtpConfig),
+    DraftModel { draft: DraftPipeline, gamma: usize },
+}
+
+impl std::fmt::Debug for SpeculativeConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Off => f.write_str("Off"),
+            Self::Mtp(config) => f.debug_tuple("Mtp").field(config).finish(),
+            Self::DraftModel { gamma, .. } => {
+                f.debug_struct("DraftModel").field("gamma", gamma).finish()
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
