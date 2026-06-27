@@ -82,6 +82,12 @@ pub struct Qwen3OmniModel {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     dtype: DType,
     max_seq_len: usize,
+    /// mRoPE position-axis carry across decode steps after a vision prefill: the next-token position
+    /// is `seqlen_offset + mrope_delta` on all three axes. Vision compresses position space (an image
+    /// occupies `max(h,w)` positions but many more tokens), so the delta is typically negative. It is
+    /// `0` for the text/audio path — decode then stays on the validated 1D cached forward. Interior
+    /// mutability matches the `Arc<Mutex<NormalCache>>` already threaded through `forward(&self)`.
+    mrope_delta: std::sync::atomic::AtomicI64,
 }
 
 impl Qwen3OmniModel {
@@ -120,16 +126,13 @@ impl Qwen3OmniModel {
             vb.pp("thinker").pp("visual"),
             device,
         )?);
-        let merge = cfg.thinker_config.vision_config.spatial_merge_size;
         encoders.push(Box::new(vision::VisionModality::new(
             vision_tower.clone(),
             cfg.thinker_config.image_token_id,
-            merge,
         )));
         encoders.push(Box::new(vision::VisionModality::new(
             vision_tower,
             cfg.thinker_config.video_token_id,
-            merge,
         )));
 
         let talker = OmniTalker::new(&cfg.talker_config, vb.pp("talker"), device, comm)?;
@@ -180,6 +183,7 @@ impl Qwen3OmniModel {
             mapper,
             dtype: vb.dtype(),
             max_seq_len: tc.max_position_embeddings,
+            mrope_delta: std::sync::atomic::AtomicI64::new(0),
         })
     }
 
@@ -195,6 +199,11 @@ impl Qwen3OmniModel {
     /// Understand → think: embed `input_ids`, fuse every modality payload into its placeholder rows
     /// through the single [`fuse_modalities`] path, then run the Thinker decoder. Returns the text
     /// `logits` and the full Thinker hidden-state stream (the Talker reads `accept_hidden_layer`).
+    ///
+    /// Positions follow the modality: a vision payload (image/video) lays its placeholders on the 2-D
+    /// patch grid, so the decoder runs interleaved 3D mRoPE ([`omni_get_rope_index`] derives the
+    /// positions from the grid that travels with the payload); a text/audio-only request keeps the 1D
+    /// path (their three mRoPE axes are equal, so it is numerically exact).
     pub fn forward(
         &self,
         input_ids: &Tensor,
@@ -204,7 +213,30 @@ impl Qwen3OmniModel {
     ) -> Result<(Tensor, Vec<Tensor>)> {
         let embeds = self.thinker.embed_tokens(input_ids)?;
         let fused = fuse_modalities(&embeds, input_ids, &self.encoders, inputs, &self.device)?;
-        self.thinker.forward_embeds(&fused, seqlen_offsets, mask)
+
+        let (image_grid_thw, video_grid_thw) = vision_grid_rows(inputs)?;
+        if image_grid_thw.is_none() && video_grid_thw.is_none() {
+            return self.thinker.forward_embeds(&fused, seqlen_offsets, mask);
+        }
+
+        let ids: Vec<u32> = input_ids
+            .flatten_all()?
+            .to_dtype(DType::U32)?
+            .to_vec1::<u32>()?;
+        let tc = &self.cfg.thinker_config;
+        let position_ids = omni_get_rope_index(
+            &ids,
+            image_grid_thw.as_deref(),
+            video_grid_thw.as_deref(),
+            tc.vision_config.spatial_merge_size,
+            tc.image_token_id,
+            tc.video_token_id,
+            tc.vision_start_token_id,
+            tc.position_id_per_seconds,
+            &self.device,
+        )?;
+        self.thinker
+            .forward_embeds_mrope(&fused, &position_ids, mask)
     }
 
     /// Speak: render the Thinker outputs into a 24 kHz waveform `[1, 1, samples]`. Resolves the
@@ -260,7 +292,8 @@ impl Qwen3OmniModel {
         for f in 0..max_frames {
             let seq = inputs_embeds.dim(1)?;
             let mask = causal_mask(seq, dtype, &self.device)?;
-            let (last_hidden_all, logits) = self.talker.forward(&inputs_embeds, &[0], Some(&mask))?;
+            let (last_hidden_all, logits) =
+                self.talker.forward(&inputs_embeds, &[0], Some(&mask))?;
 
             // Greedy codec-0 with HF `suppress_tokens`: [vocab-1024, vocab) except codec_eos -> -inf.
             let mut lv = logits
@@ -330,11 +363,13 @@ impl Qwen3OmniModel {
         let l = thinker_embed.dim(1)?; // sequence length minus the last (uncollected) token
 
         // tts_{bos,eos,pad} = text_projection(thinker.embed(special)). [1,1,Ht] each.
-        let tts = self.talker.project_text(&self.thinker.embed_tokens(&self.ids(&[
-            self.cfg.tts_bos_token_id,
-            self.cfg.tts_eos_token_id,
-            self.cfg.tts_pad_token_id,
-        ])?)?)?;
+        let tts = self
+            .talker
+            .project_text(&self.thinker.embed_tokens(&self.ids(&[
+                self.cfg.tts_bos_token_id,
+                self.cfg.tts_eos_token_id,
+                self.cfg.tts_pad_token_id,
+            ])?)?)?;
         let tts_bos = tts.i((.., 0..1, ..))?;
         let tts_eos = tts.i((.., 1..2, ..))?;
         let tts_pad = tts.i((.., 2..3, ..))?;
@@ -367,11 +402,18 @@ impl Qwen3OmniModel {
             } else if role == ASSISTANT_TOKEN_ID && i == bounds.len() - 2 {
                 // assistant_hidden = text_projection(thinker_embed[start:end]); end clamps to `l`.
                 let hi = end.min(l);
-                let ah = self.talker.project_text(&thinker_embed.i((.., start..hi, ..))?)?;
+                let ah = self
+                    .talker
+                    .project_text(&thinker_embed.i((.., start..hi, ..))?)?;
                 // assistant_text = [ah[:3], tts_pad*4, tts_bos, ah[3:4]]
                 let pad4 = tts_pad.broadcast_as((1, 4, ht))?.contiguous()?;
                 let assistant_text = Tensor::cat(
-                    &[&ah.i((.., 0..3, ..))?, &pad4, &tts_bos, &ah.i((.., 3..4, ..))?],
+                    &[
+                        &ah.i((.., 0..3, ..))?,
+                        &pad4,
+                        &tts_bos,
+                        &ah.i((.., 3..4, ..))?,
+                    ],
                     1,
                 )?;
                 // assistant_codec = [zeros(3), talker.embed([nothink, think_bos, think_eos, spk, pad, bos])]
@@ -500,6 +542,65 @@ fn grid_rows(grid: Option<&Tensor>) -> Result<Option<Vec<[u32; 3]>>> {
     Ok(Some(rows))
 }
 
+/// Collect the `(image, video)` patch-grid rows carried by the vision payloads, in placeholder order,
+/// for [`omni_get_rope_index`]. The grid travels with each [`ModalityInput::Image`] /
+/// [`ModalityInput::Video`], so the model-level `forward` derives the mRoPE grids straight from the
+/// payloads (the serving path reads the equivalent pre-stacked grids off [`OmniSpecificArgs`]).
+#[allow(clippy::type_complexity)]
+fn vision_grid_rows(
+    inputs: &[(u32, ModalityInput)],
+) -> Result<(Option<Vec<[u32; 3]>>, Option<Vec<[u32; 3]>>)> {
+    let mut images: Vec<[u32; 3]> = Vec::new();
+    let mut videos: Vec<[u32; 3]> = Vec::new();
+    for (_token, input) in inputs {
+        match input {
+            ModalityInput::Image { grid_thw, .. } => {
+                images.extend(grid_rows(Some(grid_thw))?.unwrap_or_default());
+            }
+            ModalityInput::Video { grid_thw, .. } => {
+                videos.extend(grid_rows(Some(grid_thw))?.unwrap_or_default());
+            }
+            ModalityInput::Audio(_) => {}
+        }
+    }
+    Ok((
+        (!images.is_empty()).then_some(images),
+        (!videos.is_empty()).then_some(videos),
+    ))
+}
+
+/// The mRoPE decode carry from a prefill: `max(position) + 1 - seq`. Vision compresses position space,
+/// so for an image prefill this is negative; for text/audio (positions == `arange`) it is `0`.
+fn mrope_delta_of(position_ids: &Tensor, seq: usize) -> Result<i64> {
+    let max_pos = position_ids
+        .flatten_all()?
+        .to_vec1::<i64>()?
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+    Ok(max_pos + 1 - seq as i64)
+}
+
+/// Decode-step mRoPE positions `[3, batch, t]`: each token's position on all three axes is
+/// `seqlen_offset + delta + within_chunk_index`, continuing the running position recorded at prefill.
+fn decode_mrope_positions(
+    t: usize,
+    seqlen_offsets: &[usize],
+    delta: i64,
+    device: &Device,
+) -> Result<Tensor> {
+    let batch = seqlen_offsets.len();
+    let mut flat = Vec::with_capacity(3 * batch * t);
+    for _axis in 0..3 {
+        for &offset in seqlen_offsets {
+            for j in 0..t {
+                flat.push(offset as i64 + delta + j as i64);
+            }
+        }
+    }
+    Tensor::from_vec(flat, (3, batch, t), device)
+}
+
 impl MultimodalModel for Qwen3OmniModel {
     fn forward(
         &self,
@@ -513,11 +614,19 @@ impl MultimodalModel for Qwen3OmniModel {
         // raw mel/pixel/frame features are encoded and scattered into the placeholder embedding rows
         // by [`fuse_modalities`] (the same validated path the model-level `forward` uses), then mRoPE
         // positions drive the decoder. A text-only request (empty payloads, or no args) runs the
-        // exact validated text path.
+        // exact validated text path. Payloads are produced only during prefill; decode steps carry no
+        // payloads, so a vision prefill records its position delta ([`Self::mrope_delta`]) for the
+        // text-token decode that follows.
+        use std::sync::atomic::Ordering;
+
         let args = model_specific_args.downcast::<OmniSpecificArgs>().ok();
-        let multimodal = args.as_ref().is_some_and(|a| !a.payloads.is_empty());
+        let has_payloads = args.as_ref().is_some_and(|a| !a.payloads.is_empty());
+        let has_vision = args
+            .as_ref()
+            .is_some_and(|a| a.image_grid_thw.is_some() || a.video_grid_thw.is_some());
 
         let seqlen_offsets = ctx.seqlen_offsets();
+        let is_prefill = seqlen_offsets.iter().all(|&o| o == 0);
         // `force_custom` keeps a real additive mask (rather than a flash-causal marker) so the
         // Thinker's `naive_sdpa` masks correctly; `None` is returned for single-token decode.
         let mask = CausalMasker.make_causal_mask(
@@ -532,31 +641,56 @@ impl MultimodalModel for Qwen3OmniModel {
         let embeds = self.thinker.embed_tokens(input_ids)?;
         let mut cache = self.cache.normal();
 
-        if !multimodal {
-            return self.thinker.forward_cached(
+        // ── Vision prefill: fuse + interleaved 3D mRoPE; record the position delta for decode. ──
+        if has_payloads && has_vision {
+            let args = args.unwrap();
+            let fused = fuse_modalities(
                 &embeds,
-                seqlen_offsets,
+                input_ids,
+                &self.encoders,
+                &args.payloads,
+                &self.device,
+            )?;
+            let ids: Vec<u32> = input_ids
+                .flatten_all()?
+                .to_dtype(DType::U32)?
+                .to_vec1::<u32>()?;
+            let tc = &self.cfg.thinker_config;
+            let position_ids = omni_get_rope_index(
+                &ids,
+                grid_rows(args.image_grid_thw.as_ref())?.as_deref(),
+                grid_rows(args.video_grid_thw.as_ref())?.as_deref(),
+                tc.vision_config.spatial_merge_size,
+                tc.image_token_id,
+                tc.video_token_id,
+                tc.vision_start_token_id,
+                tc.position_id_per_seconds,
+                &self.device,
+            )?;
+            self.mrope_delta
+                .store(mrope_delta_of(&position_ids, ids.len())?, Ordering::Relaxed);
+            return self.thinker.forward_cached_mrope(
+                &fused,
+                &position_ids,
                 mask.as_option_tensor(),
                 &mut cache.0,
                 ctx,
             );
         }
 
-        // Scatter each modality payload into its placeholder rows.
-        let args = args.unwrap();
-        let fused = fuse_modalities(
-            &embeds,
-            input_ids,
-            &self.encoders,
-            &args.payloads,
-            &self.device,
-        )?;
-
-        // Vision (image/video) requires genuine interleaved 3D mRoPE. Audio/text positions are equal
-        // on all three axes (HF expands them as `arange().expand(3, -1)`), so they collapse to the
-        // validated 1D cached path — which is numerically exact, not an approximation.
-        let has_vision = args.image_grid_thw.is_some() || args.video_grid_thw.is_some();
-        if !has_vision {
+        // ── Audio/text prefill carrying payloads (no vision): fuse, reset the carry, 1D cached. ──
+        // Audio/text positions are equal on all three mRoPE axes (HF expands them as
+        // `arange().expand(3, -1)`), so the 1D cached path is numerically exact, not an approximation.
+        if has_payloads {
+            let args = args.unwrap();
+            let fused = fuse_modalities(
+                &embeds,
+                input_ids,
+                &self.encoders,
+                &args.payloads,
+                &self.device,
+            )?;
+            self.mrope_delta.store(0, Ordering::Relaxed);
             return self.thinker.forward_cached(
                 &fused,
                 seqlen_offsets,
@@ -566,21 +700,35 @@ impl MultimodalModel for Qwen3OmniModel {
             );
         }
 
-        let ids: Vec<u32> = input_ids.flatten_all()?.to_dtype(DType::U32)?.to_vec1::<u32>()?;
-        let tc = &self.cfg.thinker_config;
-        let position_ids = omni_get_rope_index(
-            &ids,
-            grid_rows(args.image_grid_thw.as_ref())?.as_deref(),
-            grid_rows(args.video_grid_thw.as_ref())?.as_deref(),
-            tc.vision_config.spatial_merge_size,
-            tc.image_token_id,
-            tc.video_token_id,
-            tc.vision_start_token_id,
-            tc.position_id_per_seconds,
-            &self.device,
-        )?;
+        // ── No payloads: a fresh prefill resets the carry; a decode step continues from it. ──
+        if is_prefill {
+            self.mrope_delta.store(0, Ordering::Relaxed);
+            return self.thinker.forward_cached(
+                &embeds,
+                seqlen_offsets,
+                mask.as_option_tensor(),
+                &mut cache.0,
+                ctx,
+            );
+        }
+
+        // Decode. With no carry (text/audio history) this is the validated 1D cached path. After a
+        // vision prefill the running position is `seqlen_offset + delta` on all three axes — the decode
+        // token is text, so the axes agree and mRoPE reproduces the correct continued position.
+        let delta = self.mrope_delta.load(Ordering::Relaxed);
+        if delta == 0 {
+            return self.thinker.forward_cached(
+                &embeds,
+                seqlen_offsets,
+                mask.as_option_tensor(),
+                &mut cache.0,
+                ctx,
+            );
+        }
+        let position_ids =
+            decode_mrope_positions(input_ids.dim(1)?, seqlen_offsets, delta, &self.device)?;
         self.thinker.forward_cached_mrope(
-            &fused,
+            &embeds,
             &position_ids,
             mask.as_option_tensor(),
             &mut cache.0,
@@ -802,7 +950,15 @@ mod mrope_tests {
         pps: usize,
     ) -> (Vec<i64>, Vec<i64>, Vec<i64>) {
         let t = omni_get_rope_index(
-            ids, img, vid, merge, image_tok, video_tok, vstart, pps, &Device::Cpu,
+            ids,
+            img,
+            vid,
+            merge,
+            image_tok,
+            video_tok,
+            vstart,
+            pps,
+            &Device::Cpu,
         )
         .unwrap();
         let v = t.to_vec3::<i64>().unwrap(); // [3, 1, seq]
@@ -836,7 +992,16 @@ mod mrope_tests {
     fn image_lays_out_grid() {
         let (vstart, vend, img_tok) = (151652u32, 151653u32, 151655u32);
         let ids = [10u32, vstart, img_tok, img_tok, img_tok, img_tok, vend, 11];
-        let (t, h, w) = pos(&ids, Some(&[[1, 4, 4]]), None, 2, img_tok, 151656, vstart, 13);
+        let (t, h, w) = pos(
+            &ids,
+            Some(&[[1, 4, 4]]),
+            None,
+            2,
+            img_tok,
+            151656,
+            vstart,
+            13,
+        );
         assert_eq!(t, vec![0, 1, 2, 2, 2, 2, 4, 5]);
         assert_eq!(h, vec![0, 1, 2, 2, 3, 3, 4, 5]);
         assert_eq!(w, vec![0, 1, 2, 3, 2, 3, 4, 5]);
@@ -926,8 +1091,9 @@ mod multimodal_tests {
             shard_set.insert(v.as_str().unwrap().to_string());
         }
         let paths: Vec<PathBuf> = shard_set.iter().map(|s| dirp.join(s)).collect();
-        let comm =
-            Arc::new(hanzo_quant::Comm::from_device(hanzo_quant::Id::new(), &device, 0, 1).unwrap());
+        let comm = Arc::new(
+            hanzo_quant::Comm::from_device(hanzo_quant::Id::new(), &device, 0, 1).unwrap(),
+        );
         // Materialize thinker (text+audio+visual), talker, code2wav — everything `new` constructs.
         let vb = from_mmaped_safetensors(
             paths,
@@ -995,9 +1161,14 @@ mod multimodal_tests {
         let cl = [(0usize, seq)];
         let pi = [0usize];
         let mut ctx = ModelForwardContext::new(&so, &cl, &pi, None, &flash);
-        let logits_b =
-            <Qwen3OmniModel as MultimodalModel>::forward(&model, &input_ids, None, Box::new(args), &mut ctx)
-                .unwrap();
+        let logits_b = <Qwen3OmniModel as MultimodalModel>::forward(
+            &model,
+            &input_ids,
+            None,
+            Box::new(args),
+            &mut ctx,
+        )
+        .unwrap();
 
         let (fa, fb) = (flat(&logits_a), flat(&logits_b));
         assert_eq!(fa.len(), fb.len(), "serving vs model-level logits shape");
@@ -1023,7 +1194,7 @@ mod multimodal_tests {
         let tids = Tensor::from_vec(text_ids.clone(), (1, tseq), &device).unwrap();
         let tmask = super::causal_mask(tseq, dtype, &device).unwrap();
         let tembeds = model.thinker.embed_tokens(&tids).unwrap();
-        let tpos = omni_get_rope_index(
+        let text_pos = omni_get_rope_index(
             &text_ids,
             None,
             None,
@@ -1049,7 +1220,7 @@ mod multimodal_tests {
             .unwrap();
         let l_mr = model
             .thinker
-            .forward_cached_mrope(&tembeds, &tpos, Some(&tmask), &mut g2.0, &tctx)
+            .forward_cached_mrope(&tembeds, &text_pos, Some(&tmask), &mut g2.0, &tctx)
             .unwrap();
         let cos_mr = cosine(&flat(&l_1d), &flat(&l_mr));
         eprintln!("[mm] mRoPE-collapse (3D arange == 1D) cosine = {cos_mr:.6}");
@@ -1058,6 +1229,179 @@ mod multimodal_tests {
             "3D mRoPE must collapse to 1D for text positions (cosine {cos_mr})"
         );
         eprintln!("[mm] PASS: fusion cosine={cos:.6}, mRoPE-collapse cosine={cos_mr:.6}");
+    }
+
+    /// The GATE for raw vision serving: the SERVING path (`MultimodalModel::forward` with an
+    /// [`OmniSpecificArgs`] image payload + grid) produces the SAME text logits as the model-level
+    /// `forward(input_ids, &[(image_token, Image{pixels, grid})], ..)` for a **non-square** image
+    /// grid. This proves the full input plumbing: the explicit `grid_thw` threads through
+    /// [`fuse_modalities`] into the tower, and BOTH paths derive identical interleaved 3D mRoPE
+    /// positions from that grid via [`omni_get_rope_index`] (model-level uses the cacheless
+    /// `forward_embeds_mrope`, serving uses the cached `forward_cached_mrope`). The vision tower itself
+    /// is already validated to cosine 1.0 in `omni_vision_matches_reference`; this isolates the
+    /// grid/fusion/mRoPE wiring. Env-gated on `ZEN_OMNI_DIR` so weightless CI skips cleanly.
+    #[test]
+    fn omni_vision_serving_fuses() {
+        let dir = std::env::var("ZEN_OMNI_DIR")
+            .unwrap_or_else(|_| "/home/z/work/zen/hf/zen-omni-30b-instruct".to_string());
+        let dirp = PathBuf::from(&dir);
+        let index = dirp.join("model.safetensors.index.json");
+        if !index.is_file() {
+            eprintln!("[vis-serve] zen-omni weights absent ({index:?}); skipping");
+            return;
+        }
+
+        let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
+        let dtype = if device.is_cuda() {
+            DType::BF16
+        } else {
+            DType::F16
+        };
+        eprintln!("[vis-serve] device={device:?} dtype={dtype:?}");
+
+        let cfg: Qwen3OmniConfig =
+            serde_json::from_str(&std::fs::read_to_string(dirp.join("config.json")).unwrap())
+                .unwrap();
+
+        let index_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&index).unwrap()).unwrap();
+        let mut shard_set = std::collections::BTreeSet::new();
+        for v in index_json["weight_map"].as_object().unwrap().values() {
+            shard_set.insert(v.as_str().unwrap().to_string());
+        }
+        let paths: Vec<PathBuf> = shard_set.iter().map(|s| dirp.join(s)).collect();
+        let comm = Arc::new(
+            hanzo_quant::Comm::from_device(hanzo_quant::Id::new(), &device, 0, 1).unwrap(),
+        );
+        let vb = from_mmaped_safetensors(
+            paths,
+            Vec::new(),
+            Some(dtype),
+            &device,
+            vec![None],
+            true,
+            None,
+            |name: String| {
+                name.starts_with("thinker.model.")
+                    || name.starts_with("thinker.lm_head")
+                    || name.starts_with("thinker.audio_tower.")
+                    || name.starts_with("thinker.visual.")
+                    || name.starts_with("talker.")
+                    || name.starts_with("code2wav.")
+            },
+            Arc::new(|_| DeviceForLoadTensor::Base),
+        )
+        .unwrap();
+        let model = Qwen3OmniModel::new(&cfg, vb, &device, &comm).unwrap();
+
+        let tc = &cfg.thinker_config;
+        let vc = &tc.vision_config;
+        let image_token = tc.image_token_id;
+
+        // NON-SQUARE grid [[1, 12, 16]] -> 192 patches -> 12*16/merge^2 = 48 merged Thinker tokens.
+        // Deterministic pixels [192, in_chans*temporal*patch^2]; exact values are irrelevant — both
+        // paths see the same pixels, so identical fusion + positions is the property under test.
+        let (gt, gh, gw) = (1usize, 12usize, 16usize);
+        let merge = vc.spatial_merge_size;
+        let n_patches = gt * gh * gw;
+        let merged = n_patches / merge.pow(2);
+        let feat = vc.in_chans * vc.temporal_patch_size * vc.patch_size * vc.patch_size;
+        assert_eq!(gh % merge, 0);
+        assert_eq!(gw % merge, 0);
+        eprintln!(
+            "[vis-serve] grid [{gt},{gh},{gw}] -> {n_patches} patches x {feat} feat -> {merged} merged tokens"
+        );
+
+        let pix: Vec<f32> = (0..n_patches * feat)
+            .map(|i| ((i % 17) as f32) * 0.01 - 0.08)
+            .collect();
+        let pixels = Tensor::from_vec(pix, (n_patches, feat), &device)
+            .unwrap()
+            .to_dtype(dtype)
+            .unwrap();
+        let grid = Tensor::new(&[[gt as u32, gh as u32, gw as u32]], &device).unwrap();
+
+        // input_ids: <im_start> user \n <vision_start> <image*merged> <vision_end> \n "Hello"
+        let mut ids = vec![151644u32, 872, 198, tc.vision_start_token_id];
+        ids.extend(std::iter::repeat_n(image_token, merged));
+        ids.extend([tc.vision_end_token_id, 198u32, 9707]);
+        let seq = ids.len();
+        let input_ids = Tensor::from_vec(ids.clone(), (1, seq), &device).unwrap();
+        let mask = super::causal_mask(seq, dtype, &device).unwrap();
+
+        // (A) Model-level reference: fuse + cacheless 3D-mRoPE decoder (grid from the payload).
+        let (logits_a, _) = model
+            .forward(
+                &input_ids,
+                &[(
+                    image_token,
+                    ModalityInput::Image {
+                        pixels: pixels.clone(),
+                        grid_thw: grid.clone(),
+                    },
+                )],
+                &[0],
+                Some(&mask),
+            )
+            .unwrap();
+
+        // (B) Serving: OmniSpecificArgs -> fuse -> cache-aware 3D-mRoPE decoder (grid from args).
+        let args = OmniSpecificArgs {
+            payloads: vec![(
+                image_token,
+                ModalityInput::Image {
+                    pixels: pixels.clone(),
+                    grid_thw: grid.clone(),
+                },
+            )],
+            image_grid_thw: Some(grid.clone()),
+            video_grid_thw: None,
+            audio_seqlens: vec![],
+        };
+        let flash = FlashParams::empty(true);
+        let so = [0usize];
+        let cl = [(0usize, seq)];
+        let pi = [0usize];
+        let mut ctx = ModelForwardContext::new(&so, &cl, &pi, None, &flash);
+        let logits_b = <Qwen3OmniModel as MultimodalModel>::forward(
+            &model,
+            &input_ids,
+            None,
+            Box::new(args),
+            &mut ctx,
+        )
+        .unwrap();
+
+        let (fa, fb) = (flat(&logits_a), flat(&logits_b));
+        assert_eq!(fa.len(), fb.len(), "serving vs model-level logits shape");
+        let cos = cosine(&fa, &fb);
+        let a_last = flat(&logits_a.i((0, seq - 1, ..)).unwrap());
+        let b_last = flat(&logits_b.i((0, seq - 1, ..)).unwrap());
+        eprintln!(
+            "[vis-serve] VISION-FUSION serving-vs-model cosine = {cos:.6}; argmax serving={} model={}",
+            argmax(&b_last),
+            argmax(&a_last)
+        );
+
+        // Decode-position continuation: after this vision prefill the carry is max(pos)+1-seq (vision
+        // compresses position space, so it is negative); the next decode step must continue from it.
+        let delta = model.mrope_delta.load(std::sync::atomic::Ordering::Relaxed);
+        eprintln!("[vis-serve] recorded mRoPE decode delta = {delta} (seq={seq})");
+        assert!(
+            delta < 0,
+            "vision prefill must record a negative mRoPE delta, got {delta}"
+        );
+
+        assert!(
+            cos > 0.999,
+            "serving vision-fused logits cosine {cos} <= 0.999"
+        );
+        assert_eq!(
+            argmax(&a_last),
+            argmax(&b_last),
+            "serving and model-level greedy next-token disagree"
+        );
+        eprintln!("[vis-serve] PASS: vision-fusion cosine={cos:.6}, decode delta={delta}");
     }
 }
 
@@ -1203,8 +1547,9 @@ mod speech_tests {
         let paths: Vec<PathBuf> = shard_set.iter().map(|s| dirp.join(s)).collect();
         eprintln!("[speech] loading {} shards", paths.len());
 
-        let comm =
-            Arc::new(hanzo_quant::Comm::from_device(hanzo_quant::Id::new(), &device, 0, 1).unwrap());
+        let comm = Arc::new(
+            hanzo_quant::Comm::from_device(hanzo_quant::Id::new(), &device, 0, 1).unwrap(),
+        );
         let vb = from_mmaped_safetensors(
             paths,
             Vec::new(),
@@ -1258,7 +1603,10 @@ mod speech_tests {
         let prefix: Vec<u32> = sequences[..l].to_vec();
         let input_ids = Tensor::from_vec(prefix, (1, l), &device).unwrap();
         let mask = super::causal_mask(l, dtype, &device).unwrap();
-        let (_logits, hs) = model.thinker.forward(&input_ids, &[0], Some(&mask)).unwrap();
+        let (_logits, hs) = model
+            .thinker
+            .forward(&input_ids, &[0], Some(&mask))
+            .unwrap();
         let accept = cfg.talker_config.accept_hidden_layer;
         let thinker_hidden = &hs[accept];
         let thinker_embed = &hs[0];
@@ -1317,17 +1665,32 @@ mod speech_tests {
                 if got.len() == refv.len() {
                     eprintln!("[speech] {name} cosine = {:.6}", cosine(&got, &refv));
                 } else {
-                    eprintln!("[speech] {name} LEN MISMATCH got {} ref {}", got.len(), refv.len());
+                    eprintln!(
+                        "[speech] {name} LEN MISMATCH got {} ref {}",
+                        got.len(),
+                        refv.len()
+                    );
                 }
             }
         }
 
         // Explicit cosines for the bit-exact assertions below.
         let flat_f32 = |t: &Tensor| -> Vec<f32> {
-            t.to_dtype(DType::F32).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap()
+            t.to_dtype(DType::F32)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap()
         };
-        let embed_cos = cosine(&flat_f32(thinker_embed), &read_f32_le(&fx.join("talker_thinker_embed.f32")));
-        let prefill_cos = cosine(&flat_f32(&prefill), &read_f32_le(&fx.join("talker_prefill.f32")));
+        let embed_cos = cosine(
+            &flat_f32(thinker_embed),
+            &read_f32_le(&fx.join("talker_thinker_embed.f32")),
+        );
+        let prefill_cos = cosine(
+            &flat_f32(&prefill),
+            &read_f32_le(&fx.join("talker_prefill.f32")),
+        );
 
         let refc: Vec<i64> = read_i64_le(&codes_path);
         let hf = |g: usize, t: usize| refc[g * t_hf + t] as u32;
@@ -1420,10 +1783,14 @@ mod speech_tests {
 
             // (b) Code predictor on HF's EXACT past_hidden + HF code0 — isolates the MTP head from
             //     talker-hidden precision. A faithful head reproduces HF groups bit-for-bit.
-            let hf_h = Tensor::from_vec(past_hf[f * hcfg..(f + 1) * hcfg].to_vec(), (1, 1, hcfg), &device)
-                .unwrap()
-                .to_dtype(dtype)
-                .unwrap();
+            let hf_h = Tensor::from_vec(
+                past_hf[f * hcfg..(f + 1) * hcfg].to_vec(),
+                (1, 1, hcfg),
+                &device,
+            )
+            .unwrap()
+            .to_dtype(dtype)
+            .unwrap();
             let frame_iso = model.predict_groups(&hf_h, hf(0, f)).unwrap();
             let mut fm = 0usize;
             for g in 1..g_hf {
@@ -1458,7 +1825,10 @@ mod speech_tests {
             hidden_cos_min = hidden_cos_min.min(c);
 
             // Teacher-force the next input with the HF reference frame + trailing[f] / tts_pad.
-            let mut summed = model.talker.embed_codec(&model.ids(&[hf(0, f)]).unwrap()).unwrap();
+            let mut summed = model
+                .talker
+                .embed_codec(&model.ids(&[hf(0, f)]).unwrap())
+                .unwrap();
             for g in 1..g_hf {
                 summed = (summed
                     + model
@@ -1493,8 +1863,14 @@ mod speech_tests {
         //   3. fed HF's exact per-frame conditioning, the code predictor reproduces HF's residual
         //      groups bit-for-bit for the early frames; the per-group decay [27,26,...,9] across g1..g15
         //      is the within-frame autoregressive cascade of BF16 argmax flips, not a logic error.
-        assert!(embed_cos > 0.9999, "thinker_embed cosine {embed_cos:.6} <= 0.9999");
-        assert!(prefill_cos > 0.999, "prefill cosine {prefill_cos:.6} <= 0.999");
+        assert!(
+            embed_cos > 0.9999,
+            "thinker_embed cosine {embed_cos:.6} <= 0.9999"
+        );
+        assert!(
+            prefill_cos > 0.999,
+            "prefill cosine {prefill_cos:.6} <= 0.999"
+        );
         assert!(
             fr_prefix >= 1,
             "frame-0 free-run must be 16/16 bit-exact (exact_prefix={fr_prefix})"

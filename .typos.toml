@@ -47,6 +47,7 @@ extend-ignore-re = [
 
 [default.extend-words]
 "ammount" = "ammount"
+"arange" = "arange"
 "layrnorm" = "layrnorm"
 "ot" = "ot"
 "thr" = "thr"

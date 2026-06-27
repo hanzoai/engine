@@ -278,7 +278,11 @@ impl PatchMerger {
             spatial_merge_unit: cfg.spatial_merge_size.pow(2),
             merged_hidden_size,
             fc1: layers::linear(merged_hidden_size, merged_hidden_size, vb.pp("mlp").pp("0"))?,
-            fc2: layers::linear(merged_hidden_size, cfg.out_hidden_size, vb.pp("mlp").pp("2"))?,
+            fc2: layers::linear(
+                merged_hidden_size,
+                cfg.out_hidden_size,
+                vb.pp("mlp").pp("2"),
+            )?,
         })
     }
 
@@ -633,65 +637,23 @@ impl OmniVisionTower {
     }
 }
 
-/// Integer square root (floor) — used to recover a single, square image grid from a patch count.
-fn isqrt(n: usize) -> usize {
-    if n == 0 {
-        return 0;
-    }
-    let mut x = (n as f64).sqrt() as usize;
-    while x * x > n {
-        x -= 1;
-    }
-    while (x + 1) * (x + 1) <= n {
-        x += 1;
-    }
-    x
-}
-
 /// The Omni vision tower wrapped as a [`ModalityEncoder`]: pre-patchified pixels
-/// `[num_patches, in_chans*temporal_patch_size*patch_size^2]` -> Thinker-space `[n_merged, 2048]`
-/// token embeddings, scattered at the image (or video) placeholder token id. One tower instance is
-/// shared (via `Arc`) by the image and video encoders — they are the same `thinker.visual.*` weights.
+/// `[num_patches, in_chans*temporal_patch_size*patch_size^2]` + the explicit `[n, 3]` (t, h, w) patch
+/// grid -> Thinker-space `[n_merged, 2048]` token embeddings, scattered at the image (or video)
+/// placeholder token id. One tower instance is shared (via `Arc`) by the image and video encoders —
+/// they are the same `thinker.visual.*` weights.
 ///
-/// GRID HANDLING (documented simplification for follow-up): [`ModalityInput`] is just a `Tensor`, so
-/// it carries no `grid_thw`. `encode` therefore derives a single, square, single-frame grid
-/// `[1, side, side]` with `side = isqrt(num_patches)`, asserting `side*side == num_patches` and
-/// `side % spatial_merge_size == 0`. This is exact for one square image (the validated path). Video
-/// and non-square / multi-image inputs need the real grid; the clean fix is to extend
-/// [`ModalityInput`] (e.g. `Image { pixels, grid_thw }`) so the processor's grid flows through —
-/// `encode` then passes it straight to [`OmniVisionTower::forward`] unchanged.
+/// The grid travels with the payload ([`ModalityInput::Image`] / [`ModalityInput::Video`]), so
+/// `encode` hands it straight to [`OmniVisionTower::forward`]; non-square and multi-frame inputs are
+/// exact (no square-grid derivation).
 pub struct VisionModality {
     tower: std::sync::Arc<OmniVisionTower>,
     token: u32,
-    spatial_merge_size: usize,
 }
 
 impl VisionModality {
-    pub fn new(tower: std::sync::Arc<OmniVisionTower>, token: u32, spatial_merge_size: usize) -> Self {
-        Self {
-            tower,
-            token,
-            spatial_merge_size,
-        }
-    }
-
-    /// Derive the single-image square grid `[1, side, side]` from a `[num_patches, feat]` tensor.
-    fn grid_for(&self, pixels: &Tensor) -> Result<Tensor> {
-        let num_patches = pixels.dim(0)?;
-        let side = isqrt(num_patches);
-        if side * side != num_patches {
-            hanzo_ml::bail!(
-                "VisionModality: {num_patches} patches is not a perfect square; pass an explicit \
-                 grid_thw (extend ModalityInput) for non-square / video inputs"
-            );
-        }
-        if side % self.spatial_merge_size != 0 {
-            hanzo_ml::bail!(
-                "VisionModality: derived side {side} not divisible by spatial_merge_size {}",
-                self.spatial_merge_size
-            );
-        }
-        Tensor::new(&[[1u32, side as u32, side as u32]], pixels.device())
+    pub fn new(tower: std::sync::Arc<OmniVisionTower>, token: u32) -> Self {
+        Self { tower, token }
     }
 }
 
@@ -701,14 +663,14 @@ impl ModalityEncoder for VisionModality {
     }
 
     fn encode(&self, input: &ModalityInput, _device: &Device) -> Result<Tensor> {
-        let pixels = match input {
-            ModalityInput::Image(t) | ModalityInput::Video(t) => t,
+        let (pixels, grid_thw) = match input {
+            ModalityInput::Image { pixels, grid_thw }
+            | ModalityInput::Video { pixels, grid_thw } => (pixels, grid_thw),
             ModalityInput::Audio(_) => {
                 hanzo_ml::bail!("VisionModality encodes ModalityInput::Image / ::Video only")
             }
         };
-        let grid = self.grid_for(pixels)?;
-        self.tower.forward(pixels, &grid)
+        self.tower.forward(pixels, grid_thw)
     }
 }
 
@@ -758,13 +720,11 @@ mod vision_tests {
             .unwrap_or_else(|_| "/home/z/work/zen/hf/zen-omni-30b-instruct".to_string());
         let dirp = PathBuf::from(&dir);
         let index = dirp.join("model.safetensors.index.json");
-        let fx = PathBuf::from(
-            std::env::var("ZEN_OMNI_FIXTURES").unwrap_or_else(|_| {
-                "/tmp/claude-1000/-home-z-work-lux/\
+        let fx = PathBuf::from(std::env::var("ZEN_OMNI_FIXTURES").unwrap_or_else(|_| {
+            "/tmp/claude-1000/-home-z-work-lux/\
                  95715740-b8bb-4d96-8a9c-010a600ec9a6/scratchpad"
-                    .to_string()
-            }),
-        );
+                .to_string()
+        }));
         let hidden_path = fx.join("vis_hidden.f32");
         let grid_path = fx.join("vis_grid.i64");
         let emb_path = fx.join("vis_emb.f32");
@@ -806,8 +766,7 @@ mod vision_tests {
         )
         .unwrap();
 
-        let tower =
-            OmniVisionTower::new(vcfg, vb.pp("thinker").pp("visual"), &device).unwrap();
+        let tower = OmniVisionTower::new(vcfg, vb.pp("thinker").pp("visual"), &device).unwrap();
 
         // Fixed deterministic input: [256, 1536] patches, grid [[1,16,16]].
         let hidden_v = read_f32_le(&hidden_path);
@@ -830,7 +789,13 @@ mod vision_tests {
             .to_vec1::<f32>()
             .unwrap();
         let refv = read_f32_le(&emb_path);
-        assert_eq!(got.len(), refv.len(), "emb len rust {} ref {}", got.len(), refv.len());
+        assert_eq!(
+            got.len(),
+            refv.len(),
+            "emb len rust {} ref {}",
+            got.len(),
+            refv.len()
+        );
         let cos = cosine(&got, &refv);
         let max_abs = got
             .iter()
