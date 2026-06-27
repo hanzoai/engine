@@ -841,6 +841,10 @@ pub trait Pipeline:
         hanzo_ml::bail!("This pipeline does not support speculative decoding attachment.")
     }
 
+    /// Release per-sequence speculative-proposer state for sequences that are no longer running.
+    /// Called from the engine reap path each step; default no-op for pipelines without a proposer.
+    fn retain_speculative_seqs(&mut self, _live: &[usize]) {}
+
     #[allow(clippy::too_many_arguments)]
     async fn try_sample_speculative_causal_gen(
         &mut self,
