@@ -35,7 +35,7 @@ Server listening on http://0.0.0.0:1234
 
 The server binds `0.0.0.0` by default, making it reachable from any host on the network. To restrict it, pass `--host 127.0.0.1`. The port is configurable with `--port`.
 
-OpenAI-compatible clients use `http://localhost:1234/v1`. Anthropic-compatible clients use `http://localhost:1234`; see [Anthropic Messages API](/mistral.rs/guides/serve/anthropic-messages-api/).
+OpenAI-compatible clients use `http://localhost:1234/v1`. Anthropic-compatible clients use `http://localhost:1234`; see [Anthropic Messages API](/hanzo/guides/serve/anthropic-messages-api/).
 
 Leave the server running and open a second terminal.
 

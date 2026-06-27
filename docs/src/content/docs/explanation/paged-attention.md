@@ -42,7 +42,7 @@ Paged attention and flash attention are separate layers of the runtime.
 
 For non-paged attention, the `flash-attn` and `flash-attn-v3` Cargo features enable the usual flash attention kernels when the model and GPU support them.
 
-For CUDA paged attention, mistral.rs can use a FlashInfer-backed paged KV-cache layout and paged decode kernel directly. Eligible paged prefill chunks also use FlashInfer. When a request falls outside those constraints, the runtime falls back to the generic paged path, which gathers blocks and then dispatches to the available attention backend.
+For CUDA paged attention, Hanzo Engine can use a FlashInfer-backed paged KV-cache layout and paged decode kernel directly. Eligible paged prefill chunks also use FlashInfer. When a request falls outside those constraints, the runtime falls back to the generic paged path, which gathers blocks and then dispatches to the available attention backend.
 
 FlashInfer paged kernels are built as part of the `cuda` feature. They do not require the `flash-attn` Cargo feature.
 
@@ -56,7 +56,7 @@ Chunking is internal and does not change the visible prompt, logits, or generate
 
 CUDA decode graphs can replay supported single-token paged decode steps with lower CPU launch overhead. They are enabled by default for supported CUDA paged decode paths. Set `HANZO_CUDA_GRAPHS=0` to disable them.
 
-See [Use CUDA graphs](/mistral.rs/guides/perf/use-cuda-graphs/) for requirements and benchmarking guidance.
+See [Use CUDA graphs](/hanzo/guides/perf/use-cuda-graphs/) for requirements and benchmarking guidance.
 
 ## Default behavior
 
