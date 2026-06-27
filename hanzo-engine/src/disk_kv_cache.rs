@@ -113,15 +113,23 @@ impl KvcHeader {
     }
 }
 
-pub fn key_for(rendered_text: &str) -> String {
-    let mut h = Sha1::new();
-    h.update(rendered_text.as_bytes());
-    let digest = h.finalize();
+fn hex40(digest: &[u8]) -> String {
     let mut s = String::with_capacity(40);
-    for b in digest.iter() {
-        let _ = std::fmt::Write::write_fmt(&mut s, format_args!("{:02x}", b));
+    for b in digest {
+        let _ = std::fmt::Write::write_fmt(&mut s, format_args!("{b:02x}"));
     }
     s
+}
+
+/// Content-address a byte slice as a lowercase SHA-1 hex string — the disk-cache key.
+///
+/// This is the single key-derivation primitive. Callers hash whatever identifies the
+/// prefix: rendered-text bytes (cross-restart session resume) or little-endian token
+/// bytes (prefix-cache spill/restore, see `prefix_cacher`).
+pub fn key_for_bytes(bytes: &[u8]) -> String {
+    let mut h = Sha1::new();
+    h.update(bytes);
+    hex40(&h.finalize())
 }
 
 pub struct DiskKvCache {
@@ -282,7 +290,7 @@ mod tests {
 
     #[test]
     fn key_is_stable_sha1_hex() {
-        let k = key_for("hello world");
+        let k = key_for_bytes(b"hello world");
         assert_eq!(k.len(), 40);
         assert_eq!(k, "2aae6c35c94fcfb415dbe95f408b9ce91ee846ed");
     }
@@ -306,7 +314,7 @@ mod tests {
         let cache = DiskKvCache::new(tmp.path(), 64).unwrap();
         let text = b"<|user|>hi<|assistant|>";
         let payload = b"binary session payload bytes";
-        let key = key_for(std::str::from_utf8(text).unwrap());
+        let key = key_for_bytes(text);
         let header = KvcHeader::new(2, SaveReason::Cold, 17, 8192);
         cache.save(&key, header, text, payload).unwrap();
 
@@ -335,12 +343,72 @@ mod tests {
         let cache = DiskKvCache::new(tmp.path(), 1).unwrap();
         let big = vec![0u8; 256 * 1024];
         for i in 0..400 {
-            let key = key_for(&format!("prefix{i}"));
+            let key = key_for_bytes(format!("prefix{i}").as_bytes());
             let mut header = KvcHeader::new(2, SaveReason::Cold, i as u32, 8192);
             header.last_used_unix = 1_000_000 + i as u64;
             cache.save(&key, header, b"", &big).unwrap();
         }
         let removed = cache.evict_to_budget().unwrap();
         assert!(removed > 0, "expected eviction beyond budget");
+    }
+
+    #[test]
+    fn save_is_atomic_no_tmp_left_behind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = DiskKvCache::new(tmp.path(), 64).unwrap();
+        let key = key_for_bytes(b"atomic");
+        cache
+            .save(&key, KvcHeader::new(0, SaveReason::Cold, 1, 0), b"", b"payload")
+            .unwrap();
+        // Only the final `.kv` file should remain; the temp file is renamed in.
+        let mut kv = 0;
+        let mut partials = 0;
+        for entry in fs::read_dir(tmp.path()).unwrap() {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            if name.ends_with(FILE_SUFFIX) {
+                kv += 1;
+            }
+            if name.contains(".tmp") {
+                partials += 1;
+            }
+        }
+        assert_eq!(kv, 1);
+        assert_eq!(partials, 0);
+    }
+
+    #[test]
+    fn resave_overwrites_payload() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = DiskKvCache::new(tmp.path(), 64).unwrap();
+        let key = key_for_bytes(b"k");
+        cache
+            .save(&key, KvcHeader::new(0, SaveReason::Cold, 1, 0), b"", b"v1")
+            .unwrap();
+        cache
+            .save(
+                &key,
+                KvcHeader::new(0, SaveReason::Continued, 2, 0),
+                b"",
+                b"v2-longer",
+            )
+            .unwrap();
+        let hit = cache.load(&key).unwrap().unwrap();
+        assert_eq!(hit.payload, b"v2-longer");
+        assert_eq!(hit.header.token_count, 2);
+    }
+
+    #[test]
+    fn load_persists_hit_count_across_handles() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = DiskKvCache::new(tmp.path(), 64).unwrap();
+        let key = key_for_bytes(b"hot");
+        cache
+            .save(&key, KvcHeader::new(0, SaveReason::Cold, 1, 0), b"", b"p")
+            .unwrap();
+        assert_eq!(cache.load(&key).unwrap().unwrap().header.hit_count, 1);
+        assert_eq!(cache.load(&key).unwrap().unwrap().header.hit_count, 2);
+        // hit_count is written back to disk, so a fresh handle keeps counting.
+        let cache2 = DiskKvCache::new(tmp.path(), 64).unwrap();
+        assert_eq!(cache2.load(&key).unwrap().unwrap().header.hit_count, 3);
     }
 }
