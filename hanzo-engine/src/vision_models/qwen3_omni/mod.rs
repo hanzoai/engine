@@ -779,8 +779,17 @@ impl crate::speculative::SpeculativeTargetMixin for Qwen3OmniModel {}
 /// HF `config.assistant_token_id` (absent from [`Qwen3OmniConfig`]; stable checkpoint constant).
 const ASSISTANT_TOKEN_ID: u32 = 77091;
 
-/// HF `talker_config.speaker_id` (absent from [`Qwen3OmniConfig`]; the published checkpoint map).
-fn speaker_id(name: &str) -> Option<u32> {
+/// The codec speaker a request gets when it names none (HF default: Ethan).
+pub const DEFAULT_SPEAKER: &str = "ethan";
+
+/// The selectable Omni speakers (HF `talker_config.speaker_id` keys), for request validation / listing.
+pub const SPEAKERS: [&str; 3] = ["chelsie", "ethan", "aiden"];
+
+/// Resolve an Omni speaker name to its HF `talker_config.speaker_id` codec id, case-insensitively
+/// (absent from [`Qwen3OmniConfig`]; this is the published checkpoint map). `None` for an unknown name
+/// so a caller can reject the request or fall back to [`DEFAULT_SPEAKER`]. This is the single place a
+/// speaker selection threaded from a request resolves before [`Qwen3OmniModel::generate_speech`].
+pub fn speaker_id(name: &str) -> Option<u32> {
     match name.to_ascii_lowercase().as_str() {
         "chelsie" => Some(2301),
         "ethan" => Some(2302),
@@ -1007,6 +1016,32 @@ mod mrope_tests {
         assert_eq!(w, vec![0, 1, 2, 3, 2, 3, 4, 5]);
     }
 
+    /// A 2×4×4 video (merge 2 → 2 temporal × 2×2 spatial = 8 placeholders, pps=1) laid out on the
+    /// (t, h, w) grid: the temporal axis advances by `pps` per temporal patch while height/width index
+    /// the merged spatial grid — the video analogue of `image_lays_out_grid`, proving the processor's
+    /// `video_grid_thw` threads into the same interleaved-mRoPE layout the model consumes.
+    #[test]
+    fn video_lays_out_grid() {
+        let (vstart, vend, vid_tok) = (151652u32, 151653u32, 151656u32);
+        let ids = [
+            10u32, vstart, vid_tok, vid_tok, vid_tok, vid_tok, vid_tok, vid_tok, vid_tok, vid_tok,
+            vend, 11,
+        ];
+        let (t, h, w) = pos(
+            &ids,
+            None,
+            Some(&[[2, 4, 4]]),
+            2,
+            151655,
+            vid_tok,
+            vstart,
+            1,
+        );
+        assert_eq!(t, vec![0, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 5]);
+        assert_eq!(h, vec![0, 1, 2, 2, 3, 3, 2, 2, 3, 3, 4, 5]);
+        assert_eq!(w, vec![0, 1, 2, 3, 2, 3, 2, 3, 2, 3, 4, 5]);
+    }
+
     /// `omni_audio_feat_len` reproduces HF `_get_feat_extract_output_lengths` (and the audio tower's
     /// own conv-stem output length): 13 frames per full 100-frame block plus the downsampled tail.
     #[test]
@@ -1015,6 +1050,28 @@ mod mrope_tests {
         assert_eq!(omni_audio_feat_len(50), 7);
         assert_eq!(omni_audio_feat_len(150), 20);
         assert_eq!(omni_audio_feat_len(200), 26);
+    }
+}
+
+#[cfg(test)]
+mod speaker_tests {
+    use super::{speaker_id, DEFAULT_SPEAKER, SPEAKERS};
+
+    /// The published Omni speaker map a request selection resolves through: chelsie/ethan/aiden ->
+    /// 2301/2302/2303, case-insensitive, with the default resolving to Ethan and unknown names
+    /// rejected (so a caller can reject the request or fall back to [`DEFAULT_SPEAKER`]).
+    #[test]
+    fn omni_speaker_map() {
+        assert_eq!(speaker_id("chelsie"), Some(2301));
+        assert_eq!(speaker_id("ethan"), Some(2302));
+        assert_eq!(speaker_id("aiden"), Some(2303));
+        assert_eq!(speaker_id("Ethan"), Some(2302));
+        assert_eq!(speaker_id("AIDEN"), Some(2303));
+        assert_eq!(speaker_id("nobody"), None);
+        assert_eq!(speaker_id(DEFAULT_SPEAKER), Some(2302));
+        for s in SPEAKERS {
+            assert!(speaker_id(s).is_some(), "listed speaker {s} must resolve");
+        }
     }
 }
 
