@@ -282,6 +282,9 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::Phi3_5MoE) => Box::new(Phi3_5MoELoader),
             Some(NormalLoaderType::DeepSeekV2) => Box::new(DeepSeekV2Loader),
             Some(NormalLoaderType::DeepSeekV3) => Box::new(DeepSeekV3Loader),
+            // DeepSeek-V3.2 reuses the validated V3 dense MLA/MoE loader; the
+            // extra DSA-indexer/MTP tensors are simply never requested.
+            Some(NormalLoaderType::DeepSeekV32) => Box::new(DeepSeekV3Loader),
             Some(NormalLoaderType::Qwen3) => Box::new(Qwen3Loader),
             Some(NormalLoaderType::GLM4) => Box::new(GLM4Loader),
             Some(NormalLoaderType::GLM4MoeLite) => Box::new(GLM4MoeLiteLoader),
