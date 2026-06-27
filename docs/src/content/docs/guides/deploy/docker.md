@@ -8,9 +8,10 @@ sidebar:
 The hanzo repository ships several Dockerfiles for common deployment targets.
 
 - `Dockerfile`: default. Multi-stage build producing a Debian-based CPU-only image with the server binary.
-- `Dockerfile.cuda-all`: CUDA variant for NVIDIA GPUs with flash attention.
-- `Dockerfile.cuda-13.0-ubi9`: pinned to CUDA 13.0 on Red Hat UBI 9, for air-gapped and enterprise deployments.
+- `Dockerfile.cuda`: CUDA variant for NVIDIA GPUs with flash attention (multi-arch, Blackwell `sm_120`/`sm_121` included).
 - `Dockerfile.manylinux`: for producing the Python wheels published to PyPI.
+
+Apple Silicon (Metal) is not containerizable -- macOS gives containers no GPU access -- so the Metal build ships as a native Homebrew binary (`brew install hanzoai/hanzo/hanzo`), not an image. AMD (ROCm/HIP) and Vulkan build from source today: the AMD APU (`gfx1151`) path runs natively rather than in a container.
 
 ## Building an image
 
@@ -21,7 +22,7 @@ From a repository checkout:
 docker build -t hanzo:latest -f Dockerfile .
 
 # CUDA
-docker build -t hanzo:cuda -f Dockerfile.cuda-all .
+docker build -t hanzo:cuda -f Dockerfile.cuda .
 ```
 
 The CUDA build is slower the first time because flash-attention compilation takes a while. Subsequent builds use the Docker layer cache.
