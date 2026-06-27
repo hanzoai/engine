@@ -32,6 +32,7 @@ mod pipeline;
 use hanzo_ml::{Result, Tensor};
 use hanzo_quant::ShardedVarBuilder;
 
+pub use audio::Qwen3AsrAudioProcessor;
 pub use config::{AudioEncoderConfig, Qwen3AsrConfig, TextDecoderConfig};
 use decoder::Qwen3AsrTextDecoder;
 use encoder::Qwen3AsrAudioEncoder;
