@@ -1,7 +1,7 @@
 use crate::attention::AttentionMask;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use hanzo_ml::{Result, Tensor, D};
+use hanzo_ml::{Device, Result, Tensor, D};
 
 use crate::{
     get_mut_arcmutex,
@@ -1589,4 +1589,373 @@ fn try_kv_append_rotating_metal(
     kc.last_append_result = Some(k_dst.clone());
     vc.last_append_result = Some(v_dst.clone());
     Ok(Some((k_dst, v_dst)))
+}
+
+// ===========================================================================
+// Disk-spill serialization: KvCache <-> bytes
+//
+// A layer's live KV (`current_data`) is the only thing attention reads, so that
+// is what we persist. The seq dimension beyond `current_seq_len` is allocation
+// slack and is rebuilt as zeros on load (never read). Tensor bytes use the
+// safetensors format — the same encoding the model loader already uses — so any
+// dtype/shape round-trips exactly, including GPU tensors (encoding copies to
+// host). Scalar shape metadata is framed in a tiny self-describing header.
+//
+// Layout (little-endian):
+//   [u8 variant]            0 = Normal, 1 = Rotating, 2 = Shared
+//   Normal | Rotating:
+//     [u64 dim][u64 current_seq_len][u64 max_seq_len][u64 capacity_seq_len]
+//     [u8 has_data]
+//     has_data == 1: [u64 blob_len][safetensors blob with tensors "k" and "v"]
+//   Shared:
+//     [u64 owner]
+// ===========================================================================
+
+const KV_PAYLOAD_NORMAL: u8 = 0;
+const KV_PAYLOAD_ROTATING: u8 = 1;
+const KV_PAYLOAD_SHARED: u8 = 2;
+
+impl KvCache {
+    /// Serialize this layer's live KV plus shape metadata into a self-describing
+    /// byte buffer for the disk cache. GPU tensors are copied to host as part of
+    /// the safetensors encode. `Shared` layers carry only their owner index.
+    pub fn to_payload(&self) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        match self {
+            Self::Normal { k, v } => {
+                out.push(KV_PAYLOAD_NORMAL);
+                write_kv_tensor_payload(
+                    &mut out,
+                    k.dim,
+                    k.current_seq_len,
+                    k.max_seq_len,
+                    k.capacity_seq_len,
+                    k.current_data()?,
+                    v.current_data()?,
+                )?;
+            }
+            Self::Rotating { k, v } => {
+                out.push(KV_PAYLOAD_ROTATING);
+                write_kv_tensor_payload(
+                    &mut out,
+                    k.dim,
+                    k.current_seq_len,
+                    k.max_seq_len,
+                    k.capacity_seq_len,
+                    k.current_data()?,
+                    v.current_data()?,
+                )?;
+            }
+            Self::Shared { owner } => {
+                out.push(KV_PAYLOAD_SHARED);
+                out.extend_from_slice(&(*owner as u64).to_le_bytes());
+            }
+        }
+        Ok(out)
+    }
+
+    /// Reconstruct a layer from [`Self::to_payload`] bytes, materializing tensors
+    /// on `device`. This is a trust boundary: malformed/truncated input returns an
+    /// error rather than panicking.
+    pub fn from_payload(bytes: &[u8], device: &Device) -> Result<Self> {
+        let mut r = ByteReader::new(bytes);
+        match r.read_u8()? {
+            KV_PAYLOAD_NORMAL => {
+                let (dim, csl, msl, cap, data) = read_kv_tensor_payload(&mut r, device)?;
+                let (k, v) = match data {
+                    Some((kt, vt)) => (
+                        rebuild_single(kt, dim, csl, msl, cap)?,
+                        rebuild_single(vt, dim, csl, msl, cap)?,
+                    ),
+                    None => (
+                        SingleCache::new(dim, msl, cap.max(1)),
+                        SingleCache::new(dim, msl, cap.max(1)),
+                    ),
+                };
+                Ok(Self::Normal { k, v })
+            }
+            KV_PAYLOAD_ROTATING => {
+                let (dim, csl, msl, cap, data) = read_kv_tensor_payload(&mut r, device)?;
+                let (k, v) = match data {
+                    Some((kt, vt)) => (
+                        rebuild_rotating(kt, dim, csl, msl, cap)?,
+                        rebuild_rotating(vt, dim, csl, msl, cap)?,
+                    ),
+                    None => (
+                        RotatingCache::new(dim, msl, cap.max(1)),
+                        RotatingCache::new(dim, msl, cap.max(1)),
+                    ),
+                };
+                Ok(Self::Rotating { k, v })
+            }
+            KV_PAYLOAD_SHARED => {
+                let owner = usize_from_u64(r.read_u64()?, "owner")?;
+                Ok(Self::Shared { owner })
+            }
+            other => hanzo_ml::bail!("kv payload: unknown variant tag {other}"),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_kv_tensor_payload(
+    out: &mut Vec<u8>,
+    dim: usize,
+    current_seq_len: usize,
+    max_seq_len: usize,
+    capacity_seq_len: usize,
+    k: Option<Tensor>,
+    v: Option<Tensor>,
+) -> Result<()> {
+    out.extend_from_slice(&(dim as u64).to_le_bytes());
+    out.extend_from_slice(&(current_seq_len as u64).to_le_bytes());
+    out.extend_from_slice(&(max_seq_len as u64).to_le_bytes());
+    out.extend_from_slice(&(capacity_seq_len as u64).to_le_bytes());
+
+    match (current_seq_len > 0).then_some(()).and(k).zip(v) {
+        Some((k, v)) => {
+            out.push(1u8);
+            // narrow() views can be non-contiguous; safetensors needs a flat copy.
+            let k = k.contiguous()?;
+            let v = v.contiguous()?;
+            let blob = safetensors::serialize([("k".to_string(), &k), ("v".to_string(), &v)], None)
+                .map_err(|e| {
+                    hanzo_ml::Error::Msg(format!("kv payload: safetensors encode failed: {e}"))
+                })?;
+            out.extend_from_slice(&(blob.len() as u64).to_le_bytes());
+            out.extend_from_slice(&blob);
+        }
+        None => out.push(0u8),
+    }
+    Ok(())
+}
+
+type KvScalars = (usize, usize, usize, usize, Option<(Tensor, Tensor)>);
+
+fn read_kv_tensor_payload(r: &mut ByteReader<'_>, device: &Device) -> Result<KvScalars> {
+    let dim = usize_from_u64(r.read_u64()?, "dim")?;
+    let current_seq_len = usize_from_u64(r.read_u64()?, "current_seq_len")?;
+    let max_seq_len = usize_from_u64(r.read_u64()?, "max_seq_len")?;
+    let capacity_seq_len = usize_from_u64(r.read_u64()?, "capacity_seq_len")?;
+    let data = match r.read_u8()? {
+        0 => None,
+        1 => {
+            let blob_len = usize_from_u64(r.read_u64()?, "blob_len")?;
+            let blob = r.read_bytes(blob_len)?;
+            let mut map = hanzo_ml::safetensors::load_buffer(blob, device)?;
+            let k = map
+                .remove("k")
+                .ok_or_else(|| hanzo_ml::Error::Msg("kv payload: missing k tensor".into()))?;
+            let v = map
+                .remove("v")
+                .ok_or_else(|| hanzo_ml::Error::Msg("kv payload: missing v tensor".into()))?;
+            Some((k, v))
+        }
+        other => hanzo_ml::bail!("kv payload: bad has_data flag {other}"),
+    };
+    Ok((dim, current_seq_len, max_seq_len, capacity_seq_len, data))
+}
+
+fn rebuild_single(
+    data: Tensor,
+    dim: usize,
+    current_seq_len: usize,
+    max_seq_len: usize,
+    capacity_seq_len: usize,
+) -> Result<SingleCache> {
+    let stored = data.dim(dim)?;
+    if stored != current_seq_len {
+        hanzo_ml::bail!("kv payload: normal seq dim {stored} != current_seq_len {current_seq_len}");
+    }
+    let cap = capacity_seq_len.max(current_seq_len).max(1);
+    let mut shape = data.dims().to_vec();
+    shape[dim] = cap;
+    let all_data = Tensor::zeros(shape, data.dtype(), data.device())?;
+    all_data.slice_set(&data, dim, 0)?;
+    Ok(SingleCache {
+        all_data: Some(all_data),
+        dim,
+        current_seq_len,
+        max_seq_len,
+        capacity_seq_len: cap,
+    })
+}
+
+fn rebuild_rotating(
+    data: Tensor,
+    dim: usize,
+    current_seq_len: usize,
+    max_seq_len: usize,
+    capacity_seq_len: usize,
+) -> Result<RotatingCache> {
+    let retained_len = current_seq_len.min(max_seq_len);
+    let stored = data.dim(dim)?;
+    if stored != retained_len {
+        hanzo_ml::bail!("kv payload: rotating seq dim {stored} != retained_len {retained_len}");
+    }
+    // cap must hold the retained window and never exceed the sliding window.
+    let cap = capacity_seq_len.clamp(retained_len, max_seq_len).max(retained_len);
+    let mut shape = data.dims().to_vec();
+    shape[dim] = cap.max(1);
+    let all_data = Tensor::zeros(shape, data.dtype(), data.device())?;
+    if retained_len > 0 {
+        all_data.slice_set(&data, dim, 0)?;
+    }
+    Ok(RotatingCache {
+        all_data: Some(all_data),
+        dim,
+        current_seq_len,
+        max_seq_len,
+        capacity_seq_len: cap.max(1),
+        last_append_result: None,
+    })
+}
+
+fn usize_from_u64(v: u64, what: &str) -> Result<usize> {
+    usize::try_from(v)
+        .map_err(|_| hanzo_ml::Error::Msg(format!("kv payload: {what} exceeds usize")))
+}
+
+/// Minimal forward-only reader over a byte payload. Shared by [`KvCache::from_payload`]
+/// and the layer framing in `prefix_cacher`. Bounds-checks every read so a corrupt or
+/// truncated payload fails cleanly instead of panicking.
+pub(crate) struct ByteReader<'a> {
+    buf: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> ByteReader<'a> {
+    pub(crate) fn new(buf: &'a [u8]) -> Self {
+        Self { buf, pos: 0 }
+    }
+
+    pub(crate) fn read_bytes(&mut self, n: usize) -> Result<&'a [u8]> {
+        let end = self
+            .pos
+            .checked_add(n)
+            .ok_or_else(|| hanzo_ml::Error::Msg("kv payload: length overflow".into()))?;
+        if end > self.buf.len() {
+            hanzo_ml::bail!(
+                "kv payload: truncated (need {end} bytes, have {})",
+                self.buf.len()
+            );
+        }
+        let out = &self.buf[self.pos..end];
+        self.pos = end;
+        Ok(out)
+    }
+
+    pub(crate) fn read_u8(&mut self) -> Result<u8> {
+        Ok(self.read_bytes(1)?[0])
+    }
+
+    pub(crate) fn read_u64(&mut self) -> Result<u64> {
+        let bytes = self.read_bytes(8)?;
+        Ok(u64::from_le_bytes(
+            bytes.try_into().expect("read_bytes(8) yields 8 bytes"),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::*;
+
+    fn ramp(start: f32, len: usize) -> Tensor {
+        let mut vals = Vec::with_capacity(len);
+        let mut x = start;
+        for _ in 0..len {
+            vals.push(x);
+            x += 1.0;
+        }
+        Tensor::from_vec(vals, (1, 1, len, 1), &Device::Cpu).unwrap()
+    }
+
+    fn vec1(t: &Tensor) -> Vec<f32> {
+        t.flatten_all().unwrap().to_vec1::<f32>().unwrap()
+    }
+
+    fn normal_with(len: usize) -> KvCache {
+        let mut k = SingleCache::new(2, 4096, NormalCache::CACHE_GROW_SIZE);
+        let mut v = SingleCache::new(2, 4096, NormalCache::CACHE_GROW_SIZE);
+        k.append(&ramp(0.0, len)).unwrap();
+        v.append(&ramp(1000.0, len)).unwrap();
+        KvCache::Normal { k, v }
+    }
+
+    #[test]
+    fn normal_round_trips_values_and_shape() {
+        let cache = normal_with(20);
+        let bytes = cache.to_payload().unwrap();
+        let back = KvCache::from_payload(&bytes, &Device::Cpu).unwrap();
+
+        assert_eq!(cache.current_seq_len(), back.current_seq_len());
+        assert_eq!(vec1(&cache.k().unwrap().unwrap()), vec1(&back.k().unwrap().unwrap()));
+        assert_eq!(vec1(&cache.v().unwrap().unwrap()), vec1(&back.v().unwrap().unwrap()));
+        assert_eq!(
+            cache.k().unwrap().unwrap().dims(),
+            back.k().unwrap().unwrap().dims()
+        );
+        match (&cache, &back) {
+            (KvCache::Normal { k: a, .. }, KvCache::Normal { k: b, .. }) => {
+                assert_eq!(a.dim, b.dim);
+                assert_eq!(a.max_seq_len, b.max_seq_len);
+                assert_eq!(a.capacity_seq_len, b.capacity_seq_len);
+            }
+            _ => panic!("variant changed across round-trip"),
+        }
+    }
+
+    #[test]
+    fn rotating_round_trips_after_rollover_and_keeps_decoding() {
+        // window = 4, prefill 7 tokens => rolled over (current_seq_len 7 > window).
+        let mut k = RotatingCache::new(2, 4, 4);
+        let mut v = RotatingCache::new(2, 4, 4);
+        let _ = k.append(&ramp(0.0, 7)).unwrap();
+        let _ = v.append(&ramp(1000.0, 7)).unwrap();
+        let cache = KvCache::Rotating { k, v };
+
+        let bytes = cache.to_payload().unwrap();
+        let back = KvCache::from_payload(&bytes, &Device::Cpu).unwrap();
+
+        assert!(back.is_rotating());
+        assert_eq!(cache.current_seq_len(), back.current_seq_len());
+        // current_data is the retained window: [3, 4, 5, 6].
+        assert_eq!(vec1(&cache.k().unwrap().unwrap()), vec![3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(vec1(&cache.k().unwrap().unwrap()), vec1(&back.k().unwrap().unwrap()));
+        assert_eq!(vec1(&cache.v().unwrap().unwrap()), vec1(&back.v().unwrap().unwrap()));
+
+        // The restored cache continues decoding correctly (window slides on).
+        if let KvCache::Rotating { mut k, .. } = back {
+            let next = k.append(&ramp(7.0, 1)).unwrap();
+            assert_eq!(vec1(&next), vec![4.0, 5.0, 6.0, 7.0]);
+        }
+    }
+
+    #[test]
+    fn shared_round_trips() {
+        let bytes = KvCache::Shared { owner: 5 }.to_payload().unwrap();
+        let back = KvCache::from_payload(&bytes, &Device::Cpu).unwrap();
+        assert!(matches!(back, KvCache::Shared { owner: 5 }));
+    }
+
+    #[test]
+    fn empty_normal_round_trips() {
+        let cache = KvCache::new_normal(2, 4096, NormalCache::CACHE_GROW_SIZE);
+        let bytes = cache.to_payload().unwrap();
+        let back = KvCache::from_payload(&bytes, &Device::Cpu).unwrap();
+        assert_eq!(back.current_seq_len(), 0);
+        assert!(back.k().unwrap().is_none());
+    }
+
+    #[test]
+    fn truncated_payload_errors_not_panics() {
+        let bytes = normal_with(8).to_payload().unwrap();
+        assert!(KvCache::from_payload(&bytes[..bytes.len() / 2], &Device::Cpu).is_err());
+    }
+
+    #[test]
+    fn unknown_variant_errors() {
+        assert!(KvCache::from_payload(&[99u8], &Device::Cpu).is_err());
+    }
 }
