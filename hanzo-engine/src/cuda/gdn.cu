@@ -279,13 +279,18 @@ chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
   float *state_bh = state + bh * BK * v_dim;
   float *out_bh = output + bh * seq_len * v_dim;
 
-  // Dynamic shared memory layout
+  // Dynamic shared memory layout. The (i,j)-indexed decay factors and the q/k
+  // dot products are head-level (independent of v_idx), so they are computed once
+  // per block into shared memory instead of redundantly per V-column thread.
   extern __shared__ float smem[];
-  float *k_chunk = smem;                  // [BT * BK]
-  float *kk_dot = smem + BT * BK;         // [BT * BT]
-  float *gcum = smem + BT * BK + BT * BT; // [BT]
-  float *beta_s = gcum + BT;              // [BT]
-  float *q_buf = beta_s + BT;             // [BK]
+  float *k_chunk = smem;          // [BT * BK]
+  float *kk_dot = k_chunk + BT * BK; // [BT * BT], stores <k_i,k_j>*exp(gcum_i-gcum_j), j<i
+  float *gcum = kk_dot + BT * BT; // [BT]
+  float *beta_s = gcum + BT;      // [BT]
+  float *eg = beta_s + BT;        // [BT], exp(gcum_i)
+  float *egtail = eg + BT;        // [BT], exp(gcum_last - gcum_t)
+  float *qkrow = egtail + BT;     // [BT], <q_i,k_j>*exp(gcum_i-gcum_j) for the current row i
+  float *q_buf = qkrow + BT;      // [BK]
 
   // Load state column into registers
   float s[BK];
@@ -324,8 +329,15 @@ chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
       __syncthreads();
     }
 
-    // === Phase 2: Compute kk_dot[i][j] = dot(k[i], k[j]) for j < i ===
-    // Only lower-triangular entries needed (strictly lower)
+    // === Phase 1c: Per-timestep decay factors (one expf each, not per V-column) ===
+    if (tid < chunk_len) {
+      eg[tid] = expf(gcum[tid]);
+      egtail[tid] = expf(gcum[chunk_len - 1] - gcum[tid]);
+    }
+    __syncthreads();
+
+    // === Phase 2: kk_dot[i][j] = dot(k[i],k[j]) * exp(gcum[i]-gcum[j]) for j < i ===
+    // Decay folded in here so the triangular solve reads it directly (no per-column expf).
     for (int idx = tid; idx < chunk_len * chunk_len; idx += BV) {
       int i = idx / chunk_len;
       int j = idx % chunk_len;
@@ -334,60 +346,55 @@ chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
         for (int d = 0; d < BK; d++) {
           dot = __fmaf_rn(k_chunk[i * BK + d], k_chunk[j * BK + d], dot);
         }
-        kk_dot[i * BT + j] = dot;
+        kk_dot[i * BT + j] = dot * expf(gcum[i] - gcum[j]);
       }
     }
     __syncthreads();
 
     // === Phase 3: Forward substitution (per V-column, in registers) ===
-    // Computes corrected delta values via triangular solve
     for (int i = 0; i < chunk_len; i++) {
       float v_i = v_bh[(chunk_start + i) * v_dim + v_idx];
-      float decay_i = expf(gcum[i]);
+      float eg_i = eg[i];
       float beta_i = beta_s[i];
 
-      // Inter-chunk contribution: state @ k[i] with decay
       float kv_mem = 0.0f;
 #pragma unroll
       for (int d = 0; d < BK; d++) {
-        kv_mem = __fmaf_rn(s[d] * decay_i, k_chunk[i * BK + d], kv_mem);
+        kv_mem = __fmaf_rn(s[d] * eg_i, k_chunk[i * BK + d], kv_mem);
       }
 
       float rhs = beta_i * (v_i - kv_mem);
-
-      // Subtract lower-triangular contributions (intra-chunk)
       for (int j = 0; j < i; j++) {
-        float a_ij = beta_i * kk_dot[i * BT + j] * expf(gcum[i] - gcum[j]);
-        rhs -= a_ij * delta[j];
+        rhs -= beta_i * kk_dot[i * BT + j] * delta[j];
       }
       delta[i] = rhs;
     }
 
     // === Phase 4: Output computation (per V-column) ===
     for (int i = 0; i < chunk_len; i++) {
-      // Cooperatively load q[i] into shared
       for (int j = tid; j < BK; j += BV) {
         q_buf[j] = q_bh[(chunk_start + i) * BK + j];
       }
       __syncthreads();
 
-      float decay_i = expf(gcum[i]);
+      // Cooperative qk row: thread t owns column t = <q[i],k[t]>*exp(gcum[i]-gcum[t]).
+      if (tid <= i) {
+        float qk = 0.0f;
+        for (int d = 0; d < BK; d++) {
+          qk = __fmaf_rn(q_buf[d], k_chunk[tid * BK + d], qk);
+        }
+        qkrow[tid] = qk * expf(gcum[i] - gcum[tid]);
+      }
+      __syncthreads();
 
-      // Inter-chunk contribution: q[i] @ (state * decay)
+      float eg_i = eg[i];
       float o_val = 0.0f;
 #pragma unroll
       for (int d = 0; d < BK; d++) {
-        o_val = __fmaf_rn(q_buf[d], s[d] * decay_i, o_val);
+        o_val = __fmaf_rn(q_buf[d], s[d] * eg_i, o_val);
       }
-
-      // Intra-chunk contribution: sum_{j<=i} dot(q[i], k[j]) * delta[j] *
-      // exp(gcum[i] - gcum[j])
       for (int j = 0; j <= i; j++) {
-        float qk_dot = 0.0f;
-        for (int d = 0; d < BK; d++) {
-          qk_dot = __fmaf_rn(q_buf[d], k_chunk[j * BK + d], qk_dot);
-        }
-        o_val += qk_dot * delta[j] * expf(gcum[i] - gcum[j]);
+        o_val += qkrow[j] * delta[j];
       }
 
       out_bh[(chunk_start + i) * v_dim + v_idx] = o_val;
@@ -395,12 +402,12 @@ chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
     }
 
     // === Phase 5: State update for next chunk ===
-    float g_total = gcum[chunk_len - 1];
+    float eg_tot = eg[chunk_len - 1];
 #pragma unroll
     for (int d = 0; d < BK; d++) {
-      float s_new = s[d] * expf(g_total);
+      float s_new = s[d] * eg_tot;
       for (int t = 0; t < chunk_len; t++) {
-        s_new += k_chunk[t * BK + d] * delta[t] * expf(g_total - gcum[t]);
+        s_new += k_chunk[t * BK + d] * delta[t] * egtail[t];
       }
       s[d] = s_new;
     }
@@ -426,8 +433,8 @@ extern "C" void chunked_gated_delta_rule_recurrence(
     constexpr int BT = 64;
     constexpr int BK = 128;
     constexpr int BV = 64;
-    // Shared memory: BT*BK + BT*BT + BT + BT + BK floats
-    size_t smem = (BT * BK + BT * BT + 2 * BT + BK) * sizeof(float);
+    // k_chunk[BT*BK] + kk_dot[BT*BT] + (gcum,beta_s,eg,egtail,qkrow)[5*BT] + q_buf[BK]
+    size_t smem = (BT * BK + BT * BT + 5 * BT + BK) * sizeof(float);
 
     // Request extended shared memory
     auto kernel = chunked_gated_delta_rule_kernel<BT, BK, BV>;
@@ -442,7 +449,7 @@ extern "C" void chunked_gated_delta_rule_recurrence(
     constexpr int BT = 64;
     constexpr int BK = 64;
     constexpr int BV = 64;
-    size_t smem = (BT * BK + BT * BT + 2 * BT + BK) * sizeof(float);
+    size_t smem = (BT * BK + BT * BT + 5 * BT + BK) * sizeof(float);
 
     auto kernel = chunked_gated_delta_rule_kernel<BT, BK, BV>;
     cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -609,24 +616,29 @@ extern "C" void causal_conv1d_full(const void *x, const void *weight,
   // Main convolution kernel
   dim3 block(256);
   dim3 grid((conv_dim + 255) / 256, seq_len, batch_size);
+  dim3 grid2((conv_dim + 255) / 256, batch_size);
 
   if (dtype == 0) {
     causal_conv1d_full_kernel<__half><<<grid, block, 0, custream>>>(
         (const __half *)x, (const __half *)weight, (__half *)output, batch_size,
         conv_dim, seq_len, kernel_size);
-    // Save conv state
-    dim3 grid2((conv_dim + 255) / 256, batch_size);
     save_conv_state_kernel<__half><<<grid2, block, 0, custream>>>(
         (const __half *)x, (__half *)conv_state_out, batch_size, conv_dim,
         seq_len, kernel_size);
-  } else {
+  } else if (dtype == 1) {
     causal_conv1d_full_kernel<__nv_bfloat16><<<grid, block, 0, custream>>>(
         (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)weight,
         (__nv_bfloat16 *)output, batch_size, conv_dim, seq_len, kernel_size);
-    dim3 grid2((conv_dim + 255) / 256, batch_size);
     save_conv_state_kernel<__nv_bfloat16><<<grid2, block, 0, custream>>>(
         (const __nv_bfloat16 *)x, (__nv_bfloat16 *)conv_state_out, batch_size,
         conv_dim, seq_len, kernel_size);
+  } else {
+    causal_conv1d_full_kernel<float><<<grid, block, 0, custream>>>(
+        (const float *)x, (const float *)weight, (float *)output, batch_size,
+        conv_dim, seq_len, kernel_size);
+    save_conv_state_kernel<float><<<grid2, block, 0, custream>>>(
+        (const float *)x, (float *)conv_state_out, batch_size, conv_dim,
+        seq_len, kernel_size);
   }
 }
 
