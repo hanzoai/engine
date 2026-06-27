@@ -385,20 +385,27 @@ impl OmniThinkerText {
         })
     }
 
-    /// Run the decoder over `input_ids` (`[batch, seq]` token ids).
+    /// Embed `input_ids` (`[batch, seq]` token ids) into the residual stream `[batch, seq, hidden]`
+    /// (this is `hidden_states[0]`). Exposed so multimodal fusion can replace placeholder-token rows
+    /// with encoder outputs before the decoder runs (see [`super::modality::fuse_modalities`]).
+    pub fn embed_tokens(&self, ids: &Tensor) -> Result<Tensor> {
+        self.embed_tokens.forward(ids)
+    }
+
+    /// Run the decoder over pre-computed input embeddings `[batch, seq, hidden]`.
     ///
     /// Returns `(logits, hidden_states)` where `logits` is `[batch, seq, vocab]` and
-    /// `hidden_states` has length `num_hidden_layers + 1`: `hidden_states[0]` is the token-embedding
-    /// output and `hidden_states[i]` is the residual stream after the first `i` decoder layers
-    /// (HF `output_hidden_states` indexing). `mask` is the additive causal mask broadcastable to
+    /// `hidden_states` has length `num_hidden_layers + 1`: `hidden_states[0]` is `inputs_embeds` and
+    /// `hidden_states[i]` is the residual stream after the first `i` decoder layers (HF
+    /// `output_hidden_states` indexing). `mask` is the additive causal mask broadcastable to
     /// `[batch, heads, seq, seq]`; `seqlen_offsets` carries the RoPE position offset per batch row.
-    pub fn forward(
+    pub fn forward_embeds(
         &self,
-        input_ids: &Tensor,
+        inputs_embeds: &Tensor,
         seqlen_offsets: &[usize],
         mask: Option<&Tensor>,
     ) -> Result<(Tensor, Vec<Tensor>)> {
-        let mut xs = self.embed_tokens.forward(input_ids)?;
+        let mut xs = inputs_embeds.clone();
 
         let mut hidden_states = Vec::with_capacity(self.layers.len() + 1);
         hidden_states.push(xs.clone());
@@ -411,6 +418,18 @@ impl OmniThinkerText {
         let hidden = self.norm.forward(&xs)?;
         let logits = self.lm_head.forward(&hidden)?;
         Ok((logits, hidden_states))
+    }
+
+    /// Run the decoder over `input_ids` (`[batch, seq]` token ids): [`Self::embed_tokens`] followed
+    /// by [`Self::forward_embeds`]. See [`Self::forward_embeds`] for the return contract.
+    pub fn forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        mask: Option<&Tensor>,
+    ) -> Result<(Tensor, Vec<Tensor>)> {
+        let inputs_embeds = self.embed_tokens(input_ids)?;
+        self.forward_embeds(&inputs_embeds, seqlen_offsets, mask)
     }
 }
 
