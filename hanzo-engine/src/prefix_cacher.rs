@@ -1,10 +1,13 @@
 use hanzo_ml::{Device, Result};
 use indexmap::IndexMap;
 use itertools::Itertools;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
-    kv_cache::RecurrentStateSnapshot, paged_attention::block_hash::BlockHash, pipeline::KvCache,
+    disk_kv_cache::{key_for_bytes, DiskKvCache, KvcHeader, SaveReason},
+    kv_cache::{ByteReader, RecurrentStateSnapshot},
+    paged_attention::block_hash::BlockHash,
+    pipeline::KvCache,
     sequence::Sequence,
 };
 
@@ -53,6 +56,10 @@ pub struct PrefixCacheManagerV2 {
     n_on_device: usize,
     no_prefix_cache: bool,
     has_paged_attention: bool,
+    /// Optional disk-backed spill store. When present, on-device prefixes are
+    /// written here on eviction instead of being dropped, and can be restored
+    /// later (including across process restarts).
+    disk: Option<DiskKvCache>,
 }
 
 #[derive(Clone)]
@@ -79,7 +86,20 @@ impl PrefixCacheManagerV2 {
             n_on_device,
             no_prefix_cache,
             has_paged_attention,
+            disk: None,
         }
+    }
+
+    /// Attach a disk-backed KV spill store.
+    ///
+    /// With a disk cache set, [`Self::evict_caches`] spills each evicted on-device
+    /// prefix to disk (instead of dropping it), and [`Self::load_from_disk`] can
+    /// restore an exact token prefix on a later — even cross-process — cold start.
+    /// This is what makes 1M-context KV cheap to keep and agent prefixes reusable.
+    #[must_use]
+    pub fn with_disk_cache(mut self, disk: DiskKvCache) -> Self {
+        self.disk = Some(disk);
+        self
     }
 
     fn paged_recurrent_capacity(&self) -> usize {
