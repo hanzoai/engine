@@ -7060,14 +7060,20 @@ impl MultimodalModelLoader for Qwen3OmniLoader {
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
-        _attention_mechanism: AttentionImplementation,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: Qwen3OmniConfig = serde_json::from_str(config)?;
-        // The validated Thinker uses `naive_sdpa` + the engine `NormalCache` (no paged attention),
-        // so the attention mechanism is fixed by the model, not the loader.
+        // The Thinker text decoder serves logits through its cache-aware forward and is paged-attn
+        // capable; `attention_mechanism` selects the paged kernel vs. the `naive_sdpa` cache fallback.
         let device = normal_loading_metadata.real_device.clone();
         let comm = normal_loading_metadata.mapper.get_comm_for(0)?;
-        Ok(Box::new(Qwen3OmniModel::new(&cfg, vb, &device, &comm)?))
+        Ok(Box::new(Qwen3OmniModel::new(
+            &cfg,
+            vb,
+            &device,
+            &comm,
+            attention_mechanism,
+        )?))
     }
     fn is_gptx(&self, _config: &str) -> bool {
         true
@@ -7111,7 +7117,9 @@ impl MultimodalModelLoader for Qwen3OmniLoader {
         }
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        false
+        // The Thinker text decoder is paged-attn capable (see `qwen3_omni::thinker`); when paged
+        // metadata is absent it falls back to the validated cache + `naive_sdpa` path.
+        true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         false
