@@ -17,10 +17,12 @@ use hanzo_ml::{DType, Device, Result, Tensor};
 pub enum ModalityInput {
     /// Log-mel features `[1, num_mel_bins, T]`.
     Audio(Tensor),
-    /// Pixel / patch features for an image.
-    Image(Tensor),
-    /// Pixel / patch features for a video (future modalities slot in alongside these variants).
-    Video(Tensor),
+    /// Pre-patchified image pixels `[num_patches, in_chans*temporal_patch*patch*patch]` together with
+    /// the `[num_images, 3]` (t, h, w) patch grid the vision tower lays them out on. The grid is
+    /// explicit (not square-derived) so non-square / multi-frame images fuse correctly.
+    Image { pixels: Tensor, grid_thw: Tensor },
+    /// Pre-patchified video pixels + `[num_videos, 3]` (t, h, w) patch grid (same tower as `Image`).
+    Video { pixels: Tensor, grid_thw: Tensor },
 }
 
 /// A modality maps a raw [`ModalityInput`] into Thinker-space token embeddings and declares the
@@ -46,8 +48,8 @@ pub trait ModalityEncoder: Send + Sync {
 /// target row indices — device-agnostic, and exact because each placeholder position is unique
 /// (mirrors the established `inputs_merger` idiom used by the other multimodal models in this crate).
 pub fn fuse_modalities(
-    embeds: &Tensor,                       // [1, T, H]
-    input_ids: &Tensor,                    // [1, T]
+    embeds: &Tensor,    // [1, T, H]
+    input_ids: &Tensor, // [1, T]
     encoders: &[Box<dyn ModalityEncoder>],
     inputs: &[(u32, ModalityInput)],
     device: &Device,

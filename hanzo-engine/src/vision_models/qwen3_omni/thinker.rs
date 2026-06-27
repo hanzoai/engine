@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use hanzo_ml::{Device, DType, Result, Tensor};
+use hanzo_ml::{DType, Device, Result, Tensor};
 use hanzo_nn::{Embedding, Linear, Module};
 use hanzo_quant::ShardedVarBuilder;
 
@@ -231,6 +231,58 @@ impl Attention {
         )?;
 
         let (k, v) = kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
+        let k = repeat_kv(k, self.sdpa_params.n_kv_groups)?;
+        let v = repeat_kv(v, self.sdpa_params.n_kv_groups)?;
+
+        let attn = naive_sdpa(
+            &q.contiguous()?,
+            &k.contiguous()?,
+            &v.contiguous()?,
+            mask,
+            &self.sdpa_params,
+        )?;
+        let attn = attn.transpose(1, 2)?.reshape((b, t, ()))?;
+        self.o_proj.forward(&attn)
+    }
+
+    /// Cacheless attention using **interleaved 3D mRoPE** — the model-level reference for vision.
+    /// Identical to [`Self::forward`] (full attention, no cache append) except the 1D RoPE is replaced
+    /// by the precomputed `(cos, sin)` and Qwen3 QK-norm + mRoPE are fused by `forward_qk_norm`, the
+    /// exact rotary path [`Self::forward_cached_mrope`] uses. For text/audio (equal-axis positions)
+    /// this reduces to the 1D path.
+    fn forward_mrope(
+        &self,
+        xs: &Tensor,
+        cos_sin: &(Tensor, Tensor),
+        mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let (b, t, _d) = xs.dims3()?;
+        let q = self
+            .q_proj
+            .forward(xs)?
+            .reshape((b, t, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        let k = self
+            .k_proj
+            .forward(xs)?
+            .reshape((b, t, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        let v = self
+            .v_proj
+            .forward(xs)?
+            .reshape((b, t, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
+
+        let (q, k) = self.mrope.forward_qk_norm(
+            cos_sin,
+            &q,
+            &k,
+            self.q_norm.weight(),
+            self.k_norm.weight(),
+            self.q_norm.eps(),
+            self.k_norm.eps(),
+        )?;
+
         let k = repeat_kv(k, self.sdpa_params.n_kv_groups)?;
         let v = repeat_kv(v, self.sdpa_params.n_kv_groups)?;
 
@@ -471,6 +523,25 @@ impl DecoderLayer {
             .forward(&self.post_attention_layernorm.forward(&xs)?)?;
         residual + xs
     }
+
+    /// Cacheless decoder layer with interleaved 3D mRoPE — the model-level reference for vision.
+    /// Mirrors [`Self::forward`] but applies mRoPE instead of 1D RoPE (no cache).
+    fn forward_mrope(
+        &self,
+        xs: &Tensor,
+        cos_sin: &(Tensor, Tensor),
+        mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let residual = xs;
+        let xs = self.input_layernorm.forward(xs)?;
+        let xs = self.self_attn.forward_mrope(&xs, cos_sin, mask)?;
+        let xs = (residual + xs)?;
+        let residual = &xs;
+        let xs = self
+            .mlp
+            .forward(&self.post_attention_layernorm.forward(&xs)?)?;
+        residual + xs
+    }
 }
 
 /// The Qwen3-Omni Thinker text decoder. Owns `embed_tokens`, the decoder stack, the final `norm`,
@@ -527,8 +598,12 @@ impl OmniThinkerText {
         )?);
 
         let vb_model = vb.pp("model");
-        let embed_tokens =
-            layers::embedding(cfg.vocab_size, cfg.hidden_size, vb_model.pp("embed_tokens"), &None)?;
+        let embed_tokens = layers::embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            vb_model.pp("embed_tokens"),
+            &None,
+        )?;
 
         let vb_l = vb_model.pp("layers");
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
@@ -603,6 +678,35 @@ impl OmniThinkerText {
         Ok((logits, hidden_states))
     }
 
+    /// Cacheless decoder over `inputs_embeds` `[batch, seq, hidden]` using **interleaved 3D mRoPE**
+    /// positions `position_ids` `[3, batch, seq]` (temporal/height/width) — the model-level reference
+    /// for vision. Mirrors [`Self::forward_embeds`] exactly (same per-layer attention/MoE, same
+    /// `hidden_states` indexing) but applies mRoPE rather than 1D RoPE. For text/audio the three axes
+    /// carry equal positions, so this collapses to [`Self::forward_embeds`] numerically.
+    pub fn forward_embeds_mrope(
+        &self,
+        inputs_embeds: &Tensor,
+        position_ids: &Tensor,
+        mask: Option<&Tensor>,
+    ) -> Result<(Tensor, Vec<Tensor>)> {
+        let cos_sin = self
+            .mrope
+            .compute_cos_sin(position_ids, inputs_embeds.dtype())?;
+        let mut xs = inputs_embeds.clone();
+
+        let mut hidden_states = Vec::with_capacity(self.layers.len() + 1);
+        hidden_states.push(xs.clone());
+
+        for layer in &self.layers {
+            xs = layer.forward_mrope(&xs, &cos_sin, mask)?;
+            hidden_states.push(xs.clone());
+        }
+
+        let hidden = self.norm.forward(&xs)?;
+        let logits = self.lm_head.forward(&hidden)?;
+        Ok((logits, hidden_states))
+    }
+
     /// Run the decoder over `input_ids` (`[batch, seq]` token ids): [`Self::embed_tokens`] followed
     /// by [`Self::forward_embeds`]. See [`Self::forward_embeds`] for the return contract.
     pub fn forward(
@@ -652,7 +756,9 @@ impl OmniThinkerText {
         cache: &mut [KvCache],
         ctx: &ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let cos_sin = self.mrope.compute_cos_sin(position_ids, inputs_embeds.dtype())?;
+        let cos_sin = self
+            .mrope
+            .compute_cos_sin(position_ids, inputs_embeds.dtype())?;
         let mut xs = inputs_embeds.clone();
         for (i, layer) in self.layers.iter().enumerate() {
             xs = layer.forward_cached_mrope(&xs, &cos_sin, mask, &mut cache[i])?;
@@ -803,7 +909,13 @@ mod thinker_tests {
         let mut logit_cos = f32::NAN;
         if Path::new(logit_ref).is_file() {
             let refv = read_f32_le(logit_ref);
-            assert_eq!(refv.len(), last.len(), "logits len {} vs ref {}", last.len(), refv.len());
+            assert_eq!(
+                refv.len(),
+                last.len(),
+                "logits len {} vs ref {}",
+                last.len(),
+                refv.len()
+            );
             logit_cos = cosine(&last, &refv);
             eprintln!(
                 "[thinker] logits cosine = {logit_cos:.6}, ref argmax = {}",
