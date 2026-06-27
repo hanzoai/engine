@@ -25,9 +25,10 @@ use hanzo_nn::{Embedding, Linear, Module};
 use hanzo_quant::ShardedVarBuilder;
 
 use crate::{
-    attention::{naive_sdpa, SdpaParams},
+    attention::{naive_sdpa, AttentionMask, SdpaParams},
     layers::{self, repeat_kv, Qwen3VLRotaryEmbedding, RmsNorm, RotaryEmbedding},
     ops::{moe_router_topk, MoeRouterScoreFunction, MoeRouterSelectedWeight, MoeRouterTopKConfig},
+    paged_attention::{AttentionImplementation, PagedAttention},
     pipeline::{KvCache, ModelForwardContext},
 };
 
@@ -49,6 +50,11 @@ struct Attention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
+    /// Paged-attention kernel for the serving cache path; `None` under [`AttentionImplementation::Eager`].
+    /// The validated cacheless forwards ([`Self::forward`] / [`Self::forward_mrope`]) never use it —
+    /// only [`Self::attend_cached`] does, and only when `ctx` carries per-layer paged metadata. Built
+    /// per [`AttentionImplementation`], mirroring [`crate::models::qwen3_moe`].
+    paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
 
@@ -63,6 +69,8 @@ impl Attention {
         num_kv_heads: usize,
         head_dim: usize,
         rms_norm_eps: f64,
+        attention_mechanism: AttentionImplementation,
+        device: &Device,
     ) -> Result<Self> {
         let q_proj = layers::linear_no_bias(hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
         let k_proj = layers::linear_no_bias(hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
@@ -70,6 +78,12 @@ impl Attention {
         let o_proj = layers::linear_no_bias(num_heads * head_dim, hidden_size, vb.pp("o_proj"))?;
         let q_norm = RmsNorm::new(head_dim, rms_norm_eps, vb.pp("q_norm"))?;
         let k_norm = RmsNorm::new(head_dim, rms_norm_eps, vb.pp("k_norm"))?;
+        let paged_attn = match attention_mechanism {
+            AttentionImplementation::Eager => None,
+            AttentionImplementation::PagedAttention => {
+                Some(PagedAttention::new(head_dim, device, None)?)
+            }
+        };
         Ok(Self {
             q_proj,
             k_proj,
@@ -82,6 +96,7 @@ impl Attention {
             num_heads,
             num_kv_heads,
             head_dim,
+            paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: num_heads / num_kv_heads,
                 softcap: None,
@@ -141,12 +156,15 @@ impl Attention {
     /// appended into the engine [`KvCache`] and attention runs over the full cached sequence, so
     /// decode reuses past K/V instead of recomputing. `mask` is the additive mask for the current
     /// query rows (`None` for single-token decode, where the query attends to every cached key).
+    #[allow(clippy::too_many_arguments)]
     fn forward_cached(
         &self,
         xs: &Tensor,
         seqlen_offsets: &[usize],
         mask: Option<&Tensor>,
         kv_cache: &mut KvCache,
+        ctx: &ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let (b, t, _d) = xs.dims3()?;
         let mut q = self
@@ -172,21 +190,7 @@ impl Attention {
 
         let (q, k) = self.rope.forward(&q, &k, seqlen_offsets)?;
 
-        // Append the RoPE'd K/V into the running cache, then attend over the full sequence
-        // `[b, kv_heads, past + t, head_dim]`.
-        let (k, v) = kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
-
-        let k = repeat_kv(k, self.sdpa_params.n_kv_groups)?;
-        let v = repeat_kv(v, self.sdpa_params.n_kv_groups)?;
-
-        let attn = naive_sdpa(
-            &q.contiguous()?,
-            &k.contiguous()?,
-            &v.contiguous()?,
-            mask,
-            &self.sdpa_params,
-        )?;
-        let attn = attn.transpose(1, 2)?.reshape((b, t, ()))?;
+        let attn = self.attend_cached(&q, &k, &v, mask, kv_cache, ctx, layer_idx)?;
         self.o_proj.forward(&attn)
     }
 
@@ -195,12 +199,15 @@ impl Attention {
     /// from [`Qwen3VLRotaryEmbedding`]; Qwen3 QK-norm + mRoPE are applied together by the validated
     /// `forward_qk_norm` (the exact rotary path `qwen3_vl`/`qwen3_vl_moe` use). For text/audio inputs
     /// these positions equal the 1D positions, so the two paths agree numerically.
+    #[allow(clippy::too_many_arguments)]
     fn forward_cached_mrope(
         &self,
         xs: &Tensor,
         cos_sin: &(Tensor, Tensor),
         mask: Option<&Tensor>,
         kv_cache: &mut KvCache,
+        ctx: &ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let (b, t, _d) = xs.dims3()?;
         let q = self
@@ -230,19 +237,76 @@ impl Attention {
             self.k_norm.eps(),
         )?;
 
-        let (k, v) = kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
-        let k = repeat_kv(k, self.sdpa_params.n_kv_groups)?;
-        let v = repeat_kv(v, self.sdpa_params.n_kv_groups)?;
-
-        let attn = naive_sdpa(
-            &q.contiguous()?,
-            &k.contiguous()?,
-            &v.contiguous()?,
-            mask,
-            &self.sdpa_params,
-        )?;
-        let attn = attn.transpose(1, 2)?.reshape((b, t, ()))?;
+        let attn = self.attend_cached(&q, &k, &v, mask, kv_cache, ctx, layer_idx)?;
         self.o_proj.forward(&attn)
+    }
+
+    /// Shared cache-aware attention core for the serving forwards ([`Self::forward_cached`] and
+    /// [`Self::forward_cached_mrope`]). `q` is post-RoPE/mRoPE `[b, heads, t, head_dim]`; `k`/`v` are
+    /// `[b, kv_heads, t, head_dim]`.
+    ///
+    /// When the model was built with paged attention **and** `ctx` carries this layer's paged
+    /// metadata, attention runs through the paged kernel (continuous batching / KV paging). Otherwise
+    /// it falls back to the validated engine [`KvCache`] append + [`naive_sdpa`] path — byte-identical
+    /// to the pre-paged serving forward, which is why the serving tests (no paged metadata) keep their
+    /// numerics. Returns the attention output reshaped to `[b, t, heads*head_dim]` (pre-`o_proj`).
+    /// Mirrors [`crate::models::qwen3_moe`]'s attention branch.
+    #[allow(clippy::too_many_arguments)]
+    fn attend_cached(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        mask: Option<&Tensor>,
+        kv_cache: &mut KvCache,
+        ctx: &ModelForwardContext<'_>,
+        layer_idx: usize,
+    ) -> Result<Tensor> {
+        let (b, _heads, t, _hd) = q.dims4()?;
+        match (&self.paged_attn, ctx.paged_layer(layer_idx)) {
+            (Some(paged_attn), Some(((key_cache, value_cache), input_metadata))) => {
+                // Serving against a real paged KV cache. `Custom` carries the prefill mask; decode
+                // passes `None` (the single new token attends every cached key).
+                let attention_mask = match mask {
+                    Some(m) => AttentionMask::Custom(m.clone()),
+                    None => AttentionMask::None,
+                };
+                let attn = paged_attn.forward(
+                    &q.contiguous()?,
+                    &k.contiguous()?,
+                    &v.contiguous()?,
+                    &attention_mask,
+                    Some(key_cache),
+                    Some(value_cache),
+                    input_metadata,
+                    &self.sdpa_params,
+                    Some(ctx.flash_params()),
+                )?;
+                // Prefill (Custom) returns `[b, heads, t, hd]`; decode (None) returns
+                // `[b*t, heads, hd]`. Match `qwen3_moe`'s reshape exactly.
+                if matches!(attention_mask, AttentionMask::None) {
+                    attn.reshape((b, t, ()))
+                } else {
+                    attn.transpose(1, 2)?.reshape((b, t, ()))
+                }
+            }
+            // Eager build, or no paged metadata: the validated cache + `naive_sdpa` serving path.
+            // Append the RoPE'd K/V into the running cache, then attend over the full sequence
+            // `[b, kv_heads, past + t, head_dim]`.
+            _ => {
+                let (k, v) = kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
+                let k = repeat_kv(k, self.sdpa_params.n_kv_groups)?;
+                let v = repeat_kv(v, self.sdpa_params.n_kv_groups)?;
+                let attn = naive_sdpa(
+                    &q.contiguous()?,
+                    &k.contiguous()?,
+                    &v.contiguous()?,
+                    mask,
+                    &self.sdpa_params,
+                )?;
+                attn.transpose(1, 2)?.reshape((b, t, ()))
+            }
+        }
     }
 
     /// Cacheless attention using **interleaved 3D mRoPE** — the model-level reference for vision.
@@ -441,6 +505,8 @@ impl DecoderLayer {
         num_kv_heads: usize,
         head_dim: usize,
         rms_norm_eps: f64,
+        attention_mechanism: AttentionImplementation,
+        device: &Device,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             vb.pp("self_attn"),
@@ -451,6 +517,8 @@ impl DecoderLayer {
             num_kv_heads,
             head_dim,
             rms_norm_eps,
+            attention_mechanism,
+            device,
         )?;
         let input_layernorm = RmsNorm::new(hidden_size, rms_norm_eps, vb.pp("input_layernorm"))?;
         let post_attention_layernorm =
@@ -482,18 +550,21 @@ impl DecoderLayer {
 
     /// Cache-aware decoder layer for serving: pre-norm cached attention + pre-norm MLP, both
     /// residual. Mirrors [`Self::forward`] but threads the layer's [`KvCache`].
+    #[allow(clippy::too_many_arguments)]
     fn forward_cached(
         &self,
         xs: &Tensor,
         seqlen_offsets: &[usize],
         mask: Option<&Tensor>,
         kv_cache: &mut KvCache,
+        ctx: &ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self
-            .self_attn
-            .forward_cached(&xs, seqlen_offsets, mask, kv_cache)?;
+        let xs =
+            self.self_attn
+                .forward_cached(&xs, seqlen_offsets, mask, kv_cache, ctx, layer_idx)?;
         let xs = (residual + xs)?;
         let residual = &xs;
         let xs = self
@@ -504,18 +575,21 @@ impl DecoderLayer {
 
     /// Cache-aware decoder layer for the multimodal serving path: pre-norm mRoPE attention + pre-norm
     /// MLP, both residual. Mirrors [`Self::forward_cached`] but applies interleaved 3D mRoPE.
+    #[allow(clippy::too_many_arguments)]
     fn forward_cached_mrope(
         &self,
         xs: &Tensor,
         cos_sin: &(Tensor, Tensor),
         mask: Option<&Tensor>,
         kv_cache: &mut KvCache,
+        ctx: &ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
         let xs = self
             .self_attn
-            .forward_cached_mrope(&xs, cos_sin, mask, kv_cache)?;
+            .forward_cached_mrope(&xs, cos_sin, mask, kv_cache, ctx, layer_idx)?;
         let xs = (residual + xs)?;
         let residual = &xs;
         let xs = self
@@ -564,6 +638,7 @@ impl OmniThinkerText {
         vb: ShardedVarBuilder,
         device: &Device,
         comm: &Arc<hanzo_quant::Comm>,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         // `comm` is part of the loader contract (tensor-parallel construction) but unused here:
         // experts are dense per-rank, single-process.
@@ -628,6 +703,8 @@ impl OmniThinkerText {
                 cfg.num_key_value_heads,
                 head_dim,
                 cfg.rms_norm_eps,
+                attention_mechanism,
+                device,
             )?);
         }
 
@@ -735,7 +812,7 @@ impl OmniThinkerText {
     ) -> Result<Tensor> {
         let mut xs = inputs_embeds.clone();
         for (i, layer) in self.layers.iter().enumerate() {
-            xs = layer.forward_cached(&xs, seqlen_offsets, mask, &mut cache[i])?;
+            xs = layer.forward_cached(&xs, seqlen_offsets, mask, &mut cache[i], ctx, i)?;
         }
         let xs = self.norm.forward(&xs)?;
         // Select the rows we actually need logits for (decode = last token) before the lm_head.
@@ -761,7 +838,7 @@ impl OmniThinkerText {
             .compute_cos_sin(position_ids, inputs_embeds.dtype())?;
         let mut xs = inputs_embeds.clone();
         for (i, layer) in self.layers.iter().enumerate() {
-            xs = layer.forward_cached_mrope(&xs, &cos_sin, mask, &mut cache[i])?;
+            xs = layer.forward_cached_mrope(&xs, &cos_sin, mask, &mut cache[i], ctx, i)?;
         }
         let xs = self.norm.forward(&xs)?;
         let xs = ctx.logits(&xs)?;
@@ -865,7 +942,15 @@ mod thinker_tests {
         )
         .unwrap();
 
-        let model = OmniThinkerText::new(tc, vb.pp("thinker"), &device, &comm).unwrap();
+        // Cacheless reference path under test never touches paged attention; build it `Eager`.
+        let model = OmniThinkerText::new(
+            tc,
+            vb.pp("thinker"),
+            &device,
+            &comm,
+            AttentionImplementation::Eager,
+        )
+        .unwrap();
 
         let ids: Vec<u32> = vec![
             151644, 872, 198, 9707, 11, 1879, 0, 151645, 198, 151644, 77091, 198,
