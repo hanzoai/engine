@@ -28,6 +28,7 @@ use crate::{
     attention::{naive_sdpa, SdpaParams},
     layers::{self, repeat_kv, RmsNorm, RotaryEmbedding},
     ops::{moe_router_topk, MoeRouterScoreFunction, MoeRouterSelectedWeight, MoeRouterTopKConfig},
+    pipeline::{KvCache, ModelForwardContext},
 };
 
 use super::config::OmniTextConfig;
@@ -114,6 +115,60 @@ impl Attention {
         k = k.transpose(1, 2)?.contiguous()?;
 
         let (q, k) = self.rope.forward(&q, &k, seqlen_offsets)?;
+
+        let k = repeat_kv(k, self.sdpa_params.n_kv_groups)?;
+        let v = repeat_kv(v, self.sdpa_params.n_kv_groups)?;
+
+        let attn = naive_sdpa(
+            &q.contiguous()?,
+            &k.contiguous()?,
+            &v.contiguous()?,
+            mask,
+            &self.sdpa_params,
+        )?;
+        let attn = attn.transpose(1, 2)?.reshape((b, t, ()))?;
+        self.o_proj.forward(&attn)
+    }
+
+    /// Cache-aware attention for serving. Identical math to [`Self::forward`] — the same q/k/v
+    /// projections, Qwen3 QK-norm, 1D RoPE, and [`naive_sdpa`] — but the freshly-RoPE'd K/V are
+    /// appended into the engine [`KvCache`] and attention runs over the full cached sequence, so
+    /// decode reuses past K/V instead of recomputing. `mask` is the additive mask for the current
+    /// query rows (`None` for single-token decode, where the query attends to every cached key).
+    fn forward_cached(
+        &self,
+        xs: &Tensor,
+        seqlen_offsets: &[usize],
+        mask: Option<&Tensor>,
+        kv_cache: &mut KvCache,
+    ) -> Result<Tensor> {
+        let (b, t, _d) = xs.dims3()?;
+        let mut q = self
+            .q_proj
+            .forward(xs)?
+            .reshape((b, t, self.num_heads, self.head_dim))?;
+        let mut k = self
+            .k_proj
+            .forward(xs)?
+            .reshape((b, t, self.num_kv_heads, self.head_dim))?;
+        let v = self
+            .v_proj
+            .forward(xs)?
+            .reshape((b, t, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
+
+        // Per-head RMSNorm over head_dim (Qwen3 QK-norm), applied before RoPE.
+        q = self.q_norm.forward(&q)?;
+        k = self.k_norm.forward(&k)?;
+
+        q = q.transpose(1, 2)?.contiguous()?;
+        k = k.transpose(1, 2)?.contiguous()?;
+
+        let (q, k) = self.rope.forward(&q, &k, seqlen_offsets)?;
+
+        // Append the RoPE'd K/V into the running cache, then attend over the full sequence
+        // `[b, kv_heads, past + t, head_dim]`.
+        let (k, v) = kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
 
         let k = repeat_kv(k, self.sdpa_params.n_kv_groups)?;
         let v = repeat_kv(v, self.sdpa_params.n_kv_groups)?;
@@ -309,6 +364,28 @@ impl DecoderLayer {
             .forward(&self.post_attention_layernorm.forward(&xs)?)?;
         residual + xs
     }
+
+    /// Cache-aware decoder layer for serving: pre-norm cached attention + pre-norm MLP, both
+    /// residual. Mirrors [`Self::forward`] but threads the layer's [`KvCache`].
+    fn forward_cached(
+        &self,
+        xs: &Tensor,
+        seqlen_offsets: &[usize],
+        mask: Option<&Tensor>,
+        kv_cache: &mut KvCache,
+    ) -> Result<Tensor> {
+        let residual = xs;
+        let xs = self.input_layernorm.forward(xs)?;
+        let xs = self
+            .self_attn
+            .forward_cached(&xs, seqlen_offsets, mask, kv_cache)?;
+        let xs = (residual + xs)?;
+        let residual = &xs;
+        let xs = self
+            .mlp
+            .forward(&self.post_attention_layernorm.forward(&xs)?)?;
+        residual + xs
+    }
 }
 
 /// The Qwen3-Omni Thinker text decoder. Owns `embed_tokens`, the decoder stack, the final `norm`,
@@ -430,6 +507,30 @@ impl OmniThinkerText {
     ) -> Result<(Tensor, Vec<Tensor>)> {
         let inputs_embeds = self.embed_tokens(input_ids)?;
         self.forward_embeds(&inputs_embeds, seqlen_offsets, mask)
+    }
+
+    /// Cache-aware serving forward over pre-computed `inputs_embeds` `[batch, seq, hidden]`: runs the
+    /// decoder with the engine KV cache and returns the text `logits` for the rows selected by `ctx`
+    /// (last token on decode). Mirrors the validated [`Self::forward_embeds`] math (the same
+    /// per-layer attention/MoE) but threads one [`KvCache`] per decoder layer so decode reuses past
+    /// K/V instead of recomputing — use [`Self::forward_embeds`] for the cacheless validation path.
+    /// `mask` is `None` for single-token decode; `cache.len()` must equal the decoder depth.
+    pub fn forward_cached(
+        &self,
+        inputs_embeds: &Tensor,
+        seqlen_offsets: &[usize],
+        mask: Option<&Tensor>,
+        cache: &mut [KvCache],
+        ctx: &ModelForwardContext<'_>,
+    ) -> Result<Tensor> {
+        let mut xs = inputs_embeds.clone();
+        for (i, layer) in self.layers.iter().enumerate() {
+            xs = layer.forward_cached(&xs, seqlen_offsets, mask, &mut cache[i])?;
+        }
+        let xs = self.norm.forward(&xs)?;
+        // Select the rows we actually need logits for (decode = last token) before the lm_head.
+        let xs = ctx.logits(&xs)?;
+        self.lm_head.forward(&xs)
     }
 }
 
