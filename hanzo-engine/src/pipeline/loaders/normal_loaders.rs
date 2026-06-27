@@ -189,6 +189,8 @@ pub enum NormalLoaderType {
     DeepSeekV2,
     #[serde(rename = "deepseekv3")]
     DeepSeekV3,
+    #[serde(rename = "deepseekv32")]
+    DeepSeekV32,
     #[serde(rename = "qwen3")]
     Qwen3,
     #[serde(rename = "glm4")]
@@ -225,6 +227,7 @@ impl NormalLoaderType {
             "PhiMoEForCausalLM" => Ok(Self::Phi3_5MoE),
             "DeepseekV2ForCausalLM" => Ok(Self::DeepSeekV2),
             "DeepseekV3ForCausalLM" => Ok(Self::DeepSeekV3),
+            "DeepseekV32ForCausalLM" => Ok(Self::DeepSeekV32),
             "Qwen3ForCausalLM" => Ok(Self::Qwen3),
             "Glm4ForCausalLM" => Ok(Self::GLM4),
             "Glm4MoeLiteForCausalLM" => Ok(Self::GLM4MoeLite),
@@ -257,6 +260,7 @@ impl FromStr for NormalLoaderType {
             "phi3.5moe" => Ok(Self::Phi3_5MoE),
             "deepseekv2" => Ok(Self::DeepSeekV2),
             "deepseekv3" => Ok(Self::DeepSeekV3),
+            "deepseekv32" => Ok(Self::DeepSeekV32),
             "qwen3" => Ok(Self::Qwen3),
             "glm4" => Ok(Self::GLM4),
             "glm4moelite" => Ok(Self::GLM4MoeLite),
@@ -266,7 +270,7 @@ impl FromStr for NormalLoaderType {
             "granitemoehybrid" => Ok(Self::GraniteMoeHybrid),
             "gpt_oss" => Ok(Self::GptOss),
             "qwen3next" => Ok(Self::Qwen3Next),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `qwen3next`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `deepseekv32`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `qwen3next`.")),
         }
     }
 }
@@ -286,6 +290,7 @@ impl Display for NormalLoaderType {
             Self::Starcoder2 => write!(f, "starcoder2"),
             Self::DeepSeekV2 => write!(f, "deepseekv2"),
             Self::DeepSeekV3 => write!(f, "deepseekv3"),
+            Self::DeepSeekV32 => write!(f, "deepseekv32"),
             Self::Qwen3 => write!(f, "qwen3"),
             Self::GLM4 => write!(f, "glm4"),
             Self::GLM4MoeLite => write!(f, "glm4moelite"),
@@ -343,6 +348,12 @@ impl AutoNormalLoader {
             NormalLoaderType::Phi3_5MoE => Ok(Box::new(Phi3_5MoELoader)),
             NormalLoaderType::DeepSeekV2 => Ok(Box::new(DeepSeekV2Loader)),
             NormalLoaderType::DeepSeekV3 => Ok(Box::new(DeepSeekV3Loader)),
+            // DeepSeek-V3.2 is V3-byte-identical MLA/MoE plus a lightning DSA
+            // indexer + MTP head. The dense forward over the full context is
+            // exactly what the DSA indexer approximates, so we load V3.2 weights
+            // into the validated V3 model and skip the unreferenced indexer/MTP
+            // tensors (the pull-based VarBuilder never requests them).
+            NormalLoaderType::DeepSeekV32 => Ok(Box::new(DeepSeekV3Loader)),
             NormalLoaderType::Qwen3 => Ok(Box::new(Qwen3Loader)),
             NormalLoaderType::GLM4 => Ok(Box::new(GLM4Loader)),
             NormalLoaderType::GLM4MoeLite => Ok(Box::new(GLM4MoeLiteLoader)),
@@ -5124,5 +5135,33 @@ impl DeviceMappedModelLoader for Qwen3NextLoader {
         };
 
         Ok(Box::new(cfg))
+    }
+}
+
+#[cfg(test)]
+mod deepseek_v32_tests {
+    use super::{AutoNormalLoader, NormalLoaderType};
+
+    /// DeepSeek-V3.2 (`DeepseekV32ForCausalLM`) must resolve to its own
+    /// [`NormalLoaderType`] variant from every entry point, stay distinct from
+    /// V3 at the type level, and route (dense) through the shared V3 loader.
+    #[test]
+    fn deepseek_v32_registry_dispatch() {
+        // HF auto-detection path: architectures[0] -> variant.
+        assert_eq!(
+            NormalLoaderType::from_causal_lm_name("DeepseekV32ForCausalLM").unwrap(),
+            NormalLoaderType::DeepSeekV32,
+        );
+        // Explicit CLI/TOML `-a deepseekv32` path (FromStr) + Display round-trip.
+        assert_eq!(
+            "deepseekv32".parse::<NormalLoaderType>().unwrap(),
+            NormalLoaderType::DeepSeekV32,
+        );
+        assert_eq!(NormalLoaderType::DeepSeekV32.to_string(), "deepseekv32");
+        // Identity preserved, not collapsed into V3.
+        assert_ne!(NormalLoaderType::DeepSeekV32, NormalLoaderType::DeepSeekV3);
+        // The auto loader must accept a V3.2 config and route it without error.
+        let cfg = r#"{"architectures":["DeepseekV32ForCausalLM"]}"#;
+        assert!(AutoNormalLoader::get_loader(cfg).is_ok());
     }
 }
