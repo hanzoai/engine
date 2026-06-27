@@ -69,6 +69,7 @@ use crate::vision_models::qwen3_5::{Config as Qwen3_5Config, Qwen3_5Model, Qwen3
 use crate::vision_models::qwen3_5_moe::{
     Config as Qwen3_5MoeConfig, Qwen3_5MoeModel, Qwen3_5MoeProcessor,
 };
+use crate::vision_models::qwen3_omni::{Qwen3OmniConfig, Qwen3OmniModel};
 use crate::vision_models::qwen3_vl::{Config as Qwen3VLConfig, Qwen3VLModel, Qwen3VLProcessor};
 use crate::vision_models::qwen3_vl_moe::{
     Config as Qwen3VLMoEConfig, Qwen3VLMoEModel, Qwen3VLMoEProcessor,
@@ -216,6 +217,8 @@ pub enum MultimodalLoaderType {
     Qwen3_5,
     #[serde(rename = "qwen3_5moe")]
     Qwen3_5Moe,
+    #[serde(rename = "qwen3_omni_moe")]
+    Qwen3Omni,
     #[serde(rename = "voxtral")]
     Voxtral,
     #[serde(rename = "gemma4")]
@@ -245,6 +248,7 @@ impl MultimodalLoaderType {
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
             "Qwen3_5ForConditionalGeneration" => Ok(Self::Qwen3_5),
             "Qwen3_5MoeForConditionalGeneration" => Ok(Self::Qwen3_5Moe),
+            "Qwen3OmniMoeForConditionalGeneration" => Ok(Self::Qwen3Omni),
             "VoxtralForConditionalGeneration"
             | "VoxtralRealtimeForConditionalGeneration" => Ok(Self::Voxtral),
             other => anyhow::bail!(
@@ -277,8 +281,9 @@ impl FromStr for MultimodalLoaderType {
             "qwen3vlmoe" => Ok(Self::Qwen3VLMoE),
             "qwen3_5" => Ok(Self::Qwen3_5),
             "qwen3_5moe" => Ok(Self::Qwen3_5Moe),
+            "qwen3_omni_moe" => Ok(Self::Qwen3Omni),
             "voxtral" => Ok(Self::Voxtral),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `voxtral`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `qwen3_omni_moe`, `voxtral`.")),
         }
     }
 }
@@ -304,6 +309,7 @@ impl std::fmt::Display for MultimodalLoaderType {
             MultimodalLoaderType::Qwen3VLMoE => "qwen3vlmoe",
             MultimodalLoaderType::Qwen3_5 => "qwen3_5",
             MultimodalLoaderType::Qwen3_5Moe => "qwen3_5moe",
+            MultimodalLoaderType::Qwen3Omni => "qwen3_omni_moe",
             MultimodalLoaderType::Voxtral => "voxtral",
             MultimodalLoaderType::Gemma4 => "gemma4",
         };
@@ -362,6 +368,7 @@ impl AutoMultimodalLoader {
             MultimodalLoaderType::Qwen3VLMoE => Box::new(Qwen3VLMoELoader),
             MultimodalLoaderType::Qwen3_5 => Box::new(Qwen3_5Loader),
             MultimodalLoaderType::Qwen3_5Moe => Box::new(Qwen3_5MoeLoader),
+            MultimodalLoaderType::Qwen3Omni => Box::new(Qwen3OmniLoader),
             MultimodalLoaderType::Voxtral => Box::new(VoxtralLoader),
             MultimodalLoaderType::Gemma4 => Box::new(Gemma4Loader),
         })
@@ -7026,6 +7033,248 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
         Some(vec![NonMappedSubModel::Vision])
+    }
+}
+
+// ======================== Qwen3Omni Loader
+
+/// [`MultimodalLoader`] for `Qwen3OmniMoeForConditionalGeneration` (`model_type = "qwen3_omni_moe"`).
+///
+/// Loads the full understand→think→speak [`Qwen3OmniModel`] (Thinker text decoder + vision/audio
+/// towers + Talker + Code2Wav). v1 serving runs the **text** path through the cache-aware Thinker
+/// forward; raw image/audio/video serving additionally needs the Omni input processor (placeholder
+/// tokens + mRoPE / mel / pixel payloads) and is the documented follow-up.
+///
+/// [`MultimodalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.MultimodalLoader.html
+pub struct Qwen3OmniLoader;
+
+pub struct Qwen3OmniPrefixer;
+
+impl MultimodalPromptPrefixer for Qwen3OmniPrefixer {
+    // No-op: the Qwen chat template handles modality tokens from the message content.
+}
+
+impl MultimodalModelLoader for Qwen3OmniLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        _attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
+        let cfg: Qwen3OmniConfig = serde_json::from_str(config)?;
+        // The validated Thinker uses `naive_sdpa` + the engine `NormalCache` (no paged attention),
+        // so the attention mechanism is fixed by the model, not the loader.
+        let device = normal_loading_metadata.real_device.clone();
+        let comm = normal_loading_metadata.mapper.get_comm_for(0)?;
+        Ok(Box::new(Qwen3OmniModel::new(&cfg, vb, &device, &comm)?))
+    }
+    fn is_gptx(&self, _config: &str) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let config: Qwen3OmniConfig = serde_json::from_str(config)?;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        model_config: &str,
+        _processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        // The Omni processor applies the Qwen chat template + tokenizes (text), and expands `<|AUDIO|>`
+        // placeholders into the right Thinker-token count while producing the log-mel payloads the
+        // validated audio tower consumes. Image/video placeholder expansion is the documented
+        // follow-up (model side — encoders + 3D mRoPE — is wired). On a malformed config this falls
+        // back to text-only so the loader never panics.
+        match serde_json::from_str::<Qwen3OmniConfig>(model_config) {
+            Ok(cfg) => Arc::new(crate::vision_models::qwen3_omni::Qwen3OmniProcessor::new(
+                cfg.thinker_config.audio_token_id,
+                cfg.thinker_config.audio_config,
+            )),
+            Err(_) => Arc::new(Qwen3VLProcessor::new(None)),
+        }
+    }
+    fn supports_paged_attention(&self, _config: &str) -> bool {
+        false
+    }
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
+        false
+    }
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
+        Arc::new(Qwen3OmniPrefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        // Text + Audio are served end-to-end (input processor expands `<|AUDIO|>` placeholders, mel ->
+        // audio tower -> `fuse_modalities` -> Thinker). The model also has validated vision encoders
+        // and 3D-mRoPE serving wired, but image/video input processing is the documented follow-up,
+        // so Vision is not yet advertised (advertising it without placeholder expansion would break
+        // image requests).
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Audio],
+            output: vec![SupportedModality::Text],
+        })
+    }
+}
+
+impl IsqModelLoader for Qwen3OmniLoader {
+    // Not an ISQ checkpoint: empty regexes (the defaults) mean no in-place quantization.
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+impl DeviceMappedModelLoader for Qwen3OmniLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len,
+            max_batch_size,
+            ..
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+        let cfg: Qwen3OmniConfig = serde_json::from_str(config)?;
+        let tc = &cfg.thinker_config.text_config;
+        let seq = max_seq_len.min(&ATTENTION_CHUNK_SIZE);
+        Ok(max_batch_size * tc.num_attention_heads * seq * seq)
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+            ..
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+        let cfg: Qwen3OmniConfig = serde_json::from_str(config)?;
+        let vc = &cfg.thinker_config.vision_config;
+        let img_seq_len = (max_image_shape.0 / vc.patch_size) * (max_image_shape.1 / vc.patch_size);
+        Ok((max_batch_size * max_num_images) * vc.num_heads * img_seq_len * img_seq_len)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: Qwen3OmniConfig = serde_json::from_str(config)?;
+        let elem = dtype.size_in_bytes();
+
+        // Thinker text non-layer weights: token embeddings + (untied) lm_head + final norm.
+        let text_elems = {
+            let tc = &cfg.thinker_config.text_config;
+            let embed_tokens = tc.hidden_size * tc.vocab_size / weight_pack_factor;
+            let lm_head = if tc.tie_word_embeddings && weight_pack_factor == 1 {
+                0
+            } else {
+                tc.hidden_size * tc.vocab_size / weight_pack_factor
+            };
+            embed_tokens + lm_head + tc.hidden_size
+        };
+
+        // Vision tower (kept on one device, like Qwen3.5-MoE — same `VisionConfig`).
+        let vision_elems = {
+            let vc = &cfg.thinker_config.vision_config;
+            let patch_embed = vc.in_chans
+                * vc.hidden_size
+                * vc.temporal_patch_size
+                * vc.patch_size
+                * vc.patch_size
+                + vc.hidden_size;
+            let pos_embed = vc.num_position_embeddings * vc.hidden_size;
+            let encoder_layer = {
+                let qkv = vc.hidden_size * vc.hidden_size * 3 + vc.hidden_size * 3;
+                let out = vc.hidden_size * vc.hidden_size + vc.hidden_size;
+                let fc1 = vc.hidden_size * vc.intermediate_size + vc.intermediate_size;
+                let fc2 = vc.hidden_size * vc.intermediate_size + vc.hidden_size;
+                let norms = 2 * (vc.hidden_size + vc.hidden_size);
+                qkv + out + fc1 + fc2 + norms
+            };
+            let merged = vc.hidden_size * vc.spatial_merge_size.pow(2);
+            let merger = merged * merged + merged + merged * vc.out_hidden_size + vc.out_hidden_size;
+            let deepstack = vc.deepstack_visual_indexes.len() * merger;
+            patch_embed + pos_embed + encoder_layer * vc.depth + merger + deepstack
+        };
+
+        // Audio tower (Whisper-style mel encoder + projection to the Thinker hidden width).
+        let audio_elems = {
+            let ac = &cfg.thinker_config.audio_config;
+            let convs = ac.d_model * ac.num_mel_bins * 3 + ac.d_model * ac.d_model * 3;
+            let per_layer = 4 * ac.d_model * ac.d_model + 2 * ac.d_model * ac.encoder_ffn_dim;
+            let proj = ac.d_model * ac.output_dim;
+            convs + per_layer * ac.encoder_layers + proj
+        };
+
+        Ok((text_elems + vision_elems + audio_elems) * elem)
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: Qwen3OmniConfig = serde_json::from_str(config)?;
+        let tc = &cfg.thinker_config.text_config;
+        let elem = dtype.size_in_bytes();
+
+        let size_q = tc.head_dim * tc.num_attention_heads;
+        let size_kv = tc.head_dim * tc.num_key_value_heads;
+        let attn = (tc.hidden_size * size_q
+            + tc.hidden_size * size_kv * 2
+            + size_q * tc.hidden_size)
+            / weight_pack_factor
+            + 2 * tc.head_dim; // q_norm + k_norm
+
+        // Every Thinker layer is MoE (decoder_sparse_step = 1, no shared expert).
+        let moe = {
+            let gate = tc.hidden_size * tc.num_experts;
+            let per_expert = 3 * tc.hidden_size * tc.moe_intermediate_size / weight_pack_factor;
+            gate + per_expert * tc.num_experts
+        };
+        let norms = 2 * tc.hidden_size;
+
+        let per_layer = (attn + moe + norms) * elem;
+        Ok(vec![per_layer; tc.num_hidden_layers])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: Qwen3OmniConfig = serde_json::from_str(config)?;
+        Ok(cfg.thinker_config.text_config.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: Qwen3OmniConfig = serde_json::from_str(config)?;
+        let tc = &cfg.thinker_config.text_config;
+        Ok(Box::new(ModelConfigMetadata {
+            max_seq_len: tc.max_position_embeddings,
+            num_layers: tc.num_hidden_layers,
+            hidden_size: tc.hidden_size,
+            num_kv_heads: tc.num_key_value_heads,
+            num_attn_heads: tc.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: tc.head_dim,
+            v_head_dim: tc.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        }))
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision, NonMappedSubModel::Audio])
     }
 }
 
