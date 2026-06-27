@@ -16,8 +16,13 @@
 //! second (prefill) pass materializes the mel / pixel payloads. Text-only requests fall straight
 //! through to the standard text input path, preserving validated text serving.
 //!
-//! Video frame extraction (sampling raw video into frames + the patch layout) is the remaining gap;
-//! image and audio are complete. A video placeholder is reported rather than silently mis-sized.
+//! Video accepts pre-extracted frames (`VideoInput::frames`, decoded upstream — mp4 → frames needs
+//! FFmpeg, the caller's responsibility): each `<|VIDEO|>` placeholder is expanded to its merged-token
+//! count and the frames are patchified through the same Qwen3-VL video path (frames grouped by
+//! `temporal_patch_size`), flowing through as a [`ModalityInput::Video`] payload with a `[t, h, w]`
+//! grid that also drives 3D mRoPE. Separate audio + video in one request works (non-interleaved, HF's
+//! default); the interleaved `use_audio_in_video` layout (HF's time-chunked audio+video) is the one
+//! remaining gap.
 
 use std::{any::Any, sync::Arc};
 
@@ -159,6 +164,41 @@ impl Qwen3OmniInputsProcessor {
         Ok((pre.pixel_values, [r[0], r[1], r[2]]))
     }
 
+    /// Patchify one video's frames into `([num_patches, in_chans*temporal*patch*patch], [t, h, w])`
+    /// via the shared Qwen3-VL video path: frames are grouped by `temporal_patch_size` (so `t =
+    /// ceil(num_frames / temporal_patch_size)`), reusing the exact patch math the image path uses. The
+    /// frames are pre-extracted upstream (mp4 → frames needs FFmpeg); this stage only patchifies them.
+    fn preprocess_video(
+        &self,
+        frames: Vec<DynamicImage>,
+        device: &Device,
+    ) -> Result<(Tensor, [u32; 3])> {
+        if frames.is_empty() {
+            return Err(anyhow::Error::msg("video input has no frames"));
+        }
+        let pre = self
+            .image
+            .preprocess(
+                vec![],
+                vec![frames],
+                &self.preprocessor_config,
+                device,
+                (1, 1),
+            )
+            .map_err(anyhow::Error::msg)?;
+        let grid = pre
+            .video_grid_thw
+            .ok_or_else(|| anyhow::Error::msg("video preprocess returned no grid_thw"))?;
+        let rows = grid
+            .to_dtype(hanzo_ml::DType::U32)
+            .and_then(|g| g.to_vec2::<u32>())
+            .map_err(anyhow::Error::msg)?;
+        let r = rows
+            .first()
+            .ok_or_else(|| anyhow::Error::msg("empty video grid_thw"))?;
+        Ok((pre.pixel_values, [r[0], r[1], r[2]]))
+    }
+
     /// Merged Thinker-token count for a `[t, h, w]` patch grid: `t*h*w / spatial_merge_size^2`.
     fn merged_tokens(&self, grid: [u32; 3]) -> usize {
         (grid[0] as usize * grid[1] as usize * grid[2] as usize)
@@ -208,24 +248,20 @@ impl InputsProcessor for Qwen3OmniInputsProcessor {
         let mut payloads: Vec<(u32, ModalityInput)> = Vec::new();
         let mut audio_seqlens: Vec<usize> = Vec::new();
         let mut image_grid_rows: Vec<[u32; 3]> = Vec::new();
+        let mut video_grid_rows: Vec<[u32; 3]> = Vec::new();
         if is_prompt {
             for seq in input_seqs.iter_mut() {
-                let has_mm = seq.has_audios() || seq.has_images();
+                let has_mm = seq.has_audios() || seq.has_images() || seq.has_videos();
                 if !seq.multimodal.has_changed_prompt {
                     if !has_mm {
                         continue;
                     }
-                    if seq.has_videos() {
-                        return Err(anyhow::Error::msg(
-                            "Qwen3-Omni video input is not yet wired in the input processor \
-                             (image + audio are); video frame extraction is the remaining gap.",
-                        ));
-                    }
                     let audios = seq.multimodal.clone_audios().unwrap_or_default();
                     let images = seq.clone_images().unwrap_or_default();
+                    let videos = seq.clone_videos().unwrap_or_default();
                     let toks = seq.get_toks().to_vec();
                     let mut new_toks = Vec::with_capacity(toks.len());
-                    let (mut ai, mut ii) = (0usize, 0usize);
+                    let (mut ai, mut ii, mut vi) = (0usize, 0usize, 0usize);
                     for &t in &toks {
                         if t == self.audio_token_id {
                             let audio = audios.get(ai).ok_or_else(|| {
@@ -250,6 +286,17 @@ impl InputsProcessor for Qwen3OmniInputsProcessor {
                             let len = self.merged_tokens(grid);
                             new_toks.extend(std::iter::repeat_n(self.image_token_id, len));
                             ii += 1;
+                        } else if t == self.video_token_id {
+                            let video = videos.get(vi).ok_or_else(|| {
+                                anyhow::Error::msg(
+                                    "more <|VIDEO|> placeholders than provided videos",
+                                )
+                            })?;
+                            let (_pixels, grid) =
+                                self.preprocess_video(video.frames.clone(), device)?;
+                            let len = self.merged_tokens(grid);
+                            new_toks.extend(std::iter::repeat_n(self.video_token_id, len));
+                            vi += 1;
                         } else {
                             new_toks.push(t);
                         }
@@ -280,10 +327,21 @@ impl InputsProcessor for Qwen3OmniInputsProcessor {
                             ));
                         }
                     }
+                    if let Some(videos) = seq.take_videos() {
+                        for video in videos {
+                            let (pixels, grid) = self.preprocess_video(video.frames, device)?;
+                            video_grid_rows.push(grid);
+                            let grid_thw =
+                                Tensor::new(&[grid], device).map_err(anyhow::Error::msg)?;
+                            payloads.push((
+                                self.video_token_id,
+                                ModalityInput::Video { pixels, grid_thw },
+                            ));
+                        }
+                    }
                 }
             }
         }
-        let _ = self.video_token_id;
 
         // ── Standard text input assembly (shared with every text/vision model) ──────────────────
         let text_models_inputs_processor::InnerInputProcessorOutput {
@@ -330,13 +388,17 @@ impl InputsProcessor for Qwen3OmniInputsProcessor {
             .map_err(anyhow::Error::msg)?
         };
 
-        let image_grid_thw = if image_grid_rows.is_empty() {
-            None
-        } else {
-            let n = image_grid_rows.len();
-            let flat: Vec<u32> = image_grid_rows.iter().flatten().copied().collect();
-            Some(Tensor::from_vec(flat, (n, 3), device).map_err(anyhow::Error::msg)?)
+        let stack_grid = |rows: &[[u32; 3]]| -> Result<Option<Tensor>> {
+            if rows.is_empty() {
+                return Ok(None);
+            }
+            let flat: Vec<u32> = rows.iter().flatten().copied().collect();
+            Ok(Some(
+                Tensor::from_vec(flat, (rows.len(), 3), device).map_err(anyhow::Error::msg)?,
+            ))
         };
+        let image_grid_thw = stack_grid(&image_grid_rows)?;
+        let video_grid_thw = stack_grid(&video_grid_rows)?;
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
@@ -347,7 +409,7 @@ impl InputsProcessor for Qwen3OmniInputsProcessor {
             model_specific_args: Box::new(OmniSpecificArgs {
                 payloads,
                 image_grid_thw,
-                video_grid_thw: None,
+                video_grid_thw,
                 audio_seqlens,
             }),
             paged_attn_meta,
@@ -357,5 +419,111 @@ impl InputsProcessor for Qwen3OmniInputsProcessor {
             inputs,
             seq_indices,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_audio_processor, Qwen3OmniInputsProcessor};
+    use crate::vision_models::preprocessor_config::PreProcessorConfig;
+    use crate::vision_models::qwen3_omni::config::OmniAudioConfig;
+    use crate::vision_models::qwen3_vl::inputs_processor::Qwen3VLImageProcessor;
+    use hanzo_ml::Device;
+    use image::{DynamicImage, Rgb, RgbImage};
+
+    const PATCH: usize = 16;
+    const MERGE: usize = 2;
+    const TEMPORAL: usize = 2;
+
+    /// A processor with a fixed patch geometry and pixel bounds chosen so a 64×64 frame (a multiple of
+    /// `patch*merge = 32`, 4096 px) is neither up- nor down-scaled — yielding a fully deterministic
+    /// grid. The audio tower is unused by these shape tests (the processor only stores it).
+    #[allow(clippy::field_reassign_with_default)]
+    fn processor() -> Qwen3OmniInputsProcessor {
+        let audio_config: OmniAudioConfig = serde_json::from_str(
+            r#"{"d_model":64,"encoder_layers":1,"encoder_attention_heads":1,"encoder_ffn_dim":64,"num_mel_bins":128,"output_dim":64}"#,
+        )
+        .unwrap();
+        let mut pc = PreProcessorConfig::default();
+        pc.patch_size = Some(PATCH);
+        pc.merge_size = Some(MERGE);
+        pc.temporal_patch_size = Some(TEMPORAL);
+        pc.min_pixels = Some(32 * 32);
+        pc.max_pixels = Some(128 * 128);
+        Qwen3OmniInputsProcessor {
+            audio_token_id: 151646,
+            image_token_id: 151655,
+            video_token_id: 151656,
+            spatial_merge_size: MERGE,
+            audio: build_audio_processor(&audio_config),
+            image: Qwen3VLImageProcessor::new(None),
+            preprocessor_config: pc,
+        }
+    }
+
+    /// Deterministic w×h RGB gradient (exact pixel values are irrelevant to the shape contract).
+    fn synthetic(w: u32, h: u32) -> DynamicImage {
+        DynamicImage::ImageRgb8(RgbImage::from_fn(w, h, |x, y| {
+            Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
+        }))
+    }
+
+    /// The feature width one patch row carries: `in_chans(3) * temporal_patch * patch * patch`, the
+    /// exact layout [`super::super::vision::OmniVisionTower::forward`] consumes.
+    fn feat() -> usize {
+        3 * TEMPORAL * PATCH * PATCH
+    }
+
+    /// The image path end-to-end at the shape level: a synthetic 64×64 image patchifies to the exact
+    /// `[1, 4, 4]` grid (64/16 = 4 patches per side, temporal grid 1 for a single image), the pixel
+    /// rows equal the patch product, and the merged-token count phase-1 expands the `<|IMAGE|>`
+    /// placeholder to equals `product / merge^2` and `rows / merge^2`. No weights, fast.
+    #[test]
+    fn image_path_shapes() {
+        let p = processor();
+        let (pixels, grid) = p.preprocess_image(synthetic(64, 64), &Device::Cpu).unwrap();
+        assert_eq!(grid, [1, 4, 4]);
+        assert_eq!(pixels.dims(), &[16, feat()]);
+        let merged = p.merged_tokens(grid);
+        let product = (grid[0] * grid[1] * grid[2]) as usize;
+        assert_eq!(merged, product / (MERGE * MERGE));
+        assert_eq!(merged, pixels.dims()[0] / (MERGE * MERGE));
+        assert_eq!(merged, 4);
+    }
+
+    /// The video path end-to-end at the shape level: 4 pre-extracted 64×64 frames group by
+    /// `temporal_patch_size` into a temporal grid of 2 (`[2, 4, 4]`), the pixel rows equal the patch
+    /// product, and the `<|VIDEO|>` placeholder expands to the matching merged-token count. Mirrors
+    /// `image_path_shapes`; no weights, fast.
+    #[test]
+    fn video_path_shapes() {
+        let p = processor();
+        let frames: Vec<DynamicImage> = (0..4).map(|_| synthetic(64, 64)).collect();
+        let (pixels, grid) = p.preprocess_video(frames, &Device::Cpu).unwrap();
+        assert_eq!(grid, [2, 4, 4]);
+        assert_eq!(pixels.dims(), &[32, feat()]);
+        let merged = p.merged_tokens(grid);
+        let product = (grid[0] * grid[1] * grid[2]) as usize;
+        assert_eq!(merged, product / (MERGE * MERGE));
+        assert_eq!(merged, pixels.dims()[0] / (MERGE * MERGE));
+        assert_eq!(merged, 8);
+    }
+
+    /// An odd frame count pads up to a multiple of `temporal_patch_size` (HF behaviour): 3 frames ->
+    /// temporal grid 2, the same as 4 frames. Locks the temporal grouping the mRoPE positions depend on.
+    #[test]
+    fn video_temporal_padding() {
+        let p = processor();
+        let frames: Vec<DynamicImage> = (0..3).map(|_| synthetic(64, 64)).collect();
+        let (pixels, grid) = p.preprocess_video(frames, &Device::Cpu).unwrap();
+        assert_eq!(grid[0], 2, "3 frames pad to temporal grid 2");
+        assert_eq!(pixels.dims()[0], (grid[0] * grid[1] * grid[2]) as usize);
+    }
+
+    /// Empty frames is a clean error, not a panic.
+    #[test]
+    fn video_empty_frames_errors() {
+        let p = processor();
+        assert!(p.preprocess_video(vec![], &Device::Cpu).is_err());
     }
 }
