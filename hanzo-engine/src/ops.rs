@@ -21,7 +21,9 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
     use hanzo_ml::cuda_backend::CudaStorageSlice;
     use std::ffi::c_void;
 
-    let input = final_logits_row(input)?;
+    // Full last-dim top-k over ALL rows (the kernel runs one block per row); MoE routers call this on
+    // per-token [tokens, experts] scores and need every token's experts, matching the CPU fallback.
+    let input = input.contiguous()?;
     let dims = input.dims();
     let ncols = *dims
         .last()
@@ -851,27 +853,6 @@ pub struct CudaTop1LogitsWorkspace {
     block_values: hanzo_ml::cuda_backend::cudarc::driver::CudaSlice<f32>,
     block_indices: hanzo_ml::cuda_backend::cudarc::driver::CudaSlice<u32>,
     packed: hanzo_ml::cuda_backend::cudarc::driver::CudaSlice<f32>,
-}
-
-#[cfg(feature = "cuda")]
-fn final_logits_row(input: &Tensor) -> Result<Tensor> {
-    let dims = input.dims();
-    if dims.len() <= 1 {
-        return input.contiguous();
-    }
-    let vocab = *dims.last().expect("rank checked above");
-    if vocab == 0 {
-        hanzo_ml::bail!("logits last dimension is empty");
-    }
-    let rows = input.elem_count() / vocab;
-    if rows == 0 {
-        hanzo_ml::bail!("logits tensor is empty");
-    }
-    input
-        .reshape((rows, vocab))?
-        .narrow(0, rows - 1, 1)?
-        .reshape(vocab)?
-        .contiguous()
 }
 
 #[cfg(feature = "cuda")]
