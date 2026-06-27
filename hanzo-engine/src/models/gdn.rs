@@ -65,14 +65,11 @@ impl RmsNormGated {
 
     pub fn forward(&self, x: &Tensor, gate: &Tensor) -> Result<Tensor> {
         let dtype = x.dtype();
-        let x = x.to_dtype(DType::F32)?;
+        let x = x.to_dtype(DType::F32)?.contiguous()?;
         let gate = hanzo_nn::ops::silu(&gate.to_dtype(DType::F32)?)?;
-        let variance = x.sqr()?.mean_keepdim(D::Minus1)?;
-        let normed = x.broadcast_div(&(variance + self.eps)?.sqrt()?)?;
-        let out = normed
-            .broadcast_mul(&self.weight.to_dtype(DType::F32)?)?
-            .broadcast_mul(&gate)?;
-        out.to_dtype(dtype)
+        let weight = self.weight.to_dtype(DType::F32)?;
+        let normed = hanzo_nn::ops::rms_norm(&x, &weight, self.eps as f32)?;
+        normed.broadcast_mul(&gate)?.to_dtype(dtype)
     }
 }
 
@@ -130,13 +127,12 @@ impl Clone for GdnLayerCache {
 // ====================== GDN math functions ======================
 
 pub fn l2_norm(x: &Tensor, eps: f64) -> Result<Tensor> {
-    let inv_norm = x
-        .sqr()?
-        .sum_keepdim(D::Minus1)?
-        .broadcast_add(&Tensor::new(eps as f32, x.device())?.to_dtype(x.dtype())?)?
-        .sqrt()?
-        .recip()?;
-    x.broadcast_mul(&inv_norm)
+    // x * rsqrt(sum(x^2) + eps), expressed via the fused rms_norm kernel
+    // (x * rsqrt(mean(x^2) + e) * w): w = 1/sqrt(n), e = eps/n makes it exact.
+    let n = x.dim(D::Minus1)?;
+    let scale = (n as f64).sqrt().recip();
+    let weight = Tensor::ones(n, x.dtype(), x.device())?.affine(scale, 0.0)?;
+    hanzo_nn::ops::rms_norm(&x.contiguous()?, &weight, (eps / n as f64) as f32)
 }
 
 pub fn softplus(x: &Tensor) -> Result<Tensor> {
