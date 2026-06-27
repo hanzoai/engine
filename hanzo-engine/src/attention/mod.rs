@@ -175,11 +175,14 @@ fn vulkan_decode_attn(
     let (qs, _) = q.storage_and_layout();
     let (ks, _) = k.storage_and_layout();
     let (vs, _) = v.storage_and_layout();
-    let (Storage::Vulkan(qv), Storage::Vulkan(kv), Storage::Vulkan(vv)) = (&*qs, &*ks, &*vs) else {
+    let (Storage::Vulkan(_qv), Storage::Vulkan(_kv), Storage::Vulkan(_vv)) = (&*qs, &*ks, &*vs) else {
         return Ok(None);
     };
-    let out = dev.attn_decode_gpu(qv, kv, vv, b, h, hkv, l, d, sdpa_params.softmax_scale)?;
-    Ok(Some(Tensor::from((Storage::Vulkan(out), (b, h, 1, d)))))
+    // Fused single-query Vulkan decode-attention (`attn_decode_gpu`) is not yet wired in hanzo-ml;
+    // returning None routes this through the standard Sdpa path (which handles Vulkan storage). The
+    // fused kernel is a decode-perf follow-up, not a correctness requirement.
+    let _ = (dev, hkv, l);
+    Ok(None)
 }
 
 pub struct SdpaParams {
