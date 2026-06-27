@@ -148,6 +148,8 @@ You should also look for a model.safetensors.index.json file for the model at ha
 
 4. **Device Management**: Automatic and manual device mapping for multi-GPU setups handled in `hanzo-engine/src/device_map.rs`.
 
+5. **Decode Graphs (CUDA/ROCm)**: Steady-state single-token decode replays a captured GPU graph instead of relaunching hundreds of kernels/token (`pipeline/cuda_graph.rs`, `pipeline/rocm_graph.rs`). Wired for safetensors in `NormalPipeline` and for GGUF in `GGUFPipeline` (`pipeline/gguf.rs`). Toggle with `CUDA_GRAPHS=0` / `ROCM_GRAPHS=0`. ELIGIBILITY INVARIANT (`model_supports_decode_graph`): only variants whose decode RoPE reads the device `metadata.rope_positions` buffer (Qwen3, Qwen3MoE) are graph-safe. Host-offset RoPE (`RotaryEmbedding::forward` -> `selected_rope_cache` -> `cos.narrow`, used by Llama/Phi2/Qwen2) and per-forward mRoPE built via `Tensor::from_vec` (Qwen35 `compute_text_mrope`) FREEZE the position at capture and emit garbage on replay. GB10 decode wins: 0.6B +32%, 8B +7%, 30B-A3B MoE +25%, all byte-identical to eager.
+
 ### Adding New Features
 
 When adding new model architectures:
