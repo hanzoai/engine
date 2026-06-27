@@ -21,14 +21,13 @@
 
 use std::sync::Arc;
 
-use hanzo_ml::{Device, Result, Tensor};
+use hanzo_ml::{DType, Device, Result, Tensor};
 use hanzo_nn::{Embedding, Linear, Module};
 use hanzo_quant::ShardedVarBuilder;
 
 use crate::{
     attention::{naive_sdpa, SdpaParams},
     layers::{self, repeat_kv, RmsNorm, RotaryEmbedding},
-    moe::{MoEExperts, MoEExpertsConfig},
     ops::{moe_router_topk, MoeRouterScoreFunction, MoeRouterSelectedWeight, MoeRouterTopKConfig},
 };
 
@@ -156,11 +155,17 @@ impl SwiGluMlp {
     }
 }
 
-/// Qwen3-MoE block with a shared expert: `gate` (router) + [`MoEExperts`] + a sigmoid-gated dense
-/// shared expert. Mirrors HF Qwen3-MoE semantics.
+/// Qwen3-MoE block with a shared expert: a router `gate` + per-expert SwiGLU experts + a
+/// sigmoid-gated dense shared expert. Mirrors HF Qwen3-MoE semantics.
+///
+/// The expert compute is the inlined gather → expert → weighted scatter-add loop (identical to
+/// `super::thinker::MoeMlp`), not the [`crate::moe::MoEExperts`] wrapper: that wrapper's loader
+/// requires the combined `gate_up_proj` layout while this checkpoint is per-expert
+/// (`experts.{i}.{gate,up,down}_proj`), and its fast gather kernel is CUDA-only. The inline path is
+/// device-agnostic and exact.
 struct MoeMlp {
     gate: Linear,
-    experts: MoEExperts,
+    experts: Vec<SwiGluMlp>,
     shared_expert: SwiGluMlp,
     shared_expert_gate: Linear,
     num_experts_per_tok: usize,
@@ -174,9 +179,13 @@ impl MoeMlp {
         device: &Device,
         comm: &Arc<hanzo_quant::Comm>,
     ) -> Result<Self> {
-        // Router + shared expert borrow `vb`; the experts loader consumes it last (it descends into
-        // `vb.pp("experts")` itself).
+        // Single-process, dense per-rank experts: tensor-parallel plumbing is unused here.
+        let _ = (device, comm);
         let gate = layers::linear_no_bias(cfg.hidden_size, cfg.num_experts, vb.pp("gate"))?;
+        let vb_e = vb.pp("experts");
+        let experts = (0..cfg.num_experts)
+            .map(|i| SwiGluMlp::new(vb_e.pp(i), cfg.hidden_size, cfg.moe_intermediate_size))
+            .collect::<Result<Vec<_>>>()?;
         let shared_expert = SwiGluMlp::new(
             vb.pp("shared_expert"),
             cfg.hidden_size,
@@ -184,22 +193,6 @@ impl MoeMlp {
         )?;
         let shared_expert_gate =
             layers::linear_no_bias(cfg.hidden_size, 1, vb.pp("shared_expert_gate"))?;
-
-        let moe_cfg = MoEExpertsConfig {
-            num_experts: cfg.num_experts,
-            num_experts_per_tok: cfg.num_experts_per_tok,
-            hidden_size: cfg.hidden_size,
-            moe_intermediate_size: cfg.moe_intermediate_size,
-        };
-        let experts = MoEExperts::new(
-            &moe_cfg,
-            vb,
-            device.clone(),
-            comm,
-            false,
-            &None,
-            cfg.hidden_act,
-        )?;
 
         Ok(Self {
             gate,
@@ -212,7 +205,8 @@ impl MoeMlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let (_b, _t, hidden_dim) = xs.dims3()?;
+        let (b, t, hidden_dim) = xs.dims3()?;
+        let device = xs.device();
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
         let router_logits = self.gate.forward(&xs_flat)?;
@@ -230,7 +224,35 @@ impl MoeMlp {
             None,
             None,
         )?;
-        let routed = self.experts.forward(xs, topk.values, &topk.indices)?;
+
+        // Bucket the (token, weight) assignments by expert, then run each engaged expert over its
+        // routed tokens and weighted scatter-add into the output (identical to the thinker path).
+        let weights = topk.values.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+        let ids = topk.indices.to_vec2::<u32>()?;
+        let n_experts = self.experts.len();
+        let mut rows = vec![Vec::<u32>::new(); n_experts];
+        let mut wts = vec![Vec::<f32>::new(); n_experts];
+        for (row, (rw, ix)) in weights.iter().zip(ids.iter()).enumerate() {
+            for (&w, &e) in rw.iter().zip(ix.iter()) {
+                rows[e as usize].push(row as u32);
+                wts[e as usize].push(w);
+            }
+        }
+
+        let mut ys = xs_flat.zeros_like()?;
+        for (e, expert) in self.experts.iter().enumerate() {
+            if rows[e].is_empty() {
+                continue;
+            }
+            let idx = Tensor::new(rows[e].as_slice(), device)?;
+            let sel = xs_flat.index_select(&idx, 0)?;
+            let out = expert.forward(&sel)?;
+            let w = Tensor::new(wts[e].as_slice(), device)?
+                .reshape(((), 1))?
+                .to_dtype(xs.dtype())?;
+            ys = ys.index_add(&idx, &out.broadcast_mul(&w)?, 0)?;
+        }
+        let routed = ys.reshape((b, t, hidden_dim))?;
 
         // shared_expert_gate: Linear(hidden -> 1); sigmoid-gate the dense shared expert output.
         let shared = self.shared_expert.forward(xs)?;
@@ -439,6 +461,12 @@ impl OmniTalker {
     }
 
     /// Run the talker decoder over pre-summed `inputs_embeds`; returns `(hidden, codec0_logits)`.
+    ///
+    /// `hidden` is the **post-`norm`** final hidden state (`last_hidden_state`). This is exactly HF's
+    /// `outputs.hidden_states[-1]`: the `@capture_outputs` recorder runs with
+    /// `tie_last_hidden_states=True`, which overwrites the last captured (pre-norm) entry with
+    /// `last_hidden_state`. The talker generation loop feeds this post-norm hidden to the code
+    /// predictor as `past_hidden`, and `codec0_logits = codec_head(hidden)` come from the same tensor.
     pub fn forward(
         &self,
         inputs_embeds: &Tensor,
