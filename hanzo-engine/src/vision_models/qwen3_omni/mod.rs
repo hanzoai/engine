@@ -29,12 +29,14 @@ use crate::{
 pub mod audio_tower;
 pub mod code2wav;
 pub mod config;
+pub mod inputs_processor;
 pub mod modality;
 pub mod talker;
 pub mod thinker;
 pub mod vision;
 
 pub use config::Qwen3OmniConfig;
+pub use inputs_processor::Qwen3OmniProcessor;
 
 use audio_tower::OmniAudioTower;
 use code2wav::OmniCode2Wav;
@@ -464,20 +466,57 @@ impl Qwen3OmniModel {
     }
 }
 
+/// Per-request multimodal payloads for the [`MultimodalModel`] serving path, produced by the Omni
+/// input processor and passed through `forward`'s `model_specific_args`.
+///
+/// `payloads` are the `(placeholder_token, ModalityInput)` pairs that [`fuse_modalities`] scatters
+/// into the Thinker embedding rows (audio mel / image pixels / video frames). The grids and
+/// `audio_seqlens` describe the modality shapes that drive 3D mRoPE position computation
+/// ([`omni_get_rope_index`]). An empty `payloads` (the [`Default`]) is the text-only request, which
+/// preserves the validated text serving path exactly.
+#[derive(Default)]
+pub struct OmniSpecificArgs {
+    /// `(placeholder_token_id, payload)` consumed left-to-right by [`fuse_modalities`].
+    pub payloads: Vec<(u32, ModalityInput)>,
+    /// `[num_images, 3]` (t, h, w) patch grid per image, for vision mRoPE positions.
+    pub image_grid_thw: Option<Tensor>,
+    /// `[num_videos, 3]` (t, h, w) patch grid per video, for vision mRoPE positions.
+    pub video_grid_thw: Option<Tensor>,
+    /// Per-audio mel frame counts (Thinker-token lengths are derived via the conv feat formula).
+    pub audio_seqlens: Vec<usize>,
+}
+
+/// `[n, 3]` u32 grid tensor -> `Vec<[u32; 3]>` rows for [`omni_get_rope_index`].
+fn grid_rows(grid: Option<&Tensor>) -> Result<Option<Vec<[u32; 3]>>> {
+    let Some(g) = grid else { return Ok(None) };
+    let raw = g.to_dtype(DType::U32)?.to_vec2::<u32>()?;
+    let mut rows = Vec::with_capacity(raw.len());
+    for r in raw {
+        if r.len() != 3 {
+            hanzo_ml::bail!("grid_thw rows must have length 3, got {}", r.len());
+        }
+        rows.push([r[0], r[1], r[2]]);
+    }
+    Ok(Some(rows))
+}
+
 impl MultimodalModel for Qwen3OmniModel {
     fn forward(
         &self,
         input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
-        _model_specific_args: Box<dyn Any>,
+        model_specific_args: Box<dyn Any>,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        // v1 serving = the text path: embed token ids and run the cache-aware Thinker decoder to
-        // text logits. Raw image/audio/video serving additionally needs the Omni input processor to
-        // emit modality placeholder tokens + payload tensors (mRoPE position ids, mel / pixel grids)
-        // so [`fuse_modalities`] can scatter encoder outputs into the embedding rows; that processor
-        // wiring is the documented follow-up. Until then `pixel_values` / `model_specific_args` are
-        // unused here and prompts are treated as text.
+        // Serving = understand→think to text logits over the cache-aware Thinker decoder. The Omni
+        // input processor hands modality payloads through `model_specific_args`; when present, the
+        // raw mel/pixel/frame features are encoded and scattered into the placeholder embedding rows
+        // by [`fuse_modalities`] (the same validated path the model-level `forward` uses), then mRoPE
+        // positions drive the decoder. A text-only request (empty payloads, or no args) runs the
+        // exact validated text path.
+        let args = model_specific_args.downcast::<OmniSpecificArgs>().ok();
+        let multimodal = args.as_ref().is_some_and(|a| !a.payloads.is_empty());
+
         let seqlen_offsets = ctx.seqlen_offsets();
         // `force_custom` keeps a real additive mask (rather than a flash-causal marker) so the
         // Thinker's `naive_sdpa` masks correctly; `None` is returned for single-token decode.
@@ -492,9 +531,57 @@ impl MultimodalModel for Qwen3OmniModel {
         )?;
         let embeds = self.thinker.embed_tokens(input_ids)?;
         let mut cache = self.cache.normal();
-        self.thinker.forward_cached(
+
+        if !multimodal {
+            return self.thinker.forward_cached(
+                &embeds,
+                seqlen_offsets,
+                mask.as_option_tensor(),
+                &mut cache.0,
+                ctx,
+            );
+        }
+
+        // Scatter each modality payload into its placeholder rows.
+        let args = args.unwrap();
+        let fused = fuse_modalities(
             &embeds,
-            seqlen_offsets,
+            input_ids,
+            &self.encoders,
+            &args.payloads,
+            &self.device,
+        )?;
+
+        // Vision (image/video) requires genuine interleaved 3D mRoPE. Audio/text positions are equal
+        // on all three axes (HF expands them as `arange().expand(3, -1)`), so they collapse to the
+        // validated 1D cached path — which is numerically exact, not an approximation.
+        let has_vision = args.image_grid_thw.is_some() || args.video_grid_thw.is_some();
+        if !has_vision {
+            return self.thinker.forward_cached(
+                &fused,
+                seqlen_offsets,
+                mask.as_option_tensor(),
+                &mut cache.0,
+                ctx,
+            );
+        }
+
+        let ids: Vec<u32> = input_ids.flatten_all()?.to_dtype(DType::U32)?.to_vec1::<u32>()?;
+        let tc = &self.cfg.thinker_config;
+        let position_ids = omni_get_rope_index(
+            &ids,
+            grid_rows(args.image_grid_thw.as_ref())?.as_deref(),
+            grid_rows(args.video_grid_thw.as_ref())?.as_deref(),
+            tc.vision_config.spatial_merge_size,
+            tc.image_token_id,
+            tc.video_token_id,
+            tc.vision_start_token_id,
+            tc.position_id_per_seconds,
+            &self.device,
+        )?;
+        self.thinker.forward_cached_mrope(
+            &fused,
+            &position_ids,
             mask.as_option_tensor(),
             &mut cache.0,
             ctx,
@@ -516,8 +603,8 @@ impl MultimodalModel for Qwen3OmniModel {
         &self.cfg_meta
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
-        // The text serving path carries no modality payloads.
-        Box::new(())
+        // Text-only request: no modality payloads, no grids.
+        Box::new(OmniSpecificArgs::default())
     }
 }
 
@@ -567,6 +654,125 @@ fn argmax_u32(v: &[f32]) -> u32 {
     best as u32
 }
 
+/// Number of Thinker audio tokens a mel of `mel_frames` frames produces, faithful to HF
+/// `_get_feat_extract_output_lengths`: three stride-2 convs within each 100-frame block, plus 13
+/// frames per full block. Equals the [`OmniAudioTower`] output length (its conv stem chunks the mel
+/// into 100-frame windows, each downsampled 8× to 13 post-CNN frames). The input processor uses this
+/// to expand the single audio placeholder into the right number of rows.
+pub fn omni_audio_feat_len(mel_frames: usize) -> usize {
+    let leave = mel_frames % 100;
+    // `(leave - 1) / 2 + 1` with saturating arithmetic (matches Python floor-div for leave==0 → 0).
+    let f = |n: usize| if n == 0 { 0 } else { (n - 1) / 2 + 1 };
+    f(f(f(leave))) + (mel_frames / 100) * 13
+}
+
+/// 3D interleaved-mRoPE position ids for Qwen3-Omni serving, faithful to HF
+/// `Qwen3OmniMoeThinkerForConditionalGeneration.get_rope_index` for a single sequence without
+/// `use_audio_in_video`.
+///
+/// Text and **audio** tokens advance one position on all three (temporal, height, width) axes — HF
+/// lays both out as `arange(len).expand(3, -1)` — so they reduce exactly to 1D RoPE. Each image/video
+/// span instead lays its placeholders on the patch grid: temporal index `t * position_id_per_seconds`
+/// (×1 fps for images), height `arange(grid_h / merge)`, width `arange(grid_w / merge)`, all offset
+/// by the running position. The surrounding `vision_start` / `vision_end` tokens are sequential.
+///
+/// Returns `[3, 1, seq]` (t, h, w). `image_grid_thw` / `video_grid_thw` are `[t, h, w]` patch grids
+/// (pre-merge) in placeholder order; one row is consumed per image/video span encountered.
+#[allow(clippy::too_many_arguments)]
+pub fn omni_get_rope_index(
+    input_ids: &[u32],
+    image_grid_thw: Option<&[[u32; 3]]>,
+    video_grid_thw: Option<&[[u32; 3]]>,
+    spatial_merge_size: usize,
+    image_token_id: u32,
+    video_token_id: u32,
+    vision_start_token_id: u32,
+    position_id_per_seconds: usize,
+    device: &Device,
+) -> Result<Tensor> {
+    let seq = input_ids.len();
+    let merge = spatial_merge_size.max(1) as i64;
+    let pps = position_id_per_seconds as i64;
+    let (mut tp, mut hp, mut wp) = (
+        Vec::with_capacity(seq),
+        Vec::with_capacity(seq),
+        Vec::with_capacity(seq),
+    );
+    let mut next: i64 = 0; // next sequential (text/audio) position on all three axes
+    let (mut image_idx, mut video_idx) = (0usize, 0usize);
+
+    let mut i = 0usize;
+    while i < seq {
+        let tok = input_ids[i];
+        let opens_vision = tok == vision_start_token_id
+            && i + 1 < seq
+            && (input_ids[i + 1] == image_token_id || input_ids[i + 1] == video_token_id);
+        if !opens_vision {
+            tp.push(next);
+            hp.push(next);
+            wp.push(next);
+            next += 1;
+            i += 1;
+            continue;
+        }
+
+        // `vision_start` is a sequential token; the grid starts one position later.
+        tp.push(next);
+        hp.push(next);
+        wp.push(next);
+        let base = next + 1;
+
+        let is_image = input_ids[i + 1] == image_token_id;
+        let row = if is_image {
+            let g = image_grid_thw
+                .ok_or_else(|| hanzo_ml::Error::msg("omni_get_rope_index: image grid missing"))?;
+            let r = *g.get(image_idx).ok_or_else(|| {
+                hanzo_ml::Error::msg("omni_get_rope_index: too few image_grid_thw rows")
+            })?;
+            image_idx += 1;
+            r
+        } else {
+            let g = video_grid_thw
+                .ok_or_else(|| hanzo_ml::Error::msg("omni_get_rope_index: video grid missing"))?;
+            let r = *g.get(video_idx).ok_or_else(|| {
+                hanzo_ml::Error::msg("omni_get_rope_index: too few video_grid_thw rows")
+            })?;
+            video_idx += 1;
+            r
+        };
+        let (gt, gh, gw) = (row[0] as i64, row[1] as i64 / merge, row[2] as i64 / merge);
+        if gt <= 0 || gh <= 0 || gw <= 0 {
+            hanzo_ml::bail!("omni_get_rope_index: degenerate grid {row:?}");
+        }
+        let mut max_pos = next;
+        for t in 0..gt {
+            for h in 0..gh {
+                for w in 0..gw {
+                    let (t_pos, h_pos, w_pos) = (base + t * pps, base + h, base + w);
+                    tp.push(t_pos);
+                    hp.push(h_pos);
+                    wp.push(w_pos);
+                    max_pos = max_pos.max(t_pos).max(h_pos).max(w_pos);
+                }
+            }
+        }
+        next = max_pos + 1;
+        i += 1 + (gt * gh * gw) as usize; // skip vision_start + the placeholder run
+    }
+
+    if tp.len() != seq {
+        hanzo_ml::bail!(
+            "omni_get_rope_index: produced {} positions for {seq} tokens (grid/placeholder mismatch)",
+            tp.len()
+        );
+    }
+    let mut flat = Vec::with_capacity(3 * seq);
+    flat.extend_from_slice(&tp);
+    flat.extend_from_slice(&hp);
+    flat.extend_from_slice(&wp);
+    Tensor::from_vec(flat, (3, 1, seq), device)
+}
+
 /// Additive causal mask `[1, 1, t, t]`: 0 on/below the diagonal, -inf above.
 fn causal_mask(t: usize, dtype: DType, device: &Device) -> Result<Tensor> {
     let mut data = vec![0f32; t * t];
@@ -576,6 +782,283 @@ fn causal_mask(t: usize, dtype: DType, device: &Device) -> Result<Tensor> {
         }
     }
     Tensor::from_vec(data, (1, 1, t, t), device)?.to_dtype(dtype)
+}
+
+#[cfg(test)]
+mod mrope_tests {
+    use super::{omni_audio_feat_len, omni_get_rope_index};
+    use hanzo_ml::Device;
+
+    /// (t, h, w) position rows for a single sequence.
+    #[allow(clippy::too_many_arguments)]
+    fn pos(
+        ids: &[u32],
+        img: Option<&[[u32; 3]]>,
+        vid: Option<&[[u32; 3]]>,
+        merge: usize,
+        image_tok: u32,
+        video_tok: u32,
+        vstart: u32,
+        pps: usize,
+    ) -> (Vec<i64>, Vec<i64>, Vec<i64>) {
+        let t = omni_get_rope_index(
+            ids, img, vid, merge, image_tok, video_tok, vstart, pps, &Device::Cpu,
+        )
+        .unwrap();
+        let v = t.to_vec3::<i64>().unwrap(); // [3, 1, seq]
+        (v[0][0].clone(), v[1][0].clone(), v[2][0].clone())
+    }
+
+    #[test]
+    fn text_only_is_arange() {
+        let (t, h, w) = pos(&[10, 11, 12, 13], None, None, 2, 100, 101, 102, 13);
+        assert_eq!(t, vec![0, 1, 2, 3]);
+        assert_eq!(h, vec![0, 1, 2, 3]);
+        assert_eq!(w, vec![0, 1, 2, 3]);
+    }
+
+    /// Audio_start / audio / audio_end are not vision tokens, so the whole sequence stays sequential
+    /// (HF lays audio positions out as `arange().expand(3, -1)`) — the exact 1D collapse the serving
+    /// path relies on.
+    #[test]
+    fn audio_collapses_to_arange() {
+        let ids = [10u32, 900, 1000, 1000, 1000, 901, 11];
+        let (t, h, w) = pos(&ids, None, None, 2, 151655, 151656, 151652, 13);
+        let expect: Vec<i64> = (0..ids.len() as i64).collect();
+        assert_eq!(t, expect);
+        assert_eq!(h, expect);
+        assert_eq!(w, expect);
+    }
+
+    /// A 1×4×4 image (merge 2 → 2×2 = 4 placeholders) laid out on the (t, h, w) grid, matching HF
+    /// `get_rope_index`: vision_start at the running position, the grid one beyond, vision_end after.
+    #[test]
+    fn image_lays_out_grid() {
+        let (vstart, vend, img_tok) = (151652u32, 151653u32, 151655u32);
+        let ids = [10u32, vstart, img_tok, img_tok, img_tok, img_tok, vend, 11];
+        let (t, h, w) = pos(&ids, Some(&[[1, 4, 4]]), None, 2, img_tok, 151656, vstart, 13);
+        assert_eq!(t, vec![0, 1, 2, 2, 2, 2, 4, 5]);
+        assert_eq!(h, vec![0, 1, 2, 2, 3, 3, 4, 5]);
+        assert_eq!(w, vec![0, 1, 2, 3, 2, 3, 4, 5]);
+    }
+
+    /// `omni_audio_feat_len` reproduces HF `_get_feat_extract_output_lengths` (and the audio tower's
+    /// own conv-stem output length): 13 frames per full 100-frame block plus the downsampled tail.
+    #[test]
+    fn audio_feat_len_matches_hf() {
+        assert_eq!(omni_audio_feat_len(100), 13);
+        assert_eq!(omni_audio_feat_len(50), 7);
+        assert_eq!(omni_audio_feat_len(150), 20);
+        assert_eq!(omni_audio_feat_len(200), 26);
+    }
+}
+
+#[cfg(test)]
+mod multimodal_tests {
+    use super::config::Qwen3OmniConfig;
+    use super::modality::ModalityInput;
+    use super::{omni_audio_feat_len, omni_get_rope_index, OmniSpecificArgs, Qwen3OmniModel};
+    use crate::pipeline::text_models_inputs_processor::FlashParams;
+    use crate::pipeline::{EitherCache, ModelForwardContext, MultimodalModel, NormalCache};
+    use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
+    use hanzo_ml::{DType, Device, IndexOp, Tensor};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn cosine(a: &[f32], b: &[f32]) -> f32 {
+        let (mut d, mut na, mut nb) = (0f64, 0f64, 0f64);
+        for (x, y) in a.iter().zip(b) {
+            d += (*x as f64) * (*y as f64);
+            na += (*x as f64).powi(2);
+            nb += (*y as f64).powi(2);
+        }
+        (d / (na.sqrt() * nb.sqrt())) as f32
+    }
+    fn flat(t: &Tensor) -> Vec<f32> {
+        t.to_dtype(DType::F32)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap()
+    }
+    fn argmax(v: &[f32]) -> usize {
+        v.iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap()
+            .0
+    }
+
+    /// The SERVING path (`MultimodalModel::forward` with an [`OmniSpecificArgs`] audio payload)
+    /// produces the SAME text logits as the validated model-level `forward(input_ids, &[(audio,
+    /// mel)], ..)` — i.e. it actually encodes the mel and scatters it into the audio placeholder rows
+    /// through [`fuse_modalities`]. Also exercises the 3D-mRoPE serving decoder
+    /// (`forward_cached_mrope`) and proves it collapses to the 1D path for text/audio positions, with
+    /// the REAL zen-omni-30b weights. Env-gated on `ZEN_OMNI_DIR` so weightless CI skips cleanly.
+    #[test]
+    fn omni_multimodal_forward_fuses() {
+        let dir = std::env::var("ZEN_OMNI_DIR")
+            .unwrap_or_else(|_| "/home/z/work/zen/hf/zen-omni-30b-instruct".to_string());
+        let dirp = PathBuf::from(&dir);
+        let index = dirp.join("model.safetensors.index.json");
+        if !index.is_file() {
+            eprintln!("[mm] zen-omni weights absent ({index:?}); skipping");
+            return;
+        }
+
+        let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
+        let dtype = if device.is_cuda() {
+            DType::BF16
+        } else {
+            DType::F16
+        };
+        eprintln!("[mm] device={device:?} dtype={dtype:?}");
+
+        let cfg: Qwen3OmniConfig =
+            serde_json::from_str(&std::fs::read_to_string(dirp.join("config.json")).unwrap())
+                .unwrap();
+
+        let index_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&index).unwrap()).unwrap();
+        let mut shard_set = std::collections::BTreeSet::new();
+        for v in index_json["weight_map"].as_object().unwrap().values() {
+            shard_set.insert(v.as_str().unwrap().to_string());
+        }
+        let paths: Vec<PathBuf> = shard_set.iter().map(|s| dirp.join(s)).collect();
+        let comm =
+            Arc::new(hanzo_quant::Comm::from_device(hanzo_quant::Id::new(), &device, 0, 1).unwrap());
+        // Materialize thinker (text+audio+visual), talker, code2wav — everything `new` constructs.
+        let vb = from_mmaped_safetensors(
+            paths,
+            Vec::new(),
+            Some(dtype),
+            &device,
+            vec![None],
+            true,
+            None,
+            |name: String| {
+                name.starts_with("thinker.model.")
+                    || name.starts_with("thinker.lm_head")
+                    || name.starts_with("thinker.audio_tower.")
+                    || name.starts_with("thinker.visual.")
+                    || name.starts_with("talker.")
+                    || name.starts_with("code2wav.")
+            },
+            Arc::new(|_| DeviceForLoadTensor::Base),
+        )
+        .unwrap();
+        let model = Qwen3OmniModel::new(&cfg, vb, &device, &comm).unwrap();
+
+        let tc = &cfg.thinker_config;
+        let audio_token = tc.audio_token_id;
+
+        // Deterministic mel [1, n_mels, 200]; the EXACT values are irrelevant — both paths see the
+        // same mel, so identical fusion is the property under test. 200 frames -> 26 audio tokens.
+        let frames = 200usize;
+        let n_mels = tc.audio_config.num_mel_bins;
+        let mel_data: Vec<f32> = (0..n_mels * frames)
+            .map(|i| ((i % 17) as f32) * 0.01 - 0.08)
+            .collect();
+        let mel = Tensor::from_vec(mel_data, (1, n_mels, frames), &device)
+            .unwrap()
+            .to_dtype(dtype)
+            .unwrap();
+        let n = omni_audio_feat_len(frames);
+        eprintln!("[mm] {frames} mel frames -> {n} audio placeholder tokens");
+
+        // input_ids: <im_start> user \n  <audio*n>  \n  "Hello"
+        let mut ids = vec![151644u32, 872, 198];
+        ids.extend(std::iter::repeat_n(audio_token, n));
+        ids.extend([198u32, 9707]);
+        let seq = ids.len();
+        let input_ids = Tensor::from_vec(ids.clone(), (1, seq), &device).unwrap();
+        let mask = super::causal_mask(seq, dtype, &device).unwrap();
+
+        // (A) Validated model-level path: fuse + cacheless 1D decoder.
+        let (logits_a, _) = model
+            .forward(
+                &input_ids,
+                &[(audio_token, ModalityInput::Audio(mel.clone()))],
+                &[0],
+                Some(&mask),
+            )
+            .unwrap();
+
+        // (B) Serving path: OmniSpecificArgs -> fuse -> cache-aware 1D decoder.
+        let args = OmniSpecificArgs {
+            payloads: vec![(audio_token, ModalityInput::Audio(mel.clone()))],
+            ..Default::default()
+        };
+        let flash = FlashParams::empty(true);
+        let so = [0usize];
+        let cl = [(0usize, seq)];
+        let pi = [0usize];
+        let mut ctx = ModelForwardContext::new(&so, &cl, &pi, None, &flash);
+        let logits_b =
+            <Qwen3OmniModel as MultimodalModel>::forward(&model, &input_ids, None, Box::new(args), &mut ctx)
+                .unwrap();
+
+        let (fa, fb) = (flat(&logits_a), flat(&logits_b));
+        assert_eq!(fa.len(), fb.len(), "serving vs model-level logits shape");
+        let cos = cosine(&fa, &fb);
+        let a_last = flat(&logits_a.i((0, seq - 1, ..)).unwrap());
+        let b_last = flat(&logits_b.i((0, seq - 1, ..)).unwrap());
+        eprintln!(
+            "[mm] FUSION serving-vs-model cosine = {cos:.6}; argmax serving={} model={}",
+            argmax(&b_last),
+            argmax(&a_last)
+        );
+        assert!(cos > 0.999, "serving fused logits cosine {cos} <= 0.999");
+        assert_eq!(
+            argmax(&a_last),
+            argmax(&b_last),
+            "serving and model-level greedy next-token disagree"
+        );
+
+        // (C) 3D-mRoPE decoder collapses to 1D for text/audio positions (real weights). Compare the
+        // mRoPE serving decoder against the validated 1D cached decoder on a text prefix.
+        let text_ids = vec![151644u32, 872, 198, 9707, 11, 1879, 0, 151645];
+        let tseq = text_ids.len();
+        let tids = Tensor::from_vec(text_ids.clone(), (1, tseq), &device).unwrap();
+        let tmask = super::causal_mask(tseq, dtype, &device).unwrap();
+        let tembeds = model.thinker.embed_tokens(&tids).unwrap();
+        let tpos = omni_get_rope_index(
+            &text_ids,
+            None,
+            None,
+            tc.vision_config.spatial_merge_size,
+            tc.image_token_id,
+            tc.video_token_id,
+            tc.vision_start_token_id,
+            tc.position_id_per_seconds,
+            &device,
+        )
+        .unwrap();
+        let nl = tc.text_config.num_hidden_layers;
+        let mp = tc.text_config.max_position_embeddings;
+        let c1 = EitherCache::Normal(NormalCache::new(nl, mp));
+        let c2 = EitherCache::Normal(NormalCache::new(nl, mp));
+        let mut g1 = c1.normal();
+        let mut g2 = c2.normal();
+        let tcl = [(0usize, tseq)];
+        let tctx = ModelForwardContext::new(&so, &tcl, &pi, None, &flash);
+        let l_1d = model
+            .thinker
+            .forward_cached(&tembeds, &[0], Some(&tmask), &mut g1.0, &tctx)
+            .unwrap();
+        let l_mr = model
+            .thinker
+            .forward_cached_mrope(&tembeds, &tpos, Some(&tmask), &mut g2.0, &tctx)
+            .unwrap();
+        let cos_mr = cosine(&flat(&l_1d), &flat(&l_mr));
+        eprintln!("[mm] mRoPE-collapse (3D arange == 1D) cosine = {cos_mr:.6}");
+        assert!(
+            cos_mr > 0.999,
+            "3D mRoPE must collapse to 1D for text positions (cosine {cos_mr})"
+        );
+        eprintln!("[mm] PASS: fusion cosine={cos:.6}, mRoPE-collapse cosine={cos_mr:.6}");
+    }
 }
 
 #[cfg(test)]
