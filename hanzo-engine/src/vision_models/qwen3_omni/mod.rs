@@ -2,7 +2,10 @@
 //!
 //! `model_type = "qwen3_omni_moe"`, HF class `Qwen3OmniMoeForConditionalGeneration`.
 
+pub mod audio_tower;
+pub mod code2wav;
 pub mod config;
+pub mod talker;
 
 pub use config::Qwen3OmniConfig;
 
