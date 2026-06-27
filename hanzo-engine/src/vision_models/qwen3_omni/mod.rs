@@ -22,6 +22,7 @@ pub mod config;
 pub mod modality;
 pub mod talker;
 pub mod thinker;
+pub mod vision;
 
 pub use config::Qwen3OmniConfig;
 
@@ -80,16 +81,36 @@ impl Qwen3OmniModel {
             comm,
         )?;
 
-        // Audio is the one native modality wired now; vision/video register the same way later.
+        // Native modality encoders, each keyed by its placeholder token id (see `fuse_modalities`).
         let audio_tower = OmniAudioTower::new(
             &cfg.thinker_config.audio_config,
             vb.pp("thinker").pp("audio_tower"),
             device,
         )?;
-        let encoders: Vec<Box<dyn ModalityEncoder>> = vec![Box::new(AudioModality(
+        let mut encoders: Vec<Box<dyn ModalityEncoder>> = vec![Box::new(AudioModality(
             audio_tower,
             cfg.thinker_config.audio_token_id,
         ))];
+
+        // Vision: ONE Thinker visual tower (`thinker.visual.*`) shared via `Arc` by the image and
+        // video encoders — identical weights, two placeholder token ids. Proves the modality
+        // abstraction extends with zero changes to the thinker / talker / fusion.
+        let vision_tower = Arc::new(vision::OmniVisionTower::new(
+            &cfg.thinker_config.vision_config,
+            vb.pp("thinker").pp("visual"),
+            device,
+        )?);
+        let merge = cfg.thinker_config.vision_config.spatial_merge_size;
+        encoders.push(Box::new(vision::VisionModality::new(
+            vision_tower.clone(),
+            cfg.thinker_config.image_token_id,
+            merge,
+        )));
+        encoders.push(Box::new(vision::VisionModality::new(
+            vision_tower,
+            cfg.thinker_config.video_token_id,
+            merge,
+        )));
 
         let talker = OmniTalker::new(&cfg.talker_config, vb.pp("talker"), device, comm)?;
         let code_predictor = OmniCodePredictor::new(
