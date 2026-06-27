@@ -181,17 +181,33 @@ pub fn calculate_cache_config(
     #[cfg(feature = "vulkan")]
     let unified_memory = unified_memory || device.is_vulkan();
     if unified_memory {
-        let max_tokens = max_num_tokens.unwrap_or(config.max_seq_len());
-        let mem_for_tokens =
-            ctxt_to_blocks!(max_tokens, dtype_size, block_size, config) / SIZE_IN_MB;
-        if mem_for_tokens < mem_gpu {
+        let one_ctx_mb =
+            ctxt_to_blocks!(config.max_seq_len(), dtype_size, block_size, config) / SIZE_IN_MB;
+        // KV competes with the model and the OS/compute working set for the shared pool. Reserve a
+        // fixed headroom (20% of unified RAM, min 16 GB) and let KV use the rest: total - model -
+        // reserve. On a large unified box (GB10 128 GB) that is tens of GB -> many concurrent
+        // sequences; on a tight APU the reserve keeps KV from starving the OS (the ROCm/WSL 88 GB
+        // alloc that never returns). Floor at one full context so a lone request always loads, and
+        // never exceed the post-model budget `mem_gpu` already computed. An explicit
+        // --pa-context-len (ContextSize upstream) sizes KV exactly and bypasses this.
+        let total_mb = MemoryUsage.query(device)?.total() / SIZE_IN_MB;
+        let reserve_mb = (total_mb / 5).max(16 * 1024);
+        let kv_ceiling = total_mb
+            .saturating_sub(model_weight_per_device_mb)
+            .saturating_sub(reserve_mb)
+            .max(one_ctx_mb);
+        let target = mem_gpu.min(kv_ceiling).max(one_ctx_mb);
+        if target != mem_gpu {
             if !silent {
                 info!(
-                    "Unified memory: capping KV cache from {} MB to {} MB ({} tokens).",
-                    mem_gpu, mem_for_tokens, max_tokens
+                    "Unified memory: KV cache {} MB -> {} MB ({} max-context sequences; {} MB OS reserve).",
+                    mem_gpu,
+                    target,
+                    (target / one_ctx_mb.max(1)).max(1),
+                    reserve_mb,
                 );
             }
-            mem_gpu = mem_for_tokens;
+            mem_gpu = target;
         }
     }
 
