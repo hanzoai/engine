@@ -747,3 +747,69 @@ pub enum ModelSelected {
         hf_cache_path: Option<PathBuf>,
     },
 }
+
+impl ModelSelected {
+    /// `(max_seq_len, max_batch_size)` for text-generation targets, used to size a speculative draft
+    /// model to the same context window as its target so it doesn't stop proposing past a smaller
+    /// hardcoded cap. Non-text variants (which never carry a draft) fall back to loader defaults.
+    pub fn max_dims(&self) -> (usize, usize) {
+        match self {
+            Self::Run {
+                max_seq_len,
+                max_batch_size,
+                ..
+            }
+            | Self::Plain {
+                max_seq_len,
+                max_batch_size,
+                ..
+            }
+            | Self::XLora {
+                max_seq_len,
+                max_batch_size,
+                ..
+            }
+            | Self::Lora {
+                max_seq_len,
+                max_batch_size,
+                ..
+            }
+            | Self::GGUF {
+                max_seq_len,
+                max_batch_size,
+                ..
+            }
+            | Self::XLoraGGUF {
+                max_seq_len,
+                max_batch_size,
+                ..
+            }
+            | Self::LoraGGUF {
+                max_seq_len,
+                max_batch_size,
+                ..
+            }
+            | Self::GGML {
+                max_seq_len,
+                max_batch_size,
+                ..
+            }
+            | Self::XLoraGGML {
+                max_seq_len,
+                max_batch_size,
+                ..
+            }
+            | Self::LoraGGML {
+                max_seq_len,
+                max_batch_size,
+                ..
+            }
+            | Self::MultimodalPlain {
+                max_seq_len,
+                max_batch_size,
+                ..
+            } => (*max_seq_len, *max_batch_size),
+            _ => (default_max_seq_len(), default_max_batch_size()),
+        }
+    }
+}
