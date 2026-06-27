@@ -150,6 +150,14 @@ impl SpeculativeProposer for DraftModelProposer {
         ctx: SpeculativeProposeBatchCtx<'_>,
         _target_embedder: Option<&TargetTokenEmbedder<'_>>,
     ) -> Result<SpeculativeProposalBatch> {
+        static ACTIVE_ONCE: std::sync::Once = std::sync::Once::new();
+        ACTIVE_ONCE.call_once(|| {
+            eprintln!(
+                "[hanzo] draft-model speculative proposer ACTIVE (gamma={})",
+                self.gamma
+            );
+        });
+
         let batch = ctx.sampled_tokens.len();
         let draft_arc = self.draft.clone();
         let mut draft = draft_arc
