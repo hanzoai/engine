@@ -166,17 +166,20 @@ pub fn calculate_cache_config(
         min_mem_gpu = min_mem_gpu.min(mem_gpu);
     }
 
-    // On Metal/ROCm (unified memory), cap KV cache to what the model can actually use.
-    // Unlike CUDA with dedicated VRAM where unused memory is wasted, unified-memory wired
-    // buffers compete with the OS and CPU for the same physical RAM; grabbing ~90% of it for
-    // KV cache hangs the allocation (notably ROCm under WSL: an 88 GB alloc never returns).
-    // On CUDA, all available memory is used for maximum request concurrency (vLLM approach).
+    // Unified-memory devices share physical RAM with the OS/CPU, so KV-cache wired buffers compete
+    // for it: grabbing ~90% (the discrete-VRAM vLLM approach) hangs or thrashes the allocation
+    // (ROCm/WSL: an 88 GB alloc never returns; the Grace-Blackwell GB10 over-commits its 128 GB
+    // unified pool). Cap KV to the model context instead. This covers Metal, the ROCm/Vulkan APUs,
+    // AND integrated/coherent CUDA -- `is_integrated_gpu` reads CU_DEVICE_ATTRIBUTE_INTEGRATED, which
+    // is 1 on Jetson and Grace-class parts (GB10/GH200). Discrete-VRAM CUDA stays on the vLLM path
+    // (unused VRAM is otherwise wasted, so max request concurrency is the right default there).
     #[allow(unused_mut, unused_variables)]
     let mut mem_gpu = min_mem_gpu;
+    let unified_memory = crate::utils::normal::is_integrated_gpu(device);
     #[cfg(feature = "rocm")]
-    let unified_memory = device.is_metal() || device.is_rocm();
-    #[cfg(not(feature = "rocm"))]
-    let unified_memory = device.is_metal();
+    let unified_memory = unified_memory || device.is_rocm();
+    #[cfg(feature = "vulkan")]
+    let unified_memory = unified_memory || device.is_vulkan();
     if unified_memory {
         let max_tokens = max_num_tokens.unwrap_or(config.max_seq_len());
         let mem_for_tokens =
