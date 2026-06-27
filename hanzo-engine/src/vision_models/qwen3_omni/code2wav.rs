@@ -433,8 +433,13 @@ impl DecoderBlock {
     ) -> Result<Self> {
         let vb_b = vb.pp("block");
         let pre_act = SnakeBeta::new(vb_b.pp(0), in_dim)?;
-        let upconv =
-            CausalTransConv1d::new(vb_b.pp(1), in_dim, out_dim, 2 * upsample_rate, upsample_rate)?;
+        let upconv = CausalTransConv1d::new(
+            vb_b.pp(1),
+            in_dim,
+            out_dim,
+            2 * upsample_rate,
+            upsample_rate,
+        )?;
         let mut res_units = Vec::with_capacity(3);
         for (j, dilation) in [1usize, 3, 9].into_iter().enumerate() {
             res_units.push(DecoderResidualUnit::new(vb_b.pp(2 + j), out_dim, dilation)?);
@@ -559,14 +564,20 @@ impl OmniCode2Wav {
         }
 
         // Embed each quantizer stream into the shared table (offset by quantizer index), average.
-        let idx = codes.to_dtype(DType::U32)?.broadcast_add(&self.code_offset)?;
+        let idx = codes
+            .to_dtype(DType::U32)?
+            .broadcast_add(&self.code_offset)?;
         let emb = self.code_embedding.forward(&idx)?; // (b, q, t, hidden)
         let mut h = emb.mean(1)?; // (b, t, hidden)
 
         // Pre-transformer refinement under a sliding-window-72 causal mask.
         let t = h.dim(1)?;
-        let mask =
-            causal_mask_sliding(t, self.pre_transformer.sliding_window(), DType::F32, h.device())?;
+        let mask = causal_mask_sliding(
+            t,
+            self.pre_transformer.sliding_window(),
+            DType::F32,
+            h.device(),
+        )?;
         h = self.pre_transformer.forward(&h, Some(&mask))?;
 
         // Convolutional upsampling decoder operates channels-first.
@@ -598,17 +609,27 @@ mod code2wav_tests {
     use std::sync::Arc;
 
     fn read_f32_le(p: &str) -> Vec<f32> {
-        std::fs::read(p).unwrap().chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+        std::fs::read(p)
+            .unwrap()
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect()
     }
     fn read_i64_le(p: &str) -> Vec<i64> {
-        std::fs::read(p).unwrap().chunks_exact(8)
-            .map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect()
+        std::fs::read(p)
+            .unwrap()
+            .chunks_exact(8)
+            .map(|c| i64::from_le_bytes(c.try_into().unwrap()))
+            .collect()
     }
     fn cosine(a: &[f32], b: &[f32]) -> f32 {
         let (mut d, mut na, mut nb) = (0f64, 0f64, 0f64);
-        for (x, y) in a.iter().zip(b) { d += (*x as f64)*(*y as f64); na += (*x as f64).powi(2); nb += (*y as f64).powi(2); }
-        (d / (na.sqrt()*nb.sqrt())) as f32
+        for (x, y) in a.iter().zip(b) {
+            d += (*x as f64) * (*y as f64);
+            na += (*x as f64).powi(2);
+            nb += (*y as f64).powi(2);
+        }
+        (d / (na.sqrt() * nb.sqrt())) as f32
     }
 
     /// Decode the FIXED codes fixture with the real `code2wav.*` weights and assert the waveform
@@ -627,7 +648,8 @@ mod code2wav_tests {
         }
         let device = Device::Cpu;
         let cfg: super::super::config::Qwen3OmniConfig =
-            serde_json::from_str(&std::fs::read_to_string(dirp.join("config.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(dirp.join("config.json")).unwrap())
+                .unwrap();
 
         let index_json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&index).unwrap()).unwrap();
@@ -637,10 +659,17 @@ mod code2wav_tests {
         }
         let paths: Vec<PathBuf> = shards.iter().map(|s| dirp.join(s)).collect();
         let vb = from_mmaped_safetensors(
-            paths, Vec::new(), Some(DType::F32), &device, vec![None], true, None,
+            paths,
+            Vec::new(),
+            Some(DType::F32),
+            &device,
+            vec![None],
+            true,
+            None,
             |n: String| n.starts_with("code2wav."),
             Arc::new(|_| DeviceForLoadTensor::Base),
-        ).unwrap();
+        )
+        .unwrap();
 
         let model = OmniCode2Wav::new(&cfg.code2wav_config, vb.pp("code2wav"), &device).unwrap();
 
@@ -652,13 +681,30 @@ mod code2wav_tests {
         let codes = Tensor::from_vec(codes_u32, (1, q, t), &device).unwrap();
 
         let wav = model.decode(&codes).unwrap();
-        let got: Vec<f32> = wav.flatten_all().unwrap().to_dtype(DType::F32).unwrap().to_vec1().unwrap();
+        let got: Vec<f32> = wav
+            .flatten_all()
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec1()
+            .unwrap();
         let refv = read_f32_le(&format!("{fix}/c2w_wav.f32"));
-        eprintln!("[code2wav] got {} samples, ref {} samples", got.len(), refv.len());
+        eprintln!(
+            "[code2wav] got {} samples, ref {} samples",
+            got.len(),
+            refv.len()
+        );
         let n = got.len().min(refv.len());
         let cos = cosine(&got[..n], &refv[..n]);
-        eprintln!("[code2wav] wav cosine = {cos:.6} (len got={} ref={})", got.len(), refv.len());
-        assert!((got.len() as i64 - refv.len() as i64).abs() <= 8, "wav length mismatch");
+        eprintln!(
+            "[code2wav] wav cosine = {cos:.6} (len got={} ref={})",
+            got.len(),
+            refv.len()
+        );
+        assert!(
+            (got.len() as i64 - refv.len() as i64).abs() <= 8,
+            "wav length mismatch"
+        );
         assert!(cos > 0.99, "code2wav wav cosine {cos} < 0.99");
     }
 }
