@@ -430,7 +430,7 @@ extern "C" void chunked_gated_delta_rule_recurrence(
   const cudaStream_t custream = (cudaStream_t)stream;
 
   if (k_dim == 128) {
-    constexpr int BT = 64;
+    constexpr int BT = 32;
     constexpr int BK = 128;
     constexpr int BV = 64;
     // k_chunk[BT*BK] + kk_dot[BT*BT] + (gcum,beta_s,eg,egtail,qkrow)[5*BT] + q_buf[BK]
