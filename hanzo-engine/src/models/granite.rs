@@ -2245,3 +2245,138 @@ impl AnyMoeBaseModelMixin for GraniteMoeHybrid {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Granite-4.0-H (`ibm-granite/granite-4.0-h-*`) is the in-tree
+    //! Mamba2 + attention **hybrid** MoE: `architectures[0] =
+    //! "GraniteMoeHybridForCausalLM"`, loaded via the granite loader's
+    //! `selective_scan` + hybrid cache. The real `granite-4.0-h-small`
+    //! `config.json` is embedded verbatim.
+    use super::{Config, GraniteLayerType};
+    use crate::pipeline::NormalLoaderType;
+
+    /// Real `ibm-granite/granite-4.0-h-small` `config.json`, verbatim.
+    const GRANITE_4_0_H_CONFIG: &str = r##"{
+  "architectures": [
+    "GraniteMoeHybridForCausalLM"
+  ],
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "attention_multiplier": 0.0078125,
+  "bos_token_id": 100257,
+  "embedding_multiplier": 12,
+  "eos_token_id": 100257,
+  "hidden_act": "silu",
+  "hidden_size": 4096,
+  "initializer_range": 0.1,
+  "intermediate_size": 768,
+  "layer_types": [
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "attention",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "attention",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "attention",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba",
+    "attention",
+    "mamba",
+    "mamba",
+    "mamba",
+    "mamba"
+  ],
+  "logits_scaling": 16,
+  "mamba_chunk_size": 256,
+  "mamba_conv_bias": true,
+  "mamba_d_conv": 4,
+  "mamba_d_head": 64,
+  "mamba_d_state": 128,
+  "mamba_expand": 2,
+  "mamba_n_groups": 1,
+  "mamba_n_heads": 128,
+  "mamba_proj_bias": false,
+  "max_position_embeddings": 131072,
+  "model_type": "granitemoehybrid",
+  "normalization_function": "rmsnorm",
+  "num_attention_heads": 32,
+  "num_experts_per_tok": 10,
+  "num_hidden_layers": 40,
+  "num_key_value_heads": 8,
+  "num_local_experts": 72,
+  "output_router_logits": false,
+  "pad_token_id": 100256,
+  "position_embedding_type": "nope",
+  "residual_multiplier": 0.22,
+  "rms_norm_eps": 1e-05,
+  "rope_scaling": null,
+  "rope_theta": 10000,
+  "router_aux_loss_coef": 0.0,
+  "shared_intermediate_size": 1536,
+  "tie_word_embeddings": true,
+  "torch_dtype": "bfloat16",
+  "transformers_version": "4.56.0",
+  "use_cache": true,
+  "vocab_size": 100352
+}"##;
+
+    #[test]
+    fn granite_4_0_h_config_parses() {
+        let cfg: Config = serde_json::from_str(GRANITE_4_0_H_CONFIG)
+            .expect("Granite-4.0-H config must deserialize into granite::Config");
+        assert_eq!(cfg.hidden_size, 4096);
+        assert_eq!(cfg.num_hidden_layers, 40);
+        // Hybrid interleave: real config lists 36 mamba + 4 attention layers.
+        let types = cfg.layer_types();
+        assert_eq!(types.len(), cfg.num_hidden_layers);
+        assert!(types.iter().any(|t| matches!(t, GraniteLayerType::Mamba)));
+        assert!(types
+            .iter()
+            .any(|t| matches!(t, GraniteLayerType::Attention)));
+        // Mamba2 SSM dims.
+        assert_eq!(cfg.mamba_d_state, 128);
+        assert_eq!(cfg.mamba_n_heads(), 128);
+        // MoE hybrid.
+        assert_eq!(cfg.num_local_experts, 72);
+        assert_eq!(cfg.num_experts_per_tok, 10);
+    }
+
+    #[test]
+    fn granite_4_0_h_registry_dispatch() {
+        assert_eq!(
+            NormalLoaderType::from_causal_lm_name("GraniteMoeHybridForCausalLM").unwrap(),
+            NormalLoaderType::GraniteMoeHybrid
+        );
+        assert_eq!(
+            "granitemoehybrid".parse::<NormalLoaderType>().unwrap(),
+            NormalLoaderType::GraniteMoeHybrid
+        );
+    }
+}
