@@ -439,27 +439,6 @@ pub fn kv_scale_update(
     hanzo_ml::bail!("FP8 kv_scale_update is not supported on the rocm backend")
 }
 
-/// Gather the paged KV cache into contiguous K/V tensors (used by the prefix-
-/// cache / sliding-window prefill paths). Not ported to ROCm in stage 1/2: the
-/// fresh-prompt + steady-decode flow that stage 2 targets does not take the
-/// gather path (Qwen3 head_dim 128 <= STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE,
-/// and a fresh prompt has no cached prefix). Provided so the shared layer
-/// compiles under `feature = "rocm"`; bails loudly if a gather path is hit.
-#[allow(clippy::too_many_arguments)]
-pub fn gather_kv_cache(
-    _key_cache: &Tensor,
-    _value_cache: &Tensor,
-    _k_scale: Option<&Tensor>,
-    _v_scale: Option<&Tensor>,
-    _block_table: &Tensor,
-    _cu_seq_lens: &Tensor,
-    _out_dtype: DType,
-) -> Result<(Tensor, Tensor)> {
-    hanzo_ml::bail!(
-        "gather_kv_cache (paged prefix-cache / SWA gather) is not supported on the rocm backend"
-    )
-}
-
 /// Insert key/values at `slot_mapping` into the paged KV cache. ROCm mirror of
 /// src/cuda/backend/paged_attention.rs::reshape_and_cache.
 pub fn reshape_and_cache(
