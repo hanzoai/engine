@@ -7083,11 +7083,11 @@ impl MultimodalModelLoader for Qwen3OmniLoader {
         preprocessor_config: PreProcessorConfig,
         _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
-        // The Omni processor applies the Qwen chat template + tokenizes (text), expands `<|AUDIO|>`
-        // and `<|IMAGE|>` placeholders into the right Thinker-token count, and produces the log-mel /
-        // patch-pixel payloads the validated audio + vision towers consume (image patchifying reuses
-        // the shared Qwen3-VL image processor). On a malformed config this falls back to text-only so
-        // the loader never panics.
+        // The Omni processor applies the Qwen chat template + tokenizes (text), expands `<|AUDIO|>`,
+        // `<|IMAGE|>` and `<|VIDEO|>` placeholders into the right Thinker-token count, and produces the
+        // log-mel / patch-pixel payloads the validated audio + vision towers consume (image and video
+        // patchifying reuse the shared Qwen3-VL image processor). On a malformed config this falls back
+        // to text-only so the loader never panics.
         match serde_json::from_str::<Qwen3OmniConfig>(model_config) {
             Ok(cfg) => {
                 let tc = &cfg.thinker_config;
@@ -7120,15 +7120,18 @@ impl MultimodalModelLoader for Qwen3OmniLoader {
         Arc::new(Qwen3OmniPrefixer)
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
-        // Text + Audio + Vision are served end-to-end: the input processor expands `<|AUDIO|>` /
-        // `<|IMAGE|>` placeholders and produces mel / patch-pixel payloads, which `fuse_modalities`
-        // scatters into the Thinker (image positions drive 3D mRoPE via `omni_get_rope_index`). Video
-        // understanding (frame extraction) is the remaining gap.
+        // Text + Audio + Vision + Video are served end-to-end: the input processor expands `<|AUDIO|>`
+        // / `<|IMAGE|>` / `<|VIDEO|>` placeholders and produces mel / patch-pixel payloads (video from
+        // pre-extracted frames), which `fuse_modalities` scatters into the Thinker (image/video grids
+        // drive 3D mRoPE via `omni_get_rope_index`). Separate audio + video in one request works; only
+        // the interleaved `use_audio_in_video` layout remains. Output is text (speech synthesis is the
+        // validated Talker/Code2Wav stack, not yet wired as a served output modality).
         Ok(Modalities {
             input: vec![
                 SupportedModality::Text,
                 SupportedModality::Audio,
                 SupportedModality::Vision,
+                SupportedModality::Video,
             ],
             output: vec![SupportedModality::Text],
         })
