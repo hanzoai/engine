@@ -26,7 +26,7 @@ use hanzo_quant::ShardedVarBuilder;
 
 use crate::{
     attention::{naive_sdpa, SdpaParams},
-    layers::{self, repeat_kv, RmsNorm, RotaryEmbedding},
+    layers::{self, repeat_kv, Qwen3VLRotaryEmbedding, RmsNorm, RotaryEmbedding},
     ops::{moe_router_topk, MoeRouterScoreFunction, MoeRouterSelectedWeight, MoeRouterTopKConfig},
     pipeline::{KvCache, ModelForwardContext},
 };
@@ -43,6 +43,9 @@ struct Attention {
     q_norm: RmsNorm,
     k_norm: RmsNorm,
     rope: Arc<RotaryEmbedding>,
+    /// Interleaved 3D mRoPE for the multimodal serving path (vision). For text/audio the 3D
+    /// positions collapse to 1D, so `rope` (above) is used; only image/video need this.
+    mrope: Arc<Qwen3VLRotaryEmbedding>,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -50,9 +53,11 @@ struct Attention {
 }
 
 impl Attention {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         vb: ShardedVarBuilder,
         rope: Arc<RotaryEmbedding>,
+        mrope: Arc<Qwen3VLRotaryEmbedding>,
         hidden_size: usize,
         num_heads: usize,
         num_kv_heads: usize,
@@ -73,6 +78,7 @@ impl Attention {
             q_norm,
             k_norm,
             rope,
+            mrope,
             num_heads,
             num_kv_heads,
             head_dim,
@@ -170,6 +176,61 @@ impl Attention {
         // `[b, kv_heads, past + t, head_dim]`.
         let (k, v) = kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
 
+        let k = repeat_kv(k, self.sdpa_params.n_kv_groups)?;
+        let v = repeat_kv(v, self.sdpa_params.n_kv_groups)?;
+
+        let attn = naive_sdpa(
+            &q.contiguous()?,
+            &k.contiguous()?,
+            &v.contiguous()?,
+            mask,
+            &self.sdpa_params,
+        )?;
+        let attn = attn.transpose(1, 2)?.reshape((b, t, ()))?;
+        self.o_proj.forward(&attn)
+    }
+
+    /// Cache-aware attention using **interleaved 3D mRoPE** (the multimodal serving path). Identical
+    /// to [`Self::forward_cached`] except the 1D `rope` is replaced by the precomputed `(cos, sin)`
+    /// from [`Qwen3VLRotaryEmbedding`]; Qwen3 QK-norm + mRoPE are applied together by the validated
+    /// `forward_qk_norm` (the exact rotary path `qwen3_vl`/`qwen3_vl_moe` use). For text/audio inputs
+    /// these positions equal the 1D positions, so the two paths agree numerically.
+    fn forward_cached_mrope(
+        &self,
+        xs: &Tensor,
+        cos_sin: &(Tensor, Tensor),
+        mask: Option<&Tensor>,
+        kv_cache: &mut KvCache,
+    ) -> Result<Tensor> {
+        let (b, t, _d) = xs.dims3()?;
+        let q = self
+            .q_proj
+            .forward(xs)?
+            .reshape((b, t, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        let k = self
+            .k_proj
+            .forward(xs)?
+            .reshape((b, t, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        let v = self
+            .v_proj
+            .forward(xs)?
+            .reshape((b, t, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
+
+        // Fused Qwen3 QK-norm + interleaved mRoPE on [b, heads, t, head_dim].
+        let (q, k) = self.mrope.forward_qk_norm(
+            cos_sin,
+            &q,
+            &k,
+            self.q_norm.weight(),
+            self.k_norm.weight(),
+            self.q_norm.eps(),
+            self.k_norm.eps(),
+        )?;
+
+        let (k, v) = kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
         let k = repeat_kv(k, self.sdpa_params.n_kv_groups)?;
         let v = repeat_kv(v, self.sdpa_params.n_kv_groups)?;
 
@@ -321,6 +382,7 @@ impl DecoderLayer {
     fn new(
         vb: ShardedVarBuilder,
         rope: Arc<RotaryEmbedding>,
+        mrope: Arc<Qwen3VLRotaryEmbedding>,
         mlp: Mlp,
         hidden_size: usize,
         num_heads: usize,
@@ -331,6 +393,7 @@ impl DecoderLayer {
         let self_attn = Attention::new(
             vb.pp("self_attn"),
             rope,
+            mrope,
             hidden_size,
             num_heads,
             num_kv_heads,
@@ -386,6 +449,28 @@ impl DecoderLayer {
             .forward(&self.post_attention_layernorm.forward(&xs)?)?;
         residual + xs
     }
+
+    /// Cache-aware decoder layer for the multimodal serving path: pre-norm mRoPE attention + pre-norm
+    /// MLP, both residual. Mirrors [`Self::forward_cached`] but applies interleaved 3D mRoPE.
+    fn forward_cached_mrope(
+        &self,
+        xs: &Tensor,
+        cos_sin: &(Tensor, Tensor),
+        mask: Option<&Tensor>,
+        kv_cache: &mut KvCache,
+    ) -> Result<Tensor> {
+        let residual = xs;
+        let xs = self.input_layernorm.forward(xs)?;
+        let xs = self
+            .self_attn
+            .forward_cached_mrope(&xs, cos_sin, mask, kv_cache)?;
+        let xs = (residual + xs)?;
+        let residual = &xs;
+        let xs = self
+            .mlp
+            .forward(&self.post_attention_layernorm.forward(&xs)?)?;
+        residual + xs
+    }
 }
 
 /// The Qwen3-Omni Thinker text decoder. Owns `embed_tokens`, the decoder stack, the final `norm`,
@@ -395,6 +480,8 @@ pub struct OmniThinkerText {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Linear,
+    /// Interleaved 3D mRoPE shared by every layer for the multimodal serving path.
+    mrope: Arc<Qwen3VLRotaryEmbedding>,
 }
 
 impl OmniThinkerText {
@@ -421,6 +508,23 @@ impl OmniThinkerText {
             true,
             vb.dtype(),
         )?);
+        // Interleaved 3D mRoPE (mrope_section [24,20,20]) for multimodal serving. Default to the
+        // text-collapse partition [hd/2,0,0] when the checkpoint omits rope_scaling so this never
+        // panics; vision serving requires the real section, which the published config provides.
+        let mrope_section = {
+            let s = cfg.mrope_section();
+            if s.iter().sum::<usize>() == head_dim / 2 {
+                s
+            } else {
+                vec![head_dim / 2, 0, 0]
+            }
+        };
+        let mrope = Arc::new(Qwen3VLRotaryEmbedding::new(
+            cfg.rope_theta as f32,
+            head_dim,
+            device,
+            mrope_section,
+        )?);
 
         let vb_model = vb.pp("model");
         let embed_tokens =
@@ -442,6 +546,7 @@ impl OmniThinkerText {
             layers.push(DecoderLayer::new(
                 layer_vb,
                 rope.clone(),
+                mrope.clone(),
                 mlp,
                 cfg.hidden_size,
                 cfg.num_attention_heads,
@@ -459,6 +564,7 @@ impl OmniThinkerText {
             layers,
             norm,
             lm_head,
+            mrope,
         })
     }
 
@@ -529,6 +635,29 @@ impl OmniThinkerText {
         }
         let xs = self.norm.forward(&xs)?;
         // Select the rows we actually need logits for (decode = last token) before the lm_head.
+        let xs = ctx.logits(&xs)?;
+        self.lm_head.forward(&xs)
+    }
+
+    /// Cache-aware serving forward using **interleaved 3D mRoPE** — the multimodal (vision) path.
+    /// Identical to [`Self::forward_cached`] except positions come from `position_ids` `[3, batch,
+    /// seq]` (temporal/height/width) instead of the 1D `seqlen_offsets`. `(cos, sin)` are computed
+    /// once and shared across layers. For text/audio inputs `position_ids` carry the same value on
+    /// all three axes, so this reduces to the 1D path; image/video inputs genuinely use 3D.
+    pub fn forward_cached_mrope(
+        &self,
+        inputs_embeds: &Tensor,
+        position_ids: &Tensor,
+        mask: Option<&Tensor>,
+        cache: &mut [KvCache],
+        ctx: &ModelForwardContext<'_>,
+    ) -> Result<Tensor> {
+        let cos_sin = self.mrope.compute_cos_sin(position_ids, inputs_embeds.dtype())?;
+        let mut xs = inputs_embeds.clone();
+        for (i, layer) in self.layers.iter().enumerate() {
+            xs = layer.forward_cached_mrope(&xs, &cos_sin, mask, &mut cache[i])?;
+        }
+        let xs = self.norm.forward(&xs)?;
         let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
     }

@@ -7078,14 +7078,23 @@ impl MultimodalModelLoader for Qwen3OmniLoader {
     }
     fn get_processor(
         &self,
-        _model_config: &str,
+        model_config: &str,
         _processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
-        max_edge: Option<u32>,
+        _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
-        // v1 reuses the Qwen3-VL processor (Qwen chat template + text tokenization). Omni-specific
-        // audio/video placeholder + mRoPE processing is the documented follow-up.
-        Arc::new(Qwen3VLProcessor::new(max_edge))
+        // The Omni processor applies the Qwen chat template + tokenizes (text), and expands `<|AUDIO|>`
+        // placeholders into the right Thinker-token count while producing the log-mel payloads the
+        // validated audio tower consumes. Image/video placeholder expansion is the documented
+        // follow-up (model side — encoders + 3D mRoPE — is wired). On a malformed config this falls
+        // back to text-only so the loader never panics.
+        match serde_json::from_str::<Qwen3OmniConfig>(model_config) {
+            Ok(cfg) => Arc::new(crate::vision_models::qwen3_omni::Qwen3OmniProcessor::new(
+                cfg.thinker_config.audio_token_id,
+                cfg.thinker_config.audio_config,
+            )),
+            Err(_) => Arc::new(Qwen3VLProcessor::new(None)),
+        }
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
         false
@@ -7097,10 +7106,13 @@ impl MultimodalModelLoader for Qwen3OmniLoader {
         Arc::new(Qwen3OmniPrefixer)
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
-        // v1 serving advertises the text path that the forward implements end-to-end. Vision /
-        // audio / video inputs await the Omni processor + `fuse_modalities` serving wiring.
+        // Text + Audio are served end-to-end (input processor expands `<|AUDIO|>` placeholders, mel ->
+        // audio tower -> `fuse_modalities` -> Thinker). The model also has validated vision encoders
+        // and 3D-mRoPE serving wired, but image/video input processing is the documented follow-up,
+        // so Vision is not yet advertised (advertising it without placeholder expansion would break
+        // image requests).
         Ok(Modalities {
-            input: vec![SupportedModality::Text],
+            input: vec![SupportedModality::Text, SupportedModality::Audio],
             output: vec![SupportedModality::Text],
         })
     }
