@@ -607,6 +607,7 @@ mod speech_tests {
                 name.starts_with("thinker.model.")
                     || name.starts_with("thinker.lm_head")
                     || name.starts_with("thinker.audio_tower.")
+                    || name.starts_with("thinker.visual.")
                     || name.starts_with("talker.")
                     || name.starts_with("code2wav.")
             },
