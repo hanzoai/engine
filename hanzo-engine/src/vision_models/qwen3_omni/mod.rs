@@ -22,7 +22,7 @@ use crate::{
     device_map::{DeviceMapSetting, DeviceMapper},
     layers::CausalMasker,
     layers_masker::{CausalMaskConfig, PastKvLenCache},
-    paged_attention::{KvCacheLayout, ModelConfigMetadata},
+    paged_attention::{AttentionImplementation, KvCacheLayout, ModelConfigMetadata},
     pipeline::{EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalCache},
 };
 
@@ -99,12 +99,16 @@ impl Qwen3OmniModel {
         vb: ShardedVarBuilder,
         device: &Device,
         comm: &Arc<Comm>,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        // Only the Thinker text decoder is served through the cache-aware (optionally paged) forward;
+        // the talker / code-predictor / code2wav are generation sub-models and stay `naive_sdpa`.
         let thinker = OmniThinkerText::new(
             &cfg.thinker_config.text_config,
             vb.pp("thinker"),
             device,
             comm,
+            attention_mechanism,
         )?;
 
         // Native modality encoders, each keyed by its placeholder token id (see `fuse_modalities`).
@@ -1080,6 +1084,7 @@ mod multimodal_tests {
     use super::config::Qwen3OmniConfig;
     use super::modality::ModalityInput;
     use super::{omni_audio_feat_len, omni_get_rope_index, OmniSpecificArgs, Qwen3OmniModel};
+    use crate::paged_attention::AttentionImplementation;
     use crate::pipeline::text_models_inputs_processor::FlashParams;
     use crate::pipeline::{EitherCache, ModelForwardContext, MultimodalModel, NormalCache};
     use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
@@ -1171,7 +1176,12 @@ mod multimodal_tests {
             Arc::new(|_| DeviceForLoadTensor::Base),
         )
         .unwrap();
-        let model = Qwen3OmniModel::new(&cfg, vb, &device, &comm).unwrap();
+        // `Eager` build: paged-attn construction is CUDA/Metal-only, and this CPU test carries no
+        // paged metadata anyway, so the cache-aware forwards take the `attend_cached` fallback `_`
+        // arm (engine `KvCache` + `naive_sdpa`) — the exact path serving uses when paged metadata is
+        // absent, which is what keeps the serving numerics identical to the cacheless reference.
+        let model =
+            Qwen3OmniModel::new(&cfg, vb, &device, &comm, AttentionImplementation::Eager).unwrap();
 
         let tc = &cfg.thinker_config;
         let audio_token = tc.audio_token_id;
@@ -1349,7 +1359,11 @@ mod multimodal_tests {
             Arc::new(|_| DeviceForLoadTensor::Base),
         )
         .unwrap();
-        let model = Qwen3OmniModel::new(&cfg, vb, &device, &comm).unwrap();
+        // `Eager` build (paged-attn construction is CUDA/Metal-only). The vision serving `ctx` below
+        // carries no paged metadata, so the cache-aware mRoPE forward takes the `attend_cached`
+        // fallback `_` arm (cache + `naive_sdpa`) — identical numerics to the cacheless reference.
+        let model =
+            Qwen3OmniModel::new(&cfg, vb, &device, &comm, AttentionImplementation::Eager).unwrap();
 
         let tc = &cfg.thinker_config;
         let vc = &tc.vision_config;
@@ -1532,6 +1546,7 @@ mod config_tests {
 mod speech_tests {
     use super::config::Qwen3OmniConfig;
     use super::Qwen3OmniModel;
+    use crate::paged_attention::AttentionImplementation;
     use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
     use hanzo_ml::{DType, Device, IndexOp, Tensor};
     use std::path::PathBuf;
@@ -1627,7 +1642,9 @@ mod speech_tests {
         )
         .unwrap();
 
-        let model = Qwen3OmniModel::new(&cfg, vb, &device, &comm).unwrap();
+        // Speech generation exercises the talker / code2wav, not the Thinker serving cache; `Eager`.
+        let model =
+            Qwen3OmniModel::new(&cfg, vb, &device, &comm, AttentionImplementation::Eager).unwrap();
 
         // Reference metadata.
         let meta: serde_json::Value =
