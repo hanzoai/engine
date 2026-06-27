@@ -228,198 +228,110 @@ extern "C" void gated_delta_rule_recurrence(const float *q, const float *k,
 }
 
 // ============================================================================
-// Kernel 1b: chunked_gated_delta_rule_recurrence (prefill optimization)
+// Kernel 1b: chunked_gated_delta_rule_recurrence (prefill)
 //
-// Processes prefill tokens in BT-token chunks instead of one at a time.
-// Within each chunk: parallel prefix sum of g, cooperative kk_dot computation,
-// forward substitution (triangular solve), output computation, and state
-// update.
+// Warp-per-V-column gated delta rule. One warp owns one output (V) column of
+// the state; its 32 lanes hold contiguous K-row shards in registers across the
+// whole sequence, so state never round-trips to memory inside the token loop.
+// The kv and output projections are warp-shuffle reductions over the K dim.
 //
-// Same thread model as Kernel 1: one block per (v_tile, batch*head),
-// one thread per V-column. Each thread owns BK registers of state.
+// This recurrence is occupancy-bound, not compute-bound: the prior per-V-column
+// *thread* kernel ran ~64 blocks of 64 threads (each thread holding all K=128
+// state registers), filling ~1.3 of 48 SMs. Warp-per-column launches ~bh*V/NW
+// warps -> all SMs busy at a fraction of the registers. Float4 loads coalesce
+// the per-token k/q reads. (Tensor-core chunking gives no further win here: the
+// recurrence is latency/occupancy-bound with k/q resident in L2, and the chunk
+// triangular solve is itself O(C) sequential -- see perf/cuda-gdn-bf16 report.)
 //
-// Shared memory holds:
-//   k_chunk[BT * BK]  -- key vectors for current chunk
-//   kk_dot[BT * BT]   -- dot(k[i], k[j]) lower-triangular matrix
-//   gcum[BT]           -- cumulative sum of g within chunk
-//   beta_s[BT]         -- beta values for chunk
-//   q_buf[BK]          -- q vector (loaded one row at a time)
-//
+// q PRE-SCALED by 1/sqrt(k_dim) by the host (recurrence_flatten); no scale here.
 // q,k: [BH, S, K]  v: [BH, S, V]  g,beta: [BH, S]
 // state: [BH, K, V] (in/out)  output: [BH, S, V]
 // ============================================================================
 
-template <int BT, int BK, int BV>
-__global__ void
-chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
-                                const float *__restrict__ k,    // [BH, S, K]
-                                const float *__restrict__ v,    // [BH, S, V]
-                                const float *__restrict__ g,    // [BH, S]
-                                const float *__restrict__ beta, // [BH, S]
-                                float *__restrict__ state,      // [BH, K, V]
-                                float *__restrict__ output,     // [BH, S, V]
-                                int seq_len, int v_dim) {
+template <int D, int NW>
+__global__ __launch_bounds__(32 * NW, 4) void gdn_warp_recurrence_kernel(
+    const float *__restrict__ q,    // [BH, S, K]
+    const float *__restrict__ k,    // [BH, S, K]
+    const float *__restrict__ v,    // [BH, S, V]
+    const float *__restrict__ g,    // [BH, S]
+    const float *__restrict__ beta, // [BH, S]
+    float *__restrict__ state,      // [BH, K, V]
+    float *__restrict__ output,     // [BH, S, V]
+    int seq_len, int v_dim) {
 
-  const int v_tile = blockIdx.x;
-  const int bh = blockIdx.y;
-  const int tid = threadIdx.x;
-  const int v_idx = v_tile * BV + tid;
+  constexpr int WS = 32;
+  constexpr int RPL = D / WS; // K-rows per lane (4 for D=128, 2 for D=64)
+  const int head = blockIdx.x;
+  const int lane = threadIdx.x;
+  const int col = blockIdx.y * NW + threadIdx.y; // V-column owned by this warp
 
-  if (v_idx >= v_dim)
+  if (col >= v_dim)
     return;
 
-  const int num_chunks = (seq_len + BT - 1) / BT;
+  const float *q_h = q + (size_t)head * seq_len * D;
+  const float *k_h = k + (size_t)head * seq_len * D;
+  const float *v_h = v + (size_t)head * seq_len * v_dim;
+  const float *g_h = g + (size_t)head * seq_len;
+  const float *beta_h = beta + (size_t)head * seq_len;
+  float *state_h = state + (size_t)head * D * v_dim;
+  float *out_h = output + (size_t)head * seq_len * v_dim;
 
-  // Pointers for this (batch, head)
-  const float *q_bh = q + bh * seq_len * BK;
-  const float *k_bh = k + bh * seq_len * BK;
-  const float *v_bh = v + bh * seq_len * v_dim;
-  const float *g_bh = g + bh * seq_len;
-  const float *beta_bh = beta + bh * seq_len;
-  float *state_bh = state + bh * BK * v_dim;
-  float *out_bh = output + bh * seq_len * v_dim;
-
-  // Dynamic shared memory layout. The (i,j)-indexed decay factors and the q/k
-  // dot products are head-level (independent of v_idx), so they are computed once
-  // per block into shared memory instead of redundantly per V-column thread.
-  extern __shared__ float smem[];
-  float *k_chunk = smem;          // [BT * BK]
-  float *kk_dot = k_chunk + BT * BK; // [BT * BT], stores <k_i,k_j>*exp(gcum_i-gcum_j), j<i
-  float *gcum = kk_dot + BT * BT; // [BT]
-  float *beta_s = gcum + BT;      // [BT]
-  float *eg = beta_s + BT;        // [BT], exp(gcum_i)
-  float *egtail = eg + BT;        // [BT], exp(gcum_last - gcum_t)
-  float *qkrow = egtail + BT;     // [BT], <q_i,k_j>*exp(gcum_i-gcum_j) for the current row i
-  float *q_buf = qkrow + BT;      // [BK]
-
-  // Load state column into registers
-  float s[BK];
+  const int row0 = lane * RPL; // this lane's contiguous K-rows [row0, row0+RPL)
+  float s[RPL];
 #pragma unroll
-  for (int j = 0; j < BK; j++) {
-    s[j] = state_bh[j * v_dim + v_idx];
+  for (int r = 0; r < RPL; r++)
+    s[r] = state_h[(size_t)(row0 + r) * v_dim + col];
+
+  for (int t = 0; t < seq_len; t++) {
+    const float decay = expf(g_h[t]);
+    const float beta_t = beta_h[t];
+
+    float kr[RPL], qr[RPL];
+    if constexpr (RPL == 4) {
+      *reinterpret_cast<float4 *>(kr) =
+          *reinterpret_cast<const float4 *>(k_h + (size_t)t * D + row0);
+      *reinterpret_cast<float4 *>(qr) =
+          *reinterpret_cast<const float4 *>(q_h + (size_t)t * D + row0);
+    } else if constexpr (RPL == 2) {
+      *reinterpret_cast<float2 *>(kr) =
+          *reinterpret_cast<const float2 *>(k_h + (size_t)t * D + row0);
+      *reinterpret_cast<float2 *>(qr) =
+          *reinterpret_cast<const float2 *>(q_h + (size_t)t * D + row0);
+    } else {
+#pragma unroll
+      for (int r = 0; r < RPL; r++) {
+        kr[r] = k_h[(size_t)t * D + row0 + r];
+        qr[r] = q_h[(size_t)t * D + row0 + r];
+      }
+    }
+
+    float kv = 0.0f;
+#pragma unroll
+    for (int r = 0; r < RPL; r++)
+      kv = __fmaf_rn(decay * s[r], kr[r], kv);
+#pragma unroll
+    for (int o = WS / 2; o > 0; o >>= 1)
+      kv += __shfl_xor_sync(0xffffffffu, kv, o);
+
+    const float delta = (v_h[(size_t)t * v_dim + col] - kv) * beta_t;
+
+    float attn = 0.0f;
+#pragma unroll
+    for (int r = 0; r < RPL; r++) {
+      s[r] = __fmaf_rn(decay, s[r], kr[r] * delta);
+      attn = __fmaf_rn(s[r], qr[r], attn);
+    }
+#pragma unroll
+    for (int o = WS / 2; o > 0; o >>= 1)
+      attn += __shfl_xor_sync(0xffffffffu, attn, o);
+
+    if (lane == 0)
+      out_h[(size_t)t * v_dim + col] = attn;
   }
 
-  // Per-thread register array for corrected deltas
-  float delta[BT];
-
-  for (int c = 0; c < num_chunks; c++) {
-    const int chunk_start = c * BT;
-    const int chunk_len = min(BT, seq_len - chunk_start);
-
-    // === Phase 1: Cooperative load of k, beta, g into shared memory ===
-    for (int t = 0; t < chunk_len; t++) {
-      for (int j = tid; j < BK; j += BV) {
-        k_chunk[t * BK + j] = k_bh[(chunk_start + t) * BK + j];
-      }
-    }
-    if (tid < chunk_len) {
-      beta_s[tid] = beta_bh[chunk_start + tid];
-      gcum[tid] = g_bh[chunk_start + tid];
-    }
-    __syncthreads();
-
-    // === Phase 1b: Parallel prefix sum of g (Hillis-Steele) ===
-    for (int stride = 1; stride < BT; stride <<= 1) {
-      float prev = 0.0f;
-      if (tid < chunk_len && (int)tid >= stride)
-        prev = gcum[tid - stride];
-      __syncthreads();
-      if (tid < chunk_len && (int)tid >= stride)
-        gcum[tid] += prev;
-      __syncthreads();
-    }
-
-    // === Phase 1c: Per-timestep decay factors (one expf each, not per V-column) ===
-    if (tid < chunk_len) {
-      eg[tid] = expf(gcum[tid]);
-      egtail[tid] = expf(gcum[chunk_len - 1] - gcum[tid]);
-    }
-    __syncthreads();
-
-    // === Phase 2: kk_dot[i][j] = dot(k[i],k[j]) * exp(gcum[i]-gcum[j]) for j < i ===
-    // Decay folded in here so the triangular solve reads it directly (no per-column expf).
-    for (int idx = tid; idx < chunk_len * chunk_len; idx += BV) {
-      int i = idx / chunk_len;
-      int j = idx % chunk_len;
-      if (j < i) {
-        float dot = 0.0f;
-        for (int d = 0; d < BK; d++) {
-          dot = __fmaf_rn(k_chunk[i * BK + d], k_chunk[j * BK + d], dot);
-        }
-        kk_dot[i * BT + j] = dot * expf(gcum[i] - gcum[j]);
-      }
-    }
-    __syncthreads();
-
-    // === Phase 3: Forward substitution (per V-column, in registers) ===
-    for (int i = 0; i < chunk_len; i++) {
-      float v_i = v_bh[(chunk_start + i) * v_dim + v_idx];
-      float eg_i = eg[i];
-      float beta_i = beta_s[i];
-
-      float kv_mem = 0.0f;
 #pragma unroll
-      for (int d = 0; d < BK; d++) {
-        kv_mem = __fmaf_rn(s[d] * eg_i, k_chunk[i * BK + d], kv_mem);
-      }
-
-      float rhs = beta_i * (v_i - kv_mem);
-      for (int j = 0; j < i; j++) {
-        rhs -= beta_i * kk_dot[i * BT + j] * delta[j];
-      }
-      delta[i] = rhs;
-    }
-
-    // === Phase 4: Output computation (per V-column) ===
-    for (int i = 0; i < chunk_len; i++) {
-      for (int j = tid; j < BK; j += BV) {
-        q_buf[j] = q_bh[(chunk_start + i) * BK + j];
-      }
-      __syncthreads();
-
-      // Cooperative qk row: thread t owns column t = <q[i],k[t]>*exp(gcum[i]-gcum[t]).
-      if (tid <= i) {
-        float qk = 0.0f;
-        for (int d = 0; d < BK; d++) {
-          qk = __fmaf_rn(q_buf[d], k_chunk[tid * BK + d], qk);
-        }
-        qkrow[tid] = qk * expf(gcum[i] - gcum[tid]);
-      }
-      __syncthreads();
-
-      float eg_i = eg[i];
-      float o_val = 0.0f;
-#pragma unroll
-      for (int d = 0; d < BK; d++) {
-        o_val = __fmaf_rn(q_buf[d], s[d] * eg_i, o_val);
-      }
-      for (int j = 0; j <= i; j++) {
-        o_val += qkrow[j] * delta[j];
-      }
-
-      out_bh[(chunk_start + i) * v_dim + v_idx] = o_val;
-      __syncthreads();
-    }
-
-    // === Phase 5: State update for next chunk ===
-    float eg_tot = eg[chunk_len - 1];
-#pragma unroll
-    for (int d = 0; d < BK; d++) {
-      float s_new = s[d] * eg_tot;
-      for (int t = 0; t < chunk_len; t++) {
-        s_new += k_chunk[t * BK + d] * delta[t] * egtail[t];
-      }
-      s[d] = s_new;
-    }
-
-    __syncthreads();
-  }
-
-  // Write final state back
-#pragma unroll
-  for (int j = 0; j < BK; j++) {
-    state_bh[j * v_dim + v_idx] = s[j];
-  }
+  for (int r = 0; r < RPL; r++)
+    state_h[(size_t)(row0 + r) * v_dim + col] = s[r];
 }
 
 extern "C" void chunked_gated_delta_rule_recurrence(
@@ -428,39 +340,17 @@ extern "C" void chunked_gated_delta_rule_recurrence(
     int k_dim, int v_dim, int64_t stream) {
 
   const cudaStream_t custream = (cudaStream_t)stream;
+  constexpr int NW = 8; // warps (V-columns) per block
+  dim3 block(32, NW);
+  dim3 grid(bh, (v_dim + NW - 1) / NW);
 
   if (k_dim == 128) {
-    constexpr int BT = 32;
-    constexpr int BK = 128;
-    constexpr int BV = 64;
-    // k_chunk[BT*BK] + kk_dot[BT*BT] + (gcum,beta_s,eg,egtail,qkrow)[5*BT] + q_buf[BK]
-    size_t smem = (BT * BK + BT * BT + 5 * BT + BK) * sizeof(float);
-
-    // Request extended shared memory
-    auto kernel = chunked_gated_delta_rule_kernel<BT, BK, BV>;
-    cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
-                         smem);
-
-    dim3 grid((v_dim + BV - 1) / BV, bh);
-    dim3 block(BV);
-    kernel<<<grid, block, smem, custream>>>(q, k, v, g, beta, state, output,
-                                            seq_len, v_dim);
+    gdn_warp_recurrence_kernel<128, NW><<<grid, block, 0, custream>>>(
+        q, k, v, g, beta, state, output, seq_len, v_dim);
   } else if (k_dim == 64) {
-    constexpr int BT = 64;
-    constexpr int BK = 64;
-    constexpr int BV = 64;
-    size_t smem = (BT * BK + BT * BT + 5 * BT + BK) * sizeof(float);
-
-    auto kernel = chunked_gated_delta_rule_kernel<BT, BK, BV>;
-    cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
-                         smem);
-
-    dim3 grid((v_dim + BV - 1) / BV, bh);
-    dim3 block(BV);
-    kernel<<<grid, block, smem, custream>>>(q, k, v, g, beta, state, output,
-                                            seq_len, v_dim);
+    gdn_warp_recurrence_kernel<64, NW><<<grid, block, 0, custream>>>(
+        q, k, v, g, beta, state, output, seq_len, v_dim);
   } else {
-    // Fallback: use the sequential kernel for unsupported k_dim
     gated_delta_rule_recurrence(q, k, v, g, beta, state, output, bh, seq_len,
                                 k_dim, v_dim, stream);
   }
