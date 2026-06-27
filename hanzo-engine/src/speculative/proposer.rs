@@ -70,4 +70,10 @@ pub trait SpeculativeProposer {
         ctx: SpeculativeProposeBatchCtx<'_>,
         target_embedder: Option<&TargetTokenEmbedder<'_>>,
     ) -> Result<SpeculativeProposalBatch>;
+
+    /// Drop per-sequence proposer state for sequences no longer live. `live` is the set of
+    /// still-running sequence ids; anything keyed off a finished sequence must be released so a
+    /// long-running server doesn't leak. Default no-op: proposers that hold no per-seq state
+    /// (e.g. MTP) need not implement it.
+    fn retain_seqs(&mut self, _live: &[usize]) {}
 }
