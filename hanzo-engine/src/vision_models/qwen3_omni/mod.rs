@@ -6,6 +6,7 @@ pub mod audio_tower;
 pub mod code2wav;
 pub mod config;
 pub mod talker;
+pub mod thinker;
 
 pub use config::Qwen3OmniConfig;
 
