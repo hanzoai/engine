@@ -17,7 +17,7 @@ With no manual mapping flags:
 
 1. One visible GPU runs the whole model on that GPU.
 2. Multiple visible CUDA GPUs use NCCL tensor parallelism when the binary was built with `cuda nccl` and `HANZO_NO_NCCL` is not set.
-3. If NCCL is unavailable or disabled, mistral.rs uses layer mapping across the visible GPUs.
+3. If NCCL is unavailable or disabled, Hanzo Engine uses layer mapping across the visible GPUs.
 
 The selected layout is printed in the startup logs.
 
@@ -34,18 +34,18 @@ hanzo serve -m Qwen/Qwen3-32B --quant 4
 If NCCL is not installed, omit `nccl`:
 
 ```bash
-cargo install mistralrs-cli --features "cuda flash-attn cudnn"
+cargo install hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 To force the installer decision, use `HANZO_INSTALL_NCCL=1` or `HANZO_INSTALL_NO_NCCL=1`. To disable NCCL at runtime without rebuilding:
 
 ```bash
-HANZO_NO_NCCL=1 mistralrs serve -m Qwen/Qwen3-32B --quant 4
+HANZO_NO_NCCL=1 hanzo serve -m Qwen/Qwen3-32B --quant 4
 ```
 
 ## Select GPUs
 
-Use `CUDA_VISIBLE_DEVICES` to restrict the GPU set before mistral.rs starts:
+Use `CUDA_VISIBLE_DEVICES` to restrict the GPU set before Hanzo Engine starts:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 hanzo serve -m Qwen/Qwen3-32B --quant 4
@@ -58,7 +58,7 @@ NCCL tensor parallelism uses all visible CUDA GPUs. The tensor-parallel size mus
 - Attention heads must divide evenly across GPUs.
 - KV heads must either divide evenly across GPUs or be replicated evenly when there are fewer KV heads than GPUs.
 
-If the visible GPU count is incompatible, mistral.rs errors instead of selecting a smaller subset.
+If the visible GPU count is incompatible, Hanzo Engine errors instead of selecting a smaller subset.
 
 Use `CUDA_VISIBLE_DEVICES` to choose a compatible subset.
 
@@ -73,7 +73,7 @@ hanzo serve -n "0:32;1:32" -m <model>
 For per-tensor or per-layer placement, see the [topology guide](/hanzo/guides/perf/topology/).
 
 ```bash
-mistralrs serve -n "0:44;1:20" -m Qwen/Qwen3-32B --quant 4
+hanzo serve -n "0:44;1:20" -m Qwen/Qwen3-32B --quant 4
 ```
 
 For cross-machine splitting, see the [ring backend guide](/hanzo/guides/perf/multi-machine-ring/).
