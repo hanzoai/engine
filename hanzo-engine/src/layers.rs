@@ -2698,22 +2698,20 @@ fn vulkan_qk_rms_norm_rope(
     let (cs, _) = cos.storage_and_layout();
     let (sis, _) = sin.storage_and_layout();
     let (
-        Storage::Vulkan(qv),
-        Storage::Vulkan(kv),
-        Storage::Vulkan(qwv),
-        Storage::Vulkan(kwv),
-        Storage::Vulkan(cv),
-        Storage::Vulkan(siv),
+        Storage::Vulkan(_qv),
+        Storage::Vulkan(_kv),
+        Storage::Vulkan(_qwv),
+        Storage::Vulkan(_kwv),
+        Storage::Vulkan(_cv),
+        Storage::Vulkan(_siv),
     ) = (&*qs, &*ks, &*qws, &*kws, &*cs, &*sis)
     else {
         return Ok(None);
     };
-    let qo = dev.qk_norm_rope_gpu(qv, qwv, cv, siv, b * h * s, d, s, q_eps as f32)?;
-    let ko = dev.qk_norm_rope_gpu(kv, kwv, cv, siv, b * hkv * s, d, s, k_eps as f32)?;
-    Ok(Some((
-        Tensor::from((Storage::Vulkan(qo), (b, h, s, d))),
-        Tensor::from((Storage::Vulkan(ko), (b, hkv, s, d))),
-    )))
+    // Fused per-head RMSNorm+RoPE (`qk_norm_rope_gpu`) is not yet wired in hanzo-ml; returning None
+    // routes this through the standard (unfused) norm+rope path. Perf follow-up, not correctness.
+    let _ = (dev, b, h, hkv, s, d, q_eps, k_eps);
+    Ok(None)
 }
 
 pub fn qk_rms_norm_rope(

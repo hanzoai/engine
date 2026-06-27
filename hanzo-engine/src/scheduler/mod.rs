@@ -55,6 +55,9 @@ pub trait Scheduler: Send + Sync {
     fn schedule(&mut self, logger: &IntervalLogger) -> SchedulerOutput<'_>;
     fn waiting_len(&self) -> usize;
     fn running_len(&self) -> usize;
+    /// Ids of the currently-running sequences. Used by the engine to prune per-sequence state
+    /// (e.g. the speculative draft proposer's KV caches) for sequences that have been reaped.
+    fn running_seq_ids(&self) -> Vec<usize>;
     fn add_seq(&mut self, seq: Sequence);
     /// This may do nothing. It depends on the implementation
     fn free_finished_sequence_groups(&mut self);
