@@ -525,16 +525,18 @@ extern "C" void causal_conv1d_update(const void *x, const void *weight,
   dim3 grid((conv_dim + 255) / 256, batch_size);
 
   if (dtype == 0) {
-    // f16
     causal_conv1d_update_kernel<__half><<<grid, block, 0, custream>>>(
         (const __half *)x, (const __half *)weight, (__half *)conv_state,
         (__half *)output, batch_size, conv_dim, kernel_size);
-  } else {
-    // bf16
+  } else if (dtype == 1) {
     causal_conv1d_update_kernel<__nv_bfloat16><<<grid, block, 0, custream>>>(
         (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)weight,
         (__nv_bfloat16 *)conv_state, (__nv_bfloat16 *)output, batch_size,
         conv_dim, kernel_size);
+  } else {
+    causal_conv1d_update_kernel<float><<<grid, block, 0, custream>>>(
+        (const float *)x, (const float *)weight, (float *)conv_state,
+        (float *)output, batch_size, conv_dim, kernel_size);
   }
 }
 
