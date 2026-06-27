@@ -11,10 +11,20 @@
 
 #![allow(dead_code)]
 
+use std::any::Any;
 use std::sync::Arc;
 
 use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
-use hanzo_quant::{Comm, ShardedVarBuilder};
+use hanzo_quant::{Comm, QuantMethod, ShardedVarBuilder};
+
+use crate::{
+    amoe::AnyMoeBaseModelMixin,
+    device_map::{DeviceMapSetting, DeviceMapper},
+    layers::CausalMasker,
+    layers_masker::{CausalMaskConfig, PastKvLenCache},
+    paged_attention::{KvCacheLayout, ModelConfigMetadata},
+    pipeline::{EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalCache},
+};
 
 pub mod audio_tower;
 pub mod code2wav;
@@ -62,6 +72,14 @@ pub struct Qwen3OmniModel {
     code2wav: OmniCode2Wav,
     cfg: Qwen3OmniConfig,
     device: Device,
+    // ── Serving state (the [`MultimodalModel`] path) ──────────────────────────────────────────
+    // Owned KV cache + metadata threaded through the cache-aware thinker forward. The validated
+    // cacheless path (`forward` / `forward_embeds`, used by the tests) never touches any of these.
+    cache: EitherCache,
+    cfg_meta: ModelConfigMetadata,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
+    dtype: DType,
+    max_seq_len: usize,
 }
 
 impl Qwen3OmniModel {
@@ -120,6 +138,33 @@ impl Qwen3OmniModel {
         )?;
         let code2wav = OmniCode2Wav::new(&cfg.code2wav_config, vb.pp("code2wav"), device)?;
 
+        // Serving state, derived from the Thinker text config (the decoder that produces text
+        // logits). One `KvCache` per Thinker layer; metadata mirrors `qwen3_5_moe`/`qwen3_vl_moe`.
+        let tc = &cfg.thinker_config.text_config;
+        let cache = EitherCache::Normal(NormalCache::new(
+            tc.num_hidden_layers,
+            tc.max_position_embeddings,
+        ));
+        let cfg_meta = ModelConfigMetadata {
+            max_seq_len: tc.max_position_embeddings,
+            num_layers: tc.num_hidden_layers,
+            hidden_size: tc.hidden_size,
+            num_kv_heads: tc.num_key_value_heads,
+            num_attn_heads: tc.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: tc.head_dim,
+            v_head_dim: tc.head_dim,
+            kv_cache_layout: KvCacheLayout::Standard,
+        };
+        // The Thinker loads on a single device (the validated naive loader ignores device mapping),
+        // so a dummy mapper satisfies the `IsqModel` contract without claiming a multi-GPU split.
+        let mapper = DeviceMapSetting::dummy().into_mapper(
+            tc.num_hidden_layers,
+            device,
+            None,
+            std::slice::from_ref(device),
+        )?;
+
         Ok(Self {
             thinker,
             encoders,
@@ -128,6 +173,11 @@ impl Qwen3OmniModel {
             code2wav,
             cfg: cfg.clone(),
             device: device.clone(),
+            cache,
+            cfg_meta,
+            mapper,
+            dtype: vb.dtype(),
+            max_seq_len: tc.max_position_embeddings,
         })
     }
 
@@ -413,6 +463,83 @@ impl Qwen3OmniModel {
         Ok(codes)
     }
 }
+
+impl MultimodalModel for Qwen3OmniModel {
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        _pixel_values: Option<Tensor>,
+        _model_specific_args: Box<dyn Any>,
+        ctx: &mut ModelForwardContext<'_>,
+    ) -> Result<Tensor> {
+        // v1 serving = the text path: embed token ids and run the cache-aware Thinker decoder to
+        // text logits. Raw image/audio/video serving additionally needs the Omni input processor to
+        // emit modality placeholder tokens + payload tensors (mRoPE position ids, mel / pixel grids)
+        // so [`fuse_modalities`] can scatter encoder outputs into the embedding rows; that processor
+        // wiring is the documented follow-up. Until then `pixel_values` / `model_specific_args` are
+        // unused here and prompts are treated as text.
+        let seqlen_offsets = ctx.seqlen_offsets();
+        // `force_custom` keeps a real additive mask (rather than a flash-causal marker) so the
+        // Thinker's `naive_sdpa` masks correctly; `None` is returned for single-token decode.
+        let mask = CausalMasker.make_causal_mask(
+            input_ids,
+            &seqlen_offsets as &dyn PastKvLenCache,
+            self.dtype,
+            &CausalMaskConfig {
+                sliding_window: None,
+                force_custom: true,
+            },
+        )?;
+        let embeds = self.thinker.embed_tokens(input_ids)?;
+        let mut cache = self.cache.normal();
+        self.thinker.forward_cached(
+            &embeds,
+            seqlen_offsets,
+            mask.as_option_tensor(),
+            &mut cache.0,
+            ctx,
+        )
+    }
+    fn cache(&self) -> &EitherCache {
+        &self.cache
+    }
+    fn cache_mut(&mut self) -> &mut EitherCache {
+        &mut self.cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg_meta
+    }
+    fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
+        // The text serving path carries no modality payloads.
+        Box::new(())
+    }
+}
+
+impl IsqModel for Qwen3OmniModel {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
+        // Not an ISQ checkpoint: the validated Thinker/Talker stacks use plain `hanzo_nn::Linear`,
+        // not `QuantMethod` layers, so there are no in-place-quantizable tensors to expose.
+        (Vec::new(), &*self.mapper)
+    }
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        Vec::new()
+    }
+}
+
+impl AnyMoeBaseModelMixin for Qwen3OmniModel {}
+
+impl crate::speculative::SpeculativeTargetMixin for Qwen3OmniModel {}
 
 /// HF `config.assistant_token_id` (absent from [`Qwen3OmniConfig`]; stable checkpoint constant).
 const ASSISTANT_TOKEN_ID: u32 = 77091;
