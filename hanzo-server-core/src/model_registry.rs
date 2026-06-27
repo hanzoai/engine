@@ -16,10 +16,10 @@
 //!          (text) loader.
 //!        - `SupportedVision(MultimodalLoaderType)` — vision models loadable by
 //!          the multimodal pipeline (qwen3-vl is ported: `Qwen3VLLoader` /
-//!          `Qwen3VLMoELoader`).
+//!          `Qwen3VLMoELoader`; qwen3-omni is ported: `Qwen3OmniLoader`).
 //!        - `SupportedAudio(AsrLoaderType)` — speech models loadable by the ASR
 //!          pipeline (qwen3-asr is ported: `speech_models/qwen3_asr`).
-//!        - `Unsupported(name)` — arch not yet ported (qwen3-omni, qwen3-tts,
+//!        - `Unsupported(name)` — arch not yet ported (qwen3-tts,
 //!          deepseek-v4-flash/pro); handlers return a clean 501.
 //!
 //! Adding a new SKU is a one-line change in `zen_sku_table()`. When a new arch
@@ -200,11 +200,12 @@ fn zen_sku_table() -> &'static [ZenSku] {
         // them directly. Use the zen5 ladder instead.
 
         // ---- Zen3 family (multimodal + specialty) --------------------------
-        // qwen3-omni is not ported (no qwen3_omni in vision_models); Unsupported.
+        // qwen3-omni IS ported (Qwen3OmniLoader / vision_models::qwen3_omni): the multimodal
+        // pipeline serves its Thinker text path; SupportedVision.
         ZenSku {
             sku: "zen3-omni",
             hf_repo: "zenlm/zen-omni",
-            arch: ArchKind::Unsupported("qwen3-omni"),
+            arch: ArchKind::SupportedVision("qwen3-omni"),
             quant: None,
             modality: Modality::Vision,
         },
@@ -419,12 +420,13 @@ mod tests {
 
     #[test]
     fn unsupported_arches_are_explicit() {
-        // DeepSeek-V4 (zen5-pro/max), qwen3-omni, qwen3-tts are not yet ported.
+        // DeepSeek-V4 (zen5-pro/max) and qwen3-tts are not yet ported.
         let pro = lookup("zen5-pro").unwrap();
         assert!(!pro.arch.is_supported());
         assert_eq!(pro.arch.name(), "deepseek-v4-flash");
+        // qwen3-omni IS ported now (Qwen3OmniLoader) — supported via the multimodal pipeline.
         let omni = lookup("zen3-omni").unwrap();
-        assert!(!omni.arch.is_supported());
+        assert!(omni.arch.is_supported());
         assert_eq!(omni.arch.name(), "qwen3-omni");
         let tts = lookup("zen3-tts").unwrap();
         assert!(!tts.arch.is_supported());
@@ -458,8 +460,8 @@ mod tests {
                     ),
                 },
                 // Multimodal loaders: MultimodalLoaderType arch names.
-                ArchKind::SupportedVision(name) => assert_eq!(
-                    *name, "qwen3-vl",
+                ArchKind::SupportedVision(name) => assert!(
+                    matches!(*name, "qwen3-vl" | "qwen3-omni"),
                     "SKU `{}` uses unexpected vision arch `{}`",
                     e.sku, name
                 ),
