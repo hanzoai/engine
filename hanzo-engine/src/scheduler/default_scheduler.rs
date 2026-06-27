@@ -319,6 +319,9 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
     fn running_len(&self) -> usize {
         self.running.len()
     }
+    fn running_seq_ids(&self) -> Vec<usize> {
+        self.running.iter().map(|seq| *seq.id()).collect()
+    }
     fn add_seq(&mut self, seq: Sequence) {
         if seq.is_running() {
             // prefill case

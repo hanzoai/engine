@@ -121,7 +121,7 @@ impl DraftModelProposer {
         start_pos: usize,
     ) -> Result<Tensor> {
         let seq_len = tokens.len();
-        let input_ids = Tensor::from_vec(tokens.to_vec(), (1, seq_len), &self.device)?;
+        let input_ids = Tensor::from_slice(tokens, (1, seq_len), &self.device)?;
         let inputs = ModelInputs {
             input_ids,
             input_ids_full: None,
@@ -150,14 +150,6 @@ impl SpeculativeProposer for DraftModelProposer {
         ctx: SpeculativeProposeBatchCtx<'_>,
         _target_embedder: Option<&TargetTokenEmbedder<'_>>,
     ) -> Result<SpeculativeProposalBatch> {
-        static ACTIVE_ONCE: std::sync::Once = std::sync::Once::new();
-        ACTIVE_ONCE.call_once(|| {
-            eprintln!(
-                "[hanzo] draft-model speculative proposer ACTIVE (gamma={})",
-                self.gamma
-            );
-        });
-
         let batch = ctx.sampled_tokens.len();
         let draft_arc = self.draft.clone();
         let mut draft = draft_arc
@@ -176,6 +168,16 @@ impl SpeculativeProposer for DraftModelProposer {
         }
         Ok(SpeculativeProposalBatch::new(proposals))
     }
+
+    fn retain_seqs(&mut self, live: &[usize]) {
+        prune_to_live(&mut self.caches, live);
+    }
+}
+
+/// Drop every entry whose key is not in `live`. Separated from `retain_seqs` so the pruning policy
+/// is unit-testable without constructing a real draft pipeline.
+fn prune_to_live<V>(caches: &mut HashMap<usize, V>, live: &[usize]) {
+    caches.retain(|id, _| live.contains(id));
 }
 
 fn cache_len(draft: &(dyn Pipeline + Send + Sync)) -> usize {
@@ -201,4 +203,30 @@ fn rollback_cache(draft: &(dyn Pipeline + Send + Sync), keep_len: usize) -> Resu
         layer.set_len(keep_len)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prune_to_live;
+    use std::collections::HashMap;
+
+    #[test]
+    fn prune_to_live_shrinks_as_seqs_finish() {
+        let mut caches: HashMap<usize, ()> = [0, 1, 2, 3].into_iter().map(|id| (id, ())).collect();
+        assert_eq!(caches.len(), 4);
+
+        // Sequences 1 and 3 finished this step; their draft caches must be released.
+        prune_to_live(&mut caches, &[0, 2]);
+        assert_eq!(caches.len(), 2);
+        assert!(caches.contains_key(&0) && caches.contains_key(&2));
+        assert!(!caches.contains_key(&1) && !caches.contains_key(&3));
+
+        // All remaining sequences finished -> the map shrinks to empty (no leak).
+        prune_to_live(&mut caches, &[]);
+        assert!(caches.is_empty());
+
+        // Live ids not present are harmless: still empty, no insertion.
+        prune_to_live(&mut caches, &[7, 9]);
+        assert!(caches.is_empty());
+    }
 }
