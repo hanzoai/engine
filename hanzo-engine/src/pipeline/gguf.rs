@@ -1230,6 +1230,13 @@ impl Pipeline for GGUFPipeline {
         }
     }
 
+    fn retain_speculative_seqs(&mut self, live: &[usize]) {
+        use crate::speculative::SpeculativeProposer;
+        if let Some(proposer) = self.draft_proposer.as_mut() {
+            proposer.retain_seqs(live);
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn try_sample_speculative_causal_gen(
         &mut self,
