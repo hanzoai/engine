@@ -7,14 +7,14 @@ sidebar:
 
 Multi-node NCCL inference extends tensor parallelism across machines. Each node contributes one or more local CUDA ranks to one global NCCL communicator.
 
-This is separate from the [ring backend](/mistral.rs/guides/perf/multi-machine-ring/). Multi-node NCCL uses `HANZO_MN_*` variables and does not use `RING_CONFIG`.
+This is separate from the [ring backend](/hanzo/guides/perf/multi-machine-ring/). Multi-node NCCL uses `HANZO_MN_*` variables and does not use `RING_CONFIG`.
 
 ## Build
 
 Build the same CUDA+NCCL binary on every node:
 
 ```bash
-cargo install mistralrs-cli --features "cuda nccl flash-attn cudnn"
+cargo install hanzo-cli --features "cuda nccl flash-attn cudnn"
 ```
 
 Every node should use the same model, dtype, quantization, and runtime arguments. Use `CUDA_VISIBLE_DEVICES` on each node to choose the local GPUs that participate.
@@ -32,7 +32,7 @@ The global tensor-parallel size must be compatible with the model:
 - Attention heads must divide evenly across all ranks.
 - KV heads must either divide evenly across all ranks or be replicated evenly when there are fewer KV heads than ranks.
 
-Incompatible sizes fail at startup; mistral.rs does not automatically drop ranks.
+Incompatible sizes fail at startup; Hanzo Engine does not automatically drop ranks.
 
 Common variables:
 
@@ -59,7 +59,7 @@ HANZO_MN_GLOBAL_WORLD_SIZE=8 \
 HANZO_MN_LOCAL_WORLD_SIZE=4 \
 HANZO_MN_HEAD_NUM_WORKERS=1 \
 HANZO_MN_HEAD_PORT=9000 \
-mistralrs serve -m Qwen/Qwen3-32B --quant 4
+hanzo serve -m Qwen/Qwen3-32B --quant 4
 ```
 
 Worker node:
@@ -70,7 +70,7 @@ HANZO_MN_GLOBAL_WORLD_SIZE=8 \
 HANZO_MN_LOCAL_WORLD_SIZE=4 \
 HANZO_MN_WORKER_SERVER_ADDR=10.0.0.1:9000 \
 HANZO_MN_WORKER_ID=0 \
-mistralrs serve -m Qwen/Qwen3-32B --quant 4
+hanzo serve -m Qwen/Qwen3-32B --quant 4
 ```
 
 Send client requests to the head node.

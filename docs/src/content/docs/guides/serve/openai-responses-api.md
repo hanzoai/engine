@@ -9,9 +9,9 @@ hanzo implements the OpenAI Responses API at `/v1/responses` alongside Chat Comp
 
 Both endpoints run on the same server.
 
-For general OpenAI-compatible setup, see [OpenAI-compatible APIs](/mistral.rs/guides/serve/openai-compatible-apis/).
+For general OpenAI-compatible setup, see [OpenAI-compatible APIs](/hanzo/guides/serve/openai-compatible-apis/).
 
-For Codex configuration, see [Use Codex and Claude Code](/mistral.rs/guides/serve/coding-agents/).
+For Codex configuration, see [Use Codex and Claude Code](/hanzo/guides/serve/coding-agents/).
 
 ## Endpoints
 

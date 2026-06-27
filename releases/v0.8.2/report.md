@@ -1,12 +1,12 @@
-# mistral.rs v0.8.2 Report
+# Hanzo Engine v0.8.2 Report
 
 ## Benchmark Results
 
-The release figures cover Gemma 4 E4B on GB10 and B200. Values are tokens per second, and speedups are mistral.rs divided by the comparison engine at the same length or decode depth.
+The release figures cover Gemma 4 E4B on GB10 and B200. Values are tokens per second, and speedups are Hanzo Engine divided by the comparison engine at the same length or decode depth.
 
 ![Gemma 4 E4B Q8 throughput](gemma4_e4b_q8_throughput.png)
 
-| Mode | Hardware | mistral.rs Q8 speedup range vs llama.cpp |
+| Mode | Hardware | Hanzo Engine Q8 speedup range vs llama.cpp |
 |---|---|---:|
 | Prefill | GB10 | 1.382x to 2.113x |
 | Decode | GB10 | 1.086x to 1.097x |
@@ -33,8 +33,8 @@ The release figures cover Gemma 4 E4B on GB10 and B200. Values are tokens per se
 
 Headline observations from the release artifacts:
 
-- For Gemma 4 E4B Q8, mistral.rs is faster than llama.cpp on every GB10 and B200 point in the release CSV. Mean prefill speedup is 1.828x on GB10 and 2.194x on B200; mean decode speedup is 1.090x on GB10 and 1.242x on B200.
-- For Gemma 4 E4B BF16, mistral.rs is effectively tied with vLLM on GB10 prefill at 1.005x mean speedup, faster on GB10 decode at 1.331x, faster on B200 prefill at 1.238x, and faster on B200 decode at 1.060x.
+- For Gemma 4 E4B Q8, Hanzo Engine is faster than llama.cpp on every GB10 and B200 point in the release CSV. Mean prefill speedup is 1.828x on GB10 and 2.194x on B200; mean decode speedup is 1.090x on GB10 and 1.242x on B200.
+- For Gemma 4 E4B BF16, Hanzo Engine is effectively tied with vLLM on GB10 prefill at 1.005x mean speedup, faster on GB10 decode at 1.331x, faster on B200 prefill at 1.238x, and faster on B200 decode at 1.060x.
 - The full appendix also includes Gemma 4 26B-A4B and H100 SXM. Those data are useful for technical inspection but are not part of the headline release figures.
 
 ## Method
@@ -42,11 +42,11 @@ Headline observations from the release artifacts:
 - Workloads: prompt lengths and decode depths of 128, 512, 2048, 4096, 8192, and 16384 tokens.
 - Decode workload: 256 generated tokens at each requested depth.
 - Iteration policy: 1 warmup iteration and 3 measured iterations.
-- mistral.rs configuration: paged attention enabled with `--max-seq-len 16896 --pa-context-len 16896`. GB10 and B200 logs report 16864 usable tokens, covering the 16384 plus 256 decode case.
-- Quantized comparisons: mistral.rs UQFF q4 is compared with llama.cpp GGUF Q4_K_M; mistral.rs UQFF q8 is compared with llama.cpp GGUF Q8_0.
-- BF16 comparison: mistral.rs safetensors are compared with vLLM BF16.
-- GB10 and B200 mistral.rs rows were rerun on 2026-06-01 after the Gemma 4 KV-sharing correctness fix. Their llama.cpp and vLLM comparison rows are copied from the prior 2026-05-31 full sweep and were not rerun for this report.
-- H100 mistral.rs rows were rerun on 2026-06-01 on the H100 SXM host. H100 llama.cpp and vLLM rows are copied from the 2026-05-31 H100 sweep raw artifacts.
+- Hanzo Engine configuration: paged attention enabled with `--max-seq-len 16896 --pa-context-len 16896`. GB10 and B200 logs report 16864 usable tokens, covering the 16384 plus 256 decode case.
+- Quantized comparisons: Hanzo Engine UQFF q4 is compared with llama.cpp GGUF Q4_K_M; Hanzo Engine UQFF q8 is compared with llama.cpp GGUF Q8_0.
+- BF16 comparison: Hanzo Engine safetensors are compared with vLLM BF16.
+- GB10 and B200 Hanzo Engine rows were rerun on 2026-06-01 after the Gemma 4 KV-sharing correctness fix. Their llama.cpp and vLLM comparison rows are copied from the prior 2026-05-31 full sweep and were not rerun for this report.
+- H100 Hanzo Engine rows were rerun on 2026-06-01 on the H100 SXM host. H100 llama.cpp and vLLM rows are copied from the 2026-05-31 H100 sweep raw artifacts.
 - Copied H100 llama.cpp rows use `llama-bench` with `-ngl 99 -fa 1`, as recorded in the H100 source report metadata and llama.cpp JSON fields.
 - H100 vLLM rows use the single-request sweep script reproduced below with vLLM 0.19.0, Transformers 5.9.0, and Torch 2.10.0+cu128.
 
@@ -70,50 +70,50 @@ B200 used the same `bench` command shapes shown below.
 
 ```bash
 # gb10_e4b_q4k
-target/release/mistralrs bench -m google/gemma-4-E4B-it --quant 4 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
+target/release/hanzo bench -m google/gemma-4-E4B-it --quant 4 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
 
 # gb10_e4b_q8
-target/release/mistralrs bench -m google/gemma-4-E4B-it --quant 8 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
+target/release/hanzo bench -m google/gemma-4-E4B-it --quant 8 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
 
 # gb10_e4b_bf16
-target/release/mistralrs bench -m google/gemma-4-E4B-it --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
+target/release/hanzo bench -m google/gemma-4-E4B-it --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
 
 # gb10_26b_q4k
-target/release/mistralrs bench -m google/gemma-4-26B-A4B-it --quant 4 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
+target/release/hanzo bench -m google/gemma-4-26B-A4B-it --quant 4 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
 
 # gb10_26b_q8
-target/release/mistralrs bench -m google/gemma-4-26B-A4B-it --quant 8 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
+target/release/hanzo bench -m google/gemma-4-26B-A4B-it --quant 8 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
 
 # gb10_26b_bf16
-target/release/mistralrs bench -m google/gemma-4-26B-A4B-it --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
+target/release/hanzo bench -m google/gemma-4-26B-A4B-it --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
 ```
 
 ### B200 Commands
 
 ```bash
 # b200_e4b_q4k
-target/release/mistralrs bench -m google/gemma-4-E4B-it --quant 4 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
+target/release/hanzo bench -m google/gemma-4-E4B-it --quant 4 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
 
 # b200_e4b_q8
-target/release/mistralrs bench -m google/gemma-4-E4B-it --quant 8 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
+target/release/hanzo bench -m google/gemma-4-E4B-it --quant 8 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
 
 # b200_e4b_bf16
-target/release/mistralrs bench -m google/gemma-4-E4B-it --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
+target/release/hanzo bench -m google/gemma-4-E4B-it --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
 
 # b200_26b_q4k
-target/release/mistralrs bench -m google/gemma-4-26B-A4B-it --quant 4 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
+target/release/hanzo bench -m google/gemma-4-26B-A4B-it --quant 4 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
 
 # b200_26b_q8
-target/release/mistralrs bench -m google/gemma-4-26B-A4B-it --quant 8 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
+target/release/hanzo bench -m google/gemma-4-26B-A4B-it --quant 8 --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
 
 # b200_26b_bf16
-target/release/mistralrs bench -m google/gemma-4-26B-A4B-it --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
+target/release/hanzo bench -m google/gemma-4-26B-A4B-it --paged-attn on --max-seq-len 16896 --pa-context-len 16896 --prompt-len 128,512,2048,4096,8192,16384 --depth 128,512,2048,4096,8192,16384 --gen-len 256 --iterations 3 --warmup 1
 ```
 
-### H100 mistral.rs Command Template
+### H100 Hanzo Engine Command Template
 
 ```bash
-target/release/mistralrs bench -m "$MODEL" --paged-attn on \
+target/release/hanzo bench -m "$MODEL" --paged-attn on \
   --max-seq-len "$CTX" --pa-context-len "$CTX" \
   --prompt-len "$LEN" --depth "$LEN" --gen-len "$GEN" \
   --iterations "$ITER" --warmup "$WARMUP"
@@ -145,7 +145,7 @@ GGUF artifacts recorded in the llama.cpp JSON rows:
 
 | Component | Commit or version | Notes |
 |---|---|---|
-| mistral.rs | 8b49f96392a767ea25a08af27669999a20e8a59e | branch `cuda_graphs_v1`; release `v0.8.2`; features `cuda,cudnn,flash-attn,cutile` |
+| Hanzo Engine | 8b49f96392a767ea25a08af27669999a20e8a59e | branch `cuda_graphs_v1`; release `v0.8.2`; features `cuda,cudnn,flash-attn,cutile` |
 | llama.cpp | 751ebd17a58a8a513994509214373bb9e6a3d66c | |
 | vLLM | 73dd2f33b7a5a8a237fe7296039cec246e4c68bd | `vllm 0.21.0`, `torch 2.11.0+cu130` |
 
@@ -288,7 +288,7 @@ if __name__ == "__main__":
 
 ## Appendix: Full Tables
 
-All appendix values are tokens per second. The speedup column is mistral.rs divided by the comparison engine in the same row.
+All appendix values are tokens per second. The speedup column is Hanzo Engine divided by the comparison engine in the same row.
 
 ### GB10
 
@@ -296,7 +296,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q4_K_M Prefill
 
-| Length | mistral.rs UQFF q4 | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
+| Length | Hanzo Engine UQFF q4 | llama.cpp GGUF Q4_K_M | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 4643.5 | 3170.7 | 1.465x |
 | 512 | 7747.0 | 4666.9 | 1.660x |
@@ -307,7 +307,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q4_K_M Decode
 
-| Depth | mistral.rs UQFF q4 | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
+| Depth | Hanzo Engine UQFF q4 | llama.cpp GGUF Q4_K_M | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 68.0 | 61.6 | 1.104x |
 | 512 | 67.4 | 61.2 | 1.101x |
@@ -318,7 +318,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q8_0 Prefill
 
-| Length | mistral.rs UQFF q8 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
+| Length | Hanzo Engine UQFF q8 | llama.cpp GGUF Q8_0 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 3657.1 | 2645.4 | 1.382x |
 | 512 | 7289.5 | 4238.1 | 1.720x |
@@ -329,7 +329,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q8_0 Decode
 
-| Depth | mistral.rs UQFF q8 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
+| Depth | Hanzo Engine UQFF q8 | llama.cpp GGUF Q8_0 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 45.5 | 41.9 | 1.086x |
 | 512 | 45.3 | 41.7 | 1.086x |
@@ -340,7 +340,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### BF16 Prefill
 
-| Length | mistral.rs BF16 | vLLM BF16 | mistral.rs speedup |
+| Length | Hanzo Engine BF16 | vLLM BF16 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 2401.3 | 2401.6 | 1.000x |
 | 512 | 5688.9 | 6265.5 | 0.908x |
@@ -351,7 +351,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### BF16 Decode
 
-| Depth | mistral.rs BF16 | vLLM BF16 | mistral.rs speedup |
+| Depth | Hanzo Engine BF16 | vLLM BF16 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 25.2 | 19.3 | 1.306x |
 | 512 | 25.6 | 19.3 | 1.326x |
@@ -364,7 +364,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q4_K_M Prefill
 
-| Length | mistral.rs UQFF q4 | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
+| Length | Hanzo Engine UQFF q4 | llama.cpp GGUF Q4_K_M | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 1662.5 | 1461.3 | 1.138x |
 | 512 | 3354.5 | 2855.8 | 1.175x |
@@ -375,7 +375,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q4_K_M Decode
 
-| Depth | mistral.rs UQFF q4 | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
+| Depth | Hanzo Engine UQFF q4 | llama.cpp GGUF Q4_K_M | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 71.1 | 67.4 | 1.055x |
 | 512 | 69.4 | 65.8 | 1.055x |
@@ -386,7 +386,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q8_0 Prefill
 
-| Length | mistral.rs UQFF q8 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
+| Length | Hanzo Engine UQFF q8 | llama.cpp GGUF Q8_0 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 1255.5 | 1118.7 | 1.122x |
 | 512 | 2728.6 | 2424.5 | 1.125x |
@@ -397,7 +397,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q8_0 Decode
 
-| Depth | mistral.rs UQFF q8 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
+| Depth | Hanzo Engine UQFF q8 | llama.cpp GGUF Q8_0 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 49.2 | 49.0 | 1.004x |
 | 512 | 48.4 | 48.1 | 1.006x |
@@ -408,7 +408,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### BF16 Prefill
 
-| Length | mistral.rs BF16 | vLLM BF16 | mistral.rs speedup |
+| Length | Hanzo Engine BF16 | vLLM BF16 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 418.9 | 1014.3 | 0.413x |
 | 512 | 710.8 | 2728.8 | 0.260x |
@@ -419,7 +419,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### BF16 Decode
 
-| Depth | mistral.rs BF16 | vLLM BF16 | mistral.rs speedup |
+| Depth | Hanzo Engine BF16 | vLLM BF16 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 27.8 | 23.9 | 1.163x |
 | 512 | 27.4 | 23.7 | 1.156x |
@@ -434,7 +434,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q4_K_M Prefill
 
-| Length | mistral.rs UQFF q4 | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
+| Length | Hanzo Engine UQFF q4 | llama.cpp GGUF Q4_K_M | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 7111.1 | 5265.1 | 1.351x |
 | 512 | 17879.4 | 10242.0 | 1.746x |
@@ -445,7 +445,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q4_K_M Decode
 
-| Depth | mistral.rs UQFF q4 | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
+| Depth | Hanzo Engine UQFF q4 | llama.cpp GGUF Q4_K_M | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 234.4 | 212.8 | 1.102x |
 | 512 | 233.9 | 217.5 | 1.075x |
@@ -456,7 +456,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q8_0 Prefill
 
-| Length | mistral.rs UQFF q8 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
+| Length | Hanzo Engine UQFF q8 | llama.cpp GGUF Q8_0 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 7529.4 | 5981.2 | 1.259x |
 | 512 | 15067.1 | 12091.8 | 1.246x |
@@ -467,7 +467,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q8_0 Decode
 
-| Depth | mistral.rs UQFF q8 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
+| Depth | Hanzo Engine UQFF q8 | llama.cpp GGUF Q8_0 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 247.4 | 195.9 | 1.263x |
 | 512 | 246.6 | 198.5 | 1.242x |
@@ -478,7 +478,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### BF16 Prefill
 
-| Length | mistral.rs BF16 | vLLM BF16 | mistral.rs speedup |
+| Length | Hanzo Engine BF16 | vLLM BF16 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 11122.5 | 6892.8 | 1.614x |
 | 512 | 25132.8 | 18575.1 | 1.353x |
@@ -489,7 +489,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### BF16 Decode
 
-| Depth | mistral.rs BF16 | vLLM BF16 | mistral.rs speedup |
+| Depth | Hanzo Engine BF16 | vLLM BF16 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 206.5 | 236.5 | 0.873x |
 | 512 | 205.7 | 230.5 | 0.892x |
@@ -502,7 +502,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q4_K_M Prefill
 
-| Length | mistral.rs UQFF q4 | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
+| Length | Hanzo Engine UQFF q4 | llama.cpp GGUF Q4_K_M | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 2767.0 | 3588.3 | 0.771x |
 | 512 | 8642.5 | 8000.8 | 1.080x |
@@ -513,7 +513,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q4_K_M Decode
 
-| Depth | mistral.rs UQFF q4 | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
+| Depth | Hanzo Engine UQFF q4 | llama.cpp GGUF Q4_K_M | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 241.8 | 205.4 | 1.177x |
 | 512 | 252.5 | 208.9 | 1.209x |
@@ -524,7 +524,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q8_0 Prefill
 
-| Length | mistral.rs UQFF q8 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
+| Length | Hanzo Engine UQFF q8 | llama.cpp GGUF Q8_0 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 3180.3 | 4034.5 | 0.788x |
 | 512 | 10046.8 | 9347.8 | 1.075x |
@@ -535,7 +535,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q8_0 Decode
 
-| Depth | mistral.rs UQFF q8 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
+| Depth | Hanzo Engine UQFF q8 | llama.cpp GGUF Q8_0 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 216.3 | 195.0 | 1.109x |
 | 512 | 216.0 | 196.1 | 1.101x |
@@ -546,7 +546,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### BF16 Prefill
 
-| Length | mistral.rs BF16 | vLLM BF16 | mistral.rs speedup |
+| Length | Hanzo Engine BF16 | vLLM BF16 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 2256.5 | 7963.8 | 0.283x |
 | 512 | 3244.8 | 20151.7 | 0.161x |
@@ -557,7 +557,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### BF16 Decode
 
-| Depth | mistral.rs BF16 | vLLM BF16 | mistral.rs speedup |
+| Depth | Hanzo Engine BF16 | vLLM BF16 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 163.0 | 251.9 | 0.647x |
 | 512 | 162.5 | 247.1 | 0.658x |
@@ -572,7 +572,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q4_K_M Prefill
 
-| Length | mistral.rs UQFF q4 | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
+| Length | Hanzo Engine UQFF q4 | llama.cpp GGUF Q4_K_M | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 8355.6 | 5461.6 | 1.530x |
 | 512 | 17975.3 | 11003.6 | 1.634x |
@@ -583,7 +583,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q4_K_M Decode
 
-| Depth | mistral.rs UQFF q4 | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
+| Depth | Hanzo Engine UQFF q4 | llama.cpp GGUF Q4_K_M | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 215.3 | 206.1 | 1.045x |
 | 512 | 214.1 | 206.6 | 1.036x |
@@ -594,7 +594,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q8_0 Prefill
 
-| Length | mistral.rs UQFF q8 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
+| Length | Hanzo Engine UQFF q8 | llama.cpp GGUF Q8_0 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 8533.3 | 5898.4 | 1.447x |
 | 512 | 20107.3 | 11778.4 | 1.707x |
@@ -605,7 +605,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q8_0 Decode
 
-| Depth | mistral.rs UQFF q8 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
+| Depth | Hanzo Engine UQFF q8 | llama.cpp GGUF Q8_0 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 229.1 | 186.5 | 1.228x |
 | 512 | 227.9 | 187.1 | 1.218x |
@@ -616,7 +616,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### BF16 Prefill
 
-| Length | mistral.rs BF16 | vLLM BF16 | mistral.rs speedup |
+| Length | Hanzo Engine BF16 | vLLM BF16 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 9718.5 | 15483.7 | 0.628x |
 | 512 | 25495.9 | 40069.1 | 0.636x |
@@ -627,7 +627,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### BF16 Decode
 
-| Depth | mistral.rs BF16 | vLLM BF16 | mistral.rs speedup |
+| Depth | Hanzo Engine BF16 | vLLM BF16 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 178.5 | 177.0 | 1.009x |
 | 512 | 177.1 | 173.6 | 1.020x |
@@ -640,7 +640,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q4_K_M Prefill
 
-| Length | mistral.rs UQFF q4 | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
+| Length | Hanzo Engine UQFF q4 | llama.cpp GGUF Q4_K_M | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 3498.2 | 3512.5 | 0.996x |
 | 512 | 8689.4 | 8308.1 | 1.046x |
@@ -651,7 +651,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q4_K_M Decode
 
-| Depth | mistral.rs UQFF q4 | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
+| Depth | Hanzo Engine UQFF q4 | llama.cpp GGUF Q4_K_M | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 216.0 | 211.5 | 1.021x |
 | 512 | 215.1 | 212.2 | 1.014x |
@@ -662,7 +662,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q8_0 Prefill
 
-| Length | mistral.rs UQFF q8 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
+| Length | Hanzo Engine UQFF q8 | llama.cpp GGUF Q8_0 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 3885.7 | 3831.4 | 1.014x |
 | 512 | 9549.8 | 9146.4 | 1.044x |
@@ -673,7 +673,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### Q8_0 Decode
 
-| Depth | mistral.rs UQFF q8 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
+| Depth | Hanzo Engine UQFF q8 | llama.cpp GGUF Q8_0 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 204.9 | 187.4 | 1.093x |
 | 512 | 205.2 | 187.8 | 1.093x |
@@ -684,7 +684,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### BF16 Prefill
 
-| Length | mistral.rs BF16 | vLLM BF16 | mistral.rs speedup |
+| Length | Hanzo Engine BF16 | vLLM BF16 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 1833.1 | 8446.4 | 0.217x |
 | 512 | 2733.1 | 22914.2 | 0.119x |
@@ -695,7 +695,7 @@ All appendix values are tokens per second. The speedup column is mistral.rs divi
 
 ##### BF16 Decode
 
-| Depth | mistral.rs BF16 | vLLM BF16 | mistral.rs speedup |
+| Depth | Hanzo Engine BF16 | vLLM BF16 | Hanzo Engine speedup |
 |---:|---:|---:|---:|
 | 128 | 141.1 | 162.1 | 0.871x |
 | 512 | 140.8 | 159.9 | 0.880x |
