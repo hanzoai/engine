@@ -854,6 +854,11 @@ impl Engine {
                 }
             }
             scheduler.free_finished_sequence_groups();
+
+            // Release speculative draft-proposer per-seq KV caches for sequences reaped this step
+            // so a long-running server doesn't leak; no-op unless a draft proposer is attached.
+            let live = scheduler.running_seq_ids();
+            get_mut_arcmutex!(self.pipeline).retain_speculative_seqs(&live);
         }
     }
 
