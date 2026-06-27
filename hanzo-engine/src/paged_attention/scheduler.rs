@@ -522,6 +522,12 @@ impl Scheduler for PagedAttentionScheduler {
     fn running_len(&self) -> usize {
         self.running.len()
     }
+    fn running_seq_ids(&self) -> Vec<usize> {
+        self.running
+            .iter()
+            .map(|seq| *get_mut_arcmutex!(seq).id())
+            .collect()
+    }
     fn block_size(&self) -> Option<usize> {
         Some(self.block_size)
     }

@@ -652,21 +652,21 @@ impl BenchRuntimeOptions {
         })
     }
 
-    pub fn draft_model_selected(&self) -> Option<hanzo_engine::ModelSelected> {
-        let quantized_model_id = self.draft_model.clone()?;
-        Some(hanzo_engine::ModelSelected::GGUF {
-            tok_model_id: None,
-            quantized_model_id,
-            quantized_filename: self.draft_quantized_file.clone().unwrap_or_default(),
-            dtype: hanzo_engine::ModelDType::Auto,
-            topology: None,
-            max_seq_len: 4096,
-            max_batch_size: 1,
-        })
+    pub fn draft_model_selected(
+        &self,
+        max_seq_len: usize,
+        max_batch_size: usize,
+    ) -> Option<hanzo_engine::ModelSelected> {
+        build_draft_model_selected(
+            self.draft_model.as_deref(),
+            self.draft_quantized_file.as_deref(),
+            max_seq_len,
+            max_batch_size,
+        )
     }
 
     pub fn gamma(&self) -> usize {
-        self.gamma.unwrap_or(4)
+        self.gamma.unwrap_or(DEFAULT_GAMMA)
     }
 }
 
@@ -719,21 +719,22 @@ impl RuntimeOptions {
 
     /// Build the draft model selector for classic draft+target speculative decoding, if a draft was
     /// requested. GGUF draft (the common case): `--draft-model <dir/id>` + `--draft-quantized-file`.
-    pub fn draft_model_selected(&self) -> Option<hanzo_engine::ModelSelected> {
-        let quantized_model_id = self.draft_model.clone()?;
-        Some(hanzo_engine::ModelSelected::GGUF {
-            tok_model_id: None,
-            quantized_model_id,
-            quantized_filename: self.draft_quantized_file.clone().unwrap_or_default(),
-            dtype: hanzo_engine::ModelDType::Auto,
-            topology: None,
-            max_seq_len: 4096,
-            max_batch_size: 1,
-        })
+    /// `max_seq_len`/`max_batch_size` are inherited from the target so the draft matches its context.
+    pub fn draft_model_selected(
+        &self,
+        max_seq_len: usize,
+        max_batch_size: usize,
+    ) -> Option<hanzo_engine::ModelSelected> {
+        build_draft_model_selected(
+            self.draft_model.as_deref(),
+            self.draft_quantized_file.as_deref(),
+            max_seq_len,
+            max_batch_size,
+        )
     }
 
     pub fn gamma(&self) -> usize {
-        self.gamma.unwrap_or(4)
+        self.gamma.unwrap_or(DEFAULT_GAMMA)
     }
 }
 
@@ -834,4 +835,27 @@ fn default_max_seqs() -> usize {
 
 fn default_prefix_cache_n() -> usize {
     16
+}
+
+/// Default speculative gamma: draft tokens proposed per target verification step.
+pub const DEFAULT_GAMMA: usize = 4;
+
+/// Build the GGUF draft-model selector for classic draft+target speculative decoding, sized to the
+/// target's context window so the draft keeps proposing across the full sequence instead of silently
+/// stopping past a smaller hardcoded cap. Shared by the run/serve and bench runtime option structs.
+fn build_draft_model_selected(
+    draft_model: Option<&str>,
+    draft_quantized_file: Option<&str>,
+    max_seq_len: usize,
+    max_batch_size: usize,
+) -> Option<hanzo_engine::ModelSelected> {
+    Some(hanzo_engine::ModelSelected::GGUF {
+        tok_model_id: None,
+        quantized_model_id: draft_model?.to_string(),
+        quantized_filename: draft_quantized_file.unwrap_or_default().to_string(),
+        dtype: hanzo_engine::ModelDType::Auto,
+        topology: None,
+        max_seq_len,
+        max_batch_size,
+    })
 }
