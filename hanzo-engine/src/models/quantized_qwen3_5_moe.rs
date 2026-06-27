@@ -441,6 +441,20 @@ impl QGatedDeltaNet {
         let (batch_size, seq_len, conv_dim) = x.dims3()?;
         let x_t = x.transpose(1, 2)?.contiguous()?;
 
+        #[cfg(feature = "cuda")]
+        if x_t.device().is_cuda() {
+            let weight = self.conv1d_weight.to_dtype(x_t.dtype())?.contiguous()?;
+            let (output, new_conv_state) = crate::cuda::gdn::causal_conv1d_cuda(
+                &x_t,
+                &weight,
+                &cache.conv_state,
+                self.conv_kernel_size,
+                false,
+            )?;
+            cache.conv_state = new_conv_state;
+            return output.transpose(1, 2);
+        }
+
         let pad_width = self.conv_kernel_size.saturating_sub(seq_len);
         cache.conv_state = if pad_width > 0 {
             let zeros =
