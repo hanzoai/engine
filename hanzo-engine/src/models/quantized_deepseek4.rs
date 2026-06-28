@@ -376,7 +376,7 @@ impl V4Attn {
         let o = attn
             .transpose(1, 2)? // [b, s, nh, hd]
             .reshape((b, s, self.o_groups, group_in))?
-            .to_dtype(DType::F32)?;
+            .to_dtype(self.wo_a.dtype())?;
         // batched per-group matmul: [groups, b*s, group_in] @ [groups, group_in, rank].
         let o = o
             .transpose(1, 2)? // [b, groups, s, group_in]
@@ -532,8 +532,12 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 ropes_comp[&dev.location()].clone()
             };
 
-            // Attention.
-            let wo_a = deq(&mut ct, &format!("{p}.attn_output_a.weight"), dev)?
+            // Attention. wo_a dequantized to BF16 (not F32) — halves its resident footprint
+            // (~2.8GB vs 5.7GB across 43 layers) for the grouped-o einsum.
+            let wo_a = ct
+                .tensor(&format!("{p}.attn_output_a.weight"), dev)?
+                .dequantize(dev)?
+                .to_dtype(DType::BF16)?
                 // GGUF stores [group_in, groups*rank]; reshape to [groups, rank, group_in].
                 .reshape((group_in, props.o_groups, props.o_lora_rank))?
                 .permute((1, 2, 0))?
