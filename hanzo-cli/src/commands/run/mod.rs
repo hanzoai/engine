@@ -9,7 +9,7 @@ use anyhow::Result;
 use tracing::info;
 
 use hanzo_engine::initialize_logging;
-use hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder;
+use hanzo_server_core::server::ServerBuilder;
 
 #[cfg(feature = "code-execution")]
 use super::serve::build_code_exec_config;
@@ -61,7 +61,7 @@ pub async fn run_interactive(
     let isq = extract_isq_setting(&model_type);
 
     // Build the Hanzo instance
-    let mut builder = HanzoForServerBuilder::new()
+    let mut builder = ServerBuilder::new()
         .with_model(model_selected)
         .with_max_seqs(runtime.max_seqs)
         .with_no_kv_cache(runtime.no_kv_cache)

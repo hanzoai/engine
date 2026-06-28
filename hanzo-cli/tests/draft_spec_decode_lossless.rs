@@ -20,7 +20,7 @@ use hanzo_engine::{
     Constraint, Hanzo, ModelDType, ModelSelected, NormalRequest, Request, RequestMessage, Response,
     SamplingParams, TokenSource,
 };
-use hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder;
+use hanzo_server_core::server::ServerBuilder;
 use tokio::sync::mpsc::channel;
 
 const MAX_SEQ_LEN: usize = 4096;
@@ -82,7 +82,7 @@ fn gguf(path: &Path) -> ModelSelected {
 /// while the verifier still owns correctness.
 async fn load(path: &Path, with_draft: bool) -> Arc<Hanzo> {
     let draft = with_draft.then(|| gguf(path));
-    HanzoForServerBuilder::new()
+    ServerBuilder::new()
         .with_model(gguf(path))
         .with_max_seqs(1)
         .with_no_kv_cache(false)
