@@ -1615,11 +1615,42 @@ const KV_PAYLOAD_NORMAL: u8 = 0;
 const KV_PAYLOAD_ROTATING: u8 = 1;
 const KV_PAYLOAD_SHARED: u8 = 2;
 
+/// A KV tensor never has more axes than this; a larger `dim` index in a payload
+/// is corrupt or hostile and is rejected before it can index a tensor.
+const MAX_KV_RANK: usize = 8;
+
+/// Bounds and identity used to validate an untrusted disk-spill payload *before*
+/// any allocation. `.kv` files are an untrusted-input trust boundary (read at
+/// cold start), so every deserialized count/dimension is checked against the live
+/// model and the on-disk budget — out-of-range input is rejected, never allocated.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RestoreLimits {
+    /// Live-model fingerprint; a prefix tagged with any other value is rejected.
+    pub fingerprint: u64,
+    /// Upper bound on the number of layers in a prefix (model hidden layers).
+    pub max_layers: usize,
+    /// Upper bound on any per-layer sequence dimension (model max context).
+    pub max_seq_len: usize,
+    /// Upper bound on a single reconstructed tensor's byte size (disk budget).
+    pub max_payload_bytes: u64,
+}
+
+/// Total byte size of a tensor with `shape` and `dtype`, or `None` on overflow.
+/// Used to reject a payload whose declared dimensions would allocate beyond the
+/// disk budget before [`Tensor::zeros`] is ever called.
+fn checked_tensor_bytes(shape: &[usize], dtype: hanzo_ml::DType) -> Option<u64> {
+    let mut elems: u64 = 1;
+    for &d in shape {
+        elems = elems.checked_mul(u64::try_from(d).ok()?)?;
+    }
+    elems.checked_mul(u64::try_from(dtype.size_in_bytes()).ok()?)
+}
+
 impl KvCache {
     /// Serialize this layer's live KV plus shape metadata into a self-describing
     /// byte buffer for the disk cache. GPU tensors are copied to host as part of
     /// the safetensors encode. `Shared` layers carry only their owner index.
-    pub fn to_payload(&self) -> Result<Vec<u8>> {
+    pub(crate) fn to_payload(&self) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         match self {
             Self::Normal { k, v } => {
@@ -1655,17 +1686,23 @@ impl KvCache {
     }
 
     /// Reconstruct a layer from [`Self::to_payload`] bytes, materializing tensors
-    /// on `device`. This is a trust boundary: malformed/truncated input returns an
-    /// error rather than panicking.
-    pub fn from_payload(bytes: &[u8], device: &Device) -> Result<Self> {
+    /// on `device`. This is a trust boundary: every declared dimension is bounded
+    /// by `limits` (model max context + disk budget) before any allocation, and
+    /// malformed/truncated input returns an error rather than panicking or
+    /// over-allocating.
+    pub(crate) fn from_payload(
+        bytes: &[u8],
+        device: &Device,
+        limits: &RestoreLimits,
+    ) -> Result<Self> {
         let mut r = ByteReader::new(bytes);
         match r.read_u8()? {
             KV_PAYLOAD_NORMAL => {
-                let (dim, csl, msl, cap, data) = read_kv_tensor_payload(&mut r, device)?;
+                let (dim, csl, msl, cap, data) = read_kv_tensor_payload(&mut r, device, limits)?;
                 let (k, v) = match data {
                     Some((kt, vt)) => (
-                        rebuild_single(kt, dim, csl, msl, cap)?,
-                        rebuild_single(vt, dim, csl, msl, cap)?,
+                        rebuild_single(kt, dim, csl, msl, cap, limits)?,
+                        rebuild_single(vt, dim, csl, msl, cap, limits)?,
                     ),
                     None => (
                         SingleCache::new(dim, msl, cap.max(1)),
@@ -1675,11 +1712,11 @@ impl KvCache {
                 Ok(Self::Normal { k, v })
             }
             KV_PAYLOAD_ROTATING => {
-                let (dim, csl, msl, cap, data) = read_kv_tensor_payload(&mut r, device)?;
+                let (dim, csl, msl, cap, data) = read_kv_tensor_payload(&mut r, device, limits)?;
                 let (k, v) = match data {
                     Some((kt, vt)) => (
-                        rebuild_rotating(kt, dim, csl, msl, cap)?,
-                        rebuild_rotating(vt, dim, csl, msl, cap)?,
+                        rebuild_rotating(kt, dim, csl, msl, cap, limits)?,
+                        rebuild_rotating(vt, dim, csl, msl, cap, limits)?,
                     ),
                     None => (
                         RotatingCache::new(dim, msl, cap.max(1)),
@@ -1732,15 +1769,42 @@ fn write_kv_tensor_payload(
 
 type KvScalars = (usize, usize, usize, usize, Option<(Tensor, Tensor)>);
 
-fn read_kv_tensor_payload(r: &mut ByteReader<'_>, device: &Device) -> Result<KvScalars> {
+fn read_kv_tensor_payload(
+    r: &mut ByteReader<'_>,
+    device: &Device,
+    limits: &RestoreLimits,
+) -> Result<KvScalars> {
     let dim = usize_from_u64(r.read_u64()?, "dim")?;
+    if dim >= MAX_KV_RANK {
+        hanzo_ml::bail!("kv payload: dim {dim} out of range (max {MAX_KV_RANK})");
+    }
     let current_seq_len = usize_from_u64(r.read_u64()?, "current_seq_len")?;
     let max_seq_len = usize_from_u64(r.read_u64()?, "max_seq_len")?;
     let capacity_seq_len = usize_from_u64(r.read_u64()?, "capacity_seq_len")?;
+    // Bound every sequence dimension by the live model's max context before any
+    // allocation downstream. An attacker-set huge cap/msl is rejected here.
+    for (what, v) in [
+        ("current_seq_len", current_seq_len),
+        ("max_seq_len", max_seq_len),
+        ("capacity_seq_len", capacity_seq_len),
+    ] {
+        if v > limits.max_seq_len {
+            hanzo_ml::bail!(
+                "kv payload: {what} {v} exceeds model max context {}",
+                limits.max_seq_len
+            );
+        }
+    }
     let data = match r.read_u8()? {
         0 => None,
         1 => {
             let blob_len = usize_from_u64(r.read_u64()?, "blob_len")?;
+            if blob_len as u64 > limits.max_payload_bytes {
+                hanzo_ml::bail!(
+                    "kv payload: blob_len {blob_len} exceeds budget {}",
+                    limits.max_payload_bytes
+                );
+            }
             let blob = r.read_bytes(blob_len)?;
             let mut map = hanzo_ml::safetensors::load_buffer(blob, device)?;
             let k = map
@@ -1762,6 +1826,7 @@ fn rebuild_single(
     current_seq_len: usize,
     max_seq_len: usize,
     capacity_seq_len: usize,
+    limits: &RestoreLimits,
 ) -> Result<SingleCache> {
     let stored = data.dim(dim)?;
     if stored != current_seq_len {
@@ -1770,6 +1835,7 @@ fn rebuild_single(
     let cap = capacity_seq_len.max(current_seq_len).max(1);
     let mut shape = data.dims().to_vec();
     shape[dim] = cap;
+    bound_alloc(&shape, data.dtype(), limits)?;
     let all_data = Tensor::zeros(shape, data.dtype(), data.device())?;
     all_data.slice_set(&data, dim, 0)?;
     Ok(SingleCache {
@@ -1787,6 +1853,7 @@ fn rebuild_rotating(
     current_seq_len: usize,
     max_seq_len: usize,
     capacity_seq_len: usize,
+    limits: &RestoreLimits,
 ) -> Result<RotatingCache> {
     let retained_len = current_seq_len.min(max_seq_len);
     let stored = data.dim(dim)?;
@@ -1797,6 +1864,7 @@ fn rebuild_rotating(
     let cap = capacity_seq_len.clamp(retained_len, max_seq_len).max(retained_len);
     let mut shape = data.dims().to_vec();
     shape[dim] = cap.max(1);
+    bound_alloc(&shape, data.dtype(), limits)?;
     let all_data = Tensor::zeros(shape, data.dtype(), data.device())?;
     if retained_len > 0 {
         all_data.slice_set(&data, dim, 0)?;
@@ -1814,6 +1882,22 @@ fn rebuild_rotating(
 fn usize_from_u64(v: u64, what: &str) -> Result<usize> {
     usize::try_from(v)
         .map_err(|_| hanzo_ml::Error::Msg(format!("kv payload: {what} exceeds usize")))
+}
+
+/// Reject a reconstruction whose tensor would allocate beyond the disk budget,
+/// before [`Tensor::zeros`] is called. The seq dimension is already bounded by the
+/// model max context in [`read_kv_tensor_payload`]; this caps the full product
+/// (heads x seq x head_dim x dtype) so a small-data/large-cap payload cannot OOM.
+fn bound_alloc(shape: &[usize], dtype: hanzo_ml::DType, limits: &RestoreLimits) -> Result<()> {
+    let bytes = checked_tensor_bytes(shape, dtype)
+        .ok_or_else(|| hanzo_ml::Error::Msg("kv payload: tensor byte size overflow".into()))?;
+    if bytes > limits.max_payload_bytes {
+        hanzo_ml::bail!(
+            "kv payload: reconstructed tensor {bytes} bytes exceeds budget {}",
+            limits.max_payload_bytes
+        );
+    }
+    Ok(())
 }
 
 /// Minimal forward-only reader over a byte payload. Shared by [`KvCache::from_payload`]
@@ -1849,6 +1933,13 @@ impl<'a> ByteReader<'a> {
         Ok(self.read_bytes(1)?[0])
     }
 
+    pub(crate) fn read_u32(&mut self) -> Result<u32> {
+        let bytes = self.read_bytes(4)?;
+        Ok(u32::from_le_bytes(
+            bytes.try_into().expect("read_bytes(4) yields 4 bytes"),
+        ))
+    }
+
     pub(crate) fn read_u64(&mut self) -> Result<u64> {
         let bytes = self.read_bytes(8)?;
         Ok(u64::from_le_bytes(
@@ -1875,6 +1966,16 @@ mod payload_tests {
         t.flatten_all().unwrap().to_vec1::<f32>().unwrap()
     }
 
+    /// Permissive limits for the happy-path round-trip tests.
+    fn lim() -> RestoreLimits {
+        RestoreLimits {
+            fingerprint: 0,
+            max_layers: 4096,
+            max_seq_len: 1 << 20,
+            max_payload_bytes: 1 << 32,
+        }
+    }
+
     fn normal_with(len: usize) -> KvCache {
         let mut k = SingleCache::new(2, 4096, NormalCache::CACHE_GROW_SIZE);
         let mut v = SingleCache::new(2, 4096, NormalCache::CACHE_GROW_SIZE);
@@ -1887,7 +1988,7 @@ mod payload_tests {
     fn normal_round_trips_values_and_shape() {
         let cache = normal_with(20);
         let bytes = cache.to_payload().unwrap();
-        let back = KvCache::from_payload(&bytes, &Device::Cpu).unwrap();
+        let back = KvCache::from_payload(&bytes, &Device::Cpu, &lim()).unwrap();
 
         assert_eq!(cache.current_seq_len(), back.current_seq_len());
         assert_eq!(vec1(&cache.k().unwrap().unwrap()), vec1(&back.k().unwrap().unwrap()));
@@ -1916,7 +2017,7 @@ mod payload_tests {
         let cache = KvCache::Rotating { k, v };
 
         let bytes = cache.to_payload().unwrap();
-        let back = KvCache::from_payload(&bytes, &Device::Cpu).unwrap();
+        let back = KvCache::from_payload(&bytes, &Device::Cpu, &lim()).unwrap();
 
         assert!(back.is_rotating());
         assert_eq!(cache.current_seq_len(), back.current_seq_len());
@@ -1935,7 +2036,7 @@ mod payload_tests {
     #[test]
     fn shared_round_trips() {
         let bytes = KvCache::Shared { owner: 5 }.to_payload().unwrap();
-        let back = KvCache::from_payload(&bytes, &Device::Cpu).unwrap();
+        let back = KvCache::from_payload(&bytes, &Device::Cpu, &lim()).unwrap();
         assert!(matches!(back, KvCache::Shared { owner: 5 }));
     }
 
@@ -1943,7 +2044,7 @@ mod payload_tests {
     fn empty_normal_round_trips() {
         let cache = KvCache::new_normal(2, 4096, NormalCache::CACHE_GROW_SIZE);
         let bytes = cache.to_payload().unwrap();
-        let back = KvCache::from_payload(&bytes, &Device::Cpu).unwrap();
+        let back = KvCache::from_payload(&bytes, &Device::Cpu, &lim()).unwrap();
         assert_eq!(back.current_seq_len(), 0);
         assert!(back.k().unwrap().is_none());
     }
@@ -1951,11 +2052,28 @@ mod payload_tests {
     #[test]
     fn truncated_payload_errors_not_panics() {
         let bytes = normal_with(8).to_payload().unwrap();
-        assert!(KvCache::from_payload(&bytes[..bytes.len() / 2], &Device::Cpu).is_err());
+        assert!(KvCache::from_payload(&bytes[..bytes.len() / 2], &Device::Cpu, &lim()).is_err());
     }
 
     #[test]
     fn unknown_variant_errors() {
-        assert!(KvCache::from_payload(&[99u8], &Device::Cpu).is_err());
+        assert!(KvCache::from_payload(&[99u8], &Device::Cpu, &lim()).is_err());
+    }
+
+    #[test]
+    fn oversized_capacity_is_rejected_not_allocated() {
+        // A valid 2-token Normal payload with the capacity_seq_len field overwritten
+        // to an absurd value. Must error (bounded) rather than attempt a huge alloc.
+        // Layout: [u8 variant][u64 dim][u64 csl][u64 msl][u64 cap]... → cap at offset 25.
+        let mut bytes = normal_with(2).to_payload().unwrap();
+        let cap_off = 1 + 8 + 8 + 8;
+        bytes[cap_off..cap_off + 8].copy_from_slice(&(1u64 << 40).to_le_bytes());
+        let strict = RestoreLimits {
+            fingerprint: 0,
+            max_layers: 64,
+            max_seq_len: 4096,
+            max_payload_bytes: 1 << 30,
+        };
+        assert!(KvCache::from_payload(&bytes, &Device::Cpu, &strict).is_err());
     }
 }
