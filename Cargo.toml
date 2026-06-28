@@ -22,7 +22,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "1.4.0"
+version = "1.5.0"
 edition = "2021"
 authors = ["Hanzo AI <dev@hanzo.ai>"]
 description = "Fast, flexible LLM inference."
@@ -231,9 +231,10 @@ debug = true
 opt-level = 3
 
 
-# TEMP: patch to local hanzo-ml for DeepSeek-V4 I32 (tid2eid) support + CUDA-UMA.
-# Drop once hanzo-ml 0.11.24+ is published.
+# Pin hanzo-ml to the tagged release carrying DeepSeek-V4 I32 (tid2eid) support +
+# CUDA-UMA + mmap GGUF streaming. CI-safe (git tag, not a local path). Drop this
+# patch once ml-v0.11.27 lands on crates.io (the caret dep then resolves it).
 [patch.crates-io]
-hanzo-ml = { path = "/home/z/work/hanzo/ml/hanzo-ml" }
-hanzo-nn = { path = "/home/z/work/hanzo/ml/hanzo-nn" }
-hanzo-kernels = { path = "/home/z/work/hanzo/ml/hanzo-kernels" }
+hanzo-ml = { git = "https://github.com/hanzoai/ml", tag = "ml-v0.11.27" }
+hanzo-nn = { git = "https://github.com/hanzoai/ml", tag = "ml-v0.11.27" }
+hanzo-kernels = { git = "https://github.com/hanzoai/ml", tag = "ml-v0.11.27" }
