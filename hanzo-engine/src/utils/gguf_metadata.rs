@@ -387,6 +387,22 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                 };
                 token_embd + output_norm + output
             }
+            GGUFArchitecture::Deepseek2 | GGUFArchitecture::Deepseek4 => {
+                let token_embd = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("token_embd.weight")?,
+                    DType::F32
+                );
+                let output_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("output_norm.weight")?,
+                    DType::F32
+                );
+                let output = if !self.model.has_tensor("output.weight") {
+                    tensor_info_size_in_bytes!(self.model.tensor_info("token_embd.weight")?)
+                } else {
+                    tensor_info_size_in_bytes!(self.model.tensor_info("output.weight")?)
+                };
+                token_embd + output_norm + output
+            }
             _ => unimplemented!(),
         };
         Ok(size_in_bytes)
@@ -670,10 +686,13 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                     + ffn_gate
             }
 
-            GGUFArchitecture::Qwen35 | GGUFArchitecture::Qwen35MoE => {
-                // Hybrid (GDN + full-attention) layers have non-uniform sizes, so a single
-                // representative layer can't stand in. Sum each block's real tensor bytes instead
-                // -- correct for both single-device and multi-GPU auto mapping.
+            GGUFArchitecture::Qwen35
+            | GGUFArchitecture::Qwen35MoE
+            | GGUFArchitecture::Deepseek2
+            | GGUFArchitecture::Deepseek4 => {
+                // Non-uniform block sizes (hybrid layers; V4 hash vs MoE vs compressed layers),
+                // so a single representative layer can't stand in. Sum each block's real tensor
+                // bytes -- correct for both single-device and multi-GPU auto mapping.
                 let n = self.num_layers(config)?;
                 let sizes: Vec<usize> = (0..n)
                     .map(|i| {
