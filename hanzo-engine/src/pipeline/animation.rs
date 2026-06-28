@@ -1,24 +1,36 @@
 use super::text_models_inputs_processor::PagedAttentionMeta;
 use super::{
-    AnyMoePipelineMixin, Cache, CacheManagerMixin, ChatTemplate, EitherCache, ForwardInputsResult,
+    animation_loader, AdapterPaths, AnimationComponents, AnimationLoaderType, AnyMoePipelineMixin,
+    Cache, CacheManagerMixin, ChatTemplate, EitherCache, EmbeddingModulePaths, ForwardInputsResult,
     GeneralMetadata, InputProcessorOutput, InputsProcessor, InputsProcessorType, IsqPipelineMixin,
-    MessagesAction, MetadataMixin, Modalities, ModelCategory, ModelKind, PreProcessingMixin,
-    Processor, SupportedModality,
+    Loader, MessagesAction, MetadataMixin, Modalities, ModelCategory, ModelKind, ModelPaths,
+    PreProcessingMixin, Processor, SupportedModality, TokenSource,
 };
 use crate::device_map::DeviceMapper;
 use crate::diffusion_models::animation::{
     AnimationRequest, DrivingAudio, FacialAnimator, VisualKind, VisualSource, OMNI_SAMPLE_RATE,
 };
+use crate::diffusion_models::musetalk::{AnimatorOptions, MuseTalkConfig, UNetConfig, VaeConfig};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::{MessageContent, Pipeline};
+use crate::speech_models::whisper::WhisperConfig;
+use crate::utils::progress::ProgressScopeGuard;
+use crate::utils::tokens::get_token;
+use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
+use crate::{
+    api_get_file, DeviceMapSetting, MessageContent, PagedAttentionConfig, Pipeline, TryIntoDType,
+};
 use anyhow::Result;
 use hanzo_ml::{DType, Device, Tensor};
+use hanzo_quant::IsqType;
+use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use image::DynamicImage;
 use indexmap::IndexMap;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
+use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokenizers::Tokenizer;
 
 /// One sequence's worth of animation input, gathered by `AnimationInputsProcessor`
@@ -267,6 +279,242 @@ impl Pipeline for AnimationPipeline {
 }
 
 impl AnyMoePipelineMixin for AnimationPipeline {}
+
+const RESIZED_IMG: usize = 256;
+// MuseTalk v1.5 layout in the TMElyralab/MuseTalk repo (real-time footage path).
+const MUSETALK_UNET_WEIGHTS: &str = "musetalkV15/unet.pth";
+const MUSETALK_UNET_CONFIG: &str = "musetalkV15/musetalk.json";
+const VAE_WEIGHTS: &str = "diffusion_pytorch_model.safetensors";
+const VAE_CONFIG: &str = "config.json";
+const WHISPER_WEIGHTS: &str = "tiny.pt"; // openai-format checkpoint MuseTalk trained against
+const S3FD_WEIGHTS: &str = "s3fd.pth";
+
+#[derive(Clone, Debug)]
+pub struct AnimationModelPaths {
+    unet_config: PathBuf,
+    unet_weights: PathBuf,
+    vae_config: PathBuf,
+    vae_weights: PathBuf,
+    whisper_weights: PathBuf,
+    s3fd_weights: PathBuf,
+    all_weights: Vec<PathBuf>,
+}
+
+impl AnimationModelPaths {
+    pub fn new(
+        unet_config: PathBuf,
+        unet_weights: PathBuf,
+        vae_config: PathBuf,
+        vae_weights: PathBuf,
+        whisper_weights: PathBuf,
+        s3fd_weights: PathBuf,
+    ) -> Self {
+        let all_weights = vec![
+            unet_weights.clone(),
+            vae_weights.clone(),
+            whisper_weights.clone(),
+            s3fd_weights.clone(),
+        ];
+        Self {
+            unet_config,
+            unet_weights,
+            vae_config,
+            vae_weights,
+            whisper_weights,
+            s3fd_weights,
+            all_weights,
+        }
+    }
+}
+
+impl ModelPaths for AnimationModelPaths {
+    fn get_config_filename(&self) -> &PathBuf {
+        &self.unet_config
+    }
+    fn get_weight_filenames(&self) -> &[PathBuf] {
+        &self.all_weights
+    }
+    fn get_tokenizer_filename(&self) -> &PathBuf {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_template_filename(&self) -> &Option<PathBuf> {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_gen_conf_filename(&self) -> Option<&PathBuf> {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_preprocessor_config(&self) -> &Option<PathBuf> {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_processor_config(&self) -> &Option<PathBuf> {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_chat_template_explicit(&self) -> &Option<PathBuf> {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_adapter_paths(&self) -> &AdapterPaths {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_modules(&self) -> Option<&[EmbeddingModulePaths]> {
+        unreachable!("Use `std::any::Any`.")
+    }
+}
+
+/// Loads a `FacialAnimator`-backed `AnimationPipeline`. Resolves the four weight
+/// sources (UNet, VAE, whisper, S3FD); the arch picks how they compose.
+pub struct AnimationLoader {
+    pub model_id: String,
+    pub vae_model_id: String,
+    pub whisper_model_id: String,
+    pub s3fd_model_id: String,
+    pub arch: AnimationLoaderType,
+    pub options: AnimatorOptions,
+}
+
+impl AnimationLoader {
+    fn load_vb(
+        path: &PathBuf,
+        dtype: DType,
+        device: &Device,
+        silent: bool,
+    ) -> Result<hanzo_quant::ShardedVarBuilder> {
+        Ok(from_mmaped_safetensors(
+            vec![path.clone()],
+            Vec::new(),
+            Some(dtype),
+            device,
+            vec![None],
+            silent,
+            None,
+            |_| true,
+            Arc::new(|_| DeviceForLoadTensor::Base),
+        )?)
+    }
+}
+
+impl Loader for AnimationLoader {
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model_from_hf(
+        &self,
+        revision: Option<String>,
+        token_source: TokenSource,
+        dtype: &dyn TryIntoDType,
+        device: &Device,
+        silent: bool,
+        mapper: DeviceMapSetting,
+        in_situ_quant: Option<IsqType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
+        let revision = revision.unwrap_or_else(|| "main".to_string());
+        let repo = |id: &str| -> Result<hf_hub::api::sync::ApiRepo> {
+            let api = ApiBuilder::new()
+                .with_progress(!silent)
+                .with_token(get_token(&token_source)?)
+                .build()?;
+            Ok(api.repo(Repo::with_revision(
+                id.to_string(),
+                RepoType::Model,
+                revision.clone(),
+            )))
+        };
+
+        let musetalk = repo(&self.model_id)?;
+        let vae = repo(&self.vae_model_id)?;
+        let whisper = repo(&self.whisper_model_id)?;
+        let s3fd = repo(&self.s3fd_model_id)?;
+
+        let mt_id = std::path::Path::new(&self.model_id);
+        let vae_id = std::path::Path::new(&self.vae_model_id);
+        let wh_id = std::path::Path::new(&self.whisper_model_id);
+        let sf_id = std::path::Path::new(&self.s3fd_model_id);
+
+        let paths = AnimationModelPaths::new(
+            api_get_file!(musetalk, MUSETALK_UNET_CONFIG, &mt_id, &revision),
+            api_get_file!(musetalk, MUSETALK_UNET_WEIGHTS, &mt_id, &revision),
+            api_get_file!(vae, VAE_CONFIG, &vae_id, &revision),
+            api_get_file!(vae, VAE_WEIGHTS, &vae_id, &revision),
+            api_get_file!(whisper, WHISPER_WEIGHTS, &wh_id, &revision),
+            api_get_file!(s3fd, S3FD_WEIGHTS, &sf_id, &revision),
+        );
+
+        self.load_model_from_path(
+            &(Box::new(paths) as Box<dyn ModelPaths>),
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )
+    }
+
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model_from_path(
+        &self,
+        paths: &Box<dyn ModelPaths>,
+        dtype: &dyn TryIntoDType,
+        device: &Device,
+        silent: bool,
+        mapper: DeviceMapSetting,
+        in_situ_quant: Option<IsqType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
+        if matches!(mapper, DeviceMapSetting::Map(_)) {
+            anyhow::bail!("Device mapping is not supported for animation models.");
+        }
+        if in_situ_quant.is_some() {
+            anyhow::bail!("ISQ is not supported for animation models.");
+        }
+        if paged_attn_config.is_some() {
+            tracing::warn!("PagedAttention is not supported for animation models, disabling it.");
+        }
+        let paths = paths
+            .as_ref()
+            .as_any()
+            .downcast_ref::<AnimationModelPaths>()
+            .expect("Path downcast failed.");
+
+        let dtype = dtype.try_into_dtype(&[device])?;
+
+        let unet: UNetConfig =
+            serde_json::from_str(&std::fs::read_to_string(&paths.unet_config)?)?;
+        let vae: VaeConfig = serde_json::from_str(&std::fs::read_to_string(&paths.vae_config)?)?;
+        let musetalk_config = MuseTalkConfig {
+            unet,
+            vae,
+            resized_img: RESIZED_IMG,
+        };
+
+        let components = AnimationComponents {
+            musetalk_config,
+            vae_vb: Self::load_vb(&paths.vae_weights, dtype, device, silent)?,
+            unet_vb: Self::load_vb(&paths.unet_weights, dtype, device, silent)?,
+            whisper_config: WhisperConfig::tiny(),
+            whisper_vb: Self::load_vb(&paths.whisper_weights, dtype, device, silent)?,
+            s3fd_vb: Self::load_vb(&paths.s3fd_weights, dtype, device, silent)?,
+            device: device.clone(),
+            dtype,
+            options: self.options,
+        };
+
+        let animator = animation_loader(&self.arch).load(components)?;
+        Ok(Arc::new(Mutex::new(AnimationPipeline::new(
+            animator,
+            self.model_id.clone(),
+            dtype,
+        ))))
+    }
+
+    fn get_id(&self) -> String {
+        self.model_id.clone()
+    }
+
+    fn get_kind(&self) -> ModelKind {
+        ModelKind::Normal
+    }
+}
 
 #[cfg(test)]
 mod tests {
