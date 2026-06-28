@@ -8,6 +8,7 @@ use crate::{
     AudioInput, ChatCompletionResponse, Usage, VideoInput,
 };
 use crate::{
+    diffusion_models::animation::AnimationGenerationParams,
     pipeline::{DiffusionGenerationParams, KvCache},
     response::CompletionChoice,
     tools::ToolCallingMatcher,
@@ -42,6 +43,7 @@ pub enum StopReason {
     Canceled,
     GeneratedImage,
     GeneratedSpeech,
+    GeneratedFrames,
     ToolCalls,
 }
 
@@ -54,6 +56,7 @@ impl Display for StopReason {
             StopReason::Canceled => write!(f, "canceled"),
             StopReason::GeneratedImage => write!(f, "generated_image"),
             StopReason::GeneratedSpeech => write!(f, "generated_speech"),
+            StopReason::GeneratedFrames => write!(f, "generated_frames"),
             StopReason::ToolCalls => write!(f, "tool_calls"),
         }
     }
@@ -233,6 +236,7 @@ pub struct MultimodalData {
     pub has_changed_prompt: bool,
     pub image_gen_response_format: Option<ImageGenerationResponseFormat>,
     pub diffusion_params: Option<DiffusionGenerationParams>,
+    pub animation_params: Option<AnimationGenerationParams>,
     pub image_gen_save_file: Option<PathBuf>,
     /// Per-item multimodal feature positions for prefix caching block hashing.
     /// Each entry records which token range a multimodal item (image/audio) occupies,
@@ -262,6 +266,7 @@ impl MultimodalData {
             has_changed_prompt: false,
             image_gen_response_format,
             diffusion_params,
+            animation_params: None,
             image_gen_save_file,
             mm_features: Vec::new(),
         }
@@ -396,6 +401,10 @@ impl MultimodalData {
 
     pub fn diffusion_params(&self) -> Option<DiffusionGenerationParams> {
         self.diffusion_params.clone()
+    }
+
+    pub fn animation_params(&self) -> Option<AnimationGenerationParams> {
+        self.animation_params
     }
 
     /// Per-item multimodal feature positions for prefix caching block hashing.
@@ -1103,6 +1112,10 @@ impl Sequence {
         get_mut_group!(self).speech_pcms.push((pcm, rate, channels));
     }
 
+    pub fn add_frames_to_group(&self, frames: Arc<Vec<image::DynamicImage>>, fps: f64) {
+        get_mut_group!(self).frames.push((frames, fps));
+    }
+
     pub fn add_choice_to_group(&self, choice: Choice) {
         get_mut_group!(self).choices.push(choice);
         self.update_time_info();
@@ -1284,6 +1297,14 @@ impl Sequence {
         self.multimodal.diffusion_params()
     }
 
+    pub fn animation_params(&self) -> Option<AnimationGenerationParams> {
+        self.multimodal.animation_params()
+    }
+
+    pub fn set_animation_params(&mut self, params: AnimationGenerationParams) {
+        self.multimodal.animation_params = Some(params);
+    }
+
     pub fn eos_tokens(&self) -> &[u32] {
         &self.eos_tokens
     }
@@ -1396,6 +1417,7 @@ pub struct SequenceGroup {
     choices: Vec<Choice>,
     image_choices: Vec<ImageChoice>,
     speech_pcms: Vec<(Arc<Vec<f32>>, usize, usize)>, // (pcm, rate, channels)
+    frames: Vec<(Arc<Vec<image::DynamicImage>>, f64)>, // (frames, fps)
     raw_choices: Vec<(Vec<Tensor>, Vec<u32>)>,
     embedding_choices: Vec<Vec<f32>>,
     completion_choices: Vec<(f32, CompletionChoice)>,
@@ -1416,6 +1438,7 @@ impl SequenceGroup {
             choices: Vec::new(),
             image_choices: Vec::new(),
             speech_pcms: Vec::new(),
+            frames: Vec::new(),
             raw_choices: Vec::new(),
             embedding_choices: Vec::new(),
             completion_choices: Vec::new(),
@@ -1567,6 +1590,18 @@ impl SequenceGroup {
                 channels,
             })
             .await?;
+
+        Ok(())
+    }
+
+    pub async fn maybe_send_frames_response(
+        &self,
+        sender: Sender<Response>,
+    ) -> Result<(), SendError<Response>> {
+        assert_eq!(self.frames.len(), 1);
+
+        let (frames, fps) = self.frames[0].clone();
+        sender.send(Response::Frames { frames, fps }).await?;
 
         Ok(())
     }
