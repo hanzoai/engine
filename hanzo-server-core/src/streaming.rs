@@ -5,7 +5,7 @@ use std::env;
 use hanzo_engine::Response;
 use tokio::sync::mpsc::Receiver;
 
-use crate::types::SharedHanzoState;
+use crate::types::SharedState;
 
 /// Default keep-alive interval for Server-Sent Events (SSE) streams in milliseconds.
 pub const DEFAULT_KEEP_ALIVE_INTERVAL_MS: u64 = 10_000;
@@ -30,7 +30,7 @@ pub struct BaseStreamer<R, C, D> {
     /// Current state of the streaming operation
     pub done_state: DoneState,
     /// Underlying hanzo instance
-    pub state: SharedHanzoState,
+    pub state: SharedState,
     /// Whether to store chunks for the completion callback
     pub store_chunks: bool,
     /// All chunks received during streaming (if `store_chunks` is true)
@@ -44,7 +44,7 @@ pub struct BaseStreamer<R, C, D> {
 /// Generic function to create a SSE streamer with optional callbacks.
 pub(crate) fn base_create_streamer<R, C, D>(
     rx: Receiver<Response>,
-    state: SharedHanzoState,
+    state: SharedState,
     on_chunk: Option<C>,
     on_done: Option<D>,
 ) -> BaseStreamer<R, C, D> {

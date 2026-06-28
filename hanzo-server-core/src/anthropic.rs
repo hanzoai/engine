@@ -30,10 +30,10 @@ use crate::{
         create_response_channel, send_request_with_model, ErrorToResponse, JsonError,
         ModelErrorMessage,
     },
-    hanzo_server_router_builder::AgenticDefaults,
+    router::AgenticDefaults,
     openai::ChatCompletionRequest,
     streaming::{get_keep_alive_interval, DoneState},
-    types::{ExtractedHanzoState, SharedHanzoState},
+    types::{ExtractedState, SharedState},
     util::sanitize_error_message,
 };
 
@@ -603,14 +603,14 @@ fn to_event((name, payload): NamedEvent) -> Event {
 
 pub struct MessagesStreamer {
     rx: Receiver<Response>,
-    state: SharedHanzoState,
+    state: SharedState,
     builder: StreamBuilder,
     buffered: std::collections::VecDeque<NamedEvent>,
     done_state: DoneState,
 }
 
 impl MessagesStreamer {
-    fn new(rx: Receiver<Response>, state: SharedHanzoState) -> Self {
+    fn new(rx: Receiver<Response>, state: SharedState) -> Self {
         Self {
             rx,
             state,
@@ -711,7 +711,7 @@ impl futures::Stream for MessagesStreamer {
 
 fn create_messages_streamer(
     rx: Receiver<Response>,
-    state: SharedHanzoState,
+    state: SharedState,
 ) -> Sse<KeepAliveStream<MessagesStreamer>> {
     let streamer = MessagesStreamer::new(rx, state);
     let keep_alive_interval = get_keep_alive_interval();
@@ -721,7 +721,7 @@ fn create_messages_streamer(
 
 /// `POST /v1/messages` - Anthropic-compatible chat for Claude Code.
 pub async fn messages(
-    State(state): ExtractedHanzoState,
+    State(state): ExtractedState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
     Json(areq): Json<AnthropicMessagesRequest>,
 ) -> axum::response::Response {
