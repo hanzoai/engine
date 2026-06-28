@@ -3,6 +3,7 @@ mod dia;
 pub mod qwen3_asr;
 pub mod qwen3_tts;
 pub mod utils;
+pub mod whisper;
 
 use std::{str::FromStr, sync::Arc};
 

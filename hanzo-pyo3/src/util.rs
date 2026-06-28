@@ -64,8 +64,8 @@ impl From<serde_json::Error> for PyApiErr {
     }
 }
 
-impl From<hanzo_engine::HanzoError> for PyApiErr {
-    fn from(value: hanzo_engine::HanzoError) -> Self {
+impl From<hanzo_engine::Error> for PyApiErr {
+    fn from(value: hanzo_engine::Error) -> Self {
         Self::from(value.to_string())
     }
 }
