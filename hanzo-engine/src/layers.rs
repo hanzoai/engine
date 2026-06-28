@@ -3143,7 +3143,18 @@ fn gather_rope_cos_sin(
 ) -> Result<(Tensor, Tensor)> {
     let positions = positions.to_dtype(DType::U32)?;
     let n_pos = positions.dims1()?;
-    let idx = if n_pos == batch {
+    // `positions` is already a per-token index list when its length is batch*seq_len.
+    // This includes the decode case (seq_len == 1), where the per-sequence offsets ARE
+    // the per-token positions. Check it FIRST so decode uses the device tensor directly:
+    // the alternative offset->offset+s expansion below does a DtoH (`to_vec1`) + HtoD
+    // (`from_vec`) host round-trip, which a captured CUDA decode graph cannot replay
+    // (the DtoH yields stale data under capture, so the HtoD index bytes miss the graph
+    // HtoD cache). Numerically identical for seq_len == 1 (off + 0 == off); only the
+    // genuine multi-token prefill (n_pos == batch, seq_len > 1) takes the host path,
+    // and prefill is never captured.
+    let idx = if n_pos == batch * seq_len {
+        positions
+    } else if n_pos == batch {
         let offsets = positions.to_vec1::<u32>()?;
         let mut idx = Vec::with_capacity(batch * seq_len);
         for off in offsets {
@@ -3152,8 +3163,6 @@ fn gather_rope_cos_sin(
             }
         }
         Tensor::from_vec(idx, batch * seq_len, cos_cache.device())?
-    } else if n_pos == batch * seq_len {
-        positions
     } else {
         hanzo_ml::bail!("RoPE positions length {n_pos} != batch ({batch}) or batch*seq_len");
     };
