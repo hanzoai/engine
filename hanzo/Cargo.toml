@@ -274,3 +274,7 @@ nccl = ["hanzo-engine/nccl"]
 ring = ["hanzo-engine/ring"]
 # Python code execution tool
 code-execution = ["hanzo-engine/code-execution"]
+
+[[example]]
+name = "deepseek_v4_gguf"
+path = "examples/deepseek_v4_gguf/main.rs"
