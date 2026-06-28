@@ -320,6 +320,11 @@ pub enum Response {
         rate: usize,
         channels: usize,
     },
+    // Animation (lip-sync / dub): raw frames; the server-core handler muxes to a container.
+    Frames {
+        frames: Arc<Vec<image::DynamicImage>>,
+        fps: f64,
+    },
     // Raw
     Raw {
         logits_chunks: Vec<Tensor>,
@@ -362,6 +367,11 @@ pub enum ResponseOk {
         pcm: Arc<Vec<f32>>,
         rate: usize,
         channels: usize,
+    },
+    // Animation (lip-sync / dub)
+    Frames {
+        frames: Arc<Vec<image::DynamicImage>>,
+        fps: f64,
     },
     // Raw
     Raw {
@@ -459,6 +469,7 @@ impl Response {
                 rate,
                 channels,
             }),
+            Self::Frames { frames, fps } => Ok(ResponseOk::Frames { frames, fps }),
             Self::Raw {
                 logits_chunks,
                 tokens,

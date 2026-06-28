@@ -105,6 +105,34 @@ pub async fn send_speech_responses(
     Ok(())
 }
 
+pub async fn send_frames_responses(
+    input_seqs: &mut [&mut Sequence],
+    frames: &[Arc<Vec<DynamicImage>>],
+    fps: &[f64],
+) -> hanzo_ml::Result<()> {
+    if input_seqs.len() != frames.len() {
+        hanzo_ml::bail!(
+            "Input seqs len ({}) does not match frame sets generated len ({})",
+            input_seqs.len(),
+            frames.len()
+        );
+    }
+
+    for (seq, (frames, fps)) in input_seqs.iter_mut().zip(frames.iter().zip(fps)) {
+        seq.add_frames_to_group(frames.clone(), *fps);
+
+        let group = seq.get_mut_group();
+        group
+            .maybe_send_frames_response(seq.responder())
+            .await
+            .map_err(hanzo_ml::Error::msg)?;
+
+        seq.set_state(SequenceState::Done(StopReason::GeneratedFrames));
+    }
+
+    Ok(())
+}
+
 pub async fn send_raw_responses(
     input_seqs: &mut [&mut Sequence],
     logits_chunks: Vec<Vec<Tensor>>,
