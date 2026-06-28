@@ -466,7 +466,7 @@ dependencies = [
  "bitflags 2.13.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.12.1",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -2968,8 +2968,6 @@ dependencies = [
 [[package]]
 name = "hanzo-flash-attn"
 version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00888551f15a28d6fa2277cd4102b3d11051801a0f741f89c592f54950d0bcfd"
 dependencies = [
  "anyhow",
  "bindgen_cuda",
@@ -2992,9 +2990,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-kernels"
-version = "0.11.18"
+version = "0.11.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31a0d60ef930078349878c8a16e110ea956ebc249898bf103eb15b843c1fc362"
+checksum = "decdf490b3786924ce76ca4addd0b63382d90dde3f77e586e4d0a7be6740c6dd"
 dependencies = [
  "glob",
  "hanzo-bindgen-cuda",
@@ -3050,9 +3048,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.11.18"
+version = "0.11.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3096b70198b51d8bc6cf2b0cf597851a48e340765a95d2b7ff77a268deb246ff"
+checksum = "5efaae328c0b08a86e4b3e481f03a38e0fe0e242f58191f1f91ed35d01231cae"
 dependencies = [
  "accelerate-src",
  "ash",
@@ -3595,7 +3593,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -3903,15 +3901,6 @@ name = "itertools"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
 dependencies = [
  "either",
 ]
@@ -8525,19 +8514,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "windows-core"
-version = "0.62.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
-dependencies = [
- "windows-implement",
- "windows-interface",
- "windows-link 0.2.1",
- "windows-result 0.4.1",
- "windows-strings 0.5.1",
-]
-
-[[package]]
 name = "windows-future"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9134,3 +9110,7 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
+
+[[patch.unused]]
+name = "hanzo-ml"
+version = "0.11.20"
