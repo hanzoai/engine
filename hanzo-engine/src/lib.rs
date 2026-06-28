@@ -288,10 +288,12 @@ pub use pipeline::hf::{
     HF_HUB_OFFLINE_ENV,
 };
 pub use pipeline::{
-    chat_template::ChatTemplate, expand_isq_value, parse_isq_value, parse_uqff_shard,
-    resolve_uqff_shorthand, AdapterPaths, AnyMoeLoader, AnyMoePipeline, AutoDeviceMapParams,
+    animation_loader, chat_template::ChatTemplate, expand_isq_value, parse_isq_value,
+    parse_uqff_shard, resolve_uqff_shorthand, AdapterPaths, AnimationComponents, AnimationLoaderType,
+    AnimationModelLoader, AnimationPipeline, AnyMoeLoader, AnyMoePipeline, AutoDeviceMapParams,
     AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams, DiffusionLoader,
     DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoader, EmbeddingLoaderBuilder,
+    MuseTalkAnimationLoader,
     EmbeddingLoaderType, EmbeddingModelPaths, EmbeddingSpecificConfig, GGMLLoader,
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
     GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader,
