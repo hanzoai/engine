@@ -33,6 +33,7 @@ pub(crate) mod qwen3_5_moe;
 pub(crate) mod qwen3_omni;
 pub(crate) mod qwen3_vl;
 pub(crate) mod qwen3_vl_moe;
+pub(crate) mod s3fd;
 pub(crate) mod siglip;
 pub(crate) mod voxtral;
 
