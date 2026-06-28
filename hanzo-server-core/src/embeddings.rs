@@ -350,6 +350,7 @@ async fn process_embedding_response(
             | Response::CompletionModelError(_, _)
             | Response::ImageGeneration(_)
             | Response::Speech { .. }
+            | Response::Frames { .. }
             | Response::Raw { .. }
             | Response::AgenticToolCallProgress { .. }
             | Response::AgenticToolApprovalRequired { .. }
