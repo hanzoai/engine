@@ -1,0 +1,4 @@
+# Dev/test-only deps for engine-guard (run via ./run-tests). Not needed at runtime.
+pytest>=8
+pytest-cov>=5
+psutil>=5.9
