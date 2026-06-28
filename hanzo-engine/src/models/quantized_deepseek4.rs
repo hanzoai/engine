@@ -321,6 +321,10 @@ struct V4Attn {
     o_lora_rank: usize,
     rms_eps: f64,
     attn_dtype: DType, // model/cache/mask dtype (BF16 on CUDA); q/k/v cast to it for SDPA + cache
+    /// Present on compressed (Indexed/Sliding) layers: builds the compressed-KV rows the
+    /// layer attends to alongside the raw window. `compress_ratio` is the window stride.
+    compressor: Option<Compressor>,
+    compress_ratio: usize,
 }
 
 impl V4Attn {
@@ -356,6 +360,7 @@ impl V4Attn {
         mask: &AttentionMask,
         positions: &Tensor,
         kv_cache: &mut KvCache,
+        comp_state: Option<&mut CompressorState>,
     ) -> Result<Tensor> {
         let (b, s, _) = x.dims3()?;
         // Working dtype for attention + KV cache (the model dtype; BF16 on CUDA) —
@@ -383,9 +388,61 @@ impl V4Attn {
 
         let (k, v) = kv_cache.append(&kv, &kv)?;
 
-        // Dense sliding-window + sinks attention (compressor/indexer skipped for
-        // seqlen <= window). Sdpa broadcasts the single KV head across q heads.
-        let attn = Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa)?;
+        // Compressed layers also attend to the compressor's compressed-KV rows (the
+        // bulk of long-context info). Build them from the accumulated layer-input
+        // history and concat to the raw window; a combined mask keeps both causal.
+        // (seqlen<window: the raw window is fully causal-visible, the indexer selects
+        // all rows since n_comp < top_k=512 — so dense over [raw ++ all-compressed] is
+        // exact. Sliding window for >window context + the indexer top-k are follow-ons.)
+        let attn = match (&self.compressor, comp_state) {
+            (Some(comp), Some(state)) => {
+                state.append(x)?;
+                let xh = state.x_history.as_ref().unwrap();
+                let total = xh.dim(1)?;
+                let hist_pos = Tensor::arange(0u32, total as u32, xh.device())?;
+                match comp.compress(xh, &hist_pos)? {
+                    Some(kvc) => {
+                        let nc = kvc.dim(1)?;
+                        let kvc = kvc
+                            .reshape((b, nc, 1, self.head_dim))?
+                            .transpose(1, 2)?
+                            .to_dtype(wdt)?; // [b,1,nc,hd]
+                        let kf = Tensor::cat(&[&k, &kvc], 2)?;
+                        let vf = Tensor::cat(&[&v, &kvc], 2)?;
+                        let lk = k.dim(2)?;
+                        // `positions` is the per-sequence start offset; the queries are
+                        // the `s` tokens at base..base+s (prefill) or the single token at
+                        // base (decode). Build their absolute positions for the mask.
+                        let base = positions
+                            .to_dtype(DType::U32)?
+                            .to_vec1::<u32>()?
+                            .first()
+                            .copied()
+                            .unwrap_or(0);
+                        let qpos: Vec<u32> = (0..s).map(|j| base + j as u32).collect();
+                        let cmask = combined_compressed_mask(
+                            &qpos,
+                            lk,
+                            nc,
+                            self.compress_ratio,
+                            k.device(),
+                            wdt,
+                        )?;
+                        Sdpa.run_attention(
+                            &q,
+                            &kf,
+                            &vf,
+                            &AttentionMask::Custom(cmask),
+                            None,
+                            &self.sdpa,
+                        )?
+                    }
+                    None => Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa)?,
+                }
+            }
+            // Full layers (no compressor) — dense sliding-window + sinks attention.
+            _ => Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa)?,
+        };
 
         // Inverse-RoPE on the output (absorbed: the V latent carried RoPE).
         let attn = self.rope(&attn, positions, true)?;
@@ -415,6 +472,157 @@ impl V4Attn {
     }
 }
 
+// ============================ compressor (1M-ctx KV compression) ============================
+
+/// Streaming softmax-pool of the KV latent into compressed rows (model.py `Compressor`,
+/// lines 316-377). Project KV + gate, window into `ratio` groups, softmax-pool over the
+/// window (+ absolute-position `ape`), RMS-norm, trailing partial-RoPE. ratio-4 layers
+/// use `overlap_transform` (coff==2) so each row pools across the window boundary;
+/// ratio-128 layers don't (coff==1). `coff*head_dim` is read from the `ape` width, so
+/// one struct serves both. Compressed rows are what Indexed layers attend to alongside
+/// the raw sliding window — the bulk of long-context information.
+struct Compressor {
+    wkv: Tensor,   // [coff*head_dim, dim] F32
+    wgate: Tensor, // [coff*head_dim, dim] F32
+    norm: RmsNorm,
+    ape: Tensor, // [ratio, coff*head_dim] F32
+    rotary: Arc<DeepSeekV2RotaryEmbedding>,
+    ratio: usize,
+    head_dim: usize,
+    rope_dim: usize,
+    overlap: bool, // ratio == 4
+}
+
+impl Compressor {
+    /// Compress `x [b,s,dim]` -> compressed KV `[b, n_comp, head_dim]`, trailing-RoPE'd.
+    /// `n_comp = s / ratio` (drops the partial trailing window). Correct-by-reference to
+    /// model.py:316-377 for the full-sequence (start_pos==0) path — which is what we call
+    /// each step over the accumulated history (correctness-first; incremental state is a
+    /// perf follow-on).
+    fn compress(&self, x: &Tensor, positions: &Tensor) -> Result<Option<Tensor>> {
+        let (b, s, _) = x.dims3()?;
+        let cutoff = (s / self.ratio) * self.ratio;
+        if cutoff == 0 {
+            return Ok(None);
+        }
+        let n = cutoff / self.ratio;
+        let coff_hd = self.ape.dim(D::Minus1)?;
+        let xf = x.to_dtype(DType::F32)?;
+        let kv = xf.broadcast_matmul(&self.wkv.t()?)?;
+        let score = xf.broadcast_matmul(&self.wgate.t()?)?;
+        let kv = kv.narrow(1, 0, cutoff)?.reshape((b, n, self.ratio, coff_hd))?;
+        let score = score
+            .narrow(1, 0, cutoff)?
+            .reshape((b, n, self.ratio, coff_hd))?
+            .broadcast_add(&self.ape.reshape((1, 1, self.ratio, coff_hd))?)?;
+        let (kv, score) = if self.overlap {
+            (
+                overlap_transform(&kv, 0.0)?,
+                overlap_transform(&score, f64::NEG_INFINITY)?,
+            )
+        } else {
+            (kv, score)
+        };
+        let weights = hanzo_nn::ops::softmax_last_dim(&score.transpose(2, 3)?.contiguous()?)?
+            .transpose(2, 3)?
+            .contiguous()?;
+        let pooled = kv.broadcast_mul(&weights)?.sum(2)?; // [b, n, head_dim]
+        let pooled = self.norm.forward(&pooled.to_dtype(x.dtype())?)?;
+        let hd = self.head_dim;
+        let pooled = pooled.reshape((b, n, 1, hd))?.transpose(1, 2)?;
+        let comp_pos = compressed_positions(n, self.ratio, positions)?;
+        let pass = pooled.narrow(D::Minus1, 0, hd - self.rope_dim)?.contiguous()?;
+        let rot = pooled
+            .narrow(D::Minus1, hd - self.rope_dim, self.rope_dim)?
+            .contiguous()?
+            .to_dtype(DType::F32)?;
+        let (rot, _) = self.rotary.forward_positions(&rot, &rot, &comp_pos)?;
+        let rot = rot.to_dtype(pass.dtype())?;
+        let pooled = Tensor::cat(&[&pass, &rot], D::Minus1)?
+            .transpose(1, 2)?
+            .reshape((b, n, hd))?;
+        Ok(Some(pooled))
+    }
+}
+
+/// model.py:307-314 `overlap_transform`: `[b,n,ratio,2d] -> [b,n,2*ratio,d]`, upper rows
+/// = this window's tail, lower rows = the previous window's head (row 0 = `fill`).
+fn overlap_transform(t: &Tensor, fill: f64) -> Result<Tensor> {
+    let (b, n, ratio, two_d) = t.dims4()?;
+    let d = two_d / 2;
+    let dev = t.device();
+    let second = t.narrow(D::Minus1, d, d)?;
+    let first = t.narrow(D::Minus1, 0, d)?;
+    let prev_first = if n > 1 {
+        let shifted = first.narrow(1, 0, n - 1)?;
+        let pad = Tensor::full(fill, (b, 1, ratio, d), dev)?.to_dtype(t.dtype())?;
+        Tensor::cat(&[&pad, &shifted], 1)?
+    } else {
+        Tensor::full(fill, (b, 1, ratio, d), dev)?.to_dtype(t.dtype())?
+    };
+    Tensor::cat(&[&prev_first, &second], 2)
+}
+
+/// Compressed-row positions: row j covers tokens [j*ratio, (j+1)*ratio), rope'd at the
+/// window-start stride (model.py `freqs_cis[:cutoff:ratio]`).
+fn compressed_positions(n: usize, ratio: usize, positions: &Tensor) -> Result<Tensor> {
+    let base = positions.to_dtype(DType::U32)?.to_vec1::<u32>()?;
+    let start = base.first().copied().unwrap_or(0);
+    let v: Vec<u32> = (0..n).map(|j| start + (j * ratio) as u32).collect();
+    Tensor::from_vec(v, n, positions.device())
+}
+
+/// Per-layer compressor decode state: the accumulated layer-input history `[b, seq, dim]`.
+/// Reset at the start of each sequence; appended every forward. `compress()` is rebuilt
+/// over the full history each step (correctness-first).
+#[derive(Default)]
+struct CompressorState {
+    x_history: Option<Tensor>,
+}
+
+impl CompressorState {
+    fn append(&mut self, x: &Tensor) -> Result<()> {
+        self.x_history = Some(match &self.x_history {
+            None => x.clone(),
+            Some(h) => Tensor::cat(&[h, x], 1)?,
+        });
+        Ok(())
+    }
+}
+
+/// Additive `[Lq, Lk + Nc]` mask for attention over `[raw_kv (Lk) ++ compressed (Nc)]`:
+/// raw part is causal (query at abs-pos `p` sees raw `j <= p`); compressed part lets `p`
+/// see row `jc` iff `jc < (p+1)/ratio` (the row's window is fully in the past). Matches
+/// model.py `get_window_topk_idxs` (causal window) ++ `get_compress_topk_idxs`.
+fn combined_compressed_mask(
+    q_positions: &[u32],
+    lk: usize,
+    nc: usize,
+    ratio: usize,
+    device: &Device,
+    dtype: DType,
+) -> Result<Tensor> {
+    let lq = q_positions.len();
+    let neg = f32::NEG_INFINITY;
+    let mut m = vec![0f32; lq * (lk + nc)];
+    for (i, &p) in q_positions.iter().enumerate() {
+        let p = p as usize;
+        let row = i * (lk + nc);
+        for j in 0..lk {
+            if j > p {
+                m[row + j] = neg;
+            }
+        }
+        let visible = (p + 1) / ratio; // compressed rows 0..visible are in the past
+        for jc in 0..nc {
+            if jc >= visible {
+                m[row + lk + jc] = neg;
+            }
+        }
+    }
+    Tensor::from_vec(m, (1, 1, lq, lk + nc), device)?.to_dtype(dtype)
+}
+
 // ============================ layer ============================
 
 struct DecoderLayer {
@@ -435,10 +643,17 @@ impl DecoderLayer {
         mask: &AttentionMask,
         positions: &Tensor,
         kv_cache: &mut KvCache,
+        comp_state: Option<&mut CompressorState>,
     ) -> Result<Tensor> {
         // Attention sublayer (HC pre → norm → attn → HC post).
         let (xin, post, comb) = self.hc_attn.pre(hc)?;
-        let attn = self.attn.forward(&self.attn_norm.forward(&xin)?, mask, positions, kv_cache)?;
+        let attn = self.attn.forward(
+            &self.attn_norm.forward(&xin)?,
+            mask,
+            positions,
+            kv_cache,
+            comp_state,
+        )?;
         let hc = self.hc_attn.post(hc, &attn, &post, &comb)?;
 
         // FFN sublayer.
@@ -462,6 +677,9 @@ pub struct ModelWeights {
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     dtype: DType,
+    /// Per-layer compressor decode state (history of layer inputs), behind a Mutex like
+    /// the KV cache. Reset at the start of each sequence (prefill, start_offset 0).
+    comp_state: std::sync::Mutex<Vec<CompressorState>>,
 }
 
 fn rms_from(t: Tensor, eps: f64) -> Result<RmsNorm> {
@@ -600,6 +818,31 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 .to_dtype(dtype)?
                 .reshape((props.o_groups, props.o_lora_rank, group_in))?
                 .contiguous()?;
+            // Compressor (compressed layers only): projects the layer input into
+            // compressed KV rows the attention sees alongside the raw window. wkv/wgate
+            // load as candle [coff*head_dim, dim], ape as [ratio, coff*head_dim] (coff
+            // read from ape width: 2 for ratio-4 / overlap, 1 for ratio-128). Shares the
+            // compressed RoPE (θ=160000 + YaRN).
+            let ratio = props.compress_ratios.get(i).copied().unwrap_or(0) as usize;
+            let compressor = if mode == Mode::Full {
+                None
+            } else {
+                Some(Compressor {
+                    wkv: deq(&mut ct, &format!("{p}.attn_compressor_kv.weight"), dev)?,
+                    wgate: deq(&mut ct, &format!("{p}.attn_compressor_gate.weight"), dev)?,
+                    norm: rms_from(
+                        deq(&mut ct, &format!("{p}.attn_compressor_norm.weight"), dev)?,
+                        eps,
+                    )?,
+                    ape: deq(&mut ct, &format!("{p}.attn_compressor_ape.weight"), dev)?,
+                    rotary: rotary.clone(),
+                    ratio,
+                    head_dim: props.head_dim,
+                    rope_dim: props.rope_head_dim,
+                    overlap: ratio == 4,
+                })
+            };
+
             let attn = V4Attn {
                 q_a: gguf_linear(ct.tensor(&format!("{p}.attn_q_a.weight"), dev)?)?,
                 q_a_norm: rms_from(deq(&mut ct, &format!("{p}.attn_q_a_norm.weight"), dev)?, eps)?,
@@ -623,6 +866,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 o_lora_rank: props.o_lora_rank,
                 rms_eps: eps,
                 attn_dtype: dtype,
+                compressor,
+                compress_ratio: ratio.max(1),
             };
 
             // MoE.
@@ -699,6 +944,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
             max_seq_len: props.max_seq_len,
             mapper: Some(mapper),
             dtype,
+            comp_state: std::sync::Mutex::new(
+                (0..props.block_count).map(|_| CompressorState::default()).collect(),
+            ),
         })
     }
 }
@@ -736,6 +984,15 @@ impl ModelWeights {
             &self.device,
         )?;
 
+        // Compressor decode state: reset at the start of a fresh sequence (any seq
+        // starting at offset 0 — a prefill), then accumulate per layer across steps.
+        let mut comp = self.comp_state.lock().unwrap();
+        if start_offsets.iter().any(|&o| o == 0) {
+            for s in comp.iter_mut() {
+                s.x_history = None;
+            }
+        }
+
         // Expand to the HC carrier, thread through layers, reduce at output.
         let mut hc = HyperConnections::expand(&embeds, self.n_hc)?;
         for (i, layer) in self.layers.iter().enumerate() {
@@ -748,9 +1005,11 @@ impl ModelWeights {
                 &mask.get(hc.device()),
                 &positions,
                 &mut cache[i],
+                Some(&mut comp[i]),
             )?;
             trace_rms(&hc, format_args!("v4 carrier after layer {i}"));
         }
+        drop(comp);
         let x = self.output_hc.reduce_output(&hc)?;
         trace_rms(&x, format_args!("v4 reduce_output"));
         let x = self.norm.forward(&x)?;
