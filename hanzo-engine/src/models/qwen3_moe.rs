@@ -852,3 +852,78 @@ impl NormalModel for Model {
 }
 
 impl AnyMoeBaseModelMixin for Model {}
+
+#[cfg(test)]
+mod tests {
+    //! Qwen3-MoE frontier checkpoints (Qwen3-235B-A22B, Qwen3-30B-A3B, …) carry
+    //! `architectures[0] = "Qwen3MoeForCausalLM"` and load on this loader
+    //! unchanged. The real `Qwen/Qwen3-235B-A22B` `config.json` is embedded
+    //! verbatim.
+    use super::Config;
+    use crate::pipeline::NormalLoaderType;
+
+    /// Real `Qwen/Qwen3-235B-A22B` `config.json`, verbatim.
+    const QWEN3_MOE_CONFIG: &str = r##"{
+  "architectures": [
+    "Qwen3MoeForCausalLM"
+  ],
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "bos_token_id": 151643,
+  "decoder_sparse_step": 1,
+  "eos_token_id": 151645,
+  "head_dim": 128,
+  "hidden_act": "silu",
+  "hidden_size": 4096,
+  "initializer_range": 0.02,
+  "intermediate_size": 12288,
+  "max_position_embeddings": 40960,
+  "max_window_layers": 94,
+  "mlp_only_layers": [],
+  "model_type": "qwen3_moe",
+  "moe_intermediate_size": 1536,
+  "norm_topk_prob": true,
+  "num_attention_heads": 64,
+  "num_experts": 128,
+  "num_experts_per_tok": 8,
+  "num_hidden_layers": 94,
+  "num_key_value_heads": 4,
+  "output_router_logits": false,
+  "rms_norm_eps": 1e-06,
+  "rope_scaling": null,
+  "rope_theta": 1000000.0,
+  "router_aux_loss_coef": 0.001,
+  "sliding_window": null,
+  "tie_word_embeddings": false,
+  "torch_dtype": "bfloat16",
+  "transformers_version": "4.51.0",
+  "use_cache": true,
+  "use_sliding_window": false,
+  "vocab_size": 151936
+}"##;
+
+    #[test]
+    fn qwen3_moe_config_parses() {
+        let cfg: Config = serde_json::from_str(QWEN3_MOE_CONFIG)
+            .expect("Qwen3-MoE config must deserialize into qwen3_moe::Config");
+        assert_eq!(cfg.hidden_size, 4096);
+        assert_eq!(cfg.num_hidden_layers, 94);
+        assert_eq!(cfg.num_experts, 128);
+        assert_eq!(cfg.num_experts_per_tok, 8);
+        assert_eq!(cfg.moe_intermediate_size, 1536);
+        assert_eq!(cfg.decoder_sparse_step, 1);
+        assert_eq!(cfg.head_dim(), 128);
+    }
+
+    #[test]
+    fn qwen3_moe_registry_dispatch() {
+        assert_eq!(
+            NormalLoaderType::from_causal_lm_name("Qwen3MoeForCausalLM").unwrap(),
+            NormalLoaderType::Qwen3Moe
+        );
+        assert_eq!(
+            "qwen3moe".parse::<NormalLoaderType>().unwrap(),
+            NormalLoaderType::Qwen3Moe
+        );
+    }
+}
