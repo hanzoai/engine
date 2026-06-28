@@ -163,6 +163,12 @@ impl MemoryUsage {
 
 #[cfg(feature = "cuda")]
 fn igpu_memory_fraction() -> f64 {
+    // Fraction of the unified pool the GPU may use on an integrated/UMA device
+    // (NVIDIA GB10/DGX Spark, Apple Silicon, Strix Halo). On true unified memory
+    // the weights + KV + activations all share one pool, so a higher fraction is
+    // safe and necessary to fit large (e.g. DeepSeek-V4 86GB) models on a 121GB
+    // box. Override with `IGPU_MEMORY_FRACTION` (e.g. 0.95 on a freed box, lower
+    // if co-resident services need the headroom).
     std::env::var("IGPU_MEMORY_FRACTION")
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
@@ -173,7 +179,7 @@ fn igpu_memory_fraction() -> f64 {
                 None
             }
         })
-        .unwrap_or(0.75)
+        .unwrap_or(0.85)
 }
 
 #[cfg(feature = "metal")]

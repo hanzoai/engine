@@ -1729,6 +1729,13 @@ pub struct DeepSeekV2RotaryEmbedding {
     cos: Tensor,
 }
 
+/// Default for YaRN `mscale` / `mscale_all_dim` when a checkpoint omits them
+/// (e.g. DeepSeek-V4). `1.0` is the HF default and a magnitude-scale no-op:
+/// `yarn_get_mscale(_, 1.0)` collapses to the standard YaRN attention scale.
+fn default_yarn_mscale() -> f32 {
+    1.0
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum DeepSeekV2RopeScaling {
@@ -1736,7 +1743,9 @@ pub enum DeepSeekV2RopeScaling {
         original_max_position_embeddings: usize,
         beta_fast: f32,
         beta_slow: f32,
+        #[serde(default = "default_yarn_mscale")]
         mscale: f32,
+        #[serde(default = "default_yarn_mscale")]
         mscale_all_dim: f32,
         factor: f32,
         #[serde(rename = "type")]
@@ -1917,6 +1926,16 @@ impl DeepSeekV2RotaryEmbedding {
         positions: &Tensor,
     ) -> Result<(Tensor, Tensor)> {
         apply_rotary_positions_qk(q, k, &self.cos, &self.sin, positions, false)
+    }
+
+    /// Inverse rotation (un-rotate): rotate by `-θ`, i.e. negate `sin` while
+    /// keeping `cos`. Used by DeepSeek-V4's absorbed MLA to remove the positional
+    /// component the latent K==V carried, from the attention output before the
+    /// grouped o-projection (`apply_rotary_emb(o, …, inverse=True)`).
+    pub fn forward_inverse_positions(&self, x: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        let neg_sin = self.sin.neg()?;
+        let (x, _) = apply_rotary_positions_qk(x, x, &self.cos, &neg_sin, positions, false)?;
+        Ok(x)
     }
 }
 
