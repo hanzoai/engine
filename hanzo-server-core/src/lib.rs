@@ -219,6 +219,7 @@
 //! }
 //! ```
 
+pub mod animate;
 pub mod anthropic;
 pub mod approvals;
 pub mod background_tasks;
