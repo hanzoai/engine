@@ -870,7 +870,8 @@ impl TryFrom<GgmlDType> for IsqType {
             | GgmlDType::TQ1_0
             | GgmlDType::TQ2_0
             | GgmlDType::NVFP4
-            | GgmlDType::Q1_0 => {
+            | GgmlDType::Q1_0
+            | GgmlDType::I32 => {
                 hanzo_ml::bail!("Expected valid GGML ISQ type.")
             }
         }
