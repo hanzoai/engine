@@ -11,6 +11,7 @@ use hanzo_quant::{
 };
 use serde::Deserialize;
 
+use super::dsa::{DsaConfig, DsaIndexer};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
@@ -100,11 +101,35 @@ pub struct DeepSeekV3Config {
     pub(crate) quantization_config: Option<QuantizedConfig>,
     pub(crate) n_group: usize,
     pub(crate) topk_group: usize,
+    // DeepSeek Sparse Attention (DSA) lightning-indexer fields. Present from
+    // DeepSeek-V3.2 onward (also V4 / GLM-5); absent on V3 and earlier, where
+    // the dense MLA path is used unchanged.
+    #[serde(default)]
+    pub(crate) index_n_heads: Option<usize>,
+    #[serde(default)]
+    pub(crate) index_head_dim: Option<usize>,
+    #[serde(default)]
+    pub(crate) index_topk: Option<usize>,
 }
 
 impl DeepSeekV3Config {
     pub(crate) fn q_head_dim(&self) -> usize {
         self.qk_rope_head_dim + self.qk_nope_head_dim
+    }
+
+    /// The DSA indexer config, present only when all three `index_*` fields are
+    /// set (DeepSeek-V3.2+/V4/GLM-5). `None` keeps the dense MLA path.
+    pub(crate) fn dsa(&self) -> Option<DsaConfig> {
+        match (self.index_n_heads, self.index_head_dim, self.index_topk) {
+            (Some(index_n_heads), Some(index_head_dim), Some(index_topk)) => Some(DsaConfig {
+                index_n_heads,
+                index_head_dim,
+                index_topk,
+                // The indexer reuses MLA's RoPE: rotate qk_rope_head_dim dims.
+                rope_dim: self.qk_rope_head_dim,
+            }),
+            _ => None,
+        }
     }
 
     fn softmax_scale(&self) -> f32 {
@@ -138,6 +163,16 @@ impl QProj {
             Self::Plain(lin) => lin.forward(xs),
         }
     }
+
+    /// The tensor the DSA indexer projects its query from: the q-LoRA-normalised
+    /// latent for the LoRA path (DeepSeek-V3.2's `q_a_layernorm` output), or the
+    /// raw hidden states when there is no q-LoRA.
+    fn indexer_q_src(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Lora { a, norm, .. } => norm.forward(&a.forward(xs)?),
+            Self::Plain(_) => Ok(xs.clone()),
+        }
+    }
 }
 
 struct Attention {
@@ -153,6 +188,9 @@ struct Attention {
     sdpa_params: SdpaParams,
     num_attention_heads: usize,
     mla_weights: MlaWeights,
+    /// DSA lightning indexer, present only for V3.2+/V4/GLM-5 checkpoints that
+    /// declare the `index_*` config and ship indexer weights. `None` => dense.
+    indexer: Option<DsaIndexer>,
 }
 
 impl Attention {
@@ -237,6 +275,21 @@ impl Attention {
             mapper.device_for(layer_idx, loading_isq),
         );
 
+        // DSA indexer (V3.2+/V4/GLM-5). Gated on both the config fields and the
+        // presence of indexer weights, so dense V3 / non-DSA checkpoints — and
+        // DSA configs that ship without indexer tensors — load unchanged.
+        let indexer = match cfg.dsa() {
+            Some(dsa_cfg) => DsaIndexer::load(
+                dsa_cfg,
+                cfg.q_lora_rank.unwrap_or(cfg.hidden_size),
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+                &cfg.quantization_config,
+                mapper.set_device(layer_idx, vb.pp("indexer"), loading_isq),
+            )?,
+            None => None,
+        };
+
         Ok(Self {
             q,
             kv_a_proj_with_mqa,
@@ -256,6 +309,7 @@ impl Attention {
                 sinks: None,
             },
             mla_weights,
+            indexer,
         })
     }
 
@@ -429,11 +483,57 @@ impl Attention {
                     None => {
                         (k, v) = kv_cache.append(&k, &v)?;
 
+                        // DSA: on the eager (--no-paged-attn) COLD-cache prefill
+                        // path, restrict this full-precision attention to the
+                        // indexer's selected keys by folding a `-inf` selection
+                        // bias into the causal mask.
+                        //
+                        // Guarded to `past_kv_len == 0`: the indexer sources keys
+                        // from the current chunk `xs` (length `seq_len`), so its
+                        // selection mask is `[B, seq_len, seq_len]`, which aligns
+                        // with the `[seq_len, Lk]` causal mask only when
+                        // `Lk == seq_len`. On a warm cache (`Lk > seq_len`) we
+                        // skip DSA and use the dense path (byte-identical) to
+                        // avoid a shape mismatch.
+                        //
+                        // follow-on: full long-context DSA must source indexer
+                        // keys from the FULL cached K (length `Lk`) so bias/base
+                        // align for warm-cache prefill and decode; that lands
+                        // with the FP8 lightning-indexer kernel, alongside paged
+                        // / MLA-decode fusion.
+                        //
+                        // When `indexer` is `None` (V3 / non-DSA) `dsa_mask`
+                        // stays `None` and the call below is byte-identical to
+                        // the dense path.
+                        let dsa_mask = match self.indexer.as_ref() {
+                            Some(indexer) => match attention_mask.as_option_tensor() {
+                                Some(base) if base.dim(D::Minus1)? == seq_len => {
+                                    let positions = ctx
+                                        .rope_positions(xs.device())?
+                                        .ok_or_else(|| {
+                                            hanzo_ml::Error::msg("missing RoPE positions for DSA")
+                                        })?
+                                        .clone();
+                                    let q_src = self.q.indexer_q_src(xs)?;
+                                    let selection = indexer.forward(
+                                        &q_src,
+                                        xs,
+                                        Some(&self.rotary_emb),
+                                        Some(&positions),
+                                        true,
+                                    )?;
+                                    Some(AttentionMask::Custom(selection.combine_with_mask(base)?))
+                                }
+                                _ => None,
+                            },
+                            None => None,
+                        };
+
                         Sdpa.run_attention(
                             &q,
                             &k,
                             &v,
-                            attention_mask,
+                            dsa_mask.as_ref().unwrap_or(attention_mask),
                             Some(ctx.flash_params()),
                             &self.sdpa_params,
                         )?
@@ -1203,10 +1303,11 @@ mod deepseek_v32_tests {
     ///
     /// DeepSeek-V3.2 is pure DSA over V3-byte-identical MLA/MoE, so its config
     /// must deserialize into the existing [`DeepSeekV3Config`] with V3-identical
-    /// dims. The four V3.2-only fields (`index_n_heads`, `index_head_dim`,
-    /// `index_topk`, `num_nextn_predict_layers`) — plus the other HF bookkeeping
-    /// keys — are simply ignored: [`DeepSeekV3Config`] is not
-    /// `#[serde(deny_unknown_fields)]`, and the dense path never reads them.
+    /// dims. The three indexer fields (`index_n_heads`, `index_head_dim`,
+    /// `index_topk`) are now parsed (serde-default `Option`s) and drive the DSA
+    /// path via [`DeepSeekV3Config::dsa`]; the remaining V3.2-only key
+    /// (`num_nextn_predict_layers`) and other HF bookkeeping keys are ignored
+    /// ([`DeepSeekV3Config`] is not `#[serde(deny_unknown_fields)]`).
     const DEEPSEEK_V32_CONFIG: &str = r#"{
   "architectures": [
     "DeepseekV32ForCausalLM"
@@ -1306,6 +1407,27 @@ mod deepseek_v32_tests {
         assert_eq!(cfg.rope_theta, 10000.0);
         assert!(cfg.rope_scaling.is_some());
         assert!(cfg.quantization_config.is_some());
+
+        // DSA indexer fields parse and drive the sparse-attention path.
+        assert_eq!(cfg.index_n_heads, Some(64));
+        assert_eq!(cfg.index_head_dim, Some(128));
+        assert_eq!(cfg.index_topk, Some(2048));
+        let dsa = cfg.dsa().expect("V3.2 config must enable DSA");
+        assert_eq!(dsa.index_n_heads, 64);
+        assert_eq!(dsa.index_head_dim, 128);
+        assert_eq!(dsa.index_topk, 2048);
+        assert_eq!(dsa.rope_dim, cfg.qk_rope_head_dim);
+    }
+
+    /// A V3 (pre-DSA) config has no `index_*` fields, so [`DeepSeekV3Config::dsa`]
+    /// is `None` and the dense MLA path is used unchanged.
+    #[test]
+    fn deepseek_v3_has_no_dsa() {
+        let mut cfg: DeepSeekV3Config = serde_json::from_str(DEEPSEEK_V32_CONFIG).unwrap();
+        cfg.index_n_heads = None;
+        cfg.index_head_dim = None;
+        cfg.index_topk = None;
+        assert!(cfg.dsa().is_none());
     }
 }
 
@@ -1522,3 +1644,4 @@ mod deepseek_v3_family_tests {
         );
     }
 }
+
