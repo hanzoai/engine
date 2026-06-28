@@ -1,0 +1,602 @@
+use super::text_models_inputs_processor::PagedAttentionMeta;
+use super::{
+    animation_loader, AdapterPaths, AnimationComponents, AnimationLoaderType, AnyMoePipelineMixin,
+    Cache, CacheManagerMixin, ChatTemplate, EitherCache, EmbeddingModulePaths, ForwardInputsResult,
+    GeneralMetadata, InputProcessorOutput, InputsProcessor, InputsProcessorType, IsqPipelineMixin,
+    Loader, MessagesAction, MetadataMixin, Modalities, ModelCategory, ModelKind, ModelPaths,
+    PreProcessingMixin, Processor, SupportedModality, TokenSource,
+};
+use crate::device_map::DeviceMapper;
+use crate::diffusion_models::animation::{
+    AnimationRequest, DrivingAudio, FacialAnimator, VisualKind, VisualSource, OMNI_SAMPLE_RATE,
+};
+use crate::diffusion_models::musetalk::{AnimatorOptions, MuseTalkConfig, UNetConfig, VaeConfig};
+use crate::prefix_cacher::PrefixCacheManagerV2;
+use crate::sequence::Sequence;
+use crate::speech_models::whisper::WhisperConfig;
+use crate::utils::progress::ProgressScopeGuard;
+use crate::utils::tokens::get_token;
+use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
+use crate::{
+    api_get_file, DeviceMapSetting, MessageContent, PagedAttentionConfig, Pipeline, TryIntoDType,
+};
+use anyhow::Result;
+use hanzo_ml::{DType, Device, Tensor};
+use hanzo_quant::IsqType;
+use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use image::DynamicImage;
+use indexmap::IndexMap;
+use rand_isaac::Isaac64Rng;
+use std::any::Any;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokenizers::Tokenizer;
+
+/// One sequence's worth of animation input, gathered by `AnimationInputsProcessor`
+/// from the sequence's image (frames), audio (PCM), and `animation_params` slots.
+pub struct AnimationInput {
+    pub frames: Vec<DynamicImage>,
+    pub pcm: Arc<Vec<f32>>,
+    pub sample_rate: usize,
+    pub fps: f64,
+    pub kind: VisualKind,
+}
+
+pub struct ModelInputs {
+    pub requests: Vec<AnimationInput>,
+}
+
+pub struct AnimationProcessor;
+
+impl Processor for AnimationProcessor {
+    fn process(
+        &self,
+        _pipeline: &dyn Pipeline,
+        _messages: Vec<IndexMap<String, MessageContent>>,
+        _add_generation_prompt: bool,
+        _add_special_tokens: bool,
+        _enable_thinking: Option<bool>,
+        _reasoning_effort: Option<crate::request::ReasoningEffort>,
+        _tools: Vec<crate::Tool>,
+    ) -> Result<(Vec<u32>, String)> {
+        anyhow::bail!("AnimationProcessor::process does not expect chat messages.")
+    }
+    fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
+        Arc::new(AnimationInputsProcessor)
+    }
+    fn get_special_tokens(&self) -> &[&'static str] {
+        &[]
+    }
+    fn template_action(&self) -> MessagesAction {
+        MessagesAction::FlattenOnlyText
+    }
+}
+
+pub struct AnimationInputsProcessor;
+
+impl InputsProcessor for AnimationInputsProcessor {
+    fn get_type(&self) -> InputsProcessorType {
+        InputsProcessorType::Text
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn process_inputs(
+        &self,
+        _tokenizer: Option<Arc<Tokenizer>>,
+        input_seqs: &mut [&mut Sequence],
+        _is_prompt: bool,
+        _is_xlora: bool,
+        _device: &Device,
+        _no_kv_cache: bool,
+        _last_n_context_len: Option<(usize, usize)>,
+        _return_raw_logits: bool,
+        _sliding_window: Option<usize>,
+        _other_config: Option<Arc<dyn Any>>,
+        _paged_attn_metadata: Option<PagedAttentionMeta>,
+        _mapper: Option<&dyn DeviceMapper>,
+    ) -> Result<InputProcessorOutput> {
+        let mut requests = Vec::with_capacity(input_seqs.len());
+        for seq in input_seqs.iter_mut() {
+            let params = seq
+                .animation_params()
+                .ok_or_else(|| anyhow::anyhow!("animation sequence missing animation_params"))?;
+            let frames = seq.take_images().unwrap_or_default();
+            let (pcm, sample_rate) = match seq.take_audios().and_then(|a| a.into_iter().next()) {
+                Some(audio) => (Arc::new(audio.samples), audio.sample_rate as usize),
+                None => (Arc::new(Vec::new()), OMNI_SAMPLE_RATE),
+            };
+            requests.push(AnimationInput {
+                frames,
+                pcm,
+                sample_rate,
+                fps: params.fps,
+                kind: params.kind,
+            });
+        }
+        Ok(InputProcessorOutput {
+            inputs: Box::new(ModelInputs { requests }),
+            seq_indices: (0..input_seqs.len()).collect(),
+        })
+    }
+}
+
+/// Composition pipeline over a `FacialAnimator`. The kind-gate is enforced here,
+/// once, before dispatch -- never inside an animator impl. Muxing frames to a
+/// container is a server-core concern, never this pipeline's.
+pub struct AnimationPipeline {
+    model_id: String,
+    animator: Box<dyn FacialAnimator>,
+    metadata: Arc<GeneralMetadata>,
+    dummy_cache: EitherCache,
+}
+
+impl AnimationPipeline {
+    pub fn new(animator: Box<dyn FacialAnimator>, model_id: String, dtype: DType) -> Self {
+        Self {
+            model_id,
+            animator,
+            metadata: Arc::new(GeneralMetadata {
+                max_seq_len: 1,
+                llg_factory: None,
+                is_xlora: false,
+                no_prefix_cache: false,
+                num_hidden_layers: 1,
+                eos_tok: vec![],
+                kind: ModelKind::Normal,
+                no_kv_cache: true,
+                activation_dtype: dtype,
+                sliding_window: None,
+                cache_config: None,
+                cache_engine: None,
+                model_metadata: None,
+                modalities: Modalities {
+                    input: vec![SupportedModality::Vision, SupportedModality::Audio],
+                    output: vec![SupportedModality::Vision],
+                },
+            }),
+            dummy_cache: EitherCache::Full(Cache::new(0, false)),
+        }
+    }
+}
+
+impl PreProcessingMixin for AnimationPipeline {
+    fn get_processor(&self) -> Arc<dyn Processor> {
+        Arc::new(AnimationProcessor)
+    }
+    fn get_chat_template(&self) -> Option<Arc<ChatTemplate>> {
+        None
+    }
+    fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
+        None
+    }
+}
+
+impl IsqPipelineMixin for AnimationPipeline {
+    fn re_isq_model(&mut self, _dtype: hanzo_quant::IsqType) -> anyhow::Result<()> {
+        anyhow::bail!("Animation models do not support ISQ.")
+    }
+}
+
+impl CacheManagerMixin for AnimationPipeline {
+    fn clone_in_cache(&self, _seqs: &mut [&mut Sequence]) {}
+    fn clone_out_cache(&self, _seqs: &mut [&mut Sequence]) {}
+    fn set_none_cache(
+        &self,
+        _seqs: &mut [&mut Sequence],
+        _reset_non_granular: bool,
+        _modify_draft_cache: bool,
+        _load_preallocated_cache: bool,
+    ) {
+    }
+    fn cache(&self) -> &EitherCache {
+        &self.dummy_cache
+    }
+}
+
+impl MetadataMixin for AnimationPipeline {
+    fn device(&self) -> Device {
+        self.animator.device().clone()
+    }
+    fn get_metadata(&self) -> Arc<GeneralMetadata> {
+        self.metadata.clone()
+    }
+    fn name(&self) -> String {
+        self.model_id.clone()
+    }
+    fn reset_non_granular_state(&self) {}
+    fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
+        None
+    }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
+        None
+    }
+}
+
+#[async_trait::async_trait]
+impl Pipeline for AnimationPipeline {
+    fn forward_inputs(
+        &mut self,
+        inputs: Box<dyn Any>,
+        return_raw_logits: bool,
+    ) -> hanzo_ml::Result<ForwardInputsResult> {
+        assert!(!return_raw_logits);
+
+        let ModelInputs { requests } = *inputs.downcast().expect("Downcast failed.");
+        let mut frames = Vec::with_capacity(requests.len());
+        let mut fps = Vec::with_capacity(requests.len());
+        for input in requests {
+            let visual = match input.kind {
+                VisualKind::Portrait => {
+                    let image = input.frames.into_iter().next().ok_or_else(|| {
+                        hanzo_ml::Error::msg("portrait animation requires at least one frame")
+                    })?;
+                    VisualSource::Portrait { image }
+                }
+                VisualKind::Footage | VisualKind::Either => {
+                    VisualSource::Footage {
+                        frames: input.frames,
+                    }
+                }
+            };
+            // The one kind-gate enforcement point.
+            if !self.animator.accepts().admits(&visual) {
+                hanzo_ml::bail!(
+                    "{:?} animator does not accept a {:?} visual source",
+                    self.animator.accepts(),
+                    visual.kind()
+                );
+            }
+            let req = AnimationRequest {
+                driving: DrivingAudio {
+                    pcm: input.pcm,
+                    sample_rate: input.sample_rate,
+                },
+                visual,
+                fps: input.fps,
+            };
+            let out = self.animator.animate(&req)?;
+            frames.push(Arc::new(out.frames));
+            fps.push(out.fps);
+        }
+        Ok(ForwardInputsResult::Frames { frames, fps })
+    }
+
+    async fn sample_causal_gen(
+        &self,
+        _seqs: &mut [&mut Sequence],
+        _logits: Vec<Tensor>,
+        _prefix_cacher: &mut PrefixCacheManagerV2,
+        _disable_eos_stop: bool,
+        _srng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Result<(), hanzo_ml::Error> {
+        hanzo_ml::bail!("`sample_causal_gen` is incompatible with `AnimationPipeline`");
+    }
+
+    fn category(&self) -> ModelCategory {
+        ModelCategory::Animation
+    }
+}
+
+impl AnyMoePipelineMixin for AnimationPipeline {}
+
+const RESIZED_IMG: usize = 256;
+// MuseTalk v1.5 layout in the TMElyralab/MuseTalk repo (real-time footage path).
+const MUSETALK_UNET_WEIGHTS: &str = "musetalkV15/unet.pth";
+const MUSETALK_UNET_CONFIG: &str = "musetalkV15/musetalk.json";
+const VAE_WEIGHTS: &str = "diffusion_pytorch_model.safetensors";
+const VAE_CONFIG: &str = "config.json";
+const WHISPER_WEIGHTS: &str = "tiny.pt"; // openai-format checkpoint MuseTalk trained against
+const S3FD_WEIGHTS: &str = "s3fd.pth";
+
+#[derive(Clone, Debug)]
+pub struct AnimationModelPaths {
+    unet_config: PathBuf,
+    unet_weights: PathBuf,
+    vae_config: PathBuf,
+    vae_weights: PathBuf,
+    whisper_weights: PathBuf,
+    s3fd_weights: PathBuf,
+    all_weights: Vec<PathBuf>,
+}
+
+impl AnimationModelPaths {
+    pub fn new(
+        unet_config: PathBuf,
+        unet_weights: PathBuf,
+        vae_config: PathBuf,
+        vae_weights: PathBuf,
+        whisper_weights: PathBuf,
+        s3fd_weights: PathBuf,
+    ) -> Self {
+        let all_weights = vec![
+            unet_weights.clone(),
+            vae_weights.clone(),
+            whisper_weights.clone(),
+            s3fd_weights.clone(),
+        ];
+        Self {
+            unet_config,
+            unet_weights,
+            vae_config,
+            vae_weights,
+            whisper_weights,
+            s3fd_weights,
+            all_weights,
+        }
+    }
+}
+
+impl ModelPaths for AnimationModelPaths {
+    fn get_config_filename(&self) -> &PathBuf {
+        &self.unet_config
+    }
+    fn get_weight_filenames(&self) -> &[PathBuf] {
+        &self.all_weights
+    }
+    fn get_tokenizer_filename(&self) -> &PathBuf {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_template_filename(&self) -> &Option<PathBuf> {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_gen_conf_filename(&self) -> Option<&PathBuf> {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_preprocessor_config(&self) -> &Option<PathBuf> {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_processor_config(&self) -> &Option<PathBuf> {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_chat_template_explicit(&self) -> &Option<PathBuf> {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_adapter_paths(&self) -> &AdapterPaths {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_modules(&self) -> Option<&[EmbeddingModulePaths]> {
+        unreachable!("Use `std::any::Any`.")
+    }
+}
+
+/// Loads a `FacialAnimator`-backed `AnimationPipeline`. Resolves the four weight
+/// sources (UNet, VAE, whisper, S3FD); the arch picks how they compose.
+pub struct AnimationLoader {
+    pub model_id: String,
+    pub vae_model_id: String,
+    pub whisper_model_id: String,
+    pub s3fd_model_id: String,
+    pub arch: AnimationLoaderType,
+    pub options: AnimatorOptions,
+}
+
+impl AnimationLoader {
+    fn load_vb(
+        path: &PathBuf,
+        dtype: DType,
+        device: &Device,
+        silent: bool,
+    ) -> Result<hanzo_quant::ShardedVarBuilder> {
+        Ok(from_mmaped_safetensors(
+            vec![path.clone()],
+            Vec::new(),
+            Some(dtype),
+            device,
+            vec![None],
+            silent,
+            None,
+            |_| true,
+            Arc::new(|_| DeviceForLoadTensor::Base),
+        )?)
+    }
+}
+
+impl Loader for AnimationLoader {
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model_from_hf(
+        &self,
+        revision: Option<String>,
+        token_source: TokenSource,
+        dtype: &dyn TryIntoDType,
+        device: &Device,
+        silent: bool,
+        mapper: DeviceMapSetting,
+        in_situ_quant: Option<IsqType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
+        let revision = revision.unwrap_or_else(|| "main".to_string());
+        let repo = |id: &str| -> Result<hf_hub::api::sync::ApiRepo> {
+            let api = ApiBuilder::new()
+                .with_progress(!silent)
+                .with_token(get_token(&token_source)?)
+                .build()?;
+            Ok(api.repo(Repo::with_revision(
+                id.to_string(),
+                RepoType::Model,
+                revision.clone(),
+            )))
+        };
+
+        let musetalk = repo(&self.model_id)?;
+        let vae = repo(&self.vae_model_id)?;
+        let whisper = repo(&self.whisper_model_id)?;
+        let s3fd = repo(&self.s3fd_model_id)?;
+
+        let mt_id = std::path::Path::new(&self.model_id);
+        let vae_id = std::path::Path::new(&self.vae_model_id);
+        let wh_id = std::path::Path::new(&self.whisper_model_id);
+        let sf_id = std::path::Path::new(&self.s3fd_model_id);
+
+        let paths = AnimationModelPaths::new(
+            api_get_file!(musetalk, MUSETALK_UNET_CONFIG, &mt_id, &revision),
+            api_get_file!(musetalk, MUSETALK_UNET_WEIGHTS, &mt_id, &revision),
+            api_get_file!(vae, VAE_CONFIG, &vae_id, &revision),
+            api_get_file!(vae, VAE_WEIGHTS, &vae_id, &revision),
+            api_get_file!(whisper, WHISPER_WEIGHTS, &wh_id, &revision),
+            api_get_file!(s3fd, S3FD_WEIGHTS, &sf_id, &revision),
+        );
+
+        self.load_model_from_path(
+            &(Box::new(paths) as Box<dyn ModelPaths>),
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )
+    }
+
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model_from_path(
+        &self,
+        paths: &Box<dyn ModelPaths>,
+        dtype: &dyn TryIntoDType,
+        device: &Device,
+        silent: bool,
+        mapper: DeviceMapSetting,
+        in_situ_quant: Option<IsqType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
+        if matches!(mapper, DeviceMapSetting::Map(_)) {
+            anyhow::bail!("Device mapping is not supported for animation models.");
+        }
+        if in_situ_quant.is_some() {
+            anyhow::bail!("ISQ is not supported for animation models.");
+        }
+        if paged_attn_config.is_some() {
+            tracing::warn!("PagedAttention is not supported for animation models, disabling it.");
+        }
+        let paths = paths
+            .as_ref()
+            .as_any()
+            .downcast_ref::<AnimationModelPaths>()
+            .expect("Path downcast failed.");
+
+        let dtype = dtype.try_into_dtype(&[device])?;
+
+        let unet: UNetConfig =
+            serde_json::from_str(&std::fs::read_to_string(&paths.unet_config)?)?;
+        let vae: VaeConfig = serde_json::from_str(&std::fs::read_to_string(&paths.vae_config)?)?;
+        let musetalk_config = MuseTalkConfig {
+            unet,
+            vae,
+            resized_img: RESIZED_IMG,
+        };
+
+        let components = AnimationComponents {
+            musetalk_config,
+            vae_vb: Self::load_vb(&paths.vae_weights, dtype, device, silent)?,
+            unet_vb: Self::load_vb(&paths.unet_weights, dtype, device, silent)?,
+            whisper_config: WhisperConfig::tiny(),
+            whisper_vb: Self::load_vb(&paths.whisper_weights, dtype, device, silent)?,
+            s3fd_vb: Self::load_vb(&paths.s3fd_weights, dtype, device, silent)?,
+            device: device.clone(),
+            dtype,
+            options: self.options,
+        };
+
+        let animator = animation_loader(&self.arch).load(components)?;
+        Ok(Arc::new(Mutex::new(AnimationPipeline::new(
+            animator,
+            self.model_id.clone(),
+            dtype,
+        ))))
+    }
+
+    fn get_id(&self) -> String {
+        self.model_id.clone()
+    }
+
+    fn get_kind(&self) -> ModelKind {
+        ModelKind::Normal
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diffusion_models::animation::AnimationOutput;
+
+    // Trivial animator so the test exercises the pipeline's forward_inputs + kind-gate
+    // (not MuseTalk numerics, which dub_e2e::animate_native covers). Emits ceil(secs*fps)
+    // blank frames.
+    struct MockAnimator {
+        device: Device,
+        accepts: VisualKind,
+    }
+
+    impl FacialAnimator for MockAnimator {
+        fn animate(&mut self, req: &AnimationRequest) -> hanzo_ml::Result<AnimationOutput> {
+            let secs = req.driving.pcm.len() as f64 / req.driving.sample_rate as f64;
+            let n = ((secs * req.fps).ceil() as usize).max(1);
+            Ok(AnimationOutput {
+                frames: (0..n).map(|_| DynamicImage::new_rgb8(8, 8)).collect(),
+                fps: req.fps,
+            })
+        }
+        fn device(&self) -> &Device {
+            &self.device
+        }
+        fn accepts(&self) -> VisualKind {
+            self.accepts
+        }
+    }
+
+    fn pipeline(accepts: VisualKind) -> AnimationPipeline {
+        let animator = Box::new(MockAnimator {
+            device: Device::Cpu,
+            accepts,
+        });
+        AnimationPipeline::new(animator, "mock".to_string(), DType::F32)
+    }
+
+    fn footage_input(kind: VisualKind) -> ModelInputs {
+        ModelInputs {
+            requests: vec![AnimationInput {
+                frames: vec![DynamicImage::new_rgb8(8, 8), DynamicImage::new_rgb8(8, 8)],
+                pcm: Arc::new(vec![0f32; 24_000]), // 1 s @ 24 kHz
+                sample_rate: 24_000,
+                fps: 25.0,
+                kind,
+            }],
+        }
+    }
+
+    #[test]
+    fn forward_inputs_emits_frames() {
+        let mut p = pipeline(VisualKind::Footage);
+        let out = p
+            .forward_inputs(Box::new(footage_input(VisualKind::Footage)), false)
+            .unwrap();
+        let ForwardInputsResult::Frames { frames, fps } = out else {
+            panic!("expected Frames");
+        };
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].len(), 25); // ceil(1.0 * 25)
+        assert_eq!(fps, vec![25.0]);
+    }
+
+    #[test]
+    fn kind_gate_rejects_portrait_for_footage_animator() {
+        let mut p = pipeline(VisualKind::Footage);
+        assert!(p
+            .forward_inputs(Box::new(footage_input(VisualKind::Portrait)), false)
+            .is_err());
+    }
+
+    #[test]
+    fn either_animator_accepts_both() {
+        let mut p = pipeline(VisualKind::Either);
+        assert!(p
+            .forward_inputs(Box::new(footage_input(VisualKind::Footage)), false)
+            .is_ok());
+        let mut p = pipeline(VisualKind::Either);
+        assert!(p
+            .forward_inputs(Box::new(footage_input(VisualKind::Portrait)), false)
+            .is_ok());
+    }
+}

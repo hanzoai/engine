@@ -10,7 +10,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use hanzo_engine::{File as CoreFile, FileContent};
 use serde::Serialize;
 
-use crate::types::{ExtractedHanzoState, SharedHanzoState};
+use crate::types::{ExtractedState, SharedState};
 
 const PURPOSE: &str = "agent_output";
 
@@ -38,7 +38,7 @@ pub struct SourceMeta {
     pub turn: usize,
 }
 
-pub async fn get_file(State(state): ExtractedHanzoState, Path(id): Path<String>) -> Response {
+pub async fn get_file(State(state): ExtractedState, Path(id): Path<String>) -> Response {
     match state.find_file(&id) {
         Some(f) => Json(metadata(&f)).into_response(),
         None => not_found(&id),
@@ -46,7 +46,7 @@ pub async fn get_file(State(state): ExtractedHanzoState, Path(id): Path<String>)
 }
 
 pub async fn get_file_content(
-    State(state): ExtractedHanzoState,
+    State(state): ExtractedState,
     Path(id): Path<String>,
 ) -> Response {
     serve_bytes(state, &id).unwrap_or_else(|(code, msg)| {
@@ -54,12 +54,12 @@ pub async fn get_file_content(
     })
 }
 
-pub async fn list_files(State(state): ExtractedHanzoState) -> Response {
+pub async fn list_files(State(state): ExtractedState) -> Response {
     let data: Vec<FileMetadata> = state.list_files().iter().map(|f| metadata(f)).collect();
     Json(serde_json::json!({ "object": "list", "data": data })).into_response()
 }
 
-pub async fn delete_file(State(state): ExtractedHanzoState, Path(id): Path<String>) -> Response {
+pub async fn delete_file(State(state): ExtractedState, Path(id): Path<String>) -> Response {
     if !state.remove_file(&id) {
         return not_found(&id);
     }
@@ -93,7 +93,7 @@ fn metadata(f: &CoreFile) -> FileMetadata {
     }
 }
 
-fn serve_bytes(state: SharedHanzoState, id: &str) -> Result<Response, (StatusCode, String)> {
+fn serve_bytes(state: SharedState, id: &str) -> Result<Response, (StatusCode, String)> {
     let file = state.find_file(id).ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
