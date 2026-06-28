@@ -21,7 +21,8 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 
 pub use normal_loaders::{
-    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, GLM4Loader, GLM4MoeLiteLoader,
+    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, DeepSeekV4Loader, GLM4Loader,
+    GLM4MoeLiteLoader,
     GLM4MoeLoader, Gemma2Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader, LlamaLoader,
     MiniMaxM2Loader, MistralLoader, MixtralLoader, NormalLoaderType, NormalLoadingMetadata,
     NormalModel,

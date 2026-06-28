@@ -10,7 +10,8 @@ use super::{
     IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use super::{
-    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, GLM4Loader, GLM4MoeLiteLoader,
+    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, DeepSeekV4Loader, GLM4Loader,
+    GLM4MoeLiteLoader,
     GLM4MoeLoader, Gemma2Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader, LlamaLoader,
     MiniMaxM2Loader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader,
     Phi3_5MoELoader,
@@ -286,6 +287,7 @@ impl NormalLoaderBuilder {
             // DeepSeek-V3.2 reuses the validated V3 dense MLA/MoE loader; the
             // extra DSA-indexer/MTP tensors are simply never requested.
             Some(NormalLoaderType::DeepSeekV32) => Box::new(DeepSeekV3Loader),
+            Some(NormalLoaderType::DeepSeekV4) => Box::new(DeepSeekV4Loader),
             Some(NormalLoaderType::Qwen3) => Box::new(Qwen3Loader),
             Some(NormalLoaderType::GLM4) => Box::new(GLM4Loader),
             Some(NormalLoaderType::GLM4MoeLite) => Box::new(GLM4MoeLiteLoader),
