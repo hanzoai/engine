@@ -20,8 +20,8 @@
 use std::ffi::c_int;
 use std::sync::OnceLock;
 
-use hanzo_server_core::hanzo_for_server_builder::{
-    load_model_at_runtime, HanzoForServerBuilder, ModelConfig,
+use hanzo_server_core::server::{
+    load_model_at_runtime, ServerBuilder, ModelConfig,
 };
 
 /// Lazy one-time multi-model engine build. `Ok(())` once registered.
@@ -36,7 +36,7 @@ fn ensure_engine() -> Result<(), String> {
         let tok_dir = std::env::var("HANZO_FFI_TOK_DIR").ok();
         let configs = hanzo_engine::parse_model_spec(&spec, tok_dir.as_deref())?;
         let default_id = configs[0].0.clone();
-        let mut builder = HanzoForServerBuilder::new();
+        let mut builder = ServerBuilder::new();
         for (name, model) in configs {
             // alias == name makes `name` the routable model id (get_sender).
             builder =

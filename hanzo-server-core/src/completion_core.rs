@@ -6,7 +6,7 @@ use anyhow::Result;
 use axum::response::Sse;
 use hanzo_engine::{DrySamplingParams, Hanzo, StopTokens as InternalStopTokens};
 
-use crate::{openai::StopTokens, types::SharedHanzoState, util::sanitize_error_message};
+use crate::{openai::StopTokens, types::SharedState, util::sanitize_error_message};
 
 /// Generic responder enum for different completion types.
 #[derive(Debug)]
@@ -25,7 +25,7 @@ pub enum BaseCompletionResponder<R, S> {
 
 /// Generic function to handle completion errors and logging them.
 pub(crate) fn handle_completion_error<R, S>(
-    state: SharedHanzoState,
+    state: SharedState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> BaseCompletionResponder<R, S> {
     // Log the full error internally

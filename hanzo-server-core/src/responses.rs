@@ -48,7 +48,7 @@ use crate::{
         resource::{ResponseError, ResponseResource, ResponseUsage},
     },
     streaming::{get_keep_alive_interval, DoneState},
-    types::{ExtractedHanzoState, OnDoneCallback, SharedHanzoState},
+    types::{ExtractedState, OnDoneCallback, SharedState},
     util::sanitize_error_message,
 };
 
@@ -776,7 +776,7 @@ pub struct OpenResponsesStreamer {
     /// Done state
     done_state: DoneState,
     /// Shared state
-    state: SharedHanzoState,
+    state: SharedState,
     /// Streaming state for tracking events
     streaming_state: StreamingState,
     /// Metadata from the request
@@ -808,7 +808,7 @@ impl OpenResponsesStreamer {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         rx: Receiver<Response>,
-        state: SharedHanzoState,
+        state: SharedState,
         response_id: String,
         model: String,
         metadata: Option<Value>,
@@ -1367,7 +1367,7 @@ fn chat_response_to_response_resource(
 /// Parse OpenResponses request into internal format
 async fn parse_openresponses_request(
     oairequest: OpenResponsesCreateRequest,
-    state: SharedHanzoState,
+    state: SharedState,
     tx: Sender<Response>,
 ) -> Result<(
     Request,
@@ -1564,7 +1564,7 @@ async fn parse_openresponses_request(
     responses((status = 200, description = "Response created"))
 )]
 pub async fn create_response(
-    State(state): ExtractedHanzoState,
+    State(state): ExtractedState,
     Json(oairequest): Json<OpenResponsesCreateRequest>,
 ) -> OpenResponsesResponder {
     let (tx, rx) = create_response_channel(None);
@@ -1800,7 +1800,7 @@ pub async fn create_response(
     responses((status = 200, description = "Response object"))
 )]
 pub async fn get_response(
-    State(_state): ExtractedHanzoState,
+    State(_state): ExtractedState,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
     // First check background tasks
@@ -1832,7 +1832,7 @@ pub async fn get_response(
     responses((status = 200, description = "Response deleted"))
 )]
 pub async fn delete_response(
-    State(_state): ExtractedHanzoState,
+    State(_state): ExtractedState,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
     // Delete from background tasks
@@ -1875,7 +1875,7 @@ pub async fn delete_response(
     responses((status = 200, description = "Response cancelled"))
 )]
 pub async fn cancel_response(
-    State(_state): ExtractedHanzoState,
+    State(_state): ExtractedState,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
     let task_manager = get_background_task_manager();
@@ -1896,7 +1896,7 @@ pub async fn cancel_response(
 
 /// Handle errors
 fn handle_error(
-    state: SharedHanzoState,
+    state: SharedState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> OpenResponsesResponder {
     handle_completion_error(state, e)
