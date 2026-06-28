@@ -20,7 +20,7 @@ impl DrivingAudio {
 }
 
 pub enum VisualSource {
-    Footage { frames: Vec<DynamicImage>, fps: f64 },
+    Footage { frames: Vec<DynamicImage> },
     Portrait { image: DynamicImage },
 }
 
@@ -82,7 +82,6 @@ mod tests {
     fn footage() -> VisualSource {
         VisualSource::Footage {
             frames: vec![DynamicImage::new_rgb8(8, 8)],
-            fps: 25.0,
         }
     }
 
