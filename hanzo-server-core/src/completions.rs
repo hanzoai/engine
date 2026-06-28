@@ -18,7 +18,7 @@ use crate::{
     },
     openai::{CompletionRequest, Grammar},
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
-    types::{ExtractedHanzoState, OnChunkCallback, OnDoneCallback, SharedHanzoState},
+    types::{ExtractedState, OnChunkCallback, OnDoneCallback, SharedState},
     util::{sanitize_error_message, validate_model_name},
 };
 use anyhow::Result;
@@ -288,7 +288,7 @@ pub fn parse_request(
     responses((status = 200, description = "Completions"))
 )]
 pub async fn completions(
-    State(state): ExtractedHanzoState,
+    State(state): ExtractedState,
     Json(oairequest): Json<CompletionRequest>,
 ) -> CompletionResponder {
     let (tx, mut rx) = create_response_channel(None);
@@ -311,7 +311,7 @@ pub async fn completions(
 
 /// Handle route / generation errors and logging them.
 pub fn handle_error(
-    state: SharedHanzoState,
+    state: SharedState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> CompletionResponder {
     handle_completion_error(state, e)
@@ -320,7 +320,7 @@ pub fn handle_error(
 /// Creates a SSE streamer for chat completions with optional callbacks.
 pub fn create_streamer(
     rx: Receiver<Response>,
-    state: SharedHanzoState,
+    state: SharedState,
     on_chunk: Option<CompletionOnChunkCallback>,
     on_done: Option<CompletionOnDoneCallback>,
 ) -> Sse<KeepAliveStream<CompletionStreamer>> {
@@ -334,13 +334,13 @@ pub fn create_streamer(
 /// Process non-streaming completion responses.
 pub async fn process_non_streaming_response(
     rx: &mut Receiver<Response>,
-    state: SharedHanzoState,
+    state: SharedState,
 ) -> CompletionResponder {
     base_process_non_streaming_response(rx, state, match_responses, handle_error).await
 }
 
 /// Matches and processes different types of model responses into appropriate completion responses.
-pub fn match_responses(state: SharedHanzoState, response: Response) -> CompletionResponder {
+pub fn match_responses(state: SharedState, response: Response) -> CompletionResponder {
     match response {
         Response::InternalError(e) => {
             Hanzo::maybe_log_error(state, &*e);

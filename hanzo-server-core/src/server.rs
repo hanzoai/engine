@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use hanzo_engine::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
     parse_isq_value, AddModelConfig, AutoDeviceMapParams, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, EngineConfig, Hanzo, HanzoBuilder,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, EngineConfig, Hanzo, Builder,
     Loader, LoaderBuilder, McpClientConfig, MemoryGpuConfig, ModelLoaderConfig, ModelSelected,
     MtpConfig, PagedAttentionConfig, PagedCacheType, SchedulerConfig, SearchCallback,
     SearchEmbeddingModel, TokenSource,
@@ -14,7 +14,7 @@ use hanzo_engine::{
 use hanzo_ml::Device;
 use tracing::{debug, info, warn};
 
-use crate::types::{LoadedPipeline, SharedHanzoState};
+use crate::types::{LoadedPipeline, SharedState};
 use std::collections::{HashMap, HashSet};
 
 /// License gate for every embedder of the engine (node, CLI, pyo3) that goes through the server
@@ -153,11 +153,11 @@ pub mod defaults {
 ///
 /// Basic usage:
 /// ```ignore
-/// use hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder;
+/// use hanzo_server_core::server::ServerBuilder;
 ///
 /// let args = Args::parse();
 ///
-/// let hanzo = HanzoForServerBuilder::new()
+/// let hanzo = ServerBuilder::new()
 ///        .with_model(args.model)
 ///        .with_max_seqs(args.max_seqs)
 ///        .with_no_kv_cache(args.no_kv_cache)
@@ -180,7 +180,7 @@ pub mod defaults {
 ///        .build()
 ///        .await?;
 /// ```
-pub struct HanzoForServerBuilder {
+pub struct ServerBuilder {
     /// The Hanzo device to use for model execution (CPU, CUDA, Metal, etc.).
     device: Option<Device>,
 
@@ -293,7 +293,7 @@ pub struct HanzoForServerBuilder {
     code_exec_config: Option<hanzo_engine::CodeExecutionConfig>,
 }
 
-impl Default for HanzoForServerBuilder {
+impl Default for ServerBuilder {
     /// Creates a new builder with default configuration.
     fn default() -> Self {
         Self {
@@ -333,17 +333,17 @@ impl Default for HanzoForServerBuilder {
     }
 }
 
-impl HanzoForServerBuilder {
-    /// Creates a new `HanzoForServerBuilder` with default settings.
+impl ServerBuilder {
+    /// Creates a new `ServerBuilder` with default settings.
     ///
     /// This is equivalent to calling `Default::default()`.
     ///
     /// ### Examples
     ///
     /// ```ignore
-    /// use hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder;
+    /// use hanzo_server_core::server::ServerBuilder;
     ///
-    /// let builder = hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder::new();
+    /// let builder = hanzo_server_core::server::ServerBuilder::new();
     /// ```
     pub fn new() -> Self {
         Default::default()
@@ -716,16 +716,16 @@ impl HanzoForServerBuilder {
     /// ### Examples
     ///
     /// ```ignore
-    /// use hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder;
+    /// use hanzo_server_core::server::ServerBuilder;
     ///
-    /// let shared_hanzo = HanzoForServerBuilder::new()
+    /// let shared_hanzo = ServerBuilder::new()
     ///     .with_model(model)
     ///     .with_in_situ_quant("8".to_string())
     ///     .set_paged_attn(Some(true))
     ///     .build()
     ///     .await?;
     /// ```
-    pub async fn build(self) -> Result<SharedHanzoState> {
+    pub async fn build(self) -> Result<SharedState> {
         enforce_license()?;
         // Determine if we're in single-model or multi-model mode
         if !self.models.is_empty() {
@@ -736,7 +736,7 @@ impl HanzoForServerBuilder {
     }
 
     /// Build a single-model instance (legacy mode)
-    async fn build_single_model(mut self) -> Result<SharedHanzoState> {
+    async fn build_single_model(mut self) -> Result<SharedState> {
         let model = self.model.context("Model was None")?;
 
         let tgt_non_granular_index = get_tgt_non_granular_index(&model);
@@ -845,7 +845,7 @@ impl HanzoForServerBuilder {
             mtp_config: self.mtp_config.clone(),
         };
 
-        let mut builder = HanzoBuilder::new(
+        let mut builder = Builder::new(
             pipeline,
             scheduler_config,
             !self.interactive_mode,
@@ -876,7 +876,7 @@ impl HanzoForServerBuilder {
     }
 
     /// Build a multi-model instance
-    pub async fn build_multi_model(mut self) -> Result<SharedHanzoState> {
+    pub async fn build_multi_model(mut self) -> Result<SharedState> {
         if self.models.is_empty() {
             anyhow::bail!("No models configured for multi-model mode");
         }
@@ -1013,7 +1013,7 @@ impl HanzoForServerBuilder {
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
 
         // Create the first Hanzo instance with the first model
-        let mut builder = HanzoBuilder::new(
+        let mut builder = Builder::new(
             pipeline,
             scheduler_config.clone(),
             !self.interactive_mode,
@@ -1193,7 +1193,7 @@ impl HanzoForServerBuilder {
 /// model id.
 ///
 /// This is the runtime twin of the additional-model arm of
-/// [`HanzoForServerBuilder::build_multi_model`] (see the loop over
+/// [`ServerBuilder::build_multi_model`] (see the loop over
 /// `self.models.iter().skip(1)`): it performs the exact same per-model load
 /// sequence — `LoaderBuilder` → `load_model_from_hf` → `Hanzo::add_model` →
 /// optional `register_model_alias` — by calling the very same private helpers
