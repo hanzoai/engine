@@ -12,13 +12,16 @@ use crate::diffusion_models::musetalk::MuseTalk;
 use crate::speech_models::whisper::WhisperFeatureExtractor;
 use crate::vision_models::s3fd::{FaceBox, S3fd, S3fdConfig};
 
-const DEFAULT_REDETECT_EVERY: usize = 5;
+// MuseTalk detects per frame; 1 == reference parity. Raise it to trade lip-sync
+// accuracy (a stale box drifts as the head moves) for fewer S3FD forwards.
+const DEFAULT_REDETECT_EVERY: usize = 1;
 
 /// Animator knobs. Face-detector parameters are surfaced here so the detector
 /// stays an internal composition detail.
 #[derive(Clone, Copy, Debug)]
 pub struct AnimatorOptions {
     /// Re-run face detection every N output frames; reuse the last box in between.
+    /// 1 matches MuseTalk's per-frame detection; >1 is a speed/quality tradeoff.
     pub redetect_every: usize,
     pub face_score_threshold: f32,
     pub face_nms_iou: f32,
@@ -100,11 +103,14 @@ impl MuseTalkAnimator {
 
 impl FacialAnimator for MuseTalkAnimator {
     fn animate(&mut self, req: &AnimationRequest) -> Result<AnimationOutput> {
-        let VisualSource::Footage { frames, .. } = &req.visual else {
+        let VisualSource::Footage { frames } = &req.visual else {
             hanzo_ml::bail!("MuseTalkAnimator only animates footage");
         };
         if frames.is_empty() {
             hanzo_ml::bail!("MuseTalkAnimator: empty footage");
+        }
+        if frames.iter().any(|f| f.width() == 0 || f.height() == 0) {
+            hanzo_ml::bail!("MuseTalkAnimator: footage frame has a zero dimension");
         }
 
         let feats = self
@@ -121,7 +127,11 @@ impl FacialAnimator for MuseTalkAnimator {
             let (x, y, w, h) = self.bbox_for(src, redetect, &mut last_bbox)?;
 
             let face = image_to_face_tensor(&crop(src, x, y, w, h), size, &self.device)?;
-            let audio = feats.narrow(0, t, 1)?.contiguous()?;
+            // whisper features carry whisper's vb dtype; the UNet cross-attends in MuseTalk's.
+            let audio = feats
+                .narrow(0, t, 1)?
+                .to_dtype(self.musetalk.dtype())?
+                .contiguous()?;
             let generated = self.musetalk.forward(&face, &audio)?;
             let blended = self.musetalk.blend(&face, &generated)?;
 
@@ -163,8 +173,9 @@ fn cycle_index(t: usize, n: usize) -> usize {
 fn clamp_box(b: &FaceBox, fw: u32, fh: u32) -> (u32, u32, u32, u32) {
     let x1 = (b.x1.floor().max(0.0) as u32).min(fw.saturating_sub(1));
     let y1 = (b.y1.floor().max(0.0) as u32).min(fh.saturating_sub(1));
-    let x2 = (b.x2.ceil().max(0.0) as u32).clamp(x1 + 1, fw);
-    let y2 = (b.y2.ceil().max(0.0) as u32).clamp(y1 + 1, fh);
+    // `fw.max(x1 + 1)` keeps the clamp range valid even for a degenerate 0-size frame.
+    let x2 = (b.x2.ceil().max(0.0) as u32).clamp(x1 + 1, fw.max(x1 + 1));
+    let y2 = (b.y2.ceil().max(0.0) as u32).clamp(y1 + 1, fh.max(y1 + 1));
     (x1, y1, x2 - x1, y2 - y1)
 }
 
@@ -228,5 +239,20 @@ mod tests {
         assert_eq!((x, y), (0, 2));
         assert!(x + w <= 64 && y + h <= 64);
         assert!(w > 0 && h > 0);
+    }
+
+    #[test]
+    fn clamp_box_total_on_zero_dims() {
+        // Must not panic on a degenerate 0-size frame (clamp range stays valid).
+        let b = FaceBox {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 10.0,
+            y2: 10.0,
+            score: 0.9,
+        };
+        let (x, y, w, h) = clamp_box(&b, 0, 0);
+        assert_eq!((x, y), (0, 0));
+        assert!(w >= 1 && h >= 1);
     }
 }
