@@ -6,7 +6,7 @@ use axum::extract::{Json, State};
 use axum::http::StatusCode;
 use hanzo_engine::{
     auto_tune, collect_system_info, parse_isq_value, run_doctor, AutoDeviceMapParams,
-    AutoTuneRequest, AutoTuneResult, Hanzo, HanzoError, ModelDType, ModelSelected,
+    AutoTuneRequest, AutoTuneResult, Hanzo, Error, ModelDType, ModelSelected,
     ModelStatus as CoreModelStatus, Request, SerializedSession, TokenSource, TuneProfile,
 };
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ use utoipa::ToSchema;
 
 use crate::{
     openai::{ModelObject, ModelObjects},
-    types::ExtractedHanzoState,
+    types::ExtractedState,
 };
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, ToSchema)]
@@ -41,7 +41,7 @@ impl From<TuneProfileRequest> for TuneProfile {
   path = "/v1/models",
   responses((status = 200, description = "Served model info", body = ModelObjects))
 )]
-pub async fn models(State(state): ExtractedHanzoState) -> Json<ModelObjects> {
+pub async fn models(State(state): ExtractedState) -> Json<ModelObjects> {
     let mut model_objects = Vec::new();
 
     // Add "default" as a special model option
@@ -125,7 +125,7 @@ pub struct ReIsqRequest {
   responses((status = 200, description = "Reapply ISQ to a non GGUF or GGML model."))
 )]
 pub async fn re_isq(
-    State(state): ExtractedHanzoState,
+    State(state): ExtractedState,
     Json(request): Json<ReIsqRequest>,
 ) -> Result<String, String> {
     let repr = format!("Re ISQ: {:?}", request.ggml_type);
@@ -178,7 +178,7 @@ pub struct ModelStatusResponse {
   )
 )]
 pub async fn unload_model(
-    State(state): ExtractedHanzoState,
+    State(state): ExtractedState,
     Json(request): Json<ModelOperationRequest>,
 ) -> Json<ModelStatusResponse> {
     let model_id = request.model_id;
@@ -190,9 +190,9 @@ pub async fn unload_model(
         }),
         Err(e) => {
             let (status, error) = match &e {
-                HanzoError::ModelNotFound(_) => (ModelStatus::NotFound, None),
-                HanzoError::ModelAlreadyUnloaded(_) => (ModelStatus::Unloaded, None),
-                HanzoError::NoLoaderConfig(_) => (ModelStatus::NoLoaderConfig, None),
+                Error::ModelNotFound(_) => (ModelStatus::NotFound, None),
+                Error::ModelAlreadyUnloaded(_) => (ModelStatus::Unloaded, None),
+                Error::NoLoaderConfig(_) => (ModelStatus::NoLoaderConfig, None),
                 _ => (ModelStatus::InternalError, Some(e.to_string())),
             };
             Json(ModelStatusResponse {
@@ -215,7 +215,7 @@ pub async fn unload_model(
   )
 )]
 pub async fn reload_model(
-    State(state): ExtractedHanzoState,
+    State(state): ExtractedState,
     Json(request): Json<ModelOperationRequest>,
 ) -> Json<ModelStatusResponse> {
     let model_id = request.model_id;
@@ -227,10 +227,10 @@ pub async fn reload_model(
         }),
         Err(e) => {
             let (status, error) = match &e {
-                HanzoError::ModelNotFound(_) => (ModelStatus::NotFound, None),
-                HanzoError::ModelReloading(_) => (ModelStatus::Reloading, None),
-                HanzoError::ModelAlreadyLoaded(_) => (ModelStatus::Loaded, None),
-                HanzoError::ReloadFailed(msg) => (ModelStatus::InternalError, Some(msg.clone())),
+                Error::ModelNotFound(_) => (ModelStatus::NotFound, None),
+                Error::ModelReloading(_) => (ModelStatus::Reloading, None),
+                Error::ModelAlreadyLoaded(_) => (ModelStatus::Loaded, None),
+                Error::ReloadFailed(msg) => (ModelStatus::InternalError, Some(msg.clone())),
                 _ => (ModelStatus::InternalError, Some(e.to_string())),
             };
             Json(ModelStatusResponse {
@@ -253,7 +253,7 @@ pub async fn reload_model(
   )
 )]
 pub async fn get_model_status(
-    State(state): ExtractedHanzoState,
+    State(state): ExtractedState,
     Json(request): Json<ModelOperationRequest>,
 ) -> Json<ModelStatusResponse> {
     let model_id = request.model_id;
@@ -399,7 +399,7 @@ pub async fn tune_model(
     )
 )]
 pub async fn get_session(
-    State(state): ExtractedHanzoState,
+    State(state): ExtractedState,
     Path(session_id): Path<String>,
 ) -> Result<Json<SerializedSession>, (StatusCode, String)> {
     match state.export_session(None, &session_id) {
@@ -425,7 +425,7 @@ pub async fn get_session(
     )
 )]
 pub async fn put_session(
-    State(state): ExtractedHanzoState,
+    State(state): ExtractedState,
     Path(session_id): Path<String>,
     Json(session): Json<SerializedSession>,
 ) -> Result<StatusCode, (StatusCode, String)> {
@@ -444,7 +444,7 @@ pub async fn put_session(
     responses((status = 200, description = "Session deleted (or did not exist)"))
 )]
 pub async fn delete_session(
-    State(state): ExtractedHanzoState,
+    State(state): ExtractedState,
     Path(session_id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     state
