@@ -223,6 +223,7 @@ pub fn match_responses(
 
             SpeechGenerationResponder::RawResponse((StatusCode::OK, headers, bytes).into_response())
         }
+        Response::Frames { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
