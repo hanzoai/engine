@@ -21,6 +21,9 @@ use nms::{decode_box, nms};
 const COLLECT_THRESHOLD: f32 = 0.05; // candidate cutoff before NMS (face_alignment)
 const BGR_MEAN: [f32; 3] = [104.0, 117.0, 123.0];
 const ANCHOR_SCALE: f32 = 4.0; // anchor side = stride * 4
+// Below this the VGG stem's 5 max-pools collapse a spatial dim to 0 (the conv would bail).
+// Nothing detectable that small anyway, so report "no faces" rather than erroring.
+const MIN_DETECT_SIDE: u32 = 32;
 
 #[derive(Clone, Copy, Debug)]
 pub struct S3fdConfig {
@@ -73,6 +76,11 @@ impl S3fd {
         } else {
             image.clone()
         };
+
+        let (dw, dh) = det_img.dimensions();
+        if dw.min(dh) < MIN_DETECT_SIDE {
+            return Ok(Vec::new());
+        }
 
         let input = self.preprocess(&det_img)?;
         let scales = self.model.forward(&input)?;
@@ -181,6 +189,15 @@ mod tests {
             }
             assert!(f.x2 >= f.x1 && f.y2 >= f.y1, "degenerate box ordering");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn detect_too_small_returns_empty() -> Result<()> {
+        let dev = Device::Cpu;
+        let s3fd = S3fd::new(random_vb(&dev), &dev, S3fdConfig::default())?;
+        // 16 < MIN_DETECT_SIDE: must report no faces, not bail in the conv stem.
+        assert!(s3fd.detect(&DynamicImage::new_rgb8(16, 16))?.is_empty());
         Ok(())
     }
 
