@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 
-# ROCm/HIP image for AMD datacenter GPUs. Defaults to gfx942 (MI300); set
-# ROCM_GFX_ARCH=gfx90a for MI200. The gfx1151 APU (Strix Halo) runs natively and
-# needs a ROCm 7.x base, so for it bump ROCM_BASE and pass ROCM_GFX_ARCH=gfx1151.
-ARG ROCM_BASE=rocm/dev-ubuntu-24.04:6.4.1-complete
+# ROCm/HIP image for AMD GPUs. Defaults to gfx942 (MI300, ROCm 6.4); set
+# ROCM_GFX_ARCH=gfx90a for MI200. For gfx1151 (Strix Halo) pass a ROCm 7.x base
+# (ROCM_BASE=rocm/dev-ubuntu-24.04:7.2.4) plus ROCM_GFX_ARCH=gfx1151.
+ARG ROCM_BASE=rocm/dev-ubuntu-24.04:6.4.4
 
 # Stage 1: Build environment
 FROM ${ROCM_BASE} AS builder
