@@ -1,6 +1,21 @@
-FROM nvidia/cuda:13.0.2-cudnn-devel-ubi9 AS builder
+# syntax=docker/dockerfile:1
 
-RUN dnf install -y git
+# Stage 1: Build environment
+FROM nvidia/cuda:13.0.3-cudnn-devel-ubuntu24.04 AS builder
+SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN <<HEREDOC
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        curl \
+        git \
+        libssl-dev \
+        pkg-config
+
+    rm -rf /var/lib/apt/lists/*
+HEREDOC
+
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN rustup update nightly && rustup default nightly
@@ -14,15 +29,31 @@ ARG CUDA_COMPUTE_CAP=80
 ARG RAYON_NUM_THREADS=4
 ARG RUST_NUM_THREADS=4
 ARG RUSTFLAGS="-Z threads=${RUST_NUM_THREADS}"
-ARG WITH_FEATURES="cuda,cudnn"
+ARG WITH_FEATURES="cuda,cudnn,flash-attn"
 RUN cargo build --release --workspace --exclude hanzo-pyo3 --features "${WITH_FEATURES}"
 
+
 # Stage 2: Minimal runtime environment
-FROM nvidia/cuda:13.0.2-cudnn-runtime-ubi9
+FROM nvidia/cuda:13.0.3-cudnn-runtime-ubuntu24.04 AS runtime
+SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN <<HEREDOC
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        libomp-dev \
+        ca-certificates \
+        libssl-dev \
+        curl \
+        pkg-config
+
+    rm -rf /var/lib/apt/lists/*
+HEREDOC
 
 COPY --chmod=755 --from=builder /hanzo/target/release/hanzo-bench /usr/local/bin/hanzo-bench
 COPY --chmod=755 --from=builder /hanzo/target/release/hanzo-server /usr/local/bin/hanzo-server
 # Copy chat templates for users running models which may not include them
 COPY --from=builder /hanzo/chat_templates /chat_templates
 
-ENV HUGGINGFACE_HUB_CACHE=/data PORT=1234
+ENV HUGGINGFACE_HUB_CACHE=/data \
+    PORT=80
