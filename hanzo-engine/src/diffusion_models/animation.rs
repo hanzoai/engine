@@ -1,5 +1,6 @@
 use hanzo_ml::{Device, Result};
 use image::DynamicImage;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Sample rate the omni speak path emits; the only PCM rate a `DrivingAudio` carries.
@@ -33,7 +34,8 @@ impl VisualSource {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum VisualKind {
     Footage,
     Portrait,
