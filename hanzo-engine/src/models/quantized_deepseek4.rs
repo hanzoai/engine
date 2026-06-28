@@ -315,6 +315,7 @@ struct V4Attn {
     o_groups: usize,
     o_lora_rank: usize,
     rms_eps: f64,
+    attn_dtype: DType, // model/cache/mask dtype (BF16 on CUDA); q/k/v cast to it for SDPA + cache
 }
 
 impl V4Attn {
@@ -344,6 +345,12 @@ impl V4Attn {
         kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let (b, s, _) = x.dims3()?;
+        // Working dtype for attention + KV cache (the model dtype; BF16 on CUDA) —
+        // the cache buffer + causal mask are allocated at this dtype, NOT the (F32)
+        // carrier dtype. The QMatMul projections + RMS-norm + RoPE run in F32 for
+        // precision; q/kv are cast to `attn_dtype` before SDPA + cache append so all
+        // of q/k/v, the mask, and the cache buffer agree.
+        let wdt = self.attn_dtype;
 
         // q: wq_a → q_norm → wq_b → [b, nh, s, hd] → per-head RMS → trailing rope.
         let q = self.q_b.forward(&self.q_a_norm.forward(&self.q_a.forward(x)?)?)?;
@@ -351,7 +358,7 @@ impl V4Attn {
             .reshape((b, s, self.n_head, self.head_dim))?
             .transpose(1, 2)?;
         q = per_head_rms_norm(&q, self.rms_eps)?;
-        q = self.rope(&q, positions, false)?;
+        q = self.rope(&q, positions, false)?.to_dtype(wdt)?;
 
         // kv latent: wkv → kv_norm → [b, 1, s, hd] → trailing rope (K == V).
         let kv = self
@@ -359,7 +366,7 @@ impl V4Attn {
             .forward(&self.kv.forward(x)?)?
             .reshape((b, s, 1, self.head_dim))?
             .transpose(1, 2)?;
-        let kv = self.rope(&kv, positions, false)?;
+        let kv = self.rope(&kv, positions, false)?.to_dtype(wdt)?;
 
         let (k, v) = kv_cache.append(&kv, &kv)?;
 
@@ -457,6 +464,21 @@ impl ModelConfig::FromGGUF for ModelWeights {
         dtype: DType,
     ) -> Result<Self> {
         verify_arch(ct.get_metadata())?;
+
+        // ── V4 DTYPE POLICY (one and only one place dtype is decided) ──────────────
+        // Every activation in this model flows in ONE compute dtype, `dtype`, threaded
+        // from here to the KV cache, the causal mask, and each V4Attn (`attn_dtype`):
+        // those are the only consumers and they all read this single value. Quantized
+        // weights (IQ2/Q2K/Q8) dequantize to it at the QMatMul boundary; precision-
+        // sensitive ops (RMS-norm, RoPE, softmax-with-sinks) upcast to F32 internally
+        // and return it. We pin F32 — it matches ds4.c's all-F32 activation path
+        // (numeric parity with antirez/ds4 + llama.cpp) and removes the dequant-output
+        // (F32) vs auto-selected-cache (BF16) disagreement that otherwise scatters
+        // ad-hoc casts across the forward. Set this to BF16 and the whole model still
+        // agrees — nothing else picks a dtype. (Weights stay quantized; only the small
+        // activation/KV tensors are F32.)
+        let _ = dtype;
+        let dtype = DType::F32;
         let props = PropsGGUF::try_from(ContentMetadata {
             path_prefix: "deepseek4",
             metadata: ct.get_metadata(),
@@ -532,12 +554,13 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 ropes_comp[&dev.location()].clone()
             };
 
-            // Attention. wo_a dequantized to BF16 (not F32) — halves its resident footprint
-            // (~2.8GB vs 5.7GB across 43 layers) for the grouped-o einsum.
+            // Attention. wo_a dequantized to the single compute `dtype` (the grouped-o
+            // einsum operand) — uniform with the rest of the model; no special-case
+            // BF16 that could disagree at a dtype boundary.
             let wo_a = ct
                 .tensor(&format!("{p}.attn_output_a.weight"), dev)?
                 .dequantize(dev)?
-                .to_dtype(DType::BF16)?
+                .to_dtype(dtype)?
                 // GGUF stores [group_in, groups*rank]; reshape to [groups, rank, group_in].
                 .reshape((group_in, props.o_groups, props.o_lora_rank))?
                 .permute((1, 2, 0))?
@@ -564,6 +587,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 o_groups: props.o_groups,
                 o_lora_rank: props.o_lora_rank,
                 rms_eps: eps,
+                attn_dtype: dtype,
             };
 
             // MoE.
@@ -653,7 +677,12 @@ impl ModelWeights {
         _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (_b, _s) = input_ids.dims2()?;
-        let embeds = self.tok_embeddings.forward(input_ids)?;
+        // Enter the single compute dtype HERE (the one entry point for activations):
+        // the embeddings carry the whole HC carrier downstream, so casting them to
+        // `self.dtype` makes embeds → carrier → attn → cache → output all flow in the
+        // one dtype. (Decomplected: dtype is applied at the boundary where data enters
+        // the model, then never re-decided.)
+        let embeds = self.tok_embeddings.forward(input_ids)?.to_dtype(self.dtype)?;
         let cache = &mut self.cache.normal().0;
         let mask = CausalMasker.make_causal_mask(
             input_ids,
