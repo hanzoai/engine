@@ -23,14 +23,16 @@ use crate::{
         delete_session, get_model_status, get_session, health, models, put_session, re_isq,
         reload_model, system_doctor, system_info, tune_model, unload_model,
     },
+    animate::animate,
     image_generation::image_generation,
     responses::{cancel_response, create_response, delete_response, get_response},
     route_registry::{
-        AGENT_APPROVAL_ROUTE, CANCEL_RESPONSE_ROUTE, COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE,
-        FILES_ROUTE, FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE,
-        MODELS_ROUTE, MODEL_STATUS_ROUTE, RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE,
-        RE_ISQ_ROUTE, ROOT_ROUTE, SESSION_ROUTE, SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE,
-        SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE,
+        AGENT_APPROVAL_ROUTE, ANIMATE_ROUTE, CANCEL_RESPONSE_ROUTE, COMPLETIONS_ROUTE,
+        EMBEDDINGS_ROUTE, FILES_ROUTE, FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE,
+        IMAGE_GENERATION_ROUTE, LIPSYNC_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE,
+        RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE,
+        SESSION_ROUTE, SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE,
+        TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE,
     },
     speech_generation::speech_generation,
     types::SharedState,
@@ -313,6 +315,8 @@ fn init_router(
         .route(FILE_ROUTE.path, get(get_file).delete(delete_file))
         .route(FILE_CONTENT_ROUTE.path, get(get_file_content))
         .route(SPEECH_GENERATION_ROUTE.path, post(speech_generation))
+        .route(ANIMATE_ROUTE.path, post(animate))
+        .route(LIPSYNC_ROUTE.path, post(animate))
         .route(AGENT_APPROVAL_ROUTE.path, post(resolve_agent_approval))
         .route(RESPONSES_ROUTE.path, post(create_response))
         .route(
