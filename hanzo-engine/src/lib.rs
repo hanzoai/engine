@@ -289,8 +289,9 @@ pub use pipeline::hf::{
 };
 pub use pipeline::{
     animation_loader, chat_template::ChatTemplate, expand_isq_value, parse_isq_value,
-    parse_uqff_shard, resolve_uqff_shorthand, AdapterPaths, AnimationComponents, AnimationLoaderType,
-    AnimationModelLoader, AnimationPipeline, AnyMoeLoader, AnyMoePipeline, AutoDeviceMapParams,
+    parse_uqff_shard, resolve_uqff_shorthand, AdapterPaths, AnimationComponents, AnimationLoader,
+    AnimationLoaderType, AnimationModelLoader, AnimationModelPaths, AnimationPipeline, AnyMoeLoader,
+    AnyMoePipeline, AutoDeviceMapParams,
     AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams, DiffusionLoader,
     DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoader, EmbeddingLoaderBuilder,
     MuseTalkAnimationLoader,
