@@ -869,23 +869,32 @@ impl GGUFPipeline {
     /// graph capture, i.e. it reads its RoPE rotation from the device `metadata.rope_positions`
     /// tensor (refreshed in place between replays) rather than baking a host `seqlen_offset`.
     ///
-    /// Only Qwen3 and Qwen3MoE qualify: their `forward` honors `metadata.rope_positions`
-    /// (`apply_rotary_positions_qk` -> on-device cos/sin gather; the nsys-visible
-    /// `qk_rms_norm_rope_positions_kernel`). Llama/Phi2/Qwen(2) take the host path
-    /// `RotaryEmbedding::forward` -> `selected_rope_cache` -> `cos.narrow(0, seqlen_offset, 1)`,
-    /// a view whose storage offset is FROZEN at capture and never advances on replay
-    /// (the classic frozen-position bug -> garbage from ~token 2). They are excluded so
-    /// they fall back to the always-correct eager path. XLora / Phi3 / Starcoder2 / Qwen35
-    /// (mRoPE) are excluded for the same position-invariance reason or signature mismatch.
-    /// This is the single source of truth for decode-graph eligibility, shared by the
-    /// CUDA and ROCm graph paths (both capture the identical device-generic model forward).
+    /// Qwen3, Qwen3MoE and dense Llama (also Mistral, which shares the llama arch)
+    /// qualify: their `forward` honors `metadata.rope_positions` for the seq_len==1
+    /// decode step (`RotaryEmbedding::forward_positions` -> on-device cos/sin gather via
+    /// `apply_rotary_positions_qk`), so the captured RoPE index advances with the
+    /// in-place-refreshed buffer instead of freezing at the warmup position. The other
+    /// archs (Phi2/Qwen(2)/Starcoder2/...) still take the host path
+    /// `RotaryEmbedding::forward` -> `cos.narrow(0, seqlen_offset, 1)`, a view whose
+    /// storage offset is FROZEN at capture and never advances on replay (the classic
+    /// frozen-position bug -> garbage from ~token 2); they fall back to the
+    /// always-correct eager path. MoE Llama (Mixtral-style) is excluded too — its expert
+    /// routing host-syncs (`.to_vec2()`) cannot be captured (see
+    /// `QLlama::supports_decode_graph`). XLora / Phi3 / Qwen35 (mRoPE) are excluded for
+    /// the same position-invariance reason or signature mismatch. This is the single
+    /// source of truth for decode-graph eligibility, shared by the CUDA and ROCm graph
+    /// paths (both capture the identical device-generic model forward).
     fn model_supports_decode_graph(&self) -> bool {
         // Multi-GPU device mapping freezes RoPE under capture: layers on a non-primary device do
         // `positions.to_device()` -> a fresh per-forward tensor that `copy_rope_positions` never
         // refreshes. Restrict capture to single-device so that frozen class is structurally
         // impossible (multi-GPU decode falls back to the always-correct eager path).
         self.mapper.get_unique_devices().len() <= 1
-            && matches!(self.model, Model::Qwen3(_) | Model::Qwen3MoE(_))
+            && match &self.model {
+                Model::Qwen3(_) | Model::Qwen3MoE(_) => true,
+                Model::Llama(model) => model.supports_decode_graph(),
+                _ => false,
+            }
     }
 
     /// Runs the decode forward for the graph-eligible variants with the supplied
@@ -900,6 +909,9 @@ impl GGUFPipeline {
         paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor, hanzo_ml::Error> {
         match self.model {
+            Model::Llama(ref model) => {
+                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
+            }
             Model::Qwen3(ref model) => {
                 model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
             }
