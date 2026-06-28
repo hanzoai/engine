@@ -10,10 +10,14 @@ use hanzo::{GgufModelBuilder, TextMessageRole, TextMessages};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Tight activation budget for the 86GB load on unified memory: a single
+    // sequence (default 32) shrinks the KV reservation ~32x, leaving the pool for
+    // weights. Pair with IGPU_MEMORY_FRACTION=0.92 on a freed GB10.
     let model = GgufModelBuilder::new(
         "/home/z/work/zen/hf/ds4-flash-gguf",
         vec!["DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2.gguf".to_string()],
     )
+    .with_max_num_seqs(1)
     .with_logging()
     .build()
     .await?;
