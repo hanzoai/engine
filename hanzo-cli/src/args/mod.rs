@@ -17,9 +17,10 @@ pub use server::*;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
-use hanzo_engine::TokenSource;
+use hanzo_engine::{AnimationLoaderType, TokenSource};
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 /// Fast LLM inference engine
 #[derive(Parser)]
@@ -233,9 +234,10 @@ pub struct DefaultModelOptions {
     #[arg(short = 't', long)]
     pub tokenizer: Option<PathBuf>,
 
-    /// Model architecture (auto-detected if not specified)
-    #[arg(short = 'a', long, value_parser = parse_arch)]
-    pub arch: Option<hanzo_engine::NormalLoaderType>,
+    /// Model architecture (auto-detected if not specified). Text archs use the auto loader;
+    /// `musetalk` selects the facial-animation loader.
+    #[arg(short = 'a', long, value_parser = parse_default_arch)]
+    pub arch: Option<DefaultArch>,
 
     /// Model data type
     #[arg(long, default_value = "auto", value_parser = parse_dtype)]
@@ -267,20 +269,52 @@ impl DefaultModelOptions {
         let model_id = self
             .model_id
             .ok_or_else(|| anyhow::anyhow!("--model-id (-m) is required"))?;
-        Ok(ModelType::Auto {
-            model: ModelSourceOptions {
+        match self.arch {
+            Some(DefaultArch::Animation(arch)) => Ok(ModelType::Animation {
                 model_id,
-                tokenizer: self.tokenizer,
-                arch: self.arch,
+                arch,
                 dtype: self.dtype,
-            },
-            format: self.format,
-            adapter: self.adapter,
-            quantization: self.quantization,
-            device: self.device,
-            cache: self.cache,
-            multimodal: self.multimodal,
-        })
+                device: self.device,
+            }),
+            arch => Ok(ModelType::Auto {
+                model: ModelSourceOptions {
+                    model_id,
+                    tokenizer: self.tokenizer,
+                    arch: match arch {
+                        Some(DefaultArch::Normal(n)) => Some(n),
+                        _ => None,
+                    },
+                    dtype: self.dtype,
+                },
+                format: self.format,
+                adapter: self.adapter,
+                quantization: self.quantization,
+                device: self.device,
+                cache: self.cache,
+                multimodal: self.multimodal,
+            }),
+        }
+    }
+}
+
+/// Architecture selector for the default (no-subcommand) path: `--arch` names an
+/// architecture from any category and the category is derived from the name. Text
+/// archs map to the auto loader, `musetalk` to the animation loader.
+#[derive(Clone)]
+pub enum DefaultArch {
+    Normal(hanzo_engine::NormalLoaderType),
+    Animation(AnimationLoaderType),
+}
+
+impl FromStr for DefaultArch {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(arch) = s.parse::<AnimationLoaderType>() {
+            return Ok(Self::Animation(arch));
+        }
+        s.parse::<hanzo_engine::NormalLoaderType>()
+            .map(Self::Normal)
+            .map_err(|e| format!("{e} (or `musetalk` for facial animation)"))
     }
 }
 
@@ -296,7 +330,11 @@ pub fn resolve_model_type(
     }
 }
 
-fn parse_arch(s: &str) -> Result<hanzo_engine::NormalLoaderType, String> {
+fn parse_default_arch(s: &str) -> Result<DefaultArch, String> {
+    s.parse()
+}
+
+fn parse_animation_arch(s: &str) -> Result<AnimationLoaderType, String> {
     s.parse()
 }
 
@@ -389,6 +427,24 @@ pub enum ModelType {
     Speech {
         #[command(flatten)]
         model: ModelSourceOptions,
+
+        #[command(flatten)]
+        device: DeviceOptions,
+    },
+
+    /// Facial-animation model (lip-sync / avatar). Drive it via the /v1/animate endpoint.
+    Animation {
+        /// MuseTalk bundle dir (musetalkV15/, sd-vae-ft-mse/, whisper/tiny.safetensors, s3fd.safetensors) or HF repo.
+        #[arg(short = 'm', long)]
+        model_id: String,
+
+        /// Animation architecture.
+        #[arg(short = 'a', long, default_value = "musetalk", value_parser = parse_animation_arch)]
+        arch: AnimationLoaderType,
+
+        /// Model data type.
+        #[arg(long, default_value = "auto", value_parser = parse_dtype)]
+        dtype: hanzo_engine::ModelDType,
 
         #[command(flatten)]
         device: DeviceOptions,

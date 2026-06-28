@@ -164,6 +164,29 @@ When adding new quantization methods:
 2. Add to quantization loading logic in pipelines
 3. Update documentation in `docs/QUANTIZATION.md`
 
+### Facial Animation (MuseTalk)
+
+`hanzo serve --arch musetalk -m <bundle>` loads a MuseTalk lip-sync/avatar model and
+serves `/v1/animate` (alias `/v1/video/lipsync`): POST `{model, visual, audio, fps?}`,
+audio + visual in, dubbed mp4 out. A still image -> Portrait, a video -> Footage
+(lip-sync); the pipeline picks the animator via `accepts()` and the handler muxes the
+rendered frames + driving audio with ffmpeg.
+
+`-m` is a self-contained MuseTalk bundle (a local dir or HF repo). All six sources
+resolve as fixed safetensors sub-paths of the single `model_id`:
+
+    musetalkV15/musetalk.json
+    musetalkV15/unet.safetensors
+    sd-vae-ft-mse/config.json
+    sd-vae-ft-mse/diffusion_pytorch_model.safetensors
+    whisper/tiny.safetensors
+    s3fd.safetensors
+
+Selection path: CLI `--arch musetalk` -> `ModelType::Animation` -> `ModelSelected::Animation`
+-> `AnimationLoader` (`AnimationLoaderType::MuseTalk`) in `pipeline/animation.rs`. Runs on
+CPU today (`Device::Cpu`); GPU is a separate effort. A `.pth`/`.pt` pickle still loads
+(`load_vb`) but safetensors is canonical.
+
 ### Important Files to Know
 
 - `hanzo-engine/src/engine/mod.rs` - Main engine orchestration
