@@ -405,6 +405,15 @@ impl PrefixCacheManagerV2 {
         let Some(toks) = tokens_from_le_bytes(&hit.rendered_text) else {
             hanzo_ml::bail!("kv disk entry {key}: malformed token bytes");
         };
+        // Integrity: the header records the token count at spill time; a mismatch
+        // means a corrupt or truncated entry, so refuse it rather than trust it.
+        if hit.header.token_count as usize != toks.len() {
+            hanzo_ml::bail!(
+                "kv disk entry {key}: header token_count {} != {} recovered tokens",
+                hit.header.token_count,
+                toks.len()
+            );
+        }
         let element = CacheElement::from_bytes(&hit.payload, device, &spill.limits)?;
         Ok(Some((toks, element)))
     }
@@ -999,7 +1008,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let disk = DiskKvCache::new(tmp.path(), 64).unwrap();
         // n_on_device = 0 => the single prefix overflows and must spill.
-        let mut mgr = PrefixCacheManagerV2::new(0, false, false).with_disk_cache(disk, test_limits());
+        let mut mgr =
+            PrefixCacheManagerV2::new(0, false, false).with_disk_cache(disk, test_limits());
 
         let toks = vec![10u32, 20, 30, 40];
         let original = element_with(vec![Some(make_normal_kv_cache(4)?)]);
@@ -1054,7 +1064,8 @@ mod tests {
         // First manager spills two prefixes to disk on eviction.
         {
             let disk = DiskKvCache::new(tmp.path(), 64).unwrap();
-            let mut mgr = PrefixCacheManagerV2::new(0, false, false).with_disk_cache(disk, test_limits());
+            let mut mgr =
+                PrefixCacheManagerV2::new(0, false, false).with_disk_cache(disk, test_limits());
             mgr.caches.insert(
                 vec![1u32, 2, 3].into(),
                 element_with(vec![Some(make_normal_kv_cache(3)?)]),
@@ -1068,7 +1079,8 @@ mod tests {
 
         // A fresh manager (cold start) restores them from disk and serves matches.
         let disk = DiskKvCache::new(tmp.path(), 64).unwrap();
-        let mut mgr2 = PrefixCacheManagerV2::new(8, false, false).with_disk_cache(disk, test_limits());
+        let mut mgr2 =
+            PrefixCacheManagerV2::new(8, false, false).with_disk_cache(disk, test_limits());
         assert_eq!(mgr2.restore_from_disk(&Device::Cpu)?, 2);
 
         let hit = mgr2.search_for_matching_cache(&[1, 2, 3, 99], None, None, None)?;
@@ -1134,8 +1146,7 @@ mod tests {
             fingerprint: 222,
             ..test_limits()
         };
-        let mut mgr_b =
-            PrefixCacheManagerV2::new(8, false, false).with_disk_cache(disk, limits_b);
+        let mut mgr_b = PrefixCacheManagerV2::new(8, false, false).with_disk_cache(disk, limits_b);
         assert_eq!(
             mgr_b.restore_from_disk(&Device::Cpu)?,
             0,
