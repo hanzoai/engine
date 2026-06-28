@@ -378,17 +378,30 @@ impl AnimationLoader {
         device: &Device,
         silent: bool,
     ) -> Result<hanzo_quant::ShardedVarBuilder> {
-        Ok(from_mmaped_safetensors(
-            vec![path.clone()],
-            Vec::new(),
-            Some(dtype),
-            device,
-            vec![None],
-            silent,
-            None,
-            |_| true,
-            Arc::new(|_| DeviceForLoadTensor::Base),
-        )?)
+        // MuseTalk ships unet + S3FD as PyTorch pickle (.pth); the VAE is safetensors.
+        if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("safetensors"))
+        {
+            Ok(from_mmaped_safetensors(
+                vec![path.clone()],
+                Vec::new(),
+                Some(dtype),
+                device,
+                vec![None],
+                silent,
+                None,
+                |_| true,
+                Arc::new(|_| DeviceForLoadTensor::Base),
+            )?)
+        } else {
+            let pth = hanzo_ml::pickle::PthTensors::new(path, None)?;
+            Ok(hanzo_quant::ShardedSafeTensors::wrap(
+                Box::new(pth),
+                dtype,
+                device.clone(),
+            ))
+        }
     }
 }
 
@@ -461,7 +474,8 @@ impl Loader for AnimationLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        if matches!(mapper, DeviceMapSetting::Map(_)) {
+        // Reject only a real multi-device map; dummy/Auto are no-ops on a single-device animation model.
+        if matches!(&mapper, DeviceMapSetting::Map(m) if m.device_layers().is_some_and(|l| !l.is_empty())) {
             anyhow::bail!("Device mapping is not supported for animation models.");
         }
         if in_situ_quant.is_some() {
