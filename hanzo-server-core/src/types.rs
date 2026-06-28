@@ -6,10 +6,10 @@ use axum::extract::State;
 use hanzo_engine::{Hanzo, Pipeline};
 
 /// This is the underlying instance of hanzo.
-pub type SharedHanzoState = Arc<Hanzo>;
+pub type SharedState = Arc<Hanzo>;
 
-/// This is the `SharedHanzoState` that has been extracted for an axum handler.
-pub type ExtractedHanzoState = State<SharedHanzoState>;
+/// This is the `SharedState` that has been extracted for an axum handler.
+pub type ExtractedState = State<SharedState>;
 
 pub(crate) type LoadedPipeline = Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>;
 

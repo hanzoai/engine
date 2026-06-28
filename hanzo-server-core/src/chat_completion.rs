@@ -37,13 +37,13 @@ use crate::{
         create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
         JsonError, ModelErrorMessage,
     },
-    hanzo_server_router_builder::AgenticDefaults,
+    router::AgenticDefaults,
     openai::{
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
         ResponseFormat,
     },
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
-    types::{ExtractedHanzoState, OnChunkCallback, OnDoneCallback, SharedHanzoState},
+    types::{ExtractedState, OnChunkCallback, OnDoneCallback, SharedState},
     util::{parse_audio_url, parse_image_url, sanitize_error_message, validate_model_name},
     video::parse_video_url,
 };
@@ -420,6 +420,7 @@ impl futures::Stream for ChatCompletionStreamer {
                 Response::CompletionChunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
                 Response::Speech { .. } => unreachable!(),
+                Response::Frames { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
                 Response::Embeddings { .. } => unreachable!(),
             },
@@ -476,7 +477,7 @@ fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
 /// request format used by hanzo.
 pub async fn parse_request(
     oairequest: ChatCompletionRequest,
-    state: SharedHanzoState,
+    state: SharedState,
     tx: Sender<Response>,
     tool_dispatch_url: Option<String>,
     agent_approval_handler: Option<AgentToolApprovalHandler>,
@@ -931,7 +932,7 @@ pub async fn parse_request(
     responses((status = 200, description = "Chat completions"))
 )]
 pub async fn chatcompletions(
-    State(state): ExtractedHanzoState,
+    State(state): ExtractedState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
     Json(mut oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
@@ -1005,7 +1006,7 @@ pub async fn chatcompletions(
 
 /// Handle route / generation errors and logging them.
 pub fn handle_error(
-    state: SharedHanzoState,
+    state: SharedState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> ChatCompletionResponder {
     handle_completion_error(state, e)
@@ -1014,7 +1015,7 @@ pub fn handle_error(
 /// Creates a SSE streamer for chat completions with optional callbacks.
 pub fn create_streamer(
     rx: Receiver<Response>,
-    state: SharedHanzoState,
+    state: SharedState,
     on_chunk: Option<ChatCompletionOnChunkCallback>,
     on_done: Option<ChatCompletionOnDoneCallback>,
 ) -> Sse<KeepAliveStream<ChatCompletionStreamer>> {
@@ -1028,7 +1029,7 @@ pub fn create_streamer(
 /// Process non-streaming chat completion responses.
 pub async fn process_non_streaming_response(
     rx: &mut Receiver<Response>,
-    state: SharedHanzoState,
+    state: SharedState,
 ) -> ChatCompletionResponder {
     let mut tool_call_records = Vec::new();
     let mut pending_args = std::collections::HashMap::new();
@@ -1091,7 +1092,7 @@ pub async fn process_non_streaming_response(
 }
 
 /// Matches and processes different types of model responses into appropriate chat completion responses.
-pub fn match_responses(state: SharedHanzoState, response: Response) -> ChatCompletionResponder {
+pub fn match_responses(state: SharedState, response: Response) -> ChatCompletionResponder {
     match response {
         Response::InternalError(e) => {
             Hanzo::maybe_log_error(state, &*e);
@@ -1113,6 +1114,7 @@ pub fn match_responses(state: SharedHanzoState, response: Response) -> ChatCompl
         Response::CompletionChunk(_) => unreachable!(),
         Response::ImageGeneration(_) => unreachable!(),
         Response::Speech { .. } => unreachable!(),
+        Response::Frames { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
