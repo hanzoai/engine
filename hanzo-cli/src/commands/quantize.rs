@@ -8,7 +8,7 @@ use anyhow::Result;
 use tracing::{info, warn};
 
 use hanzo_engine::{expand_isq_value, initialize_logging, IsqType, ModelSelected};
-use hanzo_server_core::hanzo_for_server_builder::{defaults, HanzoForServerBuilder};
+use hanzo_server_core::server::{defaults, ServerBuilder};
 
 use crate::args::{GlobalOptions, QuantizeModelType};
 
@@ -124,7 +124,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
             convert_to_model_selected(&model_type, effective_output)?;
 
         // Build the Hanzo instance - this triggers model loading and UQFF generation
-        let _hanzo = HanzoForServerBuilder::new()
+        let _hanzo = ServerBuilder::new()
             .with_model(model_selected)
             .with_max_seqs(1)
             .with_no_kv_cache(defaults::NO_KV_CACHE)

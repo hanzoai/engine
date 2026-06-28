@@ -20,7 +20,7 @@ use crate::{
         ErrorToResponse, JsonError,
     },
     openai::ImageGenerationRequest,
-    types::{ExtractedHanzoState, SharedHanzoState},
+    types::{ExtractedState, SharedState},
     util::{sanitize_error_message, validate_model_name},
 };
 
@@ -113,7 +113,7 @@ pub fn parse_request(
     responses((status = 200, description = "Image generation"))
 )]
 pub async fn image_generation(
-    State(state): ExtractedHanzoState,
+    State(state): ExtractedState,
     Json(oairequest): Json<ImageGenerationRequest>,
 ) -> ImageGenerationResponder {
     let (tx, mut rx) = create_response_channel(None);
@@ -132,7 +132,7 @@ pub async fn image_generation(
 
 /// Helper function to handle image generation errors and logging them.
 pub fn handle_error(
-    state: SharedHanzoState,
+    state: SharedState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> ImageGenerationResponder {
     let sanitized_msg = sanitize_error_message(&*e);
@@ -144,13 +144,13 @@ pub fn handle_error(
 /// Process non-streaming image generation responses.
 pub async fn process_non_streaming_response(
     rx: &mut Receiver<Response>,
-    state: SharedHanzoState,
+    state: SharedState,
 ) -> ImageGenerationResponder {
     base_process_non_streaming_response(rx, state, match_responses, handle_error).await
 }
 
 /// Matches and processes different types of model responses into appropriate image generation responses.
-pub fn match_responses(state: SharedHanzoState, response: Response) -> ImageGenerationResponder {
+pub fn match_responses(state: SharedState, response: Response) -> ImageGenerationResponder {
     match response {
         Response::InternalError(e) => {
             Hanzo::maybe_log_error(state, &*e);
@@ -172,6 +172,7 @@ pub fn match_responses(state: SharedHanzoState, response: Response) -> ImageGene
         Response::Done(_) => unreachable!(),
         Response::ModelError(_, _) => unreachable!(),
         Response::Speech { .. } => unreachable!(),
+        Response::Frames { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
