@@ -228,10 +228,12 @@ impl V4Moe {
         let scores = softplus(&logits)?.sqrt()?;
         let (indices, weights) = match (&self.tid2eid, &self.bias) {
             (Some(tid2eid), _) => {
-                // Hash routing: indices = tid2eid[:, input_ids]^T -> [t, used].
+                // Hash routing: each token id maps to a fixed set of `used` experts.
+                // GGUF stores the table file-shape [used=6, vocab]; the reader reverses
+                // dims, so in candle it's [vocab, used]. Select the token's row (dim 0)
+                // -> [t, used] directly (no transpose).
                 let ids = tid2eid
-                    .index_select(&input_ids.to_dtype(DType::U32)?, 1)? // [used, t]
-                    .t()?
+                    .index_select(&input_ids.to_dtype(DType::U32)?, 0)? // [t, used]
                     .contiguous()?
                     .to_dtype(DType::U32)?;
                 let w = scores.gather(&ids, 1)?;
@@ -276,8 +278,11 @@ impl V4Moe {
 
     fn forward(&self, xs: &Tensor, input_ids: &Tensor) -> Result<Tensor> {
         let (b, s, h) = xs.dims3()?;
-        let xs2 = xs.reshape((b * s, h))?;
         let orig_dtype = xs.dtype();
+        // MoE compute runs in F32 (the quantized expert kernels + gate matmul expect
+        // it, and routing is precision-sensitive); cast the carrier in here and back
+        // to the model dtype at the end — same precision-op discipline as attention.
+        let xs2 = xs.to_dtype(DType::F32)?.reshape((b * s, h))?;
         let ids = input_ids.reshape((b * s,))?;
 
         let (indices, weights) = self.route(&xs2, &ids)?;
@@ -325,8 +330,15 @@ impl V4Attn {
     fn rope(&self, x: &Tensor, positions: &Tensor, inverse: bool) -> Result<Tensor> {
         let hd = self.head_dim;
         let n_nope = hd - self.rope_dim;
+        let orig = x.dtype();
         let pass = x.narrow(D::Minus1, 0, n_nope)?.contiguous()?;
-        let rot = x.narrow(D::Minus1, n_nope, self.rope_dim)?.contiguous()?;
+        // RoPE is precision-sensitive and its cos/sin caches are F32: upcast the
+        // rotated slice to F32 for the kernel, then return the caller's dtype
+        // (rope is dtype-transparent — the precision op handles its own dtype).
+        let rot = x
+            .narrow(D::Minus1, n_nope, self.rope_dim)?
+            .contiguous()?
+            .to_dtype(DType::F32)?;
         let rot = if inverse {
             self.rotary.forward_inverse_positions(&rot, positions)?
         } else {
@@ -334,6 +346,7 @@ impl V4Attn {
             let (rot, _) = self.rotary.forward_positions(&rot, &rot, positions)?;
             rot
         };
+        let rot = rot.to_dtype(orig)?;
         Tensor::cat(&[&pass, &rot], D::Minus1)?.contiguous()
     }
 
@@ -455,6 +468,26 @@ fn rms_from(t: Tensor, eps: f64) -> Result<RmsNorm> {
     RmsNorm::from_w(t, eps)
 }
 
+/// Log the RMS of an activation at TRACE level — the per-layer numeric probe used
+/// to localize forward bugs (a healthy residual grows smoothly; a discontinuity or
+/// NaN pinpoints the broken layer). `enabled!` gates the (expensive, GPU-syncing)
+/// norm computation so this is a single atomic load when tracing is off — and with
+/// `tracing/release_max_level_info` it compiles to nothing in prod. Surface it with
+/// `RUST_LOG=hanzo_engine::models::quantized_deepseek4=trace`. No more add/remove.
+#[inline]
+fn trace_rms(t: &Tensor, what: std::fmt::Arguments) {
+    if tracing::enabled!(tracing::Level::TRACE) {
+        let rms = t
+            .to_dtype(DType::F32)
+            .and_then(|t| t.sqr())
+            .and_then(|t| t.mean_all())
+            .and_then(|t| t.to_scalar::<f32>())
+            .map(|m| m.sqrt())
+            .unwrap_or(f32::NAN);
+        tracing::trace!(rms, "{what}");
+    }
+}
+
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         mut ct: Content<'_, R>,
@@ -465,20 +498,18 @@ impl ModelConfig::FromGGUF for ModelWeights {
     ) -> Result<Self> {
         verify_arch(ct.get_metadata())?;
 
-        // ── V4 DTYPE POLICY (one and only one place dtype is decided) ──────────────
-        // Every activation in this model flows in ONE compute dtype, `dtype`, threaded
-        // from here to the KV cache, the causal mask, and each V4Attn (`attn_dtype`):
-        // those are the only consumers and they all read this single value. Quantized
-        // weights (IQ2/Q2K/Q8) dequantize to it at the QMatMul boundary; precision-
-        // sensitive ops (RMS-norm, RoPE, softmax-with-sinks) upcast to F32 internally
-        // and return it. We pin F32 — it matches ds4.c's all-F32 activation path
-        // (numeric parity with antirez/ds4 + llama.cpp) and removes the dequant-output
-        // (F32) vs auto-selected-cache (BF16) disagreement that otherwise scatters
-        // ad-hoc casts across the forward. Set this to BF16 and the whole model still
-        // agrees — nothing else picks a dtype. (Weights stay quantized; only the small
-        // activation/KV tensors are F32.)
-        let _ = dtype;
-        let dtype = DType::F32;
+        // ── V4 DTYPE POLICY (one compute dtype, threaded — not pinned) ─────────────
+        // The model HONORS the caller's `dtype` (the pipeline auto-selects it, and
+        // allocates the KV cache + causal mask at it). We thread that one value to
+        // every consumer — KV cache, mask, each V4Attn (`attn_dtype`), the embeds
+        // entry, wo_a — so the whole forward agrees with the pipeline-owned cache.
+        // The cascade of dtype bugs came from *disagreement* (model F32 vs cache
+        // BF16), NOT from any particular dtype: consistency is the fix, threading is
+        // how. Quant weights dequantize to it at the QMatMul boundary; precision-
+        // sensitive ops (RMS-norm/RoPE/softmax-sinks) upcast to F32 internally and
+        // return it. For ds4 NUMERIC parity, the *benchmark* requests F32 at the
+        // pipeline (so cache + model are both F32) — that's a caller choice, not a
+        // model hardcode.
         let props = PropsGGUF::try_from(ContentMetadata {
             path_prefix: "deepseek4",
             metadata: ct.get_metadata(),
@@ -557,13 +588,17 @@ impl ModelConfig::FromGGUF for ModelWeights {
             // Attention. wo_a dequantized to the single compute `dtype` (the grouped-o
             // einsum operand) — uniform with the rest of the model; no special-case
             // BF16 that could disagree at a dtype boundary.
+            // GGUF stores output_a as file dims [group_in, groups*rank]; the reader
+            // reverses to candle [groups*rank, group_in]. ds4.c reads row gr=g*rank+r
+            // as `out[gr] = Σ_d A[gr][d]·heads[g][d]`, so the rows split groups-major:
+            // reshape DIRECTLY to [groups, rank, group_in] (row gr -> [g=gr/rank, r=gr%rank]).
+            // (A prior reshape((group_in,groups,rank)).permute scrambled the buffer —
+            // it reinterpreted contiguous memory wrong, corrupting the o-projection.)
             let wo_a = ct
                 .tensor(&format!("{p}.attn_output_a.weight"), dev)?
                 .dequantize(dev)?
                 .to_dtype(dtype)?
-                // GGUF stores [group_in, groups*rank]; reshape to [groups, rank, group_in].
-                .reshape((group_in, props.o_groups, props.o_lora_rank))?
-                .permute((1, 2, 0))?
+                .reshape((props.o_groups, props.o_lora_rank, group_in))?
                 .contiguous()?;
             let attn = V4Attn {
                 q_a: gguf_linear(ct.tensor(&format!("{p}.attn_q_a.weight"), dev)?)?,
@@ -714,8 +749,10 @@ impl ModelWeights {
                 &positions,
                 &mut cache[i],
             )?;
+            trace_rms(&hc, format_args!("v4 carrier after layer {i}"));
         }
         let x = self.output_hc.reduce_output(&hc)?;
+        trace_rms(&x, format_args!("v4 reduce_output"));
         let x = self.norm.forward(&x)?;
         let x = extract_logits(&x, context_lens)?;
         self.output.forward(&x.contiguous()?)
