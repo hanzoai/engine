@@ -1,3 +1,4 @@
+pub mod animation;
 pub(crate) mod clip;
 pub(crate) mod flux;
 pub mod musetalk;
