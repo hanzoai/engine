@@ -48,7 +48,9 @@ See https://hanzoai.github.io/engine/guides/models/video-setup/ for details.";
 ///
 /// GIF files are decoded with the `image` crate. All other formats require
 /// FFmpeg.
-pub async fn parse_video_url(url_unparsed: &str, num_frames: Option<usize>) -> Result<VideoInput> {
+/// Fetch raw bytes from an http(s) URL, a `file://` URL, an absolute file path,
+/// or a `data:` URL. Shared by the video/image/audio decoders.
+pub async fn fetch_bytes(url_unparsed: &str) -> Result<Vec<u8>> {
     let url = if let Ok(url) = url::Url::parse(url_unparsed) {
         url
     } else if File::open(url_unparsed).await.is_ok() {
@@ -56,34 +58,38 @@ pub async fn parse_video_url(url_unparsed: &str, num_frames: Option<usize>) -> R
             .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url_unparsed))?
     } else {
         bail!(
-            "Invalid video source '{}': not a valid URL (http/https/data) and file not found. \
+            "Invalid source '{}': not a valid URL (http/https/data) and file not found. \
              Use a full URL, a data URL, or an absolute file path.",
             url_unparsed
         )
     };
 
-    let bytes = if url.scheme() == "http" || url.scheme() == "https" {
+    if url.scheme() == "http" || url.scheme() == "https" {
         let resp = reqwest::get(url.clone())
             .await
-            .context(format!("Failed to fetch video: {url}"))?;
-        resp.bytes().await?.to_vec()
+            .context(format!("Failed to fetch: {url}"))?;
+        Ok(resp.bytes().await?.to_vec())
     } else if url.scheme() == "file" {
         let path = url
             .to_file_path()
             .map_err(|_| anyhow::anyhow!("Invalid file path: {}", url))?;
         let mut f = File::open(&path)
             .await
-            .context(format!("Could not open video file: {}", path.display()))?;
+            .context(format!("Could not open file: {}", path.display()))?;
         let metadata = fs::metadata(&path).await?;
         let mut buffer = vec![0; metadata.len() as usize];
         f.read_exact(&mut buffer).await?;
-        buffer
+        Ok(buffer)
     } else if url.scheme() == "data" {
         let data_url = data_url::DataUrl::process(url.as_str())?;
-        data_url.decode_to_vec()?.0
+        Ok(data_url.decode_to_vec()?.0)
     } else {
-        bail!("Unsupported URL scheme for video: {}", url.scheme());
-    };
+        bail!("Unsupported URL scheme: {}", url.scheme());
+    }
+}
+
+pub async fn parse_video_url(url_unparsed: &str, num_frames: Option<usize>) -> Result<VideoInput> {
+    let bytes = fetch_bytes(url_unparsed).await?;
 
     // Detect format
     let lower = url_unparsed.to_lowercase();
@@ -365,9 +371,152 @@ fn parse_fps_fraction(s: &str) -> Option<f64> {
     }
 }
 
+/// Mux rendered frames + mono PCM into an H.264/AAC MP4, returning the bytes.
+///
+/// The inverse of `decode_video_ffmpeg`: write frames as a PNG sequence and the
+/// PCM as raw `f32le`, then let `ffmpeg` encode. This lives in the handler layer,
+/// never a pipeline (a pipeline emits frames; the handler containers them).
+pub async fn mux(
+    frames: &[DynamicImage],
+    fps: f64,
+    pcm: &[f32],
+    sample_rate: u32,
+) -> Result<Vec<u8>> {
+    if frames.is_empty() {
+        bail!("mux: no frames to encode");
+    }
+    let ffmpeg_ok = tokio::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .is_ok();
+    if !ffmpeg_ok {
+        bail!("Cannot mux video: FFmpeg not found.\n{}", FFMPEG_INSTALL_HELP);
+    }
+
+    let tmp_dir = std::env::temp_dir().join("hanzo_mux");
+    fs::create_dir_all(&tmp_dir).await?;
+    let job = uuid::Uuid::new_v4();
+    let frame_dir = tmp_dir.join(format!("{job}_frames"));
+    fs::create_dir_all(&frame_dir).await?;
+
+    for (i, frame) in frames.iter().enumerate() {
+        let path = frame_dir.join(format!("frame_{i:010}.png"));
+        frame
+            .to_rgb8()
+            .save_with_format(&path, image::ImageFormat::Png)
+            .with_context(|| format!("mux: writing frame {i}"))?;
+    }
+
+    let has_audio = !pcm.is_empty();
+    let audio_path = tmp_dir.join(format!("{job}.f32le"));
+    if has_audio {
+        let mut raw = Vec::with_capacity(pcm.len() * 4);
+        for &s in pcm {
+            raw.extend_from_slice(&s.to_le_bytes());
+        }
+        fs::write(&audio_path, &raw).await?;
+    }
+
+    let out_path = tmp_dir.join(format!("{job}.mp4"));
+    let frame_pattern = frame_dir.join("frame_%010d.png");
+
+    let mut command = tokio::process::Command::new("ffmpeg");
+    command
+        .arg("-y")
+        .arg("-framerate")
+        .arg(format!("{fps}"))
+        .arg("-start_number")
+        .arg("0")
+        .arg("-i")
+        .arg(&frame_pattern);
+    if has_audio {
+        command
+            .arg("-f")
+            .arg("f32le")
+            .arg("-ar")
+            .arg(sample_rate.to_string())
+            .arg("-ac")
+            .arg("1")
+            .arg("-i")
+            .arg(&audio_path)
+            .arg("-c:a")
+            .arg("aac")
+            .arg("-shortest");
+    }
+    command
+        .arg("-c:v")
+        .arg("libx264")
+        .arg("-pix_fmt")
+        .arg("yuv420p")
+        .arg(&out_path);
+
+    let status = command
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .context("Failed to run ffmpeg (mux)")?;
+
+    let frame_dir_c = frame_dir.clone();
+    let audio_path_c = audio_path.clone();
+    let out_path_c = out_path.clone();
+    let cleanup = || async {
+        let _ = fs::remove_dir_all(&frame_dir_c).await;
+        let _ = fs::remove_file(&audio_path_c).await;
+        let _ = fs::remove_file(&out_path_c).await;
+    };
+
+    if !status.success() {
+        cleanup().await;
+        bail!("FFmpeg failed to mux video (exit code: {:?})", status.code());
+    }
+
+    let bytes = fs::read(&out_path).await.context("mux: reading output mp4")?;
+    cleanup().await;
+    if bytes.is_empty() {
+        bail!("mux: ffmpeg produced an empty mp4");
+    }
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ffmpeg_present() -> bool {
+        std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[tokio::test]
+    async fn mux_frames_and_pcm_to_mp4() {
+        if !ffmpeg_present() {
+            eprintln!("[mux] ffmpeg absent; skipping");
+            return;
+        }
+        let frames: Vec<DynamicImage> = (0..6)
+            .map(|i| {
+                let v = (i * 40) as u8;
+                DynamicImage::ImageRgb8(image::RgbImage::from_pixel(64, 64, image::Rgb([v, 255 - v, v])))
+            })
+            .collect();
+        let sr = 16_000u32;
+        let pcm: Vec<f32> = (0..(sr / 5))
+            .map(|i| (i as f32 * 440.0 * 2.0 * std::f32::consts::PI / sr as f32).sin() * 0.3)
+            .collect();
+        let mp4 = mux(&frames, 25.0, &pcm, sr).await.expect("mux");
+        assert!(mp4.len() > 256, "mp4 too small ({} bytes)", mp4.len());
+        // ISO-BMFF: bytes 4..8 are the 'ftyp' box type.
+        assert_eq!(&mp4[4..8], b"ftyp", "missing ftyp box -> not a valid mp4");
+    }
 
     #[test]
     fn test_parse_fps_fraction() {
