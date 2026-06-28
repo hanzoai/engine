@@ -274,6 +274,42 @@ impl HyperConnections {
         })
     }
 
+    /// Build from already-loaded parts (the GGUF path: `proj` is a `GgufMatMul`,
+    /// `scale`/`base` come from F32 GGUF tensors). `scale` is the raw `[n_scale]`
+    /// per-region vector (1 for reduce-only, else 3 = pre/post/comb) — broadcast
+    /// here exactly like [`Self::load`].
+    pub(crate) fn from_parts(
+        proj: Arc<dyn QuantMethod>,
+        scale: Vec<f32>,
+        base: Tensor,
+        n_hc: usize,
+        iters: usize,
+        eps: f64,
+        reduce_only: bool,
+    ) -> Result<Self> {
+        let mix_dim = if reduce_only {
+            n_hc
+        } else {
+            2 * n_hc + n_hc * n_hc
+        };
+        let mut sv = Vec::with_capacity(mix_dim);
+        sv.extend(std::iter::repeat(scale[0]).take(n_hc));
+        if !reduce_only {
+            sv.extend(std::iter::repeat(scale[1]).take(n_hc));
+            sv.extend(std::iter::repeat(scale[2]).take(n_hc * n_hc));
+        }
+        let scale_vec = Tensor::from_vec(sv, mix_dim, base.device())?;
+        Ok(Self {
+            proj,
+            scale_vec,
+            base,
+            n_hc,
+            iters,
+            eps,
+            reduce_only,
+        })
+    }
+
     /// RMS-norm (no learned weight) of the flattened streams: `[B, L, n_hc·E]`.
     fn rms_flat(&self, hc: &Tensor) -> Result<Tensor> {
         let (b, l, nh, e) = hc.dims4()?;
@@ -299,7 +335,7 @@ impl HyperConnections {
     /// Sublayer **pre** step: reduce `[B,L,n_hc,E]` to the sublayer input
     /// `[B,L,E]`, returning the `post` gates `[B,L,n_hc]` and the Sinkhorn
     /// combine matrix `[B,L,n_hc,n_hc]` (`[…, dst, src]`) for the post step.
-    fn pre(&self, hc: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
+    pub(crate) fn pre(&self, hc: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
         debug_assert!(!self.reduce_only);
         let (b, l, nh, _e) = hc.dims4()?;
         let z = self.projected(hc)?;
@@ -318,7 +354,7 @@ impl HyperConnections {
     }
 
     /// Output reduction: `[B,L,n_hc,E] -> [B,L,E]` via pre-gates only.
-    fn reduce_output(&self, hc: &Tensor) -> Result<Tensor> {
+    pub(crate) fn reduce_output(&self, hc: &Tensor) -> Result<Tensor> {
         debug_assert!(self.reduce_only);
         let pre = (hanzo_nn::ops::sigmoid(&self.projected(hc)?)? + self.eps)?;
         self.reduce(hc, &pre)
@@ -330,7 +366,7 @@ impl HyperConnections {
     /// `new_hc[dst] = post[dst] · block_out + Σ_src comb[dst+src·n_hc] · hc[src]`.
     /// With `comb` stored `[…, dst, src]`, the `comb[dst+src·n_hc]` index is the
     /// transpose, so `C = combᵀ` and `mixed = C @ hc`.
-    fn post(
+    pub(crate) fn post(
         &self,
         hc: &Tensor,
         block_out: &Tensor,
@@ -400,7 +436,7 @@ struct V4Attention {
 /// Unweighted per-head RMS norm over the last (`head_dim`) axis of `[B,nh,L,hd]`
 /// — ds4.c `head_rms_norm_inplace` (ds4.c:4516), applied to the query after
 /// `q_b` and **before** RoPE (ds4.c:6756). No learned gain (γ=1).
-fn per_head_rms_norm(x: &Tensor, eps: f64) -> Result<Tensor> {
+pub(crate) fn per_head_rms_norm(x: &Tensor, eps: f64) -> Result<Tensor> {
     let scale = (x.sqr()?.mean_keepdim(D::Minus1)? + eps)?.recip()?.sqrt()?;
     x.broadcast_mul(&scale)
 }
@@ -626,7 +662,7 @@ impl V4Attention {
 // =============================================================================
 
 /// `softplus(x) = log(1 + e^x)` (the `granite.rs` formula).
-fn softplus(x: &Tensor) -> Result<Tensor> {
+pub(crate) fn softplus(x: &Tensor) -> Result<Tensor> {
     (Tensor::ones_like(x)? + x.exp()?)?.log()
 }
 
