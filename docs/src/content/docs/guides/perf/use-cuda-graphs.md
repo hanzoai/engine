@@ -12,7 +12,7 @@ CUDA graphs capture a fixed decode step once and replay it with new token and me
 CUDA graphs are enabled by default for supported CUDA decode paths. To disable them for comparison or debugging:
 
 ```bash
-HANZO_CUDA_GRAPHS=0 mistralrs serve --paged-attn on -m <model>
+HANZO_CUDA_GRAPHS=0 hanzo serve --paged-attn on -m <model>
 ```
 
 They require a CUDA build and a CUDA device. They currently apply to decode, not prompt prefill.
@@ -27,11 +27,11 @@ Graph replay is attempted only when all of these are true:
 - The request is not using a speculative proposer path.
 - The graph key matches the input shape, dtype, cache metadata shapes, and context bucket.
 
-If any condition is not met, mistral.rs runs the normal CUDA path.
+If any condition is not met, Hanzo Engine runs the normal CUDA path.
 
 ## Capture and replay
 
-The first time a decode shape is seen, mistral.rs runs a normal warmup forward, captures a graph for that shape, uploads it, and caches it. Later matching decode steps copy the current input ids and PagedAttention metadata into graph-owned buffers and replay the graph.
+The first time a decode shape is seen, Hanzo Engine runs a normal warmup forward, captures a graph for that shape, uploads it, and caches it. Later matching decode steps copy the current input ids and PagedAttention metadata into graph-owned buffers and replay the graph.
 
 The decode graph cache holds a small number of recent graph entries. New batch sizes, tensor shapes, or metadata layouts can trigger another capture.
 
@@ -44,7 +44,7 @@ CUDA graphs are most useful with PagedAttention because the paged metadata gives
 On CUDA, PagedAttention uses FlashInfer-backed paged kernels for supported decode paths by default. CUDA graphs can replay those kernels as part of the decode graph. To compare against the non-FlashInfer paged path:
 
 ```bash
-HANZO_FLASHINFER_DECODE=0 mistralrs serve --paged-attn on -m <model>
+HANZO_FLASHINFER_DECODE=0 hanzo serve --paged-attn on -m <model>
 ```
 
 ## When it helps
