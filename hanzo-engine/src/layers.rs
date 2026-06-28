@@ -1927,6 +1927,16 @@ impl DeepSeekV2RotaryEmbedding {
     ) -> Result<(Tensor, Tensor)> {
         apply_rotary_positions_qk(q, k, &self.cos, &self.sin, positions, false)
     }
+
+    /// Inverse rotation (un-rotate): rotate by `-θ`, i.e. negate `sin` while
+    /// keeping `cos`. Used by DeepSeek-V4's absorbed MLA to remove the positional
+    /// component the latent K==V carried, from the attention output before the
+    /// grouped o-projection (`apply_rotary_emb(o, …, inverse=True)`).
+    pub fn forward_inverse_positions(&self, x: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        let neg_sin = self.sin.neg()?;
+        let (x, _) = apply_rotary_positions_qk(x, x, &self.cos, &neg_sin, positions, false)?;
+        Ok(x)
+    }
 }
 
 #[derive(Debug, Clone)]
