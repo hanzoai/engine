@@ -1,3 +1,4 @@
+mod animation_loaders;
 pub(crate) mod auto_device_map;
 mod diffusion_loaders;
 mod embedding_loaders;
@@ -41,6 +42,11 @@ pub use embedding_loaders::{
     AutoEmbeddingLoader, EmbeddingGemmaLoader, EmbeddingLoaderType, EmbeddingModel,
     EmbeddingModelLoader, EmbeddingModule, EmbeddingModulePaths, EmbeddingModuleType,
     Qwen3EmbeddingLoader,
+};
+
+pub use animation_loaders::{
+    animation_loader, AnimationComponents, AnimationLoaderType, AnimationModelLoader,
+    MuseTalkAnimationLoader,
 };
 
 pub use diffusion_loaders::{
