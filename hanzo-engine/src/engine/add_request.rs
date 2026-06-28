@@ -1,4 +1,5 @@
 use crate::{
+    diffusion_models::animation::AnimationGenerationParams,
     pipeline::{KvCache, NormalCache},
     prefix_cacher::MatchingCache,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
@@ -7,6 +8,7 @@ use crate::{
     ModelCategory, RequestMessage, Response,
 };
 use either::Either;
+use hanzo_audio::AudioInput;
 use hanzo_ml::Tensor;
 use std::{
     ops::Deref,
@@ -98,6 +100,7 @@ impl Engine {
             | RequestMessage::MultimodalChat { .. }
             | RequestMessage::ImageGeneration { .. }
             | RequestMessage::SpeechGeneration { .. }
+            | RequestMessage::Animation { .. }
             | RequestMessage::Embedding { .. }
             | RequestMessage::EmbeddingTokens { .. } => None,
         };
@@ -132,6 +135,7 @@ impl Engine {
             ) => (),
             (ModelCategory::Diffusion, RequestMessage::ImageGeneration { .. }) => (),
             (ModelCategory::Speech, RequestMessage::SpeechGeneration { .. }) => (),
+            (ModelCategory::Animation, RequestMessage::Animation { .. }) => (),
             (
                 ModelCategory::Embedding,
                 RequestMessage::Embedding { .. } | RequestMessage::EmbeddingTokens { .. },
@@ -150,11 +154,21 @@ impl Engine {
 
         let images = match request.messages {
             RequestMessage::MultimodalChat { ref images, .. } => Some(images.clone()),
+            RequestMessage::Animation { ref frames, .. } => Some(frames.clone()),
             _ => None,
         };
 
         let audios = match request.messages {
             RequestMessage::MultimodalChat { ref audios, .. } => Some(audios.clone()),
+            RequestMessage::Animation {
+                ref pcm,
+                sample_rate,
+                ..
+            } => Some(vec![AudioInput {
+                samples: (**pcm).clone(),
+                sample_rate: sample_rate as u32,
+                channels: 1,
+            }]),
             _ => None,
         };
         let videos = match request.messages {
@@ -178,6 +192,7 @@ impl Engine {
         let seq_step_type = match &request.messages {
             RequestMessage::ImageGeneration { .. }
             | RequestMessage::SpeechGeneration { .. }
+            | RequestMessage::Animation { .. }
             | RequestMessage::Embedding { .. }
             | RequestMessage::EmbeddingTokens { .. } => SeqStepType::OneShot,
             _ => SeqStepType::PromptAndDecode,
@@ -187,6 +202,14 @@ impl Engine {
             RequestMessage::ImageGeneration {
                 generation_params, ..
             } => Some(generation_params.clone()),
+            _ => None,
+        };
+
+        let animation_params = match &request.messages {
+            RequestMessage::Animation { kind, fps, .. } => Some(AnimationGenerationParams {
+                fps: *fps,
+                kind: *kind,
+            }),
             _ => None,
         };
 
@@ -247,6 +270,7 @@ impl Engine {
             }
             RequestMessage::ImageGeneration { prompt, .. }
             | RequestMessage::SpeechGeneration { prompt } => (vec![u32::MAX], prompt),
+            RequestMessage::Animation { .. } => (vec![u32::MAX], String::new()),
             RequestMessage::CompletionTokens(it)
             | RequestMessage::EmbeddingTokens { prompt: it } => {
                 let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
@@ -617,6 +641,10 @@ impl Engine {
                 request.return_raw_logits,
                 eos_toks,
             );
+
+            if let Some(params) = animation_params {
+                seq.set_animation_params(params);
+            }
 
             // Only "track" a new sequence if it is a traditional one
             if matches!(seq_step_type, SeqStepType::PromptAndDecode) {
