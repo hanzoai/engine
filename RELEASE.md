@@ -29,8 +29,8 @@ Release order is **ml -> engine -> node** (ml is the leaf, node depends on engin
 - **Tags must be monotonic and must not regress below an already-cut release.** `v1.0.0` and `v1.0.1`
   are already ancestors of `main`, so the next tag must be **>= v1.0.2**. The current workspace
   version is `1.0.2`; tag it `v1.0.2`.
-- The Docker-build workflows (`build_cpu.yaml`, `build_cuda_all.yaml`) trigger on tags matching
-  `**[0-9]+.[0-9]+.[0-9]+*` as well as on GitHub `release: published`.
+- The Docker-build workflows (`build_cpu.yaml`, `build_cuda.yaml`, `build_rocm.yaml`) trigger on tags
+  matching `**[0-9]+.[0-9]+.[0-9]+*` as well as on GitHub `release: published`.
 
 To cut a release:
 
@@ -39,7 +39,7 @@ To cut a release:
 2. `cargo check` (with the `ml/` sibling present) so `Cargo.lock` is refreshed; commit the lockfile.
 3. Merge to `main`. Confirm CI (`ci.yml`) is green on `main` (see below).
 4. `git tag vX.Y.Z && git push origin vX.Y.Z`. This drives `release.yml` (binaries + GitHub release +
-   Docker) and the `build_cpu.yaml` / `build_cuda_all.yaml` image builds.
+   Docker) and the `build_cpu.yaml` / `build_cuda.yaml` / `build_rocm.yaml` image builds.
 5. For the Homebrew cask, run `brew_release.yml` (`workflow_dispatch`) with the new tag.
 
 ## CI gate (`ci.yml`)
@@ -84,8 +84,10 @@ After the matrix:
 ### Other build/publish workflows
 
 - **`build_cpu.yaml`** - CPU Docker image (`linux/amd64`) on release/tag.
-- **`build_cuda_all.yaml`** - CUDA Docker images for compute capabilities `80, 86, 89, 90` on
-  release/tag (tagged `cuda-<cc>-<version>`).
+- **`build_cuda.yaml`** - CUDA Docker images for compute capabilities `80, 86, 89, 90, 120, 121`
+  (Blackwell `sm_120`/`sm_121` included) on release/tag (tagged `cuda-<cc>-<version>`).
+- **`build_rocm.yaml`** - ROCm Docker images for AMD `gfx942`/`gfx90a` on release/tag (tagged
+  `rocm-<gfx>-<version>`); `gfx1151` builds natively or via a ROCm 7.x base override.
 - **`brew_release.yml`** - `workflow_dispatch` only; builds `-p hanzo-cli --features metal` on
   `macos-15` and updates the Homebrew cask for the given tag.
 - **`ci_cuda.yaml`** - CUDA build/test on a self-hosted `[self-hosted, Linux, ARM64, gpu, cuda]`

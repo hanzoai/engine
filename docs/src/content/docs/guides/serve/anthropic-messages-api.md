@@ -1,21 +1,21 @@
 ---
 title: Anthropic Messages API
-description: Use Anthropic-compatible clients with the mistralrs HTTP server.
+description: Use Anthropic-compatible clients with the Hanzo Engine HTTP server.
 sidebar:
   order: 6
 ---
 
-mistral.rs exposes Anthropic-compatible Messages endpoints at `POST /v1/messages`
+Hanzo Engine exposes Anthropic-compatible Messages endpoints at `POST /v1/messages`
 and `POST /v1/messages/count_tokens`. They run through the same local model,
 scheduler, chat templates, multimodal handling, tool calling, and agentic runtime
 as `/v1/chat/completions`.
 
-For Claude Code configuration, see [Use Codex and Claude Code](/mistral.rs/guides/serve/coding-agents/).
+For Claude Code configuration, see [Use Codex and Claude Code](/hanzo/guides/serve/coding-agents/).
 
 ## Start the server
 
 ```bash
-mistralrs serve -m Qwen/Qwen3-4B
+hanzo serve -m Qwen/Qwen3-4B
 ```
 
 Use `model: "default"` for a single-model server. In multi-model serving, use the
@@ -121,14 +121,14 @@ Request fields:
 | `temperature`, `top_p`, `top_k`, `min_p` | Supported. |
 | `stop_sequences` | Supported. |
 | `stream` | Supported. |
-| `tools` | Client tools are converted to OpenAI-compatible function tools. Anthropic server tools for `web_search_*` and `code_execution_*` map to mistral.rs agentic features. |
+| `tools` | Client tools are converted to OpenAI-compatible function tools. Anthropic server tools for `web_search_*` and `code_execution_*` map to Hanzo Engine agentic features. |
 | `tool_choice` | `auto`, `none`, and specific client `tool` choices are supported. `any` is accepted as `auto`. Anthropic server-tool choices are accepted as `auto`. |
-| `thinking` | `{"type":"enabled"}` maps to mistral.rs thinking mode when the loaded chat template supports it. |
-| `enable_thinking`, `reasoning_effort` | Supported as mistral.rs extensions. |
-| `logit_bias`, `logprobs`, `top_logprobs` | Supported as mistral.rs extensions. |
-| `presence_penalty`, `frequency_penalty`, `repetition_penalty` | Supported as mistral.rs extensions. |
-| `response_format`, `grammar` | Supported as mistral.rs extensions. Do not set both in one request. |
-| `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers` | Supported as mistral.rs extensions. |
+| `thinking` | `{"type":"enabled"}` maps to Hanzo Engine thinking mode when the loaded chat template supports it. |
+| `enable_thinking`, `reasoning_effort` | Supported as Hanzo Engine extensions. |
+| `logit_bias`, `logprobs`, `top_logprobs` | Supported as Hanzo Engine extensions. |
+| `presence_penalty`, `frequency_penalty`, `repetition_penalty` | Supported as Hanzo Engine extensions. |
+| `response_format`, `grammar` | Supported as Hanzo Engine extensions. Do not set both in one request. |
+| `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers` | Supported as Hanzo Engine extensions. |
 | `metadata` | Accepted for client compatibility. |
 
 Content blocks:
@@ -141,7 +141,7 @@ Content blocks:
 | `tool_result` | Supported on user messages. Text results are forwarded as tool messages. |
 | `thinking`, `redacted_thinking` | Accepted in request history. Returned when the model exposes separate reasoning content. |
 
-mistral.rs agentic extensions accepted on this endpoint: `session_id`,
+Hanzo Engine agentic extensions accepted on this endpoint: `session_id`,
 `web_search_options`, `enable_code_execution`, `agent_permission`,
 `code_execution_permission`, `files`, `max_tool_rounds`, and `truncate_sequence`.
 
@@ -191,15 +191,15 @@ Return the result in a later user message with a `tool_result` block:
 }
 ```
 
-For server-executed tools, use the same mistral.rs agent fields as Chat Completions.
-Streaming may include mistral.rs named events such as `agentic_tool_call_progress`,
+For server-executed tools, use the same Hanzo Engine agent fields as Chat Completions.
+Streaming may include Hanzo Engine named events such as `agentic_tool_call_progress`,
 `agentic_tool_approval_required`, and `file_produced`.
 
 ## Agentic server tools
 
-Anthropic web search server-tool declarations enable mistral.rs web search for
+Anthropic web search server-tool declarations enable Hanzo Engine web search for
 the request. The server must be started with search enabled, for example with
-`mistralrs serve --agent ...` or `mistralrs serve --enable-search ...`.
+`hanzo serve --agent ...` or `hanzo serve --enable-search ...`.
 `web_search_20260209` is also accepted and enables code execution for the
 request because Anthropic's dynamic web-search variant uses code-backed
 filtering.
@@ -224,8 +224,8 @@ filtering.
 
 Anthropic code-execution server-tool declarations enable the built-in Python
 tool for the request. The server must be started with code execution enabled,
-for example with `mistralrs serve --agent ...` or
-`mistralrs serve --enable-code-execution ...`.
+for example with `hanzo serve --agent ...` or
+`hanzo serve --enable-code-execution ...`.
 
 ```json
 {
@@ -249,4 +249,4 @@ Server examples live in `examples/server/`:
 | `anthropic_chat.py` | Plain non-streaming Messages request. |
 | `anthropic_streaming.py` | Anthropic SSE parsing. |
 | `anthropic_tool_calling.py` | Client-side tool use with `tool_use` and `tool_result`. |
-| `anthropic_agentic.py` | Anthropic server-tool declarations mapped to mistral.rs web search and code execution. |
+| `anthropic_agentic.py` | Anthropic server-tool declarations mapped to Hanzo Engine web search and code execution. |

@@ -25,6 +25,9 @@ Fast, flexible LLM inference.
 
 ## Latest
 
+- **Qwen3-Omni**: native end-to-end omni-modal model (understand → think → speak) — text/image/video/audio in, text + 24kHz speech out, through one extensible modality pipeline. Validated against the reference weights.
+- **New frontier models**: MiniMax-M2 (sparse-MoE) and DeepSeek-V3.2, alongside the existing DeepSeek-V3, Kimi-K2, GLM-4, and Qwen3 families. [Supported models](https://hanzoai.github.io/engine/reference/supported-models/)
+- **Paged-attention serving** for the omni Thinker, plus a **disk-first KV cache** (cross-restart sessions + agent prefix reuse) for cheap long-context serving.
 - **Anthropic Messages API**: `hanzo serve` now exposes an Anthropic-compatible `POST /v1/messages` endpoint (streaming, tool use, and Claude Code harness support) alongside the OpenAI-compatible `/v1` API. [Examples](examples/server/)
 - **Agentic runtime**: web search, local Python code execution with model feedback, session management, and custom tool hooks. [Guide](https://hanzoai.github.io/engine/tutorials/05-build-an-agent/)
 - **Gemma 4**: full multimodal: text, image, video, and audio input. [Guide](https://hanzoai.github.io/engine/reference/supported-models/) | [Video setup](https://hanzoai.github.io/engine/guides/models/video-setup/)

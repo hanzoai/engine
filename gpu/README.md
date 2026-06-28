@@ -8,7 +8,7 @@ llama.cpp/ggml runtime. Two selectable backends wired in:
 | **vulkan** (default) | any GPU (AMD/NVIDIA/Intel), Win+Linux | **~350 tok/s decode**, ~11k tok/s prefill (real AMD driver, `KHR_coopmat`) |
 | **rocm** (opt-in) | AMD, long-context fast-path | ties Vulkan at std ctx, ~3× at 130K ctx (tuned rocWMMA) |
 
-For comparison, the WSL2 mistral.rs/ROCm path capped at **~1.4 tok/s** — the
+For comparison, the WSL2 Hanzo Engine/ROCm path capped at **~1.4 tok/s** — the
 WSL→D3D12 bridge synchronizes every GPU call. Native = **~250× faster**. This is
 why the engine is built on ggml's mature native backends, not a hand-ported one.
 
@@ -50,7 +50,7 @@ gives no perf gain. If you want to compile anyway:
 
 ## Notes
 - `dist\` (binaries) is gitignored; commit only the scripts.
-- The WSL mistral.rs ROCm backend (`../`, `hanzo-ml` `feature/rocm-backend`) stays as
+- The WSL Hanzo Engine ROCm backend (`../`, `hanzo-ml` `feature/rocm-backend`) stays as
   the **native-Linux ROCm** / research track — correct but bridge-capped on Windows.
 - Model gotcha: the Ollama `zen-nano:0.6b` blob is a degenerate quant (loops, no EOS).
   Use a properly-quantized GGUF (canonical `ggml-org/Qwen3-0.6B-GGUF`, or re-quantize Zen).
