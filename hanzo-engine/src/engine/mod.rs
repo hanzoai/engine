@@ -157,6 +157,40 @@ pub static ENGINE_INSTRUCTIONS: LazyLock<
     std::sync::Mutex<HashMap<usize, Option<EngineInstruction>>>,
 > = LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
+/// FNV-1a fingerprint over the model's stable shape identity, folded into every
+/// spilled `.kv` payload so a cold start reading a foreign model's spill dir
+/// rejects the entry instead of restoring mismatched KV. Distinguishes models by
+/// layer count, max context, activation dtype, sliding window, and (when
+/// available) hidden size and attention head dims.
+fn model_fingerprint(meta: &crate::pipeline::GeneralMetadata) -> u64 {
+    fn mix(h: &mut u64, bytes: &[u8]) {
+        for &b in bytes {
+            *h ^= u64::from(b);
+            *h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    mix(&mut h, &(meta.num_hidden_layers as u64).to_le_bytes());
+    mix(&mut h, &(meta.max_seq_len as u64).to_le_bytes());
+    mix(&mut h, format!("{:?}", meta.activation_dtype).as_bytes());
+    mix(
+        &mut h,
+        &(meta.sliding_window.unwrap_or(usize::MAX) as u64).to_le_bytes(),
+    );
+    if let Some(cfg) = meta.model_metadata.as_ref() {
+        for v in [
+            cfg.hidden_size(),
+            cfg.num_attn_heads(),
+            cfg.num_kv_heads(),
+            cfg.k_head_dim(),
+            cfg.v_head_dim(),
+        ] {
+            mix(&mut h, &(v as u64).to_le_bytes());
+        }
+    }
+    h
+}
+
 pub struct Engine {
     tx: Sender<Request>,
     rx: Arc<Mutex<Receiver<Request>>>,
@@ -228,6 +262,51 @@ impl Engine {
 
         let has_paged_attention = get_mut_arcmutex!(scheduler).kv_cache_manager().is_some();
 
+        // Build the prefix cacher, optionally attaching a disk-backed KV spill
+        // store. Opt in via HANZO_KV_SPILL_DIR (budget via HANZO_KV_SPILL_BUDGET_MB,
+        // default 4096). When unset the cacher is in-memory only and behaves exactly
+        // as before. On attach we repopulate the hottest prefixes from a prior run,
+        // so sessions and agent prefixes survive a process restart.
+        let mut prefix_cacher =
+            PrefixCacheManagerV2::new(prefix_cache_n, no_prefix_cache, has_paged_attention);
+        if !no_prefix_cache {
+            if let Ok(dir) = std::env::var("HANZO_KV_SPILL_DIR") {
+                let dir = dir.trim();
+                if !dir.is_empty() {
+                    let budget_mb = std::env::var("HANZO_KV_SPILL_BUDGET_MB")
+                        .ok()
+                        .and_then(|s| s.trim().parse::<u64>().ok())
+                        .unwrap_or(4096);
+                    match crate::disk_kv_cache::DiskKvCache::new(dir, budget_mb) {
+                        Ok(disk) => {
+                            // Validation context for untrusted `.kv` payloads: model
+                            // fingerprint + bounds (max layers/context, disk budget).
+                            let (device, limits) = {
+                                let pipeline = get_mut_arcmutex!(pipeline);
+                                let meta = pipeline.get_metadata();
+                                let limits = crate::kv_cache::RestoreLimits {
+                                    fingerprint: model_fingerprint(&meta),
+                                    max_layers: meta.num_hidden_layers,
+                                    max_seq_len: meta.max_seq_len,
+                                    max_payload_bytes: disk.budget_bytes(),
+                                };
+                                (pipeline.device(), limits)
+                            };
+                            prefix_cacher = prefix_cacher.with_disk_cache(disk, limits);
+                            match prefix_cacher.restore_from_disk(&device) {
+                                Ok(n) if n > 0 => tracing::info!(
+                                    "Restored {n} KV prefix(es) from disk spill dir {dir}"
+                                ),
+                                Ok(_) => {}
+                                Err(e) => tracing::warn!("KV spill restore failed: {e}"),
+                            }
+                        }
+                        Err(e) => tracing::warn!("Could not open KV spill dir {dir}: {e}"),
+                    }
+                }
+            }
+        }
+
         Ok(Self {
             tx,
             rx: Arc::new(Mutex::new(rx)),
@@ -238,11 +317,7 @@ impl Engine {
             scheduler: scheduler.clone(),
             id: Arc::new(Mutex::new(0)),
             no_kv_cache,
-            prefix_cacher: Arc::new(Mutex::new(PrefixCacheManagerV2::new(
-                prefix_cache_n,
-                no_prefix_cache,
-                has_paged_attention,
-            ))),
+            prefix_cacher: Arc::new(Mutex::new(prefix_cacher)),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,
