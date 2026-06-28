@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use hanzo_ml::{DType, Device, Result, Tensor};
 use hanzo_nn::{Embedding, Linear, Module};
-use hanzo_quant::ShardedVarBuilder;
+use hanzo_quant::{QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder};
 
 use crate::{
     attention::{naive_sdpa, AttentionMask, SdpaParams},
@@ -30,17 +30,23 @@ use crate::{
     ops::{moe_router_topk, MoeRouterScoreFunction, MoeRouterSelectedWeight, MoeRouterTopKConfig},
     paged_attention::{AttentionImplementation, PagedAttention},
     pipeline::{KvCache, ModelForwardContext},
+    utils::unvarbuilder::UnVarBuilder,
 };
 
 use super::config::OmniTextConfig;
 
 /// Qwen3 attention: GQA + per-head q/k RMSNorm + 1D RoPE via `naive_sdpa`. Identical to the talker
 /// backbone attention; carries `self_attn.{q,k,v,o}_proj` (no bias) and `self_attn.{q,k}_norm`.
+///
+/// The four projections are [`QuantMethod`] layers so the Thinker is in-situ quantizable (ISQ) and
+/// can load a pre-quantized (FP8/GPTQ) checkpoint; with no quantization they are `UnquantLinear`,
+/// numerically identical to the plain `Linear` they replaced. Single-process [`ReplicatedLayer`]
+/// (never sharded) keeps the weights complete for the cacheless reference math.
 struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
     rope: Arc<RotaryEmbedding>,
@@ -69,13 +75,38 @@ impl Attention {
         num_kv_heads: usize,
         head_dim: usize,
         rms_norm_eps: f64,
+        qcfg: &Option<QuantizedConfig>,
         attention_mechanism: AttentionImplementation,
         device: &Device,
     ) -> Result<Self> {
-        let q_proj = layers::linear_no_bias(hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
-        let k_proj = layers::linear_no_bias(hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
-        let v_proj = layers::linear_no_bias(hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
-        let o_proj = layers::linear_no_bias(num_heads * head_dim, hidden_size, vb.pp("o_proj"))?;
+        let q_proj = ReplicatedLayer::new(
+            hidden_size,
+            num_heads * head_dim,
+            qcfg,
+            false,
+            vb.pp("q_proj"),
+        )?;
+        let k_proj = ReplicatedLayer::new(
+            hidden_size,
+            num_kv_heads * head_dim,
+            qcfg,
+            false,
+            vb.pp("k_proj"),
+        )?;
+        let v_proj = ReplicatedLayer::new(
+            hidden_size,
+            num_kv_heads * head_dim,
+            qcfg,
+            false,
+            vb.pp("v_proj"),
+        )?;
+        let o_proj = ReplicatedLayer::new(
+            num_heads * head_dim,
+            hidden_size,
+            qcfg,
+            false,
+            vb.pp("o_proj"),
+        )?;
         let q_norm = RmsNorm::new(head_dim, rms_norm_eps, vb.pp("q_norm"))?;
         let k_norm = RmsNorm::new(head_dim, rms_norm_eps, vb.pp("k_norm"))?;
         let paged_attn = match attention_mechanism {
@@ -362,20 +393,49 @@ impl Attention {
     }
 }
 
-/// Dense SwiGLU MLP: `down(silu(gate(x)) * up(x))`. Used only for any `mlp_only_layers` (the
-/// Qwen3-Omni thinker has none, but the architecture allows them). No bias.
+/// Dense SwiGLU MLP: `down(silu(gate(x)) * up(x))`. Used both as a single MoE expert and for any
+/// `mlp_only_layers` (the Qwen3-Omni thinker has none, but the architecture allows them). No bias.
+///
+/// The three projections are [`QuantMethod`] layers (ISQ / pre-quantized capable; `UnquantLinear`
+/// and bit-identical to a plain `Linear` when unquantized). The inline MoE gather/scatter in
+/// [`MoeMlp::forward`] runs each engaged expert through [`Self::forward`], so per-expert
+/// quantization composes with that path with no kernel changes — `QuantMethod::forward` casts the
+/// activations to the weight's quantized type and back.
 struct SwiGluMlp {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+    gate_proj: Arc<dyn QuantMethod>,
+    up_proj: Arc<dyn QuantMethod>,
+    down_proj: Arc<dyn QuantMethod>,
 }
 
 impl SwiGluMlp {
-    fn new(vb: ShardedVarBuilder, hidden_size: usize, intermediate_size: usize) -> Result<Self> {
+    fn new(
+        vb: ShardedVarBuilder,
+        hidden_size: usize,
+        intermediate_size: usize,
+        qcfg: &Option<QuantizedConfig>,
+    ) -> Result<Self> {
         Ok(Self {
-            gate_proj: layers::linear_no_bias(hidden_size, intermediate_size, vb.pp("gate_proj"))?,
-            up_proj: layers::linear_no_bias(hidden_size, intermediate_size, vb.pp("up_proj"))?,
-            down_proj: layers::linear_no_bias(intermediate_size, hidden_size, vb.pp("down_proj"))?,
+            gate_proj: ReplicatedLayer::new(
+                hidden_size,
+                intermediate_size,
+                qcfg,
+                false,
+                vb.pp("gate_proj"),
+            )?,
+            up_proj: ReplicatedLayer::new(
+                hidden_size,
+                intermediate_size,
+                qcfg,
+                false,
+                vb.pp("up_proj"),
+            )?,
+            down_proj: ReplicatedLayer::new(
+                intermediate_size,
+                hidden_size,
+                qcfg,
+                false,
+                vb.pp("down_proj"),
+            )?,
         })
     }
 
@@ -404,10 +464,20 @@ struct MoeMlp {
 
 impl MoeMlp {
     fn new(cfg: &OmniTextConfig, vb: ShardedVarBuilder) -> Result<Self> {
+        // The router `gate` stays a full-precision `Linear`: it is tiny (`hidden × num_experts`) and
+        // routing is precision-sensitive, so it is deliberately excluded from quantization (matches
+        // the canonical `qwen3_moe`, where the gate lives in `residual_tensors`).
         let gate = layers::linear_no_bias(cfg.hidden_size, cfg.num_experts, vb.pp("gate"))?;
         let vb_e = vb.pp("experts");
         let experts = (0..cfg.num_experts)
-            .map(|i| SwiGluMlp::new(vb_e.pp(i), cfg.hidden_size, cfg.moe_intermediate_size))
+            .map(|i| {
+                SwiGluMlp::new(
+                    vb_e.pp(i),
+                    cfg.hidden_size,
+                    cfg.moe_intermediate_size,
+                    &cfg.quantization_config,
+                )
+            })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             gate,
@@ -505,6 +575,7 @@ impl DecoderLayer {
         num_kv_heads: usize,
         head_dim: usize,
         rms_norm_eps: f64,
+        qcfg: &Option<QuantizedConfig>,
         attention_mechanism: AttentionImplementation,
         device: &Device,
     ) -> Result<Self> {
@@ -517,6 +588,7 @@ impl DecoderLayer {
             num_kv_heads,
             head_dim,
             rms_norm_eps,
+            qcfg,
             attention_mechanism,
             device,
         )?;
@@ -624,7 +696,7 @@ pub struct OmniThinkerText {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: Linear,
+    lm_head: Arc<dyn QuantMethod>,
     /// Interleaved 3D mRoPE shared by every layer for the multimodal serving path.
     mrope: Arc<Qwen3VLRotaryEmbedding>,
 }
@@ -680,6 +752,10 @@ impl OmniThinkerText {
             &None,
         )?;
 
+        // In-checkpoint quantization (FP8/GPTQ) for the quantizable linears; `None` for a full-
+        // precision checkpoint (runtime ISQ then applies on top). Shared by every layer + lm_head.
+        let qcfg = &cfg.quantization_config;
+
         let vb_l = vb_model.pp("layers");
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for i in 0..cfg.num_hidden_layers {
@@ -691,6 +767,7 @@ impl OmniThinkerText {
                     layer_vb.pp("mlp"),
                     cfg.hidden_size,
                     cfg.intermediate_size,
+                    qcfg,
                 )?)
             };
             layers.push(DecoderLayer::new(
@@ -703,13 +780,22 @@ impl OmniThinkerText {
                 cfg.num_key_value_heads,
                 head_dim,
                 cfg.rms_norm_eps,
+                qcfg,
                 attention_mechanism,
                 device,
             )?);
         }
 
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_model.pp("norm"))?;
-        let lm_head = layers::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
+        // `lm_head` is a quantizable linear (untied; `thinker.lm_head.weight`). The exposed ISQ /
+        // pre-quant path covers it like the canonical text models.
+        let lm_head = ReplicatedLayer::new(
+            cfg.hidden_size,
+            cfg.vocab_size,
+            qcfg,
+            false,
+            vb.pp("lm_head"),
+        )?;
 
         Ok(Self {
             embed_tokens,
@@ -843,6 +929,69 @@ impl OmniThinkerText {
         let xs = self.norm.forward(&xs)?;
         let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
+    }
+
+    /// Every in-situ-quantizable linear in the Thinker, paired with its layer index (`None` for the
+    /// non-layer `lm_head`), in a stable order. Drives [`IsqModel::get_layers`] for the whole Omni
+    /// model: the loader quantizes exactly these (attention q/k/v/o, each MoE expert's gate/up/down,
+    /// any dense-layer gate/up/down, and the head). The router `gate`, q/k norms, layernorms, final
+    /// norm and embeddings are intentionally absent — they stay full precision (see
+    /// [`Self::residual_tensors`]). The order mirrors the loader's ISQ regexes so an imatrix pairs up.
+    pub fn get_isq_layers(&mut self) -> Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)> {
+        let mut layers: Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)> = Vec::new();
+        layers.push((&mut self.lm_head, None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            layers.push((&mut layer.self_attn.q_proj, Some(i)));
+            layers.push((&mut layer.self_attn.k_proj, Some(i)));
+            layers.push((&mut layer.self_attn.v_proj, Some(i)));
+            layers.push((&mut layer.self_attn.o_proj, Some(i)));
+            match &mut layer.mlp {
+                Mlp::Moe(moe) => {
+                    for expert in moe.experts.iter_mut() {
+                        layers.push((&mut expert.gate_proj, Some(i)));
+                        layers.push((&mut expert.up_proj, Some(i)));
+                        layers.push((&mut expert.down_proj, Some(i)));
+                    }
+                }
+                Mlp::Dense(mlp) => {
+                    layers.push((&mut mlp.gate_proj, Some(i)));
+                    layers.push((&mut mlp.up_proj, Some(i)));
+                    layers.push((&mut mlp.down_proj, Some(i)));
+                }
+            }
+        }
+        layers
+    }
+
+    /// The full-precision Thinker tensors that ISQ never quantizes — embeddings, the final norm,
+    /// every layernorm + q/k norm, and each MoE router `gate`. Keys are relative to the `thinker`
+    /// namespace (e.g. `model.norm.weight`); the model prefixes `thinker.` (see
+    /// [`super::Qwen3OmniModel`]'s `residual_tensors`). Counterpart to [`Self::get_isq_layers`] for
+    /// UQFF serialization of the Thinker.
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+        for (i, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(i);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+            uvb_l
+                .pp("self_attn")
+                .pp("q_norm")
+                .add(&layer.self_attn.q_norm);
+            uvb_l
+                .pp("self_attn")
+                .pp("k_norm")
+                .add(&layer.self_attn.k_norm);
+            if let Mlp::Moe(moe) = &layer.mlp {
+                uvb_l.pp("mlp").pp("gate").add(&moe.gate);
+            }
+        }
+        uvb.to_safetensors()
     }
 }
 
@@ -1038,5 +1187,324 @@ mod thinker_tests {
         if logit_cos.is_finite() {
             assert!(logit_cos > 0.99, "logits cosine {logit_cos} <= 0.99");
         }
+    }
+
+    use super::super::config::OmniTextConfig;
+    use hanzo_ml::Shape;
+
+    /// Toy Thinker text config sized so every quantizable in-dim (hidden = 256, moe_intermediate =
+    /// 256) is a multiple of the K-quant super-block (256) — lets ISQ Q*K apply to every selected
+    /// linear. 2 layers × 4 experts mirrors the real 48 × 128 topology at micro scale.
+    fn toy_text_config() -> OmniTextConfig {
+        OmniTextConfig {
+            vocab_size: 512,
+            hidden_size: 256,
+            intermediate_size: 256,
+            num_hidden_layers: 2,
+            num_attention_heads: 4,
+            num_key_value_heads: 2,
+            head_dim: 64,
+            hidden_act: crate::layers::Activation::Silu,
+            max_position_embeddings: 64,
+            rms_norm_eps: 1e-6,
+            rope_theta: 1_000_000.0,
+            moe_intermediate_size: 256,
+            shared_expert_intermediate_size: 0,
+            num_experts: 4,
+            num_experts_per_tok: 2,
+            norm_topk_prob: true,
+            mlp_only_layers: Vec::new(),
+            decoder_sparse_step: 1,
+            use_qk_norm: true,
+            tie_word_embeddings: false,
+            rope_scaling: None,
+            quantization_config: None,
+        }
+    }
+
+    /// A `SimpleBackend` returning a small deterministic pattern tensor for any requested name/shape,
+    /// so the Thinker graph (and ISQ) can be built with no checkpoint on disk. The fill mirrors the
+    /// other Omni tests' `(i % 17) * 0.01 - 0.08`: small, finite, index-varying so MoE routing and
+    /// argmax are non-degenerate.
+    struct PatternBackend;
+    impl hanzo_nn::var_builder::SimpleBackend for PatternBackend {
+        fn get(
+            &self,
+            s: Shape,
+            _name: &str,
+            _h: hanzo_nn::Init,
+            dtype: DType,
+            dev: &Device,
+        ) -> Result<Tensor> {
+            let n = s.elem_count();
+            let data: Vec<f32> = (0..n).map(|i| (i % 17) as f32 * 0.01 - 0.08).collect();
+            Tensor::from_vec(data, s, dev)?.to_dtype(dtype)
+        }
+        fn get_unchecked(&self, _name: &str, _dtype: DType, _dev: &Device) -> Result<Tensor> {
+            hanzo_ml::bail!("PatternBackend requires a shape; use `get`")
+        }
+        fn contains_tensor(&self, _name: &str) -> bool {
+            true
+        }
+    }
+
+    /// One no-checkpoint ISQ round-trip for a single quant type: build the toy Thinker, assert
+    /// `get_isq_layers` exposes exactly the quantizable linears, in-situ quantize each, and forward.
+    /// Returns `(selected_layer_count, greedy_token)`. Shared by the per-type structural test.
+    fn isq_roundtrip(ty: hanzo_quant::IsqType) -> (usize, usize) {
+        let device = Device::Cpu;
+        let cfg = toy_text_config();
+        let comm = Arc::new(
+            hanzo_quant::Comm::from_device(hanzo_quant::Id::new(), &device, 0, 1).unwrap(),
+        );
+        let vb = hanzo_quant::ShardedSafeTensors::wrap(
+            Box::new(PatternBackend),
+            DType::F32,
+            device.clone(),
+        );
+
+        let mut model = OmniThinkerText::new(
+            &cfg,
+            vb.pp("thinker"),
+            &device,
+            &comm,
+            AttentionImplementation::Eager,
+        )
+        .unwrap();
+
+        // SELECTION: lm_head + per layer (q,k,v,o = 4) + (num_experts × gate/up/down = 12), exactly.
+        let expected = 1 + cfg.num_hidden_layers * (4 + cfg.num_experts * 3);
+        {
+            let layers = model.get_isq_layers();
+            assert_eq!(layers.len(), expected, "ISQ layer count != expected");
+            assert!(
+                layers.iter().all(|(l, _)| l.name() == "unquant-linear"),
+                "selected linears must start unquantized"
+            );
+        }
+
+        // APPLY: synchronous in-situ quant (no thread pool / pending layers). Every GGML Q/K quant
+        // produces a `gguf` layer; `n_quantized` must count all selected linears.
+        let n_quantized = std::sync::atomic::AtomicUsize::new(0);
+        let guard = hanzo_quant::QuantizeOntoGuard::new();
+        {
+            let layers = model.get_isq_layers();
+            for (layer, _idx) in layers {
+                let quant = layer
+                    .clone()
+                    .apply_isq(Some(ty), device.clone(), &n_quantized, None, guard.clone())
+                    .unwrap();
+                assert_eq!(
+                    quant.name(),
+                    "gguf",
+                    "{ty:?} layer did not become a gguf layer"
+                );
+                *layer = quant;
+            }
+        }
+        assert_eq!(
+            n_quantized.load(std::sync::atomic::Ordering::Relaxed),
+            expected,
+            "n_quantized != selected layer count"
+        );
+
+        // FORWARD: quantized decoder → finite logits of the right shape.
+        let ids: Vec<u32> = vec![1, 5, 9, 2, 7, 3];
+        let t = ids.len();
+        let input_ids = Tensor::from_vec(ids, (1, t), &device).unwrap();
+        let mut maskv = vec![0f32; t * t];
+        for i in 0..t {
+            for (j, m) in maskv[i * t..(i + 1) * t].iter_mut().enumerate() {
+                if j > i {
+                    *m = f32::NEG_INFINITY;
+                }
+            }
+        }
+        let mask = Tensor::from_vec(maskv, (1, 1, t, t), &device).unwrap();
+
+        let (logits, hidden_states) = model.forward(&input_ids, &[0], Some(&mask)).unwrap();
+        assert_eq!(logits.dims(), [1, t, cfg.vocab_size], "logits shape");
+        assert_eq!(hidden_states.len(), cfg.num_hidden_layers + 1);
+        let last = logits
+            .i((0, t - 1))
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        assert!(
+            last.iter().all(|x| x.is_finite()),
+            "{ty:?} logits must be finite"
+        );
+        let am = argmax(&last);
+        assert!(am < cfg.vocab_size, "argmax {am} out of vocab range");
+        (expected, am)
+    }
+
+    /// STRUCTURAL ISQ proof (no checkpoint) across the headline ISQ types (Q4K / Q2K / Q8_0). For each
+    /// quant it guards the three things Omni ISQ depends on: SELECTION (`get_isq_layers` exposes exactly
+    /// the quantizable linears — `lm_head` + per-layer attention q/k/v/o + every expert's gate/up/down),
+    /// APPLY (each becomes a `gguf` layer; `n_quantized` counts all), and FORWARD (the quantized decoder
+    /// still produces finite logits of the right shape). The exact SELECTION count also pins the loader
+    /// regexes in sync (see `qwen3_omni_isq_regexes_scope_to_thinker_text`).
+    #[test]
+    fn omni_thinker_isq_selection_and_forward() {
+        for ty in [
+            hanzo_quant::IsqType::Q4K,
+            hanzo_quant::IsqType::Q2K,
+            hanzo_quant::IsqType::Q8_0,
+        ] {
+            let (n, greedy) = isq_roundtrip(ty);
+            eprintln!("[isq-struct] {ty:?}: quantized {n} linears; finite logits; greedy={greedy}");
+        }
+    }
+
+    /// REAL-weights ISQ validation (env-gated on `ZEN_OMNI_DIR`, like the other Omni tests; skips
+    /// cleanly when the checkpoint is absent). Loads only the Thinker text decoder (`thinker.model.*`
+    /// + `thinker.lm_head`), quantizes it to Q4K through the production *immediate*-ISQ path (the exact
+    /// mechanism `hanzo run --isq Q4K` uses), and asserts a forward on the fixed prompt yields finite
+    /// logits with a greedy token in range. Quant drift is expected, so 9707 is logged, not required.
+    ///
+    /// HEAVY (~30B params): this materializes the text decoder. Run with `earlyoom` stopped. The
+    /// predicates below mirror `Qwen3OmniLoader::isq_layer_regexes` (kept in sync by the structural
+    /// test's exact-count selection check).
+    #[test]
+    fn omni_thinker_isq_real_q4k_forward() {
+        // Explicit opt-in: this materializes ~30B params, so it must never fire on a bare `cargo test`
+        // (which could OOM a co-resident service). Run with `ZEN_OMNI_ISQ_REAL=1` and `earlyoom`
+        // stopped; `HANZO_ISQ_SINGLETHREAD=1` bounds the immediate-ISQ transient to one linear.
+        if std::env::var("ZEN_OMNI_ISQ_REAL").is_err() {
+            eprintln!("[isq-real] set ZEN_OMNI_ISQ_REAL=1 to run the real-weights Q4K validation; skipping");
+            return;
+        }
+        let dir = std::env::var("ZEN_OMNI_DIR")
+            .unwrap_or_else(|_| "/home/z/work/zen/hf/zen-omni-30b-instruct".to_string());
+        let dirp = PathBuf::from(&dir);
+        let index = dirp.join("model.safetensors.index.json");
+        if !index.is_file() {
+            eprintln!("[isq-real] zen-omni weights absent ({index:?}); skipping");
+            return;
+        }
+
+        let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
+        let dtype = if device.is_cuda() {
+            DType::BF16
+        } else {
+            DType::F16
+        };
+        eprintln!("[isq-real] device={device:?} dtype={dtype:?}");
+
+        let cfg: Qwen3OmniConfig =
+            serde_json::from_str(&std::fs::read_to_string(dirp.join("config.json")).unwrap())
+                .unwrap();
+        let tc = &cfg.thinker_config.text_config;
+
+        let index_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&index).unwrap()).unwrap();
+        let mut shard_set = std::collections::BTreeSet::new();
+        for v in index_json["weight_map"].as_object().unwrap().values() {
+            shard_set.insert(v.as_str().unwrap().to_string());
+        }
+        let paths: Vec<PathBuf> = shard_set.iter().map(|s| dirp.join(s)).collect();
+
+        let comm = Arc::new(
+            hanzo_quant::Comm::from_device(hanzo_quant::Id::new(), &device, 0, 1).unwrap(),
+        );
+
+        // Production immediate-ISQ predicates, Thinker-scoped (mirror the loader). The router `gate`
+        // and the audio/vision towers are deliberately excluded.
+        let predicates: Vec<regex::Regex> = [
+            r"thinker\.lm_head\.(weight|bias)$",
+            r"thinker\.model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+            r"thinker\.model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+            r"thinker\.model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+            r"thinker\.model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+            r"thinker\.model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$",
+            r"thinker\.model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$",
+            r"thinker\.model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
+        ]
+        .iter()
+        .map(|p| regex::Regex::new(p).unwrap())
+        .collect();
+        hanzo_quant::set_immediate_isq(Some(hanzo_quant::IsqType::Q4K), predicates);
+
+        // Only the text decoder is needed for the Thinker forward; skip the towers/talker/code2wav to
+        // keep the load light. The immediate-ISQ path quantizes the matched linears as they load.
+        let vb = from_mmaped_safetensors(
+            paths,
+            Vec::new(),
+            Some(dtype),
+            &device,
+            vec![None],
+            true,
+            None,
+            |name: String| {
+                name.starts_with("thinker.model.") || name.starts_with("thinker.lm_head")
+            },
+            Arc::new(|_| DeviceForLoadTensor::Base),
+        )
+        .unwrap();
+
+        let model = OmniThinkerText::new(
+            tc,
+            vb.pp("thinker"),
+            &device,
+            &comm,
+            AttentionImplementation::Eager,
+        )
+        .unwrap();
+        hanzo_quant::clear_immediate_isq();
+
+        let ids: Vec<u32> = vec![
+            151644, 872, 198, 9707, 11, 1879, 0, 151645, 198, 151644, 77091, 198,
+        ];
+        let t = ids.len();
+        let input_ids = Tensor::from_vec(ids, (1, t), &device).unwrap();
+        let mut maskv = vec![0f32; t * t];
+        for i in 0..t {
+            for (j, m) in maskv[i * t..(i + 1) * t].iter_mut().enumerate() {
+                if j > i {
+                    *m = f32::NEG_INFINITY;
+                }
+            }
+        }
+        let mask = Tensor::from_vec(maskv, (1, 1, t, t), &device)
+            .unwrap()
+            .to_dtype(dtype)
+            .unwrap();
+
+        let (logits, _hidden) = model.forward(&input_ids, &[0], Some(&mask)).unwrap();
+        let last = logits
+            .i((0, t - 1))
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let am = argmax(&last);
+        eprintln!(
+            "[isq-real] Q4K greedy next-token = {am} (f16 reference = 9707); logits {:?}",
+            logits.dims()
+        );
+        if let Ok(refv) =
+            std::fs::read("/home/z/work/zen/hf/omni_fixtures/thinker_logits.f32").map(|b| {
+                b.chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect::<Vec<f32>>()
+            })
+        {
+            if refv.len() == last.len() {
+                eprintln!(
+                    "[isq-real] Q4K-vs-f16 logits cosine = {:.4}",
+                    cosine(&last, &refv)
+                );
+            }
+        }
+
+        assert!(
+            last.iter().all(|x| x.is_finite()),
+            "Q4K logits must be finite"
+        );
+        assert!(am < tc.vocab_size, "argmax {am} out of vocab range");
     }
 }
