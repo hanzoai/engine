@@ -229,3 +229,10 @@ debug = true
 debug = true
 opt-level = 3
 
+
+# TEMP: patch to local hanzo-ml for DeepSeek-V4 I32 (tid2eid) support + CUDA-UMA.
+# Drop once hanzo-ml 0.11.24+ is published.
+[patch.crates-io]
+hanzo-ml = { path = "/home/z/work/hanzo/ml/hanzo-ml" }
+hanzo-nn = { path = "/home/z/work/hanzo/ml/hanzo-nn" }
+hanzo-kernels = { path = "/home/z/work/hanzo/ml/hanzo-kernels" }
