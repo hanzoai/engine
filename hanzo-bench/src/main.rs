@@ -394,9 +394,23 @@ async fn main() -> anyhow::Result<()> {
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model).build()?;
     let model_name = loader.get_id();
 
-    #[cfg(feature = "metal")]
+    #[cfg(all(feature = "vulkan", not(feature = "wgpu")))]
+    let device = Device::new_vulkan(0)?;
+    #[cfg(all(feature = "rocm", not(feature = "vulkan"), not(feature = "wgpu")))]
+    let device = Device::new_rocm(0)?;
+    #[cfg(all(
+        feature = "metal",
+        not(feature = "rocm"),
+        not(feature = "vulkan"),
+        not(feature = "wgpu")
+    ))]
     let device = Device::new_metal(0)?;
-    #[cfg(not(feature = "metal"))]
+    #[cfg(all(
+        not(feature = "metal"),
+        not(feature = "rocm"),
+        not(feature = "vulkan"),
+        not(feature = "wgpu")
+    ))]
     let device = if hanzo_engine::distributed::use_nccl() {
         Device::Cpu
     } else {
