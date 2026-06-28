@@ -97,6 +97,10 @@ impl MuseTalk {
         &self.device
     }
 
+    pub fn dtype(&self) -> DType {
+        self.dtype
+    }
+
     pub fn cross_attention_dim(&self) -> usize {
         self.cfg.unet.cross_attention_dim
     }
