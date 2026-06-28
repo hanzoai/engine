@@ -1,10 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use hanzo_ml::{Result, Tensor, D};
-use hanzo_nn::{Conv2d, GroupNorm, Module};
+use hanzo_nn::{Conv2d, GroupNorm, Linear, Module};
 use hanzo_quant::{Convolution, ShardedVarBuilder};
 
-use crate::layers::{conv2d, group_norm, MatMul};
+use crate::layers::{conv2d, group_norm, linear, MatMul};
 
 use super::config::VaeConfig;
 
@@ -77,31 +77,26 @@ impl Module for ResnetBlock {
 #[derive(Debug, Clone)]
 struct AttnBlock {
     group_norm: GroupNorm,
-    to_q: Conv2d,
-    to_k: Conv2d,
-    to_v: Conv2d,
-    to_out: Conv2d,
+    query: Linear,
+    key: Linear,
+    value: Linear,
+    proj_attn: Linear,
 }
 
 impl AttnBlock {
     fn new(channels: usize, groups: usize, vb: ShardedVarBuilder) -> Result<Self> {
         let group_norm = group_norm(groups, channels, ATTN_EPS, vb.pp("group_norm"))?;
-        let to_q = conv2d(channels, channels, 1, Default::default(), vb.pp("to_q"))?;
-        let to_k = conv2d(channels, channels, 1, Default::default(), vb.pp("to_k"))?;
-        let to_v = conv2d(channels, channels, 1, Default::default(), vb.pp("to_v"))?;
-        let to_out = conv2d(
-            channels,
-            channels,
-            1,
-            Default::default(),
-            vb.pp("to_out").pp(0),
-        )?;
+        // sd-vae-ft-mse ships the legacy diffusers AttentionBlock: single-head Linear q/k/v/proj_attn.
+        let query = linear(channels, channels, vb.pp("query"))?;
+        let key = linear(channels, channels, vb.pp("key"))?;
+        let value = linear(channels, channels, vb.pp("value"))?;
+        let proj_attn = linear(channels, channels, vb.pp("proj_attn"))?;
         Ok(Self {
             group_norm,
-            to_q,
-            to_k,
-            to_v,
-            to_out,
+            query,
+            key,
+            value,
+            proj_attn,
         })
     }
 }
@@ -110,16 +105,14 @@ impl Module for AttnBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let residual = xs;
         let normed = self.group_norm.forward(xs)?;
-        let q = Convolution.forward_2d(&self.to_q, &normed)?;
-        let k = Convolution.forward_2d(&self.to_k, &normed)?;
-        let v = Convolution.forward_2d(&self.to_v, &normed)?;
-        let (b, c, h, w) = q.dims4()?;
-        let q = q.flatten_from(2)?.t()?.unsqueeze(1)?;
-        let k = k.flatten_from(2)?.t()?.unsqueeze(1)?;
-        let v = v.flatten_from(2)?.t()?.unsqueeze(1)?;
+        let (b, c, h, w) = normed.dims4()?;
+        let x = normed.flatten_from(2)?.t()?; // (b, c, hw) -> (b, hw, c)
+        let q = self.query.forward(&x)?;
+        let k = self.key.forward(&x)?;
+        let v = self.value.forward(&x)?;
         let out = sdpa(&q, &k, &v)?;
-        let out = out.squeeze(1)?.t()?.reshape((b, c, h, w))?;
-        Convolution.forward_2d(&self.to_out, &out)? + residual
+        let out = self.proj_attn.forward(&out)?;
+        out.t()?.reshape((b, c, h, w))? + residual
     }
 }
 
