@@ -395,6 +395,111 @@ impl V4Attn {
     }
 }
 
+// ============================ compressor (1M-ctx KV compression) ============================
+
+/// Streaming softmax-pool of the KV latent into compressed rows — the substrate
+/// that makes 1M context practical (a ratio-128 layer stores ~1 row per 128 tokens).
+/// Correct-by-reference to the official `inference/model.py` `Compressor.forward`
+/// (lines 316-377) for the **prefill** path (start_pos==0): project KV + gate,
+/// window into `ratio`-sized groups, softmax-pool over the window (gate scores +
+/// absolute-position `ape`), RMS-norm, trailing partial-RoPE. The ratio-4 layers
+/// additionally use an `overlap_transform` so each compressed row also sees the
+/// previous window's tail (`overlap == true`, `coff == 2`). Decode-phase
+/// incremental state (`kv_state`/`score_state`) is the follow-on; prefill is the
+/// path the ≤window benchmark + a fresh long prompt exercise.
+struct Compressor {
+    wkv: Tensor,   // [coff*head_dim, dim] F32
+    wgate: Tensor, // [coff*head_dim, dim] F32
+    norm: RmsNorm,
+    ape: Tensor, // [ratio, coff*head_dim] F32
+    rotary: Arc<DeepSeekV2RotaryEmbedding>,
+    ratio: usize,
+    head_dim: usize,
+    rope_dim: usize,
+    overlap: bool, // ratio == 4
+}
+
+impl Compressor {
+    /// Prefill compression of `x [b,s,dim]` -> compressed KV `[b, n_comp, head_dim]`,
+    /// trailing-RoPE'd. Drops the `s % ratio` remainder (the decode-state tail) —
+    /// the full windows are what the indexer scores + the bulk attends.
+    fn compress(&self, x: &Tensor, positions: &Tensor) -> Result<Option<Tensor>> {
+        let (b, s, _) = x.dims3()?;
+        let cutoff = (s / self.ratio) * self.ratio;
+        if cutoff == 0 {
+            return Ok(None); // fewer than one full window — nothing compressed yet
+        }
+        let n = cutoff / self.ratio;
+        let coff_hd = self.ape.dim(D::Minus1)?; // coff*head_dim
+        let xf = x.to_dtype(DType::F32)?;
+        let kv = xf.broadcast_matmul(&self.wkv.t()?)?; // [b,s,coff*hd]
+        let score = xf.broadcast_matmul(&self.wgate.t()?)?;
+        let kv = kv
+            .narrow(1, 0, cutoff)?
+            .reshape((b, n, self.ratio, coff_hd))?;
+        let score = score
+            .narrow(1, 0, cutoff)?
+            .reshape((b, n, self.ratio, coff_hd))?
+            .broadcast_add(&self.ape.reshape((1, 1, self.ratio, coff_hd))?)?;
+        // Pool over the window axis (dim 2). Overlap layers first reshuffle so the
+        // window spans 2*ratio rows of width head_dim.
+        let (kv, score) = if self.overlap {
+            (
+                overlap_transform(&kv, 0.0)?,
+                overlap_transform(&score, f64::NEG_INFINITY)?,
+            )
+        } else {
+            (kv, score)
+        };
+        let weights = hanzo_nn::ops::softmax_last_dim(&score.transpose(2, 3)?.contiguous()?)?
+            .transpose(2, 3)?
+            .contiguous()?; // softmax over dim 2 (the window), per model.py score.softmax(dim=2)
+        let pooled = kv.broadcast_mul(&weights)?.sum(2)?; // [b, n, head_dim]
+        let pooled = self.norm.forward(&pooled.to_dtype(x.dtype())?)?;
+        // Trailing partial-RoPE on the compressed rows (positions = window stride).
+        let hd = self.head_dim;
+        let pooled = pooled.reshape((b, n, 1, hd))?.transpose(1, 2)?; // [b,1,n,hd]
+        let comp_pos = compressed_positions(n, self.ratio, positions)?;
+        let pass = pooled.narrow(D::Minus1, 0, hd - self.rope_dim)?.contiguous()?;
+        let rot = pooled.narrow(D::Minus1, hd - self.rope_dim, self.rope_dim)?.contiguous()?;
+        let (rot, _) = self.rotary.forward_positions(&rot, &rot, &comp_pos)?;
+        let pooled = Tensor::cat(&[&pass, &rot], D::Minus1)?
+            .transpose(1, 2)? // [b,n,1,hd]
+            .reshape((b, n, hd))?;
+        Ok(Some(pooled))
+    }
+}
+
+/// `overlap_transform` (model.py:307-314): `t[b,n,ratio,2d] -> [b,n,2*ratio,d]`
+/// where the upper `ratio` rows are this window's second-half (`[d:]`) and the
+/// lower `ratio` rows are the *previous* window's first-half (`[:d]`), so a
+/// compressed row pools across the window boundary. `fill` seeds the gap
+/// (0 for kv, -inf for score so softmax ignores the absent row-0 overlap).
+fn overlap_transform(t: &Tensor, fill: f64) -> Result<Tensor> {
+    let (b, n, ratio, two_d) = t.dims4()?;
+    let d = two_d / 2;
+    let dev = t.device();
+    let second = t.narrow(D::Minus1, d, d)?; // [b,n,ratio,d] — this window's tail
+    let first = t.narrow(D::Minus1, 0, d)?; // [b,n,ratio,d] — this window's head
+    let prev_first = if n > 1 {
+        let shifted = first.narrow(1, 0, n - 1)?; // windows 0..n-1
+        let pad = Tensor::full(fill, (b, 1, ratio, d), dev)?.to_dtype(t.dtype())?;
+        Tensor::cat(&[&pad, &shifted], 1)? // [b,n,ratio,d], row0 = fill
+    } else {
+        Tensor::full(fill, (b, 1, ratio, d), dev)?.to_dtype(t.dtype())?
+    };
+    Tensor::cat(&[&prev_first, &second], 2) // [b, n, 2*ratio, d]
+}
+
+/// Positions for the compressed rows: row j represents tokens [j*ratio, (j+1)*ratio),
+/// rope'd at the window-start stride (model.py `freqs_cis[:cutoff:ratio]`).
+fn compressed_positions(n: usize, ratio: usize, positions: &Tensor) -> Result<Tensor> {
+    let base = positions.to_dtype(DType::U32)?.to_vec1::<u32>()?;
+    let start = base.first().copied().unwrap_or(0);
+    let v: Vec<u32> = (0..n).map(|j| start + (j * ratio) as u32).collect();
+    Tensor::from_vec(v, n, positions.device())
+}
+
 // ============================ layer ============================
 
 struct DecoderLayer {
@@ -690,5 +795,51 @@ impl ModelWeights {
         let x = self.norm.forward(&x)?;
         let x = extract_logits(&x, context_lens)?;
         self.output.forward(&x.contiguous()?)
+    }
+}
+
+#[cfg(test)]
+mod compressor_tests {
+    use super::{compressed_positions, overlap_transform};
+    use hanzo_ml::{Device, Tensor};
+
+    // overlap_transform([b=1,n=2,ratio=2,2d=2]) -> [1,2,4,1]: upper ratio rows =
+    // each window's second-half ([d:]); lower ratio rows = the PREVIOUS window's
+    // first-half ([:d]), window 0's prev = fill. (model.py:307-314)
+    #[test]
+    fn overlap_transform_reshuffles_windows() {
+        let dev = Device::Cpu;
+        // window0 = [[1,2],[3,4]], window1 = [[5,6],[7,8]]  (each row = [first|second], d=1)
+        let t = Tensor::from_vec(
+            vec![1f32, 2., 3., 4., 5., 6., 7., 8.],
+            (1, 2, 2, 2),
+            &dev,
+        )
+        .unwrap();
+        let out = overlap_transform(&t, 0.0).unwrap(); // [1,2,4,1]
+        let v = out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        // window0: lower(prev=fill 0,0) ++ upper(second halves 2,4) = [0,0,2,4]
+        // window1: lower(window0 firsts 1,3) ++ upper(window1 seconds 6,8) = [1,3,6,8]
+        assert_eq!(v, vec![0., 0., 2., 4., 1., 3., 6., 8.]);
+    }
+
+    #[test]
+    fn overlap_transform_fill_is_neg_inf_for_scores() {
+        let dev = Device::Cpu;
+        let t = Tensor::from_vec(vec![1f32, 2., 3., 4.], (1, 1, 2, 2), &dev).unwrap();
+        let out = overlap_transform(&t, f64::NEG_INFINITY).unwrap();
+        let v = out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        // single window: lower = prev fill (-inf, -inf), upper = seconds (2, 4)
+        assert!(v[0].is_infinite() && v[0] < 0.0 && v[1].is_infinite());
+        assert_eq!(&v[2..], &[2.0, 4.0]);
+    }
+
+    // Compressed row j is positioned at the window-start stride start + j*ratio.
+    #[test]
+    fn compressed_positions_stride_by_ratio() {
+        let dev = Device::Cpu;
+        let pos = Tensor::from_vec(vec![0u32, 1, 2, 3, 4, 5, 6, 7], 8, &dev).unwrap();
+        let cp = compressed_positions(4, 2, &pos).unwrap().to_vec1::<u32>().unwrap();
+        assert_eq!(cp, vec![0, 2, 4, 6]); // 4 rows, ratio 2, start 0
     }
 }
