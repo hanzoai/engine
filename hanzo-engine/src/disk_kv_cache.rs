@@ -137,6 +137,16 @@ pub struct DiskKvCache {
     budget_bytes: u64,
 }
 
+/// One `.kv` file as seen by a directory scan: its content key, on-disk size, and
+/// last-used timestamp (read from the header). Shared by eviction and recency
+/// listing so the on-disk layout is parsed in exactly one place.
+struct DiskEntry {
+    path: PathBuf,
+    key: String,
+    size: u64,
+    last_used: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct CacheHit {
     pub header: KvcHeader,
@@ -247,36 +257,78 @@ impl DiskKvCache {
         header.write(&mut f)
     }
 
-    pub fn evict_to_budget(&self) -> io::Result<usize> {
-        let mut entries: Vec<(PathBuf, u64, u64)> = Vec::new();
-        let mut total: u64 = 0;
+    /// Scan the cache directory for `.kv` entries, reading each header for its
+    /// last-used time. The single place that maps the on-disk layout to entries.
+    fn scan_entries(&self) -> io::Result<Vec<DiskEntry>> {
+        let mut entries = Vec::new();
         for entry in fs::read_dir(&self.dir)? {
             let entry = entry?;
             let p = entry.path();
             if p.extension().and_then(|e| e.to_str()) != Some("kv") {
                 continue;
             }
-            let meta = entry.metadata()?;
-            let len = meta.len();
-            total += len;
-            let lru = match File::open(&p).and_then(|mut f| KvcHeader::read(&mut f)) {
+            let Some(key) = p.file_stem().and_then(|s| s.to_str()).map(str::to_string) else {
+                continue;
+            };
+            let size = entry.metadata()?.len();
+            let last_used = match File::open(&p).and_then(|mut f| KvcHeader::read(&mut f)) {
                 Ok(h) => h.last_used_unix,
                 Err(_) => 0,
             };
-            entries.push((p, len, lru));
+            entries.push(DiskEntry {
+                path: p,
+                key,
+                size,
+                last_used,
+            });
         }
+        Ok(entries)
+    }
+
+    pub fn evict_to_budget(&self) -> io::Result<usize> {
+        let mut entries = self.scan_entries()?;
+        let total: u64 = entries.iter().map(|e| e.size).sum();
         if total <= self.budget_bytes {
             return Ok(0);
         }
-        entries.sort_by_key(|e| e.2);
+        // Oldest first: drop least-recently-used entries until under budget.
+        entries.sort_by_key(|e| e.last_used);
         let mut removed = 0usize;
         let mut current = total;
-        for (path, size, _) in entries {
+        for entry in entries {
             if current <= self.budget_bytes {
                 break;
             }
-            if fs::remove_file(&path).is_ok() {
-                current = current.saturating_sub(size);
+            if fs::remove_file(&entry.path).is_ok() {
+                current = current.saturating_sub(entry.size);
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
+    /// Content keys present on disk, most-recently-used first. The prefix cacher
+    /// uses this to repopulate its in-memory map on a cold start, restoring the
+    /// hottest prefixes within a bounded budget.
+    pub fn keys_by_recency(&self) -> io::Result<Vec<String>> {
+        let mut entries = self.scan_entries()?;
+        entries.sort_by(|a, b| b.last_used.cmp(&a.last_used));
+        Ok(entries.into_iter().map(|e| e.key).collect())
+    }
+
+    /// Remove orphaned partial writes (`*.kv.tmp`) left behind by an interrupted or
+    /// crashed `save`. Safe to call at cold start before any new writes; returns the
+    /// number of files removed.
+    pub fn sweep_partial(&self) -> io::Result<usize> {
+        let mut removed = 0;
+        for entry in fs::read_dir(&self.dir)? {
+            let entry = entry?;
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|n| n.ends_with(".kv.tmp"))
+                && fs::remove_file(entry.path()).is_ok()
+            {
                 removed += 1;
             }
         }
@@ -410,5 +462,22 @@ mod tests {
         // hit_count is written back to disk, so a fresh handle keeps counting.
         let cache2 = DiskKvCache::new(tmp.path(), 64).unwrap();
         assert_eq!(cache2.load(&key).unwrap().unwrap().header.hit_count, 3);
+    }
+
+    #[test]
+    fn keys_by_recency_orders_newest_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = DiskKvCache::new(tmp.path(), 64).unwrap();
+        for (i, name) in ["old", "mid", "new"].iter().enumerate() {
+            let key = key_for_bytes(name.as_bytes());
+            let mut header = KvcHeader::new(0, SaveReason::Cold, i as u32, 0);
+            header.last_used_unix = 1_000 + i as u64;
+            cache.save(&key, header, b"", b"x").unwrap();
+        }
+        let keys = cache.keys_by_recency().unwrap();
+        assert_eq!(keys.len(), 3);
+        assert_eq!(keys[0], key_for_bytes(b"new"));
+        assert_eq!(keys[1], key_for_bytes(b"mid"));
+        assert_eq!(keys[2], key_for_bytes(b"old"));
     }
 }
