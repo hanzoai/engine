@@ -14,10 +14,15 @@ jobs:
     build-and-push-image:
         strategy:
           matrix:
-            # AMD datacenter GPUs on stable ROCm. gfx942 = MI300, gfx90a = MI200.
-            # gfx1151 (Strix Halo APU) needs a ROCm 7.x base; build it natively or
-            # override ROCM_BASE + ROCM_GFX_ARCH locally until a 7.x tag is pinned.
-            gfx_arch: [gfx942, gfx90a]
+            # Each AMD target on a base that supports its ISA. gfx942 = MI300,
+            # gfx90a = MI200 (ROCm 6.4); gfx1151 = Strix Halo APU (ROCm 7.x).
+            include:
+              - gfx_arch: gfx942
+                rocm_base: rocm/dev-ubuntu-24.04:6.4.4
+              - gfx_arch: gfx90a
+                rocm_base: rocm/dev-ubuntu-24.04:6.4.4
+              - gfx_arch: gfx1151
+                rocm_base: rocm/dev-ubuntu-24.04:7.2.4
           fail-fast: false
         runs-on: hanzo-build-linux-amd64
         timeout-minutes: 210
@@ -81,4 +86,5 @@ jobs:
                 labels: ${{ steps.meta-rocm.outputs.labels }}
                 build-args: |
                   ROCM_GFX_ARCH=${{ matrix.gfx_arch }}
+                  ROCM_BASE=${{ matrix.rocm_base }}
                 cache-from: type=local,src=/tmp/.buildx-cache-rocm
