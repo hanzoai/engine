@@ -4,8 +4,8 @@ use clap::Subcommand;
 
 use crate::{
     pipeline::{
-        AutoDeviceMapParams, EmbeddingLoaderType, IsqOrganization, MultimodalLoaderType,
-        NormalLoaderType,
+        AnimationLoaderType, AutoDeviceMapParams, EmbeddingLoaderType, IsqOrganization,
+        MultimodalLoaderType, NormalLoaderType,
     },
     DiffusionLoaderType, ModelDType, SpeechLoaderType,
 };
@@ -40,6 +40,10 @@ fn parse_diffusion_arch(x: &str) -> Result<DiffusionLoaderType, String> {
 }
 
 fn parse_speech_arch(x: &str) -> Result<SpeechLoaderType, String> {
+    x.parse()
+}
+
+fn parse_animation_arch(x: &str) -> Result<AnimationLoaderType, String> {
     x.parse()
 }
 
@@ -687,6 +691,21 @@ pub enum ModelSelected {
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_speech_arch)]
         arch: SpeechLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        #[arg(long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        dtype: ModelDType,
+    },
+
+    /// Select a facial-animation model (lip-sync / avatar): MuseTalk UNet + VAE + whisper-tiny + S3FD.
+    Animation {
+        /// MuseTalk bundle: a local dir or HF repo holding musetalkV15/, sd-vae-ft-mse/, whisper/tiny.safetensors, s3fd.safetensors.
+        #[arg(short, long)]
+        model_id: String,
+
+        /// The architecture of the model.
+        #[arg(short, long, default_value = "musetalk", value_parser = parse_animation_arch)]
+        arch: AnimationLoaderType,
 
         /// Model data type. Defaults to `auto`.
         #[arg(long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]

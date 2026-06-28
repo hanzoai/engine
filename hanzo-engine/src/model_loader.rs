@@ -7,6 +7,7 @@ use std::{
 use hanzo_quant::MULTI_LORA_DELIMITER;
 
 use crate::{
+    diffusion_models::musetalk::AnimatorOptions,
     get_toml_selected_model_dtype,
     pipeline::{
         AutoLoaderBuilder, DiffusionLoaderBuilder, GGMLLoaderBuilder, GGMLSpecificConfig,
@@ -14,9 +15,9 @@ use crate::{
         NormalLoaderBuilder, NormalSpecificConfig,
     },
     toml_selector::get_toml_selected_model_device_map_params,
-    AutoDeviceMapParams, EmbeddingLoaderBuilder, EmbeddingSpecificConfig, Loader, ModelDType,
-    ModelSelected, SpeechLoader, TomlLoaderArgs, TomlSelector, Topology, GGUF_MULTI_FILE_DELIMITER,
-    UQFF_MULTI_FILE_DELIMITER,
+    AnimationLoader, AutoDeviceMapParams, EmbeddingLoaderBuilder, EmbeddingSpecificConfig, Loader,
+    ModelDType, ModelSelected, SpeechLoader, TomlLoaderArgs, TomlSelector, Topology,
+    GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
 };
 
 /// A builder for a loader using the selected model.
@@ -68,6 +69,7 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
         | ModelSelected::MultimodalPlain { .. }
         | ModelSelected::DiffusionPlain { .. }
         | ModelSelected::Speech { .. }
+        | ModelSelected::Animation { .. }
         | ModelSelected::Embedding { .. } => None,
         ModelSelected::XLora {
             tgt_non_granular_index,
@@ -102,6 +104,7 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
         | ModelSelected::LoraGGML { dtype, .. }
         | ModelSelected::Run { dtype, .. }
         | ModelSelected::Speech { dtype, .. }
+        | ModelSelected::Animation { dtype, .. }
         | ModelSelected::Embedding { dtype, .. } => Ok(*dtype),
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
@@ -204,6 +207,7 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
         }),
         ModelSelected::DiffusionPlain { .. }
         | ModelSelected::Speech { .. }
+        | ModelSelected::Animation { .. }
         | ModelSelected::Embedding { .. } => Ok(AutoDeviceMapParams::default_text()),
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
@@ -407,6 +411,15 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             dac_model_id,
             arch,
             cfg: None,
+        }),
+        ModelSelected::Animation {
+            model_id,
+            arch,
+            dtype: _,
+        } => Box::new(AnimationLoader {
+            model_id,
+            arch,
+            options: AnimatorOptions::default(),
         }),
         ModelSelected::XLora {
             model_id,
