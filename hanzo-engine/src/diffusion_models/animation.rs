@@ -58,6 +58,15 @@ pub struct AnimationRequest {
     pub fps: f64,
 }
 
+/// Per-request animation knobs carried on a `Sequence` (mirrors
+/// `DiffusionGenerationParams`); the frames/PCM ride the existing multimodal
+/// image/audio slots, so only the output rate + source kind live here.
+#[derive(Clone, Copy, Debug)]
+pub struct AnimationGenerationParams {
+    pub fps: f64,
+    pub kind: VisualKind,
+}
+
 pub struct AnimationOutput {
     pub frames: Vec<DynamicImage>,
     pub fps: f64,
