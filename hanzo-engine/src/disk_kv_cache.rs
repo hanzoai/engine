@@ -1,7 +1,7 @@
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufWriter, Read, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -160,10 +160,6 @@ impl DiskKvCache {
         fs::create_dir_all(&dir)?;
         let budget_bytes = (budget_mb * 1024 * 1024).max(MIN_BUDGET_BYTES);
         Ok(Self { dir, budget_bytes })
-    }
-
-    pub fn dir(&self) -> &Path {
-        &self.dir
     }
 
     pub fn budget_bytes(&self) -> u64 {
