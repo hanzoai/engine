@@ -191,6 +191,8 @@ pub enum NormalLoaderType {
     DeepSeekV3,
     #[serde(rename = "deepseekv32")]
     DeepSeekV32,
+    #[serde(rename = "deepseekv4")]
+    DeepSeekV4,
     #[serde(rename = "qwen3")]
     Qwen3,
     #[serde(rename = "glm4")]
@@ -230,6 +232,7 @@ impl NormalLoaderType {
             "DeepseekV2ForCausalLM" => Ok(Self::DeepSeekV2),
             "DeepseekV3ForCausalLM" => Ok(Self::DeepSeekV3),
             "DeepseekV32ForCausalLM" => Ok(Self::DeepSeekV32),
+            "DeepseekV4ForCausalLM" => Ok(Self::DeepSeekV4),
             "Qwen3ForCausalLM" => Ok(Self::Qwen3),
             "Glm4ForCausalLM" => Ok(Self::GLM4),
             "Glm4MoeLiteForCausalLM" => Ok(Self::GLM4MoeLite),
@@ -264,6 +267,7 @@ impl FromStr for NormalLoaderType {
             "deepseekv2" => Ok(Self::DeepSeekV2),
             "deepseekv3" => Ok(Self::DeepSeekV3),
             "deepseekv32" => Ok(Self::DeepSeekV32),
+            "deepseekv4" => Ok(Self::DeepSeekV4),
             "qwen3" => Ok(Self::Qwen3),
             "glm4" => Ok(Self::GLM4),
             "glm4moelite" => Ok(Self::GLM4MoeLite),
@@ -274,7 +278,7 @@ impl FromStr for NormalLoaderType {
             "gpt_oss" => Ok(Self::GptOss),
             "qwen3next" => Ok(Self::Qwen3Next),
             "minimax_m2" => Ok(Self::MiniMaxM2),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `deepseekv32`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `qwen3next`, `minimax_m2`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `deepseekv32`, `deepseekv4`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `qwen3next`, `minimax_m2`.")),
         }
     }
 }
@@ -295,6 +299,7 @@ impl Display for NormalLoaderType {
             Self::DeepSeekV2 => write!(f, "deepseekv2"),
             Self::DeepSeekV3 => write!(f, "deepseekv3"),
             Self::DeepSeekV32 => write!(f, "deepseekv32"),
+            Self::DeepSeekV4 => write!(f, "deepseekv4"),
             Self::Qwen3 => write!(f, "qwen3"),
             Self::GLM4 => write!(f, "glm4"),
             Self::GLM4MoeLite => write!(f, "glm4moelite"),
@@ -359,6 +364,7 @@ impl AutoNormalLoader {
             // into the validated V3 model and skip the unreferenced indexer/MTP
             // tensors (the pull-based VarBuilder never requests them).
             NormalLoaderType::DeepSeekV32 => Ok(Box::new(DeepSeekV3Loader)),
+            NormalLoaderType::DeepSeekV4 => Ok(Box::new(DeepSeekV4Loader)),
             NormalLoaderType::Qwen3 => Ok(Box::new(Qwen3Loader)),
             NormalLoaderType::GLM4 => Ok(Box::new(GLM4Loader)),
             NormalLoaderType::GLM4MoeLite => Ok(Box::new(GLM4MoeLiteLoader)),
@@ -3118,6 +3124,253 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
+        Ok(Box::new(cfg))
+    }
+}
+
+// =============================================================================
+// DeepSeek-V4
+// =============================================================================
+
+/// [`NormalLoader`] for a DeepSeek-V4 model (`DeepseekV4ForCausalLM`).
+pub struct DeepSeekV4Loader;
+
+impl NormalModelLoader for DeepSeekV4Loader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        Ok(Box::new(models::deepseek4::DeepSeekV4::new(
+            &cfg,
+            vb,
+            self.is_gptx(config)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _vb: ShardedVarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        todo!()
+    }
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+}
+
+impl IsqModelLoader for DeepSeekV4Loader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        let mut data = vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention (absorbed MLA + o-LoRA).
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_a_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_b_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.kv_a_proj_with_mqa\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_a_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_b_proj\.(weight|bias)$")?,
+        ];
+        for layer_idx in 0..cfg.num_hidden_layers {
+            if layer_idx >= cfg.num_hash_layers {
+                for i in 0..cfg.n_routed_experts {
+                    data.extend(vec![
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.up_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.down_proj\.(weight|bias)$"
+                        ))?,
+                    ]);
+                }
+                data.extend(vec![
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.shared_experts\.gate_proj\.(weight|bias)$"
+                    ))?,
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.shared_experts\.up_proj\.(weight|bias)$"
+                    ))?,
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.shared_experts\.down_proj\.(weight|bias)$"
+                    ))?,
+                ]);
+            } else {
+                data.extend(vec![
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.gate_proj\.(weight|bias)$"
+                    ))?,
+                    Regex::new(&format!(r"layers\.{layer_idx}\.mlp\.up_proj\.(weight|bias)$"))?,
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.down_proj\.(weight|bias)$"
+                    ))?,
+                ]);
+            }
+        }
+        Ok(data)
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        let mut data = vec![Regex::new(r"lm_head\.(weight|bias)$")?];
+        for layer_idx in cfg.num_hash_layers..cfg.num_hidden_layers {
+            for i in 0..cfg.n_routed_experts {
+                data.extend(vec![
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
+                    ))?,
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.experts\.{i}\.up_proj\.(weight|bias)$"
+                    ))?,
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.experts\.{i}\.down_proj\.(weight|bias)$"
+                    ))?,
+                ]);
+            }
+        }
+        Ok(data)
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
+    }
+}
+
+impl DeviceMappedModelLoader for DeepSeekV4Loader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        Ok(max_batch_size
+            * cfg.num_attention_heads
+            * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2))
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+        let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+            cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+        } else {
+            0
+        };
+        let norm = cfg.hidden_size;
+        // Output Hyper-Connection reduction (fn + scale + base).
+        let hc_dim = cfg.hc_mult * cfg.hidden_size;
+        let output_hc = hc_dim * cfg.hc_mult + 1 + cfg.hc_mult;
+        Ok((embed_tokens + lm_head + norm + output_hc) * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        let mut per_layer_elems = Vec::new();
+
+        let hc_mix = 2 * cfg.hc_mult + cfg.hc_mult * cfg.hc_mult;
+        let hc_block = hc_mix * (cfg.hc_mult * cfg.hidden_size) + 3 + hc_mix;
+
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let norms = 2 * cfg.hidden_size + cfg.q_lora_rank + cfg.head_dim;
+
+            let q_a = cfg.hidden_size * cfg.q_lora_rank / weight_pack_factor;
+            let q_b = cfg.q_lora_rank * (cfg.num_attention_heads * cfg.head_dim) / weight_pack_factor;
+            let kv_a = cfg.hidden_size * cfg.head_dim / weight_pack_factor;
+            let o_a =
+                (cfg.num_attention_heads * cfg.head_dim) * cfg.o_lora_rank / weight_pack_factor;
+            let o_b = cfg.o_lora_rank * cfg.hidden_size / weight_pack_factor;
+            let attn = q_a + q_b + kv_a + o_a + o_b;
+
+            let hc = 2 * hc_block;
+
+            let moe = if layer_idx >= cfg.num_hash_layers {
+                let h = cfg.hidden_size;
+                let gate_proj = h * cfg.moe_intermediate_size / weight_pack_factor * cfg.n_routed_experts;
+                let up_proj = h * cfg.moe_intermediate_size / weight_pack_factor * cfg.n_routed_experts;
+                let down_proj =
+                    cfg.moe_intermediate_size * h / weight_pack_factor * cfg.n_routed_experts;
+                let shared = {
+                    let inter = cfg.moe_intermediate_size * cfg.n_shared_experts;
+                    (h * inter + h * inter + inter * h) / weight_pack_factor
+                };
+                let gate_weight = cfg.n_routed_experts * cfg.hidden_size;
+                gate_proj + up_proj + down_proj + shared + gate_weight
+            } else {
+                let h = cfg.hidden_size;
+                let i = cfg.moe_intermediate_size;
+                (h * i + h * i + i * h) / weight_pack_factor
+            };
+
+            per_layer_elems.push(norms + attn + hc + moe);
+        }
+
+        Ok(per_layer_elems
+            .into_iter()
+            .map(|x| x * dtype.size_in_bytes())
+            .collect())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: 1,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: Some(cfg.sliding_window),
+            k_head_dim: cfg.head_dim,
+            v_head_dim: cfg.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
         Ok(Box::new(cfg))
     }
 }
