@@ -2992,9 +2992,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-kernels"
-version = "0.11.18"
+version = "0.11.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31a0d60ef930078349878c8a16e110ea956ebc249898bf103eb15b843c1fc362"
+checksum = "decdf490b3786924ce76ca4addd0b63382d90dde3f77e586e4d0a7be6740c6dd"
 dependencies = [
  "glob",
  "hanzo-bindgen-cuda",
@@ -3050,9 +3050,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.11.18"
+version = "0.11.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3096b70198b51d8bc6cf2b0cf597851a48e340765a95d2b7ff77a268deb246ff"
+checksum = "a5db0d31f443622c279ffdd7db60ba766252e3545d59a5114e1b6b96b2641762"
 dependencies = [
  "accelerate-src",
  "ash",
