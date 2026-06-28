@@ -30,11 +30,11 @@
 //!         ChatCompletionOnChunkCallback, ChatCompletionOnDoneCallback, ChatCompletionResponder,
 //!     },
 //!     handler_core::{create_response_channel, send_request},
-//!     hanzo_for_server_builder::HanzoForServerBuilder,
-//!     hanzo_server_router_builder::HanzoServerRouterBuilder,
+//!     server::ServerBuilder,
+//!     router::RouterBuilder,
 //!     openai::ChatCompletionRequest,
 //!     openapi_doc::get_openapi_doc,
-//!     types::SharedHanzoState,
+//!     types::SharedState,
 //! };
 //!
 //! #[derive(OpenApi)]
@@ -53,7 +53,7 @@
 //!
 //! #[derive(Clone)]
 //! pub struct AppState {
-//!     pub hanzo_state: SharedHanzoState,
+//!     pub hanzo_state: SharedState,
 //!     pub db_create: fn(),
 //! }
 //!
@@ -96,7 +96,7 @@
 //!         matformer_slice_name,
 //!     };
 //!
-//!     let shared_hanzo = HanzoForServerBuilder::new()
+//!     let shared_hanzo = ServerBuilder::new()
 //!         .with_model(model)
 //!         .with_in_situ_quant("8".to_string())
 //!         .set_paged_attn(Some(true))
@@ -106,7 +106,7 @@
 //!
 //!     let hanzo_base_path = "/api/mistral";
 //!
-//!     let hanzo_routes = HanzoServerRouterBuilder::new()
+//!     let hanzo_routes = RouterBuilder::new()
 //!         .with_hanzo(shared_hanzo.clone())
 //!         .with_include_swagger_routes(false)
 //!         .with_base_path(hanzo_base_path)
@@ -230,8 +230,8 @@ pub mod embeddings;
 pub mod files;
 pub mod handler_core;
 mod handlers;
-pub mod hanzo_for_server_builder;
-pub mod hanzo_server_router_builder;
+pub mod server;
+pub mod router;
 pub mod image_generation;
 pub mod model_registry;
 pub mod openai;
