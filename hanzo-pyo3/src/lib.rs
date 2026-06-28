@@ -36,7 +36,7 @@ use hanzo_engine::{
     DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata,
     DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams,
     EmbeddingLoaderBuilder, EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoaderBuilder, GGUFSpecificConfig, Hanzo, HanzoBuilder, ImageGenerationResponse,
+    GGUFLoaderBuilder, GGUFSpecificConfig, Hanzo, Builder, ImageGenerationResponse,
     ImageGenerationResponseFormat, LlguidanceGrammar, Loader, MemoryGpuConfig,
     MultimodalLoaderBuilder, MultimodalSpecificConfig, NormalLoaderBuilder, NormalRequest,
     NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, ReasoningEffort,
@@ -945,7 +945,7 @@ impl Runner {
             None => None,
         };
         let mut builder =
-            HanzoBuilder::new(pipeline, scheduler_config, false, search_embedding_model);
+            Builder::new(pipeline, scheduler_config, false, search_embedding_model);
         if let Some(cb) = cb {
             builder = builder.with_search_callback(cb);
         }

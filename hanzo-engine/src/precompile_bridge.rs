@@ -166,7 +166,7 @@ pub fn embed(model: &str, text: &[u8]) -> Result<Vec<f32>, EngineError> {
 }
 
 /// Parse a `name=kind:source;...` model spec into `(name, ModelSelected)`
-/// configs for `HanzoForServerBuilder`. `kind` ∈ {`gguf`,`plain`,`embedding`}.
+/// configs for `ServerBuilder`. `kind` ∈ {`gguf`,`plain`,`embedding`}.
 /// `tok_dir` overrides the GGUF tokenizer dir (else the .gguf's own dir). Shared
 /// by the FFI loader and the VM examples so there is exactly one config format
 /// for "load these zen / zen-embedding models". The first entry is the default.
