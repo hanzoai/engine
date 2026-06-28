@@ -257,23 +257,24 @@ impl BasicTransformerBlock {
 #[derive(Debug, Clone)]
 struct Transformer2D {
     norm: GroupNorm,
-    proj_in: Linear,
+    proj_in: Conv2d,
     blocks: Vec<BasicTransformerBlock>,
-    proj_out: Linear,
+    proj_out: Conv2d,
 }
 
 impl Transformer2D {
     fn new(channels: usize, cfg: &UNetConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let heads = channels / cfg.attention_head_dim;
         let norm = group_norm(cfg.norm_num_groups, channels, 1e-6, vb.pp("norm"))?;
-        let proj_in = linear(channels, channels, vb.pp("proj_in"))?;
+        // This MuseTalk UNet uses use_linear_projection=False: proj_in/proj_out are 1x1 conv.
+        let proj_in = conv2d(channels, channels, 1, Default::default(), vb.pp("proj_in"))?;
         let blocks = vec![BasicTransformerBlock::new(
             channels,
             cfg.cross_attention_dim,
             heads,
             vb.pp("transformer_blocks").pp(0),
         )?];
-        let proj_out = linear(channels, channels, vb.pp("proj_out"))?;
+        let proj_out = conv2d(channels, channels, 1, Default::default(), vb.pp("proj_out"))?;
         Ok(Self {
             norm,
             proj_in,
@@ -286,13 +287,13 @@ impl Transformer2D {
         let residual = xs;
         let (b, c, h, w) = xs.dims4()?;
         let mut hidden = self.norm.forward(xs)?;
+        hidden = Convolution.forward_2d(&self.proj_in, &hidden)?;
         hidden = hidden.reshape((b, c, h * w))?.transpose(1, 2)?;
-        hidden = self.proj_in.forward(&hidden)?;
         for block in self.blocks.iter() {
             hidden = block.forward(&hidden, context)?;
         }
-        hidden = self.proj_out.forward(&hidden)?;
         hidden = hidden.transpose(1, 2)?.reshape((b, c, h, w))?;
+        hidden = Convolution.forward_2d(&self.proj_out, &hidden)?;
         hidden + residual
     }
 }
