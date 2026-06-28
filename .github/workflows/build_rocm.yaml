@@ -1,0 +1,84 @@
+name: build_rocm
+
+# gh workflow run build_rocm
+# This also runs on release deploy
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+  push:
+    tags:
+      - '**[0-9]+.[0-9]+.[0-9]+*'
+
+jobs:
+    build-and-push-image:
+        strategy:
+          matrix:
+            # AMD datacenter GPUs on stable ROCm. gfx942 = MI300, gfx90a = MI200.
+            # gfx1151 (Strix Halo APU) needs a ROCm 7.x base; build it natively or
+            # override ROCM_BASE + ROCM_GFX_ARCH locally until a 7.x tag is pinned.
+            gfx_arch: [gfx942, gfx90a]
+          fail-fast: false
+        runs-on: hanzo-build-linux-amd64
+        timeout-minutes: 210
+
+        permissions:
+            contents: write
+            packages: write
+            id-token: write
+            security-events: write
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v3
+
+            - name: Initialize Docker Buildx
+              uses: docker/setup-buildx-action@v3
+              with:
+                install: true
+
+            - name: Setup cache
+              uses: actions/cache@v3
+              with:
+                path: /tmp/.buildx-cache-rocm
+                key: ${{ runner.os }}-buildx-rocm-${{ github.sha }}
+                restore-keys: |
+                  ${{ runner.os }}-buildx-rocm-
+
+            - name: Inject slug/short variables
+              id: slug
+              uses: rlespinasse/github-slug-action@v4.5.0
+
+            - name: Login to GitHub Container Registry
+              if: github.event_name != 'pull_request'
+              uses: docker/login-action@v3
+              with:
+                registry: ghcr.io
+                username: ${{ github.actor }}
+                password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Extract metadata (tags, labels) for Docker
+              id: meta-rocm
+              uses: docker/metadata-action@v5
+              with:
+                  images: |
+                    ghcr.io/${{ github.repository }}
+                  flavor: |
+                    latest=false
+                  tags: |
+                    type=semver,pattern=rocm-${{ matrix.gfx_arch }}-{{ version }}
+                    type=semver,pattern=rocm-${{ matrix.gfx_arch }}-{{ major }}.{{ minor }}
+                    type=raw,value=rocm-${{ matrix.gfx_arch }}-sha-${{ steps.slug.outputs.short_sha }}
+                    type=raw,value=rocm-${{ matrix.gfx_arch }}-sha-${{ github.sha }}
+            - name: Build and push Docker image
+              id: build-and-push-rocm
+              uses: docker/build-push-action@v6
+              with:
+                context: .
+                file: Dockerfile.rocm
+                push: ${{ github.event_name != 'pull_request' }}
+                platforms: 'linux/amd64'
+                tags: ${{ steps.meta-rocm.outputs.tags }}
+                labels: ${{ steps.meta-rocm.outputs.labels }}
+                build-args: |
+                  ROCM_GFX_ARCH=${{ matrix.gfx_arch }}
+                cache-from: type=local,src=/tmp/.buildx-cache-rocm
