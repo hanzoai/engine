@@ -133,7 +133,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -144,7 +144,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -466,7 +466,7 @@ dependencies = [
  "bitflags 2.13.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.12.1",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -1714,7 +1714,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1936,7 +1936,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2880,7 +2880,7 @@ dependencies = [
  "hanzo-code-exec",
  "hanzo-flash-attn",
  "hanzo-llm-mcp",
- "hanzo-metal-kernels",
+ "hanzo-metal-kernels 0.11.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "hanzo-ml",
  "hanzo-nn",
  "hanzo-paged-attn",
@@ -2993,8 +2993,6 @@ dependencies = [
 [[package]]
 name = "hanzo-kernels"
 version = "0.11.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edc018a531847c05e2c5fad5dc733bf8aade6d98c3f7a752e474f3b4f6e79b53"
 dependencies = [
  "glob",
  "hanzo-bindgen-cuda",
@@ -3035,6 +3033,20 @@ dependencies = [
 [[package]]
 name = "hanzo-metal-kernels"
 version = "0.11.8"
+dependencies = [
+ "block2",
+ "half",
+ "objc2",
+ "objc2-foundation",
+ "objc2-metal",
+ "once_cell",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "hanzo-metal-kernels"
+version = "0.11.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9fdf34c7ab9243f1ea16a0ab675ffd5c39a4b17b4fcb3af683c77712dfbf4920"
 dependencies = [
@@ -3050,9 +3062,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.11.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d34bc447e5f1115d4bf5df9dcca869a9baa29ca60ba08e31f020e0aa2763f8eb"
+version = "0.11.13"
 dependencies = [
  "accelerate-src",
  "ash",
@@ -3062,7 +3072,7 @@ dependencies = [
  "gemm 0.19.0",
  "half",
  "hanzo-kernels",
- "hanzo-metal-kernels",
+ "hanzo-metal-kernels 0.11.8",
  "hanzo-rocm",
  "hanzo-rocm-kernels",
  "hanzo-ug",
@@ -3089,12 +3099,10 @@ dependencies = [
 [[package]]
 name = "hanzo-nn"
 version = "0.11.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e93b86a074b1d9528d5f48840bf882a828350aa3292f2689a40b7aec44c67035"
 dependencies = [
  "accelerate-src",
  "half",
- "hanzo-metal-kernels",
+ "hanzo-metal-kernels 0.11.8",
  "hanzo-ml",
  "intel-mkl-src",
  "libc",
@@ -3115,7 +3123,7 @@ dependencies = [
  "dispatch2",
  "float8",
  "half",
- "hanzo-metal-kernels",
+ "hanzo-metal-kernels 0.11.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "hanzo-ml",
  "objc2-foundation",
  "objc2-metal",
@@ -3163,7 +3171,7 @@ dependencies = [
  "dispatch2",
  "float8",
  "half",
- "hanzo-metal-kernels",
+ "hanzo-metal-kernels 0.11.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "hanzo-ml",
  "hanzo-nn",
  "hf-hub",
@@ -3197,9 +3205,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-rocm-kernels"
-version = "0.11.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba835ef77b35b0010c6b14febe559de1cfb5a8a3c9c01e283aa324118d1a6fc7"
+version = "0.11.13"
 dependencies = [
  "dirs 5.0.1",
  "half",
@@ -3280,8 +3286,6 @@ dependencies = [
 [[package]]
 name = "hanzo-ug"
 version = "0.11.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1334cd69ce471af6e51325cb778c166924dcfdd729985b2c6d1a05063fb02df3"
 dependencies = [
  "ug",
  "ug-cuda",
@@ -3595,7 +3599,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -3903,15 +3907,6 @@ name = "itertools"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
 dependencies = [
  "either",
 ]
@@ -4618,7 +4613,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6086,7 +6081,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6145,7 +6140,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6727,7 +6722,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6795,7 +6790,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7187,7 +7182,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7227,7 +7222,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8461,7 +8456,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8522,19 +8517,6 @@ dependencies = [
  "windows-link 0.1.3",
  "windows-result 0.3.4",
  "windows-strings 0.4.2",
-]
-
-[[package]]
-name = "windows-core"
-version = "0.62.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
-dependencies = [
- "windows-implement",
- "windows-interface",
- "windows-link 0.2.1",
- "windows-result 0.4.1",
- "windows-strings 0.5.1",
 ]
 
 [[package]]

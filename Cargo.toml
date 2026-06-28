@@ -35,7 +35,7 @@ rust-version = "1.88"
 [workspace.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 # Hanzo ML crates.
-hanzo-ml = { version = "0.11.11" }
+hanzo-ml = { version = "0.11.13" }
 hanzo-nn = { version = "0.11.8" }
 hanzo-flash-attn = { version = "0.11.3" }
 hanzo-flash-attn-v3 = { version = "0.11.3", package = "hanzo-flash-attn" }
@@ -229,3 +229,8 @@ debug = true
 debug = true
 opt-level = 3
 
+
+[patch.crates-io]
+hanzo-ml = { path = "/home/z/occ-ml/hanzo-ml" }
+hanzo-nn = { path = "/home/z/occ-ml/hanzo-nn" }
+hanzo-rocm-kernels = { path = "/home/z/occ-ml/hanzo-rocm-kernels" }
