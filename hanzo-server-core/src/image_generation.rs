@@ -172,6 +172,7 @@ pub fn match_responses(state: SharedState, response: Response) -> ImageGeneratio
         Response::Done(_) => unreachable!(),
         Response::ModelError(_, _) => unreachable!(),
         Response::Speech { .. } => unreachable!(),
+        Response::Frames { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
