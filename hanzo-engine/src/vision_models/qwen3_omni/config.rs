@@ -14,6 +14,8 @@
 
 use serde::Deserialize;
 
+use hanzo_quant::QuantizedConfig;
+
 use crate::layers::Activation;
 use crate::serde_default_fn;
 
@@ -76,6 +78,12 @@ pub struct OmniTextConfig {
     pub tie_word_embeddings: bool,
     #[serde(default)]
     pub rope_scaling: Option<RopeScaling>,
+    /// In-checkpoint quantization (FP8 / GPTQ / AWQ / …) for the Thinker's quantizable linears.
+    /// `None` for a full-precision checkpoint; runtime ISQ is orthogonal and applies on top of an
+    /// unquantized checkpoint. HF places this at the config top level, so [`Qwen3OmniConfig::new`]'s
+    /// caller propagates the top-level field here before the Thinker is built.
+    #[serde(default)]
+    pub quantization_config: Option<QuantizedConfig>,
 }
 
 serde_default_fn!(usize, default_one, 1);
@@ -308,4 +316,9 @@ pub struct Qwen3OmniConfig {
     pub tts_bos_token_id: u32,
     pub tts_eos_token_id: u32,
     pub tts_pad_token_id: u32,
+    /// Top-level in-checkpoint quantization config (FP8 / GPTQ / …). Takes precedence over and is
+    /// propagated into [`OmniTextConfig::quantization_config`] when the Thinker is constructed, so a
+    /// pre-quantized Omni checkpoint loads the Thinker linears through the quantized path.
+    #[serde(default)]
+    pub quantization_config: Option<QuantizedConfig>,
 }
