@@ -7147,7 +7147,62 @@ impl MultimodalModelLoader for Qwen3OmniLoader {
 }
 
 impl IsqModelLoader for Qwen3OmniLoader {
-    // Not an ISQ checkpoint: empty regexes (the defaults) mean no in-place quantization.
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        // ISQ is scoped to the Thinker text decoder: `thinker.model.layers.*` + `thinker.lm_head`.
+        // The audio tower (`thinker.audio_tower.*`), vision tower (`thinker.visual.*`), Talker
+        // (`talker.*`) and Code2Wav (`code2wav.*`) are deliberately never matched — they stay full
+        // precision for quality and are a small fraction of the parameters. The MoE router `gate`
+        // (`...mlp.gate.weight`) is excluded (it stays a full-precision `Linear`); experts are stored
+        // per-expert in this checkpoint, so each `experts.N.{gate,up,down}_proj` is matched directly.
+        Ok(vec![
+            Regex::new(r"thinker\.lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"thinker\.model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"thinker\.model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"thinker\.model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"thinker\.model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // Dense MLP (only present for `mlp_only_layers`; none in this checkpoint, allowed by arch)
+            Regex::new(r"thinker\.model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"thinker\.model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"thinker\.model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            // MoE experts (per-expert)
+            Regex::new(
+                r"thinker\.model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"thinker\.model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"thinker\.model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
+            )?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        // MoE-experts-only organization: quantize the head + the experts (and any dense MLP), but
+        // leave attention full precision. Router gate excluded (stays `Linear`), towers/Talker/
+        // Code2Wav excluded (thinker-scoped).
+        Ok(vec![
+            Regex::new(r"thinker\.lm_head\.(weight|bias)$")?,
+            Regex::new(r"thinker\.model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"thinker\.model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"thinker\.model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"thinker\.model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"thinker\.model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"thinker\.model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
+            )?,
+        ])
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
+    }
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
@@ -7975,5 +8030,65 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         };
 
         Ok(Box::new(cfg))
+    }
+}
+
+#[cfg(test)]
+mod qwen3_omni_isq_tests {
+    use super::*;
+
+    /// The Qwen3-Omni ISQ regexes are the immediate-ISQ contract: they must match every quantizable
+    /// Thinker linear and *nothing* outside the Thinker text decoder. The audio/vision towers, the
+    /// Talker, Code2Wav, the MoE router `gate`, embeddings and every norm must stay full precision.
+    /// (`get_isq_layers`'s exact-count structural test guards the model side; this guards the loader
+    /// side so the two never drift.)
+    #[test]
+    fn qwen3_omni_isq_regexes_scope_to_thinker_text() {
+        let regexes = Qwen3OmniLoader.isq_layer_regexes("").unwrap();
+        let matches = |name: &str| regexes.iter().any(|r| r.is_match(name));
+
+        // Quantized: attention q/k/v/o, per-expert gate/up/down, head.
+        assert!(matches("thinker.model.layers.0.self_attn.q_proj.weight"));
+        assert!(matches("thinker.model.layers.47.self_attn.k_proj.weight"));
+        assert!(matches("thinker.model.layers.47.self_attn.v_proj.weight"));
+        assert!(matches("thinker.model.layers.47.self_attn.o_proj.weight"));
+        assert!(matches(
+            "thinker.model.layers.12.mlp.experts.127.gate_proj.weight"
+        ));
+        assert!(matches(
+            "thinker.model.layers.12.mlp.experts.0.up_proj.weight"
+        ));
+        assert!(matches(
+            "thinker.model.layers.12.mlp.experts.63.down_proj.weight"
+        ));
+        assert!(matches("thinker.lm_head.weight"));
+
+        // NOT quantized: router gate, towers, Talker, Code2Wav, embeddings, norms.
+        assert!(
+            !matches("thinker.model.layers.0.mlp.gate.weight"),
+            "router gate must stay full precision"
+        );
+        assert!(!matches(
+            "thinker.audio_tower.layers.0.self_attn.q_proj.weight"
+        ));
+        assert!(!matches("thinker.visual.blocks.0.attn.qkv.weight"));
+        assert!(!matches("talker.model.layers.0.self_attn.q_proj.weight"));
+        assert!(!matches("code2wav.decoder.layers.0.conv.weight"));
+        assert!(!matches("thinker.model.embed_tokens.weight"));
+        assert!(!matches("thinker.model.norm.weight"));
+        assert!(!matches("thinker.model.layers.0.self_attn.q_norm.weight"));
+        assert!(!matches("thinker.model.layers.0.input_layernorm.weight"));
+
+        // The MoE-experts-only variant excludes attention but keeps experts + head.
+        let moqe = Qwen3OmniLoader.isq_layer_regexes_moqe("").unwrap();
+        let m_moqe = |name: &str| moqe.iter().any(|r| r.is_match(name));
+        assert!(m_moqe(
+            "thinker.model.layers.12.mlp.experts.0.gate_proj.weight"
+        ));
+        assert!(m_moqe("thinker.lm_head.weight"));
+        assert!(
+            !m_moqe("thinker.model.layers.0.self_attn.q_proj.weight"),
+            "MoQE must leave attention full precision"
+        );
     }
 }
