@@ -1644,3 +1644,217 @@ mod deepseek_v3_family_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod deepseek_v3_family_tests {
+    //! Frontier checkpoints whose `architectures[0]` is `DeepseekV3ForCausalLM`
+    //! and which therefore load on the validated [`DeepSeekV3`] MLA/MoE loader
+    //! with zero new model code: Moonshot **Kimi-K2** (K2-Instruct / K2-Thinking
+    //! / K2-0905, all `model_type = "kimi_k2"`) and **DeepSeek-V3.1**. The real
+    //! `config.json` is embedded verbatim; these tests prove it deserializes into
+    //! [`DeepSeekV3Config`] (extra HF bookkeeping keys are ignored — the struct is
+    //! not `deny_unknown_fields`) and that the registry dispatches the class.
+    use super::{DeepSeekV3Config, ScoringFunc, TopkMethod};
+    use crate::pipeline::NormalLoaderType;
+
+    /// Real `moonshotai/Kimi-K2-Instruct` `config.json`, verbatim.
+    const KIMI_K2_CONFIG: &str = r##"{
+  "architectures": [
+    "DeepseekV3ForCausalLM"
+  ],
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "auto_map": {
+    "AutoConfig": "configuration_deepseek.DeepseekV3Config",
+    "AutoModel": "modeling_deepseek.DeepseekV3Model",
+    "AutoModelForCausalLM": "modeling_deepseek.DeepseekV3ForCausalLM"
+  },
+  "aux_loss_alpha": 0.001,
+  "bos_token_id": 163584,
+  "eos_token_id": 163585,
+  "first_k_dense_replace": 1,
+  "hidden_act": "silu",
+  "hidden_size": 7168,
+  "initializer_range": 0.02,
+  "intermediate_size": 18432,
+  "kv_lora_rank": 512,
+  "max_position_embeddings": 131072,
+  "model_type": "kimi_k2",
+  "moe_intermediate_size": 2048,
+  "moe_layer_freq": 1,
+  "n_group": 1,
+  "n_routed_experts": 384,
+  "n_shared_experts": 1,
+  "norm_topk_prob": true,
+  "num_attention_heads": 64,
+  "num_experts_per_tok": 8,
+  "num_hidden_layers": 61,
+  "num_key_value_heads": 64,
+  "num_nextn_predict_layers": 0,
+  "pretraining_tp": 1,
+  "q_lora_rank": 1536,
+  "qk_nope_head_dim": 128,
+  "qk_rope_head_dim": 64,
+  "quantization_config": {
+    "activation_scheme": "dynamic",
+    "fmt": "e4m3",
+    "quant_method": "fp8",
+    "weight_block_size": [
+      128,
+      128
+    ]
+  },
+  "rms_norm_eps": 1e-06,
+  "rope_theta": 50000.0,
+  "routed_scaling_factor": 2.827,
+  "rope_scaling": {
+    "beta_fast": 1.0,
+    "beta_slow": 1.0,
+    "factor": 32.0,
+    "mscale": 1.0,
+    "mscale_all_dim": 1.0,
+    "original_max_position_embeddings": 4096,
+    "type": "yarn"
+  },
+  "scoring_func": "sigmoid",
+  "seq_aux": true,
+  "tie_word_embeddings": false,
+  "topk_group": 1,
+  "topk_method": "noaux_tc",
+  "torch_dtype": "bfloat16",
+  "transformers_version": "4.48.3",
+  "use_cache": true,
+  "v_head_dim": 128,
+  "vocab_size": 163840
+}"##;
+
+    /// Real `deepseek-ai/DeepSeek-V3.1` `config.json`, verbatim.
+    const DEEPSEEK_V31_CONFIG: &str = r##"{
+  "architectures": [
+    "DeepseekV3ForCausalLM"
+  ],
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "auto_map": {
+    "AutoConfig": "configuration_deepseek.DeepseekV3Config",
+    "AutoModel": "modeling_deepseek.DeepseekV3Model",
+    "AutoModelForCausalLM": "modeling_deepseek.DeepseekV3ForCausalLM"
+  },
+  "bos_token_id": 0,
+  "eos_token_id": 1,
+  "ep_size": 1,
+  "first_k_dense_replace": 3,
+  "hidden_act": "silu",
+  "hidden_size": 7168,
+  "initializer_range": 0.02,
+  "intermediate_size": 18432,
+  "kv_lora_rank": 512,
+  "max_position_embeddings": 163840,
+  "model_type": "deepseek_v3",
+  "moe_intermediate_size": 2048,
+  "moe_layer_freq": 1,
+  "n_group": 8,
+  "n_routed_experts": 256,
+  "n_shared_experts": 1,
+  "norm_topk_prob": true,
+  "num_attention_heads": 128,
+  "num_experts_per_tok": 8,
+  "num_hidden_layers": 61,
+  "num_key_value_heads": 128,
+  "num_nextn_predict_layers": 1,
+  "q_lora_rank": 1536,
+  "qk_nope_head_dim": 128,
+  "qk_rope_head_dim": 64,
+  "quantization_config": {
+    "activation_scheme": "dynamic",
+    "fmt": "e4m3",
+    "quant_method": "fp8",
+    "weight_block_size": [
+      128,
+      128
+    ],
+    "scale_fmt": "ue8m0"
+  },
+  "rms_norm_eps": 1e-06,
+  "rope_scaling": {
+    "beta_fast": 32,
+    "beta_slow": 1,
+    "factor": 40,
+    "mscale": 1.0,
+    "mscale_all_dim": 1.0,
+    "original_max_position_embeddings": 4096,
+    "type": "yarn"
+  },
+  "rope_theta": 10000,
+  "routed_scaling_factor": 2.5,
+  "scoring_func": "sigmoid",
+  "tie_word_embeddings": false,
+  "topk_group": 4,
+  "topk_method": "noaux_tc",
+  "torch_dtype": "bfloat16",
+  "transformers_version": "4.44.2",
+  "use_cache": true,
+  "v_head_dim": 128,
+  "vocab_size": 129280
+}"##;
+
+    #[test]
+    fn kimi_k2_config_parses() {
+        let cfg: DeepSeekV3Config = serde_json::from_str(KIMI_K2_CONFIG)
+            .expect("Kimi-K2 config must deserialize into DeepSeekV3Config");
+        // MLA dims.
+        assert_eq!(cfg.hidden_size, 7168);
+        assert_eq!(cfg.num_hidden_layers, 61);
+        assert_eq!(cfg.q_lora_rank, Some(1536));
+        assert_eq!(cfg.kv_lora_rank, 512);
+        assert_eq!(cfg.qk_nope_head_dim, 128);
+        assert_eq!(cfg.qk_rope_head_dim, 64);
+        assert_eq!(cfg.v_head_dim, 128);
+        assert_eq!(cfg.q_head_dim(), 192);
+        // Fine-grained MoE (NoAuxTc sigmoid gate) — Kimi-K2 widens to 384 experts.
+        assert_eq!(cfg.n_routed_experts, Some(384));
+        assert_eq!(cfg.n_shared_experts, Some(1));
+        assert_eq!(cfg.num_experts_per_tok, Some(8));
+        assert!(matches!(cfg.topk_method, TopkMethod::NoAuxTc));
+        assert!(matches!(cfg.scoring_func, ScoringFunc::Sigmoid));
+        // YARN rope + fp8 block quant survive deserialization.
+        assert!(cfg.rope_scaling.is_some());
+        assert!(cfg.quantization_config.is_some());
+    }
+
+    #[test]
+    fn deepseek_v31_config_parses() {
+        let cfg: DeepSeekV3Config = serde_json::from_str(DEEPSEEK_V31_CONFIG)
+            .expect("DeepSeek-V3.1 config must deserialize into DeepSeekV3Config");
+        assert_eq!(cfg.hidden_size, 7168);
+        assert_eq!(cfg.num_hidden_layers, 61);
+        assert_eq!(cfg.n_routed_experts, Some(256));
+        assert_eq!(cfg.num_experts_per_tok, Some(8));
+        assert_eq!(cfg.q_lora_rank, Some(1536));
+        assert_eq!(cfg.q_head_dim(), 192);
+        assert!(matches!(cfg.topk_method, TopkMethod::NoAuxTc));
+        assert!(cfg.rope_scaling.is_some());
+    }
+
+    #[test]
+    fn deepseek_v3_family_registry_dispatch() {
+        // Kimi-K2 (all variants), DeepSeek-V3 / V3.1 / R1 all carry this class.
+        assert_eq!(
+            NormalLoaderType::from_causal_lm_name("DeepseekV3ForCausalLM").unwrap(),
+            NormalLoaderType::DeepSeekV3
+        );
+        // DeepSeek-V3.2-Exp (DSA) reuses the V3 loader via its own enum arm.
+        assert_eq!(
+            NormalLoaderType::from_causal_lm_name("DeepseekV32ForCausalLM").unwrap(),
+            NormalLoaderType::DeepSeekV32
+        );
+        assert_eq!(
+            "deepseekv3".parse::<NormalLoaderType>().unwrap(),
+            NormalLoaderType::DeepSeekV3
+        );
+        assert_eq!(
+            "deepseekv32".parse::<NormalLoaderType>().unwrap(),
+            NormalLoaderType::DeepSeekV32
+        );
+    }
+}
