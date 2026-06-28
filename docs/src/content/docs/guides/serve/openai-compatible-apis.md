@@ -1,21 +1,21 @@
 ---
 title: OpenAI-compatible APIs
-description: Use OpenAI-compatible clients with the mistralrs HTTP server.
+description: Use OpenAI-compatible clients with the Hanzo Engine HTTP server.
 sidebar:
   order: 4
 ---
 
-mistral.rs exposes OpenAI-compatible endpoints under `/v1`. Use
+Hanzo Engine exposes OpenAI-compatible endpoints under `/v1`. Use
 `http://localhost:1234/v1` as the base URL for OpenAI SDKs and compatible
 clients.
 
-The same server also exposes the [Anthropic Messages API](/mistral.rs/guides/serve/anthropic-messages-api/)
+The same server also exposes the [Anthropic Messages API](/hanzo/guides/serve/anthropic-messages-api/)
 at `http://localhost:1234`.
 
 ## Start the server
 
 ```bash
-mistralrs serve -m Qwen/Qwen3-4B
+hanzo serve -m Qwen/Qwen3-4B
 ```
 
 Use `model: "default"` for a single-model server. In multi-model serving, use
@@ -26,7 +26,7 @@ the configured model id exactly as it appears in `GET /v1/models`.
 | Endpoint | Purpose |
 |---|---|
 | `GET /v1/models` | List loaded models. |
-| `POST /v1/chat/completions` | OpenAI-compatible chat, streaming, tool calling, multimodal inputs, and mistral.rs agentic extensions. |
+| `POST /v1/chat/completions` | OpenAI-compatible chat, streaming, tool calling, multimodal inputs, and Hanzo Engine agentic extensions. |
 | `POST /v1/responses` | OpenAI Responses API for response objects, polling, background runs, and cancellation. |
 | `POST /v1/completions` | Legacy text completions. |
 | `POST /v1/embeddings` | Embedding generation. |
@@ -35,8 +35,8 @@ the configured model id exactly as it appears in `GET /v1/models`.
 | `GET /v1/files` | List files produced by agentic runs. |
 
 For every path, request schema, and response schema, see the
-[HTTP API reference](/mistral.rs/reference/http-api/). For field-level
-compatibility notes, see [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/).
+[HTTP API reference](/hanzo/reference/http-api/). For field-level
+compatibility notes, see [OpenAI compatibility](/hanzo/reference/openai-compatibility/).
 
 ## Chat Completions
 
@@ -66,7 +66,7 @@ client = OpenAI(base_url="http://localhost:1234/v1", api_key="not-used")
 
 response = client.chat.completions.create(
     model="default",
-    messages=[{"role": "user", "content": "Say hello from mistral.rs."}],
+    messages=[{"role": "user", "content": "Say hello from Hanzo Engine."}],
 )
 
 print(response.choices[0].message.content)
@@ -88,25 +88,25 @@ curl http://localhost:1234/v1/responses \
   }'
 ```
 
-See [OpenAI Responses API](/mistral.rs/guides/serve/openai-responses-api/) for
+See [OpenAI Responses API](/hanzo/guides/serve/openai-responses-api/) for
 supported fields and endpoint-specific behavior.
 
 ## Tools and agentic features
 
 OpenAI-compatible function tools are supported on Chat Completions and
-Responses. mistral.rs also supports `strict: true` inside function definitions
+Responses. Hanzo Engine also supports `strict: true` inside function definitions
 for JSON-Schema-constrained tool arguments.
 
 When the server is started with agentic capabilities, OpenAI-compatible requests
-can also use mistral.rs extensions such as `session_id`, `web_search_options`,
+can also use Hanzo Engine extensions such as `session_id`, `web_search_options`,
 `enable_code_execution`, `agent_permission`, `files`, and `max_tool_rounds`.
 
 ```bash
-mistralrs serve --agent -m Qwen/Qwen3-4B
+hanzo serve --agent -m Qwen/Qwen3-4B
 ```
 
 For app-facing tool timelines, generated files, search, code execution, and
-session state, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
+session state, see [agentic runtime for apps](/hanzo/guides/agents/agentic-runtime/).
 
 ## Examples
 
@@ -122,4 +122,4 @@ Server examples live in `examples/server/`:
 | `web_search.py` | Search through OpenAI-compatible request fields. |
 | `codex_config.toml` | Codex provider config for `/v1/responses`. |
 
-For Codex setup, see [Use Codex and Claude Code](/mistral.rs/guides/serve/coding-agents/).
+For Codex setup, see [Use Codex and Claude Code](/hanzo/guides/serve/coding-agents/).

@@ -31,6 +31,6 @@ Flash and paged attention compose. Both can be on simultaneously, but they are n
 - `flash-attn` and `flash-attn-v3` are Cargo features for the standard attention path and fallback varlen paths.
 - FlashInfer paged decode and prefill kernels are built with the `cuda` feature as part of PagedAttention.
 
-On CUDA with PagedAttention enabled, mistral.rs uses the FlashInfer paged layout and decode kernel for compatible KV caches by default. Set `HANZO_FLASHINFER_DECODE=0` only when debugging or comparing against the generic paged path.
+On CUDA with PagedAttention enabled, Hanzo Engine uses the FlashInfer paged layout and decode kernel for compatible KV caches by default. Set `HANZO_FLASHINFER_DECODE=0` only when debugging or comparing against the generic paged path.
 
 See the [paged attention guide](/hanzo/guides/perf/use-paged-attention/).
