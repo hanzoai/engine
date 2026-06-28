@@ -53,6 +53,12 @@ impl UNetConfig {
     }
 }
 
+/// Standard SD-VAE latent scaling factor; diffusers `config.json` may omit it.
+const SD_VAE_SCALING_FACTOR: f64 = 0.18215;
+fn default_scaling_factor() -> f64 {
+    SD_VAE_SCALING_FACTOR
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct VaeConfig {
     pub in_channels: usize,
@@ -61,6 +67,7 @@ pub struct VaeConfig {
     pub layers_per_block: usize,
     pub latent_channels: usize,
     pub norm_num_groups: usize,
+    #[serde(default = "default_scaling_factor")]
     pub scaling_factor: f64,
     pub sample_size: usize,
 }
@@ -74,7 +81,7 @@ impl Default for VaeConfig {
             layers_per_block: 2,
             latent_channels: 4,
             norm_num_groups: 32,
-            scaling_factor: 0.18215,
+            scaling_factor: SD_VAE_SCALING_FACTOR,
             sample_size: 256,
         }
     }
