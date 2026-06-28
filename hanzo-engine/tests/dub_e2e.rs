@@ -29,7 +29,13 @@ use std::sync::Arc;
 use ahash::AHashMap;
 use anyhow::{Context, Result};
 use hanzo_audio::AudioInput;
-use hanzo_engine::diffusion_models::musetalk::{MuseTalk, MuseTalkConfig};
+use hanzo_engine::diffusion_models::animation::{
+    AnimationRequest, DrivingAudio, FacialAnimator, VisualSource,
+};
+use hanzo_engine::diffusion_models::musetalk::{
+    AnimatorOptions, MuseTalk, MuseTalkAnimator, MuseTalkConfig, UNetConfig, VaeConfig,
+};
+use hanzo_engine::speech_models::whisper::{WhisperConfig, WhisperFeatureExtractor};
 use hanzo_engine::speech_models::{
     Qwen3AsrConfig, Qwen3AsrPipeline, Qwen3TtsCodecConfig, Qwen3TtsConfig, Qwen3TtsPipeline,
     SpeechGenerationConfig, SpeechGenerationOutput, SpeechLoaderType,
@@ -38,6 +44,7 @@ use hanzo_ml::{DType, Device, Tensor};
 use hanzo_nn::var_builder::SimpleBackend;
 use hanzo_nn::Init;
 use hanzo_quant::{ShardedSafeTensors, ShardedVarBuilder};
+use image::{DynamicImage, GenericImageView, Rgb, RgbImage};
 use tokenizers::Tokenizer;
 
 // ---- Committed golden references (no Python; the ASR-accuracy check compares against these) ----
@@ -272,11 +279,12 @@ fn synthesize(dir: &Path, text: &str, dev: &Device) -> Result<SpeechGenerationOu
     pipe.generate(&id_stream, &gen).context("tts generate")
 }
 
-// ---------------------------------------------------------------- MuseTalk render (graph, random-init)
-// Random-init weights with REAL tensor shapes prove the render graph (latents -> unet cross-attn to
-// audio feats -> vae decode -> blend) runs end-to-end on the pipeline-sized inputs and yields a
-// finite, correctly-shaped frame. Numeric fidelity vs the PyTorch MuseTalk is covered separately by
-// the codec_validation committed-fixture tests and the musetalk-bench `realverify` (CUDA f16).
+// ---------------------------------------------------------------- ANIMATE (real animate() graph, random-init)
+// Random-init weights with REAL tensor shapes drive the whole FacialAnimator composition end-to-end:
+// whisper-tiny features -> per-frame face crop -> MuseTalk UNet cross-attn -> blend -> paste-back.
+// It proves frame count == ceil(secs*fps), every pixel is finite, and the mouth (lower) region was
+// actually regenerated (delta > 0). Numeric fidelity vs PyTorch MuseTalk is covered by the codec
+// committed-fixture tests and the dub round-trip; here we exercise wiring on tiny pipeline-sized nets.
 struct RandnBackend;
 impl SimpleBackend for RandnBackend {
     fn get(
@@ -303,37 +311,114 @@ impl SimpleBackend for RandnBackend {
     }
 }
 
-fn musetalk_render(dev: &Device) -> Result<()> {
-    let dtype = DType::F32;
-    let cfg = MuseTalkConfig::default();
-    let rand_vb = || ShardedSafeTensors::wrap(Box::new(RandnBackend), dtype, dev.clone());
-    let model = MuseTalk::new(cfg, rand_vb(), rand_vb(), dev, dtype).context("build MuseTalk")?;
-
-    let sz = model.resized_img();
-    let xa = model.cross_attention_dim();
-    let face = Tensor::rand(0f32, 1f32, (1, 3, sz, sz), dev)?;
-    let audio = Tensor::randn(0f64, 1.0, (1, 50, xa), dev)?;
-
-    let latents = model.latents_for_unet(&face)?;
-    let image = model.forward(&face, &audio)?;
-    let blended = model.blend(&face, &image)?;
-
-    assert_eq!(image.dims(), &[1, 3, sz, sz], "MuseTalk frame shape");
-    assert_eq!(blended.dims(), &[1, 3, sz, sz], "blended frame shape");
-    for (name, t) in [
-        ("latents", &latents),
-        ("image", &image),
-        ("blended", &blended),
-    ] {
-        let v = t.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
-        let bad = v.iter().filter(|x| !x.is_finite()).count();
-        assert_eq!(bad, 0, "MuseTalk {name} has {bad} non-finite values");
-        let (mn, mx) = v
-            .iter()
-            .fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
-        assert!(mx != mn, "MuseTalk {name} is constant (degenerate)");
+// Tiny MuseTalk (16x16, 2-block UNet) keeps the random-weight forward cheap while preserving the
+// real graph; cross_attention_dim stays 384 to match whisper-tiny's n_audio_state.
+fn tiny_musetalk_config() -> MuseTalkConfig {
+    MuseTalkConfig {
+        unet: UNetConfig {
+            sample_size: 4,
+            in_channels: 8,
+            out_channels: 4,
+            layers_per_block: 1,
+            block_out_channels: vec![32, 64],
+            down_block_types: vec![
+                "CrossAttnDownBlock2D".to_string(),
+                "DownBlock2D".to_string(),
+            ],
+            up_block_types: vec!["UpBlock2D".to_string(), "CrossAttnUpBlock2D".to_string()],
+            cross_attention_dim: 384,
+            attention_head_dim: 8,
+            norm_num_groups: 32,
+            norm_eps: 1e-5,
+            flip_sin_to_cos: true,
+            freq_shift: 0.0,
+        },
+        vae: VaeConfig {
+            in_channels: 3,
+            out_channels: 3,
+            block_out_channels: vec![32, 64],
+            layers_per_block: 1,
+            latent_channels: 4,
+            norm_num_groups: 32,
+            scaling_factor: 0.18215,
+            sample_size: 16,
+        },
+        resized_img: 16,
     }
-    eprintln!("[dub-e2e] MuseTalk render: {sz}x{sz} frame, finite, non-degenerate");
+}
+
+fn gradient_frame(w: u32, h: u32, shift: u8) -> DynamicImage {
+    let mut img = RgbImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let v = (x * 255 / w.max(1)) as u8;
+            img.put_pixel(x, y, Rgb([v.wrapping_add(shift), 255 - v, shift]));
+        }
+    }
+    DynamicImage::ImageRgb8(img)
+}
+
+fn lower_half_delta(a: &DynamicImage, b: &DynamicImage) -> f64 {
+    let (w, h) = a.dimensions();
+    let (ar, br) = (a.to_rgb8(), b.to_rgb8());
+    let mut sum = 0f64;
+    let mut n = 0u64;
+    for y in h / 2..h {
+        for x in 0..w {
+            let pa = ar.get_pixel(x, y).0;
+            let pb = br.get_pixel(x, y).0;
+            for c in 0..3 {
+                sum += (pa[c] as f64 - pb[c] as f64).abs();
+                n += 1;
+            }
+        }
+    }
+    sum / n.max(1) as f64
+}
+
+fn animate_render(dev: &Device) -> Result<()> {
+    let dtype = DType::F32;
+    let rand_vb = || ShardedSafeTensors::wrap(Box::new(RandnBackend), dtype, dev.clone());
+
+    let musetalk = MuseTalk::new(tiny_musetalk_config(), rand_vb(), rand_vb(), dev, dtype)
+        .context("build MuseTalk")?;
+    let whisper = WhisperFeatureExtractor::new(WhisperConfig::tiny(), rand_vb(), dev)
+        .context("build whisper")?;
+    // Force the full-frame fallback deterministically: random S3FD softmax ~0.5 never clears 0.99,
+    // so detection is empty and the whole frame is the crop region (no flaky random bbox).
+    let opts = AnimatorOptions {
+        face_score_threshold: 0.99,
+        ..Default::default()
+    };
+    let mut animator =
+        MuseTalkAnimator::new(musetalk, whisper, rand_vb(), opts).context("build animator")?;
+
+    let fps = 25.0;
+    let pcm: Vec<f32> = (0..4800) // 0.2 s @ 24 kHz -> T = ceil(0.2 * 25) = 5 frames
+        .map(|i| (i as f32 * 200.0 * std::f32::consts::PI / 24_000.0).sin() * 0.3)
+        .collect();
+    let footage = vec![gradient_frame(64, 64, 0), gradient_frame(64, 64, 80)];
+
+    let req = AnimationRequest {
+        driving: DrivingAudio::new(std::sync::Arc::new(pcm)),
+        visual: VisualSource::Footage {
+            frames: footage.clone(),
+            fps,
+        },
+        fps,
+    };
+    let out = animator.animate(&req).context("animate")?;
+
+    let expected = (0.2_f64 * fps).ceil() as usize;
+    assert_eq!(out.frames.len(), expected, "frame count == ceil(secs*fps)");
+    assert_eq!(out.fps, fps);
+    for (i, frame) in out.frames.iter().enumerate() {
+        assert_eq!(frame.dimensions(), (64, 64), "frame {i} preserves source size");
+    }
+    // Mouth (lower half) of frame 0 must differ from its source frame: it was regenerated.
+    let delta = lower_half_delta(&out.frames[0], &footage[0]);
+    eprintln!("[dub-e2e] animate: {expected} frames, mouth-region delta = {delta:.3}");
+    assert!(delta > 1.0, "mouth region unchanged (delta {delta:.3}); animate did not run");
     Ok(())
 }
 
@@ -398,9 +483,13 @@ fn dub_e2e_native() -> Result<()> {
         "TTS->zen3-ASR round-trip {m_rt:.4} < {THR_TTS_RT} :: heard {back:?}"
     );
 
-    // --- 5. MuseTalk render (graph end-to-end on pipeline-sized tensors) ---
-    musetalk_render(&dev)?;
-
-    eprintln!("[dub-e2e] PASS: zen3-ASR -> golden translate -> zen3-TTS -> zen3-ASR round-trip -> MuseTalk, all native Rust");
+    eprintln!("[dub-e2e] PASS: zen3-ASR -> golden translate -> zen3-TTS -> zen3-ASR round-trip, all native Rust");
     Ok(())
+}
+
+// The animate composition uses random-init nets (no real weights), so it always runs in CI as its
+// own test rather than hiding behind the ASR/TTS/wav gate of dub_e2e_native.
+#[test]
+fn animate_native() -> Result<()> {
+    animate_render(&device()?)
 }
