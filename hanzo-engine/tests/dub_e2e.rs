@@ -403,7 +403,6 @@ fn animate_render(dev: &Device) -> Result<()> {
         driving: DrivingAudio::new(std::sync::Arc::new(pcm)),
         visual: VisualSource::Footage {
             frames: footage.clone(),
-            fps,
         },
         fps,
     };
