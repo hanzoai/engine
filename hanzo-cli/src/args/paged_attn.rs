@@ -74,7 +74,7 @@ pub enum PagedAttnMode {
 }
 
 impl PagedAttentionOptions {
-    /// Convert to the flags expected by HanzoForServerBuilder
+    /// Convert to the flags expected by ServerBuilder
     pub fn into_builder_flags(self) -> PagedAttnBuilderFlags {
         let enable = match self.mode {
             PagedAttnMode::Auto => None,
