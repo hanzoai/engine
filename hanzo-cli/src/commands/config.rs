@@ -5,8 +5,8 @@ use tracing::info;
 
 use hanzo_engine::initialize_logging;
 use hanzo_server_core::{
-    hanzo_for_server_builder::{HanzoForServerBuilder, ModelConfig},
-    hanzo_server_router_builder::HanzoServerRouterBuilder,
+    server::{ServerBuilder, ModelConfig},
+    router::RouterBuilder,
 };
 
 use crate::args::{MatformerSelection, RuntimeOptions};
@@ -59,7 +59,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
 
     let (model_configs, cpu) = build_model_configs(&models, &runtime, &global.token_source).await?;
 
-    let mut builder = HanzoForServerBuilder::new()
+    let mut builder = ServerBuilder::new()
         .with_max_seqs(runtime.max_seqs)
         .with_no_kv_cache(runtime.no_kv_cache)
         .with_token_source(global.token_source)
@@ -117,7 +117,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
     let hanzo = builder.build().await?;
     let hanzo_for_ui = hanzo.clone();
 
-    let mut app = HanzoServerRouterBuilder::new()
+    let mut app = RouterBuilder::new()
         .with_hanzo(hanzo)
         .with_max_tool_rounds_optional(server.max_tool_rounds)
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
@@ -184,7 +184,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
 
     let (model_configs, cpu) = build_model_configs(&models, &runtime, &global.token_source).await?;
 
-    let mut builder = HanzoForServerBuilder::new()
+    let mut builder = ServerBuilder::new()
         .with_max_seqs(runtime.max_seqs)
         .with_no_kv_cache(runtime.no_kv_cache)
         .with_token_source(global.token_source)

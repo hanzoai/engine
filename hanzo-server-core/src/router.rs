@@ -33,7 +33,7 @@ use crate::{
         SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE,
     },
     speech_generation::speech_generation,
-    types::SharedHanzoState,
+    types::SharedState,
 };
 
 /// Server-level defaults for agentic features.
@@ -59,9 +59,9 @@ pub const DEFAULT_MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 ///
 /// Basic usage:
 /// ```ignore
-/// use hanzo_server_core::hanzo_server_router_builder::HanzoServerRouterBuilder;
+/// use hanzo_server_core::router::RouterBuilder;
 ///
-/// let router = HanzoServerRouterBuilder::new()
+/// let router = RouterBuilder::new()
 ///     .with_hanzo(hanzo_instance)
 ///     .build()
 ///     .await?;
@@ -69,18 +69,18 @@ pub const DEFAULT_MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 ///
 /// With custom configuration:
 /// ```ignore
-/// use hanzo_server_core::hanzo_server_router_builder::HanzoServerRouterBuilder;
+/// use hanzo_server_core::router::RouterBuilder;
 ///
-/// let router = HanzoServerRouterBuilder::new()
+/// let router = RouterBuilder::new()
 ///     .with_hanzo(hanzo_instance)
 ///     .with_include_swagger_routes(false)
 ///     .with_base_path("/api/mistral")
 ///     .build()
 ///     .await?;
 /// ```
-pub struct HanzoServerRouterBuilder {
+pub struct RouterBuilder {
     /// The shared hanzo instance
-    hanzo: Option<SharedHanzoState>,
+    hanzo: Option<SharedState>,
     /// Whether to include Swagger/OpenAPI documentation routes.
     /// Only available when the `swagger-ui` feature is enabled.
     #[cfg(feature = "swagger-ui")]
@@ -97,7 +97,7 @@ pub struct HanzoServerRouterBuilder {
     agentic_defaults: AgenticDefaults,
 }
 
-impl Default for HanzoServerRouterBuilder {
+impl Default for RouterBuilder {
     /// Creates a new builder with default configuration.
     fn default() -> Self {
         Self {
@@ -113,24 +113,24 @@ impl Default for HanzoServerRouterBuilder {
     }
 }
 
-impl HanzoServerRouterBuilder {
-    /// Creates a new `HanzoServerRouterBuilder` with default settings.
+impl RouterBuilder {
+    /// Creates a new `RouterBuilder` with default settings.
     ///
     /// This is equivalent to calling `Default::default()`.
     ///
     /// ### Examples
     ///
     /// ```ignore
-    /// use hanzo_server_core::hanzo_server_router_builder::HanzoServerRouterBuilder;
+    /// use hanzo_server_core::router::RouterBuilder;
     ///
-    /// let builder = HanzoServerRouterBuilder::new();
+    /// let builder = RouterBuilder::new();
     /// ```
     pub fn new() -> Self {
         Default::default()
     }
 
     /// Sets the shared hanzo instance
-    pub fn with_hanzo(mut self, hanzo: SharedHanzoState) -> Self {
+    pub fn with_hanzo(mut self, hanzo: SharedState) -> Self {
         self.hanzo = Some(hanzo);
         self
     }
@@ -222,9 +222,9 @@ impl HanzoServerRouterBuilder {
     /// ### Examples
     ///
     /// ```ignore
-    /// use hanzo_server_core::hanzo_server_router_builder::HanzoServerRouterBuilder;
+    /// use hanzo_server_core::router::RouterBuilder;
     ///
-    /// let router = HanzoServerRouterBuilder::new()
+    /// let router = RouterBuilder::new()
     ///     .with_hanzo(hanzo_instance)
     ///     .build()
     ///     .await?;
@@ -261,7 +261,7 @@ impl HanzoServerRouterBuilder {
 /// This function creates a router with all the necessary API endpoints,
 /// CORS configuration, and body size limits.
 fn init_router(
-    state: SharedHanzoState,
+    state: SharedState,
     allowed_origins: Option<Vec<String>>,
     max_body_limit: Option<usize>,
     agentic_defaults: AgenticDefaults,

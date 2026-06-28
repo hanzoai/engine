@@ -293,7 +293,7 @@ pub use hanzo_engine::{
 
 // ========== Config Types ==========
 pub use hanzo_engine::{
-    DefaultSchedulerMethod, HanzoConfig, IsqType, MemoryGpuConfig, ModelDType,
+    DefaultSchedulerMethod, Config, IsqType, MemoryGpuConfig, ModelDType,
     PagedAttentionConfig, PagedCacheType, SchedulerConfig, WebSearchOptions,
 };
 

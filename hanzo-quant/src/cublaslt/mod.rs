@@ -3,7 +3,7 @@
 #![allow(unused_variables, unused_imports, dead_code)]
 
 use hanzo_ml::{Device, DeviceLocation, Result, Tensor};
-use hanzo_nn::Activation as HanzoActivation;
+use hanzo_nn::Activation;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, Once};
 
@@ -145,13 +145,13 @@ impl CublasLtWrapper {
         alpha: Option<f32>,
         beta: Option<f32>,
         bias: Option<&Tensor>,
-        act: Option<HanzoActivation>,
+        act: Option<Activation>,
     ) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         {
             let inner_act = act.map(|a| match a {
-                HanzoActivation::Relu => matmul::Activation::Relu,
-                HanzoActivation::Gelu => matmul::Activation::Gelu,
+                Activation::Relu => matmul::Activation::Relu,
+                Activation::Gelu => matmul::Activation::Gelu,
                 _ => unreachable!("Unsupported activation in cublaslt matmul"),
             });
             let mut result = fused_batch_matmul_f8(
@@ -168,7 +168,7 @@ impl CublasLtWrapper {
                 self.cublaslt.clone(),
             )?;
 
-            if Some(HanzoActivation::Swiglu) == act {
+            if Some(Activation::Swiglu) == act {
                 result = hanzo_nn::ops::swiglu(&result)?;
             }
             Ok(result)
@@ -201,13 +201,13 @@ impl CublasLtWrapper {
         alpha: Option<f32>,
         beta: Option<f32>,
         bias: Option<&Tensor>,
-        act: Option<HanzoActivation>,
+        act: Option<Activation>,
     ) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         {
             let inner_act = act.map(|a| match a {
-                HanzoActivation::Relu => matmul::Activation::Relu,
-                HanzoActivation::Gelu => matmul::Activation::Gelu,
+                Activation::Relu => matmul::Activation::Relu,
+                Activation::Gelu => matmul::Activation::Gelu,
                 _ => unreachable!("Unsupported activation in cublaslt matmul"),
             });
             let mut result = fused_batch_matmul(
@@ -221,7 +221,7 @@ impl CublasLtWrapper {
                 self.cublaslt.clone(),
             )?;
 
-            if Some(HanzoActivation::Swiglu) == act {
+            if Some(Activation::Swiglu) == act {
                 result = hanzo_nn::ops::swiglu(&result)?;
             }
             Ok(result)

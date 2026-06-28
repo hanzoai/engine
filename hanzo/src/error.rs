@@ -36,9 +36,9 @@ pub enum Error {
     Channel(String),
 
     /// Model management error (not found, already loaded, etc.).
-    /// Wraps the existing [`hanzo_engine::HanzoError`].
+    /// Wraps the existing [`hanzo_engine::Error`].
     #[error(transparent)]
-    Management(#[from] hanzo_engine::HanzoError),
+    Management(#[from] hanzo_engine::Error),
 
     /// JSON serialization/deserialization error.
     #[error("json error: {0}")]

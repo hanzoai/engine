@@ -791,13 +791,13 @@ impl Model {
     // ========================================================================
 
     /// Retrieve some information about this model.
-    pub fn config(&self) -> crate::error::Result<HanzoConfig> {
+    pub fn config(&self) -> crate::error::Result<Config> {
         self.config_with_model(None)
     }
 
     /// Retrieve some information about a specific model.
     /// If `model_id` is `None`, returns config for the default model.
-    pub fn config_with_model(&self, model_id: Option<&str>) -> crate::error::Result<HanzoConfig> {
+    pub fn config_with_model(&self, model_id: Option<&str>) -> crate::error::Result<Config> {
         self.runner
             .config(model_id)
             .map_err(|e| SdkError::Inference(e.into()))
@@ -944,6 +944,6 @@ impl Model {
     ) -> crate::error::Result<Vec<(String, Option<String>)>> {
         self.runner
             .list_mcp_tools(model_id)
-            .map_err(|e| crate::error::Error::from(hanzo_engine::HanzoError::Other(e)))
+            .map_err(|e| crate::error::Error::from(hanzo_engine::Error::Other(e)))
     }
 }
