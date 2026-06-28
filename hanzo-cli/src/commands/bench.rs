@@ -6,7 +6,7 @@ use hanzo_engine::{
     initialize_logging, Constraint, NormalRequest, Request, RequestMessage, Response,
     SamplingParams, Usage,
 };
-use hanzo_server_core::hanzo_for_server_builder::HanzoForServerBuilder;
+use hanzo_server_core::server::ServerBuilder;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 use tracing::info;
@@ -105,7 +105,7 @@ pub async fn run_bench(
     info!("Loading model for benchmarking...");
 
     // Build using the same infrastructure as serve
-    let builder = HanzoForServerBuilder::new()
+    let builder = ServerBuilder::new()
         .with_model(model_selected)
         .with_max_seqs(1) // Single sequence for benchmarking
         .with_no_kv_cache(runtime.no_kv_cache)
