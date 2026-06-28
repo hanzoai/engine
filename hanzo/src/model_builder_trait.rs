@@ -173,8 +173,8 @@ impl MultiModelBuilder {
             .clone()
             .unwrap_or_else(|| pipeline_name.clone());
 
-        // Create the HanzoBuilder for the first model
-        let mut runner_builder = hanzo_engine::HanzoBuilder::new(
+        // Create the Builder for the first model
+        let mut runner_builder = hanzo_engine::Builder::new(
             pipeline,
             scheduler_config,
             add_model_config.engine_config.throughput_logging_enabled,
@@ -453,7 +453,7 @@ pub async fn build_model_from_pipeline(
     scheduler_config: SchedulerConfig,
     add_model_config: AddModelConfig,
 ) -> Model {
-    let mut runner_builder = hanzo_engine::HanzoBuilder::new(
+    let mut runner_builder = hanzo_engine::Builder::new(
         pipeline,
         scheduler_config,
         add_model_config.engine_config.throughput_logging_enabled,
