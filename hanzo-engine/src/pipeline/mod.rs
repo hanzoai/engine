@@ -1,4 +1,5 @@
 mod amoe;
+mod animation;
 mod auto;
 pub mod chat_template;
 #[cfg(feature = "cuda")]
@@ -34,6 +35,7 @@ use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::PagedAttentionConfig;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 pub use auto::{AutoLoader, AutoLoaderBuilder};
+pub use animation::AnimationPipeline;
 use chat_template::ChatTemplate;
 pub use diffusion::{DiffusionLoader, DiffusionLoaderBuilder};
 pub(crate) use embedding::EmbeddingLoadContext;
@@ -682,6 +684,7 @@ pub enum ModelCategory {
     Diffusion,
     Audio,
     Speech,
+    Animation,
     Embedding,
 }
 
@@ -695,6 +698,7 @@ impl std::fmt::Debug for ModelCategory {
             ModelCategory::Diffusion => write!(f, "ModelCategory::Diffusion"),
             ModelCategory::Audio => write!(f, "ModelCategory::Audio"),
             ModelCategory::Speech => write!(f, "ModelCategory::Speech"),
+            ModelCategory::Animation => write!(f, "ModelCategory::Animation"),
             ModelCategory::Embedding => write!(f, "ModelCategory::Embedding"),
         }
     }
@@ -707,6 +711,7 @@ impl PartialEq for ModelCategory {
             (Self::Multimodal { .. }, Self::Multimodal { .. }) => true,
             (Self::Audio, Self::Audio) => true,
             (Self::Speech, Self::Speech) => true,
+            (Self::Animation, Self::Animation) => true,
             (Self::Diffusion, Self::Diffusion) => true,
             (Self::Embedding, Self::Embedding) => true,
             (
@@ -715,6 +720,7 @@ impl PartialEq for ModelCategory {
                 | Self::Diffusion
                 | Self::Audio
                 | Self::Speech
+                | Self::Animation
                 | Self::Embedding,
                 _,
             ) => false,
@@ -768,6 +774,10 @@ pub enum ForwardInputsResult {
         rates: Vec<usize>,
         channels: Vec<usize>,
     },
+    Frames {
+        frames: Vec<Arc<Vec<DynamicImage>>>,
+        fps: Vec<f64>,
+    },
 }
 
 impl ForwardInputsResult {
@@ -794,6 +804,10 @@ impl ForwardInputsResult {
                 rates: vec![rates[bs_idx]],
                 channels: vec![channels[bs_idx]],
             }),
+            Self::Frames { frames, fps } => Ok(Self::Frames {
+                frames: vec![frames[bs_idx].clone()],
+                fps: vec![fps[bs_idx]],
+            }),
         }
     }
 
@@ -810,6 +824,7 @@ impl ForwardInputsResult {
             }),
             Self::Image { .. } => Ok(self.clone()),
             Self::Speech { .. } => Ok(self.clone()),
+            Self::Frames { .. } => Ok(self.clone()),
         }
     }
 }
@@ -1108,6 +1123,37 @@ pub trait Pipeline:
                             .collect::<Vec<_>>();
                         response::send_speech_responses(input_seqs, &pcms, &rates, &channels)
                             .await?;
+                    }
+                    ForwardInputsResult::Frames { .. } => {
+                        let fps = logits
+                            .iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Frames { fps, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Frames`")
+                                };
+                                assert_eq!(fps.len(), 1, "Each sequence must have 1 frame set.");
+                                *fps.first().unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        let frames = logits
+                            .into_iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Frames { frames, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Frames`")
+                                };
+                                assert_eq!(
+                                    frames.len(),
+                                    1,
+                                    "Each sequence must have 1 frame set."
+                                );
+                                frames.into_iter().nth(0).unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        response::send_frames_responses(input_seqs, &frames, &fps).await?;
                     }
                 }
                 let end = Instant::now();
@@ -1439,6 +1485,37 @@ pub trait Pipeline:
                             .collect::<Vec<_>>();
                         response::send_speech_responses(input_seqs, &pcms, &rates, &channels)
                             .await?;
+                    }
+                    ForwardInputsResult::Frames { .. } => {
+                        let fps = logits
+                            .iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Frames { fps, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Frames`")
+                                };
+                                assert_eq!(fps.len(), 1, "Each sequence must have 1 frame set.");
+                                *fps.first().unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        let frames = logits
+                            .into_iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Frames { frames, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Frames`")
+                                };
+                                assert_eq!(
+                                    frames.len(),
+                                    1,
+                                    "Each sequence must have 1 frame set."
+                                );
+                                frames.into_iter().nth(0).unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        response::send_frames_responses(input_seqs, &frames, &fps).await?;
                     }
                 }
                 let end = Instant::now();
