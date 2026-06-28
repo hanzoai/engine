@@ -228,10 +228,12 @@ impl V4Moe {
         let scores = softplus(&logits)?.sqrt()?;
         let (indices, weights) = match (&self.tid2eid, &self.bias) {
             (Some(tid2eid), _) => {
-                // Hash routing: indices = tid2eid[:, input_ids]^T -> [t, used].
+                // Hash routing: each token id maps to a fixed set of `used` experts.
+                // GGUF stores the table file-shape [used=6, vocab]; the reader reverses
+                // dims, so in candle it's [vocab, used]. Select the token's row (dim 0)
+                // -> [t, used] directly (no transpose).
                 let ids = tid2eid
-                    .index_select(&input_ids.to_dtype(DType::U32)?, 1)? // [used, t]
-                    .t()?
+                    .index_select(&input_ids.to_dtype(DType::U32)?, 0)? // [t, used]
                     .contiguous()?
                     .to_dtype(DType::U32)?;
                 let w = scores.gather(&ids, 1)?;
@@ -276,8 +278,11 @@ impl V4Moe {
 
     fn forward(&self, xs: &Tensor, input_ids: &Tensor) -> Result<Tensor> {
         let (b, s, h) = xs.dims3()?;
-        let xs2 = xs.reshape((b * s, h))?;
         let orig_dtype = xs.dtype();
+        // MoE compute runs in F32 (the quantized expert kernels + gate matmul expect
+        // it, and routing is precision-sensitive); cast the carrier in here and back
+        // to the model dtype at the end — same precision-op discipline as attention.
+        let xs2 = xs.to_dtype(DType::F32)?.reshape((b * s, h))?;
         let ids = input_ids.reshape((b * s,))?;
 
         let (indices, weights) = self.route(&xs2, &ids)?;
@@ -315,6 +320,7 @@ struct V4Attn {
     o_groups: usize,
     o_lora_rank: usize,
     rms_eps: f64,
+    attn_dtype: DType, // model/cache/mask dtype (BF16 on CUDA); q/k/v cast to it for SDPA + cache
 }
 
 impl V4Attn {
@@ -324,8 +330,15 @@ impl V4Attn {
     fn rope(&self, x: &Tensor, positions: &Tensor, inverse: bool) -> Result<Tensor> {
         let hd = self.head_dim;
         let n_nope = hd - self.rope_dim;
+        let orig = x.dtype();
         let pass = x.narrow(D::Minus1, 0, n_nope)?.contiguous()?;
-        let rot = x.narrow(D::Minus1, n_nope, self.rope_dim)?.contiguous()?;
+        // RoPE is precision-sensitive and its cos/sin caches are F32: upcast the
+        // rotated slice to F32 for the kernel, then return the caller's dtype
+        // (rope is dtype-transparent — the precision op handles its own dtype).
+        let rot = x
+            .narrow(D::Minus1, n_nope, self.rope_dim)?
+            .contiguous()?
+            .to_dtype(DType::F32)?;
         let rot = if inverse {
             self.rotary.forward_inverse_positions(&rot, positions)?
         } else {
@@ -333,6 +346,7 @@ impl V4Attn {
             let (rot, _) = self.rotary.forward_positions(&rot, &rot, positions)?;
             rot
         };
+        let rot = rot.to_dtype(orig)?;
         Tensor::cat(&[&pass, &rot], D::Minus1)?.contiguous()
     }
 
@@ -344,6 +358,12 @@ impl V4Attn {
         kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let (b, s, _) = x.dims3()?;
+        // Working dtype for attention + KV cache (the model dtype; BF16 on CUDA) —
+        // the cache buffer + causal mask are allocated at this dtype, NOT the (F32)
+        // carrier dtype. The QMatMul projections + RMS-norm + RoPE run in F32 for
+        // precision; q/kv are cast to `attn_dtype` before SDPA + cache append so all
+        // of q/k/v, the mask, and the cache buffer agree.
+        let wdt = self.attn_dtype;
 
         // q: wq_a → q_norm → wq_b → [b, nh, s, hd] → per-head RMS → trailing rope.
         let q = self.q_b.forward(&self.q_a_norm.forward(&self.q_a.forward(x)?)?)?;
@@ -351,7 +371,7 @@ impl V4Attn {
             .reshape((b, s, self.n_head, self.head_dim))?
             .transpose(1, 2)?;
         q = per_head_rms_norm(&q, self.rms_eps)?;
-        q = self.rope(&q, positions, false)?;
+        q = self.rope(&q, positions, false)?.to_dtype(wdt)?;
 
         // kv latent: wkv → kv_norm → [b, 1, s, hd] → trailing rope (K == V).
         let kv = self
@@ -359,7 +379,7 @@ impl V4Attn {
             .forward(&self.kv.forward(x)?)?
             .reshape((b, s, 1, self.head_dim))?
             .transpose(1, 2)?;
-        let kv = self.rope(&kv, positions, false)?;
+        let kv = self.rope(&kv, positions, false)?.to_dtype(wdt)?;
 
         let (k, v) = kv_cache.append(&kv, &kv)?;
 
@@ -448,6 +468,26 @@ fn rms_from(t: Tensor, eps: f64) -> Result<RmsNorm> {
     RmsNorm::from_w(t, eps)
 }
 
+/// Log the RMS of an activation at TRACE level — the per-layer numeric probe used
+/// to localize forward bugs (a healthy residual grows smoothly; a discontinuity or
+/// NaN pinpoints the broken layer). `enabled!` gates the (expensive, GPU-syncing)
+/// norm computation so this is a single atomic load when tracing is off — and with
+/// `tracing/release_max_level_info` it compiles to nothing in prod. Surface it with
+/// `RUST_LOG=hanzo_engine::models::quantized_deepseek4=trace`. No more add/remove.
+#[inline]
+fn trace_rms(t: &Tensor, what: std::fmt::Arguments) {
+    if tracing::enabled!(tracing::Level::TRACE) {
+        let rms = t
+            .to_dtype(DType::F32)
+            .and_then(|t| t.sqr())
+            .and_then(|t| t.mean_all())
+            .and_then(|t| t.to_scalar::<f32>())
+            .map(|m| m.sqrt())
+            .unwrap_or(f32::NAN);
+        tracing::trace!(rms, "{what}");
+    }
+}
+
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         mut ct: Content<'_, R>,
@@ -457,6 +497,19 @@ impl ModelConfig::FromGGUF for ModelWeights {
         dtype: DType,
     ) -> Result<Self> {
         verify_arch(ct.get_metadata())?;
+
+        // ── V4 DTYPE POLICY (one compute dtype, threaded — not pinned) ─────────────
+        // The model HONORS the caller's `dtype` (the pipeline auto-selects it, and
+        // allocates the KV cache + causal mask at it). We thread that one value to
+        // every consumer — KV cache, mask, each V4Attn (`attn_dtype`), the embeds
+        // entry, wo_a — so the whole forward agrees with the pipeline-owned cache.
+        // The cascade of dtype bugs came from *disagreement* (model F32 vs cache
+        // BF16), NOT from any particular dtype: consistency is the fix, threading is
+        // how. Quant weights dequantize to it at the QMatMul boundary; precision-
+        // sensitive ops (RMS-norm/RoPE/softmax-sinks) upcast to F32 internally and
+        // return it. For ds4 NUMERIC parity, the *benchmark* requests F32 at the
+        // pipeline (so cache + model are both F32) — that's a caller choice, not a
+        // model hardcode.
         let props = PropsGGUF::try_from(ContentMetadata {
             path_prefix: "deepseek4",
             metadata: ct.get_metadata(),
@@ -532,15 +585,20 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 ropes_comp[&dev.location()].clone()
             };
 
-            // Attention. wo_a dequantized to BF16 (not F32) — halves its resident footprint
-            // (~2.8GB vs 5.7GB across 43 layers) for the grouped-o einsum.
+            // Attention. wo_a dequantized to the single compute `dtype` (the grouped-o
+            // einsum operand) — uniform with the rest of the model; no special-case
+            // BF16 that could disagree at a dtype boundary.
+            // GGUF stores output_a as file dims [group_in, groups*rank]; the reader
+            // reverses to candle [groups*rank, group_in]. ds4.c reads row gr=g*rank+r
+            // as `out[gr] = Σ_d A[gr][d]·heads[g][d]`, so the rows split groups-major:
+            // reshape DIRECTLY to [groups, rank, group_in] (row gr -> [g=gr/rank, r=gr%rank]).
+            // (A prior reshape((group_in,groups,rank)).permute scrambled the buffer —
+            // it reinterpreted contiguous memory wrong, corrupting the o-projection.)
             let wo_a = ct
                 .tensor(&format!("{p}.attn_output_a.weight"), dev)?
                 .dequantize(dev)?
-                .to_dtype(DType::BF16)?
-                // GGUF stores [group_in, groups*rank]; reshape to [groups, rank, group_in].
-                .reshape((group_in, props.o_groups, props.o_lora_rank))?
-                .permute((1, 2, 0))?
+                .to_dtype(dtype)?
+                .reshape((props.o_groups, props.o_lora_rank, group_in))?
                 .contiguous()?;
             let attn = V4Attn {
                 q_a: gguf_linear(ct.tensor(&format!("{p}.attn_q_a.weight"), dev)?)?,
@@ -564,6 +622,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 o_groups: props.o_groups,
                 o_lora_rank: props.o_lora_rank,
                 rms_eps: eps,
+                attn_dtype: dtype,
             };
 
             // MoE.
@@ -653,7 +712,12 @@ impl ModelWeights {
         _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (_b, _s) = input_ids.dims2()?;
-        let embeds = self.tok_embeddings.forward(input_ids)?;
+        // Enter the single compute dtype HERE (the one entry point for activations):
+        // the embeddings carry the whole HC carrier downstream, so casting them to
+        // `self.dtype` makes embeds → carrier → attn → cache → output all flow in the
+        // one dtype. (Decomplected: dtype is applied at the boundary where data enters
+        // the model, then never re-decided.)
+        let embeds = self.tok_embeddings.forward(input_ids)?.to_dtype(self.dtype)?;
         let cache = &mut self.cache.normal().0;
         let mask = CausalMasker.make_causal_mask(
             input_ids,
@@ -685,8 +749,10 @@ impl ModelWeights {
                 &positions,
                 &mut cache[i],
             )?;
+            trace_rms(&hc, format_args!("v4 carrier after layer {i}"));
         }
         let x = self.output_hc.reduce_output(&hc)?;
+        trace_rms(&x, format_args!("v4 reduce_output"));
         let x = self.norm.forward(&x)?;
         let x = extract_logits(&x, context_lens)?;
         self.output.forward(&x.contiguous()?)

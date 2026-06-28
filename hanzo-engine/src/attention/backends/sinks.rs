@@ -63,8 +63,18 @@ fn sinks_attn_regular(
     sdpa_params: &SdpaParams,
     window_size: usize,
 ) -> Result<Tensor> {
+    // Flash-attn-sinks kernels (CUDA + Metal) only template head_dims
+    // {64,80,96,112,128,192,256}. DeepSeek-V4's absorbed-MLA latent is head_dim
+    // 512 — out of range — so route it to the unfused eager path (device-agnostic:
+    // MatMul + softmax_with_sinks run on GPU too). This matches ds4.c
+    // `layer_attention_rows_one` (sink logit in the softmax denominator, no value)
+    // and llama.cpp, which likewise fall back to explicit KQ-softmax for head_dims
+    // the flash kernel doesn't support. Eager here, not a new 512-wide flash kernel.
+    let head_dim = q.dim(hanzo_ml::D::Minus1)?;
+    let flash_ok = matches!(head_dim, 64 | 80 | 96 | 112 | 128 | 192 | 256);
+
     #[cfg(all(feature = "cuda", target_family = "unix"))]
-    if q.device().is_cuda() {
+    if q.device().is_cuda() && flash_ok {
         return hanzo_paged_attn::flash_attn_sinks(
             q,
             k,
@@ -76,7 +86,7 @@ fn sinks_attn_regular(
     }
 
     #[cfg(feature = "metal")]
-    if q.device().is_metal() {
+    if q.device().is_metal() && flash_ok {
         return hanzo_quant::flash_attn_sinks_metal(
             q,
             k,
@@ -87,7 +97,8 @@ fn sinks_attn_regular(
         );
     }
 
-    // CPU fallback: unfused matmul + softmax_with_sinks
+    // Eager (unfused) sinks attention — any device, any head_dim.
+    let _ = flash_ok;
     sinks_attn_cpu(q, k, v, sinks, mask, sdpa_params)
 }
 
@@ -172,11 +183,16 @@ fn sinks_attn_cpu(
     mask: Option<&Tensor>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?;
-    let v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?;
+    // Compute in F32 (ds4.c `layer_attention_rows_one` is all-F32) — also unifies
+    // dtypes so q/k/v (model dtype, e.g. BF16) and the F32 sink logits + mask agree.
+    let q = q.to_dtype(hanzo_ml::DType::F32)?;
+    let k = repeat_kv(k.to_dtype(hanzo_ml::DType::F32)?, sdpa_params.n_kv_groups)?;
+    let v = repeat_kv(v.to_dtype(hanzo_ml::DType::F32)?, sdpa_params.n_kv_groups)?;
+    let sinks = sinks.to_dtype(hanzo_ml::DType::F32)?;
+    let mask = mask.map(|m| m.to_dtype(hanzo_ml::DType::F32)).transpose()?;
 
-    let att = MatMul.matmul_affine_mul(q, &k.t()?, sdpa_params.softmax_scale.into())?;
-    let att = hanzo_quant::softmax_with_sinks(&att, sinks, mask)?;
+    let att = MatMul.matmul_affine_mul(&q, &k.t()?, sdpa_params.softmax_scale.into())?;
+    let att = hanzo_quant::softmax_with_sinks(&att, &sinks, mask.as_ref())?;
     MatMul.matmul(&att, &v)
 }
 
