@@ -3,7 +3,7 @@ use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use hanzo_engine::{
     get_auto_device_map_params, get_model_dtype, initialize_logging, paged_attn_supported,
     parse_isq_value, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, DrySamplingParams, Hanzo, HanzoBuilder, Loader, LoaderBuilder,
+    DeviceMapSetting, DrySamplingParams, Hanzo, Builder, Loader, LoaderBuilder,
     MemoryGpuConfig, ModelSelected, NormalRequest, PagedAttentionConfig, PagedCacheType, Request,
     RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
@@ -560,7 +560,7 @@ async fn main() -> anyhow::Result<()> {
             ),
         }
     };
-    let hanzo = HanzoBuilder::new(pipeline, scheduler_config, false, None)
+    let hanzo = Builder::new(pipeline, scheduler_config, false, None)
         .with_no_prefix_cache(true)
         .with_disable_eos_stop(true)
         .build()

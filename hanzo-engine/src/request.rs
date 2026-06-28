@@ -103,6 +103,15 @@ pub enum RequestMessage {
     SpeechGeneration {
         prompt: String,
     },
+    Animation {
+        #[serde(skip)]
+        frames: Vec<image::DynamicImage>,
+        #[serde(skip)]
+        pcm: Arc<Vec<f32>>,
+        sample_rate: usize,
+        kind: crate::diffusion_models::animation::VisualKind,
+        fps: f64,
+    },
     Embedding {
         prompt: String,
     },
