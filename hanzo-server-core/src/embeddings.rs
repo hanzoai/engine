@@ -22,7 +22,7 @@ use crate::{
         EmbeddingData, EmbeddingEncodingFormat, EmbeddingInput, EmbeddingRequest,
         EmbeddingResponse, EmbeddingUsage, EmbeddingVector,
     },
-    types::{ExtractedHanzoState, SharedHanzoState},
+    types::{ExtractedState, SharedState},
     util::{sanitize_error_message, validate_model_name},
 };
 
@@ -63,7 +63,7 @@ impl IntoResponse for EmbeddingResponder {
     responses((status = 200, description = "Embeddings", body = EmbeddingResponse))
 )]
 pub async fn embeddings(
-    State(state): ExtractedHanzoState,
+    State(state): ExtractedState,
     Json(oairequest): Json<EmbeddingRequest>,
 ) -> EmbeddingResponder {
     let repr =
@@ -239,7 +239,7 @@ fn normalize_inputs(input: EmbeddingInput) -> Result<Inputs> {
 }
 
 async fn fetch_embedding(
-    state: SharedHanzoState,
+    state: SharedState,
     prompt: String,
     model_id: Option<&str>,
     truncate_sequence: bool,
@@ -282,7 +282,7 @@ async fn fetch_embedding(
 }
 
 async fn fetch_embedding_tokens(
-    state: SharedHanzoState,
+    state: SharedState,
     tokens: Vec<u32>,
     model_id: Option<&str>,
     truncate_sequence: bool,
@@ -326,7 +326,7 @@ async fn fetch_embedding_tokens(
 
 async fn process_embedding_response(
     rx: &mut Receiver<Response>,
-    state: SharedHanzoState,
+    state: SharedState,
 ) -> Result<EmbeddingWithUsage> {
     base_process_non_streaming_response(
         rx,
@@ -350,6 +350,7 @@ async fn process_embedding_response(
             | Response::CompletionModelError(_, _)
             | Response::ImageGeneration(_)
             | Response::Speech { .. }
+            | Response::Frames { .. }
             | Response::Raw { .. }
             | Response::AgenticToolCallProgress { .. }
             | Response::AgenticToolApprovalRequired { .. }

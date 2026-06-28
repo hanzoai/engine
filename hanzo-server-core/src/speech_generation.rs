@@ -21,7 +21,7 @@ use crate::{
         ErrorToResponse, JsonError,
     },
     openai::{AudioResponseFormat, SpeechGenerationRequest},
-    types::SharedHanzoState,
+    types::SharedState,
     util::{sanitize_error_message, validate_model_name},
 };
 
@@ -139,7 +139,7 @@ pub async fn speech_generation(
 
 /// Helper function to handle speech generation errors and logging them.
 pub fn handle_error(
-    state: SharedHanzoState,
+    state: SharedState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> SpeechGenerationResponder {
     let sanitized_msg = sanitize_error_message(&*e);
@@ -151,7 +151,7 @@ pub fn handle_error(
 /// Process non-streaming speech generation responses.
 pub async fn process_non_streaming_response(
     rx: &mut Receiver<Response>,
-    state: SharedHanzoState,
+    state: SharedState,
     response_format: AudioResponseFormat,
 ) -> SpeechGenerationResponder {
     base_process_non_streaming_response(
@@ -165,7 +165,7 @@ pub async fn process_non_streaming_response(
 
 /// Matches and processes different types of model responses into appropriate speech generation responses.
 pub fn match_responses(
-    state: SharedHanzoState,
+    state: SharedState,
     response: Response,
     response_format: AudioResponseFormat,
 ) -> SpeechGenerationResponder {
@@ -223,6 +223,7 @@ pub fn match_responses(
 
             SpeechGenerationResponder::RawResponse((StatusCode::OK, headers, bytes).into_response())
         }
+        Response::Frames { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
