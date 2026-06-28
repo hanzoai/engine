@@ -35,7 +35,7 @@ rust-version = "1.88"
 [workspace.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 # Hanzo ML crates.
-hanzo-ml = { version = "0.11.18" }
+hanzo-ml = { version = "0.11.32" }
 hanzo-nn = { version = "0.11.8" }
 hanzo-flash-attn = { version = "0.11.3" }
 hanzo-flash-attn-v3 = { version = "0.11.3", package = "hanzo-flash-attn" }
@@ -228,4 +228,12 @@ debug = true
 [profile.dev]
 debug = true
 opt-level = 3
+
+# Local kernel-dev patch (perf/cuda-dense-prefill-bf16): build against the ml-prefill worktree so
+# edits in hanzo-kernels/hanzo-ml compile into the binary. NOT for origin.
+[patch.crates-io]
+hanzo-ml = { path = "../ml-prefill/hanzo-ml" }
+# Vendored hanzo-flash-attn 0.11.3 + one-line DevicePtrMut import (cudarc 0.19.8 trait split breaks
+# the published crate on CUDA 13). Same version -> single instance. NOT for origin.
+hanzo-flash-attn = { path = "vendor/hanzo-flash-attn" }
 
