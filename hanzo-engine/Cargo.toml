@@ -123,6 +123,13 @@ objc2-metal = { workspace = true, optional = true }
 hanzo-metal-kernels = { workspace = true, optional = true }
 
 [features]
+# Compile-strip trace!/debug! from release binaries (true zero-cost noop in prod).
+# OFF by default so trace!/debug! stay runtime-gated — near-free when RUST_LOG is
+# unset, and available in *release* builds for debug-in-release (needed for big
+# models too slow to run in a debug profile). Shipped prod builds add this feature:
+#   cargo build --release --features strip-logs
+# Then `RUST_LOG=...=trace` shows nothing because the macros are gone at compile time.
+strip-logs = ["tracing/release_max_level_info"]
 pyo3_macros = ["pyo3", "hanzo-llm-mcp/pyo3_macros"]
 # ZAP internal RPC surface (binary wire for engine<>node). Message + adapter
 # layer only; no capnp build dep. The real capnp-rpc wire is a `zap-capnp`
