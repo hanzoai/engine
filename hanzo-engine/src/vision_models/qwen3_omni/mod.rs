@@ -101,10 +101,19 @@ impl Qwen3OmniModel {
         comm: &Arc<Comm>,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        // Propagate a top-level in-checkpoint quantization config (HF places FP8/GPTQ there) into the
+        // Thinker text config, which is where the quantizable linears read it; a text-level config set
+        // directly on the checkpoint is the fallback. Full-precision checkpoints leave this `None`,
+        // and runtime ISQ applies independently.
+        let mut thinker_text_cfg = cfg.thinker_config.text_config.clone();
+        if cfg.quantization_config.is_some() {
+            thinker_text_cfg.quantization_config = cfg.quantization_config.clone();
+        }
+
         // Only the Thinker text decoder is served through the cache-aware (optionally paged) forward;
         // the talker / code-predictor / code2wav are generation sub-models and stay `naive_sdpa`.
         let thinker = OmniThinkerText::new(
-            &cfg.thinker_config.text_config,
+            &thinker_text_cfg,
             vb.pp("thinker"),
             device,
             comm,
@@ -767,12 +776,23 @@ impl IsqModel for Qwen3OmniModel {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     ) {
-        // Not an ISQ checkpoint: the validated Thinker/Talker stacks use plain `hanzo_nn::Linear`,
-        // not `QuantMethod` layers, so there are no in-place-quantizable tensors to expose.
-        (Vec::new(), &*self.mapper)
+        // ISQ targets the Thinker text decoder only: attention q/k/v/o, every MoE expert's
+        // gate/up/down, and the head. The audio/vision towers, Talker and Code2Wav stay full
+        // precision for quality — and the 30B parameter mass lives in the Thinker's 48 × 128 experts,
+        // so quantizing those is where the footprint win is. The dummy single-device mapper places
+        // every returned layer on the one load device.
+        (self.thinker.get_isq_layers(), &*self.mapper)
     }
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        Vec::new()
+        // The Thinker's non-quantized tensors (embeddings, norms, router gates), namespaced under
+        // `thinker.` to match the checkpoint. The towers / Talker / Code2Wav are not serialized here:
+        // a full multimodal UQFF is follow-on and the immediate-ISQ run path never calls this, so
+        // this is a Thinker-scoped UQFF counterpart to [`Self::get_layers`].
+        self.thinker
+            .residual_tensors()
+            .into_iter()
+            .map(|(k, v)| (format!("thinker.{k}"), v))
+            .collect()
     }
 }
 
