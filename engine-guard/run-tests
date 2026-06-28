@@ -1,0 +1,11 @@
+#!/bin/sh
+# Run the engine-guard unit suite with coverage in an isolated uv env.
+# Dev/test deps come from requirements-dev.txt; nothing is installed globally.
+set -eu
+here=$(CDPATH= cd "$(dirname "$0")" && pwd)
+cd "$here/.."
+# The daemon is loaded by path under the module name `hanzo_engine_guard`
+# (it has no .py extension), so coverage is scoped to it by that name.
+exec uv run --no-project --with-requirements engine-guard/requirements-dev.txt \
+  python -m pytest engine-guard/test_engine_guard.py -q \
+  --cov=hanzo_engine_guard --cov-report=term-missing "$@"
