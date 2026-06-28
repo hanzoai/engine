@@ -86,6 +86,9 @@ pub async fn interactive_mode(hanzo: Arc<Hanzo>, do_search: bool, enable_thinkin
         Ok(ModelCategory::Embedding) => error!(
             "Embedding models do not support interactive mode. Use the server or Python/Rust APIs."
         ),
+        Ok(ModelCategory::Animation) => {
+            error!("Animation models do not support interactive mode. Use the /v1/animate endpoint.")
+        }
         Err(e) => eprintln!("Error getting model category: {e}"),
     }
 }
@@ -416,6 +419,7 @@ async fn text_interactive_mode(hanzo: Arc<Hanzo>, do_search: bool, enable_thinki
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
                 Response::Embeddings { .. } => unreachable!(),
+                Response::Frames { .. } => unreachable!(),
             }
         }
 
@@ -786,6 +790,7 @@ async fn multimodal_interactive_mode(
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
                 Response::Embeddings { .. } => unreachable!(),
+                Response::Frames { .. } => unreachable!(),
             }
         }
 
