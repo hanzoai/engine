@@ -10,11 +10,11 @@ use tokio::join;
 use tracing::{error, info, warn};
 
 use hanzo_server_core::{
-    hanzo_for_server_builder::{
+    server::{
         configure_paged_attn_from_flags, defaults, get_search_embedding_model,
-        HanzoForServerBuilder, ModelConfig,
+        ServerBuilder, ModelConfig,
     },
-    hanzo_server_router_builder::HanzoServerRouterBuilder,
+    router::RouterBuilder,
 };
 
 mod interactive_mode;
@@ -349,7 +349,7 @@ async fn main() -> Result<()> {
             // Multi-model mode
             let model_configs = load_multi_model_config(&config)?;
 
-            let mut builder = HanzoForServerBuilder::new()
+            let mut builder = ServerBuilder::new()
                 .with_max_seqs(args.max_seqs)
                 .with_no_kv_cache(args.no_kv_cache)
                 .with_token_source(args.token_source)
@@ -381,7 +381,7 @@ async fn main() -> Result<()> {
         }
         model => {
             // Single-model mode
-            let mut builder = HanzoForServerBuilder::new()
+            let mut builder = ServerBuilder::new()
                 .with_model(model)
                 .with_max_seqs(args.max_seqs)
                 .with_no_kv_cache(args.no_kv_cache)
@@ -452,7 +452,7 @@ async fn main() -> Result<()> {
         // Create listener early to validate address before model loading
         let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
 
-        let app = HanzoServerRouterBuilder::new()
+        let app = RouterBuilder::new()
             .with_hanzo(hanzo)
             .build()
             .await?;

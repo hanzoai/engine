@@ -123,6 +123,7 @@ fn build_model_list(hanzo: &Arc<Hanzo>) -> IndexMap<String, UiModelInfo> {
                     ModelCategory::Audio => "audio",
                     ModelCategory::Embedding => "embedding",
                     ModelCategory::Diffusion => "diffusion",
+                    ModelCategory::Animation => "animation",
                 };
                 if matches!(kind, "text" | "multimodal" | "speech") {
                     let cfg = hanzo.config(Some(&model_id)).ok();
