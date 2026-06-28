@@ -6,7 +6,7 @@ use hanzo_engine::{Request, Response};
 use serde::Serialize;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
-use crate::types::SharedHanzoState;
+use crate::types::SharedState;
 
 /// Default buffer size for the response channel used in streaming operations.
 ///
@@ -87,12 +87,12 @@ pub fn create_response_channel(
 }
 
 /// Sends a request to the model processing pipeline.
-pub async fn send_request(state: &SharedHanzoState, request: Request) -> Result<()> {
+pub async fn send_request(state: &SharedState, request: Request) -> Result<()> {
     send_request_with_model(state, request, None).await
 }
 
 pub async fn send_request_with_model(
-    state: &SharedHanzoState,
+    state: &SharedState,
     request: Request,
     model_id: Option<&str>,
 ) -> Result<()> {
@@ -109,13 +109,13 @@ pub async fn send_request_with_model(
 /// Generic function to process non-streaming responses.
 pub(crate) async fn base_process_non_streaming_response<R, M, E>(
     rx: &mut Receiver<Response>,
-    state: SharedHanzoState,
+    state: SharedState,
     match_fn: M,
     error_handler: E,
 ) -> R
 where
-    M: FnOnce(SharedHanzoState, Response) -> R,
-    E: FnOnce(SharedHanzoState, Box<dyn std::error::Error + Send + Sync + 'static>) -> R,
+    M: FnOnce(SharedState, Response) -> R,
+    E: FnOnce(SharedState, Box<dyn std::error::Error + Send + Sync + 'static>) -> R,
 {
     loop {
         match rx.recv().await {

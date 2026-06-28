@@ -10,8 +10,8 @@ use hanzo_engine::{
 };
 use hanzo_server_core::{
     approvals::ApprovalBroker,
-    hanzo_for_server_builder::HanzoForServerBuilder,
-    hanzo_server_router_builder::HanzoServerRouterBuilder,
+    server::ServerBuilder,
+    router::RouterBuilder,
     route_registry::{RouteInfo, RouteKind, API_ROUTES},
 };
 
@@ -68,7 +68,7 @@ pub async fn run_server(
     let isq = extract_isq_setting(&model_type);
 
     // Build the Hanzo instance
-    let mut builder = HanzoForServerBuilder::new()
+    let mut builder = ServerBuilder::new()
         .with_model(model_selected)
         .with_max_seqs(runtime.max_seqs)
         .with_no_kv_cache(runtime.no_kv_cache)
@@ -129,7 +129,7 @@ pub async fn run_server(
     let hanzo_for_ui = hanzo.clone();
 
     // Build and run the server
-    let mut app = HanzoServerRouterBuilder::new()
+    let mut app = RouterBuilder::new()
         .with_hanzo(hanzo)
         .with_max_tool_rounds_optional(server.max_tool_rounds)
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())

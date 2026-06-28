@@ -20,7 +20,6 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use std::{
     cell::RefCell,
-    error::Error,
     fs::OpenOptions,
     io::Write,
     sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
@@ -289,10 +288,13 @@ pub use pipeline::hf::{
     HF_HUB_OFFLINE_ENV,
 };
 pub use pipeline::{
-    chat_template::ChatTemplate, expand_isq_value, parse_isq_value, parse_uqff_shard,
-    resolve_uqff_shorthand, AdapterPaths, AnyMoeLoader, AnyMoePipeline, AutoDeviceMapParams,
+    animation_loader, chat_template::ChatTemplate, expand_isq_value, parse_isq_value,
+    parse_uqff_shard, resolve_uqff_shorthand, AdapterPaths, AnimationComponents, AnimationLoader,
+    AnimationLoaderType, AnimationModelLoader, AnimationModelPaths, AnimationPipeline, AnyMoeLoader,
+    AnyMoePipeline, AutoDeviceMapParams,
     AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams, DiffusionLoader,
     DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoader, EmbeddingLoaderBuilder,
+    MuseTalkAnimationLoader,
     EmbeddingLoaderType, EmbeddingModelPaths, EmbeddingSpecificConfig, GGMLLoader,
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
     GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader,
@@ -409,7 +411,7 @@ impl AddModelConfig {
 }
 
 #[derive(Clone)]
-pub struct HanzoConfig {
+pub struct Config {
     pub kind: ModelKind,
     pub device: Device,
     pub category: ModelCategory,
@@ -463,7 +465,7 @@ pub struct UnloadedModelState {
     /// Model category (Text, Multimodal, etc.)
     pub category: ModelCategory,
     /// Model metadata configuration
-    pub hanzo_config: HanzoConfig,
+    pub hanzo_config: Config,
 }
 
 /// Internal structure to hold per-engine state
@@ -471,7 +473,7 @@ struct EngineInstance {
     sender: Sender<Request>,
     engine_handler: JoinHandle<()>,
     reboot_state: RebootState,
-    config: HanzoConfig,
+    config: Config,
     category: ModelCategory,
     logger: Arc<IntervalLogger>,
     /// Shared with the engine so the SDK/HTTP layer can read/write sessions out of band.
@@ -556,7 +558,7 @@ impl std::fmt::Display for ModelStatus {
 }
 
 #[derive(Debug)]
-pub enum HanzoError {
+pub enum Error {
     EnginePoisoned,
     SenderPoisoned,
     /// The requested model was not found (neither loaded nor unloaded)
@@ -575,25 +577,25 @@ pub enum HanzoError {
     Other(String),
 }
 
-impl std::fmt::Display for HanzoError {
+impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", &self)
     }
 }
 
-impl std::error::Error for HanzoError {}
+impl std::error::Error for Error {}
 
 #[cfg(feature = "pyo3_macros")]
-impl From<HanzoError> for pyo3::PyErr {
-    fn from(value: HanzoError) -> Self {
+impl From<Error> for pyo3::PyErr {
+    fn from(value: Error) -> Self {
         PyValueError::new_err(format!("{value:?}"))
     }
 }
 
-/// The HanzoBuilder takes the pipeline and a scheduler method and constructs
+/// The Builder takes the pipeline and a scheduler method and constructs
 /// an Engine and a Hanzo instance. The Engine runs on a separate thread, and the Hanzo
 /// instance stays on the calling thread.
-pub struct HanzoBuilder {
+pub struct Builder {
     pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     method: SchedulerConfig,
     model_id_override: Option<String>,
@@ -611,7 +613,7 @@ pub struct HanzoBuilder {
     code_exec_config: Option<CodeExecutionConfig>,
 }
 
-impl HanzoBuilder {
+impl Builder {
     /// Creates a new builder with the given pipeline, scheduler method, logging flag,
     /// and optional embedding model for web search. To override the search callback,
     /// use `.with_search_callback(...)` on the builder.
@@ -804,7 +806,7 @@ impl Hanzo {
         info!("Pipeline input modalities are {:?}", &modalities.input);
         info!("Pipeline output modalities are {:?}", &modalities.output);
 
-        let hanzo_config = HanzoConfig {
+        let hanzo_config = Config {
             kind,
             device,
             category: category.clone(),
@@ -900,7 +902,7 @@ impl Hanzo {
     }
 
     /// Initialize MCP and code-execution tool callbacks and merge them into `tool_callbacks`.
-    /// Used by both `HanzoBuilder::new` and `add_model` so dynamically added models pick up
+    /// Used by both `Builder::new` and `add_model` so dynamically added models pick up
     /// the same external tools as the boot-time model.
     async fn init_external_tool_callbacks(
         #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))] pipeline: &Arc<
@@ -1050,9 +1052,9 @@ impl Hanzo {
         }
     }
 
-    async fn new(config: HanzoBuilder) -> Arc<Self> {
+    async fn new(config: Builder) -> Arc<Self> {
         info!("git revision: {GIT_REVISION}");
-        let HanzoBuilder {
+        let Builder {
             pipeline,
             method,
             model_id_override,
@@ -1239,10 +1241,10 @@ impl Hanzo {
     }
 
     /// Attempts to reboot a specific engine by model_id
-    fn reboot_engine(&self, model_id: &str) -> Result<(), HanzoError> {
+    fn reboot_engine(&self, model_id: &str) -> Result<(), Error> {
         let mut engines = self.engines.write().map_err(|_| {
             tracing::warn!("Couldn't get write lock on engines during reboot attempt");
-            HanzoError::EnginePoisoned
+            Error::EnginePoisoned
         })?;
 
         if let Some(engine_instance) = engines.get(model_id) {
@@ -1270,33 +1272,33 @@ impl Hanzo {
             )
             .map_err(|e| {
                 tracing::error!("Failed to create new engine instance: {}", e);
-                HanzoError::EnginePoisoned
+                Error::EnginePoisoned
             })?;
 
             engines.insert(model_id.to_string(), new_engine_instance);
             tracing::info!("Successfully rebooted engine {}", model_id);
             Ok(())
         } else {
-            Err(HanzoError::EnginePoisoned)
+            Err(Error::EnginePoisoned)
         }
     }
 
-    fn engine_dead(&self, model_id: &str) -> Result<bool, HanzoError> {
+    fn engine_dead(&self, model_id: &str) -> Result<bool, Error> {
         let engines = self.engines.read().map_err(|_| {
             tracing::warn!("Couldn't get read lock on engines!");
-            HanzoError::EnginePoisoned
+            Error::EnginePoisoned
         })?;
 
         if let Some(engine_instance) = engines.get(model_id) {
             Ok(engine_instance.engine_handler.is_finished())
         } else {
-            Err(HanzoError::EnginePoisoned)
+            Err(Error::EnginePoisoned)
         }
     }
 
     /// Get sender for a specific model. If model_id is None, uses default engine.
     /// If the model is unloaded, it will be automatically reloaded before returning the sender.
-    pub fn get_sender(&self, model_id: Option<&str>) -> Result<Sender<Request>, HanzoError> {
+    pub fn get_sender(&self, model_id: Option<&str>) -> Result<Sender<Request>, Error> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         // Check if model is loaded
@@ -1304,7 +1306,7 @@ impl Hanzo {
             let engines = self
                 .engines
                 .read()
-                .map_err(|_| HanzoError::SenderPoisoned)?;
+                .map_err(|_| Error::SenderPoisoned)?;
             engines.contains_key(&resolved_model_id)
         };
 
@@ -1318,7 +1320,7 @@ impl Hanzo {
             let engines = self
                 .engines
                 .read()
-                .map_err(|_| HanzoError::SenderPoisoned)?;
+                .map_err(|_| Error::SenderPoisoned)?;
             if let Some(engine_instance) = engines.get(&resolved_model_id) {
                 return Ok(engine_instance.sender.clone());
             }
@@ -1329,7 +1331,7 @@ impl Hanzo {
             let unloaded = self
                 .unloaded_models
                 .read()
-                .map_err(|_| HanzoError::EnginePoisoned)?;
+                .map_err(|_| Error::EnginePoisoned)?;
             unloaded.contains_key(&resolved_model_id)
         };
 
@@ -1344,13 +1346,13 @@ impl Hanzo {
             let engines = self
                 .engines
                 .read()
-                .map_err(|_| HanzoError::SenderPoisoned)?;
+                .map_err(|_| Error::SenderPoisoned)?;
             if let Some(engine_instance) = engines.get(&resolved_model_id) {
                 return Ok(engine_instance.sender.clone());
             }
         }
 
-        Err(HanzoError::ModelNotFound(resolved_model_id))
+        Err(Error::ModelNotFound(resolved_model_id))
     }
 
     /// Look up a file across all loaded engines. `None` if missing or expired.
@@ -1393,29 +1395,29 @@ impl Hanzo {
     pub fn get_session_store(
         &self,
         model_id: Option<&str>,
-    ) -> Result<Arc<std::sync::Mutex<engine::agentic_session::AgenticSessionStore>>, HanzoError>
+    ) -> Result<Arc<std::sync::Mutex<engine::agentic_session::AgenticSessionStore>>, Error>
     {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
         let engines = self
             .engines
             .read()
-            .map_err(|_| HanzoError::SenderPoisoned)?;
+            .map_err(|_| Error::SenderPoisoned)?;
         engines
             .get(&resolved_model_id)
             .map(|e| Arc::clone(&e.session_store))
-            .ok_or(HanzoError::ModelNotFound(resolved_model_id))
+            .ok_or(Error::ModelNotFound(resolved_model_id))
     }
 
-    fn get_file_store(&self, model_id: Option<&str>) -> Result<files::FileStore, HanzoError> {
+    fn get_file_store(&self, model_id: Option<&str>) -> Result<files::FileStore, Error> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
         let engines = self
             .engines
             .read()
-            .map_err(|_| HanzoError::SenderPoisoned)?;
+            .map_err(|_| Error::SenderPoisoned)?;
         engines
             .get(&resolved_model_id)
             .map(|e| e.file_store.clone())
-            .ok_or(HanzoError::ModelNotFound(resolved_model_id))
+            .ok_or(Error::ModelNotFound(resolved_model_id))
     }
 
     /// Export an agentic session by ID. Bundles the session's files (full bodies). `None` if missing.
@@ -1423,13 +1425,13 @@ impl Hanzo {
         &self,
         model_id: Option<&str>,
         session_id: &str,
-    ) -> Result<Option<engine::agentic_session::SerializedSession>, HanzoError> {
+    ) -> Result<Option<engine::agentic_session::SerializedSession>, Error> {
         let store = self.get_session_store(model_id)?;
         let exported = {
-            let mut guard = store.lock().map_err(|_| HanzoError::SenderPoisoned)?;
+            let mut guard = store.lock().map_err(|_| Error::SenderPoisoned)?;
             guard
                 .export(session_id)
-                .map_err(|e| HanzoError::Other(e.to_string()))?
+                .map_err(|e| Error::Other(e.to_string()))?
         };
         let Some(mut session) = exported else {
             return Ok(None);
@@ -1449,14 +1451,14 @@ impl Hanzo {
         model_id: Option<&str>,
         session_id: String,
         session: engine::agentic_session::SerializedSession,
-    ) -> Result<(), HanzoError> {
+    ) -> Result<(), Error> {
         let files = session.files.clone();
         let store = self.get_session_store(model_id)?;
         {
-            let mut guard = store.lock().map_err(|_| HanzoError::SenderPoisoned)?;
+            let mut guard = store.lock().map_err(|_| Error::SenderPoisoned)?;
             guard
                 .import(session_id.clone(), session)
-                .map_err(|e| HanzoError::Other(e.to_string()))?;
+                .map_err(|e| Error::Other(e.to_string()))?;
         }
         let file_store = self.get_file_store(model_id)?;
         for f in files {
@@ -1474,12 +1476,12 @@ impl Hanzo {
         src_session_id: &str,
         dest_session_id: String,
         num_turns: usize,
-    ) -> Result<(), HanzoError> {
+    ) -> Result<(), Error> {
         let store = self.get_session_store(model_id)?;
-        let mut guard = store.lock().map_err(|_| HanzoError::SenderPoisoned)?;
+        let mut guard = store.lock().map_err(|_| Error::SenderPoisoned)?;
         guard
             .fork(src_session_id, dest_session_id, num_turns)
-            .map_err(|e| HanzoError::Other(e.to_string()))
+            .map_err(|e| Error::Other(e.to_string()))
     }
 
     /// Delete an agentic session. Returns whether the session existed.
@@ -1487,16 +1489,16 @@ impl Hanzo {
         &self,
         model_id: Option<&str>,
         session_id: &str,
-    ) -> Result<bool, HanzoError> {
+    ) -> Result<bool, Error> {
         let store = self.get_session_store(model_id)?;
-        let mut guard = store.lock().map_err(|_| HanzoError::SenderPoisoned)?;
+        let mut guard = store.lock().map_err(|_| Error::SenderPoisoned)?;
         Ok(guard.delete(session_id))
     }
 
     /// All stored session IDs. SDK-only, not exposed via HTTP.
-    pub fn list_session_ids(&self, model_id: Option<&str>) -> Result<Vec<String>, HanzoError> {
+    pub fn list_session_ids(&self, model_id: Option<&str>) -> Result<Vec<String>, Error> {
         let store = self.get_session_store(model_id)?;
-        let guard = store.lock().map_err(|_| HanzoError::SenderPoisoned)?;
+        let guard = store.lock().map_err(|_| Error::SenderPoisoned)?;
         Ok(guard.list_ids())
     }
 
@@ -1508,11 +1510,11 @@ impl Hanzo {
         self.creation_time
     }
 
-    fn resolve_alias(&self, model_id: &str) -> Result<String, HanzoError> {
+    fn resolve_alias(&self, model_id: &str) -> Result<String, Error> {
         let aliases = self
             .model_aliases
             .read()
-            .map_err(|_| HanzoError::SenderPoisoned)?;
+            .map_err(|_| Error::SenderPoisoned)?;
         if let Some(primary_id) = aliases.get(model_id) {
             Ok(primary_id.clone())
         } else {
@@ -1520,17 +1522,17 @@ impl Hanzo {
         }
     }
 
-    fn resolve_alias_or_default(&self, model_id: Option<&str>) -> Result<String, HanzoError> {
+    fn resolve_alias_or_default(&self, model_id: Option<&str>) -> Result<String, Error> {
         match model_id {
             Some(id) => self.resolve_alias(id),
             None => {
                 let default_lock = self
                     .default_engine_id
                     .read()
-                    .map_err(|_| HanzoError::SenderPoisoned)?;
+                    .map_err(|_| Error::SenderPoisoned)?;
                 Ok(default_lock
                     .as_ref()
-                    .ok_or(HanzoError::EnginePoisoned)?
+                    .ok_or(Error::EnginePoisoned)?
                     .clone())
             }
         }
@@ -1602,13 +1604,13 @@ impl Hanzo {
     }
 
     /// Check if a model is known (loaded, unloaded, or reloading), resolving aliases if needed.
-    pub fn model_exists(&self, model_id: &str) -> Result<bool, HanzoError> {
+    pub fn model_exists(&self, model_id: &str) -> Result<bool, Error> {
         let resolved_model_id = self.resolve_alias(model_id)?;
 
         let reloading = self
             .reloading_models
             .read()
-            .map_err(|_| HanzoError::EnginePoisoned)?;
+            .map_err(|_| Error::EnginePoisoned)?;
         if reloading.contains(&resolved_model_id) {
             return Ok(true);
         }
@@ -1617,7 +1619,7 @@ impl Hanzo {
         let engines = self
             .engines
             .read()
-            .map_err(|_| HanzoError::EnginePoisoned)?;
+            .map_err(|_| Error::EnginePoisoned)?;
         if engines.contains_key(&resolved_model_id) {
             return Ok(true);
         }
@@ -1626,7 +1628,7 @@ impl Hanzo {
         let unloaded = self
             .unloaded_models
             .read()
-            .map_err(|_| HanzoError::EnginePoisoned)?;
+            .map_err(|_| Error::EnginePoisoned)?;
         if unloaded.contains_key(&resolved_model_id) {
             return Ok(true);
         }
@@ -1635,47 +1637,47 @@ impl Hanzo {
     }
 
     /// Get the interval logger for a specific model. If model_id is None, uses default engine.
-    pub fn get_logger(&self, model_id: Option<&str>) -> Result<Arc<IntervalLogger>, HanzoError> {
+    pub fn get_logger(&self, model_id: Option<&str>) -> Result<Arc<IntervalLogger>, Error> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         let engines = self
             .engines
             .read()
-            .map_err(|_| HanzoError::SenderPoisoned)?;
+            .map_err(|_| Error::SenderPoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.logger.clone())
         } else {
-            Err(HanzoError::EnginePoisoned)
+            Err(Error::EnginePoisoned)
         }
     }
 
     /// Get model category for a specific model. If model_id is None, uses default engine.
-    pub fn get_model_category(&self, model_id: Option<&str>) -> Result<ModelCategory, HanzoError> {
+    pub fn get_model_category(&self, model_id: Option<&str>) -> Result<ModelCategory, Error> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         let engines = self
             .engines
             .read()
-            .map_err(|_| HanzoError::SenderPoisoned)?;
+            .map_err(|_| Error::SenderPoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.category.clone())
         } else {
-            Err(HanzoError::EnginePoisoned)
+            Err(Error::EnginePoisoned)
         }
     }
 
     /// Get the maximum supported sequence length for a model, if applicable.
-    pub fn max_sequence_length(&self, model_id: Option<&str>) -> Result<Option<usize>, HanzoError> {
+    pub fn max_sequence_length(&self, model_id: Option<&str>) -> Result<Option<usize>, Error> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         let engines = self
             .engines
             .read()
-            .map_err(|_| HanzoError::SenderPoisoned)?;
+            .map_err(|_| Error::SenderPoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.config.max_seq_len)
         } else {
-            Err(HanzoError::EnginePoisoned)
+            Err(Error::EnginePoisoned)
         }
     }
 
@@ -1877,7 +1879,7 @@ impl Hanzo {
     }
 
     /// Dispatch a request to the appropriate engine based on the model_id in the request
-    pub fn send_request(&self, mut request: Request) -> Result<(), HanzoError> {
+    pub fn send_request(&self, mut request: Request) -> Result<(), Error> {
         let model_id = match &mut request {
             Request::Normal(normal_req) => normal_req.model_id.as_deref(),
             _ => None, // Other request types don't specify model_id
@@ -1886,7 +1888,7 @@ impl Hanzo {
         let sender = self.get_sender(model_id)?;
         sender
             .blocking_send(request)
-            .map_err(|_| HanzoError::SenderPoisoned)
+            .map_err(|_| Error::SenderPoisoned)
     }
 
     pub fn maybe_log_request(this: Arc<Self>, repr: String) {
@@ -1916,7 +1918,7 @@ impl Hanzo {
         }
     }
 
-    pub fn maybe_log_error(this: Arc<Self>, err: &dyn Error) {
+    pub fn maybe_log_error(this: Arc<Self>, err: &dyn std::error::Error) {
         if let Some(file) = &this.log {
             let mut f = OpenOptions::new()
                 .append(true)
@@ -2010,7 +2012,7 @@ impl Hanzo {
     }
 
     /// Get config for a specific model
-    pub fn config(&self, model_id: Option<&str>) -> Result<HanzoConfig, String> {
+    pub fn config(&self, model_id: Option<&str>) -> Result<Config, String> {
         let resolved_model_id = self
             .resolve_alias_or_default(model_id)
             .map_err(|e| e.to_string())?;
@@ -2031,17 +2033,17 @@ impl Hanzo {
     /// using `reload_model()`.
     ///
     /// Note: The model must have been added with a `ModelLoaderConfig` for auto-reload to work.
-    /// Models added via `HanzoBuilder` without explicit loader config cannot be reloaded.
-    pub fn unload_model(&self, model_id: &str) -> Result<(), HanzoError> {
+    /// Models added via `Builder` without explicit loader config cannot be reloaded.
+    pub fn unload_model(&self, model_id: &str) -> Result<(), Error> {
         let resolved_model_id = self.resolve_alias(model_id)?;
         // Check if already unloaded
         {
             let unloaded = self
                 .unloaded_models
                 .read()
-                .map_err(|_| HanzoError::EnginePoisoned)?;
+                .map_err(|_| Error::EnginePoisoned)?;
             if unloaded.contains_key(&resolved_model_id) {
-                return Err(HanzoError::ModelAlreadyUnloaded(resolved_model_id.clone()));
+                return Err(Error::ModelAlreadyUnloaded(resolved_model_id.clone()));
             }
         }
 
@@ -2049,18 +2051,18 @@ impl Hanzo {
         let mut engines = self
             .engines
             .write()
-            .map_err(|_| HanzoError::EnginePoisoned)?;
+            .map_err(|_| Error::EnginePoisoned)?;
 
         let engine_instance = engines
             .remove(&resolved_model_id)
-            .ok_or_else(|| HanzoError::ModelNotFound(resolved_model_id.clone()))?;
+            .ok_or_else(|| Error::ModelNotFound(resolved_model_id.clone()))?;
 
         // Check if we have loader config for reloading
         let loader_config = engine_instance
             .reboot_state
             .loader_config
             .clone()
-            .ok_or_else(|| HanzoError::NoLoaderConfig(resolved_model_id.clone()))?;
+            .ok_or_else(|| Error::NoLoaderConfig(resolved_model_id.clone()))?;
 
         // Create the unloaded state
         let unloaded_state = UnloadedModelState {
@@ -2090,21 +2092,21 @@ impl Hanzo {
         let mut unloaded = self
             .unloaded_models
             .write()
-            .map_err(|_| HanzoError::EnginePoisoned)?;
+            .map_err(|_| Error::EnginePoisoned)?;
         unloaded.insert(resolved_model_id.to_string(), unloaded_state);
 
         // Update default if needed
         let mut default_lock = self
             .default_engine_id
             .write()
-            .map_err(|_| HanzoError::EnginePoisoned)?;
+            .map_err(|_| Error::EnginePoisoned)?;
         if let Some(ref default_id) = *default_lock {
             if default_id == &resolved_model_id {
                 // Set the first available engine as the new default
                 let engines = self
                     .engines
                     .read()
-                    .map_err(|_| HanzoError::EnginePoisoned)?;
+                    .map_err(|_| Error::EnginePoisoned)?;
                 *default_lock = engines.keys().next().cloned();
             }
         }
@@ -2115,16 +2117,16 @@ impl Hanzo {
 
     /// Manually reload a previously unloaded model.
     /// This is also called automatically by `get_sender()` when a request targets an unloaded model.
-    pub async fn reload_model(&self, model_id: &str) -> Result<(), HanzoError> {
+    pub async fn reload_model(&self, model_id: &str) -> Result<(), Error> {
         let resolved_model_id = self.resolve_alias(model_id)?;
         // Check if already reloading
         {
             let reloading = self
                 .reloading_models
                 .read()
-                .map_err(|_| HanzoError::EnginePoisoned)?;
+                .map_err(|_| Error::EnginePoisoned)?;
             if reloading.contains(&resolved_model_id) {
-                return Err(HanzoError::ModelReloading(resolved_model_id.clone()));
+                return Err(Error::ModelReloading(resolved_model_id.clone()));
             }
         }
 
@@ -2133,7 +2135,7 @@ impl Hanzo {
             let mut reloading = self
                 .reloading_models
                 .write()
-                .map_err(|_| HanzoError::EnginePoisoned)?;
+                .map_err(|_| Error::EnginePoisoned)?;
             reloading.insert(resolved_model_id.clone());
         }
 
@@ -2142,11 +2144,11 @@ impl Hanzo {
             let unloaded = self
                 .unloaded_models
                 .read()
-                .map_err(|_| HanzoError::EnginePoisoned)?;
+                .map_err(|_| Error::EnginePoisoned)?;
             unloaded
                 .get(&resolved_model_id)
                 .cloned()
-                .ok_or_else(|| HanzoError::ModelNotFound(resolved_model_id.clone()))?
+                .ok_or_else(|| Error::ModelNotFound(resolved_model_id.clone()))?
         };
 
         // Attempt to reload
@@ -2159,7 +2161,7 @@ impl Hanzo {
             let mut reloading = self
                 .reloading_models
                 .write()
-                .map_err(|_| HanzoError::EnginePoisoned)?;
+                .map_err(|_| Error::EnginePoisoned)?;
             reloading.remove(&resolved_model_id);
         }
 
@@ -2171,7 +2173,7 @@ impl Hanzo {
         &self,
         model_id: &str,
         unloaded_state: UnloadedModelState,
-    ) -> Result<(), HanzoError> {
+    ) -> Result<(), Error> {
         use crate::model_loader::LoaderBuilder;
 
         info!("Reloading model: {}", model_id);
@@ -2183,7 +2185,7 @@ impl Hanzo {
             .with_chat_template(loader_config.chat_template.clone())
             .with_jinja_explicit(loader_config.jinja_explicit.clone())
             .build()
-            .map_err(|e| HanzoError::ReloadFailed(format!("Failed to build loader: {e}")))?;
+            .map_err(|e| Error::ReloadFailed(format!("Failed to build loader: {e}")))?;
 
         // Load the model
         let pipeline = loader
@@ -2197,14 +2199,14 @@ impl Hanzo {
                 loader_config.isq,
                 loader_config.paged_attn_config,
             )
-            .map_err(|e| HanzoError::ReloadFailed(format!("Failed to load model: {e}")))?;
+            .map_err(|e| Error::ReloadFailed(format!("Failed to load model: {e}")))?;
 
         if let Some(mtp_config) = loader_config.mtp_config.clone() {
             pipeline
                 .blocking_lock()
                 .attach_speculative(SpeculativeConfig::Mtp(mtp_config))
                 .map_err(|e| {
-                    HanzoError::ReloadFailed(format!(
+                    Error::ReloadFailed(format!(
                         "Failed to attach MTP speculative decoding: {e}"
                     ))
                 })?;
@@ -2232,14 +2234,14 @@ impl Hanzo {
             unloaded_state.engine_config,
             reboot_state,
         )
-        .map_err(|e| HanzoError::ReloadFailed(format!("Failed to create engine: {e}")))?;
+        .map_err(|e| Error::ReloadFailed(format!("Failed to create engine: {e}")))?;
 
         // Add to engines map
         {
             let mut engines = self
                 .engines
                 .write()
-                .map_err(|_| HanzoError::EnginePoisoned)?;
+                .map_err(|_| Error::EnginePoisoned)?;
             engines.insert(model_id.to_string(), engine_instance);
         }
 
@@ -2248,7 +2250,7 @@ impl Hanzo {
             let mut unloaded = self
                 .unloaded_models
                 .write()
-                .map_err(|_| HanzoError::EnginePoisoned)?;
+                .map_err(|_| Error::EnginePoisoned)?;
             unloaded.remove(model_id);
         }
 
@@ -2262,11 +2264,11 @@ impl Hanzo {
     /// - If called from a multi-threaded tokio runtime, uses `block_in_place`
     /// - If called from a single-threaded runtime, returns an error (use `reload_model()` instead)
     /// - If called outside any runtime, creates a temporary runtime
-    pub fn reload_model_blocking(&self, model_id: &str) -> Result<(), HanzoError> {
+    pub fn reload_model_blocking(&self, model_id: &str) -> Result<(), Error> {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread {
-                    Err(HanzoError::ReloadFailed(
+                    Err(Error::ReloadFailed(
                         "Cannot reload model blocking from single-threaded runtime. Use reload_model() instead.".to_string()
                     ))
                 } else {
@@ -2275,7 +2277,7 @@ impl Hanzo {
             }
             Err(_) => {
                 let rt = tokio::runtime::Runtime::new().map_err(|e| {
-                    HanzoError::ReloadFailed(format!("Failed to create runtime: {e}"))
+                    Error::ReloadFailed(format!("Failed to create runtime: {e}"))
                 })?;
                 rt.block_on(self.reload_model(model_id))
             }
@@ -2283,33 +2285,33 @@ impl Hanzo {
     }
 
     /// List all unloaded model IDs
-    pub fn list_unloaded_models(&self) -> Result<Vec<String>, HanzoError> {
+    pub fn list_unloaded_models(&self) -> Result<Vec<String>, Error> {
         let unloaded = self
             .unloaded_models
             .read()
-            .map_err(|_| HanzoError::EnginePoisoned)?;
+            .map_err(|_| Error::EnginePoisoned)?;
         Ok(unloaded.keys().cloned().collect())
     }
 
     /// Check if a model is currently loaded (as opposed to unloaded)
-    pub fn is_model_loaded(&self, model_id: &str) -> Result<bool, HanzoError> {
+    pub fn is_model_loaded(&self, model_id: &str) -> Result<bool, Error> {
         let resolved_model_id = self.resolve_alias(model_id)?;
         let engines = self
             .engines
             .read()
-            .map_err(|_| HanzoError::EnginePoisoned)?;
+            .map_err(|_| Error::EnginePoisoned)?;
         Ok(engines.contains_key(&resolved_model_id))
     }
 
     /// Get the status of a model, or None if not found
-    pub fn get_model_status(&self, model_id: &str) -> Result<Option<ModelStatus>, HanzoError> {
+    pub fn get_model_status(&self, model_id: &str) -> Result<Option<ModelStatus>, Error> {
         let resolved_model_id = self.resolve_alias(model_id)?;
         // Check if reloading
         {
             let reloading = self
                 .reloading_models
                 .read()
-                .map_err(|_| HanzoError::EnginePoisoned)?;
+                .map_err(|_| Error::EnginePoisoned)?;
             if reloading.contains(&resolved_model_id) {
                 return Ok(Some(ModelStatus::Reloading));
             }
@@ -2320,7 +2322,7 @@ impl Hanzo {
             let engines = self
                 .engines
                 .read()
-                .map_err(|_| HanzoError::EnginePoisoned)?;
+                .map_err(|_| Error::EnginePoisoned)?;
             if engines.contains_key(&resolved_model_id) {
                 return Ok(Some(ModelStatus::Loaded));
             }
@@ -2331,7 +2333,7 @@ impl Hanzo {
             let unloaded = self
                 .unloaded_models
                 .read()
-                .map_err(|_| HanzoError::EnginePoisoned)?;
+                .map_err(|_| Error::EnginePoisoned)?;
             if unloaded.contains_key(&resolved_model_id) {
                 return Ok(Some(ModelStatus::Unloaded));
             }
@@ -2341,14 +2343,14 @@ impl Hanzo {
     }
 
     /// List all models with their status
-    pub fn list_models_with_status(&self) -> Result<Vec<(String, ModelStatus)>, HanzoError> {
+    pub fn list_models_with_status(&self) -> Result<Vec<(String, ModelStatus)>, Error> {
         let mut result = Vec::new();
 
         // Get reloading models
         let reloading = self
             .reloading_models
             .read()
-            .map_err(|_| HanzoError::EnginePoisoned)?;
+            .map_err(|_| Error::EnginePoisoned)?;
         for model_id in reloading.iter() {
             result.push((model_id.clone(), ModelStatus::Reloading));
         }
@@ -2358,7 +2360,7 @@ impl Hanzo {
         let engines = self
             .engines
             .read()
-            .map_err(|_| HanzoError::EnginePoisoned)?;
+            .map_err(|_| Error::EnginePoisoned)?;
         for model_id in engines.keys() {
             result.push((model_id.clone(), ModelStatus::Loaded));
         }
@@ -2368,7 +2370,7 @@ impl Hanzo {
         let unloaded = self
             .unloaded_models
             .read()
-            .map_err(|_| HanzoError::EnginePoisoned)?;
+            .map_err(|_| Error::EnginePoisoned)?;
         for model_id in unloaded.keys() {
             // Skip if already in reloading
             if !result.iter().any(|(id, _)| id == model_id) {
