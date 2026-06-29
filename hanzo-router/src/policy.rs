@@ -6,8 +6,10 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::classify::{Classifier, Heuristic, Request};
 use crate::memory::{default_fraction, MemSnapshot};
-use crate::registry::{Backend, ModelCard, Registry, Task};
+use crate::registry::{Backend, Level, ModelCard, Registry, Task};
+use crate::route::{Route, RoutePolicy, Slo, User, COLD_START_CONFIDENCE};
 
 /// Per-task preferences + global knobs. Loadable from YAML (the same declarative
 /// shape as the Python `router_policy.yaml`).
@@ -80,7 +82,7 @@ impl Policy {
             .unwrap_or_default();
         let mut out = Vec::new();
         let mut seen = BTreeSet::new();
-        let mut push = |id: &str, out: &mut Vec<String>, seen: &mut BTreeSet<String>| {
+        let push = |id: &str, out: &mut Vec<String>, seen: &mut BTreeSet<String>| {
             if seen.insert(id.to_string()) {
                 out.push(id.to_string());
             }
@@ -143,5 +145,41 @@ impl Policy {
             }
         }
         Decision::NoFit
+    }
+}
+
+impl RoutePolicy for Policy {
+    /// Cold-start routing: pick the first task-usable candidate in preference
+    /// order, served at [`Level::Balanced`]. Placement-agnostic (memory and the
+    /// running set are decided later by [`Policy::select`]); confidence is fixed
+    /// low so a learned policy knows this is an un-personalized rule guess.
+    fn route(&self, req: &Request, _user: &User, slo: &Slo, registry: &Registry) -> Route {
+        let task = Heuristic.classify(req);
+        let running = BTreeSet::new();
+        let ctx = Context {
+            task,
+            registry,
+            mem: MemSnapshot { available_bytes: u64::MAX, total_bytes: u64::MAX, unified: true },
+            running: &running,
+            vision_required: req.has_media,
+            min_context: req.approx_tokens,
+        };
+        let mut policy = self.clone();
+        if slo.max_cost > 0.0 {
+            policy.cost_ceiling = Some(slo.max_cost as f64);
+        }
+        let model = policy
+            .candidates(&ctx)
+            .into_iter()
+            .find(|id| registry.get(id).is_some_and(|m| policy.usable(m, &ctx)));
+        match model {
+            Some(model) => Route {
+                model,
+                level: Level::Balanced,
+                modality: req.target_modality(),
+                confidence: COLD_START_CONFIDENCE,
+            },
+            None => Route::refused(0.0),
+        }
     }
 }
