@@ -55,20 +55,20 @@ pub(crate) struct PropsGGUF {
     pub rms_norm_eps: f32,
     pub max_seq_len: usize,
     // MLA / attention.
-    pub head_dim: usize,        // 512 (key_length == value_length)
-    pub rope_head_dim: usize,   // 64
-    pub q_lora_rank: usize,     // 1024
-    pub o_lora_rank: usize,     // 1024
-    pub o_groups: usize,        // 8
-    pub sliding_window: usize,  // 128
+    pub head_dim: usize,       // 512 (key_length == value_length)
+    pub rope_head_dim: usize,  // 64
+    pub q_lora_rank: usize,    // 1024
+    pub o_lora_rank: usize,    // 1024
+    pub o_groups: usize,       // 8
+    pub sliding_window: usize, // 128
     // RoPE.
-    pub rope_theta: f32,            // 10000 (Full layers)
-    pub compress_rope_theta: f32,   // 160000 (compressed layers)
-    pub rope_scaling_factor: f32,   // 16
-    pub rope_orig_ctx: usize,       // 65536
+    pub rope_theta: f32,          // 10000 (Full layers)
+    pub compress_rope_theta: f32, // 160000 (compressed layers)
+    pub rope_scaling_factor: f32, // 16
+    pub rope_orig_ctx: usize,     // 65536
     pub yarn_beta_fast: f32,
     pub yarn_beta_slow: f32,
-    pub compress_ratios: Vec<u32>,  // per-layer schedule (0 = Full)
+    pub compress_ratios: Vec<u32>, // per-layer schedule (0 = Full)
     // MoE.
     pub n_routed_experts: usize,    // 256
     pub num_experts_per_tok: usize, // 6
@@ -76,20 +76,17 @@ pub(crate) struct PropsGGUF {
     pub expert_ff_len: usize,       // 2048
     pub expert_weights_scale: f64,  // 1.5 (route_scale)
     pub norm_topk_prob: bool,
-    pub hash_layer_count: usize,    // 3
-    pub swiglu_clamp: Vec<f32>,     // per-layer SwiGLU clamp (0 = none)
+    pub hash_layer_count: usize, // 3
+    pub swiglu_clamp: Vec<f32>,  // per-layer SwiGLU clamp (0 = none)
     // Hyper-Connections.
-    pub hc_count: usize,            // 4
-    pub hc_sinkhorn_iters: usize,   // 20
-    pub hc_eps: f64,                // 0
+    pub hc_count: usize,          // 4
+    pub hc_sinkhorn_iters: usize, // 20
+    pub hc_eps: f64,              // 0
 }
 
 fn verify_arch(meta: &HashMap<String, hanzo_ml::quantized::gguf_file::Value>) -> Result<()> {
     use crate::utils::gguf_metadata::TryValueInto;
-    let arch: String = meta
-        .get("general.architecture")
-        .cloned()
-        .try_value_into()?;
+    let arch: String = meta.get("general.architecture").cloned().try_value_into()?;
     if arch != "deepseek4" {
         hanzo_ml::bail!("Expected `deepseek4` architecture, got `{arch}`.");
     }
@@ -126,7 +123,9 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             o_groups: c
                 .get_value::<u32>("attention.output_group_count")
                 .unwrap_or(1) as usize,
-            sliding_window: c.get_value::<u32>("attention.sliding_window").unwrap_or(128) as usize,
+            sliding_window: c
+                .get_value::<u32>("attention.sliding_window")
+                .unwrap_or(128) as usize,
             rope_theta: c.get_value::<f32>("rope.freq_base").unwrap_or(10_000.0),
             compress_rope_theta: c
                 .get_value::<f32>("attention.compress_rope_freq_base")
@@ -148,9 +147,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             num_experts_per_tok: c.get_value::<u32>("expert_used_count")? as usize,
             n_shared_experts: c.get_value::<u32>("expert_shared_count").unwrap_or(1) as usize,
             expert_ff_len: c.get_value::<u32>("expert_feed_forward_length")? as usize,
-            expert_weights_scale: c
-                .get_value::<f32>("expert_weights_scale")
-                .unwrap_or(1.0) as f64,
+            expert_weights_scale: c.get_value::<f32>("expert_weights_scale").unwrap_or(1.0) as f64,
             norm_topk_prob: c.get_value::<bool>("expert_weights_norm").unwrap_or(true),
             hash_layer_count: c.get_value::<u32>("hash_layer_count").unwrap_or(0) as usize,
             swiglu_clamp: c
@@ -160,7 +157,9 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             hc_sinkhorn_iters: c
                 .get_value::<u32>("hyper_connection.sinkhorn_iterations")
                 .unwrap_or(20) as usize,
-            hc_eps: c.get_value::<f32>("hyper_connection.epsilon").unwrap_or(0.0) as f64,
+            hc_eps: c
+                .get_value::<f32>("hyper_connection.epsilon")
+                .unwrap_or(0.0) as f64,
         })
     }
 }
@@ -176,7 +175,11 @@ pub(crate) fn gguf_linear(q: hanzo_ml::quantized::QTensor) -> Result<Arc<dyn Qua
 
 /// Dequantize a GGUF tensor to a plain F32 tensor (norms, sinks, bias, gate_inp,
 /// hc base/scale, and the grouped-o `wo_a`).
-pub(crate) fn deq(ct: &mut Content<'_, impl std::io::Seek + std::io::Read>, name: &str, dev: &Device) -> Result<Tensor> {
+pub(crate) fn deq(
+    ct: &mut Content<'_, impl std::io::Seek + std::io::Read>,
+    name: &str,
+    dev: &Device,
+) -> Result<Tensor> {
     ct.tensor(name, dev)?.dequantize(dev)?.to_dtype(DType::F32)
 }
 
@@ -202,9 +205,9 @@ fn layer_mode(ratios: &[u32], idx: usize, window: usize) -> Mode {
 /// `sqrt(softplus(logits))`, bias-shifted top-k selection (or `tid2eid` hash on
 /// early layers), unbiased gathered weights renormalized × `route_scale`.
 pub(crate) struct V4Moe {
-    pub(crate) gate_inp: Tensor,          // [hidden, n_experts] F32 (router weight, applied as x·W)
-    pub(crate) bias: Option<Tensor>,      // [n_experts] F32 (exp_probs_b) — MoE layers
-    pub(crate) tid2eid: Option<Tensor>,   // [used, vocab] I32 — hash layers
+    pub(crate) gate_inp: Tensor, // [hidden, n_experts] F32 (router weight, applied as x·W)
+    pub(crate) bias: Option<Tensor>, // [n_experts] F32 (exp_probs_b) — MoE layers
+    pub(crate) tid2eid: Option<Tensor>, // [used, vocab] I32 — hash layers
     pub(crate) gate_experts: QMatMul,
     pub(crate) up_experts: QMatMul,
     pub(crate) down_experts: QMatMul,
@@ -222,9 +225,7 @@ impl V4Moe {
     /// hash routing; `xs` is `[tokens, hidden]`.
     fn route(&self, xs: &Tensor, input_ids: &Tensor) -> Result<(Tensor, Tensor)> {
         // scores = sqrt(softplus(xs @ gate_inp)).
-        let logits = xs
-            .to_dtype(DType::F32)?
-            .matmul(&self.gate_inp)?; // [t, n_experts]
+        let logits = xs.to_dtype(DType::F32)?.matmul(&self.gate_inp)?; // [t, n_experts]
         let scores = softplus(&logits)?.sqrt()?;
         let (indices, weights) = match (&self.tid2eid, &self.bias) {
             (Some(tid2eid), _) => {
@@ -266,10 +267,7 @@ impl V4Moe {
     fn swiglu(&self, gate: &Tensor, up: &Tensor) -> Result<Tensor> {
         let (gate, up) = if self.swiglu_clamp > 0.0 {
             let c = self.swiglu_clamp as f64;
-            (
-                gate.clamp(f64::NEG_INFINITY, c)?,
-                up.clamp(-c, c)?,
-            )
+            (gate.clamp(f64::NEG_INFINITY, c)?, up.clamp(-c, c)?)
         } else {
             (gate.clone(), up.clone())
         };
@@ -296,9 +294,7 @@ impl V4Moe {
         let routed = hanzo_ml::quantized::moe_combine(&routed, &weights)?; // [b*s, h]
 
         let shared = self.shared(&xs2)?;
-        (routed + shared)?
-            .reshape((b, s, h))?
-            .to_dtype(orig_dtype)
+        (routed + shared)?.reshape((b, s, h))?.to_dtype(orig_dtype)
     }
 }
 
@@ -371,7 +367,9 @@ impl V4Attn {
         let wdt = self.attn_dtype;
 
         // q: wq_a → q_norm → wq_b → [b, nh, s, hd] → per-head RMS → trailing rope.
-        let q = self.q_b.forward(&self.q_a_norm.forward(&self.q_a.forward(x)?)?)?;
+        let q = self
+            .q_b
+            .forward(&self.q_a_norm.forward(&self.q_a.forward(x)?)?)?;
         let mut q = q
             .reshape((b, s, self.n_head, self.head_dim))?
             .transpose(1, 2)?;
@@ -521,7 +519,9 @@ impl Compressor {
         let xf = x.to_dtype(DType::F32)?;
         let kv = xf.broadcast_matmul(&self.wkv.t()?)?;
         let score = xf.broadcast_matmul(&self.wgate.t()?)?;
-        let kv = kv.narrow(1, 0, cutoff)?.reshape((b, n, self.ratio, coff_hd))?;
+        let kv = kv
+            .narrow(1, 0, cutoff)?
+            .reshape((b, n, self.ratio, coff_hd))?;
         let score = score
             .narrow(1, 0, cutoff)?
             .reshape((b, n, self.ratio, coff_hd))?
@@ -542,7 +542,9 @@ impl Compressor {
         let hd = self.head_dim;
         let pooled = pooled.reshape((b, n, 1, hd))?.transpose(1, 2)?;
         let comp_pos = compressed_positions(n, self.ratio, positions)?;
-        let pass = pooled.narrow(D::Minus1, 0, hd - self.rope_dim)?.contiguous()?;
+        let pass = pooled
+            .narrow(D::Minus1, 0, hd - self.rope_dim)?
+            .contiguous()?;
         let rot = pooled
             .narrow(D::Minus1, hd - self.rope_dim, self.rope_dim)?
             .contiguous()?
@@ -636,18 +638,155 @@ fn combined_compressed_mask(
 
 // ============================ layer ============================
 
-struct DecoderLayer {
-    hc_attn: HyperConnections,
-    attn_norm: RmsNorm,
-    attn: V4Attn,
-    hc_ffn: HyperConnections,
-    ffn_norm: RmsNorm,
-    moe: V4Moe,
+pub(crate) struct DecoderLayer {
+    pub(crate) hc_attn: HyperConnections,
+    pub(crate) attn_norm: RmsNorm,
+    pub(crate) attn: V4Attn,
+    pub(crate) hc_ffn: HyperConnections,
+    pub(crate) ffn_norm: RmsNorm,
+    pub(crate) moe: V4Moe,
 }
 
 impl DecoderLayer {
+    /// Load one V4 decoder block (attn + MoE + per-sublayer Hyper-Connections) from
+    /// `{p}.*` GGUF tensors. Shared by the main layer loop and the MTP head (which is
+    /// itself one V4 block at `mtp.0`). `is_hash` selects hash-routed MoE (tid2eid) vs
+    /// bias-routed; `compress_ratio == 0` (Full mode) means no compressor.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn load<R: std::io::Seek + std::io::Read>(
+        ct: &mut Content<'_, R>,
+        p: &str,
+        props: &PropsGGUF,
+        dev: &Device,
+        rotary: Arc<DeepSeekV2RotaryEmbedding>,
+        compress_ratio: usize,
+        group_in: usize,
+        eps: f64,
+        softmax_scale: f32,
+        dtype: DType,
+        is_hash: bool,
+        swiglu_clamp: f32,
+    ) -> Result<Self> {
+        let is_full = compress_ratio == 0;
+        // Attention. wo_a -> [groups, rank, group_in] (ds4 row-major grouped-o).
+        let wo_a = ct
+            .tensor(&format!("{p}.attn_output_a.weight"), dev)?
+            .dequantize(dev)?
+            .to_dtype(dtype)?
+            .reshape((props.o_groups, props.o_lora_rank, group_in))?
+            .contiguous()?;
+        let compressor = if is_full {
+            None
+        } else {
+            Some(Compressor {
+                wkv: deq(ct, &format!("{p}.attn_compressor_kv.weight"), dev)?,
+                wgate: deq(ct, &format!("{p}.attn_compressor_gate.weight"), dev)?,
+                norm: rms_from(
+                    deq(ct, &format!("{p}.attn_compressor_norm.weight"), dev)?,
+                    eps,
+                )?,
+                ape: deq(ct, &format!("{p}.attn_compressor_ape.weight"), dev)?,
+                rotary: rotary.clone(),
+                ratio: compress_ratio,
+                head_dim: props.head_dim,
+                rope_dim: props.rope_head_dim,
+                overlap: compress_ratio == 4,
+            })
+        };
+        let attn = V4Attn {
+            q_a: gguf_linear(ct.tensor(&format!("{p}.attn_q_a.weight"), dev)?)?,
+            q_a_norm: rms_from(deq(ct, &format!("{p}.attn_q_a_norm.weight"), dev)?, eps)?,
+            q_b: gguf_linear(ct.tensor(&format!("{p}.attn_q_b.weight"), dev)?)?,
+            kv: gguf_linear(ct.tensor(&format!("{p}.attn_kv.weight"), dev)?)?,
+            kv_norm: rms_from(deq(ct, &format!("{p}.attn_kv_a_norm.weight"), dev)?, eps)?,
+            wo_a,
+            wo_b: gguf_linear(ct.tensor(&format!("{p}.attn_output_b.weight"), dev)?)?,
+            rotary,
+            sdpa: SdpaParams {
+                n_kv_groups: props.head_count,
+                softcap: None,
+                softmax_scale,
+                sliding_window: if is_full {
+                    None
+                } else {
+                    Some(props.sliding_window)
+                },
+                sinks: Some(deq(ct, &format!("{p}.attn_sinks.weight"), dev)?),
+            },
+            n_head: props.head_count,
+            head_dim: props.head_dim,
+            rope_dim: props.rope_head_dim,
+            o_groups: props.o_groups,
+            o_lora_rank: props.o_lora_rank,
+            rms_eps: eps,
+            attn_dtype: dtype,
+            compressor,
+            compress_ratio: compress_ratio.max(1),
+        };
+        let moe = V4Moe {
+            gate_inp: deq(ct, &format!("{p}.ffn_gate_inp.weight"), dev)?
+                .t()?
+                .contiguous()?,
+            bias: if is_hash {
+                None
+            } else {
+                Some(deq(ct, &format!("{p}.exp_probs_b.bias"), dev)?)
+            },
+            tid2eid: if is_hash {
+                Some(
+                    ct.tensor(&format!("{p}.ffn_gate_tid2eid.weight"), dev)?
+                        .dequantize(dev)?,
+                )
+            } else {
+                None
+            },
+            gate_experts: QMatMul::QTensor(Arc::new(
+                ct.tensor(&format!("{p}.ffn_gate_exps.weight"), dev)?,
+            )),
+            up_experts: QMatMul::QTensor(Arc::new(
+                ct.tensor(&format!("{p}.ffn_up_exps.weight"), dev)?,
+            )),
+            down_experts: QMatMul::QTensor(Arc::new(
+                ct.tensor(&format!("{p}.ffn_down_exps.weight"), dev)?,
+            )),
+            shared_gate: gguf_linear(ct.tensor(&format!("{p}.ffn_gate_shexp.weight"), dev)?)?,
+            shared_up: gguf_linear(ct.tensor(&format!("{p}.ffn_up_shexp.weight"), dev)?)?,
+            shared_down: gguf_linear(ct.tensor(&format!("{p}.ffn_down_shexp.weight"), dev)?)?,
+            topk: props.num_experts_per_tok,
+            route_scale: props.expert_weights_scale,
+            norm_topk: props.norm_topk_prob,
+            swiglu_clamp,
+        };
+        let hc_attn = HyperConnections::from_parts(
+            gguf_linear(ct.tensor(&format!("{p}.hc_attn_fn.weight"), dev)?)?,
+            deq(ct, &format!("{p}.hc_attn_scale.weight"), dev)?.to_vec1::<f32>()?,
+            deq(ct, &format!("{p}.hc_attn_base.weight"), dev)?,
+            props.hc_count,
+            props.hc_sinkhorn_iters,
+            props.hc_eps,
+            false,
+        )?;
+        let hc_ffn = HyperConnections::from_parts(
+            gguf_linear(ct.tensor(&format!("{p}.hc_ffn_fn.weight"), dev)?)?,
+            deq(ct, &format!("{p}.hc_ffn_scale.weight"), dev)?.to_vec1::<f32>()?,
+            deq(ct, &format!("{p}.hc_ffn_base.weight"), dev)?,
+            props.hc_count,
+            props.hc_sinkhorn_iters,
+            props.hc_eps,
+            false,
+        )?;
+        Ok(DecoderLayer {
+            hc_attn,
+            attn_norm: rms_from(deq(ct, &format!("{p}.attn_norm.weight"), dev)?, eps)?,
+            attn,
+            hc_ffn,
+            ffn_norm: rms_from(deq(ct, &format!("{p}.ffn_norm.weight"), dev)?, eps)?,
+            moe,
+        })
+    }
+
     /// One layer over the HC carrier `[b, s, n_hc, e]`.
-    fn forward(
+    pub(crate) fn forward(
         &self,
         hc: &Tensor,
         input_ids: &Tensor,
@@ -772,27 +911,32 @@ impl ModelConfig::FromGGUF for ModelWeights {
         )?;
 
         // Per-layer RoPE: Full (θ=rope_theta, no YaRN) vs compressed (θ=compress, YaRN).
-        let mk_rope = |theta: f32, yarn: bool, dev: &Device| -> Result<Arc<DeepSeekV2RotaryEmbedding>> {
-            let cfg = DeepSeekV2RopeConfig {
-                rope_scaling: if yarn {
-                    Some(DeepSeekV2RopeScaling::Yarn {
-                        original_max_position_embeddings: props.rope_orig_ctx,
-                        beta_fast: props.yarn_beta_fast,
-                        beta_slow: props.yarn_beta_slow,
-                        factor: props.rope_scaling_factor,
-                        mscale: 1.0,
-                        mscale_all_dim: 1.0,
-                        scaling_type: ScaledRopeType::Yarn,
-                    })
-                } else {
-                    None
-                },
-                max_position_embeddings: props.max_seq_len,
-                rope_theta: theta,
-                qk_rope_head_dim: props.rope_head_dim,
+        let mk_rope =
+            |theta: f32, yarn: bool, dev: &Device| -> Result<Arc<DeepSeekV2RotaryEmbedding>> {
+                let cfg = DeepSeekV2RopeConfig {
+                    rope_scaling: if yarn {
+                        Some(DeepSeekV2RopeScaling::Yarn {
+                            original_max_position_embeddings: props.rope_orig_ctx,
+                            beta_fast: props.yarn_beta_fast,
+                            beta_slow: props.yarn_beta_slow,
+                            factor: props.rope_scaling_factor,
+                            mscale: 1.0,
+                            mscale_all_dim: 1.0,
+                            scaling_type: ScaledRopeType::Yarn,
+                        })
+                    } else {
+                        None
+                    },
+                    max_position_embeddings: props.max_seq_len,
+                    rope_theta: theta,
+                    qk_rope_head_dim: props.rope_head_dim,
+                };
+                Ok(Arc::new(DeepSeekV2RotaryEmbedding::new(
+                    &cfg,
+                    DType::F32,
+                    dev,
+                )?))
             };
-            Ok(Arc::new(DeepSeekV2RotaryEmbedding::new(&cfg, DType::F32, dev)?))
-        };
         let mut ropes_full = HashMap::new();
         let mut ropes_comp = HashMap::new();
         for i in 0..props.block_count {
@@ -800,9 +944,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
             ropes_full
                 .entry(dev.location())
                 .or_insert(mk_rope(props.rope_theta, false, dev)?);
-            ropes_comp
-                .entry(dev.location())
-                .or_insert(mk_rope(props.compress_rope_theta, true, dev)?);
+            ropes_comp.entry(dev.location()).or_insert(mk_rope(
+                props.compress_rope_theta,
+                true,
+                dev,
+            )?);
         }
 
         let group_in = props.head_count * props.head_dim / props.o_groups;
@@ -822,133 +968,22 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 ropes_comp[&dev.location()].clone()
             };
 
-            // Attention. wo_a dequantized to the single compute `dtype` (the grouped-o
-            // einsum operand) — uniform with the rest of the model; no special-case
-            // BF16 that could disagree at a dtype boundary.
-            // GGUF stores output_a as file dims [group_in, groups*rank]; the reader
-            // reverses to candle [groups*rank, group_in]. ds4.c reads row gr=g*rank+r
-            // as `out[gr] = Σ_d A[gr][d]·heads[g][d]`, so the rows split groups-major:
-            // reshape DIRECTLY to [groups, rank, group_in] (row gr -> [g=gr/rank, r=gr%rank]).
-            // (A prior reshape((group_in,groups,rank)).permute scrambled the buffer —
-            // it reinterpreted contiguous memory wrong, corrupting the o-projection.)
-            let wo_a = ct
-                .tensor(&format!("{p}.attn_output_a.weight"), dev)?
-                .dequantize(dev)?
-                .to_dtype(dtype)?
-                .reshape((props.o_groups, props.o_lora_rank, group_in))?
-                .contiguous()?;
-            // Compressor (compressed layers only): projects the layer input into
-            // compressed KV rows the attention sees alongside the raw window. wkv/wgate
-            // load as candle [coff*head_dim, dim], ape as [ratio, coff*head_dim] (coff
-            // read from ape width: 2 for ratio-4 / overlap, 1 for ratio-128). Shares the
-            // compressed RoPE (θ=160000 + YaRN).
+            // One V4 decoder block via the shared loader (same code path as the MTP head).
             let ratio = props.compress_ratios.get(i).copied().unwrap_or(0) as usize;
-            let compressor = if mode == Mode::Full {
-                None
-            } else {
-                Some(Compressor {
-                    wkv: deq(&mut ct, &format!("{p}.attn_compressor_kv.weight"), dev)?,
-                    wgate: deq(&mut ct, &format!("{p}.attn_compressor_gate.weight"), dev)?,
-                    norm: rms_from(
-                        deq(&mut ct, &format!("{p}.attn_compressor_norm.weight"), dev)?,
-                        eps,
-                    )?,
-                    ape: deq(&mut ct, &format!("{p}.attn_compressor_ape.weight"), dev)?,
-                    rotary: rotary.clone(),
-                    ratio,
-                    head_dim: props.head_dim,
-                    rope_dim: props.rope_head_dim,
-                    overlap: ratio == 4,
-                })
-            };
-
-            let attn = V4Attn {
-                q_a: gguf_linear(ct.tensor(&format!("{p}.attn_q_a.weight"), dev)?)?,
-                q_a_norm: rms_from(deq(&mut ct, &format!("{p}.attn_q_a_norm.weight"), dev)?, eps)?,
-                q_b: gguf_linear(ct.tensor(&format!("{p}.attn_q_b.weight"), dev)?)?,
-                kv: gguf_linear(ct.tensor(&format!("{p}.attn_kv.weight"), dev)?)?,
-                kv_norm: rms_from(deq(&mut ct, &format!("{p}.attn_kv_a_norm.weight"), dev)?, eps)?,
-                wo_a,
-                wo_b: gguf_linear(ct.tensor(&format!("{p}.attn_output_b.weight"), dev)?)?,
+            layers.push(DecoderLayer::load(
+                &mut ct,
+                &p,
+                &props,
+                dev,
                 rotary,
-                sdpa: SdpaParams {
-                    n_kv_groups: props.head_count,
-                    softcap: None,
-                    softmax_scale,
-                    sliding_window: if mode == Mode::Full { None } else { Some(props.sliding_window) },
-                    sinks: Some(deq(&mut ct, &format!("{p}.attn_sinks.weight"), dev)?),
-                },
-                n_head: props.head_count,
-                head_dim: props.head_dim,
-                rope_dim: props.rope_head_dim,
-                o_groups: props.o_groups,
-                o_lora_rank: props.o_lora_rank,
-                rms_eps: eps,
-                attn_dtype: dtype,
-                compressor,
-                compress_ratio: ratio.max(1),
-            };
-
-            // MoE.
-            let is_hash = i < props.hash_layer_count;
-            let moe = V4Moe {
-                gate_inp: deq(&mut ct, &format!("{p}.ffn_gate_inp.weight"), dev)?.t()?.contiguous()?,
-                bias: if is_hash {
-                    None
-                } else {
-                    Some(deq(&mut ct, &format!("{p}.exp_probs_b.bias"), dev)?)
-                },
-                tid2eid: if is_hash {
-                    Some(ct.tensor(&format!("{p}.ffn_gate_tid2eid.weight"), dev)?.dequantize(dev)?)
-                } else {
-                    None
-                },
-                gate_experts: QMatMul::QTensor(Arc::new(
-                    ct.tensor(&format!("{p}.ffn_gate_exps.weight"), dev)?,
-                )),
-                up_experts: QMatMul::QTensor(Arc::new(
-                    ct.tensor(&format!("{p}.ffn_up_exps.weight"), dev)?,
-                )),
-                down_experts: QMatMul::QTensor(Arc::new(
-                    ct.tensor(&format!("{p}.ffn_down_exps.weight"), dev)?,
-                )),
-                shared_gate: gguf_linear(ct.tensor(&format!("{p}.ffn_gate_shexp.weight"), dev)?)?,
-                shared_up: gguf_linear(ct.tensor(&format!("{p}.ffn_up_shexp.weight"), dev)?)?,
-                shared_down: gguf_linear(ct.tensor(&format!("{p}.ffn_down_shexp.weight"), dev)?)?,
-                topk: props.num_experts_per_tok,
-                route_scale: props.expert_weights_scale,
-                norm_topk: props.norm_topk_prob,
-                swiglu_clamp: props.swiglu_clamp.get(i).copied().unwrap_or(0.0),
-            };
-
-            // Hyper-Connections (per sublayer).
-            let hc_attn = HyperConnections::from_parts(
-                gguf_linear(ct.tensor(&format!("{p}.hc_attn_fn.weight"), dev)?)?,
-                deq(&mut ct, &format!("{p}.hc_attn_scale.weight"), dev)?.to_vec1::<f32>()?,
-                deq(&mut ct, &format!("{p}.hc_attn_base.weight"), dev)?,
-                props.hc_count,
-                props.hc_sinkhorn_iters,
-                props.hc_eps,
-                false,
-            )?;
-            let hc_ffn = HyperConnections::from_parts(
-                gguf_linear(ct.tensor(&format!("{p}.hc_ffn_fn.weight"), dev)?)?,
-                deq(&mut ct, &format!("{p}.hc_ffn_scale.weight"), dev)?.to_vec1::<f32>()?,
-                deq(&mut ct, &format!("{p}.hc_ffn_base.weight"), dev)?,
-                props.hc_count,
-                props.hc_sinkhorn_iters,
-                props.hc_eps,
-                false,
-            )?;
-
-            layers.push(DecoderLayer {
-                hc_attn,
-                attn_norm: rms_from(deq(&mut ct, &format!("{p}.attn_norm.weight"), dev)?, eps)?,
-                attn,
-                hc_ffn,
-                ffn_norm: rms_from(deq(&mut ct, &format!("{p}.ffn_norm.weight"), dev)?, eps)?,
-                moe,
-            });
+                ratio,
+                group_in,
+                eps,
+                softmax_scale,
+                dtype,
+                i < props.hash_layer_count,
+                props.swiglu_clamp.get(i).copied().unwrap_or(0.0),
+            )?);
         }
 
         Ok(Self {
@@ -964,7 +999,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
             mapper: Some(mapper),
             dtype,
             comp_state: std::sync::Mutex::new(
-                (0..props.block_count).map(|_| CompressorState::default()).collect(),
+                (0..props.block_count)
+                    .map(|_| CompressorState::default())
+                    .collect(),
             ),
         })
     }
@@ -984,7 +1021,10 @@ impl ModelWeights {
         // `self.dtype` makes embeds → carrier → attn → cache → output all flow in the
         // one dtype. (Decomplected: dtype is applied at the boundary where data enters
         // the model, then never re-decided.)
-        let embeds = self.tok_embeddings.forward(input_ids)?.to_dtype(self.dtype)?;
+        let embeds = self
+            .tok_embeddings
+            .forward(input_ids)?
+            .to_dtype(self.dtype)?;
         let cache = &mut self.cache.normal().0;
         let mask = CausalMasker.make_causal_mask(
             input_ids,
