@@ -251,3 +251,89 @@ All files reference the same knowledge base. Updates here propagate to all AI sy
 2. **NEVER** commit symlinked files (.AGENTS.md, CLAUDE.md, etc.) - they're in .gitignore
 3. **NEVER** create random summary files - update THIS file
 4. **ALWAYS** check compilation with `cargo check` before considering integration complete
+
+---
+
+# DeepSeek-V4 + SOTA Inference Playbook (2026-06-28)
+
+Cross-verified research (llama.cpp source, antirez/ds4, vLLM/SGLang, V4 config.json/arXiv) +
+this session's GB10 (sm_121, 273 GB/s LPDDR5X, 128 GB unified) measurements. **The binding
+constraint for batch-1 decode is MEMORY BANDWIDTH (~11 GB read/token); every win = fewer
+bytes/token or higher BW utilization. Compute-side FP4 tensor-core gains are IRRELEVANT at
+batch-1 (and broken on sm_121).**
+
+## V4 architecture — the corrected mental model
+- **NOT MLA.** V4 replaced MLA with **hybrid sparse attention (DSA)**, per-layer mix of:
+  **SWA-128** (raw sliding window) · **CSA** (4×-compressed KV, lightning-indexer top-k 512/1024)
+  · **HCA** (128×-compressed KV, dense) · learned **per-head attention sinks**. The `head_dim:512
+  / kv_heads:1` is a shared-K=V **MQA** head with partial RoPE-64 — compressed-KV MQA + sparse
+  selection, *not* MLA up-projection decompression.
+- Weights ship **FP8 (E4M3, 128×128 block, UE8M0 µscale) dense + native FP4 MoE experts**, bf16
+  master. The model is **W8A8 QAT-trained** — it EXPECTS low-precision activations.
+- MoE: 256(Flash)/384(Pro) routed, 6 active + 1 shared; gate = **sqrtsoftplus + noaux_tc** bias;
+  clamped SwiGLU (limit 10); **3 Hash-MoE bootstrap layers** (`tid2eid`). Residual = **mHC**
+  (4-stream, 20-iter Sinkhorn doubly-stochastic mixing).
+
+## Quant recipe (canonical = what we run; antirez GGUF, imatrix-built)
+`IQ2_XXS`(ffn_gate/up_exps) · `Q2_K`(ffn_down_exps) · `Q8_0`(shared experts, all attn proj,
+output) · F16(token_embd, router) · F32(norms, sinks) · I32(hash). q2≈81 GiB. **imatrix REQUIRED
+for IQ2_XXS** (from real routed-expert activations). **Q3=garbage, Q4 decode unstable** (argmax
+collapse from 43-layer error accumulation — ds4 fix: hi-precision matmul, `Q4_DECODE`+`Q8_NO_Q4`).
+
+## The decode-degeneration finding (this session) — WHY hard/long prompts collapse
+V4-at-IQ2 sits at a **repetition bifurcation**: cumulative quant error across 43 layers tips it.
+ds4 hit the SAME issue (its README documents it) and fixes it with **hi-precision matmul
+accumulation**, not higher activation precision. KEY MEASUREMENT: **F32 is WORSE than bf16** here
+— because the model is FP8-trained, so MORE precision moves AWAY from the trained operating point.
+**bit-exact = match ds4's Q8_0/IQ2 *accumulation* kernels (int32 dp4a / hi-precision), NOT go f32.**
+Current best config: **bf16 carrier + native dp4a** (HANZO_CUDA_FAST_MMQ / V4 `set_fast_mmq(true)`)
+→ correct on short/medium (primary-colors, France, math, natural EOS); haiku-class long-hard
+reasoning still degenerates (the accumulation-precision residual).
+
+## Improvement playbook (ranked by batch-1-decode leverage on GB10)
+
+### TIER 1 — proven, highest leverage
+1. **Per-layer CUDA-graph capture + split-K F16/dp4a decode GEMV.** ds4's exact win: 73→94% of
+   roofline → ~19-25 t/s (we're at 3.5). Per-LAYER (resolve MoE routing host-side / fixed expert
+   capacity) — llama.cpp can't (mul_mat_id disables whole-graph capture) → our edge. `cudarc`
+   graph capture. **This is the #1 perf item.**
+2. **dp4a int8 (NOT tensor-core INT8/FP4) for decode GEMV.** At N=1, WMMA wastes 15/16 slots
+   (0.25×). FP4 tensor cores only help PREFILL (build sm_121a + CUDA 13 compute_121f). Decode =
+   dp4a / F16 split-K.
+3. **Bandwidth-optimal IQ2_XXS dequant→GEMV** (wide 128/256-bit loads, in-register dequant,
+   `L1::no_allocate` on streamed expert weights, `evict_last` on reused activation, maxrregcount
+   32-45). The routed IQ2 experts dominate the 11 GB/token. Port dequant from **github.com/nktkt/ds4**
+   (Rust, bit-exact-tested).
+4. **Hi-precision accumulation in ALL quant matmuls** (the haiku fix) — match ds4's
+   `matmul_q8_0_tensor` hi-precision path / `ds4_gpu_set_quality(true)`. int32 dp4a accumulate +
+   verify IQ2 mmvq accumulates hi-precision. **This is bit-exact correctness for hard prompts.**
+
+### TIER 2 — correctness + structural
+5. **Real V4 sparse attention (DSA: CSA top-k lightning-indexer + HCA + SWA-128 + sinks, FP8 KV)**
+   — refs: llama.cpp **#24162** (`llama-kv-cache-dsv4`), **#23346** (`llama_kv_cache_dsa`, 2 caches:
+   latents + indexer keys). The compressor is wired (this session); the **indexer top-k selection**
+   is the missing piece for >128 context (1M ctx ≈ 9.62 GiB/seq).
+6. **Fuse MoE hot path** (TopK gate+route, gate/up SwiGLU sharing activation load, RMSNorm+mul,
+   compressor+RoPE+cache-insert). llama.cpp +42.5% (#16130/#16715/#14800); vLLM 1.4-20× on V4 ops.
+7. **Unified-memory zero-copy** (mmap GGUF GPU-addressable via Grace ATS; `cudaMemAdvise`
+   ReadMostly/AccessedBy on resident, PreferredLocation(CPU)+AccessedBy(GPU) on cold experts;
+   prefetch predicted experts). Enables SSD/CPU expert streaming.
+
+### TIER 3 — conditional
+8. **EAGLE-3 speculative (> native MTP)** — accept ~2.5 vs MTP ~1.9. **MANDATORY: batched verify
+   (stream weights ONCE for all K draft tokens, fixed-shape CUDA graph)** else net-negative
+   single-stream (ds4 proved depth-1 MTP = −21%). The MTP head (3.6 GiB gguf) is being loaded;
+   wire it EAGLE-style, not depth-1.
+9. **DeepSeek-OCR** (`deepseek2ocr` in llama.cpp, llama-model.cpp:181) — a separate vision+V2 port
+   (SAM/CLIP encoder + DeepEncoder + V2-MoE decoder). Scoped follow-on; reference llama.cpp's impl.
+
+### DON'T (negative results, save the effort)
+FP4/INT8 tensor cores for decode (batch-1 irrelevant, sm_121-broken) · whole-model CUDA graphs
+(MoE breaks them → per-layer) · native depth-1 MTP single-stream · DeepGEMM/FlashMLA drop-in
+(no sm_121 FP4 path mid-2026) · going F32 for "precision" (worse — model is FP8-trained).
+
+## Key references
+ds4: github.com/antirez/ds4 + **nktkt/ds4** (Rust dequant) · llama.cpp PRs #12801(MLA)
+#19057/#22286(FA head-dim 512/576) #23346(V3.2/DSA) #24162(V4,open) #22673(MTP) #18039(EAGLE-3)
+#16130/#16715/#14800(fusion) · vLLM blog 2026-04-24 + LMSYS 2026-04-25(V4 recipe) · sm_121:
+build sm_121a + CUDA 13 (issue #19662).
