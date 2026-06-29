@@ -5,6 +5,7 @@ pub mod musetalk;
 pub(crate) mod processor;
 pub(crate) mod qwen_image;
 pub(crate) mod t5;
+pub mod wan;
 
 macro_rules! generate_repr {
     ($t:ident) => {

@@ -1,6 +1,7 @@
 use super::text_models_inputs_processor::PagedAttentionMeta;
 use super::{
     animation_loader, AdapterPaths, AnimationComponents, AnimationLoaderType, AnyMoePipelineMixin,
+    MuseTalkComponents,
     Cache, CacheManagerMixin, ChatTemplate, EitherCache, EmbeddingModulePaths, ForwardInputsResult,
     GeneralMetadata, InputProcessorOutput, InputsProcessor, InputsProcessorType, IsqPipelineMixin,
     Loader, MessagesAction, MetadataMixin, Modalities, ModelCategory, ModelKind, ModelPaths,
@@ -491,7 +492,7 @@ impl Loader for AnimationLoader {
             resized_img: RESIZED_IMG,
         };
 
-        let components = AnimationComponents {
+        let components = AnimationComponents::MuseTalk(MuseTalkComponents {
             musetalk_config,
             vae_vb: Self::load_vb(&paths.vae_weights, dtype, device, silent)?,
             unet_vb: Self::load_vb(&paths.unet_weights, dtype, device, silent)?,
@@ -501,7 +502,7 @@ impl Loader for AnimationLoader {
             device: device.clone(),
             dtype,
             options: self.options,
-        };
+        });
 
         let animator = animation_loader(&self.arch).load(components)?;
         Ok(Arc::new(Mutex::new(AnimationPipeline::new(
