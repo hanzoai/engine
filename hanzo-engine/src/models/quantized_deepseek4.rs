@@ -167,7 +167,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 
 // ============================ helpers ============================
 
-fn gguf_linear(q: hanzo_ml::quantized::QTensor) -> Result<Arc<dyn QuantMethod>> {
+pub(crate) fn gguf_linear(q: hanzo_ml::quantized::QTensor) -> Result<Arc<dyn QuantMethod>> {
     Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
         q_weight: Arc::new(q),
         b: None,
@@ -176,7 +176,7 @@ fn gguf_linear(q: hanzo_ml::quantized::QTensor) -> Result<Arc<dyn QuantMethod>> 
 
 /// Dequantize a GGUF tensor to a plain F32 tensor (norms, sinks, bias, gate_inp,
 /// hc base/scale, and the grouped-o `wo_a`).
-fn deq(ct: &mut Content<'_, impl std::io::Seek + std::io::Read>, name: &str, dev: &Device) -> Result<Tensor> {
+pub(crate) fn deq(ct: &mut Content<'_, impl std::io::Seek + std::io::Read>, name: &str, dev: &Device) -> Result<Tensor> {
     ct.tensor(name, dev)?.dequantize(dev)?.to_dtype(DType::F32)
 }
 
@@ -201,20 +201,20 @@ fn layer_mode(ratios: &[u32], idx: usize, window: usize) -> Mode {
 /// Routed experts (stacked GGUF banks) + 1 shared expert. Custom V4 routing:
 /// `sqrt(softplus(logits))`, bias-shifted top-k selection (or `tid2eid` hash on
 /// early layers), unbiased gathered weights renormalized × `route_scale`.
-struct V4Moe {
-    gate_inp: Tensor,          // [hidden, n_experts] F32 (router weight, applied as x·W)
-    bias: Option<Tensor>,      // [n_experts] F32 (exp_probs_b) — MoE layers
-    tid2eid: Option<Tensor>,   // [used, vocab] I32 — hash layers
-    gate_experts: QMatMul,
-    up_experts: QMatMul,
-    down_experts: QMatMul,
-    shared_gate: Arc<dyn QuantMethod>,
-    shared_up: Arc<dyn QuantMethod>,
-    shared_down: Arc<dyn QuantMethod>,
-    topk: usize,
-    route_scale: f64,
-    norm_topk: bool,
-    swiglu_clamp: f32,
+pub(crate) struct V4Moe {
+    pub(crate) gate_inp: Tensor,          // [hidden, n_experts] F32 (router weight, applied as x·W)
+    pub(crate) bias: Option<Tensor>,      // [n_experts] F32 (exp_probs_b) — MoE layers
+    pub(crate) tid2eid: Option<Tensor>,   // [used, vocab] I32 — hash layers
+    pub(crate) gate_experts: QMatMul,
+    pub(crate) up_experts: QMatMul,
+    pub(crate) down_experts: QMatMul,
+    pub(crate) shared_gate: Arc<dyn QuantMethod>,
+    pub(crate) shared_up: Arc<dyn QuantMethod>,
+    pub(crate) shared_down: Arc<dyn QuantMethod>,
+    pub(crate) topk: usize,
+    pub(crate) route_scale: f64,
+    pub(crate) norm_topk: bool,
+    pub(crate) swiglu_clamp: f32,
 }
 
 impl V4Moe {
@@ -276,7 +276,7 @@ impl V4Moe {
         crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)
     }
 
-    fn forward(&self, xs: &Tensor, input_ids: &Tensor) -> Result<Tensor> {
+    pub(crate) fn forward(&self, xs: &Tensor, input_ids: &Tensor) -> Result<Tensor> {
         let (b, s, h) = xs.dims3()?;
         let orig_dtype = xs.dtype();
         // MoE compute runs in F32 (the quantized expert kernels + gate matmul expect
@@ -304,27 +304,27 @@ impl V4Moe {
 
 // ============================ attention ============================
 
-struct V4Attn {
-    q_a: Arc<dyn QuantMethod>,
-    q_a_norm: RmsNorm,
-    q_b: Arc<dyn QuantMethod>,
-    kv: Arc<dyn QuantMethod>,
-    kv_norm: RmsNorm,
-    wo_a: Tensor, // [groups, o_lora_rank, group_in] F32 for the grouped einsum
-    wo_b: Arc<dyn QuantMethod>,
-    rotary: Arc<DeepSeekV2RotaryEmbedding>,
-    sdpa: SdpaParams,
-    n_head: usize,
-    head_dim: usize,
-    rope_dim: usize,
-    o_groups: usize,
-    o_lora_rank: usize,
-    rms_eps: f64,
-    attn_dtype: DType, // model/cache/mask dtype (BF16 on CUDA); q/k/v cast to it for SDPA + cache
+pub(crate) struct V4Attn {
+    pub(crate) q_a: Arc<dyn QuantMethod>,
+    pub(crate) q_a_norm: RmsNorm,
+    pub(crate) q_b: Arc<dyn QuantMethod>,
+    pub(crate) kv: Arc<dyn QuantMethod>,
+    pub(crate) kv_norm: RmsNorm,
+    pub(crate) wo_a: Tensor, // [groups, o_lora_rank, group_in] F32 for the grouped einsum
+    pub(crate) wo_b: Arc<dyn QuantMethod>,
+    pub(crate) rotary: Arc<DeepSeekV2RotaryEmbedding>,
+    pub(crate) sdpa: SdpaParams,
+    pub(crate) n_head: usize,
+    pub(crate) head_dim: usize,
+    pub(crate) rope_dim: usize,
+    pub(crate) o_groups: usize,
+    pub(crate) o_lora_rank: usize,
+    pub(crate) rms_eps: f64,
+    pub(crate) attn_dtype: DType, // model/cache/mask dtype (BF16 on CUDA); q/k/v cast to it for SDPA + cache
     /// Present on compressed (Indexed/Sliding) layers: builds the compressed-KV rows the
     /// layer attends to alongside the raw window. `compress_ratio` is the window stride.
-    compressor: Option<Compressor>,
-    compress_ratio: usize,
+    pub(crate) compressor: Option<Compressor>,
+    pub(crate) compress_ratio: usize,
 }
 
 impl V4Attn {
@@ -354,7 +354,7 @@ impl V4Attn {
         Tensor::cat(&[&pass, &rot], D::Minus1)?.contiguous()
     }
 
-    fn forward(
+    pub(crate) fn forward(
         &self,
         x: &Tensor,
         mask: &AttentionMask,
@@ -384,7 +384,18 @@ impl V4Attn {
             .forward(&self.kv.forward(x)?)?
             .reshape((b, s, 1, self.head_dim))?
             .transpose(1, 2)?;
-        let kv = self.rope(&kv, positions, false)?.to_dtype(wdt)?;
+        let kv = self.rope(&kv, positions, false)?;
+        // QAT: FP8-round the non-rope KV dims (per-64 block) to match the model's
+        // training-time graph (model.py:506 `act_quant(kv[..., :-rd], 64, …)`). The
+        // rope dims stay full-precision. Skipping this leaves the KV slightly off the
+        // quantized graph the weights were trained against — a small per-step logit
+        // drift that accumulates over decode into incoherence. Done in F32 (the QAT
+        // round-trip dtype), then back to the working dtype.
+        let kv = hanzo_ml::quantized::dsv4_qat::fp8_kv_quantize(
+            &kv.to_dtype(DType::F32)?,
+            self.rope_dim,
+        )?
+        .to_dtype(wdt)?;
 
         let (k, v) = kv_cache.append(&kv, &kv)?;
 
@@ -481,7 +492,7 @@ impl V4Attn {
 /// ratio-128 layers don't (coff==1). `coff*head_dim` is read from the `ape` width, so
 /// one struct serves both. Compressed rows are what Indexed layers attend to alongside
 /// the raw sliding window — the bulk of long-context information.
-struct Compressor {
+pub(crate) struct Compressor {
     wkv: Tensor,   // [coff*head_dim, dim] F32
     wgate: Tensor, // [coff*head_dim, dim] F32
     norm: RmsNorm,
@@ -576,7 +587,7 @@ fn compressed_positions(n: usize, ratio: usize, positions: &Tensor) -> Result<Te
 /// Reset at the start of each sequence; appended every forward. `compress()` is rebuilt
 /// over the full history each step (correctness-first).
 #[derive(Default)]
-struct CompressorState {
+pub(crate) struct CompressorState {
     x_history: Option<Tensor>,
 }
 
@@ -682,7 +693,7 @@ pub struct ModelWeights {
     comp_state: std::sync::Mutex<Vec<CompressorState>>,
 }
 
-fn rms_from(t: Tensor, eps: f64) -> Result<RmsNorm> {
+pub(crate) fn rms_from(t: Tensor, eps: f64) -> Result<RmsNorm> {
     RmsNorm::from_w(t, eps)
 }
 
