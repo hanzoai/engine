@@ -21,17 +21,17 @@ use crate::paged_attention::{
     calculate_cache_config, AttentionImplementation, CacheEngine, ModelConfigLike,
 };
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
-use crate::pipeline::loaders::DeviceMappedModelLoader;
-#[cfg(feature = "rocm")]
-use crate::pipeline::rocm_graph::{
-    rocm_decode_graphs_enabled, RocmDecodeGraphKey, RocmDecodeGraphMetadataBuffers,
-    RocmGraphHandle, ROCM_DECODE_GRAPH_CACHE_CAPACITY,
-};
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
     cuda_decode_graphs_enabled, disable_event_tracking_for_capture, end_cuda_capture_discard,
     restore_event_tracking_after_capture, CudaDecodeGraphKey, CudaDecodeGraphMetadataBuffers,
     CudaGraphHandle, CUDA_DECODE_GRAPH_CACHE_CAPACITY,
+};
+use crate::pipeline::loaders::DeviceMappedModelLoader;
+#[cfg(feature = "rocm")]
+use crate::pipeline::rocm_graph::{
+    rocm_decode_graphs_enabled, RocmDecodeGraphKey, RocmDecodeGraphMetadataBuffers,
+    RocmGraphHandle, ROCM_DECODE_GRAPH_CACHE_CAPACITY,
 };
 use crate::pipeline::sampling::sample_and_add_toks;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -892,6 +892,10 @@ impl GGUFPipeline {
         self.mapper.get_unique_devices().len() <= 1
             && match &self.model {
                 Model::Qwen3(_) | Model::Qwen3MoE(_) => true,
+                // DeepSeek-V4: capture-eligible because the compressor is prefill-only
+                // (skipped at single-token decode), so the decode forward is shape-stable
+                // and host-sync-free (GPU-only MoE routing, like Qwen3MoE).
+                Model::Deepseek4(_) => true,
                 Model::Llama(model) => model.supports_decode_graph(),
                 _ => false,
             }
@@ -916,6 +920,9 @@ impl GGUFPipeline {
                 model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
             }
             Model::Qwen3MoE(ref model) => {
+                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
+            }
+            Model::Deepseek4(ref model) => {
                 model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
             }
             _ => hanzo_ml::bail!("decode graph: unsupported model variant"),
@@ -1492,13 +1499,17 @@ impl Pipeline for GGUFPipeline {
                 }
                 {
                     let target_tok = self.tokenizer().ok_or_else(|| {
-                        hanzo_ml::Error::msg("target pipeline has no tokenizer for speculative decoding")
+                        hanzo_ml::Error::msg(
+                            "target pipeline has no tokenizer for speculative decoding",
+                        )
                     })?;
                     let draft_guard = draft.try_lock().map_err(|_| {
                         hanzo_ml::Error::msg("draft pipeline is not exclusively owned")
                     })?;
                     let draft_tok = draft_guard.tokenizer().ok_or_else(|| {
-                        hanzo_ml::Error::msg("draft pipeline has no tokenizer for speculative decoding")
+                        hanzo_ml::Error::msg(
+                            "draft pipeline has no tokenizer for speculative decoding",
+                        )
                     })?;
                     if target_tok.get_vocab(true) != draft_tok.get_vocab(true) {
                         hanzo_ml::bail!(
