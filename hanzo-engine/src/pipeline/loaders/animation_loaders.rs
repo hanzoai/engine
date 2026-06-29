@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::diffusion_models::animation::FacialAnimator;
 use crate::diffusion_models::musetalk::{AnimatorOptions, MuseTalk, MuseTalkAnimator, MuseTalkConfig};
+use crate::diffusion_models::wan::{
+    AutoencoderKLWan, EchoMimicAnimator, EchoMimicConfig, EchoMimicDiT, EchoMimicGenerator,
+    EchoMimicOptions, WanVaeConfig,
+};
 use crate::speech_models::whisper::{WhisperConfig, WhisperFeatureExtractor};
 
 /// openai-whisper-tiny ships a full checkpoint; the encoder weights are nested
@@ -22,6 +26,8 @@ const WHISPER_ENCODER_PREFIX: &str = "encoder";
 pub enum AnimationLoaderType {
     #[serde(rename = "musetalk")]
     MuseTalk,
+    #[serde(rename = "echomimicv3")]
+    EchoMimicV3,
 }
 
 impl FromStr for AnimationLoaderType {
@@ -29,14 +35,22 @@ impl FromStr for AnimationLoaderType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "musetalk" => Ok(Self::MuseTalk),
-            a => Err(format!("Unknown animation architecture `{a}`. Possible: `musetalk`.")),
+            "echomimicv3" | "echomimic-v3" | "echomimic_v3" => Ok(Self::EchoMimicV3),
+            a => Err(format!(
+                "Unknown animation architecture `{a}`. Possible: `musetalk`, `echomimicv3`."
+            )),
         }
     }
 }
 
-/// The component weights + configs an animator is built from. Frames/PCM are
-/// request-time inputs; this is purely the loaded model.
-pub struct AnimationComponents {
+/// The component weights + configs an animator is built from. Frames/PCM are request-time inputs.
+/// Arch-tagged so DiT backbones (Wan family) carry their own slots instead of borrowing MuseTalk's.
+pub enum AnimationComponents {
+    MuseTalk(MuseTalkComponents),
+    Dit(DitComponents),
+}
+
+pub struct MuseTalkComponents {
     pub musetalk_config: MuseTalkConfig,
     pub vae_vb: ShardedVarBuilder,
     pub unet_vb: ShardedVarBuilder,
@@ -48,9 +62,24 @@ pub struct AnimationComponents {
     pub options: AnimatorOptions,
 }
 
-/// Turns loaded component weights into a `FacialAnimator`. New backbones
-/// (InfiniteTalk, EchoMimic, LongCat-Avatar, ...) drop in as new variants +
-/// impls with zero pipeline changes.
+/// Wan-family DiT backbone (EchoMimic, InfiniteTalk, LongCat). audio/clip/text encoder var
+/// builders are optional: wav2vec2/CLIP-ViT-H/umT5 are not ported yet, so the pipeline takes
+/// precomputed embeddings and these slots stay None until those encoders land.
+pub struct DitComponents {
+    pub dit_config: EchoMimicConfig,
+    pub vae_config: WanVaeConfig,
+    pub dit_vb: ShardedVarBuilder,
+    pub vae_vb: ShardedVarBuilder,
+    pub audio_vb: Option<ShardedVarBuilder>,
+    pub clip_vb: Option<ShardedVarBuilder>,
+    pub text_vb: Option<ShardedVarBuilder>,
+    pub options: EchoMimicOptions,
+    pub device: Device,
+    pub dtype: DType,
+}
+
+/// Turns loaded component weights into a `FacialAnimator`. New backbones drop in as new
+/// `AnimationLoaderType` variants + `AnimationComponents` arms with zero pipeline changes.
 pub trait AnimationModelLoader: Send + Sync {
     fn load(&self, components: AnimationComponents) -> Result<Box<dyn FacialAnimator>>;
 }
@@ -58,7 +87,10 @@ pub trait AnimationModelLoader: Send + Sync {
 pub struct MuseTalkAnimationLoader;
 
 impl AnimationModelLoader for MuseTalkAnimationLoader {
-    fn load(&self, c: AnimationComponents) -> Result<Box<dyn FacialAnimator>> {
+    fn load(&self, components: AnimationComponents) -> Result<Box<dyn FacialAnimator>> {
+        let AnimationComponents::MuseTalk(c) = components else {
+            anyhow::bail!("MuseTalk loader requires MuseTalk components");
+        };
         let musetalk = MuseTalk::new(c.musetalk_config, c.vae_vb, c.unet_vb, &c.device, c.dtype)?;
         let whisper = WhisperFeatureExtractor::new(
             c.whisper_config,
@@ -70,9 +102,24 @@ impl AnimationModelLoader for MuseTalkAnimationLoader {
     }
 }
 
+pub struct EchoMimicV3Loader;
+
+impl AnimationModelLoader for EchoMimicV3Loader {
+    fn load(&self, components: AnimationComponents) -> Result<Box<dyn FacialAnimator>> {
+        let AnimationComponents::Dit(c) = components else {
+            anyhow::bail!("EchoMimicV3 loader requires DiT components");
+        };
+        let vae = AutoencoderKLWan::new(&c.vae_config, c.vae_vb, &c.device)?;
+        let dit = EchoMimicDiT::new(c.dit_config, c.dit_vb, c.device.clone(), c.dtype)?;
+        let generator = EchoMimicGenerator::new(vae, dit, c.options, c.device, c.dtype);
+        Ok(Box::new(EchoMimicAnimator::new(generator)))
+    }
+}
+
 pub fn animation_loader(kind: &AnimationLoaderType) -> Box<dyn AnimationModelLoader> {
     match kind {
         AnimationLoaderType::MuseTalk => Box::new(MuseTalkAnimationLoader),
+        AnimationLoaderType::EchoMimicV3 => Box::new(EchoMimicV3Loader),
     }
 }
 
@@ -147,5 +194,18 @@ mod tests {
             !keys.iter().any(|k| k.starts_with("encoder.ln_post")),
             "MuseTalk whisper features must not use ln_post"
         );
+    }
+
+    #[test]
+    fn echomimic_v3_arch_parses() {
+        assert_eq!(
+            "echomimicv3".parse::<AnimationLoaderType>().unwrap(),
+            AnimationLoaderType::EchoMimicV3
+        );
+        assert_eq!(
+            "echomimic-v3".parse::<AnimationLoaderType>().unwrap(),
+            AnimationLoaderType::EchoMimicV3
+        );
+        assert!("nope".parse::<AnimationLoaderType>().is_err());
     }
 }
