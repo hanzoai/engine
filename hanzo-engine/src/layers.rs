@@ -2710,27 +2710,30 @@ fn vulkan_qk_rms_norm_rope(
     let kw = k_weight.contiguous()?;
     let cos = cos.contiguous()?;
     let sin = sin.contiguous()?;
-    let (qs, _) = q.storage_and_layout();
-    let (ks, _) = k.storage_and_layout();
-    let (qws, _) = qw.storage_and_layout();
-    let (kws, _) = kw.storage_and_layout();
-    let (cs, _) = cos.storage_and_layout();
-    let (sis, _) = sin.storage_and_layout();
+    let (qs, ql) = q.storage_and_layout();
+    let (ks, kl) = k.storage_and_layout();
+    let (qws, qwl) = qw.storage_and_layout();
+    let (kws, kwl) = kw.storage_and_layout();
+    let (cs, cl) = cos.storage_and_layout();
+    let (sis, sil) = sin.storage_and_layout();
     let (
-        Storage::Vulkan(_qv),
-        Storage::Vulkan(_kv),
-        Storage::Vulkan(_qwv),
-        Storage::Vulkan(_kwv),
-        Storage::Vulkan(_cv),
-        Storage::Vulkan(_siv),
+        Storage::Vulkan(qv),
+        Storage::Vulkan(kv),
+        Storage::Vulkan(qwv),
+        Storage::Vulkan(kwv),
+        Storage::Vulkan(cv),
+        Storage::Vulkan(siv),
     ) = (&*qs, &*ks, &*qws, &*kws, &*cs, &*sis)
     else {
         return Ok(None);
     };
-    // Fused per-head RMSNorm+RoPE (`qk_norm_rope_gpu`) is not yet wired in hanzo-ml; returning None
-    // routes this through the standard (unfused) norm+rope path. Perf follow-up, not correctness.
-    let _ = (dev, b, h, hkv, s, d, q_eps, k_eps);
-    Ok(None)
+    let q_out = qv.rope_norm(ql, qwv, qwl, q_eps as f32, cv, cl, siv, sil)?;
+    let k_out = kv.rope_norm(kl, kwv, kwl, k_eps as f32, cv, cl, siv, sil)?;
+    let _ = (dev, b, h, hkv, s, d);
+    Ok(Some((
+        Tensor::from((Storage::Vulkan(q_out), ql.shape().clone())),
+        Tensor::from((Storage::Vulkan(k_out), kl.shape().clone())),
+    )))
 }
 
 pub fn qk_rms_norm_rope(
