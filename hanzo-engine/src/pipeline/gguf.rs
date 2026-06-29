@@ -892,10 +892,12 @@ impl GGUFPipeline {
         self.mapper.get_unique_devices().len() <= 1
             && match &self.model {
                 Model::Qwen3(_) | Model::Qwen3MoE(_) => true,
-                // DeepSeek-V4: capture-eligible because the compressor is prefill-only
-                // (skipped at single-token decode), so the decode forward is shape-stable
-                // and host-sync-free (GPU-only MoE routing, like Qwen3MoE).
-                Model::Deepseek4(_) => true,
+                // DeepSeek-V4 is capture-eligible (compressor prefill-only → shape-stable
+                // decode), and `run_decode_forward` handles it — BUT the decode is currently
+                // KERNEL-bound (Q2_K down experts hit the CPU-bound generic MoE fallback,
+                // not a resident dp4a kernel), so capture adds warmup overhead with no
+                // payoff (measured regression). Re-enable once the Q2_K resident MoE dp4a
+                // kernel lands; THEN the graph pays off (→ ds4-class ~24 t/s).
                 Model::Llama(model) => model.supports_decode_graph(),
                 _ => false,
             }
