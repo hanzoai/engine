@@ -47,7 +47,7 @@ pub use embedding_loaders::{
 
 pub use animation_loaders::{
     animation_loader, AnimationComponents, AnimationLoaderType, AnimationModelLoader,
-    MuseTalkAnimationLoader,
+    DitComponents, EchoMimicV3Loader, MuseTalkAnimationLoader, MuseTalkComponents,
 };
 
 pub use diffusion_loaders::{
