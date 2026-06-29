@@ -4,6 +4,7 @@ members = [
     "hanzo-engine",
     "hanzo-engine-ffi",
     "hanzo-router",
+    "enso",
     "hanzo-server-core",
     "hanzo-server",
     "hanzo-cli",
