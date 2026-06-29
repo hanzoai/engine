@@ -234,6 +234,6 @@ opt-level = 3
 # (ffn_gate_tid2eid load). crates.io 0.11.31 predates it; this commit (v0.11.32)
 # has all 3 I32 pieces. Drop once ml 0.11.32+ is published to crates.io.
 [patch.crates-io]
-hanzo-ml = { git = "https://github.com/hanzoai/ml", rev = "66f464c27640" }
-hanzo-nn = { git = "https://github.com/hanzoai/ml", rev = "66f464c27640" }
-hanzo-kernels = { git = "https://github.com/hanzoai/ml", rev = "66f464c27640" }
+hanzo-ml = { git = "https://github.com/hanzoai/ml", rev = "798fe88aae27" }
+hanzo-nn = { git = "https://github.com/hanzoai/ml", rev = "798fe88aae27" }
+hanzo-kernels = { git = "https://github.com/hanzoai/ml", rev = "798fe88aae27" }
