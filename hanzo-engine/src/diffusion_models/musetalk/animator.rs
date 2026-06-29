@@ -1,12 +1,12 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use hanzo_ml::{Device, Result, Tensor};
+use hanzo_ml::{DType, Device, Result, Tensor};
 use hanzo_quant::ShardedVarBuilder;
-use hanzo_vision::{crop, paste_resized};
 use image::{imageops::FilterType, DynamicImage, GenericImageView, RgbImage};
 
 use crate::diffusion_models::animation::{
-    AnimationOutput, AnimationRequest, FacialAnimator, VisualKind, VisualSource,
+    AnimationOutput, AnimationRequest, Animator, DriveEncoder, DrivingAudio, FaceLocator,
+    FacialAnimator, Generator, InpaintPaste, Region, VisualKind,
 };
 use crate::diffusion_models::musetalk::MuseTalk;
 use crate::speech_models::whisper::WhisperFeatureExtractor;
@@ -40,16 +40,86 @@ impl Default for AnimatorOptions {
     }
 }
 
-/// Footage-driven (inpainting) facial animator: S3FD locates the face, the
-/// openai-whisper-tiny features condition the MuseTalk UNet, and each frame is
-/// crop -> forward -> blend (keep upper half, generate lower half) -> paste back.
-pub struct MuseTalkAnimator {
-    musetalk: MuseTalk,
-    whisper: WhisperFeatureExtractor,
+/// S3FD face detection as a `FaceLocator`: the top box clamped to the frame, or `None`
+/// when nothing is detected. Footage-generic, reusable by any inpainting backbone.
+pub struct S3fdLocator {
     detector: S3fd,
-    device: Device,
-    redetect_every: usize,
 }
+
+impl S3fdLocator {
+    pub fn new(vb: ShardedVarBuilder, device: &Device, opts: AnimatorOptions) -> Result<Self> {
+        Ok(Self {
+            detector: S3fd::new(
+                vb,
+                device,
+                S3fdConfig {
+                    score_threshold: opts.face_score_threshold,
+                    nms_iou: opts.face_nms_iou,
+                    max_side: opts.face_max_side,
+                },
+            )?,
+        })
+    }
+}
+
+impl FaceLocator for S3fdLocator {
+    fn locate(&self, frame: &DynamicImage) -> Result<Option<Region>> {
+        let (fw, fh) = frame.dimensions();
+        Ok(self.detector.detect(frame)?.into_iter().next().map(|b| {
+            let (x, y, w, h) = clamp_box(&b, fw, fh);
+            Region { x, y, w, h }
+        }))
+    }
+}
+
+/// openai-whisper-tiny stacked encoder features as MuseTalk's lip-sync `DriveEncoder`.
+impl DriveEncoder for WhisperFeatureExtractor {
+    fn encode(&self, audio: &DrivingAudio, fps: f64) -> Result<Tensor> {
+        self.features(&audio.pcm, audio.sample_rate, fps)
+    }
+}
+
+/// MuseTalk VAE-encode + UNet cross-attn + VAE-decode + blend (keep upper half, generate
+/// lower) as the `Generator`. Inpaints a face crop, so its `VisualKind` is `Footage`.
+pub struct MuseTalkGenerator {
+    musetalk: MuseTalk,
+    size: usize,
+    dtype: DType,
+    device: Device,
+}
+
+impl MuseTalkGenerator {
+    pub fn new(musetalk: MuseTalk) -> Self {
+        Self {
+            size: musetalk.resized_img(),
+            dtype: musetalk.dtype(),
+            device: musetalk.device().clone(),
+            musetalk,
+        }
+    }
+}
+
+impl Generator for MuseTalkGenerator {
+    fn generate(&self, visual: &DynamicImage, audio: &Tensor) -> Result<DynamicImage> {
+        let face = image_to_face_tensor(visual, self.size, &self.device)?;
+        // whisper features carry whisper's vb dtype; the UNet cross-attends in MuseTalk's.
+        let audio = audio.to_dtype(self.dtype)?.contiguous()?;
+        let generated = self.musetalk.forward(&face, &audio)?;
+        let blended = self.musetalk.blend(&face, &generated)?;
+        face_tensor_to_image(&blended)
+    }
+
+    fn accepts(&self) -> VisualKind {
+        VisualKind::Footage
+    }
+}
+
+/// Footage-driven lip-sync animator: `S3fdLocator` + whisper-tiny `DriveEncoder` +
+/// `MuseTalkGenerator` + `InpaintPaste`. EchoMimic/LongCat/InfiniteTalk drop in as a new
+/// `Generator` (+ `Compositor`), reusing locate/encode, with zero pipeline change.
+pub struct MuseTalkAnimator(
+    Animator<S3fdLocator, WhisperFeatureExtractor, MuseTalkGenerator, InpaintPaste>,
+);
 
 impl MuseTalkAnimator {
     pub fn new(
@@ -66,107 +136,29 @@ impl MuseTalkAnimator {
             );
         }
         let device = musetalk.device().clone();
-        let detector = S3fd::new(
-            s3fd_vb,
-            &device,
-            S3fdConfig {
-                score_threshold: opts.face_score_threshold,
-                nms_iou: opts.face_nms_iou,
-                max_side: opts.face_max_side,
-            },
-        )?;
-        Ok(Self {
-            musetalk,
+        let locate = S3fdLocator::new(s3fd_vb, &device, opts)?;
+        Ok(Self(Animator::new(
+            locate,
             whisper,
-            detector,
+            MuseTalkGenerator::new(musetalk),
+            InpaintPaste,
             device,
-            redetect_every: opts.redetect_every.max(1),
-        })
-    }
-
-    fn bbox_for(
-        &self,
-        frame: &DynamicImage,
-        redetect: bool,
-        last: &mut Option<FaceBox>,
-    ) -> Result<(u32, u32, u32, u32)> {
-        if redetect || last.is_none() {
-            if let Some(top) = self.detector.detect(frame)?.into_iter().next() {
-                *last = Some(top);
-            }
-        }
-        let (fw, fh) = frame.dimensions();
-        // No face ever found: fall back to the whole frame (headshot footage).
-        Ok(last.map_or((0, 0, fw, fh), |b| clamp_box(&b, fw, fh)))
+            opts.redetect_every,
+        )))
     }
 }
 
 impl FacialAnimator for MuseTalkAnimator {
     fn animate(&mut self, req: &AnimationRequest) -> Result<AnimationOutput> {
-        let VisualSource::Footage { frames } = &req.visual else {
-            hanzo_ml::bail!("MuseTalkAnimator only animates footage");
-        };
-        if frames.is_empty() {
-            hanzo_ml::bail!("MuseTalkAnimator: empty footage");
-        }
-        if frames.iter().any(|f| f.width() == 0 || f.height() == 0) {
-            hanzo_ml::bail!("MuseTalkAnimator: footage frame has a zero dimension");
-        }
-
-        let feats = self
-            .whisper
-            .features(&req.driving.pcm, req.driving.sample_rate, req.fps)?;
-        let n_frames = feats.dim(0)?;
-        let size = self.musetalk.resized_img();
-
-        let mut out = Vec::with_capacity(n_frames);
-        let mut last_bbox: Option<FaceBox> = None;
-        for t in 0..n_frames {
-            let src = &frames[cycle_index(t, frames.len())];
-            let redetect = t % self.redetect_every == 0;
-            let (x, y, w, h) = self.bbox_for(src, redetect, &mut last_bbox)?;
-
-            let face = image_to_face_tensor(&crop(src, x, y, w, h), size, &self.device)?;
-            // whisper features carry whisper's vb dtype; the UNet cross-attends in MuseTalk's.
-            let audio = feats
-                .narrow(0, t, 1)?
-                .to_dtype(self.musetalk.dtype())?
-                .contiguous()?;
-            let generated = self.musetalk.forward(&face, &audio)?;
-            let blended = self.musetalk.blend(&face, &generated)?;
-
-            let patch = face_tensor_to_image(&blended)?;
-            let mut frame_out = src.clone();
-            paste_resized(&mut frame_out, &patch, x, y, w, h);
-            out.push(frame_out);
-        }
-        Ok(AnimationOutput {
-            frames: out,
-            fps: req.fps,
-        })
+        self.0.animate(req)
     }
 
     fn device(&self) -> &Device {
-        &self.device
+        self.0.device()
     }
 
     fn accepts(&self) -> VisualKind {
-        VisualKind::Footage
-    }
-}
-
-/// Ping-pong (boomerang) index into `n` footage frames so audio longer than the
-/// footage loops without a hard cut: 0,1,..,n-1,n-1,..,1,0,0,1,..
-fn cycle_index(t: usize, n: usize) -> usize {
-    if n <= 1 {
-        return 0;
-    }
-    let period = 2 * n;
-    let m = t % period;
-    if m < n {
-        m
-    } else {
-        period - 1 - m
+        self.0.accepts()
     }
 }
 
@@ -215,16 +207,6 @@ fn face_tensor_to_image(t: &Tensor) -> Result<DynamicImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn cycle_index_pingpongs() {
-        assert_eq!((0..5).map(|t| cycle_index(t, 1)).collect::<Vec<_>>(), [0, 0, 0, 0, 0]);
-        assert_eq!((0..5).map(|t| cycle_index(t, 2)).collect::<Vec<_>>(), [0, 1, 1, 0, 0]);
-        assert_eq!(
-            (0..8).map(|t| cycle_index(t, 3)).collect::<Vec<_>>(),
-            [0, 1, 2, 2, 1, 0, 0, 1]
-        );
-    }
 
     #[test]
     fn clamp_box_stays_in_bounds() {
