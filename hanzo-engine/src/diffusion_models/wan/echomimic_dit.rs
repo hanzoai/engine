@@ -515,10 +515,10 @@ impl EchoMimicDiT {
         let xs = x.flatten_from(2)?.transpose(1, 2)?.contiguous()?; // [b, seq, dim]
 
         let e = sinusoidal_embedding(t, self.cfg.freq_dim)?
+            .to_dtype(dtype)?
             .apply(&self.time0)?
             .silu()?
             .apply(&self.time2)?; // [b, dim]
-        let e = e.to_dtype(dtype)?;
         let e0 = e.silu()?.apply(&self.time_proj)?.reshape((b, 6, dim))?;
 
         let text_ctx = text.apply(&self.text0)?.gelu()?.apply(&self.text2)?;
