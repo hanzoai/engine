@@ -180,6 +180,21 @@ pub(crate) fn deq(ct: &mut Content<'_, impl std::io::Seek + std::io::Read>, name
     ct.tensor(name, dev)?.dequantize(dev)?.to_dtype(DType::F32)
 }
 
+/// Simulate **W8A8**: round-trip the activation through Q8_0 (quantize→dequantize)
+/// before a quantized matmul, matching ds4's Q8 dp4a. The model is QAT-trained with
+/// quantized activations (model.py act_quant before every quantized linear), but our
+/// `QMatMul` is W8A16 (dequant weight × full-precision activation) — the per-matmul
+/// activation-rounding difference makes greedy generation diverge from ds4's by
+/// ~token 3. This closes the gap. Last dim must be a multiple of 32 (Q8_0 block);
+/// V4's activations (4096/1024/8192) all satisfy it.
+fn qact(x: &Tensor) -> Result<Tensor> {
+    let q = hanzo_ml::quantized::QTensor::quantize(
+        &x.to_dtype(DType::F32)?,
+        hanzo_ml::quantized::GgmlDType::Q8_0,
+    )?;
+    q.dequantize(x.device())?.to_dtype(x.dtype())
+}
+
 /// Per-layer attention mode from the `compress_ratios` schedule.
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
@@ -257,10 +272,12 @@ impl V4Moe {
     }
 
     fn shared(&self, xs: &Tensor) -> Result<Tensor> {
-        let gate = self.shared_gate.forward(xs)?;
-        let up = self.shared_up.forward(xs)?;
+        // W8A8: Q8-round-trip the shared-expert (Q8_0) matmul inputs (qact).
+        let xq = qact(xs)?;
+        let gate = self.shared_gate.forward(&xq)?;
+        let up = self.shared_up.forward(&xq)?;
         let act = self.swiglu(&gate, &up)?;
-        self.shared_down.forward(&act)
+        self.shared_down.forward(&qact(&act)?)
     }
 
     fn swiglu(&self, gate: &Tensor, up: &Tensor) -> Result<Tensor> {
@@ -288,10 +305,11 @@ impl V4Moe {
         let (indices, weights) = self.route(&xs2, &ids)?;
 
         // Fused routed experts: gate/up → swiglu → down → weighted combine.
-        let xs3 = xs2.reshape((b * s, 1, h))?;
+        // W8A8: Q8-round-trip the routed-expert matmul inputs (qact) to match ds4's dp4a.
+        let xs3 = qact(&xs2)?.reshape((b * s, 1, h))?;
         let (gate, up) =
             hanzo_ml::quantized::moe_gate_up(&xs3, &indices, &self.gate_experts, &self.up_experts)?;
-        let act = self.swiglu(&gate, &up)?;
+        let act = qact(&self.swiglu(&gate, &up)?)?;
         let routed = self.down_experts.indexed_moe_forward(&act, &indices)?;
         let routed = hanzo_ml::quantized::moe_combine(&routed, &weights)?; // [b*s, h]
 
@@ -371,7 +389,10 @@ impl V4Attn {
         let wdt = self.attn_dtype;
 
         // q: wq_a → q_norm → wq_b → [b, nh, s, hd] → per-head RMS → trailing rope.
-        let q = self.q_b.forward(&self.q_a_norm.forward(&self.q_a.forward(x)?)?)?;
+        // W8A8: Q8-round-trip each quantized-matmul input (qact) to match ds4's dp4a.
+        let q = self
+            .q_b
+            .forward(&qact(&self.q_a_norm.forward(&self.q_a.forward(&qact(x)?)?)?)?)?;
         let mut q = q
             .reshape((b, s, self.n_head, self.head_dim))?
             .transpose(1, 2)?;
@@ -381,7 +402,7 @@ impl V4Attn {
         // kv latent: wkv → kv_norm → [b, 1, s, hd] → trailing rope (K == V).
         let kv = self
             .kv_norm
-            .forward(&self.kv.forward(x)?)?
+            .forward(&self.kv.forward(&qact(x)?)?)?
             .reshape((b, s, 1, self.head_dim))?
             .transpose(1, 2)?;
         let kv = self.rope(&kv, positions, false)?;
@@ -479,7 +500,7 @@ impl V4Attn {
             .transpose(1, 2)? // [b, s, groups, rank]
             .reshape((b, s, self.o_groups * self.o_lora_rank))?
             .contiguous()?;
-        self.wo_b.forward(&o.to_dtype(x.dtype())?)
+        self.wo_b.forward(&qact(&o.to_dtype(x.dtype())?)?)
     }
 }
 
