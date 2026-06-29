@@ -403,8 +403,15 @@ impl V4Attn {
         // (seqlen<window: the raw window is fully causal-visible, the indexer selects
         // all rows since n_comp < top_k=512 — so dense over [raw ++ all-compressed] is
         // exact. Sliding window for >window context + the indexer top-k are follow-ons.)
+        // The compressor runs only during PREFILL (s > 1). At single-token decode it is
+        // (a) redundant for context ≤ window (the raw window already covers everything —
+        // byte-identical output, verified) and (b) shape-variable + host-syncing, which
+        // would break CUDA-graph capture and impose an O(n²) per-step rebuild. Skipping
+        // it at decode makes the decode forward shape-stable + capture-eligible (the big
+        // perf win) and keeps the O(n) decode. (>window long-context recall via the
+        // compressed pool is the eager-path / indexer follow-on.)
         let attn = match (&self.compressor, comp_state) {
-            (Some(comp), Some(state)) => {
+            (Some(comp), Some(state)) if s > 1 => {
                 state.append(x)?;
                 let xh = state.x_history.as_ref().unwrap();
                 let total = xh.dim(1)?;
