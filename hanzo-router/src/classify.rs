@@ -1,7 +1,7 @@
 //! Request → [`Task`]. Heuristic today; the `Classifier` seam lets a learned
 //! model drop in without touching the policy (same as the Python router).
 
-use crate::registry::Task;
+use crate::registry::{Modality, Task};
 
 /// The features the router reasons about — extracted from the request by the
 /// caller (hanzo-node), kept as a value so classification is pure.
@@ -15,6 +15,22 @@ pub struct Request {
     pub has_media: bool,
     /// Optional explicit task override (skips classification).
     pub task_hint: Option<Task>,
+    /// Desired output modality (image-gen/dub set this; chat leaves it None).
+    pub modality_hint: Option<Modality>,
+}
+
+impl Request {
+    /// The pool this request must be served from: an explicit hint wins, else
+    /// media input implies vision, else text.
+    pub fn target_modality(&self) -> Modality {
+        self.modality_hint.unwrap_or({
+            if self.has_media {
+                Modality::Vision
+            } else {
+                Modality::Text
+            }
+        })
+    }
 }
 
 pub trait Classifier {

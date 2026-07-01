@@ -379,6 +379,17 @@ pub(crate) fn convert_to_model_selected(
             dtype: model.dtype,
         }),
 
+        ModelType::Animation {
+            model_id,
+            arch,
+            dtype,
+            device: _,
+        } => Ok(ModelSelected::Animation {
+            model_id: model_id.clone(),
+            arch: arch.clone(),
+            dtype: *dtype,
+        }),
+
         ModelType::Embedding {
             model,
             format: _,
@@ -666,6 +677,7 @@ pub(crate) fn extract_device_settings(model_type: &ModelType) -> (bool, Option<V
         ModelType::Multimodal { device, .. } => device,
         ModelType::Diffusion { device, .. } => device,
         ModelType::Speech { device, .. } => device,
+        ModelType::Animation { device, .. } => device,
         ModelType::Embedding { device, .. } => device,
     };
 
@@ -686,7 +698,9 @@ fn extract_quantization(model_type: &ModelType) -> Option<&crate::args::Quantiza
         ModelType::Text { quantization, .. } => Some(quantization),
         ModelType::Multimodal { quantization, .. } => Some(quantization),
         ModelType::Embedding { quantization, .. } => Some(quantization),
-        ModelType::Diffusion { .. } | ModelType::Speech { .. } => None,
+        ModelType::Diffusion { .. } | ModelType::Speech { .. } | ModelType::Animation { .. } => {
+            None
+        }
     }
 }
 
@@ -698,7 +712,9 @@ pub(crate) fn model_quantization_mut(
         ModelType::Text { quantization, .. } => Some(quantization),
         ModelType::Multimodal { quantization, .. } => Some(quantization),
         ModelType::Embedding { quantization, .. } => Some(quantization),
-        ModelType::Diffusion { .. } | ModelType::Speech { .. } => None,
+        ModelType::Diffusion { .. } | ModelType::Speech { .. } | ModelType::Animation { .. } => {
+            None
+        }
     }
 }
 
@@ -709,6 +725,7 @@ pub(crate) fn model_id_mut(model_type: &mut ModelType) -> &mut String {
         ModelType::Multimodal { model, .. } => &mut model.model_id,
         ModelType::Diffusion { model, .. } => &mut model.model_id,
         ModelType::Speech { model, .. } => &mut model.model_id,
+        ModelType::Animation { model_id, .. } => model_id,
         ModelType::Embedding { model, .. } => &mut model.model_id,
     }
 }
@@ -720,6 +737,7 @@ pub(crate) fn model_id_of(model_type: &ModelType) -> &str {
         ModelType::Multimodal { model, .. } => &model.model_id,
         ModelType::Diffusion { model, .. } => &model.model_id,
         ModelType::Speech { model, .. } => &model.model_id,
+        ModelType::Animation { model_id, .. } => model_id,
         ModelType::Embedding { model, .. } => &model.model_id,
     }
 }
