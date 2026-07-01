@@ -176,11 +176,18 @@ impl MtpHead {
             &self.device,
         )?;
 
-        // One V4 block over the HC carrier (no compressor — Full mode).
+        // One V4 block over the HC carrier (no compressor — Full mode, so the
+        // `is_prefill` gate is moot here; pass false).
         let mut hc = HyperConnections::expand(&x, self.n_hc)?;
-        hc = self
-            .block
-            .forward(&hc, token_ids, &mask, &positions, &mut self.cache[0], None)?;
+        hc = self.block.forward(
+            &hc,
+            token_ids,
+            &mask,
+            &positions,
+            &mut self.cache[0],
+            None,
+            false,
+        )?;
         let x = self.head_hc.reduce_output(&hc)?;
         let x = self.norm.forward(&x)?;
         output.forward(&x.contiguous()?)
