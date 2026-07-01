@@ -207,6 +207,9 @@ impl Gemma4MtpRuntime {
                     &cache,
                 )
             }
+            SpeculativeKvCache::Normal => {
+                hanzo_ml::bail!("gemma4 MTP requires a paged KV cache, got a normal cache")
+            }
         }
     }
 
