@@ -42,11 +42,13 @@ pub mod classify;
 pub mod memory;
 pub mod policy;
 pub mod registry;
+pub mod route;
 
 pub use classify::{Classifier, Heuristic, Request};
 pub use memory::MemSnapshot;
 pub use policy::{Context, Decision, Policy};
-pub use registry::{Backend, ModelCard, Registry, Task};
+pub use registry::{Backend, Level, Modality, ModelCard, Registry, Task};
+pub use route::{Route, RoutePolicy, Slo, User, REFUSED_MODEL};
 
 /// Load a [`Policy`] from a YAML string (the declarative policy file).
 pub fn load_policy(yaml: &str) -> Result<Policy, serde_yaml::Error> {
