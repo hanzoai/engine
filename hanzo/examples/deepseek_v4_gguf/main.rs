@@ -22,18 +22,25 @@ async fn main() -> Result<()> {
     .build()
     .await?;
 
-    // Correctness check: a factual short-answer prompt that naturally stops.
-    let messages = RequestBuilder::new().add_message(
-        TextMessageRole::User,
-        "In one sentence, what is the capital of France?",
-    );
+    // Correctness check: a factual short-answer prompt, capped so a working kernel
+    // completes fast (a deadlocked one still hangs — the decisive distinction).
+    let messages = RequestBuilder::new()
+        .add_message(
+            TextMessageRole::User,
+            "In one sentence, what is the capital of France?",
+        )
+        .set_sampler_max_len(48);
 
     let response = model.send_chat_request(messages).await?;
-    println!("\n=== DEEPSEEK-V4 OUTPUT ===");
-    println!(
-        "{}",
-        response.choices[0].message.content.as_deref().unwrap_or("<none>")
-    );
+    let msg = &response.choices[0].message;
+    // V4 is a reasoning model: the answer may arrive as `content` (on natural stop)
+    // or still be in `reasoning_content` when a max_len cap cuts the chain short.
+    let text = msg
+        .content
+        .as_deref()
+        .or(msg.reasoning_content.as_deref())
+        .unwrap_or("<none>");
+    println!("\n=== DEEPSEEK-V4 OUTPUT ===\n{text}");
     println!(
         "=== tok/s: prompt {:?} compl {:?} | completion_tokens {} ===",
         response.usage.avg_prompt_tok_per_sec,

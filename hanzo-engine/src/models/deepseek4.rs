@@ -385,6 +385,12 @@ impl HyperConnections {
     /// (over `dst`) / row (over `src`) alternation, matching `ds4.c`
     /// `hc_split_sinkhorn_one`.
     fn sinkhorn(&self, logits: &Tensor) -> Result<Tensor> {
+        // CUDA: one fused f32 kernel instead of ~120 tiny bf16 tensor-op launches
+        // (the mHC swarm was ~20% of decode GPU time — see hanzo_ml Tensor::hc_sinkhorn).
+        // Off-device keeps the tensor-op alternation (softmax + row/col norm).
+        if logits.device().is_cuda() {
+            return logits.hc_sinkhorn(self.iters, self.eps);
+        }
         let mut c = (hanzo_nn::ops::softmax_last_dim(logits)? + self.eps)?;
         c = self.col_norm(&c)?;
         for _ in 1..self.iters {
