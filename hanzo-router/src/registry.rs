@@ -18,6 +18,76 @@ pub enum Task {
     General,
 }
 
+impl Task {
+    pub const ALL: [Task; 8] = [
+        Task::Code,
+        Task::Reasoning,
+        Task::Math,
+        Task::Creative,
+        Task::Vision,
+        Task::LongContext,
+        Task::CheapChat,
+        Task::General,
+    ];
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|&t| t == self).unwrap()
+    }
+}
+
+/// The I/O pool a request and a model live in. Orthogonal to [`Task`]: `Task` is
+/// the text-task taxonomy used to rank quality within a pool; `Modality` selects
+/// the pool itself, so the same router serves chat, vision, image-gen and dub by
+/// matching pools. Media-generation requests (image/dub) carry [`Task::General`].
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Modality {
+    #[default]
+    Text,
+    Vision,
+    Image,
+    Audio,
+    Video,
+}
+
+impl Modality {
+    pub const ALL: [Modality; 5] = [
+        Modality::Text,
+        Modality::Vision,
+        Modality::Image,
+        Modality::Audio,
+        Modality::Video,
+    ];
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|&m| m == self).unwrap()
+    }
+}
+
+/// Effort/quality tier a model is served at (reasoning depth, quant, renderer
+/// quality). A model can expose several levels; each (model, level, modality) is
+/// one profile row the router ranks independently.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Level {
+    Fast,
+    #[default]
+    Balanced,
+    Max,
+}
+
+impl Level {
+    pub const ALL: [Level; 3] = [Level::Fast, Level::Balanced, Level::Max];
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|&l| l == self).unwrap()
+    }
+}
+
 /// Where a model executes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
