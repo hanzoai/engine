@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
     .with_logging()
     .with_mtp_model(
         "/home/z/work/zen/hf/ds4-flash-gguf/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf",
-        Some(1),
+        Some(2),
     )
     .build()
     .await?;
