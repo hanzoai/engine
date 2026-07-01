@@ -13,6 +13,10 @@ pub enum SpeculativeKvCache<'a> {
         metadata: &'a PagedAttentionMeta,
         kv_cache: &'a [(Tensor, Tensor)],
     },
+    /// Normal (non-paged) KV cache. Self-speculative proposers that keep their own
+    /// draft KV (e.g. DeepSeek-V4 MTP) don't read the target tensors — the confirmed
+    /// tokens arrive via `sampled_tokens`/`sequences` — so this variant carries none.
+    Normal,
 }
 
 pub struct SpeculativeProposeBatchCtx<'a> {
