@@ -431,6 +431,12 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         None,
         builder.paged_attn_cfg,
     )?;
+    if let Some(mtp_config) = builder.mtp_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+    }
 
     let scheduler_config =
         scheduler_config_from_pipeline(&pipeline, paged_attn_requested, builder.max_num_seqs)
