@@ -13,22 +13,17 @@ async fn main() -> Result<()> {
     // Tight activation budget for the 86GB load on unified memory: a single
     // sequence (default 32) shrinks the KV reservation ~32x, leaving the pool for
     // weights. Pair with IGPU_MEMORY_FRACTION=0.92 on a freed GB10.
-    let mut builder = GgufModelBuilder::new(
+    // The MTP self-speculative draft head is available via `.with_mtp_model(path, n)`
+    // (fully wired + greedy-identical). It's left off here because naive depth-1 MTP
+    // is net-negative single-stream; the net-positive path is EAGLE-style multi-draft.
+    let model = GgufModelBuilder::new(
         "/home/z/work/zen/hf/ds4-flash-gguf",
         vec!["DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2.gguf".to_string()],
     )
     .with_max_num_seqs(1)
-    .with_logging();
-    // Attach the MTP self-speculative draft head when HANZO_V4_MTP=1 (so the same
-    // example measures baseline vs speculative). Output must stay greedy-identical;
-    // the draft only changes accept rate / speed.
-    if std::env::var("HANZO_V4_MTP").is_ok() {
-        builder = builder.with_mtp_model(
-            "/home/z/work/zen/hf/ds4-flash-gguf/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf",
-            Some(1),
-        );
-    }
-    let model = builder.build().await?;
+    .with_logging()
+    .build()
+    .await?;
 
     // Correctness check: a factual short-answer prompt, capped so a working kernel
     // completes fast (a deadlocked one still hangs — the decisive distinction).
