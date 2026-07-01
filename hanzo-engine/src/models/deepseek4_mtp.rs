@@ -149,8 +149,9 @@ impl MtpHead {
     /// the corresponding `token_ids` `[b,s]`, sharing the base `embed` + `output` head.
     /// `start_offsets` are the per-sequence positions (for RoPE/causality).
     ///
-    /// Returns `[b, s, vocab]`. Loop this (feeding back the accepted token's hidden) for
-    /// multi-step EAGLE-style drafting.
+    /// Returns `(logits [b,s,vocab], hidden [b,s,e])`. The returned post-norm hidden is
+    /// the EAGLE chain feature: feed it back (with the drafted token) as `hidden` for the
+    /// next chained draft step, extending the draft beyond depth-1 off a single head.
     pub fn draft(
         &mut self,
         hidden: &Tensor,
@@ -158,7 +159,7 @@ impl MtpHead {
         embed: &Embedding,
         output: &Arc<dyn QuantMethod>,
         start_offsets: &[usize],
-    ) -> Result<Tensor> {
+    ) -> Result<(Tensor, Tensor)> {
         let e = self.e_proj.forward(
             &self
                 .enorm
@@ -195,7 +196,8 @@ impl MtpHead {
         )?;
         let x = self.head_hc.reduce_output(&hc)?;
         let x = self.norm.forward(&x)?;
-        output.forward(&x.contiguous()?)
+        let logits = output.forward(&x.contiguous()?)?;
+        Ok((logits, x))
     }
 
     /// Head dim (for callers wiring the draft into a speculative loop).
@@ -266,37 +268,53 @@ impl SpeculativeProposer for Deepseek4MtpRuntime {
         }
         let device = self.mtp.device().clone();
 
-        // Draft-from inputs: the just-sampled anchor token per row at its position, and
-        // the target hidden that produced it ([batch, 1, H]).
-        let hidden = if hiddens.dims().len() == 3 {
+        // EAGLE-style chained draft off a single head: step 0 drafts from the target
+        // hidden + anchor; each next step feeds the MTP's OWN post-norm hidden + the
+        // token it just drafted, extending the draft to `n_predict` tokens. The KV cache
+        // accumulates the chain (reset once per proposal); the target verify decides
+        // acceptance, so draft quality only affects accept rate, never correctness.
+        let mut hidden = if hiddens.dims().len() == 3 {
             hiddens
         } else {
             hiddens.unsqueeze(1)?
         };
-        let token_ids = Tensor::from_vec(ctx.sampled_tokens.to_vec(), (batch, 1), &device)?;
-        let start_offsets: Vec<usize> = ctx.base_lens.to_vec();
+        let mut cur_tokens: Vec<u32> = ctx.sampled_tokens.to_vec();
+        let base: Vec<usize> = ctx.base_lens.to_vec();
 
-        // Stateless draft — fresh KV each step; the target hidden carries the context.
         self.mtp.reset_cache();
-        let logits = self
-            .mtp
-            .draft(&hidden, &token_ids, &self.embed, &self.output, &start_offsets)?;
-
-        // n_predict == 1: one greedy draft token per row (the target verify decides
-        // acceptance; the logits ride along for the stochastic path).
-        let draft = logits.argmax(D::Minus1)?.to_dtype(DType::U32)?;
-        let draft_ids: Vec<u32> = draft.flatten_all()?.to_vec1::<u32>()?;
-        if draft_ids.len() != batch {
-            hanzo_ml::bail!(
-                "V4 MTP draft produced {} tokens for {batch} rows",
-                draft_ids.len()
-            );
+        let mut step_tokens: Vec<Vec<u32>> = Vec::with_capacity(self.n_predict); // [step][row]
+        let mut step_logits: Vec<Tensor> = Vec::with_capacity(self.n_predict); // [step] = [batch,1,vocab]
+        for k in 0..self.n_predict {
+            let token_ids = Tensor::from_vec(cur_tokens.clone(), (batch, 1), &device)?;
+            let start_offsets: Vec<usize> = base.iter().map(|b| b + k).collect();
+            let (logits, next_hidden) =
+                self.mtp
+                    .draft(&hidden, &token_ids, &self.embed, &self.output, &start_offsets)?;
+            let draft = logits.argmax(D::Minus1)?.to_dtype(DType::U32)?;
+            let draft_ids: Vec<u32> = draft.flatten_all()?.to_vec1::<u32>()?;
+            if draft_ids.len() != batch {
+                hanzo_ml::bail!(
+                    "V4 MTP draft produced {} tokens for {batch} rows",
+                    draft_ids.len()
+                );
+            }
+            cur_tokens = draft_ids.clone();
+            hidden = next_hidden;
+            step_tokens.push(draft_ids);
+            step_logits.push(logits);
         }
 
+        // Per row: the n_predict drafted tokens + their logits stacked as [1, n_predict, vocab]
+        // (the verifier indexes logit rows by draft position).
         let mut proposals = Vec::with_capacity(batch);
-        for (i, tok) in draft_ids.into_iter().enumerate() {
-            let row_logits = logits.narrow(0, i, 1)?; // [1, 1, vocab]
-            proposals.push(SpeculativeProposal::with_logits(vec![tok], row_logits));
+        for i in 0..batch {
+            let toks: Vec<u32> = step_tokens.iter().map(|s| s[i]).collect();
+            let row_logits = step_logits
+                .iter()
+                .map(|l| l.narrow(0, i, 1))
+                .collect::<Result<Vec<_>>>()?;
+            let row_logits = Tensor::cat(&row_logits, 1)?; // [1, n_predict, vocab]
+            proposals.push(SpeculativeProposal::with_logits(toks, row_logits));
         }
         Ok(SpeculativeProposalBatch::new(proposals))
     }
