@@ -61,9 +61,6 @@ fn animation_loader_builds_pipeline() -> anyhow::Result<()> {
     );
     let loader = AnimationLoader {
         model_id: "musetalk".to_string(),
-        vae_model_id: "sd-vae-ft-mse".to_string(),
-        whisper_model_id: "whisper".to_string(),
-        s3fd_model_id: "s3fd".to_string(),
         arch: AnimationLoaderType::MuseTalk,
         options: AnimatorOptions::default(),
     };
