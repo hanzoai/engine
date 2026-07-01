@@ -230,10 +230,10 @@ debug = true
 debug = true
 opt-level = 3
 
-# TEMP: pin hanzo-ml to the git commit carrying the DeepSeek-V4 I32 dequant arm
-# (ffn_gate_tid2eid load). crates.io 0.11.31 predates it; this commit (v0.11.32)
-# has all 3 I32 pieces. Drop once ml 0.11.32+ is published to crates.io.
+# TEMP: pin hanzo-ml to the git commit carrying the fused mHC Sinkhorn kernel
+# (hc_sinkhorn, ml 0.11.36 / kernels 0.11.34) + the DeepSeek-V4 I32 dequant arm.
+# On ml main @ 6ebab002. Drop once ml 0.11.36+ is published to crates.io.
 [patch.crates-io]
-hanzo-ml = { git = "https://github.com/hanzoai/ml", rev = "798fe88aae27" }
-hanzo-nn = { git = "https://github.com/hanzoai/ml", rev = "798fe88aae27" }
-hanzo-kernels = { git = "https://github.com/hanzoai/ml", rev = "798fe88aae27" }
+hanzo-ml = { git = "https://github.com/hanzoai/ml", rev = "6ebab002" }
+hanzo-nn = { git = "https://github.com/hanzoai/ml", rev = "6ebab002" }
+hanzo-kernels = { git = "https://github.com/hanzoai/ml", rev = "6ebab002" }
