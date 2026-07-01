@@ -306,7 +306,7 @@ pub(crate) struct V4Attn {
     pub(crate) q_b: Arc<dyn QuantMethod>,
     pub(crate) kv: Arc<dyn QuantMethod>,
     pub(crate) kv_norm: RmsNorm,
-    pub(crate) wo_a: Tensor, // [groups, o_lora_rank, group_in] F32 for the grouped einsum
+    pub(crate) wo_a_t: Tensor, // [groups, group_in, rank] — pre-transposed (matmul-ready) grouped-o weight
     pub(crate) wo_b: Arc<dyn QuantMethod>,
     pub(crate) rotary: Arc<DeepSeekV2RotaryEmbedding>,
     pub(crate) sdpa: SdpaParams,
@@ -469,15 +469,14 @@ impl V4Attn {
         let o = attn
             .transpose(1, 2)? // [b, s, nh, hd]
             .reshape((b, s, self.o_groups, group_in))?
-            .to_dtype(self.wo_a.dtype())?;
+            .to_dtype(self.wo_a_t.dtype())?;
         // batched per-group matmul: [groups, b*s, group_in] @ [groups, group_in, rank].
         let o = o
             .transpose(1, 2)? // [b, groups, s, group_in]
             .transpose(0, 1)? // [groups, b, s, group_in]
             .reshape((self.o_groups, b * s, group_in))?
             .contiguous()?;
-        let wo_a_t = self.wo_a.transpose(1, 2)?.contiguous()?; // [groups, group_in, rank]
-        let o = o.matmul(&wo_a_t)?; // [groups, b*s, rank]
+        let o = o.matmul(&self.wo_a_t)?; // [groups, b*s, rank] — wo_a_t precomputed at load
         let o = o
             .reshape((self.o_groups, b, s, self.o_lora_rank))?
             .transpose(0, 1)? // [b, groups, s, rank]
@@ -675,12 +674,16 @@ impl DecoderLayer {
         swiglu_clamp: f32,
     ) -> Result<Self> {
         let is_full = compress_ratio == 0;
-        // Attention. wo_a -> [groups, rank, group_in] (ds4 row-major grouped-o).
-        let wo_a = ct
+        // Attention grouped-o weight. Reshape to the ds4 row-major [groups, rank,
+        // group_in] layout, then pre-transpose to the matmul-ready [groups, group_in,
+        // rank] ONCE here — the forward previously re-transposed+copied this 32Mi bf16
+        // constant every token (~33% of decode GPU time).
+        let wo_a_t = ct
             .tensor(&format!("{p}.attn_output_a.weight"), dev)?
             .dequantize(dev)?
             .to_dtype(dtype)?
             .reshape((props.o_groups, props.o_lora_rank, group_in))?
+            .transpose(1, 2)?
             .contiguous()?;
         let compressor = if is_full {
             None
@@ -706,7 +709,7 @@ impl DecoderLayer {
             q_b: gguf_linear(ct.tensor(&format!("{p}.attn_q_b.weight"), dev)?)?,
             kv: gguf_linear(ct.tensor(&format!("{p}.attn_kv.weight"), dev)?)?,
             kv_norm: rms_from(deq(ct, &format!("{p}.attn_kv_a_norm.weight"), dev)?, eps)?,
-            wo_a,
+            wo_a_t,
             wo_b: gguf_linear(ct.tensor(&format!("{p}.attn_output_b.weight"), dev)?)?,
             rotary,
             sdpa: SdpaParams {
