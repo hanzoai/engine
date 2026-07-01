@@ -6,7 +6,7 @@
 //! The GGUF carries its own tokenizer + chat template, so no external files needed.
 
 use anyhow::Result;
-use hanzo::{GgufModelBuilder, TextMessageRole, TextMessages};
+use hanzo::{GgufModelBuilder, RequestBuilder, TextMessageRole};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -22,17 +22,23 @@ async fn main() -> Result<()> {
     .build()
     .await?;
 
-    // Keep it <= window_size (128 tokens) so the v1 dense path is the correct one.
-    let messages = TextMessages::new().add_message(
+    // Correctness check: a factual short-answer prompt that naturally stops.
+    let messages = RequestBuilder::new().add_message(
         TextMessageRole::User,
         "In one sentence, what is the capital of France?",
     );
 
     let response = model.send_chat_request(messages).await?;
     println!("\n=== DEEPSEEK-V4 OUTPUT ===");
-    println!("{}", response.choices[0].message.content.as_ref().unwrap());
-    println!("=== tok/s: prompt {:?} compl {:?} ===",
+    println!(
+        "{}",
+        response.choices[0].message.content.as_deref().unwrap_or("<none>")
+    );
+    println!(
+        "=== tok/s: prompt {:?} compl {:?} | completion_tokens {} ===",
         response.usage.avg_prompt_tok_per_sec,
-        response.usage.avg_compl_tok_per_sec);
+        response.usage.avg_compl_tok_per_sec,
+        response.usage.completion_tokens,
+    );
     Ok(())
 }
