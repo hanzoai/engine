@@ -349,3 +349,123 @@ fn map_to_devices(
     }
     Ok(map)
 }
+
+// ============================================================================
+// Normal (non-paged) KV cache speculative access — the peer of
+// PagedSpeculativeCacheAccess for models that keep their KV inside the model
+// (EitherCache::Normal), e.g. DeepSeek-V4. The whole draft/verify/accept loop in
+// driver.rs is generic over `SpeculativeCacheAccess`; this is just a second backend.
+//
+// The borrow that paged sidesteps via an external cache_engine is handled here by
+// interior mutability: NormalCache is `Arc<Mutex<..>>`, so a shared handle can
+// snapshot/roll back the per-layer caches while the model is borrowed `&mut`
+// elsewhere. Rollback is `set_len(keep_len)` per layer — the verify forward already
+// appended the staged tokens' KV via the shared input processor; a partial accept
+// just truncates the surplus.
+// ============================================================================
+
+pub struct NormalSpeculativeCacheAccess {
+    cache: std::sync::Arc<std::sync::Mutex<crate::pipeline::NormalCache>>,
+    max_seq_len: usize,
+}
+
+impl NormalSpeculativeCacheAccess {
+    pub fn new(
+        cache: std::sync::Arc<std::sync::Mutex<crate::pipeline::NormalCache>>,
+        max_seq_len: usize,
+    ) -> Self {
+        Self {
+            cache,
+            max_seq_len,
+        }
+    }
+}
+
+pub struct NormalSpeculativeCacheGuard {
+    cache: std::sync::Arc<std::sync::Mutex<crate::pipeline::NormalCache>>,
+    reserved_len: usize,
+}
+
+impl SpeculativeCacheGuard for NormalSpeculativeCacheGuard {
+    fn commit(&mut self) -> Result<()> {
+        // The staged tokens' KV is already in the cache (appended by the verify
+        // forward); accepting everything keeps it as-is.
+        Ok(())
+    }
+
+    fn rollback_to(&mut self, keep_len: usize) -> Result<()> {
+        if keep_len < self.reserved_len {
+            let mut cache = self
+                .cache
+                .lock()
+                .map_err(|_| hanzo_ml::Error::Msg("normal speculative cache poisoned".into()))?;
+            for layer in cache.0.iter_mut() {
+                layer.set_len(keep_len)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
+    type Guard = NormalSpeculativeCacheGuard;
+
+    fn begin(
+        &self,
+        _seq_id: usize,
+        base_len: usize,
+        verify_len: usize,
+    ) -> Result<Option<Self::Guard>> {
+        // Normal cache grows dynamically — no slot allocation. Only decline if the
+        // verify window would overflow the context (fall back to one-token decode).
+        if base_len + verify_len > self.max_seq_len {
+            return Ok(None);
+        }
+        Ok(Some(NormalSpeculativeCacheGuard {
+            cache: self.cache.clone(),
+            reserved_len: base_len + verify_len,
+        }))
+    }
+
+    fn guard_for_reserved(
+        &self,
+        _seq_id: usize,
+        base_len: usize,
+        verify_len: usize,
+    ) -> NormalSpeculativeCacheGuard {
+        NormalSpeculativeCacheGuard {
+            cache: self.cache.clone(),
+            reserved_len: base_len + verify_len,
+        }
+    }
+
+    fn make_verify_input_metadata(
+        &self,
+        verify_tokens: &[u32],
+        _seq_id: usize,
+        base_len: usize,
+        device: &Device,
+        _mapper: &dyn DeviceMapper,
+    ) -> Result<InputMetadata> {
+        let verify_len = verify_tokens.len();
+        if verify_len == 0 {
+            hanzo_ml::bail!("speculative verification requires at least one token.");
+        }
+        // Dense (non-paged) decode inputs: the verify tokens at contiguous positions
+        // base_len.., with logits requested at every row.
+        let input = Tensor::from_vec(verify_tokens.to_vec(), (1, verify_len), device)?;
+        let positions: Vec<usize> = (base_len..base_len + verify_len).collect();
+        Ok(InputMetadata {
+            input,
+            positions: positions.clone(),
+            context_lens: vec![(0, verify_len)],
+            position_ids: positions,
+            paged_attn_meta: None,
+            flash_meta: FlashParams::empty(true),
+        })
+    }
+
+    fn proposer_cache(&self, _sequences: &[&Sequence]) -> Result<SpeculativeKvCache<'_>> {
+        Ok(SpeculativeKvCache::Normal)
+    }
+}
