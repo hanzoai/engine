@@ -48,6 +48,7 @@ const DEFAULT_MAX_SEQ_LEN: u32 = 1_048_576;
 // ============================ metadata ============================
 
 #[allow(dead_code)]
+#[derive(Clone)]
 pub(crate) struct PropsGGUF {
     pub block_count: usize,
     pub embedding_length: usize,
@@ -848,6 +849,9 @@ pub struct ModelWeights {
     /// the MTP proposer can read it. Same seam as gemma4's `last_spec_hidden`.
     spec_hidden: std::sync::Mutex<Option<Tensor>>,
     store_spec_hidden: std::sync::atomic::AtomicBool,
+    /// Base-model config, retained so the MTP head (a V4 block sharing all hyperparams)
+    /// can be loaded against it, and so the speculative wiring can read n_hc/head_dim.
+    base_props: PropsGGUF,
 }
 
 pub(crate) fn rms_from(t: Tensor, eps: f64) -> Result<RmsNorm> {
@@ -1023,11 +1027,39 @@ impl ModelConfig::FromGGUF for ModelWeights {
             ),
             spec_hidden: std::sync::Mutex::new(None),
             store_spec_hidden: std::sync::atomic::AtomicBool::new(false),
+            base_props: props.clone(),
         })
     }
 }
 
 impl ModelWeights {
+    /// Base-model token embeddings (shared with the MTP head).
+    pub fn embeddings(&self) -> &Embedding {
+        &self.tok_embeddings
+    }
+
+    /// Base-model output projection (shared with the MTP head).
+    pub fn output_head(&self) -> Arc<dyn QuantMethod> {
+        self.output.clone()
+    }
+
+    /// Base-model config, for loading the MTP head against it.
+    pub fn base_props(&self) -> &PropsGGUF {
+        &self.base_props
+    }
+
+    /// The model's compute dtype (the MTP head loads at the same dtype).
+    pub fn compute_dtype(&self) -> DType {
+        self.dtype
+    }
+
+    /// Shared handle to the normal KV cache, for `NormalSpeculativeCacheAccess`.
+    pub fn normal_cache_arc(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<crate::pipeline::NormalCache>>> {
+        self.cache.normal_arc()
+    }
+
     /// Enable/disable stashing the pre-output hidden state for MTP speculative
     /// proposal. Clearing also drops any stashed tensor so a finished step can't leak.
     pub fn set_store_spec_hidden(&self, store: bool) {
