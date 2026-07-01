@@ -31,9 +31,14 @@ use crate::layers::{
 };
 use crate::layers_masker::PastKvLenCache;
 use crate::pipeline::KvCache;
-use hanzo_ml::{DType, Device, Result, Tensor};
+use hanzo_ml::{DType, Device, Result, Tensor, D};
 use hanzo_nn::{Embedding, Module};
 use hanzo_quant::QuantMethod;
+
+use crate::speculative::{
+    SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposer,
+    TargetTokenEmbedder,
+};
 
 use super::deepseek4::HyperConnections;
 use super::quantized_deepseek4::{deq, gguf_linear, rms_from, DecoderLayer, PropsGGUF};
@@ -196,5 +201,103 @@ impl MtpHead {
     /// Head dim (for callers wiring the draft into a speculative loop).
     pub fn head_dim(&self) -> usize {
         self.head_dim
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
+    /// Drop the draft block's KV history. The proposer resets before each draft so the
+    /// MTP attends only to the current token over the target hidden (which already
+    /// encodes the full context) — a stateless draft. This trades some accept rate for
+    /// a drift-free cache; it never affects correctness (the target verify does).
+    pub fn reset_cache(&mut self) {
+        for c in self.cache.iter_mut() {
+            c.reset();
+        }
+    }
+}
+
+/// The `SpeculativeProposer` adapter that plugs the V4 MTP head into the generic
+/// speculative driver. Holds the head plus clones of the base model's token
+/// embeddings + output projection (the head shares both). Correctness comes from the
+/// target verify forward, NOT from the draft — so this uses a stateless single-token
+/// draft (see `MtpHead::reset_cache`); accept rate is what it trades, and that's what
+/// the validation measures.
+pub struct Deepseek4MtpRuntime {
+    mtp: MtpHead,
+    embed: Embedding,
+    output: Arc<dyn QuantMethod>,
+    n_predict: usize,
+}
+
+impl Deepseek4MtpRuntime {
+    pub fn new(
+        mtp: MtpHead,
+        embed: Embedding,
+        output: Arc<dyn QuantMethod>,
+        n_predict: usize,
+    ) -> Self {
+        Self {
+            mtp,
+            embed,
+            output,
+            n_predict: n_predict.max(1),
+        }
+    }
+}
+
+impl SpeculativeProposer for Deepseek4MtpRuntime {
+    fn proposal_len(&self) -> usize {
+        self.n_predict
+    }
+
+    fn propose(
+        &mut self,
+        ctx: SpeculativeProposeBatchCtx<'_>,
+        _target_embedder: Option<&TargetTokenEmbedder<'_>>,
+    ) -> Result<SpeculativeProposalBatch> {
+        let hiddens = ctx.target_hiddens.ok_or_else(|| {
+            hanzo_ml::Error::Msg("V4 MTP requires the target hidden state for proposal".into())
+        })?;
+        let batch = ctx.sampled_tokens.len();
+        if batch == 0 {
+            return Ok(SpeculativeProposalBatch::new(Vec::new()));
+        }
+        let device = self.mtp.device().clone();
+
+        // Draft-from inputs: the just-sampled anchor token per row at its position, and
+        // the target hidden that produced it ([batch, 1, H]).
+        let hidden = if hiddens.dims().len() == 3 {
+            hiddens
+        } else {
+            hiddens.unsqueeze(1)?
+        };
+        let token_ids = Tensor::from_vec(ctx.sampled_tokens.to_vec(), (batch, 1), &device)?;
+        let start_offsets: Vec<usize> = ctx.base_lens.to_vec();
+
+        // Stateless draft — fresh KV each step; the target hidden carries the context.
+        self.mtp.reset_cache();
+        let logits = self
+            .mtp
+            .draft(&hidden, &token_ids, &self.embed, &self.output, &start_offsets)?;
+
+        // n_predict == 1: one greedy draft token per row (the target verify decides
+        // acceptance; the logits ride along for the stochastic path).
+        let draft = logits.argmax(D::Minus1)?.to_dtype(DType::U32)?;
+        let draft_ids: Vec<u32> = draft.flatten_all()?.to_vec1::<u32>()?;
+        if draft_ids.len() != batch {
+            hanzo_ml::bail!(
+                "V4 MTP draft produced {} tokens for {batch} rows",
+                draft_ids.len()
+            );
+        }
+
+        let mut proposals = Vec::with_capacity(batch);
+        for (i, tok) in draft_ids.into_iter().enumerate() {
+            let row_logits = logits.narrow(0, i, 1)?; // [1, 1, vocab]
+            proposals.push(SpeculativeProposal::with_logits(vec![tok], row_logits));
+        }
+        Ok(SpeculativeProposalBatch::new(proposals))
     }
 }
