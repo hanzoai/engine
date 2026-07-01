@@ -4,6 +4,7 @@ members = [
     "hanzo-engine",
     "hanzo-engine-ffi",
     "hanzo-router",
+    "enso",
     "hanzo-server-core",
     "hanzo-server",
     "hanzo-cli",
@@ -22,7 +23,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "1.6.1"
+version = "1.7.0"
 edition = "2021"
 authors = ["Hanzo AI <dev@hanzo.ai>"]
 description = "Fast, flexible LLM inference."
@@ -36,11 +37,11 @@ rust-version = "1.88"
 [workspace.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 # Hanzo ML crates.
-hanzo-ml = { version = "0.11.31" }
-hanzo-nn = { version = "0.11.8" }
-hanzo-flash-attn = { version = "0.11.3" }
+hanzo-ml = { version = "0.11.36" }
+hanzo-nn = { version = "0.11.33" }
+hanzo-flash-attn = { version = "0.11.33" }
 hanzo-flash-attn-v3 = { version = "0.11.3", package = "hanzo-flash-attn" }
-hanzo-metal-kernels = { version = "0.11.3" }
+hanzo-metal-kernels = { version = "0.11.33" }
 
 axum = "0.8.8"
 anyhow = "1.0.100"
@@ -230,10 +231,3 @@ debug = true
 debug = true
 opt-level = 3
 
-# TEMP: pin hanzo-ml to the git commit carrying the fused mHC Sinkhorn kernel
-# (hc_sinkhorn, ml 0.11.36 / kernels 0.11.34) + the DeepSeek-V4 I32 dequant arm.
-# On ml main @ 6ebab002. Drop once ml 0.11.36+ is published to crates.io.
-[patch.crates-io]
-hanzo-ml = { git = "https://github.com/hanzoai/ml", rev = "6ebab002" }
-hanzo-nn = { git = "https://github.com/hanzoai/ml", rev = "6ebab002" }
-hanzo-kernels = { git = "https://github.com/hanzoai/ml", rev = "6ebab002" }

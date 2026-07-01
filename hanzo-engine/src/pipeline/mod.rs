@@ -52,6 +52,7 @@ pub use isq::{
 use llguidance::toktrie::TokEnv;
 pub use loaders::{
     animation_loader, AdapterKind, AnimationComponents, AnimationLoaderType, AnimationModelLoader,
+    DitComponents, EchoMimicV3Loader, MuseTalkComponents,
     AutoDeviceMapParams, AutoEmbeddingLoader, AutoMultimodalLoader, AutoNormalLoader,
     DeepSeekV2Loader, DeepSeekV3Loader, DeepSeekV4Loader, DeviceMappedModelLoader,
     DiffusionLoaderType, MuseTalkAnimationLoader,
