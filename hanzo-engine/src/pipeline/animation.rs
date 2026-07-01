@@ -1,6 +1,7 @@
 use super::text_models_inputs_processor::PagedAttentionMeta;
 use super::{
     animation_loader, AdapterPaths, AnimationComponents, AnimationLoaderType, AnyMoePipelineMixin,
+    MuseTalkComponents,
     Cache, CacheManagerMixin, ChatTemplate, EitherCache, EmbeddingModulePaths, ForwardInputsResult,
     GeneralMetadata, InputProcessorOutput, InputsProcessor, InputsProcessorType, IsqPipelineMixin,
     Loader, MessagesAction, MetadataMixin, Modalities, ModelCategory, ModelKind, ModelPaths,
@@ -281,13 +282,14 @@ impl Pipeline for AnimationPipeline {
 impl AnyMoePipelineMixin for AnimationPipeline {}
 
 const RESIZED_IMG: usize = 256;
-// MuseTalk v1.5 layout in the TMElyralab/MuseTalk repo (real-time footage path).
-const MUSETALK_UNET_WEIGHTS: &str = "musetalkV15/unet.pth";
+// Self-contained MuseTalk bundle: all six sources resolve relative to one `model_id`
+// (a local dir or HF repo). safetensors is the canonical weight format here.
 const MUSETALK_UNET_CONFIG: &str = "musetalkV15/musetalk.json";
-const VAE_WEIGHTS: &str = "diffusion_pytorch_model.safetensors";
-const VAE_CONFIG: &str = "config.json";
-const WHISPER_WEIGHTS: &str = "tiny.pt"; // openai-format checkpoint MuseTalk trained against
-const S3FD_WEIGHTS: &str = "s3fd.pth";
+const MUSETALK_UNET_WEIGHTS: &str = "musetalkV15/unet.safetensors";
+const VAE_CONFIG: &str = "sd-vae-ft-mse/config.json";
+const VAE_WEIGHTS: &str = "sd-vae-ft-mse/diffusion_pytorch_model.safetensors";
+const WHISPER_WEIGHTS: &str = "whisper/tiny.safetensors";
+const S3FD_WEIGHTS: &str = "s3fd.safetensors";
 
 #[derive(Clone, Debug)]
 pub struct AnimationModelPaths {
@@ -360,13 +362,11 @@ impl ModelPaths for AnimationModelPaths {
     }
 }
 
-/// Loads a `FacialAnimator`-backed `AnimationPipeline`. Resolves the four weight
-/// sources (UNet, VAE, whisper, S3FD); the arch picks how they compose.
+/// Loads a `FacialAnimator`-backed `AnimationPipeline` from one MuseTalk bundle: the
+/// four weight sources (UNet, VAE, whisper, S3FD) all resolve as fixed sub-paths of
+/// `model_id`; the arch picks how they compose.
 pub struct AnimationLoader {
     pub model_id: String,
-    pub vae_model_id: String,
-    pub whisper_model_id: String,
-    pub s3fd_model_id: String,
     pub arch: AnimationLoaderType,
     pub options: AnimatorOptions,
 }
@@ -378,7 +378,7 @@ impl AnimationLoader {
         device: &Device,
         silent: bool,
     ) -> Result<hanzo_quant::ShardedVarBuilder> {
-        // MuseTalk ships unet + S3FD as PyTorch pickle (.pth); the VAE is safetensors.
+        // safetensors is canonical; a .pth/.pt pickle (upstream MuseTalk) still loads.
         if path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("safetensors"))
@@ -420,35 +420,24 @@ impl Loader for AnimationLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         let revision = revision.unwrap_or_else(|| "main".to_string());
-        let repo = |id: &str| -> Result<hf_hub::api::sync::ApiRepo> {
-            let api = ApiBuilder::new()
-                .with_progress(!silent)
-                .with_token(get_token(&token_source)?)
-                .build()?;
-            Ok(api.repo(Repo::with_revision(
-                id.to_string(),
-                RepoType::Model,
-                revision.clone(),
-            )))
-        };
-
-        let musetalk = repo(&self.model_id)?;
-        let vae = repo(&self.vae_model_id)?;
-        let whisper = repo(&self.whisper_model_id)?;
-        let s3fd = repo(&self.s3fd_model_id)?;
-
-        let mt_id = std::path::Path::new(&self.model_id);
-        let vae_id = std::path::Path::new(&self.vae_model_id);
-        let wh_id = std::path::Path::new(&self.whisper_model_id);
-        let sf_id = std::path::Path::new(&self.s3fd_model_id);
+        let api = ApiBuilder::new()
+            .with_progress(!silent)
+            .with_token(get_token(&token_source)?)
+            .build()?;
+        let repo = api.repo(Repo::with_revision(
+            self.model_id.clone(),
+            RepoType::Model,
+            revision.clone(),
+        ));
+        let id = std::path::Path::new(&self.model_id);
 
         let paths = AnimationModelPaths::new(
-            api_get_file!(musetalk, MUSETALK_UNET_CONFIG, &mt_id, &revision),
-            api_get_file!(musetalk, MUSETALK_UNET_WEIGHTS, &mt_id, &revision),
-            api_get_file!(vae, VAE_CONFIG, &vae_id, &revision),
-            api_get_file!(vae, VAE_WEIGHTS, &vae_id, &revision),
-            api_get_file!(whisper, WHISPER_WEIGHTS, &wh_id, &revision),
-            api_get_file!(s3fd, S3FD_WEIGHTS, &sf_id, &revision),
+            api_get_file!(repo, MUSETALK_UNET_CONFIG, &id, &revision),
+            api_get_file!(repo, MUSETALK_UNET_WEIGHTS, &id, &revision),
+            api_get_file!(repo, VAE_CONFIG, &id, &revision),
+            api_get_file!(repo, VAE_WEIGHTS, &id, &revision),
+            api_get_file!(repo, WHISPER_WEIGHTS, &id, &revision),
+            api_get_file!(repo, S3FD_WEIGHTS, &id, &revision),
         );
 
         self.load_model_from_path(
@@ -466,7 +455,7 @@ impl Loader for AnimationLoader {
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        dtype: &dyn TryIntoDType,
+        _dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapSetting,
@@ -490,7 +479,9 @@ impl Loader for AnimationLoader {
             .downcast_ref::<AnimationModelPaths>()
             .expect("Path downcast failed.");
 
-        let dtype = dtype.try_into_dtype(&[device])?;
+        // MuseTalk (VAE+UNet) + S3FD + the whisper feature path run F32-native; `Auto` resolves to
+        // F16, which dtype-mismatches conv2d against the F32 activations. F16/BF16 await the GPU effort.
+        let dtype = DType::F32;
 
         let unet: UNetConfig =
             serde_json::from_str(&std::fs::read_to_string(&paths.unet_config)?)?;
@@ -501,7 +492,7 @@ impl Loader for AnimationLoader {
             resized_img: RESIZED_IMG,
         };
 
-        let components = AnimationComponents {
+        let components = AnimationComponents::MuseTalk(MuseTalkComponents {
             musetalk_config,
             vae_vb: Self::load_vb(&paths.vae_weights, dtype, device, silent)?,
             unet_vb: Self::load_vb(&paths.unet_weights, dtype, device, silent)?,
@@ -511,7 +502,7 @@ impl Loader for AnimationLoader {
             device: device.clone(),
             dtype,
             options: self.options,
-        };
+        });
 
         let animator = animation_loader(&self.arch).load(components)?;
         Ok(Arc::new(Mutex::new(AnimationPipeline::new(
