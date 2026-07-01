@@ -840,6 +840,11 @@ pub struct ModelWeights {
     /// Per-layer compressor decode state (history of layer inputs), behind a Mutex like
     /// the KV cache. Reset at the start of each sequence (prefill, start_offset 0).
     comp_state: std::sync::Mutex<Vec<CompressorState>>,
+    /// MTP self-speculative decode: when `store_spec_hidden` is set, the forward stashes
+    /// the post-norm, per-sampled-row hidden state here (before the output projection) so
+    /// the MTP proposer can read it. Same seam as gemma4's `last_spec_hidden`.
+    spec_hidden: std::sync::Mutex<Option<Tensor>>,
+    store_spec_hidden: std::sync::atomic::AtomicBool,
 }
 
 pub(crate) fn rms_from(t: Tensor, eps: f64) -> Result<RmsNorm> {
@@ -1013,11 +1018,31 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     .map(|_| CompressorState::default())
                     .collect(),
             ),
+            spec_hidden: std::sync::Mutex::new(None),
+            store_spec_hidden: std::sync::atomic::AtomicBool::new(false),
         })
     }
 }
 
 impl ModelWeights {
+    /// Enable/disable stashing the pre-output hidden state for MTP speculative
+    /// proposal. Clearing also drops any stashed tensor so a finished step can't leak.
+    pub fn set_store_spec_hidden(&self, store: bool) {
+        self.store_spec_hidden
+            .store(store, std::sync::atomic::Ordering::Relaxed);
+        if !store {
+            if let Ok(mut h) = self.spec_hidden.lock() {
+                *h = None;
+            }
+        }
+    }
+
+    /// The hidden state stashed by the most recent forward (post-norm, per sampled row,
+    /// pre output projection), if capture was enabled. Cloned; the stash is retained.
+    pub fn last_spec_hidden(&self) -> Option<Tensor> {
+        self.spec_hidden.lock().ok().and_then(|h| h.clone())
+    }
+
     pub fn forward(
         &self,
         input_ids: &Tensor,
@@ -1083,6 +1108,15 @@ impl ModelWeights {
         trace_rms(&x, format_args!("v4 reduce_output"));
         let x = self.norm.forward(&x)?;
         let x = extract_logits(&x, context_lens)?;
+        // MTP: stash the per-sampled-row hidden (post-norm, pre-output) for the proposer.
+        if self
+            .store_spec_hidden
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            if let Ok(mut h) = self.spec_hidden.lock() {
+                *h = Some(x.clone());
+            }
+        }
         self.output.forward(&x.contiguous()?)
     }
 }
