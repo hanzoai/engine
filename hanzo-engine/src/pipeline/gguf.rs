@@ -105,7 +105,7 @@ pub struct GGUFPipeline {
     metadata: Arc<GeneralMetadata>,
     generation_defaults: Option<crate::ModelGenerationDefaults>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
-    draft_proposer: Option<crate::speculative::DraftModelProposer>,
+    draft_proposer: Option<Box<dyn crate::speculative::SpeculativeProposer + Send + Sync>>,
     /// Captured ROCm/HIP decode graphs, keyed by decode bucket. See
     /// [`crate::pipeline::rocm_graph`]. Mirrors `NormalPipeline::cuda_decode_graph`.
     #[cfg(feature = "rocm")]
@@ -1522,12 +1522,43 @@ impl Pipeline for GGUFPipeline {
                 let proposer = crate::speculative::DraftModelProposer::new(draft, gamma)?;
                 let info = crate::speculative::SpeculativeAttachInfo::draft_model(gamma);
                 crate::speculative::logging::log_attach(&info);
-                self.draft_proposer = Some(proposer);
+                self.draft_proposer = Some(Box::new(proposer));
                 Ok(())
             }
-            other => hanzo_ml::bail!(
-                "GGUF pipeline supports only draft-model speculative decoding, got {other:?}"
-            ),
+            crate::speculative::SpeculativeConfig::Mtp(mtp_config) => {
+                // Self-speculative MTP: load the draft head against the base model's
+                // config and share its embeddings + output head. Only DeepSeek-V4.
+                let Model::Deepseek4(ref model) = self.model else {
+                    hanzo_ml::bail!("MTP speculative decoding is only supported for DeepSeek-V4");
+                };
+                let path = mtp_config.resolve_path()?;
+                let mut readers = vec![std::fs::File::open(&path).map_err(hanzo_ml::Error::msg)?];
+                let mut readers_ref: Vec<&mut std::fs::File> = readers.iter_mut().collect();
+                let mut ct = crate::gguf::Content::from_readers(&mut readers_ref)?;
+                let head = crate::models::deepseek4_mtp::MtpHead::load(
+                    &mut ct,
+                    model.base_props(),
+                    &model.device,
+                    model.compute_dtype(),
+                )?;
+                let n_predict = mtp_config.n_predict.unwrap_or(1);
+                let runtime = crate::models::deepseek4_mtp::Deepseek4MtpRuntime::new(
+                    head,
+                    model.embeddings().clone(),
+                    model.output_head(),
+                    n_predict,
+                );
+                // Always stash the pre-output hidden — the proposer needs it every step
+                // and the clone is cheap versus the forward.
+                model.set_store_spec_hidden(true);
+                let info = crate::speculative::SpeculativeAttachInfo::mtp(
+                    "deepseek4-mtp".to_string(),
+                    n_predict,
+                );
+                crate::speculative::logging::log_attach(&info);
+                self.draft_proposer = Some(Box::new(runtime));
+                Ok(())
+            }
         }
     }
 
@@ -1575,6 +1606,31 @@ impl Pipeline for GGUFPipeline {
             .await;
         }
 
+        // Non-paged path (DeepSeek-V4 MTP): drive the SAME generic loop over the normal
+        // KV backend. Extract the shared cache handle first so the model borrow is
+        // dropped before the &mut-self driver call.
+        let normal_cache = if let Model::Deepseek4(ref model) = self.model {
+            model
+                .normal_cache_arc()
+                .map(|arc| (arc, model.max_seq_len))
+        } else {
+            None
+        };
+        if let Some((cache_arc, max_seq_len)) = normal_cache {
+            let cache =
+                crate::speculative::cache::NormalSpeculativeCacheAccess::new(cache_arc, max_seq_len);
+            return crate::speculative::driver::try_sample_speculative_causal_gen(
+                self,
+                seqs,
+                logits,
+                prefix_cacher,
+                disable_eos_stop,
+                rng,
+                &cache,
+            )
+            .await;
+        }
+
         crate::speculative::driver::clear_staged_speculative_tokens(seqs);
         Ok(false)
     }
@@ -1606,9 +1662,33 @@ impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
 
     fn speculative_target_hiddens(
         &self,
-        _rows: &[(usize, usize)],
+        rows: &[(usize, usize)],
     ) -> hanzo_ml::Result<Option<Tensor>> {
-        Ok(None)
+        if self.draft_proposer.is_none() || rows.is_empty() {
+            return Ok(None);
+        }
+        let Model::Deepseek4(ref model) = self.model else {
+            return Ok(None);
+        };
+        let Some(hidden) = model.last_spec_hidden() else {
+            return Ok(None);
+        };
+        // The forward stashed the per-row post-norm hidden ([batch, rows, H], aligned
+        // with the extract_logits rows). Gather the (seq, row) the driver asked for
+        // (row = accepted_drafts, the position to draft from) → [n, 1, H].
+        let mut gathered = Vec::with_capacity(rows.len());
+        for &(b, r) in rows {
+            let h = match hidden.dims().len() {
+                3 => hidden.narrow(0, b, 1)?.narrow(1, r, 1)?,
+                2 => hidden.narrow(0, r, 1)?.unsqueeze(0)?,
+                _ => hanzo_ml::bail!(
+                    "unexpected speculative hidden shape {:?}",
+                    hidden.dims()
+                ),
+            };
+            gathered.push(h);
+        }
+        Ok(Some(Tensor::cat(&gathered, 0)?))
     }
 
     fn speculative_propose(
