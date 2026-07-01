@@ -32,6 +32,16 @@ impl EitherCache {
         }
     }
 
+    /// Clone the shared handle to the normal cache (interior-mutable), for callers
+    /// that must snapshot/roll it back while the model is borrowed elsewhere — e.g.
+    /// `NormalSpeculativeCacheAccess`. `None` for non-normal caches.
+    pub fn normal_arc(&self) -> Option<Arc<Mutex<NormalCache>>> {
+        match self {
+            Self::Normal(normal) => Some(normal.clone()),
+            _ => None,
+        }
+    }
+
     /// Panics otherwise!
     pub fn hybrid(&self) -> MutexGuard<'_, HybridCache> {
         match self {
