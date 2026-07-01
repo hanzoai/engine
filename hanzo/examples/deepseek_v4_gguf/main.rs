@@ -13,15 +13,19 @@ async fn main() -> Result<()> {
     // Tight activation budget for the 86GB load on unified memory: a single
     // sequence (default 32) shrinks the KV reservation ~32x, leaving the pool for
     // weights. Pair with IGPU_MEMORY_FRACTION=0.92 on a freed GB10.
-    // The MTP self-speculative draft head is available via `.with_mtp_model(path, n)`
-    // (fully wired + greedy-identical). It's left off here because naive depth-1 MTP
-    // is net-negative single-stream; the net-positive path is EAGLE-style multi-draft.
+    // MTP self-speculative decode is net-positive here (~10.6 vs ~9.8 t/s) via the
+    // non-paged NormalSpeculativeCacheAccess; greedy-identical output preserved (the
+    // target verify decides every token). Drop `.with_mtp_model(..)` for the baseline.
     let model = GgufModelBuilder::new(
         "/home/z/work/zen/hf/ds4-flash-gguf",
         vec!["DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2.gguf".to_string()],
     )
     .with_max_num_seqs(1)
     .with_logging()
+    .with_mtp_model(
+        "/home/z/work/zen/hf/ds4-flash-gguf/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf",
+        Some(1),
+    )
     .build()
     .await?;
 
