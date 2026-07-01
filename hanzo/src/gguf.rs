@@ -38,6 +38,7 @@ pub struct GgufModelBuilder {
     pub(crate) with_logging: bool,
     pub(crate) prefix_cache_n: Option<usize>,
     pub(crate) code_exec_config: Option<hanzo_engine::CodeExecutionConfig>,
+    pub(crate) mtp_config: Option<hanzo_engine::MtpConfig>,
 }
 
 impl GgufModelBuilder {
@@ -72,7 +73,15 @@ impl GgufModelBuilder {
             tool_callbacks: HashMap::new(),
             device: None,
             code_exec_config: None,
+            mtp_config: None,
         }
+    }
+
+    /// Attach an MTP draft head (a separate GGUF) for self-speculative decoding.
+    /// `model` is a path or HF id; `n_predict` is the draft length (defaults to 1).
+    pub fn with_mtp_model(mut self, model: impl Into<String>, n_predict: Option<usize>) -> Self {
+        self.mtp_config = Some(hanzo_engine::MtpConfig::new(model, n_predict));
+        self
     }
 
     /// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding reranker (EmbeddingGemma by default).
