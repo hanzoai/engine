@@ -1487,6 +1487,10 @@ impl Pipeline for GGUFPipeline {
             Ok(ForwardInputsResult::CausalGeneration { logits })
         }
     }
+    fn has_active_speculative_proposer(&self) -> bool {
+        self.draft_proposer.is_some()
+    }
+
     fn attach_speculative(
         &mut self,
         config: crate::speculative::SpeculativeConfig,

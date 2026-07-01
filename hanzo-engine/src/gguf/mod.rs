@@ -34,6 +34,11 @@ pub enum GGUFArchitecture {
     Mistral3,
     Deepseek2,
     Deepseek4,
+    /// The DeepSeek-V4 MTP draft-head GGUF (a separate file). Never loaded as a
+    /// standalone model — opened only by the MTP speculative loader, which reads its
+    /// `mtp.0.*` tensors directly.
+    #[strum(serialize = "deepseek4_mtp_support")]
+    Deepseek4MtpSupport,
 }
 
 // Wraps from_str() for some convenience:
