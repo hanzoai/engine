@@ -1727,6 +1727,11 @@ impl Qwen2_5VLRotaryEmbedding {
 pub struct DeepSeekV2RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
+    /// `-sin`, precomputed once. The absorbed-output inverse rotation
+    /// (`forward_inverse_positions`) rotates by `-θ`; negating the full
+    /// [max_pos, dim/2] cache per call (128 MB f32 at 1M ctx) was ~21% of
+    /// decode GPU time. It's a derived constant — build it with the cache.
+    neg_sin: Tensor,
 }
 
 /// Default for YaRN `mscale` / `mscale_all_dim` when a checkpoint omits them
@@ -1783,8 +1788,9 @@ impl DeepSeekV2RotaryEmbedding {
 
         let sin = freqs.sin()?.to_dtype(dtype)?;
         let cos = freqs.cos()?.to_dtype(dtype)?;
+        let neg_sin = sin.neg()?;
 
-        Ok(Self { sin, cos })
+        Ok(Self { sin, cos, neg_sin })
     }
 
     fn yarn_find_correction_dim(
@@ -1875,8 +1881,9 @@ impl DeepSeekV2RotaryEmbedding {
             Self::yarn_get_mscale(factor, mscale) / Self::yarn_get_mscale(factor, mscale_all_dim);
         let sin = (freqs.sin()? * mscale as f64)?.to_dtype(dtype)?;
         let cos = (freqs.cos()? * mscale as f64)?.to_dtype(dtype)?;
+        let neg_sin = sin.neg()?;
 
-        Ok(Self { sin, cos })
+        Ok(Self { sin, cos, neg_sin })
     }
 
     pub fn new(cfg: &DeepSeekV2RopeConfig, dtype: DType, dev: &Device) -> Result<Self> {
@@ -1933,8 +1940,9 @@ impl DeepSeekV2RotaryEmbedding {
     /// component the latent K==V carried, from the attention output before the
     /// grouped o-projection (`apply_rotary_emb(o, …, inverse=True)`).
     pub fn forward_inverse_positions(&self, x: &Tensor, positions: &Tensor) -> Result<Tensor> {
-        let neg_sin = self.sin.neg()?;
-        let (x, _) = apply_rotary_positions_qk(x, x, &self.cos, &neg_sin, positions, false)?;
+        // `neg_sin` is precomputed (see struct) — the per-position gather picks the
+        // one row it needs; negating the whole cache here was ~21% of decode time.
+        let (x, _) = apply_rotary_positions_qk(x, x, &self.cos, &self.neg_sin, positions, false)?;
         Ok(x)
     }
 }
