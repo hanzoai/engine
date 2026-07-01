@@ -50,6 +50,7 @@ fn get_model_id(model_type: &ModelType) -> String {
         | ModelType::Diffusion { model, .. }
         | ModelType::Speech { model, .. }
         | ModelType::Embedding { model, .. } => model.model_id.clone(),
+        ModelType::Animation { model_id, .. } => model_id.clone(),
     }
 }
 
