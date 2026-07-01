@@ -357,6 +357,7 @@ impl V4Attn {
         positions: &Tensor,
         kv_cache: &mut KvCache,
         comp_state: Option<&mut CompressorState>,
+        is_prefill: bool,
     ) -> Result<Tensor> {
         let (b, s, _) = x.dims3()?;
         // Working dtype for attention + KV cache (the model dtype; BF16 on CUDA) —
@@ -411,7 +412,7 @@ impl V4Attn {
         // perf win) and keeps the O(n) decode. (>window long-context recall via the
         // compressed pool is the eager-path / indexer follow-on.)
         let attn = match (&self.compressor, comp_state) {
-            (Some(comp), Some(state)) if s > 1 => {
+            (Some(comp), Some(state)) if s > 1 && is_prefill => {
                 state.append(x)?;
                 let xh = state.x_history.as_ref().unwrap();
                 let total = xh.dim(1)?;
@@ -804,6 +805,7 @@ impl DecoderLayer {
         positions: &Tensor,
         kv_cache: &mut KvCache,
         comp_state: Option<&mut CompressorState>,
+        is_prefill: bool,
     ) -> Result<Tensor> {
         // Attention sublayer (HC pre → norm → attn → HC post).
         let (xin, post, comb) = self.hc_attn.pre(hc)?;
@@ -813,6 +815,7 @@ impl DecoderLayer {
             positions,
             kv_cache,
             comp_state,
+            is_prefill,
         )?;
         let hc = self.hc_attn.post(hc, &attn, &post, &comb)?;
 
@@ -1080,8 +1083,12 @@ impl ModelWeights {
 
         // Compressor decode state: reset at the start of a fresh sequence (any seq
         // starting at offset 0 — a prefill), then accumulate per layer across steps.
+        // `is_prefill` also gates the compressor itself: it runs on the prefill only,
+        // NOT on a multi-token decode (a speculative verify forward has s>1 but is a
+        // decode continuation — gating on `s>1` alone would wrongly re-run it).
+        let is_prefill = start_offsets.iter().any(|&o| o == 0);
         let mut comp = self.comp_state.lock().unwrap();
-        if start_offsets.iter().any(|&o| o == 0) {
+        if is_prefill {
             for s in comp.iter_mut() {
                 s.x_history = None;
             }
@@ -1100,6 +1107,7 @@ impl ModelWeights {
                 &positions,
                 &mut cache[i],
                 Some(&mut comp[i]),
+                is_prefill,
             )?;
             trace_rms(&hc, format_args!("v4 carrier after layer {i}"));
         }
