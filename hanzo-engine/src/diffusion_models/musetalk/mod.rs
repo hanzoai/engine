@@ -4,7 +4,7 @@ pub mod pipeline;
 pub mod unet;
 pub mod vae;
 
-pub use animator::{AnimatorOptions, MuseTalkAnimator};
+pub use animator::{AnimatorOptions, MuseTalkAnimator, MuseTalkGenerator, S3fdLocator};
 pub use config::{MuseTalkConfig, UNetConfig, VaeConfig};
 pub use pipeline::MuseTalk;
 pub use unet::UNet2DConditionModel;
