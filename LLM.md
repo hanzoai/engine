@@ -164,6 +164,29 @@ When adding new quantization methods:
 2. Add to quantization loading logic in pipelines
 3. Update documentation in `docs/QUANTIZATION.md`
 
+### Facial Animation (MuseTalk)
+
+`hanzo serve --arch musetalk -m <bundle>` loads a MuseTalk lip-sync/avatar model and
+serves `/v1/animate` (alias `/v1/video/lipsync`): POST `{model, visual, audio, fps?}`,
+audio + visual in, dubbed mp4 out. A still image -> Portrait, a video -> Footage
+(lip-sync); the pipeline picks the animator via `accepts()` and the handler muxes the
+rendered frames + driving audio with ffmpeg.
+
+`-m` is a self-contained MuseTalk bundle (a local dir or HF repo). All six sources
+resolve as fixed safetensors sub-paths of the single `model_id`:
+
+    musetalkV15/musetalk.json
+    musetalkV15/unet.safetensors
+    sd-vae-ft-mse/config.json
+    sd-vae-ft-mse/diffusion_pytorch_model.safetensors
+    whisper/tiny.safetensors
+    s3fd.safetensors
+
+Selection path: CLI `--arch musetalk` -> `ModelType::Animation` -> `ModelSelected::Animation`
+-> `AnimationLoader` (`AnimationLoaderType::MuseTalk`) in `pipeline/animation.rs`. Runs on
+CPU today (`Device::Cpu`); GPU is a separate effort. A `.pth`/`.pt` pickle still loads
+(`load_vb`) but safetensors is canonical.
+
 ### Important Files to Know
 
 - `hanzo-engine/src/engine/mod.rs` - Main engine orchestration
@@ -234,6 +257,44 @@ git rebase upstream/master
 # After resolving conflicts, test build
 cargo check --package hanzo-engine --no-default-features --features metal
 ```
+
+## enso -- the learned router policy (brain) for hanzo-router (mechanism)
+
+`hanzo-router` is the routing MECHANISM (registry, SLO gate, placement, dispatch).
+It exposes one seam: the `RoutePolicy` trait --
+`route(&Request, &User, &Slo, &Registry) -> Route { model, level, modality, confidence }`.
+The rule-based `Policy` implements it as the cold-start fallback (placement-agnostic,
+fixed low confidence). New vocabulary lives in `registry` (`Modality`, `Level`) and
+`route` (`Route`, `User`, `Slo`, `REFUSED_MODEL`). Pre-existing API unchanged.
+
+`enso` (separate crate, `enso/`) is the learned POLICY implementing `RoutePolicy`.
+Six orthogonal pieces, one concern each:
+- `featurize`: Request -> feature vector x (hashing + metadata, sub-us; a tiny
+  finetunable encoder swaps in at the same `Featurizer` trait).
+- `profile`: eval rows p per (model, level, modality); `ingest`/`parse_jsonl` fold
+  bench tuples into the table. REAL eval data plugs in HERE (JSONL of `EvalSample`);
+  absent it, `synth` emits clearly-labeled synthetic tuples + an `oracle`.
+- `policy`: the one learnable object -- bilinear utility `x^T W p`.
+- `guard`: two-tier safety -- hot-path keyword classifier + escalate to a `Teacher`
+  seam (Qwen3Guard; `DistilledTeacher` stands in until weights are wired).
+- `selector`: safety-gated, SLO-feasible `argmax[utility - lambda*cost - mu*latency]`.
+- `learner`: offline ridge fit of base W + online per-user LinUCB. `theta_u` is
+  prior-centered at W; `dW_u = theta_u - W` is the per-user delta. Serving is greedy
+  on `theta_u` (sub-ms); UCB exploration runs off the hot path during learning.
+
+Registry is cross-modal: LLMs, dub generators (musetalk/echomimic), image models are
+all profile rows -- "add a model = add a row".
+
+Proof: `cargo test -p enso --test proof -- --nocapture` (add `--release` for the
+latency number). It asserts correct (model, level) picks, per-user bandit divergence
+after feedback (alice -> zen-eco, bob -> zen-ultra on the same request), guard
+block/escalate, sub-ms routing (p99 ~1.5us), and 100% (model, level) accuracy vs the
+oracle on a held-out synthetic split (rule baseline 0% on (model, level): no level/cost
+awareness). 100% reflects well-separated synthetic profiles -- real data will be lower.
+
+Honest scope: the LinUCB per-user bandit is solid and realizable. Per-user real-time
+LoRA over a neural encoder and self-adaptive expert vectors are research-frontier and
+attach at the same `policy`/`learner` seam -- flagged, not faked.
 
 ## Context for All AI Assistants
 

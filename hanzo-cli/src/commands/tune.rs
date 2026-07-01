@@ -218,6 +218,7 @@ fn model_kind(model_type: &ModelType) -> &'static str {
         ModelType::Multimodal { .. } => "multimodal",
         ModelType::Diffusion { .. } => "diffusion",
         ModelType::Speech { .. } => "speech",
+        ModelType::Animation { .. } => "animation",
         ModelType::Embedding { .. } => "embedding",
     }
 }
@@ -238,6 +239,7 @@ fn model_dtype(model_selected: &ModelSelected) -> Option<&'static str> {
         | ModelSelected::DiffusionPlain { dtype, .. }
         | ModelSelected::Run { dtype, .. }
         | ModelSelected::Speech { dtype, .. }
+        | ModelSelected::Animation { dtype, .. }
         | ModelSelected::Embedding { dtype, .. } => Some(match dtype {
             ModelDType::Auto => "auto",
             ModelDType::F16 => "f16",
