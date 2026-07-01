@@ -863,6 +863,12 @@ pub trait Pipeline:
     /// Called from the engine reap path each step; default no-op for pipelines without a proposer.
     fn retain_speculative_seqs(&mut self, _live: &[usize]) {}
 
+    /// Whether a speculative proposer is attached. Governs whether the non-paged decode
+    /// step preserves staged draft tokens (to verify) rather than clearing them.
+    fn has_active_speculative_proposer(&self) -> bool {
+        false
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn try_sample_speculative_causal_gen(
         &mut self,
@@ -890,7 +896,12 @@ pub trait Pipeline:
     ) -> Result<Duration, hanzo_ml::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
-                if !is_prompt && !return_raw_logits {
+                // Non-paged decode: keep staged speculative tokens when a proposer is
+                // active — they're the drafts to verify this step (the input processor
+                // appends them; the driver verifies/clears them). Without a proposer,
+                // reset any stale staged state. (The paged path uses a different backend
+                // arm, so this only governs the non-paged, e.g. DeepSeek-V4 MTP, path.)
+                if !is_prompt && !return_raw_logits && !self.has_active_speculative_proposer() {
                     crate::speculative::driver::clear_staged_speculative_tokens(input_seqs);
                 }
 
