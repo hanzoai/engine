@@ -2740,7 +2740,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2766,7 +2766,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-audio"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "anyhow",
  "apodize",
@@ -2776,7 +2776,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-bench"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2802,7 +2802,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-cli"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -2841,7 +2841,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-code-exec"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2859,7 +2859,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-engine"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -3012,7 +3012,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-llm-mcp"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3034,7 +3034,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-macros"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -3118,7 +3118,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-paged-attn"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "anyhow",
  "cudaforge",
@@ -3134,7 +3134,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-pyo3"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3160,7 +3160,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-quant"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "byteorder",
  "cuda-async",
@@ -3230,7 +3230,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-sandbox"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "anyhow",
  "itoa",
@@ -3246,7 +3246,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3269,7 +3269,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server-core"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3309,7 +3309,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-vision"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "hanzo-ml",
  "image",
@@ -3318,7 +3318,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-web-chat"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "anyhow",
  "axum",
