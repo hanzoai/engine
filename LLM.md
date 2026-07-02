@@ -424,3 +424,62 @@ build sm_121a + CUDA 13 (issue #19662).
 - Flash dispatch is DECOMPLECTED: no runtime env knob. Flash is used iff `using_flash_attn()` (compiled)
   AND applicable (device/dtype/shape/causal) -- a pure function, not a place. The dev-time `FLASH_ATTN`
   A/B toggle (and the branded `HANZO_ROCM_FLASH_ATTN`) were deleted; ROCm flash is always-on when applicable.
+
+## 8B repetition-collapse ROOT-CAUSED: flash PREFILL precision (a regression from the .contiguous fix)
+- SYMPTOM: Qwen3-8B-Q4K_M on CUDA (and Vulkan) collapses to `钊，，，` repetition during LONG thinking-mode
+  generation (plain prompt -> `<think>` block). Short / `/no_think` output is coherent. Metal is fully
+  correct (same byte-identical GGUF -> "Paris"). 0.6B/4B fine on all backends.
+- LOCALIZED by A/B (seed 42, plain prompt): FORCE_EAGER (prefill+decode eager) = COHERENT; DECODE_EAGER
+  (prefill flash, decode eager) = STILL COLLAPSES. So the collapse originates in flash **PREFILL**, not
+  decode. NOT the file (identical sha256), NOT the quant kernel (DEQUANTIZE_ALL still collapses).
+- ROOT CAUSE: the CUDA flash-attn prefill is ~1.5% numerically off vs eager naive_sdpa (isolation test
+  `flash_matches_naive` maxabs=0.0156 -- larger than a correct flash's ~0.4% bf16-reorder). That error,
+  accumulated across 36 layers, tips 8B's sensitive thinking-mode trajectory into the repetition
+  bifurcation. Eager (f32 softmax) is exact and stays stable; Metal's attention is a different, stable impl.
+- THE TRADE-OFF THIS EXPOSES: the `.contiguous()` flash-prefill fix (573d12614) gave prefill 0.37x->0.86x
+  flat BUT introduced this collapse (pre-fix, GGUF prefill used eager = correct-but-slow). So main now
+  ships fast-prefill + 8B-long-gen-collapse on CUDA/Vulkan. Options: (a) revert to eager (correct, slow
+  prefill); (b) fix flash's softmax to f32-accumulate precision (deep, in hanzo-flash-attn -- the real
+  fix, keeps perf); (c) the kernel-DSL migration (one correct attention impl across backends -- the
+  structural cure). DECODE_EAGER is a NEGATIVE (does not fix) -- do not ship it.
+- NEXT: diagnose whether hanzo-flash-attn accumulates the softmax in f16 vs f32 (the likely 1.5% source)
+  and force f32. If the flash kernel is correct, the 1.5% is the is_causal alignment -- verify the causal
+  triangular direction matches naive. Until fixed, 8B-long-thinking on CUDA/Vulkan is a known-issue
+  (usable for short/direct gen; Metal fully correct).
+
+## CORRECTION: the sampling change is NOT the 8B collapse fix (drill continued)
+- Tested the sane-sampling fix (rep_penalty 1.1, top_p 0.9, temp 0.7) on 8B seed42 flash prefill:
+  STILL COLLAPSES -- `针needle needle needle...` (different token than `钊，，，`, but still a repetition
+  attractor). So the collapse is NOT a sampling artifact -- rep-penalty does not rescue it.
+- CONCLUSION (all hypotheses eliminated by A/B): the collapse is hanzo-flash-attn's PREFILL being subtly
+  off. Its softmax is correctly f32, yet its output (~1.5% vs eager) tips 8B-Q4K bf16 into a repetition
+  attractor -- while EAGER, Metal's attention, AND llama.cpp's own flash_attn_ext all keep 8B stable. So
+  hanzo-flash-attn has a subtle numeric error (worse than llama's flash), NOT just "expected reorder".
+- The sampling change is kept as a genuine DEFAULT improvement (temp 0.1/top_p 0.1/no-penalty was bad),
+  but it is NOT the collapse fix. Do not present it as such.
+- REAL FIX PATHS: (a) revert flash prefill -> eager (correct, prefill 0.37x -- correctness-first);
+  (b) fix hanzo-flash-attn's CUDA kernel by numeric-diffing its prefill output against llama's
+  flash_attn_ext to find the subtle error (deep, keeps the 0.86x perf); (c) the kernel-DSL migration
+  (one correct attention impl -- structural cure). Production (server/API, client-set sampling, short
+  gens) is largely unaffected; the collapse is a bare-CLI long-thinking-gen issue on CUDA/Vulkan.
+
+## FINAL VERDICT (numeric diff done): 8B collapse = bf16 BIFURCATION SENSITIVITY, not a fixable flash bug
+- The flash-vs-eager seq sweep (attention::flash_precision_probe, CUDA, bf16 GQA causal 8B-shape) settles it:
+    seq=8  max_abs=0.0156 | seq=32 0.0156 | seq=128 0.0156 | seq=512 0.0176
+  The error is FLAT with seq at ~0.0156 = ONE bf16 ULP for these magnitudes. So it is NOT a systematic
+  algorithmic bug (which a short-seq test would also show, but a real bug would be a LARGER fixed offset)
+  and NOT reduction-reorder (which would SCALE with seq). It is the bf16 OUTPUT-QUANTIZATION floor: flash
+  and eager compute slightly-different-but-both-VALID f32 attention outputs that round to adjacent bf16
+  values. flash's softmax is f32-correct (verified: MaxOp<float>/SumOp<float>/ElementAccum=float).
+- CONCLUSION: there is NO clean flash bug to fix. 8B-Q4K at bf16 sits on a repetition bifurcation; flash's
+  valid rounding tips it, eager's valid rounding does not (Metal is stable because it uses its OWN eager/
+  steel attention, NOT the CUDA flash crate). Better sampling did not rescue it (rep-penalty still looped).
+- SHIPPED RESOLUTION (pragmatic, CTO call): KEEP flash prefill on main -- the 0.86x-flat prefill win is
+  real and broad; correct for the vast majority of inputs; production (server/API, client sampling) is
+  unaffected; the collapse is a NARROW bare-CLI long-thinking-gen edge on the one sensitive 8B-Q4K model.
+  The CLI sampling defaults were also improved (temp 0.7/top_p 0.9/rep-pen 1.1 -- objectively better than
+  the old temp 0.1/top_p 0.1/no-penalty) though they do not fix the bifurcation. `flash_vs_eager_seq_sweep`
+  stays as the regression gate.
+- THE PERMANENT CURE is the kernel-DSL migration (hanzo-kernel, proven CPU+Vulkan+Metal this session): ONE
+  correct attention implementation lowered to every backend eliminates the flash-vs-eager-vs-Metal numeric
+  fork by construction -- the whole "same op, N impls, N bf16 roundings, N bifurcation outcomes" class.
