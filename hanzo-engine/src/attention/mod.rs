@@ -537,3 +537,98 @@ impl Sdpa {
         }
     }
 }
+
+#[cfg(all(test, feature = "flash-attn"))]
+mod flash_correctness {
+    use super::{naive_sdpa, SdpaParams};
+    use crate::attention::backends::flash_attn;
+    use crate::attention::repeat_kv;
+    use hanzo_ml::{DType, Device, Tensor};
+
+    // Additive causal mask (s x s): 0 on/below the diagonal, -inf above.
+    fn causal_mask(s: usize, dev: &Device) -> Tensor {
+        let mut m = vec![0f32; s * s];
+        for i in 0..s {
+            for j in (i + 1)..s {
+                m[i * s + j] = f32::NEG_INFINITY;
+            }
+        }
+        Tensor::from_vec(m, (s, s), dev).unwrap()
+    }
+
+    // The decisive isolation: flash_attn vs the trusted naive_sdpa on IDENTICAL controlled q/k/v.
+    // If these diverge, the bug is in the flash crate/invocation (not the model). Qwen3-8B shape:
+    // 32 Q heads / 8 KV heads, head_dim 128, bf16, causal prefill.
+    #[test]
+    fn flash_matches_naive_causal_gqa_prefill() {
+        let dev = Device::new_cuda(0).expect("cuda:0");
+        let (b, hq, hkv, s, d) = (1usize, 32usize, 8usize, 512usize, 128usize);
+        let scale = 1.0 / (d as f32).sqrt();
+        let params = SdpaParams {
+            n_kv_groups: hq / hkv,
+            softcap: None,
+            softmax_scale: scale,
+            sliding_window: None,
+            sinks: None,
+        };
+        let q = Tensor::randn(0f32, 1., (b, hq, s, d), &dev)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap();
+        let k = Tensor::randn(0f32, 1., (b, hkv, s, d), &dev)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap();
+        let v = Tensor::randn(0f32, 1., (b, hkv, s, d), &dev)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap();
+
+        // Trusted reference: repeat kv to MHA + explicit causal mask + naive sdpa -> (b, hq, s, d).
+        let kr = repeat_kv(k.clone(), params.n_kv_groups).unwrap();
+        let vr = repeat_kv(v.clone(), params.n_kv_groups).unwrap();
+        let mask = causal_mask(s, &dev).to_dtype(DType::BF16).unwrap();
+        let eager = naive_sdpa(&q, &kr, &vr, Some(&mask), &params).unwrap();
+
+        // Flash: same repeated kv, (b,H,s,d)->(b,s,H,d) contiguous, is_causal internal.
+        let qf = q.transpose(1, 2).unwrap().contiguous().unwrap();
+        let kf = kr.transpose(1, 2).unwrap().contiguous().unwrap();
+        let vf = vr.transpose(1, 2).unwrap().contiguous().unwrap();
+        let flash = flash_attn(&qf, &kf, &vf, None, &params)
+            .unwrap()
+            .transpose(1, 2)
+            .unwrap();
+
+        let e = eager
+            .to_dtype(DType::F32)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let f = flash
+            .to_dtype(DType::F32)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let nan = f.iter().filter(|x| x.is_nan()).count();
+        let zeros = f.iter().filter(|x| **x == 0.0).count();
+        let mut maxabs = 0f32;
+        for (a, b) in e.iter().zip(f.iter()) {
+            maxabs = maxabs.max((a - b).abs());
+        }
+        eprintln!(
+            "[flash-vs-naive] n={} nan={} zeros={} maxabs={:.4} eager[0..4]={:?} flash[0..4]={:?}",
+            f.len(),
+            nan,
+            zeros,
+            maxabs,
+            &e[..4],
+            &f[..4]
+        );
+        assert_eq!(nan, 0, "flash produced {nan} NaNs");
+        assert!(maxabs < 0.15, "flash != naive: maxabs={maxabs} (bf16 tol)");
+    }
+}
