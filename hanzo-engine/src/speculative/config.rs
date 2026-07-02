@@ -21,6 +21,13 @@ pub enum SpeculativeConfig {
     Off,
     Mtp(MtpConfig),
     DraftModel { draft: DraftPipeline, gamma: usize },
+    /// DSpark parallel-block draft (Qwen3). `path` is the draft checkpoint directory
+    /// (`config.json` + `model.safetensors`); `confidence_threshold` gates the confident
+    /// draft prefix (`0.0` ⇒ the full block).
+    Dspark {
+        path: String,
+        confidence_threshold: f32,
+    },
 }
 
 impl std::fmt::Debug for SpeculativeConfig {
@@ -31,6 +38,14 @@ impl std::fmt::Debug for SpeculativeConfig {
             Self::DraftModel { gamma, .. } => {
                 f.debug_struct("DraftModel").field("gamma", gamma).finish()
             }
+            Self::Dspark {
+                path,
+                confidence_threshold,
+            } => f
+                .debug_struct("Dspark")
+                .field("path", path)
+                .field("confidence_threshold", confidence_threshold)
+                .finish(),
         }
     }
 }
