@@ -338,6 +338,49 @@ pub(crate) struct V4Attn {
 }
 
 impl V4Attn {
+    /// Dense sliding-window + sinks attention over the raw KV (no compressed rows).
+    /// For q_len 1..=8 (single-token decode AND MTP/EAGLE verify widths) take the
+    /// fused F32 flash-decode kernel directly: the model KNOWS this path is
+    /// plain-causal + sinks + per-row window (exactly the kernel's semantics),
+    /// sidestepping the generic mask-variant ambiguity at the sinks backend.
+    /// ds4-parity numerics AND kills the eager 3-pass on the latency-critical paths.
+    fn dense_attn(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        mask: &AttentionMask,
+        b: usize,
+    ) -> Result<Tensor> {
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        {
+            let s_q = q.dim(2)?;
+            if q.device().is_cuda() && b == 1 && (1..=8).contains(&s_q) {
+                if let Some(sinks) = &self.sdpa.sinks {
+                    let f32d = DType::F32;
+                    let qk = q.squeeze(0)?.to_dtype(f32d)?.contiguous()?;
+                    let kk = k.squeeze(0)?.to_dtype(f32d)?.contiguous()?;
+                    let vv = v.squeeze(0)?.to_dtype(f32d)?.contiguous()?;
+                    let sk = sinks.to_dtype(f32d)?.contiguous()?;
+                    let kvl = kk.dim(1)?;
+                    let win = self.sdpa.sliding_window.unwrap_or(kvl);
+                    let out = hanzo_ml::fattn_decode::fattn_decode_f32_hd512(
+                        &qk,
+                        &kk,
+                        &vv,
+                        Some(&sk),
+                        win,
+                        self.sdpa.softmax_scale,
+                    )?;
+                    return out.unsqueeze(0)?.to_dtype(q.dtype());
+                }
+            }
+        }
+        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+        let _ = b;
+        Sdpa.run_attention(q, k, v, mask, None, &self.sdpa)
+    }
+
     /// Trailing partial-RoPE on `[B, nh, L, hd]` (and the single-head latent),
     /// `inverse = true` un-rotates (the absorbed output path). ds4 rotates the
     /// last `rope_dim` dims; the leading `head_dim - rope_dim` pass through.
@@ -463,12 +506,14 @@ impl V4Attn {
         let attn = match (&self.compressor, comp_state) {
             (Some(comp), Some(state)) if s > 1 && is_prefill && !disable_compressor => {
                 state.append(x)?;
-                let xh = state.x_history.as_ref().unwrap();
-                let total = xh.dim(1)?;
+                let total = state.len;
+                let xh = state.slice(0, total)?;
                 let hist_pos = Tensor::arange(0u32, total as u32, xh.device())?;
-                match comp.compress(xh, &hist_pos)? {
+                match comp.compress(&xh, &hist_pos)? {
                     Some(kvc) => {
                         let nc = kvc.dim(1)?;
+                        // Seed the decode-side row cache: emission continues from here.
+                        state.seed_rows(Some(&kvc), nc);
                         let kvc = kvc
                             .reshape((b, nc, 1, self.head_dim))?
                             .transpose(1, 2)?
@@ -488,9 +533,11 @@ impl V4Attn {
                         let qpos: Vec<u32> = (0..s).map(|j| base + j as u32).collect();
                         let cmask = combined_compressed_mask(
                             &qpos,
+                            0,
                             lk,
                             nc,
                             self.compress_ratio,
+                            self.sdpa.sliding_window,
                             k.device(),
                             wdt,
                         )?;
@@ -506,6 +553,62 @@ impl V4Attn {
                     None => Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa)?,
                 }
             }
+            // Compressed layers at DECODE/VERIFY beyond the raw window: the model's
+            // long-context memory. Heal state from the absolute position (speculative
+            // rollbacks), append this step's inputs, emit due compressed rows, and
+            // attend [raw ++ compressed] with the per-row window/causal mask. Below
+            // the window the compressed rows are provably redundant (raw covers all)
+            // and the fused-kernel arm below handles it.
+            (Some(comp), Some(state)) if !is_prefill && !disable_compressor => {
+                let base = positions
+                    .to_dtype(DType::U32)?
+                    .to_vec1::<u32>()?
+                    .first()
+                    .copied()
+                    .unwrap_or(0) as usize;
+                state.sync_to(base, comp.ratio)?;
+                state.append(x)?;
+                let confirmed = base + s;
+                let kv_len = k.dim(2)?;
+                let window = self.sdpa.sliding_window.unwrap_or(usize::MAX);
+                if kv_len <= window {
+                    // Raw window still covers everything — fused fast path semantics.
+                    self.dense_attn(&q, &k, &v, mask, b)?
+                } else {
+                    let due = confirmed / comp.ratio;
+                    state.emit_due(comp, due, k.device())?;
+                    let nc = state.emitted;
+                    // Raw slice covering every query's window: abs [lo_min, base+s).
+                    let lo_min = (base + 1).saturating_sub(window);
+                    let raw_start = lo_min.min(kv_len - 1);
+                    let raw_n = kv_len - raw_start;
+                    let kw = k.narrow(2, raw_start, raw_n)?;
+                    let vw = v.narrow(2, raw_start, raw_n)?;
+                    let (kf, vf) = match &state.comp_rows {
+                        Some(rows) if nc > 0 => {
+                            let kvc = rows
+                                .narrow(1, 0, nc)?
+                                .reshape((b, nc, 1, self.head_dim))?
+                                .transpose(1, 2)?
+                                .to_dtype(wdt)?;
+                            (Tensor::cat(&[&kw, &kvc], 2)?, Tensor::cat(&[&vw, &kvc], 2)?)
+                        }
+                        _ => (kw.clone(), vw.clone()),
+                    };
+                    let qpos: Vec<u32> = (0..s).map(|j| (base + j) as u32).collect();
+                    let cmask = combined_compressed_mask(
+                        &qpos,
+                        raw_start,
+                        raw_n,
+                        nc,
+                        self.compress_ratio,
+                        Some(window),
+                        k.device(),
+                        wdt,
+                    )?;
+                    Sdpa.run_attention(&q, &kf, &vf, &AttentionMask::Custom(cmask), None, &self.sdpa)?
+                }
+            }
             // Full layers (no compressor) + compressed layers at decode/verify —
             // dense sliding-window + sinks attention. For q_len 1..=8 (single-token
             // decode AND MTP/EAGLE verify widths) take the fused F32 flash-decode
@@ -513,43 +616,7 @@ impl V4Attn {
             // per-row window (exactly the kernel's semantics), sidestepping the
             // generic mask-variant ambiguity at the sinks backend. ds4-parity
             // numerics AND kills the eager 3-pass on the latency-critical paths.
-            _ => {
-                #[cfg(all(feature = "cuda", target_family = "unix"))]
-                let fast = {
-                    let s_q = q.dim(2)?;
-                    if q.device().is_cuda() && b == 1 && (1..=8).contains(&s_q) {
-                        match &self.sdpa.sinks {
-                            Some(sinks) => {
-                                let f32d = DType::F32;
-                                let qk = q.squeeze(0)?.to_dtype(f32d)?.contiguous()?;
-                                let kk = k.squeeze(0)?.to_dtype(f32d)?.contiguous()?;
-                                let vv = v.squeeze(0)?.to_dtype(f32d)?.contiguous()?;
-                                let sk = sinks.to_dtype(f32d)?.contiguous()?;
-                                let kvl = kk.dim(1)?;
-                                let win = self.sdpa.sliding_window.unwrap_or(kvl);
-                                let out = hanzo_ml::fattn_decode::fattn_decode_f32_hd512(
-                                    &qk,
-                                    &kk,
-                                    &vv,
-                                    Some(&sk),
-                                    win,
-                                    self.sdpa.softmax_scale,
-                                )?;
-                                Some(out.unsqueeze(0)?.to_dtype(q.dtype())?)
-                            }
-                            None => None,
-                        }
-                    } else {
-                        None
-                    }
-                };
-                #[cfg(not(all(feature = "cuda", target_family = "unix")))]
-                let fast: Option<Tensor> = None;
-                match fast {
-                    Some(a) => a,
-                    None => Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa)?,
-                }
-            }
+            _ => self.dense_attn(&q, &k, &v, mask, b)?,
         };
 
         // Inverse-RoPE on the output (absorbed: the V latent carried RoPE).
@@ -683,21 +750,112 @@ fn compressed_positions(n: usize, ratio: usize, positions: &Tensor) -> Result<Te
     Tensor::from_vec(v, n, positions.device())
 }
 
-/// Per-layer compressor decode state: the accumulated layer-input history `[b, seq, dim]`.
-/// Reset at the start of each sequence; appended every forward. `compress()` is rebuilt
-/// over the full history each step (correctness-first).
+/// Per-layer compressor decode state: the layer-input history (chunked, `[b, s_i, dim]`
+/// each) plus the incrementally-emitted compressed-KV rows. The history is chunked so
+/// per-step appends are O(1) (no full-history copy); row emission cats only the small
+/// slice it pools. State is SELF-HEALING under speculative rollback: every forward
+/// calls [`Self::sync_to`] with the incoming absolute position, truncating any
+/// history/rows contributed by rejected draft tokens (a row is kept only when its
+/// whole `ratio` window is confirmed).
 #[derive(Default)]
 pub(crate) struct CompressorState {
-    x_history: Option<Tensor>,
+    chunks: Vec<Tensor>, // each [b, s_i, dim]; sum(s_i) == len
+    len: usize,
+    comp_rows: Option<Tensor>, // [b, n_emitted, head_dim] — trailing-RoPE'd rows
+    emitted: usize,
 }
 
 impl CompressorState {
     fn append(&mut self, x: &Tensor) -> Result<()> {
-        self.x_history = Some(match &self.x_history {
-            None => x.clone(),
-            Some(h) => Tensor::cat(&[h, x], 1)?,
-        });
+        self.len += x.dim(1)?;
+        self.chunks.push(x.clone());
         Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.chunks.clear();
+        self.len = 0;
+        self.comp_rows = None;
+        self.emitted = 0;
+    }
+
+    /// Truncate history + emitted rows to `base` confirmed tokens (rollback healing).
+    fn sync_to(&mut self, base: usize, ratio: usize) -> Result<()> {
+        while self.len > base {
+            let last = self.chunks.pop().expect("len>0 implies chunks");
+            let s = last.dim(1)?;
+            if self.len - s >= base {
+                self.len -= s;
+            } else {
+                let keep = base - (self.len - s);
+                self.chunks.push(last.narrow(1, 0, keep)?);
+                self.len = base;
+            }
+        }
+        let max_rows = if ratio == 0 { 0 } else { base / ratio };
+        if self.emitted > max_rows {
+            self.comp_rows = match (&self.comp_rows, max_rows) {
+                (_, 0) => None,
+                (Some(r), n) => Some(r.narrow(1, 0, n)?),
+                (None, _) => None,
+            };
+            self.emitted = max_rows;
+        }
+        Ok(())
+    }
+
+    /// Concatenate history rows `[start, end)` into one `[b, end-start, dim]` tensor.
+    fn slice(&self, start: usize, end: usize) -> Result<Tensor> {
+        let mut parts = Vec::new();
+        let mut off = 0usize;
+        for c in &self.chunks {
+            let s = c.dim(1)?;
+            let (c0, c1) = (off, off + s);
+            off = c1;
+            if c1 <= start || c0 >= end {
+                continue;
+            }
+            let a = start.max(c0) - c0;
+            let b = end.min(c1) - c0;
+            parts.push(c.narrow(1, a, b - a)?);
+        }
+        if parts.len() == 1 {
+            Ok(parts.pop().unwrap())
+        } else {
+            let refs: Vec<&Tensor> = parts.iter().collect();
+            Tensor::cat(&refs, 1)
+        }
+    }
+
+    /// Emit compressed rows up to `due` (== floor(confirmed_len / ratio)), pooling only
+    /// the new rows' windows (+ the previous window for ratio-4 overlap semantics).
+    fn emit_due(&mut self, comp: &Compressor, due: usize, device: &Device) -> Result<()> {
+        while self.emitted < due {
+            let j = self.emitted;
+            let r = comp.ratio;
+            let slice_start = j.saturating_sub(1) * r; // include window j-1 for overlap
+            let slice_end = (j + 1) * r;
+            let x = self.slice(slice_start, slice_end)?;
+            let pos: Vec<u32> = (slice_start as u32..slice_end as u32).collect();
+            let pos = Tensor::from_vec(pos, slice_end - slice_start, device)?;
+            let rows = comp
+                .compress(&x, &pos)?
+                .ok_or_else(|| hanzo_ml::Error::Msg("compressor emitted no row".into()))?;
+            let n = rows.dim(1)?;
+            let newest = rows.narrow(1, n - 1, 1)?; // [b,1,hd]
+            self.comp_rows = Some(match &self.comp_rows {
+                None => newest,
+                Some(rws) => Tensor::cat(&[rws, &newest], 1)?,
+            });
+            self.emitted += 1;
+        }
+        Ok(())
+    }
+
+    /// Seed the row cache from a full-prefill compress result.
+    fn seed_rows(&mut self, rows: Option<&Tensor>, n: usize) {
+        self.comp_rows = rows.cloned();
+        self.emitted = n;
     }
 }
 
@@ -705,11 +863,14 @@ impl CompressorState {
 /// raw part is causal (query at abs-pos `p` sees raw `j <= p`); compressed part lets `p`
 /// see row `jc` iff `jc < (p+1)/ratio` (the row's window is fully in the past). Matches
 /// model.py `get_window_topk_idxs` (causal window) ++ `get_compress_topk_idxs`.
+#[allow(clippy::too_many_arguments)]
 fn combined_compressed_mask(
     q_positions: &[u32],
+    raw_abs_start: usize,
     lk: usize,
     nc: usize,
     ratio: usize,
+    window: Option<usize>,
     device: &Device,
     dtype: DType,
 ) -> Result<Tensor> {
@@ -719,8 +880,12 @@ fn combined_compressed_mask(
     for (i, &p) in q_positions.iter().enumerate() {
         let p = p as usize;
         let row = i * (lk + nc);
+        // Raw columns: absolute position `raw_abs_start + j`; visible iff within the
+        // query's causal past AND its sliding window (model.py get_window_topk_idxs).
+        let lo = window.map_or(0, |w| (p + 1).saturating_sub(w));
         for j in 0..lk {
-            if j > p {
+            let abs = raw_abs_start + j;
+            if abs > p || abs < lo {
                 m[row + j] = neg;
             }
         }
@@ -1219,7 +1384,7 @@ impl ModelWeights {
         let mut comp = self.comp_state.lock().unwrap();
         if is_prefill {
             for s in comp.iter_mut() {
-                s.x_history = None;
+                s.reset();
             }
         }
 
