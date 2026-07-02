@@ -596,4 +596,96 @@ mod tests {
         );
         Ok(())
     }
+
+    /// Cross-language parity: the Rust `draft_block` must reproduce the DeepSpec
+    /// Python reference (deepspec/eval/dspark/draft_ops.py) bit-close on identical
+    /// inputs. The reference dump is produced by `scratchpad/dspark_ref_dump.py`
+    /// (fixed seed, F32): 5 target-layer hiddens [ctx_len,H] + corrected block
+    /// logits [bs,vocab] + tokens [bs] + confidence [bs], with ctx_len=12,
+    /// anchor_pos=12, anchor_token=100. Run explicitly:
+    ///   cargo test -p hanzo-engine dspark_matches_python_reference -- --ignored --nocapture
+    #[test]
+    #[ignore = "needs the Python reference dump + local checkpoint"]
+    fn dspark_matches_python_reference() -> Result<()> {
+        const REF: &str = "/tmp/claude-1000/-home-z-work-lux/\
+95715740-b8bb-4d96-8a9c-010a600ec9a6/scratchpad/dspark_ref.safetensors";
+        // Must match dspark_ref_dump.py.
+        const CTX_LEN: usize = 12;
+        const ANCHOR_POS: usize = 12;
+        const ANCHOR_TOKEN: u32 = 100;
+
+        let dir = std::path::Path::new(CKPT_DIR);
+        let weights = dir.join("model.safetensors");
+        let refp = std::path::Path::new(REF);
+        if !weights.exists() || !refp.exists() {
+            eprintln!("skipping: need checkpoint {} + ref dump {}", weights.display(), REF);
+            return Ok(());
+        }
+
+        let dev = Device::Cpu;
+        let cfg = DSparkConfig::from_json_file(dir.join("config.json"))?;
+        let vb = dspark_varbuilder(&weights, DType::F32, &dev)?;
+        let model = Qwen3DSpark::load(cfg, vb)?;
+
+        // Load the reference dump (same inputs the Python side used).
+        let refs = hanzo_ml::safetensors::load(refp, &dev)?;
+        let hiddens: Vec<Tensor> = (0..model.config().num_fused_layers())
+            .map(|i| refs[&format!("target_hidden_{i}")].to_dtype(DType::F32))
+            .collect::<Result<_>>()?;
+        assert_eq!(hiddens[0].dims(), &[CTX_LEN, model.config().hidden_size]);
+
+        let (tokens, logits, confidence) =
+            model.draft_block(&hiddens, ANCHOR_TOKEN, ANCHOR_POS, 0.0)?;
+
+        // Compare the Markov-corrected block logits (backbone + Markov) — the
+        // decisive numeric check. Small tolerance for F32 reduction-order drift.
+        let got = logits.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+        let exp = refs["corrected_logits"].to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(got.len(), exp.len(), "logit count mismatch");
+        let max_abs = got
+            .iter()
+            .zip(&exp)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0f32, f32::max);
+        let mean_abs = got.iter().zip(&exp).map(|(a, b)| (a - b).abs()).sum::<f32>()
+            / got.len() as f32;
+        eprintln!("corrected-logit max|Δ| = {max_abs:.5}, mean|Δ| = {mean_abs:.6}");
+
+        // Token agreement (the operational signal — do the drafts match?).
+        let got_toks = tokens.to_vec1::<u32>()?;
+        let exp_toks: Vec<u32> = refs["tokens"]
+            .to_dtype(DType::U32)?
+            .to_vec1::<u32>()?;
+        eprintln!("rust tokens = {got_toks:?}");
+        eprintln!("ref  tokens = {exp_toks:?}");
+        let tok_match = got_toks.iter().zip(&exp_toks).filter(|(a, b)| a == b).count();
+
+        // Confidence parity.
+        let got_conf = confidence.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+        let exp_conf = refs["confidence"].to_dtype(DType::F32)?.to_vec1::<f32>()?;
+        let conf_max = got_conf
+            .iter()
+            .zip(&exp_conf)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0f32, f32::max);
+        eprintln!("rust conf = {got_conf:?}");
+        eprintln!("ref  conf = {exp_conf:?}");
+        eprintln!("confidence max|Δ| = {conf_max:.5}");
+
+        assert!(
+            max_abs < 5e-2,
+            "corrected block logits diverge from Python reference (max|Δ|={max_abs})"
+        );
+        assert_eq!(
+            tok_match,
+            exp_toks.len(),
+            "draft tokens diverge from Python reference: rust {got_toks:?} vs ref {exp_toks:?}"
+        );
+        assert!(
+            conf_max < 5e-2,
+            "confidence diverges from Python reference (max|Δ|={conf_max})"
+        );
+        eprintln!("✓ Rust draft_block matches the DeepSpec Python reference");
+        Ok(())
+    }
 }
