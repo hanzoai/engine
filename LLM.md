@@ -446,3 +446,19 @@ build sm_121a + CUDA 13 (issue #19662).
   and force f32. If the flash kernel is correct, the 1.5% is the is_causal alignment -- verify the causal
   triangular direction matches naive. Until fixed, 8B-long-thinking on CUDA/Vulkan is a known-issue
   (usable for short/direct gen; Metal fully correct).
+
+## CORRECTION: the sampling change is NOT the 8B collapse fix (drill continued)
+- Tested the sane-sampling fix (rep_penalty 1.1, top_p 0.9, temp 0.7) on 8B seed42 flash prefill:
+  STILL COLLAPSES -- `针needle needle needle...` (different token than `钊，，，`, but still a repetition
+  attractor). So the collapse is NOT a sampling artifact -- rep-penalty does not rescue it.
+- CONCLUSION (all hypotheses eliminated by A/B): the collapse is hanzo-flash-attn's PREFILL being subtly
+  off. Its softmax is correctly f32, yet its output (~1.5% vs eager) tips 8B-Q4K bf16 into a repetition
+  attractor -- while EAGER, Metal's attention, AND llama.cpp's own flash_attn_ext all keep 8B stable. So
+  hanzo-flash-attn has a subtle numeric error (worse than llama's flash), NOT just "expected reorder".
+- The sampling change is kept as a genuine DEFAULT improvement (temp 0.1/top_p 0.1/no-penalty was bad),
+  but it is NOT the collapse fix. Do not present it as such.
+- REAL FIX PATHS: (a) revert flash prefill -> eager (correct, prefill 0.37x -- correctness-first);
+  (b) fix hanzo-flash-attn's CUDA kernel by numeric-diffing its prefill output against llama's
+  flash_attn_ext to find the subtle error (deep, keeps the 0.86x perf); (c) the kernel-DSL migration
+  (one correct attention impl -- structural cure). Production (server/API, client-set sampling, short
+  gens) is largely unaffected; the collapse is a bare-CLI long-thinking-gen issue on CUDA/Vulkan.
