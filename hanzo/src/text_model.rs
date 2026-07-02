@@ -35,6 +35,9 @@ pub struct TextModelBuilder {
     pub(crate) mcp_client_config: Option<McpClientConfig>,
     pub(crate) code_exec_config: Option<hanzo_engine::CodeExecutionConfig>,
     pub(crate) mtp_config: Option<MtpConfig>,
+    /// DSpark parallel-block speculative draft: `(checkpoint_dir, confidence_threshold)`.
+    /// Attached after load via `SpeculativeConfig::Dspark`; requires the non-paged path.
+    pub(crate) dspark_config: Option<(String, f32)>,
     pub(crate) device: Option<Device>,
     pub(crate) matformer_config_path: Option<PathBuf>,
     pub(crate) matformer_slice_name: Option<String>,
@@ -151,6 +154,7 @@ impl TextModelBuilder {
             mcp_client_config: None,
             code_exec_config: None,
             mtp_config: None,
+            dspark_config: None,
             device: None,
             matformer_config_path: None,
             matformer_slice_name: None,
@@ -159,6 +163,15 @@ impl TextModelBuilder {
 
     // Shared methods from builder_macros.rs
     common_builder_methods!();
+
+    /// Attach a DSpark parallel-block speculative draft (Qwen3). `path` is the draft checkpoint
+    /// directory (`config.json` + `model.safetensors`); `confidence_threshold` gates the confident
+    /// draft prefix (`0.0` ⇒ the whole block). Do not enable PagedAttention alongside it — DSpark
+    /// rides the non-paged normal KV path.
+    pub fn with_dspark(mut self, path: impl Into<String>, confidence_threshold: f32) -> Self {
+        self.dspark_config = Some((path.into(), confidence_threshold));
+        self
+    }
 
     /// Configure MCP client to connect to external MCP servers and automatically
     /// register their tools for use in automatic tool calling.
