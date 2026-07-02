@@ -36,11 +36,11 @@ rust-version = "1.88"
 [workspace.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 # Hanzo ML crates.
-hanzo-ml = { version = "0.11.31" }
+hanzo-ml = { version = "0.11.32" }
 hanzo-nn = { version = "0.11.8" }
 hanzo-flash-attn = { version = "0.11.3" }
 hanzo-flash-attn-v3 = { version = "0.11.3", package = "hanzo-flash-attn" }
-hanzo-metal-kernels = { version = "0.11.3" }
+hanzo-metal-kernels = { version = "0.11.9" }
 
 axum = "0.8.8"
 anyhow = "1.0.100"
@@ -229,11 +229,3 @@ debug = true
 [profile.dev]
 debug = true
 opt-level = 3
-
-# TEMP: pin hanzo-ml to the git commit carrying the DeepSeek-V4 I32 dequant arm
-# (ffn_gate_tid2eid load). crates.io 0.11.31 predates it; this commit (v0.11.32)
-# has all 3 I32 pieces. Drop once ml 0.11.32+ is published to crates.io.
-[patch.crates-io]
-hanzo-ml = { git = "https://github.com/hanzoai/ml", rev = "28ee18cf5f87c059b0578c752e457c7418c050e6" }
-hanzo-nn = { git = "https://github.com/hanzoai/ml", rev = "28ee18cf5f87c059b0578c752e457c7418c050e6" }
-hanzo-kernels = { git = "https://github.com/hanzoai/ml", rev = "28ee18cf5f87c059b0578c752e457c7418c050e6" }
