@@ -231,3 +231,10 @@ debug = true
 debug = true
 opt-level = 3
 
+
+# V4-parity campaign: local ml-mmq (same 0.11.36/0.11.34 lineage as crates.io)
+# + the fused F32 hd512 flash-decode kernel (feat/fattn-decode-ds4). DROP once
+# hanzo-ml with fattn_decode is published and the dep bumps.
+[patch.crates-io]
+hanzo-ml = { path = "/home/z/work/hanzo/ml-mmq/hanzo-ml" }
+hanzo-kernels = { path = "/home/z/work/hanzo/ml-mmq/hanzo-kernels" }
