@@ -64,7 +64,21 @@ async fn main() -> Result<()> {
 
     // A prompt that elicits sustained generation so the reported decode rate is
     // steady-state, not dominated by the first few tokens.
-    let messages = RequestBuilder::new()
+    //
+    // env DUMP_LOGPROBS=<path>: ds4-parity diagnostic mode. Adds ds4's default
+    // system prompt ("You are a helpful assistant" — ds4_cli.c:1402) so the
+    // rendered token sequence matches ds4's (BOS + system + <|User|> + prompt +
+    // <|Assistant|> + <think>), and dumps per-step greedy top-10 logprobs as JSON
+    // for a token-exact trajectory diff against `ds4 --dump-logprobs`.
+    let dump_path = std::env::var("DUMP_LOGPROBS").ok();
+    let mut messages = RequestBuilder::new();
+    if dump_path.is_some() {
+        messages = messages
+            .add_message(TextMessageRole::System, "You are a helpful assistant")
+            .return_logprobs(true)
+            .set_sampler_topn_logprobs(10);
+    }
+    let messages = messages
         .add_message(TextMessageRole::User, prompt)
         .set_sampler_max_len(max_len);
 
@@ -79,10 +93,16 @@ async fn main() -> Result<()> {
         .unwrap_or("<none>");
     println!("\n=== DEEPSEEK-V4 OUTPUT ===\n{text}");
     println!(
-        "=== tok/s: prompt {:?} compl {:?} | completion_tokens {} ===",
+        "=== tok/s: prompt {:?} compl {:?} | prompt_tokens {} completion_tokens {} ===",
         response.usage.avg_prompt_tok_per_sec,
         response.usage.avg_compl_tok_per_sec,
+        response.usage.prompt_tokens,
         response.usage.completion_tokens,
     );
+    if let Some(path) = dump_path {
+        let json = serde_json::to_string_pretty(&response.choices[0].logprobs)?;
+        std::fs::write(&path, json)?;
+        println!("=== logprobs dumped -> {path} ===");
+    }
     Ok(())
 }

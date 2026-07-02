@@ -85,6 +85,32 @@ fn sinks_attn_regular(
         );
     }
 
+    // head_dim-512 decode (DeepSeek-V4 absorbed-MLA latent): fused F32
+    // online-softmax flash-decode kernel, a faithful port of ds4's
+    // `attention_decode_mixed_heads8_online_kernel` (sink folded into the
+    // denominator only; ds4's sliding-window clamp). All-F32 = ds4-parity
+    // numerics AND replaces the slow eager 3-pass below on the decode path.
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    if q.device().is_cuda() && head_dim == 512 && q.dim(2)? == 1 && q.dim(0)? == 1 {
+        let in_dtype = q.dtype();
+        let f32 = hanzo_ml::DType::F32;
+        let qk = q.squeeze(0)?.to_dtype(f32)?.contiguous()?; // [H, 1, 512]
+        let kk = k.squeeze(0)?.to_dtype(f32)?.contiguous()?; // [kv_H, kv_len, 512]
+        let vv = v.squeeze(0)?.to_dtype(f32)?.contiguous()?;
+        let sk = sinks.to_dtype(f32)?.contiguous()?; // [H]
+        let kv_len = kk.dim(1)?;
+        let win = if window_size == 0 { kv_len } else { window_size };
+        let out = hanzo_ml::fattn_decode::fattn_decode_f32_hd512(
+            &qk,
+            &kk,
+            &vv,
+            Some(&sk),
+            win,
+            sdpa_params.softmax_scale,
+        )?;
+        return out.unsqueeze(0)?.to_dtype(in_dtype); // [1, H, 1, 512]
+    }
+
     #[cfg(feature = "metal")]
     if q.device().is_metal() && flash_ok {
         return hanzo_quant::flash_attn_sinks_metal(
