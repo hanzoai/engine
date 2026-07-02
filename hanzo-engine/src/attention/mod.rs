@@ -544,3 +544,43 @@ impl Sdpa {
         }
     }
 }
+
+#[cfg(all(test, feature = "flash-attn"))]
+mod flash_precision_probe {
+    use super::{naive_sdpa, repeat_kv, SdpaParams};
+    use crate::attention::backends::flash_attn;
+    use hanzo_ml::{DType, Device, Tensor};
+
+    fn causal_mask(s: usize, dev: &Device) -> Tensor {
+        let mut m = vec![0f32; s * s];
+        for i in 0..s { for j in (i + 1)..s { m[i * s + j] = f32::NEG_INFINITY; } }
+        Tensor::from_vec(m, (s, s), dev).unwrap()
+    }
+
+    // Flash vs eager (exact f32-softmax reference) across seq lengths. If max_rel is FLAT with seq -> a
+    // SYSTEMATIC error (real bug). If it SCALES with seq -> reduction-reorder noise (model sensitivity).
+    #[test]
+    fn flash_vs_eager_seq_sweep() {
+        let dev = Device::new_cuda(0).expect("cuda");
+        let (hq, hkv, d) = (32usize, 8usize, 128usize);
+        let scale = 1.0 / (d as f32).sqrt();
+        let p = SdpaParams { n_kv_groups: hq / hkv, softcap: None, softmax_scale: scale, sliding_window: None, sinks: None };
+        for &s in &[8usize, 32, 128, 512] {
+            let q = Tensor::randn(0f32, 1., (1, hq, s, d), &dev).unwrap().to_dtype(DType::BF16).unwrap();
+            let k = Tensor::randn(0f32, 1., (1, hkv, s, d), &dev).unwrap().to_dtype(DType::BF16).unwrap();
+            let v = Tensor::randn(0f32, 1., (1, hkv, s, d), &dev).unwrap().to_dtype(DType::BF16).unwrap();
+            let kr = repeat_kv(k.clone(), p.n_kv_groups).unwrap();
+            let vr = repeat_kv(v.clone(), p.n_kv_groups).unwrap();
+            let eager = naive_sdpa(&q, &kr, &vr, Some(&causal_mask(s, &dev).to_dtype(DType::BF16).unwrap()), &p).unwrap();
+            let qf = q.transpose(1,2).unwrap().contiguous().unwrap();
+            let kf = kr.transpose(1,2).unwrap().contiguous().unwrap();
+            let vf = vr.transpose(1,2).unwrap().contiguous().unwrap();
+            let flash = flash_attn(&qf,&kf,&vf,None,&p).unwrap().transpose(1,2).unwrap();
+            let e: Vec<f32> = eager.to_dtype(DType::F32).unwrap().flatten_all().unwrap().to_vec1().unwrap();
+            let f: Vec<f32> = flash.to_dtype(DType::F32).unwrap().flatten_all().unwrap().to_vec1().unwrap();
+            let (mut mr, mut ma) = (0f32, 0f32);
+            for (a,b) in e.iter().zip(f.iter()) { let dd=(a-b).abs(); ma=ma.max(dd); mr=mr.max(dd/a.abs().max(1e-3)); }
+            eprintln!("[flash-vs-eager] seq={:<4} max_abs={:.4} max_rel={:.4}", s, ma, mr);
+        }
+    }
+}
