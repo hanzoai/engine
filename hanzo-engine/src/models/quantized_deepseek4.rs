@@ -412,8 +412,15 @@ impl V4Attn {
         // it at decode makes the decode forward shape-stable + capture-eligible (the big
         // perf win) and keeps the O(n) decode. (>window long-context recall via the
         // compressed pool is the eager-path / indexer follow-on.)
+        // Diagnostic kill-switch (env V4_DISABLE_COMPRESSOR=1): drop the compressed-KV
+        // rows from prefill attention entirely — at ctx <= window the raw rows cover
+        // everything, so this isolates whether the compressor path shifts the logits
+        // vs the ds4 reference. Not for production (>window ctx needs the rows).
+        static DISABLE_COMPRESSOR: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let disable_compressor = *DISABLE_COMPRESSOR
+            .get_or_init(|| std::env::var("V4_DISABLE_COMPRESSOR").is_ok_and(|v| v == "1"));
         let attn = match (&self.compressor, comp_state) {
-            (Some(comp), Some(state)) if s > 1 && is_prefill => {
+            (Some(comp), Some(state)) if s > 1 && is_prefill && !disable_compressor => {
                 state.append(x)?;
                 let xh = state.x_history.as_ref().unwrap();
                 let total = xh.dim(1)?;
