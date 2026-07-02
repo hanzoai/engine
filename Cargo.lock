@@ -2976,9 +2976,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-flash-attn"
-version = "0.11.33"
+version = "0.11.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbb79790cb5ddf063df99236b8655dd244bc090ac9c7f0ce3ca32739c5dc30fb"
+checksum = "ffdf8315293276d8a4e7e0967238a110ec048ef8fc076f1de5fd6e77522ab932"
 dependencies = [
  "anyhow",
  "bindgen_cuda",

@@ -51,22 +51,6 @@ pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn}
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
 
-/// Cached `HANZO_ROCM_FLASH_ATTN` gate (default on); set to `0` to force the eager rocBLAS path.
-#[cfg(feature = "rocm")]
-fn rocm_flash_attn_enabled() -> bool {
-    use std::sync::atomic::{AtomicU8, Ordering};
-    static CACHED: AtomicU8 = AtomicU8::new(u8::MAX);
-    let cached = CACHED.load(Ordering::Relaxed);
-    if cached != u8::MAX {
-        return cached == 1;
-    }
-    let enabled = !matches!(
-        std::env::var("HANZO_ROCM_FLASH_ATTN").as_deref(),
-        Ok("0") | Ok("false")
-    );
-    CACHED.store(u8::from(enabled), Ordering::Relaxed);
-    enabled
-}
 
 /// Generic chunked attention computation that can be used by different backends
 pub(crate) fn chunked_attention<F>(
@@ -253,7 +237,6 @@ impl Sdpa {
         // through to the eager path. The kernel does GQA, so it takes the un-expanded k/v.
         #[cfg(feature = "rocm")]
         if q.device().is_rocm()
-            && rocm_flash_attn_enabled()
             && !matches!(mask, AttentionMask::None if !do_causal)
         {
             const ROCM_FLASH_MIN_SEQ: usize = 768;
@@ -279,6 +262,16 @@ impl Sdpa {
                 );
             }
         }
+
+        // NOTE: CUDA GGUF prefill uses a Custom causal mask and falls to eager naive_sdpa below, which
+        // materializes the [seq x seq] score matrix -> O(n^2) prefill (measured: 8B pp512/pp2048 collapse
+        // 0.84x->0.37x of llama while llama's fused flash stays flat ~3000 t/s). Routing this Custom-mask
+        // prefill to the fused `flash_attn` (drop the redundant causal mask, like the ROCm block above)
+        // is a PROVEN ~1.8-2.4x prefill lever (flat vs length) -- BUT the hanzo-flash-attn CUDA path
+        // produces GARBAGE logits for this config (bf16 GGUF, paged, causal); contiguous + GQA->MHA
+        // repeat_kv + window/bf16-dispatch checks all ruled out, so it needs a numeric flash-vs-eager
+        // tensor diff to isolate. Tracked as the #1 CUDA prefill follow-up (engine LLM.md). Until fixed,
+        // GGUF prefill stays on the correct eager path.
 
         // Custom mask, eager attention (flash can't use arbitrary mask tensors)
         if let AttentionMask::Custom(mask_tensor) = mask {
