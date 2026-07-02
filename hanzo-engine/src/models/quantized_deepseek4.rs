@@ -506,8 +506,50 @@ impl V4Attn {
                     None => Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa)?,
                 }
             }
-            // Full layers (no compressor) — dense sliding-window + sinks attention.
-            _ => Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa)?,
+            // Full layers (no compressor) + compressed layers at decode/verify —
+            // dense sliding-window + sinks attention. For q_len 1..=8 (single-token
+            // decode AND MTP/EAGLE verify widths) take the fused F32 flash-decode
+            // kernel directly: the model KNOWS this arm is plain-causal + sinks +
+            // per-row window (exactly the kernel's semantics), sidestepping the
+            // generic mask-variant ambiguity at the sinks backend. ds4-parity
+            // numerics AND kills the eager 3-pass on the latency-critical paths.
+            _ => {
+                #[cfg(all(feature = "cuda", target_family = "unix"))]
+                let fast = {
+                    let s_q = q.dim(2)?;
+                    if q.device().is_cuda() && b == 1 && (1..=8).contains(&s_q) {
+                        match &self.sdpa.sinks {
+                            Some(sinks) => {
+                                let f32d = DType::F32;
+                                let qk = q.squeeze(0)?.to_dtype(f32d)?.contiguous()?;
+                                let kk = k.squeeze(0)?.to_dtype(f32d)?.contiguous()?;
+                                let vv = v.squeeze(0)?.to_dtype(f32d)?.contiguous()?;
+                                let sk = sinks.to_dtype(f32d)?.contiguous()?;
+                                let kvl = kk.dim(1)?;
+                                let win = self.sdpa.sliding_window.unwrap_or(kvl);
+                                let out = hanzo_ml::fattn_decode::fattn_decode_f32_hd512(
+                                    &qk,
+                                    &kk,
+                                    &vv,
+                                    Some(&sk),
+                                    win,
+                                    self.sdpa.softmax_scale,
+                                )?;
+                                Some(out.unsqueeze(0)?.to_dtype(q.dtype())?)
+                            }
+                            None => None,
+                        }
+                    } else {
+                        None
+                    }
+                };
+                #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+                let fast: Option<Tensor> = None;
+                match fast {
+                    Some(a) => a,
+                    None => Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa)?,
+                }
+            }
         };
 
         // Inverse-RoPE on the output (absorbed: the V latent carried RoPE).
