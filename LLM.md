@@ -424,3 +424,25 @@ build sm_121a + CUDA 13 (issue #19662).
 - Flash dispatch is DECOMPLECTED: no runtime env knob. Flash is used iff `using_flash_attn()` (compiled)
   AND applicable (device/dtype/shape/causal) -- a pure function, not a place. The dev-time `FLASH_ATTN`
   A/B toggle (and the branded `HANZO_ROCM_FLASH_ATTN`) were deleted; ROCm flash is always-on when applicable.
+
+## 8B repetition-collapse ROOT-CAUSED: flash PREFILL precision (a regression from the .contiguous fix)
+- SYMPTOM: Qwen3-8B-Q4K_M on CUDA (and Vulkan) collapses to `钊，，，` repetition during LONG thinking-mode
+  generation (plain prompt -> `<think>` block). Short / `/no_think` output is coherent. Metal is fully
+  correct (same byte-identical GGUF -> "Paris"). 0.6B/4B fine on all backends.
+- LOCALIZED by A/B (seed 42, plain prompt): FORCE_EAGER (prefill+decode eager) = COHERENT; DECODE_EAGER
+  (prefill flash, decode eager) = STILL COLLAPSES. So the collapse originates in flash **PREFILL**, not
+  decode. NOT the file (identical sha256), NOT the quant kernel (DEQUANTIZE_ALL still collapses).
+- ROOT CAUSE: the CUDA flash-attn prefill is ~1.5% numerically off vs eager naive_sdpa (isolation test
+  `flash_matches_naive` maxabs=0.0156 -- larger than a correct flash's ~0.4% bf16-reorder). That error,
+  accumulated across 36 layers, tips 8B's sensitive thinking-mode trajectory into the repetition
+  bifurcation. Eager (f32 softmax) is exact and stays stable; Metal's attention is a different, stable impl.
+- THE TRADE-OFF THIS EXPOSES: the `.contiguous()` flash-prefill fix (573d12614) gave prefill 0.37x->0.86x
+  flat BUT introduced this collapse (pre-fix, GGUF prefill used eager = correct-but-slow). So main now
+  ships fast-prefill + 8B-long-gen-collapse on CUDA/Vulkan. Options: (a) revert to eager (correct, slow
+  prefill); (b) fix flash's softmax to f32-accumulate precision (deep, in hanzo-flash-attn -- the real
+  fix, keeps perf); (c) the kernel-DSL migration (one correct attention impl across backends -- the
+  structural cure). DECODE_EAGER is a NEGATIVE (does not fix) -- do not ship it.
+- NEXT: diagnose whether hanzo-flash-attn accumulates the softmax in f16 vs f32 (the likely 1.5% source)
+  and force f32. If the flash kernel is correct, the 1.5% is the is_causal alignment -- verify the causal
+  triangular direction matches naive. Until fixed, 8B-long-thinking on CUDA/Vulkan is a known-issue
+  (usable for short/direct gen; Metal fully correct).
