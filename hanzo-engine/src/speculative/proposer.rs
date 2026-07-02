@@ -27,6 +27,11 @@ pub struct SpeculativeProposeBatchCtx<'a> {
     pub sequences: &'a [&'a Sequence],
     pub cache: SpeculativeKvCache<'a>,
     pub target_hiddens: Option<Tensor>,
+    /// Multi-layer target hidden prefix for DSpark-style parallel-block proposers: one
+    /// tensor per fused target decoder layer, each `[prefix_len, hidden]`. `None` for
+    /// single-hidden proposers (V4 MTP) and standalone draft models — additive, so
+    /// existing proposers are unaffected.
+    pub target_hidden_layers: Option<Vec<Tensor>>,
     pub rng: Arc<Mutex<Isaac64Rng>>,
 }
 

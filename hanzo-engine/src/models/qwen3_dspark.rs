@@ -32,6 +32,10 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::layers::{embedding, linear, linear_no_bias, RmsNorm, RotaryEmbedding};
+use crate::speculative::{
+    SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposer,
+    TargetTokenEmbedder,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RopeParameters {
@@ -527,11 +531,200 @@ pub fn dspark_varbuilder(
     unsafe { ShardedSafeTensors::sharded(&[path], dtype, device, None, predicate) }
 }
 
+/// The `SpeculativeProposer` adapter plugging DSpark into the generic speculative driver.
+///
+/// DSpark is a parallel-block draft: one forward through the [`Qwen3DSpark`] draft model
+/// produces a whole `block_size` block of candidate tokens from the target's multi-layer
+/// hidden prefix (`ctx.target_hidden_layers`, one `[prefix_len, hidden]` tensor per fused
+/// target layer) plus the just-sampled anchor. Correctness comes from the target verify
+/// forward, NOT from the draft, so the confidence gate below only trades draft depth.
+pub struct DsparkProposer {
+    draft: Qwen3DSpark,
+    /// Keep only the leading run of draft slots whose `sigmoid(confidence) >= threshold`
+    /// (mirrors `_confident_prefix_length` in deepspec/eval/dspark/draft_ops.py). `0.0`
+    /// keeps the whole block (default). Never affects correctness — the target verify
+    /// decides every emitted token; a shorter draft just narrows the verify window.
+    confidence_threshold: f32,
+}
+
+impl DsparkProposer {
+    pub fn new(draft: Qwen3DSpark, confidence_threshold: f32) -> Self {
+        Self {
+            draft,
+            confidence_threshold,
+        }
+    }
+}
+
+/// Length of the leading confident prefix. Mirrors DeepSpec's `_confident_prefix_length`:
+/// walk the per-slot confidences, stop at the first slot whose `sigmoid(conf)` drops below
+/// the threshold, and always keep at least one token. `threshold <= 0` ⇒ the whole block.
+/// A pure function so the gate is testable without loading a draft model.
+fn confident_prefix_length(threshold: f32, confidence: &[f32], block: usize) -> usize {
+    if threshold <= 0.0 {
+        return block;
+    }
+    let mut n = 0usize;
+    for &c in confidence {
+        let p = 1.0f32 / (1.0 + (-c).exp());
+        if p >= threshold {
+            n += 1;
+        } else {
+            break;
+        }
+    }
+    n.max(1)
+}
+
+impl SpeculativeProposer for DsparkProposer {
+    fn proposal_len(&self) -> usize {
+        self.draft.config().block_size
+    }
+
+    fn propose(
+        &mut self,
+        ctx: SpeculativeProposeBatchCtx<'_>,
+        _target_embedder: Option<&TargetTokenEmbedder<'_>>,
+    ) -> Result<SpeculativeProposalBatch> {
+        let hiddens = ctx.target_hidden_layers.as_ref().ok_or_else(|| {
+            hanzo_ml::Error::Msg(
+                "DSpark proposer requires the multi-layer target hidden prefix".into(),
+            )
+        })?;
+        let batch = ctx.sampled_tokens.len();
+        if batch == 0 {
+            return Ok(SpeculativeProposalBatch::new(Vec::new()));
+        }
+        // DSpark drafts from ONE sequence's full prefix context (the captured hiddens are that
+        // sequence's forward). Batched multi-sequence drafting needs a per-sequence prefix
+        // slice and is a follow-on; the supported shape here is a single active sequence.
+        if batch != 1 {
+            hanzo_ml::bail!(
+                "DSpark proposer drafts one sequence per step (got batch={batch})"
+            );
+        }
+        let anchor_token = ctx.sampled_tokens[0];
+        let anchor_pos = ctx.base_lens[0];
+        let block = self.draft.config().block_size;
+
+        // Deterministic draft (argmax): draft quality only affects accept rate, and the
+        // target verify decides every emitted token.
+        let (tokens_t, logits, confidence) =
+            self.draft.draft_block(hiddens, anchor_token, anchor_pos, 0.0)?;
+
+        let tokens: Vec<u32> = tokens_t.to_vec1::<u32>()?;
+        let conf: Vec<f32> = confidence.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+        let keep =
+            confident_prefix_length(self.confidence_threshold, &conf, block).min(tokens.len());
+
+        // Truncate to the confident prefix. The verifier indexes logit rows by draft
+        // position and expects `[1, keep, vocab]`.
+        let tokens = tokens[..keep].to_vec();
+        let logits = logits.narrow(0, 0, keep)?.unsqueeze(0)?; // [1, keep, vocab]
+
+        Ok(SpeculativeProposalBatch::new(vec![
+            SpeculativeProposal::with_logits(tokens, logits),
+        ]))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const CKPT_DIR: &str = "/home/z/work/zen/hf/dspark/dspark_qwen3_4b_block7";
+
+    /// Pure gate logic — runs on CPU with no model. `threshold <= 0` keeps the whole block;
+    /// otherwise keep the leading run whose `sigmoid(conf) >= threshold`, always at least one.
+    #[test]
+    fn dspark_confident_prefix_length_logic() {
+        // sigmoid(+10) ~ 1.0 (confident), sigmoid(-10) ~ 0.0 (not).
+        let hi = 10.0f32;
+        let lo = -10.0f32;
+        // threshold 0 => full block regardless of confidences.
+        assert_eq!(confident_prefix_length(0.0, &[lo, lo, lo], 7), 7);
+        // all confident => keep all provided slots.
+        assert_eq!(confident_prefix_length(0.5, &[hi, hi, hi], 3), 3);
+        // stop at first below-threshold slot.
+        assert_eq!(confident_prefix_length(0.5, &[hi, hi, lo, hi], 4), 2);
+        // never zero: even a first low slot keeps one.
+        assert_eq!(confident_prefix_length(0.5, &[lo, hi, hi], 3), 1);
+    }
+
+    /// End-to-end proposer over the real checkpoint IF present (skips gracefully otherwise):
+    /// 5 random `[12, hidden]` target hiddens + anchor -> a `1..=block` token proposal whose
+    /// logits are `[1, keep, vocab]`. No GPU, no model download.
+    #[test]
+    fn dspark_proposer_produces_block() -> Result<()> {
+        use crate::speculative::SpeculativeKvCache;
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::sync::{Arc, Mutex};
+
+        let dir = std::path::Path::new(CKPT_DIR);
+        let weights = dir.join("model.safetensors");
+        if !weights.exists() {
+            eprintln!("skipping: checkpoint not found at {}", weights.display());
+            return Ok(());
+        }
+
+        let dev = Device::Cpu;
+        let cfg = DSparkConfig::from_json_file(dir.join("config.json"))?;
+        let block = cfg.block_size;
+        let n_fused = cfg.num_fused_layers();
+        let h = cfg.hidden_size;
+        let vocab = cfg.vocab_size;
+        let vb = dspark_varbuilder(&weights, DType::F32, &dev)?;
+        let draft = Qwen3DSpark::load(cfg, vb)?;
+        let mut proposer = DsparkProposer::new(draft, 0.0);
+        assert_eq!(proposer.proposal_len(), block);
+
+        // 5 target-layer prefix hiddens [ctx_len, hidden].
+        let ctx_len = 12usize;
+        let mut hiddens = Vec::with_capacity(n_fused);
+        for _ in 0..n_fused {
+            hiddens.push(Tensor::randn(0f32, 1f32, (ctx_len, h), &dev)?);
+        }
+
+        let anchor_token = 12345u32;
+        let sampled = [anchor_token];
+        let base_lens = [ctx_len]; // anchor_pos = prefix length
+        let seq_ids = [0usize];
+        let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(0)));
+        // DSpark's propose reads only sampled_tokens / base_lens / target_hidden_layers, so an
+        // empty `sequences` slice and a Normal cache stub are sufficient for a unit test.
+        let ctx = SpeculativeProposeBatchCtx {
+            sampled_tokens: &sampled,
+            sampled_tokens_emitted: true,
+            seq_ids: &seq_ids,
+            base_lens: &base_lens,
+            sequences: &[],
+            cache: SpeculativeKvCache::Normal,
+            target_hiddens: None,
+            target_hidden_layers: Some(hiddens),
+            rng,
+        };
+
+        let batch = proposer.propose(ctx, None)?;
+        assert_eq!(batch.proposals.len(), 1);
+        let p = &batch.proposals[0];
+        assert!(
+            (1..=block).contains(&p.tokens.len()),
+            "proposal len {} out of 1..={block}",
+            p.tokens.len()
+        );
+        let logits = p
+            .logits
+            .as_ref()
+            .expect("DSpark proposal must carry logits");
+        assert_eq!(logits.dims(), &[1, p.tokens.len(), vocab]);
+        assert!(
+            p.tokens.iter().all(|&t| (t as usize) < vocab),
+            "draft token out of vocab range"
+        );
+        eprintln!("dspark proposer tokens = {:?}", p.tokens);
+        Ok(())
+    }
 
     #[test]
     fn dspark_load_and_draft_block() -> Result<()> {

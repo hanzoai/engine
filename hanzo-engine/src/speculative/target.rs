@@ -42,4 +42,20 @@ pub trait SpeculativeTargetMixin {
     fn speculative_target_hiddens(&self, _rows: &[(usize, usize)]) -> Result<Option<Tensor>> {
         Ok(None)
     }
+
+    /// Enable capture of the DSpark target-layer hidden states, stashing every layer index in
+    /// `layers` (the draft checkpoint's `target_layer_ids`) during each forward. Default no-op:
+    /// only models that expose multi-layer hiddens (Qwen3) override it. Uses interior
+    /// mutability, so `&self` suffices.
+    fn set_speculative_capture_layers(&self, _layers: Vec<usize>) {}
+
+    /// The multi-layer target hidden prefix captured by the most recent forward, one
+    /// `[prefix_len, hidden]` tensor per fused layer, gathered for the requested `(seq, row)`
+    /// pairs. `Ok(None)` when capture is off or unsupported (the default).
+    fn speculative_target_hidden_layers(
+        &self,
+        _rows: &[(usize, usize)],
+    ) -> Result<Option<Vec<Tensor>>> {
+        Ok(None)
+    }
 }
