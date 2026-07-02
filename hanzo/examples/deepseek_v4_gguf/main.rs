@@ -6,7 +6,7 @@
 //! The GGUF carries its own tokenizer + chat template, so no external files needed.
 
 use anyhow::Result;
-use hanzo::{GgufModelBuilder, RequestBuilder, TextMessageRole};
+use hanzo::{GgufModelBuilder, ModelDType, RequestBuilder, TextMessageRole};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -37,11 +37,21 @@ async fn main() -> Result<()> {
     // MTP self-speculative decode is net-positive here via the non-paged
     // NormalSpeculativeCacheAccess; greedy-identical output preserved (the target
     // verify decides every token). n_predict=0 drops the MTP head for the baseline.
+    // env V4_DTYPE = auto (default, bf16 on CUDA) | bf16 | f16 | f32. F32 threads the
+    // full-precision KV cache + attention operands (ds4-parity numerics test — does it
+    // stop the long-gen degeneration?).
+    let dtype = match std::env::var("V4_DTYPE").as_deref() {
+        Ok("f32") => ModelDType::F32,
+        Ok("f16") => ModelDType::F16,
+        Ok("bf16") => ModelDType::BF16,
+        _ => ModelDType::Auto,
+    };
     let mut builder = GgufModelBuilder::new(
         "/home/z/work/zen/hf/ds4-flash-gguf",
         vec!["DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2.gguf".to_string()],
     )
     .with_max_num_seqs(1)
+    .with_dtype(dtype)
     .with_logging();
     if n_predict > 0 {
         builder = builder.with_mtp_model(
@@ -49,7 +59,7 @@ async fn main() -> Result<()> {
             Some(n_predict),
         );
     }
-    println!("=== V4 bench: MTP n_predict={n_predict} max_len={max_len} ===");
+    println!("=== V4 bench: MTP n_predict={n_predict} max_len={max_len} dtype={dtype:?} ===");
     let model = builder.build().await?;
 
     // A prompt that elicits sustained generation so the reported decode rate is
