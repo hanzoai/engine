@@ -238,6 +238,19 @@ impl Sdpa {
             return self.run_attention_noflash(q, k, v, mt, sdpa_params, dc);
         }
 
+        // DECODE_EAGER: route DECODE (seq==1) through eager naive_sdpa (f32 softmax) while keeping
+        // PREFILL on fused flash. The 8B collapse is flash-attention numerical drift that accumulates
+        // over long generation (FORCE_EAGER fixed it, flash collapsed); decode is where it compounds
+        // token-by-token. Eager decode is O(context) same as flash decode -- no O(n^2) penalty (that's
+        // a prefill-only concern) -- so this trades a little decode dispatch overhead for stability.
+        if std::env::var_os("DECODE_EAGER").is_some() {
+            let (_, _, seq_len, _) = q.dims4()?;
+            if seq_len == 1 {
+                let mt = if let AttentionMask::Custom(t) = mask { Some(t) } else { None };
+                return self.run_attention_noflash(q, k, v, mt, sdpa_params, do_causal);
+            }
+        }
+
         // ROCm WMMA flash-attention: causal prefill at long sequences wins 1.23-1.49x over
         // rocBLAS+softmax on gfx1151. A non-SWA causal mask (Custom from the causal masker) or
         // CausalFlash is full-causal, so the kernel applies causality internally and the explicit
