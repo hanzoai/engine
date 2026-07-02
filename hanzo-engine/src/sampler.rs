@@ -455,14 +455,23 @@ impl Sampler {
     }
 
     fn sample_argmax(&self, logits: Tensor, return_logprobs: bool) -> Result<Logprobs> {
-        let probs: Vec<f32> = logits.to_vec1()?;
-        let next_token = argmax_f32(&probs);
-        let logprob = probs[next_token as usize].log(10.0);
-
-        let top_logprobs = if return_logprobs {
-            Some(self.get_top_logprobs(&probs)?)
+        let raw: Vec<f32> = logits.to_vec1()?;
+        let next_token = argmax_f32(&raw);
+        // The argmax itself needs no normalization, but the reported logprobs do:
+        // `raw` here are LOGITS, and log10(logit) is NaN for any negative logit
+        // (which silently voided top-k logprobs on the greedy path). Softmax first.
+        let (logprob, top_logprobs) = if return_logprobs {
+            let mx = raw.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let mut probs: Vec<f32> = raw.iter().map(|&l| (l - mx).exp()).collect();
+            let sum: f32 = probs.iter().sum();
+            for p in probs.iter_mut() {
+                *p /= sum;
+            }
+            let lp = probs[next_token as usize].log(10.0);
+            let top = Some(self.get_top_logprobs(&probs)?);
+            (lp, top)
         } else {
-            None
+            (raw[next_token as usize].log(10.0), None)
         };
 
         let bytes = if let Some(tokenizer) = &self.tokenizer {
@@ -492,6 +501,14 @@ impl Sampler {
         min_p: f32,
     ) -> Result<Logprobs> {
         let mut probs: Vec<f32> = logits.to_vec1()?;
+        // Snapshot the pre-filter distribution for logprob reporting: top-k/top-p/
+        // min-p zero out `probs` in place below, and ranking the filtered vector
+        // yields the lone survivor + zero-ties (log10(0) = -inf -> null in JSON).
+        let unfiltered = if return_logprobs {
+            Some(probs.clone())
+        } else {
+            None
+        };
 
         // Determine how many elements we need for partial sort
         let k = if top_k > 0 {
@@ -537,10 +554,11 @@ impl Sampler {
         let next_token = argmax_f32(&probs);
         let logprob = probs[next_token as usize].log(10.0);
 
-        let top_logprobs = if return_logprobs {
-            Some(self.get_top_logprobs(&probs)?)
-        } else {
-            None
+        let top_logprobs = match &unfiltered {
+            // Report top-k over the PRE-FILTER distribution — the filters shape
+            // SAMPLING, not the reported distribution.
+            Some(pre) => Some(self.get_top_logprobs(pre)?),
+            None => None,
         };
 
         let bytes = if let Some(tokenizer) = &self.tokenizer {
@@ -564,6 +582,21 @@ impl Sampler {
     fn sample_multinomial(
         &self,
         probs: &[f32],
+        return_logprobs: bool,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<Logprobs> {
+        self.sample_multinomial_report(probs, None, return_logprobs, rng)
+    }
+
+    /// Like [`Self::sample_multinomial`], but reports top-k logprobs from
+    /// `report_probs` (the PRE-filter distribution) when provided: `probs` has
+    /// been zeroed by top-k/top-p/min-p, and ranking the filtered vector yields
+    /// the survivors plus zero-ties (log10(0) = -inf -> null in JSON). The
+    /// filters shape SAMPLING, not the reported distribution.
+    fn sample_multinomial_report(
+        &self,
+        probs: &[f32],
+        report_probs: Option<&[f32]>,
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
@@ -605,7 +638,7 @@ impl Sampler {
         let logprob = probs[next_token].log(10.0);
 
         let top_logprobs = if return_logprobs {
-            Some(self.get_top_logprobs(probs)?)
+            Some(self.get_top_logprobs(report_probs.unwrap_or(probs))?)
         } else {
             None
         };
@@ -1100,6 +1133,13 @@ impl Sampler {
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
+        // Snapshot the pre-filter distribution for logprob reporting (the
+        // filters below zero `probs` in place; see sample_multinomial_report).
+        let unfiltered = if return_logprobs {
+            Some(probs.to_vec())
+        } else {
+            None
+        };
         // Determine how many elements we need for partial sort
         let k = if top_k > 0 {
             top_k as usize
@@ -1111,7 +1151,12 @@ impl Sampler {
         let idx_probs = partial_sort_top_k(probs, k, true);
 
         if top_p <= 0.0 || top_p >= 1.0 {
-            return self.sample_multinomial(probs, return_logprobs, rng);
+            return self.sample_multinomial_report(
+                probs,
+                unfiltered.as_deref(),
+                return_logprobs,
+                rng,
+            );
         }
 
         // TOP P
@@ -1131,7 +1176,12 @@ impl Sampler {
         }
 
         if min_p <= 0.0 || min_p >= 1.0 {
-            return self.sample_multinomial(probs, return_logprobs, rng);
+            return self.sample_multinomial_report(
+                probs,
+                unfiltered.as_deref(),
+                return_logprobs,
+                rng,
+            );
         }
 
         // Get max_p from first sorted element
@@ -1151,7 +1201,7 @@ impl Sampler {
         }
 
         // Sample with clamped probabilities.
-        self.sample_multinomial(probs, return_logprobs, rng)
+        self.sample_multinomial_report(probs, unfiltered.as_deref(), return_logprobs, rng)
     }
 
     fn apply_penalties(&self, mut logits: Vec<f32>, context: &[u32]) -> Result<Tensor> {
@@ -1343,16 +1393,33 @@ impl Sampler {
         for processor in &self.logits_processors {
             logits = processor.apply(&logits, context)?;
         }
+        // One-shot path tracer (env SAMPLER_TRACE=1): prints which sampling path
+        // actually runs — argmax vs top-k vs speculative — once. Diagnostic only.
+        static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let trace = *TRACE.get_or_init(|| std::env::var("SAMPLER_TRACE").is_ok_and(|v| v == "1"));
+        static TRACED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let mut trace_once = |path: &str| {
+            if trace && !TRACED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                eprintln!(
+                    "[SAMPLER-TRACE] path={path} temp={:?} top_k={} top_p={} min_p={} spec={sample_speculative}",
+                    self.temperature, self.top_k, self.top_p, self.min_p
+                );
+            }
+        };
         let next_token = if sample_speculative {
             match self.temperature {
-                None => self.sample_speculative_top_kp_min_p(
-                    logits,
-                    return_logprobs,
-                    self.top_k,
-                    self.top_p as f32,
-                    self.min_p as f32,
-                )?,
+                None => {
+                    trace_once("speculative/topk-RAW-LOGITS");
+                    self.sample_speculative_top_kp_min_p(
+                        logits,
+                        return_logprobs,
+                        self.top_k,
+                        self.top_p as f32,
+                        self.min_p as f32,
+                    )?
+                }
                 Some(temperature) => {
+                    trace_once("speculative/topk-softmax");
                     let logits = (&logits / temperature)?;
                     let probs = hanzo_nn::ops::softmax_last_dim(&logits)?;
 
@@ -1367,8 +1434,12 @@ impl Sampler {
             }
         } else {
             match self.temperature {
-                None => self.sample_argmax(logits, return_logprobs)?,
+                None => {
+                    trace_once("argmax");
+                    self.sample_argmax(logits, return_logprobs)?
+                }
                 Some(temperature) => {
+                    trace_once("topk-softmax");
                     let logits = (&logits / temperature)?;
                     let probs = hanzo_nn::ops::softmax_last_dim(&logits)?;
                     let mut probs: Vec<f32> = probs.to_vec1()?;
