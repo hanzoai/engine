@@ -247,6 +247,7 @@ where
         )
         .await?;
         let accepted_all = outcome.accepted_drafts == outcome.proposed_drafts;
+        super::stats::record_verify(outcome.accepted_drafts, outcome.proposed_drafts);
         tracing::debug!(
             seq_id = *seq.id(),
             accepted = outcome.accepted_drafts,

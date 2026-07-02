@@ -385,6 +385,15 @@ pub(crate) async fn build_pipeline_from_text_loader(
             .await
             .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
     }
+    if let Some((path, confidence_threshold)) = builder.dspark_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Dspark {
+                path,
+                confidence_threshold,
+            })?;
+    }
 
     let scheduler_config =
         scheduler_config_from_pipeline(&pipeline, paged_attn_requested, builder.max_num_seqs)
