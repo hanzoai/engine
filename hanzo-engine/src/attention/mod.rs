@@ -202,6 +202,22 @@ impl Sdpa {
         flash_params: Option<&FlashParams>,
         sdpa_params: &SdpaParams,
     ) -> Result<Tensor> {
+        // DBG_ATTN: unconditional trace of every run_attention call -- the ground truth of what the
+        // real forward passes (mask variant / device / dtype / dims / params). Diagnostic only.
+        if std::env::var_os("DBG_ATTN").is_some() {
+            let variant = match mask {
+                AttentionMask::None => "None",
+                AttentionMask::CausalFlash => "CausalFlash",
+                AttentionMask::Custom(_) => "Custom",
+            };
+            eprintln!(
+                "[DBG_ATTN] mask={} dev={:?} dtype={:?} q_dims={:?} k_dims={:?} n_kv_groups={} scale={} softcap={:?} sw={:?} fp_causal={:?}",
+                variant, q.device().location(), q.dtype(), q.dims(), k.dims(),
+                sdpa_params.n_kv_groups, sdpa_params.softmax_scale, sdpa_params.softcap,
+                sdpa_params.sliding_window, flash_params.map(|p| p.causal)
+            );
+        }
+
         // If sinks are present, dispatch to the sinks backend
         if let Some(sinks) = &sdpa_params.sinks {
             let mask_tensor = match mask {
