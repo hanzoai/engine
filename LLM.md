@@ -398,28 +398,29 @@ ds4: github.com/antirez/ds4 + **nktkt/ds4** (Rust dequant) · llama.cpp PRs #128
 #19057/#22286(FA head-dim 512/576) #23346(V3.2/DSA) #24162(V4,open) #22673(MTP) #18039(EAGLE-3)
 #16130/#16715/#14800(fusion) · vLLM blog 2026-04-24 + LMSYS 2026-04-25(V4 recipe) · sm_121:
 build sm_121a + CUDA 13 (issue #19662).
-## CUDA prefill is the #1 perf frontier: flash-attn lever PROVEN (~2x) but BLOCKED on a flash correctness bug
-- Fresh matched bench (spark GB10, hanzo vs llama-CUDA, idle): decode BEATS/parity (8B 1.04x, 4B 1.00x);
-  the whole CUDA deficit is PREFILL -- 8B 0.70x, 4B 0.62x.
-- ROOT CAUSE (prefill length-sweep 8B): hanzo eager prefill COLLAPSES O(n^2) with length
-  (pp128 2158 -> pp512 2044 -> pp2048 1118) while llama stays FLAT (~2579/3033/3008). Signature of the
-  eager `naive_sdpa` materializing the [seq x seq] score matrix. GGUF prefill uses a Custom causal mask
-  which `Sdpa.run_attention` early-returns to eager (the CUDA analogue of the ROCm flash block was absent).
-- THE LEVER (proven): route Custom-mask causal prefill to the fused `flash_attn` (drop the redundant
-  causal mask). In-binary A/B via a runtime toggle: flash prefill 8B pp512 2829 / pp2048 2392 vs eager
-  2087 / 1352 = ~1.8x at pp2048, and FLAT with length (the O(n^2)->O(n) fix, tracking llama's ~3000-flat).
-- THE BLOCKER (why it is NOT shipped): the hanzo-flash-attn CUDA path returns GARBAGE logits for this
-  config (bf16 GGUF, paged, causal) -> byte-identical `钊，，，` collapse from token 1; eager stays
-  coherent on the same binary. RULED OUT by A/B (garbage unchanged): non-contiguous q/k/v (added
-  `.contiguous()` -- fixed SPEED not correctness), GQA (added repeat_kv n_kv->n_head MHA), sliding
-  window (None), softcap (none), bf16 dispatch (crate handles it, lib.rs:245 is_bf16=true). flash-attn
-  is known-correct on sm_121 for DENSE models, so the bug is in THIS invocation, not the kernel per se.
-- NEXT (focused, not a guess): numeric flash-vs-eager tensor diff on ONE prefill forward -- dump the
-  flash output (min/max/NaN/mean) vs the eager reference to categorize NaN-source vs wrong-scale vs
-  wrong-mask-alignment. Likely candidates left: causal q/k position alignment in the non-varlen windowed
-  path, or a Blackwell bf16 kernel numeric issue. The dispatch code is reverted (GGUF prefill stays on
-  correct eager); re-add the flash route once the crate output is proven correct. DO NOT ship the flash
-  route until a bit-exactish gate passes -- shipping garbage is the one thing we don't do.
+## CUDA flash prefill: the missing-`.contiguous()` bug -- FOUND + FIXED (573d12614)
+- SYMPTOM: CUDA GGUF prefill was BOTH slow (eager O(n^2) collapse: pp128 2158 -> pp512 2044 -> pp2048
+  1118, vs llama FLAT ~2579/3033/3008) AND, when routed to flash, produced GARBAGE logits (byte-identical
+  `钊，，，` from token 1 -> corrupted KV cache -> whole generation garbled).
+- ROOT CAUSE (one bug, two symptoms): the `can_use_flash` path in `Sdpa::run_attention` transposed
+  q/k/v `(b,H,s,d)->(b,s,H,d)` WITHOUT `.contiguous()`. `flash_attn_v2` hands the tensor straight to the
+  CUDA kernel with no internal contiguous, so for **seq>1 (prefill)** the non-contiguous strides are read
+  wrong -> garbage. **Decode (seq==1)** is trivially contiguous so it worked -- which HID the bug and made
+  it look prefill-specific. Because flash garbled, GGUF prefill had been left on the eager `naive_sdpa`
+  fallback (the O(n^2) collapse). ONE `.contiguous()` fixes both.
+- HOW IT WAS FOUND (methodology, not guessing): (1) an ISOLATION TEST (`flash_correctness` in attention/
+  mod.rs) proved `flash_attn == naive_sdpa` to maxabs 0.0156 on controlled bf16 GQA-causal inputs WITH
+  `.contiguous()` -> the crate/kernel is CORRECT (killed the "Blackwell bf16 kernel bug" theory). (2) a
+  `DBG_ATTN` trace showed the real prefill call is `mask=CausalFlash q_dims=[1,32,512,128]` -> the
+  `can_use_flash` path (NOT the Custom-mask block I'd been chasing). (3) that path lacked the `.contiguous()`
+  the passing isolation test had. Fix = add it. Earlier guesses (Custom-mask route, GQA repeat_kv, window,
+  bf16 dispatch) were all on the WRONG path -- the trace corrected course.
+- RESULT (8B CUDA, spark GB10, main + fix): prefill coherent + FLAT -- pp512 2653 (pure) / 2349 (with
+  decode) vs llama 2779 = **0.85-0.95x** (was 0.70x); pp2048 ~2586 flat vs the old eager 1118 =
+  **0.37x -> ~0.86x** (the big long-context win). Decode 35.8 vs 36.0 = **0.99x (parity)**. So CUDA is
+  now NEAR-PARITY on BOTH prefill and decode, and the pp2048 collapse is gone. Fixes flash prefill for
+  ALL CUDA models (any that hit the CausalFlash path), not just GGUF. Residual prefill gap to llama is
+  now kernel-efficiency (llama's flash is well-tuned), not an algorithmic O(n^2) defect.
 - Flash dispatch is DECOMPLECTED: no runtime env knob. Flash is used iff `using_flash_attn()` (compiled)
   AND applicable (device/dtype/shape/causal) -- a pure function, not a place. The dev-time `FLASH_ATTN`
   A/B toggle (and the branded `HANZO_ROCM_FLASH_ATTN`) were deleted; ROCm flash is always-on when applicable.
