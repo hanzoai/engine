@@ -590,15 +590,20 @@ const VIDEO_REGEX: &str =
     r#"((?:https?://|file://)?\S+?\.(?:mp4|avi|mov|mkv|webm|gif|m4v)(?:\?\S+?)?)"#;
 
 fn interactive_fallback_sample_parameters() -> SamplingParams {
+    // Sane, collapse-resistant defaults matching the UI path. The old fallback (temp 0.1, top_p 0.1,
+    // no repetition penalty) was near-greedy with zero anti-repetition -- a thinking model (Qwen3) whose
+    // numerics nudge it toward a token would lock into repeating it forever (`，，，`). A repetition
+    // penalty + a wider nucleus makes generation robust to the tiny valid numeric differences between
+    // attention backends (flash vs eager vs Metal) that otherwise tip the repetition bifurcation.
     SamplingParams {
-        temperature: Some(0.1),
-        top_k: Some(32),
-        top_p: Some(0.1),
+        temperature: Some(0.7),
+        top_k: Some(40),
+        top_p: Some(0.9),
         min_p: Some(0.05),
         top_n_logprobs: 0,
         frequency_penalty: None,
         presence_penalty: None,
-        repetition_penalty: None,
+        repetition_penalty: Some(1.1),
         max_len: None,
         stop_toks: None,
         logits_bias: None,
