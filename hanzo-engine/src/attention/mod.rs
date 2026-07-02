@@ -51,19 +51,18 @@ pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn}
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
 
-/// Cached `HANZO_ROCM_FLASH_ATTN` gate (default on); set to `0` to force the eager rocBLAS path.
-#[cfg(feature = "rocm")]
-fn rocm_flash_attn_enabled() -> bool {
+/// Runtime flash-attn dispatch gate (default on), device-agnostic. `FLASH_ATTN=0`/`false` forces the
+/// eager path so a single flash-compiled build can A/B flash vs eager without a rebuild. The kernels'
+/// PRESENCE is still compile-gated (`using_flash_attn()` for CUDA, the `rocm` feature for ROCm); this
+/// only gates whether a present kernel is dispatched.
+fn flash_attn_enabled() -> bool {
     use std::sync::atomic::{AtomicU8, Ordering};
     static CACHED: AtomicU8 = AtomicU8::new(u8::MAX);
     let cached = CACHED.load(Ordering::Relaxed);
     if cached != u8::MAX {
         return cached == 1;
     }
-    let enabled = !matches!(
-        std::env::var("HANZO_ROCM_FLASH_ATTN").as_deref(),
-        Ok("0") | Ok("false")
-    );
+    let enabled = !matches!(std::env::var("FLASH_ATTN").as_deref(), Ok("0") | Ok("false"));
     CACHED.store(u8::from(enabled), Ordering::Relaxed);
     enabled
 }
@@ -253,7 +252,7 @@ impl Sdpa {
         // through to the eager path. The kernel does GQA, so it takes the un-expanded k/v.
         #[cfg(feature = "rocm")]
         if q.device().is_rocm()
-            && rocm_flash_attn_enabled()
+            && flash_attn_enabled()
             && !matches!(mask, AttentionMask::None if !do_causal)
         {
             const ROCM_FLASH_MIN_SEQ: usize = 768;
@@ -280,6 +279,27 @@ impl Sdpa {
             }
         }
 
+        // CUDA flash-attention for full-causal prefill. A causal Custom mask (from the causal masker,
+        // no SWA, not explicitly non-causal) is redundant with flash's internal is_causal + the varlen
+        // cumulative_seqlens, so drop it and run the fused flash kernel. Mirrors the ROCm block above;
+        // WITHOUT this, a Custom mask falls to the eager naive_sdpa below, which materializes the
+        // [seq x seq] score matrix -> O(n^2) prefill (measured: 8B pp2048 collapses to 0.37x llama,
+        // while llama's fused flash stays flat). flash_attn_v2 reads causality from flash_params.causal.
+        #[cfg(any(feature = "flash-attn", feature = "flash-attn-v3"))]
+        if q.device().is_cuda()
+            && flash_attn_enabled()
+            && q.dtype() != DType::F32
+            && do_causal
+            && !explicitly_noncausal
+            && sdpa_params.sliding_window.is_none()
+            && matches!(mask, AttentionMask::Custom(_))
+        {
+            let q = q.transpose(1, 2)?;
+            let k = k.transpose(1, 2)?;
+            let v = v.transpose(1, 2)?;
+            return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
+        }
+
         // Custom mask, eager attention (flash can't use arbitrary mask tensors)
         if let AttentionMask::Custom(mask_tensor) = mask {
             return self.run_attention_noflash(q, k, v, Some(mask_tensor), sdpa_params, do_causal);
@@ -287,7 +307,10 @@ impl Sdpa {
 
         // CausalFlash or None: try flash attention, fall back to eager
         let can_use_flash = q.device().is_cpu()
-            || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32;
+            || q.device().is_cuda()
+                && crate::using_flash_attn()
+                && flash_attn_enabled()
+                && q.dtype() != DType::F32;
 
         if can_use_flash {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
