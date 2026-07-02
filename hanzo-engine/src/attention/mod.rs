@@ -301,9 +301,12 @@ impl Sdpa {
                 && k.dim(3)? == 128
                 && matches!(q.dtype(), DType::F16 | DType::BF16)
             {
-                let q = q.transpose(1, 2)?;
-                let k = k.transpose(1, 2)?;
-                let v = v.transpose(1, 2)?;
+                // flash_attn_v2 passes q/k/v straight to the kernel (no internal contiguous),
+                // and the (b,H,s,d)->(b,s,H,d) transpose is non-contiguous -> the kernel reads
+                // wrong strides and garbles. Materialize contiguous, like every other flash caller.
+                let q = q.transpose(1, 2)?.contiguous()?;
+                let k = k.transpose(1, 2)?.contiguous()?;
+                let v = v.transpose(1, 2)?.contiguous()?;
                 return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
             }
         }
