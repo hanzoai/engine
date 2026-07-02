@@ -607,10 +607,26 @@ impl SpeculativeProposer for DsparkProposer {
         let anchor_pos = ctx.base_lens[0];
         let block = self.draft.config().block_size;
 
+        // Gap 2: DSpark drafts against the fused hiddens of the WHOLE confirmed prefix. The target
+        // model hands us its accumulated confirmed-prefix buffer (`[prefix_len, hidden]` per fused
+        // layer); slice it to the `anchor_pos` positions that precede the anchor. In the steady
+        // state `prefix_len == anchor_pos`; a shorter prefix means the accumulator hasn't caught up
+        // (e.g. right after a discontinuity) — bail so the target simply decodes one token.
+        let prefix_len = hiddens.first().map(|t| t.dim(0)).transpose()?.unwrap_or(0);
+        if prefix_len < anchor_pos {
+            return Ok(SpeculativeProposalBatch::new(vec![SpeculativeProposal::new(
+                Vec::new(),
+            )]));
+        }
+        let prefix = hiddens
+            .iter()
+            .map(|t| t.narrow(0, 0, anchor_pos))
+            .collect::<Result<Vec<_>>>()?;
+
         // Deterministic draft (argmax): draft quality only affects accept rate, and the
         // target verify decides every emitted token.
         let (tokens_t, logits, confidence) =
-            self.draft.draft_block(hiddens, anchor_token, anchor_pos, 0.0)?;
+            self.draft.draft_block(&prefix, anchor_token, anchor_pos, 0.0)?;
 
         let tokens: Vec<u32> = tokens_t.to_vec1::<u32>()?;
         let conf: Vec<f32> = confidence.to_dtype(DType::F32)?.to_vec1::<f32>()?;

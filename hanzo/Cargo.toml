@@ -42,6 +42,10 @@ name = "text_generation"
 path = "examples/getting_started/text_generation/main.rs"
 
 [[example]]
+name = "dspark_qwen3"
+path = "examples/dspark_qwen3/main.rs"
+
+[[example]]
 name = "streaming"
 path = "examples/getting_started/streaming/main.rs"
 
