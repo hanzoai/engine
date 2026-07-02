@@ -373,8 +373,14 @@ where
         );
     }
 
+    // `proposal_len` is the MAXIMUM draft depth. A proposer may return a shorter
+    // draft (adaptive draft length): stage exactly what it produced. Verification
+    // keys off the ACTUAL staged length (staged_batch_state -> Homogeneous(len);
+    // guard_for_reserved uses staged_len+1), and one propose round returns a
+    // batch-uniform length, so the staged batch stays homogeneous — only the depth
+    // varies per round. Reject only an empty or over-long draft.
     for (idx, proposal) in active_indices.iter().zip(proposal_batch.proposals) {
-        if proposal.tokens.len() == proposal_len {
+        if (1..=proposal_len).contains(&proposal.tokens.len()) {
             seqs[*idx].set_staged_speculative(proposal.tokens, proposal.logits);
         } else {
             seqs[*idx].clear_staged_speculative_tokens();
