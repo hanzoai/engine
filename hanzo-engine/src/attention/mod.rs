@@ -301,9 +301,12 @@ impl Sdpa {
                 && k.dim(3)? == 128
                 && matches!(q.dtype(), DType::F16 | DType::BF16)
             {
-                // flash_attn_v2 passes q/k/v straight to the kernel (no internal contiguous),
-                // and the (b,H,s,d)->(b,s,H,d) transpose is non-contiguous -> the kernel reads
-                // wrong strides and garbles. Materialize contiguous, like every other flash caller.
+                // Expand GQA k/v (n_kv_head -> n_head) so flash sees plain MHA (Hk==Hq) -- the
+                // most-tested flash path; the eager naive_sdpa does the same repeat_kv. Then
+                // (b,H,s,d)->(b,s,H,d) + contiguous: flash_attn_v2 hands q/k/v straight to the
+                // kernel (no internal contiguous), so a strided transpose reads wrong strides.
+                let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?;
+                let v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?;
                 let q = q.transpose(1, 2)?.contiguous()?;
                 let k = k.transpose(1, 2)?.contiguous()?;
                 let v = v.transpose(1, 2)?.contiguous()?;
