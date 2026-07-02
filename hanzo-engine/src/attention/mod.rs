@@ -310,6 +310,13 @@ impl Sdpa {
                     }
                 }
             } else {
+                // flash_attn_v2 hands q/k/v straight to the CUDA kernel with no internal contiguous,
+                // and the (b,H,s,d)->(b,s,H,d) transpose above is NON-CONTIGUOUS -> for seq>1 (prefill)
+                // the kernel reads wrong strides and returns GARBAGE (decode seq==1 is trivially fine,
+                // which is why only prefill corrupted the KV cache and the whole generation garbled).
+                let q = q.contiguous()?;
+                let k = k.contiguous()?;
+                let v = v.contiguous()?;
                 return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
             }
         }
