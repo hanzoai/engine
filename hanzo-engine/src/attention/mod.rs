@@ -273,6 +273,48 @@ impl Sdpa {
         // tensor diff to isolate. Tracked as the #1 CUDA prefill follow-up (engine LLM.md). Until fixed,
         // GGUF prefill stays on the correct eager path.
 
+        // FLASH_DBG: real-data flash-vs-naive diff on the ACTUAL Custom-mask prefill (mask/q/k/v from the
+        // live forward). Logs the mask stats + divergence, returns naive (stays coherent). Diagnostic only.
+        #[cfg(any(feature = "flash-attn", feature = "flash-attn-v3"))]
+        if std::env::var_os("FLASH_DBG").is_some()
+            && q.device().is_cuda()
+            && !explicitly_noncausal
+            && sdpa_params.sliding_window.is_none()
+        {
+            if let AttentionMask::Custom(m) = mask {
+                let (_, _, s, hd) = q.dims4()?;
+                if s > 1 && hd == 128 && matches!(q.dtype(), DType::F16 | DType::BF16) {
+                    let naive =
+                        self.run_attention_noflash(q, k, v, Some(m), sdpa_params, do_causal)?;
+                    let kr = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?;
+                    let vr = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?;
+                    let qf = q.transpose(1, 2)?.contiguous()?;
+                    let kf = kr.transpose(1, 2)?.contiguous()?;
+                    let vf = vr.transpose(1, 2)?.contiguous()?;
+                    let flash = flash_attn(&qf, &kf, &vf, flash_params, sdpa_params)?
+                        .transpose(1, 2)?;
+                    let nv = naive.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+                    let fv = flash.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+                    let mv = m.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+                    let nan = fv.iter().filter(|x| x.is_nan()).count();
+                    let ninf = mv.iter().filter(|x| x.is_infinite()).count();
+                    let mut maxabs = 0f32;
+                    for (a, b) in nv.iter().zip(fv.iter()) {
+                        if a.is_finite() && b.is_finite() {
+                            maxabs = maxabs.max((a - b).abs());
+                        }
+                    }
+                    eprintln!(
+                        "[FLASH_DBG] mask_dims={:?} q_dims={:?} n_kv_groups={} scale={} softcap={:?} causal={} | flash_nan={} maxabs={:.4} mask_ninf={}/{} naive[0..3]={:?} flash[0..3]={:?}",
+                        m.dims(), q.dims(), sdpa_params.n_kv_groups, sdpa_params.softmax_scale,
+                        sdpa_params.softcap, do_causal, nan, maxabs, ninf, mv.len(),
+                        &nv[..3.min(nv.len())], &fv[..3.min(fv.len())]
+                    );
+                    return Ok(naive);
+                }
+            }
+        }
+
         // Custom mask, eager attention (flash can't use arbitrary mask tensors)
         if let AttentionMask::Custom(mask_tensor) = mask {
             return self.run_attention_noflash(q, k, v, Some(mask_tensor), sdpa_params, do_causal);
