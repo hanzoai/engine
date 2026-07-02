@@ -230,6 +230,14 @@ impl Sdpa {
         // causal masking to a bidirectional encoder (which would corrupt its output).
         let explicitly_noncausal = flash_params.is_some_and(|p| !p.causal);
 
+        // FORCE_EAGER: route every path through eager naive_sdpa (f32 softmax) instead of flash --
+        // localizes whether the 8B long-generation collapse is flash-attention precision. Diagnostic.
+        if std::env::var_os("FORCE_EAGER").is_some() {
+            let dc = do_causal || matches!(mask, AttentionMask::CausalFlash);
+            let mt = if let AttentionMask::Custom(t) = mask { Some(t) } else { None };
+            return self.run_attention_noflash(q, k, v, mt, sdpa_params, dc);
+        }
+
         // ROCm WMMA flash-attention: causal prefill at long sequences wins 1.23-1.49x over
         // rocBLAS+softmax on gfx1151. A non-SWA causal mask (Custom from the causal masker) or
         // CausalFlash is full-causal, so the kernel applies causality internally and the explicit
