@@ -5,6 +5,7 @@ pub mod driver;
 pub mod logging;
 pub mod proposer;
 pub(crate) mod staging;
+pub mod stats;
 pub mod target;
 pub mod verifier;
 
