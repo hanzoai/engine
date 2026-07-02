@@ -344,6 +344,9 @@ impl V4Attn {
     /// plain-causal + sinks + per-row window (exactly the kernel's semantics),
     /// sidestepping the generic mask-variant ambiguity at the sinks backend.
     /// ds4-parity numerics AND kills the eager 3-pass on the latency-critical paths.
+    /// `window_override`: `None` = the layer's own sliding window; `Some(w)` forces
+    /// `w` (`Some(0)` = NO clamp — used for pre-sliced combined `[window ++ comp]`
+    /// buffers where every row is already visible by construction).
     fn dense_attn(
         &self,
         q: &Tensor,
@@ -351,6 +354,7 @@ impl V4Attn {
         v: &Tensor,
         mask: &AttentionMask,
         b: usize,
+        window_override: Option<usize>,
     ) -> Result<Tensor> {
         #[cfg(all(feature = "cuda", target_family = "unix"))]
         {
@@ -363,7 +367,10 @@ impl V4Attn {
                     let vv = v.squeeze(0)?.to_dtype(f32d)?.contiguous()?;
                     let sk = sinks.to_dtype(f32d)?.contiguous()?;
                     let kvl = kk.dim(1)?;
-                    let win = self.sdpa.sliding_window.unwrap_or(kvl);
+                    let win = match window_override {
+                        Some(w) => w, // 0 = kernel no-clamp semantics
+                        None => self.sdpa.sliding_window.unwrap_or(kvl),
+                    };
                     let out = hanzo_ml::fattn_decode::fattn_decode_f32_hd512(
                         &qk,
                         &kk,
@@ -377,7 +384,7 @@ impl V4Attn {
             }
         }
         #[cfg(not(all(feature = "cuda", target_family = "unix")))]
-        let _ = b;
+        let _ = (b, window_override);
         Sdpa.run_attention(q, k, v, mask, None, &self.sdpa)
     }
 
@@ -573,7 +580,7 @@ impl V4Attn {
                 let window = self.sdpa.sliding_window.unwrap_or(usize::MAX);
                 if kv_len <= window {
                     // Raw window still covers everything — fused fast path semantics.
-                    self.dense_attn(&q, &k, &v, mask, b)?
+                    self.dense_attn(&q, &k, &v, mask, b, None)?
                 } else {
                     let due = confirmed / comp.ratio;
                     state.emit_due(comp, due, k.device())?;
@@ -595,18 +602,36 @@ impl V4Attn {
                         }
                         _ => (kw.clone(), vw.clone()),
                     };
-                    let qpos: Vec<u32> = (0..s).map(|j| (base + j) as u32).collect();
-                    let cmask = combined_compressed_mask(
-                        &qpos,
-                        raw_start,
-                        raw_n,
-                        nc,
-                        self.compress_ratio,
-                        Some(window),
-                        k.device(),
-                        wdt,
-                    )?;
-                    Sdpa.run_attention(&q, &kf, &vf, &AttentionMask::Custom(cmask), None, &self.sdpa)?
+                    if s == 1 {
+                        // Single-token decode: after pre-slicing the raw window and
+                        // emitting exactly the due rows, EVERY combined column is
+                        // visible (raw slice == the query's window; comp rows 0..due
+                        // are all fully past) — the mask is provably all-zeros. Run
+                        // the fused kernel over the combined KV with the window
+                        // clamp disabled (kv_len), keeping deep-context decode on
+                        // the fast path instead of the eager 3-pass.
+                        self.dense_attn(&q, &kf, &vf, &AttentionMask::None, b, Some(0))?
+                    } else {
+                        let qpos: Vec<u32> = (0..s).map(|j| (base + j) as u32).collect();
+                        let cmask = combined_compressed_mask(
+                            &qpos,
+                            raw_start,
+                            raw_n,
+                            nc,
+                            self.compress_ratio,
+                            Some(window),
+                            k.device(),
+                            wdt,
+                        )?;
+                        Sdpa.run_attention(
+                            &q,
+                            &kf,
+                            &vf,
+                            &AttentionMask::Custom(cmask),
+                            None,
+                            &self.sdpa,
+                        )?
+                    }
                 }
             }
             // Full layers (no compressor) + compressed layers at decode/verify —
@@ -616,7 +641,7 @@ impl V4Attn {
             // per-row window (exactly the kernel's semantics), sidestepping the
             // generic mask-variant ambiguity at the sinks backend. ds4-parity
             // numerics AND kills the eager 3-pass on the latency-critical paths.
-            _ => self.dense_attn(&q, &k, &v, mask, b)?,
+            _ => self.dense_attn(&q, &k, &v, mask, b, None)?,
         };
 
         // Inverse-RoPE on the output (absorbed: the V latent carried RoPE).
