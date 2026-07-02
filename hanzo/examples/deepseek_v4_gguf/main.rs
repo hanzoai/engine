@@ -73,10 +73,14 @@ async fn main() -> Result<()> {
     let dump_path = std::env::var("DUMP_LOGPROBS").ok();
     let mut messages = RequestBuilder::new();
     if dump_path.is_some() {
+        let topn: usize = std::env::var("DUMP_TOPN")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10);
         messages = messages
             .add_message(TextMessageRole::System, "You are a helpful assistant")
             .return_logprobs(true)
-            .set_sampler_topn_logprobs(10);
+            .set_sampler_topn_logprobs(topn);
     }
     let messages = messages
         .add_message(TextMessageRole::User, prompt)
