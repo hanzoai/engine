@@ -2,6 +2,7 @@
 pub enum SpeculativeAttachKind {
     Mtp { assistant: String, n_predict: usize },
     DraftModel { gamma: usize },
+    Dspark { block_size: usize, confidence_threshold: f32 },
 }
 
 #[derive(Clone, Debug)]
@@ -24,6 +25,15 @@ impl SpeculativeAttachInfo {
             kind: SpeculativeAttachKind::DraftModel { gamma },
         }
     }
+
+    pub fn dspark(block_size: usize, confidence_threshold: f32) -> Self {
+        Self {
+            kind: SpeculativeAttachKind::Dspark {
+                block_size,
+                confidence_threshold,
+            },
+        }
+    }
 }
 
 pub fn log_attach(info: &SpeculativeAttachInfo) {
@@ -36,6 +46,12 @@ pub fn log_attach(info: &SpeculativeAttachInfo) {
         ),
         SpeculativeAttachKind::DraftModel { gamma } => tracing::info!(
             "Speculative decoding enabled: classic draft+target with gamma={gamma}"
+        ),
+        SpeculativeAttachKind::Dspark {
+            block_size,
+            confidence_threshold,
+        } => tracing::info!(
+            "Speculative decoding enabled: DSpark parallel-block draft with block_size={block_size}, confidence_threshold={confidence_threshold}"
         ),
     }
 }
