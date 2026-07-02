@@ -105,7 +105,7 @@ pub struct NormalPipeline {
     config: String,
     imatrix: Option<PathBuf>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
-    draft_proposer: Option<crate::speculative::DraftModelProposer>,
+    draft_proposer: Option<Box<dyn crate::speculative::SpeculativeProposer + Send + Sync>>,
 }
 
 #[cfg(feature = "cuda")]
@@ -1270,6 +1270,16 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
         self.model.speculative_target_hiddens(rows)
     }
 
+    fn speculative_target_hidden_layers(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> hanzo_ml::Result<Option<Vec<Tensor>>> {
+        // Unconditional delegate: DSpark's proposer lives in `draft_proposer` but reads the
+        // TARGET's captured multi-layer hiddens. Non-capture targets return `None` here, so
+        // classic draft-model / no-proposer runs are unaffected.
+        self.model.speculative_target_hidden_layers(rows)
+    }
+
     fn speculative_propose(
         &mut self,
         ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
@@ -1713,11 +1723,51 @@ impl Pipeline for NormalPipeline {
         config: crate::speculative::SpeculativeConfig,
     ) -> hanzo_ml::Result<()> {
         if self.get_metadata().cache_engine.is_none()
-            && !matches!(config, crate::speculative::SpeculativeConfig::Off)
+            && !matches!(
+                config,
+                crate::speculative::SpeculativeConfig::Off
+                    | crate::speculative::SpeculativeConfig::Dspark { .. }
+            )
         {
             hanzo_ml::bail!(
                 "speculative decoding currently requires PagedAttention for this pipeline."
             );
+        }
+        if let crate::speculative::SpeculativeConfig::Dspark {
+            path,
+            confidence_threshold,
+        } = config
+        {
+            // DSpark parallel-block draft on the normal (safetensors) Qwen3 pipeline. Load the
+            // draft checkpoint, enable multi-layer hidden capture on the target model, and
+            // register the proposer. Draft dtype: F32 on CPU (numeric parity for tests), BF16
+            // on accelerators — draft dtype only affects accept rate, never correctness (the
+            // target verify decides every emitted token; draft_block casts target hiddens in).
+            let dir = std::path::PathBuf::from(&path);
+            let cfg = crate::models::qwen3_dspark::DSparkConfig::from_json_file(
+                dir.join("config.json"),
+            )?;
+            let device = self.model.device().clone();
+            let dtype = if device.is_cpu() {
+                hanzo_ml::DType::F32
+            } else {
+                hanzo_ml::DType::BF16
+            };
+            let weights = dir.join("model.safetensors");
+            let vb = crate::models::qwen3_dspark::dspark_varbuilder(&weights, dtype, &device)?;
+            let capture_layers: Vec<usize> =
+                cfg.target_layer_ids.iter().map(|&x| x as usize).collect();
+            let block_size = cfg.block_size;
+            let draft = crate::models::qwen3_dspark::Qwen3DSpark::load(cfg, vb)?;
+            let proposer =
+                crate::models::qwen3_dspark::DsparkProposer::new(draft, confidence_threshold);
+            // Enable target-side capture of the fused layer hiddens the proposer reads.
+            self.model.set_speculative_capture_layers(capture_layers);
+            let info =
+                crate::speculative::SpeculativeAttachInfo::dspark(block_size, confidence_threshold);
+            crate::speculative::logging::log_attach(&info);
+            self.draft_proposer = Some(Box::new(proposer));
+            return Ok(());
         }
         if let crate::speculative::SpeculativeConfig::DraftModel { draft, gamma } = config {
             {
@@ -1739,7 +1789,7 @@ impl Pipeline for NormalPipeline {
             let proposer = crate::speculative::DraftModelProposer::new(draft, gamma)?;
             let info = crate::speculative::SpeculativeAttachInfo::draft_model(gamma);
             crate::speculative::logging::log_attach(&info);
-            self.draft_proposer = Some(proposer);
+            self.draft_proposer = Some(Box::new(proposer));
             return Ok(());
         }
         if let Some(info) = self.model.attach_speculative(config)? {
@@ -1780,6 +1830,31 @@ impl Pipeline for NormalPipeline {
             let cache = crate::speculative::cache::PagedSpeculativeCacheAccess::new(
                 &metadata,
                 cache_engine,
+            );
+            return crate::speculative::driver::try_sample_speculative_causal_gen(
+                self,
+                seqs,
+                logits,
+                prefix_cacher,
+                disable_eos_stop,
+                rng,
+                &cache,
+            )
+            .await;
+        }
+
+        // Non-paged path (DSpark on normal Qwen3): drive the SAME generic loop over the
+        // normal KV backend. Snapshot the shared cache handle first (it clones the Arc), so the
+        // immutable model borrow ends before the `&mut self` driver call.
+        let normal_cache = self
+            .model
+            .cache()
+            .normal_arc()
+            .map(|arc| (arc, self.model.max_seq_len()));
+        if let Some((cache_arc, max_seq_len)) = normal_cache {
+            let cache = crate::speculative::cache::NormalSpeculativeCacheAccess::new(
+                cache_arc,
+                max_seq_len,
             );
             return crate::speculative::driver::try_sample_speculative_causal_gen(
                 self,
