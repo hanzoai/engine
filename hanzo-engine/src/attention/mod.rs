@@ -279,25 +279,33 @@ impl Sdpa {
             }
         }
 
-        // CUDA flash-attention for full-causal prefill. A causal Custom mask (from the causal masker,
-        // no SWA, not explicitly non-causal) is redundant with flash's internal is_causal + the varlen
-        // cumulative_seqlens, so drop it and run the fused flash kernel. Mirrors the ROCm block above;
-        // WITHOUT this, a Custom mask falls to the eager naive_sdpa below, which materializes the
-        // [seq x seq] score matrix -> O(n^2) prefill (measured: 8B pp2048 collapses to 0.37x llama,
-        // while llama's fused flash stays flat). flash_attn_v2 reads causality from flash_params.causal.
+        // CUDA flash-attention for full-causal prefill. A Custom mask from the causal masker (no SWA,
+        // no softcap, not explicitly non-causal) is full-causal, so it is redundant with flash's
+        // internal is_causal (flash_attn_v2 defaults causal = seq_len>1, or reads flash_params.causal)
+        // and can be dropped to run the fused kernel. Mirrors the ROCm block above; without it a Custom
+        // mask falls to the eager naive_sdpa below, which materializes the [seq x seq] score matrix ->
+        // O(n^2) prefill (measured: 8B pp2048 collapsed to 0.37x llama while llama's fused flash stayed
+        // flat). The causal intent lives in the mask, NOT flash_params (the GGUF model passes None), so
+        // gate on `!explicitly_noncausal` like ROCm -- do_causal alone is false on this path.
         #[cfg(any(feature = "flash-attn", feature = "flash-attn-v3"))]
         if q.device().is_cuda()
             && flash_attn_enabled()
-            && q.dtype() != DType::F32
-            && do_causal
             && !explicitly_noncausal
             && sdpa_params.sliding_window.is_none()
+            && sdpa_params.softcap.is_none_or(|x| x == 1.0)
             && matches!(mask, AttentionMask::Custom(_))
         {
-            let q = q.transpose(1, 2)?;
-            let k = k.transpose(1, 2)?;
-            let v = v.transpose(1, 2)?;
-            return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
+            let (_, _, seq_len, head_dim) = q.dims4()?;
+            if seq_len > 1
+                && head_dim == 128
+                && k.dim(3)? == 128
+                && matches!(q.dtype(), DType::F16 | DType::BF16)
+            {
+                let q = q.transpose(1, 2)?;
+                let k = k.transpose(1, 2)?;
+                let v = v.transpose(1, 2)?;
+                return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
+            }
         }
 
         // Custom mask, eager attention (flash can't use arbitrary mask tensors)
