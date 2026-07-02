@@ -3059,9 +3059,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.11.36"
+version = "0.11.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f3fb8822c13a1de5bcfd58ee21be0f2d093498721d44468b133a1bd5f74f1de"
+checksum = "398d7eed293b125695cb3f9397d9eaff12da3dfebc9328ad814f465476f8ae77"
 dependencies = [
  "accelerate-src",
  "ash",
