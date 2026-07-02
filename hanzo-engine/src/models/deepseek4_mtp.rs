@@ -230,7 +230,19 @@ pub struct Deepseek4MtpRuntime {
     mtp: MtpHead,
     embed: Embedding,
     output: Arc<dyn QuantMethod>,
+    /// The MAXIMUM chained-draft depth. The chain stops early (adaptive draft
+    /// length) when the draft head's confidence drops below `confidence_threshold`.
     n_predict: usize,
+    /// Adaptive draft-length gate (DSpark's load-aware idea, minus the trained
+    /// predictor): keep extending the EAGLE chain only while the just-drafted
+    /// token's softmax top-probability stays `>= confidence_threshold` on every
+    /// active row. `0.0` never gates (the chain always runs the full `n_predict` —
+    /// exactly the prior fixed-depth behavior). A high-confidence draft token is a
+    /// strong proxy for "the target will accept it", so gating spends draft depth
+    /// on the easy spans (long confident runs) and stays shallow on hard spans
+    /// (where deeper drafts would just be rejected, wasting verify width). It is
+    /// correctness-neutral — the target verify still decides every emitted token.
+    confidence_threshold: f32,
 }
 
 impl Deepseek4MtpRuntime {
@@ -240,11 +252,19 @@ impl Deepseek4MtpRuntime {
         output: Arc<dyn QuantMethod>,
         n_predict: usize,
     ) -> Self {
+        // Precedent: infra/experiment tuning knobs (e.g. IGPU_MEMORY_FRACTION) are
+        // plain env vars. Default 0.0 = fixed-depth = byte-identical to before.
+        let confidence_threshold = std::env::var("MTP_CONF_THRESHOLD")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(0.0);
         Self {
             mtp,
             embed,
             output,
             n_predict: n_predict.max(1),
+            confidence_threshold,
         }
     }
 }
@@ -301,7 +321,25 @@ impl SpeculativeProposer for Deepseek4MtpRuntime {
             cur_tokens = draft_ids.clone();
             hidden = next_hidden;
             step_tokens.push(draft_ids);
-            step_logits.push(logits);
+            step_logits.push(logits.clone());
+
+            // Adaptive draft length: after emitting step k, decide whether to extend
+            // the chain. Stop once the WEAKEST active row's draft confidence drops
+            // below the gate — a batch-uniform length keeps the staged proposals
+            // homogeneous (one target verify shape), so batched verify is unaffected;
+            // only the depth varies per proposal round. `0.0` never triggers (the
+            // min top-prob is always >= 0), preserving fixed-depth behavior exactly.
+            if self.confidence_threshold > 0.0 && k + 1 < self.n_predict {
+                // Confidence in F32: logits are the model compute dtype (bf16);
+                // softmax + the to_vec1::<f32> readback both need F32.
+                let probs = hanzo_nn::ops::softmax_last_dim(&logits.to_dtype(DType::F32)?)?; // [batch,1,vocab]
+                let top = probs.max(D::Minus1)?; // [batch,1]
+                let top_probs: Vec<f32> = top.flatten_all()?.to_vec1::<f32>()?;
+                let min_conf = top_probs.iter().cloned().fold(f32::INFINITY, f32::min);
+                if min_conf < self.confidence_threshold {
+                    break;
+                }
+            }
         }
 
         // Per row: the n_predict drafted tokens + their logits stacked as [1, n_predict, vocab]
