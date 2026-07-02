@@ -39,6 +39,7 @@ pub struct GgufModelBuilder {
     pub(crate) prefix_cache_n: Option<usize>,
     pub(crate) code_exec_config: Option<hanzo_engine::CodeExecutionConfig>,
     pub(crate) mtp_config: Option<hanzo_engine::MtpConfig>,
+    pub(crate) dtype: hanzo_engine::ModelDType,
 }
 
 impl GgufModelBuilder {
@@ -74,7 +75,16 @@ impl GgufModelBuilder {
             device: None,
             code_exec_config: None,
             mtp_config: None,
+            dtype: hanzo_engine::ModelDType::Auto,
         }
+    }
+
+    /// Load the GGUF in a specific compute dtype (KV cache + attention operands).
+    /// Default `Auto` picks per-device (bf16 on CUDA). `F32` threads full precision
+    /// end-to-end (ds4-parity numerics).
+    pub fn with_dtype(mut self, dtype: hanzo_engine::ModelDType) -> Self {
+        self.dtype = dtype;
+        self
     }
 
     /// Attach an MTP draft head (a separate GGUF) for self-speculative decoding.
