@@ -82,9 +82,17 @@ async fn main() -> Result<()> {
             .return_logprobs(true)
             .set_sampler_topn_logprobs(topn);
     }
-    let messages = messages
+    // env V4_TEMP / V4_TOPP: match ds4's CLI sampling defaults (temp 0.6, top-p)
+    // for behavior-parity runs — argmax (unset) is loop-prone on reasoning models.
+    let mut messages = messages
         .add_message(TextMessageRole::User, prompt)
         .set_sampler_max_len(max_len);
+    if let Ok(t) = std::env::var("V4_TEMP").map(|s| s.parse::<f64>().unwrap_or(0.6)) {
+        messages = messages.set_sampler_temperature(t);
+    }
+    if let Ok(p) = std::env::var("V4_TOPP").map(|s| s.parse::<f64>().unwrap_or(0.95)) {
+        messages = messages.set_sampler_topp(p);
+    }
 
     let response = model.send_chat_request(messages).await?;
     let msg = &response.choices[0].message;
