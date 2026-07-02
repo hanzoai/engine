@@ -141,8 +141,21 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             yarn_beta_slow: c
                 .get_value::<f32>("rope.scaling.yarn_beta_slow")
                 .unwrap_or(1.0),
+            // The GGUF writes this as an I32 array; `Value::to_u32` refuses I32, so a
+            // plain Vec<u32> read errors — and a silent `unwrap_or_default()` here made
+            // EVERY layer Full-mode (wrong rope on 41/43 layers, compressor never
+            // built, no sliding window). Accept any GGUF integer width; an absent key
+            // (all-Full model) is the only case that yields an empty schedule.
             compress_ratios: c
                 .get_value::<Vec<u32>>("attention.compress_ratios")
+                .or_else(|_| {
+                    c.get_value::<Vec<i32>>("attention.compress_ratios")
+                        .map(|v| v.into_iter().map(|x| x.max(0) as u32).collect())
+                })
+                .or_else(|_| {
+                    c.get_value::<Vec<i64>>("attention.compress_ratios")
+                        .map(|v| v.into_iter().map(|x| x.max(0) as u32).collect())
+                })
                 .unwrap_or_default(),
             n_routed_experts: c.get_value::<u32>("expert_count")? as usize,
             num_experts_per_tok: c.get_value::<u32>("expert_used_count")? as usize,
@@ -340,13 +353,41 @@ impl V4Attn {
             .narrow(D::Minus1, n_nope, self.rope_dim)?
             .contiguous()?
             .to_dtype(DType::F32)?;
+        let rot_in = rot;
         let rot = if inverse {
-            self.rotary.forward_inverse_positions(&rot, positions)?
+            self.rotary.forward_inverse_positions(&rot_in, positions)?
         } else {
             // forward_positions takes (q, k); reuse with a dummy second arg.
-            let (rot, _) = self.rotary.forward_positions(&rot, &rot, positions)?;
+            let (rot, _) = self.rotary.forward_positions(&rot_in, &rot_in, positions)?;
             rot
         };
+        // Diagnostic (env V4_TRACE_ROPE=1): dump the rope application — positions,
+        // table fingerprint, in/out values at the LAST token — a handful of calls only.
+        static TRACE_ROPE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        static ROPE_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        if *TRACE_ROPE.get_or_init(|| std::env::var("V4_TRACE_ROPE").is_ok_and(|v| v == "1"))
+            && rot_in.dim(2).unwrap_or(1) > 1
+        {
+            let n = ROPE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if n < 9 {
+                let pos_v: Vec<u32> = positions
+                    .to_dtype(DType::U32)
+                    .and_then(|p| p.flatten_all()?.to_vec1())
+                    .unwrap_or_default();
+                let s = rot_in.dim(2).unwrap_or(1);
+                let fp = |t: &Tensor| -> Vec<f32> {
+                    t.narrow(2, s - 1, 1)
+                        .and_then(|x| x.narrow(1, 0, 1)?.flatten_all()?.to_dtype(DType::F32)?.to_vec1())
+                        .map(|v: Vec<f32>| v.into_iter().take(4).collect())
+                        .unwrap_or_default()
+                };
+                eprintln!(
+                    "ROPETRACE call={n} inverse={inverse} s={s} positions={pos_v:?} in={:?} out={:?}",
+                    fp(&rot_in),
+                    fp(&rot)
+                );
+            }
+        }
         let rot = rot.to_dtype(orig)?;
         Tensor::cat(&[&pass, &rot], D::Minus1)?.contiguous()
     }
@@ -991,7 +1032,14 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let p = format!("blk.{i}");
             let dev = mapper.device_for(i, false).unwrap_or(device);
             let mode = layer_mode(&props.compress_ratios, i, props.sliding_window);
-            let rotary = if mode == Mode::Full {
+            // Diagnostic (env V4_FORCE_FULL_ROPE=1): give EVERY layer the Full rope map
+            // (θ=rope_theta, no YaRN). Numerically wrong on compressed layers by design —
+            // used to discriminate whether the layer-2+ drift vs ds4 comes from the
+            // compressed rope path (drift signature changes) or elsewhere (identical).
+            static FORCE_FULL_ROPE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            let force_full = *FORCE_FULL_ROPE
+                .get_or_init(|| std::env::var("V4_FORCE_FULL_ROPE").is_ok_and(|v| v == "1"));
+            let rotary = if mode == Mode::Full || force_full {
                 ropes_full[&dev.location()].clone()
             } else {
                 ropes_comp[&dev.location()].clone()
@@ -1133,6 +1181,38 @@ impl ModelWeights {
             }
         }
 
+        // Per-layer numeric trace (env V4_TRACE_LAYERS=1, prefill only): last-position
+        // carrier stream-sum L2 + stream-0 L2 + first-4 values per layer — the hanzo
+        // half of the ds4 divergence bisection (pairs with ds4's DS4_TRACE_LAYERS).
+        static TRACE_LAYERS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let trace_layers = *TRACE_LAYERS
+            .get_or_init(|| std::env::var("V4_TRACE_LAYERS").is_ok_and(|v| v == "1"))
+            && is_prefill;
+        let layer_trace = |tag: &str, t: &Tensor| -> Result<()> {
+            // t: [B, s, n_hc, E] carrier or [B, s, E] plain hidden — dump last position.
+            let s_len = t.dim(1)?;
+            let last = t.narrow(1, s_len - 1, 1)?.squeeze(1)?.squeeze(0)?;
+            let (summed, s0norm) = if last.dims().len() == 2 {
+                let s0 = last.narrow(0, 0, 1)?.squeeze(0)?.to_dtype(DType::F32)?;
+                let s0n = s0.sqr()?.sum_all()?.to_scalar::<f32>()?.sqrt();
+                (last.sum(0)?.to_dtype(DType::F32)?, s0n)
+            } else {
+                let x = last.to_dtype(DType::F32)?;
+                let n = x.sqr()?.sum_all()?.to_scalar::<f32>()?.sqrt();
+                (x, n)
+            };
+            let norm = summed.sqr()?.sum_all()?.to_scalar::<f32>()?.sqrt();
+            let v: Vec<f32> = summed.narrow(0, 0, 4)?.to_vec1()?;
+            eprintln!(
+                "HZTRACE layer={tag} norm={norm:.6} s0norm={s0norm:.6} h0={:.6} h1={:.6} h2={:.6} h3={:.6}",
+                v[0], v[1], v[2], v[3]
+            );
+            Ok(())
+        };
+        if trace_layers {
+            layer_trace("-1", &embeds)?;
+        }
+
         // Expand to the HC carrier, thread through layers, reduce at output.
         let mut hc = HyperConnections::expand(&embeds, self.n_hc)?;
         for (i, layer) in self.layers.iter().enumerate() {
@@ -1149,11 +1229,17 @@ impl ModelWeights {
                 is_prefill,
             )?;
             trace_rms(&hc, format_args!("v4 carrier after layer {i}"));
+            if trace_layers {
+                layer_trace(&i.to_string(), &hc)?;
+            }
         }
         drop(comp);
         let x = self.output_hc.reduce_output(&hc)?;
         trace_rms(&x, format_args!("v4 reduce_output"));
         let x = self.norm.forward(&x)?;
+        if trace_layers {
+            layer_trace("99", &x)?;
+        }
         let x = extract_logits(&x, context_lens)?;
         // MTP: stash the per-sampled-row hidden (post-norm, pre-output) for the proposer.
         if self
