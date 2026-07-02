@@ -1497,6 +1497,11 @@ impl Pipeline for GGUFPipeline {
     ) -> Result<(), hanzo_ml::Error> {
         match config {
             crate::speculative::SpeculativeConfig::Off => Ok(()),
+            crate::speculative::SpeculativeConfig::Dspark { .. } => {
+                hanzo_ml::bail!(
+                    "DSpark speculative decoding targets the safetensors (normal) Qwen3 pipeline, not GGUF."
+                );
+            }
             crate::speculative::SpeculativeConfig::DraftModel { draft, gamma } => {
                 if self.metadata.cache_engine.is_none() {
                     hanzo_ml::bail!(

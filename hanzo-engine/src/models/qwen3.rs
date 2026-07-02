@@ -364,6 +364,14 @@ pub struct Model {
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
+    /// DSpark speculative multi-layer hidden exposure. When `store_spec_hiddens` is set,
+    /// `forward_embeds` stashes the post-layer output of every layer index listed in
+    /// `spec_capture_layers` (HF `hidden_states[i+1]` convention) into `spec_hiddens`, in
+    /// layer order, so the DSpark draft proposer can read the fused-context inputs. Default
+    /// OFF ⇒ the layer loop is byte-identical to the non-speculative path.
+    spec_hiddens: std::sync::Mutex<Vec<Tensor>>,
+    spec_capture_layers: std::sync::Mutex<Vec<usize>>,
+    store_spec_hiddens: std::sync::atomic::AtomicBool,
 }
 
 impl Model {
@@ -514,6 +522,9 @@ impl Model {
                 kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
+            spec_hiddens: std::sync::Mutex::new(Vec::new()),
+            spec_capture_layers: std::sync::Mutex::new(Vec::new()),
+            store_spec_hiddens: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -523,6 +534,32 @@ impl Model {
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         self.forward_embeds(input_ids, self.embed_tokens.forward(input_ids)?, ctx)
+    }
+
+    /// Enable/disable DSpark target-layer hidden capture, and set which layer indices to
+    /// stash (the DSpark checkpoint's `target_layer_ids`). Clearing drops any stashed
+    /// hiddens so a finished step cannot leak state into the next one.
+    pub fn set_store_spec_hiddens(&self, store: bool, capture_layers: Vec<usize>) {
+        if let Ok(mut layers) = self.spec_capture_layers.lock() {
+            *layers = capture_layers;
+        }
+        self.store_spec_hiddens
+            .store(store, std::sync::atomic::Ordering::Relaxed);
+        if !store {
+            if let Ok(mut h) = self.spec_hiddens.lock() {
+                h.clear();
+            }
+        }
+    }
+
+    /// The target-layer hidden states stashed by the most recent forward (in
+    /// `spec_capture_layers` order), if capture was enabled. Cloned; the stash is retained.
+    pub fn last_spec_hiddens(&self) -> Vec<Tensor> {
+        self.spec_hiddens
+            .lock()
+            .ok()
+            .map(|h| h.clone())
+            .unwrap_or_default()
     }
 
     pub fn forward_embeds(
@@ -550,9 +587,31 @@ impl Model {
             AttentionMask::None
         };
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
+        // DSpark capture: snapshot the requested layer indices once (empty when OFF, so the
+        // `.contains` guard below is a no-op and the loop stays byte-identical), and clear
+        // any prior stash so this forward's hiddens don't accrete onto a stale set.
+        let capture_layers: Vec<usize> = if self
+            .store_spec_hiddens
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            if let Ok(mut h) = self.spec_hiddens.lock() {
+                h.clear();
+            }
+            self.spec_capture_layers
+                .lock()
+                .map(|l| l.clone())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(&xs, &attention_mask.get(xs.device()), &mut cache[i], ctx, i)?;
+            if capture_layers.contains(&i) {
+                if let Ok(mut h) = self.spec_hiddens.lock() {
+                    h.push(xs.clone());
+                }
+            }
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
@@ -631,7 +690,37 @@ impl IsqModel for Model {
     }
 }
 
-impl crate::speculative::SpeculativeTargetMixin for Model {}
+impl crate::speculative::SpeculativeTargetMixin for Model {
+    fn set_speculative_capture_layers(&self, layers: Vec<usize>) {
+        self.set_store_spec_hiddens(true, layers);
+    }
+
+    fn speculative_target_hidden_layers(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> Result<Option<Vec<Tensor>>> {
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let hiddens = self.last_spec_hiddens();
+        if hiddens.is_empty() {
+            return Ok(None);
+        }
+        // DSpark drafts one sequence per step; take that sequence's full captured prefix from
+        // every fused layer as `[prefix_len, hidden]` (draft_block accepts rank-2 or rank-3).
+        let (b, _r) = rows[0];
+        let mut layers = Vec::with_capacity(hiddens.len());
+        for h in &hiddens {
+            let slice = match h.dims().len() {
+                3 => h.narrow(0, b, 1)?.squeeze(0)?, // [batch,seq,hidden] -> [seq,hidden]
+                2 => h.clone(),
+                _ => hanzo_ml::bail!("unexpected DSpark hidden shape {:?}", h.dims()),
+            };
+            layers.push(slice);
+        }
+        Ok(Some(layers))
+    }
+}
 
 impl NormalModel for Model {
     fn forward(

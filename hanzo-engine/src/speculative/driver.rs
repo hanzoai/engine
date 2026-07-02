@@ -22,6 +22,15 @@ pub trait SpeculativePipelineExt: Pipeline {
 
     fn speculative_target_hiddens(&self, rows: &[(usize, usize)]) -> Result<Option<Tensor>>;
 
+    /// Multi-layer target hidden prefix for DSpark parallel-block proposers. Default `None`:
+    /// only pipelines with a DSpark proposer + a capture-enabled target override this.
+    fn speculative_target_hidden_layers(
+        &self,
+        _rows: &[(usize, usize)],
+    ) -> Result<Option<Vec<Tensor>>> {
+        Ok(None)
+    }
+
     fn speculative_propose(
         &mut self,
         ctx: SpeculativeProposeBatchCtx<'_>,
@@ -339,6 +348,9 @@ where
     // model), not a failure: pass it through and let the proposer decide. MTP returns `Some` when
     // active and its `propose` errors if hiddens are missing.
     let target_hiddens = target.speculative_target_hiddens(hidden_rows)?;
+    // DSpark parallel-block proposers read the multi-layer prefix hiddens instead of the
+    // single per-row hidden. `Ok(None)` for every other proposer (default trait impl).
+    let target_hidden_layers = target.speculative_target_hidden_layers(hidden_rows)?;
 
     let seq_ids = active_indices
         .iter()
@@ -357,6 +369,7 @@ where
             sequences: &sequences,
             cache: cache.proposer_cache(&sequences)?,
             target_hiddens,
+            target_hidden_layers,
             rng: rng.clone(),
         })?
     };
