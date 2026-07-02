@@ -85,16 +85,26 @@ fn sinks_attn_regular(
         );
     }
 
-    // head_dim-512 decode (DeepSeek-V4 absorbed-MLA latent): fused F32
-    // online-softmax flash-decode kernel, a faithful port of ds4's
+    // head_dim-512 decode + speculative-verify (DeepSeek-V4 absorbed-MLA latent):
+    // fused F32 online-softmax flash-decode kernel, a faithful port of ds4's
     // `attention_decode_mixed_heads8_online_kernel` (sink folded into the
-    // denominator only; ds4's sliding-window clamp). All-F32 = ds4-parity
-    // numerics AND replaces the slow eager 3-pass below on the decode path.
+    // denominator only; ds4's sliding-window clamp, per query row). Covers
+    // q_len 1..=8 — single-token decode AND MTP/EAGLE verify widths — with
+    // causal masking of the trailing block handled inside the kernel. All-F32
+    // = ds4-parity numerics AND replaces the slow eager 3-pass below.
+    // `mask` here is the CUSTOM-mask extraction only (plain causal arrives as None
+    // and the kernel applies per-row causality itself). A Some(..) means the
+    // compressed-layer combined mask — those rows need it, so keep the eager path.
     #[cfg(all(feature = "cuda", target_family = "unix"))]
-    if q.device().is_cuda() && head_dim == 512 && q.dim(2)? == 1 && q.dim(0)? == 1 {
+    if q.device().is_cuda()
+        && head_dim == 512
+        && (1..=8).contains(&q.dim(2)?)
+        && q.dim(0)? == 1
+        && mask.is_none()
+    {
         let in_dtype = q.dtype();
         let f32 = hanzo_ml::DType::F32;
-        let qk = q.squeeze(0)?.to_dtype(f32)?.contiguous()?; // [H, 1, 512]
+        let qk = q.squeeze(0)?.to_dtype(f32)?.contiguous()?; // [H, q_len, 512]
         let kk = k.squeeze(0)?.to_dtype(f32)?.contiguous()?; // [kv_H, kv_len, 512]
         let vv = v.squeeze(0)?.to_dtype(f32)?.contiguous()?;
         let sk = sinks.to_dtype(f32)?.contiguous()?; // [H]
@@ -108,7 +118,7 @@ fn sinks_attn_regular(
             win,
             sdpa_params.softmax_scale,
         )?;
-        return out.unsqueeze(0)?.to_dtype(in_dtype); // [1, H, 1, 512]
+        return out.unsqueeze(0)?.to_dtype(in_dtype); // [1, H, q_len, 512]
     }
 
     #[cfg(feature = "metal")]
