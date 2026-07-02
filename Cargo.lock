@@ -2889,7 +2889,7 @@ dependencies = [
  "hanzo-code-exec",
  "hanzo-flash-attn",
  "hanzo-llm-mcp",
- "hanzo-metal-kernels",
+ "hanzo-metal-kernels 0.11.33 (registry+https://github.com/rust-lang/crates.io-index)",
  "hanzo-ml",
  "hanzo-nn",
  "hanzo-paged-attn",
@@ -3002,8 +3002,6 @@ dependencies = [
 [[package]]
 name = "hanzo-kernels"
 version = "0.11.34"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "870faa6e269052fef4cb5ba31b96ca3dc5283fe27f0a7efed6f12c55c47a2164"
 dependencies = [
  "glob",
  "hanzo-bindgen-cuda",
@@ -3044,6 +3042,20 @@ dependencies = [
 [[package]]
 name = "hanzo-metal-kernels"
 version = "0.11.33"
+dependencies = [
+ "block2",
+ "half",
+ "objc2",
+ "objc2-foundation",
+ "objc2-metal",
+ "once_cell",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "hanzo-metal-kernels"
+version = "0.11.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "99d9b64f98adaef89b56f1b3665aa166692020f47c3dce214751ddf539797d41"
 dependencies = [
@@ -3060,8 +3072,6 @@ dependencies = [
 [[package]]
 name = "hanzo-ml"
 version = "0.11.36"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f3fb8822c13a1de5bcfd58ee21be0f2d093498721d44468b133a1bd5f74f1de"
 dependencies = [
  "accelerate-src",
  "ash",
@@ -3071,7 +3081,7 @@ dependencies = [
  "gemm 0.19.0",
  "half",
  "hanzo-kernels",
- "hanzo-metal-kernels",
+ "hanzo-metal-kernels 0.11.33",
  "hanzo-rocm",
  "hanzo-rocm-kernels",
  "hanzo-ug",
@@ -3103,7 +3113,7 @@ checksum = "5c9f9902aecdda75c5d6da702963bfc582c97a782e2024bf188543cd372f57f2"
 dependencies = [
  "accelerate-src",
  "half",
- "hanzo-metal-kernels",
+ "hanzo-metal-kernels 0.11.33 (registry+https://github.com/rust-lang/crates.io-index)",
  "hanzo-ml",
  "intel-mkl-src",
  "libc",
@@ -3124,7 +3134,7 @@ dependencies = [
  "dispatch2",
  "float8",
  "half",
- "hanzo-metal-kernels",
+ "hanzo-metal-kernels 0.11.33 (registry+https://github.com/rust-lang/crates.io-index)",
  "hanzo-ml",
  "objc2-foundation",
  "objc2-metal",
@@ -3172,7 +3182,7 @@ dependencies = [
  "dispatch2",
  "float8",
  "half",
- "hanzo-metal-kernels",
+ "hanzo-metal-kernels 0.11.33 (registry+https://github.com/rust-lang/crates.io-index)",
  "hanzo-ml",
  "hanzo-nn",
  "hf-hub",
@@ -3207,8 +3217,6 @@ dependencies = [
 [[package]]
 name = "hanzo-rocm-kernels"
 version = "0.11.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae6c1d47c3f216fa6821e2e098727cc87766af485a0fcc14359559d2742d7f82"
 dependencies = [
  "dirs 5.0.1",
  "half",
@@ -3298,8 +3306,6 @@ dependencies = [
 [[package]]
 name = "hanzo-ug"
 version = "0.11.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de16cfe5017dbaedf840d5929928a3cb6e85003b7d25a9c5d41d3bceace0939d"
 dependencies = [
  "ug",
  "ug-cuda",
