@@ -135,6 +135,7 @@ async fn run_bench(
                             Response::CompletionChunk(_) => unreachable!(),
                             Response::ImageGeneration(_) => unreachable!(),
                             Response::Speech { .. } => unreachable!(),
+                            Response::Frames { .. } => unreachable!(),
                             Response::Raw { .. } => unreachable!(),
                             Response::Embeddings { .. } => unreachable!(),
                             Response::AgenticToolCallProgress { .. } => unreachable!(),
