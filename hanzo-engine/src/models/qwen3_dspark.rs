@@ -650,6 +650,13 @@ mod tests {
 
     const CKPT_DIR: &str = "/home/z/work/zen/hf/dspark/dspark_qwen3_4b_block7";
 
+    /// Checkpoint override (env DSPARK_CKPT) so the load tests can point at ANY
+    /// DSpark checkpoint — e.g. one produced by the native hanzo-train trainer
+    /// (the deploy arrow of the all-Rust dump→cache→train→deploy loop).
+    fn ckpt_dir() -> String {
+        std::env::var("DSPARK_CKPT").unwrap_or_else(|_| CKPT_DIR.to_string())
+    }
+
     /// Pure gate logic — runs on CPU with no model. `threshold <= 0` keeps the whole block;
     /// otherwise keep the leading run whose `sigmoid(conf) >= threshold`, always at least one.
     #[test]
@@ -677,7 +684,8 @@ mod tests {
         use rand_isaac::Isaac64Rng;
         use std::sync::{Arc, Mutex};
 
-        let dir = std::path::Path::new(CKPT_DIR);
+        let dir_s = ckpt_dir();
+        let dir = std::path::Path::new(&dir_s);
         let weights = dir.join("model.safetensors");
         if !weights.exists() {
             eprintln!("skipping: checkpoint not found at {}", weights.display());
@@ -744,7 +752,8 @@ mod tests {
 
     #[test]
     fn dspark_load_and_draft_block() -> Result<()> {
-        let dir = std::path::Path::new(CKPT_DIR);
+        let dir_s = ckpt_dir();
+        let dir = std::path::Path::new(&dir_s);
         let weights = dir.join("model.safetensors");
         if !weights.exists() {
             eprintln!("skipping: checkpoint not found at {}", weights.display());
@@ -754,19 +763,25 @@ mod tests {
         let dev = Device::Cpu;
         let cfg = DSparkConfig::from_json_file(dir.join("config.json"))?;
         assert_eq!(cfg.block_size, 7);
-        assert_eq!(cfg.num_hidden_layers, 5);
-        assert_eq!(cfg.num_fused_layers(), 5);
-        assert_eq!(cfg.mask_token_id, 151669);
+        if std::env::var("DSPARK_CKPT").is_err() {
+            // Reference-checkpoint invariants (deepseek-ai/dspark_qwen3_4b_block7).
+            // Overridden checkpoints (e.g. hanzo-train output) carry their own dims
+            // in config.json — the load below validates shape consistency itself.
+            assert_eq!(cfg.num_hidden_layers, 5);
+            assert_eq!(cfg.num_fused_layers(), 5);
+            assert_eq!(cfg.mask_token_id, 151669);
+        }
+        let n_fused = cfg.num_fused_layers();
 
         let vb = dspark_varbuilder(&weights, DType::F32, &dev)?;
         let model = Qwen3DSpark::load(cfg, vb)?;
 
-        // Random target hiddens: 5 × [ctx_len, hidden].
+        // Random target hiddens: n_fused × [ctx_len, hidden].
         let ctx_len = 6usize;
         let h = model.config().hidden_size;
         let vocab = model.config().vocab_size;
-        let mut hiddens = Vec::with_capacity(5);
-        for _ in 0..5 {
+        let mut hiddens = Vec::with_capacity(n_fused);
+        for _ in 0..n_fused {
             hiddens.push(Tensor::randn(0f32, 1f32, (ctx_len, h), &dev)?);
         }
 
@@ -823,7 +838,8 @@ mod tests {
         const ANCHOR_POS: usize = 12;
         const ANCHOR_TOKEN: u32 = 100;
 
-        let dir = std::path::Path::new(CKPT_DIR);
+        let dir_s = ckpt_dir();
+        let dir = std::path::Path::new(&dir_s);
         let weights = dir.join("model.safetensors");
         let refp = std::path::Path::new(REF);
         if !weights.exists() || !refp.exists() {
