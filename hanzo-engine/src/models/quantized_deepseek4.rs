@@ -1158,6 +1158,25 @@ fn trace_rms(t: &Tensor, what: std::fmt::Arguments) {
     }
 }
 
+/// Layers whose (stream-summed) Hyper-Connection carrier is captured for the
+/// DSpark draft-head training cache — even spacing over V4-Flash's 43 blocks,
+/// mirroring DeepSpec's `[1, 9, 17, 25, 33]` for 36 layers. See `write_capture`
+/// and `examples/v4_cache_dump`.
+const V4_CAPTURE_LAYERS: [usize; 5] = [1, 11, 21, 31, 41];
+
+/// FNV-1a 64-bit over the token ids — a process-stable content hash for the
+/// capture sidecar (identifies a sample independent of SipHash's per-process seed).
+fn fnv1a_ids(ids: &[u32]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &v in ids {
+        for b in v.to_le_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    h
+}
+
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         mut ct: Content<'_, R>,
@@ -1365,6 +1384,59 @@ impl ModelWeights {
         self.spec_hidden.lock().ok().and_then(|h| h.clone())
     }
 
+    /// Write one teacher-forced sample's hidden-state shards to `dir` (env
+    /// `V4_CAPTURE_DIR`). ALL capture I/O lives here so the caller stays a thin
+    /// driver. `carriers` are the per-`V4_CAPTURE_LAYERS` stream-summed carriers,
+    /// each `[1, s, E]`; `last` is the post-final-norm hidden `[1, s, E]`. Emits
+    /// `<dir>/sample_<n>.safetensors` with tensors `input_ids [s] u32`,
+    /// `target_hidden_states [s, 5, E] bf16`, `target_last_hidden_states [s, E]
+    /// bf16`, and appends one line to `<dir>/index.jsonl`:
+    /// `{"idx","file","seq_len","ids_hash"}`. A shared `AtomicUsize` names the
+    /// sample so the driver's Nth request maps to `sample_<N>`.
+    fn write_capture(
+        &self,
+        dir: &str,
+        input_ids: &Tensor,
+        carriers: &[Tensor],
+        last: &Tensor,
+    ) -> Result<()> {
+        use std::io::Write as _;
+        let ids = input_ids.squeeze(0)?.to_dtype(DType::U32)?; // [s]
+        let seq_len = ids.dim(0)?;
+        // [s, 5, E] bf16: stack the stream-summed carriers along a new axis 1.
+        let planes = carriers
+            .iter()
+            .map(|c| c.squeeze(0))
+            .collect::<Result<Vec<_>>>()?;
+        let hidden = Tensor::stack(&planes, 1)?.to_dtype(DType::BF16)?;
+        let last = last.squeeze(0)?.to_dtype(DType::BF16)?; // [s, E]
+
+        let mut shards = HashMap::new();
+        shards.insert("input_ids".to_string(), ids.clone());
+        shards.insert("target_hidden_states".to_string(), hidden);
+        shards.insert("target_last_hidden_states".to_string(), last);
+
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let file = format!("sample_{idx}.safetensors");
+        let dir_path = std::path::Path::new(dir);
+        std::fs::create_dir_all(dir_path).map_err(hanzo_ml::Error::wrap)?;
+        hanzo_ml::safetensors::save(&shards, dir_path.join(&file))?;
+
+        let ids_hash = fnv1a_ids(&ids.to_vec1::<u32>()?);
+        let mut index = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir_path.join("index.jsonl"))
+            .map_err(hanzo_ml::Error::wrap)?;
+        writeln!(
+            index,
+            "{{\"idx\":{idx},\"file\":\"{file}\",\"seq_len\":{seq_len},\"ids_hash\":\"{ids_hash:016x}\"}}"
+        )
+        .map_err(hanzo_ml::Error::wrap)?;
+        Ok(())
+    }
+
     pub fn forward(
         &self,
         input_ids: &Tensor,
@@ -1413,6 +1485,24 @@ impl ModelWeights {
             }
         }
 
+        // V4 training-cache capture (env V4_CAPTURE_DIR): teacher-forced per-position
+        // hidden-state dump for the DSpark draft-head. Prefill-only and single-
+        // sequence; a single OnceLock load when the var is unset → zero cost off-path.
+        static CAPTURE_DIR: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        let capture_dir = CAPTURE_DIR
+            .get_or_init(|| std::env::var("V4_CAPTURE_DIR").ok().filter(|s| !s.is_empty()))
+            .as_deref();
+        // `> 1` skips the load-time single-token warmup prefill (the engine runs one
+        // 1-token forward at offset 0 to prime caches; seqlen 1 has no teacher-forcing
+        // signal). Real samples are many tokens.
+        let capturing = capture_dir.is_some() && is_prefill && input_ids.dim(1)? > 1;
+        if capturing && input_ids.dim(0)? != 1 {
+            hanzo_ml::bail!(
+                "V4_CAPTURE_DIR requires a single sequence (max_num_seqs=1); got batch {}",
+                input_ids.dim(0)?
+            );
+        }
+
         // Per-layer numeric trace (env V4_TRACE_LAYERS=1, prefill only): last-position
         // carrier stream-sum L2 + stream-0 L2 + first-4 values per layer — the hanzo
         // half of the ds4 divergence bisection (pairs with ds4's DS4_TRACE_LAYERS).
@@ -1446,6 +1536,8 @@ impl ModelWeights {
         }
 
         // Expand to the HC carrier, thread through layers, reduce at output.
+        // (`captured` stays empty — no allocation — unless V4_CAPTURE_DIR is set.)
+        let mut captured: Vec<Tensor> = Vec::new();
         let mut hc = HyperConnections::expand(&embeds, self.n_hc)?;
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
@@ -1464,6 +1556,11 @@ impl ModelWeights {
             if trace_layers {
                 layer_trace(&i.to_string(), &hc)?;
             }
+            // V4 training-cache: stash this layer's carrier summed across the HC
+            // streams -> [1, s, E] (full sequence), at the sampled layers only.
+            if capturing && V4_CAPTURE_LAYERS.contains(&i) {
+                captured.push(hc.sum(2)?);
+            }
         }
         drop(comp);
         let x = self.output_hc.reduce_output(&hc)?;
@@ -1471,6 +1568,18 @@ impl ModelWeights {
         let x = self.norm.forward(&x)?;
         if trace_layers {
             layer_trace("99", &x)?;
+        }
+        // V4 training-cache: `x` here is the post-final-norm FULL-sequence hidden
+        // [1, s, E] — captured BEFORE extract_logits narrows it to sampled rows.
+        // Both the per-layer carriers and this norm are now in hand, so emit the
+        // sample's shards. `capturing` guarantees prefill-only + single-sequence.
+        if capturing {
+            self.write_capture(
+                capture_dir.expect("capturing implies V4_CAPTURE_DIR set"),
+                input_ids,
+                &captured,
+                &x,
+            )?;
         }
         let x = extract_logits(&x, context_lens)?;
         // MTP: stash the per-sampled-row hidden (post-norm, pre-output) for the proposer.
