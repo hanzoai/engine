@@ -1617,6 +1617,14 @@ impl NormalPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
+    fn has_active_speculative_proposer(&self) -> bool {
+        // Gates the step-start staged-token clear (pipeline/mod.rs): without this
+        // override the default `false` wipes every staged DSpark/draft proposal
+        // before its verify forward — bootstrap-forever, zero accepted drafts
+        // (the exact bug class fixed for the GGUF/MTP path earlier).
+        self.draft_proposer.is_some() || self.model.has_speculative_proposer()
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
