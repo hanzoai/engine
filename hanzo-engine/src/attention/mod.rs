@@ -51,14 +51,6 @@ pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn}
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
 
-/// `HANZO_CUDA_FLASH=1` forces CUDA bf16 attention back onto flash-attn (default routes bf16 to the
-/// numerically-stable eager path, curing the flash-attn-2 bf16 collapse). Read once, cached.
-fn cuda_flash_forced() -> bool {
-    use std::sync::OnceLock;
-    static FORCED: OnceLock<bool> = OnceLock::new();
-    *FORCED.get_or_init(|| std::env::var("HANZO_CUDA_FLASH").is_ok_and(|v| v == "1"))
-}
-
 
 /// Generic chunked attention computation that can be used by different backends
 pub(crate) fn chunked_attention<F>(
@@ -286,18 +278,12 @@ impl Sdpa {
             return self.run_attention_noflash(q, k, v, Some(mask_tensor), sdpa_params, do_causal);
         }
 
-        // CausalFlash or None: try flash attention, fall back to eager.
-        // CUDA flash-attn-2 bifurcates numerically on BF16 and seeds the Qwen3-8B-Q4K repetition-collapse
-        // in PREFILL: eager+eager generates "...Paris..." coherently, flash+flash collapses to
-        // "needle needle needle", and flash-prefill+eager-decode STILL collapses -- so even a 13-token
-        // flash prefill tips the model onto the repetition attractor from the first token (measured A/B).
-        // Route ALL bf16 CUDA attention (prefill AND decode) to the stable eager path. Eager decode is
-        // 1xKV (cheap); eager prefill is O(n^2) -- fine for typical prompts, but long-context (thousands of
-        // tokens) needs the DSL online-softmax sdpa follow-up (tracked). f16 keeps flash (bf16-specific
-        // bug). HANZO_CUDA_FLASH=1 forces flash back for the A/B.
-        let cuda_bf16_stable = q.device().is_cuda() && q.dtype() == DType::BF16 && !cuda_flash_forced();
+        // CausalFlash or None: try flash attention, fall back to eager. `using_flash_attn()` is now
+        // runtime-gated (default OFF on CUDA -- flash-attn-2 bf16 collapses 8B-Q4K into repetition; the
+        // cure is the eager path at EVERY flash site: masker, paged-attn, inputs, here). HANZO_CUDA_FLASH=1
+        // opts back in. See using_flash_attn() in utils/mod.rs.
         let can_use_flash = q.device().is_cpu()
-            || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32 && !cuda_bf16_stable;
+            || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32;
 
         if can_use_flash {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)

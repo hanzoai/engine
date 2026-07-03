@@ -2607,7 +2607,7 @@ fn selected_rope_cache(
 }
 
 fn post_rope_output(mut x: Tensor) -> Result<Tensor> {
-    if !(cfg!(feature = "flash-attn") || cfg!(feature = "flash-attn-v3")) {
+    if !crate::using_flash_attn() {
         x = x.contiguous()?;
     }
     Ok(x)
@@ -2801,7 +2801,7 @@ pub fn qk_rms_norm_rope(
         let mut k = k_embed
             .reshape((batch, seq_len, k.dim(1)?, n_embd))?
             .transpose(1, 2)?;
-        if !(cfg!(feature = "flash-attn") || cfg!(feature = "flash-attn-v3")) {
+        if !crate::using_flash_attn() {
             q = q.contiguous()?;
             k = k.contiguous()?;
         }
@@ -3544,7 +3544,7 @@ impl RotaryEmbedding {
             let mut k = k_embed
                 .reshape((b_sz, seq_len, kh, n_embd))?
                 .transpose(1, 2)?;
-            if !(cfg!(feature = "flash-attn") || cfg!(feature = "flash-attn-v3")) {
+            if !crate::using_flash_attn() {
                 q = q.contiguous()?;
                 k = k.contiguous()?;
             }
