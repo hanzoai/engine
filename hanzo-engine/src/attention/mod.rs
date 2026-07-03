@@ -51,6 +51,14 @@ pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn}
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
 
+/// `HANZO_CUDA_FLASH_DECODE=1` forces CUDA decode back onto flash-attn (default routes decode to the
+/// numerically-stable eager path, curing the bf16 flash decode collapse). Read once, cached.
+fn cuda_flash_decode_forced() -> bool {
+    use std::sync::OnceLock;
+    static FORCED: OnceLock<bool> = OnceLock::new();
+    *FORCED.get_or_init(|| std::env::var("HANZO_CUDA_FLASH_DECODE").is_ok_and(|v| v == "1"))
+}
+
 
 /// Generic chunked attention computation that can be used by different backends
 pub(crate) fn chunked_attention<F>(
@@ -278,9 +286,16 @@ impl Sdpa {
             return self.run_attention_noflash(q, k, v, Some(mask_tensor), sdpa_params, do_causal);
         }
 
-        // CausalFlash or None: try flash attention, fall back to eager
+        // CausalFlash or None: try flash attention, fall back to eager.
+        // CUDA flash-attn-2 bifurcates numerically on bf16 DECODE: Qwen3-8B-Q4K collapses into repetition
+        // ("needle needle needle") under flash yet generates coherently ("...Paris...") under eager -- a
+        // proven same-box A/B (only the attention path differs). Decode is seq_q==1, so the eager path
+        // costs no seq^2 score matrix (cheap, no VRAM blowup); route CUDA decode to the stable eager path.
+        // Prefill (seq_q>1) keeps flash, where eager's O(n^2) would actually cost (GGUF prefill is already
+        // eager via its Custom mask above). HANZO_CUDA_FLASH_DECODE=1 forces flash decode back for the A/B.
+        let cuda_decode = q.device().is_cuda() && q.dim(2)? == 1 && !cuda_flash_decode_forced();
         let can_use_flash = q.device().is_cpu()
-            || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32;
+            || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32 && !cuda_decode;
 
         if can_use_flash {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
