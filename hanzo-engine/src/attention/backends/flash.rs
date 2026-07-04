@@ -1,9 +1,33 @@
-use hanzo_ml::{Result, Tensor};
+use hanzo_ml::{DType, Result, Tensor};
 
 use crate::attention::SdpaParams;
 
+// flash-attn-2 casts the softmax probabilities P (f32) to the kernel Element (bf16) before the P*V
+// tensor-core matmul (flash_fwd_kernel.h:347 `convert_type<Element>(acc_s)`). bf16's 7 mantissa bits
+// crush P and tip fragile models (Qwen3-8B-Q4K) into repetition-collapse -- eager (f32 P) stays
+// coherent. fp16 has 10 mantissa bits (3 more) and P in [0,1] fits fp16's range, so routing bf16
+// attention through the f16 kernel restores precision at IDENTICAL tensor-core throughput (fp16 MMA
+// == bf16 MMA rate). Default ON; HANZO_CUDA_FLASH_BF16=1 forces the raw bf16 kernel for A/B.
 #[cfg(feature = "flash-attn")]
 fn flash_attn_v2(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    flash_params: Option<&crate::pipeline::text_models_inputs_processor::FlashParams>,
+    sdpa_params: &SdpaParams,
+) -> Result<Tensor> {
+    if q.dtype() == DType::BF16 && std::env::var("HANZO_CUDA_FLASH_BF16").is_err() {
+        let orig = q.dtype();
+        let qf = q.to_dtype(DType::F16)?;
+        let kf = k.to_dtype(DType::F16)?;
+        let vf = v.to_dtype(DType::F16)?;
+        return flash_attn_v2_impl(&qf, &kf, &vf, flash_params, sdpa_params)?.to_dtype(orig);
+    }
+    flash_attn_v2_impl(q, k, v, flash_params, sdpa_params)
+}
+
+#[cfg(feature = "flash-attn")]
+fn flash_attn_v2_impl(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
