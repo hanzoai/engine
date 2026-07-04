@@ -345,6 +345,11 @@ pub struct HybridCache {
     /// Set by clone_in_cache before forward, used by model during forward.
     /// Shape: (batch_size,) containing pool slot indices.
     state_indices: Option<Tensor>,
+    /// Host mirror of `state_indices`. The decode forward reads slots from here to
+    /// gather/scatter recurrent state via constant-offset `narrow`/`slice_set` with NO
+    /// device->host sync, so the GDN decode path stays capturable by a CUDA/HIP graph
+    /// (a `state_indices.to_vec1()` would abort stream capture).
+    state_indices_host: Option<Vec<u32>>,
 }
 
 impl HybridCache {
@@ -375,6 +380,7 @@ impl HybridCache {
             caches,
             config,
             state_indices: None,
+            state_indices_host: None,
         })
     }
 
@@ -499,10 +505,21 @@ impl HybridCache {
         self.state_indices = indices;
     }
 
+    /// Set the host mirror of the state indices for the current batch. Kept in lockstep
+    /// with `set_state_indices` so the model can read slots without a device sync.
+    pub fn set_state_indices_host(&mut self, indices: Option<Vec<u32>>) {
+        self.state_indices_host = indices;
+    }
+
     /// Get the state indices for the current batch.
     /// Used by the model during forward to access recurrent state pool.
     pub fn state_indices(&self) -> Option<&Tensor> {
         self.state_indices.as_ref()
+    }
+
+    /// Get the host slot indices for the current batch (sync-free path).
+    pub fn state_indices_host(&self) -> Option<&[u32]> {
+        self.state_indices_host.as_deref()
     }
 }
 

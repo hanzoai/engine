@@ -1183,6 +1183,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
         if let Some(device) = recurrent_device {
             if state_index_allocation_failed {
                 hybrid_cache.set_state_indices(None);
+                hybrid_cache.set_state_indices_host(None);
             } else {
                 // Build state_indices tensor from sequences
                 let mut indices = Vec::with_capacity(seqs.len());
@@ -1196,13 +1197,16 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                             seq.id()
                         );
                         hybrid_cache.set_state_indices(None);
+                        hybrid_cache.set_state_indices_host(None);
                         return;
                     }
                 }
-                if let Ok(state_indices) = Tensor::from_vec(indices, (seqs.len(),), &device) {
+                if let Ok(state_indices) = Tensor::from_vec(indices.clone(), (seqs.len(),), &device) {
                     hybrid_cache.set_state_indices(Some(state_indices));
+                    hybrid_cache.set_state_indices_host(Some(indices));
                 } else {
                     hybrid_cache.set_state_indices(None);
+                    hybrid_cache.set_state_indices_host(None);
                 }
             }
         }
@@ -1379,8 +1383,9 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                 .filter_map(|seq| seq.recurrent_state_idx().map(|idx| idx as u32))
                 .collect();
             if indices.len() == seqs.len() {
-                if let Ok(state_indices) = Tensor::from_vec(indices, (seqs.len(),), &device) {
+                if let Ok(state_indices) = Tensor::from_vec(indices.clone(), (seqs.len(),), &device) {
                     hybrid_cache.set_state_indices(Some(state_indices));
+                    hybrid_cache.set_state_indices_host(Some(indices));
                 }
             }
         }
