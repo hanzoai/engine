@@ -892,6 +892,13 @@ impl GGUFPipeline {
         self.mapper.get_unique_devices().len() <= 1
             && match &self.model {
                 Model::Qwen3(_) | Model::Qwen3MoE(_) => true,
+                // Qwen3.5/3.6 hybrid (Gated-DeltaNet + MoE): capturable now that (a) the full-attn
+                // layers run through PagedAttention (position-invariant KV), (b) mRoPE reads the
+                // stable `rope_positions` buffer, and (c) the GDN recurrent/conv state is gathered
+                // and scattered in place via a constant host slot (no `to_vec1` sync). The baked
+                // slot is only valid for a single sequence, so `model_decode_graph_single_seq_only`
+                // gates capture to batch == 1.
+                Model::Qwen35(_) => true,
                 // DeepSeek-V4 is capture-eligible (compressor prefill-only → shape-stable
                 // decode), and `run_decode_forward` handles it — BUT the decode is currently
                 // KERNEL-bound (Q2_K down experts hit the CPU-bound generic MoE fallback,
@@ -924,11 +931,21 @@ impl GGUFPipeline {
             Model::Qwen3MoE(ref model) => {
                 model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
             }
+            Model::Qwen35(ref model) => {
+                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
+            }
             Model::Deepseek4(ref model) => {
                 model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
             }
             _ => hanzo_ml::bail!("decode graph: unsupported model variant"),
         }
+    }
+
+    /// Variants whose captured decode graph bakes a single sequence's per-token state (Qwen35 bakes
+    /// the recurrent-pool slot offset), so the graph is only replay-valid for batch == 1. Other
+    /// variants (paged-only) are batch-agnostic.
+    fn model_decode_graph_single_seq_only(&self) -> bool {
+        matches!(self.model, Model::Qwen35(_))
     }
 }
 
@@ -964,6 +981,7 @@ impl GGUFPipeline {
             || seqlen_offsets.len() != batch
             || context_lens.len() != batch
             || !input_ids.device().is_cuda()
+            || (self.model_decode_graph_single_seq_only() && batch != 1)
         {
             return Ok(None);
         }
@@ -1159,6 +1177,7 @@ impl GGUFPipeline {
             || seqlen_offsets.len() != batch
             || context_lens.len() != batch
             || !input_ids.device().is_rocm()
+            || (self.model_decode_graph_single_seq_only() && batch != 1)
         {
             return Ok(None);
         }
