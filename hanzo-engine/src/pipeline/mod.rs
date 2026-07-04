@@ -1197,9 +1197,11 @@ pub trait Pipeline:
                             .filter_map(|seq| seq.recurrent_state_idx().map(|idx| idx as u32))
                             .collect();
                         if indices.len() == input_seqs.len() {
-                            if let Ok(si) = Tensor::from_vec(indices, (input_seqs.len(),), &device)
+                            if let Ok(si) =
+                                Tensor::from_vec(indices.clone(), (input_seqs.len(),), &device)
                             {
                                 hybrid_cache.set_state_indices(Some(si));
+                                hybrid_cache.set_state_indices_host(Some(indices));
                             }
                         }
                     }
