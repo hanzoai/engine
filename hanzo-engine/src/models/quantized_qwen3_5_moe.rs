@@ -73,7 +73,7 @@ use crate::models::gdn::{
     gated_delta_rule_recurrence, l2_norm, softplus, GdnLayerCache, RmsNormGated,
 };
 use crate::ops::{TopKLastDimOp, TopKOutput};
-use crate::paged_attention::AttentionImplementation;
+use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::{extract_logits, EitherCache, KvCache};
 use crate::utils::gguf_metadata::ContentMetadata;
@@ -204,6 +204,7 @@ struct GatedFullAttention {
     n_kv_head: usize,
     head_dim: usize,
     rotary: Arc<Qwen3VLRotaryEmbedding>,
+    paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     dtype: DType,
 }
@@ -215,6 +216,7 @@ impl GatedFullAttention {
         mask: &AttentionMask,
         cos_sin: &(Tensor, Tensor),
         kv_cache: &mut KvCache,
+        paged: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
@@ -261,8 +263,32 @@ impl GatedFullAttention {
             v.to_dtype(self.dtype)?,
         );
 
-        let (k, v) = kv_cache.append(&k, &v)?;
-        let y = Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?;
+        // PagedAttention keeps the decode KV write/read position-invariant (device slot_mappings +
+        // bucketed context_lens), which is what makes the whole decode forward capturable by a CUDA
+        // graph. The plain hybrid `KvCache::append` path (host-offset write, frozen under capture) is
+        // kept only for the eager / no-paged (CPU) case. Mirrors quantized_qwen3_moe / qwen3_next.
+        let y = match (&self.paged_attn, paged) {
+            (Some(paged_attn), Some(((key_cache, value_cache), input_metadata))) => paged_attn
+                .forward(
+                    &q,
+                    &k,
+                    &v,
+                    mask,
+                    Some(key_cache),
+                    Some(value_cache),
+                    input_metadata,
+                    &self.sdpa_params,
+                    None,
+                )?,
+            (Some(paged_attn), None) => {
+                let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                paged_attn.forward(&q, &k, &v, mask, None, None, &input_metadata, &self.sdpa_params, None)?
+            }
+            (None, _) => {
+                let (k, v) = kv_cache.append(&k, &v)?;
+                Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
+            }
+        };
 
         let y = if mask.is_custom() {
             y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
@@ -702,7 +728,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         mut ct: Content<'_, R>,
         device: &Device,
         mapper: Box<dyn DeviceMapper + Send + Sync>,
-        _attention_mechanism: AttentionImplementation,
+        attention_mechanism: AttentionImplementation,
         dtype: DType,
     ) -> Result<Self> {
         let meta = ct.get_metadata();
@@ -804,6 +830,12 @@ impl ModelConfig::FromGGUF for ModelWeights {
                         ct.tensor(&format!("{prefix}.attn_k_norm.weight"), dev)?,
                         props.rms_norm_eps,
                     )?;
+                    let paged_attn = match attention_mechanism {
+                        AttentionImplementation::PagedAttention => {
+                            Some(PagedAttention::new(props.head_dim, dev, None)?)
+                        }
+                        AttentionImplementation::Eager => None,
+                    };
                     LayerImpl::FullAttention(GatedFullAttention {
                         attn_q,
                         attn_k,
@@ -815,6 +847,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                         n_kv_head: props.head_count_kv,
                         head_dim: props.head_dim,
                         rotary,
+                        paged_attn,
                         sdpa_params: SdpaParams {
                             n_kv_groups: props.head_count / props.head_count_kv,
                             softcap: None,
@@ -969,13 +1002,15 @@ impl ModelWeights {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
-        let (_b_sz, seq_len) = input_ids.dims2()?;
+        let (b_sz, seq_len) = input_ids.dims2()?;
         let mut x = self.tok_embeddings.forward(input_ids)?;
 
         let mut hybrid_cache = self.cache.hybrid();
         let state_indices = hybrid_cache.state_indices().cloned();
+        let state_indices_host: Option<Vec<u32>> =
+            hybrid_cache.state_indices_host().map(|s| s.to_vec());
         if self
             .layer_types
             .iter()
@@ -987,12 +1022,28 @@ impl ModelWeights {
             );
         }
 
+        // With PagedAttention the running context lives in the paged KV pool, so the past-kv length
+        // comes from the host `seqlen_offsets`, not the (unused) hybrid attention KvCache; decode
+        // (non-first chunk) needs no mask, as paged attention enforces causality via context_lens.
+        // Without paging (CPU/eager) fall back to the hybrid cache. Mirrors quantized_qwen3_moe.
         let mask = CausalMasker.make_causal_mask(
             input_ids,
-            &*hybrid_cache as &dyn PastKvLenCache,
+            match metadata.as_ref() {
+                Some(_) => &seqlen_offsets as &dyn PastKvLenCache,
+                None => &*hybrid_cache as &dyn PastKvLenCache,
+            },
             self.dtype,
             &CausalMaskConfig::default(),
         )?;
+        let mask = if metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true)
+        {
+            mask
+        } else {
+            AttentionMask::None
+        };
         let mask = if let Some(ref mapper) = self.mapper {
             DeviceMappedMask::new(mask, &**mapper)?
         } else {
@@ -1000,8 +1051,14 @@ impl ModelWeights {
         };
 
         // Text-only 3D mRoPE position ids: all three rows equal the linear position per sequence.
-        // Built once on the model device; reduces interleaved mRoPE to standard partial RoPE.
-        let cos_sin = self.compute_text_mrope(seqlen_offsets, seq_len, x.dtype())?;
+        // The decode-graph path threads a STABLE device `rope_positions` buffer (refreshed in place
+        // by the graph runner) so the captured cos/sin advance with the replayed token instead of
+        // freezing at the warmup position; the eager path synthesizes them from `seqlen_offsets`.
+        let rope_positions = metadata
+            .as_ref()
+            .and_then(|(_, meta)| meta.rope_positions.as_ref())
+            .and_then(|rp| rp.get(&self.device.location()));
+        let cos_sin = self.compute_text_mrope(seqlen_offsets, seq_len, x.dtype(), rope_positions)?;
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
@@ -1012,50 +1069,88 @@ impl ModelWeights {
 
             let attn_out = match &layer.layer_impl {
                 LayerImpl::FullAttention(attn) => {
+                    let paged = metadata
+                        .as_ref()
+                        .map(|(kv_cache, meta)| (kv_cache[layer_idx].clone(), *meta));
                     let Some(HybridLayerCache::Attention(kv_cache)) =
                         hybrid_cache.get_mut(layer_idx)
                     else {
                         hanzo_ml::bail!("Hybrid cache layer {layer_idx} not attention.");
                     };
-                    attn.forward(&normed, &mask.get(normed.device()), &cos_sin, kv_cache)?
+                    attn.forward(&normed, &mask.get(normed.device()), &cos_sin, kv_cache, paged)?
                 }
                 LayerImpl::LinearAttention(gdn) => {
                     let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(layer_idx)
                     else {
                         hanzo_ml::bail!("Hybrid cache layer {layer_idx} not recurrent.");
                     };
-                    let indices = state_indices
-                        .as_ref()
-                        .expect("checked above: recurrent indices required");
-                    let indices_vec: Vec<u32> = indices.to_vec1()?;
-                    if indices_vec.is_empty() {
-                        hanzo_ml::bail!("Hybrid recurrent state indices are empty.");
+                    if b_sz == 1 && seq_len == 1 {
+                        // Single-sequence decode: gather/scatter the recurrent + conv state via
+                        // constant-offset `narrow`/`slice_set` using the HOST slot, so there is no
+                        // `to_vec1` device->host sync and the pool buffers (stable VRAM) are updated
+                        // in place. This is exactly what makes the GDN decode step capturable by a
+                        // CUDA graph: the baked slot offset is constant for the sequence's lifetime,
+                        // and the recurrence evolves the live pool state across serialized replays.
+                        let slot = state_indices_host
+                            .as_ref()
+                            .and_then(|s| s.first().copied())
+                            .ok_or_else(|| {
+                                hanzo_ml::Error::msg("missing host recurrent state index")
+                            })? as usize;
+                        let mut gdn_cache = GdnLayerCache {
+                            conv_state: pool.conv_state.narrow(0, slot, 1)?,
+                            recurrent_state: pool.recurrent_state.narrow(0, slot, 1)?,
+                            seqlen_offset: seqlen_offsets.first().copied().unwrap_or(0),
+                        };
+                        let out = gdn.forward(&normed, &mut gdn_cache)?;
+                        let conv_dt = pool.conv_state.dtype();
+                        let rec_dt = pool.recurrent_state.dtype();
+                        pool.conv_state.slice_set(
+                            &gdn_cache.conv_state.to_dtype(conv_dt)?.contiguous()?,
+                            0,
+                            slot,
+                        )?;
+                        pool.recurrent_state.slice_set(
+                            &gdn_cache.recurrent_state.to_dtype(rec_dt)?.contiguous()?,
+                            0,
+                            slot,
+                        )?;
+                        pool.set_seqlen_offset(slot, gdn_cache.seqlen_offset);
+                        out
+                    } else {
+                        let indices = state_indices
+                            .as_ref()
+                            .expect("checked above: recurrent indices required");
+                        let indices_vec: Vec<u32> = indices.to_vec1()?;
+                        if indices_vec.is_empty() {
+                            hanzo_ml::bail!("Hybrid recurrent state indices are empty.");
+                        }
+                        let first_offset = pool.get_seqlen_offset(indices_vec[0] as usize);
+                        if indices_vec
+                            .iter()
+                            .any(|&idx| pool.get_seqlen_offset(idx as usize) != first_offset)
+                        {
+                            hanzo_ml::bail!(
+                                "Hybrid recurrent seqlen offsets diverged within a batch for layer {layer_idx}."
+                            );
+                        }
+                        let conv_state = pool.gather_conv_state(indices)?;
+                        let recurrent_state = pool.gather_recurrent_state(indices)?;
+                        let mut gdn_cache = GdnLayerCache {
+                            conv_state,
+                            recurrent_state,
+                            seqlen_offset: first_offset,
+                        };
+                        let out = gdn.forward(&normed, &mut gdn_cache)?;
+                        pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
+                        pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
+                        let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
+                        for &idx in &indices_vec {
+                            let updated = pool.get_seqlen_offset(idx as usize) + delta;
+                            pool.set_seqlen_offset(idx as usize, updated);
+                        }
+                        out
                     }
-                    let first_offset = pool.get_seqlen_offset(indices_vec[0] as usize);
-                    if indices_vec
-                        .iter()
-                        .any(|&idx| pool.get_seqlen_offset(idx as usize) != first_offset)
-                    {
-                        hanzo_ml::bail!(
-                            "Hybrid recurrent seqlen offsets diverged within a batch for layer {layer_idx}."
-                        );
-                    }
-                    let conv_state = pool.gather_conv_state(indices)?;
-                    let recurrent_state = pool.gather_recurrent_state(indices)?;
-                    let mut gdn_cache = GdnLayerCache {
-                        conv_state,
-                        recurrent_state,
-                        seqlen_offset: first_offset,
-                    };
-                    let out = gdn.forward(&normed, &mut gdn_cache)?;
-                    pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
-                    pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
-                    let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
-                    for &idx in &indices_vec {
-                        let updated = pool.get_seqlen_offset(idx as usize) + delta;
-                        pool.set_seqlen_offset(idx as usize, updated);
-                    }
-                    out
                 }
             };
 
@@ -1080,22 +1175,34 @@ impl ModelWeights {
         seqlen_offsets: &[usize],
         seq_len: usize,
         dtype: DType,
+        rope_positions: Option<&Tensor>,
     ) -> Result<(Tensor, Tensor)> {
-        let batch = seqlen_offsets.len().max(1);
-        let mut positions = Vec::with_capacity(batch * seq_len);
-        for &off in seqlen_offsets.iter() {
-            for p in 0..seq_len {
-                positions.push((off + p) as u32);
+        // (3, batch, seq) position ids -> interleaved mRoPE collapses to partial RoPE for text.
+        let position_ids = match rope_positions {
+            // Decode-graph path: read the advancing position from the stable device buffer the graph
+            // runner refreshes in place (no host Tensor::from_vec, so the captured cos/sin advance).
+            Some(rp) if seq_len == 1 => {
+                let batch = rp.dim(0)?;
+                let pos = rp.reshape((1, batch, 1))?;
+                Tensor::cat(&[&pos, &pos, &pos], 0)?
             }
-        }
-        if seqlen_offsets.is_empty() {
-            for p in 0..seq_len {
-                positions.push(p as u32);
+            _ => {
+                let batch = seqlen_offsets.len().max(1);
+                let mut positions = Vec::with_capacity(batch * seq_len);
+                for &off in seqlen_offsets.iter() {
+                    for p in 0..seq_len {
+                        positions.push((off + p) as u32);
+                    }
+                }
+                if seqlen_offsets.is_empty() {
+                    for p in 0..seq_len {
+                        positions.push(p as u32);
+                    }
+                }
+                let pos_1d = Tensor::from_vec(positions, (batch, seq_len), &self.device)?;
+                Tensor::stack(&[&pos_1d, &pos_1d, &pos_1d], 0)?
             }
-        }
-        let pos_1d = Tensor::from_vec(positions, (batch, seq_len), &self.device)?;
-        // (3, batch, seq)
-        let position_ids = Tensor::stack(&[&pos_1d, &pos_1d, &pos_1d], 0)?;
+        };
         self.rotary.compute_cos_sin(&position_ids, dtype)
     }
 }
