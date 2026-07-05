@@ -213,6 +213,36 @@ Avoid returning TODOs.
 3. **Chat Templates**: Models may need specific chat templates - check `chat_templates/` directory
 4. **Quantization**: Different quantization methods have different hardware requirements
 
+## Qwen3.5/3.6 hybrid (GDN + MoE) and the portable kernel DSL
+
+- **`quantized_qwen3_5_moe`** is the Qwen3.5/3.6 (`qwen3_5_moe` arch) hybrid model: Gated-DeltaNet
+  (GDN) linear-attention layers interleaved with MoE. Registered end-to-end (GGUF arch
+  `Qwen35`/`Qwen35MoE` in `pipeline/gguf.rs`, `Qwen3_5MoeLoader`, vision + text variants). GDN lives
+  in `hanzo-engine/src/models/gdn.rs`.
+- **Fused GDN kernel**: `gdn.rs` routes the gated-delta-rule recurrence through ONE fused per-backend
+  kernel (`fused_gdn_gating_{cuda,metal}` + the fused scan) that drives Qwen3.5/3.6 to near-parity;
+  the portable f32 ops-composed scan (`gdn_step_scalar`) is the reference and the CPU/Vulkan fallback.
+  A/B knob `HANZO_GDN_FUSED_FALLBACK=1` forces the portable scan on every backend. Bit-exact CPU gates
+  (`gdn_step_matches_reference_seq1`, `gdn_recurrence_cpu_shapes`) are colocated in `gdn.rs`.
+- **hanzo-kernel** (the portable kernel DSL, published 0.2.15) is a CODEGEN: one
+  `#[kernel(targets(...))]` Rust source lowers to CUDA/ROCm/Vulkan/Metal/WebGPU/CPU. Its op library
+  (`gdn`, `norm`, `rope`, `attn` incl. `sdpa_runtime`, `quant`) and the `fuse` auto-fusion pass
+  (fusion == composition of Map morphisms, one `fused_interp` launch, zero intermediates) are all
+  bit-exact on CPU. `sdpa`/`sdpa_runtime` online-softmax is the structural cure for the 8B
+  flash-collapse. See `ml/LLM.md` for the DSL and env-var details.
+
+## Environment variables (bare names; de-brand in progress)
+
+The env-flag convention is BARE names (no `HANZO_` brand prefix). Canonical flags in `perf_flags.rs`:
+- `CUDA_GRAPHS`, `ROCM_GRAPHS`, `METAL_GRAPHS`, `FLASHINFER_DECODE` -- all default ON, set `=0` to
+  force the eager/unfused path. (`HANZO_ROCM_FLASH_ATTN` and its A/B toggle were already deleted; ROCm
+  flash is always-on when applicable.)
+- The de-brand is PARTIAL: the per-type A/B FALLBACK knobs are still `HANZO_`-branded
+  (`HANZO_GDN_FUSED_FALLBACK`, `HANZO_ADD_RMSNORM_FALLBACK`, `HANZO_QK_NORM_ROPE_FALLBACK`,
+  `HANZO_Q*K_FALLBACK`, `HANZO_MOE_*_FALLBACK`, `HANZO_VK_Q4K_*`). Finish to ONE bare name per knob.
+- License gate reads `HANZO_ENGINE_LICENSE` / `HANZO_ENGINE_LICENSE_FILE` (see `license.rs`); these are
+  product-namespaced identity vars, not perf flags, and stay branded by design.
+
 ## Latest Upstream Features (as of commit 530463af1)
 
 - **Qwen 3 VL** - Vision-language model support (#1657)
