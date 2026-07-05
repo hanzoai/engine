@@ -13,11 +13,11 @@
 //! reference is captured on the same backend you bless on).
 //!
 //! Env-gated on the model path so CI without a model is a no-op:
-//!   HANZO_TEST_GGUF=/abs/path/to/Qwen3-0.6B-Q8_0.gguf  (a local Qwen3/zen-eco GGUF file)
+//!   TEST_GGUF=/abs/path/to/Qwen3-0.6B-Q8_0.gguf  (a local Qwen3/zen-eco GGUF file)
 //! Optional:
-//!   HANZO_TEST_BLESS=1   print the captured greedy completions/logits then PASS (use to (re)generate
+//!   TEST_BLESS=1   print the captured greedy completions/logits then PASS (use to (re)generate
 //!                        the committed reference strings below from current HEAD), e.g.
-//!                        HANZO_TEST_GGUF=... HANZO_TEST_BLESS=1 cargo test -p hanzo-cli \
+//!                        TEST_GGUF=... TEST_BLESS=1 cargo test -p hanzo-cli \
 //!                          --test llm_e2e_correctness -- --nocapture --test-threads=1
 //!
 //! Keep --test-threads=1: each test loads the model into its own engine; running them serially keeps
@@ -33,7 +33,7 @@ use hanzo_engine::{
 use hanzo_server_core::server::ServerBuilder;
 use tokio::sync::mpsc::channel;
 
-// ---- Committed reference outputs (captured from HEAD on CPU via HANZO_TEST_BLESS=1) ----
+// ---- Committed reference outputs (captured from HEAD on CPU via TEST_BLESS=1) ----
 // Model: Qwen3-0.6B-Q8_0.gguf. Raw-completion path (no chat template), greedy (top_k=1).
 // If a deliberate, understood change to the inference math lands, re-bless and update these in the
 // same commit. An UNEXPECTED change here means the inference path regressed (wrong dequant, wrong
@@ -56,16 +56,16 @@ const PPL_TEXT: &str = "The quick brown fox jumps over the lazy dog.";
 const PPL_CEILING: f64 = 30.0;
 
 fn model_path() -> Option<PathBuf> {
-    let p = std::env::var("HANZO_TEST_GGUF").ok()?;
+    let p = std::env::var("TEST_GGUF").ok()?;
     let pb = PathBuf::from(&p);
     if !pb.is_file() {
-        panic!("HANZO_TEST_GGUF={p} is not a file");
+        panic!("TEST_GGUF={p} is not a file");
     }
     Some(pb)
 }
 
 fn bless() -> bool {
-    std::env::var("HANZO_TEST_BLESS")
+    std::env::var("TEST_BLESS")
         .map(|v| v == "1")
         .unwrap_or(false)
 }
@@ -235,7 +235,7 @@ fn assert_finite(label: &str, logprobs: &[(String, f32)]) {
 async fn deterministic_greedy_output() {
     let Some(path) = model_path() else {
         eprintln!(
-            "SKIP deterministic_greedy_output: set HANZO_TEST_GGUF to a local Qwen3/zen-eco GGUF"
+            "SKIP deterministic_greedy_output: set TEST_GGUF to a local Qwen3/zen-eco GGUF"
         );
         return;
     };
@@ -281,7 +281,7 @@ async fn deterministic_greedy_output() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn quant_path_no_nan_coherent() {
     let Some(path) = model_path() else {
-        eprintln!("SKIP quant_path_no_nan_coherent: set HANZO_TEST_GGUF");
+        eprintln!("SKIP quant_path_no_nan_coherent: set TEST_GGUF");
         return;
     };
     let hanzo = load(&path).await;
@@ -329,7 +329,7 @@ async fn quant_path_no_nan_coherent() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sanity_logits_and_perplexity() {
     let Some(path) = model_path() else {
-        eprintln!("SKIP sanity_logits_and_perplexity: set HANZO_TEST_GGUF");
+        eprintln!("SKIP sanity_logits_and_perplexity: set TEST_GGUF");
         return;
     };
     let hanzo = load(&path).await;
