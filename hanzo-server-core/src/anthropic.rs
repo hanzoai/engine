@@ -18,18 +18,20 @@ use axum::{
     },
     Extension, Json,
 };
-use hanzo_engine::{ChatCompletionChunkResponse, Hanzo, Response, ToolCallResponse};
+use either::Either;
+use hanzo_engine::{
+    ChatCompletionChunkResponse, Hanzo, MessageContent, Request, Response, TokenizationRequest,
+    Tool, ToolCallResponse,
+};
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::{channel, Receiver};
 use uuid::Uuid;
 
 use crate::{
     chat_completion::{parse_request, process_non_streaming_response, ChatCompletionResponder},
-    handler_core::{
-        create_response_channel, send_request_with_model, ErrorToResponse, JsonError,
-        ModelErrorMessage,
-    },
+    handler_core::{create_response_channel, send_request_with_model, ModelErrorMessage},
     router::AgenticDefaults,
     openai::ChatCompletionRequest,
     streaming::{get_keep_alive_interval, DoneState},
@@ -63,6 +65,32 @@ pub struct AnthropicMessage {
     pub role: String,
     /// String or array of content blocks (text/image/tool_use/tool_result).
     pub content: Value,
+}
+
+/// `POST /v1/messages/count_tokens` request body. Same shape as
+/// [`AnthropicMessagesRequest`] except `max_tokens` is NOT required (Anthropic's
+/// count_tokens endpoint omits it). `max_tokens`/`stream` are accepted-but-ignored
+/// so clients that reuse a messages body still work.
+#[derive(Debug, Deserialize)]
+pub struct AnthropicCountTokensRequest {
+    pub model: String,
+    pub messages: Vec<AnthropicMessage>,
+    #[serde(default)]
+    pub system: Option<Value>,
+    #[serde(default)]
+    pub tools: Option<Vec<Value>>,
+    #[serde(default)]
+    pub tool_choice: Option<Value>,
+    #[serde(default)]
+    pub max_tokens: Option<usize>,
+    #[serde(default)]
+    pub stream: Option<bool>,
+}
+
+/// Response body for `POST /v1/messages/count_tokens`: `{"input_tokens": <int>}`.
+#[derive(Debug, Serialize)]
+pub struct CountTokensResponse {
+    pub input_tokens: u32,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -228,21 +256,133 @@ fn anthropic_tools_to_openai(tools: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+/// Build the OpenAI-format message array (system + translated messages) shared by both
+/// `/v1/messages` and `/v1/messages/count_tokens`, so the two paths render identically.
+fn build_openai_messages(system: &Option<Value>, messages: &[AnthropicMessage]) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::with_capacity(messages.len() + 1);
+    if let Some(sys) = system {
+        let sys = content_text_only(sys);
+        if !sys.is_empty() {
+            out.push(json!({"role": "system", "content": sys}));
+        }
+    }
+    for m in messages {
+        translate_message(&m.role, &m.content, &mut out);
+    }
+    out
+}
+
+/// Claude Code sends Anthropic model ids (`claude-sonnet-4-5-*`, ...); route them to the
+/// single loaded model (`None` = default). Non-claude ids route by name. The response
+/// still echoes the originally requested id.
+fn resolve_model_id(model: &str) -> Option<String> {
+    let resolved = if model.to_ascii_lowercase().starts_with("claude") {
+        "default"
+    } else {
+        model
+    };
+    (resolved != "default").then(|| resolved.to_string())
+}
+
+/// Anthropic-shaped error body: `{"type":"error","error":{"type":..,"message":..}}`.
+/// This is what the Anthropic SDKs parse, so it is a drop-in error surface.
+fn anthropic_error(
+    status: StatusCode,
+    err_type: &str,
+    message: impl Into<String>,
+) -> axum::response::Response {
+    let body = json!({
+        "type": "error",
+        "error": {"type": err_type, "message": message.into()},
+    });
+    (status, Json(body)).into_response()
+}
+
+/// Translate Anthropic tool defs to the internal [`Tool`] type (via the OpenAI function
+/// shape). Invalid tool schemas are dropped rather than failing the whole request.
+fn build_tools(tools: &Option<Vec<Value>>) -> Vec<Tool> {
+    match tools {
+        Some(t) => serde_json::from_value(json!(anthropic_tools_to_openai(t))).unwrap_or_default(),
+        None => Vec::new(),
+    }
+}
+
+/// Convert a translated OpenAI message (JSON object) into the chat-template map form
+/// `IndexMap<String, MessageContent>`. Mirrors `chat_completion::parse_request` so that
+/// count_tokens renders byte-identically to what `/v1/messages` sends to the model —
+/// making `input_tokens` equal the `usage.input_tokens` a real generation would report.
+fn openai_message_to_template_map(msg: &Value) -> IndexMap<String, MessageContent> {
+    let mut map: IndexMap<String, MessageContent> = IndexMap::new();
+    let role = msg.get("role").and_then(Value::as_str).unwrap_or("user");
+    map.insert("role".to_string(), Either::Left(role.to_string()));
+
+    let tool_calls = msg.get("tool_calls").and_then(Value::as_array);
+    let content = match msg.get("content") {
+        Some(Value::String(s)) => s.clone(),
+        // Mirror parse_request: an assistant tool-call turn with no text renders the
+        // serialized function calls as its content.
+        Some(Value::Null) | None => tool_calls
+            .map(|calls| {
+                let funcs: Vec<&Value> = calls.iter().filter_map(|c| c.get("function")).collect();
+                serde_json::to_string(&funcs).unwrap_or_default()
+            })
+            .unwrap_or_default(),
+        Some(other) => other.to_string(),
+    };
+    map.insert("content".to_string(), Either::Left(content));
+
+    if let Some(calls) = tool_calls {
+        let tc_vec: Vec<IndexMap<String, Value>> = calls
+            .iter()
+            .filter_map(Value::as_object)
+            .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .collect();
+        map.insert("tool_calls".to_string(), Either::Right(tc_vec));
+    }
+    if let Some(id) = msg.get("tool_call_id").and_then(Value::as_str) {
+        map.insert("tool_call_id".to_string(), Either::Left(id.to_string()));
+    }
+    if let Some(name) = msg.get("name").and_then(Value::as_str) {
+        map.insert("name".to_string(), Either::Left(name.to_string()));
+    }
+    map
+}
+
+/// Validate an Anthropic messages request against the spec: non-empty messages, roles in
+/// {user, assistant}, and `max_tokens >= 1`. Returns an `(err_type, message)` on failure.
+fn validate_messages_request(
+    areq: &AnthropicMessagesRequest,
+) -> Result<(), (&'static str, String)> {
+    if areq.messages.is_empty() {
+        return Err((
+            "invalid_request_error",
+            "messages: at least one message is required".to_string(),
+        ));
+    }
+    if areq.max_tokens == 0 {
+        return Err((
+            "invalid_request_error",
+            "max_tokens: must be greater than or equal to 1".to_string(),
+        ));
+    }
+    for (i, m) in areq.messages.iter().enumerate() {
+        if m.role != "user" && m.role != "assistant" {
+            return Err((
+                "invalid_request_error",
+                format!(
+                    "messages.{i}.role: input should be 'user' or 'assistant', got '{}'",
+                    m.role
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn anthropic_to_openai(
     areq: &AnthropicMessagesRequest,
 ) -> Result<ChatCompletionRequest, serde_json::Error> {
-    let mut messages: Vec<Value> = Vec::with_capacity(areq.messages.len() + 1);
-    if let Some(sys) = &areq.system {
-        let sys = content_text_only(sys);
-        if !sys.is_empty() {
-            messages.push(json!({"role": "system", "content": sys}));
-        }
-    }
-    for m in &areq.messages {
-        translate_message(&m.role, &m.content, &mut messages);
-    }
-    // Claude Code sends Anthropic model ids (claude-sonnet-4-5-*, ...); route them to the
-    // single loaded model. The response still echoes the originally requested id.
+    let messages = build_openai_messages(&areq.system, &areq.messages);
     let model = if areq.model.to_ascii_lowercase().starts_with("claude") {
         "default"
     } else {
@@ -720,28 +860,38 @@ fn create_messages_streamer(
 }
 
 /// `POST /v1/messages` - Anthropic-compatible chat for Claude Code.
+///
+/// Parses the raw body itself (rather than via `Json<AnthropicMessagesRequest>`) so that a
+/// missing/invalid field returns an Anthropic-shaped 400 `invalid_request_error` instead of
+/// axum's default 422 — required for drop-in Anthropic SDK compatibility.
 pub async fn messages(
     State(state): ExtractedState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
-    Json(areq): Json<AnthropicMessagesRequest>,
+    Json(body): Json<Value>,
 ) -> axum::response::Response {
+    let areq: AnthropicMessagesRequest = match serde_json::from_value(body) {
+        Ok(r) => r,
+        Err(e) => return anthropic_error(StatusCode::BAD_REQUEST, "invalid_request_error", e.to_string()),
+    };
+    if let Err((ty, msg)) = validate_messages_request(&areq) {
+        return anthropic_error(StatusCode::BAD_REQUEST, ty, msg);
+    }
     let stream = areq.stream.unwrap_or(false);
 
     let mut openai_req = match anthropic_to_openai(&areq) {
         Ok(r) => r,
         Err(e) => {
-            return JsonError::new(format!("anthropic->openai translation failed: {e}"))
-                .to_response(StatusCode::BAD_REQUEST)
+            return anthropic_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+                format!("anthropic->openai translation failed: {e}"),
+            )
         }
     };
     openai_req.stream = Some(stream);
 
     let model = areq.model.clone();
-    let model_id = if openai_req.model == "default" {
-        None
-    } else {
-        Some(openai_req.model.clone())
-    };
+    let model_id = resolve_model_id(&areq.model);
 
     let (tx, mut rx) = create_response_channel(None);
     let (request, _is_streaming) = match parse_request(
@@ -756,14 +906,20 @@ pub async fn messages(
     {
         Ok(x) => x,
         Err(e) => {
-            return JsonError::new(format!("request parse failed: {e}"))
-                .to_response(StatusCode::BAD_REQUEST)
+            return anthropic_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+                format!("request parse failed: {e}"),
+            )
         }
     };
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
-        return JsonError::new(format!("send failed: {e}"))
-            .to_response(StatusCode::INTERNAL_SERVER_ERROR);
+        return anthropic_error(
+            StatusCode::NOT_FOUND,
+            "not_found_error",
+            format!("no model available: {e}"),
+        );
     }
 
     if stream {
@@ -799,6 +955,90 @@ pub async fn messages(
             Json(out).into_response()
         }
         other => other.into_response(),
+    }
+}
+
+/// `POST /v1/messages/count_tokens` - Anthropic-compatible input token counter.
+///
+/// Renders `system` + `messages` + `tools` through the loaded model's chat template and
+/// returns `{"input_tokens": n}` WITHOUT running generation. Uses the same render flags as
+/// a real `/v1/messages` call (`add_generation_prompt`/`add_special_tokens` = true), so the
+/// returned count equals the `usage.input_tokens` generation would report. `max_tokens` is
+/// not required by this endpoint.
+pub async fn count_tokens(
+    State(state): ExtractedState,
+    Json(body): Json<Value>,
+) -> axum::response::Response {
+    let creq: AnthropicCountTokensRequest = match serde_json::from_value(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return anthropic_error(StatusCode::BAD_REQUEST, "invalid_request_error", e.to_string())
+        }
+    };
+    if creq.messages.is_empty() {
+        return anthropic_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            "messages: at least one message is required",
+        );
+    }
+    for (i, m) in creq.messages.iter().enumerate() {
+        if m.role != "user" && m.role != "assistant" {
+            return anthropic_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+                format!(
+                    "messages.{i}.role: input should be 'user' or 'assistant', got '{}'",
+                    m.role
+                ),
+            );
+        }
+    }
+
+    let messages: Vec<IndexMap<String, MessageContent>> =
+        build_openai_messages(&creq.system, &creq.messages)
+            .iter()
+            .map(openai_message_to_template_map)
+            .collect();
+    let tools = build_tools(&creq.tools);
+    let model_id = resolve_model_id(&creq.model);
+
+    // The Tokenize request carries its own oneshot response channel (Vec<u32>), separate
+    // from the generation Response channel — no generation is scheduled.
+    let (tx, mut rx) = channel(1);
+    let request = Request::Tokenize(TokenizationRequest {
+        text: Either::Left(messages),
+        tools: Some(tools),
+        add_generation_prompt: true,
+        add_special_tokens: true,
+        enable_thinking: Some(false),
+        reasoning_effort: None,
+        response: tx,
+    });
+
+    if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
+        return anthropic_error(
+            StatusCode::NOT_FOUND,
+            "not_found_error",
+            format!("no model available to tokenize: {e}"),
+        );
+    }
+
+    match rx.recv().await {
+        Some(Ok(toks)) => Json(CountTokensResponse {
+            input_tokens: toks.len() as u32,
+        })
+        .into_response(),
+        Some(Err(e)) => anthropic_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "api_error",
+            format!("tokenization failed: {e}"),
+        ),
+        None => anthropic_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "api_error",
+            "tokenizer channel closed unexpectedly",
+        ),
     }
 }
 
@@ -1069,5 +1309,177 @@ mod tests {
         );
         let data_json = serde_json::to_string(&pair.1).unwrap();
         assert!(data_json.contains("\"type\":\"message_start\""));
+    }
+
+    // ---- count_tokens ----
+
+    fn msgs(v: Value) -> Vec<AnthropicMessage> {
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// count_tokens accepts a body WITHOUT `max_tokens` (Anthropic's endpoint omits it),
+    /// and preserves it if present.
+    #[test]
+    fn count_tokens_request_does_not_require_max_tokens() {
+        let no_max: AnthropicCountTokensRequest = serde_json::from_value(json!({
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        .expect("count_tokens must parse without max_tokens");
+        assert!(no_max.max_tokens.is_none());
+        assert_eq!(no_max.messages.len(), 1);
+
+        let with_max: AnthropicCountTokensRequest = serde_json::from_value(json!({
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 64,
+        }))
+        .expect("count_tokens must also accept a body that includes max_tokens");
+        assert_eq!(with_max.max_tokens, Some(64));
+    }
+
+    /// String content maps to a `role`/`content` template pair. System prepends a system turn.
+    #[test]
+    fn count_tokens_maps_string_content_and_system() {
+        let system = Some(json!("be brief"));
+        let messages = msgs(json!([{"role": "user", "content": "hello world"}]));
+        let maps: Vec<IndexMap<String, MessageContent>> =
+            build_openai_messages(&system, &messages)
+                .iter()
+                .map(openai_message_to_template_map)
+                .collect();
+        assert_eq!(maps.len(), 2);
+        assert_eq!(maps[0]["role"], Either::Left("system".to_string()));
+        assert_eq!(maps[0]["content"], Either::Left("be brief".to_string()));
+        assert_eq!(maps[1]["role"], Either::Left("user".to_string()));
+        assert_eq!(maps[1]["content"], Either::Left("hello world".to_string()));
+    }
+
+    /// Content-block messages (text + tool_use + tool_result) render into the same
+    /// template map shape that `/v1/messages` sends: assistant carries `tool_calls`,
+    /// tool_result becomes a `tool` role with `tool_call_id`.
+    #[test]
+    fn count_tokens_maps_content_blocks_and_tools() {
+        let system = Some(json!([{"type": "text", "text": "sys"}]));
+        let messages = msgs(json!([
+            {"role": "user", "content": "start"},
+            {"role": "assistant", "content": [
+                {"type": "text", "text": "calling"},
+                {"type": "tool_use", "id": "call-1", "name": "lookup", "input": {"q": "rust"}}
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "call-1", "content": "found"}
+            ]},
+        ]));
+        let maps: Vec<IndexMap<String, MessageContent>> =
+            build_openai_messages(&system, &messages)
+                .iter()
+                .map(openai_message_to_template_map)
+                .collect();
+        let roles: Vec<&str> = maps
+            .iter()
+            .filter_map(|m| m["role"].as_ref().left().map(String::as_str))
+            .collect();
+        assert_eq!(roles, vec!["system", "user", "assistant", "tool"]);
+
+        // Assistant turn carries structured tool_calls for the chat template.
+        let assistant = &maps[2];
+        match &assistant["tool_calls"] {
+            Either::Right(calls) => {
+                assert_eq!(calls[0]["id"], json!("call-1"));
+                assert_eq!(calls[0]["function"]["name"], json!("lookup"));
+            }
+            other => panic!("expected tool_calls array, got {other:?}"),
+        }
+        // tool_result becomes a `tool` role message with a tool_call_id.
+        let tool_msg = &maps[3];
+        assert_eq!(tool_msg["tool_call_id"], Either::Left("call-1".to_string()));
+        assert_eq!(tool_msg["content"], Either::Left("found".to_string()));
+
+        // Tools translate into the internal Tool type via the OpenAI function shape.
+        let tools = build_tools(&Some(vec![json!({
+            "name": "lookup",
+            "description": "search",
+            "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}},
+        })]));
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].function.name, "lookup");
+    }
+
+    /// Response body is exactly `{"input_tokens": n}`.
+    #[test]
+    fn count_tokens_response_serializes_input_tokens_only() {
+        let body = serde_json::to_value(CountTokensResponse { input_tokens: 42 }).unwrap();
+        assert_eq!(body, json!({"input_tokens": 42}));
+    }
+
+    // ---- /v1/messages request validation ----
+
+    /// A messages body missing `max_tokens` fails to deserialize (→ 400 in the handler).
+    #[test]
+    fn messages_request_requires_max_tokens() {
+        let err = serde_json::from_value::<AnthropicMessagesRequest>(json!({
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+        }));
+        assert!(err.is_err(), "missing max_tokens must be a deserialize error");
+        assert!(err.unwrap_err().to_string().contains("max_tokens"));
+    }
+
+    /// Role validation: only `user`/`assistant` are allowed; empty messages rejected.
+    #[test]
+    fn messages_request_rejects_bad_role_and_empty() {
+        let bad_role = AnthropicMessagesRequest {
+            model: "claude-sonnet-4-5".to_string(),
+            messages: vec![AnthropicMessage {
+                role: "system".to_string(),
+                content: json!("hi"),
+            }],
+            max_tokens: 16,
+            system: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            stop_sequences: None,
+            tools: None,
+            tool_choice: None,
+        };
+        let err = validate_messages_request(&bad_role).unwrap_err();
+        assert_eq!(err.0, "invalid_request_error");
+        assert!(err.1.contains("role"), "{}", err.1);
+
+        let empty = AnthropicMessagesRequest {
+            messages: vec![],
+            ..bad_role
+        };
+        let err = validate_messages_request(&empty).unwrap_err();
+        assert!(err.1.contains("at least one message"), "{}", err.1);
+
+        let zero_max = AnthropicMessagesRequest {
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: json!("hi"),
+            }],
+            max_tokens: 0,
+            ..empty
+        };
+        let err = validate_messages_request(&zero_max).unwrap_err();
+        assert!(err.1.contains("max_tokens"), "{}", err.1);
+    }
+
+    /// Claude model ids route to the default model; explicit non-default ids route by name.
+    #[test]
+    fn resolve_model_id_routes_claude_to_default() {
+        assert_eq!(resolve_model_id("claude-sonnet-4-5-20250929"), None);
+        assert_eq!(resolve_model_id("default"), None);
+        assert_eq!(resolve_model_id("qwen3"), Some("qwen3".to_string()));
+    }
+
+    /// stop_reason maps the internal finish reason to the Anthropic enum.
+    #[test]
+    fn stop_reason_maps_to_anthropic_enum() {
+        assert_eq!(map_stop_reason("length"), "max_tokens");
+        assert_eq!(map_stop_reason("tool_calls"), "tool_use");
+        assert_eq!(map_stop_reason("stop"), "end_turn");
     }
 }
