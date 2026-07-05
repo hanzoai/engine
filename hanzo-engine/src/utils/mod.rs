@@ -294,11 +294,11 @@ pub const fn using_flash_attn() -> bool {
 /// The collapse is seeded in flash PREFILL, and the flash feature changes behavior at MANY sites
 /// (mask construction, paged attention, input processors, run_attention) -- so a per-site toggle can't
 /// faithfully reproduce the correct eager path. Gating the whole predicate is the fix: default OFF so
-/// every flash site consistently takes the proven no-flash path. `HANZO_CUDA_FLASH=1` opts back in
+/// every flash site consistently takes the proven no-flash path. `CUDA_FLASH=1` opts back in
 /// (once the numerics are fixed or the DSL online-softmax sdpa lands). Read once, cached.
 #[cfg(any(feature = "flash-attn", feature = "flash-attn-v3"))]
 pub fn using_flash_attn() -> bool {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("HANZO_CUDA_FLASH").is_ok_and(|v| v == "1"))
+    *ENABLED.get_or_init(|| std::env::var("CUDA_FLASH").is_ok_and(|v| v == "1"))
 }
