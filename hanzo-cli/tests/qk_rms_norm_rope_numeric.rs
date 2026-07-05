@@ -1,10 +1,10 @@
 // Numeric gate for the FUSED ROCm q/k-RMSNorm + positions-RoPE kernel (rope.hip
 // `rope_norm_positions`, wired via layers::rocm_qk_rms_norm_rope_positions). Drives the SAME engine
 // entry `qk_rms_norm_rope_positions` twice on identical inputs: once with the fused kernel (default)
-// and once with HANZO_QK_NORM_ROPE_FALLBACK=1 (the proven rms_norm + rope_positions chain). A wrong
+// and once with the force-unfused flag (the proven rms_norm + rope_positions chain). A wrong
 // norm/rope = positional gibberish across every token, so byte-closeness here is a hard gate. The two
 // paths both accumulate the rms sum in f32; only the reduction ORDER differs, so the tolerance covers
-// f32/f16 reorder, not a layout/scale bug. Run with --test-threads=1 (process-global FALLBACK env).
+// f32/f16 reorder, not a layout/scale bug. Run with --test-threads=1 (process-global force flag).
 #![cfg(feature = "rocm")]
 
 use hanzo_engine::layers::qk_rms_norm_rope_positions;
@@ -54,11 +54,11 @@ fn check(dev: &Device, log: &mut String, b: usize, h: usize, kh: usize, t: usize
     let positions = Tensor::from_vec((0..b).map(|i| (3 + 5 * i) as u32).collect::<Vec<_>>(), b, dev).unwrap();
     let eps = 1e-6f64;
 
-    std::env::remove_var("HANZO_QK_NORM_ROPE_FALLBACK");
+    hanzo_engine::layers::set_force_unfused_qk_norm_rope(false);
     let (qf, kf) = qk_rms_norm_rope_positions(&q, &k, &qw, &kw, eps, eps, &cos, &sin, true, &positions).unwrap();
-    std::env::set_var("HANZO_QK_NORM_ROPE_FALLBACK", "1");
+    hanzo_engine::layers::set_force_unfused_qk_norm_rope(true);
     let (qs, ks) = qk_rms_norm_rope_positions(&q, &k, &qw, &kw, eps, eps, &cos, &sin, true, &positions).unwrap();
-    std::env::remove_var("HANZO_QK_NORM_ROPE_FALLBACK");
+    hanzo_engine::layers::set_force_unfused_qk_norm_rope(false);
 
     let mut me = 0f32;
     for (a, bb) in to_f32(&qf).iter().zip(to_f32(&qs).iter()).chain(to_f32(&kf).iter().zip(to_f32(&ks).iter())) {

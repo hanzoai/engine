@@ -128,12 +128,11 @@ fn decode_exact<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
     log: &mut String,
     name: &str,
     qt: RocmQuantType,
-    fb_env: &str,
     n: usize,
     tsz: usize,
     fill: F,
 ) {
-    std::env::set_var(fb_env, "1");
+    hanzo_ml::set_force_scalar_matvec(true);
     let k = 256usize;
     let wq_bytes = build_bytes(n, k, 256, tsz, &fill);
     let wst = dev.storage_from_slice(&wq_bytes).expect("upload w");
@@ -177,7 +176,7 @@ fn decode_exact<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
         n * 256,
         covered.len()
     ));
-    std::env::remove_var(fb_env);
+    hanzo_ml::set_force_scalar_matvec(false);
     assert!(nbad == 0, "{name} decode_exact: {nbad} weights mismatch (max_err={max_err})");
 }
 
@@ -328,17 +327,17 @@ fn qmatvec_iq2_numeric() {
     let fill = |blk: &mut [u8], r: usize, b: usize| put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
 
     // IQ2_XXS: 66 B. d@0, qs[32]u16@2.
-    decode_exact::<BlockIQ2xxs, _>(&dev, &mut log, "IQ2_XXS", RocmQuantType::IQ2_XXS, "HANZO_IQ2XXS_FALLBACK", 128, 66, fill);
+    decode_exact::<BlockIQ2xxs, _>(&dev, &mut log, "IQ2_XXS", RocmQuantType::IQ2_XXS, 128, 66, fill);
     for &(n, k) in SHAPES {
         check::<BlockIQ2xxs, _>(&dev, &mut log, "IQ2_XXS", RocmQuantType::IQ2_XXS, n, k, 256, 66, fill);
     }
     // IQ2_XS: 74 B. d@0, qs[32]u16@2, scales[8]@66.
-    decode_exact::<BlockIQ2xs, _>(&dev, &mut log, "IQ2_XS", RocmQuantType::IQ2_XS, "HANZO_IQ2XS_FALLBACK", 128, 74, fill);
+    decode_exact::<BlockIQ2xs, _>(&dev, &mut log, "IQ2_XS", RocmQuantType::IQ2_XS, 128, 74, fill);
     for &(n, k) in SHAPES {
         check::<BlockIQ2xs, _>(&dev, &mut log, "IQ2_XS", RocmQuantType::IQ2_XS, n, k, 256, 74, fill);
     }
     // IQ2_S: 82 B. d@0, qs[64]@2, qh[8]@66, scales[8]@74.
-    decode_exact::<BlockIQ2s, _>(&dev, &mut log, "IQ2_S", RocmQuantType::IQ2_S, "HANZO_IQ2S_FALLBACK", 128, 82, fill);
+    decode_exact::<BlockIQ2s, _>(&dev, &mut log, "IQ2_S", RocmQuantType::IQ2_S, 128, 82, fill);
     for &(n, k) in SHAPES {
         check::<BlockIQ2s, _>(&dev, &mut log, "IQ2_S", RocmQuantType::IQ2_S, n, k, 256, 82, fill);
     }
@@ -348,7 +347,7 @@ fn qmatvec_iq2_numeric() {
 
 // dp4a-vs-scalar A/B: the int8-dp4a IQ2 decode (`qdp4a<DW_IQ2_*>`) must equal the scalar
 // `qmatvec_core<DW_IQ2_*>` (the to_float-faithful reference) to a tight f16/bf16-reorder tolerance.
-// HANZO_IQ2*_FALLBACK forces the scalar core; unset takes dp4a. Both accumulate in f32 -- only the
+// set_force_scalar_matvec(true) forces the scalar core; false takes dp4a. Both accumulate in f32 -- only the
 // summation order differs -- so nbad=0 proves the dp4a port is numerically the scalar core.
 #[allow(clippy::too_many_arguments)]
 fn ab_matvec<F: Fn(&mut [u8], usize, usize)>(
@@ -356,7 +355,6 @@ fn ab_matvec<F: Fn(&mut [u8], usize, usize)>(
     log: &mut String,
     name: &str,
     qt: RocmQuantType,
-    fb_env: &str,
     n: usize,
     k: usize,
     blk: usize,
@@ -371,13 +369,13 @@ fn ab_matvec<F: Fn(&mut [u8], usize, usize)>(
     let wq_bytes = build_bytes(n, k, blk, tsz, fill);
     let wst = dev.storage_from_slice(&wq_bytes).expect("upload w");
 
-    std::env::remove_var(fb_env);
+    hanzo_ml::set_force_scalar_matvec(false);
     let dp4a_h = to_f32(&dev.matvec_quant(qt, &wst, &xst_h, n, k).expect("dp4a f16"));
     let dp4a_b = to_f32(&dev.matvec_quant(qt, &wst, &xst_b, n, k).expect("dp4a bf16"));
-    std::env::set_var(fb_env, "1");
+    hanzo_ml::set_force_scalar_matvec(true);
     let scal_h = to_f32(&dev.matvec_quant(qt, &wst, &xst_h, n, k).expect("scalar f16"));
     let scal_b = to_f32(&dev.matvec_quant(qt, &wst, &xst_b, n, k).expect("scalar bf16"));
-    std::env::remove_var(fb_env);
+    hanzo_ml::set_force_scalar_matvec(false);
 
     let scale = scal_h.iter().chain(scal_b.iter()).fold(0f32, |m, &v| m.max(v.abs())).max(1.0);
     let tol = 0.01 * scale;
@@ -403,7 +401,6 @@ fn ab_moe<F: Fn(&mut [u8], usize, usize)>(
     log: &mut String,
     name: &str,
     qt: RocmQuantType,
-    fb_env: &str,
     e_cnt: usize,
     nrows: usize,
     n: usize,
@@ -425,11 +422,11 @@ fn ab_moe<F: Fn(&mut [u8], usize, usize)>(
     let xh: Vec<f16> = xf.iter().map(|&v| f16::from_f32(v)).collect();
     let xst_h = dev.storage_from_slice(&xh).expect("upload x f16");
 
-    std::env::remove_var(fb_env);
+    hanzo_ml::set_force_scalar_matvec(false);
     let dp4a = to_f32(&dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k).expect("moe dp4a"));
-    std::env::set_var(fb_env, "1");
+    hanzo_ml::set_force_scalar_matvec(true);
     let scal = to_f32(&dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k).expect("moe scalar"));
-    std::env::remove_var(fb_env);
+    hanzo_ml::set_force_scalar_matvec(false);
 
     let scale = scal.iter().fold(0f32, |m, &v| m.max(v.abs())).max(1.0);
     let tol = 0.01 * scale;
@@ -455,13 +452,13 @@ fn qmatvec_iq2_dp4a_vs_scalar() {
     let dev = RocmDevice::new(0).expect("rocm device");
     let fill = |blk: &mut [u8], r: usize, b: usize| put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
     for &(n, k) in SHAPES {
-        ab_matvec(&dev, &mut log, "IQ2_XXS", RocmQuantType::IQ2_XXS, "HANZO_IQ2XXS_FALLBACK", n, k, 256, 66, fill);
-        ab_matvec(&dev, &mut log, "IQ2_XS", RocmQuantType::IQ2_XS, "HANZO_IQ2XS_FALLBACK", n, k, 256, 74, fill);
-        ab_matvec(&dev, &mut log, "IQ2_S", RocmQuantType::IQ2_S, "HANZO_IQ2S_FALLBACK", n, k, 256, 82, fill);
+        ab_matvec(&dev, &mut log, "IQ2_XXS", RocmQuantType::IQ2_XXS, n, k, 256, 66, fill);
+        ab_matvec(&dev, &mut log, "IQ2_XS", RocmQuantType::IQ2_XS, n, k, 256, 74, fill);
+        ab_matvec(&dev, &mut log, "IQ2_S", RocmQuantType::IQ2_S, n, k, 256, 82, fill);
     }
-    ab_moe(&dev, &mut log, "IQ2_XXS", RocmQuantType::IQ2_XXS, "HANZO_IQ2XXS_FALLBACK", 8, 16, 128, 512, 256, 66, fill);
-    ab_moe(&dev, &mut log, "IQ2_XS", RocmQuantType::IQ2_XS, "HANZO_IQ2XS_FALLBACK", 8, 16, 128, 512, 256, 74, fill);
-    ab_moe(&dev, &mut log, "IQ2_S", RocmQuantType::IQ2_S, "HANZO_IQ2S_FALLBACK", 8, 16, 128, 512, 256, 82, fill);
+    ab_moe(&dev, &mut log, "IQ2_XXS", RocmQuantType::IQ2_XXS, 8, 16, 128, 512, 256, 66, fill);
+    ab_moe(&dev, &mut log, "IQ2_XS", RocmQuantType::IQ2_XS, 8, 16, 128, 512, 256, 74, fill);
+    ab_moe(&dev, &mut log, "IQ2_S", RocmQuantType::IQ2_S, 8, 16, 128, 512, 256, 82, fill);
     eprintln!("{log}");
 }
 
