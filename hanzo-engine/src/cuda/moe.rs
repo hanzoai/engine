@@ -380,3 +380,96 @@ pub fn moe_gemm_transposed(
 ) -> Result<Tensor> {
     hanzo_ml::bail!("moe_gemm_transposed is not implemented on this platform!")
 }
+
+/// Fused MoE expert-combine: `out[t,:] = sum_e scores[t,e] * routed[t,e,:]`.
+///
+/// Replaces the two-op `routed.broadcast_mul(scores).sum(dim=topk)`, whose
+/// candle reduce (`fast_sum_f32`) walked the middle `topk` axis of a
+/// [T, topk, N] tensor with an uncoalesced strided gather (`~15%` of Qwen3.6
+/// prefill GPU time vs llama's `~0`). One coalesced pass over N here.
+///
+/// `routed`: [T, topk, N] contiguous, f32 or bf16. `scores`: [T, topk] f32.
+/// Returns [T, N] in `routed`'s dtype (accumulation is always f32).
+#[cfg(feature = "cuda")]
+pub fn moe_combine_cuda(routed: &Tensor, scores: &Tensor) -> Result<Tensor> {
+    use core::ffi::c_void;
+    use half::bf16;
+    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
+    use hanzo_ml::DType;
+
+    let (t, topk, n) = routed.dims3()?;
+    debug_assert_eq!(scores.dims2()?, (t, topk));
+    debug_assert!(topk <= 32, "moe_combine_cuda: topk must be <= 32");
+
+    let dev = routed.device().as_cuda_device()?;
+
+    let routed = routed.contiguous()?;
+    // scores come from the f32 router; the kernel reads them as f32.
+    let scores = scores.to_dtype(DType::F32)?.contiguous()?;
+    let stream = dev.cuda_stream().cu_stream() as i64;
+
+    let (s_s, s_l) = scores.storage_and_layout();
+    let s_ptr = match &*s_s {
+        hanzo_ml::Storage::Cuda(c) => {
+            let sl = c.as_cuda_slice::<f32>()?;
+            sl.slice(s_l.start_offset()..).device_ptr(sl.stream()).0 as *const f32
+        }
+        _ => hanzo_ml::bail!("moe_combine: scores must be a cuda tensor"),
+    };
+
+    let (r_s, r_l) = routed.storage_and_layout();
+    let hanzo_ml::Storage::Cuda(r_cuda) = &*r_s else {
+        hanzo_ml::bail!("moe_combine: routed must be a cuda tensor")
+    };
+
+    // dtype: 0=f32, 1=bf16 (routed/out); accum is always f32 in the kernel.
+    let (r_ptr, dtype_code) = match routed.dtype() {
+        DType::F32 => {
+            let sl = r_cuda.as_cuda_slice::<f32>()?;
+            (
+                sl.slice(r_l.start_offset()..).device_ptr(sl.stream()).0 as *const c_void,
+                0,
+            )
+        }
+        DType::BF16 => {
+            let sl = r_cuda.as_cuda_slice::<bf16>()?;
+            (
+                sl.slice(r_l.start_offset()..).device_ptr(sl.stream()).0 as *const c_void,
+                1,
+            )
+        }
+        d => hanzo_ml::bail!("moe_combine: unsupported routed dtype {d:?} (want f32/bf16)"),
+    };
+
+    macro_rules! run {
+        ($ty:ty) => {{
+            let out_buf = unsafe { dev.alloc::<$ty>(t * n) }?;
+            unsafe {
+                crate::cuda::ffi::moe_combine_f32(
+                    r_ptr,
+                    s_ptr,
+                    out_buf.device_ptr(out_buf.stream()).0 as *mut c_void,
+                    t as i32,
+                    topk as i32,
+                    n as i32,
+                    dtype_code,
+                    stream,
+                );
+            }
+            let out_storage = hanzo_ml::CudaStorage::wrap_cuda_slice(out_buf, dev.clone());
+            Ok(Tensor::from((hanzo_ml::Storage::Cuda(out_storage), (t, n))))
+        }};
+    }
+
+    if dtype_code == 0 {
+        run!(f32)
+    } else {
+        run!(bf16)
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+#[allow(unused)]
+pub fn moe_combine_cuda(_routed: &Tensor, _scores: &Tensor) -> Result<Tensor> {
+    hanzo_ml::bail!("moe_combine_cuda requires the cuda feature")
+}
