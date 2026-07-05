@@ -127,11 +127,11 @@ pub(crate) fn matmul_i8_reference(x: &Tensor, blocks: &Tensor, scales: &Tensor) 
     Tensor::from_vec(out, (m, n), &Device::Cpu)
 }
 
-/// Opt-in env flag to exercise the int8 path's CPU reference (`HANZO_MXFP4_DP4A=1`). Off by default.
-const ENV_MXFP4_DP4A: &str = "HANZO_MXFP4_DP4A";
+/// Opt-in env flag to exercise the int8 path's CPU reference (`MXFP4_DP4A=1`). Off by default.
+const ENV_MXFP4_DP4A: &str = "MXFP4_DP4A";
 
 /// MXFP4 matmul via the int8/dp4a path. SCAFFOLD: no GPU dp4a kernel is wired yet. By default returns
-/// `Ok(None)` so the caller uses the f32 dequant fallback. With `HANZO_MXFP4_DP4A=1` it runs the CPU
+/// `Ok(None)` so the caller uses the f32 dequant fallback. With `MXFP4_DP4A=1` it runs the CPU
 /// int8 reference (`matmul_i8_reference`) so the unpack+quantize+dp4a numerics are exercised on real
 /// weights. When a kernel lands, gate it here on `Device::Cuda` (BlockMXFP4 -> resident q8 bank ->
 /// dp4a) or `Device::Vulkan` (upload unpacked int8 + scales, dispatch `mul_mat_q8_dp4a`).
