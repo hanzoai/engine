@@ -270,7 +270,7 @@ fn qmatvec_iq1_numeric() {
 }
 
 // dp4a-vs-scalar A/B: the int8-dp4a IQ1 decode (`qdp4a<DW_IQ1_*>`, signed grid + delta-bias sum) must
-// equal the scalar core to a tight reorder tolerance. HANZO_IQ1*_FALLBACK forces scalar; unset = dp4a.
+// equal the scalar core to a tight reorder tolerance. IQ1*_FALLBACK forces scalar; unset = dp4a.
 #[allow(clippy::too_many_arguments)]
 fn ab_matvec<F: Fn(&mut [u8], usize, usize)>(
     dev: &RocmDevice, log: &mut String, name: &str, qt: RocmQuantType, fb_env: &str,
@@ -360,10 +360,10 @@ fn qmatvec_iq1_dp4a_vs_scalar() {
     let iq1s_fill = |blk: &mut [u8], r: usize, b: usize| put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
     let iq1m_fill = |blk: &mut [u8], _r: usize, _b: usize| put_iq1m_d(blk, 0.0078125);
     for &(n, k) in shapes {
-        ab_matvec(&dev, &mut log, "IQ1_S", RocmQuantType::IQ1_S, "HANZO_IQ1S_FALLBACK", n, k, 256, 50, iq1s_fill);
-        ab_matvec(&dev, &mut log, "IQ1_M", RocmQuantType::IQ1_M, "HANZO_IQ1M_FALLBACK", n, k, 256, 56, iq1m_fill);
+        ab_matvec(&dev, &mut log, "IQ1_S", RocmQuantType::IQ1_S, "IQ1S_FALLBACK", n, k, 256, 50, iq1s_fill);
+        ab_matvec(&dev, &mut log, "IQ1_M", RocmQuantType::IQ1_M, "IQ1M_FALLBACK", n, k, 256, 56, iq1m_fill);
     }
-    ab_moe(&dev, &mut log, "IQ1_S", RocmQuantType::IQ1_S, "HANZO_IQ1S_FALLBACK", 8, 16, 128, 512, 256, 50, iq1s_fill);
-    ab_moe(&dev, &mut log, "IQ1_M", RocmQuantType::IQ1_M, "HANZO_IQ1M_FALLBACK", 8, 16, 128, 512, 256, 56, iq1m_fill);
+    ab_moe(&dev, &mut log, "IQ1_S", RocmQuantType::IQ1_S, "IQ1S_FALLBACK", 8, 16, 128, 512, 256, 50, iq1s_fill);
+    ab_moe(&dev, &mut log, "IQ1_M", RocmQuantType::IQ1_M, "IQ1M_FALLBACK", 8, 16, 128, 512, 256, 56, iq1m_fill);
     eprintln!("{log}");
 }

@@ -11,7 +11,7 @@ const RELEASE_THRESHOLD_BYTES: u64 = u64::MAX;
 pub(crate) fn set_pool_retain_all(device: &Device) -> Result<()> {
     use hanzo_ml::cuda_backend::cudarc::driver::sys as cuda_sys;
 
-    if std::env::var("HANZO_NO_MEMPOOL_FIX").is_ok() {
+    if std::env::var("NO_MEMPOOL_FIX").is_ok() {
         return Ok(());
     }
 

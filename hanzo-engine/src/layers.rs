@@ -2772,7 +2772,7 @@ pub fn qk_rms_norm_rope(
     }
 
     #[cfg(feature = "vulkan")]
-    if is_gpt_neox && q.device().is_vulkan() && std::env::var("HANZO_VK_FUSED_QKNORM").is_ok() {
+    if is_gpt_neox && q.device().is_vulkan() && std::env::var("VK_FUSED_QKNORM").is_ok() {
         if let Some(res) =
             vulkan_qk_rms_norm_rope(q, k, q_weight, k_weight, q_eps, k_eps, &cos, &sin)?
         {
@@ -3005,7 +3005,7 @@ pub fn qk_rms_norm_rope_positions(
 
 /// ROCm fused q/k RMSNorm + positions-RoPE (one kernel). Applies only when positions are per-sequence
 /// start offsets (length == batch, the decode/prefill graph path) and head_dim is even <= 1024; other
-/// shapes (or HANZO_QK_NORM_ROPE_FALLBACK) return None so the caller runs the unfused rms_norm + rope.
+/// shapes (or QK_NORM_ROPE_FALLBACK) return None so the caller runs the unfused rms_norm + rope.
 #[cfg(feature = "rocm")]
 #[allow(clippy::too_many_arguments)]
 fn rocm_qk_rms_norm_rope_positions(
@@ -3021,7 +3021,7 @@ fn rocm_qk_rms_norm_rope_positions(
     is_gpt_neox: bool,
 ) -> Result<Option<(Tensor, Tensor)>> {
     use hanzo_ml::Storage;
-    if !q.device().is_rocm() || std::env::var_os("HANZO_QK_NORM_ROPE_FALLBACK").is_some() {
+    if !q.device().is_rocm() || std::env::var_os("QK_NORM_ROPE_FALLBACK").is_some() {
         return Ok(None);
     }
     let (batch, _q_heads, _seq_len, head_dim) = q.dims4()?;

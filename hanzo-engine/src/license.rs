@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Env var holding the raw token (highest priority source).
-pub const LICENSE_TOKEN_ENV: &str = "HANZO_ENGINE_LICENSE_TOKEN";
+pub const LICENSE_TOKEN_ENV: &str = "ENGINE_LICENSE_TOKEN";
 /// Env var holding a path to a file whose contents are the token (fallback source).
-pub const LICENSE_FILE_ENV: &str = "HANZO_ENGINE_LICENSE_FILE";
+pub const LICENSE_FILE_ENV: &str = "ENGINE_LICENSE_FILE";
 
 /// Current token schema version. `verify_license` rejects anything else.
 pub const LICENSE_SCHEMA_VERSION: u8 = 1;
@@ -35,7 +35,7 @@ pub const IAT_SKEW_SECS: i64 = 300;
 /// DEV KEY -- replace with prod pubkey from KMS for release. The matching private seed lives only in
 /// the gitignored `license-dev-key/` for tests/issuer; it is NEVER committed. For a real release this
 /// const must be swapped for the public key whose private half is held in the KMS / CI secret.
-pub const HANZO_LICENSE_PUBKEY: [u8; 32] = [
+pub const LICENSE_PUBKEY: [u8; 32] = [
     0x6e, 0x79, 0xb8, 0x50, 0x79, 0xfe, 0xbd, 0x9e, 0xfc, 0x35, 0xbf, 0x4d, 0x8e, 0x0a, 0x6e, 0x86,
     0x27, 0x03, 0x1b, 0x87, 0x2f, 0xc6, 0xb7, 0x61, 0xe2, 0x8a, 0xf9, 0x8c, 0xed, 0xe4, 0x1e, 0xf7,
 ];
@@ -112,7 +112,7 @@ pub enum LicenseError {
 impl std::fmt::Display for LicenseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let msg = match self {
-            LicenseError::Missing => "no license token supplied (set HANZO_ENGINE_LICENSE_TOKEN or HANZO_ENGINE_LICENSE_FILE)",
+            LicenseError::Missing => "no license token supplied (set ENGINE_LICENSE_TOKEN or ENGINE_LICENSE_FILE)",
             LicenseError::Malformed => "license token is malformed",
             LicenseError::BadSig => "license token signature is invalid",
             LicenseError::Expired => "license token has expired",
@@ -196,8 +196,8 @@ fn current_unix_time() -> i64 {
         .unwrap_or(0)
 }
 
-/// Read the token from `HANZO_ENGINE_LICENSE_TOKEN`, falling back to the file named by
-/// `HANZO_ENGINE_LICENSE_FILE`, and verify it against the embedded pubkey + this build's expected app
+/// Read the token from `ENGINE_LICENSE_TOKEN`, falling back to the file named by
+/// `ENGINE_LICENSE_FILE`, and verify it against the embedded pubkey + this build's expected app
 /// + the current system time.
 pub fn load_and_verify() -> Result<License, LicenseError> {
     let token = match std::env::var(LICENSE_TOKEN_ENV) {
@@ -211,7 +211,7 @@ pub fn load_and_verify() -> Result<License, LicenseError> {
     };
     verify_license(
         &token,
-        &HANZO_LICENSE_PUBKEY,
+        &LICENSE_PUBKEY,
         EXPECTED_APP_ID,
         current_unix_time(),
     )
@@ -226,11 +226,11 @@ mod tests {
     const ONE_DAY: i64 = 86_400;
 
     // The dev signing seed (base64url, 32 bytes) mints test tokens; its public half is the
-    // HANZO_LICENSE_PUBKEY embedded above. The seed is a secret (never committed), read at
-    // runtime from $HANZO_DEV_SIGNING_SEED or the gitignored license-dev-key file — so builds
+    // LICENSE_PUBKEY embedded above. The seed is a secret (never committed), read at
+    // runtime from $DEV_SIGNING_SEED or the gitignored license-dev-key file — so builds
     // without it still compile and the seed-dependent tests skip (see `dev_signing_key!`).
     fn dev_signing_key_opt() -> Option<SigningKey> {
-        let b64 = std::env::var("HANZO_DEV_SIGNING_SEED").ok().or_else(|| {
+        let b64 = std::env::var("DEV_SIGNING_SEED").ok().or_else(|| {
             std::fs::read_to_string(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/../license-dev-key/dev_signing_key.b64"
@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn dev_keypair_matches_embedded_pubkey() {
         let vk = dev_signing_key!().verifying_key();
-        assert_eq!(vk.to_bytes(), HANZO_LICENSE_PUBKEY);
+        assert_eq!(vk.to_bytes(), LICENSE_PUBKEY);
     }
 
     // (a) a freshly-issued valid token verifies OK.
@@ -279,7 +279,7 @@ mod tests {
         let token = encode_license(&lic, &dev_signing_key!());
 
         let verified =
-            verify_license(&token, &HANZO_LICENSE_PUBKEY, DEV_APP, now).expect("should verify");
+            verify_license(&token, &LICENSE_PUBKEY, DEV_APP, now).expect("should verify");
         assert_eq!(verified, lic);
         assert_eq!(verified.holder, "test-holder");
         assert_eq!(verified.features, vec!["inference", "embeddings"]);
@@ -298,7 +298,7 @@ mod tests {
         sig[0] = if sig[0] == 'A' { 'B' } else { 'A' };
         let tampered = format!("{payload_b64}.{}", sig.into_iter().collect::<String>());
 
-        let err = verify_license(&tampered, &HANZO_LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
+        let err = verify_license(&tampered, &LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
         assert_eq!(err, LicenseError::BadSig);
     }
 
@@ -315,7 +315,7 @@ mod tests {
         let forged_payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&forged).unwrap());
         let forged_token = format!("{forged_payload}.{sig_b64}");
 
-        let err = verify_license(&forged_token, &HANZO_LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
+        let err = verify_license(&forged_token, &LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
         assert_eq!(err, LicenseError::BadSig);
     }
 
@@ -328,7 +328,7 @@ mod tests {
         let token = encode_license(&lic, &dev_signing_key!());
 
         let now = exp + 1; // one second past expiry
-        let err = verify_license(&token, &HANZO_LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
+        let err = verify_license(&token, &LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
         assert_eq!(err, LicenseError::Expired);
     }
 
@@ -340,7 +340,7 @@ mod tests {
         let token = encode_license(&lic, &dev_signing_key!());
 
         // Build expects "hanzo"; the token is for "zoo".
-        let err = verify_license(&token, &HANZO_LICENSE_PUBKEY, "hanzo", now).unwrap_err();
+        let err = verify_license(&token, &LICENSE_PUBKEY, "hanzo", now).unwrap_err();
         assert_eq!(err, LicenseError::WrongApp);
     }
 
@@ -358,7 +358,7 @@ mod tests {
             "a.b.c",           // too many segments
             "eyJhIjoxfQ.AAAA", // valid b64 but wrong sig length
         ] {
-            let err = verify_license(bad, &HANZO_LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
+            let err = verify_license(bad, &LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
             assert_eq!(err, LicenseError::Malformed, "input was {bad:?}");
         }
     }
@@ -371,7 +371,7 @@ mod tests {
         let lic = make_license(DEV_APP, iat, iat + ONE_DAY);
         let token = encode_license(&lic, &dev_signing_key!());
 
-        let err = verify_license(&token, &HANZO_LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
+        let err = verify_license(&token, &LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
         assert_eq!(err, LicenseError::NotYetValid);
     }
 
@@ -383,7 +383,7 @@ mod tests {
         lic.v = 99;
         let token = encode_license(&lic, &dev_signing_key!());
 
-        let err = verify_license(&token, &HANZO_LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
+        let err = verify_license(&token, &LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
         assert_eq!(err, LicenseError::Malformed);
     }
 }

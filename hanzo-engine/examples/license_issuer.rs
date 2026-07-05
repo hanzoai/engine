@@ -11,7 +11,7 @@
 //!       --app hanzo --holder desktop-prod --days 365 --features inference,embeddings
 //!
 //!   # or via env (CI / KMS material exported to env):
-//!   HANZO_LICENSE_SIGNING_KEY=<base64url-seed> cargo run -p hanzo-engine --example license_issuer -- \
+//!   LICENSE_SIGNING_KEY=<base64url-seed> cargo run -p hanzo-engine --example license_issuer -- \
 //!       --app zoo --holder zoo-desktop-prod --days 365
 //!
 //! The signing key is accepted as a base64url (no padding) OR standard-base64 encoding of the raw
@@ -25,7 +25,7 @@ use hanzo_engine::license::{encode_license, verify_license, License, LICENSE_SCH
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Env var carrying the private signing seed (base64). File flag takes precedence if both are set.
-const SIGNING_KEY_ENV: &str = "HANZO_LICENSE_SIGNING_KEY";
+const SIGNING_KEY_ENV: &str = "LICENSE_SIGNING_KEY";
 
 #[derive(Parser, Debug)]
 #[command(
