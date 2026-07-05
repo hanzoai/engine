@@ -227,10 +227,10 @@ mod tests {
 
     // The dev signing seed (base64url, 32 bytes) mints test tokens; its public half is the
     // HANZO_LICENSE_PUBKEY embedded above. The seed is a secret (never committed), read at
-    // runtime from $HANZO_DEV_SIGNING_SEED or the gitignored license-dev-key file — so builds
+    // runtime from $DEV_SIGNING_SEED or the gitignored license-dev-key file -- so builds
     // without it still compile and the seed-dependent tests skip (see `dev_signing_key!`).
     fn dev_signing_key_opt() -> Option<SigningKey> {
-        let b64 = std::env::var("HANZO_DEV_SIGNING_SEED").ok().or_else(|| {
+        let b64 = std::env::var("DEV_SIGNING_SEED").ok().or_else(|| {
             std::fs::read_to_string(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/../license-dev-key/dev_signing_key.b64"

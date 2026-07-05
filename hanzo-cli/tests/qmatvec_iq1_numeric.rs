@@ -270,10 +270,10 @@ fn qmatvec_iq1_numeric() {
 }
 
 // dp4a-vs-scalar A/B: the int8-dp4a IQ1 decode (`qdp4a<DW_IQ1_*>`, signed grid + delta-bias sum) must
-// equal the scalar core to a tight reorder tolerance. HANZO_IQ1*_FALLBACK forces scalar; unset = dp4a.
+// equal the scalar core to a tight reorder tolerance. set_force_scalar_matvec(true) forces scalar; false = dp4a.
 #[allow(clippy::too_many_arguments)]
 fn ab_matvec<F: Fn(&mut [u8], usize, usize)>(
-    dev: &RocmDevice, log: &mut String, name: &str, qt: RocmQuantType, fb_env: &str,
+    dev: &RocmDevice, log: &mut String, name: &str, qt: RocmQuantType,
     n: usize, k: usize, blk: usize, tsz: usize, fill: F,
 ) {
     let xf: Vec<f32> = (0..k).map(val).collect();
@@ -284,13 +284,13 @@ fn ab_matvec<F: Fn(&mut [u8], usize, usize)>(
     let wq_bytes = build_bytes(n, k, blk, tsz, fill);
     let wst = dev.storage_from_slice(&wq_bytes).expect("upload w");
 
-    std::env::remove_var(fb_env);
+    hanzo_ml::set_force_scalar_matvec(false);
     let dp4a_h = to_f32(&dev.matvec_quant(qt, &wst, &xst_h, n, k).expect("dp4a f16"));
     let dp4a_b = to_f32(&dev.matvec_quant(qt, &wst, &xst_b, n, k).expect("dp4a bf16"));
-    std::env::set_var(fb_env, "1");
+    hanzo_ml::set_force_scalar_matvec(true);
     let scal_h = to_f32(&dev.matvec_quant(qt, &wst, &xst_h, n, k).expect("scalar f16"));
     let scal_b = to_f32(&dev.matvec_quant(qt, &wst, &xst_b, n, k).expect("scalar bf16"));
-    std::env::remove_var(fb_env);
+    hanzo_ml::set_force_scalar_matvec(false);
 
     let scale = scal_h.iter().chain(scal_b.iter()).fold(0f32, |m, &v| m.max(v.abs())).max(1.0);
     let tol = 0.01 * scale;
@@ -312,7 +312,7 @@ fn ab_matvec<F: Fn(&mut [u8], usize, usize)>(
 
 #[allow(clippy::too_many_arguments)]
 fn ab_moe<F: Fn(&mut [u8], usize, usize)>(
-    dev: &RocmDevice, log: &mut String, name: &str, qt: RocmQuantType, fb_env: &str,
+    dev: &RocmDevice, log: &mut String, name: &str, qt: RocmQuantType,
     e_cnt: usize, nrows: usize, n: usize, k: usize, blk: usize, tsz: usize, fill: F,
 ) {
     let nblk = k / blk;
@@ -328,11 +328,11 @@ fn ab_moe<F: Fn(&mut [u8], usize, usize)>(
     let xh: Vec<f16> = xf.iter().map(|&v| f16::from_f32(v)).collect();
     let xst_h = dev.storage_from_slice(&xh).expect("upload x f16");
 
-    std::env::remove_var(fb_env);
+    hanzo_ml::set_force_scalar_matvec(false);
     let dp4a = to_f32(&dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k).expect("moe dp4a"));
-    std::env::set_var(fb_env, "1");
+    hanzo_ml::set_force_scalar_matvec(true);
     let scal = to_f32(&dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k).expect("moe scalar"));
-    std::env::remove_var(fb_env);
+    hanzo_ml::set_force_scalar_matvec(false);
 
     let scale = scal.iter().fold(0f32, |m, &v| m.max(v.abs())).max(1.0);
     let tol = 0.01 * scale;
@@ -360,10 +360,10 @@ fn qmatvec_iq1_dp4a_vs_scalar() {
     let iq1s_fill = |blk: &mut [u8], r: usize, b: usize| put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
     let iq1m_fill = |blk: &mut [u8], _r: usize, _b: usize| put_iq1m_d(blk, 0.0078125);
     for &(n, k) in shapes {
-        ab_matvec(&dev, &mut log, "IQ1_S", RocmQuantType::IQ1_S, "HANZO_IQ1S_FALLBACK", n, k, 256, 50, iq1s_fill);
-        ab_matvec(&dev, &mut log, "IQ1_M", RocmQuantType::IQ1_M, "HANZO_IQ1M_FALLBACK", n, k, 256, 56, iq1m_fill);
+        ab_matvec(&dev, &mut log, "IQ1_S", RocmQuantType::IQ1_S, n, k, 256, 50, iq1s_fill);
+        ab_matvec(&dev, &mut log, "IQ1_M", RocmQuantType::IQ1_M, n, k, 256, 56, iq1m_fill);
     }
-    ab_moe(&dev, &mut log, "IQ1_S", RocmQuantType::IQ1_S, "HANZO_IQ1S_FALLBACK", 8, 16, 128, 512, 256, 50, iq1s_fill);
-    ab_moe(&dev, &mut log, "IQ1_M", RocmQuantType::IQ1_M, "HANZO_IQ1M_FALLBACK", 8, 16, 128, 512, 256, 56, iq1m_fill);
+    ab_moe(&dev, &mut log, "IQ1_S", RocmQuantType::IQ1_S, 8, 16, 128, 512, 256, 50, iq1s_fill);
+    ab_moe(&dev, &mut log, "IQ1_M", RocmQuantType::IQ1_M, 8, 16, 128, 512, 256, 56, iq1m_fill);
     eprintln!("{log}");
 }
