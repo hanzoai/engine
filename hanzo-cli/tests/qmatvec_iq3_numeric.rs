@@ -308,12 +308,12 @@ fn qmatvec_iq3_numeric() {
     let fill = |blk: &mut [u8], r: usize, b: usize| put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
 
     // IQ3_XXS: 98 B. d@0, qs[96]@2 (grid idx [0..64), scales_and_signs [64..96)).
-    decode_exact::<BlockIQ3xxs, _>(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, "HANZO_IQ3XXS_FALLBACK", 128, 98, fill);
+    decode_exact::<BlockIQ3xxs, _>(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, "IQ3XXS_FALLBACK", 128, 98, fill);
     for &(n, k) in SHAPES {
         check::<BlockIQ3xxs, _>(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, n, k, 256, 98, fill);
     }
     // IQ3_S: 110 B. d@0, qs[64]@2, qh[8]@66, signs[32]@74, scales[4]@106.
-    decode_exact::<BlockIQ3s, _>(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, "HANZO_IQ3S_FALLBACK", 128, 110, fill);
+    decode_exact::<BlockIQ3s, _>(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, "IQ3S_FALLBACK", 128, 110, fill);
     for &(n, k) in SHAPES {
         check::<BlockIQ3s, _>(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, n, k, 256, 110, fill);
     }
@@ -322,7 +322,7 @@ fn qmatvec_iq3_numeric() {
 }
 
 // dp4a-vs-scalar A/B: the int8-dp4a IQ3 decode (`qdp4a<DW_IQ3_*>`) must equal the scalar core to a
-// tight f16/bf16-reorder tolerance. HANZO_IQ3*_FALLBACK forces scalar; unset takes dp4a.
+// tight f16/bf16-reorder tolerance. IQ3*_FALLBACK forces scalar; unset takes dp4a.
 #[allow(clippy::too_many_arguments)]
 fn ab_matvec<F: Fn(&mut [u8], usize, usize)>(
     dev: &RocmDevice,
@@ -428,11 +428,11 @@ fn qmatvec_iq3_dp4a_vs_scalar() {
     let dev = RocmDevice::new(0).expect("rocm device");
     let fill = |blk: &mut [u8], r: usize, b: usize| put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
     for &(n, k) in SHAPES {
-        ab_matvec(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, "HANZO_IQ3XXS_FALLBACK", n, k, 256, 98, fill);
-        ab_matvec(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, "HANZO_IQ3S_FALLBACK", n, k, 256, 110, fill);
+        ab_matvec(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, "IQ3XXS_FALLBACK", n, k, 256, 98, fill);
+        ab_matvec(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, "IQ3S_FALLBACK", n, k, 256, 110, fill);
     }
-    ab_moe(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, "HANZO_IQ3XXS_FALLBACK", 8, 16, 128, 512, 256, 98, fill);
-    ab_moe(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, "HANZO_IQ3S_FALLBACK", 8, 16, 128, 512, 256, 110, fill);
+    ab_moe(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, "IQ3XXS_FALLBACK", 8, 16, 128, 512, 256, 98, fill);
+    ab_moe(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, "IQ3S_FALLBACK", 8, 16, 128, 512, 256, 110, fill);
     eprintln!("{log}");
 }
 

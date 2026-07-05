@@ -1677,7 +1677,7 @@ pub fn rocm_rms_norm_of_sum(
     weight: &Tensor,
     eps: f32,
 ) -> Result<Option<(Tensor, Tensor)>> {
-    if std::env::var("HANZO_ADD_RMSNORM_FALLBACK").is_ok() {
+    if std::env::var("ADD_RMSNORM_FALLBACK").is_ok() {
         return Ok(None);
     }
     if input.dtype() != DType::F32 || residual.dtype() != DType::F32 || weight.dtype() != DType::F32 {

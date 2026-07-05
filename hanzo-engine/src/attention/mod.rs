@@ -280,7 +280,7 @@ impl Sdpa {
 
         // CausalFlash or None: try flash attention, fall back to eager. `using_flash_attn()` is now
         // runtime-gated (default OFF on CUDA -- flash-attn-2 bf16 collapses 8B-Q4K into repetition; the
-        // cure is the eager path at EVERY flash site: masker, paged-attn, inputs, here). HANZO_CUDA_FLASH=1
+        // cure is the eager path at EVERY flash site: masker, paged-attn, inputs, here). CUDA_FLASH=1
         // opts back in. See using_flash_attn() in utils/mod.rs.
         let can_use_flash = q.device().is_cpu()
             || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32;
