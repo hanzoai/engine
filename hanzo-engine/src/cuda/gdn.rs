@@ -223,6 +223,107 @@ pub fn chunked_gated_delta_rule_recurrence_cuda(
     hanzo_ml::bail!("chunked_gated_delta_rule_recurrence_cuda requires the cuda feature")
 }
 
+/// Layout-native prefill recurrence. q,k: [B, S, H, K]; v: [B, S, H, V];
+/// g,beta: [B, S, H]; all f32 contiguous. state: [B*H, K, V] f32 (in place).
+/// Returns output [B, S, H, V]. q is scaled by 1/sqrt(K) inside the kernel, so
+/// the host passes q UNSCALED -- this skips the transpose+contiguous reshuffle
+/// (and the separate scale copy) the flattened path needs. Only K in {64,128}
+/// has a native kernel; callers gate on that.
+#[cfg(feature = "cuda")]
+pub fn chunked_gated_delta_rule_recurrence_native_cuda(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state: &mut Tensor,
+) -> Result<Tensor> {
+    use hanzo_ml::cuda_backend::cudarc::driver::DevicePtr;
+
+    let (batch, seq_len, num_heads, k_dim) = q.dims4()?;
+    let v_dim = v.dim(3)?;
+    let qscale = 1.0f32 / (k_dim as f32).sqrt();
+
+    let dev = q.device().as_cuda_device()?;
+
+    // All operands must be contiguous f32 in native [B,S,H,D] layout.
+    let q = q.contiguous()?;
+    let k = k.contiguous()?;
+    let v = v.contiguous()?;
+    let g = g.contiguous()?;
+    let beta = beta.contiguous()?;
+
+    macro_rules! dptr {
+        ($t:expr) => {{
+            let (s, l) = $t.storage_and_layout();
+            let ptr = match &*s {
+                hanzo_ml::Storage::Cuda(c) => {
+                    let sl = c.as_cuda_slice::<f32>()?;
+                    sl.slice(l.start_offset()..).device_ptr(sl.stream()).0 as *const f32
+                }
+                _ => hanzo_ml::bail!("gdn native: operand must be a cuda f32 tensor"),
+            };
+            ptr
+        }};
+    }
+
+    let q_p = dptr!(q);
+    let k_p = dptr!(k);
+    let v_p = dptr!(v);
+    let g_p = dptr!(g);
+    let beta_p = dptr!(beta);
+
+    let (state_s, state_l) = state.storage_and_layout();
+    let state_p = match &*state_s {
+        hanzo_ml::Storage::Cuda(c) => {
+            let sl = c.as_cuda_slice::<f32>()?;
+            sl.slice(state_l.start_offset()..).device_ptr(sl.stream()).0 as *mut f32
+        }
+        _ => hanzo_ml::bail!("gdn native: state must be a cuda f32 tensor"),
+    };
+
+    let output_buf = unsafe { dev.alloc::<f32>(batch * seq_len * num_heads * v_dim) }?;
+    let stream = dev.cuda_stream().cu_stream() as i64;
+
+    unsafe {
+        crate::cuda::ffi::chunked_gated_delta_rule_recurrence_native(
+            q_p,
+            k_p,
+            v_p,
+            g_p,
+            beta_p,
+            state_p,
+            output_buf.device_ptr(output_buf.stream()).0 as *mut f32,
+            batch as i32,
+            num_heads as i32,
+            seq_len as i32,
+            k_dim as i32,
+            v_dim as i32,
+            qscale,
+            stream,
+        );
+    }
+
+    let output_storage = hanzo_ml::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
+    Ok(Tensor::from((
+        hanzo_ml::Storage::Cuda(output_storage),
+        (batch, seq_len, num_heads, v_dim),
+    )))
+}
+
+#[cfg(not(feature = "cuda"))]
+#[allow(unused)]
+pub fn chunked_gated_delta_rule_recurrence_native_cuda(
+    _q: &Tensor,
+    _k: &Tensor,
+    _v: &Tensor,
+    _g: &Tensor,
+    _beta: &Tensor,
+    _state: &mut Tensor,
+) -> Result<Tensor> {
+    hanzo_ml::bail!("chunked_gated_delta_rule_recurrence_native_cuda requires the cuda feature")
+}
+
 /// CUDA-accelerated causal conv1d (both update and full paths).
 ///
 /// For update (is_update=true):
