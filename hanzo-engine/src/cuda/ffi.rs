@@ -579,6 +579,38 @@ extern "C" {
         v_dim: i32,
         stream: i64,
     );
+    // Layout-native prefill recurrence: q/k/v/g/beta/output stay in the model's
+    // [B, S, H, D] token-major layout (no transpose), so the host skips the
+    // flatten reshuffle. state is [B*H, K, V]. q scaled by qscale in-kernel.
+    pub(crate) fn chunked_gated_delta_rule_recurrence_native(
+        q: *const f32,
+        k: *const f32,
+        v: *const f32,
+        g: *const f32,
+        beta: *const f32,
+        state: *mut f32,
+        output: *mut f32,
+        batch: i32,
+        num_heads: i32,
+        seq_len: i32,
+        k_dim: i32,
+        v_dim: i32,
+        qscale: f32,
+        stream: i64,
+    );
+    // Fused MoE expert-combine: out[t,:] = sum_e scores[t,e] * routed[t,e,:].
+    // Replaces the strided `broadcast_mul(scores).sum(topk)` (fast_sum_f32).
+    // dtype: 0=f32, 1=bf16 (routed/out); scores always f32; accum always f32.
+    pub(crate) fn moe_combine_f32(
+        routed: *const c_void, // [T, topk, N] contiguous
+        scores: *const f32,    // [T, topk] contiguous
+        out: *mut c_void,      // [T, N]
+        num_tokens: i32,
+        topk: i32,
+        n: i32,
+        dtype: i32,
+        stream: i64,
+    );
     pub(crate) fn causal_conv1d_update(
         x: *const c_void,
         weight: *const c_void,
