@@ -55,9 +55,10 @@ curl localhost:1234/v1/messages \
   -d '{"model":"default","max_tokens":64,"messages":[{"role":"user","content":"say hi in 3 words"}]}'
 ```
 
-> Prefer to join it to your cloud fleet instead of a bare port?
-> `hanzo gpu connect --serve-engine` installs + serves this same binary and
-> registers the node with your Hanzo Cloud account (see the `hanzo` CLI).
+> Prefer to join it to your cloud fleet instead of a bare port? Start it with
+> `hanzo engine serve -m Qwen/Qwen3-4B`, then `hanzo gpu connect --serve-engine`
+> advertises this node to your Hanzo Cloud account so `api.hanzo.ai` can route
+> model calls to it (see the `hanzo` CLI: `hanzo engine` + `hanzo gpu`).
 
 ## Verifying signatures
 
