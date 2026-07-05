@@ -1372,7 +1372,7 @@ mod thinker_tests {
     fn omni_thinker_isq_real_q4k_forward() {
         // Explicit opt-in: this materializes ~30B params, so it must never fire on a bare `cargo test`
         // (which could OOM a co-resident service). Run with `ZEN_OMNI_ISQ_REAL=1` and `earlyoom`
-        // stopped; `HANZO_ISQ_SINGLETHREAD=1` bounds the immediate-ISQ transient to one linear.
+        // stopped; `ISQ_SINGLETHREAD=1` bounds the immediate-ISQ transient to one linear.
         if std::env::var("ZEN_OMNI_ISQ_REAL").is_err() {
             eprintln!("[isq-real] set ZEN_OMNI_ISQ_REAL=1 to run the real-weights Q4K validation; skipping");
             return;
