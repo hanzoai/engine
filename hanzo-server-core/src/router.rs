@@ -27,7 +27,8 @@ use crate::{
     image_generation::image_generation,
     responses::{cancel_response, create_response, delete_response, get_response},
     route_registry::{
-        AGENT_APPROVAL_ROUTE, ANIMATE_ROUTE, CANCEL_RESPONSE_ROUTE, COMPLETIONS_ROUTE,
+        AGENT_APPROVAL_ROUTE, ANIMATE_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE, CANCEL_RESPONSE_ROUTE,
+        COMPLETIONS_ROUTE,
         EMBEDDINGS_ROUTE, FILES_ROUTE, FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE,
         IMAGE_GENERATION_ROUTE, LIPSYNC_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE,
         RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE,
@@ -298,6 +299,10 @@ fn init_router(
         // *_ROUTE constant below (duplicating them here panics axum).
         .route("/v1/chat/completions", post(chatcompletions))
         .route("/v1/messages", post(crate::anthropic::messages))
+        .route(
+            ANTHROPIC_COUNT_TOKENS_ROUTE.path,
+            post(crate::anthropic::count_tokens),
+        )
         .route(COMPLETIONS_ROUTE.path, post(completions))
         .route(EMBEDDINGS_ROUTE.path, post(embeddings))
         .route(MODELS_ROUTE.path, get(models))
