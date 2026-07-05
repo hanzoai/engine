@@ -2772,7 +2772,7 @@ pub fn qk_rms_norm_rope(
     }
 
     #[cfg(feature = "vulkan")]
-    if is_gpt_neox && q.device().is_vulkan() && std::env::var("HANZO_VK_FUSED_QKNORM").is_ok() {
+    if is_gpt_neox && q.device().is_vulkan() && std::env::var("VK_FUSED_QKNORM").is_ok() {
         if let Some(res) =
             vulkan_qk_rms_norm_rope(q, k, q_weight, k_weight, q_eps, k_eps, &cos, &sin)?
         {
@@ -3003,9 +3003,20 @@ pub fn qk_rms_norm_rope_positions(
     apply_rotary_positions_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox)
 }
 
+#[cfg(feature = "rocm")]
+static FORCE_UNFUSED_QK_NORM_ROPE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Test-only: force the unfused rms_norm + rope chain so the numeric oracle can gate the fused kernel
+/// against it. Never set in production.
+#[cfg(feature = "rocm")]
+pub fn set_force_unfused_qk_norm_rope(force: bool) {
+    FORCE_UNFUSED_QK_NORM_ROPE.store(force, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// ROCm fused q/k RMSNorm + positions-RoPE (one kernel). Applies only when positions are per-sequence
 /// start offsets (length == batch, the decode/prefill graph path) and head_dim is even <= 1024; other
-/// shapes (or HANZO_QK_NORM_ROPE_FALLBACK) return None so the caller runs the unfused rms_norm + rope.
+/// shapes (or the test-only force-unfused flag) return None so the caller runs the unfused rms_norm + rope.
 #[cfg(feature = "rocm")]
 #[allow(clippy::too_many_arguments)]
 fn rocm_qk_rms_norm_rope_positions(
@@ -3021,7 +3032,7 @@ fn rocm_qk_rms_norm_rope_positions(
     is_gpt_neox: bool,
 ) -> Result<Option<(Tensor, Tensor)>> {
     use hanzo_ml::Storage;
-    if !q.device().is_rocm() || std::env::var_os("HANZO_QK_NORM_ROPE_FALLBACK").is_some() {
+    if !q.device().is_rocm() || FORCE_UNFUSED_QK_NORM_ROPE.load(std::sync::atomic::Ordering::Relaxed) {
         return Ok(None);
     }
     let (batch, _q_heads, _seq_len, head_dim) = q.dims4()?;
