@@ -1393,23 +1393,9 @@ impl Sampler {
         for processor in &self.logits_processors {
             logits = processor.apply(&logits, context)?;
         }
-        // One-shot path tracer (env SAMPLER_TRACE=1): prints which sampling path
-        // actually runs — argmax vs top-k vs speculative — once. Diagnostic only.
-        static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let trace = *TRACE.get_or_init(|| std::env::var("SAMPLER_TRACE").is_ok_and(|v| v == "1"));
-        static TRACED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        let mut trace_once = |path: &str| {
-            if trace && !TRACED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                eprintln!(
-                    "[SAMPLER-TRACE] path={path} temp={:?} top_k={} top_p={} min_p={} spec={sample_speculative}",
-                    self.temperature, self.top_k, self.top_p, self.min_p
-                );
-            }
-        };
         let next_token = if sample_speculative {
             match self.temperature {
                 None => {
-                    trace_once("speculative/topk-RAW-LOGITS");
                     self.sample_speculative_top_kp_min_p(
                         logits,
                         return_logprobs,
@@ -1419,7 +1405,6 @@ impl Sampler {
                     )?
                 }
                 Some(temperature) => {
-                    trace_once("speculative/topk-softmax");
                     let logits = (&logits / temperature)?;
                     let probs = hanzo_nn::ops::softmax_last_dim(&logits)?;
 
@@ -1435,11 +1420,9 @@ impl Sampler {
         } else {
             match self.temperature {
                 None => {
-                    trace_once("argmax");
                     self.sample_argmax(logits, return_logprobs)?
                 }
                 Some(temperature) => {
-                    trace_once("topk-softmax");
                     let logits = (&logits / temperature)?;
                     let probs = hanzo_nn::ops::softmax_last_dim(&logits)?;
                     let mut probs: Vec<f32> = probs.to_vec1()?;

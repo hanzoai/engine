@@ -6,14 +6,14 @@
 //! can use ANY loaded zen / zen-embedding model in-process. The engine is built
 //! once (lazy, from env) holding every configured model.
 //!
-//! Config (read on first call): `HANZO_FFI_MODELS` = `;`-separated list of
+//! Config (read on first call): `FFI_MODELS` = `;`-separated list of
 //! `name=kind:source`, where `kind` ∈ {`gguf`,`plain`,`embedding`}:
 //!   - `gguf:/abs/path/model.gguf`  (causal GGUF; tokenizer from the file's dir
-//!      or `HANZO_FFI_TOK_DIR` if set)
+//!      or `FFI_TOK_DIR` if set)
 //!   - `plain:<hf-repo-or-dir>`     (causal safetensors)
 //!   - `embedding:<hf-repo-or-dir>` (embedding model; arch auto-detected)
 //! The first entry is the default model. Example:
-//!   `HANZO_FFI_MODELS="zen-nano=gguf:/tmp/zen5-weights/zen-5-flash.gguf;zen-embed=embedding:/tmp/zen-embedding-0.6B"`
+//!   `FFI_MODELS="zen-nano=gguf:/tmp/zen5-weights/zen-5-flash.gguf;zen-embed=embedding:/tmp/zen-embedding-0.6B"`
 
 #![allow(clippy::doc_lazy_continuation, clippy::doc_overindented_list_items)]
 
@@ -31,9 +31,9 @@ fn ensure_engine() -> Result<(), String> {
         if hanzo_engine::inference_engine_registered() {
             return Ok(());
         }
-        let spec = std::env::var("HANZO_FFI_MODELS")
-            .map_err(|_| "set HANZO_FFI_MODELS (name=kind:source;...)".to_string())?;
-        let tok_dir = std::env::var("HANZO_FFI_TOK_DIR").ok();
+        let spec = std::env::var("FFI_MODELS")
+            .map_err(|_| "set FFI_MODELS (name=kind:source;...)".to_string())?;
+        let tok_dir = std::env::var("FFI_TOK_DIR").ok();
         let configs = hanzo_engine::parse_model_spec(&spec, tok_dir.as_deref())?;
         let default_id = configs[0].0.clone();
         let mut builder = ServerBuilder::new();
@@ -151,10 +151,10 @@ pub unsafe extern "C" fn hanzo_ffi_embed(
 
 /// Load one model into the LIVE engine at runtime, routable immediately by
 /// `name`. `kind` ∈ {`gguf`,`plain`,`embedding`}; `source` is the same value the
-/// startup `HANZO_FFI_MODELS` spec uses (abs `.gguf` path, or HF repo / local
+/// startup `FFI_MODELS` spec uses (abs `.gguf` path, or HF repo / local
 /// dir). The engine must already be up (`hanzo_ffi_ready`); the new model is
 /// added incrementally via `Hanzo::add_model` without disturbing loaded models.
-/// GGUF tokenizer resolution honors `HANZO_FFI_TOK_DIR` exactly as at startup.
+/// GGUF tokenizer resolution honors `FFI_TOK_DIR` exactly as at startup.
 ///
 /// Returns 0 on success. Errors: -1 bad args, -2 engine unavailable,
 /// -3 load failed (bad spec, missing weights, or name/alias conflict).
@@ -185,7 +185,7 @@ pub unsafe extern "C" fn hanzo_ffi_load(
 
     // Reuse the one spec format: `name=kind:source` parses to exactly one config.
     let spec = format!("{name}={kind}:{source}");
-    let tok_dir = std::env::var("HANZO_FFI_TOK_DIR").ok();
+    let tok_dir = std::env::var("FFI_TOK_DIR").ok();
     let configs = match hanzo_engine::parse_model_spec(&spec, tok_dir.as_deref()) {
         Ok(c) => c,
         Err(_) => return -3,

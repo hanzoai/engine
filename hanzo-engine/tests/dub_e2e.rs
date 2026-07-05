@@ -4,7 +4,7 @@
 //!
 //!   sun.wav (zh)
 //!     -> zen3-ASR transcribe              [speech_models::Qwen3AsrPipeline]   -> char-match golden zh
-//!     -> translate (zh -> en)             [committed golden, or hanzo LLM if HANZO_TEST_GGUF set]
+//!     -> translate (zh -> en)             [committed golden, or hanzo LLM if TEST_GGUF set]
 //!     -> zen3-TTS synthesize (en)         [speech_models::Qwen3TtsPipeline]   -> 24 kHz PCM
 //!     -> zen3-ASR re-transcribe the TTS   [speech_models::Qwen3AsrPipeline]   -> round-trip char-match
 //!     -> MuseTalk render                  [diffusion_models::musetalk::MuseTalk] -> finite, shaped frame
@@ -18,7 +18,7 @@
 //!   ZEN3_ASR_DIR=/abs/zen-3-asr-0.6B   ZEN3_TTS_DIR=/abs/zen-3-tts-0.6B
 //!   DUB_SUN_WAV=/abs/sun.wav           (default: spark layout)
 //! Optional:
-//!   HANZO_TEST_GGUF=/abs/qwen.gguf     wire the real LLM translate stage (else use golden)
+//!   TEST_GGUF=/abs/qwen.gguf     wire the real LLM translate stage (else use golden)
 //!   --features cuda                    run the speech models on CUDA (default CPU)
 //!
 //! Run:  ZEN3_ASR_DIR=... ZEN3_TTS_DIR=... cargo test -p hanzo-engine --test dub_e2e -- --nocapture --test-threads=1
@@ -54,7 +54,7 @@ use tokenizers::Tokenizer;
 const GOLDEN_ZH: &str = "每个人到了一定年纪一切都看淡了顺其自然地活着珍惜所有的遇见";
 // Committed golden English translation fed to TTS. The bash orchestrator produced this with a
 // quantized Qwen3 (zen-eco-4b); wiring a GGUF LLM into the cargo test is heavy, so we assert the
-// pipeline against this committed translation (the task explicitly allows this). Set HANZO_TEST_GGUF
+// pipeline against this committed translation (the task explicitly allows this). Set TEST_GGUF
 // to instead run the real LLM (not done by default: it pulls in the full server/loader path).
 const GOLDEN_EN: &str =
     "Everyone becomes calm with age and lives naturally, cherishing every encounter.";
