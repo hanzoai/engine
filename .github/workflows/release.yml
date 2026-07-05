@@ -68,6 +68,13 @@ jobs:
     env:
       RUSTFLAGS: ""   # portable baseline codegen; overrides repo target-cpu=native
       CARGO_TERM_COLOR: always
+      # Cap concurrent rustc processes so this heavy ML-stack build fits the ARC
+      # pod's memory. The v1.7.6 run OOM-killed the linux runners ("lost
+      # communication ... starves it for CPU/Memory") with unbounded `-j`; the
+      # identical build succeeds locally. NOTE: for reliable signed CI releases the
+      # `hanzo-build-linux-amd64` scale-set pods should also be given more RAM
+      # (this build peaks several GB); this cap is the workflow-side mitigation.
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@v4
 
