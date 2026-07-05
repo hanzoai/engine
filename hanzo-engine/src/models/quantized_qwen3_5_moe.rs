@@ -140,9 +140,29 @@ impl FusedMoe {
             self.down_experts
                 .indexed_moe_forward(&activated, &indices)?
         };
-        let routed = routed
-            .broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
-            .sum(D::Minus2)?;
+        // Weighted expert-combine: out[t,:] = sum_e scores[t,e] * routed[t,e,:].
+        // The fused CUDA kernel does this in one coalesced pass over the hidden axis,
+        // replacing the materialize-then-strided-reduce (`broadcast_mul` + `sum` over
+        // the topk axis), whose `fast_sum_f32` was ~15% of prefill GPU time. The
+        // portable path (CPU / Vulkan / Metal) keeps the two-op form.
+        let routed = {
+            #[cfg(feature = "cuda")]
+            {
+                if routed.device().is_cuda() {
+                    crate::cuda::moe::moe_combine_cuda(&routed, &scores)?
+                } else {
+                    routed
+                        .broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
+                        .sum(D::Minus2)?
+                }
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                routed
+                    .broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
+                    .sum(D::Minus2)?
+            }
+        };
 
         // Shared expert with sigmoid gating, matching qwen3_next SparseMoeBlock.
         let shared_g = self.shared_gate_proj.forward(&xs)?;
