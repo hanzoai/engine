@@ -139,6 +139,16 @@ pub fn softplus(x: &Tensor) -> Result<Tensor> {
     (Tensor::ones_like(x)? + x.exp()?)?.log()
 }
 
+/// A/B knob: `GDN_FUSED_FALLBACK=1` forces the portable ops-composed scan on every backend,
+/// isolating the fused per-backend recurrence kernel's contribution. Default (unset) uses the fused
+/// kernel where one exists. Read once, cached.
+fn gdn_force_portable() -> bool {
+    static FORCE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FORCE.get_or_init(|| {
+        std::env::var("GDN_FUSED_FALLBACK").is_ok_and(|v| v != "0" && !v.is_empty())
+    })
+}
+
 /// Recurrent gated delta rule for prefill and decode. q,k: (b, s, v_heads, k_dim); v: (b, s,
 /// v_heads, v_dim); g,beta: (b, s, v_heads); state: (b, v_heads, k_dim, v_dim), updated in place.
 /// Returns (b, s, v_heads, v_dim). Single dispatch point: routes to the fused per-backend kernel
@@ -152,6 +162,9 @@ pub fn gated_delta_rule_recurrence(
     beta: &Tensor,
     state: &mut Tensor,
 ) -> Result<Tensor> {
+    if gdn_force_portable() {
+        return recurrence_portable(q, k, v, g, beta, state);
+    }
     #[cfg(feature = "cuda")]
     if state.device().is_cuda() {
         return recurrence_cuda(q, k, v, g, beta, state);
@@ -271,6 +284,30 @@ fn recurrence_cuda(
     state: &mut Tensor,
 ) -> Result<Tensor> {
     const CHUNK_THRESHOLD: usize = 64;
+    let (b, s_len, nh, kd) = q.dims4()?;
+    let vd = v.dim(D::Minus1)?;
+
+    // Layout-native prefill fast path: for K in {64,128} the fused kernel reads
+    // q/k/v/g/beta straight out of the model's [B,S,H,D] layout, so we skip the
+    // transpose+contiguous reshuffle (the large `ucopy_f32` copies) that
+    // `recurrence_flatten` does. Only the (small) state is flattened to [B*H,K,V].
+    if s_len >= CHUNK_THRESHOLD && (kd == 64 || kd == 128) {
+        let q = q.to_dtype(DType::F32)?;
+        let k = k.to_dtype(DType::F32)?;
+        let v = v.to_dtype(DType::F32)?;
+        let g = g.to_dtype(DType::F32)?;
+        let beta = beta.to_dtype(DType::F32)?;
+        let mut s = state
+            .to_dtype(DType::F32)?
+            .reshape((b * nh, kd, vd))?
+            .contiguous()?;
+        let out = crate::cuda::gdn::chunked_gated_delta_rule_recurrence_native_cuda(
+            &q, &k, &v, &g, &beta, &mut s,
+        )?;
+        *state = s.reshape((b, nh, kd, vd))?.to_dtype(state.dtype())?;
+        return out.to_dtype(q.dtype());
+    }
+
     let (q_bh, k_bh, v_bh, g_bh, beta_bh, mut s) = recurrence_flatten(q, k, v, g, beta, state)?;
     let out_bh = if q.dim(1)? >= CHUNK_THRESHOLD {
         crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
@@ -1144,8 +1181,8 @@ mod tests {
 
     // The fused CUDA recurrence (cuda/gdn.cu: tiled decode kernel for seq<64, warp-per-column prefill
     // kernel for seq>=64) must match the portable ops-composed scan bit-for-bit within f32 reorder.
-    // This is the correctness gate for the fused-vs-ops-composed path (recurrence_cuda vs
-    // recurrence_portable). Covers decode (seq=1 -> tiled), short prefill (seq=7 -> tiled), and a real prefill chunk
+    // This is the correctness gate for the fused-vs-ops-composed path the GDN_FUSED_FALLBACK knob
+    // selects. Covers decode (seq=1 -> tiled), short prefill (seq=7 -> tiled), and a real prefill chunk
     // (seq=64 -> warp), at the shipping head dim 128. Skips cleanly with no CUDA device.
     #[cfg(feature = "cuda")]
     #[test]
