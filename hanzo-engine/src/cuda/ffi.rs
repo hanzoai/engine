@@ -579,6 +579,19 @@ extern "C" {
         v_dim: i32,
         stream: i64,
     );
+    // Fused MoE expert-combine: out[t,:] = sum_e scores[t,e] * routed[t,e,:].
+    // Replaces the strided `broadcast_mul(scores).sum(topk)` (fast_sum_f32).
+    // dtype: 0=f32, 1=bf16 (routed/out); scores always f32; accum always f32.
+    pub(crate) fn moe_combine_f32(
+        routed: *const c_void, // [T, topk, N] contiguous
+        scores: *const f32,    // [T, topk] contiguous
+        out: *mut c_void,      // [T, N]
+        num_tokens: i32,
+        topk: i32,
+        n: i32,
+        dtype: i32,
+        stream: i64,
+    );
     pub(crate) fn causal_conv1d_update(
         x: *const c_void,
         weight: *const c_void,
