@@ -1,8 +1,6 @@
-// Prefill before/after micro-benchmark for the unified native Q4_K int8-WMMA GEMM (qmmq_core<Q4_K>)
-// vs the OLD dequantize-to-f16 + dense matmul fallback. Times QMatMul::forward(x) with rows>1 (the
-// prefill path) on a production Q4_K shape, toggling HANZO_QMMQ_FALLBACK to select the path the same
-// way the model does in quantized/mod.rs. Reports us/launch + the speedup. Not a correctness gate
-// (that's qmmq_unified_numeric); this isolates the prefill kernel win the unification delivers.
+// Prefill micro-benchmark for the unified native Q4_K int8-WMMA GEMM (qmmq_core<Q4_K>). Times
+// QMatMul::forward(x) with rows>1 (the prefill path) on a production Q4_K shape and reports us/launch.
+// Not a correctness gate (that's qmmq_unified_numeric); this isolates the native prefill kernel cost.
 // Lives in hanzo-cli so it links the HIP runtime via hanzo-cli's build.rs.
 #![cfg(feature = "rocm")]
 
@@ -55,18 +53,10 @@ fn qmmq_q4k_prefill_perf() {
 
     let iters = 30;
 
-    // BEFORE: dequantize-to-f16 + dense matmul (the old non-Q8_0 prefill fallback).
-    std::env::set_var("HANZO_QMMQ_FALLBACK", "1");
-    let before = time_forward(&qm, &x, &dev, iters);
+    // Native unified int8 WMMA prefill (qmmq_core<Q4_K>).
+    let native = time_forward(&qm, &x, &dev, iters);
 
-    // AFTER: native unified int8 WMMA prefill (qmmq_core<Q4_K>).
-    std::env::remove_var("HANZO_QMMQ_FALLBACK");
-    let after = time_forward(&qm, &x, &dev, iters);
-
-    let speedup = before / after;
-    let line = format!(
-        "Q4_K prefill m={m} k={k} n={n}: before(dequant-f16)={before:.1}us  after(native)={after:.1}us  speedup={speedup:.2}x\n"
-    );
+    let line = format!("Q4_K prefill m={m} k={k} n={n}: native={native:.1}us\n");
     eprintln!("{line}");
     let _ = std::fs::File::create("C:\\qmmq-q4k-prefill-perf.txt")
         .and_then(|mut f| f.write_all(line.as_bytes()));
