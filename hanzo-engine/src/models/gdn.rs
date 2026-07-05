@@ -139,6 +139,16 @@ pub fn softplus(x: &Tensor) -> Result<Tensor> {
     (Tensor::ones_like(x)? + x.exp()?)?.log()
 }
 
+/// A/B knob: `GDN_FUSED_FALLBACK=1` forces the portable ops-composed scan on every backend,
+/// isolating the fused per-backend recurrence kernel's contribution. Default (unset) uses the fused
+/// kernel where one exists. Read once, cached.
+fn gdn_force_portable() -> bool {
+    static FORCE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FORCE.get_or_init(|| {
+        std::env::var("GDN_FUSED_FALLBACK").is_ok_and(|v| v != "0" && !v.is_empty())
+    })
+}
+
 /// Recurrent gated delta rule for prefill and decode. q,k: (b, s, v_heads, k_dim); v: (b, s,
 /// v_heads, v_dim); g,beta: (b, s, v_heads); state: (b, v_heads, k_dim, v_dim), updated in place.
 /// Returns (b, s, v_heads, v_dim). Single dispatch point: routes to the fused per-backend kernel
@@ -152,6 +162,9 @@ pub fn gated_delta_rule_recurrence(
     beta: &Tensor,
     state: &mut Tensor,
 ) -> Result<Tensor> {
+    if gdn_force_portable() {
+        return recurrence_portable(q, k, v, g, beta, state);
+    }
     #[cfg(feature = "cuda")]
     if state.device().is_cuda() {
         return recurrence_cuda(q, k, v, g, beta, state);
@@ -271,6 +284,30 @@ fn recurrence_cuda(
     state: &mut Tensor,
 ) -> Result<Tensor> {
     const CHUNK_THRESHOLD: usize = 64;
+    let (b, s_len, nh, kd) = q.dims4()?;
+    let vd = v.dim(D::Minus1)?;
+
+    // Layout-native prefill fast path: for K in {64,128} the fused kernel reads
+    // q/k/v/g/beta straight out of the model's [B,S,H,D] layout, so we skip the
+    // transpose+contiguous reshuffle (the large `ucopy_f32` copies) that
+    // `recurrence_flatten` does. Only the (small) state is flattened to [B*H,K,V].
+    if s_len >= CHUNK_THRESHOLD && (kd == 64 || kd == 128) {
+        let q = q.to_dtype(DType::F32)?;
+        let k = k.to_dtype(DType::F32)?;
+        let v = v.to_dtype(DType::F32)?;
+        let g = g.to_dtype(DType::F32)?;
+        let beta = beta.to_dtype(DType::F32)?;
+        let mut s = state
+            .to_dtype(DType::F32)?
+            .reshape((b * nh, kd, vd))?
+            .contiguous()?;
+        let out = crate::cuda::gdn::chunked_gated_delta_rule_recurrence_native_cuda(
+            &q, &k, &v, &g, &beta, &mut s,
+        )?;
+        *state = s.reshape((b, nh, kd, vd))?.to_dtype(state.dtype())?;
+        return out.to_dtype(q.dtype());
+    }
+
     let (q_bh, k_bh, v_bh, g_bh, beta_bh, mut s) = recurrence_flatten(q, k, v, g, beta, state)?;
     let out_bh = if q.dim(1)? >= CHUNK_THRESHOLD {
         crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
@@ -1140,6 +1177,72 @@ mod tests {
     #[test]
     fn gdn_recurrence_cpu_shapes() -> Result<()> {
         run_gdn_recurrence_shapes(&Device::Cpu)
+    }
+
+    // The fused CUDA recurrence (cuda/gdn.cu: tiled decode kernel for seq<64, warp-per-column prefill
+    // kernel for seq>=64) must match the portable ops-composed scan bit-for-bit within f32 reorder.
+    // This is the correctness gate for the fused-vs-ops-composed path the GDN_FUSED_FALLBACK knob
+    // selects. Covers decode (seq=1 -> tiled), short prefill (seq=7 -> tiled), and a real prefill chunk
+    // (seq=64 -> warp), at the shipping head dim 128. Skips cleanly with no CUDA device.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn gdn_recurrence_cuda_matches_portable() -> Result<()> {
+        let Ok(dev) = Device::new_cuda(0) else {
+            eprintln!("skip: no cuda device");
+            return Ok(());
+        };
+        let gen = |n: usize, seed: usize| -> Vec<f32> {
+            (0..n)
+                .map(|i| (((i * 1103515245 + seed * 12345 + 7) % 2000) as f32 / 1000.0) - 1.0)
+                .collect()
+        };
+        let max_rel = |a: &[f32], b: &[f32]| -> f32 {
+            a.iter()
+                .zip(b)
+                .map(|(x, y)| (x - y).abs() / x.abs().max(1e-4))
+                .fold(0.0f32, f32::max)
+        };
+        for &(batch, nvh, hkd, hvd, seq) in
+            &[(1usize, 4usize, 128usize, 128usize, 1usize), (1, 8, 128, 128, 7), (1, 4, 128, 128, 64)]
+        {
+            let on4 = |v: Vec<f32>, s: (usize, usize, usize, usize)| -> Result<Tensor> {
+                Tensor::from_vec(v, s, &Device::Cpu)?.to_device(&dev)
+            };
+            let on3 = |v: Vec<f32>, s: (usize, usize, usize)| -> Result<Tensor> {
+                Tensor::from_vec(v, s, &Device::Cpu)?.to_device(&dev)
+            };
+            let q = on4(gen(batch * seq * nvh * hkd, 1), (batch, seq, nvh, hkd))?;
+            let k = on4(gen(batch * seq * nvh * hkd, 2), (batch, seq, nvh, hkd))?;
+            let v = on4(gen(batch * seq * nvh * hvd, 3), (batch, seq, nvh, hvd))?;
+            let g = on3(
+                gen(batch * seq * nvh, 4).iter().map(|x| x * 0.5 - 0.5).collect(),
+                (batch, seq, nvh),
+            )?;
+            let beta = on3(
+                gen(batch * seq * nvh, 5).iter().map(|x| (x + 1.0) * 0.5).collect(),
+                (batch, seq, nvh),
+            )?;
+            let state0 =
+                Tensor::from_vec(gen(batch * nvh * hkd * hvd, 6), (batch, nvh, hkd, hvd), &Device::Cpu)?
+                    .to_device(&dev)?;
+
+            let mut s_fused = state0.clone();
+            let y_fused = recurrence_cuda(&q, &k, &v, &g, &beta, &mut s_fused)?;
+            let mut s_port = state0.clone();
+            let y_port = recurrence_portable(&q, &k, &v, &g, &beta, &mut s_port)?;
+
+            let yf = y_fused.flatten_all()?.to_vec1::<f32>()?;
+            let yp = y_port.flatten_all()?.to_vec1::<f32>()?;
+            let sf = s_fused.flatten_all()?.to_vec1::<f32>()?;
+            let sp = s_port.flatten_all()?.to_vec1::<f32>()?;
+            let ry = max_rel(&yp, &yf);
+            let rs = max_rel(&sp, &sf);
+            eprintln!(
+                "[gdn cuda-vs-portable] b{batch} h{nvh} k{hkd} v{hvd} s{seq}  y_rel={ry:.2e} state_rel={rs:.2e}"
+            );
+            assert!(ry < 1e-4 && rs < 1e-4, "fused!=portable b{batch} s{seq} y_rel={ry} state_rel={rs}");
+        }
+        Ok(())
     }
 
     // Fast Vulkan reproduction of the qwen35moe prompt-step recurrence shape crash. Skips cleanly with
