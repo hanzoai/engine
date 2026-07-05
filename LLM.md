@@ -213,6 +213,45 @@ Avoid returning TODOs.
 3. **Chat Templates**: Models may need specific chat templates - check `chat_templates/` directory
 4. **Quantization**: Different quantization methods have different hardware requirements
 
+## Qwen3.5/3.6 hybrid (GDN + MoE) and the portable kernel DSL
+
+- **`quantized_qwen3_5_moe`** is the Qwen3.5/3.6 (`qwen3_5_moe` arch) hybrid model: Gated-DeltaNet
+  (GDN) linear-attention layers interleaved with MoE. Registered end-to-end (GGUF arch
+  `Qwen35`/`Qwen35MoE` in `pipeline/gguf.rs`, `Qwen3_5MoeLoader`, vision + text variants). GDN lives
+  in `hanzo-engine/src/models/gdn.rs`.
+- **Fused GDN kernel**: `gdn.rs` routes the gated-delta-rule recurrence through ONE fused per-backend
+  kernel (`fused_gdn_gating_{cuda,metal}` + the fused scan) that drives Qwen3.5/3.6 to near-parity;
+  the portable f32 ops-composed scan (`gdn_step_scalar`) is the reference and the CPU/Vulkan fallback.
+  The fused-vs-portable A/B env knob was removed; bit-exact CPU gates (`gdn_step_matches_reference_seq1`,
+  `gdn_recurrence_cpu_shapes`) are colocated in `gdn.rs` and compare the two paths directly.
+- **hanzo-kernel** (the portable kernel DSL, published 0.2.15) is a CODEGEN: one
+  `#[kernel(targets(...))]` Rust source lowers to CUDA/ROCm/Vulkan/Metal/WebGPU/CPU. Its op library
+  (`gdn`, `norm`, `rope`, `attn` incl. `sdpa_runtime`, `quant`) and the `fuse` auto-fusion pass
+  (fusion == composition of Map morphisms, one `fused_interp` launch, zero intermediates) are all
+  bit-exact on CPU. `sdpa`/`sdpa_runtime` online-softmax is the structural cure for the 8B
+  flash-collapse. See `ml/LLM.md` for the DSL and env-var details.
+
+## Environment variables (bare names, one-way; de-brand DONE)
+
+The env-flag convention is BARE names (no `HANZO_` brand prefix). The de-brand is COMPLETE: every runtime
+knob is a bare name and the one-off dev A/B "fallback" toggles are DELETED (production always runs the
+fast path; runtime HW auto-select is kept). One bare name per real knob. Canonical flags in `perf_flags.rs`:
+- `CUDA_GRAPHS`, `ROCM_GRAPHS`, `METAL_GRAPHS`, `FLASHINFER_DECODE` -- all default ON, set `=0` to force
+  the eager/unfused path. (`HANZO_ROCM_FLASH_ATTN` and its A/B toggle were already deleted; ROCm flash is
+  always-on when applicable.)
+- **De-branded runtime config**: `KV_SPILL_DIR`, `KV_SPILL_BUDGET_MB`, `ISQ_SINGLETHREAD`,
+  `DEV_SIGNING_SEED`, `VK_FUSED_QKNORM`, `MXFP4_DP4A`, `MN_LOCAL_WORLD_SIZE`, `NO_NCCL`,
+  `FFI_MODELS`, `FFI_TOK_DIR`, `CUDA_FLASH_BF16`, `METAL_PRECOMPILE`, `ROCM_GFX_ARCH`.
+- **DELETED (one-off dev A/B toggles that forced the OLD/slow path)**: `HANZO_GDN_FUSED_FALLBACK`,
+  `HANZO_ADD_RMSNORM_FALLBACK`, `HANZO_QK_NORM_ROPE_FALLBACK`, `HANZO_NO_MEMPOOL_FIX`, `SAMPLER_TRACE`
+  (plus the ml `HANZO_Q*K_FALLBACK` / `HANZO_MOE_*_FALLBACK` / `HANZO_IQ*_FALLBACK` family). The fused
+  vs unfused decision is now the always-fast path; bit-exact oracle tests force the unfused/scalar leg
+  via test-only programmatic setters (`layers::set_force_unfused_qk_norm_rope`,
+  `hanzo_ml::set_force_scalar_matvec`), never env, never set in production.
+- License gate reads `HANZO_ENGINE_LICENSE_TOKEN` / `HANZO_ENGINE_LICENSE_FILE` +
+  `HANZO_LICENSE_SIGNING_KEY` (see `license.rs`); these are product-namespaced identity vars, not perf
+  flags, and stay branded by design -- the ONLY remaining `HANZO_` env names.
+
 ## Latest Upstream Features (as of commit 530463af1)
 
 - **Qwen 3 VL** - Vision-language model support (#1657)
@@ -347,7 +386,7 @@ ds4 hit the SAME issue (its README documents it) and fixes it with **hi-precisio
 accumulation**, not higher activation precision. KEY MEASUREMENT: **F32 is WORSE than bf16** here
 — because the model is FP8-trained, so MORE precision moves AWAY from the trained operating point.
 **bit-exact = match ds4's Q8_0/IQ2 *accumulation* kernels (int32 dp4a / hi-precision), NOT go f32.**
-Current best config: **bf16 carrier + native dp4a** (HANZO_CUDA_FAST_MMQ / V4 `set_fast_mmq(true)`)
+Current best config: **bf16 carrier + native dp4a** (CUDA_FAST_MMQ / V4 `set_fast_mmq(true)`)
 → correct on short/medium (primary-colors, France, math, natural EOS); haiku-class long-hard
 reasoning still degenerates (the accumulation-precision residual).
 
