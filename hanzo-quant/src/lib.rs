@@ -227,7 +227,7 @@ pub fn set_immediate_isq_with_pool(
 /// - GGML types (Q2K-Q8K) and F8E4M3: `rayon::current_num_threads()` (CPU quantization)
 /// - HQQ/AFQ: 1 thread (GPU quantization, serialized by `QuantizeOntoGuard`)
 pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize) {
-    let num_threads = if std::env::var("HANZO_ISQ_SINGLETHREAD").is_ok() {
+    let num_threads = if std::env::var("ISQ_SINGLETHREAD").is_ok() {
         1
     } else if let Some(ty) = ty {
         ty.get_max_isq_cpu_threads()

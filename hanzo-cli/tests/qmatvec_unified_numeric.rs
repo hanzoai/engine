@@ -193,7 +193,7 @@ fn check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
 
     // dp4a-path types dot the weight against the q8_1-reconstructed activation; the scalar path uses
     // the exact f16/bf16 activation. Match the reference to whichever the GPU actually ran so nbad=0
-    // means bit-exact (not "within a q8_1 fudge"). dp4a_active() reflects the HANZO_<T>_FALLBACK env.
+    // means bit-exact (not "within a q8_1 fudge"). dp4a_active() reflects set_force_scalar_matvec.
     let dp4a = qt.dp4a_active();
     let ax_h = if dp4a { q8_1_recon(&xf_h) } else { xf_h.clone() };
     let ax_b = if dp4a { q8_1_recon(&xf_b) } else { xf_b.clone() };
@@ -387,10 +387,10 @@ fn qmatvec_unified_numeric() {
             },
         );
     }
-    // SCALAR-forced (HANZO_<T>_FALLBACK) vs the EXACT oracle: the ground-truth bit-exact weight-decode
-    // gate for the low-bit k-quants. With the fallback set, dp4a_active() is false so `check` runs the
-    // scalar core AND references the exact (non-q8_1) activation -- proving the decode itself is exact.
-    std::env::set_var("HANZO_Q2K_FALLBACK", "1");
+    // SCALAR-forced vs the EXACT oracle: the ground-truth bit-exact weight-decode gate for the low-bit
+    // k-quants. With the scalar core forced, dp4a_active() is false so `check` runs the scalar core AND
+    // references the exact (non-q8_1) activation -- proving the decode itself is exact.
+    hanzo_ml::set_force_scalar_matvec(true);
     for &(n, k) in shapes {
         check::<BlockQ2K, _>(
             &dev,
@@ -407,8 +407,6 @@ fn qmatvec_unified_numeric() {
             },
         );
     }
-    std::env::remove_var("HANZO_Q2K_FALLBACK");
-    std::env::set_var("HANZO_Q3K_FALLBACK", "1");
     for &(n, k) in shapes {
         check::<BlockQ3K, _>(
             &dev,
@@ -424,7 +422,7 @@ fn qmatvec_unified_numeric() {
             },
         );
     }
-    std::env::remove_var("HANZO_Q3K_FALLBACK");
+    hanzo_ml::set_force_scalar_matvec(false);
     // Q5_K: 176 B, 256 elems. d (f16) at 0, dmin (f16) at 2. ASYMMETRIC 5-bit (Q4_K + qh 5th bit).
     // dp4a-capable, so check() exercises the dp4a path vs the to_float oracle (scalar gated in the A/B
     // below). Small exact-f16 d/dmin keep the 5-bit*6-bit-scale worst case inside f16 range.
@@ -730,7 +728,7 @@ fn moe_matvec_unified_numeric() {
     );
     // SCALAR-forced MoE vs EXACT oracle: exercises the moe_qmatvecu_q2k/q3k scalar kernels (the dp4a
     // runs above used the q8_1 reference). Bit-exact weight decode through the batched expert path.
-    std::env::set_var("HANZO_Q2K_FALLBACK", "1");
+    hanzo_ml::set_force_scalar_matvec(true);
     moe_check::<BlockQ2K, _>(
         &dev,
         &mut log,
@@ -747,8 +745,6 @@ fn moe_matvec_unified_numeric() {
             put_d(blk, 82, r, b, 0.03125, 0.015625, 4);
         },
     );
-    std::env::remove_var("HANZO_Q2K_FALLBACK");
-    std::env::set_var("HANZO_Q3K_FALLBACK", "1");
     moe_check::<BlockQ3K, _>(
         &dev,
         &mut log,
@@ -764,7 +760,7 @@ fn moe_matvec_unified_numeric() {
             put_d(blk, 108, r, b, 0.0078125, 0.00390625, 5);
         },
     );
-    std::env::remove_var("HANZO_Q3K_FALLBACK");
+    hanzo_ml::set_force_scalar_matvec(false);
     // Q5_K MoE (ASYMMETRIC 5-bit) -- dp4a expert-bank path (moe_qmatvec_dp4a_q5k) vs the CPU oracle.
     moe_check::<BlockQ5K, _>(
         &dev,
@@ -815,7 +811,7 @@ fn moe_matvec_unified_numeric() {
 
 // dp4a-vs-scalar A/B gate: the int8-dp4a decode core (`qdp4a<WTYPE>`) must equal the scalar
 // `qmatvec_core<WTYPE>` (the byte-faithful CPU-oracle reference) for every dp4a-capable type. Sets
-// the per-type `HANZO_<T>_FALLBACK` env to force the scalar core, unset to take dp4a, and asserts the
+// set_force_scalar_matvec(true) to force the scalar core, false to take dp4a, and asserts the
 // two agree to a tight f16/bf16-reorder tolerance (both accumulate in f32; only the summation ORDER
 // differs). Covers both the single-expert matvec and the indexed-MoE path. This proves the speedup
 // changed nothing numeric -- the whole point of the bit-faithful dp4a port.
@@ -824,7 +820,6 @@ fn ab_matvec<F: Fn(&mut [u8], usize, usize)>(
     log: &mut String,
     name: &str,
     qt: RocmQuantType,
-    fb_env: &str,
     n: usize,
     k: usize,
     blk: usize,
@@ -840,11 +835,11 @@ fn ab_matvec<F: Fn(&mut [u8], usize, usize)>(
     let wst = dev.storage_from_slice(&wq_bytes).expect("upload w");
 
     // dp4a path (fallback unset).
-    std::env::remove_var(fb_env);
+    hanzo_ml::set_force_scalar_matvec(false);
     let dp4a_h = to_f32(&dev.matvec_quant(qt, &wst, &xst_h, n, k).expect("dp4a f16"));
     let dp4a_b = to_f32(&dev.matvec_quant(qt, &wst, &xst_b, n, k).expect("dp4a bf16"));
     // scalar path (fallback set) -- the byte-faithful reference core.
-    std::env::set_var(fb_env, "1");
+    hanzo_ml::set_force_scalar_matvec(true);
     let scal_h = to_f32(
         &dev.matvec_quant(qt, &wst, &xst_h, n, k)
             .expect("scalar f16"),
@@ -853,7 +848,7 @@ fn ab_matvec<F: Fn(&mut [u8], usize, usize)>(
         &dev.matvec_quant(qt, &wst, &xst_b, n, k)
             .expect("scalar bf16"),
     );
-    std::env::remove_var(fb_env);
+    hanzo_ml::set_force_scalar_matvec(false);
 
     let scale = scal_h
         .iter()
@@ -886,7 +881,6 @@ fn ab_moe<F: Fn(&mut [u8], usize, usize)>(
     log: &mut String,
     name: &str,
     qt: RocmQuantType,
-    fb_env: &str,
     e_cnt: usize,
     nrows: usize,
     n: usize,
@@ -910,17 +904,17 @@ fn ab_moe<F: Fn(&mut [u8], usize, usize)>(
     let xh: Vec<f16> = xf.iter().map(|&v| f16::from_f32(v)).collect();
     let xst_h = dev.storage_from_slice(&xh).expect("upload x f16");
 
-    std::env::remove_var(fb_env);
+    hanzo_ml::set_force_scalar_matvec(false);
     let dp4a = to_f32(
         &dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k)
             .expect("moe dp4a"),
     );
-    std::env::set_var(fb_env, "1");
+    hanzo_ml::set_force_scalar_matvec(true);
     let scal = to_f32(
         &dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k)
             .expect("moe scalar"),
     );
-    std::env::remove_var(fb_env);
+    hanzo_ml::set_force_scalar_matvec(false);
 
     let scale = scal.iter().fold(0f32, |m, &v| m.max(v.abs())).max(1.0);
     let tol = 0.01 * scale;
@@ -963,7 +957,6 @@ fn qmatvec_dp4a_vs_scalar() {
             &mut log,
             "Q4_K",
             RocmQuantType::Q4K,
-            "HANZO_Q4K_FALLBACK",
             n,
             k,
             256,
@@ -978,7 +971,6 @@ fn qmatvec_dp4a_vs_scalar() {
             &mut log,
             "Q6_K",
             RocmQuantType::Q6K,
-            "HANZO_Q6K_FALLBACK",
             n,
             k,
             256,
@@ -992,7 +984,6 @@ fn qmatvec_dp4a_vs_scalar() {
             &mut log,
             "Q5_K",
             RocmQuantType::Q5K,
-            "HANZO_Q5K_FALLBACK",
             n,
             k,
             256,
@@ -1009,7 +1000,6 @@ fn qmatvec_dp4a_vs_scalar() {
         &mut log,
         "Q4_K",
         RocmQuantType::Q4K,
-        "HANZO_Q4K_FALLBACK",
         8,
         16,
         128,
@@ -1026,7 +1016,6 @@ fn qmatvec_dp4a_vs_scalar() {
         &mut log,
         "Q6_K",
         RocmQuantType::Q6K,
-        "HANZO_Q6K_FALLBACK",
         8,
         16,
         128,
@@ -1042,7 +1031,6 @@ fn qmatvec_dp4a_vs_scalar() {
         &mut log,
         "Q5_K",
         RocmQuantType::Q5K,
-        "HANZO_Q5K_FALLBACK",
         8,
         16,
         128,
