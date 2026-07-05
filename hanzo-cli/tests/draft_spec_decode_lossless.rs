@@ -9,7 +9,7 @@
 //!
 //! The classic draft path requires PagedAttention, which is GPU-only, so this test is a no-op unless
 //! built with a GPU backend AND given a local GGUF (so CPU CI is a clean skip):
-//!   HANZO_TEST_GGUF=/abs/path/to/Qwen3-0.6B-Q8_0.gguf \
+//!   TEST_GGUF=/abs/path/to/Qwen3-0.6B-Q8_0.gguf \
 //!     cargo test -p hanzo-cli --features rocm --test draft_spec_decode_lossless \
 //!       -- --nocapture --test-threads=1
 
@@ -36,10 +36,10 @@ const GPU: bool = cfg!(any(
 ));
 
 fn model_path() -> Option<PathBuf> {
-    let p = std::env::var("HANZO_TEST_GGUF").ok()?;
+    let p = std::env::var("TEST_GGUF").ok()?;
     let pb = PathBuf::from(&p);
     if !pb.is_file() {
-        panic!("HANZO_TEST_GGUF={p} is not a file");
+        panic!("TEST_GGUF={p} is not a file");
     }
     Some(pb)
 }
@@ -182,7 +182,7 @@ async fn draft_spec_decode_is_lossless_greedy() {
         return;
     }
     let Some(path) = model_path() else {
-        eprintln!("SKIP draft_spec_decode_is_lossless_greedy: set HANZO_TEST_GGUF to a local GGUF");
+        eprintln!("SKIP draft_spec_decode_is_lossless_greedy: set TEST_GGUF to a local GGUF");
         return;
     };
 
