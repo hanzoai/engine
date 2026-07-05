@@ -357,6 +357,139 @@ extern "C" void chunked_gated_delta_rule_recurrence(
 }
 
 // ============================================================================
+// Kernel 1c: layout-native chunked recurrence (prefill).
+//
+// Same math as `gdn_warp_recurrence_kernel`, but reads q/k/v/g/beta and writes
+// output in the model's NATIVE [B, S, H, D] token-major layout instead of the
+// [B*H, S, D] head-major layout. This lets `recurrence_flatten` skip the
+// transpose(1,2)+contiguous reshuffle of q/k/v (the large `ucopy_f32` copies:
+// ~8% of Qwen3.6 prefill GPU time) -- the kernel strides over the head axis
+// directly. state stays [B*H, K, V] (small, laid out by the host once).
+//
+// Strides (in elements): tok_qk = H*K, tok_v = H*V, tok_gb = H (g/beta are
+// [B,S,H]); the per-head base is head*K / head*V / head, plus the batch base.
+// q is scaled by `qscale` = 1/sqrt(K) in-kernel (host no longer pre-scales).
+// row0..row0+RPL within a head are still contiguous, so the float4 loads hold.
+// ============================================================================
+template <int D, int NW>
+__global__ __launch_bounds__(32 * NW, 4) void gdn_warp_recurrence_native_kernel(
+    const float *__restrict__ q,    // [B, S, H, K]
+    const float *__restrict__ k,    // [B, S, H, K]
+    const float *__restrict__ v,    // [B, S, H, V]
+    const float *__restrict__ g,    // [B, S, H]
+    const float *__restrict__ beta, // [B, S, H]
+    float *__restrict__ state,      // [B*H, K, V]
+    float *__restrict__ output,     // [B, S, H, V]
+    int seq_len, int v_dim, int num_heads, float qscale) {
+
+  constexpr int WS = 32;
+  constexpr int RPL = D / WS;
+  const int bh = blockIdx.x;             // flattened (batch, head)
+  const int b_idx = bh / num_heads;
+  const int head = bh % num_heads;
+  const int lane = threadIdx.x;
+  const int col = blockIdx.y * NW + threadIdx.y;
+
+  if (col >= v_dim)
+    return;
+
+  const size_t tok_qk = (size_t)num_heads * D;
+  const size_t tok_v = (size_t)num_heads * v_dim;
+  const size_t tok_gb = (size_t)num_heads;
+  // Batch/head base offsets into the token-major tensors.
+  const float *q_h = q + (size_t)b_idx * seq_len * tok_qk + (size_t)head * D;
+  const float *k_h = k + (size_t)b_idx * seq_len * tok_qk + (size_t)head * D;
+  const float *v_h = v + (size_t)b_idx * seq_len * tok_v + (size_t)head * v_dim;
+  const float *g_h = g + (size_t)b_idx * seq_len * tok_gb + head;
+  const float *beta_h = beta + (size_t)b_idx * seq_len * tok_gb + head;
+  float *state_h = state + (size_t)bh * D * v_dim;
+  float *out_h = output + (size_t)b_idx * seq_len * tok_v + (size_t)head * v_dim;
+
+  const int row0 = lane * RPL;
+  float s[RPL];
+#pragma unroll
+  for (int r = 0; r < RPL; r++)
+    s[r] = state_h[(size_t)(row0 + r) * v_dim + col];
+
+  for (int t = 0; t < seq_len; t++) {
+    const float decay = expf(g_h[t * tok_gb]);
+    const float beta_t = beta_h[t * tok_gb];
+
+    float kr[RPL], qr[RPL];
+    if constexpr (RPL == 4) {
+      *reinterpret_cast<float4 *>(kr) =
+          *reinterpret_cast<const float4 *>(k_h + (size_t)t * tok_qk + row0);
+      *reinterpret_cast<float4 *>(qr) =
+          *reinterpret_cast<const float4 *>(q_h + (size_t)t * tok_qk + row0);
+    } else if constexpr (RPL == 2) {
+      *reinterpret_cast<float2 *>(kr) =
+          *reinterpret_cast<const float2 *>(k_h + (size_t)t * tok_qk + row0);
+      *reinterpret_cast<float2 *>(qr) =
+          *reinterpret_cast<const float2 *>(q_h + (size_t)t * tok_qk + row0);
+    } else {
+#pragma unroll
+      for (int r = 0; r < RPL; r++) {
+        kr[r] = k_h[(size_t)t * tok_qk + row0 + r];
+        qr[r] = q_h[(size_t)t * tok_qk + row0 + r];
+      }
+    }
+#pragma unroll
+    for (int r = 0; r < RPL; r++)
+      qr[r] *= qscale; // host no longer pre-scales q
+
+    float kv = 0.0f;
+#pragma unroll
+    for (int r = 0; r < RPL; r++)
+      kv = __fmaf_rn(decay * s[r], kr[r], kv);
+#pragma unroll
+    for (int o = WS / 2; o > 0; o >>= 1)
+      kv += __shfl_xor_sync(0xffffffffu, kv, o);
+
+    const float delta = (v_h[(size_t)t * tok_v + col] - kv) * beta_t;
+
+    float attn = 0.0f;
+#pragma unroll
+    for (int r = 0; r < RPL; r++) {
+      s[r] = __fmaf_rn(decay, s[r], kr[r] * delta);
+      attn = __fmaf_rn(s[r], qr[r], attn);
+    }
+#pragma unroll
+    for (int o = WS / 2; o > 0; o >>= 1)
+      attn += __shfl_xor_sync(0xffffffffu, attn, o);
+
+    if (lane == 0)
+      out_h[(size_t)t * tok_v + col] = attn;
+  }
+
+#pragma unroll
+  for (int r = 0; r < RPL; r++)
+    state_h[(size_t)(row0 + r) * v_dim + col] = s[r];
+}
+
+extern "C" void chunked_gated_delta_rule_recurrence_native(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, float *state, float *output, int batch, int num_heads,
+    int seq_len, int k_dim, int v_dim, float qscale, int64_t stream) {
+
+  const cudaStream_t custream = (cudaStream_t)stream;
+  constexpr int NW = 8;
+  const int bh = batch * num_heads;
+  dim3 block(32, NW);
+  dim3 grid(bh, (v_dim + NW - 1) / NW);
+
+  if (k_dim == 128) {
+    gdn_warp_recurrence_native_kernel<128, NW><<<grid, block, 0, custream>>>(
+        q, k, v, g, beta, state, output, seq_len, v_dim, num_heads, qscale);
+  } else if (k_dim == 64) {
+    gdn_warp_recurrence_native_kernel<64, NW><<<grid, block, 0, custream>>>(
+        q, k, v, g, beta, state, output, seq_len, v_dim, num_heads, qscale);
+  } else {
+    // No native fast path for this K; caller must fall back to the flattened
+    // path (chunked_gated_delta_rule_recurrence).
+  }
+}
+
+// ============================================================================
 // Kernel 2a: causal_conv1d_update (decode path, single step)
 //
 // Each thread handles one channel: shift conv_state left by 1,
