@@ -81,6 +81,14 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y -qq --no-install-recommends \
               build-essential cmake pkg-config curl git zip python3 python3-pip xz-utils ca-certificates
+            # Windows-gnu targets: some crates (parking_lot_core) invoke
+            # `x86_64-w64-mingw32-dlltool` directly — zig provides the C compiler
+            # but not binutils, so install mingw-w64. (Windows-arm64/gnullvm still
+            # wants llvm-mingw's dlltool; that leg is best-effort until a native
+            # Windows runner or llvm-mingw is wired.)
+            case "${{ matrix.dir }}" in
+              *windows*) sudo apt-get install -y -qq --no-install-recommends mingw-w64 || true ;;
+            esac
           fi
 
       - name: Rust toolchain + zigbuild
