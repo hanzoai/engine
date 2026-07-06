@@ -2,13 +2,11 @@
 
 ## Quick Install (Recommended)
 
-Downloads a **prebuilt, cosign-signed `hanzoai` binary** for your platform — no
-Rust, no compiler, no CUDA toolkit required. The server speaks the OpenAI API
-(`/v1/chat/completions`) and the Anthropic API (`/v1/messages`) natively.
+The install script automatically detects your hardware (CUDA, Metal, MKL) and builds with optimal features.
 
 **Linux/macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hanzoai/engine/main/install.sh | sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/hanzoai/engine/main/install.sh | sh
 ```
 
 **Windows (PowerShell):**
@@ -16,77 +14,28 @@ curl -fsSL https://raw.githubusercontent.com/hanzoai/engine/main/install.sh | sh
 irm https://raw.githubusercontent.com/hanzoai/engine/main/install.ps1 | iex
 ```
 
-Prebuilt targets: **linux** `amd64`/`arm64`, **macos** `arm64`, **windows** `amd64`/`arm64`.
-The installer auto-detects your OS + CPU, downloads the matching bundle from the
-latest release, verifies it (cosign signature, or `SHA256SUMS` fallback), and puts
-`hanzoai` on your `PATH`.
+## Prerequisites
 
-### Installer options (env vars)
+1. Install required packages:
+   - OpenSSL: `sudo apt install libssl-dev` (Ubuntu)
+   - pkg-config (Linux only): `sudo apt install pkg-config`
 
-| Variable | Effect |
-|----------|--------|
-| `HANZOAI_VERSION=v1.7.6` | Install a specific tag instead of `latest` |
-| `HANZOAI_INSTALL_DIR=/opt/bin` | Install location (default: first writable of `/usr/local/bin`, `~/.local/bin`, `~/.hanzo/bin`) |
-| `HANZOAI_BASE_URL=https://mirror/…` | Air-gapped / self-hosted release mirror |
-| `HANZOAI_NO_VERIFY=1` | Skip signature/checksum verification |
+2. Install Rust from https://rustup.rs/
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   source $HOME/.cargo/env
+   ```
 
-## Test on a fresh machine
+3. (Optional) Install [FFmpeg](https://ffmpeg.org/) for video input support:
+   - Linux: `sudo apt install ffmpeg` or `sudo dnf install ffmpeg`
+   - macOS: `brew install ffmpeg`
+   - See [Video Input](VIDEO.md) for details
 
-The exact commands to go from nothing to a working local LLM endpoint on a new box:
-
-```bash
-# 1. install the prebuilt engine (no dependencies)
-curl -fsSL https://raw.githubusercontent.com/hanzoai/engine/main/install.sh | sh
-
-# 2. it works
-hanzoai --version
-
-# 3. serve a small model on :1234 (downloads weights from HF on first run)
-hanzoai --port 1234 run -m Qwen/Qwen3-4B &
-
-# 4a. OpenAI-compatible endpoint
-curl localhost:1234/v1/chat/completions \
-  -H 'content-type: application/json' \
-  -d '{"model":"default","messages":[{"role":"user","content":"say hi in 3 words"}]}'
-
-# 4b. Anthropic-compatible endpoint (same engine, same weights)
-curl localhost:1234/v1/messages \
-  -H 'content-type: application/json' \
-  -d '{"model":"default","max_tokens":64,"messages":[{"role":"user","content":"say hi in 3 words"}]}'
-```
-
-> Prefer to join it to your cloud fleet instead of a bare port? Start it with
-> `hanzo engine serve -m Qwen/Qwen3-4B`, then `hanzo gpu connect --serve-engine`
-> advertises this node to your Hanzo Cloud account so `api.hanzo.ai` can route
-> model calls to it (see the `hanzo` CLI: `hanzo engine` + `hanzo gpu`).
-
-## Verifying signatures
-
-Every bundle is cosign-signed keyless (Sigstore / GitHub OIDC). Each `<bundle>`
-ships an adjacent `<bundle>.sig` + `<bundle>.pem`, and the release carries a
-`SHA256SUMS`:
-
-```bash
-cosign verify-blob \
-  --certificate hanzoai-linux-amd64.tar.gz.pem \
-  --signature   hanzoai-linux-amd64.tar.gz.sig \
-  --certificate-identity-regexp "https://github.com/hanzoai/.*" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  hanzoai-linux-amd64.tar.gz
-```
-
-The installer performs this check automatically when `cosign` is on your `PATH`.
-
----
-
-The rest of this guide covers **building from source** (for a GPU-accelerated
-build, an unsupported platform, or local development). Building from source needs
-the Rust toolchain:
-
-- OpenSSL: `sudo apt install libssl-dev` (Ubuntu) · pkg-config: `sudo apt install pkg-config`
-- Rust from https://rustup.rs/ — `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh && source $HOME/.cargo/env`
-- (Optional) [FFmpeg](https://ffmpeg.org/) for video input — see [Video Input](VIDEO.md)
-- (Optional) HuggingFace auth: `hanzo login` (or `huggingface-cli login`)
+4. (Optional) Set up HuggingFace authentication:
+   ```bash
+   hanzo login
+   ```
+   Or use `huggingface-cli login` as documented [here](https://huggingface.co/docs/huggingface_hub/en/installation).
 
 ## Supported Accelerators
 

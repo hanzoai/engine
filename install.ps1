@@ -1,98 +1,357 @@
 #Requires -Version 5.1
-<#
-  Hanzo Engine installer for Windows — downloads a prebuilt, signed hanzoai.exe.
+# hanzo Installation Script for Windows
+# Automatic hardware detection and feature configuration
 
-    irm https://raw.githubusercontent.com/hanzoai/engine/main/install.ps1 | iex
-
-  Detects your CPU (amd64/arm64), fetches the matching bundle from the latest
-  GitHub release, verifies it (cosign if present, else SHA256SUMS), and installs
-  hanzoai.exe under %LOCALAPPDATA%\Hanzo\bin (user-level, no admin), on PATH.
-
-  Env overrides: $env:HANZOAI_VERSION, $env:HANZOAI_INSTALL_DIR,
-                 $env:HANZOAI_BASE_URL, $env:HANZOAI_NO_VERIFY=1
-#>
 $ErrorActionPreference = "Stop"
-function Info($m)    { Write-Host "==> $m" -ForegroundColor Blue }
-function Ok($m)      { Write-Host "OK  $m" -ForegroundColor Green }
-function Warn($m)    { Write-Host "warning: $m" -ForegroundColor Yellow }
-function Die($m)     { Write-Host "error: $m" -ForegroundColor Red; exit 1 }
 
-$Repo = "hanzoai/engine"
+# Color output functions
+function Write-Info { Write-Host "info: $args" -ForegroundColor Blue }
+function Write-Success { Write-Host "success: $args" -ForegroundColor Green }
+function Write-Warn { Write-Host "warning: $args" -ForegroundColor Yellow }
+function Write-Err { Write-Host "error: $args" -ForegroundColor Red; exit 1 }
 
-# --- platform ---
-switch ($env:PROCESSOR_ARCHITECTURE) {
-  "AMD64" { $arch = "amd64" }
-  "ARM64" { $arch = "arm64" }
-  "x86"   { if ($env:PROCESSOR_ARCHITEW6432 -eq "ARM64") { $arch = "arm64" } else { $arch = "amd64" } }
-  default { Die "unsupported CPU architecture: $($env:PROCESSOR_ARCHITECTURE)" }
+# Banner
+function Show-Banner {
+    Write-Host ""
+    Write-Host "  __  __ _     _             _              " -ForegroundColor Cyan
+    Write-Host " |  \/  (_)___| |_ _ __ __ _| |  _ __ ___   " -ForegroundColor Cyan
+    Write-Host " | |\/| | / __| __| '__/ `` | | | '__/ __|  " -ForegroundColor Cyan
+    Write-Host " | |  | | \__ \ |_| | | (_| | |_| |  \__ \  " -ForegroundColor Cyan
+    Write-Host " |_|  |_|_|___/\__|_|  \__,_|_(_)_|  |___/  " -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Fast, flexible LLM inference." -ForegroundColor Blue
+    Write-Host ""
 }
-$asset = "hanzoai-windows-$arch.zip"
 
-# --- release base ---
-if ($env:HANZOAI_BASE_URL)      { $base = $env:HANZOAI_BASE_URL.TrimEnd('/'); $tag = if ($env:HANZOAI_VERSION) { $env:HANZOAI_VERSION } else { "mirror" } }
-elseif ($env:HANZOAI_VERSION)   { $base = "https://github.com/$Repo/releases/download/$($env:HANZOAI_VERSION)"; $tag = $env:HANZOAI_VERSION }
-else                            { $base = "https://github.com/$Repo/releases/latest/download"; $tag = "latest" }
-$url = "$base/$asset"
+# Minimum required Rust version (from Cargo.toml rust-version)
+$RequiredRustVersion = "1.88"
+$MistralRsRepoUrl = "https://github.com/EricLBuehler/mistral.rs"
+$MistralRsBranch = "master"
+$MistralRsCliPackage = "mistralrs-cli"
 
-Info "Hanzo Engine — installing $asset ($tag)"
-$tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("hanzoai-" + [guid]::NewGuid())) -Force
-try {
-  $zip = Join-Path $tmp $asset
-  Info "Downloading $url"
-  try { Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing } catch {
-    Die "no prebuilt binary for windows/$arch in release $tag. See https://github.com/$Repo/releases"
-  }
-
-  # --- verify ---
-  if ($env:HANZOAI_NO_VERIFY -ne "1") {
-    $cosign = Get-Command cosign -ErrorAction SilentlyContinue
-    $org = $Repo.Split('/')[0]
-    if ($cosign) {
-      try {
-        Invoke-WebRequest -Uri "$url.sig" -OutFile "$zip.sig" -UseBasicParsing
-        Invoke-WebRequest -Uri "$url.pem" -OutFile "$zip.pem" -UseBasicParsing
-        & cosign verify-blob --certificate "$zip.pem" --signature "$zip.sig" `
-          --certificate-identity-regexp "https://github.com/$org/.*" `
-          --certificate-oidc-issuer "https://token.actions.githubusercontent.com" $zip 2>$null
-        if ($LASTEXITCODE -ne 0) { Die "cosign verification FAILED for $asset" }
-        Ok "cosign signature verified"
-      } catch { Warn "cosign present but signature unavailable — skipping" }
-    } else {
-      try {
-        $sums = Join-Path $tmp "SHA256SUMS"
-        Invoke-WebRequest -Uri "$base/SHA256SUMS" -OutFile $sums -UseBasicParsing
-        $want = (Select-String -Path $sums -Pattern ([regex]::Escape($asset)) | Select-Object -First 1).Line.Split(' ')[0]
-        $got  = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
-        if ($want -and ($want -eq $got)) { Ok "sha256 checksum verified" } else { Die "sha256 mismatch for $asset" }
-      } catch { Warn "no cosign and no SHA256SUMS — skipping verification" }
+# Check if Rust is installed
+function Test-Rust {
+    try {
+        $null = Get-Command cargo -ErrorAction Stop
+        return $true
+    } catch {
+        return $false
     }
-  }
-
-  # --- extract + install ---
-  Info "Extracting"
-  Expand-Archive -Path $zip -DestinationPath $tmp -Force
-  $exe = Join-Path $tmp "hanzoai.exe"
-  if (-not (Test-Path $exe)) { Die "archive did not contain hanzoai.exe" }
-
-  $dir = if ($env:HANZOAI_INSTALL_DIR) { $env:HANZOAI_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "Hanzo\bin" }
-  New-Item -ItemType Directory -Path $dir -Force | Out-Null
-  $dest = Join-Path $dir "hanzoai.exe"
-  if (Test-Path $dest) { Info "Upgrading existing install at $dest" }
-  Copy-Item -Path $exe -Destination $dest -Force
-  Ok "installed hanzoai.exe -> $dest"
-
-  # --- PATH (user) ---
-  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-  if (($userPath -split ';') -notcontains $dir) {
-    [Environment]::SetEnvironmentVariable("Path", "$userPath;$dir", "User")
-    $env:Path = "$env:Path;$dir"
-    Info "Added $dir to your user PATH (restart terminals to pick it up)"
-  }
-
-  try { Ok (& $dest --version) } catch { Warn "installed, but 'hanzoai --version' did not run cleanly" }
-  Write-Host ""
-  Write-Host "Next: serve an OpenAI + Anthropic compatible endpoint on :1234" -ForegroundColor White
-  Write-Host "  hanzoai --port 1234 run -m Qwen/Qwen3-4B" -ForegroundColor Green
-  Write-Host ""
 }
-finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
+
+# Get installed Rust version (major.minor)
+function Get-RustVersion {
+    try {
+        $output = & rustc --version 2>$null
+        if ($output -match 'rustc (\d+\.\d+)') {
+            return $matches[1]
+        }
+    } catch {}
+    return $null
+}
+
+# Compare two version strings (returns $true if $v1 >= $v2)
+function Test-VersionGte {
+    param([string]$v1, [string]$v2)
+
+    $v1Parts = $v1 -split '\.'
+    $v2Parts = $v2 -split '\.'
+
+    $v1Major = [int]$v1Parts[0]
+    $v1Minor = [int]$v1Parts[1]
+    $v2Major = [int]$v2Parts[0]
+    $v2Minor = [int]$v2Parts[1]
+
+    if ($v1Major -gt $v2Major) {
+        return $true
+    } elseif ($v1Major -eq $v2Major -and $v1Minor -ge $v2Minor) {
+        return $true
+    }
+    return $false
+}
+
+# Install Rust via rustup
+function Install-Rust {
+    Write-Info "Installing Rust via rustup..."
+    $rustupInit = "$env:TEMP\rustup-init.exe"
+
+    try {
+        Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile $rustupInit -UseBasicParsing
+        & $rustupInit -y
+
+        # Add cargo to PATH for current session
+        $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+
+        Write-Success "Rust installed successfully"
+    } catch {
+        Write-Err "Failed to install Rust: $_"
+    }
+}
+
+# Update Rust to latest version
+function Update-Rust {
+    Write-Info "Updating Rust to latest version..."
+    try {
+        & rustup update stable
+        Write-Success "Rust updated successfully"
+    } catch {
+        Write-Err "Failed to update Rust: $_"
+    }
+}
+
+# Get CUDA compute capability
+function Get-CudaComputeCap {
+    try {
+        $nvidiaSmi = Get-Command nvidia-smi -ErrorAction Stop
+        $output = & nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>$null
+        if ($output) {
+            $cc = ($output -split "`n")[0].Trim() -replace '\.',''
+            return $cc
+        }
+    } catch {}
+    return $null
+}
+
+# CUDA toolkit version as major*100+minor (e.g. 13.1 -> 1301). $null if nvcc is unavailable.
+function Get-CudaVersionCode {
+    try {
+        $null = Get-Command nvcc -ErrorAction Stop
+        $output = & nvcc --version 2>$null | Out-String
+        if ($output -match "release (\d+)\.(\d+)") {
+            return [int]$Matches[1] * 100 + [int]$Matches[2]
+        }
+    } catch {}
+    return $null
+}
+
+# Check if MKL is installed
+function Test-MKL {
+    if ($env:MKLROOT -and (Test-Path $env:MKLROOT)) {
+        return $true
+    }
+
+    $mklPaths = @(
+        "C:\Program Files (x86)\Intel\oneAPI\mkl\latest",
+        "C:\Program Files\Intel\oneAPI\mkl\latest",
+        "$env:USERPROFILE\intel\oneapi\mkl\latest"
+    )
+
+    foreach ($path in $mklPaths) {
+        if (Test-Path $path) {
+            return $true
+        }
+    }
+    return $false
+}
+
+# Check if CPU is Intel
+function Test-IntelCpu {
+    try {
+        $cpu = Get-CimInstance -ClassName Win32_Processor | Select-Object -First 1
+        return $cpu.Manufacturer -match "Intel" -or $cpu.Name -match "Intel"
+    } catch {
+        return $false
+    }
+}
+
+# Check if cuDNN is installed
+function Test-CuDNN {
+    # Check common cuDNN library paths on Windows
+    $cudnnPaths = @(
+        "$env:CUDA_PATH\bin\cudnn*.dll",
+        "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\bin\cudnn*.dll",
+        "C:\Program Files\NVIDIA\CUDNN\*\bin\cudnn*.dll"
+        "C:\Program Files\NVIDIA\CUDNN\*\bin\*\x64\cudnn*.dll"
+    )
+
+    foreach ($pattern in $cudnnPaths) {
+        if (Get-Item $pattern -ErrorAction SilentlyContinue) {
+            return $true
+        }
+    }
+    return $false
+}
+
+# Check if NCCL is installed
+function Test-NCCL {
+    $ncclPaths = @(
+        "$env:NCCL_ROOT\bin\nccl*.dll",
+        "$env:NCCL_ROOT\lib\nccl*.lib",
+        "$env:NCCL_HOME\bin\nccl*.dll",
+        "$env:NCCL_HOME\lib\nccl*.lib",
+        "$env:CUDA_PATH\bin\nccl*.dll",
+        "$env:CUDA_PATH\lib\x64\nccl*.lib",
+        "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\bin\nccl*.dll",
+        "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\lib\x64\nccl*.lib"
+    )
+
+    foreach ($pattern in $ncclPaths) {
+        if (Get-Item $pattern -ErrorAction SilentlyContinue) {
+            return $true
+        }
+    }
+    return $false
+}
+
+# Build feature string based on detected hardware
+function Get-Features {
+    $features = @()
+
+    # Check for CUDA
+    $cudaCC = Get-CudaComputeCap
+    if ($cudaCC) {
+        $features += "cuda"
+
+        $ccMajor = $cudaCC.Substring(0, 1)
+        $ccMinor = if ($cudaCC.Length -gt 1) { $cudaCC.Substring(1) } else { "0" }
+        Write-Info "CUDA detected (compute capability: $ccMajor.$ccMinor)"
+
+        if ($env:MISTRALRS_INSTALL_NO_NCCL -eq "1") {
+            Write-Info "MISTRALRS_INSTALL_NO_NCCL=1 set - skipping nccl"
+        } elseif (Test-NCCL) {
+            $features += "nccl"
+            Write-Info "NCCL detected - enabling nccl for CUDA multi-GPU tensor parallelism"
+        } elseif ($env:MISTRALRS_INSTALL_NCCL -eq "1") {
+            $features += "nccl"
+            Write-Warn "MISTRALRS_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless NCCL is on the linker path"
+        } else {
+            Write-Warn "NCCL not found - skipping nccl. Install NCCL or set MISTRALRS_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
+        }
+
+        # Check for cuDNN
+        if (Test-CuDNN) {
+            $features += "cudnn"
+            Write-Info "cuDNN detected - enabling cudnn"
+        } else {
+            Write-Info "cuDNN not found - skipping cudnn feature"
+        }
+
+        # Add flash attention based on compute capability
+        if ($cudaCC -eq "90") {
+            $features += "flash-attn-v3"
+            Write-Info "Hopper GPU detected - enabling flash-attn-v3"
+        } elseif ([int]$cudaCC -ge 80) {
+            $features += "flash-attn"
+            Write-Info "Ampere+ GPU detected - enabling flash-attn"
+        }
+
+        # cuTile: optimized CUDA kernels. Needs CUDA >= 13.1 (its JIT tool tileiras ships with 13.1+); runs on Ampere (80-89) or Blackwell+ (>=100), not Hopper (90-99).
+        $cudaVer = Get-CudaVersionCode
+        $ccNum = [int]$cudaCC
+        if ($cudaVer -and $cudaVer -ge 1301 -and ((($ccNum -ge 80) -and ($ccNum -lt 90)) -or ($ccNum -ge 100))) {
+            $features += "cutile"
+            Write-Info "CUDA >= 13.1 and supported arch - enabling cutile (optimized kernels)"
+        }
+    } else {
+        Write-Info "No NVIDIA GPU detected"
+    }
+
+    # Check for MKL on Intel
+    if ((Test-IntelCpu) -and (Test-MKL)) {
+        $features += "mkl"
+        Write-Info "Intel MKL detected - enabling mkl"
+    }
+
+    return $features -join " "
+}
+
+# Install hanzo-cli
+function Install-MistralRS {
+    param([string]$Features)
+
+    if ($Features) {
+        Write-Info "Installing hanzo-cli with features: $Features"
+        & cargo install hanzo-cli@0.8.0 --features "$Features"
+    } else {
+        Write-Info "Installing hanzo-cli with default features"
+        & cargo install hanzo-cli@0.8.0
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "Installation failed"
+    }
+}
+
+# Main installation flow
+function Main {
+    Show-Banner
+
+    Write-Info "Detected OS: Windows"
+
+    # Check for Rust
+    if (Test-Rust) {
+        $rustVersionFull = & rustc --version 2>$null
+        $rustVersion = Get-RustVersion
+        Write-Info "Rust is installed: $rustVersionFull"
+
+        # Check if version meets minimum requirement
+        if ($rustVersion -and -not (Test-VersionGte $rustVersion $RequiredRustVersion)) {
+            Write-Warn "Rust $rustVersion is below the required version $RequiredRustVersion"
+            Write-Host ""
+            $response = Read-Host "Would you like to update Rust now? [Y/n]"
+            if ($response -match "^[Nn]") {
+                Write-Err "Rust $RequiredRustVersion or newer is required to install hanzo"
+            }
+            Update-Rust
+            # Re-check version after update
+            $rustVersion = Get-RustVersion
+            if (-not (Test-VersionGte $rustVersion $RequiredRustVersion)) {
+                Write-Err "Failed to update Rust to required version $RequiredRustVersion"
+            }
+        }
+    } else {
+        Write-Warn "Rust is not installed"
+        Write-Host ""
+        $response = Read-Host "Would you like to install Rust now? [Y/n]"
+        if ($response -match "^[Nn]") {
+            Write-Err "Rust is required to install hanzo"
+        }
+        Install-Rust
+    }
+
+    Write-Host ""
+    Write-Info "Detecting hardware capabilities..."
+
+    # Build features
+    $features = Get-Features
+
+    Write-Host ""
+    Write-Host "Installation Summary" -ForegroundColor White
+    Write-Host "====================" -ForegroundColor White
+    if ($features) {
+        Write-Host "Features: " -NoNewline
+        Write-Host $features -ForegroundColor Green
+    } else {
+        Write-Host "Features: " -NoNewline
+        Write-Host "(none - CPU only)" -ForegroundColor Yellow
+    }
+    Write-Host ""
+
+    # Confirm installation
+    $response = Read-Host "Proceed with installation? [Y/n]"
+    if ($response -match "^[Nn]") {
+        Write-Info "Installation cancelled"
+        exit 0
+    }
+
+    Write-Host ""
+    Install-MistralRS -Features $features
+
+    Write-Host ""
+    Write-Success "hanzo installed successfully!"
+    Write-Host ""
+    Write-Host "Quick Start" -ForegroundColor White
+    Write-Host "===========" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  hanzo run -m Qwen/Qwen3-4B"
+    Write-Host ""
+    Write-Host "  hanzo serve --agent -m google/gemma-4-E4B-it"
+    Write-Host ""
+    Write-Host "For more information, visit: https://github.com/hanzoai/engine"
+    Write-Host ""
+    Write-Host "Note: " -ForegroundColor Yellow -NoNewline
+    Write-Host "Restart your terminal to use the 'hanzo' command."
+}
+
+# Run main
+Main
