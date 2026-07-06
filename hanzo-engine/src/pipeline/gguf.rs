@@ -970,14 +970,20 @@ impl GGUFPipeline {
         if self.draft_proposer.is_some() {
             return Ok(None);
         }
-        if metadata.is_first_prompt_chunk
+        let (batch, q_len) = input_ids.dims2()?;
+        // Single-sequence prefill (batch==1, q_len>1) for a GDN-hybrid whose recurrent state is now
+        // sync-free is CUDA-graph capturable too — the graph is keyed by q_len (each prompt length
+        // captures once, then replays), which collapses the prefill launch storm the same way decode
+        // graphs do. Chunked / cached / multi-seq prefill stays eager.
+        let single_seq_prefill =
+            q_len > 1 && batch == 1 && self.model_decode_graph_single_seq_only();
+        if (metadata.is_first_prompt_chunk && !single_seq_prefill)
             || metadata.disable_cuda_graphs
             || metadata.num_cached_tokens.is_some()
         {
             return Ok(None);
         }
-        let (batch, q_len) = input_ids.dims2()?;
-        if q_len != 1
+        if (q_len != 1 && !single_seq_prefill)
             || seqlen_offsets.len() != batch
             || context_lens.len() != batch
             || !input_ids.device().is_cuda()
