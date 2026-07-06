@@ -32,8 +32,8 @@ use uuid::Uuid;
 use crate::{
     chat_completion::{parse_request, process_non_streaming_response, ChatCompletionResponder},
     handler_core::{create_response_channel, send_request_with_model, ModelErrorMessage},
-    router::AgenticDefaults,
     openai::ChatCompletionRequest,
+    router::AgenticDefaults,
     streaming::{get_keep_alive_interval, DoneState},
     types::{ExtractedState, SharedState},
     util::sanitize_error_message,
@@ -871,7 +871,13 @@ pub async fn messages(
 ) -> axum::response::Response {
     let areq: AnthropicMessagesRequest = match serde_json::from_value(body) {
         Ok(r) => r,
-        Err(e) => return anthropic_error(StatusCode::BAD_REQUEST, "invalid_request_error", e.to_string()),
+        Err(e) => {
+            return anthropic_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+                e.to_string(),
+            )
+        }
     };
     if let Err((ty, msg)) = validate_messages_request(&areq) {
         return anthropic_error(StatusCode::BAD_REQUEST, ty, msg);
@@ -972,7 +978,11 @@ pub async fn count_tokens(
     let creq: AnthropicCountTokensRequest = match serde_json::from_value(body) {
         Ok(r) => r,
         Err(e) => {
-            return anthropic_error(StatusCode::BAD_REQUEST, "invalid_request_error", e.to_string())
+            return anthropic_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+                e.to_string(),
+            )
         }
     };
     if creq.messages.is_empty() {
@@ -1343,11 +1353,10 @@ mod tests {
     fn count_tokens_maps_string_content_and_system() {
         let system = Some(json!("be brief"));
         let messages = msgs(json!([{"role": "user", "content": "hello world"}]));
-        let maps: Vec<IndexMap<String, MessageContent>> =
-            build_openai_messages(&system, &messages)
-                .iter()
-                .map(openai_message_to_template_map)
-                .collect();
+        let maps: Vec<IndexMap<String, MessageContent>> = build_openai_messages(&system, &messages)
+            .iter()
+            .map(openai_message_to_template_map)
+            .collect();
         assert_eq!(maps.len(), 2);
         assert_eq!(maps[0]["role"], Either::Left("system".to_string()));
         assert_eq!(maps[0]["content"], Either::Left("be brief".to_string()));
@@ -1371,11 +1380,10 @@ mod tests {
                 {"type": "tool_result", "tool_use_id": "call-1", "content": "found"}
             ]},
         ]));
-        let maps: Vec<IndexMap<String, MessageContent>> =
-            build_openai_messages(&system, &messages)
-                .iter()
-                .map(openai_message_to_template_map)
-                .collect();
+        let maps: Vec<IndexMap<String, MessageContent>> = build_openai_messages(&system, &messages)
+            .iter()
+            .map(openai_message_to_template_map)
+            .collect();
         let roles: Vec<&str> = maps
             .iter()
             .filter_map(|m| m["role"].as_ref().left().map(String::as_str))
@@ -1422,7 +1430,10 @@ mod tests {
             "model": "claude-sonnet-4-5",
             "messages": [{"role": "user", "content": "hi"}],
         }));
-        assert!(err.is_err(), "missing max_tokens must be a deserialize error");
+        assert!(
+            err.is_err(),
+            "missing max_tokens must be a deserialize error"
+        );
         assert!(err.unwrap_err().to_string().contains("max_tokens"));
     }
 
