@@ -50,18 +50,17 @@ Fast, flexible LLM inference.
 
 ### Install
 
-**Linux/macOS** — downloads a prebuilt, signed `hanzoai` binary (no Rust, no compiler):
+**Linux/macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hanzoai/engine/main/install.sh | sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/hanzoai/engine/master/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/hanzoai/engine/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/hanzoai/engine/master/install.ps1 | iex
 ```
 
-Prebuilt targets: `linux` amd64/arm64, `macos` arm64, `windows` amd64/arm64.
-[Manual installation, verification & building from source](docs/INSTALLATION.md)
+[Manual installation & other platforms](https://hanzoai.github.io/engine/guides/install/)
 
 ### Run Your First Model
 
