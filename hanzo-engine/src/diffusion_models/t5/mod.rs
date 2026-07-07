@@ -101,6 +101,40 @@ pub struct Config {
     pub decoder_start_token_id: Option<usize>,
 }
 
+impl Config {
+    /// umT5-xxl encoder config, the text tower for Wan2.1/2.2 video (google/umt5-xxl).
+    /// gated-gelu FFN, d_model 4096, 24 layers, 64 heads (d_kv 64), 256384-token vocab.
+    /// Note: umT5 has per-layer relative-attention bias; the shared-bias T5Attention here
+    /// loads the bias on layer 0 only, which is the Wan2.1-parity gap to close at weight load.
+    pub fn umt5_xxl() -> Self {
+        Self {
+            vocab_size: 256384,
+            d_model: 4096,
+            d_kv: 64,
+            d_ff: 10240,
+            num_layers: 24,
+            num_decoder_layers: Some(24),
+            num_heads: 64,
+            relative_attention_num_buckets: 32,
+            relative_attention_max_distance: 128,
+            dropout_rate: 0.1,
+            layer_norm_epsilon: 1e-6,
+            initializer_factor: 1.0,
+            feed_forward_proj: ActivationWithOptionalGating {
+                gated: true,
+                activation: Activation::NewGelu,
+            },
+            tie_word_embeddings: false,
+            is_decoder: false,
+            is_encoder_decoder: true,
+            use_cache: true,
+            pad_token_id: 0,
+            eos_token_id: 1,
+            decoder_start_token_id: Some(0),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
