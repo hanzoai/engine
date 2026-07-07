@@ -32,10 +32,12 @@ use crate::{
         IMAGE_GENERATION_ROUTE, LIPSYNC_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE,
         RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE,
         SESSION_ROUTE, SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE,
-        TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE,
+        TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE, VIDEO_CONTENT_ROUTE, VIDEO_GENERATION_ROUTE,
+        VIDEO_JOB_ROUTE,
     },
     speech_generation::speech_generation,
     types::SharedState,
+    video_generation::{create_video, get_video, get_video_content},
 };
 
 /// Server-level defaults for agentic features.
@@ -311,6 +313,9 @@ fn init_router(
         .route(ROOT_ROUTE.path, get(health))
         .route(RE_ISQ_ROUTE.path, post(re_isq))
         .route(IMAGE_GENERATION_ROUTE.path, post(image_generation))
+        .route(VIDEO_GENERATION_ROUTE.path, post(create_video))
+        .route(VIDEO_JOB_ROUTE.path, get(get_video))
+        .route(VIDEO_CONTENT_ROUTE.path, get(get_video_content))
         .route(FILES_ROUTE.path, get(list_files))
         .route(FILE_ROUTE.path, get(get_file).delete(delete_file))
         .route(FILE_CONTENT_ROUTE.path, get(get_file_content))

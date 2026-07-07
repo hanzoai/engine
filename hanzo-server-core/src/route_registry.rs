@@ -56,6 +56,11 @@ pub const FILE_CONTENT_ROUTE: RouteInfo =
     RouteInfo::new("/v1/files/{id}/content", "GET", RouteKind::OpenAi);
 pub const SPEECH_GENERATION_ROUTE: RouteInfo =
     RouteInfo::new("/v1/audio/speech", "POST", RouteKind::OpenAi);
+pub const VIDEO_GENERATION_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/videos", "POST", RouteKind::OpenAi);
+pub const VIDEO_JOB_ROUTE: RouteInfo = RouteInfo::new("/v1/videos/{id}", "GET", RouteKind::OpenAi);
+pub const VIDEO_CONTENT_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/videos/{id}/content", "GET", RouteKind::OpenAi);
 pub const ANIMATE_ROUTE: RouteInfo = RouteInfo::new("/v1/animate", "POST", RouteKind::Hanzo);
 pub const LIPSYNC_ROUTE: RouteInfo =
     RouteInfo::new("/v1/video/lipsync", "POST", RouteKind::Hanzo);
@@ -100,6 +105,9 @@ pub const API_ROUTES: &[RouteInfo] = &[
     COMPLETIONS_ROUTE,
     EMBEDDINGS_ROUTE,
     IMAGE_GENERATION_ROUTE,
+    VIDEO_GENERATION_ROUTE,
+    VIDEO_JOB_ROUTE,
+    VIDEO_CONTENT_ROUTE,
     SPEECH_GENERATION_ROUTE,
     FILES_ROUTE,
     FILE_ROUTE,
