@@ -238,6 +238,7 @@ pub mod model_registry;
 pub mod openai;
 pub mod openapi_doc;
 pub mod responses;
+pub mod route;
 pub mod responses_types;
 pub mod route_registry;
 pub mod speech_generation;
