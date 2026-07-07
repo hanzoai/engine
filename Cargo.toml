@@ -42,6 +42,7 @@ hanzo-nn = { version = "0.11.33" }
 hanzo-flash-attn = { version = "0.11.34" }
 hanzo-flash-attn-v3 = { version = "0.11.3", package = "hanzo-flash-attn" }
 hanzo-metal-kernels = { version = "0.11.33" }
+hanzo-3d = { version = "0.1" }
 
 axum = "0.8.8"
 anyhow = "1.0.100"
