@@ -2765,6 +2765,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-3d"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9dc246ef72490c348c62b93c06989605dc074e285657501c0aaa02d73c5b408"
+
+[[package]]
 name = "hanzo-audio"
 version = "1.7.2"
 dependencies = [
@@ -2886,6 +2892,7 @@ dependencies = [
  "futures",
  "galil-seiferas",
  "half",
+ "hanzo-3d",
  "hanzo-audio",
  "hanzo-code-exec",
  "hanzo-flash-attn",
@@ -3278,6 +3285,7 @@ dependencies = [
  "data-url",
  "either",
  "futures",
+ "hanzo-3d",
  "hanzo-engine",
  "hanzo-ml",
  "image",
