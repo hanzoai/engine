@@ -7,6 +7,8 @@ pub mod echomimic;
 pub mod echomimic_dit;
 pub mod infinitetalk;
 pub mod longcat;
+pub mod t2v;
+pub mod t2v_dit;
 pub mod vae;
 
 pub use conv3d::{CausalConv3d, FeatCache};
