@@ -3288,6 +3288,7 @@ dependencies = [
  "hanzo-3d",
  "hanzo-engine",
  "hanzo-ml",
+ "hanzo-router",
  "image",
  "indexmap 2.14.0",
  "intel-mkl-src",
