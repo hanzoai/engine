@@ -16,6 +16,7 @@ homepage.workspace = true
 anyhow.workspace = true
 axum = { workspace = true, features = ["tokio"] }
 hanzo-ml.workspace = true
+hanzo-router = { path = "../hanzo-router" }
 data-url.workspace = true
 either.workspace = true
 futures.workspace = true

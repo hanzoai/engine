@@ -25,6 +25,7 @@ use crate::{
         reload_model, system_doctor, system_info, tune_model, unload_model,
     },
     image_generation::image_generation,
+    route::route_handler,
     responses::{cancel_response, create_response, delete_response, get_response},
     route_registry::{
         AGENT_APPROVAL_ROUTE, ANIMATE_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE, CANCEL_RESPONSE_ROUTE,
@@ -315,6 +316,7 @@ fn init_router(
         .route(ROOT_ROUTE.path, get(health))
         .route(RE_ISQ_ROUTE.path, post(re_isq))
         .route(IMAGE_GENERATION_ROUTE.path, post(image_generation))
+        .route("/v1/route", post(route_handler))
         .route(FILES_ROUTE.path, get(list_files))
         .route(FILE_ROUTE.path, get(get_file).delete(delete_file))
         .route(FILE_CONTENT_ROUTE.path, get(get_file_content))
