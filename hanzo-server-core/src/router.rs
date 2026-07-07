@@ -32,9 +32,11 @@ use crate::{
         IMAGE_GENERATION_ROUTE, LIPSYNC_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE,
         RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE,
         SESSION_ROUTE, SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE,
-        TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE,
+        THREED_CONTENT_ROUTE, THREED_GENERATION_ROUTE, THREED_JOB_ROUTE, TUNE_MODEL_ROUTE,
+        UNLOAD_MODEL_ROUTE,
     },
     speech_generation::speech_generation,
+    threed_generation::{create_3d, get_3d, get_3d_content},
     types::SharedState,
 };
 
@@ -311,6 +313,9 @@ fn init_router(
         .route(ROOT_ROUTE.path, get(health))
         .route(RE_ISQ_ROUTE.path, post(re_isq))
         .route(IMAGE_GENERATION_ROUTE.path, post(image_generation))
+        .route(THREED_GENERATION_ROUTE.path, post(create_3d))
+        .route(THREED_JOB_ROUTE.path, get(get_3d))
+        .route(THREED_CONTENT_ROUTE.path, get(get_3d_content))
         .route(FILES_ROUTE.path, get(list_files))
         .route(FILE_ROUTE.path, get(get_file).delete(delete_file))
         .route(FILE_CONTENT_ROUTE.path, get(get_file_content))
