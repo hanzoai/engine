@@ -23,7 +23,7 @@ use crate::{
         EmbeddingResponse, EmbeddingUsage, EmbeddingVector,
     },
     types::{ExtractedState, SharedState},
-    util::{sanitize_error_message, validate_model_name},
+    util::{parse_image_url, sanitize_error_message, validate_model_name},
 };
 
 /// Represents different types of embeddings responses.
@@ -189,6 +189,44 @@ pub async fn embeddings(
                 }
             }
         }
+        Inputs::Images(image_urls) => {
+            let futures =
+                image_urls.into_iter().map(|image_url| {
+                    let state = state.clone();
+                    let model_override = model_override.clone();
+                    async move {
+                        fetch_embedding_image(state, image_url, model_override.as_deref()).await
+                    }
+                });
+
+            let results = join_all(futures).await;
+            for (index, result) in results.into_iter().enumerate() {
+                match result {
+                    Ok(EmbeddingWithUsage {
+                        embedding,
+                        prompt_tokens,
+                        total_tokens: item_total_tokens,
+                    }) => {
+                        let embedding = if return_base64 {
+                            EmbeddingVector::Base64(encode_embedding_base64(&embedding))
+                        } else {
+                            EmbeddingVector::Float(embedding)
+                        };
+                        data.push(EmbeddingData {
+                            object: "embedding",
+                            embedding,
+                            index,
+                        });
+                        total_prompt_tokens = total_prompt_tokens.saturating_add(prompt_tokens);
+                        total_tokens = total_tokens.saturating_add(item_total_tokens);
+                    }
+                    Err(e) => {
+                        Hanzo::maybe_log_error(state.clone(), e.as_ref());
+                        return internal_error(e);
+                    }
+                }
+            }
+        }
     }
 
     let usage = EmbeddingUsage {
@@ -211,6 +249,7 @@ pub async fn embeddings(
 enum Inputs {
     Prompt(Vec<String>),
     Tokens(Vec<Vec<u32>>),
+    Images(Vec<String>),
 }
 
 impl Inputs {
@@ -218,6 +257,7 @@ impl Inputs {
         match self {
             Self::Prompt(x) => x.is_empty(),
             Self::Tokens(x) => x.is_empty(),
+            Self::Images(x) => x.is_empty(),
         }
     }
 
@@ -225,6 +265,7 @@ impl Inputs {
         match self {
             Self::Prompt(x) => x.len(),
             Self::Tokens(x) => x.len(),
+            Self::Images(x) => x.len(),
         }
     }
 }
@@ -235,6 +276,7 @@ fn normalize_inputs(input: EmbeddingInput) -> Result<Inputs> {
         EmbeddingInput::Multiple(items) => Ok(Inputs::Prompt(items)),
         EmbeddingInput::Tokens(t) => Ok(Inputs::Tokens(vec![t])),
         EmbeddingInput::TokensBatch(batch) => Ok(Inputs::Tokens(batch)),
+        EmbeddingInput::Image { image_url } => Ok(Inputs::Images(vec![image_url])),
     }
 }
 
@@ -313,6 +355,54 @@ async fn fetch_embedding_tokens(
         tool_dispatch_url: None,
         model_id: model_id.map(|m| m.to_string()),
         truncate_sequence,
+        session_id: None,
+        files: None,
+    }));
+
+    send_request_with_model(&state, request, model_id)
+        .await
+        .context("Failed to dispatch embedding request")?;
+
+    process_embedding_response(&mut rx, state.clone()).await
+}
+
+async fn fetch_embedding_image(
+    state: SharedState,
+    image_url: String,
+    model_id: Option<&str>,
+) -> Result<EmbeddingWithUsage> {
+    let image = parse_image_url(&image_url)
+        .await
+        .context("Failed to load embedding image")?;
+
+    let (tx, mut rx) = create_response_channel(Some(1));
+
+    let request = Request::Normal(Box::new(NormalRequest {
+        id: state.next_request_id(),
+        messages: RequestMessage::EmbeddingImage {
+            images: vec![image],
+        },
+        sampling_params: SamplingParams::deterministic(),
+        response: tx,
+        return_logprobs: false,
+        is_streaming: false,
+        suffix: None,
+        constraint: Constraint::None,
+        tool_choice: None,
+        tools: None,
+        logits_processors: None,
+        return_raw_logits: false,
+        web_search_options: None,
+        enable_code_execution: false,
+        code_execution_permission: None,
+        code_execution_approval_notifier: None,
+        agent_permission: None,
+        agent_approval_handler: None,
+        agent_approval_notifier: None,
+        max_tool_rounds: None,
+        tool_dispatch_url: None,
+        model_id: model_id.map(|m| m.to_string()),
+        truncate_sequence: false,
         session_id: None,
         files: None,
     }));
