@@ -17,7 +17,13 @@ RUN <<HEREDOC
         git \
         libclang-dev \
         libssl-dev \
-        pkg-config
+        miopen-hip-dev \
+        pkg-config \
+        rocblas-dev \
+        rocfft-dev \
+        rocrand-dev \
+        rocsolver-dev \
+        rocsparse-dev
 
     rm -rf /var/lib/apt/lists/*
 HEREDOC
