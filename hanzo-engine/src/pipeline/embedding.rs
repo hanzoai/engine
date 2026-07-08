@@ -160,9 +160,19 @@ impl EmbeddingLoaderBuilder {
     }
 
     pub fn build(self, loader: Option<EmbeddingLoaderType>) -> Box<dyn Loader> {
+        // I-JEPA is a vision encoder, not a token model: it has no tokenizer and takes
+        // pixels, so it uses a dedicated tokenizer-free loader/pipeline rather than the
+        // token-based EmbeddingLoader path below.
+        if matches!(loader, Some(EmbeddingLoaderType::Ijepa)) {
+            return Box::new(crate::pipeline::JepaEncoderLoader::new(
+                self.model_id.unwrap(),
+                self.hf_cache_path,
+            ));
+        }
         let loader: Box<dyn EmbeddingModelLoader> = match loader {
             Some(EmbeddingLoaderType::EmbeddingGemma) => Box::new(EmbeddingGemmaLoader),
             Some(EmbeddingLoaderType::Qwen3Embedding) => Box::new(Qwen3EmbeddingLoader),
+            Some(EmbeddingLoaderType::Ijepa) => unreachable!("I-JEPA handled above"),
             None => Box::new(AutoEmbeddingLoader),
         };
         Box::new(EmbeddingLoader {
