@@ -15,6 +15,7 @@ jobs:
         strategy:
           matrix:
             compute_capability: [80, 86, 89, 90, 120, 121]
+            # cap 121 (Blackwell GB10) is the flagship: it also gets the bare -cuda tags
           fail-fast: false
         runs-on: hanzo-build-linux-amd64
         timeout-minutes: 210
@@ -65,7 +66,8 @@ jobs:
                     latest=false
                   tags: |
                     type=semver,pattern={{version}}-cuda${{ matrix.compute_capability }}
-                    type=semver,pattern={{major}}.{{minor}}-cuda${{ matrix.compute_capability }}
+                    type=semver,pattern={{version}}-cuda,enable=${{ matrix.compute_capability == 121 }}
+                    type=raw,value=cuda,enable=${{ matrix.compute_capability == 121 }}
             - name: Build and push Docker image
               id: build-and-push-cuda
               uses: docker/build-push-action@v6
