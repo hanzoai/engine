@@ -86,6 +86,10 @@ pub(crate) struct DsaConfig {
 }
 
 /// Result of a DSA selection over a `[batch, q_len, kv_len]` score matrix.
+///
+/// `Clone` is cheap (both tensors are `Arc`-backed) and lets GLM-5's IndexShare
+/// reuse a group-leader layer's selection across the following `"shared"` layers.
+#[derive(Clone)]
 pub(crate) struct DsaSelection {
     /// Selected key indices per query, `[batch, q_len, min(topk, kv_len)]` (`u32`),
     /// sorted by descending score. Useful for a gather-based sparse attention
