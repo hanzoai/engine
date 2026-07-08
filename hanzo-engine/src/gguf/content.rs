@@ -144,14 +144,20 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
             }
 
             arch = Some(
-                ct.metadata["general.architecture"]
-                    .to_string()
+                ct.metadata
+                    .get("general.architecture")
                     .context("Model metadata should have declared an architecture")
+                    .and_then(|v| {
+                        v.to_string()
+                            .context("`general.architecture` must be a string")
+                    })
                     .and_then(GGUFArchitecture::from_value)
-                    .unwrap(),
+                    .map_err(hanzo_ml::Error::msg)?,
             );
         }
-        let arch = arch.expect("GGUF files must specify `general.architecture`");
+        let arch = arch.ok_or_else(|| {
+            hanzo_ml::Error::Msg("GGUF files must specify `general.architecture`".into())
+        })?;
 
         let mut all_metadata = HashMap::new();
         for content in &contents {
