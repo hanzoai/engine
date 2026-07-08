@@ -71,6 +71,11 @@ const INDEXER_KNORM_EPS: f64 = 1e-6;
 /// `rms_norm_eps`.
 const MLA_LORA_NORM_EPS: f64 = 1e-6;
 
+/// noaux_tc group mask: masked-out experts must be UNSELECTABLE by the top-k, matching HF
+/// `masked_fill(~score_mask, -inf)`. A 0/1 multiply is wrong when an in-group score is negative
+/// (a zeroed masked expert would then outrank it). Finite so `mask * bias` can never NaN.
+const MASKED_EXPERT_BIAS: f64 = 1e30;
+
 serde_default_fn!(f64, routed_scaling_factor, 1.0);
 serde_default_fn!(usize, moe_layer_freq, 1);
 serde_default_fn!(usize, first_k_dense_replace, 0);
@@ -667,7 +672,8 @@ impl MoeGate {
             .unsqueeze(D::Minus1)?
             .expand((n, self.n_group, self.n_routed_experts / self.n_group))?
             .reshape((n, ()))?;
-        let tmp_scores = scores_for_choice.broadcast_mul(&score_mask)?;
+        let masked_bias = score_mask.affine(MASKED_EXPERT_BIAS, -MASKED_EXPERT_BIAS)?;
+        let tmp_scores = scores_for_choice.broadcast_add(&masked_bias)?;
         let topk_idx = tmp_scores.topk(self.top_k)?.indices;
         let mut topk_weight = scores.gather(&topk_idx, 1)?;
 
@@ -1399,6 +1405,61 @@ mod tests {
         let mut derived = explicit.clone();
         derived.indexer_types = None;
         assert_eq!(derived.indexer_schedule(), explicit.indexer_schedule());
+    }
+
+    /// The `index_topk_pattern` string branch ('S' -> Shared, else Full) plus the precedence
+    /// contract: explicit `indexer_types` overrides `index_topk_pattern` overrides the cadence.
+    #[test]
+    fn indexer_schedule_from_topk_pattern_and_precedence() {
+        let mut cfg: Glm5MoeConfig = serde_json::from_str(REAL_CONFIG).unwrap();
+        cfg.indexer_types = None;
+        cfg.index_topk_pattern = Some("FSSSFF".to_string());
+        assert_eq!(
+            cfg.indexer_schedule(),
+            vec![
+                IndexerType::Full,
+                IndexerType::Shared,
+                IndexerType::Shared,
+                IndexerType::Shared,
+                IndexerType::Full,
+                IndexerType::Full,
+            ]
+        );
+        cfg.indexer_types = Some(vec!["shared".to_string(), "full".to_string()]);
+        assert_eq!(
+            cfg.indexer_schedule(),
+            vec![IndexerType::Shared, IndexerType::Full]
+        );
+    }
+
+    /// noaux_tc group masking must be `masked_fill(-inf)` (HF), not a 0/1 multiply. With n_group>1
+    /// and a correction bias that drives in-group scores negative, a zeroed masked expert would
+    /// outrank a legitimately-routed negative-score expert. Two groups {0,1},{2,3}; group 1 wins
+    /// the group top-k but its scores are negative -> a multiply-mask picks masked expert 0, the
+    /// correct `-inf` semantics pick in-group expert 2.
+    #[test]
+    fn moe_gate_group_mask_matches_masked_fill_neg_inf() -> Result<()> {
+        let device = Device::Cpu;
+        let weight = Tensor::zeros((4, 1), DType::F32, &device)?;
+        let bias = Tensor::from_vec(vec![-1.0f32, -1.0, -0.55, -0.6], 4, &device)?;
+        let gate = MoeGate {
+            weight,
+            e_score_correction_bias: bias,
+            top_k: 1,
+            n_routed_experts: 4,
+            n_group: 2,
+            topk_group: 1,
+            norm_topk_prob: false,
+            routed_scaling_factor: 1.0,
+        };
+        let xs = Tensor::from_vec(vec![1.0f32], (1, 1, 1), &device)?;
+        let (topk_idx, _) = gate.forward(&xs)?;
+        assert_eq!(
+            topk_idx.to_vec2::<u32>()?[0][0],
+            2,
+            "masked group experts must be unselectable: expected in-group expert 2, a 0/1 multiply would pick masked expert 0"
+        );
+        Ok(())
     }
 
     #[test]
