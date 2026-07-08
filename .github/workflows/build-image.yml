@@ -16,11 +16,11 @@ jobs:
     uses: hanzoai/.github/.github/workflows/docker-build.yml@main
     with:
       image: ghcr.io/hanzoai/engine
-      # Temporary amd64-only: the arm64 runner (spark) NIC corrupts large GHCR
-      # layer uploads (remote error: tls: bad record MAC, 3/3 attempts), which
-      # blocks the multi-arch manifest and therefore :latest. Single-arch routes
-      # through tag-single-arch so :latest / {version} ship on amd64 while the
-      # arm64 node offload fix (ethtool -K <iface> tx off tso off gso off) lands.
-      # Restore "linux/amd64,linux/arm64" once spark's NIC is fixed.
-      platforms: linux/amd64
+      # Multi-arch restored. History: the arm64 runner (spark) once corrupted
+      # large GHCR layer uploads (remote error: tls: bad record MAC) because its
+      # uplink was wifi — offload-computed checksums went out over a lossy link.
+      # Root-cause fix is NIC offload disabled on the arm64 node
+      # (ethtool -K <iface> tx off tso off gso off gro off); durable fix is
+      # wiring spark to ethernet + persisting the ethtool settings.
+      platforms: linux/amd64,linux/arm64
     secrets: inherit
