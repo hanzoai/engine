@@ -38,6 +38,9 @@ pub enum GGUFArchitecture {
     /// Qwen3-VL MoE text backbone (30B-A3B, 235B-A22B). Same relationship to
     /// `Qwen3MoE` as `Qwen3Vl` is to `Qwen3`. Reuses `QQwen3MoE`.
     Qwen3VlMoE,
+    /// Qwen3-Next (80B-A3B) hybrid: Gated-DeltaNet linear attention (3:1) + gated
+    /// full attention + 512-expert sparse MoE. Own loader `quantized_qwen3_next`.
+    Qwen3Next,
     Qwen35,
     Qwen35MoE,
     Mistral3,
