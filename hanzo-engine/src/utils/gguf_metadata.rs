@@ -358,7 +358,9 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                 };
                 token_embd + output_norm + output
             }
-            GGUFArchitecture::Qwen35 | GGUFArchitecture::Qwen35MoE => {
+            GGUFArchitecture::Qwen35
+            | GGUFArchitecture::Qwen35MoE
+            | GGUFArchitecture::Qwen3Next => {
                 let token_embd = tensor_info_size_in_bytes!(
                     self.model.tensor_info("token_embd.weight")?,
                     DType::F32
@@ -700,6 +702,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
 
             GGUFArchitecture::Qwen35
             | GGUFArchitecture::Qwen35MoE
+            | GGUFArchitecture::Qwen3Next
             | GGUFArchitecture::Deepseek2
             | GGUFArchitecture::Deepseek4 => {
                 // Non-uniform block sizes (hybrid layers; V4 hash vs MoE vs compressed layers),
