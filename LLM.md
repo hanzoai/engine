@@ -231,6 +231,35 @@ Avoid returning TODOs.
   bit-exact on CPU. `sdpa`/`sdpa_runtime` online-softmax is the structural cure for the 8B
   flash-collapse. See `ml/LLM.md` for the DSL and env-var details.
 
+## Qwen3-VL GGUF (text backbone) — `qwen3vl` / `qwen3vlmoe`
+
+- **GGUF fast-path** for Qwen3-VL: the dense text backbone (`qwen3vl`, 2/4/8/32B) reuses
+  `quantized_qwen3::ModelWeights`; the MoE text backbone (`qwen3vlmoe`, 30B-A3B / 235B-A22B)
+  reuses `quantized_qwen3_moe::ModelWeights`. Wired as `GGUFArchitecture::Qwen3Vl` / `Qwen3VlMoE`
+  in `gguf/mod.rs`, dispatched in `pipeline/gguf.rs`, sized in `utils/gguf_metadata.rs`. No new
+  modeling code — the VL text tower is structurally identical to Qwen3/Qwen3MoE (same `blk.*`
+  tensors, q/k-norm, GQA); metadata is read under the file's own `qwen3vl.*` / `qwen3vlmoe.*`
+  prefix (dynamic `path_prefix`), so `rope.freq_base`, head dims and expert counts come straight
+  from the file.
+- **Why reuse is bit-correct for text**: Qwen3-VL uses interleaved-MRoPE (sections [24,20,20]),
+  but for text-only tokens t==h==w, so every frequency band receives the same position and the
+  interleaved partition is a no-op — identical to the standard 1D RoPE already in
+  `quantized_qwen3`. Verified: Qwen3-VL-8B-Instruct Q4_K_M loads (36 layers, 151936-tok Qwen3
+  BPE), dispatches to `Model::Qwen3`, and decodes coherent text.
+- **Image-blind (mmproj not wired)**: GGUF Qwen3-VL ships TWO files — the LLM gguf (loaded here)
+  and a separate `mmproj-*.gguf` vision tower (`general.architecture=clip`,
+  `clip.projector_type=qwen3vl_merger`, `v.blk.*` / `mm.*` / `v.deepstack.*`, DeepStack at vision
+  layers 8/16/24). `GGUFPipeline` is text-only (modalities Text→Text, no image inputs processor),
+  so the mmproj is NOT consumed. Full image support needs a `clip`/mmproj GGUF loader feeding the
+  existing `vision_models/qwen3_vl` tower PLUS a multimodal quantized-VL text forward (3D-MRoPE
+  position_ids + DeepStack embed injection + `<|image_pad|>` merge) — a new subsystem, not a
+  reuse of `quantized_qwen3::forward` (whose signature carries only 1D `start_offsets` and no
+  DeepStack hook). See the safetensors `Qwen3VLLoader` for the reference multimodal path.
+- **Decode graphs EXCLUDED** for `qwen3vl`/`qwen3vlmoe` GGUF: they dispatch to the `Qwen3`/`Qwen3MoE`
+  model variants, which are already graph-eligible for pure-text 1D RoPE; the VL archs run the same
+  eager/graph text path. (Multimodal 3D-MRoPE, if added, would be position-dependent and must stay
+  eager per `model_supports_decode_graph`.)
+
 ## Environment variables (bare names, one-way; de-brand DONE)
 
 The env-flag convention is BARE names (no `HANZO_` brand prefix). The de-brand is COMPLETE: every runtime
