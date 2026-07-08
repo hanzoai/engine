@@ -880,8 +880,8 @@ impl GGUFPipeline {
     /// frozen-position bug -> garbage from ~token 2); they fall back to the
     /// always-correct eager path. MoE Llama (Mixtral-style) is excluded too — its expert
     /// routing host-syncs (`.to_vec2()`) cannot be captured (see
-    /// `QLlama::supports_decode_graph`). XLora / Phi3 / Qwen35 (mRoPE) are excluded for
-    /// the same position-invariance reason or signature mismatch. This is the single
+    /// `QLlama::supports_decode_graph`). XLora / Phi3 are excluded for the same
+    /// position-invariance reason or signature mismatch. This is the single
     /// source of truth for decode-graph eligibility, shared by the CUDA and ROCm graph
     /// paths (both capture the identical device-generic model forward).
     fn model_supports_decode_graph(&self) -> bool {
@@ -970,20 +970,18 @@ impl GGUFPipeline {
         if self.draft_proposer.is_some() {
             return Ok(None);
         }
-        let (batch, q_len) = input_ids.dims2()?;
-        // Single-sequence prefill (batch==1, q_len>1) for a GDN-hybrid whose recurrent state is now
-        // sync-free is CUDA-graph capturable too — the graph is keyed by q_len (each prompt length
-        // captures once, then replays), which collapses the prefill launch storm the same way decode
-        // graphs do. Chunked / cached / multi-seq prefill stays eager.
-        let single_seq_prefill =
-            q_len > 1 && batch == 1 && self.model_decode_graph_single_seq_only();
-        if (metadata.is_first_prompt_chunk && !single_seq_prefill)
+        // Only steady-state single-token decode with paged metadata present and no
+        // prefix-cache prefill in flight. Prefill stays eager: its causal mask and
+        // data-dependent grouped-MoE routing are not graph-capturable, so prefill
+        // parity is a kernel-fusion problem, not a graph-capture one.
+        if metadata.is_first_prompt_chunk
             || metadata.disable_cuda_graphs
             || metadata.num_cached_tokens.is_some()
         {
             return Ok(None);
         }
-        if (q_len != 1 && !single_seq_prefill)
+        let (batch, q_len) = input_ids.dims2()?;
+        if q_len != 1
             || seqlen_offsets.len() != batch
             || context_lens.len() != batch
             || !input_ids.device().is_cuda()
