@@ -1,65 +1,58 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-//! Quantized (GGUF) loader for Qwen3.5 / Qwen3.6 hybrid models.
+//! Quantized (GGUF) loader for Qwen3-Next (80B-A3B) hybrid linear-attention MoE.
 //!
-//! Architecture string: `qwen35moe` (35B-A3B MoE, primary target) or `qwen35` (27B dense).
-//! Hybrid per-layer schedule: every `full_attention_interval`-th layer (default 4) is a gated
-//! full-attention layer (partial-rotary interleaved mRoPE + sigmoid output gate); the rest are
-//! Gated-DeltaNet (GDN) linear-attention layers (causal conv1d kernel=4, gated RMSNorm, recurrent
-//! state). MoE variant uses 256 experts (8 routed + 1 shared); dense variant uses a plain SwiGLU MLP.
+//! Architecture string: `qwen3next`. 48 layers on a 3:1 schedule — every
+//! `full_attention_interval`-th layer (default 4) is a gated full-attention layer (partial-rotary
+//! NEOX RoPE + qk-RMSNorm + sigmoid output gate); the other three are Gated-DeltaNet (GDN)
+//! linear-attention layers (causal conv1d kernel=4, gated RMSNorm, recurrent state). The FFN is a
+//! sparse MoE (512 experts, 10 routed + 1 shared with a sigmoid gate).
 //!
-//! The GDN math mirrors `models::gdn` / `models::qwen3_next` / `vision_models::qwen3_5_moe::text`.
-//! The recurrent state is driven through the pipeline `HybridCache` exactly like `qwen3_next`.
+//! The GDN math is shared with `models::gdn` / `models::qwen3_next` (safetensors) and
+//! `models::quantized_qwen3_5_moe` (the sibling GGUF hybrid). The MoE block (`FusedMoe`) and the
+//! `gguf_qmm` helper are shared verbatim with `quantized_qwen3_5_moe` — the sparse-MoE layout is
+//! identical between Qwen3.5-MoE and Qwen3-Next. The recurrent state flows through the pipeline
+//! `HybridCache` exactly like both siblings.
 //!
-//! NOT YET CORRECTNESS-VERIFIED on a GPU with a real GGUF. The GGUF tensor-name mapping and the
-//! GDN V-head ordering are documented inline; every assumption is called out. MTP and vision are
-//! ignored (text-only).
+//! ===================== Qwen3-Next vs Qwen3.5 GGUF differences =====================
+//! (source: llama.cpp `src/models/qwen3next.cpp`, `src/llama-arch.cpp`, `src/llama-model.cpp`)
 //!
-//! ===================== GGUF tensor-name mapping (source: llama.cpp) =====================
-//! Verified against llama.cpp `gguf-py/gguf/constants.py` (MODEL_ARCH.QWEN35 / QWEN35MOE),
-//! `gguf-py/gguf/tensor_mapping.py`, `conversion/qwen.py` (Qwen3_5MoeTextModel ->
-//! _LinearAttentionVReorderBase -> Qwen3NextModel) and `src/models/qwen35moe.cpp`.
+//!  1. RoPE: Qwen3-Next uses plain NEOX **partial** rotary (`LLAMA_ROPE_TYPE_NEOX`, rot_dim =
+//!     head_dim * partial_rotary_factor), NOT the interleaved mRoPE that Qwen3.5 uses. So this
+//!     loader uses `RotaryEmbedding::new_partial` + `forward_qk_norm{,_positions}` (the same path
+//!     the safetensors `qwen3_next` model uses), never `Qwen3VLRotaryEmbedding`.
+//!  2. beta/alpha projection: MERGED into a single `ssm_ba` tensor ([2*num_v_heads, hidden]) split
+//!     per key-head group into (beta | alpha), vs Qwen3.5's separate `ssm_beta` + `ssm_alpha`.
+//!  3. V-head order: GROUPED `[k0_v0, k0_v1, k1_v2, k1_v3, ...]` (HF-native), so V head j pairs with
+//!     K head `j / v_per_group`. The q/k repeat is therefore a GROUPED repeat
+//!     (`unsqueeze(3).repeat(..v_per_group..)`), not Qwen3.5's TILED repeat (`% num_k_heads`).
+//!  4. Experts: 512 routed / 10 per token (vs 256 / 8). Read straight from GGUF metadata.
 //!
+//! ===================== GGUF tensor-name mapping =====================
 //! Per layer `blk.{i}`:
-//!   GDN (linear-attention) layers:
-//!     attn_qkv.weight   <- linear_attn.in_proj_qkv  (merged q,k,v; key_dim*2 + value_dim, hidden)
-//!     attn_gate.weight  <- linear_attn.in_proj_z    (the z gate; value_dim, hidden)
-//!     ssm_conv1d.weight <- linear_attn.conv1d squeezed to 2D (conv_dim, kernel)
-//!     ssm_dt.bias       <- linear_attn.dt_bias      (1D, num_v_heads, f32) [note: GGUF suffix is `bias`]
-//!     ssm_a             <- -exp(A_log) precomputed at conversion (1D, num_v_heads, f32) [no `.weight`]
-//!     ssm_beta.weight   <- linear_attn.in_proj_b    (num_v_heads, hidden)
-//!     ssm_alpha.weight  <- linear_attn.in_proj_a    (num_v_heads, hidden)
-//!     ssm_norm.weight   <- linear_attn.norm         (gated RMSNorm; head_v_dim)
-//!     ssm_out.weight    <- linear_attn.out_proj     (value_dim, hidden)
+//!   GDN (linear-attention) layers — two possible input-projection encodings:
+//!     optimized: attn_qkv.weight (merged q|k|v, key_dim*2+value_dim) + attn_gate.weight (z, value_dim)
+//!     legacy:    ssm_in.weight (merged q|k|v|z, key_dim*2+value_dim*2, grouped by key-head)
+//!     ssm_ba.weight    <- merged beta|alpha (2*num_v_heads, hidden), grouped by key-head
+//!     ssm_conv1d.weight<- causal conv1d (conv_dim, kernel) [squeezed to 2D]
+//!     ssm_dt.bias      <- dt_bias (num_v_heads, f32)
+//!     ssm_a            <- -exp(A_log) precomputed at conversion (num_v_heads, f32) [no `.weight`]
+//!     ssm_norm.weight  <- gated RMSNorm (head_v_dim)
+//!     ssm_out.weight   <- out_proj (value_dim, hidden)
 //!   Full-attention layers:
-//!     attn_q.weight     <- self_attn.q_proj  (DOUBLED: num_heads*head_dim*2 = query + gate)
-//!     attn_k/attn_v/attn_output, attn_q_norm, attn_k_norm  (standard GQA + qk-norm)
-//!   Shared (both): attn_norm (input_layernorm), post_attention_norm (post-attn layernorm).
+//!     attn_q.weight (DOUBLED: num_heads*head_dim*2 = query + gate), attn_k/attn_v/attn_output,
+//!     attn_q_norm, attn_k_norm (standard GQA + qk-norm).
+//!   Shared: attn_norm (input_layernorm), post_attention_norm (post-attn layernorm).
 //!   MoE FFN: ffn_gate_inp, ffn_gate_exps, ffn_up_exps, ffn_down_exps,
 //!            ffn_gate_inp_shexp, ffn_gate_shexp, ffn_up_shexp, ffn_down_shexp.
-//!   Dense FFN: ffn_gate, ffn_up, ffn_down.
 //!   Global: token_embd, output_norm, output (tied to token_embd when absent).
 //!
-//! Metadata keys (prefixed with the arch string by ContentMetadata):
-//!   attention.head_count / head_count_kv / key_length / value_length / layer_norm_rms_epsilon
+//! Metadata keys (prefixed with `qwen3next.` by ContentMetadata):
+//!   attention.head_count / head_count_kv / key_length / layer_norm_rms_epsilon,
 //!   block_count, context_length, rope.freq_base, rope.dimension_count (= rot_dim),
-//!   rope.dimension_sections (mrope [t,h,w,0]), full_attention_interval,
-//!   ssm.conv_kernel (=linear_conv_kernel_dim), ssm.state_size (=linear_key_head_dim, also head_v_dim),
-//!   ssm.group_count (=linear_num_key_heads), ssm.time_step_rank (=linear_num_value_heads),
-//!   ssm.inner_size (=value_dim), expert_count, expert_used_count, expert_feed_forward_length.
-//!
-//! V-head ordering: llama.cpp's qwen3.5 converter (_LinearAttentionVReorderBase) REORDERS the V
-//! heads of in_proj_qkv(v part) / in_proj_z / in_proj_a / in_proj_b / out_proj / conv1d(v part) /
-//! A_log / dt_bias from HF grouped order [K0_v0..v{r-1}, K1_v0..v{r-1}, ...] into TILED order
-//! [v0_K0..v0_K{K-1}, v1_K0..v1_K{K-1}, ...]. We do NOT undo this at load; instead the recurrence
-//! consumes tiled order natively. Every per-V-head tensor (v, z, beta, g, conv V-channels) comes
-//! straight from a GGUF projection in tiled order, and out_proj's input columns are tiled too, so
-//! the layer is self-consistent end-to-end. The only place that mixes K-indexed and V-indexed
-//! tensors is the q/k repeat in `QGatedDeltaNet::forward`, which TILES q/k (V head j -> K head
-//! j % num_k_heads) to match. When num_k_heads == num_v_heads the reorder is a no-op and the tile
-//! collapses to identity, leaving the original (verified) path unchanged. The shared safetensors
-//! `gdn.rs` recurrence instead consumes HF grouped order (it repeats grouped: j -> j / v_per_group);
-//! that path is untouched and still correct for its grouped inputs.
+//!   full_attention_interval, ssm.conv_kernel (=conv width), ssm.state_size (=head_k_dim=head_v_dim),
+//!   ssm.group_count (=num_k_heads), ssm.time_step_rank (=num_v_heads), ssm.inner_size (=value_dim),
+//!   expert_count, expert_used_count, expert_feed_forward_length.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -67,22 +60,21 @@ use std::sync::{Arc, Mutex};
 use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
-use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, Qwen3VLRotaryEmbedding, Sdpa};
+use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::models::gdn::{
     gated_delta_rule_recurrence, l2_norm, softplus, GdnLayerCache, RmsNormGated,
 };
-use crate::ops::{TopKLastDimOp, TopKOutput};
+use crate::models::quantized_qwen3_5_moe::{gguf_qmm, FusedMoe};
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::{extract_logits, EitherCache, KvCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
-use hanzo_ml::quantized::QMatMul;
 use hanzo_ml::{DType, Device, Result, Tensor, D};
 use hanzo_nn::{Embedding, Module};
-use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
+use hanzo_quant::QuantMethod;
 
 use crate::kv_cache::{
     HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
@@ -99,159 +91,10 @@ enum LayerType {
     LinearAttention,
 }
 
-// ===================== MoE / dense FFN =====================
-
-pub(crate) struct FusedMoe {
-    gate: QMatMul,
-    gate_experts: QMatMul,
-    up_experts: QMatMul,
-    down_experts: QMatMul,
-    shared_gate: QMatMul,
-    shared_gate_proj: Arc<dyn QuantMethod>,
-    shared_up_proj: Arc<dyn QuantMethod>,
-    shared_down_proj: Arc<dyn QuantMethod>,
-    norm_topk_prob: bool,
-    num_experts_per_tok: usize,
-}
-
-impl FusedMoe {
-    /// Load the shared sparse-MoE block (routed experts + sigmoid-gated shared expert) from GGUF.
-    /// Identical tensor layout for Qwen3.5-MoE and Qwen3-Next: `ffn_gate_inp`, `ffn_{gate,up,down}_exps`,
-    /// and the `*_shexp` shared-expert tensors. `norm_topk_prob` is always true for both.
-    pub(crate) fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: &mut Content<'_, R>,
-        prefix: &str,
-        dev: &Device,
-        num_experts_per_tok: usize,
-    ) -> Result<Self> {
-        let gate = ct.tensor(&format!("{prefix}.ffn_gate_inp.weight"), dev)?;
-        let gate_experts = ct.tensor(&format!("{prefix}.ffn_gate_exps.weight"), dev)?;
-        let up_experts = ct.tensor(&format!("{prefix}.ffn_up_exps.weight"), dev)?;
-        let down_experts = ct.tensor(&format!("{prefix}.ffn_down_exps.weight"), dev)?;
-        let shared_gate = ct.tensor(&format!("{prefix}.ffn_gate_inp_shexp.weight"), dev)?;
-        let shared_gate_proj =
-            gguf_qmm(ct.tensor(&format!("{prefix}.ffn_gate_shexp.weight"), dev)?)?;
-        let shared_up_proj = gguf_qmm(ct.tensor(&format!("{prefix}.ffn_up_shexp.weight"), dev)?)?;
-        let shared_down_proj =
-            gguf_qmm(ct.tensor(&format!("{prefix}.ffn_down_shexp.weight"), dev)?)?;
-        Ok(Self {
-            gate: QMatMul::from_qtensor(gate)?,
-            gate_experts: QMatMul::from_qtensor(gate_experts)?,
-            up_experts: QMatMul::from_qtensor(up_experts)?,
-            down_experts: QMatMul::from_qtensor(down_experts)?,
-            // ffn_gate_inp_shexp is a hidden->1 shared-expert gate stored 1D [hidden]; the
-            // matmul needs 2D, so dequantize and reshape to [1, hidden].
-            shared_gate: {
-                let w = shared_gate.dequantize(dev)?;
-                QMatMul::Tensor(if w.rank() == 1 { w.unsqueeze(0)? } else { w })
-            },
-            shared_gate_proj,
-            shared_up_proj,
-            shared_down_proj,
-            norm_topk_prob: true,
-            num_experts_per_tok,
-        })
-    }
-
-    pub(crate) fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let (batch, seq_len, hidden_dim) = xs.dims3()?;
-        let xs = xs.reshape(((), hidden_dim))?;
-        let original_dtype = xs.dtype();
-        let (num_tokens, hidden_dim) = xs.dims2()?;
-
-        let router_logits = self.gate.forward(&xs.to_dtype(DType::F32)?)?;
-        let routing_weights = hanzo_nn::ops::softmax_last_dim(&router_logits)?;
-
-        let TopKOutput {
-            values: mut scores,
-            indices,
-        } = routing_weights.topk(self.num_experts_per_tok)?;
-        if self.norm_topk_prob {
-            scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
-        }
-
-        let routed = {
-            let xs_e = xs.reshape((num_tokens, 1, hidden_dim))?;
-            let gate = self.gate_experts.indexed_moe_forward(&xs_e, &indices)?;
-            let up = self.up_experts.indexed_moe_forward(&xs_e, &indices)?;
-            let activated = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
-            self.down_experts
-                .indexed_moe_forward(&activated, &indices)?
-        };
-        // Weighted expert-combine: out[t,:] = sum_e scores[t,e] * routed[t,e,:].
-        // The fused CUDA kernel does this in one coalesced pass over the hidden axis,
-        // replacing the materialize-then-strided-reduce (`broadcast_mul` + `sum` over
-        // the topk axis), whose `fast_sum_f32` was ~15% of prefill GPU time. The
-        // portable path (CPU / Vulkan / Metal) keeps the two-op form.
-        let routed = {
-            #[cfg(feature = "cuda")]
-            {
-                if routed.device().is_cuda() {
-                    crate::cuda::moe::moe_combine_cuda(&routed, &scores)?
-                } else {
-                    routed
-                        .broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
-                        .sum(D::Minus2)?
-                }
-            }
-            #[cfg(not(feature = "cuda"))]
-            {
-                routed
-                    .broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
-                    .sum(D::Minus2)?
-            }
-        };
-
-        // Shared expert with sigmoid gating, matching qwen3_next SparseMoeBlock.
-        let shared_g = self.shared_gate_proj.forward(&xs)?;
-        let shared_u = self.shared_up_proj.forward(&xs)?;
-        let shared_act =
-            crate::ops::mul_and_act(&shared_g, &shared_u, crate::layers::Activation::Silu)?;
-        let shared_out = self.shared_down_proj.forward(&shared_act)?;
-        let shared_gate =
-            hanzo_nn::ops::sigmoid(&self.shared_gate.forward(&xs.to_dtype(DType::F32)?)?)?
-                .to_dtype(shared_out.dtype())?;
-        let shared_out = shared_out.broadcast_mul(&shared_gate)?;
-
-        (routed + shared_out)?
-            .reshape((batch, seq_len, hidden_dim))?
-            .to_dtype(original_dtype)
-    }
-}
-
-struct DenseMlp {
-    gate: Arc<dyn QuantMethod>,
-    up: Arc<dyn QuantMethod>,
-    down: Arc<dyn QuantMethod>,
-}
-
-impl DenseMlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let gate = self.gate.forward(xs)?;
-        let up = self.up.forward(xs)?;
-        let y = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
-        self.down.forward(&y)
-    }
-}
-
-enum MoeOrMlp {
-    FusedMoe(Box<FusedMoe>),
-    Mlp(DenseMlp),
-}
-
-impl MoeOrMlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        match self {
-            Self::Mlp(m) => m.forward(xs),
-            Self::FusedMoe(m) => m.forward(xs),
-        }
-    }
-}
-
 // ===================== Gated full-attention layer =====================
 
-struct GatedFullAttention {
-    // q_proj output is doubled: first head_dim is q, second head_dim is the output gate.
+struct QGatedFullAttention {
+    // attn_q output is doubled: first head_dim per head is q, second head_dim is the output gate.
     attn_q: Arc<dyn QuantMethod>,
     attn_k: Arc<dyn QuantMethod>,
     attn_v: Arc<dyn QuantMethod>,
@@ -261,18 +104,20 @@ struct GatedFullAttention {
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    rotary: Arc<Qwen3VLRotaryEmbedding>,
+    rotary: Arc<RotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     dtype: DType,
 }
 
-impl GatedFullAttention {
+impl QGatedFullAttention {
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         x: &Tensor,
         mask: &AttentionMask,
-        cos_sin: &(Tensor, Tensor),
+        start_offsets: &[usize],
+        positions: &Tensor,
         kv_cache: &mut KvCache,
         paged: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
@@ -282,7 +127,7 @@ impl GatedFullAttention {
         let k = self.attn_k.forward(x)?;
         let v = self.attn_v.forward(x)?;
 
-        // Split q_gate into q and gate (interleaved per head: [q_head, gate_head] * n_head).
+        // Split q_gate into q and gate: per head, first head_dim is q, second head_dim is the gate.
         let q_gate = q_gate.reshape((b_sz, seq_len, self.n_head, self.head_dim * 2))?;
         let q = q_gate.narrow(D::Minus1, 0, self.head_dim)?;
         let gate = q_gate.narrow(D::Minus1, self.head_dim, self.head_dim)?;
@@ -304,16 +149,35 @@ impl GatedFullAttention {
             (q, k, v)
         };
 
-        // Partial-rotary interleaved mRoPE + qk RMSNorm.
-        let (q, k) = self.rotary.forward_qk_norm(
-            cos_sin,
-            &q,
-            &k,
-            self.q_norm.weight(),
-            self.k_norm.weight(),
-            self.q_norm.eps(),
-            self.k_norm.eps(),
-        )?;
+        // qk-RMSNorm + partial NEOX RoPE. Decode (seq_len == 1) reads positions from the device
+        // buffer (graph-safe, position-invariant); prefill uses the host seqlen_offsets. Mirrors
+        // quantized_qwen3.rs, which also drives the safetensors qwen3_next partial-rope path.
+        let (q, k) = if seq_len == 1 {
+            let positions = if positions.device().same_device(q.device()) {
+                positions.clone()
+            } else {
+                positions.to_device(q.device())?
+            };
+            self.rotary.forward_qk_norm_positions(
+                &q,
+                &k,
+                self.q_norm.weight(),
+                self.k_norm.weight(),
+                self.q_norm.eps(),
+                self.k_norm.eps(),
+                &positions,
+            )?
+        } else {
+            self.rotary.forward_qk_norm(
+                &q,
+                &k,
+                self.q_norm.weight(),
+                self.k_norm.weight(),
+                self.q_norm.eps(),
+                self.k_norm.eps(),
+                start_offsets,
+            )?
+        };
 
         let (q, k, v) = (
             q.to_dtype(self.dtype)?,
@@ -321,10 +185,6 @@ impl GatedFullAttention {
             v.to_dtype(self.dtype)?,
         );
 
-        // PagedAttention keeps the decode KV write/read position-invariant (device slot_mappings +
-        // bucketed context_lens), which is what makes the whole decode forward capturable by a CUDA
-        // graph. The plain hybrid `KvCache::append` path (host-offset write, frozen under capture) is
-        // kept only for the eager / no-paged (CPU) case. Mirrors quantized_qwen3_moe / qwen3_next.
         let y = match (&self.paged_attn, paged) {
             (Some(paged_attn), Some(((key_cache, value_cache), input_metadata))) => paged_attn
                 .forward(
@@ -340,7 +200,17 @@ impl GatedFullAttention {
                 )?,
             (Some(paged_attn), None) => {
                 let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                paged_attn.forward(&q, &k, &v, mask, None, None, &input_metadata, &self.sdpa_params, None)?
+                paged_attn.forward(
+                    &q,
+                    &k,
+                    &v,
+                    mask,
+                    None,
+                    None,
+                    &input_metadata,
+                    &self.sdpa_params,
+                    None,
+                )?
             }
             (None, _) => {
                 let (k, v) = kv_cache.append(&k, &v)?;
@@ -364,14 +234,22 @@ impl GatedFullAttention {
 
 // ===================== Gated DeltaNet (linear-attention) layer =====================
 
+/// Input QKVZ encoding. Modern GGUFs split the projection into `attn_qkv` (merged q|k|v) + `attn_gate`
+/// (z); legacy GGUFs keep a single merged `ssm_in` (q|k|v|z) that must be split per key-head group.
+enum QkvzProj {
+    Split {
+        qkv: Arc<dyn QuantMethod>,
+        z: Arc<dyn QuantMethod>,
+    },
+    Merged(Arc<dyn QuantMethod>),
+}
+
 struct QGatedDeltaNet {
-    in_proj_qkv: Arc<dyn QuantMethod>, // merged q,k,v (no z) -> attn_qkv
-    in_proj_z: Arc<dyn QuantMethod>,   // z gate -> attn_gate
-    in_proj_b: Arc<dyn QuantMethod>,   // beta -> ssm_beta
-    in_proj_a: Arc<dyn QuantMethod>,   // alpha -> ssm_alpha
-    conv1d_weight: Tensor,             // (conv_dim, kernel) f32
-    dt_bias: Tensor,                   // (num_v_heads,) f32
-    a: Tensor,                         // -exp(A_log), (num_v_heads,) f32, precomputed in GGUF
+    qkvz: QkvzProj,
+    in_proj_ba: Arc<dyn QuantMethod>, // merged beta|alpha -> ssm_ba
+    conv1d_weight: Tensor,            // (conv_dim, kernel) f32
+    dt_bias: Tensor,                  // (num_v_heads,) f32
+    a: Tensor,                        // -exp(A_log), (num_v_heads,) f32, precomputed in GGUF
     norm: RmsNormGated,
     out_proj: Arc<dyn QuantMethod>,
     num_k_heads: usize,
@@ -385,32 +263,66 @@ struct QGatedDeltaNet {
 
 impl QGatedDeltaNet {
     fn forward(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
-        // GDN recurrence + gates run in f32 end-to-end to avoid bf16/f32 boundary mismatches;
-        // input is lifted to f32 here and the out_proj result cast back to the model dtype.
+        // Run the GDN recurrence + gates in f32 end-to-end (matches quantized_qwen3_5_moe); lift the
+        // input here and cast the out_proj result back to the model dtype.
         let orig_dtype = x.dtype();
         let x = &x.to_dtype(DType::F32)?;
         let (batch_size, seq_len, _hidden) = x.dims3()?;
-        let dtype = x.dtype();
         let v_per_group = self.num_v_heads / self.num_k_heads;
 
-        // 1. Projections. qkv is already merged [q | k | v]; z is the gate.
-        let mixed_qkv = self.in_proj_qkv.forward(x)?;
-        let z = self.in_proj_z.forward(x)?;
-        let b = self.in_proj_b.forward(x)?;
-        let a = self.in_proj_a.forward(x)?;
+        // 1. Input projections. Produce the concatenated [q|k|v] conv input (v in GROUPED order) and
+        //    the z gate reshaped to (b, s, num_v_heads, head_v_dim).
+        let (mixed_qkv, z) = match &self.qkvz {
+            QkvzProj::Split { qkv, z } => {
+                let mixed_qkv = qkv.forward(x)?;
+                let z = z
+                    .forward(x)?
+                    .reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
+                (mixed_qkv, z)
+            }
+            QkvzProj::Merged(ssm_in) => {
+                // Legacy grouped layout: [q(head_k) | k(head_k) | v(v_per_group*head_v) | z(same)]
+                // per key-head group. Split within the group, then flatten q,k,v and concat.
+                let group_size = 2 * self.head_k_dim + 2 * v_per_group * self.head_v_dim;
+                let mixed = ssm_in
+                    .forward(x)?
+                    .reshape((batch_size, seq_len, self.num_k_heads, group_size))?;
+                let mut offset = 0;
+                let q = mixed.narrow(D::Minus1, offset, self.head_k_dim)?;
+                offset += self.head_k_dim;
+                let k = mixed.narrow(D::Minus1, offset, self.head_k_dim)?;
+                offset += self.head_k_dim;
+                let v = mixed.narrow(D::Minus1, offset, v_per_group * self.head_v_dim)?;
+                offset += v_per_group * self.head_v_dim;
+                let z = mixed.narrow(D::Minus1, offset, v_per_group * self.head_v_dim)?;
 
-        let z = z.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
-        let b = b.reshape((batch_size, seq_len, self.num_v_heads))?;
-        let a = a.reshape((batch_size, seq_len, self.num_v_heads))?;
+                let q = q.reshape((batch_size, seq_len, self.key_dim))?;
+                let k = k.reshape((batch_size, seq_len, self.key_dim))?;
+                let v = v.reshape((batch_size, seq_len, self.value_dim))?;
+                let z = z.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
+                let mixed_qkv = Tensor::cat(&[&q, &k, &v], D::Minus1)?;
+                (mixed_qkv, z)
+            }
+        };
 
-        // 2. Causal conv1d over the concatenated qkv (includes silu).
+        // 2. beta|alpha: grouped [b(v_per_group) | a(v_per_group)] per key-head group.
+        let mixed_ba = self.in_proj_ba.forward(x)?;
+        let mixed_ba = mixed_ba.reshape((batch_size, seq_len, self.num_k_heads, 2 * v_per_group))?;
+        let b = mixed_ba
+            .narrow(D::Minus1, 0, v_per_group)?
+            .reshape((batch_size, seq_len, self.num_v_heads))?;
+        let a = mixed_ba
+            .narrow(D::Minus1, v_per_group, v_per_group)?
+            .reshape((batch_size, seq_len, self.num_v_heads))?;
+
+        // 3. Causal conv1d over the concatenated qkv (includes silu).
         let mixed_qkv = if cache.seqlen_offset > 0 && seq_len == 1 {
             self.causal_conv1d_update(&mixed_qkv, cache)?
         } else {
             self.causal_conv1d_full(&mixed_qkv, cache)?
         };
 
-        // 3. Split conv output back into per-head q, k, v.
+        // 4. Split conv output back into per-head q, k, v.
         let q = mixed_qkv.narrow(D::Minus1, 0, self.key_dim)?;
         let k = mixed_qkv.narrow(D::Minus1, self.key_dim, self.key_dim)?;
         let v = mixed_qkv.narrow(D::Minus1, self.key_dim * 2, self.value_dim)?;
@@ -419,53 +331,44 @@ impl QGatedDeltaNet {
         let k = k.reshape((batch_size, seq_len, self.num_k_heads, self.head_k_dim))?;
         let v = v.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
 
-        // 4. beta = sigmoid(b); g = -exp(A_log) * softplus(a + dt_bias).
-        //    The GGUF `ssm_a` already stores -exp(A_log), so we multiply directly (no neg/exp here).
+        // 5. beta = sigmoid(b); g = -exp(A_log) * softplus(a + dt_bias). GGUF `ssm_a` already stores
+        //    -exp(A_log), so multiply directly (no neg/exp here).
         let beta = hanzo_nn::ops::sigmoid(&b)?;
-        let dt_bias = self
-            .dt_bias
-            .to_dtype(DType::F32)?
-            .unsqueeze(0)?
-            .unsqueeze(0)?;
+        let dt_bias = self.dt_bias.to_dtype(DType::F32)?.unsqueeze(0)?.unsqueeze(0)?;
         let g = self
             .a
             .to_dtype(DType::F32)?
             .unsqueeze(0)?
             .unsqueeze(0)?
-            .broadcast_mul(&softplus(
-                &a.to_dtype(DType::F32)?.broadcast_add(&dt_bias)?,
-            )?)?
-            .to_dtype(dtype)?;
+            .broadcast_mul(&softplus(&a.to_dtype(DType::F32)?.broadcast_add(&dt_bias)?)?)?;
 
-        // 5. If num_v_heads > num_k_heads, tile q,k to V-head count. The GGUF lays out every per-V-head
-        //    tensor (v, z, beta, g, conv V-channels, out_proj columns) in tiled order [v0_K0..v0_K{K-1},
-        //    v1_K0..], so V head j pairs with K head j % num_k_heads. Tiling K (insert axis BEFORE the
-        //    K axis, repeat, flatten) reproduces that j -> j % num_k_heads pairing; a grouped repeat
-        //    (j -> j / v_per_group) would mismatch. The whole layer then stays in tiled order through
-        //    out_proj, so no weights need re-permuting at load.
+        // 6. GROUPED repeat q,k to V-head count: V head j -> K head j / v_per_group. The GGUF lays out
+        //    every per-V-head tensor (v, z, beta, g) grouped by key-head, so inserting the repeat axis
+        //    AFTER the K axis reproduces the `j / v_per_group` pairing (a tiled `% num_k_heads` repeat
+        //    would mismatch). When num_k_heads == num_v_heads this collapses to identity.
         let (q, k) = if v_per_group > 1 {
             let q = q
-                .unsqueeze(2)?
-                .repeat((1, 1, v_per_group, 1, 1))?
+                .unsqueeze(3)?
+                .repeat((1, 1, 1, v_per_group, 1))?
                 .reshape((batch_size, seq_len, self.num_v_heads, self.head_k_dim))?;
             let k = k
-                .unsqueeze(2)?
-                .repeat((1, 1, v_per_group, 1, 1))?
+                .unsqueeze(3)?
+                .repeat((1, 1, 1, v_per_group, 1))?
                 .reshape((batch_size, seq_len, self.num_v_heads, self.head_k_dim))?;
             (q, k)
         } else {
             (q, k)
         };
 
-        // 6. L2-normalize q and k.
+        // 7. L2-normalize q and k.
         let q = l2_norm(&q, L2_NORM_EPS)?;
         let k = l2_norm(&k, L2_NORM_EPS)?;
 
-        // 7. Recurrent gated delta rule (dispatches to the fused per-backend kernel internally).
+        // 8. Recurrent gated delta rule (dispatches to the fused per-backend kernel internally).
         let y = gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?;
         cache.seqlen_offset += seq_len;
 
-        // 8. Gated RMSNorm with z, then output projection.
+        // 9. Gated RMSNorm with z, then output projection.
         let z_shape = z.shape().clone();
         let y = y.reshape(((), self.head_v_dim))?;
         let z = z.reshape(((), self.head_v_dim))?;
@@ -478,10 +381,6 @@ impl QGatedDeltaNet {
 
     fn causal_conv1d_update(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (_batch, seq_len, _conv_dim) = x.dims3()?;
-
-        // Vulkan conv1d single-step kernel (gdn_conv1d_step_vulkan) isn't ported to canonical
-        // hanzo-ml yet; the portable candle path below runs correctly on the Vulkan device.
-
         let x_t = x.transpose(1, 2)?.contiguous()?;
 
         let state_len = cache.conv_state.dim(2)?;
@@ -494,31 +393,13 @@ impl QGatedDeltaNet {
         let mut conv_outputs = Vec::with_capacity(seq_len);
         let total_len = hidden_new.dim(2)?;
         for i in (total_len - seq_len)..total_len {
-            let window =
-                hidden_new.narrow(2, i + 1 - self.conv_kernel_size, self.conv_kernel_size)?;
+            let window = hidden_new.narrow(2, i + 1 - self.conv_kernel_size, self.conv_kernel_size)?;
             let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
             conv_outputs.push(out);
         }
         let out = Tensor::stack(&conv_outputs, 2)?;
         let out = hanzo_nn::ops::silu(&out)?;
         out.transpose(1, 2)
-    }
-
-    // Single decode step (seq_len==1, batch==1) of the causal conv1d on Vulkan. conv_state is
-    // (1, conv_dim, k) -- it stores k columns; the step drops the oldest and appends x, exactly as
-    // the CPU causal_conv1d_update does. conv_state is updated in place in VRAM (aliases the pool
-    // buffer); x is (1, 1, conv_dim). Returns silu(conv) as (1, 1, conv_dim). The GGUF conv1d_weight
-    // is (conv_dim, k) with no bias.
-    fn causal_conv1d_update_vulkan(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
-        let conv_dim = self.conv1d_weight.dim(0)?;
-        let x_flat = x.reshape(conv_dim)?.to_dtype(DType::F32)?.contiguous()?;
-        let weight = self.conv1d_weight.to_dtype(DType::F32)?.contiguous()?;
-        let mut conv_state = cache
-            .conv_state
-            .reshape((conv_dim, self.conv_kernel_size))?;
-        let out = crate::vulkan::gdn::gdn_conv1d_step_vulkan(&mut conv_state, &x_flat, &weight)?;
-        cache.conv_state = conv_state.reshape((1, conv_dim, self.conv_kernel_size))?;
-        out.reshape((1, 1, conv_dim))
     }
 
     fn causal_conv1d_full(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
@@ -541,8 +422,7 @@ impl QGatedDeltaNet {
 
         let pad_width = self.conv_kernel_size.saturating_sub(seq_len);
         cache.conv_state = if pad_width > 0 {
-            let zeros =
-                Tensor::zeros((batch_size, conv_dim, pad_width), x_t.dtype(), x_t.device())?;
+            let zeros = Tensor::zeros((batch_size, conv_dim, pad_width), x_t.dtype(), x_t.device())?;
             Tensor::cat(&[zeros, x_t.clone()], 2)?
         } else {
             x_t.narrow(2, seq_len - self.conv_kernel_size, self.conv_kernel_size)?
@@ -576,7 +456,7 @@ impl QGatedDeltaNet {
 // ===================== Decoder layer =====================
 
 enum LayerImpl {
-    FullAttention(GatedFullAttention),
+    FullAttention(QGatedFullAttention),
     LinearAttention(QGatedDeltaNet),
 }
 
@@ -584,7 +464,7 @@ struct DecoderLayer {
     layer_impl: LayerImpl,
     input_layernorm: QRmsNorm,
     post_attention_layernorm: QRmsNorm,
-    mlp: MoeOrMlp,
+    mlp: FusedMoe,
 }
 
 // ===================== Config extraction =====================
@@ -600,7 +480,6 @@ struct PropsGGUF {
     rope_freq_base: f32,
     head_dim: usize,
     rot_dim: usize,
-    mrope_section: Vec<usize>,
     full_attention_interval: usize,
     // GDN
     conv_kernel: usize,
@@ -608,29 +487,25 @@ struct PropsGGUF {
     head_v_dim: usize,
     num_k_heads: usize,
     num_v_heads: usize,
-    // MoE (None for dense)
-    num_experts: Option<usize>,
+    // MoE
+    num_experts: usize,
     num_experts_per_tok: usize,
-    moe_intermediate_size: usize,
-    is_moe: bool,
 }
 
-fn verify_arch(
-    metadata: &HashMap<String, hanzo_ml::quantized::gguf_file::Value>,
-) -> Result<String> {
+fn verify_arch(metadata: &HashMap<String, hanzo_ml::quantized::gguf_file::Value>) -> Result<()> {
     use crate::utils::gguf_metadata::TryValueInto;
     let actual_arch: String = metadata
         .get("general.architecture")
         .cloned()
         .try_value_into()?;
-    if actual_arch != "qwen35moe" && actual_arch != "qwen35" {
-        hanzo_ml::bail!("Expected `qwen35moe`/`qwen35` architecture, got `{actual_arch}`.");
+    if actual_arch != "qwen3next" {
+        hanzo_ml::bail!("Expected `qwen3next` architecture, got `{actual_arch}`.");
     }
-    Ok(actual_arch)
+    Ok(())
 }
 
 impl PropsGGUF {
-    fn try_from(c: &ContentMetadata, is_moe: bool) -> Result<Self> {
+    fn try_from(c: &ContentMetadata) -> Result<Self> {
         let required = [
             "attention.head_count",
             "attention.head_count_kv",
@@ -641,6 +516,9 @@ impl PropsGGUF {
             "ssm.state_size",
             "ssm.group_count",
             "ssm.time_step_rank",
+            "expert_count",
+            "expert_used_count",
+            "expert_feed_forward_length",
         ];
         c.has_required_keys(&required)
             .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?;
@@ -652,25 +530,19 @@ impl PropsGGUF {
             .get_value::<u32>("attention.head_count")
             .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize;
 
+        // head_dim from attention.key_length (Qwen3-Next has head_dim != embed/head_count).
         let head_dim = c
             .get_value::<u32>("attention.key_length")
             .ok()
             .map(|x| x as usize)
             .unwrap_or(embed_len / head_count);
 
-        // rope.dimension_count is the rotary (partial) dim; fall back to head_dim * 0.25.
+        // Partial-rotary width. Prefer rope.dimension_count; else head_dim * 0.25.
         let rot_dim = c
             .get_value::<u32>("rope.dimension_count")
             .ok()
             .map(|x| x as usize)
             .unwrap_or((head_dim as f64 * DEFAULT_PARTIAL_ROTARY_FACTOR) as usize);
-
-        let mrope_section = c
-            .get_value::<Vec<u32>>("rope.dimension_sections")
-            .ok()
-            .map(|v| v.into_iter().map(|x| x as usize).collect::<Vec<_>>())
-            // mrope_section sums to rot_dim/2; default [t,h,w,0] from llama.cpp is [11,11,10,0].
-            .unwrap_or_else(|| vec![11, 11, 10, 0]);
 
         let head_k_dim = c
             .get_value::<u32>("ssm.state_size")
@@ -681,33 +553,17 @@ impl PropsGGUF {
         let num_v_heads = c
             .get_value::<u32>("ssm.time_step_rank")
             .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize;
-        // head_v_dim: ssm.inner_size / num_v_heads, else equal to head_k_dim (state_size).
+        // head_v_dim = ssm.inner_size / num_v_heads, else == head_k_dim (state_size).
         let head_v_dim = c
             .get_value::<u32>("ssm.inner_size")
             .ok()
             .map(|x| x as usize / num_v_heads)
             .unwrap_or(head_k_dim);
 
-        let (num_experts, num_experts_per_tok, moe_intermediate_size) = if is_moe {
-            (
-                Some(
-                    c.get_value::<u32>("expert_count")
-                        .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
-                        as usize,
-                ),
-                c.get_value::<u32>("expert_used_count")
-                    .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize,
-                c.get_value::<u32>("expert_feed_forward_length")
-                    .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize,
-            )
-        } else {
-            (None, 0, 0)
-        };
-
         Ok(Self {
             head_count,
             head_count_kv: {
-                // hybrid layers store head_count_kv as a per-layer array; take the max (attention layers)
+                // hybrid layers may store head_count_kv as a per-layer array; take the max.
                 let key = "attention.head_count_kv";
                 c.get_value::<u32>(key)
                     .map(|n| n as usize)
@@ -717,9 +573,8 @@ impl PropsGGUF {
                     })
                     .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
             },
-            // block_count includes trailing MTP (multi-token-prediction) layers in some exports
-            // (e.g. the MXFP4 gguf: block_count=41, nextn_predict_layers=1). MTP is ignored for
-            // text-only inference, so the transformer depth is block_count - nextn_predict_layers.
+            // block_count may include trailing MTP (multi-token-prediction) layers; the transformer
+            // depth is block_count - nextn_predict_layers. MTP is ignored for text-only inference.
             block_count: (c
                 .get_value::<u32>("block_count")
                 .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
@@ -736,7 +591,6 @@ impl PropsGGUF {
             rope_freq_base: c.get_value("rope.freq_base").ok().unwrap_or(10_000_000_f32),
             head_dim,
             rot_dim,
-            mrope_section,
             full_attention_interval: c
                 .get_value::<u32>("full_attention_interval")
                 .ok()
@@ -744,16 +598,17 @@ impl PropsGGUF {
                 .unwrap_or(DEFAULT_FULL_ATTENTION_INTERVAL),
             conv_kernel: c
                 .get_value::<u32>("ssm.conv_kernel")
-                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
-                as usize,
+                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize,
             head_k_dim,
             head_v_dim,
             num_k_heads,
             num_v_heads,
-            num_experts,
-            num_experts_per_tok,
-            moe_intermediate_size,
-            is_moe,
+            num_experts: c
+                .get_value::<u32>("expert_count")
+                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize,
+            num_experts_per_tok: c
+                .get_value::<u32>("expert_used_count")
+                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize,
         })
     }
 }
@@ -766,19 +621,11 @@ pub struct ModelWeights {
     layer_types: Vec<LayerType>,
     norm: QRmsNorm,
     output: Arc<dyn QuantMethod>,
-    rotary: Arc<Qwen3VLRotaryEmbedding>,
     pub device: Device,
     pub cache: EitherCache,
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     dtype: DType,
-}
-
-pub(crate) fn gguf_qmm(q: hanzo_ml::quantized::QTensor) -> Result<Arc<dyn QuantMethod>> {
-    Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-        q_weight: Arc::new(q),
-        b: None,
-    })?))
 }
 
 impl ModelConfig::FromGGUF for ModelWeights {
@@ -790,25 +637,21 @@ impl ModelConfig::FromGGUF for ModelWeights {
         dtype: DType,
     ) -> Result<Self> {
         let meta = ct.get_metadata();
-        let actual_arch = verify_arch(meta)?;
-        let is_moe = actual_arch == "qwen35moe";
+        verify_arch(meta)?;
 
         let metadata = ContentMetadata {
-            path_prefix: &actual_arch,
+            path_prefix: "qwen3next",
             metadata: meta,
         };
-        let props = PropsGGUF::try_from(&metadata, is_moe)?;
+        let props = PropsGGUF::try_from(&metadata)?;
 
         let key_dim = props.num_k_heads * props.head_k_dim;
         let value_dim = props.num_v_heads * props.head_v_dim;
         let conv_dim = key_dim * 2 + value_dim;
 
-        // GGUF stores V heads in tiled order (converter's _LinearAttentionVReorderBase). The K==V
-        // case is a no-op reorder; for V = m*K we consume tiled order directly (QGatedDeltaNet
-        // tiles q/k to match). Only a non-integer V/K split is genuinely unsupported.
         if props.num_v_heads % props.num_k_heads != 0 {
             hanzo_ml::bail!(
-                "qwen35 GGUF GDN requires num_v_heads ({}) to be a multiple of num_k_heads ({}).",
+                "qwen3next GDN requires num_v_heads ({}) to be a multiple of num_k_heads ({}).",
                 props.num_v_heads,
                 props.num_k_heads
             );
@@ -833,23 +676,21 @@ impl ModelConfig::FromGGUF for ModelWeights {
             ct.tensor("token_embd.weight", device)?
         };
 
-        // One mRoPE per device location. head_dim arg = rot_dim so cos/sin width = rot_dim/2.
+        // One partial NEOX RoPE per device location (shared by the full-attention layers).
         let mut ropes = HashMap::new();
         for layer_idx in 0..props.block_count {
             let dev = mapper.device_for(layer_idx, false).unwrap_or(device);
             if let std::collections::hash_map::Entry::Vacant(e) = ropes.entry(dev.location()) {
-                e.insert(Arc::new(Qwen3VLRotaryEmbedding::new(
+                e.insert(Arc::new(RotaryEmbedding::new_partial(
                     props.rope_freq_base,
                     props.rot_dim,
+                    props.max_seq_len,
                     dev,
-                    props.mrope_section.clone(),
+                    true,
+                    DType::F32,
                 )?));
             }
         }
-        let default_rotary = ropes
-            .get(&device.location())
-            .cloned()
-            .unwrap_or_else(|| ropes.values().next().unwrap().clone());
 
         let mut layers = Vec::with_capacity(props.block_count);
         for layer_idx in NiceProgressBar::<_, 'b'>(
@@ -894,7 +735,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                         }
                         AttentionImplementation::Eager => None,
                     };
-                    LayerImpl::FullAttention(GatedFullAttention {
+                    LayerImpl::FullAttention(QGatedFullAttention {
                         attn_q,
                         attn_k,
                         attn_v,
@@ -917,25 +758,27 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     })
                 }
                 LayerType::LinearAttention => {
-                    let in_proj_qkv =
-                        gguf_qmm(ct.tensor(&format!("{prefix}.attn_qkv.weight"), dev)?)?;
-                    let in_proj_z =
-                        gguf_qmm(ct.tensor(&format!("{prefix}.attn_gate.weight"), dev)?)?;
-                    let in_proj_b =
-                        gguf_qmm(ct.tensor(&format!("{prefix}.ssm_beta.weight"), dev)?)?;
-                    let in_proj_a =
-                        gguf_qmm(ct.tensor(&format!("{prefix}.ssm_alpha.weight"), dev)?)?;
+                    // Optimized (attn_qkv + attn_gate) vs legacy (ssm_in) input encoding.
+                    let qkvz = if ct.has_tensor(&format!("{prefix}.attn_qkv.weight")) {
+                        QkvzProj::Split {
+                            qkv: gguf_qmm(ct.tensor(&format!("{prefix}.attn_qkv.weight"), dev)?)?,
+                            z: gguf_qmm(ct.tensor(&format!("{prefix}.attn_gate.weight"), dev)?)?,
+                        }
+                    } else {
+                        QkvzProj::Merged(gguf_qmm(
+                            ct.tensor(&format!("{prefix}.ssm_in.weight"), dev)?,
+                        )?)
+                    };
+                    let in_proj_ba = gguf_qmm(ct.tensor(&format!("{prefix}.ssm_ba.weight"), dev)?)?;
                     let out_proj = gguf_qmm(ct.tensor(&format!("{prefix}.ssm_out.weight"), dev)?)?;
 
                     // conv1d / dt / a are small f32 params kept dequantized.
                     let mut conv1d_weight = ct
                         .tensor(&format!("{prefix}.ssm_conv1d.weight"), dev)?
                         .dequantize(dev)?;
-                    // GGUF squeezes conv1d to 2D (conv_dim, kernel); ensure 2D.
                     if conv1d_weight.rank() == 3 {
                         conv1d_weight = conv1d_weight.squeeze(1)?;
                     }
-                    // GGUF conversions name this `ssm_dt.bias` (Unsloth/llama.cpp) or `ssm_dt`; accept both.
                     let dt_bias = ct
                         .tensor(&format!("{prefix}.ssm_dt.bias"), dev)
                         .or_else(|_| ct.tensor(&format!("{prefix}.ssm_dt"), dev))?
@@ -952,10 +795,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     let norm = RmsNormGated::from_weight(ssm_norm_w, props.rms_norm_eps as f64);
 
                     LayerImpl::LinearAttention(QGatedDeltaNet {
-                        in_proj_qkv,
-                        in_proj_z,
-                        in_proj_b,
-                        in_proj_a,
+                        qkvz,
+                        in_proj_ba,
                         conv1d_weight,
                         dt_bias,
                         a,
@@ -972,19 +813,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 }
             };
 
-            let mlp = if is_moe {
-                MoeOrMlp::FusedMoe(Box::new(FusedMoe::from_gguf(
-                    &mut ct,
-                    &prefix,
-                    dev,
-                    props.num_experts_per_tok,
-                )?))
-            } else {
-                let gate = gguf_qmm(ct.tensor(&format!("{prefix}.ffn_gate.weight"), dev)?)?;
-                let up = gguf_qmm(ct.tensor(&format!("{prefix}.ffn_up.weight"), dev)?)?;
-                let down = gguf_qmm(ct.tensor(&format!("{prefix}.ffn_down.weight"), dev)?)?;
-                MoeOrMlp::Mlp(DenseMlp { gate, up, down })
-            };
+            let mlp = FusedMoe::from_gguf(&mut ct, &prefix, dev, props.num_experts_per_tok)?;
 
             layers.push(DecoderLayer {
                 layer_impl,
@@ -1022,7 +851,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
             layer_types,
             norm,
             output: gguf_qmm(output)?,
-            rotary: default_rotary,
             device: device.clone(),
             cache: EitherCache::Hybrid(pipeline_cache),
             max_seq_len: props.max_seq_len,
@@ -1040,7 +868,7 @@ impl ModelWeights {
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
-        let (b_sz, seq_len) = input_ids.dims2()?;
+        let (b_sz, _seq_len) = input_ids.dims2()?;
         let mut x = self.tok_embeddings.forward(input_ids)?;
 
         let mut hybrid_cache = self.cache.hybrid();
@@ -1058,10 +886,9 @@ impl ModelWeights {
             );
         }
 
-        // With PagedAttention the running context lives in the paged KV pool, so the past-kv length
-        // comes from the host `seqlen_offsets`, not the (unused) hybrid attention KvCache; decode
-        // (non-first chunk) needs no mask, as paged attention enforces causality via context_lens.
-        // Without paging (CPU/eager) fall back to the hybrid cache. Mirrors quantized_qwen3_moe.
+        // Past-kv length: with PagedAttention the running context lives in the paged pool, so it
+        // comes from the host `seqlen_offsets`; decode (non-first chunk) needs no mask. Without
+        // paging (CPU/eager) fall back to the hybrid cache. Mirrors quantized_qwen3_5_moe.
         let mask = CausalMasker.make_causal_mask(
             input_ids,
             match metadata.as_ref() {
@@ -1086,15 +913,25 @@ impl ModelWeights {
             DeviceMappedMask::from_single(mask)
         };
 
-        // Text-only 3D mRoPE position ids: all three rows equal the linear position per sequence.
-        // The decode-graph path threads a STABLE device `rope_positions` buffer (refreshed in place
-        // by the graph runner) so the captured cos/sin advance with the replayed token instead of
-        // freezing at the warmup position; the eager path synthesizes them from `seqlen_offsets`.
-        let rope_positions = metadata
+        // RoPE positions: prefer the stable device buffer from decode-graph metadata (refreshed in
+        // place across replays); else synthesize from the host `seqlen_offsets`. Mirrors
+        // quantized_qwen3.rs. One position per sequence.
+        let positions = match metadata
             .as_ref()
             .and_then(|(_, meta)| meta.rope_positions.as_ref())
-            .and_then(|rp| rp.get(&self.device.location()));
-        let cos_sin = self.compute_text_mrope(seqlen_offsets, seq_len, x.dtype(), rope_positions)?;
+            .and_then(|positions| positions.get(&self.device.location()))
+        {
+            Some(positions) => positions.clone(),
+            None => {
+                let pos = seqlen_offsets
+                    .iter()
+                    .copied()
+                    .map(u32::try_from)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(hanzo_ml::Error::wrap)?;
+                Tensor::from_vec(pos, seqlen_offsets.len().max(1), &self.device)?
+            }
+        };
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
@@ -1113,7 +950,19 @@ impl ModelWeights {
                     else {
                         hanzo_ml::bail!("Hybrid cache layer {layer_idx} not attention.");
                     };
-                    attn.forward(&normed, &mask.get(normed.device()), &cos_sin, kv_cache, paged)?
+                    let positions = if positions.device().same_device(normed.device()) {
+                        positions.clone()
+                    } else {
+                        positions.to_device(normed.device())?
+                    };
+                    attn.forward(
+                        &normed,
+                        &mask.get(normed.device()),
+                        seqlen_offsets,
+                        &positions,
+                        kv_cache,
+                        paged,
+                    )?
                 }
                 LayerImpl::LinearAttention(gdn) => {
                     let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(layer_idx)
@@ -1121,11 +970,8 @@ impl ModelWeights {
                         hanzo_ml::bail!("Hybrid cache layer {layer_idx} not recurrent.");
                     };
                     if b_sz == 1 {
-                        // Single sequence: one slot, so gather/scatter is constant-offset
-                        // `narrow`/`slice_set` on the HOST slot with no `to_vec1` sync. That sync-free
-                        // form is what makes the decode step CUDA-graph capturable (constant baked slot,
-                        // recurrence evolves the live pool state in place across replays). b_sz>1 gathers
-                        // below.
+                        // Single sequence: constant-offset narrow/slice_set on the host slot, no
+                        // to_vec1 sync (mirrors quantized_qwen3_5_moe's graph-safe fast path).
                         let slot = state_indices_host
                             .as_ref()
                             .and_then(|s| s.first().copied())
@@ -1200,44 +1046,5 @@ impl ModelWeights {
         let x = self.norm.forward(&x)?;
         let x = extract_logits(&x, context_lens)?;
         self.output.forward(&x.contiguous()?)
-    }
-
-    /// Build text-only mRoPE cos/sin. position_ids shape (3, batch, seq) with all three temporal/
-    /// height/width rows equal to the absolute token position; this collapses interleaved mRoPE to
-    /// plain partial RoPE, which is correct for text-only generation.
-    fn compute_text_mrope(
-        &self,
-        seqlen_offsets: &[usize],
-        seq_len: usize,
-        dtype: DType,
-        rope_positions: Option<&Tensor>,
-    ) -> Result<(Tensor, Tensor)> {
-        // (3, batch, seq) position ids -> interleaved mRoPE collapses to partial RoPE for text.
-        let position_ids = match rope_positions {
-            // Decode-graph path: read the advancing position from the stable device buffer the graph
-            // runner refreshes in place (no host Tensor::from_vec, so the captured cos/sin advance).
-            Some(rp) if seq_len == 1 => {
-                let batch = rp.dim(0)?;
-                let pos = rp.reshape((1, batch, 1))?;
-                Tensor::cat(&[&pos, &pos, &pos], 0)?
-            }
-            _ => {
-                let batch = seqlen_offsets.len().max(1);
-                let mut positions = Vec::with_capacity(batch * seq_len);
-                for &off in seqlen_offsets.iter() {
-                    for p in 0..seq_len {
-                        positions.push((off + p) as u32);
-                    }
-                }
-                if seqlen_offsets.is_empty() {
-                    for p in 0..seq_len {
-                        positions.push(p as u32);
-                    }
-                }
-                let pos_1d = Tensor::from_vec(positions, (batch, seq_len), &self.device)?;
-                Tensor::stack(&[&pos_1d, &pos_1d, &pos_1d], 0)?
-            }
-        };
-        self.rotary.compute_cos_sin(&position_ids, dtype)
     }
 }
