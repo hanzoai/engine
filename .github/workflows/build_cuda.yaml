@@ -64,10 +64,8 @@ jobs:
                   flavor: |
                     latest=false
                   tags: |
-                    type=semver,pattern=cuda-${{ matrix.compute_capability }}-{{ version }}
-                    type=semver,pattern=cuda-${{ matrix.compute_capability }}-{{ major }}.{{ minor }}
-                    type=raw,value=cuda-${{ matrix.compute_capability }}-sha-${{ steps.slug.outputs.short_sha }}
-                    type=raw,value=cuda-${{ matrix.compute_capability }}-sha-${{ github.sha }}
+                    type=semver,pattern={{version}}-cuda${{ matrix.compute_capability }}
+                    type=semver,pattern={{major}}.{{minor}}-cuda${{ matrix.compute_capability }}
             - name: Build and push Docker image
               id: build-and-push-cuda
               uses: docker/build-push-action@v6
