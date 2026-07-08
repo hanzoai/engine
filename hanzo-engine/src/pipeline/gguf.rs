@@ -959,11 +959,13 @@ impl GGUFPipeline {
         }
     }
 
-    /// Variants whose captured decode graph bakes a single sequence's per-token state (Qwen35 bakes
-    /// the recurrent-pool slot offset), so the graph is only replay-valid for batch == 1. Other
-    /// variants (paged-only) are batch-agnostic.
+    /// Variants whose captured decode graph is only replay-valid for batch == 1: Qwen35 bakes the
+    /// recurrent-pool slot offset, and MoE variants at batch > 1 route through
+    /// `indexed_moe_grouped`, whose host-side counting sort is structurally uncapturable (RED-1 --
+    /// capture would bake garbage routing into every replay; ml now bails there, so gating here
+    /// keeps batch > 1 MoE decode on the always-correct eager path instead of thrashing capture).
     fn model_decode_graph_single_seq_only(&self) -> bool {
-        matches!(self.model, Model::Qwen35(_))
+        matches!(self.model, Model::Qwen35(_) | Model::Qwen3MoE(_))
     }
 }
 
