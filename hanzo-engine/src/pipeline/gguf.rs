@@ -556,6 +556,15 @@ impl Loader for GGUFLoader {
                 GGUFArchitecture::Qwen2 => Model::Qwen(QQwen::try_from(model_config)?),
                 GGUFArchitecture::Qwen3 => Model::Qwen3(QQwen3::try_from(model_config)?),
                 GGUFArchitecture::Qwen3MoE => Model::Qwen3MoE(QQwen3MoE::try_from(model_config)?),
+                // Qwen3-VL text backbone reuses the dense/MoE Qwen3 quantized weights.
+                // Image-blind: the LLM GGUF carries only the text tower (`blk.*`); the
+                // vision tower ships as a separate mmproj GGUF (not yet wired). For
+                // text-only input interleaved-MRoPE == standard RoPE, so the forward is
+                // bit-identical to plain Qwen3/Qwen3MoE.
+                GGUFArchitecture::Qwen3Vl => Model::Qwen3(QQwen3::try_from(model_config)?),
+                GGUFArchitecture::Qwen3VlMoE => {
+                    Model::Qwen3MoE(QQwen3MoE::try_from(model_config)?)
+                }
                 GGUFArchitecture::Qwen35 | GGUFArchitecture::Qwen35MoE => {
                     Model::Qwen35(QQwen35::try_from(model_config)?)
                 }

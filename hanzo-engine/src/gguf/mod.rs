@@ -29,6 +29,15 @@ pub enum GGUFArchitecture {
     Qwen2,
     Qwen3,
     Qwen3MoE,
+    /// Qwen3-VL text backbone (dense 2/4/8/32B). Structurally identical to `Qwen3`
+    /// (same `blk.*` tensor names, q/k-norm, GQA); the only VL-specific bits —
+    /// interleaved-MRoPE and DeepStack vision injection — collapse to the plain
+    /// Qwen3 path for text-only input (all mrope sections carry the same position
+    /// when t==h==w, so the interleaved partition is a no-op). Reuses `QQwen3`.
+    Qwen3Vl,
+    /// Qwen3-VL MoE text backbone (30B-A3B, 235B-A22B). Same relationship to
+    /// `Qwen3MoE` as `Qwen3Vl` is to `Qwen3`. Reuses `QQwen3MoE`.
+    Qwen3VlMoE,
     Qwen35,
     Qwen35MoE,
     Mistral3,
