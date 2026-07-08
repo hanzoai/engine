@@ -23,7 +23,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "1.7.13"
+version = "1.7.14"
 edition = "2021"
 authors = ["Hanzo AI <dev@hanzo.ai>"]
 description = "Fast, flexible LLM inference."
@@ -39,6 +39,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 # Hanzo ML crates.
 hanzo-ml = { version = "0.11.43" }
 hanzo-nn = { version = "0.11.33" }
+hanzo-transformers = { version = "0.11.9" }
 hanzo-flash-attn = { version = "0.11.34" }
 hanzo-flash-attn-v3 = { version = "0.11.3", package = "hanzo-flash-attn" }
 hanzo-metal-kernels = { version = "0.11.33" }
