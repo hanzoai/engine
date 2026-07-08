@@ -15,6 +15,7 @@ RUN <<HEREDOC
     apt-get install -y --no-install-recommends \
         curl \
         git \
+        libclang-dev \
         libssl-dev \
         pkg-config
 
