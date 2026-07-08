@@ -70,10 +70,8 @@ jobs:
                   flavor: |
                     latest=false
                   tags: |
-                    type=semver,pattern=rocm-${{ matrix.gfx_arch }}-{{ version }}
-                    type=semver,pattern=rocm-${{ matrix.gfx_arch }}-{{ major }}.{{ minor }}
-                    type=raw,value=rocm-${{ matrix.gfx_arch }}-sha-${{ steps.slug.outputs.short_sha }}
-                    type=raw,value=rocm-${{ matrix.gfx_arch }}-sha-${{ github.sha }}
+                    type=semver,pattern={{version}}-rocm-${{ matrix.gfx_arch }}
+                    type=semver,pattern={{major}}.{{minor}}-rocm-${{ matrix.gfx_arch }}
             - name: Build and push Docker image
               id: build-and-push-rocm
               uses: docker/build-push-action@v6
