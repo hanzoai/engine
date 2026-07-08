@@ -889,6 +889,53 @@ impl Sampler {
         )
     }
 
+    /// Host fallback for the on-device Metal top-k when its softmax normalizer comes back
+    /// invalid. Under a long prefill command stream the on-device top-k can read the logits
+    /// buffer before the GPU caches are flushed: Metal buffers use HazardTrackingModeUntracked,
+    /// so cross-encoder ordering is fence-based, and a fence wait orders execution but is NOT the
+    /// cache flush that a host blit is -> stage-1 reads a stale-cached logit and the packed
+    /// normalizer comes back as 0 / non-finite from otherwise-correct logits. The `to_vec1` read
+    /// here is exactly that coherency-forcing host blit, so we recompute the sample on the host
+    /// with the same top-k/top-p/min-p path used when device sampling is unavailable. Only fires
+    /// on the rare prefill sample (decode's short pipeline is coherent), so decode and dense keep
+    /// the fast on-device path.
+    #[cfg(feature = "metal")]
+    fn sample_topk_host_fallback(
+        &self,
+        logits: &Tensor,
+        temperature: f64,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<Logprobs> {
+        let mut probs: Vec<f32> = logits.to_vec1::<f32>()?;
+        let inv_temperature = (1.0 / temperature) as f32;
+        let mut max_logit = f32::NEG_INFINITY;
+        for p in probs.iter_mut() {
+            *p *= inv_temperature;
+            if *p > max_logit {
+                max_logit = *p;
+            }
+        }
+        let mut sum = 0.0f32;
+        for p in probs.iter_mut() {
+            let e = (*p - max_logit).exp();
+            *p = e;
+            sum += e;
+        }
+        if sum > 0.0 {
+            for p in probs.iter_mut() {
+                *p /= sum;
+            }
+        }
+        self.sample_top_kp_min_p(
+            &mut probs,
+            self.top_k as i64,
+            self.top_p as f32,
+            self.min_p as f32,
+            false,
+            rng,
+        )
+    }
+
     #[cfg(feature = "metal")]
     fn sample_topk_on_device_metal(
         &self,
@@ -915,7 +962,7 @@ impl Sampler {
         let denom = softmax_info[0];
         let global_max = softmax_info[1];
         if denom <= 0.0 || !denom.is_finite() || !global_max.is_finite() {
-            hanzo_ml::bail!("invalid Metal top-k softmax normalizer");
+            return self.sample_topk_host_fallback(&logits, temperature, rng);
         }
 
         let inv_temperature = (1.0 / temperature) as f32;
