@@ -211,8 +211,11 @@ fn verify_qwen3_arch(
         .cloned()
         .try_value_into()?;
 
-    if actual_arch != "qwen3" {
-        hanzo_ml::bail!("Expected `qwen3` architecture, got `{actual_arch}`.");
+    // `qwen3vl` is the dense Qwen3-VL text backbone: identical text architecture to
+    // `qwen3` (same tensors, q/k-norm, GQA). Its LLM GGUF is loaded here image-blind
+    // (interleaved-MRoPE collapses to standard RoPE for text-only positions).
+    if actual_arch != "qwen3" && actual_arch != "qwen3vl" {
+        hanzo_ml::bail!("Expected `qwen3` or `qwen3vl` architecture, got `{actual_arch}`.");
     }
     Ok(actual_arch)
 }
