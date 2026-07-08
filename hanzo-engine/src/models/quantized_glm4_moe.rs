@@ -173,6 +173,7 @@ pub struct ModelWeights {
     dtype: DType,
 }
 
+#[allow(dead_code)]
 pub(crate) struct PropsGGUF {
     pub head_count: usize,
     pub head_count_kv: usize,

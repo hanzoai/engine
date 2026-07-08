@@ -3347,33 +3347,6 @@ impl RotaryEmbedding {
         })
     }
 
-    /// Partial RoPE: rotate only the first `rotary_dim` dims of each head, passing the rest through.
-    /// The frequency denominator is `rotary_dim` (not `head_dim`), matching GLM/llama.cpp partial NeoX.
-    pub fn new_partial(
-        base: f32,
-        rotary_dim: usize,
-        max_position_embeddings: usize,
-        device: &Device,
-        is_gpt_neox: bool,
-        dtype: DType,
-    ) -> Result<Self> {
-        let inv_freq: Vec<_> = (0..rotary_dim)
-            .step_by(2)
-            .map(|i| 1f32 / base.powf(i as f32 / rotary_dim as f32))
-            .collect();
-        let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), device)?;
-        let t = Tensor::arange(0u32, max_position_embeddings as u32, device)?
-            .to_dtype(DType::F32)?
-            .reshape((max_position_embeddings, 1))?;
-        let freqs = t.matmul(&inv_freq)?;
-        Ok(Self {
-            sin: freqs.sin()?.to_dtype(dtype)?,
-            cos: freqs.cos()?.to_dtype(dtype)?,
-            is_gpt_neox,
-        })
-    }
-
     pub fn get_cos_sin(&self) -> Result<(Tensor, Tensor)> {
         Ok((self.cos.clone(), self.sin.clone()))
     }

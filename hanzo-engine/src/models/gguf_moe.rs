@@ -13,7 +13,6 @@ use crate::gguf::Content;
 use crate::ops::{TopKLastDimOp, TopKOutput};
 use hanzo_ml::quantized::QMatMul;
 use hanzo_ml::{DType, Device, Result, Tensor, D};
-use hanzo_nn::Module;
 use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 pub(crate) fn gguf_linear(q: hanzo_ml::quantized::QTensor) -> Result<Arc<dyn QuantMethod>> {
