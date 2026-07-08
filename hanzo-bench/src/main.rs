@@ -140,6 +140,7 @@ async fn run_bench(
                             Response::AgenticToolCallProgress { .. } => unreachable!(),
                             Response::AgenticToolApprovalRequired { .. } => unreachable!(),
                             Response::File(_) => unreachable!(),
+                            Response::Frames { .. } => unreachable!(),
                         }
                         break;
                     }
