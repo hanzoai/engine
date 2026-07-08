@@ -343,12 +343,33 @@ ASORT_OP(int64_t, asort_desc_i64, false)
 // - Single kernel launch for all rows
 // ============================================================================
 
+// __shfl_down has no unambiguous overload for the 16-bit float types on older
+// ROCm (bf16/half implicitly convert to both float and double, so the call is
+// ambiguous). Shuffle the raw 16-bit pattern through the exact unsigned-int
+// overload and reinterpret back — resolves cleanly on every ROCm version and is
+// a no-op wrapper over __shfl_down for the natively-supported types.
+template <typename T>
+__device__ __forceinline__ T shfl_down_val(T val, int offset) {
+  if constexpr (sizeof(T) == 2) {
+    unsigned short bits;
+    __builtin_memcpy(&bits, &val, sizeof(bits));
+    unsigned int shuffled =
+        __shfl_down(static_cast<unsigned int>(bits), offset, 32);
+    unsigned short out_bits = static_cast<unsigned short>(shuffled);
+    T out;
+    __builtin_memcpy(&out, &out_bits, sizeof(out));
+    return out;
+  } else {
+    return __shfl_down(val, offset, 32);
+  }
+}
+
 template <typename T>
 __device__ __forceinline__ T warp_reduce_max_with_idx(T val, int idx,
                                                       int &max_idx) {
 #pragma unroll
   for (int offset = 16; offset > 0; offset /= 2) {
-    T other_val = __shfl_down(val, offset, 32);
+    T other_val = shfl_down_val(val, offset);
     int other_idx = __shfl_down(idx, offset, 32);
     if (other_val > val) {
       val = other_val;
