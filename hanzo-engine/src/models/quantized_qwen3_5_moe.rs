@@ -1194,6 +1194,20 @@ impl ModelWeights {
             let normed = layer.post_attention_layernorm.forward(&x_mid)?;
             let ffn_out = layer.mlp.forward(&normed)?;
             x = (ffn_out + residual)?;
+
+            // Metal prefill hazard drain. The GDN + generic-MoE prefill path churns many
+            // short-lived pooled Metal buffers, and the device buffer pool recycles on
+            // `Arc::strong_count == 1` with no GPU-completion check (find_available_buffer): a
+            // buffer can be handed to a later op while an earlier, recorded-but-not-yet-executed
+            // op still needs to read its previous contents -> corrupted intermediates -> NaN
+            // logits (which surfaced downstream as the sampler's bad Metal top-k normalizer). A
+            // completion drain per prefill layer forces each layer's ops to finish before its
+            // buffers can be recycled. Gated to prefill (seq_len > 1) and Metal only: the
+            // single-token decode step is short and race-free, so decode keeps the fast resident
+            // MoE path with no per-token drain, and CUDA/other backends are untouched.
+            if seq_len > 1 && x.device().is_metal() {
+                x.device().synchronize()?;
+            }
         }
 
         let x = x.to_device(&self.device)?;
