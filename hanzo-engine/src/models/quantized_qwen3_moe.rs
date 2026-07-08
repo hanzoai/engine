@@ -262,8 +262,14 @@ fn verify_qwen3_arch(
         .cloned()
         .try_value_into()?;
 
-    if actual_arch != "qwen3" && actual_arch != "qwen3moe" {
-        hanzo_ml::bail!("Expected `qwen3` architecture, got `{actual_arch}`.");
+    // `qwen3vlmoe` is the Qwen3-VL MoE text backbone (30B-A3B / 235B-A22B): identical
+    // sparse text architecture to `qwen3moe` (ffn_gate_inp + ffn_{gate,up,down}_exps,
+    // q/k-norm, GQA). Loaded here image-blind; interleaved-MRoPE collapses to standard
+    // RoPE for text-only positions.
+    if actual_arch != "qwen3" && actual_arch != "qwen3moe" && actual_arch != "qwen3vlmoe" {
+        hanzo_ml::bail!(
+            "Expected `qwen3`, `qwen3moe` or `qwen3vlmoe` architecture, got `{actual_arch}`."
+        );
     }
     Ok(actual_arch)
 }
