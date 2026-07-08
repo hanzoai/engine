@@ -102,7 +102,8 @@ impl Engine {
             | RequestMessage::SpeechGeneration { .. }
             | RequestMessage::Animation { .. }
             | RequestMessage::Embedding { .. }
-            | RequestMessage::EmbeddingTokens { .. } => None,
+            | RequestMessage::EmbeddingTokens { .. }
+            | RequestMessage::EmbeddingImage { .. } => None,
         };
         let truncate_sequence = request.truncate_sequence;
         if is_chat
@@ -138,7 +139,9 @@ impl Engine {
             (ModelCategory::Animation, RequestMessage::Animation { .. }) => (),
             (
                 ModelCategory::Embedding,
-                RequestMessage::Embedding { .. } | RequestMessage::EmbeddingTokens { .. },
+                RequestMessage::Embedding { .. }
+                | RequestMessage::EmbeddingTokens { .. }
+                | RequestMessage::EmbeddingImage { .. },
             ) => (),
             _ => {
                 request
@@ -155,6 +158,7 @@ impl Engine {
         let images = match request.messages {
             RequestMessage::MultimodalChat { ref images, .. } => Some(images.clone()),
             RequestMessage::Animation { ref frames, .. } => Some(frames.clone()),
+            RequestMessage::EmbeddingImage { ref images, .. } => Some(images.clone()),
             _ => None,
         };
 
@@ -194,7 +198,8 @@ impl Engine {
             | RequestMessage::SpeechGeneration { .. }
             | RequestMessage::Animation { .. }
             | RequestMessage::Embedding { .. }
-            | RequestMessage::EmbeddingTokens { .. } => SeqStepType::OneShot,
+            | RequestMessage::EmbeddingTokens { .. }
+            | RequestMessage::EmbeddingImage { .. } => SeqStepType::OneShot,
             _ => SeqStepType::PromptAndDecode,
         };
 
@@ -271,6 +276,9 @@ impl Engine {
             RequestMessage::ImageGeneration { prompt, .. }
             | RequestMessage::SpeechGeneration { prompt } => (vec![u32::MAX], prompt),
             RequestMessage::Animation { .. } => (vec![u32::MAX], String::new()),
+            // Image is carried on the sequence (see `images` above); the pixel tensor is
+            // built by the I-JEPA inputs processor, so a placeholder token suffices here.
+            RequestMessage::EmbeddingImage { .. } => (vec![u32::MAX], String::new()),
             RequestMessage::CompletionTokens(it)
             | RequestMessage::EmbeddingTokens { prompt: it } => {
                 let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
