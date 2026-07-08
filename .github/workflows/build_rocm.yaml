@@ -71,7 +71,8 @@ jobs:
                     latest=false
                   tags: |
                     type=semver,pattern={{version}}-rocm-${{ matrix.gfx_arch }}
-                    type=semver,pattern={{major}}.{{minor}}-rocm-${{ matrix.gfx_arch }}
+                    type=semver,pattern={{version}}-rocm,enable=${{ matrix.gfx_arch == 'gfx1151' }}
+                    type=raw,value=rocm,enable=${{ matrix.gfx_arch == 'gfx1151' }}
             - name: Build and push Docker image
               id: build-and-push-rocm
               uses: docker/build-push-action@v6
