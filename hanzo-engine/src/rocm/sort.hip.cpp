@@ -348,8 +348,8 @@ __device__ __forceinline__ T warp_reduce_max_with_idx(T val, int idx,
                                                       int &max_idx) {
 #pragma unroll
   for (int offset = 16; offset > 0; offset /= 2) {
-    T other_val = __shfl_down_sync(0xffffffffffffffffULL, val, offset);
-    int other_idx = __shfl_down_sync(0xffffffffffffffffULL, idx, offset);
+    T other_val = __shfl_down(val, offset, 32);
+    int other_idx = __shfl_down(idx, offset, 32);
     if (other_val > val) {
       val = other_val;
       idx = other_idx;
@@ -680,7 +680,7 @@ extern "C" void topk_softmax_f16(const __half *input, __half *weights_out,
 __device__ __forceinline__ float warp_reduce_sum_f32(float val) {
 #pragma unroll
   for (int offset = 16; offset > 0; offset /= 2) {
-    val += __shfl_down_sync(0xffffffffffffffffULL, val, offset);
+    val += __shfl_down(val, offset, 32);
   }
   return val;
 }
