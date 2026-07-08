@@ -116,7 +116,7 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
             .filter_map(|ct| {
                 ct.metadata
                     .get("split.count")
-                    .map(|val| val.to_u64().unwrap())
+                    .and_then(|val| val.to_u64().ok())
             })
             .fold(Vec::new(), |mut accum, x| {
                 if !accum.contains(&x) {
@@ -275,5 +275,57 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
     /// Get all metadatas
     pub fn get_metadata(&self) -> &HashMap<String, Value> {
         &self.all_metadata
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn parse(metadata: &[(&str, &Value)]) -> Result<()> {
+        let mut buf = Cursor::new(Vec::new());
+        gguf_file::write(&mut buf, metadata, &[]).unwrap();
+        let mut cur = Cursor::new(buf.into_inner());
+        let mut readers = [&mut cur];
+        Content::from_readers(&mut readers).map(|_| ())
+    }
+
+    #[test]
+    fn missing_architecture_is_error_not_panic() {
+        let name = Value::String("x".to_string());
+        let err = parse(&[("general.name", &name)]).unwrap_err();
+        assert!(
+            err.to_string().contains("must specify"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn non_string_architecture_is_error_not_panic() {
+        let arch = Value::U32(7);
+        let err = parse(&[("general.architecture", &arch)]).unwrap_err();
+        assert!(
+            err.to_string().contains("must be a string"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn unknown_architecture_is_error_not_panic() {
+        let arch = Value::String("bogusarch".to_string());
+        let err = parse(&[("general.architecture", &arch)]).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("architecture"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn malformed_split_count_does_not_panic() {
+        let arch = Value::String("llama".to_string());
+        let bad = Value::String("not-a-number".to_string());
+        parse(&[("general.architecture", &arch), ("split.count", &bad)])
+            .expect("a non-integer split.count must be ignored, not `.unwrap()`-panicked");
     }
 }
