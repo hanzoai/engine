@@ -1105,13 +1105,11 @@ impl ModelWeights {
                         hanzo_ml::bail!("Hybrid cache layer {layer_idx} not recurrent.");
                     };
                     if b_sz == 1 {
-                        // Single sequence (decode seq_len==1 OR single-seq prefill seq_len>1): exactly
-                        // one slot, so gather/scatter collapses to constant-offset `narrow`/`slice_set`
-                        // on the HOST slot -- no `to_vec1` device->host sync. This keeps the whole
-                        // single-sequence GDN path (decode AND prefill) CUDA-graph capturable: the baked
-                        // slot offset is constant for the sequence lifetime and the recurrence evolves
-                        // the live pool state across serialized replays. Batched multi-seq (b_sz>1)
-                        // takes the device-index gather path below.
+                        // Single sequence: one slot, so gather/scatter is constant-offset
+                        // `narrow`/`slice_set` on the HOST slot with no `to_vec1` sync. That sync-free
+                        // form is what makes the decode step CUDA-graph capturable (constant baked slot,
+                        // recurrence evolves the live pool state in place across replays). b_sz>1 gathers
+                        // below.
                         let slot = state_indices_host
                             .as_ref()
                             .and_then(|s| s.first().copied())
