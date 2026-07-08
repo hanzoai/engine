@@ -747,6 +747,11 @@ pub enum EmbeddingInput {
     Multiple(Vec<String>),
     Tokens(Vec<u32>),
     TokensBatch(Vec<Vec<u32>>),
+    /// An image to embed with a vision encoder (e.g. I-JEPA). `image_url` is an
+    /// `http(s)` URL or a `data:` base64 URI.
+    Image {
+        image_url: String,
+    },
 }
 
 impl PartialSchema for EmbeddingInput {
@@ -807,6 +812,20 @@ fn embedding_input_schema() -> Schema {
                             .build(),
                     )))
                     .description(Some("Multiple token arrays"))
+                    .build(),
+            ))
+            .item(Schema::Object(
+                ObjectBuilder::new()
+                    .property(
+                        "image_url",
+                        Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .build(),
+                        ),
+                    )
+                    .required("image_url")
+                    .description(Some("An image URL or base64 data URI to embed"))
                     .build(),
             ))
             .build(),

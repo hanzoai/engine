@@ -2015,6 +2015,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fancy-regex"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1e1dacd0d2082dfcf1351c4bdd566bbe89a2b263235a2b50058f1e130a47277"
+dependencies = [
+ "bit-set 0.8.0",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2740,7 +2751,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "anyhow",
  "clap",
@@ -2772,7 +2783,7 @@ checksum = "b9dc246ef72490c348c62b93c06989605dc074e285657501c0aaa02d73c5b408"
 
 [[package]]
 name = "hanzo-audio"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "anyhow",
  "apodize",
@@ -2782,7 +2793,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-bench"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "anyhow",
  "clap",
@@ -2808,7 +2819,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-cli"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "anyhow",
  "axum",
@@ -2847,7 +2858,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-code-exec"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2865,7 +2876,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-engine"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -2903,6 +2914,7 @@ dependencies = [
  "hanzo-paged-attn",
  "hanzo-quant",
  "hanzo-sandbox",
+ "hanzo-transformers",
  "hanzo-vision",
  "hashbrown 0.16.1",
  "hf-hub",
@@ -3019,7 +3031,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-llm-mcp"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3041,7 +3053,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-macros"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -3125,7 +3137,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-paged-attn"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "anyhow",
  "cudaforge",
@@ -3141,7 +3153,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-pyo3"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3167,7 +3179,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-quant"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "byteorder",
  "cuda-async",
@@ -3237,7 +3249,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-sandbox"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "anyhow",
  "itoa",
@@ -3253,7 +3265,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3276,7 +3288,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server-core"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3306,6 +3318,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-transformers"
+version = "0.11.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b561ebf35167c463b2ce29ce318d44840f00d91a17dd9be021b0b2a1a9cca6a9"
+dependencies = [
+ "byteorder",
+ "fancy-regex 0.18.0",
+ "hanzo-ml",
+ "hanzo-nn",
+ "num-traits",
+ "rand 0.9.4",
+ "rayon",
+ "serde",
+ "serde_json",
+ "serde_plain",
+ "tracing",
+]
+
+[[package]]
 name = "hanzo-ug"
 version = "0.11.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3318,7 +3349,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-vision"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "hanzo-ml",
  "image",
@@ -3327,7 +3358,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-web-chat"
-version = "1.7.13"
+version = "1.7.14"
 dependencies = [
  "anyhow",
  "axum",
