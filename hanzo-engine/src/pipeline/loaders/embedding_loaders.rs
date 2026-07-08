@@ -89,6 +89,10 @@ pub enum EmbeddingLoaderType {
     EmbeddingGemma,
     #[serde(rename = "qwen3embedding")]
     Qwen3Embedding,
+    /// I-JEPA ViT image encoder (per-image mean-pooled embedding). Tokenizer-free;
+    /// handled by a dedicated vision loader rather than the token-model path.
+    #[serde(rename = "ijepa")]
+    Ijepa,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -110,8 +114,9 @@ impl FromStr for EmbeddingLoaderType {
         match s {
             "embeddinggemma" => Ok(Self::EmbeddingGemma),
             "qwen3embedding" => Ok(Self::Qwen3Embedding),
+            "ijepa" => Ok(Self::Ijepa),
             a => Err(format!(
-                "Unknown architecture `{a}`. Possible architectures: `embeddinggemma`, `qwen3embedding`."
+                "Unknown architecture `{a}`. Possible architectures: `embeddinggemma`, `qwen3embedding`, `ijepa`."
             )),
         }
     }
@@ -122,6 +127,7 @@ impl Display for EmbeddingLoaderType {
         match self {
             Self::EmbeddingGemma => write!(f, "embeddinggemma"),
             Self::Qwen3Embedding => write!(f, "qwen3embedding"),
+            Self::Ijepa => write!(f, "ijepa"),
         }
     }
 }
@@ -276,6 +282,11 @@ impl AutoEmbeddingLoader {
         match tp {
             EmbeddingLoaderType::EmbeddingGemma => Ok(Box::new(EmbeddingGemmaLoader)),
             EmbeddingLoaderType::Qwen3Embedding => Ok(Box::new(Qwen3EmbeddingLoader)),
+            // I-JEPA is a vision encoder with a dedicated (tokenizer-free) loader; it is
+            // never resolved through the token-model auto-detect path.
+            EmbeddingLoaderType::Ijepa => anyhow::bail!(
+                "I-JEPA uses a dedicated image-embedding loader; select it explicitly with `--arch ijepa`."
+            ),
         }
     }
 }
