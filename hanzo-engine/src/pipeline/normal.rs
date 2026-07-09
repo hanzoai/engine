@@ -1397,10 +1397,11 @@ impl NormalPipeline {
                 .graph
                 .launch()
                 .map_err(|err| hanzo_ml::Error::msg(err.to_string()))?;
-            let diff = (&warmup_logits - &entry.logits)?
-                .abs()?
-                .max_all()?
-                .to_scalar::<f32>()?;
+            let diff = (warmup_logits.to_dtype(hanzo_ml::DType::F32)?
+                - entry.logits.to_dtype(hanzo_ml::DType::F32)?)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
             let q_len = input_ids.dim(1)?;
             warn!("PREFILL_GRAPH_VERIFY q_len={q_len} replay_vs_eager_max_abs_diff={diff}");
         }
