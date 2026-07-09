@@ -42,12 +42,21 @@ pub mod classify;
 pub mod memory;
 pub mod policy;
 pub mod registry;
+pub mod replica;
+pub mod ring;
 pub mod route;
+
+#[cfg(feature = "proxy")]
+pub mod proxy;
 
 pub use classify::{Classifier, Heuristic, Request};
 pub use memory::MemSnapshot;
 pub use policy::{Context, Decision, Policy};
 pub use registry::{Backend, Level, Modality, ModelCard, Registry, Task};
+pub use replica::{
+    Balancer, BalancerConfig, Lease, Replica, ReplicaSet, ReplicaStatus, DEFAULT_MAX_INFLIGHT,
+};
+pub use ring::Ring;
 pub use route::{Route, RoutePolicy, Slo, User, REFUSED_MODEL};
 
 /// Load a [`Policy`] from a YAML string (the declarative policy file).
