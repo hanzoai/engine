@@ -223,7 +223,8 @@ pub enum ClusterAction {
         #[arg(short = 'm', long)]
         model: String,
 
-        /// Total nodes in the ring. Must be a power of 2 (2, 4, 8, ...), a ring-backend requirement.
+        /// Total nodes in the ring (>= 2). The model's attention heads and intermediate size
+        /// must be divisible by this for tensor-parallel sharding.
         #[arg(short = 'w', long)]
         world_size: usize,
 

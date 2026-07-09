@@ -213,9 +213,6 @@ fn validate_layout(base_port: u16, world_size: usize) -> Result<()> {
     if world_size < 2 {
         bail!("world_size must be >= 2 for a ring, got {world_size}");
     }
-    if !world_size.is_power_of_two() {
-        bail!("the ring backend requires world_size to be a power of 2 (2, 4, 8, ...), got {world_size}");
-    }
     if base_port as usize + world_size > u16::MAX as usize {
         bail!(
             "base_port {base_port} + world_size {world_size} overflows the max TCP port {}",
@@ -474,10 +471,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_power_of_two_and_bad_versions() {
-        assert!(validate_layout(DEFAULT_BASE_PORT, 3).is_err());
-        assert!(validate_layout(DEFAULT_BASE_PORT, 1).is_err());
-        assert!(validate_layout(u16::MAX - 1, 4).is_err());
+    fn validate_layout_accepts_any_world_size_ge_2() {
+        assert!(validate_layout(DEFAULT_BASE_PORT, 1).is_err()); // ring needs >= 2
+        assert!(validate_layout(u16::MAX - 1, 4).is_err()); // port block overflow
+        assert!(validate_layout(DEFAULT_BASE_PORT, 2).is_ok());
+        assert!(validate_layout(DEFAULT_BASE_PORT, 3).is_ok()); // non-power-of-2 now allowed
         assert!(validate_layout(DEFAULT_BASE_PORT, 4).is_ok());
     }
 }
