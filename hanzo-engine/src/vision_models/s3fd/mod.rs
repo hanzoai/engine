@@ -21,8 +21,8 @@ use nms::{decode_box, nms};
 const COLLECT_THRESHOLD: f32 = 0.05; // candidate cutoff before NMS (face_alignment)
 const BGR_MEAN: [f32; 3] = [104.0, 117.0, 123.0];
 const ANCHOR_SCALE: f32 = 4.0; // anchor side = stride * 4
-// Below this the VGG stem's 5 max-pools collapse a spatial dim to 0 (the conv would bail).
-// Nothing detectable that small anyway, so report "no faces" rather than erroring.
+                               // Below this the VGG stem's 5 max-pools collapse a spatial dim to 0 (the conv would bail).
+                               // Nothing detectable that small anyway, so report "no faces" rather than erroring.
 const MIN_DETECT_SIDE: u32 = 32;
 
 #[derive(Clone, Copy, Debug)]
@@ -214,7 +214,10 @@ mod tests {
             eprintln!("[s3fd] S3FD_WEIGHTS/S3FD_TEST_IMAGE/S3FD_TEST_BBOX unset; skipping");
             return Ok(());
         };
-        let coords: Vec<f32> = bbox.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        let coords: Vec<f32> = bbox
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
         assert_eq!(coords.len(), 4, "S3FD_TEST_BBOX must be x1,y1,x2,y2");
         let truth = FaceBox {
             x1: coords[0],
@@ -227,9 +230,8 @@ mod tests {
         let dev = Device::Cpu;
         let predicate: std::sync::Arc<dyn Fn(String) -> bool + Send + Sync> =
             std::sync::Arc::new(|_| true);
-        let vb = unsafe {
-            ShardedSafeTensors::sharded(&[weights], DType::F32, &dev, None, predicate)?
-        };
+        let vb =
+            unsafe { ShardedSafeTensors::sharded(&[weights], DType::F32, &dev, None, predicate)? };
         let s3fd = S3fd::new(vb, &dev, S3fdConfig::default())?;
         let img = image::open(&img_path).map_err(|e| hanzo_ml::Error::msg(e.to_string()))?;
         let faces = s3fd.detect(&img)?;

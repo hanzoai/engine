@@ -34,16 +34,37 @@ fn trained() -> (Enso, Registry) {
             Some((x, p, s.quality))
         })
         .collect();
-    let base = fit_base(train.iter().map(|(x, p, y)| (x.as_slice(), p.as_slice(), *y)), GAMMA);
+    let base = fit_base(
+        train
+            .iter()
+            .map(|(x, p, y)| (x.as_slice(), p.as_slice(), *y)),
+        GAMMA,
+    );
     let learner = Learner::new(base, GAMMA, ALPHA);
     let mut cards: Vec<ModelCard> = Vec::new();
     for tp in &lineup {
-        if cards.iter().any(|c| c.id == tp.model) { continue; }
+        if cards.iter().any(|c| c.id == tp.model) {
+            continue;
+        }
         cards.push(ModelCard {
             id: tp.model.to_string(),
-            backend: Backend::Local { est_bytes: (tp.vram_gb as u64).max(1) << 30 },
-            tasks: Task::ALL.into_iter().filter(|t| lineup.iter().any(|o| o.model == tp.model && o.quality[t.index()] > 0.0)).collect(),
-            max_context: lineup.iter().filter(|o| o.model == tp.model).map(|o| o.max_context).max().unwrap_or(0),
+            backend: Backend::Local {
+                est_bytes: (tp.vram_gb as u64).max(1) << 30,
+            },
+            tasks: Task::ALL
+                .into_iter()
+                .filter(|t| {
+                    lineup
+                        .iter()
+                        .any(|o| o.model == tp.model && o.quality[t.index()] > 0.0)
+                })
+                .collect(),
+            max_context: lineup
+                .iter()
+                .filter(|o| o.model == tp.model)
+                .map(|o| o.max_context)
+                .max()
+                .unwrap_or(0),
             vision: tp.modality == Modality::Vision,
             cost_per_1k: tp.cost,
         });
@@ -59,7 +80,9 @@ fn prompt_1k() -> String {
         ```rust fn process(items: &mut Vec<Item>) { for i in items.iter() {} } ``` \
         Also add a unit test that exercises the dirty path and note edge cases. ";
     let mut s = String::new();
-    while s.len() < 1000 { s.push_str(base); }
+    while s.len() < 1000 {
+        s.push_str(base);
+    }
     s.truncate(1024);
     s
 }
@@ -67,13 +90,23 @@ fn prompt_1k() -> String {
 fn stats(mut ns: Vec<u128>) -> (f64, f64, f64) {
     ns.sort_unstable();
     let mean = ns.iter().sum::<u128>() as f64 / ns.len() as f64;
-    (mean / 1000.0, ns[ns.len() / 2] as f64 / 1000.0, ns[(ns.len() as f64 * 0.99) as usize] as f64 / 1000.0)
+    (
+        mean / 1000.0,
+        ns[ns.len() / 2] as f64 / 1000.0,
+        ns[(ns.len() as f64 * 0.99) as usize] as f64 / 1000.0,
+    )
 }
 
 fn time<F: FnMut()>(mut f: F) -> (f64, f64, f64) {
-    for _ in 0..WARMUP { f(); }
+    for _ in 0..WARMUP {
+        f();
+    }
     let mut s = Vec::with_capacity(ITERS);
-    for _ in 0..ITERS { let t = Instant::now(); f(); s.push(t.elapsed().as_nanos()); }
+    for _ in 0..ITERS {
+        let t = Instant::now();
+        f();
+        s.push(t.elapsed().as_nanos());
+    }
     stats(s)
 }
 
@@ -82,13 +115,21 @@ fn bench_enso_path_end_to_end() {
     let (enso, reg) = trained();
     let slo = Slo::default();
     let user = User::new("alice");
-    let req = Request { text: prompt_1k(), approx_tokens: 256, has_media: false, task_hint: None, modality_hint: None };
+    let req = Request {
+        text: prompt_1k(),
+        approx_tokens: 256,
+        has_media: false,
+        task_hint: None,
+        modality_hint: None,
+    };
 
     let feat = HashFeaturizer::default();
     let selector = Selector;
 
     // (1) featurize only.
-    let (f_mean, f_p50, f_p99) = time(|| { black_box(feat.featurize(black_box(&req))); });
+    let (f_mean, f_p50, f_p99) = time(|| {
+        black_box(feat.featurize(black_box(&req)));
+    });
 
     // (2) bilinear select only (featurization + weight lookup hoisted out).
     let x = feat.featurize(&req);
@@ -97,18 +138,39 @@ fn bench_enso_path_end_to_end() {
     let w = enso.learner().effective_w(&user.id).to_vec();
     let table = enso.table();
     let (s_mean, s_p50, s_p99) = time(|| {
-        let ctx = SelectCtx { x: &x, w: &w, table, want: modality, task, slo: &slo };
+        let ctx = SelectCtx {
+            x: &x,
+            w: &w,
+            table,
+            want: modality,
+            task,
+            slo: &slo,
+        };
         black_box(selector.select(black_box(&ctx), None));
     });
 
     // (3) full enso decision: featurize + effective_w + guard + bilinear select.
-    let (e_mean, e_p50, e_p99) = time(|| { black_box(enso.route(black_box(&req), &user, &slo, &reg)); });
+    let (e_mean, e_p50, e_p99) = time(|| {
+        black_box(enso.route(black_box(&req), &user, &slo, &reg));
+    });
 
-    println!("\n[enso learned path] over trained {}-row table | ~1k-char prompt", table.profiles.len());
+    println!(
+        "\n[enso learned path] over trained {}-row table | ~1k-char prompt",
+        table.profiles.len()
+    );
     println!("  featurize          iters={ITERS}  mean={f_mean:.3}us  p50={f_p50:.3}us  p99={f_p99:.3}us");
     println!("  bilinear select    iters={ITERS}  mean={s_mean:.3}us  p50={s_p50:.3}us  p99={s_p99:.3}us");
-    println!("  featurize+select   (sum of means) = {:.3}us", f_mean + s_mean);
+    println!(
+        "  featurize+select   (sum of means) = {:.3}us",
+        f_mean + s_mean
+    );
     println!("  full route (e2e)   iters={ITERS}  mean={e_mean:.3}us  p50={e_p50:.3}us  p99={e_p99:.3}us");
-    println!("  route = {:?}\n", enso.route(&req, &user, &slo, &reg).model);
-    assert!(e_mean < 100.0, "enso end-to-end mean {e_mean}us regressed above 100us");
+    println!(
+        "  route = {:?}\n",
+        enso.route(&req, &user, &slo, &reg).model
+    );
+    assert!(
+        e_mean < 100.0,
+        "enso end-to-end mean {e_mean}us regressed above 100us"
+    );
 }

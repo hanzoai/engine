@@ -87,7 +87,9 @@ pub async fn interactive_mode(hanzo: Arc<Hanzo>, do_search: bool, enable_thinkin
             "Embedding models do not support interactive mode. Use the server or Python/Rust APIs."
         ),
         Ok(ModelCategory::Animation) => {
-            error!("Animation models do not support interactive mode. Use the /v1/animate endpoint.")
+            error!(
+                "Animation models do not support interactive mode. Use the /v1/animate endpoint."
+            )
         }
         Err(e) => eprintln!("Error getting model category: {e}"),
     }
