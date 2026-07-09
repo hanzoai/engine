@@ -804,8 +804,8 @@ mod ring_ops {
                 let right = loop {
                     match TcpStream::connect(format!("{}:{}", right_ip, right_port)) {
                         Ok(s) => break s,
-                        Err(_) if start.elapsed() > Duration::from_secs(10) => {
-                            panic!("Failed to connect to right node due to 10-second timeout");
+                        Err(_) if start.elapsed() > Duration::from_secs(120) => {
+                            panic!("Failed to connect to right node due to 120-second timeout");
                         }
                         Err(_) => continue,
                     }
@@ -852,7 +852,7 @@ mod ring_ops {
             dims: &[usize],
             device: &Device,
         ) -> Result<Tensor> {
-            let nbytes = x.len() * std::mem::size_of_val(x);
+            let nbytes = std::mem::size_of_val(x);
 
             // --- ping‑pong to overlap latency ---------------------------------------
             // Clone the Arc references
@@ -930,6 +930,8 @@ mod ring_ops {
                 Storage::Cpu(storage) => storage,
                 Storage::Cuda(storage) => &storage.to_cpu_storage()?,
                 Storage::Metal(storage) => &storage.to_cpu_storage()?,
+                #[cfg(feature = "rocm")]
+                Storage::Rocm(storage) => &storage.to_cpu_storage()?,
             };
 
             let delta = match cpu_storage {
@@ -1046,6 +1048,8 @@ mod ring_ops {
                 Storage::Cpu(s) => s,
                 Storage::Cuda(s) => &s.to_cpu_storage()?,
                 Storage::Metal(s) => &s.to_cpu_storage()?,
+                #[cfg(feature = "rocm")]
+                Storage::Rocm(s) => &s.to_cpu_storage()?,
             };
 
             match cpu_storage {
