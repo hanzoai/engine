@@ -31,16 +31,31 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
     fn from(value: &Content<'a, R>) -> Self {
         let metadata = value.get_metadata();
         let arch = metadata["general.architecture"].to_string().unwrap();
+        let u = |k: &str| metadata.get(k).and_then(|x| x.to_u64().ok()).map(|n| n as usize);
+        let num_attn_heads = u(&format!("{arch}.attention.head_count")).unwrap();
+
+        // deepseek2 (incl. GLM-4.7-Flash) runs the un-absorbed MLA path: it materializes full per-head
+        // K/V, so the KV cache is sized by n_head x q_head_dim (qk_nope + qk_rope), not the compressed
+        // MQA metadata (`head_count_kv`=1, `key_length`=kv_lora+rope).
+        if arch == "deepseek2" {
+            let qk_rope = u(&format!("{arch}.rope.dimension_count")).unwrap_or(0);
+            let q_head_dim = u(&format!("{arch}.attention.key_length_mla"))
+                .unwrap_or_else(|| u(&format!("{arch}.attention.key_length")).unwrap_or(0) + qk_rope);
+            return Self {
+                max_seq_len: u(&format!("{arch}.context_length")).unwrap(),
+                hidden_size: u(&format!("{arch}.embedding_length")).unwrap(),
+                num_attn_heads,
+                num_kv_heads: num_attn_heads,
+                num_layers: u(&format!("{arch}.block_count")).unwrap(),
+                key_length: Some(q_head_dim),
+                value_length: Some(q_head_dim),
+            };
+        }
+
         Self {
-            max_seq_len: metadata[&format!("{arch}.context_length")]
-                .to_u64()
-                .unwrap() as usize,
-            hidden_size: metadata[&format!("{arch}.embedding_length")]
-                .to_u64()
-                .unwrap() as usize,
-            num_attn_heads: metadata[&format!("{arch}.attention.head_count")]
-                .to_u64()
-                .unwrap() as usize,
+            max_seq_len: u(&format!("{arch}.context_length")).unwrap(),
+            hidden_size: u(&format!("{arch}.embedding_length")).unwrap(),
+            num_attn_heads,
             num_kv_heads: {
                 // hybrid archs (qwen35moe) store per-layer head_count_kv as an array; take the max
                 let v = &metadata[&format!("{arch}.attention.head_count_kv")];
@@ -53,13 +68,9 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
                         .unwrap_or(0) as usize
                 })
             },
-            num_layers: metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize,
-            key_length: metadata
-                .get(&format!("{arch}.attention.key_length"))
-                .map(|x| x.to_u64().unwrap() as usize),
-            value_length: metadata
-                .get(&format!("{arch}.attention.value_length"))
-                .map(|x| x.to_u64().unwrap() as usize),
+            num_layers: u(&format!("{arch}.block_count")).unwrap(),
+            key_length: u(&format!("{arch}.attention.key_length")),
+            value_length: u(&format!("{arch}.attention.value_length")),
         }
     }
 }
@@ -393,7 +404,10 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                 };
                 token_embd + output_norm + output
             }
-            GGUFArchitecture::Deepseek2 | GGUFArchitecture::Deepseek4 => {
+            GGUFArchitecture::Deepseek2
+            | GGUFArchitecture::Deepseek4
+            | GGUFArchitecture::GptOss
+            | GGUFArchitecture::Glm4Moe => {
                 let token_embd = tensor_info_size_in_bytes!(
                     self.model.tensor_info("token_embd.weight")?,
                     DType::F32
@@ -704,7 +718,9 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
             | GGUFArchitecture::Qwen35MoE
             | GGUFArchitecture::Qwen3Next
             | GGUFArchitecture::Deepseek2
-            | GGUFArchitecture::Deepseek4 => {
+            | GGUFArchitecture::Deepseek4
+            | GGUFArchitecture::GptOss
+            | GGUFArchitecture::Glm4Moe => {
                 // Non-uniform block sizes (hybrid layers; V4 hash vs MoE vs compressed layers),
                 // so a single representative layer can't stand in. Sum each block's real tensor
                 // bytes -- correct for both single-device and multi-GPU auto mapping.
