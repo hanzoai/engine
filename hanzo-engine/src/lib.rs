@@ -82,6 +82,7 @@ mod models;
 mod paged_attention;
 mod perf_flags;
 mod pipeline;
+pub mod pipeline_parallel;
 pub mod precompile_bridge;
 mod prefix_cacher;
 pub mod reasoning_parsers;
@@ -1131,14 +1132,25 @@ impl Hanzo {
         };
 
         if distributed::is_daemon() {
-            let request_sender = engine_instance.sender.clone();
-
-            if cfg!(feature = "ring") {
-                // Ring daemon replicator
-                distributed::ring_daemon_replicator(request_sender);
+            if crate::pipeline_parallel::use_pipeline_parallel() {
+                // Pipeline-parallel worker: a stateless layer executor driven by activations
+                // arriving on the ring, not by replicated requests.
+                let pp_pipeline = pipeline.clone();
+                std::thread::spawn(move || {
+                    pp_pipeline
+                        .blocking_lock()
+                        .pipeline_parallel_worker()
+                        .expect("Pipeline-parallel worker exited with error");
+                });
             } else {
-                // NCCL daemon replicator
-                distributed::nccl_daemon_replicator(request_sender);
+                let request_sender = engine_instance.sender.clone();
+                if cfg!(feature = "ring") {
+                    // Ring daemon replicator
+                    distributed::ring_daemon_replicator(request_sender);
+                } else {
+                    // NCCL daemon replicator
+                    distributed::nccl_daemon_replicator(request_sender);
+                }
             }
 
             #[allow(clippy::empty_loop)]
