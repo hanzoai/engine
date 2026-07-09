@@ -393,7 +393,10 @@ pub async fn mux(
         .await
         .is_ok();
     if !ffmpeg_ok {
-        bail!("Cannot mux video: FFmpeg not found.\n{}", FFMPEG_INSTALL_HELP);
+        bail!(
+            "Cannot mux video: FFmpeg not found.\n{}",
+            FFMPEG_INSTALL_HELP
+        );
     }
 
     let tmp_dir = std::env::temp_dir().join("hanzo_mux");
@@ -471,10 +474,15 @@ pub async fn mux(
 
     if !status.success() {
         cleanup().await;
-        bail!("FFmpeg failed to mux video (exit code: {:?})", status.code());
+        bail!(
+            "FFmpeg failed to mux video (exit code: {:?})",
+            status.code()
+        );
     }
 
-    let bytes = fs::read(&out_path).await.context("mux: reading output mp4")?;
+    let bytes = fs::read(&out_path)
+        .await
+        .context("mux: reading output mp4")?;
     cleanup().await;
     if bytes.is_empty() {
         bail!("mux: ffmpeg produced an empty mp4");
@@ -505,7 +513,11 @@ mod tests {
         let frames: Vec<DynamicImage> = (0..6)
             .map(|i| {
                 let v = (i * 40) as u8;
-                DynamicImage::ImageRgb8(image::RgbImage::from_pixel(64, 64, image::Rgb([v, 255 - v, v])))
+                DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                    64,
+                    64,
+                    image::Rgb([v, 255 - v, v]),
+                ))
             })
             .collect();
         let sr = 16_000u32;

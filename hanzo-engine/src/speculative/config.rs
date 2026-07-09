@@ -20,7 +20,10 @@ use super::draft::DraftPipeline;
 pub enum SpeculativeConfig {
     Off,
     Mtp(MtpConfig),
-    DraftModel { draft: DraftPipeline, gamma: usize },
+    DraftModel {
+        draft: DraftPipeline,
+        gamma: usize,
+    },
     /// DSpark parallel-block draft (Qwen3). `path` is the draft checkpoint directory
     /// (`config.json` + `model.safetensors`); `confidence_threshold` gates the confident
     /// draft prefix (`0.0` ⇒ the full block).

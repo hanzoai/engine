@@ -74,7 +74,10 @@ fn load_vb(path: &PathBuf, dtype: DType, dev: &Device) -> Result<ShardedVarBuild
 // frames, so secs = frames / fps. Uses sun.wav content when present (resampled internally), else a
 // sine. Returns the pcm and its sample rate.
 fn pcm_for_frames(frames: usize) -> (Arc<Vec<f32>>, usize) {
-    let wav = env_path("SUN_WAV", "/home/z/work/zen-dub-run/zen-dub/data/audio/sun.wav");
+    let wav = env_path(
+        "SUN_WAV",
+        "/home/z/work/zen-dub-run/zen-dub/data/audio/sun.wav",
+    );
     if let Ok(audio) = hanzo_audio::AudioInput::read_wav(&wav.to_string_lossy()) {
         let rate = audio.sample_rate.max(1) as usize;
         let want = ((frames as f64 / FPS) * rate as f64).ceil() as usize + 1;
@@ -114,7 +117,8 @@ fn build_animator(dev: &Device) -> Result<MuseTalkAnimator> {
         dev,
     )?;
     let unet_vb = load_vb(&mt_dir.join("unet.safetensors"), DType::F32, dev)?;
-    let musetalk = MuseTalk::new(cfg, vae_vb, unet_vb, dev, DType::F32).context("build MuseTalk")?;
+    let musetalk =
+        MuseTalk::new(cfg, vae_vb, unet_vb, dev, DType::F32).context("build MuseTalk")?;
 
     let whisper_vb = load_vb(&whisper_st, DType::F32, dev)?;
     let whisper = WhisperFeatureExtractor::new(

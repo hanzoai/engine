@@ -51,9 +51,24 @@ impl Attention {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b, t, _) = xs.dims3()?;
         let shape = (b, t, self.num_heads, self.head_dim);
-        let q = self.query.forward(xs)?.reshape(shape)?.transpose(1, 2)?.contiguous()?;
-        let k = self.key.forward(xs)?.reshape(shape)?.transpose(1, 2)?.contiguous()?;
-        let v = self.value.forward(xs)?.reshape(shape)?.transpose(1, 2)?.contiguous()?;
+        let q = self
+            .query
+            .forward(xs)?
+            .reshape(shape)?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let k = self
+            .key
+            .forward(xs)?
+            .reshape(shape)?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let v = self
+            .value
+            .forward(xs)?
+            .reshape(shape)?
+            .transpose(1, 2)?
+            .contiguous()?;
         // Encoder self-attention is bidirectional: AttentionMask::None.
         let attn = Sdpa.run_attention(&q, &k, &v, &AttentionMask::None, None, &self.sdpa_params)?;
         let attn = attn.transpose(1, 2)?.reshape((b, t, ()))?;

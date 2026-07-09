@@ -35,13 +35,12 @@ use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::PagedAttentionConfig;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
-pub use auto::{AutoLoader, AutoLoaderBuilder};
 pub use animation::{AnimationLoader, AnimationModelPaths, AnimationPipeline};
+pub use auto::{AutoLoader, AutoLoaderBuilder};
 use chat_template::ChatTemplate;
 pub use diffusion::{DiffusionLoader, DiffusionLoaderBuilder};
 pub(crate) use embedding::EmbeddingLoadContext;
 pub use embedding::{EmbeddingLoader, EmbeddingLoaderBuilder, EmbeddingSpecificConfig};
-pub use jepa_encoder::JepaEncoderLoader;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 use image::DynamicImage;
@@ -51,28 +50,26 @@ pub use isq::{
     expand_isq_value, parse_isq_value, parse_uqff_shard, resolve_uqff_shorthand, IsqModel,
     IsqOrganization, UQFF_MULTI_FILE_DELIMITER,
 };
+pub use jepa_encoder::JepaEncoderLoader;
 use llguidance::toktrie::TokEnv;
 pub use loaders::{
     animation_loader, AdapterKind, AnimationComponents, AnimationLoaderType, AnimationModelLoader,
-    DitComponents, EchoMimicV3Loader, MuseTalkComponents,
     AutoDeviceMapParams, AutoEmbeddingLoader, AutoMultimodalLoader, AutoNormalLoader,
     DeepSeekV2Loader, DeepSeekV3Loader, DeepSeekV4Loader, DeviceMappedModelLoader,
-    DiffusionLoaderType, MuseTalkAnimationLoader,
-    DiffusionModel, DiffusionModelLoader, EmbeddingGemmaLoader, EmbeddingLoaderType,
-    EmbeddingModel, EmbeddingModelLoader, EmbeddingModelPaths, EmbeddingModule,
-    EmbeddingModulePaths, EmbeddingModuleType, FluxLoader, GLM4Loader, GLM4MoeLiteLoader,
-    GLM4MoeLoader, Gemma2Loader, Gemma3Loader, Gemma3nLoader, Gemma4Loader, GemmaLoader,
-    Glm5MoeLoader, GptOssLoader, GraniteMoeHybridLoader, Idefics2Loader, Idefics3Loader,
-    LLaVALoader,
-    LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, MiniMaxM2Loader,
-    Mistral3Loader, MistralLoader, MixtralLoader, ModelKind, ModelPaths, MultimodalLoaderType,
-    MultimodalModel,
-    MultimodalModelLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
-    Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName,
-    QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3EmbeddingLoader,
-    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3OmniLoader, Qwen3VLLoader, Qwen3VLMoELoader,
-    Qwen3_5Loader, Qwen3_5MoeLoader, QwenImageLoader, SmolLm3Loader, Starcoder2Loader, TokenSource,
-    VLlama4Loader, VLlamaLoader, VoxtralLoader,
+    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, DitComponents, EchoMimicV3Loader,
+    EmbeddingGemmaLoader, EmbeddingLoaderType, EmbeddingModel, EmbeddingModelLoader,
+    EmbeddingModelPaths, EmbeddingModule, EmbeddingModulePaths, EmbeddingModuleType, FluxLoader,
+    GLM4Loader, GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, Gemma3Loader, Gemma3nLoader,
+    Gemma4Loader, GemmaLoader, Glm5MoeLoader, GptOssLoader, GraniteMoeHybridLoader, Idefics2Loader,
+    Idefics3Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths,
+    MiniCpmOLoader, MiniMaxM2Loader, Mistral3Loader, MistralLoader, MixtralLoader, ModelKind,
+    ModelPaths, MultimodalLoaderType, MultimodalModel, MultimodalModelLoader,
+    MuseTalkAnimationLoader, MuseTalkComponents, NormalLoaderType, NormalLoadingMetadata,
+    NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader,
+    Phi4MMLoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader,
+    Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3OmniLoader,
+    Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, QwenImageLoader,
+    SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader, VoxtralLoader,
 };
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
@@ -1162,11 +1159,7 @@ pub trait Pipeline:
                                 else {
                                     unreachable!("All results must have same type, `Frames`")
                                 };
-                                assert_eq!(
-                                    frames.len(),
-                                    1,
-                                    "Each sequence must have 1 frame set."
-                                );
+                                assert_eq!(frames.len(), 1, "Each sequence must have 1 frame set.");
                                 frames.into_iter().nth(0).unwrap()
                             })
                             .collect::<Vec<_>>();
@@ -1526,11 +1519,7 @@ pub trait Pipeline:
                                 else {
                                     unreachable!("All results must have same type, `Frames`")
                                 };
-                                assert_eq!(
-                                    frames.len(),
-                                    1,
-                                    "Each sequence must have 1 frame set."
-                                );
+                                assert_eq!(frames.len(), 1, "Each sequence must have 1 frame set.");
                                 frames.into_iter().nth(0).unwrap()
                             })
                             .collect::<Vec<_>>();

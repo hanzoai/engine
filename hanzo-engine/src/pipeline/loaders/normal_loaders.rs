@@ -3286,7 +3286,11 @@ impl DeviceMappedModelLoader for Glm5MoeLoader {
             anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
         let cfg: crate::models::glm5_moe::Glm5MoeConfig = serde_json::from_str(config)?;
-        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2))
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -3347,17 +3351,16 @@ impl DeviceMappedModelLoader for Glm5MoeLoader {
                 / weight_pack_factor
                 + bias_if!(cfg.attention_bias, cfg.hidden_size);
 
-            let indexer = if indexer_schedule[layer_idx]
-                == crate::models::glm5_moe::IndexerType::Full
-            {
-                let wq_b = cfg.index_n_heads * cfg.index_head_dim * cfg.q_lora_rank;
-                let wk = cfg.index_head_dim * cfg.hidden_size;
-                let weights_proj = cfg.index_n_heads * cfg.hidden_size;
-                let k_norm = 2 * cfg.index_head_dim;
-                wq_b + wk + weights_proj + k_norm
-            } else {
-                0
-            };
+            let indexer =
+                if indexer_schedule[layer_idx] == crate::models::glm5_moe::IndexerType::Full {
+                    let wq_b = cfg.index_n_heads * cfg.index_head_dim * cfg.q_lora_rank;
+                    let wk = cfg.index_head_dim * cfg.hidden_size;
+                    let weights_proj = cfg.index_n_heads * cfg.hidden_size;
+                    let k_norm = 2 * cfg.index_head_dim;
+                    wq_b + wk + weights_proj + k_norm
+                } else {
+                    0
+                };
 
             let moe_block = if cfg.is_moe_layer(layer_idx) {
                 let h = cfg.hidden_size;
@@ -3508,7 +3511,9 @@ impl IsqModelLoader for DeepSeekV4Loader {
                     Regex::new(&format!(
                         r"layers\.{layer_idx}\.mlp\.gate_proj\.(weight|bias)$"
                     ))?,
-                    Regex::new(&format!(r"layers\.{layer_idx}\.mlp\.up_proj\.(weight|bias)$"))?,
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.up_proj\.(weight|bias)$"
+                    ))?,
                     Regex::new(&format!(
                         r"layers\.{layer_idx}\.mlp\.down_proj\.(weight|bias)$"
                     ))?,
@@ -3559,9 +3564,11 @@ impl DeviceMappedModelLoader for DeepSeekV4Loader {
             anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
         let cfg: crate::models::deepseek4::DeepSeekV4Config = serde_json::from_str(config)?;
-        Ok(max_batch_size
-            * cfg.num_attention_heads
-            * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2))
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -3609,7 +3616,8 @@ impl DeviceMappedModelLoader for DeepSeekV4Loader {
             let norms = 2 * cfg.hidden_size + cfg.q_lora_rank + cfg.head_dim;
 
             let q_a = cfg.hidden_size * cfg.q_lora_rank / weight_pack_factor;
-            let q_b = cfg.q_lora_rank * (cfg.num_attention_heads * cfg.head_dim) / weight_pack_factor;
+            let q_b =
+                cfg.q_lora_rank * (cfg.num_attention_heads * cfg.head_dim) / weight_pack_factor;
             let kv_a = cfg.hidden_size * cfg.head_dim / weight_pack_factor;
             let o_a =
                 (cfg.num_attention_heads * cfg.head_dim) * cfg.o_lora_rank / weight_pack_factor;
@@ -3620,8 +3628,10 @@ impl DeviceMappedModelLoader for DeepSeekV4Loader {
 
             let moe = if layer_idx >= cfg.num_hash_layers {
                 let h = cfg.hidden_size;
-                let gate_proj = h * cfg.moe_intermediate_size / weight_pack_factor * cfg.n_routed_experts;
-                let up_proj = h * cfg.moe_intermediate_size / weight_pack_factor * cfg.n_routed_experts;
+                let gate_proj =
+                    h * cfg.moe_intermediate_size / weight_pack_factor * cfg.n_routed_experts;
+                let up_proj =
+                    h * cfg.moe_intermediate_size / weight_pack_factor * cfg.n_routed_experts;
                 let down_proj =
                     cfg.moe_intermediate_size * h / weight_pack_factor * cfg.n_routed_experts;
                 let shared = {

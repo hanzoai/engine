@@ -54,7 +54,10 @@ impl ModulationOut {
 
 /// No-affine LayerNorm (weight 1, no bias); hanzo-nn upcasts bf16/f16 to f32 inside `forward`.
 pub(crate) fn no_affine_layer_norm(dim: usize, dtype: DType, dev: &Device) -> Result<LayerNorm> {
-    Ok(LayerNorm::new_no_bias(Tensor::ones(dim, dtype, dev)?, LN_EPS))
+    Ok(LayerNorm::new_no_bias(
+        Tensor::ones(dim, dtype, dev)?,
+        LN_EPS,
+    ))
 }
 
 /// 3D-RoPE table builder: `head_dim` split across (t, h, w) axes (44/42/42 at head_dim 128).
@@ -101,9 +104,15 @@ impl Rope3D {
         let fh = self.axis_freqs(1, h)?;
         let fw = self.axis_freqs(2, w)?;
         let (dt, dh, dw) = (ft.dim(1)?, fh.dim(1)?, fw.dim(1)?);
-        let ft = ft.reshape((frames, 1, 1, dt))?.broadcast_as((frames, h, w, dt))?;
-        let fh = fh.reshape((1, h, 1, dh))?.broadcast_as((frames, h, w, dh))?;
-        let fw = fw.reshape((1, 1, w, dw))?.broadcast_as((frames, h, w, dw))?;
+        let ft = ft
+            .reshape((frames, 1, 1, dt))?
+            .broadcast_as((frames, h, w, dt))?;
+        let fh = fh
+            .reshape((1, h, 1, dh))?
+            .broadcast_as((frames, h, w, dh))?;
+        let fw = fw
+            .reshape((1, 1, w, dw))?
+            .broadcast_as((frames, h, w, dw))?;
         let freqs =
             Tensor::cat(&[&ft, &fh, &fw], D::Minus1)?.reshape((frames * h * w, dt + dh + dw))?;
         let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;

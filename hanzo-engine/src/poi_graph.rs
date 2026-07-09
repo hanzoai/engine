@@ -81,7 +81,7 @@ pub enum OpKind {
 pub const SOFTMAX_FRAC: u32 = 16;
 const SM_ONE: i64 = 1 << SOFTMAX_FRAC; // 65536
 const SM_LN2: i64 = 45426; // ln2 · 2^16
-// I-BERT integer exp poly: exp(p) ≈ a·(p+b)² + c on p ∈ (−ln2, 0], coefficients · 2^16.
+                           // I-BERT integer exp poly: exp(p) ≈ a·(p+b)² + c on p ∈ (−ln2, 0], coefficients · 2^16.
 const SM_A: i64 = 23499; // 0.3585
 const SM_B: i64 = 88670; // 1.3530
 const SM_C: i64 = 22544; // 0.3440
@@ -226,16 +226,32 @@ impl GraphTrace {
     pub fn matmul_act(&mut self, a: &Mat, ac: [u8; 32], b: &Mat, bc: [u8; 32]) -> ([u8; 32], Mat) {
         let c = exact_matmul(a, b);
         let oc = act_commit(&c);
-        let op = Op { kind: OpKind::MatMul, inputs: vec![ac, bc], output: oc, weight: None, scalars: vec![] };
+        let op = Op {
+            kind: OpKind::MatMul,
+            inputs: vec![ac, bc],
+            output: oc,
+            weight: None,
+            scalars: vec![],
+        };
         self.push(op, vec![a.clone(), b.clone()], c.clone());
         (oc, c)
     }
 
     /// `out = x + y` (residual).
     pub fn add(&mut self, x: &Mat, xc: [u8; 32], y: &Mat, yc: [u8; 32]) -> ([u8; 32], Mat) {
-        let out = Mat::new(x.rows, x.cols, x.data.iter().zip(&y.data).map(|(a, b)| a + b).collect());
+        let out = Mat::new(
+            x.rows,
+            x.cols,
+            x.data.iter().zip(&y.data).map(|(a, b)| a + b).collect(),
+        );
         let oc = act_commit(&out);
-        let op = Op { kind: OpKind::Add, inputs: vec![xc, yc], output: oc, weight: None, scalars: vec![] };
+        let op = Op {
+            kind: OpKind::Add,
+            inputs: vec![xc, yc],
+            output: oc,
+            weight: None,
+            scalars: vec![],
+        };
         self.push(op, vec![x.clone(), y.clone()], out.clone());
         (oc, out)
     }
@@ -244,17 +260,32 @@ impl GraphTrace {
     pub fn relu(&mut self, x: &Mat, xc: [u8; 32]) -> ([u8; 32], Mat) {
         let out = Mat::new(x.rows, x.cols, x.data.iter().map(|&v| v.max(0)).collect());
         let oc = act_commit(&out);
-        let op = Op { kind: OpKind::ReLU, inputs: vec![xc], output: oc, weight: None, scalars: vec![] };
+        let op = Op {
+            kind: OpKind::ReLU,
+            inputs: vec![xc],
+            output: oc,
+            weight: None,
+            scalars: vec![],
+        };
         self.push(op, vec![x.clone()], out.clone());
         (oc, out)
     }
 
     /// `out = (x * num) / den` (integer scale, e.g. attention's 1/√d as a fixed-point ratio).
     pub fn scale(&mut self, x: &Mat, xc: [u8; 32], num: i64, den: i64) -> ([u8; 32], Mat) {
-        let out = Mat::new(x.rows, x.cols, x.data.iter().map(|&v| v * num / den).collect());
+        let out = Mat::new(
+            x.rows,
+            x.cols,
+            x.data.iter().map(|&v| v * num / den).collect(),
+        );
         let oc = act_commit(&out);
-        let op =
-            Op { kind: OpKind::Scale, inputs: vec![xc], output: oc, weight: None, scalars: vec![num, den] };
+        let op = Op {
+            kind: OpKind::Scale,
+            inputs: vec![xc],
+            output: oc,
+            weight: None,
+            scalars: vec![num, den],
+        };
         self.push(op, vec![x.clone()], out.clone());
         (oc, out)
     }
@@ -298,7 +329,13 @@ impl GraphTrace {
     pub fn softmax(&mut self, x: &Mat, xc: [u8; 32]) -> ([u8; 32], Mat) {
         let out = int_softmax(x);
         let oc = act_commit(&out);
-        let op = Op { kind: OpKind::Softmax, inputs: vec![xc], output: oc, weight: None, scalars: vec![] };
+        let op = Op {
+            kind: OpKind::Softmax,
+            inputs: vec![xc],
+            output: oc,
+            weight: None,
+            scalars: vec![],
+        };
         self.push(op, vec![x.clone()], out.clone());
         (oc, out)
     }
@@ -307,7 +344,13 @@ impl GraphTrace {
     pub fn transpose(&mut self, x: &Mat, xc: [u8; 32]) -> ([u8; 32], Mat) {
         let out = transpose(x);
         let oc = act_commit(&out);
-        let op = Op { kind: OpKind::Transpose, inputs: vec![xc], output: oc, weight: None, scalars: vec![] };
+        let op = Op {
+            kind: OpKind::Transpose,
+            inputs: vec![xc],
+            output: oc,
+            weight: None,
+            scalars: vec![],
+        };
         self.push(op, vec![x.clone()], out.clone());
         (oc, out)
     }
@@ -407,7 +450,9 @@ pub fn verify_graph_op(root: &[u8; 32], beacon: &[u8], op: &GraphOpening, k: usi
         }
         OpKind::ReLU => {
             let x = &op.input_mats[0];
-            recompute_eq(&op.output_mat, x.rows, x.cols, || x.data.iter().map(|&v| v.max(0)).collect())
+            recompute_eq(&op.output_mat, x.rows, x.cols, || {
+                x.data.iter().map(|&v| v.max(0)).collect()
+            })
         }
         OpKind::Scale => {
             let x = &op.input_mats[0];
@@ -415,7 +460,9 @@ pub fn verify_graph_op(root: &[u8; 32], beacon: &[u8], op: &GraphOpening, k: usi
             if den == 0 {
                 return false;
             }
-            recompute_eq(&op.output_mat, x.rows, x.cols, || x.data.iter().map(|&v| v * num / den).collect())
+            recompute_eq(&op.output_mat, x.rows, x.cols, || {
+                x.data.iter().map(|&v| v * num / den).collect()
+            })
         }
         OpKind::TopKRoute => {
             let logits = &op.input_mats[0];
@@ -483,7 +530,9 @@ mod tests {
     use super::*;
 
     fn lcg(s: &mut u64) -> i64 {
-        *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *s = s
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((*s >> 33) as i64 % 64) - 32
     }
     fn rmat(rows: usize, cols: usize, s: &mut u64) -> Mat {
@@ -520,11 +569,17 @@ mod tests {
         let mut s = 0x30Eu64;
         let mut t = GraphTrace::new();
         moe_block(&mut t, &mut s);
-        assert!(t.verify_chaining(), "the MoE block is a well-formed graph (every input chains)");
+        assert!(
+            t.verify_chaining(),
+            "the MoE block is a well-formed graph (every input chains)"
+        );
         let root = t.root();
         let beacon = b"beacon:moe";
         for i in 0..t.len() {
-            assert!(verify_graph_op(&root, beacon, &t.open(i), 2), "op {i} of the MoE block verifies");
+            assert!(
+                verify_graph_op(&root, beacon, &t.open(i), 2),
+                "op {i} of the MoE block verifies"
+            );
         }
     }
 
@@ -544,25 +599,48 @@ mod tests {
         let (sm_c, sm) = t.softmax(&scl, scl_c); // attention weights (deterministic int softmax)
         let v = rmat(tk, d, &mut s);
         let (_ctx_c, _ctx) = t.matmul(&sm, sm_c, &v); // ctx = softmax(QKᵀ/√d)·V  [tk × d]
-        assert!(t.verify_chaining(), "full attention block (incl. softmax) chains");
+        assert!(
+            t.verify_chaining(),
+            "full attention block (incl. softmax) chains"
+        );
         let root = t.root();
         for i in 0..t.len() {
-            assert!(verify_graph_op(&root, b"beacon:attn", &t.open(i), 2), "attention op {i} verifies");
+            assert!(
+                verify_graph_op(&root, b"beacon:attn", &t.open(i), 2),
+                "attention op {i} verifies"
+            );
         }
     }
 
     #[test]
     fn test_int_softmax_is_a_valid_distribution() {
         // Each row sums to ≈ 2^16, larger logits get larger weight, and it is bit-reproducible.
-        let logits = Mat::new(2, 4, vec![0, SM_ONE, 2 * SM_ONE, 0, /**/ 5 * SM_ONE, 0, 0, 0]);
+        let logits = Mat::new(
+            2,
+            4,
+            vec![0, SM_ONE, 2 * SM_ONE, 0, /**/ 5 * SM_ONE, 0, 0, 0],
+        );
         let p = int_softmax(&logits);
         for r in 0..2 {
             let sum: i64 = p.data[r * 4..(r + 1) * 4].iter().sum();
-            assert!((sum - SM_ONE).abs() <= 8, "row {r} sums to ≈2^16 (got {sum})");
+            assert!(
+                (sum - SM_ONE).abs() <= 8,
+                "row {r} sums to ≈2^16 (got {sum})"
+            );
         }
-        assert!(p.data[2] > p.data[1] && p.data[1] > p.data[0], "monotone in the logit");
-        assert!(p.data[4] > p.data[5], "the peaked row concentrates mass on the max");
-        assert_eq!(int_softmax(&logits), int_softmax(&logits), "deterministic / bit-reproducible");
+        assert!(
+            p.data[2] > p.data[1] && p.data[1] > p.data[0],
+            "monotone in the logit"
+        );
+        assert!(
+            p.data[4] > p.data[5],
+            "the peaked row concentrates mass on the max"
+        );
+        assert_eq!(
+            int_softmax(&logits),
+            int_softmax(&logits),
+            "deterministic / bit-reproducible"
+        );
     }
 
     #[test]
@@ -575,7 +653,10 @@ mod tests {
         let root = t.root();
         let mut op = t.open(0);
         op.output_mat.data[0] += 1; // tamper the attention weights
-        assert!(!verify_graph_op(&root, b"beacon", &op, 2), "a forged softmax output is caught by recompute");
+        assert!(
+            !verify_graph_op(&root, b"beacon", &op, 2),
+            "a forged softmax output is caught by recompute"
+        );
     }
 
     // PROOF-OF-AI covers TRAINING with no new machinery: an SGD step on a linear layer is a graph of
@@ -600,15 +681,24 @@ mod tests {
         let (neg_c, neg) = t.scale(&dw, dw_c, -1, 100); // 5: −lr·dW   (lr = 1/100)
         let _ = t.add(&w, wc, &neg, neg_c); // 6: W' = W − lr·dW
 
-        assert!(t.verify_chaining(), "a training step is a well-formed graph");
+        assert!(
+            t.verify_chaining(),
+            "a training step is a well-formed graph"
+        );
         let root = t.root();
         for i in 0..t.len() {
-            assert!(verify_graph_op(&root, b"beacon:train", &t.open(i), 2), "training op {i} verifies");
+            assert!(
+                verify_graph_op(&root, b"beacon:train", &t.open(i), 2),
+                "training op {i} verifies"
+            );
         }
         // fabricate the weight gradient (op 2) → caught by Freivalds, same as a faked inference output.
         let mut bad = t.open(2);
         bad.output_mat.data[0] += 1;
-        assert!(!verify_graph_op(&root, b"beacon:train", &bad, 2), "a fabricated gradient is caught");
+        assert!(
+            !verify_graph_op(&root, b"beacon:train", &bad, 2),
+            "a fabricated gradient is caught"
+        );
     }
 
     // ---- ADVERSARIAL: break the chain, fabricate ops -----------------------------------------
@@ -625,7 +715,10 @@ mod tests {
         let _ = t.input(&x);
         let bogus = [0xABu8; 32]; // an activation commitment that was never produced
         let (_oc, _c) = t.matmul(&x, bogus, &rmat(8, 4, &mut s));
-        assert!(!t.verify_chaining(), "an op reading an unproduced activation breaks the chain");
+        assert!(
+            !t.verify_chaining(),
+            "an op reading an unproduced activation breaks the chain"
+        );
         assert!(
             !verify_graph_op(&t.root(), b"beacon", &t.open(0), 2),
             "and the per-op check rejects the bogus input commitment"
@@ -666,7 +759,13 @@ mod tests {
             scalars: vec![],
         };
         let root = merkle_root(&[op.leaf()]);
-        let opening = GraphOpening { index: 0, op, input_mats: vec![a], output_mat: c, proof: vec![] };
+        let opening = GraphOpening {
+            index: 0,
+            op,
+            input_mats: vec![a],
+            output_mat: c,
+            proof: vec![],
+        };
         assert!(
             !verify_graph_op(&root, b"beacon", &opening, 2),
             "a fabricated matmul output in the graph is caught by Freivalds"
@@ -684,8 +783,9 @@ mod tests {
         let root = t.root();
         let mut op = t.open(0);
         op.output_mat.data[0] = (op.output_mat.data[0] + 1) % 6; // route to a different expert
-        assert!(!verify_graph_op(&root, b"beacon", &op, 2), "a forged routing decision is caught");
+        assert!(
+            !verify_graph_op(&root, b"beacon", &op, 2),
+            "a forged routing decision is caught"
+        );
     }
-
 }
-

@@ -53,7 +53,8 @@ pub struct Context<'a> {
 
 impl Policy {
     fn fraction(&self, unified: bool) -> f64 {
-        self.memory_fraction.unwrap_or_else(|| default_fraction(unified))
+        self.memory_fraction
+            .unwrap_or_else(|| default_fraction(unified))
     }
 
     fn usable(&self, m: &ModelCard, ctx: &Context) -> bool {
@@ -123,7 +124,9 @@ impl Policy {
         // (1) Reuse anything already loaded.
         for m in &cards {
             if m.backend.is_local() && ctx.running.contains(&m.id) {
-                return Decision::Reuse { model: m.id.clone() };
+                return Decision::Reuse {
+                    model: m.id.clone(),
+                };
             }
         }
         // (2) Ordered walk: first local-that-fits or cloud, by preference.
@@ -159,7 +162,11 @@ impl RoutePolicy for Policy {
         let ctx = Context {
             task,
             registry,
-            mem: MemSnapshot { available_bytes: u64::MAX, total_bytes: u64::MAX, unified: true },
+            mem: MemSnapshot {
+                available_bytes: u64::MAX,
+                total_bytes: u64::MAX,
+                unified: true,
+            },
             running: &running,
             vision_required: req.has_media,
             min_context: req.approx_tokens,

@@ -406,7 +406,12 @@ mod tests {
         let cache = DiskKvCache::new(tmp.path(), 64).unwrap();
         let key = key_for_bytes(b"atomic");
         cache
-            .save(&key, KvcHeader::new(0, SaveReason::Cold, 1, 0), b"", b"payload")
+            .save(
+                &key,
+                KvcHeader::new(0, SaveReason::Cold, 1, 0),
+                b"",
+                b"payload",
+            )
             .unwrap();
         // Only the final `.kv` file should remain; the temp file is renamed in.
         let mut kv = 0;

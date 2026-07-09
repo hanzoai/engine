@@ -32,7 +32,11 @@ impl CausalConv3d {
     ) -> Result<Self> {
         let (kt, kh, kw) = kernel;
         let w = vb.get((out_c, in_c, kt, kh, kw), "weight")?;
-        let bias = if bias { Some(vb.get(out_c, "bias")?) } else { None };
+        let bias = if bias {
+            Some(vb.get(out_c, "bias")?)
+        } else {
+            None
+        };
         Self::from_weight(w, bias, stride, padding)
     }
 
@@ -44,7 +48,10 @@ impl CausalConv3d {
     ) -> Result<Self> {
         let kt = w.dim(2)?;
         // Wan only uses square spatial kernels/pads, so one Conv2dConfig covers h and w.
-        debug_assert_eq!(padding.1, padding.2, "wan causal conv assumes pad_h == pad_w");
+        debug_assert_eq!(
+            padding.1, padding.2,
+            "wan causal conv assumes pad_h == pad_w"
+        );
         let cfg = Conv2dConfig {
             padding: padding.1,
             stride: stride.1,
@@ -186,7 +193,7 @@ impl FeatCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hanzo_ml::{Device, DType};
+    use hanzo_ml::{DType, Device};
 
     // kernel (1,3,3): temporal size 1 collapses the decomposition to a plain per-frame conv2d,
     // so every output frame must equal conv2d applied to that input frame independently.
