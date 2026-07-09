@@ -3245,9 +3245,17 @@ dependencies = [
 name = "hanzo-router"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "futures",
+ "reqwest 0.13.4",
  "serde",
  "serde_json",
  "serde_yaml",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
