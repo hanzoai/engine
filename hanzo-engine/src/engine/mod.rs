@@ -953,6 +953,10 @@ impl Engine {
     }
 
     fn replicate_request_to_daemons(&self, request: &Request) {
+        if crate::pipeline_parallel::use_pipeline_parallel() {
+            // PP workers are driven by activations on the ring, not replicated requests.
+            return;
+        }
         if !distributed::is_daemon() && hanzo_quant::distributed::use_nccl() {
             let name = distributed::ipc_name().unwrap();
             let num_workers =
