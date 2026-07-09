@@ -7,6 +7,7 @@
 //! - Config-file-first support
 
 mod args;
+mod cluster;
 mod commands;
 mod config;
 mod ui;
@@ -106,6 +107,10 @@ async fn main() -> Result<()> {
 
         Command::FromConfig { file } => {
             run_from_config(file).await?;
+        }
+
+        Command::Cluster { action } => {
+            cluster::run(action)?;
         }
 
         Command::Doctor { json } => {
