@@ -51,10 +51,13 @@ image = { workspace = true }
 comfy-table = "7"
 dirs = { workspace = true }
 walkdir = { workspace = true }
+bs58 = "0.5.1"
+qrcode = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 half = { workspace = true }
 hanzo-nn = { workspace = true }
+hanzo-quant = { workspace = true }
 
 [features]
 default = ["code-execution"]
