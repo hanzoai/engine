@@ -31,6 +31,34 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
     fn from(value: &Content<'a, R>) -> Self {
         let metadata = value.get_metadata();
         let arch = metadata["general.architecture"].to_string().unwrap();
+        let u = |k: &str| {
+            metadata
+                .get(k)
+                .and_then(|x| x.to_u64().ok())
+                .map(|n| n as usize)
+        };
+
+        // deepseek2 (incl. GLM-4.7-Flash) runs the un-absorbed MLA path eagerly: it materializes full
+        // per-head K/V, so the KV cache is n_head x q_head_dim/v_head_dim, not the compressed MQA
+        // metadata (head_count_kv=1, key_length=kv_lora+rope).
+        if arch == "deepseek2" {
+            let n_head = u(&format!("{arch}.attention.head_count")).unwrap();
+            let qk_rope = u(&format!("{arch}.rope.dimension_count")).unwrap_or(0);
+            let q_head_dim = u(&format!("{arch}.attention.key_length_mla")).unwrap_or_else(|| {
+                u(&format!("{arch}.attention.key_length")).unwrap_or(0) + qk_rope
+            });
+            let v_head_dim = u(&format!("{arch}.attention.value_length_mla")).unwrap_or(q_head_dim);
+            return Self {
+                max_seq_len: u(&format!("{arch}.context_length")).unwrap(),
+                hidden_size: u(&format!("{arch}.embedding_length")).unwrap(),
+                num_attn_heads: n_head,
+                num_kv_heads: n_head,
+                num_layers: u(&format!("{arch}.block_count")).unwrap(),
+                key_length: Some(q_head_dim),
+                value_length: Some(v_head_dim),
+            };
+        }
+
         Self {
             max_seq_len: metadata[&format!("{arch}.context_length")]
                 .to_u64()
@@ -393,7 +421,10 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                 };
                 token_embd + output_norm + output
             }
-            GGUFArchitecture::Deepseek2 | GGUFArchitecture::Deepseek4 => {
+            GGUFArchitecture::Deepseek2
+            | GGUFArchitecture::Deepseek4
+            | GGUFArchitecture::GptOss
+            | GGUFArchitecture::Glm4Moe => {
                 let token_embd = tensor_info_size_in_bytes!(
                     self.model.tensor_info("token_embd.weight")?,
                     DType::F32
@@ -704,7 +735,9 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
             | GGUFArchitecture::Qwen35MoE
             | GGUFArchitecture::Qwen3Next
             | GGUFArchitecture::Deepseek2
-            | GGUFArchitecture::Deepseek4 => {
+            | GGUFArchitecture::Deepseek4
+            | GGUFArchitecture::GptOss
+            | GGUFArchitecture::Glm4Moe => {
                 // Non-uniform block sizes (hybrid layers; V4 hash vs MoE vs compressed layers),
                 // so a single representative layer can't stand in. Sum each block's real tensor
                 // bytes -- correct for both single-device and multi-GPU auto mapping.
