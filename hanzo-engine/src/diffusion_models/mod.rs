@@ -6,6 +6,7 @@ pub mod pixal3d;
 pub(crate) mod processor;
 pub(crate) mod qwen_image;
 pub(crate) mod t5;
+pub mod vton;
 pub mod wan;
 
 macro_rules! generate_repr {
