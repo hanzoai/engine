@@ -44,6 +44,9 @@ pub enum GGUFArchitecture {
     Qwen35,
     Qwen35MoE,
     Mistral3,
+    #[strum(serialize = "gpt-oss")]
+    GptOss,
+    Glm4Moe,
     Deepseek2,
     Deepseek4,
     /// The DeepSeek-V4 MTP draft-head GGUF (a separate file). Never loaded as a
