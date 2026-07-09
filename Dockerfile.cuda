@@ -30,7 +30,11 @@ ARG RAYON_NUM_THREADS=4
 ARG RUST_NUM_THREADS=4
 ARG RUSTFLAGS="-Z threads=${RUST_NUM_THREADS}"
 ARG WITH_FEATURES="cuda,cudnn,flash-attn"
-RUN cargo build --release --workspace --exclude hanzo-pyo3 --features "${WITH_FEATURES}"
+# Only the two binaries the runtime stage copies (hanzo-server, hanzo-bench) —
+# not the whole workspace. Cuts CUDA build time enough to finish inside the
+# self-hosted runner lifetime (a full --workspace build was getting the runner
+# recycled mid-compile on the higher compute-cap legs).
+RUN cargo build --release -p hanzo-server -p hanzo-bench --features "${WITH_FEATURES}"
 
 
 # Stage 2: Minimal runtime environment
