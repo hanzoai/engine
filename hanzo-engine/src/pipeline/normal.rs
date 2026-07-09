@@ -1379,7 +1379,7 @@ impl NormalPipeline {
         let warmup_logits = self.model.forward(input_ids, &mut ctx)?;
         input_ids.device().synchronize()?;
 
-        let entry = self.capture_cuda_decode_graph(
+        let mut entry = self.capture_cuda_decode_graph(
             key,
             input_ids,
             seqlen_offsets,
@@ -1390,6 +1390,20 @@ impl NormalPipeline {
             flash_meta,
             cache_config.block_size,
         )?;
+        if std::env::var("PREFILL_GRAPH_VERIFY").is_ok() {
+            entry.input_ids.set(input_ids)?;
+            entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
+            entry
+                .graph
+                .launch()
+                .map_err(|err| hanzo_ml::Error::msg(err.to_string()))?;
+            let diff = (&warmup_logits - &entry.logits)?
+                .abs()?
+                .max_all()?
+                .to_scalar::<f32>()?;
+            let q_len = input_ids.dim(1)?;
+            warn!("PREFILL_GRAPH_VERIFY q_len={q_len} replay_vs_eager_max_abs_diff={diff}");
+        }
         if state.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
             state.entries.remove(0);
         }
