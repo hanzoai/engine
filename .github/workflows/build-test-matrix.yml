@@ -22,8 +22,8 @@ jobs:
             features: cuda
             env_line: "CUDA_COMPUTE_CAP=121 LD_LIBRARY_PATH=/usr/local/cuda/lib64"
             path_add: "/usr/local/cuda/bin"
-          - name: evo-vulkan-win-x64
-            runs-on: [self-hosted, windows, X64]
+          - name: evo-vulkan-x64
+            runs-on: [self-hosted, linux, X64]
             features: vulkan
             env_line: ""
             path_add: ""
