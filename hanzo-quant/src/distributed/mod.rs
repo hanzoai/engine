@@ -87,8 +87,7 @@ pub fn get_global_tp_size_from_devices() -> Result<usize> {
 }
 
 pub fn use_nccl() -> bool {
-    (std::env::var("NO_NCCL").is_err()
-        || std::env::var("NO_NCCL").is_ok_and(|x| x != "1"))
+    (std::env::var("NO_NCCL").is_err() || std::env::var("NO_NCCL").is_ok_and(|x| x != "1"))
         && (cfg!(feature = "nccl") && cfg!(feature = "cuda"))
 }
 

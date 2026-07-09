@@ -427,7 +427,12 @@ impl V4Attn {
                 let s = rot_in.dim(2).unwrap_or(1);
                 let fp = |t: &Tensor| -> Vec<f32> {
                     t.narrow(2, s - 1, 1)
-                        .and_then(|x| x.narrow(1, 0, 1)?.flatten_all()?.to_dtype(DType::F32)?.to_vec1())
+                        .and_then(|x| {
+                            x.narrow(1, 0, 1)?
+                                .flatten_all()?
+                                .to_dtype(DType::F32)?
+                                .to_vec1()
+                        })
                         .map(|v: Vec<f32>| v.into_iter().take(4).collect())
                         .unwrap_or_default()
                 };
@@ -1490,7 +1495,11 @@ impl ModelWeights {
         // sequence; a single OnceLock load when the var is unset → zero cost off-path.
         static CAPTURE_DIR: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
         let capture_dir = CAPTURE_DIR
-            .get_or_init(|| std::env::var("V4_CAPTURE_DIR").ok().filter(|s| !s.is_empty()))
+            .get_or_init(|| {
+                std::env::var("V4_CAPTURE_DIR")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+            })
             .as_deref();
         // `> 1` skips the load-time single-token warmup prefill (the engine runs one
         // 1-token forward at offset 0 to prime caches; seqlen 1 has no teacher-forcing

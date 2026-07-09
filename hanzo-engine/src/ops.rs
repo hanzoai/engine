@@ -239,7 +239,8 @@ pub struct MoeRouterTopKConfig {
 /// determinism is a Proof-of-AI prerequisite: a different expert is a different sub-network, so a
 /// non-canonical tie-break (or a CPU-F32 vs CUDA-bf16 disagreement) would diverge the output and
 /// false-reject an honest run.
-static MOE_PROOF_DETERMINISTIC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static MOE_PROOF_DETERMINISTIC: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Enable/disable proof-deterministic MoE routing process-wide (set ON for proof-bearing runs).
 pub fn set_moe_proof_deterministic(on: bool) {
@@ -304,7 +305,10 @@ pub fn moe_router_topk(
         // canonical, backend-independent expert selection (Proof-of-AI)
         deterministic_topk_indices(&selection_scores, config.top_k)?
     } else {
-        selection_scores.topk(config.top_k)?.indices.to_dtype(DType::U32)?
+        selection_scores
+            .topk(config.top_k)?
+            .indices
+            .to_dtype(DType::U32)?
     };
     let selected_logits = match config.selected_weight {
         MoeRouterSelectedWeight::Score => None,
@@ -1677,7 +1681,8 @@ pub fn rocm_rms_norm_of_sum(
     weight: &Tensor,
     eps: f32,
 ) -> Result<Option<(Tensor, Tensor)>> {
-    if input.dtype() != DType::F32 || residual.dtype() != DType::F32 || weight.dtype() != DType::F32 {
+    if input.dtype() != DType::F32 || residual.dtype() != DType::F32 || weight.dtype() != DType::F32
+    {
         return Ok(None);
     }
     if !input.device().is_rocm()
@@ -3519,16 +3524,24 @@ mod tests {
         // Row 1: all five equal at 7.0 -> top-2 = [0, 1], the two LOWEST indices (tests the
         //        boundary tie-break: which of the equal experts make the cut).
         let scores = Tensor::from_vec(
-            vec![1.0f32, 5.0, 2.0, 5.0, 4.0, /* row1 */ 7.0, 7.0, 7.0, 7.0, 7.0],
+            vec![
+                1.0f32, 5.0, 2.0, 5.0, 4.0, /* row1 */ 7.0, 7.0, 7.0, 7.0, 7.0,
+            ],
             (2, 5),
             &device,
         )
         .unwrap();
         let idx = deterministic_topk_indices(&scores, 2).unwrap();
-        assert_eq!(idx.to_vec2::<u32>().unwrap(), vec![vec![1u32, 3], vec![0u32, 1]]);
+        assert_eq!(
+            idx.to_vec2::<u32>().unwrap(),
+            vec![vec![1u32, 3], vec![0u32, 1]]
+        );
         // Determinism: identical inputs -> identical selection, every time.
         let idx2 = deterministic_topk_indices(&scores, 2).unwrap();
-        assert_eq!(idx.to_vec2::<u32>().unwrap(), idx2.to_vec2::<u32>().unwrap());
+        assert_eq!(
+            idx.to_vec2::<u32>().unwrap(),
+            idx2.to_vec2::<u32>().unwrap()
+        );
     }
 
     #[test]

@@ -5,8 +5,8 @@ use tracing::info;
 
 use hanzo_engine::initialize_logging;
 use hanzo_server_core::{
-    server::{ServerBuilder, ModelConfig},
     router::RouterBuilder,
+    server::{ModelConfig, ServerBuilder},
 };
 
 use crate::args::{MatformerSelection, RuntimeOptions};

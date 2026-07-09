@@ -25,7 +25,17 @@ fn to_f32(t: &Tensor) -> Vec<f32> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn check(dev: &Device, log: &mut String, b: usize, h: usize, kh: usize, t: usize, d: usize, dtype: DType, tol: f32) {
+fn check(
+    dev: &Device,
+    log: &mut String,
+    b: usize,
+    h: usize,
+    kh: usize,
+    t: usize,
+    d: usize,
+    dtype: DType,
+    tol: f32,
+) {
     let half = d / 2;
     let max_pos = 256usize;
     let mk = |n: usize, off: usize| {
@@ -37,8 +47,22 @@ fn check(dev: &Device, log: &mut String, b: usize, h: usize, kh: usize, t: usize
     let q = mk(b * h * t * d, 1).reshape((b, h, t, d)).unwrap();
     let k = mk(b * kh * t * d, 7).reshape((b, kh, t, d)).unwrap();
     // RMSNorm weights near 1.0 (realistic scale).
-    let qw = Tensor::from_vec((0..d).map(|i| 1.0 + 0.1 * val(i)).collect::<Vec<_>>(), d, dev).unwrap().to_dtype(dtype).unwrap();
-    let kw = Tensor::from_vec((0..d).map(|i| 1.0 + 0.1 * val(i + 3)).collect::<Vec<_>>(), d, dev).unwrap().to_dtype(dtype).unwrap();
+    let qw = Tensor::from_vec(
+        (0..d).map(|i| 1.0 + 0.1 * val(i)).collect::<Vec<_>>(),
+        d,
+        dev,
+    )
+    .unwrap()
+    .to_dtype(dtype)
+    .unwrap();
+    let kw = Tensor::from_vec(
+        (0..d).map(|i| 1.0 + 0.1 * val(i + 3)).collect::<Vec<_>>(),
+        d,
+        dev,
+    )
+    .unwrap()
+    .to_dtype(dtype)
+    .unwrap();
     let mut cosf = vec![0f32; max_pos * half];
     let mut sinf = vec![0f32; max_pos * half];
     for p in 0..max_pos {
@@ -49,23 +73,47 @@ fn check(dev: &Device, log: &mut String, b: usize, h: usize, kh: usize, t: usize
             sinf[p * half + j] = ang.sin();
         }
     }
-    let cos = Tensor::from_vec(cosf, (max_pos, half), dev).unwrap().to_dtype(dtype).unwrap();
-    let sin = Tensor::from_vec(sinf, (max_pos, half), dev).unwrap().to_dtype(dtype).unwrap();
-    let positions = Tensor::from_vec((0..b).map(|i| (3 + 5 * i) as u32).collect::<Vec<_>>(), b, dev).unwrap();
+    let cos = Tensor::from_vec(cosf, (max_pos, half), dev)
+        .unwrap()
+        .to_dtype(dtype)
+        .unwrap();
+    let sin = Tensor::from_vec(sinf, (max_pos, half), dev)
+        .unwrap()
+        .to_dtype(dtype)
+        .unwrap();
+    let positions = Tensor::from_vec(
+        (0..b).map(|i| (3 + 5 * i) as u32).collect::<Vec<_>>(),
+        b,
+        dev,
+    )
+    .unwrap();
     let eps = 1e-6f64;
 
     hanzo_engine::layers::set_force_unfused_qk_norm_rope(false);
-    let (qf, kf) = qk_rms_norm_rope_positions(&q, &k, &qw, &kw, eps, eps, &cos, &sin, true, &positions).unwrap();
+    let (qf, kf) =
+        qk_rms_norm_rope_positions(&q, &k, &qw, &kw, eps, eps, &cos, &sin, true, &positions)
+            .unwrap();
     hanzo_engine::layers::set_force_unfused_qk_norm_rope(true);
-    let (qs, ks) = qk_rms_norm_rope_positions(&q, &k, &qw, &kw, eps, eps, &cos, &sin, true, &positions).unwrap();
+    let (qs, ks) =
+        qk_rms_norm_rope_positions(&q, &k, &qw, &kw, eps, eps, &cos, &sin, true, &positions)
+            .unwrap();
     hanzo_engine::layers::set_force_unfused_qk_norm_rope(false);
 
     let mut me = 0f32;
-    for (a, bb) in to_f32(&qf).iter().zip(to_f32(&qs).iter()).chain(to_f32(&kf).iter().zip(to_f32(&ks).iter())) {
+    for (a, bb) in to_f32(&qf)
+        .iter()
+        .zip(to_f32(&qs).iter())
+        .chain(to_f32(&kf).iter().zip(to_f32(&ks).iter()))
+    {
         me = me.max((a - bb).abs());
     }
-    log.push_str(&format!("b={b} h={h} kh={kh} t={t} d={d} {dtype:?} max_abs_err={me:.6} (tol {tol})\n"));
-    assert!(me < tol, "qk_rms_norm_rope fused vs fallback: b={b} h={h} t={t} d={d} {dtype:?} err={me} >= {tol}");
+    log.push_str(&format!(
+        "b={b} h={h} kh={kh} t={t} d={d} {dtype:?} max_abs_err={me:.6} (tol {tol})\n"
+    ));
+    assert!(
+        me < tol,
+        "qk_rms_norm_rope fused vs fallback: b={b} h={h} t={t} d={d} {dtype:?} err={me} >= {tol}"
+    );
 }
 
 #[test]

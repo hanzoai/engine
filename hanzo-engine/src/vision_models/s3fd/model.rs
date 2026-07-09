@@ -53,14 +53,18 @@ struct Head {
 }
 
 impl Head {
-    fn new(
-        vb: &ShardedVarBuilder,
-        prefix: &str,
-        cin: usize,
-        conf_out: usize,
-    ) -> Result<Self> {
+    fn new(vb: &ShardedVarBuilder, prefix: &str, cin: usize, conf_out: usize) -> Result<Self> {
         Ok(Self {
-            conf: conv(vb, &format!("{prefix}_mbox_conf"), cin, conf_out, 3, 1, 1, 1)?,
+            conf: conv(
+                vb,
+                &format!("{prefix}_mbox_conf"),
+                cin,
+                conf_out,
+                3,
+                1,
+                1,
+                1,
+            )?,
             loc: conv(vb, &format!("{prefix}_mbox_loc"), cin, 4, 3, 1, 1, 1)?,
         })
     }

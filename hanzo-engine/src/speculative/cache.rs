@@ -374,10 +374,7 @@ impl NormalSpeculativeCacheAccess {
         cache: std::sync::Arc<std::sync::Mutex<crate::pipeline::NormalCache>>,
         max_seq_len: usize,
     ) -> Self {
-        Self {
-            cache,
-            max_seq_len,
-        }
+        Self { cache, max_seq_len }
     }
 }
 

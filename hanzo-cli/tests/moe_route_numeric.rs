@@ -9,8 +9,11 @@
 use hanzo_ml::{Device, Tensor};
 
 fn val(i: usize, salt: usize) -> f32 {
-    let x = ((i.wrapping_mul(2654435761).wrapping_add(salt.wrapping_mul(40503)) >> 8) & 0xffff)
-        as f32
+    let x = ((i
+        .wrapping_mul(2654435761)
+        .wrapping_add(salt.wrapping_mul(40503))
+        >> 8)
+        & 0xffff) as f32
         / 65535.0; // [0,1)
     (x - 0.5) * 8.0 // [-4,4]
 }
@@ -57,14 +60,23 @@ fn check(dev: &Device, log: &mut String, ntok: usize, n_experts: usize, topk: us
     let (ids_t, w_t) = hanzo_ml::quantized::moe_route(&lt, topk, norm).expect("moe_route");
     assert_eq!(ids_t.dims(), &[ntok, topk], "ids shape");
     assert_eq!(w_t.dims(), &[ntok, topk], "w shape");
-    let ids = ids_t.flatten_all().unwrap().to_vec1::<u32>().expect("ids vec");
+    let ids = ids_t
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<u32>()
+        .expect("ids vec");
     let w = w_t.flatten_all().unwrap().to_vec1::<f32>().expect("w vec");
 
     let tol = 1e-5f32;
     let mut nbad = 0usize;
     let mut max_w_err = 0f32;
     for t in 0..ntok {
-        let (rid, rw) = route_ref(&logits[t * n_experts..(t + 1) * n_experts], n_experts, topk, norm);
+        let (rid, rw) = route_ref(
+            &logits[t * n_experts..(t + 1) * n_experts],
+            n_experts,
+            topk,
+            norm,
+        );
         for r in 0..topk {
             let k = t * topk + r;
             if ids[k] != rid[r] {

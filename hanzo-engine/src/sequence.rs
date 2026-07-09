@@ -1,4 +1,12 @@
 use crate::{
+    diffusion_models::animation::AnimationGenerationParams,
+    pipeline::{DiffusionGenerationParams, KvCache},
+    response::CompletionChoice,
+    tools::ToolCallingMatcher,
+    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
+    ImageGenerationResponse, ImageGenerationResponseFormat,
+};
+use crate::{
     get_mut_arcmutex, get_mut_group,
     paged_attention::block_hash::MultiModalFeature,
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
@@ -6,14 +14,6 @@ use crate::{
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
     AudioInput, ChatCompletionResponse, Usage, VideoInput,
-};
-use crate::{
-    diffusion_models::animation::AnimationGenerationParams,
-    pipeline::{DiffusionGenerationParams, KvCache},
-    response::CompletionChoice,
-    tools::ToolCallingMatcher,
-    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
-    ImageGenerationResponse, ImageGenerationResponseFormat,
 };
 use hanzo_ml::Tensor;
 use std::{
