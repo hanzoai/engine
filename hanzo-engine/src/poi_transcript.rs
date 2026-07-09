@@ -96,7 +96,11 @@ pub fn merkle_verify(leaf: [u8; 32], root: [u8; 32], index: usize, proof: &[[u8;
     let mut node = leaf;
     let mut idx = index;
     for sib in proof {
-        node = if idx % 2 == 0 { hash_pair(&node, sib) } else { hash_pair(sib, &node) };
+        node = if idx % 2 == 0 {
+            hash_pair(&node, sib)
+        } else {
+            hash_pair(sib, &node)
+        };
         idx /= 2;
     }
     node == root
@@ -212,7 +216,9 @@ mod tests {
 
     // A small deterministic PRNG so tests build the same int8-ish matrices every run.
     fn lcg(s: &mut u64) -> i64 {
-        *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *s = s
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((*s >> 33) as i64 % 127) - 63
     }
 
@@ -259,7 +265,10 @@ mod tests {
         let beacon = b"beacon:any";
         for idx in 0..t.len() {
             let op = t.open(idx);
-            assert!(verify_opening(&root, beacon, &op, 2), "honest matmul {idx} must verify");
+            assert!(
+                verify_opening(&root, beacon, &op, 2),
+                "honest matmul {idx} must verify"
+            );
         }
     }
 
@@ -299,7 +308,13 @@ mod tests {
         let root = t.root();
         // open with the CORRECT c instead of the committed wrong one
         let good_c = poi::exact_matmul(&a, &b);
-        let op = Opening { index: 0, a, b, c: good_c, proof: merkle_proof(&t.leaves, 0) };
+        let op = Opening {
+            index: 0,
+            a,
+            b,
+            c: good_c,
+            proof: merkle_proof(&t.leaves, 0),
+        };
         assert!(
             !verify_opening(&root, b"beacon:swap", &op, 2),
             "revealing operands that were never committed must fail Merkle inclusion"
@@ -331,7 +346,10 @@ mod tests {
         let root = merkle_root(&leaves);
         for (i, leaf) in leaves.iter().enumerate() {
             let p = merkle_proof(&leaves, i);
-            assert!(merkle_verify(*leaf, root, i, &p), "leaf {i} must verify under the root");
+            assert!(
+                merkle_verify(*leaf, root, i, &p),
+                "leaf {i} must verify under the root"
+            );
             // a wrong index must NOT verify
             assert!(!merkle_verify(*leaf, root, (i + 1) % 3, &p) || i == (i + 1) % 3);
         }
@@ -350,7 +368,10 @@ mod tests {
         let root = t.root();
         let beacon = b"beacon:real-layer";
         let op = t.open(0);
-        assert!(verify_opening(&root, beacon, &op, 2), "honest 256x256 quantized layer verifies");
+        assert!(
+            verify_opening(&root, beacon, &op, 2),
+            "honest 256x256 quantized layer verifies"
+        );
 
         // now fabricate a single output entry and recommit — must be caught
         let mut t2 = ProofTranscript::new();

@@ -11,7 +11,9 @@
 //! the router owns the decision.
 
 use axum::{extract::Json, response::IntoResponse};
-use hanzo_router::{route, Decision, Heuristic, MemSnapshot, Policy, Registry, Request as RouteRequest};
+use hanzo_router::{
+    route, Decision, Heuristic, MemSnapshot, Policy, Registry, Request as RouteRequest,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use utoipa::ToSchema;
@@ -120,8 +122,16 @@ pub async fn route_handler(Json(body): Json<RouteBody>) -> impl IntoResponse {
     let registry = Registry::new(body.models.iter().map(to_card).collect());
     let running: BTreeSet<String> = body.running.into_iter().collect();
     let mem = MemSnapshot {
-        available_bytes: if body.available_bytes == 0 { u64::MAX } else { body.available_bytes },
-        total_bytes: if body.total_bytes == 0 { u64::MAX } else { body.total_bytes },
+        available_bytes: if body.available_bytes == 0 {
+            u64::MAX
+        } else {
+            body.available_bytes
+        },
+        total_bytes: if body.total_bytes == 0 {
+            u64::MAX
+        } else {
+            body.total_bytes
+        },
         unified: body.unified,
     };
     let req = RouteRequest {
@@ -131,6 +141,13 @@ pub async fn route_handler(Json(body): Json<RouteBody>) -> impl IntoResponse {
         task_hint: None,
         modality_hint: None,
     };
-    let decision = route(&req, &Heuristic, &Policy::default(), &registry, mem, &running);
+    let decision = route(
+        &req,
+        &Heuristic,
+        &Policy::default(),
+        &registry,
+        mem,
+        &running,
+    );
     RouteResponse { decision }
 }

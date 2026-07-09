@@ -163,7 +163,11 @@ pub async fn get_video(
     State(_state): ExtractedState,
     Path(id): Path<String>,
 ) -> axum::response::Response {
-    match job_store().lock().expect("video job store poisoned").get(&id) {
+    match job_store()
+        .lock()
+        .expect("video job store poisoned")
+        .get(&id)
+    {
         Some(job) => (StatusCode::OK, Json(VideoJobResponse::from(job))).into_response(),
         None => not_found(&id),
     }
@@ -199,11 +203,9 @@ pub async fn get_video_content(
             })),
         )
             .into_response(),
-        VideoJobStatus::Queued | VideoJobStatus::Running => (
-            StatusCode::ACCEPTED,
-            Json(VideoJobResponse::from(job)),
-        )
-            .into_response(),
+        VideoJobStatus::Queued | VideoJobStatus::Running => {
+            (StatusCode::ACCEPTED, Json(VideoJobResponse::from(job))).into_response()
+        }
     }
 }
 

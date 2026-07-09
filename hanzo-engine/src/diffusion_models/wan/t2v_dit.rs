@@ -189,10 +189,11 @@ impl ConditionEmbedder {
             .apply(&self.time_l1)?
             .silu()?
             .apply(&self.time_l2)?;
-        let seed = temb
-            .silu()?
-            .apply(&self.time_proj)?
-            .reshape((temb.dim(0)?, BLOCK_MOD_CHUNKS, self.hidden))?;
+        let seed = temb.silu()?.apply(&self.time_proj)?.reshape((
+            temb.dim(0)?,
+            BLOCK_MOD_CHUNKS,
+            self.hidden,
+        ))?;
         Ok((temb, seed))
     }
 
@@ -296,7 +297,11 @@ struct FeedForward {
 impl FeedForward {
     fn new(cfg: &Wan2Config, vb: ShardedVarBuilder) -> Result<Self> {
         Ok(Self {
-            proj: layers::linear(cfg.hidden_size, cfg.ffn_dim, vb.pp("net").pp("0").pp("proj"))?,
+            proj: layers::linear(
+                cfg.hidden_size,
+                cfg.ffn_dim,
+                vb.pp("net").pp("0").pp("proj"),
+            )?,
             out: layers::linear(cfg.ffn_dim, cfg.hidden_size, vb.pp("net").pp("2"))?,
         })
     }

@@ -2989,7 +2989,15 @@ pub fn qk_rms_norm_rope_positions(
     // ROCm: one fused kernel does q/k RMSNorm + RoPE (vs two rms_norm launches + the rope launch).
     #[cfg(feature = "rocm")]
     if let Some(qk) = rocm_qk_rms_norm_rope_positions(
-        q, k, q_weight, k_weight, q_eps as f32, k_eps as f32, cos_cache, sin_cache, positions,
+        q,
+        k,
+        q_weight,
+        k_weight,
+        q_eps as f32,
+        k_eps as f32,
+        cos_cache,
+        sin_cache,
+        positions,
         is_gpt_neox,
     )? {
         return Ok(qk);
@@ -3032,7 +3040,9 @@ fn rocm_qk_rms_norm_rope_positions(
     is_gpt_neox: bool,
 ) -> Result<Option<(Tensor, Tensor)>> {
     use hanzo_ml::Storage;
-    if !q.device().is_rocm() || FORCE_UNFUSED_QK_NORM_ROPE.load(std::sync::atomic::Ordering::Relaxed) {
+    if !q.device().is_rocm()
+        || FORCE_UNFUSED_QK_NORM_ROPE.load(std::sync::atomic::Ordering::Relaxed)
+    {
         return Ok(None);
     }
     let (batch, _q_heads, _seq_len, head_dim) = q.dims4()?;
@@ -3074,7 +3084,19 @@ fn rocm_qk_rms_norm_rope_positions(
     };
 
     let (q_out, k_out) = q_s.rope_norm_positions(
-        q_l, k_s, k_l, qw_s, kw_s, q_eps, k_eps, cos_s, cos_l, sin_s, sin_l, pos_s, pos_l,
+        q_l,
+        k_s,
+        k_l,
+        qw_s,
+        kw_s,
+        q_eps,
+        k_eps,
+        cos_s,
+        cos_l,
+        sin_s,
+        sin_l,
+        pos_s,
+        pos_l,
         is_gpt_neox,
     )?;
     Ok(Some((

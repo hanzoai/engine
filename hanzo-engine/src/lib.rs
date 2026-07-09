@@ -43,9 +43,9 @@ mod model_loader;
 mod moe;
 mod ops;
 pub mod poi;
-pub mod poi_transcript;
 pub mod poi_forward;
 pub mod poi_graph;
+pub mod poi_transcript;
 mod video_input;
 mod vulkan;
 pub use model_loader::{
@@ -290,20 +290,19 @@ pub use pipeline::hf::{
 pub use pipeline::{
     animation_loader, chat_template::ChatTemplate, expand_isq_value, parse_isq_value,
     parse_uqff_shard, resolve_uqff_shorthand, AdapterPaths, AnimationComponents, AnimationLoader,
-    AnimationLoaderType, AnimationModelLoader, AnimationModelPaths, AnimationPipeline, AnyMoeLoader,
-    AnyMoePipeline, AutoDeviceMapParams,
-    AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams, DiffusionLoader,
-    DiffusionLoaderBuilder, DiffusionLoaderType, DitComponents, EchoMimicV3Loader, EmbeddingLoader,
-    EmbeddingLoaderBuilder, MuseTalkAnimationLoader, MuseTalkComponents,
-    EmbeddingLoaderType, EmbeddingModelPaths, EmbeddingSpecificConfig, GGMLLoader,
-    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
-    GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader,
-    Loader, LocalModelPaths, LoraAdapterPaths, MistralLoader, MixtralLoader, Modalities, ModelKind,
+    AnimationLoaderType, AnimationModelLoader, AnimationModelPaths, AnimationPipeline,
+    AnyMoeLoader, AnyMoePipeline, AutoDeviceMapParams, AutoLoader, AutoLoaderBuilder,
+    DiffusionGenerationParams, DiffusionLoader, DiffusionLoaderBuilder, DiffusionLoaderType,
+    DitComponents, EchoMimicV3Loader, EmbeddingLoader, EmbeddingLoaderBuilder, EmbeddingLoaderType,
+    EmbeddingModelPaths, EmbeddingSpecificConfig, GGMLLoader, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader,
+    Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
+    LocalModelPaths, LoraAdapterPaths, MistralLoader, MixtralLoader, Modalities, ModelKind,
     ModelPaths, MultimodalLoader, MultimodalLoaderBuilder, MultimodalLoaderType,
-    MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader, NormalLoaderBuilder,
-    NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
-    SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality, TokenSource,
-    UQFF_MULTI_FILE_DELIMITER,
+    MultimodalPromptPrefixer, MultimodalSpecificConfig, MuseTalkAnimationLoader,
+    MuseTalkComponents, NormalLoader, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
+    Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeechLoader, SpeechPipeline,
+    Starcoder2Loader, SupportedModality, TokenSource, UQFF_MULTI_FILE_DELIMITER,
 };
 pub use precompile_bridge::{
     embed, embedding_engine_registered, engine_handle, infer, inference_engine_registered,
@@ -1303,10 +1302,7 @@ impl Hanzo {
 
         // Check if model is loaded
         let is_loaded = {
-            let engines = self
-                .engines
-                .read()
-                .map_err(|_| Error::SenderPoisoned)?;
+            let engines = self.engines.read().map_err(|_| Error::SenderPoisoned)?;
             engines.contains_key(&resolved_model_id)
         };
 
@@ -1317,10 +1313,7 @@ impl Hanzo {
                 self.reboot_engine(&resolved_model_id)?
             }
 
-            let engines = self
-                .engines
-                .read()
-                .map_err(|_| Error::SenderPoisoned)?;
+            let engines = self.engines.read().map_err(|_| Error::SenderPoisoned)?;
             if let Some(engine_instance) = engines.get(&resolved_model_id) {
                 return Ok(engine_instance.sender.clone());
             }
@@ -1343,10 +1336,7 @@ impl Hanzo {
             self.reload_model_blocking(&resolved_model_id)?;
 
             // After reload, get the sender
-            let engines = self
-                .engines
-                .read()
-                .map_err(|_| Error::SenderPoisoned)?;
+            let engines = self.engines.read().map_err(|_| Error::SenderPoisoned)?;
             if let Some(engine_instance) = engines.get(&resolved_model_id) {
                 return Ok(engine_instance.sender.clone());
             }
@@ -1395,13 +1385,9 @@ impl Hanzo {
     pub fn get_session_store(
         &self,
         model_id: Option<&str>,
-    ) -> Result<Arc<std::sync::Mutex<engine::agentic_session::AgenticSessionStore>>, Error>
-    {
+    ) -> Result<Arc<std::sync::Mutex<engine::agentic_session::AgenticSessionStore>>, Error> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
-        let engines = self
-            .engines
-            .read()
-            .map_err(|_| Error::SenderPoisoned)?;
+        let engines = self.engines.read().map_err(|_| Error::SenderPoisoned)?;
         engines
             .get(&resolved_model_id)
             .map(|e| Arc::clone(&e.session_store))
@@ -1410,10 +1396,7 @@ impl Hanzo {
 
     fn get_file_store(&self, model_id: Option<&str>) -> Result<files::FileStore, Error> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
-        let engines = self
-            .engines
-            .read()
-            .map_err(|_| Error::SenderPoisoned)?;
+        let engines = self.engines.read().map_err(|_| Error::SenderPoisoned)?;
         engines
             .get(&resolved_model_id)
             .map(|e| e.file_store.clone())
@@ -1485,11 +1468,7 @@ impl Hanzo {
     }
 
     /// Delete an agentic session. Returns whether the session existed.
-    pub fn delete_session(
-        &self,
-        model_id: Option<&str>,
-        session_id: &str,
-    ) -> Result<bool, Error> {
+    pub fn delete_session(&self, model_id: Option<&str>, session_id: &str) -> Result<bool, Error> {
         let store = self.get_session_store(model_id)?;
         let mut guard = store.lock().map_err(|_| Error::SenderPoisoned)?;
         Ok(guard.delete(session_id))
@@ -1530,10 +1509,7 @@ impl Hanzo {
                     .default_engine_id
                     .read()
                     .map_err(|_| Error::SenderPoisoned)?;
-                Ok(default_lock
-                    .as_ref()
-                    .ok_or(Error::EnginePoisoned)?
-                    .clone())
+                Ok(default_lock.as_ref().ok_or(Error::EnginePoisoned)?.clone())
             }
         }
     }
@@ -1616,10 +1592,7 @@ impl Hanzo {
         }
         drop(reloading);
 
-        let engines = self
-            .engines
-            .read()
-            .map_err(|_| Error::EnginePoisoned)?;
+        let engines = self.engines.read().map_err(|_| Error::EnginePoisoned)?;
         if engines.contains_key(&resolved_model_id) {
             return Ok(true);
         }
@@ -1640,10 +1613,7 @@ impl Hanzo {
     pub fn get_logger(&self, model_id: Option<&str>) -> Result<Arc<IntervalLogger>, Error> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
-        let engines = self
-            .engines
-            .read()
-            .map_err(|_| Error::SenderPoisoned)?;
+        let engines = self.engines.read().map_err(|_| Error::SenderPoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.logger.clone())
         } else {
@@ -1655,10 +1625,7 @@ impl Hanzo {
     pub fn get_model_category(&self, model_id: Option<&str>) -> Result<ModelCategory, Error> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
-        let engines = self
-            .engines
-            .read()
-            .map_err(|_| Error::SenderPoisoned)?;
+        let engines = self.engines.read().map_err(|_| Error::SenderPoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.category.clone())
         } else {
@@ -1670,10 +1637,7 @@ impl Hanzo {
     pub fn max_sequence_length(&self, model_id: Option<&str>) -> Result<Option<usize>, Error> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
-        let engines = self
-            .engines
-            .read()
-            .map_err(|_| Error::SenderPoisoned)?;
+        let engines = self.engines.read().map_err(|_| Error::SenderPoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.config.max_seq_len)
         } else {
@@ -2048,10 +2012,7 @@ impl Hanzo {
         }
 
         // Get the engine instance and create UnloadedModelState
-        let mut engines = self
-            .engines
-            .write()
-            .map_err(|_| Error::EnginePoisoned)?;
+        let mut engines = self.engines.write().map_err(|_| Error::EnginePoisoned)?;
 
         let engine_instance = engines
             .remove(&resolved_model_id)
@@ -2103,10 +2064,7 @@ impl Hanzo {
         if let Some(ref default_id) = *default_lock {
             if default_id == &resolved_model_id {
                 // Set the first available engine as the new default
-                let engines = self
-                    .engines
-                    .read()
-                    .map_err(|_| Error::EnginePoisoned)?;
+                let engines = self.engines.read().map_err(|_| Error::EnginePoisoned)?;
                 *default_lock = engines.keys().next().cloned();
             }
         }
@@ -2206,9 +2164,7 @@ impl Hanzo {
                 .blocking_lock()
                 .attach_speculative(SpeculativeConfig::Mtp(mtp_config))
                 .map_err(|e| {
-                    Error::ReloadFailed(format!(
-                        "Failed to attach MTP speculative decoding: {e}"
-                    ))
+                    Error::ReloadFailed(format!("Failed to attach MTP speculative decoding: {e}"))
                 })?;
         }
 
@@ -2238,10 +2194,7 @@ impl Hanzo {
 
         // Add to engines map
         {
-            let mut engines = self
-                .engines
-                .write()
-                .map_err(|_| Error::EnginePoisoned)?;
+            let mut engines = self.engines.write().map_err(|_| Error::EnginePoisoned)?;
             engines.insert(model_id.to_string(), engine_instance);
         }
 
@@ -2276,9 +2229,8 @@ impl Hanzo {
                 }
             }
             Err(_) => {
-                let rt = tokio::runtime::Runtime::new().map_err(|e| {
-                    Error::ReloadFailed(format!("Failed to create runtime: {e}"))
-                })?;
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| Error::ReloadFailed(format!("Failed to create runtime: {e}")))?;
                 rt.block_on(self.reload_model(model_id))
             }
         }
@@ -2296,10 +2248,7 @@ impl Hanzo {
     /// Check if a model is currently loaded (as opposed to unloaded)
     pub fn is_model_loaded(&self, model_id: &str) -> Result<bool, Error> {
         let resolved_model_id = self.resolve_alias(model_id)?;
-        let engines = self
-            .engines
-            .read()
-            .map_err(|_| Error::EnginePoisoned)?;
+        let engines = self.engines.read().map_err(|_| Error::EnginePoisoned)?;
         Ok(engines.contains_key(&resolved_model_id))
     }
 
@@ -2319,10 +2268,7 @@ impl Hanzo {
 
         // Check if loaded
         {
-            let engines = self
-                .engines
-                .read()
-                .map_err(|_| Error::EnginePoisoned)?;
+            let engines = self.engines.read().map_err(|_| Error::EnginePoisoned)?;
             if engines.contains_key(&resolved_model_id) {
                 return Ok(Some(ModelStatus::Loaded));
             }
@@ -2357,10 +2303,7 @@ impl Hanzo {
         drop(reloading);
 
         // Get loaded models
-        let engines = self
-            .engines
-            .read()
-            .map_err(|_| Error::EnginePoisoned)?;
+        let engines = self.engines.read().map_err(|_| Error::EnginePoisoned)?;
         for model_id in engines.keys() {
             result.push((model_id.clone(), ModelStatus::Loaded));
         }

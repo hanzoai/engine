@@ -6,7 +6,7 @@ use axum::extract::{Json, State};
 use axum::http::StatusCode;
 use hanzo_engine::{
     auto_tune, collect_system_info, parse_isq_value, run_doctor, AutoDeviceMapParams,
-    AutoTuneRequest, AutoTuneResult, Hanzo, Error, ModelDType, ModelSelected,
+    AutoTuneRequest, AutoTuneResult, Error, Hanzo, ModelDType, ModelSelected,
     ModelStatus as CoreModelStatus, Request, SerializedSession, TokenSource, TuneProfile,
 };
 use serde::{Deserialize, Serialize};
