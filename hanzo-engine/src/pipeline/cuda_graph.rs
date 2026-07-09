@@ -509,6 +509,43 @@ pub(crate) fn cuda_decode_graphs_enabled() -> bool {
     crate::perf_flags::cuda_graphs_enabled()
 }
 
+// Decide whether a forward is capturable: q_len==1 decode (unchanged), or a full first prompt chunk
+// at the fixed prefill graph width. The chunk is self-attention (no prefix-cache gather), batch 1,
+// so every graph-varying tensor is one the decode buffers already refresh; the causal mask is a
+// flash marker and the flash cu-seqlens are constant for the width (kept alive, not refreshed).
+pub(crate) fn cuda_graph_forward_eligible(
+    input_ids: &Tensor,
+    seqlen_offsets: &[usize],
+    context_lens: &[(usize, usize)],
+    position_ids: &[usize],
+    metadata: &PagedAttentionInputMetadata,
+) -> bool {
+    if !input_ids.device().is_cuda() {
+        return false;
+    }
+    let Ok((batch, q_len)) = input_ids.dims2() else {
+        return false;
+    };
+    if seqlen_offsets.len() != batch
+        || context_lens.len() != batch
+        || position_ids.len() != batch
+    {
+        return false;
+    }
+    if q_len == 1 {
+        return crate::perf_flags::cuda_graphs_enabled()
+            && !metadata.is_first_prompt_chunk
+            && !metadata.disable_cuda_graphs
+            && metadata.num_cached_tokens.is_none();
+    }
+    crate::perf_flags::prefill_graphs_enabled()
+        && batch == 1
+        && q_len == crate::perf_flags::prefill_graph_chunk()
+        && metadata.is_first_prompt_chunk
+        && !metadata.disable_cuda_graphs
+        && metadata.num_cached_tokens.is_none()
+}
+
 pub(crate) fn disable_event_tracking_for_capture(stream: &Arc<CudaStream>) -> bool {
     let restore = stream.context().is_event_tracking();
     if restore {

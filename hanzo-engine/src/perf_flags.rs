@@ -1,13 +1,22 @@
 use std::sync::OnceLock;
 
 const CUDA_GRAPHS_ENV: &str = "CUDA_GRAPHS";
+const PREFILL_GRAPHS_ENV: &str = "PREFILL_GRAPHS";
+const PREFILL_GRAPH_CHUNK_ENV: &str = "PREFILL_GRAPH_CHUNK";
 #[cfg(feature = "metal")]
 const METAL_GRAPHS_ENV: &str = "METAL_GRAPHS";
 #[cfg(feature = "rocm")]
 const ROCM_GRAPHS_ENV: &str = "ROCM_GRAPHS";
 const FLASHINFER_DECODE_ENV: &str = "FLASHINFER_DECODE";
 
+// Fixed prefill chunk width captured as one CUDA graph per (chunk, kv-bucket) shape. Prompts longer
+// than this are chunked to this width so a graph is reused across requests; the ragged tail stays
+// eager. Full chunks (== this width) are the only prefill forwards captured.
+pub(crate) const DEFAULT_PREFILL_GRAPH_CHUNK: usize = 512;
+
 static CUDA_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
+static PREFILL_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
+static PREFILL_GRAPH_CHUNK: OnceLock<usize> = OnceLock::new();
 #[cfg(feature = "metal")]
 static METAL_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "rocm")]
@@ -30,6 +39,20 @@ fn env_flag(name: &str, default: bool) -> bool {
 
 pub(crate) fn cuda_graphs_enabled() -> bool {
     *CUDA_GRAPHS_ENABLED.get_or_init(|| env_flag(CUDA_GRAPHS_ENV, true))
+}
+
+pub(crate) fn prefill_graphs_enabled() -> bool {
+    *PREFILL_GRAPHS_ENABLED.get_or_init(|| env_flag(PREFILL_GRAPHS_ENV, true))
+}
+
+pub(crate) fn prefill_graph_chunk() -> usize {
+    *PREFILL_GRAPH_CHUNK.get_or_init(|| {
+        std::env::var(PREFILL_GRAPH_CHUNK_ENV)
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|chunk| *chunk > 1)
+            .unwrap_or(DEFAULT_PREFILL_GRAPH_CHUNK)
+    })
 }
 
 #[cfg(feature = "metal")]

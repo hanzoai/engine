@@ -26,7 +26,7 @@ use crate::paged_attention::{calculate_cache_config, AttentionImplementation, Ca
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
-    cuda_decode_graphs_enabled, disable_event_tracking_for_capture, end_cuda_capture_discard,
+    cuda_graph_forward_eligible, disable_event_tracking_for_capture, end_cuda_capture_discard,
     restore_event_tracking_after_capture, CudaDecodeGraphKey, CudaDecodeGraphMetadataBuffers,
     CudaGraphHandle, CUDA_DECODE_GRAPH_CACHE_CAPACITY,
 };
@@ -121,6 +121,9 @@ struct CudaDecodeGraphEntry {
     input_ids: Var,
     metadata_buffers: CudaDecodeGraphMetadataBuffers,
     _metadata: PagedAttentionInputMetadata,
+    // Prefill flash cu-seqlens are constant for the graph width, so they are baked at capture; this
+    // clone keeps their device storage alive for the graph's lifetime. Empty for decode.
+    _flash_meta: FlashParams,
     logits: Tensor,
 }
 
@@ -1320,28 +1323,19 @@ impl NormalPipeline {
         paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_meta: &FlashParams,
     ) -> hanzo_ml::Result<Option<Tensor>> {
-        if !cuda_decode_graphs_enabled() || !self.model.supports_cuda_decode_graphs() {
-            return Ok(None);
-        }
-        if self.model.has_speculative_proposer() {
+        if !self.model.supports_cuda_decode_graphs() || self.model.has_speculative_proposer() {
             return Ok(None);
         }
         let Some((kv_cache, metadata)) = paged_attn_meta else {
             return Ok(None);
         };
-        if metadata.is_first_prompt_chunk
-            || metadata.disable_cuda_graphs
-            || metadata.num_cached_tokens.is_some()
-        {
-            return Ok(None);
-        }
-        let (batch, q_len) = input_ids.dims2()?;
-        if q_len != 1
-            || seqlen_offsets.len() != batch
-            || context_lens.len() != batch
-            || position_ids.len() != batch
-            || !input_ids.device().is_cuda()
-        {
+        if !cuda_graph_forward_eligible(
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            metadata,
+        ) {
             return Ok(None);
         }
         let Some(cache_config) = self.metadata.cache_config.as_ref() else {
@@ -1474,6 +1468,7 @@ impl NormalPipeline {
             input_ids,
             metadata_buffers,
             _metadata: metadata,
+            _flash_meta: flash_meta.clone(),
             logits,
         })
     }
@@ -1617,6 +1612,17 @@ impl NormalPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
+    fn supports_prefill_graphs(&self) -> bool {
+        #[cfg(feature = "cuda")]
+        {
+            self.model.supports_cuda_decode_graphs()
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            false
+        }
+    }
+
     fn has_active_speculative_proposer(&self) -> bool {
         // Gates the step-start staged-token clear (pipeline/mod.rs): without this
         // override the default `false` wipes every staged DSpark/draft proposal
