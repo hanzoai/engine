@@ -2751,7 +2751,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "anyhow",
  "clap",
@@ -2783,7 +2783,7 @@ checksum = "b9dc246ef72490c348c62b93c06989605dc074e285657501c0aaa02d73c5b408"
 
 [[package]]
 name = "hanzo-audio"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "anyhow",
  "apodize",
@@ -2793,7 +2793,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-bench"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "anyhow",
  "clap",
@@ -2819,10 +2819,11 @@ dependencies = [
 
 [[package]]
 name = "hanzo-cli"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "anyhow",
  "axum",
+ "bs58",
  "chrono",
  "clap",
  "clap_complete",
@@ -2837,12 +2838,14 @@ dependencies = [
  "hanzo-engine",
  "hanzo-ml",
  "hanzo-nn",
+ "hanzo-quant",
  "hanzo-sandbox",
  "hanzo-server-core",
  "image",
  "include_dir",
  "indexmap 2.14.0",
  "mime_guess",
+ "qrcode",
  "regex",
  "rustyline",
  "serde",
@@ -2858,7 +2861,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-code-exec"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2876,7 +2879,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-engine"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -3031,7 +3034,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-llm-mcp"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3053,7 +3056,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-macros"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -3137,7 +3140,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-paged-attn"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "anyhow",
  "cudaforge",
@@ -3153,7 +3156,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-pyo3"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3179,7 +3182,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-quant"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "byteorder",
  "cuda-async",
@@ -3249,7 +3252,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-sandbox"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "anyhow",
  "itoa",
@@ -3265,7 +3268,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3288,7 +3291,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server-core"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3349,7 +3352,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-vision"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "hanzo-ml",
  "image",
@@ -3358,7 +3361,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-web-chat"
-version = "1.7.14"
+version = "1.7.17"
 dependencies = [
  "anyhow",
  "axum",
@@ -5431,6 +5434,12 @@ checksum = "7f6d64c71eb498fe9eae14ce4ec935c555749aef511cca85b5568910d6e48001"
 dependencies = [
  "bytemuck",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"
