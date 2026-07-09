@@ -37,6 +37,7 @@ use crate::pipeline::sampling::sample_and_add_toks;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::ChatTemplate;
+use crate::pipeline_parallel::{pp_worker_step, use_pipeline_parallel};
 use crate::pipeline::{get_chat_template, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
@@ -411,6 +412,14 @@ impl Loader for GGUFLoader {
         let num_layers = model.get_metadata()[&format!("{arch}.block_count")].to_u32()? as usize;
 
         let mut max_kv_tokens: Option<usize> = None;
+
+        // Pipeline parallelism owns layer placement itself (each rank loads only its own range
+        // onto its single local device) and runs eager attention, so bypass the auto device map
+        // and paged-attention cache engine.
+        if use_pipeline_parallel() {
+            mapper = DeviceMapSetting::dummy();
+            paged_attn_config = None;
+        }
 
         if let DeviceMapSetting::Auto(params) = mapper.clone() {
             let devices = device_map::get_all_similar_devices(device)?;
@@ -1403,6 +1412,22 @@ impl GGUFPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for GGUFPipeline {
+    fn pipeline_parallel_worker(&self) -> Result<(), hanzo_ml::Error> {
+        loop {
+            let cont = match self.model {
+                Model::Qwen3(ref m) => pp_worker_step(m)?,
+                Model::Qwen3MoE(ref m) => pp_worker_step(m)?,
+                _ => {
+                    hanzo_ml::bail!("pipeline parallelism is not wired for this GGUF architecture")
+                }
+            };
+            if !cont {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
