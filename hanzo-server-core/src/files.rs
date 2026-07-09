@@ -45,10 +45,7 @@ pub async fn get_file(State(state): ExtractedState, Path(id): Path<String>) -> R
     }
 }
 
-pub async fn get_file_content(
-    State(state): ExtractedState,
-    Path(id): Path<String>,
-) -> Response {
+pub async fn get_file_content(State(state): ExtractedState, Path(id): Path<String>) -> Response {
     serve_bytes(state, &id).unwrap_or_else(|(code, msg)| {
         (code, [(header::CONTENT_TYPE, "application/json")], msg).into_response()
     })

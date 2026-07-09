@@ -8,8 +8,11 @@
 use hanzo_ml::{DType, Device, Tensor, D};
 
 fn val(i: usize, salt: usize) -> f32 {
-    let x = ((i.wrapping_mul(2654435761).wrapping_add(salt.wrapping_mul(40503)) >> 8) & 0xffff)
-        as f32
+    let x = ((i
+        .wrapping_mul(2654435761)
+        .wrapping_add(salt.wrapping_mul(40503))
+        >> 8)
+        & 0xffff) as f32
         / 65535.0; // [0,1)
     (x - 0.5) * 8.0 // [-4,4]
 }
@@ -75,7 +78,10 @@ fn check(dev: &Device, log: &mut String, t: usize, topk: usize, n: usize, dtype:
         "t={t} topk={topk} n={n} dtype={dtype:?} nbad={nbad}/{} max_err(vs composite)={max_err:.6} max_ref={max_ref:.6}\n",
         t * n
     ));
-    assert_eq!(nbad, 0, "moe_combine {dtype:?} t={t} topk={topk} n={n}: nbad={nbad} max_ref={max_ref}");
+    assert_eq!(
+        nbad, 0,
+        "moe_combine {dtype:?} t={t} topk={topk} n={n}: nbad={nbad} max_ref={max_ref}"
+    );
 }
 
 #[test]

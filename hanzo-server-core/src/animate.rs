@@ -55,8 +55,10 @@ impl IntoResponse for AnimateResponder {
             AnimateResponder::Mp4(bytes) => {
                 ([(header::CONTENT_TYPE, "video/mp4")], bytes).into_response()
             }
-            AnimateResponder::InternalError(e) => JsonError::new(sanitize_error_message(e.as_ref()))
-                .to_response(StatusCode::INTERNAL_SERVER_ERROR),
+            AnimateResponder::InternalError(e) => {
+                JsonError::new(sanitize_error_message(e.as_ref()))
+                    .to_response(StatusCode::INTERNAL_SERVER_ERROR)
+            }
             AnimateResponder::ValidationError(e) => {
                 JsonError::new(sanitize_error_message(e.as_ref()))
                     .to_response(StatusCode::UNPROCESSABLE_ENTITY)

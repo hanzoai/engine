@@ -1,8 +1,16 @@
 #[derive(Clone, Debug)]
 pub enum SpeculativeAttachKind {
-    Mtp { assistant: String, n_predict: usize },
-    DraftModel { gamma: usize },
-    Dspark { block_size: usize, confidence_threshold: f32 },
+    Mtp {
+        assistant: String,
+        n_predict: usize,
+    },
+    DraftModel {
+        gamma: usize,
+    },
+    Dspark {
+        block_size: usize,
+        confidence_threshold: f32,
+    },
 }
 
 #[derive(Clone, Debug)]

@@ -51,7 +51,6 @@ pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn}
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
 
-
 /// Generic chunked attention computation that can be used by different backends
 pub(crate) fn chunked_attention<F>(
     q: &Tensor,
@@ -159,7 +158,8 @@ fn vulkan_decode_attn(
     let (qs, _) = q.storage_and_layout();
     let (ks, _) = k.storage_and_layout();
     let (vs, _) = v.storage_and_layout();
-    let (Storage::Vulkan(_qv), Storage::Vulkan(_kv), Storage::Vulkan(_vv)) = (&*qs, &*ks, &*vs) else {
+    let (Storage::Vulkan(_qv), Storage::Vulkan(_kv), Storage::Vulkan(_vv)) = (&*qs, &*ks, &*vs)
+    else {
         return Ok(None);
     };
     // Fused single-query Vulkan decode-attention (`attn_decode_gpu`) is not yet wired in hanzo-ml;
@@ -236,9 +236,7 @@ impl Sdpa {
         // mask is dropped. SWA, non-causal (None+!do_causal), short seqs, and head_dim != 128 fall
         // through to the eager path. The kernel does GQA, so it takes the un-expanded k/v.
         #[cfg(feature = "rocm")]
-        if q.device().is_rocm()
-            && !matches!(mask, AttentionMask::None if !do_causal)
-        {
+        if q.device().is_rocm() && !matches!(mask, AttentionMask::None if !do_causal) {
             const ROCM_FLASH_MIN_SEQ: usize = 768;
             let (_, _, seq_len, head_dim) = q.dims4()?;
             let is_full_causal = matches!(mask, AttentionMask::CausalFlash)
@@ -556,7 +554,11 @@ mod flash_precision_probe {
 
     fn causal_mask(s: usize, dev: &Device) -> Tensor {
         let mut m = vec![0f32; s * s];
-        for i in 0..s { for j in (i + 1)..s { m[i * s + j] = f32::NEG_INFINITY; } }
+        for i in 0..s {
+            for j in (i + 1)..s {
+                m[i * s + j] = f32::NEG_INFINITY;
+            }
+        }
         Tensor::from_vec(m, (s, s), dev).unwrap()
     }
 
@@ -567,23 +569,67 @@ mod flash_precision_probe {
         let dev = Device::new_cuda(0).expect("cuda");
         let (hq, hkv, d) = (32usize, 8usize, 128usize);
         let scale = 1.0 / (d as f32).sqrt();
-        let p = SdpaParams { n_kv_groups: hq / hkv, softcap: None, softmax_scale: scale, sliding_window: None, sinks: None };
+        let p = SdpaParams {
+            n_kv_groups: hq / hkv,
+            softcap: None,
+            softmax_scale: scale,
+            sliding_window: None,
+            sinks: None,
+        };
         for &s in &[8usize, 32, 128, 512] {
-            let q = Tensor::randn(0f32, 1., (1, hq, s, d), &dev).unwrap().to_dtype(DType::BF16).unwrap();
-            let k = Tensor::randn(0f32, 1., (1, hkv, s, d), &dev).unwrap().to_dtype(DType::BF16).unwrap();
-            let v = Tensor::randn(0f32, 1., (1, hkv, s, d), &dev).unwrap().to_dtype(DType::BF16).unwrap();
+            let q = Tensor::randn(0f32, 1., (1, hq, s, d), &dev)
+                .unwrap()
+                .to_dtype(DType::BF16)
+                .unwrap();
+            let k = Tensor::randn(0f32, 1., (1, hkv, s, d), &dev)
+                .unwrap()
+                .to_dtype(DType::BF16)
+                .unwrap();
+            let v = Tensor::randn(0f32, 1., (1, hkv, s, d), &dev)
+                .unwrap()
+                .to_dtype(DType::BF16)
+                .unwrap();
             let kr = repeat_kv(k.clone(), p.n_kv_groups).unwrap();
             let vr = repeat_kv(v.clone(), p.n_kv_groups).unwrap();
-            let eager = naive_sdpa(&q, &kr, &vr, Some(&causal_mask(s, &dev).to_dtype(DType::BF16).unwrap()), &p).unwrap();
-            let qf = q.transpose(1,2).unwrap().contiguous().unwrap();
-            let kf = kr.transpose(1,2).unwrap().contiguous().unwrap();
-            let vf = vr.transpose(1,2).unwrap().contiguous().unwrap();
-            let flash = flash_attn(&qf,&kf,&vf,None,&p).unwrap().transpose(1,2).unwrap();
-            let e: Vec<f32> = eager.to_dtype(DType::F32).unwrap().flatten_all().unwrap().to_vec1().unwrap();
-            let f: Vec<f32> = flash.to_dtype(DType::F32).unwrap().flatten_all().unwrap().to_vec1().unwrap();
+            let eager = naive_sdpa(
+                &q,
+                &kr,
+                &vr,
+                Some(&causal_mask(s, &dev).to_dtype(DType::BF16).unwrap()),
+                &p,
+            )
+            .unwrap();
+            let qf = q.transpose(1, 2).unwrap().contiguous().unwrap();
+            let kf = kr.transpose(1, 2).unwrap().contiguous().unwrap();
+            let vf = vr.transpose(1, 2).unwrap().contiguous().unwrap();
+            let flash = flash_attn(&qf, &kf, &vf, None, &p)
+                .unwrap()
+                .transpose(1, 2)
+                .unwrap();
+            let e: Vec<f32> = eager
+                .to_dtype(DType::F32)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1()
+                .unwrap();
+            let f: Vec<f32> = flash
+                .to_dtype(DType::F32)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1()
+                .unwrap();
             let (mut mr, mut ma) = (0f32, 0f32);
-            for (a,b) in e.iter().zip(f.iter()) { let dd=(a-b).abs(); ma=ma.max(dd); mr=mr.max(dd/a.abs().max(1e-3)); }
-            eprintln!("[flash-vs-eager] seq={:<4} max_abs={:.4} max_rel={:.4}", s, ma, mr);
+            for (a, b) in e.iter().zip(f.iter()) {
+                let dd = (a - b).abs();
+                ma = ma.max(dd);
+                mr = mr.max(dd / a.abs().max(1e-3));
+            }
+            eprintln!(
+                "[flash-vs-eager] seq={:<4} max_abs={:.4} max_rel={:.4}",
+                s, ma, mr
+            );
         }
     }
 }

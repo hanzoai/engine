@@ -1202,9 +1202,11 @@ mod tests {
                 .map(|(x, y)| (x - y).abs() / x.abs().max(1e-4))
                 .fold(0.0f32, f32::max)
         };
-        for &(batch, nvh, hkd, hvd, seq) in
-            &[(1usize, 4usize, 128usize, 128usize, 1usize), (1, 8, 128, 128, 7), (1, 4, 128, 128, 64)]
-        {
+        for &(batch, nvh, hkd, hvd, seq) in &[
+            (1usize, 4usize, 128usize, 128usize, 1usize),
+            (1, 8, 128, 128, 7),
+            (1, 4, 128, 128, 64),
+        ] {
             let on4 = |v: Vec<f32>, s: (usize, usize, usize, usize)| -> Result<Tensor> {
                 Tensor::from_vec(v, s, &Device::Cpu)?.to_device(&dev)
             };
@@ -1215,16 +1217,25 @@ mod tests {
             let k = on4(gen(batch * seq * nvh * hkd, 2), (batch, seq, nvh, hkd))?;
             let v = on4(gen(batch * seq * nvh * hvd, 3), (batch, seq, nvh, hvd))?;
             let g = on3(
-                gen(batch * seq * nvh, 4).iter().map(|x| x * 0.5 - 0.5).collect(),
+                gen(batch * seq * nvh, 4)
+                    .iter()
+                    .map(|x| x * 0.5 - 0.5)
+                    .collect(),
                 (batch, seq, nvh),
             )?;
             let beta = on3(
-                gen(batch * seq * nvh, 5).iter().map(|x| (x + 1.0) * 0.5).collect(),
+                gen(batch * seq * nvh, 5)
+                    .iter()
+                    .map(|x| (x + 1.0) * 0.5)
+                    .collect(),
                 (batch, seq, nvh),
             )?;
-            let state0 =
-                Tensor::from_vec(gen(batch * nvh * hkd * hvd, 6), (batch, nvh, hkd, hvd), &Device::Cpu)?
-                    .to_device(&dev)?;
+            let state0 = Tensor::from_vec(
+                gen(batch * nvh * hkd * hvd, 6),
+                (batch, nvh, hkd, hvd),
+                &Device::Cpu,
+            )?
+            .to_device(&dev)?;
 
             let mut s_fused = state0.clone();
             let y_fused = recurrence_cuda(&q, &k, &v, &g, &beta, &mut s_fused)?;
@@ -1240,7 +1251,10 @@ mod tests {
             eprintln!(
                 "[gdn cuda-vs-portable] b{batch} h{nvh} k{hkd} v{hvd} s{seq}  y_rel={ry:.2e} state_rel={rs:.2e}"
             );
-            assert!(ry < 1e-4 && rs < 1e-4, "fused!=portable b{batch} s{seq} y_rel={ry} state_rel={rs}");
+            assert!(
+                ry < 1e-4 && rs < 1e-4,
+                "fused!=portable b{batch} s{seq} y_rel={ry} state_rel={rs}"
+            );
         }
         Ok(())
     }

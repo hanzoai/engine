@@ -213,8 +213,11 @@ pub async fn get_3d_content(
     match job.status {
         ThreeDJobStatus::Completed => match &job.result {
             Some(bytes) => {
-                let disposition =
-                    format!("inline; filename=\"{}.{}\"", job.id, job.params.format.ext());
+                let disposition = format!(
+                    "inline; filename=\"{}.{}\"",
+                    job.id,
+                    job.params.format.ext()
+                );
                 (
                     StatusCode::OK,
                     [
@@ -327,7 +330,10 @@ mod tests {
     fn demo_cube_serializes_to_ply() {
         let mesh = hanzo_3d::unit_cube();
         let ply = String::from_utf8(ThreeDFormat::Ply.serialize(&mesh)).unwrap();
-        assert!(ply.starts_with("ply"), "expected PLY header, got: {ply:.16}");
+        assert!(
+            ply.starts_with("ply"),
+            "expected PLY header, got: {ply:.16}"
+        );
         assert!(ply.contains("element vertex 8"));
     }
 

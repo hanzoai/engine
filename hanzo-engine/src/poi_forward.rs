@@ -33,7 +33,9 @@ pub fn prove<T>(f: impl FnOnce() -> T) -> (T, ProofTranscript) {
     let out = f();
     let transcript = PROOF_CTX.with(|c| {
         let mut slot = c.borrow_mut();
-        let t = slot.take().expect("proof context present at end of prove()");
+        let t = slot
+            .take()
+            .expect("proof context present at end of prove()");
         *slot = prev;
         t
     });
@@ -94,7 +96,11 @@ impl ProvableLinear {
     /// Quantize an f32 weight given row-major as `[out_features × in_features]` (the PyTorch
     /// `nn.Linear` layout) into the proof-bearing representation. Per-output-row symmetric int8.
     pub fn from_f32(weight: &[f32], out_features: usize, in_features: usize) -> Self {
-        assert_eq!(weight.len(), out_features * in_features, "ProvableLinear weight shape");
+        assert_eq!(
+            weight.len(),
+            out_features * in_features,
+            "ProvableLinear weight shape"
+        );
         // quantize per output row, then store TRANSPOSED as [in × out] for x[t×in]·W[in×out].
         let (q_row, w_scale) = quantize_rows_i8(weight, out_features, in_features);
         let mut w_t = vec![0i64; in_features * out_features];
@@ -103,7 +109,12 @@ impl ProvableLinear {
                 w_t[i * out_features + o] = q_row[o * in_features + i];
             }
         }
-        Self { in_features, out_features, w_i8: Mat::new(in_features, out_features, w_t), w_scale }
+        Self {
+            in_features,
+            out_features,
+            w_i8: Mat::new(in_features, out_features, w_t),
+            w_scale,
+        }
     }
 
     pub fn in_features(&self) -> usize {
@@ -125,11 +136,15 @@ impl ProvableLinear {
     /// proving, and dequantizes the committed `C` — so the returned value is exactly what was
     /// committed.
     pub fn forward(&self, x: &[f32], tokens: usize) -> Vec<f32> {
-        assert_eq!(x.len(), tokens * self.in_features, "ProvableLinear forward shape");
+        assert_eq!(
+            x.len(),
+            tokens * self.in_features,
+            "ProvableLinear forward shape"
+        );
         let (x_q, x_scale) = quantize_rows_i8(x, tokens, self.in_features);
         let a = Mat::new(tokens, self.in_features, x_q);
         let c = exact_matmul(&a, &self.w_i8); // [tokens × out] EXACT i64
-        // dequant: y[t][o] = C[t][o] * x_scale[t] * w_scale[o]
+                                              // dequant: y[t][o] = C[t][o] * x_scale[t] * w_scale[o]
         let mut y = vec![0f32; tokens * self.out_features];
         for t in 0..tokens {
             for o in 0..self.out_features {
@@ -151,7 +166,9 @@ mod tests {
     fn gen(n: usize, seed: &mut u64) -> Vec<f32> {
         (0..n)
             .map(|_| {
-                *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                *seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 (((*seed >> 33) as i64 % 200) - 100) as f32 / 50.0 // ~[-2, 2]
             })
             .collect()
@@ -195,7 +212,11 @@ mod tests {
         // run the REAL forward under proof emission
         let (y, transcript) = prove(|| ffn.forward(&x, tokens, d, hidden));
         assert_eq!(y.len(), tokens * d, "FFN returns [tokens × d]");
-        assert_eq!(transcript.len(), 3, "gate + up + down = 3 committed matmuls");
+        assert_eq!(
+            transcript.len(),
+            3,
+            "gate + up + down = 3 committed matmuls"
+        );
 
         // the prover posts this root; a challenger opens a beacon-selected matmul
         let root = transcript.root();
@@ -207,7 +228,10 @@ mod tests {
         );
         // every layer of the real forward verifies
         for i in 0..transcript.len() {
-            assert!(verify_opening(&root, beacon, &transcript.open(i), 2), "honest matmul {i} verifies");
+            assert!(
+                verify_opening(&root, beacon, &transcript.open(i), 2),
+                "honest matmul {i} verifies"
+            );
         }
     }
 
@@ -223,8 +247,12 @@ mod tests {
         let (_xq, x_scale) = quantize_rows_i8(&x, 2, 16);
         for tok in 0..2 {
             for o in 0..8 {
-                let expect = (op.c.data[tok * op.c.cols + o] as f64 * x_scale[tok] * lin.w_scale[o]) as f32;
-                assert!((y[tok * 8 + o] - expect).abs() < 1e-6, "returned output == dequant(committed C)");
+                let expect =
+                    (op.c.data[tok * op.c.cols + o] as f64 * x_scale[tok] * lin.w_scale[o]) as f32;
+                assert!(
+                    (y[tok * 8 + o] - expect).abs() < 1e-6,
+                    "returned output == dequant(committed C)"
+                );
             }
         }
     }

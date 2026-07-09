@@ -74,7 +74,14 @@ fn put_d(block: &mut [u8], off: usize, r: usize, b: usize, lo: f32, step: f32, m
     block[off + 1] = bytes[1];
 }
 
-fn reference_row<T: GgmlType>(wq: &[u8], nn: usize, nblk: usize, blk: usize, tsz: usize, x: &[f32]) -> f32 {
+fn reference_row<T: GgmlType>(
+    wq: &[u8],
+    nn: usize,
+    nblk: usize,
+    blk: usize,
+    tsz: usize,
+    x: &[f32],
+) -> f32 {
     let mut acc = 0f32;
     let mut deq = vec![0f32; blk];
     for b in 0..nblk {
@@ -139,7 +146,10 @@ fn decode_exact<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
         let mut xh = vec![f16::ZERO; k];
         xh[j] = f16::ONE;
         let xst = dev.storage_from_slice(&xh).expect("upload onehot");
-        let y = to_f32(&dev.matvec_quant(qt, &wst, &xst, n, k).expect("matvec onehot"));
+        let y = to_f32(
+            &dev.matvec_quant(qt, &wst, &xst, n, k)
+                .expect("matvec onehot"),
+        );
         for r in 0..n {
             let g = y[r];
             let c = cpu[r * 256 + j];
@@ -161,7 +171,10 @@ fn decode_exact<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
         covered.len()
     ));
     hanzo_ml::set_force_scalar_matvec(false);
-    assert!(nbad == 0, "{name} decode_exact: {nbad} weights mismatch (max_err={max_err})");
+    assert!(
+        nbad == 0,
+        "{name} decode_exact: {nbad} weights mismatch (max_err={max_err})"
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -189,16 +202,28 @@ fn check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
     let wq_bytes = build_bytes(n, k, blk, tsz, fill);
     let wst = dev.storage_from_slice(&wq_bytes).expect("upload w");
 
-    let y_h = dev.matvec_quant(qt, &wst, &xst_h, n, k).expect("matvec f16");
-    let y_b = dev.matvec_quant(qt, &wst, &xst_b, n, k).expect("matvec bf16");
+    let y_h = dev
+        .matvec_quant(qt, &wst, &xst_h, n, k)
+        .expect("matvec f16");
+    let y_b = dev
+        .matvec_quant(qt, &wst, &xst_b, n, k)
+        .expect("matvec bf16");
     assert_eq!(y_h.dtype(), hanzo_ml::DType::F16);
     assert_eq!(y_b.dtype(), hanzo_ml::DType::BF16);
     let yh = to_f32(&y_h);
     let yb = to_f32(&y_b);
 
     let dp4a = qt.dp4a_active();
-    let ax_h = if dp4a { q8_1_recon(&xf_h) } else { xf_h.clone() };
-    let ax_b = if dp4a { q8_1_recon(&xf_b) } else { xf_b.clone() };
+    let ax_h = if dp4a {
+        q8_1_recon(&xf_h)
+    } else {
+        xf_h.clone()
+    };
+    let ax_b = if dp4a {
+        q8_1_recon(&xf_b)
+    } else {
+        xf_b.clone()
+    };
     let mut ref_h = vec![0f32; n];
     let mut ref_b = vec![0f32; n];
     for nn in 0..n {
@@ -250,7 +275,9 @@ fn moe_check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
     let expert_bytes = n * nblk * tsz;
     let mut bank: Vec<u8> = Vec::with_capacity(e_cnt * expert_bytes);
     for e in 0..e_cnt {
-        bank.extend_from_slice(&build_bytes(n, k, blk, tsz, |b, r, bb| fill(b, r * (e + 1) + e, bb)));
+        bank.extend_from_slice(&build_bytes(n, k, blk, tsz, |b, r, bb| {
+            fill(b, r * (e + 1) + e, bb)
+        }));
     }
     let wbank = dev.storage_from_slice(&bank).expect("upload bank");
     let ids: Vec<u32> = (0..nrows).map(|s| ((s * 3 + 1) % e_cnt) as u32).collect();
@@ -263,8 +290,14 @@ fn moe_check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
     let xst_h = dev.storage_from_slice(&xh).expect("upload x f16");
     let xst_b = dev.storage_from_slice(&xbf).expect("upload x bf16");
 
-    let yh = to_f32(&dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k).expect("moe f16"));
-    let yb = to_f32(&dev.moe_matvec_quant(qt, &wbank, &xst_b, &ids_dev, nrows, n, k).expect("moe bf16"));
+    let yh = to_f32(
+        &dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k)
+            .expect("moe f16"),
+    );
+    let yb = to_f32(
+        &dev.moe_matvec_quant(qt, &wbank, &xst_b, &ids_dev, nrows, n, k)
+            .expect("moe bf16"),
+    );
 
     let mut nbad = 0usize;
     let mut max_err_h = 0f32;
@@ -275,8 +308,16 @@ fn moe_check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
         let eb = &bank[eid as usize * expert_bytes..(eid as usize + 1) * expert_bytes];
         let raw_h = &xf_h[s * k..s * k + k];
         let raw_b = &xf_b[s * k..s * k + k];
-        let xrow_h = if dp4a { q8_1_recon(raw_h) } else { raw_h.to_vec() };
-        let xrow_b = if dp4a { q8_1_recon(raw_b) } else { raw_b.to_vec() };
+        let xrow_h = if dp4a {
+            q8_1_recon(raw_h)
+        } else {
+            raw_h.to_vec()
+        };
+        let xrow_b = if dp4a {
+            q8_1_recon(raw_b)
+        } else {
+            raw_b.to_vec()
+        };
         for r in 0..n {
             let rh = reference_row::<T>(eb, r, nblk, blk, tsz, &xrow_h);
             let rb = reference_row::<T>(eb, r, nblk, blk, tsz, &xrow_b);
@@ -295,10 +336,19 @@ fn moe_check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
         "{name:8} MoE E={e_cnt} nrows={nrows} n={n} k={k} nbad={nbad}/{} max_err_f16={max_err_h:.5} max_err_bf16={max_err_b:.5} scale={scale:.3}\n",
         nrows * n
     ));
-    assert!(nbad == 0, "{name} MoE mismatch: nbad={nbad} max_err_f16={max_err_h} max_err_bf16={max_err_b}");
+    assert!(
+        nbad == 0,
+        "{name} MoE mismatch: nbad={nbad} max_err_f16={max_err_h} max_err_bf16={max_err_b}"
+    );
 }
 
-const SHAPES: &[(usize, usize)] = &[(64, 256), (4096, 4096), (1024, 3072), (17, 4096), (4096, 256)];
+const SHAPES: &[(usize, usize)] = &[
+    (64, 256),
+    (4096, 4096),
+    (1024, 3072),
+    (17, 4096),
+    (4096, 256),
+];
 
 #[test]
 fn qmatvec_iq3_numeric() {
@@ -307,14 +357,50 @@ fn qmatvec_iq3_numeric() {
     let fill = |blk: &mut [u8], r: usize, b: usize| put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
 
     // IQ3_XXS: 98 B. d@0, qs[96]@2 (grid idx [0..64), scales_and_signs [64..96)).
-    decode_exact::<BlockIQ3xxs, _>(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, 128, 98, fill);
+    decode_exact::<BlockIQ3xxs, _>(
+        &dev,
+        &mut log,
+        "IQ3_XXS",
+        RocmQuantType::IQ3_XXS,
+        128,
+        98,
+        fill,
+    );
     for &(n, k) in SHAPES {
-        check::<BlockIQ3xxs, _>(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, n, k, 256, 98, fill);
+        check::<BlockIQ3xxs, _>(
+            &dev,
+            &mut log,
+            "IQ3_XXS",
+            RocmQuantType::IQ3_XXS,
+            n,
+            k,
+            256,
+            98,
+            fill,
+        );
     }
     // IQ3_S: 110 B. d@0, qs[64]@2, qh[8]@66, signs[32]@74, scales[4]@106.
-    decode_exact::<BlockIQ3s, _>(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, 128, 110, fill);
+    decode_exact::<BlockIQ3s, _>(
+        &dev,
+        &mut log,
+        "IQ3_S",
+        RocmQuantType::IQ3_S,
+        128,
+        110,
+        fill,
+    );
     for &(n, k) in SHAPES {
-        check::<BlockIQ3s, _>(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, n, k, 256, 110, fill);
+        check::<BlockIQ3s, _>(
+            &dev,
+            &mut log,
+            "IQ3_S",
+            RocmQuantType::IQ3_S,
+            n,
+            k,
+            256,
+            110,
+            fill,
+        );
     }
 
     eprintln!("{log}");
@@ -346,11 +432,21 @@ fn ab_matvec<F: Fn(&mut [u8], usize, usize)>(
     let dp4a_h = to_f32(&dev.matvec_quant(qt, &wst, &xst_h, n, k).expect("dp4a f16"));
     let dp4a_b = to_f32(&dev.matvec_quant(qt, &wst, &xst_b, n, k).expect("dp4a bf16"));
     hanzo_ml::set_force_scalar_matvec(true);
-    let scal_h = to_f32(&dev.matvec_quant(qt, &wst, &xst_h, n, k).expect("scalar f16"));
-    let scal_b = to_f32(&dev.matvec_quant(qt, &wst, &xst_b, n, k).expect("scalar bf16"));
+    let scal_h = to_f32(
+        &dev.matvec_quant(qt, &wst, &xst_h, n, k)
+            .expect("scalar f16"),
+    );
+    let scal_b = to_f32(
+        &dev.matvec_quant(qt, &wst, &xst_b, n, k)
+            .expect("scalar bf16"),
+    );
     hanzo_ml::set_force_scalar_matvec(false);
 
-    let scale = scal_h.iter().chain(scal_b.iter()).fold(0f32, |m, &v| m.max(v.abs())).max(1.0);
+    let scale = scal_h
+        .iter()
+        .chain(scal_b.iter())
+        .fold(0f32, |m, &v| m.max(v.abs()))
+        .max(1.0);
     let tol = 0.01 * scale;
     let mut nbad = 0usize;
     let mut max_err = 0f32;
@@ -365,7 +461,10 @@ fn ab_matvec<F: Fn(&mut [u8], usize, usize)>(
     log.push_str(&format!(
         "{name:8} dp4a-vs-scalar n={n} k={k} nbad={nbad}/{n} max_err={max_err:.5} (tol {tol:.5})\n"
     ));
-    assert!(nbad == 0, "{name} dp4a != scalar core: nbad={nbad} max_err={max_err} tol={tol}");
+    assert!(
+        nbad == 0,
+        "{name} dp4a != scalar core: nbad={nbad} max_err={max_err} tol={tol}"
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -386,7 +485,9 @@ fn ab_moe<F: Fn(&mut [u8], usize, usize)>(
     let expert_bytes = n * nblk * tsz;
     let mut bank: Vec<u8> = Vec::with_capacity(e_cnt * expert_bytes);
     for e in 0..e_cnt {
-        bank.extend_from_slice(&build_bytes(n, k, blk, tsz, |b, r, bb| fill(b, r * (e + 1) + e, bb)));
+        bank.extend_from_slice(&build_bytes(n, k, blk, tsz, |b, r, bb| {
+            fill(b, r * (e + 1) + e, bb)
+        }));
     }
     let wbank = dev.storage_from_slice(&bank).expect("upload bank");
     let ids: Vec<u32> = (0..nrows).map(|s| ((s * 3 + 1) % e_cnt) as u32).collect();
@@ -396,9 +497,15 @@ fn ab_moe<F: Fn(&mut [u8], usize, usize)>(
     let xst_h = dev.storage_from_slice(&xh).expect("upload x f16");
 
     hanzo_ml::set_force_scalar_matvec(false);
-    let dp4a = to_f32(&dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k).expect("moe dp4a"));
+    let dp4a = to_f32(
+        &dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k)
+            .expect("moe dp4a"),
+    );
     hanzo_ml::set_force_scalar_matvec(true);
-    let scal = to_f32(&dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k).expect("moe scalar"));
+    let scal = to_f32(
+        &dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k)
+            .expect("moe scalar"),
+    );
     hanzo_ml::set_force_scalar_matvec(false);
 
     let scale = scal.iter().fold(0f32, |m, &v| m.max(v.abs())).max(1.0);
@@ -416,7 +523,10 @@ fn ab_moe<F: Fn(&mut [u8], usize, usize)>(
         "{name:8} MoE dp4a-vs-scalar nbad={nbad}/{} max_err={max_err:.5} (tol {tol:.5})\n",
         nrows * n
     ));
-    assert!(nbad == 0, "{name} MoE dp4a != scalar core: nbad={nbad} max_err={max_err} tol={tol}");
+    assert!(
+        nbad == 0,
+        "{name} MoE dp4a != scalar core: nbad={nbad} max_err={max_err} tol={tol}"
+    );
 }
 
 #[test]
@@ -425,11 +535,55 @@ fn qmatvec_iq3_dp4a_vs_scalar() {
     let dev = RocmDevice::new(0).expect("rocm device");
     let fill = |blk: &mut [u8], r: usize, b: usize| put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
     for &(n, k) in SHAPES {
-        ab_matvec(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, n, k, 256, 98, fill);
-        ab_matvec(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, n, k, 256, 110, fill);
+        ab_matvec(
+            &dev,
+            &mut log,
+            "IQ3_XXS",
+            RocmQuantType::IQ3_XXS,
+            n,
+            k,
+            256,
+            98,
+            fill,
+        );
+        ab_matvec(
+            &dev,
+            &mut log,
+            "IQ3_S",
+            RocmQuantType::IQ3_S,
+            n,
+            k,
+            256,
+            110,
+            fill,
+        );
     }
-    ab_moe(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, 8, 16, 128, 512, 256, 98, fill);
-    ab_moe(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, 8, 16, 128, 512, 256, 110, fill);
+    ab_moe(
+        &dev,
+        &mut log,
+        "IQ3_XXS",
+        RocmQuantType::IQ3_XXS,
+        8,
+        16,
+        128,
+        512,
+        256,
+        98,
+        fill,
+    );
+    ab_moe(
+        &dev,
+        &mut log,
+        "IQ3_S",
+        RocmQuantType::IQ3_S,
+        8,
+        16,
+        128,
+        512,
+        256,
+        110,
+        fill,
+    );
     eprintln!("{log}");
 }
 
@@ -439,8 +593,32 @@ fn moe_matvec_iq3_numeric() {
     let dev = RocmDevice::new(0).expect("rocm device");
     let fill = |blk: &mut [u8], r: usize, b: usize| put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
 
-    moe_check::<BlockIQ3xxs, _>(&dev, &mut log, "IQ3_XXS", RocmQuantType::IQ3_XXS, 8, 16, 128, 512, 256, 98, fill);
-    moe_check::<BlockIQ3s, _>(&dev, &mut log, "IQ3_S", RocmQuantType::IQ3_S, 8, 16, 128, 512, 256, 110, fill);
+    moe_check::<BlockIQ3xxs, _>(
+        &dev,
+        &mut log,
+        "IQ3_XXS",
+        RocmQuantType::IQ3_XXS,
+        8,
+        16,
+        128,
+        512,
+        256,
+        98,
+        fill,
+    );
+    moe_check::<BlockIQ3s, _>(
+        &dev,
+        &mut log,
+        "IQ3_S",
+        RocmQuantType::IQ3_S,
+        8,
+        16,
+        128,
+        512,
+        256,
+        110,
+        fill,
+    );
 
     eprintln!("{log}");
 }

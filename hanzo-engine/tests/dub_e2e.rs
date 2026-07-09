@@ -394,9 +394,10 @@ fn animate_render(dev: &Device) -> Result<()> {
         MuseTalkAnimator::new(musetalk, whisper, rand_vb(), opts).context("build animator")?;
 
     let fps = 25.0;
-    let pcm: Vec<f32> = (0..4800) // 0.2 s @ 24 kHz -> T = ceil(0.2 * 25) = 5 frames
-        .map(|i| (i as f32 * 200.0 * std::f32::consts::PI / 24_000.0).sin() * 0.3)
-        .collect();
+    let pcm: Vec<f32> =
+        (0..4800) // 0.2 s @ 24 kHz -> T = ceil(0.2 * 25) = 5 frames
+            .map(|i| (i as f32 * 200.0 * std::f32::consts::PI / 24_000.0).sin() * 0.3)
+            .collect();
     let footage = vec![gradient_frame(64, 64, 0), gradient_frame(64, 64, 80)];
 
     let req = AnimationRequest {
@@ -412,12 +413,19 @@ fn animate_render(dev: &Device) -> Result<()> {
     assert_eq!(out.frames.len(), expected, "frame count == ceil(secs*fps)");
     assert_eq!(out.fps, fps);
     for (i, frame) in out.frames.iter().enumerate() {
-        assert_eq!(frame.dimensions(), (64, 64), "frame {i} preserves source size");
+        assert_eq!(
+            frame.dimensions(),
+            (64, 64),
+            "frame {i} preserves source size"
+        );
     }
     // Mouth (lower half) of frame 0 must differ from its source frame: it was regenerated.
     let delta = lower_half_delta(&out.frames[0], &footage[0]);
     eprintln!("[dub-e2e] animate: {expected} frames, mouth-region delta = {delta:.3}");
-    assert!(delta > 1.0, "mouth region unchanged (delta {delta:.3}); animate did not run");
+    assert!(
+        delta > 1.0,
+        "mouth region unchanged (delta {delta:.3}); animate did not run"
+    );
     Ok(())
 }
 

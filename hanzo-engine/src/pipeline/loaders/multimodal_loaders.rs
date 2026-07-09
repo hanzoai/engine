@@ -7287,7 +7287,8 @@ impl DeviceMappedModelLoader for Qwen3OmniLoader {
                 qkv + out + fc1 + fc2 + norms
             };
             let merged = vc.hidden_size * vc.spatial_merge_size.pow(2);
-            let merger = merged * merged + merged + merged * vc.out_hidden_size + vc.out_hidden_size;
+            let merger =
+                merged * merged + merged + merged * vc.out_hidden_size + vc.out_hidden_size;
             let deepstack = vc.deepstack_visual_indexes.len() * merger;
             patch_embed + pos_embed + encoder_layer * vc.depth + merger + deepstack
         };
@@ -7317,11 +7318,10 @@ impl DeviceMappedModelLoader for Qwen3OmniLoader {
 
         let size_q = tc.head_dim * tc.num_attention_heads;
         let size_kv = tc.head_dim * tc.num_key_value_heads;
-        let attn = (tc.hidden_size * size_q
-            + tc.hidden_size * size_kv * 2
-            + size_q * tc.hidden_size)
-            / weight_pack_factor
-            + 2 * tc.head_dim; // q_norm + k_norm
+        let attn =
+            (tc.hidden_size * size_q + tc.hidden_size * size_kv * 2 + size_q * tc.hidden_size)
+                / weight_pack_factor
+                + 2 * tc.head_dim; // q_norm + k_norm
 
         // Every Thinker layer is MoE (decoder_sparse_step = 1, no shared expert).
         let moe = {
