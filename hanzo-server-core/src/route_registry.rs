@@ -49,6 +49,8 @@ pub const ROOT_ROUTE: RouteInfo = RouteInfo::new("/", "GET", RouteKind::Hanzo);
 pub const RE_ISQ_ROUTE: RouteInfo = RouteInfo::new("/re_isq", "POST", RouteKind::Hanzo);
 pub const IMAGE_GENERATION_ROUTE: RouteInfo =
     RouteInfo::new("/v1/images/generations", "POST", RouteKind::OpenAi);
+pub const TRYON_GENERATION_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/images/tryon", "POST", RouteKind::Hanzo);
 pub const FILES_ROUTE: RouteInfo = RouteInfo::new("/v1/files", "GET", RouteKind::OpenAi);
 pub const FILE_ROUTE: RouteInfo =
     RouteInfo::new("/v1/files/{id}", "GET, DELETE", RouteKind::OpenAi);
@@ -66,8 +68,7 @@ pub const THREED_JOB_ROUTE: RouteInfo = RouteInfo::new("/v1/3d/{id}", "GET", Rou
 pub const THREED_CONTENT_ROUTE: RouteInfo =
     RouteInfo::new("/v1/3d/{id}/content", "GET", RouteKind::Hanzo);
 pub const ANIMATE_ROUTE: RouteInfo = RouteInfo::new("/v1/animate", "POST", RouteKind::Hanzo);
-pub const LIPSYNC_ROUTE: RouteInfo =
-    RouteInfo::new("/v1/video/lipsync", "POST", RouteKind::Hanzo);
+pub const LIPSYNC_ROUTE: RouteInfo = RouteInfo::new("/v1/video/lipsync", "POST", RouteKind::Hanzo);
 pub const AGENT_APPROVAL_ROUTE: RouteInfo = RouteInfo::new(
     "/v1/agent/approvals/{approval_id}",
     "POST",
