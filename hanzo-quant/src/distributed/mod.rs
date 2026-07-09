@@ -2,7 +2,11 @@ use std::{fmt::Debug, fs::File, sync::Barrier};
 
 use hanzo_ml::Result;
 pub mod layers;
+pub mod pipeline;
 pub mod socket;
+mod wire;
+
+pub use pipeline::{PpHeader, RingPipeline, PP_OP_FORWARD, PP_OP_TERMINATE};
 
 use serde::{Deserialize, Serialize};
 
@@ -764,114 +768,12 @@ mod nccl_ops {
 mod ring_ops {
     use std::{
         collections::HashMap,
-        sync::{Arc, Mutex, OnceLock},
-        time::{Duration, Instant},
+        sync::{Arc, Mutex},
     };
 
-    use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
+    use hanzo_ml::{backend::BackendStorage, Result, Storage, Tensor};
 
-    // Friendly aliases to tame type complexity.
-    type SharedTcpStream = Arc<Mutex<TcpStream>>;
-    type LeftRight = (SharedTcpStream, SharedTcpStream);
-
-    use hanzo_ml::{backend::BackendStorage, CpuStorage, Result, Storage, Tensor};
-
-    use super::RingConfig;
-
-    // Lazily–initialized pair of TCP streams shared by every ring‑based collective op
-    static LEFT_RIGHT_STREAMS: OnceLock<LeftRight> = OnceLock::new();
-
-    fn get_ring_streams(config: &RingConfig) -> LeftRight {
-        LEFT_RIGHT_STREAMS
-            .get_or_init(|| {
-                let cur_port = config.port;
-
-                let right_ip = config.right_ip();
-                let right_port = config.right_port;
-
-                let left_listener =
-                    TcpListener::bind(format!("0.0.0.0:{cur_port}")).expect("bind left");
-
-                let start = Instant::now();
-                // Connect to the right neighbor using the provided IP
-                let right = loop {
-                    match TcpStream::connect(format!("{}:{}", right_ip, right_port)) {
-                        Ok(s) => break s,
-                        Err(_) if start.elapsed() > Duration::from_secs(120) => {
-                            panic!("Failed to connect to right node due to 120-second timeout");
-                        }
-                        Err(_) => continue,
-                    }
-                };
-
-                // Accept connection from the left neighbour
-                let (left, _) = left_listener.accept().expect("accept left neighbour");
-
-                left.set_nodelay(true).unwrap();
-                left.set_nonblocking(false).unwrap();
-                right.set_nodelay(true).unwrap();
-                right.set_nonblocking(false).unwrap();
-
-                (Arc::new(Mutex::new(left)), Arc::new(Mutex::new(right)))
-            })
-            .clone()
-    }
-
-    const CHUNK_SIZE: usize = 64 * 1024;
-
-    // Canonical wire dtype is f32. Heterogeneous ranks auto-pick different compute dtypes
-    // (CUDA->bf16, ROCm->f16); f32 is the lossless superset so raw bytes are never misread,
-    // and reductions accumulate in higher precision.
-    fn cpu_to_f32(cpu: &CpuStorage) -> Result<Vec<f32>> {
-        Ok(match cpu {
-            CpuStorage::F32(x) => x.clone(),
-            CpuStorage::F16(x) => x.iter().map(|v| v.to_f32()).collect(),
-            CpuStorage::BF16(x) => x.iter().map(|v| v.to_f32()).collect(),
-            _ => hanzo_ml::bail!("Unsupported dtype for ring backend"),
-        })
-    }
-
-    // One ring step: stream `send` to the right neighbour and read the same-sized payload
-    // from the left, returning the left neighbour's f32 slice.
-    fn ring_exchange(
-        left: &SharedTcpStream,
-        right: &SharedTcpStream,
-        buffers: &Arc<Mutex<HashMap<usize, Vec<u8>>>>,
-        send: &[f32],
-    ) -> Result<Vec<f32>> {
-        let nbytes = std::mem::size_of_val(send);
-        let data_bytes = unsafe { std::slice::from_raw_parts(send.as_ptr() as *const u8, nbytes) };
-
-        let mut buffers_guard = buffers
-            .lock()
-            .map_err(|e| hanzo_ml::Error::msg(format!("lock buffers: {e:?}")))?;
-        let recv_buf = buffers_guard.entry(nbytes).or_insert_with(|| vec![0u8; nbytes]);
-
-        let mut right_guard = right
-            .lock()
-            .map_err(|e| hanzo_ml::Error::msg(format!("lock right: {e:?}")))?;
-        let mut left_guard = left
-            .lock()
-            .map_err(|e| hanzo_ml::Error::msg(format!("lock left: {e:?}")))?;
-
-        let mut offset = 0;
-        while offset < nbytes {
-            let len = std::cmp::min(CHUNK_SIZE, nbytes - offset);
-            right_guard
-                .write_all(&data_bytes[offset..offset + len])
-                .map_err(|e| hanzo_ml::Error::msg(format!("write: {e:?}")))?;
-            left_guard
-                .read_exact(&mut recv_buf[offset..offset + len])
-                .map_err(|e| hanzo_ml::Error::msg(format!("read: {e:?}")))?;
-            offset += len;
-        }
-        drop(left_guard);
-        drop(right_guard);
-
-        let peer = unsafe { std::slice::from_raw_parts(recv_buf.as_ptr() as *const f32, send.len()) };
-        Ok(peer.to_vec())
-    }
+    use super::wire::{cpu_to_f32, get_ring_streams, ring_exchange, SharedTcpStream};
 
     #[derive(Clone, Debug)]
     pub struct SumAllReduce {
