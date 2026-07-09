@@ -109,7 +109,11 @@ fn sinks_attn_regular(
         let vv = v.squeeze(0)?.to_dtype(f32)?.contiguous()?;
         let sk = sinks.to_dtype(f32)?.contiguous()?; // [H]
         let kv_len = kk.dim(1)?;
-        let win = if window_size == 0 { kv_len } else { window_size };
+        let win = if window_size == 0 {
+            kv_len
+        } else {
+            window_size
+        };
         let out = hanzo_ml::fattn_decode::fattn_decode_f32_hd512(
             &qk,
             &kk,

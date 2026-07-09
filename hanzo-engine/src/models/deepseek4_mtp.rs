@@ -307,9 +307,13 @@ impl SpeculativeProposer for Deepseek4MtpRuntime {
         for k in 0..self.n_predict {
             let token_ids = Tensor::from_vec(cur_tokens.clone(), (batch, 1), &device)?;
             let start_offsets: Vec<usize> = base.iter().map(|b| b + k).collect();
-            let (logits, next_hidden) =
-                self.mtp
-                    .draft(&hidden, &token_ids, &self.embed, &self.output, &start_offsets)?;
+            let (logits, next_hidden) = self.mtp.draft(
+                &hidden,
+                &token_ids,
+                &self.embed,
+                &self.output,
+                &start_offsets,
+            )?;
             let draft = logits.argmax(D::Minus1)?.to_dtype(DType::U32)?;
             let draft_ids: Vec<u32> = draft.flatten_all()?.to_vec1::<u32>()?;
             if draft_ids.len() != batch {

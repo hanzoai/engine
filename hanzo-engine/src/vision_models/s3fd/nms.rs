@@ -125,7 +125,10 @@ mod tests {
         let far = b(100.0, 100.0, 110.0, 110.0, 0.7);
         let keep = nms(vec![dup, a, far], 0.3);
         assert_eq!(keep.len(), 2);
-        assert!((keep[0].score - 0.9).abs() < 1e-6, "highest score kept first");
+        assert!(
+            (keep[0].score - 0.9).abs() < 1e-6,
+            "highest score kept first"
+        );
         assert!((keep[1].score - 0.7).abs() < 1e-6, "disjoint box survives");
     }
 }

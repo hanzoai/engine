@@ -1201,7 +1201,8 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                         return;
                     }
                 }
-                if let Ok(state_indices) = Tensor::from_vec(indices.clone(), (seqs.len(),), &device) {
+                if let Ok(state_indices) = Tensor::from_vec(indices.clone(), (seqs.len(),), &device)
+                {
                     hybrid_cache.set_state_indices(Some(state_indices));
                     hybrid_cache.set_state_indices_host(Some(indices));
                 } else {
@@ -1383,7 +1384,8 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                 .filter_map(|seq| seq.recurrent_state_idx().map(|idx| idx as u32))
                 .collect();
             if indices.len() == seqs.len() {
-                if let Ok(state_indices) = Tensor::from_vec(indices.clone(), (seqs.len(),), &device) {
+                if let Ok(state_indices) = Tensor::from_vec(indices.clone(), (seqs.len(),), &device)
+                {
                     hybrid_cache.set_state_indices(Some(state_indices));
                     hybrid_cache.set_state_indices_host(Some(indices));
                 }
@@ -1866,7 +1868,9 @@ fn rebuild_rotating(
         hanzo_ml::bail!("kv payload: rotating seq dim {stored} != retained_len {retained_len}");
     }
     // cap must hold the retained window and never exceed the sliding window.
-    let cap = capacity_seq_len.clamp(retained_len, max_seq_len).max(retained_len);
+    let cap = capacity_seq_len
+        .clamp(retained_len, max_seq_len)
+        .max(retained_len);
     let mut shape = data.dims().to_vec();
     shape[dim] = cap.max(1);
     bound_alloc(&shape, data.dtype(), limits)?;
@@ -1996,8 +2000,14 @@ mod payload_tests {
         let back = KvCache::from_payload(&bytes, &Device::Cpu, &lim()).unwrap();
 
         assert_eq!(cache.current_seq_len(), back.current_seq_len());
-        assert_eq!(vec1(&cache.k().unwrap().unwrap()), vec1(&back.k().unwrap().unwrap()));
-        assert_eq!(vec1(&cache.v().unwrap().unwrap()), vec1(&back.v().unwrap().unwrap()));
+        assert_eq!(
+            vec1(&cache.k().unwrap().unwrap()),
+            vec1(&back.k().unwrap().unwrap())
+        );
+        assert_eq!(
+            vec1(&cache.v().unwrap().unwrap()),
+            vec1(&back.v().unwrap().unwrap())
+        );
         assert_eq!(
             cache.k().unwrap().unwrap().dims(),
             back.k().unwrap().unwrap().dims()
@@ -2028,8 +2038,14 @@ mod payload_tests {
         assert_eq!(cache.current_seq_len(), back.current_seq_len());
         // current_data is the retained window: [3, 4, 5, 6].
         assert_eq!(vec1(&cache.k().unwrap().unwrap()), vec![3.0, 4.0, 5.0, 6.0]);
-        assert_eq!(vec1(&cache.k().unwrap().unwrap()), vec1(&back.k().unwrap().unwrap()));
-        assert_eq!(vec1(&cache.v().unwrap().unwrap()), vec1(&back.v().unwrap().unwrap()));
+        assert_eq!(
+            vec1(&cache.k().unwrap().unwrap()),
+            vec1(&back.k().unwrap().unwrap())
+        );
+        assert_eq!(
+            vec1(&cache.v().unwrap().unwrap()),
+            vec1(&back.v().unwrap().unwrap())
+        );
 
         // The restored cache continues decoding correctly (window slides on).
         if let KvCache::Rotating { mut k, .. } = back {
