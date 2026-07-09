@@ -1,7 +1,8 @@
 name: docs
 
-# Builds the docs site as a deployable artifact. Hosting is native
-# (platform.hanzo.ai / hanzoai ingress+static) — never GitHub Pages.
+# Build-verifies the docs site. Hosting is native (platform.hanzo.ai /
+# hanzoai ingress+static builds from source) — never GitHub Pages, and it
+# does not consume a CI artifact, so nothing is uploaded here.
 
 on:
   push:
@@ -51,10 +52,3 @@ jobs:
       - name: Build docs
         working-directory: docs
         run: npm run build
-
-      - name: Upload docs artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: docs-dist
-          path: docs/dist
-          retention-days: 7
