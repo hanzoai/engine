@@ -206,6 +206,66 @@ pub enum Command {
         #[arg(short, long)]
         file: PathBuf,
     },
+
+    /// Link machines into a distributed inference ring (scan-to-join UX over the ring backend)
+    Cluster {
+        #[command(subcommand)]
+        action: ClusterAction,
+    },
+}
+
+/// `hanzo cluster` actions: `init` starts the head node, `join` adds a worker.
+#[derive(Subcommand)]
+pub enum ClusterAction {
+    /// Head node (rank 0): generate a join token + QR, then launch the ring.
+    Init {
+        /// Model every node loads (the token pins it so all ranks stay in lockstep).
+        #[arg(short = 'm', long)]
+        model: String,
+
+        /// Total nodes in the ring. Must be a power of 2 (2, 4, 8, ...), a ring-backend requirement.
+        #[arg(short = 'w', long)]
+        world_size: usize,
+
+        /// This head's reachable IP (what workers dial). Auto-detected if omitted.
+        #[arg(long)]
+        bind: Option<String>,
+
+        /// A worker's reachable IP, in rank order. Repeat once per worker to bake the full ring into
+        /// the token so workers self-assign their rank. Omit to just print a token.
+        #[arg(long)]
+        node: Vec<String>,
+
+        /// First port of the ring's contiguous port block.
+        #[arg(long, default_value_t = crate::cluster::DEFAULT_BASE_PORT)]
+        base_port: u16,
+
+        /// Print the token + config and exit without launching the engine.
+        #[arg(long)]
+        print: bool,
+
+        /// Extra args forwarded verbatim to `hanzo serve` (pass after `--`).
+        #[arg(last = true)]
+        engine_args: Vec<String>,
+    },
+
+    /// Worker node (rank 1..N-1): decode a token from `init` and launch as a ring daemon.
+    Join {
+        /// Join token printed by `hanzo cluster init`.
+        token: String,
+
+        /// This node's rank. Auto-picked from the token's peer list when omitted.
+        #[arg(long)]
+        rank: Option<usize>,
+
+        /// Print the config and exit without launching the engine.
+        #[arg(long)]
+        print: bool,
+
+        /// Extra args forwarded verbatim to `hanzo serve` (pass after `--`).
+        #[arg(last = true)]
+        engine_args: Vec<String>,
+    },
 }
 
 /// Cache management subcommands
