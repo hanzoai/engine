@@ -244,6 +244,7 @@ pub mod server;
 pub mod speech_generation;
 pub mod streaming;
 pub mod threed_generation;
+pub mod tryon_generation;
 pub mod types;
 pub mod util;
 pub mod video;
