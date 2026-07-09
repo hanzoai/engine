@@ -290,8 +290,14 @@ mod tests {
 
     #[test]
     fn cycle_index_pingpongs() {
-        assert_eq!((0..5).map(|t| cycle_index(t, 1)).collect::<Vec<_>>(), [0, 0, 0, 0, 0]);
-        assert_eq!((0..5).map(|t| cycle_index(t, 2)).collect::<Vec<_>>(), [0, 1, 1, 0, 0]);
+        assert_eq!(
+            (0..5).map(|t| cycle_index(t, 1)).collect::<Vec<_>>(),
+            [0, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            (0..5).map(|t| cycle_index(t, 2)).collect::<Vec<_>>(),
+            [0, 1, 1, 0, 0]
+        );
         assert_eq!(
             (0..8).map(|t| cycle_index(t, 3)).collect::<Vec<_>>(),
             [0, 1, 2, 2, 1, 0, 0, 1]

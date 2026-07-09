@@ -10,11 +10,11 @@ use tokio::join;
 use tracing::{error, info, warn};
 
 use hanzo_server_core::{
-    server::{
-        configure_paged_attn_from_flags, defaults, get_search_embedding_model,
-        ServerBuilder, ModelConfig,
-    },
     router::RouterBuilder,
+    server::{
+        configure_paged_attn_from_flags, defaults, get_search_embedding_model, ModelConfig,
+        ServerBuilder,
+    },
 };
 
 mod interactive_mode;
@@ -452,10 +452,7 @@ async fn main() -> Result<()> {
         // Create listener early to validate address before model loading
         let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
 
-        let app = RouterBuilder::new()
-            .with_hanzo(hanzo)
-            .build()
-            .await?;
+        let app = RouterBuilder::new().with_hanzo(hanzo).build().await?;
 
         info!("OpenAI-compatible server listening on http://{ip}:{port}.");
 

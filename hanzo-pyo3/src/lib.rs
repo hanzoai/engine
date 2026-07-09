@@ -32,11 +32,11 @@ use util::{
 
 use hanzo_engine::{
     initialize_logging, paged_attn_supported, parse_isq_value, AgentToolApprovalHandler,
-    AnyMoeLoader, AutoDeviceMapParams, ChatCompletionResponse, CompletionResponse, Constraint,
-    DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams,
-    EmbeddingLoaderBuilder, EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoaderBuilder, GGUFSpecificConfig, Hanzo, Builder, ImageGenerationResponse,
+    AnyMoeLoader, AutoDeviceMapParams, Builder, ChatCompletionResponse, CompletionResponse,
+    Constraint, DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata,
+    DeviceMapMetadata, DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder,
+    DrySamplingParams, EmbeddingLoaderBuilder, EmbeddingSpecificConfig, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Hanzo, ImageGenerationResponse,
     ImageGenerationResponseFormat, LlguidanceGrammar, Loader, MemoryGpuConfig,
     MultimodalLoaderBuilder, MultimodalSpecificConfig, NormalLoaderBuilder, NormalRequest,
     NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, ReasoningEffort,
@@ -944,8 +944,7 @@ impl Runner {
             Some(obj) => Some(wrap_tool_callbacks(obj)?),
             None => None,
         };
-        let mut builder =
-            Builder::new(pipeline, scheduler_config, false, search_embedding_model);
+        let mut builder = Builder::new(pipeline, scheduler_config, false, search_embedding_model);
         if let Some(cb) = cb {
             builder = builder.with_search_callback(cb);
         }

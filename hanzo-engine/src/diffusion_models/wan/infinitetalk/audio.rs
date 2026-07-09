@@ -93,7 +93,8 @@ impl AudioProjModel {
     pub fn forward(&self, audio: &Tensor) -> Result<Tensor> {
         let (b, f, w, l, c) = audio.dims5()?;
         let x = audio.reshape((b * f, w * l * c))?;
-        self.project_flat(&x, &self.proj1)?.reshape((b, f, CONTEXT_TOKENS, c))
+        self.project_flat(&x, &self.proj1)?
+            .reshape((b, f, CONTEXT_TOKENS, c))
     }
 
     /// First-frame group via `proj1_vf` (`[B,F,seq_len_vf,LAYERS,DIM]` -> `[B,F,CONTEXT_TOKENS,DIM]`).
@@ -108,7 +109,9 @@ impl AudioProjModel {
         let rows = x.dim(0)?;
         let x = x.apply(proj1)?.relu()?;
         let x = x.apply(&self.proj2)?.relu()?;
-        let x = x.apply(&self.proj3)?.reshape((rows, CONTEXT_TOKENS, WAV2VEC_DIM))?;
+        let x = x
+            .apply(&self.proj3)?
+            .reshape((rows, CONTEXT_TOKENS, WAV2VEC_DIM))?;
         x.apply(&self.norm)
     }
 }
@@ -167,7 +170,11 @@ pub fn apply_rope_1d(x: &Tensor, positions: &[f64], base: f64) -> Result<Tensor>
         .map(|i| (1.0 / base.powf(2.0 * i as f64 / d as f64)) as f32)
         .collect();
     let inv = Tensor::from_vec(inv, (1, half), dev)?;
-    let pos = Tensor::from_vec(positions.iter().map(|p| *p as f32).collect::<Vec<_>>(), (l, 1), dev)?;
+    let pos = Tensor::from_vec(
+        positions.iter().map(|p| *p as f32).collect::<Vec<_>>(),
+        (l, 1),
+        dev,
+    )?;
     let ang = pos.broadcast_mul(&inv)?;
     let emb = Tensor::cat(&[&ang, &ang], D::Minus1)?;
     let cos = emb.cos()?.reshape((1, 1, l, d))?.to_dtype(x.dtype())?;
@@ -262,7 +269,8 @@ impl SingleStreamAudioAttn {
 
     fn heads(&self, x: &Tensor) -> Result<Tensor> {
         let (b, l, _) = x.dims3()?;
-        x.reshape((b, l, self.num_heads, self.head_dim))?.transpose(1, 2)
+        x.reshape((b, l, self.num_heads, self.head_dim))?
+            .transpose(1, 2)
     }
 
     /// Project the audio context tokens `[N,M,768]` to per-head K,V `[N,H,M,D]`. Separated so a
@@ -270,14 +278,18 @@ impl SingleStreamAudioAttn {
     pub fn project_kv(&self, audio: &Tensor) -> Result<(Tensor, Tensor)> {
         let kv = audio.apply(&self.kv_linear)?;
         let dim = self.num_heads * self.head_dim;
-        let k = self.heads(&kv.narrow(D::Minus1, 0, dim)?)?.apply(&self.k_norm)?;
+        let k = self
+            .heads(&kv.narrow(D::Minus1, 0, dim)?)?
+            .apply(&self.k_norm)?;
         let v = self.heads(&kv.narrow(D::Minus1, dim, dim)?)?;
         Ok((k, v))
     }
 
     fn finish(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
         let (n, _h, l, _d) = q.dims4()?;
-        let o = sdpa(q, k, v)?.transpose(1, 2)?.reshape((n, l, self.num_heads * self.head_dim))?;
+        let o = sdpa(q, k, v)?
+            .transpose(1, 2)?
+            .reshape((n, l, self.num_heads * self.head_dim))?;
         o.apply(&self.proj)
     }
 
@@ -317,7 +329,14 @@ mod tests {
 
     struct RandnBackend;
     impl SimpleBackend for RandnBackend {
-        fn get(&self, s: Shape, name: &str, _h: Init, dtype: DType, dev: &Device) -> Result<Tensor> {
+        fn get(
+            &self,
+            s: Shape,
+            name: &str,
+            _h: Init,
+            dtype: DType,
+            dev: &Device,
+        ) -> Result<Tensor> {
             if name.ends_with("bias") {
                 Tensor::zeros(s, dtype, dev)
             } else if name.ends_with("weight") && s.rank() == 1 {
@@ -428,7 +447,10 @@ mod tests {
         // rotation is norm-preserving
         let nx = x.sqr()?.sum_all()?.to_scalar::<f32>()?;
         let ny = y.sqr()?.sum_all()?.to_scalar::<f32>()?;
-        assert!((nx - ny).abs() / nx < 1e-4, "rope changed norm: {nx} vs {ny}");
+        assert!(
+            (nx - ny).abs() / nx < 1e-4,
+            "rope changed norm: {nx} vs {ny}"
+        );
         Ok(())
     }
 }

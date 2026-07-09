@@ -25,8 +25,8 @@ use crate::{
         reload_model, system_doctor, system_info, tune_model, unload_model,
     },
     image_generation::image_generation,
-    route::route_handler,
     responses::{cancel_response, create_response, delete_response, get_response},
+    route::route_handler,
     route_registry::{
         AGENT_APPROVAL_ROUTE, ANIMATE_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE, CANCEL_RESPONSE_ROUTE,
         COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE, FILES_ROUTE, FILE_CONTENT_ROUTE, FILE_ROUTE,
