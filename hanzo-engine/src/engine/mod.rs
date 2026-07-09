@@ -953,8 +953,11 @@ impl Engine {
     }
 
     fn replicate_request_to_daemons(&self, request: &Request) {
-        if crate::pipeline_parallel::use_pipeline_parallel() {
-            // PP workers are driven by activations on the ring, not replicated requests.
+        // Only replicate in an actual NCCL or ring tensor-parallel cluster. PP workers are driven
+        // by activations on the ring, and a single-node run has no daemons to replicate to.
+        if crate::pipeline_parallel::use_pipeline_parallel()
+            || (!hanzo_quant::distributed::use_nccl() && !hanzo_quant::distributed::use_ring())
+        {
             return;
         }
         if !distributed::is_daemon() && hanzo_quant::distributed::use_nccl() {
