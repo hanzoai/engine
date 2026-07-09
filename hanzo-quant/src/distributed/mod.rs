@@ -302,12 +302,8 @@ mod ring {
                     config.world_size
                 );
             }
-            if !config.world_size.is_power_of_two() {
-                hanzo_ml::bail!(
-                    "Ring backend requires world_size to be a power of 2, got {}",
-                    config.world_size
-                );
-            }
+            // The ring all-reduce/all-gather use world_size-1 accumulating steps, valid for any
+            // N >= 2 (power-of-2 is an NCCL-only constraint), enabling e.g. 3-node clusters.
             Ok(Self { config })
         }
 
@@ -779,9 +775,7 @@ mod ring_ops {
     type SharedTcpStream = Arc<Mutex<TcpStream>>;
     type LeftRight = (SharedTcpStream, SharedTcpStream);
 
-    use hanzo_ml::{
-        backend::BackendStorage, CpuStorage, Device, Result, Storage, Tensor, WithDType,
-    };
+    use hanzo_ml::{backend::BackendStorage, CpuStorage, Result, Storage, Tensor};
 
     use super::RingConfig;
 
@@ -824,11 +818,67 @@ mod ring_ops {
             .clone()
     }
 
+    const CHUNK_SIZE: usize = 64 * 1024;
+
+    // Canonical wire dtype is f32. Heterogeneous ranks auto-pick different compute dtypes
+    // (CUDA->bf16, ROCm->f16); f32 is the lossless superset so raw bytes are never misread,
+    // and reductions accumulate in higher precision.
+    fn cpu_to_f32(cpu: &CpuStorage) -> Result<Vec<f32>> {
+        Ok(match cpu {
+            CpuStorage::F32(x) => x.clone(),
+            CpuStorage::F16(x) => x.iter().map(|v| v.to_f32()).collect(),
+            CpuStorage::BF16(x) => x.iter().map(|v| v.to_f32()).collect(),
+            _ => hanzo_ml::bail!("Unsupported dtype for ring backend"),
+        })
+    }
+
+    // One ring step: stream `send` to the right neighbour and read the same-sized payload
+    // from the left, returning the left neighbour's f32 slice.
+    fn ring_exchange(
+        left: &SharedTcpStream,
+        right: &SharedTcpStream,
+        buffers: &Arc<Mutex<HashMap<usize, Vec<u8>>>>,
+        send: &[f32],
+    ) -> Result<Vec<f32>> {
+        let nbytes = std::mem::size_of_val(send);
+        let data_bytes = unsafe { std::slice::from_raw_parts(send.as_ptr() as *const u8, nbytes) };
+
+        let mut buffers_guard = buffers
+            .lock()
+            .map_err(|e| hanzo_ml::Error::msg(format!("lock buffers: {e:?}")))?;
+        let recv_buf = buffers_guard.entry(nbytes).or_insert_with(|| vec![0u8; nbytes]);
+
+        let mut right_guard = right
+            .lock()
+            .map_err(|e| hanzo_ml::Error::msg(format!("lock right: {e:?}")))?;
+        let mut left_guard = left
+            .lock()
+            .map_err(|e| hanzo_ml::Error::msg(format!("lock left: {e:?}")))?;
+
+        let mut offset = 0;
+        while offset < nbytes {
+            let len = std::cmp::min(CHUNK_SIZE, nbytes - offset);
+            right_guard
+                .write_all(&data_bytes[offset..offset + len])
+                .map_err(|e| hanzo_ml::Error::msg(format!("write: {e:?}")))?;
+            left_guard
+                .read_exact(&mut recv_buf[offset..offset + len])
+                .map_err(|e| hanzo_ml::Error::msg(format!("read: {e:?}")))?;
+            offset += len;
+        }
+        drop(left_guard);
+        drop(right_guard);
+
+        let peer = unsafe { std::slice::from_raw_parts(recv_buf.as_ptr() as *const f32, send.len()) };
+        Ok(peer.to_vec())
+    }
+
     #[derive(Clone, Debug)]
     pub struct SumAllReduce {
         left: SharedTcpStream,
         right: SharedTcpStream,
         buffers: Arc<Mutex<HashMap<usize, Vec<u8>>>>,
+        world_size: usize,
     }
 
     impl SumAllReduce {
@@ -840,88 +890,11 @@ mod ring_ops {
                         left,
                         right,
                         buffers: Arc::new(Mutex::new(HashMap::new())),
+                        world_size: ring_comm.world_size(),
                     }
                 }
                 _ => panic!("SumAllReduce requires Ring backend"),
             }
-        }
-
-        fn run<T: WithDType + Copy>(
-            &self,
-            x: &[T],
-            dims: &[usize],
-            device: &Device,
-        ) -> Result<Tensor> {
-            let nbytes = std::mem::size_of_val(x);
-
-            // --- ping‑pong to overlap latency ---------------------------------------
-            // Clone the Arc references
-            let right = self.right.clone();
-            let left = self.left.clone();
-
-            // View the local slice as bytes that can be written on the wire.
-            let data_bytes = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const u8, nbytes) };
-
-            // Re‑use (or allocate) a receive buffer of identical size.
-            let mut buffers_guard = self.buffers.lock().map_err(|e| {
-                hanzo_ml::Error::msg(format!("Failed to lock buffers mutex: {:?}", e))
-            })?;
-            let recv_buf = buffers_guard
-                .entry(nbytes)
-                .or_insert_with(|| vec![0u8; nbytes]);
-
-            // Lock both sockets once to avoid per-call mutex overhead.
-            let mut right_guard = right.lock().map_err(|e| {
-                hanzo_ml::Error::msg(format!("Failed to lock right stream mutex: {:?}", e))
-            })?;
-            let mut left_guard = left.lock().map_err(|e| {
-                hanzo_ml::Error::msg(format!("Failed to lock left stream mutex: {:?}", e))
-            })?;
-
-            // For the typical tensor size we see (~ 6 KiB) a single
-            // write/read pair is faster than chunking because the extra
-            // system‑call and loop overhead dominates.  Only fall back to the
-            // chunked "ping‑pong" pipeline for larger transfers.
-            if nbytes <= 8 * 1024 {
-                // --- fast path: one shot ------------------------------------
-                right_guard
-                    .write_all(data_bytes)
-                    .map_err(|e| hanzo_ml::Error::msg(format!("write error: {:?}", e)))?;
-
-                left_guard
-                    .read_exact(recv_buf)
-                    .map_err(|e| hanzo_ml::Error::msg(format!("read error: {:?}", e)))?;
-            } else {
-                // --- slow path: chunked ping‑pong ---------------------------
-                const CHUNK_SIZE: usize = 64 * 1024; // 64 KiB
-                let mut offset = 0;
-
-                while offset < nbytes {
-                    let len = std::cmp::min(CHUNK_SIZE, nbytes - offset);
-
-                    // send this chunk to the right neighbour
-                    right_guard
-                        .write_all(&data_bytes[offset..offset + len])
-                        .map_err(|e| hanzo_ml::Error::msg(format!("write error: {:?}", e)))?;
-
-                    // receive the matching chunk from the left neighbour
-                    left_guard
-                        .read_exact(&mut recv_buf[offset..offset + len])
-                        .map_err(|e| hanzo_ml::Error::msg(format!("read error: {:?}", e)))?;
-
-                    offset += len;
-                }
-            }
-
-            drop(left_guard);
-            drop(right_guard);
-
-            // -------------------------------------------------------------------------
-            // Interpret the received bytes as a slice of T and add element‑wise into x
-            let received: &[T] =
-                unsafe { std::slice::from_raw_parts(recv_buf.as_ptr() as *const T, x.len()) };
-
-            Tensor::from_slice(received, dims, device)
         }
 
         pub fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor> {
@@ -934,14 +907,20 @@ mod ring_ops {
                 Storage::Rocm(storage) => &storage.to_cpu_storage()?,
             };
 
-            let delta = match cpu_storage {
-                CpuStorage::BF16(x) => self.run(x.as_slice(), xs.dims(), xs.device())?,
-                CpuStorage::F32(x) => self.run(x.as_slice(), xs.dims(), xs.device())?,
-                CpuStorage::F16(x) => self.run(x.as_slice(), xs.dims(), xs.device())?,
-                _ => hanzo_ml::bail!("Unsupported dtype for ring backend"),
-            };
+            // world_size-1 accumulating ring steps: forward what we received each step, so
+            // after N-1 steps every rank has summed all N partials. For N==2 this is the
+            // single left/right exchange.
+            let mut acc = cpu_to_f32(cpu_storage)?;
+            let mut send = acc.clone();
+            for _ in 0..self.world_size - 1 {
+                let peer = ring_exchange(&self.left, &self.right, &self.buffers, &send)?;
+                for (a, p) in acc.iter_mut().zip(peer.iter()) {
+                    *a += *p;
+                }
+                send = peer;
+            }
 
-            xs + delta
+            Tensor::from_slice(&acc, xs.dims(), xs.device())?.to_dtype(xs.dtype())
         }
     }
 
@@ -973,76 +952,14 @@ mod ring_ops {
             }
         }
 
-        fn run<T: WithDType + Copy + Default>(
-            &self,
-            x: &[T],
-            dims: &[usize],
-            device: &Device,
-        ) -> Result<Tensor> {
-            // Validate gather dimension
-            if self.dim >= dims.len() {
+        pub fn all_gather(&self, xs: &Tensor) -> Result<Tensor> {
+            if self.dim >= xs.dims().len() {
                 hanzo_ml::bail!(
                     "AllGather: invalid dimension {} for tensor of rank {}",
                     self.dim,
-                    dims.len()
+                    xs.dims().len()
                 );
             }
-            let elem_cnt = x.len();
-            let nbytes = elem_cnt * std::mem::size_of_val(x);
-
-            // Prepare output buffer that will hold slices from every rank.
-            let mut out: Vec<T> = vec![T::default(); elem_cnt * self.world_size];
-
-            // Copy this rank's slice into its final slot.
-            let start = self.rank * elem_cnt;
-            out[start..start + elem_cnt].copy_from_slice(x);
-
-            let right = self.right.clone();
-            let left = self.left.clone();
-            let mut send_piece: &[T] = x;
-
-            for step in 0..(self.world_size - 1) {
-                // ---------- send to the right ----------
-                let bytes =
-                    unsafe { std::slice::from_raw_parts(send_piece.as_ptr() as *const u8, nbytes) };
-                {
-                    let mut rg = right.lock().map_err(|e| {
-                        hanzo_ml::Error::msg(format!("Failed to lock right stream mutex: {:?}", e))
-                    })?;
-                    rg.write_all(bytes)
-                        .map_err(|e| hanzo_ml::Error::msg(format!("write error: {:?}", e)))?;
-                }
-
-                // ---------- receive from the left ----------
-                let mut bg = self.buffers.lock().map_err(|e| {
-                    hanzo_ml::Error::msg(format!("Failed to lock buffers mutex: {:?}", e))
-                })?;
-                let buf = bg.entry(nbytes).or_insert_with(|| vec![0u8; nbytes]);
-                {
-                    let mut lg = left.lock().map_err(|e| {
-                        hanzo_ml::Error::msg(format!("Failed to lock left stream mutex: {:?}", e))
-                    })?;
-                    lg.read_exact(buf)
-                        .map_err(|e| hanzo_ml::Error::msg(format!("read error: {:?}", e)))?;
-                }
-                let recv_piece: &[T] =
-                    unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const T, elem_cnt) };
-
-                // Determine which global rank the received slice came from.
-                let src_rank = (self.rank + self.world_size - step - 1) % self.world_size;
-                let dst = src_rank * elem_cnt;
-                out[dst..dst + elem_cnt].copy_from_slice(recv_piece);
-
-                // Forward that slice in the next iteration.
-                send_piece = recv_piece;
-            }
-
-            let mut out_dims = dims.to_vec();
-            out_dims[self.dim] *= self.world_size;
-            Tensor::from_slice(&out, out_dims, device)
-        }
-
-        pub fn all_gather(&self, xs: &Tensor) -> Result<Tensor> {
             let storage = xs.storage_and_layout().0;
             let cpu_storage = match &*storage {
                 Storage::Cpu(s) => s,
@@ -1052,12 +969,23 @@ mod ring_ops {
                 Storage::Rocm(s) => &s.to_cpu_storage()?,
             };
 
-            match cpu_storage {
-                CpuStorage::BF16(x) => self.run(x.as_slice(), xs.dims(), xs.device()),
-                CpuStorage::F32(x) => self.run(x.as_slice(), xs.dims(), xs.device()),
-                CpuStorage::F16(x) => self.run(x.as_slice(), xs.dims(), xs.device()),
-                _ => hanzo_ml::bail!("Unsupported dtype for ring backend"),
+            // f32 wire format, same as SumAllReduce, so heterogeneous ranks agree on bytes.
+            let local = cpu_to_f32(cpu_storage)?;
+            let elem_cnt = local.len();
+            let mut out = vec![0f32; elem_cnt * self.world_size];
+            out[self.rank * elem_cnt..(self.rank + 1) * elem_cnt].copy_from_slice(&local);
+
+            let mut send = local;
+            for step in 0..self.world_size - 1 {
+                let recv = ring_exchange(&self.left, &self.right, &self.buffers, &send)?;
+                let src_rank = (self.rank + self.world_size - step - 1) % self.world_size;
+                out[src_rank * elem_cnt..(src_rank + 1) * elem_cnt].copy_from_slice(&recv);
+                send = recv;
             }
+
+            let mut out_dims = xs.dims().to_vec();
+            out_dims[self.dim] *= self.world_size;
+            Tensor::from_slice(&out, out_dims, xs.device())?.to_dtype(xs.dtype())
         }
     }
 }
