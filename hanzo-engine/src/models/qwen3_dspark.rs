@@ -130,8 +130,8 @@ pub struct Qwen3DSpark {
     layers: Vec<DSparkLayer>,
     norm: RmsNorm,
     lm_head: Linear,
-    markov_w1: Tensor, // [vocab, rank] — nn.Embedding weight
-    markov_w2: Tensor, // [vocab, rank] — nn.Linear(rank -> vocab) weight
+    markov_w1: Tensor,               // [vocab, rank] — nn.Embedding weight
+    markov_w2: Tensor,               // [vocab, rank] — nn.Linear(rank -> vocab) weight
     confidence_head: Option<Linear>, // Linear(hidden + rank -> 1)
     rotary: RotaryEmbedding,
     cfg: DSparkConfig,
@@ -599,9 +599,7 @@ impl SpeculativeProposer for DsparkProposer {
         // sequence's forward). Batched multi-sequence drafting needs a per-sequence prefix
         // slice and is a follow-on; the supported shape here is a single active sequence.
         if batch != 1 {
-            hanzo_ml::bail!(
-                "DSpark proposer drafts one sequence per step (got batch={batch})"
-            );
+            hanzo_ml::bail!("DSpark proposer drafts one sequence per step (got batch={batch})");
         }
         let anchor_token = ctx.sampled_tokens[0];
         let anchor_pos = ctx.base_lens[0];
@@ -614,9 +612,9 @@ impl SpeculativeProposer for DsparkProposer {
         // (e.g. right after a discontinuity) — bail so the target simply decodes one token.
         let prefix_len = hiddens.first().map(|t| t.dim(0)).transpose()?.unwrap_or(0);
         if prefix_len < anchor_pos {
-            return Ok(SpeculativeProposalBatch::new(vec![SpeculativeProposal::new(
-                Vec::new(),
-            )]));
+            return Ok(SpeculativeProposalBatch::new(vec![
+                SpeculativeProposal::new(Vec::new()),
+            ]));
         }
         let prefix = hiddens
             .iter()
@@ -626,7 +624,8 @@ impl SpeculativeProposer for DsparkProposer {
         // Deterministic draft (argmax): draft quality only affects accept rate, and the
         // target verify decides every emitted token.
         let (tokens_t, logits, confidence) =
-            self.draft.draft_block(&prefix, anchor_token, anchor_pos, 0.0)?;
+            self.draft
+                .draft_block(&prefix, anchor_token, anchor_pos, 0.0)?;
 
         let tokens: Vec<u32> = tokens_t.to_vec1::<u32>()?;
         let conf: Vec<f32> = confidence.to_dtype(DType::F32)?.to_vec1::<f32>()?;
@@ -843,7 +842,11 @@ mod tests {
         let weights = dir.join("model.safetensors");
         let refp = std::path::Path::new(REF);
         if !weights.exists() || !refp.exists() {
-            eprintln!("skipping: need checkpoint {} + ref dump {}", weights.display(), REF);
+            eprintln!(
+                "skipping: need checkpoint {} + ref dump {}",
+                weights.display(),
+                REF
+            );
             return Ok(());
         }
 
@@ -864,26 +867,38 @@ mod tests {
 
         // Compare the Markov-corrected block logits (backbone + Markov) — the
         // decisive numeric check. Small tolerance for F32 reduction-order drift.
-        let got = logits.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
-        let exp = refs["corrected_logits"].to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+        let got = logits
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let exp = refs["corrected_logits"]
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
         assert_eq!(got.len(), exp.len(), "logit count mismatch");
         let max_abs = got
             .iter()
             .zip(&exp)
             .map(|(a, b)| (a - b).abs())
             .fold(0f32, f32::max);
-        let mean_abs = got.iter().zip(&exp).map(|(a, b)| (a - b).abs()).sum::<f32>()
+        let mean_abs = got
+            .iter()
+            .zip(&exp)
+            .map(|(a, b)| (a - b).abs())
+            .sum::<f32>()
             / got.len() as f32;
         eprintln!("corrected-logit max|Δ| = {max_abs:.5}, mean|Δ| = {mean_abs:.6}");
 
         // Token agreement (the operational signal — do the drafts match?).
         let got_toks = tokens.to_vec1::<u32>()?;
-        let exp_toks: Vec<u32> = refs["tokens"]
-            .to_dtype(DType::U32)?
-            .to_vec1::<u32>()?;
+        let exp_toks: Vec<u32> = refs["tokens"].to_dtype(DType::U32)?.to_vec1::<u32>()?;
         eprintln!("rust tokens = {got_toks:?}");
         eprintln!("ref  tokens = {exp_toks:?}");
-        let tok_match = got_toks.iter().zip(&exp_toks).filter(|(a, b)| a == b).count();
+        let tok_match = got_toks
+            .iter()
+            .zip(&exp_toks)
+            .filter(|(a, b)| a == b)
+            .count();
 
         // Confidence parity.
         let got_conf = confidence.to_dtype(DType::F32)?.to_vec1::<f32>()?;

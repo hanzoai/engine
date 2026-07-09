@@ -28,7 +28,10 @@ impl PatchEmbed3D {
             hanzo_ml::bail!("PatchEmbed3D expects a square spatial patch, got {ph}x{pw}");
         }
         let w = vb
-            .get((cfg.hidden_size, cfg.in_channels, pt, ph, pw), "proj.weight")?
+            .get(
+                (cfg.hidden_size, cfg.in_channels, pt, ph, pw),
+                "proj.weight",
+            )?
             .squeeze(2)?;
         let bias = vb.get(cfg.hidden_size, "proj.bias")?;
         let cfg2 = Conv2dConfig {
@@ -70,8 +73,16 @@ pub(crate) struct TimestepEmbedder {
 
 impl TimestepEmbedder {
     pub(crate) fn new(cfg: &LongCatConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let mlp0 = layers::linear(cfg.freq_embed_dim, cfg.adaln_tembed_dim, vb.pp("mlp").pp("0"))?;
-        let mlp2 = layers::linear(cfg.adaln_tembed_dim, cfg.adaln_tembed_dim, vb.pp("mlp").pp("2"))?;
+        let mlp0 = layers::linear(
+            cfg.freq_embed_dim,
+            cfg.adaln_tembed_dim,
+            vb.pp("mlp").pp("0"),
+        )?;
+        let mlp2 = layers::linear(
+            cfg.adaln_tembed_dim,
+            cfg.adaln_tembed_dim,
+            vb.pp("mlp").pp("2"),
+        )?;
         Ok(Self {
             mlp0,
             mlp2,

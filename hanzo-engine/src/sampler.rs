@@ -1442,15 +1442,13 @@ impl Sampler {
         }
         let next_token = if sample_speculative {
             match self.temperature {
-                None => {
-                    self.sample_speculative_top_kp_min_p(
-                        logits,
-                        return_logprobs,
-                        self.top_k,
-                        self.top_p as f32,
-                        self.min_p as f32,
-                    )?
-                }
+                None => self.sample_speculative_top_kp_min_p(
+                    logits,
+                    return_logprobs,
+                    self.top_k,
+                    self.top_p as f32,
+                    self.min_p as f32,
+                )?,
                 Some(temperature) => {
                     let logits = (&logits / temperature)?;
                     let probs = hanzo_nn::ops::softmax_last_dim(&logits)?;
@@ -1466,9 +1464,7 @@ impl Sampler {
             }
         } else {
             match self.temperature {
-                None => {
-                    self.sample_argmax(logits, return_logprobs)?
-                }
+                None => self.sample_argmax(logits, return_logprobs)?,
                 Some(temperature) => {
                     let logits = (&logits / temperature)?;
                     let probs = hanzo_nn::ops::softmax_last_dim(&logits)?;
@@ -1539,10 +1535,22 @@ mod tests {
         // id, so a re-executing verifier picks the identical token. Rust's max_by would
         // return the highest (last) — this guards against that regression.
         use super::argmax_f32;
-        assert_eq!(argmax_f32(&[1.0, 5.0, 2.0, 5.0, 3.0]), 1, "tie at 5.0 -> lowest index 1");
+        assert_eq!(
+            argmax_f32(&[1.0, 5.0, 2.0, 5.0, 3.0]),
+            1,
+            "tie at 5.0 -> lowest index 1"
+        );
         assert_eq!(argmax_f32(&[7.0, 7.0, 7.0]), 0, "all equal -> index 0");
-        assert_eq!(argmax_f32(&[0.0, 1.0, 2.0, 3.0]), 3, "strict max unaffected");
-        assert_eq!(argmax_f32(&[f32::NAN, 2.0, f32::NAN, 2.0]), 1, "NaNs skipped, tie -> lowest finite");
+        assert_eq!(
+            argmax_f32(&[0.0, 1.0, 2.0, 3.0]),
+            3,
+            "strict max unaffected"
+        );
+        assert_eq!(
+            argmax_f32(&[f32::NAN, 2.0, f32::NAN, 2.0]),
+            1,
+            "NaNs skipped, tie -> lowest finite"
+        );
     }
 
     #[test]

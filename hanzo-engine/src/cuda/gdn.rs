@@ -450,7 +450,10 @@ pub fn causal_conv1d_cuda(
         DType::F16 => cuda_fwd::<half::f16>(x, weight, conv_state, kernel_size, is_update, 0),
         DType::BF16 => cuda_fwd::<half::bf16>(x, weight, conv_state, kernel_size, is_update, 1),
         DType::F32 => cuda_fwd::<f32>(x, weight, conv_state, kernel_size, is_update, 2),
-        other => hanzo_ml::bail!("causal_conv1d_cuda only supports f16/bf16/f32, got {:?}", other),
+        other => hanzo_ml::bail!(
+            "causal_conv1d_cuda only supports f16/bf16/f32, got {:?}",
+            other
+        ),
     }
 }
 

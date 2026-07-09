@@ -66,8 +66,7 @@ pub const THREED_JOB_ROUTE: RouteInfo = RouteInfo::new("/v1/3d/{id}", "GET", Rou
 pub const THREED_CONTENT_ROUTE: RouteInfo =
     RouteInfo::new("/v1/3d/{id}/content", "GET", RouteKind::Hanzo);
 pub const ANIMATE_ROUTE: RouteInfo = RouteInfo::new("/v1/animate", "POST", RouteKind::Hanzo);
-pub const LIPSYNC_ROUTE: RouteInfo =
-    RouteInfo::new("/v1/video/lipsync", "POST", RouteKind::Hanzo);
+pub const LIPSYNC_ROUTE: RouteInfo = RouteInfo::new("/v1/video/lipsync", "POST", RouteKind::Hanzo);
 pub const AGENT_APPROVAL_ROUTE: RouteInfo = RouteInfo::new(
     "/v1/agent/approvals/{approval_id}",
     "POST",

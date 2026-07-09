@@ -58,7 +58,10 @@ impl FlowMatchScheduler {
             sigmas.push(shift * s / (1.0 + (shift - 1.0) * s));
         }
         sigmas.push(0.0);
-        let timesteps = sigmas[..steps].iter().map(|s| s * NUM_TRAIN_TIMESTEPS).collect();
+        let timesteps = sigmas[..steps]
+            .iter()
+            .map(|s| s * NUM_TRAIN_TIMESTEPS)
+            .collect();
         Self { sigmas, timesteps }
     }
 
@@ -117,7 +120,8 @@ impl EchoMimicGenerator {
     ) -> Result<Tensor> {
         let sched = FlowMatchScheduler::new(self.opts.steps, self.opts.shift);
         let clip_dim = self.dit.config().clip_dim;
-        let mut latent = Tensor::randn(0f64, 1.0, (1, Z, f_lat, hp, wp), &self.device)?.to_dtype(self.dtype)?;
+        let mut latent =
+            Tensor::randn(0f64, 1.0, (1, Z, f_lat, hp, wp), &self.device)?.to_dtype(self.dtype)?;
 
         // CFG context: text/clip zeros (no encoders); audio is [neg, neg, cond].
         let text3 = Tensor::zeros((3, 1, self.dit.config().text_dim), self.dtype, &self.device)?;
@@ -130,9 +134,9 @@ impl EchoMimicGenerator {
             let x = Tensor::cat(&[&latent, mask4, masked_ref], 1)?;
             let x3 = Tensor::cat(&[&x, &x, &x], 0)?;
             let t = Tensor::from_vec(vec![ts as f32; 3], 3, &self.device)?;
-            let v = self
-                .dit
-                .forward(&x3, &t, &text3, &clip3, &audio3, &ip3, self.opts.audio_cfg)?;
+            let v =
+                self.dit
+                    .forward(&x3, &t, &text3, &clip3, &audio3, &ip3, self.opts.audio_cfg)?;
             let v = self.cfg(&v)?;
             latent = sched.step(&v, i, &latent)?;
         }
@@ -150,7 +154,12 @@ impl EchoMimicGenerator {
     }
 
     // Build conditioning from a portrait and run the full pipeline -> RGB frames.
-    pub fn generate_video(&self, portrait: &DynamicImage, audio: &Tensor, f_lat: usize) -> Result<Vec<DynamicImage>> {
+    pub fn generate_video(
+        &self,
+        portrait: &DynamicImage,
+        audio: &Tensor,
+        f_lat: usize,
+    ) -> Result<Vec<DynamicImage>> {
         let (h, w) = (self.opts.height, self.opts.width);
         let (hp, wp) = (h / VAE_SPATIAL, w / VAE_SPATIAL);
         let f_pix = 4 * f_lat - 3;
@@ -170,7 +179,9 @@ impl EchoMimicGenerator {
         let latent = self.denoise(&masked_ref, &mask4, audio, &ip_mask, f_lat, hp, wp)?;
         let rgb = self.vae.decode(&latent)?; // [1,3,f_pix,h,w] in [-1,1]
         let n = rgb.dim(2)?;
-        (0..n).map(|f| video_frame_to_image(&rgb.narrow(2, f, 1)?)).collect()
+        (0..n)
+            .map(|f| video_frame_to_image(&rgb.narrow(2, f, 1)?))
+            .collect()
     }
 }
 
@@ -196,7 +207,9 @@ pub struct Wav2Vec2Encoder;
 
 impl DriveEncoder for Wav2Vec2Encoder {
     fn encode(&self, _audio: &DrivingAudio, _fps: f64) -> Result<Tensor> {
-        hanzo_ml::bail!("EchoMimic wav2vec2 encoder not ported; supply precomputed audio_embeds [1,2F,768]")
+        hanzo_ml::bail!(
+            "EchoMimic wav2vec2 encoder not ported; supply precomputed audio_embeds [1,2F,768]"
+        )
     }
 }
 
@@ -235,7 +248,9 @@ impl FacialAnimator for EchoMimicAnimator {
 
 // Portrait -> [1,3,1,H,W] in [-1,1] (the Wan VAE input range).
 fn portrait_to_tensor(img: &DynamicImage, h: usize, w: usize, device: &Device) -> Result<Tensor> {
-    let rgb = img.resize_exact(w as u32, h as u32, FilterType::Triangle).to_rgb8();
+    let rgb = img
+        .resize_exact(w as u32, h as u32, FilterType::Triangle)
+        .to_rgb8();
     let raw = rgb.into_raw();
     let plane = h * w;
     let mut data = vec![0f32; 3 * plane];
@@ -280,7 +295,14 @@ mod tests {
 
     struct RandnBackend;
     impl SimpleBackend for RandnBackend {
-        fn get(&self, s: Shape, name: &str, _h: Init, dtype: DType, dev: &Device) -> Result<Tensor> {
+        fn get(
+            &self,
+            s: Shape,
+            name: &str,
+            _h: Init,
+            dtype: DType,
+            dev: &Device,
+        ) -> Result<Tensor> {
             if name.ends_with("bias") {
                 Tensor::zeros(s, dtype, dev)
             } else if name.ends_with("gamma") || (name.ends_with("weight") && s.rank() == 1) {

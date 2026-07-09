@@ -9,7 +9,9 @@ use pyo3::pyclass;
 use serde::{Deserialize, Serialize};
 
 use crate::diffusion_models::animation::FacialAnimator;
-use crate::diffusion_models::musetalk::{AnimatorOptions, MuseTalk, MuseTalkAnimator, MuseTalkConfig};
+use crate::diffusion_models::musetalk::{
+    AnimatorOptions, MuseTalk, MuseTalkAnimator, MuseTalkConfig,
+};
 use crate::diffusion_models::wan::{
     AutoencoderKLWan, EchoMimicAnimator, EchoMimicConfig, EchoMimicDiT, EchoMimicGenerator,
     EchoMimicOptions, WanVaeConfig,
@@ -159,8 +161,11 @@ mod tests {
     fn whisper_vb_scopes_under_encoder() {
         let dev = Device::Cpu;
         let keys = Arc::new(Mutex::new(Vec::new()));
-        let vb =
-            ShardedSafeTensors::wrap(Box::new(RecordingBackend(keys.clone())), DType::F32, dev.clone());
+        let vb = ShardedSafeTensors::wrap(
+            Box::new(RecordingBackend(keys.clone())),
+            DType::F32,
+            dev.clone(),
+        );
         // Mirror the loader: scope to the encoder before constructing the extractor.
         WhisperFeatureExtractor::new(WhisperConfig::tiny(), vb.pp(WHISPER_ENCODER_PREFIX), &dev)
             .unwrap();

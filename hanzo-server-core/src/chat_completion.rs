@@ -37,11 +37,11 @@ use crate::{
         create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
         JsonError, ModelErrorMessage,
     },
-    router::AgenticDefaults,
     openai::{
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
         ResponseFormat,
     },
+    router::AgenticDefaults,
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedState, OnChunkCallback, OnDoneCallback, SharedState},
     util::{parse_audio_url, parse_image_url, sanitize_error_message, validate_model_name},
