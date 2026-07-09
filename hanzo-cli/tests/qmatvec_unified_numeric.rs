@@ -195,8 +195,16 @@ fn check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
     // the exact f16/bf16 activation. Match the reference to whichever the GPU actually ran so nbad=0
     // means bit-exact (not "within a q8_1 fudge"). dp4a_active() reflects set_force_scalar_matvec.
     let dp4a = qt.dp4a_active();
-    let ax_h = if dp4a { q8_1_recon(&xf_h) } else { xf_h.clone() };
-    let ax_b = if dp4a { q8_1_recon(&xf_b) } else { xf_b.clone() };
+    let ax_h = if dp4a {
+        q8_1_recon(&xf_h)
+    } else {
+        xf_h.clone()
+    };
+    let ax_b = if dp4a {
+        q8_1_recon(&xf_b)
+    } else {
+        xf_b.clone()
+    };
     let mut ref_h = vec![0f32; n];
     let mut ref_b = vec![0f32; n];
     for nn in 0..n {
@@ -593,8 +601,16 @@ fn moe_check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
         let eb = &bank[eid as usize * expert_bytes..(eid as usize + 1) * expert_bytes];
         let raw_h = &xf_h[s * k..s * k + k];
         let raw_b = &xf_b[s * k..s * k + k];
-        let xrow_h = if dp4a { q8_1_recon(raw_h) } else { raw_h.to_vec() };
-        let xrow_b = if dp4a { q8_1_recon(raw_b) } else { raw_b.to_vec() };
+        let xrow_h = if dp4a {
+            q8_1_recon(raw_h)
+        } else {
+            raw_h.to_vec()
+        };
+        let xrow_b = if dp4a {
+            q8_1_recon(raw_b)
+        } else {
+            raw_b.to_vec()
+        };
         for r in 0..n {
             let rh = reference_row::<T>(eb, r, nblk, blk, tsz, &xrow_h);
             let rb = reference_row::<T>(eb, r, nblk, blk, tsz, &xrow_b);
@@ -780,27 +796,63 @@ fn moe_matvec_unified_numeric() {
     );
     // Legacy 32-elem MoE types via the scalar moe_qmatvecu_* core (experts on grid.y).
     moe_check::<BlockQ4_1, _>(
-        &dev, &mut log, "Q4_1", RocmQuantType::Q4_1, 8, 16, 128, 512, 32, 20,
+        &dev,
+        &mut log,
+        "Q4_1",
+        RocmQuantType::Q4_1,
+        8,
+        16,
+        128,
+        512,
+        32,
+        20,
         |blk, r, b| {
             put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
             put_d(blk, 2, r, b, 0.03125, 0.015625, 4);
         },
     );
     moe_check::<BlockQ5_0, _>(
-        &dev, &mut log, "Q5_0", RocmQuantType::Q5_0, 8, 16, 128, 512, 32, 22,
+        &dev,
+        &mut log,
+        "Q5_0",
+        RocmQuantType::Q5_0,
+        8,
+        16,
+        128,
+        512,
+        32,
+        22,
         |blk, r, b| {
             put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
         },
     );
     moe_check::<BlockQ5_1, _>(
-        &dev, &mut log, "Q5_1", RocmQuantType::Q5_1, 8, 16, 128, 512, 32, 24,
+        &dev,
+        &mut log,
+        "Q5_1",
+        RocmQuantType::Q5_1,
+        8,
+        16,
+        128,
+        512,
+        32,
+        24,
         |blk, r, b| {
             put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
             put_d(blk, 2, r, b, 0.03125, 0.015625, 4);
         },
     );
     moe_check::<BlockQ8_1, _>(
-        &dev, &mut log, "Q8_1", RocmQuantType::Q8_1, 8, 16, 128, 512, 32, 36,
+        &dev,
+        &mut log,
+        "Q8_1",
+        RocmQuantType::Q8_1,
+        8,
+        16,
+        128,
+        512,
+        32,
+        36,
         |blk, r, b| {
             put_d(blk, 0, r, b, 0.0625, 0.03125, 5);
         },

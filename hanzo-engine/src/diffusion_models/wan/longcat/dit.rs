@@ -183,12 +183,7 @@ pub fn merge_lora(weight: &Tensor, down: &Tensor, up: &Tensor, alpha: f64) -> Re
 }
 
 /// Rebuild a `Linear` with a LoRA delta merged into its weight (bias unchanged).
-pub fn merged_linear(
-    base: &Linear,
-    down: &Tensor,
-    up: &Tensor,
-    alpha: f64,
-) -> Result<Linear> {
+pub fn merged_linear(base: &Linear, down: &Tensor, up: &Tensor, alpha: f64) -> Result<Linear> {
     Ok(Linear::new(
         merge_lora(base.weight(), down, up, alpha)?,
         base.bias().cloned(),
@@ -214,8 +209,10 @@ impl LongCatAvatarDiT {
         cfg.validate()?;
         let dtype = vb.dtype();
         let x_embedder = PatchEmbed3D::new(&cfg, vb.pp("x_embedder").set_device(device.clone()))?;
-        let t_embedder = TimestepEmbedder::new(&cfg, vb.pp("t_embedder").set_device(device.clone()))?;
-        let y_embedder = CaptionEmbedder::new(&cfg, vb.pp("y_embedder").set_device(device.clone()))?;
+        let t_embedder =
+            TimestepEmbedder::new(&cfg, vb.pp("t_embedder").set_device(device.clone()))?;
+        let y_embedder =
+            CaptionEmbedder::new(&cfg, vb.pp("y_embedder").set_device(device.clone()))?;
         let audio_proj = AudioProjModel::new(&cfg, vb.pp("audio_proj").set_device(device.clone()))?;
         let vb_b = vb.pp("blocks");
         let mut blocks = Vec::with_capacity(cfg.depth);

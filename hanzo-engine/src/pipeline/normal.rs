@@ -11,12 +11,10 @@ use super::{
 };
 use super::{
     AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, DeepSeekV4Loader, GLM4Loader,
-    GLM4MoeLiteLoader,
-    GLM4MoeLoader, Gemma2Loader, GemmaLoader, Glm5MoeLoader, GptOssLoader, GraniteMoeHybridLoader,
-    LlamaLoader,
-    MiniMaxM2Loader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader,
-    Phi3_5MoELoader,
-    Qwen2Loader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, SmolLm3Loader, Starcoder2Loader,
+    GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, GemmaLoader, Glm5MoeLoader, GptOssLoader,
+    GraniteMoeHybridLoader, LlamaLoader, MiniMaxM2Loader, MistralLoader, MixtralLoader,
+    NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader,
+    Qwen3MoELoader, Qwen3NextLoader, SmolLm3Loader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
 use crate::attention::ATTENTION_CHUNK_SIZE;
@@ -1754,9 +1752,8 @@ impl Pipeline for NormalPipeline {
             // on accelerators — draft dtype only affects accept rate, never correctness (the
             // target verify decides every emitted token; draft_block casts target hiddens in).
             let dir = std::path::PathBuf::from(&path);
-            let cfg = crate::models::qwen3_dspark::DSparkConfig::from_json_file(
-                dir.join("config.json"),
-            )?;
+            let cfg =
+                crate::models::qwen3_dspark::DSparkConfig::from_json_file(dir.join("config.json"))?;
             let device = self.model.device().clone();
             let dtype = if device.is_cpu() {
                 hanzo_ml::DType::F32
@@ -1782,11 +1779,13 @@ impl Pipeline for NormalPipeline {
         if let crate::speculative::SpeculativeConfig::DraftModel { draft, gamma } = config {
             {
                 let target_tok = self.tokenizer().ok_or_else(|| {
-                    hanzo_ml::Error::msg("target pipeline has no tokenizer for speculative decoding")
+                    hanzo_ml::Error::msg(
+                        "target pipeline has no tokenizer for speculative decoding",
+                    )
                 })?;
-                let draft_guard = draft.try_lock().map_err(|_| {
-                    hanzo_ml::Error::msg("draft pipeline is not exclusively owned")
-                })?;
+                let draft_guard = draft
+                    .try_lock()
+                    .map_err(|_| hanzo_ml::Error::msg("draft pipeline is not exclusively owned"))?;
                 let draft_tok = draft_guard.tokenizer().ok_or_else(|| {
                     hanzo_ml::Error::msg("draft pipeline has no tokenizer for speculative decoding")
                 })?;

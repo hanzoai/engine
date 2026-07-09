@@ -141,7 +141,11 @@ pub fn flow_sigmas(steps: usize, shift: f64) -> Vec<f64> {
 /// `x_t = (1-t)*clean + t*noise`. This is the cross-boundary motion injection.
 fn pin_context(x: &Tensor, clean: &Tensor, noise_ctx: &Tensor, t: f64) -> Result<Tensor> {
     let ctx_t = ((clean * (1.0 - t))? + (noise_ctx * t)?)?;
-    let rest = x.narrow(LATENT_T_AXIS, CONTEXT_LATENTS, x.dim(LATENT_T_AXIS)? - CONTEXT_LATENTS)?;
+    let rest = x.narrow(
+        LATENT_T_AXIS,
+        CONTEXT_LATENTS,
+        x.dim(LATENT_T_AXIS)? - CONTEXT_LATENTS,
+    )?;
     Tensor::cat(&[&ctx_t, &rest], LATENT_T_AXIS)
 }
 
@@ -174,7 +178,11 @@ pub fn denoise_one_chunk(
         x = (x + (v * (t_next - t))?)?;
     }
     if let Some(clean) = context {
-        let rest = x.narrow(LATENT_T_AXIS, CONTEXT_LATENTS, x.dim(LATENT_T_AXIS)? - CONTEXT_LATENTS)?;
+        let rest = x.narrow(
+            LATENT_T_AXIS,
+            CONTEXT_LATENTS,
+            x.dim(LATENT_T_AXIS)? - CONTEXT_LATENTS,
+        )?;
         x = Tensor::cat(&[clean, &rest], LATENT_T_AXIS)?;
     }
     Ok(x)
@@ -286,7 +294,13 @@ mod tests {
     // move a latent slot is context re-pinning -> lets us assert pinning exactly.
     struct ZeroDenoiser;
     impl ChunkDenoiser for ZeroDenoiser {
-        fn denoise_chunk(&self, l: &Tensor, _a: &Tensor, _c: &ChunkCond, _t: f64) -> Result<Tensor> {
+        fn denoise_chunk(
+            &self,
+            l: &Tensor,
+            _a: &Tensor,
+            _c: &ChunkCond,
+            _t: f64,
+        ) -> Result<Tensor> {
             l.zeros_like()
         }
     }
@@ -321,13 +335,37 @@ mod tests {
 
     #[test]
     fn plan_expands_correctly() {
-        assert_eq!(plan_for_frames(81), ChunkPlan { chunks: 1, total_latents: 21 });
+        assert_eq!(
+            plan_for_frames(81),
+            ChunkPlan {
+                chunks: 1,
+                total_latents: 21
+            }
+        );
         // 153 frames -> 39 latents -> 1 + ceil((39-21)/18) = 2 chunks, 21 + 18 = 39 latents
-        assert_eq!(plan_for_frames(153), ChunkPlan { chunks: 2, total_latents: 39 });
+        assert_eq!(
+            plan_for_frames(153),
+            ChunkPlan {
+                chunks: 2,
+                total_latents: 39
+            }
+        );
         // 154 frames -> 39 latents (same)
-        assert_eq!(plan_for_frames(154), ChunkPlan { chunks: 2, total_latents: 39 });
+        assert_eq!(
+            plan_for_frames(154),
+            ChunkPlan {
+                chunks: 2,
+                total_latents: 39
+            }
+        );
         // one latent past a chunk forces a new chunk
-        assert_eq!(plan_for_frames(latents_to_frames(22)), ChunkPlan { chunks: 2, total_latents: 39 });
+        assert_eq!(
+            plan_for_frames(latents_to_frames(22)),
+            ChunkPlan {
+                chunks: 2,
+                total_latents: 39
+            }
+        );
     }
 
     #[test]
@@ -343,9 +381,16 @@ mod tests {
     #[test]
     fn pin_context_recovers_clean_context() -> Result<()> {
         let dev = Device::Cpu;
-        let cfg = StreamConfig { steps: 4, ..Default::default() };
+        let cfg = StreamConfig {
+            steps: 4,
+            ..Default::default()
+        };
         let ctx = latent(CONTEXT_LATENTS, &dev);
-        let cond = ChunkCond { reference: latent(1, &dev), text: None, image_embed: None };
+        let cond = ChunkCond {
+            reference: latent(1, &dev),
+            text: None,
+            image_embed: None,
+        };
         let out = denoise_one_chunk(
             &ZeroDenoiser,
             Some(&ctx),
@@ -359,14 +404,21 @@ mod tests {
         assert_eq!(out.dims(), &[1, 4, CHUNK_LATENTS, 8, 8]);
         let got = out.narrow(LATENT_T_AXIS, 0, CONTEXT_LATENTS)?;
         let diff = (got - &ctx)?.abs()?.max_all()?.to_scalar::<f32>()?;
-        assert!(diff < 1e-5, "context not preserved exactly, max abs diff {diff}");
+        assert!(
+            diff < 1e-5,
+            "context not preserved exactly, max abs diff {diff}"
+        );
         Ok(())
     }
 
     #[test]
     fn stream_shapes_and_chunking() -> Result<()> {
         let dev = Device::Cpu;
-        let cfg = StreamConfig { steps: 2, max_frames: 153, ..Default::default() };
+        let cfg = StreamConfig {
+            steps: 2,
+            max_frames: 153,
+            ..Default::default()
+        };
         let plan = plan_for_frames(cfg.max_frames);
         let rec = RecordingDenoiser(Mutex::new(Recorder::default()));
         let out = stream(
@@ -387,7 +439,11 @@ mod tests {
     #[test]
     fn first_chunk_has_no_context_rest_do() -> Result<()> {
         let dev = Device::Cpu;
-        let cfg = StreamConfig { steps: 1, max_frames: 153, ..Default::default() };
+        let cfg = StreamConfig {
+            steps: 1,
+            max_frames: 153,
+            ..Default::default()
+        };
         let out = stream(
             &ZeroDenoiser,
             &latent(1, &dev),

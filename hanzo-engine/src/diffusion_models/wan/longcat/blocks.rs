@@ -98,9 +98,9 @@ impl SelfAttention {
     // x: [B, N, hidden] -> normed q,k and raw v, each [B, H, N, D]; no RoPE yet.
     fn proj_qkv(&self, x: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
         let (b, n, _) = x.dims3()?;
-        let qkv = x
-            .apply(&self.qkv)?
-            .reshape((b, n, SELF_ATTN_MULT, self.num_heads, self.head_dim))?;
+        let qkv =
+            x.apply(&self.qkv)?
+                .reshape((b, n, SELF_ATTN_MULT, self.num_heads, self.head_dim))?;
         let q = qkv.i((.., .., 0))?.transpose(1, 2)?;
         let k = qkv.i((.., .., 1))?.transpose(1, 2)?;
         let v = qkv.i((.., .., 2))?.transpose(1, 2)?;
@@ -115,7 +115,13 @@ impl SelfAttention {
     }
 
     // Dense full-sequence self-attn (mask carries the block-causal structure).
-    fn dense(&self, x: &Tensor, cos: &Tensor, sin: &Tensor, mask: &AttentionMask) -> Result<Tensor> {
+    fn dense(
+        &self,
+        x: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+        mask: &AttentionMask,
+    ) -> Result<Tensor> {
         let (q, k, v) = self.proj_qkv(x)?;
         let q = apply_rope(&q, cos, sin)?;
         let k = apply_rope(&k, cos, sin)?;
@@ -191,9 +197,13 @@ impl CrossAttention {
             .apply(&self.q_linear)?
             .reshape((b, nq, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let kv = kv_src
-            .apply(&self.kv_linear)?
-            .reshape((b, nk, CROSS_KV_MULT, self.num_heads, self.head_dim))?;
+        let kv = kv_src.apply(&self.kv_linear)?.reshape((
+            b,
+            nk,
+            CROSS_KV_MULT,
+            self.num_heads,
+            self.head_dim,
+        ))?;
         let k = kv.i((.., .., 0))?.transpose(1, 2)?;
         let v = kv.i((.., .., 1))?.transpose(1, 2)?;
         let q = q.apply(&self.q_norm)?;
@@ -322,7 +332,12 @@ impl Block {
     }
 
     /// Dense forward over the full token sequence; `mask` carries block-causality.
-    pub(crate) fn forward(&self, x: &Tensor, ctx: &BlockCtx, mask: &AttentionMask) -> Result<Tensor> {
+    pub(crate) fn forward(
+        &self,
+        x: &Tensor,
+        ctx: &BlockCtx,
+        mask: &AttentionMask,
+    ) -> Result<Tensor> {
         let (m1, m2) = self.ada_ln.forward(ctx.cond)?;
         let h = m1.scale_shift(&x.apply(&self.norm1)?)?;
         let a = self.self_attn.dense(&h, ctx.cos, ctx.sin, mask)?;
@@ -339,7 +354,9 @@ impl Block {
     ) -> Result<(Tensor, KvSlot)> {
         let (m1, m2) = self.ada_ln.forward(ctx.cond)?;
         let h = m1.scale_shift(&x.apply(&self.norm1)?)?;
-        let (a, slot) = self.self_attn.dense_capture(&h, ctx.cos, ctx.sin, mask, n_cond)?;
+        let (a, slot) = self
+            .self_attn
+            .dense_capture(&h, ctx.cos, ctx.sin, mask, n_cond)?;
         Ok((self.finish(x, &a, &m1, &m2, ctx)?, slot))
     }
 
