@@ -22,8 +22,8 @@ pub use audio::{
 };
 pub use streaming::{
     frames_to_latents, latents_to_frames, plan_for_frames, stream, ChunkCond, ChunkDenoiser,
-    ChunkPlan, CondTemplate, StreamConfig, CHUNK_FRAMES, CHUNK_LATENTS, CONTEXT_LATENTS, NEW_FRAMES,
-    NEW_LATENTS,
+    ChunkPlan, CondTemplate, StreamConfig, CHUNK_FRAMES, CHUNK_LATENTS, CONTEXT_LATENTS,
+    NEW_FRAMES, NEW_LATENTS,
 };
 
 use hanzo_ml::{Result, Tensor};
@@ -130,7 +130,14 @@ mod tests {
 
     struct RandnBackend;
     impl SimpleBackend for RandnBackend {
-        fn get(&self, s: Shape, name: &str, _h: Init, dtype: DType, dev: &Device) -> Result<Tensor> {
+        fn get(
+            &self,
+            s: Shape,
+            name: &str,
+            _h: Init,
+            dtype: DType,
+            dev: &Device,
+        ) -> Result<Tensor> {
             if name.ends_with("bias") {
                 Tensor::zeros(s, dtype, dev)
             } else if name.ends_with("weight") && s.rank() == 1 {
@@ -175,11 +182,19 @@ mod tests {
         }
     }
     impl ChunkDenoiser for TinyDit {
-        fn denoise_chunk(&self, l: &Tensor, _a: &Tensor, _c: &ChunkCond, _t: f64) -> Result<Tensor> {
+        fn denoise_chunk(
+            &self,
+            l: &Tensor,
+            _a: &Tensor,
+            _c: &ChunkCond,
+            _t: f64,
+        ) -> Result<Tensor> {
             let (b, c, t, h, w) = l.dims5()?;
             let x = l.permute((0, 2, 3, 4, 1))?.reshape((b * t * h * w, c))?;
             let x = x.apply(&self.l1)?.gelu()?.apply(&self.l2)?;
-            x.reshape((b, t, h, w, c))?.permute((0, 4, 1, 2, 3))?.contiguous()
+            x.reshape((b, t, h, w, c))?
+                .permute((0, 4, 1, 2, 3))?
+                .contiguous()
         }
     }
 

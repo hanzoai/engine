@@ -68,7 +68,12 @@ fn validate(params: &WanT2vParams) -> Result<()> {
 /// bridge from the VAE decode output to the container muxer, kept here so the forward path lands as
 /// one function once weights are wired.
 #[allow(dead_code)]
-pub(crate) fn frames_from_pixels(pixels: &[f32], num_frames: usize, height: usize, width: usize) -> Result<Vec<DynamicImage>> {
+pub(crate) fn frames_from_pixels(
+    pixels: &[f32],
+    num_frames: usize,
+    height: usize,
+    width: usize,
+) -> Result<Vec<DynamicImage>> {
     let per_frame = height * width * 3;
     if pixels.len() != num_frames * per_frame {
         bail!(

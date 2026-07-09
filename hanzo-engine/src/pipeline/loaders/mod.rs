@@ -23,21 +23,19 @@ use tokio::sync::Mutex;
 
 pub use normal_loaders::{
     AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, DeepSeekV4Loader, GLM4Loader,
-    GLM4MoeLiteLoader,
-    GLM4MoeLoader, Gemma2Loader, GemmaLoader, Glm5MoeLoader, GptOssLoader, GraniteMoeHybridLoader,
-    LlamaLoader,
-    MiniMaxM2Loader, MistralLoader, MixtralLoader, NormalLoaderType, NormalLoadingMetadata,
-    NormalModel,
-    NormalModelLoader, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader,
-    Qwen3MoELoader, Qwen3NextLoader, SmolLm3Loader, Starcoder2Loader,
+    GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, GemmaLoader, Glm5MoeLoader, GptOssLoader,
+    GraniteMoeHybridLoader, LlamaLoader, MiniMaxM2Loader, MistralLoader, MixtralLoader,
+    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
+    Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader,
+    SmolLm3Loader, Starcoder2Loader,
 };
 
 pub use multimodal_loaders::{
     AutoMultimodalLoader, Gemma3Loader, Gemma3nLoader, Gemma4Loader, Idefics2Loader,
     Idefics3Loader, LLaVALoader, LLaVANextLoader, MiniCpmOLoader, Mistral3Loader,
     MultimodalLoaderType, MultimodalModel, MultimodalModelLoader, Phi3VLoader, Phi4MMLoader,
-    Qwen2VLLoader, Qwen2_5VLLoader, Qwen3OmniLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader,
-    Qwen3_5MoeLoader, VLlama4Loader, VLlamaLoader, VoxtralLoader,
+    Qwen2VLLoader, Qwen2_5VLLoader, Qwen3OmniLoader, Qwen3VLLoader, Qwen3VLMoELoader,
+    Qwen3_5Loader, Qwen3_5MoeLoader, VLlama4Loader, VLlamaLoader, VoxtralLoader,
 };
 
 pub use embedding_loaders::{

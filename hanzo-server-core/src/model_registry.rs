@@ -463,7 +463,8 @@ mod tests {
                 ArchKind::SupportedVision(name) => assert!(
                     matches!(*name, "qwen3-vl" | "qwen3-omni"),
                     "SKU `{}` uses unexpected vision arch `{}`",
-                    e.sku, name
+                    e.sku,
+                    name
                 ),
                 // ASR loaders.
                 ArchKind::SupportedAudio(name) => assert_eq!(
