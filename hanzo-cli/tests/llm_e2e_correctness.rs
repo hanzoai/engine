@@ -234,9 +234,7 @@ fn assert_finite(label: &str, logprobs: &[(String, f32)]) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deterministic_greedy_output() {
     let Some(path) = model_path() else {
-        eprintln!(
-            "SKIP deterministic_greedy_output: set TEST_GGUF to a local Qwen3/zen-eco GGUF"
-        );
+        eprintln!("SKIP deterministic_greedy_output: set TEST_GGUF to a local Qwen3/zen-eco GGUF");
         return;
     };
     let hanzo = load(&path).await;

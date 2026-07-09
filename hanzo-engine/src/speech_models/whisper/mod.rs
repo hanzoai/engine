@@ -100,7 +100,9 @@ impl WhisperFeatureExtractor {
         // Each 30 s window is encoded independently (faithful to openai's chunking).
         let mut windows = Vec::with_capacity(n_win);
         for w in 0..n_win {
-            let win = mel.narrow(1, w * mel_per_window, mel_per_window)?.unsqueeze(0)?;
+            let win = mel
+                .narrow(1, w * mel_per_window, mel_per_window)?
+                .unsqueeze(0)?;
             windows.push(self.encoder.encode_window(&win)?);
         }
         let feats = if windows.len() == 1 {
@@ -112,7 +114,10 @@ impl WhisperFeatureExtractor {
         // Trim padded-tail features to real content; boundary windows clamp-repeat.
         let total_feat = feats.dim(1)?;
         let n_content = ((secs * FEATURE_FPS as f64).ceil() as usize).clamp(1, total_feat);
-        let feats = feats.narrow(1, 0, n_content)?.transpose(0, 1)?.contiguous()?;
+        let feats = feats
+            .narrow(1, 0, n_content)?
+            .transpose(0, 1)?
+            .contiguous()?;
 
         // MuseTalk get_sliced_feature, vectorized: gather a clamped `window_len`
         // run of feature frames centered on `vid * 50 / fps` for every video frame.

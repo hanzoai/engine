@@ -20,9 +20,7 @@
 use std::ffi::c_int;
 use std::sync::OnceLock;
 
-use hanzo_server_core::server::{
-    load_model_at_runtime, ServerBuilder, ModelConfig,
-};
+use hanzo_server_core::server::{load_model_at_runtime, ModelConfig, ServerBuilder};
 
 /// Lazy one-time multi-model engine build. `Ok(())` once registered.
 fn ensure_engine() -> Result<(), String> {
