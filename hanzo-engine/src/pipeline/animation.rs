@@ -1,11 +1,10 @@
 use super::text_models_inputs_processor::PagedAttentionMeta;
 use super::{
     animation_loader, AdapterPaths, AnimationComponents, AnimationLoaderType, AnyMoePipelineMixin,
-    MuseTalkComponents,
     Cache, CacheManagerMixin, ChatTemplate, EitherCache, EmbeddingModulePaths, ForwardInputsResult,
     GeneralMetadata, InputProcessorOutput, InputsProcessor, InputsProcessorType, IsqPipelineMixin,
     Loader, MessagesAction, MetadataMixin, Modalities, ModelCategory, ModelKind, ModelPaths,
-    PreProcessingMixin, Processor, SupportedModality, TokenSource,
+    MuseTalkComponents, PreProcessingMixin, Processor, SupportedModality, TokenSource,
 };
 use crate::device_map::DeviceMapper;
 use crate::diffusion_models::animation::{
@@ -31,8 +30,8 @@ use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokenizers::Tokenizer;
+use tokio::sync::Mutex;
 
 /// One sequence's worth of animation input, gathered by `AnimationInputsProcessor`
 /// from the sequence's image (frames), audio (PCM), and `animation_params` slots.
@@ -234,11 +233,9 @@ impl Pipeline for AnimationPipeline {
                     })?;
                     VisualSource::Portrait { image }
                 }
-                VisualKind::Footage | VisualKind::Either => {
-                    VisualSource::Footage {
-                        frames: input.frames,
-                    }
-                }
+                VisualKind::Footage | VisualKind::Either => VisualSource::Footage {
+                    frames: input.frames,
+                },
             };
             // The one kind-gate enforcement point.
             if !self.animator.accepts().admits(&visual) {
@@ -464,7 +461,8 @@ impl Loader for AnimationLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         // Reject only a real multi-device map; dummy/Auto are no-ops on a single-device animation model.
-        if matches!(&mapper, DeviceMapSetting::Map(m) if m.device_layers().is_some_and(|l| !l.is_empty())) {
+        if matches!(&mapper, DeviceMapSetting::Map(m) if m.device_layers().is_some_and(|l| !l.is_empty()))
+        {
             anyhow::bail!("Device mapping is not supported for animation models.");
         }
         if in_situ_quant.is_some() {
@@ -483,8 +481,7 @@ impl Loader for AnimationLoader {
         // F16, which dtype-mismatches conv2d against the F32 activations. F16/BF16 await the GPU effort.
         let dtype = DType::F32;
 
-        let unet: UNetConfig =
-            serde_json::from_str(&std::fs::read_to_string(&paths.unet_config)?)?;
+        let unet: UNetConfig = serde_json::from_str(&std::fs::read_to_string(&paths.unet_config)?)?;
         let vae: VaeConfig = serde_json::from_str(&std::fs::read_to_string(&paths.vae_config)?)?;
         let musetalk_config = MuseTalkConfig {
             unet,

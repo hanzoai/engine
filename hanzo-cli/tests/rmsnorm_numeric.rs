@@ -108,7 +108,8 @@ fn add_rms_check(dev: &Device, log: &mut String, rows: usize, cols: usize) -> us
     let a = Tensor::from_vec(a_v, (cols,), dev).expect("a");
 
     let sum_ref = (&x + &r).expect("sum_ref");
-    let normed_ref = hanzo_nn::ops::rms_norm(&sum_ref.contiguous().expect("c"), &a, eps).expect("ref");
+    let normed_ref =
+        hanzo_nn::ops::rms_norm(&sum_ref.contiguous().expect("c"), &a, eps).expect("ref");
 
     let (xs, xl) = x.storage_and_layout();
     let xr = match &*xs {
@@ -125,7 +126,9 @@ fn add_rms_check(dev: &Device, log: &mut String, rows: usize, cols: usize) -> us
         hanzo_ml::Storage::Rocm(s) => s,
         _ => panic!("a not rocm"),
     };
-    let (sum_s, normed_s) = xr.add_rms_norm(xl, rr, rl, ar, al, eps).expect("add_rms_norm");
+    let (sum_s, normed_s) = xr
+        .add_rms_norm(xl, rr, rl, ar, al, eps)
+        .expect("add_rms_norm");
     let shape = x.shape().clone();
     let sum_f = Tensor::from((hanzo_ml::Storage::Rocm(sum_s), shape.clone()));
     let normed_f = Tensor::from((hanzo_ml::Storage::Rocm(normed_s), shape));
@@ -164,5 +167,8 @@ fn add_rmsnorm_numeric() {
     nbad += add_rms_check(&dev, &mut log, 5, 1025); // just over the 1024 block switch
     nbad += add_rms_check(&dev, &mut log, 2, 12288); // wide
     eprintln!("{log}");
-    assert_eq!(nbad, 0, "add_rmsnorm must be bit-identical to add + rms_norm\n{log}");
+    assert_eq!(
+        nbad, 0,
+        "add_rmsnorm must be bit-identical to add + rms_norm\n{log}"
+    );
 }

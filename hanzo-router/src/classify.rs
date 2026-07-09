@@ -54,11 +54,34 @@ impl Classifier for Heuristic {
         }
         let t = req.text.to_lowercase();
         let has = |words: &[&str]| words.iter().any(|w| t.contains(w));
-        if t.contains("```") || has(&["code", "function", "bug", "compile", "stack trace", "refactor"]) {
+        if t.contains("```")
+            || has(&[
+                "code",
+                "function",
+                "bug",
+                "compile",
+                "stack trace",
+                "refactor",
+            ])
+        {
             Task::Code
-        } else if has(&["prove", "theorem", "integral", "equation", "calculate", "solve for"]) {
+        } else if has(&[
+            "prove",
+            "theorem",
+            "integral",
+            "equation",
+            "calculate",
+            "solve for",
+        ]) {
             Task::Math
-        } else if has(&["why", "reason", "step by step", "analyze", "explain how", "trade-off"]) {
+        } else if has(&[
+            "why",
+            "reason",
+            "step by step",
+            "analyze",
+            "explain how",
+            "trade-off",
+        ]) {
             Task::Reasoning
         } else if has(&["write a story", "poem", "creative", "imagine", "brainstorm"]) {
             Task::Creative

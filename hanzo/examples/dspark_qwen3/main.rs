@@ -49,9 +49,7 @@ async fn run(model: &hanzo::Model, label: &str) -> Result<RunResult> {
     let text = choice.message.content.clone().unwrap_or_default();
     let compl_toks = response.usage.completion_tokens;
     let tok_per_sec = response.usage.avg_compl_tok_per_sec;
-    println!(
-        "[{label}] completion_tokens={compl_toks}  decode={tok_per_sec:.2} tok/s"
-    );
+    println!("[{label}] completion_tokens={compl_toks}  decode={tok_per_sec:.2} tok/s");
     Ok(RunResult {
         text,
         compl_toks,

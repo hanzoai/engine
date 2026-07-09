@@ -174,7 +174,13 @@ impl LongCatGenerator {
 
 impl Generator for LongCatGenerator {
     fn generate(&self, visual: &DynamicImage, audio: &Tensor) -> Result<DynamicImage> {
-        let img = image_to_tensor(visual, self.opts.height, self.opts.width, self.dtype, &self.device)?;
+        let img = image_to_tensor(
+            visual,
+            self.opts.height,
+            self.opts.width,
+            self.dtype,
+            &self.device,
+        )?;
         let (_, blk, ch) = audio.dims3()?;
         let audio4 = audio.reshape((1, 1, blk, ch))?;
         let text = Tensor::zeros(
@@ -219,7 +225,9 @@ pub struct LongCatAvatarAnimator(
 impl LongCatAvatarAnimator {
     pub fn new(gen: LongCatGenerator, whisper: WhisperLargeEncoder) -> Self {
         let device = gen.device().clone();
-        Self(Animator::new(WholeFrame, whisper, gen, FullFrame, device, 1))
+        Self(Animator::new(
+            WholeFrame, whisper, gen, FullFrame, device, 1,
+        ))
     }
 }
 
@@ -285,11 +293,11 @@ mod tests {
     use super::dit::{merge_lora, merged_linear};
     use super::*;
     use crate::diffusion_models::wan::longcat::audio::AudioProjModel;
+    use hanzo_ml::{Shape, D};
     use hanzo_nn::var_builder::SimpleBackend;
     use hanzo_nn::{Init, Linear};
-    use hanzo_ml::{Shape, D};
-    use image::GenericImageView;
     use hanzo_quant::{ShardedSafeTensors, ShardedVarBuilder};
+    use image::GenericImageView;
 
     const WEIGHT_STD: f64 = 0.02;
 
@@ -418,7 +426,10 @@ mod tests {
         let noisy = latent.narrow(2, n_cond, 2)?.contiguous()?;
         let cached = dit.forward_cached(&noisy, &ts, &text, &audio, n_cond, &cache)?;
 
-        assert!(max_abs_diff(&prime, &dense)? < 1e-4, "prime must equal dense");
+        assert!(
+            max_abs_diff(&prime, &dense)? < 1e-4,
+            "prime must equal dense"
+        );
         let dense_noisy = dense.narrow(2, n_cond, 2)?;
         assert!(
             max_abs_diff(&cached, &dense_noisy)? < 1e-3,
@@ -470,9 +481,15 @@ mod tests {
         let ap = AudioProjModel::new(&cfg, random_vb(dt, &dev))?;
         let audio = Tensor::randn(0f32, 1f32, (1, 6, cfg.audio_block, cfg.audio_channel), &dev)?;
         let out = ap.forward(&audio)?;
-        assert_eq!(out.dims(), &[1, 6, cfg.audio_context_tokens, cfg.audio_output_dim]);
+        assert_eq!(
+            out.dims(),
+            &[1, 6, cfg.audio_context_tokens, cfg.audio_output_dim]
+        );
         let vf = ap.forward_first_group(&audio)?;
-        assert_eq!(vf.dims(), &[1, 6, cfg.audio_context_tokens, cfg.audio_output_dim]);
+        assert_eq!(
+            vf.dims(),
+            &[1, 6, cfg.audio_context_tokens, cfg.audio_output_dim]
+        );
         assert_finite(&out)?;
         assert_finite(&vf)?;
         Ok(())

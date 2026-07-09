@@ -275,18 +275,24 @@ impl QGatedDeltaNet {
         let (mixed_qkv, z) = match &self.qkvz {
             QkvzProj::Split { qkv, z } => {
                 let mixed_qkv = qkv.forward(x)?;
-                let z = z
-                    .forward(x)?
-                    .reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
+                let z = z.forward(x)?.reshape((
+                    batch_size,
+                    seq_len,
+                    self.num_v_heads,
+                    self.head_v_dim,
+                ))?;
                 (mixed_qkv, z)
             }
             QkvzProj::Merged(ssm_in) => {
                 // Legacy grouped layout: [q(head_k) | k(head_k) | v(v_per_group*head_v) | z(same)]
                 // per key-head group. Split within the group, then flatten q,k,v and concat.
                 let group_size = 2 * self.head_k_dim + 2 * v_per_group * self.head_v_dim;
-                let mixed = ssm_in
-                    .forward(x)?
-                    .reshape((batch_size, seq_len, self.num_k_heads, group_size))?;
+                let mixed = ssm_in.forward(x)?.reshape((
+                    batch_size,
+                    seq_len,
+                    self.num_k_heads,
+                    group_size,
+                ))?;
                 let mut offset = 0;
                 let q = mixed.narrow(D::Minus1, offset, self.head_k_dim)?;
                 offset += self.head_k_dim;
@@ -307,10 +313,13 @@ impl QGatedDeltaNet {
 
         // 2. beta|alpha: grouped [b(v_per_group) | a(v_per_group)] per key-head group.
         let mixed_ba = self.in_proj_ba.forward(x)?;
-        let mixed_ba = mixed_ba.reshape((batch_size, seq_len, self.num_k_heads, 2 * v_per_group))?;
-        let b = mixed_ba
-            .narrow(D::Minus1, 0, v_per_group)?
-            .reshape((batch_size, seq_len, self.num_v_heads))?;
+        let mixed_ba =
+            mixed_ba.reshape((batch_size, seq_len, self.num_k_heads, 2 * v_per_group))?;
+        let b = mixed_ba.narrow(D::Minus1, 0, v_per_group)?.reshape((
+            batch_size,
+            seq_len,
+            self.num_v_heads,
+        ))?;
         let a = mixed_ba
             .narrow(D::Minus1, v_per_group, v_per_group)?
             .reshape((batch_size, seq_len, self.num_v_heads))?;
@@ -334,13 +343,19 @@ impl QGatedDeltaNet {
         // 5. beta = sigmoid(b); g = -exp(A_log) * softplus(a + dt_bias). GGUF `ssm_a` already stores
         //    -exp(A_log), so multiply directly (no neg/exp here).
         let beta = hanzo_nn::ops::sigmoid(&b)?;
-        let dt_bias = self.dt_bias.to_dtype(DType::F32)?.unsqueeze(0)?.unsqueeze(0)?;
+        let dt_bias = self
+            .dt_bias
+            .to_dtype(DType::F32)?
+            .unsqueeze(0)?
+            .unsqueeze(0)?;
         let g = self
             .a
             .to_dtype(DType::F32)?
             .unsqueeze(0)?
             .unsqueeze(0)?
-            .broadcast_mul(&softplus(&a.to_dtype(DType::F32)?.broadcast_add(&dt_bias)?)?)?;
+            .broadcast_mul(&softplus(
+                &a.to_dtype(DType::F32)?.broadcast_add(&dt_bias)?,
+            )?)?;
 
         // 6. GROUPED repeat q,k to V-head count: V head j -> K head j / v_per_group. The GGUF lays out
         //    every per-V-head tensor (v, z, beta, g) grouped by key-head, so inserting the repeat axis
@@ -393,7 +408,8 @@ impl QGatedDeltaNet {
         let mut conv_outputs = Vec::with_capacity(seq_len);
         let total_len = hidden_new.dim(2)?;
         for i in (total_len - seq_len)..total_len {
-            let window = hidden_new.narrow(2, i + 1 - self.conv_kernel_size, self.conv_kernel_size)?;
+            let window =
+                hidden_new.narrow(2, i + 1 - self.conv_kernel_size, self.conv_kernel_size)?;
             let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
             conv_outputs.push(out);
         }
@@ -422,7 +438,8 @@ impl QGatedDeltaNet {
 
         let pad_width = self.conv_kernel_size.saturating_sub(seq_len);
         cache.conv_state = if pad_width > 0 {
-            let zeros = Tensor::zeros((batch_size, conv_dim, pad_width), x_t.dtype(), x_t.device())?;
+            let zeros =
+                Tensor::zeros((batch_size, conv_dim, pad_width), x_t.dtype(), x_t.device())?;
             Tensor::cat(&[zeros, x_t.clone()], 2)?
         } else {
             x_t.narrow(2, seq_len - self.conv_kernel_size, self.conv_kernel_size)?
@@ -598,17 +615,20 @@ impl PropsGGUF {
                 .unwrap_or(DEFAULT_FULL_ATTENTION_INTERVAL),
             conv_kernel: c
                 .get_value::<u32>("ssm.conv_kernel")
-                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize,
+                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
+                as usize,
             head_k_dim,
             head_v_dim,
             num_k_heads,
             num_v_heads,
             num_experts: c
                 .get_value::<u32>("expert_count")
-                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize,
+                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
+                as usize,
             num_experts_per_tok: c
                 .get_value::<u32>("expert_used_count")
-                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))? as usize,
+                .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
+                as usize,
         })
     }
 }

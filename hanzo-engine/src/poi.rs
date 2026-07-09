@@ -72,7 +72,10 @@ pub fn derive_challenges_keccak(seed: &[u8], n: usize, k: usize) -> Vec<Vec<u64>
 /// trading the `f32` fast path's throughput for the reproducibility the proof needs. `A` is
 /// `[t×k]`, `B` is `[k×n]`, `C` is `[t×n]`. (`i8·i8` over realistic `k` stays far inside `i64`.)
 pub fn exact_matmul(a: &Mat, b: &Mat) -> Mat {
-    assert_eq!(a.cols, b.rows, "exact_matmul dim mismatch: a.cols != b.rows");
+    assert_eq!(
+        a.cols, b.rows,
+        "exact_matmul dim mismatch: a.cols != b.rows"
+    );
     let (t, k, n) = (a.rows, a.cols, b.cols);
     let mut c = vec![0i64; t * n];
     for i in 0..t {
@@ -200,7 +203,10 @@ mod tests {
     fn test_honest_matmul_passes() {
         let (a, b, c) = fixture();
         let ch = derive_challenges(0xBE16A, 2, 4);
-        assert!(freivalds_verify_multi(&a, &b, &c, &ch), "honest C = A·B must pass every challenge");
+        assert!(
+            freivalds_verify_multi(&a, &b, &c, &ch),
+            "honest C = A·B must pass every challenge"
+        );
     }
 
     #[test]
@@ -223,9 +229,15 @@ mod tests {
         // C = A·B = [[1*5+(-2)*(-7), 1*6+(-2)*8],[3*5+4*(-7), 3*6+4*8]] = [[19,-10],[-13,50]]
         let c = Mat::new(2, 2, vec![19, -10, -13, 50]);
         let ch = derive_challenges(7, 2, 4);
-        assert!(freivalds_verify_multi(&a, &b, &c, &ch), "honest matmul with negatives passes");
+        assert!(
+            freivalds_verify_multi(&a, &b, &c, &ch),
+            "honest matmul with negatives passes"
+        );
         let c_bad = Mat::new(2, 2, vec![19, -10, -13, 49]); // flip -> caught
-        assert!(!freivalds_verify_multi(&a, &b, &c_bad, &ch), "tampered negative-entry matmul caught");
+        assert!(
+            !freivalds_verify_multi(&a, &b, &c_bad, &ch),
+            "tampered negative-entry matmul caught"
+        );
     }
 
     #[test]
@@ -240,7 +252,10 @@ mod tests {
         let a = Mat::new(2, 3, vec![1, 2, 3, 4, 5, 6]);
         let b = Mat::new(2, 2, vec![1, 2, 3, 4]); // b.rows(2) != a.cols(3)
         let c = Mat::new(2, 2, vec![1, 2, 3, 4]);
-        assert!(!freivalds_verify(&a, &b, &c, &[1, 1]), "shape mismatch must fail closed");
+        assert!(
+            !freivalds_verify(&a, &b, &c, &[1, 1]),
+            "shape mismatch must fail closed"
+        );
     }
 
     #[test]
@@ -251,7 +266,9 @@ mod tests {
         let mut sa = 0x1234_5678u64;
         let mut sb = 0x9abc_def0u64;
         let mut rnd = |s: &mut u64| -> i64 {
-            *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((*s >> 33) as i64 % 127) - 63 // small signed, int8-ish
         };
         let a = Mat::new(t, k, (0..t * k).map(|_| rnd(&mut sa)).collect());
@@ -269,11 +286,17 @@ mod tests {
         }
         let c = Mat::new(t, n, cdata.clone());
         let ch = derive_challenges(0xC0FFEE, n, 2);
-        assert!(freivalds_verify_multi(&a, &b, &c, &ch), "honest large matmul passes");
+        assert!(
+            freivalds_verify_multi(&a, &b, &c, &ch),
+            "honest large matmul passes"
+        );
         let mut bad = cdata.clone();
         bad[7 * n + 11] += 1; // one entry off by one
         let c_bad = Mat::new(t, n, bad);
-        assert!(!freivalds_verify_multi(&a, &b, &c_bad, &ch), "off-by-one in one entry is caught");
+        assert!(
+            !freivalds_verify_multi(&a, &b, &c_bad, &ch),
+            "off-by-one in one entry is caught"
+        );
     }
 
     #[test]

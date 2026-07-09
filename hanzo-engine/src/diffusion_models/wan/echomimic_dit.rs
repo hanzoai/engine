@@ -111,9 +111,15 @@ fn rope_freqs(f: usize, h: usize, w: usize, head_dim: usize, dev: &Device) -> Re
     let fh = rope_axis(&(0..h as i64).collect::<Vec<_>>(), s_dim, THETA, dev)?;
     let fw = rope_axis(&(0..w as i64).collect::<Vec<_>>(), s_dim, THETA, dev)?;
     let (dt, dhh, dw) = (ft.dim(1)?, fh.dim(1)?, fw.dim(1)?);
-    let ft = ft.reshape((f, 1, 1, dt, 2))?.broadcast_as((f, h, w, dt, 2))?;
-    let fh = fh.reshape((1, h, 1, dhh, 2))?.broadcast_as((f, h, w, dhh, 2))?;
-    let fw = fw.reshape((1, 1, w, dw, 2))?.broadcast_as((f, h, w, dw, 2))?;
+    let ft = ft
+        .reshape((f, 1, 1, dt, 2))?
+        .broadcast_as((f, h, w, dt, 2))?;
+    let fh = fh
+        .reshape((1, h, 1, dhh, 2))?
+        .broadcast_as((f, h, w, dhh, 2))?;
+    let fw = fw
+        .reshape((1, 1, w, dw, 2))?
+        .broadcast_as((f, h, w, dw, 2))?;
     Tensor::cat(&[&ft, &fh, &fw], 3)?
         .contiguous()?
         .reshape((f * h * w, dt + dhh + dw, 2))
@@ -292,7 +298,8 @@ impl CrossAttentionAudio {
 
     fn split(&self, x: &Tensor) -> Result<Tensor> {
         let (b, l, _) = x.dims3()?;
-        x.reshape((b, l, self.n_heads, self.head_dim))?.transpose(1, 2)
+        x.reshape((b, l, self.n_heads, self.head_dim))?
+            .transpose(1, 2)
     }
 
     fn forward(&self, x: &Tensor, ctx: &CrossContext) -> Result<Tensor> {
@@ -325,7 +332,9 @@ impl CrossAttentionAudio {
         let (n, d) = (self.n_heads, self.head_dim);
         let lt = ctx.latent_t;
         let n_q = seq / lt;
-        let k_a = self.norm_k_audio.forward(&ctx.audio.apply(&self.k_audio)?)?;
+        let k_a = self
+            .norm_k_audio
+            .forward(&ctx.audio.apply(&self.k_audio)?)?;
         let v_a = ctx.audio.apply(&self.v_audio)?;
         let bt = ctx.audio.dim(0)?; // b * latent_t
         let win = ctx.audio.dim(1)?;
@@ -350,7 +359,12 @@ struct AttentionBlock {
 }
 
 impl AttentionBlock {
-    fn new(cfg: &EchoMimicConfig, dev: &Device, dtype: DType, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(
+        cfg: &EchoMimicConfig,
+        dev: &Device,
+        dtype: DType,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         let d = cfg.dim;
         let norm1 = wan_layer_norm(d, cfg.eps, dev, dtype)?;
         let norm2 = wan_layer_norm(d, cfg.eps, dev, dtype)?;
@@ -367,7 +381,13 @@ impl AttentionBlock {
         })
     }
 
-    fn forward(&self, x: &Tensor, e0: &Tensor, freqs: &Tensor, ctx: &CrossContext) -> Result<Tensor> {
+    fn forward(
+        &self,
+        x: &Tensor,
+        e0: &Tensor,
+        freqs: &Tensor,
+        ctx: &CrossContext,
+    ) -> Result<Tensor> {
         // e: 6 modulation vectors [b, 1, dim] from (modulation + e0).
         let e = self.modulation.broadcast_add(e0)?;
         let m: Vec<Tensor> = (0..6)
@@ -399,7 +419,13 @@ struct Head {
 }
 
 impl Head {
-    fn new(cfg: &EchoMimicConfig, patch: usize, dev: &Device, dtype: DType, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(
+        cfg: &EchoMimicConfig,
+        patch: usize,
+        dev: &Device,
+        dtype: DType,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         let norm = wan_layer_norm(cfg.dim, cfg.eps, dev, dtype)?;
         let head = layers::linear(cfg.dim, patch * cfg.out_dim, vb.pp("head"))?;
         Ok(Self {
@@ -448,7 +474,12 @@ pub struct EchoMimicDiT {
 }
 
 impl EchoMimicDiT {
-    pub fn new(cfg: EchoMimicConfig, vb: ShardedVarBuilder, device: Device, dtype: DType) -> Result<Self> {
+    pub fn new(
+        cfg: EchoMimicConfig,
+        vb: ShardedVarBuilder,
+        device: Device,
+        dtype: DType,
+    ) -> Result<Self> {
         let d = cfg.dim;
         let (pt, ph, pw) = (1usize, 2usize, 2usize);
         let patch_embedding = CausalConv3d::new(
@@ -628,7 +659,14 @@ mod tests {
 
     struct RandnBackend;
     impl SimpleBackend for RandnBackend {
-        fn get(&self, s: Shape, name: &str, _h: Init, dtype: DType, dev: &Device) -> Result<Tensor> {
+        fn get(
+            &self,
+            s: Shape,
+            name: &str,
+            _h: Init,
+            dtype: DType,
+            dev: &Device,
+        ) -> Result<Tensor> {
             if name.ends_with("bias") {
                 Tensor::zeros(s, dtype, dev)
             } else if name.ends_with("weight") && s.rank() == 1 {
@@ -675,8 +713,10 @@ mod tests {
         let x = Tensor::randn(0f64, 1.0, (1, cfg.in_dim, f_lat, h, w), &dev)?.to_dtype(dtype)?;
         let t = Tensor::from_vec(vec![500f32], 1, &dev)?;
         let text = Tensor::randn(0f64, 1.0, (1, 12, cfg.text_dim), &dev)?.to_dtype(dtype)?;
-        let clip = Tensor::randn(0f64, 1.0, (1, CLIP_TOKENS, cfg.clip_dim), &dev)?.to_dtype(dtype)?;
-        let audio = Tensor::randn(0f64, 1.0, (1, 2 * f_pix, cfg.audio_dim), &dev)?.to_dtype(dtype)?;
+        let clip =
+            Tensor::randn(0f64, 1.0, (1, CLIP_TOKENS, cfg.clip_dim), &dev)?.to_dtype(dtype)?;
+        let audio =
+            Tensor::randn(0f64, 1.0, (1, 2 * f_pix, cfg.audio_dim), &dev)?.to_dtype(dtype)?;
         let n_q = (h / 2) * (w / 2);
         let ip_mask = Tensor::ones((1, n_q), dtype, &dev)?;
 
@@ -684,7 +724,9 @@ mod tests {
         assert_eq!(out.dims(), &[1, cfg.out_dim, f_lat, h, w]);
         let v = out.flatten_all()?.to_vec1::<f32>()?;
         assert!(v.iter().all(|x| x.is_finite()), "non-finite DiT output");
-        let (mn, mx) = v.iter().fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+        let (mn, mx) = v
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
         assert!(mx != mn, "degenerate constant DiT output");
         Ok(())
     }

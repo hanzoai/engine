@@ -86,7 +86,9 @@ mod tests {
         Registry::new(vec![
             ModelCard {
                 id: "deepseek-v4-flash".into(),
-                backend: Backend::Local { est_bytes: 93 << 30 },
+                backend: Backend::Local {
+                    est_bytes: 93 << 30,
+                },
                 tasks: vec![Task::Code, Task::Reasoning, Task::General],
                 max_context: 1_048_576,
                 vision: false,
@@ -94,7 +96,9 @@ mod tests {
             },
             ModelCard {
                 id: "zen-omni".into(),
-                backend: Backend::Local { est_bytes: 18 << 30 },
+                backend: Backend::Local {
+                    est_bytes: 18 << 30,
+                },
                 tasks: vec![Task::Vision, Task::General],
                 max_context: 32_768,
                 vision: true,
@@ -102,7 +106,9 @@ mod tests {
             },
             ModelCard {
                 id: "claude-sonnet-4-5".into(),
-                backend: Backend::Cloud { provider: "anthropic".into() },
+                backend: Backend::Cloud {
+                    provider: "anthropic".into(),
+                },
                 tasks: vec![Task::Code, Task::General],
                 max_context: 200_000,
                 vision: true,
@@ -110,7 +116,9 @@ mod tests {
             },
             ModelCard {
                 id: "gpt-4o-mini".into(),
-                backend: Backend::Cloud { provider: "openai".into() },
+                backend: Backend::Cloud {
+                    provider: "openai".into(),
+                },
                 tasks: vec![Task::CheapChat, Task::General],
                 max_context: 128_000,
                 vision: true,
@@ -143,7 +151,13 @@ mod tests {
     fn loads_local_v4_for_code_when_ram_available() {
         let reg = pool();
         let d = Policy::default().select(&ctx(Task::Code, &reg, 115, &BTreeSet::new()));
-        assert_eq!(d, Decision::LoadLocal { model: "deepseek-v4-flash".into(), est_bytes: 93 << 30 });
+        assert_eq!(
+            d,
+            Decision::LoadLocal {
+                model: "deepseek-v4-flash".into(),
+                est_bytes: 93 << 30
+            }
+        );
     }
 
     #[test]
@@ -151,7 +165,13 @@ mod tests {
         let reg = pool();
         // Only 60GB free -> V4 (93GB) can't load -> cheapest usable cloud for code = claude.
         let d = Policy::default().select(&ctx(Task::Code, &reg, 60, &BTreeSet::new()));
-        assert_eq!(d, Decision::Cloud { provider: "anthropic".into(), model: "claude-sonnet-4-5".into() });
+        assert_eq!(
+            d,
+            Decision::Cloud {
+                provider: "anthropic".into(),
+                model: "claude-sonnet-4-5".into()
+            }
+        );
     }
 
     #[test]
@@ -160,7 +180,12 @@ mod tests {
         let running: BTreeSet<String> = ["deepseek-v4-flash".to_string()].into_iter().collect();
         // V4 already loaded -> reuse it (zero load cost) rather than reload.
         let d = Policy::default().select(&ctx(Task::Code, &reg, 60, &running));
-        assert_eq!(d, Decision::Reuse { model: "deepseek-v4-flash".into() });
+        assert_eq!(
+            d,
+            Decision::Reuse {
+                model: "deepseek-v4-flash".into()
+            }
+        );
     }
 
     #[test]
@@ -171,49 +196,78 @@ mod tests {
         c.vision_required = true;
         // V4 isn't vision; zen-omni (18GB, vision) fits and is chosen.
         let d = Policy::default().select(&c);
-        assert_eq!(d, Decision::LoadLocal { model: "zen-omni".into(), est_bytes: 18 << 30 });
+        assert_eq!(
+            d,
+            Decision::LoadLocal {
+                model: "zen-omni".into(),
+                est_bytes: 18 << 30
+            }
+        );
     }
 
     #[test]
     fn cheap_chat_prefers_cheapest_cloud_via_policy() {
         let reg = pool();
         // Policy steers cheap_chat to the cheap cloud model explicitly.
-        let policy: Policy = load_policy(
-            "prefer:\n  cheap_chat: [gpt-4o-mini]\n",
-        )
-        .unwrap();
+        let policy: Policy = load_policy("prefer:\n  cheap_chat: [gpt-4o-mini]\n").unwrap();
         let running = BTreeSet::new();
         let d = policy.select(&ctx(Task::CheapChat, &reg, 115, &running));
-        assert_eq!(d, Decision::Cloud { provider: "openai".into(), model: "gpt-4o-mini".into() });
+        assert_eq!(
+            d,
+            Decision::Cloud {
+                provider: "openai".into(),
+                model: "gpt-4o-mini".into()
+            }
+        );
     }
 
     #[test]
     fn no_fit_when_nothing_usable() {
         let reg = Registry::new(vec![ModelCard {
             id: "huge".into(),
-            backend: Backend::Local { est_bytes: 500 << 30 },
+            backend: Backend::Local {
+                est_bytes: 500 << 30,
+            },
             tasks: vec![Task::General],
             max_context: 0,
             vision: false,
             cost_per_1k: 0.0,
         }]);
         let running = BTreeSet::new();
-        assert_eq!(Policy::default().select(&ctx(Task::Code, &reg, 60, &running)), Decision::NoFit);
+        assert_eq!(
+            Policy::default().select(&ctx(Task::Code, &reg, 60, &running)),
+            Decision::NoFit
+        );
     }
 
     #[test]
     fn classifier_routes_by_task() {
-        assert_eq!(Heuristic.classify(&Request { text: "```py```".into(), ..Default::default() }), Task::Code);
         assert_eq!(
-            Heuristic.classify(&Request { text: "prove sqrt(2) irrational".into(), ..Default::default() }),
+            Heuristic.classify(&Request {
+                text: "```py```".into(),
+                ..Default::default()
+            }),
+            Task::Code
+        );
+        assert_eq!(
+            Heuristic.classify(&Request {
+                text: "prove sqrt(2) irrational".into(),
+                ..Default::default()
+            }),
             Task::Math
         );
         assert_eq!(
-            Heuristic.classify(&Request { has_media: true, ..Default::default() }),
+            Heuristic.classify(&Request {
+                has_media: true,
+                ..Default::default()
+            }),
             Task::Vision
         );
         assert_eq!(
-            Heuristic.classify(&Request { approx_tokens: 100_000, ..Default::default() }),
+            Heuristic.classify(&Request {
+                approx_tokens: 100_000,
+                ..Default::default()
+            }),
             Task::LongContext
         );
     }
