@@ -293,8 +293,8 @@ pub use hanzo_engine::{
 
 // ========== Config Types ==========
 pub use hanzo_engine::{
-    DefaultSchedulerMethod, Config, IsqType, MemoryGpuConfig, ModelDType,
-    PagedAttentionConfig, PagedCacheType, SchedulerConfig, WebSearchOptions,
+    Config, DefaultSchedulerMethod, IsqType, MemoryGpuConfig, ModelDType, PagedAttentionConfig,
+    PagedCacheType, SchedulerConfig, WebSearchOptions,
 };
 
 // ========== Audio Types ==========

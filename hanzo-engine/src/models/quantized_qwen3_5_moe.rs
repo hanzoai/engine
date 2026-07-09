@@ -340,7 +340,17 @@ impl GatedFullAttention {
                 )?,
             (Some(paged_attn), None) => {
                 let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                paged_attn.forward(&q, &k, &v, mask, None, None, &input_metadata, &self.sdpa_params, None)?
+                paged_attn.forward(
+                    &q,
+                    &k,
+                    &v,
+                    mask,
+                    None,
+                    None,
+                    &input_metadata,
+                    &self.sdpa_params,
+                    None,
+                )?
             }
             (None, _) => {
                 let (k, v) = kv_cache.append(&k, &v)?;
@@ -1094,7 +1104,8 @@ impl ModelWeights {
             .as_ref()
             .and_then(|(_, meta)| meta.rope_positions.as_ref())
             .and_then(|rp| rp.get(&self.device.location()));
-        let cos_sin = self.compute_text_mrope(seqlen_offsets, seq_len, x.dtype(), rope_positions)?;
+        let cos_sin =
+            self.compute_text_mrope(seqlen_offsets, seq_len, x.dtype(), rope_positions)?;
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
@@ -1113,7 +1124,13 @@ impl ModelWeights {
                     else {
                         hanzo_ml::bail!("Hybrid cache layer {layer_idx} not attention.");
                     };
-                    attn.forward(&normed, &mask.get(normed.device()), &cos_sin, kv_cache, paged)?
+                    attn.forward(
+                        &normed,
+                        &mask.get(normed.device()),
+                        &cos_sin,
+                        kv_cache,
+                        paged,
+                    )?
                 }
                 LayerImpl::LinearAttention(gdn) => {
                     let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(layer_idx)

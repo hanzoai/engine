@@ -59,7 +59,10 @@ async fn main() -> Result<()> {
     }
     let input = args[1].clone();
     let out_dir = args[2].clone();
-    let max_samples: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(usize::MAX);
+    let max_samples: usize = args
+        .get(3)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(usize::MAX);
     let max_seq_len: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(2048);
 
     // Route the in-model capture: models/quantized_deepseek4.rs latches this on the

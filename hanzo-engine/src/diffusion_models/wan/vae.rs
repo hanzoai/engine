@@ -88,13 +88,37 @@ impl ResidualBlock {
     fn new(in_dim: usize, out_dim: usize, vb: ShardedVarBuilder) -> Result<Self> {
         let res = vb.pp("residual");
         let norm1 = WanRmsNorm::new(in_dim, false, res.pp(0))?;
-        let conv1 = CausalConv3d::new(in_dim, out_dim, (3, 3, 3), (1, 1, 1), (1, 1, 1), true, res.pp(2))?;
+        let conv1 = CausalConv3d::new(
+            in_dim,
+            out_dim,
+            (3, 3, 3),
+            (1, 1, 1),
+            (1, 1, 1),
+            true,
+            res.pp(2),
+        )?;
         let norm2 = WanRmsNorm::new(out_dim, false, res.pp(3))?;
-        let conv2 = CausalConv3d::new(out_dim, out_dim, (3, 3, 3), (1, 1, 1), (1, 1, 1), true, res.pp(6))?;
+        let conv2 = CausalConv3d::new(
+            out_dim,
+            out_dim,
+            (3, 3, 3),
+            (1, 1, 1),
+            (1, 1, 1),
+            true,
+            res.pp(6),
+        )?;
         let shortcut = if in_dim == out_dim {
             None
         } else {
-            Some(CausalConv3d::new(in_dim, out_dim, (1, 1, 1), (1, 1, 1), (0, 0, 0), true, vb.pp("shortcut"))?)
+            Some(CausalConv3d::new(
+                in_dim,
+                out_dim,
+                (1, 1, 1),
+                (1, 1, 1),
+                (0, 0, 0),
+                true,
+                vb.pp("shortcut"),
+            )?)
         };
         Ok(Self {
             norm1,
@@ -111,9 +135,13 @@ impl ResidualBlock {
             None => x.clone(),
         };
         let prev = cache.step(x)?;
-        let mut y = self.conv1.forward(&self.norm1.forward(x)?.silu()?, prev.as_ref())?;
+        let mut y = self
+            .conv1
+            .forward(&self.norm1.forward(x)?.silu()?, prev.as_ref())?;
         let prev = cache.step(&y)?;
-        y = self.conv2.forward(&self.norm2.forward(&y)?.silu()?, prev.as_ref())?;
+        y = self
+            .conv2
+            .forward(&self.norm2.forward(&y)?.silu()?, prev.as_ref())?;
         y + h
     }
 }
@@ -146,7 +174,9 @@ impl AttentionBlock {
         let qkv = qkv.flatten_from(2)?.transpose(1, 2)?; // [n, hw, 3c]
         let q = qkv.narrow(D::Minus1, 0, self.dim)?.contiguous()?;
         let k = qkv.narrow(D::Minus1, self.dim, self.dim)?.contiguous()?;
-        let v = qkv.narrow(D::Minus1, 2 * self.dim, self.dim)?.contiguous()?;
+        let v = qkv
+            .narrow(D::Minus1, 2 * self.dim, self.dim)?
+            .contiguous()?;
         let scale = 1.0 / (self.dim as f64).sqrt();
         let attn = (MatMul.matmul(&q, &k.t()?)? * scale)?;
         let out = MatMul.matmul(&hanzo_nn::ops::softmax_last_dim(&attn)?, &v)?; // [n, hw, c]
@@ -219,7 +249,9 @@ impl WanResample {
         let (bt, b, t) = merge_bt(x)?;
         let y = match self.mode {
             SampleMode::Down2d | SampleMode::Down3d => {
-                let p = bt.pad_with_zeros(D::Minus1, 0, 1)?.pad_with_zeros(D::Minus2, 0, 1)?;
+                let p = bt
+                    .pad_with_zeros(D::Minus1, 0, 1)?
+                    .pad_with_zeros(D::Minus2, 0, 1)?;
                 Convolution.forward_2d(&self.conv, &p)?
             }
             SampleMode::Up2d | SampleMode::Up3d => {
@@ -323,7 +355,15 @@ impl Encoder3d {
             .chain(cfg.dim_mult.iter().copied())
             .map(|u| base * u)
             .collect();
-        let conv_in = CausalConv3d::new(3, dims[0], (3, 3, 3), (1, 1, 1), (1, 1, 1), true, vb.pp("conv1"))?;
+        let conv_in = CausalConv3d::new(
+            3,
+            dims[0],
+            (3, 3, 3),
+            (1, 1, 1),
+            (1, 1, 1),
+            true,
+            vb.pp("conv1"),
+        )?;
 
         let vb_down = vb.pp("downsamples");
         let mut downs = Vec::new();
@@ -334,7 +374,11 @@ impl Encoder3d {
             let out_dim = dims[i + 1];
             for j in 0..cfg.num_res_blocks {
                 let ic = if j == 0 { in_dim } else { out_dim };
-                downs.push(Layer::Res(ResidualBlock::new(ic, out_dim, vb_down.pp(idx))?));
+                downs.push(Layer::Res(ResidualBlock::new(
+                    ic,
+                    out_dim,
+                    vb_down.pp(idx),
+                )?));
                 idx += 1;
             }
             if i != n_stage - 1 {
@@ -343,7 +387,11 @@ impl Encoder3d {
                 } else {
                     SampleMode::Down2d
                 };
-                downs.push(Layer::Resample(WanResample::new(out_dim, mode, vb_down.pp(idx))?));
+                downs.push(Layer::Resample(WanResample::new(
+                    out_dim,
+                    mode,
+                    vb_down.pp(idx),
+                )?));
                 idx += 1;
             }
         }
@@ -357,8 +405,15 @@ impl Encoder3d {
         ];
 
         let head_norm = WanRmsNorm::new(mid_dim, false, vb.pp("head").pp(0))?;
-        let head_conv =
-            CausalConv3d::new(mid_dim, out_z, (3, 3, 3), (1, 1, 1), (1, 1, 1), true, vb.pp("head").pp(2))?;
+        let head_conv = CausalConv3d::new(
+            mid_dim,
+            out_z,
+            (3, 3, 3),
+            (1, 1, 1),
+            (1, 1, 1),
+            true,
+            vb.pp("head").pp(2),
+        )?;
         Ok(Self {
             conv_in,
             downs,
@@ -402,7 +457,15 @@ impl Decoder3d {
         let temperal_up: Vec<bool> = cfg.temperal_downsample.iter().rev().copied().collect();
         let n_stage = cfg.dim_mult.len();
 
-        let conv_in = CausalConv3d::new(cfg.z_dim, dims[0], (3, 3, 3), (1, 1, 1), (1, 1, 1), true, vb.pp("conv1"))?;
+        let conv_in = CausalConv3d::new(
+            cfg.z_dim,
+            dims[0],
+            (3, 3, 3),
+            (1, 1, 1),
+            (1, 1, 1),
+            true,
+            vb.pp("conv1"),
+        )?;
         let vb_mid = vb.pp("middle");
         let middle = vec![
             Layer::Res(ResidualBlock::new(dims[0], dims[0], vb_mid.pp(0))?),
@@ -431,15 +494,26 @@ impl Decoder3d {
                 } else {
                     SampleMode::Up2d
                 };
-                ups.push(Layer::Resample(WanResample::new(out_dim, mode, vb_up.pp(idx))?));
+                ups.push(Layer::Resample(WanResample::new(
+                    out_dim,
+                    mode,
+                    vb_up.pp(idx),
+                )?));
                 idx += 1;
             }
         }
 
         let base_out = *dims.last().unwrap();
         let head_norm = WanRmsNorm::new(base_out, false, vb.pp("head").pp(0))?;
-        let head_conv =
-            CausalConv3d::new(base_out, 3, (3, 3, 3), (1, 1, 1), (1, 1, 1), true, vb.pp("head").pp(2))?;
+        let head_conv = CausalConv3d::new(
+            base_out,
+            3,
+            (3, 3, 3),
+            (1, 1, 1),
+            (1, 1, 1),
+            true,
+            vb.pp("head").pp(2),
+        )?;
         Ok(Self {
             conv_in,
             middle,
@@ -481,7 +555,15 @@ impl AutoencoderKLWan {
     pub fn new(cfg: &WanVaeConfig, vb: ShardedVarBuilder, device: &Device) -> Result<Self> {
         let z = cfg.z_dim;
         let encoder = Encoder3d::new(cfg, z * 2, vb.pp("encoder"))?;
-        let conv1 = CausalConv3d::new(z * 2, z * 2, (1, 1, 1), (1, 1, 1), (0, 0, 0), true, vb.pp("conv1"))?;
+        let conv1 = CausalConv3d::new(
+            z * 2,
+            z * 2,
+            (1, 1, 1),
+            (1, 1, 1),
+            (0, 0, 0),
+            true,
+            vb.pp("conv1"),
+        )?;
         let conv2 = CausalConv3d::new(z, z, (1, 1, 1), (1, 1, 1), (0, 0, 0), true, vb.pp("conv2"))?;
         let decoder = Decoder3d::new(cfg, vb.pp("decoder"))?;
         let mean = Tensor::from_slice(&LATENTS_MEAN[..z], (1, z, 1, 1, 1), device)?;
@@ -552,13 +634,18 @@ impl AutoencoderKLWan {
 
 fn merge_bt(x: &Tensor) -> Result<(Tensor, usize, usize)> {
     let (b, c, t, h, w) = x.dims5()?;
-    let y = x.permute((0, 2, 1, 3, 4))?.contiguous()?.reshape((b * t, c, h, w))?;
+    let y = x
+        .permute((0, 2, 1, 3, 4))?
+        .contiguous()?
+        .reshape((b * t, c, h, w))?;
     Ok((y, b, t))
 }
 
 fn split_bt(x: &Tensor, b: usize, t: usize) -> Result<Tensor> {
     let (_, c, h, w) = x.dims4()?;
-    x.reshape((b, t, c, h, w))?.permute((0, 2, 1, 3, 4))?.contiguous()
+    x.reshape((b, t, c, h, w))?
+        .permute((0, 2, 1, 3, 4))?
+        .contiguous()
 }
 
 // [B, 2C, T, H, W] -> [B, C, 2T, H, W] by interleaving the two channel halves across time.
@@ -581,7 +668,14 @@ mod tests {
 
     struct RandnBackend;
     impl SimpleBackend for RandnBackend {
-        fn get(&self, s: Shape, name: &str, _h: Init, dtype: DType, dev: &Device) -> Result<Tensor> {
+        fn get(
+            &self,
+            s: Shape,
+            name: &str,
+            _h: Init,
+            dtype: DType,
+            dev: &Device,
+        ) -> Result<Tensor> {
             if name.ends_with("bias") {
                 Tensor::zeros(s, dtype, dev)
             } else if name.ends_with("gamma") {
@@ -611,7 +705,9 @@ mod tests {
     fn assert_finite(t: &Tensor) -> Result<()> {
         let v = t.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
         assert!(v.iter().all(|x| x.is_finite()), "non-finite VAE output");
-        let (mn, mx) = v.iter().fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+        let (mn, mx) = v
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
         assert!(mx != mn, "degenerate constant output");
         Ok(())
     }
@@ -627,11 +723,19 @@ mod tests {
         let f = 5usize;
         let x = Tensor::randn(0f64, 1.0, (1, 3, f, 32, 32), &dev)?.to_dtype(DType::F32)?;
         let z = vae.encode(&x)?;
-        assert_eq!(z.dims(), &[1, cfg.z_dim, 2, 4, 4], "latent shape / compression");
+        assert_eq!(
+            z.dims(),
+            &[1, cfg.z_dim, 2, 4, 4],
+            "latent shape / compression"
+        );
         assert_finite(&z)?;
 
         let recon = vae.decode(&z)?;
-        assert_eq!(recon.dims(), &[1, 3, f, 32, 32], "decode recovers frame count");
+        assert_eq!(
+            recon.dims(),
+            &[1, 3, f, 32, 32],
+            "decode recovers frame count"
+        );
         assert_finite(&recon)?;
         Ok(())
     }

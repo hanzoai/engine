@@ -33,7 +33,13 @@ fn to_f32(s: &RocmStorage) -> Vec<f32> {
 
 fn as_blocks<T: Clone>(bytes: &[u8]) -> Vec<T> {
     let sz = std::mem::size_of::<T>();
-    assert_eq!(bytes.len() % sz, 0, "byte len {} not a multiple of {}", bytes.len(), sz);
+    assert_eq!(
+        bytes.len() % sz,
+        0,
+        "byte len {} not a multiple of {}",
+        bytes.len(),
+        sz
+    );
     let n = bytes.len() / sz;
     let mut v: Vec<T> = Vec::with_capacity(n);
     unsafe {
@@ -43,7 +49,13 @@ fn as_blocks<T: Clone>(bytes: &[u8]) -> Vec<T> {
     v
 }
 
-fn build_bytes<F: Fn(&mut [u8], usize, usize)>(n: usize, k: usize, blk: usize, tsz: usize, fill: F) -> Vec<u8> {
+fn build_bytes<F: Fn(&mut [u8], usize, usize)>(
+    n: usize,
+    k: usize,
+    blk: usize,
+    tsz: usize,
+    fill: F,
+) -> Vec<u8> {
     assert_eq!(k % blk, 0);
     let nblk = k / blk;
     let mut out = vec![0u8; n * nblk * tsz];
@@ -68,7 +80,14 @@ fn put_d(block: &mut [u8], off: usize, r: usize, b: usize, lo: f32, step: f32, m
     block[off + 1] = bytes[1];
 }
 
-fn reference_row<T: GgmlType>(wq: &[u8], nn: usize, nblk: usize, blk: usize, tsz: usize, x: &[f32]) -> f32 {
+fn reference_row<T: GgmlType>(
+    wq: &[u8],
+    nn: usize,
+    nblk: usize,
+    blk: usize,
+    tsz: usize,
+    x: &[f32],
+) -> f32 {
     let mut acc = 0f32;
     let mut deq = vec![0f32; blk];
     for b in 0..nblk {
@@ -85,8 +104,15 @@ fn reference_row<T: GgmlType>(wq: &[u8], nn: usize, nblk: usize, blk: usize, tsz
 
 #[allow(clippy::too_many_arguments)]
 fn check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
-    dev: &RocmDevice, log: &mut String, name: &str, qt: RocmQuantType,
-    n: usize, k: usize, blk: usize, tsz: usize, fill: F,
+    dev: &RocmDevice,
+    log: &mut String,
+    name: &str,
+    qt: RocmQuantType,
+    n: usize,
+    k: usize,
+    blk: usize,
+    tsz: usize,
+    fill: F,
 ) {
     assert_eq!(k % blk, 0, "{name}: k must be a multiple of {blk}");
     let nblk = k / blk;
@@ -101,10 +127,22 @@ fn check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
     let wq_bytes = build_bytes(n, k, blk, tsz, fill);
     let wst = dev.storage_from_slice(&wq_bytes).expect("upload w");
 
-    let y_h = dev.matvec_quant(qt, &wst, &xst_h, n, k).expect("matvec f16");
-    let y_b = dev.matvec_quant(qt, &wst, &xst_b, n, k).expect("matvec bf16");
-    assert_eq!(y_h.dtype(), hanzo_ml::DType::F16, "{name}: f16 matvec keeps f16");
-    assert_eq!(y_b.dtype(), hanzo_ml::DType::BF16, "{name}: bf16 matvec keeps bf16");
+    let y_h = dev
+        .matvec_quant(qt, &wst, &xst_h, n, k)
+        .expect("matvec f16");
+    let y_b = dev
+        .matvec_quant(qt, &wst, &xst_b, n, k)
+        .expect("matvec bf16");
+    assert_eq!(
+        y_h.dtype(),
+        hanzo_ml::DType::F16,
+        "{name}: f16 matvec keeps f16"
+    );
+    assert_eq!(
+        y_b.dtype(),
+        hanzo_ml::DType::BF16,
+        "{name}: bf16 matvec keeps bf16"
+    );
     let yh = to_f32(&y_h);
     let yb = to_f32(&y_b);
 
@@ -114,7 +152,11 @@ fn check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
         ref_h[nn] = reference_row::<T>(&wq_bytes, nn, nblk, blk, tsz, &xf_h);
         ref_b[nn] = reference_row::<T>(&wq_bytes, nn, nblk, blk, tsz, &xf_b);
     }
-    let scale = ref_b.iter().chain(ref_h.iter()).fold(0f32, |m, &v| m.max(v.abs())).max(1.0);
+    let scale = ref_b
+        .iter()
+        .chain(ref_h.iter())
+        .fold(0f32, |m, &v| m.max(v.abs()))
+        .max(1.0);
     let tol = 0.01 * scale;
     let tol_b = 0.02 * scale;
     let mut max_err_h = 0f32;
@@ -137,14 +179,25 @@ fn check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
 
 #[allow(clippy::too_many_arguments)]
 fn moe_check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
-    dev: &RocmDevice, log: &mut String, name: &str, qt: RocmQuantType,
-    e_cnt: usize, nrows: usize, n: usize, k: usize, blk: usize, tsz: usize, fill: F,
+    dev: &RocmDevice,
+    log: &mut String,
+    name: &str,
+    qt: RocmQuantType,
+    e_cnt: usize,
+    nrows: usize,
+    n: usize,
+    k: usize,
+    blk: usize,
+    tsz: usize,
+    fill: F,
 ) {
     let nblk = k / blk;
     let expert_bytes = n * nblk * tsz;
     let mut bank: Vec<u8> = Vec::with_capacity(e_cnt * expert_bytes);
     for e in 0..e_cnt {
-        bank.extend_from_slice(&build_bytes(n, k, blk, tsz, |b, r, bb| fill(b, r * (e + 1) + e, bb)));
+        bank.extend_from_slice(&build_bytes(n, k, blk, tsz, |b, r, bb| {
+            fill(b, r * (e + 1) + e, bb)
+        }));
     }
     let wbank = dev.storage_from_slice(&bank).expect("upload bank");
     let ids: Vec<u32> = (0..nrows).map(|s| ((s * 3 + 1) % e_cnt) as u32).collect();
@@ -157,8 +210,12 @@ fn moe_check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
     let xst_h = dev.storage_from_slice(&xh).expect("upload x f16");
     let xst_b = dev.storage_from_slice(&xbf).expect("upload x bf16");
 
-    let y_h = dev.moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k).expect("moe f16");
-    let y_b = dev.moe_matvec_quant(qt, &wbank, &xst_b, &ids_dev, nrows, n, k).expect("moe bf16");
+    let y_h = dev
+        .moe_matvec_quant(qt, &wbank, &xst_h, &ids_dev, nrows, n, k)
+        .expect("moe f16");
+    let y_b = dev
+        .moe_matvec_quant(qt, &wbank, &xst_b, &ids_dev, nrows, n, k)
+        .expect("moe bf16");
     let yh = to_f32(&y_h);
     let yb = to_f32(&y_b);
 
@@ -188,7 +245,10 @@ fn moe_check<T: GgmlType, F: Fn(&mut [u8], usize, usize)>(
         "{name:8} MoE E={e_cnt} nrows={nrows} n={n} k={k} nbad={nbad}/{} max_err_f16={max_err_h:.5} max_err_bf16={max_err_b:.5} scale={scale:.3}\n",
         nrows * n
     ));
-    assert!(nbad == 0, "{name} IQ4_NL MoE mismatch: nbad={nbad} max_err_f16={max_err_h} max_err_bf16={max_err_b}");
+    assert!(
+        nbad == 0,
+        "{name} IQ4_NL MoE mismatch: nbad={nbad} max_err_f16={max_err_h} max_err_bf16={max_err_b}"
+    );
 }
 
 #[test]
@@ -196,17 +256,45 @@ fn qmatvec_iq4nl_numeric() {
     let mut log = String::new();
     let dev = RocmDevice::new(0).expect("rocm device");
     // Single block per row, production decode, wide-k FFN, partial last warp-row (17), vocab-sized out.
-    let shapes: &[(usize, usize)] = &[(64, 32), (4096, 4096), (1024, 3072), (17, 4096), (4096, 256)];
+    let shapes: &[(usize, usize)] = &[
+        (64, 32),
+        (4096, 4096),
+        (1024, 3072),
+        (17, 4096),
+        (4096, 256),
+    ];
     // IQ4_NL: 18 B, 32 elems, d (f16) at byte 0. Small exact-f16 d keeps the +-127 codebook outputs
     // inside f16 range (same reasoning as the IQ4_XS gate -- shared KVALUES_IQ4NL LUT).
     for &(n, k) in shapes {
-        check::<BlockIQ4nl, _>(&dev, &mut log, "IQ4_NL", RocmQuantType::IQ4_NL, n, k, 32, 18, |blk, r, b| {
-            put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
-        });
+        check::<BlockIQ4nl, _>(
+            &dev,
+            &mut log,
+            "IQ4_NL",
+            RocmQuantType::IQ4_NL,
+            n,
+            k,
+            32,
+            18,
+            |blk, r, b| {
+                put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
+            },
+        );
     }
     // MoE: 8 experts, 16 routed slots, n=128 out, k=512 in (16 blocks of 32).
-    moe_check::<BlockIQ4nl, _>(&dev, &mut log, "IQ4_NL", RocmQuantType::IQ4_NL, 8, 16, 128, 512, 32, 18, |blk, r, b| {
-        put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
-    });
+    moe_check::<BlockIQ4nl, _>(
+        &dev,
+        &mut log,
+        "IQ4_NL",
+        RocmQuantType::IQ4_NL,
+        8,
+        16,
+        128,
+        512,
+        32,
+        18,
+        |blk, r, b| {
+            put_d(blk, 0, r, b, 0.0078125, 0.00390625, 5);
+        },
+    );
     eprintln!("{log}");
 }

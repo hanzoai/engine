@@ -564,9 +564,7 @@ impl Loader for GGUFLoader {
                 // text-only input interleaved-MRoPE == standard RoPE, so the forward is
                 // bit-identical to plain Qwen3/Qwen3MoE.
                 GGUFArchitecture::Qwen3Vl => Model::Qwen3(QQwen3::try_from(model_config)?),
-                GGUFArchitecture::Qwen3VlMoE => {
-                    Model::Qwen3MoE(QQwen3MoE::try_from(model_config)?)
-                }
+                GGUFArchitecture::Qwen3VlMoE => Model::Qwen3MoE(QQwen3MoE::try_from(model_config)?),
                 GGUFArchitecture::Qwen3Next => {
                     Model::Qwen3Next(QQwen3Next::try_from(model_config)?)
                 }
@@ -1665,15 +1663,15 @@ impl Pipeline for GGUFPipeline {
         // KV backend. Extract the shared cache handle first so the model borrow is
         // dropped before the &mut-self driver call.
         let normal_cache = if let Model::Deepseek4(ref model) = self.model {
-            model
-                .normal_cache_arc()
-                .map(|arc| (arc, model.max_seq_len))
+            model.normal_cache_arc().map(|arc| (arc, model.max_seq_len))
         } else {
             None
         };
         if let Some((cache_arc, max_seq_len)) = normal_cache {
-            let cache =
-                crate::speculative::cache::NormalSpeculativeCacheAccess::new(cache_arc, max_seq_len);
+            let cache = crate::speculative::cache::NormalSpeculativeCacheAccess::new(
+                cache_arc,
+                max_seq_len,
+            );
             return crate::speculative::driver::try_sample_speculative_causal_gen(
                 self,
                 seqs,
@@ -1736,10 +1734,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
             let h = match hidden.dims().len() {
                 3 => hidden.narrow(0, b, 1)?.narrow(1, r, 1)?,
                 2 => hidden.narrow(0, r, 1)?.unsqueeze(0)?,
-                _ => hanzo_ml::bail!(
-                    "unexpected speculative hidden shape {:?}",
-                    hidden.dims()
-                ),
+                _ => hanzo_ml::bail!("unexpected speculative hidden shape {:?}", hidden.dims()),
             };
             gathered.push(h);
         }
