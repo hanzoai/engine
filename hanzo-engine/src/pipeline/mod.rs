@@ -860,6 +860,13 @@ pub trait Pipeline:
         hanzo_ml::bail!("This pipeline does not support speculative decoding attachment.")
     }
 
+    /// Run this rank's pipeline-parallel worker loop: receive an activation from the left
+    /// neighbour, run this rank's local layers, forward to the right, repeat. The head (rank 0)
+    /// runs the normal generation loop instead; non-head ranks call this.
+    fn pipeline_parallel_worker(&self) -> Result<(), hanzo_ml::Error> {
+        hanzo_ml::bail!("This pipeline does not support pipeline parallelism.")
+    }
+
     /// Release per-sequence speculative-proposer state for sequences that are no longer running.
     /// Called from the engine reap path each step; default no-op for pipelines without a proposer.
     fn retain_speculative_seqs(&mut self, _live: &[usize]) {}

@@ -65,6 +65,7 @@ pub use distributed::{
         compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, FusedExperts, PackedExperts,
         ReplicatedLayer, RowParallelLayer,
     },
+    pipeline::{PpHeader, RingPipeline, PP_OP_FORWARD, PP_OP_TERMINATE},
     socket::{Client, Server},
     BarrierLike, Comm, Id, RingConfig, SumAllReduce,
 };
