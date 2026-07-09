@@ -23,17 +23,16 @@ use crate::layers::{
     DeepSeekV2RotaryEmbedding, QRmsNorm, ScaledRopeType, Sdpa,
 };
 use crate::layers_masker::PastKvLenCache;
-use crate::ops::{SplitOp, TopKLastDimOp, TopKOutput};
+use crate::ops::SplitOp;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::{extract_logits, EitherCache, KvCache, NormalCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
-use hanzo_ml::quantized::QMatMul;
 use hanzo_ml::{DType, Device, Result, Tensor, D};
-use hanzo_nn::{Embedding, Module};
-use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
+use hanzo_nn::{Embedding, Linear, Module};
+use hanzo_quant::{QuantMethod, QuantMethodConfig, UnquantLinear};
 
 const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
 
@@ -41,145 +40,7 @@ const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
 const EXPERT_GATING_SOFTMAX: u32 = 1;
 const EXPERT_GATING_SIGMOID: u32 = 2;
 
-struct Mlp {
-    gate: Arc<dyn QuantMethod>,
-    up: Arc<dyn QuantMethod>,
-    down: Arc<dyn QuantMethod>,
-}
-
-impl Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let gate = self.gate.forward(xs)?;
-        let up = self.up.forward(xs)?;
-        let y = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
-        self.down.forward(&y)
-    }
-}
-
-struct MoeGate {
-    weight: Tensor,
-    e_score_correction_bias: Option<Tensor>,
-    top_k: usize,
-    n_routed_experts: usize,
-    n_group: usize,
-    topk_group: usize,
-    routed_scaling_factor: f64,
-    norm_topk_prob: bool,
-    sigmoid_scoring: bool,
-}
-
-impl MoeGate {
-    // (topk_idx, topk_weight). Greedy softmax (V2) or grouped sigmoid no-aux (V3) selection.
-    fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
-        let (bs, seq_len, h) = xs.dims3()?;
-        let xs = xs.reshape(((), h))?;
-        let logits = xs
-            .to_dtype(DType::F32)?
-            .broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
-        let scores = if self.sigmoid_scoring {
-            hanzo_nn::ops::sigmoid(&logits)?
-        } else {
-            hanzo_nn::ops::softmax_last_dim(&logits)?
-        };
-
-        let mut topk_weight;
-        let topk_idx;
-        if let Some(bias) = &self.e_score_correction_bias {
-            // V3 noaux_tc: group-limited greedy on (scores + bias), gathered weights are raw scores.
-            let scores_for_choice = scores
-                .reshape((bs * seq_len, ()))?
-                .broadcast_add(&bias.unsqueeze(0)?)?;
-            let group_scores = scores_for_choice
-                .reshape((bs * seq_len, self.n_group, ()))?
-                .topk(2)?
-                .values
-                .sum(D::Minus1)?;
-            let group_idx = group_scores.topk(self.topk_group)?.indices;
-            let mut group_mask = group_scores.zeros_like()?;
-            group_mask = group_mask.scatter_add(
-                &group_idx,
-                &group_idx.ones_like()?.to_dtype(group_mask.dtype())?,
-                1,
-            )?;
-            let score_mask = group_mask
-                .unsqueeze(D::Minus1)?
-                .expand((
-                    bs * seq_len,
-                    self.n_group,
-                    self.n_routed_experts / self.n_group,
-                ))?
-                .reshape((bs * seq_len, ()))?;
-            let tmp_scores = scores_for_choice.broadcast_mul(&score_mask)?;
-            topk_idx = tmp_scores.topk(self.top_k)?.indices;
-            topk_weight = scores.gather(&topk_idx, 1)?;
-        } else {
-            let TopKOutput { values, indices } = scores.topk(self.top_k)?;
-            topk_weight = values;
-            topk_idx = indices;
-        }
-
-        if self.norm_topk_prob {
-            let denom = (topk_weight.sum_keepdim(D::Minus1)? + 1e-20)?;
-            topk_weight = topk_weight.broadcast_div(&denom)?;
-        }
-        topk_weight = (topk_weight * self.routed_scaling_factor)?;
-        Ok((topk_idx, topk_weight))
-    }
-}
-
-// GGUF fused MoE: ffn_gate_exps / ffn_up_exps / ffn_down_exps stacked across experts.
-struct FusedMoe {
-    gate: MoeGate,
-    gate_experts: QMatMul,
-    up_experts: QMatMul,
-    down_experts: QMatMul,
-    shared: Option<Mlp>,
-}
-
-impl FusedMoe {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let (batch, seq_len, hidden_dim) = xs.dims3()?;
-        let identity = xs.clone();
-        let xs_flat = xs.reshape(((), hidden_dim))?;
-        let original_dtype = xs_flat.dtype();
-        let (num_tokens, hidden_dim) = xs_flat.dims2()?;
-
-        let (topk_idx, topk_weight) = self.gate.forward(xs)?;
-
-        let ys = {
-            let xs3 = xs_flat.reshape((num_tokens, 1, hidden_dim))?;
-            let gate = self.gate_experts.indexed_moe_forward(&xs3, &topk_idx)?;
-            let up = self.up_experts.indexed_moe_forward(&xs3, &topk_idx)?;
-            let activated = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
-            self.down_experts
-                .indexed_moe_forward(&activated, &topk_idx)?
-        };
-        let mut y = ys
-            .broadcast_mul(&topk_weight.to_dtype(ys.dtype())?.unsqueeze(D::Minus1)?)?
-            .sum(D::Minus2)?
-            .reshape((batch, seq_len, hidden_dim))?
-            .to_dtype(original_dtype)?;
-
-        if let Some(shared) = &self.shared {
-            y = (y + shared.forward(&identity)?)?;
-        }
-        Ok(y)
-    }
-}
-
-enum MoeOrMlp {
-    FusedMoe(Box<FusedMoe>),
-    Mlp(Mlp),
-}
-
-impl MoeOrMlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        match self {
-            Self::Mlp(m) => m.forward(xs),
-            Self::FusedMoe(m) => m.forward(xs),
-        }
-    }
-}
+use crate::models::gguf_moe::{build_moe_or_mlp, gguf_linear, MoeOrMlp, MoeParams};
 
 struct LayerWeights {
     // MLA projections. q is either plain (q_proj) or low-rank (q_a/q_b with q_a_norm).
@@ -234,9 +95,12 @@ impl LayerWeights {
             compressed_kv.split(&[self.kv_lora_rank, self.qk_rope_head_dim], D::Minus1)?;
         let compressed_kv = ckv_split[0].clone();
         let mut k_pe = ckv_split[1].clone();
+        // Broadcast the shared (MQA) rope key to n_head BEFORE rope: the fused CUDA rope kernel
+        // requires q and k to have equal head counts, and rope is head-independent so this is exact.
         k_pe = k_pe
             .reshape((bs, seq_len, 1, self.qk_rope_head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .repeat((1, self.n_head, 1, 1))?;
         let ckv = self.kv_a_norm.forward(&compressed_kv)?;
 
         (q_pe, k_pe) = self.rotary.forward(&q_pe, &k_pe, start_offsets)?;
@@ -255,8 +119,7 @@ impl LayerWeights {
         let v = kv_split[1].clone();
 
         let q = Tensor::cat(&[&q_nope, &q_pe], D::Minus1)?.contiguous()?;
-        let k = Tensor::cat(&[&k_nope, &k_pe.repeat((1, self.n_head, 1, 1))?], D::Minus1)?
-            .contiguous()?;
+        let k = Tensor::cat(&[&k_nope, &k_pe], D::Minus1)?.contiguous()?;
 
         let (q, k, v) = (
             q.to_dtype(self.dtype)?,
@@ -385,6 +248,20 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             Ok(other) => anyhow::bail!("unknown deepseek2 expert_gating_func {other}"),
         };
 
+        // MLA head dims. Newer GGUFs (GLM-4.7-Flash, recent DeepSeek) carry the split-MLA layout:
+        // `key_length` is the compressed MQA width (kv_lora + rope) and the true per-head dims live in
+        // `key_length_mla` (= q_head_dim) / `value_length_mla`. Classic GGUFs set `key_length` = qk_nope.
+        let qk_rope_head_dim = c.get_value::<u32>("rope.dimension_count")? as usize;
+        let qk_nope_head_dim = match c.get_value::<u32>("attention.key_length_mla") {
+            Ok(klm) => klm as usize - qk_rope_head_dim,
+            Err(_) => c.get_value::<u32>("attention.key_length")? as usize,
+        };
+        let v_head_dim = c
+            .get_value::<u32>("attention.value_length_mla")
+            .or_else(|_| c.get_value::<u32>("attention.value_length"))
+            .map(|x| x as usize)
+            .unwrap_or(qk_nope_head_dim);
+
         Ok(Self {
             head_count,
             block_count: c.get_value::<u32>("block_count")? as usize,
@@ -400,14 +277,9 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
                 .ok()
                 .map(|x| x as usize),
             kv_lora_rank: c.get_value::<u32>("attention.kv_lora_rank")? as usize,
-            qk_nope_head_dim: c.get_value::<u32>("attention.key_length")? as usize,
-            qk_rope_head_dim: c.get_value::<u32>("rope.dimension_count")? as usize,
-            v_head_dim: c
-                .get_value::<u32>("attention.value_length")
-                .ok()
-                .map(|x| x as usize)
-                // V-head dim falls back to nope dim when not present.
-                .unwrap_or(c.get_value::<u32>("attention.key_length")? as usize),
+            qk_nope_head_dim,
+            qk_rope_head_dim,
+            v_head_dim,
             n_routed_experts,
             n_shared_experts: c
                 .get_value::<u32>("expert_shared_count")
@@ -454,13 +326,6 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
                 .map(|x| x as usize),
         })
     }
-}
-
-fn gguf_linear(q: hanzo_ml::quantized::QTensor) -> Result<Arc<dyn QuantMethod>> {
-    Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-        q_weight: Arc::new(q),
-        b: None,
-    })?))
 }
 
 impl ModelConfig::FromGGUF for ModelWeights {
@@ -574,7 +439,31 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 ct.tensor(&format!("{prefix}.attn_kv_a_norm.weight"), device)?,
                 props.rms_norm_eps,
             )?;
-            let kv_b_proj = gguf_linear(ct.tensor(&format!("{prefix}.attn_kv_b.weight"), device)?)?;
+            // kv_b: classic GGUFs ship the combined `attn_kv_b` (kv_lora -> [k_nope; v]). Newer
+            // split-MLA GGUFs (GLM-4.7-Flash) ship `attn_k_b` (qk_nope -> kv_lora, absorbed
+            // orientation) + `attn_v_b` (kv_lora -> v). Reconstruct the un-absorbed combined weight
+            // `cat(k_b^T, v_b)` so the materialized-K/V forward below is identical for both layouts.
+            let kv_b_proj = if ct.has_tensor(&format!("{prefix}.attn_kv_b.weight")) {
+                gguf_linear(ct.tensor(&format!("{prefix}.attn_kv_b.weight"), device)?)?
+            } else {
+                let k_b = ct
+                    .tensor(&format!("{prefix}.attn_k_b.weight"), device)?
+                    .dequantize(device)?;
+                let v_b = ct
+                    .tensor(&format!("{prefix}.attn_v_b.weight"), device)?
+                    .dequantize(device)?;
+                let k_part = k_b.transpose(1, 2)?;
+                let kv_b = Tensor::cat(&[&k_part, &v_b], 1)?
+                    .reshape((
+                        props.head_count * (props.qk_nope_head_dim + props.v_head_dim),
+                        props.kv_lora_rank,
+                    ))?
+                    .to_dtype(DType::F32)?
+                    .contiguous()?;
+                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                    Linear::new(kv_b, None),
+                ))?)
+            };
             let o_proj = gguf_linear(ct.tensor(&format!("{prefix}.attn_output.weight"), device)?)?;
 
             let attn_norm = QRmsNorm::new(
@@ -586,63 +475,22 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 props.rms_norm_eps,
             )?;
 
-            // Layer is MoE when idx >= leading_dense_block_count and experts exist.
-            let is_moe = props.n_routed_experts > 0 && layer_idx >= props.leading_dense_block_count;
-            let mlp = if is_moe {
-                let gate = ct.tensor(&format!("{prefix}.ffn_gate_inp.weight"), device)?;
-                let gate_experts = ct.tensor(&format!("{prefix}.ffn_gate_exps.weight"), device)?;
-                let up_experts = ct.tensor(&format!("{prefix}.ffn_up_exps.weight"), device)?;
-                let down_experts = ct.tensor(&format!("{prefix}.ffn_down_exps.weight"), device)?;
-                let e_score_correction_bias = if props.sigmoid_scoring
-                    && ct.has_tensor(&format!("{prefix}.exp_probs_b.bias"))
-                {
-                    Some(
-                        ct.tensor(&format!("{prefix}.exp_probs_b.bias"), device)?
-                            .dequantize(device)?
-                            .to_dtype(DType::F32)?,
-                    )
-                } else {
-                    None
-                };
-                let shared = if props.n_shared_experts > 0 {
-                    Some(Mlp {
-                        gate: gguf_linear(
-                            ct.tensor(&format!("{prefix}.ffn_gate_shexp.weight"), device)?,
-                        )?,
-                        up: gguf_linear(
-                            ct.tensor(&format!("{prefix}.ffn_up_shexp.weight"), device)?,
-                        )?,
-                        down: gguf_linear(
-                            ct.tensor(&format!("{prefix}.ffn_down_shexp.weight"), device)?,
-                        )?,
-                    })
-                } else {
-                    None
-                };
-                MoeOrMlp::FusedMoe(Box::new(FusedMoe {
-                    gate: MoeGate {
-                        weight: gate.dequantize(device)?,
-                        e_score_correction_bias,
-                        top_k: props.num_experts_per_tok,
-                        n_routed_experts: props.n_routed_experts,
-                        n_group: props.n_group,
-                        topk_group: props.topk_group,
-                        routed_scaling_factor: props.expert_weights_scale,
-                        norm_topk_prob: props.norm_topk_prob,
-                        sigmoid_scoring: props.sigmoid_scoring,
-                    },
-                    gate_experts: QMatMul::from_qtensor(gate_experts)?,
-                    up_experts: QMatMul::from_qtensor(up_experts)?,
-                    down_experts: QMatMul::from_qtensor(down_experts)?,
-                    shared,
-                }))
-            } else {
-                MoeOrMlp::Mlp(Mlp {
-                    gate: gguf_linear(ct.tensor(&format!("{prefix}.ffn_gate.weight"), device)?)?,
-                    up: gguf_linear(ct.tensor(&format!("{prefix}.ffn_up.weight"), device)?)?,
-                    down: gguf_linear(ct.tensor(&format!("{prefix}.ffn_down.weight"), device)?)?,
-                })
-            };
+            let mlp = build_moe_or_mlp(
+                &mut ct,
+                layer_idx,
+                device,
+                &MoeParams {
+                    n_routed_experts: props.n_routed_experts,
+                    num_experts_per_tok: props.num_experts_per_tok,
+                    n_group: props.n_group,
+                    topk_group: props.topk_group,
+                    routed_scaling_factor: props.expert_weights_scale,
+                    norm_topk_prob: props.norm_topk_prob,
+                    sigmoid_scoring: props.sigmoid_scoring,
+                    n_shared_experts: props.n_shared_experts,
+                    leading_dense_block_count: props.leading_dense_block_count,
+                },
+            )?;
 
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
