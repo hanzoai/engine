@@ -538,7 +538,8 @@ pub(crate) fn cuda_graph_forward_eligible(
             && !metadata.disable_cuda_graphs
             && metadata.num_cached_tokens.is_none();
     }
-    crate::perf_flags::prefill_graphs_enabled()
+    std::env::var("PREFILL_NOGRAPH").is_err()
+        && crate::perf_flags::prefill_graphs_enabled()
         && batch == 1
         && q_len == crate::perf_flags::prefill_graph_chunk()
         && metadata.is_first_prompt_chunk
