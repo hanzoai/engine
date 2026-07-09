@@ -1,5 +1,8 @@
 name: docs
 
+# Builds the docs site as a deployable artifact. Hosting is native
+# (platform.hanzo.ai / hanzoai ingress+static) — never GitHub Pages.
+
 on:
   push:
     branches: ["main"]
@@ -16,12 +19,10 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  group: "docs"
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -51,32 +52,9 @@ jobs:
         working-directory: docs
         run: npm run build
 
-      - name: Setup Pages
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-        uses: actions/configure-pages@v5
-
-      - name: Upload Pages artifact
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs/dist
-
-      - name: Upload PR preview artifact
-        if: github.event_name == 'pull_request'
+      - name: Upload docs artifact
         uses: actions/upload-artifact@v4
         with:
           name: docs-dist
           path: docs/dist
           retention-days: 7
-
-  deploy:
-    if: github.repository == 'hanzoai/engine' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: build
-    runs-on: hanzo-deploy-linux-amd64
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
