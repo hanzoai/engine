@@ -49,6 +49,8 @@ pub const ROOT_ROUTE: RouteInfo = RouteInfo::new("/", "GET", RouteKind::Hanzo);
 pub const RE_ISQ_ROUTE: RouteInfo = RouteInfo::new("/re_isq", "POST", RouteKind::Hanzo);
 pub const IMAGE_GENERATION_ROUTE: RouteInfo =
     RouteInfo::new("/v1/images/generations", "POST", RouteKind::OpenAi);
+pub const TRYON_GENERATION_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/images/tryon", "POST", RouteKind::Hanzo);
 pub const FILES_ROUTE: RouteInfo = RouteInfo::new("/v1/files", "GET", RouteKind::OpenAi);
 pub const FILE_ROUTE: RouteInfo =
     RouteInfo::new("/v1/files/{id}", "GET, DELETE", RouteKind::OpenAi);
