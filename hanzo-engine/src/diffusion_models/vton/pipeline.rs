@@ -18,6 +18,9 @@ use anyhow::{anyhow, Result};
 use hanzo_ml::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use image::{DynamicImage, RgbImage};
+use rand::SeedableRng;
+use rand_distr::{Distribution, Normal};
+use rand_isaac::Isaac64Rng;
 
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
 
@@ -221,15 +224,15 @@ pub fn vton_generate(inputs: &TryOnInputs, device: &Device) -> Result<Vec<Dynami
         categories,
     };
 
-    device.set_seed(inputs.seed)?;
+    // Host-seeded Gaussian init noise: device-agnostic and deterministic across
+    // CPU/CUDA/Metal (device.set_seed is unimplemented on the CPU backend).
+    let normal = Normal::new(0f32, 1.0).map_err(|e| anyhow!("vton noise dist: {e}"))?;
+    let mut rng = Isaac64Rng::seed_from_u64(inputs.seed);
+    let numel = cfg.channels_in * cfg.height * cfg.width;
     let mut out = Vec::with_capacity(inputs.num_samples);
     for _ in 0..inputs.num_samples {
-        let init = Tensor::randn(
-            0f32,
-            1.0,
-            (1, cfg.channels_in, cfg.height, cfg.width),
-            device,
-        )?;
+        let noise: Vec<f32> = (0..numel).map(|_| normal.sample(&mut rng)).collect();
+        let init = Tensor::from_vec(noise, (1, cfg.channels_in, cfg.height, cfg.width), device)?;
         let image = denoise(&model, &cond, &init, &inputs.sample)?;
         let image = image.squeeze(0)?;
         out.push(tensor_to_rgb(&image, pad_left, pad_top, crop_w, crop_h)?);
