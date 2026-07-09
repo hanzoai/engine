@@ -52,6 +52,8 @@ use crate::{
 use crate::{
     models::quantized_deepseek2::ModelWeights as QDeepSeek2,
     models::quantized_deepseek4::ModelWeights as QDeepSeek4,
+    models::quantized_glm4_moe::ModelWeights as QGlm4Moe,
+    models::quantized_gptoss::ModelWeights as QGptOss,
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
     models::quantized_phi3::ModelWeights as QPhi3,
@@ -95,6 +97,8 @@ enum Model {
     Qwen35(QQwen35),
     Deepseek2(QDeepSeek2),
     Deepseek4(QDeepSeek4),
+    GptOss(QGptOss),
+    Glm4Moe(QGlm4Moe),
 }
 
 pub struct GGUFPipeline {
@@ -513,6 +517,11 @@ impl Loader for GGUFLoader {
         let paged_attn_config = if matches!(self.kind, ModelKind::GgufAdapter { .. }) {
             warn!("Adapter models do not currently support PagedAttention, running without");
             None
+        } else if matches!(arch, GGUFArchitecture::Deepseek2) {
+            // quantized deepseek2 (incl. GLM-4.7-Flash) runs un-absorbed MLA (materialized per-head
+            // K/V); the paged MLA cache is the compressed [kv_lora, 1] layout, which is incompatible.
+            warn!("GGUF deepseek2 (MLA) runs eager attention; PagedAttention (absorbed-MLA cache) not wired");
+            None
         } else {
             paged_attn_config
         };
@@ -577,6 +586,8 @@ impl Loader for GGUFLoader {
                 GGUFArchitecture::Deepseek4 => {
                     Model::Deepseek4(QDeepSeek4::try_from(model_config)?)
                 }
+                GGUFArchitecture::GptOss => Model::GptOss(QGptOss::try_from(model_config)?),
+                GGUFArchitecture::Glm4Moe => Model::Glm4Moe(QGlm4Moe::try_from(model_config)?),
                 a => bail!("Unsupported architecture `{a:?}` for GGUF"),
             },
             ModelKind::GgufAdapter { adapter, .. } => match arch {
@@ -647,6 +658,8 @@ impl Loader for GGUFLoader {
             Model::Qwen35(ref p) => p.max_seq_len,
             Model::Deepseek2(ref p) => p.max_seq_len,
             Model::Deepseek4(ref p) => p.max_seq_len,
+            Model::GptOss(ref p) => p.max_seq_len,
+            Model::Glm4Moe(ref p) => p.max_seq_len,
         };
         let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model {
@@ -663,6 +676,8 @@ impl Loader for GGUFLoader {
             Model::Qwen3Next(ref model) => model.cache.hybrid().num_layers(),
             Model::Deepseek2(ref model) => model.cache.normal().0.len(),
             Model::Deepseek4(ref model) => model.cache.normal().0.len(),
+            Model::GptOss(ref model) => model.cache.normal().0.len(),
+            Model::Glm4Moe(ref model) => model.cache.normal().0.len(),
         };
 
         if chat_template.bos_token.is_none() {
@@ -816,6 +831,8 @@ impl CacheManagerMixin for GGUFPipeline {
             Model::Qwen3Next(ref model) => &model.cache,
             Model::Deepseek2(ref model) => &model.cache,
             Model::Deepseek4(ref model) => &model.cache,
+            Model::GptOss(ref model) => &model.cache,
+            Model::Glm4Moe(ref model) => &model.cache,
         }
     }
 }
@@ -836,6 +853,8 @@ impl MetadataMixin for GGUFPipeline {
             Model::Qwen3Next(ref model) => model.device.clone(),
             Model::Deepseek2(ref model) => model.device.clone(),
             Model::Deepseek4(ref model) => model.device.clone(),
+            Model::GptOss(ref model) => model.device.clone(),
+            Model::Glm4Moe(ref model) => model.device.clone(),
         }
     }
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
@@ -1522,6 +1541,12 @@ impl Pipeline for GGUFPipeline {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
             Model::Deepseek4(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
+            }
+            Model::GptOss(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
+            }
+            Model::Glm4Moe(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
         };
