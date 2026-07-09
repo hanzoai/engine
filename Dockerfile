@@ -18,7 +18,7 @@ SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 # Install only essential runtime dependencies and clean up
 ARG DEBIAN_FRONTEND=noninteractive
 RUN <<HEREDOC
-    apt-get update
+    for i in 1 2 3 4 5; do apt-get -o Acquire::Retries=3 update && break; echo "apt-get update failed (attempt $i/5), mirror may be syncing; retrying in 15s"; sleep 15; done
     apt-get install -y --no-install-recommends \
         libomp-dev \
         ca-certificates \
