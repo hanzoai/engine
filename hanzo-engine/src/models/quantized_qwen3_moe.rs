@@ -11,13 +11,16 @@ use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::{extract_logits, EitherCache, KvCache, NormalCache};
+use crate::pipeline_parallel::{
+    pp_head_forward, use_pipeline_parallel, PipelineParallelModel, RingLayout,
+};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 use hanzo_ml::quantized::QMatMul;
 use hanzo_ml::{DType, Device, Result, Tensor};
 use hanzo_nn::{Embedding, Module};
-use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
+use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig, RingPipeline};
 
 // Default fallback for models that don't specify context_length
 const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
@@ -215,18 +218,37 @@ impl LayerWeights {
         let y = self.attention_wo.forward(&y.to_dtype(x.dtype())?)?;
         Ok(y)
     }
+
+    fn forward_block(
+        &self,
+        x: Tensor,
+        mask: &AttentionMask,
+        start_offsets: &[usize],
+        positions: &Tensor,
+        kv_cache: &mut KvCache,
+        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+    ) -> Result<Tensor> {
+        let residual = &x;
+        let xn = self.attention_norm.forward(&x)?;
+        let attn = self.forward_attn(&xn, mask, start_offsets, positions, kv_cache, metadata)?;
+        let (sum, xn) = self.ffn_norm.forward_of_sum(&attn, residual)?;
+        let residual = &sum;
+        let xn = self.mlp.forward(&xn)?;
+        xn + residual
+    }
 }
 
 pub struct ModelWeights {
-    tok_embeddings: Embedding,
+    tok_embeddings: Option<Embedding>,
     layers: Vec<LayerWeights>,
-    norm: QRmsNorm,
-    output: Arc<dyn QuantMethod>,
+    norm: Option<QRmsNorm>,
+    output: Option<Arc<dyn QuantMethod>>,
     pub device: Device,
     pub cache: EitherCache,
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     dtype: DType,
+    pp: Option<Arc<RingPipeline>>,
 }
 
 #[derive(Debug, Clone)]
@@ -361,15 +383,38 @@ impl ModelConfig::FromGGUF for ModelWeights {
             moe_cfg,
         } = PropsGGUF::try_from(metadata).or_else(|err| hanzo_ml::bail!("{err}"))?;
 
-        let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
-        let tok_embeddings = qtok_embeddings.dequantize(device)?;
-        let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, rms_norm_eps)?;
-        let output = if !ct.has_tensor("output.weight") {
-            ct.tensor("token_embd.weight", device)?
+        let pp = if use_pipeline_parallel() {
+            let config = hanzo_quant::RingConfig::load();
+            Some(Arc::new(RingPipeline::from_config(&config)))
         } else {
-            ct.tensor("output.weight", device)?
+            None
         };
-        let mut layers = Vec::with_capacity(block_count);
+        let layout = match &pp {
+            Some(_) => Some(RingLayout::new(block_count)?),
+            None => None,
+        };
+        let local_range = layout.as_ref().map_or(0..block_count, RingLayout::local);
+        let is_head = layout.as_ref().map_or(true, RingLayout::is_head);
+        let local_len = local_range.end - local_range.start;
+
+        let (tok_embeddings, norm, output) = if is_head {
+            let qtok = ct.tensor("token_embd.weight", device)?;
+            let tok = Embedding::new(qtok.dequantize(device)?, embedding_length);
+            let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, rms_norm_eps)?;
+            let out = if !ct.has_tensor("output.weight") {
+                ct.tensor("token_embd.weight", device)?
+            } else {
+                ct.tensor("output.weight", device)?
+            };
+            let out = Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                q_weight: Arc::new(out),
+                b: None,
+            })?) as Arc<dyn QuantMethod>;
+            (Some(tok), Some(norm), Some(out))
+        } else {
+            (None, None, None)
+        };
+        let mut layers = Vec::with_capacity(local_len);
 
         let head_dim = key_length;
         if key_length != value_length {
@@ -379,28 +424,38 @@ impl ModelConfig::FromGGUF for ModelWeights {
         }
 
         let mut ropes = HashMap::new();
-        for layer_idx in 0..block_count {
-            let device = mapper.device_for(layer_idx, false).unwrap_or(device);
-            ropes.insert(
-                device.location(),
-                Arc::new(RotaryEmbedding::new(
-                    rope_freq_base,
-                    head_dim,
-                    max_seq_len,
-                    device,
-                    true,
-                    DType::F32,
-                )?),
-            );
+        for layer_idx in local_range.clone() {
+            let ldev = if pp.is_some() {
+                device
+            } else {
+                mapper.device_for(layer_idx, false).unwrap_or(device)
+            };
+            if !ropes.contains_key(&ldev.location()) {
+                ropes.insert(
+                    ldev.location(),
+                    Arc::new(RotaryEmbedding::new(
+                        rope_freq_base,
+                        head_dim,
+                        max_seq_len,
+                        ldev,
+                        true,
+                        DType::F32,
+                    )?),
+                );
+            }
         }
 
         for layer_idx in NiceProgressBar::<_, 'b'>(
-            0..block_count,
+            local_range.clone(),
             "Loading repeating layers",
             &new_multi_progress(),
         ) {
             let prefix = format!("blk.{layer_idx}");
-            let device = mapper.device_for(layer_idx, false).unwrap_or(device);
+            let device = if pp.is_some() {
+                device
+            } else {
+                mapper.device_for(layer_idx, false).unwrap_or(device)
+            };
             let rotary = ropes
                 .get(&device.location())
                 .expect("No RoPE for device location!")
@@ -467,6 +522,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let attention_norm = ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?;
             let ffn_norm = ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?;
             let paged_attn = match &attention_mechanism {
+                _ if pp.is_some() => None,
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => {
                     Some(PagedAttention::new(head_dim, device, None)?)
@@ -510,18 +566,16 @@ impl ModelConfig::FromGGUF for ModelWeights {
             })
         }
         Ok(Self {
-            tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
+            tok_embeddings,
             layers,
             norm,
-            output: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                q_weight: Arc::new(output),
-                b: None,
-            })?),
+            output,
             device: device.clone(),
-            cache: EitherCache::Normal(NormalCache::new(block_count, max_seq_len)),
+            cache: EitherCache::Normal(NormalCache::new(local_len, max_seq_len)),
             max_seq_len,
-            mapper: Some(mapper),
+            mapper: if pp.is_some() { None } else { Some(mapper) },
             dtype,
+            pp,
         })
     }
 }
@@ -534,7 +588,10 @@ impl ModelWeights {
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
-        let mut layer_in = self.tok_embeddings.forward(x)?;
+        if self.pp.is_some() {
+            return pp_head_forward(self, x, start_offsets, context_lens);
+        }
+        let mut layer_in = self.tok_embeddings.as_ref().unwrap().forward(x)?;
         let cache = &mut self.cache.normal().0;
         // Decode reads RoPE positions from a stable device tensor so a captured
         // graph replays with the advancing position; when the caller supplies
@@ -585,12 +642,10 @@ impl ModelWeights {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
             }
-            let x = layer_in;
-            let residual = &x;
-            let x = layer.attention_norm.forward(&x)?;
-            let attn = layer.forward_attn(
-                &x,
-                &mask.get(x.device()),
+            let dmask = mask.get(layer_in.device());
+            layer_in = layer.forward_block(
+                layer_in,
+                &dmask,
                 start_offsets,
                 &positions,
                 &mut cache[i],
@@ -598,16 +653,69 @@ impl ModelWeights {
                     .as_ref()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
             )?;
-            // Fused residual-add + ffn_norm: sum = attn + residual (the new residual stream), x =
-            // rmsnorm(sum). One ROCm launch instead of a separate add then rmsnorm.
-            let (sum, x) = layer.ffn_norm.forward_of_sum(&attn, residual)?;
-            let residual = &sum;
-            let x = layer.mlp.forward(&x)?;
-            let x = (x + residual)?;
-            layer_in = x;
         }
-        let x = self.norm.forward(&layer_in)?;
+        let x = self.norm.as_ref().unwrap().forward(&layer_in)?;
         let x = extract_logits(&x, context_lens)?;
-        self.output.forward(&x.contiguous()?)
+        self.output.as_ref().unwrap().forward(&x.contiguous()?)
+    }
+
+    fn run_local_layers(&self, h: &Tensor, offsets: &[usize]) -> Result<Tensor> {
+        let positions = {
+            let pos = offsets
+                .iter()
+                .copied()
+                .map(u32::try_from)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(hanzo_ml::Error::wrap)?;
+            Tensor::from_vec(pos, offsets.len(), &self.device)?
+        };
+        let ids2d = h.narrow(2, 0, 1)?.squeeze(2)?;
+        let mask = CausalMasker.make_causal_mask(
+            &ids2d,
+            &offsets as &dyn PastKvLenCache,
+            self.dtype,
+            &CausalMaskConfig::default(),
+        )?;
+        let mask = DeviceMappedMask::from_single(mask);
+        let cache = &mut self.cache.normal().0;
+        if !self.pp.as_ref().unwrap().is_head()
+            && cache
+                .first()
+                .is_some_and(|c| c.current_seq_len() != offsets[0])
+        {
+            for c in cache.iter_mut() {
+                c.reset();
+            }
+        }
+        let mut layer_in = h.clone();
+        for (i, layer) in self.layers.iter().enumerate() {
+            let dmask = mask.get(layer_in.device());
+            layer_in =
+                layer.forward_block(layer_in, &dmask, offsets, &positions, &mut cache[i], None)?;
+        }
+        Ok(layer_in)
+    }
+}
+
+impl PipelineParallelModel for ModelWeights {
+    fn ring(&self) -> &Arc<RingPipeline> {
+        self.pp.as_ref().expect("pipeline parallel not enabled")
+    }
+    fn pp_device(&self) -> &Device {
+        &self.device
+    }
+    fn pp_dtype(&self) -> DType {
+        self.dtype
+    }
+    fn pp_embed(&self, tokens: &Tensor) -> Result<Tensor> {
+        self.tok_embeddings.as_ref().unwrap().forward(tokens)
+    }
+    fn pp_run_local(&self, h: &Tensor, offsets: &[usize]) -> Result<Tensor> {
+        self.run_local_layers(h, offsets)
+    }
+    fn pp_norm_head(&self, h: &Tensor, context_lens: Vec<(usize, usize)>) -> Result<Tensor> {
+        let x = self.norm.as_ref().unwrap().forward(h)?;
+        let x = extract_logits(&x, context_lens)?;
+        self.output.as_ref().unwrap().forward(&x.contiguous()?)
     }
 }
