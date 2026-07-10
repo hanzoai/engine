@@ -79,7 +79,9 @@ pub(crate) fn ring_exchange(
     let mut buffers_guard = buffers
         .lock()
         .map_err(|e| hanzo_ml::Error::msg(format!("lock buffers: {e:?}")))?;
-    let recv_buf = buffers_guard.entry(nbytes).or_insert_with(|| vec![0u8; nbytes]);
+    let recv_buf = buffers_guard
+        .entry(nbytes)
+        .or_insert_with(|| vec![0u8; nbytes]);
 
     let mut right_guard = right
         .lock()
