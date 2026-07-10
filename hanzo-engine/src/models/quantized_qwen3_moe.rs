@@ -394,7 +394,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             None => None,
         };
         let local_range = layout.as_ref().map_or(0..block_count, RingLayout::local);
-        let is_head = layout.as_ref().map_or(true, RingLayout::is_head);
+        let is_head = layout.as_ref().is_none_or(RingLayout::is_head);
         let local_len = local_range.end - local_range.start;
 
         let (tok_embeddings, norm, output) = if is_head {
@@ -430,18 +430,15 @@ impl ModelConfig::FromGGUF for ModelWeights {
             } else {
                 mapper.device_for(layer_idx, false).unwrap_or(device)
             };
-            if !ropes.contains_key(&ldev.location()) {
-                ropes.insert(
-                    ldev.location(),
-                    Arc::new(RotaryEmbedding::new(
-                        rope_freq_base,
-                        head_dim,
-                        max_seq_len,
-                        ldev,
-                        true,
-                        DType::F32,
-                    )?),
-                );
+            if let std::collections::hash_map::Entry::Vacant(e) = ropes.entry(ldev.location()) {
+                e.insert(Arc::new(RotaryEmbedding::new(
+                    rope_freq_base,
+                    head_dim,
+                    max_seq_len,
+                    ldev,
+                    true,
+                    DType::F32,
+                )?));
             }
         }
 
