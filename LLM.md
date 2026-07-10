@@ -682,3 +682,48 @@ build sm_121a + CUDA 13 (issue #19662).
 - No-KV-cost caveat: every step re-forwards the whole [prompt+gen] sequence, so per-step cost grows with
   sequence length (Fast-dLLM-style block KV cache is the known follow-up). gated tests: llada_parity,
   llada_smoke (LLADA_WEIGHTS + LLADA_ORACLE / LLADA_GEN/STEPS/BLOCK).
+
+## ACE-Step music: /v1/audio/music (this session)
+- Made the composable AceStepPipeline (diffusion_models/ace_step/) servable as a new SpeechLoaderType.
+  UMT5-base text encoder + DiT flow-match (APG guidance) + DCAE + HiFi-GAN vocoder -> stereo 44.1kHz.
+- Registration mirrors TTS exactly: SpeechLoaderType::AceStep (FromStr `ace_step|ace-step|acestep`,
+  auto-detect on the DiT config's `_class_name == "ACEStepTransformer2DModel"`), SpeechGenerationConfig::
+  AceStep { frames, steps, guidance_scale } (default ~10s = 10*44100/4096 frames, 27 steps, guidance 15).
+  Reuses ModelCategory::Speech + Response::Speech + RequestMessage::SpeechGeneration -> ForwardInputsResult
+  ::Speech; forward_inputs tokenizes with the UMT5 tokenizer (umt5-base/tokenizer.json), runs generate(),
+  and interleaves the (1,C,S) waveform into PCM (channels=2, rate=44100).
+- Loader (pipeline/speech.rs) fetches the 4 real ACE-Step sub-checkpoints from ACE-Step/ACE-Step-v1-3.5B:
+  umt5-base/model.safetensors (keep all), ace_step_transformer/diffusion_pytorch_model.safetensors (drop
+  the unused `lyric*`/`projectors`/`.add_`/`.to_add_out` heads), music_dcae_f8c8/... (keep `decoder.*`),
+  music_vocoder/... (keep all). All loaded f32 (vocoder/DCAE fidelity). Key filters byte-match the proven
+  ace_step_generate_e2e test fixtures; the DCAE f8c8 gives 4096 samples/latent-frame (44100/4096 ~10.77 fps).
+- Server: POST /v1/audio/music (MusicGenerationRequest {model,input,response_format}) in
+  hanzo-server-core/src/music_generation.rs reuses speech_generation's parse + response plane (wav/pcm).
+  Merged to main (5c8b8968b). Per-request duration/steps/guidance = config-driven (load-time), same as TTS;
+  threading them per-request would need RequestMessage::SpeechGeneration to carry gen params (follow-up).
+
+## Customer surface: where a Hanzo SaaS customer generates audio/video/3D
+- Engine (this repo) serves the OpenAI-adjacent /v1 modality plane: /v1/chat/completions (text+dLLM),
+  /v1/images/generations, /v1/audio/speech (TTS), /v1/audio/music (ACE-Step), /v1/audio/transcriptions
+  (ASR), /v1/3d (TRELLIS/Pixal3D, `texture` flag), /v1/videos (WAN async), /v1/animate (MuseTalk dub).
+  Deployed via platform.hanzo.ai on DOKS behind the gateway (api.hanzo.ai).
+- studio.hanzo.ai (hanzoai/studio, ComfyUI fork; deployed by hanzo.yml onto do-sfo3-hanzo-k8s / studio
+  Service CR) is the PRIMARY authoring surface: the `hanzo_engine` node pack (custom_nodes/hanzo_engine)
+  maps one node == one /v1 endpoint over a shared client; the flagship workflow hanzo-full-generative-
+  pipeline.json chains Chat -> ImageGen -> (textured ImageTo3D + WAN video) + TTS + Music.
+- hanzo.app (app builder + /games) is the consumer/preview surface for the produced assets.
+- PRODUCTIZATION GAP (hosted multi-tenant), named precisely from the studio code:
+  (1) Engine URL is not per-tenant: the node pack reads process-global HANZO_ENGINE_URL (default
+      localhost:1234); it is set NOWHERE in the studio repo, and the per-org engine/worker routing
+      (middleware/engine_selector.py + compute_config.py + prompt_router.py, which route the graph to
+      local vs a BYO-GPU worker) never derives or sets the node pack's /v1 base URL per org/worker.
+  (2) Identity is not propagated to the engine: iam_auth_middleware.py authenticates the Studio surface
+      (Hanzo IAM JWT, org from the `owner` claim) and worker_client signs Studio->worker calls, but
+      custom_nodes/hanzo_engine/client.py sends the /v1 calls with NO Authorization header -> a gateway-
+      fronted engine (api.hanzo.ai injects identity, scopes by `owner`) gets an anonymous/unscoped call.
+  (3) Hosted GPU + model availability: /v1/3d,/videos,/audio/music,/animate are GPU-bound and need those
+      specific models loaded; the compute layer schedules the ComfyUI graph on GPU workers but there is no
+      per-org binding of "engine deployment X (with ACE-Step/WAN/TRELLIS/MuseTalk loaded) serves this org".
+  Self-hosted single-engine works TODAY (set HANZO_ENGINE_URL, run `hanzo serve`); the gap is the 3-part
+  wiring to make it hosted SaaS: per-org engine-URL resolution from engine_selector, IAM-token forwarding
+  onto the node /v1 calls, and per-tenant engine/model provisioning.
