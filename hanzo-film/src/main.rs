@@ -11,7 +11,10 @@ use hanzo_film::project::{Config, Project, VideoBackend};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "hanzo-film", about = "Long-form film orchestration over the Hanzo Engine.")]
+#[command(
+    name = "hanzo-film",
+    about = "Long-form film orchestration over the Hanzo Engine."
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -97,7 +100,10 @@ struct VerifyArgs {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("hanzo_film=info".parse().unwrap()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("hanzo_film=info".parse().unwrap()),
+        )
         .with_target(false)
         .init();
 
@@ -138,9 +144,17 @@ async fn plan_into(project: &Project, scenes: usize, shots_per_scene: usize) -> 
     let cfg = project.config();
     let engine = Engine::new(&cfg.engine_url)?;
     if !engine.ready().await {
-        anyhow::bail!("engine not reachable at {} — start it with `hanzo serve`", cfg.engine_url);
+        anyhow::bail!(
+            "engine not reachable at {} — start it with `hanzo serve`",
+            cfg.engine_url
+        );
     }
-    let planner = Planner { engine: &engine, model: cfg.planner_model.clone(), scenes, shots_per_scene };
+    let planner = Planner {
+        engine: &engine,
+        model: cfg.planner_model.clone(),
+        scenes,
+        shots_per_scene,
+    };
     let bible = planner.plan(&project.manifest.brief).await?;
     project.save_bible(&bible)?;
     println!(
@@ -164,7 +178,11 @@ async fn cmd_assets(dir: PathBuf) -> Result<()> {
     let mut bible = project.load_bible()?;
     let pipe = Pipeline::new(project)?;
     pipe.assets(&mut bible).await?;
-    println!("assets: {} characters, {} locations", bible.characters.len(), bible.locations.len());
+    println!(
+        "assets: {} characters, {} locations",
+        bible.characters.len(),
+        bible.locations.len()
+    );
     Ok(())
 }
 
@@ -173,7 +191,11 @@ async fn cmd_render(dir: PathBuf) -> Result<()> {
     let bible = project.load_bible()?;
     let pipe = Pipeline::new(project)?;
     let n = pipe.render(&bible).await?;
-    println!("render: {} shots (re)rendered of {}", n, bible.shots().count());
+    println!(
+        "render: {} shots (re)rendered of {}",
+        n,
+        bible.shots().count()
+    );
     Ok(())
 }
 
@@ -182,7 +204,10 @@ async fn cmd_audio(dir: PathBuf) -> Result<()> {
     let bible = project.load_bible()?;
     let pipe = Pipeline::new(project)?;
     pipe.audio(&bible).await?;
-    println!("audio: dialogue + score mixed for {} shots", bible.shots().count());
+    println!(
+        "audio: dialogue + score mixed for {} shots",
+        bible.shots().count()
+    );
     Ok(())
 }
 
@@ -192,7 +217,13 @@ async fn cmd_assemble(dir: PathBuf) -> Result<()> {
     let film = project.film_path();
     let pipe = Pipeline::new(project)?;
     let tl = pipe.assemble(&bible).await?;
-    println!("assembled {} ({:.1}s, {} shots) -> {}", tl.title, tl.total_duration_s, tl.entries.len(), film.display());
+    println!(
+        "assembled {} ({:.1}s, {} shots) -> {}",
+        tl.title,
+        tl.total_duration_s,
+        tl.entries.len(),
+        film.display()
+    );
     Ok(())
 }
 
@@ -200,12 +231,21 @@ async fn cmd_verify(a: VerifyArgs) -> Result<()> {
     let project = Project::open(&a.dir)?;
     let bible = project.load_bible()?;
     let scorer = match a.embed_model {
-        Some(model) => Scorer::Embedding { engine: Engine::new(&project.config().engine_url)?, model },
+        Some(model) => Scorer::Embedding {
+            engine: Engine::new(&project.config().engine_url)?,
+            model,
+        },
         None => Scorer::Pixel,
     };
     let report = coherence::verify(&project, &bible, scorer, a.max_pairs).await?;
     hanzo_film::project::write_json(&project.coherence_path(), &report)?;
-    println!("coherence [{}]: mean {:.3} over {} pairs — {}", report.method, report.mean, report.pairs.len(), report.note);
+    println!(
+        "coherence [{}]: mean {:.3} over {} pairs — {}",
+        report.method,
+        report.mean,
+        report.pairs.len(),
+        report.note
+    );
     Ok(())
 }
 

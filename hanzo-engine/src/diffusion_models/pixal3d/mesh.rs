@@ -5,6 +5,7 @@
 //! watertight [`Mesh`] in the [-0.5, 0.5]^3 cube TRELLIS uses. It is the coarse-geometry output; the
 //! SLAT stage refines it to a detailed FlexiCubes mesh.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use std::collections::HashMap;
 
 use hanzo_3d::{Mesh, Vec3};
@@ -33,7 +34,8 @@ impl Dedup {
         let i = self.verts.len() as u32;
         // lattice point in 0..=res -> world in [-0.5, 0.5]
         let w = |c: i32| c as f32 / self.res - 0.5;
-        self.verts.push(Vec3::new(w(corner[0]), w(corner[1]), w(corner[2])));
+        self.verts
+            .push(Vec3::new(w(corner[0]), w(corner[1]), w(corner[2])));
         self.map.insert(corner, i);
         i
     }
@@ -87,7 +89,7 @@ mod tests {
     fn single_voxel_is_a_cube() {
         // A 2^3 grid with one occupied cell -> a closed cube: 6 faces * 2 tris, 8 unique verts.
         let mut occ = vec![false; 8];
-        occ[(1 * 2 + 1) * 2 + 1] = true; // voxel (1,1,1)
+        occ[(2 + 1) * 2 + 1] = true; // voxel (1,1,1)
         let mesh = occupancy_to_mesh(&occ, 2);
         assert_eq!(mesh.faces.len(), 12);
         assert_eq!(mesh.vertices.len(), 8);

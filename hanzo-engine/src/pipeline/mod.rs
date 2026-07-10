@@ -38,7 +38,7 @@ use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::PagedAttentionConfig;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 pub use animation::{AnimationLoader, AnimationModelPaths, AnimationPipeline};
-pub use asr::{AsrLoader, AsrModelPaths, AsrPipeline};
+pub use asr::AsrLoader;
 pub use auto::{AutoLoader, AutoLoaderBuilder};
 use chat_template::ChatTemplate;
 pub use diffusion::{DiffusionLoader, DiffusionLoaderBuilder};

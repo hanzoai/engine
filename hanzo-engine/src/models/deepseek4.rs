@@ -83,6 +83,7 @@ fn default_compress_ratios() -> Vec<u32> {
 /// Parsed verbatim from `deepseek-ai/DeepSeek-V4-Flash/config.json`. Extra HF
 /// bookkeeping keys are ignored (this struct is not `deny_unknown_fields`).
 #[derive(Deserialize, Clone, Debug)]
+#[allow(dead_code)] // config mirrors config.json verbatim; not every key drives the forward
 pub struct DeepSeekV4Config {
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
@@ -172,6 +173,7 @@ impl DeepSeekV4Config {
     }
 
     /// MLA absorbed dot-product / value width.
+    #[allow(dead_code)]
     pub(crate) fn q_head_dim(&self) -> usize {
         self.head_dim
     }
@@ -214,6 +216,7 @@ pub(crate) struct HyperConnections {
     scale_vec: Tensor,
     /// `[mix_dim]` — additive bias.
     base: Tensor,
+    #[allow(dead_code)]
     n_hc: usize,
     iters: usize,
     eps: f64,
@@ -256,10 +259,10 @@ impl HyperConnections {
 
         // Broadcast the (pre, post, comb) scales over their regions once.
         let mut sv = Vec::with_capacity(mix_dim);
-        sv.extend(std::iter::repeat(scale[0]).take(n_hc)); // pre
+        sv.extend(std::iter::repeat_n(scale[0], n_hc)); // pre
         if !reduce_only {
-            sv.extend(std::iter::repeat(scale[1]).take(n_hc)); // post
-            sv.extend(std::iter::repeat(scale[2]).take(n_hc * n_hc)); // comb
+            sv.extend(std::iter::repeat_n(scale[1], n_hc)); // post
+            sv.extend(std::iter::repeat_n(scale[2], n_hc * n_hc)); // comb
         }
         let scale_vec = Tensor::from_vec(sv, mix_dim, base.device())?;
 
@@ -293,10 +296,10 @@ impl HyperConnections {
             2 * n_hc + n_hc * n_hc
         };
         let mut sv = Vec::with_capacity(mix_dim);
-        sv.extend(std::iter::repeat(scale[0]).take(n_hc));
+        sv.extend(std::iter::repeat_n(scale[0], n_hc));
         if !reduce_only {
-            sv.extend(std::iter::repeat(scale[1]).take(n_hc));
-            sv.extend(std::iter::repeat(scale[2]).take(n_hc * n_hc));
+            sv.extend(std::iter::repeat_n(scale[1], n_hc));
+            sv.extend(std::iter::repeat_n(scale[2], n_hc * n_hc));
         }
         let scale_vec = Tensor::from_vec(sv, mix_dim, base.device())?;
         Ok(Self {
@@ -1252,6 +1255,48 @@ impl NormalModel for DeepSeekV4 {
 
 impl AnyMoeBaseModelMixin for DeepSeekV4 {}
 
+/// Test-only helpers to read 3-D/4-D tensors as nested `Vec`s.
+#[cfg(test)]
+trait NestedVecExt {
+    fn to_vec_dim3(&self) -> Vec<Vec<Vec<f32>>>;
+    fn to_vec_dim4(&self) -> Vec<Vec<Vec<Vec<f32>>>>;
+}
+
+#[cfg(test)]
+impl NestedVecExt for Tensor {
+    fn to_vec_dim3(&self) -> Vec<Vec<Vec<f32>>> {
+        self.to_dtype(DType::F32).unwrap().to_vec3::<f32>().unwrap()
+    }
+    fn to_vec_dim4(&self) -> Vec<Vec<Vec<Vec<f32>>>> {
+        let (a, b, c, d) = self.dims4().unwrap();
+        let flat = self
+            .to_dtype(DType::F32)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let mut out = Vec::with_capacity(a);
+        let mut it = flat.into_iter();
+        for _ in 0..a {
+            let mut bb = Vec::with_capacity(b);
+            for _ in 0..b {
+                let mut cc = Vec::with_capacity(c);
+                for _ in 0..c {
+                    let mut dd = Vec::with_capacity(d);
+                    for _ in 0..d {
+                        dd.push(it.next().unwrap());
+                    }
+                    cc.push(dd);
+                }
+                bb.push(cc);
+            }
+            out.push(bb);
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1432,6 +1477,7 @@ mod tests {
         assert_eq!(hc.dims(), &[1, 3, 4, 2]);
         // Every stream equals the token vector.
         let v = hc.to_vec_dim4();
+        #[allow(clippy::needless_range_loop)]
         for s in 0..4 {
             assert_eq!(v[0][0][s], vec![1.0, 2.0]);
             assert_eq!(v[0][2][s], vec![5.0, 6.0]);
@@ -1478,6 +1524,7 @@ mod tests {
         let v = new_hc.to_vec_dim4();
         let expect = [[12.0, 17.0], [31.0, 44.0]]; // x+block per (L, E)
         for li in 0..2 {
+            #[allow(clippy::needless_range_loop)]
             for s in 0..2 {
                 for e in 0..2 {
                     assert!(
@@ -1607,47 +1654,5 @@ mod tests {
             let rms = (h.iter().map(|v| v * v).sum::<f32>() / 4.0).sqrt();
             assert!((rms - 1.0).abs() < 1e-4, "unit RMS, got {rms}");
         }
-    }
-}
-
-/// Test-only helpers to read 3-D/4-D tensors as nested `Vec`s.
-#[cfg(test)]
-trait NestedVecExt {
-    fn to_vec_dim3(&self) -> Vec<Vec<Vec<f32>>>;
-    fn to_vec_dim4(&self) -> Vec<Vec<Vec<Vec<f32>>>>;
-}
-
-#[cfg(test)]
-impl NestedVecExt for Tensor {
-    fn to_vec_dim3(&self) -> Vec<Vec<Vec<f32>>> {
-        self.to_dtype(DType::F32).unwrap().to_vec3::<f32>().unwrap()
-    }
-    fn to_vec_dim4(&self) -> Vec<Vec<Vec<Vec<f32>>>> {
-        let (a, b, c, d) = self.dims4().unwrap();
-        let flat = self
-            .to_dtype(DType::F32)
-            .unwrap()
-            .flatten_all()
-            .unwrap()
-            .to_vec1::<f32>()
-            .unwrap();
-        let mut out = Vec::with_capacity(a);
-        let mut it = flat.into_iter();
-        for _ in 0..a {
-            let mut bb = Vec::with_capacity(b);
-            for _ in 0..b {
-                let mut cc = Vec::with_capacity(c);
-                for _ in 0..c {
-                    let mut dd = Vec::with_capacity(d);
-                    for _ in 0..d {
-                        dd.push(it.next().unwrap());
-                    }
-                    cc.push(dd);
-                }
-                bb.push(cc);
-            }
-            out.push(bb);
-        }
-        out
     }
 }

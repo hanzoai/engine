@@ -6,6 +6,7 @@
 //! `upsample`, `subdivide` (each voxel -> 2^3), the `AbsolutePositionEmbedder`, and the windowed /
 //! full self-attention partitioning. N is small (<= ~32k), so gathers are plain index maps.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use std::collections::HashMap;
 
 use hanzo_ml::{DType, Device, Result, Tensor};
@@ -38,6 +39,7 @@ impl Sparse {
         }
     }
 
+    #[allow(dead_code)]
     fn index(&self) -> HashMap<[i32; 3], u32> {
         self.coords
             .iter()
@@ -80,7 +82,13 @@ pub struct SubMConv3d {
 }
 
 impl SubMConv3d {
-    pub fn new(cin: usize, cout: usize, ksize: usize, bias: bool, vb: ShardedVarBuilder) -> Result<Self> {
+    pub fn new(
+        cin: usize,
+        cout: usize,
+        ksize: usize,
+        bias: bool,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         let w = vb.get((cout, ksize, ksize, ksize, cin), "weight")?;
         let mut wt = Vec::with_capacity(ksize.pow(3));
         for kz in 0..ksize {
@@ -98,7 +106,11 @@ impl SubMConv3d {
                 }
             }
         }
-        let bias = if bias { Some(vb.get(cout, "bias")?) } else { None };
+        let bias = if bias {
+            Some(vb.get(cout, "bias")?)
+        } else {
+            None
+        };
         Ok(Self {
             wt,
             bias,
@@ -198,18 +210,29 @@ pub struct DownCache {
 pub fn downsample2(x: &Sparse) -> Result<(Sparse, DownCache)> {
     let n = x.n();
     // code = raveled (z//2, y//2, x//2); dedup ascending == lexicographic (z,y,x).
-    let dcoord: Vec<[i32; 3]> = x.coords.iter().map(|c| [c[0] / 2, c[1] / 2, c[2] / 2]).collect();
+    let dcoord: Vec<[i32; 3]> = x
+        .coords
+        .iter()
+        .map(|c| [c[0] / 2, c[1] / 2, c[2] / 2])
+        .collect();
     let mut uniq: Vec<[i32; 3]> = dcoord.clone();
     uniq.sort_unstable();
     uniq.dedup();
-    let pos: HashMap<[i32; 3], u32> = uniq.iter().enumerate().map(|(i, c)| (*c, i as u32)).collect();
+    let pos: HashMap<[i32; 3], u32> = uniq
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (*c, i as u32))
+        .collect();
     let idx: Vec<u32> = dcoord.iter().map(|c| pos[c]).collect();
     let m = uniq.len();
     // mean-pool feats by group.
     let dev = x.feats.device();
     let idx_t = Tensor::from_vec(idx.clone(), n, dev)?;
     let cin = x.feats.dim(1)?;
-    let idx_exp = idx_t.reshape((n, 1))?.broadcast_as((n, cin))?.contiguous()?;
+    let idx_exp = idx_t
+        .reshape((n, 1))?
+        .broadcast_as((n, cin))?
+        .contiguous()?;
     let sum = Tensor::zeros((m, cin), DType::F32, dev)?.scatter_add(&idx_exp, &x.feats, 0)?;
     // TRELLIS uses torch.scatter_reduce(mean, include_self=True): the zero-init counts, so the
     // divisor is (group size + 1), not the group size.
@@ -257,7 +280,9 @@ pub fn subdivide(x: &Sparse) -> Result<Sparse> {
     }
     let dev = x.feats.device();
     // feats.unsqueeze(1).expand(n,8,C).flatten(0,1) == repeat_interleave rows by 8.
-    let idx: Vec<u32> = (0..n as u32).flat_map(|i| std::iter::repeat(i).take(8)).collect();
+    let idx: Vec<u32> = (0..n as u32)
+        .flat_map(|i| std::iter::repeat_n(i, 8))
+        .collect();
     let idx_t = Tensor::from_vec(idx, n * 8, dev)?;
     let feats = x.feats.index_select(&idx_t, 0)?;
     Ok(Sparse::new(coords, feats))
@@ -327,7 +352,7 @@ impl SparseGroupNorm32 {
     pub fn forward_feats(&self, feats: &Tensor) -> Result<Tensor> {
         let n = feats.dim(0)?;
         let cs = self.channels / self.groups;
-        let dev = feats.device();
+        let _dev = feats.device();
         // [N, G, cs] -> per-group mean/var over (N, cs).
         let g = feats.reshape((n, self.groups, cs))?;
         let mean = g.mean_keepdim(0)?.mean_keepdim(2)?; // [1, G, 1]
@@ -346,7 +371,13 @@ impl SparseGroupNorm32 {
 pub fn window_partition(coords: &[[i32; 3]], window: i32, shift: i32) -> Vec<Vec<u32>> {
     let sc: Vec<[i32; 3]> = coords
         .iter()
-        .map(|c| [(c[0] + shift) / window, (c[1] + shift) / window, (c[2] + shift) / window])
+        .map(|c| {
+            [
+                (c[0] + shift) / window,
+                (c[1] + shift) / window,
+                (c[2] + shift) / window,
+            ]
+        })
         .collect();
     // group by window cell, preserving first-seen order is irrelevant (attention is permutation
     // equivariant); we only need each window's member set.
@@ -378,7 +409,9 @@ pub fn cos_stats(a: &Tensor, b: &Tensor) -> (f64, f64, f64) {
 fn coords_from(t: &Tensor) -> Vec<[i32; 3]> {
     // fixtures store coords as [N,4] float (b,z,y,x).
     let v = t.to_vec2::<f32>().unwrap();
-    v.iter().map(|r| [r[1] as i32, r[2] as i32, r[3] as i32]).collect()
+    v.iter()
+        .map(|r| [r[1] as i32, r[2] as i32, r[3] as i32])
+        .collect()
 }
 
 // TRELLIS_FIX=/path/to/oracle/fixtures cargo test -p hanzo-engine pixal3d::sparse -- --nocapture

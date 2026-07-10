@@ -17,6 +17,7 @@
 //! [`super::modality::ModalityEncoder`] contract so it plugs into the existing fusion with zero
 //! changes there.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
 use hanzo_nn::{Embedding, LayerNorm, LayerNormConfig, Linear, Module};
 use hanzo_quant::{QuantizedConfig, ShardedVarBuilder};
