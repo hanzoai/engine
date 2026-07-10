@@ -116,3 +116,33 @@ cargo run --release --features ring -- ...
 ```
 
 The ring backend will automatically handle collective communication for tensor-parallel inference.
+
+## Pipeline parallelism (GGUF / quantized models)
+
+Quantized GGUF models run the ring as a **pipeline** rather than a tensor-parallel collective. This is the only way to distribute a GGUF model, and it is what lets a model larger than any single node fit across the cluster.
+
+- Rank 0 (the head) owns the generation loop: tokenizer, embeddings, lm_head, sampling and streaming. It runs its own layer range, sends the activation to its right neighbor, and receives the post-final-layer activation back from its left neighbor before the final norm and lm_head.
+- Every other rank is a stateless layer executor: it receives an activation from the left, runs its local layer range, and sends the result to the right. Workers never see tokens, only activations, so there is no lockstep sampling and no head-divisibility constraint. Any `world_size >= 2` works.
+- Each rank loads **only its own layer range** from disk, so weights and the KV cache split roughly in proportion to the layer counts. A rank never materializes tensors outside its range.
+- Activations cross the wire as canonical `f32` with a small per-hop header (shape + per-sequence offsets), so a heterogeneous ring (e.g. a ROCm head and a CUDA worker) agrees on the bytes. Use `--dtype f32` for heterogeneous clusters.
+
+Pipeline parallelism is the default when the `ring` feature is active and a GGUF model is loaded. Set `RING_PP=0` to fall back to the legacy safetensors tensor-parallel behavior.
+
+Layer assignment is proportional to per-rank memory. Override it with:
+
+| Variable | Effect |
+|--|--|
+| `RING_LAYER_SPLIT="a,b,.."` | Exact per-rank block counts (must sum to the model's layer count, one entry per rank). |
+| `RING_MEM_GIB="g0,g1,.."` | Per-rank GPU budget; layers are distributed proportionally. |
+
+Currently wired for the `qwen3` and `qwen3moe` GGUF architectures.
+
+Example, two heterogeneous machines A (192.168.1.10, head) and B (192.168.1.11):
+
+```bash
+# Machine A, rank 0
+RING_CONFIG=ring_0.json hanzo serve -p 1234 --dtype f32 --format gguf -m /models/M -f model.gguf
+
+# Machine B, rank 1 (auto-enters the worker loop)
+RING_CONFIG=ring_1.json hanzo serve --dtype f32 --format gguf -m /models/M -f model.gguf
+```
