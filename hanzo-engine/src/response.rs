@@ -325,6 +325,10 @@ pub enum Response {
         frames: Arc<Vec<image::DynamicImage>>,
         fps: f64,
     },
+    // Audio transcription (ASR): speech -> text.
+    Transcription {
+        text: String,
+    },
     // Raw
     Raw {
         logits_chunks: Vec<Tensor>,
@@ -372,6 +376,10 @@ pub enum ResponseOk {
     Frames {
         frames: Arc<Vec<image::DynamicImage>>,
         fps: f64,
+    },
+    // Audio transcription (ASR)
+    Transcription {
+        text: String,
     },
     // Raw
     Raw {
@@ -470,6 +478,7 @@ impl Response {
                 channels,
             }),
             Self::Frames { frames, fps } => Ok(ResponseOk::Frames { frames, fps }),
+            Self::Transcription { text } => Ok(ResponseOk::Transcription { text }),
             Self::Raw {
                 logits_chunks,
                 tokens,

@@ -441,6 +441,7 @@ async fn process_embedding_response(
             | Response::ImageGeneration(_)
             | Response::Speech { .. }
             | Response::Frames { .. }
+            | Response::Transcription { .. }
             | Response::Raw { .. }
             | Response::AgenticToolCallProgress { .. }
             | Response::AgenticToolApprovalRequired { .. }
