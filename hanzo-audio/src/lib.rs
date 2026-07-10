@@ -11,7 +11,7 @@ use symphonia::core::{
 };
 
 /// Raw audio input consisting of PCM samples and a sample rate.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct AudioInput {
     pub samples: Vec<f32>,
     pub sample_rate: u32,

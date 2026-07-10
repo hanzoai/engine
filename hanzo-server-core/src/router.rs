@@ -16,6 +16,7 @@ use crate::openapi_doc::get_openapi_doc;
 use crate::{
     animate::animate,
     approvals::{resolve_agent_approval, ApprovalBroker},
+    audio_transcription::audio_transcription,
     chat_completion::chatcompletions,
     completions::completions,
     embeddings::embeddings,
@@ -28,14 +29,14 @@ use crate::{
     responses::{cancel_response, create_response, delete_response, get_response},
     route::route_handler,
     route_registry::{
-        AGENT_APPROVAL_ROUTE, ANIMATE_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE, CANCEL_RESPONSE_ROUTE,
-        COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE, FILES_ROUTE, FILE_CONTENT_ROUTE, FILE_ROUTE,
-        HEALTH_ROUTE, IMAGE_GENERATION_ROUTE, LIPSYNC_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE,
-        RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE,
-        SESSION_ROUTE, SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE,
-        THREED_CONTENT_ROUTE, THREED_GENERATION_ROUTE, THREED_JOB_ROUTE, TRYON_GENERATION_ROUTE,
-        TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE, VIDEO_CONTENT_ROUTE, VIDEO_GENERATION_ROUTE,
-        VIDEO_JOB_ROUTE,
+        AGENT_APPROVAL_ROUTE, ANIMATE_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE,
+        AUDIO_TRANSCRIPTION_ROUTE, CANCEL_RESPONSE_ROUTE, COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE,
+        FILES_ROUTE, FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE,
+        LIPSYNC_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE, RELOAD_MODEL_ROUTE, RESPONSES_ROUTE,
+        RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE, SESSION_ROUTE, SPEECH_GENERATION_ROUTE,
+        SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE, THREED_CONTENT_ROUTE, THREED_GENERATION_ROUTE,
+        THREED_JOB_ROUTE, TRYON_GENERATION_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE,
+        VIDEO_CONTENT_ROUTE, VIDEO_GENERATION_ROUTE, VIDEO_JOB_ROUTE,
     },
     speech_generation::speech_generation,
     threed_generation::{create_3d, get_3d, get_3d_content},
@@ -333,6 +334,7 @@ fn init_router(
         .route(FILE_ROUTE.path, get(get_file).delete(delete_file))
         .route(FILE_CONTENT_ROUTE.path, get(get_file_content))
         .route(SPEECH_GENERATION_ROUTE.path, post(speech_generation))
+        .route(AUDIO_TRANSCRIPTION_ROUTE.path, post(audio_transcription))
         .route(ANIMATE_ROUTE.path, post(animate))
         .route(LIPSYNC_ROUTE.path, post(animate))
         .route(AGENT_APPROVAL_ROUTE.path, post(resolve_agent_approval))

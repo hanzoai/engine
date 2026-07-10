@@ -133,6 +133,33 @@ pub async fn send_frames_responses(
     Ok(())
 }
 
+pub async fn send_transcription_responses(
+    input_seqs: &mut [&mut Sequence],
+    texts: Vec<String>,
+) -> hanzo_ml::Result<()> {
+    if input_seqs.len() != texts.len() {
+        hanzo_ml::bail!(
+            "Input seqs len ({}) does not match transcriptions generated len ({})",
+            input_seqs.len(),
+            texts.len()
+        );
+    }
+
+    for (seq, text) in input_seqs.iter_mut().zip(texts) {
+        seq.add_transcription_to_group(text);
+
+        let group = seq.get_mut_group();
+        group
+            .maybe_send_transcription_response(seq.responder())
+            .await
+            .map_err(hanzo_ml::Error::msg)?;
+
+        seq.set_state(SequenceState::Done(StopReason::GeneratedTranscription));
+    }
+
+    Ok(())
+}
+
 pub async fn send_raw_responses(
     input_seqs: &mut [&mut Sequence],
     logits_chunks: Vec<Vec<Tensor>>,
