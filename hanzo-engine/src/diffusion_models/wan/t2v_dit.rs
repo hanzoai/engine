@@ -183,17 +183,26 @@ impl ConditionEmbedder {
         })
     }
 
-    // timestep [B] -> temb [B, hidden] and per-block modulation seed [B, 6, hidden].
+    // timestep [B] (scalar) or [B, N] (per-token, Wan2.2 expand_timesteps) -> temb [B, K, hidden]
+    // and per-block modulation seed [B, K, 6, hidden], K = 1 (scalar) or N (per-token).
     fn time(&self, t: &Tensor, dtype: DType) -> Result<(Tensor, Tensor)> {
-        let temb = timestep_embedding(&(t / TIME_SCALE)?, self.freq_dim, dtype)?
+        let (b, k, flat) = match t.rank() {
+            1 => (t.dim(0)?, 1usize, t.clone()),
+            2 => {
+                let (b, n) = t.dims2()?;
+                (b, n, t.reshape(b * n)?)
+            }
+            r => hanzo_ml::bail!("wan timestep must be rank 1 or 2, got {r}"),
+        };
+        let temb = timestep_embedding(&(flat / TIME_SCALE)?, self.freq_dim, dtype)?
             .apply(&self.time_l1)?
             .silu()?
             .apply(&self.time_l2)?;
-        let seed = temb.silu()?.apply(&self.time_proj)?.reshape((
-            temb.dim(0)?,
-            BLOCK_MOD_CHUNKS,
-            self.hidden,
-        ))?;
+        let seed =
+            temb.silu()?
+                .apply(&self.time_proj)?
+                .reshape((b, k, BLOCK_MOD_CHUNKS, self.hidden))?;
+        let temb = temb.reshape((b, k, self.hidden))?;
         Ok((temb, seed))
     }
 
@@ -203,7 +212,7 @@ impl ConditionEmbedder {
     }
 }
 
-// adaLN shift/scale/gate for one stream, from a [B, hidden] modulation slice.
+// adaLN shift/scale/gate for one stream; each is [B, K, hidden], K = 1 (scalar t) or N (per-token).
 struct Mod {
     shift: Tensor,
     scale: Tensor,
@@ -211,14 +220,14 @@ struct Mod {
 }
 
 impl Mod {
-    // x [B, N, hidden]: norm(x) * (1 + scale) + shift.
+    // x [B, N, hidden]: norm(x) * (1 + scale) + shift. K broadcasts over N when 1, else exact.
     fn scale_shift(&self, x: &Tensor) -> Result<Tensor> {
-        x.broadcast_mul(&(&self.scale.unsqueeze(1)? + 1.0)?)?
-            .broadcast_add(&self.shift.unsqueeze(1)?)
+        x.broadcast_mul(&(&self.scale + 1.0)?)?
+            .broadcast_add(&self.shift)
     }
 
     fn gate(&self, x: &Tensor) -> Result<Tensor> {
-        x.broadcast_mul(&self.gate.unsqueeze(1)?)
+        x.broadcast_mul(&self.gate)
     }
 }
 
@@ -348,13 +357,14 @@ impl Block {
         })
     }
 
-    // seed [B, 6, hidden]: block modulation = scale_shift_table + seed, chunked into 2 Mods.
+    // seed [B, K, 6, hidden]: block modulation = scale_shift_table + seed, chunked into 2 Mods.
     fn modulation(&self, seed: &Tensor) -> Result<(Mod, Mod)> {
         let m = self
             .scale_shift_table
             .to_dtype(seed.dtype())?
+            .unsqueeze(1)?
             .broadcast_add(seed)?;
-        let take = |i: usize| m.i((.., i)).and_then(|t| t.contiguous());
+        let take = |i: usize| m.i((.., .., i)).and_then(|t| t.contiguous());
         Ok((
             Mod {
                 shift: take(0)?,
@@ -408,14 +418,15 @@ impl FinalLayer {
         })
     }
 
-    // x [B, N, hidden]; temb [B, hidden] -> [B, N, patch_out].
+    // x [B, N, hidden]; temb [B, K, hidden] -> [B, N, patch_out]. K = 1 (scalar) or N (per-token).
     fn forward(&self, x: &Tensor, temb: &Tensor) -> Result<Tensor> {
         let m = self
             .scale_shift_table
             .to_dtype(temb.dtype())?
-            .broadcast_add(&temb.unsqueeze(1)?)?;
-        let shift = m.i((.., 0))?.contiguous()?.unsqueeze(1)?;
-        let scale = m.i((.., 1))?.contiguous()?.unsqueeze(1)?;
+            .unsqueeze(1)?
+            .broadcast_add(&temb.unsqueeze(2)?)?;
+        let shift = m.i((.., .., 0))?.contiguous()?;
+        let scale = m.i((.., .., 1))?.contiguous()?;
         x.apply(&self.norm)?
             .broadcast_mul(&(&scale + 1.0)?)?
             .broadcast_add(&shift)?
@@ -485,8 +496,9 @@ impl Wan2TransformerDiT {
             .reshape((b, oc, t * pt, hp * ph, wp * pw))
     }
 
-    /// Flow-matching velocity for the latent `[B, C, T, H, W]` given `timestep [B]` and the encoded
-    /// text `[B, L, text_dim]`. Returns velocity `[B, C, T, H, W]`.
+    /// Flow-matching velocity for the latent `[B, C, T, H, W]`. `timestep` is `[B]` (uniform, T2V)
+    /// or `[B, T*Hp*Wp]` (per-token, Wan2.2 I2V expand_timesteps); `text` is `[B, L, text_dim]`.
+    /// Returns velocity `[B, C, T, H, W]`.
     pub fn forward(&self, latent: &Tensor, timestep: &Tensor, text: &Tensor) -> Result<Tensor> {
         let (temb, seed) = self.condition.time(timestep, self.dtype)?;
         let text = self.condition.text(text)?;
@@ -497,5 +509,63 @@ impl Wan2TransformerDiT {
             x = block.forward(&x, &seed, &text, (&cos, &sin))?;
         }
         self.unpatchify(&self.final_layer.forward(&x, &temb)?, grid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hanzo_ml::{DType, Shape};
+    use hanzo_nn::var_builder::SimpleBackend;
+    use hanzo_nn::Init;
+    use hanzo_quant::ShardedSafeTensors;
+
+    struct RandnBackend;
+    impl SimpleBackend for RandnBackend {
+        fn get(
+            &self,
+            s: Shape,
+            name: &str,
+            _h: Init,
+            dtype: DType,
+            dev: &Device,
+        ) -> Result<Tensor> {
+            if name.ends_with("bias") {
+                Tensor::zeros(s, dtype, dev)
+            } else {
+                Tensor::randn(0f64, 0.05, s, dev)?.to_dtype(dtype)
+            }
+        }
+        fn get_unchecked(&self, _n: &str, _d: DType, _dev: &Device) -> Result<Tensor> {
+            hanzo_ml::bail!("needs shape")
+        }
+        fn contains_tensor(&self, _n: &str) -> bool {
+            true
+        }
+    }
+
+    // A per-token timestep that is uniform in t must reproduce the scalar-t forward exactly. This
+    // pins the expand_timesteps (I2V) path to the T2V path when no frame is being conditioned.
+    #[test]
+    fn per_token_uniform_matches_scalar() -> Result<()> {
+        let dev = Device::Cpu;
+        let vb = ShardedSafeTensors::wrap(Box::new(RandnBackend), DType::F32, dev.clone());
+        let cfg = Wan2Config::tiny();
+        let dit = Wan2TransformerDiT::new(cfg, vb, dev.clone())?;
+        let latent = Tensor::randn(0f64, 1.0, (1, 48, 2, 4, 4), &dev)?.to_dtype(DType::F32)?;
+        let text = Tensor::randn(0f64, 1.0, (1, 3, 64), &dev)?.to_dtype(DType::F32)?;
+        // grid: T=2, Hp=4/2=2, Wp=4/2=2 -> N = 8 tokens.
+        let out_scalar = dit.forward(&latent, &Tensor::from_vec(vec![500f32], 1, &dev)?, &text)?;
+        let t_tokens = (Tensor::ones((1, 8), DType::F32, &dev)? * 500.0)?;
+        let out_tokens = dit.forward(&latent, &t_tokens, &text)?;
+        let diff = (&out_scalar - &out_tokens)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(
+            diff < 1e-4,
+            "per-token uniform t != scalar t, max diff {diff}"
+        );
+        Ok(())
     }
 }
