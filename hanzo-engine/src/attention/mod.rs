@@ -261,25 +261,15 @@ impl Sdpa {
             }
         }
 
-        // NOTE: CUDA GGUF prefill uses a Custom causal mask and falls to eager naive_sdpa below, which
-        // materializes the [seq x seq] score matrix -> O(n^2) prefill (measured: 8B pp512/pp2048 collapse
-        // 0.84x->0.37x of llama while llama's fused flash stays flat ~3000 t/s). Routing this Custom-mask
-        // prefill to the fused `flash_attn` (drop the redundant causal mask, like the ROCm block above)
-        // is a PROVEN ~1.8-2.4x prefill lever (flat vs length) -- BUT the hanzo-flash-attn CUDA path
-        // produces GARBAGE logits for this config (bf16 GGUF, paged, causal); contiguous + GQA->MHA
-        // repeat_kv + window/bf16-dispatch checks all ruled out, so it needs a numeric flash-vs-eager
-        // tensor diff to isolate. Tracked as the #1 CUDA prefill follow-up (engine LLM.md). Until fixed,
-        // GGUF prefill stays on the correct eager path.
-
-        // Custom mask, eager attention (flash can't use arbitrary mask tensors)
+        // Custom mask, eager attention (flash can't use arbitrary mask tensors). Reached only under
+        // FLASH_PREFILL=0 or for force_custom models (gpt-oss); the masker otherwise emits CausalFlash.
         if let AttentionMask::Custom(mask_tensor) = mask {
             return self.run_attention_noflash(q, k, v, Some(mask_tensor), sdpa_params, do_causal);
         }
 
-        // CausalFlash or None: try flash attention, fall back to eager. `using_flash_attn()` is now
-        // runtime-gated (default OFF on CUDA -- flash-attn-2 bf16 collapses 8B-Q4K into repetition; the
-        // cure is the eager path at EVERY flash site: masker, paged-attn, inputs, here). HANZO_CUDA_FLASH=1
-        // opts back in. See using_flash_attn() in utils/mod.rs.
+        // CausalFlash or None: try flash attention, fall back to eager. `using_flash_attn()` is default
+        // ON (flash-attn >= 0.11.35 f16-routes bf16 P, curing the old Q4K collapse). FLASH_PREFILL=0
+        // forces eager at every flash site. See using_flash_attn() in utils/mod.rs.
         let can_use_flash = q.device().is_cpu()
             || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32;
 
