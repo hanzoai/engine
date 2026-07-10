@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
+use std::sync::Arc;
 use tracing::{debug, info};
 
 use hanzo_engine::{
@@ -20,6 +21,7 @@ use crate::args::{
     GlobalOptions, MatformerSelection, ModelFormat, ModelSourceOptions, ModelType,
     QuantizationOptions, RuntimeOptions, SandboxMode, SandboxOptions, ServerOptions,
 };
+use crate::commands::advertise::{spawn_model_observer, Advertiser};
 use crate::ui::build_ui_router;
 
 /// Run the HTTP server with the specified model
@@ -127,6 +129,7 @@ pub async fn run_server(
 
     let hanzo = builder.build().await?;
     let hanzo_for_ui = hanzo.clone();
+    let hanzo_for_mdns = hanzo.clone();
 
     // Build and run the server
     let mut app = RouterBuilder::new()
@@ -167,9 +170,68 @@ pub async fn run_server(
     info!("Server listening on http://{}:{}", server.host, server.port);
     log_api_surfaces(&server.host, server.port);
 
-    axum::serve(listener, app).await?;
+    let advertiser = start_advertiser(&server, hanzo_for_mdns);
+
+    let result = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await;
+
+    if let Some(adv) = advertiser {
+        adv.shutdown();
+    }
+    result?;
 
     Ok(())
+}
+
+/// Advertise the ready engine over mDNS (unless `--no-advertise`) and observe
+/// model-list changes to re-publish. Failure to advertise never blocks serving.
+fn start_advertiser(
+    server: &ServerOptions,
+    hanzo: hanzo_server_core::types::SharedState,
+) -> Option<Arc<Advertiser>> {
+    if server.no_advertise {
+        return None;
+    }
+    let models = hanzo.list_models().unwrap_or_default();
+    match Advertiser::start(server.port, &models) {
+        Ok(adv) => {
+            spawn_model_observer(
+                move || hanzo.list_models().unwrap_or_default(),
+                adv.clone(),
+                models,
+            );
+            Some(adv)
+        }
+        Err(e) => {
+            tracing::warn!("mDNS advertise disabled: {e}");
+            None
+        }
+    }
+}
+
+/// Resolve when the process receives SIGINT (Ctrl-C) or SIGTERM (systemd stop),
+/// so graceful shutdown can deregister the mDNS service.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
 }
 
 /// License gate. With `license-enforce`, verify a valid Hanzo license for this build's app or
