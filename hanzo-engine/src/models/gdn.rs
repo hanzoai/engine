@@ -139,6 +139,17 @@ pub fn softplus(x: &Tensor) -> Result<Tensor> {
     (Tensor::ones_like(x)? + x.exp()?)?.log()
 }
 
+// ROCm eager has no fused Sigmoid op; compose it from exp there (affine/exp/broadcast_div all
+// already lower on ROCm via softmax/l2_norm). Other backends keep the fused kernel.
+pub fn sigmoid(x: &Tensor) -> Result<Tensor> {
+    if x.device().is_rocm() {
+        let denom = x.affine(-1.0, 0.0)?.exp()?.affine(1.0, 1.0)?;
+        Tensor::ones_like(x)?.broadcast_div(&denom)
+    } else {
+        hanzo_nn::ops::sigmoid(x)
+    }
+}
+
 /// A/B knob: `GDN_FUSED_FALLBACK=1` forces the portable ops-composed scan on every backend,
 /// isolating the fused per-backend recurrence kernel's contribution. Default (unset) uses the fused
 /// kernel where one exists. Read once, cached.
