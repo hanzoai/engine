@@ -47,6 +47,11 @@ pub enum GGUFArchitecture {
     #[strum(serialize = "gpt-oss")]
     GptOss,
     Glm4Moe,
+    /// GLM-5.2 (`glm-dsa`): DeepSeek-class split-MLA + 256-expert MoE + a DSA sparse-attention
+    /// indexer. Loaded through the deepseek2 GGUF path (the indexer is a no-op for prompts within
+    /// its top_k window, i.e. plain dense MLA).
+    #[strum(serialize = "glm-dsa")]
+    GlmDsa,
     Deepseek2,
     Deepseek4,
     /// The DeepSeek-V4 MTP draft-head GGUF (a separate file). Never loaded as a
