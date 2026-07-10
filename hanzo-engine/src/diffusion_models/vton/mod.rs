@@ -4,6 +4,7 @@
 //! encoder). Conditioning is person + garment images, single-channel pose maps, and a garment
 //! category. Sampling is rectified-flow Euler with classifier-free guidance.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub mod config;
 pub mod model;
 pub mod pipeline;

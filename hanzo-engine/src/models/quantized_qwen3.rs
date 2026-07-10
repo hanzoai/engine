@@ -179,6 +179,7 @@ impl LayerWeights {
         Ok(y)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward_block(
         &self,
         x: Tensor,

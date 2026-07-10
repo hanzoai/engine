@@ -19,6 +19,7 @@
 //! As in the speech path, the interleaved 3D mRoPE collapses to a plain 1D [`RotaryEmbedding`] here,
 //! so a standard rotary embedding is exact.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use std::sync::Arc;
 
 use hanzo_ml::{DType, Device, Result, Tensor};

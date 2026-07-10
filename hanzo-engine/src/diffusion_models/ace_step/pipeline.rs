@@ -107,7 +107,7 @@ mod tests {
         out.extend_from_slice(&1u16.to_le_bytes()); // PCM
         out.extend_from_slice(&ch.to_le_bytes());
         out.extend_from_slice(&sr.to_le_bytes());
-        out.extend_from_slice(&(sr * bytes_per as u32 * ch as u32).to_le_bytes());
+        out.extend_from_slice(&(sr * bytes_per * ch as u32).to_le_bytes());
         out.extend_from_slice(&(bytes_per as u16 * ch).to_le_bytes());
         out.extend_from_slice(&16u16.to_le_bytes());
         out.extend_from_slice(b"data");

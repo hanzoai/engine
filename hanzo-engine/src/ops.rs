@@ -243,6 +243,7 @@ static MOE_PROOF_DETERMINISTIC: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// Enable/disable proof-deterministic MoE routing process-wide (set ON for proof-bearing runs).
+#[allow(dead_code)]
 pub fn set_moe_proof_deterministic(on: bool) {
     MOE_PROOF_DETERMINISTIC.store(on, std::sync::atomic::Ordering::Relaxed);
 }
@@ -257,6 +258,7 @@ pub fn moe_proof_deterministic() -> bool {
 /// `k`. Unlike candle's `.topk()` (whose tie-break is unspecified) and the separate CUDA bf16/f16
 /// router kernel, this yields the SAME experts on every machine — the routing analog of the
 /// lowest-id argmax tie-break the sampler now uses. `top_k <= num_experts` for every MoE config.
+#[allow(clippy::cast_possible_truncation)]
 fn deterministic_topk_indices(scores: &Tensor, k: usize) -> Result<Tensor> {
     let rows = scores.to_vec2::<f32>()?;
     let device = scores.device();
