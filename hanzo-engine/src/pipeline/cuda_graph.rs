@@ -509,10 +509,12 @@ pub(crate) fn cuda_decode_graphs_enabled() -> bool {
     crate::perf_flags::cuda_graphs_enabled()
 }
 
-// Decide whether a forward is capturable: q_len==1 decode (unchanged), or a full first prompt chunk
-// at the fixed prefill graph width. The chunk is self-attention (no prefix-cache gather), batch 1,
-// so every graph-varying tensor is one the decode buffers already refresh; the causal mask is a
-// flash marker and the flash cu-seqlens are constant for the width (kept alive, not refreshed).
+// Decide whether a forward is capturable: q_len==1 decode (unchanged), or a whole-prompt first
+// chunk (batch 1). The first chunk is dense causal self-attention (no prefix-cache gather, no flash
+// varlen), so the causal mask is a flash marker, the flash cu-seqlens are constant for the shape
+// (kept alive, baked), and only the tensors the decode buffers already refresh vary per replay.
+// Subsequent (gather) chunks are excluded: their flash-varlen path (kv_len != q_len) is unrelated
+// to graphs and does not affect this decision.
 pub(crate) fn cuda_graph_forward_eligible(
     input_ids: &Tensor,
     seqlen_offsets: &[usize],
@@ -538,10 +540,8 @@ pub(crate) fn cuda_graph_forward_eligible(
             && !metadata.disable_cuda_graphs
             && metadata.num_cached_tokens.is_none();
     }
-    std::env::var("PREFILL_NOGRAPH").is_err()
-        && crate::perf_flags::prefill_graphs_enabled()
+    crate::perf_flags::prefill_graphs_enabled()
         && batch == 1
-        && q_len == crate::perf_flags::prefill_graph_chunk()
         && metadata.is_first_prompt_chunk
         && !metadata.disable_cuda_graphs
         && metadata.num_cached_tokens.is_none()

@@ -1627,17 +1627,6 @@ impl NormalPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
-    fn supports_prefill_graphs(&self) -> bool {
-        #[cfg(feature = "cuda")]
-        {
-            self.model.supports_cuda_decode_graphs()
-        }
-        #[cfg(not(feature = "cuda"))]
-        {
-            false
-        }
-    }
-
     fn has_active_speculative_proposer(&self) -> bool {
         // Gates the step-start staged-token clear (pipeline/mod.rs): without this
         // override the default `false` wipes every staged DSpark/draft proposal
