@@ -101,8 +101,9 @@ impl MuseTalkGenerator {
 
 impl Generator for MuseTalkGenerator {
     fn generate(&self, visual: &DynamicImage, audio: &Tensor) -> Result<DynamicImage> {
-        let face = image_to_face_tensor(visual, self.size, &self.device)?;
-        // whisper features carry whisper's vb dtype; the UNet cross-attends in MuseTalk's.
+        // Face pixels and whisper features arrive F32; cast both to MuseTalk's dtype so an f16
+        // core sees f16 activations against f16 conv weights (no mixed-dtype conv2d).
+        let face = image_to_face_tensor(visual, self.size, &self.device)?.to_dtype(self.dtype)?;
         let audio = audio.to_dtype(self.dtype)?.contiguous()?;
         let generated = self.musetalk.forward(&face, &audio)?;
         let blended = self.musetalk.blend(&face, &generated)?;
