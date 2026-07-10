@@ -600,11 +600,29 @@ pub async fn parse_request(
                             messages.push(message_map);
                             continue;
                         }
+                        // Non-`user` roles (developer/system/assistant) may arrive as an array of
+                        // text parts, e.g. codex Responses `instructions`. Collapse all-text content
+                        // into a single text message; only genuine image/audio/video parts require
+                        // the `user` role.
                         if message.role != "user" {
-                            anyhow::bail!(
-                                "Role for an image message must be `user`, but it is {}",
-                                message.role
-                            );
+                            let mut text = String::new();
+                            for part in image_messages {
+                                match part.get("text").map(|c| &c.0) {
+                                    Some(Either::Left(s)) => text.push_str(s),
+                                    _ => anyhow::bail!(
+                                        "Role for an image message must be `user`, but it is {}",
+                                        message.role
+                                    ),
+                                }
+                            }
+                            let mut message_map: IndexMap<
+                                String,
+                                Either<String, Vec<IndexMap<String, Value>>>,
+                            > = IndexMap::new();
+                            message_map.insert("role".to_string(), Either::Left(message.role));
+                            message_map.insert("content".to_string(), Either::Left(text));
+                            messages.push(message_map);
+                            continue;
                         }
 
                         enum ContentPart {
