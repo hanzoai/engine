@@ -40,6 +40,7 @@ pub struct Qwen2_5VLModel {
     spatial_merge_size: usize,
     image_token_id: u32,
     video_token_id: u32,
+    tokens_per_second: f64,
     encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
@@ -79,6 +80,7 @@ impl Qwen2_5VLModel {
             spatial_merge_size: cfg.vision_config.spatial_merge_size,
             image_token_id: cfg.image_token_id,
             video_token_id: cfg.video_token_id,
+            tokens_per_second: cfg.vision_config.tokens_per_second as f64,
             encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }
@@ -95,6 +97,7 @@ impl Qwen2_5VLModel {
         input_ids_searching: Vec<Vec<u32>>,
         image_nums: Vec<usize>,
         video_nums: Vec<usize>,
+        second_per_grid_ts: &[f64],
     ) -> Result<(Tensor, Tensor)> {
         if image_grid_thw.is_some() || video_grid_thw.is_some() {
             let total_input_ids = input_ids.clone();
@@ -150,7 +153,7 @@ impl Qwen2_5VLModel {
                     } else {
                         input_ids.dim(0)? + 1
                     };
-                    let (ed, llm_grid_t, h, w) = if ed_image < ed_video {
+                    let (ed, llm_grid_t, h, w, second_per_grid_t) = if ed_image < ed_video {
                         let t = image_grid_thw.as_ref().unwrap().i((image_index, 0))?;
                         let h = image_grid_thw.as_ref().unwrap().i((image_index, 1))?;
                         let w = image_grid_thw.as_ref().unwrap().i((image_index, 2))?;
@@ -161,11 +164,14 @@ impl Qwen2_5VLModel {
                             t.to_scalar::<u32>()?,
                             h.to_scalar::<u32>()?,
                             w.to_scalar::<u32>()?,
+                            0.0f64,
                         )
                     } else {
                         let t = video_grid_thw.as_ref().unwrap().i((video_index, 0))?;
                         let h = video_grid_thw.as_ref().unwrap().i((video_index, 1))?;
                         let w = video_grid_thw.as_ref().unwrap().i((video_index, 2))?;
+                        let second_per_grid_t =
+                            second_per_grid_ts.get(video_index).copied().unwrap_or(1.0);
                         video_index += 1;
                         remain_videos -= 1;
                         (
@@ -173,6 +179,7 @@ impl Qwen2_5VLModel {
                             t.to_scalar::<u32>()?,
                             h.to_scalar::<u32>()?,
                             w.to_scalar::<u32>()?,
+                            second_per_grid_t,
                         )
                     };
                     let llm_grid_h = h / self.spatial_merge_size as u32;
@@ -188,10 +195,13 @@ impl Qwen2_5VLModel {
                             .repeat((3, 1))?,
                     );
 
-                    let t_idx = Tensor::arange(0, llm_grid_t as i64, input_ids.device())?
-                        .reshape(((), 1))?
-                        .repeat((1, llm_grid_h as usize * llm_grid_w as usize))?
-                        .flatten_all()?;
+                    // Temporal index scaled by the sampling interval (video); identity for images.
+                    let t_scale = second_per_grid_t * self.tokens_per_second;
+                    let hw = llm_grid_h as usize * llm_grid_w as usize;
+                    let t_vals: Vec<i64> = (0..llm_grid_t as i64)
+                        .flat_map(|t| std::iter::repeat_n((t as f64 * t_scale).floor() as i64, hw))
+                        .collect();
+                    let t_idx = Tensor::from_vec(t_vals, hw * llm_grid_t as usize, input_ids.device())?;
                     let h_idx = Tensor::arange(0, llm_grid_h as i64, input_ids.device())?
                         .reshape((1, (), 1))?
                         .repeat((llm_grid_t as usize, 1, llm_grid_w as usize))?
@@ -292,6 +302,7 @@ impl Qwen2_5VLModel {
         input_ids_searching: Vec<Vec<u32>>,
         image_nums: Vec<usize>,
         video_nums: Vec<usize>,
+        second_per_grid_ts: Vec<f64>,
         image_hashes: &[u64],
         ctx: &ModelForwardContext<'_>,
     ) -> Result<Tensor> {
@@ -432,7 +443,7 @@ impl Qwen2_5VLModel {
                     let mut last_end = 0;
                     for (start, end) in batch_ids {
                         xs = xs.slice_assign(
-                            &[batch..batch + 1, start..end, 0..xs.dim(1)?],
+                            &[batch..batch + 1, start..end, 0..xs.dim(2)?],
                             &video_embeds
                                 .i((last_end..last_end + (end - start), ..))?
                                 .unsqueeze(0)?,
@@ -480,6 +491,7 @@ impl Qwen2_5VLModel {
             input_ids_searching,
             image_nums,
             video_nums,
+            &second_per_grid_ts,
         )?;
 
         let position_ids = if !matches!(attention_mask, AttentionMask::None) {
@@ -520,6 +532,7 @@ pub(crate) struct Qwen2_5VLVisionSpecificArgs {
     image_nums: Vec<usize>,
     video_nums: Vec<usize>,
     pub image_hashes: Vec<u64>,
+    second_per_grid_ts: Vec<f64>,
 }
 
 impl crate::speculative::SpeculativeTargetMixin for Qwen2_5VLModel {}
@@ -545,6 +558,7 @@ impl MultimodalModel for Qwen2_5VLModel {
             image_nums,
             video_nums,
             image_hashes,
+            second_per_grid_ts,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Qwen2_5VLVisionSpecificArgs`");
@@ -575,6 +589,7 @@ impl MultimodalModel for Qwen2_5VLModel {
             input_ids_searching,
             image_nums,
             video_nums,
+            second_per_grid_ts,
             &image_hashes,
             ctx,
         )
@@ -609,6 +624,7 @@ impl MultimodalModel for Qwen2_5VLModel {
             image_nums: vec![0; input_ids.dims()[0]],
             video_nums: vec![0; input_ids.dims()[0]],
             image_hashes: vec![],
+            second_per_grid_ts: vec![],
         })
     }
     fn encoder_cache_counters(
