@@ -345,4 +345,58 @@ mod tests {
         );
         Ok(())
     }
+
+    fn save_frames(frames: &[image::DynamicImage], dir: &str, tag: &str) -> Result<()> {
+        for (i, f) in frames.iter().enumerate() {
+            f.save(format!("{dir}/{tag}_{i:04}.png"))
+                .map_err(|e| anyhow::anyhow!("save {tag} frame {i}: {e}"))?;
+        }
+        Ok(())
+    }
+
+    // Real generation on GPU: a T2V clip A, then clip B conditioned on A's last frame (the film
+    // continuation seam). Env-gated: WAN_MODEL_DIR + WAN_GEN_OUT (dir for the PNG frames), plus
+    // optional WAN_GEN_{FRAMES,W,H,STEPS} and WAN_PROMPT_{A,B}. Skips when unset.
+    #[test]
+    fn wan_generate_and_continue() -> Result<()> {
+        let (Ok(_), Ok(out)) = (std::env::var("WAN_MODEL_DIR"), std::env::var("WAN_GEN_OUT"))
+        else {
+            eprintln!("skip wan_generate_and_continue: set WAN_MODEL_DIR + WAN_GEN_OUT");
+            return Ok(());
+        };
+        let ev = |k: &str, d: usize| {
+            std::env::var(k)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d)
+        };
+        let cfg = WanVideoConfig {
+            num_frames: ev("WAN_GEN_FRAMES", 25),
+            height: ev("WAN_GEN_H", 512),
+            width: ev("WAN_GEN_W", 512),
+            steps: ev("WAN_GEN_STEPS", 20),
+            shift: DEFAULT_SHIFT,
+            guidance: DEFAULT_GUIDANCE,
+            fps: DEFAULT_FPS,
+            negative_prompt: DEFAULT_NEGATIVE_PROMPT.to_string(),
+        };
+        let pipe = global()?;
+        let prompt_a = std::env::var("WAN_PROMPT_A").unwrap_or_else(|_| {
+            "a red fox trotting through fresh snow, cinematic, sunlight".into()
+        });
+        let a = pipe.t2v(&cfg, &prompt_a)?;
+        save_frames(&a.frames, &out, "clipA")?;
+        let last = a.frames.last().unwrap().clone();
+        let prompt_b = std::env::var("WAN_PROMPT_B").unwrap_or_else(|_| {
+            "the same red fox continues trotting then leaps over a log, cinematic".into()
+        });
+        let b = pipe.i2v_image(&cfg, &prompt_b, &last)?;
+        save_frames(&b.frames, &out, "clipB")?;
+        eprintln!(
+            "wrote clipA={} clipB={} frames to {out}",
+            a.frames.len(),
+            b.frames.len()
+        );
+        Ok(())
+    }
 }
