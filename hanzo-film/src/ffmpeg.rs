@@ -81,7 +81,13 @@ pub fn color_for(label: &str) -> String {
 
 /// Draw a static procedural card (solid color + optional wrapped caption) as a PNG.
 /// The dependency-free stand-in for the image-gen endpoint on a GPU-less box.
-pub async fn procedural_card(text: &str, label: &str, width: usize, height: usize, out: &Path) -> Result<()> {
+pub async fn procedural_card(
+    text: &str,
+    label: &str,
+    width: usize,
+    height: usize,
+    out: &Path,
+) -> Result<()> {
     let mut vf = String::new();
     if let (Some(f), true) = (font(), has_drawtext().await) {
         vf = format!(
@@ -92,9 +98,12 @@ pub async fn procedural_card(text: &str, label: &str, width: usize, height: usiz
     }
     let mut args = vec![
         s("-y"),
-        s("-f"), s("lavfi"),
-        s("-i"), format!("color=c={}:s={}x{}", color_for(label), width, height),
-        s("-frames:v"), s(1),
+        s("-f"),
+        s("lavfi"),
+        s("-i"),
+        format!("color=c={}:s={}x{}", color_for(label), width, height),
+        s("-frames:v"),
+        s(1),
     ];
     if !vf.is_empty() {
         args.push(s("-vf"));
@@ -128,14 +137,22 @@ pub async fn kenburns_clip(
     }
     let args = vec![
         s("-y"),
-        s("-loop"), s(1),
-        s("-i"), image.to_string_lossy().into_owned(),
-        s("-t"), s(dur_s),
-        s("-r"), s(fps),
-        s("-vf"), chain,
-        s("-c:v"), s("libx264"),
-        s("-pix_fmt"), s("yuv420p"),
-        s("-preset"), s("veryfast"),
+        s("-loop"),
+        s(1),
+        s("-i"),
+        image.to_string_lossy().into_owned(),
+        s("-t"),
+        s(dur_s),
+        s("-r"),
+        s(fps),
+        s("-vf"),
+        chain,
+        s("-c:v"),
+        s("libx264"),
+        s("-pix_fmt"),
+        s("yuv420p"),
+        s("-preset"),
+        s("veryfast"),
         s("-an"),
         out.to_string_lossy().into_owned(),
     ];
@@ -146,10 +163,14 @@ pub async fn kenburns_clip(
 pub async fn tail_frame(clip: &Path, out: &Path) -> Result<()> {
     let args = vec![
         s("-y"),
-        s("-sseof"), s("-0.25"),
-        s("-i"), clip.to_string_lossy().into_owned(),
-        s("-update"), s(1),
-        s("-frames:v"), s(1),
+        s("-sseof"),
+        s("-0.25"),
+        s("-i"),
+        clip.to_string_lossy().into_owned(),
+        s("-update"),
+        s(1),
+        s("-frames:v"),
+        s(1),
         out.to_string_lossy().into_owned(),
     ];
     run("ffmpeg", &args).await
@@ -159,10 +180,14 @@ pub async fn tail_frame(clip: &Path, out: &Path) -> Result<()> {
 pub async fn frame_at(clip: &Path, t_s: f32, out: &Path) -> Result<()> {
     let args = vec![
         s("-y"),
-        s("-ss"), s(t_s.max(0.0)),
-        s("-i"), clip.to_string_lossy().into_owned(),
-        s("-update"), s(1),
-        s("-frames:v"), s(1),
+        s("-ss"),
+        s(t_s.max(0.0)),
+        s("-i"),
+        clip.to_string_lossy().into_owned(),
+        s("-update"),
+        s(1),
+        s("-frames:v"),
+        s(1),
         out.to_string_lossy().into_owned(),
     ];
     run("ffmpeg", &args).await
@@ -170,7 +195,13 @@ pub async fn frame_at(clip: &Path, t_s: f32, out: &Path) -> Result<()> {
 
 /// Re-encode arbitrary (already-decoded) mp4 bytes to the pipeline's uniform
 /// codec/geometry so the final concat can stream-copy. Used for WAN clips.
-pub async fn normalize_clip(input: &Path, width: usize, height: usize, fps: usize, out: &Path) -> Result<()> {
+pub async fn normalize_clip(
+    input: &Path,
+    width: usize,
+    height: usize,
+    fps: usize,
+    out: &Path,
+) -> Result<()> {
     let args = vec![
         s("-y"),
         s("-i"), input.to_string_lossy().into_owned(),
@@ -188,10 +219,14 @@ pub async fn normalize_clip(input: &Path, width: usize, height: usize, fps: usiz
 pub async fn silence(dur_s: f32, out: &Path) -> Result<()> {
     let args = vec![
         s("-y"),
-        s("-f"), s("lavfi"),
-        s("-i"), s("anullsrc=r=44100:cl=mono"),
-        s("-t"), s(dur_s),
-        s("-c:a"), s("pcm_s16le"),
+        s("-f"),
+        s("lavfi"),
+        s("-i"),
+        s("anullsrc=r=44100:cl=mono"),
+        s("-t"),
+        s(dur_s),
+        s("-c:a"),
+        s("pcm_s16le"),
         out.to_string_lossy().into_owned(),
     ];
     run("ffmpeg", &args).await
@@ -202,10 +237,14 @@ pub async fn silence(dur_s: f32, out: &Path) -> Result<()> {
 pub async fn tone(dur_s: f32, freq: f32, out: &Path) -> Result<()> {
     let args = vec![
         s("-y"),
-        s("-f"), s("lavfi"),
-        s("-i"), format!("sine=frequency={freq}:sample_rate=44100:duration={dur_s}"),
-        s("-af"), s("volume=0.12"),
-        s("-c:a"), s("pcm_s16le"),
+        s("-f"),
+        s("lavfi"),
+        s("-i"),
+        format!("sine=frequency={freq}:sample_rate=44100:duration={dur_s}"),
+        s("-af"),
+        s("volume=0.12"),
+        s("-c:a"),
+        s("pcm_s16le"),
         out.to_string_lossy().into_owned(),
     ];
     run("ffmpeg", &args).await
@@ -215,10 +254,14 @@ pub async fn tone(dur_s: f32, freq: f32, out: &Path) -> Result<()> {
 pub async fn to_wav(input: &Path, out: &Path) -> Result<()> {
     let args = vec![
         s("-y"),
-        s("-i"), input.to_string_lossy().into_owned(),
-        s("-ar"), s(44100),
-        s("-ac"), s(1),
-        s("-c:a"), s("pcm_s16le"),
+        s("-i"),
+        input.to_string_lossy().into_owned(),
+        s("-ar"),
+        s(44100),
+        s("-ac"),
+        s(1),
+        s("-c:a"),
+        s("pcm_s16le"),
         out.to_string_lossy().into_owned(),
     ];
     run("ffmpeg", &args).await
@@ -263,11 +306,16 @@ pub async fn mix(bed: Option<&Path>, lines: &[Placement], total_s: f32, out: &Pa
     ));
 
     args.extend([
-        s("-filter_complex"), filter,
-        s("-map"), s("[out]"),
-        s("-ar"), s(44100),
-        s("-ac"), s(1),
-        s("-c:a"), s("pcm_s16le"),
+        s("-filter_complex"),
+        filter,
+        s("-map"),
+        s("[out]"),
+        s("-ar"),
+        s(44100),
+        s("-ac"),
+        s(1),
+        s("-c:a"),
+        s("pcm_s16le"),
         out.to_string_lossy().into_owned(),
     ]);
     run("ffmpeg", &args).await
@@ -281,17 +329,26 @@ pub async fn concat(clips: &[std::path::PathBuf], out: &Path) -> Result<()> {
     let list = out.with_extension("concat.txt");
     let body: String = clips
         .iter()
-        .map(|c| format!("file '{}'\n", c.canonicalize().unwrap_or_else(|_| c.clone()).display()))
+        .map(|c| {
+            format!(
+                "file '{}'\n",
+                c.canonicalize().unwrap_or_else(|_| c.clone()).display()
+            )
+        })
         .collect();
     std::fs::write(&list, body)?;
     let r = run(
         "ffmpeg",
         &[
             s("-y"),
-            s("-f"), s("concat"),
-            s("-safe"), s(0),
-            s("-i"), list.to_string_lossy().into_owned(),
-            s("-c"), s("copy"),
+            s("-f"),
+            s("concat"),
+            s("-safe"),
+            s(0),
+            s("-i"),
+            list.to_string_lossy().into_owned(),
+            s("-c"),
+            s("copy"),
             out.to_string_lossy().into_owned(),
         ],
     )
@@ -304,13 +361,20 @@ pub async fn concat(clips: &[std::path::PathBuf], out: &Path) -> Result<()> {
 pub async fn mux(video: &Path, audio: &Path, out: &Path) -> Result<()> {
     let args = vec![
         s("-y"),
-        s("-i"), video.to_string_lossy().into_owned(),
-        s("-i"), audio.to_string_lossy().into_owned(),
-        s("-c:v"), s("copy"),
-        s("-c:a"), s("aac"),
-        s("-b:a"), s("192k"),
-        s("-map"), s("0:v:0"),
-        s("-map"), s("1:a:0"),
+        s("-i"),
+        video.to_string_lossy().into_owned(),
+        s("-i"),
+        audio.to_string_lossy().into_owned(),
+        s("-c:v"),
+        s("copy"),
+        s("-c:a"),
+        s("aac"),
+        s("-b:a"),
+        s("192k"),
+        s("-map"),
+        s("0:v:0"),
+        s("-map"),
+        s("1:a:0"),
         s("-shortest"),
         out.to_string_lossy().into_owned(),
     ];
@@ -351,8 +415,10 @@ impl Probe {
 pub async fn probe(path: &Path) -> Result<Probe> {
     let out = Command::new("ffprobe")
         .args([
-            "-v", "error",
-            "-print_format", "json",
+            "-v",
+            "error",
+            "-print_format",
+            "json",
             "-show_format",
             "-show_streams",
             &path.to_string_lossy(),

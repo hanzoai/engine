@@ -97,7 +97,7 @@ impl OmniTextConfig {
     pub fn is_moe_layer(&self, idx: usize) -> bool {
         !self.mlp_only_layers.contains(&idx)
             && self.num_experts > 0
-            && (idx + 1) % self.decoder_sparse_step == 0
+            && (idx + 1).is_multiple_of(self.decoder_sparse_step)
     }
     pub fn mrope_section(&self) -> Vec<usize> {
         self.rope_scaling
@@ -207,7 +207,7 @@ impl TalkerTextConfig {
     pub fn is_moe_layer(&self, idx: usize) -> bool {
         !self.mlp_only_layers.contains(&idx)
             && self.num_experts > 0
-            && (idx + 1) % self.decoder_sparse_step == 0
+            && (idx + 1).is_multiple_of(self.decoder_sparse_step)
     }
     pub fn has_shared_expert(&self) -> bool {
         self.shared_expert_intermediate_size > 0

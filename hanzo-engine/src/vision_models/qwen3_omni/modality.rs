@@ -9,6 +9,7 @@
 //! — the thinker, the talker, and this function never change. (Values, not places: a modality is
 //! identified by the *value* of its placeholder token id, not by a hard-wired branch.)
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use std::collections::HashMap;
 
 use hanzo_ml::{DType, Device, Result, Tensor};
