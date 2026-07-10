@@ -67,7 +67,7 @@ impl MultiHeadRmsNorm {
 }
 
 /// Naive scaled-dot-product attention. q [B,Lq,H,D], k/v [B,Lk,H,D] -> [B,Lq,H,D].
-fn sdpa(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+pub(crate) fn sdpa(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
     let d = q.dim(D::Minus1)?;
     let scale = 1.0 / (d as f64).sqrt();
     let q = q.transpose(1, 2)?.contiguous()?; // [B,H,Lq,D]
