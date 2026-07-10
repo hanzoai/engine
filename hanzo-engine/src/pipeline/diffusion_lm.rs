@@ -119,7 +119,9 @@ impl Loader for DiffusionLmLoader {
             anyhow::bail!("ISQ is not supported for diffusion LMs.");
         }
         if paged_attn_config.is_some() {
-            anyhow::bail!("PagedAttention is not supported for diffusion LMs (no KV cache).");
+            tracing::warn!(
+                "PagedAttention is not supported for diffusion LMs (no KV cache); disabling."
+            );
         }
 
         let config: llada::Config =
