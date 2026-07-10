@@ -724,7 +724,7 @@ impl ModelWeights {
                 .map(|(_, _)| &start_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
             self.dtype,
-            &CausalMaskConfig::default(),
+            &CausalMaskConfig::gguf(),
         )?;
         // PagedAttention prompt chunking
         let mask = if metadata
