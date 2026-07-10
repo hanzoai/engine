@@ -949,12 +949,19 @@ mod tests {
         let vae = Wan22Vae::new(&Wan22VaeConfig::ti2v_5b(), vb, &dev)?;
         let oracle = hanzo_ml::safetensors::load(&oracle_path, &dev)?;
         let x = oracle["x"].to_dtype(DType::F32)?;
-        let z_oracle = oracle["z"].to_dtype(DType::F32)?;
         let recon_oracle = oracle["recon"].to_dtype(DType::F32)?;
+        // The oracle dumps the raw posterior mode; our encode/decode fold the pipeline latent
+        // normalization ((mode-mean)/std), so bridge the oracle mode into that space to compare.
+        let mean = Tensor::from_slice(&LATENTS_MEAN, (1, 48, 1, 1, 1), &dev)?;
+        let std = Tensor::from_slice(&LATENTS_STD, (1, 48, 1, 1, 1), &dev)?;
+        let z_norm = oracle["z"]
+            .to_dtype(DType::F32)?
+            .broadcast_sub(&mean)?
+            .broadcast_div(&std)?;
 
         let z_rust = vae.encode(&x)?;
-        let cos = cosine(&z_rust, &z_oracle)?;
-        let psnr_decode = psnr(&vae.decode(&z_oracle)?, &recon_oracle)?;
+        let cos = cosine(&z_rust, &z_norm)?;
+        let psnr_decode = psnr(&vae.decode(&z_norm)?, &recon_oracle)?;
         let psnr_roundtrip = psnr(&vae.decode(&z_rust)?, &x)?;
         eprintln!(
             "VAE parity: latent cosine={cos:.6}, decode PSNR={psnr_decode:.2}dB, roundtrip PSNR={psnr_roundtrip:.2}dB"
