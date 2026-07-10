@@ -338,7 +338,10 @@ impl Engine {
         let pipeline = get_mut_arcmutex!(self.pipeline);
         let category = pipeline.category();
 
-        if matches!(category, ModelCategory::Diffusion | ModelCategory::Speech) {
+        if matches!(
+            category,
+            ModelCategory::Diffusion | ModelCategory::Speech | ModelCategory::Audio
+        ) {
             None
         } else {
             Some(pipeline.get_metadata().max_seq_len)
