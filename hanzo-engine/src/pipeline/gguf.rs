@@ -1415,6 +1415,7 @@ impl Pipeline for GGUFPipeline {
     fn pipeline_parallel_worker(&self) -> Result<(), hanzo_ml::Error> {
         loop {
             let cont = match self.model {
+                Model::Llama(ref m) => pp_worker_step(m)?,
                 Model::Qwen3(ref m) => pp_worker_step(m)?,
                 Model::Qwen3MoE(ref m) => pp_worker_step(m)?,
                 Model::Qwen3Next(ref m) => pp_worker_step(m)?,
