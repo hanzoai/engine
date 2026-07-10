@@ -346,7 +346,8 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 }
                 crate::sequence::StopReason::GeneratedImage
                 | crate::sequence::StopReason::GeneratedSpeech
-                | crate::sequence::StopReason::GeneratedFrames => {
+                | crate::sequence::StopReason::GeneratedFrames
+                | crate::sequence::StopReason::GeneratedTranscription => {
                     hanzo_ml::bail!("Stop reason was a non-text generation.")
                 }
             };

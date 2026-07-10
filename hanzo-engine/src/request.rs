@@ -103,6 +103,12 @@ pub enum RequestMessage {
     SpeechGeneration {
         prompt: String,
     },
+    AudioTranscription {
+        #[serde(skip)]
+        audio: AudioInput,
+        /// Optional teacher-forced output language (e.g. `"Chinese"`); `None` auto-detects.
+        language: Option<String>,
+    },
     Animation {
         #[serde(skip)]
         frames: Vec<image::DynamicImage>,
