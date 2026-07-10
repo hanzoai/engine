@@ -826,7 +826,29 @@ fn apply_rotary_q_inner(
     if q.device().is_metal() {
         return metal_apply_rotary_q(q, cos, sin, positions, is_neox);
     }
+    // ROCm (and any device without a native rotary kernel here) has no dispatch above;
+    // marshal to the reference CPU kernel and back so MLA-family rope runs everywhere.
+    if !q.device().is_cpu() {
+        return rope_via_cpu_q(q, cos, sin, positions, is_neox);
+    }
     cpu_apply_rotary_q(q, cos, sin, positions, is_neox)
+}
+
+fn rope_via_cpu_q(
+    q: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: Option<&Tensor>,
+    is_neox: bool,
+) -> Result<Tensor> {
+    let dev = q.device().clone();
+    let cpu = hanzo_ml::Device::Cpu;
+    let q_c = q.to_device(&cpu)?;
+    let cos_c = cos.to_device(&cpu)?;
+    let sin_c = sin.to_device(&cpu)?;
+    let pos_c = positions.map(|p| p.to_device(&cpu)).transpose()?;
+    let out = cpu_apply_rotary_q(&q_c, &cos_c, &sin_c, pos_c.as_ref(), is_neox)?;
+    out.to_device(&dev)
 }
 
 pub fn apply_rotary_qk(
@@ -868,6 +890,17 @@ fn apply_rotary_qk_inner(
     #[cfg(feature = "metal")]
     if q.device().is_metal() {
         return metal_apply_rotary_qk(q, k, cos, sin, positions, is_neox);
+    }
+    if !q.device().is_cpu() {
+        let dev = q.device().clone();
+        let cpu = hanzo_ml::Device::Cpu;
+        let q_c = q.to_device(&cpu)?;
+        let k_c = k.to_device(&cpu)?;
+        let cos_c = cos.to_device(&cpu)?;
+        let sin_c = sin.to_device(&cpu)?;
+        let pos_c = positions.map(|p| p.to_device(&cpu)).transpose()?;
+        let (qo, ko) = cpu_apply_rotary_qk(&q_c, &k_c, &cos_c, &sin_c, pos_c.as_ref(), is_neox)?;
+        return Ok((qo.to_device(&dev)?, ko.to_device(&dev)?));
     }
     cpu_apply_rotary_qk(q, k, cos, sin, positions, is_neox)
 }
