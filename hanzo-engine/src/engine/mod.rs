@@ -244,7 +244,10 @@ impl Engine {
         no_prefix_cache = no_prefix_cache
             || no_kv_cache
             || get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache
-            || prefix_cache_n == 0;
+            || prefix_cache_n == 0
+            // PP workers are stateless across requests; a reused prefix on the head would leave
+            // the workers without the corresponding KV, desyncing offsets from cache lengths.
+            || crate::pipeline_parallel::use_pipeline_parallel();
 
         let search_pipeline = match search_embedding_model {
             Some(search_embedding_model) => Some(SearchPipeline::new(
