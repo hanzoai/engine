@@ -6,6 +6,7 @@
 //! yet, so an RGB input is resized/normalized whole (document this - pass a segmented RGBA for a
 //! faithful result).
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use hanzo_ml::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, RgbaImage};
 
@@ -28,7 +29,11 @@ pub fn preprocess(image: &DynamicImage, device: &Device) -> Result<Tensor> {
     let mut data = vec![0f32; 3 * RES * RES];
     for (x, y, px) in resized.enumerate_pixels() {
         let (x, y) = (x as usize, y as usize);
-        let a = if premultiply { px[3] as f32 / 255.0 } else { 1.0 };
+        let a = if premultiply {
+            px[3] as f32 / 255.0
+        } else {
+            1.0
+        };
         for c in 0..3 {
             let v = (px[c] as f32 / 255.0) * a;
             data[c * RES * RES + y * RES + x] = (v - MEAN[c]) / STD[c];
@@ -57,7 +62,10 @@ fn crop_to_object(rgba: &RgbaImage) -> RgbaImage {
     let cy = (miny + maxy) as f32 / 2.0;
     let size = (((maxx - minx).max(maxy - miny) as f32) * 1.2).round() as i32;
     let size = size.max(1);
-    let (x0, y0) = ((cx - size as f32 / 2.0).round() as i32, (cy - size as f32 / 2.0).round() as i32);
+    let (x0, y0) = (
+        (cx - size as f32 / 2.0).round() as i32,
+        (cy - size as f32 / 2.0).round() as i32,
+    );
 
     let mut out = RgbaImage::new(size as u32, size as u32);
     for oy in 0..size {

@@ -6,8 +6,9 @@
 //! after CLS with no positional embedding. GELU is exact-erf (torch `nn.GELU`), norms are eps 1e-6,
 //! and TRELLIS's outer LayerNorm is eps 1e-5.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use hanzo_ml::{IndexOp, Result, Tensor, D};
-use hanzo_nn::{Conv2d, Conv2dConfig, LayerNorm, Module};
+use hanzo_nn::{Conv2d, Conv2dConfig, LayerNorm};
 use hanzo_quant::{Convolution, ShardedVarBuilder};
 
 use crate::layers::{conv2d, layer_norm, linear};
@@ -183,8 +184,10 @@ impl DinoV2 {
     pub fn new(cfg: &DinoV2Config, vb: ShardedVarBuilder) -> Result<Self> {
         let patch_embed = PatchEmbed::new(cfg, vb.pp("patch_embed"))?;
         let cls_token = vb.get((1, 1, cfg.embed_dim), "cls_token")?;
-        let register_tokens =
-            vb.get((1, cfg.num_register_tokens, cfg.embed_dim), "register_tokens")?;
+        let register_tokens = vb.get(
+            (1, cfg.num_register_tokens, cfg.embed_dim),
+            "register_tokens",
+        )?;
         let pos_embed = vb.get((1, cfg.num_patches() + 1, cfg.embed_dim), "pos_embed")?;
         let vb_b = vb.pp("blocks");
         let mut blocks = Vec::with_capacity(cfg.depth);
@@ -259,7 +262,9 @@ mod tests {
         let dir = oracle_dir();
         let dev = Device::Cpu;
         let vb = from_mmaped_safetensors(
-            vec![PathBuf::from(format!("{dir}/dinov2_vitl14_reg.safetensors"))],
+            vec![PathBuf::from(format!(
+                "{dir}/dinov2_vitl14_reg.safetensors"
+            ))],
             Vec::new(),
             Some(DType::F32),
             &dev,
@@ -272,9 +277,11 @@ mod tests {
         .unwrap();
         let model = DinoV2::new(&DinoV2Config::default(), vb).unwrap();
 
-        let inp = hanzo_ml::safetensors::load(format!("{dir}/dinov2_input.safetensors"), &dev).unwrap();
+        let inp =
+            hanzo_ml::safetensors::load(format!("{dir}/dinov2_input.safetensors"), &dev).unwrap();
         let want =
-            hanzo_ml::safetensors::load(format!("{dir}/dinov2_patchtokens.safetensors"), &dev).unwrap();
+            hanzo_ml::safetensors::load(format!("{dir}/dinov2_patchtokens.safetensors"), &dev)
+                .unwrap();
         let out = model.forward(&inp["x"]).unwrap();
         assert_eq!(out.dims(), &[1, 1374, 1024]);
         let cos = cosine(&out, &want["patchtokens"]);

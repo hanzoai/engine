@@ -410,7 +410,7 @@ impl Loader for SpeechLoader {
         if let Device::Cuda(dev) = &device {
             unsafe { dev.disable_event_tracking() };
         }
-        crate::utils::cuda_mempool::set_pool_retain_all(&device)?;
+        crate::utils::cuda_mempool::set_pool_retain_all(device)?;
         let use_nccl = hanzo_quant::distributed::use_nccl();
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;

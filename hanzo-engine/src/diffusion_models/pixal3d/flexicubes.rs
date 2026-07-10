@@ -6,6 +6,7 @@
 //! processed in the reference's (z,y,x) C-order so the 4-cube quad winding matches. Dual vertices are
 //! beta-weighted means of alpha-weighted edge zero-crossings; colours interpolate the same way.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use std::collections::HashMap;
 
 use hanzo_3d::{Mesh, Vec3};
@@ -14,8 +15,14 @@ use hanzo_ml::{Result, Tensor};
 use super::flexicubes_tables::{CHECK, DMC, NUM_VD};
 
 const CUBE_CORNERS: [[i32; 3]; 8] = [
-    [0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0],
-    [0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1],
+    [0, 0, 0],
+    [1, 0, 0],
+    [0, 1, 0],
+    [1, 1, 0],
+    [0, 0, 1],
+    [1, 0, 1],
+    [0, 1, 1],
+    [1, 1, 1],
 ];
 // 12 edges, each a pair of corner indices (fixed orientation so shared edges match across cubes).
 const CUBE_EDGES: [usize; 24] = [
@@ -76,8 +83,17 @@ pub fn extract(coords: &[[i32; 3]], feats: &Tensor, res: i32) -> Result<Textured
     for (v, c) in coords.iter().enumerate() {
         let row = &f[v];
         for j in 0..8 {
-            let vc = [c[0] + CUBE_CORNERS[j][0], c[1] + CUBE_CORNERS[j][1], c[2] + CUBE_CORNERS[j][2]];
-            let a = vacc.entry(vc).or_insert(Acc { sdf: 0.0, deform: [0.0; 3], color: [0.0; 6], n: 0.0 });
+            let vc = [
+                c[0] + CUBE_CORNERS[j][0],
+                c[1] + CUBE_CORNERS[j][1],
+                c[2] + CUBE_CORNERS[j][2],
+            ];
+            let a = vacc.entry(vc).or_insert(Acc {
+                sdf: 0.0,
+                deform: [0.0; 3],
+                color: [0.0; 6],
+                n: 0.0,
+            });
             a.sdf += row[j] + sdf_bias;
             for k in 0..3 {
                 a.deform[k] += row[8 + j * 3 + k];
@@ -108,7 +124,9 @@ pub fn extract(coords: &[[i32; 3]], feats: &Tensor, res: i32) -> Result<Textured
     }
 
     let sdf_at = |c: [i32; 3]| verts.get(&c).map_or(1.0, |v| v.sdf);
-    let in_range = |p: [i32; 3]| (0..res).contains(&p[0]) && (0..res).contains(&p[1]) && (0..res).contains(&p[2]);
+    let in_range = |p: [i32; 3]| {
+        (0..res).contains(&p[0]) && (0..res).contains(&p[1]) && (0..res).contains(&p[2])
+    };
 
     // candidate surf cubes: those touching an sdf<0 vertex.
     let mut cand: Vec<[i32; 3]> = Vec::new();
@@ -128,6 +146,7 @@ pub fn extract(coords: &[[i32; 3]], feats: &Tensor, res: i32) -> Result<Textured
     // keep genuine surf cubes (mixed occupancy), sorted (z,y,x) = reference reg_c order.
     struct Cube {
         p: [i32; 3],
+        #[allow(dead_code)]
         occ: [bool; 8],
         case: usize,
         beta: [f32; 12],
@@ -141,7 +160,11 @@ pub fn extract(coords: &[[i32; 3]], feats: &Tensor, res: i32) -> Result<Textured
         let mut occ = [false; 8];
         let mut s = 0;
         for j in 0..8 {
-            let cc = [p[0] + CUBE_CORNERS[j][0], p[1] + CUBE_CORNERS[j][1], p[2] + CUBE_CORNERS[j][2]];
+            let cc = [
+                p[0] + CUBE_CORNERS[j][0],
+                p[1] + CUBE_CORNERS[j][1],
+                p[2] + CUBE_CORNERS[j][2],
+            ];
             occ[j] = sdf_at(cc) < 0.0;
             s += occ[j] as usize;
         }
@@ -153,11 +176,21 @@ pub fn extract(coords: &[[i32; 3]], feats: &Tensor, res: i32) -> Result<Textured
         let beta = std::array::from_fn(|k| norm_beta(w.map_or(0.0, |w| w[k])));
         let alpha = std::array::from_fn(|k| norm_beta(w.map_or(0.0, |w| w[12 + k])));
         let gamma = norm_gamma(w.map_or(0.0, |w| w[20]));
-        cubes.push(Cube { p, occ, case, beta, alpha, gamma });
+        cubes.push(Cube {
+            p,
+            occ,
+            case,
+            beta,
+            alpha,
+            gamma,
+        });
     }
-    cubes.sort_by(|a, b| a.p.cmp(&b.p));
+    cubes.sort_by_key(|a| a.p);
     if cubes.is_empty() {
-        return Ok(TexturedMesh { mesh: Mesh::default(), colors: Vec::new() });
+        return Ok(TexturedMesh {
+            mesh: Mesh::default(),
+            colors: Vec::new(),
+        });
     }
 
     // DMC ambiguity resolution: invert a case when it shares an ambiguous face with an ambiguous neighbour.
@@ -171,8 +204,12 @@ pub fn extract(coords: &[[i32; 3]], feats: &Tensor, res: i32) -> Result<Textured
         if pc[0] != 1 {
             continue;
         }
-        let adj = [c.p[0] + pc[1] as i32, c.p[1] + pc[2] as i32, c.p[2] + pc[3] as i32];
-        if in_range(adj) && amb.get(&adj).map_or(false, |a| a[0] == 1) {
+        let adj = [
+            c.p[0] + pc[1] as i32,
+            c.p[1] + pc[2] as i32,
+            c.p[2] + pc[3] as i32,
+        ];
+        if in_range(adj) && amb.get(&adj).is_some_and(|a| a[0] == 1) {
             c.case = pc[4] as usize;
         }
     }
@@ -185,13 +222,18 @@ pub fn extract(coords: &[[i32; 3]], feats: &Tensor, res: i32) -> Result<Textured
 
     let edge_vids = |p: [i32; 3]| -> [(u64, [i32; 3]); 8] {
         std::array::from_fn(|j| {
-            let cc = [p[0] + CUBE_CORNERS[j][0], p[1] + CUBE_CORNERS[j][1], p[2] + CUBE_CORNERS[j][2]];
+            let cc = [
+                p[0] + CUBE_CORNERS[j][0],
+                p[1] + CUBE_CORNERS[j][1],
+                p[2] + CUBE_CORNERS[j][2],
+            ];
             (vid(cc, resv), cc)
         })
     };
 
     for (ci, c) in cubes.iter().enumerate() {
         let corner = edge_vids(c.p);
+        #[allow(clippy::needless_range_loop)]
         for vdj in 0..NUM_VD[c.case] as usize {
             let group = &DMC[c.case][vdj];
             let (mut acc, mut acc_c, mut bsum) = ([0.0f32; 3], [0.0f32; 6], 0.0f32);
@@ -244,7 +286,10 @@ pub fn extract(coords: &[[i32; 3]], feats: &Tensor, res: i32) -> Result<Textured
             let (ia, ib) = (CUBE_EDGES[2 * e], CUBE_EDGES[2 * e + 1]);
             let (key_a, key_b) = (corner[ia].0, corner[ib].0);
             let s0 = verts.get(&corner[ia].1).map_or(1.0, |v| v.sdf);
-            edge_groups.entry((key_a, key_b)).or_default().push(EdgeHit { vd, s0 });
+            edge_groups
+                .entry((key_a, key_b))
+                .or_default()
+                .push(EdgeHit { vd, s0 });
         }
     }
 
@@ -295,7 +340,8 @@ mod tests {
     fn flexicubes_vs_golden() {
         let dir = std::env::var("TRELLIS_FIX").expect("TRELLIS_FIX");
         let dev = Device::Cpu;
-        let io = hanzo_ml::safetensors::load(format!("{dir}/mesh_dec_io.safetensors"), &dev).unwrap();
+        let io =
+            hanzo_ml::safetensors::load(format!("{dir}/mesh_dec_io.safetensors"), &dev).unwrap();
         let coords: Vec<[i32; 3]> = io["out_coords"]
             .to_vec2::<f32>()
             .unwrap()
@@ -304,7 +350,8 @@ mod tests {
             .collect();
         let tm = extract(&coords, &io["out_feats"], 256).unwrap();
 
-        let gold = hanzo_ml::safetensors::load(format!("{dir}/mesh_out.safetensors"), &dev).unwrap();
+        let gold =
+            hanzo_ml::safetensors::load(format!("{dir}/mesh_out.safetensors"), &dev).unwrap();
         let gv = gold["vertices"].dim(0).unwrap();
         let gf = gold["faces"].dim(0).unwrap();
         println!(
@@ -331,9 +378,15 @@ mod tests {
             cnt += 1;
         }
         chamfer /= cnt as f64;
-        println!("chamfer(golden->ours) mean = {chamfer:.6} (grid cell = {:.6})", 1.0 / 256.0);
+        println!(
+            "chamfer(golden->ours) mean = {chamfer:.6} (grid cell = {:.6})",
+            1.0 / 256.0
+        );
         assert!(!tm.mesh.faces.is_empty());
-        assert!(chamfer < 1.0 / 256.0, "chamfer {chamfer} exceeds one grid cell");
+        assert!(
+            chamfer < 1.0 / 256.0,
+            "chamfer {chamfer} exceeds one grid cell"
+        );
     }
 
     // Writes coarse (occupancy) + fine (FlexiCubes textured) GLBs for before/after comparison.
@@ -345,7 +398,8 @@ mod tests {
         let dir = std::env::var("TRELLIS_FIX").expect("TRELLIS_FIX");
         let out = std::env::var("PIXAL3D_OUT").unwrap_or_else(|_| "/tmp".into());
         let dev = Device::Cpu;
-        let io = hanzo_ml::safetensors::load(format!("{dir}/mesh_dec_io.safetensors"), &dev).unwrap();
+        let io =
+            hanzo_ml::safetensors::load(format!("{dir}/mesh_dec_io.safetensors"), &dev).unwrap();
 
         // fine textured mesh from the exact decoder output.
         let coords: Vec<[i32; 3]> = io["out_coords"]

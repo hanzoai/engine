@@ -26,6 +26,7 @@
 //! expansion here (splitmix64) has the identical soundness for the unit test, where what
 //! matters is that `r` is fixed and reproducible by both sides.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use sha3::{Digest, Keccak256};
 
 /// The Mersenne prime field modulus `p = 2^61 - 1`. Bounds the int8 accumulator and the
@@ -137,6 +138,7 @@ fn fmul(a: u64, b: u64) -> u64 {
 fn matvec(m: &Mat, v: &[u64]) -> Vec<u64> {
     assert_eq!(m.cols, v.len(), "matvec dim mismatch");
     let mut out = vec![0u64; m.rows];
+    #[allow(clippy::needless_range_loop)]
     for i in 0..m.rows {
         let mut acc = 0u64;
         for j in 0..m.cols {
@@ -265,7 +267,7 @@ mod tests {
         let (t, k, n) = (16usize, 24usize, 16usize);
         let mut sa = 0x1234_5678u64;
         let mut sb = 0x9abc_def0u64;
-        let mut rnd = |s: &mut u64| -> i64 {
+        let rnd = |s: &mut u64| -> i64 {
             *s = s
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);

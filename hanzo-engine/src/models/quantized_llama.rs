@@ -714,6 +714,7 @@ impl ModelWeights {
     /// experts through `.to_vec2()` host syncs that cannot be captured under a graph,
     /// so an MoE Llama must fall back to the eager decode path. Consulted by the GGUF
     /// pipeline's `model_supports_decode_graph` gate.
+    #[allow(dead_code)]
     pub fn supports_decode_graph(&self) -> bool {
         self.layers
             .iter()

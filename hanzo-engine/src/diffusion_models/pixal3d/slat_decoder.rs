@@ -5,8 +5,9 @@
 //! projects to the 101-channel FlexiCubes layout (sdf 8 + deform 24 + weights 21 + color 48). The
 //! surface is then extracted by the flexicubes module.
 
-use hanzo_ml::{Result, Tensor, D};
-use hanzo_nn::{Linear, Module};
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+use hanzo_ml::{Result, Tensor};
+use hanzo_nn::Linear;
 use hanzo_quant::ShardedVarBuilder;
 
 use super::sparse::{
@@ -60,12 +61,14 @@ impl WindowAttn {
             order.extend(group);
         }
         let cat = Tensor::cat(&outs.iter().collect::<Vec<_>>(), 0)?; // [N,h,d] group order
-        // invert the group ordering back to the original voxel order.
+                                                                     // invert the group ordering back to the original voxel order.
         let mut inv = vec![0u32; n];
         for (pos, &orig) in order.iter().enumerate() {
             inv[orig as usize] = pos as u32;
         }
-        let out = cat.index_select(&Tensor::from_vec(inv, n, dev)?, 0)?.reshape((n, h * d))?;
+        let out = cat
+            .index_select(&Tensor::from_vec(inv, n, dev)?, 0)?
+            .reshape((n, h * d))?;
         out.apply(&self.to_out)
     }
 }
@@ -79,7 +82,13 @@ struct TransformerBlock {
 }
 
 impl TransformerBlock {
-    fn new(channels: usize, heads: usize, mlp_ratio: usize, shift: i32, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(
+        channels: usize,
+        heads: usize,
+        mlp_ratio: usize,
+        shift: i32,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         Ok(Self {
             attn: WindowAttn::new(channels, heads, vb.pp("attn"))?,
             fc1: linear(channels, channels * mlp_ratio, vb.pp("mlp.mlp.0"))?,
@@ -105,21 +114,40 @@ struct SubdivideBlock {
     norm: SparseGroupNorm32,
     conv2: SubMConv3d,
     skip: Option<SubMConv3d>, // 1x1x1 conv when channels change
+    #[allow(dead_code)]
     out_channels: usize,
 }
 
 impl SubdivideBlock {
     fn new(channels: usize, out_channels: usize, vb: ShardedVarBuilder) -> Result<Self> {
         let skip = if channels != out_channels {
-            Some(SubMConv3d::new(channels, out_channels, 1, true, vb.pp("skip_connection").pp("conv"))?)
+            Some(SubMConv3d::new(
+                channels,
+                out_channels,
+                1,
+                true,
+                vb.pp("skip_connection").pp("conv"),
+            )?)
         } else {
             None
         };
         Ok(Self {
             act_norm: SparseGroupNorm32::new(GROUPS, channels, vb.pp("act_layers").pp("0"))?,
-            conv1: SubMConv3d::new(channels, out_channels, 3, true, vb.pp("out_layers").pp("0").pp("conv"))?,
+            conv1: SubMConv3d::new(
+                channels,
+                out_channels,
+                3,
+                true,
+                vb.pp("out_layers").pp("0").pp("conv"),
+            )?,
             norm: SparseGroupNorm32::new(GROUPS, out_channels, vb.pp("out_layers").pp("1"))?,
-            conv2: SubMConv3d::new(out_channels, out_channels, 3, true, vb.pp("out_layers").pp("3").pp("conv"))?,
+            conv2: SubMConv3d::new(
+                out_channels,
+                out_channels,
+                3,
+                true,
+                vb.pp("out_layers").pp("3").pp("conv"),
+            )?,
             skip,
             out_channels,
         })
@@ -180,7 +208,13 @@ impl SlatMeshDecoder {
         let mut blocks = Vec::with_capacity(cfg.num_blocks);
         for i in 0..cfg.num_blocks {
             let shift = if i % 2 == 1 { WINDOW / 2 } else { 0 };
-            blocks.push(TransformerBlock::new(mc, cfg.num_heads, cfg.mlp_ratio, shift, vb_b.pp(i))?);
+            blocks.push(TransformerBlock::new(
+                mc,
+                cfg.num_heads,
+                cfg.mlp_ratio,
+                shift,
+                vb_b.pp(i),
+            )?);
         }
         let vb_u = vb.pp("upsample");
         let upsample = vec![
@@ -243,7 +277,8 @@ mod tests {
         .unwrap();
         let model = SlatMeshDecoder::new(&SlatDecoderConfig::default(), vb).unwrap();
 
-        let io = hanzo_ml::safetensors::load(format!("{dir}/mesh_dec_io.safetensors"), &dev).unwrap();
+        let io =
+            hanzo_ml::safetensors::load(format!("{dir}/mesh_dec_io.safetensors"), &dev).unwrap();
         let coords: Vec<[i32; 3]> = io["coords"]
             .to_vec2::<f32>()
             .unwrap()
