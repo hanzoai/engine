@@ -187,6 +187,32 @@ Selection path: CLI `--arch musetalk` -> `ModelType::Animation` -> `ModelSelecte
 CPU today (`Device::Cpu`); GPU is a separate effort. A `.pth`/`.pt` pickle still loads
 (`load_vb`) but safetensors is canonical.
 
+### World Model (Oasis)
+
+`hanzo-engine/src/diffusion_models/oasis/` is a native port of Etched/Decart Oasis-500M
+(MIT, code + weights `Etched/oasis-500m`): an action-conditioned frame-autoregressive
+latent-diffusion Minecraft world model (a playable generative game engine).
+
+- `vae.rs` — ViT-VAE (`vit-l-20`): 20x20 conv patchify of a 360x640 frame -> ViT blocks ->
+  16-dim latent `[16,18,32]`. Attention is 2D pixel-axial RoPE; MLP is exact GELU.
+- `dit.rs` — DiT-S/2 spatiotemporal DiT (16 blocks): adaLN spatial-attn + causal-temporal-attn,
+  action conditioning via `external_cond` added to the timestep embedding. tanh-GELU MLPs.
+- `rope.rs` — interleaved (lucidrains adjacent-pair, `is_gptx=false`) axial RoPE. Spatial/VAE
+  use pixel freqs, temporal uses lang freqs; freqs verified against the checkpoint.
+- `sampling.rs` — diffusion-forcing rollout (sigmoid-beta schedule, per-frame noise, sliding
+  window at `MAX_FRAMES=32`). Fully-hallucinated: only prompt frames are VAE-encoded, all
+  subsequent frames are generated purely in latent space (no encoder in the loop).
+- `mod.rs` — `WorldModel::{load,encode_frames,generate,decode_frames}` + 25-key `ACTION_KEYS`.
+
+Parity vs the torch reference (CPU f32, `parity.rs`, weight-gated on `OASIS_DIR`): VAE encode
+latent cosine 1.000000, decode PSNR 59.73 dB, DiT single-step cosine 1.000000.
+
+Gotcha: candle `Linear` only matmuls up to rank 4; the DiT keeps rank-5 `[B,T,H,W,D]` tensors,
+so all its linears go through `apply_linear` (flatten leading dims -> matmul -> reshape).
+
+Example: `cargo run --release --example oasis_generate -- --frames 32 --steps 10 --out <dir>`
+(prompt image + action stream -> PNG frames; assemble with ffmpeg).
+
 ### Important Files to Know
 
 - `hanzo-engine/src/engine/mod.rs` - Main engine orchestration
