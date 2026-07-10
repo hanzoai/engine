@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use anyhow::{ensure, Context, Result};
 use hanzo_ml::{DType, Device, Tensor};
 use hanzo_quant::ShardedVarBuilder;
+use image::DynamicImage;
 use tokenizers::Tokenizer;
 
 use super::echomimic::FlowMatchScheduler;
@@ -69,9 +70,26 @@ impl WanVideoConfig {
 struct Condition {
     latent: Tensor, // [1, z, k, lat_h, lat_w] normalized clean latent
     k: usize,
+    token_mask: Tensor, // [1, T*hp*wp]: 0 for conditioning-frame tokens, 1 elsewhere
 }
 
 impl Condition {
+    fn new(latent: Tensor, grid: (usize, usize, usize), device: &Device) -> Result<Self> {
+        let k = latent.dim(2)?;
+        let (tl, lat_h, lat_w) = grid;
+        let (hp, wp) = (lat_h / PATCH_SPATIAL, lat_w / PATCH_SPATIAL);
+        let mut m = vec![1f32; tl * hp * wp];
+        for f in 0..k.min(tl) {
+            m[f * hp * wp..(f + 1) * hp * wp].fill(0.0);
+        }
+        let n = m.len();
+        Ok(Self {
+            latent,
+            k,
+            token_mask: Tensor::from_vec(m, (1, n), device)?,
+        })
+    }
+
     // Replace the leading k latent frames with the clean conditioning latent.
     fn pin(&self, latent: &Tensor) -> Result<Tensor> {
         let t = latent.dim(2)?;
@@ -79,17 +97,9 @@ impl Condition {
         Ok(Tensor::cat(&[&self.latent, &tail], 2)?)
     }
 
-    // Per-token timestep [1, T*hp*wp]: 0 for conditioning-frame tokens, t elsewhere.
-    fn timestep(&self, t: f64, grid: (usize, usize, usize), device: &Device) -> Result<Tensor> {
-        let (tl, lat_h, lat_w) = grid;
-        let (hp, wp) = (lat_h / PATCH_SPATIAL, lat_w / PATCH_SPATIAL);
-        let mut v = Vec::with_capacity(tl * hp * wp);
-        for f in 0..tl {
-            let val = if f < self.k { 0.0 } else { t as f32 };
-            v.extend(std::iter::repeat(val).take(hp * wp));
-        }
-        let n = v.len();
-        Ok(Tensor::from_vec(v, (1, n), device)?)
+    // Per-token timestep [1, T*hp*wp]: 0 for conditioning tokens (mask 0), t elsewhere.
+    fn timestep(&self, t: f64) -> Result<Tensor> {
+        Ok((&self.token_mask * t)?)
     }
 }
 
@@ -157,7 +167,6 @@ impl WanVideoPipeline {
         neg: &Tensor,
         cond: Option<&Condition>,
     ) -> Result<Tensor> {
-        let grid = cfg.latent_grid();
         let sched = FlowMatchScheduler::new(cfg.steps, cfg.shift);
         let scalar_ts: Vec<Tensor> = sched
             .timesteps()
@@ -168,7 +177,7 @@ impl WanVideoPipeline {
         for (i, &t) in sched.timesteps().iter().enumerate() {
             let (model_in, ts) = match cond {
                 None => (latent.clone(), scalar_ts[i].clone()),
-                Some(c) => (c.pin(&latent)?, c.timestep(t, grid, &self.device)?),
+                Some(c) => (c.pin(&latent)?, c.timestep(t)?),
             };
             let v_cond = self.dit.forward(&model_in, &ts, text)?;
             let v = if (cfg.guidance - 1.0).abs() > f64::EPSILON {
@@ -204,14 +213,40 @@ impl WanVideoPipeline {
     ) -> Result<WanT2vFrames> {
         let text = self.encode_text(prompt)?;
         let neg = self.encode_text(&cfg.negative_prompt)?;
+        let grid = cfg.latent_grid();
         let cond_latent = self.vae.encode(cond_frames)?.to_dtype(self.dtype)?;
-        let cond = Condition {
-            k: cond_latent.dim(2)?,
-            latent: cond_latent,
-        };
-        let latent = cond.pin(&self.init_latent(cfg.latent_grid())?)?;
+        let cond = Condition::new(cond_latent, grid, &self.device)?;
+        let latent = cond.pin(&self.init_latent(grid)?)?;
         let latent = self.denoise(cfg, latent, &text, &neg, Some(&cond))?;
         self.decode_frames(&latent, cfg.fps)
+    }
+
+    /// I2V from a single conditioning image (resized to the clip resolution). This is the HTTP entry
+    /// for continuation: pass the last frame of a prior clip as `img`.
+    pub fn i2v_image(
+        &self,
+        cfg: &WanVideoConfig,
+        prompt: &str,
+        img: &DynamicImage,
+    ) -> Result<WanT2vFrames> {
+        let cond = self.frame_to_tensor(img, cfg.height, cfg.width)?;
+        self.i2v(cfg, prompt, &cond)
+    }
+
+    // RGB image -> f32 tensor [1,3,1,H,W] in [-1,1] (the VAE's input range), resized to (h, w).
+    fn frame_to_tensor(&self, img: &DynamicImage, h: usize, w: usize) -> Result<Tensor> {
+        let rgb = img
+            .resize_exact(w as u32, h as u32, image::imageops::FilterType::Lanczos3)
+            .to_rgb8();
+        let raw: Vec<f32> = rgb
+            .into_raw()
+            .into_iter()
+            .map(|b| b as f32 / 127.5 - 1.0)
+            .collect();
+        Ok(Tensor::from_vec(raw, (h, w, 3), &self.device)?
+            .permute((2, 0, 1))?
+            .contiguous()?
+            .reshape((1, 3, 1, h, w))?)
     }
 
     // Normalized latent -> RGB frames. VAE runs in f32.
@@ -279,10 +314,12 @@ mod tests {
     fn condition_pins_head_and_zeros_timestep() -> Result<()> {
         let dev = Device::Cpu;
         let z = 2;
-        let cond = Condition {
-            latent: Tensor::ones((1, z, 1, 4, 4), DType::F32, &dev)?,
-            k: 1,
-        };
+        // k=1 conditioning frame; latent grid T=3, 4x4 (hp=wp=2 -> 4 tokens/frame).
+        let cond = Condition::new(
+            Tensor::ones((1, z, 1, 4, 4), DType::F32, &dev)?,
+            (3, 4, 4),
+            &dev,
+        )?;
         let latent = Tensor::zeros((1, z, 3, 4, 4), DType::F32, &dev)?;
         let pinned = cond.pin(&latent)?;
         assert_eq!(pinned.dims(), &[1, z, 3, 4, 4]);
@@ -294,8 +331,8 @@ mod tests {
         );
         assert!(f1.abs() < 1e-6, "tail frames must stay the noise latent");
 
-        // grid T=3, lat 4x4 -> hp=wp=2 -> 4 tokens/frame, N=12; frame-0 tokens are 0, rest are t.
-        let ts = cond.timestep(500.0, (3, 4, 4), &dev)?;
+        // N = 3*4 = 12 tokens; frame-0 tokens are 0, rest are t.
+        let ts = cond.timestep(500.0)?;
         assert_eq!(ts.dims(), &[1, 12]);
         let v = ts.flatten_all()?.to_vec1::<f32>()?;
         assert!(

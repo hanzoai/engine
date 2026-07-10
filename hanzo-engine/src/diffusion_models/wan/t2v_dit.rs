@@ -566,4 +566,58 @@ mod tests {
         );
         Ok(())
     }
+
+    // Real-weight single-step parity vs the diffusers oracle (f16 tolerance). Set WAN_DIT_DIR (the
+    // transformer shard dir) and WAN_DIT_ORACLE (latent/text/t/vel from wan_dit_oracle.py); skips
+    // when unset. Run on GPU (--features cuda) for the 5B model.
+    #[test]
+    fn dit_parity_vs_oracle() -> Result<()> {
+        use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
+        use std::path::PathBuf;
+        use std::sync::Arc;
+
+        let (Ok(dir), Ok(oracle_path)) = (
+            std::env::var("WAN_DIT_DIR"),
+            std::env::var("WAN_DIT_ORACLE"),
+        ) else {
+            eprintln!("skip dit_parity_vs_oracle: set WAN_DIT_DIR + WAN_DIT_ORACLE");
+            return Ok(());
+        };
+        let dev = Device::cuda_if_available(0)?;
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "safetensors"))
+            .collect();
+        paths.sort();
+        let n = paths.len();
+        let vb = from_mmaped_safetensors(
+            paths,
+            Vec::new(),
+            Some(DType::F32),
+            &dev,
+            vec![None; n],
+            true,
+            None,
+            |_| true,
+            Arc::new(|_| DeviceForLoadTensor::Base),
+        )?;
+        let dit = Wan2TransformerDiT::new(Wan2Config::ti2v_5b(), vb, dev.clone())?;
+        let o = hanzo_ml::safetensors::load(&oracle_path, &dev)?;
+        let vel = dit.forward(&o["latent"], &o["t"], &o["text"])?;
+        let a = vel.flatten_all()?.to_vec1::<f32>()?;
+        let b = o["vel"]
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let (mut dot, mut na, mut nb) = (0f64, 0f64, 0f64);
+        for (x, y) in a.iter().zip(b.iter()) {
+            dot += *x as f64 * *y as f64;
+            na += (*x as f64).powi(2);
+            nb += (*y as f64).powi(2);
+        }
+        let cos = dot / (na.sqrt() * nb.sqrt());
+        eprintln!("DiT single-step velocity cosine vs oracle = {cos:.6}");
+        assert!(cos > 0.99, "DiT velocity cosine {cos} <= 0.99");
+        Ok(())
+    }
 }
