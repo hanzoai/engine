@@ -10,7 +10,7 @@
 //! (`patch_embedding`, `condition_embedder.{time_embedder,time_proj,text_embedder}`,
 //! `blocks.{i}.{attn1,attn2,norm2,ffn,scale_shift_table}`, top-level `scale_shift_table`, `proj_out`).
 
-use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor};
 use hanzo_nn::{Conv2d, Conv2dConfig, LayerNorm, Linear, Module, RmsNorm};
 use hanzo_quant::ShardedVarBuilder;
 
@@ -21,8 +21,6 @@ use crate::diffusion_models::wan::longcat::common::{
 };
 use crate::layers;
 
-const SELF_ATTN: usize = 1;
-const CROSS_ATTN: usize = 2;
 const BLOCK_MOD_CHUNKS: usize = 6; // shift/scale/gate for (self-attn, ffn)
 const FINAL_MOD_CHUNKS: usize = 2; // shift/scale
 const TIME_SCALE: f64 = 1000.0; // flow-match t in [0,1000] -> sinusoid input in [0,1]
