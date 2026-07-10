@@ -408,6 +408,41 @@ mod tests {
         }
     }
 
+    fn envu(k: &str, default: usize) -> usize {
+        std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    }
+
+    // Coherence + throughput smoke on real weights (no oracle). Env: LLADA_WEIGHTS,
+    // LLADA_GEN/LLADA_STEPS/LLADA_BLOCK, LLADA_F32. Run on GPU:
+    // `cargo test -p hanzo-engine --features cuda llada_smoke -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn llada_smoke() {
+        let dir = std::env::var("LLADA_WEIGHTS").expect("set LLADA_WEIGHTS");
+        let dtype = if std::env::var("LLADA_F32").is_ok() { DType::F32 } else { DType::BF16 };
+        let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
+        println!("device={device:?} dtype={dtype:?}");
+        let model = load_from_dir(std::path::Path::new(&dir), &device, dtype).unwrap();
+        let tok = tokenizers::Tokenizer::from_file(std::path::Path::new(&dir).join("tokenizer.json")).unwrap();
+        let gen = envu("LLADA_GEN", 64);
+        let params = GenParams { gen_length: gen, steps: envu("LLADA_STEPS", gen), block_length: envu("LLADA_BLOCK", 32) };
+        println!("params: gen={} steps={} block={}", params.gen_length, params.steps, params.block_length);
+        for q in [
+            "What is the capital of France? Answer in one word.",
+            "Write a haiku about the ocean.",
+        ] {
+            let s = format!("<|startoftext|><|start_header_id|>user<|end_header_id|>\n\n{q}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n");
+            let ids: Vec<u32> = tok.encode(s, false).unwrap().get_ids().to_vec();
+            let t0 = std::time::Instant::now();
+            let out = model.generate(&ids, &params).unwrap();
+            let dt = t0.elapsed().as_secs_f32();
+            let text = tok.decode(&out, true).unwrap();
+            let tps = params.gen_length as f32 / dt;
+            let tpt = params.gen_length as f32 / params.steps as f32;
+            println!("\nPROMPT: {q}\nGEN [{dt:.2}s | {tps:.1} tok/s | {:.2} tok/traversal]:\n{text}\n---", tpt);
+        }
+    }
+
     fn cosine(a: &Tensor, b: &Tensor) -> f32 {
         let a = a.to_vec1::<f32>().unwrap();
         let b = b.to_vec1::<f32>().unwrap();
