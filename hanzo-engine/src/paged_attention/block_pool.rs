@@ -365,9 +365,9 @@ impl BlockPool {
                 block_hash,
                 group_id,
             };
-            match self.cached_block_hash_to_block.get_one(&key) {
-                Some(id) => cached_ids.push(id),
-                None => return None,
+            {
+                let id = self.cached_block_hash_to_block.get_one(&key)?;
+                cached_ids.push(id)
             }
         }
         Some(cached_ids)

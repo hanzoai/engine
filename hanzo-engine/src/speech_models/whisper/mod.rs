@@ -2,7 +2,7 @@
 
 //! openai-whisper-tiny audio encoder used as MuseTalk's lip-sync condition.
 //! MuseTalk's UNet was trained on the stacked encoder embeddings (post-conv map
-//! + every block output) of openai-whisper-tiny, sliced into a per-video-frame
+//! and every block output) of openai-whisper-tiny, sliced into a per-video-frame
 //! window. `WhisperFeatureExtractor::features` reproduces that exact tensor.
 
 pub mod encoder;
