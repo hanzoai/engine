@@ -511,7 +511,8 @@ impl Module for F32RmsNorm {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let initial_type = xs.dtype();
         let mut xs = xs.to_dtype(DType::F32)?;
-        let var = xs.powf(2.)?.mean_keepdim(D::Minus1)?;
+        // Square via multiply, not powf(2): CUDA powf(x,2) is exp(2*log(x)) -> NaN for x<0.
+        let var = xs.sqr()?.mean_keepdim(D::Minus1)?;
         xs = xs.broadcast_mul(&(&var + self.eps)?.recip()?.sqrt()?)?;
         xs.to_dtype(initial_type)?.broadcast_mul(&self.w)
     }
