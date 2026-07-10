@@ -598,6 +598,33 @@ build sm_121a + CUDA 13 (issue #19662).
   `dinov2_vitl14_reg.safetensors` (torch-hub .pth has no safetensors; convert once). Runs Device::Cpu today.
 - GLB export = hand-rolled binary glTF 2.0 (glb.rs), validated against the third-party `gltf` loader;
   wired into ThreeDFormat::Glb (was a PLY fallback). The /v1/3d async endpoint already calls pixal3d_generate.
+- SLAT + FlexiCubes half is now DONE (the fine textured mesh), all bit-exact vs the reference:
+  * sparse.rs = the sparse-tensor infra (SparseTensor coords[N,3]+feats[N,C], B=1): submanifold Conv3d
+    (SubMConv3d, gather active neighbours c+(kz-1,ky-1,kx-1)), SparseLinear, downsample/upsample/
+    subdivide, SparseGroupNorm32, AbsolutePositionEmbedder, window partition. GOTCHA: spconv's CPU build
+    is ~2% WRONG on sparse SubMConv (single-tap dense is exact, multi-tap sparse gather-gemm is buggy) --
+    the correct oracle is dense conv3d @ active sites (== GPU spconv). GOTCHA: SparseDownsample uses
+    torch.scatter_reduce(mean, include_self=True) so the divisor is (group size + 1), not the size.
+  * slat_flow.rs (SLatFlowModel) reuses the SS-flow ModulatedCrossBlock verbatim (full attention over the
+    voxel set == dense sdpa at B=1) + SparseResBlock3d pack/unpack (downsample 64->32, 24 blocks, upsample
+    32->64 with U-Net skips). NO stored pos_emb (on-the-fly AbsolutePositionEmbedder from coords). Parity
+    cos=1.0000, max|d|=5.2e-5.
+  * slat_decoder.rs (SLatMeshDecoder): 12-block sparse SWIN transformer (windowed self-attn, alternating
+    shift 4, non-affine norms), 2 SparseSubdivideBlock3d (GroupNorm32+subdivide+conv residual) 64->128->256,
+    out_layer -> 101-ch FlexiCubes layout (sdf 8 + deform 24 + weights 21 + color 48). Parity cos=1.0000.
+  * flexicubes.rs (+ flexicubes_tables.rs) = nvdiffrec FlexiCubes dual-MC, inference path. Ported SPARSELY:
+    the SDF grid is 1 everywhere except active-voxel corners, so only cubes touching an sdf<0 vertex can be
+    surface -- no dense 256^3 arrays. sparse_cube2verts corner-mean, DMC case + check_table ambiguity
+    inversion, beta-weighted dual verts from alpha-weighted edge zero-crossings, 6-ch color interp, quad
+    triangulation split by gamma with sdf winding. Cubes processed in reg_c (z,y,x) order so the 4-cube
+    quad winding matches. Parity vs golden mesh: verts 32981==32981, faces 63978==63978, Chamfer=0.000000.
+  * pipeline.rs generate_textured(): coarse occupancy -> active coords (argwhere>0, res 64) -> SLAT flow
+    denoise (from noise, CFG) -> denormalize (*std+mean, consts SLAT_MEAN/STD) -> mesh decoder -> FlexiCubes.
+    /v1/3d exposes it via the `texture` request flag; GLB carries per-vertex RGB as COLOR_0 (mesh_to_glb_colored).
+- Oracle method for the SLAT half: real TRELLIS + real CPU spconv, with a flash_attn shim (sdpa CPU) so the
+  real code runs, trellis.{pipelines,renderers,gaussian,octree,radiance_field} stubbed, kaolin.check_tensor
+  stubbed, FlexiCubes forced device=cpu, and SparseConv3d monkeypatched to the correct submanifold gather
+  (CPU spconv is buggy). Scripts in scratchpad/oracle (gen_oracle.py + flash_attn.py).
 
 ## LLaDA: diffusion LLM (dLLM) native port -- models/llada.rs
 - Model: GSAI-ML/LLaDA-8B-Instruct (MIT, ungated, most-downloaded dLLM). Same code loads LLaDA-1.5 +
