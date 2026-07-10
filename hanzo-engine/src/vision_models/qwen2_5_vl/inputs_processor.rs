@@ -143,7 +143,9 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs.iter().all(|seq| seq.has_images());
+        let has_vision = input_seqs
+            .iter()
+            .all(|seq| seq.has_images() || seq.has_videos());
 
         let (
             new_input,
@@ -155,7 +157,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
             input_ids_searching,
             image_nums,
             video_nums,
-        ) = if has_images {
+        ) = if has_vision {
             let mut pixel_values_accum = Vec::new();
             let mut image_grid_thw_accum = Vec::new();
             let mut video_grid_thw_accum = Vec::new();
@@ -197,9 +199,12 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                             num_crops: _,
                         } = self
                             .preprocess(
-                                seq.clone_images()
-                                    .expect("Need to have images by this point."),
-                                vec![],
+                                seq.clone_images().unwrap_or_default(),
+                                seq.clone_videos()
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(|v| v.frames)
+                                    .collect(),
                                 config,
                                 device,
                                 (usize::MAX, usize::MAX), // Don't use it here...
@@ -637,6 +642,14 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
             vec![]
         };
 
+        // Aligns with the full (untrimmed) video set used for MRoPE: temporal_patch_size / sampled_fps.
+        let temporal_patch_size = config.temporal_patch_size.unwrap_or(2) as f64;
+        let second_per_grid_ts: Vec<f64> = input_seqs
+            .iter()
+            .flat_map(|seq| seq.videos().unwrap_or(&[]).iter())
+            .map(|v| temporal_patch_size / v.sampled_fps().max(f64::MIN_POSITIVE))
+            .collect();
+
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
@@ -656,6 +669,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 image_nums,
                 video_nums,
                 image_hashes,
+                second_per_grid_ts,
             }),
             paged_attn_meta,
             flash_meta,
