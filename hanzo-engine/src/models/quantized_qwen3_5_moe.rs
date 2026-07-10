@@ -208,9 +208,8 @@ impl FusedMoe {
         let shared_act =
             crate::ops::mul_and_act(&shared_g, &shared_u, crate::layers::Activation::Silu)?;
         let shared_out = self.shared_down_proj.forward(&shared_act)?;
-        let shared_gate =
-            sigmoid(&self.shared_gate.forward(&xs.to_dtype(DType::F32)?)?)?
-                .to_dtype(shared_out.dtype())?;
+        let shared_gate = sigmoid(&self.shared_gate.forward(&xs.to_dtype(DType::F32)?)?)?
+            .to_dtype(shared_out.dtype())?;
         let shared_out = shared_out.broadcast_mul(&shared_gate)?;
 
         (routed + shared_out)?
