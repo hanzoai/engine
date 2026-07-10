@@ -509,6 +509,10 @@ pub(crate) fn cuda_decode_graphs_enabled() -> bool {
     crate::perf_flags::cuda_graphs_enabled()
 }
 
+pub(crate) fn cuda_prefill_graphs_enabled() -> bool {
+    crate::perf_flags::cuda_prefill_graphs_enabled()
+}
+
 pub(crate) fn disable_event_tracking_for_capture(stream: &Arc<CudaStream>) -> bool {
     let restore = stream.context().is_event_tracking();
     if restore {
