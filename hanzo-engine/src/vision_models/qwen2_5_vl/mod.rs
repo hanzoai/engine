@@ -201,7 +201,8 @@ impl Qwen2_5VLModel {
                     let t_vals: Vec<i64> = (0..llm_grid_t as i64)
                         .flat_map(|t| std::iter::repeat_n((t as f64 * t_scale).floor() as i64, hw))
                         .collect();
-                    let t_idx = Tensor::from_vec(t_vals, hw * llm_grid_t as usize, input_ids.device())?;
+                    let t_idx =
+                        Tensor::from_vec(t_vals, hw * llm_grid_t as usize, input_ids.device())?;
                     let h_idx = Tensor::arange(0, llm_grid_h as i64, input_ids.device())?
                         .reshape((1, (), 1))?
                         .repeat((llm_grid_t as usize, 1, llm_grid_w as usize))?
@@ -313,7 +314,8 @@ impl Qwen2_5VLModel {
             self.text.dtype,
             &CausalMaskConfig {
                 sliding_window: self.text.cfg.sliding_window,
-                ..Default::default()
+                // Text attention upcasts to F32 (eager, no flash), so it needs the real mask tensor.
+                force_custom: true,
             },
         )?;
 
