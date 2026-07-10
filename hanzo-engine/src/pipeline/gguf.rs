@@ -37,8 +37,8 @@ use crate::pipeline::sampling::sample_and_add_toks;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::ChatTemplate;
-use crate::pipeline_parallel::{pp_worker_step, use_pipeline_parallel};
 use crate::pipeline::{get_chat_template, Modalities, SupportedModality};
+use crate::pipeline_parallel::{pp_worker_step, use_pipeline_parallel};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::gguf_metadata::{ContentConfig, GgufDeviceMapLoaderInner};
