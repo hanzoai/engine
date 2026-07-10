@@ -50,6 +50,32 @@ fn load_vb(path: PathBuf, dev: &Device) -> Result<ShardedVarBuilder> {
     )?)
 }
 
+/// Deterministic standard-normal noise (splitmix64 + Box-Muller). candle's CPU RNG isn't seedable
+/// via `Device::set_seed`; the sample only needs to be reproducible, not to match torch's RNG.
+fn seeded_gaussian(shape: &[usize], seed: u64, dev: &Device) -> Result<Tensor> {
+    let n: usize = shape.iter().product();
+    let mut state = seed ^ 0x9E37_79B9_7F4A_7C15;
+    let mut next_unit = || {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        (((z >> 40) as f32) / ((1u32 << 24) as f32)).max(1e-7) // (0, 1]
+    };
+    let mut data = Vec::with_capacity(n);
+    while data.len() < n {
+        let (u1, u2) = (next_unit(), next_unit());
+        let r = (-2.0 * u1.ln()).sqrt();
+        let theta = std::f32::consts::TAU * u2;
+        data.push(r * theta.cos());
+        if data.len() < n {
+            data.push(r * theta.sin());
+        }
+    }
+    Ok(Tensor::from_vec(data, shape.to_vec(), dev)?)
+}
+
 /// A weight file may sit directly in the model dir or under `ckpts/` (the HF snapshot layout).
 fn resolve(dir: &Path, name: &str) -> Result<PathBuf> {
     for cand in [dir.join(name), dir.join("ckpts").join(name)] {
@@ -105,8 +131,7 @@ pub fn generate(image: &DynamicImage, seed: u64, steps: usize) -> Result<Mesh> {
     let cond = m.dinov2.forward(&img)?; // [1, 1374, 1024]
     let neg = cond.zeros_like()?;
 
-    dev.set_seed(seed)?;
-    let noise = Tensor::randn(0f32, 1.0, (1, SS_CH, SS_RES, SS_RES, SS_RES), &dev)?;
+    let noise = seeded_gaussian(&[1, SS_CH, SS_RES, SS_RES, SS_RES], seed, &dev)?;
     let params = sampler::FlowEulerParams {
         steps: steps.max(1),
         ..Default::default()
