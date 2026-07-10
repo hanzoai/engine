@@ -1030,6 +1030,10 @@ impl Sequence {
         self.prompt_len
     }
 
+    pub fn max_len(&self) -> Option<usize> {
+        self.max_len
+    }
+
     pub fn stop_strings(&self) -> &[String] {
         &self.stop_strings
     }
