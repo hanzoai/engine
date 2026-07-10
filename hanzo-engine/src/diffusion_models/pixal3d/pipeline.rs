@@ -7,6 +7,7 @@
 //! Weights live under `PIXAL3D_MODEL` (the microsoft/TRELLIS-image-large snapshot, plus a converted
 //! `dinov2_vitl14_reg.safetensors`).
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -39,11 +40,24 @@ const MESH_RES: i32 = 256; // FlexiCubes grid = decoder resolution (64) * 4
 
 // slat_flow_img_dit_L_64l8p2 dataset normalization (denormalize the sampled latent before decoding).
 const SLAT_MEAN: [f32; 8] = [
-    -2.168_754_6, -0.004_347_046, -0.133_523_49, -0.084_180_73, -0.527_120_65, 0.723_868_9,
-    -1.141_445, 1.203_936_3,
+    -2.168_754_6,
+    -0.004_347_046,
+    -0.133_523_5,
+    -0.084_180_73,
+    -0.527_120_65,
+    0.723_868_9,
+    -1.141_445,
+    1.203_936_3,
 ];
 const SLAT_STD: [f32; 8] = [
-    2.377_650_7, 2.386_378_3, 2.124_418, 2.174_855_2, 2.663_944_7, 2.371_192_2, 2.621_744_6, 2.684_523,
+    2.377_650_7,
+    2.386_378_3,
+    2.124_418,
+    2.174_855_2,
+    2.663_944_7,
+    2.371_192_2,
+    2.621_744_6,
+    2.684_523,
 ];
 
 struct Models {
@@ -213,7 +227,11 @@ pub fn generate(image: &DynamicImage, seed: u64, steps: usize) -> Result<Mesh> {
 
 /// Run the full image-to-3D pipeline: coarse occupancy -> SLAT rectified-flow on the active voxels
 /// -> mesh decoder -> FlexiCubes, returning the fine textured mesh (vertices + faces + vertex RGB).
-pub fn generate_textured(image: &DynamicImage, seed: u64, steps: usize) -> Result<flexicubes::TexturedMesh> {
+pub fn generate_textured(
+    image: &DynamicImage,
+    seed: u64,
+    steps: usize,
+) -> Result<flexicubes::TexturedMesh> {
     let dir = std::env::var("PIXAL3D_MODEL")
         .map(PathBuf::from)
         .map_err(|_| anyhow!("set PIXAL3D_MODEL to the TRELLIS ckpts + dinov2 dir"))?;
@@ -236,7 +254,9 @@ pub fn generate_textured(image: &DynamicImage, seed: u64, steps: usize) -> Resul
     let coords_c = coords.clone();
     let feats = sampler::sample(&noise, &cond, &neg, &params, |x, t, c| {
         let tt = Tensor::full(t as f32, 1, &dev)?;
-        Ok(slat_flow.forward(&Sparse::new(coords_c.clone(), x.clone()), &tt, c)?.feats)
+        Ok(slat_flow
+            .forward(&Sparse::new(coords_c.clone(), x.clone()), &tt, c)?
+            .feats)
     })?;
     // denormalize.
     let std = Tensor::from_vec(SLAT_STD.to_vec(), (1, SLAT_CH), &dev)?;
@@ -292,8 +312,12 @@ mod tests {
     #[ignore = "needs full PIXAL3D_MODEL (dinov2 + ss + slat) + PIXAL3D_TEST_IMAGE"]
     fn end_to_end_textured_glb() {
         let img_path = std::env::var("PIXAL3D_TEST_IMAGE").expect("set PIXAL3D_TEST_IMAGE");
-        let out = std::env::var("PIXAL3D_OUT").unwrap_or_else(|_| "/tmp/pixal3d_textured.glb".into());
-        let steps: usize = std::env::var("PIXAL3D_STEPS").ok().and_then(|s| s.parse().ok()).unwrap_or(12);
+        let out =
+            std::env::var("PIXAL3D_OUT").unwrap_or_else(|_| "/tmp/pixal3d_textured.glb".into());
+        let steps: usize = std::env::var("PIXAL3D_STEPS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(12);
         let image = image::open(&img_path).expect("load test image");
 
         let t0 = std::time::Instant::now();

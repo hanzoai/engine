@@ -197,6 +197,7 @@ pub fn gated_delta_rule_recurrence(
 /// Native Vulkan single decode step (seq==1). q,k,v,g,beta arrive (1, 1, v_heads, ..); the state
 /// (1, v_heads, k_dim, v_dim) is updated in place in VRAM. Applies the 1/sqrt(k_dim) q-scale that
 /// the portable scan does internally, then returns y (1, 1, v_heads, v_dim).
+#[allow(dead_code)]
 fn recurrence_vulkan_step(
     q: &Tensor,
     k: &Tensor,

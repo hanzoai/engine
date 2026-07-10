@@ -24,6 +24,7 @@
 //! The whole vocoder runs in f32 (`vb.set_dtype(DType::F32)`); codec precision matters and the
 //! upstream weights are otherwise model-dtype.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use std::sync::Arc;
 
 use hanzo_ml::{DType, Device, Result, Tensor, D};

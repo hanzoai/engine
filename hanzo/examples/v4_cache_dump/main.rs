@@ -116,7 +116,7 @@ async fn main() -> Result<()> {
         total_prompt_tokens += response.usage.prompt_tokens;
         done += 1;
 
-        if done % 10 == 0 {
+        if done.is_multiple_of(10) {
             let secs = start.elapsed().as_secs_f64();
             println!(
                 "[{done}] running prefill tok/s {:.1} | last prompt_tokens {} avg_prompt_tok/s {:.1}",

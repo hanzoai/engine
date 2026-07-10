@@ -108,16 +108,7 @@ fn to_card(m: &RouteModel) -> hanzo_router::ModelCard {
     }
 }
 
-/// The routing decision for a request. Pure over its inputs — no engine state is mutated.
-#[cfg_attr(
-    feature = "utoipa",
-    utoipa::path(
-        post,
-        path = "/v1/route",
-        request_body = RouteBody,
-        responses((status = 200, description = "Routing decision", body = RouteResponse))
-    )
-)]
+/// The routing decision for a request. Pure over its inputs - no engine state is mutated.
 pub async fn route_handler(Json(body): Json<RouteBody>) -> impl IntoResponse {
     let registry = Registry::new(body.models.iter().map(to_card).collect());
     let running: BTreeSet<String> = body.running.into_iter().collect();

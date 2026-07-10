@@ -3,6 +3,7 @@
 //! latent -> waveform tail (DCAE decode + vocoder) first; the text encoder,
 //! DiT and flow sampler land alongside as they parity-gate.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub mod dcae;
 pub mod pipeline;
 pub mod scheduler;

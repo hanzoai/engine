@@ -25,6 +25,7 @@
 //! and a MoE block (router → top-k → gather → expert matmuls → combine) are expressible with no
 //! floating-point reduction in the committed trace.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use crate::poi::{derive_challenges_keccak, exact_matmul, freivalds_verify_multi, keccak256, Mat};
 use crate::poi_transcript::{merkle_proof, merkle_root, merkle_verify};
 

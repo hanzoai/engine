@@ -6,8 +6,9 @@
 //! the optimized 2D conv. Norm is a channel-last affine LayerNorm; upsampling is Conv3d(c -> 8c)
 //! then a 3D pixel shuffle.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use hanzo_ml::{Result, Tensor};
-use hanzo_nn::{LayerNorm, Module};
+use hanzo_nn::LayerNorm;
 use hanzo_quant::ShardedVarBuilder;
 
 use crate::layers::layer_norm;
@@ -253,7 +254,11 @@ mod tests {
         assert_eq!(out.dims(), &[1, 1, 64, 64, 64]);
 
         let a = out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
-        let b = io["logits"].flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let b = io["logits"]
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
         let (mut dot, mut na, mut nb, mut se, mut maxabs) = (0f64, 0f64, 0f64, 0f64, 0f64);
         for (x, y) in a.iter().zip(&b) {
             let (x, y) = (*x as f64, *y as f64);

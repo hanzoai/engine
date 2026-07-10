@@ -2742,6 +2742,7 @@ fn vulkan_qk_rms_norm_rope(
     Ok(None)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn qk_rms_norm_rope(
     q: &Tensor,
     k: &Tensor,
