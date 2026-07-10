@@ -289,16 +289,19 @@ pub const fn using_flash_attn() -> bool {
 
 /// `true` if built with `flash-attn`/`flash-attn-v3` AND flash is runtime-enabled.
 ///
-/// Flash-attn-2 numerically bifurcates on bf16 CUDA and collapses Qwen3-8B-Q4K into repetition
-/// ("needle needle needle" / degenerate loops) while the eager path generates coherently ("...Paris...").
-/// The collapse is seeded in flash PREFILL, and the flash feature changes behavior at MANY sites
-/// (mask construction, paged attention, input processors, run_attention) -- so a per-site toggle can't
-/// faithfully reproduce the correct eager path. Gating the whole predicate is the fix: default OFF so
-/// every flash site consistently takes the proven no-flash path. `CUDA_FLASH=1` opts back in
-/// (once the numerics are fixed or the DSL online-softmax sdpa lands). Read once, cached.
+/// Default ON. hanzo-flash-attn >= 0.11.35 routes bf16 attention through the f16 kernel, curing the
+/// P-cast softmax collapse (flash-attn-2 rounds the f32 softmax probabilities to bf16's 7 mantissa
+/// bits before P*V, tipping repetition-prone models like Qwen3-8B-Q4K into "needle needle" loops)
+/// that previously forced flash off. Flash flips behavior at MANY sites (mask construction, paged
+/// attention, input processors, run_attention), so one predicate gates them all consistently.
+/// `FLASH_PREFILL=0` forces the eager path everywhere. Read once, cached.
 #[cfg(any(feature = "flash-attn", feature = "flash-attn-v3"))]
 pub fn using_flash_attn() -> bool {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("CUDA_FLASH").is_ok_and(|v| v == "1"))
+    *ENABLED.get_or_init(|| {
+        std::env::var("FLASH_PREFILL")
+            .map(|v| !matches!(v.as_str(), "0" | "false" | "FALSE" | "no" | "off"))
+            .unwrap_or(true)
+    })
 }

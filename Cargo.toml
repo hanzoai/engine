@@ -40,7 +40,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 hanzo-ml = { version = "0.11.43" }
 hanzo-nn = { version = "0.11.33" }
 hanzo-transformers = { version = "0.11.9" }
-hanzo-flash-attn = { version = "0.11.34" }
+hanzo-flash-attn = { version = "0.11.35" }
 hanzo-flash-attn-v3 = { version = "0.11.3", package = "hanzo-flash-attn" }
 hanzo-metal-kernels = { version = "0.11.33" }
 hanzo-3d = { version = "0.1" }
