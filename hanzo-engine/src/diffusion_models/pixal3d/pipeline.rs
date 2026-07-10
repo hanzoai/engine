@@ -284,4 +284,31 @@ mod tests {
         std::fs::write(&out, &glb).unwrap();
         println!("wrote {out} ({} bytes)", glb.len());
     }
+
+    // Full image -> textured GLB. PIXAL3D_MODEL=/model PIXAL3D_TEST_IMAGE=/img.png \
+    //   PIXAL3D_OUT=/out.glb PIXAL3D_STEPS=12 cargo test -p hanzo-engine \
+    //   pixal3d::pipeline::end_to_end_textured -- --ignored --nocapture
+    #[test]
+    #[ignore = "needs full PIXAL3D_MODEL (dinov2 + ss + slat) + PIXAL3D_TEST_IMAGE"]
+    fn end_to_end_textured_glb() {
+        let img_path = std::env::var("PIXAL3D_TEST_IMAGE").expect("set PIXAL3D_TEST_IMAGE");
+        let out = std::env::var("PIXAL3D_OUT").unwrap_or_else(|_| "/tmp/pixal3d_textured.glb".into());
+        let steps: usize = std::env::var("PIXAL3D_STEPS").ok().and_then(|s| s.parse().ok()).unwrap_or(12);
+        let image = image::open(&img_path).expect("load test image");
+
+        let t0 = std::time::Instant::now();
+        let tm = generate_textured(&image, 42, steps).unwrap();
+        println!(
+            "pixal3d textured: {} verts, {} faces, {} colors in {:.1}s ({steps} steps)",
+            tm.mesh.vertices.len(),
+            tm.mesh.faces.len(),
+            tm.colors.len(),
+            t0.elapsed().as_secs_f32()
+        );
+        assert!(!tm.mesh.faces.is_empty());
+        let glb = super::super::glb::mesh_to_glb_colored(&tm.mesh, Some(&tm.colors));
+        assert_eq!(&glb[0..4], b"glTF");
+        std::fs::write(&out, &glb).unwrap();
+        println!("wrote {out} ({} bytes)", glb.len());
+    }
 }
