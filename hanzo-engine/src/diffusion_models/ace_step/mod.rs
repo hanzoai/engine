@@ -5,6 +5,7 @@
 
 pub mod dcae;
 pub mod text_encoder;
+pub mod transformer;
 pub mod vocoder;
 
 use hanzo_ml::{Result, Tensor};
