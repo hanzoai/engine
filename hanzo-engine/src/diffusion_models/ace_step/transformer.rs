@@ -351,12 +351,17 @@ impl PatchEmbed {
     }
 }
 
+const TEXT_DIM: usize = 768;
+const SPEAKER_DIM: usize = 512;
+
 #[derive(Debug, Clone)]
 pub struct AceStepTransformer {
     proj_in: PatchEmbed,
     ts_linear1: Linear,
     ts_linear2: Linear,
     t_block: Linear,
+    genre_embedder: Linear,
+    speaker_embedder: Linear,
     blocks: Vec<Block>,
     final_norm_shift_scale: Tensor, // [2, 2560]
     final_linear: Linear,
@@ -369,6 +374,8 @@ impl AceStepTransformer {
         let ts_linear1 = linear(TIME_PROJ_DIM, INNER_DIM, te.pp("linear_1"))?;
         let ts_linear2 = linear(INNER_DIM, INNER_DIM, te.pp("linear_2"))?;
         let t_block = linear(INNER_DIM, 6 * INNER_DIM, vb.pp("t_block").pp("1"))?;
+        let genre_embedder = linear(TEXT_DIM, INNER_DIM, vb.pp("genre_embedder"))?;
+        let speaker_embedder = linear(SPEAKER_DIM, INNER_DIM, vb.pp("speaker_embedder"))?;
         let tb = vb.pp("transformer_blocks");
         let blocks = (0..NUM_LAYERS)
             .map(|i| Block::new(tb.pp(i.to_string())))
@@ -381,10 +388,21 @@ impl AceStepTransformer {
             ts_linear1,
             ts_linear2,
             t_block,
+            genre_embedder,
+            speaker_embedder,
             blocks,
             final_norm_shift_scale,
             final_linear,
         })
+    }
+
+    /// Assemble cross-attn context: [speaker(1), text(T_text)] projected to 2560.
+    /// text_hidden (B, T_text, 768) UMT5 last hidden; speaker (B, 512). Lyric stream omitted
+    /// (masked-out lyric contributes nothing to softmax cross-attn).
+    pub fn encode(&self, text_hidden: &Tensor, speaker: &Tensor) -> Result<Tensor> {
+        let spk = self.speaker_embedder.forward(speaker)?.unsqueeze(1)?;
+        let text = self.genre_embedder.forward(text_hidden)?;
+        Tensor::cat(&[&spk, &text], 1)
     }
 
     /// latent (B, 8, 16, T), encoder_hidden_states (B, S_enc, 2560), optional encoder mask
@@ -506,6 +524,8 @@ mod tests {
                 n.starts_with("proj_in.")
                     || n.starts_with("timestep_embedder.")
                     || n.starts_with("t_block.")
+                    || n.starts_with("genre_embedder.")
+                    || n.starts_with("speaker_embedder.")
                     || n.starts_with("final_layer.")
                     || (n.starts_with("transformer_blocks.")
                         && !n.contains(".add_")
