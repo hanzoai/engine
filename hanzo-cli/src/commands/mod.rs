@@ -1,5 +1,6 @@
 //! Command implementations for hanzo-cli
 
+pub(crate) mod advertise;
 mod bench;
 mod cache;
 mod config;
