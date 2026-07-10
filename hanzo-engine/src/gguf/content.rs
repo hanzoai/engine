@@ -127,14 +127,20 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
         if n_splits.len() > 1 {
             hanzo_ml::bail!("GGUF files have differing `split.count` values: {n_splits:?}. Perhaps the GGUF files do not match?");
         }
+        // Under pipeline parallelism each rank opens only the shards holding its own layer range
+        // (plus the metadata shard), so a subset of the declared split count is expected.
+        let pp = crate::pipeline_parallel::use_pipeline_parallel();
         #[allow(clippy::cast_possible_truncation)]
-        if !n_splits.is_empty() && n_readers != n_splits[0] as usize {
+        if !n_splits.is_empty() && n_readers != n_splits[0] as usize && !pp {
             hanzo_ml::bail!(
                 "Number of GGUF files does not match the number of splits, expected {} files.",
                 n_splits[0]
             );
         } else if n_splits.len() == 1 {
-            info!("GGUF file has been split into {} shards", n_splits[0]);
+            info!(
+                "GGUF file has been split into {} shards ({} provided here)",
+                n_splits[0], n_readers
+            );
         }
 
         let mut arch = None;
