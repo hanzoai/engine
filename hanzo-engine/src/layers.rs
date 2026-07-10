@@ -2755,6 +2755,10 @@ pub fn qk_rms_norm_rope(
 ) -> Result<(Tensor, Tensor)> {
     let (batch, _, seq_len, _) = q.dims4()?;
     let (cos, sin) = selected_rope_cache(cos_cache, sin_cache, batch, seq_len, seqlen_offsets)?;
+    // CUDA rope kernels are dtype-strict; match the f32 cache to a native bf16/f16 query so the
+    // fused path and the plain rope both accept it. ROCm (no cuda feature) keeps the f32 cache.
+    #[cfg(feature = "cuda")]
+    let (cos, sin) = match_rope_dtype(cos, sin, q)?;
 
     #[cfg(feature = "cuda")]
     if let Some((q, Some(k))) = crate::ops::try_cuda_qk_rms_norm_rope(
@@ -3239,11 +3243,24 @@ fn rope_positions_via_gather(
 ) -> Result<(Tensor, Tensor)> {
     let (batch, _q_heads, seq_len, _head_dim) = q.dims4()?;
     let (cos, sin) = gather_rope_cos_sin(cos_cache, sin_cache, positions, batch, seq_len)?;
+    let (cos, sin) = match_rope_dtype(cos, sin, q)?;
     let rope = rope_fn(is_gpt_neox);
     Ok((
         rope(&q.contiguous()?, &cos, &sin)?,
         rope(&k.contiguous()?, &cos, &sin)?,
     ))
+}
+
+// The external rope kernel is dtype-strict on the gather (CUDA) path -- unlike ROCm it has no
+// rope_slow fallback -- so a native mixed-dtype ring (bf16/f16 activations, f32 rope cache) is
+// rejected. Cast the gathered cos/sin rows to the activation dtype. No-op when they already match
+// (f32 runs, or an f16/bf16 cache), and ROCm never reaches here (it returns via its own kernel).
+fn match_rope_dtype(cos: Tensor, sin: Tensor, q: &Tensor) -> Result<(Tensor, Tensor)> {
+    if cos.dtype() == q.dtype() {
+        Ok((cos, sin))
+    } else {
+        Ok((cos.to_dtype(q.dtype())?, sin.to_dtype(q.dtype())?))
+    }
 }
 
 /// Single-tensor variant of [`rope_positions_via_gather`] for the q-only RoPE path.
@@ -3256,6 +3273,7 @@ fn rope_positions_via_gather_q(
 ) -> Result<Tensor> {
     let (batch, _q_heads, seq_len, _head_dim) = q.dims4()?;
     let (cos, sin) = gather_rope_cos_sin(cos_cache, sin_cache, positions, batch, seq_len)?;
+    let (cos, sin) = match_rope_dtype(cos, sin, q)?;
     rope_fn(is_gpt_neox)(&q.contiguous()?, &cos, &sin)
 }
 
