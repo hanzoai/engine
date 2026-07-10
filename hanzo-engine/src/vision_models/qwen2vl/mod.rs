@@ -302,7 +302,8 @@ impl Qwen2VLModel {
             self.text.dtype,
             &CausalMaskConfig {
                 sliding_window: self.text.cfg.sliding_window,
-                ..Default::default()
+                // Text attention upcasts to F32 (eager, no flash), so it needs the real mask tensor.
+                force_custom: true,
             },
         )?;
 
