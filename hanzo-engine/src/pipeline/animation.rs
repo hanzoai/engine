@@ -305,6 +305,16 @@ fn dub_taesd_enabled() -> bool {
     }
 }
 
+// MuseTalk core (VAE/UNet/TAESD) dtype. Default F32; DUB_TAESD realtime runs set f16. S3FD +
+// whisper stay F32 (the animator casts their outputs to the core dtype), so this only governs conv.
+fn dub_dtype() -> DType {
+    match std::env::var("DUB_DTYPE").as_deref() {
+        Ok("f16") | Ok("F16") | Ok("half") => DType::F16,
+        Ok("bf16") | Ok("BF16") => DType::BF16,
+        _ => DType::F32,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AnimationModelPaths {
     unet_config: PathBuf,
@@ -494,9 +504,10 @@ impl Loader for AnimationLoader {
             .downcast_ref::<AnimationModelPaths>()
             .expect("Path downcast failed.");
 
-        // MuseTalk (VAE+UNet) + S3FD + the whisper feature path run F32-native; `Auto` resolves to
-        // F16, which dtype-mismatches conv2d against the F32 activations. F16/BF16 await the GPU effort.
-        let dtype = DType::F32;
+        // MuseTalk core dtype (F32 default, f16 for realtime); S3FD + whisper stay F32 and the
+        // animator bridges their outputs to the core dtype, so no mixed-dtype conv2d.
+        let dtype = dub_dtype();
+        const AUX_DTYPE: DType = DType::F32;
 
         let unet: UNetConfig = serde_json::from_str(&std::fs::read_to_string(&paths.unet_config)?)?;
         let vae: VaeConfig = serde_json::from_str(&std::fs::read_to_string(&paths.vae_config)?)?;
@@ -532,8 +543,8 @@ impl Loader for AnimationLoader {
             vae_vb: Self::load_vb(&paths.vae_weights, dtype, device, silent)?,
             unet_vb: Self::load_vb(&paths.unet_weights, dtype, device, silent)?,
             whisper_config: WhisperConfig::tiny(),
-            whisper_vb: Self::load_vb(&paths.whisper_weights, dtype, device, silent)?,
-            s3fd_vb: Self::load_vb(&paths.s3fd_weights, dtype, device, silent)?,
+            whisper_vb: Self::load_vb(&paths.whisper_weights, AUX_DTYPE, device, silent)?,
+            s3fd_vb: Self::load_vb(&paths.s3fd_weights, AUX_DTYPE, device, silent)?,
             taesd_vb,
             device: device.clone(),
             dtype,
