@@ -62,8 +62,8 @@ impl ThreeDFormat {
     /// Serialize a decoded mesh into this container's bytes.
     fn serialize(self, mesh: &Mesh) -> Vec<u8> {
         match self {
-            // GLB writer is pending; PLY is the wire format until then.
-            ThreeDFormat::Glb | ThreeDFormat::Ply => io::mesh_to_ply(mesh).into_bytes(),
+            ThreeDFormat::Glb => glb::mesh_to_glb(mesh),
+            ThreeDFormat::Ply => io::mesh_to_ply(mesh).into_bytes(),
             ThreeDFormat::Obj => io::mesh_to_obj(mesh).into_bytes(),
         }
     }
@@ -346,11 +346,10 @@ mod tests {
     }
 
     #[test]
-    fn glb_falls_back_to_ply_bytes() {
+    fn glb_serializes_to_binary_gltf() {
         let mesh = hanzo_3d::unit_cube();
-        assert_eq!(
-            ThreeDFormat::Glb.serialize(&mesh),
-            ThreeDFormat::Ply.serialize(&mesh)
-        );
+        let glb = ThreeDFormat::Glb.serialize(&mesh);
+        assert_eq!(&glb[0..4], b"glTF", "expected GLB magic");
+        assert_eq!(glb.len() % 4, 0, "GLB must be 4-byte aligned");
     }
 }
