@@ -457,7 +457,7 @@ impl Loader for GGUFLoader {
         if let Device::Cuda(dev) = &device {
             unsafe { dev.disable_event_tracking() };
         }
-        crate::utils::cuda_mempool::set_pool_retain_all(&device)?;
+        crate::utils::cuda_mempool::set_pool_retain_all(device)?;
 
         let use_nccl = hanzo_quant::distributed::use_nccl();
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
@@ -1645,7 +1645,7 @@ impl Pipeline for GGUFPipeline {
                     hanzo_ml::bail!("MTP speculative decoding is only supported for DeepSeek-V4");
                 };
                 let path = mtp_config.resolve_path()?;
-                let mut readers = vec![std::fs::File::open(&path).map_err(hanzo_ml::Error::msg)?];
+                let mut readers = [std::fs::File::open(&path).map_err(hanzo_ml::Error::msg)?];
                 let mut readers_ref: Vec<&mut std::fs::File> = readers.iter_mut().collect();
                 let mut ct = crate::gguf::Content::from_readers(&mut readers_ref)?;
                 let head = crate::models::deepseek4_mtp::MtpHead::load(
@@ -1676,7 +1676,6 @@ impl Pipeline for GGUFPipeline {
     }
 
     fn retain_speculative_seqs(&mut self, live: &[usize]) {
-        use crate::speculative::SpeculativeProposer;
         if let Some(proposer) = self.draft_proposer.as_mut() {
             proposer.retain_seqs(live);
         }
@@ -1769,7 +1768,6 @@ impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
     }
 
     fn speculative_proposal_len(&self) -> Option<usize> {
-        use crate::speculative::SpeculativeProposer;
         self.draft_proposer.as_ref().map(|p| p.proposal_len())
     }
 
@@ -1805,7 +1803,6 @@ impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
         &mut self,
         ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
     ) -> hanzo_ml::Result<Option<crate::speculative::SpeculativeProposalBatch>> {
-        use crate::speculative::SpeculativeProposer;
         match self.draft_proposer.as_mut() {
             Some(proposer) => Ok(Some(proposer.propose(ctx, None)?)),
             None => Ok(None),

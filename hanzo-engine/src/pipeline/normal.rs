@@ -1,3 +1,4 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use super::isq::ImatrixDataSource;
 use super::llg::build_llg_factory;
 use super::{
@@ -1253,7 +1254,6 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
     }
 
     fn speculative_proposal_len(&self) -> Option<usize> {
-        use crate::speculative::SpeculativeProposer;
         match self.draft_proposer.as_ref() {
             Some(proposer) => Some(proposer.proposal_len()),
             None => self.model.speculative_proposal_len(),
@@ -1284,7 +1284,6 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
         &mut self,
         ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
     ) -> hanzo_ml::Result<Option<crate::speculative::SpeculativeProposalBatch>> {
-        use crate::speculative::SpeculativeProposer;
         if let Some(proposer) = self.draft_proposer.as_mut() {
             return Ok(Some(proposer.propose(ctx, None)?));
         }
@@ -1808,7 +1807,6 @@ impl Pipeline for NormalPipeline {
     }
 
     fn retain_speculative_seqs(&mut self, live: &[usize]) {
-        use crate::speculative::SpeculativeProposer;
         if let Some(proposer) = self.draft_proposer.as_mut() {
             proposer.retain_seqs(live);
         }

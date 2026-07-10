@@ -6,6 +6,7 @@
 //! and a paired ResBlock stack unpacks (upsamples 32->64) with U-Net skips back to the 8-channel
 //! velocity. Only the pack/unpack path is sparse-conv specific; the torso reuses the SS-flow block.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use hanzo_ml::{Result, Tensor, D};
 use hanzo_nn::{Linear, Module};
 use hanzo_quant::ShardedVarBuilder;
@@ -67,6 +68,7 @@ struct SparseResBlock3d {
     emb: Linear, // emb_layers.1: Linear(emb_channels, 2*out)
     skip: Option<SparseLinear>,
     updown: UpDown,
+    #[allow(dead_code)]
     out_channels: usize,
 }
 
@@ -79,14 +81,24 @@ impl SparseResBlock3d {
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let skip = if channels != out_channels {
-            Some(SparseLinear::new(channels, out_channels, vb.pp("skip_connection"))?)
+            Some(SparseLinear::new(
+                channels,
+                out_channels,
+                vb.pp("skip_connection"),
+            )?)
         } else {
             None
         };
         Ok(Self {
             norm1: layer_norm(channels, NORM_EPS, vb.pp("norm1"))?,
             conv1: SubMConv3d::new(channels, out_channels, 3, true, vb.pp("conv1").pp("conv"))?,
-            conv2: SubMConv3d::new(out_channels, out_channels, 3, true, vb.pp("conv2").pp("conv"))?,
+            conv2: SubMConv3d::new(
+                out_channels,
+                out_channels,
+                3,
+                true,
+                vb.pp("conv2").pp("conv"),
+            )?,
             emb: linear(emb_channels, 2 * out_channels, vb.pp("emb_layers").pp("1"))?,
             skip,
             updown,
@@ -147,10 +159,22 @@ impl SlatFlow {
         let mut input_blocks = Vec::new();
         let mut idx = 0;
         for _ in 0..cfg.num_io_res_blocks - 1 {
-            input_blocks.push(SparseResBlock3d::new(io, mc, io, UpDown::None, vb_i.pp(idx))?);
+            input_blocks.push(SparseResBlock3d::new(
+                io,
+                mc,
+                io,
+                UpDown::None,
+                vb_i.pp(idx),
+            )?);
             idx += 1;
         }
-        input_blocks.push(SparseResBlock3d::new(io, mc, mc, UpDown::Down, vb_i.pp(idx))?);
+        input_blocks.push(SparseResBlock3d::new(
+            io,
+            mc,
+            mc,
+            UpDown::Down,
+            vb_i.pp(idx),
+        )?);
 
         let t_embedder = TimestepEmbedder::new(mc, vb.pp("t_embedder"))?;
         let vb_b = vb.pp("blocks");
@@ -170,10 +194,22 @@ impl SlatFlow {
         let vb_o = vb.pp("out_blocks");
         let mut out_blocks = Vec::new();
         let mut idx = 0;
-        out_blocks.push(SparseResBlock3d::new(mc * 2, mc, io, UpDown::Up, vb_o.pp(idx))?);
+        out_blocks.push(SparseResBlock3d::new(
+            mc * 2,
+            mc,
+            io,
+            UpDown::Up,
+            vb_o.pp(idx),
+        )?);
         idx += 1;
         for _ in 0..cfg.num_io_res_blocks - 1 {
-            out_blocks.push(SparseResBlock3d::new(io * 2, mc, io, UpDown::None, vb_o.pp(idx))?);
+            out_blocks.push(SparseResBlock3d::new(
+                io * 2,
+                mc,
+                io,
+                UpDown::None,
+                vb_o.pp(idx),
+            )?);
             idx += 1;
         }
 
@@ -206,7 +242,7 @@ impl SlatFlow {
 
         let n = h.coords.len();
         let pe = self.pos_embedder.forward(&h.coords, &dev)?; // [N, mc]
-        // torso: full attention over the voxel set (B=1 -> dense [1, N, C]).
+                                                              // torso: full attention over the voxel set (B=1 -> dense [1, N, C]).
         let mut feats3 = (h.feats + pe)?.reshape((1, n, self.model_channels))?;
         for blk in &self.blocks {
             feats3 = blk.forward(&feats3, &t_emb, cond)?;
@@ -220,7 +256,8 @@ impl SlatFlow {
         }
 
         let feats = nonaffine_layernorm(&h.feats, FINAL_LN_EPS)?;
-        self.out_layer.forward(&Sparse::new(h.coords.clone(), feats))
+        self.out_layer
+            .forward(&Sparse::new(h.coords.clone(), feats))
     }
 }
 
@@ -256,7 +293,8 @@ mod tests {
         .unwrap();
         let model = SlatFlow::new(&SlatFlowConfig::default(), vb).unwrap();
 
-        let io = hanzo_ml::safetensors::load(format!("{dir}/slat_flow_io.safetensors"), &dev).unwrap();
+        let io =
+            hanzo_ml::safetensors::load(format!("{dir}/slat_flow_io.safetensors"), &dev).unwrap();
         let coords: Vec<[i32; 3]> = io["coords"]
             .to_vec2::<f32>()
             .unwrap()

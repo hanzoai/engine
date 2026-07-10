@@ -8,6 +8,7 @@ use crate::layers::conv2d;
 
 const L2NORM_EPS: f64 = 1e-10;
 
+#[allow(clippy::too_many_arguments)]
 fn conv(
     vb: &ShardedVarBuilder,
     name: &str,

@@ -1,3 +1,4 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufWriter, Read, Write},
@@ -308,7 +309,7 @@ impl DiskKvCache {
     /// hottest prefixes within a bounded budget.
     pub fn keys_by_recency(&self) -> io::Result<Vec<String>> {
         let mut entries = self.scan_entries()?;
-        entries.sort_by(|a, b| b.last_used.cmp(&a.last_used));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.last_used));
         Ok(entries.into_iter().map(|e| e.key).collect())
     }
 

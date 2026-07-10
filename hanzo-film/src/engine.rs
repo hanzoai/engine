@@ -50,7 +50,13 @@ impl Engine {
     // --- chat -------------------------------------------------------------
 
     /// Chat completion returning the raw assistant string.
-    pub async fn chat(&self, model: &str, system: &str, user: &str, max_tokens: usize) -> Result<String> {
+    pub async fn chat(
+        &self,
+        model: &str,
+        system: &str,
+        user: &str,
+        max_tokens: usize,
+    ) -> Result<String> {
         let body = json!({
             "model": model,
             "messages": [
@@ -102,7 +108,12 @@ impl Engine {
             "temperature": 0.2,
         });
         let text = self.chat_raw(retry).await?;
-        extract_json(&text).ok_or_else(|| anyhow!("model did not return parseable JSON: {}", truncate(&text, 300)))
+        extract_json(&text).ok_or_else(|| {
+            anyhow!(
+                "model did not return parseable JSON: {}",
+                truncate(&text, 300)
+            )
+        })
     }
 
     async fn chat_raw(&self, body: Value) -> Result<String> {
@@ -123,7 +134,13 @@ impl Engine {
     // --- images -----------------------------------------------------------
 
     /// Generate one image, returned as decoded bytes (requests b64_json).
-    pub async fn image(&self, model: &str, prompt: &str, width: usize, height: usize) -> Result<Vec<u8>> {
+    pub async fn image(
+        &self,
+        model: &str,
+        prompt: &str,
+        width: usize,
+        height: usize,
+    ) -> Result<Vec<u8>> {
         let body = json!({
             "model": model,
             "prompt": prompt,
@@ -205,13 +222,23 @@ impl Engine {
         let arr = v["data"][0]["embedding"]
             .as_array()
             .ok_or_else(|| anyhow!("no data[0].embedding in response"))?;
-        Ok(arr.iter().filter_map(|x| x.as_f64().map(|f| f as f32)).collect())
+        Ok(arr
+            .iter()
+            .filter_map(|x| x.as_f64().map(|f| f as f32))
+            .collect())
     }
 
     // --- video (async job) ------------------------------------------------
 
     /// Queue a text-to-video job; returns the job id.
-    pub async fn video_create(&self, prompt: &str, num_frames: usize, width: usize, height: usize, steps: usize) -> Result<String> {
+    pub async fn video_create(
+        &self,
+        prompt: &str,
+        num_frames: usize,
+        width: usize,
+        height: usize,
+        steps: usize,
+    ) -> Result<String> {
         let body = json!({
             "prompt": prompt,
             "num_frames": num_frames,
@@ -227,7 +254,10 @@ impl Engine {
             .await
             .context("videos request failed")?;
         let v: Value = ok_json(resp, "/v1/videos").await?;
-        v["id"].as_str().map(str::to_string).ok_or_else(|| anyhow!("no id in video job response"))
+        v["id"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("no id in video job response"))
     }
 
     /// One poll of a video job: `(status, progress)`.
@@ -265,7 +295,8 @@ async fn ok_json(resp: reqwest::Response, what: &str) -> Result<Value> {
     if !status.is_success() {
         bail!("{what} returned {status}: {}", truncate(&text, 400));
     }
-    serde_json::from_str(&text).with_context(|| format!("{what} returned non-JSON: {}", truncate(&text, 200)))
+    serde_json::from_str(&text)
+        .with_context(|| format!("{what} returned non-JSON: {}", truncate(&text, 200)))
 }
 
 /// Pull the first balanced JSON object/array out of arbitrary model text
@@ -278,7 +309,11 @@ pub fn extract_json(s: &str) -> Option<Value> {
     }
     let bytes = s.as_bytes();
     let open = bytes.iter().position(|&b| b == b'{' || b == b'[')?;
-    let (openc, closec) = if bytes[open] == b'{' { (b'{', b'}') } else { (b'[', b']') };
+    let (openc, closec) = if bytes[open] == b'{' {
+        (b'{', b'}')
+    } else {
+        (b'[', b']')
+    };
     let mut depth = 0i32;
     let mut in_str = false;
     let mut esc = false;
@@ -430,7 +465,11 @@ mod tests {
         let s = r#"{"shots":[{"shot_type":"wide","action_prompt":"a"},{"shot_type":"close","action_prompt":"b"},{"shot_type":"med","action_pro"#;
         let v = extract_json(s).expect("must repair truncated json");
         let shots = v["shots"].as_array().unwrap();
-        assert_eq!(shots.len(), 2, "keeps the two complete shots, drops the cut one");
+        assert_eq!(
+            shots.len(),
+            2,
+            "keeps the two complete shots, drops the cut one"
+        );
         assert_eq!(shots[0]["shot_type"], "wide");
         assert_eq!(shots[1]["action_prompt"], "b");
     }
