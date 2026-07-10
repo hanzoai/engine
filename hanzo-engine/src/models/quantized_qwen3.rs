@@ -200,9 +200,8 @@ impl LayerWeights {
             flash_params,
             metadata,
         )?;
-        let x = (attn + residual)?;
-        let residual = &x;
-        let xn = self.ffn_norm.forward(&x)?;
+        let (sum, xn) = self.ffn_norm.forward_of_sum(&attn, residual)?;
+        let residual = &sum;
         let xn = self.mlp.forward(&xn)?;
         xn + residual
     }
