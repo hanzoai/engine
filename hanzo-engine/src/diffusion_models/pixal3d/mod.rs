@@ -4,6 +4,11 @@
 //! SLAT sampler and decodes into a [`hanzo_3d::Mesh`]. Only the entry point exists here; the
 //! sampler, the rectified-flow transformer, and the mesh decoder are the follow-up.
 
+pub mod dinov2;
+pub mod glb;
+pub mod ss_flow;
+pub mod transformer;
+
 use anyhow::{bail, Result};
 use hanzo_3d::Mesh;
 use image::DynamicImage;
