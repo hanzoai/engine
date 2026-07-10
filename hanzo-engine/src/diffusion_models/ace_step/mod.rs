@@ -4,6 +4,8 @@
 //! DiT and flow sampler land alongside as they parity-gate.
 
 pub mod dcae;
+pub mod pipeline;
+pub mod scheduler;
 pub mod text_encoder;
 pub mod transformer;
 pub mod vocoder;
