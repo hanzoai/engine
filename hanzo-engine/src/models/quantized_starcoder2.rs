@@ -369,7 +369,7 @@ impl ModelWeights {
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
             self.dtype,
-            &CausalMaskConfig::default(),
+            &CausalMaskConfig::gguf(),
         )?;
         let mask = if metadata
             .as_ref()
