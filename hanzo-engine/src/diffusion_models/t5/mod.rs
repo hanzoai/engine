@@ -135,6 +135,38 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    /// `google/umt5-xxl` - the WAN 2.x text encoder (encoder-only, gated-GELU, 24 layers, d_model 4096).
+    pub fn umt5_xxl() -> Self {
+        Self {
+            vocab_size: 256384,
+            d_model: 4096,
+            d_kv: 64,
+            d_ff: 10240,
+            num_layers: 24,
+            num_decoder_layers: Some(24),
+            num_heads: 64,
+            relative_attention_num_buckets: 32,
+            relative_attention_max_distance: 128,
+            dropout_rate: 0.1,
+            layer_norm_epsilon: 1e-6,
+            initializer_factor: 1.0,
+            feed_forward_proj: ActivationWithOptionalGating {
+                gated: true,
+                activation: Activation::NewGelu,
+            },
+            tie_word_embeddings: false,
+            is_decoder: false,
+            is_encoder_decoder: true,
+            use_cache: false,
+            pad_token_id: 0,
+            eos_token_id: 1,
+            decoder_start_token_id: Some(0),
+            umt5: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct T5LayerNorm {
     weight: Tensor,
@@ -796,5 +828,110 @@ impl T5EncoderModel {
 
     pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
         self.encoder.forward(input_ids, None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hanzo_ml::Shape;
+    use hanzo_nn::var_builder::SimpleBackend;
+    use hanzo_nn::Init;
+    use hanzo_quant::ShardedSafeTensors;
+    use std::sync::{Arc, Mutex};
+
+    struct RecBackend {
+        seen: Arc<Mutex<Vec<String>>>,
+    }
+    impl SimpleBackend for RecBackend {
+        fn get(
+            &self,
+            s: Shape,
+            name: &str,
+            _h: Init,
+            dtype: DType,
+            dev: &Device,
+        ) -> Result<Tensor> {
+            self.seen.lock().unwrap().push(name.to_string());
+            Tensor::randn(0f64, 0.02, s, dev)?.to_dtype(dtype)
+        }
+        fn get_unchecked(&self, _n: &str, _d: DType, _dev: &Device) -> Result<Tensor> {
+            hanzo_ml::bail!("needs shape")
+        }
+        fn contains_tensor(&self, _n: &str) -> bool {
+            true
+        }
+    }
+
+    fn tiny(umt5: bool) -> Config {
+        Config {
+            vocab_size: 128,
+            d_model: 32,
+            d_kv: 8,
+            d_ff: 64,
+            num_layers: 3,
+            num_decoder_layers: None,
+            num_heads: 4,
+            relative_attention_num_buckets: 16,
+            relative_attention_max_distance: 128,
+            dropout_rate: 0.0,
+            layer_norm_epsilon: 1e-6,
+            initializer_factor: 1.0,
+            feed_forward_proj: ActivationWithOptionalGating {
+                gated: true,
+                activation: Activation::NewGelu,
+            },
+            tie_word_embeddings: false,
+            is_decoder: false,
+            is_encoder_decoder: true,
+            use_cache: false,
+            pad_token_id: 0,
+            eos_token_id: 1,
+            decoder_start_token_id: None,
+            umt5,
+        }
+    }
+
+    fn run(umt5: bool) -> Result<Vec<String>> {
+        let dev = Device::Cpu;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let vb = ShardedSafeTensors::wrap(
+            Box::new(RecBackend { seen: seen.clone() }),
+            DType::F32,
+            dev.clone(),
+        );
+        let mut enc = T5EncoderModel::load(vb, &tiny(umt5), &dev, false)?;
+        let ids = Tensor::from_vec(vec![3u32, 7, 1, 0], (1, 4), &dev)?;
+        let out = enc.forward(&ids)?;
+        assert_eq!(out.dims(), &[1, 4, 32]);
+        assert!(out
+            .flatten_all()?
+            .to_vec1::<f32>()?
+            .iter()
+            .all(|x| x.is_finite()));
+        let names = seen.lock().unwrap().clone();
+        Ok(names)
+    }
+
+    // UMT5 loads a per-layer relative_attention_bias; T5 only layer 0. Pins the umt5-xxl ctor + flag.
+    #[test]
+    fn umt5_per_layer_bias() -> Result<()> {
+        assert!(Config::umt5_xxl().umt5);
+        let umt5 = run(true)?;
+        let has = |n: &[String], p: &str| n.iter().any(|x| x.contains(p));
+        assert!(has(
+            &umt5,
+            "block.2.layer.0.SelfAttention.relative_attention_bias"
+        ));
+        let t5 = run(false)?;
+        assert!(has(
+            &t5,
+            "block.0.layer.0.SelfAttention.relative_attention_bias"
+        ));
+        assert!(!has(
+            &t5,
+            "block.2.layer.0.SelfAttention.relative_attention_bias"
+        ));
+        Ok(())
     }
 }
