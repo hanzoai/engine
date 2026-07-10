@@ -58,7 +58,8 @@ impl MoeGate {
             .to_dtype(DType::F32)?
             .broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
         let scores = if self.sigmoid_scoring {
-            hanzo_nn::ops::sigmoid(&logits)?
+            // 1/(1+exp(-x)) via standard unaries; the fused Sigmoid custom-op has no ROCm kernel.
+            (logits.neg()?.exp()? + 1.0)?.recip()?
         } else {
             hanzo_nn::ops::softmax_last_dim(&logits)?
         };
@@ -69,27 +70,34 @@ impl MoeGate {
             let scores_for_choice = scores
                 .reshape((bs * seq_len, ()))?
                 .broadcast_add(&bias.unsqueeze(0)?)?;
-            let group_scores = scores_for_choice
-                .reshape((bs * seq_len, self.n_group, ()))?
-                .topk(2)?
-                .values
-                .sum(D::Minus1)?;
-            let group_idx = group_scores.topk(self.topk_group)?.indices;
-            let mut group_mask = group_scores.zeros_like()?;
-            group_mask = group_mask.scatter_add(
-                &group_idx,
-                &group_idx.ones_like()?.to_dtype(group_mask.dtype())?,
-                1,
-            )?;
-            let score_mask = group_mask
-                .unsqueeze(D::Minus1)?
-                .expand((
-                    bs * seq_len,
-                    self.n_group,
-                    self.n_routed_experts / self.n_group,
-                ))?
-                .reshape((bs * seq_len, ()))?;
-            let tmp_scores = scores_for_choice.broadcast_mul(&score_mask)?;
+            // With a single expert group the group-limited mask is all-ones (identity), so skip the
+            // scatter entirely (also sidesteps ROCm's missing scatter_add). n_group > 1 keeps the
+            // DeepSeek-V3 grouped no-aux-loss selection.
+            let tmp_scores = if self.n_group <= 1 {
+                scores_for_choice
+            } else {
+                let group_scores = scores_for_choice
+                    .reshape((bs * seq_len, self.n_group, ()))?
+                    .topk(2)?
+                    .values
+                    .sum(D::Minus1)?;
+                let group_idx = group_scores.topk(self.topk_group)?.indices;
+                let mut group_mask = group_scores.zeros_like()?;
+                group_mask = group_mask.scatter_add(
+                    &group_idx,
+                    &group_idx.ones_like()?.to_dtype(group_mask.dtype())?,
+                    1,
+                )?;
+                let score_mask = group_mask
+                    .unsqueeze(D::Minus1)?
+                    .expand((
+                        bs * seq_len,
+                        self.n_group,
+                        self.n_routed_experts / self.n_group,
+                    ))?
+                    .reshape((bs * seq_len, ()))?;
+                scores_for_choice.broadcast_mul(&score_mask)?
+            };
             topk_idx = tmp_scores.topk(self.top_k)?.indices;
             topk_weight = scores.gather(&topk_idx, 1)?;
         } else {
