@@ -551,3 +551,32 @@ build sm_121a + CUDA 13 (issue #19662).
 - THE PERMANENT CURE is the kernel-DSL migration (hanzo-kernel, proven CPU+Vulkan+Metal this session): ONE
   correct attention implementation lowered to every backend eliminates the flash-vs-eager-vs-Metal numeric
   fork by construction -- the whole "same op, N impls, N bf16 roundings, N bifurcation outcomes" class.
+
+## Pixal3D: native image-to-3D (TRELLIS-image-large, MIT) -- `diffusion_models/pixal3d/`
+- Target = microsoft/TRELLIS-image-large (the mature 1.2B model). TRELLIS.2-4B (DINOv3, ConvNeXt VAE,
+  RoPE, shape/texture cascade) is the successor and a 3x heavier follow-up, NOT this port.
+- Pipeline stages: image -> DINOv2 tokens -> sparse-structure rectified-flow -> Conv3d decode to a 64^3
+  occupancy grid -> [SLAT sparse flow -> FlexiCubes mesh] -> GLB. The DENSE half (through occupancy) is
+  fully ported; the SLAT/FlexiCubes half is the frontier (needs sparse-conv infra + FlexiCubes).
+- ALL dense stages are BIT-EXACT vs the torch reference oracle (cos=1.00000000):
+    dinov2 (max|d|=8.2e-5), ss_flow (mse=3.0e-12), ss_decoder (mse=2.3e-9).
+  Oracle = TRELLIS's own pure-torch code run CPU-only with ATTN_BACKEND=sdpa and the sparse/render
+  subpackages stubbed (`sys.modules['trellis.{pipelines,renderers,representations}']=ModuleType(...)`),
+  so no spconv/nvdiffrast/flash needed to validate the dense models. Scripts in scratchpad/trellis_oracle.
+- Key facts pinned from the reference source (do not re-derive):
+  * DINOv2 = torch-hub `dinov2_vitl14_reg` (NOT the HF-naming variant): fused qkv, LayerScale ls1/ls2,
+    4 registers inserted AFTER cls (no pos-emb), 518->1374 tokens, exact-erf GELU; TRELLIS uses `x_prenorm`
+    (before the final `norm`) then a non-affine `F.layer_norm` (eps 1e-5). Block norms eps 1e-6.
+  * ModulatedTransformerCrossBlock (SS + SLAT share it): norm1/norm3 non-affine, norm2 affine; self-attn
+    is adaLN-gated with per-head qk-RMSNorm (= L2-normalize over head_dim * gamma[H,D] * sqrt(D)); cross-attn
+    to the DINOv2 tokens is un-gated/un-modulated; FFN is tanh-GELU, adaLN-gated. adaLN = SiLU->Linear(C,6C).
+  * Sampler passes t*1000 to the model; timestep_embedding is cos-then-sin; SS pos_emb is a stored buffer.
+  * FlowEuler: t_seq=linspace(1,0,steps+1) reparam by rescale_t=3; step x-=（t-t_prev)*v; CFG only inside
+    cfg_interval [0.5,1] as (1+s)*cond - s*uncond, s=5; neg_cond = zeros_like(cond).
+- hanzo-ml has NO Conv3d: the decoder's only kernel (3x3x3, pad1, stride1) is decomposed into 3 depth-sliced
+  conv2d summed with depth alignment (ss_decoder.rs::Conv3d). candle tuple Shape/Dims cap at rank 6 -> use
+  Vec/&[usize] for the 8-D pixel_shuffle_3d reshape/permute.
+- Weights: `PIXAL3D_MODEL` dir holds the TRELLIS ckpts (ckpts/*.safetensors) + a converted
+  `dinov2_vitl14_reg.safetensors` (torch-hub .pth has no safetensors; convert once). Runs Device::Cpu today.
+- GLB export = hand-rolled binary glTF 2.0 (glb.rs), validated against the third-party `gltf` loader;
+  wired into ThreeDFormat::Glb (was a PLY fallback). The /v1/3d async endpoint already calls pixal3d_generate.
