@@ -395,12 +395,17 @@ impl Loader for GGUFLoader {
 
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
-        let mut readers = Vec::new();
+        let mut files = Vec::new();
         for filename in paths.get_weight_filenames() {
-            readers.push(std::fs::File::open(filename)?);
+            files.push(std::fs::File::open(filename)?);
         }
-        let mut readers = readers.iter_mut().collect::<Vec<_>>();
-        let model = Content::from_readers(&mut readers)?;
+        let mmaps: Vec<std::sync::Arc<memmap2::Mmap>> = files
+            .iter()
+            .map(|f| unsafe { memmap2::Mmap::map(f) }.map(std::sync::Arc::new))
+            .collect::<std::io::Result<_>>()?;
+        let mut readers = files.iter_mut().collect::<Vec<_>>();
+        let mut model = Content::from_readers(&mut readers)?;
+        model.set_mmaps(mmaps);
 
         if !silent {
             model.print_metadata()?;
