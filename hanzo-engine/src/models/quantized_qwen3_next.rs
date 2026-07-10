@@ -69,12 +69,15 @@ use crate::models::quantized_qwen3_5_moe::{gguf_qmm, FusedMoe};
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::{extract_logits, EitherCache, KvCache};
+use crate::pipeline_parallel::{
+    pp_head_forward, use_pipeline_parallel, PipelineParallelModel, RingLayout,
+};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 use hanzo_ml::{DType, Device, Result, Tensor, D};
 use hanzo_nn::{Embedding, Module};
-use hanzo_quant::QuantMethod;
+use hanzo_quant::{QuantMethod, RingPipeline};
 
 use crate::kv_cache::{
     HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
@@ -636,16 +639,17 @@ impl PropsGGUF {
 // ===================== Model =====================
 
 pub struct ModelWeights {
-    tok_embeddings: Embedding,
+    tok_embeddings: Option<Embedding>,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
-    norm: QRmsNorm,
-    output: Arc<dyn QuantMethod>,
+    norm: Option<QRmsNorm>,
+    output: Option<Arc<dyn QuantMethod>>,
     pub device: Device,
     pub cache: EitherCache,
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     dtype: DType,
+    pp: Option<Arc<RingPipeline>>,
 }
 
 impl ModelConfig::FromGGUF for ModelWeights {
@@ -677,7 +681,27 @@ impl ModelConfig::FromGGUF for ModelWeights {
             );
         }
 
-        let layer_types: Vec<LayerType> = (0..props.block_count)
+        // PP: each rank loads only its layer range; rank 0 also owns embed/norm/lm_head. The GDN
+        // recurrent + KV state lives on the owning rank. Layer type keys off the GLOBAL index, so
+        // the hybrid schedule survives the split.
+        let pp = if use_pipeline_parallel() {
+            let config = hanzo_quant::RingConfig::load();
+            Some(Arc::new(RingPipeline::from_config(&config)))
+        } else {
+            None
+        };
+        let layout = match &pp {
+            Some(_) => Some(RingLayout::new(props.block_count)?),
+            None => None,
+        };
+        let local_range = layout
+            .as_ref()
+            .map_or(0..props.block_count, RingLayout::local);
+        let is_head = layout.as_ref().is_none_or(RingLayout::is_head);
+        let local_start = local_range.start;
+
+        let layer_types: Vec<LayerType> = local_range
+            .clone()
             .map(|i| {
                 if (i + 1) % props.full_attention_interval == 0 {
                     LayerType::FullAttention
@@ -687,19 +711,30 @@ impl ModelConfig::FromGGUF for ModelWeights {
             })
             .collect();
 
-        let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
-        let tok_embeddings = qtok_embeddings.dequantize(device)?;
-        let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, props.rms_norm_eps)?;
-        let output = if ct.has_tensor("output.weight") {
-            ct.tensor("output.weight", device)?
+        let (tok_embeddings, norm, output) = if is_head {
+            let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
+            let tok_embeddings =
+                Embedding::new(qtok_embeddings.dequantize(device)?, props.embedding_length);
+            let norm =
+                QRmsNorm::new(ct.tensor("output_norm.weight", device)?, props.rms_norm_eps)?;
+            let output = if ct.has_tensor("output.weight") {
+                ct.tensor("output.weight", device)?
+            } else {
+                ct.tensor("token_embd.weight", device)?
+            };
+            (Some(tok_embeddings), Some(norm), Some(gguf_qmm(output)?))
         } else {
-            ct.tensor("token_embd.weight", device)?
+            (None, None, None)
         };
 
         // One partial NEOX RoPE per device location (shared by the full-attention layers).
         let mut ropes = HashMap::new();
-        for layer_idx in 0..props.block_count {
-            let dev = mapper.device_for(layer_idx, false).unwrap_or(device);
+        for layer_idx in local_range.clone() {
+            let dev = if pp.is_some() {
+                device
+            } else {
+                mapper.device_for(layer_idx, false).unwrap_or(device)
+            };
             if let std::collections::hash_map::Entry::Vacant(e) = ropes.entry(dev.location()) {
                 e.insert(Arc::new(RotaryEmbedding::new_partial(
                     props.rope_freq_base,
@@ -712,14 +747,18 @@ impl ModelConfig::FromGGUF for ModelWeights {
             }
         }
 
-        let mut layers = Vec::with_capacity(props.block_count);
+        let mut layers = Vec::with_capacity(layer_types.len());
         for layer_idx in NiceProgressBar::<_, 'b'>(
-            0..props.block_count,
+            local_range.clone(),
             "Loading repeating layers",
             &new_multi_progress(),
         ) {
             let prefix = format!("blk.{layer_idx}");
-            let dev = mapper.device_for(layer_idx, false).unwrap_or(device);
+            let dev = if pp.is_some() {
+                device
+            } else {
+                mapper.device_for(layer_idx, false).unwrap_or(device)
+            };
             let rotary = ropes
                 .get(&dev.location())
                 .expect("No RoPE for device location!")
@@ -734,7 +773,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 props.rms_norm_eps,
             )?;
 
-            let layer_impl = match layer_types[layer_idx] {
+            let layer_impl = match layer_types[layer_idx - local_start] {
                 LayerType::FullAttention => {
                     let attn_q = gguf_qmm(ct.tensor(&format!("{prefix}.attn_q.weight"), dev)?)?;
                     let attn_k = gguf_qmm(ct.tensor(&format!("{prefix}.attn_k.weight"), dev)?)?;
@@ -750,6 +789,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                         props.rms_norm_eps,
                     )?;
                     let paged_attn = match attention_mechanism {
+                        _ if pp.is_some() => None,
                         AttentionImplementation::PagedAttention => {
                             Some(PagedAttention::new(props.head_dim, dev, None)?)
                         }
@@ -866,16 +906,17 @@ impl ModelConfig::FromGGUF for ModelWeights {
         ));
 
         Ok(Self {
-            tok_embeddings: Embedding::new(tok_embeddings, props.embedding_length),
+            tok_embeddings,
             layers,
             layer_types,
             norm,
-            output: gguf_qmm(output)?,
+            output,
             device: device.clone(),
             cache: EitherCache::Hybrid(pipeline_cache),
             max_seq_len: props.max_seq_len,
-            mapper: Some(mapper),
+            mapper: if pp.is_some() { None } else { Some(mapper) },
             dtype,
+            pp,
         })
     }
 }
@@ -888,8 +929,11 @@ impl ModelWeights {
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
+        if self.pp.is_some() {
+            return pp_head_forward(self, input_ids, seqlen_offsets, context_lens);
+        }
         let (b_sz, _seq_len) = input_ids.dims2()?;
-        let mut x = self.tok_embeddings.forward(input_ids)?;
+        let mut x = self.tok_embeddings.as_ref().unwrap().forward(input_ids)?;
 
         let mut hybrid_cache = self.cache.hybrid();
         let state_indices = hybrid_cache.state_indices().cloned();
@@ -1063,8 +1107,120 @@ impl ModelWeights {
         }
 
         let x = x.to_device(&self.device)?;
-        let x = self.norm.forward(&x)?;
+        let x = self.norm.as_ref().unwrap().forward(&x)?;
         let x = extract_logits(&x, context_lens)?;
-        self.output.forward(&x.contiguous()?)
+        self.output.as_ref().unwrap().forward(&x.contiguous()?)
+    }
+
+    fn run_local_layers(&self, h: &Tensor, offsets: &[usize]) -> Result<Tensor> {
+        let mut hybrid_cache = self.cache.hybrid();
+        let is_head = self.pp.as_ref().unwrap().is_head();
+
+        // Worker ranks are stateless across requests: a fresh prompt (past-kv len 0) zeroes the
+        // local KV + recurrent state. The head slot is (re)zeroed by the HybridCacheManager.
+        if !is_head && offsets.first().copied().unwrap_or(0) == 0 {
+            hybrid_cache.reset();
+        }
+        // Head reuses its manager-allocated slot; a worker always drives slot 0 (batch is 1).
+        let slot = hybrid_cache
+            .state_indices_host()
+            .and_then(|s| s.first().copied())
+            .unwrap_or(0) as usize;
+
+        let ids2d = h.narrow(2, 0, 1)?.squeeze(2)?;
+        let mask = CausalMasker.make_causal_mask(
+            &ids2d,
+            &offsets as &dyn PastKvLenCache,
+            self.dtype,
+            &CausalMaskConfig::default(),
+        )?;
+        let mask = DeviceMappedMask::from_single(mask);
+        let positions = {
+            let pos = offsets
+                .iter()
+                .copied()
+                .map(u32::try_from)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(hanzo_ml::Error::wrap)?;
+            Tensor::from_vec(pos, offsets.len().max(1), &self.device)?
+        };
+
+        let mut x = h.clone();
+        for (local_idx, layer) in self.layers.iter().enumerate() {
+            let residual = x.clone();
+            let normed = layer.input_layernorm.forward(&x)?;
+            let attn_out = match &layer.layer_impl {
+                LayerImpl::FullAttention(attn) => {
+                    let Some(HybridLayerCache::Attention(kv_cache)) =
+                        hybrid_cache.get_mut(local_idx)
+                    else {
+                        hanzo_ml::bail!("Hybrid cache layer {local_idx} not attention.");
+                    };
+                    attn.forward(
+                        &normed,
+                        &mask.get(normed.device()),
+                        offsets,
+                        &positions,
+                        kv_cache,
+                        None,
+                    )?
+                }
+                LayerImpl::LinearAttention(gdn) => {
+                    let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(local_idx)
+                    else {
+                        hanzo_ml::bail!("Hybrid cache layer {local_idx} not recurrent.");
+                    };
+                    let mut gdn_cache = GdnLayerCache {
+                        conv_state: pool.conv_state.narrow(0, slot, 1)?,
+                        recurrent_state: pool.recurrent_state.narrow(0, slot, 1)?,
+                        seqlen_offset: offsets.first().copied().unwrap_or(0),
+                    };
+                    let out = gdn.forward(&normed, &mut gdn_cache)?;
+                    let conv_dt = pool.conv_state.dtype();
+                    let rec_dt = pool.recurrent_state.dtype();
+                    pool.conv_state.slice_set(
+                        &gdn_cache.conv_state.to_dtype(conv_dt)?.contiguous()?,
+                        0,
+                        slot,
+                    )?;
+                    pool.recurrent_state.slice_set(
+                        &gdn_cache.recurrent_state.to_dtype(rec_dt)?.contiguous()?,
+                        0,
+                        slot,
+                    )?;
+                    pool.set_seqlen_offset(slot, gdn_cache.seqlen_offset);
+                    out
+                }
+            };
+            let x_mid = (attn_out + residual)?;
+            let residual = &x_mid;
+            let normed = layer.post_attention_layernorm.forward(&x_mid)?;
+            let ffn_out = layer.mlp.forward(&normed)?;
+            x = (ffn_out + residual)?;
+        }
+        Ok(x)
+    }
+}
+
+impl PipelineParallelModel for ModelWeights {
+    fn ring(&self) -> &Arc<RingPipeline> {
+        self.pp.as_ref().expect("pipeline parallel not enabled")
+    }
+    fn pp_device(&self) -> &Device {
+        &self.device
+    }
+    fn pp_dtype(&self) -> DType {
+        self.dtype
+    }
+    fn pp_embed(&self, tokens: &Tensor) -> Result<Tensor> {
+        self.tok_embeddings.as_ref().unwrap().forward(tokens)
+    }
+    fn pp_run_local(&self, h: &Tensor, offsets: &[usize]) -> Result<Tensor> {
+        self.run_local_layers(h, offsets)
+    }
+    fn pp_norm_head(&self, h: &Tensor, context_lens: Vec<(usize, usize)>) -> Result<Tensor> {
+        let x = self.norm.as_ref().unwrap().forward(h)?;
+        let x = extract_logits(&x, context_lens)?;
+        self.output.as_ref().unwrap().forward(&x.contiguous()?)
     }
 }
