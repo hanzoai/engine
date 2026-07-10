@@ -422,6 +422,7 @@ async fn text_interactive_mode(hanzo: Arc<Hanzo>, do_search: bool, enable_thinki
                 Response::Raw { .. } => unreachable!(),
                 Response::Embeddings { .. } => unreachable!(),
                 Response::Frames { .. } => unreachable!(),
+                Response::Transcription { .. } => unreachable!(),
             }
         }
 
@@ -793,6 +794,7 @@ async fn multimodal_interactive_mode(
                 Response::Raw { .. } => unreachable!(),
                 Response::Embeddings { .. } => unreachable!(),
                 Response::Frames { .. } => unreachable!(),
+                Response::Transcription { .. } => unreachable!(),
             }
         }
 
