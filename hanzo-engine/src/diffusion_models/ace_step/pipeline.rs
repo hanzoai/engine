@@ -36,6 +36,10 @@ impl AceStepPipeline {
         }
     }
 
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
     /// input_ids (1, T_text) u32 -> stereo waveform (1, 2, samples) at 44.1kHz.
     pub fn generate(
         &mut self,

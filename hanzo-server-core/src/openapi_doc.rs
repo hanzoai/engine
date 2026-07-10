@@ -8,16 +8,18 @@ use crate::{
     embeddings::__path_embeddings,
     handlers::{__path_health, __path_models, __path_re_isq, ReIsqRequest},
     image_generation::__path_image_generation,
+    music_generation::__path_music_generation,
     openai::{
         AudioResponseFormat, ChatCompletionRequest, CompletionRequest, EmbeddingData,
         EmbeddingEncodingFormat, EmbeddingInput, EmbeddingRequest, EmbeddingResponse,
         EmbeddingUsage, EmbeddingVector, FunctionCalled, Grammar, ImageGenerationRequest,
         JsonSchemaResponseFormat, Message, MessageContent, MessageInnerContent, ModelObject,
-        ModelObjects, ResponseFormat, ResponsesAnnotation, ResponsesChunk, ResponsesContent,
-        ResponsesCreateRequest, ResponsesDelta, ResponsesDeltaContent, ResponsesDeltaOutput,
-        ResponsesError, ResponsesIncompleteDetails, ResponsesInputTokensDetails, ResponsesMessages,
-        ResponsesObject, ResponsesOutput, ResponsesOutputTokensDetails, ResponsesUsage,
-        SpeechGenerationRequest, StopTokens, ToolCall,
+        ModelObjects, MusicGenerationRequest, ResponseFormat, ResponsesAnnotation, ResponsesChunk,
+        ResponsesContent, ResponsesCreateRequest, ResponsesDelta, ResponsesDeltaContent,
+        ResponsesDeltaOutput, ResponsesError, ResponsesIncompleteDetails,
+        ResponsesInputTokensDetails, ResponsesMessages, ResponsesObject, ResponsesOutput,
+        ResponsesOutputTokensDetails, ResponsesUsage, SpeechGenerationRequest, StopTokens,
+        ToolCall,
     },
     responses::{__path_create_response, __path_delete_response, __path_get_response},
     speech_generation::__path_speech_generation,
@@ -69,7 +71,7 @@ use hanzo_engine::{
 pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(
-        paths(models, health, chatcompletions, completions, embeddings, re_isq, image_generation, speech_generation, create_response, get_response, delete_response),
+        paths(models, health, chatcompletions, completions, embeddings, re_isq, image_generation, speech_generation, music_generation, create_response, get_response, delete_response),
         components(schemas(
             ApproximateUserLocation,
             AudioResponseFormat,
@@ -93,6 +95,7 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             MessageInnerContent,
             ModelObject,
             ModelObjects,
+            MusicGenerationRequest,
             ReIsqRequest,
             ResponseFormat,
             ResponsesAnnotation,

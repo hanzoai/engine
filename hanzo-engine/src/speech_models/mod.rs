@@ -61,6 +61,9 @@ pub enum SpeechLoaderType {
     Dia,
     #[serde(rename = "qwen3_tts")]
     Qwen3Tts,
+    /// ACE-Step: text/tag prompt -> song (UMT5 encoder + DiT flow-match + DCAE + vocoder).
+    #[serde(rename = "ace_step")]
+    AceStep,
 }
 
 impl FromStr for SpeechLoaderType {
@@ -69,8 +72,9 @@ impl FromStr for SpeechLoaderType {
         match s {
             "dia" => Ok(Self::Dia),
             "qwen3_tts" | "qwen3-tts" | "zen3_tts" | "zen3-tts" => Ok(Self::Qwen3Tts),
+            "ace_step" | "ace-step" | "acestep" => Ok(Self::AceStep),
             a => Err(format!(
-                "Unknown architecture `{a}`. Possible architectures: `dia`, `qwen3_tts`."
+                "Unknown architecture `{a}`. Possible architectures: `dia`, `qwen3_tts`, `ace_step`."
             )),
         }
     }
@@ -80,8 +84,12 @@ impl SpeechLoaderType {
     /// Auto-detect speech loader type from a config.json string.
     /// Extend this when adding new speech pipelines.
     pub fn auto_detect_from_config(config: &str) -> Option<Self> {
-        // qwen3_tts is checked first: its config has a distinct `talker_config`/`model_type`.
+        // ace_step is checked first: the DiT config names itself `ACEStepTransformer2DModel`.
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(config) {
+            if v.get("_class_name").and_then(|m| m.as_str()) == Some("ACEStepTransformer2DModel") {
+                return Some(Self::AceStep);
+            }
+            // qwen3_tts is checked next: its config has a distinct `talker_config`/`model_type`.
             if v.get("model_type").and_then(|m| m.as_str()) == Some("qwen3_tts") {
                 return Some(Self::Qwen3Tts);
             }
@@ -111,7 +119,21 @@ pub enum SpeechGenerationConfig {
         top_p: f32,
         top_k: Option<usize>,
     },
+    /// ACE-Step music: `frames` is the DiT latent time dimension (44100/4096 ~= 10.77
+    /// latent frames per second of stereo audio); `steps` is the flow-match sampler
+    /// count; `guidance_scale` is APG classifier-free guidance.
+    AceStep {
+        frames: usize,
+        steps: usize,
+        guidance_scale: f64,
+    },
 }
+
+/// Samples of stereo audio produced by one ACE-Step latent frame (DCAE f8 over a
+/// mel with hop 512 at 44.1 kHz). `frames = round(seconds * 44100 / 4096)`.
+pub const ACE_STEP_SAMPLES_PER_FRAME: usize = 4096;
+/// ACE-Step output sample rate (Hz).
+pub const ACE_STEP_SAMPLE_RATE: usize = 44100;
 
 impl SpeechGenerationConfig {
     pub fn default(ty: SpeechLoaderType) -> Self {
@@ -129,6 +151,12 @@ impl SpeechGenerationConfig {
                 top_p: 1.0,
                 top_k: Some(50),
             },
+            // ~10 s clip, ACE-Step's recommended 27 sampler steps, APG guidance 15.
+            SpeechLoaderType::AceStep => Self::AceStep {
+                frames: 10 * ACE_STEP_SAMPLE_RATE / ACE_STEP_SAMPLES_PER_FRAME,
+                steps: 27,
+                guidance_scale: 15.0,
+            },
         }
     }
 }
@@ -138,4 +166,36 @@ pub struct SpeechGenerationOutput {
     pub pcm: Arc<Vec<f32>>,
     pub rate: usize,
     pub channels: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ace_step_arch_registration() {
+        for s in ["ace_step", "ace-step", "acestep"] {
+            assert_eq!(
+                s.parse::<SpeechLoaderType>().unwrap(),
+                SpeechLoaderType::AceStep
+            );
+        }
+        // The ACE-Step DiT/top-level config names itself; auto-detect must route to AceStep.
+        let cfg = r#"{"_class_name":"ACEStepTransformer2DModel","in_channels":8}"#;
+        assert_eq!(
+            SpeechLoaderType::auto_detect_from_config(cfg),
+            Some(SpeechLoaderType::AceStep)
+        );
+        let SpeechGenerationConfig::AceStep { frames, steps, .. } =
+            SpeechGenerationConfig::default(SpeechLoaderType::AceStep)
+        else {
+            panic!("default config for AceStep must be the AceStep variant");
+        };
+        assert!(steps > 0);
+        // ~10 s at 44100/4096 latent fps.
+        assert_eq!(
+            frames,
+            10 * ACE_STEP_SAMPLE_RATE / ACE_STEP_SAMPLES_PER_FRAME
+        );
+    }
 }
