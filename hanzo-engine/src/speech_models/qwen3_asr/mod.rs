@@ -1,9 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-// The pipeline is built + verified end-to-end (see pipeline.rs tests) but not
-// yet hooked into the serve/`Loader` path, so some public API is unreferenced.
-#![allow(dead_code, unused_imports)]
+// Some encoder/decoder helper methods are only exercised by the isolation tests
+// (decoder-vs-ref, ref-embeds), so keep a crate-local dead_code allow.
+#![allow(dead_code)]
 
-//! Qwen3-ASR (audio -> text). NEW ASR modality for the engine.
+//! Qwen3-ASR (audio -> text). ASR modality for the engine, served via the ASR
+//! pipeline (`pipeline::asr`) at `/v1/audio/transcriptions`.
 //!
 //! Architecture (per the HF `Qwen3-ASR` release): an AuT audio encoder
 //! (Conv2d 8x-downsample stem + sinusoidal-position bidirectional transformer +
@@ -18,10 +19,10 @@
 //!   `thinker.model.*`        -> [`decoder::Qwen3AsrTextDecoder`]
 //!   `thinker.lm_head.weight` -> tied with `thinker.model.embed_tokens.weight`
 //!
-//! Status: this is a compile-green scaffold. The transformer graph (encoder +
-//! decoder + merge) is implemented; the audio mel frontend and streaming
-//! incremental decode are the remaining pieces (see crate notes / the loader's
-//! TODOs) before end-to-end transcription works.
+//! End-to-end path (mel frontend -> AuT encoder -> audio-embed splice -> greedy
+//! decode) lives in [`pipeline::Qwen3AsrPipeline`] and is covered by the
+//! `qwen3_asr_e2e` test. Streaming incremental (KV-cache) decode is the one
+//! remaining perf item; decode currently re-runs prefill per step.
 
 mod audio;
 pub mod config;
