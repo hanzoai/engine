@@ -2,6 +2,7 @@ pub mod animation;
 pub(crate) mod clip;
 pub(crate) mod flux;
 pub mod musetalk;
+pub mod oasis;
 pub mod pixal3d;
 pub(crate) mod processor;
 pub(crate) mod qwen_image;
