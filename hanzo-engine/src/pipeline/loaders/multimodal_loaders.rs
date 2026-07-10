@@ -2140,6 +2140,18 @@ impl MultimodalPromptPrefixer for Qwen2VLPrefixer {
             .repeat(image_indexes.len())
         )
     }
+    fn prefix_video(&self, video_indexes: Vec<usize>, prompt: &str) -> String {
+        format!(
+            "{}{prompt}",
+            format!(
+                "{}{}{}",
+                Qwen2VLProcessor::VISION_START,
+                Qwen2VLProcessor::VIDEO_PAD,
+                Qwen2VLProcessor::VISION_END
+            )
+            .repeat(video_indexes.len())
+        )
+    }
 }
 
 impl MultimodalModelLoader for Qwen2VLLoader {
@@ -3382,6 +3394,18 @@ impl MultimodalPromptPrefixer for Qwen2_5VLPrefixer {
                 Qwen2_5VLProcessor::VISION_END
             )
             .repeat(image_indexes.len())
+        )
+    }
+    fn prefix_video(&self, video_indexes: Vec<usize>, prompt: &str) -> String {
+        format!(
+            "{}{prompt}",
+            format!(
+                "{}{}{}",
+                Qwen2_5VLProcessor::VISION_START,
+                Qwen2_5VLProcessor::VIDEO_PAD,
+                Qwen2_5VLProcessor::VISION_END
+            )
+            .repeat(video_indexes.len())
         )
     }
 }

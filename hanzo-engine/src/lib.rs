@@ -51,7 +51,7 @@ mod vulkan;
 pub use model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
 };
-pub use video_input::{sample_frame_indices, VideoInput};
+pub use video_input::{sample_frame_indices, smart_nframes, VideoInput, DEFAULT_SAMPLE_FPS};
 pub(crate) mod disk_kv_cache;
 mod embedding_models;
 mod kv_cache;
