@@ -33,11 +33,12 @@ use crate::{
         RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE,
         SESSION_ROUTE, SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE,
         THREED_CONTENT_ROUTE, THREED_GENERATION_ROUTE, THREED_JOB_ROUTE, TUNE_MODEL_ROUTE,
-        UNLOAD_MODEL_ROUTE,
+        UNLOAD_MODEL_ROUTE, VIDEO_CONTENT_ROUTE, VIDEO_GENERATION_ROUTE, VIDEO_JOB_ROUTE,
     },
     speech_generation::speech_generation,
     threed_generation::{create_3d, get_3d, get_3d_content},
     types::SharedState,
+    video_generation::{create_video, get_video, get_video_content},
 };
 
 /// Server-level defaults for agentic features.
@@ -313,6 +314,9 @@ fn init_router(
         .route(ROOT_ROUTE.path, get(health))
         .route(RE_ISQ_ROUTE.path, post(re_isq))
         .route(IMAGE_GENERATION_ROUTE.path, post(image_generation))
+        .route(VIDEO_GENERATION_ROUTE.path, post(create_video))
+        .route(VIDEO_JOB_ROUTE.path, get(get_video))
+        .route(VIDEO_CONTENT_ROUTE.path, get(get_video_content))
         .route(THREED_GENERATION_ROUTE.path, post(create_3d))
         .route(THREED_JOB_ROUTE.path, get(get_3d))
         .route(THREED_CONTENT_ROUTE.path, get(get_3d_content))
