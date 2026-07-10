@@ -332,9 +332,13 @@ async fn generate(req: &ThreeDGenerationRequest) -> anyhow::Result<GenOutput> {
     let bytes = decode_image_input(&req.image).await?;
     let image = image::load_from_memory(&bytes)?;
     if req.texture {
-        Ok(GenOutput::Fine(Box::new(pixal3d_generate_textured(&image, req.seed, req.steps)?)))
+        Ok(GenOutput::Fine(Box::new(pixal3d_generate_textured(
+            &image, req.seed, req.steps,
+        )?)))
     } else {
-        Ok(GenOutput::Coarse(pixal3d_generate(&image, req.seed, req.steps)?))
+        Ok(GenOutput::Coarse(pixal3d_generate(
+            &image, req.seed, req.steps,
+        )?))
     }
 }
 

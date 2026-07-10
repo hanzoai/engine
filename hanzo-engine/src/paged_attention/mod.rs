@@ -126,7 +126,7 @@ pub fn calculate_cache_config(
     layer_devices: &[Option<Device>],
     silent: bool,
     model_weight_size_in_bytes: Option<usize>,
-    max_num_tokens: Option<usize>,
+    _max_num_tokens: Option<usize>,
 ) -> anyhow::Result<CacheConfig> {
     let block_size = block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
     if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {

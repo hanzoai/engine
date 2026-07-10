@@ -1,3 +1,4 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use super::text_models_inputs_processor::PagedAttentionMeta;
 use super::{
     animation_loader, AdapterPaths, AnimationComponents, AnimationLoaderType, AnyMoePipelineMixin,

@@ -6,6 +6,7 @@
 //! `(1 + s) * v_cond - s * v_uncond`; outside it, cond-only. `v` is supplied as a closure so the
 //! same sampler drives the sparse-structure and SLAT flows.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use hanzo_ml::{Result, Tensor};
 
 #[derive(Debug, Clone)]

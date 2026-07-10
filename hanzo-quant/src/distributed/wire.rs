@@ -1,5 +1,6 @@
+#[cfg(feature = "ring")]
+use std::collections::HashMap;
 use std::{
-    collections::HashMap,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     sync::{Arc, Mutex, OnceLock},
@@ -67,6 +68,7 @@ pub(crate) fn cpu_to_f32(cpu: &CpuStorage) -> Result<Vec<f32>> {
 
 // One symmetric ring step: stream `send` to the right neighbour and read the same-sized payload
 // from the left, returning the left neighbour's f32 slice. Used by the collectives.
+#[cfg(feature = "ring")]
 pub(crate) fn ring_exchange(
     left: &SharedTcpStream,
     right: &SharedTcpStream,
