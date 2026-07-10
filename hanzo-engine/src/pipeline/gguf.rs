@@ -677,7 +677,7 @@ impl Loader for GGUFLoader {
                 GGUFArchitecture::Qwen35 | GGUFArchitecture::Qwen35MoE => {
                     Model::Qwen35(QQwen35::try_from(model_config)?)
                 }
-                GGUFArchitecture::Deepseek2 => {
+                GGUFArchitecture::Deepseek2 | GGUFArchitecture::GlmDsa => {
                     Model::Deepseek2(QDeepSeek2::try_from(model_config)?)
                 }
                 GGUFArchitecture::Deepseek4 => {
@@ -1781,6 +1781,7 @@ impl Pipeline for GGUFPipeline {
                 Model::Qwen3(ref m) => pp_worker_step(m)?,
                 Model::Qwen3MoE(ref m) => pp_worker_step(m)?,
                 Model::Qwen3Next(ref m) => pp_worker_step(m)?,
+                Model::Deepseek2(ref m) => pp_worker_step(m)?,
                 _ => {
                     hanzo_ml::bail!("pipeline parallelism is not wired for this GGUF architecture")
                 }
