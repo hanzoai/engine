@@ -71,8 +71,10 @@ impl Attention {
         let kv_out = cfg.num_kv_heads() * head_dim;
         let quant = &cfg.quantization_config;
         let q_proj = ReplicatedLayer::new(hidden, q_out, quant, cfg.include_bias, vb.pp("q_proj"))?;
-        let k_proj = ReplicatedLayer::new(hidden, kv_out, quant, cfg.include_bias, vb.pp("k_proj"))?;
-        let v_proj = ReplicatedLayer::new(hidden, kv_out, quant, cfg.include_bias, vb.pp("v_proj"))?;
+        let k_proj =
+            ReplicatedLayer::new(hidden, kv_out, quant, cfg.include_bias, vb.pp("k_proj"))?;
+        let v_proj =
+            ReplicatedLayer::new(hidden, kv_out, quant, cfg.include_bias, vb.pp("v_proj"))?;
         let attn_out =
             ReplicatedLayer::new(q_out, hidden, quant, cfg.include_bias, vb.pp("attn_out"))?;
         Ok(Self {
@@ -143,8 +145,20 @@ impl Mlp {
         let inter = cfg.mlp_hidden_size;
         let quant = &cfg.quantization_config;
         Ok(Self {
-            ff_proj: ReplicatedLayer::new(hidden, inter, quant, cfg.include_bias, vb.pp("ff_proj"))?,
-            up_proj: ReplicatedLayer::new(hidden, inter, quant, cfg.include_bias, vb.pp("up_proj"))?,
+            ff_proj: ReplicatedLayer::new(
+                hidden,
+                inter,
+                quant,
+                cfg.include_bias,
+                vb.pp("ff_proj"),
+            )?,
+            up_proj: ReplicatedLayer::new(
+                hidden,
+                inter,
+                quant,
+                cfg.include_bias,
+                vb.pp("up_proj"),
+            )?,
             ff_out: ReplicatedLayer::new(inter, hidden, quant, cfg.include_bias, vb.pp("ff_out"))?,
             act: Activation::Silu,
         })
@@ -175,7 +189,9 @@ impl Block {
     }
 
     fn forward(&self, x: &Tensor, positions: &Tensor, bidir: &FlashParams) -> Result<Tensor> {
-        let x = (x + self.attn.forward(&self.attn_norm.forward(x)?, positions, bidir)?)?;
+        let x = (x + self
+            .attn
+            .forward(&self.attn_norm.forward(x)?, positions, bidir)?)?;
         let out = (&x + self.mlp.forward(&self.ff_norm.forward(&x)?)?)?;
         Ok(out)
     }
@@ -222,8 +238,9 @@ impl Model {
             vb.dtype(),
         )?);
         let vb_blocks = vb_t.pp("blocks");
-        let blocks = NiceProgressBar::<_, 'b'>(0..cfg.n_layers, "Loading repeating layers", multi_progress)
-            .par_iter_if_isq(|i| Block::load(vb_blocks.pp(i), cfg, rotary.clone()))?;
+        let blocks =
+            NiceProgressBar::<_, 'b'>(0..cfg.n_layers, "Loading repeating layers", multi_progress)
+                .par_iter_if_isq(|i| Block::load(vb_blocks.pp(i), cfg, rotary.clone()))?;
         Ok(Self {
             wte,
             blocks,
@@ -330,11 +347,7 @@ impl Model {
     }
 }
 
-pub(crate) fn load_from_dir(
-    dir: &std::path::Path,
-    device: &Device,
-    dtype: DType,
-) -> Result<Model> {
+pub(crate) fn load_from_dir(dir: &std::path::Path, device: &Device, dtype: DType) -> Result<Model> {
     let cfg_str = std::fs::read_to_string(dir.join("config.json")).map_err(hanzo_ml::Error::msg)?;
     let cfg: Config = serde_json::from_str(&cfg_str).map_err(hanzo_ml::Error::msg)?;
     let mut st: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
@@ -379,9 +392,22 @@ mod tests {
         // Gate 1: single-forward logit parity. Oracle logits are computed in the same dtype
         // (bf16 on GPU) then upcast to f32; compare in f32. Threshold reflects cross-impl bf16 noise.
         let thresh = if f32 { 0.999 } else { 0.99 };
-        let ids = Tensor::read_npy(format!("{oracle}_ids.npy")).unwrap().to_dtype(DType::U32).unwrap().to_device(&device).unwrap();
+        let ids = Tensor::read_npy(format!("{oracle}_ids.npy"))
+            .unwrap()
+            .to_dtype(DType::U32)
+            .unwrap()
+            .to_device(&device)
+            .unwrap();
         let ref_logits = Tensor::read_npy(format!("{oracle}_logits.npy")).unwrap();
-        let logits = model.forward(&ids, &[0]).unwrap().i(0).unwrap().to_dtype(DType::F32).unwrap().to_device(&Device::Cpu).unwrap();
+        let logits = model
+            .forward(&ids, &[0])
+            .unwrap()
+            .i(0)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_device(&Device::Cpu)
+            .unwrap();
         let l = logits.dim(0).unwrap();
         let mut worst = 1.0f32;
         for pos in (l.saturating_sub(32))..l {
@@ -393,32 +419,50 @@ mod tests {
 
         // Gate 2: full greedy generation token match.
         let gen: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(format!("{oracle}_gen.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(format!("{oracle}_gen.json")).unwrap())
+                .unwrap();
         let params = GenParams {
             gen_length: gen["gen"].as_u64().unwrap() as usize,
             steps: gen["steps"].as_u64().unwrap() as usize,
             block_length: gen["block"].as_u64().unwrap() as usize,
         };
         for (k, o) in gen["outs"].as_object().unwrap() {
-            let prompt_ids: Vec<u32> = o["input_ids"].as_array().unwrap().iter()
-                .map(|v| v.as_u64().unwrap() as u32).collect();
-            let ref_toks: Vec<u32> = o["gen_tokens"].as_array().unwrap().iter()
-                .map(|v| v.as_u64().unwrap() as u32).collect();
+            let prompt_ids: Vec<u32> = o["input_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as u32)
+                .collect();
+            let ref_toks: Vec<u32> = o["gen_tokens"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as u32)
+                .collect();
             let toks = model.generate(&prompt_ids, &params).unwrap();
             let matches = toks.iter().zip(&ref_toks).filter(|(a, b)| a == b).count();
             let frac = matches as f32 / ref_toks.len() as f32;
-            println!("gate2 prompt{k}: {matches}/{} tokens match ({frac:.2})", ref_toks.len());
+            println!(
+                "gate2 prompt{k}: {matches}/{} tokens match ({frac:.2})",
+                ref_toks.len()
+            );
             println!("  oracle: {ref_toks:?}\n  rust:   {toks:?}");
             // Prompts 0,1 are deterministic factual (single-token answers) -> byte-exact.
             // Higher-entropy prompts diverge under bf16 confidence-tie ordering (both valid); report only.
             if k == "0" || k == "1" {
-                assert_eq!(toks, ref_toks, "deterministic prompt{k} must match the oracle exactly");
+                assert_eq!(
+                    toks, ref_toks,
+                    "deterministic prompt{k} must match the oracle exactly"
+                );
             }
         }
     }
 
     fn envu(k: &str, default: usize) -> usize {
-        std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+        std::env::var(k)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
     }
 
     // Coherence + throughput smoke on real weights (no oracle). Env: LLADA_WEIGHTS,
@@ -428,14 +472,27 @@ mod tests {
     #[ignore]
     fn llada_smoke() {
         let dir = std::env::var("LLADA_WEIGHTS").expect("set LLADA_WEIGHTS");
-        let dtype = if std::env::var("LLADA_F32").is_ok() { DType::F32 } else { DType::BF16 };
+        let dtype = if std::env::var("LLADA_F32").is_ok() {
+            DType::F32
+        } else {
+            DType::BF16
+        };
         let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
         println!("device={device:?} dtype={dtype:?}");
         let model = load_from_dir(std::path::Path::new(&dir), &device, dtype).unwrap();
-        let tok = tokenizers::Tokenizer::from_file(std::path::Path::new(&dir).join("tokenizer.json")).unwrap();
+        let tok =
+            tokenizers::Tokenizer::from_file(std::path::Path::new(&dir).join("tokenizer.json"))
+                .unwrap();
         let gen = envu("LLADA_GEN", 64);
-        let params = GenParams { gen_length: gen, steps: envu("LLADA_STEPS", gen), block_length: envu("LLADA_BLOCK", 32) };
-        println!("params: gen={} steps={} block={}", params.gen_length, params.steps, params.block_length);
+        let params = GenParams {
+            gen_length: gen,
+            steps: envu("LLADA_STEPS", gen),
+            block_length: envu("LLADA_BLOCK", 32),
+        };
+        println!(
+            "params: gen={} steps={} block={}",
+            params.gen_length, params.steps, params.block_length
+        );
         for q in [
             "What is the capital of France? Answer in one word.",
             "Write a haiku about the ocean.",
