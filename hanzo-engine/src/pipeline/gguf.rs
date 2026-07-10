@@ -614,9 +614,9 @@ impl Loader for GGUFLoader {
         let paged_attn_config = if matches!(self.kind, ModelKind::GgufAdapter { .. }) {
             warn!("Adapter models do not currently support PagedAttention, running without");
             None
-        } else if matches!(arch, GGUFArchitecture::Deepseek2) {
-            // quantized deepseek2 (incl. GLM-4.7-Flash) runs un-absorbed MLA (materialized per-head
-            // K/V); the paged MLA cache is the compressed [kv_lora, 1] layout, which is incompatible.
+        } else if matches!(arch, GGUFArchitecture::Deepseek2 | GGUFArchitecture::GlmDsa) {
+            // quantized deepseek2 (incl. GLM-4.7-Flash, GLM-5.2) runs un-absorbed MLA (materialized
+            // per-head K/V); the paged MLA cache is the compressed [kv_lora, 1] layout, incompatible.
             warn!("GGUF deepseek2 (MLA) runs eager attention; PagedAttention (absorbed-MLA cache) not wired");
             None
         } else {
