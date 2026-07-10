@@ -182,7 +182,11 @@ impl Bible {
                 bail!("duplicate scene id {}", scene.id);
             }
             if !loc_ids.contains(scene.location_ref.as_str()) {
-                bail!("scene {} references unknown location {}", scene.id, scene.location_ref);
+                bail!(
+                    "scene {} references unknown location {}",
+                    scene.id,
+                    scene.location_ref
+                );
             }
             for cr in &scene.characters {
                 if !char_ids.contains(cr.as_str()) {
@@ -204,15 +208,24 @@ impl Bible {
                         scene.id
                     );
                 }
+                #[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN-safe: rejects NaN durations too
                 if !(shot.duration_s > 0.0) {
-                    bail!("shot {} has non-positive duration {}", shot.id, shot.duration_s);
+                    bail!(
+                        "shot {} has non-positive duration {}",
+                        shot.id,
+                        shot.duration_s
+                    );
                 }
                 if shot.action_prompt.trim().is_empty() {
                     bail!("shot {} has empty action_prompt", shot.id);
                 }
                 for line in &shot.dialogue {
                     if !char_ids.contains(line.character_ref.as_str()) {
-                        bail!("shot {} dialogue references unknown character {}", shot.id, line.character_ref);
+                        bail!(
+                            "shot {} dialogue references unknown character {}",
+                            shot.id,
+                            line.character_ref
+                        );
                     }
                 }
             }

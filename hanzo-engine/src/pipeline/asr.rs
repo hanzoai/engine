@@ -206,6 +206,7 @@ pub struct AsrPipeline {
 
 pub struct AsrLoader {
     pub model_id: String,
+    #[allow(dead_code)]
     pub arch: AsrLoaderType,
 }
 

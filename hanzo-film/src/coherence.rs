@@ -90,7 +90,12 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
 
 /// For each character, sample a mid-frame from each shot they appear in, score
 /// consecutive pairs, and aggregate. `max_pairs` caps work on long films.
-pub async fn verify(project: &Project, bible: &Bible, scorer: Scorer, max_pairs: usize) -> Result<Report> {
+pub async fn verify(
+    project: &Project,
+    bible: &Bible,
+    scorer: Scorer,
+    max_pairs: usize,
+) -> Result<Report> {
     let mut pairs = Vec::new();
 
     for ch in &bible.characters {

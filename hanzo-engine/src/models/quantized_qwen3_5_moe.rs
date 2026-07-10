@@ -518,6 +518,7 @@ impl QGatedDeltaNet {
     // the CPU causal_conv1d_update does. conv_state is updated in place in VRAM (aliases the pool
     // buffer); x is (1, 1, conv_dim). Returns silu(conv) as (1, 1, conv_dim). The GGUF conv1d_weight
     // is (conv_dim, k) with no bias.
+    #[allow(dead_code)]
     fn causal_conv1d_update_vulkan(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let conv_dim = self.conv1d_weight.dim(0)?;
         let x_flat = x.reshape(conv_dim)?.to_dtype(DType::F32)?.contiguous()?;
