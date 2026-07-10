@@ -43,13 +43,13 @@ impl Default for WanVaeConfig {
 
 // Channel-wise RMS norm (F.normalize over dim 1, then * sqrt(dim) * gamma). gamma is stored as
 // [dim,1,1,1] (images=false, 5D acts) or [dim,1,1] (images=true, per-frame 4D acts).
-struct WanRmsNorm {
+pub(crate) struct WanRmsNorm {
     gamma: Tensor,
     scale: f64,
 }
 
 impl WanRmsNorm {
-    fn new(dim: usize, images: bool, vb: ShardedVarBuilder) -> Result<Self> {
+    pub(crate) fn new(dim: usize, images: bool, vb: ShardedVarBuilder) -> Result<Self> {
         let shape: Vec<usize> = if images {
             vec![dim, 1, 1]
         } else {
@@ -62,7 +62,7 @@ impl WanRmsNorm {
         })
     }
 
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    pub(crate) fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let c = x.dim(1)?;
         let denom = (x.sqr()?.sum_keepdim(1)? + NORM_EPS)?.sqrt()?;
         let g = match x.rank() {
@@ -146,7 +146,7 @@ impl ResidualBlock {
     }
 }
 
-struct AttentionBlock {
+pub(crate) struct AttentionBlock {
     norm: WanRmsNorm,
     to_qkv: Conv2d,
     proj: Conv2d,
@@ -154,7 +154,7 @@ struct AttentionBlock {
 }
 
 impl AttentionBlock {
-    fn new(dim: usize, vb: ShardedVarBuilder) -> Result<Self> {
+    pub(crate) fn new(dim: usize, vb: ShardedVarBuilder) -> Result<Self> {
         let norm = WanRmsNorm::new(dim, true, vb.pp("norm"))?;
         let to_qkv = conv2d(dim, dim * 3, 1, Default::default(), vb.pp("to_qkv"))?;
         let proj = conv2d(dim, dim, 1, Default::default(), vb.pp("proj"))?;
@@ -166,7 +166,7 @@ impl AttentionBlock {
         })
     }
 
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    pub(crate) fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let (bt, b, t) = merge_bt(x)?;
         let h = self.norm.forward(&bt)?;
         let qkv = Convolution.forward_2d(&self.to_qkv, &h)?;
@@ -632,7 +632,7 @@ impl AutoencoderKLWan {
     }
 }
 
-fn merge_bt(x: &Tensor) -> Result<(Tensor, usize, usize)> {
+pub(crate) fn merge_bt(x: &Tensor) -> Result<(Tensor, usize, usize)> {
     let (b, c, t, h, w) = x.dims5()?;
     let y = x
         .permute((0, 2, 1, 3, 4))?
@@ -641,7 +641,7 @@ fn merge_bt(x: &Tensor) -> Result<(Tensor, usize, usize)> {
     Ok((y, b, t))
 }
 
-fn split_bt(x: &Tensor, b: usize, t: usize) -> Result<Tensor> {
+pub(crate) fn split_bt(x: &Tensor, b: usize, t: usize) -> Result<Tensor> {
     let (_, c, h, w) = x.dims4()?;
     x.reshape((b, t, c, h, w))?
         .permute((0, 2, 1, 3, 4))?
@@ -649,7 +649,7 @@ fn split_bt(x: &Tensor, b: usize, t: usize) -> Result<Tensor> {
 }
 
 // [B, 2C, T, H, W] -> [B, C, 2T, H, W] by interleaving the two channel halves across time.
-fn double_temporal(y: &Tensor) -> Result<Tensor> {
+pub(crate) fn double_temporal(y: &Tensor) -> Result<Tensor> {
     let (b, c2, t, h, w) = y.dims5()?;
     let c = c2 / 2;
     let y = y.reshape((b, 2, c, t, h, w))?;
