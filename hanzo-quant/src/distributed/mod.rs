@@ -6,7 +6,7 @@ pub mod pipeline;
 pub mod socket;
 mod wire;
 
-pub use pipeline::{PpHeader, RingPipeline, PP_OP_FORWARD, PP_OP_TERMINATE};
+pub use pipeline::{broadcast_head_tokens, PpHeader, RingPipeline, PP_OP_FORWARD, PP_OP_TERMINATE};
 
 use serde::{Deserialize, Serialize};
 

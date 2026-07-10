@@ -499,7 +499,22 @@ pub async fn sample_and_add_toks(
             )
         })
         .collect();
-    let sampled_vec = futures::future::join_all(sampling_futures).await;
+    let mut sampled_vec = futures::future::join_all(sampling_futures).await;
+
+    // Ring tensor-parallel: replace every rank's independently-sampled token with the head's, so a
+    // near-tie argmax can't silently desync the lockstep KV caches. No-op unless ring TP is active.
+    if hanzo_quant::distributed::use_ring() && !crate::pipeline_parallel::use_pipeline_parallel() {
+        let mut token_ids: Vec<u32> = sampled_vec
+            .iter()
+            .map(|s| s.as_ref().map(|lp| lp.token).unwrap_or_default())
+            .collect();
+        hanzo_quant::distributed::broadcast_head_tokens(&mut token_ids)?;
+        for (sampled, id) in sampled_vec.iter_mut().zip(token_ids) {
+            if let Ok(lp) = sampled {
+                lp.token = id;
+            }
+        }
+    }
 
     for (sampled, seq) in std::iter::zip(sampled_vec, seqs.iter_mut()) {
         let next_token = crate::handle_seq_error_stateaware_ok!(sampled, seq);
