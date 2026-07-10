@@ -291,7 +291,13 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 
         Ok(Self {
             head_count,
-            block_count: c.get_value::<u32>("block_count")? as usize,
+            // GLM-5.2 (glm-dsa) trails an MTP/nextn block inside block_count; it is a speculative
+            // draft head, not part of the main forward path, so drop it.
+            block_count: c.get_value::<u32>("block_count")? as usize
+                - c.get_value::<u32>("nextn_predict_layers")
+                    .ok()
+                    .map(|x| x as usize)
+                    .unwrap_or(0),
             embedding_length: embed_len,
             rms_norm_eps: c.get_value("attention.layer_norm_rms_epsilon")?,
             max_seq_len: c
