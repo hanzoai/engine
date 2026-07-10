@@ -4,6 +4,7 @@ use hanzo_ml::{DType, Device, Result, Tensor, D};
 use hanzo_quant::ShardedVarBuilder;
 
 use super::config::MuseTalkConfig;
+use super::taesd::Taesd;
 use super::unet::UNet2DConditionModel;
 use super::vae::AutoencoderKl;
 
@@ -17,6 +18,7 @@ pub struct MuseTalk {
     device: Device,
     dtype: DType,
     mask: Tensor,
+    taesd: Option<Taesd>,
 }
 
 impl MuseTalk {
@@ -37,7 +39,25 @@ impl MuseTalk {
             device: device.clone(),
             dtype,
             mask,
+            taesd: None,
         })
+    }
+
+    /// Attach the TAESD encode+decode pair as the fast VAE path. The tiny distilled encoder
+    /// replaces the profiled realtime wall (the full VAE encoder's high-res conv-GEMMs); the full
+    /// VAE stays loaded but unused. Both stacks share the SD-VAE latent space so the UNet is
+    /// untouched. Enabled at load time behind `DUB_TAESD`.
+    pub fn with_taesd(
+        mut self,
+        encoder_vb: ShardedVarBuilder,
+        decoder_vb: ShardedVarBuilder,
+    ) -> Result<Self> {
+        self.taesd = Some(Taesd::new(&self.cfg.vae, encoder_vb, decoder_vb)?);
+        Ok(self)
+    }
+
+    pub fn has_taesd(&self) -> bool {
+        self.taesd.is_some()
     }
 
     fn build_mask(size: usize, device: &Device, dtype: DType) -> Result<Tensor> {
@@ -55,16 +75,27 @@ impl MuseTalk {
     }
 
     pub fn latents_for_unet(&self, face: &Tensor) -> Result<Tensor> {
-        // `face` is in [0,1]. Mask the lower half to black BEFORE normalizing (MuseTalk's
-        // preprocess_img masks the raw [0,1] image, so the masked region encodes as -1 after
-        // normalize, not 0). Masking the normalized tensor would gray the mouth region and the
-        // VAE inpaints a flat patch.
-        let masked =
-            self.normalize(&face.broadcast_mul(&self.mask.unsqueeze(0)?.unsqueeze(0)?)?)?;
-        let face = self.normalize(face)?;
-        let masked_latents = self.vae.encode_mode(&masked)?;
-        let ref_latents = self.vae.encode_mode(&face)?;
+        // Mask the lower half to black in [0,1] (MuseTalk's preprocess_img masks the raw image).
+        // The full VAE wants [-1,1], so mask BEFORE normalize -> the mouth encodes as -1, not gray
+        // 0 (which the VAE would inpaint as a flat patch). TAESD consumes [0,1] as-is.
+        let masked = face.broadcast_mul(&self.mask.unsqueeze(0)?.unsqueeze(0)?)?;
+        let (masked_latents, ref_latents) = match &self.taesd {
+            Some(t) => (t.encoder.encode(&masked)?, t.encoder.encode(face)?),
+            None => (
+                self.vae.encode_mode(&self.normalize(&masked)?)?,
+                self.vae.encode_mode(&self.normalize(face)?)?,
+            ),
+        };
         Tensor::cat(&[masked_latents, ref_latents], 1)
+    }
+
+    /// Scaled UNet latents -> `[0,1]` RGB face, via TAESD when attached (it emits [0,1] directly)
+    /// or the full VAE (which emits [-1,1], so denormalize).
+    pub fn decode_latents(&self, pred: &Tensor) -> Result<Tensor> {
+        match &self.taesd {
+            Some(t) => t.decoder.decode(pred),
+            None => self.denormalize(&self.vae.decode(pred)?),
+        }
     }
 
     pub fn forward(&self, face: &Tensor, audio_feat: &Tensor) -> Result<Tensor> {
@@ -72,8 +103,7 @@ impl MuseTalk {
         let b = latent_input.dim(0)?;
         let timestep = Tensor::zeros(b, DType::F32, &self.device)?;
         let pred_latents = self.unet.forward(&latent_input, &timestep, audio_feat)?;
-        let image = self.vae.decode(&pred_latents)?;
-        self.denormalize(&image)
+        self.decode_latents(&pred_latents)
     }
 
     pub fn unet_forward(
