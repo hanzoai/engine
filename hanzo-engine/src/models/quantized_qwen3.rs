@@ -536,7 +536,7 @@ impl ModelWeights {
                 .map(|(_, _)| &start_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
             self.dtype,
-            &CausalMaskConfig::default(),
+            &CausalMaskConfig::gguf(),
         )?;
         let mask = if metadata
             .as_ref()
@@ -588,7 +588,7 @@ impl ModelWeights {
             &ids2d,
             &offsets as &dyn PastKvLenCache,
             self.dtype,
-            &CausalMaskConfig::default(),
+            &CausalMaskConfig::gguf(),
         )?;
         let mask = DeviceMappedMask::from_single(mask);
         let cache = &mut self.cache.normal().0;
