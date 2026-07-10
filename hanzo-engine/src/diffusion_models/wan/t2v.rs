@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 //! Wan2.2 text-to-video generation entry point: params in, RGB frames out. The forward
 //! (umt5 text-encode -> flow-match denoise -> Wan2.2 VAE decode) lives in `super::pipeline`;
 //! this module is the thin request/frame boundary the async `/v1/videos` job drives.
