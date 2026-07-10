@@ -370,13 +370,19 @@ mod tests {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d)
         };
+        let evf = |k: &str, d: f64| {
+            std::env::var(k)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d)
+        };
         let cfg = WanVideoConfig {
             num_frames: ev("WAN_GEN_FRAMES", 25),
             height: ev("WAN_GEN_H", 512),
             width: ev("WAN_GEN_W", 512),
             steps: ev("WAN_GEN_STEPS", 20),
-            shift: DEFAULT_SHIFT,
-            guidance: DEFAULT_GUIDANCE,
+            shift: evf("WAN_GEN_SHIFT", DEFAULT_SHIFT),
+            guidance: evf("WAN_GEN_GUIDANCE", DEFAULT_GUIDANCE),
             fps: DEFAULT_FPS,
             negative_prompt: DEFAULT_NEGATIVE_PROMPT.to_string(),
         };
