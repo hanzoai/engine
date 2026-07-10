@@ -6,13 +6,18 @@ use super::{
     PreProcessingMixin, Processor, TokenSource,
 };
 use crate::device_map::{self, DeviceMapper};
+use crate::diffusion_models::ace_step::pipeline::AceStepPipeline;
+use crate::diffusion_models::ace_step::text_encoder::Umt5TextEncoder;
+use crate::diffusion_models::ace_step::transformer::AceStepTransformer;
+use crate::diffusion_models::ace_step::MusicDcae;
+use crate::diffusion_models::t5::Config as T5Config;
 use crate::distributed::{use_ring, WorkerTransferData};
 use crate::pipeline::{ChatTemplate, EmbeddingModulePaths, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::speech_models::{
     DiaConfig, DiaPipeline, Qwen3TtsCodecConfig, Qwen3TtsConfig, Qwen3TtsPipeline,
-    SpeechGenerationOutput, SpeechLoaderType,
+    SpeechGenerationOutput, SpeechLoaderType, ACE_STEP_SAMPLE_RATE,
 };
 use crate::utils::progress::ProgressScopeGuard;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
@@ -51,6 +56,10 @@ enum SpeechModel {
     Dia(DiaPipeline),
     Qwen3Tts {
         pipeline: Qwen3TtsPipeline,
+        tokenizer: Tokenizer,
+    },
+    AceStep {
+        pipeline: AceStepPipeline,
         tokenizer: Tokenizer,
     },
 }
@@ -240,8 +249,50 @@ impl Loader for SpeechLoader {
             let mut codec_config = None;
             let mut tokenizer_dir = None;
 
-            // Main model
-            let config = {
+            // Dia/Qwen3Tts ship a single root `model.safetensors`; ACE-Step ships four
+            // component checkpoints in sub-folders, so its files are fetched in the arm below.
+            let config = if matches!(self.arch, SpeechLoaderType::AceStep) {
+                let api = ApiBuilder::new()
+                    .with_progress(!silent)
+                    .with_token(get_token(&token_source)?)
+                    .build()?;
+                let revision = revision.clone().unwrap_or("main".to_string());
+                let api = api.repo(Repo::with_revision(
+                    self.model_id.to_string(),
+                    RepoType::Model,
+                    revision.clone(),
+                ));
+                let model_id = std::path::Path::new(&self.model_id);
+
+                // Order is load-critical: [umt5, dit, dcae, vocoder] (see load_model_from_path).
+                let umt5 = api_get_file!(api, "umt5-base/model.safetensors", &model_id, &revision);
+                let dit = api_get_file!(
+                    api,
+                    "ace_step_transformer/diffusion_pytorch_model.safetensors",
+                    &model_id,
+                    &revision
+                );
+                let dcae = api_get_file!(
+                    api,
+                    "music_dcae_f8c8/diffusion_pytorch_model.safetensors",
+                    &model_id,
+                    &revision
+                );
+                let vocoder = api_get_file!(
+                    api,
+                    "music_vocoder/diffusion_pytorch_model.safetensors",
+                    &model_id,
+                    &revision
+                );
+                let config = api_get_file!(api, "umt5-base/config.json", &model_id, &revision);
+                let tok = api_get_file!(api, "umt5-base/tokenizer.json", &model_id, &revision);
+                weights.push(umt5);
+                weights.push(dit);
+                weights.push(dcae);
+                weights.push(vocoder);
+                tokenizer_dir = Some(tok.parent().unwrap().to_path_buf());
+                config
+            } else {
                 let api = ApiBuilder::new()
                     .with_progress(!silent)
                     .with_token(get_token(&token_source)?)
@@ -261,6 +312,7 @@ impl Loader for SpeechLoader {
             };
 
             match self.arch {
+                SpeechLoaderType::AceStep => {}
                 SpeechLoaderType::Dia => {
                     // DAC model lives in a separate repo.
                     let api = ApiBuilder::new()
@@ -374,22 +426,25 @@ impl Loader for SpeechLoader {
             DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None, &available_devices)?;
         let dtype = mapper.get_min_dtype(dtype)?;
 
-        // Last weight is the codec (DAC for Dia, speech_tokenizer for qwen3_tts).
-        let model_weights = paths.weights[..paths.weights.len() - 1].to_vec();
-        let vb = from_mmaped_safetensors(
-            model_weights,
-            Vec::new(),
-            Some(dtype),
-            device,
-            vec![None],
-            silent,
-            None,
-            |_| true,
-            Arc::new(|_| DeviceForLoadTensor::Base),
-        )?;
+        let load_component = |files: Vec<PathBuf>, ld: hanzo_ml::DType, keep: fn(&str) -> bool| {
+            from_mmaped_safetensors(
+                files,
+                Vec::new(),
+                Some(ld),
+                device,
+                vec![None],
+                silent,
+                None,
+                move |n: String| keep(&n),
+                Arc::new(|_| DeviceForLoadTensor::Base),
+            )
+        };
+        // Dia/Qwen3Tts: all but the last weight (last = DAC/speech_tokenizer codec).
+        let main_weights = || paths.weights[..paths.weights.len() - 1].to_vec();
 
         let model = match self.arch {
             SpeechLoaderType::Dia => {
+                let vb = load_component(main_weights(), dtype, |_| true)?;
                 let cfg: DiaConfig =
                     serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
                 let dac_vb = unsafe {
@@ -403,6 +458,7 @@ impl Loader for SpeechLoader {
                 SpeechModel::Dia(pipeline)
             }
             SpeechLoaderType::Qwen3Tts => {
+                let vb = load_component(main_weights(), dtype, |_| true)?;
                 let cfg: Qwen3TtsConfig =
                     serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
                 let codec_cfg_path = paths
@@ -431,6 +487,42 @@ impl Loader for SpeechLoader {
                 )?;
                 let pipeline = Qwen3TtsPipeline::new(&cfg, &codec_cfg, vb, codec_vb)?;
                 SpeechModel::Qwen3Tts {
+                    pipeline,
+                    tokenizer,
+                }
+            }
+            SpeechLoaderType::AceStep => {
+                // Components load in f32 for vocoder/DCAE fidelity; weights = [umt5, dit, dcae, vocoder].
+                let f32 = hanzo_ml::DType::F32;
+                let umt5_vb = load_component(vec![paths.weights[0].clone()], f32, |_| true)?;
+                // The DiT ckpt also carries the unused lyric-encoder / cross-attn-add / projector heads.
+                let dit_vb = load_component(vec![paths.weights[1].clone()], f32, |n| {
+                    !n.contains(".add_")
+                        && !n.contains(".to_add_out")
+                        && !n.starts_with("lyric")
+                        && !n.starts_with("projectors")
+                })?;
+                let dcae_vb = load_component(vec![paths.weights[2].clone()], f32, |n| {
+                    n.starts_with("decoder.")
+                })?;
+                let voc_vb = load_component(vec![paths.weights[3].clone()], f32, |_| true)?;
+
+                let mut cfg: T5Config =
+                    serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
+                cfg.umt5 = true;
+                let text_encoder = Umt5TextEncoder::new(&cfg, umt5_vb, device)?;
+                let transformer = AceStepTransformer::new(dit_vb)?;
+                let dcae = MusicDcae::new(dcae_vb, voc_vb)?;
+                let pipeline =
+                    AceStepPipeline::new(text_encoder, transformer, dcae, device.clone());
+
+                let tok_path = paths
+                    .tokenizer_dir
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("ace_step requires a tokenizer"))?
+                    .join("tokenizer.json");
+                let tokenizer = Tokenizer::from_file(&tok_path).map_err(anyhow::Error::msg)?;
+                SpeechModel::AceStep {
                     pipeline,
                     tokenizer,
                 }
@@ -514,6 +606,7 @@ impl MetadataMixin for SpeechPipeline {
         match &self.model {
             SpeechModel::Dia(m) => m.device().clone(),
             SpeechModel::Qwen3Tts { pipeline, .. } => pipeline.device().clone(),
+            SpeechModel::AceStep { pipeline, .. } => pipeline.device().clone(),
         }
     }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
@@ -541,6 +634,7 @@ impl Pipeline for SpeechPipeline {
         assert!(!return_raw_logits);
 
         let ModelInputs { prompts } = *inputs.downcast().expect("Downcast failed.");
+        let cfg = self.cfg;
         let mut pcms = Vec::new();
         let mut rates = Vec::new();
         let mut channels_all = Vec::new();
@@ -549,8 +643,8 @@ impl Pipeline for SpeechPipeline {
                 pcm,
                 rate,
                 channels,
-            } = match &self.model {
-                SpeechModel::Dia(m) => m.generate(&prompt, &self.cfg)?,
+            } = match &mut self.model {
+                SpeechModel::Dia(m) => m.generate(&prompt, &cfg)?,
                 SpeechModel::Qwen3Tts {
                     pipeline,
                     tokenizer,
@@ -568,7 +662,45 @@ impl Pipeline for SpeechPipeline {
                         .map(|i| i.to_string())
                         .collect::<Vec<_>>()
                         .join(" ");
-                    pipeline.generate(&id_stream, &self.cfg)?
+                    pipeline.generate(&id_stream, &cfg)?
+                }
+                SpeechModel::AceStep {
+                    pipeline,
+                    tokenizer,
+                } => {
+                    let SpeechGenerationConfig::AceStep {
+                        frames,
+                        steps,
+                        guidance_scale,
+                    } = cfg
+                    else {
+                        hanzo_ml::bail!("ace_step requires SpeechGenerationConfig::AceStep");
+                    };
+                    let enc = tokenizer
+                        .encode_fast(prompt.as_str(), true)
+                        .map_err(hanzo_ml::Error::msg)?;
+                    let ids = enc.get_ids().to_vec();
+                    let n = ids.len();
+                    let dev = pipeline.device().clone();
+                    let input_ids = Tensor::from_vec(ids, (1, n), &dev)?;
+                    let wav = pipeline.generate(&input_ids, frames, steps, guidance_scale)?;
+                    // (1, C, S) planar -> interleaved [L0, R0, L1, R1, ...] PCM.
+                    let planar = wav.narrow(0, 0, 1)?.squeeze(0)?;
+                    let (chans, samples) = planar.dims2()?;
+                    let per_ch: Vec<Vec<f32>> = (0..chans)
+                        .map(|c| planar.narrow(0, c, 1)?.squeeze(0)?.to_vec1::<f32>())
+                        .collect::<hanzo_ml::Result<_>>()?;
+                    let mut pcm = vec![0f32; chans * samples];
+                    for (c, ch) in per_ch.iter().enumerate() {
+                        for (i, &s) in ch.iter().enumerate() {
+                            pcm[i * chans + c] = s;
+                        }
+                    }
+                    SpeechGenerationOutput {
+                        pcm: Arc::new(pcm),
+                        rate: ACE_STEP_SAMPLE_RATE,
+                        channels: chans,
+                    }
                 }
             };
             pcms.push(pcm);
