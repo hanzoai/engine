@@ -35,7 +35,7 @@ use crate::pipeline::rocm_graph::{
 };
 use crate::pipeline::sampling::sample_and_add_toks;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::ChatTemplate;
 use crate::pipeline::{get_chat_template, Modalities, SupportedModality};
 use crate::pipeline_parallel::{pp_worker_step, use_pipeline_parallel};
@@ -969,9 +969,13 @@ impl GGUFPipeline {
             Model::Llama(ref model) => {
                 model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
             }
-            Model::Qwen3(ref model) => {
-                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
-            }
+            Model::Qwen3(ref model) => model.forward(
+                input_ids,
+                seqlen_offsets,
+                context_lens,
+                &FlashParams::empty(true),
+                paged_attn_meta,
+            ),
             Model::Qwen3MoE(ref model) => {
                 model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
             }
@@ -1552,9 +1556,13 @@ impl Pipeline for GGUFPipeline {
             Model::Qwen(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
-            Model::Qwen3(ref model) => {
-                model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
-            }
+            Model::Qwen3(ref model) => model.forward(
+                &input_ids,
+                &seqlen_offsets,
+                context_lens,
+                &flash_meta,
+                paged_attn_meta,
+            )?,
             Model::Qwen3MoE(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
