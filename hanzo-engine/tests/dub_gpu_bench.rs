@@ -36,6 +36,9 @@ const RESIZED_IMG: usize = 256;
 const FPS: f64 = 25.0;
 const DEFAULT_FRAMES: usize = 13; // matches the measured CPU-floor clip (256-res, 13 frames)
 const WARMUP_FRAMES: usize = 2; // first GPU forward compiles shaders/allocates; don't time it
+const CORE_FRAMES: usize = 64; // core-fps averaging window
+const AUDIO_SEQ_LEN: usize = 50; // MuseTalk whisper chunk length per output frame
+const TAESD_DIR_DEFAULT: &str = "/home/z/models/MuseTalk/taesd";
 
 fn env_path(key: &str, default: &str) -> PathBuf {
     PathBuf::from(std::env::var(key).unwrap_or_else(|_| default.to_string()))
@@ -131,6 +134,132 @@ fn build_animator(dev: &Device) -> Result<MuseTalkAnimator> {
     let s3fd_vb = load_vb(&s3fd_st, DType::F32, dev)?;
     MuseTalkAnimator::new(musetalk, whisper, s3fd_vb, AnimatorOptions::default())
         .context("build animator")
+}
+
+fn dtype_from_env() -> DType {
+    match std::env::var("DUB_DTYPE").as_deref() {
+        Ok("f16") | Ok("F16") | Ok("half") => DType::F16,
+        _ => DType::F32,
+    }
+}
+
+// Just the MuseTalk core (VAE/TAESD + UNet), the realtime-critical inner loop. No S3FD/whisper.
+fn build_core(dev: &Device, dtype: DType, with_taesd: bool) -> Result<MuseTalk> {
+    let mt_dir = env_path("MT_DIR", "/home/z/models/MuseTalk/musetalkV15");
+    let vae_dir = env_path("VAE_DIR", "/home/z/models/MuseTalk/sd-vae-ft-mse");
+    let unet: UNetConfig =
+        serde_json::from_str(&std::fs::read_to_string(mt_dir.join("musetalk.json"))?)?;
+    let vae: VaeConfig =
+        serde_json::from_str(&std::fs::read_to_string(vae_dir.join("config.json"))?)?;
+    let cfg = MuseTalkConfig {
+        unet,
+        vae,
+        resized_img: RESIZED_IMG,
+    };
+    let vae_vb = load_vb(
+        &vae_dir.join("diffusion_pytorch_model.safetensors"),
+        dtype,
+        dev,
+    )?;
+    let unet_vb = load_vb(&mt_dir.join("unet.safetensors"), dtype, dev)?;
+    let mt = MuseTalk::new(cfg, vae_vb, unet_vb, dev, dtype).context("build MuseTalk core")?;
+    if with_taesd {
+        let td = env_path("TAESD_DIR", TAESD_DIR_DEFAULT);
+        let enc = load_vb(&td.join("taesd_encoder.safetensors"), dtype, dev)?;
+        let dec = load_vb(&td.join("taesd_decoder.safetensors"), dtype, dev)?;
+        return mt.with_taesd(enc, dec).context("attach TAESD");
+    }
+    Ok(mt)
+}
+
+fn bench_core(
+    label: &str,
+    mt: &MuseTalk,
+    dev: &Device,
+    dtype: DType,
+    frames: usize,
+) -> Result<f64> {
+    let sz = mt.resized_img();
+    let cdim = mt.cross_attention_dim();
+    let face = hanzo_ml::Tensor::rand(0f32, 1f32, (1, 3, sz, sz), dev)?.to_dtype(dtype)?;
+    let audio =
+        hanzo_ml::Tensor::randn(0f64, 1.0, (1, AUDIO_SEQ_LEN, cdim), dev)?.to_dtype(dtype)?;
+    let ts = hanzo_ml::Tensor::zeros(1, DType::F32, dev)?;
+
+    for _ in 0..WARMUP_FRAMES {
+        mt.forward(&face, &audio)?;
+    }
+    dev.synchronize()?;
+
+    let t = Instant::now();
+    let lat = mt.latents_for_unet(&face)?;
+    dev.synchronize()?;
+    let t_enc = t.elapsed().as_secs_f64();
+    let t = Instant::now();
+    let pred = mt.unet_forward(&lat, &ts, &audio)?;
+    dev.synchronize()?;
+    let t_unet = t.elapsed().as_secs_f64();
+    let t = Instant::now();
+    mt.decode_latents(&pred)?;
+    dev.synchronize()?;
+    let t_dec = t.elapsed().as_secs_f64();
+
+    let t0 = Instant::now();
+    for _ in 0..frames {
+        mt.forward(&face, &audio)?;
+    }
+    dev.synchronize()?;
+    let dt = t0.elapsed().as_secs_f64();
+    let fps = frames as f64 / dt;
+    eprintln!(
+        "[core] {label:9} encode {:6.2}ms  unet {:6.2}ms  decode {:6.2}ms | {:6.2} ms/frame = {:6.2} fps",
+        t_enc * 1e3,
+        t_unet * 1e3,
+        t_dec * 1e3,
+        dt / frames as f64 * 1e3,
+        fps
+    );
+    Ok(fps)
+}
+
+// Realtime core benchmark: per-frame encode/unet/decode, full-VAE vs TAESD encoder, at DUB_DTYPE.
+#[test]
+fn dub_musetalk_core_fps() -> Result<()> {
+    let mt_dir = env_path("MT_DIR", "/home/z/models/MuseTalk/musetalkV15");
+    if !mt_dir.join("unet.safetensors").is_file() {
+        eprintln!("[core] weights absent; skipping (set MT_DIR)");
+        return Ok(());
+    }
+    let dev = device()?;
+    let dtype = dtype_from_env();
+    let frames = std::env::var("DUB_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(CORE_FRAMES);
+    eprintln!("[core] dtype = {dtype:?}, frames = {frames}");
+
+    let full_fps = {
+        let full = build_core(&dev, dtype, false)?;
+        bench_core("full-VAE", &full, &dev, dtype, frames)?
+    };
+
+    let td = env_path("TAESD_DIR", TAESD_DIR_DEFAULT);
+    if td.join("taesd_encoder.safetensors").is_file() {
+        let taesd = build_core(&dev, dtype, true)?;
+        let taesd_fps = bench_core("TAESD", &taesd, &dev, dtype, frames)?;
+        eprintln!(
+            "[core] SPEEDUP TAESD/full = {:.2}x  ({:.2} -> {:.2} fps @ {dtype:?})",
+            taesd_fps / full_fps,
+            full_fps,
+            taesd_fps
+        );
+    } else {
+        eprintln!(
+            "[core] TAESD weights absent at {}; full-VAE only",
+            td.display()
+        );
+    }
+    Ok(())
 }
 
 #[test]

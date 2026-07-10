@@ -288,6 +288,23 @@ const VAE_WEIGHTS: &str = "sd-vae-ft-mse/diffusion_pytorch_model.safetensors";
 const WHISPER_WEIGHTS: &str = "whisper/tiny.safetensors";
 const S3FD_WEIGHTS: &str = "s3fd.safetensors";
 
+// TAESD fast VAE path (madebyollin/taesd). Weights live next to the bundle under `taesd/` or at
+// `DUB_TAESD_DIR`. Off by default until the LSE-C quality gate clears; then flip the default.
+const TAESD_SUBDIR: &str = "taesd";
+const TAESD_ENCODER_FILE: &str = "taesd_encoder.safetensors";
+const TAESD_DECODER_FILE: &str = "taesd_decoder.safetensors";
+const DUB_TAESD_DEFAULT: bool = false;
+
+fn dub_taesd_enabled() -> bool {
+    match std::env::var("DUB_TAESD") {
+        Ok(v) => {
+            let v = v.trim();
+            !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false")
+        }
+        Err(_) => DUB_TAESD_DEFAULT,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AnimationModelPaths {
     unet_config: PathBuf,
@@ -489,6 +506,27 @@ impl Loader for AnimationLoader {
             resized_img: RESIZED_IMG,
         };
 
+        let taesd_vb = if dub_taesd_enabled() {
+            let dir = std::env::var("DUB_TAESD_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| std::path::Path::new(&self.model_id).join(TAESD_SUBDIR));
+            let (enc, dec) = (dir.join(TAESD_ENCODER_FILE), dir.join(TAESD_DECODER_FILE));
+            if !enc.exists() || !dec.exists() {
+                anyhow::bail!(
+                    "DUB_TAESD is set but TAESD weights are missing under {}. Place {} + {} there (source: madebyollin/taesd).",
+                    dir.display(),
+                    TAESD_ENCODER_FILE,
+                    TAESD_DECODER_FILE
+                );
+            }
+            Some((
+                Self::load_vb(&enc, dtype, device, silent)?,
+                Self::load_vb(&dec, dtype, device, silent)?,
+            ))
+        } else {
+            None
+        };
+
         let components = AnimationComponents::MuseTalk(MuseTalkComponents {
             musetalk_config,
             vae_vb: Self::load_vb(&paths.vae_weights, dtype, device, silent)?,
@@ -496,6 +534,7 @@ impl Loader for AnimationLoader {
             whisper_config: WhisperConfig::tiny(),
             whisper_vb: Self::load_vb(&paths.whisper_weights, dtype, device, silent)?,
             s3fd_vb: Self::load_vb(&paths.s3fd_weights, dtype, device, silent)?,
+            taesd_vb,
             device: device.clone(),
             dtype,
             options: self.options,
