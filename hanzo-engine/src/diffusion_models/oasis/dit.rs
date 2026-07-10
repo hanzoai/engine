@@ -34,11 +34,15 @@ const GRID_W: usize = LATENT_W / PATCH; // 16
 const PATCH_OUT: usize = PATCH * PATCH * IN_CH; // 64
 const MASK_NEG: f64 = -1e9;
 
-// oasis sinusoidal timestep features: discrete noise indices used directly (no /1000 flow scaling).
-fn timestep_embedding(t: &Tensor, dev: &Device) -> Result<Tensor> {
+// Precomputed at init (pitfall #5: no Tensor::arange/from_vec in the per-forward hot loop).
+fn timestep_freqs(dev: &Device) -> Result<Tensor> {
     let half = FREQ_EMB / 2;
     let arange = Tensor::arange(0, half as u32, dev)?.to_dtype(DType::F32)?;
-    let freqs = (arange * (-(10000f64.ln()) / half as f64))?.exp()?;
+    (arange * (-(10000f64.ln()) / half as f64))?.exp()
+}
+
+// oasis sinusoidal timestep features: discrete noise indices used directly (no /1000 flow scaling).
+fn timestep_embedding(t: &Tensor, freqs: &Tensor) -> Result<Tensor> {
     let args = t
         .to_dtype(DType::F32)?
         .unsqueeze(1)?
@@ -46,15 +50,16 @@ fn timestep_embedding(t: &Tensor, dev: &Device) -> Result<Tensor> {
     Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)
 }
 
-fn causal_mask(t: usize, dtype: DType, dev: &Device) -> Result<AttentionMask> {
-    let mut v = vec![0f32; t * t];
-    for i in 0..t {
-        for j in (i + 1)..t {
-            v[i * t + j] = MASK_NEG as f32;
+// Full [1,1,MAX_FRAMES,MAX_FRAMES] additive causal mask; a leading [tt,tt] slice is the tt-frame mask.
+fn causal_full_mask(dtype: DType, dev: &Device) -> Result<Tensor> {
+    let n = MAX_FRAMES;
+    let mut v = vec![0f32; n * n];
+    for i in 0..n {
+        for j in (i + 1)..n {
+            v[i * n + j] = MASK_NEG as f32;
         }
     }
-    let m = Tensor::from_vec(v, (1, 1, t, t), dev)?.to_dtype(dtype)?;
-    Ok(AttentionMask::Custom(m))
+    Tensor::from_vec(v, (1, 1, n, n), dev)?.to_dtype(dtype)
 }
 
 // adaLN modulation: x [B,T,H,W,D] * (1+scale) + shift; scale/shift/gate broadcast [B,T,1,1,D].
@@ -284,6 +289,8 @@ pub struct Dit {
     final_layer: FinalLayer,
     s_rope: RotaryTable,
     t_rope: RotaryTable,
+    time_freqs: Tensor,
+    causal_full: Tensor,
     device: Device,
     dtype: DType,
 }
@@ -323,6 +330,8 @@ impl Dit {
             final_layer,
             s_rope: RotaryTable::spatial(GRID_H, GRID_W, HEAD_DIM, SPATIAL_MAX_FREQ, &device)?,
             t_rope: RotaryTable::temporal(MAX_FRAMES, HEAD_DIM, &device)?,
+            time_freqs: timestep_freqs(&device)?,
+            causal_full: causal_full_mask(dtype, &device)?,
             device,
             dtype,
         })
@@ -339,7 +348,7 @@ impl Dit {
     // t [B,T] noise levels -> conditioning c [B,T,DIM] (timestep + action embeddings).
     fn condition(&self, t: &Tensor, action: &Tensor) -> Result<Tensor> {
         let (b, tt) = t.dims2()?;
-        let temb = timestep_embedding(&t.reshape(b * tt)?, &self.device)?
+        let temb = timestep_embedding(&t.reshape(b * tt)?, &self.time_freqs)?
             .to_dtype(self.dtype)?
             .apply(&self.t_mlp0)?
             .silu()?
@@ -372,7 +381,9 @@ impl Dit {
             .contiguous()?
             .reshape((b, tt, GRID_H, GRID_W, DIM))?;
         let t_rope = self.t_rope.slice(tt)?;
-        let t_mask = causal_mask(tt, self.dtype, &self.device)?;
+        let t_mask = AttentionMask::Custom(
+            self.causal_full.narrow(2, 0, tt)?.narrow(3, 0, tt)?.contiguous()?,
+        );
         for blk in &self.blocks {
             h = blk.forward(&h, &c, &self.s_rope, &t_rope, &t_mask)?;
         }
