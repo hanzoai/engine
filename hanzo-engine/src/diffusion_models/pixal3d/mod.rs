@@ -1,18 +1,25 @@
-//! Pixal3D: image-to-3D in the TRELLIS family (structured-latent SLAT -> rectified-flow decode).
+//! Pixal3D: image-to-3D in the TRELLIS family (MIT, microsoft/TRELLIS-image-large).
 //!
-//! The forward pass is not yet wired: it reuses the Flux / Qwen-Image diffusion backbone for the
-//! SLAT sampler and decodes into a [`hanzo_3d::Mesh`]. Only the entry point exists here; the
-//! sampler, the rectified-flow transformer, and the mesh decoder are the follow-up.
+//! Coarse-geometry path implemented end to end: DINOv2 conditioner -> sparse-structure rectified-flow
+//! sample -> 3D-conv decode to a 64^3 occupancy grid -> surface mesh -> GLB. The sparse SLAT flow +
+//! FlexiCubes mesh refinement is the remaining stage.
 
-use anyhow::{bail, Result};
+pub mod dinov2;
+pub mod glb;
+pub mod mesh;
+pub mod pipeline;
+pub mod preprocess;
+pub mod sampler;
+pub mod ss_decoder;
+pub mod ss_flow;
+pub mod transformer;
+
+use anyhow::Result;
 use hanzo_3d::Mesh;
 use image::DynamicImage;
 
-/// Run Pixal3D image-to-3D, returning the decoded mesh.
-///
-/// `image` is the conditioning image, `seed` the sampler seed, `steps` the number of
-/// rectified-flow steps. The SLAT sampler + RFT decode are not yet wired.
+/// Run Pixal3D image-to-3D, returning the decoded mesh. `seed` seeds the sampler, `steps` is the
+/// number of rectified-flow steps. Weights are resolved from `PIXAL3D_MODEL`.
 pub fn pixal3d_generate(image: &DynamicImage, seed: u64, steps: usize) -> Result<Mesh> {
-    let _ = (image, seed, steps);
-    bail!("Pixal3D forward pending model wiring")
+    pipeline::generate(image, seed, steps)
 }

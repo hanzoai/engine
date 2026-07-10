@@ -2983,6 +2983,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-film"
+version = "1.7.2"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "clap",
+ "futures",
+ "image",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "hanzo-flash-attn"
 version = "0.11.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
