@@ -114,15 +114,23 @@ fn build_animator(dev: &Device) -> Result<MuseTalkAnimator> {
         resized_img: RESIZED_IMG,
     };
 
+    let dtype = dtype_from_env();
     let vae_vb = load_vb(
         &vae_dir.join("diffusion_pytorch_model.safetensors"),
-        DType::F32,
+        dtype,
         dev,
     )?;
-    let unet_vb = load_vb(&mt_dir.join("unet.safetensors"), DType::F32, dev)?;
-    let musetalk =
-        MuseTalk::new(cfg, vae_vb, unet_vb, dev, DType::F32).context("build MuseTalk")?;
+    let unet_vb = load_vb(&mt_dir.join("unet.safetensors"), dtype, dev)?;
+    let mut musetalk = MuseTalk::new(cfg, vae_vb, unet_vb, dev, dtype).context("build MuseTalk")?;
+    let td = env_path("TAESD_DIR", TAESD_DIR_DEFAULT);
+    if taesd_enabled() && td.join("taesd_encoder.safetensors").is_file() {
+        let enc = load_vb(&td.join("taesd_encoder.safetensors"), dtype, dev)?;
+        let dec = load_vb(&td.join("taesd_decoder.safetensors"), dtype, dev)?;
+        musetalk = musetalk.with_taesd(enc, dec).context("attach TAESD")?;
+        eprintln!("[dub-gpu] TAESD encoder+decoder attached");
+    }
 
+    // S3FD + whisper stay F32; the animator casts whisper features to the core dtype.
     let whisper_vb = load_vb(&whisper_st, DType::F32, dev)?;
     let whisper = WhisperFeatureExtractor::new(
         WhisperConfig::tiny(),
@@ -141,6 +149,15 @@ fn dtype_from_env() -> DType {
         Ok("f16") | Ok("F16") | Ok("half") => DType::F16,
         _ => DType::F32,
     }
+}
+
+fn taesd_enabled() -> bool {
+    std::env::var("DUB_TAESD")
+        .map(|v| {
+            let v = v.trim().to_string();
+            !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false")
+        })
+        .unwrap_or(false)
 }
 
 // Just the MuseTalk core (VAE/TAESD + UNet), the realtime-critical inner loop. No S3FD/whisper.
