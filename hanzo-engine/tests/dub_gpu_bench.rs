@@ -239,6 +239,55 @@ fn bench_core(
     Ok(fps)
 }
 
+// Renders the LSE-C quality-gate mouths: read the pre-dumped standard-clip faces + whisper feats
+// from MUSETALK_DUBIN, run the real-weight core (full-VAE or DUB_TAESD), write [3,256,256] mouths
+// to MUSETALK_DUBOUT. Python reblend + syncnet then score LSE-C. Same npy contract as the dub tool.
+#[test]
+fn dub_render_mouths() -> Result<()> {
+    let (Ok(dubin), Ok(dubout)) = (
+        std::env::var("MUSETALK_DUBIN"),
+        std::env::var("MUSETALK_DUBOUT"),
+    ) else {
+        eprintln!("[render] set MUSETALK_DUBIN + MUSETALK_DUBOUT to render mouths; skipping");
+        return Ok(());
+    };
+    let dev = device()?;
+    let dtype = dtype_from_env();
+    let with_taesd = taesd_enabled();
+    let mt = build_core(&dev, dtype, with_taesd)?;
+    std::fs::create_dir_all(&dubout)?;
+
+    let t0 = Instant::now();
+    let mut n = 0usize;
+    loop {
+        let face_p = format!("{dubin}/face_{n:06}.npy");
+        if !std::path::Path::new(&face_p).is_file() {
+            break;
+        }
+        let face = hanzo_ml::Tensor::read_npy(&face_p)?
+            .to_device(&dev)?
+            .to_dtype(dtype)?;
+        let audio = hanzo_ml::Tensor::read_npy(format!("{dubin}/audio_{n:06}.npy"))?
+            .to_device(&dev)?
+            .to_dtype(dtype)?;
+        let mouth = mt.forward(&face, &audio)?;
+        mouth
+            .squeeze(0)?
+            .to_dtype(DType::F32)?
+            .to_device(&Device::Cpu)?
+            .write_npy(format!("{dubout}/mouth_{n:06}.npy"))?;
+        n += 1;
+    }
+    dev.synchronize()?;
+    let dt = t0.elapsed().as_secs_f64();
+    eprintln!(
+        "[render] {n} mouths -> {dubout} in {dt:.2}s ({:.2} fps) taesd={with_taesd} dtype={dtype:?}",
+        n as f64 / dt
+    );
+    assert!(n > 0, "no face_*.npy found in {dubin}");
+    Ok(())
+}
+
 // Realtime core benchmark: per-frame encode/unet/decode, full-VAE vs TAESD encoder, at DUB_DTYPE.
 #[test]
 fn dub_musetalk_core_fps() -> Result<()> {
