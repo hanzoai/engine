@@ -1,3 +1,4 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use hanzo_ml::{Device, Result};
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -798,7 +799,7 @@ fn tokens_to_le_bytes(toks: &[u32]) -> Vec<u8> {
 /// Inverse of [`tokens_to_le_bytes`]; `None` if the byte length is not a multiple
 /// of 4 (a corrupt or foreign entry).
 fn tokens_from_le_bytes(bytes: &[u8]) -> Option<Vec<u32>> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return None;
     }
     Some(

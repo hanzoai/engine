@@ -1,6 +1,7 @@
 //! UMT5-base text encoder for ACE-Step tag/genre conditioning (768-dim last hidden state).
 //! Reuses the shared T5 encoder with `Config.umt5 = true` (per-layer relative attention bias).
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use hanzo_ml::{Device, Result, Tensor};
 use hanzo_quant::ShardedVarBuilder;
 

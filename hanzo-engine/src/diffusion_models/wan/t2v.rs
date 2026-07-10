@@ -6,6 +6,7 @@
 //! one piece still pending model wiring (weights + umt5 text encoder + scheduler); everything that
 //! consumes its output (the async `/v1/videos` job) is real and drives this function.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use anyhow::{bail, Result};
 use image::{DynamicImage, RgbImage};
 

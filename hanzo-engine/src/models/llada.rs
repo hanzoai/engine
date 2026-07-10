@@ -6,6 +6,7 @@
 //! denoising rather than token-append. There is no KV cache: every denoise
 //! step re-runs the full sequence. See `modeling_llada.py` (LLaDALlamaBlock).
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use hanzo_ml::{DType, Device, IndexOp, Result, Tensor, D};
 use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder};
@@ -32,6 +33,7 @@ pub struct Config {
     pub rope_theta: f32,
     pub max_sequence_length: usize,
     pub mask_token_id: u32,
+    #[allow(dead_code)]
     pub eos_token_id: u32,
     #[serde(default)]
     pub include_bias: bool,
@@ -203,6 +205,7 @@ pub struct Model {
     ln_f: RmsNorm,
     ff_out: Arc<dyn QuantMethod>,
     device: Device,
+    #[allow(dead_code)]
     dtype: DType,
     pub cfg: Config,
 }
@@ -255,6 +258,7 @@ impl Model {
     pub fn device(&self) -> &Device {
         &self.device
     }
+    #[allow(dead_code)]
     pub fn dtype(&self) -> DType {
         self.dtype
     }
@@ -316,7 +320,7 @@ impl Model {
         let total = prompt_len + params.gen_length;
         let mut x = Vec::with_capacity(total);
         x.extend_from_slice(prompt);
-        x.extend(std::iter::repeat(mask).take(params.gen_length));
+        x.extend(std::iter::repeat_n(mask, params.gen_length));
 
         let num_blocks = params.gen_length / params.block_length;
         let steps_per_block = params.steps / num_blocks;
@@ -347,6 +351,7 @@ impl Model {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn load_from_dir(dir: &std::path::Path, device: &Device, dtype: DType) -> Result<Model> {
     let cfg_str = std::fs::read_to_string(dir.join("config.json")).map_err(hanzo_ml::Error::msg)?;
     let cfg: Config = serde_json::from_str(&cfg_str).map_err(hanzo_ml::Error::msg)?;

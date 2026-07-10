@@ -5,8 +5,9 @@
 //! 16^3x8 velocity for the rectified-flow sampler. Positional embedding is the stored `pos_emb`
 //! (an AbsolutePositionEmbedder over the 16^3 grid, baked into the checkpoint).
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use hanzo_ml::{Result, Tensor};
-use hanzo_nn::{Linear, Module};
+use hanzo_nn::Linear;
 use hanzo_quant::ShardedVarBuilder;
 
 use super::transformer::{nonaffine_layernorm, ModulatedCrossBlock, TimestepEmbedder};
@@ -119,8 +120,7 @@ mod tests {
     fn ss_flow_parity_vs_reference() {
         let dir = std::env::var("TRELLIS_ORACLE").expect("set TRELLIS_ORACLE");
         let dev = Device::Cpu;
-        let weights =
-            format!("{dir}/trellis_dl/ckpts/ss_flow_img_dit_L_16l8_fp16.safetensors");
+        let weights = format!("{dir}/trellis_dl/ckpts/ss_flow_img_dit_L_16l8_fp16.safetensors");
         let vb = from_mmaped_safetensors(
             vec![PathBuf::from(weights)],
             Vec::new(),
@@ -140,7 +140,11 @@ mod tests {
         assert_eq!(out.dims(), &[1, 8, 16, 16, 16]);
 
         let a = out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
-        let b = io["velocity"].flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let b = io["velocity"]
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
         let (mut dot, mut na, mut nb, mut se, mut maxabs) = (0f64, 0f64, 0f64, 0f64, 0f64);
         for (x, y) in a.iter().zip(&b) {
             let (x, y) = (*x as f64, *y as f64);

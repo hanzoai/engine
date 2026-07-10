@@ -579,7 +579,7 @@ pub enum Error {
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", &self)
+        write!(f, "{:?}", self)
     }
 }
 
@@ -761,7 +761,7 @@ impl Drop for Hanzo {
     fn drop(&mut self) {
         // Terminate all engines
         if let Ok(engines) = self.engines.read() {
-            for (_, engine) in engines.iter() {
+            for engine in engines.values() {
                 // Use try_send instead of blocking_send to avoid runtime panics
                 let _ = engine.sender.try_send(Request::Terminate);
             }

@@ -3329,6 +3329,7 @@ impl DeviceMappedModelLoader for Glm5MoeLoader {
         let indexer_schedule = cfg.indexer_schedule();
         let mut per_layer_elems = Vec::new();
 
+        #[allow(clippy::needless_range_loop)]
         for layer_idx in 0..cfg.num_hidden_layers {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;

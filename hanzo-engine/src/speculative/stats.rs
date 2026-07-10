@@ -5,6 +5,7 @@
 //! bumps it once per verify step (see [`record_verify`]); a benchmark [`reset`]s before a run
 //! and [`snapshot`]s after. Cheap relaxed atomics — off the hot numeric path.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static VERIFY_ROUNDS: AtomicU64 = AtomicU64::new(0);

@@ -1,3 +1,4 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use crate::{
     diffusion_models::animation::AnimationGenerationParams,
     pipeline::{KvCache, NormalCache},
