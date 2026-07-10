@@ -44,6 +44,7 @@ pub enum StopReason {
     GeneratedImage,
     GeneratedSpeech,
     GeneratedFrames,
+    GeneratedTranscription,
     ToolCalls,
 }
 
@@ -57,6 +58,7 @@ impl Display for StopReason {
             StopReason::GeneratedImage => write!(f, "generated_image"),
             StopReason::GeneratedSpeech => write!(f, "generated_speech"),
             StopReason::GeneratedFrames => write!(f, "generated_frames"),
+            StopReason::GeneratedTranscription => write!(f, "generated_transcription"),
             StopReason::ToolCalls => write!(f, "tool_calls"),
         }
     }
@@ -237,6 +239,8 @@ pub struct MultimodalData {
     pub image_gen_response_format: Option<ImageGenerationResponseFormat>,
     pub diffusion_params: Option<DiffusionGenerationParams>,
     pub animation_params: Option<AnimationGenerationParams>,
+    /// Teacher-forced output language for ASR transcription; `None` auto-detects.
+    pub asr_language: Option<String>,
     pub image_gen_save_file: Option<PathBuf>,
     /// Per-item multimodal feature positions for prefix caching block hashing.
     /// Each entry records which token range a multimodal item (image/audio) occupies,
@@ -267,6 +271,7 @@ impl MultimodalData {
             image_gen_response_format,
             diffusion_params,
             animation_params: None,
+            asr_language: None,
             image_gen_save_file,
             mm_features: Vec::new(),
         }
@@ -405,6 +410,10 @@ impl MultimodalData {
 
     pub fn animation_params(&self) -> Option<AnimationGenerationParams> {
         self.animation_params
+    }
+
+    pub fn asr_language(&self) -> Option<&str> {
+        self.asr_language.as_deref()
     }
 
     /// Per-item multimodal feature positions for prefix caching block hashing.
@@ -1120,6 +1129,10 @@ impl Sequence {
         get_mut_group!(self).frames.push((frames, fps));
     }
 
+    pub fn add_transcription_to_group(&self, text: String) {
+        get_mut_group!(self).transcriptions.push(text);
+    }
+
     pub fn add_choice_to_group(&self, choice: Choice) {
         get_mut_group!(self).choices.push(choice);
         self.update_time_info();
@@ -1309,6 +1322,14 @@ impl Sequence {
         self.multimodal.animation_params = Some(params);
     }
 
+    pub fn asr_language(&self) -> Option<&str> {
+        self.multimodal.asr_language()
+    }
+
+    pub fn set_asr_language(&mut self, language: Option<String>) {
+        self.multimodal.asr_language = language;
+    }
+
     pub fn eos_tokens(&self) -> &[u32] {
         &self.eos_tokens
     }
@@ -1422,6 +1443,7 @@ pub struct SequenceGroup {
     image_choices: Vec<ImageChoice>,
     speech_pcms: Vec<(Arc<Vec<f32>>, usize, usize)>, // (pcm, rate, channels)
     frames: Vec<(Arc<Vec<image::DynamicImage>>, f64)>, // (frames, fps)
+    transcriptions: Vec<String>,
     raw_choices: Vec<(Vec<Tensor>, Vec<u32>)>,
     embedding_choices: Vec<Vec<f32>>,
     completion_choices: Vec<(f32, CompletionChoice)>,
@@ -1443,6 +1465,7 @@ impl SequenceGroup {
             image_choices: Vec::new(),
             speech_pcms: Vec::new(),
             frames: Vec::new(),
+            transcriptions: Vec::new(),
             raw_choices: Vec::new(),
             embedding_choices: Vec::new(),
             completion_choices: Vec::new(),
@@ -1606,6 +1629,18 @@ impl SequenceGroup {
 
         let (frames, fps) = self.frames[0].clone();
         sender.send(Response::Frames { frames, fps }).await?;
+
+        Ok(())
+    }
+
+    pub async fn maybe_send_transcription_response(
+        &self,
+        sender: Sender<Response>,
+    ) -> Result<(), SendError<Response>> {
+        assert_eq!(self.transcriptions.len(), 1);
+
+        let text = self.transcriptions[0].clone();
+        sender.send(Response::Transcription { text }).await?;
 
         Ok(())
     }

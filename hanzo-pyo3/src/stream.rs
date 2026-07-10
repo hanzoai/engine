@@ -59,6 +59,7 @@ impl ChatCompletionStreamer {
                     Response::ImageGeneration(_) => unreachable!(),
                     Response::Speech { .. } => unreachable!(),
                     Response::Frames { .. } => unreachable!(),
+                    Response::Transcription { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
                     Response::Embeddings { .. } => unreachable!(),
                 },

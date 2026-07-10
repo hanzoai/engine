@@ -191,6 +191,7 @@ enum Detected {
     Diffusion(DiffusionLoaderType),
     DiffusionLm,
     Speech(crate::speech_models::SpeechLoaderType),
+    Asr(crate::speech_models::AsrLoaderType),
 }
 
 impl AutoLoader {
@@ -345,6 +346,9 @@ impl AutoLoader {
             {
                 return Ok(Detected::Speech(tp));
             }
+            if let Some(tp) = crate::speech_models::AsrLoaderType::auto_detect_from_config(config) {
+                return Ok(Detected::Asr(tp));
+            }
         }
 
         if artifacts.sentence_transformers_present {
@@ -453,6 +457,13 @@ impl AutoLoader {
                     dac_model_id: None,
                     arch: tp,
                     cfg: None,
+                });
+                *guard = Some(loader);
+            }
+            Detected::Asr(tp) => {
+                let loader: Box<dyn Loader> = Box::new(crate::pipeline::AsrLoader {
+                    model_id: self.model_id.clone(),
+                    arch: tp,
                 });
                 *guard = Some(loader);
             }
