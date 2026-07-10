@@ -430,6 +430,56 @@ void launch_rms_norm_residual_then_rms_norm(
       reinterpret_cast<T *>(norm_dst), ncols, residual_eps, norm_eps);
 }
 
+// Pre-norm transformer fusion: sum = x + residual (the new residual-stream value), and
+// normed = rmsnorm(sum) * weight. Writes both. Mirrors ROCm add_rms_norm. The mean is taken over the
+// stored (dtype-rounded) sum so the result is bit-identical to a separate `add` + `rms_norm`.
+template <typename T>
+__global__ void rms_norm_of_sum_kernel(const T *__restrict__ x,
+                                       const T *__restrict__ residual,
+                                       const T *__restrict__ weight,
+                                       T *__restrict__ sum_dst,
+                                       T *__restrict__ norm_dst, const int ncols,
+                                       const float eps) {
+  __shared__ float reduce[32];
+  const int row = blockIdx.x;
+  const int tid = threadIdx.x;
+  const int row_offset = row * ncols;
+
+  float sq = 0.0f;
+  for (int col = tid; col < ncols; col += blockDim.x) {
+    const int idx = row_offset + col;
+    const float value = rms_residual_to_float(x[idx]) +
+                        rms_residual_to_float(residual[idx]);
+    sum_dst[idx] = rms_residual_from_float<T>(value);
+    const float stored = rms_residual_to_float(sum_dst[idx]);
+    sq += stored * stored;
+  }
+  const float inv_rms =
+      rsqrtf(rms_block_sum(sq, reduce) / static_cast<float>(ncols) + eps);
+  for (int col = tid; col < ncols; col += blockDim.x) {
+    const int idx = row_offset + col;
+    const float normed = rms_residual_to_float(sum_dst[idx]) * inv_rms *
+                         rms_residual_to_float(weight[col]);
+    norm_dst[idx] = rms_residual_from_float<T>(normed);
+  }
+}
+
+template <typename T>
+void launch_rms_norm_of_sum(const void *x, const void *residual,
+                            const void *weight, void *sum_dst, void *norm_dst,
+                            const int nrows, const int ncols, const float eps,
+                            int64_t stream) {
+  if (nrows <= 0 || ncols <= 0) {
+    return;
+  }
+  const cudaStream_t custream = (cudaStream_t)stream;
+  const int block = ncols < 1024 ? 32 : 1024;
+  rms_norm_of_sum_kernel<T><<<nrows, block, 0, custream>>>(
+      reinterpret_cast<const T *>(x), reinterpret_cast<const T *>(residual),
+      reinterpret_cast<const T *>(weight), reinterpret_cast<T *>(sum_dst),
+      reinterpret_cast<T *>(norm_dst), ncols, eps);
+}
+
 template <typename T>
 __global__ void rms_norm_strided_4d_kernel(
     const T *__restrict__ x, const T *__restrict__ weight, T *__restrict__ dst,
@@ -540,6 +590,31 @@ extern "C" void rms_norm_residual_then_rms_norm_bf16(
   launch_rms_norm_residual_then_rms_norm<__nv_bfloat16>(
       x, residual, residual_weight, scale, norm_weight, residual_dst, norm_dst,
       nrows, ncols, residual_eps, norm_eps, stream);
+}
+
+extern "C" void rms_norm_of_sum_f32(const void *x, const void *residual,
+                                    const void *weight, void *sum_dst,
+                                    void *norm_dst, const int nrows,
+                                    const int ncols, const float eps,
+                                    int64_t stream) {
+  launch_rms_norm_of_sum<float>(x, residual, weight, sum_dst, norm_dst, nrows,
+                                ncols, eps, stream);
+}
+extern "C" void rms_norm_of_sum_f16(const void *x, const void *residual,
+                                    const void *weight, void *sum_dst,
+                                    void *norm_dst, const int nrows,
+                                    const int ncols, const float eps,
+                                    int64_t stream) {
+  launch_rms_norm_of_sum<__half>(x, residual, weight, sum_dst, norm_dst, nrows,
+                                 ncols, eps, stream);
+}
+extern "C" void rms_norm_of_sum_bf16(const void *x, const void *residual,
+                                     const void *weight, void *sum_dst,
+                                     void *norm_dst, const int nrows,
+                                     const int ncols, const float eps,
+                                     int64_t stream) {
+  launch_rms_norm_of_sum<__nv_bfloat16>(x, residual, weight, sum_dst, norm_dst,
+                                        nrows, ncols, eps, stream);
 }
 
 extern "C" void rms_norm_strided_4d_f32(
