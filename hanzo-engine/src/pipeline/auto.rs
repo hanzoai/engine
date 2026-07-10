@@ -189,6 +189,7 @@ enum Detected {
     Multimodal(MultimodalLoaderType),
     Embedding(Option<EmbeddingLoaderType>),
     Diffusion(DiffusionLoaderType),
+    DiffusionLm,
     Speech(crate::speech_models::SpeechLoaderType),
 }
 
@@ -390,6 +391,9 @@ impl AutoLoader {
             anyhow::bail!("Expected exactly one architecture in config");
         }
         let name = &cfg.architectures[0];
+        if name == "LLaDAModelLM" {
+            return Ok(Detected::DiffusionLm);
+        }
         if let Ok(tp) = MultimodalLoaderType::from_causal_lm_name(name) {
             return Ok(Detected::Multimodal(tp));
         }
@@ -435,6 +439,12 @@ impl AutoLoader {
             }
             Detected::Diffusion(tp) => {
                 let loader = DiffusionLoaderBuilder::new(Some(self.model_id.clone())).build(tp);
+                *guard = Some(loader);
+            }
+            Detected::DiffusionLm => {
+                let loader: Box<dyn Loader> = Box::new(crate::pipeline::DiffusionLmLoader::new(
+                    self.model_id.clone(),
+                ));
                 *guard = Some(loader);
             }
             Detected::Speech(tp) => {
