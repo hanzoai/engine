@@ -38,10 +38,10 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
                 .map(|n| n as usize)
         };
 
-        // deepseek2 (incl. GLM-4.7-Flash) runs the un-absorbed MLA path eagerly: it materializes full
-        // per-head K/V, so the KV cache is n_head x q_head_dim/v_head_dim, not the compressed MQA
-        // metadata (head_count_kv=1, key_length=kv_lora+rope).
-        if arch == "deepseek2" {
+        // deepseek2 (incl. GLM-4.7-Flash) and glm-dsa (GLM-5.2) run the un-absorbed MLA path eagerly:
+        // they materialize full per-head K/V, so the KV cache is n_head x q_head_dim/v_head_dim, not
+        // the compressed MQA metadata (head_count_kv=1, key_length=kv_lora+rope).
+        if arch == "deepseek2" || arch == "glm-dsa" {
             let n_head = u(&format!("{arch}.attention.head_count")).unwrap();
             let qk_rope = u(&format!("{arch}.rope.dimension_count")).unwrap_or(0);
             let q_head_dim = u(&format!("{arch}.attention.key_length_mla")).unwrap_or_else(|| {
