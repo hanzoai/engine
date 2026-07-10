@@ -59,6 +59,8 @@ pub struct MuseTalkComponents {
     pub whisper_config: WhisperConfig,
     pub whisper_vb: ShardedVarBuilder,
     pub s3fd_vb: ShardedVarBuilder,
+    /// TAESD encode+decode var builders, present iff the fast VAE path is enabled (`DUB_TAESD`).
+    pub taesd_vb: Option<(ShardedVarBuilder, ShardedVarBuilder)>,
     pub device: Device,
     pub dtype: DType,
     pub options: AnimatorOptions,
@@ -93,7 +95,11 @@ impl AnimationModelLoader for MuseTalkAnimationLoader {
         let AnimationComponents::MuseTalk(c) = components else {
             anyhow::bail!("MuseTalk loader requires MuseTalk components");
         };
-        let musetalk = MuseTalk::new(c.musetalk_config, c.vae_vb, c.unet_vb, &c.device, c.dtype)?;
+        let mut musetalk =
+            MuseTalk::new(c.musetalk_config, c.vae_vb, c.unet_vb, &c.device, c.dtype)?;
+        if let Some((encoder_vb, decoder_vb)) = c.taesd_vb {
+            musetalk = musetalk.with_taesd(encoder_vb, decoder_vb)?;
+        }
         let whisper = WhisperFeatureExtractor::new(
             c.whisper_config,
             c.whisper_vb.pp(WHISPER_ENCODER_PREFIX),

@@ -1,12 +1,14 @@
 pub mod animator;
 pub mod config;
 pub mod pipeline;
+pub mod taesd;
 pub mod unet;
 pub mod vae;
 
 pub use animator::{AnimatorOptions, MuseTalkAnimator, MuseTalkGenerator, S3fdLocator};
 pub use config::{MuseTalkConfig, UNetConfig, VaeConfig};
 pub use pipeline::MuseTalk;
+pub use taesd::{Taesd, TaesdDecoder, TaesdEncoder};
 pub use unet::UNet2DConditionModel;
 pub use vae::AutoencoderKl;
 
