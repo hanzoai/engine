@@ -103,3 +103,58 @@ impl SsFlow {
             .reshape((b, self.out_channels, r, r, r))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
+    use hanzo_ml::{DType, Device};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    // TRELLIS_ORACLE=/path/to/trellis_oracle \
+    //   cargo test -p hanzo-engine pixal3d::ss_flow -- --ignored --nocapture
+    #[test]
+    #[ignore = "needs ss_flow oracle (TRELLIS_ORACLE dir)"]
+    fn ss_flow_parity_vs_reference() {
+        let dir = std::env::var("TRELLIS_ORACLE").expect("set TRELLIS_ORACLE");
+        let dev = Device::Cpu;
+        let weights =
+            format!("{dir}/trellis_dl/ckpts/ss_flow_img_dit_L_16l8_fp16.safetensors");
+        let vb = from_mmaped_safetensors(
+            vec![PathBuf::from(weights)],
+            Vec::new(),
+            Some(DType::F32),
+            &dev,
+            vec![None],
+            true,
+            None,
+            |_| true,
+            Arc::new(|_| DeviceForLoadTensor::Base),
+        )
+        .unwrap();
+        let model = SsFlow::new(&SsFlowConfig::default(), vb).unwrap();
+
+        let io = hanzo_ml::safetensors::load(format!("{dir}/ssflow_io.safetensors"), &dev).unwrap();
+        let out = model.forward(&io["x"], &io["t"], &io["cond"]).unwrap();
+        assert_eq!(out.dims(), &[1, 8, 16, 16, 16]);
+
+        let a = out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let b = io["velocity"].flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let (mut dot, mut na, mut nb, mut se, mut maxabs) = (0f64, 0f64, 0f64, 0f64, 0f64);
+        for (x, y) in a.iter().zip(&b) {
+            let (x, y) = (*x as f64, *y as f64);
+            dot += x * y;
+            na += x * x;
+            nb += y * y;
+            se += (x - y).powi(2);
+            maxabs = maxabs.max((x - y).abs());
+        }
+        let cos = dot / (na.sqrt() * nb.sqrt());
+        println!(
+            "ss_flow cos={cos:.8} mse={:.3e} max|d|={maxabs:.3e}",
+            se / a.len() as f64
+        );
+        assert!(cos > 0.999, "cosine {cos} < 0.999");
+    }
+}
