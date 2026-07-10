@@ -27,7 +27,14 @@ impl Images {
 
     /// Render `prompt` to a PNG at `out`. `label` seeds the procedural card's
     /// deterministic color (e.g. a character id).
-    pub async fn make(&self, prompt: &str, label: &str, width: usize, height: usize, out: &Path) -> Result<()> {
+    pub async fn make(
+        &self,
+        prompt: &str,
+        label: &str,
+        width: usize,
+        height: usize,
+        out: &Path,
+    ) -> Result<()> {
         match self {
             Images::Engine { engine, model } => {
                 let bytes = engine.image(model, prompt, width, height).await?;
@@ -58,6 +65,7 @@ impl Video {
     /// Produce a silent clip of `dur_s` at `out`.
     /// `still` is the conditioning image (a fresh keyframe for `cut`, the prior
     /// shot's tail frame for `continue`); `prompt` drives the real video model.
+    #[allow(clippy::too_many_arguments)]
     pub async fn clip(
         &self,
         prompt: &str,
@@ -70,10 +78,14 @@ impl Video {
         out: &Path,
     ) -> Result<()> {
         match self {
-            Video::Placeholder => ffmpeg::kenburns_clip(still, dur_s, width, height, fps, grade, out).await,
+            Video::Placeholder => {
+                ffmpeg::kenburns_clip(still, dur_s, width, height, fps, grade, out).await
+            }
             Video::Wan { engine, steps } => {
                 let frames = ((dur_s * fps as f32).round() as usize).max(1);
-                let id = engine.video_create(prompt, frames, width, height, *steps).await?;
+                let id = engine
+                    .video_create(prompt, frames, width, height, *steps)
+                    .await?;
                 // Poll to completion. The endpoint is the durable contract; timeout guards a stuck job.
                 let deadline = std::time::Instant::now() + Duration::from_secs(1800);
                 loop {
@@ -81,7 +93,9 @@ impl Video {
                     match status.as_str() {
                         "completed" => break,
                         "failed" => bail!("wan job {id} failed"),
-                        _ if std::time::Instant::now() > deadline => bail!("wan job {id} timed out"),
+                        _ if std::time::Instant::now() > deadline => {
+                            bail!("wan job {id} timed out")
+                        }
                         _ => tokio::time::sleep(Duration::from_secs(2)).await,
                     }
                 }

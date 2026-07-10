@@ -5,6 +5,7 @@
 //! the pixal3d product path. Zero deps beyond serde_json: GLB is a 12-byte header + a JSON chunk + a
 //! BIN chunk, both padded to 4 bytes.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use hanzo_3d::Mesh;
 use serde_json::{json, Value};
 
@@ -23,7 +24,7 @@ const JSON_PAD: u8 = 0x20; // space
 const BIN_PAD: u8 = 0x00;
 
 fn pad4(buf: &mut Vec<u8>, fill: u8) {
-    while buf.len() % 4 != 0 {
+    while !buf.len().is_multiple_of(4) {
         buf.push(fill);
     }
 }
@@ -143,7 +144,11 @@ pub fn mesh_to_glb_colored(mesh: &Mesh, colors: Option<&[[f32; 3]]>) -> Vec<u8> 
     }
 
     if let Some(colors) = colors {
-        let col_bytes = floats_le(colors.iter().flat_map(|c| [c[0], c[1], c[2], 1.0].into_iter()));
+        let col_bytes = floats_le(
+            colors
+                .iter()
+                .flat_map(|c| [c[0], c[1], c[2], 1.0].into_iter()),
+        );
         let view = bin.push(&col_bytes, TARGET_ARRAY);
         attributes.insert("COLOR_0".into(), json!(accessors.len()));
         accessors.push(json!({
@@ -246,13 +251,19 @@ mod tests {
 
         // Cube: 8 verts, 12 tris -> 36 indices; POSITION + indices accessors, no normals/uvs.
         assert_eq!(json["accessors"][0]["count"].as_u64().unwrap(), 36);
-        assert_eq!(json["accessors"][0]["componentType"].as_u64().unwrap(), CT_UINT as u64);
+        assert_eq!(
+            json["accessors"][0]["componentType"].as_u64().unwrap(),
+            CT_UINT as u64
+        );
         let pos = &json["accessors"][1];
         assert_eq!(pos["count"].as_u64().unwrap(), 8);
         assert_eq!(pos["type"].as_str().unwrap(), "VEC3");
         assert_eq!(pos["min"], json!([0.0, 0.0, 0.0]));
         assert_eq!(pos["max"], json!([1.0, 1.0, 1.0]));
-        assert_eq!(json["meshes"][0]["primitives"][0]["mode"].as_u64().unwrap(), 4);
+        assert_eq!(
+            json["meshes"][0]["primitives"][0]["mode"].as_u64().unwrap(),
+            4
+        );
     }
 
     #[test]

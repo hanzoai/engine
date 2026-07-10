@@ -69,7 +69,9 @@ fn device() -> Result<Device> {
 
 fn load_vb(path: &PathBuf, dtype: DType, dev: &Device) -> Result<ShardedVarBuilder> {
     let predicate: Arc<dyn Fn(String) -> bool + Send + Sync> = Arc::new(|_| true);
-    let vb = unsafe { ShardedSafeTensors::sharded(&[path.clone()], dtype, dev, None, predicate)? };
+    let vb = unsafe {
+        ShardedSafeTensors::sharded(std::slice::from_ref(path), dtype, dev, None, predicate)?
+    };
     Ok(vb)
 }
 
