@@ -10,6 +10,7 @@ pub mod longcat;
 pub mod t2v;
 pub mod t2v_dit;
 pub mod vae;
+pub mod vae22;
 
 pub use conv3d::{CausalConv3d, FeatCache};
 pub use echomimic::{
@@ -22,3 +23,4 @@ pub use longcat::{
     WhisperLargeEncoder,
 };
 pub use vae::{AutoencoderKLWan, WanVaeConfig};
+pub use vae22::{Wan22Vae, Wan22VaeConfig};
