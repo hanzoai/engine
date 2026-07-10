@@ -581,8 +581,8 @@ pub struct OpenResponsesCreateRequest {
 
     /// Whether to allow parallel tool calls.
     ///
-    /// NOTE: Only `true` (default) or `None` is supported. Setting this to `false`
-    /// will return an error as hanzo does not support disabling parallel tool calls.
+    /// Accepted and echoed back; the engine generates one sequence per turn so the
+    /// flag is advisory (not enforced). `false` is honored by codex-family clients.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parallel_tool_calls: Option<bool>,
 
@@ -1376,14 +1376,10 @@ async fn parse_openresponses_request(
     IncludeConfig,
     RequestContext,
 )> {
-    // Validate unsupported parameters
-    // parallel_tool_calls: only `true` (default) or `None` is supported
-    if let Some(false) = oairequest.parallel_tool_calls {
-        anyhow::bail!(
-            "parallel_tool_calls=false is not supported. \
-             hanzo does not currently support disabling parallel tool calls."
-        );
-    }
+    // Validate unsupported parameters.
+    // parallel_tool_calls is accepted (true/false/None) and echoed back; the engine
+    // generates one sequence per turn, so the flag is advisory. Codex-family clients
+    // send `false` by default, so rejecting it would lock them out of `/v1/responses`.
 
     // max_tool_calls: only `None` (unlimited) is supported
     if oairequest.max_tool_calls.is_some() {
