@@ -15,7 +15,9 @@ use axum::{
     http::{header, StatusCode},
     response::IntoResponse,
 };
-use hanzo_engine::diffusion_models::wan::t2v::{wan_t2v_generate, WanT2vParams, DEFAULT_FPS};
+use hanzo_engine::diffusion_models::wan::t2v::{
+    wan_i2v_generate, wan_t2v_generate, WanT2vParams, DEFAULT_FPS,
+};
 use hanzo_engine::Hanzo;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -53,6 +55,10 @@ pub struct VideoGenerationRequest {
     pub height: usize,
     #[serde(default = "default_steps")]
     pub steps: usize,
+    /// Optional conditioning image (data URL, base64, http). Present -> image/continuation-to-video:
+    /// the clip continues from this frame. For a seamless film cut, pass a prior clip's last frame.
+    #[serde(default)]
+    pub image: Option<String>,
 }
 
 /// Lifecycle of a video job.
@@ -261,8 +267,7 @@ async fn run_job(state: SharedState, id: String) {
     }
 }
 
-/// Run the model forward then container the frames. `wan_t2v_generate` is the seam pending weights;
-/// everything downstream (mux -> mp4 bytes) is real and exercised the moment the forward lands.
+/// Run the WAN forward (t2v, or i2v/continuation when `image` is set) then mux the frames to mp4.
 async fn generate(req: &VideoGenerationRequest) -> anyhow::Result<Vec<u8>> {
     let params = WanT2vParams {
         prompt: req.prompt.clone(),
@@ -271,7 +276,13 @@ async fn generate(req: &VideoGenerationRequest) -> anyhow::Result<Vec<u8>> {
         height: req.height,
         steps: req.steps,
     };
-    let rendered = wan_t2v_generate(&params)?;
+    let rendered = match &req.image {
+        Some(src) => {
+            let img = crate::util::parse_image_url(src).await?;
+            wan_i2v_generate(&params, &img)?
+        }
+        None => wan_t2v_generate(&params)?,
+    };
     mux(&rendered.frames, rendered.fps, &[], 0).await
 }
 
