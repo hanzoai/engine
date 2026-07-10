@@ -23,6 +23,7 @@
 //! K draft tokens inside a fixed-shape graph). So [`MtpHead::draft`] is built to be
 //! looped for multi-step drafting; the accept/verify loop is the engine-side follow-on.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use std::sync::Arc;
 
 use crate::gguf::Content;
@@ -54,6 +55,7 @@ pub struct MtpHead {
     head_hc: HyperConnections,
     norm: RmsNorm,
     n_hc: usize,
+    #[allow(dead_code)]
     head_dim: usize,
     device: Device,
     dtype: DType,
@@ -139,6 +141,7 @@ impl MtpHead {
     }
 
     /// Reset the draft head's KV cache (call before each fresh speculative round).
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         for c in &mut self.cache {
             c.reset();
@@ -201,6 +204,7 @@ impl MtpHead {
     }
 
     /// Head dim (for callers wiring the draft into a speculative loop).
+    #[allow(dead_code)]
     pub fn head_dim(&self) -> usize {
         self.head_dim
     }

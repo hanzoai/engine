@@ -18,6 +18,7 @@
 //! layers) so the talker bridge can read layer `accept_hidden_layer` — matching HF
 //! `output_hidden_states` indexing.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use std::sync::Arc;
 
 use hanzo_ml::{DType, Device, Result, Tensor};
@@ -1361,7 +1362,7 @@ mod thinker_tests {
 
     /// REAL-weights ISQ validation (env-gated on `ZEN_OMNI_DIR`, like the other Omni tests; skips
     /// cleanly when the checkpoint is absent). Loads only the Thinker text decoder (`thinker.model.*`
-    /// + `thinker.lm_head`), quantizes it to Q4K through the production *immediate*-ISQ path (the exact
+    /// and `thinker.lm_head`), quantizes it to Q4K through the production *immediate*-ISQ path (the exact
     /// mechanism `hanzo run --isq Q4K` uses), and asserts a forward on the fixed prompt yields finite
     /// logits with a greedy token in range. Quant drift is expected, so 9707 is logged, not required.
     ///

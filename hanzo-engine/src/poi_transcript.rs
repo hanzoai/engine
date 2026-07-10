@@ -22,6 +22,7 @@
 //! Everything here is keccak/`F_p` and matches the chain byte-for-byte, so the same opening that
 //! convinces this Rust challenger convinces the Go `crypto/poi` watcher and the Solidity witness.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use crate::poi::{self, Mat};
 
 /// Domain tag for a matmul leaf — keeps these commitments disjoint from any other keccak leaf.
@@ -83,7 +84,11 @@ pub fn merkle_proof(leaves: &[[u8; 32]], index: usize) -> Vec<[u8; 32]> {
             let last = *level.last().unwrap();
             level.push(last);
         }
-        let sib = if idx % 2 == 0 { idx + 1 } else { idx - 1 };
+        let sib = if idx.is_multiple_of(2) {
+            idx + 1
+        } else {
+            idx - 1
+        };
         proof.push(level[sib]);
         level = level.chunks(2).map(|p| hash_pair(&p[0], &p[1])).collect();
         idx /= 2;
@@ -96,7 +101,7 @@ pub fn merkle_verify(leaf: [u8; 32], root: [u8; 32], index: usize, proof: &[[u8;
     let mut node = leaf;
     let mut idx = index;
     for sib in proof {
-        node = if idx % 2 == 0 {
+        node = if idx.is_multiple_of(2) {
             hash_pair(&node, sib)
         } else {
             hash_pair(sib, &node)

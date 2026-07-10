@@ -5,8 +5,9 @@
 //! qk-RMSNorm), un-gated cross-attention to the DINOv2 tokens, adaLN-modulated FFN. The only thing
 //! that differs upstream is how tokens/pos-embeddings are formed, so the block lives here once.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use hanzo_ml::{DType, Result, Tensor, D};
-use hanzo_nn::{LayerNorm, Linear, Module};
+use hanzo_nn::{LayerNorm, Linear};
 use hanzo_quant::ShardedVarBuilder;
 
 use crate::layers::{layer_norm, linear};
@@ -52,7 +53,9 @@ struct MultiHeadRmsNorm {
 
 impl MultiHeadRmsNorm {
     fn new(head_dim: usize, heads: usize, vb: ShardedVarBuilder) -> Result<Self> {
-        let gamma = vb.get((heads, head_dim), "gamma")?.reshape((1, 1, heads, head_dim))?;
+        let gamma = vb
+            .get((heads, head_dim), "gamma")?
+            .reshape((1, 1, heads, head_dim))?;
         Ok(Self {
             gamma,
             scale: (head_dim as f64).sqrt(),
@@ -62,7 +65,7 @@ impl MultiHeadRmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let norm = x.sqr()?.sum_keepdim(D::Minus1)?.sqrt()?; // [B, L, H, 1]
         let x = x.broadcast_div(&(norm + NORMALIZE_EPS)?)?;
-        (x.broadcast_mul(&self.gamma)? * self.scale)
+        x.broadcast_mul(&self.gamma)? * self.scale
     }
 }
 
@@ -89,7 +92,12 @@ struct SelfAttention {
 }
 
 impl SelfAttention {
-    fn new(channels: usize, heads: usize, qk_rms_norm: bool, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(
+        channels: usize,
+        heads: usize,
+        qk_rms_norm: bool,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         let head_dim = channels / heads;
         let (q_rms, k_rms) = if qk_rms_norm {
             (

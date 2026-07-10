@@ -382,7 +382,10 @@ impl Dit {
             .reshape((b, tt, GRID_H, GRID_W, DIM))?;
         let t_rope = self.t_rope.slice(tt)?;
         let t_mask = AttentionMask::Custom(
-            self.causal_full.narrow(2, 0, tt)?.narrow(3, 0, tt)?.contiguous()?,
+            self.causal_full
+                .narrow(2, 0, tt)?
+                .narrow(3, 0, tt)?
+                .contiguous()?,
         );
         for blk in &self.blocks {
             h = blk.forward(&h, &c, &self.s_rope, &t_rope, &t_mask)?;

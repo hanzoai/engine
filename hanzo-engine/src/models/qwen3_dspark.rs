@@ -252,7 +252,7 @@ impl Qwen3DSpark {
         // 2. create_noise_embed: [anchor, mask, mask, ...] for the block.
         let mut ids = Vec::with_capacity(bs);
         ids.push(anchor_token);
-        ids.extend(std::iter::repeat(self.cfg.mask_token_id).take(bs - 1));
+        ids.extend(std::iter::repeat_n(self.cfg.mask_token_id, bs - 1));
         let ids_t = Tensor::from_vec(ids, (bs,), dev)?;
         let mut hstate = self.embed_tokens.forward(&ids_t)?.to_dtype(self.dtype)?; // [bs, hidden]
 
