@@ -99,6 +99,9 @@ pub struct Config {
     pub pad_token_id: usize,
     pub eos_token_id: usize,
     pub decoder_start_token_id: Option<usize>,
+    // UMT5 gives every layer its own relative_attention_bias (T5 shares block 0's).
+    #[serde(default)]
+    pub umt5: bool,
 }
 
 impl Default for Config {
@@ -127,6 +130,7 @@ impl Default for Config {
             pad_token_id: 0,
             eos_token_id: 1,
             decoder_start_token_id: Some(0),
+            umt5: false,
         }
     }
 }
@@ -694,6 +698,7 @@ struct T5Stack {
     final_layer_norm: T5LayerNorm,
     device: Device,
     offloaded: bool,
+    umt5: bool,
 }
 
 impl T5Stack {
@@ -706,7 +711,14 @@ impl T5Stack {
         offloaded: bool,
     ) -> Result<Self> {
         let block = (0..cfg.num_layers)
-            .map(|i| T5Block::load(i == 0, decoder, vb.pp(format!("block.{i}")), cfg))
+            .map(|i| {
+                T5Block::load(
+                    cfg.umt5 || i == 0,
+                    decoder,
+                    vb.pp(format!("block.{i}")),
+                    cfg,
+                )
+            })
             .collect::<Result<Vec<_>>>()?;
         let final_layer_norm = T5LayerNorm::load(
             cfg.d_model,
@@ -719,6 +731,7 @@ impl T5Stack {
             final_layer_norm,
             device: device.clone(),
             offloaded,
+            umt5: cfg.umt5,
         })
     }
 
@@ -734,11 +747,15 @@ impl T5Stack {
             if self.offloaded {
                 block.cast_to(&self.device)?;
             }
-            (hidden_states, position_bias) = block.forward(
-                &hidden_states,
-                position_bias.as_ref(),
-                encoder_hidden_states,
-            )?;
+            // UMT5 recomputes bias per layer, so never carry it forward.
+            let carry = if self.umt5 {
+                None
+            } else {
+                position_bias.as_ref()
+            };
+            let (hs, pb) = block.forward(&hidden_states, carry, encoder_hidden_states)?;
+            hidden_states = hs;
+            position_bias = if self.umt5 { None } else { pb };
             if self.offloaded {
                 block.cast_to(&Device::Cpu)?;
             }
