@@ -4,9 +4,9 @@
 //! stack that stands in for the full SD-VAE: no GroupNorm, no attention, ~1000x fewer params. Both
 //! halves are optional fast paths for MuseTalk. The encoder is the realtime lever: MuseTalk
 //! re-encodes a masked + reference face every frame, and the full VAE encoder's high-res conv-GEMMs
-//! are the profiled wall. TAESD shares the SD-VAE raw latent space, so the UNet is unchanged; the
-//! only cost is the distillation's fidelity, gated by LSE-C. Quality parity needs the distilled
-//! `taesd_encoder`/`taesd_decoder` weights trained against the same latent space.
+//! are the profiled wall. TAESD's latent space is the SD UNet's scaled space (std ~1, verified on
+//! real weights), so the UNet is unchanged; the only cost is the distillation's fidelity, gated by
+//! LSE-C. Quality parity needs the distilled `taesd_encoder`/`taesd_decoder` weights.
 
 use hanzo_ml::{DType, Result, Tensor};
 use hanzo_nn::{Conv2d, Conv2dConfig, Module};
@@ -104,16 +104,10 @@ pub struct TaesdEncoder {
     downsamplers: Vec<Conv2d>,
     blocks: Vec<Block>,
     conv_out: Conv2d,
-    scaling_factor: f64,
 }
 
 impl TaesdEncoder {
-    pub fn new(
-        in_channels: usize,
-        latent_channels: usize,
-        scaling_factor: f64,
-        vb: ShardedVarBuilder,
-    ) -> Result<Self> {
+    pub fn new(in_channels: usize, latent_channels: usize, vb: ShardedVarBuilder) -> Result<Self> {
         let conv_in = conv3(in_channels, HIDDEN, vb.pp(0))?;
         let block0 = Block::new(HIDDEN, HIDDEN, vb.pp(1))?;
         let mut idx = 2usize;
@@ -134,13 +128,12 @@ impl TaesdEncoder {
             downsamplers,
             blocks,
             conv_out,
-            scaling_factor,
         })
     }
 
-    /// Encode a `[0,1]` RGB face into UNet latents. TAESD emits RAW SD-VAE latents, so scale by
-    /// `scaling_factor` to match the pipeline's scaled-latent convention (the full VAE's
-    /// `encode_mode` multiplies its mean by the same factor).
+    /// Encode a `[0,1]` RGB face into UNet latents. TAESD's latent space is the SD UNet's scaled
+    /// space (std ~1), same as the full VAE's `encode_mode`, so the conv output is returned as-is
+    /// (verified on real weights: taesd/full latent-std ratio ~1.0 vs 0.18 with a scaling factor).
     pub fn encode(&self, img: &Tensor) -> Result<Tensor> {
         let mut h = Convolution.forward_2d(&self.conv_in, img)?;
         h = self.block0.forward(&h)?;
@@ -152,7 +145,7 @@ impl TaesdEncoder {
                 bi += 1;
             }
         }
-        Convolution.forward_2d(&self.conv_out, &h)? * self.scaling_factor
+        Convolution.forward_2d(&self.conv_out, &h)
     }
 }
 
@@ -164,16 +157,10 @@ pub struct TaesdDecoder {
     blocks: Vec<Block>,
     upsamplers: Vec<Conv2d>,
     conv_out: Conv2d,
-    scaling_factor: f64,
 }
 
 impl TaesdDecoder {
-    pub fn new(
-        latent_channels: usize,
-        out_channels: usize,
-        scaling_factor: f64,
-        vb: ShardedVarBuilder,
-    ) -> Result<Self> {
+    pub fn new(latent_channels: usize, out_channels: usize, vb: ShardedVarBuilder) -> Result<Self> {
         let conv_in = conv3(latent_channels, HIDDEN, vb.pp(1))?;
         let mut idx = 3usize; // after Clamp(0), conv_in(1), ReLU(2)
         let mut blocks = Vec::new();
@@ -195,16 +182,14 @@ impl TaesdDecoder {
             blocks,
             upsamplers,
             conv_out,
-            scaling_factor,
         })
     }
 
-    /// Decode scaled UNet latents to a `[0,1]` RGB image. Undo `scaling_factor` to reach the raw
-    /// latent space TAESD decodes; the repo's 0-1 magnitude/shift is for the uint8 preview only, so
-    /// it is intentionally omitted. The final conv emits `[0,1]` directly (no tanh/denorm).
+    /// Decode scaled UNet latents to a `[0,1]` RGB image. TAESD consumes the UNet's scaled latents
+    /// directly (its trained input space); the repo's 0-1 magnitude/shift is for the uint8 preview
+    /// only. The final conv emits `[0,1]` directly (no tanh/denorm).
     pub fn decode(&self, latents: &Tensor) -> Result<Tensor> {
-        let mut h = (latents / self.scaling_factor)?;
-        h = Convolution.forward_2d(&self.conv_in, &h)?.relu()?;
+        let mut h = Convolution.forward_2d(&self.conv_in, latents)?.relu()?;
         let mut bi = 0usize;
         for up in self.upsamplers.iter() {
             for _ in 0..BLOCKS_PER_STAGE {
@@ -237,18 +222,8 @@ impl Taesd {
         encoder_vb: ShardedVarBuilder,
         decoder_vb: ShardedVarBuilder,
     ) -> Result<Self> {
-        let encoder = TaesdEncoder::new(
-            cfg.in_channels,
-            cfg.latent_channels,
-            cfg.scaling_factor,
-            encoder_vb,
-        )?;
-        let decoder = TaesdDecoder::new(
-            cfg.latent_channels,
-            cfg.out_channels,
-            cfg.scaling_factor,
-            decoder_vb,
-        )?;
+        let encoder = TaesdEncoder::new(cfg.in_channels, cfg.latent_channels, encoder_vb)?;
+        let decoder = TaesdDecoder::new(cfg.latent_channels, cfg.out_channels, decoder_vb)?;
         Ok(Self { encoder, decoder })
     }
 }
