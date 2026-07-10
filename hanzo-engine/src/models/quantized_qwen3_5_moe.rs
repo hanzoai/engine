@@ -70,7 +70,7 @@ use crate::gguf::Content;
 use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, Qwen3VLRotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::models::gdn::{
-    gated_delta_rule_recurrence, l2_norm, softplus, GdnLayerCache, RmsNormGated,
+    gated_delta_rule_recurrence, l2_norm, sigmoid, softplus, GdnLayerCache, RmsNormGated,
 };
 use crate::ops::{TopKLastDimOp, TopKOutput};
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
@@ -209,7 +209,7 @@ impl FusedMoe {
             crate::ops::mul_and_act(&shared_g, &shared_u, crate::layers::Activation::Silu)?;
         let shared_out = self.shared_down_proj.forward(&shared_act)?;
         let shared_gate =
-            hanzo_nn::ops::sigmoid(&self.shared_gate.forward(&xs.to_dtype(DType::F32)?)?)?
+            sigmoid(&self.shared_gate.forward(&xs.to_dtype(DType::F32)?)?)?
                 .to_dtype(shared_out.dtype())?;
         let shared_out = shared_out.broadcast_mul(&shared_gate)?;
 
@@ -365,7 +365,7 @@ impl GatedFullAttention {
         };
 
         // Output gate: y = y * sigmoid(gate).
-        let gate = hanzo_nn::ops::sigmoid(&gate.to_dtype(y.dtype())?)?;
+        let gate = sigmoid(&gate.to_dtype(y.dtype())?)?;
         let y = y.broadcast_mul(&gate)?;
 
         self.attn_o.forward(&y.to_dtype(x.dtype())?)
@@ -431,7 +431,7 @@ impl QGatedDeltaNet {
 
         // 4. beta = sigmoid(b); g = -exp(A_log) * softplus(a + dt_bias).
         //    The GGUF `ssm_a` already stores -exp(A_log), so we multiply directly (no neg/exp here).
-        let beta = hanzo_nn::ops::sigmoid(&b)?;
+        let beta = sigmoid(&b)?;
         let dt_bias = self
             .dt_bias
             .to_dtype(DType::F32)?
