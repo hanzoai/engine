@@ -23,9 +23,9 @@ use crate::paged_attention::{
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
-    cuda_decode_graphs_enabled, disable_event_tracking_for_capture, end_cuda_capture_discard,
-    restore_event_tracking_after_capture, CudaDecodeGraphKey, CudaDecodeGraphMetadataBuffers,
-    CudaGraphHandle, CUDA_DECODE_GRAPH_CACHE_CAPACITY,
+    cuda_decode_graphs_enabled, cuda_prefill_graphs_enabled, disable_event_tracking_for_capture,
+    end_cuda_capture_discard, restore_event_tracking_after_capture, CudaDecodeGraphKey,
+    CudaDecodeGraphMetadataBuffers, CudaGraphHandle, CUDA_DECODE_GRAPH_CACHE_CAPACITY,
 };
 use crate::pipeline::loaders::DeviceMappedModelLoader;
 #[cfg(feature = "rocm")]
@@ -122,6 +122,8 @@ pub struct GGUFPipeline {
     /// reuses the same `cuda_graph` machinery for the quantized decode forward.
     #[cfg(feature = "cuda")]
     cuda_decode_graph: std::sync::Mutex<CudaDecodeGraphState>,
+    #[cfg(feature = "cuda")]
+    cuda_prefill_graph: std::sync::Mutex<CudaPrefillGraphState>,
 }
 
 #[cfg(feature = "rocm")]
@@ -162,6 +164,28 @@ struct CudaDecodeGraphEntry {
     input_ids: Var,
     metadata_buffers: CudaDecodeGraphMetadataBuffers,
     _metadata: PagedAttentionInputMetadata,
+    logits: Tensor,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Default)]
+struct CudaPrefillGraphState {
+    entries: Vec<CudaPrefillGraphEntry>,
+    disabled: bool,
+}
+
+// A captured dense prefill: one cuGraphLaunch replaces the ~1.5k eager kernel launches whose
+// per-op CPU dispatch/alloc cost otherwise starves the GPU (measured prefill GPU util 83% vs
+// llama's 98%). Keyed on the fixed [1, seq_len] bucket. `flash_params` is held so the varlen
+// cumulative-seqlens device tensors the captured flash kernels reference stay live.
+#[cfg(feature = "cuda")]
+struct CudaPrefillGraphEntry {
+    key: CudaDecodeGraphKey,
+    graph: CudaGraphHandle,
+    input_ids: Var,
+    metadata_buffers: CudaDecodeGraphMetadataBuffers,
+    _metadata: PagedAttentionInputMetadata,
+    _flash_params: FlashParams,
     logits: Tensor,
 }
 
@@ -750,6 +774,8 @@ impl Loader for GGUFLoader {
             rocm_decode_graph: std::sync::Mutex::new(RocmDecodeGraphState::default()),
             #[cfg(feature = "cuda")]
             cuda_decode_graph: std::sync::Mutex::new(CudaDecodeGraphState::default()),
+            #[cfg(feature = "cuda")]
+            cuda_prefill_graph: std::sync::Mutex::new(CudaPrefillGraphState::default()),
         })))
     }
 
@@ -1200,6 +1226,238 @@ impl GGUFPipeline {
         state.disabled = true;
         state.entries.clear();
     }
+
+    /// Dense fixed-shape prefill: only the pre-norm dense-attention Qwen3 GGUF variant on a single
+    /// device. MoE routing (Qwen3MoE/Qwen35) is a host-side counting sort that cannot be captured;
+    /// multi-device freezes RoPE under capture. Both fall through to the always-correct eager path.
+    fn model_supports_prefill_graph(&self) -> bool {
+        self.mapper.get_unique_devices().len() <= 1 && matches!(self.model, Model::Qwen3(_))
+    }
+
+    /// Runs the dense prefill forward for graph-eligible variants with the supplied (rebound) paged
+    /// metadata and the real varlen `flash_params`. Mirrors the eager Qwen3 dispatch in
+    /// `forward_inputs` so the captured forward is identical to what the eager path runs.
+    fn run_prefill_forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        flash_params: &FlashParams,
+        paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+    ) -> Result<Tensor, hanzo_ml::Error> {
+        match self.model {
+            Model::Qwen3(ref model) => model.forward(
+                input_ids,
+                seqlen_offsets,
+                context_lens,
+                flash_params,
+                paged_attn_meta,
+            ),
+            _ => hanzo_ml::bail!("prefill graph: unsupported model variant"),
+        }
+    }
+
+    /// Attempts to satisfy a full dense prefill via a captured CUDA graph. Returns `Ok(None)` when
+    /// the graph path does not apply (caller runs eager). One `cuGraphLaunch` replaces the ~1.5k
+    /// eager launches whose per-op CPU dispatch/alloc gaps hold prefill GPU util at ~83% vs llama's
+    /// ~98%. Gated to the offset-0 single-sequence first prompt chunk, where the causal mask, RoPE
+    /// positions and varlen cumulative-seqlens are all fixed for the `[1, seq_len]` bucket, so only
+    /// the token ids and the KV slot mapping need refreshing between replays. On any capture/replay
+    /// error the path disables and returns the already-correct warmup logits (no lost token).
+    #[allow(clippy::too_many_arguments)]
+    fn try_cuda_prefill_graph_forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        kv_cache: &[(Tensor, Tensor)],
+        metadata: &PagedAttentionInputMetadata,
+        flash_params: &FlashParams,
+    ) -> Result<Option<Tensor>, hanzo_ml::Error> {
+        if !cuda_prefill_graphs_enabled() || !self.model_supports_prefill_graph() {
+            return Ok(None);
+        }
+        if self.draft_proposer.is_some() {
+            return Ok(None);
+        }
+        // Offset-0 first prompt chunk only: the mask/positions/cumulative-seqlens are then fixed for
+        // the bucket. Chunked prefill (offset > 0), prefix-cache reuse and graph-disabled requests
+        // stay eager.
+        if !metadata.is_first_prompt_chunk
+            || metadata.disable_cuda_graphs
+            || metadata.num_cached_tokens.is_some()
+        {
+            return Ok(None);
+        }
+        let (batch, q_len) = input_ids.dims2()?;
+        if batch != 1
+            || q_len <= 1
+            || seqlen_offsets.len() != 1
+            || seqlen_offsets[0] != 0
+            || context_lens.len() != 1
+            || !input_ids.device().is_cuda()
+        {
+            return Ok(None);
+        }
+        let Some(cache_config) = self.metadata.cache_config.as_ref() else {
+            return Ok(None);
+        };
+        let block_size = cache_config.block_size;
+        let key = CudaDecodeGraphKey::new(input_ids, metadata, block_size)?;
+
+        let mut state = self
+            .cuda_prefill_graph
+            .lock()
+            .expect("CUDA prefill graph mutex poisoned");
+        if state.disabled {
+            return Ok(None);
+        }
+
+        // Cache hit: refresh the stable token-id and slot-mapping buffers in place, replay in one launch.
+        if let Some(pos) = state.entries.iter().position(|entry| entry.key == key) {
+            let mut entry = state.entries.remove(pos);
+            entry.input_ids.set(input_ids)?;
+            entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
+            entry.graph.launch()?;
+            let logits = entry.logits.clone();
+            state.entries.push(entry);
+            return Ok(Some(logits));
+        }
+
+        // Cache miss: run a real (eager) warmup prefill so the caller gets correct logits, then
+        // capture a graph for subsequent same-bucket prefills. Hold the HtoD cache guard across both
+        // so host->device copies (positions, mask, cumulative-seqlens) use stable staging.
+        let Device::Cuda(cuda_device) = input_ids.device() else {
+            return Ok(None);
+        };
+        let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+
+        let warmup_logits = self.run_prefill_forward(
+            input_ids,
+            seqlen_offsets,
+            context_lens.to_vec(),
+            flash_params,
+            Some((kv_cache.to_vec(), metadata)),
+        )?;
+        input_ids.device().synchronize()?;
+
+        match self.capture_cuda_prefill_graph(
+            key,
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            kv_cache,
+            metadata,
+            flash_params,
+            block_size,
+        ) {
+            Ok(entry) => {
+                if state.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
+                    state.entries.remove(0);
+                }
+                state.entries.push(entry);
+            }
+            Err(err) => {
+                if !state.disabled {
+                    warn!("CUDA prefill graph capture failed; falling back to eager prefill: {err}");
+                }
+                state.disabled = true;
+                state.entries.clear();
+            }
+        }
+        Ok(Some(warmup_logits))
+    }
+
+    /// Captures the dense prefill forward into a CUDA graph against stable input-id and metadata
+    /// buffers. Mirrors `capture_cuda_decode_graph` but dispatches `run_prefill_forward` with the
+    /// varlen `flash_params`, whose cumulative-seqlens device tensors are held live in the entry.
+    #[allow(clippy::too_many_arguments)]
+    fn capture_cuda_prefill_graph(
+        &self,
+        key: CudaDecodeGraphKey,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        kv_cache: &[(Tensor, Tensor)],
+        metadata: &PagedAttentionInputMetadata,
+        flash_params: &FlashParams,
+        block_size: usize,
+    ) -> Result<CudaPrefillGraphEntry, hanzo_ml::Error> {
+        use hanzo_ml::cuda_backend::cudarc::driver::sys;
+
+        let input_ids_var = Var::from_tensor(input_ids)?;
+        let (metadata_buffers, rebound_metadata) =
+            CudaDecodeGraphMetadataBuffers::new(metadata, seqlen_offsets, block_size)?;
+        let graph_input_ids = input_ids_var.as_detached_tensor();
+        let Device::Cuda(cuda_device) = graph_input_ids.device() else {
+            hanzo_ml::bail!("CUDA prefill graph expected a CUDA device");
+        };
+        let stream = cuda_device.cuda_stream();
+        let restore_event_tracking = disable_event_tracking_for_capture(&stream);
+        let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+
+        if let Err(err) =
+            stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+        {
+            restore_event_tracking_after_capture(&stream, restore_event_tracking);
+            return Err(hanzo_ml::Error::msg(err.to_string())
+                .context("CUDA prefill graph begin capture failed"));
+        }
+
+        let logits = match self.run_prefill_forward(
+            &graph_input_ids,
+            seqlen_offsets,
+            context_lens.to_vec(),
+            flash_params,
+            Some((kv_cache.to_vec(), &rebound_metadata)),
+        ) {
+            Ok(logits) => logits,
+            Err(err) => {
+                end_cuda_capture_discard(&stream);
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(err);
+            }
+        };
+
+        let graph = match CudaGraphHandle::end_capture(&stream) {
+            Ok(Some(graph)) => graph,
+            Ok(None) => {
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(hanzo_ml::Error::msg("CUDA prefill graph capture returned no graph"));
+            }
+            Err(err) => {
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(err);
+            }
+        };
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+
+        graph.upload()?;
+
+        Ok(CudaPrefillGraphEntry {
+            key,
+            graph,
+            input_ids: input_ids_var,
+            metadata_buffers,
+            _metadata: rebound_metadata,
+            _flash_params: flash_params.clone(),
+            logits,
+        })
+    }
+
+    /// Disables the CUDA prefill graph fast path after a capture/replay failure and clears the
+    /// cache so the pipeline falls back to eager.
+    fn disable_cuda_prefill_graph(&self, err: &hanzo_ml::Error) {
+        let mut state = self
+            .cuda_prefill_graph
+            .lock()
+            .expect("CUDA prefill graph mutex poisoned");
+        if !state.disabled {
+            warn!("CUDA prefill graphs disabled after capture/replay error: {err}");
+        }
+        state.disabled = true;
+        state.entries.clear();
+    }
 }
 
 #[cfg(feature = "rocm")]
@@ -1515,6 +1773,33 @@ impl Pipeline for GGUFPipeline {
                     }
                     Ok(None) => {}
                     Err(err) => self.disable_cuda_decode_graph(&err),
+                }
+            }
+        }
+        // CUDA dense-prefill graph fast path. On an offset-0 single-sequence first prompt chunk,
+        // replay (or capture) the whole prefill as one graph launch instead of re-dispatching ~1.5k
+        // eager kernels whose per-op CPU cost starves the GPU. Same fail-closed contract as decode:
+        // on any capture/replay error, disable and fall through to eager.
+        #[cfg(feature = "cuda")]
+        {
+            if let Some((ref kv_cache, meta)) = paged_attn_meta {
+                match self.try_cuda_prefill_graph_forward(
+                    &input_ids,
+                    &seqlen_offsets,
+                    &context_lens,
+                    kv_cache,
+                    meta,
+                    &flash_meta,
+                ) {
+                    Ok(Some(logits)) => {
+                        return if return_raw_logits {
+                            Ok(ForwardInputsResult::RawLogits { logits })
+                        } else {
+                            Ok(ForwardInputsResult::CausalGeneration { logits })
+                        };
+                    }
+                    Ok(None) => {}
+                    Err(err) => self.disable_cuda_prefill_graph(&err),
                 }
             }
         }
