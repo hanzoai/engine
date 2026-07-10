@@ -17,7 +17,7 @@
 //! See <https://hanzoai.github.io/engine/guides/models/video-setup/> for full details.
 
 use anyhow::{bail, Context, Result};
-use hanzo_engine::{sample_frame_indices, VideoInput};
+use hanzo_engine::{sample_frame_indices, smart_nframes, VideoInput, DEFAULT_SAMPLE_FPS};
 use image::codecs::gif::GifDecoder;
 use image::{AnimationDecoder, DynamicImage};
 use std::io::Cursor;
@@ -186,6 +186,11 @@ async fn decode_video_ffmpeg(
     let out_dir = tmp_dir.join(format!("{video_id}_frames"));
     fs::create_dir_all(&out_dir).await?;
     let output_pattern = format!("{}/frame_%010d.png", out_dir.display());
+
+    // Default to fps-based sampling (qwen-vl-utils) once the true frame count is known.
+    let num_frames = num_frames.or_else(|| {
+        (total_frames > 0).then(|| smart_nframes(total_frames, fps, DEFAULT_SAMPLE_FPS))
+    });
 
     let mut requested_indices = None;
     let effective_total = if let Some(num_frames) = num_frames {
