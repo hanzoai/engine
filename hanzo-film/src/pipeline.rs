@@ -33,14 +33,30 @@ impl Pipeline {
     pub fn new(project: Project) -> Result<Self> {
         let cfg = project.config().clone();
         let engine = Engine::new(&cfg.engine_url)?;
-        let images = Images::Engine { engine: engine.clone(), model: cfg.image_model.clone() };
+        let images = Images::Engine {
+            engine: engine.clone(),
+            model: cfg.image_model.clone(),
+        };
         let video = match cfg.video {
             VideoBackend::Placeholder => Video::Placeholder,
-            VideoBackend::Wan => Video::Wan { engine: engine.clone(), steps: 30 },
+            VideoBackend::Wan => Video::Wan {
+                engine: engine.clone(),
+                steps: 30,
+            },
         };
-        let speech = Speech::Engine { engine: engine.clone(), model: cfg.tts_model.clone() };
+        let speech = Speech::Engine {
+            engine: engine.clone(),
+            model: cfg.tts_model.clone(),
+        };
         let music = Music::Silent;
-        Ok(Self { project, engine, images, video, speech, music })
+        Ok(Self {
+            project,
+            engine,
+            images,
+            video,
+            speech,
+            music,
+        })
     }
 
     fn cfg(&self) -> &Config {
@@ -57,8 +73,13 @@ impl Pipeline {
             let c = &bible.characters[i];
             let out = self.project.character_ref(&c.id);
             if !out.exists() {
-                let prompt = format!("character reference portrait. {}. {}", c.description, bible.style.prompt);
-                self.still(&prompt, &c.id, w, h, &out).await.with_context(|| format!("asset for character {}", c.id))?;
+                let prompt = format!(
+                    "character reference portrait. {}. {}",
+                    c.description, bible.style.prompt
+                );
+                self.still(&prompt, &c.id, w, h, &out)
+                    .await
+                    .with_context(|| format!("asset for character {}", c.id))?;
             }
             bible.characters[i].reference_image = Some(rel(&self.project, &out));
         }
@@ -66,8 +87,13 @@ impl Pipeline {
             let l = &bible.locations[i];
             let out = self.project.location_ref(&l.id);
             if !out.exists() {
-                let prompt = format!("establishing location. {}. {}", l.description, bible.style.prompt);
-                self.still(&prompt, &l.id, w, h, &out).await.with_context(|| format!("asset for location {}", l.id))?;
+                let prompt = format!(
+                    "establishing location. {}. {}",
+                    l.description, bible.style.prompt
+                );
+                self.still(&prompt, &l.id, w, h, &out)
+                    .await
+                    .with_context(|| format!("asset for location {}", l.id))?;
             }
             bible.locations[i].reference_image = Some(rel(&self.project, &out));
         }
@@ -76,9 +102,19 @@ impl Pipeline {
     }
 
     /// Image with graceful fallback: try the configured backend, else a procedural card.
-    async fn still(&self, prompt: &str, label: &str, w: usize, h: usize, out: &std::path::Path) -> Result<()> {
+    async fn still(
+        &self,
+        prompt: &str,
+        label: &str,
+        w: usize,
+        h: usize,
+        out: &std::path::Path,
+    ) -> Result<()> {
         if let Err(e) = self.images.make(prompt, label, w, h, out).await {
-            tracing::warn!("image backend ({}) failed for {label}: {e}; using procedural card", self.images.label());
+            tracing::warn!(
+                "image backend ({}) failed for {label}: {e}; using procedural card",
+                self.images.label()
+            );
             Images::Procedural.make(prompt, label, w, h, out).await?;
         }
         Ok(())
@@ -93,10 +129,11 @@ impl Pipeline {
     pub async fn render(&self, bible: &Bible) -> Result<usize> {
         let runs = continuity_runs(bible);
         let concurrency = self.cfg().concurrency.max(1);
-        let results: Vec<Result<usize>> = stream::iter(runs.into_iter().map(|run| self.render_run(bible, run)))
-            .buffer_unordered(concurrency)
-            .collect()
-            .await;
+        let results: Vec<Result<usize>> =
+            stream::iter(runs.into_iter().map(|run| self.render_run(bible, run)))
+                .buffer_unordered(concurrency)
+                .collect()
+                .await;
         let mut rendered = 0;
         for r in results {
             rendered += r?;
@@ -110,7 +147,10 @@ impl Pipeline {
         for sr in run {
             let scene = &bible.scenes[sr.scene];
             let shot = &scene.shots[sr.shot];
-            if self.render_shot(bible, scene, shot, prior.as_deref()).await? {
+            if self
+                .render_shot(bible, scene, shot, prior.as_deref())
+                .await?
+            {
                 rendered += 1;
             }
             // Ensure a tail frame exists for a possible following `continue`.
@@ -124,7 +164,13 @@ impl Pipeline {
     }
 
     /// Returns true if the shot was (re)rendered, false if skipped as up-to-date.
-    async fn render_shot(&self, bible: &Bible, scene: &Scene, shot: &Shot, prior: Option<&str>) -> Result<bool> {
+    async fn render_shot(
+        &self,
+        bible: &Bible,
+        scene: &Scene,
+        shot: &Shot,
+        prior: Option<&str>,
+    ) -> Result<bool> {
         let cont = matches!(shot.continuity, Continuity::Continue) && prior.is_some();
         let hash = self.spec_hash(bible, scene, shot, prior, cont);
         let clip = self.project.shot_clip(&shot.id);
@@ -144,8 +190,19 @@ impl Pipeline {
             self.project.shot_tail(prior.unwrap())
         } else {
             let key = self.project.shot_keyframe(&shot.id);
-            let label = scene.characters.first().cloned().unwrap_or_else(|| scene.location_ref.clone());
-            self.still(&shot_prompt(bible, scene, shot), &label, self.cfg().width, self.cfg().height, &key).await?;
+            let label = scene
+                .characters
+                .first()
+                .cloned()
+                .unwrap_or_else(|| scene.location_ref.clone());
+            self.still(
+                &shot_prompt(bible, scene, shot),
+                &label,
+                self.cfg().width,
+                self.cfg().height,
+                &key,
+            )
+            .await?;
             key
         };
 
@@ -177,12 +234,23 @@ impl Pipeline {
     }
 
     /// Stable content hash: everything that determines a shot's pixels.
-    fn spec_hash(&self, bible: &Bible, scene: &Scene, shot: &Shot, prior: Option<&str>, cont: bool) -> String {
+    fn spec_hash(
+        &self,
+        bible: &Bible,
+        scene: &Scene,
+        shot: &Shot,
+        prior: Option<&str>,
+        cont: bool,
+    ) -> String {
         let cfg = self.cfg();
         let char_refs: Vec<(&str, &Option<String>)> = scene
             .characters
             .iter()
-            .filter_map(|cr| bible.character(cr).map(|c| (c.id.as_str(), &c.reference_image)))
+            .filter_map(|cr| {
+                bible
+                    .character(cr)
+                    .map(|c| (c.id.as_str(), &c.reference_image))
+            })
             .collect();
         let key = serde_json::json!({
             "renderer": self.video.kind(),
@@ -232,11 +300,17 @@ impl Pipeline {
                 for (n, line) in shot.dialogue.iter().enumerate() {
                     let wav = self.project.dialogue_wav(&shot.id, n);
                     let dur = if wav.exists() {
-                        ffmpeg::probe(&wav).await.map(|p| p.duration_s()).unwrap_or_else(|_| estimate_speech_s(&line.line))
+                        ffmpeg::probe(&wav)
+                            .await
+                            .map(|p| p.duration_s())
+                            .unwrap_or_else(|_| estimate_speech_s(&line.line))
                     } else {
                         self.say(&line.line, &wav).await?
                     };
-                    placements.push(Placement { wav, start_s: cursor });
+                    placements.push(Placement {
+                        wav,
+                        start_s: cursor,
+                    });
                     cursor += dur + 0.20;
                 }
                 let mix = self.project.mix_wav(&shot.id);
@@ -270,8 +344,14 @@ impl Pipeline {
         for (scene, shot) in bible.shots() {
             let clip = self.project.shot_clip(&shot.id);
             let mix = self.project.mix_wav(&shot.id);
-            let av = self.project.root.join("shots").join(format!("{}.av.mp4", shot.id));
-            ffmpeg::mux(&clip, &mix, &av).await.with_context(|| format!("muxing shot {}", shot.id))?;
+            let av = self
+                .project
+                .root
+                .join("shots")
+                .join(format!("{}.av.mp4", shot.id));
+            ffmpeg::mux(&clip, &mix, &av)
+                .await
+                .with_context(|| format!("muxing shot {}", shot.id))?;
 
             let mut dcursor = cursor + 0.30;
             let dialogue: Vec<TlLine> = shot
@@ -280,7 +360,11 @@ impl Pipeline {
                 .map(|l| {
                     let at = dcursor;
                     dcursor += estimate_speech_s(&l.line) + 0.20;
-                    TlLine { character: l.character_ref.clone(), line: l.line.clone(), start_s: at }
+                    TlLine {
+                        character: l.character_ref.clone(),
+                        line: l.line.clone(),
+                        start_s: at,
+                    }
                 })
                 .collect();
 
@@ -297,7 +381,9 @@ impl Pipeline {
             av_clips.push(av);
         }
 
-        ffmpeg::concat(&av_clips, &self.project.film_path()).await.context("final concat")?;
+        ffmpeg::concat(&av_clips, &self.project.film_path())
+            .await
+            .context("final concat")?;
 
         let timeline = Timeline {
             title: bible.title.clone(),
@@ -325,8 +411,12 @@ pub fn continuity_runs(bible: &Bible) -> Vec<Vec<ShotRef>> {
     let mut runs: Vec<Vec<ShotRef>> = Vec::new();
     for (si, scene) in bible.scenes.iter().enumerate() {
         for (ki, shot) in scene.shots.iter().enumerate() {
-            let r = ShotRef { scene: si, shot: ki };
-            let start_new = runs.is_empty() || matches!(shot.continuity, Continuity::Cut) || ki == 0;
+            let r = ShotRef {
+                scene: si,
+                shot: ki,
+            };
+            let start_new =
+                runs.is_empty() || matches!(shot.continuity, Continuity::Cut) || ki == 0;
             if start_new {
                 runs.push(vec![r]);
             } else {
@@ -338,7 +428,10 @@ pub fn continuity_runs(bible: &Bible) -> Vec<Vec<ShotRef>> {
 }
 
 fn rel(project: &Project, p: &std::path::Path) -> String {
-    p.strip_prefix(&project.root).unwrap_or(p).to_string_lossy().into_owned()
+    p.strip_prefix(&project.root)
+        .unwrap_or(p)
+        .to_string_lossy()
+        .into_owned()
 }
 
 // --- EDL timeline manifest (the durable assembly artifact) ----------------
@@ -405,8 +498,18 @@ mod tests {
             title: "T".into(),
             logline: "l".into(),
             style: Style::default(),
-            characters: vec![Character { id: "c1".into(), name: "C".into(), description: "d".into(), reference_image: None, voice_id: None }],
-            locations: vec![Location { id: "l1".into(), description: "d".into(), reference_image: None }],
+            characters: vec![Character {
+                id: "c1".into(),
+                name: "C".into(),
+                description: "d".into(),
+                reference_image: None,
+                voice_id: None,
+            }],
+            locations: vec![Location {
+                id: "l1".into(),
+                description: "d".into(),
+                reference_image: None,
+            }],
             scenes,
         }
     }
@@ -414,7 +517,10 @@ mod tests {
     #[test]
     fn runs_split_on_cut() {
         // cut, continue, continue | cut, continue  => 2 runs of sizes 3 and 2
-        let b = bible_with(&[&[Continuity::Cut, Continuity::Continue, Continuity::Continue], &[Continuity::Cut, Continuity::Continue]]);
+        let b = bible_with(&[
+            &[Continuity::Cut, Continuity::Continue, Continuity::Continue],
+            &[Continuity::Cut, Continuity::Continue],
+        ]);
         let runs = continuity_runs(&b);
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].len(), 3);
@@ -442,7 +548,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("film_hash_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let proj = Project::create(&dir, "b".into(), Config::default()).unwrap();
-        let pipe = Pipeline { project: proj, engine: Engine::new("http://127.0.0.1:1").unwrap(), images: Images::Procedural, video: Video::Placeholder, speech: Speech::Placeholder, music: Music::Silent };
+        let pipe = Pipeline {
+            project: proj,
+            engine: Engine::new("http://127.0.0.1:1").unwrap(),
+            images: Images::Procedural,
+            video: Video::Placeholder,
+            speech: Speech::Placeholder,
+            music: Music::Silent,
+        };
         let mut b = bible_with(&[&[Continuity::Cut]]);
         let s = &b.scenes[0].clone();
         let sh = &b.scenes[0].shots[0].clone();

@@ -15,6 +15,7 @@
 //! the committed `C`, so committing `C` commits the output: a prover cannot claim an output its
 //! committed matmuls did not produce.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use crate::poi::{exact_matmul, Mat};
 use crate::poi_transcript::ProofTranscript;
 use std::cell::RefCell;
@@ -175,6 +176,7 @@ mod tests {
     }
 
     // A real SwiGLU FFN block: gate/up project up, SiLU(gate)*up, down projects back.
+    #[allow(clippy::upper_case_acronyms)]
     struct FFN {
         gate: ProvableLinear,
         up: ProvableLinear,

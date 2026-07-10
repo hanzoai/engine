@@ -230,6 +230,7 @@ pub(crate) struct V4Moe {
     pub(crate) shared_down: Arc<dyn QuantMethod>,
     pub(crate) topk: usize,
     pub(crate) route_scale: f64,
+    #[allow(dead_code)]
     pub(crate) norm_topk: bool,
     pub(crate) swiglu_clamp: f32,
 }
@@ -822,7 +823,7 @@ impl CompressorState {
                 self.len = base;
             }
         }
-        let max_rows = if ratio == 0 { 0 } else { base / ratio };
+        let max_rows = base.checked_div(ratio).unwrap_or(0);
         if self.emitted > max_rows {
             self.comp_rows = match (&self.comp_rows, max_rows) {
                 (_, 0) => None,
@@ -1083,6 +1084,7 @@ impl DecoderLayer {
     }
 
     /// One layer over the HC carrier `[b, s, n_hc, e]`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn forward(
         &self,
         hc: &Tensor,
@@ -1482,7 +1484,7 @@ impl ModelWeights {
         // `is_prefill` also gates the compressor itself: it runs on the prefill only,
         // NOT on a multi-token decode (a speculative verify forward has s>1 but is a
         // decode continuation — gating on `s>1` alone would wrongly re-run it).
-        let is_prefill = start_offsets.iter().any(|&o| o == 0);
+        let is_prefill = start_offsets.contains(&0);
         let mut comp = self.comp_state.lock().unwrap();
         if is_prefill {
             for s in comp.iter_mut() {

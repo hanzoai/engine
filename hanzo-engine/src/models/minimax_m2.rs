@@ -891,8 +891,12 @@ mod tests {
     }
 
     fn loading_metadata(device: &Device, num_layers: usize) -> Result<NormalLoadingMetadata> {
-        let mapper =
-            DeviceMapSetting::dummy().into_mapper(num_layers, device, None, &[device.clone()])?;
+        let mapper = DeviceMapSetting::dummy().into_mapper(
+            num_layers,
+            device,
+            None,
+            std::slice::from_ref(device),
+        )?;
         Ok(NormalLoadingMetadata {
             mapper,
             loading_isq: false,

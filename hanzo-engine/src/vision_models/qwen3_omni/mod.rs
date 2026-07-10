@@ -10,7 +10,7 @@
 //!     [`code2wav::OmniCode2Wav`] vocoder, driven greedily into a 24 kHz waveform.
 
 #![allow(dead_code)]
-
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use std::any::Any;
 use std::sync::Arc;
 
@@ -1868,6 +1868,7 @@ mod speech_tests {
             // (a) Code predictor on MY talker hidden + HF code0 (tests the full per-step path).
             let last_hidden = last_all.i((.., seq - 1.., ..)).unwrap();
             let frame = model.predict_groups(&last_hidden, hf(0, f)).unwrap();
+            #[allow(clippy::needless_range_loop)]
             for g in 1..g_hf {
                 group_total += 1;
                 if frame[g] == hf(g, f) {

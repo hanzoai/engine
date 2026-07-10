@@ -91,7 +91,10 @@ pub struct Planner<'a> {
 impl<'a> Planner<'a> {
     /// Run both stages and return a validated Bible.
     pub async fn plan(&self, brief: &str) -> Result<Bible> {
-        let meta = self.stage_meta(brief).await.context("planner stage A (meta)")?;
+        let meta = self
+            .stage_meta(brief)
+            .await
+            .context("planner stage A (meta)")?;
         // Stage B in parallel across scenes.
         let names: Vec<String> = meta.characters.iter().map(|c| c.name.clone()).collect();
         let futs = meta.scenes.iter().enumerate().map(|(i, sc)| {
@@ -137,11 +140,20 @@ impl<'a> Planner<'a> {
             nloc = 2usize,
             nsc = self.scenes,
         );
-        let v = self.engine.chat_json(&self.model, system, &user, schema, 1200).await?;
+        let v = self
+            .engine
+            .chat_json(&self.model, system, &user, schema, 1200)
+            .await?;
         Ok(serde_json::from_value(v)?)
     }
 
-    async fn stage_shots(&self, brief: &str, idx: usize, scene: &MetaScene, names: &[String]) -> Result<ShotList> {
+    async fn stage_shots(
+        &self,
+        brief: &str,
+        idx: usize,
+        scene: &MetaScene,
+        names: &[String],
+    ) -> Result<ShotList> {
         let schema = json!({
             "type": "object",
             "properties": {
@@ -175,7 +187,10 @@ impl<'a> Planner<'a> {
             roster = roster,
             k = self.shots_per_scene,
         );
-        let v = self.engine.chat_json(&self.model, system, &user, schema, 1200).await?;
+        let v = self
+            .engine
+            .chat_json(&self.model, system, &user, schema, 1200)
+            .await?;
         Ok(serde_json::from_value(v).unwrap_or(ShotList { shots: vec![] }))
     }
 }
@@ -346,7 +361,10 @@ fn normalize(brief: &str, meta: Meta, shot_lists: Vec<ShotList>) -> Bible {
     Bible {
         version: BIBLE_VERSION,
         title: nonempty(&meta.title, "Untitled"),
-        logline: nonempty(&meta.logline, brief.chars().take(120).collect::<String>().trim()),
+        logline: nonempty(
+            &meta.logline,
+            brief.chars().take(120).collect::<String>().trim(),
+        ),
         style: Style {
             prompt: nonempty(&meta.style_prompt, "cinematic, natural light"),
             lora: None,
@@ -394,21 +412,60 @@ mod tests {
             logline: "".into(),
             style_prompt: "noir".into(),
             characters: vec![
-                MetaChar { name: "Ada".into(), description: "engineer".into() },
-                MetaChar { name: "".into(), description: "".into() }, // dropped
-                MetaChar { name: "Boro".into(), description: "pilot".into() },
+                MetaChar {
+                    name: "Ada".into(),
+                    description: "engineer".into(),
+                },
+                MetaChar {
+                    name: "".into(),
+                    description: "".into(),
+                }, // dropped
+                MetaChar {
+                    name: "Boro".into(),
+                    description: "pilot".into(),
+                },
             ],
-            locations: vec![MetaLoc { description: "bridge".into() }],
+            locations: vec![MetaLoc {
+                description: "bridge".into(),
+            }],
             scenes: vec![
-                MetaScene { synopsis: "they meet".into(), character_indices: vec![0, 2], location_index: 0 },
-                MetaScene { synopsis: "they argue".into(), character_indices: vec![99], location_index: 5 },
+                MetaScene {
+                    synopsis: "they meet".into(),
+                    character_indices: vec![0, 2],
+                    location_index: 0,
+                },
+                MetaScene {
+                    synopsis: "they argue".into(),
+                    character_indices: vec![99],
+                    location_index: 5,
+                },
             ],
         };
         let shots = vec![
-            ShotList { shots: vec![
-                MetaShot { shot_type: "wide".into(), action_prompt: "ada enters".into(), duration_s: 4.0, continuity: "cut".into(), dialogue: vec![MetaLine{character_index:0, line:"hi".into()}] },
-                MetaShot { shot_type: "close".into(), action_prompt: "boro turns".into(), duration_s: 20.0, continuity: "continue".into(), dialogue: vec![MetaLine{character_index:2, line:"you".into()}] },
-            ]},
+            ShotList {
+                shots: vec![
+                    MetaShot {
+                        shot_type: "wide".into(),
+                        action_prompt: "ada enters".into(),
+                        duration_s: 4.0,
+                        continuity: "cut".into(),
+                        dialogue: vec![MetaLine {
+                            character_index: 0,
+                            line: "hi".into(),
+                        }],
+                    },
+                    MetaShot {
+                        shot_type: "close".into(),
+                        action_prompt: "boro turns".into(),
+                        duration_s: 20.0,
+                        continuity: "continue".into(),
+                        dialogue: vec![MetaLine {
+                            character_index: 2,
+                            line: "you".into(),
+                        }],
+                    },
+                ],
+            },
             ShotList { shots: vec![] }, // forces the floor
         ];
         let b = normalize("a brief about a signal", meta, shots);
@@ -420,7 +477,9 @@ mod tests {
         // duration clamped
         assert!(b.scenes[0].shots[1].duration_s <= 8.0);
         // dialogue char refs resolved to real ids
-        assert!(b.character(&b.scenes[0].shots[0].dialogue[0].character_ref).is_some());
+        assert!(b
+            .character(&b.scenes[0].shots[0].dialogue[0].character_ref)
+            .is_some());
         // recurring character: c1 appears in scene 1 roster
         assert!(b.scenes[0].characters.iter().any(|c| c == "c1"));
     }
@@ -428,14 +487,31 @@ mod tests {
     #[test]
     fn first_shot_is_always_cut() {
         let meta = Meta {
-            title: "X".into(), logline: "l".into(), style_prompt: "s".into(),
-            characters: vec![MetaChar{name:"A".into(),description:"d".into()}],
-            locations: vec![MetaLoc{description:"here".into()}],
-            scenes: vec![MetaScene{synopsis:"s".into(),character_indices:vec![0],location_index:0}],
+            title: "X".into(),
+            logline: "l".into(),
+            style_prompt: "s".into(),
+            characters: vec![MetaChar {
+                name: "A".into(),
+                description: "d".into(),
+            }],
+            locations: vec![MetaLoc {
+                description: "here".into(),
+            }],
+            scenes: vec![MetaScene {
+                synopsis: "s".into(),
+                character_indices: vec![0],
+                location_index: 0,
+            }],
         };
-        let shots = vec![ShotList{shots:vec![
-            MetaShot{shot_type:"".into(),action_prompt:"a".into(),duration_s:3.0,continuity:"continue".into(),dialogue:vec![]},
-        ]}];
+        let shots = vec![ShotList {
+            shots: vec![MetaShot {
+                shot_type: "".into(),
+                action_prompt: "a".into(),
+                duration_s: 3.0,
+                continuity: "continue".into(),
+                dialogue: vec![],
+            }],
+        }];
         let b = normalize("brief", meta, shots);
         assert_eq!(b.scenes[0].shots[0].continuity, Continuity::Cut);
     }
