@@ -10,6 +10,8 @@ pub mod mesh;
 pub mod pipeline;
 pub mod preprocess;
 pub mod sampler;
+pub mod slat_flow;
+pub mod sparse;
 pub mod ss_decoder;
 pub mod ss_flow;
 pub mod transformer;
