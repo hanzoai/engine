@@ -1417,6 +1417,7 @@ impl Pipeline for GGUFPipeline {
             let cont = match self.model {
                 Model::Qwen3(ref m) => pp_worker_step(m)?,
                 Model::Qwen3MoE(ref m) => pp_worker_step(m)?,
+                Model::Qwen3Next(ref m) => pp_worker_step(m)?,
                 _ => {
                     hanzo_ml::bail!("pipeline parallelism is not wired for this GGUF architecture")
                 }
