@@ -598,3 +598,34 @@ build sm_121a + CUDA 13 (issue #19662).
   `dinov2_vitl14_reg.safetensors` (torch-hub .pth has no safetensors; convert once). Runs Device::Cpu today.
 - GLB export = hand-rolled binary glTF 2.0 (glb.rs), validated against the third-party `gltf` loader;
   wired into ThreeDFormat::Glb (was a PLY fallback). The /v1/3d async endpoint already calls pixal3d_generate.
+
+## LLaDA: diffusion LLM (dLLM) native port -- models/llada.rs
+- Model: GSAI-ML/LLaDA-8B-Instruct (MIT, ungated, most-downloaded dLLM). Same code loads LLaDA-1.5 +
+  LLaDA-8B-Base (identical arch). Rejected: DiffuCoder (apple-amlr research-only); Dream-7B (Apache, qwen2-
+  arch) is the fallback; LLaDA-MoE-7B-A1B (Apache) is future.
+- Arch = Llama with 2 differences: BIDIRECTIONAL attention (no causal mask) + iterative masked-diffusion
+  generation (no KV cache, whole sequence re-forwarded each step). OLMo config names (d_model 4096, n_heads
+  32, n_kv_heads 32 = MHA, n_layers 32, mlp_hidden_size 12288 SPLIT SwiGLU ff_proj gate + up_proj, ff_out
+  down, rms_norm, rope_theta 500000 NeoX, untied lm_head = transformer.ff_out, vocab 126464, mask 126336).
+  Reuses RmsNorm/Sdpa/RotaryEmbedding/ReplicatedLayer verbatim; the ONLY structural change vs llama.rs is
+  the mask. Bidirectional = AttentionMask::None + FlashParams::empty(false) (pitfall 6). Weight prefix is
+  model.transformer.{wte,blocks.N.*,ln_f,ff_out}.
+- Sampler (official LLaDA generate.py, ported): semi-autoregressive blocks (block_length), low-confidence
+  remasking (confidence = max softmax prob = softmax at argmax), linear noise schedule
+  (num_transfer_tokens), greedy (temp 0). Per step: full forward -> argmax x0 + confidence -> unmask the
+  top-k highest-confidence masked positions within the current block. Selection on CPU (tiny), forward on
+  GPU (dominant). Deterministic.
+- PARITY (GB10, bf16, vs transformers-4.46 oracle -- tf5.x breaks LLaDA remote code via all_tied_weights_keys):
+  gate1 single-forward logit cosine > 0.99; gate2 generation BYTE-IDENTICAL on deterministic prompts (France
+  ->"Paris" [65926,eot,eos...] 32/32; 17*23->"391" [18,24,16,...] 32/32); haiku 19/32 = legitimate bf16
+  confidence-tie nondeterminism (both valid). Coherence: "Paris", coherent haiku.
+- THE DISTRIBUTED THESIS, measured (gen=128, block=32, GB10 bf16): tok/s scales LINEARLY with tokens-per-
+  traversal (steps 128->1.0 tok/traversal->6.9 T/s; 64->2.0->13.6; 32->4.0->27.7). Each denoise step = ONE
+  model.forward = ONE ring traversal (pp_head_forward). So a 2-node ring PP dLLM amortizes the traversal
+  latency over MANY tokens per hop -- inverting AR's 1-token-per-traversal economics. PP wiring is a thin
+  adapter: PipelineParallelModel = {pp_embed=wte, pp_run_local=local block range, pp_norm_head=ln_f+ff_out};
+  loop pp_head_forward N times = N traversals. (Trait in pipeline_parallel.rs; single-node sweep proves the
+  economics; 2-node execution + /v1 serving pipeline are the remaining wiring.)
+- No-KV-cost caveat: every step re-forwards the whole [prompt+gen] sequence, so per-step cost grows with
+  sequence length (Fast-dLLM-style block KV cache is the known follow-up). gated tests: llada_parity,
+  llada_smoke (LLADA_WEIGHTS + LLADA_ORACLE / LLADA_GEN/STEPS/BLOCK).
