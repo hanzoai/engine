@@ -12,7 +12,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use hanzo_engine::diffusion_models::oasis::{
-    frames_to_images, image_to_tensor, sampling::SampleParams, WorldModel,
+    frames_to_images, image_to_tensor,
+    sampling::{rollout, SampleParams},
+    WorldModel,
 };
 use hanzo_ml::{DType, Device};
 
@@ -101,13 +103,27 @@ fn main() -> Result<()> {
         seed: args.seed,
     };
     println!("rollout: {} frames, {} ddim steps", args.frames, args.steps);
+    let n = args.frames as f64;
     let t0 = std::time::Instant::now();
-    let out = wm.generate(&prompt, &acts, &params)?;
+    let latents = wm.encode_frames(&prompt)?;
+    let enc = t0.elapsed().as_secs_f64();
+    let t1 = std::time::Instant::now();
+    let rolled = rollout(wm.dit(), &latents, &acts, &params)?;
+    let roll = t1.elapsed().as_secs_f64();
+    let t2 = std::time::Instant::now();
+    let out = wm.decode_frames(&rolled)?;
+    let dec = t2.elapsed().as_secs_f64();
     let dt = t0.elapsed().as_secs_f64();
     println!(
-        "generated {} frames in {dt:.1}s ({:.2} fps)",
+        "stage: vae-encode(prompt) {:.0}ms | dit-rollout {roll:.2}s | vae-decode {dec:.2}s",
+        enc * 1000.0
+    );
+    println!(
+        "generated {} frames in {dt:.1}s ({:.2} fps) | dit {:.0} ms/frame, decode {:.0} ms/frame",
         args.frames,
-        args.frames as f64 / dt
+        n / dt,
+        roll * 1000.0 / n,
+        dec * 1000.0 / n
     );
 
     std::fs::create_dir_all(&args.out)?;
