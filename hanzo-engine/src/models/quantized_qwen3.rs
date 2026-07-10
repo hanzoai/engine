@@ -13,7 +13,7 @@ use crate::gguf::Content;
 use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
-use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{extract_logits, EitherCache, KvCache, NormalCache};
 use crate::pipeline_parallel::{
     pp_head_forward, use_pipeline_parallel, PipelineParallelModel, RingLayout,
@@ -68,6 +68,7 @@ impl LayerWeights {
         start_offsets: &[usize],
         positions: &Tensor,
         kv_cache: &mut KvCache,
+        flash_params: &FlashParams,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
@@ -157,17 +158,18 @@ impl LayerWeights {
                     Some(value_cache),
                     input_metadata,
                     &self.sdpa_params,
-                    None,
+                    Some(flash_params),
                 )?
             }
             None => {
                 let (k, v) = kv_cache.append(&k, &v)?;
 
-                Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
+                Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?
             }
         };
 
-        let y = if mask.is_custom() {
+        // CausalFlash and eager both return [b, heads, seq, dim]; only decode (None) needs no transpose.
+        let y = if !matches!(mask, AttentionMask::None) {
             y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
         } else {
             y.reshape((b_sz, seq_len, ()))?
@@ -184,11 +186,20 @@ impl LayerWeights {
         start_offsets: &[usize],
         positions: &Tensor,
         kv_cache: &mut KvCache,
+        flash_params: &FlashParams,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let residual = &x;
         let xn = self.attention_norm.forward(&x)?;
-        let attn = self.forward_attn(&xn, mask, start_offsets, positions, kv_cache, metadata)?;
+        let attn = self.forward_attn(
+            &xn,
+            mask,
+            start_offsets,
+            positions,
+            kv_cache,
+            flash_params,
+            metadata,
+        )?;
         let x = (attn + residual)?;
         let residual = &x;
         let xn = self.ffn_norm.forward(&x)?;
@@ -493,6 +504,7 @@ impl ModelWeights {
         x: &Tensor,
         start_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
+        flash_params: &FlashParams,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         if self.pp.is_some() {
@@ -536,7 +548,7 @@ impl ModelWeights {
                 .map(|(_, _)| &start_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
             self.dtype,
-            &CausalMaskConfig::gguf(),
+            &CausalMaskConfig::default(),
         )?;
         let mask = if metadata
             .as_ref()
@@ -563,6 +575,7 @@ impl ModelWeights {
                 start_offsets,
                 &positions,
                 &mut cache[i],
+                flash_params,
                 metadata
                     .as_ref()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
@@ -602,10 +615,18 @@ impl ModelWeights {
             }
         }
         let mut layer_in = h.clone();
+        let flash_params = FlashParams::empty(true);
         for (i, layer) in self.layers.iter().enumerate() {
             let dmask = mask.get(layer_in.device());
-            layer_in =
-                layer.forward_block(layer_in, &dmask, offsets, &positions, &mut cache[i], None)?;
+            layer_in = layer.forward_block(
+                layer_in,
+                &dmask,
+                offsets,
+                &positions,
+                &mut cache[i],
+                &flash_params,
+                None,
+            )?;
         }
         Ok(layer_in)
     }
