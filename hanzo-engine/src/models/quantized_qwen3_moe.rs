@@ -437,7 +437,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     max_seq_len,
                     ldev,
                     true,
-                    dtype,
+                    DType::F32,
                 )?));
             }
         }
