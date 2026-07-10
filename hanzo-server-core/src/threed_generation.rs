@@ -19,7 +19,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use hanzo_3d::{io, Mesh};
-use hanzo_engine::diffusion_models::pixal3d::pixal3d_generate;
+use hanzo_engine::diffusion_models::pixal3d::{glb, pixal3d_generate};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
