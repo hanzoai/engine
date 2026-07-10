@@ -1079,7 +1079,7 @@ impl ModelWeights {
                 None => &*hybrid_cache as &dyn PastKvLenCache,
             },
             self.dtype,
-            &CausalMaskConfig::default(),
+            &CausalMaskConfig::gguf(),
         )?;
         let mask = if metadata
             .as_ref()

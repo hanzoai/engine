@@ -20,6 +20,20 @@ pub struct CausalMaskConfig {
     pub force_custom: bool,
 }
 
+impl CausalMaskConfig {
+    /// Full-causal, eager-only. GGUF/quantized models forward_attn without FlashParams plumbing,
+    /// so the flash kernel runs without cumulative seqlens and corrupts prefill logits (verified:
+    /// Qwen3-8B-Q4K flash emits garbage while eager is coherent). Keep GGUF on the proven eager
+    /// path until FlashParams are threaded through the GGUF forward. Dense safetensors models pass
+    /// real FlashParams and use flash. See using_flash_attn().
+    pub fn gguf() -> Self {
+        Self {
+            sliding_window: None,
+            force_custom: true,
+        }
+    }
+}
+
 // an external reference implementation
 /// xs are on false (0), value is on true (1)
 pub fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result<Tensor> {
