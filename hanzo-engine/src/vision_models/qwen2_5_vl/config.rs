@@ -16,6 +16,7 @@ serde_default_fn!(usize, default_num_heads, 16);
 serde_default_fn!(usize, default_patch_size, 14);
 serde_default_fn!(usize, default_spatial_merge_size, 2);
 serde_default_fn!(usize, default_temporal_patch_size, 2);
+serde_default_fn!(usize, default_tokens_per_second, 2);
 serde_default_fn!(usize, default_window_size, 112);
 serde_default_fn!(
     Vec<usize>,
@@ -45,6 +46,8 @@ pub struct VisionConfig {
     pub spatial_merge_size: usize,
     #[serde(default = "default_temporal_patch_size")]
     pub temporal_patch_size: usize,
+    #[serde(default = "default_tokens_per_second")]
+    pub tokens_per_second: usize,
     #[serde(default = "default_window_size")]
     pub window_size: usize,
     #[serde(default = "default_fullatt_block_indexes")]
