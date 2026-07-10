@@ -5,6 +5,7 @@ pub mod chat_template;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda_graph;
 mod diffusion;
+mod diffusion_lm;
 mod embedding;
 mod ggml;
 mod gguf;
@@ -39,6 +40,7 @@ pub use animation::{AnimationLoader, AnimationModelPaths, AnimationPipeline};
 pub use auto::{AutoLoader, AutoLoaderBuilder};
 use chat_template::ChatTemplate;
 pub use diffusion::{DiffusionLoader, DiffusionLoaderBuilder};
+pub use diffusion_lm::DiffusionLmLoader;
 pub(crate) use embedding::EmbeddingLoadContext;
 pub use embedding::{EmbeddingLoader, EmbeddingLoaderBuilder, EmbeddingSpecificConfig};
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
