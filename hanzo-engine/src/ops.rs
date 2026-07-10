@@ -1670,6 +1670,153 @@ pub fn cuda_rms_norm_residual(
     }
 }
 
+/// Fused residual-add + rmsnorm on CUDA: returns Some((sum = input + residual, normed =
+/// rmsnorm(sum)*weight)) in one launch, or None when the fused kernel does not cover the case (caller
+/// falls back to a separate add + rms_norm). The mean is taken over the stored sum, so the result is
+/// bit-identical to the fallback. The pre-norm-transformer pattern; the CUDA twin of rocm_rms_norm_of_sum.
+#[cfg(feature = "cuda")]
+pub fn cuda_rms_norm_of_sum(
+    input: &Tensor,
+    residual: &Tensor,
+    weight: &Tensor,
+    eps: f32,
+) -> Result<Option<(Tensor, Tensor)>> {
+    use hanzo_ml::backend::BackendStorage;
+    use hanzo_ml::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use hanzo_ml::cuda_backend::{CudaStorage, CudaStorageSlice};
+    use std::ffi::c_void;
+
+    if !matches!(input.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+    if input.dtype() != residual.dtype() || input.dtype() != weight.dtype() {
+        return Ok(None);
+    }
+    if !input.device().is_cuda()
+        || !residual.device().same_device(input.device())
+        || !weight.device().same_device(input.device())
+    {
+        return Ok(None);
+    }
+    if input.shape() != residual.shape() {
+        hanzo_ml::bail!(
+            "cuda_rms_norm_of_sum input/residual shape mismatch: {:?} vs {:?}",
+            input.shape(),
+            residual.shape()
+        );
+    }
+    let ncols = input.dim(D::Minus1)?;
+    if weight.dims1()? != ncols {
+        hanzo_ml::bail!(
+            "cuda_rms_norm_of_sum weight size {} does not match last dim {ncols}",
+            weight.dims1()?
+        );
+    }
+    let elem_count = input.elem_count();
+    if elem_count == 0 {
+        hanzo_ml::bail!("cuda_rms_norm_of_sum got empty input");
+    }
+    let nrows = elem_count / ncols;
+    if nrows > i32::MAX as usize || ncols > i32::MAX as usize {
+        hanzo_ml::bail!("cuda_rms_norm_of_sum input too large: nrows={nrows}, ncols={ncols}");
+    }
+    let nrows_i32 = i32::try_from(nrows).map_err(hanzo_ml::Error::wrap)?;
+    let ncols_i32 = i32::try_from(ncols).map_err(hanzo_ml::Error::wrap)?;
+
+    let input = input.contiguous()?;
+    let residual = residual.contiguous()?;
+    let weight = weight.contiguous()?;
+
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let input_storage = match &*input_storage {
+        hanzo_ml::Storage::Cuda(s) => s,
+        _ => return Ok(None),
+    };
+    let (residual_storage, residual_layout) = residual.storage_and_layout();
+    let residual_storage = match &*residual_storage {
+        hanzo_ml::Storage::Cuda(s) => s,
+        _ => return Ok(None),
+    };
+    let (weight_storage, weight_layout) = weight.storage_and_layout();
+    let weight_storage = match &*weight_storage {
+        hanzo_ml::Storage::Cuda(s) => s,
+        _ => return Ok(None),
+    };
+
+    let dev = input_storage.device();
+    let stream = dev.cuda_stream();
+    let stream_ptr = stream.cu_stream() as i64;
+    let shape = input.shape().clone();
+
+    macro_rules! launch {
+        ($variant:ident, $ty:ty, $ffi_fn:ident) => {{
+            let CudaStorageSlice::$variant(src) = &input_storage.slice else {
+                hanzo_ml::bail!("cuda_rms_norm_of_sum input dtype mismatch");
+            };
+            let CudaStorageSlice::$variant(residual_src) = &residual_storage.slice else {
+                hanzo_ml::bail!("cuda_rms_norm_of_sum residual dtype mismatch");
+            };
+            let CudaStorageSlice::$variant(weight_src) = &weight_storage.slice else {
+                hanzo_ml::bail!("cuda_rms_norm_of_sum weight dtype mismatch");
+            };
+
+            let mut sum_out = unsafe { dev.alloc::<$ty>(elem_count) }?;
+            let mut norm_out = unsafe { dev.alloc::<$ty>(elem_count) }?;
+            let (src_ptr, src_guard) = src.device_ptr(&stream);
+            let (residual_ptr, residual_guard) = residual_src.device_ptr(&stream);
+            let (weight_ptr, weight_guard) = weight_src.device_ptr(&stream);
+            let (sum_out_ptr, sum_out_guard) = sum_out.device_ptr_mut(&stream);
+            let (norm_out_ptr, norm_out_guard) = norm_out.device_ptr_mut(&stream);
+
+            let src_ptr = unsafe { (src_ptr as *const $ty).add(input_layout.start_offset()) };
+            let residual_ptr =
+                unsafe { (residual_ptr as *const $ty).add(residual_layout.start_offset()) };
+            let weight_ptr =
+                unsafe { (weight_ptr as *const $ty).add(weight_layout.start_offset()) };
+
+            unsafe {
+                ffi::$ffi_fn(
+                    src_ptr as *const c_void,
+                    residual_ptr as *const c_void,
+                    weight_ptr as *const c_void,
+                    sum_out_ptr as *mut c_void,
+                    norm_out_ptr as *mut c_void,
+                    nrows_i32,
+                    ncols_i32,
+                    eps,
+                    stream_ptr,
+                );
+            }
+
+            drop(src_guard);
+            drop(residual_guard);
+            drop(weight_guard);
+            drop(sum_out_guard);
+            drop(norm_out_guard);
+
+            let sum_storage = CudaStorage {
+                slice: CudaStorageSlice::$variant(sum_out),
+                device: dev.clone(),
+            };
+            let norm_storage = CudaStorage {
+                slice: CudaStorageSlice::$variant(norm_out),
+                device: dev.clone(),
+            };
+            Ok(Some((
+                Tensor::from((hanzo_ml::Storage::Cuda(sum_storage), shape.clone())),
+                Tensor::from((hanzo_ml::Storage::Cuda(norm_storage), shape)),
+            )))
+        }};
+    }
+
+    match input.dtype() {
+        DType::BF16 => launch!(BF16, half::bf16, rms_norm_of_sum_bf16),
+        DType::F16 => launch!(F16, half::f16, rms_norm_of_sum_f16),
+        DType::F32 => launch!(F32, f32, rms_norm_of_sum_f32),
+        dtype => hanzo_ml::bail!("cuda_rms_norm_of_sum unsupported dtype {dtype:?}"),
+    }
+}
+
 /// Fused residual-add + rmsnorm: returns Some((sum = input + residual, normed = rmsnorm(sum)*weight))
 /// in one ROCm launch, or None (caller falls back to a separate add + rms_norm) for any case the fused
 /// f32 kernel does not cover. Distinct from `cuda_rms_norm_residual` (which is `residual + rmsnorm(x)`):
