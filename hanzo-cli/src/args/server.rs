@@ -21,6 +21,11 @@ pub struct ServerOptions {
     #[serde(default)]
     pub no_ui: bool,
 
+    /// Disable mDNS/DNS-SD advertisement of this engine on the local network.
+    #[arg(long)]
+    #[serde(default)]
+    pub no_advertise: bool,
+
     /// Default maximum tool-call rounds for the agentic loop.
     /// Per-request values from the HTTP API override this. Safety cap: 256 if unset.
     #[arg(long)]
@@ -40,6 +45,7 @@ impl Default for ServerOptions {
             port: 1234,
             host: "0.0.0.0".to_string(),
             no_ui: false,
+            no_advertise: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
         }
