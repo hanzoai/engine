@@ -63,7 +63,7 @@ use crate::gguf::Content;
 use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::models::gdn::{
-    gated_delta_rule_recurrence, l2_norm, softplus, GdnLayerCache, RmsNormGated,
+    gated_delta_rule_recurrence, l2_norm, sigmoid, softplus, GdnLayerCache, RmsNormGated,
 };
 use crate::models::quantized_qwen3_5_moe::{gguf_qmm, FusedMoe};
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
@@ -228,7 +228,7 @@ impl QGatedFullAttention {
         };
 
         // Output gate: y = y * sigmoid(gate).
-        let gate = hanzo_nn::ops::sigmoid(&gate.to_dtype(y.dtype())?)?;
+        let gate = sigmoid(&gate.to_dtype(y.dtype())?)?;
         let y = y.broadcast_mul(&gate)?;
 
         self.attn_o.forward(&y.to_dtype(x.dtype())?)
@@ -345,7 +345,7 @@ impl QGatedDeltaNet {
 
         // 5. beta = sigmoid(b); g = -exp(A_log) * softplus(a + dt_bias). GGUF `ssm_a` already stores
         //    -exp(A_log), so multiply directly (no neg/exp here).
-        let beta = hanzo_nn::ops::sigmoid(&b)?;
+        let beta = sigmoid(&b)?;
         let dt_bias = self
             .dt_bias
             .to_dtype(DType::F32)?
