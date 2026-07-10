@@ -1,3 +1,4 @@
+pub mod ace_step;
 pub mod animation;
 pub(crate) mod clip;
 pub(crate) mod flux;
