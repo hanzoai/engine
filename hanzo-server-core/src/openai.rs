@@ -1009,6 +1009,22 @@ pub struct SpeechGenerationRequest {
     pub response_format: AudioResponseFormat,
 }
 
+/// Text/tag/lyric prompt -> generated music (e.g. ACE-Step). Clip length and sampler
+/// settings are fixed by the loaded model's generation config.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct MusicGenerationRequest {
+    /// The music model to use for audio generation.
+    #[schema(example = "ACE-Step/ACE-Step-v1-3.5B")]
+    #[serde(default = "default_model")]
+    pub model: String,
+    /// The prompt describing the music: genre/mood tags and optional lyrics.
+    #[schema(example = "epic cinematic orchestral, driving percussion, brass swells")]
+    pub input: String,
+    /// The desired audio format for the generated music (`wav` or `pcm`).
+    #[schema(example = "wav")]
+    pub response_format: AudioResponseFormat,
+}
+
 /// Helper type for messages field in ResponsesCreateRequest
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
