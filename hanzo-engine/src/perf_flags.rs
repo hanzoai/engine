@@ -1,6 +1,7 @@
 use std::sync::OnceLock;
 
 const CUDA_GRAPHS_ENV: &str = "CUDA_GRAPHS";
+const CUDA_PREFILL_GRAPHS_ENV: &str = "CUDA_PREFILL_GRAPHS";
 #[cfg(feature = "metal")]
 const METAL_GRAPHS_ENV: &str = "METAL_GRAPHS";
 #[cfg(feature = "rocm")]
@@ -8,6 +9,7 @@ const ROCM_GRAPHS_ENV: &str = "ROCM_GRAPHS";
 const FLASHINFER_DECODE_ENV: &str = "FLASHINFER_DECODE";
 
 static CUDA_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
+static CUDA_PREFILL_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "metal")]
 static METAL_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "rocm")]
@@ -30,6 +32,13 @@ fn env_flag(name: &str, default: bool) -> bool {
 
 pub(crate) fn cuda_graphs_enabled() -> bool {
     *CUDA_GRAPHS_ENABLED.get_or_init(|| env_flag(CUDA_GRAPHS_ENV, true))
+}
+
+// Dense fixed-shape prefill graph capture (single-sequence, offset-0 first prompt chunk). Gated
+// behind cuda_graphs_enabled() as well; CUDA_PREFILL_GRAPHS=0 forces eager prefill.
+pub(crate) fn cuda_prefill_graphs_enabled() -> bool {
+    *CUDA_PREFILL_GRAPHS_ENABLED
+        .get_or_init(|| cuda_graphs_enabled() && env_flag(CUDA_PREFILL_GRAPHS_ENV, true))
 }
 
 #[cfg(feature = "metal")]
