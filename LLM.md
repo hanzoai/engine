@@ -265,9 +265,9 @@ Avoid returning TODOs.
 The env-flag convention is BARE names (no `HANZO_` brand prefix). The de-brand is COMPLETE: every runtime
 knob is a bare name and the one-off dev A/B "fallback" toggles are DELETED (production always runs the
 fast path; runtime HW auto-select is kept). One bare name per real knob. Canonical flags in `perf_flags.rs`:
-- `CUDA_GRAPHS`, `ROCM_GRAPHS`, `METAL_GRAPHS`, `FLASHINFER_DECODE` -- all default ON, set `=0` to force
-  the eager/unfused path. (`HANZO_ROCM_FLASH_ATTN` and its A/B toggle were already deleted; ROCm flash is
-  always-on when applicable.)
+- `CUDA_GRAPHS`, `ROCM_GRAPHS`, `METAL_GRAPHS`, `FLASHINFER_DECODE`, `FLASH_PREFILL` -- all default ON,
+  set `=0` to force the eager/unfused path. (`HANZO_ROCM_FLASH_ATTN` and its A/B toggle were already
+  deleted; ROCm flash is always-on when applicable.) `FLASH_PREFILL` gates `using_flash_attn()` (CUDA).
 - **De-branded runtime config**: `KV_SPILL_DIR`, `KV_SPILL_BUDGET_MB`, `ISQ_SINGLETHREAD`,
   `DEV_SIGNING_SEED`, `VK_FUSED_QKNORM`, `MXFP4_DP4A`, `MN_LOCAL_WORLD_SIZE`, `NO_NCCL`,
   `FFI_MODELS`, `FFI_TOK_DIR`, `CUDA_FLASH_BF16`, `METAL_PRECOMPILE`, `ROCM_GFX_ARCH`.
@@ -489,9 +489,8 @@ build sm_121a + CUDA 13 (issue #19662).
   now NEAR-PARITY on BOTH prefill and decode, and the pp2048 collapse is gone. Fixes flash prefill for
   ALL CUDA models (any that hit the CausalFlash path), not just GGUF. Residual prefill gap to llama is
   now kernel-efficiency (llama's flash is well-tuned), not an algorithmic O(n^2) defect.
-- Flash dispatch is DECOMPLECTED: no runtime env knob. Flash is used iff `using_flash_attn()` (compiled)
-  AND applicable (device/dtype/shape/causal) -- a pure function, not a place. The dev-time `FLASH_ATTN`
-  A/B toggle (and the branded `HANZO_ROCM_FLASH_ATTN`) were deleted; ROCm flash is always-on when applicable.
+- Flash dispatch: `using_flash_attn()` (CUDA) is now default ON with a `FLASH_PREFILL=0` opt-out; flash is
+  used iff that predicate AND applicable (device/dtype/shape/causal). ROCm flash is always-on when applicable.
 
 ## 8B repetition-collapse ROOT-CAUSED: flash PREFILL precision (a regression from the .contiguous fix)
 - SYMPTOM: Qwen3-8B-Q4K_M on CUDA (and Vulkan) collapses to `钊，，，` repetition during LONG thinking-mode
@@ -514,6 +513,25 @@ build sm_121a + CUDA 13 (issue #19662).
   and force f32. If the flash kernel is correct, the 1.5% is the is_causal alignment -- verify the causal
   triangular direction matches naive. Until fixed, 8B-long-thinking on CUDA/Vulkan is a known-issue
   (usable for short/direct gen; Metal fully correct).
+
+## RESOLVED: flash prefill default ON (dense) + GGUF gated (spark GB10, hanzo-flash-attn 0.11.35)
+- `using_flash_attn()` flipped default ON (`FLASH_PREFILL=0` opts out) after bumping hanzo-flash-attn to
+  0.11.35 (routes bf16 softmax-P through the f16 kernel's 10 mantissa bits vs bf16's 7).
+- DENSE bf16 8B on CUDA: flash prefill is BYTE-EXACT vs eager (greedy seed-0, first-prefill non-varlen path)
+  and 1.34x@pp512 / 2.46x@pp2048 faster (flat vs length: eager 2110/1166, flash 2825/2868 T/s), beats
+  llama.cpp Q4KM (2706/2723). Decode 14.8->15.0 (paged kernel, unchanged). d_flash == d_bf16raw == d_eager,
+  so the P-cast is NOT what tips dense here.
+- GGUF/quantized garble under flash and are GATED to eager via `CausalMaskConfig::gguf()` (all
+  `quantized_*` models). Verified: Qwen3-8B-Q4K flash emits corrupted text ("-devel...corrupted") that is
+  P-precision-INDEPENDENT (q_flash == q_bf16raw), so it is NOT the 1.5% P-cast issue above -- it is
+  structural: GGUF `forward_attn` has no FlashParams plumbing (passes `None`), so flash runs without
+  cumulative seqlens. Q4K + MoE flash == eager (coherent "Paris") after the gate. This is the same config as
+  the "8B-Q4K thinking-mode collapse" above.
+- The paged prefix-cache/chunked GATHER path (varlen, q_len<kv_len) is coherent under flash but its greedy
+  output differs from a fresh (non-cached) run -- and EAGER gather differs from fresh too, so this is a
+  pre-existing prefix-cache non-transparency (reduction-order/fp between gather vs non-gather kernels), NOT
+  a flash-specific garble. Single-shot generation never hits the gather path (needs a prefix-cache hit), so
+  the default-ON win is safe there. A transparent gather (build-2) remains a separate follow-up.
 
 ## CORRECTION: the sampling change is NOT the 8B collapse fix (drill continued)
 - Tested the sane-sampling fix (rep_penalty 1.1, top_p 0.9, temp 0.7) on 8B seed42 flash prefill:
