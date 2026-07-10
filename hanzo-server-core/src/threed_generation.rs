@@ -19,7 +19,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use hanzo_3d::{io, Mesh};
-use hanzo_engine::diffusion_models::pixal3d::pixal3d_generate;
+use hanzo_engine::diffusion_models::pixal3d::{glb, pixal3d_generate};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -62,8 +62,8 @@ impl ThreeDFormat {
     /// Serialize a decoded mesh into this container's bytes.
     fn serialize(self, mesh: &Mesh) -> Vec<u8> {
         match self {
-            // GLB writer is pending; PLY is the wire format until then.
-            ThreeDFormat::Glb | ThreeDFormat::Ply => io::mesh_to_ply(mesh).into_bytes(),
+            ThreeDFormat::Glb => glb::mesh_to_glb(mesh),
+            ThreeDFormat::Ply => io::mesh_to_ply(mesh).into_bytes(),
             ThreeDFormat::Obj => io::mesh_to_obj(mesh).into_bytes(),
         }
     }
@@ -213,8 +213,11 @@ pub async fn get_3d_content(
     match job.status {
         ThreeDJobStatus::Completed => match &job.result {
             Some(bytes) => {
-                let disposition =
-                    format!("inline; filename=\"{}.{}\"", job.id, job.params.format.ext());
+                let disposition = format!(
+                    "inline; filename=\"{}.{}\"",
+                    job.id,
+                    job.params.format.ext()
+                );
                 (
                     StatusCode::OK,
                     [
@@ -327,7 +330,10 @@ mod tests {
     fn demo_cube_serializes_to_ply() {
         let mesh = hanzo_3d::unit_cube();
         let ply = String::from_utf8(ThreeDFormat::Ply.serialize(&mesh)).unwrap();
-        assert!(ply.starts_with("ply"), "expected PLY header, got: {ply:.16}");
+        assert!(
+            ply.starts_with("ply"),
+            "expected PLY header, got: {ply:.16}"
+        );
         assert!(ply.contains("element vertex 8"));
     }
 
@@ -340,11 +346,10 @@ mod tests {
     }
 
     #[test]
-    fn glb_falls_back_to_ply_bytes() {
+    fn glb_serializes_to_binary_gltf() {
         let mesh = hanzo_3d::unit_cube();
-        assert_eq!(
-            ThreeDFormat::Glb.serialize(&mesh),
-            ThreeDFormat::Ply.serialize(&mesh)
-        );
+        let glb = ThreeDFormat::Glb.serialize(&mesh);
+        assert_eq!(&glb[0..4], b"glTF", "expected GLB magic");
+        assert_eq!(glb.len() % 4, 0, "GLB must be 4-byte aligned");
     }
 }
