@@ -252,3 +252,74 @@ impl Taesd {
         Ok(Self { encoder, decoder })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hanzo_ml::{Device, Shape};
+    use hanzo_nn::var_builder::SimpleBackend;
+    use hanzo_nn::Init;
+    use hanzo_quant::ShardedSafeTensors;
+
+    const SIZE: usize = 256;
+    const LATENT: usize = 32; // 256 / 8 (three stride-2 downsamples)
+
+    struct RandnBackend;
+
+    impl SimpleBackend for RandnBackend {
+        fn get(
+            &self,
+            s: Shape,
+            name: &str,
+            _h: Init,
+            dtype: DType,
+            dev: &Device,
+        ) -> Result<Tensor> {
+            if name.ends_with("bias") {
+                Tensor::zeros(s, dtype, dev)
+            } else {
+                Tensor::randn(0f64, 0.05, s, dev)?.to_dtype(dtype)
+            }
+        }
+        fn get_unchecked(&self, _name: &str, _dtype: DType, _dev: &Device) -> Result<Tensor> {
+            hanzo_ml::bail!("RandnBackend requires an explicit shape")
+        }
+        fn contains_tensor(&self, _name: &str) -> bool {
+            true
+        }
+    }
+
+    fn vb(dev: &Device) -> ShardedVarBuilder {
+        ShardedSafeTensors::wrap(Box::new(RandnBackend), DType::F32, dev.clone())
+    }
+
+    fn assert_finite_in_unit(t: &Tensor) -> Result<()> {
+        let v = t.flatten_all()?.to_vec1::<f32>()?;
+        assert!(v.iter().all(|x| x.is_finite()), "non-finite output");
+        assert!(
+            v.iter().all(|&x| (0.0..=1.0).contains(&x)),
+            "decoder output must be clamped to [0,1]"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn taesd_encode_decode_shapes_roundtrip() -> Result<()> {
+        let dev = Device::Cpu;
+        let cfg = VaeConfig::default();
+        let taesd = Taesd::new(&cfg, vb(&dev), vb(&dev))?;
+
+        let face = Tensor::rand(0f32, 1f32, (1, cfg.in_channels, SIZE, SIZE), &dev)?;
+        let latents = taesd.encoder.encode(&face)?;
+        assert_eq!(latents.dims(), &[1, cfg.latent_channels, LATENT, LATENT]);
+
+        // Two encoder passes concat to the UNet's in_channels (masked + reference).
+        let unet_in = Tensor::cat(&[&latents, &latents], 1)?;
+        assert_eq!(unet_in.dim(1)?, 2 * cfg.latent_channels);
+
+        let image = taesd.decoder.decode(&latents)?;
+        assert_eq!(image.dims(), &[1, cfg.out_channels, SIZE, SIZE]);
+        assert_finite_in_unit(&image)?;
+        Ok(())
+    }
+}
