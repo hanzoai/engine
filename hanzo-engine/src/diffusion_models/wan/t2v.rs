@@ -34,6 +34,15 @@ pub fn wan_t2v_generate(params: &WanT2vParams) -> Result<WanT2vFrames> {
     pipe.t2v(&cfg, &params.prompt)
 }
 
+/// Wan2.2 image/continuation-to-video: condition the clip on `image` (e.g. a prior clip's last
+/// frame, for a seamless film continuation). Same model + config path as `wan_t2v_generate`.
+pub fn wan_i2v_generate(params: &WanT2vParams, image: &DynamicImage) -> Result<WanT2vFrames> {
+    validate(params)?;
+    let pipe = super::pipeline::global()?;
+    let cfg = super::pipeline::WanVideoConfig::from_params(params);
+    pipe.i2v_image(&cfg, &params.prompt, image)
+}
+
 fn validate(params: &WanT2vParams) -> Result<()> {
     if params.prompt.trim().is_empty() {
         bail!("prompt must not be empty");
