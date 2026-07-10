@@ -1464,7 +1464,7 @@ impl ModelWeights {
             input_ids,
             cache as &dyn PastKvLenCache,
             self.dtype,
-            &CausalMaskConfig::default(),
+            &CausalMaskConfig::gguf(),
         )?;
         let mask = if let Some(ref mapper) = self.mapper {
             DeviceMappedMask::new(mask, &**mapper)?
