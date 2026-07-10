@@ -1209,6 +1209,7 @@ async fn stream_assistant_response(
             Response::Raw { .. } => unreachable!(),
             Response::Embeddings { .. } => unreachable!(),
             Response::Frames { .. } => unreachable!(),
+            Response::Transcription { .. } => unreachable!(),
         }
     }
 
