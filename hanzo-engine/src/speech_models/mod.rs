@@ -34,10 +34,21 @@ impl FromStr for AsrLoaderType {
 }
 
 impl AsrLoaderType {
-    /// Auto-detect an ASR loader type from a config.json string.
-    /// Extend this when adding new ASR pipelines.
+    /// Auto-detect an ASR loader type from a config.json string. Gated on the
+    /// `model_type`/`architectures` name so a Qwen3-Omni/VL config (which also
+    /// nests an audio+text config) is never mis-routed here; the shape must also
+    /// parse as a `Qwen3AsrConfig`. Extend this when adding new ASR pipelines.
     pub fn auto_detect_from_config(config: &str) -> Option<Self> {
-        if serde_json::from_str::<Qwen3AsrConfig>(config).is_ok() {
+        let v: serde_json::Value = serde_json::from_str(config).ok()?;
+        let name_signal = v.get("model_type").and_then(|m| m.as_str()) == Some("qwen3_asr")
+            || v.get("architectures")
+                .and_then(|a| a.as_array())
+                .is_some_and(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str())
+                        .any(|n| n.contains("Qwen3ASR") || n.contains("Qwen3Asr"))
+                });
+        if name_signal && serde_json::from_str::<Qwen3AsrConfig>(config).is_ok() {
             return Some(Self::Qwen3Asr);
         }
         None
