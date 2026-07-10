@@ -58,6 +58,8 @@ pub const FILE_CONTENT_ROUTE: RouteInfo =
     RouteInfo::new("/v1/files/{id}/content", "GET", RouteKind::OpenAi);
 pub const SPEECH_GENERATION_ROUTE: RouteInfo =
     RouteInfo::new("/v1/audio/speech", "POST", RouteKind::OpenAi);
+pub const MUSIC_GENERATION_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/audio/music", "POST", RouteKind::OpenAi);
 pub const AUDIO_TRANSCRIPTION_ROUTE: RouteInfo =
     RouteInfo::new("/v1/audio/transcriptions", "POST", RouteKind::OpenAi);
 pub const VIDEO_GENERATION_ROUTE: RouteInfo =
