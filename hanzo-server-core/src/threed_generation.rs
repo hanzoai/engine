@@ -3,9 +3,9 @@
 //!
 //! Image-to-3D is long-running, so the create call returns a job id immediately and the work runs
 //! in a spawned task. The job store is a process-local map; a job holds its params, live
-//! status/progress, and (once done) the serialized mesh bytes. The Pixal3D forward
-//! (`pixal3d_generate`) is the one piece pending weights; the job lifecycle around it and the
-//! [`hanzo_3d`] PLY/OBJ serialization are real end to end. The `demo` flag runs a GPU-free path
+//! status/progress, and (once done) the serialized mesh bytes. `texture=false` runs the coarse
+//! occupancy forward (`pixal3d_generate`); `texture=true` runs the full SLAT + FlexiCubes stage
+//! (`pixal3d_generate_textured`) for a fine textured GLB. The `demo` flag runs a GPU-free path
 //! that serializes [`hanzo_3d::unit_cube`], proving the job -> mesh -> bytes path.
 
 use std::collections::HashMap;
@@ -19,7 +19,8 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use hanzo_3d::{io, Mesh};
-use hanzo_engine::diffusion_models::pixal3d::{glb, pixal3d_generate};
+use hanzo_engine::diffusion_models::pixal3d::flexicubes::TexturedMesh;
+use hanzo_engine::diffusion_models::pixal3d::{glb, pixal3d_generate, pixal3d_generate_textured};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -60,11 +61,20 @@ impl ThreeDFormat {
     }
 
     /// Serialize a decoded mesh into this container's bytes.
-    fn serialize(self, mesh: &Mesh) -> Vec<u8> {
+    fn serialize_mesh(self, mesh: &Mesh) -> Vec<u8> {
         match self {
             ThreeDFormat::Glb => glb::mesh_to_glb(mesh),
             ThreeDFormat::Ply => io::mesh_to_ply(mesh).into_bytes(),
             ThreeDFormat::Obj => io::mesh_to_obj(mesh).into_bytes(),
+        }
+    }
+
+    /// Serialize a textured mesh. Only GLB carries the per-vertex colours (glTF `COLOR_0`); PLY/OBJ
+    /// fall back to geometry only.
+    fn serialize_textured(&self, mesh: &Mesh, colors: &[[f32; 3]]) -> Vec<u8> {
+        match self {
+            ThreeDFormat::Glb => glb::mesh_to_glb_colored(mesh, Some(colors)),
+            _ => self.serialize_mesh(mesh),
         }
     }
 }
@@ -83,6 +93,9 @@ pub struct ThreeDGenerationRequest {
     /// GPU-free demo path: serialize `unit_cube()` instead of running Pixal3D.
     #[serde(default)]
     pub demo: bool,
+    /// Run the full SLAT + FlexiCubes stage for a fine textured mesh (vs the coarse occupancy mesh).
+    #[serde(default)]
+    pub texture: bool,
 }
 
 /// Lifecycle of a 3D job.
@@ -281,8 +294,11 @@ async fn run_job(id: String) {
     };
 
     match generate(&params).await {
-        Ok(mesh) => {
-            let bytes = params.format.serialize(&mesh);
+        Ok(out) => {
+            let bytes = match &out {
+                GenOutput::Coarse(mesh) => params.format.serialize_mesh(mesh),
+                GenOutput::Fine(tm) => params.format.serialize_textured(&tm.mesh, &tm.colors),
+            };
             let mut store = job_store().lock().expect("3d job store poisoned");
             if let Some(job) = store.get_mut(&id) {
                 job.result = Some(bytes);
@@ -301,16 +317,25 @@ async fn run_job(id: String) {
     }
 }
 
-/// Decode the conditioning image, then run the model forward. `pixal3d_generate` is the seam
-/// pending weights; the `demo` path and everything downstream (mesh -> bytes) is real and
-/// exercised the moment the forward lands.
-async fn generate(req: &ThreeDGenerationRequest) -> anyhow::Result<Mesh> {
+/// The forward output: a coarse occupancy mesh or a fine textured mesh (SLAT + FlexiCubes).
+enum GenOutput {
+    Coarse(Mesh),
+    Fine(Box<TexturedMesh>),
+}
+
+/// Decode the conditioning image, then run the model forward. `texture` selects the fine SLAT +
+/// FlexiCubes path (textured mesh); otherwise the coarse occupancy mesh.
+async fn generate(req: &ThreeDGenerationRequest) -> anyhow::Result<GenOutput> {
     if req.demo {
-        return Ok(hanzo_3d::unit_cube());
+        return Ok(GenOutput::Coarse(hanzo_3d::unit_cube()));
     }
     let bytes = decode_image_input(&req.image).await?;
     let image = image::load_from_memory(&bytes)?;
-    pixal3d_generate(&image, req.seed, req.steps)
+    if req.texture {
+        Ok(GenOutput::Fine(Box::new(pixal3d_generate_textured(&image, req.seed, req.steps)?)))
+    } else {
+        Ok(GenOutput::Coarse(pixal3d_generate(&image, req.seed, req.steps)?))
+    }
 }
 
 /// Resolve the request `image` field to raw image bytes: URL / data-URL / path via
@@ -329,7 +354,7 @@ mod tests {
     #[test]
     fn demo_cube_serializes_to_ply() {
         let mesh = hanzo_3d::unit_cube();
-        let ply = String::from_utf8(ThreeDFormat::Ply.serialize(&mesh)).unwrap();
+        let ply = String::from_utf8(ThreeDFormat::Ply.serialize_mesh(&mesh)).unwrap();
         assert!(
             ply.starts_with("ply"),
             "expected PLY header, got: {ply:.16}"
@@ -340,7 +365,7 @@ mod tests {
     #[test]
     fn demo_cube_serializes_to_obj() {
         let mesh = hanzo_3d::unit_cube();
-        let obj = String::from_utf8(ThreeDFormat::Obj.serialize(&mesh)).unwrap();
+        let obj = String::from_utf8(ThreeDFormat::Obj.serialize_mesh(&mesh)).unwrap();
         assert!(obj.contains("v "), "expected OBJ vertices");
         assert!(obj.contains("f "), "expected OBJ faces");
     }
@@ -348,7 +373,7 @@ mod tests {
     #[test]
     fn glb_serializes_to_binary_gltf() {
         let mesh = hanzo_3d::unit_cube();
-        let glb = ThreeDFormat::Glb.serialize(&mesh);
+        let glb = ThreeDFormat::Glb.serialize_mesh(&mesh);
         assert_eq!(&glb[0..4], b"glTF", "expected GLB magic");
         assert_eq!(glb.len() % 4, 0, "GLB must be 4-byte aligned");
     }
