@@ -864,12 +864,6 @@ pub trait Pipeline:
     /// Called from the engine reap path each step; default no-op for pipelines without a proposer.
     fn retain_speculative_seqs(&mut self, _live: &[usize]) {}
 
-    /// Whether prompt prefill can be captured as fixed-width CUDA graphs for this model. When true,
-    /// the paged step chunks prompts to the graph width so each full chunk is a reusable graph.
-    fn supports_prefill_graphs(&self) -> bool {
-        false
-    }
-
     /// Whether a speculative proposer is attached. Governs whether the non-paged decode
     /// step preserves staged draft tokens (to verify) rather than clearing them.
     fn has_active_speculative_proposer(&self) -> bool {
@@ -1214,13 +1208,7 @@ pub trait Pipeline:
                     && !self.get_metadata().is_xlora
                     && self.device().is_cuda()
                 {
-                    if self.supports_prefill_graphs()
-                        && crate::perf_flags::prefill_graphs_enabled()
-                    {
-                        Some(crate::perf_flags::prefill_graph_chunk())
-                    } else {
-                        Some(DEFAULT_PAGED_PREFILL_CHUNK_SIZE)
-                    }
+                    Some(DEFAULT_PAGED_PREFILL_CHUNK_SIZE)
                 } else {
                     None
                 };
