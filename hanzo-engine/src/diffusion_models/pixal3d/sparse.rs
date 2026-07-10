@@ -299,6 +299,48 @@ impl AbsolutePositionEmbedder {
     }
 }
 
+/// TRELLIS `SparseGroupNorm32`: nn.GroupNorm over the [N,C] feats (B=1). Each group of C/G channels
+/// is normalized over all voxels + its channels (population var), then per-channel affine.
+pub struct SparseGroupNorm32 {
+    weight: Tensor, // [C]
+    bias: Tensor,   // [C]
+    groups: usize,
+    channels: usize,
+    eps: f64,
+}
+
+impl SparseGroupNorm32 {
+    pub fn new(groups: usize, channels: usize, vb: ShardedVarBuilder) -> Result<Self> {
+        Ok(Self {
+            weight: vb.get(channels, "weight")?,
+            bias: vb.get(channels, "bias")?,
+            groups,
+            channels,
+            eps: 1e-5,
+        })
+    }
+
+    pub fn forward(&self, x: &Sparse) -> Result<Sparse> {
+        Ok(x.replace(self.forward_feats(&x.feats)?))
+    }
+
+    pub fn forward_feats(&self, feats: &Tensor) -> Result<Tensor> {
+        let n = feats.dim(0)?;
+        let cs = self.channels / self.groups;
+        let dev = feats.device();
+        // [N, G, cs] -> per-group mean/var over (N, cs).
+        let g = feats.reshape((n, self.groups, cs))?;
+        let mean = g.mean_keepdim(0)?.mean_keepdim(2)?; // [1, G, 1]
+        let xc = g.broadcast_sub(&mean)?;
+        let var = xc.sqr()?.mean_keepdim(0)?.mean_keepdim(2)?; // [1, G, 1]
+        let norm = xc
+            .broadcast_div(&(var + self.eps)?.sqrt()?)?
+            .reshape((n, self.channels))?;
+        norm.broadcast_mul(&self.weight.reshape((1, self.channels))?)?
+            .broadcast_add(&self.bias.reshape((1, self.channels))?)
+    }
+}
+
 /// Window partition (TRELLIS `calc_window_partition`, single batch, shift): returns per-window voxel
 /// index groups. Window id = raveled (z+sh)//ws, (y+sh)//ws, (x+sh)//ws over the used window grid.
 pub fn window_partition(coords: &[[i32; 3]], window: i32, shift: i32) -> Vec<Vec<u32>> {
