@@ -100,6 +100,7 @@ impl Engine {
             | RequestMessage::MultimodalChat { .. }
             | RequestMessage::ImageGeneration { .. }
             | RequestMessage::SpeechGeneration { .. }
+            | RequestMessage::AudioTranscription { .. }
             | RequestMessage::Animation { .. }
             | RequestMessage::Embedding { .. }
             | RequestMessage::EmbeddingTokens { .. }
@@ -136,6 +137,7 @@ impl Engine {
             ) => (),
             (ModelCategory::Diffusion, RequestMessage::ImageGeneration { .. }) => (),
             (ModelCategory::Speech, RequestMessage::SpeechGeneration { .. }) => (),
+            (ModelCategory::Audio, RequestMessage::AudioTranscription { .. }) => (),
             (ModelCategory::Animation, RequestMessage::Animation { .. }) => (),
             (
                 ModelCategory::Embedding,
@@ -164,6 +166,7 @@ impl Engine {
 
         let audios = match request.messages {
             RequestMessage::MultimodalChat { ref audios, .. } => Some(audios.clone()),
+            RequestMessage::AudioTranscription { ref audio, .. } => Some(vec![audio.clone()]),
             RequestMessage::Animation {
                 ref pcm,
                 sample_rate,
@@ -173,6 +176,10 @@ impl Engine {
                 sample_rate: sample_rate as u32,
                 channels: 1,
             }]),
+            _ => None,
+        };
+        let asr_language = match request.messages {
+            RequestMessage::AudioTranscription { ref language, .. } => language.clone(),
             _ => None,
         };
         let videos = match request.messages {
@@ -196,6 +203,7 @@ impl Engine {
         let seq_step_type = match &request.messages {
             RequestMessage::ImageGeneration { .. }
             | RequestMessage::SpeechGeneration { .. }
+            | RequestMessage::AudioTranscription { .. }
             | RequestMessage::Animation { .. }
             | RequestMessage::Embedding { .. }
             | RequestMessage::EmbeddingTokens { .. }
@@ -275,7 +283,9 @@ impl Engine {
             }
             RequestMessage::ImageGeneration { prompt, .. }
             | RequestMessage::SpeechGeneration { prompt } => (vec![u32::MAX], prompt),
-            RequestMessage::Animation { .. } => (vec![u32::MAX], String::new()),
+            RequestMessage::Animation { .. } | RequestMessage::AudioTranscription { .. } => {
+                (vec![u32::MAX], String::new())
+            }
             // Image is carried on the sequence (see `images` above); the pixel tensor is
             // built by the I-JEPA inputs processor, so a placeholder token suffices here.
             RequestMessage::EmbeddingImage { .. } => (vec![u32::MAX], String::new()),
@@ -652,6 +662,9 @@ impl Engine {
 
             if let Some(params) = animation_params {
                 seq.set_animation_params(params);
+            }
+            if asr_language.is_some() {
+                seq.set_asr_language(asr_language.clone());
             }
 
             // Only "track" a new sequence if it is a traditional one

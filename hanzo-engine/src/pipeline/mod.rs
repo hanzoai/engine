@@ -1,5 +1,6 @@
 mod amoe;
 mod animation;
+mod asr;
 mod auto;
 pub mod chat_template;
 #[cfg(feature = "cuda")]
@@ -37,6 +38,7 @@ use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::PagedAttentionConfig;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 pub use animation::{AnimationLoader, AnimationModelPaths, AnimationPipeline};
+pub use asr::{AsrLoader, AsrModelPaths, AsrPipeline};
 pub use auto::{AutoLoader, AutoLoaderBuilder};
 use chat_template::ChatTemplate;
 pub use diffusion::{DiffusionLoader, DiffusionLoaderBuilder};
@@ -783,6 +785,9 @@ pub enum ForwardInputsResult {
         frames: Vec<Arc<Vec<DynamicImage>>>,
         fps: Vec<f64>,
     },
+    Transcription {
+        texts: Vec<String>,
+    },
 }
 
 impl ForwardInputsResult {
@@ -813,6 +818,9 @@ impl ForwardInputsResult {
                 frames: vec![frames[bs_idx].clone()],
                 fps: vec![fps[bs_idx]],
             }),
+            Self::Transcription { texts } => Ok(Self::Transcription {
+                texts: vec![texts[bs_idx].clone()],
+            }),
         }
     }
 
@@ -830,6 +838,7 @@ impl ForwardInputsResult {
             Self::Image { .. } => Ok(self.clone()),
             Self::Speech { .. } => Ok(self.clone()),
             Self::Frames { .. } => Ok(self.clone()),
+            Self::Transcription { .. } => Ok(self.clone()),
         }
     }
 }
@@ -1173,6 +1182,28 @@ pub trait Pipeline:
                             })
                             .collect::<Vec<_>>();
                         response::send_frames_responses(input_seqs, &frames, &fps).await?;
+                    }
+                    ForwardInputsResult::Transcription { .. } => {
+                        response::send_transcription_responses(
+                            input_seqs,
+                            logits
+                                .into_iter()
+                                .map(|r| {
+                                    #[allow(irrefutable_let_patterns)]
+                                    let ForwardInputsResult::Transcription { texts } = r
+                                    else {
+                                        unreachable!(
+                                            "All results must have same type, `Transcription`"
+                                        )
+                                    };
+                                    texts
+                                        .into_iter()
+                                        .next()
+                                        .expect("Must have at least 1 element.")
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                        .await?;
                     }
                 }
                 let end = Instant::now();
@@ -1533,6 +1564,28 @@ pub trait Pipeline:
                             })
                             .collect::<Vec<_>>();
                         response::send_frames_responses(input_seqs, &frames, &fps).await?;
+                    }
+                    ForwardInputsResult::Transcription { .. } => {
+                        response::send_transcription_responses(
+                            input_seqs,
+                            logits
+                                .into_iter()
+                                .map(|r| {
+                                    #[allow(irrefutable_let_patterns)]
+                                    let ForwardInputsResult::Transcription { texts } = r
+                                    else {
+                                        unreachable!(
+                                            "All results must have same type, `Transcription`"
+                                        )
+                                    };
+                                    texts
+                                        .into_iter()
+                                        .next()
+                                        .expect("Must have at least 1 element.")
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                        .await?;
                     }
                 }
                 let end = Instant::now();
