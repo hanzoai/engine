@@ -73,6 +73,10 @@ fn parse_gguf_value(value: &Value) -> String {
 pub struct Content<'a, R: std::io::Seek + std::io::Read> {
     contents: Vec<gguf_file::Content>,
     readers: &'a mut [&'a mut R],
+    // When non-empty (paired one-per-shard with `contents`), tensor data is read zero-resident-copy
+    // from the mmap and uploaded to the device directly, instead of into an owned host Vec. Keeps
+    // host RSS bounded when loading multi-GB quantized tensors (e.g. GLM-5.2 IQ1 experts).
+    mmaps: Vec<std::sync::Arc<memmap2::Mmap>>,
     arch: GGUFArchitecture,
     all_metadata: HashMap<String, Value>,
 }
@@ -173,9 +177,16 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
         Ok(Self {
             contents,
             readers,
+            mmaps: Vec::new(),
             arch,
             all_metadata,
         })
+    }
+
+    /// Enable mmap-backed tensor reads. `mmaps` must be paired one-per-shard with the readers.
+    pub fn set_mmaps(&mut self, mmaps: Vec<std::sync::Arc<memmap2::Mmap>>) {
+        debug_assert_eq!(mmaps.len(), self.contents.len());
+        self.mmaps = mmaps;
     }
 
     pub fn arch(&self) -> GGUFArchitecture {
@@ -210,10 +221,17 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
 
     /// Retrieve a tensor, searching through each content.
     pub fn tensor(&mut self, name: &str, device: &Device) -> Result<QTensor> {
-        for (ct, reader) in self.contents.iter().zip(self.readers.iter_mut()) {
-            if let Some(tensor_info) = ct.tensor_infos.get(name) {
-                return tensor_info.read(reader, ct.tensor_data_offset, device);
+        for i in 0..self.contents.len() {
+            if !self.contents[i].tensor_infos.contains_key(name) {
+                continue;
             }
+            let offset = self.contents[i].tensor_data_offset;
+            let mmap = self.mmaps.get(i).cloned();
+            let tensor_info = self.contents[i].tensor_infos.get(name).unwrap();
+            return match mmap {
+                Some(mmap) => tensor_info.read_mmap(&mmap, offset, device),
+                None => tensor_info.read(&mut *self.readers[i], offset, device),
+            };
         }
         hanzo_ml::bail!("Cannot find tensor info for {name}")
     }
