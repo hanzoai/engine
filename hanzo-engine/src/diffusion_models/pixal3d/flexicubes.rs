@@ -335,4 +335,55 @@ mod tests {
         assert!(!tm.mesh.faces.is_empty());
         assert!(chamfer < 1.0 / 256.0, "chamfer {chamfer} exceeds one grid cell");
     }
+
+    // Writes coarse (occupancy) + fine (FlexiCubes textured) GLBs for before/after comparison.
+    // PIXAL3D_OUT=/dir TRELLIS_FIX=/fix cargo test -p hanzo-engine pixal3d::flexicubes::write_ -- --ignored --nocapture
+    #[test]
+    #[ignore = "needs TRELLIS_FIX; writes GLB artifacts to PIXAL3D_OUT"]
+    fn write_textured_glb_artifact() {
+        use super::super::{glb, mesh};
+        let dir = std::env::var("TRELLIS_FIX").expect("TRELLIS_FIX");
+        let out = std::env::var("PIXAL3D_OUT").unwrap_or_else(|_| "/tmp".into());
+        let dev = Device::Cpu;
+        let io = hanzo_ml::safetensors::load(format!("{dir}/mesh_dec_io.safetensors"), &dev).unwrap();
+
+        // fine textured mesh from the exact decoder output.
+        let coords: Vec<[i32; 3]> = io["out_coords"]
+            .to_vec2::<f32>()
+            .unwrap()
+            .iter()
+            .map(|r| [r[1] as i32, r[2] as i32, r[3] as i32])
+            .collect();
+        let tm = extract(&coords, &io["out_feats"], 256).unwrap();
+        let fine = glb::mesh_to_glb_colored(&tm.mesh, Some(&tm.colors));
+        std::fs::write(format!("{out}/pixal3d_fine_textured.glb"), &fine).unwrap();
+
+        // coarse occupancy mesh from the same active voxels (res 64) for comparison.
+        let vin: Vec<[i32; 3]> = io["coords"]
+            .to_vec2::<f32>()
+            .unwrap()
+            .iter()
+            .map(|r| [r[1] as i32, r[2] as i32, r[3] as i32])
+            .collect();
+        let r = 64usize;
+        let mut occ = vec![false; r * r * r];
+        for c in &vin {
+            occ[(c[0] as usize * r + c[1] as usize) * r + c[2] as usize] = true;
+        }
+        let coarse_mesh = mesh::occupancy_to_mesh(&occ, r);
+        let coarse = glb::mesh_to_glb(&coarse_mesh);
+        std::fs::write(format!("{out}/pixal3d_coarse.glb"), &coarse).unwrap();
+
+        println!(
+            "coarse: {} verts / {} faces ({} bytes)  ->  fine: {} verts / {} faces / {} colors ({} bytes)",
+            coarse_mesh.vertices.len(),
+            coarse_mesh.faces.len(),
+            coarse.len(),
+            tm.mesh.vertices.len(),
+            tm.mesh.faces.len(),
+            tm.colors.len(),
+            fine.len(),
+        );
+        assert_eq!(&fine[0..4], b"glTF");
+    }
 }
