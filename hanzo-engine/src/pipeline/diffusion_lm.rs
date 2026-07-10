@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 
 use crate::lora::Ordering;
 use crate::models::llada::{self, GenParams};
+use crate::paged_attention::{KvCacheLayout, ModelConfigMetadata};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::sampling::finish_or_add_toks_to_seq;
@@ -170,7 +171,19 @@ impl Loader for DiffusionLmLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
-                model_metadata: None,
+                // Present only so the engine's Text-path cache-preallocation guard passes; the Full
+                // cache leaves `needs_preallocated_cache` empty so nothing is actually allocated.
+                model_metadata: Some(Arc::new(ModelConfigMetadata {
+                    max_seq_len,
+                    num_layers: config.n_layers,
+                    hidden_size: config.d_model,
+                    num_kv_heads: config.num_kv_heads(),
+                    num_attn_heads: config.n_heads,
+                    sliding_window: None,
+                    k_head_dim: config.head_dim(),
+                    v_head_dim: config.head_dim(),
+                    kv_cache_layout: KvCacheLayout::Standard,
+                })),
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Text],
