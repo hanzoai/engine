@@ -68,6 +68,11 @@ fn floats_le(vals: impl Iterator<Item = f32>) -> Vec<u8> {
 
 /// Serialize `mesh` to a binary glTF 2.0 container.
 pub fn mesh_to_glb(mesh: &Mesh) -> Vec<u8> {
+    mesh_to_glb_colored(mesh, None)
+}
+
+/// Serialize `mesh` with optional per-vertex RGB colours (glTF `COLOR_0`, VEC4 with alpha 1).
+pub fn mesh_to_glb_colored(mesh: &Mesh, colors: Option<&[[f32; 3]]>) -> Vec<u8> {
     let mut bin = Bin::new();
     let mut accessors: Vec<Value> = Vec::new();
     let mut attributes = serde_json::Map::new();
@@ -134,6 +139,18 @@ pub fn mesh_to_glb(mesh: &Mesh) -> Vec<u8> {
             "componentType": CT_FLOAT,
             "count": mesh.uvs.len(),
             "type": "VEC2",
+        }));
+    }
+
+    if let Some(colors) = colors {
+        let col_bytes = floats_le(colors.iter().flat_map(|c| [c[0], c[1], c[2], 1.0].into_iter()));
+        let view = bin.push(&col_bytes, TARGET_ARRAY);
+        attributes.insert("COLOR_0".into(), json!(accessors.len()));
+        accessors.push(json!({
+            "bufferView": view,
+            "componentType": CT_FLOAT,
+            "count": colors.len(),
+            "type": "VEC4",
         }));
     }
 
