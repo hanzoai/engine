@@ -16,13 +16,10 @@ use hanzo_quant::ShardedVarBuilder;
 
 use crate::attention::AttentionMask;
 use crate::diffusion_models::wan::longcat::blocks::sdpa;
-use crate::diffusion_models::wan::longcat::common::{
-    apply_rope, no_affine_layer_norm, timestep_embedding, Rope3D, ROPE_THETA,
-};
+use crate::diffusion_models::wan::longcat::common::{no_affine_layer_norm, timestep_embedding};
 use crate::layers;
 
-const SELF_ATTN: usize = 1;
-const CROSS_ATTN: usize = 2;
+const ROPE_THETA: f64 = 10000.0;
 const BLOCK_MOD_CHUNKS: usize = 6; // shift/scale/gate for (self-attn, ffn)
 const FINAL_MOD_CHUNKS: usize = 2; // shift/scale
 const TIME_SCALE: f64 = 1000.0; // flow-match t in [0,1000] -> sinusoid input in [0,1]
@@ -231,8 +228,86 @@ impl Mod {
     }
 }
 
-/// Multi-head attention with fused-free q/k/v Linears, RMSNorm(fp32) q/k, and optional 3D-RoPE.
-/// `attn1` is self-attn over video tokens (rope); `attn2` is cross-attn over text (no rope).
+// Wan 3D-RoPE: interleaved (repeat_interleave) pair rotation, head_dim split across (t,h,w) axes.
+// cos/sin tables are [N, head_dim/2] = cat of the unique per-pair freqs across the 3 axes.
+struct WanRope {
+    axes: [usize; 3],
+    theta: f64,
+    device: Device,
+}
+
+impl WanRope {
+    fn new(axes: [usize; 3], theta: f64, device: Device) -> Self {
+        Self {
+            axes,
+            theta,
+            device,
+        }
+    }
+
+    fn axis(&self, dim: usize, n: usize) -> Result<(Tensor, Tensor)> {
+        let half = dim / 2;
+        let inv: Vec<f32> = (0..dim)
+            .step_by(2)
+            .map(|i| (1.0 / self.theta.powf(i as f64 / dim as f64)) as f32)
+            .collect();
+        let inv = Tensor::from_vec(inv, (1, half), &self.device)?;
+        let pos = Tensor::arange(0, n as u32, &self.device)?
+            .to_dtype(DType::F32)?
+            .reshape((n, 1))?;
+        let freqs = pos.broadcast_mul(&inv)?;
+        Ok((freqs.cos()?, freqs.sin()?))
+    }
+
+    // (cos, sin) each [frames*h*w, head_dim/2] for the flattened (t, h, w) token grid.
+    fn table(&self, frames: usize, h: usize, w: usize) -> Result<(Tensor, Tensor)> {
+        let (ct, st) = self.axis(self.axes[0], frames)?;
+        let (ch, sh) = self.axis(self.axes[1], h)?;
+        let (cw, sw) = self.axis(self.axes[2], w)?;
+        let (dt, dh, dw) = (self.axes[0] / 2, self.axes[1] / 2, self.axes[2] / 2);
+        let g = |a: &Tensor, s: (usize, usize, usize, usize)| -> Result<Tensor> {
+            a.reshape(s)?.broadcast_as((frames, h, w, s.3))
+        };
+        let n = frames * h * w;
+        let cos = Tensor::cat(
+            &[
+                g(&ct, (frames, 1, 1, dt))?,
+                g(&ch, (1, h, 1, dh))?,
+                g(&cw, (1, 1, w, dw))?,
+            ],
+            D::Minus1,
+        )?
+        .reshape((n, dt + dh + dw))?;
+        let sin = Tensor::cat(
+            &[
+                g(&st, (frames, 1, 1, dt))?,
+                g(&sh, (1, h, 1, dh))?,
+                g(&sw, (1, 1, w, dw))?,
+            ],
+            D::Minus1,
+        )?
+        .reshape((n, dt + dh + dw))?;
+        Ok((cos, sin))
+    }
+}
+
+// Interleaved RoPE: rotate adjacent (even, odd) pairs. x [B,H,N,D], cos/sin [N, D/2].
+fn apply_wan_rope(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+    let dtype = x.dtype();
+    let (b, h, n, d) = x.dims4()?;
+    let half = d / 2;
+    let xr = x.reshape((b, h, n, half, 2))?;
+    let x1 = xr.narrow(4, 0, 1)?.squeeze(4)?;
+    let x2 = xr.narrow(4, 1, 1)?.squeeze(4)?;
+    let cos = cos.to_dtype(dtype)?.reshape((1, 1, n, half))?;
+    let sin = sin.to_dtype(dtype)?.reshape((1, 1, n, half))?;
+    let o1 = (x1.broadcast_mul(&cos)? - x2.broadcast_mul(&sin)?)?;
+    let o2 = (x1.broadcast_mul(&sin)? + x2.broadcast_mul(&cos)?)?;
+    Tensor::stack(&[&o1, &o2], 4)?.reshape((b, h, n, d))
+}
+
+/// Multi-head attention: fused-free q/k/v Linears, RMSNorm(fp32) over the full projection (Wan
+/// `rms_norm_across_heads`) before head-split, and optional interleaved 3D-RoPE (self-attn only).
 struct Attention {
     to_q: Linear,
     to_k: Linear,
@@ -251,8 +326,8 @@ impl Attention {
         let to_k = layers::linear(kv_in, dim, vb.pp("to_k"))?;
         let to_v = layers::linear(kv_in, dim, vb.pp("to_v"))?;
         let to_out = layers::linear(dim, dim, vb.pp("to_out").pp("0"))?;
-        let norm_q = RmsNorm::new(vb.get(cfg.head_dim, "norm_q.weight")?, cfg.eps);
-        let norm_k = RmsNorm::new(vb.get(cfg.head_dim, "norm_k.weight")?, cfg.eps);
+        let norm_q = RmsNorm::new(vb.get(dim, "norm_q.weight")?, cfg.eps);
+        let norm_k = RmsNorm::new(vb.get(dim, "norm_k.weight")?, cfg.eps);
         Ok(Self {
             to_q,
             to_k,
@@ -279,15 +354,11 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b, nq, _) = q_src.dims3()?;
         let nk = kv_src.dim(1)?;
-        let q = self
-            .split_heads(&q_src.apply(&self.to_q)?, b, nq)?
-            .apply(&self.norm_q)?;
-        let k = self
-            .split_heads(&kv_src.apply(&self.to_k)?, b, nk)?
-            .apply(&self.norm_k)?;
+        let q = self.split_heads(&q_src.apply(&self.to_q)?.apply(&self.norm_q)?, b, nq)?;
+        let k = self.split_heads(&kv_src.apply(&self.to_k)?.apply(&self.norm_k)?, b, nk)?;
         let v = self.split_heads(&kv_src.apply(&self.to_v)?, b, nk)?;
         let (q, k) = match rope {
-            Some((cos, sin)) => (apply_rope(&q, cos, sin)?, apply_rope(&k, cos, sin)?),
+            Some((cos, sin)) => (apply_wan_rope(&q, cos, sin)?, apply_wan_rope(&k, cos, sin)?),
             None => (q, k),
         };
         let out = sdpa(&q, &k, &v, &AttentionMask::None)?;
@@ -440,7 +511,7 @@ pub struct Wan2TransformerDiT {
     condition: ConditionEmbedder,
     blocks: Vec<Block>,
     final_layer: FinalLayer,
-    rope: Rope3D,
+    rope: WanRope,
     cfg: Wan2Config,
     device: Device,
     dtype: DType,
@@ -460,7 +531,7 @@ impl Wan2TransformerDiT {
             blocks.push(Block::new(&cfg, vb_b.pp(i).set_device(device.clone()))?);
         }
         let final_layer = FinalLayer::new(&cfg, vb.set_device(device.clone()))?;
-        let rope = Rope3D::new(cfg.rope_axes_dim, ROPE_THETA, device.clone())?;
+        let rope = WanRope::new(cfg.rope_axes_dim, ROPE_THETA, device.clone());
         Ok(Self {
             patch_embed,
             condition,
@@ -566,6 +637,60 @@ mod tests {
             diff < 1e-4,
             "per-token uniform t != scalar t, max diff {diff}"
         );
+        Ok(())
+    }
+
+    // Real-weight single-step parity vs the diffusers oracle (f16 tolerance). Set WAN_DIT_DIR (the
+    // transformer shard dir) and WAN_DIT_ORACLE (latent/text/t/vel from wan_dit_oracle.py); skips
+    // when unset. Run on GPU (--features cuda) for the 5B model.
+    #[test]
+    fn dit_parity_vs_oracle() -> Result<()> {
+        use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
+        use std::path::PathBuf;
+        use std::sync::Arc;
+
+        let (Ok(dir), Ok(oracle_path)) = (
+            std::env::var("WAN_DIT_DIR"),
+            std::env::var("WAN_DIT_ORACLE"),
+        ) else {
+            eprintln!("skip dit_parity_vs_oracle: set WAN_DIT_DIR + WAN_DIT_ORACLE");
+            return Ok(());
+        };
+        let dev = Device::cuda_if_available(0)?;
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "safetensors"))
+            .collect();
+        paths.sort();
+        let n = paths.len();
+        let vb = from_mmaped_safetensors(
+            paths,
+            Vec::new(),
+            Some(DType::F32),
+            &dev,
+            vec![None; n],
+            true,
+            None,
+            |_| true,
+            Arc::new(|_| DeviceForLoadTensor::Base),
+        )?;
+        let dit = Wan2TransformerDiT::new(Wan2Config::ti2v_5b(), vb, dev.clone())?;
+        let o = hanzo_ml::safetensors::load(&oracle_path, &dev)?;
+        let vel = dit.forward(&o["latent"], &o["t"], &o["text"])?;
+        let a = vel.flatten_all()?.to_vec1::<f32>()?;
+        let b = o["vel"]
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let (mut dot, mut na, mut nb) = (0f64, 0f64, 0f64);
+        for (x, y) in a.iter().zip(b.iter()) {
+            dot += *x as f64 * *y as f64;
+            na += (*x as f64).powi(2);
+            nb += (*y as f64).powi(2);
+        }
+        let cos = dot / (na.sqrt() * nb.sqrt());
+        eprintln!("DiT single-step velocity cosine vs oracle = {cos:.6}");
+        assert!(cos > 0.99, "DiT velocity cosine {cos} <= 0.99");
         Ok(())
     }
 }
