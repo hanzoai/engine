@@ -261,8 +261,10 @@ impl Sdpa {
             }
         }
 
-        // Custom mask, eager attention (flash can't use arbitrary mask tensors). Reached only under
-        // FLASH_PREFILL=0 or for force_custom models (gpt-oss); the masker otherwise emits CausalFlash.
+        // Custom mask, eager attention (flash can't use arbitrary mask tensors). Reached under
+        // FLASH_PREFILL=0, for GGUF/quantized models (CausalMaskConfig::gguf: no FlashParams plumbing,
+        // flash corrupts their prefill), and force_custom models (gpt-oss). Dense safetensors otherwise
+        // emit CausalFlash.
         if let AttentionMask::Custom(mask_tensor) = mask {
             return self.run_attention_noflash(q, k, v, Some(mask_tensor), sdpa_params, do_causal);
         }

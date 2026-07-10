@@ -289,12 +289,14 @@ pub const fn using_flash_attn() -> bool {
 
 /// `true` if built with `flash-attn`/`flash-attn-v3` AND flash is runtime-enabled.
 ///
-/// Default ON. hanzo-flash-attn >= 0.11.35 routes bf16 attention through the f16 kernel, curing the
-/// P-cast softmax collapse (flash-attn-2 rounds the f32 softmax probabilities to bf16's 7 mantissa
-/// bits before P*V, tipping repetition-prone models like Qwen3-8B-Q4K into "needle needle" loops)
-/// that previously forced flash off. Flash flips behavior at MANY sites (mask construction, paged
-/// attention, input processors, run_attention), so one predicate gates them all consistently.
-/// `FLASH_PREFILL=0` forces the eager path everywhere. Read once, cached.
+/// Default ON for dense safetensors prefill: verified byte-exact vs eager and ~1.3-2.5x faster on
+/// CUDA (flat vs prompt length, beats llama.cpp). hanzo-flash-attn >= 0.11.35 keeps the bf16 softmax
+/// probabilities in the f16 kernel's 10 mantissa bits (flash-attn-2 otherwise rounds P to bf16's 7
+/// before P*V, which can tip repetition-prone bf16 generation into degenerate loops). GGUF/quantized
+/// models stay eager -- they forward_attn without FlashParams and flash corrupts their prefill --
+/// gated at CausalMaskConfig::gguf, not here. Flash flips behavior at MANY sites (mask construction,
+/// paged attention, input processors, run_attention), so one predicate gates them consistently;
+/// `FLASH_PREFILL=0` forces eager everywhere. Read once, cached.
 #[cfg(any(feature = "flash-attn", feature = "flash-attn-v3"))]
 pub fn using_flash_attn() -> bool {
     use std::sync::OnceLock;
