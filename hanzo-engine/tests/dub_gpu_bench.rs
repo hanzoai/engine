@@ -239,6 +239,64 @@ fn bench_core(
     Ok(fps)
 }
 
+// Diagnostic: compare TAESD vs full-VAE latent scale + isolate the decoder, on real weights.
+// Set MUSETALK_DUBIN to a dir with face_000000.npy. Prints the std ratio (the encoder scale bug
+// signature) and the TAESD-decode-of-correct-UNet-pred PSNR (isolates the decoder).
+#[test]
+fn taesd_scale_diagnostic() -> Result<()> {
+    let Ok(dubin) = std::env::var("MUSETALK_DUBIN") else {
+        eprintln!("[diag] set MUSETALK_DUBIN; skipping");
+        return Ok(());
+    };
+    let dev = device()?;
+    let face = hanzo_ml::Tensor::read_npy(format!("{dubin}/face_000000.npy"))?.to_device(&dev)?;
+    let audio = hanzo_ml::Tensor::read_npy(format!("{dubin}/audio_000000.npy"))?.to_device(&dev)?;
+    let full = build_core(&dev, DType::F32, false)?;
+    let taesd = build_core(&dev, DType::F32, true)?;
+
+    let std = |t: &hanzo_ml::Tensor| -> Result<f64> {
+        let v = t.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+        let m = v.iter().sum::<f32>() as f64 / v.len() as f64;
+        Ok((v.iter().map(|&x| (x as f64 - m).powi(2)).sum::<f64>() / v.len() as f64).sqrt())
+    };
+    let psnr = |a: &hanzo_ml::Tensor, b: &hanzo_ml::Tensor| -> Result<f64> {
+        let (a, b) = (
+            a.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?,
+            b.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?,
+        );
+        let mse = a
+            .iter()
+            .zip(&b)
+            .map(|(x, y)| (x - y).powi(2) as f64)
+            .sum::<f64>()
+            / a.len() as f64;
+        Ok(if mse > 0.0 {
+            10.0 * (1.0 / mse).log10()
+        } else {
+            99.0
+        })
+    };
+
+    let lat_full = full.latents_for_unet(&face)?;
+    let lat_taesd = taesd.latents_for_unet(&face)?;
+    eprintln!(
+        "[diag] latent std: full={:.4} taesd={:.4} ratio(taesd/full)={:.4}",
+        std(&lat_full)?,
+        std(&lat_taesd)?,
+        std(&lat_taesd)? / std(&lat_full)?
+    );
+    // Isolate the decoder: same correct UNet pred through both decoders.
+    let ts = hanzo_ml::Tensor::zeros(1, DType::F32, &dev)?;
+    let pred = full.unet_forward(&lat_full, &ts, &audio)?;
+    let img_full = full.decode_latents(&pred)?;
+    let img_taesd = taesd.decode_latents(&pred)?;
+    eprintln!(
+        "[diag] decoder-only PSNR(TAESD vs fullVAE, same pred)={:.2}dB",
+        psnr(&img_taesd, &img_full)?
+    );
+    Ok(())
+}
+
 // Renders the LSE-C quality-gate mouths: read the pre-dumped standard-clip faces + whisper feats
 // from MUSETALK_DUBIN, run the real-weight core (full-VAE or DUB_TAESD), write [3,256,256] mouths
 // to MUSETALK_DUBOUT. Python reblend + syncnet then score LSE-C. Same npy contract as the dub tool.
