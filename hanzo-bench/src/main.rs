@@ -141,6 +141,7 @@ async fn run_bench(
                             Response::AgenticToolApprovalRequired { .. } => unreachable!(),
                             Response::File(_) => unreachable!(),
                             Response::Frames { .. } => unreachable!(),
+                            Response::Transcription { .. } => unreachable!(),
                         }
                         break;
                     }
