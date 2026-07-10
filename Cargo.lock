@@ -2751,7 +2751,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "anyhow",
  "clap",
@@ -2783,7 +2783,7 @@ checksum = "b9dc246ef72490c348c62b93c06989605dc074e285657501c0aaa02d73c5b408"
 
 [[package]]
 name = "hanzo-audio"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "anyhow",
  "apodize",
@@ -2793,7 +2793,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-bench"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "anyhow",
  "clap",
@@ -2819,7 +2819,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-cli"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "anyhow",
  "axum",
@@ -2861,7 +2861,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-code-exec"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2879,7 +2879,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-engine"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -2999,9 +2999,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-flash-attn"
-version = "0.11.34"
+version = "0.11.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffdf8315293276d8a4e7e0967238a110ec048ef8fc076f1de5fd6e77522ab932"
+checksum = "918a7b9fdcb762bf519c69a7f379fa90d7273a90c5a3e9ff04791e0f8f402c2f"
 dependencies = [
  "anyhow",
  "bindgen_cuda",
@@ -3034,7 +3034,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-llm-mcp"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3056,7 +3056,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-macros"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -3140,7 +3140,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-paged-attn"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "anyhow",
  "cudaforge",
@@ -3156,7 +3156,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-pyo3"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3182,7 +3182,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-quant"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "byteorder",
  "cuda-async",
@@ -3260,7 +3260,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-sandbox"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "anyhow",
  "itoa",
@@ -3276,7 +3276,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3299,7 +3299,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server-core"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3360,7 +3360,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-vision"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "hanzo-ml",
  "image",
@@ -3369,7 +3369,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-web-chat"
-version = "1.7.17"
+version = "1.7.18"
 dependencies = [
  "anyhow",
  "axum",
