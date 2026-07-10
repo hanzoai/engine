@@ -5,6 +5,8 @@
 //! FlexiCubes mesh refinement is the remaining stage.
 
 pub mod dinov2;
+pub mod flexicubes;
+pub mod flexicubes_tables;
 pub mod glb;
 pub mod mesh;
 pub mod pipeline;
