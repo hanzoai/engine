@@ -13,6 +13,7 @@ pub(crate) mod glm4_moe_lite;
 pub(crate) mod glm5_moe;
 pub(crate) mod gpt_oss;
 pub(crate) mod granite;
+pub(crate) mod llada;
 pub(crate) mod llama;
 pub(crate) mod minimax_m2;
 pub(crate) mod mistral;
