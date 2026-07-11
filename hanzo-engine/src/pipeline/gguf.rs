@@ -53,6 +53,7 @@ use crate::{
 use crate::{
     models::quantized_deepseek2::ModelWeights as QDeepSeek2,
     models::quantized_deepseek4::ModelWeights as QDeepSeek4,
+    models::quantized_gemma::ModelWeights as QGemma,
     models::quantized_glm4_moe::ModelWeights as QGlm4Moe,
     models::quantized_gptoss::ModelWeights as QGptOss,
     models::quantized_llama::ModelWeights as QLlama,
@@ -90,6 +91,7 @@ enum Model {
     XLoraLlama(XLoraQLlama),
     XLoraPhi3(XLoraQPhi3),
     Phi3(QPhi3),
+    Gemma(QGemma),
     Starcoder2(QStarcoder2),
     Qwen(QQwen),
     Qwen3(QQwen3),
@@ -663,6 +665,9 @@ impl Loader for GGUFLoader {
                 }
                 GGUFArchitecture::Phi2 => Model::Phi2(QPhi::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::Phi3(QPhi3::try_from(model_config)?),
+                GGUFArchitecture::Gemma | GGUFArchitecture::Gemma2 => {
+                    Model::Gemma(QGemma::try_from(model_config)?)
+                }
                 GGUFArchitecture::Starcoder2 => {
                     Model::Starcoder2(QStarcoder2::try_from(model_config)?)
                 }
@@ -752,6 +757,7 @@ impl Loader for GGUFLoader {
             Model::XLoraLlama(ref xl) => xl.max_seq_len,
             Model::Phi3(ref p) => p.max_seq_len,
             Model::XLoraPhi3(ref p) => p.max_seq_len,
+            Model::Gemma(ref p) => p.max_seq_len,
             Model::Starcoder2(ref p) => p.max_seq_len,
             Model::Qwen(ref p) => p.max_seq_len,
             Model::Qwen3(ref p) => p.max_seq_len,
@@ -770,6 +776,7 @@ impl Loader for GGUFLoader {
             Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
             Model::Phi3(ref model) => model.cache.normal().0.len(),
             Model::XLoraPhi3(ref model) => model.cache.full().lock().len(),
+            Model::Gemma(ref model) => model.cache.normal().0.len(),
             Model::Starcoder2(ref model) => model.cache.normal().0.len(),
             Model::Qwen(ref model) => model.cache.normal().0.len(),
             Model::Qwen3(ref model) => model.cache.normal().0.len(),
@@ -927,6 +934,7 @@ impl CacheManagerMixin for GGUFPipeline {
             Model::XLoraLlama(ref model) => &model.cache,
             Model::Phi3(ref model) => &model.cache,
             Model::XLoraPhi3(ref model) => &model.cache,
+            Model::Gemma(ref model) => &model.cache,
             Model::Starcoder2(ref model) => &model.cache,
             Model::Qwen(ref model) => &model.cache,
             Model::Qwen3(ref model) => &model.cache,
@@ -949,6 +957,7 @@ impl MetadataMixin for GGUFPipeline {
             Model::XLoraLlama(ref model) => model.device.clone(),
             Model::Phi3(ref model) => model.device.clone(),
             Model::XLoraPhi3(ref model) => model.device.clone(),
+            Model::Gemma(ref model) => model.device.clone(),
             Model::Starcoder2(ref model) => model.device.clone(),
             Model::Qwen(ref model) => model.device.clone(),
             Model::Qwen3(ref model) => model.device.clone(),
@@ -1945,6 +1954,9 @@ impl Pipeline for GGUFPipeline {
                 &flash_meta,
                 flash_meta_full.as_ref().unwrap_or(&flash_meta),
             )?,
+            Model::Gemma(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
+            }
             Model::Starcoder2(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, paged_attn_meta)?
             }
