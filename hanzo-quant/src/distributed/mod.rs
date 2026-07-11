@@ -308,6 +308,9 @@ mod ring {
             }
             // The ring all-reduce/all-gather use world_size-1 accumulating steps, valid for any
             // N >= 2 (power-of-2 is an NCCL-only constraint), enabling e.g. 3-node clusters.
+            // Dial the ring eagerly so an unreachable neighbour is a named startup error here,
+            // not a panic on first collective use.
+            super::wire::get_ring_streams(&config)?;
             Ok(Self { config })
         }
 
@@ -787,7 +790,8 @@ mod ring_ops {
         pub fn new(comm: &Arc<super::Comm>) -> Self {
             match &**comm {
                 super::Comm::Ring(ring_comm) => {
-                    let (left, right) = get_ring_streams(ring_comm.config());
+                    let (left, right) = get_ring_streams(ring_comm.config())
+                        .expect("ring streams: connected by RingComm::from_device");
                     Self {
                         left,
                         right,
@@ -840,7 +844,8 @@ mod ring_ops {
         pub fn new(comm: &Arc<super::Comm>, dim: usize) -> Self {
             match &**comm {
                 super::Comm::Ring(ring_comm) => {
-                    let (left, right) = get_ring_streams(ring_comm.config());
+                    let (left, right) = get_ring_streams(ring_comm.config())
+                        .expect("ring streams: connected by RingComm::from_device");
                     Self {
                         left,
                         right,

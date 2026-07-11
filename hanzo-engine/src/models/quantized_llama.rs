@@ -457,7 +457,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         // owns embed/final-norm/lm_head.
         let pp = if use_pipeline_parallel() {
             let config = hanzo_quant::RingConfig::load();
-            Some(Arc::new(RingPipeline::from_config(&config)))
+            Some(Arc::new(RingPipeline::from_config(&config)?))
         } else {
             None
         };
