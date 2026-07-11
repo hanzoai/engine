@@ -1,12 +1,9 @@
-//! Wan2.2 text-to-video generation entry point.
-//!
-//! The backbone pieces already live here: the 3D causal VAE (`vae::AutoencoderKLWan`) and the T2V
-//! DiT (`t2v_dit::Wan2TransformerDiT`, a flow-matching velocity predictor). This module is the seam that
-//! chains text-encode -> scheduler denoise loop -> VAE decode into RGB frames. The forward is the
-//! one piece still pending model wiring (weights + umt5 text encoder + scheduler); everything that
-//! consumes its output (the async `/v1/videos` job) is real and drives this function.
-
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
+//! Wan2.2 text-to-video generation entry point: params in, RGB frames out. The forward
+//! (umt5 text-encode -> flow-match denoise -> Wan2.2 VAE decode) lives in `super::pipeline`;
+//! this module is the thin request/frame boundary the async `/v1/videos` job drives.
+
 use anyhow::{bail, Result};
 use image::{DynamicImage, RgbImage};
 
@@ -30,23 +27,22 @@ pub struct WanT2vFrames {
 /// Default frame rate for generated video when the model does not dictate one.
 pub const DEFAULT_FPS: f64 = 16.0;
 
-/// Run Wan2.2 text-to-video for `params`, returning decoded RGB frames.
-///
-/// Pending model wiring: this needs the Wan2.2-TI2V-5B weights loaded into `t2v_dit::Wan2TransformerDiT` + the
-/// umt5 text encoder for the prompt embedding + a flow-match scheduler denoise loop feeding
-/// `vae::AutoencoderKLWan::decode`. Until that is loaded, refuse rather than emit garbage.
+/// Run Wan2.2 text-to-video for `params`, returning decoded RGB frames. The model (umt5 + DiT +
+/// Wan2.2 VAE) is loaded once from `WAN_MODEL_DIR` and cached; see `super::pipeline`.
 pub fn wan_t2v_generate(params: &WanT2vParams) -> Result<WanT2vFrames> {
     validate(params)?;
-    bail!(
-        "WAN t2v forward pending model wiring: prompt {:?} ({}x{}, {} frames, {} steps). \
-         The Wan2.2 DiT + VAE backbone exists (t2v_dit::Wan2, vae::AutoencoderKLWan) but the \
-         weights/text-encoder/scheduler are not loaded yet.",
-        params.prompt,
-        params.width,
-        params.height,
-        params.num_frames,
-        params.steps,
-    )
+    let pipe = super::pipeline::global()?;
+    let cfg = super::pipeline::WanVideoConfig::from_params(params);
+    pipe.t2v(&cfg, &params.prompt)
+}
+
+/// Wan2.2 image/continuation-to-video: condition the clip on `image` (e.g. a prior clip's last
+/// frame, for a seamless film continuation). Same model + config path as `wan_t2v_generate`.
+pub fn wan_i2v_generate(params: &WanT2vParams, image: &DynamicImage) -> Result<WanT2vFrames> {
+    validate(params)?;
+    let pipe = super::pipeline::global()?;
+    let cfg = super::pipeline::WanVideoConfig::from_params(params);
+    pipe.i2v_image(&cfg, &params.prompt, image)
 }
 
 fn validate(params: &WanT2vParams) -> Result<()> {

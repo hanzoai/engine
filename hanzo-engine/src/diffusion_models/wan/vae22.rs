@@ -894,4 +894,80 @@ mod tests {
         assert_finite(&recon)?;
         Ok(())
     }
+
+    fn cosine(a: &Tensor, b: &Tensor) -> Result<f64> {
+        let a = a.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+        let b = b.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+        let (mut dot, mut na, mut nb) = (0f64, 0f64, 0f64);
+        for (x, y) in a.iter().zip(b.iter()) {
+            dot += *x as f64 * *y as f64;
+            na += (*x as f64).powi(2);
+            nb += (*y as f64).powi(2);
+        }
+        Ok(dot / (na.sqrt() * nb.sqrt()))
+    }
+
+    fn psnr(a: &Tensor, b: &Tensor) -> Result<f64> {
+        let a = a.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+        let b = b.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+        let mse: f64 = a
+            .iter()
+            .zip(b.iter())
+            .map(|(x, y)| ((*x - *y) as f64).powi(2))
+            .sum::<f64>()
+            / a.len() as f64;
+        Ok(10.0 * (4.0 / mse).log10()) // peak-to-peak 2.0 for [-1,1]
+    }
+
+    // Real-weight parity vs the diffusers oracle. Set WAN_VAE_SAFETENSORS (the vae weights file) and
+    // WAN_VAE_ORACLE (a safetensors of x/z/recon from wan_vae_oracle.py); skips when unset.
+    #[test]
+    fn vae_parity_vs_oracle() -> Result<()> {
+        use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
+        use std::path::PathBuf;
+        use std::sync::Arc;
+
+        let (Ok(weights), Ok(oracle_path)) = (
+            std::env::var("WAN_VAE_SAFETENSORS"),
+            std::env::var("WAN_VAE_ORACLE"),
+        ) else {
+            eprintln!("skip vae_parity_vs_oracle: set WAN_VAE_SAFETENSORS + WAN_VAE_ORACLE");
+            return Ok(());
+        };
+        let dev = Device::Cpu;
+        let vb = from_mmaped_safetensors(
+            vec![PathBuf::from(weights)],
+            Vec::new(),
+            Some(DType::F32),
+            &dev,
+            vec![None],
+            true,
+            None,
+            |_| true,
+            Arc::new(|_| DeviceForLoadTensor::Base),
+        )?;
+        let vae = Wan22Vae::new(&Wan22VaeConfig::ti2v_5b(), vb, &dev)?;
+        let oracle = hanzo_ml::safetensors::load(&oracle_path, &dev)?;
+        let x = oracle["x"].to_dtype(DType::F32)?;
+        let recon_oracle = oracle["recon"].to_dtype(DType::F32)?;
+        // The oracle dumps the raw posterior mode; our encode/decode fold the pipeline latent
+        // normalization ((mode-mean)/std), so bridge the oracle mode into that space to compare.
+        let mean = Tensor::from_slice(&LATENTS_MEAN, (1, 48, 1, 1, 1), &dev)?;
+        let std = Tensor::from_slice(&LATENTS_STD, (1, 48, 1, 1, 1), &dev)?;
+        let z_norm = oracle["z"]
+            .to_dtype(DType::F32)?
+            .broadcast_sub(&mean)?
+            .broadcast_div(&std)?;
+
+        let z_rust = vae.encode(&x)?;
+        let cos = cosine(&z_rust, &z_norm)?;
+        let psnr_decode = psnr(&vae.decode(&z_norm)?, &recon_oracle)?;
+        let psnr_roundtrip = psnr(&vae.decode(&z_rust)?, &x)?;
+        eprintln!(
+            "VAE parity: latent cosine={cos:.6}, decode PSNR={psnr_decode:.2}dB, roundtrip PSNR={psnr_roundtrip:.2}dB"
+        );
+        assert!(cos > 0.999, "latent cosine {cos} <= 0.999");
+        assert!(psnr_decode > 35.0, "decode PSNR {psnr_decode} <= 35dB");
+        Ok(())
+    }
 }
