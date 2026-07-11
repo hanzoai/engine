@@ -185,6 +185,12 @@ impl DeepSeekV4Config {
         1.0 / (self.head_dim as f32).sqrt()
     }
 
+    /// SwiGLU clamp limit (V4 clamps gate to `max=limit` and up to `[-limit, limit]` before SiLU-mul,
+    /// per `DeepseekV4MLP`/`DeepseekV4Experts`). `None` when the config omits it.
+    fn swiglu_limit_f32(&self) -> Option<f32> {
+        self.swiglu_limit.map(|l| l as f32)
+    }
+
     /// Attention mode for layer `idx` from its compression ratio. Missing ratios
     /// (shorter `compress_ratios` than `num_hidden_layers`) default to `Full`.
     pub(crate) fn layer_mode(&self, idx: usize) -> AttnMode {
@@ -765,17 +771,21 @@ impl V4Moe {
             loading_isq,
             &cfg.quantization_config,
             cfg.hidden_act,
-        )?;
+        )?
+        .with_swiglu_limit(cfg.swiglu_limit_f32());
 
         let shared_experts = if cfg.n_shared_experts > 0 {
-            Some(Mlp::new(
-                mapper.set_device(layer_idx, vb.pp("shared_experts"), loading_isq),
-                cfg.hidden_size,
-                cfg.moe_intermediate_size * cfg.n_shared_experts,
-                &cfg.quantization_config,
-                cfg.hidden_act,
-                comm,
-            )?)
+            Some(
+                Mlp::new(
+                    mapper.set_device(layer_idx, vb.pp("shared_experts"), loading_isq),
+                    cfg.hidden_size,
+                    cfg.moe_intermediate_size * cfg.n_shared_experts,
+                    &cfg.quantization_config,
+                    cfg.hidden_act,
+                    comm,
+                )?
+                .with_swiglu_limit(cfg.swiglu_limit_f32()),
+            )
         } else {
             None
         };
@@ -903,14 +913,17 @@ impl DecoderLayer {
                 real_device,
             )?))
         } else {
-            MoeOrMlp::Mlp(Mlp::new(
-                mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
-                cfg.hidden_size,
-                cfg.moe_intermediate_size,
-                &cfg.quantization_config,
-                cfg.hidden_act,
-                comm,
-            )?)
+            MoeOrMlp::Mlp(
+                Mlp::new(
+                    mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+                    cfg.hidden_size,
+                    cfg.moe_intermediate_size,
+                    &cfg.quantization_config,
+                    cfg.hidden_act,
+                    comm,
+                )?
+                .with_swiglu_limit(cfg.swiglu_limit_f32()),
+            )
         };
 
         Ok(Self {
@@ -1654,5 +1667,68 @@ mod tests {
             let rms = (h.iter().map(|v| v * v).sum::<f32>() / 4.0).sqrt();
             assert!((rms - 1.0).abs() < 1e-4, "unit RMS, got {rms}");
         }
+    }
+
+    // ---- swiglu_limit clamp (DeepseekV4MLP: gate.clamp(max=limit), up.clamp(-limit, limit)) ----
+
+    #[test]
+    fn v4_mlp_applies_swiglu_limit() {
+        // hidden=2, inter=2, identity down-proj; gate/up pick x[0] so a large input overflows the limit.
+        let mut tensors = HashMap::new();
+        tensors.insert(
+            "gate_proj.weight".to_string(),
+            t(vec![1., 0., 0., 0.], &[2, 2]),
+        );
+        tensors.insert(
+            "up_proj.weight".to_string(),
+            t(vec![1., 0., 0., 0.], &[2, 2]),
+        );
+        tensors.insert(
+            "down_proj.weight".to_string(),
+            t(vec![1., 0., 0., 1.], &[2, 2]),
+        );
+        let comm = Arc::new(
+            hanzo_quant::Comm::from_device(hanzo_quant::Id::new(), &Device::Cpu, 0, 1).unwrap(),
+        );
+        let build = |limit: Option<f32>| {
+            Mlp::new(
+                vb_from(tensors.clone()),
+                2,
+                2,
+                &None,
+                Activation::Silu,
+                &comm,
+            )
+            .unwrap()
+            .with_swiglu_limit(limit)
+        };
+        let flat = |m: &Mlp, x: &Tensor| {
+            m.forward(x)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap()
+        };
+
+        // x = [10, 0] -> gate = up = [10, 0]; index 0 overflows a limit of 1.0.
+        let x = t(vec![10.0, 0.0], &[1, 1, 2]);
+        let unclamped = flat(&build(None), &x);
+        let clamped = flat(&build(Some(1.0)), &x);
+
+        let silu = |z: f32| z / (1.0 + (-z).exp());
+        // No limit: silu(10) * 10. Limit 1.0: gate/up clamped to 1 -> silu(1) * 1.
+        assert!(
+            (unclamped[0] - silu(10.0) * 10.0).abs() < 1e-3,
+            "unclamped {unclamped:?}"
+        );
+        assert!((clamped[0] - silu(1.0)).abs() < 1e-4, "clamped {clamped:?}");
+        assert!(
+            (unclamped[0] - clamped[0]).abs() > 1.0,
+            "a non-default swiglu_limit must change the MLP output"
+        );
+
+        // The default (limit=None) path is unchanged from a plain SwiGLU MLP.
+        assert_eq!(unclamped, flat(&build(None), &x));
     }
 }
