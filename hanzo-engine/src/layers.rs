@@ -1938,6 +1938,8 @@ impl DeepSeekV2RotaryEmbedding {
     ) -> Result<(Tensor, Tensor)> {
         let (batch, _, seq_len, _) = q.dims4()?;
         let (cos, sin) = selected_rope_cache(&self.cos, &self.sin, batch, seq_len, seqlen_offsets)?;
+        // Match the f32 rope cache to a single-dtype bf16/f16 query (no-op when q is F32).
+        let (cos, sin) = match_rope_dtype(cos, sin, q)?;
         apply_rotary_selected_qk(q, k, &cos, &sin, false)
     }
 
