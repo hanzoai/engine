@@ -263,7 +263,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = qtok_embeddings.dequantize(device)?;
-        let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, rms_norm_eps)?;
+        let norm =
+            QRmsNorm::new_dtype(ct.tensor("output_norm.weight", device)?, rms_norm_eps, dtype)?;
         let output = if !ct.has_tensor("output.weight") {
             ct.tensor("token_embd.weight", device)?
         } else {
@@ -357,8 +358,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
             let (q_norm, k_norm) = match (q_norm, k_norm) {
                 (Ok(q), Ok(k)) => {
-                    let q_norm = QRmsNorm::new(q, rms_norm_eps)?;
-                    let k_norm = QRmsNorm::new(k, rms_norm_eps)?;
+                    let q_norm = QRmsNorm::new_dtype(q, rms_norm_eps, dtype)?;
+                    let k_norm = QRmsNorm::new_dtype(k, rms_norm_eps, dtype)?;
                     (Some(q_norm), Some(k_norm))
                 }
                 _ => (None, None),
@@ -389,11 +390,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     q_weight: Arc::new(attention_wo),
                     b: None,
                 })?),
-                attention_norm: QRmsNorm::new(attention_norm, rms_norm_eps)?,
+                attention_norm: QRmsNorm::new_dtype(attention_norm, rms_norm_eps, dtype)?,
                 q_norm,
                 k_norm,
                 mlp,
-                ffn_norm: QRmsNorm::new(ffn_norm, rms_norm_eps)?,
+                ffn_norm: QRmsNorm::new_dtype(ffn_norm, rms_norm_eps, dtype)?,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim,
@@ -434,7 +435,9 @@ impl ModelWeights {
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
-        let mut layer_in = self.tok_embeddings.forward(x)?;
+        // Single-dtype residual: cast the F32 embedding output to the compute dtype so norms/matmul/
+        // attention stay one dtype (drops the F32<->half attention casts, engages the fused qk-norm).
+        let mut layer_in = self.tok_embeddings.forward(x)?.to_dtype(self.dtype)?;
         let cache = &mut self.cache.normal().0;
         let mask = CausalMasker.make_causal_mask(
             x,
