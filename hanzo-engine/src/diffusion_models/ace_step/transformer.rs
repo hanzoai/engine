@@ -68,8 +68,12 @@ fn rope_tables(seq: usize, device: &Device) -> Result<(Tensor, Tensor)> {
 }
 
 // Interleaved-pair rotate against half-split cos/sin (the ACE-Step RoPE quirk). x [B,H,S,D].
+// cos/sin are F32; the rotation is applied in F32 (positions reach the latent length, and a bf16
+// position*freq argument would corrupt the phase) and cast back to the input dtype.
 fn apply_rope(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+    let dt = x.dtype();
     let (b, h, s, d) = x.dims4()?;
+    let x = x.to_dtype(DType::F32)?;
     let cos = cos.reshape((1, 1, s, d))?;
     let sin = sin.reshape((1, 1, s, d))?;
     let xp = x.reshape((b, h, s, d / 2, 2))?;
@@ -77,13 +81,18 @@ fn apply_rope(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
     let x_imag = xp.narrow(4, 1, 1)?.squeeze(4)?;
     let neg_imag = x_imag.neg()?;
     let x_rot = Tensor::stack(&[&neg_imag, &x_real], 4)?.reshape((b, h, s, d))?;
-    x.broadcast_mul(&cos)?.add(&x_rot.broadcast_mul(&sin)?)
+    x.broadcast_mul(&cos)?
+        .add(&x_rot.broadcast_mul(&sin)?)?
+        .to_dtype(dt)
 }
 
-// RMSNorm without affine params (norm1/norm2/norm_final), over the last dim.
+// RMSNorm without affine params (norm1/norm2/norm_final), over the last dim. The variance reduction
+// runs in F32 (a 2560-wide bf16 accumulation loses too many bits) and casts back to the input dtype.
 fn rms_noaffine(x: &Tensor) -> Result<Tensor> {
+    let dt = x.dtype();
+    let x = x.to_dtype(DType::F32)?;
     let var = x.sqr()?.mean_keepdim(D::Minus1)?;
-    x.broadcast_div(&(var + RMS_EPS)?.sqrt()?)
+    x.broadcast_div(&(var + RMS_EPS)?.sqrt()?)?.to_dtype(dt)
 }
 
 // x * (1 + scale) + shift, broadcasting scale/shift [B,1,C] over [B,S,C].
@@ -112,9 +121,11 @@ impl LiteLA {
     fn forward(&self, x: &Tensor, ctx: &SampleCtx) -> Result<Tensor> {
         let (cos, sin) = (&ctx.cos_l, &ctx.sin_l);
         let (b, s, _) = x.dims3()?;
-        let q = self.to_q.forward(x)?;
-        let k = self.to_k.forward(x)?;
-        let v = self.to_v.forward(x)?;
+        // Projections run in the compute dtype (tensor cores); the un-normalised linear-attention
+        // core (v.k, vk.q, the 1/den normaliser) runs in F32 since it has no softmax to bound it.
+        let q = self.to_q.forward(x)?.to_dtype(DType::F32)?;
+        let k = self.to_k.forward(x)?.to_dtype(DType::F32)?;
+        let v = self.to_v.forward(x)?.to_dtype(DType::F32)?;
         // q,v -> [B,H,D,S]; k -> [B,H,S,D]
         let q = q
             .transpose(1, 2)?
@@ -147,7 +158,7 @@ impl LiteLA {
             .reshape((b, NUM_HEADS * HEAD_DIM, s))?
             .permute((0, 2, 1))?
             .contiguous()?; // [B,S,2560]
-        self.to_out.forward(&out)
+        self.to_out.forward(&out.to_dtype(x.dtype())?)
     }
 }
 
@@ -202,7 +213,7 @@ impl CrossAttn {
         let scale = 1.0 / (HEAD_DIM as f64).sqrt();
         let mut scores = (q.matmul(&k.transpose(2, 3)?.contiguous()?)? * scale)?; // [B,H,S,Se]
         if let Some(m) = add_mask {
-            scores = scores.broadcast_add(m)?; // m [B,1,1,Se]
+            scores = scores.broadcast_add(&m.to_dtype(scores.dtype())?)?; // m [B,1,1,Se]
         }
         let attn = hanzo_nn::ops::softmax_last_dim(&scores)?;
         let out = attn.matmul(&v)?; // [B,H,S,D]
@@ -380,10 +391,12 @@ pub struct AceStepTransformer {
     blocks: Vec<Block>,
     final_norm_shift_scale: Tensor, // [2, 2560]
     final_linear: Linear,
+    dtype: DType, // compute dtype: bf16/f16 uses tensor cores, f32 is the reference path
 }
 
 impl AceStepTransformer {
     pub fn new(vb: ShardedVarBuilder) -> Result<Self> {
+        let dtype = vb.dtype();
         let proj_in = PatchEmbed::new(vb.pp("proj_in"))?;
         let te = vb.pp("timestep_embedder");
         let ts_linear1 = linear(TIME_PROJ_DIM, INNER_DIM, te.pp("linear_1"))?;
@@ -408,6 +421,7 @@ impl AceStepTransformer {
             blocks,
             final_norm_shift_scale,
             final_linear,
+            dtype,
         })
     }
 
@@ -415,8 +429,11 @@ impl AceStepTransformer {
     /// text_hidden (B, T_text, 768) UMT5 last hidden; speaker (B, 512). Lyric stream omitted
     /// (masked-out lyric contributes nothing to softmax cross-attn).
     pub fn encode(&self, text_hidden: &Tensor, speaker: &Tensor) -> Result<Tensor> {
-        let spk = self.speaker_embedder.forward(speaker)?.unsqueeze(1)?;
-        let text = self.genre_embedder.forward(text_hidden)?;
+        let spk = self
+            .speaker_embedder
+            .forward(&speaker.to_dtype(self.dtype)?)?
+            .unsqueeze(1)?;
+        let text = self.genre_embedder.forward(&text_hidden.to_dtype(self.dtype)?)?;
         Tensor::cat(&[&spk, &text], 1)
     }
 
@@ -458,13 +475,13 @@ impl AceStepTransformer {
         ctx: &SampleCtx,
     ) -> Result<Tensor> {
         let embedded_ts = {
-            let e = timestep_embedding(timestep, &ctx.ts_freqs)?;
+            let e = timestep_embedding(timestep, &ctx.ts_freqs)?.to_dtype(self.dtype)?;
             self.ts_linear2
                 .forward(&self.ts_linear1.forward(&e)?.silu()?)?
         };
         let temb = self.t_block.forward(&embedded_ts.silu()?)?; // [B, 15360]
 
-        let hidden = self.proj_in.forward(latent)?; // [B,T,2560]
+        let hidden = self.proj_in.forward(&latent.to_dtype(self.dtype)?)?; // [B,T,2560]
         let seq = hidden.dim(1)?;
         let se = ehs.dim(1)?;
 
@@ -492,7 +509,7 @@ impl AceStepTransformer {
         let (shift, scale) = (&parts[0], &parts[1]);
         let x = modulate(&rms_noaffine(&h)?, shift, scale)?;
         let x = self.final_linear.forward(&x)?; // [B,T,128]
-        unpatchfy(&x, seq)
+        unpatchfy(&x, seq)?.to_dtype(DType::F32) // velocity feeds the F32 scheduler/APG
     }
 }
 
