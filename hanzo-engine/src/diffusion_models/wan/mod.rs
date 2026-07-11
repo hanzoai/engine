@@ -7,6 +7,7 @@ pub mod echomimic;
 pub mod echomimic_dit;
 pub mod infinitetalk;
 pub mod longcat;
+pub mod pipeline;
 pub mod t2v;
 pub mod t2v_dit;
 pub mod vae;
@@ -22,5 +23,6 @@ pub use longcat::{
     LongCatAvatarAnimator, LongCatAvatarDiT, LongCatConfig, LongCatGenerator, LongCatOptions,
     WhisperLargeEncoder,
 };
+pub use pipeline::{WanVideoConfig, WanVideoPipeline};
 pub use vae::{AutoencoderKLWan, WanVaeConfig};
 pub use vae22::{Wan22Vae, Wan22VaeConfig};
