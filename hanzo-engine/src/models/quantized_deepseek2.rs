@@ -404,7 +404,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let (tok_embeddings, norm, output) = if is_head {
             let qtok = ct.tensor("token_embd.weight", device)?;
             let tok = Embedding::new(qtok.dequantize(device)?, props.embedding_length);
-            let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, props.rms_norm_eps)?;
+            let norm = QRmsNorm::new_dtype(
+                ct.tensor("output_norm.weight", device)?,
+                props.rms_norm_eps,
+                dtype,
+            )?;
             let out = if ct.has_tensor("output.weight") {
                 ct.tensor("output.weight", device)?
             } else {
@@ -473,9 +477,10 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     Some(gguf_linear(
                         ct.tensor(&format!("{prefix}.attn_q_a.weight"), device)?,
                     )?),
-                    Some(QRmsNorm::new(
+                    Some(QRmsNorm::new_dtype(
                         ct.tensor(&format!("{prefix}.attn_q_a_norm.weight"), device)?,
                         props.rms_norm_eps,
+                        dtype,
                     )?),
                     Some(gguf_linear(
                         ct.tensor(&format!("{prefix}.attn_q_b.weight"), device)?,
@@ -495,9 +500,10 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
             let kv_a_proj_with_mqa =
                 gguf_linear(ct.tensor(&format!("{prefix}.attn_kv_a_mqa.weight"), device)?)?;
-            let kv_a_norm = QRmsNorm::new(
+            let kv_a_norm = QRmsNorm::new_dtype(
                 ct.tensor(&format!("{prefix}.attn_kv_a_norm.weight"), device)?,
                 props.rms_norm_eps,
+                dtype,
             )?;
             // kv_b: classic GGUFs ship the combined `attn_kv_b` (kv_lora -> [k_nope; v]). Newer
             // split-MLA GGUFs (GLM-4.7-Flash) ship `attn_k_b` (qk_nope -> kv_lora, absorbed
@@ -526,13 +532,15 @@ impl ModelConfig::FromGGUF for ModelWeights {
             };
             let o_proj = gguf_linear(ct.tensor(&format!("{prefix}.attn_output.weight"), device)?)?;
 
-            let attn_norm = QRmsNorm::new(
+            let attn_norm = QRmsNorm::new_dtype(
                 ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?,
                 props.rms_norm_eps,
+                dtype,
             )?;
-            let ffn_norm = QRmsNorm::new(
+            let ffn_norm = QRmsNorm::new_dtype(
                 ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?,
                 props.rms_norm_eps,
+                dtype,
             )?;
 
             let mlp = build_moe_or_mlp(
@@ -620,7 +628,15 @@ impl ModelWeights {
         if self.pp.is_some() {
             return pp_head_forward(self, x, start_offsets, context_lens);
         }
-        let mut layer_in = self.tok_embeddings.as_ref().unwrap().forward(x)?;
+        // Single-dtype residual: cast the F32 embedding output to the compute dtype so the
+        // norm/MLA-attention/MoE chain stays one dtype (drops F32<->half casts; the MoE expert path
+        // restores the input dtype so no F32 round-trip is reintroduced).
+        let mut layer_in = self
+            .tok_embeddings
+            .as_ref()
+            .unwrap()
+            .forward(x)?
+            .to_dtype(self.dtype)?;
         let cache = &mut self.cache.normal().0;
         let mask = CausalMasker.make_causal_mask(
             x,
