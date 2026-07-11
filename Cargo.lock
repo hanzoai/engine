@@ -2946,6 +2946,7 @@ dependencies = [
  "libc",
  "llguidance",
  "lrtable",
+ "memmap2",
  "mime_guess",
  "minijinja",
  "minijinja-contrib",
