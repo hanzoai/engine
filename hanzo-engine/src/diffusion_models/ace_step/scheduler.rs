@@ -46,11 +46,12 @@ impl FlowMatchScheduler {
     }
 
     // Euler with omega mean-preserving deviation rescale: x + ((s_next - s)*v - m)*omega + m.
+    // m stays a 0-dim device tensor (no per-step to_scalar sync); algebraically identical.
     pub fn step(&self, model_output: &Tensor, sample: &Tensor, i: usize) -> Result<Tensor> {
         let dt = self.sigmas[i + 1] - self.sigmas[i];
         let dx = (model_output * dt)?;
-        let m = dx.mean_all()?.to_scalar::<f32>()? as f64;
-        let dx = (((dx - m)? * self.omega)? + m)?;
+        let m = dx.mean_all()?;
+        let dx = (dx.broadcast_sub(&m)? * self.omega)?.broadcast_add(&m)?;
         sample + dx
     }
 }
@@ -134,6 +135,35 @@ mod tests {
         }
         // omega logistic(10, k=0.1) in (0.9, 1.1)
         assert!(s.omega > 1.0 && s.omega < 1.1);
+    }
+
+    // The on-device mean rescale must be byte-identical to the old scalar-readback formula.
+    #[test]
+    fn euler_step_matches_scalar_readback() {
+        let dev = Device::Cpu;
+        let s = FlowMatchScheduler::new(8, 10.0);
+        let v = Tensor::randn(0f32, 1.0, (1, 8, 16, 32), &dev).unwrap();
+        let x = Tensor::randn(0f32, 1.0, (1, 8, 16, 32), &dev).unwrap();
+        for i in 0..8 {
+            let dt = s.sigmas[i + 1] - s.sigmas[i];
+            let dx = (&v * dt).unwrap();
+            let m = dx.mean_all().unwrap().to_scalar::<f32>().unwrap() as f64;
+            let ref_dx = (((&dx - m).unwrap() * s.omega).unwrap() + m).unwrap();
+            let want: Vec<f32> = (&x + ref_dx)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1()
+                .unwrap();
+            let got: Vec<f32> = s
+                .step(&v, &x, i)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1()
+                .unwrap();
+            assert_eq!(got, want, "step {i} diverged from scalar-readback");
+        }
     }
 
     #[test]

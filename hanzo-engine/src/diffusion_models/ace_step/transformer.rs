@@ -25,16 +25,19 @@ const GN_EPS: f64 = 1e-6;
 const LITELA_EPS: f64 = 1e-15;
 const TIME_MAX_PERIOD: f64 = 10_000.0;
 
-// diffusers Timesteps(256, flip_sin_to_cos=True, downscale_freq_shift=0): [B] -> [B, 256].
-fn timestep_embedding(t: &Tensor) -> Result<Tensor> {
+// diffusers Timesteps freq basis [1, 128], constant across the sampler loop.
+fn timestep_freqs(dev: &Device) -> Result<Tensor> {
     let half = TIME_PROJ_DIM / 2;
-    let dev = t.device();
     let exps: Vec<f32> = (0..half)
         .map(|i| (-(TIME_MAX_PERIOD.ln()) * i as f64 / half as f64).exp() as f32)
         .collect();
-    let freqs = Tensor::from_vec(exps, (1, half), dev)?; // [1, 128]
+    Tensor::from_vec(exps, (1, half), dev)
+}
+
+// diffusers Timesteps(256, flip_sin_to_cos=True, downscale_freq_shift=0): [B] -> [B, 256].
+fn timestep_embedding(t: &Tensor, freqs: &Tensor) -> Result<Tensor> {
     let t = t.to_dtype(DType::F32)?.reshape((t.dim(0)?, 1))?; // [B, 1]
-    let args = t.broadcast_mul(&freqs)?; // [B, 128]
+    let args = t.broadcast_mul(freqs)?; // [B, 128]
     Tensor::cat(&[&args.cos()?, &args.sin()?], D::Minus1) // [B, 256]
 }
 
@@ -76,6 +79,18 @@ fn modulate(x: &Tensor, shift: &Tensor, scale: &Tensor) -> Result<Tensor> {
     x.broadcast_mul(&(scale + 1.0)?)?.broadcast_add(shift)
 }
 
+/// Per-generation constants for the DiT sampler loop: rope tables (fixed latent/encoder
+/// lengths), the timestep freq basis, and the LiteLA denominator-augmentation ones row.
+/// Hoisted out of decode() so the per-step forward makes zero host<->device transfers.
+pub struct DiTCache {
+    time_freqs: Tensor,
+    cos_l: Tensor,
+    sin_l: Tensor,
+    cos_e: Tensor,
+    sin_e: Tensor,
+    litela_ones: Tensor,
+}
+
 #[derive(Debug, Clone)]
 struct LiteLA {
     to_q: Linear,
@@ -94,7 +109,7 @@ impl LiteLA {
         })
     }
 
-    fn forward(&self, x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+    fn forward(&self, x: &Tensor, cache: &DiTCache) -> Result<Tensor> {
         let (b, s, _) = x.dims3()?;
         let q = self.to_q.forward(x)?;
         let k = self.to_k.forward(x)?;
@@ -115,13 +130,12 @@ impl LiteLA {
             .contiguous()?
             .reshape((b, NUM_HEADS, HEAD_DIM, s))?;
         let q = q.permute((0, 1, 3, 2))?.contiguous()?; // [B,H,S,D]
-        let q = apply_rope(&q, cos, sin)?;
-        let k = apply_rope(&k, cos, sin)?;
+        let q = apply_rope(&q, &cache.cos_l, &cache.sin_l)?;
+        let k = apply_rope(&k, &cache.cos_l, &cache.sin_l)?;
         let q = q.permute((0, 1, 3, 2))?.contiguous()?.relu()?; // [B,H,D,S]
         let k = k.relu()?; // [B,H,S,D]
         let v = v.contiguous()?;
-        let ones = Tensor::ones((b, NUM_HEADS, 1, s), DType::F32, x.device())?;
-        let v = Tensor::cat(&[&v, &ones], 2)?; // [B,H,D+1,S]
+        let v = Tensor::cat(&[&v, &cache.litela_ones], 2)?; // [B,H,D+1,S]
         let vk = v.matmul(&k)?; // [B,H,D+1,D]
         let out = vk.matmul(&q)?; // [B,H,D+1,S]
         let num = out.narrow(2, 0, HEAD_DIM)?;
@@ -155,16 +169,12 @@ impl CrossAttn {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         x: &Tensor,
         ehs: &Tensor,
         add_mask: Option<&Tensor>,
-        cos_l: &Tensor,
-        sin_l: &Tensor,
-        cos_e: &Tensor,
-        sin_e: &Tensor,
+        cache: &DiTCache,
     ) -> Result<Tensor> {
         let (b, s, _) = x.dims3()?;
         let se = ehs.dim(1)?;
@@ -186,8 +196,8 @@ impl CrossAttn {
             .reshape((b, se, NUM_HEADS, HEAD_DIM))?
             .transpose(1, 2)?
             .contiguous()?;
-        let q = apply_rope(&q, cos_l, sin_l)?;
-        let k = apply_rope(&k, cos_e, sin_e)?;
+        let q = apply_rope(&q, &cache.cos_l, &cache.sin_l)?;
+        let k = apply_rope(&k, &cache.cos_e, &cache.sin_e)?;
         let scale = 1.0 / (HEAD_DIM as f64).sqrt();
         let mut scores = (q.matmul(&k.transpose(2, 3)?.contiguous()?)? * scale)?; // [B,H,S,Se]
         if let Some(m) = add_mask {
@@ -271,16 +281,12 @@ impl Block {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         hidden: &Tensor,
         ehs: &Tensor,
         add_mask: Option<&Tensor>,
-        cos_l: &Tensor,
-        sin_l: &Tensor,
-        cos_e: &Tensor,
-        sin_e: &Tensor,
+        cache: &DiTCache,
         temb: &Tensor,
     ) -> Result<Tensor> {
         let b = hidden.dim(0)?;
@@ -291,12 +297,10 @@ impl Block {
         let (shift_mlp, scale_mlp, gate_mlp) = (&m[3], &m[4], &m[5]);
 
         let norm = modulate(&rms_noaffine(hidden)?, shift_msa, scale_msa)?;
-        let attn_out = self.attn.forward(&norm, cos_l, sin_l)?;
+        let attn_out = self.attn.forward(&norm, cache)?;
         let hidden = (attn_out.broadcast_mul(gate_msa)? + hidden)?;
 
-        let cross = self
-            .cross_attn
-            .forward(&hidden, ehs, add_mask, cos_l, sin_l, cos_e, sin_e)?;
+        let cross = self.cross_attn.forward(&hidden, ehs, add_mask, cache)?;
         let hidden = (cross + hidden)?;
 
         let norm = modulate(&rms_noaffine(&hidden)?, shift_mlp, scale_mlp)?;
@@ -405,6 +409,20 @@ impl AceStepTransformer {
         Tensor::cat(&[&spk, &text], 1)
     }
 
+    /// Sampler-loop constants for a fixed latent length `seq` and encoder length `se`.
+    pub fn dit_cache(&self, seq: usize, se: usize, dev: &Device) -> Result<DiTCache> {
+        let (cos_l, sin_l) = rope_tables(seq, dev)?;
+        let (cos_e, sin_e) = rope_tables(se, dev)?;
+        Ok(DiTCache {
+            time_freqs: timestep_freqs(dev)?,
+            cos_l,
+            sin_l,
+            cos_e,
+            sin_e,
+            litela_ones: Tensor::ones((1, NUM_HEADS, 1, seq), DType::F32, dev)?,
+        })
+    }
+
     /// latent (B, 8, 16, T), encoder_hidden_states (B, S_enc, 2560), optional encoder mask
     /// (B, S_enc) with 1 = keep, timestep (B,) on the 0..1000 scale -> velocity (B, 8, 16, T).
     pub fn decode(
@@ -413,9 +431,10 @@ impl AceStepTransformer {
         ehs: &Tensor,
         encoder_mask: Option<&Tensor>,
         timestep: &Tensor,
+        cache: &DiTCache,
     ) -> Result<Tensor> {
         let embedded_ts = {
-            let e = timestep_embedding(timestep)?;
+            let e = timestep_embedding(timestep, &cache.time_freqs)?;
             self.ts_linear2
                 .forward(&self.ts_linear1.forward(&e)?.silu()?)?
         };
@@ -424,9 +443,6 @@ impl AceStepTransformer {
         let hidden = self.proj_in.forward(latent)?; // [B,T,2560]
         let seq = hidden.dim(1)?;
         let se = ehs.dim(1)?;
-        let dev = hidden.device();
-        let (cos_l, sin_l) = rope_tables(seq, dev)?;
-        let (cos_e, sin_e) = rope_tables(se, dev)?;
 
         // Additive cross-attn mask [B,1,1,Se] from a 0/1 keep mask.
         // Additive mask: 0 where keep(1), large-negative where drop(0). (mk-1)*1e30 avoids 0*-inf NaN.
@@ -441,16 +457,7 @@ impl AceStepTransformer {
 
         let mut h = hidden;
         for block in &self.blocks {
-            h = block.forward(
-                &h,
-                ehs,
-                add_mask.as_ref(),
-                &cos_l,
-                &sin_l,
-                &cos_e,
-                &sin_e,
-                &temb,
-            )?;
+            h = block.forward(&h, ehs, add_mask.as_ref(), cache, &temb)?;
         }
 
         // final layer: adaLN from embedded_timestep, then linear + unpatchify.
@@ -550,7 +557,8 @@ mod tests {
         .unwrap();
         let ts = Tensor::from_vec(vec![500.0f32], (1,), &device).unwrap();
 
-        let out = model.decode(&latent, &ehs, None, &ts).unwrap();
+        let cache = model.dit_cache(32, 10, &device).unwrap();
+        let out = model.decode(&latent, &ehs, None, &ts, &cache).unwrap();
         let got: Vec<f32> = out.flatten_all().unwrap().to_vec1().unwrap();
         let want = read_f32_le(&format!("{fix}/dit_out.f32"));
         let c = cosine(&got, &want);
