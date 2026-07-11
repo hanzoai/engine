@@ -27,6 +27,8 @@ pub enum GGUFArchitecture {
     Phi3,
     Gemma,
     Gemma2,
+    #[strum(serialize = "minimax-m2")]
+    MiniMaxM2,
     Starcoder2,
     Qwen2,
     Qwen3,
