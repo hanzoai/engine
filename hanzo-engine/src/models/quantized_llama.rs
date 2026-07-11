@@ -253,7 +253,7 @@ impl ModelConfig::FromGGML for ModelWeights {
         )?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
-        let norm = QRmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
+        let norm = QRmsNorm::new_dtype(ct.remove("norm.weight")?, 1e-5, dtype)?;
         let output = ct.remove("output.weight")?;
         let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
         for layer_idx in NiceProgressBar::<_, 'b'>(
@@ -305,9 +305,9 @@ impl ModelConfig::FromGGML for ModelWeights {
                     q_weight: Arc::new(attention_wo),
                     b: None,
                 })?),
-                attention_norm: QRmsNorm::new(attention_norm, 1e-5)?,
+                attention_norm: QRmsNorm::new_dtype(attention_norm, 1e-5, dtype)?,
                 mlp_or_moe,
-                ffn_norm: QRmsNorm::new(ffn_norm, 1e-5)?,
+                ffn_norm: QRmsNorm::new_dtype(ffn_norm, 1e-5, dtype)?,
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
@@ -473,7 +473,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
             let tok_embeddings =
                 Embedding::new(qtok_embeddings.dequantize(device)?, embedding_length);
-            let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, rms_norm_eps)?;
+            let norm =
+                QRmsNorm::new_dtype(ct.tensor("output_norm.weight", device)?, rms_norm_eps, dtype)?;
             let output = if !ct.has_tensor("output.weight") {
                 ct.tensor("token_embd.weight", device)?
             } else {
@@ -675,9 +676,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     q_weight: Arc::new(attention_wo),
                     b: None,
                 })?),
-                attention_norm: QRmsNorm::new(attention_norm, rms_norm_eps)?,
+                attention_norm: QRmsNorm::new_dtype(attention_norm, rms_norm_eps, dtype)?,
                 mlp_or_moe,
-                ffn_norm: QRmsNorm::new(ffn_norm, rms_norm_eps)?,
+                ffn_norm: QRmsNorm::new_dtype(ffn_norm, rms_norm_eps, dtype)?,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim,
@@ -731,7 +732,15 @@ impl ModelWeights {
         if self.pp.is_some() {
             return pp_head_forward(self, x, start_offsets, context_lens);
         }
-        let mut layer_in = self.tok_embeddings.as_ref().unwrap().forward(x)?;
+        // Run the residual in the model compute dtype (not the F32 the embedding dequantizes to) so
+        // the norm/matmul/attention chain stays single-dtype, dropping the F32<->half casts around
+        // attention and matching the norm weights (held in self.dtype).
+        let mut layer_in = self
+            .tok_embeddings
+            .as_ref()
+            .unwrap()
+            .forward(x)?
+            .to_dtype(self.dtype)?;
         // Build the RoPE positions tensor once per step on the model device from the
         // host `start_offsets` (one position per sequence). The decode path
         // (seq_len == 1) reads these from device memory instead of baking the offset
