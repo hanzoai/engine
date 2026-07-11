@@ -125,6 +125,123 @@ mod tests {
         std::fs::write(path, out).unwrap();
     }
 
+    fn load_ace_pipeline(fx: &str, device: &Device) -> AceStepPipeline {
+        use crate::diffusion_models::ace_step::text_encoder::Umt5TextEncoder;
+        use crate::diffusion_models::ace_step::transformer::AceStepTransformer;
+        let fx = fx.to_string();
+        let dev = device.clone();
+        let load = move |p: String, keep: Arc<dyn Fn(&str) -> bool + Send + Sync>| {
+            from_mmaped_safetensors(
+                vec![PathBuf::from(p)],
+                Vec::new(),
+                Some(DType::F32),
+                &dev,
+                vec![None],
+                true,
+                None,
+                move |n: String| keep(&n),
+                Arc::new(|_| DeviceForLoadTensor::Base),
+            )
+            .unwrap()
+        };
+        let all: Arc<dyn Fn(&str) -> bool + Send + Sync> = Arc::new(|_| true);
+        let dec: Arc<dyn Fn(&str) -> bool + Send + Sync> = Arc::new(|n| n.starts_with("decoder."));
+        let dit_keep: Arc<dyn Fn(&str) -> bool + Send + Sync> = Arc::new(|n| {
+            !n.contains(".add_")
+                && !n.contains(".to_add_out")
+                && !n.starts_with("lyric")
+                && !n.starts_with("projectors")
+        });
+
+        let mut cfg: Config =
+            serde_json::from_str(&std::fs::read_to_string(format!("{fx}/umt5_config.json")).unwrap())
+                .unwrap();
+        cfg.umt5 = true;
+        let text_encoder =
+            Umt5TextEncoder::new(&cfg, load(format!("{fx}/umt5.safetensors"), all.clone()), device)
+                .unwrap();
+        let transformer =
+            AceStepTransformer::new(load(format!("{fx}/dit.safetensors"), dit_keep)).unwrap();
+        let dcae = MusicDcae::new(
+            load(format!("{fx}/dcae.safetensors"), dec),
+            load(format!("{fx}/vocoder.safetensors"), all),
+        )
+        .unwrap();
+        AceStepPipeline::new(text_encoder, transformer, dcae, device.clone())
+    }
+
+    fn env_usize(k: &str, d: usize) -> usize {
+        std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+    }
+
+    #[test]
+    fn ace_step_bench() {
+        if std::env::var("ACE_BENCH").is_err() {
+            eprintln!("ACE_BENCH unset; skipping bench");
+            return;
+        }
+        let fx = std::env::var("ACE_FIX_DIR")
+            .unwrap_or_else(|_| "/home/z/work/hanzo/ace-fixtures".to_string());
+        for f in [
+            "umt5.safetensors",
+            "dit.safetensors",
+            "dcae.safetensors",
+            "vocoder.safetensors",
+            "umt5_ids.i64",
+            "umt5_config.json",
+        ] {
+            if !PathBuf::from(format!("{fx}/{f}")).is_file() {
+                eprintln!("ACE-Step bench fixtures absent; skipping");
+                return;
+            }
+        }
+        let seed = 1234u64;
+        let device = Device::cuda_if_available(0).unwrap();
+        println!("ace bench device = {device:?}");
+        let mut pipe = load_ace_pipeline(&fx, &device);
+
+        let frames: usize = env_usize("ACE_BENCH_FRAMES", 107);
+        let steps: usize = env_usize("ACE_BENCH_STEPS", 27);
+        let guidance = 15.0;
+
+        let ids: Vec<u32> = read_i64_le(&format!("{fx}/umt5_ids.i64"))
+            .iter()
+            .map(|&v| v as u32)
+            .collect();
+        let n = ids.len();
+        let input_ids = Tensor::from_vec(ids, (1, n), &device).unwrap();
+
+        if !device.is_cpu() {
+            device.set_seed(seed).unwrap();
+        }
+        let _ = pipe.generate(&input_ids, frames, steps, guidance).unwrap(); // warmup
+
+        if !device.is_cpu() {
+            device.set_seed(seed).unwrap();
+        }
+        let t0 = std::time::Instant::now();
+        let wav = pipe.generate(&input_ids, frames, steps, guidance).unwrap();
+        let flat: Vec<f32> = wav.flatten_all().unwrap().to_vec1().unwrap();
+        let wall = t0.elapsed().as_secs_f64();
+
+        let (_, _, samples) = wav.dims3().unwrap();
+        let audio_s = samples as f64 / 44100.0;
+        let rms = (flat.iter().map(|x| (*x as f64).powi(2)).sum::<f64>() / flat.len() as f64).sqrt();
+        assert!(flat.iter().all(|x| x.is_finite()), "waveform has NaN/inf");
+        assert!(rms > 1e-5, "waveform is silent");
+        println!(
+            "ace bench frames={frames} steps={steps} wall={wall:.3}s audio={audio_s:.3}s \
+             realtime={:.4}x per_step={:.1}ms rms={rms:.5}",
+            audio_s / wall,
+            wall * 1000.0 / steps as f64
+        );
+        if let Ok(out) = std::env::var("ACE_BENCH_OUT") {
+            let bytes: Vec<u8> = flat.iter().flat_map(|x| x.to_le_bytes()).collect();
+            std::fs::write(&out, bytes).unwrap();
+            println!("wrote {out} ({} samples)", flat.len());
+        }
+    }
+
     // Full prompt->music path (short clip) with the real weights: non-NaN + saved .wav artifact.
     #[test]
     fn ace_step_generate_e2e() {
