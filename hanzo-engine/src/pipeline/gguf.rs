@@ -172,6 +172,70 @@ struct CudaDecodeGraphEntry {
 struct CudaPrefillGraphState {
     entries: Vec<CudaPrefillGraphEntry>,
     disabled: bool,
+    // Shapes whose captured graph did not replay bit-exactly against the eager warmup: those buckets
+    // stay eager forever (fail-closed) so the default-on path only ever serves verified-exact graphs.
+    denied: Vec<CudaDecodeGraphKey>,
+}
+
+// Bitwise eager-vs-replay comparison of the prefill logits, computed once per captured shape. A
+// graph is only trusted (cached for replay) when `bit_exact`; otherwise the bucket is denied and
+// falls back to the always-correct eager prefill.
+#[cfg(feature = "cuda")]
+struct PrefillGraphDivergence {
+    bit_exact: bool,
+    max_abs_diff: f32,
+    mismatched: usize,
+    total: usize,
+    argmax_eager: u32,
+    argmax_replay: u32,
+}
+
+#[cfg(feature = "cuda")]
+fn prefill_graph_divergence(
+    eager: &Tensor,
+    replay: &Tensor,
+) -> Result<PrefillGraphDivergence, hanzo_ml::Error> {
+    let eager = eager
+        .to_dtype(hanzo_ml::DType::F32)?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+    let replay = replay
+        .to_dtype(hanzo_ml::DType::F32)?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+    if eager.len() != replay.len() {
+        hanzo_ml::bail!(
+            "prefill graph logits length mismatch: eager={} replay={}",
+            eager.len(),
+            replay.len()
+        );
+    }
+    let mut max_abs_diff = 0f32;
+    let mut mismatched = 0usize;
+    let (mut argmax_eager, mut argmax_replay) = (0u32, 0u32);
+    let (mut best_eager, mut best_replay) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for (i, (&e, &r)) in eager.iter().zip(replay.iter()).enumerate() {
+        if e.to_bits() != r.to_bits() {
+            mismatched += 1;
+            max_abs_diff = max_abs_diff.max((e - r).abs());
+        }
+        if e > best_eager {
+            best_eager = e;
+            argmax_eager = i as u32;
+        }
+        if r > best_replay {
+            best_replay = r;
+            argmax_replay = i as u32;
+        }
+    }
+    Ok(PrefillGraphDivergence {
+        bit_exact: mismatched == 0,
+        max_abs_diff,
+        mismatched,
+        total: eager.len(),
+        argmax_eager,
+        argmax_replay,
+    })
 }
 
 // A captured dense prefill: one cuGraphLaunch replaces the ~1.5k eager kernel launches whose
@@ -1309,7 +1373,7 @@ impl GGUFPipeline {
             .cuda_prefill_graph
             .lock()
             .expect("CUDA prefill graph mutex poisoned");
-        if state.disabled {
+        if state.disabled || state.denied.iter().any(|denied| *denied == key) {
             return Ok(None);
         }
 
@@ -1342,7 +1406,7 @@ impl GGUFPipeline {
         input_ids.device().synchronize()?;
 
         match self.capture_cuda_prefill_graph(
-            key,
+            key.clone(),
             input_ids,
             seqlen_offsets,
             context_lens,
@@ -1352,10 +1416,33 @@ impl GGUFPipeline {
             block_size,
         ) {
             Ok(entry) => {
-                if state.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
-                    state.entries.remove(0);
+                // Verify the captured graph reproduces the eager warmup logits bit-for-bit before
+                // ever serving a replay: launch it once against the same (unchanged) input buffers
+                // and compare. A shape that is not bit-exact is denied and stays eager, so default-on
+                // only serves verified-exact graphs. This one extra launch amortizes over all replays.
+                match self.verify_prefill_graph(&entry, &warmup_logits) {
+                    Ok(div) if div.bit_exact => {
+                        info!(
+                            "CUDA prefill graph verified bit-exact for [1,{q_len}] ({} logits, argmax {})",
+                            div.total, div.argmax_eager
+                        );
+                        if state.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
+                            state.entries.remove(0);
+                        }
+                        state.entries.push(entry);
+                    }
+                    Ok(div) => {
+                        warn!(
+                            "CUDA prefill graph NOT bit-exact for [1,{q_len}]: {}/{} logits differ, max|Δ|={:.3e}, argmax eager={} replay={}; denying bucket (eager fallback)",
+                            div.mismatched, div.total, div.max_abs_diff, div.argmax_eager, div.argmax_replay
+                        );
+                        state.denied.push(key);
+                    }
+                    Err(err) => {
+                        warn!("CUDA prefill graph verification failed for [1,{q_len}]; denying bucket: {err}");
+                        state.denied.push(key);
+                    }
                 }
-                state.entries.push(entry);
             }
             Err(err) => {
                 if !state.disabled {
@@ -1366,6 +1453,19 @@ impl GGUFPipeline {
             }
         }
         Ok(Some(warmup_logits))
+    }
+
+    /// Launches a freshly-captured prefill graph once (inputs unchanged from the warmup) and returns
+    /// the bitwise eager-vs-replay logits comparison. A synchronize bounds the replay so the readback
+    /// sees the completed graph.
+    fn verify_prefill_graph(
+        &self,
+        entry: &CudaPrefillGraphEntry,
+        warmup_logits: &Tensor,
+    ) -> Result<PrefillGraphDivergence, hanzo_ml::Error> {
+        entry.graph.launch()?;
+        warmup_logits.device().synchronize()?;
+        prefill_graph_divergence(warmup_logits, &entry.logits)
     }
 
     /// Captures the dense prefill forward into a CUDA graph against stable input-id and metadata
