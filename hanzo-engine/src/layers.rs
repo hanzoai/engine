@@ -4066,6 +4066,8 @@ pub struct Mlp {
     pub down: Arc<dyn QuantMethod>,
     merged_gate_up: Option<crate::ops::MergedDenseProjection>,
     act: Activation,
+    /// SwiGLU clamp limit (DeepSeek-V4); `None` = plain gated activation.
+    swiglu_limit: Option<f32>,
     params: Vec<usize>,
 }
 
@@ -4109,6 +4111,7 @@ impl Mlp {
             )?,
             merged_gate_up,
             act: hidden_act,
+            swiglu_limit: None,
             params: vec![hidden_size, intermediate_size],
         })
     }
@@ -4150,8 +4153,16 @@ impl Mlp {
             )?,
             merged_gate_up,
             act: hidden_act,
+            swiglu_limit: None,
             params: vec![hidden_size, intermediate_size],
         })
+    }
+
+    /// Set the SwiGLU clamp limit (DeepSeek-V4). `None` leaves the plain gated activation.
+    #[must_use]
+    pub fn with_swiglu_limit(mut self, swiglu_limit: Option<f32>) -> Self {
+        self.swiglu_limit = swiglu_limit;
+        self
     }
 
     pub fn replicate(
@@ -4168,10 +4179,18 @@ impl Mlp {
             let mut gate_up = merged_gate_up.forward(xs)?.into_iter();
             let gate = gate_up.next().unwrap();
             let up = gate_up.next().unwrap();
+            let (gate, up) = crate::ops::swiglu_clamp(&gate, &up, self.swiglu_limit)?;
             let inter = crate::ops::mul_and_act(&gate, &up, self.act)?;
             self.down.forward(&inter)?
         } else {
-            crate::ops::quantized_ffn(xs, &*self.gate, &*self.up, &*self.down, self.act)?
+            crate::ops::quantized_ffn(
+                xs,
+                &*self.gate,
+                &*self.up,
+                &*self.down,
+                self.act,
+                self.swiglu_limit,
+            )?
         };
         Ok(res)
     }
@@ -4222,6 +4241,7 @@ impl MlpLayer for Mlp {
             down,
             merged_gate_up,
             act: self.act,
+            swiglu_limit: self.swiglu_limit,
             params: self.params.clone(),
         }))
     }

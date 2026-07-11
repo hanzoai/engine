@@ -230,8 +230,6 @@ pub(crate) struct V4Moe {
     pub(crate) shared_down: Arc<dyn QuantMethod>,
     pub(crate) topk: usize,
     pub(crate) route_scale: f64,
-    #[allow(dead_code)]
-    pub(crate) norm_topk: bool,
     pub(crate) swiglu_clamp: f32,
 }
 
@@ -266,7 +264,8 @@ impl V4Moe {
                 (indices, w)
             }
         };
-        // Renormalize (sqrtsoftplus is not a simplex) and scale.
+        // V4 always L1-normalizes selected weights (DeepseekV4TopKRouter/HashRouter, unconditional in
+        // modeling_deepseek_v4.py); sqrtsoftplus scores are not a simplex. Then scale.
         let weights = weights.broadcast_div(&weights.sum_keepdim(D::Minus1)?)?;
         let weights = (weights * self.route_scale)?;
         Ok((indices.to_dtype(DType::U32)?, weights))
@@ -280,12 +279,8 @@ impl V4Moe {
     }
 
     fn swiglu(&self, gate: &Tensor, up: &Tensor) -> Result<Tensor> {
-        let (gate, up) = if self.swiglu_clamp > 0.0 {
-            let c = self.swiglu_clamp as f64;
-            (gate.clamp(f64::NEG_INFINITY, c)?, up.clamp(-c, c)?)
-        } else {
-            (gate.clone(), up.clone())
-        };
+        let limit = (self.swiglu_clamp > 0.0).then_some(self.swiglu_clamp);
+        let (gate, up) = crate::ops::swiglu_clamp(gate, up, limit)?;
         crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)
     }
 
@@ -1052,7 +1047,6 @@ impl DecoderLayer {
             shared_down: gguf_linear(ct.tensor(&format!("{p}.ffn_down_shexp.weight"), dev)?)?,
             topk: props.num_experts_per_tok,
             route_scale: props.expert_weights_scale,
-            norm_topk: props.norm_topk_prob,
             swiglu_clamp,
         };
         let hc_attn = HyperConnections::from_parts(
