@@ -408,6 +408,7 @@ impl FusedExpertsWeights {
             .narrow(D::Minus1, self.w.w_size_n, self.w.w_size_n)?
             .contiguous()?;
 
+        let (gate, up) = crate::ops::swiglu_clamp(&gate, &up, config.swiglu_limit)?;
         let down_inputs = (up * gate.apply(&config.act)?)?.reshape(((), self.w.w_size_n))?;
 
         let ys = moe::moe_gemm(
@@ -568,6 +569,7 @@ impl FastExpertsWeights {
                     .reshape((forward.shape.num_tokens, 1, forward.shape.hidden_dim))?;
             let gate = self.fused_gate_proj.gather_forward(&xs, forward.topk_ids)?;
             let up = self.fused_up_proj.gather_forward(&xs, forward.topk_ids)?;
+            let (gate, up) = crate::ops::swiglu_clamp(&gate, &up, config.swiglu_limit)?;
             self.fused_down_proj
                 .gather_forward(&(up * gate.apply(&config.act)?)?, forward.topk_ids)?
         } else {
@@ -585,6 +587,7 @@ impl FastExpertsWeights {
             ))?;
             let gate = self.fused_gate_proj.gather_forward(&xs, &indices)?;
             let up = self.fused_up_proj.gather_forward(&xs, &indices)?;
+            let (gate, up) = crate::ops::swiglu_clamp(&gate, &up, config.swiglu_limit)?;
             let xs = self
                 .fused_down_proj
                 .gather_forward(&(up * gate.apply(&config.act)?)?, &indices)?;
@@ -609,6 +612,12 @@ impl FastExpertsWeights {
         config: MoEForwardConfig,
     ) -> Result<Option<Tensor>> {
         use hanzo_ml::cuda::cudarc::driver::DevicePtr;
+
+        // The fused decode kernel applies the activation in-kernel and can't clamp gate/up; defer to
+        // the split gather path when a SwiGLU limit is set.
+        if config.swiglu_limit.is_some() {
+            return Ok(None);
+        }
 
         let dev = forward.xs_flat.device().as_cuda_device()?;
 
@@ -686,6 +695,12 @@ impl FastExpertsWeights {
         forward: &MoEForward,
         config: MoEForwardConfig,
     ) -> Result<Option<Tensor>> {
+        // The grouped GLU kernel applies the activation in-kernel and can't clamp gate/up; defer to
+        // the split gather path when a SwiGLU limit is set.
+        if config.swiglu_limit.is_some() {
+            return Ok(None);
+        }
+
         let topk = config.num_experts_per_tok;
         let num_experts = config.num_experts;
         let total_assignments = forward.shape.num_tokens * topk;
@@ -929,12 +944,11 @@ impl SlowExpertsWeights {
 
             // Forward through expert MLP
             let expert_input = current_state.clone();
-            let gate_out = self.experts.gate_proj[expert_idx]
-                .forward(&expert_input)?
-                .apply(&config.act)?;
-            let up_out = self.experts.up_proj[expert_idx].forward(&expert_input)?;
+            let gate = self.experts.gate_proj[expert_idx].forward(&expert_input)?;
+            let up = self.experts.up_proj[expert_idx].forward(&expert_input)?;
+            let (gate, up) = crate::ops::swiglu_clamp(&gate, &up, config.swiglu_limit)?;
             let current_hidden_states =
-                self.experts.down_proj[expert_idx].forward(&(gate_out * up_out)?)?;
+                self.experts.down_proj[expert_idx].forward(&(gate.apply(&config.act)? * up)?)?;
 
             let current_hidden_states =
                 current_hidden_states.broadcast_mul(&selected_experts_tensor)?;

@@ -232,27 +232,6 @@ pub struct MoeRouterTopKConfig {
     pub logit_clip: Option<(f32, f32)>,
 }
 
-/// Process-wide PROOF-DETERMINISTIC mode for MoE expert routing. When ON, `moe_router_topk`
-/// takes a single canonical, backend-independent path (F32 CPU scores + a canonical tie-break),
-/// so a prover and a re-executing verifier on DIFFERENT hardware select the IDENTICAL experts.
-/// OFF by default — normal inference keeps the fast (CUDA/candle) path unchanged. Routing
-/// determinism is a Proof-of-AI prerequisite: a different expert is a different sub-network, so a
-/// non-canonical tie-break (or a CPU-F32 vs CUDA-bf16 disagreement) would diverge the output and
-/// false-reject an honest run.
-static MOE_PROOF_DETERMINISTIC: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// Enable/disable proof-deterministic MoE routing process-wide (set ON for proof-bearing runs).
-#[allow(dead_code)]
-pub fn set_moe_proof_deterministic(on: bool) {
-    MOE_PROOF_DETERMINISTIC.store(on, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// Whether proof-deterministic MoE routing is currently enabled.
-pub fn moe_proof_deterministic() -> bool {
-    MOE_PROOF_DETERMINISTIC.load(std::sync::atomic::Ordering::Relaxed)
-}
-
 /// Deterministic top-k expert selection with a CANONICAL, backend-independent tie-break: order
 /// each row by (score DESC, expert-index ASC) using f32 total ordering (NaN-safe), take the first
 /// `k`. Unlike candle's `.topk()` (whose tie-break is unspecified) and the separate CUDA bf16/f16
@@ -277,8 +256,11 @@ pub fn moe_router_topk(
     selection_bias: Option<&Tensor>,
     expert_scale: Option<&Tensor>,
 ) -> Result<TopKOutput> {
-    let proof = moe_proof_deterministic();
-    // Proof mode forces the single canonical CPU path so prover and verifier never disagree.
+    // While a poi proof transcript is being emitted (inside `poi_forward::prove`), routing takes the
+    // single canonical CPU path so a prover and a re-executing verifier on different hardware select
+    // the IDENTICAL experts (a different expert is a different sub-network). Off during normal
+    // inference: `proving()` is false, so the fast CUDA/candle path is byte-for-byte unchanged.
+    let proof = crate::poi_forward::proving();
     #[cfg(feature = "cuda")]
     if !proof {
         if let Some(topk) =
@@ -3500,6 +3482,22 @@ pub fn mul_and_act(a: &Tensor, b: &Tensor, act: Activation) -> Result<Tensor> {
     a.apply(&act)? * b
 }
 
+/// Clamp SwiGLU gate/up before the gated activation: `gate.clamp(max=limit)`,
+/// `up.clamp(-limit, limit)` (DeepSeek-V4 `DeepseekV4MLP`/`Experts`, gpt-oss). `None` returns the
+/// inputs unchanged (cheap ref-clone) so the no-limit path stays byte-identical.
+pub fn swiglu_clamp(gate: &Tensor, up: &Tensor, limit: Option<f32>) -> Result<(Tensor, Tensor)> {
+    match limit {
+        None => Ok((gate.clone(), up.clone())),
+        Some(limit) => {
+            let limit = f64::from(limit);
+            Ok((
+                gate.clamp(f64::NEG_INFINITY, limit)?,
+                up.clamp(-limit, limit)?,
+            ))
+        }
+    }
+}
+
 pub fn mul_and_nn_act(a: &Tensor, b: &Tensor, act: hanzo_nn::Activation) -> Result<Tensor> {
     // Check if we can use the fused kernel (works on CUDA, Metal, and CPU)
     if matches!(a.dtype(), DType::F16 | DType::BF16 | DType::F32) && a.dtype() == b.dtype() {
@@ -3613,25 +3611,35 @@ pub(crate) fn quantized_ffn(
     up: &dyn hanzo_quant::QuantMethod,
     down: &dyn hanzo_quant::QuantMethod,
     act: Activation,
+    swiglu_limit: Option<f32>,
 ) -> Result<Tensor> {
+    // The fused gate-up kernels don't materialize gate/up, so they can't apply the SwiGLU clamp;
+    // fall through to the split path when a limit is set (`None` keeps the fast path unchanged).
     #[cfg(feature = "cuda")]
-    if let Some(activation_type) = glu_activation_type(act) {
-        if let Some(inter) =
-            hanzo_quant::try_fused_quantized_gate_up(xs, gate, up, activation_type)?
-        {
-            return down.forward(&inter);
+    if swiglu_limit.is_none() {
+        if let Some(activation_type) = glu_activation_type(act) {
+            if let Some(inter) =
+                hanzo_quant::try_fused_quantized_gate_up(xs, gate, up, activation_type)?
+            {
+                return down.forward(&inter);
+            }
         }
     }
 
     #[cfg(feature = "metal")]
-    if let Some(activation_type) = glu_activation_type(act) {
-        if let Some(inter) = hanzo_quant::try_fused_gate_up_metal(xs, gate, up, activation_type)? {
-            return down.forward(&inter);
+    if swiglu_limit.is_none() {
+        if let Some(activation_type) = glu_activation_type(act) {
+            if let Some(inter) =
+                hanzo_quant::try_fused_gate_up_metal(xs, gate, up, activation_type)?
+            {
+                return down.forward(&inter);
+            }
         }
     }
 
     let lhs = gate.forward(xs)?;
     let rhs = up.forward(xs)?;
+    let (lhs, rhs) = swiglu_clamp(&lhs, &rhs, swiglu_limit)?;
     let inter = mul_and_act(&lhs, &rhs, act)?;
     down.forward(&inter)
 }
@@ -3691,6 +3699,68 @@ mod tests {
             idx.to_vec2::<u32>().unwrap(),
             idx2.to_vec2::<u32>().unwrap()
         );
+    }
+
+    #[test]
+    fn moe_router_topk_canonical_only_inside_proof_context() {
+        // Wiring: proof-deterministic routing must engage IFF a poi transcript is being emitted
+        // (`poi_forward::prove`). Inside prove(), tied scores select the canonical lowest indices so
+        // prover and verifier agree; outside, proving() is false and the flag is never forced on.
+        use super::{moe_router_topk, MoeRouterScoreFunction, MoeRouterSelectedWeight};
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::Cpu;
+        // Row 0: experts 1,3 tie highest -> canonical top-2 = [1,3]. Row 1: all tie -> lowest two [0,1].
+        let logits = Tensor::from_vec(
+            vec![1.0f32, 5.0, 2.0, 5.0, 4.0, 7.0, 7.0, 7.0, 7.0, 7.0],
+            (2, 5),
+            &device,
+        )
+        .unwrap();
+        let config = super::MoeRouterTopKConfig {
+            top_k: 2,
+            score_function: MoeRouterScoreFunction::Raw,
+            selected_weight: MoeRouterSelectedWeight::Score,
+            renormalize: false,
+            norm_min: 0.0,
+            output_scale: 1.0,
+            logit_clip: None,
+        };
+
+        assert!(
+            !crate::poi_forward::proving(),
+            "no proof context by default"
+        );
+        let (out, _transcript) = crate::poi_forward::prove(|| {
+            assert!(
+                crate::poi_forward::proving(),
+                "prove() installs the context"
+            );
+            moe_router_topk(&logits, config, None, None).unwrap()
+        });
+        assert_eq!(
+            out.indices.to_vec2::<u32>().unwrap(),
+            vec![vec![1u32, 3], vec![0u32, 1]],
+            "proof context forces the canonical, backend-independent tie-break"
+        );
+    }
+
+    #[test]
+    fn swiglu_clamp_matches_reference_and_is_noop_when_none() {
+        use super::swiglu_clamp;
+        use hanzo_ml::Tensor;
+        let device = hanzo_ml::Device::Cpu;
+        let gate = Tensor::from_vec(vec![10.0f32, -10.0, 0.5], (1, 3), &device).unwrap();
+        let up = Tensor::from_vec(vec![10.0f32, -10.0, 0.5], (1, 3), &device).unwrap();
+
+        // None: exact passthrough.
+        let (g0, u0) = swiglu_clamp(&gate, &up, None).unwrap();
+        assert_eq!(g0.to_vec2::<f32>().unwrap(), gate.to_vec2::<f32>().unwrap());
+        assert_eq!(u0.to_vec2::<f32>().unwrap(), up.to_vec2::<f32>().unwrap());
+
+        // Some(1.0): DeepSeek-V4 clamp -> gate.clamp(max=1), up.clamp(-1, 1).
+        let (g1, u1) = swiglu_clamp(&gate, &up, Some(1.0)).unwrap();
+        assert_eq!(g1.to_vec2::<f32>().unwrap(), vec![vec![1.0f32, -10.0, 0.5]]);
+        assert_eq!(u1.to_vec2::<f32>().unwrap(), vec![vec![1.0f32, -1.0, 0.5]]);
     }
 
     #[test]
