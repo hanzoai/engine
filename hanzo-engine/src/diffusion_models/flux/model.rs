@@ -116,23 +116,24 @@ fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> 
     x.transpose(1, 2)?.flatten_from(2)
 }
 
-fn timestep_embedding(t: &Tensor, dim: usize, dtype: DType) -> Result<Tensor> {
-    const TIME_FACTOR: f64 = 1000.;
-    const MAX_PERIOD: f64 = 10000.;
-    if dim % 2 == 1 {
-        hanzo_ml::bail!("{dim} is odd")
-    }
-    let dev = t.device();
+const TIME_EMB_DIM: usize = 256;
+const TIME_FACTOR: f64 = 1000.;
+const TIME_MAX_PERIOD: f64 = 10000.;
+
+// exp(-ln(max_period) * arange(half)/half); constant across the sampler loop.
+fn timestep_freqs(dim: usize, dev: &Device) -> Result<Tensor> {
     let half = dim / 2;
+    let arange = Tensor::arange(0, half as u32, dev)?.to_dtype(DType::F32)?;
+    (arange * (-TIME_MAX_PERIOD.ln() / half as f64))?.exp()
+}
+
+fn timestep_embedding(t: &Tensor, freqs: &Tensor, dtype: DType) -> Result<Tensor> {
     let t = (t * TIME_FACTOR)?;
-    let arange = Tensor::arange(0, half as u32, dev)?.to_dtype(hanzo_ml::DType::F32)?;
-    let freqs = (arange * (-MAX_PERIOD.ln() / half as f64))?.exp()?;
     let args = t
         .unsqueeze(1)?
-        .to_dtype(hanzo_ml::DType::F32)?
+        .to_dtype(DType::F32)?
         .broadcast_mul(&freqs.unsqueeze(0)?)?;
-    let emb = Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)?.to_dtype(dtype)?;
-    Ok(emb)
+    Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)?.to_dtype(dtype)
 }
 
 #[derive(Debug, Clone)]
@@ -727,15 +728,25 @@ impl Flux {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Sampler-loop constants for fixed img/txt positions: the rope table (from constant ids)
+    /// and the timestep freq basis. Hoisted so the per-step forward makes no host<->device
+    /// transfers for positions/frequencies.
+    pub fn denoise_consts(&self, img_ids: &Tensor, txt_ids: &Tensor) -> Result<DenoiseConsts> {
+        let ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
+        Ok(DenoiseConsts {
+            pe: ids.apply(&self.pe_embedder)?,
+            time_freqs: timestep_freqs(TIME_EMB_DIM, img_ids.device())?,
+        })
+    }
+
     pub fn forward(
         &mut self,
         img: &Tensor,
-        img_ids: &Tensor,
         txt: &Tensor,
-        txt_ids: &Tensor,
         timesteps: &Tensor,
         y: &Tensor,
         guidance: Option<&Tensor>,
+        consts: &DenoiseConsts,
     ) -> Result<Tensor> {
         if txt.rank() != 3 {
             hanzo_ml::bail!("unexpected shape for txt {:?}", txt.shape())
@@ -744,16 +755,13 @@ impl Flux {
             hanzo_ml::bail!("unexpected shape for img {:?}", img.shape())
         }
         let dtype = img.dtype();
-        let pe = {
-            let ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
-            ids.apply(&self.pe_embedder)?
-        };
+        let pe = &consts.pe;
         let mut txt = txt.apply(&self.txt_in)?;
         let mut img = img.apply(&self.img_in)?;
-        let vec_ = timestep_embedding(timesteps, 256, dtype)?.apply(&self.time_in)?;
+        let vec_ = timestep_embedding(timesteps, &consts.time_freqs, dtype)?.apply(&self.time_in)?;
         let vec_ = match (self.guidance_in.as_ref(), guidance) {
             (Some(g_in), Some(guidance)) => {
-                (vec_ + timestep_embedding(guidance, 256, dtype)?.apply(g_in))?
+                (vec_ + timestep_embedding(guidance, &consts.time_freqs, dtype)?.apply(g_in))?
             }
             _ => vec_,
         };
@@ -764,7 +772,7 @@ impl Flux {
             if self.offloaded {
                 block.cast_to(&self.device)?;
             }
-            (img, txt) = block.forward(&img, &txt, &vec_, &pe)?;
+            (img, txt) = block.forward(&img, &txt, &vec_, pe)?;
             if self.offloaded {
                 block.cast_to(&Device::Cpu)?;
             }
@@ -775,7 +783,7 @@ impl Flux {
             if self.offloaded {
                 block.cast_to(&self.device)?;
             }
-            img = block.forward(&img, &vec_, &pe)?;
+            img = block.forward(&img, &vec_, pe)?;
             if self.offloaded {
                 block.cast_to(&Device::Cpu)?;
             }
@@ -783,4 +791,9 @@ impl Flux {
         let img = img.i((.., txt.dim(1)?..))?;
         self.final_layer.forward(&img, &vec_)
     }
+}
+
+pub struct DenoiseConsts {
+    pe: Tensor,
+    time_freqs: Tensor,
 }

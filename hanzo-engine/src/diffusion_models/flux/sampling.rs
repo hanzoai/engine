@@ -111,14 +111,19 @@ fn denoise_inner(
     } else {
         None
     };
+    // Rope table + timestep basis are fixed for the whole loop; the schedule lives on-device and
+    // each step reads t_curr via a metadata-only narrow (no per-step host<->device transfer).
+    let consts = model.denoise_consts(img_ids, txt_ids)?;
+    let sched: Vec<f32> = timesteps.iter().map(|&t| t as f32).collect();
+    let sched = Tensor::from_vec(sched, (timesteps.len(),), dev)?;
     let mut img = img.clone();
-    for window in timesteps.windows(2) {
+    for (i, window) in timesteps.windows(2).enumerate() {
         let (t_curr, t_prev) = match window {
             [a, b] => (a, b),
             _ => continue,
         };
-        let t_vec = Tensor::full(*t_curr as f32, b_sz, dev)?;
-        let pred = model.forward(&img, img_ids, txt, txt_ids, &t_vec, vec_, guidance.as_ref())?;
+        let t_vec = sched.narrow(0, i, 1)?.broadcast_as((b_sz,))?;
+        let pred = model.forward(&img, txt, &t_vec, vec_, guidance.as_ref(), &consts)?;
         img = (img + pred * (t_prev - t_curr))?
     }
     Ok(img)
