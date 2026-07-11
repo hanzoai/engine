@@ -25,17 +25,32 @@ const GN_EPS: f64 = 1e-6;
 const LITELA_EPS: f64 = 1e-15;
 const TIME_MAX_PERIOD: f64 = 10_000.0;
 
-// diffusers Timesteps(256, flip_sin_to_cos=True, downscale_freq_shift=0): [B] -> [B, 256].
-fn timestep_embedding(t: &Tensor) -> Result<Tensor> {
+// diffusers Timesteps(256, flip_sin_to_cos=True, downscale_freq_shift=0) freq basis [1, 128].
+// Constant across the whole sample loop; build once (from_vec is a htod sync, keep it off the hot path).
+fn timestep_freqs(device: &Device) -> Result<Tensor> {
     let half = TIME_PROJ_DIM / 2;
-    let dev = t.device();
     let exps: Vec<f32> = (0..half)
         .map(|i| (-(TIME_MAX_PERIOD.ln()) * i as f64 / half as f64).exp() as f32)
         .collect();
-    let freqs = Tensor::from_vec(exps, (1, half), dev)?; // [1, 128]
+    Tensor::from_vec(exps, (1, half), device)
+}
+
+// [B] timestep -> [B, 256] using the precomputed freq basis.
+fn timestep_embedding(t: &Tensor, freqs: &Tensor) -> Result<Tensor> {
     let t = t.to_dtype(DType::F32)?.reshape((t.dim(0)?, 1))?; // [B, 1]
-    let args = t.broadcast_mul(&freqs)?; // [B, 128]
+    let args = t.broadcast_mul(freqs)?; // [B, 128]
     Tensor::cat(&[&args.cos()?, &args.sin()?], D::Minus1) // [B, 256]
+}
+
+// Per-generation constants: rope tables (latent + text), timestep freq basis, LiteLA normaliser row.
+// Every DiT forward in the sampler shares these, so they are built once, not per forward.
+pub struct SampleCtx {
+    cos_l: Tensor,
+    sin_l: Tensor,
+    cos_e: Tensor,
+    sin_e: Tensor,
+    ts_freqs: Tensor,
+    litela_ones: Tensor,
 }
 
 // Qwen2 rotary cos/sin caches, each [seq, HEAD_DIM]; emb = cat(freqs, freqs).
@@ -94,7 +109,8 @@ impl LiteLA {
         })
     }
 
-    fn forward(&self, x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+    fn forward(&self, x: &Tensor, ctx: &SampleCtx) -> Result<Tensor> {
+        let (cos, sin) = (&ctx.cos_l, &ctx.sin_l);
         let (b, s, _) = x.dims3()?;
         let q = self.to_q.forward(x)?;
         let k = self.to_k.forward(x)?;
@@ -120,8 +136,7 @@ impl LiteLA {
         let q = q.permute((0, 1, 3, 2))?.contiguous()?.relu()?; // [B,H,D,S]
         let k = k.relu()?; // [B,H,S,D]
         let v = v.contiguous()?;
-        let ones = Tensor::ones((b, NUM_HEADS, 1, s), DType::F32, x.device())?;
-        let v = Tensor::cat(&[&v, &ones], 2)?; // [B,H,D+1,S]
+        let v = Tensor::cat(&[&v, &ctx.litela_ones], 2)?; // [B,H,D+1,S]
         let vk = v.matmul(&k)?; // [B,H,D+1,D]
         let out = vk.matmul(&q)?; // [B,H,D+1,S]
         let num = out.narrow(2, 0, HEAD_DIM)?;
@@ -155,16 +170,12 @@ impl CrossAttn {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         x: &Tensor,
         ehs: &Tensor,
         add_mask: Option<&Tensor>,
-        cos_l: &Tensor,
-        sin_l: &Tensor,
-        cos_e: &Tensor,
-        sin_e: &Tensor,
+        ctx: &SampleCtx,
     ) -> Result<Tensor> {
         let (b, s, _) = x.dims3()?;
         let se = ehs.dim(1)?;
@@ -186,8 +197,8 @@ impl CrossAttn {
             .reshape((b, se, NUM_HEADS, HEAD_DIM))?
             .transpose(1, 2)?
             .contiguous()?;
-        let q = apply_rope(&q, cos_l, sin_l)?;
-        let k = apply_rope(&k, cos_e, sin_e)?;
+        let q = apply_rope(&q, &ctx.cos_l, &ctx.sin_l)?;
+        let k = apply_rope(&k, &ctx.cos_e, &ctx.sin_e)?;
         let scale = 1.0 / (HEAD_DIM as f64).sqrt();
         let mut scores = (q.matmul(&k.transpose(2, 3)?.contiguous()?)? * scale)?; // [B,H,S,Se]
         if let Some(m) = add_mask {
@@ -200,10 +211,24 @@ impl CrossAttn {
     }
 }
 
+// Depthwise (groups == channels) conv1d, kernel 3 / stride 1 / pad 1, vectorised across channels.
+// candle lowers a grouped conv to one conv per group (here 12800 launches); this is the identical
+// arithmetic expressed as 3 shifted channel-broadcast multiply-adds -> ~10 ops, not ~38k.
+// x [B,C,L], w [1,C,3], b [1,C,1].
+fn depthwise_k3_p1(x: &Tensor, w: &Tensor, b: &Tensor) -> Result<Tensor> {
+    let l = x.dim(2)?;
+    let xp = x.pad_with_zeros(2, 1, 1)?; // [B,C,L+2]
+    let o0 = xp.narrow(2, 0, l)?.broadcast_mul(&w.narrow(2, 0, 1)?)?;
+    let o1 = xp.narrow(2, 1, l)?.broadcast_mul(&w.narrow(2, 1, 1)?)?;
+    let o2 = xp.narrow(2, 2, l)?.broadcast_mul(&w.narrow(2, 2, 1)?)?;
+    ((o0 + o1)? + o2)?.broadcast_add(b)
+}
+
 #[derive(Debug, Clone)]
 struct GlumbFf {
     inverted: Conv1d,
-    depth: Conv1d,
+    depth_w: Tensor, // [1, FF_HIDDEN*2, 3]
+    depth_b: Tensor, // [1, FF_HIDDEN*2, 1]
     point: Conv1d,
 }
 
@@ -216,18 +241,13 @@ impl GlumbFf {
             Default::default(),
             vb.pp("inverted_conv").pp("conv"),
         )?;
-        let depth_cfg = hanzo_nn::Conv1dConfig {
-            padding: 1,
-            groups: FF_HIDDEN * 2,
-            ..Default::default()
-        };
-        let depth = conv1d(
-            FF_HIDDEN * 2,
-            FF_HIDDEN * 2,
-            3,
-            depth_cfg,
-            vb.pp("depth_conv").pp("conv"),
-        )?;
+        let dvb = vb.pp("depth_conv").pp("conv");
+        let depth_w = dvb
+            .get((FF_HIDDEN * 2, 1, 3), "weight")?
+            .reshape((1, FF_HIDDEN * 2, 3))?;
+        let depth_b = dvb
+            .get(FF_HIDDEN * 2, "bias")?
+            .reshape((1, FF_HIDDEN * 2, 1))?;
         let point = conv1d_no_bias(
             FF_HIDDEN,
             INNER_DIM,
@@ -237,7 +257,8 @@ impl GlumbFf {
         )?;
         Ok(Self {
             inverted,
-            depth,
+            depth_w,
+            depth_b,
             point,
         })
     }
@@ -245,7 +266,7 @@ impl GlumbFf {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let x = x.transpose(1, 2)?.contiguous()?; // [B,2560,S]
         let x = self.inverted.forward(&x)?.silu()?; // [B,12800,S]
-        let x = self.depth.forward(&x)?;
+        let x = depthwise_k3_p1(&x, &self.depth_w, &self.depth_b)?;
         let parts = x.chunk(2, 1)?;
         let x = (&parts[0] * parts[1].silu()?)?; // [B,6400,S]
         let x = self.point.forward(&x)?; // [B,2560,S]
@@ -271,16 +292,12 @@ impl Block {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         hidden: &Tensor,
         ehs: &Tensor,
         add_mask: Option<&Tensor>,
-        cos_l: &Tensor,
-        sin_l: &Tensor,
-        cos_e: &Tensor,
-        sin_e: &Tensor,
+        ctx: &SampleCtx,
         temb: &Tensor,
     ) -> Result<Tensor> {
         let b = hidden.dim(0)?;
@@ -291,12 +308,10 @@ impl Block {
         let (shift_mlp, scale_mlp, gate_mlp) = (&m[3], &m[4], &m[5]);
 
         let norm = modulate(&rms_noaffine(hidden)?, shift_msa, scale_msa)?;
-        let attn_out = self.attn.forward(&norm, cos_l, sin_l)?;
+        let attn_out = self.attn.forward(&norm, ctx)?;
         let hidden = (attn_out.broadcast_mul(gate_msa)? + hidden)?;
 
-        let cross = self
-            .cross_attn
-            .forward(&hidden, ehs, add_mask, cos_l, sin_l, cos_e, sin_e)?;
+        let cross = self.cross_attn.forward(&hidden, ehs, add_mask, ctx)?;
         let hidden = (cross + hidden)?;
 
         let norm = modulate(&rms_noaffine(&hidden)?, shift_mlp, scale_mlp)?;
@@ -407,6 +422,21 @@ impl AceStepTransformer {
 
     /// latent (B, 8, 16, T), encoder_hidden_states (B, S_enc, 2560), optional encoder mask
     /// (B, S_enc) with 1 = keep, timestep (B,) on the 0..1000 scale -> velocity (B, 8, 16, T).
+    /// Per-generation constants (rope tables, timestep freq basis, LiteLA normaliser). `seq` is the
+    /// latent time dim, `se` the encoder-context length; both fixed across the whole sampler loop.
+    pub fn sample_ctx(&self, seq: usize, se: usize, device: &Device) -> Result<SampleCtx> {
+        let (cos_l, sin_l) = rope_tables(seq, device)?;
+        let (cos_e, sin_e) = rope_tables(se, device)?;
+        Ok(SampleCtx {
+            cos_l,
+            sin_l,
+            cos_e,
+            sin_e,
+            ts_freqs: timestep_freqs(device)?,
+            litela_ones: Tensor::ones((1, NUM_HEADS, 1, seq), DType::F32, device)?,
+        })
+    }
+
     pub fn decode(
         &self,
         latent: &Tensor,
@@ -414,8 +444,21 @@ impl AceStepTransformer {
         encoder_mask: Option<&Tensor>,
         timestep: &Tensor,
     ) -> Result<Tensor> {
+        let ctx = self.sample_ctx(latent.dim(3)?, ehs.dim(1)?, latent.device())?;
+        self.decode_with_ctx(latent, ehs, encoder_mask, timestep, &ctx)
+    }
+
+    /// Hot-path decode reusing a shared `SampleCtx` so no per-forward htod syncs are issued.
+    pub fn decode_with_ctx(
+        &self,
+        latent: &Tensor,
+        ehs: &Tensor,
+        encoder_mask: Option<&Tensor>,
+        timestep: &Tensor,
+        ctx: &SampleCtx,
+    ) -> Result<Tensor> {
         let embedded_ts = {
-            let e = timestep_embedding(timestep)?;
+            let e = timestep_embedding(timestep, &ctx.ts_freqs)?;
             self.ts_linear2
                 .forward(&self.ts_linear1.forward(&e)?.silu()?)?
         };
@@ -424,9 +467,6 @@ impl AceStepTransformer {
         let hidden = self.proj_in.forward(latent)?; // [B,T,2560]
         let seq = hidden.dim(1)?;
         let se = ehs.dim(1)?;
-        let dev = hidden.device();
-        let (cos_l, sin_l) = rope_tables(seq, dev)?;
-        let (cos_e, sin_e) = rope_tables(se, dev)?;
 
         // Additive cross-attn mask [B,1,1,Se] from a 0/1 keep mask.
         // Additive mask: 0 where keep(1), large-negative where drop(0). (mk-1)*1e30 avoids 0*-inf NaN.
@@ -441,16 +481,7 @@ impl AceStepTransformer {
 
         let mut h = hidden;
         for block in &self.blocks {
-            h = block.forward(
-                &h,
-                ehs,
-                add_mask.as_ref(),
-                &cos_l,
-                &sin_l,
-                &cos_e,
-                &sin_e,
-                &temb,
-            )?;
+            h = block.forward(&h, ehs, add_mask.as_ref(), ctx, &temb)?;
         }
 
         // final layer: adaLN from embedded_timestep, then linear + unpatchify.
