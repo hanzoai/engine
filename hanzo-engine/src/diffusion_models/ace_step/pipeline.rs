@@ -226,4 +226,107 @@ mod tests {
         write_wav16(&out, &stereo, 44100);
         println!("wrote {out}");
     }
+
+    // GB10 end-to-end music-gen real-time factor. Seeded so the same config is bit-reproducible for an
+    // A/B waveform correlation across a rebuild. ACE_BENCH=1 gated; needs a CUDA build + full fixtures.
+    #[test]
+    fn music_generate_cuda_bench() {
+        use std::time::Instant;
+        if std::env::var("ACE_BENCH").is_err() {
+            eprintln!("music_generate_cuda_bench: set ACE_BENCH=1 to run");
+            return;
+        }
+        let fx = std::env::var("ACE_FIX_DIR").unwrap_or_else(|_| "/data/ace-bench-fix".to_string());
+        let need = [
+            "umt5.safetensors",
+            "dit.safetensors",
+            "dcae.safetensors",
+            "vocoder.safetensors",
+            "umt5_ids.i64",
+            "umt5_config.json",
+        ];
+        if need.iter().any(|f| !PathBuf::from(format!("{fx}/{f}")).is_file()) {
+            eprintln!("ACE-Step fixtures absent; skipping generate bench");
+            return;
+        }
+        let device = Device::new_cuda(0).unwrap();
+        let load = |p: String, keep: Arc<dyn Fn(&str) -> bool + Send + Sync>| {
+            from_mmaped_safetensors(
+                vec![PathBuf::from(p)],
+                Vec::new(),
+                Some(DType::F32),
+                &device,
+                vec![None],
+                true,
+                None,
+                move |n: String| keep(&n),
+                Arc::new(|_| DeviceForLoadTensor::Base),
+            )
+            .unwrap()
+        };
+        let all: Arc<dyn Fn(&str) -> bool + Send + Sync> = Arc::new(|_| true);
+        let dec: Arc<dyn Fn(&str) -> bool + Send + Sync> = Arc::new(|n| n.starts_with("decoder."));
+        let dit_keep: Arc<dyn Fn(&str) -> bool + Send + Sync> = Arc::new(|n| {
+            !n.contains(".add_")
+                && !n.contains(".to_add_out")
+                && !n.starts_with("lyric")
+                && !n.starts_with("projectors")
+        });
+        let mut cfg: Config = serde_json::from_str(
+            &std::fs::read_to_string(format!("{fx}/umt5_config.json")).unwrap(),
+        )
+        .unwrap();
+        cfg.umt5 = true;
+        let text_encoder =
+            Umt5TextEncoder::new(&cfg, load(format!("{fx}/umt5.safetensors"), all.clone()), &device)
+                .unwrap();
+        let transformer =
+            AceStepTransformer::new(load(format!("{fx}/dit.safetensors"), dit_keep)).unwrap();
+        let dcae = MusicDcae::new(
+            load(format!("{fx}/dcae.safetensors"), dec),
+            load(format!("{fx}/vocoder.safetensors"), all),
+        )
+        .unwrap();
+        let mut pipe = AceStepPipeline::new(text_encoder, transformer, dcae, device.clone());
+
+        let ids: Vec<u32> = read_i64_le(&format!("{fx}/umt5_ids.i64"))
+            .iter()
+            .map(|&v| v as u32)
+            .collect();
+        let n = ids.len();
+        let input_ids = Tensor::from_vec(ids, (1, n), &device).unwrap();
+
+        let frames: usize = std::env::var("ACE_FRAMES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(108);
+        let steps: usize = std::env::var("ACE_STEPS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(27);
+
+        device.set_seed(1234).unwrap();
+        let _ = pipe.generate(&input_ids, 32, 4, 15.0).unwrap();
+        device.synchronize().unwrap();
+
+        device.set_seed(1234).unwrap();
+        device.synchronize().unwrap();
+        let t = Instant::now();
+        let wav = pipe.generate(&input_ids, frames, steps, 15.0).unwrap();
+        device.synchronize().unwrap();
+        let wall = t.elapsed().as_secs_f64();
+        let (_, _, s) = wav.dims3().unwrap();
+        let audio_s = s as f64 / 44100.0;
+        println!(
+            "GEN-BENCH frames={frames} steps={steps} audio={audio_s:.3}s wall={wall:.3}s realtime={:.3}x",
+            audio_s / wall
+        );
+
+        if let Ok(ab) = std::env::var("ACE_AB_GEN") {
+            let flat: Vec<f32> = wav.flatten_all().unwrap().to_vec1().unwrap();
+            let bytes: Vec<u8> = flat.iter().flat_map(|x| x.to_le_bytes()).collect();
+            std::fs::write(&ab, bytes).unwrap();
+            println!("music_generate_cuda_bench wrote A/B waveform {ab} ({} samples)", flat.len());
+        }
+    }
 }
