@@ -34,11 +34,17 @@ pub(crate) fn cuda_graphs_enabled() -> bool {
     *CUDA_GRAPHS_ENABLED.get_or_init(|| env_flag(CUDA_GRAPHS_ENV, true))
 }
 
-// Dense fixed-shape prefill graph capture (single-sequence, offset-0 first prompt chunk). Gated
-// behind cuda_graphs_enabled() as well; CUDA_PREFILL_GRAPHS=0 forces eager prefill.
+// Dense fixed-shape prefill graph capture (single-sequence, offset-0 first prompt chunk). DEFAULT
+// OFF: capturing the prefill collapses ~1.5k eager launches into one replay and recovers part of the
+// prefill GPU-idle gap (measured pp2048 2693 -> 2831 T/s), but (a) it does not close the whole gap to
+// llama -- the residual per-replay metadata refresh plus out-of-graph sampling/D2H leave util short of
+// the ~98% needed to cross 1.0x -- and (b) replay is not yet bit-exact for chunked/large prefill
+// (greedy output diverged on a >1500-token prompt), so it fails the exactness bar for a default-on
+// path. Left gated behind CUDA_PREFILL_GRAPHS=1 (and cuda_graphs_enabled()) for continued hardening;
+// the eager prefill remains the correct default.
 pub(crate) fn cuda_prefill_graphs_enabled() -> bool {
     *CUDA_PREFILL_GRAPHS_ENABLED
-        .get_or_init(|| cuda_graphs_enabled() && env_flag(CUDA_PREFILL_GRAPHS_ENV, true))
+        .get_or_init(|| cuda_graphs_enabled() && env_flag(CUDA_PREFILL_GRAPHS_ENV, false))
 }
 
 #[cfg(feature = "metal")]
