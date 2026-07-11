@@ -266,28 +266,46 @@ mod tests {
         };
         let all: Arc<dyn Fn(&str) -> bool + Send + Sync> = Arc::new(|_| true);
         let dec: Arc<dyn Fn(&str) -> bool + Send + Sync> = Arc::new(|n| n.starts_with("decoder."));
-        let dit_keep: Arc<dyn Fn(&str) -> bool + Send + Sync> = Arc::new(|n| {
-            !n.contains(".add_")
-                && !n.contains(".to_add_out")
-                && !n.starts_with("lyric")
-                && !n.starts_with("projectors")
-        });
         let mut cfg: Config = serde_json::from_str(
             &std::fs::read_to_string(format!("{fx}/umt5_config.json")).unwrap(),
         )
         .unwrap();
         cfg.umt5 = true;
-        let text_encoder =
+        let mut text_encoder =
             Umt5TextEncoder::new(&cfg, load(format!("{fx}/umt5.safetensors"), all.clone()), &device)
                 .unwrap();
-        let transformer =
-            AceStepTransformer::new(load(format!("{fx}/dit.safetensors"), dit_keep)).unwrap();
+        let dit_dtype = match std::env::var("ACE_DIT_DTYPE")
+            .unwrap_or_else(|_| "f32".to_string())
+            .as_str()
+        {
+            "f32" => DType::F32,
+            "bf16" => DType::BF16,
+            "f16" => DType::F16,
+            o => panic!("ACE_DIT_DTYPE must be f32|bf16|f16, got {o}"),
+        };
+        let dit_vb = from_mmaped_safetensors(
+            vec![PathBuf::from(format!("{fx}/dit.safetensors"))],
+            Vec::new(),
+            Some(dit_dtype),
+            &device,
+            vec![None],
+            true,
+            None,
+            move |n: String| {
+                !n.contains(".add_")
+                    && !n.contains(".to_add_out")
+                    && !n.starts_with("lyric")
+                    && !n.starts_with("projectors")
+            },
+            Arc::new(|_| DeviceForLoadTensor::Base),
+        )
+        .unwrap();
+        let transformer = AceStepTransformer::new(dit_vb).unwrap();
         let dcae = MusicDcae::new(
             load(format!("{fx}/dcae.safetensors"), dec),
             load(format!("{fx}/vocoder.safetensors"), all),
         )
         .unwrap();
-        let mut pipe = AceStepPipeline::new(text_encoder, transformer, dcae, device.clone());
 
         let ids: Vec<u32> = read_i64_le(&format!("{fx}/umt5_ids.i64"))
             .iter()
@@ -305,6 +323,56 @@ mod tests {
             .and_then(|s| s.parse().ok())
             .unwrap_or(27);
 
+        // Per-DiT-forward microbench (the sampler's hot inner call), isolated from text-enc + DCAE.
+        {
+            let text_hidden = text_encoder.encode(&input_ids).unwrap();
+            let speaker = Tensor::zeros((1, SPEAKER_DIM), text_hidden.dtype(), &device).unwrap();
+            let ehs = transformer.encode(&text_hidden, &speaker).unwrap();
+            let ctx = transformer
+                .sample_ctx(frames, ehs.dim(1).unwrap(), &device)
+                .unwrap();
+            device.set_seed(1234).unwrap();
+            let latent =
+                Tensor::randn(0f32, 1.0, (1, LATENT_CHANNELS, LATENT_HEIGHT, frames), &device)
+                    .unwrap();
+            let ts = Tensor::from_vec(vec![500f32], (1,), &device).unwrap();
+            for _ in 0..5 {
+                let _ = transformer
+                    .decode_with_ctx(&latent, &ehs, None, &ts, &ctx)
+                    .unwrap();
+            }
+            device.synchronize().unwrap();
+            let mut ms = Vec::with_capacity(41);
+            let mut vel0: Option<Vec<f32>> = None;
+            for i in 0..41 {
+                let t0 = Instant::now();
+                let v = transformer
+                    .decode_with_ctx(&latent, &ehs, None, &ts, &ctx)
+                    .unwrap();
+                device.synchronize().unwrap();
+                ms.push(t0.elapsed().as_secs_f64() * 1000.0);
+                if i == 0 {
+                    vel0 = Some(v.flatten_all().unwrap().to_vec1().unwrap());
+                }
+            }
+            ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let mean = ms.iter().sum::<f64>() / ms.len() as f64;
+            println!(
+                "DIT-BENCH dtype={dit_dtype:?} per_forward_ms median={:.2} mean={mean:.2} min={:.2} max={:.2}",
+                ms[ms.len() / 2],
+                ms[0],
+                ms[ms.len() - 1]
+            );
+            if let Ok(p) = std::env::var("ACE_AB_VEL") {
+                let flat = vel0.unwrap();
+                let bytes: Vec<u8> = flat.iter().flat_map(|x| x.to_le_bytes()).collect();
+                std::fs::write(&p, bytes).unwrap();
+                println!("wrote DiT velocity A/B {p} ({} f32)", flat.len());
+            }
+        }
+
+        let mut pipe = AceStepPipeline::new(text_encoder, transformer, dcae, device.clone());
+
         device.set_seed(1234).unwrap();
         let _ = pipe.generate(&input_ids, 32, 4, 15.0).unwrap();
         device.synchronize().unwrap();
@@ -318,7 +386,7 @@ mod tests {
         let (_, _, s) = wav.dims3().unwrap();
         let audio_s = s as f64 / 44100.0;
         println!(
-            "GEN-BENCH frames={frames} steps={steps} audio={audio_s:.3}s wall={wall:.3}s realtime={:.3}x",
+            "GEN-BENCH dtype={dit_dtype:?} frames={frames} steps={steps} audio={audio_s:.3}s wall={wall:.3}s realtime={:.3}x",
             audio_s / wall
         );
 
