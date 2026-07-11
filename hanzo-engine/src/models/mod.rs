@@ -23,6 +23,7 @@ pub(crate) mod phi3;
 pub(crate) mod phi3_5_moe;
 pub(crate) mod quantized_deepseek2;
 pub(crate) mod quantized_deepseek4;
+pub(crate) mod quantized_gemma;
 pub(crate) mod quantized_glm4_moe;
 pub(crate) mod quantized_gptoss;
 pub(crate) mod quantized_llama;
