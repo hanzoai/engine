@@ -1404,6 +1404,10 @@ fn init_device(force_cpu: bool, seed: Option<u64>) -> Result<hanzo_ml::Device> {
         && !hanzo_engine::distributed::use_ring()
     {
         Device::Cpu
+    } else if hanzo_engine::distributed::use_ring() {
+        // Ring PP: each rank runs on its own local GPU. cuda_if_available silently
+        // falls back to CPU, which strands the worker off-device; demand the GPU.
+        Device::new_cuda(0)?
     } else {
         Device::cuda_if_available(0)?
     };
