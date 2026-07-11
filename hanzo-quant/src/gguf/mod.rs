@@ -37,7 +37,13 @@ pub struct GgufMatMul {
 impl GgufMatMul {
     fn add_bias(&self, x: Tensor) -> Result<Tensor> {
         if let Some(ref b) = self.b {
-            x.broadcast_add(b)
+            // GGUF biases dequantize to F32; the single-dtype (bf16/f16) residual feeds a matching
+            // activation, so cast the bias to it rather than fail the strict broadcast_add.
+            if b.dtype() == x.dtype() {
+                x.broadcast_add(b)
+            } else {
+                x.broadcast_add(&b.to_dtype(x.dtype())?)
+            }
         } else {
             Ok(x)
         }
@@ -172,11 +178,7 @@ impl QuantMethod for GgufMatMul {
         #[cfg(not(feature = "cuda"))]
         let res = cpu::cpu_indexed_moe_forward(&self.w, x, indices)?;
 
-        if let Some(ref b) = self.b {
-            res.broadcast_add(b)
-        } else {
-            Ok(res)
-        }
+        self.add_bias(res)
     }
 
     #[cfg(feature = "cuda")]
