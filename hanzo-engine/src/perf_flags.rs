@@ -1,6 +1,7 @@
 use std::sync::OnceLock;
 
 const CUDA_GRAPHS_ENV: &str = "CUDA_GRAPHS";
+#[cfg(feature = "cuda")]
 const CUDA_PREFILL_GRAPHS_ENV: &str = "CUDA_PREFILL_GRAPHS";
 #[cfg(feature = "metal")]
 const METAL_GRAPHS_ENV: &str = "METAL_GRAPHS";
@@ -9,6 +10,7 @@ const ROCM_GRAPHS_ENV: &str = "ROCM_GRAPHS";
 const FLASHINFER_DECODE_ENV: &str = "FLASHINFER_DECODE";
 
 static CUDA_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
+#[cfg(feature = "cuda")]
 static CUDA_PREFILL_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "metal")]
 static METAL_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
@@ -42,6 +44,7 @@ pub(crate) fn cuda_graphs_enabled() -> bool {
 // (greedy output diverged on a >1500-token prompt), so it fails the exactness bar for a default-on
 // path. Left gated behind CUDA_PREFILL_GRAPHS=1 (and cuda_graphs_enabled()) for continued hardening;
 // the eager prefill remains the correct default.
+#[cfg(feature = "cuda")]
 pub(crate) fn cuda_prefill_graphs_enabled() -> bool {
     *CUDA_PREFILL_GRAPHS_ENABLED
         .get_or_init(|| cuda_graphs_enabled() && env_flag(CUDA_PREFILL_GRAPHS_ENV, false))
