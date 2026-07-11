@@ -61,17 +61,26 @@ impl AceStepPipeline {
             Tensor::randn(0f32, 1.0, (1, LATENT_CHANNELS, LATENT_HEIGHT, frames), dev)?;
         let mut mb = MomentumBuffer::new();
 
+        // Constants shared by every forward + all step timesteps, materialised once off the hot loop.
+        let ctx = self.transformer.sample_ctx(frames, ehs.dim(1)?, dev)?;
+        let timesteps = Tensor::from_vec(sched.timesteps.clone(), (steps,), dev)?;
+
         let g_start = (steps as f64 * (1.0 - GUIDANCE_INTERVAL) / 2.0) as usize;
         let g_end = (steps as f64 * (GUIDANCE_INTERVAL / 2.0 + 0.5)) as usize;
 
         for i in 0..steps {
-            let t = Tensor::from_vec(vec![sched.timesteps[i]], (1,), dev)?;
+            let t = timesteps.narrow(0, i, 1)?;
             let v = if i >= g_start && i < g_end {
-                let v_cond = self.transformer.decode(&latent, &ehs, None, &t)?;
-                let v_uncond = self.transformer.decode(&latent, &ehs_null, None, &t)?;
+                let v_cond = self
+                    .transformer
+                    .decode_with_ctx(&latent, &ehs, None, &t, &ctx)?;
+                let v_uncond = self
+                    .transformer
+                    .decode_with_ctx(&latent, &ehs_null, None, &t, &ctx)?;
                 apg_forward(&v_cond, &v_uncond, guidance_scale, &mut mb)?
             } else {
-                self.transformer.decode(&latent, &ehs, None, &t)?
+                self.transformer
+                    .decode_with_ctx(&latent, &ehs, None, &t, &ctx)?
             };
             latent = sched.step(&v, &latent, i)?;
         }
