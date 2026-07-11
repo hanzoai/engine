@@ -346,7 +346,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let (tok_embeddings, norm, output) = if is_head {
             let qtok = ct.tensor("token_embd.weight", device)?;
             let tok = Embedding::new(qtok.dequantize(device)?, embedding_length);
-            let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, rms_norm_eps)?;
+            let norm = QRmsNorm::new_dtype(
+                ct.tensor("output_norm.weight", device)?,
+                rms_norm_eps,
+                dtype,
+            )?;
             let out = if !ct.has_tensor("output.weight") {
                 ct.tensor("token_embd.weight", device)?
             } else {
@@ -428,13 +432,15 @@ impl ModelConfig::FromGGUF for ModelWeights {
             };
 
             // Qwen3 always has q_norm and k_norm
-            let q_norm = QRmsNorm::new(
+            let q_norm = QRmsNorm::new_dtype(
                 ct.tensor(&format!("{prefix}.attn_q_norm.weight"), device)?,
                 rms_norm_eps,
+                dtype,
             )?;
-            let k_norm = QRmsNorm::new(
+            let k_norm = QRmsNorm::new_dtype(
                 ct.tensor(&format!("{prefix}.attn_k_norm.weight"), device)?,
                 rms_norm_eps,
+                dtype,
             )?;
 
             let attention_norm = ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?;
@@ -463,11 +469,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     q_weight: Arc::new(attention_wo),
                     b: None,
                 })?),
-                attention_norm: QRmsNorm::new(attention_norm, rms_norm_eps)?,
+                attention_norm: QRmsNorm::new_dtype(attention_norm, rms_norm_eps, dtype)?,
                 q_norm,
                 k_norm,
                 mlp,
-                ffn_norm: QRmsNorm::new(ffn_norm, rms_norm_eps)?,
+                ffn_norm: QRmsNorm::new_dtype(ffn_norm, rms_norm_eps, dtype)?,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim,
@@ -510,7 +516,16 @@ impl ModelWeights {
         if self.pp.is_some() {
             return pp_head_forward(self, x, start_offsets, context_lens);
         }
-        let mut layer_in = self.tok_embeddings.as_ref().unwrap().forward(x)?;
+        // Run the residual stream in the model compute dtype (not the F32 the embedding dequantizes
+        // to) so the per-layer norm/matmul/attention chain stays single-dtype: this drops the
+        // F32<->half round-trip casts around attention and lets the fused qk-norm-rope kernel accept
+        // the (now matching-dtype) norm weights.
+        let mut layer_in = self
+            .tok_embeddings
+            .as_ref()
+            .unwrap()
+            .forward(x)?
+            .to_dtype(self.dtype)?;
         // Build the RoPE positions tensor once per step on the model device from
         // the host `start_offsets` (one position per sequence). The decode path
         // (seq_len == 1) reads these from device memory instead of baking the
