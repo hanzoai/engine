@@ -24,7 +24,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "1.7.19"
+version = "1.7.20"
 edition = "2021"
 authors = ["Hanzo AI <dev@hanzo.ai>"]
 description = "Fast, flexible LLM inference."
@@ -38,12 +38,12 @@ rust-version = "1.88"
 [workspace.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 # Hanzo ML crates.
-hanzo-ml = { version = "0.11.43" }
+hanzo-ml = { version = "0.11.48" }
 hanzo-nn = { version = "0.11.33" }
 hanzo-transformers = { version = "0.11.9" }
 hanzo-flash-attn = { version = "0.11.35" }
 hanzo-flash-attn-v3 = { version = "0.11.3", package = "hanzo-flash-attn" }
-hanzo-metal-kernels = { version = "0.11.33" }
+hanzo-metal-kernels = { version = "0.11.36" }
 hanzo-3d = { version = "0.1" }
 
 axum = "0.8.8"
