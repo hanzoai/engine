@@ -30,14 +30,14 @@ pub struct RingPipeline {
 }
 
 impl RingPipeline {
-    pub fn from_config(config: &RingConfig) -> Self {
-        let (left, right) = get_ring_streams(config);
-        Self {
+    pub fn from_config(config: &RingConfig) -> Result<Self> {
+        let (left, right) = get_ring_streams(config)?;
+        Ok(Self {
             left,
             right,
             rank: config.rank,
             world_size: config.world_size,
-        }
+        })
     }
 
     pub fn is_head(&self) -> bool {
@@ -181,14 +181,15 @@ fn read_u32(stream: &mut std::net::TcpStream) -> Result<u32> {
 
 static TP_ENDPOINTS: OnceLock<(SharedTcpStream, SharedTcpStream, usize)> = OnceLock::new();
 
-fn tp_endpoints() -> (SharedTcpStream, SharedTcpStream, usize) {
-    TP_ENDPOINTS
-        .get_or_init(|| {
-            let config = RingConfig::load();
-            let (left, right) = get_ring_streams(&config);
-            (left, right, config.rank)
-        })
-        .clone()
+fn tp_endpoints() -> Result<(SharedTcpStream, SharedTcpStream, usize)> {
+    if let Some(eps) = TP_ENDPOINTS.get() {
+        return Ok(eps.clone());
+    }
+    let config = RingConfig::load();
+    let (left, right) = get_ring_streams(&config)?;
+    let eps = (left, right, config.rank);
+    let _ = TP_ENDPOINTS.set(eps.clone());
+    Ok(eps)
 }
 
 /// Ring tensor-parallel token sync: rank 0 broadcasts its sampled tokens around the ring so no
@@ -196,7 +197,7 @@ fn tp_endpoints() -> (SharedTcpStream, SharedTcpStream, usize) {
 /// Head writes right then drains the wrap-around from left; workers read from left (overwriting
 /// `values` in place) and forward right. One hop per rank keeps the shared streams balanced.
 pub fn broadcast_head_tokens(values: &mut [u32]) -> Result<()> {
-    let (left, right, rank) = tp_endpoints();
+    let (left, right, rank) = tp_endpoints()?;
     let nbytes = std::mem::size_of_val(values);
     let lock_err = |e| hanzo_ml::Error::msg(format!("lock: {e:?}"));
     if rank == 0 {
