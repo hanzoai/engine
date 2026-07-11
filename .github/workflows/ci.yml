@@ -123,7 +123,7 @@ jobs:
 
   # run `mlc` (`cargo install mlc`)
   # markdown-link-check:
-  #   runs-on: ubuntu-latest
+  #   runs-on: hanzo-build-linux-amd64
   #   steps:
   #     - uses: actions/checkout@v4
   #     - uses: gaurav-nelson/github-action-markdown-link-check@v1
