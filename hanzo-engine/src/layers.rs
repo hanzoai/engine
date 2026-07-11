@@ -1938,6 +1938,8 @@ impl DeepSeekV2RotaryEmbedding {
     ) -> Result<(Tensor, Tensor)> {
         let (batch, _, seq_len, _) = q.dims4()?;
         let (cos, sin) = selected_rope_cache(&self.cos, &self.sin, batch, seq_len, seqlen_offsets)?;
+        // Match the f32 rope cache to a single-dtype bf16/f16 query (no-op when q is F32).
+        let (cos, sin) = match_rope_dtype(cos, sin, q)?;
         apply_rotary_selected_qk(q, k, &cos, &sin, false)
     }
 
@@ -3595,6 +3597,9 @@ impl RotaryEmbedding {
                 }
                 (Tensor::cat(&cos_s, 0)?, Tensor::cat(&sin_s, 0)?)
             };
+            // The f32 rope cache is dtype-strict against the (now single-dtype) bf16/f16 query; match
+            // it so the single-dtype residual path feeds a consistent dtype, like `qk_rms_norm_rope`.
+            let (cos, sin) = match_rope_dtype(cos, sin, q)?;
 
             let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
             let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
@@ -3619,6 +3624,7 @@ impl RotaryEmbedding {
         } else if seqlen_offsets.len() == 1 {
             let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
             let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
+            let (cos, sin) = match_rope_dtype(cos, sin, q)?;
             let q_embed = rope(&q.contiguous()?, &cos, &sin)?;
             let k_embed = rope(&k.contiguous()?, &cos, &sin)?;
             Ok((q_embed, k_embed))
@@ -3628,6 +3634,7 @@ impl RotaryEmbedding {
             for (i, offset) in seqlen_offsets.iter().enumerate() {
                 let cos = self.cos.narrow(0, *offset, seq_len)?;
                 let sin = self.sin.narrow(0, *offset, seq_len)?;
+                let (cos, sin) = match_rope_dtype(cos, sin, q)?;
                 let q_embed = rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
                 let k_embed = rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
                 q_embeds.push(q_embed);
