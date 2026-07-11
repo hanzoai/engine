@@ -1451,7 +1451,9 @@ impl GGUFPipeline {
             }
             Err(err) => {
                 if !state.disabled {
-                    warn!("CUDA prefill graph capture failed; falling back to eager prefill: {err}");
+                    warn!(
+                        "CUDA prefill graph capture failed; falling back to eager prefill: {err}"
+                    );
                 }
                 state.disabled = true;
                 state.entries.clear();
@@ -1528,7 +1530,9 @@ impl GGUFPipeline {
             Ok(Some(graph)) => graph,
             Ok(None) => {
                 restore_event_tracking_after_capture(&stream, restore_event_tracking);
-                return Err(hanzo_ml::Error::msg("CUDA prefill graph capture returned no graph"));
+                return Err(hanzo_ml::Error::msg(
+                    "CUDA prefill graph capture returned no graph",
+                ));
             }
             Err(err) => {
                 restore_event_tracking_after_capture(&stream, restore_event_tracking);
