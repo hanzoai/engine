@@ -113,10 +113,33 @@ impl DCUpBlock {
     }
 }
 
+// Depthwise conv2d (groups == channels), square kernel k, stride 1, pad p, vectorised across channels.
+// candle lowers a grouped conv to one conv per group (up to 8192 launches in stage3); this is the same
+// cross-correlation expressed as k*k shifted channel-broadcast multiply-adds. x [B,C,H,W], w [1,C,k,k].
+fn depthwise_conv2d(x: &Tensor, w: &Tensor, p: usize) -> Result<Tensor> {
+    let (_, _, h, wd) = x.dims4()?;
+    let k = w.dim(2)?;
+    let xp = x.pad_with_zeros(2, p, p)?.pad_with_zeros(3, p, p)?;
+    let mut acc: Option<Tensor> = None;
+    for kh in 0..k {
+        let row = xp.narrow(2, kh, h)?;
+        let wr = w.narrow(2, kh, 1)?;
+        for kw in 0..k {
+            let term = row.narrow(3, kw, wd)?.broadcast_mul(&wr.narrow(3, kw, 1)?)?;
+            acc = Some(match acc {
+                Some(a) => (a + term)?,
+                None => term,
+            });
+        }
+    }
+    Ok(acc.expect("kernel is at least 1x1"))
+}
+
 #[derive(Debug, Clone)]
 struct GlumbConv {
     conv_inverted: Conv2d,
-    conv_depth: Conv2d,
+    depth_w: Tensor,
+    depth_b: Tensor,
     conv_point: Conv2d,
     norm_w: Tensor,
     norm_b: Tensor,
@@ -132,12 +155,11 @@ impl GlumbConv {
             Conv2dConfig::default(),
             vb.pp("conv_inverted"),
         )?;
-        let depth_cfg = Conv2dConfig {
-            padding: 1,
-            groups: hidden * 2,
-            ..Default::default()
-        };
-        let conv_depth = conv2d(hidden * 2, hidden * 2, 3, depth_cfg, vb.pp("conv_depth"))?;
+        let dvb = vb.pp("conv_depth");
+        let depth_w = dvb
+            .get((hidden * 2, 1, 3, 3), "weight")?
+            .reshape((1, hidden * 2, 3, 3))?;
+        let depth_b = dvb.get(hidden * 2, "bias")?.reshape((1, hidden * 2, 1, 1))?;
         let conv_point = conv2d_no_bias(
             hidden,
             channels,
@@ -149,7 +171,8 @@ impl GlumbConv {
         let norm_b = vb.get(channels, "norm.bias")?;
         Ok(Self {
             conv_inverted,
-            conv_depth,
+            depth_w,
+            depth_b,
             conv_point,
             norm_w,
             norm_b,
@@ -160,7 +183,7 @@ impl GlumbConv {
         let residual = x;
         let h = self.conv_inverted.forward(x)?;
         let h = h.silu()?;
-        let h = self.conv_depth.forward(&h)?;
+        let h = depthwise_conv2d(&h, &self.depth_w, 1)?.broadcast_add(&self.depth_b)?;
         let parts = h.chunk(2, 1)?;
         let h = (&parts[0] * parts[1].silu()?)?;
         let h = self.conv_point.forward(&h)?;
@@ -171,29 +194,28 @@ impl GlumbConv {
 
 #[derive(Debug, Clone)]
 struct MultiscaleProj {
-    proj_in: Conv2d,
+    proj_in_w: Tensor,
     proj_out: Conv2d,
 }
 
 impl MultiscaleProj {
     fn new(inner: usize, num_heads: usize, vb: ShardedVarBuilder) -> Result<Self> {
         let ch = 3 * inner;
-        let in_cfg = Conv2dConfig {
-            padding: QKV_KERNEL / 2,
-            groups: ch,
-            ..Default::default()
-        };
-        let proj_in = conv2d_no_bias(ch, ch, QKV_KERNEL, in_cfg, vb.pp("proj_in"))?;
+        let proj_in_w = vb
+            .pp("proj_in")
+            .get((ch, 1, QKV_KERNEL, QKV_KERNEL), "weight")?
+            .reshape((1, ch, QKV_KERNEL, QKV_KERNEL))?;
         let out_cfg = Conv2dConfig {
             groups: 3 * num_heads,
             ..Default::default()
         };
         let proj_out = conv2d_no_bias(ch, ch, 1, out_cfg, vb.pp("proj_out"))?;
-        Ok(Self { proj_in, proj_out })
+        Ok(Self { proj_in_w, proj_out })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.proj_out.forward(&self.proj_in.forward(x)?)
+        let h = depthwise_conv2d(x, &self.proj_in_w, QKV_KERNEL / 2)?;
+        self.proj_out.forward(&h)
     }
 }
 
@@ -363,5 +385,39 @@ impl DcaeDecoder {
         let h = rms_norm_channels(&h, &self.norm_w, &self.norm_b)?;
         let h = h.relu()?;
         self.conv_out.forward(&h)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hanzo_ml::Device;
+
+    // The depthwise_conv2d reformulation must match candle's grouped Conv2d for the kernels stage3 uses:
+    // GlumbConv conv_depth (k3/p1) and MultiscaleProj proj_in (k5/p2).
+    #[test]
+    fn depthwise_conv2d_matches_grouped_conv() {
+        let dev = Device::Cpu;
+        for (k, p) in [(3usize, 1usize), (5usize, 2usize)] {
+            let (b, c, h, w) = (2usize, 24usize, 7usize, 9usize);
+            let x = Tensor::randn(0f32, 1.0, (b, c, h, w), &dev).unwrap();
+            let wt = Tensor::randn(0f32, 1.0, (c, 1, k, k), &dev).unwrap();
+            let cfg = Conv2dConfig {
+                padding: p,
+                groups: c,
+                ..Default::default()
+            };
+            let reference = Conv2d::new(wt.clone(), None, cfg).forward(&x).unwrap();
+            let mine = depthwise_conv2d(&x, &wt.reshape((1, c, k, k)).unwrap(), p).unwrap();
+            let diff = (reference - mine)
+                .unwrap()
+                .abs()
+                .unwrap()
+                .max_all()
+                .unwrap()
+                .to_scalar::<f32>()
+                .unwrap();
+            assert!(diff < 1e-4, "k{k} p{p} max abs diff {diff}");
+        }
     }
 }
