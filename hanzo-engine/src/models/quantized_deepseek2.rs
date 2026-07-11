@@ -121,14 +121,20 @@ impl LayerWeights {
         let k_nope = kv_split[0].clone();
         let v = kv_split[1].clone();
 
-        let q = Tensor::cat(&[&q_nope, &q_pe], D::Minus1)?.contiguous()?;
-        let k = Tensor::cat(&[&k_nope, &k_pe], D::Minus1)?.contiguous()?;
+        // Rope may hand back f32 pe parts; the nope parts follow the single-dtype residual, so pin
+        // both cat operands to the compute dtype (keeps the concat and the whole MLA single-dtype).
+        let q = Tensor::cat(
+            &[&q_nope.to_dtype(self.dtype)?, &q_pe.to_dtype(self.dtype)?],
+            D::Minus1,
+        )?
+        .contiguous()?;
+        let k = Tensor::cat(
+            &[&k_nope.to_dtype(self.dtype)?, &k_pe.to_dtype(self.dtype)?],
+            D::Minus1,
+        )?
+        .contiguous()?;
 
-        let (q, k, v) = (
-            q.to_dtype(self.dtype)?,
-            k.to_dtype(self.dtype)?,
-            v.to_dtype(self.dtype)?,
-        );
+        let v = v.to_dtype(self.dtype)?;
 
         let y = match &self.paged_attn {
             Some(paged_attn) => {
