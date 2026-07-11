@@ -66,6 +66,8 @@ pub(super) struct MoEForwardConfig {
     pub num_experts: usize,
     pub num_experts_per_tok: usize,
     pub act: Activation,
+    /// SwiGLU clamp limit (DeepSeek-V4); `None` = plain gated activation.
+    pub swiglu_limit: Option<f32>,
 }
 
 #[cfg(feature = "cuda")]
