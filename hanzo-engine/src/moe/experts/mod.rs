@@ -28,6 +28,8 @@ use forward::{MoEForward, MoEForwardConfig, MoEForwardShape};
 pub struct MoEExperts {
     backend: MoEExpertsBackendImpl,
     act: Activation,
+    /// SwiGLU clamp limit (DeepSeek-V4); `None` = plain gated activation.
+    swiglu_limit: Option<f32>,
     #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
     num_experts: usize,
     num_experts_per_tok: usize,
@@ -210,11 +212,19 @@ impl MoEExperts {
         Self {
             backend,
             act,
+            swiglu_limit: None,
             num_experts: cfg.num_experts,
             num_experts_per_tok: cfg.num_experts_per_tok,
             all_reduce: SumAllReduce::new(comm),
             world_size: comm.world_size(),
         }
+    }
+
+    /// Set the SwiGLU clamp limit (DeepSeek-V4). `None` leaves the plain gated activation.
+    #[must_use]
+    pub fn with_swiglu_limit(mut self, swiglu_limit: Option<f32>) -> Self {
+        self.swiglu_limit = swiglu_limit;
+        self
     }
 }
 
@@ -260,6 +270,7 @@ impl MoEExperts {
             num_experts: self.num_experts,
             num_experts_per_tok: self.num_experts_per_tok,
             act: self.act,
+            swiglu_limit: self.swiglu_limit,
         }
     }
 }
