@@ -526,10 +526,18 @@ pub struct QRmsNorm {
 
 impl QRmsNorm {
     pub fn new(scale: QTensor, eps: f32) -> Result<Self> {
-        let scale = scale.dequantize(&scale.device())?;
+        Self::new_dtype(scale, eps, DType::F32)
+    }
+
+    /// Holds the norm weight in `dtype` (the model compute dtype) rather than F32. Matching the
+    /// activation dtype lets `rms_norm` skip the per-forward weight cast and, for q/k norms, lets the
+    /// fused CUDA `qk_rms_norm_rope` kernel accept the weight (it bails on a dtype mismatch), which
+    /// removes the unfused rope path's transpose/contiguous copies.
+    pub fn new_dtype(scale: QTensor, eps: f32, dtype: DType) -> Result<Self> {
+        let weight = scale.dequantize(&scale.device())?.to_dtype(dtype)?;
         Ok(Self {
             eps: eps as f64,
-            weight: scale,
+            weight,
         })
     }
 
