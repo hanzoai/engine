@@ -46,11 +46,12 @@ impl FlowMatchScheduler {
     }
 
     // Euler with omega mean-preserving deviation rescale: x + ((s_next - s)*v - m)*omega + m.
+    // Mean stays on device (no scalar readback) so the sampler loop never blocks on a host sync.
     pub fn step(&self, model_output: &Tensor, sample: &Tensor, i: usize) -> Result<Tensor> {
         let dt = self.sigmas[i + 1] - self.sigmas[i];
         let dx = (model_output * dt)?;
-        let m = dx.mean_all()?.to_scalar::<f32>()? as f64;
-        let dx = (((dx - m)? * self.omega)? + m)?;
+        let m = dx.mean_all()?.reshape((1, 1, 1, 1))?;
+        let dx = ((dx.broadcast_sub(&m)? * self.omega)?.broadcast_add(&m))?;
         sample + dx
     }
 }
