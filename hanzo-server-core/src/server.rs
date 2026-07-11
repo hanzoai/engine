@@ -1400,9 +1400,7 @@ fn init_device(force_cpu: bool, seed: Option<u64>) -> Result<hanzo_ml::Device> {
     #[allow(clippy::if_same_then_else)]
     let device = if force_cpu {
         Device::Cpu
-    } else if hanzo_engine::distributed::use_nccl()
-        && !hanzo_engine::distributed::use_ring()
-    {
+    } else if hanzo_engine::distributed::use_nccl() && !hanzo_engine::distributed::use_ring() {
         Device::Cpu
     } else if hanzo_engine::distributed::use_ring() {
         // Ring PP: each rank runs on its own local GPU. cuda_if_available silently
