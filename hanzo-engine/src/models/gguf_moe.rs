@@ -123,40 +123,88 @@ pub(crate) struct FusedMoe {
     shared: Option<Mlp>,
 }
 
+#[cfg(feature = "cuda")]
+fn moe_qtensor(q: &QMatMul) -> Option<&hanzo_ml::quantized::QTensor> {
+    match q {
+        QMatMul::QTensor(qt) => Some(qt),
+        _ => None,
+    }
+}
+
 impl FusedMoe {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (batch, seq_len, hidden_dim) = xs.dims3()?;
         let identity = xs.clone();
         let xs_flat = xs.reshape(((), hidden_dim))?;
         let original_dtype = xs_flat.dtype();
-        let (num_tokens, hidden_dim) = xs_flat.dims2()?;
+        let num_tokens = xs_flat.dim(0)?;
 
         let (topk_idx, topk_weight) = self.gate.forward(xs)?;
 
-        let ys = {
-            // The expert grouped-GEMM (`indexed_moe_forward`) requires an F32 activation;
-            // upcast here so a single-dtype (bf16/f16) residual works. No-op when the residual
-            // is already F32; the trailing `to_dtype(original_dtype)` restores the residual
-            // dtype, keeping the F32 round-trip localized to the MoE expert boundary.
-            let xs3 = xs_flat
-                .to_dtype(DType::F32)?
-                .reshape((num_tokens, 1, hidden_dim))?;
-            let gate = self.gate_experts.indexed_moe_forward(&xs3, &topk_idx)?;
-            let up = self.up_experts.indexed_moe_forward(&xs3, &topk_idx)?;
-            let activated = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
-            self.down_experts
-                .indexed_moe_forward(&activated, &topk_idx)?
-        };
-        let mut y = ys
-            .broadcast_mul(&topk_weight.to_dtype(ys.dtype())?.unsqueeze(D::Minus1)?)?
-            .sum(D::Minus2)?
-            .reshape((batch, seq_len, hidden_dim))?
-            .to_dtype(original_dtype)?;
+        let mut y = self
+            .experts(
+                &xs_flat,
+                &topk_idx,
+                &topk_weight,
+                num_tokens,
+                original_dtype,
+            )?
+            .reshape((batch, seq_len, hidden_dim))?;
 
         if let Some(shared) = &self.shared {
             y = (y + shared.forward(&identity)?)?;
         }
         Ok(y)
+    }
+
+    // Routed expert compute -> [num_tokens, hidden] in original_dtype. Prefill routes the 16-bit
+    // activation straight through the fused q8_1 MMQ grouped-GEMM (no f32 round-trip); decode and
+    // short prompts keep the per-slot indexed matvec (capture-clean, no host-side counting sort).
+    fn experts(
+        &self,
+        xs_flat: &Tensor,
+        topk_idx: &Tensor,
+        topk_weight: &Tensor,
+        num_tokens: usize,
+        original_dtype: DType,
+    ) -> Result<Tensor> {
+        #[cfg(feature = "cuda")]
+        if num_tokens >= crate::moe::grouped::GROUPED_MIN_TOKENS {
+            if let (Some(g), Some(u), Some(d)) = (
+                moe_qtensor(&self.gate_experts),
+                moe_qtensor(&self.up_experts),
+                moe_qtensor(&self.down_experts),
+            ) {
+                if let Some(y) = crate::moe::grouped::moe_grouped_prefill(
+                    g,
+                    u,
+                    d,
+                    xs_flat,
+                    topk_idx,
+                    topk_weight,
+                    crate::layers::Activation::Silu,
+                    self.gate.n_routed_experts,
+                    self.gate.top_k,
+                    original_dtype,
+                )? {
+                    return Ok(y);
+                }
+            }
+        }
+
+        let hidden_dim = xs_flat.dim(1)?;
+        let xs3 = xs_flat
+            .to_dtype(DType::F32)?
+            .reshape((num_tokens, 1, hidden_dim))?;
+        let gate = self.gate_experts.indexed_moe_forward(&xs3, topk_idx)?;
+        let up = self.up_experts.indexed_moe_forward(&xs3, topk_idx)?;
+        let activated = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
+        let ys = self
+            .down_experts
+            .indexed_moe_forward(&activated, topk_idx)?;
+        ys.broadcast_mul(&topk_weight.to_dtype(ys.dtype())?.unsqueeze(D::Minus1)?)?
+            .sum(D::Minus2)?
+            .to_dtype(original_dtype)
     }
 }
 
