@@ -130,4 +130,103 @@ mod tests {
         );
         assert!(c > 0.99, "waveform correlation {c} below 0.99");
     }
+
+    // GB10 profile of the DCAE decode path: isolate the grouped-conv DcaeDecoder (stage3 storm) from
+    // the vocoder, report the decode-time split, and dump the reference-latent waveform for A/B
+    // correlation across a rebuild. ACE_BENCH=1 gated; needs a CUDA build + the DCAE/vocoder fixtures.
+    #[test]
+    fn dcae_profile_cuda() {
+        use std::time::Instant;
+        if std::env::var("ACE_BENCH").is_err() {
+            eprintln!("dcae_profile_cuda: set ACE_BENCH=1 to run");
+            return;
+        }
+        let dcae_p = std::env::var("ACE_DCAE_ST")
+            .unwrap_or_else(|_| "/data/ace-fixtures/dcae.safetensors".to_string());
+        let voc_p = std::env::var("ACE_VOC_ST")
+            .unwrap_or_else(|_| "/data/ace-fixtures/vocoder.safetensors".to_string());
+        let fix = std::env::var("ACE_FIX_DIR").unwrap_or_else(|_| "/data/ace-fixtures".to_string());
+        if !PathBuf::from(&dcae_p).is_file() {
+            eprintln!("DCAE fixtures absent; skipping profile");
+            return;
+        }
+        let device = Device::new_cuda(0).unwrap();
+        let load = |p: &str, pref: &'static str| {
+            from_mmaped_safetensors(
+                vec![PathBuf::from(p)],
+                Vec::new(),
+                Some(DType::F32),
+                &device,
+                vec![None],
+                true,
+                None,
+                move |n: String| n.starts_with(pref),
+                Arc::new(|_| DeviceForLoadTensor::Base),
+            )
+            .unwrap()
+        };
+        let model = MusicDcae::new(load(&dcae_p, "decoder."), load(&voc_p, "")).unwrap();
+
+        let frames: usize = std::env::var("ACE_FRAMES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(108);
+        let iters: usize = std::env::var("ACE_ITERS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10);
+
+        let latent = Tensor::randn(0f32, 1.0, (1, 8, 16, frames), &device).unwrap();
+        let scaled = ((&latent / SCALE_FACTOR).unwrap() + SHIFT_FACTOR).unwrap();
+
+        for _ in 0..3 {
+            let _ = model.decode(&latent).unwrap();
+        }
+        device.synchronize().unwrap();
+
+        let t = Instant::now();
+        let mut mel = model.dcae.decode(&scaled).unwrap();
+        for _ in 1..iters {
+            mel = model.dcae.decode(&scaled).unwrap();
+        }
+        device.synchronize().unwrap();
+        let dcae_ms = t.elapsed().as_secs_f64() * 1e3 / iters as f64;
+
+        let m = ((mel * 0.5).unwrap() + 0.5).unwrap();
+        let m = ((m * (MAX_MEL - MIN_MEL)).unwrap() + MIN_MEL).unwrap();
+        let ch0 = m.narrow(1, 0, 1).unwrap().squeeze(1).unwrap();
+        let ch1 = m.narrow(1, 1, 1).unwrap().squeeze(1).unwrap();
+        device.synchronize().unwrap();
+        let t = Instant::now();
+        for _ in 0..iters {
+            let _ = model.vocoder.decode(&ch0).unwrap();
+            let _ = model.vocoder.decode(&ch1).unwrap();
+        }
+        device.synchronize().unwrap();
+        let voc_ms = t.elapsed().as_secs_f64() * 1e3 / iters as f64;
+
+        device.synchronize().unwrap();
+        let t = Instant::now();
+        for _ in 0..iters {
+            let _ = model.decode(&latent).unwrap();
+        }
+        device.synchronize().unwrap();
+        let full_ms = t.elapsed().as_secs_f64() * 1e3 / iters as f64;
+
+        let audio_s = (frames * 8 * 512) as f64 / 44100.0;
+        println!(
+            "DCAE-PROFILE frames={frames} audio={audio_s:.3}s iters={iters} | dcae_decoder={dcae_ms:.2}ms vocoder={voc_ms:.2}ms full={full_ms:.2}ms | dcae_share={:.1}%",
+            100.0 * dcae_ms / full_ms
+        );
+
+        if let Ok(ab) = std::env::var("ACE_AB_OUT") {
+            let rl = Tensor::from_vec(read_f32_le(&format!("{fix}/latent.f32")), (1, 8, 16, 32), &device)
+                .unwrap();
+            let wav = model.decode(&rl).unwrap();
+            let flat: Vec<f32> = wav.flatten_all().unwrap().to_vec1().unwrap();
+            let bytes: Vec<u8> = flat.iter().flat_map(|x| x.to_le_bytes()).collect();
+            std::fs::write(&ab, bytes).unwrap();
+            println!("dcae_profile_cuda wrote A/B waveform {ab} ({} samples)", flat.len());
+        }
+    }
 }
