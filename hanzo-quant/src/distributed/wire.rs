@@ -16,42 +16,75 @@ pub(crate) type LeftRight = (SharedTcpStream, SharedTcpStream);
 
 pub(crate) const CHUNK_SIZE: usize = 64 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
+const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(200);
 
 // Lazily-initialized pair of TCP streams shared by every ring collective and the pipeline
 // transport. left = accepted from the left neighbour, right = dialed to the right neighbour.
 static LEFT_RIGHT_STREAMS: OnceLock<LeftRight> = OnceLock::new();
+// Serializes the one-shot connect so a racing second caller can't bind the listener twice.
+static CONNECT_GUARD: Mutex<()> = Mutex::new(());
 
-pub(crate) fn get_ring_streams(config: &RingConfig) -> LeftRight {
-    LEFT_RIGHT_STREAMS
-        .get_or_init(|| {
-            let cur_port = config.port;
-            let right_ip = config.right_ip();
-            let right_port = config.right_port;
+// Connect the ring once (idempotent) and hand back the shared stream pair. An unreachable
+// neighbour returns a named error rather than panicking, so a flaky link is diagnosable.
+pub(crate) fn get_ring_streams(config: &RingConfig) -> Result<LeftRight> {
+    if let Some(streams) = LEFT_RIGHT_STREAMS.get() {
+        return Ok(streams.clone());
+    }
+    let _guard = CONNECT_GUARD
+        .lock()
+        .map_err(|e| hanzo_ml::Error::msg(format!("ring: connect guard poisoned: {e:?}")))?;
+    if let Some(streams) = LEFT_RIGHT_STREAMS.get() {
+        return Ok(streams.clone());
+    }
+    let streams = connect_ring(config)?;
+    let _ = LEFT_RIGHT_STREAMS.set(streams.clone());
+    Ok(streams)
+}
 
-            let left_listener =
-                TcpListener::bind(format!("0.0.0.0:{cur_port}")).expect("bind left");
+fn connect_ring(config: &RingConfig) -> Result<LeftRight> {
+    let cur_port = config.port;
+    let right_addr = format!("{}:{}", config.right_ip(), config.right_port);
 
-            let start = Instant::now();
-            let right = loop {
-                match TcpStream::connect(format!("{right_ip}:{right_port}")) {
-                    Ok(s) => break s,
-                    Err(_) if start.elapsed() > CONNECT_TIMEOUT => {
-                        panic!("Failed to connect to right node due to 120-second timeout");
-                    }
-                    Err(_) => continue,
+    let left_listener = TcpListener::bind(format!("0.0.0.0:{cur_port}")).map_err(|e| {
+        hanzo_ml::Error::msg(format!("ring: bind left listener 0.0.0.0:{cur_port}: {e}"))
+    })?;
+
+    let right = connect_right(&right_addr, CONNECT_TIMEOUT)?;
+    let (left, _) = left_listener.accept().map_err(|e| {
+        hanzo_ml::Error::msg(format!(
+            "ring: accept left neighbour on 0.0.0.0:{cur_port}: {e}"
+        ))
+    })?;
+
+    let tune = |s: &TcpStream, side: &str| -> Result<()> {
+        s.set_nodelay(true)
+            .map_err(|e| hanzo_ml::Error::msg(format!("ring: set_nodelay {side}: {e}")))?;
+        s.set_nonblocking(false)
+            .map_err(|e| hanzo_ml::Error::msg(format!("ring: set_nonblocking {side}: {e}")))
+    };
+    tune(&left, "left")?;
+    tune(&right, "right")?;
+
+    Ok((Arc::new(Mutex::new(left)), Arc::new(Mutex::new(right))))
+}
+
+// Dial the right neighbour, retrying until `timeout` elapses, then fail naming the unreachable peer.
+fn connect_right(addr: &str, timeout: Duration) -> Result<TcpStream> {
+    let start = Instant::now();
+    loop {
+        match TcpStream::connect(addr) {
+            Ok(s) => return Ok(s),
+            Err(e) => {
+                if start.elapsed() >= timeout {
+                    return Err(hanzo_ml::Error::msg(format!(
+                        "ring: could not reach right neighbour {addr} within {timeout:?} ({e}); \
+                         check the link and that the peer is listening"
+                    )));
                 }
-            };
-
-            let (left, _) = left_listener.accept().expect("accept left neighbour");
-
-            left.set_nodelay(true).unwrap();
-            left.set_nonblocking(false).unwrap();
-            right.set_nodelay(true).unwrap();
-            right.set_nonblocking(false).unwrap();
-
-            (Arc::new(Mutex::new(left)), Arc::new(Mutex::new(right)))
-        })
-        .clone()
+                std::thread::sleep(CONNECT_RETRY_DELAY);
+            }
+        }
+    }
 }
 
 // Canonical wire dtype is f32. Heterogeneous ranks auto-pick different compute dtypes
@@ -133,4 +166,23 @@ pub(crate) fn read_bytes(stream: &mut TcpStream, buf: &mut [u8]) -> Result<()> {
         offset += len;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Loopback port 1 refuses instantly, so the retry loop hits the deadline with no live socket
+    // and must return a named error, never panic.
+    #[test]
+    fn dial_timeout_names_the_unreachable_peer() {
+        let addr = "127.0.0.1:1";
+        let err = connect_right(addr, Duration::from_millis(30)).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains(addr), "error must name the peer: {msg}");
+        assert!(
+            msg.contains("right neighbour"),
+            "error must be actionable: {msg}"
+        );
+    }
 }
