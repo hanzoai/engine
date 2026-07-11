@@ -134,7 +134,13 @@ impl FusedMoe {
         let (topk_idx, topk_weight) = self.gate.forward(xs)?;
 
         let ys = {
-            let xs3 = xs_flat.reshape((num_tokens, 1, hidden_dim))?;
+            // The expert grouped-GEMM (`indexed_moe_forward`) requires an F32 activation;
+            // upcast here so a single-dtype (bf16/f16) residual works. No-op when the residual
+            // is already F32; the trailing `to_dtype(original_dtype)` restores the residual
+            // dtype, keeping the F32 round-trip localized to the MoE expert boundary.
+            let xs3 = xs_flat
+                .to_dtype(DType::F32)?
+                .reshape((num_tokens, 1, hidden_dim))?;
             let gate = self.gate_experts.indexed_moe_forward(&xs3, &topk_idx)?;
             let up = self.up_experts.indexed_moe_forward(&xs3, &topk_idx)?;
             let activated = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
