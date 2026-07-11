@@ -25,6 +25,8 @@ pub enum GGUFArchitecture {
     Rwkv,
     Phi2,
     Phi3,
+    Gemma,
+    Gemma2,
     Starcoder2,
     Qwen2,
     Qwen3,

@@ -370,7 +370,9 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
             | GGUFArchitecture::Qwen3
             | GGUFArchitecture::Qwen3MoE
             | GGUFArchitecture::Qwen3Vl
-            | GGUFArchitecture::Qwen3VlMoE => {
+            | GGUFArchitecture::Qwen3VlMoE
+            | GGUFArchitecture::Gemma
+            | GGUFArchitecture::Gemma2 => {
                 let token_embd = tensor_info_size_in_bytes!(
                     self.model.tensor_info("token_embd.weight")?,
                     DType::F32
@@ -731,6 +733,44 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                     + ffn_gate
             }
 
+            GGUFArchitecture::Gemma | GGUFArchitecture::Gemma2 => {
+                let mut norms = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.attn_norm.weight")?,
+                    DType::F32
+                ) + tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.ffn_norm.weight")?,
+                    DType::F32
+                );
+                // Gemma2 runs post-attention and post-feedforward norms.
+                if let GGUFArchitecture::Gemma2 = self.arch {
+                    norms += tensor_info_size_in_bytes!(
+                        self.model.tensor_info("blk.0.post_attention_norm.weight")?,
+                        DType::F32
+                    ) + tensor_info_size_in_bytes!(
+                        self.model.tensor_info("blk.0.post_ffw_norm.weight")?,
+                        DType::F32
+                    );
+                }
+
+                let attn_q =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_q.weight")?);
+                let attn_k =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_k.weight")?);
+                let attn_v =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_v.weight")?);
+                let attn_output = tensor_info_size_in_bytes!(self
+                    .model
+                    .tensor_info("blk.0.attn_output.weight")?);
+
+                let ffn_gate =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_gate.weight")?);
+                let ffn_up =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_up.weight")?);
+                let ffn_down =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_down.weight")?);
+
+                norms + attn_q + attn_k + attn_v + attn_output + ffn_gate + ffn_up + ffn_down
+            }
             GGUFArchitecture::Qwen35
             | GGUFArchitecture::Qwen35MoE
             | GGUFArchitecture::Qwen3Next
