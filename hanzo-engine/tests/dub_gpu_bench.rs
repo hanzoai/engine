@@ -44,6 +44,9 @@ fn env_path(key: &str, default: &str) -> PathBuf {
     PathBuf::from(std::env::var(key).unwrap_or_else(|_| default.to_string()))
 }
 
+// Per-branch `return` keeps the cfg device selector readable; whichever branch is active would
+// otherwise trip needless_return under that feature set.
+#[allow(clippy::needless_return)]
 fn device() -> Result<Device> {
     #[cfg(feature = "vulkan")]
     {
