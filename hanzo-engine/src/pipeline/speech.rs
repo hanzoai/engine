@@ -492,11 +492,13 @@ impl Loader for SpeechLoader {
                 }
             }
             SpeechLoaderType::AceStep => {
-                // Components load in f32 for vocoder/DCAE fidelity; weights = [umt5, dit, dcae, vocoder].
+                // umt5/DCAE/vocoder stay f32 for fidelity; weights = [umt5, dit, dcae, vocoder].
                 let f32 = hanzo_ml::DType::F32;
                 let umt5_vb = load_component(vec![paths.weights[0].clone()], f32, |_| true)?;
-                // The DiT ckpt also carries the unused lyric-encoder / cross-attn-add / projector heads.
-                let dit_vb = load_component(vec![paths.weights[1].clone()], f32, |n| {
+                // DiT runs bf16 for Blackwell tensor cores (2x/forward, spectrogram-identical audio);
+                // f16 is unusable here, the 12800-wide GLU overflows its range to NaN. F32 islands for
+                // the RMS variance, LiteLA normaliser and RoPE phase live in AceStepTransformer.
+                let dit_vb = load_component(vec![paths.weights[1].clone()], hanzo_ml::DType::BF16, |n| {
                     !n.contains(".add_")
                         && !n.contains(".to_add_out")
                         && !n.starts_with("lyric")
