@@ -1,4 +1,6 @@
 mod experts;
+#[cfg(feature = "cuda")]
+pub(crate) mod grouped;
 
 use hanzo_quant::Shard;
 
