@@ -1,13 +1,18 @@
 name: build-test-matrix
 
-# Build + smoke-test hanzo across every self-hosted machine/arch in parallel.
-# Targets the auto-applied self-hosted labels (self-hosted + os + arch), so no
-# custom runner labels are required. The engine has a path-dep on ../ml, so each
-# job checks out the engine and clones the matching ml branch as a sibling.
+# Build hanzo-cli + `doctor` smoke on every self-hosted box in parallel, one
+# backend per box (same label convention as gpu-tests):
+#   cuda   -> spark (NVIDIA GB10, sm_121)      label: cuda
+#   vulkan -> evo   (AMD Strix Halo gfx1151)   label: gfx1151
+#   metal  -> dbc   (Apple M4 Max)             label: metal
+#   cpu    -> hanzo-build-linux-amd64 (cloud), in a C-toolchain container
+#
+# hanzo-ml is a crates.io dependency (see workspace Cargo.toml), so there is no
+# ../ml sibling to clone. Debug build (not --release): validates that each GPU
+# backend compiles, links, and produces a runnable binary — the shippable
+# release images come from build_cuda / build_rocm.
 
 on:
-  push:
-    branches: [feat/vulkan-quant-q4k]
   workflow_dispatch:
 
 jobs:
@@ -17,58 +22,57 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: spark-cuda-arm64
-            runs-on: [self-hosted, linux, ARM64]
+          - name: cuda-spark-arm64
+            runs-on: [self-hosted, cuda]
             features: cuda
+            container: ""
             env_line: "CUDA_COMPUTE_CAP=121 LD_LIBRARY_PATH=/usr/local/cuda/lib64"
             path_add: "/usr/local/cuda/bin"
-          - name: evo-vulkan-x64
-            runs-on: hanzo-build-linux-amd64
+          - name: vulkan-evo-x64
+            runs-on: [self-hosted, gfx1151]
             features: vulkan
+            container: ""
             env_line: ""
             path_add: ""
-          - name: dbc-metal-arm64
-            runs-on: [self-hosted, macOS, ARM64]
+          - name: metal-dbc-arm64
+            runs-on: [self-hosted, metal]
             features: metal
+            container: ""
             env_line: ""
             path_add: ""
-          - name: linux-cpu-x64
+          - name: cpu-linux-x64
             runs-on: hanzo-build-linux-amd64
             features: ""
+            container: buildpack-deps:bookworm
             env_line: ""
             path_add: ""
     runs-on: ${{ matrix.runs-on }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
     steps:
-      - name: Checkout engine
-        uses: actions/checkout@v4
-        with:
-          path: engine
+      - uses: actions/checkout@v4
 
-      - name: Clone ml sibling (matching branch)
-        run: |
-          rm -rf ml
-          git clone --depth 1 -b "${GITHUB_REF_NAME}" git@github.com:hanzoai/ml.git ml \
-            || git clone --depth 1 git@github.com:hanzoai/ml.git ml
-          echo "ml at: $(git -C ml rev-parse --short HEAD)"
+      - name: Remove cargo config (macOS ring crate fix)
+        if: matrix.features == 'metal'
+        run: rm -f .cargo/config.toml
+
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Build hanzo-cli (${{ matrix.features || 'cpu' }})
         run: |
           export PATH="$HOME/.cargo/bin:${{ matrix.path_add }}:$PATH"
           [ -n "${{ matrix.env_line }}" ] && export ${{ matrix.env_line }}
-          cd engine
           if [ -n "${{ matrix.features }}" ]; then
-            cargo build --release -p hanzo-cli --features "${{ matrix.features }}"
+            cargo build -p hanzo-cli --features "${{ matrix.features }}"
           else
-            cargo build --release -p hanzo-cli
+            cargo build -p hanzo-cli
           fi
 
       - name: Smoke test (doctor)
         run: |
           export PATH="$HOME/.cargo/bin:${{ matrix.path_add }}:$PATH"
           [ -n "${{ matrix.env_line }}" ] && export ${{ matrix.env_line }}
-          BIN=engine/target/release/hanzo
-          [ -f "$BIN.exe" ] && BIN="$BIN.exe"
-          "$BIN" doctor
+          target/debug/hanzo doctor
