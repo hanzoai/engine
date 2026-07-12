@@ -24,6 +24,12 @@ jobs:
               - gfx_arch: gfx1151
                 rocm_base: rocm/dev-ubuntu-24.04:7.2.4
           fail-fast: false
+          # Build one arch at a time: the ARC pods carry no memory request, so
+          # co-located heavy build pods OOM-kill each other on a shared node
+          # (empty job logs = the pod was evicted before it could upload). Memory
+          # per leg is bounded in Dockerfile.rocm; serializing removes the
+          # co-location. Durable fix is memory requests on the scale set.
+          max-parallel: 1
         runs-on: hanzo-build-linux-amd64
         timeout-minutes: 210
 
