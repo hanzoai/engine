@@ -56,6 +56,7 @@ const SKIP_RESPONSE_HEADERS: [&str; 6] = [
 struct ProxyState {
     balancer: Balancer,
     client: reqwest::Client,
+    upstream_model: Option<String>,
 }
 
 /// What to serve: the pool + where to bind + how often to re-probe.
@@ -64,6 +65,11 @@ pub struct ServeConfig {
     pub port: u16,
     pub balancer: Balancer,
     pub probe_interval: Duration,
+    /// Rewrite each forwarded request's `model` to this before it reaches the
+    /// replica. Engines that serve one model strict-match its id (or `default`)
+    /// and 500 on anything else, so a fabric fronting `claude-*`-style clients
+    /// pins the upstream id here. `None` forwards the client's `model` unchanged.
+    pub upstream_model: Option<String>,
 }
 
 fn app(state: Arc<ProxyState>) -> Router {
@@ -80,10 +86,12 @@ pub async fn serve_listener(
     listener: tokio::net::TcpListener,
     balancer: Balancer,
     probe_interval: Duration,
+    upstream_model: Option<String>,
 ) -> anyhow::Result<()> {
     let state = Arc::new(ProxyState {
         balancer,
         client: reqwest::Client::builder().build()?,
+        upstream_model,
     });
     tokio::spawn(probe_loop(state.clone(), probe_interval));
     axum::serve(listener, app(state)).await?;
@@ -94,7 +102,7 @@ pub async fn serve_listener(
 pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind((cfg.host.as_str(), cfg.port)).await?;
     tracing::info!("hanzo-router proxy listening on {}:{}", cfg.host, cfg.port);
-    serve_listener(listener, cfg.balancer, cfg.probe_interval).await
+    serve_listener(listener, cfg.balancer, cfg.probe_interval, cfg.upstream_model).await
 }
 
 /// Forward any non-admin path to a chosen replica, retrying past replicas that
@@ -119,6 +127,13 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request) -> Response {
         return err(StatusCode::NOT_FOUND, "no replica set for model");
     };
     let key = affinity_key(&parts.headers, json.as_ref());
+    let body_bytes = match (state.upstream_model.as_deref(), json) {
+        (Some(um), Some(mut j)) => {
+            j["model"] = Value::String(um.to_string());
+            serde_json::to_vec(&j).map(Bytes::from).unwrap_or(body_bytes)
+        }
+        _ => body_bytes,
+    };
     let fwd = forward_headers(&parts.headers);
     for _ in 0..set.len().max(1) {
         let Some(lease) = set.pick(&key) else { break };
@@ -425,7 +440,11 @@ mod e2e {
     async fn start_proxy(balancer: Balancer, interval: Duration) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { serve_listener(listener, balancer, interval).await.unwrap() });
+        tokio::spawn(async move {
+            serve_listener(listener, balancer, interval, None)
+                .await
+                .unwrap()
+        });
         format!("http://{addr}")
     }
 
@@ -551,5 +570,53 @@ mod e2e {
             .cloned()
             .unwrap();
         assert_eq!(dead_row["healthy"], false, "dead upstream probed unhealthy");
+    }
+
+    async fn echo_model(axum::Json(v): axum::Json<serde_json::Value>) -> Response {
+        let m = v
+            .get("model")
+            .and_then(|x| x.as_str())
+            .unwrap_or("<none>")
+            .to_string();
+        let body = format!("data: {{\"model\":\"{m}\"}}\n\ndata: [DONE]\n\n");
+        ([(CONTENT_TYPE, "text/event-stream")], body).into_response()
+    }
+
+    #[tokio::test]
+    async fn upstream_model_is_rewritten() {
+        let app = Router::new()
+            .route("/health", get(|| async { "ok" }))
+            .route("/v1/chat/completions", post(echo_model));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let balancer = Balancer::new(64);
+        balancer.register("qwen", Replica::new(format!("http://{addr}")));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let paddr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            serve_listener(listener, balancer, Duration::from_secs(60), Some("default".into()))
+                .await
+                .unwrap()
+        });
+        let base = format!("http://{paddr}");
+        let client = reqwest::Client::new();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let resp = client
+            .post(format!("{base}/v1/chat/completions"))
+            .json(&serde_json::json!({
+                "model": "claude-3-5-sonnet",
+                "messages": [{"role": "user", "content": "hi"}]
+            }))
+            .send()
+            .await
+            .unwrap();
+        let text = resp.text().await.unwrap();
+        assert!(
+            text.contains("\"model\":\"default\""),
+            "client model must be rewritten to `default` upstream, got: {text}"
+        );
     }
 }
