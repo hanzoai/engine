@@ -7,8 +7,16 @@ FROM rust:latest AS builder
 WORKDIR /hanzo
 COPY . .
 
-# Build the project in release mode, excluding the specified workspace
-RUN cargo build --release --workspace --exclude hanzo-pyo3
+# Portable, memory-bounded release build (see Dockerfile.cuda for the rationale):
+# RUSTFLAGS="" strips .cargo/config.toml `target-cpu=native` so the image runs on
+# any x86-64 host; CARGO_BUILD_JOBS=2 caps rustc so the ARC pod does not OOM.
+ENV RUSTFLAGS="" \
+    CARGO_INCREMENTAL=0 \
+    CARGO_NET_RETRY=5 \
+    CARGO_BUILD_JOBS=2
+# Only the two binaries the runtime stage copies (hanzo-server, hanzo-bench) —
+# a full --workspace build (incl. tests/examples) OOM-killed the runner.
+RUN cargo build --release -p hanzo-server -p hanzo-bench
 
 
 # Stage 2: Minimal runtime environment
