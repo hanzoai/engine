@@ -11,8 +11,12 @@ name: Release Hanzo Engine
 #     workflow-level cancel (the historical failure: legs targeting an offline
 #     runner never start, the 48h max hits, and `create-release` is skipped ->
 #     zero assets on v0.9.0 / v1.0.1).
-#   * `fail-fast: false` + `release: if: always()`: a flaky leg (e.g. a Windows
-#     cross-build) fails on its own and the release still attaches whatever built.
+#   * `fail-fast: false` + `release: if: always()`: a flaky leg fails on its own
+#     and the release still attaches whatever built.
+#   * Linux amd64/arm64 only. Windows is not built: cargo-zigbuild cannot
+#     cross-compile aws-lc-sys (jitterentropy needs POSIX `sched.h`, absent from
+#     zig's windows-gnu sysroot), so those legs never produced a binary. Wire a
+#     native Windows runner to add them back.
 #   * RUSTFLAGS="" strips the repo's `.cargo/config.toml` `target-cpu=native`, so
 #     the artifacts are baseline-portable (no SIGILL on other CPUs). zigbuild pins
 #     a glibc floor (2.17) so the Linux binaries run on ~any distro from the last decade.
@@ -55,16 +59,6 @@ jobs:
             zigtarget: aarch64-unknown-linux-gnu.2.17
             dir: aarch64-unknown-linux-gnu
             ext: tar.gz
-          - name: hanzoai-windows-amd64
-            zigtarget: x86_64-pc-windows-gnu
-            dir: x86_64-pc-windows-gnu
-            ext: zip
-            binext: .exe
-          - name: hanzoai-windows-arm64
-            zigtarget: aarch64-pc-windows-gnullvm
-            dir: aarch64-pc-windows-gnullvm
-            ext: zip
-            binext: .exe
     env:
       RUSTFLAGS: ""   # portable baseline codegen; overrides repo target-cpu=native
       CARGO_TERM_COLOR: always
@@ -88,14 +82,6 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y -qq --no-install-recommends \
               build-essential cmake pkg-config curl git zip python3 python3-pip xz-utils ca-certificates
-            # Windows-gnu targets: some crates (parking_lot_core) invoke
-            # `x86_64-w64-mingw32-dlltool` directly — zig provides the C compiler
-            # but not binutils, so install mingw-w64. (Windows-arm64/gnullvm still
-            # wants llvm-mingw's dlltool; that leg is best-effort until a native
-            # Windows runner or llvm-mingw is wired.)
-            case "${{ matrix.dir }}" in
-              *windows*) sudo apt-get install -y -qq --no-install-recommends mingw-w64 || true ;;
-            esac
           fi
 
       - name: Rust toolchain + zigbuild
@@ -143,10 +129,13 @@ jobs:
         run: |
           set -euo pipefail
           f="${{ matrix.name }}.${{ matrix.ext }}"
+          # Keyless signing needs egress to fulcio.sigstore.dev, which the
+          # self-hosted fleet may have blocked. Never fail the release over a
+          # missing signature: attach the binary regardless, signed when reachable.
           cosign sign-blob --yes \
             --output-signature "$f.sig" \
             --output-certificate "$f.pem" \
-            "$f"
+            "$f" || echo "::warning::cosign keyless signing unavailable (Fulcio egress blocked); shipping $f unsigned"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -197,7 +186,8 @@ jobs:
         run: |
           set -euo pipefail
           f="hanzoai-macos-${{ matrix.arch }}.tar.gz"
-          cosign sign-blob --yes --output-signature "$f.sig" --output-certificate "$f.pem" "$f"
+          # Non-fatal: ship the binary even when Fulcio egress is blocked (see build job).
+          cosign sign-blob --yes --output-signature "$f.sig" --output-certificate "$f.pem" "$f" || echo "::warning::cosign keyless signing unavailable (Fulcio egress blocked); shipping $f unsigned"
       - uses: actions/upload-artifact@v4
         with:
           name: hanzoai-macos-${{ matrix.arch }}
