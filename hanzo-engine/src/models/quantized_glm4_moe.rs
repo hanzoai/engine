@@ -308,7 +308,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = qtok_embeddings.dequantize(device)?;
-        let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, props.rms_norm_eps)?;
+        let norm = QRmsNorm::new_dtype(
+            ct.tensor("output_norm.weight", device)?,
+            props.rms_norm_eps,
+            dtype,
+        )?;
         let output = if ct.has_tensor("output.weight") {
             ct.tensor("output.weight", device)?
         } else {
@@ -367,13 +371,15 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
             let (q_norm, k_norm) = if ct.has_tensor(&format!("{prefix}.attn_q_norm.weight")) {
                 (
-                    Some(QRmsNorm::new(
+                    Some(QRmsNorm::new_dtype(
                         ct.tensor(&format!("{prefix}.attn_q_norm.weight"), device)?,
                         props.rms_norm_eps,
+                        dtype,
                     )?),
-                    Some(QRmsNorm::new(
+                    Some(QRmsNorm::new_dtype(
                         ct.tensor(&format!("{prefix}.attn_k_norm.weight"), device)?,
                         props.rms_norm_eps,
+                        dtype,
                     )?),
                 )
             } else {
@@ -382,13 +388,15 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
             let mlp = build_moe_or_mlp(&mut ct, layer_idx, device, &props.moe)?;
 
-            let attention_norm = QRmsNorm::new(
+            let attention_norm = QRmsNorm::new_dtype(
                 ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?,
                 props.rms_norm_eps,
+                dtype,
             )?;
-            let post_attention_norm = QRmsNorm::new(
+            let post_attention_norm = QRmsNorm::new_dtype(
                 ct.tensor(&format!("{prefix}.post_attention_norm.weight"), device)?,
                 props.rms_norm_eps,
+                dtype,
             )?;
 
             let paged_attn = match &attention_mechanism {
@@ -445,7 +453,10 @@ impl ModelWeights {
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
-        let mut layer_in = self.tok_embeddings.forward(x)?;
+        // Single-dtype residual: cast the F32 embedding output to the compute dtype so the
+        // norm/attention/MoE chain stays one dtype (drops F32<->half casts; the MoE expert path
+        // restores the input dtype so no F32 round-trip is reintroduced).
+        let mut layer_in = self.tok_embeddings.forward(x)?.to_dtype(self.dtype)?;
         let cache = &mut self.cache.normal().0;
         let positions = match metadata
             .as_ref()
