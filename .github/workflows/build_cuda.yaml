@@ -17,10 +17,13 @@ jobs:
             compute_capability: [80, 86, 89, 90, 120, 121]
             # cap 121 (Blackwell GB10) is the flagship: it also gets the bare -cuda tags
           fail-fast: false
-          # Cap concurrent legs so six multi-GB CUDA builds do not exhaust the
-          # ARC node pool / OOM each other (the historical "runner received a
-          # shutdown signal"). Memory per leg is bounded in Dockerfile.cuda.
-          max-parallel: 2
+          # Build one cap at a time. The ARC pods carry no memory request, so
+          # K8s packs several heavy build pods onto one node and the kernel
+          # OOM-kills whichever legs co-locate ("the runner has received a
+          # shutdown signal"). Per-leg memory is already bounded in
+          # Dockerfile.cuda; serializing removes the cross-leg co-location that
+          # is the actual killer. Durable fix is memory requests on the scale set.
+          max-parallel: 1
         runs-on: hanzo-build-linux-amd64
         timeout-minutes: 210
         
