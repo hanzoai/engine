@@ -36,15 +36,21 @@ RUN rustup update nightly && rustup default nightly
 WORKDIR /hanzo
 COPY . .
 
-# Rayon threads are limited to minimize memory requirements in CI, avoiding OOM
-# Rust threads are increased with a nightly feature for faster compilation (single-threaded by default)
-# ROCM_GFX_ARCH is read by build.rs to compile the HIP kernels for the target ISA
+# ROCM_GFX_ARCH is read by build.rs to compile the HIP kernels for the target ISA.
 ARG ROCM_GFX_ARCH=gfx942
 ENV ROCM_GFX_ARCH=${ROCM_GFX_ARCH}
-ARG RAYON_NUM_THREADS=4
-ARG RUST_NUM_THREADS=4
-ARG RUSTFLAGS="-Z threads=${RUST_NUM_THREADS}"
 ARG WITH_FEATURES="rocm"
+# Portable, memory-bounded release build. These MUST be ENV, not ARG, or cargo
+# never sees them:
+#   RUSTFLAGS=""       overrides .cargo/config.toml `target-cpu=native` (SIGILL on
+#                      other hosts otherwise).
+#   CARGO_BUILD_JOBS=2 caps concurrent rustc so the ARC pod does not OOM (the
+#                      unbounded default recycled the runner mid-compile).
+ENV RUSTFLAGS="" \
+    CARGO_INCREMENTAL=0 \
+    CARGO_NET_RETRY=5 \
+    CARGO_BUILD_JOBS=2 \
+    RAYON_NUM_THREADS=4
 # Only the two binaries the runtime stage copies (hanzo-server, hanzo-bench).
 RUN cargo build --release -p hanzo-server -p hanzo-bench --features "${WITH_FEATURES}"
 
