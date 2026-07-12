@@ -34,6 +34,11 @@ struct Args {
     /// Background health re-probe cadence, seconds.
     #[arg(long)]
     probe_interval_secs: Option<u64>,
+    /// Rewrite every forwarded request's `model` to this value. Single-model
+    /// engines strict-match their served id (or `default`) and 500 otherwise, so
+    /// a fabric fronting `claude-*`-style clients pins `--upstream-model default`.
+    #[arg(long)]
+    upstream_model: Option<String>,
 }
 
 fn build_balancer(args: &Args) -> anyhow::Result<Balancer> {
@@ -74,6 +79,7 @@ async fn main() -> anyhow::Result<()> {
         port: args.port,
         balancer,
         probe_interval,
+        upstream_model: args.upstream_model.clone(),
     })
     .await
 }
