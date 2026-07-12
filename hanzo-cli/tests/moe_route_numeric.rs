@@ -96,6 +96,28 @@ fn check(dev: &Device, log: &mut String, ntok: usize, n_experts: usize, topk: us
     assert_eq!(nbad, 0, "moe_route ntok={ntok} E={n_experts} k={topk} norm={norm}: nbad={nbad} max_w_err={max_w_err}");
 }
 
+// Explicit last-row-collapse guard: token t peaks at experts t..t+topk, so the last token routes to a
+// DIFFERENT expert set than every earlier token. A kernel that narrowed [tokens, experts] to its last
+// row (the fixed CUDA `cuda_topk`/`final_logits_row` bug) would route token 0 by the last token's
+// experts; assert the fused ROCm kernel keeps per-token routing at the model's real prefill shape.
+fn check_last_row_distinct(dev: &Device, ntok: usize, n_experts: usize, topk: usize) {
+    let mut logits = vec![0f32; ntok * n_experts];
+    for t in 0..ntok {
+        for r in 0..topk {
+            logits[t * n_experts + (t + r) % n_experts] = (topk - r) as f32 * 10.0;
+        }
+    }
+    let lt = Tensor::from_vec(logits, (ntok, n_experts), dev).expect("logits");
+    let (ids_t, _) = hanzo_ml::quantized::moe_route(&lt, topk, true).expect("moe_route");
+    let ids = ids_t.flatten_all().unwrap().to_vec1::<u32>().expect("ids");
+    let mut tok0 = ids[0..topk].to_vec();
+    let mut last = ids[(ntok - 1) * topk..ntok * topk].to_vec();
+    tok0.sort_unstable();
+    last.sort_unstable();
+    assert_eq!(tok0, (0..topk as u32).collect::<Vec<_>>(), "token 0 must route to experts 0..topk");
+    assert_ne!(tok0, last, "token 0 wears the last token's experts -- last-row collapse");
+}
+
 #[test]
 fn moe_route_numeric() {
     let mut log = String::new();
@@ -109,6 +131,8 @@ fn moe_route_numeric() {
     check(&dev, &mut log, 7, 64, 6, true); // non-pow2 experts/topk
     check(&dev, &mut log, 33, 60, 4, false);
     check(&dev, &mut log, 1, 256, 8, true); // max experts
+
+    check_last_row_distinct(&dev, 128, 128, 8); // last-row-collapse guard at real prefill shape
 
     eprintln!("{log}");
 }
