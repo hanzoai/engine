@@ -23,17 +23,26 @@ RUN rustup update nightly && rustup default nightly
 WORKDIR /hanzo
 COPY . .
 
-# Rayon threads are limited to minimize memory requirements in CI, avoiding OOM
-# Rust threads are increased with a nightly feature for faster compilation (single-threaded by default)
 ARG CUDA_COMPUTE_CAP=80
-ARG RAYON_NUM_THREADS=4
-ARG RUST_NUM_THREADS=4
-ARG RUSTFLAGS="-Z threads=${RUST_NUM_THREADS}"
 ARG WITH_FEATURES="cuda,cudnn,flash-attn"
+# Portable, memory-bounded release build. These MUST be ENV, not ARG: cargo and
+# build.rs read the process environment, so an ARG alone is invisible to them.
+#   RUSTFLAGS=""       overrides the repo .cargo/config.toml `target-cpu=native`,
+#                      which would otherwise bake the builder pod's CPU features
+#                      into the image and SIGILL on any other host.
+#   CARGO_BUILD_JOBS=2 caps concurrent rustc so the ARC pod does not OOM. The
+#                      unbounded default (num_cpus) recycled the runner
+#                      mid-compile: "the runner has received a shutdown signal".
+#   CUDA_COMPUTE_CAP   is read by build.rs — as ARG-only every matrix leg
+#                      silently compiled the default cap instead of its own.
+ENV RUSTFLAGS="" \
+    CARGO_INCREMENTAL=0 \
+    CARGO_NET_RETRY=5 \
+    CARGO_BUILD_JOBS=2 \
+    RAYON_NUM_THREADS=4 \
+    CUDA_COMPUTE_CAP=${CUDA_COMPUTE_CAP}
 # Only the two binaries the runtime stage copies (hanzo-server, hanzo-bench) —
-# not the whole workspace. Cuts CUDA build time enough to finish inside the
-# self-hosted runner lifetime (a full --workspace build was getting the runner
-# recycled mid-compile on the higher compute-cap legs).
+# not the whole workspace.
 RUN cargo build --release -p hanzo-server -p hanzo-bench --features "${WITH_FEATURES}"
 
 
