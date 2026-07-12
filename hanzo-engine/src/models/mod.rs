@@ -27,6 +27,7 @@ pub(crate) mod quantized_gemma;
 pub(crate) mod quantized_glm4_moe;
 pub(crate) mod quantized_gptoss;
 pub(crate) mod quantized_llama;
+pub(crate) mod quantized_minimax;
 pub(crate) mod quantized_phi2;
 pub(crate) mod quantized_phi3;
 pub(crate) mod quantized_qwen;
