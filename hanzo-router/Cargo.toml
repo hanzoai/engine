@@ -1,6 +1,6 @@
 [package]
 name = "hanzo-router"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Memory- and engine-aware model router — the native companion to hanzo-ml/hanzo-engine that hanzo-node uses to route requests across local + cloud models."
 repository = "https://github.com/hanzoai/engine"
