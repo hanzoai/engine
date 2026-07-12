@@ -66,26 +66,13 @@ jobs:
           export PATH="$HOME/.cargo/bin:${{ matrix.path_add }}:$PATH"
           [ -n "${{ matrix.env_line }}" ] && export ${{ matrix.env_line }}
           if [ -n "${{ matrix.features }}" ]; then
-            cargo build -p hanzo-cli --features "${{ matrix.features }}" 2>&1 | tee build.log
+            cargo build -p hanzo-cli --features "${{ matrix.features }}"
           else
-            cargo build -p hanzo-cli 2>&1 | tee build.log
+            cargo build -p hanzo-cli
           fi
 
       - name: Smoke test (doctor)
         run: |
           export PATH="$HOME/.cargo/bin:${{ matrix.path_add }}:$PATH"
           [ -n "${{ matrix.env_line }}" ] && export ${{ matrix.env_line }}
-          target/debug/hanzo doctor 2>&1 | tee smoke.log
-
-      # Self-hosted / ephemeral runners do not reliably retain logs in the GitHub
-      # API (evo returns 0 lines; cloud blobs 404), so persist stderr as an
-      # artifact for post-mortem when a cell is red.
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: log-${{ matrix.name }}
-          path: |
-            build.log
-            smoke.log
-          if-no-files-found: ignore
+          target/debug/hanzo doctor
