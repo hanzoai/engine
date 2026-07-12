@@ -43,8 +43,44 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Create the GitHub Release first; every build leg then uploads its bundle
+  # straight to it as a RELEASE ASSET (softprops). Release assets are not billed
+  # against the Actions artifact-storage quota, so the release ships even when
+  # that quota is exhausted (the v1.7.30 failure: every leg built + signed, then
+  # `upload-artifact` hit "Artifact storage quota has been hit").
+  create-release:
+    name: Create Release
+    runs-on: hanzo-build-linux-amd64
+    timeout-minutes: 15
+    steps:
+      - name: Ensure the GitHub Release exists
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          make_latest: true
+          generate_release_notes: true
+          body: |
+            ## Prebuilt binaries
+
+            One-line install (Linux/macOS):
+            ```sh
+            curl -fsSL https://raw.githubusercontent.com/hanzoai/engine/main/install.sh | sh
+            ```
+
+            Then serve an OpenAI + Anthropic compatible endpoint on :1234:
+            ```sh
+            hanzoai --port 1234 run -m Qwen/Qwen3-4B
+            ```
+
+            Each bundle is cosign-signed (keyless, Sigstore / GitHub OIDC) when the
+            signer is reachable — verify with the adjacent `.sig` + `.pem`.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
     name: ${{ matrix.name }}
+    needs: create-release
     runs-on: hanzo-build-linux-amd64
     timeout-minutes: 120
     strategy:
@@ -137,15 +173,16 @@ jobs:
             --output-certificate "$f.pem" \
             "$f" || echo "::warning::cosign keyless signing unavailable (Fulcio egress blocked); shipping $f unsigned"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload bundle to release
+        uses: softprops/action-gh-release@v2
         with:
-          name: ${{ matrix.name }}
-          path: |
+          files: |
             ${{ matrix.name }}.${{ matrix.ext }}
             ${{ matrix.name }}.${{ matrix.ext }}.sig
             ${{ matrix.name }}.${{ matrix.ext }}.pem
-          if-no-files-found: ignore
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # macOS is the one target that cannot be cross-compiled from Linux (needs the
   # Apple SDK + codesign). It is GATED on a repo variable so it never queues on a
@@ -154,6 +191,7 @@ jobs:
   # change. Until then it is skipped (not queued), so it cannot hang the release.
   build-macos:
     name: hanzoai-macos-${{ matrix.arch }}
+    needs: create-release
     if: ${{ vars.MACOS_RUNNER_ONLINE == 'true' }}
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 120
@@ -188,74 +226,13 @@ jobs:
           f="hanzoai-macos-${{ matrix.arch }}.tar.gz"
           # Non-fatal: ship the binary even when Fulcio egress is blocked (see build job).
           cosign sign-blob --yes --output-signature "$f.sig" --output-certificate "$f.pem" "$f" || echo "::warning::cosign keyless signing unavailable (Fulcio egress blocked); shipping $f unsigned"
-      - uses: actions/upload-artifact@v4
+      - name: Upload bundle to release
+        uses: softprops/action-gh-release@v2
         with:
-          name: hanzoai-macos-${{ matrix.arch }}
-          path: |
+          files: |
             hanzoai-macos-${{ matrix.arch }}.tar.gz
             hanzoai-macos-${{ matrix.arch }}.tar.gz.sig
             hanzoai-macos-${{ matrix.arch }}.tar.gz.pem
-          if-no-files-found: ignore
-
-  release:
-    name: Create Release
-    needs: [build, build-macos]
-    # Attach whatever built. Runs on partial success (a failed Windows cross leg
-    # must not block the linux assets); only a full run cancellation stops it.
-    if: always() && !cancelled()
-    runs-on: hanzo-build-linux-amd64
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: ./artifacts
-
-      - name: Assemble + checksums
-        id: assemble
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sig' -o -name '*.pem' \) \
-            -exec cp {} dist/ \;
-          cd dist
-          shopt -s nullglob
-          bundles=( *.tar.gz *.zip )
-          if [ ${#bundles[@]} -eq 0 ]; then
-            echo "::error::no build artifacts were produced — refusing to publish an empty release"
-            exit 1
-          fi
-          sha256sum *.tar.gz *.zip > SHA256SUMS 2>/dev/null || true
-          echo "Published platform bundles:"; ls -1 *.tar.gz *.zip
-          {
-            echo "## Prebuilt binaries"
-            echo
-            echo "One-line install (Linux/macOS):"
-            echo '```sh'
-            echo 'curl -fsSL https://raw.githubusercontent.com/hanzoai/engine/main/install.sh | sh'
-            echo '```'
-            echo
-            echo "Then serve an OpenAI + Anthropic compatible endpoint on :1234:"
-            echo '```sh'
-            echo 'hanzoai --port 1234 run -m Qwen/Qwen3-4B'
-            echo '```'
-            echo
-            echo "### Platform bundles"
-            for b in *.tar.gz *.zip; do echo "- \`$b\`"; done
-            echo
-            echo "Each bundle is cosign-signed (keyless, Sigstore / GitHub OIDC): verify with the"
-            echo 'adjacent `.sig` + `.pem` and `SHA256SUMS`.'
-          } > ../RELEASE_NOTES.md
-
-      - name: Create / update Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
-          body_path: RELEASE_NOTES.md
-          draft: false
-          prerelease: false
-          make_latest: true
-          generate_release_notes: true
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
