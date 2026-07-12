@@ -400,7 +400,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let (tok_embeddings, norm, output) = if is_head {
             let qtok = ct.tensor("token_embd.weight", device)?;
             let tok = Embedding::new(qtok.dequantize(device)?, embedding_length);
-            let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, rms_norm_eps)?;
+            let norm =
+                QRmsNorm::new_dtype(ct.tensor("output_norm.weight", device)?, rms_norm_eps, dtype)?;
             let out = if !ct.has_tensor("output.weight") {
                 ct.tensor("token_embd.weight", device)?
             } else {
@@ -507,13 +508,15 @@ impl ModelConfig::FromGGUF for ModelWeights {
             };
 
             // Qwen3 always has q_norm and k_norm
-            let q_norm = QRmsNorm::new(
+            let q_norm = QRmsNorm::new_dtype(
                 ct.tensor(&format!("{prefix}.attn_q_norm.weight"), device)?,
                 rms_norm_eps,
+                dtype,
             )?;
-            let k_norm = QRmsNorm::new(
+            let k_norm = QRmsNorm::new_dtype(
                 ct.tensor(&format!("{prefix}.attn_k_norm.weight"), device)?,
                 rms_norm_eps,
+                dtype,
             )?;
 
             let attention_norm = ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?;
@@ -542,11 +545,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     q_weight: Arc::new(attention_wo),
                     b: None,
                 })?),
-                attention_norm: QRmsNorm::new(attention_norm, rms_norm_eps)?,
+                attention_norm: QRmsNorm::new_dtype(attention_norm, rms_norm_eps, dtype)?,
                 q_norm,
                 k_norm,
                 mlp,
-                ffn_norm: QRmsNorm::new(ffn_norm, rms_norm_eps)?,
+                ffn_norm: QRmsNorm::new_dtype(ffn_norm, rms_norm_eps, dtype)?,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim,
@@ -588,7 +591,15 @@ impl ModelWeights {
         if self.pp.is_some() {
             return pp_head_forward(self, x, start_offsets, context_lens);
         }
-        let mut layer_in = self.tok_embeddings.as_ref().unwrap().forward(x)?;
+        // Single-dtype residual: cast the F32 embedding output to the compute dtype so the
+        // norm/attention/MoE chain stays one dtype (drops F32<->half casts, engages fused qk-norm;
+        // the MoE expert path already restores the input dtype so no F32 round-trip is reintroduced).
+        let mut layer_in = self
+            .tok_embeddings
+            .as_ref()
+            .unwrap()
+            .forward(x)?
+            .to_dtype(self.dtype)?;
         let cache = &mut self.cache.normal().0;
         // Decode reads RoPE positions from a stable device tensor so a captured
         // graph replays with the advancing position; when the caller supplies
