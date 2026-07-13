@@ -26,9 +26,13 @@ impl LogVerbosity {
 
 /// This should be called to initialize the debug flag and logging.
 /// This should not be called in hanzo-engine code due to Rust usage.
+///
+/// Installs a tracing subscriber honoring `RUST_LOG` (falling back to the
+/// `Info` default filter) and sets the `DEBUG` atomic. Idempotent: if a
+/// subscriber is already installed (e.g. the CLI installed one earlier) the
+/// install is a no-op, but the `DEBUG` atomic is still set.
 pub fn initialize_logging() {
-    let is_debug = std::env::var("DEBUG").unwrap_or_default().contains('1');
-    DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
+    initialize_hanzo_logging(LogVerbosity::Info);
 }
 
 pub fn initialize_hanzo_logging(verbosity: LogVerbosity) {

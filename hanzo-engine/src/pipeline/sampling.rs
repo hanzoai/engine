@@ -429,7 +429,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             // Ensure timing info is synced to group before sending response
             seq.update_time_info();
 
-            let group = seq.get_mut_group();
+            let mut group = seq.get_mut_group();
             if group.is_chat {
                 group
                     .maybe_send_chat_done_response(
@@ -450,19 +450,17 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     .await
                     .map_err(hanzo_ml::Error::msg)?;
             } else {
+                let completion_response = crate::CompletionResponse {
+                    id: seq.id().to_string(),
+                    choices: group.get_completion_choices(),
+                    created: seq.creation_time(),
+                    model: pipeline_name,
+                    system_fingerprint: crate::SYSTEM_FINGERPRINT.to_string(),
+                    object: "text_completion".to_string(),
+                    usage: group.get_usage(),
+                };
                 group
-                    .maybe_send_completion_done_response(
-                        crate::CompletionResponse {
-                            id: seq.id().to_string(),
-                            choices: group.get_completion_choices().to_vec(),
-                            created: seq.creation_time(),
-                            model: pipeline_name,
-                            system_fingerprint: crate::SYSTEM_FINGERPRINT.to_string(),
-                            object: "text_completion".to_string(),
-                            usage: group.get_usage(),
-                        },
-                        seq.responder(),
-                    )
+                    .maybe_send_completion_done_response(completion_response, seq.responder())
                     .await
                     .map_err(hanzo_ml::Error::msg)?;
             }
