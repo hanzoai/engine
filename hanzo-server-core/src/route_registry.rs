@@ -47,6 +47,9 @@ pub const SYSTEM_DOCTOR_ROUTE: RouteInfo =
 pub const HEALTH_ROUTE: RouteInfo = RouteInfo::new("/health", "GET", RouteKind::Hanzo);
 pub const ROOT_ROUTE: RouteInfo = RouteInfo::new("/", "GET", RouteKind::Hanzo);
 pub const RE_ISQ_ROUTE: RouteInfo = RouteInfo::new("/re_isq", "POST", RouteKind::Hanzo);
+/// The production model-routing contract consumed by hanzoai/ai cloud-api's
+/// `router.Client`. Base path (no `/v1`) is fixed by the merged Go client.
+pub const ROUTE_ROUTE: RouteInfo = RouteInfo::new("/route", "POST", RouteKind::Hanzo);
 pub const IMAGE_GENERATION_ROUTE: RouteInfo =
     RouteInfo::new("/v1/images/generations", "POST", RouteKind::OpenAi);
 pub const FILES_ROUTE: RouteInfo = RouteInfo::new("/v1/files", "GET", RouteKind::OpenAi);
@@ -122,6 +125,7 @@ pub const API_ROUTES: &[RouteInfo] = &[
     SESSION_ROUTE,
     AGENT_APPROVAL_ROUTE,
     RE_ISQ_ROUTE,
+    ROUTE_ROUTE,
 ];
 
 #[cfg(feature = "swagger-ui")]
