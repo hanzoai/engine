@@ -85,6 +85,30 @@ pub(crate) struct DsaConfig {
     pub rope_dim: usize,
 }
 
+impl DsaConfig {
+    /// Build a config from a checkpoint's indexer dims, or `None` when those dims
+    /// can't drive a real indexer. The gate is colibrì `glm.c`'s `has_dsa`
+    /// predicate (`glm.c:836`): `index_topk`, `index_n_heads`, `index_head_dim`
+    /// all positive and `index_head_dim <= 256`. A checkpoint that declares DSA
+    /// metadata with degenerate dims falls back to the dense path here instead of
+    /// building an indexer that would mis-shape downstream — the one place every
+    /// loader decides "is this DSA config usable", so they can't disagree.
+    pub(crate) fn new(
+        index_n_heads: usize,
+        index_head_dim: usize,
+        index_topk: usize,
+        rope_dim: usize,
+    ) -> Option<Self> {
+        (index_topk > 0 && index_n_heads > 0 && index_head_dim > 0 && index_head_dim <= 256)
+            .then_some(Self {
+                index_n_heads,
+                index_head_dim,
+                index_topk,
+                rope_dim,
+            })
+    }
+}
+
 /// Result of a DSA selection over a `[batch, q_len, kv_len]` score matrix.
 ///
 /// `Clone` is cheap (both tensors are `Arc`-backed) and lets GLM-5's IndexShare
@@ -542,6 +566,26 @@ mod tests {
                 .mask
                 .to_vec3::<f32>()
                 .unwrap(),
+        );
+    }
+
+    /// `DsaConfig::new` is the single gate every loader shares: it accepts a
+    /// config iff colibrì `glm.c:836`'s `has_dsa` holds (`topk/heads/dim > 0`,
+    /// `head_dim <= 256`) and otherwise returns `None` (dense fallback).
+    #[test]
+    fn config_new_applies_colibri_has_dsa_bounds() {
+        assert!(DsaConfig::new(64, 128, 2048, 64).is_some());
+        assert!(DsaConfig::new(0, 128, 2048, 64).is_none(), "n_heads=0");
+        assert!(DsaConfig::new(64, 0, 2048, 64).is_none(), "head_dim=0");
+        assert!(DsaConfig::new(64, 128, 0, 64).is_none(), "topk=0");
+        assert!(DsaConfig::new(64, 257, 2048, 64).is_none(), "head_dim>256");
+        assert!(DsaConfig::new(64, 256, 2048, 64).is_some(), "head_dim==256");
+
+        let c = DsaConfig::new(64, 128, 2048, 0).unwrap();
+        assert_eq!(
+            (c.index_n_heads, c.index_head_dim, c.index_topk, c.rope_dim),
+            (64, 128, 2048, 0),
+            "fields pass through unchanged; rope_dim=0 (RoPE disabled) is valid"
         );
     }
 
