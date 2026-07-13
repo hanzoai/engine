@@ -32,15 +32,15 @@ fn terminate_handler() {
 }
 
 fn history_file_path() -> PathBuf {
-    // Replace these with your own org/app identifiers.
-    let proj_dirs =
-        ProjectDirs::from("com", "", "hanzo").expect("Could not determine project directories");
-    let config_dir = proj_dirs.config_dir();
+    // Readline history is a convenience — a missing or unwritable config dir (a
+    // broken symlink, a read-only home, an unusual platform) must NEVER crash
+    // inference. Take the platform config dir only if we can actually create it;
+    // otherwise fall back to the temp dir so the REPL always starts.
+    let config_dir = ProjectDirs::from("com", "", "hanzo")
+        .map(|d| d.config_dir().to_path_buf())
+        .filter(|d| fs::create_dir_all(d).is_ok())
+        .unwrap_or_else(std::env::temp_dir);
 
-    // Ensure the directory exists:
-    fs::create_dir_all(config_dir).expect("Failed to create config directory");
-
-    // e.g. ~/.config/MyApp/history.txt
     config_dir.join("history.txt")
 }
 
