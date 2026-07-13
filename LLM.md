@@ -731,7 +731,7 @@ build sm_121a + CUDA 13 (issue #19662).
 ## FP8 -> GGUF converter for GLM-5.2 (glm-dsa) -- scripts/convert_fp8_to_gguf.py
 - WHY: unblock loading GLM-5.2 in-engine. The loader is `models/quantized_deepseek2.rs`, which
   accepts `general.architecture in {deepseek2, glm-dsa}`; GLM-5.2 = glm-dsa (split-MLA + 256-expert MoE).
-- DISK-SAFE like colibri's `convert_fp8_to_int4.py`: stream one ~5 GB FP8 shard, requantize, delete it,
+- DISK-SAFE: stream one ~5 GB FP8 shard, requantize, delete it,
   next. But GGUF's whole tensor directory precedes its data blob, so it can't append per shard. So: (1)
   PLAN the full directory + metadata from config.json, write header/KV/tensor-info, preallocate; (2) stream
   shards, `pwrite` each tensor (or one expert's slice of a rank-3 bank) into its fixed offset. Resumable via
@@ -742,8 +742,8 @@ build sm_121a + CUDA 13 (issue #19662).
   - split-MLA: `attention.key_length`=qk_nope, `key_length_mla`=q_head_dim, `value_length_mla`=v_head_dim,
     `rope.dimension_count`=qk_rope. q_lora path uses attn_q_a/attn_q_a_norm/attn_q_b; kv_b shipped combined.
   - `expert_gating_func`=2 (sigmoid), `expert_group_count`=1 (noaux), `leading_dense_block_count`=first_k_dense.
-  - MTP/nextn block at index n_layers, emitted Q8_0 -- an int4 draft head measures ~0% acceptance (colibri
-    issue #8), speculation never starts. `nextn_predict_layers` records it; the text loader drops it from
+  - MTP/nextn block at index n_layers, emitted Q8_0 -- an int4 draft head measures ~0% acceptance, so
+    speculation never starts. `nextn_predict_layers` records it; the text loader drops it from
     block_count (n_layers = block_count - nextn).
   - VALUE-TYPE gotchas from hanzo-ml gguf `Value`: `to_f32` accepts ONLY F32 (rms_eps/rope.freq_base/
     expert_weights_scale must be FLOAT32, not F64); `to_bool` ONLY Bool; `to_u32/to_u64` upcast U8/U16/U32.
