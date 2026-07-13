@@ -43,6 +43,7 @@ P_TOK=512
 N_TOK=128
 REPS=3
 PORT=1234
+MAX_CTX=8192
 LLAMA_JSON=""
 SKIP_OURS=0
 MIN_FREE_GB=25
@@ -56,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     -n) N_TOK="$2"; shift 2 ;;
     -r) REPS="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
+    --max-ctx) MAX_CTX="$2"; shift 2 ;;
     --llama-json) LLAMA_JSON="$2"; shift 2 ;;
     --skip-ours) SKIP_OURS=1; shift ;;
     -*) echo "unknown arg: $1" >&2; exit 2 ;;
@@ -144,9 +146,12 @@ start_server() { # bind-poll /health with pid-liveness bail; sets SERVER_PID
   require_free_gb "$MIN_FREE_GB"
   local log="$OUT/server.log"
   echo "hanzo-engine: launching $SERVER on port $PORT ..." >&2
+  # --pa-ctxt-len caps the PagedAttention KV cache at MAX_CTX tokens: without it
+  # the 0.9 memory-usage heuristic grabs ~84 GB of the 128 GB unified pool.
   env HSA_XNACK=1 LD_LIBRARY_PATH="$LD_ROCM" \
     "$SERVER" --port "$PORT" --max-seqs 4 --prefix-cache-n 0 \
-    gguf -m "$MODEL_DIR" -f "$MODEL_FILE" --max-seq-len 8192 > "$log" 2>&1 &
+    --pa-ctxt-len "$MAX_CTX" \
+    gguf -m "$MODEL_DIR" -f "$MODEL_FILE" --max-seq-len "$MAX_CTX" > "$log" 2>&1 &
   SERVER_PID=$!
   local waited=0
   until curl -sf "http://localhost:$PORT/health" >/dev/null 2>&1; do
