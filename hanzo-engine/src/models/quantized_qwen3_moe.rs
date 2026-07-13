@@ -432,13 +432,15 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 mapper.device_for(layer_idx, false).unwrap_or(device)
             };
             if let std::collections::hash_map::Entry::Vacant(e) = ropes.entry(ldev.location()) {
+                // Cache in the compute dtype (matches quantized_qwen3): an F32 cache against half
+                // activations makes the ROCm/Metal rope ops bail with a dtype mismatch.
                 e.insert(Arc::new(RotaryEmbedding::new(
                     rope_freq_base,
                     head_dim,
                     max_seq_len,
                     ldev,
                     true,
-                    DType::F32,
+                    dtype,
                 )?));
             }
         }
