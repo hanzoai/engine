@@ -273,6 +273,39 @@ impl Deepseek4MtpRuntime {
     }
 }
 
+/// DeepSeek-V4 is self-speculative: its MTP head ships as a companion GGUF (the
+/// path carried by `cfg`), sharing the base model's token embeddings + output
+/// projection. This impl is the ONE place that knowledge lives — the pipeline
+/// asks for the capability and never names DeepSeek. Other MTP models (GLM-5.2's
+/// in-band `nextn` head, …) implement the same trait next to their own weights.
+impl crate::speculative::SelfSpeculative for super::quantized_deepseek4::ModelWeights {
+    fn attach_mtp(
+        &self,
+        cfg: &crate::speculative::MtpConfig,
+    ) -> Result<Box<dyn SpeculativeProposer + Send + Sync>> {
+        let path = cfg.resolve_path()?;
+        let mut readers = [std::fs::File::open(&path).map_err(hanzo_ml::Error::msg)?];
+        let mut readers_ref: Vec<&mut std::fs::File> = readers.iter_mut().collect();
+        let mut ct = crate::gguf::Content::from_readers(&mut readers_ref)?;
+        let head = MtpHead::load(
+            &mut ct,
+            self.base_props(),
+            &self.device,
+            self.compute_dtype(),
+        )?;
+        let runtime = Deepseek4MtpRuntime::new(
+            head,
+            self.embeddings().clone(),
+            self.output_head(),
+            cfg.n_predict.unwrap_or(1),
+        );
+        // The proposer needs the pre-output hidden every step; the clone is cheap
+        // versus the forward, so stash it once speculation is attached.
+        self.set_store_spec_hidden(true);
+        Ok(Box::new(runtime))
+    }
+}
+
 impl SpeculativeProposer for Deepseek4MtpRuntime {
     fn proposal_len(&self) -> usize {
         self.n_predict
