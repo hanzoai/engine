@@ -229,3 +229,8 @@ debug = true
 debug = true
 opt-level = 3
 
+# TEMP local-ml patch for the IQ2/IQ3 codebook decode oracle gate -- DEV/VERIFY ONLY, never commit.
+[patch.crates-io]
+hanzo-ml = { path = "/home/z/iq23-ml/hanzo-ml" }
+hanzo-rocm-kernels = { path = "/home/z/iq23-ml/hanzo-rocm-kernels" }
+
