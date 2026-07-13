@@ -198,18 +198,20 @@ impl FusedMoe {
         }
 
         let hidden_dim = xs_flat.dim(1)?;
-        let xs3 = xs_flat
-            .to_dtype(DType::F32)?
-            .reshape((num_tokens, 1, hidden_dim))?;
-        let gate = self.gate_experts.indexed_moe_forward(&xs3, topk_idx)?;
-        let up = self.up_experts.indexed_moe_forward(&xs3, topk_idx)?;
+        // Decode stays single-dtype end-to-end: the routed activation rides the model's native
+        // bf16/f16 through gate+up+down (the down matvec and both fused banks consume it directly),
+        // dropping the F32 round-trip that used to wrap every gate/up/down matvec. gate and up share
+        // ONE broadcast+quantize of the routed token in a single `moe_gate_up` launch instead of two
+        // independent matvec launches; `moe_combine` reduces the per-expert outputs by the router
+        // weights in one pass (f32 accumulate) rather than a bf16 broadcast-mul + strided sum.
+        let xs3 = xs_flat.reshape((num_tokens, 1, hidden_dim))?;
+        let (gate, up) =
+            hanzo_ml::quantized::moe_gate_up(&xs3, topk_idx, &self.gate_experts, &self.up_experts)?;
         let activated = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
         let ys = self
             .down_experts
             .indexed_moe_forward(&activated, topk_idx)?;
-        ys.broadcast_mul(&topk_weight.to_dtype(ys.dtype())?.unsqueeze(D::Minus1)?)?
-            .sum(D::Minus2)?
-            .to_dtype(original_dtype)
+        hanzo_ml::quantized::moe_combine(&ys, topk_weight)?.to_dtype(original_dtype)
     }
 }
 
@@ -224,36 +226,6 @@ impl MoeOrMlp {
             Self::Mlp(m) => m.forward(xs),
             Self::FusedMoe(m) => m.forward(xs),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Guards the gguf_moe.rs router-weight f16 hold: the [tokens, n_experts] logits still accumulate
-    // f32-stable, so top-k expert selection is unchanged vs the old f32 weight at GLM/DeepSeek scale.
-    #[test]
-    fn f16_router_preserves_topk() -> Result<()> {
-        let dev = Device::Cpu;
-        let (tokens, hidden, experts, top_k) = (8usize, 5120usize, 256usize, 8usize);
-        // Router logits ~ N(0, hidden * var); scale the weight so logits land in the usual O(1)
-        // range instead of a degenerate tie band.
-        let scale = 1.0 / (hidden as f64).sqrt();
-        let w = (Tensor::randn(0f32, 1.0, (experts, hidden), &dev)? * scale)?;
-        let x = Tensor::randn(0f32, 1.0, (tokens, hidden), &dev)?;
-
-        let logits_f32 = x.broadcast_matmul(&w.t()?)?;
-        let w16 = w.to_dtype(DType::F16)?;
-        let logits_f16 = x
-            .to_dtype(DType::F16)?
-            .broadcast_matmul(&w16.t()?)?
-            .to_dtype(DType::F32)?;
-
-        let top_f32 = logits_f32.topk(top_k)?.indices.to_vec2::<u32>()?;
-        let top_f16 = logits_f16.topk(top_k)?.indices.to_vec2::<u32>()?;
-        assert_eq!(top_f32, top_f16, "f16 router changed top-{top_k} routing");
-        Ok(())
     }
 }
 
@@ -328,4 +300,93 @@ pub(crate) fn build_moe_or_mlp<R: std::io::Seek + std::io::Read>(
         down_experts: QMatMul::from_qtensor(down_experts)?,
         shared,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Deterministic N(0,1) sample stream. The CPU backend's Device::set_seed is a no-op (candle's CPU
+    // rng is not seedable), so the guards below drive their own seeded rng and build tensors from the
+    // values -- otherwise unseeded randn lets a borderline top-k boundary flip under f16 rounding and
+    // the guard flakes for reasons unrelated to what it guards.
+    fn normals(seed: u64, n: usize) -> Vec<f32> {
+        use rand::prelude::*;
+        use rand_distr::StandardNormal;
+        let mut rng = rand_isaac::Isaac64Rng::seed_from_u64(seed);
+        (0..n).map(|_| rng.sample::<f32, _>(StandardNormal)).collect()
+    }
+
+    // Guards the gguf_moe.rs router-weight f16 hold: the [tokens, n_experts] logits still accumulate
+    // f32-stable, so top-k expert selection is unchanged vs the old f32 weight at GLM/DeepSeek scale.
+    #[test]
+    fn f16_router_preserves_topk() -> Result<()> {
+        let dev = Device::Cpu;
+        let (tokens, hidden, experts, top_k) = (8usize, 5120usize, 256usize, 8usize);
+        // Router logits ~ N(0, hidden * var); scale the weight so logits land in the usual O(1)
+        // range instead of a degenerate tie band.
+        let scale = 1.0 / (hidden as f64).sqrt();
+        let w = (Tensor::from_vec(normals(0x9E37, experts * hidden), (experts, hidden), &dev)? * scale)?;
+        let x = Tensor::from_vec(normals(0x1F83, tokens * hidden), (tokens, hidden), &dev)?;
+
+        let logits_f32 = x.broadcast_matmul(&w.t()?)?;
+        let w16 = w.to_dtype(DType::F16)?;
+        let logits_f16 = x
+            .to_dtype(DType::F16)?
+            .broadcast_matmul(&w16.t()?)?
+            .to_dtype(DType::F32)?;
+
+        let top_f32 = logits_f32.topk(top_k)?.indices.to_vec2::<u32>()?;
+        let top_f16 = logits_f16.topk(top_k)?.indices.to_vec2::<u32>()?;
+        assert_eq!(top_f32, top_f16, "f16 router changed top-{top_k} routing");
+        Ok(())
+    }
+
+    // Guards the decode expert-glue rewrite: the fused single-dtype path (moe_gate_up shared-quantize
+    // + moe_combine reduce, activation kept in its native dtype) reproduces the prior two-matvec +
+    // F32-cast + broadcast-mul/sum reference on a FIXED routed selection. Routing (topk_idx) is held
+    // constant, so this isolates the expert-compute change from the top-k selection guarded above.
+    // On CPU moe_gate_up runs its unfused fallback, so this also pins the "fallback == two separate
+    // indexed_moe_forward" contract; the ROCm shared-quantize kernel is bit-identical by construction
+    // (the q8_1 activation is deterministic in x).
+    #[test]
+    fn fused_decode_matches_unfused_reference() -> Result<()> {
+        use hanzo_ml::quantized::{GgmlDType, QMatMul, QTensor};
+        let dev = Device::Cpu;
+        let (tokens, topk, experts, hidden, inter) = (3usize, 2usize, 4usize, 64usize, 32usize);
+        let bank = |seed: u64, rows: usize, cols: usize| -> Result<QMatMul> {
+            let w =
+                (Tensor::from_vec(normals(seed, experts * rows * cols), (experts, rows, cols), &dev)?
+                    * 0.5)?;
+            QMatMul::from_qtensor(QTensor::quantize(&w, GgmlDType::Q4_0)?)
+        };
+        let gate = bank(0xA1, inter, hidden)?;
+        let up = bank(0xB2, inter, hidden)?;
+        let down = bank(0xC3, hidden, inter)?;
+
+        let xs = Tensor::from_vec(normals(0xD4, tokens * hidden), (tokens, hidden), &dev)?;
+        let idx = Tensor::from_vec(vec![0u32, 1, 2, 3, 1, 0], (tokens, topk), &dev)?;
+        let weight = Tensor::from_vec(normals(0xE5, tokens * topk), (tokens, topk), &dev)?.abs()?;
+
+        // New path: mirror of experts() decode -- native dtype, one fused gate+up, fused combine.
+        let xs3 = xs.reshape((tokens, 1, hidden))?;
+        let (g, u) = hanzo_ml::quantized::moe_gate_up(&xs3, &idx, &gate, &up)?;
+        let act = crate::ops::mul_and_act(&g, &u, crate::layers::Activation::Silu)?;
+        let ys = down.indexed_moe_forward(&act, &idx)?;
+        let new = hanzo_ml::quantized::moe_combine(&ys, &weight)?;
+
+        // Prior reference: F32 force-cast, two independent matvecs, broadcast-mul + strided sum.
+        let xs3f = xs.to_dtype(DType::F32)?.reshape((tokens, 1, hidden))?;
+        let g2 = gate.indexed_moe_forward(&xs3f, &idx)?;
+        let u2 = up.indexed_moe_forward(&xs3f, &idx)?;
+        let act2 = crate::ops::mul_and_act(&g2, &u2, crate::layers::Activation::Silu)?;
+        let ys2 = down.indexed_moe_forward(&act2, &idx)?;
+        let old = ys2
+            .broadcast_mul(&weight.to_dtype(ys2.dtype())?.unsqueeze(D::Minus1)?)?
+            .sum(D::Minus2)?;
+
+        let diff = (new - old)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(diff < 1e-5, "fused decode diverged from reference by {diff}");
+        Ok(())
+    }
 }
