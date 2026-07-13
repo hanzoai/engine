@@ -23,6 +23,7 @@ hanzo-engine.workspace = true
 tracing.workspace = true
 tokio.workspace = true
 cli-table.workspace = true
+libc.workspace = true
 
 [features]
 cuda = ["hanzo-engine/cuda"]
