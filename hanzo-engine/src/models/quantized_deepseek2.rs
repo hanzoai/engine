@@ -140,15 +140,15 @@ fn dsa_topk_override() -> Option<usize> {
 }
 
 /// The checkpoint's DSA config, or `None` when DSA is off (`DSA=0`) or the GGUF
-/// lacks the indexer metadata. colibrì `glm.c` bounds: topk/heads/dim > 0 and
-/// head_dim <= 256. Derived purely from `props`, so the single block loader
-/// ([`LayerWeights::load`]) and the model-level summary log agree by construction.
+/// lacks the indexer metadata. colibrì `glm.c` bounds: topk/heads > 0 and
+/// `0 < index_head_dim < (1<<16)`. Derived purely from `props`, so the single block
+/// loader ([`LayerWeights::load`]) and the model-level summary log agree by construction.
 fn dsa_config(props: &PropsGGUF) -> Option<DsaConfig> {
     if !dsa_enabled() {
         return None;
     }
     match (props.index_topk, props.index_n_heads, props.index_head_dim) {
-        (Some(topk), Some(nh), Some(hd)) if topk > 0 && nh > 0 && hd > 0 && hd <= 256 => {
+        (Some(topk), Some(nh), Some(hd)) if topk > 0 && nh > 0 && hd > 0 && hd < (1 << 16) => {
             Some(DsaConfig {
                 index_n_heads: nh,
                 index_head_dim: hd,
@@ -1018,9 +1018,23 @@ impl ModelConfig::FromGGUF for ModelWeights {
         // DSA lightning-indexer config (glm-dsa). Active only when the metadata
         // carries the indexer dims (and `DSA != 0`); the per-layer `attn_indexer_*`
         // tensors then decide "full" (own indexer) vs "shared" (reuse) by presence.
-        // colibrì `glm.c` bounds: topk/heads/dim > 0 and head_dim <= 256.
+        // colibrì `glm.c` bounds: topk/heads > 0 and 0 < head_dim < (1<<16).
         let dsa_cfg = dsa_config(&props);
         let mut dsa_full_layers = 0usize;
+
+        // Absorbed-MLA decode is proven token-equal to the materialized path
+        // (`absorbed_equals_materialized`), but the KV cache is still preallocated at the
+        // materialized per-head shape while the absorbed path appends the compressed latent
+        // `[kv_lora(+rope)]` — the absorb-aware `add_request` preallocation must land first.
+        // Fail loud at load rather than crash mid-generation; the default path is unaffected.
+        if mla_absorb_enabled() {
+            hanzo_ml::bail!(
+                "MLA_ABSORB=1 is not yet wired through the KV cache (add_request preallocates the \
+                 materialized K/V shape, absorbed decode appends the compressed latent). The math \
+                 is validated (absorbed_equals_materialized); the absorb-aware cache must land \
+                 first. Unset MLA_ABSORB to run."
+            );
+        }
 
         let mut layers = Vec::with_capacity(local_range.end - local_range.start);
         for layer_idx in NiceProgressBar::<_, 'b'>(
