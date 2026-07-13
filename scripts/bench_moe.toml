@@ -1,0 +1,62 @@
+# bench_moe — declarative sweep matrix for the MoE bench harness.
+# The orchestrator (bench_moe.sh) is a pure executor; every knob lives here so a
+# run is reproducible and the cross-product is defined in exactly one place.
+#
+# Build/run env (REQUIRED — the sandbox cc shim rejects -m64):
+#   cd ~/work/hanzo/engine
+#   PATH="/usr/bin:$PATH:$HOME/.cargo/bin:/opt/rocm/bin" \
+#     CC=/usr/bin/gcc CXX=/usr/bin/g++ \
+#     CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=/usr/bin/gcc \
+#     cargo build --release -p hanzo --bin hanzo --features rocm
+#   cargo build --release -p hanzo-bench --bin roofline --features rocm
+#   runtime: LD_LIBRARY_PATH=/opt/rocm/lib
+# Engine main is v1.7.37. GPU is AMD gfx1151 (Strix Halo, 128 GB unified,
+# measured ~250 GB/s RAM, ~3.3 GB/s NVMe). No model downloads (NVMe ~99% full).
+
+model = "/home/z/models/Qwen3-30B-GGUF/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf"
+port = 1234
+warmup = 1                       # unscored warmup requests per row
+
+# Client sweeps (passed straight to bench_client.py).
+prompt_tokens = "512,2048,8192,32768"
+max_tokens = "256,512,1024"
+batch = "1,2,4,8,16,32"
+
+# Sweep matrix. Each entry becomes one server launch:
+#   stream_experts=true -> STREAM_EXPERTS=1 in the env
+#   ram_gb=<n>          -> STREAM_EXPERTS_RAM_GB=<n>  (omit for the full-RAM budget)
+#   quant               -> --isq <quant>
+#   max_seqs            -> --max-seqs (must be >= max(batch) for an honest curve)
+#
+# The 18.5 GB model on a 128 GB box only produces meaningful miss traffic under a
+# forced-small budget, so the streamed budgets deliberately sit below the active-
+# expert working set to sweep the hit-rate / roofline curve.
+
+[[configs]]
+quant = "q4k"
+stream_experts = false
+max_seqs = 32
+
+[[configs]]
+quant = "q4k"
+stream_experts = true
+ram_gb = 4
+max_seqs = 32
+
+[[configs]]
+quant = "q4k"
+stream_experts = true
+ram_gb = 8
+max_seqs = 32
+
+[[configs]]
+quant = "q4k"
+stream_experts = true
+ram_gb = 16
+max_seqs = 32
+
+[[configs]]
+quant = "q4k"
+stream_experts = true
+# no ram_gb -> unbounded (STREAM_EXPERTS_RAM_GB unset): the resident ceiling
+max_seqs = 32

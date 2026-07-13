@@ -2811,6 +2811,7 @@ dependencies = [
  "cli-table",
  "hanzo-engine",
  "hanzo-ml",
+ "libc",
  "serde",
  "serde_json",
  "tokio",
