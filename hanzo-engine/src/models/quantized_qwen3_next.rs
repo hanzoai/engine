@@ -741,7 +741,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     props.max_seq_len,
                     dev,
                     true,
-                    DType::F32,
+                    dtype,
                 )?));
             }
         }
