@@ -1099,6 +1099,17 @@ impl GGUFPipeline {
                 // slot is only valid for a single sequence, so `model_decode_graph_single_seq_only`
                 // gates capture to batch == 1.
                 Model::Qwen35(_) => true,
+                // DeepSeek-V2 / GLM-5.2 (`deepseek2`/`glm-dsa` arch): capture-eligible on the
+                // paged decode step. The materialized MLA path (`Some(paged_attn)` branch) is
+                // shape-stable at seq_len==1 — projections/splits/cats and the V-pad are all
+                // fixed — and its RoPE now reads the device `rope_positions` buffer
+                // (`forward_positions`), so the captured rotation advances per replay instead of
+                // freezing at the warmup position. The 256-expert MoE routes through the same
+                // capture-clean `indexed_moe` matvec Qwen3MoE captures at batch==1 (no host
+                // counting sort), and the DSA lightning-indexer is dormant on the paged path
+                // (it only fires on the eager non-paged cold-prefill `None` branch). MoE ⇒
+                // batch==1 only (`model_decode_graph_single_seq_only`).
+                Model::Deepseek2(_) => true,
                 // DeepSeek-V4 is capture-eligible (compressor prefill-only → shape-stable
                 // decode), and `run_decode_forward` handles it — BUT the decode is currently
                 // KERNEL-bound (Q2_K down experts hit the CPU-bound generic MoE fallback,
@@ -1138,6 +1149,9 @@ impl GGUFPipeline {
             Model::Qwen35(ref model) => {
                 model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
             }
+            Model::Deepseek2(ref model) => {
+                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
+            }
             Model::Deepseek4(ref model) => {
                 model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
             }
@@ -1151,7 +1165,10 @@ impl GGUFPipeline {
     /// capture would bake garbage routing into every replay; ml now bails there, so gating here
     /// keeps batch > 1 MoE decode on the always-correct eager path instead of thrashing capture).
     fn model_decode_graph_single_seq_only(&self) -> bool {
-        matches!(self.model, Model::Qwen35(_) | Model::Qwen3MoE(_))
+        matches!(
+            self.model,
+            Model::Qwen35(_) | Model::Qwen3MoE(_) | Model::Deepseek2(_)
+        )
     }
 }
 
