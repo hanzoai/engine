@@ -727,3 +727,32 @@ build sm_121a + CUDA 13 (issue #19662).
   Self-hosted single-engine works TODAY (set HANZO_ENGINE_URL, run `hanzo serve`); the gap is the 3-part
   wiring to make it hosted SaaS: per-org engine-URL resolution from engine_selector, IAM-token forwarding
   onto the node /v1 calls, and per-tenant engine/model provisioning.
+
+## FP8 -> GGUF converter for GLM-5.2 (glm-dsa) -- scripts/convert_fp8_to_gguf.py
+- WHY: unblock loading GLM-5.2 in-engine. The loader is `models/quantized_deepseek2.rs`, which
+  accepts `general.architecture in {deepseek2, glm-dsa}`; GLM-5.2 = glm-dsa (split-MLA + 256-expert MoE).
+- DISK-SAFE like colibri's `convert_fp8_to_int4.py`: stream one ~5 GB FP8 shard, requantize, delete it,
+  next. But GGUF's whole tensor directory precedes its data blob, so it can't append per shard. So: (1)
+  PLAN the full directory + metadata from config.json, write header/KV/tensor-info, preallocate; (2) stream
+  shards, `pwrite` each tensor (or one expert's slice of a rank-3 bank) into its fixed offset. Resumable via
+  a `.progress.json` sidecar keyed by a plan signature (offsets shift if any --*-type/config changes).
+- THE glm-dsa GGUF CONTRACT (matched byte-for-byte to the reader + utils/gguf_metadata.rs):
+  - routed experts -> rank-3 `blk.{i}.ffn_{gate,up,down}_exps.weight`, ne=[hidden, moe_inter, n_expert], Q4_K.
+  - router `ffn_gate_inp.weight` + no-aux `exp_probs_b.bias` -> F32 (reader dequantizes them).
+  - split-MLA: `attention.key_length`=qk_nope, `key_length_mla`=q_head_dim, `value_length_mla`=v_head_dim,
+    `rope.dimension_count`=qk_rope. q_lora path uses attn_q_a/attn_q_a_norm/attn_q_b; kv_b shipped combined.
+  - `expert_gating_func`=2 (sigmoid), `expert_group_count`=1 (noaux), `leading_dense_block_count`=first_k_dense.
+  - MTP/nextn block at index n_layers, emitted Q8_0 -- an int4 draft head measures ~0% acceptance (colibri
+    issue #8), speculation never starts. `nextn_predict_layers` records it; the text loader drops it from
+    block_count (n_layers = block_count - nextn).
+  - VALUE-TYPE gotchas from hanzo-ml gguf `Value`: `to_f32` accepts ONLY F32 (rms_eps/rope.freq_base/
+    expert_weights_scale must be FLOAT32, not F64); `to_bool` ONLY Bool; `to_u32/to_u64` upcast U8/U16/U32.
+    `context_length` is `.unwrap()`ed by the device mapper -- must be present.
+- QUANT: gguf-py 0.19 quantizes Q8_0/F32 but NOT the K-quants (it does dequantize Q4_K). So Q4_K is a
+  faithful `quantize_row_q4_K_ref` (make_qkx2 + K_SCALE packing, numpy-vectorized over super-blocks),
+  proven by round-tripping through gguf-py's own Q4_K dequantizer (`--selftest`, relerr ~0.075).
+- VALIDATED here without the 756 GB checkpoint: `--selftest` builds a tiny synthetic glm-dsa GGUF end-to-end
+  and asserts every reader-required key/type/tensor/shape via gguf-py `GGUFReader`; an on-disk FP8(e4m3
+  128-block)+BF16 safetensors fixture exercised the `--indir` streaming path and resume. NEEDS a real
+  zai-org/GLM-5.2-FP8 checkpoint for full-scale conversion + an in-engine load smoke test (and the tokenizer
+  is loaded separately -- GGUF vocab embedding is not done here).
