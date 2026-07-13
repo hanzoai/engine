@@ -87,7 +87,7 @@ pub(crate) struct DsaConfig {
 
 impl DsaConfig {
     /// Build a config from a checkpoint's indexer dims, or `None` when those dims
-    /// can't drive a real indexer. The gate is colibrì `glm.c`'s `has_dsa`
+    /// can't drive a real indexer. The gate is the GLM-5.2 `has_dsa`
     /// predicate (`glm.c:836`): `index_topk`, `index_n_heads`, `index_head_dim`
     /// all positive and `index_head_dim <= 256`. A checkpoint that declares DSA
     /// metadata with degenerate dims falls back to the dense path here instead of
@@ -570,10 +570,10 @@ mod tests {
     }
 
     /// `DsaConfig::new` is the single gate every loader shares: it accepts a
-    /// config iff colibrì `glm.c:836`'s `has_dsa` holds (`topk/heads/dim > 0`,
+    /// config iff the `has_dsa` predicate holds (`topk/heads/dim > 0`,
     /// `head_dim <= 256`) and otherwise returns `None` (dense fallback).
     #[test]
-    fn config_new_applies_colibri_has_dsa_bounds() {
+    fn config_new_applies_has_dsa_bounds() {
         assert!(DsaConfig::new(64, 128, 2048, 64).is_some());
         assert!(DsaConfig::new(0, 128, 2048, 64).is_none(), "n_heads=0");
         assert!(DsaConfig::new(64, 0, 2048, 64).is_none(), "head_dim=0");

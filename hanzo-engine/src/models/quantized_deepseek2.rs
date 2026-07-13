@@ -50,7 +50,7 @@ const EXPERT_GATING_SIGMOID: u32 = 2;
 
 /// GLM-5's DSA indexer key-norm is a real `LayerNorm` with a hardcoded `eps = 1e-6`
 /// (independent of the model's `rms_norm_eps`), matching [`super::glm5_moe`]'s
-/// `INDEXER_KNORM_EPS` and the colibrì `glm.c` reference.
+/// `INDEXER_KNORM_EPS` (the GLM-5.2 DSA spec).
 const INDEXER_KNORM_EPS: f64 = 1e-6;
 
 use crate::models::dsa::{DsaConfig, DsaIndexer, DsaSelection};
@@ -62,13 +62,13 @@ use crate::models::gguf_moe::{build_moe_or_mlp, gguf_linear, MoeOrMlp, MoeParams
 /// floats for GLM-5.2) instead of the materialized per-head K/V (`n_head * q_head_dim` +
 /// `n_head * v_head_dim`, ~20k floats), and the `kv_b` projection is *absorbed*: its K rows fold
 /// into the query (`ql_nope = q_nope @ w_uk`) and its V rows fold out after attention
-/// (`out = (att @ ckv) @ w_uv_t`). This is the DeepSeek/colibri weight-absorption trick.
+/// (`out = (att @ ckv) @ w_uv_t`). This is the DeepSeek weight-absorption trick.
 ///
 /// It is algebraically identical to the materialized path (`ql_nope·ckv == q_nope·k_nope`,
 /// `Σ_t a_t (w_uv·ckv_t) == Σ_t a_t v_t`), so decode is token-for-token equal in exact arithmetic.
 /// It is opt-in (default off) until validated against a real GGUF because absorption reassociates
 /// the score/context reductions: floating-point rounding differs, so a near-tie argmax could in
-/// principle flip (the same shape-dependent-kernel caveat colibri documents for its MTP/CUDA tiers).
+/// principle flip (the same shape-dependent-kernel caveat that applies to MTP/CUDA tiers).
 /// Read once, cached.
 fn mla_absorb_enabled() -> bool {
     use std::sync::OnceLock;
@@ -126,13 +126,13 @@ fn absorb_weights_from_kv_b(
 }
 
 /// DSA sparse attention is on by default whenever a checkpoint ships the indexer
-/// tensors; `DSA=0` forces the dense path (byte-identical). Mirrors colibrì.
+/// tensors; `DSA=0` forces the dense path (byte-identical).
 fn dsa_enabled() -> bool {
     !matches!(std::env::var("DSA").ok().as_deref(), Some("0"))
 }
 
 /// `DSA_TOPK=N` overrides the checkpoint's `index_topk` (test / ablation knob,
-/// colibrì-compatible). `DSA_TOPK >= context` reproduces dense selection exactly.
+/// test / ablation knob). `DSA_TOPK >= context` reproduces dense selection exactly.
 fn dsa_topk_override() -> Option<usize> {
     std::env::var("DSA_TOPK")
         .ok()
@@ -140,7 +140,7 @@ fn dsa_topk_override() -> Option<usize> {
 }
 
 /// The checkpoint's DSA config, or `None` when DSA is off (`DSA=0`) or the GGUF
-/// lacks the indexer metadata. Gated by [`DsaConfig::new`] on colibrì's `has_dsa`
+/// lacks the indexer metadata. Gated by [`DsaConfig::new`] on the `has_dsa`
 /// predicate (`glm.c`: topk/heads > 0 and `0 < index_head_dim <= 256`). Derived purely
 /// from `props`, so the single block loader ([`LayerWeights::load`]) and the model-level
 /// summary log agree by construction.
@@ -149,7 +149,7 @@ fn dsa_config(props: &PropsGGUF) -> Option<DsaConfig> {
         return None;
     }
     match (props.index_topk, props.index_n_heads, props.index_head_dim) {
-        // Gate on the raw checkpoint dims (colibrì `has_dsa`); the `DSA_TOPK`
+        // Gate on the raw checkpoint dims (`has_dsa`); the `DSA_TOPK`
         // ablation knob then overrides the kept-key count on the valid config.
         (Some(topk), Some(nh), Some(hd)) => DsaConfig::new(nh, hd, topk, props.qk_rope_head_dim)
             .map(|c| DsaConfig {
@@ -174,7 +174,7 @@ fn dsa_rope_positions(offsets: &[usize], device: &Device) -> Result<Tensor> {
 /// checkpoint) — that layer then reuses the previous full layer's selection.
 ///
 /// Tensor names (llama.cpp `blk.N.` convention, mapped from the HF
-/// `self_attn.indexer.{wq_b,wk,weights_proj,k_norm}` the colibrì `--indexer`
+/// `self_attn.indexer.{wq_b,wk,weights_proj,k_norm}` our `--indexer`
 /// converter extracts as `out-idx-*`):
 ///   `attn_indexer_q`      = `wq_b`         (q-LoRA latent -> n_head·head_dim)
 ///   `attn_indexer_k`      = `wk`           (hidden -> head_dim, shared MQA head)
@@ -1018,7 +1018,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         // DSA lightning-indexer config (glm-dsa). Active only when the metadata
         // carries the indexer dims (and `DSA != 0`); the per-layer `attn_indexer_*`
         // tensors then decide "full" (own indexer) vs "shared" (reuse) by presence.
-        // colibrì `has_dsa`: topk/heads > 0 and 0 < index_head_dim <= 256 (else dense).
+        // has_dsa gate: topk/heads > 0 and 0 < index_head_dim <= 256 (else dense).
         let dsa_cfg = dsa_config(&props);
         let mut dsa_full_layers = 0usize;
 
@@ -1088,7 +1088,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 );
             } else {
                 tracing::warn!(
-                    "DSA indexer configured (top-{}) but no `attn_indexer_*` tensors found in the GGUF; running dense. Reconvert with the colibrì `--indexer` mode (out-idx-*).",
+                    "DSA indexer configured (top-{}) but no `attn_indexer_*` tensors found in the GGUF; running dense. Reconvert with our `--indexer` mode (out-idx-*).",
                     cfg.index_topk,
                 );
             }
