@@ -2165,10 +2165,16 @@ impl Pipeline for GGUFPipeline {
         // Non-paged path (DeepSeek-V4 MTP): drive the SAME generic loop over the normal
         // KV backend. Extract the shared cache handle first so the model borrow is
         // dropped before the &mut-self driver call.
-        let normal_cache = if let Model::Deepseek4(ref model) = self.model {
-            model.normal_cache_arc().map(|arc| (arc, model.max_seq_len))
-        } else {
-            None
+        let normal_cache = match self.model {
+            Model::Deepseek4(ref model) => {
+                model.normal_cache_arc().map(|arc| (arc, model.max_seq_len))
+            }
+            // GLM-5.2 (`glm-dsa`) loads as Deepseek2 and self-drafts through its in-band
+            // `nextn` MTP head over the SAME normal KV backend.
+            Model::Deepseek2(ref model) => {
+                model.normal_cache_arc().map(|arc| (arc, model.max_seq_len))
+            }
+            _ => None,
         };
         if let Some((cache_arc, max_seq_len)) = normal_cache {
             let cache = crate::speculative::cache::NormalSpeculativeCacheAccess::new(
@@ -2222,10 +2228,13 @@ impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
         if self.draft_proposer.is_none() || rows.is_empty() {
             return Ok(None);
         }
-        let Model::Deepseek4(ref model) = self.model else {
-            return Ok(None);
+        let hidden = match self.model {
+            Model::Deepseek4(ref model) => model.last_spec_hidden(),
+            // GLM-5.2 (`glm-dsa`) loads as Deepseek2; same MTP spec-hidden stash.
+            Model::Deepseek2(ref model) => model.last_spec_hidden(),
+            _ => return Ok(None),
         };
-        let Some(hidden) = model.last_spec_hidden() else {
+        let Some(hidden) = hidden else {
             return Ok(None);
         };
         // The forward stashed the per-row post-norm hidden ([batch, rows, H], aligned
