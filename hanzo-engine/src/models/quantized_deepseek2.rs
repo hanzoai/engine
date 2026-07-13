@@ -45,6 +45,75 @@ const EXPERT_GATING_SIGMOID: u32 = 2;
 
 use crate::models::gguf_moe::{build_moe_or_mlp, gguf_linear, MoeOrMlp, MoeParams};
 
+/// `MLA_ABSORB=1` enables the device-agnostic absorbed-MLA decode.
+///
+/// When on, the KV cache holds only the compressed latent `[kv_lora + qk_rope]` per token (~576
+/// floats for GLM-5.2) instead of the materialized per-head K/V (`n_head * q_head_dim` +
+/// `n_head * v_head_dim`, ~20k floats), and the `kv_b` projection is *absorbed*: its K rows fold
+/// into the query (`ql_nope = q_nope @ w_uk`) and its V rows fold out after attention
+/// (`out = (att @ ckv) @ w_uv_t`). This is the DeepSeek/colibri weight-absorption trick.
+///
+/// It is algebraically identical to the materialized path (`ql_nope·ckv == q_nope·k_nope`,
+/// `Σ_t a_t (w_uv·ckv_t) == Σ_t a_t v_t`), so decode is token-for-token equal in exact arithmetic.
+/// It is opt-in (default off) until validated against a real GGUF because absorption reassociates
+/// the score/context reductions: floating-point rounding differs, so a near-tie argmax could in
+/// principle flip (the same shape-dependent-kernel caveat colibri documents for its MTP/CUDA tiers).
+/// Read once, cached.
+fn mla_absorb_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("MLA_ABSORB")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+            .unwrap_or(false)
+    })
+}
+
+/// Extract the absorbed-MLA weight views from the (un-absorbed) `kv_b` projection.
+///
+/// `kv_b` maps the latent `ckv [kv_lora]` to the per-head `[k_nope | v]` block, i.e. its weight is
+/// `[n_head * (qk_nope + v_head), kv_lora]`. Split per head into:
+///   - `w_uk = [n_head, qk_nope, kv_lora]` — the K-nope rows. `ql_nope = q_nope @ w_uk` gives the
+///     latent query with `ql_nope · ckv == q_nope · (w_uk^T · ckv) == q_nope · k_nope`.
+///   - `w_uv_t = [n_head, kv_lora, v_head]` — the V rows, transposed. After latent attention,
+///     `attn_latent @ w_uv_t == Σ_t a_t (w_uv · ckv_t) == Σ_t a_t v_t`.
+///
+/// Held dense in `dtype` so the decode matmuls stay single-dtype. Mirrors `crate::mla::MlaWeights`
+/// (which is CUDA/FlashInfer-only) but is device-agnostic (pure tensor ops).
+fn absorb_weights_from_kv_b(
+    kv_b_proj: &dyn QuantMethod,
+    device: &Device,
+    n_head: usize,
+    kv_lora_rank: usize,
+    qk_nope_head_dim: usize,
+    v_head_dim: usize,
+    dtype: DType,
+) -> Result<(Tensor, Tensor)> {
+    let mut w = kv_b_proj.dequantize_w()?;
+    if !w.device().same_device(device) {
+        w = w.to_device(device)?;
+    }
+    let (out_dim, in_dim) = w.dims2()?;
+    let per_head = qk_nope_head_dim + v_head_dim;
+    if in_dim != kv_lora_rank || out_dim != n_head * per_head {
+        hanzo_ml::bail!(
+            "absorbed MLA: kv_b_proj weight is [{out_dim}, {in_dim}], expected [{}, {kv_lora_rank}]",
+            n_head * per_head
+        );
+    }
+    let w = w.reshape((n_head, per_head, kv_lora_rank))?;
+    let w_uk = w
+        .narrow(D::Minus2, 0, qk_nope_head_dim)?
+        .contiguous()?
+        .to_dtype(dtype)?;
+    let w_uv_t = w
+        .narrow(D::Minus2, qk_nope_head_dim, v_head_dim)?
+        .transpose(1, 2)?
+        .contiguous()?
+        .to_dtype(dtype)?;
+    Ok((w_uk, w_uv_t))
+}
+
 struct LayerWeights {
     // MLA projections. q is either plain (q_proj) or low-rank (q_a/q_b with q_a_norm).
     q_a_proj: Option<Arc<dyn QuantMethod>>,
@@ -54,6 +123,10 @@ struct LayerWeights {
     kv_a_proj_with_mqa: Arc<dyn QuantMethod>,
     kv_a_norm: QRmsNorm,
     kv_b_proj: Arc<dyn QuantMethod>,
+    // Absorbed-MLA weight views, precomputed from `kv_b_proj` only when `MLA_ABSORB` is on. `Some`
+    // switches `forward_attn` to the compressed-latent decode; `None` keeps the materialized path.
+    w_uk: Option<Tensor>,
+    w_uv_t: Option<Tensor>,
     o_proj: Arc<dyn QuantMethod>,
     attn_norm: QRmsNorm,
     ffn_norm: QRmsNorm,
@@ -79,6 +152,14 @@ impl LayerWeights {
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
+        // Absorbed-MLA path (MLA_ABSORB=1): compressed-latent KV cache + kv_b folded into q/out.
+        // Only on the normal (non-paged) cache; algebraically identical to the materialized path.
+        if metadata.is_none() {
+            if let (Some(w_uk), Some(w_uv_t)) = (&self.w_uk, &self.w_uv_t) {
+                return self.forward_attn_absorbed(x, mask, start_offsets, kv_cache, w_uk, w_uv_t);
+            }
+        }
+
         let (bs, seq_len, _) = x.dims3()?;
 
         let q = match (&self.q_proj, &self.q_a_proj, &self.q_b_proj, &self.q_a_norm) {
@@ -169,6 +250,103 @@ impl LayerWeights {
             y.reshape((bs, seq_len, ()))?
         };
         self.o_proj.forward(&y.to_dtype(x.dtype())?)
+    }
+
+    /// Absorbed-MLA attention: standard attention in the compressed latent space.
+    ///
+    /// The KV cache stores only `[ckv | k_pe]` (one shared MQA head), and `kv_b` never materializes
+    /// per-head K/V. Instead its K rows are folded into the query (`w_uk`) and its V rows out of the
+    /// context (`w_uv_t`). Numerically mirrors `naive_sdpa` (scale, F32 softmax, additive mask) so
+    /// the only difference from the materialized path is the absorption reassociation itself.
+    ///
+    /// Shapes (bs=B, heads=H, new tokens=S, cache length=T): `q_latent [B,H,S,kv_lora+qk_rope]`,
+    /// `k_latent [B,1,T,kv_lora+qk_rope]`, `v_latent [B,1,T,kv_lora]`. K/V stay one head and
+    /// broadcast across the H query heads via `broadcast_matmul` — no per-head expansion, so the
+    /// MLA memory profile holds at compute time too.
+    fn forward_attn_absorbed(
+        &self,
+        x: &Tensor,
+        mask: &AttentionMask,
+        start_offsets: &[usize],
+        kv_cache: &mut KvCache,
+        w_uk: &Tensor,
+        w_uv_t: &Tensor,
+    ) -> Result<Tensor> {
+        if matches!(mask, AttentionMask::CausalFlash) {
+            // GGUF deepseek2/glm-dsa always emits Custom/None (CausalMaskConfig::gguf). A CausalFlash
+            // mask carries no tensor, so silently dropping it would make prefill non-causal — bail
+            // instead of corrupting attention.
+            hanzo_ml::bail!("absorbed MLA: unexpected CausalFlash mask on the eager GGUF path");
+        }
+        let (bs, seq_len, _) = x.dims3()?;
+
+        // Query: identical projection, split, and RoPE to the materialized path.
+        let q = match (&self.q_proj, &self.q_a_proj, &self.q_b_proj, &self.q_a_norm) {
+            (Some(q_proj), _, _, _) => q_proj.forward(x)?,
+            (None, Some(a), Some(b), Some(norm)) => b.forward(&norm.forward(&a.forward(x)?)?)?,
+            _ => hanzo_ml::bail!("deepseek2 gguf: inconsistent q projection weights"),
+        };
+        let q = q
+            .reshape((bs, seq_len, self.n_head, self.q_head_dim))?
+            .transpose(1, 2)?;
+        let q_split = q.split(&[self.qk_nope_head_dim, self.qk_rope_head_dim], D::Minus1)?;
+        let q_nope = q_split[0].clone();
+        let mut q_pe = q_split[1].clone();
+
+        // Compressed latent (normed) + shared RoPE key.
+        let compressed_kv = self.kv_a_proj_with_mqa.forward(x)?;
+        let ckv_split =
+            compressed_kv.split(&[self.kv_lora_rank, self.qk_rope_head_dim], D::Minus1)?;
+        let ckv = self.kv_a_norm.forward(&ckv_split[0])?; // [B, S, kv_lora]
+        // Broadcast the shared rope key to n_head for the head-count-symmetric rope kernel, then
+        // keep a single head: RoPE is head-independent and the inputs were identical across heads.
+        let mut k_pe = ckv_split[1]
+            .reshape((bs, seq_len, 1, self.qk_rope_head_dim))?
+            .transpose(1, 2)?
+            .repeat((1, self.n_head, 1, 1))?;
+        (q_pe, k_pe) = self.rotary.forward(&q_pe, &k_pe, start_offsets)?;
+        let k_pe = k_pe.narrow(1, 0, 1)?; // [B, 1, S, qk_rope]
+
+        // Absorb kv_b K-rows into the query: ql_nope = q_nope @ w_uk -> [B, H, S, kv_lora].
+        let ql_nope = q_nope
+            .to_dtype(self.dtype)?
+            .broadcast_matmul(&w_uk.unsqueeze(0)?)?;
+        let q_latent = Tensor::cat(&[&ql_nope, &q_pe.to_dtype(self.dtype)?], D::Minus1)?
+            .contiguous()?; // [B, H, S, kv_lora + qk_rope]
+
+        // Latent key/value for the new tokens (one shared head), appended to the compressed cache.
+        let ckv4 = ckv
+            .to_dtype(self.dtype)?
+            .reshape((bs, seq_len, 1, self.kv_lora_rank))?
+            .transpose(1, 2)?
+            .contiguous()?; // [B, 1, S, kv_lora]  (this IS v_latent for the new tokens)
+        let k_latent_new =
+            Tensor::cat(&[&ckv4, &k_pe.to_dtype(self.dtype)?], D::Minus1)?.contiguous()?;
+        let (k_latent, v_latent) = kv_cache.append(&k_latent_new, &ckv4)?; // full [0, T)
+
+        // Scores in latent space; K/V (one head) broadcast across the H query heads.
+        let scores = q_latent.broadcast_matmul(&k_latent.transpose(2, 3)?.contiguous()?)?;
+        let mut att = (scores * f64::from(self.sdpa_params.softmax_scale))?; // [B, H, S, T]
+        if let Some(m) = mask.as_option_tensor() {
+            att = att.broadcast_add(&m.to_dtype(att.dtype())?)?;
+        }
+        // Softmax in F32 for precision (mirrors naive_sdpa: BF16/F16 exp() loses information).
+        let att_dtype = att.dtype();
+        if matches!(att_dtype, DType::BF16 | DType::F16) {
+            att = att.to_dtype(DType::F32)?;
+        }
+        att = hanzo_nn::ops::softmax_last_dim(&att)?;
+        if att.dtype() != att_dtype {
+            att = att.to_dtype(att_dtype)?;
+        }
+
+        // Context latent, then fold kv_b V-rows back out: out = (att @ v_latent) @ w_uv_t.
+        let attn_latent = att.broadcast_matmul(&v_latent)?; // [B, H, S, kv_lora]
+        let out = attn_latent
+            .broadcast_matmul(&w_uv_t.unsqueeze(0)?)? // [B, H, S, v_head]
+            .transpose(1, 2)?
+            .reshape((bs, seq_len, self.n_head * self.v_head_dim))?;
+        self.o_proj.forward(&out.to_dtype(x.dtype())?)
     }
 
     fn forward_block(
@@ -540,6 +718,24 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     Linear::new(kv_b, None),
                 ))?)
             };
+            // Absorbed-MLA weights (opt-in): fold kv_b's K rows into the query and V rows out of the
+            // context so decode stores only the compressed latent. Computed here, once, from the
+            // (materialized-orientation) kv_b so both classic and split-MLA GGUFs are covered.
+            let (w_uk, w_uv_t) = if mla_absorb_enabled() {
+                let (uk, uvt) = absorb_weights_from_kv_b(
+                    kv_b_proj.as_ref(),
+                    device,
+                    props.head_count,
+                    props.kv_lora_rank,
+                    props.qk_nope_head_dim,
+                    props.v_head_dim,
+                    dtype,
+                )?;
+                (Some(uk), Some(uvt))
+            } else {
+                (None, None)
+            };
+
             let o_proj = gguf_linear(ct.tensor(&format!("{prefix}.attn_output.weight"), device)?)?;
 
             let attn_norm = QRmsNorm::new_dtype(
@@ -586,6 +782,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 kv_a_proj_with_mqa,
                 kv_a_norm,
                 kv_b_proj,
+                w_uk,
+                w_uv_t,
                 o_proj,
                 attn_norm,
                 ffn_norm,
@@ -739,5 +937,109 @@ impl PipelineParallelModel for ModelWeights {
         let x = self.norm.as_ref().unwrap().forward(h)?;
         let x = extract_logits(&x, context_lens)?;
         self.output.as_ref().unwrap().forward(&x.contiguous()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Proves the load-bearing identity behind absorbed MLA: attention computed in the compressed
+    /// latent space (kv_b folded into q via `w_uk` and out via `w_uv_t`) equals attention computed
+    /// on the materialized per-head K/V. Exercises the real `absorb_weights_from_kv_b` extraction
+    /// against an `UnquantLinear` `kv_b`, then runs both attentions in plain f32 so the comparison
+    /// depends only on the algebra, not on any device kernel. This is the exactness guarantee that
+    /// justifies wiring absorbed decode without a real GGUF on hand.
+    #[test]
+    fn absorbed_equals_materialized() -> Result<()> {
+        let dev = Device::Cpu;
+        let (h, t, kvl, nope, rope, vh) = (3usize, 5usize, 8usize, 4usize, 2usize, 4usize);
+        let per_head = nope + vh;
+        let scale = 1.0f32 / ((nope + rope) as f32).sqrt();
+
+        // kv_b: [h*(nope+vh), kvl], the un-absorbed latent -> per-head [k_nope | v] projection.
+        let kv_b_w = Tensor::randn(0f32, 1f32, (h * per_head, kvl), &dev)?;
+        let kv_b: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(kv_b_w, None)),
+        )?);
+
+        // Compressed cache: normed latent `ckv` [t, kvl] and shared rope key `k_pe` [t, rope].
+        let ckv = Tensor::randn(0f32, 1f32, (t, kvl), &dev)?;
+        let k_pe = Tensor::randn(0f32, 1f32, (t, rope), &dev)?;
+        // Single new query token, per head: [h, nope] nope part and [h, rope] rope part.
+        let q_nope = Tensor::randn(0f32, 1f32, (h, nope), &dev)?;
+        let q_pe = Tensor::randn(0f32, 1f32, (h, rope), &dev)?;
+
+        // --- Materialized reference: reconstruct per-head k_nope / v from kv_b, then attend. ---
+        let kv = kv_b.forward(&ckv)?.reshape((t, h, per_head))?;
+        let k_nope = kv.narrow(D::Minus1, 0, nope)?.to_vec3::<f32>()?; // [t][h][nope]
+        let v = kv.narrow(D::Minus1, nope, vh)?.to_vec3::<f32>()?; // [t][h][vh]
+        let ckv_v = ckv.to_vec2::<f32>()?; // [t][kvl]
+        let kpe_v = k_pe.to_vec2::<f32>()?; // [t][rope]
+        let qn = q_nope.to_vec2::<f32>()?; // [h][nope]
+        let qp = q_pe.to_vec2::<f32>()?; // [h][rope]
+
+        let attend = |score: &[f32]| -> Vec<f32> {
+            let m = score.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let exps: Vec<f32> = score.iter().map(|s| (s - m).exp()).collect();
+            let z: f32 = exps.iter().sum();
+            exps.iter().map(|e| e / z).collect()
+        };
+
+        let mut out_mat = vec![vec![0f32; vh]; h];
+        for hi in 0..h {
+            let score: Vec<f32> = (0..t)
+                .map(|ti| {
+                    let sk: f32 = (0..nope).map(|d| qn[hi][d] * k_nope[ti][hi][d]).sum();
+                    let sr: f32 = (0..rope).map(|r| qp[hi][r] * kpe_v[ti][r]).sum();
+                    (sk + sr) * scale
+                })
+                .collect();
+            let a = attend(&score);
+            for (ti, &at) in a.iter().enumerate() {
+                for d in 0..vh {
+                    out_mat[hi][d] += at * v[ti][hi][d];
+                }
+            }
+        }
+
+        // --- Absorbed: fold kv_b into q (w_uk) / out (w_uv_t) and attend in latent space. ---
+        let (w_uk, w_uv_t) =
+            absorb_weights_from_kv_b(kv_b.as_ref(), &dev, h, kvl, nope, vh, DType::F32)?;
+        let w_uk = w_uk.to_vec3::<f32>()?; // [h][nope][kvl]
+        let w_uv_t = w_uv_t.to_vec3::<f32>()?; // [h][kvl][vh]
+
+        let mut max_diff = 0f32;
+        for hi in 0..h {
+            // ql_nope = q_nope @ w_uk  -> [kvl]
+            let ql: Vec<f32> = (0..kvl)
+                .map(|i| (0..nope).map(|d| qn[hi][d] * w_uk[hi][d][i]).sum())
+                .collect();
+            let score: Vec<f32> = (0..t)
+                .map(|ti| {
+                    let sk: f32 = (0..kvl).map(|i| ql[i] * ckv_v[ti][i]).sum();
+                    let sr: f32 = (0..rope).map(|r| qp[hi][r] * kpe_v[ti][r]).sum();
+                    (sk + sr) * scale
+                })
+                .collect();
+            let a = attend(&score);
+            // attn_latent = Σ a_t ckv_t -> [kvl]; out = attn_latent @ w_uv_t -> [vh]
+            let mut latent = vec![0f32; kvl];
+            for (ti, &at) in a.iter().enumerate() {
+                for i in 0..kvl {
+                    latent[i] += at * ckv_v[ti][i];
+                }
+            }
+            for d in 0..vh {
+                let o: f32 = (0..kvl).map(|i| latent[i] * w_uv_t[hi][i][d]).sum();
+                max_diff = max_diff.max((o - out_mat[hi][d]).abs());
+            }
+        }
+
+        assert!(
+            max_diff < 1e-4,
+            "absorbed vs materialized MLA diverged: max_diff={max_diff}"
+        );
+        Ok(())
     }
 }
