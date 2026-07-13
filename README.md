@@ -1,14 +1,14 @@
-<p align="center"><img src=".github/hero.svg" alt="engine" width="880"></p>
+<p align="center"><img src=".github/hero.svg" alt="Hanzo Engine" width="880"></p>
 
 <a name="top"></a>
 <!--
 <h1 align="center">
-  hanzo
+  Hanzo Engine
 </h1>
 -->
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/hanzoai/engine/master/res/banner.png" alt="hanzo" width="100%" style="max-width: 800px;">
+  <img src="https://raw.githubusercontent.com/hanzoai/engine/master/res/banner.png" alt="Hanzo Engine" width="100%" style="max-width: 800px;">
 </div>
 
 <h3 align="center">
@@ -35,7 +35,7 @@ Fast, flexible LLM inference.
 - **Gemma 4**: full multimodal: text, image, video, and audio input. [Guide](https://hanzoai.github.io/engine/reference/supported-models/) | [Video setup](https://hanzoai.github.io/engine/guides/models/video-setup/)
 - **MXFP4 ISQ quantization**: MXFP4 with optimized decode kernels for faster, smaller models. [Quantization docs](https://hanzoai.github.io/engine/reference/quantization-types/)
 
-## Why hanzo?
+## Why Hanzo Engine?
 
 - **Any Hugging Face model, zero config**: Just `hanzo run -m user/model`. Architecture, quantization format, and chat template are auto-detected.
 - **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
@@ -307,7 +307,7 @@ Contributions welcome! Please [open an issue](https://github.com/hanzoai/engine/
 
 This project would not be possible without the excellent work at [Hanzo](https://github.com/hanzoai/ml). Thank you to all [contributors](https://github.com/hanzoai/engine/graphs/contributors)!
 
-hanzo is not affiliated with Mistral AI.
+Hanzo Engine is not affiliated with Mistral AI.
 
 <p align="right">
   <a href="#top">Back to Top</a>
