@@ -77,6 +77,10 @@ pub struct Content<'a, R: std::io::Seek + std::io::Read> {
     // from the mmap and uploaded to the device directly, instead of into an owned host Vec. Keeps
     // host RSS bounded when loading multi-GB quantized tensors (e.g. GLM-5.2 IQ1 experts).
     mmaps: Vec<std::sync::Arc<memmap2::Mmap>>,
+    // When non-empty (paired one-per-shard with `contents`) and streaming is enabled, stacked MoE
+    // expert banks (rank-3 tensors) are kept on disk and preaded per-expert through the LRU cache
+    // instead of loaded resident -- the low-memory mode for huge MoEs (e.g. GLM-5.2).
+    stream_paths: Vec<std::path::PathBuf>,
     arch: GGUFArchitecture,
     all_metadata: HashMap<String, Value>,
 }
@@ -178,6 +182,7 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
             contents,
             readers,
             mmaps: Vec::new(),
+            stream_paths: Vec::new(),
             arch,
             all_metadata,
         })
@@ -187,6 +192,13 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
     pub fn set_mmaps(&mut self, mmaps: Vec<std::sync::Arc<memmap2::Mmap>>) {
         debug_assert_eq!(mmaps.len(), self.contents.len());
         self.mmaps = mmaps;
+    }
+
+    /// Enable disk-streaming of stacked expert banks. `paths` must be paired one-per-shard with the
+    /// readers; a rank-3 tensor is then opened as a `QStorage::Stream` over its shard file.
+    pub fn set_stream_paths(&mut self, paths: Vec<std::path::PathBuf>) {
+        debug_assert_eq!(paths.len(), self.contents.len());
+        self.stream_paths = paths;
     }
 
     pub fn arch(&self) -> GGUFArchitecture {
@@ -226,6 +238,17 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
                 continue;
             }
             let offset = self.contents[i].tensor_data_offset;
+            // Stream stacked (rank-3) expert banks from disk when enabled and a shard path is known.
+            // Rank-3 is the arch-agnostic key: every GGUF MoE stores routed experts as [E, n, k]
+            // (glm-dsa / deepseek2 / qwen3-moe / glm4-moe); dense weights are rank-1/2 and stay
+            // resident. The streamed bank is consumed only by `indexed_moe_forward`.
+            let is_expert_bank =
+                self.contents[i].tensor_infos.get(name).unwrap().shape.dims().len() == 3;
+            if is_expert_bank && hanzo_ml::quantized::expert_stream::enabled() {
+                if let Some(path) = self.stream_paths.get(i).cloned() {
+                    return self.contents[i].tensor_stream(&path, name);
+                }
+            }
             let mmap = self.mmaps.get(i).cloned();
             let tensor_info = self.contents[i].tensor_infos.get(name).unwrap();
             return match mmap {
