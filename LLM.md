@@ -77,9 +77,27 @@ cargo build --release --features "cuda flash-attn cudnn"
 # With Metal support (macOS)
 cargo build --release --features metal
 
+# With ROCm support (Linux, AMD)
+cargo build --release --features rocm
+
 # Install hanzo-server binary
 cargo install --path hanzo-server --features <features>
 ```
+
+#### ROCm on AMD APUs (Strix Halo / gfx1151, unified memory)
+
+APUs expose a tiny dedicated-VRAM carve-out (HIP reports ~1 GB) alongside the
+large unified GTT pool (~the whole system RAM). A raw `hipMalloc` targets the
+1 GB carve-out and OOMs immediately on any real model. Run with unified memory:
+
+```bash
+HSA_XNACK=1 LD_LIBRARY_PATH=/opt/rocm/lib \
+  hanzo-server --port 8080 gguf -m <repo> -f <file.gguf>
+```
+
+`HSA_XNACK=1` lets managed allocations page into GTT so the full unified pool is
+usable. (The build already matches the fused qk-norm-rope cos/sin cache to the
+activation dtype; without that fix every GGUF MoE decode step errors on gfx1151.)
 
 ### Testing & Quality
 ```bash
