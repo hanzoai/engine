@@ -471,18 +471,30 @@ class GgufSlotWriter:
         os.pwrite(self.fd, prefix, 0)          # header only touches [0, data_start); never tensor data
         os.ftruncate(self.fd, self.total)      # same size on resume -> preserves written slots
 
+    def _pwrite_all(self, b: bytes, off: int):
+        """Write every byte at `off`. A single os.pwrite is capped by Linux at ~2 GB and
+        short-writes, which would silently truncate a large tensor (an F32 token_embd is
+        ~3.8 GB) while its slot is marked done. Loop until the whole buffer lands."""
+        mv = memoryview(b)
+        written = 0
+        while written < len(mv):
+            n = os.pwrite(self.fd, mv[written:], off + written)
+            if n <= 0:
+                raise IOError(f"pwrite made no progress at offset {off + written}")
+            written += n
+
     def write_full(self, name: str, data: np.ndarray):
         b = data.tobytes()
         if len(b) != self.nbytes[name]:
             raise ValueError(f"{name}: {len(b)} bytes, slot wants {self.nbytes[name]}")
-        os.pwrite(self.fd, b, self.offset[name])
+        self._pwrite_all(b, self.offset[name])
 
     def write_slice(self, name: str, index: int, n_slices: int, data: np.ndarray):
         b = data.tobytes()
         stride = self.nbytes[name] // n_slices
         if len(b) != stride:
             raise ValueError(f"{name}[{index}]: {len(b)} bytes, per-expert stride {stride}")
-        os.pwrite(self.fd, b, self.offset[name] + index * stride)
+        self._pwrite_all(b, self.offset[name] + index * stride)
 
     def close(self):
         if self.fd >= 0:
@@ -600,10 +612,23 @@ def run_convert(args):
         print(f"    shard {idx+1}: +{n} slots ({len(done)} total)", flush=True)
 
     w.close()
+    # The main text model (blk.0..NL-1 + embeddings/head) is the loader-visible model; the
+    # trailing MTP/nextn block (blk.{NL..NL+NEXTN-1}) is a speculative draft head the text loader
+    # drops. DeepSeek/GLM checkpoints frequently tie or omit the MTP embed_tokens/shared_head.head,
+    # so a missing MTP slot must NOT fail an otherwise-complete conversion: the file is loadable.
+    NL = int(_cfg(config, "num_hidden_layers"))
+    NEXTN = int(_cfg(config, "num_nextn_predict_layers", default=0))
+    mtp_prefixes = tuple(f"blk.{NL + k}." for k in range(NEXTN))
     missing = expected_slots(plan) - done
-    if missing:
-        print(f"INCOMPLETE: {len(missing)} slots unfilled (rerun to resume). e.g. {sorted(missing)[:3]}")
+    missing_mtp = {m for m in missing if mtp_prefixes and m.startswith(mtp_prefixes)}
+    missing_main = missing - missing_mtp
+    if missing_main:
+        print(f"INCOMPLETE: {len(missing_main)} slots unfilled (rerun to resume). e.g. {sorted(missing_main)[:3]}")
         return 1
+    if missing_mtp:
+        print(f"WARNING: {len(missing_mtp)} MTP/nextn slot(s) unfilled -- source omitted/renamed them. "
+              f"The text model (blk.0..{NL - 1}) is complete and loadable; a future speculative loader "
+              f"would need these. e.g. {sorted(missing_mtp)[:3]}")
     os.path.exists(sidecar) and os.remove(sidecar)
     shutil.rmtree(tmp, ignore_errors=True)
     print(f"DONE: {args.out} ({w.total/1e9:.2f} GB, {len(plan.tensors)} tensors)")
