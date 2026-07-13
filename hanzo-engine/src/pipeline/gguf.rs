@@ -116,6 +116,8 @@ impl Model {
     /// [`SelfSpeculative`]: crate::speculative::SelfSpeculative
     fn as_self_speculative(&self) -> Option<&dyn crate::speculative::SelfSpeculative> {
         match self {
+            // GLM-5.2 (`glm-dsa`) loads as Deepseek2 and carries an in-band `nextn` MTP head.
+            Model::Deepseek2(m) => Some(m),
             Model::Deepseek4(m) => Some(m),
             _ => None,
         }
