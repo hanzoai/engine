@@ -8,9 +8,14 @@
 //! `expert_weights_norm`/`expert_gating_func` metadata; see TODOs). Layout/tensor names follow
 //! llama.cpp's `LLM_ARCH_DEEPSEEK2` convention.
 //!
-//! NOTE: this is a scope+scaffold pass. MLA here uses the un-absorbed (materialized K/V) eager path
-//! that the safetensors model uses on the no-paged branch; the CUDA paged "absorbed" MLA decode in
-//! `crate::mla` is NOT wired here yet (it needs paged-attn MLA cache layout for GGUF). See the report.
+//! NOTE: MLA here uses the un-absorbed (materialized K/V) eager path that the safetensors model uses
+//! on the no-paged branch; the CUDA paged "absorbed" MLA decode in `crate::mla` is NOT wired here yet
+//! (it needs paged-attn MLA cache layout for GGUF). See the report.
+//!
+//! DSA: a `glm-dsa` GGUF carrying the lightning-indexer (`attn_indexer_*` tensors + `index_*`
+//! metadata) drives GLM-5.2 top-`index_topk` sparse key selection on the eager cold-prefill path via
+//! the shared [`super::dsa`] primitive — the same selection the safetensors [`super::glm5_moe`] uses.
+//! `DSA=0` forces dense; `DSA_TOPK=N` overrides. `index_topk >= context` is byte-identical to dense.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -34,7 +39,7 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 use hanzo_ml::{DType, Device, Result, Tensor, D};
-use hanzo_nn::{Embedding, Linear, Module};
+use hanzo_nn::{Embedding, LayerNorm, Linear, Module};
 use hanzo_quant::{QuantMethod, QuantMethodConfig, RingPipeline, UnquantLinear};
 
 const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
@@ -43,7 +48,80 @@ const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
 const EXPERT_GATING_SOFTMAX: u32 = 1;
 const EXPERT_GATING_SIGMOID: u32 = 2;
 
+/// GLM-5's DSA indexer key-norm is a real `LayerNorm` with a hardcoded `eps = 1e-6`
+/// (independent of the model's `rms_norm_eps`), matching [`super::glm5_moe`]'s
+/// `INDEXER_KNORM_EPS` and the colibrì `glm.c` reference.
+const INDEXER_KNORM_EPS: f64 = 1e-6;
+
+use crate::models::dsa::{DsaConfig, DsaIndexer, DsaSelection};
 use crate::models::gguf_moe::{build_moe_or_mlp, gguf_linear, MoeOrMlp, MoeParams};
+
+/// DSA sparse attention is on by default whenever a checkpoint ships the indexer
+/// tensors; `DSA=0` forces the dense path (byte-identical). Mirrors colibrì.
+fn dsa_enabled() -> bool {
+    !matches!(std::env::var("DSA").ok().as_deref(), Some("0"))
+}
+
+/// `DSA_TOPK=N` overrides the checkpoint's `index_topk` (test / ablation knob,
+/// colibrì-compatible). `DSA_TOPK >= context` reproduces dense selection exactly.
+fn dsa_topk_override() -> Option<usize> {
+    std::env::var("DSA_TOPK")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+}
+
+/// Per-sequence RoPE base offsets as the position tensor the DSA indexer's
+/// partial RoPE consumes. Length `batch` -> the gather expands each offset to
+/// `off + 0..seq_len`, i.e. the exact cos/sin rows the main MLA RoPE selects
+/// from the same `start_offsets` (cold prefill: `off == 0`, positions `0..L`).
+fn dsa_rope_positions(offsets: &[usize], device: &Device) -> Result<Tensor> {
+    let positions = offsets.iter().map(|&o| o as u32).collect::<Vec<_>>();
+    Tensor::from_vec(positions, offsets.len(), device)
+}
+
+/// Load a layer's DSA lightning-indexer from a `glm-dsa` GGUF, or `None` when the
+/// layer ships no indexer tensors (an IndexShare "shared" layer, or a non-DSA
+/// checkpoint) — that layer then reuses the previous full layer's selection.
+///
+/// Tensor names (llama.cpp `blk.N.` convention, mapped from the HF
+/// `self_attn.indexer.{wq_b,wk,weights_proj,k_norm}` the colibrì `--indexer`
+/// converter extracts as `out-idx-*`):
+///   `attn_indexer_q`      = `wq_b`         (q-LoRA latent -> n_head·head_dim)
+///   `attn_indexer_k`      = `wk`           (hidden -> head_dim, shared MQA head)
+///   `attn_indexer_w`      = `weights_proj` (hidden -> n_head)
+///   `attn_indexer_k_norm` = `k_norm`       (LayerNorm weight + bias)
+fn load_layer_indexer<R: std::io::Seek + std::io::Read>(
+    ct: &mut Content<'_, R>,
+    prefix: &str,
+    cfg: DsaConfig,
+    device: &Device,
+    dtype: DType,
+) -> Result<Option<DsaIndexer>> {
+    let wq_name = format!("{prefix}.attn_indexer_q.weight");
+    if !ct.has_tensor(&wq_name) {
+        return Ok(None);
+    }
+    let wq = gguf_linear(ct.tensor(&wq_name, device)?)?;
+    let wk = gguf_linear(ct.tensor(&format!("{prefix}.attn_indexer_k.weight"), device)?)?;
+    let weights_proj =
+        gguf_linear(ct.tensor(&format!("{prefix}.attn_indexer_w.weight"), device)?)?;
+
+    let k_norm = if ct.has_tensor(&format!("{prefix}.attn_indexer_k_norm.weight")) {
+        let w = ct
+            .tensor(&format!("{prefix}.attn_indexer_k_norm.weight"), device)?
+            .dequantize(device)?
+            .to_dtype(dtype)?;
+        let b = ct
+            .tensor(&format!("{prefix}.attn_indexer_k_norm.bias"), device)?
+            .dequantize(device)?
+            .to_dtype(dtype)?;
+        Some(LayerNorm::new(w, b, INDEXER_KNORM_EPS))
+    } else {
+        None
+    };
+
+    Ok(Some(DsaIndexer::from_parts(cfg, wq, wk, weights_proj, k_norm)))
+}
 
 pub(crate) struct LayerWeights {
     // MLA projections. q is either plain (q_proj) or low-rank (q_a/q_b with q_a_norm).
@@ -68,9 +146,22 @@ pub(crate) struct LayerWeights {
     kv_lora_rank: usize,
     v_head_dim: usize,
     dtype: DType,
+    /// DSA lightning indexer on IndexShare "full" layers; `None` on "shared"
+    /// layers (reuse the threaded-in selection) and non-DSA checkpoints (dense).
+    indexer: Option<DsaIndexer>,
 }
 
 impl LayerWeights {
+    /// The q-LoRA-normalised latent the DSA indexer projects its query from:
+    /// `q_a_norm(q_a_proj(x))`. Every DSA checkpoint uses low-rank Q, so an
+    /// indexer-bearing layer always has these; guard for the plain-Q case.
+    fn indexer_q_src(&self, x: &Tensor) -> Result<Tensor> {
+        match (&self.q_a_proj, &self.q_a_norm) {
+            (Some(a), Some(norm)) => norm.forward(&a.forward(x)?),
+            _ => hanzo_ml::bail!("deepseek2 gguf: DSA indexer requires low-rank Q (q_a_proj)"),
+        }
+    }
+
     /// Load one deepseek2/glm-dsa decoder block (`blk.{layer_idx}`): MLA attention +
     /// dense-or-MoE feed-forward. The single loader used by BOTH the main model loop and
     /// the in-band `nextn` MTP head (`crate::models::deepseek2_mtp`) — the block layout is
@@ -86,6 +177,7 @@ impl LayerWeights {
         softmax_scale: f32,
         q_head_dim: usize,
         paged_attn: Option<PagedAttention>,
+        dsa_cfg: Option<DsaConfig>,
         dtype: DType,
     ) -> Result<Self> {
         let prefix = format!("blk.{layer_idx}");
@@ -183,6 +275,15 @@ impl LayerWeights {
             },
         )?;
 
+        // DSA lightning indexer: read AFTER the main block tensors (matches the on-disk
+        // GGUF order). Present -> this is an IndexShare "full" layer that owns its selection;
+        // absent (or `dsa_cfg` None) -> a "shared"/non-DSA layer that runs dense or reuses the
+        // threaded-in selection. The MTP draft head passes `None` (it drafts dense).
+        let indexer = match dsa_cfg {
+            Some(cfg) => load_layer_indexer(ct, &prefix, cfg, device, dtype)?,
+            None => None,
+        };
+
         Ok(LayerWeights {
             q_a_proj,
             q_a_norm,
@@ -211,17 +312,22 @@ impl LayerWeights {
             kv_lora_rank: props.kv_lora_rank,
             v_head_dim: props.v_head_dim,
             dtype,
+            indexer,
         })
     }
 
+    /// Returns `(attn_out, selection)`. `selection` is `Some` on the eager
+    /// cold-prefill DSA path (the value the next "shared" layer reuses) and
+    /// `None` on every dense fallback (paged, warm cache, decode, non-DSA).
     fn forward_attn(
         &self,
         x: &Tensor,
         mask: &AttentionMask,
         start_offsets: &[usize],
+        prev_selection: Option<&DsaSelection>,
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-    ) -> Result<Tensor> {
+    ) -> Result<(Tensor, Option<DsaSelection>)> {
         let (bs, seq_len, _) = x.dims3()?;
 
         let q = match (&self.q_proj, &self.q_a_proj, &self.q_b_proj, &self.q_a_norm) {
@@ -279,6 +385,7 @@ impl LayerWeights {
 
         let v = v.to_dtype(self.dtype)?;
 
+        let mut selection_out = None;
         let y = match &self.paged_attn {
             Some(paged_attn) => {
                 let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
@@ -302,16 +409,75 @@ impl LayerWeights {
             }
             None => {
                 let (k, v) = kv_cache.append(&k, &v)?;
-                Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
+
+                // DSA (eager cold-cache prefill only): fold the lightning-indexer's
+                // selected-key `-inf` bias into the causal mask so MLA attends over
+                // the top-`index_topk` keys instead of dense O(L^2). A "full" layer
+                // (has its own indexer) computes a fresh selection; a "shared" layer
+                // reuses `prev_selection` (GLM-5 IndexShare). Guarded to `Lk == seq_len`
+                // (cold cache, mask already Custom) so the `[B, seq_len, seq_len]`
+                // selection aligns with the causal mask and the `mask.is_custom()`
+                // reshape branch below is unchanged; warm cache / decode stay dense.
+                // `index_topk >= seq_len` -> all keys -> zero bias -> byte-identical
+                // to the dense path.
+                let dsa_mask = match mask.as_option_tensor() {
+                    Some(base) if base.dim(D::Minus1)? == seq_len => {
+                        let selection = match &self.indexer {
+                            Some(indexer) => {
+                                let q_src = self.indexer_q_src(x)?;
+                                let positions = dsa_rope_positions(start_offsets, x.device())?;
+                                Some(indexer.forward(
+                                    &q_src,
+                                    x,
+                                    Some(&self.rotary),
+                                    Some(&positions),
+                                    true,
+                                )?)
+                            }
+                            // A "shared" layer reuses the previous full layer's selection.
+                            // Under a DeviceMapper / pipeline stage the reused tensor can live
+                            // on a different device than this layer's mask; reusing it would
+                            // panic in `combine_with_mask`'s cross-device broadcast_add. Fall
+                            // back to dense on a device mismatch (a pipeline-stage boundary,
+                            // where `prev_selection` is `None`, takes the same dense path).
+                            None => match prev_selection {
+                                Some(sel) if sel.mask.device().same_device(base.device()) => {
+                                    Some(sel.clone())
+                                }
+                                _ => None,
+                            },
+                        };
+                        match selection {
+                            Some(sel) => {
+                                let mask = AttentionMask::Custom(sel.combine_with_mask(base)?);
+                                selection_out = Some(sel);
+                                Some(mask)
+                            }
+                            None => None,
+                        }
+                    }
+                    _ => None,
+                };
+
+                Sdpa.run_attention(
+                    &q,
+                    &k,
+                    &v,
+                    dsa_mask.as_ref().unwrap_or(mask),
+                    None,
+                    &self.sdpa_params,
+                )?
             }
         };
 
+        // Reshape decision keys off the ORIGINAL mask (Custom => eager `[B,H,L,Dv]`
+        // layout), never the DSA-wrapped one, so a substituted mask can't flip it.
         let y = if mask.is_custom() {
             y.transpose(1, 2)?.reshape((bs, seq_len, ()))?
         } else {
             y.reshape((bs, seq_len, ()))?
         };
-        self.o_proj.forward(&y.to_dtype(x.dtype())?)
+        Ok((self.o_proj.forward(&y.to_dtype(x.dtype())?)?, selection_out))
     }
 
     pub(crate) fn forward_block(
@@ -319,17 +485,19 @@ impl LayerWeights {
         x: Tensor,
         mask: &AttentionMask,
         start_offsets: &[usize],
+        prev_selection: Option<&DsaSelection>,
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-    ) -> Result<Tensor> {
+    ) -> Result<(Tensor, Option<DsaSelection>)> {
         let residual = &x;
         let xn = self.attn_norm.forward(&x)?;
-        let attn = self.forward_attn(&xn, mask, start_offsets, kv_cache, metadata)?;
+        let (attn, selection) =
+            self.forward_attn(&xn, mask, start_offsets, prev_selection, kv_cache, metadata)?;
         let x = (attn + residual)?;
         let residual = &x;
         let xn = self.ffn_norm.forward(&x)?;
         let xn = self.mlp.forward(&xn)?;
-        xn + residual
+        Ok(((xn + residual)?, selection))
     }
 }
 
@@ -391,11 +559,18 @@ pub(crate) struct PropsGGUF {
     // YaRN rope scaling (optional).
     pub rope_scaling_factor: Option<f32>,
     pub rope_yarn_orig_ctx: Option<usize>,
+    // DSA lightning indexer (glm-dsa). All three present + a per-layer
+    // `attn_indexer_*` tensor set activate sparse attention; absent -> dense.
+    pub index_topk: Option<usize>,
+    pub index_n_heads: Option<usize>,
+    pub index_head_dim: Option<usize>,
 }
 
-// GLM-5.2 (`glm-dsa`) is deepseek2-class in GGUF terms: split-MLA + 256-expert MoE. Its extra DSA
-// sparse-attention indexer tensors are ignored; for any prompt <= indexer top_k the sparse key
-// selection returns all keys, i.e. plain dense MLA, which this materialized-K/V path computes.
+// GLM-5.2 (`glm-dsa`) is deepseek2-class in GGUF terms: split-MLA + 256-expert MoE. When the GGUF
+// carries the DSA lightning-indexer (`attn_indexer_*` tensors + `index_*` metadata), cold-prefill
+// MLA runs over the top-`index_topk` keys the indexer selects (see `forward_attn`); for any prompt
+// <= index_topk the selection returns all keys, i.e. dense MLA, byte-identical to the pre-DSA path.
+// A GGUF without those tensors runs dense unconditionally, exactly as before.
 fn verify_arch(
     metadata: &HashMap<String, hanzo_ml::quantized::gguf_file::Value>,
 ) -> Result<String> {
@@ -524,6 +699,18 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
                 .get_value::<u32>("rope.scaling.original_context_length")
                 .ok()
                 .map(|x| x as usize),
+            index_topk: c
+                .get_value::<u32>("attention.index_top_k")
+                .ok()
+                .map(|x| x as usize),
+            index_n_heads: c
+                .get_value::<u32>("attention.index_head_count")
+                .ok()
+                .map(|x| x as usize),
+            index_head_dim: c
+                .get_value::<u32>("attention.index_head_dim")
+                .ok()
+                .map(|x| x as usize),
         })
     }
 }
@@ -621,6 +808,29 @@ impl ModelConfig::FromGGUF for ModelWeights {
             }
         }
 
+        // DSA lightning-indexer config (glm-dsa). Active only when the metadata carries the
+        // indexer dims, `DSA != 0`, and this is a single-node (non-pipeline-parallel) load; the
+        // per-layer `attn_indexer_*` tensors then decide "full" (own indexer) vs "shared" (reuse)
+        // by presence. Pipeline-parallel is excluded because a "shared" layer's reused selection
+        // can cross a stage boundary; multi-device DeviceMapper reuse is guarded per-layer in
+        // `forward_attn` (device mismatch -> dense). colibrì `glm.c` bounds index_head_dim to
+        // `(0, 1<<16)`; heads and topk must be `> 0`.
+        let dsa_cfg = if dsa_enabled() && pp.is_none() {
+            match (props.index_topk, props.index_n_heads, props.index_head_dim) {
+                (Some(topk), Some(nh), Some(hd)) if topk > 0 && nh > 0 && hd > 0 && hd < (1 << 16) => {
+                    Some(DsaConfig {
+                        index_n_heads: nh,
+                        index_head_dim: hd,
+                        index_topk: dsa_topk_override().unwrap_or(topk),
+                        rope_dim: props.qk_rope_head_dim,
+                    })
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
         let mut layers = Vec::with_capacity(local_range.end - local_range.start);
         for layer_idx in NiceProgressBar::<_, 'b'>(
             local_range.clone(),
@@ -654,8 +864,24 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 softmax_scale,
                 q_head_dim,
                 paged_attn,
+                dsa_cfg,
                 dtype,
             )?);
+        }
+
+        if let Some(cfg) = dsa_cfg {
+            let dsa_full_layers = layers.iter().filter(|l| l.indexer.is_some()).count();
+            if dsa_full_layers > 0 {
+                tracing::info!(
+                    "DSA sparse attention active: top-{} key selection across {dsa_full_layers} indexer layer(s) (dense beyond cold prefill)",
+                    cfg.index_topk,
+                );
+            } else {
+                tracing::warn!(
+                    "DSA indexer configured (top-{}) but no `attn_indexer_*` tensors found in the GGUF; running dense. Reconvert with the colibrì `--indexer` mode (out-idx-*).",
+                    cfg.index_topk,
+                );
+            }
         }
 
         Ok(Self {
@@ -723,20 +949,24 @@ impl ModelWeights {
         } else {
             DeviceMappedMask::from_single(mask)
         };
+        let mut selection: Option<DsaSelection> = None;
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
             }
             let dmask = mask.get(layer_in.device());
-            layer_in = layer.forward_block(
+            let (xs_next, sel) = layer.forward_block(
                 layer_in,
                 &dmask,
                 start_offsets,
+                selection.as_ref(),
                 &mut cache[i],
                 metadata
                     .as_ref()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
             )?;
+            layer_in = xs_next;
+            selection = sel;
         }
         let x = self.norm.as_ref().unwrap().forward(&layer_in)?;
         let x = extract_logits(&x, context_lens)?;
@@ -773,9 +1003,13 @@ impl ModelWeights {
             }
         }
         let mut layer_in = h.clone();
+        let mut selection: Option<DsaSelection> = None;
         for (i, layer) in self.layers.iter().enumerate() {
             let dmask = mask.get(layer_in.device());
-            layer_in = layer.forward_block(layer_in, &dmask, offsets, &mut cache[i], None)?;
+            let (xs_next, sel) =
+                layer.forward_block(layer_in, &dmask, offsets, selection.as_ref(), &mut cache[i], None)?;
+            layer_in = xs_next;
+            selection = sel;
         }
         Ok(layer_in)
     }

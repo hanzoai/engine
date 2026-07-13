@@ -133,7 +133,7 @@ impl GlmMtpHead {
         // The nextn block is a full deepseek2 decoder block — SAME loader as the main model,
         // Eager (no paged attn: the draft runs over its own small KvCache).
         let block = LayerWeights::load(
-            ct, nextn_idx, props, device, rotary, softmax_scale, q_head_dim, None, dtype,
+            ct, nextn_idx, props, device, rotary, softmax_scale, q_head_dim, None, None, dtype,
         )?;
 
         // NextN entry/exit. enorm/hnorm normalize the token embedding / base hidden; eh_proj is
@@ -201,9 +201,10 @@ impl GlmMtpHead {
         )?;
 
         // One deepseek2 decoder block over the fused carrier (Eager over the draft KvCache).
-        let x = self
+        // The draft head runs dense (no DSA sparse selection); ignore the returned selection.
+        let (x, _sel) = self
             .block
-            .forward_block(x, &mask, start_offsets, &mut self.cache[0], None)?;
+            .forward_block(x, &mask, start_offsets, None, &mut self.cache[0], None)?;
         let x = self.norm.forward(&x)?;
         let logits = output.forward(&x.contiguous()?)?;
         Ok((logits, x))
