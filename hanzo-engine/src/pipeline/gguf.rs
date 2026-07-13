@@ -106,6 +106,22 @@ enum Model {
     Glm4Moe(QGlm4Moe),
 }
 
+impl Model {
+    /// The model's self-speculative capability, if it carries an MTP head. This is
+    /// the ONE place the enum maps a variant to [`SelfSpeculative`]; the speculative
+    /// pipeline asks for the trait object and never matches on the architecture.
+    /// Adding a self-speculative model = one arm here + the trait impl by its
+    /// weights (e.g. GLM-5.2's in-band `nextn` head).
+    ///
+    /// [`SelfSpeculative`]: crate::speculative::SelfSpeculative
+    fn as_self_speculative(&self) -> Option<&dyn crate::speculative::SelfSpeculative> {
+        match self {
+            Model::Deepseek4(m) => Some(m),
+            _ => None,
+        }
+    }
+}
+
 pub struct GGUFPipeline {
     model: Model,
     tokenizer: Arc<Tokenizer>,
@@ -2078,37 +2094,24 @@ impl Pipeline for GGUFPipeline {
                 Ok(())
             }
             crate::speculative::SpeculativeConfig::Mtp(mtp_config) => {
-                // Self-speculative MTP: load the draft head against the base model's
-                // config and share its embeddings + output head. Only DeepSeek-V4.
-                let Model::Deepseek4(ref model) = self.model else {
-                    hanzo_ml::bail!("MTP speculative decoding is only supported for DeepSeek-V4");
-                };
-                let path = mtp_config.resolve_path()?;
-                let mut readers = [std::fs::File::open(&path).map_err(hanzo_ml::Error::msg)?];
-                let mut readers_ref: Vec<&mut std::fs::File> = readers.iter_mut().collect();
-                let mut ct = crate::gguf::Content::from_readers(&mut readers_ref)?;
-                let head = crate::models::deepseek4_mtp::MtpHead::load(
-                    &mut ct,
-                    model.base_props(),
-                    &model.device,
-                    model.compute_dtype(),
-                )?;
+                // Self-speculative MTP: the model provides its OWN draft head. This is
+                // the ONE seam — the pipeline asks the model for its SelfSpeculative
+                // capability and never names an architecture. A model without an MTP
+                // head is reported honestly instead of silently unsupported.
                 let n_predict = mtp_config.n_predict.unwrap_or(1);
-                let runtime = crate::models::deepseek4_mtp::Deepseek4MtpRuntime::new(
-                    head,
-                    model.embeddings().clone(),
-                    model.output_head(),
-                    n_predict,
-                );
-                // Always stash the pre-output hidden — the proposer needs it every step
-                // and the clone is cheap versus the forward.
-                model.set_store_spec_hidden(true);
-                let info = crate::speculative::SpeculativeAttachInfo::mtp(
-                    "deepseek4-mtp".to_string(),
-                    n_predict,
-                );
+                let proposer = self
+                    .model
+                    .as_self_speculative()
+                    .ok_or_else(|| {
+                        hanzo_ml::Error::msg(
+                            "this model has no MTP head for self-speculative decoding",
+                        )
+                    })?
+                    .attach_mtp(&mtp_config)?;
+                let info =
+                    crate::speculative::SpeculativeAttachInfo::mtp("mtp".to_string(), n_predict);
                 crate::speculative::logging::log_attach(&info);
-                self.draft_proposer = Some(Box::new(runtime));
+                self.draft_proposer = Some(proposer);
                 Ok(())
             }
         }
