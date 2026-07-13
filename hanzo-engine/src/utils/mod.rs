@@ -194,7 +194,7 @@ macro_rules! handle_pipeline_forward_error {
                     } else {
                         let partial_completion_response = CompletionResponse {
                             id: seq.id().to_string(),
-                            choices: group.get_completion_choices().to_vec(),
+                            choices: group.get_completion_choices(),
                             created: seq.creation_time(),
                             model: pipeline_name.clone(),
                             system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
