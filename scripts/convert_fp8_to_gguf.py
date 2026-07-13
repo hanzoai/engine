@@ -1,9 +1,9 @@
 """
 FP8 (GLM-5.2) -> standard llama.cpp-style `glm-dsa` GGUF, shard-by-shard, disk-safe.
 
-Studied from colibri's `tools/convert_fp8_to_int4.py`: download ONE ~5 GB safetensors
+Convert a GLM-5.2 FP8 checkpoint to GGUF: download ONE ~5 GB safetensors
 shard, convert its tensors, DELETE the shard, move on. Peak disk = one shard + the growing
-output. The difference: colibri writes its OWN int4 container; this writes a STANDARD GGUF
+output as a STANDARD GGUF
 that hanzo-engine's `glm-dsa` loader (models/quantized_deepseek2.rs, arch "glm-dsa") reads.
 
 What "standard glm-dsa GGUF" means here, matched byte-for-byte to that loader:
@@ -13,7 +13,7 @@ What "standard glm-dsa GGUF" means here, matched byte-for-byte to that loader:
   - router `blk.{i}.ffn_gate_inp.weight` + no-aux bias `blk.{i}.exp_probs_b.bias` kept F32
   - expert_gating_func = 2 (sigmoid), leading_dense_block_count, expert_group_count = 1 (noaux)
   - the trailing MTP / nextn block is emitted at Q8_0 (an int4 draft head measures ~0% acceptance,
-    colibri issue #8 -- speculation never starts), and nextn_predict_layers records it so the
+    speculation never starts at int4), and nextn_predict_layers records it so the
     text-forward loader drops it from block_count.
 
 GGUF is a single file whose whole tensor directory (name, shape, type, byte offset) precedes the
@@ -56,7 +56,7 @@ QK_K = 256  # K-quant super-block
 # ------------------------------------------------------------------ FP8 dequant --
 
 def _dequant_fp8_block(weight, scale_inv):
-    """FP8 e4m3 weight with a 128x128 block scale grid -> f32, matching colibri's dequant."""
+    """FP8 e4m3 weight with a 128x128 block scale grid -> f32, standard FP8 e4m3 block-scale dequant."""
     import torch
 
     w = weight.to(torch.float32)
