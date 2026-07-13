@@ -70,42 +70,94 @@ use crate::ops::TopKLastDimOp;
 /// `-inf`, the desired softmax behaviour).
 const MASK_NEG_BIAS: f64 = -1e30;
 
+/// DSA sparse attention is on by default whenever a checkpoint ships the indexer
+/// dims; `DSA=0` forces the dense path (byte-identical). Resolved once, here — the
+/// single place every arch and both the GGUF and safetensors loaders read the
+/// switch, so "turn DSA off" means the same thing on every path. Cached.
+fn dsa_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| !matches!(std::env::var("DSA").ok().as_deref(), Some("0")))
+}
+
+/// `DSA_TOPK=N` overrides the checkpoint's `index_topk` (ablation knob; `>= context`
+/// reproduces dense selection exactly). Resolved once here so every arch and both
+/// pipelines honour it identically. Cached.
+fn dsa_topk_override() -> Option<usize> {
+    use std::sync::OnceLock;
+    static OVERRIDE: OnceLock<Option<usize>> = OnceLock::new();
+    *OVERRIDE.get_or_init(|| {
+        std::env::var("DSA_TOPK")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+    })
+}
+
 /// Static config for the DSA indexer, parameterized so the same primitive
 /// covers DeepSeek-V3.2 / V4 and GLM-5 selection.
+///
+/// Fields are private: the only way to build a `DsaConfig` is [`DsaConfig::new`],
+/// so every loader passes through the same `has_dsa` gate and DSA on/off + topk
+/// policy — no struct-literal path can disagree.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DsaConfig {
     /// Number of indexer query heads (`index_n_heads`, e.g. 64).
-    pub index_n_heads: usize,
+    index_n_heads: usize,
     /// Per-head indexer dimension (`index_head_dim`, e.g. 128).
-    pub index_head_dim: usize,
-    /// Number of preceding tokens to keep per query (`index_topk`, e.g. 2048).
-    pub index_topk: usize,
+    index_head_dim: usize,
+    /// Number of preceding tokens to keep per query (`index_topk`, e.g. 2048),
+    /// after any `DSA_TOPK` override.
+    index_topk: usize,
     /// Leading dims of each indexer head that receive (partial) RoPE.
     /// Equals `qk_rope_head_dim` for V3.2; `0` disables RoPE entirely.
-    pub rope_dim: usize,
+    rope_dim: usize,
 }
 
 impl DsaConfig {
-    /// Build a config from a checkpoint's indexer dims, or `None` when those dims
-    /// can't drive a real indexer. The gate is the GLM-5.2 `has_dsa`
-    /// predicate (`glm.c:836`): `index_topk`, `index_n_heads`, `index_head_dim`
-    /// all positive and `index_head_dim <= 256`. A checkpoint that declares DSA
-    /// metadata with degenerate dims falls back to the dense path here instead of
-    /// building an indexer that would mis-shape downstream — the one place every
-    /// loader decides "is this DSA config usable", so they can't disagree.
+    /// Build a config from a checkpoint's indexer dims, or `None` when DSA is off
+    /// (`DSA=0`) or those dims can't drive a real indexer. The gate is the
+    /// GLM-5.2 `has_dsa` predicate (`glm.c:836`): `index_topk`, `index_n_heads`,
+    /// `index_head_dim` all positive and `index_head_dim <= 256`. A checkpoint
+    /// that declares DSA metadata with degenerate dims falls back to the dense
+    /// path here instead of building an indexer that would mis-shape downstream.
+    ///
+    /// This is THE one place every loader (GGUF and safetensors, all four archs)
+    /// decides "is this DSA config usable" AND resolves the `DSA` / `DSA_TOPK`
+    /// env policy, so they can't disagree.
     pub(crate) fn new(
         index_n_heads: usize,
         index_head_dim: usize,
         index_topk: usize,
         rope_dim: usize,
     ) -> Option<Self> {
+        if !dsa_enabled() {
+            return None;
+        }
+        // Gate on the raw checkpoint dims (`has_dsa`); the `DSA_TOPK` ablation
+        // knob then overrides the kept-key count on the valid config.
         (index_topk > 0 && index_n_heads > 0 && index_head_dim > 0 && index_head_dim <= 256)
             .then_some(Self {
                 index_n_heads,
                 index_head_dim,
-                index_topk,
+                index_topk: dsa_topk_override().unwrap_or(index_topk),
                 rope_dim,
             })
+    }
+
+    pub(crate) fn index_n_heads(&self) -> usize {
+        self.index_n_heads
+    }
+
+    pub(crate) fn index_head_dim(&self) -> usize {
+        self.index_head_dim
+    }
+
+    pub(crate) fn index_topk(&self) -> usize {
+        self.index_topk
+    }
+
+    pub(crate) fn rope_dim(&self) -> usize {
+        self.rope_dim
     }
 }
 
@@ -195,14 +247,14 @@ impl DsaIndexer {
 
         let wq = hanzo_quant::linear_no_bias(
             q_src_dim,
-            cfg.index_n_heads * cfg.index_head_dim,
+            cfg.index_n_heads() * cfg.index_head_dim(),
             quant,
             vb.pp("wq_b"),
         )?;
-        let wk = hanzo_quant::linear_no_bias(kv_src_dim, cfg.index_head_dim, quant, vb.pp("wk"))?;
+        let wk = hanzo_quant::linear_no_bias(kv_src_dim, cfg.index_head_dim(), quant, vb.pp("wk"))?;
         let weights_proj = hanzo_quant::linear_no_bias(
             kv_src_dim,
-            cfg.index_n_heads,
+            cfg.index_n_heads(),
             quant,
             vb.pp("weights_proj"),
         )?;
@@ -212,7 +264,7 @@ impl DsaIndexer {
         // RmsNorm here would silently drop the bias and skip mean-centering,
         // yielding wrong key vectors and wrong top-k.
         let k_norm = if vb.contains_tensor("k_norm.weight") {
-            Some(layer_norm(cfg.index_head_dim, norm_eps, vb.pp("k_norm"))?)
+            Some(layer_norm(cfg.index_head_dim(), norm_eps, vb.pp("k_norm"))?)
         } else {
             None
         };
@@ -234,7 +286,7 @@ impl DsaIndexer {
         weights_proj: Arc<dyn QuantMethod>,
         k_norm: Option<LayerNorm>,
     ) -> Self {
-        let weight_scale = 1.0 / ((cfg.index_head_dim * cfg.index_n_heads) as f64).sqrt();
+        let weight_scale = 1.0 / ((cfg.index_head_dim() * cfg.index_n_heads()) as f64).sqrt();
         Self {
             wq,
             wk,
@@ -262,8 +314,8 @@ impl DsaIndexer {
         causal: bool,
     ) -> Result<DsaSelection> {
         let (b, lq, _) = q_src.dims3()?;
-        let nh = self.cfg.index_n_heads;
-        let dh = self.cfg.index_head_dim;
+        let nh = self.cfg.index_n_heads();
+        let dh = self.cfg.index_head_dim();
 
         // Queries: [B, Lq, nh·dh] -> [B, nh, Lq, dh]
         let q = self
@@ -282,14 +334,14 @@ impl DsaIndexer {
             .affine(self.weight_scale, 0.0)?; // [B, Lq, nh]
 
         let (q, k) = match (rotary, positions) {
-            (Some(rot), Some(pos)) if self.cfg.rope_dim > 0 => {
-                apply_partial_rope(&q, &k, self.cfg.rope_dim, rot, pos)?
+            (Some(rot), Some(pos)) if self.cfg.rope_dim() > 0 => {
+                apply_partial_rope(&q, &k, self.cfg.rope_dim(), rot, pos)?
             }
             _ => (q, k),
         };
 
         let scores = indexer_scores(&q, &k, &weights)?;
-        select_topk(&scores, self.cfg.index_topk, causal)
+        select_topk(&scores, self.cfg.index_topk(), causal)
     }
 
     /// Project and normalize the indexer keys: `[B, Lk, dh]`, one shared head.
@@ -583,7 +635,7 @@ mod tests {
 
         let c = DsaConfig::new(64, 128, 2048, 0).unwrap();
         assert_eq!(
-            (c.index_n_heads, c.index_head_dim, c.index_topk, c.rope_dim),
+            (c.index_n_heads(), c.index_head_dim(), c.index_topk(), c.rope_dim()),
             (64, 128, 2048, 0),
             "fields pass through unchanged; rope_dim=0 (RoPE disabled) is valid"
         );
