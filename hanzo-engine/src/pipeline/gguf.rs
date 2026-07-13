@@ -730,8 +730,7 @@ impl Loader for GGUFLoader {
             _ => unreachable!(),
         };
 
-        // All expert banks are now open: size their LRU caches from available RAM and auto-pin the
-        // hottest experts learned in prior runs (colibri cap_for_ram + AUTOPIN). No-op when off.
+        // Banks are open: size their LRU caches from RAM and pin the learned-hot experts.
         if stream_experts {
             hanzo_ml::quantized::expert_stream::finalize();
         }
