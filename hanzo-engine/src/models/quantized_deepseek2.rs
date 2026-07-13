@@ -1445,4 +1445,150 @@ mod tests {
         );
         Ok(())
     }
+
+    // ---- GLM-5.2 (glm-dsa) whole-forward oracle: engine vs transformers, token-for-token ----
+    //
+    // Loads a tiny random-weight `glm-dsa` GGUF (arch: split-MLA + DSA lightning indexer +
+    // sigmoid/noaux MoE router + shared expert) on Device::Cpu and asserts the forward matches a
+    // transformers reference (`ref_glm.json`) token-for-token. `index_topk=4096 >> seq`, and the
+    // GGUF omits the `attn_indexer_*` tensors, so DSA degenerates to DENSE attention on every layer
+    // (`LayerWeights.indexer == None`) — this validates the ENTIRE forward WITHOUT the sparse path.
+    //
+    // Two independent checks on FRESH model instances (cold KV cache):
+    //   (A) TEACHER FORCING — one cold prefill over the 32-token `full_ids`, argmax every position;
+    //       positions 11..=30 must equal the oracle next-token `full_ids[i+1]` (== `tf_pred[i]`).
+    //   (B) GREEDY DECODE  — from `prompt_ids`, KV-cache-incremental greedy-decode 20 tokens; the
+    //       result must equal `full_ids[12..32]`.
+    //
+    // Assertions compare to the REAL oracle values from the committed fixture (no self-reference,
+    // no tolerance). Fixtures default to `tests/fixtures/` and can be overridden with
+    //   GLM_TINY_GGUF=/abs/glm_tiny_f32.gguf  GLM_TINY_REF=/abs/ref_glm.json
+    // Run: cargo test -p hanzo-engine glm_dsa_oracle -- --nocapture --test-threads=1
+    fn glm_load(path: &std::path::Path) -> anyhow::Result<ModelWeights> {
+        let mut f = std::fs::File::open(path)?;
+        let mut readers: Vec<&mut std::fs::File> = vec![&mut f];
+        let ct = Content::from_readers(&mut readers)?;
+        let dev = Device::Cpu;
+        // dummy mapper ignores model_layers; 64 is a safe upper bound for the 5-block model.
+        let mapper = crate::device_map::DeviceMapSetting::dummy()
+            .into_mapper(64, &dev, None, &[dev.clone()])?;
+        let m = <ModelWeights as ModelConfig::FromGGUF>::from_gguf(
+            ct,
+            &dev,
+            mapper,
+            AttentionImplementation::Eager,
+            DType::F32,
+        )?;
+        Ok(m)
+    }
+
+    fn glm_ids(ids: &[u32]) -> Result<Tensor> {
+        Tensor::from_vec(ids.to_vec(), (1, ids.len()), &Device::Cpu)
+    }
+
+    // argmax over the vocab dim of logits[1, npos, vocab] -> Vec<u32> length npos.
+    fn glm_argmax_rows(logits: &Tensor) -> Result<Vec<u32>> {
+        let v = logits.to_dtype(DType::F32)?.to_vec3::<f32>()?; // [1][npos][vocab]
+        Ok(v[0]
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .enumerate()
+                    .fold((0usize, f32::NEG_INFINITY), |(bi, bv), (i, &x)| {
+                        if x > bv {
+                            (i, x)
+                        } else {
+                            (bi, bv)
+                        }
+                    })
+                    .0 as u32
+            })
+            .collect())
+    }
+
+    #[test]
+    fn glm_dsa_oracle_matches_transformers() -> anyhow::Result<()> {
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let gguf = std::env::var("GLM_TINY_GGUF")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| fixtures.join("glm_tiny_f32.gguf"));
+        let refp = std::env::var("GLM_TINY_REF")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| fixtures.join("ref_glm.json"));
+        if !gguf.exists() || !refp.exists() {
+            eprintln!(
+                "[glm-dsa-oracle] fixture missing (gguf={}, ref={}); skipping",
+                gguf.display(),
+                refp.display()
+            );
+            return Ok(());
+        }
+
+        let refj: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&refp)?)?;
+        let as_u32 = |k: &str| {
+            refj[k]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_u64().unwrap() as u32)
+                .collect::<Vec<u32>>()
+        };
+        let prompt_ids = as_u32("prompt_ids"); // len 12
+        let full_ids = as_u32("full_ids"); // len 32
+        let tf_pred = as_u32("tf_pred"); // len 32 (index i = argmax at position i)
+        assert_eq!(prompt_ids.len(), 12);
+        assert_eq!(full_ids.len(), 32);
+        assert_eq!(tf_pred.len(), 32);
+
+        // ---- (A) TEACHER FORCING: one cold forward over full_ids, argmax every position ----
+        {
+            let m = glm_load(&gguf)?;
+            let x = glm_ids(&full_ids)?;
+            let logits = m.forward(&x, &[0usize], vec![(0usize, full_ids.len())], None)?; // [1,32,256]
+            let am = glm_argmax_rows(&logits)?; // len 32
+            for i in 11..=30usize {
+                assert_eq!(
+                    am[i], full_ids[i + 1],
+                    "teacher-force diverged at position {i}: engine argmax {} != oracle next-token {} (tf_pred[{i}]={})",
+                    am[i], full_ids[i + 1], tf_pred[i]
+                );
+                assert_eq!(
+                    am[i], tf_pred[i],
+                    "position {i} disagrees with committed tf_pred: engine {} != tf_pred {}",
+                    am[i], tf_pred[i]
+                );
+            }
+        }
+
+        // ---- (B) GREEDY DECODE: 20 autoregressive steps from prompt_ids, KV-cache incremental ----
+        {
+            let m = glm_load(&gguf)?; // fresh cold cache
+            // prefill: predict token at position 12 from the last prompt position
+            let pre = m.forward(
+                &glm_ids(&prompt_ids)?,
+                &[0usize],
+                vec![(prompt_ids.len() - 1, 1)],
+                None,
+            )?; // [1,1,256]
+            let mut produced = glm_argmax_rows(&pre)?; // len 1
+            let mut last = produced[0];
+            let mut offset = prompt_ids.len(); // 12
+            for _ in 0..19 {
+                let step = m.forward(&glm_ids(&[last])?, &[offset], vec![(0usize, 1)], None)?;
+                let tok = glm_argmax_rows(&step)?[0];
+                produced.push(tok);
+                last = tok;
+                offset += 1;
+            }
+            let expected = &full_ids[12..32];
+            assert_eq!(
+                produced.as_slice(),
+                expected,
+                "greedy decode mismatch:\n  engine   = {:?}\n  oracle   = {:?}",
+                produced,
+                expected
+            );
+        }
+        Ok(())
+    }
 }
