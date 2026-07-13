@@ -9,7 +9,7 @@
 //! Structurally the head is ONE deepseek2 decoder block (`blk.{N}.*`: MLA attention +
 //! bias-routed MoE — the SAME [`LayerWeights::load`] the base model uses) wrapped with a
 //! NextN entry/exit that predicts token `t+1` from the base hidden at `t` plus the
-//! embedding of token `t` (DeepSeek-V3 chain; colibrì `glm.c` `mtp_draft`, README line 29):
+//! embedding of token `t` (the DeepSeek-V3 MTP chain):
 //!
 //! ```text
 //!   x       = eh_proj( [ enorm(embed(token_t)) ; hnorm(hidden_t) ] )   // [b,s,e]
@@ -19,11 +19,10 @@
 //!
 //! `eh_proj` is a SINGLE `[2e,e]` concat projection (GLM's form; DeepSeek-V4 instead sums
 //! two `[e,e]` projections — equivalent). The output head + token embeddings are SHARED
-//! with the base model. The head must be **int8** (colibrì [#8]): at int4 draft acceptance
+//! with the base model. The head must be **int8**: at int4 draft acceptance
 //! collapses to 0–4% and speculation never engages (vs 39–59% at int8) — [`enforce_int8_head`]
 //! rejects a sub-int8 `eh_proj` at load rather than attaching a dead draft head.
 //!
-//! [#8]: https://github.com/JustVugg/colibri/issues/8
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use std::sync::Arc;
@@ -47,19 +46,18 @@ use crate::speculative::{
 
 use super::quantized_deepseek2::{LayerWeights, ModelWeights, PropsGGUF};
 
-/// colibrì [#8]: the GLM-5.2 MTP head MUST be int8. At int4 the draft-acceptance rate
+/// The GLM-5.2 MTP head MUST be int8. At int4 the draft-acceptance rate
 /// collapses to 0–4% and speculation never engages (vs 39–59% at int8). Enforced at load:
 /// reject an `eh_proj` weight quantized below 8 effective bits/weight — naming the offending
 /// dtype — rather than silently attaching a draft head that never proposes.
 ///
-/// [#8]: https://github.com/JustVugg/colibri/issues/8
 fn enforce_int8_head(w: &hanzo_ml::quantized::QTensor) -> Result<()> {
     let dt = w.dtype();
     // Effective bits/weight = block byte-size × 8 ÷ elements-per-block. Q8_0 ≈ 8.5, Q4_K ≈ 4.5.
     let bits = (dt.type_size() * 8) as f64 / dt.block_size() as f64;
     if bits < 8.0 {
         hanzo_ml::bail!(
-            "GLM-5.2 MTP head `eh_proj` is {dt:?} (~{bits:.1} bit/weight); colibrì #8 requires an \
+            "GLM-5.2 MTP head `eh_proj` is {dt:?} (~{bits:.1} bit/weight); GLM-5.2 speculative decoding requires an \
              int8 head (>= 8 bit/weight) — at int4 draft acceptance collapses to 0–4% and \
              speculation never engages. Re-convert the nextn head at int8 (the converter default)."
         );
@@ -138,7 +136,7 @@ impl GlmMtpHead {
 
         // NextN entry/exit. enorm/hnorm normalize the token embedding / base hidden; eh_proj is
         // the single [2e -> e] concat projection; shared_head_norm is the MTP final norm (logits
-        // share the base output head). See colibrì glm.c mtp_draft (lines ~1583+).
+        // share the base output head).
         let enorm = QRmsNorm::new_dtype(
             ct.tensor(&format!("{prefix}.nextn.enorm.weight"), device)?,
             eps,

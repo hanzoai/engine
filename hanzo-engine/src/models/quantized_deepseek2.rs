@@ -50,20 +50,20 @@ const EXPERT_GATING_SIGMOID: u32 = 2;
 
 /// GLM-5's DSA indexer key-norm is a real `LayerNorm` with a hardcoded `eps = 1e-6`
 /// (independent of the model's `rms_norm_eps`), matching [`super::glm5_moe`]'s
-/// `INDEXER_KNORM_EPS` and the colibrì `glm.c` reference.
+/// `INDEXER_KNORM_EPS` (the GLM-5.2 DSA spec).
 const INDEXER_KNORM_EPS: f64 = 1e-6;
 
 use crate::models::dsa::{DsaConfig, DsaIndexer, DsaSelection};
 use crate::models::gguf_moe::{build_moe_or_mlp, gguf_linear, MoeOrMlp, MoeParams};
 
 /// DSA sparse attention is on by default whenever a checkpoint ships the indexer
-/// tensors; `DSA=0` forces the dense path (byte-identical). Mirrors colibrì.
+/// tensors; `DSA=0` forces the dense path (byte-identical).
 fn dsa_enabled() -> bool {
     !matches!(std::env::var("DSA").ok().as_deref(), Some("0"))
 }
 
 /// `DSA_TOPK=N` overrides the checkpoint's `index_topk` (test / ablation knob,
-/// colibrì-compatible). `DSA_TOPK >= context` reproduces dense selection exactly.
+/// test / ablation knob). `DSA_TOPK >= context` reproduces dense selection exactly.
 fn dsa_topk_override() -> Option<usize> {
     std::env::var("DSA_TOPK")
         .ok()
@@ -84,7 +84,7 @@ fn dsa_rope_positions(offsets: &[usize], device: &Device) -> Result<Tensor> {
 /// checkpoint) — that layer then reuses the previous full layer's selection.
 ///
 /// Tensor names (llama.cpp `blk.N.` convention, mapped from the HF
-/// `self_attn.indexer.{wq_b,wk,weights_proj,k_norm}` the colibrì `--indexer`
+/// `self_attn.indexer.{wq_b,wk,weights_proj,k_norm}` our `--indexer`
 /// converter extracts as `out-idx-*`):
 ///   `attn_indexer_q`      = `wq_b`         (q-LoRA latent -> n_head·head_dim)
 ///   `attn_indexer_k`      = `wk`           (hidden -> head_dim, shared MQA head)
@@ -813,7 +813,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         // per-layer `attn_indexer_*` tensors then decide "full" (own indexer) vs "shared" (reuse)
         // by presence. Pipeline-parallel is excluded because a "shared" layer's reused selection
         // can cross a stage boundary; multi-device DeviceMapper reuse is guarded per-layer in
-        // `forward_attn` (device mismatch -> dense). colibrì `glm.c` bounds index_head_dim to
+        // `forward_attn` (device mismatch -> dense). The GLM-5.2 DSA spec bounds index_head_dim to
         // `(0, 1<<16)`; heads and topk must be `> 0`.
         let dsa_cfg = if dsa_enabled() && pp.is_none() {
             match (props.index_topk, props.index_n_heads, props.index_head_dim) {
@@ -878,7 +878,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 );
             } else {
                 tracing::warn!(
-                    "DSA indexer configured (top-{}) but no `attn_indexer_*` tensors found in the GGUF; running dense. Reconvert with the colibrì `--indexer` mode (out-idx-*).",
+                    "DSA indexer configured (top-{}) but no `attn_indexer_*` tensors found in the GGUF; running dense. Reconvert with our `--indexer` mode (out-idx-*).",
                     cfg.index_topk,
                 );
             }
