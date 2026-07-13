@@ -1,5 +1,5 @@
 Hanzo Engine
-Copyright (c) 2024 Hanzo AI
+Copyright (c) 2024 Hanzo AI, Inc.
 
 This product is licensed under the MIT License (see LICENSE).
 
@@ -31,6 +31,11 @@ Copyright (c) 2024 Eric Buehler, used under the MIT License:
 Hanzo Engine is an independent fork: all crates, binaries, and APIs are
 Hanzo-branded (hanzo-engine), and Hanzo AI is not affiliated with Mistral AI.
 
+Forked from https://github.com/EricLBuehler/mistral.rs. This tree does not
+pin the exact upstream revision it diverged from (the initial import was
+squashed into a single commit), and Hanzo Engine now tracks its own release
+line (1.7.x) rather than upstream tags.
+
 Hanzo Engine is built on candle (https://github.com/huggingface/candle),
 Copyright (c) 2023 HuggingFace Inc., dual-licensed under the MIT License OR the
 Apache License, Version 2.0; used here under the MIT License (full text above).
@@ -45,3 +50,31 @@ license (per-file copyright headers retained in-source):
   - NVIDIA CUTLASS (BSD-3-Clause), Copyright (c) 2020-2023 NVIDIA CORPORATION
   - Marlin (Apache-2.0), Copyright (c) 2024 Elias Frantar
   - ggml / llama.cpp (MIT), Copyright (c) ggml authors (Georgi Gerganov et al.)
+
+-------------------------------------------------------------------------------
+DEVIATIONS
+-------------------------------------------------------------------------------
+
+Hanzo Engine has diverged substantially from upstream mistral.rs:
+
+  - Full Hanzo rebrand: every workspace crate is renamed hanzo-* (hanzo-engine,
+    hanzo-server-core, hanzo-router, hanzo-quant, hanzo-vision, hanzo-audio,
+    hanzo-paged-attn, hanzo-llm-mcp, hanzo-sandbox, hanzo-code-exec, hanzo-cli,
+    hanzo-pyo3, hanzo-film), and the CLI/binary is `hanzo`.
+  - Candle is consumed as Hanzo's fork (hanzo-ml, hanzo-nn, hanzo-flash-attn,
+    hanzo-metal-kernels) rather than upstream candle-core / candle-nn.
+  - OpenAI-compatible `/v1` server plus an Anthropic-compatible
+    `POST /v1/messages` endpoint (streaming + tool use), served from one router.
+  - All-modality serving: text/chat, vision (hanzo-vision), audio in and 24 kHz
+    speech out (hanzo-audio), video and image/diffusion models, long-form film
+    orchestration (hanzo-film), and 3D (hanzo-3d).
+  - GPU backend coverage across CUDA, Apple Metal, and AMD ROCm/HIP
+    (Dockerfile.cuda, Dockerfile.rocm, and the Metal kernels).
+  - Broad quantization support: GGUF, ISQ, UQFF, Q8_0/Q4_K, IQ4, MXFP4, HQQ,
+    AFQ, and bitsandbytes FP4.
+  - Zen model serving (native/zen3-serving and the zen model paths).
+  - Adapter primitives: AnyMoE plus LoRA and QLoRA adapters.
+  - Hanzo ZAP transport integration (hanzo-engine/src/zap) and a disk-first KV
+    cache for cross-restart sessions and agent prefix reuse.
+  - Sandboxed local code execution (hanzo-sandbox, hanzo-code-exec) for the
+    agentic runtime.
