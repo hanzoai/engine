@@ -161,15 +161,17 @@ pub(crate) enum AttnMode {
 }
 
 impl DeepSeekV4Config {
-    /// The DSA lightning-indexer config (always present in V4).
-    pub(crate) fn dsa(&self) -> DsaConfig {
-        DsaConfig {
-            index_n_heads: self.index_n_heads,
-            index_head_dim: self.index_head_dim,
-            index_topk: self.index_topk,
-            // The indexer reuses MLA's RoPE: rotate the leading qk_rope_head_dim.
-            rope_dim: self.qk_rope_head_dim,
-        }
+    /// The DSA lightning-indexer config, or `None` when DSA is off (`DSA=0`) or
+    /// the checkpoint's indexer dims are degenerate. Routed through
+    /// [`DsaConfig::new`] so V4 shares the one `has_dsa` gate + env policy with
+    /// every other arch. The indexer reuses MLA's RoPE (leading `qk_rope_head_dim`).
+    pub(crate) fn dsa(&self) -> Option<DsaConfig> {
+        DsaConfig::new(
+            self.index_n_heads,
+            self.index_head_dim,
+            self.index_topk,
+            self.qk_rope_head_dim,
+        )
     }
 
     /// MLA absorbed dot-product / value width.
@@ -536,16 +538,19 @@ impl V4Attention {
         };
 
         // DSA indexer: query from the q-LoRA latent (q_lora_rank), keys from the
-        // normed hidden (hidden_size). Returns None (dense fallback) if the
-        // indexer tensors are absent.
-        let indexer = DsaIndexer::load(
-            cfg.dsa(),
-            cfg.q_lora_rank,
-            cfg.hidden_size,
-            cfg.rms_norm_eps,
-            &cfg.quantization_config,
-            mapper.set_device(layer_idx, vb.pp("indexer"), loading_isq),
-        )?;
+        // normed hidden (hidden_size). `None` (dense fallback) when DSA is off or
+        // the indexer tensors are absent.
+        let indexer = match cfg.dsa() {
+            Some(dsa_cfg) => DsaIndexer::load(
+                dsa_cfg,
+                cfg.q_lora_rank,
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+                &cfg.quantization_config,
+                mapper.set_device(layer_idx, vb.pp("indexer"), loading_isq),
+            )?,
+            None => None,
+        };
 
         Ok(Self {
             q_a,
@@ -1427,9 +1432,9 @@ mod tests {
         assert_eq!(cfg.index_n_heads, 64);
         assert_eq!(cfg.index_head_dim, 128);
         assert_eq!(cfg.index_topk, 512);
-        let dsa = cfg.dsa();
-        assert_eq!(dsa.index_topk, 512);
-        assert_eq!(dsa.rope_dim, 64);
+        let dsa = cfg.dsa().expect("V4 config must enable DSA");
+        assert_eq!(dsa.index_topk(), 512);
+        assert_eq!(dsa.rope_dim(), 64);
         assert!(cfg.rope_scaling.is_some(), "YaRN (no mscale) must parse");
         assert!(cfg.quantization_config.is_some());
 
@@ -1441,6 +1446,20 @@ mod tests {
         assert_eq!(cfg.layer_mode(2), AttnMode::Indexed); // ratio 4
         assert_eq!(cfg.layer_mode(3), AttnMode::Sliding); // ratio 128
         assert_eq!(cfg.layer_mode(43), AttnMode::Full); // ratio 0 (MTP tail)
+    }
+
+    /// Gate regression: V4's `dsa()` now routes through [`DsaConfig::new`], so a
+    /// degenerate indexer dim falls back to dense instead of building a mis-shaped
+    /// indexer (the struct-literal bypass this path used to have is gone).
+    #[test]
+    fn deepseek_v4_dsa_gate_rejects_degenerate_dims() {
+        let mut cfg: DeepSeekV4Config = serde_json::from_str(DSV4_FLASH_CONFIG).unwrap();
+        assert!(cfg.dsa().is_some(), "healthy V4 config enables DSA");
+        cfg.index_head_dim = 257; // > 256 fails `has_dsa`
+        assert!(
+            cfg.dsa().is_none(),
+            "degenerate indexer head_dim must fall back to dense"
+        );
     }
 
     // ---- Hyper-Connections ----
