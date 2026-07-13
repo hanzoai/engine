@@ -198,11 +198,30 @@ impl GlmMtpHead {
             &CausalMaskConfig::default(),
         )?;
 
+        // RoPE positions for this draft step (Eager path: no metadata, so build from the
+        // host offsets — the decode-graph `rope_positions` buffer never reaches the draft
+        // head). `forward_attn` reads this for the single-token (`seq_len == 1`) branch.
+        let positions = {
+            let pos = start_offsets
+                .iter()
+                .copied()
+                .map(u32::try_from)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(hanzo_ml::Error::wrap)?;
+            Tensor::from_vec(pos, start_offsets.len(), &self.device)?
+        };
+
         // One deepseek2 decoder block over the fused carrier (Eager over the draft KvCache).
         // The one-block draft head runs dense — no DSA selection threads through it (`_`).
-        let (x, _) = self
-            .block
-            .forward_block(x, &mask, start_offsets, None, &mut self.cache[0], None)?;
+        let (x, _) = self.block.forward_block(
+            x,
+            &mask,
+            start_offsets,
+            &positions,
+            None,
+            &mut self.cache[0],
+            None,
+        )?;
         let x = self.norm.forward(&x)?;
         let logits = output.forward(&x.contiguous()?)?;
         Ok((logits, x))
