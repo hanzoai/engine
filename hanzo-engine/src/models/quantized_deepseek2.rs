@@ -140,22 +140,22 @@ fn dsa_topk_override() -> Option<usize> {
 }
 
 /// The checkpoint's DSA config, or `None` when DSA is off (`DSA=0`) or the GGUF
-/// lacks the indexer metadata. colibrì `glm.c` bounds: topk/heads > 0 and
-/// `0 < index_head_dim < (1<<16)`. Derived purely from `props`, so the single block
-/// loader ([`LayerWeights::load`]) and the model-level summary log agree by construction.
+/// lacks the indexer metadata. Gated by [`DsaConfig::new`] on colibrì's `has_dsa`
+/// predicate (`glm.c`: topk/heads > 0 and `0 < index_head_dim <= 256`). Derived purely
+/// from `props`, so the single block loader ([`LayerWeights::load`]) and the model-level
+/// summary log agree by construction.
 fn dsa_config(props: &PropsGGUF) -> Option<DsaConfig> {
     if !dsa_enabled() {
         return None;
     }
     match (props.index_topk, props.index_n_heads, props.index_head_dim) {
-        (Some(topk), Some(nh), Some(hd)) if topk > 0 && nh > 0 && hd > 0 && hd < (1 << 16) => {
-            Some(DsaConfig {
-                index_n_heads: nh,
-                index_head_dim: hd,
+        // Gate on the raw checkpoint dims (colibrì `has_dsa`); the `DSA_TOPK`
+        // ablation knob then overrides the kept-key count on the valid config.
+        (Some(topk), Some(nh), Some(hd)) => DsaConfig::new(nh, hd, topk, props.qk_rope_head_dim)
+            .map(|c| DsaConfig {
                 index_topk: dsa_topk_override().unwrap_or(topk),
-                rope_dim: props.qk_rope_head_dim,
-            })
-        }
+                ..c
+            }),
         _ => None,
     }
 }
@@ -1018,7 +1018,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         // DSA lightning-indexer config (glm-dsa). Active only when the metadata
         // carries the indexer dims (and `DSA != 0`); the per-layer `attn_indexer_*`
         // tensors then decide "full" (own indexer) vs "shared" (reuse) by presence.
-        // colibrì `glm.c` bounds: topk/heads > 0 and 0 < head_dim < (1<<16).
+        // colibrì `has_dsa`: topk/heads > 0 and 0 < index_head_dim <= 256 (else dense).
         let dsa_cfg = dsa_config(&props);
         let mut dsa_full_layers = 0usize;
 
