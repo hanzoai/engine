@@ -239,4 +239,4 @@ opt-level = 3
 # LOCAL-VERIFY ONLY (not for CI): build against the local hanzo-ml streaming branch until it is
 # published as 0.11.51. Standard sibling layout ~/work/hanzo/{engine,ml}. Remove before merge.
 [patch.crates-io]
-hanzo-ml = { path = "../ml/hanzo-ml" }
+hanzo-ml = { path = "/tmp/ml-stream/hanzo-ml" }
