@@ -193,16 +193,32 @@ impl DsaIndexer {
             None
         };
 
-        let weight_scale = 1.0 / ((cfg.index_head_dim * cfg.index_n_heads) as f64).sqrt();
+        Ok(Some(Self::from_parts(cfg, wq, wk, weights_proj, k_norm)))
+    }
 
-        Ok(Some(Self {
+    /// Assemble an indexer from already-built projections — the source-agnostic
+    /// constructor. [`load`](Self::load) builds `wq`/`wk`/`weights_proj` from a
+    /// safetensors var-builder; the GGUF quantized path
+    /// ([`super::quantized_deepseek2`]) builds the same three from GGUF
+    /// `GgufMatMul` tensors. Both converge here so the folded `weight_scale` and
+    /// the [`forward`](Self::forward) math live in exactly one place, independent
+    /// of where the weights came from.
+    pub(crate) fn from_parts(
+        cfg: DsaConfig,
+        wq: Arc<dyn QuantMethod>,
+        wk: Arc<dyn QuantMethod>,
+        weights_proj: Arc<dyn QuantMethod>,
+        k_norm: Option<LayerNorm>,
+    ) -> Self {
+        let weight_scale = 1.0 / ((cfg.index_head_dim * cfg.index_n_heads) as f64).sqrt();
+        Self {
             wq,
             wk,
             weights_proj,
             k_norm,
             cfg,
             weight_scale,
-        }))
+        }
     }
 
     /// Run the indexer over a self-attention block and return the DSA selection.
@@ -452,6 +468,81 @@ mod tests {
         DsaIndexer::load(cfg, 2, 2, 1e-5, &None, vb_from(t))
             .unwrap()
             .expect("toy indexer tensors present")
+    }
+
+    /// The GGUF construction path: an indexer assembled via [`DsaIndexer::from_parts`]
+    /// from freshly-built `QuantMethod` projections (as [`super::quantized_deepseek2`]
+    /// does from GGUF `GgufMatMul` tensors) yields the **identical** selection to the
+    /// var-builder [`DsaIndexer::load`] path — proving the decomplected constructor
+    /// carries the same folded `weight_scale` and forward math, source-independently.
+    #[test]
+    fn from_parts_matches_load() {
+        use hanzo_nn::Linear;
+        use hanzo_quant::{QuantMethodConfig, UnquantLinear};
+
+        let mk = |data: Vec<f32>, o: usize, i: usize| -> Arc<dyn QuantMethod> {
+            let w = Tensor::from_vec(data, (o, i), &Device::Cpu).unwrap();
+            Arc::new(
+                UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(w, None))).unwrap(),
+            )
+        };
+        let cfg = DsaConfig {
+            index_n_heads: 2,
+            index_head_dim: 2,
+            index_topk: 2,
+            rope_dim: 0,
+        };
+        // Same toy projections as `toy_indexer`, but built as QuantMethods.
+        let idx = DsaIndexer::from_parts(
+            cfg,
+            mk(vec![1., 0., 0., 1., 1., 0., 0., 1.], 4, 2),
+            mk(vec![1., 0., 0., 1.], 2, 2),
+            mk(vec![1., 0., 0., 1.], 2, 2),
+            None,
+        );
+
+        let x = Tensor::from_vec(vec![2f32, 0., 0., 3., 1., 2.], (1, 3, 2), &Device::Cpu).unwrap();
+        let via_parts = idx.forward(&x, &x, None, None, true).unwrap();
+        let via_load = toy_indexer().forward(&x, &x, None, None, true).unwrap();
+
+        assert_eq!(
+            via_parts.mask.to_vec3::<f32>().unwrap(),
+            via_load.mask.to_vec3::<f32>().unwrap(),
+            "from_parts selection mask must equal the load path"
+        );
+        assert_eq!(
+            via_parts.indices.to_vec3::<u32>().unwrap(),
+            via_load.indices.to_vec3::<u32>().unwrap(),
+        );
+
+        // Full selection (topk >= L): from_parts must still match load. Folding the
+        // full causal selection into a causal base leaves it unchanged (the dense
+        // token-for-token invariant), which is gold-tested via the load path in
+        // `dsa_selection_drives_sdpa_and_full_selection_is_dense`.
+        let full_parts = DsaIndexer::from_parts(
+            DsaConfig {
+                index_topk: 3,
+                ..cfg
+            },
+            mk(vec![1., 0., 0., 1., 1., 0., 0., 1.], 4, 2),
+            mk(vec![1., 0., 0., 1.], 2, 2),
+            mk(vec![1., 0., 0., 1.], 2, 2),
+            None,
+        );
+        assert_eq!(
+            full_parts
+                .forward(&x, &x, None, None, true)
+                .unwrap()
+                .mask
+                .to_vec3::<f32>()
+                .unwrap(),
+            toy_indexer_topk(3)
+                .forward(&x, &x, None, None, true)
+                .unwrap()
+                .mask
+                .to_vec3::<f32>()
+                .unwrap(),
+        );
     }
 
     /// End-to-end proof of the ReLU·weight·sum + top-k math against fully
