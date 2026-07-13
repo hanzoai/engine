@@ -24,7 +24,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "1.7.41"
+version = "1.7.42"
 edition = "2021"
 authors = ["Hanzo AI <dev@hanzo.ai>"]
 description = "Fast, flexible LLM inference."
@@ -38,7 +38,7 @@ rust-version = "1.88"
 [workspace.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 # Hanzo ML crates.
-hanzo-ml = { version = "0.11.51" }
+hanzo-ml = { version = "0.11.54" }
 hanzo-nn = { version = "0.11.33" }
 hanzo-transformers = { version = "0.11.9" }
 hanzo-flash-attn = { version = "0.11.35" }
@@ -197,17 +197,17 @@ landlock = "0.4.4"
 seccompiler = "0.5.0"
 
 # Canonical Hanzo crates (hanzo crates).
-hanzo = { path = "hanzo" }
-hanzo-engine = { path = "hanzo-engine" }
-hanzo-server-core = { path = "hanzo-server-core" }
-hanzo-paged-attn = { path = "hanzo-paged-attn" }
-hanzo-quant = { path = "hanzo-quant" }
-hanzo-vision = { path = "hanzo-vision" }
-hanzo-audio = { path = "hanzo-audio" }
-hanzo-llm-mcp = { path = "hanzo-llm-mcp" }
-hanzo-macros = { path = "hanzo-macros" }
-hanzo-sandbox = { path = "hanzo-sandbox" }
-hanzo-code-exec = { path = "hanzo-code-exec" }
+hanzo = { version = "1.7.41", path = "hanzo" }
+hanzo-engine = { version = "1.7.41", path = "hanzo-engine" }
+hanzo-server-core = { version = "1.7.41", path = "hanzo-server-core" }
+hanzo-paged-attn = { version = "1.7.41", path = "hanzo-paged-attn" }
+hanzo-quant = { version = "1.7.41", path = "hanzo-quant" }
+hanzo-vision = { version = "1.7.41", path = "hanzo-vision" }
+hanzo-audio = { version = "1.7.41", path = "hanzo-audio" }
+hanzo-llm-mcp = { version = "1.7.41", path = "hanzo-llm-mcp" }
+hanzo-macros = { version = "1.7.41", path = "hanzo-macros" }
+hanzo-sandbox = { version = "1.7.41", path = "hanzo-sandbox" }
+hanzo-code-exec = { version = "1.7.41", path = "hanzo-code-exec" }
 hanzo-zap = { version = "0.2.1" }
 
 # Hanzo native-ML extension crates (federated training, quantization, zen5 inference)
