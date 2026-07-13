@@ -45,7 +45,7 @@ const EXPERT_GATING_SIGMOID: u32 = 2;
 
 use crate::models::gguf_moe::{build_moe_or_mlp, gguf_linear, MoeOrMlp, MoeParams};
 
-struct LayerWeights {
+pub(crate) struct LayerWeights {
     // MLA projections. q is either plain (q_proj) or low-rank (q_a/q_b with q_a_norm).
     q_a_proj: Option<Arc<dyn QuantMethod>>,
     q_a_norm: Option<QRmsNorm>,
@@ -71,6 +71,149 @@ struct LayerWeights {
 }
 
 impl LayerWeights {
+    /// Load one deepseek2/glm-dsa decoder block (`blk.{layer_idx}`): MLA attention +
+    /// dense-or-MoE feed-forward. The single loader used by BOTH the main model loop and
+    /// the in-band `nextn` MTP head (`crate::models::deepseek2_mtp`) — the block layout is
+    /// identical, so it lives in exactly one place. `paged_attn` is `None` for the head
+    /// (the draft runs Eager over its own `KvCache`).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn load<R: std::io::Seek + std::io::Read>(
+        ct: &mut Content<'_, R>,
+        layer_idx: usize,
+        props: &PropsGGUF,
+        device: &Device,
+        rotary: Arc<DeepSeekV2RotaryEmbedding>,
+        softmax_scale: f32,
+        q_head_dim: usize,
+        paged_attn: Option<PagedAttention>,
+        dtype: DType,
+    ) -> Result<Self> {
+        let prefix = format!("blk.{layer_idx}");
+
+        // Q: low-rank (attn_q_a/attn_q_b) if q_lora_rank set, else plain attn_q.
+        let (q_a_proj, q_a_norm, q_b_proj, q_proj) = if props.q_lora_rank.is_some() {
+            (
+                Some(gguf_linear(
+                    ct.tensor(&format!("{prefix}.attn_q_a.weight"), device)?,
+                )?),
+                Some(QRmsNorm::new_dtype(
+                    ct.tensor(&format!("{prefix}.attn_q_a_norm.weight"), device)?,
+                    props.rms_norm_eps,
+                    dtype,
+                )?),
+                Some(gguf_linear(
+                    ct.tensor(&format!("{prefix}.attn_q_b.weight"), device)?,
+                )?),
+                None,
+            )
+        } else {
+            (
+                None,
+                None,
+                None,
+                Some(gguf_linear(
+                    ct.tensor(&format!("{prefix}.attn_q.weight"), device)?,
+                )?),
+            )
+        };
+
+        let kv_a_proj_with_mqa =
+            gguf_linear(ct.tensor(&format!("{prefix}.attn_kv_a_mqa.weight"), device)?)?;
+        let kv_a_norm = QRmsNorm::new_dtype(
+            ct.tensor(&format!("{prefix}.attn_kv_a_norm.weight"), device)?,
+            props.rms_norm_eps,
+            dtype,
+        )?;
+        // kv_b: classic GGUFs ship the combined `attn_kv_b` (kv_lora -> [k_nope; v]). Newer
+        // split-MLA GGUFs (GLM-4.7-Flash) ship `attn_k_b` (qk_nope -> kv_lora, absorbed
+        // orientation) + `attn_v_b` (kv_lora -> v). Reconstruct the un-absorbed combined weight
+        // `cat(k_b^T, v_b)` so the materialized-K/V forward below is identical for both layouts.
+        let kv_b_proj = if ct.has_tensor(&format!("{prefix}.attn_kv_b.weight")) {
+            gguf_linear(ct.tensor(&format!("{prefix}.attn_kv_b.weight"), device)?)?
+        } else {
+            let k_b = ct
+                .tensor(&format!("{prefix}.attn_k_b.weight"), device)?
+                .dequantize(device)?;
+            let v_b = ct
+                .tensor(&format!("{prefix}.attn_v_b.weight"), device)?
+                .dequantize(device)?;
+            let k_part = k_b.transpose(1, 2)?;
+            let kv_b = Tensor::cat(&[&k_part, &v_b], 1)?
+                .reshape((
+                    props.head_count * (props.qk_nope_head_dim + props.v_head_dim),
+                    props.kv_lora_rank,
+                ))?
+                // Single-dtype: hold the materialized (un-absorbed) kv_b weight in the
+                // compute dtype so `UnquantLinear`'s cuBLASlt matmul sees a uniform (a, w)
+                // dtype. Held in F32, the bf16 single-dtype `ckv` activation hit the F32
+                // weight -> `as_cuda_slice::<bf16>` on F32 storage (expected BF16, got F32).
+                .to_dtype(dtype)?
+                .contiguous()?;
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                Linear::new(kv_b, None),
+            ))?)
+        };
+        let o_proj = gguf_linear(ct.tensor(&format!("{prefix}.attn_output.weight"), device)?)?;
+
+        let attn_norm = QRmsNorm::new_dtype(
+            ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?,
+            props.rms_norm_eps,
+            dtype,
+        )?;
+        let ffn_norm = QRmsNorm::new_dtype(
+            ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?,
+            props.rms_norm_eps,
+            dtype,
+        )?;
+
+        let mlp = build_moe_or_mlp(
+            ct,
+            layer_idx,
+            device,
+            &MoeParams {
+                n_routed_experts: props.n_routed_experts,
+                num_experts_per_tok: props.num_experts_per_tok,
+                n_group: props.n_group,
+                topk_group: props.topk_group,
+                routed_scaling_factor: props.expert_weights_scale,
+                norm_topk_prob: props.norm_topk_prob,
+                sigmoid_scoring: props.sigmoid_scoring,
+                n_shared_experts: props.n_shared_experts,
+                leading_dense_block_count: props.leading_dense_block_count,
+            },
+        )?;
+
+        Ok(LayerWeights {
+            q_a_proj,
+            q_a_norm,
+            q_b_proj,
+            q_proj,
+            kv_a_proj_with_mqa,
+            kv_a_norm,
+            kv_b_proj,
+            o_proj,
+            attn_norm,
+            ffn_norm,
+            mlp,
+            rotary,
+            paged_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: 1,
+                softcap: None,
+                softmax_scale,
+                sliding_window: None,
+                sinks: None,
+            },
+            n_head: props.head_count,
+            q_head_dim,
+            qk_nope_head_dim: props.qk_nope_head_dim,
+            qk_rope_head_dim: props.qk_rope_head_dim,
+            kv_lora_rank: props.kv_lora_rank,
+            v_head_dim: props.v_head_dim,
+            dtype,
+        })
+    }
+
     fn forward_attn(
         &self,
         x: &Tensor,
@@ -171,7 +314,7 @@ impl LayerWeights {
         self.o_proj.forward(&y.to_dtype(x.dtype())?)
     }
 
-    fn forward_block(
+    pub(crate) fn forward_block(
         &self,
         x: Tensor,
         mask: &AttentionMask,
@@ -201,14 +344,27 @@ pub struct ModelWeights {
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     dtype: DType,
     pp: Option<Arc<RingPipeline>>,
+    /// Base-model config, retained so the in-band `nextn` MTP head (GLM-5.2) can load
+    /// against it. See [`crate::models::deepseek2_mtp`].
+    base_props: PropsGGUF,
+    /// MTP self-speculative decode: when `store_spec_hidden` is set, [`Self::forward`]
+    /// stashes the post-norm, per-sampled-row hidden (before the output projection) here
+    /// so the MTP proposer can read it. Same seam as `quantized_deepseek4`.
+    spec_hidden: std::sync::Mutex<Option<Tensor>>,
+    store_spec_hidden: std::sync::atomic::AtomicBool,
 }
 
 // Some fields mirror the full deepseek2 GGUF metadata surface but aren't needed at load time (GGUF
 // tensors carry their own shapes); kept for clarity and future paged-MLA wiring.
 #[allow(dead_code)]
+#[derive(Clone)]
 pub(crate) struct PropsGGUF {
     pub head_count: usize,
     pub block_count: usize,
+    /// Count of trailing in-band `nextn` (MTP) blocks, excluded from `block_count`.
+    /// `> 0` for GLM-5.2 (`glm-dsa`); the self-speculative draft head lives at
+    /// `blk.{block_count}` and is loaded on demand by `SelfSpeculative::attach_mtp`.
+    pub nextn_predict_layers: usize,
     pub embedding_length: usize,
     pub rms_norm_eps: f32,
     pub max_seq_len: usize,
@@ -295,15 +451,20 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             .map(|x| x as usize)
             .unwrap_or(qk_nope_head_dim);
 
+        // GLM-5.2 (`glm-dsa`) trails `nextn_predict_layers` MTP/nextn blocks after the main
+        // blocks inside `block_count`. They are the self-speculative draft head, NOT part of
+        // the main forward path — so the main model uses `block_count - nextn` layers, while the
+        // head's tensors stay reachable at `blk.{block_count}` for `SelfSpeculative::attach_mtp`.
+        let nextn_predict_layers = c
+            .get_value::<u32>("nextn_predict_layers")
+            .ok()
+            .map(|x| x as usize)
+            .unwrap_or(0);
+
         Ok(Self {
             head_count,
-            // GLM-5.2 (glm-dsa) trails an MTP/nextn block inside block_count; it is a speculative
-            // draft head, not part of the main forward path, so drop it.
-            block_count: c.get_value::<u32>("block_count")? as usize
-                - c.get_value::<u32>("nextn_predict_layers")
-                    .ok()
-                    .map(|x| x as usize)
-                    .unwrap_or(0),
+            block_count: c.get_value::<u32>("block_count")? as usize - nextn_predict_layers,
+            nextn_predict_layers,
             embedding_length: embed_len,
             rms_norm_eps: c.get_value("attention.layer_norm_rms_epsilon")?,
             max_seq_len: c
@@ -466,7 +627,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
             "Loading repeating layers",
             &new_multi_progress(),
         ) {
-            let prefix = format!("blk.{layer_idx}");
             let device = if pp.is_some() {
                 device
             } else {
@@ -477,99 +637,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 .expect("No RoPE for device location!")
                 .clone();
 
-            // Q: low-rank (attn_q_a/attn_q_b) if q_lora_rank set, else plain attn_q.
-            let (q_a_proj, q_a_norm, q_b_proj, q_proj) = if props.q_lora_rank.is_some() {
-                (
-                    Some(gguf_linear(
-                        ct.tensor(&format!("{prefix}.attn_q_a.weight"), device)?,
-                    )?),
-                    Some(QRmsNorm::new_dtype(
-                        ct.tensor(&format!("{prefix}.attn_q_a_norm.weight"), device)?,
-                        props.rms_norm_eps,
-                        dtype,
-                    )?),
-                    Some(gguf_linear(
-                        ct.tensor(&format!("{prefix}.attn_q_b.weight"), device)?,
-                    )?),
-                    None,
-                )
-            } else {
-                (
-                    None,
-                    None,
-                    None,
-                    Some(gguf_linear(
-                        ct.tensor(&format!("{prefix}.attn_q.weight"), device)?,
-                    )?),
-                )
-            };
-
-            let kv_a_proj_with_mqa =
-                gguf_linear(ct.tensor(&format!("{prefix}.attn_kv_a_mqa.weight"), device)?)?;
-            let kv_a_norm = QRmsNorm::new_dtype(
-                ct.tensor(&format!("{prefix}.attn_kv_a_norm.weight"), device)?,
-                props.rms_norm_eps,
-                dtype,
-            )?;
-            // kv_b: classic GGUFs ship the combined `attn_kv_b` (kv_lora -> [k_nope; v]). Newer
-            // split-MLA GGUFs (GLM-4.7-Flash) ship `attn_k_b` (qk_nope -> kv_lora, absorbed
-            // orientation) + `attn_v_b` (kv_lora -> v). Reconstruct the un-absorbed combined weight
-            // `cat(k_b^T, v_b)` so the materialized-K/V forward below is identical for both layouts.
-            let kv_b_proj = if ct.has_tensor(&format!("{prefix}.attn_kv_b.weight")) {
-                gguf_linear(ct.tensor(&format!("{prefix}.attn_kv_b.weight"), device)?)?
-            } else {
-                let k_b = ct
-                    .tensor(&format!("{prefix}.attn_k_b.weight"), device)?
-                    .dequantize(device)?;
-                let v_b = ct
-                    .tensor(&format!("{prefix}.attn_v_b.weight"), device)?
-                    .dequantize(device)?;
-                let k_part = k_b.transpose(1, 2)?;
-                let kv_b = Tensor::cat(&[&k_part, &v_b], 1)?
-                    .reshape((
-                        props.head_count * (props.qk_nope_head_dim + props.v_head_dim),
-                        props.kv_lora_rank,
-                    ))?
-                    // Single-dtype: hold the materialized (un-absorbed) kv_b weight in the
-                    // compute dtype so `UnquantLinear`'s cuBLASlt matmul sees a uniform (a, w)
-                    // dtype. Held in F32, the bf16 single-dtype `ckv` activation hit the F32
-                    // weight -> `as_cuda_slice::<bf16>` on F32 storage (expected BF16, got F32).
-                    .to_dtype(dtype)?
-                    .contiguous()?;
-                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                    Linear::new(kv_b, None),
-                ))?)
-            };
-            let o_proj = gguf_linear(ct.tensor(&format!("{prefix}.attn_output.weight"), device)?)?;
-
-            let attn_norm = QRmsNorm::new_dtype(
-                ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?,
-                props.rms_norm_eps,
-                dtype,
-            )?;
-            let ffn_norm = QRmsNorm::new_dtype(
-                ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?,
-                props.rms_norm_eps,
-                dtype,
-            )?;
-
-            let mlp = build_moe_or_mlp(
-                &mut ct,
-                layer_idx,
-                device,
-                &MoeParams {
-                    n_routed_experts: props.n_routed_experts,
-                    num_experts_per_tok: props.num_experts_per_tok,
-                    n_group: props.n_group,
-                    topk_group: props.topk_group,
-                    routed_scaling_factor: props.expert_weights_scale,
-                    norm_topk_prob: props.norm_topk_prob,
-                    sigmoid_scoring: props.sigmoid_scoring,
-                    n_shared_experts: props.n_shared_experts,
-                    leading_dense_block_count: props.leading_dense_block_count,
-                },
-            )?;
-
             let paged_attn = match &attention_mechanism {
                 _ if pp.is_some() => None,
                 AttentionImplementation::Eager => None,
@@ -578,35 +645,17 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 }
             };
 
-            layers.push(LayerWeights {
-                q_a_proj,
-                q_a_norm,
-                q_b_proj,
-                q_proj,
-                kv_a_proj_with_mqa,
-                kv_a_norm,
-                kv_b_proj,
-                o_proj,
-                attn_norm,
-                ffn_norm,
-                mlp,
+            layers.push(LayerWeights::load(
+                &mut ct,
+                layer_idx,
+                &props,
+                device,
                 rotary,
-                paged_attn,
-                sdpa_params: SdpaParams {
-                    n_kv_groups: 1,
-                    softcap: None,
-                    softmax_scale,
-                    sliding_window: None,
-                    sinks: None,
-                },
-                n_head: props.head_count,
+                softmax_scale,
                 q_head_dim,
-                qk_nope_head_dim: props.qk_nope_head_dim,
-                qk_rope_head_dim: props.qk_rope_head_dim,
-                kv_lora_rank: props.kv_lora_rank,
-                v_head_dim: props.v_head_dim,
+                paged_attn,
                 dtype,
-            });
+            )?);
         }
 
         Ok(Self {
@@ -623,6 +672,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
             mapper: if pp.is_some() { None } else { Some(mapper) },
             dtype,
             pp,
+            base_props: props,
+            spec_hidden: std::sync::Mutex::new(None),
+            store_spec_hidden: std::sync::atomic::AtomicBool::new(false),
         })
     }
 }
@@ -688,6 +740,16 @@ impl ModelWeights {
         }
         let x = self.norm.as_ref().unwrap().forward(&layer_in)?;
         let x = extract_logits(&x, context_lens)?;
+        // MTP: stash the per-sampled-row hidden (post-norm, pre-output) for the in-band
+        // `nextn` proposer. A single atomic load when speculation is off (mirrors deepseek4).
+        if self
+            .store_spec_hidden
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            if let Ok(mut h) = self.spec_hidden.lock() {
+                *h = Some(x.clone());
+            }
+        }
         self.output.as_ref().unwrap().forward(&x.contiguous()?)
     }
 
@@ -716,6 +778,64 @@ impl ModelWeights {
             layer_in = layer.forward_block(layer_in, &dmask, offsets, &mut cache[i], None)?;
         }
         Ok(layer_in)
+    }
+}
+
+impl ModelWeights {
+    /// Base-model config, for loading the in-band `nextn` MTP head against it.
+    pub(crate) fn base_props(&self) -> &PropsGGUF {
+        &self.base_props
+    }
+
+    /// The model's compute dtype (the MTP head loads at the same dtype).
+    pub(crate) fn compute_dtype(&self) -> DType {
+        self.dtype
+    }
+
+    /// Base-model token embeddings (shared with the MTP head). Errors on a non-head
+    /// pipeline-parallel shard, where they do not live.
+    pub(crate) fn embeddings(&self) -> Result<Embedding> {
+        self.tok_embeddings
+            .clone()
+            .ok_or_else(|| hanzo_ml::Error::msg("deepseek2: token embeddings not on this shard"))
+    }
+
+    /// Base-model output projection (shared with the MTP head). Errors on a non-head shard.
+    pub(crate) fn output_head(&self) -> Result<Arc<dyn QuantMethod>> {
+        self.output
+            .clone()
+            .ok_or_else(|| hanzo_ml::Error::msg("deepseek2: output head not on this shard"))
+    }
+
+    /// Shared handle to the normal KV cache, for `NormalSpeculativeCacheAccess`. Consumed by
+    /// the pipeline's non-paged speculative dispatch (`try_sample_speculative_causal_gen`),
+    /// which the CTO wires for `Model::Deepseek2` alongside the existing `Deepseek4` arm.
+    #[allow(dead_code)]
+    pub fn normal_cache_arc(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<crate::pipeline::NormalCache>>> {
+        self.cache.normal_arc()
+    }
+
+    /// Enable/disable stashing the pre-output hidden for MTP speculative proposal.
+    /// Clearing also drops any stashed tensor so a finished step can't leak.
+    pub fn set_store_spec_hidden(&self, store: bool) {
+        self.store_spec_hidden
+            .store(store, std::sync::atomic::Ordering::Relaxed);
+        if !store {
+            if let Ok(mut h) = self.spec_hidden.lock() {
+                *h = None;
+            }
+        }
+    }
+
+    /// The hidden state stashed by the most recent forward (post-norm, per sampled row,
+    /// pre output projection), if capture was enabled. Cloned; the stash is retained.
+    /// Read by the pipeline's `speculative_target_hiddens`, which the CTO wires for
+    /// `Model::Deepseek2` alongside the existing `Deepseek4` arm.
+    #[allow(dead_code)]
+    pub fn last_spec_hidden(&self) -> Option<Tensor> {
+        self.spec_hidden.lock().ok().and_then(|h| h.clone())
     }
 }
 
