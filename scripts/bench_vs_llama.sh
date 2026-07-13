@@ -195,10 +195,11 @@ import json, statistics, sys, time, urllib.error, urllib.request, uuid
 base, p_tok, n_tok, reps, out = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
 URL = base + "/v1/chat/completions"
 
-def filler(n):
-    # ~1 token per short word; usage.prompt_tokens is the ground truth anyway.
+def filler(n_words):
+    # Word count is calibrated to the token target below; usage.prompt_tokens is
+    # the ground truth ("w503" is several BPE tokens, so words != tokens).
     head = f"bench {uuid.uuid4().hex} "
-    return head + " ".join(f"w{i}" for i in range(max(0, n - 8)))
+    return head + " ".join(f"w{i}" for i in range(max(0, n_words - 8)))
 
 def chat(prompt, max_tokens):
     """One request -> (wall_s, usage) or raises with the server's own words."""
@@ -233,15 +234,31 @@ r = attempt(lambda: chat(filler(8), 1), errors, "tiny-prefill")
 if r:
     tiny_prefill_s = r[0]
 
+# Calibrate words -> tokens so the scored prompt lands on the pp target
+# (matching llama-bench's -p). The map is not linear ("w7" is 1-2 tokens,
+# "w700" is more), so iterate the observed ratio until within 3%.
+words = p_tok
+for j in range(3):
+    r = attempt(lambda: chat(filler(words), 1), errors, f"calibrate[{j}]")
+    if not (r and r[1].get("prompt_tokens")):
+        break
+    got = r[1]["prompt_tokens"]
+    if abs(got - p_tok) <= p_tok * 0.03:
+        break
+    words = max(8, round(words * p_tok / got))
+
 for i in range(reps):
-    r = attempt(lambda: chat(filler(p_tok), 1), errors, f"prefill[{i}]")
+    r = attempt(lambda: chat(filler(words), 1), errors, f"prefill[{i}]")
     if r:
         wall, u = r
         n = u.get("prompt_tokens")
         rate = u.get("avg_prompt_tok_per_sec") or (n / wall if n else None)
         if rate:
             prefill.append({"tok_s": rate, "wall_s": wall, "prompt_tokens": n})
-    r = attempt(lambda: chat(filler(8), n_tok), errors, f"decode[{i}]")
+    # The API has no ignore_eos, so the prompt must demand output that cannot
+    # end early; runs that still stop short are recorded but not scored.
+    count_prompt = f"bench {uuid.uuid4().hex}. Count upward forever: 1 2 3 4 5"
+    r = attempt(lambda: chat(count_prompt, n_tok), errors, f"decode[{i}]")
     if r:
         wall, u = r
         n = u.get("completion_tokens")
@@ -250,15 +267,17 @@ for i in range(reps):
         if not rate and n and wall > tiny_prefill_s:
             rate, src = n / (wall - tiny_prefill_s), "wall-minus-prefill"
         if rate:
-            decode.append({"tok_s": rate, "wall_s": wall, "completion_tokens": n, "source": src})
+            decode.append({"tok_s": rate, "wall_s": wall, "completion_tokens": n,
+                           "source": src, "full": n == n_tok})
 
 def fold(recs):
     if not recs:
         return None
-    ts = [x["tok_s"] for x in recs]
+    scored = [x for x in recs if x.get("full", True)] or recs
+    ts = [x["tok_s"] for x in scored]
     return {"tok_s": statistics.mean(ts),
             "stddev": statistics.stdev(ts) if len(ts) > 1 else 0.0,
-            "runs": recs}
+            "scored": len(scored), "runs": recs}
 
 result = {"prefill": fold(prefill), "decode": fold(decode), "errors": errors}
 if not prefill and not decode:
