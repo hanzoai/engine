@@ -407,11 +407,13 @@ impl LayerWeights {
     /// Returns `(attn_out, selection)`. `selection` is `Some` on the eager
     /// cold-prefill DSA path (the value the next "shared" layer reuses) and
     /// `None` on every dense fallback (paged, warm cache, decode, non-DSA).
+    #[allow(clippy::too_many_arguments)]
     fn forward_attn(
         &self,
         x: &Tensor,
         mask: &AttentionMask,
         start_offsets: &[usize],
+        positions: &Tensor,
         prev_selection: Option<&DsaSelection>,
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -454,7 +456,23 @@ impl LayerWeights {
             .repeat((1, self.n_head, 1, 1))?;
         let ckv = self.kv_a_norm.forward(&compressed_kv)?;
 
-        (q_pe, k_pe) = self.rotary.forward(&q_pe, &k_pe, start_offsets)?;
+        // Decode (single new token) reads its RoPE index from the DEVICE `positions`
+        // tensor (`forward_positions` -> on-device cos/sin gather) instead of baking the
+        // host `start_offsets` into a frozen `selected_rope_cache` view. Under decode-graph
+        // capture the graph runner refreshes that buffer in place per token, so the captured
+        // rotation advances with the sequence; the host-offset form would freeze at the
+        // warmup position and corrupt every replayed token. Mirrors `quantized_qwen3_moe`.
+        // Prefill (seq_len > 1) keeps the host-offset path unchanged.
+        (q_pe, k_pe) = if seq_len == 1 {
+            let positions = if positions.device().same_device(q_pe.device()) {
+                positions.clone()
+            } else {
+                positions.to_device(q_pe.device())?
+            };
+            self.rotary.forward_positions(&q_pe, &k_pe, &positions)?
+        } else {
+            self.rotary.forward(&q_pe, &k_pe, start_offsets)?
+        };
 
         let mut kv = self.kv_b_proj.forward(&ckv)?;
         kv = kv
@@ -665,11 +683,13 @@ impl LayerWeights {
         self.o_proj.forward(&out.to_dtype(x.dtype())?)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn forward_block(
         &self,
         x: Tensor,
         mask: &AttentionMask,
         start_offsets: &[usize],
+        positions: &Tensor,
         prev_selection: Option<&DsaSelection>,
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -677,7 +697,7 @@ impl LayerWeights {
         let residual = &x;
         let xn = self.attn_norm.forward(&x)?;
         let (attn, selection) =
-            self.forward_attn(&xn, mask, start_offsets, prev_selection, kv_cache, metadata)?;
+            self.forward_attn(&xn, mask, start_offsets, positions, prev_selection, kv_cache, metadata)?;
         let x = (attn + residual)?;
         let residual = &x;
         let xn = self.ffn_norm.forward(&x)?;
@@ -1114,6 +1134,28 @@ impl ModelWeights {
             .forward(x)?
             .to_dtype(self.dtype)?;
         let cache = &mut self.cache.normal().0;
+        // Decode reads RoPE positions from a stable device tensor so a captured graph
+        // replays with the advancing position; when the caller supplies
+        // `metadata.rope_positions` (the ROCm/CUDA decode-graph path) use that buffer
+        // verbatim — the graph runner refreshes it in place. Synthesizing a fresh tensor
+        // each forward would freeze the captured positions at the warmup value and corrupt
+        // every replayed token. Mirrors `quantized_qwen3_moe`.
+        let positions = match metadata
+            .as_ref()
+            .and_then(|(_, meta)| meta.rope_positions.as_ref())
+            .and_then(|positions| positions.get(&self.device.location()))
+        {
+            Some(positions) => positions.clone(),
+            None => {
+                let pos = start_offsets
+                    .iter()
+                    .copied()
+                    .map(u32::try_from)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(hanzo_ml::Error::wrap)?;
+                Tensor::from_vec(pos, start_offsets.len(), &self.device)?
+            }
+        };
         let mask = CausalMasker.make_causal_mask(
             x,
             metadata
@@ -1147,6 +1189,7 @@ impl ModelWeights {
                 layer_in,
                 &dmask,
                 start_offsets,
+                &positions,
                 selection.as_ref(),
                 &mut cache[i],
                 metadata
@@ -1172,6 +1215,15 @@ impl ModelWeights {
     }
 
     fn run_local_layers(&self, h: &Tensor, offsets: &[usize]) -> Result<Tensor> {
+        let positions = {
+            let pos = offsets
+                .iter()
+                .copied()
+                .map(u32::try_from)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(hanzo_ml::Error::wrap)?;
+            Tensor::from_vec(pos, offsets.len(), &self.device)?
+        };
         let ids2d = h.narrow(2, 0, 1)?.squeeze(2)?;
         let mask = CausalMasker.make_causal_mask(
             &ids2d,
@@ -1194,8 +1246,15 @@ impl ModelWeights {
         let mut selection: Option<DsaSelection> = None;
         for (i, layer) in self.layers.iter().enumerate() {
             let dmask = mask.get(layer_in.device());
-            let (xs_next, sel) =
-                layer.forward_block(layer_in, &dmask, offsets, selection.as_ref(), &mut cache[i], None)?;
+            let (xs_next, sel) = layer.forward_block(
+                layer_in,
+                &dmask,
+                offsets,
+                &positions,
+                selection.as_ref(),
+                &mut cache[i],
+                None,
+            )?;
             layer_in = xs_next;
             selection = sel;
         }
