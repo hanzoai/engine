@@ -229,3 +229,7 @@ debug = true
 debug = true
 opt-level = 3
 
+
+# TEMP local-ml patch for the IQ1_S/IQ1_M/TQ1_0/IQ4_NL ROCm decode oracle -- DEV/VERIFY ONLY (engine worktree, not committed).
+[patch.crates-io]
+hanzo-ml = { path = "/home/z/work/hanzo/ml-iq1/hanzo-ml" }
