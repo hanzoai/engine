@@ -54,9 +54,14 @@ impl MoeGate {
     fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
         let (bs, seq_len, h) = xs.dims3()?;
         let xs = xs.reshape(((), h))?;
+        // Router weight is held f16 (`build_moe_or_mlp` below): half the resident bytes and half the
+        // per-token read of the [n_experts, hidden] matrix. The matmul reads f16 and accumulates the
+        // small [tokens, n_experts] logits back to f32 so scoring/top-k stay f32-stable. f16 rounding
+        // (~2^-11 relative) sits well under the Q4/Q6 quantization noise the gate already carries.
         let logits = xs
-            .to_dtype(DType::F32)?
-            .broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
+            .to_dtype(self.weight.dtype())?
+            .broadcast_matmul(&self.weight.t()?)?
+            .to_dtype(DType::F32)?;
         let scores = if self.sigmoid_scoring {
             // 1/(1+exp(-x)) via standard unaries; the fused Sigmoid custom-op has no ROCm kernel.
             (logits.neg()?.exp()? + 1.0)?.recip()?
@@ -222,6 +227,36 @@ impl MoeOrMlp {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Guards the gguf_moe.rs router-weight f16 hold: the [tokens, n_experts] logits still accumulate
+    // f32-stable, so top-k expert selection is unchanged vs the old f32 weight at GLM/DeepSeek scale.
+    #[test]
+    fn f16_router_preserves_topk() -> Result<()> {
+        let dev = Device::Cpu;
+        let (tokens, hidden, experts, top_k) = (8usize, 5120usize, 256usize, 8usize);
+        // Router logits ~ N(0, hidden * var); scale the weight so logits land in the usual O(1)
+        // range instead of a degenerate tie band.
+        let scale = 1.0 / (hidden as f64).sqrt();
+        let w = (Tensor::randn(0f32, 1.0, (experts, hidden), &dev)? * scale)?;
+        let x = Tensor::randn(0f32, 1.0, (tokens, hidden), &dev)?;
+
+        let logits_f32 = x.broadcast_matmul(&w.t()?)?;
+        let w16 = w.to_dtype(DType::F16)?;
+        let logits_f16 = x
+            .to_dtype(DType::F16)?
+            .broadcast_matmul(&w16.t()?)?
+            .to_dtype(DType::F32)?;
+
+        let top_f32 = logits_f32.topk(top_k)?.indices.to_vec2::<u32>()?;
+        let top_f16 = logits_f16.topk(top_k)?.indices.to_vec2::<u32>()?;
+        assert_eq!(top_f32, top_f16, "f16 router changed top-{top_k} routing");
+        Ok(())
+    }
+}
+
 /// Per-family routing/expert config, all sourced from GGUF metadata.
 pub(crate) struct MoeParams {
     pub n_routed_experts: usize,
@@ -278,7 +313,7 @@ pub(crate) fn build_moe_or_mlp<R: std::io::Seek + std::io::Read>(
     };
     Ok(MoeOrMlp::FusedMoe(Box::new(FusedMoe {
         gate: MoeGate {
-            weight: gate.dequantize(device)?,
+            weight: gate.dequantize_f16(device)?,
             e_score_correction_bias,
             top_k: p.num_experts_per_tok,
             n_routed_experts: p.n_routed_experts,
