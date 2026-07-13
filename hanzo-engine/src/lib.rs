@@ -1210,10 +1210,24 @@ impl Hanzo {
                 let start = Instant::now();
                 clone_sender.blocking_send(req).unwrap();
 
-                // Drain all responses from the channel until it's closed
+                // Drain until the first TERMINAL response (success or error).
+                // Waiting for the channel to close would park here forever on a
+                // non-terminating sequence, blocking the HTTP bind indefinitely.
                 let mut received_any = false;
-                while let Some(_resp) = rx.blocking_recv() {
-                    received_any = true;
+                while let Some(resp) = rx.blocking_recv() {
+                    match resp {
+                        Response::CompletionDone(_)
+                        | Response::CompletionModelError(..)
+                        | Response::Done(_)
+                        | Response::ModelError(..)
+                        | Response::InternalError(_)
+                        | Response::ValidationError(_) => {
+                            received_any = true;
+                            break;
+                        }
+                        // Intermediate chunks etc: keep draining.
+                        _ => {}
+                    }
                 }
 
                 if received_any {
