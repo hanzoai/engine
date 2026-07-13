@@ -657,9 +657,14 @@ impl Loader for GGUFLoader {
             warn!("Adapter models do not currently support PagedAttention, running without");
             None
         } else if matches!(arch, GGUFArchitecture::Deepseek2 | GGUFArchitecture::GlmDsa) {
-            // quantized deepseek2 (incl. GLM-4.7-Flash, GLM-5.2) runs un-absorbed MLA (materialized
-            // per-head K/V); the paged MLA cache is the compressed [kv_lora, 1] layout, incompatible.
-            warn!("GGUF deepseek2 (MLA) runs eager attention; PagedAttention (absorbed-MLA cache) not wired");
+            // quantized deepseek2 (incl. GLM-4.7-Flash, GLM-5.2) defaults to un-absorbed MLA
+            // (materialized per-head K/V) on the eager, non-paged cache. `MLA_ABSORB=1` switches the
+            // decode to the compressed [kv_lora, 1] latent with kv_b folded into q/out (see
+            // quantized_deepseek2.rs) — device-agnostic, but still on the eager (contiguous) cache.
+            // Wiring PagedAttention needs the *paged* MLA cache + FlashInfer MLA kernels (CUDA-only,
+            // crate::mla::mla_decode_forward), which this eager path does not provide, so paged stays
+            // off here regardless of MLA_ABSORB.
+            warn!("GGUF deepseek2 (MLA) runs eager attention; paged MLA (FlashInfer) not wired (MLA_ABSORB gives the compressed-latent eager decode)");
             None
         } else {
             paged_attn_config
