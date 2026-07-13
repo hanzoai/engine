@@ -3078,6 +3078,12 @@ fn rocm_qk_rms_norm_rope_positions(
     if q_weight.dtype() != q.dtype() || k_weight.dtype() != q.dtype() || k.dtype() != q.dtype() {
         return Ok(None);
     }
+    // The fused kernel reads q/k/weights/cos/sin through ONE dtype (it dispatches on q's storage
+    // slice). The rope cos/sin cache is built in F32 while q is the half compute dtype, so match the
+    // cache to q here rather than bail — bailing would silently drop every GGUF MoE decode onto the
+    // unfused path, and the kernel itself hard-errors on the mismatch.
+    let cos_cache = &cos_cache.to_dtype(q.dtype())?;
+    let sin_cache = &sin_cache.to_dtype(q.dtype())?;
     let q = q.contiguous()?;
     let k = k.contiguous()?;
     let q_weight = q_weight.contiguous()?;
