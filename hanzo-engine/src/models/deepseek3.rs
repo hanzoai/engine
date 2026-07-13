@@ -1412,10 +1412,10 @@ mod deepseek_v32_tests {
         assert_eq!(cfg.index_head_dim, Some(128));
         assert_eq!(cfg.index_topk, Some(2048));
         let dsa = cfg.dsa().expect("V3.2 config must enable DSA");
-        assert_eq!(dsa.index_n_heads, 64);
-        assert_eq!(dsa.index_head_dim, 128);
-        assert_eq!(dsa.index_topk, 2048);
-        assert_eq!(dsa.rope_dim, cfg.qk_rope_head_dim);
+        assert_eq!(dsa.index_n_heads(), 64);
+        assert_eq!(dsa.index_head_dim(), 128);
+        assert_eq!(dsa.index_topk(), 2048);
+        assert_eq!(dsa.rope_dim(), cfg.qk_rope_head_dim);
     }
 
     /// A V3 (pre-DSA) config has no `index_*` fields, so [`DeepSeekV3Config::dsa`]
