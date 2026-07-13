@@ -488,7 +488,8 @@ impl Loader for GGUFLoader {
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let mut files = Vec::new();
-        for filename in paths.get_weight_filenames() {
+        let weight_filenames: Vec<std::path::PathBuf> = paths.get_weight_filenames().to_vec();
+        for filename in &weight_filenames {
             files.push(std::fs::File::open(filename)?);
         }
         let mmaps: Vec<std::sync::Arc<memmap2::Mmap>> = files
@@ -498,6 +499,22 @@ impl Loader for GGUFLoader {
         let mut readers = files.iter_mut().collect::<Vec<_>>();
         let mut model = Content::from_readers(&mut readers)?;
         model.set_mmaps(mmaps);
+
+        // Disk-streaming expert cache (low-memory mode): keep the dense weights resident but stream
+        // stacked MoE expert banks from NVMe, so a model far larger than RAM runs on one box. Gated
+        // by the STREAM_EXPERTS env knob (default off -> resident behaviour unchanged).
+        let stream_experts = env::var("STREAM_EXPERTS")
+            .map(|v| v != "0" && !v.is_empty())
+            .unwrap_or(false);
+        if stream_experts {
+            hanzo_ml::quantized::expert_stream::set_enabled(true);
+            model.set_stream_paths(weight_filenames.clone());
+            if let Some(dir) = weight_filenames.first().and_then(|p| p.parent()) {
+                hanzo_ml::quantized::expert_stream::set_usage_sidecar(
+                    dir.join(".hanzo_experts_usage"),
+                );
+            }
+        }
 
         if !silent {
             model.print_metadata()?;
@@ -712,6 +729,12 @@ impl Loader for GGUFLoader {
             },
             _ => unreachable!(),
         };
+
+        // All expert banks are now open: size their LRU caches from available RAM and auto-pin the
+        // hottest experts learned in prior runs (colibri cap_for_ram + AUTOPIN). No-op when off.
+        if stream_experts {
+            hanzo_ml::quantized::expert_stream::finalize();
+        }
 
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let model_config: &dyn ModelConfigLike = &model_config_metadata;
