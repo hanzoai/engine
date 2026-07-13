@@ -1451,6 +1451,10 @@ pub struct SequenceGroup {
     pub completion_streaming_chunks: Vec<CompletionChunkChoice>,
     pub is_streaming: bool,
     pub is_chat: bool,
+    // Guards `CompletionDone` to a single delivery: an errored sequence
+    // decrements `n_choices`, so an exact `len == n_choices` gate could latch
+    // permanently open and re-fire on every subsequent finish.
+    completion_done_sent: bool,
 }
 
 impl SequenceGroup {
@@ -1480,6 +1484,7 @@ impl SequenceGroup {
             is_streaming,
             is_chat,
             best_of,
+            completion_done_sent: false,
         }
     }
 
@@ -1691,11 +1696,15 @@ impl SequenceGroup {
     }
 
     pub async fn maybe_send_completion_done_response(
-        &self,
+        &mut self,
         response: CompletionResponse,
         sender: Sender<Response>,
     ) -> Result<(), Box<SendError<Response>>> {
-        if self.completion_choices.len() == self.n_choices {
+        // `>=` (not `==`) so a group whose `n_choices` was decremented by an
+        // errored sequence still delivers; `completion_done_sent` keeps it to a
+        // single terminal response even if more finishes arrive afterward.
+        if !self.completion_done_sent && self.completion_choices.len() >= self.n_choices {
+            self.completion_done_sent = true;
             sender.send(Response::CompletionDone(response)).await?;
         }
         Ok(())
@@ -1773,5 +1782,80 @@ mod tests {
         assert_eq!(seq.prefix_cache_len(), 4);
         assert_eq!(seq.count_prefix_cached_mm_items_by_kind("img"), 1);
         assert_eq!(seq.count_prefix_cached_mm_items_by_kind("audio"), 0);
+    }
+
+    fn push_completion_choice(group: &mut SequenceGroup) {
+        group.completion_choices.push((
+            0.0,
+            CompletionChoice {
+                finish_reason: "stop".to_string(),
+                index: group.completion_choices.len(),
+                text: "hi".to_string(),
+                logprobs: None,
+            },
+        ));
+    }
+
+    fn dummy_completion_response(group: &SequenceGroup) -> CompletionResponse {
+        CompletionResponse {
+            id: "0".to_string(),
+            choices: group.get_completion_choices(),
+            created: 0,
+            model: "test".to_string(),
+            system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+            object: "text_completion".to_string(),
+            usage: group.get_usage(),
+        }
+    }
+
+    #[tokio::test]
+    async fn completion_done_sent_once_and_gated_below_target() {
+        let mut group = SequenceGroup::new(2, false, false, None);
+        let (tx, mut rx) = channel::<Response>(8);
+
+        // One of two choices: below target, nothing delivered.
+        push_completion_choice(&mut group);
+        let resp = dummy_completion_response(&group);
+        group
+            .maybe_send_completion_done_response(resp, tx.clone())
+            .await
+            .unwrap();
+        assert!(rx.try_recv().is_err(), "must not deliver below n_choices");
+
+        // Second choice reaches target: exactly one CompletionDone.
+        push_completion_choice(&mut group);
+        let resp = dummy_completion_response(&group);
+        group
+            .maybe_send_completion_done_response(resp, tx.clone())
+            .await
+            .unwrap();
+        assert!(matches!(rx.try_recv(), Ok(Response::CompletionDone(_))));
+
+        // A stray re-run must not deliver a second terminal response.
+        push_completion_choice(&mut group);
+        let resp = dummy_completion_response(&group);
+        group
+            .maybe_send_completion_done_response(resp, tx.clone())
+            .await
+            .unwrap();
+        assert!(rx.try_recv().is_err(), "must deliver CompletionDone once");
+    }
+
+    #[tokio::test]
+    async fn completion_done_delivers_after_n_choices_decrement() {
+        // An errored sequence decrements n_choices; the survivors must still
+        // deliver rather than latch open forever (the `>=` gate).
+        let mut group = SequenceGroup::new(2, false, false, None);
+        let (tx, mut rx) = channel::<Response>(8);
+
+        push_completion_choice(&mut group);
+        group.n_choices -= 1; // simulate set_state(Error) on the sibling seq
+
+        let resp = dummy_completion_response(&group);
+        group
+            .maybe_send_completion_done_response(resp, tx.clone())
+            .await
+            .unwrap();
+        assert!(matches!(rx.try_recv(), Ok(Response::CompletionDone(_))));
     }
 }
