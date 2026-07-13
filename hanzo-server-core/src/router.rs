@@ -25,13 +25,13 @@ use crate::{
         reload_model, system_doctor, system_info, tune_model, unload_model,
     },
     image_generation::image_generation,
-    route::route_handler,
+    route::{classify_handler, route_handler},
     responses::{cancel_response, create_response, delete_response, get_response},
     route_registry::{
         AGENT_APPROVAL_ROUTE, ANIMATE_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE, CANCEL_RESPONSE_ROUTE,
         COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE, FILES_ROUTE, FILE_CONTENT_ROUTE, FILE_ROUTE,
         HEALTH_ROUTE, IMAGE_GENERATION_ROUTE, LIPSYNC_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE,
-        RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE,
+        RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE, ROUTE_ROUTE,
         SESSION_ROUTE, SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE,
         THREED_CONTENT_ROUTE, THREED_GENERATION_ROUTE, THREED_JOB_ROUTE, TUNE_MODEL_ROUTE,
         UNLOAD_MODEL_ROUTE, VIDEO_CONTENT_ROUTE, VIDEO_GENERATION_ROUTE, VIDEO_JOB_ROUTE,
@@ -320,6 +320,7 @@ fn init_router(
         .route(RE_ISQ_ROUTE.path, post(re_isq))
         .route(IMAGE_GENERATION_ROUTE.path, post(image_generation))
         .route("/v1/route", post(route_handler))
+        .route(ROUTE_ROUTE.path, post(classify_handler))
         .route(VIDEO_GENERATION_ROUTE.path, post(create_video))
         .route(VIDEO_JOB_ROUTE.path, get(get_video))
         .route(VIDEO_CONTENT_ROUTE.path, get(get_video_content))

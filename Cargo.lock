@@ -3284,6 +3284,7 @@ dependencies = [
  "base64 0.22.1",
  "data-url",
  "either",
+ "enso",
  "futures",
  "hanzo-3d",
  "hanzo-engine",
