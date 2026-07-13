@@ -205,6 +205,20 @@ impl FusedMoe {
         // independent matvec launches; `moe_combine` reduces the per-expert outputs by the router
         // weights in one pass (f32 accumulate) rather than a bf16 broadcast-mul + strided sum.
         let xs3 = xs_flat.reshape((num_tokens, 1, hidden_dim))?;
+        // Unquantized (e.g. all-F32) GGUF: the expert bank dequantizes to a plain `Tensor`, which the
+        // fused `moe_gate_up`/`indexed_moe_forward` quant kernels don't cover. Run the dense per-expert
+        // twin instead (same gather->matmul->scatter contract), keeping the quantized path untouched.
+        if let (Some(g), Some(u), Some(d)) = (
+            dense_bank(&self.gate_experts),
+            dense_bank(&self.up_experts),
+            dense_bank(&self.down_experts),
+        ) {
+            let gate = dense_indexed_moe(&g, &xs3, topk_idx)?;
+            let up = dense_indexed_moe(&u, &xs3, topk_idx)?;
+            let activated = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
+            let ys = dense_indexed_moe(&d, &activated, topk_idx)?;
+            return hanzo_ml::quantized::moe_combine(&ys, topk_weight)?.to_dtype(original_dtype);
+        }
         let (gate, up) =
             hanzo_ml::quantized::moe_gate_up(&xs3, topk_idx, &self.gate_experts, &self.up_experts)?;
         let activated = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
@@ -213,6 +227,50 @@ impl FusedMoe {
             .indexed_moe_forward(&activated, topk_idx)?;
         hanzo_ml::quantized::moe_combine(&ys, topk_weight)?.to_dtype(original_dtype)
     }
+}
+
+// Dequantized expert bank behind a `QMatMul`, if the weight is stored dense (`Tensor`/`TensorF16`).
+fn dense_bank(q: &QMatMul) -> Option<Tensor> {
+    match q {
+        QMatMul::Tensor(t) | QMatMul::TensorF16(t) => Some(t.clone()),
+        _ => None,
+    }
+}
+
+// Dense twin of `QTensor::indexed_moe_forward` for an unquantized `[E, n, k]` expert bank.
+// `x` is `[t, s, k]` with `s == 1` (shared input, broadcast over topk) or `s == topk` (per-slot);
+// `ids` is `[t, topk]`. Returns `[t, topk, n]`. Groups routed slots by expert, one matmul each.
+fn dense_indexed_moe(bank: &Tensor, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
+    use std::collections::HashMap;
+    let device = x.device();
+    let out_dtype = x.dtype();
+    let (_e_cnt, n, k) = bank.dims3()?;
+    let (t, topk) = ids.dims2()?;
+    let s = x.dim(1)?;
+    let x_exp = if s == topk {
+        x.clone()
+    } else {
+        x.broadcast_as((t, topk, k))?
+    };
+    let x_flat = x_exp
+        .reshape((t * topk, k))?
+        .to_dtype(DType::F32)?
+        .contiguous()?;
+    let bank = bank.to_dtype(DType::F32)?;
+    let ids_vec = ids.reshape((t * topk,))?.to_dtype(DType::U32)?.to_vec1::<u32>()?;
+    let mut groups: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (slot, eid) in ids_vec.iter().enumerate() {
+        groups.entry(*eid).or_default().push(slot as u32);
+    }
+    let mut out_flat = Tensor::zeros((t * topk, n), DType::F32, device)?;
+    for (eid, slots) in groups {
+        let w_e = bank.narrow(0, eid as usize, 1)?.squeeze(0)?; // [n, k]
+        let idx = Tensor::from_vec(slots.clone(), (slots.len(),), device)?;
+        let x_e = x_flat.index_select(&idx, 0)?; // [m, k]
+        let y_e = x_e.matmul(&w_e.t()?)?; // [m, n]
+        out_flat = out_flat.index_add(&idx, &y_e, 0)?;
+    }
+    out_flat.reshape((t, topk, n))?.to_dtype(out_dtype)
 }
 
 pub(crate) enum MoeOrMlp {
