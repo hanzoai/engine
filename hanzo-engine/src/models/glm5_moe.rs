@@ -166,13 +166,17 @@ impl Glm5MoeConfig {
         1.0 / (self.q_head_dim() as f32).sqrt()
     }
 
-    pub(crate) fn dsa(&self) -> DsaConfig {
-        DsaConfig {
-            index_n_heads: self.index_n_heads,
-            index_head_dim: self.index_head_dim,
-            index_topk: self.index_topk,
-            rope_dim: self.qk_rope_head_dim,
-        }
+    /// The DSA lightning-indexer config, or `None` when DSA is off (`DSA=0`) or
+    /// the checkpoint's indexer dims are degenerate. Routed through
+    /// [`DsaConfig::new`] so GLM-5 shares the one `has_dsa` gate + env policy with
+    /// every other arch.
+    pub(crate) fn dsa(&self) -> Option<DsaConfig> {
+        DsaConfig::new(
+            self.index_n_heads,
+            self.index_head_dim,
+            self.index_topk,
+            self.qk_rope_head_dim,
+        )
     }
 
     /// Layer uses the MoE block (vs a dense MLP). Explicit `mlp_layer_types`
@@ -338,16 +342,16 @@ impl Attention {
             mapper.device_for(layer_idx, loading_isq),
         );
 
-        let indexer = match indexer_type {
-            IndexerType::Full => DsaIndexer::load(
-                cfg.dsa(),
+        let indexer = match (indexer_type, cfg.dsa()) {
+            (IndexerType::Full, Some(dsa_cfg)) => DsaIndexer::load(
+                dsa_cfg,
                 cfg.q_lora_rank,
                 cfg.hidden_size,
                 INDEXER_KNORM_EPS,
                 &cfg.quantization_config,
                 mapper.set_device(layer_idx, vb.pp("indexer"), loading_isq),
             )?,
-            IndexerType::Shared => None,
+            (IndexerType::Full, None) | (IndexerType::Shared, _) => None,
         };
 
         Ok(Self {
@@ -1377,11 +1381,11 @@ mod tests {
         assert_eq!(cfg.rope_parameters.rope_theta, 8_000_000.0);
         assert_eq!(cfg.rope_parameters.rope_type, "default");
 
-        let dsa = cfg.dsa();
-        assert_eq!(dsa.index_n_heads, 32);
-        assert_eq!(dsa.index_head_dim, 128);
-        assert_eq!(dsa.index_topk, 2048);
-        assert_eq!(dsa.rope_dim, 64);
+        let dsa = cfg.dsa().expect("GLM-5 config must enable DSA");
+        assert_eq!(dsa.index_n_heads(), 32);
+        assert_eq!(dsa.index_head_dim(), 128);
+        assert_eq!(dsa.index_topk(), 2048);
+        assert_eq!(dsa.rope_dim(), 64);
 
         let sched = cfg.indexer_schedule();
         assert_eq!(sched.len(), 78);
@@ -1395,6 +1399,20 @@ mod tests {
         assert!(!cfg.is_moe_layer(2));
         assert!(cfg.is_moe_layer(3));
         assert!(cfg.is_moe_layer(77));
+    }
+
+    /// Gate regression: GLM-5's `dsa()` now routes through [`DsaConfig::new`], so a
+    /// degenerate indexer dim falls back to dense instead of building a mis-shaped
+    /// indexer (the struct-literal bypass this path used to have is gone).
+    #[test]
+    fn glm5_dsa_gate_rejects_degenerate_dims() {
+        let mut cfg: Glm5MoeConfig = serde_json::from_str(REAL_CONFIG).unwrap();
+        assert!(cfg.dsa().is_some(), "healthy GLM-5 config enables DSA");
+        cfg.index_head_dim = 257; // > 256 fails `has_dsa`
+        assert!(
+            cfg.dsa().is_none(),
+            "degenerate indexer head_dim must fall back to dense"
+        );
     }
 
     /// The `index_topk_freq` / `index_skip_topk_offset` derivation reproduces the

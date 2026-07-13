@@ -125,37 +125,15 @@ fn absorb_weights_from_kv_b(
     Ok((w_uk, w_uv_t))
 }
 
-/// DSA sparse attention is on by default whenever a checkpoint ships the indexer
-/// tensors; `DSA=0` forces the dense path (byte-identical).
-fn dsa_enabled() -> bool {
-    !matches!(std::env::var("DSA").ok().as_deref(), Some("0"))
-}
-
-/// `DSA_TOPK=N` overrides the checkpoint's `index_topk` (test / ablation knob,
-/// test / ablation knob). `DSA_TOPK >= context` reproduces dense selection exactly.
-fn dsa_topk_override() -> Option<usize> {
-    std::env::var("DSA_TOPK")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-}
-
 /// The checkpoint's DSA config, or `None` when DSA is off (`DSA=0`) or the GGUF
-/// lacks the indexer metadata. Gated by [`DsaConfig::new`] on the `has_dsa`
-/// predicate (`glm.c`: topk/heads > 0 and `0 < index_head_dim <= 256`). Derived purely
-/// from `props`, so the single block loader ([`LayerWeights::load`]) and the model-level
-/// summary log agree by construction.
+/// lacks the indexer metadata. [`DsaConfig::new`] applies the `has_dsa` gate
+/// (`glm.c`: topk/heads > 0 and `0 < index_head_dim <= 256`) and resolves the
+/// `DSA` / `DSA_TOPK` env policy in one place. Derived purely from `props`, so
+/// the single block loader ([`LayerWeights::load`]) and the model-level summary
+/// log agree by construction.
 fn dsa_config(props: &PropsGGUF) -> Option<DsaConfig> {
-    if !dsa_enabled() {
-        return None;
-    }
     match (props.index_topk, props.index_n_heads, props.index_head_dim) {
-        // Gate on the raw checkpoint dims (`has_dsa`); the `DSA_TOPK`
-        // ablation knob then overrides the kept-key count on the valid config.
-        (Some(topk), Some(nh), Some(hd)) => DsaConfig::new(nh, hd, topk, props.qk_rope_head_dim)
-            .map(|c| DsaConfig {
-                index_topk: dsa_topk_override().unwrap_or(topk),
-                ..c
-            }),
+        (Some(topk), Some(nh), Some(hd)) => DsaConfig::new(nh, hd, topk, props.qk_rope_head_dim),
         _ => None,
     }
 }
@@ -1084,12 +1062,12 @@ impl ModelConfig::FromGGUF for ModelWeights {
             if dsa_full_layers > 0 {
                 tracing::info!(
                     "DSA sparse attention active: top-{} key selection across {dsa_full_layers} indexer layer(s) (dense beyond cold prefill)",
-                    cfg.index_topk,
+                    cfg.index_topk(),
                 );
             } else {
                 tracing::warn!(
                     "DSA indexer configured (top-{}) but no `attn_indexer_*` tensors found in the GGUF; running dense. Reconvert with our `--indexer` mode (out-idx-*).",
-                    cfg.index_topk,
+                    cfg.index_topk(),
                 );
             }
         }
