@@ -122,7 +122,7 @@ impl DeepSeekV3Config {
     pub(crate) fn dsa(&self) -> Option<DsaConfig> {
         match (self.index_n_heads, self.index_head_dim, self.index_topk) {
             // The indexer reuses MLA's RoPE: rotate qk_rope_head_dim dims. `new`
-            // applies colibrì's `has_dsa` bounds, so a malformed checkpoint falls
+            // applies the `has_dsa` bounds, so a malformed checkpoint falls
             // back to dense instead of building a mis-shaped indexer.
             (Some(index_n_heads), Some(index_head_dim), Some(index_topk)) => {
                 DsaConfig::new(index_n_heads, index_head_dim, index_topk, self.qk_rope_head_dim)
