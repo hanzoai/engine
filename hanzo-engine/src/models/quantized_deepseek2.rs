@@ -148,14 +148,13 @@ fn dsa_config(props: &PropsGGUF) -> Option<DsaConfig> {
         return None;
     }
     match (props.index_topk, props.index_n_heads, props.index_head_dim) {
-        (Some(topk), Some(nh), Some(hd)) if topk > 0 && nh > 0 && hd > 0 && hd <= 256 => {
-            Some(DsaConfig {
-                index_n_heads: nh,
-                index_head_dim: hd,
+        // Gate on the raw checkpoint dims (colibrì `has_dsa`); the `DSA_TOPK`
+        // ablation knob then overrides the kept-key count on the valid config.
+        (Some(topk), Some(nh), Some(hd)) => DsaConfig::new(nh, hd, topk, props.qk_rope_head_dim)
+            .map(|c| DsaConfig {
                 index_topk: dsa_topk_override().unwrap_or(topk),
-                rope_dim: props.qk_rope_head_dim,
-            })
-        }
+                ..c
+            }),
         _ => None,
     }
 }
