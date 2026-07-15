@@ -63,7 +63,15 @@ impl FusedMoe {
         )?;
 
         let ys = {
-            let xs = xs.reshape((num_tokens, 1, hidden_dim))?;
+            // CUDA's quantized-expert kernels (moe_gate_up / indexed_moe_forward) read an F32
+            // activation and quantize it to q8_1 in-kernel; ROCm's fused expert matvec consumes
+            // the bf16/f16 compute-dtype activation directly. Feed each what it wants -- moe_combine
+            // + to_dtype(original_dtype) below restore the model dtype for the residual add.
+            let xs = if xs.device().is_cuda() {
+                xs.to_dtype(DType::F32)?.reshape((num_tokens, 1, hidden_dim))?
+            } else {
+                xs.reshape((num_tokens, 1, hidden_dim))?
+            };
             let (gate, up) = hanzo_ml::quantized::moe_gate_up(
                 &xs,
                 &indices,
