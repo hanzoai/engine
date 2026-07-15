@@ -1,17 +1,35 @@
 use std::sync::OnceLock;
 
-const CUDA_GRAPHS_ENV: &str = "CUDA_GRAPHS";
-#[cfg(feature = "cuda")]
-const CUDA_PREFILL_GRAPHS_ENV: &str = "CUDA_PREFILL_GRAPHS";
-#[cfg(feature = "metal")]
-const METAL_GRAPHS_ENV: &str = "METAL_GRAPHS";
-#[cfg(feature = "rocm")]
-const ROCM_GRAPHS_ENV: &str = "ROCM_GRAPHS";
-const FLASHINFER_DECODE_ENV: &str = "FLASHINFER_DECODE";
-#[cfg(feature = "vulkan")]
-const VULKAN_FUSED_ATTN_ENV: &str = "VK_FUSED_ATTN";
-#[cfg(feature = "vulkan")]
-const VULKAN_GRAPHS_ENV: &str = "VK_GRAPHS";
+// Perf toggles resolve on two orthogonal axes -- the optimization (the "concept": GRAPHS, FUSED_ATTN,
+// PREFILL_GRAPHS, ...) and the backend it runs on (CUDA, METAL, ROCM, VK) -- through one precedence,
+// so a new toggle is one `resolve(...)` line, never another copy of this logic. First hit wins:
+//
+//   1. `<BACKEND>_<CONCEPT>`  e.g. CUDA_GRAPHS / VK_GRAPHS  — one backend, one opt (per-arch A/B)
+//   2. `<CONCEPT>`            e.g. GRAPHS                    — one opt, every backend (the normal knob)
+//   3. `PERF`                 — every opt (safe-mode `PERF=0`, or force-max `PERF=1`)
+//   4. autotuned default
+//
+// Bare, backend-scoped names (no brand prefix outside licensing) — the convention CUDA_GRAPHS /
+// METAL_GRAPHS / ROCM_GRAPHS / VK_GRAPHS / VK_FUSED_ATTN already established.
+
+/// Parse a boolean env var. `None` when unset OR unrecognized, so resolution falls through to the next
+/// source rather than a typo silently forcing a value.
+fn env_opt(name: &str) -> Option<bool> {
+    match std::env::var(name).ok()?.as_str() {
+        "1" | "true" | "TRUE" | "yes" | "on" => Some(true),
+        "0" | "false" | "FALSE" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// Resolve one perf toggle: its full `<BACKEND>_<CONCEPT>` name, its bare concept (backend-independent
+/// override; `None` for opts with no cross-backend sibling), and the autotuned default.
+fn resolve(primary: &str, concept: Option<&str>, default: bool) -> bool {
+    env_opt(primary)
+        .or_else(|| concept.and_then(env_opt))
+        .or_else(|| env_opt("PERF"))
+        .unwrap_or(default)
+}
 
 static CUDA_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "cuda")]
@@ -26,118 +44,77 @@ static VULKAN_FUSED_ATTN_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "vulkan")]
 static VULKAN_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 
-fn env_flag(name: &str, default: bool) -> bool {
-    std::env::var(name)
-        .map(|value| {
-            if matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on") {
-                true
-            } else if matches!(value.as_str(), "0" | "false" | "FALSE" | "no" | "off") {
-                false
-            } else {
-                default
-            }
-        })
-        .unwrap_or(default)
-}
-
 pub(crate) fn cuda_graphs_enabled() -> bool {
-    *CUDA_GRAPHS_ENABLED.get_or_init(|| env_flag(CUDA_GRAPHS_ENV, true))
+    *CUDA_GRAPHS_ENABLED.get_or_init(|| resolve("CUDA_GRAPHS", Some("GRAPHS"), true))
 }
 
-// Fused GQA flash-SDPA decode kernel (sdpa_blk) on Vulkan. DEFAULT ON: one dispatch replaces the
-// repeat_kv + QKᵀ bmm + softmax + ·V bmm chain. Gated so the naive path can be A/B compared without a
-// rebuild (VK_FUSED_ATTN=0 falls back).
+// Fused GQA flash-SDPA decode kernel (sdpa_blk) on Vulkan: one dispatch replaces the repeat_kv + QKᵀ
+// bmm + softmax + ·V bmm chain. Default on; VK_FUSED_ATTN=0 (or FUSED_ATTN=0) A/Bs the naive path.
 #[cfg(feature = "vulkan")]
 pub(crate) fn vulkan_fused_attn_enabled() -> bool {
-    *VULKAN_FUSED_ATTN_ENABLED.get_or_init(|| env_flag(VULKAN_FUSED_ATTN_ENV, true))
+    *VULKAN_FUSED_ATTN_ENABLED.get_or_init(|| resolve("VK_FUSED_ATTN", Some("FUSED_ATTN"), true))
 }
 
 // Vulkan decode command-graph: capture the single-token decode forward once and replay it per token,
 // collapsing the eager per-token re-record + resubmit of the full dispatch stream into one queue
-// submit — the residual per-token CPU cost once decode is kernel-bound. DEFAULT ON: the failure mode
-// (fluent-but-stale output from a frozen
-// refresh buffer) is guarded three ways -- two bit-exact replay tests in hanzo-ml, measured token-
-// identical greedy decode vs eager, and capture deferred until a sequence proves itself sustained
-// (VULKAN_GRAPH_CAPTURE_AFTER) so short generations run the eager path unchanged. Any capture/replay
-// error still fails closed to eager. Set VK_GRAPHS=0 to force the eager path.
+// submit — the residual per-token CPU cost once decode is kernel-bound. Default on: the fluent-but-
+// stale-output failure mode is guarded by two bit-exact replay tests in hanzo-ml, byte-identical
+// greedy decode vs eager in scripts/bench_vk_graph.sh, a self-shaping capture policy that keeps short
+// generations on the eager path, and fail-closed fallback on any capture/replay error. VK_GRAPHS=0
+// (or GRAPHS=0) forces eager.
 #[cfg(feature = "vulkan")]
 pub(crate) fn vulkan_graphs_enabled() -> bool {
-    *VULKAN_GRAPHS_ENABLED.get_or_init(|| env_flag(VULKAN_GRAPHS_ENV, true))
+    *VULKAN_GRAPHS_ENABLED.get_or_init(|| resolve("VK_GRAPHS", Some("GRAPHS"), true))
 }
 
-// Dense fixed-shape prefill graph capture (single-sequence, offset-0 first prompt chunk). DEFAULT
-// OFF: capturing the prefill collapses ~1.5k eager launches into one replay and recovers part of the
-// prefill GPU-idle gap (measured pp2048 2693 -> 2831 T/s), but (a) it does not close the whole gap to
-// llama -- the residual per-replay metadata refresh plus out-of-graph sampling/D2H leave util short of
-// the ~98% needed to cross 1.0x -- and (b) replay is not yet bit-exact for chunked/large prefill
-// (greedy output diverged on a >1500-token prompt), so it fails the exactness bar for a default-on
-// path. Left gated behind CUDA_PREFILL_GRAPHS=1 (and cuda_graphs_enabled()) for continued hardening;
-// the eager prefill remains the correct default.
+// Dense fixed-shape prefill graph capture (single-sequence, offset-0 first prompt chunk). Default off,
+// and additionally gated by cuda_graphs_enabled(): capturing the prefill collapses its eager launches
+// into one replay and recovers part of the prefill GPU-idle gap, but it does not close the whole gap
+// to llama, and replay is not yet bit-exact for chunked/large prefill (greedy output diverged on a
+// long prompt) — so it fails the exactness bar for a default-on path and stays behind
+// CUDA_PREFILL_GRAPHS=1 for continued hardening. Eager prefill remains the correct default.
 #[cfg(feature = "cuda")]
 pub(crate) fn cuda_prefill_graphs_enabled() -> bool {
-    *CUDA_PREFILL_GRAPHS_ENABLED
-        .get_or_init(|| cuda_graphs_enabled() && env_flag(CUDA_PREFILL_GRAPHS_ENV, false))
+    *CUDA_PREFILL_GRAPHS_ENABLED.get_or_init(|| {
+        cuda_graphs_enabled() && resolve("CUDA_PREFILL_GRAPHS", Some("PREFILL_GRAPHS"), false)
+    })
 }
 
 #[cfg(feature = "metal")]
 pub(crate) fn metal_graphs_enabled() -> bool {
-    *METAL_GRAPHS_ENABLED.get_or_init(|| env_flag(METAL_GRAPHS_ENV, true))
+    *METAL_GRAPHS_ENABLED.get_or_init(|| resolve("METAL_GRAPHS", Some("GRAPHS"), true))
 }
 
 #[cfg(feature = "rocm")]
 pub(crate) fn rocm_graphs_enabled() -> bool {
-    // Default OFF. The async-conversion + capture-safety work is DONE: the ROCm
-    // decode forward now captures into a hipGraph cleanly (no HIP 906, no crash),
-    // all per-token state is device-resident in stable `Var` buffers refreshed in
-    // place between replays (input_ids / slot_mappings / context_lens / block_tables
-    // / rope_positions — all verified to advance correctly), and the captured output
-    // buffers are reserved out of the caching pool for the graph's lifetime so no
-    // later allocation can alias them (see `wrappers::PoolInner`).
+    // Default on, and coherent/bit-exact (token-for-token identical to graphs-off on the same
+    // prompt+seed). The decode forward captures into a hipGraph cleanly; all per-token state is
+    // device-resident in stable `Var` buffers refreshed in place between replays (input_ids /
+    // slot_mappings / context_lens / block_tables / rope_positions); the captured output buffers are
+    // reserved out of the caching pool for the graph's lifetime so no later allocation can alias them
+    // (see `wrappers::PoolInner`).
     //
-    // COHERENCE BUG — RESOLVED 2026-06-08. graphs-ON is now COHERENT and
-    // bit-exact (token-for-token identical to graphs-OFF on the same prompt+seed
-    // for 707-token Qwen3-8B-Q8_0 decode). Two sub-issues were fixed:
+    // Two coherence bugs had to be fixed to reach bit-exactness, both worth remembering:
+    //  (1) Stale/frozen logits: instantiate with flags=0 (no `hipGraphInstantiateFlagAutoFreeOnLaunch`)
+    //      — the ROCm backend has no graph-ordered allocator, so AutoFreeOnLaunch recycled the reserved
+    //      logits buffer across replays (see `rocm_graph.rs`).
+    //  (2) Frozen full-attention context span: models WITHOUT a sliding window (Qwen3) take the
+    //      `use_full` decode path, where paged-attn v1 reads `full_context_lens`/`full_block_tables`,
+    //      NOT the windowed `context_lens`/`block_tables`. The graph metadata only refreshed the
+    //      windowed buffers and cloned the full ones verbatim from warmup, so the captured kernel
+    //      attended a frozen context span every token. `RocmDecodeGraphMetadataBuffers` now owns and
+    //      refreshes the full buffers in `copy_from` (full_context_lens every token, full_block_tables
+    //      on signature change), aliases them in `metadata_from`, and derives `full_max_context_len` as
+    //      the bucketed capacity — mirroring the CUDA path.
     //
-    //  (1) STALE/FROZEN LOGITS — fixed earlier: instantiate with flags=0 (no
-    //      `hipGraphInstantiateFlagAutoFreeOnLaunch`); the ROCm backend has no
-    //      graph-ordered allocator, so AutoFreeOnLaunch recycled the reserved
-    //      logits buffer across replays. See `rocm_graph.rs`.
-    //
-    //  (2) FROZEN FULL-ATTENTION CONTEXT SPAN — the actual final blocker, fixed
-    //      here. Models WITHOUT a sliding window (Qwen3) take the `use_full`
-    //      decode path in `paged_attention::layers::paged_attention`, where the
-    //      paged-attn v1 kernel reads `full_context_lens` / `full_block_tables`
-    //      (NOT the windowed `context_lens` / `block_tables`). The ROCm graph's
-    //      `RocmDecodeGraphMetadataBuffers` only refreshed the windowed buffers
-    //      between replays and cloned the full ones VERBATIM from the warmup
-    //      metadata — so the captured kernel attended a FROZEN context span (the
-    //      warmup length, e.g. 17) every token while the windowed buffers (unused
-    //      on this path) advanced correctly. A per-token KV/state probe proved
-    //      slot/ctx/rope/block_tables all advanced AND the KV was written to the
-    //      correct advancing slot, yet replay logits diverged from a fresh eager
-    //      forward by ~20 (max-abs) while matching an eager forward run with the
-    //      REBOUND metadata exactly — isolating `full_context_lens`/`full_block_tables`
-    //      as the frozen piece. Fix: `RocmDecodeGraphMetadataBuffers` now owns
-    //      `full_block_tables` + `full_context_lens` stable Vars, refreshes them in
-    //      `copy_from` every token (full_context_lens always, full_block_tables on
-    //      signature change), aliases them in `metadata_from`, and derives
-    //      `full_max_context_len` as the bucketed capacity — mirroring the CUDA
-    //      path exactly. Verified replay-vs-eager max_abs_diff = 0.0.
-    //
-    // Default ON. The "no speedup" measurement that previously kept this OFF predates the
-    // Q6_K dp4a decode core, the inline dims/strides change, and the librocdxg AqlToPm4 ring
-    // fix. Re-profiled on native Linux gfx1151 (Radeon 8060S, ROCm 7.13): eager MoE decode is
-    // ~62% GPU-busy with ~38% inter-kernel launch gap (rocprofv3: 2671 kernel launches/token,
-    // ~2us median gap, 2.79s of 7.29s wall spent in gaps). The captured graph collapses those
-    // launches into one submission. Canonical bench (Qwen3-30B-A3B-Q4_K_M, pp1024/tg128@d4):
-    // decode 35.1 -> ~42 T/s (+18-20%), run-to-run variance halved, output bit-identical to
-    // eager (393-token coherent generation, token-for-token match, past the historical
-    // ~token-12 drift point). Only `model_supports_rocm_decode_graph` variants use this path
-    // (mRoPE Qwen35/Qwen3-VL stay eager), and `disable_rocm_decode_graph` falls back to eager
-    // on any capture/replay error. Set `ROCM_GRAPHS=0` to force the eager path.
-    *ROCM_GRAPHS_ENABLED.get_or_init(|| env_flag(ROCM_GRAPHS_ENV, true))
+    // Only `model_supports_rocm_decode_graph` variants use this path (mRoPE Qwen35/Qwen3-VL stay
+    // eager), and `disable_rocm_decode_graph` falls back to eager on any capture/replay error.
+    // ROCM_GRAPHS=0 (or GRAPHS=0) forces eager.
+    *ROCM_GRAPHS_ENABLED.get_or_init(|| resolve("ROCM_GRAPHS", Some("GRAPHS"), true))
 }
 
 pub(crate) fn flashinfer_decode_enabled() -> bool {
-    *FLASHINFER_DECODE_ENABLED.get_or_init(|| env_flag(FLASHINFER_DECODE_ENV, true))
+    // No cross-backend sibling: FlashInfer is one decode-kernel selector, so only its own name and the
+    // PERF master gate it.
+    *FLASHINFER_DECODE_ENABLED.get_or_init(|| resolve("FLASHINFER_DECODE", None, true))
 }
