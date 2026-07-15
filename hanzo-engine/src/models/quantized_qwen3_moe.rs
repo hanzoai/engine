@@ -22,6 +22,14 @@ use hanzo_ml::{DType, Device, Result, Tensor};
 use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig, RingPipeline};
 
+// Decode command-graph attention context (shared scale + meta buffers), threaded through the forward
+// so one set serves every layer's SDPA while a capture is in flight. Vulkan-only; the uninhabited
+// stand-in keeps the forward signature backend-uniform off-Vulkan, where the graph path is never taken.
+#[cfg(feature = "vulkan")]
+use hanzo_ml::VkGraphAttn;
+#[cfg(not(feature = "vulkan"))]
+enum VkGraphAttn {}
+
 // Default fallback for models that don't specify context_length
 const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
 
@@ -114,6 +122,7 @@ struct LayerWeights {
 }
 
 impl LayerWeights {
+    #[allow(clippy::too_many_arguments)]
     fn forward_attn(
         &self,
         x: &Tensor,
@@ -122,6 +131,7 @@ impl LayerWeights {
         positions: &Tensor,
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        vk_graph: Option<&VkGraphAttn>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
@@ -203,9 +213,42 @@ impl LayerWeights {
                 )?
             }
             None => {
-                let (k, v) = kv_cache.append(&k, &v)?;
+                // Vulkan decode command-graph: append the new K/V at a DEVICE-offset cache slot and run
+                // the shared-meta fused SDPA, so a captured forward replays with the advancing slot +
+                // attended span (`vk_graph` present only while capturing). Falls back to the eager
+                // host-offset append + SDPA otherwise. `graph_y` is Some only on the capture path.
+                #[cfg(feature = "vulkan")]
+                let graph_y = match vk_graph {
+                    Some(g) => {
+                        let k = k.contiguous()?;
+                        let v = v.contiguous()?;
+                        let (k_full, v_full) = kv_cache.append_graph(&k, &v, positions)?;
+                        let q = q.contiguous()?;
+                        Some(vk_sdpa_graph(
+                            &q,
+                            &k_full,
+                            &v_full,
+                            g,
+                            b_sz,
+                            self.n_head,
+                            self.head_dim,
+                        )?)
+                    }
+                    None => None,
+                };
+                #[cfg(not(feature = "vulkan"))]
+                let graph_y: Option<Tensor> = {
+                    let _ = vk_graph;
+                    None
+                };
 
-                Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
+                match graph_y {
+                    Some(y) => y,
+                    None => {
+                        let (k, v) = kv_cache.append(&k, &v)?;
+                        Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
+                    }
+                }
             }
         };
 
@@ -219,6 +262,7 @@ impl LayerWeights {
         Ok(y)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward_block(
         &self,
         x: Tensor,
@@ -227,15 +271,62 @@ impl LayerWeights {
         positions: &Tensor,
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        vk_graph: Option<&VkGraphAttn>,
     ) -> Result<Tensor> {
         let residual = &x;
         let xn = self.attention_norm.forward(&x)?;
-        let attn = self.forward_attn(&xn, mask, start_offsets, positions, kv_cache, metadata)?;
+        let attn =
+            self.forward_attn(&xn, mask, start_offsets, positions, kv_cache, metadata, vk_graph)?;
         let (sum, xn) = self.ffn_norm.forward_of_sum(&attn, residual)?;
         let residual = &sum;
         let xn = self.mlp.forward(&xn)?;
         xn + residual
     }
+}
+
+// Fused GQA flash SDPA over the FULL fixed-shape KV cache for the decode command-graph: binds the
+// caller-owned shared `scale`/`meta` (seq_k advances per replay) and a fresh per-layer `out`, so a
+// captured forward attends the growing span without re-recording. `q`/`k_full`/`v_full` are the decode
+// query and the whole cache; returns `out` [b, n_head, 1, head_dim] — same shape the eager SDPA yields.
+#[cfg(feature = "vulkan")]
+fn vk_sdpa_graph(
+    q: &Tensor,
+    k_full: &Tensor,
+    v_full: &Tensor,
+    g: &VkGraphAttn,
+    b: usize,
+    n_head: usize,
+    head_dim: usize,
+) -> Result<Tensor> {
+    use hanzo_ml::{backend::BackendStorage, Storage};
+    let out = Tensor::zeros((b, n_head, 1, head_dim), DType::F32, q.device())?;
+    {
+        let (qs, _) = q.storage_and_layout();
+        let (ks, _) = k_full.storage_and_layout();
+        let (vs, _) = v_full.storage_and_layout();
+        let (os, _) = out.storage_and_layout();
+        let (
+            Storage::Vulkan(q_vk),
+            Storage::Vulkan(k_vk),
+            Storage::Vulkan(v_vk),
+            Storage::Vulkan(o_vk),
+        ) = (&*qs, &*ks, &*vs, &*os)
+        else {
+            hanzo_ml::bail!("vk sdpa graph: expected vulkan storage for q/k/v/out");
+        };
+        q_vk.device().sdpa_blk_vk_graph(
+            q_vk,
+            k_vk,
+            v_vk,
+            o_vk,
+            g.scale(),
+            g.meta(),
+            b,
+            n_head,
+            1,
+        )?;
+    }
+    Ok(out)
 }
 
 pub struct ModelWeights {
@@ -590,6 +681,41 @@ impl ModelWeights {
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
+        self.forward_inner(x, start_offsets, context_lens, metadata, None, None)
+    }
+
+    /// Decode command-graph entry (Vulkan): run the single-token forward against a stable `positions`
+    /// buffer and the shared `vk_graph` attention buffers, so a capture in flight records a replayable
+    /// forward whose per-token state (embedding input, RoPE/KV-slot position, attended span) lives in
+    /// buffers the graph runner refreshes in place. Naive KV cache path only (no paged metadata).
+    #[cfg(feature = "vulkan")]
+    pub fn forward_vk_graph(
+        &self,
+        x: &Tensor,
+        start_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        positions: &Tensor,
+        vk_graph: &VkGraphAttn,
+    ) -> Result<Tensor> {
+        self.forward_inner(
+            x,
+            start_offsets,
+            context_lens,
+            None,
+            Some(positions),
+            Some(vk_graph),
+        )
+    }
+
+    fn forward_inner(
+        &self,
+        x: &Tensor,
+        start_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        positions_override: Option<&Tensor>,
+        vk_graph: Option<&VkGraphAttn>,
+    ) -> Result<Tensor> {
         if self.pp.is_some() {
             return pp_head_forward(self, x, start_offsets, context_lens);
         }
@@ -604,26 +730,29 @@ impl ModelWeights {
             .to_dtype(self.dtype)?;
         let cache = &mut self.cache.normal().0;
         // Decode reads RoPE positions from a stable device tensor so a captured
-        // graph replays with the advancing position; when the caller supplies
-        // `metadata.rope_positions` (the ROCm/CUDA decode graph path) use that
-        // buffer verbatim (the graph runner refreshes it in place). Synthesizing a
-        // fresh tensor each forward would freeze the captured positions at the
+        // graph replays with the advancing position; a caller with a stable buffer
+        // (the Vulkan command-graph via `positions_override`, or `metadata.rope_positions`
+        // for ROCm/CUDA) supplies it verbatim and the graph runner refreshes it in place.
+        // Synthesizing a fresh tensor each forward would freeze the captured positions at the
         // warmup value and corrupt every replayed token. Mirrors `quantized_qwen3`.
-        let positions = match metadata
-            .as_ref()
-            .and_then(|(_, meta)| meta.rope_positions.as_ref())
-            .and_then(|positions| positions.get(&self.device.location()))
-        {
+        let positions = match positions_override {
             Some(positions) => positions.clone(),
-            None => {
-                let pos = start_offsets
-                    .iter()
-                    .copied()
-                    .map(u32::try_from)
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(hanzo_ml::Error::wrap)?;
-                Tensor::from_vec(pos, start_offsets.len(), &self.device)?
-            }
+            None => match metadata
+                .as_ref()
+                .and_then(|(_, meta)| meta.rope_positions.as_ref())
+                .and_then(|positions| positions.get(&self.device.location()))
+            {
+                Some(positions) => positions.clone(),
+                None => {
+                    let pos = start_offsets
+                        .iter()
+                        .copied()
+                        .map(u32::try_from)
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                        .map_err(hanzo_ml::Error::wrap)?;
+                    Tensor::from_vec(pos, start_offsets.len(), &self.device)?
+                }
+            },
         };
         let mask = CausalMasker.make_causal_mask(
             x,
@@ -662,11 +791,65 @@ impl ModelWeights {
                 metadata
                     .as_ref()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                vk_graph,
             )?;
         }
         let x = self.norm.as_ref().unwrap().forward(&layer_in)?;
         let x = extract_logits(&x, context_lens)?;
         self.output.as_ref().unwrap().forward(&x.contiguous()?)
+    }
+
+    /// Build the shared decode command-graph attention buffers (scale + meta) for the current KV cache
+    /// geometry. Every layer has the identical head/kv/head_dim shape and one contiguous cache, so a
+    /// single [`VkGraphAttn`] serves the whole forward; `seq_k` is the initial attended span (advanced
+    /// per replay via [`VkGraphAttn::set_seq_k`]).
+    #[cfg(feature = "vulkan")]
+    pub fn vk_build_graph_attn(&self, seq_k: usize) -> Result<VkGraphAttn> {
+        let Device::Vulkan(dev) = &self.device else {
+            hanzo_ml::bail!("vulkan decode graph: model is not on a vulkan device");
+        };
+        let l = self
+            .layers
+            .first()
+            .ok_or_else(|| hanzo_ml::Error::msg("vulkan decode graph: model has no layers"))?;
+        let capacity = self
+            .vk_kv_capacity()
+            .ok_or_else(|| hanzo_ml::Error::msg("vulkan decode graph: KV cache not allocated"))?;
+        dev.new_graph_attn(
+            l.n_head,
+            l.n_kv_head,
+            l.head_dim,
+            capacity,
+            l.sdpa_params.softmax_scale,
+            false,
+            seq_k,
+        )
+    }
+
+    /// The contiguous KV cache capacity (max cached tokens) the graph is captured against; `None` until
+    /// an eager warmup step allocates the cache. A captured graph is valid only while the write slot
+    /// stays below this — a grow reallocates the cache buffer and invalidates the graph.
+    #[cfg(feature = "vulkan")]
+    pub fn vk_kv_capacity(&self) -> Option<usize> {
+        let guard = self.cache.normal();
+        match guard.0.first() {
+            Some(KvCache::Normal { k, .. }) if k.all_data.is_some() => Some(k.capacity_seq_len),
+            _ => None,
+        }
+    }
+
+    /// Advance every layer's host KV length after a graph replay wrote the token's K/V on-device, so the
+    /// cache stays consistent for a later eager fallback or capacity-boundary recapture.
+    #[cfg(feature = "vulkan")]
+    pub fn vk_advance_kv_len(&self, len: usize) -> Result<()> {
+        let mut guard = self.cache.normal();
+        for kv in guard.0.iter_mut() {
+            if let KvCache::Normal { k, v } = kv {
+                k.set_len(len)?;
+                v.set_len(len)?;
+            }
+        }
+        Ok(())
     }
 
     fn run_local_layers(&self, h: &Tensor, offsets: &[usize]) -> Result<Tensor> {
@@ -700,8 +883,15 @@ impl ModelWeights {
         let mut layer_in = h.clone();
         for (i, layer) in self.layers.iter().enumerate() {
             let dmask = mask.get(layer_in.device());
-            layer_in =
-                layer.forward_block(layer_in, &dmask, offsets, &positions, &mut cache[i], None)?;
+            layer_in = layer.forward_block(
+                layer_in,
+                &dmask,
+                offsets,
+                &positions,
+                &mut cache[i],
+                None,
+                None,
+            )?;
         }
         Ok(layer_in)
     }
