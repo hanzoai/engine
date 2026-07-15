@@ -20,6 +20,12 @@ fn as_vulkan<'a>(storage: &'a Storage, what: &str) -> Result<&'a VulkanStorage> 
     }
 }
 
+// Index metadata (slot_mapping/block_tables/context_lens) reaches this backend already as u32 GPU
+// buffers: block_tables/context_lens are built u32 at the source, and the Vulkan device coerces the
+// i64 slot_mapping to u32 on upload (`-1 -> u32::MAX`, the shader's pad sentinel) -- the ONE seam,
+// in VulkanDevice::storage_from_cpu_storage, mirroring the existing f16->f32 / u8->u32 coercion. So
+// every consumer here just binds the buffer via `as_vulkan`; no per-site conversion.
+
 struct PagedAttention {
     softmax_scale: f32,
     softcapping: f32,
@@ -168,18 +174,6 @@ pub fn reshape_and_cache(
 
     let (num_tokens, num_heads, head_size) = key.shape().dims3()?;
 
-    // slot_mapping arrives as i64; map to u32 with -1 -> 0xFFFFFFFF (pad sentinel the shader skips).
-    // TODO: avoid the CPU round-trip by adding an i64->u32-with-sentinel cast kernel, or have the
-    // engine build the u32 slot mapping directly for the vulkan backend.
-    let slot_u32: Vec<u32> = slot_mapping
-        .to_device(&hanzo_ml::Device::Cpu)?
-        .flatten_all()?
-        .to_vec1::<i64>()?
-        .into_iter()
-        .map(|s| if s < 0 { u32::MAX } else { s as u32 })
-        .collect();
-    let slot_dev = Tensor::from_vec(slot_u32, num_tokens, key.device())?;
-
     let (k, k_l) = key.storage_and_layout();
     let k = as_vulkan(&k, "key")?;
     let (v, _v_l) = value.storage_and_layout();
@@ -188,7 +182,9 @@ pub fn reshape_and_cache(
     let kc = as_vulkan(&kc, "key_cache")?;
     let (vc, _vc_l) = value_cache.storage_and_layout();
     let vc = as_vulkan(&vc, "value_cache")?;
-    let (sm, _sm_l) = slot_dev.storage_and_layout();
+    // slot_mapping arrives as a u32 GPU buffer (the device coerced the engine's i64 on upload,
+    // -1 -> u32::MAX = the shader's pad sentinel), so bind it directly like every other buffer.
+    let (sm, _sm_l) = slot_mapping.storage_and_layout();
     let sm = as_vulkan(&sm, "slot_mapping")?;
 
     let (_num_blocks, _num_kv_heads, _hs_div_x, block_size, x) = kc_l.shape().dims5()?;

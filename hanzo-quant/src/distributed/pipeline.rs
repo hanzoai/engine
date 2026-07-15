@@ -122,6 +122,10 @@ fn tensor_to_f32(xs: &Tensor) -> Result<Vec<f32>> {
         Storage::Metal(s) => cpu_to_f32(&s.to_cpu_storage()?),
         #[cfg(feature = "rocm")]
         Storage::Rocm(s) => cpu_to_f32(&s.to_cpu_storage()?),
+        #[cfg(feature = "vulkan")]
+        Storage::Vulkan(s) => cpu_to_f32(&s.to_cpu_storage()?),
+        #[cfg(feature = "wgpu")]
+        Storage::Wgpu(s) => cpu_to_f32(&s.to_cpu_storage()?),
     }
 }
 
