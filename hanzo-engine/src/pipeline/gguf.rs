@@ -187,13 +187,9 @@ struct VulkanDecodeGraphState {
     /// mid-sustained-generation, and never a first token. Bounded by [`Self::park`].
     retired: Vec<VulkanDecodeGraphEntry>,
     disabled: bool,
-    /// Length of the current run of sequential single-token decodes. Capture is deferred until this
-    /// reaches [`VULKAN_GRAPH_CAPTURE_AFTER`], so a generation shorter than the break-even never pays
-    /// a capture it cannot amortize. Reset to 1 whenever the position is not the expected next one
-    /// (a new or reset sequence).
-    run: usize,
-    /// The position [`run`] expects next; any other position starts a new run.
-    next_run_position: usize,
+    /// The self-shaping capture policy: it observes generation lengths and decides when a capture
+    /// will pay off for THIS workload (see [`GraphCapturePolicy`]).
+    policy: GraphCapturePolicy,
 }
 
 #[cfg(feature = "vulkan")]
@@ -210,12 +206,77 @@ impl VulkanDecodeGraphState {
     }
 }
 
-/// Sequential decodes to observe before capturing a graph. A capture costs roughly one extra eager
-/// forward plus recording the full decode dispatch stream, which replay only repays over a sustained
-/// run. Staying eager until a run proves itself makes the graph a strict win at every generation
-/// length: short generations behave exactly as the eager path, long ones capture once and replay.
+/// Decode tokens a captured graph must be replayed to repay its cost -- one extra eager forward plus
+/// recording the whole dispatch stream, against the per-token replay saving. This is a hardware
+/// property (dispatch count × record cost ÷ per-token CPU saving), not a workload choice; the policy
+/// below decides *whether* a given workload reaches it, this only says *how far* a capture must run.
 #[cfg(feature = "vulkan")]
-const VULKAN_GRAPH_CAPTURE_AFTER: usize = 48;
+const VULKAN_GRAPH_BREAKEVEN: usize = 40;
+
+/// Self-shaping decode-graph capture policy. A capture is worth recording only if it will be replayed
+/// past [`VULKAN_GRAPH_BREAKEVEN`] tokens, and whether a generation runs that long is a property of
+/// the LIVE workload, not a constant: a server answering in a handful of tokens should never capture,
+/// one streaming long completions should capture as soon as it has banked the breakeven. So the policy
+/// carries no hand-tuned threshold -- it observes completed generation lengths (an exponential moving
+/// average) and arms capture only while the typical generation is long enough to profit. The same
+/// build is then optimal for chat, batch summarization, and code generation with nothing to tune, and
+/// the mechanism is backend-agnostic (the CUDA/ROCm decode graphs can adopt the same policy).
+#[cfg(feature = "vulkan")]
+#[derive(Debug)]
+struct GraphCapturePolicy {
+    /// EMA of completed decode-generation lengths (tokens) -- the workload-shape signal.
+    ema_len: f64,
+    /// Consecutive decode steps in the current sequence (eager or replayed).
+    run: usize,
+    /// The position the run expects next; any other position begins a new sequence.
+    next_position: usize,
+}
+
+#[cfg(feature = "vulkan")]
+impl Default for GraphCapturePolicy {
+    fn default() -> Self {
+        // Seed the EMA at the arming threshold (2× breakeven, see `capture_after`) so a fresh server
+        // captures on its first sustained generation and only backs off once short ones pull the
+        // average down — matching the default-on intent before any workload has been observed.
+        Self { ema_len: 2.0 * VULKAN_GRAPH_BREAKEVEN as f64, run: 0, next_position: 0 }
+    }
+}
+
+#[cfg(feature = "vulkan")]
+impl GraphCapturePolicy {
+    /// Fold a finished sequence's length into the workload EMA.
+    fn end_run(&mut self) {
+        if self.run > 0 {
+            // Light smoothing: react to a workload shift within a handful of generations without
+            // letting one outlier flip the policy.
+            const ALPHA: f64 = 0.2;
+            self.ema_len = ALPHA * self.run as f64 + (1.0 - ALPHA) * self.ema_len;
+            self.run = 0;
+        }
+    }
+
+    /// Count one decode step at `position`, returning the resulting run length. A position that is not
+    /// the expected next one closes the previous sequence (folding it into the EMA) and starts a new
+    /// run -- so ONE call per decode step keeps both the run length and the workload signal current,
+    /// whichever path (eager or replay) produced the token.
+    fn tick(&mut self, position: usize) -> usize {
+        if position != self.next_position {
+            self.end_run();
+        }
+        self.run += 1;
+        self.next_position = position + 1;
+        self.run
+    }
+
+    /// The run length at which capturing becomes worthwhile for the observed workload, or `None` to
+    /// suppress capture entirely. Capturing spends `breakeven` tokens eager and then repays only over
+    /// the *replayed* tail, so a capture at `run = breakeven` profits only if the generation runs to
+    /// about `2 × breakeven` (breakeven eager + breakeven replayed). Arm only when the typical
+    /// generation is at least that long; when armed, capture at the breakeven to bank the longest tail.
+    fn capture_after(&self) -> Option<usize> {
+        (self.ema_len >= 2.0 * VULKAN_GRAPH_BREAKEVEN as f64).then_some(VULKAN_GRAPH_BREAKEVEN)
+    }
+}
 
 #[cfg(feature = "vulkan")]
 struct VulkanDecodeGraphEntry {
@@ -1034,9 +1095,11 @@ impl CacheManagerMixin for GGUFPipeline {
         // Vulkan decode graph — which baked the old buffer handles into its recorded commands — is now
         // stale. Park it for teardown at the next capture (inline destruction here would stall the new
         // sequence's first tokens); a later sustained generation recaptures against the fresh cache
-        // and drains the parked graph then.
+        // and drains the parked graph then. Fold the finished sequence's length into the capture policy
+        // so its workload signal counts this generation even when it ends on a clean reset.
         #[cfg(feature = "vulkan")]
         if let Ok(mut state) = self.vulkan_decode_graph.lock() {
+            state.policy.end_run();
             if let Some(entry) = state.entry.take() {
                 state.park(entry);
             }
@@ -1985,6 +2048,10 @@ impl GGUFPipeline {
             return Ok(None);
         }
 
+        // One tick per decode step, before either path: advances the run and, on a position that does
+        // not continue the last one, folds the finished sequence's length into the workload signal.
+        let run = state.policy.tick(position);
+
         // Cache hit: refresh the four stable buffers in place and replay in one submit.
         if let Some(mut entry) = state.entry.take() {
             // Replay only a STRICTLY sequential continuation of the captured sequence on the same KV
@@ -2011,12 +2078,11 @@ impl GGUFPipeline {
                 state.entry = Some(entry);
                 return Ok(Some(logits));
             }
-            // Guard failed: a reset or different sequence. The entry is parked for teardown at the
-            // next capture (see `retired`) and the run restarts from this position, so the new
-            // sequence must prove itself sustained before paying another capture.
+            // Guard failed: either a different sequence (the tick above already folded the old run and
+            // began a new one) or the same sequence past the captured capacity (the tick continued the
+            // run, so a recapture follows once eager). Either way park the stale graph for teardown at
+            // the next capture and fall back to eager for this token.
             state.park(entry);
-            state.run = 0;
-            state.next_run_position = position + 1;
             return Ok(None);
         }
 
@@ -2025,17 +2091,12 @@ impl GGUFPipeline {
         // disable the path (fail-closed), so no token is lost or recomputed.
         let warmup_logits = model.forward(input_ids, seqlen_offsets, context_lens.to_vec(), None)?;
 
-        // Count this decode against the current sequential run, then capture only once the run is long
-        // enough to repay the capture. A generation that ends before the break-even therefore runs pure
-        // eager and can never be slower than the eager path.
-        state.run = if position == state.next_run_position {
-            state.run + 1
-        } else {
-            1
-        };
-        state.next_run_position = position + 1;
-        if state.run < VULKAN_GRAPH_CAPTURE_AFTER {
-            return Ok(Some(warmup_logits));
+        // Capture only once this sequence's run reaches the point the policy judges worthwhile for the
+        // observed workload -- `None` means the typical generation is too short to repay a capture, so
+        // this workload stays fully eager and can never be slower than the eager path.
+        match state.policy.capture_after() {
+            Some(after) if run >= after => {}
+            _ => return Ok(Some(warmup_logits)),
         }
 
         // Tear down any graphs retired by earlier sequence switches now, adjacent to the capture we
