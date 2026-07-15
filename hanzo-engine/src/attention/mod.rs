@@ -132,41 +132,48 @@ fn vulkan_decode_attn(
     v: &Tensor,
     sdpa_params: &SdpaParams,
 ) -> Result<Option<Tensor>> {
-    use hanzo_ml::{Device, Storage};
-    let (b, h, q_len, d) = q.dims4()?;
+    use hanzo_ml::{DType, Device};
+    if !crate::perf_flags::vulkan_fused_attn_enabled() {
+        return Ok(None);
+    }
+    let (_b, h, q_len, d) = q.dims4()?;
+    // The committed `sdpa_blk` .spv is f32 and specialized for head_dim 128 (d and the block width are
+    // comptime in the kernel), so gate to f32 + 128; other dtypes/head dims need their own kernel. No
+    // softcap / sliding-window (the kernel does neither). A lone decode query (q_len==1) attends the
+    // full cache, so no attention mask is needed.
     if q_len != 1
-        || d == 0
-        || d > 128
-        || (d & (d - 1)) != 0
+        || d != 128
+        || q.dtype() != DType::F32
+        || k.dtype() != DType::F32
+        || v.dtype() != DType::F32
         || sdpa_params.softcap.is_some()
         || sdpa_params.sliding_window.is_some()
     {
         return Ok(None);
     }
-    let dev = match q.device() {
-        Device::Vulkan(dv) => dv.clone(),
-        _ => return Ok(None),
-    };
-    let hkv = k.dim(1)?;
-    let l = k.dim(2)?;
-    if h % hkv != 0 {
+    if !matches!(q.device(), Device::Vulkan(_)) {
         return Ok(None);
     }
-    let q = q.contiguous()?;
-    let k = k.contiguous()?;
-    let v = v.contiguous()?;
-    let (qs, _) = q.storage_and_layout();
-    let (ks, _) = k.storage_and_layout();
-    let (vs, _) = v.storage_and_layout();
-    let (Storage::Vulkan(_qv), Storage::Vulkan(_kv), Storage::Vulkan(_vv)) = (&*qs, &*ks, &*vs)
-    else {
+    let hkv = k.dim(1)?;
+    if hkv == 0 || h % hkv != 0 {
         return Ok(None);
+    }
+    // One fused `sdpa_blk` dispatch replaces repeat_kv(copy2d) + QKᵀ bmm + softmax + ·V bmm: the op's
+    // vulkan_fwd (hanzo_nn::ops::Sdpa) runs the GQA-native online-softmax kernel. q is a single decode
+    // token -- cheap to materialize contiguous. k/v are the KV cache: pass them STRIDED (read in place)
+    // when their layout is kernel-friendly (innermost head_dim contiguous, offset 0, matching strides),
+    // which skips the per-layer `.contiguous()` copy of the whole active cache -- the dominant decode
+    // cost. Otherwise materialize contiguous so the stride path always sees a layout it can read.
+    // Non-causal: a decode query sees only past keys, so the whole cache is unmasked.
+    let q = q.contiguous()?;
+    let kv_readable = |t: &Tensor| t.layout().start_offset() == 0 && t.stride().last() == Some(&1);
+    let (k, v) = if kv_readable(k) && kv_readable(v) && k.stride() == v.stride() {
+        (k.clone(), v.clone())
+    } else {
+        (k.contiguous()?, v.contiguous()?)
     };
-    // Fused single-query Vulkan decode-attention (`attn_decode_gpu`) is not yet wired in hanzo-ml;
-    // returning None routes this through the standard Sdpa path (which handles Vulkan storage). The
-    // fused kernel is a decode-perf follow-up, not a correctness requirement.
-    let _ = (dev, hkv, l);
-    Ok(None)
+    let out = hanzo_nn::ops::sdpa(&q, &k, &v, None, false, sdpa_params.softmax_scale, 1.0)?;
+    Ok(Some(out))
 }
 
 pub struct SdpaParams {
