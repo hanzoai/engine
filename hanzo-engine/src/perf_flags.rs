@@ -9,9 +9,9 @@ const METAL_GRAPHS_ENV: &str = "METAL_GRAPHS";
 const ROCM_GRAPHS_ENV: &str = "ROCM_GRAPHS";
 const FLASHINFER_DECODE_ENV: &str = "FLASHINFER_DECODE";
 #[cfg(feature = "vulkan")]
-const VULKAN_FUSED_ATTN_ENV: &str = "HANZO_VK_FUSED_ATTN";
+const VULKAN_FUSED_ATTN_ENV: &str = "VK_FUSED_ATTN";
 #[cfg(feature = "vulkan")]
-const VULKAN_GRAPHS_ENV: &str = "HANZO_VK_GRAPH";
+const VULKAN_GRAPHS_ENV: &str = "VK_GRAPHS";
 
 static CUDA_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "cuda")]
@@ -46,21 +46,23 @@ pub(crate) fn cuda_graphs_enabled() -> bool {
 
 // Fused GQA flash-SDPA decode kernel (sdpa_blk) on Vulkan. DEFAULT ON: one dispatch replaces the
 // repeat_kv + QKᵀ bmm + softmax + ·V bmm chain. Gated so the naive path can be A/B compared without a
-// rebuild (HANZO_VK_FUSED_ATTN=0 falls back).
+// rebuild (VK_FUSED_ATTN=0 falls back).
 #[cfg(feature = "vulkan")]
 pub(crate) fn vulkan_fused_attn_enabled() -> bool {
     *VULKAN_FUSED_ATTN_ENABLED.get_or_init(|| env_flag(VULKAN_FUSED_ATTN_ENV, true))
 }
 
 // Vulkan decode command-graph: capture the single-token decode forward once and replay it per token,
-// collapsing the eager per-token re-record + resubmit of ~1.7k dispatches into one queue submit. The
-// per-token CPU record+submit cost (~6ms on gfx1151) is the residual decode overhead once the kernels
-// already beat llama's bandwidth. DEFAULT OFF: the subtle failure mode is fluent-but-stale output
-// (a frozen refresh buffer), so this ships gated + fail-closed (any capture/replay error falls back to
-// the always-correct eager path) until proven token-identical to eager. Set HANZO_VK_GRAPH=1 to enable.
+// collapsing the eager per-token re-record + resubmit of the full dispatch stream into one queue
+// submit — the residual per-token CPU cost once decode is kernel-bound. DEFAULT ON: the failure mode
+// (fluent-but-stale output from a frozen
+// refresh buffer) is guarded three ways -- two bit-exact replay tests in hanzo-ml, measured token-
+// identical greedy decode vs eager, and capture deferred until a sequence proves itself sustained
+// (VULKAN_GRAPH_CAPTURE_AFTER) so short generations run the eager path unchanged. Any capture/replay
+// error still fails closed to eager. Set VK_GRAPHS=0 to force the eager path.
 #[cfg(feature = "vulkan")]
 pub(crate) fn vulkan_graphs_enabled() -> bool {
-    *VULKAN_GRAPHS_ENABLED.get_or_init(|| env_flag(VULKAN_GRAPHS_ENV, false))
+    *VULKAN_GRAPHS_ENABLED.get_or_init(|| env_flag(VULKAN_GRAPHS_ENV, true))
 }
 
 // Dense fixed-shape prefill graph capture (single-sequence, offset-0 first prompt chunk). DEFAULT
