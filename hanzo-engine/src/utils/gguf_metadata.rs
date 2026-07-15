@@ -427,6 +427,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
             | GGUFArchitecture::Deepseek4
             | GGUFArchitecture::GptOss
             | GGUFArchitecture::Glm4Moe
+            | GGUFArchitecture::GlmDsa
             | GGUFArchitecture::MiniMaxM2 => {
                 let token_embd = tensor_info_size_in_bytes!(
                     self.model.tensor_info("token_embd.weight")?,
@@ -779,10 +780,12 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
             | GGUFArchitecture::Deepseek4
             | GGUFArchitecture::GptOss
             | GGUFArchitecture::Glm4Moe
+            | GGUFArchitecture::GlmDsa
             | GGUFArchitecture::MiniMaxM2 => {
-                // Non-uniform block sizes (hybrid layers; V4 hash vs MoE vs compressed layers),
-                // so a single representative layer can't stand in. Sum each block's real tensor
-                // bytes -- correct for both single-device and multi-GPU auto mapping.
+                // Non-uniform block sizes (hybrid layers; V4 hash vs MoE vs compressed layers,
+                // GLM-5.2's first-3-dense + MLA + 256-expert MoE + in-band MTP head), so a single
+                // representative layer can't stand in. Sum each block's real tensor bytes -- correct
+                // for both single-device and multi-GPU auto mapping.
                 let n = self.num_layers(config)?;
                 let sizes: Vec<usize> = (0..n)
                     .map(|i| {
