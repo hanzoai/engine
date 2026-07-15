@@ -10,11 +10,11 @@ name = "zen3-serving"
 path = "src/main.rs"
 
 [dependencies]
-hanzo-engine = { path = "../../hanzo-engine" }
+hanzo-engine = { version = "1.7.41", path = "../../hanzo-engine" }
 hanzo-ml = { path = "../../../ml/hanzo-ml" }
 hanzo-nn = { path = "../../../ml/hanzo-nn" }
-hanzo-quant = { path = "../../hanzo-quant" }
-hanzo-audio = { path = "../../hanzo-audio" }
+hanzo-quant = { version = "1.7.41", path = "../../hanzo-quant" }
+hanzo-audio = { version = "1.7.41", path = "../../hanzo-audio" }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
