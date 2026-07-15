@@ -8,6 +8,8 @@ const METAL_GRAPHS_ENV: &str = "METAL_GRAPHS";
 #[cfg(feature = "rocm")]
 const ROCM_GRAPHS_ENV: &str = "ROCM_GRAPHS";
 const FLASHINFER_DECODE_ENV: &str = "FLASHINFER_DECODE";
+#[cfg(feature = "vulkan")]
+const VULKAN_FUSED_ATTN_ENV: &str = "HANZO_VK_FUSED_ATTN";
 
 static CUDA_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "cuda")]
@@ -17,6 +19,8 @@ static METAL_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "rocm")]
 static ROCM_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 static FLASHINFER_DECODE_ENABLED: OnceLock<bool> = OnceLock::new();
+#[cfg(feature = "vulkan")]
+static VULKAN_FUSED_ATTN_ENABLED: OnceLock<bool> = OnceLock::new();
 
 fn env_flag(name: &str, default: bool) -> bool {
     std::env::var(name)
@@ -34,6 +38,14 @@ fn env_flag(name: &str, default: bool) -> bool {
 
 pub(crate) fn cuda_graphs_enabled() -> bool {
     *CUDA_GRAPHS_ENABLED.get_or_init(|| env_flag(CUDA_GRAPHS_ENV, true))
+}
+
+// Fused GQA flash-SDPA decode kernel (sdpa_blk) on Vulkan. DEFAULT ON: one dispatch replaces the
+// repeat_kv + QKᵀ bmm + softmax + ·V bmm chain. Gated so the naive path can be A/B compared without a
+// rebuild (HANZO_VK_FUSED_ATTN=0 falls back).
+#[cfg(feature = "vulkan")]
+pub(crate) fn vulkan_fused_attn_enabled() -> bool {
+    *VULKAN_FUSED_ATTN_ENABLED.get_or_init(|| env_flag(VULKAN_FUSED_ATTN_ENV, true))
 }
 
 // Dense fixed-shape prefill graph capture (single-sequence, offset-0 first prompt chunk). DEFAULT
