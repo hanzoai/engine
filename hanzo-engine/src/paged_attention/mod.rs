@@ -111,10 +111,13 @@ macro_rules! ctxt_to_blocks {
 /// remain after the weights are loaded. Post-loading callers should pass `None` since
 /// `get_memory_available()` already reflects the loaded model.
 ///
-/// `max_num_tokens`: on Metal (unified memory), caps the KV cache to this many tokens.
-/// Unlike CUDA with dedicated VRAM where unused memory is wasted, Metal's wired buffers
-/// compete with the OS and CPU for the same physical RAM. On CUDA this is ignored.
-/// If `None` on Metal, falls back to `config.max_seq_len()`.
+/// `max_num_tokens`: on UNIFIED-memory devices (Metal, ROCm/Vulkan APUs, integrated/coherent
+/// CUDA), caps the KV cache to this many tokens = the actual concurrent working set
+/// (`max_seq_len * max_batch_size` = context * concurrency). Unlike discrete VRAM where unused
+/// memory is otherwise wasted, wired KV buffers here compete with the model, OS, and compute for
+/// one shared physical pool, so KV is sized to DEMAND, not capacity -- more concurrent
+/// sessions/agents raise `max_batch_size` and grow KV automatically, always bounded by the
+/// post-model/OS-reserve ceiling. On discrete CUDA this is ignored. Falls back to one context.
 #[allow(clippy::too_many_arguments)]
 pub fn calculate_cache_config(
     mem_gpu: MemoryGpuConfig,
@@ -126,7 +129,7 @@ pub fn calculate_cache_config(
     layer_devices: &[Option<Device>],
     silent: bool,
     model_weight_size_in_bytes: Option<usize>,
-    _max_num_tokens: Option<usize>,
+    max_num_tokens: Option<usize>,
 ) -> anyhow::Result<CacheConfig> {
     let block_size = block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
     if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
@@ -183,24 +186,32 @@ pub fn calculate_cache_config(
     if unified_memory {
         let one_ctx_mb =
             ctxt_to_blocks!(config.max_seq_len(), dtype_size, block_size, config) / SIZE_IN_MB;
-        // KV competes with the model and the OS/compute working set for the shared pool. Reserve a
-        // fixed headroom (20% of unified RAM, min 16 GB) and let KV use the rest: total - model -
-        // reserve. On a large unified box (GB10 128 GB) that is tens of GB -> many concurrent
-        // sequences; on a tight APU the reserve keeps KV from starving the OS (the ROCm/WSL 88 GB
-        // alloc that never returns). Floor at one full context so a lone request always loads, and
-        // never exceed the post-model budget `mem_gpu` already computed. An explicit
-        // --pa-context-len (ContextSize upstream) sizes KV exactly and bypasses this.
+        // KV competes with the model and the OS/compute working set for ONE shared physical pool, so
+        // size it to DEMAND -- the concurrent working set (`max_num_tokens` = max_seq_len *
+        // max_batch_size = context * concurrency) -- NOT to capacity. Grabbing all free RAM (the
+        // discrete-VRAM vLLM approach) wires tens of GB of KV that a single agent never touches and,
+        // on a tight/coherent pool, thrashes or hangs the allocator (ROCm/WSL: an 84 GB alloc never
+        // returns). More concurrent sessions/agents raise max_batch_size and grow KV automatically.
+        // Bound demand by the post-model/OS-reserve ceiling (20% of unified RAM, min 16 GB, so KV
+        // never starves the OS) and floor at one full context so a lone request always loads. An
+        // explicit --pa-context-len (ContextSize upstream) sizes KV exactly and bypasses this.
+        let demand_mb = match max_num_tokens {
+            Some(toks) => {
+                (ctxt_to_blocks!(toks, dtype_size, block_size, config) / SIZE_IN_MB).max(one_ctx_mb)
+            }
+            None => one_ctx_mb,
+        };
         let total_mb = MemoryUsage.query(device)?.total() / SIZE_IN_MB;
         let reserve_mb = (total_mb / 5).max(16 * 1024);
         let kv_ceiling = total_mb
             .saturating_sub(model_weight_per_device_mb)
             .saturating_sub(reserve_mb)
             .max(one_ctx_mb);
-        let target = mem_gpu.min(kv_ceiling).max(one_ctx_mb);
+        let target = mem_gpu.min(kv_ceiling).min(demand_mb).max(one_ctx_mb);
         if target != mem_gpu {
             if !silent {
                 info!(
-                    "Unified memory: KV cache {} MB -> {} MB ({} max-context sequences; {} MB OS reserve).",
+                    "Unified memory: KV cache {} MB -> {} MB ({} max-context sequences, demand-sized; {} MB OS reserve).",
                     mem_gpu,
                     target,
                     (target / one_ctx_mb.max(1)).max(1),
