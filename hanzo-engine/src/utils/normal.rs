@@ -173,6 +173,11 @@ impl TryIntoDType for ModelDType {
             // Vulkan stores all floats as f32; auto bf16/f16 would force a CPU roundtrip on every
             // to_dtype cast-back. Explicit --dtype still honored (only Auto is steered here).
             Self::Auto if devices.iter().any(|d| d.is_vulkan()) => DType::F32,
+            // x86 CPUs have no native f16 arithmetic (every op upconverts) and the CPU kernels expect a
+            // uniform float dtype -- a mixed f16 activation against the f32 rope/mask caches fails. F32
+            // is the CPU-native compute type, so steer CPU-only Auto to it (this is what makes a huge
+            // quantized MoE like GLM-5.2 run CPU-streamed; the weights stay quantized on disk).
+            Self::Auto if devices.iter().all(|d| d.is_cpu()) => DType::F32,
             Self::Auto => determine_auto_dtype_all(devices).map_err(anyhow::Error::msg)?,
             Self::BF16 => DType::BF16,
             Self::F16 => DType::F16,
