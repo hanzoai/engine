@@ -10,6 +10,8 @@ const ROCM_GRAPHS_ENV: &str = "ROCM_GRAPHS";
 const FLASHINFER_DECODE_ENV: &str = "FLASHINFER_DECODE";
 #[cfg(feature = "vulkan")]
 const VULKAN_FUSED_ATTN_ENV: &str = "HANZO_VK_FUSED_ATTN";
+#[cfg(feature = "vulkan")]
+const VULKAN_GRAPHS_ENV: &str = "HANZO_VK_GRAPH";
 
 static CUDA_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "cuda")]
@@ -21,6 +23,8 @@ static ROCM_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 static FLASHINFER_DECODE_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "vulkan")]
 static VULKAN_FUSED_ATTN_ENABLED: OnceLock<bool> = OnceLock::new();
+#[cfg(feature = "vulkan")]
+static VULKAN_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 
 fn env_flag(name: &str, default: bool) -> bool {
     std::env::var(name)
@@ -46,6 +50,17 @@ pub(crate) fn cuda_graphs_enabled() -> bool {
 #[cfg(feature = "vulkan")]
 pub(crate) fn vulkan_fused_attn_enabled() -> bool {
     *VULKAN_FUSED_ATTN_ENABLED.get_or_init(|| env_flag(VULKAN_FUSED_ATTN_ENV, true))
+}
+
+// Vulkan decode command-graph: capture the single-token decode forward once and replay it per token,
+// collapsing the eager per-token re-record + resubmit of ~1.7k dispatches into one queue submit. The
+// per-token CPU record+submit cost (~6ms on gfx1151) is the residual decode overhead once the kernels
+// already beat llama's bandwidth. DEFAULT OFF: the subtle failure mode is fluent-but-stale output
+// (a frozen refresh buffer), so this ships gated + fail-closed (any capture/replay error falls back to
+// the always-correct eager path) until proven token-identical to eager. Set HANZO_VK_GRAPH=1 to enable.
+#[cfg(feature = "vulkan")]
+pub(crate) fn vulkan_graphs_enabled() -> bool {
+    *VULKAN_GRAPHS_ENABLED.get_or_init(|| env_flag(VULKAN_GRAPHS_ENV, false))
 }
 
 // Dense fixed-shape prefill graph capture (single-sequence, offset-0 first prompt chunk). DEFAULT
