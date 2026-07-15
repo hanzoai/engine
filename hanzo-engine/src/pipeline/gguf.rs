@@ -71,7 +71,7 @@ use crate::{
 };
 use anyhow::{bail, Result};
 use either::Either;
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(any(feature = "cuda", feature = "rocm", feature = "vulkan"))]
 use hanzo_ml::Var;
 use hanzo_ml::{Device, Tensor};
 use hanzo_quant::IsqType;
@@ -146,6 +146,10 @@ pub struct GGUFPipeline {
     cuda_decode_graph: std::sync::Mutex<CudaDecodeGraphState>,
     #[cfg(feature = "cuda")]
     cuda_prefill_graph: std::sync::Mutex<CudaPrefillGraphState>,
+    /// Captured Vulkan decode command-graph (single-token, naive KV cache). One graph at a time,
+    /// invalidated on a KV-cache capacity grow. See [`crate::perf_flags::vulkan_graphs_enabled`].
+    #[cfg(feature = "vulkan")]
+    vulkan_decode_graph: std::sync::Mutex<VulkanDecodeGraphState>,
 }
 
 #[cfg(feature = "rocm")]
@@ -170,6 +174,40 @@ struct RocmDecodeGraphEntry {
     /// tensor's (stable) storage every replay, cloning it after a launch yields
     /// the current token's logits.
     logits: Tensor,
+}
+
+#[cfg(feature = "vulkan")]
+#[derive(Default)]
+struct VulkanDecodeGraphState {
+    entry: Option<VulkanDecodeGraphEntry>,
+    disabled: bool,
+}
+
+#[cfg(feature = "vulkan")]
+struct VulkanDecodeGraphEntry {
+    /// The captured decode forward; `replay()` re-submits it in one queue submit + fence wait,
+    /// replacing the eager per-token re-record of ~1.7k dispatches.
+    graph: hanzo_ml::VkGraph,
+    /// Shared per-forward attention buffers (scale + meta). One serves every layer; `seq_k` (the
+    /// attended span) advances in place per replay via [`hanzo_ml::VkGraphAttn::set_seq_k`].
+    attn: hanzo_ml::VkGraphAttn,
+    /// Stable input-token buffer the captured embedding gather reads; refreshed each replay.
+    input_ids: Var,
+    /// Stable u32 position buffer feeding BOTH the captured RoPE and the device-offset KV append
+    /// (the advancing write slot). Refreshed each replay; the two uses share one value (the position).
+    positions: Var,
+    /// The pinned logits tensor the captured output head writes; cloned after each replay for sampling.
+    logits: Tensor,
+    /// KV cache capacity the graph was captured against. The graph is invalidated (recaptured) once
+    /// the write slot reaches this, since a cache grow reallocates the buffer whose handle the graph
+    /// baked into its recorded descriptors.
+    capacity: usize,
+    /// The one decode position this graph is valid to replay next. A captured graph replays only a
+    /// STRICTLY sequential continuation of the sequence it captured (position advances by exactly one
+    /// per token, on the same KV buffers); any other position means a different / reset sequence, so
+    /// the graph is invalidated and recaptured. Guards against replaying against another sequence's
+    /// state (the naive cache is reallocated per sequence, unlike a persistent paged pool).
+    next_position: usize,
 }
 
 #[cfg(feature = "cuda")]
@@ -902,6 +940,8 @@ impl Loader for GGUFLoader {
             cuda_decode_graph: std::sync::Mutex::new(CudaDecodeGraphState::default()),
             #[cfg(feature = "cuda")]
             cuda_prefill_graph: std::sync::Mutex::new(CudaPrefillGraphState::default()),
+            #[cfg(feature = "vulkan")]
+            vulkan_decode_graph: std::sync::Mutex::new(VulkanDecodeGraphState::default()),
         })))
     }
 
@@ -956,6 +996,13 @@ impl CacheManagerMixin for GGUFPipeline {
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
     ) {
+        // A cache reset (new / restarted sequence) reallocates the naive KV buffers, so any captured
+        // Vulkan decode graph — which baked the old buffer handles into its recorded commands — is now
+        // stale. Drop it; the first decode of the new sequence recaptures against the fresh cache.
+        #[cfg(feature = "vulkan")]
+        if let Ok(mut state) = self.vulkan_decode_graph.lock() {
+            state.entry = None;
+        }
         match self.cache() {
             EitherCache::Full(_) => {
                 FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false)
@@ -1859,6 +1906,175 @@ impl GGUFPipeline {
     }
 }
 
+#[cfg(feature = "vulkan")]
+impl GGUFPipeline {
+    /// Attempts to satisfy a single Vulkan decode step via the captured command-graph. Returns
+    /// `Ok(None)` when the graph path does not apply (caller runs eager). Unlike the paged ROCm/CUDA
+    /// analogs this drives the model's NAIVE KV cache directly (no paged metadata): each replay
+    /// refreshes exactly four buffers in place — the input token, the RoPE/KV-slot position, and the
+    /// attended span `seq_k` — and re-submits the recorded forward once. Fail-closed: on any
+    /// capture/replay error the path disables and the always-correct eager decode continues.
+    fn try_vulkan_decode_graph_forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+    ) -> Result<Option<Tensor>, hanzo_ml::Error> {
+        if !crate::perf_flags::vulkan_graphs_enabled() || self.draft_proposer.is_some() {
+            return Ok(None);
+        }
+        // Steady-state single-token decode on a Vulkan device only. Prefill (q_len > 1) stays eager.
+        let (batch, q_len) = input_ids.dims2()?;
+        if q_len != 1 || batch != 1 || seqlen_offsets.len() != 1 || context_lens.len() != 1 {
+            return Ok(None);
+        }
+        if !matches!(input_ids.device(), Device::Vulkan(_)) {
+            return Ok(None);
+        }
+        // The naive-KV-cache decode graph is wired for the Q4_K / E=128 Qwen3-MoE decode path.
+        let Model::Qwen3MoE(ref model) = self.model else {
+            return Ok(None);
+        };
+
+        let position = seqlen_offsets[0];
+        let seq_k = position + 1;
+
+        let mut state = self
+            .vulkan_decode_graph
+            .lock()
+            .expect("Vulkan graph mutex poisoned");
+        if state.disabled {
+            return Ok(None);
+        }
+
+        // Cache hit: refresh the four stable buffers in place and replay in one submit.
+        if let Some(mut entry) = state.entry.take() {
+            // Replay only a STRICTLY sequential continuation of the captured sequence on the same KV
+            // buffers: the next position must be exactly the one the graph is primed for, and still
+            // within the captured capacity (a grow reallocates the cache buffer the graph baked in).
+            // Any mismatch means a reset / different sequence — drop the graph (entry falls out of
+            // scope here, NOT put back) and fall back to eager; the next cache-miss recaptures.
+            if position == entry.next_position && position < entry.capacity {
+                entry.input_ids.set(input_ids)?;
+                let pos_t = Tensor::from_vec(vec![position as u32], (1,), input_ids.device())?;
+                entry.positions.set(&pos_t)?;
+                entry.attn.set_seq_k(seq_k)?;
+                // The `set` refreshes record device copies into the eager batch (input token, position);
+                // drain them (and any staged meta upload) so the replay — a SEPARATE queue submit —
+                // reads the fresh values, not the stale capture-time buffers. Without this the graph
+                // replays against last token's inputs: fluent but STALE output.
+                input_ids.device().synchronize()?;
+                entry.graph.replay()?;
+                let logits = entry.logits.clone();
+                // Advance the host KV length so the cache stays consistent for a later eager fallback
+                // or capacity-boundary recapture (the graph did the on-device write to slot `position`).
+                model.vk_advance_kv_len(seq_k)?;
+                entry.next_position = position + 1;
+                state.entry = Some(entry);
+                return Ok(Some(logits));
+            }
+            return Ok(None);
+        }
+
+        // Cache miss: run an eager warmup forward first (correct first token + cache populate), then
+        // capture a graph for the subsequent tokens. If capture fails we keep the warmup logits and
+        // disable the path (fail-closed), so no token is lost or recomputed.
+        let warmup_logits = model.forward(input_ids, seqlen_offsets, context_lens.to_vec(), None)?;
+        input_ids.device().synchronize()?;
+
+        match self.capture_vulkan_decode_graph(input_ids, seqlen_offsets, context_lens, position) {
+            Ok(entry) => {
+                tracing::info!(
+                    "vulkan decode graph: captured {} dispatches at position {} (KV capacity {}); replaying subsequent tokens",
+                    entry.graph.n_dispatch(),
+                    position,
+                    entry.capacity
+                );
+                state.entry = Some(entry);
+            }
+            Err(err) => {
+                if !state.disabled {
+                    warn!("Vulkan decode graph capture failed; falling back to eager decode: {err}");
+                }
+                state.disabled = true;
+                state.entry = None;
+            }
+        }
+        Ok(Some(warmup_logits))
+    }
+
+    /// Captures the naive-KV-cache decode forward into a replayable Vulkan command-graph against stable
+    /// per-token buffers. Mirrors `capture_rocm_decode_graph` but binds this pipeline's own scale/meta
+    /// attention buffers and a shared position buffer for the device-offset KV append. On any error the
+    /// in-flight capture is aborted so the eager path can resume on a clean submitter.
+    fn capture_vulkan_decode_graph(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        position: usize,
+    ) -> Result<VulkanDecodeGraphEntry, hanzo_ml::Error> {
+        let Model::Qwen3MoE(ref model) = self.model else {
+            hanzo_ml::bail!("vulkan decode graph: unsupported model variant");
+        };
+        let Device::Vulkan(vdev) = input_ids.device().clone() else {
+            hanzo_ml::bail!("vulkan decode graph: input not on a vulkan device");
+        };
+        let capacity = model.vk_kv_capacity().ok_or_else(|| {
+            hanzo_ml::Error::msg("vulkan decode graph: KV cache not allocated after warmup")
+        })?;
+
+        // Stable per-token inputs: the token id (embedding gather reads it) and the u32 position
+        // (RoPE + device-offset KV append read it). Refreshed in place before each replay.
+        let input_ids_var = Var::from_tensor(input_ids)?;
+        let pos_t = Tensor::from_vec(vec![position as u32], (1,), input_ids.device())?;
+        let positions_var = Var::from_tensor(&pos_t)?;
+        // Shared attention buffers; seq_k is the initial attended span, advanced per replay.
+        let attn = model.vk_build_graph_attn(position + 1)?;
+
+        vdev.begin_graph_capture()?;
+        let logits = match model.forward_vk_graph(
+            &input_ids_var.as_detached_tensor(),
+            seqlen_offsets,
+            context_lens.to_vec(),
+            positions_var.as_tensor(),
+            &attn,
+        ) {
+            Ok(logits) => logits,
+            Err(err) => {
+                vdev.abort_graph_capture();
+                return Err(err);
+            }
+        };
+        let graph = vdev.end_graph_capture()?;
+
+        Ok(VulkanDecodeGraphEntry {
+            graph,
+            attn,
+            input_ids: input_ids_var,
+            positions: positions_var,
+            logits,
+            capacity,
+            // The graph is captured for `position`; the first replay is the next token in sequence.
+            next_position: position + 1,
+        })
+    }
+
+    /// Disables the Vulkan decode graph fast path after a capture/replay failure and drops the captured
+    /// graph so the pipeline falls back to the always-correct eager decode.
+    fn disable_vulkan_decode_graph(&self, err: &hanzo_ml::Error) {
+        let mut state = self
+            .vulkan_decode_graph
+            .lock()
+            .expect("Vulkan graph mutex poisoned");
+        if !state.disabled {
+            warn!("Vulkan decode graphs disabled after capture/replay error: {err}");
+        }
+        state.disabled = true;
+        state.entry = None;
+    }
+}
+
 #[async_trait::async_trait]
 impl Pipeline for GGUFPipeline {
     fn pipeline_parallel_worker(&self) -> Result<(), hanzo_ml::Error> {
@@ -1909,6 +2125,28 @@ impl Pipeline for GGUFPipeline {
             }
             (None, None) => None,
         };
+        // Vulkan decode command-graph fast path. The Vulkan naive-KV-cache decode has no paged
+        // metadata (so the ROCm/CUDA blocks below never fire); this replays the captured single-token
+        // forward (or captures it on the first decode step) instead of re-recording ~1.7k dispatches
+        // each token. Gated to single-token decode internally; fail-closed to eager on any error.
+        #[cfg(feature = "vulkan")]
+        {
+            match self.try_vulkan_decode_graph_forward(
+                &input_ids,
+                &seqlen_offsets,
+                &context_lens,
+            ) {
+                Ok(Some(logits)) => {
+                    return if return_raw_logits {
+                        Ok(ForwardInputsResult::RawLogits { logits })
+                    } else {
+                        Ok(ForwardInputsResult::CausalGeneration { logits })
+                    };
+                }
+                Ok(None) => {}
+                Err(err) => self.disable_vulkan_decode_graph(&err),
+            }
+        }
         // ROCm/HIP decode graph fast path. On a steady-state single-token decode
         // with paged metadata present, replay the captured graph (or capture it on
         // the first such step) instead of re-launching every kernel eagerly. On any
