@@ -68,6 +68,15 @@ fn parse_gguf_value(value: &Value) -> String {
     }
 }
 
+/// Whether a tensor is a routed-expert bank that the streaming cache owns. It must be rank-3 -- the
+/// stacked `[n_experts, n, k]` layout every GGUF MoE uses (glm-dsa / deepseek2 / qwen3-moe / glm4-moe)
+/// -- AND named `*_exps` (`ffn_{gate,up,down}_exps`). The name guard matters: split-MLA attention
+/// weights (`attn_k_b` / `attn_v_b`) are ALSO rank-3 but are dense, always-active, and dequantized
+/// whole at load, so rank alone would misclassify them as streamable and break their load.
+fn is_routed_expert_bank(name: &str, dims: usize) -> bool {
+    dims == 3 && name.contains("_exps")
+}
+
 // Internal invariant: contents and readers must be paired.
 /// This abstracts the files for a GGUF model and enables multiple files to be used.
 pub struct Content<'a, R: std::io::Seek + std::io::Read> {
@@ -219,10 +228,18 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
     /// shards. Used by device mapping for architectures whose layers have non-uniform sizes
     /// (e.g. Qwen3.5/3.6 hybrid GDN+attention), where one representative layer can't stand in.
     pub fn tensors_size_in_bytes_with_prefix(&self, prefix: &str) -> usize {
+        // When expert streaming is on, the routed-expert banks live on disk behind a bounded LRU cache
+        // -- they are NOT resident, so they must not count toward the device-map budget (the same
+        // predicate the load path in `tensor()` uses). Otherwise the auto mapper sizes the whole model
+        // as resident and rejects a model that streaming exists precisely to run.
+        let streaming = hanzo_ml::quantized::expert_stream::enabled();
         let mut total = 0usize;
         for ct in &self.contents {
             for (name, info) in &ct.tensor_infos {
                 if name.starts_with(prefix) {
+                    if streaming && is_routed_expert_bank(name, info.shape.dims().len()) {
+                        continue;
+                    }
                     total += info.shape.elem_count() / info.ggml_dtype.block_size()
                         * info.ggml_dtype.type_size();
                 }
@@ -238,12 +255,12 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
                 continue;
             }
             let offset = self.contents[i].tensor_data_offset;
-            // Stream stacked (rank-3) expert banks from disk when enabled and a shard path is known.
-            // Rank-3 is the arch-agnostic key: every GGUF MoE stores routed experts as [E, n, k]
-            // (glm-dsa / deepseek2 / qwen3-moe / glm4-moe); dense weights are rank-1/2 and stay
-            // resident. The streamed bank is consumed only by `indexed_moe_forward`.
-            let is_expert_bank =
-                self.contents[i].tensor_infos.get(name).unwrap().shape.dims().len() == 3;
+            // Stream the stacked routed-expert banks from disk when enabled and a shard path is known.
+            // The streamed bank is consumed only by `indexed_moe_forward`.
+            let is_expert_bank = is_routed_expert_bank(
+                name,
+                self.contents[i].tensor_infos.get(name).unwrap().shape.dims().len(),
+            );
             if is_expert_bank && hanzo_ml::quantized::expert_stream::enabled() {
                 if let Some(path) = self.stream_paths.get(i).cloned() {
                     return self.contents[i].tensor_stream(&path, name);
