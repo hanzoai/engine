@@ -136,6 +136,13 @@ pub mod defaults {
     pub const PAGED_ATTN_CUDA: bool = true;
     pub const PAGED_ATTN_METAL: bool = false;
     pub const PAGED_ATTN_ROCM: bool = true;
+    // Vulkan has a paged-attention path (`VulkanDevice::paged_attention_vk` + paged_attn.spv +
+    // reshape_and_cache.spv), enabled opt-in via `--paged-attn on`. It correctly eliminates the naive
+    // Sdpa layout-copy churn (GQA repeat_kv + KV-append cat: copy2d 14k->1.2k), BUT the current v1
+    // scalar attention kernel is slower per-dispatch than the copies it removes, so it nets a decode
+    // regression on this APU until the kernel is optimized (v2 partitioned) and the MoE route/combine
+    // op-chains are fused. Default OFF until then; the `is_vulkan()` branch keeps the opt-in wired.
+    pub const PAGED_ATTN_VULKAN: bool = false;
     pub const CPU: bool = false;
     pub const ENABLE_SEARCH: bool = false;
     pub const SEARCH_EMBEDDING_MODEL: Option<SearchEmbeddingModel> = None;
@@ -1487,6 +1494,8 @@ fn configure_paged_attn(device: &Device, paged_attn: Option<bool>) -> bool {
         paged_attn.unwrap_or(defaults::PAGED_ATTN_METAL)
     } else if device.is_rocm() {
         paged_attn.unwrap_or(defaults::PAGED_ATTN_ROCM)
+    } else if device.is_vulkan() {
+        paged_attn.unwrap_or(defaults::PAGED_ATTN_VULKAN)
     } else {
         false
     }
