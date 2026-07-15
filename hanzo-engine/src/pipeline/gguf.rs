@@ -180,6 +180,12 @@ struct RocmDecodeGraphEntry {
 #[derive(Default)]
 struct VulkanDecodeGraphState {
     entry: Option<VulkanDecodeGraphEntry>,
+    /// Graphs retired by a sequence switch, awaiting teardown. Destroying a graph frees its recorded
+    /// command buffer and returns its pooled intermediates -- lock-contending work that would
+    /// otherwise land on the NEXT sequence's first tokens, no matter which thread ran it. Parked
+    /// entries are drained at the next capture instead: a point that is already expensive, already
+    /// mid-sustained-generation, and never a first token. Bounded by [`Self::park`].
+    retired: Vec<VulkanDecodeGraphEntry>,
     disabled: bool,
     /// Length of the current run of sequential single-token decodes. Capture is deferred until this
     /// reaches [`VULKAN_GRAPH_CAPTURE_AFTER`], so a generation shorter than the break-even never pays
@@ -190,10 +196,24 @@ struct VulkanDecodeGraphState {
     next_run_position: usize,
 }
 
-/// Sequential decodes to observe before capturing a graph. Capture costs roughly one extra eager
-/// forward plus the record of ~1.7k dispatches, which the ~3.3ms/token replay saving repays after
-/// ~40 tokens. Staying eager until then makes the graph a strict win at every generation length:
-/// short generations behave exactly as the eager path, long ones capture once and replay.
+#[cfg(feature = "vulkan")]
+impl VulkanDecodeGraphState {
+    /// Park a retired graph for deferred teardown, keeping at most two parked (the pinned pool
+    /// intermediates of a parked graph are roughly one forward's transients; two is the natural
+    /// worst case of switch-park-switch before any capture drains). Overflow falls back to dropping
+    /// the oldest here -- rare, and no worse than the undeferred behavior.
+    fn park(&mut self, entry: VulkanDecodeGraphEntry) {
+        self.retired.push(entry);
+        if self.retired.len() > 2 {
+            self.retired.remove(0);
+        }
+    }
+}
+
+/// Sequential decodes to observe before capturing a graph. A capture costs roughly one extra eager
+/// forward plus recording the full decode dispatch stream, which replay only repays over a sustained
+/// run. Staying eager until a run proves itself makes the graph a strict win at every generation
+/// length: short generations behave exactly as the eager path, long ones capture once and replay.
 #[cfg(feature = "vulkan")]
 const VULKAN_GRAPH_CAPTURE_AFTER: usize = 48;
 
@@ -1012,10 +1032,14 @@ impl CacheManagerMixin for GGUFPipeline {
     ) {
         // A cache reset (new / restarted sequence) reallocates the naive KV buffers, so any captured
         // Vulkan decode graph — which baked the old buffer handles into its recorded commands — is now
-        // stale. Drop it; the first decode of the new sequence recaptures against the fresh cache.
+        // stale. Park it for teardown at the next capture (inline destruction here would stall the new
+        // sequence's first tokens); a later sustained generation recaptures against the fresh cache
+        // and drains the parked graph then.
         #[cfg(feature = "vulkan")]
         if let Ok(mut state) = self.vulkan_decode_graph.lock() {
-            state.entry = None;
+            if let Some(entry) = state.entry.take() {
+                state.park(entry);
+            }
         }
         match self.cache() {
             EitherCache::Full(_) => {
@@ -1987,9 +2011,10 @@ impl GGUFPipeline {
                 state.entry = Some(entry);
                 return Ok(Some(logits));
             }
-            // Guard failed: a reset or different sequence. The entry is dropped (not put back) and the
-            // run restarts from this position, so the new sequence must prove itself sustained before
-            // paying another capture.
+            // Guard failed: a reset or different sequence. The entry is parked for teardown at the
+            // next capture (see `retired`) and the run restarts from this position, so the new
+            // sequence must prove itself sustained before paying another capture.
+            state.park(entry);
             state.run = 0;
             state.next_run_position = position + 1;
             return Ok(None);
@@ -2013,6 +2038,10 @@ impl GGUFPipeline {
             return Ok(Some(warmup_logits));
         }
 
+        // Tear down any graphs retired by earlier sequence switches now, adjacent to the capture we
+        // are about to pay for: this is the one point that is expensive anyway, mid-sustained-
+        // generation, and never a first token (see `retired`).
+        state.retired.clear();
         // Drain the warmup so the capture records against a settled device rather than trailing eager
         // work. This belongs to capture, not to the warmup: the pre-capture decodes above return
         // without it and so cost exactly what the eager path costs.
