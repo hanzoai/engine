@@ -181,7 +181,21 @@ struct RocmDecodeGraphEntry {
 struct VulkanDecodeGraphState {
     entry: Option<VulkanDecodeGraphEntry>,
     disabled: bool,
+    /// Length of the current run of sequential single-token decodes. Capture is deferred until this
+    /// reaches [`VULKAN_GRAPH_CAPTURE_AFTER`], so a generation shorter than the break-even never pays
+    /// a capture it cannot amortize. Reset to 1 whenever the position is not the expected next one
+    /// (a new or reset sequence).
+    run: usize,
+    /// The position [`run`] expects next; any other position starts a new run.
+    next_run_position: usize,
 }
+
+/// Sequential decodes to observe before capturing a graph. Capture costs roughly one extra eager
+/// forward plus the record of ~1.7k dispatches, which the ~3.3ms/token replay saving repays after
+/// ~40 tokens. Staying eager until then makes the graph a strict win at every generation length:
+/// short generations behave exactly as the eager path, long ones capture once and replay.
+#[cfg(feature = "vulkan")]
+const VULKAN_GRAPH_CAPTURE_AFTER: usize = 48;
 
 #[cfg(feature = "vulkan")]
 struct VulkanDecodeGraphEntry {
@@ -1973,6 +1987,11 @@ impl GGUFPipeline {
                 state.entry = Some(entry);
                 return Ok(Some(logits));
             }
+            // Guard failed: a reset or different sequence. The entry is dropped (not put back) and the
+            // run restarts from this position, so the new sequence must prove itself sustained before
+            // paying another capture.
+            state.run = 0;
+            state.next_run_position = position + 1;
             return Ok(None);
         }
 
@@ -1980,8 +1999,24 @@ impl GGUFPipeline {
         // capture a graph for the subsequent tokens. If capture fails we keep the warmup logits and
         // disable the path (fail-closed), so no token is lost or recomputed.
         let warmup_logits = model.forward(input_ids, seqlen_offsets, context_lens.to_vec(), None)?;
-        input_ids.device().synchronize()?;
 
+        // Count this decode against the current sequential run, then capture only once the run is long
+        // enough to repay the capture. A generation that ends before the break-even therefore runs pure
+        // eager and can never be slower than the eager path.
+        state.run = if position == state.next_run_position {
+            state.run + 1
+        } else {
+            1
+        };
+        state.next_run_position = position + 1;
+        if state.run < VULKAN_GRAPH_CAPTURE_AFTER {
+            return Ok(Some(warmup_logits));
+        }
+
+        // Drain the warmup so the capture records against a settled device rather than trailing eager
+        // work. This belongs to capture, not to the warmup: the pre-capture decodes above return
+        // without it and so cost exactly what the eager path costs.
+        input_ids.device().synchronize()?;
         match self.capture_vulkan_decode_graph(input_ids, seqlen_offsets, context_lens, position) {
             Ok(entry) => {
                 tracing::info!(
