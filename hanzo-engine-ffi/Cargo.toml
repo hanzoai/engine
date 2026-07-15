@@ -11,8 +11,8 @@ name = "hanzo_engine_ffi"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-hanzo-engine = { path = "../hanzo-engine" }
-hanzo-server-core = { path = "../hanzo-server-core", default-features = false }
+hanzo-engine = { version = "1.7.41", path = "../hanzo-engine" }
+hanzo-server-core = { version = "1.7.41", path = "../hanzo-server-core", default-features = false }
 tokio = { workspace = true }
 
 [features]
