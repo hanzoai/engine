@@ -186,6 +186,30 @@ impl KvCache {
         Ok((k, v))
     }
 
+    /// Command-graph KV append (Vulkan): write the new token's K/V into the pre-allocated cache at a
+    /// DEVICE offset read from `off` (the decode position buffer) via `copy2d_off`, instead of the
+    /// host-offset `slice_set` of [`Self::append`]. A captured decode graph records this write once;
+    /// each replay targets the ADVANCING cache slot by refreshing `off[0]` in place — a host offset
+    /// would freeze every replay's write to the warmup slot (the fluent-but-stale bug). Returns the
+    /// FULL fixed-shape cache K/V (`all_data`), which the graph SDPA attends over `[0, seq_k)` via its
+    /// shared meta. Requires a Normal cache already allocated by an eager warmup step; the caller
+    /// advances `current_seq_len` (this method performs only the device write).
+    #[cfg(feature = "vulkan")]
+    pub fn append_graph(&mut self, k: &Tensor, v: &Tensor, off: &Tensor) -> Result<(Tensor, Tensor)> {
+        let (kc, vc) = match self {
+            Self::Normal { k, v } => (k, v),
+            _ => hanzo_ml::bail!("vulkan decode graph: append_graph requires a Normal KV cache"),
+        };
+        let (Some(k_dst), Some(v_dst)) = (kc.all_data.as_ref(), vc.all_data.as_ref()) else {
+            hanzo_ml::bail!(
+                "vulkan decode graph: KV cache not pre-allocated (eager warmup must run first)"
+            );
+        };
+        vulkan_kv_append_off(k, k_dst, off)?;
+        vulkan_kv_append_off(v, v_dst, off)?;
+        Ok((k_dst.clone(), v_dst.clone()))
+    }
+
     pub fn current_seq_len(&self) -> usize {
         match self {
             Self::Normal { k, .. } => k.current_seq_len(),
@@ -1392,6 +1416,42 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
             }
         }
     }
+}
+
+// Device-offset K or V write into the contiguous Normal cache for the Vulkan decode command-graph.
+// `src` is the new token's [b=1, n_kv, q=1, head_dim]; `dst` is the cache [1, n_kv, capacity, head_dim];
+// `off` is the u32 position buffer (off[0] = cache slot). One row per kv-head, each head_dim contiguous
+// elements, written at `off[0]*head_dim + head*capacity*head_dim`. `copy2d_off` writes device memory
+// through the bound dst handle (no mutable borrow of the cache storage needed), mirroring the Metal seam.
+#[cfg(feature = "vulkan")]
+fn vulkan_kv_append_off(src: &Tensor, dst: &Tensor, off: &Tensor) -> Result<()> {
+    use hanzo_ml::Storage;
+    let (b, n_kv, q, head_dim) = src.dims4()?;
+    if b != 1 || q != 1 {
+        hanzo_ml::bail!("vulkan kv append: decode-only (b=1, q=1), got b={b} q={q}");
+    }
+    if !src.is_contiguous() {
+        hanzo_ml::bail!("vulkan kv append: src must be contiguous");
+    }
+    let capacity = dst.dim(2)?;
+    let (src_s, src_l) = src.storage_and_layout();
+    let (dst_s, _dst_l) = dst.storage_and_layout();
+    let (off_s, _off_l) = off.storage_and_layout();
+    let (Storage::Vulkan(src_vk), Storage::Vulkan(dst_vk), Storage::Vulkan(off_vk)) =
+        (&*src_s, &*dst_s, &*off_s)
+    else {
+        hanzo_ml::bail!("vulkan kv append: expected vulkan storage for src/dst/off");
+    };
+    src_vk.copy2d_off(
+        dst_vk,
+        off_vk,
+        n_kv,                // rows: one per kv-head
+        head_dim,            // cols: contiguous elements per head
+        head_dim,            // src_stride1: consecutive src heads (q=1)
+        capacity * head_dim, // dst_stride1: cache head slab
+        src_l.start_offset(),
+        head_dim, // off_mult: position -> element offset (cache row width)
+    )
 }
 
 #[cfg(feature = "metal")]
