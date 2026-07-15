@@ -49,12 +49,15 @@ OUT="${OUT:-$(mktemp -d "${TMPDIR:-/tmp}/bench_vk_graph.XXXXXX")}"
 mkdir -p "$OUT"
 echo "out-dir: $OUT" >&2
 
-# name|prompt|max_tokens — long prompts amortize a capture, `short` must stay pure eager.
+# name|prompt|max_tokens. `short` stays pure eager (sub-breakeven); `deep` runs past the 512-token
+# CACHE_GROW_SIZE boundary so the depth regime (recapture + growing attention) is guarded, not just
+# the shallow one; the rest amortize a single capture.
 PROMPTS=(
   "prose|Write a detailed paragraph about the ocean.|$GEN"
   "numbers|Count from 1 to 40, writing each number in words, one per line.|$GEN"
   "code|Write a Rust function that parses an IPv4 address string into [u8;4] with error handling.|$GEN"
   "short|Reply with exactly: The quick brown fox jumps over the lazy dog.|24"
+  "deep|Write an extremely long, detailed, continuous essay about the history of the ocean. Do not stop early.|1024"
 )
 
 serve() { # mode: on|off
@@ -131,6 +134,13 @@ for name in sorted({k.rsplit("_", 1)[0] for k in tps}):
         # Sub-breakeven timing is startup-dominated noise; identity + the autoshape gate below
         # (zero captures) are the real proof it runs the eager path. Reported, not gated.
         rows[name]["gate"] = "reported (see autoshape gate)"
+    elif name == "deep":
+        # Past the 512-token recapture boundary: guard that the graph does NOT regress at depth
+        # (measured a growing win there — eager slows with attention while replay holds). Held to
+        # no-regression rather than the shallow mean, its own regime.
+        ok = delta >= -max_loss
+        rows[name]["gate"] = "ok (no depth regression)" if ok else f"DEPTH REGRESSION beyond {max_loss}%"
+        fail |= not ok
     else:
         ok = delta >= -max_loss
         rows[name]["gate"] = "ok" if ok else f"REGRESSION beyond {max_loss}%"
