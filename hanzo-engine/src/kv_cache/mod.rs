@@ -195,7 +195,12 @@ impl KvCache {
     /// shared meta. Requires a Normal cache already allocated by an eager warmup step; the caller
     /// advances `current_seq_len` (this method performs only the device write).
     #[cfg(feature = "vulkan")]
-    pub fn append_graph(&mut self, k: &Tensor, v: &Tensor, off: &Tensor) -> Result<(Tensor, Tensor)> {
+    pub fn append_graph(
+        &mut self,
+        k: &Tensor,
+        v: &Tensor,
+        off: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
         let (kc, vc) = match self {
             Self::Normal { k, v } => (k, v),
             _ => hanzo_ml::bail!("vulkan decode graph: append_graph requires a Normal KV cache"),

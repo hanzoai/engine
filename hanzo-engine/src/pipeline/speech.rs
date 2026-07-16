@@ -498,12 +498,13 @@ impl Loader for SpeechLoader {
                 // DiT runs bf16 for Blackwell tensor cores (2x/forward, spectrogram-identical audio);
                 // f16 is unusable here, the 12800-wide GLU overflows its range to NaN. F32 islands for
                 // the RMS variance, LiteLA normaliser and RoPE phase live in AceStepTransformer.
-                let dit_vb = load_component(vec![paths.weights[1].clone()], hanzo_ml::DType::BF16, |n| {
-                    !n.contains(".add_")
-                        && !n.contains(".to_add_out")
-                        && !n.starts_with("lyric")
-                        && !n.starts_with("projectors")
-                })?;
+                let dit_vb =
+                    load_component(vec![paths.weights[1].clone()], hanzo_ml::DType::BF16, |n| {
+                        !n.contains(".add_")
+                            && !n.contains(".to_add_out")
+                            && !n.starts_with("lyric")
+                            && !n.starts_with("projectors")
+                    })?;
                 let dcae_vb = load_component(vec![paths.weights[2].clone()], f32, |n| {
                     n.starts_with("decoder.")
                 })?;

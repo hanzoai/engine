@@ -102,7 +102,13 @@ pub async fn serve_listener(
 pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind((cfg.host.as_str(), cfg.port)).await?;
     tracing::info!("hanzo-router proxy listening on {}:{}", cfg.host, cfg.port);
-    serve_listener(listener, cfg.balancer, cfg.probe_interval, cfg.upstream_model).await
+    serve_listener(
+        listener,
+        cfg.balancer,
+        cfg.probe_interval,
+        cfg.upstream_model,
+    )
+    .await
 }
 
 /// Forward any non-admin path to a chosen replica, retrying past replicas that
@@ -130,7 +136,9 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request) -> Response {
     let body_bytes = match (state.upstream_model.as_deref(), json) {
         (Some(um), Some(mut j)) => {
             j["model"] = Value::String(um.to_string());
-            serde_json::to_vec(&j).map(Bytes::from).unwrap_or(body_bytes)
+            serde_json::to_vec(&j)
+                .map(Bytes::from)
+                .unwrap_or(body_bytes)
         }
         _ => body_bytes,
     };
@@ -596,9 +604,14 @@ mod e2e {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let paddr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            serve_listener(listener, balancer, Duration::from_secs(60), Some("default".into()))
-                .await
-                .unwrap()
+            serve_listener(
+                listener,
+                balancer,
+                Duration::from_secs(60),
+                Some("default".into()),
+            )
+            .await
+            .unwrap()
         });
         let base = format!("http://{paddr}");
         let client = reqwest::Client::new();

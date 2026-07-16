@@ -259,7 +259,13 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
             // The streamed bank is consumed only by `indexed_moe_forward`.
             let is_expert_bank = is_routed_expert_bank(
                 name,
-                self.contents[i].tensor_infos.get(name).unwrap().shape.dims().len(),
+                self.contents[i]
+                    .tensor_infos
+                    .get(name)
+                    .unwrap()
+                    .shape
+                    .dims()
+                    .len(),
             );
             if is_expert_bank && hanzo_ml::quantized::expert_stream::enabled() {
                 if let Some(path) = self.stream_paths.get(i).cloned() {

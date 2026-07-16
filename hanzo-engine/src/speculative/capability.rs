@@ -27,8 +27,5 @@ use hanzo_ml::Result;
 /// not implement this trait, and [`crate::pipeline`] reports that honestly.
 pub trait SelfSpeculative {
     /// Build the self-speculative proposer for this model from `cfg`.
-    fn attach_mtp(
-        &self,
-        cfg: &MtpConfig,
-    ) -> Result<Box<dyn SpeculativeProposer + Send + Sync>>;
+    fn attach_mtp(&self, cfg: &MtpConfig) -> Result<Box<dyn SpeculativeProposer + Send + Sync>>;
 }

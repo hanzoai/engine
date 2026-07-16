@@ -125,7 +125,9 @@ fn depthwise_conv2d(x: &Tensor, w: &Tensor, p: usize) -> Result<Tensor> {
         let row = xp.narrow(2, kh, h)?;
         let wr = w.narrow(2, kh, 1)?;
         for kw in 0..k {
-            let term = row.narrow(3, kw, wd)?.broadcast_mul(&wr.narrow(3, kw, 1)?)?;
+            let term = row
+                .narrow(3, kw, wd)?
+                .broadcast_mul(&wr.narrow(3, kw, 1)?)?;
             acc = Some(match acc {
                 Some(a) => (a + term)?,
                 None => term,
@@ -159,7 +161,9 @@ impl GlumbConv {
         let depth_w = dvb
             .get((hidden * 2, 1, 3, 3), "weight")?
             .reshape((1, hidden * 2, 3, 3))?;
-        let depth_b = dvb.get(hidden * 2, "bias")?.reshape((1, hidden * 2, 1, 1))?;
+        let depth_b = dvb
+            .get(hidden * 2, "bias")?
+            .reshape((1, hidden * 2, 1, 1))?;
         let conv_point = conv2d_no_bias(
             hidden,
             channels,
@@ -210,7 +214,10 @@ impl MultiscaleProj {
             ..Default::default()
         };
         let proj_out = conv2d_no_bias(ch, ch, 1, out_cfg, vb.pp("proj_out"))?;
-        Ok(Self { proj_in_w, proj_out })
+        Ok(Self {
+            proj_in_w,
+            proj_out,
+        })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
