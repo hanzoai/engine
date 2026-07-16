@@ -38,22 +38,51 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
                 .map(|n| n as usize)
         };
 
-        // deepseek2 (incl. GLM-4.7-Flash) and glm-dsa (GLM-5.2) run the un-absorbed MLA path eagerly:
-        // they materialize full per-head K/V, so the KV cache is n_head x q_head_dim/v_head_dim, not
-        // the compressed MQA metadata (head_count_kv=1, key_length=kv_lora+rope).
+        // The MLA archs -- deepseek2 (incl. GLM-4.7-Flash) and glm-dsa (GLM-5.2) -- cache K/V in one of
+        // two shapes, and the engine's preallocation MUST match what the model's decode appends:
+        //
+        //   * materialized (default): the eager path reconstructs full per-head K/V from the latent,
+        //     so the cache is `n_head x q_head_dim` / `n_head x v_head_dim`.
+        //   * absorbed (`MLA_ABSORB=1`): `kv_b` folds into the query/output and the cache holds only
+        //     the compressed latent under ONE shared head -- `k = [1, kv_lora + qk_rope]` (the ckv
+        //     concatenated with the shared RoPE key) and `v = [1, kv_lora]` (the ckv itself). This is
+        //     the GGUF's own MQA metadata shape, and it is ~30x smaller per token, which is what makes
+        //     long context and multi-sequence batching fit.
+        //
+        // Both paths read `perf_flags::mla_absorb_enabled`, so they cannot disagree.
         if arch == "deepseek2" || arch == "glm-dsa" {
             let n_head = u(&format!("{arch}.attention.head_count")).unwrap();
             let qk_rope = u(&format!("{arch}.rope.dimension_count")).unwrap_or(0);
+            let max_seq_len = u(&format!("{arch}.context_length")).unwrap();
+            let hidden_size = u(&format!("{arch}.embedding_length")).unwrap();
+            let num_layers = u(&format!("{arch}.block_count")).unwrap();
+
+            if crate::perf_flags::mla_absorb_enabled() {
+                // Mirrors `forward_attn_absorbed`'s append exactly: k_latent = cat(ckv, k_pe), v = ckv.
+                let kv_lora = u(&format!("{arch}.attention.kv_lora_rank")).expect(
+                    "absorbed MLA needs attention.kv_lora_rank in the GGUF metadata (MLA arch)",
+                );
+                return Self {
+                    max_seq_len,
+                    hidden_size,
+                    num_attn_heads: n_head,
+                    num_kv_heads: 1,
+                    num_layers,
+                    key_length: Some(kv_lora + qk_rope),
+                    value_length: Some(kv_lora),
+                };
+            }
+
             let q_head_dim = u(&format!("{arch}.attention.key_length_mla")).unwrap_or_else(|| {
                 u(&format!("{arch}.attention.key_length")).unwrap_or(0) + qk_rope
             });
             let v_head_dim = u(&format!("{arch}.attention.value_length_mla")).unwrap_or(q_head_dim);
             return Self {
-                max_seq_len: u(&format!("{arch}.context_length")).unwrap(),
-                hidden_size: u(&format!("{arch}.embedding_length")).unwrap(),
+                max_seq_len,
+                hidden_size,
                 num_attn_heads: n_head,
                 num_kv_heads: n_head,
-                num_layers: u(&format!("{arch}.block_count")).unwrap(),
+                num_layers,
                 key_length: Some(q_head_dim),
                 value_length: Some(v_head_dim),
             };
