@@ -39,6 +39,7 @@ static METAL_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "rocm")]
 static ROCM_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 static FLASHINFER_DECODE_ENABLED: OnceLock<bool> = OnceLock::new();
+static MLA_ABSORB_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "vulkan")]
 static VULKAN_FUSED_ATTN_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "vulkan")]
@@ -117,4 +118,19 @@ pub(crate) fn flashinfer_decode_enabled() -> bool {
     // No cross-backend sibling: FlashInfer is one decode-kernel selector, so only its own name and the
     // PERF master gate it.
     *FLASHINFER_DECODE_ENABLED.get_or_init(|| resolve("FLASHINFER_DECODE", None, true))
+}
+
+// Absorbed-MLA decode (DeepSeek weight absorption) for the MLA archs (deepseek2 / glm-dsa). When on,
+// the KV cache holds only the compressed latent `[kv_lora + qk_rope]` per token instead of the
+// materialized per-head K/V, and `kv_b` folds into the query (`q_nope @ w_uk`) and out of the context
+// (`(att @ ckv) @ w_uv_t`). Algebraically identical to the materialized path, so decode is
+// token-for-token equal in exact arithmetic -- but absorption reassociates the score/context
+// reductions, so float rounding differs and a near-tie argmax can in principle flip (the same
+// shape-dependent-kernel caveat as the MTP/CUDA tiers). Device-agnostic: it is a different
+// factorization of the same math, not a kernel.
+//
+// This gates BOTH the model's decode path and the KV-cache shape the engine preallocates
+// (`ContentConfig` reports the latent dims when it is on) -- they must agree, so they read one flag.
+pub(crate) fn mla_absorb_enabled() -> bool {
+    *MLA_ABSORB_ENABLED.get_or_init(|| resolve("MLA_ABSORB", None, false))
 }
