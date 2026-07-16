@@ -24,6 +24,7 @@ hanzo-server-core = { workspace = true }
 hanzo = { workspace = true }
 hanzo-sandbox = { workspace = true }
 hanzo-ml = { workspace = true }
+hanzo-train = { workspace = true }
 
 clap = { workspace = true }
 clap_complete = "4.5"
