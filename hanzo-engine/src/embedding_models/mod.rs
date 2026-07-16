@@ -1,3 +1,4 @@
+pub(crate) mod bert;
 pub(crate) mod embedding_gemma;
 pub(crate) mod inputs_processor;
 mod layers;
