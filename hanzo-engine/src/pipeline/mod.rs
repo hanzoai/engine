@@ -58,7 +58,7 @@ pub use jepa_encoder::JepaEncoderLoader;
 use llguidance::toktrie::TokEnv;
 pub use loaders::{
     animation_loader, AdapterKind, AnimationComponents, AnimationLoaderType, AnimationModelLoader,
-    AutoDeviceMapParams, AutoEmbeddingLoader, AutoMultimodalLoader, AutoNormalLoader,
+    AutoDeviceMapParams, AutoEmbeddingLoader, AutoMultimodalLoader, AutoNormalLoader, BertLoader,
     DeepSeekV2Loader, DeepSeekV3Loader, DeepSeekV4Loader, DeviceMappedModelLoader,
     DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, DitComponents, EchoMimicV3Loader,
     EmbeddingGemmaLoader, EmbeddingLoaderType, EmbeddingModel, EmbeddingModelLoader,

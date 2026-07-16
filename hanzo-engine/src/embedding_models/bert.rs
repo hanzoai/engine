@@ -437,11 +437,7 @@ impl BertEmbeddingModel {
 }
 
 impl EmbeddingModel for BertEmbeddingModel {
-    fn forward(
-        &self,
-        input_ids: &Tensor,
-        _flash_params: &FlashParams,
-    ) -> hanzo_ml::Result<Tensor> {
+    fn forward(&self, input_ids: &Tensor, _flash_params: &FlashParams) -> hanzo_ml::Result<Tensor> {
         tracing::debug!(
             "BertEmbeddingModel forward - input_ids shape: {:?}",
             input_ids.shape()
@@ -505,6 +501,162 @@ impl AnyMoeBaseModelMixin for BertEmbeddingModel {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DeviceMapSetting;
+    use hanzo_ml::safetensors;
+    use indicatif::MultiProgress;
+    use rand::{rngs::StdRng, Rng, SeedableRng};
+
+    fn loading_metadata(device: &Device, num_layers: usize) -> Result<NormalLoadingMetadata> {
+        let mapper = DeviceMapSetting::dummy().into_mapper(
+            num_layers,
+            device,
+            None,
+            std::slice::from_ref(device),
+        )?;
+        Ok(NormalLoadingMetadata {
+            mapper,
+            loading_isq: false,
+            real_device: device.clone(),
+            multi_progress: Arc::new(MultiProgress::new()),
+            matformer_slicing_config: None,
+        })
+    }
+
+    // Random-init checkpoint with the exact sentence-transformers BERT tensor keys (no
+    // `bert.` prefix, `encoder.layer.{i}`, post-norm blocks).
+    fn write_checkpoint(cfg: &BertConfig, dir: &std::path::Path) -> Result<std::path::PathBuf> {
+        let mut rng = StdRng::seed_from_u64(0xbe27);
+        let mut t = |shape: &[usize]| -> Result<Tensor> {
+            let n: usize = shape.iter().product();
+            let data: Vec<f32> = (0..n).map(|_| rng.random_range(-0.08f32..0.08)).collect();
+            Tensor::from_vec(data, shape, &Device::Cpu)
+        };
+        let one = |n: usize| Tensor::ones((n,), DType::F32, &Device::Cpu);
+        let zero = |n: usize| Tensor::zeros((n,), DType::F32, &Device::Cpu);
+        let h = cfg.hidden_size;
+        let i = cfg.intermediate_size;
+        let mut ts = std::collections::HashMap::new();
+        ts.insert(
+            "embeddings.word_embeddings.weight".to_string(),
+            t(&[cfg.vocab_size, h])?,
+        );
+        ts.insert(
+            "embeddings.position_embeddings.weight".to_string(),
+            t(&[cfg.max_position_embeddings, h])?,
+        );
+        ts.insert(
+            "embeddings.token_type_embeddings.weight".to_string(),
+            t(&[cfg.type_vocab_size, h])?,
+        );
+        ts.insert("embeddings.LayerNorm.weight".to_string(), one(h)?);
+        ts.insert("embeddings.LayerNorm.bias".to_string(), zero(h)?);
+        for l in 0..cfg.num_hidden_layers {
+            let p = format!("encoder.layer.{l}");
+            for proj in ["query", "key", "value"] {
+                ts.insert(format!("{p}.attention.self.{proj}.weight"), t(&[h, h])?);
+                ts.insert(format!("{p}.attention.self.{proj}.bias"), zero(h)?);
+            }
+            ts.insert(format!("{p}.attention.output.dense.weight"), t(&[h, h])?);
+            ts.insert(format!("{p}.attention.output.dense.bias"), zero(h)?);
+            ts.insert(format!("{p}.attention.output.LayerNorm.weight"), one(h)?);
+            ts.insert(format!("{p}.attention.output.LayerNorm.bias"), zero(h)?);
+            ts.insert(format!("{p}.intermediate.dense.weight"), t(&[i, h])?);
+            ts.insert(format!("{p}.intermediate.dense.bias"), zero(i)?);
+            ts.insert(format!("{p}.output.dense.weight"), t(&[h, i])?);
+            ts.insert(format!("{p}.output.dense.bias"), zero(h)?);
+            ts.insert(format!("{p}.output.LayerNorm.weight"), one(h)?);
+            ts.insert(format!("{p}.output.LayerNorm.bias"), zero(h)?);
+        }
+        let path = dir.join("model.safetensors");
+        safetensors::save(&ts, &path)?;
+        Ok(path)
+    }
+
+    fn load_toy(
+        path: &std::path::Path,
+        cfg: &BertConfig,
+        device: &Device,
+    ) -> Result<BertEmbeddingModel> {
+        let vb = crate::utils::varbuilder_utils::from_mmaped_safetensors(
+            vec![path.to_path_buf()],
+            Vec::new(),
+            Some(DType::F32),
+            device,
+            vec![None],
+            true,
+            None,
+            |_| true,
+            Arc::new(|_| crate::utils::varbuilder_utils::DeviceForLoadTensor::Base),
+        )?;
+        let metadata = loading_metadata(device, cfg.num_hidden_layers)?;
+        BertEmbeddingModel::new(cfg, vb, false, metadata, AttentionImplementation::Eager)
+    }
+
+    // Mean-pool over tokens then L2-normalize — the sentence-transformers default that the
+    // pipeline applies on top of the model's token states.
+    fn mean_pool_norm(hidden: &Tensor) -> Result<Tensor> {
+        let pooled = hidden.mean(1)?; // (b, hidden)
+        let norm = pooled.sqr()?.sum_keepdim(1)?.sqrt()?;
+        pooled.broadcast_div(&norm)
+    }
+
+    #[test]
+    fn bert_registry_dispatch() {
+        use crate::pipeline::EmbeddingLoaderType;
+        assert_eq!(
+            EmbeddingLoaderType::from_causal_lm_name("BertModel").unwrap(),
+            EmbeddingLoaderType::Bert
+        );
+        assert_eq!(
+            EmbeddingLoaderType::from_causal_lm_name("BertForMaskedLM").unwrap(),
+            EmbeddingLoaderType::Bert
+        );
+    }
+
+    #[test]
+    fn bert_toy_forward_embeds() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = BertConfig {
+            vocab_size: 24,
+            hidden_size: 16,
+            num_hidden_layers: 2,
+            num_attention_heads: 4,
+            intermediate_size: 32,
+            hidden_act: Activation::Gelu,
+            layer_norm_eps: 1e-12,
+            max_position_embeddings: 16,
+            type_vocab_size: 2,
+            pad_token_id: Some(0),
+        };
+        let dir = tempfile::tempdir().map_err(hanzo_ml::Error::wrap)?;
+        let path = write_checkpoint(&cfg, dir.path())?;
+        let model = load_toy(&path, &cfg, &device)?;
+        let flash = FlashParams::empty(true);
+
+        let ids = Tensor::from_vec(vec![1u32, 2, 3, 4, 5], (1, 5), &device)?;
+        let hidden = model.forward(&ids, &flash)?;
+        assert_eq!(hidden.dims3()?, (1, 5, cfg.hidden_size));
+        let flat = hidden.flatten_all()?.to_vec1::<f32>()?;
+        assert!(
+            flat.iter().all(|x| x.is_finite()),
+            "embeddings must be finite"
+        );
+
+        // Sanity: pooled+normalized embedding of the same sequence is self-identical
+        // (cosine == 1), and a different sequence differs (cosine < 1).
+        let e1 = mean_pool_norm(&hidden)?;
+        let e1b = mean_pool_norm(&model.forward(&ids, &flash)?)?;
+        let ids2 = Tensor::from_vec(vec![6u32, 7, 8, 9, 10], (1, 5), &device)?;
+        let e2 = mean_pool_norm(&model.forward(&ids2, &flash)?)?;
+        let cos =
+            |a: &Tensor, b: &Tensor| -> Result<f32> { a.mul(b)?.sum_all()?.to_scalar::<f32>() };
+        assert!(
+            (cos(&e1, &e1b)? - 1.0).abs() < 1e-5,
+            "identical inputs must cosine to 1"
+        );
+        assert!(cos(&e1, &e2)? < 0.999, "distinct inputs must differ");
+        Ok(())
+    }
 
     #[test]
     fn test_bert_config_defaults() {
