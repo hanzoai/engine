@@ -21,7 +21,7 @@ use crate::{
 /// Music generation endpoint handler.
 #[utoipa::path(
     post,
-    tag = "Mistral.rs",
+    tag = "Hanzo",
     path = "/v1/audio/music",
     request_body = MusicGenerationRequest,
     responses((status = 200, description = "Music generation"))
