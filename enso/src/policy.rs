@@ -19,7 +19,7 @@ pub const K: usize = PROFILE_DIM;
 pub const DK: usize = D * K;
 
 /// The base policy: a `D x K` row-major weight matrix.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Policy {
     pub w: Vec<f64>,
 }
