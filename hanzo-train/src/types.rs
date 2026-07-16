@@ -99,7 +99,13 @@ impl LoraConfig {
     /// The seven attention + MLP projections adapted by default (Llama / Qwen2 family).
     pub fn default_target_modules() -> Vec<String> {
         [
-            "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -167,7 +173,10 @@ pub struct AdamParams {
 
 impl AdamParams {
     pub fn new(lr: f64) -> Self {
-        Self { lr, ..Self::default() }
+        Self {
+            lr,
+            ..Self::default()
+        }
     }
 
     pub fn to_hanzo(self) -> hanzo_nn::ParamsAdamW {
