@@ -275,8 +275,15 @@ impl LayerWeights {
     ) -> Result<Tensor> {
         let residual = &x;
         let xn = self.attention_norm.forward(&x)?;
-        let attn =
-            self.forward_attn(&xn, mask, start_offsets, positions, kv_cache, metadata, vk_graph)?;
+        let attn = self.forward_attn(
+            &xn,
+            mask,
+            start_offsets,
+            positions,
+            kv_cache,
+            metadata,
+            vk_graph,
+        )?;
         let (sum, xn) = self.ffn_norm.forward_of_sum(&attn, residual)?;
         let residual = &sum;
         let xn = self.mlp.forward(&xn)?;
@@ -491,8 +498,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let (tok_embeddings, norm, output) = if is_head {
             let qtok = ct.tensor("token_embd.weight", device)?;
             let tok = Embedding::new(qtok.dequantize(device)?, embedding_length);
-            let norm =
-                QRmsNorm::new_dtype(ct.tensor("output_norm.weight", device)?, rms_norm_eps, dtype)?;
+            let norm = QRmsNorm::new_dtype(
+                ct.tensor("output_norm.weight", device)?,
+                rms_norm_eps,
+                dtype,
+            )?;
             let out = if !ct.has_tensor("output.weight") {
                 ct.tensor("token_embd.weight", device)?
             } else {
