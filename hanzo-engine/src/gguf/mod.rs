@@ -1,5 +1,7 @@
 mod chat_template;
 mod content;
+#[cfg(test)]
+mod export_test;
 mod gguf_tokenizer;
 use strum::EnumString;
 
