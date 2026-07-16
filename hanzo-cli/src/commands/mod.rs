@@ -10,6 +10,7 @@ pub(crate) mod quant;
 mod quantize;
 mod run;
 pub(crate) mod serve;
+mod train;
 mod tune;
 
 pub use bench::{run_bench, BenchRunConfig};
@@ -20,4 +21,5 @@ pub use login::run_login;
 pub use quantize::run_quantize;
 pub use run::run_interactive;
 pub use serve::run_server;
+pub use train::{run_train, TrainRunConfig};
 pub use tune::run_tune;
