@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::types::ExtractedState;
-use crate::video::fetch_bytes;
+use crate::media::{self, Origin};
 
 const DEFAULT_STEPS: usize = 25;
 
@@ -342,11 +342,11 @@ async fn generate(req: &ThreeDGenerationRequest) -> anyhow::Result<GenOutput> {
     }
 }
 
-/// Resolve the request `image` field to raw image bytes: URL / data-URL / path via
-/// [`fetch_bytes`], else treat it as raw base64.
+/// Resolve the request `image` field to raw image bytes: a URL or data URL via
+/// [`media::load`], else treat it as raw base64.
 async fn decode_image_input(image: &str) -> anyhow::Result<Vec<u8>> {
-    match fetch_bytes(image).await {
-        Ok(bytes) => Ok(bytes),
+    match media::load(image, Origin::Network).await {
+        Ok(media) => Ok(media.bytes),
         Err(_) => Ok(STANDARD.decode(image.trim())?),
     }
 }

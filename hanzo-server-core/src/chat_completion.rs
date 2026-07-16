@@ -44,6 +44,7 @@ use crate::{
     router::AgenticDefaults,
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedState, OnChunkCallback, OnDoneCallback, SharedState},
+    media::Origin,
     util::{parse_audio_url, parse_image_url, sanitize_error_message, validate_model_name},
     video::parse_video_url,
 };
@@ -810,7 +811,7 @@ pub async fn parse_request(
                 // Parse images
                 let mut images = Vec::new();
                 for url_unparsed in image_urls {
-                    let image = parse_image_url(&url_unparsed)
+                    let image = parse_image_url(&url_unparsed, Origin::Network)
                         .await
                         .context(format!("Failed to parse image resource: {url_unparsed}"))?;
                     images.push(image);
@@ -819,7 +820,7 @@ pub async fn parse_request(
                 // Parse audios
                 let mut audios = Vec::new();
                 for url_unparsed in audio_urls {
-                    let audio = parse_audio_url(&url_unparsed)
+                    let audio = parse_audio_url(&url_unparsed, Origin::Network)
                         .await
                         .context(format!("Failed to parse audio resource: {url_unparsed}"))?;
                     audios.push(audio);
@@ -828,7 +829,7 @@ pub async fn parse_request(
                 // Parse videos
                 let mut videos = Vec::new();
                 for url_unparsed in video_urls {
-                    let video = parse_video_url(&url_unparsed, None)
+                    let video = parse_video_url(&url_unparsed, None, Origin::Network)
                         .await
                         .context(format!("Failed to parse video resource: {url_unparsed}"))?;
                     videos.push(video);

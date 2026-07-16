@@ -278,7 +278,7 @@ async fn generate(req: &VideoGenerationRequest) -> anyhow::Result<Vec<u8>> {
     };
     let rendered = match &req.image {
         Some(src) => {
-            let img = crate::util::parse_image_url(src).await?;
+            let img = crate::util::parse_image_url(src, crate::media::Origin::Network).await?;
             wan_i2v_generate(&params, &img)?
         }
         None => wan_t2v_generate(&params)?,

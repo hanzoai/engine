@@ -1,133 +1,62 @@
 //! ## General utilities.
 
+use anyhow::Context;
 use hanzo_engine::AudioInput;
 use hanzo_engine::Hanzo;
 use image::DynamicImage;
 use std::error::Error;
 use std::sync::Arc;
-use tokio::{
-    fs::{self, File},
-    io::AsyncReadExt,
-};
+
+use crate::media::{self, Origin};
 
 /// Parses and loads an image from a URL, file path, or data URL.
-///
-/// This function accepts various input formats and attempts to parse them in order:
-/// 1. First tries to parse as a complete URL (http/https/file/data schemes)
-/// 2. If that fails, checks if it's a local file path and converts to file URL
-/// 3. Finally falls back to treating it as a malformed URL and returns an error
 ///
 /// ### Arguments
 ///
 /// * `url_unparsed` - A string that can be:
 ///   - An HTTP/HTTPS URL (e.g., "<https://example.com/image.png>")
-///   - A file path (e.g., "/path/to/image.jpg" or "image.png")
 ///   - A data URL with base64 encoded image (e.g., "data:image/png;base64,...")
-///   - A file URL (e.g., "file:///path/to/image.jpg")
+///   - A file path (e.g., "/path/to/image.jpg" or "image.png"), under
+///     [`Origin::Operator`]
+///   - A file URL (e.g., "file:///path/to/image.jpg"), under [`Origin::Operator`]
+/// * `origin` - who supplied `url_unparsed`. See [`Origin`] for the sources each
+///   one reaches.
 ///
 /// ### Examples
 ///
 /// ```ignore
-/// use hanzo_server_core::util::parse_image_url;
+/// use hanzo_server_core::{media::Origin, util::parse_image_url};
 ///
-/// // Load from HTTP URL
-/// let image = parse_image_url("https://example.com/photo.jpg").await?;
+/// // A URL named in an API request.
+/// let image = parse_image_url("https://example.com/photo.jpg", Origin::Network).await?;
 ///
-/// // Load from local file path
-/// let image = parse_image_url("./assets/logo.png").await?;
+/// // A path named by the operator.
+/// let image = parse_image_url("./assets/logo.png", Origin::Operator).await?;
 ///
-/// // Load from data URL
-/// let image = parse_image_url("data:image/png;base64,iVBORw0KGgoAAAANS...").await?;
-///
-/// // Load from file URL
-/// let image = parse_image_url("file:///home/user/picture.jpg").await?;
+/// // A data URL.
+/// let image = parse_image_url("data:image/png;base64,iVBORw0KGgoAAAANS...", Origin::Network).await?;
 /// ```
-pub async fn parse_image_url(url_unparsed: &str) -> Result<DynamicImage, anyhow::Error> {
-    let url = if let Ok(url) = url::Url::parse(url_unparsed) {
-        url
-    } else if File::open(url_unparsed).await.is_ok() {
-        url::Url::from_file_path(std::path::absolute(url_unparsed)?)
-            .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url_unparsed))?
-    } else {
-        anyhow::bail!(
-            "Invalid source '{}': not a valid URL (http/https/data) and file not found on server. \
-             Use a full URL, a data URL, or an absolute file path that exists on the server.",
-            url_unparsed
-        )
-    };
-
-    let bytes = if url.scheme() == "http" || url.scheme() == "https" {
-        // Read from http
-        match reqwest::get(url.clone()).await {
-            Ok(http_resp) => http_resp.bytes().await?.to_vec(),
-            Err(e) => anyhow::bail!(e),
-        }
-    } else if url.scheme() == "file" {
-        let path = url
-            .to_file_path()
-            .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url))?;
-
-        if let Ok(mut f) = File::open(&path).await {
-            // Read from local file
-            let metadata = fs::metadata(&path).await?;
-            let mut buffer = vec![0; metadata.len() as usize];
-            f.read_exact(&mut buffer).await?;
-            buffer
-        } else {
-            anyhow::bail!("Could not open file at path: {}", url);
-        }
-    } else if url.scheme() == "data" {
-        // Decode with base64
-        let data_url = data_url::DataUrl::process(url.as_str())?;
-        data_url.decode_to_vec()?.0
-    } else {
-        anyhow::bail!("Unsupported URL scheme: {}", url.scheme());
-    };
-
-    Ok(image::load_from_memory(&bytes)?)
+pub async fn parse_image_url(
+    url_unparsed: &str,
+    origin: Origin,
+) -> Result<DynamicImage, anyhow::Error> {
+    let media = media::load(url_unparsed, origin)
+        .await
+        .with_context(|| format!("Loading image: {url_unparsed}"))?;
+    Ok(image::load_from_memory(&media.bytes)?)
 }
 
 /// Parses and loads an audio file from a URL, file path, or data URL.
-pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::Error> {
-    let url = if let Ok(url) = url::Url::parse(url_unparsed) {
-        url
-    } else if File::open(url_unparsed).await.is_ok() {
-        url::Url::from_file_path(std::path::absolute(url_unparsed)?)
-            .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url_unparsed))?
-    } else {
-        anyhow::bail!(
-            "Invalid source '{}': not a valid URL (http/https/data) and file not found on server. \
-             Use a full URL, a data URL, or an absolute file path that exists on the server.",
-            url_unparsed
-        )
-    };
-
-    let bytes = if url.scheme() == "http" || url.scheme() == "https" {
-        match reqwest::get(url.clone()).await {
-            Ok(http_resp) => http_resp.bytes().await?.to_vec(),
-            Err(e) => anyhow::bail!(e),
-        }
-    } else if url.scheme() == "file" {
-        let path = url
-            .to_file_path()
-            .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url))?;
-
-        if let Ok(mut f) = File::open(&path).await {
-            let metadata = fs::metadata(&path).await?;
-            let mut buffer = vec![0; metadata.len() as usize];
-            f.read_exact(&mut buffer).await?;
-            buffer
-        } else {
-            anyhow::bail!("Could not open file at path: {}", url);
-        }
-    } else if url.scheme() == "data" {
-        let data_url = data_url::DataUrl::process(url.as_str())?;
-        data_url.decode_to_vec()?.0
-    } else {
-        anyhow::bail!("Unsupported URL scheme: {}", url.scheme());
-    };
-
-    AudioInput::from_bytes(&bytes)
+///
+/// Mirrors [`parse_image_url`], including the sources each [`Origin`] reaches.
+pub async fn parse_audio_url(
+    url_unparsed: &str,
+    origin: Origin,
+) -> Result<AudioInput, anyhow::Error> {
+    let media = media::load(url_unparsed, origin)
+        .await
+        .with_context(|| format!("Loading audio: {url_unparsed}"))?;
+    AudioInput::from_bytes(&media.bytes)
 }
 
 /// Validates that the requested model matches one of the loaded models.
@@ -227,22 +156,22 @@ mod tests {
     async fn test_parse_image_url() {
         // from URL
         let url = "https://www.rust-lang.org/logos/rust-logo-32x32.png";
-        let image = parse_image_url(url).await.unwrap();
+        let image = parse_image_url(url, Origin::Network).await.unwrap();
         assert_eq!(image.dimensions(), (32, 32));
 
         let url = "http://www.rust-lang.org/logos/rust-logo-32x32.png";
-        let image = parse_image_url(url).await.unwrap();
+        let image = parse_image_url(url, Origin::Network).await.unwrap();
         assert_eq!(image.dimensions(), (32, 32));
 
         // from file path
         let url = "resources/rust-logo-32x32.png";
-        let image = parse_image_url(url).await.unwrap();
+        let image = parse_image_url(url, Origin::Operator).await.unwrap();
         assert_eq!(image.dimensions(), (32, 32));
 
         // URL must be an absolute path
         let absolute_path = std::path::absolute(url).unwrap();
         let url = format!("file://{}", absolute_path.as_os_str().to_str().unwrap());
-        let image = parse_image_url(&url).await.unwrap();
+        let image = parse_image_url(&url, Origin::Operator).await.unwrap();
         assert_eq!(image.dimensions(), (32, 32));
 
         // from base64 encoded image (rust-logo-32x32.png)
@@ -285,15 +214,33 @@ mod tests {
         ";
 
         let url = format!("data:image/png;base64,{url}");
-        let image = parse_image_url(&url).await.unwrap();
+        let image = parse_image_url(&url, Origin::Network).await.unwrap();
         assert_eq!(image.dimensions(), (32, 32));
 
         // audio from base64
         let audio_b64 = "UklGRiYAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQIAAAAAAA==";
         let url = format!("data:audio/wav;base64,{audio_b64}");
-        let audio = parse_audio_url(&url).await.unwrap();
+        let audio = parse_audio_url(&url, Origin::Network).await.unwrap();
         assert_eq!(audio.sample_rate, 8000);
         assert_eq!(audio.samples.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn network_origin_reads_no_local_media() {
+        let path = std::path::absolute("resources/rust-logo-32x32.png").unwrap();
+
+        assert!(parse_image_url("resources/rust-logo-32x32.png", Origin::Network)
+            .await
+            .is_err());
+        assert!(
+            parse_image_url(&format!("file://{}", path.display()), Origin::Network)
+                .await
+                .is_err()
+        );
+        assert!(parse_audio_url("/etc/passwd", Origin::Network).await.is_err());
+        assert!(parse_audio_url("file:///etc/passwd", Origin::Network)
+            .await
+            .is_err());
     }
 
     #[test]

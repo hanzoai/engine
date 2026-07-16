@@ -233,6 +233,7 @@ pub mod files;
 pub mod handler_core;
 mod handlers;
 pub mod image_generation;
+pub mod media;
 pub mod model_registry;
 pub mod music_generation;
 pub mod openai;

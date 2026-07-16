@@ -21,7 +21,7 @@ use image::{DynamicImage, ImageFormat};
 use serde::{Deserialize, Serialize};
 
 use crate::types::ExtractedState;
-use crate::video::fetch_bytes;
+use crate::media::{self, Origin};
 
 const DEFAULT_TIMESTEPS: usize = 30;
 const DEFAULT_GUIDANCE: f64 = 1.5;
@@ -104,8 +104,8 @@ fn resolve_device() -> anyhow::Result<Device> {
 }
 
 async fn decode_image(src: &str) -> anyhow::Result<DynamicImage> {
-    let bytes = match fetch_bytes(src).await {
-        Ok(b) => b,
+    let bytes = match media::load(src, Origin::Network).await {
+        Ok(media) => media.bytes,
         Err(_) => STANDARD.decode(src.trim())?,
     };
     Ok(image::load_from_memory(&bytes)?)
