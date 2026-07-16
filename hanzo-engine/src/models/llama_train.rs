@@ -19,23 +19,29 @@
 //!
 //! CPU + F32 is the supported training config.
 
-// The in-crate consumer that drives this seam — the pipeline/CLI `hanzo train` entrypoint
-// that assembles a `hanzo_train::BaseModel` from a loaded model and calls
-// `hanzo_train::create_lora_training_client_from_engine` — lands in a separate change (the
-// `hanzo train` subcommand). Until then the seam is exercised by this module's tests.
-#![allow(dead_code)]
+// The `hanzo train` entrypoint drives this seam: [`load_llama_base_for_training`] assembles a
+// [`BaseModel`] from an engine-loaded [`Llama`] and hands it to
+// `hanzo_train::create_lora_training_client_from_engine`.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use hanzo_ml::{DType, Device, Result, Tensor};
-use hanzo_nn::VarMap;
 use hanzo_train::config::ModelConfig;
-use hanzo_train::lora::LoraDelta;
-use hanzo_train::model::{LoraModel, Weights};
-use hanzo_train::LoraConfig;
+use hanzo_train::model::Weights;
+use hanzo_train::BaseModel;
 
 use super::llama::{Config, Llama};
 use crate::pipeline::IsqModel;
+
+#[cfg(test)]
+use hanzo_nn::VarMap;
+#[cfg(test)]
+use hanzo_train::lora::LoraDelta;
+#[cfg(test)]
+use hanzo_train::model::LoraModel;
+#[cfg(test)]
+use hanzo_train::LoraConfig;
 
 /// Map the engine's llama [`Config`] onto the training decoder's config. The engine
 /// llama derives `head_dim` as `hidden_size / num_attention_heads`, which is exactly the
@@ -108,17 +114,165 @@ pub(crate) fn base_weights_for_training(model: &mut Llama) -> Result<HashMap<Str
     Ok(map)
 }
 
-/// A differentiable, LoRA-injected forward for the llama family, built over the engine's
-/// own [`Config`] and frozen base weights. Base weights stay frozen; only the LoRA `A`/`B`
-/// factors — registered in the caller's [`VarMap`] on the seven llama projections — train.
+/// Load a llama-family base model by Hugging Face id (or local directory) into an engine
+/// [`Llama`], then hand its config, tokenizer, and frozen (dequantized) base weights to
+/// `hanzo-train` as a [`BaseModel`].
 ///
-/// Reachable from outside the inference path so a trainer (e.g. `hanzo-train`) can drive
-/// LoRA fine-tuning over an engine-loaded model: build the base map with
-/// [`base_weights_for_training`], then [`LlamaTrainForward::new`].
+/// Returns `Ok(None)` when the model's architecture is not llama-family — the caller then
+/// falls back to hanzo-train's standalone loader. Otherwise this is the engine-backed source
+/// for `hanzo train`: LoRA fine-tunes against the engine's own loaded weights via
+/// [`hanzo_train::create_lora_training_client_from_engine`]. CPU + F32 is the supported
+/// training config.
+pub fn load_llama_base_for_training(
+    model_id: &str,
+    dtype: DType,
+    device: &Device,
+) -> anyhow::Result<Option<BaseModel>> {
+    use crate::device_map::DeviceMapSetting;
+    use crate::paged_attention::AttentionImplementation;
+    use crate::pipeline::NormalLoadingMetadata;
+    use indicatif::MultiProgress;
+    use std::sync::Arc;
+
+    let config_path = require(model_id, "config.json")?;
+    let config_text = std::fs::read_to_string(&config_path)?;
+    // Only the llama family routes through the engine extractor (the projection layout is
+    // llama-specific); everything else defers to the standalone loader.
+    if !is_llama_family(&config_text) {
+        return Ok(None);
+    }
+    let cfg: Config = serde_json::from_str(&config_text)?;
+
+    let tokenizer_path = require(model_id, "tokenizer.json")?;
+    let tokenizer =
+        tokenizers::Tokenizer::from_file(&tokenizer_path).map_err(anyhow::Error::msg)?;
+
+    let vb = crate::utils::varbuilder_utils::from_mmaped_safetensors(
+        weight_files(model_id)?,
+        Vec::new(),
+        Some(dtype),
+        device,
+        vec![None],
+        true,
+        None,
+        |_| true,
+        Arc::new(|_| crate::utils::varbuilder_utils::DeviceForLoadTensor::Base),
+    )?;
+
+    let mapper = DeviceMapSetting::dummy().into_mapper(
+        cfg.num_hidden_layers,
+        device,
+        None,
+        std::slice::from_ref(device),
+    )?;
+    let meta = NormalLoadingMetadata {
+        mapper,
+        loading_isq: false,
+        real_device: device.clone(),
+        multi_progress: Arc::new(MultiProgress::new()),
+        matformer_slicing_config: None,
+    };
+    let mut model = Llama::new(&cfg, vb, false, meta, AttentionImplementation::Eager)?;
+
+    let weights = base_weights_for_training(&mut model)?;
+    let (bos_token_id, eos_token_id) = special_token_ids(&config_text);
+
+    Ok(Some(BaseModel {
+        config: training_config(&cfg),
+        tokenizer,
+        weights: Weights::new(weights, dtype, device.clone()),
+        bos_token_id,
+        eos_token_id,
+    }))
+}
+
+/// Whether the config's first architecture resolves to the llama family.
+fn is_llama_family(config_text: &str) -> bool {
+    #[derive(serde::Deserialize, Default)]
+    struct Arch {
+        #[serde(default)]
+        architectures: Vec<String>,
+    }
+    let arch: Arch = serde_json::from_str(config_text).unwrap_or_default();
+    arch.architectures.first().is_some_and(|name| {
+        matches!(
+            crate::pipeline::NormalLoaderType::from_causal_lm_name(name),
+            Ok(crate::pipeline::NormalLoaderType::Llama)
+        )
+    })
+}
+
+/// Resolve a file from a local directory or a Hugging Face repo.
+fn resolve(model: &str, file: &str) -> anyhow::Result<Option<PathBuf>> {
+    let local = Path::new(model);
+    if local.is_dir() {
+        let p = local.join(file);
+        return Ok(p.exists().then_some(p));
+    }
+    let token = std::env::var("HF_TOKEN").ok();
+    let api = hf_hub::api::sync::ApiBuilder::new()
+        .with_token(token)
+        .build()?;
+    match api.model(model.to_string()).get(file) {
+        Ok(p) => Ok(Some(p)),
+        // A missing optional file (e.g. the shard index) is not an error.
+        Err(_) => Ok(None),
+    }
+}
+
+fn require(model: &str, file: &str) -> anyhow::Result<PathBuf> {
+    resolve(model, file)?.ok_or_else(|| anyhow::anyhow!("`{file}` not found for model `{model}`"))
+}
+
+/// The model's safetensors shard paths — the single file, or every shard in the index.
+fn weight_files(model: &str) -> anyhow::Result<Vec<PathBuf>> {
+    #[derive(serde::Deserialize)]
+    struct Index {
+        weight_map: HashMap<String, String>,
+    }
+    if let Some(index_path) = resolve(model, "model.safetensors.index.json")? {
+        let index: Index = serde_json::from_str(&std::fs::read_to_string(index_path)?)?;
+        let mut shards: Vec<String> = index.weight_map.into_values().collect();
+        shards.sort();
+        shards.dedup();
+        shards.into_iter().map(|s| require(model, &s)).collect()
+    } else {
+        Ok(vec![require(model, "model.safetensors")?])
+    }
+}
+
+/// Parse bos/eos ids from the model config (scalar or first-of-array).
+fn special_token_ids(config_text: &str) -> (Option<u32>, Option<u32>) {
+    #[derive(serde::Deserialize, Default)]
+    struct Special {
+        #[serde(default)]
+        bos_token_id: Option<serde_json::Value>,
+        #[serde(default)]
+        eos_token_id: Option<serde_json::Value>,
+    }
+    fn first_int(v: &serde_json::Value) -> Option<u32> {
+        match v {
+            serde_json::Value::Number(n) => n.as_u64().and_then(|x| u32::try_from(x).ok()),
+            serde_json::Value::Array(a) => a.first().and_then(first_int),
+            _ => None,
+        }
+    }
+    let s: Special = serde_json::from_str(config_text).unwrap_or_default();
+    (
+        s.bos_token_id.as_ref().and_then(first_int),
+        s.eos_token_id.as_ref().and_then(first_int),
+    )
+}
+
+/// A differentiable, LoRA-injected forward for the llama family, used by this module's tests
+/// to prove the extracted base weights train. The production `hanzo train` path drives the
+/// same [`LoraModel`] through [`hanzo_train::create_lora_training_client_from_engine`].
+#[cfg(test)]
 pub(crate) struct LlamaTrainForward {
     model: LoraModel,
 }
 
+#[cfg(test)]
 impl LlamaTrainForward {
     /// Build the training forward. `weights` are the frozen base tensors (HF-named);
     /// `varmap` receives the trainable LoRA factors.
