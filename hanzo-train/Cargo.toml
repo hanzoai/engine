@@ -1,0 +1,40 @@
+[package]
+name = "hanzo-train"
+readme = "../README.md"
+authors = ["Hanzo AI <dev@hanzo.ai>"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Native Rust LoRA fine-tuning for the Hanzo engine, shaped like the Tinker API."
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "hanzo-train"
+path = "src/bin/hanzo-train.rs"
+
+[dependencies]
+hanzo-ml.workspace = true
+hanzo-nn.workspace = true
+
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+safetensors.workspace = true
+# onig explicit: the workspace tokenizers dep is default-features=false, and a
+# standalone `cargo build -p hanzo-train` doesn't inherit a regex backend via
+# feature unification, so enable one here (matches the workspace's onig choice).
+tokenizers = { workspace = true, features = ["onig"] }
+hf-hub.workspace = true
+rand.workspace = true
+clap.workspace = true
+tracing-subscriber.workspace = true
+
+[features]
+cuda = ["hanzo-ml/cuda", "hanzo-nn/cuda"]
+metal = ["hanzo-ml/metal", "hanzo-nn/metal"]

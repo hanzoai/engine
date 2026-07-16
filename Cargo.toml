@@ -20,6 +20,7 @@ members = [
     "hanzo-sandbox",
     "hanzo-code-exec",
     "hanzo-film",
+    "hanzo-train",
 ]
 resolver = "2"
 
