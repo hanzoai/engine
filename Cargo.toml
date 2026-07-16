@@ -21,6 +21,7 @@ members = [
     "hanzo-code-exec",
     "hanzo-film",
     "hanzo-train",
+    "hanzo-router-retrain",
 ]
 resolver = "2"
 

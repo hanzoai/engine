@@ -1,0 +1,30 @@
+# Canonical hanzoai/tasks durable-cron entry for the router-heads retrain.
+#
+# STATUS: convergence reference, NOT auto-applied. The retrain job is spark-native
+# (it builds + runs the enso Rust `fit` on the GB10 box), and the in-cluster tasks
+# engine's RunJobActivity places k8s Jobs IN-cluster -- it cannot run work on spark
+# without a spark<->tasks bridge (a spark tasks-worker on a `router-retrain` queue,
+# or a spark HTTP receiver the poke below can reach). Until that bridge exists the
+# LIVE scheduler is the spark systemd user timer (router-retrain.timer). Ship this
+# in a kustomization only after a spark receiver/worker is wired.
+#
+# Contract (clients/cron): a ConfigMap in ns `hanzo` labeled cron.hanzo.ai/enabled
+# with data.schedule (UTC cron) + exactly one of data["job.yaml"]|data["poke.json"].
+# 11:20 UTC ~= 04:20 America/Los_Angeles during PDT (a fixed UTC cron does not track
+# DST; the systemd timer does, which is the other reason it stays the live path).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: router-retrain
+  namespace: hanzo
+  labels:
+    cron.hanzo.ai/enabled: 'true'
+data:
+  schedule: "20 11 * * *"
+  poke.json: |
+    {
+      "url": "http://router-retrain-bridge.hanzo.svc:8080/v1/router/retrain",
+      "method": "POST",
+      "bearerEnv": "ROUTER_RETRAIN_TOKEN",
+      "timeout": "30s"
+    }
