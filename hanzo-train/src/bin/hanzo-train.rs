@@ -14,7 +14,10 @@ use hanzo_train::{
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 
 #[derive(Parser, Debug)]
-#[command(name = "hanzo-train", about = "Native Rust LoRA fine-tuning (Tinker-shaped)")]
+#[command(
+    name = "hanzo-train",
+    about = "Native Rust LoRA fine-tuning (Tinker-shaped)"
+)]
 struct Args {
     /// Base model: a Hugging Face repo id or a local directory.
     #[arg(long)]

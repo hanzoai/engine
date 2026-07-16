@@ -31,8 +31,14 @@ pub fn write_adapter(
 
     let mut tensors: HashMap<String, Tensor> = HashMap::new();
     for delta in adapters {
-        tensors.insert(adapter_key(&delta.name, "lora_A"), delta.a.detach().contiguous()?);
-        tensors.insert(adapter_key(&delta.name, "lora_B"), delta.b.detach().contiguous()?);
+        tensors.insert(
+            adapter_key(&delta.name, "lora_A"),
+            delta.a.detach().contiguous()?,
+        );
+        tensors.insert(
+            adapter_key(&delta.name, "lora_B"),
+            delta.b.detach().contiguous()?,
+        );
     }
     hanzo_ml::safetensors::save(&tensors, dir.join("adapter_model.safetensors"))?;
 
@@ -79,16 +85,18 @@ mod tests {
         write_adapter(&dir, std::slice::from_ref(&delta), &lora).unwrap();
 
         // Weights: exact engine-facing keys + shapes.
-        let loaded = hanzo_ml::safetensors::load(dir.join("adapter_model.safetensors"), &dev).unwrap();
+        let loaded =
+            hanzo_ml::safetensors::load(dir.join("adapter_model.safetensors"), &dev).unwrap();
         let ka = "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight";
         let kb = "base_model.model.model.layers.0.self_attn.q_proj.lora_B.weight";
         assert_eq!(loaded.get(ka).unwrap().dims(), &[rank, in_dim]);
         assert_eq!(loaded.get(kb).unwrap().dims(), &[out_dim, rank]);
 
         // Config: PEFT field names the engine deserializes.
-        let cfg: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("adapter_config.json")).unwrap())
-                .unwrap();
+        let cfg: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("adapter_config.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(cfg["r"], 4);
         assert_eq!(cfg["lora_alpha"], 8.0);
         assert_eq!(cfg["target_modules"][0], "q_proj");
