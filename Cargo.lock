@@ -2992,6 +2992,7 @@ dependencies = [
  "hanzo-paged-attn",
  "hanzo-quant",
  "hanzo-sandbox",
+ "hanzo-train",
  "hanzo-transformers",
  "hanzo-vision",
  "hashbrown 0.16.1",
