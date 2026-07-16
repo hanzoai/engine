@@ -20,7 +20,7 @@ use tracing_subscriber::{prelude::*, EnvFilter};
 use args::{resolve_model_type, resolve_quantize_model_type, CacheCommand, Cli, Command};
 use commands::{
     run_bench, run_cache_delete, run_cache_list, run_doctor, run_from_config, run_interactive,
-    run_login, run_quantize, run_server, run_tune, BenchRunConfig,
+    run_login, run_quantize, run_server, run_train, run_tune, BenchRunConfig, TrainRunConfig,
 };
 
 const LOG_TARGETS: &[&str] = &[
@@ -34,6 +34,7 @@ const LOG_TARGETS: &[&str] = &[
     "hanzo_sandbox",
     "hanzo_server",
     "hanzo_server_core",
+    "hanzo_train",
     "hanzo_vision",
 ];
 
@@ -126,6 +127,32 @@ async fn main() -> Result<()> {
         } => {
             let model_type = resolve_model_type(model_type, default_model)?;
             run_tune(model_type, cli.global, profile, json, emit_config).await?;
+        }
+
+        Command::Train {
+            model,
+            data,
+            lora_rank,
+            lora_alpha,
+            lr,
+            steps,
+            batch_size,
+            out,
+            seed,
+            sample_prompt,
+        } => {
+            run_train(TrainRunConfig {
+                model,
+                data,
+                lora_rank,
+                lora_alpha,
+                lr,
+                steps,
+                batch_size,
+                out,
+                seed,
+                sample_prompt,
+            })?;
         }
 
         Command::Login { token } => {
