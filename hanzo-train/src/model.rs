@@ -62,7 +62,13 @@ struct Attention {
 }
 
 impl Attention {
-    fn forward(&self, xs: &Tensor, cos: &Tensor, sin: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+        mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
         let (b, l, _) = xs.dims3()?;
         let q = self.q_proj.forward(xs)?;
         let k = self.k_proj.forward(xs)?;
@@ -99,9 +105,7 @@ impl Attention {
         let probs = hanzo_nn::ops::softmax(&scores, D::Minus1)?;
         let out = probs.matmul(&v)?; // (b, heads, l, hd)
 
-        let out = out
-            .transpose(1, 2)?
-            .reshape((b, l, self.hidden_size))?;
+        let out = out.transpose(1, 2)?.reshape((b, l, self.hidden_size))?;
         self.o_proj.forward(&out)
     }
 }
@@ -128,7 +132,13 @@ struct Layer {
 }
 
 impl Layer {
-    fn forward(&self, xs: &Tensor, cos: &Tensor, sin: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+        mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
         // `forward_diff` is RmsNorm's differentiable path (primitive ops); the plain
         // `forward` dispatches to a fused CustomOp with no backward.
         let residual = xs;
@@ -209,10 +219,46 @@ impl LoraModel {
             let n_kv = cfg.num_kv_heads();
 
             let attn = Attention {
-                q_proj: make_linear(weights, varmap, lora, &format!("{p}.self_attn.q_proj"), "q_proj", cfg.hidden_size, n_heads * hd, &mut adapters)?,
-                k_proj: make_linear(weights, varmap, lora, &format!("{p}.self_attn.k_proj"), "k_proj", cfg.hidden_size, n_kv * hd, &mut adapters)?,
-                v_proj: make_linear(weights, varmap, lora, &format!("{p}.self_attn.v_proj"), "v_proj", cfg.hidden_size, n_kv * hd, &mut adapters)?,
-                o_proj: make_linear(weights, varmap, lora, &format!("{p}.self_attn.o_proj"), "o_proj", n_heads * hd, cfg.hidden_size, &mut adapters)?,
+                q_proj: make_linear(
+                    weights,
+                    varmap,
+                    lora,
+                    &format!("{p}.self_attn.q_proj"),
+                    "q_proj",
+                    cfg.hidden_size,
+                    n_heads * hd,
+                    &mut adapters,
+                )?,
+                k_proj: make_linear(
+                    weights,
+                    varmap,
+                    lora,
+                    &format!("{p}.self_attn.k_proj"),
+                    "k_proj",
+                    cfg.hidden_size,
+                    n_kv * hd,
+                    &mut adapters,
+                )?,
+                v_proj: make_linear(
+                    weights,
+                    varmap,
+                    lora,
+                    &format!("{p}.self_attn.v_proj"),
+                    "v_proj",
+                    cfg.hidden_size,
+                    n_kv * hd,
+                    &mut adapters,
+                )?,
+                o_proj: make_linear(
+                    weights,
+                    varmap,
+                    lora,
+                    &format!("{p}.self_attn.o_proj"),
+                    "o_proj",
+                    n_heads * hd,
+                    cfg.hidden_size,
+                    &mut adapters,
+                )?,
                 num_heads: n_heads,
                 num_kv_heads: n_kv,
                 num_kv_groups: cfg.num_kv_groups(),
@@ -220,13 +266,51 @@ impl LoraModel {
                 hidden_size: cfg.hidden_size,
             };
             let mlp = Mlp {
-                gate_proj: make_linear(weights, varmap, lora, &format!("{p}.mlp.gate_proj"), "gate_proj", cfg.hidden_size, cfg.intermediate_size, &mut adapters)?,
-                up_proj: make_linear(weights, varmap, lora, &format!("{p}.mlp.up_proj"), "up_proj", cfg.hidden_size, cfg.intermediate_size, &mut adapters)?,
-                down_proj: make_linear(weights, varmap, lora, &format!("{p}.mlp.down_proj"), "down_proj", cfg.intermediate_size, cfg.hidden_size, &mut adapters)?,
+                gate_proj: make_linear(
+                    weights,
+                    varmap,
+                    lora,
+                    &format!("{p}.mlp.gate_proj"),
+                    "gate_proj",
+                    cfg.hidden_size,
+                    cfg.intermediate_size,
+                    &mut adapters,
+                )?,
+                up_proj: make_linear(
+                    weights,
+                    varmap,
+                    lora,
+                    &format!("{p}.mlp.up_proj"),
+                    "up_proj",
+                    cfg.hidden_size,
+                    cfg.intermediate_size,
+                    &mut adapters,
+                )?,
+                down_proj: make_linear(
+                    weights,
+                    varmap,
+                    lora,
+                    &format!("{p}.mlp.down_proj"),
+                    "down_proj",
+                    cfg.intermediate_size,
+                    cfg.hidden_size,
+                    &mut adapters,
+                )?,
             };
-            let input_ln = RmsNorm::new(weights.get(&format!("{p}.input_layernorm.weight"))?, cfg.rms_norm_eps);
-            let post_ln = RmsNorm::new(weights.get(&format!("{p}.post_attention_layernorm.weight"))?, cfg.rms_norm_eps);
-            layers.push(Layer { attn, mlp, input_ln, post_ln });
+            let input_ln = RmsNorm::new(
+                weights.get(&format!("{p}.input_layernorm.weight"))?,
+                cfg.rms_norm_eps,
+            );
+            let post_ln = RmsNorm::new(
+                weights.get(&format!("{p}.post_attention_layernorm.weight"))?,
+                cfg.rms_norm_eps,
+            );
+            layers.push(Layer {
+                attn,
+                mlp,
+                input_ln,
+                post_ln,
+            });
         }
 
         let norm = RmsNorm::new(weights.get("model.norm.weight")?, cfg.rms_norm_eps);
@@ -386,13 +470,41 @@ mod tests {
         };
         for l in 0..cfg.num_hidden_layers {
             let p = format!("model.layers.{l}");
-            put(&format!("{p}.self_attn.q_proj.weight"), cfg.num_attention_heads * hd, cfg.hidden_size);
-            put(&format!("{p}.self_attn.k_proj.weight"), cfg.num_kv_heads() * hd, cfg.hidden_size);
-            put(&format!("{p}.self_attn.v_proj.weight"), cfg.num_kv_heads() * hd, cfg.hidden_size);
-            put(&format!("{p}.self_attn.o_proj.weight"), cfg.hidden_size, cfg.num_attention_heads * hd);
-            put(&format!("{p}.mlp.gate_proj.weight"), cfg.intermediate_size, cfg.hidden_size);
-            put(&format!("{p}.mlp.up_proj.weight"), cfg.intermediate_size, cfg.hidden_size);
-            put(&format!("{p}.mlp.down_proj.weight"), cfg.hidden_size, cfg.intermediate_size);
+            put(
+                &format!("{p}.self_attn.q_proj.weight"),
+                cfg.num_attention_heads * hd,
+                cfg.hidden_size,
+            );
+            put(
+                &format!("{p}.self_attn.k_proj.weight"),
+                cfg.num_kv_heads() * hd,
+                cfg.hidden_size,
+            );
+            put(
+                &format!("{p}.self_attn.v_proj.weight"),
+                cfg.num_kv_heads() * hd,
+                cfg.hidden_size,
+            );
+            put(
+                &format!("{p}.self_attn.o_proj.weight"),
+                cfg.hidden_size,
+                cfg.num_attention_heads * hd,
+            );
+            put(
+                &format!("{p}.mlp.gate_proj.weight"),
+                cfg.intermediate_size,
+                cfg.hidden_size,
+            );
+            put(
+                &format!("{p}.mlp.up_proj.weight"),
+                cfg.intermediate_size,
+                cfg.hidden_size,
+            );
+            put(
+                &format!("{p}.mlp.down_proj.weight"),
+                cfg.hidden_size,
+                cfg.intermediate_size,
+            );
         }
         // RMSNorm weights are all-ones (identity scale) — build them separately.
         for l in 0..cfg.num_hidden_layers {
@@ -416,7 +528,16 @@ mod tests {
         let dev = Device::Cpu;
         let vm = VarMap::new();
         let w = vm
-            .get((3, 4), "w", Init::Randn { mean: 0.0, stdev: 1.0 }, DType::F32, &dev)
+            .get(
+                (3, 4),
+                "w",
+                Init::Randn {
+                    mean: 0.0,
+                    stdev: 1.0,
+                },
+                DType::F32,
+                &dev,
+            )
             .unwrap();
         let x = Tensor::randn(0f32, 1f32, (2, 4), &dev).unwrap();
         let y = Linear::new(w.clone(), None).forward(&x).unwrap(); // (2,3)
@@ -469,7 +590,8 @@ mod tests {
             let logits = model.forward(&input).unwrap();
             let vocab = logits.dim(D::Minus1).unwrap();
             let logits = logits.reshape((n, vocab)).unwrap();
-            let loss = (masked_nll_sum(&logits, &targets, &mask).unwrap() * (1.0 / total_w)).unwrap();
+            let loss =
+                (masked_nll_sum(&logits, &targets, &mask).unwrap() * (1.0 / total_w)).unwrap();
             let lv = loss.to_scalar::<f32>().unwrap();
             if step == 0 {
                 // Every LoRA factor must receive a gradient — otherwise the graph is

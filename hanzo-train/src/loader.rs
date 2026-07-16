@@ -70,8 +70,7 @@ fn load_weights(model: &str, dtype: DType, device: &Device) -> anyhow::Result<We
     let mut map: HashMap<String, Tensor> = HashMap::new();
 
     if let Some(index_path) = resolve(model, "model.safetensors.index.json")? {
-        let index: SafetensorsIndex =
-            serde_json::from_str(&std::fs::read_to_string(index_path)?)?;
+        let index: SafetensorsIndex = serde_json::from_str(&std::fs::read_to_string(index_path)?)?;
         let mut shards: Vec<String> = index.weight_map.into_values().collect();
         shards.sort();
         shards.dedup();
