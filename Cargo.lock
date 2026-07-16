@@ -3354,6 +3354,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-router-retrain"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "enso",
+ "hanzo-router",
+ "safetensors 0.7.0",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hanzo-sandbox"
 version = "1.7.51"
 dependencies = [
