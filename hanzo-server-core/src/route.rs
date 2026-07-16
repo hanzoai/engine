@@ -267,6 +267,40 @@ impl EnsoRegistry {
         }
     }
 
+    /// Reload the base policy from disk and evict the per-org cache, so a freshly
+    /// published `heads-<scope>.safetensors` (the retrain pipeline's artifact) takes
+    /// effect WITHOUT a restart. Per-org scopes lazily reload on next use; their live
+    /// online state is flushed first so nothing is lost. Returns whether the base was
+    /// reloaded from a file. This is the real reload path the retrain script's
+    /// DO_RELOAD hook calls after it publishes a new artifact to the mounted dir.
+    pub fn reload(&self) -> bool {
+        let base_heads = self.artifact_path("base");
+        let base_state = self.state_path("base");
+        let mut reloaded = false;
+        if let Some(pick) = newer_of(&base_heads, &base_state) {
+            match enso::persist::load(&pick, ENSO_GAMMA, ENSO_ALPHA) {
+                Ok((learner, table)) => {
+                    if let Ok(mut g) = self.base.write() {
+                        *g = enso::Enso::new(table, learner);
+                        reloaded = true;
+                        tracing::info!("enso base reloaded from {}", pick.display());
+                    }
+                }
+                Err(e) => tracing::warn!("enso reload from {} failed: {e}", pick.display()),
+            }
+        }
+        // Evict per-org scopes (flushing their online state) so each reloads lazily.
+        if let Ok(mut c) = self.cache.lock() {
+            for (k, e) in c.map.drain() {
+                if let ScopeEntry::Own(a) = e {
+                    self.flush_scope(&k, &a);
+                }
+            }
+            c.order.clear();
+        }
+        reloaded
+    }
+
     /// Flush the base and every live per-org scope — the periodic online-state save.
     pub fn flush_all(&self) {
         self.flush_scope("base", &self.base);
@@ -579,6 +613,26 @@ fn cloud_route(scope: &SharedScope, body: RouteBody) -> CloudRouteResponse {
         source: source.to_string(),
         features,
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReloadResponse {
+    pub reloaded: bool,
+}
+
+impl IntoResponse for ReloadResponse {
+    fn into_response(self) -> axum::response::Response {
+        Json(self).into_response()
+    }
+}
+
+/// `POST /v1/route/reload` — reload the base policy from the mounted artifact dir and
+/// evict per-org scopes, so a newly published `heads-<scope>.safetensors` is served
+/// without a restart. The retrain pipeline calls this after publishing.
+pub async fn route_reload_handler(
+    axum::Extension(enso): axum::Extension<SharedEnso>,
+) -> axum::response::Response {
+    ReloadResponse { reloaded: enso.reload() }.into_response()
 }
 
 /// A cloud-pool model is always a cloud backend with unknown context/vision

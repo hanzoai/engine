@@ -28,7 +28,10 @@ use crate::{
     image_generation::image_generation,
     music_generation::music_generation,
     responses::{cancel_response, create_response, delete_response, get_response},
-    route::{cold_start_enso, enso_from_path, route_handler, route_observe_handler, SharedEnso},
+    route::{
+        cold_start_enso, enso_from_path, route_handler, route_observe_handler,
+        route_reload_handler, SharedEnso,
+    },
     route_registry::{
         AGENT_APPROVAL_ROUTE, ANIMATE_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE,
         AUDIO_TRANSCRIPTION_ROUTE, CANCEL_RESPONSE_ROUTE, COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE,
@@ -366,6 +369,7 @@ fn init_router(
         .route(TRYON_GENERATION_ROUTE.path, post(tryon_generation))
         .route("/v1/route", post(route_handler))
         .route("/v1/route/observe", post(route_observe_handler))
+        .route("/v1/route/reload", post(route_reload_handler))
         .route(VIDEO_GENERATION_ROUTE.path, post(create_video))
         .route(VIDEO_JOB_ROUTE.path, get(get_video))
         .route(VIDEO_CONTENT_ROUTE.path, get(get_video_content))
