@@ -25,6 +25,8 @@ Fast, flexible LLM inference.
   </a>
 </p>
 
+<p align="center"><sub>Forked from <a href="https://github.com/EricLBuehler/mistral.rs"><b>EricLBuehler/mistral.rs</b></a> (MIT).</sub></p>
+
 ## Latest
 
 - **Qwen3-Omni**: native end-to-end omni-modal model (understand → think → speak) — text/image/video/audio in, text + 24kHz speech out, through one extensible modality pipeline. Validated against the reference weights.
