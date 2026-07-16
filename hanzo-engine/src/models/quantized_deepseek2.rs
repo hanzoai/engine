@@ -1471,7 +1471,7 @@ mod tests {
         let dev = Device::Cpu;
         // dummy mapper ignores model_layers; 64 is a safe upper bound for the 5-block model.
         let mapper = crate::device_map::DeviceMapSetting::dummy()
-            .into_mapper(64, &dev, None, &[dev.clone()])?;
+            .into_mapper(64, &dev, None, std::slice::from_ref(&dev))?;
         let m = <ModelWeights as ModelConfig::FromGGUF>::from_gguf(
             ct,
             &dev,
@@ -1572,13 +1572,12 @@ mod tests {
             )?; // [1,1,256]
             let mut produced = glm_argmax_rows(&pre)?; // len 1
             let mut last = produced[0];
-            let mut offset = prompt_ids.len(); // 12
-            for _ in 0..19 {
+            let start = prompt_ids.len(); // 12
+            for offset in start..start + 19 {
                 let step = m.forward(&glm_ids(&[last])?, &[offset], vec![(0usize, 1)], None)?;
                 let tok = glm_argmax_rows(&step)?[0];
                 produced.push(tok);
                 last = tok;
-                offset += 1;
             }
             let expected = &full_ids[12..32];
             assert_eq!(
