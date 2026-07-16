@@ -29,6 +29,7 @@ pub mod f8q8;
 mod fp8;
 pub mod gemv;
 mod gguf;
+pub mod gguf_export;
 mod gptq;
 mod hqq;
 mod imatrix;
@@ -45,6 +46,7 @@ mod unquantized;
 mod utils;
 mod vector_fp8;
 
+pub use gguf_export::{export_gguf, GgufOutputType};
 use gptq::gptq_linear;
 use lora::merge_lora_weights;
 use regex::Regex;
