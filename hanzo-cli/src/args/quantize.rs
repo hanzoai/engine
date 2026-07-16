@@ -1,8 +1,18 @@
-//! Quantize command argument structs for UQFF generation
+//! Quantize command argument structs for UQFF and GGUF generation
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use hanzo_engine::{AutoDeviceMapParams, IsqOrganization, ModelDType, NormalLoaderType};
 use std::path::PathBuf;
+
+/// Output container format for the quantize command.
+#[derive(ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// Hanzo UQFF: flexible multi-quant single-file format (default).
+    #[default]
+    Uqff,
+    /// llama.cpp GGUF: `--isq f16` or `--isq q8_0`, loadable by llama.cpp and the engine.
+    Gguf,
+}
 
 /// Quantize model type selection (base models only, no adapter support)
 #[derive(Subcommand, Clone)]
@@ -146,6 +156,10 @@ pub struct QuantizeDeviceOptions {
 /// Output options for UQFF generation
 #[derive(Args, Clone)]
 pub struct QuantizeOutputOptions {
+    /// Output format: `uqff` (default) or `gguf`.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Uqff)]
+    pub format: OutputFormat,
+
     /// Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type).
     /// Examples: `-o model/model-q4k.uqff` or `-o output/`
     #[arg(short = 'o', long = "output", required = true)]
@@ -237,6 +251,10 @@ pub struct QuantizeDefaultOptions {
     #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
     pub max_batch_size: usize,
 
+    /// Output format: `uqff` (default) or `gguf`.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Uqff)]
+    pub format: OutputFormat,
+
     /// Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type).
     #[arg(short = 'o', long = "output")]
     pub output_path: Option<PathBuf>,
@@ -301,6 +319,7 @@ impl QuantizeDefaultOptions {
                 max_batch_size: self.max_batch_size,
             },
             output: QuantizeOutputOptions {
+                format: self.format,
                 output_path,
                 no_readme: self.no_readme,
                 uqff_base_model: self.uqff_base_model,
