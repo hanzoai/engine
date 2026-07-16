@@ -61,7 +61,10 @@ impl Selector {
             if !feasible(p, ctx.task, ctx.slo) {
                 continue;
             }
-            let pv = p.features();
+            // The learned utility reads QUALITY only; cost/latency are the explicit
+            // SLO penalties below (never folded into the utility — that would
+            // double-count and let a fast-but-weaker arm outrank the measured-best).
+            let pv = p.quality_features();
             let utility = Policy::utility_with(ctx.w, ctx.x, &pv);
             let objective = utility
                 - ctx.slo.lambda_cost as f64 * p.cost_norm()

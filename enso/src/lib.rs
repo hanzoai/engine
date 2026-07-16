@@ -26,6 +26,7 @@ pub mod featurize;
 pub mod guard;
 pub mod learner;
 pub mod linalg;
+pub mod persist;
 pub mod policy;
 pub mod profile;
 pub mod selector;
@@ -39,7 +40,7 @@ pub use featurize::{Featurizer, HashFeaturizer};
 pub use guard::{
     DistilledTeacher, GuardTier, GuardVerdict, Safety, SafetyGuard, Teacher, TwoTierGuard,
 };
-pub use learner::{fit_base, Bandit, Learner};
+pub use learner::{fit_base, Bandit, BanditState, Learner};
 pub use policy::Policy;
 pub use profile::{ingest, parse_jsonl, EvalSample, Profile, ProfileTable, PROFILE_DIM};
 pub use selector::{Choice, SelectCtx, Selector};
@@ -136,9 +137,31 @@ impl<F: Featurizer, G: SafetyGuard> Enso<F, G> {
         reward: f64,
     ) {
         let x = self.feat.featurize(req);
-        if let Some(p) = self.table.get(model, level, modality).map(|p| p.features()) {
+        if let Some(p) = self.table.get(model, level, modality).map(|p| p.quality_features()) {
             self.learner.observe(&user.id, &x, &p, reward);
         }
+    }
+
+    /// Online feedback keyed by the request's feature vector `x` (the exact vector the
+    /// engine returned at decision time) and the served arm id — the shape the
+    /// `/v1/route/observe` reward callback carries. Looks the arm's profile up by
+    /// model id and updates that user's LinUCB bandit. Returns whether the arm was
+    /// known (an unknown arm is a no-op, reported so the caller can 404). This is the
+    /// fast online loop: `theta_user` drifts toward this user's realized quality.
+    pub fn observe_features(&mut self, user_id: &str, x: &[f64], model: &str, reward: f64) -> bool {
+        match self.table.by_model(model).map(|p| p.quality_features()) {
+            Some(p) => {
+                self.learner.observe(user_id, x, &p, reward);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Serialize the full serving state (base `W` + arms + per-user bandits) for the
+    /// periodic flush. The registry pairs this with [`persist::save`].
+    pub fn learner_states(&self) -> Vec<(String, learner::BanditState)> {
+        self.learner.user_states()
     }
 
     fn decide(

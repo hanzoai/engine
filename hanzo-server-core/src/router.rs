@@ -28,7 +28,7 @@ use crate::{
     image_generation::image_generation,
     music_generation::music_generation,
     responses::{cancel_response, create_response, delete_response, get_response},
-    route::route_handler,
+    route::{cold_start_enso, enso_from_path, route_handler, SharedEnso},
     route_registry::{
         AGENT_APPROVAL_ROUTE, ANIMATE_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE,
         AUDIO_TRANSCRIPTION_ROUTE, CANCEL_RESPONSE_ROUTE, COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE,
@@ -113,6 +113,9 @@ pub struct RouterBuilder {
     max_body_limit: Option<usize>,
     /// Server-level agentic defaults
     agentic_defaults: AgenticDefaults,
+    /// The learned router policy served at `/v1/route` (cloud branch). Defaults
+    /// to cold start; Phase 1 swaps in a weights-loaded instance.
+    enso: SharedEnso,
 }
 
 impl Default for RouterBuilder {
@@ -127,6 +130,7 @@ impl Default for RouterBuilder {
             allowed_origins: None,
             max_body_limit: None,
             agentic_defaults: AgenticDefaults::default(),
+            enso: cold_start_enso(),
         }
     }
 }
@@ -235,6 +239,28 @@ impl RouterBuilder {
         self
     }
 
+    /// Sets the learned router policy served at `/v1/route` (cloud branch). An
+    /// instance carrying persisted weights (Phase 1) replaces the cold start.
+    pub fn with_enso(mut self, enso: SharedEnso) -> Self {
+        self.enso = enso;
+        self
+    }
+
+    /// Load the base `W` from a safetensors file and serve it. Missing/corrupt
+    /// falls back to cold start (see [`enso_from_path`]); this never fails.
+    pub fn with_enso_path(mut self, path: impl AsRef<std::path::Path>) -> Self {
+        self.enso = enso_from_path(path.as_ref());
+        self
+    }
+
+    /// Load the base `W` from a safetensors file if set. Unset keeps cold start.
+    pub fn with_enso_path_optional(mut self, path: Option<&str>) -> Self {
+        if let Some(p) = path {
+            self.enso = enso_from_path(std::path::Path::new(p));
+        }
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -258,6 +284,7 @@ impl RouterBuilder {
             self.allowed_origins,
             self.max_body_limit,
             self.agentic_defaults,
+            self.enso,
         )?;
 
         #[cfg(feature = "swagger-ui")]
@@ -283,6 +310,7 @@ fn init_router(
     allowed_origins: Option<Vec<String>>,
     max_body_limit: Option<usize>,
     agentic_defaults: AgenticDefaults,
+    enso: SharedEnso,
 ) -> Result<Router> {
     let allow_origin = if let Some(origins) = allowed_origins {
         let parsed_origins: Result<Vec<_>, _> = origins.into_iter().map(|o| o.parse()).collect();
@@ -381,6 +409,7 @@ fn init_router(
         .layer(Extension(agentic_defaults.approval_broker.clone()))
         .layer(Extension(agentic_defaults))
         .layer(Extension(TrainingState::default()))
+        .layer(Extension(enso))
         .with_state(state);
 
     Ok(router)

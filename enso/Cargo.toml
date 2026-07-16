@@ -10,5 +10,9 @@ license = "MIT OR Apache-2.0"
 hanzo-router = { version = "0.1", path = "../hanzo-router" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+safetensors.workspace = true
+anyhow.workspace = true
+bytemuck.workspace = true
 
 [dev-dependencies]
+tempfile = "3"
