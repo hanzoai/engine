@@ -79,6 +79,9 @@ mod layers_utils;
 pub mod matformer;
 mod mla;
 mod models;
+/// Load a llama-family base model into a `hanzo_train::BaseModel` from an engine-loaded
+/// `Llama`, for engine-backed LoRA training.
+pub use models::llama_train::load_llama_base_for_training;
 mod paged_attention;
 mod perf_flags;
 mod pipeline;

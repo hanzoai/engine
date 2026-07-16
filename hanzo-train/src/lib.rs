@@ -27,5 +27,5 @@ pub use client::{
 };
 pub use distill::{run_distill, DistillConfig, DistillReport};
 pub use loader::BaseModel;
-pub use run::{run_sft, SftConfig, SftReport};
+pub use run::{run_sft, run_sft_with_client, SftConfig, SftReport};
 pub use types::{AdamParams, Datum, ForwardBackwardOutput, LoraConfig, ModelInput, SamplingParams};
