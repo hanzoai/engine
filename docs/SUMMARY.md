@@ -88,6 +88,7 @@
 
 # Adapters & Model Customization
 
+- [Training (LoRA fine-tuning)](TRAINING.md)
 - [Adapter Models](ADAPTER_MODELS.md)
 - [LoRA/X-LoRA Examples](LORA_XLORA.md)
 - [Non-Granular Scalings](NON_GRANULAR.md)
