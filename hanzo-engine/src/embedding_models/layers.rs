@@ -2,16 +2,30 @@ use hanzo_ml::{IndexOp, Result, Tensor, D};
 use hanzo_nn::Module;
 use serde::Deserialize;
 
-/// Pooling layer
+fn default_true() -> bool {
+    true
+}
+
+/// Pooling layer. Fields beyond `word_embedding_dimension` default to `false` (and
+/// `include_prompt` to `true`) so older sentence-transformers `1_Pooling/config.json`
+/// files — e.g. `all-MiniLM-L6-v2`, which predates the weighted-mean / last-token modes —
+/// still parse.
 #[derive(Deserialize, Debug, Clone)]
 pub struct Pooling {
     pub word_embedding_dimension: usize,
+    #[serde(default)]
     pub pooling_mode_cls_token: bool,
+    #[serde(default)]
     pub pooling_mode_mean_tokens: bool,
+    #[serde(default)]
     pub pooling_mode_max_tokens: bool,
+    #[serde(default)]
     pub pooling_mode_mean_sqrt_len_tokens: bool,
+    #[serde(default)]
     pub pooling_mode_weightedmean_tokens: bool,
+    #[serde(default)]
     pub pooling_mode_lasttoken: bool,
+    #[serde(default = "default_true")]
     pub include_prompt: bool,
 }
 
