@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
 
 # Stage 1: Build environment
-FROM rust:latest AS builder
+# Builder and runtime MUST share one Debian release: the binary links the
+# builder's glibc (rust:latest drifted to trixie/glibc-2.39 while the runtime
+# was bookworm/2.36 -> "GLIBC_2.39 not found" at startup). Bump both together.
+FROM rust:1-trixie AS builder
 
 # Set working directory and copy files
 WORKDIR /hanzo
@@ -19,8 +22,8 @@ ENV RUSTFLAGS="" \
 RUN cargo build --release -p hanzo-server -p hanzo-bench
 
 
-# Stage 2: Minimal runtime environment
-FROM debian:bookworm-slim AS runtime
+# Stage 2: Minimal runtime environment (same Debian release as builder — see above)
+FROM debian:trixie-slim AS runtime
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
 # Install only essential runtime dependencies and clean up
