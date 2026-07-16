@@ -12,10 +12,6 @@ categories.workspace = true
 license.workspace = true
 homepage.workspace = true
 
-[[bin]]
-name = "hanzo-train"
-path = "src/bin/hanzo-train.rs"
-
 [dependencies]
 hanzo-ml.workspace = true
 hanzo-nn.workspace = true
@@ -32,9 +28,9 @@ safetensors.workspace = true
 tokenizers = { workspace = true, features = ["onig"] }
 hf-hub.workspace = true
 rand.workspace = true
-clap.workspace = true
-tracing-subscriber.workspace = true
+utoipa = { workspace = true, optional = true }
 
 [features]
 cuda = ["hanzo-ml/cuda", "hanzo-nn/cuda"]
 metal = ["hanzo-ml/metal", "hanzo-nn/metal"]
+utoipa = ["dep:utoipa"]

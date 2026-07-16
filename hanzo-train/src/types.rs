@@ -10,7 +10,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 /// A tokenized model input. Mirrors Tinker's `ModelInput` (the token half of a `Datum`).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct ModelInput {
     pub tokens: Vec<u32>,
 }
@@ -45,7 +46,8 @@ impl ModelInput {
 /// - `weights[i]` is the loss mask (0.0 = ignore, e.g. prompt; 1.0 = train, e.g. completion)
 ///
 /// Invariant: `model_input.len() == target_tokens.len() == weights.len()`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct Datum {
     pub model_input: ModelInput,
     pub target_tokens: Vec<u32>,
@@ -85,7 +87,12 @@ pub enum DatumError {
 /// LoRA adapter configuration. Field semantics and shapes match the engine's
 /// inference-side `hanzo_quant::lora::LoraConfig` so a saved adapter round-trips
 /// back into the engine for sampling.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// Deserializes with per-field defaults (rank 16, alpha 32, the seven
+/// llama-family projections), so `{}` is a valid config on the wire.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[serde(default)]
 pub struct LoraConfig {
     /// Low-rank dimension `r`.
     pub rank: usize,
@@ -162,7 +169,9 @@ impl From<&LoraConfig> for PeftAdapterConfig {
 }
 
 /// AdamW hyperparameters for `optim_step`. Mirrors Tinker's `AdamParams`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[serde(default)]
 pub struct AdamParams {
     pub lr: f64,
     pub beta1: f64,
@@ -204,7 +213,9 @@ impl Default for AdamParams {
 }
 
 /// Sampling controls for `sample`. Mirrors Tinker's `SamplingParams`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[serde(default)]
 pub struct SamplingParams {
     pub max_tokens: usize,
     pub temperature: f64,
@@ -229,7 +240,8 @@ impl Default for SamplingParams {
 }
 
 /// Result of a `forward_backward` call. Mirrors Tinker's `{loss, metrics}` output.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct ForwardBackwardOutput {
     /// Mean next-token cross-entropy over supervised positions in the batch.
     pub loss: f32,

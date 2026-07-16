@@ -37,7 +37,7 @@ impl From<TuneProfileRequest> for TuneProfile {
 
 #[utoipa::path(
   get,
-  tag = "Mistral.rs",
+  tag = "Hanzo",
   path = "/v1/models",
   responses((status = 200, description = "Served model info", body = ModelObjects))
 )]
@@ -95,7 +95,7 @@ pub async fn models(State(state): ExtractedState) -> Json<ModelObjects> {
 
 #[utoipa::path(
   get,
-  tag = "Mistral.rs",
+  tag = "Hanzo",
   path = "/health",
   responses((status = 200, description = "Server is healthy"))
 )]
@@ -119,7 +119,7 @@ pub struct ReIsqRequest {
 
 #[utoipa::path(
   post,
-  tag = "Mistral.rs",
+  tag = "Hanzo",
   path = "/re_isq",
   request_body = ReIsqRequest,
   responses((status = 200, description = "Reapply ISQ to a non GGUF or GGML model."))
@@ -169,7 +169,7 @@ pub struct ModelStatusResponse {
 
 #[utoipa::path(
   post,
-  tag = "Mistral.rs",
+  tag = "Hanzo",
   path = "/v1/models/unload",
   request_body = ModelOperationRequest,
   responses(
@@ -206,7 +206,7 @@ pub async fn unload_model(
 
 #[utoipa::path(
   post,
-  tag = "Mistral.rs",
+  tag = "Hanzo",
   path = "/v1/models/reload",
   request_body = ModelOperationRequest,
   responses(
@@ -244,7 +244,7 @@ pub async fn reload_model(
 
 #[utoipa::path(
   post,
-  tag = "Mistral.rs",
+  tag = "Hanzo",
   path = "/v1/models/status",
   request_body = ModelOperationRequest,
   responses(
@@ -390,7 +390,7 @@ pub async fn tune_model(
 /// GET `/v1/sessions/{session_id}`. 404 if the session doesn't exist.
 #[utoipa::path(
     get,
-    tag = "Mistral.rs",
+    tag = "Hanzo",
     path = "/v1/sessions/{session_id}",
     params(("session_id" = String, Path, description = "Session ID to export")),
     responses(
@@ -415,7 +415,7 @@ pub async fn get_session(
 /// PUT `/v1/sessions/{session_id}`. Replaces any existing session.
 #[utoipa::path(
     put,
-    tag = "Mistral.rs",
+    tag = "Hanzo",
     path = "/v1/sessions/{session_id}",
     params(("session_id" = String, Path, description = "Session ID to import as")),
     request_body = SerializedSession,
@@ -438,7 +438,7 @@ pub async fn put_session(
 /// DELETE `/v1/sessions/{session_id}`. Idempotent: returns 200 either way.
 #[utoipa::path(
     delete,
-    tag = "Mistral.rs",
+    tag = "Hanzo",
     path = "/v1/sessions/{session_id}",
     params(("session_id" = String, Path, description = "Session ID to delete")),
     responses((status = 200, description = "Session deleted (or did not exist)"))
