@@ -33,6 +33,20 @@ hanzo train -m HuggingFaceTB/SmolLM2-135M --data sft.jsonl \
 `--lora-alpha` defaults to `2 * rank`. The run logs per-step loss and prints
 the adapter path, trainable-parameter count, and final loss.
 
+### Distillation
+
+`hanzo distill` does sequence-level knowledge distillation: a teacher model
+samples completions for a `{"prompt"}` JSONL set, and the student
+LoRA-fine-tunes on the teacher's outputs. The generated dataset is kept at
+`out/distill.jsonl` for inspection; the student adapter lands in
+`out/adapter`.
+
+```bash
+hanzo distill --teacher Qwen/Qwen2.5-1.5B --student HuggingFaceTB/SmolLM2-135M \
+    --prompts prompts.jsonl --max-tokens 128 --temperature 0.7 \
+    --steps 200 --out ./distilled
+```
+
 ## HTTP API
 
 `hanzo serve` exposes the same primitives under `/v1/training` — the server
