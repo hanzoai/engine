@@ -19,8 +19,9 @@ use tracing_subscriber::{prelude::*, EnvFilter};
 
 use args::{resolve_model_type, resolve_quantize_model_type, CacheCommand, Cli, Command};
 use commands::{
-    run_bench, run_cache_delete, run_cache_list, run_doctor, run_from_config, run_interactive,
-    run_login, run_quantize, run_server, run_train, run_tune, BenchRunConfig, TrainRunConfig,
+    run_bench, run_cache_delete, run_cache_list, run_distill_cmd, run_doctor, run_from_config,
+    run_interactive, run_login, run_quantize, run_server, run_train, run_tune, BenchRunConfig,
+    DistillRunConfig, TrainRunConfig,
 };
 
 const LOG_TARGETS: &[&str] = &[
@@ -144,6 +145,38 @@ async fn main() -> Result<()> {
             run_train(TrainRunConfig {
                 model,
                 data,
+                lora_rank,
+                lora_alpha,
+                lr,
+                steps,
+                batch_size,
+                out,
+                seed,
+                sample_prompt,
+            })?;
+        }
+
+        Command::Distill {
+            teacher,
+            student,
+            prompts,
+            max_tokens,
+            temperature,
+            lora_rank,
+            lora_alpha,
+            lr,
+            steps,
+            batch_size,
+            out,
+            seed,
+            sample_prompt,
+        } => {
+            run_distill_cmd(DistillRunConfig {
+                teacher,
+                student,
+                prompts,
+                max_tokens,
+                temperature,
                 lora_rank,
                 lora_alpha,
                 lr,

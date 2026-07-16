@@ -10,13 +10,13 @@ use std::{
     path::Path,
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 
 use crate::types::{Datum, ModelInput};
 
 /// One line of a `{ "prompt": ..., "completion": ... }` JSONL file.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Example {
     pub prompt: String,
     pub completion: String,
