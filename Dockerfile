@@ -42,5 +42,8 @@ COPY --chmod=755 --from=builder /hanzo/target/release/hanzo-server /usr/local/bi
 # Copy chat templates for users running models which may not include them
 COPY --from=builder /hanzo/chat_templates /chat_templates
 
-ENV HUGGINGFACE_HUB_CACHE=/data \
-    PORT=80
+ENV HUGGINGFACE_HUB_CACHE=/data
+
+# Self-runnable: `docker run <image> --port 36900 plain -m <model>`.
+# hanzo-server takes its port and model from args (it does not read $PORT).
+ENTRYPOINT ["/usr/local/bin/hanzo-server"]
