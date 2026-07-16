@@ -433,7 +433,9 @@ impl AceStepTransformer {
             .speaker_embedder
             .forward(&speaker.to_dtype(self.dtype)?)?
             .unsqueeze(1)?;
-        let text = self.genre_embedder.forward(&text_hidden.to_dtype(self.dtype)?)?;
+        let text = self
+            .genre_embedder
+            .forward(&text_hidden.to_dtype(self.dtype)?)?;
         Tensor::cat(&[&spk, &text], 1)
     }
 
