@@ -156,11 +156,7 @@ impl TrainingClient {
 
     /// Decode up to `params.max_tokens` new tokens from the current weights.
     /// Returns only the newly generated tokens (Tinker's `sample`).
-    pub fn sample(
-        &self,
-        input: &ModelInput,
-        params: &SamplingParams,
-    ) -> anyhow::Result<Vec<u32>> {
+    pub fn sample(&self, input: &ModelInput, params: &SamplingParams) -> anyhow::Result<Vec<u32>> {
         let mut tokens = input.tokens.clone();
         let mut generated = Vec::new();
         let mut rng = StdRng::seed_from_u64(params.seed);
@@ -169,7 +165,10 @@ impl TrainingClient {
             let n = tokens.len();
             let ids = Tensor::from_slice(tokens.as_slice(), (1, n), &self.device)?;
             let logits = self.model.forward(&ids)?; // (1, n, vocab)
-            let last = logits.narrow(1, n - 1, 1)?.flatten_all()?.to_dtype(DType::F32)?;
+            let last = logits
+                .narrow(1, n - 1, 1)?
+                .flatten_all()?
+                .to_dtype(DType::F32)?;
             let next = pick_token(&last.to_vec1::<f32>()?, params, &mut rng);
             tokens.push(next);
             generated.push(next);
@@ -212,10 +211,7 @@ fn pick_token(logits: &[f32], params: &SamplingParams, rng: &mut StdRng) -> u32 
 
     // softmax over the (possibly filtered) candidates
     let max = scaled.iter().fold(f32::NEG_INFINITY, |m, &(_, v)| m.max(v));
-    let mut probs: Vec<(usize, f32)> = scaled
-        .iter()
-        .map(|&(i, v)| (i, (v - max).exp()))
-        .collect();
+    let mut probs: Vec<(usize, f32)> = scaled.iter().map(|&(i, v)| (i, (v - max).exp())).collect();
     let sum: f32 = probs.iter().map(|&(_, p)| p).sum();
     for p in probs.iter_mut() {
         p.1 /= sum;
