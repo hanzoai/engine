@@ -94,6 +94,27 @@ pub const SESSION_ROUTE: RouteInfo = RouteInfo::new(
     "GET, PUT, DELETE",
     RouteKind::Hanzo,
 );
+pub const TRAINING_CLIENTS_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/training/clients", "GET, POST", RouteKind::Hanzo);
+pub const TRAINING_CLIENT_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/training/clients/{id}", "GET, DELETE", RouteKind::Hanzo);
+pub const TRAINING_FORWARD_BACKWARD_ROUTE: RouteInfo = RouteInfo::new(
+    "/v1/training/clients/{id}/forward_backward",
+    "POST",
+    RouteKind::Hanzo,
+);
+pub const TRAINING_OPTIM_STEP_ROUTE: RouteInfo = RouteInfo::new(
+    "/v1/training/clients/{id}/optim_step",
+    "POST",
+    RouteKind::Hanzo,
+);
+pub const TRAINING_SAMPLE_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/training/clients/{id}/sample", "POST", RouteKind::Hanzo);
+pub const TRAINING_SAVE_WEIGHTS_ROUTE: RouteInfo = RouteInfo::new(
+    "/v1/training/clients/{id}/save_weights",
+    "POST",
+    RouteKind::Hanzo,
+);
 
 pub const API_ROUTES: &[RouteInfo] = &[
     ROOT_ROUTE,
@@ -128,6 +149,12 @@ pub const API_ROUTES: &[RouteInfo] = &[
     SESSION_ROUTE,
     AGENT_APPROVAL_ROUTE,
     RE_ISQ_ROUTE,
+    TRAINING_CLIENTS_ROUTE,
+    TRAINING_CLIENT_ROUTE,
+    TRAINING_FORWARD_BACKWARD_ROUTE,
+    TRAINING_OPTIM_STEP_ROUTE,
+    TRAINING_SAMPLE_ROUTE,
+    TRAINING_SAVE_WEIGHTS_ROUTE,
 ];
 
 #[cfg(feature = "swagger-ui")]

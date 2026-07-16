@@ -28,6 +28,8 @@ base64.workspace = true
 hanzo-engine = { workspace = true, features = [
   "utoipa",
 ] }
+hanzo-train = { workspace = true, features = ["utoipa"] }
+dirs.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -41,6 +43,9 @@ uuid = { workspace = true, features = ["v4"] }
 
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [features]
 default = ["swagger-ui"]

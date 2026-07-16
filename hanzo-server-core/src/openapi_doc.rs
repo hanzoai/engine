@@ -23,10 +23,22 @@ use crate::{
     },
     responses::{__path_create_response, __path_delete_response, __path_get_response},
     speech_generation::__path_speech_generation,
+    training::{
+        __path_create_training_client, __path_delete_training_client, __path_get_training_client,
+        __path_list_training_clients, __path_training_forward_backward, __path_training_optim_step,
+        __path_training_sample, __path_training_save_weights, CreateTrainingClientRequest,
+        DeleteTrainingClientResponse, ForwardBackwardRequest, OptimStepRequest, OptimStepResponse,
+        SampleRequest, SampleResponse, SampledSequence, SaveWeightsRequest, SaveWeightsResponse,
+        TrainingClientDetail, TrainingClientInfo, TrainingClientList, TrainingClientStatus,
+        WireDatum,
+    },
 };
 use hanzo_engine::{
     ApproximateUserLocation, Function, ImageGenerationResponseFormat, SearchContextSize, Tool,
     ToolChoice, ToolType, WebSearchOptions, WebSearchUserLocation,
+};
+use hanzo_train::{
+    AdamParams, Datum, ForwardBackwardOutput, LoraConfig, ModelInput, SamplingParams,
 };
 
 /// This is used to generate the OpenAPI docs.
@@ -71,8 +83,29 @@ use hanzo_engine::{
 pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(
-        paths(models, health, chatcompletions, completions, embeddings, re_isq, image_generation, speech_generation, music_generation, create_response, get_response, delete_response),
+        paths(models, health, chatcompletions, completions, embeddings, re_isq, image_generation, speech_generation, music_generation, create_response, get_response, delete_response, create_training_client, list_training_clients, get_training_client, delete_training_client, training_forward_backward, training_optim_step, training_sample, training_save_weights),
         components(schemas(
+            AdamParams,
+            CreateTrainingClientRequest,
+            Datum,
+            DeleteTrainingClientResponse,
+            ForwardBackwardOutput,
+            ForwardBackwardRequest,
+            LoraConfig,
+            ModelInput,
+            OptimStepRequest,
+            OptimStepResponse,
+            SampleRequest,
+            SampleResponse,
+            SampledSequence,
+            SamplingParams,
+            SaveWeightsRequest,
+            SaveWeightsResponse,
+            TrainingClientDetail,
+            TrainingClientInfo,
+            TrainingClientList,
+            TrainingClientStatus,
+            WireDatum,
             ApproximateUserLocation,
             AudioResponseFormat,
             ChatCompletionRequest,
@@ -124,10 +157,10 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             WebSearchUserLocation
         )),
         tags(
-            (name = "Mistral.rs", description = "Mistral.rs API")
+            (name = "Hanzo", description = "Hanzo Engine API")
         ),
         info(
-            title = "Mistral.rs",
+            title = "Hanzo Engine",
             license(
             name = "MIT",
         )
