@@ -13,6 +13,7 @@
 pub mod client;
 pub mod config;
 pub mod data;
+pub mod distill;
 pub mod loader;
 pub mod lora;
 pub mod loss;
@@ -22,5 +23,6 @@ pub mod save;
 pub mod types;
 
 pub use client::{create_lora_training_client, TrainingClient};
+pub use distill::{run_distill, DistillConfig, DistillReport};
 pub use run::{run_sft, SftConfig, SftReport};
 pub use types::{AdamParams, Datum, ForwardBackwardOutput, LoraConfig, ModelInput, SamplingParams};
