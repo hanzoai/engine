@@ -20,8 +20,8 @@ use crate::pipeline::EmbeddingLoaderType;
 use crate::pipeline::EmbeddingModel;
 use crate::pipeline::EmbeddingModelLoader;
 use crate::pipeline::{AutoEmbeddingLoader, EmbeddingModulePaths};
+use crate::pipeline::{BertLoader, EmbeddingGemmaLoader, Qwen3EmbeddingLoader};
 use crate::pipeline::{ChatTemplate, EmbeddingModelPaths, IsqOrganization, Processor};
-use crate::pipeline::{EmbeddingGemmaLoader, Qwen3EmbeddingLoader};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
@@ -172,6 +172,7 @@ impl EmbeddingLoaderBuilder {
         let loader: Box<dyn EmbeddingModelLoader> = match loader {
             Some(EmbeddingLoaderType::EmbeddingGemma) => Box::new(EmbeddingGemmaLoader),
             Some(EmbeddingLoaderType::Qwen3Embedding) => Box::new(Qwen3EmbeddingLoader),
+            Some(EmbeddingLoaderType::Bert) => Box::new(BertLoader),
             Some(EmbeddingLoaderType::Ijepa) => unreachable!("I-JEPA handled above"),
             None => Box::new(AutoEmbeddingLoader),
         };
