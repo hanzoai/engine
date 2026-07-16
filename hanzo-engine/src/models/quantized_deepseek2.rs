@@ -56,29 +56,10 @@ const INDEXER_KNORM_EPS: f64 = 1e-6;
 use crate::models::dsa::{DsaConfig, DsaIndexer, DsaSelection};
 use crate::models::gguf_moe::{build_moe_or_mlp, gguf_linear, MoeOrMlp, MoeParams};
 
-/// `MLA_ABSORB=1` enables the device-agnostic absorbed-MLA decode.
-///
-/// When on, the KV cache holds only the compressed latent `[kv_lora + qk_rope]` per token (~576
-/// floats for GLM-5.2) instead of the materialized per-head K/V (`n_head * q_head_dim` +
-/// `n_head * v_head_dim`, ~20k floats), and the `kv_b` projection is *absorbed*: its K rows fold
-/// into the query (`ql_nope = q_nope @ w_uk`) and its V rows fold out after attention
-/// (`out = (att @ ckv) @ w_uv_t`). This is the DeepSeek weight-absorption trick.
-///
-/// It is algebraically identical to the materialized path (`ql_nope·ckv == q_nope·k_nope`,
-/// `Σ_t a_t (w_uv·ckv_t) == Σ_t a_t v_t`), so decode is token-for-token equal in exact arithmetic.
-/// It is opt-in (default off) until validated against a real GGUF because absorption reassociates
-/// the score/context reductions: floating-point rounding differs, so a near-tie argmax could in
-/// principle flip (the same shape-dependent-kernel caveat that applies to MTP/CUDA tiers).
-/// Read once, cached.
-fn mla_absorb_enabled() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("MLA_ABSORB")
-            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
-            .unwrap_or(false)
-    })
-}
+/// Absorbed-MLA decode. The flag lives in [`crate::perf_flags`] because the ENGINE must agree with the
+/// model: `ContentConfig` reports the latent KV dims iff this is on, and this decode path appends the
+/// latent iff this is on. One flag, read by both -- a disagreement would preallocate the wrong cache.
+use crate::perf_flags::mla_absorb_enabled;
 
 /// Extract the absorbed-MLA weight views from the (un-absorbed) `kv_b` projection.
 ///
@@ -648,8 +629,13 @@ impl LayerWeights {
         let k_pe = k_pe.narrow(1, 0, 1)?; // [B, 1, S, qk_rope]
 
         // Absorb kv_b K-rows into the query: ql_nope = q_nope @ w_uk -> [B, H, S, kv_lora].
+        // `q_nope` is a split view of the `q_head_dim`-wide projection (it covers only the leading
+        // qk_nope columns of each row), so it is non-contiguous by construction. A single sequence
+        // can still satisfy the matmul's striding, but a batched decode cannot -- make it contiguous
+        // rather than depend on the batch shape.
         let ql_nope = q_nope
             .to_dtype(self.dtype)?
+            .contiguous()?
             .broadcast_matmul(&w_uk.unsqueeze(0)?)?;
         let q_latent =
             Tensor::cat(&[&ql_nope, &q_pe.to_dtype(self.dtype)?], D::Minus1)?.contiguous()?; // [B, H, S, kv_lora + qk_rope]
@@ -1032,20 +1018,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
         // has_dsa gate: topk/heads > 0 and 0 < index_head_dim <= 256 (else dense).
         let dsa_cfg = dsa_config(&props);
         let mut dsa_full_layers = 0usize;
-
-        // Absorbed-MLA decode is proven token-equal to the materialized path
-        // (`absorbed_equals_materialized`), but the KV cache is still preallocated at the
-        // materialized per-head shape while the absorbed path appends the compressed latent
-        // `[kv_lora(+rope)]` — the absorb-aware `add_request` preallocation must land first.
-        // Fail loud at load rather than crash mid-generation; the default path is unaffected.
-        if mla_absorb_enabled() {
-            hanzo_ml::bail!(
-                "MLA_ABSORB=1 is not yet wired through the KV cache (add_request preallocates the \
-                 materialized K/V shape, absorbed decode appends the compressed latent). The math \
-                 is validated (absorbed_equals_materialized); the absorb-aware cache must land \
-                 first. Unset MLA_ABSORB to run."
-            );
-        }
 
         let mut layers = Vec::with_capacity(local_range.end - local_range.start);
         for layer_idx in NiceProgressBar::<_, 'b'>(
