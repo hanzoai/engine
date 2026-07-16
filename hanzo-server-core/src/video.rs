@@ -22,10 +22,9 @@ use image::codecs::gif::GifDecoder;
 use image::{AnimationDecoder, DynamicImage};
 use std::io::Cursor;
 use std::path::Path;
-use tokio::{
-    fs::{self, File},
-    io::AsyncReadExt,
-};
+use tokio::fs;
+
+use crate::media::{self, Loaded, Origin};
 
 /// Default frames-per-second assumed when metadata is unavailable (e.g. GIF).
 const DEFAULT_FPS: f64 = 24.0;
@@ -48,61 +47,34 @@ See https://hanzoai.github.io/engine/guides/models/video-setup/ for details.";
 ///
 /// GIF files are decoded with the `image` crate. All other formats require
 /// FFmpeg.
-/// Fetch raw bytes from an http(s) URL, a `file://` URL, an absolute file path,
-/// or a `data:` URL. Shared by the video/image/audio decoders.
-pub async fn fetch_bytes(url_unparsed: &str) -> Result<Vec<u8>> {
-    let url = if let Ok(url) = url::Url::parse(url_unparsed) {
-        url
-    } else if File::open(url_unparsed).await.is_ok() {
-        url::Url::from_file_path(std::path::absolute(url_unparsed)?)
-            .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url_unparsed))?
-    } else {
-        bail!(
-            "Invalid source '{}': not a valid URL (http/https/data) and file not found. \
-             Use a full URL, a data URL, or an absolute file path.",
-            url_unparsed
-        )
-    };
+///
+/// `origin` says who supplied `url_unparsed`; see [`Origin`] for the sources
+/// each one reaches.
+pub async fn parse_video_url(
+    url_unparsed: &str,
+    num_frames: Option<usize>,
+    origin: Origin,
+) -> Result<VideoInput> {
+    let media = media::load(url_unparsed, origin)
+        .await
+        .with_context(|| format!("Loading video: {url_unparsed}"))?;
 
-    if url.scheme() == "http" || url.scheme() == "https" {
-        let resp = reqwest::get(url.clone())
-            .await
-            .context(format!("Failed to fetch: {url}"))?;
-        Ok(resp.bytes().await?.to_vec())
-    } else if url.scheme() == "file" {
-        let path = url
-            .to_file_path()
-            .map_err(|_| anyhow::anyhow!("Invalid file path: {}", url))?;
-        let mut f = File::open(&path)
-            .await
-            .context(format!("Could not open file: {}", path.display()))?;
-        let metadata = fs::metadata(&path).await?;
-        let mut buffer = vec![0; metadata.len() as usize];
-        f.read_exact(&mut buffer).await?;
-        Ok(buffer)
-    } else if url.scheme() == "data" {
-        let data_url = data_url::DataUrl::process(url.as_str())?;
-        Ok(data_url.decode_to_vec()?.0)
+    if is_gif(url_unparsed, &media) {
+        decode_gif_frames(&media.bytes, num_frames)
     } else {
-        bail!("Unsupported URL scheme: {}", url.scheme());
+        decode_video_ffmpeg(&media.bytes, num_frames, url_unparsed).await
     }
 }
 
-pub async fn parse_video_url(url_unparsed: &str, num_frames: Option<usize>) -> Result<VideoInput> {
-    let bytes = fetch_bytes(url_unparsed).await?;
-
-    // Detect format
-    let lower = url_unparsed.to_lowercase();
-    let is_gif = lower.ends_with(".gif")
-        || lower.contains("image/gif")
-        || (bytes.len() >= 6 && &bytes[..6] == b"GIF89a")
-        || (bytes.len() >= 6 && &bytes[..6] == b"GIF87a");
-
-    if is_gif {
-        decode_gif_frames(&bytes, num_frames)
-    } else {
-        decode_video_ffmpeg(&bytes, num_frames, url_unparsed).await
-    }
+/// Whether the source names, declares, or begins with a GIF.
+fn is_gif(source: &str, media: &Loaded) -> bool {
+    source.to_lowercase().ends_with(".gif")
+        || media
+            .mime
+            .as_deref()
+            .is_some_and(|mime| mime.eq_ignore_ascii_case("image/gif"))
+        || media.bytes.starts_with(b"GIF89a")
+        || media.bytes.starts_with(b"GIF87a")
 }
 
 /// Decode a GIF into frames using the `image` crate.
@@ -542,5 +514,40 @@ mod tests {
         assert!((parse_fps_fraction("24/1").unwrap() - 24.0).abs() < 0.01);
         assert!(parse_fps_fraction("").is_none());
         assert!(parse_fps_fraction("abc").is_none());
+    }
+
+    #[tokio::test]
+    async fn network_origin_reads_no_local_video() {
+        let path = std::path::absolute("resources/rust-logo-32x32.png").unwrap();
+
+        assert!(
+            parse_video_url("resources/rust-logo-32x32.png", None, Origin::Network)
+                .await
+                .is_err()
+        );
+        assert!(
+            parse_video_url(&format!("file://{}", path.display()), None, Origin::Network)
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn gif_is_detected_by_name_mime_or_magic() {
+        let plain = |bytes: &[u8]| Loaded {
+            bytes: bytes.to_vec(),
+            mime: None,
+        };
+        assert!(is_gif("clip.GIF", &plain(b"")));
+        assert!(is_gif("clip", &plain(b"GIF89a...")));
+        assert!(is_gif("clip", &plain(b"GIF87a...")));
+        assert!(is_gif(
+            "clip",
+            &Loaded {
+                bytes: Vec::new(),
+                mime: Some("image/gif".to_string()),
+            }
+        ));
+        assert!(!is_gif("clip.mp4", &plain(b"\x00\x00\x00\x18ftyp")));
     }
 }

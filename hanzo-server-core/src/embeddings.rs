@@ -23,6 +23,7 @@ use crate::{
         EmbeddingResponse, EmbeddingUsage, EmbeddingVector,
     },
     types::{ExtractedState, SharedState},
+    media::Origin,
     util::{parse_image_url, sanitize_error_message, validate_model_name},
 };
 
@@ -371,7 +372,7 @@ async fn fetch_embedding_image(
     image_url: String,
     model_id: Option<&str>,
 ) -> Result<EmbeddingWithUsage> {
-    let image = parse_image_url(&image_url)
+    let image = parse_image_url(&image_url, Origin::Network)
         .await
         .context("Failed to load embedding image")?;
 

@@ -21,6 +21,7 @@ use tokio::sync::mpsc::channel;
 use tracing::{error, info};
 
 use hanzo_server_core::util;
+use hanzo_server_core::media::Origin;
 use hanzo_server_core::video::parse_video_url;
 
 fn exit_handler() {
@@ -575,7 +576,7 @@ async fn multimodal_interactive_mode(
                     // Load images
                     let mut image_indexes = Vec::new();
                     for url in &urls_image {
-                        match util::parse_image_url(url).await {
+                        match util::parse_image_url(url, Origin::Operator).await {
                             Ok(image) => {
                                 info!("Added image at `{url}`");
                                 image_indexes.push(images.len());
@@ -590,7 +591,7 @@ async fn multimodal_interactive_mode(
                     // Load audios
                     let mut audio_indexes = Vec::new();
                     for url in &urls_audio {
-                        match util::parse_audio_url(url).await {
+                        match util::parse_audio_url(url, Origin::Operator).await {
                             Ok(audio) => {
                                 info!("Added audio at `{url}`");
                                 audio_indexes.push(audios.len());
@@ -605,7 +606,7 @@ async fn multimodal_interactive_mode(
                     // Load videos
                     let mut video_indexes = Vec::new();
                     for url in &urls_video {
-                        match parse_video_url(url, None).await {
+                        match parse_video_url(url, None, Origin::Operator).await {
                             Ok(video) => {
                                 info!("Added video at `{url}`");
                                 video_indexes.push(videos.len());

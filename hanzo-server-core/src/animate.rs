@@ -24,9 +24,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     handler_core::{create_response_channel, send_request, ErrorToResponse, JsonError},
+    media::{self, Origin},
     types::{ExtractedState, SharedState},
     util::{sanitize_error_message, validate_model_name},
-    video::{fetch_bytes, mux, parse_video_url},
+    video::{mux, parse_video_url},
 };
 
 const IMAGE_EXTS: [&str; 6] = [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"];
@@ -79,23 +80,24 @@ async fn decode_visual(
     fps_override: Option<f64>,
 ) -> Result<(Vec<DynamicImage>, VisualKind, f64)> {
     if looks_like_image(visual) {
-        let bytes = fetch_bytes(visual).await?;
-        let img = image::load_from_memory(&bytes)?;
+        let media = media::load(visual, Origin::Network).await?;
+        let img = image::load_from_memory(&media.bytes)?;
         Ok((
             vec![img],
             VisualKind::Portrait,
             fps_override.unwrap_or(PORTRAIT_DEFAULT_FPS),
         ))
     } else {
-        let video = parse_video_url(visual, None).await?;
+        let video = parse_video_url(visual, None, Origin::Network).await?;
         let fps = fps_override.unwrap_or(video.fps);
         Ok((video.frames, VisualKind::Footage, fps))
     }
 }
 
 async fn decode_audio(audio: &str) -> Result<(Arc<Vec<f32>>, usize)> {
-    let bytes = fetch_bytes(audio).await?;
-    let input = AudioInput::from_bytes(&bytes).map_err(|e| anyhow::anyhow!("decode audio: {e}"))?;
+    let media = media::load(audio, Origin::Network).await?;
+    let input =
+        AudioInput::from_bytes(&media.bytes).map_err(|e| anyhow::anyhow!("decode audio: {e}"))?;
     let sample_rate = input.sample_rate as usize;
     Ok((Arc::new(input.to_mono()), sample_rate))
 }
