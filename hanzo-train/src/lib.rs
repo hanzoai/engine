@@ -17,8 +17,10 @@ pub mod loader;
 pub mod lora;
 pub mod loss;
 pub mod model;
+pub mod run;
 pub mod save;
 pub mod types;
 
 pub use client::{create_lora_training_client, TrainingClient};
+pub use run::{run_sft, SftConfig, SftReport};
 pub use types::{AdamParams, Datum, ForwardBackwardOutput, LoraConfig, ModelInput, SamplingParams};
