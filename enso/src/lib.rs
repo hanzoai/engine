@@ -39,7 +39,7 @@ pub use featurize::{Featurizer, HashFeaturizer};
 pub use guard::{
     DistilledTeacher, GuardTier, GuardVerdict, Safety, SafetyGuard, Teacher, TwoTierGuard,
 };
-pub use learner::{fit_base, Bandit, Learner};
+pub use learner::{fit_base, Bandit, Learner, LearnerStats};
 pub use policy::Policy;
 pub use profile::{ingest, parse_jsonl, EvalSample, Profile, ProfileTable, PROFILE_DIM};
 pub use selector::{Choice, SelectCtx, Selector};
