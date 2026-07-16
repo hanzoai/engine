@@ -1,0 +1,20 @@
+[package]
+name = "hanzo-router-retrain"
+version = "0.1.0"
+edition = "2021"
+description = "Nightly router-heads retrain: transform the ai routing ledger into enso fit input, ridge-fit heads, holdout-gate, persist heads-{scope}.safetensors."
+repository = "https://github.com/hanzoai/engine"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "enso-fit"
+path = "src/main.rs"
+
+[dependencies]
+enso = { path = "../enso" }
+hanzo-router = { path = "../hanzo-router" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+safetensors = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
