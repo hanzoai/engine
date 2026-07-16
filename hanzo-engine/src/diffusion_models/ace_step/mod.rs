@@ -220,13 +220,20 @@ mod tests {
         );
 
         if let Ok(ab) = std::env::var("ACE_AB_OUT") {
-            let rl = Tensor::from_vec(read_f32_le(&format!("{fix}/latent.f32")), (1, 8, 16, 32), &device)
-                .unwrap();
+            let rl = Tensor::from_vec(
+                read_f32_le(&format!("{fix}/latent.f32")),
+                (1, 8, 16, 32),
+                &device,
+            )
+            .unwrap();
             let wav = model.decode(&rl).unwrap();
             let flat: Vec<f32> = wav.flatten_all().unwrap().to_vec1().unwrap();
             let bytes: Vec<u8> = flat.iter().flat_map(|x| x.to_le_bytes()).collect();
             std::fs::write(&ab, bytes).unwrap();
-            println!("dcae_profile_cuda wrote A/B waveform {ab} ({} samples)", flat.len());
+            println!(
+                "dcae_profile_cuda wrote A/B waveform {ab} ({} samples)",
+                flat.len()
+            );
         }
     }
 }
