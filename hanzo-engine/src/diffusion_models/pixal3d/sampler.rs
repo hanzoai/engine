@@ -1,7 +1,7 @@
 //! Rectified-flow Euler sampler with classifier-free guidance interval (TRELLIS
 //! `FlowEulerGuidanceIntervalSampler`), shared by both flow stages.
 //!
-//! The schedule is `linspace(1, 0, steps+1)` reparametrized by `rescale_t`, and each step is a plain
+//! The schedule is `linspace(1, 0, steps+1)` reparameterized by `rescale_t`, and each step is a plain
 //! Euler update `x <- x - (t - t_prev) * v`. Inside `cfg_interval` the velocity is CFG-guided
 //! `(1 + s) * v_cond - s * v_uncond`; outside it, cond-only. `v` is supplied as a closure so the
 //! same sampler drives the sparse-structure and SLAT flows.
@@ -29,7 +29,7 @@ impl Default for FlowEulerParams {
     }
 }
 
-/// `linspace(1, 0, steps+1)` reparametrized by `rescale_t`. Endpoints stay 1 and 0.
+/// `linspace(1, 0, steps+1)` reparameterized by `rescale_t`. Endpoints stay 1 and 0.
 pub fn t_schedule(steps: usize, rescale_t: f64) -> Vec<f64> {
     (0..=steps)
         .map(|i| {
