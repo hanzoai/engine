@@ -18,7 +18,7 @@ use hanzo_nn::{AdamW, Optimizer, VarMap};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokenizers::Tokenizer;
 
-use crate::loader::load_base_model;
+use crate::loader::{load_base_model, BaseModel};
 use crate::model::LoraModel;
 use crate::types::{
     AdamParams, Datum, ForwardBackwardOutput, LoraConfig, ModelInput, SamplingParams,
@@ -38,14 +38,44 @@ pub struct TrainingClient {
 }
 
 /// Load `base_model` frozen and attach trainable LoRA adapters — Tinker's
-/// `create_lora_training_client(base_model, LoraConfig)`.
+/// `create_lora_training_client(base_model, LoraConfig)`. Resolves the base with
+/// hanzo-train's standalone loader ([`load_base_model`]).
 pub fn create_lora_training_client(
     base_model: &str,
     lora: LoraConfig,
     device: Device,
     dtype: DType,
 ) -> anyhow::Result<TrainingClient> {
-    let base = load_base_model(base_model, dtype, &device)?;
+    from_base(
+        load_base_model(base_model, dtype, &device)?,
+        lora,
+        device,
+        dtype,
+    )
+}
+
+/// Attach trainable LoRA adapters to a base resolved by the *engine* — its config,
+/// tokenizer, and frozen weights extracted from an already-loaded engine model
+/// (`hanzo_engine::models::llama_train::base_weights_for_training`), rather than
+/// hanzo-train's standalone loader. Same [`TrainingClient`], different base source:
+/// LoRA fine-tuning runs against the engine's own loaded weights.
+pub fn create_lora_training_client_from_engine(
+    base: BaseModel,
+    lora: LoraConfig,
+    device: Device,
+    dtype: DType,
+) -> anyhow::Result<TrainingClient> {
+    from_base(base, lora, device, dtype)
+}
+
+/// The single construction path shared by both constructors: freeze the base, inject the
+/// LoRA `Var`s, and wrap it in a [`TrainingClient`]. The training logic lives only here.
+fn from_base(
+    base: BaseModel,
+    lora: LoraConfig,
+    device: Device,
+    dtype: DType,
+) -> anyhow::Result<TrainingClient> {
     let varmap = VarMap::new();
     let model = LoraModel::new(&base.config, &base.weights, &lora, &varmap)?;
     Ok(TrainingClient {
