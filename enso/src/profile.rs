@@ -100,7 +100,7 @@ impl Profile {
         self.cost / COST_NORM
     }
 
-    /// The eval feature vector `p` consumed by the bilinear policy.
+    /// The full eval feature vector `p`: [quality-by-task | latency | cost | vram | ctx].
     pub fn features(&self) -> [f64; PROFILE_DIM] {
         let mut p = [0.0; PROFILE_DIM];
         p[..NUM_TASKS].copy_from_slice(&self.quality);
@@ -110,11 +110,26 @@ impl Profile {
         p[NUM_TASKS + 3] = self.max_context as f64 / CTX_NORM;
         p
     }
+
+    /// The QUALITY-only feature vector: [quality-by-task | 0 | 0 | 0 | 0] (same length
+    /// as `features`). The learned bilinear utility `x^T W p` reads this — it scores how
+    /// well an arm SERVES a task by measured quality alone. Cost and latency are NOT in
+    /// the utility: they are the selector's explicit, SLO-tunable penalties
+    /// (`objective = utility - lambda*cost_norm - mu*latency_norm`). Folding perf into
+    /// the utility too would double-count it and let a fast-but-weaker arm outrank the
+    /// measured-best one at a neutral SLO — which is exactly what warm-start must not do.
+    pub fn quality_features(&self) -> [f64; PROFILE_DIM] {
+        let mut p = [0.0; PROFILE_DIM];
+        p[..NUM_TASKS].copy_from_slice(&self.quality);
+        p
+    }
 }
 
 /// The pool. Lookups are by (model, level, modality); candidate enumeration is
-/// by modality (the pool the request must be served from).
-#[derive(Debug, Clone, Default)]
+/// by modality (the pool the request must be served from). Serializable so a fit
+/// job can bake the arms into the base artifact alongside `W` (one file, one format
+/// across every scope) and serving reconstructs the exact pool it was fit against.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProfileTable {
     pub profiles: Vec<Profile>,
 }
@@ -124,6 +139,12 @@ impl ProfileTable {
         self.profiles
             .iter()
             .find(|p| p.model == model && p.level == level && p.modality == modality)
+    }
+
+    /// First profile row for a model id, across level/modality — the arm lookup the
+    /// online observe path uses (it carries only the served arm id, not its level).
+    pub fn by_model(&self, model: &str) -> Option<&Profile> {
+        self.profiles.iter().find(|p| p.model == model)
     }
 
     pub fn for_modality(&self, modality: Modality) -> impl Iterator<Item = &Profile> {

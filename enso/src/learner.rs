@@ -18,6 +18,8 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::linalg::{self, bilinear_feature, dot, matvec, quad_form, sherman_morrison};
 use crate::policy::{Policy, DK};
 
@@ -103,6 +105,45 @@ impl Bandit {
         matvec(&self.ainv, DK, DK, &self.b, &mut self.theta);
         self.n += 1;
     }
+
+    /// A serializable snapshot of the online state — everything needed to resume the
+    /// LinUCB update after a restart (the scratch buffers are reconstructed on load).
+    pub fn to_state(&self) -> BanditState {
+        BanditState {
+            ainv: self.ainv.clone(),
+            b: self.b.clone(),
+            theta: self.theta.clone(),
+            n: self.n,
+        }
+    }
+
+    /// Rebuild a bandit from a persisted snapshot at the learner's alpha. Rejects a
+    /// snapshot whose matrices are the wrong shape (a stale/corrupt state file).
+    pub fn from_state(state: &BanditState, alpha: f64) -> Option<Self> {
+        if state.ainv.len() != DK * DK || state.b.len() != DK || state.theta.len() != DK {
+            return None;
+        }
+        Some(Self {
+            ainv: state.ainv.clone(),
+            b: state.b.clone(),
+            theta: state.theta.clone(),
+            alpha,
+            phi: vec![0.0; DK],
+            scratch: vec![0.0; DK],
+            n: state.n,
+        })
+    }
+}
+
+/// The persisted form of one user's LinUCB bandit — `A^-1`, `b`, `theta`, and the
+/// observation count. Serialized into the state artifact's metadata so restarts do
+/// not lose per-user adaptation. Same shape across every scope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BanditState {
+    pub ainv: Vec<f64>,
+    pub b: Vec<f64>,
+    pub theta: Vec<f64>,
+    pub n: u32,
 }
 
 /// Owns the base policy and the per-user bandits.
@@ -142,6 +183,30 @@ impl Learner {
 
     pub fn observe(&mut self, user_id: &str, x: &[f64], p: &[f64], reward: f64) {
         self.bandit_mut(user_id).observe(x, p, reward);
+    }
+
+    /// Export every user's bandit snapshot for persistence (empty when no user has
+    /// been observed yet — a fresh base carries no online state).
+    pub fn user_states(&self) -> Vec<(String, BanditState)> {
+        self.users
+            .iter()
+            .map(|(id, b)| (id.clone(), b.to_state()))
+            .collect()
+    }
+
+    /// Restore per-user bandits from persisted snapshots at this learner's alpha,
+    /// skipping any wrong-shaped snapshot. The base `W` prior is unchanged — only the
+    /// online deltas are layered back on.
+    pub fn restore(&mut self, states: &[(String, BanditState)]) {
+        for (id, st) in states {
+            if let Some(b) = Bandit::from_state(st, self.alpha) {
+                self.users.insert(id.clone(), b);
+            }
+        }
+    }
+
+    pub fn user_count(&self) -> usize {
+        self.users.len()
     }
 
     /// `||dW_u|| = ||theta_u - W||`, the size of the per-user adaptation.
