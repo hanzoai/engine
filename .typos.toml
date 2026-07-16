@@ -48,6 +48,12 @@ extend-ignore-re = [
 
 [default.extend-words]
 "ammount" = "ammount"
+# ROCm Heterogeneous System Architecture (HSA_XNACK env var)
+"HSA" = "HSA"
+# least-squares accumulator sum(w * x * Laux) in convert_fp8_to_gguf.py
+"sxl" = "sxl"
+# TRELLIS flexicubes interpolated-edge variable
+"ue" = "ue"
 # 3D-generation route/module naming (/v1/3d)
 "threed" = "threed"
 "arange" = "arange"
