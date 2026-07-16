@@ -1925,9 +1925,13 @@ checksum = "869b0adbda23651a9c5c0c3d270aac9fcb52e8622a8f2b17e57802d7791962f2"
 name = "enso"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "bytemuck",
  "hanzo-router",
+ "safetensors 0.7.0",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -3403,6 +3407,7 @@ dependencies = [
  "data-url",
  "dirs 6.0.0",
  "either",
+ "enso",
  "futures",
  "hanzo-3d",
  "hanzo-engine",

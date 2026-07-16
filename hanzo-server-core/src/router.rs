@@ -28,7 +28,7 @@ use crate::{
     image_generation::image_generation,
     music_generation::music_generation,
     responses::{cancel_response, create_response, delete_response, get_response},
-    route::{cold_start_enso, enso_from_path, route_handler, SharedEnso},
+    route::{cold_start_enso, enso_from_path, route_handler, route_observe_handler, SharedEnso},
     route_registry::{
         AGENT_APPROVAL_ROUTE, ANIMATE_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE,
         AUDIO_TRANSCRIPTION_ROUTE, CANCEL_RESPONSE_ROUTE, COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE,
@@ -325,6 +325,10 @@ fn init_router(
 
     let router_max_body_limit = max_body_limit.unwrap_or(DEFAULT_MAX_BODY_LIMIT);
 
+    // Periodically flush each live scope's online LinUCB state to disk so a restart
+    // resumes per-user learning (60s; a no-op without a tokio runtime).
+    enso.spawn_flush(60);
+
     let cors_layer = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
         .allow_headers([
@@ -361,6 +365,7 @@ fn init_router(
         .route(IMAGE_GENERATION_ROUTE.path, post(image_generation))
         .route(TRYON_GENERATION_ROUTE.path, post(tryon_generation))
         .route("/v1/route", post(route_handler))
+        .route("/v1/route/observe", post(route_observe_handler))
         .route(VIDEO_GENERATION_ROUTE.path, post(create_video))
         .route(VIDEO_JOB_ROUTE.path, get(get_video))
         .route(VIDEO_CONTENT_ROUTE.path, get(get_video_content))
