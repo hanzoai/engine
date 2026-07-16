@@ -257,7 +257,10 @@ fn dense_indexed_moe(bank: &Tensor, x: &Tensor, ids: &Tensor) -> Result<Tensor> 
         .to_dtype(DType::F32)?
         .contiguous()?;
     let bank = bank.to_dtype(DType::F32)?;
-    let ids_vec = ids.reshape((t * topk,))?.to_dtype(DType::U32)?.to_vec1::<u32>()?;
+    let ids_vec = ids
+        .reshape((t * topk,))?
+        .to_dtype(DType::U32)?
+        .to_vec1::<u32>()?;
     let mut groups: HashMap<u32, Vec<u32>> = HashMap::new();
     for (slot, eid) in ids_vec.iter().enumerate() {
         groups.entry(*eid).or_default().push(slot as u32);
@@ -372,7 +375,9 @@ mod tests {
         use rand::prelude::*;
         use rand_distr::StandardNormal;
         let mut rng = rand_isaac::Isaac64Rng::seed_from_u64(seed);
-        (0..n).map(|_| rng.sample::<f32, _>(StandardNormal)).collect()
+        (0..n)
+            .map(|_| rng.sample::<f32, _>(StandardNormal))
+            .collect()
     }
 
     // Guards the gguf_moe.rs router-weight f16 hold: the [tokens, n_experts] logits still accumulate
@@ -384,7 +389,8 @@ mod tests {
         // Router logits ~ N(0, hidden * var); scale the weight so logits land in the usual O(1)
         // range instead of a degenerate tie band.
         let scale = 1.0 / (hidden as f64).sqrt();
-        let w = (Tensor::from_vec(normals(0x9E37, experts * hidden), (experts, hidden), &dev)? * scale)?;
+        let w = (Tensor::from_vec(normals(0x9E37, experts * hidden), (experts, hidden), &dev)?
+            * scale)?;
         let x = Tensor::from_vec(normals(0x1F83, tokens * hidden), (tokens, hidden), &dev)?;
 
         let logits_f32 = x.broadcast_matmul(&w.t()?)?;
@@ -413,9 +419,11 @@ mod tests {
         let dev = Device::Cpu;
         let (tokens, topk, experts, hidden, inter) = (3usize, 2usize, 4usize, 64usize, 32usize);
         let bank = |seed: u64, rows: usize, cols: usize| -> Result<QMatMul> {
-            let w =
-                (Tensor::from_vec(normals(seed, experts * rows * cols), (experts, rows, cols), &dev)?
-                    * 0.5)?;
+            let w = (Tensor::from_vec(
+                normals(seed, experts * rows * cols),
+                (experts, rows, cols),
+                &dev,
+            )? * 0.5)?;
             QMatMul::from_qtensor(QTensor::quantize(&w, GgmlDType::Q4_0)?)
         };
         let gate = bank(0xA1, inter, hidden)?;
@@ -444,7 +452,10 @@ mod tests {
             .sum(D::Minus2)?;
 
         let diff = (new - old)?.abs()?.max_all()?.to_scalar::<f32>()?;
-        assert!(diff < 1e-5, "fused decode diverged from reference by {diff}");
+        assert!(
+            diff < 1e-5,
+            "fused decode diverged from reference by {diff}"
+        );
         Ok(())
     }
 }

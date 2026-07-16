@@ -245,7 +245,10 @@ mod tests {
             "umt5_ids.i64",
             "umt5_config.json",
         ];
-        if need.iter().any(|f| !PathBuf::from(format!("{fx}/{f}")).is_file()) {
+        if need
+            .iter()
+            .any(|f| !PathBuf::from(format!("{fx}/{f}")).is_file())
+        {
             eprintln!("ACE-Step fixtures absent; skipping generate bench");
             return;
         }
@@ -271,9 +274,12 @@ mod tests {
         )
         .unwrap();
         cfg.umt5 = true;
-        let mut text_encoder =
-            Umt5TextEncoder::new(&cfg, load(format!("{fx}/umt5.safetensors"), all.clone()), &device)
-                .unwrap();
+        let mut text_encoder = Umt5TextEncoder::new(
+            &cfg,
+            load(format!("{fx}/umt5.safetensors"), all.clone()),
+            &device,
+        )
+        .unwrap();
         let dit_dtype = match std::env::var("ACE_DIT_DTYPE")
             .unwrap_or_else(|_| "f32".to_string())
             .as_str()
@@ -332,9 +338,13 @@ mod tests {
                 .sample_ctx(frames, ehs.dim(1).unwrap(), &device)
                 .unwrap();
             device.set_seed(1234).unwrap();
-            let latent =
-                Tensor::randn(0f32, 1.0, (1, LATENT_CHANNELS, LATENT_HEIGHT, frames), &device)
-                    .unwrap();
+            let latent = Tensor::randn(
+                0f32,
+                1.0,
+                (1, LATENT_CHANNELS, LATENT_HEIGHT, frames),
+                &device,
+            )
+            .unwrap();
             let ts = Tensor::from_vec(vec![500f32], (1,), &device).unwrap();
             for _ in 0..5 {
                 let _ = transformer
@@ -394,7 +404,10 @@ mod tests {
             let flat: Vec<f32> = wav.flatten_all().unwrap().to_vec1().unwrap();
             let bytes: Vec<u8> = flat.iter().flat_map(|x| x.to_le_bytes()).collect();
             std::fs::write(&ab, bytes).unwrap();
-            println!("music_generate_cuda_bench wrote A/B waveform {ab} ({} samples)", flat.len());
+            println!(
+                "music_generate_cuda_bench wrote A/B waveform {ab} ({} samples)",
+                flat.len()
+            );
         }
     }
 }
