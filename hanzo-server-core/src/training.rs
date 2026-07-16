@@ -553,22 +553,7 @@ pub async fn training_sample(
     let sequences = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<SampledSequence>> {
         let client = guard.as_ref().expect("ready_client guarantees Some");
         let ids = match (&req.prompt, &req.tokens) {
-            (Some(prompt), None) => {
-                let mut ids = Vec::new();
-                if let Some(b) = client.bos_token_id() {
-                    ids.push(b);
-                }
-                ids.extend(
-                    client
-                        .tokenizer()
-                        .encode(prompt.as_str(), false)
-                        .map_err(anyhow::Error::msg)?
-                        .get_ids()
-                        .iter()
-                        .copied(),
-                );
-                ids
-            }
+            (Some(prompt), None) => client.encode_prompt(prompt)?,
             (None, Some(tokens)) => tokens.clone(),
             _ => unreachable!("validated above"),
         };
@@ -579,10 +564,7 @@ pub async fn training_sample(
                     ..req.sampling_params.clone()
                 };
                 let tokens = client.sample(&ModelInput::from_ints(ids.clone()), &params)?;
-                let text = client
-                    .tokenizer()
-                    .decode(&tokens, true)
-                    .map_err(anyhow::Error::msg)?;
+                let text = client.decode(&tokens)?;
                 Ok(SampledSequence { tokens, text })
             })
             .collect()
