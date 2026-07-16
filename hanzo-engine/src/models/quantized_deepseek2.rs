@@ -171,8 +171,7 @@ fn load_layer_indexer<R: std::io::Seek + std::io::Read>(
     }
     let wq = gguf_linear(ct.tensor(&wq_name, device)?)?;
     let wk = gguf_linear(ct.tensor(&format!("{prefix}.attn_indexer_k.weight"), device)?)?;
-    let weights_proj =
-        gguf_linear(ct.tensor(&format!("{prefix}.attn_indexer_w.weight"), device)?)?;
+    let weights_proj = gguf_linear(ct.tensor(&format!("{prefix}.attn_indexer_w.weight"), device)?)?;
 
     let k_norm = if ct.has_tensor(&format!("{prefix}.attn_indexer_k_norm.weight")) {
         let w = ct
@@ -188,7 +187,13 @@ fn load_layer_indexer<R: std::io::Seek + std::io::Read>(
         None
     };
 
-    Ok(Some(DsaIndexer::from_parts(cfg, wq, wk, weights_proj, k_norm)))
+    Ok(Some(DsaIndexer::from_parts(
+        cfg,
+        wq,
+        wk,
+        weights_proj,
+        k_norm,
+    )))
 }
 
 pub(crate) struct LayerWeights {
@@ -424,7 +429,8 @@ impl LayerWeights {
         // not pre-empt DSA's sparse key selection. Algebraically identical to the materialized path.
         if metadata.is_none() && self.indexer.is_none() && prev_selection.is_none() {
             if let (Some(w_uk), Some(w_uv_t)) = (&self.w_uk, &self.w_uv_t) {
-                let out = self.forward_attn_absorbed(x, mask, start_offsets, kv_cache, w_uk, w_uv_t)?;
+                let out =
+                    self.forward_attn_absorbed(x, mask, start_offsets, kv_cache, w_uk, w_uv_t)?;
                 return Ok((out, None));
             }
         }
@@ -632,8 +638,8 @@ impl LayerWeights {
         let ckv_split =
             compressed_kv.split(&[self.kv_lora_rank, self.qk_rope_head_dim], D::Minus1)?;
         let ckv = self.kv_a_norm.forward(&ckv_split[0])?; // [B, S, kv_lora]
-        // Broadcast the shared rope key to n_head for the head-count-symmetric rope kernel, then
-        // keep a single head: RoPE is head-independent and the inputs were identical across heads.
+                                                          // Broadcast the shared rope key to n_head for the head-count-symmetric rope kernel, then
+                                                          // keep a single head: RoPE is head-independent and the inputs were identical across heads.
         let mut k_pe = ckv_split[1]
             .reshape((bs, seq_len, 1, self.qk_rope_head_dim))?
             .transpose(1, 2)?
@@ -645,8 +651,8 @@ impl LayerWeights {
         let ql_nope = q_nope
             .to_dtype(self.dtype)?
             .broadcast_matmul(&w_uk.unsqueeze(0)?)?;
-        let q_latent = Tensor::cat(&[&ql_nope, &q_pe.to_dtype(self.dtype)?], D::Minus1)?
-            .contiguous()?; // [B, H, S, kv_lora + qk_rope]
+        let q_latent =
+            Tensor::cat(&[&ql_nope, &q_pe.to_dtype(self.dtype)?], D::Minus1)?.contiguous()?; // [B, H, S, kv_lora + qk_rope]
 
         // Latent key/value for the new tokens (one shared head), appended to the compressed cache.
         let ckv4 = ckv
@@ -696,8 +702,15 @@ impl LayerWeights {
     ) -> Result<(Tensor, Option<DsaSelection>)> {
         let residual = &x;
         let xn = self.attn_norm.forward(&x)?;
-        let (attn, selection) =
-            self.forward_attn(&xn, mask, start_offsets, positions, prev_selection, kv_cache, metadata)?;
+        let (attn, selection) = self.forward_attn(
+            &xn,
+            mask,
+            start_offsets,
+            positions,
+            prev_selection,
+            kv_cache,
+            metadata,
+        )?;
         let x = (attn + residual)?;
         let residual = &x;
         let xn = self.ffn_norm.forward(&x)?;
@@ -1470,8 +1483,12 @@ mod tests {
         let ct = Content::from_readers(&mut readers)?;
         let dev = Device::Cpu;
         // dummy mapper ignores model_layers; 64 is a safe upper bound for the 5-block model.
-        let mapper = crate::device_map::DeviceMapSetting::dummy()
-            .into_mapper(64, &dev, None, std::slice::from_ref(&dev))?;
+        let mapper = crate::device_map::DeviceMapSetting::dummy().into_mapper(
+            64,
+            &dev,
+            None,
+            std::slice::from_ref(&dev),
+        )?;
         let m = <ModelWeights as ModelConfig::FromGGUF>::from_gguf(
             ct,
             &dev,
@@ -1563,7 +1580,7 @@ mod tests {
         // ---- (B) GREEDY DECODE: 20 autoregressive steps from prompt_ids, KV-cache incremental ----
         {
             let m = glm_load(&gguf)?; // fresh cold cache
-            // prefill: predict token at position 12 from the last prompt position
+                                      // prefill: predict token at position 12 from the last prompt position
             let pre = m.forward(
                 &glm_ids(&prompt_ids)?,
                 &[0usize],

@@ -473,8 +473,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
             let tok_embeddings =
                 Embedding::new(qtok_embeddings.dequantize(device)?, embedding_length);
-            let norm =
-                QRmsNorm::new_dtype(ct.tensor("output_norm.weight", device)?, rms_norm_eps, dtype)?;
+            let norm = QRmsNorm::new_dtype(
+                ct.tensor("output_norm.weight", device)?,
+                rms_norm_eps,
+                dtype,
+            )?;
             let output = if !ct.has_tensor("output.weight") {
                 ct.tensor("token_embd.weight", device)?
             } else {
