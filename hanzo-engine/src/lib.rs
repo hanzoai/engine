@@ -126,7 +126,7 @@ pub use hanzo_llm_mcp::{
 pub use hanzo_llm_mcp::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
-pub use hanzo_quant::{IsqBits, IsqType, MULTI_LORA_DELIMITER};
+pub use hanzo_quant::{export_gguf, GgufOutputType, IsqBits, IsqType, MULTI_LORA_DELIMITER};
 pub use hanzo_sandbox::{NetworkMode, SandboxPolicy};
 
 /// Python code execution config.
