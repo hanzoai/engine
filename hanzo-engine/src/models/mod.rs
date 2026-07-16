@@ -16,6 +16,7 @@ pub(crate) mod gpt_oss;
 pub(crate) mod granite;
 pub(crate) mod llada;
 pub(crate) mod llama;
+pub(crate) mod llama_train;
 pub(crate) mod minimax_m2;
 pub(crate) mod mistral;
 pub(crate) mod mixtral;
