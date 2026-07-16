@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use hanzo_ml::{DType, Device};
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 
-use crate::client::create_lora_training_client;
+use crate::client::{create_lora_training_client, TrainingClient};
 use crate::data::load_jsonl;
 use crate::types::{AdamParams, LoraConfig, ModelInput, SamplingParams};
 
@@ -47,14 +47,24 @@ pub struct SftReport {
     pub sample: Option<String>,
 }
 
-/// Run supervised fine-tuning to completion. Blocking; call from a thread that
-/// may compute for a while.
+/// Run supervised fine-tuning to completion, resolving the base with hanzo-train's
+/// standalone loader. Blocking; call from a thread that may compute for a while.
 pub fn run_sft(cfg: &SftConfig) -> anyhow::Result<SftReport> {
     let device = Device::Cpu;
     let dtype = DType::F32;
 
     tracing::info!(model = %cfg.model, "loading base model + injecting LoRA");
-    let mut client = create_lora_training_client(&cfg.model, cfg.lora.clone(), device, dtype)?;
+    let client = create_lora_training_client(&cfg.model, cfg.lora.clone(), device, dtype)?;
+    run_sft_with_client(client, cfg)
+}
+
+/// Run supervised fine-tuning with a caller-supplied [`TrainingClient`] — the loop shared
+/// by the standalone [`run_sft`] and the engine-backed path (LoRA over an engine-loaded
+/// model via `create_lora_training_client_from_engine`).
+pub fn run_sft_with_client(
+    mut client: TrainingClient,
+    cfg: &SftConfig,
+) -> anyhow::Result<SftReport> {
     let trainable_params = client.num_trainable_params();
     tracing::info!(trainable_params, "base loaded, adapters injected");
 
