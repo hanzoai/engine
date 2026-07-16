@@ -1,0 +1,19 @@
+[Unit]
+Description=Hanzo Enso router-heads nightly retrain (spark-local: native fit + holdout gate + publish)
+Documentation=https://github.com/hanzoai/engine/tree/main/deploy/router-retrain
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# The engine checkout that carries these scripts (set by install.sh).
+WorkingDirectory=%h/work/hanzo/engine
+# KMS-provisioned secrets + tunables: ROUTER_ADMIN_TOKEN, CONTRIB_ORGS, DO_RELOAD, ...
+EnvironmentFile=-%h/.config/router-retrain/env
+Environment=KUBECONFIG=%h/.kube/config
+ExecStart=%h/work/hanzo/engine/scripts/router-retrain-all.sh
+Nice=10
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=default.target
