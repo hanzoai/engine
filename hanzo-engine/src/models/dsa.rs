@@ -635,7 +635,12 @@ mod tests {
 
         let c = DsaConfig::new(64, 128, 2048, 0).unwrap();
         assert_eq!(
-            (c.index_n_heads(), c.index_head_dim(), c.index_topk(), c.rope_dim()),
+            (
+                c.index_n_heads(),
+                c.index_head_dim(),
+                c.index_topk(),
+                c.rope_dim()
+            ),
             (64, 128, 2048, 0),
             "fields pass through unchanged; rope_dim=0 (RoPE disabled) is valid"
         );

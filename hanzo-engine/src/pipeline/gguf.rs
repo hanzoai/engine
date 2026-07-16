@@ -238,7 +238,11 @@ impl Default for GraphCapturePolicy {
         // Seed the EMA at the arming threshold (2× breakeven, see `capture_after`) so a fresh server
         // captures on its first sustained generation and only backs off once short ones pull the
         // average down — matching the default-on intent before any workload has been observed.
-        Self { ema_len: 2.0 * VULKAN_GRAPH_BREAKEVEN as f64, run: 0, next_position: 0 }
+        Self {
+            ema_len: 2.0 * VULKAN_GRAPH_BREAKEVEN as f64,
+            run: 0,
+            next_position: 0,
+        }
     }
 }
 
@@ -2089,7 +2093,8 @@ impl GGUFPipeline {
         // Cache miss: run an eager warmup forward first (correct first token + cache populate), then
         // capture a graph for the subsequent tokens. If capture fails we keep the warmup logits and
         // disable the path (fail-closed), so no token is lost or recomputed.
-        let warmup_logits = model.forward(input_ids, seqlen_offsets, context_lens.to_vec(), None)?;
+        let warmup_logits =
+            model.forward(input_ids, seqlen_offsets, context_lens.to_vec(), None)?;
 
         // Capture only once this sequence's run reaches the point the policy judges worthwhile for the
         // observed workload -- `None` means the typical generation is too short to repay a capture, so
@@ -2119,7 +2124,9 @@ impl GGUFPipeline {
             }
             Err(err) => {
                 if !state.disabled {
-                    warn!("Vulkan decode graph capture failed; falling back to eager decode: {err}");
+                    warn!(
+                        "Vulkan decode graph capture failed; falling back to eager decode: {err}"
+                    );
                 }
                 state.disabled = true;
                 state.entry = None;
@@ -2256,11 +2263,7 @@ impl Pipeline for GGUFPipeline {
         // each token. Gated to single-token decode internally; fail-closed to eager on any error.
         #[cfg(feature = "vulkan")]
         {
-            match self.try_vulkan_decode_graph_forward(
-                &input_ids,
-                &seqlen_offsets,
-                &context_lens,
-            ) {
+            match self.try_vulkan_decode_graph_forward(&input_ids, &seqlen_offsets, &context_lens) {
                 Ok(Some(logits)) => {
                     return if return_raw_logits {
                         Ok(ForwardInputsResult::RawLogits { logits })
