@@ -22,7 +22,10 @@ pub mod run;
 pub mod save;
 pub mod types;
 
-pub use client::{create_lora_training_client, TrainingClient};
+pub use client::{
+    create_lora_training_client, create_lora_training_client_from_engine, TrainingClient,
+};
 pub use distill::{run_distill, DistillConfig, DistillReport};
+pub use loader::BaseModel;
 pub use run::{run_sft, SftConfig, SftReport};
 pub use types::{AdamParams, Datum, ForwardBackwardOutput, LoraConfig, ModelInput, SamplingParams};
