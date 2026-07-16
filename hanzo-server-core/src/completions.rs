@@ -284,7 +284,7 @@ pub fn parse_request(
 /// OpenAI-compatible completions endpoint handler.
 #[utoipa::path(
     post,
-    tag = "Mistral.rs",
+    tag = "Hanzo",
     path = "/v1/completions",
     request_body = CompletionRequest,
     responses((status = 200, description = "Completions"))

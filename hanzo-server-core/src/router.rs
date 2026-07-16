@@ -36,12 +36,19 @@ use crate::{
         LIPSYNC_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE, MUSIC_GENERATION_ROUTE,
         RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE,
         SESSION_ROUTE, SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE,
-        THREED_CONTENT_ROUTE, THREED_GENERATION_ROUTE, THREED_JOB_ROUTE, TRYON_GENERATION_ROUTE,
+        THREED_CONTENT_ROUTE, THREED_GENERATION_ROUTE, THREED_JOB_ROUTE, TRAINING_CLIENTS_ROUTE,
+        TRAINING_CLIENT_ROUTE, TRAINING_FORWARD_BACKWARD_ROUTE, TRAINING_OPTIM_STEP_ROUTE,
+        TRAINING_SAMPLE_ROUTE, TRAINING_SAVE_WEIGHTS_ROUTE, TRYON_GENERATION_ROUTE,
         TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE, VIDEO_CONTENT_ROUTE, VIDEO_GENERATION_ROUTE,
         VIDEO_JOB_ROUTE,
     },
     speech_generation::speech_generation,
     threed_generation::{create_3d, get_3d, get_3d_content},
+    training::{
+        create_training_client, delete_training_client, get_training_client, list_training_clients,
+        training_forward_backward, training_optim_step, training_sample, training_save_weights,
+        TrainingState,
+    },
     tryon_generation::tryon_generation,
     types::SharedState,
     video_generation::{create_video, get_video, get_video_content},
@@ -351,10 +358,29 @@ fn init_router(
             SESSION_ROUTE.path,
             get(get_session).put(put_session).delete(delete_session),
         )
+        .route(
+            TRAINING_CLIENTS_ROUTE.path,
+            get(list_training_clients).post(create_training_client),
+        )
+        .route(
+            TRAINING_CLIENT_ROUTE.path,
+            get(get_training_client).delete(delete_training_client),
+        )
+        .route(
+            TRAINING_FORWARD_BACKWARD_ROUTE.path,
+            post(training_forward_backward),
+        )
+        .route(TRAINING_OPTIM_STEP_ROUTE.path, post(training_optim_step))
+        .route(TRAINING_SAMPLE_ROUTE.path, post(training_sample))
+        .route(
+            TRAINING_SAVE_WEIGHTS_ROUTE.path,
+            post(training_save_weights),
+        )
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .layer(Extension(agentic_defaults.approval_broker.clone()))
         .layer(Extension(agentic_defaults))
+        .layer(Extension(TrainingState::default()))
         .with_state(state);
 
     Ok(router)
