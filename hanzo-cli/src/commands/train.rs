@@ -5,7 +5,10 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use hanzo_train::{run_sft, LoraConfig, SftConfig};
+use hanzo_ml::{DType, Device};
+use hanzo_train::{
+    create_lora_training_client_from_engine, run_sft, run_sft_with_client, LoraConfig, SftConfig,
+};
 
 /// Arguments for `hanzo train`, as parsed by the CLI.
 pub struct TrainRunConfig {
@@ -27,17 +30,29 @@ pub fn run_train(cfg: TrainRunConfig) -> Result<()> {
         alpha: cfg.lora_alpha.unwrap_or(2.0 * cfg.lora_rank as f64),
         target_modules: LoraConfig::default_target_modules(),
     };
-    let report = run_sft(&SftConfig {
+    let sft = SftConfig {
         model: cfg.model,
         data: cfg.data,
-        lora,
+        lora: lora.clone(),
         lr: cfg.lr,
         steps: cfg.steps,
         batch_size: cfg.batch_size,
         out: cfg.out,
         seed: cfg.seed,
         sample_prompt: cfg.sample_prompt,
-    })?;
+    };
+
+    // Llama-family models train against the engine's own loaded (dequantized) weights; every
+    // other architecture falls back to hanzo-train's standalone loader. Same loop either way.
+    let (device, dtype) = (Device::Cpu, DType::F32);
+    let report = match hanzo_engine::load_llama_base_for_training(&sft.model, dtype, &device)? {
+        Some(base) => {
+            tracing::info!(model = %sft.model, "training via engine-loaded llama base");
+            let client = create_lora_training_client_from_engine(base, lora, device, dtype)?;
+            run_sft_with_client(client, &sft)?
+        }
+        None => run_sft(&sft)?,
+    };
 
     println!("adapter: {}", report.adapter.display());
     println!(
