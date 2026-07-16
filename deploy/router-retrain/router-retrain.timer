@@ -1,0 +1,11 @@
+[Unit]
+Description=Fire the Enso router-heads retrain nightly at 04:20 America/Los_Angeles
+Documentation=https://github.com/hanzoai/engine/tree/main/deploy/router-retrain
+
+[Timer]
+OnCalendar=*-*-* 04:20:00 America/Los_Angeles
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
