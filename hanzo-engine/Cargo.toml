@@ -80,6 +80,7 @@ ed25519-dalek.workspace = true
 bytemuck_derive.workspace = true
 hanzo-paged-attn = { workspace = true, optional = true }
 hanzo-quant.workspace = true
+hanzo-train.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 utoipa = { workspace = true, optional = true }
 schemars.workspace = true
