@@ -196,6 +196,61 @@ pub enum Command {
         sample_prompt: Option<String>,
     },
 
+    /// Distill: teacher samples completions for a prompt set, student LoRA-trains on them
+    Distill {
+        /// Teacher model: a Hugging Face repo id or a local directory.
+        #[arg(long)]
+        teacher: String,
+
+        /// Student model to fine-tune.
+        #[arg(long)]
+        student: String,
+
+        /// Prompt set: JSONL of {"prompt"}.
+        #[arg(long)]
+        prompts: PathBuf,
+
+        /// Teacher generation length per prompt.
+        #[arg(long, default_value_t = 128)]
+        max_tokens: usize,
+
+        /// Teacher sampling temperature (0 = greedy).
+        #[arg(long, default_value_t = 0.7)]
+        temperature: f64,
+
+        /// Student LoRA rank.
+        #[arg(long, default_value_t = 16)]
+        lora_rank: usize,
+
+        /// Student LoRA alpha. Defaults to 2 * rank.
+        #[arg(long)]
+        lora_alpha: Option<f64>,
+
+        /// Learning rate.
+        #[arg(long, default_value_t = 1e-4)]
+        lr: f64,
+
+        /// Number of optimizer steps.
+        #[arg(long, default_value_t = 100)]
+        steps: usize,
+
+        /// Examples per forward_backward / optim_step.
+        #[arg(long, default_value_t = 1)]
+        batch_size: usize,
+
+        /// Output directory: gets distill.jsonl and adapter/.
+        #[arg(long, default_value = "./distilled")]
+        out: PathBuf,
+
+        /// Sampling + shuffle seed.
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+
+        /// After training, greedy-sample the student for this prompt (smoke check).
+        #[arg(long)]
+        sample_prompt: Option<String>,
+    },
+
     /// Authenticate with HuggingFace Hub
     Login {
         /// Provide token directly (non-interactive)
