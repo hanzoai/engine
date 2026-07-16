@@ -3177,9 +3177,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.11.61"
+version = "0.11.62"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e804482708c32ce1d92f5b9ed7e415e37e6c06e391d0805143c78bc068f0f6d0"
+checksum = "d613d8011f209c65e934488f2a4bff9e4f9a08992d3694b85c63167de9d0c44d"
 dependencies = [
  "accelerate-src",
  "ash",
@@ -3351,6 +3351,19 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "hanzo-router-retrain"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "enso",
+ "hanzo-router",
+ "safetensors 0.7.0",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
