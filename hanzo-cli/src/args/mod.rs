@@ -153,6 +153,49 @@ pub enum Command {
         emit_config: Option<PathBuf>,
     },
 
+    /// LoRA fine-tune a model on {"prompt","completion"} JSONL (native, Tinker-shaped)
+    Train {
+        /// Base model: a Hugging Face repo id or a local directory.
+        #[arg(short = 'm', long)]
+        model: String,
+
+        /// Training data: JSONL of {"prompt", "completion"}.
+        #[arg(long)]
+        data: PathBuf,
+
+        /// LoRA rank.
+        #[arg(long, default_value_t = 16)]
+        lora_rank: usize,
+
+        /// LoRA alpha. Defaults to 2 * rank.
+        #[arg(long)]
+        lora_alpha: Option<f64>,
+
+        /// Learning rate.
+        #[arg(long, default_value_t = 1e-4)]
+        lr: f64,
+
+        /// Number of optimizer steps.
+        #[arg(long, default_value_t = 100)]
+        steps: usize,
+
+        /// Examples per forward_backward / optim_step.
+        #[arg(long, default_value_t = 1)]
+        batch_size: usize,
+
+        /// Output directory for the saved PEFT adapter.
+        #[arg(long, default_value = "./adapter")]
+        out: PathBuf,
+
+        /// Shuffle seed.
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+
+        /// After training, greedy-sample a completion for this prompt (smoke check).
+        #[arg(long)]
+        sample_prompt: Option<String>,
+    },
+
     /// Authenticate with HuggingFace Hub
     Login {
         /// Provide token directly (non-interactive)
