@@ -215,6 +215,12 @@ pub enum NormalLoaderType {
     Qwen3Next,
     #[serde(rename = "minimax_m2")]
     MiniMaxM2,
+    #[serde(rename = "gpt2")]
+    GPT2,
+    #[serde(rename = "falcon")]
+    Falcon,
+    #[serde(rename = "olmo")]
+    Olmo,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -246,6 +252,9 @@ impl NormalLoaderType {
             "GptOssForCausalLM" => Ok(Self::GptOss),
             "Qwen3NextForCausalLM" => Ok(Self::Qwen3Next),
             "MiniMaxM2ForCausalLM" => Ok(Self::MiniMaxM2),
+            "GPT2LMHeadModel" => Ok(Self::GPT2),
+            "FalconForCausalLM" | "RWForCausalLM" => Ok(Self::Falcon),
+            "OlmoForCausalLM" => Ok(Self::Olmo),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
@@ -282,7 +291,10 @@ impl FromStr for NormalLoaderType {
             "gpt_oss" => Ok(Self::GptOss),
             "qwen3next" => Ok(Self::Qwen3Next),
             "minimax_m2" => Ok(Self::MiniMaxM2),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `deepseekv32`, `deepseekv4`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `glm5moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `qwen3next`, `minimax_m2`.")),
+            "gpt2" => Ok(Self::GPT2),
+            "falcon" => Ok(Self::Falcon),
+            "olmo" => Ok(Self::Olmo),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `deepseekv32`, `deepseekv4`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `glm5moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `qwen3next`, `minimax_m2`, `gpt2`, `falcon`, `olmo`.")),
         }
     }
 }
@@ -315,6 +327,9 @@ impl Display for NormalLoaderType {
             Self::GptOss => write!(f, "gpt_oss"),
             Self::Qwen3Next => write!(f, "qwen3next"),
             Self::MiniMaxM2 => write!(f, "minimax_m2"),
+            Self::GPT2 => write!(f, "gpt2"),
+            Self::Falcon => write!(f, "falcon"),
+            Self::Olmo => write!(f, "olmo"),
         }
     }
 }
@@ -381,6 +396,9 @@ impl AutoNormalLoader {
             NormalLoaderType::GptOss => Ok(Box::new(GptOssLoader)),
             NormalLoaderType::Qwen3Next => Ok(Box::new(Qwen3NextLoader)),
             NormalLoaderType::MiniMaxM2 => Ok(Box::new(MiniMaxM2Loader)),
+            NormalLoaderType::GPT2 => Ok(Box::new(GPT2Loader)),
+            NormalLoaderType::Falcon => Ok(Box::new(FalconLoader)),
+            NormalLoaderType::Olmo => Ok(Box::new(OlmoLoader)),
         }
     }
 }
@@ -5897,6 +5915,478 @@ impl DeviceMappedModelLoader for Qwen3NextLoader {
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
+        Ok(Box::new(cfg))
+    }
+}
+
+// ======================== GPT-2 loader
+
+/// [`NormalLoader`] for a GPT-2 model.
+pub struct GPT2Loader;
+
+impl NormalModelLoader for GPT2Loader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::gpt2::Config = serde_json::from_str(config)?;
+        Ok(Box::new(models::gpt2::Model::new(
+            &cfg,
+            vb,
+            self.is_gptx(config)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _vb: ShardedVarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        todo!()
+    }
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        // GPT-2 uses learned positional embeddings, not RoPE.
+        Ok(false)
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::gpt2::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+}
+
+impl IsqModelLoader for GPT2Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"h\.(\d+)\.attn\.c_attn\.(weight|bias)$")?,
+            Regex::new(r"h\.(\d+)\.attn\.c_proj\.(weight|bias)$")?,
+            Regex::new(r"h\.(\d+)\.mlp\.c_fc\.(weight|bias)$")?,
+            Regex::new(r"h\.(\d+)\.mlp\.c_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+}
+
+impl DeviceMappedModelLoader for GPT2Loader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+        let cfg: crate::models::gpt2::Config = serde_json::from_str(config)?;
+        Ok(max_batch_size * cfg.n_head * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2))
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: crate::models::gpt2::Config = serde_json::from_str(config)?;
+        let elems = {
+            let wte = cfg.n_embd * cfg.vocab_size / weight_pack_factor;
+            let wpe = cfg.n_positions * cfg.n_embd;
+            // The head is tied to `wte`, so no separate parameters.
+            let ln_f = cfg.n_embd + cfg.n_embd;
+            wte + wpe + ln_f
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: crate::models::gpt2::Config = serde_json::from_str(config)?;
+        let h = cfg.n_embd;
+        let inner = cfg.n_inner.unwrap_or(4 * h);
+        let per_layer_elems = {
+            let ln_1 = h + h;
+            let ln_2 = h + h;
+            let c_attn = h * (3 * h) / weight_pack_factor + 3 * h;
+            let c_proj = h * h / weight_pack_factor + h;
+            let c_fc = h * inner / weight_pack_factor + inner;
+            let mlp_c_proj = inner * h / weight_pack_factor + h;
+            ln_1 + ln_2 + c_attn + c_proj + c_fc + mlp_c_proj
+        };
+        Ok(vec![per_layer_elems * dtype.size_in_bytes(); cfg.n_layer])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: crate::models::gpt2::Config = serde_json::from_str(config)?;
+        Ok(cfg.n_layer)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: crate::models::gpt2::Config = serde_json::from_str(config)?;
+        let head_dim = cfg.n_embd / cfg.n_head;
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.n_positions,
+            num_layers: cfg.n_layer,
+            hidden_size: cfg.n_embd,
+            num_kv_heads: cfg.n_head,
+            num_attn_heads: cfg.n_head,
+            sliding_window: None,
+            k_head_dim: head_dim,
+            v_head_dim: head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+        Ok(Box::new(cfg))
+    }
+}
+
+// ======================== Falcon loader
+
+/// [`NormalLoader`] for a Falcon model.
+pub struct FalconLoader;
+
+impl NormalModelLoader for FalconLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::falcon::Config = serde_json::from_str(config)?;
+        Ok(Box::new(models::falcon::Model::new(
+            &cfg,
+            vb,
+            self.is_gptx(config)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _vb: ShardedVarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        todo!()
+    }
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::falcon::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+}
+
+impl IsqModelLoader for FalconLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"h\.(\d+)\.self_attention\.query_key_value\.(weight|bias)$")?,
+            Regex::new(r"h\.(\d+)\.self_attention\.dense\.(weight|bias)$")?,
+            Regex::new(r"h\.(\d+)\.mlp\.dense_h_to_4h\.(weight|bias)$")?,
+            Regex::new(r"h\.(\d+)\.mlp\.dense_4h_to_h\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+}
+
+impl DeviceMappedModelLoader for FalconLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+        let cfg: crate::models::falcon::Config = serde_json::from_str(config)?;
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: crate::models::falcon::Config = serde_json::from_str(config)?;
+        let elems = {
+            let word_embeddings = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let ln_f = cfg.hidden_size + cfg.hidden_size;
+            word_embeddings + lm_head + ln_f
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: crate::models::falcon::Config = serde_json::from_str(config)?;
+        let h = cfg.hidden_size;
+        let head_dim = h / cfg.num_attention_heads;
+        let num_kv = if cfg.new_decoder_architecture || !cfg.multi_query {
+            cfg.num_kv_heads.unwrap_or(cfg.num_attention_heads)
+        } else {
+            1
+        };
+        let ffn = cfg.ffn_hidden_size.unwrap_or(4 * h);
+        let per_layer_elems = {
+            let qkv_out = (cfg.num_attention_heads + 2 * num_kv) * head_dim;
+            let query_key_value = h * qkv_out / weight_pack_factor + bias_if!(cfg.bias, qkv_out);
+            let dense = h * h / weight_pack_factor + bias_if!(cfg.bias, h);
+            let h_to_4h = h * ffn / weight_pack_factor + bias_if!(cfg.bias, ffn);
+            let ffn_to_h = ffn * h / weight_pack_factor + bias_if!(cfg.bias, h);
+            // One or two affine norms per layer.
+            let norms = 4 * h;
+            query_key_value + dense + h_to_4h + ffn_to_h + norms
+        };
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: crate::models::falcon::Config = serde_json::from_str(config)?;
+        Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: crate::models::falcon::Config = serde_json::from_str(config)?;
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let num_kv = if cfg.new_decoder_architecture || !cfg.multi_query {
+            cfg.num_kv_heads.unwrap_or(cfg.num_attention_heads)
+        } else {
+            1
+        };
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: num_kv,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: head_dim,
+            v_head_dim: head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+        Ok(Box::new(cfg))
+    }
+}
+
+// ======================== OLMo loader
+
+/// [`NormalLoader`] for an OLMo model.
+pub struct OlmoLoader;
+
+impl NormalModelLoader for OlmoLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::olmo::Config = serde_json::from_str(config)?;
+        Ok(Box::new(models::olmo::Model::new(
+            &cfg,
+            vb,
+            self.is_gptx(config)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _vb: ShardedVarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        todo!()
+    }
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::olmo::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+}
+
+impl IsqModelLoader for OlmoLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+}
+
+impl DeviceMappedModelLoader for OlmoLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+        let cfg: crate::models::olmo::Config = serde_json::from_str(config)?;
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: crate::models::olmo::Config = serde_json::from_str(config)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            // Norms are non-parametric; head is tied when `tie_word_embeddings`.
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            embed_tokens + lm_head
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: crate::models::olmo::Config = serde_json::from_str(config)?;
+        let h = cfg.hidden_size;
+        let head_dim = h / cfg.num_attention_heads;
+        let size_q = head_dim * cfg.num_attention_heads;
+        let size_kv = head_dim * cfg.num_key_value_heads;
+        let i = cfg.intermediate_size;
+        let per_layer_elems = {
+            let q_proj = h * size_q / weight_pack_factor + bias_if!(cfg.attention_bias, size_q);
+            let k_proj = h * size_kv / weight_pack_factor + bias_if!(cfg.attention_bias, size_kv);
+            let v_proj = h * size_kv / weight_pack_factor + bias_if!(cfg.attention_bias, size_kv);
+            let o_proj = size_q * h / weight_pack_factor + bias_if!(cfg.attention_bias, h);
+            let gate_proj = h * i / weight_pack_factor;
+            let up_proj = h * i / weight_pack_factor;
+            let down_proj = i * h / weight_pack_factor;
+            // Non-parametric norms contribute no parameters.
+            q_proj + k_proj + v_proj + o_proj + gate_proj + up_proj + down_proj
+        };
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: crate::models::olmo::Config = serde_json::from_str(config)?;
+        Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: crate::models::olmo::Config = serde_json::from_str(config)?;
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: head_dim,
+            v_head_dim: head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
         Ok(Box::new(cfg))
     }
 }
