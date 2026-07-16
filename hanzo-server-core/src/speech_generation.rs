@@ -104,7 +104,7 @@ pub fn parse_request(
 /// Speech generation endpoint handler.
 #[utoipa::path(
     post,
-    tag = "Mistral.rs",
+    tag = "Hanzo",
     path = "/v1/audio/speech",
     request_body = SpeechGenerationRequest,
     responses((status = 200, description = "Speech generation"))

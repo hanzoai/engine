@@ -945,7 +945,7 @@ pub async fn parse_request(
 /// OpenAI-compatible chat completions endpoint handler.
 #[utoipa::path(
     post,
-    tag = "Mistral.rs",
+    tag = "Hanzo",
     path = "/v1/chat/completions",
     request_body = ChatCompletionRequest,
     responses((status = 200, description = "Chat completions"))

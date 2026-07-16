@@ -107,7 +107,7 @@ pub fn parse_request(
 /// Image generation endpoint handler.
 #[utoipa::path(
     post,
-    tag = "Mistral.rs",
+    tag = "Hanzo",
     path = "/v1/images/generations",
     request_body = ImageGenerationRequest,
     responses((status = 200, description = "Image generation"))
