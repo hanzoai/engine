@@ -7,10 +7,12 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use tracing::{info, warn};
 
-use hanzo_engine::{expand_isq_value, initialize_logging, IsqType, ModelSelected};
+use hanzo_engine::{
+    expand_isq_value, export_gguf, initialize_logging, GgufOutputType, IsqType, ModelSelected,
+};
 use hanzo_server_core::server::{defaults, ServerBuilder};
 
-use crate::args::{GlobalOptions, QuantizeModelType};
+use crate::args::{GlobalOptions, OutputFormat, QuantizeModelType};
 
 /// Extract ISQ values from the QuantizeModelType
 fn get_isq_values(model_type: &QuantizeModelType) -> &[String] {
@@ -29,6 +31,16 @@ fn get_output_path(model_type: &QuantizeModelType) -> &PathBuf {
         QuantizeModelType::Text { output, .. } => &output.output_path,
         QuantizeModelType::Multimodal { output, .. } => &output.output_path,
         QuantizeModelType::Embedding { output, .. } => &output.output_path,
+    }
+}
+
+/// Extract the output format from the QuantizeModelType
+fn get_format(model_type: &QuantizeModelType) -> OutputFormat {
+    match model_type {
+        QuantizeModelType::Auto { output, .. }
+        | QuantizeModelType::Text { output, .. }
+        | QuantizeModelType::Multimodal { output, .. }
+        | QuantizeModelType::Embedding { output, .. } => output.format,
     }
 }
 
@@ -67,6 +79,10 @@ fn get_readme_overrides(model_type: &QuantizeModelType) -> (Option<String>, Opti
 /// Run UQFF quantization and generation, supporting multiple ISQ types.
 pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) -> Result<()> {
     initialize_logging();
+
+    if get_format(&model_type) == OutputFormat::Gguf {
+        return run_gguf_export(&model_type).await;
+    }
 
     let isq_values = get_isq_values(&model_type);
     let base_output = get_output_path(&model_type).clone();
@@ -175,6 +191,44 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
         print_upload_hint(&base_output, repo_id.as_deref(), &model_id);
     }
 
+    Ok(())
+}
+
+/// Export a llama-family model to a single llama.cpp-loadable `.gguf` file.
+///
+/// The output tensor type comes from a single `--isq` value: `f16` or `q8_0`.
+async fn run_gguf_export(model_type: &QuantizeModelType) -> Result<()> {
+    let model_id = get_model_id(model_type).to_string();
+    let isq = get_isq_values(model_type);
+    if isq.len() != 1 {
+        anyhow::bail!("GGUF export takes exactly one --isq value (`f16` or `q8_0`), got {isq:?}");
+    }
+    let ty_str = isq[0].to_lowercase();
+    let ty: GgufOutputType = ty_str.parse().map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    // Accept either a `.gguf` file path or a directory (auto-named per type).
+    let out = get_output_path(model_type).clone();
+    let output = if out.extension().and_then(|e| e.to_str()) == Some("gguf") {
+        out
+    } else {
+        let stem = Path::new(&model_id)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("model");
+        out.join(format!("{stem}-{ty_str}.gguf"))
+    };
+
+    info!(
+        "Exporting `{model_id}` to GGUF ({ty_str}) -> `{}`",
+        output.display()
+    );
+    let src = model_id.clone();
+    let dst = output.clone();
+    tokio::task::spawn_blocking(move || export_gguf(&src, &dst, ty))
+        .await
+        .map_err(|e| anyhow::anyhow!("GGUF export task failed: {e}"))?
+        .map_err(|e| anyhow::anyhow!("GGUF export failed: {e}"))?;
+    info!("GGUF export complete: `{}`", output.display());
     Ok(())
 }
 
