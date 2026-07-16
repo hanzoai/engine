@@ -126,12 +126,24 @@ impl GlmMtpHead {
             rope_theta: props.rope_freq_base,
             qk_rope_head_dim: props.qk_rope_head_dim,
         };
-        let rotary = Arc::new(DeepSeekV2RotaryEmbedding::new(&rope_cfg, DType::F32, device)?);
+        let rotary = Arc::new(DeepSeekV2RotaryEmbedding::new(
+            &rope_cfg,
+            DType::F32,
+            device,
+        )?);
 
         // The nextn block is a full deepseek2 decoder block — SAME loader as the main model,
         // Eager (no paged attn: the draft runs over its own small KvCache).
         let block = LayerWeights::load(
-            ct, nextn_idx, props, device, rotary, softmax_scale, q_head_dim, None, dtype,
+            ct,
+            nextn_idx,
+            props,
+            device,
+            rotary,
+            softmax_scale,
+            q_head_dim,
+            None,
+            dtype,
         )?;
 
         // NextN entry/exit. enorm/hnorm normalize the token embedding / base hidden; eh_proj is
@@ -288,10 +300,7 @@ impl Deepseek2MtpRuntime {
 /// is the ONE place that knowledge lives — the pipeline asks for the capability and never
 /// names GLM. (DeepSeek-V4 implements the same trait against a companion GGUF.)
 impl crate::speculative::SelfSpeculative for ModelWeights {
-    fn attach_mtp(
-        &self,
-        cfg: &MtpConfig,
-    ) -> Result<Box<dyn SpeculativeProposer + Send + Sync>> {
+    fn attach_mtp(&self, cfg: &MtpConfig) -> Result<Box<dyn SpeculativeProposer + Send + Sync>> {
         if self.base_props().nextn_predict_layers == 0 {
             hanzo_ml::bail!(
                 "this model has no in-band `nextn` MTP head for self-speculative decoding"
