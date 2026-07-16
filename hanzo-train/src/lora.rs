@@ -92,7 +92,10 @@ mod tests {
         use hanzo_ml::{Device, Var};
         let dev = Device::Cpu;
         // A random, B = 0  =>  initial delta must be exactly zero (base preserved).
-        let a = Var::randn(0f32, 1f32, (2, 8), &dev).unwrap().as_tensor().clone();
+        let a = Var::randn(0f32, 1f32, (2, 8), &dev)
+            .unwrap()
+            .as_tensor()
+            .clone();
         let b = Var::zeros((4, 2), hanzo_ml::DType::F32, &dev)
             .unwrap()
             .as_tensor()

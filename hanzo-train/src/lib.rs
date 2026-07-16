@@ -21,6 +21,4 @@ pub mod save;
 pub mod types;
 
 pub use client::{create_lora_training_client, TrainingClient};
-pub use types::{
-    AdamParams, Datum, ForwardBackwardOutput, LoraConfig, ModelInput, SamplingParams,
-};
+pub use types::{AdamParams, Datum, ForwardBackwardOutput, LoraConfig, ModelInput, SamplingParams};
