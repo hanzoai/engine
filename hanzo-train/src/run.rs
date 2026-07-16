@@ -101,31 +101,15 @@ pub fn run_sft(cfg: &SftConfig) -> anyhow::Result<SftReport> {
     let sample = match &cfg.sample_prompt {
         None => None,
         Some(prompt) => {
-            let mut ids = Vec::new();
-            if let Some(b) = client.bos_token_id() {
-                ids.push(b);
-            }
-            ids.extend(
-                client
-                    .tokenizer()
-                    .encode(prompt.as_str(), false)
-                    .map_err(anyhow::Error::msg)?
-                    .get_ids()
-                    .iter()
-                    .copied(),
-            );
             let sampled = client.sample(
-                &ModelInput::from_ints(ids),
+                &ModelInput::from_ints(client.encode_prompt(prompt)?),
                 &SamplingParams {
                     max_tokens: 64,
                     temperature: 0.0,
                     ..SamplingParams::default()
                 },
             )?;
-            let text = client
-                .tokenizer()
-                .decode(&sampled, true)
-                .map_err(anyhow::Error::msg)?;
+            let text = client.decode(&sampled)?;
             tracing::info!(completion = %text, "sample");
             Some(text)
         }
