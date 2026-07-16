@@ -221,6 +221,8 @@ pub enum NormalLoaderType {
     Falcon,
     #[serde(rename = "olmo")]
     Olmo,
+    #[serde(rename = "mamba")]
+    Mamba,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -255,6 +257,7 @@ impl NormalLoaderType {
             "GPT2LMHeadModel" => Ok(Self::GPT2),
             "FalconForCausalLM" | "RWForCausalLM" => Ok(Self::Falcon),
             "OlmoForCausalLM" => Ok(Self::Olmo),
+            "MambaForCausalLM" => Ok(Self::Mamba),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
@@ -294,7 +297,8 @@ impl FromStr for NormalLoaderType {
             "gpt2" => Ok(Self::GPT2),
             "falcon" => Ok(Self::Falcon),
             "olmo" => Ok(Self::Olmo),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `deepseekv32`, `deepseekv4`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `glm5moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `qwen3next`, `minimax_m2`, `gpt2`, `falcon`, `olmo`.")),
+            "mamba" => Ok(Self::Mamba),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `deepseekv32`, `deepseekv4`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `glm5moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `qwen3next`, `minimax_m2`, `gpt2`, `falcon`, `olmo`, `mamba`.")),
         }
     }
 }
@@ -330,6 +334,7 @@ impl Display for NormalLoaderType {
             Self::GPT2 => write!(f, "gpt2"),
             Self::Falcon => write!(f, "falcon"),
             Self::Olmo => write!(f, "olmo"),
+            Self::Mamba => write!(f, "mamba"),
         }
     }
 }
@@ -399,6 +404,7 @@ impl AutoNormalLoader {
             NormalLoaderType::GPT2 => Ok(Box::new(GPT2Loader)),
             NormalLoaderType::Falcon => Ok(Box::new(FalconLoader)),
             NormalLoaderType::Olmo => Ok(Box::new(OlmoLoader)),
+            NormalLoaderType::Mamba => Ok(Box::new(MambaLoader)),
         }
     }
 }
@@ -6385,6 +6391,169 @@ impl DeviceMappedModelLoader for OlmoLoader {
             sliding_window: None,
             k_head_dim: head_dim,
             v_head_dim: head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+        Ok(Box::new(cfg))
+    }
+}
+
+// ======================== Mamba loader
+
+/// [`NormalLoader`] for a Mamba (selective state-space) model.
+pub struct MambaLoader;
+
+impl NormalModelLoader for MambaLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::mamba::Config = serde_json::from_str(config)?;
+        Ok(Box::new(models::mamba::Model::new(
+            &cfg,
+            vb,
+            self.is_gptx(config)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _vb: ShardedVarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        todo!()
+    }
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        // Mamba has no rotary positions.
+        Ok(false)
+    }
+    fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
+        // Pure SSM: no attention to page.
+        Ok(false)
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::mamba::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+}
+
+impl IsqModelLoader for MambaLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mixer\.in_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mixer\.x_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mixer\.dt_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mixer\.out_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+}
+
+impl DeviceMappedModelLoader for MambaLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+        let cfg: crate::models::mamba::Config = serde_json::from_str(config)?;
+        // No attention: activations scale with the inner width, not seq_len^2.
+        Ok(max_batch_size * max_seq_len * cfg.d_inner())
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: crate::models::mamba::Config = serde_json::from_str(config)?;
+        let elems = {
+            let embed = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            // The head is tied to the embedding unless the checkpoint carries its own.
+            let lm_head = if cfg.tie_word_embeddings {
+                0
+            } else {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            };
+            let norm_f = cfg.hidden_size;
+            embed + lm_head + norm_f
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: crate::models::mamba::Config = serde_json::from_str(config)?;
+        let h = cfg.hidden_size;
+        let di = cfg.d_inner();
+        let dr = cfg.dt_rank();
+        let ds = cfg.state_size;
+        let k = cfg.conv_kernel;
+        let per_layer_elems = {
+            let in_proj = h * (2 * di) / weight_pack_factor + bias_if!(cfg.use_bias, 2 * di);
+            let conv1d = di * k + di;
+            let x_proj = di * (dr + 2 * ds) / weight_pack_factor;
+            let dt_proj = dr * di / weight_pack_factor + di;
+            let a = di * ds;
+            let d = di;
+            let out_proj = di * h / weight_pack_factor + bias_if!(cfg.use_bias, h);
+            let norm = h;
+            in_proj + conv1d + x_proj + dt_proj + a + d + out_proj + norm
+        };
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: crate::models::mamba::Config = serde_json::from_str(config)?;
+        Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: crate::models::mamba::Config = serde_json::from_str(config)?;
+        let cfg = ModelConfigMetadata {
+            max_seq_len: 8192,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            // No attention: non-zero placeholders for memory/device-map math only.
+            num_kv_heads: 1,
+            num_attn_heads: 1,
+            sliding_window: None,
+            k_head_dim: cfg.hidden_size,
+            v_head_dim: cfg.hidden_size,
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
         Ok(Box::new(cfg))
