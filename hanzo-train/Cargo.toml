@@ -30,6 +30,9 @@ hf-hub.workspace = true
 rand.workspace = true
 utoipa = { workspace = true, optional = true }
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [features]
 cuda = ["hanzo-ml/cuda", "hanzo-nn/cuda"]
 metal = ["hanzo-ml/metal", "hanzo-nn/metal"]

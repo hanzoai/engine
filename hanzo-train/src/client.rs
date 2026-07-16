@@ -80,6 +80,31 @@ impl TrainingClient {
             .sum()
     }
 
+    /// BOS (if the model has one) + tokenized `text` — the prompt encoding
+    /// used by `sample` callers everywhere.
+    pub fn encode_prompt(&self, text: &str) -> anyhow::Result<Vec<u32>> {
+        let mut ids = Vec::new();
+        if let Some(b) = self.bos_token_id {
+            ids.push(b);
+        }
+        ids.extend(
+            self.tokenizer
+                .encode(text, false)
+                .map_err(anyhow::Error::msg)?
+                .get_ids()
+                .iter()
+                .copied(),
+        );
+        Ok(ids)
+    }
+
+    /// Decode sampled token ids to text, skipping special tokens.
+    pub fn decode(&self, tokens: &[u32]) -> anyhow::Result<String> {
+        self.tokenizer
+            .decode(tokens, true)
+            .map_err(anyhow::Error::msg)
+    }
+
     /// Forward the batch with gradient tracking, compute mask-weighted next-token
     /// cross-entropy, and backward. Gradients accumulate until [`Self::optim_step`].
     pub fn forward_backward(&mut self, data: &[Datum]) -> anyhow::Result<ForwardBackwardOutput> {
