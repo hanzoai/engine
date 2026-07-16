@@ -114,8 +114,15 @@ fn check_last_row_distinct(dev: &Device, ntok: usize, n_experts: usize, topk: us
     let mut last = ids[(ntok - 1) * topk..ntok * topk].to_vec();
     tok0.sort_unstable();
     last.sort_unstable();
-    assert_eq!(tok0, (0..topk as u32).collect::<Vec<_>>(), "token 0 must route to experts 0..topk");
-    assert_ne!(tok0, last, "token 0 wears the last token's experts -- last-row collapse");
+    assert_eq!(
+        tok0,
+        (0..topk as u32).collect::<Vec<_>>(),
+        "token 0 must route to experts 0..topk"
+    );
+    assert_ne!(
+        tok0, last,
+        "token 0 wears the last token's experts -- last-row collapse"
+    );
 }
 
 #[test]
