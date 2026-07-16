@@ -43,7 +43,8 @@ impl User {
 /// soft cost/latency trade the selector applies. A *value* the caller sets per
 /// request (the operator's budget), distinct from a user's learned taste. `0`
 /// disables a ceiling.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Slo {
     pub max_latency_ms: f32,
     pub max_cost: f32,
