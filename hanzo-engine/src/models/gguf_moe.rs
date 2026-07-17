@@ -200,10 +200,14 @@ impl FusedMoe {
         let hidden_dim = xs_flat.dim(1)?;
         // Decode stays single-dtype end-to-end: the routed activation rides the model's native
         // bf16/f16 through gate+up+down (the down matvec and both fused banks consume it directly),
-        // dropping the F32 round-trip that used to wrap every gate/up/down matvec. gate and up share
-        // ONE broadcast+quantize of the routed token in a single `moe_gate_up` launch instead of two
-        // independent matvec launches; `moe_combine` reduces the per-expert outputs by the router
-        // weights in one pass (f32 accumulate) rather than a bf16 broadcast-mul + strided sum.
+        // dropping the F32 round-trip that used to wrap every gate/up/down matvec. `moe_combine`
+        // reduces the per-expert outputs by the router weights in one pass (f32 accumulate) rather
+        // than a bf16 broadcast-mul + strided sum.
+        //
+        // Sharing ONE broadcast+quantize of the routed token across gate and up is a ROCm-only
+        // property: that fusion is `#[cfg(feature = "rocm")]` in `moe_gate_up` (quantized/mod.rs).
+        // Every other backend falls through to two independent `indexed_moe_forward` calls, and the
+        // Vulkan dp4a path re-quantizes the identical activation inside each one.
         let xs3 = xs_flat.reshape((num_tokens, 1, hidden_dim))?;
         // Unquantized (e.g. all-F32) GGUF: the expert bank dequantizes to a plain `Tensor`, which the
         // fused `moe_gate_up`/`indexed_moe_forward` quant kernels don't cover. Run the dense per-expert
