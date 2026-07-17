@@ -1,6 +1,6 @@
 [package]
 name = "enso"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "enso: the learned, eval-trained, per-user-adaptive routing policy (the brain) for hanzo-router (the mechanism)."
 repository = "https://github.com/hanzoai/engine"

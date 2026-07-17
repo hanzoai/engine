@@ -70,19 +70,31 @@ pub struct Enso<F: Featurizer = HashFeaturizer, G: SafetyGuard = TwoTierGuard> {
 
 impl Enso<HashFeaturizer, TwoTierGuard> {
     pub fn new(table: ProfileTable, learner: Learner) -> Self {
-        Self {
-            feat: HashFeaturizer::default(),
+        Self::with_pieces(
+            HashFeaturizer::default(),
             table,
             learner,
-            guard: TwoTierGuard::default(),
-            selector: Selector,
-            fallback: hanzo_router::Policy::default(),
-        }
+            TwoTierGuard::default(),
+        )
     }
 }
 
 impl<F: Featurizer, G: SafetyGuard> Enso<F, G> {
+    /// Compose the pieces. Panics unless `feat.dim() == policy::D`: the bilinear
+    /// utility fixes `W` at `D x K`, so [`crate::linalg::bilinear`] reads only
+    /// `x[..D]` and would silently score a wider `x` on its truncation. `dim()`
+    /// is the [`Featurizer`] contract and this is where it is enforced -- once,
+    /// at wiring time, so the hot path stays a bare dot product. A trained
+    /// encoder wider than `D` (zen-router's 256-wide `feature_head`) must
+    /// project down to `D` before it can plug in.
     pub fn with_pieces(feat: F, table: ProfileTable, learner: Learner, guard: G) -> Self {
+        assert_eq!(
+            feat.dim(),
+            policy::D,
+            "featurizer dim {} != policy::D {}",
+            feat.dim(),
+            policy::D
+        );
         Self {
             feat,
             table,
