@@ -234,7 +234,15 @@ fn approx_tokens(prompt: &str) -> usize {
 /// serve. Returns exactly the wire fields. Separated from the axum handler so it
 /// is unit-testable with no engine instance, and allocation-light (one
 /// featurize, one policy walk).
-fn classify_route(
+/// Classify against a caller-supplied policy.
+///
+/// The policy is a parameter because `hanzo-router` is the mechanism and the policy is the value
+/// plugged into it: `Policy` is the rule-based cold start, and `enso::Enso` is the learned one that
+/// `hanzo-router-retrain` fits nightly into `heads-{scope}.safetensors`. Constructing a policy in
+/// here would pin the mechanism to one of them -- which is what kept the trained policy out of the
+/// serving path despite existing, loading and retraining.
+fn classify_route_with(
+    policy: &dyn RoutePolicy,
     prompt: &str,
     task_hint: Option<Task>,
     slo: Slo,
@@ -251,15 +259,31 @@ fn classify_route(
     let featurizer = HashFeaturizer::default();
     let features = featurizer.featurize(&req);
     let task = featurizer.task_of(&req);
-    // Model: the rule-based cold-start policy over the available pool, honoring
-    // the SLO cost ceiling. Empty/refused -> no explicit model, caller maps task.
-    let route = Policy::default().route(&req, &User::anonymous(), &slo, registry);
+    // Model: whichever policy the caller plugged in, over the available pool, honoring the SLO cost
+    // ceiling. Empty/refused -> no explicit model, caller maps task.
+    let route = policy.route(&req, &User::anonymous(), &slo, registry);
     let model = if route.is_refused() {
         String::new()
     } else {
         route.model
     };
     (model, task, route.confidence as f64, features)
+}
+
+/// Classify with the policy this deployment serves.
+///
+/// Still the rule-based `Policy`: `enso::Enso` is the learned implementor, and
+/// `hanzo-router-retrain` already fits its weights nightly into `heads-{scope}.safetensors` and can
+/// `load_w` them -- but nothing constructs an `Enso` outside its own tests, so the trained policy has
+/// never served a request. Selecting it belongs here, at the one place that decides, now that
+/// `classify_route_with` takes the policy rather than picking one.
+fn classify_route(
+    prompt: &str,
+    task_hint: Option<Task>,
+    slo: Slo,
+    registry: &Registry,
+) -> (String, Task, f64, Vec<f64>) {
+    classify_route_with(&Policy::default(), prompt, task_hint, slo, registry)
 }
 
 /// Build the routing pool from the models the engine currently has. Loaded
