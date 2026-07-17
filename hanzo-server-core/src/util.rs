@@ -10,6 +10,84 @@ use tokio::{
     io::AsyncReadExt,
 };
 
+/// Largest media body accepted from a remote URL. A request body is attacker-chosen; without a cap a
+/// single `image_url` can stream until the process is OOM-killed.
+const MAX_REMOTE_MEDIA_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Fetch `url` over http(s) for media, refusing what a server must not fetch on a caller's behalf.
+///
+/// `parse_image_url`/`parse_audio_url` run on `/v1/chat/completions` and `/v1/embeddings`, so the URL
+/// arrives from an untrusted request body. A bare GET there is an SSRF primitive: the server will
+/// happily fetch `http://169.254.169.254/...` (cloud metadata, i.e. credentials), reach hosts inside
+/// the deployment's network that the caller cannot, follow a redirect from a public host into either,
+/// and stream an unbounded body. This refuses all four:
+///   - only http/https (the caller's scheme choice is not ours to trust),
+///   - no redirects, so a public URL cannot hop to a private one after the check,
+///   - resolved address must be globally routable -- no loopback/private/link-local/unspecified,
+///   - body capped at MAX_REMOTE_MEDIA_BYTES, enforced on the stream, not on a claimed header.
+async fn fetch_remote_media(url: &url::Url) -> Result<Vec<u8>, anyhow::Error> {
+    if url.scheme() != "http" && url.scheme() != "https" {
+        anyhow::bail!("Unsupported URL scheme for remote media: {}", url.scheme());
+    }
+    // Match on the parsed host, not `host_str()`: that returns an IPv6 literal still wrapped in
+    // brackets ("[::1]"), which no resolver accepts -- the address would fail DNS instead of reaching
+    // the check below, refusing for the wrong reason and never testing the IP at all.
+    let host = url
+        .host()
+        .ok_or_else(|| anyhow::anyhow!("Remote media URL has no host: {url}"))?;
+    let ips: Vec<std::net::IpAddr> = match host {
+        // A literal address needs no resolver; check what was actually named.
+        url::Host::Ipv4(v4) => vec![std::net::IpAddr::V4(v4)],
+        url::Host::Ipv6(v6) => vec![std::net::IpAddr::V6(v6)],
+        // A name is only as safe as its worst address: check every one it maps to, since a name can
+        // resolve to a private address (and to several).
+        url::Host::Domain(name) => {
+            let port = url.port_or_known_default().unwrap_or(80);
+            tokio::net::lookup_host((name, port))
+                .await
+                .map_err(|e| anyhow::anyhow!("Could not resolve remote media host '{name}': {e}"))?
+                .map(|a| a.ip())
+                .collect()
+        }
+    };
+    if ips.is_empty() {
+        anyhow::bail!("Remote media host '{host}' resolved to no addresses");
+    }
+    for ip in ips {
+        let blocked = match ip {
+            std::net::IpAddr::V4(v4) => {
+                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_broadcast()
+                    || v4.is_unspecified() || v4.is_documentation()
+            }
+            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local()
+                || v6.is_unicast_link_local(),
+        };
+        if blocked {
+            anyhow::bail!("Refusing to fetch remote media from non-public address {ip} (host '{host}')");
+        }
+    }
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    let resp = client.get(url.clone()).send().await?.error_for_status()?;
+
+    // Cap on the stream: Content-Length is the sender's claim, not a limit.
+    use futures::StreamExt;
+    let mut out: Vec<u8> = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if out.len() as u64 + chunk.len() as u64 > MAX_REMOTE_MEDIA_BYTES {
+            anyhow::bail!(
+                "Remote media at {url} exceeds the {MAX_REMOTE_MEDIA_BYTES} byte limit"
+            );
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
+}
+
 /// Parses and loads an image from a URL, file path, or data URL.
 ///
 /// This function accepts various input formats and attempts to parse them in order:
@@ -57,11 +135,7 @@ pub async fn parse_image_url(url_unparsed: &str) -> Result<DynamicImage, anyhow:
     };
 
     let bytes = if url.scheme() == "http" || url.scheme() == "https" {
-        // Read from http
-        match reqwest::get(url.clone()).await {
-            Ok(http_resp) => http_resp.bytes().await?.to_vec(),
-            Err(e) => anyhow::bail!(e),
-        }
+        fetch_remote_media(&url).await?
     } else if url.scheme() == "file" {
         let path = url
             .to_file_path()
@@ -103,10 +177,7 @@ pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::E
     };
 
     let bytes = if url.scheme() == "http" || url.scheme() == "https" {
-        match reqwest::get(url.clone()).await {
-            Ok(http_resp) => http_resp.bytes().await?.to_vec(),
-            Err(e) => anyhow::bail!(e),
-        }
+        fetch_remote_media(&url).await?
     } else if url.scheme() == "file" {
         let path = url
             .to_file_path()
@@ -404,5 +475,45 @@ mod tests {
         assert_eq!(sanitized, "Root cause: Database connection failed");
         assert!(!sanitized.contains("backtrace"));
         assert!(!sanitized.contains("Request failed"));
+    }
+
+    /// A URL naming a non-public address must be refused before any request is made.
+    ///
+    /// `parse_image_url`/`parse_audio_url` are reachable from the request body on
+    /// `/v1/chat/completions` and `/v1/embeddings`, so an unguarded GET here lets a caller aim the
+    /// server at `169.254.169.254` (cloud metadata: credentials) or at hosts inside the deployment
+    /// that the caller cannot reach. Each case below is refused at resolution, so nothing is sent.
+    #[tokio::test]
+    async fn remote_media_refuses_non_public_addresses() {
+        for url in [
+            "http://169.254.169.254/latest/meta-data/",  // cloud metadata
+            "http://127.0.0.1:8080/admin",               // loopback
+            "http://10.0.0.5/internal",                  // private
+            "http://[::1]/",                             // v6 loopback
+        ] {
+            let parsed = url::Url::parse(url).unwrap();
+            let err = fetch_remote_media(&parsed)
+                .await
+                .expect_err("must refuse a non-public address");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("non-public address") || msg.contains("resolved to no addresses"),
+                "{url} was refused, but for the wrong reason: {msg}"
+            );
+        }
+    }
+
+    /// Only http/https reach the network path. `file:` is served by the local branch in
+    /// `parse_image_url`, never by a fetch, so a caller cannot smuggle a local read through it.
+    #[tokio::test]
+    async fn remote_media_refuses_non_http_schemes() {
+        for url in ["file:///etc/passwd", "ftp://example.com/x", "gopher://example.com/"] {
+            let parsed = url::Url::parse(url).unwrap();
+            let err = fetch_remote_media(&parsed).await.expect_err("must refuse scheme");
+            assert!(
+                err.to_string().contains("Unsupported URL scheme"),
+                "{url}: {err}"
+            );
+        }
     }
 }
