@@ -429,7 +429,7 @@ impl Sampler {
         let mut probs_copy = probs.to_vec();
         let top_k = partial_sort_top_k(&mut probs_copy, k, false);
 
-        // Build the result vector with log10 of probabilities and optional decoding
+        // Build the result vector with natural-log probabilities and optional decoding
         let mut result = Vec::with_capacity(k);
         if let Some(tokenizer) = &self.tokenizer {
             for (token, prob) in top_k {
@@ -438,7 +438,7 @@ impl Sampler {
                     .map_err(|e| Error::Msg(e.to_string()))?;
                 result.push(TopLogprob {
                     token,
-                    logprob: prob.log(10.0),
+                    logprob: prob.ln(),
                     bytes: Some(decoded),
                 });
             }
@@ -446,7 +446,7 @@ impl Sampler {
             for (token, prob) in top_k {
                 result.push(TopLogprob {
                     token,
-                    logprob: prob.log(10.0),
+                    logprob: prob.ln(),
                     bytes: None,
                 });
             }
@@ -458,7 +458,7 @@ impl Sampler {
         let raw: Vec<f32> = logits.to_vec1()?;
         let next_token = argmax_f32(&raw);
         // The argmax itself needs no normalization, but the reported logprobs do:
-        // `raw` here are LOGITS, and log10(logit) is NaN for any negative logit
+        // `raw` here are LOGITS, and the log of a negative logit is NaN
         // (which silently voided top-k logprobs on the greedy path). Softmax first.
         let (logprob, top_logprobs) = if return_logprobs {
             let mx = raw.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -467,11 +467,15 @@ impl Sampler {
             for p in probs.iter_mut() {
                 *p /= sum;
             }
-            let lp = probs[next_token as usize].log(10.0);
+            let lp = probs[next_token as usize].ln();
             let top = Some(self.get_top_logprobs(&probs)?);
             (lp, top)
         } else {
-            (raw[next_token as usize].log(10.0), None)
+            // Natural log, so every path reports `logprob` in one base. Note the value is a LOGIT:
+            // this arm runs only when logprobs were not requested, so it is never normalized. It is
+            // not a log-probability in any base -- the base is made consistent here, the missing
+            // softmax is a separate bug.
+            (raw[next_token as usize].ln(), None)
         };
 
         let bytes = if let Some(tokenizer) = &self.tokenizer {
@@ -503,7 +507,7 @@ impl Sampler {
         let mut probs: Vec<f32> = logits.to_vec1()?;
         // Snapshot the pre-filter distribution for logprob reporting: top-k/top-p/
         // min-p zero out `probs` in place below, and ranking the filtered vector
-        // yields the lone survivor + zero-ties (log10(0) = -inf -> null in JSON).
+        // yields the lone survivor + zero-ties (ln(0) = -inf -> null in JSON).
         let unfiltered = if return_logprobs {
             Some(probs.clone())
         } else {
@@ -552,7 +556,7 @@ impl Sampler {
 
         // Find argmax directly on the Vec (O(n) scan, no Tensor creation)
         let next_token = argmax_f32(&probs);
-        let logprob = probs[next_token as usize].log(10.0);
+        let logprob = probs[next_token as usize].ln();
 
         let top_logprobs = match &unfiltered {
             // Report top-k over the PRE-FILTER distribution — the filters shape
@@ -591,7 +595,7 @@ impl Sampler {
     /// Like [`Self::sample_multinomial`], but reports top-k logprobs from
     /// `report_probs` (the PRE-filter distribution) when provided: `probs` has
     /// been zeroed by top-k/top-p/min-p, and ranking the filtered vector yields
-    /// the survivors plus zero-ties (log10(0) = -inf -> null in JSON). The
+    /// the survivors plus zero-ties (ln(0) = -inf -> null in JSON). The
     /// filters shape SAMPLING, not the reported distribution.
     fn sample_multinomial_report(
         &self,
@@ -635,7 +639,7 @@ impl Sampler {
 
         let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
         let next_token = distr.sample(&mut mut_ref_rng); // "Find the first item which has a weight *higher* than the chosen weight."
-        let logprob = probs[next_token].log(10.0);
+        let logprob = probs[next_token].ln();
 
         let top_logprobs = if return_logprobs {
             Some(self.get_top_logprobs(report_probs.unwrap_or(probs))?)
@@ -833,7 +837,7 @@ impl Sampler {
         let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
         let selected = distr.sample(&mut mut_ref_rng);
         let next_token = top_indices[selected];
-        let logprob = probs[selected].log(10.0);
+        let logprob = probs[selected].ln();
 
         Ok(Logprobs {
             token: next_token,
@@ -1015,7 +1019,7 @@ impl Sampler {
         let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
         let selected = distr.sample(&mut mut_ref_rng);
         let next_token = top_indices[selected];
-        let logprob = probs[selected].log(10.0);
+        let logprob = probs[selected].ln();
         let bytes = if let Some(tokenizer) = &self.tokenizer {
             Some(
                 tokenizer
@@ -1135,7 +1139,7 @@ impl Sampler {
     ) -> Result<Logprobs> {
         let prob = probs.get(token as usize).copied().unwrap_or(0.0);
         let logprob = if prob > 0.0 {
-            prob.log(10.0)
+            prob.ln()
         } else {
             f32::NEG_INFINITY
         };
@@ -1526,7 +1530,13 @@ mod tests {
             .unwrap();
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
-        assert_eq!(res.logprob, 1023f64.log(10.) as f32)
+        // Natural log, per the OpenAI `logprobs` contract this field serves.
+        //
+        // The value under the log is a LOGIT -- the fixture feeds 0..1024 straight in and this path
+        // reports it without a softmax -- so it is not a log-probability in any base. Pinning it keeps
+        // the base honest; the missing normalization is the same latent bug as the greedy path's
+        // `raw[..]` arm (return_logprobs == false), and is not addressed here.
+        assert_eq!(res.logprob, 1023f64.ln() as f32)
     }
 
     #[test]
@@ -1590,7 +1600,13 @@ mod tests {
             .unwrap();
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
-        assert_eq!(res.logprob, 1023f64.log(10.) as f32)
+        // Natural log, per the OpenAI `logprobs` contract this field serves.
+        //
+        // The value under the log is a LOGIT -- the fixture feeds 0..1024 straight in and this path
+        // reports it without a softmax -- so it is not a log-probability in any base. Pinning it keeps
+        // the base honest; the missing normalization is the same latent bug as the greedy path's
+        // `raw[..]` arm (return_logprobs == false), and is not addressed here.
+        assert_eq!(res.logprob, 1023f64.ln() as f32)
     }
 
     #[test]
