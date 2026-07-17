@@ -499,11 +499,13 @@ impl PagedAttentionScheduler {
         self.waiting.push_front(seq);
     }
 
+    /// Order `running` oldest-first, which is what both consumers of the order want: `pop_front`
+    /// runs the next sequence (the oldest, under FCFS) and `pop_back` preempts (the newest, the one
+    /// whose work is cheapest to lose).
     fn sort_running_by_priority_fcfs(&mut self) {
         self.running
             .make_contiguous()
             .sort_by_key(|seq| get_mut_arcmutex!(seq).timestamp());
-        self.running.make_contiguous().reverse();
     }
 }
 
