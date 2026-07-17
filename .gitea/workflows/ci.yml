@@ -1,0 +1,59 @@
+# Native CI for the Hanzo Git act_runners (label hanzo-build-linux-amd64).
+# Self-contained — no reusable-workflow hub on Gitea. GitHub.com ignores
+# .gitea/workflows, so this never touches the GitHub release lanes. CPU lane
+# ONLY (amd64) — mirrors the check-linux + test-linux jobs of
+# .github/workflows/ci.yml. The GPU/CUDA/ROCm/macOS lanes stay on GitHub;
+# they need special runners.
+#
+# Container: buildpack-deps carries the C toolchain the runner image lacks
+# (native crate deps link against it). act runs JS actions (checkout, cache)
+# with the container's OWN node — GitHub's runner injects one, act does not —
+# so each job installs node first (a shell step, needs no node itself).
+#
+# Secrets: HF_TOKEN gates the model-download tests (mirrored from the GitHub
+# lane). Seed it as a Gitea Actions repo/org secret if those tests need it;
+# without it the token is empty. GITHUB_TOKEN is auto-minted per job by Gitea.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: hanzo-build-linux-amd64
+    container: buildpack-deps:bookworm
+    timeout-minutes: 90
+    steps:
+      - name: node
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends nodejs
+          command -v node >/dev/null || ln -sf "$(command -v nodejs)" /usr/local/bin/node
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check
+
+  test:
+    runs-on: hanzo-build-linux-amd64
+    container: buildpack-deps:bookworm
+    needs: [build]
+    timeout-minutes: 90
+    steps:
+      - name: node
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends nodejs
+          command -v node >/dev/null || ln -sf "$(command -v nodejs)" /usr/local/bin/node
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p hanzo-engine -p hanzo-quant -p hanzo-vision
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
