@@ -22,7 +22,6 @@
 //! (point them at a bench's JSONL); absent that, [`synth`] emits clearly-labeled
 //! synthetic tuples so the mechanism is provable today.
 
-pub mod featurize;
 pub mod guard;
 pub mod learner;
 pub mod linalg;
@@ -31,14 +30,19 @@ pub mod profile;
 pub mod selector;
 pub mod synth;
 
+// The featurizer (request -> `x`) is a hanzo-router primitive; enso re-exports it
+// so the offline fit and the serving path featurize through one implementation
+// (no train/serve skew), and `crate::featurize::*` keeps resolving.
+pub use hanzo_router::featurize;
+
 use hanzo_router::classify::Request;
 use hanzo_router::registry::{Level, Modality, Registry, Task};
 use hanzo_router::{Route, RoutePolicy, Slo, User};
 
-pub use featurize::{Featurizer, HashFeaturizer};
 pub use guard::{
     DistilledTeacher, GuardTier, GuardVerdict, Safety, SafetyGuard, Teacher, TwoTierGuard,
 };
+pub use hanzo_router::featurize::{Featurizer, HashFeaturizer};
 pub use learner::{fit_base, Bandit, Learner, LearnerStats};
 pub use policy::Policy;
 pub use profile::{ingest, parse_jsonl, EvalSample, Profile, ProfileTable, PROFILE_DIM};

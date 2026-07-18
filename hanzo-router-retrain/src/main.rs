@@ -1,7 +1,7 @@
-//! `enso-fit` -- the router-heads fit tool the nightly pipeline drives.
+//! `router-fit` -- the router-heads fit tool the nightly pipeline drives.
 //!
 //! Contract (drop-in for enso's own `fit` when it lands; override with $FIT_BIN):
-//!   enso-fit --events <in.jsonl> --out <heads.safetensors>
+//!   router-fit --events <in.jsonl> --out <heads.safetensors>
 //! Optional gate: --holdout <frac> [--incumbent <base.safetensors>] emits a JSON
 //! gate report to stdout. The tool always writes the freshly-fit candidate to
 //! --out; the pipeline decides whether to PROMOTE it (publish) from gatePassed.
@@ -18,7 +18,7 @@ use hanzo_router_retrain::{
 };
 
 #[derive(Parser, Debug)]
-#[command(name = "enso-fit", about = "Fit + holdout-gate enso routing heads.")]
+#[command(name = "router-fit", about = "Fit + holdout-gate the router heads.")]
 struct Args {
     /// Input JSONL: native enso EvalSample lines, or ai reward tuples with --from-rewards.
     #[arg(long)]
@@ -114,6 +114,20 @@ fn main() -> Result<()> {
     save_w(&args.out, &final_policy)
         .with_context(|| format!("write heads {}", args.out.display()))?;
 
+    // Serve bundle the engine loads via ROUTER_HEADS: the base W plus the arm
+    // profile vectors it ranks (a `hanzo_router::Heads` -- the router owns the
+    // serve-time scorer). Written next to --out as `<stem>.heads.json` so the one
+    // fit command produces both the gate artifact and the servable head.
+    let bundle_path = args.out.with_extension("heads.json");
+    let arm_feats: Vec<hanzo_router::heads::Arm> = table_all
+        .profiles
+        .iter()
+        .map(|p| hanzo_router::heads::Arm { model: p.model.clone(), feat: p.features().to_vec() })
+        .collect();
+    hanzo_router::Heads::new(final_policy.w, arm_feats)
+        .save(&bundle_path)
+        .with_context(|| format!("write serve bundle {}", bundle_path.display()))?;
+
     let report = serde_json::json!({
         "gateKind": "holdout",
         "gateMetric": "holdout_reward",
@@ -124,6 +138,7 @@ fn main() -> Result<()> {
         "holdoutRows": holdout_rows,
         "note": decision.note,
         "out": args.out.display().to_string(),
+        "serveBundle": bundle_path.display().to_string(),
     });
     println!("{}", serde_json::to_string(&report)?);
     Ok(())
