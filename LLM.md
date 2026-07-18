@@ -275,6 +275,49 @@ Avoid returning TODOs.
   bit-exact on CPU. `sdpa`/`sdpa_runtime` online-softmax is the structural cure for the 8B
   flash-collapse. See `ml/LLM.md` for the DSL and env-var details.
 
+## Kernel tuning + new-model onboarding: the roofline-driven process (SOTA loop)
+A repeatable, measurement-first process. The scar tissue behind every step is in `ml/LLM.md`
+("Vulkan PREFILL: the Q6_K lever, the roofline method..."). The rule: **measure in-engine, never trust
+a cache-warm microbench for a memory-bound kernel, and kill a lever the moment the engine says it lost.**
+
+### Tune a kernel (the loop that took prefill 212 -> 704 t/s)
+1. PROFILE a real forward: `VK_PROFILE_GPU=1 VK_PROFILE=1 hanzo bench --prompt-len 512 --gen-len 0 ...`
+   -> per-op GPU time + record/submit/fence + pool fresh/hit counters.
+2. RANK by roofline: achieved BW = bytes-moved / GPU-time vs device peak. Biggest (time-share x
+   distance-from-roofline) = the target. (Q4_K GEMM: ~24 GB/s vs ~135 practical = the 18% that IS the gap.)
+3. PICK THE LEVER by what the roofline says, not by fashion: coalescing / occupancy / layout / reuse /
+   fusion / vectorization. NOT tensor-core dtype (coopmat is measured-dead on gfx1151), NOT bigger tiles
+   (occupancy collapse, measured 2.4x WORSE).
+4. IMPLEMENT in the DSL/shader; GATE BIT-EXACT -- a CPU oracle OR a CONTROLLED known-answer test (uniform
+   weight -> exact k localized the Q6_K decode bug in minutes where random-vs-oracle only said "wrong").
+5. MEASURE IN-ENGINE (`--gen-len 0` = the true cold-weight prefill floor). Env-gate A/B variants
+   (VK_Q4K_BM, VK_Q6K_LEGACY, VK_Q4K_COOPMAT). Cache-warm microbench LIES for memory-bound kernels.
+6. KEEP only if it wins in-engine; RECORD the dead ends (this session killed coopmat + bigger-BM).
+
+### Autotune (mechanical, per shape/device -- NOT AutoML)
+Kernel-level LATENCY search over tile/occupancy configs (BM/BN/BK/threads/unroll), measured and cached
+per (kernel, shape, device). Deterministic objective (ns), cheap trials -> a for-loop + cache, like
+`triton.autotune` / cubecl autotune. The env A/B knobs (VK_Q4K_BM=64/128/256) are the manual version;
+the DSL autotune automates the sweep so a hand-picked constant can't be a local optimum on another GPU.
+
+### Onboard a new model fast (get it to SOTA on our stack)
+1. LOAD the GGUF; confirm COHERENCE with a known-answer generation (`hanzo run -i "The capital of France is"`).
+2. PROFILE prefill + decode -> the hot kernels for THIS model's quant mix + shapes.
+3. ROOFLINE-RANK -> the offenders. The classic miss: a quant type with NO tiled prefill path (Q6_K was
+   76% of prefill because attn_v/ffn_down are Q6_K in Q4_K_M and only had the column matvec).
+4. ENSURE every quant type in the model has a tiled prefill path (Q4_K, Q6_K done; Q5_K/Q8_0/IQ next).
+5. AUTOTUNE the tile configs for the model's shapes.
+6. GATE vs llama-bench, SAME box + model: `~/llama.cpp/build/bin/llama-bench -m <gguf> -p 512 -n 128`
+   vs `hanzo bench --prompt-len 512 --gen-len 128 auto -m <dir> -f <gguf>`. That ratio is the SOTA gate.
+
+### The tooling
+- Roofline dashboard (visual "find" UI: roofline plot + priority-ranked kernels + tuning log).
+- `VK_PROFILE_GPU` (per-op GPU ns), `VK_PROFILE` (record/submit/fence + pool counters), `VK_ROOFLINE`
+  (planned: per-dispatch exact bytes/FLOPs joined to timestamps, auto-refreshing the dashboard).
+- The DSL end state (`ml/LLM.md` "DSL MAGIC"): layout-as-value + a coalesced layout-aware loader +
+  tiled-matmul + pluggable quant-decode + autotune, so every kernel inherits coalescing correct-by-
+  construction and naive strided reads stop being possible.
+
 ## Qwen3-VL GGUF (text backbone) — `qwen3vl` / `qwen3vlmoe`
 
 - **GGUF fast-path** for Qwen3-VL: the dense text backbone (`qwen3vl`, 2/4/8/32B) reuses
