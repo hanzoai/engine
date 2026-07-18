@@ -133,11 +133,26 @@ pub async fn run_bench(
     let hanzo = builder.build().await?;
     info!("Model loaded.");
 
-    // Warmup runs
+    // Warmup runs. Warm the SAME shapes that will be timed — a prefill at each prompt length and a
+    // decode at each depth — so the buffer pool, device clocks, and shader caches are hot at those
+    // exact shapes before measurement. A fixed stand-in shape (a short prefill) compiles the
+    // pipelines but leaves the pool and clock cold for the measured shape: the first timed iteration
+    // then pays a one-time working-set allocation, and because the per-layer dispatch count is
+    // token-count-independent, a per-op profile shows the stand-in and the measured forward as two
+    // costs at an identical dispatch count — which misreads as a spurious per-forward slowdown.
     if warmup > 0 {
         info!("Running {} warmup iteration(s)...", warmup);
         for _ in 0..warmup {
-            run_single_bench(&hanzo, 32, 16).await?;
+            for &prompt_len in &prompt_lens {
+                if prompt_len > 0 {
+                    run_single_bench(&hanzo, prompt_len, 1).await?;
+                }
+            }
+            if gen_len > 0 {
+                for &depth in &depths {
+                    run_single_bench(&hanzo, depth, gen_len).await?;
+                }
+            }
         }
         info!("Warmup complete.");
 
