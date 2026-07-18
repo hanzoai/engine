@@ -1,11 +1,15 @@
-//! Piece 1/6: request -> feature vector `x`. The smallest, fastest thing that
-//! works: task one-hot, length, media flag, bias, and a hashed n-gram block for
-//! domain signal. No neural net, sub-microsecond. The [`Featurizer`] trait is
-//! the seam: a tiny finetunable encoder can later produce the same `x` (same
-//! `dim`) without any other piece changing.
+//! Request -> feature vector `x`. The smallest, fastest thing that works: task
+//! one-hot, length, media flag, bias, and a hashed n-gram block for domain
+//! signal. No neural net, sub-microsecond.
+//!
+//! This is a router primitive: it turns a [`Request`] into the `x` the learned
+//! scorer ranks arms with, and it is the SINGLE source of that vector so the
+//! offline fit and the serving path featurize identically (no train/serve skew).
+//! The [`Featurizer`] trait is the seam: a finetunable encoder can later produce
+//! the same `x` (same `dim`) without any other piece changing.
 
-use hanzo_router::classify::{Classifier, Heuristic, Request};
-use hanzo_router::registry::Task;
+use crate::classify::{Classifier, Heuristic, Request};
+use crate::registry::Task;
 
 pub const NUM_TASKS: usize = 8;
 pub const NUM_HASH: usize = 5;
