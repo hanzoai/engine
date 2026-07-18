@@ -187,6 +187,7 @@ fn realistic_policy() -> Policy {
         prefer,
         memory_fraction: None,
         cost_ceiling: Some(10.0),
+        learned: None,
     }
 }
 
