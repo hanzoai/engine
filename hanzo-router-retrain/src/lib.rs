@@ -10,6 +10,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+pub mod decision;
+
 use enso::policy::DK;
 use enso::profile::PROFILE_DIM;
 use enso::{fit_base, Featurizer, HashFeaturizer, Policy, ProfileTable};

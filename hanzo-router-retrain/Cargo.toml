@@ -7,7 +7,7 @@ repository = "https://github.com/hanzoai/engine"
 license = "MIT OR Apache-2.0"
 
 [[bin]]
-name = "enso-fit"
+name = "router-fit"
 path = "src/main.rs"
 
 [dependencies]

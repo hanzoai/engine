@@ -14,13 +14,17 @@ use axum::{
     extract::{Json, State},
     response::IntoResponse,
 };
-use enso::{Featurizer, HashFeaturizer};
+// The featurizer is a hanzo-router primitive; the learned head is mounted on the
+// one `hanzo_router::Policy` (see `deployment_policy`), so `enso` -- the router's
+// offline learner/featurizer library -- is not threaded through the serve seam.
+use hanzo_router::featurize::{Featurizer, HashFeaturizer};
 use hanzo_router::{
-    route, Backend, Decision, Heuristic, MemSnapshot, ModelCard, Policy, Registry,
+    prefer, route, Backend, Decision, Heuristic, MemSnapshot, ModelCard, Policy, Registry,
     Request as RouteRequest, RoutePolicy, Slo, Task, User,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use std::sync::OnceLock;
 use utoipa::ToSchema;
 
 use crate::types::{ExtractedState, SharedState};
@@ -185,9 +189,9 @@ pub struct ClassifySlo {
 }
 
 /// `POST /route` response: exactly the four fields the Go client decodes.
-/// `features` is the stable per-prompt vector (enso `HashFeaturizer`,
-/// [`FEAT_DIM`](enso::featurize::FEAT_DIM) dims) collected for router training;
-/// it is feature values only, never prompt text.
+/// `features` is the stable per-prompt vector (router `HashFeaturizer`,
+/// [`FEAT_DIM`](hanzo_router::featurize::FEAT_DIM) dims) collected for router
+/// training; it is feature values only, never prompt text.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ClassifyResponse {
     /// Chosen model id, or empty when the engine has no servable model (the
@@ -237,10 +241,10 @@ fn approx_tokens(prompt: &str) -> usize {
 /// Classify against a caller-supplied policy.
 ///
 /// The policy is a parameter because `hanzo-router` is the mechanism and the policy is the value
-/// plugged into it: `Policy` is the rule-based cold start, and `enso::Enso` is the learned one that
-/// `hanzo-router-retrain` fits nightly into `heads-{scope}.safetensors`. Constructing a policy in
-/// here would pin the mechanism to one of them -- which is what kept the trained policy out of the
-/// serving path despite existing, loading and retraining.
+/// plugged into it. There is one `Policy` type: without a mounted head it is the rule-based
+/// preference walk; with one (`ROUTER_HEADS` -> `Policy::load_heads`) it scores arms with the
+/// bilinear head `hanzo-router-retrain` fits nightly. Taking the policy as a parameter is what lets
+/// `deployment_policy` swap the two without the mechanism knowing which it serves.
 fn classify_route_with(
     policy: &dyn RoutePolicy,
     prompt: &str,
@@ -255,7 +259,7 @@ fn classify_route_with(
         task_hint,
         modality_hint: None,
     };
-    // Features + task from the enso Featurizer seam (single source of task truth).
+    // Features + task from the router Featurizer seam (single source of task truth).
     let featurizer = HashFeaturizer::default();
     let features = featurizer.featurize(&req);
     let task = featurizer.task_of(&req);
@@ -270,20 +274,35 @@ fn classify_route_with(
     (model, task, route.confidence as f64, features)
 }
 
-/// Classify with the policy this deployment serves.
-///
-/// Still the rule-based `Policy`: `enso::Enso` is the learned implementor, and
-/// `hanzo-router-retrain` already fits its weights nightly into `heads-{scope}.safetensors` and can
-/// `load_w` them -- but nothing constructs an `Enso` outside its own tests, so the trained policy has
-/// never served a request. Selecting it belongs here, at the one place that decides, now that
-/// `classify_route_with` takes the policy rather than picking one.
+/// The single [`Policy`] this deployment serves, resolved once. `ROUTER_HEADS=<serve
+/// bundle>` mounts the learned head onto the router `Policy` ([`Policy::load_heads`]);
+/// unset (or unreadable) leaves the preference-aware rule-based [`prefer`] policy.
+/// Exactly one `Policy` type reaches the seam; the learned path is opt-in and
+/// reversible by one env var, so shipping a head cannot regress the default.
+fn deployment_policy() -> &'static Policy {
+    static POLICY: OnceLock<Policy> = OnceLock::new();
+    POLICY.get_or_init(|| match std::env::var_os("ROUTER_HEADS") {
+        Some(path) => match Policy::load_heads(std::path::Path::new(&path)) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("ROUTER_HEADS {:?} unreadable ({e}); using rule-based router", path);
+                prefer()
+            }
+        },
+        None => prefer(),
+    })
+}
+
+/// Classify with the policy this deployment serves: the learned head when
+/// `ROUTER_HEADS` is set, else the preference-aware rule-based `Policy`. One
+/// `classify_route_with` seam, one `Policy` type, either way.
 fn classify_route(
     prompt: &str,
     task_hint: Option<Task>,
     slo: Slo,
     registry: &Registry,
 ) -> (String, Task, f64, Vec<f64>) {
-    classify_route_with(&Policy::default(), prompt, task_hint, slo, registry)
+    classify_route_with(deployment_policy(), prompt, task_hint, slo, registry)
 }
 
 /// Build the routing pool from the models the engine currently has. Loaded
@@ -337,7 +356,7 @@ pub async fn classify_handler(
 #[cfg(test)]
 mod contract_tests {
     use super::*;
-    use enso::featurize::FEAT_DIM;
+    use hanzo_router::featurize::FEAT_DIM;
     use std::time::Instant;
 
     fn cloud(id: &str, cost: f64) -> ModelCard {
@@ -349,6 +368,46 @@ mod contract_tests {
             vision: false,
             cost_per_1k: cost,
         }
+    }
+
+    #[test]
+    fn wired_head_routes_per_head_through_the_seam() {
+        // A fitted head, persisted as a serve bundle and loaded exactly as
+        // `deployment_policy` loads it (`Policy::load_heads`), routes to its argmax
+        // arm through the SAME `classify_route_with` seam the handler uses --- and
+        // diverges from the rule-based default on the same prompt + pool. This is
+        // the wired path, and the seam only ever sees `hanzo_router::Policy`.
+        use hanzo_router::featurize::{FEAT_DIM, NUM_TASKS};
+        use hanzo_router::heads::{Arm, Heads};
+        let g = Task::General.index();
+        let k = NUM_TASKS + 4;
+        let mut w = vec![0.0; FEAT_DIM * k];
+        w[g * k + g] = 1.0; // utility reads the General quality column
+        let arm = |model: &str, q: f64| {
+            let mut feat = vec![0.0; k];
+            feat[g] = q;
+            Arm { model: model.into(), feat }
+        };
+        let path = std::env::temp_dir().join(format!("router-heads-wire-{}.json", std::process::id()));
+        Heads::new(w, vec![arm("weak-cheap", 0.2), arm("strong", 0.9)])
+            .save(&path)
+            .unwrap();
+
+        let head = Policy::load_heads(&path).expect("serve bundle loads");
+        // Registry lists weak-cheap first, so the rule-based default picks it (no
+        // arm matches the PREFER pool); the head ranks by learned quality instead.
+        let reg = Registry::new(vec![cloud("weak-cheap", 0.5), cloud("strong", 0.5)]);
+        let hint = Some(Task::General);
+
+        let (head_model, _, _, _) =
+            classify_route_with(&head, "give me an overview", hint, Slo::default(), &reg);
+        let (rule_model, _, _, _) =
+            classify_route_with(&prefer(), "give me an overview", hint, Slo::default(), &reg);
+
+        assert_eq!(head_model, "strong", "wired head routes to its highest-quality arm");
+        assert_eq!(rule_model, "weak-cheap", "rule-based default picks registry order");
+        assert_ne!(head_model, rule_model, "the head must route per the head, not the heuristic");
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
