@@ -11,10 +11,10 @@ keywords.workspace = true
 categories.workspace = true
 license.workspace = true
 rust-version.workspace = true
-default-run = "hanzo"
+default-run = "hanzo-engine"
 
 [[bin]]
-name = "hanzo"
+name = "hanzo-engine"
 path = "src/main.rs"
 doc = false
 
