@@ -60,6 +60,7 @@ impl LayerWeights {
         x: &Tensor,
         mask: &AttentionMask,
         start_offsets: &[usize],
+        positions: &Tensor,
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
@@ -87,17 +88,42 @@ impl LayerWeights {
             (q, k, v)
         };
 
-        let (q, k) = match (&self.q_norm, &self.k_norm) {
-            (Some(q_norm), Some(k_norm)) => self.rotary.forward_qk_norm(
-                &q,
-                &k,
-                q_norm.weight(),
-                k_norm.weight(),
-                q_norm.eps(),
-                k_norm.eps(),
-                start_offsets,
-            )?,
-            _ => self.rotary.forward(&q, &k, start_offsets)?,
+        // Decode (single new token) reads the RoPE index from a DEVICE positions
+        // tensor rather than baking a host `start_offsets` scalar into the launch —
+        // the prerequisite for capturing the decode step into a CUDA/ROCm graph
+        // (paged attention already reads context_lens on device). Prompt/prefill keeps
+        // the host-offset form, which also feeds the same offsets into the causal mask.
+        let (q, k) = if seq_len == 1 {
+            let positions = if positions.device().same_device(q.device()) {
+                positions.clone()
+            } else {
+                positions.to_device(q.device())?
+            };
+            match (&self.q_norm, &self.k_norm) {
+                (Some(q_norm), Some(k_norm)) => self.rotary.forward_qk_norm_positions(
+                    &q,
+                    &k,
+                    q_norm.weight(),
+                    k_norm.weight(),
+                    q_norm.eps(),
+                    k_norm.eps(),
+                    &positions,
+                )?,
+                _ => self.rotary.forward_positions(&q, &k, &positions)?,
+            }
+        } else {
+            match (&self.q_norm, &self.k_norm) {
+                (Some(q_norm), Some(k_norm)) => self.rotary.forward_qk_norm(
+                    &q,
+                    &k,
+                    q_norm.weight(),
+                    k_norm.weight(),
+                    q_norm.eps(),
+                    k_norm.eps(),
+                    start_offsets,
+                )?,
+                _ => self.rotary.forward(&q, &k, start_offsets)?,
+            }
         };
 
         let (q, k, v) = (
@@ -465,6 +491,27 @@ impl ModelWeights {
         } else {
             DeviceMappedMask::from_single(mask)
         };
+        // Build the RoPE positions tensor once per step on the model device. When the
+        // caller supplies `metadata.rope_positions` (the ROCm/CUDA decode-graph path),
+        // use that *stable* device tensor verbatim so the captured decode replays the
+        // advancing position instead of freezing at the warmup offset; otherwise build a
+        // fresh one from the host offsets. Only the seq_len==1 attention path reads it.
+        let positions = match metadata
+            .as_ref()
+            .and_then(|(_, meta)| meta.rope_positions.as_ref())
+            .and_then(|positions| positions.get(&self.device.location()))
+        {
+            Some(positions) => positions.clone(),
+            None => {
+                let pos = start_offsets
+                    .iter()
+                    .copied()
+                    .map(u32::try_from)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(hanzo_ml::Error::wrap)?;
+                Tensor::from_vec(pos, start_offsets.len(), &self.device)?
+            }
+        };
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
@@ -476,6 +523,7 @@ impl ModelWeights {
                 &x,
                 &mask.get(x.device()),
                 start_offsets,
+                &positions,
                 &mut cache[i],
                 metadata
                     .as_ref()
