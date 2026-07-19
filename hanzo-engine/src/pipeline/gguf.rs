@@ -1243,6 +1243,12 @@ impl GGUFPipeline {
         // impossible (multi-GPU decode falls back to the always-correct eager path).
         self.mapper.get_unique_devices().len() <= 1
             && match &self.model {
+                // Qwen2: dense GQA transformer whose decode step is shape-stable at
+                // seq_len==1 (paged attention gives position-invariant KV) and whose
+                // RoPE reads the device `rope_positions` buffer (`forward_positions`),
+                // so the captured rotation advances per replay. No MoE host-side routing
+                // sort, so capture is clean at any batch (not single-seq-gated).
+                Model::Qwen(_) => true,
                 Model::Qwen3(_) | Model::Qwen3MoE(_) => true,
                 // Qwen3.5/3.6 hybrid (Gated-DeltaNet + MoE): capturable now that (a) the full-attn
                 // layers run through PagedAttention (position-invariant KV), (b) mRoPE reads the
@@ -1286,6 +1292,9 @@ impl GGUFPipeline {
     ) -> Result<Tensor, hanzo_ml::Error> {
         match self.model {
             Model::Llama(ref model) => {
+                model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
+            }
+            Model::Qwen(ref model) => {
                 model.forward(input_ids, seqlen_offsets, context_lens, paged_attn_meta)
             }
             Model::Qwen3(ref model) => model.forward(
