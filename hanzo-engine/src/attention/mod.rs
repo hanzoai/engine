@@ -1,8 +1,17 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::{attention::backends::cpu, pipeline::text_models_inputs_processor::FlashParams};
+use crate::pipeline::KvCache;
 
 use hanzo_ml::{DType, Device, Result, Tensor};
+
+/// Decode command-graph attention context (shared scale + meta buffers). Vulkan-only; the uninhabited
+/// stand-in keeps the model forward signatures backend-uniform off-Vulkan, where the graph path is
+/// never taken. One canonical alias so every GGUF text model names the same type.
+#[cfg(feature = "vulkan")]
+pub(crate) use hanzo_ml::VkGraphAttn;
+#[cfg(not(feature = "vulkan"))]
+pub(crate) enum VkGraphAttn {}
 
 /// Attention mask passed to [`Sdpa::run_attention`].
 ///
@@ -543,6 +552,86 @@ impl Sdpa {
             naive_sdpa(q, &k, &v, mask, sdpa_params)
         }
     }
+}
+
+/// SDPA over the naive (non-paged) contiguous KV cache -- the shared decode/prefill attention tail for
+/// the GGUF dense and MoE text models. When a decode command-graph attention context is supplied
+/// (`vk_graph`, a Vulkan capture in flight) the new K/V is appended at the DEVICE-offset slot read from
+/// `positions` and the fused shared-meta SDPA attends the growing `[0, seq_k)` span, so a captured
+/// forward replays with the advancing write slot and span; otherwise the eager host-offset append + SDPA
+/// runs. One home so both the dense and MoE models dispatch naive-cache attention identically.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sdpa_naive_cache(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    mask: &AttentionMask,
+    kv_cache: &mut KvCache,
+    positions: &Tensor,
+    sdpa_params: &SdpaParams,
+    vk_graph: Option<&VkGraphAttn>,
+    b: usize,
+    n_head: usize,
+    head_dim: usize,
+) -> Result<Tensor> {
+    #[cfg(feature = "vulkan")]
+    if let Some(g) = vk_graph {
+        // Contiguous q/k/v so the device-offset append and the fused SDPA read packed rows.
+        let k = k.contiguous()?;
+        let v = v.contiguous()?;
+        let (k_full, v_full) = kv_cache.append_graph(&k, &v, positions)?;
+        let q = q.contiguous()?;
+        return vk_sdpa_graph(&q, &k_full, &v_full, g, b, n_head, head_dim);
+    }
+    #[cfg(not(feature = "vulkan"))]
+    let _ = (positions, vk_graph, b, n_head, head_dim);
+    let (k, v) = kv_cache.append(k, v)?;
+    Sdpa.run_attention(q, &k, &v, mask, None, sdpa_params)
+}
+
+/// Fused GQA flash SDPA over the FULL fixed-shape KV cache for the decode command-graph: binds the
+/// caller-owned shared `scale`/`meta` (seq_k advances per replay) and a fresh per-layer `out`, so a
+/// captured forward attends the growing span without re-recording. `q`/`k_full`/`v_full` are the decode
+/// query and the whole cache; returns `out` [b, n_head, 1, head_dim] -- the shape the eager SDPA yields.
+#[cfg(feature = "vulkan")]
+fn vk_sdpa_graph(
+    q: &Tensor,
+    k_full: &Tensor,
+    v_full: &Tensor,
+    g: &VkGraphAttn,
+    b: usize,
+    n_head: usize,
+    head_dim: usize,
+) -> Result<Tensor> {
+    use hanzo_ml::{backend::BackendStorage, Storage};
+    let out = Tensor::zeros((b, n_head, 1, head_dim), DType::F32, q.device())?;
+    {
+        let (qs, _) = q.storage_and_layout();
+        let (ks, _) = k_full.storage_and_layout();
+        let (vs, _) = v_full.storage_and_layout();
+        let (os, _) = out.storage_and_layout();
+        let (
+            Storage::Vulkan(q_vk),
+            Storage::Vulkan(k_vk),
+            Storage::Vulkan(v_vk),
+            Storage::Vulkan(o_vk),
+        ) = (&*qs, &*ks, &*vs, &*os)
+        else {
+            hanzo_ml::bail!("vk sdpa graph: expected vulkan storage for q/k/v/out");
+        };
+        q_vk.device().sdpa_blk_vk_graph(
+            q_vk,
+            k_vk,
+            v_vk,
+            o_vk,
+            g.scale(),
+            g.meta(),
+            b,
+            n_head,
+            1,
+        )?;
+    }
+    Ok(out)
 }
 
 #[cfg(all(test, feature = "flash-attn"))]
