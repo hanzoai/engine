@@ -39,6 +39,7 @@ static METAL_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "rocm")]
 static ROCM_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 static FLASHINFER_DECODE_ENABLED: OnceLock<bool> = OnceLock::new();
+static FLASHINFER_PREFILL_ENABLED: OnceLock<bool> = OnceLock::new();
 static MLA_ABSORB_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "vulkan")]
 static VULKAN_FUSED_ATTN_ENABLED: OnceLock<bool> = OnceLock::new();
@@ -118,6 +119,18 @@ pub(crate) fn flashinfer_decode_enabled() -> bool {
     // No cross-backend sibling: FlashInfer is one decode-kernel selector, so only its own name and the
     // PERF master gate it.
     *FLASHINFER_DECODE_ENABLED.get_or_init(|| resolve("FLASHINFER_DECODE", None, true))
+}
+
+// FlashInfer paged prefill (BatchPrefillWithPagedKVCache, MaskMode::kCausal). Replaces the eager
+// cutlass-GEMM + softmax_f32 prompt attention for GGUF/quantized models, whose causal mask is Custom
+// and therefore never reaches the dense flash path. Reads the paged cache (the current tokens' K/V are
+// written first), so it composes with the FlashInfer decode cache layout. Default on: greedy decode is
+// token-for-token identical to the eager causal path across diverse prompts -- the online-softmax
+// reduction reorders float adds so intermediate scores differ within flash-attention tolerance, but the
+// argmax does not move -- and the call-site guards fall through to eager for any uncovered shape.
+// FLASHINFER_PREFILL=0 forces eager.
+pub(crate) fn flashinfer_prefill_enabled() -> bool {
+    *FLASHINFER_PREFILL_ENABLED.get_or_init(|| resolve("FLASHINFER_PREFILL", None, true))
 }
 
 // Absorbed-MLA decode (DeepSeek weight absorption) for the MLA archs (deepseek2 / glm-dsa). When on,
