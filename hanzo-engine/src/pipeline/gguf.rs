@@ -206,12 +206,14 @@ impl VulkanDecodeGraphState {
     }
 }
 
-/// Decode tokens a captured graph must be replayed to repay its cost -- one extra eager forward plus
-/// recording the whole dispatch stream, against the per-token replay saving. This is a hardware
-/// property (dispatch count × record cost ÷ per-token CPU saving), not a workload choice; the policy
-/// below decides *whether* a given workload reaches it, this only says *how far* a capture must run.
+/// Replayed decode tokens a capture must run to repay its cost. A capture records the whole decode
+/// dispatch stream once and pins its working set; it runs NO extra GPU work (the eager warmup forward
+/// that precedes it is the token's real forward), so the cost is one command-buffer record, which each
+/// subsequent replay recovers by skipping the per-token re-record + submit. Recording repays within a
+/// couple of replayed tokens; this small margin exists only so a capture is never paid for a generation
+/// too short to reuse it. The policy below decides *whether* a given workload reaches it.
 #[cfg(feature = "vulkan")]
-const VULKAN_GRAPH_BREAKEVEN: usize = 40;
+const VULKAN_GRAPH_BREAKEVEN: usize = 4;
 
 /// Self-shaping decode-graph capture policy. A capture is worth recording only if it will be replayed
 /// past [`VULKAN_GRAPH_BREAKEVEN`] tokens, and whether a generation runs that long is a property of
@@ -235,11 +237,12 @@ struct GraphCapturePolicy {
 #[cfg(feature = "vulkan")]
 impl Default for GraphCapturePolicy {
     fn default() -> Self {
-        // Seed the EMA at the arming threshold (2× breakeven, see `capture_after`) so a fresh server
-        // captures on its first sustained generation and only backs off once short ones pull the
-        // average down — matching the default-on intent before any workload has been observed.
+        // Seed the EMA above the arming threshold (2× breakeven, see `capture_after`) so a fresh server
+        // captures on its first sustained generation AND a short startup/warmup sequence cannot fold the
+        // average below the threshold before any real generation is observed (seeding exactly at the
+        // threshold let one 2-token warmup disarm capture). Matches the default-on intent.
         Self {
-            ema_len: 2.0 * VULKAN_GRAPH_BREAKEVEN as f64,
+            ema_len: 4.0 * VULKAN_GRAPH_BREAKEVEN as f64,
             run: 0,
             next_position: 0,
         }
@@ -279,6 +282,54 @@ impl GraphCapturePolicy {
     /// generation is at least that long; when armed, capture at the breakeven to bank the longest tail.
     fn capture_after(&self) -> Option<usize> {
         (self.ema_len >= 2.0 * VULKAN_GRAPH_BREAKEVEN as f64).then_some(VULKAN_GRAPH_BREAKEVEN)
+    }
+}
+
+#[cfg(all(test, feature = "vulkan"))]
+mod graph_capture_policy {
+    use super::{GraphCapturePolicy, VULKAN_GRAPH_BREAKEVEN};
+
+    /// A fresh policy is armed: a server with no observed workload captures on its first sustained
+    /// generation (the default-on intent).
+    #[test]
+    fn fresh_policy_arms() {
+        assert_eq!(
+            GraphCapturePolicy::default().capture_after(),
+            Some(VULKAN_GRAPH_BREAKEVEN)
+        );
+    }
+
+    /// A single short startup/warmup sequence must NOT disarm capture. Seeding the EMA exactly at the
+    /// arming threshold let one 2-token warmup fold it below and suppress capture for the whole run; the
+    /// seed sits above the threshold so a startup sequence cannot disarm a fresh server.
+    #[test]
+    fn short_warmup_does_not_disarm() {
+        let mut p = GraphCapturePolicy::default();
+        // A 2-token startup sequence, then a real generation begins at a discontinuous position (which
+        // folds the finished 2-token run into the workload EMA).
+        p.tick(0);
+        p.tick(1);
+        p.tick(1000);
+        assert!(
+            p.capture_after().is_some(),
+            "a single short warmup sequence disarmed capture"
+        );
+    }
+
+    /// A workload of consistently short generations DOES back off: the EMA settles below the arming
+    /// threshold so a capture is never paid for generations too short to reuse it.
+    #[test]
+    fn sustained_short_workload_backs_off() {
+        let mut p = GraphCapturePolicy::default();
+        for seq in 0..50 {
+            let base = seq * 1000;
+            p.tick(base);
+            p.tick(base + 1);
+        }
+        assert!(
+            p.capture_after().is_none(),
+            "a sustained short-generation workload should stop capturing"
+        );
     }
 }
 
@@ -2020,6 +2071,97 @@ impl GGUFPipeline {
     }
 }
 
+/// The per-model surface the Vulkan decode command-graph seam drives: the eager warmup `forward`, the
+/// capture-time `forward_vk_graph`, and the three KV/attention accessors that let one captured graph
+/// replay a strictly-sequential continuation. One abstraction over every graph-eligible GGUF text model
+/// (dense Qwen2 + Qwen3-MoE today) keeps `try_vulkan_decode_graph_forward` model-agnostic — adding a
+/// model is one match arm plus the thin methods on that model, which already exist as its inherent API.
+#[cfg(feature = "vulkan")]
+trait VulkanDecodeGraphModel {
+    fn forward(
+        &self,
+        x: &Tensor,
+        start_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+    ) -> Result<Tensor, hanzo_ml::Error>;
+    fn forward_vk_graph(
+        &self,
+        x: &Tensor,
+        start_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        positions: &Tensor,
+        vk_graph: &hanzo_ml::VkGraphAttn,
+    ) -> Result<Tensor, hanzo_ml::Error>;
+    fn vk_build_graph_attn(&self, seq_k: usize) -> Result<hanzo_ml::VkGraphAttn, hanzo_ml::Error>;
+    fn vk_kv_capacity(&self) -> Option<usize>;
+    fn vk_advance_kv_len(&self, len: usize) -> Result<(), hanzo_ml::Error>;
+}
+
+// Thin adapters: each delegates to the model's inherent method (inherent items win in `Type::method`
+// path resolution, so this never recurses), so the graph logic lives once in the model and once in the
+// seam. The two models' inherent methods are identical in signature by construction.
+#[cfg(feature = "vulkan")]
+impl VulkanDecodeGraphModel for QQwen {
+    fn forward(
+        &self,
+        x: &Tensor,
+        start_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+    ) -> Result<Tensor, hanzo_ml::Error> {
+        QQwen::forward(self, x, start_offsets, context_lens, None)
+    }
+    fn forward_vk_graph(
+        &self,
+        x: &Tensor,
+        start_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        positions: &Tensor,
+        vk_graph: &hanzo_ml::VkGraphAttn,
+    ) -> Result<Tensor, hanzo_ml::Error> {
+        QQwen::forward_vk_graph(self, x, start_offsets, context_lens, positions, vk_graph)
+    }
+    fn vk_build_graph_attn(&self, seq_k: usize) -> Result<hanzo_ml::VkGraphAttn, hanzo_ml::Error> {
+        QQwen::vk_build_graph_attn(self, seq_k)
+    }
+    fn vk_kv_capacity(&self) -> Option<usize> {
+        QQwen::vk_kv_capacity(self)
+    }
+    fn vk_advance_kv_len(&self, len: usize) -> Result<(), hanzo_ml::Error> {
+        QQwen::vk_advance_kv_len(self, len)
+    }
+}
+
+#[cfg(feature = "vulkan")]
+impl VulkanDecodeGraphModel for QQwen3MoE {
+    fn forward(
+        &self,
+        x: &Tensor,
+        start_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+    ) -> Result<Tensor, hanzo_ml::Error> {
+        QQwen3MoE::forward(self, x, start_offsets, context_lens, None)
+    }
+    fn forward_vk_graph(
+        &self,
+        x: &Tensor,
+        start_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        positions: &Tensor,
+        vk_graph: &hanzo_ml::VkGraphAttn,
+    ) -> Result<Tensor, hanzo_ml::Error> {
+        QQwen3MoE::forward_vk_graph(self, x, start_offsets, context_lens, positions, vk_graph)
+    }
+    fn vk_build_graph_attn(&self, seq_k: usize) -> Result<hanzo_ml::VkGraphAttn, hanzo_ml::Error> {
+        QQwen3MoE::vk_build_graph_attn(self, seq_k)
+    }
+    fn vk_kv_capacity(&self) -> Option<usize> {
+        QQwen3MoE::vk_kv_capacity(self)
+    }
+    fn vk_advance_kv_len(&self, len: usize) -> Result<(), hanzo_ml::Error> {
+        QQwen3MoE::vk_advance_kv_len(self, len)
+    }
+}
+
 #[cfg(feature = "vulkan")]
 impl GGUFPipeline {
     /// Attempts to satisfy a single Vulkan decode step via the captured command-graph. Returns
@@ -2045,9 +2187,12 @@ impl GGUFPipeline {
         if !matches!(input_ids.device(), Device::Vulkan(_)) {
             return Ok(None);
         }
-        // The naive-KV-cache decode graph is wired for the Q4_K / E=128 Qwen3-MoE decode path.
-        let Model::Qwen3MoE(ref model) = self.model else {
-            return Ok(None);
+        // The naive-KV-cache decode graph drives every graph-eligible GGUF text model through one
+        // model-agnostic seam (dense Qwen2 + Qwen3-MoE today); other variants stay on the eager path.
+        let model: &dyn VulkanDecodeGraphModel = match &self.model {
+            Model::Qwen(model) => model,
+            Model::Qwen3MoE(model) => model,
+            _ => return Ok(None),
         };
 
         let position = seqlen_offsets[0];
@@ -2102,8 +2247,7 @@ impl GGUFPipeline {
         // Cache miss: run an eager warmup forward first (correct first token + cache populate), then
         // capture a graph for the subsequent tokens. If capture fails we keep the warmup logits and
         // disable the path (fail-closed), so no token is lost or recomputed.
-        let warmup_logits =
-            model.forward(input_ids, seqlen_offsets, context_lens.to_vec(), None)?;
+        let warmup_logits = model.forward(input_ids, seqlen_offsets, context_lens.to_vec())?;
 
         // Capture only once this sequence's run reaches the point the policy judges worthwhile for the
         // observed workload -- `None` means the typical generation is too short to repay a capture, so
@@ -2155,8 +2299,10 @@ impl GGUFPipeline {
         context_lens: &[(usize, usize)],
         position: usize,
     ) -> Result<VulkanDecodeGraphEntry, hanzo_ml::Error> {
-        let Model::Qwen3MoE(ref model) = self.model else {
-            hanzo_ml::bail!("vulkan decode graph: unsupported model variant");
+        let model: &dyn VulkanDecodeGraphModel = match &self.model {
+            Model::Qwen(model) => model,
+            Model::Qwen3MoE(model) => model,
+            _ => hanzo_ml::bail!("vulkan decode graph: unsupported model variant"),
         };
         let Device::Vulkan(vdev) = input_ids.device().clone() else {
             hanzo_ml::bail!("vulkan decode graph: input not on a vulkan device");
