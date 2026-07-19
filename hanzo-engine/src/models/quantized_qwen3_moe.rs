@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::attention::{AttentionMask, SdpaParams};
+use crate::attention::{sdpa_naive_cache, AttentionMask, SdpaParams, VkGraphAttn};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
-use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
+use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -21,14 +21,6 @@ use hanzo_ml::quantized::QMatMul;
 use hanzo_ml::{DType, Device, Result, Tensor};
 use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig, RingPipeline};
-
-// Decode command-graph attention context (shared scale + meta buffers), threaded through the forward
-// so one set serves every layer's SDPA while a capture is in flight. Vulkan-only; the uninhabited
-// stand-in keeps the forward signature backend-uniform off-Vulkan, where the graph path is never taken.
-#[cfg(feature = "vulkan")]
-use hanzo_ml::VkGraphAttn;
-#[cfg(not(feature = "vulkan"))]
-enum VkGraphAttn {}
 
 // Default fallback for models that don't specify context_length
 const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
@@ -212,44 +204,19 @@ impl LayerWeights {
                     None,
                 )?
             }
-            None => {
-                // Vulkan decode command-graph: append the new K/V at a DEVICE-offset cache slot and run
-                // the shared-meta fused SDPA, so a captured forward replays with the advancing slot +
-                // attended span (`vk_graph` present only while capturing). Falls back to the eager
-                // host-offset append + SDPA otherwise. `graph_y` is Some only on the capture path.
-                #[cfg(feature = "vulkan")]
-                let graph_y = match vk_graph {
-                    Some(g) => {
-                        let k = k.contiguous()?;
-                        let v = v.contiguous()?;
-                        let (k_full, v_full) = kv_cache.append_graph(&k, &v, positions)?;
-                        let q = q.contiguous()?;
-                        Some(vk_sdpa_graph(
-                            &q,
-                            &k_full,
-                            &v_full,
-                            g,
-                            b_sz,
-                            self.n_head,
-                            self.head_dim,
-                        )?)
-                    }
-                    None => None,
-                };
-                #[cfg(not(feature = "vulkan"))]
-                let graph_y: Option<Tensor> = {
-                    let _ = vk_graph;
-                    None
-                };
-
-                match graph_y {
-                    Some(y) => y,
-                    None => {
-                        let (k, v) = kv_cache.append(&k, &v)?;
-                        Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
-                    }
-                }
-            }
+            None => sdpa_naive_cache(
+                &q,
+                &k,
+                &v,
+                mask,
+                kv_cache,
+                positions,
+                &self.sdpa_params,
+                vk_graph,
+                b_sz,
+                self.n_head,
+                self.head_dim,
+            )?,
         };
 
         let y = if mask.is_custom() {
@@ -289,51 +256,6 @@ impl LayerWeights {
         let xn = self.mlp.forward(&xn)?;
         xn + residual
     }
-}
-
-// Fused GQA flash SDPA over the FULL fixed-shape KV cache for the decode command-graph: binds the
-// caller-owned shared `scale`/`meta` (seq_k advances per replay) and a fresh per-layer `out`, so a
-// captured forward attends the growing span without re-recording. `q`/`k_full`/`v_full` are the decode
-// query and the whole cache; returns `out` [b, n_head, 1, head_dim] — same shape the eager SDPA yields.
-#[cfg(feature = "vulkan")]
-fn vk_sdpa_graph(
-    q: &Tensor,
-    k_full: &Tensor,
-    v_full: &Tensor,
-    g: &VkGraphAttn,
-    b: usize,
-    n_head: usize,
-    head_dim: usize,
-) -> Result<Tensor> {
-    use hanzo_ml::{backend::BackendStorage, Storage};
-    let out = Tensor::zeros((b, n_head, 1, head_dim), DType::F32, q.device())?;
-    {
-        let (qs, _) = q.storage_and_layout();
-        let (ks, _) = k_full.storage_and_layout();
-        let (vs, _) = v_full.storage_and_layout();
-        let (os, _) = out.storage_and_layout();
-        let (
-            Storage::Vulkan(q_vk),
-            Storage::Vulkan(k_vk),
-            Storage::Vulkan(v_vk),
-            Storage::Vulkan(o_vk),
-        ) = (&*qs, &*ks, &*vs, &*os)
-        else {
-            hanzo_ml::bail!("vk sdpa graph: expected vulkan storage for q/k/v/out");
-        };
-        q_vk.device().sdpa_blk_vk_graph(
-            q_vk,
-            k_vk,
-            v_vk,
-            o_vk,
-            g.scale(),
-            g.meta(),
-            b,
-            n_head,
-            1,
-        )?;
-    }
-    Ok(out)
 }
 
 pub struct ModelWeights {
