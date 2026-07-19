@@ -28,7 +28,7 @@ use crate::{
 };
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use hanzo_paged_attn::{
-    flashinfer_decode, gather_kv_cache_flashinfer, reshape_and_cache_flashinfer,
+    flashinfer_decode, flashinfer_prefill, gather_kv_cache_flashinfer, reshape_and_cache_flashinfer,
 };
 
 fn resolve_tensor_for_device(
@@ -535,6 +535,85 @@ impl PagedAttention {
         }
 
         // === Regular prompt path (no prefix cache, write_cache=true only) ===
+
+        // === FlashInfer paged causal prefill (default on for qualifying CUDA models) ===
+        // Replaces the eager cutlass-GEMM + softmax_f32 prompt attention with the in-tree
+        // BatchPrefillWithPagedKVCache kernel (MaskMode::kCausal baked into the native dispatch, so
+        // causality is not a caller parameter). The kernel reads the paged K/V cache, so this chunk's
+        // K/V are written first; it therefore covers both the is_first (Custom mask) and later-chunk
+        // (mask=None) prompt forwards, which for GGUF/quantized models otherwise both run the eager
+        // path (their causal mask is Custom, which never reaches the dense flash path). The returned
+        // shape matches the caller's mask-keyed reshape in the model forward. The guards below fall
+        // through to the eager path for any shape the kernel does not cover; FLASHINFER_PREFILL=0
+        // forces eager.
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        if crate::perf_flags::flashinfer_prefill_enabled()
+            && write_cache
+            && seq_len > 1
+            && query.dtype() != DType::F32
+            && alibi_slopes.is_none()
+            && sdpa_params.sinks.is_none()
+            && sdpa_params.sliding_window.is_none()
+            && matches!(head_size, 64 | 128 | 256)
+            && key_value_heads != 0
+            && attention_heads % key_value_heads == 0
+            && attention_heads / key_value_heads <= FLASHINFER_PREFILL_MAX_GROUP_SIZE
+        {
+            if let (Some(mut kc), Some(mut vc)) = (key_cache.clone(), value_cache.clone()) {
+                if matches!(
+                    AttentionBackendKind::from_cache(&kc, &vc),
+                    AttentionBackendKind::FlashInfer
+                ) {
+                    let dev = query.device().location();
+                    // Write this chunk's K/V into the paged cache so the causal kernel attends the
+                    // chunk's own keys (mirrors the eager path's post-attention write below).
+                    let k3 = key.transpose(1, 2)?.reshape(((), key_value_heads, head_size))?;
+                    let v3 = value.transpose(1, 2)?.reshape(((), key_value_heads, head_size))?;
+                    write_kv_cache(
+                        &k3,
+                        &v3,
+                        self.k_scale.as_ref(),
+                        self.v_scale.as_ref(),
+                        &mut kc,
+                        &mut vc,
+                        slot_mapping,
+                    )?;
+                    let q3 = query
+                        .transpose(1, 2)?
+                        .reshape((batch_size * seq_len, attention_heads, head_size))?
+                        .contiguous()?;
+                    let fi = input_metadata.flashinfer_prefill_metadata(&dev, use_full)?;
+                    let out = flashinfer_prefill(
+                        &q3,
+                        &kc,
+                        &vc,
+                        fi.paged_kv_indptr,
+                        fi.paged_kv_indices,
+                        fi.paged_kv_last_page_len,
+                        fi.q_indptr,
+                        fi.request_indices,
+                        fi.qo_tile_indices,
+                        fi.kv_tile_indices,
+                        fi.o_indptr,
+                        fi.kv_chunk_size,
+                        fi.block_valid_mask,
+                        batch_size,
+                        sdpa_params.softmax_scale,
+                        sdpa_params.sliding_window,
+                        sdpa_params.softcap,
+                    )?;
+                    return if attention_mask.is_custom() {
+                        Ok(out
+                            .reshape((batch_size, seq_len, attention_heads, head_size))?
+                            .transpose(1, 2)?
+                            .contiguous()?)
+                    } else {
+                        Ok(out)
+                    };
+                }
+            }
+        }
+
         #[allow(clippy::cast_possible_truncation)]
         let single_token_first_prompt =
             write_cache && input_metadata.is_first_prompt_chunk && seq_len == 1;
