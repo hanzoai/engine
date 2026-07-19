@@ -7,10 +7,10 @@ use hanzo_ml::{DType, Device, Result, Tensor};
 use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
-use crate::attention::{AttentionMask, SdpaParams};
+use crate::attention::{sdpa_naive_cache, AttentionMask, SdpaParams, VkGraphAttn};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
-use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
+use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -63,6 +63,7 @@ impl LayerWeights {
         positions: &Tensor,
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        vk_graph: Option<&VkGraphAttn>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
@@ -147,11 +148,19 @@ impl LayerWeights {
                     None,
                 )?
             }
-            None => {
-                let (k, v) = kv_cache.append(&k, &v)?;
-
-                Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
-            }
+            None => sdpa_naive_cache(
+                &q,
+                &k,
+                &v,
+                mask,
+                kv_cache,
+                positions,
+                &self.sdpa_params,
+                vk_graph,
+                b_sz,
+                self.n_head,
+                self.head_dim,
+            )?,
         };
 
         let y = if mask.is_custom() {
@@ -464,6 +473,41 @@ impl ModelWeights {
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
+        self.forward_inner(x, start_offsets, context_lens, metadata, None, None)
+    }
+
+    /// Decode command-graph capture entry: runs the forward reading RoPE from the stable `positions`
+    /// buffer and appending K/V at the device-offset slot + attending the shared span via `vk_graph`,
+    /// so a capture in flight records a replayable single-token forward. Naive KV cache path only.
+    #[cfg(feature = "vulkan")]
+    pub fn forward_vk_graph(
+        &self,
+        x: &Tensor,
+        start_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        positions: &Tensor,
+        vk_graph: &VkGraphAttn,
+    ) -> Result<Tensor> {
+        self.forward_inner(
+            x,
+            start_offsets,
+            context_lens,
+            None,
+            Some(positions),
+            Some(vk_graph),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn forward_inner(
+        &self,
+        x: &Tensor,
+        start_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        positions_override: Option<&Tensor>,
+        vk_graph: Option<&VkGraphAttn>,
+    ) -> Result<Tensor> {
         // Single-dtype residual: cast the F32 embedding output to the compute dtype so norms/matmul/
         // attention stay one dtype (drops the F32<->half attention casts, engages the fused qk-norm).
         let mut layer_in = self.tok_embeddings.forward(x)?.to_dtype(self.dtype)?;
@@ -491,26 +535,29 @@ impl ModelWeights {
         } else {
             DeviceMappedMask::from_single(mask)
         };
-        // Build the RoPE positions tensor once per step on the model device. When the
-        // caller supplies `metadata.rope_positions` (the ROCm/CUDA decode-graph path),
-        // use that *stable* device tensor verbatim so the captured decode replays the
-        // advancing position instead of freezing at the warmup offset; otherwise build a
-        // fresh one from the host offsets. Only the seq_len==1 attention path reads it.
-        let positions = match metadata
-            .as_ref()
-            .and_then(|(_, meta)| meta.rope_positions.as_ref())
-            .and_then(|positions| positions.get(&self.device.location()))
-        {
+        // RoPE positions come from a STABLE device tensor when a caller supplies one: the Vulkan
+        // command-graph (`positions_override`) or the ROCm/CUDA decode graph (`metadata.rope_positions`)
+        // refresh that buffer in place between replays, so the captured decode advances the rotation
+        // instead of freezing at the warmup offset. Otherwise build a fresh one from the host offsets.
+        // Only the seq_len==1 attention path reads it.
+        let positions = match positions_override {
             Some(positions) => positions.clone(),
-            None => {
-                let pos = start_offsets
-                    .iter()
-                    .copied()
-                    .map(u32::try_from)
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(hanzo_ml::Error::wrap)?;
-                Tensor::from_vec(pos, start_offsets.len(), &self.device)?
-            }
+            None => match metadata
+                .as_ref()
+                .and_then(|(_, meta)| meta.rope_positions.as_ref())
+                .and_then(|positions| positions.get(&self.device.location()))
+            {
+                Some(positions) => positions.clone(),
+                None => {
+                    let pos = start_offsets
+                        .iter()
+                        .copied()
+                        .map(u32::try_from)
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                        .map_err(hanzo_ml::Error::wrap)?;
+                    Tensor::from_vec(pos, start_offsets.len(), &self.device)?
+                }
+            },
         };
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
@@ -528,6 +575,7 @@ impl ModelWeights {
                 metadata
                     .as_ref()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                vk_graph,
             )?;
             let x = (attn + residual)?;
 
@@ -541,5 +589,58 @@ impl ModelWeights {
         let x = self.norm.forward(&layer_in)?;
         let x = extract_logits(&x, context_lens)?;
         self.output.forward(&x.contiguous()?)
+    }
+
+    /// Build the shared decode command-graph attention buffers (scale + meta) for the current KV cache
+    /// geometry. Every layer has the identical head/kv/head_dim shape and one contiguous cache, so a
+    /// single [`VkGraphAttn`] serves the whole forward; `seq_k` is the initial attended span (advanced
+    /// per replay via [`VkGraphAttn::set_seq_k`]).
+    #[cfg(feature = "vulkan")]
+    pub fn vk_build_graph_attn(&self, seq_k: usize) -> Result<VkGraphAttn> {
+        let Device::Vulkan(dev) = &self.device else {
+            hanzo_ml::bail!("vulkan decode graph: model is not on a vulkan device");
+        };
+        let l = self
+            .layers
+            .first()
+            .ok_or_else(|| hanzo_ml::Error::msg("vulkan decode graph: model has no layers"))?;
+        let capacity = self
+            .vk_kv_capacity()
+            .ok_or_else(|| hanzo_ml::Error::msg("vulkan decode graph: KV cache not allocated"))?;
+        dev.new_graph_attn(
+            l.n_head,
+            l.n_kv_head,
+            l.head_dim,
+            capacity,
+            l.sdpa_params.softmax_scale,
+            false,
+            seq_k,
+        )
+    }
+
+    /// The contiguous KV cache capacity (max cached tokens) the graph is captured against; `None` until
+    /// an eager warmup step allocates the cache. A captured graph is valid only while the write slot
+    /// stays below this — a grow reallocates the cache buffer and invalidates the graph.
+    #[cfg(feature = "vulkan")]
+    pub fn vk_kv_capacity(&self) -> Option<usize> {
+        let guard = self.cache.normal();
+        match guard.0.first() {
+            Some(KvCache::Normal { k, .. }) if k.all_data.is_some() => Some(k.capacity_seq_len),
+            _ => None,
+        }
+    }
+
+    /// Advance every layer's host KV length after a graph replay wrote the token's K/V on-device, so the
+    /// cache stays consistent for a later eager fallback or capacity-boundary recapture.
+    #[cfg(feature = "vulkan")]
+    pub fn vk_advance_kv_len(&self, len: usize) -> Result<()> {
+        let mut guard = self.cache.normal();
+        for kv in guard.0.iter_mut() {
+            if let KvCache::Normal { k, v } = kv {
+                k.set_len(len)?;
+                v.set_len(len)?;
+            }
+        }
+        Ok(())
     }
 }
