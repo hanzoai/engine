@@ -619,19 +619,59 @@ fn vk_sdpa_graph(
         else {
             hanzo_ml::bail!("vk sdpa graph: expected vulkan storage for q/k/v/out");
         };
-        q_vk.device().sdpa_blk_vk_graph(
-            q_vk,
-            k_vk,
-            v_vk,
-            o_vk,
-            g.scale(),
-            g.meta(),
-            b,
-            n_head,
-            1,
-        )?;
+        // Flash-decoding (default): split the KV sequence across n_split workgroups per head so the lone
+        // decode query fills the GPU (the one-workgroup-per-head sdpa_blk runs at 256 VGPR / min
+        // occupancy). VK_SDPA_SPLIT_OFF reverts to sdpa_blk_vk_graph for A/B; n_split via VK_SDPA_NSPLIT.
+        if vk_sdpa_split_graph() {
+            q_vk.device().sdpa_decode_split_vk_graph(
+                q_vk,
+                k_vk,
+                v_vk,
+                o_vk,
+                g.meta(),
+                b,
+                n_head,
+                g.n_kv(),
+                head_dim,
+                g.softmax_scale(),
+                vk_sdpa_nsplit(),
+                g.kv_batch_stride(),
+                g.kv_head_stride(),
+                g.key_stride(),
+            )?;
+        } else {
+            q_vk.device().sdpa_blk_vk_graph(
+                q_vk,
+                k_vk,
+                v_vk,
+                o_vk,
+                g.scale(),
+                g.meta(),
+                b,
+                n_head,
+                1,
+            )?;
+        }
     }
     Ok(out)
+}
+
+// Flash-decoding graph toggle (cached): default ON, VK_SDPA_SPLIT_OFF=1 reverts to sdpa_blk for A/B.
+#[cfg(feature = "vulkan")]
+fn vk_sdpa_split_graph() -> bool {
+    static S: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *S.get_or_init(|| std::env::var("VK_SDPA_SPLIT_OFF").map(|v| v == "0").unwrap_or(true))
+}
+#[cfg(feature = "vulkan")]
+fn vk_sdpa_nsplit() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("VK_SDPA_NSPLIT")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n >= 1)
+            .unwrap_or(8)
+    })
 }
 
 #[cfg(all(test, feature = "flash-attn"))]
