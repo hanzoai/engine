@@ -91,6 +91,34 @@ impl GgufMatMul {
 
         Ok(None)
     }
+
+    /// Metal decode fast path: a single-row bf16 activation against a K-quant weight that has a
+    /// bf16-native matvec (Q4_K/Q6_K) is fed straight through, so the projection skips the
+    /// bf16->f32->bf16 round-trip the f32 fallback wraps around it (the largest decode glue cost,
+    /// measured). Bit-identical to the fallback: both accumulate in f32 and round the result to bf16
+    /// (the fallback via `to_dtype(original_dtype)`, the kernel via its bf16 store). Prefill
+    /// (multi-row) and every other dtype return None and take the f32 path.
+    #[cfg(feature = "metal")]
+    fn try_metal_bf16_decode(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        let QMatMul::QTensor(q) = &self.w else {
+            return Ok(None);
+        };
+        // A bias would be added in bf16 here vs f32 in the fallback; keep the path bit-identical by
+        // reserving it for the bias-free projections (Qwen3 uses QK-norm, no qkv bias).
+        if self.b.is_some() || !q.device().is_metal() || a.dtype() != DType::BF16 {
+            return Ok(None);
+        }
+        if !matches!(q.dtype(), GgmlDType::Q4K | GgmlDType::Q6K) {
+            return Ok(None);
+        }
+        let flat_batch = a.dims()[..a.dims().len().saturating_sub(1)]
+            .iter()
+            .product::<usize>();
+        if flat_batch != 1 {
+            return Ok(None);
+        }
+        Ok(Some(self.w.forward(a)?))
+    }
 }
 
 impl QuantMethod for GgufMatMul {
@@ -118,6 +146,25 @@ impl QuantMethod for GgufMatMul {
 
     fn dequantize_w(&self) -> Result<Tensor> {
         self.w.dequantize_f16()?.to_dtype(DType::F32)
+    }
+
+    /// The default `QuantMethod::forward` casts the activation to `quantized_act_type()` (F32 here)
+    /// and back around `forward_raw` -- the bf16<->f32 round-trip that dominates the measured decode
+    /// glue. Override it so a single-row bf16 activation against a bf16-native K-quant weight skips
+    /// that round-trip; every other case defers to the default cast path.
+    fn forward(&self, a: &Tensor) -> Result<Tensor> {
+        #[cfg(feature = "metal")]
+        {
+            if let Some(out) = self.try_metal_bf16_decode(a)? {
+                return self.add_bias(out);
+            }
+        }
+        if let Some(t) = self.quantized_act_type() {
+            let original_ty = a.dtype();
+            self.forward_raw(&a.to_dtype(t)?)?.to_dtype(original_ty)
+        } else {
+            self.forward_raw(a)
+        }
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
