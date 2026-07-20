@@ -54,19 +54,21 @@ async fn run_bench(
     test_name: TestName,
 ) -> anyhow::Result<BenchResult> {
     let sampling_params = SamplingParams {
-        temperature: Some(0.1),
-        top_k: Some(32),
-        top_p: Some(0.1),
-        min_p: Some(0.05),
+        // Greedy argmax decode: matches llama-bench's tg measurement (no top-k/p, no penalties,
+        // no DRY vocab scan) so the reported tok/s isolates model-eval throughput, not sampler cost.
+        temperature: None,
+        top_k: None,
+        top_p: None,
+        min_p: None,
         top_n_logprobs: 0,
-        frequency_penalty: Some(0.1),
-        presence_penalty: Some(0.1),
+        frequency_penalty: None,
+        presence_penalty: None,
         repetition_penalty: None,
         max_len: Some(n_gen),
         stop_toks: None,
         logits_bias: None,
         n_choices: 1,
-        dry_params: Some(DrySamplingParams::default()),
+        dry_params: None,
     };
     let sender = hanzo.get_sender(None).unwrap();
     let (tx, mut rx) = channel(10_000);
@@ -396,9 +398,16 @@ async fn main() -> anyhow::Result<()> {
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model).build()?;
     let model_name = loader.get_id();
 
-    #[cfg(feature = "metal")]
+    // Device selection mirrors the accelerator cascade in hanzo-server-core's `init_device`
+    // (vulkan > rocm > metal > cuda/cpu): the bench must run on the same backend it was
+    // compiled for, otherwise `--features rocm` silently falls through to CPU.
+    #[cfg(feature = "vulkan")]
+    let device = Device::new_vulkan(0)?;
+    #[cfg(all(feature = "rocm", not(feature = "vulkan")))]
+    let device = Device::new_rocm(0)?;
+    #[cfg(all(feature = "metal", not(feature = "rocm"), not(feature = "vulkan")))]
     let device = Device::new_metal(0)?;
-    #[cfg(not(feature = "metal"))]
+    #[cfg(all(not(feature = "metal"), not(feature = "rocm"), not(feature = "vulkan")))]
     let device = if hanzo_engine::distributed::use_nccl() {
         Device::Cpu
     } else {
@@ -461,7 +470,9 @@ async fn main() -> anyhow::Result<()> {
     } else if device.is_metal() {
         !args.paged_attn
     } else {
-        true
+        // ROCm/Vulkan support PagedAttention (server-core enables it): default off to match
+        // llama-bench's contiguous KV, but honor `--paged-attn` so the production path is benchable.
+        !args.paged_attn
     };
 
     let cache_config = match (
