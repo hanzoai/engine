@@ -1854,6 +1854,59 @@ pub fn rocm_rms_norm_of_sum(
     Ok(Some((sum_t, normed_t)))
 }
 
+/// Fused (input + residual) then rmsnorm on Vulkan: returns (sum, normed) where sum = input + residual
+/// (the new residual-stream value) and normed = rms_norm(sum) * weight, in one dispatch (the DSL
+/// add_rmsnorm_blk kernel) with no barrier between the add and the norm. Bit-identical to a separate add
+/// + rms_norm. Returns None (caller falls back) unless every tensor is F32 and Vulkan on one device --
+/// the block kernel is f32. Mirrors [`rocm_rms_norm_of_sum`].
+#[cfg(feature = "vulkan")]
+pub fn vulkan_rms_norm_of_sum(
+    input: &Tensor,
+    residual: &Tensor,
+    weight: &Tensor,
+    eps: f32,
+) -> Result<Option<(Tensor, Tensor)>> {
+    if input.dtype() != DType::F32 || residual.dtype() != DType::F32 || weight.dtype() != DType::F32 {
+        return Ok(None);
+    }
+    if !input.device().is_vulkan()
+        || !residual.device().same_device(input.device())
+        || !weight.device().same_device(input.device())
+    {
+        return Ok(None);
+    }
+    if input.shape() != residual.shape() {
+        hanzo_ml::bail!(
+            "vulkan_rms_norm_of_sum input/residual shape mismatch: {:?} vs {:?}",
+            input.shape(),
+            residual.shape()
+        );
+    }
+    let input = input.contiguous()?;
+    let residual = residual.contiguous()?;
+    let weight = weight.contiguous()?;
+    let (xs, xl) = input.storage_and_layout();
+    let xr = match &*xs {
+        hanzo_ml::Storage::Vulkan(v) => v,
+        _ => return Ok(None),
+    };
+    let (rs, rl) = residual.storage_and_layout();
+    let rr = match &*rs {
+        hanzo_ml::Storage::Vulkan(v) => v,
+        _ => return Ok(None),
+    };
+    let (ws, wl) = weight.storage_and_layout();
+    let wr = match &*ws {
+        hanzo_ml::Storage::Vulkan(v) => v,
+        _ => return Ok(None),
+    };
+    let (sum, normed) = xr.add_rmsnorm(xl, rr, rl, wr, wl, eps)?;
+    let shape = input.shape().clone();
+    let sum_t = Tensor::from((hanzo_ml::Storage::Vulkan(sum), shape.clone()));
+    let normed_t = Tensor::from((hanzo_ml::Storage::Vulkan(normed), shape));
+    Ok(Some((sum_t, normed_t)))
+}
+
 #[cfg(feature = "metal")]
 pub fn metal_rms_norm_residual(
     input: &Tensor,
