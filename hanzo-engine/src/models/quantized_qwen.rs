@@ -577,11 +577,13 @@ impl ModelWeights {
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
                 vk_graph,
             )?;
-            let x = (attn + residual)?;
+            // Fused residual-add + ffn norm: sum = attn + residual (the new residual stream), x =
+            // ffn_norm(sum). One dispatch on backends with the fused kernel (Vulkan/CUDA/ROCm), else a
+            // separate add + rms_norm. Mirrors quantized_qwen3.
+            let (sum, x) = layer.ffn_norm.forward_of_sum(&attn, residual)?;
 
             // MLP
-            let residual = &x;
-            let x = layer.ffn_norm.forward(&x)?;
+            let residual = &sum;
             let x = layer.mlp.forward(&x)?;
             let x = (x + residual)?;
             layer_in = x;
