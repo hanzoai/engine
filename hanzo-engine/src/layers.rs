@@ -569,6 +569,12 @@ impl QRmsNorm {
         {
             return Ok(out);
         }
+        #[cfg(feature = "vulkan")]
+        if let Some(out) =
+            crate::ops::vulkan_rms_norm_of_sum(x, residual, &self.weight, self.eps as f32)?
+        {
+            return Ok(out);
+        }
         let sum = (x + residual)?;
         let normed = hanzo_nn::ops::rms_norm(&sum.contiguous()?, &self.weight, self.eps as f32)?;
         Ok((sum, normed))
