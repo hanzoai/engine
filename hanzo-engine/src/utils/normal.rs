@@ -54,6 +54,12 @@ impl FromStr for ModelDType {
 /// Type which can be converted to a DType
 pub trait TryIntoDType {
     fn try_into_dtype(&self, devices: &[&Device]) -> Result<DType>;
+
+    /// Resolve for a pipeline whose weights stay quantized (GGUF/GGML), where the dtype selects
+    /// the activation and KV type rather than weight storage.
+    fn try_into_quantized_dtype(&self, devices: &[&Device]) -> Result<DType> {
+        self.try_into_dtype(devices)
+    }
 }
 
 impl TryIntoDType for DType {
@@ -186,6 +192,22 @@ impl TryIntoDType for ModelDType {
         once_log_info(format!("DType selected is {dtype:?}."));
         Ok(dtype)
     }
+
+    fn try_into_quantized_dtype(&self, devices: &[&Device]) -> Result<DType> {
+        match self {
+            // Metal's quantized matmul consumes F32 and always yields F32, so a bf16/f16
+            // activation makes every matmul cast in and cast back. Quantized weights stay in their
+            // GGML blocks, so a narrower activation buys none of the weight bandwidth it buys on
+            // the unquantized path -- match the kernel's dtype instead. Costs a wider KV cache.
+            // Explicit --dtype still honored (only Auto is steered here).
+            Self::Auto if devices.iter().any(|d| d.is_metal()) => {
+                let dtype = DType::F32;
+                once_log_info(format!("DType selected is {dtype:?}."));
+                Ok(dtype)
+            }
+            _ => self.try_into_dtype(devices),
+        }
+    }
 }
 
 /// Returns `true` if the given device has integrated/unified memory where CPU and GPU
@@ -217,5 +239,59 @@ pub fn is_integrated_gpu(device: &Device) -> bool {
             }
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The quantized steer is Metal-only -- every other backend resolves exactly as it did.
+    #[test]
+    fn off_metal_quantized_resolves_like_unquantized() {
+        let cpu = Device::Cpu;
+        assert_eq!(
+            ModelDType::Auto.try_into_quantized_dtype(&[&cpu]).unwrap(),
+            ModelDType::Auto.try_into_dtype(&[&cpu]).unwrap(),
+        );
+    }
+
+    /// Only Auto is steered; an explicit request is a user override and survives.
+    #[test]
+    fn explicit_dtype_survives_the_quantized_path() {
+        let cpu = Device::Cpu;
+        for (req, want) in [
+            (ModelDType::BF16, DType::BF16),
+            (ModelDType::F16, DType::F16),
+            (ModelDType::F32, DType::F32),
+        ] {
+            assert_eq!(req.try_into_quantized_dtype(&[&cpu]).unwrap(), want);
+        }
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_steers_only_the_quantized_path() {
+        let metal = Device::new_metal(0).expect("metal device");
+        // Quantized: match the kernel's dtype so no matmul pays a cast round-trip.
+        assert_eq!(
+            ModelDType::Auto
+                .try_into_quantized_dtype(&[&metal])
+                .unwrap(),
+            DType::F32
+        );
+        // Unquantized: bf16 still halves weight bandwidth and there is no round-trip, so the
+        // steer must not reach here.
+        assert_eq!(
+            ModelDType::Auto.try_into_dtype(&[&metal]).unwrap(),
+            DType::BF16
+        );
+        // An explicit request still wins on the quantized path.
+        assert_eq!(
+            ModelDType::BF16
+                .try_into_quantized_dtype(&[&metal])
+                .unwrap(),
+            DType::BF16
+        );
     }
 }
