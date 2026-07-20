@@ -123,28 +123,30 @@ impl SamplingParams {
     ///
     /// This is opt-in and only updates fields that the model default explicitly provides.
     pub fn apply_model_defaults(&mut self, defaults: &ModelGenerationDefaults) {
+        // `do_sample: false` selects greedy decoding, so the model's sampling knobs
+        // describe a mode that was not selected and must not overwrite it.
         if defaults.do_sample == Some(false) {
             self.temperature = None;
             self.top_k = Some(1);
             self.top_p = None;
             self.min_p = None;
-        }
-
-        if let Some(temperature) = defaults.temperature {
-            self.temperature = if temperature == 0.0 {
-                None
-            } else {
-                Some(temperature)
-            };
-        }
-        if let Some(top_k) = defaults.top_k {
-            self.top_k = if top_k == 0 { None } else { Some(top_k) };
-        }
-        if let Some(top_p) = defaults.top_p {
-            self.top_p = Some(top_p);
-        }
-        if let Some(min_p) = defaults.min_p {
-            self.min_p = Some(min_p);
+        } else {
+            if let Some(temperature) = defaults.temperature {
+                self.temperature = if temperature == 0.0 {
+                    None
+                } else {
+                    Some(temperature)
+                };
+            }
+            if let Some(top_k) = defaults.top_k {
+                self.top_k = if top_k == 0 { None } else { Some(top_k) };
+            }
+            if let Some(top_p) = defaults.top_p {
+                self.top_p = Some(top_p);
+            }
+            if let Some(min_p) = defaults.min_p {
+                self.min_p = Some(min_p);
+            }
         }
         if let Some(repetition_penalty) = defaults.repetition_penalty {
             self.repetition_penalty = Some(repetition_penalty);
@@ -1681,5 +1683,28 @@ mod tests {
         assert_eq!(params.top_k, Some(1));
         assert_eq!(params.top_p, None);
         assert_eq!(params.min_p, None);
+    }
+
+    #[test]
+    fn test_apply_model_defaults_greedy_ignores_sampling_knobs() {
+        let mut params = SamplingParams::neutral();
+        params.apply_model_defaults(&ModelGenerationDefaults {
+            do_sample: Some(false),
+            temperature: Some(0.7),
+            top_k: Some(50),
+            top_p: Some(0.9),
+            min_p: Some(0.05),
+            repetition_penalty: Some(1.1),
+            max_new_tokens: Some(256),
+            max_length: None,
+        });
+
+        assert_eq!(params.temperature, None);
+        assert_eq!(params.top_k, Some(1));
+        assert_eq!(params.top_p, None);
+        assert_eq!(params.min_p, None);
+        // Knobs orthogonal to the sampling/greedy choice still apply.
+        assert_eq!(params.repetition_penalty, Some(1.1));
+        assert_eq!(params.max_len, Some(256));
     }
 }
