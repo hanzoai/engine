@@ -693,7 +693,7 @@ impl Loader for GGUFLoader {
         if let DeviceMapSetting::Auto(params) = mapper.clone() {
             let devices = device_map::get_all_similar_devices(device)?;
             // Initial dtype
-            let dtype = dtype.try_into_dtype(&devices.iter().collect::<Vec<_>>())?;
+            let dtype = dtype.try_into_quantized_dtype(&devices.iter().collect::<Vec<_>>())?;
 
             let model = GgufDeviceMapLoaderInner {
                 model: &model,
@@ -810,7 +810,9 @@ impl Loader for GGUFLoader {
         };
 
         let model_config_metadata: ContentConfig = (&model).into();
-        let internal_dtype = mapper.get_min_dtype(dtype)?;
+        let mapper_devices = mapper.get_unique_devices();
+        let internal_dtype =
+            dtype.try_into_quantized_dtype(&mapper_devices.iter().collect::<Vec<_>>())?;
 
         let model_config = {
             // Base config (quantization only):

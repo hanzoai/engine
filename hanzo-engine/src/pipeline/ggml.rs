@@ -315,7 +315,7 @@ impl Loader for GGMLLoader {
 
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
-        let internal_dtype = dtype.try_into_dtype(&[device]).unwrap();
+        let internal_dtype = dtype.try_into_quantized_dtype(&[device]).unwrap();
 
         let model_config = {
             // Base config (quantization only):
