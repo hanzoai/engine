@@ -31,6 +31,16 @@ pub enum SpeculativeConfig {
         path: String,
         confidence_threshold: f32,
     },
+    /// Prompt-lookup / n-gram drafting: no draft model. The tail n-gram of the sequence's
+    /// own history (lengths `ngram_max` down to `ngram_min`) is matched against earlier
+    /// context and the ≤`gamma` tokens that followed the match become the draft. The target
+    /// verifier corrects every token, so this is lossless; it excels on grounded, repetitive
+    /// decoding (code edits, RAG, "repeat back"). See `speculative::prompt_lookup`.
+    PromptLookup {
+        ngram_min: usize,
+        ngram_max: usize,
+        gamma: usize,
+    },
 }
 
 impl std::fmt::Debug for SpeculativeConfig {
@@ -48,6 +58,16 @@ impl std::fmt::Debug for SpeculativeConfig {
                 .debug_struct("Dspark")
                 .field("path", path)
                 .field("confidence_threshold", confidence_threshold)
+                .finish(),
+            Self::PromptLookup {
+                ngram_min,
+                ngram_max,
+                gamma,
+            } => f
+                .debug_struct("PromptLookup")
+                .field("ngram_min", ngram_min)
+                .field("ngram_max", ngram_max)
+                .field("gamma", gamma)
                 .finish(),
         }
     }
