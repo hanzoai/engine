@@ -603,7 +603,12 @@ impl Engine {
                                 seq.len() as f32 / prompt_exec_time.as_secs_f32();
                             seq.prompt_tok_per_sec = prompt_tok_per_sec;
                             seq.prompt_timestamp = Some(now);
-                            seq.total_prompt_time = Some(prompt_exec_time.as_millis());
+                            // Fallback only: sampling records prefill time at the first
+                            // token (before response build). Set here only if a pipeline
+                            // never reached that path, so we don't clobber the real value.
+                            if seq.total_prompt_time.is_none() {
+                                seq.total_prompt_time = Some(prompt_exec_time.as_millis());
+                            }
                             seq.step_start_instant = None;
                         }
                         last_completion_ids = vec![];
@@ -907,7 +912,12 @@ impl Engine {
                                     let duration = start.elapsed();
                                     seq.prompt_tok_per_sec =
                                         seq.len() as f32 / duration.as_secs_f32();
-                                    seq.total_prompt_time = Some(duration.as_millis());
+                                    // Fallback only: sampling records prefill time at the
+                                    // first token (before response build). Keep the real
+                                    // value if it was already recorded there.
+                                    if seq.total_prompt_time.is_none() {
+                                        seq.total_prompt_time = Some(duration.as_millis());
+                                    }
                                     seq.step_start_instant = None;
                                 }
                                 let now = SystemTime::now()

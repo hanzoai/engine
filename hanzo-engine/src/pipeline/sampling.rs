@@ -58,6 +58,20 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     eos_tok: Option<&[u32]>,
     use_prefix_cacher: bool,
 ) -> Result<()> {
+    // Record prefill wall-time once, at the first sampled token and before any
+    // detokenization or response construction below. `step_start_instant` is set
+    // just before the prompt forward; sampling has already forced that forward's
+    // device sync, so this elapsed span is the true prompt-forward -> first-token
+    // latency -- identical for single-token (max_len=1 / prompt benchmarks, which
+    // finish inside the prompt step) and multi-token requests, on every backend.
+    // Recording it here (not after step() returns) keeps post-forward overhead
+    // out of the number so avg_prompt_tok_per_sec reflects real prefill throughput.
+    if seq.total_prompt_time.is_none() {
+        if let Some(start) = seq.step_start_instant {
+            seq.total_prompt_time = Some(start.elapsed().as_millis());
+        }
+    }
+
     let mut is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_seq_len);
     let metadata = this.get_metadata();
     let tok_env = metadata.tok_env().ok_or(hanzo_ml::Error::Msg(
