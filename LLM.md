@@ -553,6 +553,24 @@ ds4: github.com/antirez/ds4 + **nktkt/ds4** (Rust dequant) · llama.cpp PRs #128
 #19057/#22286(FA head-dim 512/576) #23346(V3.2/DSA) #24162(V4,open) #22673(MTP) #18039(EAGLE-3)
 #16130/#16715/#14800(fusion) · vLLM blog 2026-04-24 + LMSYS 2026-04-25(V4 recipe) · sm_121:
 build sm_121a + CUDA 13 (issue #19662).
+## Speculative: prompt-lookup (n-gram) proposer -- SHIPPED (engine 1.7.82)
+Zero-training, quantization-agnostic draft that reuses 100% of the batched-verify engine
+(driver/verifier/proposer) with NO verifier change. `SpeculativeConfig::PromptLookup { ngram_min,
+ngram_max, gamma }` -> `speculative::prompt_lookup::PromptLookupProposer`. The draft is the sequence's
+OWN history: the tail n-gram (longest first, `ngram_max..=ngram_min`) -> its most-recent earlier
+occurrence -> the <=gamma tokens that followed. Returns `logits: None` -> the verifier's exact-match
+path -> provably lossless (greedy byte-identical on/off). Auto-gates: drafts only at batch <= 4.
+- Attach in pipeline/{normal,gguf}.rs `attach_speculative` (exempt from PagedAttention, like DSpark)
+  -> `draft_proposer`. Ref: apoorvumang/prompt-lookup-decoding = HF `prompt_lookup_num_tokens` = vLLM `[ngram]`.
+- CPU/GGUF now works: the GGUF non-paged spec path was made GENERIC (was Deepseek-only) so any
+  normal-cache GGUF (qwen2/qwen3) drives `NormalSpeculativeCacheAccess`. CLI `--prompt-lookup-ngram <N>`
+  (reuses `--gamma`); server default-OFF (opt-in). Gate test: hanzo-cli/tests/prompt_lookup_lossless.rs (CPU).
+- MEASURED (zen-eco-4b Q4 GGUF, CPU, grounded code-repeat prompt): 85% acceptance (mean_accepted 6.83/8),
+  byte-identical. ~6 target forwards emitted ~47 tokens vs 48 forwards without = ~8x fewer target forwards.
+  Wall-clock ~break-even here (0.85-1.12x across runs) because CPU decode of this small model is
+  COMPUTE-bound: a width-(1+gamma) verify forward costs ~(1+gamma)x a width-1 one, so spec-decode can only
+  win on MEMORY-bound decode (GPU, or large models streaming weights once per forward -> wide verify ~free
+  -> throughput ~= 1+accepted). Same regime law as the EAGLE/MTP note ("stream weights ONCE for all K").
 ## CUDA flash prefill: the missing-`.contiguous()` bug -- FOUND + FIXED (573d12614)
 - SYMPTOM: CUDA GGUF prefill was BOTH slow (eager O(n^2) collapse: pp128 2158 -> pp512 2044 -> pp2048
   1118, vs llama FLAT ~2579/3033/3008) AND, when routed to flash, produced GARBAGE logits (byte-identical

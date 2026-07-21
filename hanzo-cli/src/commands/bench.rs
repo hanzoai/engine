@@ -119,6 +119,7 @@ pub async fn run_bench(
             runtime.draft_model_selected(draft_max_seq_len, draft_max_batch_size),
             runtime.gamma(),
         )
+        .with_prompt_lookup_optional(runtime.prompt_lookup_ngram, runtime.gamma())
         .set_paged_attn(paged_attn)
         .with_cpu(cpu)
         .with_seed_optional(global.seed)

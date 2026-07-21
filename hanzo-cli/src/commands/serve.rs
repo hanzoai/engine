@@ -106,6 +106,7 @@ pub async fn run_server(
             runtime.draft_model_selected(draft_max_seq_len, draft_max_batch_size),
             runtime.gamma(),
         )
+        .with_prompt_lookup_optional(runtime.prompt_lookup_ngram, runtime.gamma())
         .with_paged_attn_cache_type(paged_cache_type);
 
     if let Some(model) = runtime.search_embedding_model {
