@@ -1803,8 +1803,9 @@ pub fn cuda_rms_norm_of_sum(
 
 /// Fused residual-add + rmsnorm: returns Some((sum = input + residual, normed = rmsnorm(sum)*weight))
 /// in one ROCm launch, or None (caller falls back to a separate add + rms_norm) for any case the fused
-/// f32 kernel does not cover. Distinct from `cuda_rms_norm_residual` (which is `residual + rmsnorm(x)`):
-/// this normalizes the SUM, the pre-norm-transformer pattern.
+/// kernel does not cover. Covers F32 (prefill/router) and F16 (the decode residual stream). Distinct
+/// from `cuda_rms_norm_residual` (which is `residual + rmsnorm(x)`): this normalizes the SUM, the
+/// pre-norm-transformer pattern.
 #[cfg(feature = "rocm")]
 pub fn rocm_rms_norm_of_sum(
     input: &Tensor,
@@ -1812,7 +1813,9 @@ pub fn rocm_rms_norm_of_sum(
     weight: &Tensor,
     eps: f32,
 ) -> Result<Option<(Tensor, Tensor)>> {
-    if input.dtype() != DType::F32 || residual.dtype() != DType::F32 || weight.dtype() != DType::F32
+    if !matches!(input.dtype(), DType::F32 | DType::F16)
+        || residual.dtype() != input.dtype()
+        || weight.dtype() != input.dtype()
     {
         return Ok(None);
     }
