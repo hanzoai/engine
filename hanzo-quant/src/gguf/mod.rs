@@ -92,14 +92,21 @@ impl GgufMatMul {
         Ok(None)
     }
 
-    /// Metal decode fast path: a single-row bf16 activation against a K-quant weight that has a
-    /// bf16-native matvec (Q4_K/Q6_K) is fed straight through, so the projection skips the
-    /// bf16->f32->bf16 round-trip the f32 fallback wraps around it (the largest decode glue cost,
-    /// measured). Bit-identical to the fallback: both accumulate in f32 and round the result to bf16
-    /// (the fallback via `to_dtype(original_dtype)`, the kernel via its bf16 store). Prefill
-    /// (multi-row) and every other dtype return None and take the f32 path.
+    /// Metal bf16-native fast path: a bf16 activation against a K-quant weight that has a bf16-native
+    /// kernel (Q4_K/Q6_K) is fed straight through, so the projection skips the bf16->f32->bf16
+    /// round-trip the f32 fallback wraps around it. Decode (single row) rides the bf16 matvec, prefill
+    /// (multi row) the bf16 mm -- both accumulate in f32 and round the result to bf16, matching the
+    /// fallback bit-for-bit (the fallback rounds via `to_dtype(original_dtype)`, the kernel via its
+    /// bf16 store). Every other dtype returns None and takes the f32 path.
     #[cfg(feature = "metal")]
-    fn try_metal_bf16_decode(&self, a: &Tensor) -> Result<Option<Tensor>> {
+    fn try_metal_bf16(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        // Opt-out kill switch for the bf16-native path (read once). The path is proven bit-identical
+        // to the f32 fallback, so this exists only as an ops safety valve / A-B measurement toggle.
+        use std::sync::OnceLock;
+        static DISABLED: OnceLock<bool> = OnceLock::new();
+        if *DISABLED.get_or_init(|| std::env::var("HANZO_NO_BF16_QMM").is_ok()) {
+            return Ok(None);
+        }
         let QMatMul::QTensor(q) = &self.w else {
             return Ok(None);
         };
@@ -109,12 +116,6 @@ impl GgufMatMul {
             return Ok(None);
         }
         if !matches!(q.dtype(), GgmlDType::Q4K | GgmlDType::Q6K) {
-            return Ok(None);
-        }
-        let flat_batch = a.dims()[..a.dims().len().saturating_sub(1)]
-            .iter()
-            .product::<usize>();
-        if flat_batch != 1 {
             return Ok(None);
         }
         Ok(Some(self.w.forward(a)?))
@@ -150,12 +151,12 @@ impl QuantMethod for GgufMatMul {
 
     /// The default `QuantMethod::forward` casts the activation to `quantized_act_type()` (F32 here)
     /// and back around `forward_raw` -- the bf16<->f32 round-trip that dominates the measured decode
-    /// glue. Override it so a single-row bf16 activation against a bf16-native K-quant weight skips
-    /// that round-trip; every other case defers to the default cast path.
+    /// glue. Override it so a bf16 activation against a bf16-native K-quant weight skips that
+    /// round-trip (decode and prefill alike); every other case defers to the default cast path.
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         #[cfg(feature = "metal")]
         {
-            if let Some(out) = self.try_metal_bf16_decode(a)? {
+            if let Some(out) = self.try_metal_bf16(a)? {
                 return self.add_bias(out);
             }
         }
