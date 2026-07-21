@@ -6,7 +6,7 @@
 #   router-retrain.sh --scope org=<slug>    # that org's rows -> heads-<slug>.safetensors (owner "<slug>")
 #
 # Cycle: pull last-24h rewards -> enso-fit (ridge) -> holdout gate -> publish-or-hold
-#        -> local log record -> POST /v1/router/publish-artifact-meta.
+#        -> local log record -> POST /v1/router/artifact-meta.
 # Fail-closed: a thin/absent ledger or a failed gate keeps the incumbent serving.
 set -euo pipefail
 
@@ -75,11 +75,11 @@ elif [[ "$SCOPE" == "global" && -n "$CONTRIB_ORGS" ]]; then
   IFS=',' read -r -a ORGS <<< "$CONTRIB_ORGS"
   for o in "${ORGS[@]}"; do
     o="$(echo "$o" | xargs)"; [[ -n "$o" ]] || continue
-    pull_http "$AI_BASE/v1/export-routing-rewards?since=$SINCE&org=$o" || true
+    pull_http "$AI_BASE/v1/router/rewards?since=$SINCE&org=$o" || true
   done
 else
   [[ "$SCOPE" == "global" ]] && echo "router-retrain: CONTRIB_ORGS empty -> unfiltered global pull (set it once ListTrainingContributorOrgs is exposed)" >&2
-  pull_http "$AI_BASE/v1/export-routing-rewards?since=$SINCE$ORG_Q" || true
+  pull_http "$AI_BASE/v1/router/rewards?since=$SINCE$ORG_Q" || true
 fi
 
 ROWS=$(awk 'NF{n++} END{print n+0}' "$REWARDS")
@@ -138,7 +138,7 @@ if [[ "$DO_PUBLISH_META" == "1" && -n "$ROUTER_ADMIN_TOKEN" ]]; then
     '{owner:$owner,version:$version,trainedTime:$trainedTime,events:$events,gatePassed:$gatePassed,published:$published,gateKind:$gateKind,gateMetric:$gateMetric,gateValue:$gateValue,gateBase:$gateBase,note:$note}')
   code=$(curl -sS -m 30 -o "$WORK/meta.out" -w '%{http_code}' -X POST \
       -H "Authorization: Bearer $ROUTER_ADMIN_TOKEN" -H 'Content-Type: application/json' \
-      -d "$BODY" "$AI_BASE/v1/router/publish-artifact-meta" 2>>"$WORK/pull.err" || echo 000)
+      -d "$BODY" "$AI_BASE/v1/router/artifact-meta" 2>>"$WORK/pull.err" || echo 000)
   echo "router-retrain[$SCOPE]: publish-artifact-meta -> HTTP $code" >&2
 else
   echo "router-retrain[$SCOPE]: publish-artifact-meta skipped (no ROUTER_ADMIN_TOKEN or DO_PUBLISH_META=0)" >&2
