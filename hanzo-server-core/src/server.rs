@@ -151,6 +151,10 @@ pub mod defaults {
     pub const PAGED_CACHE_TYPE: PagedCacheType = PagedCacheType::Auto;
     pub const MTP_CONFIG: Option<hanzo_engine::MtpConfig> = None;
     pub const DRAFT_MODEL: Option<hanzo_engine::ModelSelected> = None;
+    pub const PROMPT_LOOKUP_NGRAM: Option<usize> = None;
+    /// Shortest tail n-gram prompt-lookup will match on (Hugging Face / apoorvumang parity:
+    /// search down to a single token).
+    pub const PROMPT_LOOKUP_NGRAM_MIN: usize = 1;
     pub const GAMMA: usize = 4;
 }
 
@@ -290,6 +294,9 @@ pub struct ServerBuilder {
     /// Optional draft model for classic draft+target speculative decoding.
     draft_model: Option<ModelSelected>,
 
+    /// Optional max n-gram for prompt-lookup speculative decoding (no draft model).
+    prompt_lookup_ngram: Option<usize>,
+
     /// Draft tokens proposed per target verification step.
     gamma: usize,
 
@@ -333,6 +340,7 @@ impl Default for ServerBuilder {
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
             mtp_config: defaults::MTP_CONFIG,
             draft_model: defaults::DRAFT_MODEL,
+            prompt_lookup_ngram: defaults::PROMPT_LOOKUP_NGRAM,
             gamma: defaults::GAMMA,
             disable_eos_stop: false,
             code_exec_config: None,
@@ -645,6 +653,17 @@ impl ServerBuilder {
         self
     }
 
+    /// Enable prompt-lookup (n-gram) speculative decoding if a max n-gram was requested.
+    /// No draft model; drafts come from the sequence's own history and `gamma` bounds
+    /// their length. Opt-in — off unless `ngram` is `Some`.
+    pub fn with_prompt_lookup_optional(mut self, ngram: Option<usize>, gamma: usize) -> Self {
+        if let Some(ngram) = ngram {
+            self.prompt_lookup_ngram = Some(ngram);
+            self.gamma = gamma;
+        }
+        self
+    }
+
     /// Disable EOS token stopping (generate until max_len regardless of EOS).
     pub fn with_disable_eos_stop(mut self, disable: bool) -> Self {
         self.disable_eos_stop = disable;
@@ -824,6 +843,14 @@ impl ServerBuilder {
                     gamma: self.gamma,
                 },
             )?;
+        } else if let Some(ngram_max) = self.prompt_lookup_ngram {
+            pipeline.lock().await.attach_speculative(
+                hanzo_engine::SpeculativeConfig::PromptLookup {
+                    ngram_min: defaults::PROMPT_LOOKUP_NGRAM_MIN,
+                    ngram_max,
+                    gamma: self.gamma,
+                },
+            )?;
         } else if let Some(mtp_config) = self.mtp_config.clone() {
             pipeline
                 .lock()
@@ -979,6 +1006,14 @@ impl ServerBuilder {
             pipeline.lock().await.attach_speculative(
                 hanzo_engine::SpeculativeConfig::DraftModel {
                     draft: draft_pipeline,
+                    gamma: self.gamma,
+                },
+            )?;
+        } else if let Some(ngram_max) = self.prompt_lookup_ngram {
+            pipeline.lock().await.attach_speculative(
+                hanzo_engine::SpeculativeConfig::PromptLookup {
+                    ngram_min: defaults::PROMPT_LOOKUP_NGRAM_MIN,
+                    ngram_max,
                     gamma: self.gamma,
                 },
             )?;
