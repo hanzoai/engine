@@ -2606,6 +2606,20 @@ impl Pipeline for GGUFPipeline {
                     "DSpark speculative decoding targets the safetensors (normal) Qwen3 pipeline, not GGUF."
                 );
             }
+            crate::speculative::SpeculativeConfig::PromptLookup {
+                ngram_min,
+                ngram_max,
+                gamma,
+            } => {
+                let proposer =
+                    crate::speculative::PromptLookupProposer::new(ngram_min, ngram_max, gamma)?;
+                let info = crate::speculative::SpeculativeAttachInfo::prompt_lookup(
+                    ngram_min, ngram_max, gamma,
+                );
+                crate::speculative::logging::log_attach(&info);
+                self.draft_proposer = Some(Box::new(proposer));
+                Ok(())
+            }
             crate::speculative::SpeculativeConfig::DraftModel { draft, gamma } => {
                 if self.metadata.cache_engine.is_none() {
                     hanzo_ml::bail!(
@@ -2705,19 +2719,22 @@ impl Pipeline for GGUFPipeline {
             .await;
         }
 
-        // Non-paged path (DeepSeek-V4 MTP): drive the SAME generic loop over the normal
-        // KV backend. Extract the shared cache handle first so the model borrow is
-        // dropped before the &mut-self driver call.
+        // Non-paged path: drive the SAME generic loop over the normal KV backend.
+        // Extract the shared cache handle first so the model borrow is dropped before
+        // the &mut-self driver call. DeepSeek-V4 / GLM-5.2 (`nextn` MTP) read a
+        // per-model max_seq_len; every other normal-cache model (e.g. a quantized
+        // qwen2/qwen3 running prompt-lookup on CPU) uses the generic cache handle.
         let normal_cache = match self.model {
             Model::Deepseek4(ref model) => {
                 model.normal_cache_arc().map(|arc| (arc, model.max_seq_len))
             }
-            // GLM-5.2 (`glm-dsa`) loads as Deepseek2 and self-drafts through its in-band
-            // `nextn` MTP head over the SAME normal KV backend.
             Model::Deepseek2(ref model) => {
                 model.normal_cache_arc().map(|arc| (arc, model.max_seq_len))
             }
-            _ => None,
+            _ => self
+                .cache()
+                .normal_arc()
+                .map(|arc| (arc, general_metadata.max_seq_len)),
         };
         if let Some((cache_arc, max_seq_len)) = normal_cache {
             let cache = crate::speculative::cache::NormalSpeculativeCacheAccess::new(
