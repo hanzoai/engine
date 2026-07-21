@@ -29,7 +29,7 @@ produces the `heads-{scope}.safetensors` it loads.
   Rows come from opted-in orgs only (`CONTRIB_ORGS` = `object.ListTrainingContributorOrgs`);
   the reward export carries no `org`, so global fetches per opted-in org and concats.
 - `--scope org=<slug>` -> `heads-<slug>.safetensors`, publish `owner:"<slug>"`, using
-  `GET /v1/export-routing-rewards?org=<slug>`. The gate holds any org under `MIN_ROWS`.
+  `GET /v1/router/rewards?org=<slug>`. The gate holds any org under `MIN_ROWS`.
 
 Filenames align with the engine adapter-cache fallback chain (org -> base -> rules).
 
@@ -64,7 +64,7 @@ from KMS `hanzo/prod/router-admin-token`, `CONTRIB_ORGS`, `DO_RELOAD`).
    primitives; point `FIT_BIN` at enso's `fit` when it merges. Reconcile the fit INPUT
    schema: enso re-featurizes from the request bucket, so the ledger's stored backbone
    `features` vector is carried but not consumed yet.
-2. Export not on prod: `GET /v1/export-routing-rewards` 404s on api.hanzo.ai (deployed
+2. Export not on prod: `GET /v1/router/rewards` 404s on api.hanzo.ai (deployed
    cloud image predates the routes; they exist on ai main). `publish-artifact-meta` is
    on ai branch `feat/router-stats-observability` (PR #99), not yet deployed.
 3. Super-admin auth: exports need IAM `admin`-org identity; no in-cluster/service

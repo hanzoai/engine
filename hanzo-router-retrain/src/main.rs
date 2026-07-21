@@ -26,7 +26,7 @@ struct Args {
     /// Output heads safetensors (the fresh candidate; always written).
     #[arg(long)]
     out: PathBuf,
-    /// Input is ai /v1/export-routing-rewards tuples; transform to EvalSample first.
+    /// Input is ai /v1/router/rewards tuples; transform to EvalSample first.
     #[arg(long, default_value_t = false)]
     from_rewards: bool,
     /// Holdout fraction for the regression gate (0 = fit-all, no gate).

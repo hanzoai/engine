@@ -1,7 +1,7 @@
 //! Nightly router-heads retrain, the testable core.
 //!
 //! One job, four pure pieces the harness (scripts/router-retrain.sh) composes:
-//!   1. transform  -- ai /v1/export-routing-rewards tuple -> enso `EvalSample`.
+//!   1. transform  -- ai /v1/router/rewards tuple -> enso `EvalSample`.
 //!   2. fit        -- proof.rs's exact (x,p,quality) join -> `fit_base` -> `Policy`.
 //!   3. holdout    -- score a `Policy` on held-out samples (mean quality-prediction).
 //!   4. gate       -- publish iff candidate >= incumbent on a trusted holdout.
@@ -21,7 +21,7 @@ use safetensors::tensor::{Dtype, TensorView};
 use safetensors::SafeTensors;
 use serde::Deserialize;
 
-/// One line of `GET /v1/export-routing-rewards` (ai controllers/routing_reward.go
+/// One line of `GET /v1/router/rewards` (ai controllers/routing_reward.go
 /// `rewardTuple`). `features` is the frozen-backbone vector the ledger stored; enso
 /// re-featurizes from the request bucket today, so it is carried but not consumed --
 /// the binding point to reconcile when the backbone-native head lands.
