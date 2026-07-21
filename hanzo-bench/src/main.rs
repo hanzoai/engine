@@ -3,13 +3,14 @@ use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use hanzo_engine::{
     get_auto_device_map_params, get_model_dtype, initialize_logging, paged_attn_supported,
     parse_isq_value, Builder, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, DeviceMapSetting, DrySamplingParams, Hanzo, Loader, LoaderBuilder,
+    DeviceMapMetadata, DeviceMapSetting, Hanzo, Loader, LoaderBuilder,
     MemoryGpuConfig, ModelSelected, NormalRequest, PagedAttentionConfig, PagedCacheType, Request,
     RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 use hanzo_ml::Device;
 use std::fmt::Display;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc::channel;
 use tracing::{info, warn};
 
@@ -28,8 +29,12 @@ impl Display for TestName {
     }
 }
 
+// Per repetition: (wall seconds for the whole concurrency batch, tokens scored that batch). Tokens
+// scored are prompt_tokens for a Prompt test and completion_tokens for a Gen test -- llama-bench's
+// definition. Wall-clock is measured here rather than read from the response's self-reported rate,
+// which the completion path does not populate from real prefill timing.
 struct BenchResult {
-    usages: Vec<Usage>,
+    per_rep: Vec<(f64, usize)>,
     concurrency: usize,
     test_name: TestName,
 }
@@ -101,111 +106,89 @@ async fn run_bench(
         files: None,
     }));
 
-    let mut usages = Vec::new();
+    // Scored token count for one finished request: prompt tokens for a prefill test, generated
+    // (completion) tokens for a decode test -- llama-bench's t/s convention. The response's own
+    // rate fields are ignored (see BenchResult); only the token COUNTS are trusted.
+    let scored = |u: &Usage| -> usize {
+        match test_name {
+            TestName::Prompt(_) => u.prompt_tokens,
+            TestName::Gen(_) => u.completion_tokens,
+        }
+    };
 
+    let mut per_rep: Vec<(f64, usize)> = Vec::with_capacity(repetitions);
     for _ in 0..repetitions {
+        let t0 = Instant::now();
         for _ in 0..concurrency {
             if sender.send(req.clone()).await.is_err() {
                 eprintln!("Receiver disconnected");
             }
         }
+        let mut toks = 0usize;
         for _ in 0..concurrency {
             loop {
                 match rx.recv().await {
                     Some(Response::AgenticToolCallProgress { .. }) => continue,
                     Some(Response::AgenticToolApprovalRequired { .. }) => continue,
                     Some(Response::File(_)) => continue,
-                    Some(r) => {
-                        match r {
-                            Response::InternalError(e) => {
-                                unreachable!("Got an internal error: {e:?}");
-                            }
-                            Response::ModelError(e, resp) => {
-                                unreachable!("Got a model error: {e:?}, response: {resp:?}");
-                            }
-                            Response::ValidationError(e) => {
-                                unreachable!("Got a validation error: {e:?}");
-                            }
-                            Response::Done(res) => {
-                                usages.push(res.usage);
-                            }
-                            Response::Chunk(_) => unreachable!(),
-                            Response::CompletionModelError(_, _) => unreachable!(),
-                            Response::CompletionDone(res) => {
-                                usages.push(res.usage);
-                            }
-                            Response::CompletionChunk(_) => unreachable!(),
-                            Response::ImageGeneration(_) => unreachable!(),
-                            Response::Speech { .. } => unreachable!(),
-                            Response::Raw { .. } => unreachable!(),
-                            Response::Embeddings { .. } => unreachable!(),
-                            Response::AgenticToolCallProgress { .. } => unreachable!(),
-                            Response::AgenticToolApprovalRequired { .. } => unreachable!(),
-                            Response::File(_) => unreachable!(),
-                            Response::Frames { .. } => unreachable!(),
-                            Response::Transcription { .. } => unreachable!(),
-                        }
+                    Some(Response::Done(res)) => {
+                        toks += scored(&res.usage);
                         break;
                     }
-                    None => unreachable!("Expected a Done response, got None",),
+                    Some(Response::CompletionDone(res)) => {
+                        toks += scored(&res.usage);
+                        break;
+                    }
+                    // A benchmark must surface a failed forward, not panic: report the engine's own
+                    // error so the cause (e.g. a device/storage mismatch) is legible.
+                    Some(Response::InternalError(e)) => anyhow::bail!("internal error: {e}"),
+                    Some(Response::ModelError(e, _)) => anyhow::bail!("model error: {e}"),
+                    Some(Response::CompletionModelError(e, _)) => anyhow::bail!("model error: {e}"),
+                    Some(Response::ValidationError(e)) => anyhow::bail!("validation error: {e}"),
+                    Some(_) => anyhow::bail!("unexpected response variant during benchmark"),
+                    None => anyhow::bail!("response channel closed before a terminal response"),
                 }
             }
         }
+        per_rep.push((t0.elapsed().as_secs_f64(), toks));
     }
 
     Ok(BenchResult {
-        usages,
+        per_rep,
         concurrency,
         test_name,
     })
 }
 
+fn uncertain(v: &[f32]) -> UncertainTokSec {
+    if v.is_empty() {
+        return UncertainTokSec { mean: 0.0, std_dev: 0.0 };
+    }
+    let mean = v.iter().sum::<f32>() / v.len() as f32;
+    let variance = v.iter().map(|e| (mean - e).powf(2.)).sum::<f32>() / v.len() as f32;
+    UncertainTokSec { mean, std_dev: variance.sqrt() }
+}
+
+// Per-stream throughput: scored tokens over the batch wall, divided by concurrency (so t/s is the
+// single-stream rate and the throughput column's `t/s * concurrency` recovers the aggregate).
 fn get_tok_s(result: &BenchResult) -> UncertainTokSec {
-    let ts_measurements = match result.test_name {
-        TestName::Prompt(_) => result
-            .usages
-            .iter()
-            .map(|u| u.avg_prompt_tok_per_sec)
-            .collect::<Vec<_>>(),
-        TestName::Gen(_) => result
-            .usages
-            .iter()
-            .map(|u| u.avg_compl_tok_per_sec)
-            .collect::<Vec<_>>(),
-    };
-    // Calculate uncertainty
-    let mean = ts_measurements.iter().sum::<f32>() / ts_measurements.len() as f32;
-    let variance = ts_measurements
+    let rates: Vec<f32> = result
+        .per_rep
         .iter()
-        .map(|e| (mean - e).powf(2.))
-        .sum::<f32>()
-        / ts_measurements.len() as f32;
-    let std_dev = variance.sqrt();
-    UncertainTokSec { mean, std_dev }
+        .filter(|(secs, toks)| *secs > 0.0 && *toks > 0)
+        .map(|(secs, toks)| *toks as f32 / *secs as f32 / result.concurrency as f32)
+        .collect();
+    uncertain(&rates)
 }
 
 fn get_ms_tok(result: &BenchResult) -> UncertainTokSec {
-    let ms_tok_measurements = match result.test_name {
-        TestName::Prompt(_) => result
-            .usages
-            .iter()
-            .map(|u| 1000. / u.avg_prompt_tok_per_sec)
-            .collect::<Vec<_>>(),
-        TestName::Gen(_) => result
-            .usages
-            .iter()
-            .map(|u| 1000. / u.avg_compl_tok_per_sec)
-            .collect::<Vec<_>>(),
-    };
-    // Calculate uncertainty
-    let mean = ms_tok_measurements.iter().sum::<f32>() / ms_tok_measurements.len() as f32;
-    let variance = ms_tok_measurements
+    let ms: Vec<f32> = result
+        .per_rep
         .iter()
-        .map(|e| (mean - e).powf(2.))
-        .sum::<f32>()
-        / ms_tok_measurements.len() as f32;
-    let std_dev = variance.sqrt();
-    UncertainTokSec { mean, std_dev }
+        .filter(|(secs, toks)| *secs > 0.0 && *toks > 0)
+        .map(|(secs, toks)| *secs as f32 * 1000. * result.concurrency as f32 / *toks as f32)
+        .collect();
+    uncertain(&ms)
 }
 
 fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {

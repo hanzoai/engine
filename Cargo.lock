@@ -2822,7 +2822,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "anyhow",
  "clap",
@@ -2854,7 +2854,7 @@ checksum = "b9dc246ef72490c348c62b93c06989605dc074e285657501c0aaa02d73c5b408"
 
 [[package]]
 name = "hanzo-audio"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "anyhow",
  "apodize",
@@ -2864,7 +2864,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-bench"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "anyhow",
  "clap",
@@ -2891,7 +2891,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-cli"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "anyhow",
  "axum",
@@ -2936,7 +2936,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-code-exec"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2954,7 +2954,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-engine"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -3076,7 +3076,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-film"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3129,7 +3129,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-llm-mcp"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3151,7 +3151,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-macros"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -3161,9 +3161,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-metal-kernels"
-version = "0.11.43"
+version = "0.11.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "462edc64e1be3c820c2fd0fedd5de7601c0100d4bd6278c8e026a0bfc9f08fc4"
+checksum = "5db77d88f8169317e0ebe78dd98a6e76f0e8aaaecc4c661a6ee0e43b2bc8d48b"
 dependencies = [
  "block2",
  "half",
@@ -3177,9 +3177,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.11.84"
+version = "0.11.85"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd27fd9c486b6f8c559c72b59f1329b28b6e217797d908a0a501797638b41b7c"
+checksum = "34b383c67b34e79b56043cf7bb8e9f1eaedac3cdbfa508edb64287348655a362"
 dependencies = [
  "accelerate-src",
  "ash",
@@ -3235,7 +3235,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-paged-attn"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "anyhow",
  "cudaforge",
@@ -3251,7 +3251,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-pyo3"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3277,7 +3277,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-quant"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "byteorder",
  "cuda-async",
@@ -3368,7 +3368,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-sandbox"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "anyhow",
  "itoa",
@@ -3384,7 +3384,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3407,7 +3407,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server-core"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3442,7 +3442,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-train"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "anyhow",
  "hanzo-ml",
@@ -3491,7 +3491,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-vision"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "hanzo-ml",
  "image",
@@ -3500,7 +3500,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-web-chat"
-version = "1.7.81"
+version = "1.7.82"
 dependencies = [
  "anyhow",
  "axum",
