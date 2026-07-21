@@ -11,6 +11,11 @@ pub enum SpeculativeAttachKind {
         block_size: usize,
         confidence_threshold: f32,
     },
+    PromptLookup {
+        ngram_min: usize,
+        ngram_max: usize,
+        gamma: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -42,6 +47,16 @@ impl SpeculativeAttachInfo {
             },
         }
     }
+
+    pub fn prompt_lookup(ngram_min: usize, ngram_max: usize, gamma: usize) -> Self {
+        Self {
+            kind: SpeculativeAttachKind::PromptLookup {
+                ngram_min,
+                ngram_max,
+                gamma,
+            },
+        }
+    }
 }
 
 pub fn log_attach(info: &SpeculativeAttachInfo) {
@@ -60,6 +75,13 @@ pub fn log_attach(info: &SpeculativeAttachInfo) {
             confidence_threshold,
         } => tracing::info!(
             "Speculative decoding enabled: DSpark parallel-block draft with block_size={block_size}, confidence_threshold={confidence_threshold}"
+        ),
+        SpeculativeAttachKind::PromptLookup {
+            ngram_min,
+            ngram_max,
+            gamma,
+        } => tracing::info!(
+            "Speculative decoding enabled: prompt-lookup n-gram draft with ngram={ngram_min}..={ngram_max}, gamma={gamma}"
         ),
     }
 }
