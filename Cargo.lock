@@ -133,7 +133,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -144,7 +144,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1770,7 +1770,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2001,7 +2001,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2822,7 +2822,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "anyhow",
  "clap",
@@ -2854,7 +2854,7 @@ checksum = "b9dc246ef72490c348c62b93c06989605dc074e285657501c0aaa02d73c5b408"
 
 [[package]]
 name = "hanzo-audio"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "anyhow",
  "apodize",
@@ -2864,7 +2864,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-bench"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "anyhow",
  "clap",
@@ -2891,7 +2891,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-cli"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "anyhow",
  "axum",
@@ -2936,7 +2936,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-code-exec"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2954,7 +2954,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-engine"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -3076,7 +3076,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-film"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3129,7 +3129,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-llm-mcp"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3151,7 +3151,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-macros"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -3177,9 +3177,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.11.82"
+version = "0.11.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2b967de9d335327b5502a15d77001d6062040bbf3d3b7e399b88978538b55ca"
+checksum = "3ded857db0a09dda124aaef1b2f5514c48310dcb63acbb8c84ba09c21bbefae2"
 dependencies = [
  "accelerate-src",
  "ash",
@@ -3215,9 +3215,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-nn"
-version = "0.11.38"
+version = "0.11.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "223bd916d398d0869b82a6fb1356f918fa0c65a99385946ddf70f57934a68fa0"
+checksum = "194a8234aa87a29b85d87e7fdc4f0d02bcd2d53dd0e6e0831c6619b28e8a272e"
 dependencies = [
  "accelerate-src",
  "half",
@@ -3235,7 +3235,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-paged-attn"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "anyhow",
  "cudaforge",
@@ -3251,7 +3251,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-pyo3"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3277,7 +3277,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-quant"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "byteorder",
  "cuda-async",
@@ -3324,9 +3324,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-rocm-kernels"
-version = "0.11.34"
+version = "0.11.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ed6f0620fe0917a8937e6c5106353afdf878dfbaf58e5868cdf13ec9305e5b4"
+checksum = "ae1acb8ecab6260b6eb7f5c5bed2e89cc27d1a7eb6514e6d2010a21a51abb9d6"
 dependencies = [
  "dirs 5.0.1",
  "half",
@@ -3368,7 +3368,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-sandbox"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "anyhow",
  "itoa",
@@ -3384,7 +3384,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3407,7 +3407,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server-core"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3442,7 +3442,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-train"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "anyhow",
  "hanzo-ml",
@@ -3491,7 +3491,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-vision"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "hanzo-ml",
  "image",
@@ -3500,7 +3500,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-web-chat"
-version = "1.7.79"
+version = "1.7.80"
 dependencies = [
  "anyhow",
  "axum",
@@ -4856,7 +4856,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5685,7 +5685,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6357,7 +6357,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6416,7 +6416,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7033,7 +7033,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7104,7 +7104,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7496,7 +7496,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7535,7 +7535,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8776,7 +8776,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
