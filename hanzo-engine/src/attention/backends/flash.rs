@@ -138,6 +138,37 @@ fn flash_attn_v3(
     hanzo_flash_attn_v3::flash_attn(q, k, v, sdpa_params.softmax_scale, causal, true)
 }
 
+/// Live CUDA compute capability `(major, minor)` for the device a tensor is on,
+/// cached per ordinal. `None` for non-CUDA devices or when the query fails.
+/// Attention runs this every layer, so it is cheap after the first call.
+#[cfg(feature = "flash-attn-v3")]
+fn cuda_compute_cap(device: &hanzo_ml::Device) -> Option<(u32, u32)> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    let gpu_id = match device.location() {
+        hanzo_ml::DeviceLocation::Cuda { gpu_id } => gpu_id,
+        _ => return None,
+    };
+    static CACHE: OnceLock<Mutex<HashMap<usize, Option<(u32, u32)>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap();
+    *guard
+        .entry(gpu_id)
+        .or_insert_with(|| crate::diagnostics::get_cuda_compute_capability(gpu_id))
+}
+
+/// FA3 / FA4 auto-selection by datacenter GPU architecture.
+///
+/// FlashAttention-3 (arXiv:2407.08608) is compiled for `sm_90a` only and its
+/// cubins do not execute on any other architecture, so the choice is made from
+/// the live device compute capability, not a build flag:
+///
+/// * `9.0` (Hopper H100/H200) -> FA3, for the head dims FA3 supports.
+/// * `10.x` (datacenter Blackwell B200/GB200) -> FA4 when vendored, else the
+///   FA2-class fallback — `sm_90a` FA3 does NOT run on `sm_100`.
+/// * anything else (Ampere/Ada, consumer Blackwell sm_120/121, unknown) -> the
+///   shipped FA2-class kernel, unchanged.
 #[cfg(feature = "flash-attn-v3")]
 pub(crate) fn flash_attn(
     q: &Tensor,
@@ -146,16 +177,62 @@ pub(crate) fn flash_attn(
     flash_params: Option<&crate::pipeline::text_models_inputs_processor::FlashParams>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    let q_dims = q.dims4()?;
-    let head_dim = q_dims.3;
-    if head_dim <= 512 {
-        #[cfg(feature = "flash-attn")]
-        {
-            return flash_attn_v2(q, k, v, flash_params, sdpa_params);
+    let head_dim = q.dims4()?.3;
+    match cuda_compute_cap(q.device()) {
+        // Hopper. FA3 covers head dims 64/128/256/512; other dims (96/160/192/
+        // 224) have no FA3 kernel and take the FA2-class path.
+        Some((9, 0)) if matches!(head_dim, 64 | 128 | 256 | 512) => {
+            flash_attn_v3(q, k, v, flash_params, sdpa_params)
         }
+        // Datacenter Blackwell -> FA4 hook (falls through to FA2-class today).
+        Some((10, _)) => flash_attn_datacenter_blackwell(q, k, v, flash_params, sdpa_params),
+        // Everything else keeps the shipped kernel.
+        _ => flash_attn_non_hopper(q, k, v, flash_params, sdpa_params),
     }
+}
 
-    flash_attn_v3(q, k, v, flash_params, sdpa_params)
+/// `sm_100a` (datacenter Blackwell) dispatch hook.
+///
+/// Dao-AILab has not released a Blackwell FA4 kernel set we can vendor as of
+/// 2026-07. When it lands, port it behind a `flash-attn-v4` feature and dispatch
+/// it here. Until then Blackwell datacenter uses the FA2-class fallback, because
+/// the `sm_90a` FA3 cubins are architecture-specific and do not run on `sm_100`.
+#[cfg(feature = "flash-attn-v3")]
+fn flash_attn_datacenter_blackwell(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    flash_params: Option<&crate::pipeline::text_models_inputs_processor::FlashParams>,
+    sdpa_params: &SdpaParams,
+) -> Result<Tensor> {
+    flash_attn_non_hopper(q, k, v, flash_params, sdpa_params)
+}
+
+/// FA2-class fallback for every non-Hopper CUDA GPU (Ampere/Ada, consumer
+/// Blackwell, and — until FA4 is vendored — datacenter Blackwell).
+#[cfg(all(feature = "flash-attn-v3", feature = "flash-attn"))]
+fn flash_attn_non_hopper(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    flash_params: Option<&crate::pipeline::text_models_inputs_processor::FlashParams>,
+    sdpa_params: &SdpaParams,
+) -> Result<Tensor> {
+    flash_attn_v2(q, k, v, flash_params, sdpa_params)
+}
+
+#[cfg(all(feature = "flash-attn-v3", not(feature = "flash-attn")))]
+fn flash_attn_non_hopper(
+    _q: &Tensor,
+    _k: &Tensor,
+    _v: &Tensor,
+    _flash_params: Option<&crate::pipeline::text_models_inputs_processor::FlashParams>,
+    _sdpa_params: &SdpaParams,
+) -> Result<Tensor> {
+    hanzo_ml::bail!(
+        "this build has only the Hopper FA3 kernels (`flash-attn-v3`) but the device is not \
+         Hopper (sm_90a); rebuild with `--features flash-attn` for the FA2-class fallback"
+    )
 }
 
 #[cfg(all(feature = "flash-attn", not(feature = "flash-attn-v3")))]

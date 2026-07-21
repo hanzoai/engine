@@ -175,7 +175,7 @@ metal = [
     "dep:objc2-metal"
 ]
 flash-attn = ["cuda", "dep:hanzo-flash-attn"]
-flash-attn-v3 = ["cuda", "dep:hanzo-flash-attn-v3"]
+flash-attn-v3 = ["cuda", "dep:hanzo-flash-attn-v3", "hanzo-flash-attn-v3/cuda"]
 # Max-opt CUDA in one feature (bare `cuda` omits these). metal/vulkan bundle their opts already.
 cuda-full = ["cuda", "flash-attn", "cudnn"]
 accelerate = ["hanzo-ml/accelerate", "hanzo-nn/accelerate", "hanzo-quant/accelerate"]
