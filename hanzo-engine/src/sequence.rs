@@ -1784,6 +1784,124 @@ mod tests {
         assert_eq!(seq.count_prefix_cached_mm_items_by_kind("audio"), 0);
     }
 
+    // Build a Sequence with `layers=1` (so `len()` reads `tokens.len()` instead
+    // of panicking on an empty cache vec) and a `prompt_len`-token prompt.
+    fn make_timed_sequence(prompt_len: usize) -> Sequence {
+        let (tx, _rx) = channel(1);
+        let sampler =
+            Sampler::new(None, 0, None, None, None, None, None, 32, 1.0, 0.0, vec![]).unwrap();
+        let group = Arc::new(Mutex::new(SequenceGroup::new(1, false, false, None)));
+        Sequence::new_waiting(
+            (0..prompt_len as u32).collect(),
+            "prompt".to_string(),
+            0,
+            0,
+            1, // layers
+            tx,
+            sampler,
+            vec![],
+            vec![],
+            None,
+            false,
+            false,
+            group,
+            0,
+            0,
+            SequenceRecognizer::None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SeqStepType::PromptAndDecode,
+            None,
+            None,
+            None,
+            false,
+            vec![],
+        )
+    }
+
+    // avg_prompt_tok_per_sec must be derived from the REAL recorded prefill
+    // wall-time, never the degenerate prompt_toks / prompt_toks * 1000 = 1000
+    // placeholder. Regression guard for the pure-prefill (max_len=1) timing bug.
+    #[test]
+    fn prefill_rate_uses_recorded_elapsed_not_degenerate_placeholder() {
+        use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+        let now_ms = || {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        };
+
+        // A recorded prefill duration yields the true rate: 512 tok / 0.366 s.
+        {
+            let mut seq = make_timed_sequence(512);
+            seq.prompt_timestamp = Some(now_ms());
+            seq.total_prompt_time = Some(366);
+            seq.step_start_instant = None;
+            seq.update_time_info();
+            let usage = seq.get_mut_group().get_usage();
+            let expected = 512.0 / 0.366; // ~1398.9 t/s
+            assert!(
+                (usage.avg_prompt_tok_per_sec - expected).abs() < 1.0,
+                "prefill rate must derive from recorded elapsed (~{expected}), got {}",
+                usage.avg_prompt_tok_per_sec
+            );
+            // ... and must NOT be the phantom ~1000 constant.
+            assert!(
+                (usage.avg_prompt_tok_per_sec - 1000.0).abs() > 100.0,
+                "prefill rate collapsed to the ~1000 placeholder: {}",
+                usage.avg_prompt_tok_per_sec
+            );
+        }
+
+        // The fix's core guarantee: once prefill time is recorded at the first
+        // token (before response construction), the reported rate is IMMUNE to
+        // post-forward overhead (detokenization, response build). A fast prefill
+        // recorded up front, followed by a large response-build delay, must still
+        // report the real prefill rate -- not prefill+overhead (which is exactly
+        // how the number decays toward ~1000 on fast backends).
+        {
+            let mut seq = make_timed_sequence(512);
+            seq.prompt_timestamp = Some(now_ms());
+            seq.total_prompt_time = Some(366); // recorded at first token
+            seq.step_start_instant = Some(Instant::now()); // in-flight, must be ignored
+            std::thread::sleep(Duration::from_millis(150)); // response-build overhead
+            seq.update_time_info();
+            let usage = seq.get_mut_group().get_usage();
+            assert!(
+                (usage.avg_prompt_tok_per_sec - 512.0 / 0.366).abs() < 5.0,
+                "recorded prefill must win over the in-flight fallback, got {}",
+                usage.avg_prompt_tok_per_sec
+            );
+        }
+
+        // Documents the exact failure mode the fix prevents. When the measured
+        // "prefill time" (ms) equals the prompt length -- which is what the old
+        // fallback yields on fast backends where the forward is dwarfed by the
+        // fixed post-forward overhead, ~1 ms per prompt token -- the rate
+        // collapses to exactly prompt_toks / prompt_toks * 1000 = 1000.000, the
+        // phantom placeholder, independent of the real prefill throughput.
+        {
+            let mut group = SequenceGroup::new(1, false, false, None);
+            group.total_prompt_toks = 512;
+            group.total_prompt_time = 512; // ms == tokens -> degenerate
+            group.total_toks = 513;
+            group.total_completion_time = 1;
+            group.total_time = 513;
+            let usage = group.get_usage();
+            assert_eq!(
+                usage.avg_prompt_tok_per_sec, 1000.0,
+                "time_ms == prompt_toks must expose the degenerate 1000 placeholder"
+            );
+        }
+    }
+
     fn push_completion_choice(group: &mut SequenceGroup) {
         group.completion_choices.push((
             0.0,
