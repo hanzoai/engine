@@ -378,11 +378,13 @@ impl PagedAttentionScheduler {
         }
         self.running = running;
 
-        // Bucket running completions by sequence length
-        let running_for_bucket = std::mem::take(&mut self.running);
-        let bucketed = self.bucket_and_preempt_sequences(running_for_bucket);
-        self.running = bucketed;
-
+        // Continuous batching (Orca iteration-level scheduling): every running
+        // sequence decodes together this step, whatever its context length. The
+        // paged decode kernel reads a per-sequence `context_lens` + `block_tables`
+        // (hanzo-paged-attn/src/*/backend/paged_attention.rs), so a length-mixed
+        // batch is correct — no bucketing to a single length is needed. The
+        // completion loop above already preempted for genuine KV-block exhaustion;
+        // length divergence, on its own, never sheds a sequence from the batch.
         self.running
             .iter()
             .for_each(|seq| get_mut_arcmutex!(seq).set_state(SequenceState::RunningCompletion));
@@ -548,5 +550,240 @@ impl Scheduler for PagedAttentionScheduler {
     }
     fn set_prefix_caching_enabled(&mut self, enabled: bool) {
         self.set_prefix_caching_enabled_sync(enabled);
+    }
+}
+
+#[cfg(test)]
+mod continuous_batching_tests {
+    //! Continuous-batching contract for the paged decode path.
+    //!
+    //! The paged decode kernel reads a per-sequence `context_lens` + `block_tables`
+    //! (see `hanzo-paged-attn/src/*/backend/paged_attention.rs`), so a decode batch
+    //! may hold sequences of arbitrary, differing context lengths. These tests pin
+    //! that the scheduler batches *all* running sequences each decode step
+    //! (Orca-style iteration-level scheduling) and preempts only under genuine KV
+    //! block exhaustion — never as a function of length divergence.
+
+    use super::*;
+    use crate::paged_attention::{CacheConfig, PagedCacheType};
+    use crate::response::Response;
+    use crate::sampler::Sampler;
+    use crate::sequence::{SeqStepType, SequenceGroup, SequenceRecognizer};
+    use std::time::Duration;
+    use tokio::sync::mpsc::{channel, Sender};
+
+    const BLOCK_SIZE: usize = 16;
+
+    fn logger() -> IntervalLogger {
+        // No `begin_logging`, so the background thread stays quiet.
+        IntervalLogger::new(Duration::from_secs(3600), None)
+    }
+
+    fn scheduler(max_num_seqs: usize, num_gpu_blocks: usize) -> PagedAttentionScheduler {
+        let mut s = PagedAttentionScheduler::new(
+            PagedAttentionSchedulerConfig { max_num_seqs },
+            CacheConfig {
+                block_size: BLOCK_SIZE,
+                num_gpu_blocks,
+                cache_type: PagedCacheType::default(),
+            },
+        );
+        // Isolate the batching decision from prefix-cache effects: with distinct
+        // token streams there is nothing to reuse, and preemption then frees blocks
+        // outright rather than parking them in the reuse cache.
+        s.set_prefix_caching_enabled_sync(false);
+        s
+    }
+
+    /// A fresh waiting sequence of exactly `n_tokens` unique tokens. `len()` falls
+    /// back to `tokens.len()` when no real KV tensor is attached, so token count is
+    /// the sequence's scheduling length here.
+    fn waiting_seq(id: usize, n_tokens: usize, tx: &Sender<Response>) -> Sequence {
+        let sampler =
+            Sampler::new(None, 0, None, None, None, None, None, 32, 1.0, 0.0, vec![]).unwrap();
+        let group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(1, false, true, None)));
+        // Unique tokens per id => no cross-sequence prefix overlap.
+        let base = (id as u32 + 1) * 1_000_000;
+        Sequence::new_waiting(
+            (base..base + n_tokens as u32).collect(),
+            "p".to_string(),
+            id,
+            id as u128, // distinct timestamp => deterministic FCFS order
+            1,          // one cache layer slot (holds None) so len() reads tokens.len()
+            tx.clone(),
+            sampler,
+            vec![],
+            vec![],
+            None,
+            false,
+            false,
+            group,
+            0,
+            0,
+            SequenceRecognizer::None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(BLOCK_SIZE),
+            None,
+            None,
+            SeqStepType::PromptAndDecode,
+            None,
+            None,
+            None,
+            false,
+            vec![],
+        )
+    }
+
+    /// Prefill each length into the running set one at a time. Scheduling a single
+    /// waiting sequence returns a prompt batch of one, so each lands in `running`
+    /// without touching the sequences already there — yielding a running set whose
+    /// members hold *different* context lengths, exactly as staggered (Poisson)
+    /// arrivals produce in production.
+    fn prefill_each(sched: &mut PagedAttentionScheduler, lengths: &[usize], tx: &Sender<Response>) {
+        let logger = logger();
+        for (id, &len) in lengths.iter().enumerate() {
+            sched.add_seq(waiting_seq(id, len, tx));
+            let out = sched.schedule(&logger);
+            assert_eq!(out.scheduled.len(), 1, "prefill schedules one prompt at a time");
+            assert!(
+                get_mut_arcmutex!(out.scheduled[0]).is_prompt(),
+                "prefill pass must yield a prompt batch"
+            );
+        }
+    }
+
+    fn scheduled_ids(out: &PagedAttentionSchedulerOutput) -> Vec<usize> {
+        let mut ids: Vec<usize> = out
+            .scheduled
+            .iter()
+            .map(|s| *get_mut_arcmutex!(s).id())
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// The core win: under length-divergent traffic the decode step batches every
+    /// running sequence, not just the modal-length bucket. Before iteration-level
+    /// scheduling this collapsed to the shortest bucket (effective batch ~1).
+    #[test]
+    fn decode_batches_all_running_regardless_of_length() {
+        let lengths = [20usize, 40, 60, 80, 100, 120, 140, 160];
+        let n = lengths.len();
+        let mut sched = scheduler(n, 4096);
+        let (tx, _rx) = channel::<Response>(1);
+
+        prefill_each(&mut sched, &lengths, &tx);
+        assert_eq!(sched.running_len(), n, "all prefilled sequences are running");
+
+        // Decode step: waiting is empty, so this exercises the completion path.
+        let out = sched.schedule(&logger());
+
+        assert!(
+            get_mut_arcmutex!(out.scheduled[0]).is_completion(),
+            "decode batch must be completion-phase"
+        );
+        assert_eq!(
+            out.scheduled.len(),
+            n,
+            "continuous batching: every running sequence decodes this step (effective batch = {n})"
+        );
+        assert_eq!(sched.running_len(), n, "no sequence preempted for length divergence");
+        assert_eq!(
+            scheduled_ids(&out),
+            (0..n).collect::<Vec<_>>(),
+            "each running sequence appears exactly once — no drops, dups, or swaps"
+        );
+    }
+
+    /// Single-stream latency path is untouched: N=1 decodes as a batch of one with
+    /// no spurious preemption.
+    #[test]
+    fn single_stream_decode_unaffected() {
+        let mut sched = scheduler(1, 256);
+        let (tx, _rx) = channel::<Response>(1);
+
+        prefill_each(&mut sched, &[64], &tx);
+        let out = sched.schedule(&logger());
+
+        assert_eq!(out.scheduled.len(), 1);
+        assert_eq!(sched.running_len(), 1);
+        assert_eq!(sched.waiting_len(), 0);
+    }
+
+    /// Preemption still fires on real KV-block exhaustion (memory pressure), not on
+    /// length. Four equal-length sequences each need a fresh block for their next
+    /// token, but the pool cannot back them all; the newest (cheapest to lose under
+    /// FCFS) is preempted back to waiting — no deadlock, no starvation, nothing lost.
+    #[test]
+    fn decode_preempts_on_kv_exhaustion() {
+        // Each sequence is exactly one full block (16 toks); the decode +1 token
+        // crosses into a second block. Pool = 6 (one is the null block => 5 usable):
+        // four prefill into one block each, leaving one free — far short of the four
+        // second-blocks the decode step wants.
+        let n = 4;
+        let lengths = [BLOCK_SIZE; 4];
+        let mut sched = scheduler(n, 6);
+        let (tx, _rx) = channel::<Response>(1);
+
+        prefill_each(&mut sched, &lengths, &tx);
+        assert_eq!(sched.running_len(), n, "all four prefill into one block each");
+
+        let out = sched.schedule(&logger());
+
+        assert!(
+            (1..n).contains(&out.scheduled.len()),
+            "some but not all sequences decode under memory pressure (got {})",
+            out.scheduled.len()
+        );
+        assert!(
+            sched.waiting_len() >= 1,
+            "at least one sequence is preempted back to waiting"
+        );
+        assert_eq!(
+            sched.running_len() + sched.waiting_len(),
+            n,
+            "conservation: every sequence is either running or waiting, none dropped"
+        );
+    }
+
+    /// The decisive combination: length divergence AND memory pressure together.
+    /// The batch is bounded by *memory* (more than one, fewer than all), proving the
+    /// cap is KV capacity rather than the old length bucket — which, faced with these
+    /// four distinct lengths, would have collapsed the batch to exactly one.
+    #[test]
+    fn decode_batch_bounded_by_memory_not_length() {
+        // Block-multiple, pairwise-distinct lengths => four distinct old buckets, and
+        // every sequence needs a fresh block on its next token. Prefill costs
+        // 1+2+3+4 = 10 blocks; pool = 13 (12 usable) leaves two free, so only a
+        // couple of sequences can grow before the tail is preempted.
+        let lengths = [BLOCK_SIZE, 2 * BLOCK_SIZE, 3 * BLOCK_SIZE, 4 * BLOCK_SIZE];
+        let n = lengths.len();
+        let mut sched = scheduler(n, 13);
+        let (tx, _rx) = channel::<Response>(1);
+
+        prefill_each(&mut sched, &lengths, &tx);
+        assert_eq!(sched.running_len(), n);
+
+        let out = sched.schedule(&logger());
+
+        assert!(
+            out.scheduled.len() > 1,
+            "not collapsed to a single length bucket (got {})",
+            out.scheduled.len()
+        );
+        assert!(
+            out.scheduled.len() < n,
+            "memory pressure preempts the tail (got {})",
+            out.scheduled.len()
+        );
+        assert_eq!(
+            sched.running_len() + sched.waiting_len(),
+            n,
+            "no sequence lost: running + waiting conserves the full set"
+        );
     }
 }
