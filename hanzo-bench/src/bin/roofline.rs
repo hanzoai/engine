@@ -15,6 +15,7 @@
 use std::alloc::{alloc, dealloc, Layout};
 use std::fs::OpenOptions;
 use std::io::Read;
+#[cfg(target_os = "linux")]
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
@@ -145,13 +146,45 @@ fn measure_ram(buffer_gb: f64, reps: usize, threads: usize) -> serde_json::Value
     })
 }
 
-/// Drop this range of the file from the page cache so the read reflects the disk.
+/// Open `path` read-only with the OS's page-cache bypass, so the NVMe probe reflects the disk and
+/// not RAM. Linux: O_DIRECT, falling back to a buffered read where the filesystem rejects it (e.g.
+/// tmpfs). macOS: a normal open plus fcntl(F_NOCACHE) -- there is no O_DIRECT. Other platforms: a
+/// plain buffered read. The bool reports whether cache-bypass is actually in effect.
+#[cfg(target_os = "linux")]
+fn open_uncached(path: &PathBuf) -> std::io::Result<(std::fs::File, bool)> {
+    match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECT)
+        .open(path)
+    {
+        Ok(f) => Ok((f, true)),
+        Err(_) => Ok((OpenOptions::new().read(true).open(path)?, false)),
+    }
+}
+#[cfg(target_os = "macos")]
+fn open_uncached(path: &PathBuf) -> std::io::Result<(std::fs::File, bool)> {
+    let file = OpenOptions::new().read(true).open(path)?;
+    // SAFETY: fd is a live descriptor owned by `file`; F_NOCACHE bypasses the unified buffer cache.
+    let bypassed = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_NOCACHE, 1) } == 0;
+    Ok((file, bypassed))
+}
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn open_uncached(path: &PathBuf) -> std::io::Result<(std::fs::File, bool)> {
+    Ok((OpenOptions::new().read(true).open(path)?, false))
+}
+
+/// Drop this file's already-cached pages so the read reflects the disk. Linux has posix_fadvise; on
+/// macOS the descriptor is opened F_NOCACHE (see `open_uncached`), so there is nothing to drop and
+/// this is a no-op (as it is on any platform without posix_fadvise).
+#[cfg(target_os = "linux")]
 fn fadvise_dontneed(fd: i32) {
     // SAFETY: fd is a live descriptor; a 0 length means "to end of file".
     unsafe {
         libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
     }
 }
+#[cfg(not(target_os = "linux"))]
+fn fadvise_dontneed(_fd: i32) {}
 
 fn measure_nvme(
     path: &PathBuf,
@@ -161,16 +194,9 @@ fn measure_nvme(
     let chunk = chunk_mb * 1024 * 1024;
     let target = (read_gb * GIB) as u64;
 
-    // Prefer O_DIRECT; fall back to a fadvise-cleared buffered read where the
-    // filesystem rejects it (e.g. tmpfs) so the probe still yields a number.
-    let (mut file, direct) = match OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECT)
-        .open(path)
-    {
-        Ok(f) => (f, true),
-        Err(_) => (OpenOptions::new().read(true).open(path)?, false),
-    };
+    // Bypass the page cache so the read reflects the disk, not RAM (O_DIRECT on Linux, F_NOCACHE on
+    // macOS; a buffered fallback where neither applies).
+    let (mut file, direct) = open_uncached(path)?;
     fadvise_dontneed(file.as_raw_fd());
 
     let mut buf = AlignedBuf::new(chunk);
