@@ -1739,11 +1739,27 @@ impl Pipeline for NormalPipeline {
                 config,
                 crate::speculative::SpeculativeConfig::Off
                     | crate::speculative::SpeculativeConfig::Dspark { .. }
+                    | crate::speculative::SpeculativeConfig::PromptLookup { .. }
             )
         {
             hanzo_ml::bail!(
                 "speculative decoding currently requires PagedAttention for this pipeline."
             );
+        }
+        if let crate::speculative::SpeculativeConfig::PromptLookup {
+            ngram_min,
+            ngram_max,
+            gamma,
+        } = config
+        {
+            let proposer =
+                crate::speculative::PromptLookupProposer::new(ngram_min, ngram_max, gamma)?;
+            let info = crate::speculative::SpeculativeAttachInfo::prompt_lookup(
+                ngram_min, ngram_max, gamma,
+            );
+            crate::speculative::logging::log_attach(&info);
+            self.draft_proposer = Some(Box::new(proposer));
+            return Ok(());
         }
         if let crate::speculative::SpeculativeConfig::Dspark {
             path,

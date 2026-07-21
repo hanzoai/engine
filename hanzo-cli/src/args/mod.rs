@@ -716,6 +716,13 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub gamma: Option<usize>,
 
+    /// Enable prompt-lookup (n-gram) speculative decoding with this max tail n-gram. No draft
+    /// model — drafts are pulled from the sequence's own history; reuses `--gamma` for draft
+    /// length. Best on grounded/repetitive decoding (code edits, RAG, "repeat back"). Off unless set.
+    #[arg(long)]
+    #[serde(default)]
+    pub prompt_lookup_ngram: Option<usize>,
+
     /// Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset.
     #[arg(long)]
     #[serde(default)]
@@ -850,6 +857,11 @@ pub struct BenchRuntimeOptions {
     /// Speculative gamma: draft tokens proposed per target verification step (default 4).
     #[arg(long)]
     pub gamma: Option<usize>,
+
+    /// Enable prompt-lookup (n-gram) speculative decoding with this max tail n-gram. No draft
+    /// model — drafts are pulled from the sequence's own history; reuses `--gamma` for draft length.
+    #[arg(long)]
+    pub prompt_lookup_ngram: Option<usize>,
 }
 
 impl BenchRuntimeOptions {
@@ -1019,6 +1031,7 @@ impl Default for RuntimeOptions {
             draft_model: None,
             draft_quantized_file: None,
             gamma: None,
+            prompt_lookup_ngram: None,
             mcp_config: None,
             agent: false,
             enable_search: false,
