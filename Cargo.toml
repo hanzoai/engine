@@ -44,7 +44,7 @@ hanzo-ml = { version = "0.11.84" }
 hanzo-nn = { version = "0.11.39" }
 hanzo-transformers = { version = "0.11.9" }
 hanzo-flash-attn = { version = "0.11.35" }
-hanzo-flash-attn-v3 = { version = "0.11.3", package = "hanzo-flash-attn" }
+hanzo-flash-attn-v3 = { version = "0.11.9", package = "hanzo-flash-attn-v3" }
 hanzo-metal-kernels = { version = "0.11.43" }
 hanzo-3d = { version = "0.1" }
 

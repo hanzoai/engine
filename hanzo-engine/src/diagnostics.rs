@@ -201,7 +201,7 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
 
 /// Get CUDA compute capability for a device ordinal
 #[cfg(feature = "cuda")]
-fn get_cuda_compute_capability(ordinal: usize) -> Option<(u32, u32)> {
+pub(crate) fn get_cuda_compute_capability(ordinal: usize) -> Option<(u32, u32)> {
     // Use nvidia-smi to query compute capability
     let output = std::process::Command::new("nvidia-smi")
         .args([
