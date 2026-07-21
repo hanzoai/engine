@@ -185,6 +185,51 @@ fn vulkan_decode_attn(
     Ok(Some(out))
 }
 
+// ROCm single-query (decode) attention: one fused GQA-aware online-softmax kernel in place of
+// repeat_kv (cat -> copy2d) + QK^T bmm + softmax + *V bmm + the per-layer `.contiguous()` copy of the
+// whole active KV cache (~10 dispatches + ~653 copyBufferRectAligned/token -> 1). Returns None (caller
+// falls back to eager) unless: ROCm device, q_len==1, head_dim 128, f16/bf16, no softcap, no sliding
+// window. q:[B,H,1,128] attends the full cache k/v:[B,Hkv,L,128]; k/v are read STRIDED in place when
+// the head dim is contiguous (the win), else materialized contiguous. A lone decode query sees only
+// past keys, so the whole cache is unmasked.
+#[cfg(feature = "rocm")]
+fn rocm_decode_attn(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    sdpa_params: &SdpaParams,
+) -> Result<Option<Tensor>> {
+    use hanzo_ml::DType;
+    let (_b, h, q_len, d) = q.dims4()?;
+    if q_len != 1
+        || d != 128
+        || !matches!(q.dtype(), DType::F16 | DType::BF16)
+        || q.dtype() != k.dtype()
+        || q.dtype() != v.dtype()
+        || sdpa_params.softcap.is_some_and(|x| x != 1.0)
+        || sdpa_params.sliding_window.is_some()
+    {
+        return Ok(None);
+    }
+    if !q.device().is_rocm() {
+        return Ok(None);
+    }
+    let hkv = k.dim(1)?;
+    if hkv == 0 || h % hkv != 0 || k.dim(3)? != 128 || v.dim(3)? != 128 {
+        return Ok(None);
+    }
+    // Read k/v in place when the head dim is contiguous (the kernel handles arbitrary batch/head/seq
+    // strides + start offset); otherwise materialize contiguous so the kernel always sees stride 1.
+    let dim_contig = |t: &Tensor| t.stride().last() == Some(&1);
+    let (k, v) = if dim_contig(k) && dim_contig(v) {
+        (k.clone(), v.clone())
+    } else {
+        (k.contiguous()?, v.contiguous()?)
+    };
+    let out = hanzo_nn::attention::rocm_flash_attn_decode(q, &k, &v, sdpa_params.softmax_scale)?;
+    Ok(Some(out))
+}
+
 pub struct SdpaParams {
     pub n_kv_groups: usize,
     pub softcap: Option<f32>,
@@ -232,6 +277,16 @@ impl Sdpa {
         #[cfg(feature = "vulkan")]
         if matches!(mask, AttentionMask::None | AttentionMask::CausalFlash) {
             if let Some(out) = vulkan_decode_attn(q, k, v, sdpa_params)? {
+                return Ok(out);
+            }
+        }
+
+        // ROCm decode fast-path: same gating as Vulkan (single query, no explicit mask needed since a
+        // lone decode query attends the full past cache). Fuses repeat_kv + QK^T + softmax + *V and
+        // reads the KV cache strided in place, eliminating the copy2d glue that dominates ROCm decode.
+        #[cfg(feature = "rocm")]
+        if matches!(mask, AttentionMask::None | AttentionMask::CausalFlash) {
+            if let Some(out) = rocm_decode_attn(q, k, v, sdpa_params)? {
                 return Ok(out);
             }
         }
