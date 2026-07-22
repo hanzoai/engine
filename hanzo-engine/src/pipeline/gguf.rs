@@ -2163,6 +2163,44 @@ impl VulkanDecodeGraphModel for QQwen3MoE {
 }
 
 #[cfg(feature = "vulkan")]
+impl VulkanDecodeGraphModel for QQwen3 {
+    fn forward(
+        &self,
+        x: &Tensor,
+        start_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+    ) -> Result<Tensor, hanzo_ml::Error> {
+        QQwen3::forward(
+            self,
+            x,
+            start_offsets,
+            context_lens,
+            &crate::pipeline::text_models_inputs_processor::FlashParams::empty(true),
+            None,
+        )
+    }
+    fn forward_vk_graph(
+        &self,
+        x: &Tensor,
+        start_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        positions: &Tensor,
+        vk_graph: &hanzo_ml::VkGraphAttn,
+    ) -> Result<Tensor, hanzo_ml::Error> {
+        QQwen3::forward_vk_graph(self, x, start_offsets, context_lens, positions, vk_graph)
+    }
+    fn vk_build_graph_attn(&self, seq_k: usize) -> Result<hanzo_ml::VkGraphAttn, hanzo_ml::Error> {
+        QQwen3::vk_build_graph_attn(self, seq_k)
+    }
+    fn vk_kv_capacity(&self) -> Option<usize> {
+        QQwen3::vk_kv_capacity(self)
+    }
+    fn vk_advance_kv_len(&self, len: usize) -> Result<(), hanzo_ml::Error> {
+        QQwen3::vk_advance_kv_len(self, len)
+    }
+}
+
+#[cfg(feature = "vulkan")]
 impl GGUFPipeline {
     /// Attempts to satisfy a single Vulkan decode step via the captured command-graph. Returns
     /// `Ok(None)` when the graph path does not apply (caller runs eager). Unlike the paged ROCm/CUDA
@@ -2188,9 +2226,10 @@ impl GGUFPipeline {
             return Ok(None);
         }
         // The naive-KV-cache decode graph drives every graph-eligible GGUF text model through one
-        // model-agnostic seam (dense Qwen2 + Qwen3-MoE today); other variants stay on the eager path.
+        // model-agnostic seam (dense Qwen2, dense Qwen3, Qwen3-MoE); other variants stay on the eager path.
         let model: &dyn VulkanDecodeGraphModel = match &self.model {
             Model::Qwen(model) => model,
+            Model::Qwen3(model) => model,
             Model::Qwen3MoE(model) => model,
             _ => return Ok(None),
         };
@@ -2301,6 +2340,7 @@ impl GGUFPipeline {
     ) -> Result<VulkanDecodeGraphEntry, hanzo_ml::Error> {
         let model: &dyn VulkanDecodeGraphModel = match &self.model {
             Model::Qwen(model) => model,
+            Model::Qwen3(model) => model,
             Model::Qwen3MoE(model) => model,
             _ => hanzo_ml::bail!("vulkan decode graph: unsupported model variant"),
         };
