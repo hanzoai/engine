@@ -58,9 +58,19 @@ def stats(samples):
 
 
 def hanzo_samples(rec):
-    """per-rep tok/s for one hanzo result record: tokens/wall/concurrency."""
+    """per-rep tok/s for one hanzo result record: tokens/wall/concurrency.
+
+    The first timed repetition is discarded as per-shape warmup when at least three
+    were taken: hanzo-bench does a single tiny warmup, so the first large-shape rep
+    still pays pipeline compilation (pronounced on Vulkan). llama-bench warms every
+    shape internally, so dropping our first rep equalizes warmth between the engines.
+    The raw samples are committed, so any reader can recompute with the first rep in.
+    """
     c = rec["concurrency"]
-    return [toks / secs / c for secs, toks in rec["per_rep"] if secs > 0 and toks > 0]
+    per = rec["per_rep"]
+    if len(per) >= 3:
+        per = per[1:]
+    return [toks / secs / c for secs, toks in per if secs > 0 and toks > 0]
 
 
 def load_hanzo(path):
@@ -142,6 +152,15 @@ def fmt(st):
 
 def main():
     run = sys.argv[1] if len(sys.argv) > 1 else "."
+    # Model bytes (from the manifest) turn a decode ratio into an effective-bandwidth
+    # roofline: decode is memory-bound, so eff BW = decode t/s * bytes streamed/token,
+    # with the model file size an upper bound on bytes/token. Both engines stream the
+    # same weights, so the reach (ratio) is exact regardless of the byte estimate.
+    model_gb = None
+    try:
+        model_gb = json.load(open(os.path.join(run, "manifest.json")))["model_bytes"] / 1e9
+    except Exception:
+        pass
     hanzo, llama = {}, {}
     for p in sorted(glob.glob(os.path.join(run, "hanzo_*.json"))):
         tag = os.path.basename(p)[len("hanzo_"):-len(".json")]
@@ -183,6 +202,12 @@ def main():
             if rr:
                 tex.append(f"\\renewcommand{{\\{base}R}}{{{rr['ratio']:.2f}}}")
                 tex.append(f"\\renewcommand{{\\{base}V}}{{{rr['verdict']}}}")
+            # roofline: only for single-stream decode, where the memory-bound model holds
+            if phase == "decode" and conc == 1 and model_gb and hs and ls and rr:
+                bk = BACKEND_TITLE.get(backend, backend)
+                tex.append(f"\\renewcommand{{\\r{bk}EffBW}}{{{hs['mean'] * model_gb:.0f}}}")
+                tex.append(f"\\renewcommand{{\\r{bk}RoofBW}}{{{ls['mean'] * model_gb:.0f}}}")
+                tex.append(f"\\renewcommand{{\\r{bk}Reach}}{{{100 * rr['ratio']:.0f}\\%}}")
             # one booktabs row per measured cell, for \input into the paper's results table
             def cell(st):
                 if not st:

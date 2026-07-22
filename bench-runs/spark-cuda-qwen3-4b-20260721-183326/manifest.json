@@ -1,0 +1,28 @@
+{
+  "host": "spark",
+  "uname": "Linux spark 6.17.0-1018-nvidia #18-Ubuntu SMP PREEMPT_DYNAMIC Tue May  5 21:28:33 UTC 2026 aarch64",
+  "backend": "cuda",
+  "timestamp": 1784684006.2887366,
+  "iso": "2026-07-21T18:33:26-0700",
+  "engine_git_sha": "a0c6d7429233bca12e0f4996bbcc9f1c8ca42820",
+  "engine_version": "1.7.87",
+  "hanzo_ml": "0.11.88",
+  "hanzo_rocm_kernels": "0.11.36",
+  "hanzo_metal_kernels": "0.11.44",
+  "llama_sha": "31e82494c0a3913c919c1027fa70500fbf4c07dd",
+  "llama_bench": "/home/z/llama.cpp/build/bin/llama-bench",
+  "model_path": "/home/z/models/Qwen3-4B-Q4_K_M.gguf",
+  "model_bytes": 2497280256,
+  "model_sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+  "params": {
+    "prompt_sizes": "512,2048",
+    "n_gen": 128,
+    "reps": 7,
+    "concurrency": 1,
+    "max_ctx": 4096
+  },
+  "env": {
+    "backend_env": ""
+  },
+  "gpu": "NVIDIA GB10, 580.159.03"
+}

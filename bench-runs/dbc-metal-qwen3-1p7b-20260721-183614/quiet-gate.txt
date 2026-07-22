@@ -1,0 +1,5 @@
+quiet-gate @ 2026-07-21T18:36:14-0700
+gpu_busy%: na
+load averages: 4.04 3.81 3.44
+gpu/compile competitors (by command name):
+  (none)
