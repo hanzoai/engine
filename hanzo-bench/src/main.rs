@@ -14,6 +14,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::channel;
 use tracing::{info, warn};
 
+#[derive(Clone, Copy)]
 enum TestName {
     Prompt(usize),
     Gen(usize),
@@ -57,23 +58,35 @@ async fn run_bench(
     concurrency: usize,
     repetitions: usize,
     test_name: TestName,
+    greedy: bool,
 ) -> anyhow::Result<BenchResult> {
-    let sampling_params = SamplingParams {
-        // Greedy argmax decode: matches llama-bench's tg measurement (no top-k/p, no penalties,
-        // no DRY vocab scan) so the reported tok/s isolates model-eval throughput, not sampler cost.
-        temperature: None,
-        top_k: None,
-        top_p: None,
-        min_p: None,
-        top_n_logprobs: 0,
-        frequency_penalty: None,
-        presence_penalty: None,
-        repetition_penalty: None,
-        max_len: Some(n_gen),
-        stop_toks: None,
-        logits_bias: None,
-        n_choices: 1,
-        dry_params: None,
+    // Sampling PARITY with llama-bench (which decodes greedily) is a required control.
+    // greedy == deterministic(): top_k=Some(1) engages the device top-1 (argmax) path.
+    // A None temperature is forced to 1.0 downstream (engine add_request), and top_k=None
+    // then falls into a full-vocabulary CPU multinomial that idles the GPU -- a per-token
+    // sampler tax NOT present in llama-bench, which silently inflated the apparent decode
+    // gap. The stochastic branch reproduces that artifact so the tax can be measured.
+    let sampling_params = if greedy {
+        SamplingParams {
+            max_len: Some(n_gen),
+            ..SamplingParams::deterministic()
+        }
+    } else {
+        SamplingParams {
+            temperature: None,
+            top_k: None,
+            top_p: None,
+            min_p: None,
+            top_n_logprobs: 0,
+            frequency_penalty: None,
+            presence_penalty: None,
+            repetition_penalty: None,
+            max_len: Some(n_gen),
+            stop_toks: None,
+            logits_bias: None,
+            n_choices: 1,
+            dry_params: None,
+        }
     };
     let sender = hanzo.get_sender(None).unwrap();
     let (tx, mut rx) = channel(10_000);
@@ -362,6 +375,44 @@ struct Args {
     /// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
     #[arg(long = "paged-attn", default_value_t = false)]
     paged_attn: bool,
+
+    /// Emit the raw per-repetition samples (wall seconds, scored tokens) for every test to this
+    /// path as JSON. Downstream statistics (mean, 95% CI, coefficient of variation) are computed
+    /// from these samples rather than a pre-aggregated mean/stddev, so the reported uncertainty is
+    /// auditable and reproducible. The token COUNTS are the engine's own usage figures; the timing
+    /// is wall-clock, identical in method to llama-bench, so the two engines compare like-for-like.
+    #[arg(long = "json")]
+    json: Option<String>,
+
+    /// Decode with the full-vocabulary stochastic sampler (temperature 1.0, no top-k) instead
+    /// of greedy argmax. Default is greedy, at sampling parity with llama-bench; this flag
+    /// exists only to MEASURE the sampler tax (the artifact greedy avoids), not to report a rate.
+    #[arg(long)]
+    stochastic: bool,
+}
+
+fn backend_str(device: &Device) -> &'static str {
+    match device {
+        Device::Cpu => "CPU",
+        Device::Cuda(_) => "CUDA",
+        Device::Metal(_) => "Metal",
+        #[cfg(feature = "rocm")]
+        Device::Rocm(_) => "ROCm",
+        #[cfg(feature = "vulkan")]
+        Device::Vulkan(_) => "Vulkan",
+    }
+}
+
+// Serialize one test's raw samples. `per_rep` is the ground truth; every published statistic is a
+// pure function of this array, so a reviewer can recompute the board from the JSON alone.
+fn result_json(r: &BenchResult) -> serde_json::Value {
+    serde_json::json!({
+        "test": r.test_name.to_string(),
+        "phase": match r.test_name { TestName::Prompt(_) => "prefill", TestName::Gen(_) => "decode" },
+        "n": match r.test_name { TestName::Prompt(n) | TestName::Gen(n) => n },
+        "concurrency": r.concurrency,
+        "per_rep": r.per_rep.iter().map(|(secs, toks)| serde_json::json!([secs, toks])).collect::<Vec<_>>(),
+    })
 }
 
 #[tokio::main]
@@ -567,6 +618,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Finished warmup run.");
     info!("Starting benchmarks.");
 
+    let mut json_records = Vec::new();
     for concurrency in args.concurrency.as_ref().unwrap() {
         let mut results = vec![];
         if args.n_gen > 0 {
@@ -581,6 +633,7 @@ async fn main() -> anyhow::Result<()> {
                 *concurrency,
                 args.repetitions,
                 TestName::Gen(args.n_gen),
+                !args.stochastic,
             )
             .await?;
             results.push(r);
@@ -595,13 +648,32 @@ async fn main() -> anyhow::Result<()> {
                 *concurrency,
                 args.repetitions,
                 TestName::Prompt(args.n_prompt),
+                !args.stochastic,
             )
             .await?;
 
             results.push(r);
         }
 
+        if args.json.is_some() {
+            json_records.extend(results.iter().map(result_json));
+        }
         print_usage(&model_name, &device, results);
+    }
+
+    if let Some(path) = &args.json {
+        let doc = serde_json::json!({
+            "engine_version": env!("CARGO_PKG_VERSION"),
+            "backend": backend_str(&device),
+            "sampler": if args.stochastic { "stochastic-temp1-fullvocab" } else { "greedy-argmax" },
+            "model_id": model_name,
+            "n_prompt": args.n_prompt,
+            "n_gen": args.n_gen,
+            "repetitions": args.repetitions,
+            "results": json_records,
+        });
+        std::fs::write(path, serde_json::to_string_pretty(&doc)?)?;
+        info!("Wrote raw samples to {path}");
     }
 
     Ok(())
