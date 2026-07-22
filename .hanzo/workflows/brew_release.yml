@@ -1,0 +1,90 @@
+name: Homebrew Release
+
+# Native (Hanzo Git) copy of .github/workflows/brew_release.yml. The fork scans
+# .hanzo/workflows FIRST; GitHub.com ignores .hanzo/, so this is inert on GitHub.
+#
+# One native adaptation: the build targets the git-runner `metal` host daemon
+# (dbc, Apple M4 Max) instead of the GitHub `self-hosted` label set. The tap push
+# still targets github.com/hanzoai/homebrew-hanzo (the tap stays on GitHub).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag"
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: metal
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install ffmpeg
+        run: brew install ffmpeg
+
+      - name: Build
+        run: cargo build --release --features metal -p hanzo-cli
+
+      - name: Package
+        run: |
+          tar czf hanzo-metal-aarch64-apple-darwin.tar.gz -C target/release hanzo
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.tag }}"
+          gh release create "$TAG" --title "$TAG" --notes "Release $TAG" 2>/dev/null || true
+          gh release upload "$TAG" hanzo-metal-aarch64-apple-darwin.tar.gz --clobber
+
+      - name: Update tap formula
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.tag }}"
+          VERSION="${TAG#v}"
+          SHA=$(shasum -a 256 hanzo-metal-aarch64-apple-darwin.tar.gz | awk '{print $1}')
+          URL="https://github.com/hanzoai/engine/releases/download/${TAG}/hanzo-metal-aarch64-apple-darwin.tar.gz"
+
+          git clone "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/hanzoai/homebrew-hanzo.git" tap
+
+          cat > tap/Formula/hanzo.rb << FORMULA
+          class Hanzo < Formula
+            desc "Fast, flexible LLM inference."
+            homepage "https://github.com/hanzoai/engine"
+            license "MIT"
+            version "${VERSION}"
+            url "${URL}"
+            sha256 "${SHA}"
+
+            depends_on "ffmpeg"
+            depends_on :macos
+            depends_on arch: :arm64
+
+            def install
+              bin.install "hanzo"
+            end
+
+            test do
+              assert_match "hanzo", shell_output("#{bin}/hanzo --help")
+            end
+          end
+          FORMULA
+          # Strip leading whitespace from heredoc indentation
+          sed -i '' 's/^          //' tap/Formula/hanzo.rb
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/hanzo.rb
+          git commit -m "Update hanzo to ${TAG}"
+          git push
