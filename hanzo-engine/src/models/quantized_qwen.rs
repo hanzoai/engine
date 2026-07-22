@@ -55,6 +55,7 @@ struct LayerWeights {
 }
 
 impl LayerWeights {
+    #[allow(clippy::too_many_arguments)]
     fn forward_attn(
         &self,
         x: &Tensor,

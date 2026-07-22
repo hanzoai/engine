@@ -164,14 +164,38 @@ impl Policy {
 /// strengths, not fit to any eval. Keys are [`Task`] snake_case labels; the first
 /// list entry present in the registry wins.
 pub const PREFER: &[(&str, &[&str])] = &[
-    ("code", &["gpt-5.5", "opus-4.8", "deepseek-v4-pro", "fable-5"]),
-    ("math", &["gpt-5.5", "opus-4.8", "deepseek-v4-pro", "fable-5"]),
-    ("reasoning", &["opus-4.8", "gpt-5.5", "deepseek-v4-pro", "fable-5"]),
-    ("creative", &["fable-5", "opus-4.8", "gpt-5.5", "deepseek-v4-pro"]),
-    ("vision", &["opus-4.8", "gpt-5.5", "fable-5", "deepseek-v4-pro"]),
-    ("long_context", &["opus-4.8", "gpt-5.5", "deepseek-v4-pro", "fable-5"]),
-    ("cheap_chat", &["deepseek-v4-pro", "fable-5", "gpt-5.5", "opus-4.8"]),
-    ("general", &["opus-4.8", "gpt-5.5", "deepseek-v4-pro", "fable-5"]),
+    (
+        "code",
+        &["gpt-5.5", "opus-4.8", "deepseek-v4-pro", "fable-5"],
+    ),
+    (
+        "math",
+        &["gpt-5.5", "opus-4.8", "deepseek-v4-pro", "fable-5"],
+    ),
+    (
+        "reasoning",
+        &["opus-4.8", "gpt-5.5", "deepseek-v4-pro", "fable-5"],
+    ),
+    (
+        "creative",
+        &["fable-5", "opus-4.8", "gpt-5.5", "deepseek-v4-pro"],
+    ),
+    (
+        "vision",
+        &["opus-4.8", "gpt-5.5", "fable-5", "deepseek-v4-pro"],
+    ),
+    (
+        "long_context",
+        &["opus-4.8", "gpt-5.5", "deepseek-v4-pro", "fable-5"],
+    ),
+    (
+        "cheap_chat",
+        &["deepseek-v4-pro", "fable-5", "gpt-5.5", "opus-4.8"],
+    ),
+    (
+        "general",
+        &["opus-4.8", "gpt-5.5", "deepseek-v4-pro", "fable-5"],
+    ),
 ];
 
 /// A [`Policy`] whose `prefer` table is [`PREFER`] --- the a-priori routing
@@ -204,89 +228,6 @@ impl Policy {
     /// Load a `ROUTER_HEADS` serve bundle from `path` and mount it ([`with_heads`]).
     pub fn load_heads(path: &std::path::Path) -> std::io::Result<Self> {
         crate::heads::Heads::load(path).map(Self::with_heads)
-    }
-}
-
-#[cfg(test)]
-mod prefer_tests {
-    use super::*;
-    use crate::registry::{Backend, ModelCard, Task};
-    use crate::route::{RoutePolicy, Slo, User};
-
-    fn pool() -> Registry {
-        Registry::new(
-            ["opus-4.8", "gpt-5.5", "deepseek-v4-pro", "fable-5"]
-                .iter()
-                .map(|id| ModelCard {
-                    id: (*id).into(),
-                    backend: Backend::Cloud { provider: "gateway".into() },
-                    tasks: vec![Task::General],
-                    max_context: 0,
-                    vision: false,
-                    cost_per_1k: 0.0,
-                })
-                .collect(),
-        )
-    }
-
-    #[test]
-    fn prefer_routes_per_bucket() {
-        let p = prefer();
-        let reg = pool();
-        let route = |text: &str| {
-            p.route(
-                &Request { text: text.into(), approx_tokens: 200, ..Default::default() },
-                &User::anonymous(),
-                &Slo::default(),
-                &reg,
-            )
-            .model
-        };
-        // code bucket -> gpt-5.5 first; reasoning -> opus-4.8 first.
-        assert_eq!(route("fix this ```rust``` bug"), "gpt-5.5");
-        assert_eq!(route("analyze the trade-off step by step"), "opus-4.8");
-        // default Policy has no prefer table -> falls to registry order (opus first).
-        assert_eq!(
-            Policy::default()
-                .route(
-                    &Request { text: "fix this ```rust``` bug".into(), approx_tokens: 200, ..Default::default() },
-                    &User::anonymous(),
-                    &Slo::default(),
-                    &reg,
-                )
-                .model,
-            "opus-4.8"
-        );
-    }
-
-    #[test]
-    fn learned_head_overrides_rule_based_route() {
-        use crate::featurize::{FEAT_DIM, NUM_TASKS};
-        use crate::heads::{Arm, Heads};
-        let g = Task::General.index();
-        let k = NUM_TASKS + 4;
-        let mut w = vec![0.0; FEAT_DIM * k]; // utility reads x[General] * p[General]
-        w[g * k + g] = 1.0;
-        let mkarm = |m: &str, q: f64| {
-            let mut f = vec![0.0; k];
-            f[g] = q;
-            Arm { model: m.into(), feat: f }
-        };
-        // rule-based `prefer` would send General to opus-4.8; the head must win.
-        let policy = Policy::with_heads(Heads::new(w, vec![mkarm("weak", 0.2), mkarm("strong", 0.9)]));
-        let reg = pool();
-        let r = policy.route(
-            &Request {
-                text: "overview".into(),
-                approx_tokens: 200,
-                task_hint: Some(Task::General),
-                ..Default::default()
-            },
-            &User::anonymous(),
-            &Slo { lambda_cost: 0.0, mu_latency: 0.0, ..Slo::default() },
-            &reg,
-        );
-        assert_eq!(r.model, "strong", "mounted head routes by learned quality, not the prefer table");
     }
 }
 
@@ -341,5 +282,111 @@ impl RoutePolicy for Policy {
             },
             None => Route::refused(0.0),
         }
+    }
+}
+
+#[cfg(test)]
+mod prefer_tests {
+    use super::*;
+    use crate::registry::{Backend, ModelCard, Task};
+    use crate::route::{RoutePolicy, Slo, User};
+
+    fn pool() -> Registry {
+        Registry::new(
+            ["opus-4.8", "gpt-5.5", "deepseek-v4-pro", "fable-5"]
+                .iter()
+                .map(|id| ModelCard {
+                    id: (*id).into(),
+                    backend: Backend::Cloud {
+                        provider: "gateway".into(),
+                    },
+                    tasks: vec![Task::General],
+                    max_context: 0,
+                    vision: false,
+                    cost_per_1k: 0.0,
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn prefer_routes_per_bucket() {
+        let p = prefer();
+        let reg = pool();
+        let route = |text: &str| {
+            p.route(
+                &Request {
+                    text: text.into(),
+                    approx_tokens: 200,
+                    ..Default::default()
+                },
+                &User::anonymous(),
+                &Slo::default(),
+                &reg,
+            )
+            .model
+        };
+        // code bucket -> gpt-5.5 first; reasoning -> opus-4.8 first.
+        assert_eq!(route("fix this ```rust``` bug"), "gpt-5.5");
+        assert_eq!(route("analyze the trade-off step by step"), "opus-4.8");
+        // default Policy has no prefer table -> falls to registry order (opus first).
+        assert_eq!(
+            Policy::default()
+                .route(
+                    &Request {
+                        text: "fix this ```rust``` bug".into(),
+                        approx_tokens: 200,
+                        ..Default::default()
+                    },
+                    &User::anonymous(),
+                    &Slo::default(),
+                    &reg,
+                )
+                .model,
+            "opus-4.8"
+        );
+    }
+
+    #[test]
+    fn learned_head_overrides_rule_based_route() {
+        use crate::featurize::{FEAT_DIM, NUM_TASKS};
+        use crate::heads::{Arm, Heads};
+        let g = Task::General.index();
+        let k = NUM_TASKS + 4;
+        let mut w = vec![0.0; FEAT_DIM * k]; // utility reads x[General] * p[General]
+        w[g * k + g] = 1.0;
+        let mkarm = |m: &str, q: f64| {
+            let mut f = vec![0.0; k];
+            f[g] = q;
+            Arm {
+                model: m.into(),
+                feat: f,
+            }
+        };
+        // rule-based `prefer` would send General to opus-4.8; the head must win.
+        let policy = Policy::with_heads(Heads::new(
+            w,
+            vec![mkarm("weak", 0.2), mkarm("strong", 0.9)],
+        ));
+        let reg = pool();
+        let r = policy.route(
+            &Request {
+                text: "overview".into(),
+                approx_tokens: 200,
+                task_hint: Some(Task::General),
+                ..Default::default()
+            },
+            &User::anonymous(),
+            &Slo {
+                lambda_cost: 0.0,
+                mu_latency: 0.0,
+                ..Slo::default()
+            },
+            &reg,
+        );
+        assert_eq!(
+            r.model, "strong",
+            "mounted head routes by learned quality, not the prefer table"
+        );
     }
 }

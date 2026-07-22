@@ -14,7 +14,10 @@ use hanzo_router_retrain::decision::{
 };
 
 #[derive(Parser, Debug)]
-#[command(name = "router-decide", about = "Decision-quality gate for router heads.")]
+#[command(
+    name = "router-decide",
+    about = "Decision-quality gate for router heads."
+)]
 struct Args {
     /// Augmented EvalSample JSONL (benchmark + id + EvalSample fields per line).
     #[arg(long)]
@@ -90,7 +93,14 @@ fn main() -> Result<()> {
     println!(
         "gamma   head@q          head@slo        heuristic       best-single     oracle          holdout_reward"
     );
-    let cols = ["head@q", "head@slo", "heuristic", "best-single", "oracle", "holdout_reward"];
+    let cols = [
+        "head@q",
+        "head@slo",
+        "heuristic",
+        "best-single",
+        "oracle",
+        "holdout_reward",
+    ];
     let mut per_gamma: Vec<(f64, Vec<Scores>)> = Vec::new();
     for &gamma in &gammas {
         let mut all = Vec::new();
@@ -124,7 +134,12 @@ fn main() -> Result<()> {
             let wins = d.iter().filter(|&&x| x > 1e-9).count();
             format!("{m:+.4}+-{sd:.4} ({wins}/{})", d.len())
         };
-        println!("{gamma:<7.2} {:<22} {:<22} {}", fmt(&d_heur), fmt(&d_best), fmt(&d_served));
+        println!(
+            "{gamma:<7.2} {:<22} {:<22} {}",
+            fmt(&d_heur),
+            fmt(&d_best),
+            fmt(&d_served)
+        );
     }
     println!(
         "\nn.b. head@q = pure-quality SLO (lambda=mu=0); head@slo = default served SLO (0.3/0.3). \
