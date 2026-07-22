@@ -14,12 +14,20 @@ pub enum PagedCacheType {
     #[default]
     Auto,
     F8E4M3,
+    /// Symmetric per-token int8 KV cache (KIVI / KVQuant). Codes + a co-located per-token f32
+    /// scale are packed 4-per-u32, so the storage dtype is `U32` (Vulkan has no 1-byte tensor);
+    /// the packed layout is built by `calculate_{key,value}_block_shape`. See
+    /// `hanzo_paged_attn::quant` for the reference/oracle and the Vulkan `*_q8` kernels.
+    Int8,
 }
 
 impl PagedCacheType {
     pub fn to_dtype(&self, act_dtype: DType) -> DType {
         match self {
             PagedCacheType::F8E4M3 => DType::F8E4M3,
+            // int8 codes are packed 4-per-u32 with a co-located f32 scale word; the storage
+            // element is u32. `U32` is the unique marker for an int8 KV cache downstream.
+            PagedCacheType::Int8 => DType::U32,
             PagedCacheType::Auto => act_dtype,
         }
     }
@@ -31,8 +39,9 @@ impl FromStr for PagedCacheType {
         match s {
             "auto" => Ok(Self::Auto),
             "f8e4m3" => Ok(Self::F8E4M3),
+            "int8" => Ok(Self::Int8),
             other => Err(format!(
-                "Unexpected `PagedCacheType`, got `{other}` but expected `auto` and `f8e4m3`."
+                "Unexpected `PagedCacheType`, got `{other}` but expected `auto`, `f8e4m3`, or `int8`."
             )),
         }
     }
@@ -111,6 +120,7 @@ impl CacheEngine {
                     );
                     let value_block_shape = Self::calculate_value_block_shape(
                         model_config,
+                        dtype,
                         cache_config.block_size,
                         layer_idx,
                     );
@@ -381,23 +391,37 @@ impl CacheEngine {
         block_size: usize,
         layer_idx: usize,
     ) -> (usize, usize, usize, usize) {
+        let num_kv_heads = model_config.num_kv_heads_for_layer(layer_idx);
+        let head_dim = model_config.k_head_dim_for_layer(layer_idx);
+        if dtype == DType::U32 {
+            // int8-packed key cache, token-major: [num_kv_heads, block_size, head_dim/4 + 1] u32
+            // (head_dim/4 code words + 1 co-located per-token f32 scale word), rank-padded with a
+            // trailing 1 so the Standard rank-5 allocation and block-shape readers still apply.
+            // Element (block, head, token, word) sits at token*wpt + word, matching the `*_q8`
+            // shaders whose strides are computed from head_size/block_size/num_kv_heads.
+            let wpt = head_dim / 4 + 1;
+            return (num_kv_heads, block_size, wpt, 1);
+        }
         let element_size = dtype.size_in_bytes();
         let x = 16 / element_size;
-        (
-            model_config.num_kv_heads_for_layer(layer_idx),
-            model_config.k_head_dim_for_layer(layer_idx) / x,
-            block_size,
-            x,
-        )
+        (num_kv_heads, head_dim / x, block_size, x)
     }
 
     fn calculate_value_block_shape(
         model_config: &dyn ModelConfigLike,
+        dtype: DType,
         block_size: usize,
         layer_idx: usize,
     ) -> (usize, usize, usize) {
+        let num_kv_heads = model_config.num_kv_heads_for_layer(layer_idx);
+        if dtype == DType::U32 {
+            // int8-packed value cache, token-major: [num_kv_heads, block_size, head_dim/4 + 1] u32,
+            // the same per-token layout as the key cache (KIVI uses per-token grouping for values).
+            let wpt = model_config.v_head_dim_for_layer(layer_idx) / 4 + 1;
+            return (num_kv_heads, block_size, wpt);
+        }
         (
-            model_config.num_kv_heads_for_layer(layer_idx),
+            num_kv_heads,
             model_config.v_head_dim_for_layer(layer_idx),
             block_size,
         )
