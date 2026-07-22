@@ -1,0 +1,44 @@
+name: gpu-tests
+
+# Native (Hanzo Git) copy of .github/workflows/gpu-tests.yml. The fork scans
+# .hanzo/workflows FIRST; GitHub.com ignores .hanzo/, so this is inert on GitHub.
+#
+# One native adaptation: the runner label drops the GitHub `self-hosted` prefix
+# and targets the git-runner host daemon by its bare backend label. On the native
+# forge one label == one host daemon == one backend:
+#   cuda  -> spark  (NVIDIA GB10, sm_121)
+#   rocm  -> evo    (AMD Strix Halo gfx1151, ROCm 7.x)
+#   metal -> dbc    (Apple M4 Max)
+#
+# These boxes double as dev/bench machines, so this is NOT per-push: it runs
+# nightly (staggered 3h after ml/gpu-tests so shared boxes never contend) and
+# on demand (`gh workflow run gpu-tests`). The smoke compiles the engine with
+# each GPU backend enabled -- the fast, weight-free signal that CUDA/ROCm/Metal
+# still build on real hardware. The gpu-guard step avoids stepping on any
+# in-flight bench (critical on ROCm, where concurrent inits wedge the kfd
+# driver until reboot).
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 11 * * *'
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [cuda, rocm, metal]
+    runs-on: ["${{ matrix.backend }}"]
+    timeout-minutes: 90
+    concurrency:
+      group: gpu-${{ matrix.backend }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+      - name: Remove cargo config (macOS ring crate fix)
+        if: matrix.backend == 'metal'
+        run: rm -f .cargo/config.toml
+      - uses: ./.github/actions/gpu-guard
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check (${{ matrix.backend }})
+        run: cargo check -p hanzo-engine --features ${{ matrix.backend }}
