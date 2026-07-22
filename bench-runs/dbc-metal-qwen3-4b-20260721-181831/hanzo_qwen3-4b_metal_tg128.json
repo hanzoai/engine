@@ -1,0 +1,47 @@
+{
+  "engine_version": "1.7.87",
+  "backend": "Metal",
+  "sampler": "greedy-argmax",
+  "model_id": "/Users/a/models",
+  "n_prompt": 0,
+  "n_gen": 128,
+  "repetitions": 7,
+  "results": [
+    {
+      "test": "tg 128",
+      "phase": "decode",
+      "n": 128,
+      "concurrency": 1,
+      "per_rep": [
+        [
+          1.000058167,
+          127
+        ],
+        [
+          0.984528,
+          127
+        ],
+        [
+          0.986452791,
+          127
+        ],
+        [
+          0.993158584,
+          127
+        ],
+        [
+          0.994735209,
+          127
+        ],
+        [
+          0.999324083,
+          127
+        ],
+        [
+          0.986091917,
+          127
+        ]
+      ]
+    }
+  ]
+}
