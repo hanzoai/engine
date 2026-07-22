@@ -126,7 +126,9 @@ mod tests {
 
     fn lcg(state: &mut u64) -> f32 {
         // Deterministic pseudo-random in [-1, 1); no external rng dependency.
-        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let bits = (*state >> 40) as u32; // 24 bits
         (bits as f32 / (1u32 << 23) as f32) - 1.0
     }
@@ -162,7 +164,10 @@ mod tests {
         row[42] = 250.0; // one dominant outlier channel
         row[99] = -180.0; // another
         let err = scale_relative_error(&row);
-        assert!(err <= BOUND, "channel outlier err={err} exceeds bound {BOUND}");
+        assert!(
+            err <= BOUND,
+            "channel outlier err={err} exceeds bound {BOUND}"
+        );
     }
 
     #[test]
@@ -184,7 +189,10 @@ mod tests {
         assert_eq!(scale, 1.0, "all-zero must take unit scale");
         let mut back = vec![9.0f32; 128];
         dequantize_token(&packed, 128, &mut back);
-        assert!(back.iter().all(|&x| x == 0.0), "all-zero must dequantize to 0");
+        assert!(
+            back.iter().all(|&x| x == 0.0),
+            "all-zero must dequantize to 0"
+        );
     }
 
     #[test]
@@ -200,7 +208,11 @@ mod tests {
         let mut back = vec![0.0f32; head_size];
         dequantize_token(&packed, head_size, &mut back);
         // -4.0 / scale = -127 exactly -> code -127 -> back = -127 * (4/127) = -4.0.
-        assert!((back[10] - (-4.0)).abs() < 1e-5, "endpoint {} != -4.0", back[10]);
+        assert!(
+            (back[10] - (-4.0)).abs() < 1e-5,
+            "endpoint {} != -4.0",
+            back[10]
+        );
     }
 
     #[test]

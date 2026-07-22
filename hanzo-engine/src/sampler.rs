@@ -1565,8 +1565,20 @@ mod tests {
         use rand_isaac::Isaac64Rng;
         use std::sync::{Arc, Mutex};
 
-        let sampler =
-            Sampler::new(Some(1.0), 0, None, None, None, None, None, 0, 0.0, 0.0, vec![]).unwrap();
+        let sampler = Sampler::new(
+            Some(1.0),
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            0,
+            0.0,
+            0.0,
+            vec![],
+        )
+        .unwrap();
         let probs = vec![0.05f32, 0.30, 0.10, 0.25, 0.02, 0.18, 0.10];
 
         // NEW: the guard delegates straight to the multinomial draw, no sort.

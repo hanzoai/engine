@@ -50,10 +50,22 @@ pub fn parse_labeled(s: &str) -> anyhow::Result<Vec<LabeledSample>> {
             continue;
         }
         let v: serde_json::Value = serde_json::from_str(line)?;
-        let benchmark = v.get("benchmark").and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let benchmark = v
+            .get("benchmark")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let id = v
+            .get("id")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
         let sample: EvalSample = serde_json::from_value(v)?;
-        out.push(LabeledSample { benchmark, id, sample });
+        out.push(LabeledSample {
+            benchmark,
+            id,
+            sample,
+        });
     }
     Ok(out)
 }
@@ -91,7 +103,10 @@ pub fn to_prompts(rows: &[LabeledSample]) -> Vec<Prompt> {
             arm_sum: BTreeMap::new(),
             rows: Vec::new(),
         });
-        let e = acc.arm_sum.entry(ls.sample.model.clone()).or_insert((0.0, 0));
+        let e = acc
+            .arm_sum
+            .entry(ls.sample.model.clone())
+            .or_insert((0.0, 0));
         e.0 += ls.sample.quality;
         e.1 += 1;
         acc.rows.push(ls.sample.clone());
@@ -161,7 +176,9 @@ fn arm_registry(arms: &[String]) -> Registry {
         arms.iter()
             .map(|id| ModelCard {
                 id: id.clone(),
-                backend: Backend::Cloud { provider: "gateway".into() },
+                backend: Backend::Cloud {
+                    provider: "gateway".into(),
+                },
                 tasks: vec![Task::General],
                 max_context: 0,
                 vision: false,
@@ -191,7 +208,11 @@ pub struct Scores {
 }
 
 fn pure_slo() -> Slo {
-    Slo { lambda_cost: 0.0, mu_latency: 0.0, ..Slo::default() }
+    Slo {
+        lambda_cost: 0.0,
+        mu_latency: 0.0,
+        ..Slo::default()
+    }
 }
 
 /// Fit on `train` prompts, score every reference on `test` prompts. `gamma` is the
@@ -201,8 +222,10 @@ fn pure_slo() -> Slo {
 pub fn score_split(prompts: &[Prompt], train: &[usize], test: &[usize], gamma: f64) -> Scores {
     let feat = HashFeaturizer::default();
     // Train rows -> profile table + fit W (identical join to the serve path).
-    let train_rows: Vec<EvalSample> =
-        train.iter().flat_map(|&i| prompts[i].rows.clone()).collect();
+    let train_rows: Vec<EvalSample> = train
+        .iter()
+        .flat_map(|&i| prompts[i].rows.clone())
+        .collect();
     let table = ingest(&train_rows);
     let policy_fit = fit_policy(&train_rows, &table, &feat, gamma);
 
@@ -219,7 +242,10 @@ pub fn score_split(prompts: &[Prompt], train: &[usize], test: &[usize], gamma: f
     let arm_feats: Vec<hanzo_router::heads::Arm> = table
         .profiles
         .iter()
-        .map(|p| hanzo_router::heads::Arm { model: p.model.clone(), feat: p.features().to_vec() })
+        .map(|p| hanzo_router::heads::Arm {
+            model: p.model.clone(),
+            feat: p.features().to_vec(),
+        })
         .collect();
     let head =
         hanzo_router::Policy::with_heads(hanzo_router::Heads::new(policy_fit.w.clone(), arm_feats));
@@ -251,9 +277,11 @@ pub fn score_split(prompts: &[Prompt], train: &[usize], test: &[usize], gamma: f
         let head_q = head.route(&p.request, &user, &slo_pure, &reg).model;
         let head_s = head.route(&p.request, &user, &slo_served, &reg).model;
         let heur = heuristic.route(&p.request, &user, &slo_served, &reg).model;
-        let (Some(vq), Some(vs), Some(vh)) =
-            (realized(&head_q, p), realized(&head_s, p), realized(&heur, p))
-        else {
+        let (Some(vq), Some(vs), Some(vh)) = (
+            realized(&head_q, p),
+            realized(&head_s, p),
+            realized(&heur, p),
+        ) else {
             continue;
         };
         hq += vq;
@@ -266,8 +294,7 @@ pub fn score_split(prompts: &[Prompt], train: &[usize], test: &[usize], gamma: f
     let denom = n.max(1) as f64;
 
     // enso holdout_reward on the fitted W under this split (continuity with the old gate).
-    let test_rows: Vec<EvalSample> =
-        test.iter().flat_map(|&i| prompts[i].rows.clone()).collect();
+    let test_rows: Vec<EvalSample> = test.iter().flat_map(|&i| prompts[i].rows.clone()).collect();
     let (hr, _) = crate::holdout_reward(&policy_fit, &table, &feat, &test_rows);
 
     Scores {
@@ -347,7 +374,10 @@ mod tests {
         assert_eq!(test.len(), 3, "round(8*.25)+round(4*.25)=2+1");
         assert_eq!(train.len(), prompts.len() - 3);
         // stratified: exactly one B in test.
-        let b_in_test = test.iter().filter(|&&i| prompts[i].benchmark == "B").count();
+        let b_in_test = test
+            .iter()
+            .filter(|&&i| prompts[i].benchmark == "B")
+            .count();
         assert_eq!(b_in_test, 1);
     }
 
