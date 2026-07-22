@@ -37,6 +37,13 @@ pub struct ServerOptions {
     #[arg(long)]
     #[serde(default)]
     pub tool_dispatch_url: Option<String>,
+
+    /// Path to a `heads-base.safetensors` (from the Phase 4d retrain job) whose
+    /// base `W` the `/v1/route` cloud branch serves. Missing/corrupt falls back
+    /// to the cold-start rule policy, so this never fails startup.
+    #[arg(long)]
+    #[serde(default)]
+    pub enso_weights: Option<String>,
 }
 
 impl Default for ServerOptions {
@@ -48,6 +55,7 @@ impl Default for ServerOptions {
             no_advertise: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
+            enso_weights: None,
         }
     }
 }

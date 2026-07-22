@@ -10,6 +10,7 @@
 
 use crate::classify::Request;
 use crate::registry::{Level, Modality, Registry};
+use serde::{Deserialize, Serialize};
 
 /// Sentinel model id a [`Route`] carries when the safety guard refused the
 /// request. The mechanism checks this before dispatch and returns a refusal
@@ -43,7 +44,8 @@ impl User {
 /// soft cost/latency trade the selector applies. A *value* the caller sets per
 /// request (the operator's budget), distinct from a user's learned taste. `0`
 /// disables a ceiling.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Slo {
     pub max_latency_ms: f32,
     pub max_cost: f32,

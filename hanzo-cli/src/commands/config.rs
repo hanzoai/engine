@@ -121,6 +121,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         .with_hanzo(hanzo)
         .with_max_tool_rounds_optional(server.max_tool_rounds)
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
+        .with_enso_path_optional(server.enso_weights.as_deref())
         .build()
         .await?;
 
