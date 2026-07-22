@@ -1193,6 +1193,20 @@ impl Sampler {
         } else {
             None
         };
+        // Pure-temperature sampling (no top-k, top-p off): the full-vocab partial_sort_top_k below is
+        // dead work. With top_k <= 0 it takes the k == n branch, which neither zeroes nor reorders
+        // `probs` -- it only sorts a discarded index copy -- and top_p off returns before any min_p
+        // step. Sample straight from the softmax. Byte-identical to the sorted path (same `probs`,
+        // same RNG draw), dropping an O(V log V) sort from every unfiltered decode step.
+        if top_k <= 0 && (top_p <= 0.0 || top_p >= 1.0) {
+            return self.sample_multinomial_report(
+                probs,
+                unfiltered.as_deref(),
+                return_logprobs,
+                rng,
+            );
+        }
+
         // Determine how many elements we need for partial sort
         let k = if top_k > 0 {
             top_k as usize
@@ -1539,6 +1553,55 @@ mod tests {
         // the base honest; the missing normalization is the same latent bug as the greedy path's
         // `raw[..]` arm (return_logprobs == false), and is not addressed here.
         assert_eq!(res.logprob, 1023f64.ln() as f32)
+    }
+
+    #[test]
+    fn pure_temperature_fast_path_matches_sorted_path() {
+        // The pure-temperature (no top-k, top-p off) fast-path skips partial_sort_top_k. Prove that
+        // skip is byte-identical: run the OLD behavior (the now-discarded full-vocab sort) then draw,
+        // and the NEW fast-path draw, from the same distribution under the same seeded RNG.
+        use super::{partial_sort_top_k, Sampler};
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::sync::{Arc, Mutex};
+
+        let sampler =
+            Sampler::new(Some(1.0), 0, None, None, None, None, None, 0, 0.0, 0.0, vec![]).unwrap();
+        let probs = vec![0.05f32, 0.30, 0.10, 0.25, 0.02, 0.18, 0.10];
+
+        // NEW: the guard delegates straight to the multinomial draw, no sort.
+        let mut p_fast = probs.clone();
+        let fast = sampler
+            .sample_top_kp_min_p(
+                &mut p_fast,
+                0,
+                0.0,
+                0.0,
+                false,
+                Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(7))),
+            )
+            .unwrap();
+
+        // OLD: run the (now-skipped) full-vocab sort, then draw from the same distribution.
+        let mut p_ref = probs.clone();
+        let n = p_ref.len();
+        let _discarded = partial_sort_top_k(&mut p_ref, n, true);
+        let reference = sampler
+            .sample_multinomial(
+                &p_ref,
+                false,
+                Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(7))),
+            )
+            .unwrap();
+
+        assert_eq!(
+            p_fast, p_ref,
+            "the discarded sort must not have mutated the distribution"
+        );
+        assert_eq!(
+            fast.token, reference.token,
+            "sort-skip must draw the identical token as the sorted path"
+        );
     }
 
     #[test]
