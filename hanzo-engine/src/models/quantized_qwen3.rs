@@ -7,7 +7,7 @@ use hanzo_ml::{DType, Device, Result, Tensor};
 use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig, RingPipeline};
 
-use crate::attention::{AttentionMask, SdpaParams};
+use crate::attention::{sdpa_naive_cache, AttentionMask, SdpaParams, VkGraphAttn};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
 use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
@@ -70,6 +70,7 @@ impl LayerWeights {
         kv_cache: &mut KvCache,
         flash_params: &FlashParams,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        vk_graph: Option<&VkGraphAttn>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
@@ -135,7 +136,25 @@ impl LayerWeights {
             v.to_dtype(self.dtype)?,
         );
 
-        let y = match &self.paged_attn {
+        let y = if let Some(g) = vk_graph {
+            // Decode command-graph capture: drive the naive KV cache with the device-offset K/V
+            // append + shared-span fused SDPA (`sdpa_naive_cache` graph path), so the recorded
+            // single-token forward replays with the advancing write slot and attended span.
+            sdpa_naive_cache(
+                &q,
+                &k,
+                &v,
+                mask,
+                kv_cache,
+                positions,
+                &self.sdpa_params,
+                Some(g),
+                b_sz,
+                self.n_head,
+                self.head_dim,
+            )?
+        } else {
+            match &self.paged_attn {
             Some(paged_attn) => {
                 // One-time confirmation that the Qwen3 GGUF decode is running
                 // through PagedAttention (not the SingleCache + Sdpa eager path)
@@ -166,6 +185,7 @@ impl LayerWeights {
 
                 Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?
             }
+            }
         };
 
         // CausalFlash and eager both return [b, heads, seq, dim]; only decode (None) needs no transpose.
@@ -189,6 +209,7 @@ impl LayerWeights {
         kv_cache: &mut KvCache,
         flash_params: &FlashParams,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        vk_graph: Option<&VkGraphAttn>,
     ) -> Result<Tensor> {
         let residual = &x;
         let xn = self.attention_norm.forward(&x)?;
@@ -200,6 +221,7 @@ impl LayerWeights {
             kv_cache,
             flash_params,
             metadata,
+            vk_graph,
         )?;
         let (sum, xn) = self.ffn_norm.forward_of_sum(&attn, residual)?;
         let residual = &sum;
@@ -513,6 +535,44 @@ impl ModelWeights {
         flash_params: &FlashParams,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
+        self.forward_inner(x, start_offsets, context_lens, flash_params, metadata, None, None)
+    }
+
+    /// Decode command-graph capture entry (Vulkan): run the single-token forward reading RoPE from the
+    /// stable `positions` buffer and appending K/V at the device-offset slot + attending the shared span
+    /// via `vk_graph`, so a capture in flight records a replayable single-token forward. Naive KV cache
+    /// path only (no paged metadata). Mirrors `quantized_qwen3_moe::forward_vk_graph`.
+    #[cfg(feature = "vulkan")]
+    pub fn forward_vk_graph(
+        &self,
+        x: &Tensor,
+        start_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        positions: &Tensor,
+        vk_graph: &VkGraphAttn,
+    ) -> Result<Tensor> {
+        self.forward_inner(
+            x,
+            start_offsets,
+            context_lens,
+            &FlashParams::empty(true),
+            None,
+            Some(positions),
+            Some(vk_graph),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn forward_inner(
+        &self,
+        x: &Tensor,
+        start_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        flash_params: &FlashParams,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        positions_override: Option<&Tensor>,
+        vk_graph: Option<&VkGraphAttn>,
+    ) -> Result<Tensor> {
         if self.pp.is_some() {
             return pp_head_forward(self, x, start_offsets, context_lens);
         }
@@ -539,21 +599,24 @@ impl ModelWeights {
         // tensor each forward would freeze the captured positions at the warmup
         // value and corrupt every replayed token. Falls back to the host-offset
         // form for prefill and the non-graph decode path.
-        let positions = match metadata
-            .as_ref()
-            .and_then(|(_, meta)| meta.rope_positions.as_ref())
-            .and_then(|positions| positions.get(&self.device.location()))
-        {
+        let positions = match positions_override {
             Some(positions) => positions.clone(),
-            None => {
-                let pos = start_offsets
-                    .iter()
-                    .copied()
-                    .map(u32::try_from)
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(hanzo_ml::Error::wrap)?;
-                Tensor::from_vec(pos, start_offsets.len(), &self.device)?
-            }
+            None => match metadata
+                .as_ref()
+                .and_then(|(_, meta)| meta.rope_positions.as_ref())
+                .and_then(|positions| positions.get(&self.device.location()))
+            {
+                Some(positions) => positions.clone(),
+                None => {
+                    let pos = start_offsets
+                        .iter()
+                        .copied()
+                        .map(u32::try_from)
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                        .map_err(hanzo_ml::Error::wrap)?;
+                    Tensor::from_vec(pos, start_offsets.len(), &self.device)?
+                }
+            },
         };
         let cache = &mut self.cache.normal().0;
         let mask = CausalMasker.make_causal_mask(
@@ -594,6 +657,7 @@ impl ModelWeights {
                 metadata
                     .as_ref()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                vk_graph,
             )?;
         }
         let x = self.norm.as_ref().unwrap().forward(&layer_in)?;
@@ -641,9 +705,62 @@ impl ModelWeights {
                 &mut cache[i],
                 &flash_params,
                 None,
+                None,
             )?;
         }
         Ok(layer_in)
+    }
+
+    /// Build the shared decode command-graph attention buffers (scale + meta) for the current KV cache
+    /// geometry. Every layer has the identical head/kv/head_dim shape and one contiguous cache, so a
+    /// single [`VkGraphAttn`] serves the whole forward; `seq_k` is the initial attended span (advanced
+    /// per replay via [`VkGraphAttn::set_seq_k`]). Mirrors `quantized_qwen3_moe`.
+    #[cfg(feature = "vulkan")]
+    pub fn vk_build_graph_attn(&self, seq_k: usize) -> Result<VkGraphAttn> {
+        let Device::Vulkan(dev) = &self.device else {
+            hanzo_ml::bail!("vulkan decode graph: model is not on a vulkan device");
+        };
+        let l = self
+            .layers
+            .first()
+            .ok_or_else(|| hanzo_ml::Error::msg("vulkan decode graph: model has no layers"))?;
+        let capacity = self
+            .vk_kv_capacity()
+            .ok_or_else(|| hanzo_ml::Error::msg("vulkan decode graph: KV cache not allocated"))?;
+        dev.new_graph_attn(
+            l.n_head,
+            l.n_kv_head,
+            l.head_dim,
+            capacity,
+            l.sdpa_params.softmax_scale,
+            false,
+            seq_k,
+        )
+    }
+
+    /// The contiguous KV cache capacity (max cached tokens) the graph is captured against; `None` until
+    /// an eager warmup step allocates the cache. A grow reallocates the buffer and invalidates the graph.
+    #[cfg(feature = "vulkan")]
+    pub fn vk_kv_capacity(&self) -> Option<usize> {
+        let guard = self.cache.normal();
+        match guard.0.first() {
+            Some(KvCache::Normal { k, .. }) if k.all_data.is_some() => Some(k.capacity_seq_len),
+            _ => None,
+        }
+    }
+
+    /// Advance every layer's host KV length after a graph replay wrote the token's K/V on-device, so the
+    /// cache stays consistent for a later eager fallback or capacity-boundary recapture.
+    #[cfg(feature = "vulkan")]
+    pub fn vk_advance_kv_len(&self, len: usize) -> Result<()> {
+        let mut guard = self.cache.normal();
+        for kv in guard.0.iter_mut() {
+            if let KvCache::Normal { k, v } = kv {
+                k.set_len(len)?;
+                v.set_len(len)?;
+            }
+        }
+        Ok(())
     }
 }
 
