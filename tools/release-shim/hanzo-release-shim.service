@@ -1,0 +1,29 @@
+# TEMPORARY -- retire with the shim when the native forge (Phase B) lands.
+#
+# Runs one reconcile pass of the tag->release trigger shim. Paired with
+# hanzo-release-shim.timer. Install (as root, on any box with a machine `gh`):
+#
+#   install -Dm755 shim.sh /opt/hanzo/release-shim/shim.sh
+#   cp hanzo-release-shim.service hanzo-release-shim.timer /etc/systemd/system/
+#   # create a login for the shim and authenticate gh once (token needs `repo`
+#   # + `workflow` scope on hanzoai/engine):
+#   useradd -r -m -s /usr/sbin/nologin hanzo-shim || true
+#   sudo -u hanzo-shim gh auth login   # or: GH_TOKEN=<kms-token> in the unit env
+#   systemctl daemon-reload
+#   systemctl enable --now hanzo-release-shim.timer
+#
+# The token belongs in KMS (hanzo/prod:/git/release-shim-token); source it via a
+# systemd drop-in `Environment=GH_TOKEN=...` or an EnvironmentFile, never in tree.
+[Unit]
+Description=Hanzo tag->release trigger shim (TEMPORARY; retire at native-forge Phase B)
+Documentation=file:/opt/hanzo/release-shim/shim.sh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=hanzo-shim
+# gh reads GH_TOKEN if present; otherwise the user's `gh auth` keyring.
+# EnvironmentFile=/etc/hanzo/release-shim.env   # GH_TOKEN=<from KMS>
+ExecStart=/opt/hanzo/release-shim/shim.sh --once
+Nice=10
