@@ -8,6 +8,7 @@ use hanzo_engine::{
 };
 use hanzo_server_core::server::ServerBuilder;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc::channel;
 use tracing::info;
 
@@ -191,15 +192,25 @@ pub async fn run_bench(
                 continue;
             }
             let usage = run_single_bench(&hanzo, *prompt_len, 1).await?;
-            let tok_per_sec = usage.avg_prompt_tok_per_sec;
+            // Prefill t/s from the counted tokens over the engine's measured prompt-forward
+            // wall (recorded at first sampled token), not the model-reported avg_* field --
+            // that field's max_len=1 collapse produced physically-impossible readings.
+            let prefill_time = usage.total_prompt_time_sec.max(f32::EPSILON);
+            let tok_per_sec = usage.prompt_tokens as f32 / prefill_time;
             let ttft_ms = usage.total_prompt_time_sec * 1000.0;
             results.push((tok_per_sec, ttft_ms));
         }
 
         if gen_len > 0 {
             for (depth, results) in decode_results.iter_mut() {
+                // Decode t/s from the counted completion tokens over the decode wall isolated
+                // by subtracting the measured prefill from the timed end-to-end run -- a
+                // bench-owned measurement, not the model-reported avg_* field.
+                let start = Instant::now();
                 let usage = run_single_bench(&hanzo, *depth, gen_len).await?;
-                let tok_per_sec = usage.avg_compl_tok_per_sec;
+                let wall = start.elapsed().as_secs_f32();
+                let decode_time = (wall - usage.total_prompt_time_sec).max(f32::EPSILON);
+                let tok_per_sec = usage.completion_tokens as f32 / decode_time;
                 let ms_per_tok = if tok_per_sec > 0.0 {
                     1000.0 / tok_per_sec
                 } else {
