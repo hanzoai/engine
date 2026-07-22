@@ -78,6 +78,11 @@ fn block_aligned_window_len_for_query(
 fn cache_block_size(key_cache: &Tensor, value_cache: &Tensor) -> Result<usize> {
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => Ok(key_cache.dims4()?.2),
+        // int8-packed key cache [nb, nkv, block_size, wpt, 1] carries block_size at index 2;
+        // the f32 Standard layout [nb, nkv, head_size/x, block_size, x] carries it at index 3.
+        AttentionBackendKind::Standard if key_cache.dtype() == DType::U32 => {
+            Ok(key_cache.dims5()?.2)
+        }
         AttentionBackendKind::Standard => Ok(key_cache.dims5()?.3),
     }
 }
@@ -87,6 +92,11 @@ fn cache_kv_shape(key_cache: &Tensor, value_cache: &Tensor) -> Result<(usize, us
         AttentionBackendKind::FlashInfer => {
             let (_, num_kv_heads, _, head_size) = key_cache.dims4()?;
             Ok((num_kv_heads, head_size))
+        }
+        // int8-packed key cache [nb, nkv, block_size, wpt, 1]: head_size = (wpt - 1) * 4.
+        AttentionBackendKind::Standard if key_cache.dtype() == DType::U32 => {
+            let (_, num_kv_heads, _block_size, wpt, _) = key_cache.dims5()?;
+            Ok((num_kv_heads, (wpt - 1) * 4))
         }
         AttentionBackendKind::Standard => {
             let (_, num_kv_heads, head_size_blocks, _, x) = key_cache.dims5()?;
