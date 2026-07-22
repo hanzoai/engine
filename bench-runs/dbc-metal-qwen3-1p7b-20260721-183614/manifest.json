@@ -1,0 +1,28 @@
+{
+  "host": "dbc",
+  "uname": "Darwin dbc 25.5.0 Darwin Kernel Version 25.5.0: Mon Apr 27 20:41:15 PDT 2026; root:xnu-12377.121.6~2/RELEASE_ARM64_T6041 arm64",
+  "backend": "metal",
+  "timestamp": 1784684174.584567,
+  "iso": "2026-07-21T18:36:14-0700",
+  "engine_git_sha": "a0c6d7429233bca12e0f4996bbcc9f1c8ca42820",
+  "engine_version": "1.7.87",
+  "hanzo_ml": "0.11.88",
+  "hanzo_rocm_kernels": "0.11.36",
+  "hanzo_metal_kernels": "0.11.44",
+  "llama_sha": "81ff7abe50b95fb81cc70a6cdba1eb1a02a48f62",
+  "llama_bench": "/Users/a/llama.cpp/build/bin/llama-bench",
+  "model_path": "/Users/a/models/Qwen_Qwen3-1.7B-Q4_K_M.gguf",
+  "model_bytes": 1282439584,
+  "model_sha256": "72c5c3cb38fa32d5256e2fe30d03e7a64c6c79e668ad84057e3bd66e250b24fb",
+  "params": {
+    "prompt_sizes": "512,500,2048,4096",
+    "n_gen": 128,
+    "reps": 7,
+    "concurrency": 1,
+    "max_ctx": 4096
+  },
+  "env": {
+    "backend_env": ""
+  },
+  "gpu": ""
+}
