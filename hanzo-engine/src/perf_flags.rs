@@ -39,6 +39,7 @@ static METAL_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "rocm")]
 static ROCM_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 static FLASHINFER_DECODE_ENABLED: OnceLock<bool> = OnceLock::new();
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 static FLASHINFER_PREFILL_ENABLED: OnceLock<bool> = OnceLock::new();
 static MLA_ABSORB_ENABLED: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "vulkan")]
@@ -128,7 +129,9 @@ pub(crate) fn flashinfer_decode_enabled() -> bool {
 // token-for-token identical to the eager causal path across diverse prompts -- the online-softmax
 // reduction reorders float adds so intermediate scores differ within flash-attention tolerance, but the
 // argmax does not move -- and the call-site guards fall through to eager for any uncovered shape.
-// FLASHINFER_PREFILL=0 forces eager.
+// FLASHINFER_PREFILL=0 forces eager. Consumed only by the paged-attention prefill path, which is
+// cfg-gated to cuda + unix; the accessor tracks the same gate so non-cuda builds carry no dead flag.
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub(crate) fn flashinfer_prefill_enabled() -> bool {
     *FLASHINFER_PREFILL_ENABLED.get_or_init(|| resolve("FLASHINFER_PREFILL", None, true))
 }

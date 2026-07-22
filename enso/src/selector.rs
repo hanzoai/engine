@@ -25,8 +25,12 @@ pub fn knee_lambda(points: &[(f64, f64, f64)]) -> f64 {
     if points.len() < 2 {
         return points.first().map(|p| p.0).unwrap_or(0.0);
     }
-    let (mut c_lo, mut c_hi, mut q_lo, mut q_hi) =
-        (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+    let (mut c_lo, mut c_hi, mut q_lo, mut q_hi) = (
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    );
     for &(_, q, c) in points {
         c_lo = c_lo.min(c);
         c_hi = c_hi.max(c);
@@ -58,7 +62,9 @@ pub fn knee_lambda(points: &[(f64, f64, f64)]) -> f64 {
 pub fn model_family(model: &str) -> &str {
     let m = model.trim();
     let end = m
-        .find(|c: char| c == '-' || c == '/' || c == ':' || c == '.' || c == '_' || c.is_ascii_digit())
+        .find(|c: char| {
+            c == '-' || c == '/' || c == ':' || c == '.' || c == '_' || c.is_ascii_digit()
+        })
         .unwrap_or(m.len());
     if end == 0 {
         m
@@ -196,7 +202,10 @@ impl Selector {
                 }
             }
             let mut chosen = cands.remove(best_i);
-            let runner = cands.iter().map(|c| c.objective).fold(f64::NEG_INFINITY, f64::max);
+            let runner = cands
+                .iter()
+                .map(|c| c.objective)
+                .fold(f64::NEG_INFINITY, f64::max);
             chosen.confidence = if runner.is_finite() {
                 1.0 / (1.0 + (-(chosen.objective - runner) * MARGIN_SCALE).exp())
             } else {

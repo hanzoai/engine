@@ -47,8 +47,7 @@ pub struct Heads {
 /// `x^T W p` for a row-major `d x k` weight matrix.
 fn bilinear(x: &[f64], w: &[f64], p: &[f64], d: usize, k: usize) -> f64 {
     let mut acc = 0.0;
-    for i in 0..d {
-        let xi = x[i];
+    for (i, &xi) in x.iter().enumerate().take(d) {
         if xi == 0.0 {
             continue;
         }
@@ -64,7 +63,12 @@ fn bilinear(x: &[f64], w: &[f64], p: &[f64], d: usize, k: usize) -> f64 {
 
 impl Heads {
     pub fn new(w: Vec<f64>, arms: Vec<Arm>) -> Self {
-        Self { d: FEAT_DIM, k: w.len() / FEAT_DIM.max(1), w, arms }
+        Self {
+            d: FEAT_DIM,
+            k: w.len() / FEAT_DIM.max(1),
+            w,
+            arms,
+        }
     }
 
     pub fn load(path: &Path) -> std::io::Result<Self> {
@@ -83,7 +87,10 @@ impl Heads {
             std::fs::create_dir_all(dir)?;
         }
         let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?)?;
+        std::fs::write(
+            &tmp,
+            serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?,
+        )?;
         std::fs::rename(&tmp, path)
     }
 
@@ -125,7 +132,10 @@ mod tests {
     fn arm(model: &str, q_general: f64) -> Arm {
         let mut feat = vec![0.0; K];
         feat[Task::General.index()] = q_general;
-        Arm { model: model.into(), feat }
+        Arm {
+            model: model.into(),
+            feat,
+        }
     }
 
     #[test]
@@ -138,7 +148,16 @@ mod tests {
         let heads = Heads::new(w, vec![arm("lo", 0.2), arm("hi", 0.9)]);
         let mut x = vec![0.0; FEAT_DIM];
         x[g] = 1.0;
-        let (m, _c) = heads.best(&x, &Slo { lambda_cost: 0.0, mu_latency: 0.0, ..Slo::default() }).unwrap();
+        let (m, _c) = heads
+            .best(
+                &x,
+                &Slo {
+                    lambda_cost: 0.0,
+                    mu_latency: 0.0,
+                    ..Slo::default()
+                },
+            )
+            .unwrap();
         assert_eq!(m, "hi");
     }
 }
