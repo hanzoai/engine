@@ -285,7 +285,10 @@ fn deployment_policy() -> &'static Policy {
         Some(path) => match Policy::load_heads(std::path::Path::new(&path)) {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!("ROUTER_HEADS {:?} unreadable ({e}); using rule-based router", path);
+                tracing::warn!(
+                    "ROUTER_HEADS {:?} unreadable ({e}); using rule-based router",
+                    path
+                );
                 prefer()
             }
         },
@@ -362,7 +365,9 @@ mod contract_tests {
     fn cloud(id: &str, cost: f64) -> ModelCard {
         ModelCard {
             id: id.into(),
-            backend: Backend::Cloud { provider: "test".into() },
+            backend: Backend::Cloud {
+                provider: "test".into(),
+            },
             tasks: vec![Task::General],
             max_context: 0,
             vision: false,
@@ -386,9 +391,13 @@ mod contract_tests {
         let arm = |model: &str, q: f64| {
             let mut feat = vec![0.0; k];
             feat[g] = q;
-            Arm { model: model.into(), feat }
+            Arm {
+                model: model.into(),
+                feat,
+            }
         };
-        let path = std::env::temp_dir().join(format!("router-heads-wire-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("router-heads-wire-{}.json", std::process::id()));
         Heads::new(w, vec![arm("weak-cheap", 0.2), arm("strong", 0.9)])
             .save(&path)
             .unwrap();
@@ -404,9 +413,18 @@ mod contract_tests {
         let (rule_model, _, _, _) =
             classify_route_with(&prefer(), "give me an overview", hint, Slo::default(), &reg);
 
-        assert_eq!(head_model, "strong", "wired head routes to its highest-quality arm");
-        assert_eq!(rule_model, "weak-cheap", "rule-based default picks registry order");
-        assert_ne!(head_model, rule_model, "the head must route per the head, not the heuristic");
+        assert_eq!(
+            head_model, "strong",
+            "wired head routes to its highest-quality arm"
+        );
+        assert_eq!(
+            rule_model, "weak-cheap",
+            "rule-based default picks registry order"
+        );
+        assert_ne!(
+            head_model, rule_model,
+            "the head must route per the head, not the heuristic"
+        );
         std::fs::remove_file(&path).ok();
     }
 
@@ -448,8 +466,12 @@ mod contract_tests {
     #[test]
     fn classifies_and_returns_all_fields() {
         let reg = Registry::new(vec![cloud("router-model", 0.5)]);
-        let (model, task, confidence, features) =
-            classify_route("fix this ```rust``` compile bug", None, Slo::default(), &reg);
+        let (model, task, confidence, features) = classify_route(
+            "fix this ```rust``` compile bug",
+            None,
+            Slo::default(),
+            &reg,
+        );
         assert_eq!(task, Task::Code);
         assert_eq!(task_label(task), "code");
         assert_eq!(model, "router-model");
@@ -477,7 +499,10 @@ mod contract_tests {
         assert_eq!(m, "pricey");
 
         // Ceiling below pricey -> pricey filtered, cheap wins.
-        let slo = Slo { max_cost: 1.0, ..Slo::default() };
+        let slo = Slo {
+            max_cost: 1.0,
+            ..Slo::default()
+        };
         let (m, _t, _c, _f) = classify_route(prompt, None, slo, &reg);
         assert_eq!(m, "cheap");
     }
@@ -486,8 +511,12 @@ mod contract_tests {
     fn empty_pool_yields_task_only() {
         // No servable model -> empty model id (caller maps the task), but the
         // task + features are still produced (pure classification mode).
-        let (model, task, _c, features) =
-            classify_route("write a function", None, Slo::default(), &Registry::default());
+        let (model, task, _c, features) = classify_route(
+            "write a function",
+            None,
+            Slo::default(),
+            &Registry::default(),
+        );
         assert_eq!(model, "");
         assert_eq!(task, Task::Code);
         assert_eq!(features.len(), FEAT_DIM);
@@ -496,8 +525,10 @@ mod contract_tests {
     #[test]
     fn features_are_stable_and_correct_dim() {
         let reg = Registry::new(vec![cloud("m", 0.5)]);
-        let (_m, _t, _c, a) = classify_route("prove sqrt(2) is irrational", None, Slo::default(), &reg);
-        let (_m, _t, _c, b) = classify_route("prove sqrt(2) is irrational", None, Slo::default(), &reg);
+        let (_m, _t, _c, a) =
+            classify_route("prove sqrt(2) is irrational", None, Slo::default(), &reg);
+        let (_m, _t, _c, b) =
+            classify_route("prove sqrt(2) is irrational", None, Slo::default(), &reg);
         assert_eq!(a.len(), FEAT_DIM);
         assert_eq!(a, b); // deterministic per prompt
     }

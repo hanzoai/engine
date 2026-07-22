@@ -56,14 +56,24 @@ async fn fetch_remote_media(url: &url::Url) -> Result<Vec<u8>, anyhow::Error> {
     for ip in ips {
         let blocked = match ip {
             std::net::IpAddr::V4(v4) => {
-                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_broadcast()
-                    || v4.is_unspecified() || v4.is_documentation()
+                v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_broadcast()
+                    || v4.is_unspecified()
+                    || v4.is_documentation()
             }
-            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local()
-                || v6.is_unicast_link_local(),
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6.is_unique_local()
+                    || v6.is_unicast_link_local()
+            }
         };
         if blocked {
-            anyhow::bail!("Refusing to fetch remote media from non-public address {ip} (host '{host}')");
+            anyhow::bail!(
+                "Refusing to fetch remote media from non-public address {ip} (host '{host}')"
+            );
         }
     }
 
@@ -79,9 +89,7 @@ async fn fetch_remote_media(url: &url::Url) -> Result<Vec<u8>, anyhow::Error> {
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
         if out.len() as u64 + chunk.len() as u64 > MAX_REMOTE_MEDIA_BYTES {
-            anyhow::bail!(
-                "Remote media at {url} exceeds the {MAX_REMOTE_MEDIA_BYTES} byte limit"
-            );
+            anyhow::bail!("Remote media at {url} exceeds the {MAX_REMOTE_MEDIA_BYTES} byte limit");
         }
         out.extend_from_slice(&chunk);
     }
@@ -486,10 +494,10 @@ mod tests {
     #[tokio::test]
     async fn remote_media_refuses_non_public_addresses() {
         for url in [
-            "http://169.254.169.254/latest/meta-data/",  // cloud metadata
-            "http://127.0.0.1:8080/admin",               // loopback
-            "http://10.0.0.5/internal",                  // private
-            "http://[::1]/",                             // v6 loopback
+            "http://169.254.169.254/latest/meta-data/", // cloud metadata
+            "http://127.0.0.1:8080/admin",              // loopback
+            "http://10.0.0.5/internal",                 // private
+            "http://[::1]/",                            // v6 loopback
         ] {
             let parsed = url::Url::parse(url).unwrap();
             let err = fetch_remote_media(&parsed)
@@ -507,9 +515,15 @@ mod tests {
     /// `parse_image_url`, never by a fetch, so a caller cannot smuggle a local read through it.
     #[tokio::test]
     async fn remote_media_refuses_non_http_schemes() {
-        for url in ["file:///etc/passwd", "ftp://example.com/x", "gopher://example.com/"] {
+        for url in [
+            "file:///etc/passwd",
+            "ftp://example.com/x",
+            "gopher://example.com/",
+        ] {
             let parsed = url::Url::parse(url).unwrap();
-            let err = fetch_remote_media(&parsed).await.expect_err("must refuse scheme");
+            let err = fetch_remote_media(&parsed)
+                .await
+                .expect_err("must refuse scheme");
             assert!(
                 err.to_string().contains("Unsupported URL scheme"),
                 "{url}: {err}"

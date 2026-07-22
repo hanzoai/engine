@@ -10,8 +10,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use enso::{ingest, HashFeaturizer};
 use enso::EvalSample;
+use enso::{ingest, HashFeaturizer};
 use hanzo_router_retrain::{
     decide_gate, fit_policy, holdout_reward, load_w, save_w, split_indices, transform_reward,
     RewardTuple,
@@ -67,7 +67,7 @@ fn read_samples(args: &Args) -> Result<Vec<EvalSample>> {
         }
     }
     if bad > 0 {
-        eprintln!("enso-fit: skipped {bad} unparseable line(s)");
+        eprintln!("enso-fit: skipped {bad} unparsable line(s)");
     }
     Ok(out)
 }
@@ -122,7 +122,10 @@ fn main() -> Result<()> {
     let arm_feats: Vec<hanzo_router::heads::Arm> = table_all
         .profiles
         .iter()
-        .map(|p| hanzo_router::heads::Arm { model: p.model.clone(), feat: p.features().to_vec() })
+        .map(|p| hanzo_router::heads::Arm {
+            model: p.model.clone(),
+            feat: p.features().to_vec(),
+        })
         .collect();
     hanzo_router::Heads::new(final_policy.w, arm_feats)
         .save(&bundle_path)

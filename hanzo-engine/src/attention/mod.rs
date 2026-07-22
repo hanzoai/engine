@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use crate::{attention::backends::cpu, pipeline::text_models_inputs_processor::FlashParams};
 use crate::pipeline::KvCache;
+use crate::{attention::backends::cpu, pipeline::text_models_inputs_processor::FlashParams};
 
 use hanzo_ml::{DType, Device, Result, Tensor};
 
@@ -715,7 +715,11 @@ fn vk_sdpa_graph(
 #[cfg(feature = "vulkan")]
 fn vk_sdpa_split_graph() -> bool {
     static S: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *S.get_or_init(|| std::env::var("VK_SDPA_SPLIT_OFF").map(|v| v == "0").unwrap_or(true))
+    *S.get_or_init(|| {
+        std::env::var("VK_SDPA_SPLIT_OFF")
+            .map(|v| v == "0")
+            .unwrap_or(true)
+    })
 }
 #[cfg(feature = "vulkan")]
 fn vk_sdpa_nsplit() -> usize {

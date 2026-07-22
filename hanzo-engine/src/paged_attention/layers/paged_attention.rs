@@ -577,8 +577,12 @@ impl PagedAttention {
                     let dev = query.device().location();
                     // Write this chunk's K/V into the paged cache so the causal kernel attends the
                     // chunk's own keys (mirrors the eager path's post-attention write below).
-                    let k3 = key.transpose(1, 2)?.reshape(((), key_value_heads, head_size))?;
-                    let v3 = value.transpose(1, 2)?.reshape(((), key_value_heads, head_size))?;
+                    let k3 = key
+                        .transpose(1, 2)?
+                        .reshape(((), key_value_heads, head_size))?;
+                    let v3 = value
+                        .transpose(1, 2)?
+                        .reshape(((), key_value_heads, head_size))?;
                     write_kv_cache(
                         &k3,
                         &v3,
