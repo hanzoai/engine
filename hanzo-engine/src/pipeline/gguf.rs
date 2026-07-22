@@ -2217,6 +2217,14 @@ impl GGUFPipeline {
         if !crate::perf_flags::vulkan_graphs_enabled() || self.draft_proposer.is_some() {
             return Ok(None);
         }
+        // The decode graph captures the model's NAIVE-KV forward (metadata=None). When PagedAttention is
+        // active (cache_engine present) the forward takes the paged attention arm, which unwraps the paged
+        // metadata a naive capture does not supply -- so stay eager whenever paged is configured. Shared
+        // guard for every graph-eligible model (qwen2 / qwen3 / qwen3-moe); benign today (GGUF bench runs
+        // eager-attention, cache_engine=None) but fail-closed if paged ever coexists with the graph path.
+        if self.metadata.cache_engine.is_some() {
+            return Ok(None);
+        }
         // Steady-state single-token decode on a Vulkan device only. Prefill (q_len > 1) stays eager.
         let (batch, q_len) = input_ids.dims2()?;
         if q_len != 1 || batch != 1 || seqlen_offsets.len() != 1 || context_lens.len() != 1 {
@@ -2375,6 +2383,14 @@ impl GGUFPipeline {
         };
         let graph = vdev.end_graph_capture()?;
 
+        // No verification replay here, deliberately. The paged prefill graph self-checks bit-exact
+        // (`verify_prefill_graph`) because its slot-mapped KV makes a re-launch idempotent; naive-KV
+        // decode has no such safety. A verify replay would re-drive the device KV append for `position`
+        // and risk double-advancing the running cache length -- a self-check that can corrupt the very
+        // state it guards. The CUDA and ROCm decode captures omit it for the same reason. Decode
+        // correctness rests on the structural guards (strict sequential position < capacity,
+        // sync-before-replay, paged fail-closed) and the ship-time byte-identity gate
+        // (scripts/bench_vk_graph.sh), not on a KV-mutating replay.
         Ok(VulkanDecodeGraphEntry {
             graph,
             attn,
