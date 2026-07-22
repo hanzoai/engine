@@ -1,3 +1,8 @@
+// Backend-agnostic symmetric int8 KV-cache quantization (CPU reference + shared packing
+// convention). Always compiled; it is the oracle every backend's int8 kernel is validated
+// against.
+pub mod quant;
+
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 mod cuda;
 #[cfg(all(feature = "cuda", target_family = "unix"))]
