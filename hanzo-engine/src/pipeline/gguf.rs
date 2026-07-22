@@ -2383,6 +2383,14 @@ impl GGUFPipeline {
         };
         let graph = vdev.end_graph_capture()?;
 
+        // No verification replay here, deliberately. The paged prefill graph self-checks bit-exact
+        // (`verify_prefill_graph`) because its slot-mapped KV makes a re-launch idempotent; naive-KV
+        // decode has no such safety. A verify replay would re-drive the device KV append for `position`
+        // and risk double-advancing the running cache length -- a self-check that can corrupt the very
+        // state it guards. The CUDA and ROCm decode captures omit it for the same reason. Decode
+        // correctness rests on the structural guards (strict sequential position < capacity,
+        // sync-before-replay, paged fail-closed) and the ship-time byte-identity gate
+        // (scripts/bench_vk_graph.sh), not on a KV-mutating replay.
         Ok(VulkanDecodeGraphEntry {
             graph,
             attn,
