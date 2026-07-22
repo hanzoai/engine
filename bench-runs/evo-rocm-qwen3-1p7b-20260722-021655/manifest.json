@@ -1,0 +1,34 @@
+{
+  "host": "evo",
+  "uname": "Linux evo 7.0.0-28-generic #28~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Wed Jul  1 15:50:57 UTC 2 x86_64",
+  "backend": "rocm",
+  "timestamp": 1784711815.5984983,
+  "iso": "2026-07-22T02:16:55-0700",
+  "sampler": "greedy-argmax",
+  "engine_git_sha": "01e6b3c7653207aca3d274698627da2e974eef85",
+  "engine_git_dirty": true,
+  "engine_version": "1.7.90",
+  "hanzo_ml": "0.11.88",
+  "hanzo_rocm_kernels": "0.11.36",
+  "hanzo_metal_kernels": "0.11.44",
+  "llama_sha": "0821c5fcfd729af70037bc1e9e60769d42c081ba",
+  "llama_git_dirty": false,
+  "hanzo_bench_bin": "/home/z/work/hanzo/engine/target/release/hanzo-bench-rocm",
+  "hanzo_bench_bin_sha256": "df5d8f980f2bf6c2819306b67172655bac5fdd7fb8ec4222c045fd1b39ca79d7",
+  "llama_bench_bin": "/home/z/llama.cpp/build-hip/bin/llama-bench",
+  "llama_bench_bin_sha256": "a6be9935aa4fe795aa631be98f9e43ae3e63f023371dc666c66cd0e3f739d491",
+  "model_path": "/home/z/work/qwen3-1.7b/Qwen_Qwen3-1.7B-Q4_K_M.gguf",
+  "model_bytes": 1282439584,
+  "model_sha256": "72c5c3cb38fa32d5256e2fe30d03e7a64c6c79e668ad84057e3bd66e250b24fb",
+  "params": {
+    "prompt_sizes": "512,500,2048,4096",
+    "n_gen": 128,
+    "reps": 7,
+    "concurrency": 1,
+    "max_ctx": 4096
+  },
+  "env": {
+    "backend_env": "LD_LIBRARY_PATH=/opt/rocm/lib HSA_XNACK=1"
+  },
+  "gpu": "Marketing Name:          AMD RYZEN AI MAX+ 395 w/ Radeon 8060S"
+}
