@@ -1869,7 +1869,8 @@ pub fn vulkan_rms_norm_of_sum(
     weight: &Tensor,
     eps: f32,
 ) -> Result<Option<(Tensor, Tensor)>> {
-    if input.dtype() != DType::F32 || residual.dtype() != DType::F32 || weight.dtype() != DType::F32 {
+    if input.dtype() != DType::F32 || residual.dtype() != DType::F32 || weight.dtype() != DType::F32
+    {
         return Ok(None);
     }
     if !input.device().is_vulkan()

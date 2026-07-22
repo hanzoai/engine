@@ -28,7 +28,7 @@ use anyhow::{Context, Result};
 use hanzo::{GgufModelBuilder, ModelDType, RequestBuilder, TextMessageRole};
 
 /// Extract the sample text from one JSONL line: `"text"` verbatim, else the
-/// concatenated `"messages"[].content`. Returns `None` for blank/unparseable lines.
+/// concatenated `"messages"[].content`. Returns `None` for blank/unparsable lines.
 fn sample_text(line: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
     if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
