@@ -222,7 +222,10 @@ impl Learner {
             std::fs::create_dir_all(dir)?;
         }
         let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, serde_json::to_vec(self).map_err(std::io::Error::other)?)?;
+        std::fs::write(
+            &tmp,
+            serde_json::to_vec(self).map_err(std::io::Error::other)?,
+        )?;
         std::fs::rename(&tmp, path)
     }
 
@@ -316,7 +319,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("enso-learner-{}", std::process::id()));
         let path = dir.join("state.json");
         learner.save(&path).unwrap();
-        let reloaded = Learner::load(&path).unwrap().expect("file exists after save");
+        let reloaded = Learner::load(&path)
+            .unwrap()
+            .expect("file exists after save");
 
         // Observability survives...
         let after = reloaded.stats();
@@ -328,7 +333,10 @@ mod tests {
         let w_after = reloaded.effective_w("alice");
         assert_eq!(w_after.len(), w_before.len());
         assert!(
-            w_before.iter().zip(w_after).all(|(a, b)| (a - b).abs() < 1e-12),
+            w_before
+                .iter()
+                .zip(w_after)
+                .all(|(a, b)| (a - b).abs() < 1e-12),
             "reloaded theta must match the persisted one bit-for-bit"
         );
         std::fs::remove_dir_all(&dir).ok();

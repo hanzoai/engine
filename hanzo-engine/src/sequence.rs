@@ -1792,7 +1792,7 @@ mod tests {
             Sampler::new(None, 0, None, None, None, None, None, 32, 1.0, 0.0, vec![]).unwrap();
         let group = Arc::new(Mutex::new(SequenceGroup::new(1, false, false, None)));
         Sequence::new_waiting(
-            (0..prompt_len as u32).collect(),
+            (0..u32::try_from(prompt_len).unwrap()).collect(),
             "prompt".to_string(),
             0,
             0,
