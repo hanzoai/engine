@@ -1,5 +1,11 @@
 name: Homebrew Release
 
+# Native (Hanzo Git) copy of .github/workflows/brew_release.yml. The fork scans
+# .hanzo/workflows FIRST; GitHub.com ignores .hanzo/, so this is inert on GitHub.
+#
+# One native adaptation: the build targets the git-runner `metal` host daemon
+# (dbc, Apple M4 Max) instead of the GitHub `self-hosted` label set. The tap push
+# still targets github.com/hanzoai/homebrew-hanzo (the tap stays on GitHub).
 on:
   workflow_dispatch:
     inputs:
@@ -10,7 +16,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: metal
     permissions:
       contents: write
     steps:
@@ -52,7 +58,7 @@ jobs:
           git clone "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/hanzoai/homebrew-hanzo.git" tap
 
           cat > tap/Formula/hanzo.rb << FORMULA
-          class Mistralrs < Formula
+          class Hanzo < Formula
             desc "Fast, flexible LLM inference."
             homepage "https://github.com/hanzoai/engine"
             license "MIT"
