@@ -1,0 +1,78 @@
+# Ensure a Hanzo Git (Gitea) release exists for a tag and attach files to it.
+#
+# Forge-native: talks straight to the Gitea release API
+# (POST /repos/{owner}/{repo}/releases, POST .../releases/{id}/assets) with the
+# job's provisioned token. This is the ONE way this repo publishes a release on
+# the native forge. It replaces softprops/action-gh-release@v2, whose GitHub-only
+# release POST returns HTTP 405 against Gitea's API (that action stays in the
+# .github/workflows copy, which only runs on GitHub.com).
+#
+# Idempotent: reuses the release if the tag already has one; per-asset it replaces
+# a same-named asset so a re-run overwrites rather than 409s.
+name: Forge Release
+description: Create a Hanzo Git release for a tag and/or attach files as assets (forge-native).
+inputs:
+  tag:
+    description: Tag to release (e.g. v1.7.92).
+    required: true
+  token:
+    description: Forge token with contents:write (the job's GITHUB_TOKEN).
+    required: true
+  files:
+    description: Newline- or space-separated asset paths. Empty = create/ensure only.
+    required: false
+    default: ""
+  body:
+    description: Release notes body.
+    required: false
+    default: ""
+  prerelease:
+    description: Mark the release as a prerelease.
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        FORGE_TOKEN: ${{ inputs.token }}
+        TAG: ${{ inputs.tag }}
+        FILES: ${{ inputs.files }}
+        BODY: ${{ inputs.body }}
+        PRERELEASE: ${{ inputs.prerelease }}
+      run: |
+        set -euo pipefail
+        api="${GITHUB_API_URL:-${GITHUB_SERVER_URL%/}/api/v1}"
+        repo="${GITHUB_REPOSITORY}"
+        auth="Authorization: token ${FORGE_TOKEN}"
+
+        # Ensure the release exists (idempotent on the tag).
+        code=$(curl -sS -o /tmp/forge-rel.json -w '%{http_code}' -H "$auth" \
+          "$api/repos/$repo/releases/tags/$TAG" || true)
+        if [ "$code" != "200" ]; then
+          jq -nc --arg tag "$TAG" --arg body "$BODY" --argjson pre "${PRERELEASE:-false}" \
+            '{tag_name:$tag,name:$tag,body:$body,draft:false,prerelease:$pre}' > /tmp/forge-req.json
+          curl -fsS -X POST -H "$auth" -H 'Content-Type: application/json' \
+            --data @/tmp/forge-req.json "$api/repos/$repo/releases" -o /tmp/forge-rel.json
+          echo "created release $TAG"
+        else
+          echo "release $TAG already exists"
+        fi
+        rid=$(jq -r '.id' /tmp/forge-rel.json)
+        echo "release id=$rid"
+
+        # Attach files, replacing any same-named asset so re-runs overwrite.
+        [ -n "${FILES// /}" ] || { echo "no files to attach"; exit 0; }
+        printf '%s\n' $FILES | while read -r f; do
+          [ -n "$f" ] || continue
+          if [ ! -f "$f" ]; then echo "skip (absent): $f"; continue; fi
+          name=$(basename "$f")
+          old=$(curl -sS -H "$auth" "$api/repos/$repo/releases/$rid/assets" \
+            | jq -r --arg n "$name" '.[] | select(.name==$n) | .id' | head -1 || true)
+          if [ -n "${old:-}" ]; then
+            curl -fsS -X DELETE -H "$auth" "$api/repos/$repo/releases/$rid/assets/$old" >/dev/null || true
+          fi
+          curl -fsS -X POST -H "$auth" -H 'Content-Type: application/octet-stream' \
+            --data-binary @"$f" "$api/repos/$repo/releases/$rid/assets?name=$name" >/dev/null
+          echo "uploaded $name"
+        done

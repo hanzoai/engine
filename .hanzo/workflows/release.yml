@@ -53,7 +53,8 @@ concurrency:
 
 jobs:
   # Create the Release first; every build leg then uploads its bundle straight to
-  # it as a RELEASE ASSET (softprops). Release assets are not billed against the
+  # it as a RELEASE ASSET (forge-native, .hanzo/actions/forge-release). Release
+  # assets are not billed against the
   # Actions artifact-storage quota, so the release ships even when that quota is
   # exhausted (the v1.7.30 failure: every leg built + signed, then `upload-artifact`
   # hit "Artifact storage quota has been hit").
@@ -62,17 +63,18 @@ jobs:
     runs-on: hanzo-build-linux-amd64
     timeout-minutes: 15
     steps:
-      - name: Ensure the Release exists
-        uses: softprops/action-gh-release@v2
+      # The forge-release action is local to the repo tree -> check it out first.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.ref }}
+      - name: Ensure the Release exists (forge-native)
+        uses: ./.hanzo/actions/forge-release
         with:
           # Tag push: github.ref_name is the tag. Manual run: the `version` input
           # names the tag to (re)build -- recovers a tag whose push did not trigger
           # a run (dropped tag-push events when many tags land in one push).
-          tag_name: ${{ inputs.version || github.ref_name }}
-          draft: false
-          prerelease: false
-          make_latest: true
-          generate_release_notes: true
+          tag: ${{ inputs.version || github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           body: |
             ## Prebuilt binaries
 
@@ -88,8 +90,6 @@ jobs:
 
             Each bundle is cosign-signed (keyless, Sigstore / GitHub OIDC) when the
             signer is reachable -- verify with the adjacent `.sig` + `.pem`.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build:
     name: ${{ matrix.name }}
@@ -185,17 +185,15 @@ jobs:
             --output-certificate "$f.pem" \
             "$f" || echo "::warning::cosign keyless signing unavailable (Fulcio egress blocked); shipping $f unsigned"
 
-      - name: Upload bundle to release
-        uses: softprops/action-gh-release@v2
+      - name: Upload bundle to release (forge-native)
+        uses: ./.hanzo/actions/forge-release
         with:
-          tag_name: ${{ inputs.version || github.ref_name }}
+          tag: ${{ inputs.version || github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: |
             ${{ matrix.name }}.${{ matrix.ext }}
             ${{ matrix.name }}.${{ matrix.ext }}.sig
             ${{ matrix.name }}.${{ matrix.ext }}.pem
-          fail_on_unmatched_files: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # macOS is the one target that cannot be cross-compiled from Linux (needs the
   # Apple SDK + codesign). On the native forge it targets the `metal` host daemon
@@ -242,14 +240,12 @@ jobs:
           f="hanzoai-macos-${{ matrix.arch }}.tar.gz"
           # Non-fatal: ship the binary even when Fulcio egress is blocked (see build job).
           cosign sign-blob --yes --output-signature "$f.sig" --output-certificate "$f.pem" "$f" || echo "::warning::cosign keyless signing unavailable (Fulcio egress blocked); shipping $f unsigned"
-      - name: Upload bundle to release
-        uses: softprops/action-gh-release@v2
+      - name: Upload bundle to release (forge-native)
+        uses: ./.hanzo/actions/forge-release
         with:
-          tag_name: ${{ inputs.version || github.ref_name }}
+          tag: ${{ inputs.version || github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: |
             hanzoai-macos-${{ matrix.arch }}.tar.gz
             hanzoai-macos-${{ matrix.arch }}.tar.gz.sig
             hanzoai-macos-${{ matrix.arch }}.tar.gz.pem
-          fail_on_unmatched_files: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
