@@ -3,9 +3,9 @@ use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use hanzo_engine::{
     get_auto_device_map_params, get_model_dtype, initialize_logging, paged_attn_supported,
     parse_isq_value, Builder, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, DeviceMapSetting, Hanzo, Loader, LoaderBuilder,
-    MemoryGpuConfig, ModelSelected, NormalRequest, PagedAttentionConfig, PagedCacheType, Request,
-    RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
+    DeviceMapMetadata, DeviceMapSetting, Hanzo, Loader, LoaderBuilder, MemoryGpuConfig,
+    ModelSelected, NormalRequest, PagedAttentionConfig, PagedCacheType, Request, RequestMessage,
+    Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 use hanzo_ml::Device;
 use std::fmt::Display;
@@ -175,11 +175,17 @@ async fn run_bench(
 
 fn uncertain(v: &[f32]) -> UncertainTokSec {
     if v.is_empty() {
-        return UncertainTokSec { mean: 0.0, std_dev: 0.0 };
+        return UncertainTokSec {
+            mean: 0.0,
+            std_dev: 0.0,
+        };
     }
     let mean = v.iter().sum::<f32>() / v.len() as f32;
     let variance = v.iter().map(|e| (mean - e).powf(2.)).sum::<f32>() / v.len() as f32;
-    UncertainTokSec { mean, std_dev: variance.sqrt() }
+    UncertainTokSec {
+        mean,
+        std_dev: variance.sqrt(),
+    }
 }
 
 // Per-stream throughput: scored tokens over the batch wall, divided by concurrency (so t/s is the

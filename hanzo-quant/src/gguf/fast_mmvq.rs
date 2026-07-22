@@ -960,8 +960,7 @@ mod fused_glu_oracle {
             .reshape((b, k))?
             .to_dtype(input_ty)?;
 
-        let fused =
-            fused_glu(&gate_q, &up_q, &x, GluActivationType::Silu)?.to_dtype(DType::F32)?;
+        let fused = fused_glu(&gate_q, &up_q, &x, GluActivationType::Silu)?.to_dtype(DType::F32)?;
 
         let wg_dq = gate_q.dequantize(dev)?;
         let wu_dq = up_q.dequantize(dev)?;
@@ -970,7 +969,10 @@ mod fused_glu_oracle {
         let up = xf.matmul(&wu_dq.t()?)?;
         let reference = (gate.silu()? * up)?;
 
-        let max_abs_diff = (&fused - &reference)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        let max_abs_diff = (&fused - &reference)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
         let max_abs_ref = reference.abs()?.max_all()?.to_scalar::<f32>()?;
         Ok(max_abs_diff / max_abs_ref.max(1e-6))
     }
@@ -1003,7 +1005,9 @@ mod fused_glu_oracle {
                 worst = worst.max(err);
             }
         }
-        println!("fused_glu oracle: WORST scale-rel err = {worst:.4e} over 30 (dtype x input) cases");
+        println!(
+            "fused_glu oracle: WORST scale-rel err = {worst:.4e} over 30 (dtype x input) cases"
+        );
         Ok(())
     }
 }

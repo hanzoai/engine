@@ -23,8 +23,8 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use hanzo_engine::{
-    get_auto_device_map_params, get_model_dtype, initialize_logging, paged_attn_supported,
-    Builder, Constraint, DefaultSchedulerMethod, DeviceMapSetting, Hanzo, Loader, LoaderBuilder,
+    get_auto_device_map_params, get_model_dtype, initialize_logging, paged_attn_supported, Builder,
+    Constraint, DefaultSchedulerMethod, DeviceMapSetting, Hanzo, Loader, LoaderBuilder,
     MemoryGpuConfig, ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage,
     Response, SamplingParams, SchedulerConfig, TokenSource,
 };
@@ -486,7 +486,11 @@ async fn complete_text(
     loop {
         match rx.recv().await {
             Some(Response::CompletionDone(resp)) => {
-                return Ok(resp.choices.first().map(|c| c.text.clone()).unwrap_or_default());
+                return Ok(resp
+                    .choices
+                    .first()
+                    .map(|c| c.text.clone())
+                    .unwrap_or_default());
             }
             Some(Response::CompletionModelError(e, _)) => anyhow::bail!("model error: {e}"),
             Some(Response::InternalError(e)) | Some(Response::ValidationError(e)) => {
@@ -537,7 +541,11 @@ async fn run_identity(hanzo: Arc<Hanzo>) {
     // Single-stream baseline: one request in flight at a time (decode batch = 1).
     let mut sequential = Vec::new();
     for p in &prompts {
-        sequential.push(complete_text(hanzo.clone(), p.clone(), out_len).await.unwrap());
+        sequential.push(
+            complete_text(hanzo.clone(), p.clone(), out_len)
+                .await
+                .unwrap(),
+        );
     }
 
     // Concurrent: all K in flight -> one length-mixed continuous decode batch.
