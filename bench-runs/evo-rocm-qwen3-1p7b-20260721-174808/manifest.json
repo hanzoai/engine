@@ -1,0 +1,28 @@
+{
+  "host": "evo",
+  "uname": "Linux evo 7.0.0-28-generic #28~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Wed Jul  1 15:50:57 UTC 2 x86_64",
+  "backend": "rocm",
+  "timestamp": 1784681288.224909,
+  "iso": "2026-07-21T17:48:08-0700",
+  "engine_git_sha": "1ac219c43d04a69ef4f224e037bef309a4557728",
+  "engine_version": "1.7.87",
+  "hanzo_ml": "0.11.88",
+  "hanzo_rocm_kernels": "0.11.36",
+  "hanzo_metal_kernels": "0.11.44",
+  "llama_sha": "0821c5fcfd729af70037bc1e9e60769d42c081ba",
+  "llama_bench": "/home/z/llama.cpp/build-hip/bin/llama-bench",
+  "model_path": "/home/z/work/qwen3-1.7b/Qwen_Qwen3-1.7B-Q4_K_M.gguf",
+  "model_bytes": 1282439584,
+  "model_sha256": "72c5c3cb38fa32d5256e2fe30d03e7a64c6c79e668ad84057e3bd66e250b24fb",
+  "params": {
+    "prompt_sizes": "512,500,2048,4096",
+    "n_gen": 128,
+    "reps": 7,
+    "concurrency": 1,
+    "max_ctx": 4096
+  },
+  "env": {
+    "backend_env": "LD_LIBRARY_PATH=/opt/rocm/lib HSA_XNACK=1"
+  },
+  "gpu": "Marketing Name:          AMD RYZEN AI MAX+ 395 w/ Radeon 8060S"
+}
