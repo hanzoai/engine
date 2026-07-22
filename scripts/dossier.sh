@@ -73,7 +73,7 @@ quiet_gate() {
   local hits busy load
   hits="$(ps -eo pid=,comm= 2>/dev/null | grep -wE "$COMPET" | grep -vw "$$" || true)"
   busy="$(gpu_busy)"; load="$(uptime | grep -oE 'load average.*' || true)"
-  { echo "quiet-gate @ $(date -Is)"; echo "gpu_busy%: $busy"; echo "$load";
+  { echo "quiet-gate @ $(date +%Y-%m-%dT%H:%M:%S%z)"; echo "gpu_busy%: $busy"; echo "$load";
     echo "gpu/compile competitors (by command name):"; echo "${hits:-  (none)}"; } | tee "$OUT/quiet-gate.txt"
   if [[ -n "$hits" && "$FORCE" != 1 ]]; then
     echo "REFUSING: a GPU/compile workload is running (see above). Re-run when quiet or --force." >&2; exit 3; fi
