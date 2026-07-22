@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: [self-hosted, macOS, ARM64]
     permissions:
       contents: write
     steps:
@@ -52,7 +52,7 @@ jobs:
           git clone "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/hanzoai/homebrew-hanzo.git" tap
 
           cat > tap/Formula/hanzo.rb << FORMULA
-          class Mistralrs < Formula
+          class Hanzo < Formula
             desc "Fast, flexible LLM inference."
             homepage "https://github.com/hanzoai/engine"
             license "MIT"
