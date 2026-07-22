@@ -1133,7 +1133,8 @@ pub fn try_fused_quantized_gate_up(
     let Some(up_q) = up.get_qtensor() else {
         return Ok(None);
     };
-    if gate_q.dtype() != GgmlDType::Q8_0 || up_q.dtype() != GgmlDType::Q8_0 {
+    let dtype = gate_q.dtype();
+    if dtype != up_q.dtype() || !gguf::fast_mmvq::supports(dtype) {
         return Ok(None);
     }
     if gate_q.shape() != up_q.shape() {
