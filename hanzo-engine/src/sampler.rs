@@ -498,6 +498,37 @@ impl Sampler {
         })
     }
 
+    /// Greedy argmax on the tensor's own device: a top-1 reduction plus a one-element readback,
+    /// replacing the full-vocab host copy + scan of [`Self::sample_argmax`]. Byte-identical to that
+    /// host path -- the device arg-reduce breaks ties to the lowest index (`indexed<T>`: equal value
+    /// keeps the smaller index), exactly as `argmax_f32`, and reports the same raw-logit natural log.
+    /// Ports CUDA's device top-1 (`top1_cache`) to ROCm/Vulkan, whose discrete memory makes the
+    /// full-vocab host copy expensive. Metal is excluded: its unified memory makes that copy cheap, so
+    /// the extra device sync measured net-neutral (the host `sample_argmax` scan stays on Metal/CPU).
+    #[cfg(any(feature = "rocm", feature = "vulkan"))]
+    fn sample_argmax_on_device(&self, logits: Tensor) -> Result<Logprobs> {
+        let flat = logits.flatten_all()?;
+        // argmax reduces to a single index; flatten_all normalizes the 0-D/[1] result across backends.
+        let next_token = flat.argmax(0)?.flatten_all()?.to_vec1::<u32>()?[0];
+        // The `return_logprobs == false` arm of `sample_argmax`: the raw logit's natural log.
+        let logit = flat.narrow(0, next_token as usize, 1)?.to_vec1::<f32>()?[0];
+        let bytes = if let Some(tokenizer) = &self.tokenizer {
+            Some(
+                tokenizer
+                    .decode(&[next_token], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            )
+        } else {
+            None
+        };
+        Ok(Logprobs {
+            token: next_token,
+            logprob: logit.ln(),
+            top_logprobs: None,
+            bytes,
+        })
+    }
+
     fn sample_speculative_top_kp_min_p(
         &self,
         logits: Tensor,
@@ -1193,6 +1224,20 @@ impl Sampler {
         } else {
             None
         };
+        // Pure-temperature sampling (no top-k, top-p off): the full-vocab partial_sort_top_k below is
+        // dead work. With top_k <= 0 it takes the k == n branch, which neither zeroes nor reorders
+        // `probs` -- it only sorts a discarded index copy -- and top_p off returns before any min_p
+        // step. Sample straight from the softmax. Byte-identical to the sorted path (same `probs`,
+        // same RNG draw), dropping an O(V log V) sort from every unfiltered decode step.
+        if top_k <= 0 && (top_p <= 0.0 || top_p >= 1.0) {
+            return self.sample_multinomial_report(
+                probs,
+                unfiltered.as_deref(),
+                return_logprobs,
+                rng,
+            );
+        }
+
         // Determine how many elements we need for partial sort
         let k = if top_k > 0 {
             top_k as usize
@@ -1441,6 +1486,30 @@ impl Sampler {
             }
         }
 
+        // Greedy argmax on device (ROCm/Vulkan): temperature None is greedy, and the top-1 token is a
+        // device reduction + one-element readback rather than the full-vocab host copy + scan the path
+        // below performs -- a win where device->host is expensive (discrete memory). WHERE the argmax
+        // runs changes, not WHAT. Off when penalties / logits-processors / logprobs need the whole host
+        // distribution, and off on CPU. Metal is excluded (unified memory: the host copy is already
+        // cheap, and the device path measured net-neutral there).
+        #[cfg(any(feature = "rocm", feature = "vulkan"))]
+        if self.temperature.is_none()
+            && !return_logprobs
+            && !sample_speculative
+            && !multiple_sequences
+            && self.logits_processors.is_empty()
+            && self.frequency_penalty.unwrap_or(0.0).abs() <= f32::EPSILON
+            && self.presence_penalty.unwrap_or(0.0).abs() <= f32::EPSILON
+            && (self.repetition_penalty.unwrap_or(1.0) - 1.0).abs() <= f32::EPSILON
+            && self
+                .dry_params
+                .as_ref()
+                .is_none_or(|p| p.multiplier.abs() <= f32::EPSILON)
+            && !logits.device().is_cpu()
+        {
+            return self.sample_argmax_on_device(logits);
+        }
+
         let logits = logits.to_vec1()?;
         let mut logits = self.apply_penalties(logits, context)?;
         for processor in &self.logits_processors {
@@ -1539,6 +1608,55 @@ mod tests {
         // the base honest; the missing normalization is the same latent bug as the greedy path's
         // `raw[..]` arm (return_logprobs == false), and is not addressed here.
         assert_eq!(res.logprob, 1023f64.ln() as f32)
+    }
+
+    #[test]
+    fn pure_temperature_fast_path_matches_sorted_path() {
+        // The pure-temperature (no top-k, top-p off) fast-path skips partial_sort_top_k. Prove that
+        // skip is byte-identical: run the OLD behavior (the now-discarded full-vocab sort) then draw,
+        // and the NEW fast-path draw, from the same distribution under the same seeded RNG.
+        use super::{partial_sort_top_k, Sampler};
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::sync::{Arc, Mutex};
+
+        let sampler =
+            Sampler::new(Some(1.0), 0, None, None, None, None, None, 0, 0.0, 0.0, vec![]).unwrap();
+        let probs = vec![0.05f32, 0.30, 0.10, 0.25, 0.02, 0.18, 0.10];
+
+        // NEW: the guard delegates straight to the multinomial draw, no sort.
+        let mut p_fast = probs.clone();
+        let fast = sampler
+            .sample_top_kp_min_p(
+                &mut p_fast,
+                0,
+                0.0,
+                0.0,
+                false,
+                Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(7))),
+            )
+            .unwrap();
+
+        // OLD: run the (now-skipped) full-vocab sort, then draw from the same distribution.
+        let mut p_ref = probs.clone();
+        let n = p_ref.len();
+        let _discarded = partial_sort_top_k(&mut p_ref, n, true);
+        let reference = sampler
+            .sample_multinomial(
+                &p_ref,
+                false,
+                Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(7))),
+            )
+            .unwrap();
+
+        assert_eq!(
+            p_fast, p_ref,
+            "the discarded sort must not have mutated the distribution"
+        );
+        assert_eq!(
+            fast.token, reference.token,
+            "sort-skip must draw the identical token as the sorted path"
+        );
     }
 
     #[test]
