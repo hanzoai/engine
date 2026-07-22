@@ -1,0 +1,15 @@
+# TEMPORARY -- retire with the shim when the native forge (Phase B) lands.
+#
+# Fires the shim every 10 minutes so a dropped tag-push event is recovered within
+# one interval. `Persistent=true` catches up one missed run after a reboot.
+[Unit]
+Description=Run the Hanzo tag->release trigger shim every 10 min (TEMPORARY)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

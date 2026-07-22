@@ -1,0 +1,255 @@
+# Release Hanzo Engine -- native (Hanzo Git) copy.
+#
+# This is the .hanzo/workflows copy of .github/workflows/release.yml. The Hanzo
+# Git fork scans .hanzo/workflows FIRST; GitHub.com ignores .hanzo/, so this file
+# is INERT on GitHub -- it cannot affect the live GitHub release lane, which keeps
+# running from .github/workflows/release.yml until the Phase-E cutover.
+#
+# One native adaptation vs the .github copy: the macOS leg targets the git-runner
+# `metal` host daemon (dbc, Apple M4 Max) instead of the GitHub `self-hosted`
+# label set. The amd64/arm64 cross-build legs are unchanged -- they run on the
+# `hanzo-build-linux-amd64` label the git-runner maps.
+#
+# One tag -> prebuilt, portable, cosign-signed `hanzoai` binaries for every
+# platform, attached to the Release. Consumed by install.sh
+# (`curl -fsSL https://hanzo.ai/install.sh | sh`) and the desktop engine manager.
+#
+# Design notes (why this shape):
+#   * EVERY build leg runs on the always-online `hanzo-build-linux-amd64` runner
+#     and CROSS-compiles with cargo-zigbuild. No leg targets a self-hosted
+#     mac/win runner in a way that can queue for 48h and force a workflow-level
+#     cancel (the historical failure: legs targeting an offline runner never
+#     start, the 48h max hits, and `create-release` is skipped -> zero assets).
+#   * `fail-fast: false` + `release: if: always()`: a flaky leg fails on its own
+#     and the release still attaches whatever built.
+#   * Linux amd64/arm64 only. Windows is not built: cargo-zigbuild cannot
+#     cross-compile aws-lc-sys (jitterentropy needs POSIX `sched.h`, absent from
+#     zig's windows-gnu sysroot), so those legs never produced a binary. Wire a
+#     native Windows runner to add them back.
+#   * RUSTFLAGS="" strips the repo's `.cargo/config.toml` `target-cpu=native`, so
+#     the artifacts are baseline-portable (no SIGILL on other CPUs). zigbuild pins
+#     a glibc floor (2.17) so the Linux binaries run on ~any distro from the last decade.
+#   * The server binary is `hanzo-server` (renamed -> `hanzoai`); `hanzo-engine`
+#     is a *library*. Built `--no-default-features` (CPU, no CUDA/Metal, no
+#     `license-enforce`) so the public binary runs anywhere with no license token.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Tag to build + release (e.g. v1.7.90). Recovers a tag whose push did not trigger a run.'
+        required: false
+
+permissions:
+  contents: write   # create the release + upload assets
+  id-token: write   # cosign keyless (Sigstore / GitHub OIDC) signing
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Create the Release first; every build leg then uploads its bundle straight to
+  # it as a RELEASE ASSET (softprops). Release assets are not billed against the
+  # Actions artifact-storage quota, so the release ships even when that quota is
+  # exhausted (the v1.7.30 failure: every leg built + signed, then `upload-artifact`
+  # hit "Artifact storage quota has been hit").
+  create-release:
+    name: Create Release
+    runs-on: hanzo-build-linux-amd64
+    timeout-minutes: 15
+    steps:
+      - name: Ensure the Release exists
+        uses: softprops/action-gh-release@v2
+        with:
+          # Tag push: github.ref_name is the tag. Manual run: the `version` input
+          # names the tag to (re)build -- recovers a tag whose push did not trigger
+          # a run (dropped tag-push events when many tags land in one push).
+          tag_name: ${{ inputs.version || github.ref_name }}
+          draft: false
+          prerelease: false
+          make_latest: true
+          generate_release_notes: true
+          body: |
+            ## Prebuilt binaries
+
+            One-line install (Linux/macOS):
+            ```sh
+            curl -fsSL https://raw.githubusercontent.com/hanzoai/engine/main/install.sh | sh
+            ```
+
+            Then serve an OpenAI + Anthropic compatible endpoint on :1234:
+            ```sh
+            hanzoai --port 1234 run -m Qwen/Qwen3-4B
+            ```
+
+            Each bundle is cosign-signed (keyless, Sigstore / GitHub OIDC) when the
+            signer is reachable -- verify with the adjacent `.sig` + `.pem`.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: ${{ matrix.name }}
+    needs: create-release
+    runs-on: hanzo-build-linux-amd64
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: hanzoai-linux-amd64
+            zigtarget: x86_64-unknown-linux-gnu.2.17
+            dir: x86_64-unknown-linux-gnu
+            ext: tar.gz
+          - name: hanzoai-linux-arm64
+            zigtarget: aarch64-unknown-linux-gnu.2.17
+            dir: aarch64-unknown-linux-gnu
+            ext: tar.gz
+    env:
+      RUSTFLAGS: ""   # portable baseline codegen; overrides repo target-cpu=native
+      CARGO_TERM_COLOR: always
+      # Cap concurrent rustc processes so this heavy ML-stack build fits the
+      # runner pod's memory. The v1.7.6 run OOM-killed the linux runners with
+      # unbounded `-j`; the identical build succeeds locally.
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.ref }}
+
+      # Runner images are minimal: install the C/build prerequisites zigbuild's C
+      # deps need (aws-lc-sys -> cmake; onig_sys/esaxx-rs -> a C/C++ compiler that
+      # zig provides), plus packaging tools.
+      - name: System prerequisites
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends \
+              build-essential cmake pkg-config curl git zip python3 python3-pip xz-utils ca-certificates
+          fi
+
+      - name: Rust toolchain + zigbuild
+        run: |
+          set -euo pipefail
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
+              -y --profile minimal --default-toolchain stable
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          # zig ships as a pip wheel; cargo-zigbuild auto-detects `python3 -m ziglang`.
+          python3 -m pip install --user --quiet --break-system-packages 'ziglang==0.13.0' || \
+            python3 -m pip install --user --quiet 'ziglang==0.13.0'
+          command -v cargo-zigbuild >/dev/null 2>&1 || cargo install --locked cargo-zigbuild@0.19.8
+          rustup target add ${{ matrix.dir }} || echo "rustup target ${{ matrix.dir }} unavailable on stable"
+
+      - name: Build hanzoai (${{ matrix.name }})
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo zigbuild --release --package hanzo-server --no-default-features \
+            --target ${{ matrix.zigtarget }}
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          BINEXT="${{ matrix.binext }}"
+          SRC="target/${{ matrix.dir }}/release/hanzo-server${BINEXT}"
+          test -f "$SRC" || { echo "::error::build produced no binary at $SRC"; exit 1; }
+          install -m 0755 "$SRC" "hanzoai${BINEXT}"
+          if [ "${{ matrix.ext }}" = "zip" ]; then
+            zip -q -j "${{ matrix.name }}.zip" "hanzoai${BINEXT}"
+          else
+            tar -czf "${{ matrix.name }}.tar.gz" "hanzoai${BINEXT}"
+          fi
+          ls -la "${{ matrix.name }}.${{ matrix.ext }}"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign (cosign keyless)
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          f="${{ matrix.name }}.${{ matrix.ext }}"
+          # Keyless signing needs egress to fulcio.sigstore.dev, which the
+          # self-hosted fleet may have blocked. Never fail the release over a
+          # missing signature: attach the binary regardless, signed when reachable.
+          cosign sign-blob --yes \
+            --output-signature "$f.sig" \
+            --output-certificate "$f.pem" \
+            "$f" || echo "::warning::cosign keyless signing unavailable (Fulcio egress blocked); shipping $f unsigned"
+
+      - name: Upload bundle to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version || github.ref_name }}
+          files: |
+            ${{ matrix.name }}.${{ matrix.ext }}
+            ${{ matrix.name }}.${{ matrix.ext }}.sig
+            ${{ matrix.name }}.${{ matrix.ext }}.pem
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # macOS is the one target that cannot be cross-compiled from Linux (needs the
+  # Apple SDK + codesign). On the native forge it targets the `metal` host daemon
+  # (dbc, Apple M4 Max). It stays GATED on a repo variable so it never queues on a
+  # missing runner: register the metal host daemon, set repo variable
+  # MACOS_RUNNER_ONLINE=true, and this leg builds natively -- no other change.
+  # Until then it is skipped (not queued), so it cannot hang the release.
+  build-macos:
+    name: hanzoai-macos-${{ matrix.arch }}
+    needs: create-release
+    if: ${{ vars.MACOS_RUNNER_ONLINE == 'true' }}
+    runs-on: metal
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+          - arch: amd64
+            target: x86_64-apple-darwin
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.ref }}
+      - name: Build + package
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          command -v cargo >/dev/null 2>&1 || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal; export PATH="$HOME/.cargo/bin:$PATH"; }
+          rustup target add ${{ matrix.target }}
+          cargo build --release --package hanzo-server --no-default-features --target ${{ matrix.target }} --features metal
+          install -m 0755 "target/${{ matrix.target }}/release/hanzo-server" hanzoai
+          tar -czf "hanzoai-macos-${{ matrix.arch }}.tar.gz" hanzoai
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: Sign (cosign keyless)
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          f="hanzoai-macos-${{ matrix.arch }}.tar.gz"
+          # Non-fatal: ship the binary even when Fulcio egress is blocked (see build job).
+          cosign sign-blob --yes --output-signature "$f.sig" --output-certificate "$f.pem" "$f" || echo "::warning::cosign keyless signing unavailable (Fulcio egress blocked); shipping $f unsigned"
+      - name: Upload bundle to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version || github.ref_name }}
+          files: |
+            hanzoai-macos-${{ matrix.arch }}.tar.gz
+            hanzoai-macos-${{ matrix.arch }}.tar.gz.sig
+            hanzoai-macos-${{ matrix.arch }}.tar.gz.pem
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
