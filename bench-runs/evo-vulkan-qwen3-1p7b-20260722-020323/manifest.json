@@ -1,0 +1,34 @@
+{
+  "host": "evo",
+  "uname": "Linux evo 7.0.0-28-generic #28~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Wed Jul  1 15:50:57 UTC 2 x86_64",
+  "backend": "vulkan",
+  "timestamp": 1784711004.4571898,
+  "iso": "2026-07-22T02:03:24-0700",
+  "sampler": "greedy-argmax",
+  "engine_git_sha": "f8e384d28b119db3093d818edd2cc8c0556c7cea",
+  "engine_git_dirty": true,
+  "engine_version": "1.7.90",
+  "hanzo_ml": "0.11.88",
+  "hanzo_rocm_kernels": "0.11.36",
+  "hanzo_metal_kernels": "0.11.44",
+  "llama_sha": "0821c5fcfd729af70037bc1e9e60769d42c081ba",
+  "llama_git_dirty": false,
+  "hanzo_bench_bin": "/home/z/work/hanzo/engine/target/release/hanzo-bench-vulkan",
+  "hanzo_bench_bin_sha256": "b7a1e01735134934c6a2ee6ca504068918360d783c13670799cead4a404b1d85",
+  "llama_bench_bin": "/home/z/llama.cpp/build/bin/llama-bench",
+  "llama_bench_bin_sha256": "8f261adb1b8858484df8200f2fc25e058959cfdac0a351c837067f13e5c14507",
+  "model_path": "/home/z/work/qwen3-1.7b/Qwen_Qwen3-1.7B-Q4_K_M.gguf",
+  "model_bytes": 1282439584,
+  "model_sha256": "72c5c3cb38fa32d5256e2fe30d03e7a64c6c79e668ad84057e3bd66e250b24fb",
+  "params": {
+    "prompt_sizes": "512,500,2048,4096",
+    "n_gen": 128,
+    "reps": 7,
+    "concurrency": 1,
+    "max_ctx": 4096
+  },
+  "env": {
+    "backend_env": ""
+  },
+  "gpu": "Marketing Name:          AMD RYZEN AI MAX+ 395 w/ Radeon 8060S"
+}

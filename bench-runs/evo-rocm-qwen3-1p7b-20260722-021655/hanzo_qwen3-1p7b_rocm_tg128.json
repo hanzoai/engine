@@ -1,0 +1,47 @@
+{
+  "engine_version": "1.7.90",
+  "backend": "ROCm",
+  "sampler": "greedy-argmax",
+  "model_id": "/home/z/work/qwen3-1.7b",
+  "n_prompt": 0,
+  "n_gen": 128,
+  "repetitions": 7,
+  "results": [
+    {
+      "test": "tg 128",
+      "phase": "decode",
+      "n": 128,
+      "concurrency": 1,
+      "per_rep": [
+        [
+          1.112088758,
+          127
+        ],
+        [
+          1.104099808,
+          127
+        ],
+        [
+          1.113782613,
+          127
+        ],
+        [
+          1.120252893,
+          127
+        ],
+        [
+          1.120495234,
+          127
+        ],
+        [
+          1.119976063,
+          127
+        ],
+        [
+          1.120259753,
+          127
+        ]
+      ]
+    }
+  ]
+}

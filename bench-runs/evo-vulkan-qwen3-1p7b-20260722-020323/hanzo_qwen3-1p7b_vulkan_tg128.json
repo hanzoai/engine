@@ -1,0 +1,47 @@
+{
+  "engine_version": "1.7.90",
+  "backend": "Vulkan",
+  "sampler": "greedy-argmax",
+  "model_id": "/home/z/work/qwen3-1.7b",
+  "n_prompt": 0,
+  "n_gen": 128,
+  "repetitions": 7,
+  "results": [
+    {
+      "test": "tg 128",
+      "phase": "decode",
+      "n": 128,
+      "concurrency": 1,
+      "per_rep": [
+        [
+          1.212600742,
+          127
+        ],
+        [
+          1.16633227,
+          127
+        ],
+        [
+          1.141568777,
+          127
+        ],
+        [
+          1.154672229,
+          127
+        ],
+        [
+          1.173493755,
+          127
+        ],
+        [
+          1.16327853,
+          127
+        ],
+        [
+          1.13765391,
+          127
+        ]
+      ]
+    }
+  ]
+}

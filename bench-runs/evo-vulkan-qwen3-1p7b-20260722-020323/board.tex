@@ -1,0 +1,11 @@
+\begin{tabular}{@{}llrrrrl@{}}
+\toprule
+backend & phase & $n$ & hanzo t/s & llama t/s & ratio & verdict \\
+\midrule
+Vulkan & prefill & 2048 & 1474.7$\pm$12.4 & 4401.1$\pm$26.1 & 0.34$\pm$0.00 & \textsc{loss} \\
+Vulkan & prefill & 4096 & 970.1$\pm$6.5 & 3932.3$\pm$36.4 & 0.25$\pm$0.00 & \textsc{loss} \\
+Vulkan & prefill & 500 & 2386.3$\pm$31.8 & 4675.7$\pm$30.6 & 0.51$\pm$0.01 & \textsc{loss} \\
+Vulkan & prefill & 512 & 3117.0$\pm$19.1 & 4724.6$\pm$40.7 & 0.66$\pm$0.01 & \textsc{loss} \\
+Vulkan & decode & 128 & 109.9$\pm$1.4 & 155.3$\pm$0.2 & 0.71$\pm$0.01 & \textsc{loss} \\
+\bottomrule
+\end{tabular}
