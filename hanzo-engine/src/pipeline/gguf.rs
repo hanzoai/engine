@@ -2217,6 +2217,14 @@ impl GGUFPipeline {
         if !crate::perf_flags::vulkan_graphs_enabled() || self.draft_proposer.is_some() {
             return Ok(None);
         }
+        // The decode graph captures the model's NAIVE-KV forward (metadata=None). When PagedAttention is
+        // active (cache_engine present) the forward takes the paged attention arm, which unwraps the paged
+        // metadata a naive capture does not supply -- so stay eager whenever paged is configured. Shared
+        // guard for every graph-eligible model (qwen2 / qwen3 / qwen3-moe); benign today (GGUF bench runs
+        // eager-attention, cache_engine=None) but fail-closed if paged ever coexists with the graph path.
+        if self.metadata.cache_engine.is_some() {
+            return Ok(None);
+        }
         // Steady-state single-token decode on a Vulkan device only. Prefill (q_len > 1) stays eager.
         let (batch, q_len) = input_ids.dims2()?;
         if q_len != 1 || batch != 1 || seqlen_offsets.len() != 1 || context_lens.len() != 1 {
