@@ -85,6 +85,37 @@ impl hanzo_ml::CustomOp1 for PagedAttention {
         let (cl, _cl_l) = self.context_lens.storage_and_layout();
         let cl = as_vulkan(&cl, "context_lens")?;
 
+        // int8-packed KV cache ([num_blocks, num_kv_heads, block_size, wpt, 1] u32): route to the
+        // dequant-on-read q8 kernel. block_size is at dims5().2 here (the f32 x-packed layout has it
+        // at .3); the shader derives all cache strides from head_size/block_size/num_kv_heads, so no
+        // cache strides are passed. k_scale/v_scale are ignored -- int8 scales live per-token in the
+        // cache itself.
+        if self.key_cache.dtype() == DType::U32 {
+            let (_nb, num_kv_heads, block_size, _wpt, _one) = kc_l.shape().dims5()?;
+            let (_num_seqs_bt, max_num_blocks_per_seq) = bt_l.shape().dims2()?;
+            let args = PagedAttnArgs {
+                q,
+                key_cache: kc,
+                value_cache: vc,
+                block_tables: bt,
+                context_lens: cl,
+                num_seqs,
+                num_heads,
+                num_kv_heads,
+                head_size,
+                block_size,
+                max_num_blocks_per_seq,
+                q_stride: q_l.stride()[0],
+                kv_block_stride: 0,
+                kv_head_stride: 0,
+                x: 0,
+                max_context_len: self.max_context_len,
+                scale: self.softmax_scale,
+            };
+            let out = q.device().paged_attention_q8_vk(&args)?;
+            return Ok((out, out_shape));
+        }
+
         // Cache layout: key_cache [num_blocks, num_kv_heads, head_size/x, block_size, x].
         let (_num_blocks, num_kv_heads, _hs_div_x, block_size, x) = kc_l.shape().dims5()?;
         let (_num_seqs_bt, max_num_blocks_per_seq) = bt_l.shape().dims2()?;
@@ -186,6 +217,27 @@ pub fn reshape_and_cache(
     // -1 -> u32::MAX = the shader's pad sentinel), so bind it directly like every other buffer.
     let (sm, _sm_l) = slot_mapping.storage_and_layout();
     let sm = as_vulkan(&sm, "slot_mapping")?;
+
+    // int8-packed KV cache ([num_blocks, num_kv_heads, block_size, wpt, 1] u32): symmetric per-token
+    // int8 quantize-on-write. block_size is at dims5().2; scales are computed per-token in-shader.
+    if key_cache.dtype() == DType::U32 {
+        let (_nb, _nkv, block_size, _wpt, _one) = kc_l.shape().dims5()?;
+        let args = ReshapeCacheArgs {
+            key: k,
+            value: v,
+            key_cache: kc,
+            value_cache: vc,
+            slot_mapping: sm,
+            num_tokens,
+            num_heads,
+            head_size,
+            block_size,
+            key_stride: k_l.stride()[0],
+            value_stride: value.layout().stride()[0],
+            x: 0,
+        };
+        return k.device().reshape_and_cache_q8_vk(&args);
+    }
 
     let (_num_blocks, _num_kv_heads, _hs_div_x, block_size, x) = kc_l.shape().dims5()?;
     let key_stride = k_l.stride()[0];
