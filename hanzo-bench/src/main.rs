@@ -58,23 +58,35 @@ async fn run_bench(
     concurrency: usize,
     repetitions: usize,
     test_name: TestName,
+    greedy: bool,
 ) -> anyhow::Result<BenchResult> {
-    let sampling_params = SamplingParams {
-        // Greedy argmax decode: matches llama-bench's tg measurement (no top-k/p, no penalties,
-        // no DRY vocab scan) so the reported tok/s isolates model-eval throughput, not sampler cost.
-        temperature: None,
-        top_k: None,
-        top_p: None,
-        min_p: None,
-        top_n_logprobs: 0,
-        frequency_penalty: None,
-        presence_penalty: None,
-        repetition_penalty: None,
-        max_len: Some(n_gen),
-        stop_toks: None,
-        logits_bias: None,
-        n_choices: 1,
-        dry_params: None,
+    // Sampling PARITY with llama-bench (which decodes greedily) is a required control.
+    // greedy == deterministic(): top_k=Some(1) engages the device top-1 (argmax) path.
+    // A None temperature is forced to 1.0 downstream (engine add_request), and top_k=None
+    // then falls into a full-vocabulary CPU multinomial that idles the GPU -- a per-token
+    // sampler tax NOT present in llama-bench, which silently inflated the apparent decode
+    // gap. The stochastic branch reproduces that artifact so the tax can be measured.
+    let sampling_params = if greedy {
+        SamplingParams {
+            max_len: Some(n_gen),
+            ..SamplingParams::deterministic()
+        }
+    } else {
+        SamplingParams {
+            temperature: None,
+            top_k: None,
+            top_p: None,
+            min_p: None,
+            top_n_logprobs: 0,
+            frequency_penalty: None,
+            presence_penalty: None,
+            repetition_penalty: None,
+            max_len: Some(n_gen),
+            stop_toks: None,
+            logits_bias: None,
+            n_choices: 1,
+            dry_params: None,
+        }
     };
     let sender = hanzo.get_sender(None).unwrap();
     let (tx, mut rx) = channel(10_000);
@@ -371,6 +383,12 @@ struct Args {
     /// is wall-clock, identical in method to llama-bench, so the two engines compare like-for-like.
     #[arg(long = "json")]
     json: Option<String>,
+
+    /// Decode with the full-vocabulary stochastic sampler (temperature 1.0, no top-k) instead
+    /// of greedy argmax. Default is greedy, at sampling parity with llama-bench; this flag
+    /// exists only to MEASURE the sampler tax (the artifact greedy avoids), not to report a rate.
+    #[arg(long)]
+    stochastic: bool,
 }
 
 fn backend_str(device: &Device) -> &'static str {
@@ -615,6 +633,7 @@ async fn main() -> anyhow::Result<()> {
                 *concurrency,
                 args.repetitions,
                 TestName::Gen(args.n_gen),
+                !args.stochastic,
             )
             .await?;
             results.push(r);
@@ -629,6 +648,7 @@ async fn main() -> anyhow::Result<()> {
                 *concurrency,
                 args.repetitions,
                 TestName::Prompt(args.n_prompt),
+                !args.stochastic,
             )
             .await?;
 
@@ -645,6 +665,7 @@ async fn main() -> anyhow::Result<()> {
         let doc = serde_json::json!({
             "engine_version": env!("CARGO_PKG_VERSION"),
             "backend": backend_str(&device),
+            "sampler": if args.stochastic { "stochastic-temp1-fullvocab" } else { "greedy-argmax" },
             "model_id": model_name,
             "n_prompt": args.n_prompt,
             "n_gen": args.n_gen,
