@@ -55,7 +55,11 @@ fn guard() -> TwoTierGuard<DistilledTeacher> {
 /// A pool with one profile, so the learned path is live (an empty table for the
 /// request's modality short-circuits to the rule-based fallback).
 fn table() -> ProfileTable {
-    enso::ingest(&enso::synth::gen_eval_samples(&enso::synth::lineup(), 64, 7))
+    enso::ingest(&enso::synth::gen_eval_samples(
+        &enso::synth::lineup(),
+        64,
+        7,
+    ))
 }
 
 fn registry() -> Registry {
@@ -124,7 +128,7 @@ fn bilinear_cannot_see_the_truncation_itself() {
     let short = vec![1.0; D];
     let long = {
         let mut v = vec![1.0; D];
-        v.extend(std::iter::repeat(9999.0).take(ZEN_FEATURE_DIM - D));
+        v.extend(std::iter::repeat_n(9999.0, ZEN_FEATURE_DIM - D));
         v
     };
     assert_eq!(

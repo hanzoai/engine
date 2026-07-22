@@ -5,6 +5,7 @@
 //!   2. fit        -- proof.rs's exact (x,p,quality) join -> `fit_base` -> `Policy`.
 //!   3. holdout    -- score a `Policy` on held-out samples (mean quality-prediction).
 //!   4. gate       -- publish iff candidate >= incumbent on a trusted holdout.
+//!
 //! Persist is the enso-base safetensors ("w", f64, [D*K]) the engine loads.
 
 use std::collections::HashMap;
@@ -14,8 +15,8 @@ pub mod decision;
 
 use enso::policy::DK;
 use enso::profile::PROFILE_DIM;
-use enso::{fit_base, Featurizer, HashFeaturizer, Policy, ProfileTable};
 use enso::EvalSample;
+use enso::{fit_base, Featurizer, HashFeaturizer, Policy, ProfileTable};
 use hanzo_router::registry::{Level, Modality, Task};
 use safetensors::tensor::{Dtype, TensorView};
 use safetensors::SafeTensors;
@@ -39,7 +40,8 @@ pub struct RewardTuple {
 
 /// Parse the ai task string (snake_case) into an enso `Task`; unknown -> `General`.
 pub fn parse_task(s: &str) -> Task {
-    serde_json::from_value::<Task>(serde_json::Value::String(s.to_string())).unwrap_or(Task::General)
+    serde_json::from_value::<Task>(serde_json::Value::String(s.to_string()))
+        .unwrap_or(Task::General)
 }
 
 /// ai reward tuple -> enso `EvalSample`. The reward is the quality label; level and
@@ -78,7 +80,9 @@ pub fn fit_policy(
         })
         .collect();
     fit_base(
-        train.iter().map(|(x, p, y)| (x.as_slice(), p.as_slice(), *y)),
+        train
+            .iter()
+            .map(|(x, p, y)| (x.as_slice(), p.as_slice(), *y)),
         gamma,
     )
 }
@@ -154,7 +158,9 @@ pub fn split_indices(n: usize, holdout: f64, seed: u64) -> (Vec<usize>, Vec<usiz
     let mut idx: Vec<usize> = (0..n).collect();
     let mut state = seed ^ 0x9E3779B97F4A7C15;
     for i in (1..n).rev() {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let j = (state >> 33) as usize % (i + 1);
         idx.swap(i, j);
     }
@@ -274,7 +280,11 @@ mod tests {
         assert_eq!(tr, tr2);
         let mut all: Vec<usize> = tr.iter().chain(te.iter()).copied().collect();
         all.sort_unstable();
-        assert_eq!(all, (0..100).collect::<Vec<_>>(), "split must be a partition");
+        assert_eq!(
+            all,
+            (0..100).collect::<Vec<_>>(),
+            "split must be a partition"
+        );
     }
 
     #[test]

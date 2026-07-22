@@ -155,36 +155,36 @@ impl LayerWeights {
             )?
         } else {
             match &self.paged_attn {
-            Some(paged_attn) => {
-                // One-time confirmation that the Qwen3 GGUF decode is running
-                // through PagedAttention (not the SingleCache + Sdpa eager path)
-                // and that the decode RoPE uses device positions. Emitted once.
-                if seq_len == 1 {
-                    static PAGED_DECODE_ONCE: std::sync::Once = std::sync::Once::new();
-                    PAGED_DECODE_ONCE.call_once(|| {
+                Some(paged_attn) => {
+                    // One-time confirmation that the Qwen3 GGUF decode is running
+                    // through PagedAttention (not the SingleCache + Sdpa eager path)
+                    // and that the decode RoPE uses device positions. Emitted once.
+                    if seq_len == 1 {
+                        static PAGED_DECODE_ONCE: std::sync::Once = std::sync::Once::new();
+                        PAGED_DECODE_ONCE.call_once(|| {
                         eprintln!(
                             "[hanzo] qwen3 GGUF decode: PagedAttention ACTIVE; RoPE via device positions (graph-safe)"
                         );
                     });
+                    }
+                    let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
+                    paged_attn.forward(
+                        &q,
+                        &k,
+                        &v,
+                        mask,
+                        Some(key_cache),
+                        Some(value_cache),
+                        input_metadata,
+                        &self.sdpa_params,
+                        Some(flash_params),
+                    )?
                 }
-                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
-                paged_attn.forward(
-                    &q,
-                    &k,
-                    &v,
-                    mask,
-                    Some(key_cache),
-                    Some(value_cache),
-                    input_metadata,
-                    &self.sdpa_params,
-                    Some(flash_params),
-                )?
-            }
-            None => {
-                let (k, v) = kv_cache.append(&k, &v)?;
+                None => {
+                    let (k, v) = kv_cache.append(&k, &v)?;
 
-                Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?
-            }
+                    Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?
+                }
             }
         };
 
@@ -535,7 +535,15 @@ impl ModelWeights {
         flash_params: &FlashParams,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
-        self.forward_inner(x, start_offsets, context_lens, flash_params, metadata, None, None)
+        self.forward_inner(
+            x,
+            start_offsets,
+            context_lens,
+            flash_params,
+            metadata,
+            None,
+            None,
+        )
     }
 
     /// Decode command-graph capture entry (Vulkan): run the single-token forward reading RoPE from the
