@@ -1,0 +1,225 @@
+# Native CI for the Hanzo Git act_runners (git.hanzo.ai).
+#
+# This is the .hanzo/workflows (Hanzo-native, rebranded) copy of
+# .github/workflows/ci.yml. The Hanzo Git fork scans .hanzo/workflows FIRST
+# (GIT__actions__WORKFLOW_DIRS=.hanzo/workflows,.github/workflows,.gitea/workflows),
+# and GitHub.com ignores .hanzo/, so this file is inert on GitHub and only runs
+# on the native forge -- zero effect on the GitHub CI lanes.
+#
+# Two native adaptations vs the .github copy, nothing else:
+#   1. runs-on stays `hanzo-build-linux-amd64` -- the git-runner maps that label
+#      to catthehacker/ubuntu:act-24.04 (has node + a C toolchain), so the
+#      no-container jobs (fmt, doc-links) run unchanged.
+#   2. Every job that overrides the image with `container:` (buildpack-deps /
+#      rocm) gets a `node` install as its FIRST step: act_runner (unlike GitHub's
+#      runner) does not inject node into an arbitrary job container, so the JS
+#      actions (checkout, rust-cache) need one. It must run BEFORE checkout (a
+#      local `uses:` cannot bootstrap it -- there is no repo yet).
+#
+# All GPU arms are compile-only (no GPU hardware) and run on the amd64 build
+# fleet, same as the .github copy.
+name: Continuous integration
+
+on:
+  schedule:
+      - cron: '0 0 * * 1'
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  check-linux:
+    name: Check (linux)
+    runs-on: hanzo-build-linux-amd64
+    container: buildpack-deps:bookworm
+    timeout-minutes: 90
+    steps:
+      - name: node (act_runner container ships no node for JS actions)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends nodejs
+          command -v node >/dev/null || ln -sf "$(command -v nodejs)" /usr/local/bin/node
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check
+
+  # Compile the GPU-backend cfg blocks that the default `cargo check` never sees. These are the gates
+  # a Vulkan/ROCm-only regression falls through to today (a decode-graph model arm left unwired, a
+  # sampler cfg block that never builds): the omission only surfaced at release-build time. Both are
+  # compile-only and need no GPU -- they run on the build fleet, not the shared GPU dev boxes.
+  check-vulkan:
+    name: Check (vulkan)
+    runs-on: hanzo-build-linux-amd64
+    # ash loads Vulkan at runtime and hanzo-ml falls back to its committed SPIR-V, so the vulkan arm
+    # compiles with no GPU and no Vulkan SDK in the same image as check-linux.
+    container: buildpack-deps:bookworm
+    timeout-minutes: 90
+    steps:
+      - name: node (act_runner container ships no node for JS actions)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends nodejs
+          command -v node >/dev/null || ln -sf "$(command -v nodejs)" /usr/local/bin/node
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p hanzo-engine --features vulkan
+
+  check-rocm:
+    name: Check (rocm)
+    runs-on: hanzo-build-linux-amd64
+    # ROCm dev image (gfx1151 / Strix Halo base, matching build_rocm) supplies hipcc. The HIP kernels
+    # compile from source with no SPIR-V fallback, so this needs the toolchain but still no GPU.
+    container: rocm/dev-ubuntu-24.04:7.2.4
+    timeout-minutes: 90
+    env:
+      ROCM_PATH: /opt/rocm
+      # Read by rocm-kernels' build.rs to compile the HIP kernels for the target ISA.
+      ROCM_GFX_ARCH: gfx1151
+    steps:
+      - name: node (act_runner container ships no node for JS actions)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends nodejs
+          command -v node >/dev/null || ln -sf "$(command -v nodejs)" /usr/local/bin/node
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y curl build-essential libssl-dev protobuf-compiler pkg-config
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: echo "/opt/rocm/bin" >> "$GITHUB_PATH"
+      - run: cargo check -p hanzo-engine --features rocm
+
+  test-linux:
+    name: Test Suite (linux)
+    runs-on: hanzo-build-linux-amd64
+    container: buildpack-deps:bookworm
+    timeout-minutes: 90
+    steps:
+      - name: node (act_runner container ships no node for JS actions)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends nodejs
+          command -v node >/dev/null || ln -sf "$(command -v nodejs)" /usr/local/bin/node
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p hanzo-engine -p hanzo-quant -p hanzo-vision
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+  fmt:
+    name: Rustfmt
+    runs-on: hanzo-build-linux-amd64
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: hanzo-build-linux-amd64
+    # self-hosted runner image lacks a C toolchain; run in an image that has build-essential
+    container: buildpack-deps:bookworm
+    timeout-minutes: 90
+    steps:
+      - name: node (act_runner container ships no node for JS actions)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends nodejs
+          command -v node >/dev/null || ln -sf "$(command -v nodejs)" /usr/local/bin/node
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --tests --examples -- -D warnings
+
+  docs:
+    name: Docs
+    runs-on: hanzo-build-linux-amd64
+    # self-hosted runner image lacks a C toolchain; run in an image that has build-essential
+    container: buildpack-deps:bookworm
+    timeout-minutes: 90
+    steps:
+      - name: node (act_runner container ships no node for JS actions)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends nodejs
+          command -v node >/dev/null || ln -sf "$(command -v nodejs)" /usr/local/bin/node
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace
+
+  typos:
+    name: Typos
+    runs-on: hanzo-build-linux-amd64
+    container: buildpack-deps:bookworm
+    timeout-minutes: 90
+    steps:
+      - name: node (act_runner container ships no node for JS actions)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends nodejs
+          command -v node >/dev/null || ln -sf "$(command -v nodejs)" /usr/local/bin/node
+      - uses: actions/checkout@v4
+      - name: Typos check with custom config file
+        uses: crate-ci/typos@master
+        with:
+          config: .typos.toml
+
+  doc-links:
+    name: Doc Links
+    runs-on: hanzo-build-linux-amd64
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for docs/*.md links outside docs/
+        run: |
+          if grep -rn '(docs/[^)]*\.md' --include='*.md' --exclude-dir=docs .; then
+            echo "::error::Found docs/*.md links outside docs/ directory. Use https://hanzoai.github.io/engine/ URLs instead."
+            exit 1
+          fi
+
+  msrv:
+    name: MSRV Check (1.90)
+    runs-on: hanzo-build-linux-amd64
+    # self-hosted runner image lacks a C toolchain; run in an image that has build-essential
+    container: buildpack-deps:bookworm
+    timeout-minutes: 90
+    steps:
+      - name: node (act_runner container ships no node for JS actions)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends nodejs
+          command -v node >/dev/null || ln -sf "$(command -v nodejs)" /usr/local/bin/node
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.90.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace
