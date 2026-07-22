@@ -923,3 +923,87 @@ pub fn fused_qkv(
         _ => unreachable!(),
     }
 }
+
+#[cfg(all(test, feature = "cuda"))]
+mod fused_glu_oracle {
+    //! Correctness gate for the K-quant fused GLU matvec. The fused kernel computes
+    //! `silu(gate·x) * (up·x)` in one dispatch; the oracle recomputes the same value by
+    //! dequantizing the SAME quantized gate/up weights to f32 and running a plain f32
+    //! matmul, so weight-quantization error is excluded and only the kernel's own
+    //! arithmetic (plus the q8_1 activation quantization it applies to `x`, and the
+    //! f16/bf16 rounding of its output) is under test.
+    //!
+    //! The bound is scale-relative (`max|Δ| / max|ref|`), not per-element relative: the
+    //! SwiGLU output crosses zero, where a per-element relative bound explodes on
+    //! near-zero cancellation and reports false failures. A correct kernel lands near the
+    //! q8_1 activation-quantization floor; a wrong block constant (QK/QI/VDR/vec_dot)
+    //! produces order-one error.
+    use super::*;
+    use hanzo_ml::quantized::{GgmlDType, QTensor};
+    use hanzo_ml::{Device, Tensor};
+
+    fn deterministic(phase: f32, n: usize, dev: &Device) -> Result<Tensor> {
+        // Signed, reproducible fill in [-1, 1]; distinct phase per operand.
+        let v: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.017 + phase).sin()).collect();
+        Tensor::from_vec(v, n, dev)
+    }
+
+    fn scale_rel_err(dtype: GgmlDType, input_ty: DType, dev: &Device) -> Result<f32> {
+        let cpu = Device::Cpu;
+        // Decode-batch shape: K a multiple of the K-quant super-block (256).
+        let (n, k, b) = (128usize, 512usize, 4usize);
+        let wg = deterministic(0.3, n * k, &cpu)?.reshape((n, k))?;
+        let wu = deterministic(1.7, n * k, &cpu)?.reshape((n, k))?;
+        let gate_q = QTensor::quantize_onto(&wg, dtype, dev)?;
+        let up_q = QTensor::quantize_onto(&wu, dtype, dev)?;
+        let x = deterministic(2.9, b * k, dev)?
+            .reshape((b, k))?
+            .to_dtype(input_ty)?;
+
+        let fused =
+            fused_glu(&gate_q, &up_q, &x, GluActivationType::Silu)?.to_dtype(DType::F32)?;
+
+        let wg_dq = gate_q.dequantize(dev)?;
+        let wu_dq = up_q.dequantize(dev)?;
+        let xf = x.to_dtype(DType::F32)?;
+        let gate = xf.matmul(&wg_dq.t()?)?;
+        let up = xf.matmul(&wu_dq.t()?)?;
+        let reference = (gate.silu()? * up)?;
+
+        let max_abs_diff = (&fused - &reference)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        let max_abs_ref = reference.abs()?.max_all()?.to_scalar::<f32>()?;
+        Ok(max_abs_diff / max_abs_ref.max(1e-6))
+    }
+
+    #[test]
+    fn fused_glu_matches_dequant_oracle() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        let dtypes = [
+            GgmlDType::Q4_0,
+            GgmlDType::Q4_1,
+            GgmlDType::Q5_0,
+            GgmlDType::Q5_1,
+            GgmlDType::Q8_0,
+            GgmlDType::Q2K,
+            GgmlDType::Q3K,
+            GgmlDType::Q4K,
+            GgmlDType::Q5K,
+            GgmlDType::Q6K,
+        ];
+        let inputs = [DType::F32, DType::F16, DType::BF16];
+        let mut worst = 0f32;
+        for &dt in &dtypes {
+            for &it in &inputs {
+                let err = scale_rel_err(dt, it, &dev)?;
+                println!("fused_glu {dt:?} x {it:?}: scale-rel err = {err:.4e}");
+                assert!(
+                    err < 0.06,
+                    "{dt:?}/{it:?} scale-rel err {err:.4e} exceeds 0.06 gate"
+                );
+                worst = worst.max(err);
+            }
+        }
+        println!("fused_glu oracle: WORST scale-rel err = {worst:.4e} over 30 (dtype x input) cases");
+        Ok(())
+    }
+}
