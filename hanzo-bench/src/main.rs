@@ -14,6 +14,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::channel;
 use tracing::{info, warn};
 
+#[derive(Clone, Copy)]
 enum TestName {
     Prompt(usize),
     Gen(usize),
@@ -362,6 +363,38 @@ struct Args {
     /// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
     #[arg(long = "paged-attn", default_value_t = false)]
     paged_attn: bool,
+
+    /// Emit the raw per-repetition samples (wall seconds, scored tokens) for every test to this
+    /// path as JSON. Downstream statistics (mean, 95% CI, coefficient of variation) are computed
+    /// from these samples rather than a pre-aggregated mean/stddev, so the reported uncertainty is
+    /// auditable and reproducible. The token COUNTS are the engine's own usage figures; the timing
+    /// is wall-clock, identical in method to llama-bench, so the two engines compare like-for-like.
+    #[arg(long = "json")]
+    json: Option<String>,
+}
+
+fn backend_str(device: &Device) -> &'static str {
+    match device {
+        Device::Cpu => "CPU",
+        Device::Cuda(_) => "CUDA",
+        Device::Metal(_) => "Metal",
+        #[cfg(feature = "rocm")]
+        Device::Rocm(_) => "ROCm",
+        #[cfg(feature = "vulkan")]
+        Device::Vulkan(_) => "Vulkan",
+    }
+}
+
+// Serialize one test's raw samples. `per_rep` is the ground truth; every published statistic is a
+// pure function of this array, so a reviewer can recompute the board from the JSON alone.
+fn result_json(r: &BenchResult) -> serde_json::Value {
+    serde_json::json!({
+        "test": r.test_name.to_string(),
+        "phase": match r.test_name { TestName::Prompt(_) => "prefill", TestName::Gen(_) => "decode" },
+        "n": match r.test_name { TestName::Prompt(n) | TestName::Gen(n) => n },
+        "concurrency": r.concurrency,
+        "per_rep": r.per_rep.iter().map(|(secs, toks)| serde_json::json!([secs, toks])).collect::<Vec<_>>(),
+    })
 }
 
 #[tokio::main]
@@ -567,6 +600,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Finished warmup run.");
     info!("Starting benchmarks.");
 
+    let mut json_records = Vec::new();
     for concurrency in args.concurrency.as_ref().unwrap() {
         let mut results = vec![];
         if args.n_gen > 0 {
@@ -601,7 +635,24 @@ async fn main() -> anyhow::Result<()> {
             results.push(r);
         }
 
+        if args.json.is_some() {
+            json_records.extend(results.iter().map(result_json));
+        }
         print_usage(&model_name, &device, results);
+    }
+
+    if let Some(path) = &args.json {
+        let doc = serde_json::json!({
+            "engine_version": env!("CARGO_PKG_VERSION"),
+            "backend": backend_str(&device),
+            "model_id": model_name,
+            "n_prompt": args.n_prompt,
+            "n_gen": args.n_gen,
+            "repetitions": args.repetitions,
+            "results": json_records,
+        });
+        std::fs::write(path, serde_json::to_string_pretty(&doc)?)?;
+        info!("Wrote raw samples to {path}");
     }
 
     Ok(())
