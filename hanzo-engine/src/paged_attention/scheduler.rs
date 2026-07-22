@@ -601,11 +601,13 @@ mod continuous_batching_tests {
     fn waiting_seq(id: usize, n_tokens: usize, tx: &Sender<Response>) -> Sequence {
         let sampler =
             Sampler::new(None, 0, None, None, None, None, None, 32, 1.0, 0.0, vec![]).unwrap();
-        let group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(1, false, true, None)));
+        let group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
+            1, false, true, None,
+        )));
         // Unique tokens per id => no cross-sequence prefix overlap.
-        let base = (id as u32 + 1) * 1_000_000;
+        let base = (u32::try_from(id).unwrap() + 1) * 1_000_000;
         Sequence::new_waiting(
-            (base..base + n_tokens as u32).collect(),
+            (base..base + u32::try_from(n_tokens).unwrap()).collect(),
             "p".to_string(),
             id,
             id as u128, // distinct timestamp => deterministic FCFS order
@@ -648,7 +650,11 @@ mod continuous_batching_tests {
         for (id, &len) in lengths.iter().enumerate() {
             sched.add_seq(waiting_seq(id, len, tx));
             let out = sched.schedule(&logger);
-            assert_eq!(out.scheduled.len(), 1, "prefill schedules one prompt at a time");
+            assert_eq!(
+                out.scheduled.len(),
+                1,
+                "prefill schedules one prompt at a time"
+            );
             assert!(
                 get_mut_arcmutex!(out.scheduled[0]).is_prompt(),
                 "prefill pass must yield a prompt batch"
@@ -677,7 +683,11 @@ mod continuous_batching_tests {
         let (tx, _rx) = channel::<Response>(1);
 
         prefill_each(&mut sched, &lengths, &tx);
-        assert_eq!(sched.running_len(), n, "all prefilled sequences are running");
+        assert_eq!(
+            sched.running_len(),
+            n,
+            "all prefilled sequences are running"
+        );
 
         // Decode step: waiting is empty, so this exercises the completion path.
         let out = sched.schedule(&logger());
@@ -691,7 +701,11 @@ mod continuous_batching_tests {
             n,
             "continuous batching: every running sequence decodes this step (effective batch = {n})"
         );
-        assert_eq!(sched.running_len(), n, "no sequence preempted for length divergence");
+        assert_eq!(
+            sched.running_len(),
+            n,
+            "no sequence preempted for length divergence"
+        );
         assert_eq!(
             scheduled_ids(&out),
             (0..n).collect::<Vec<_>>(),
@@ -730,7 +744,11 @@ mod continuous_batching_tests {
         let (tx, _rx) = channel::<Response>(1);
 
         prefill_each(&mut sched, &lengths, &tx);
-        assert_eq!(sched.running_len(), n, "all four prefill into one block each");
+        assert_eq!(
+            sched.running_len(),
+            n,
+            "all four prefill into one block each"
+        );
 
         let out = sched.schedule(&logger());
 
