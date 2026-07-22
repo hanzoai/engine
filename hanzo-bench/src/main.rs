@@ -59,10 +59,12 @@ async fn run_bench(
     test_name: TestName,
 ) -> anyhow::Result<BenchResult> {
     let sampling_params = SamplingParams {
-        // Greedy argmax decode: matches llama-bench's tg measurement (no top-k/p, no penalties,
-        // no DRY vocab scan) so the reported tok/s isolates model-eval throughput, not sampler cost.
+        // Greedy argmax decode via top_k=1 (matches SamplingParams::deterministic() and llama-bench's
+        // greedy tg): top_k=None left temperature to default to 1.0 and run the full-vocab CPU
+        // multinomial each step, taxing the decode loop and muddying model-eval throughput. top_k=1
+        // selects the argmax directly (no multinomial, no DRY scan), so t/s isolates model eval.
         temperature: None,
-        top_k: None,
+        top_k: Some(1),
         top_p: None,
         min_p: None,
         top_n_logprobs: 0,
