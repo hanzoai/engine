@@ -26,6 +26,7 @@ pub mod featurize;
 pub mod guard;
 pub mod learner;
 pub mod linalg;
+pub mod persist;
 pub mod policy;
 pub mod profile;
 pub mod selector;

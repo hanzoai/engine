@@ -138,6 +138,7 @@ pub async fn run_server(
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
         .with_agent_permission(runtime.code_exec_permission.into())
         .with_approval_broker(approval_broker.clone())
+        .with_enso_path_optional(server.enso_weights.as_deref())
         .build()
         .await?;
 
