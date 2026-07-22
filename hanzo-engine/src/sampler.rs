@@ -371,6 +371,15 @@ fn argmax_f32(values: &[f32]) -> u32 {
     best_i
 }
 
+/// One-shot toggle read once per process: `HANZO_LEAN_GREEDY_OFF=1` restores the tensor
+/// round-trip on the greedy decode path so the lean host-vector path can be A/B'd in-engine
+/// without a rebuild. Cached in a `OnceLock` so the check costs nothing per token.
+fn lean_greedy_off() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("HANZO_LEAN_GREEDY_OFF").is_some())
+}
+
 impl Sampler {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -457,7 +466,13 @@ impl Sampler {
     }
 
     fn sample_argmax(&self, logits: Tensor, return_logprobs: bool) -> Result<Logprobs> {
-        let raw: Vec<f32> = logits.to_vec1()?;
+        self.sample_argmax_vec(logits.to_vec1()?, return_logprobs)
+    }
+
+    /// Plain-argmax sampling directly on a host logits vector. The greedy decode path reaches this
+    /// with the already-read-back, already-penalized vector so it never re-wraps the logits into a
+    /// CPU tensor just to read them straight back out again.
+    fn sample_argmax_vec(&self, raw: Vec<f32>, return_logprobs: bool) -> Result<Logprobs> {
         let next_token = argmax_f32(&raw);
         // The argmax itself needs no normalization, but the reported logprobs do:
         // `raw` here are LOGITS, and the log of a negative logit is NaN
@@ -1271,7 +1286,16 @@ impl Sampler {
         self.sample_multinomial_report(probs, unfiltered.as_deref(), return_logprobs, rng)
     }
 
-    fn apply_penalties(&self, mut logits: Vec<f32>, context: &[u32]) -> Result<Tensor> {
+    fn apply_penalties(&self, logits: Vec<f32>, context: &[u32]) -> Result<Tensor> {
+        let logits = self.apply_penalties_vec(logits, context)?;
+        let vocab_size = logits.len();
+        Tensor::from_vec(logits, vocab_size, &Device::Cpu)
+    }
+
+    /// Apply the in-place logit penalties (dry, then frequency/presence/repetition) to a host
+    /// vector. Shared by the tensor path (`apply_penalties`) and the greedy fast path, which stays
+    /// on the vector and never allocates the intermediate CPU tensor.
+    fn apply_penalties_vec(&self, mut logits: Vec<f32>, context: &[u32]) -> Result<Vec<f32>> {
         if context.is_empty() {
             hanzo_ml::bail!("Penalty context is empty, this should not happen.");
         }
@@ -1282,8 +1306,7 @@ impl Sampler {
         // Frequency, presence, repetition penalty
         self.apply_freq_pres_rep_penalty(&mut logits, context)?;
 
-        let vocab_size = logits.len();
-        Tensor::from_vec(logits, vocab_size, &Device::Cpu)
+        Ok(logits)
     }
 
     fn apply_freq_pres_rep_penalty(&self, logits: &mut [f32], context: &[u32]) -> Result<()> {
@@ -1456,6 +1479,19 @@ impl Sampler {
         }
 
         let logits = logits.to_vec1()?;
+        // Greedy fast path: the plain-argmax decode -- no temperature, no speculative sampling, no
+        // custom tensor logits-processor -- needs only the penalized host vector, so argmax it
+        // directly instead of round-tripping through a CPU tensor (apply_penalties' Tensor::from_vec
+        // then sample_argmax's to_vec1, two full-vocab copies per token). Byte-identical token: same
+        // penalties, same argmax_f32. HANZO_LEAN_GREEDY_OFF restores the tensor path for the A/B.
+        if self.temperature.is_none()
+            && !sample_speculative
+            && self.logits_processors.is_empty()
+            && !lean_greedy_off()
+        {
+            let logits = self.apply_penalties_vec(logits, context)?;
+            return self.sample_argmax_vec(logits, return_logprobs);
+        }
         let mut logits = self.apply_penalties(logits, context)?;
         for processor in &self.logits_processors {
             logits = processor.apply(&logits, context)?;
