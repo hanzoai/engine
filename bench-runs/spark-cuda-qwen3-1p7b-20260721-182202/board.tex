@@ -1,0 +1,11 @@
+\begin{tabular}{@{}llrrrrl@{}}
+\toprule
+backend & phase & $n$ & hanzo t/s & llama t/s & ratio & verdict \\
+\midrule
+CUDA & prefill & 2048 & 7001.4$\pm$918.0 & 7326.8$\pm$394.0 & 0.96$\pm$0.14 & \textsc{parity} \\
+CUDA & prefill & 4096 & 7181.3$\pm$739.2 & 6871.3$\pm$125.0 & 1.05$\pm$0.11 & \textsc{parity} \\
+CUDA & prefill & 500 & 7605.6$\pm$889.7 & 7250.2$\pm$208.5 & 1.05$\pm$0.13 & \textsc{parity} \\
+CUDA & prefill & 512 & 7588.4$\pm$852.4 & 6190.0$\pm$1081.7 & 1.23$\pm$0.25 & \textsc{parity} \\
+CUDA & decode & 128 & 86.5$\pm$1.1 & 102.8$\pm$1.1 & 0.84$\pm$0.01 & \textsc{loss} \\
+\bottomrule
+\end{tabular}
