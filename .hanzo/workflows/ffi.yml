@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         # Only linux-amd64 is buildable today. Verified against
-        # /api/v1/admin/actions/runners: the four ONLINE runners advertise
+        # /v1/admin/actions/runners: the four ONLINE runners advertise
         # exactly ubuntu-latest, ubuntu-22.04, ubuntu-24.04 and
         # hanzo-build-linux-amd64. No runner advertises a linux-arm64 or
         # macOS pool, and the three self-hosted hosts that could (spark
