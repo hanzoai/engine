@@ -1,16 +1,33 @@
-# Hanzo Engine - LLM Inference Integration
+# LLM.md — Hanzo Engine
 
-This file provides guidance to AI assistants working with the Hanzo Engine codebase.
+Guidance for AI agents working in this repo. (Symlinked to `CLAUDE.md` / `AGENTS.md` / `QWEN.md` / `GEMINI.md` — see "Context for All AI Assistants" below.)
 
-## Project Overview
+## What this is
 
-**Hanzo Engine** is Hanzo AI's high-performance LLM inference engine written in Rust.
+**Hanzo Engine** is Hanzo AI's native inference engine: a fast, multimodal Rust engine (LLM + vision + audio + speech + image + embeddings) that serves the `/v1` inference plane of the Open AI Cloud. One `hanzo` binary (`run`, `serve`, `bench`, `tune`) + a Rust crate (`hanzo`) + a Python package (`hanzo`).
 
-### Integration Status
+## Canonical role in the Hanzo model
 
-- **Last Sync Date**: 2026-05-06 — merged upstream hanzo `2d4ba4f16`
-- **Remote**: Configured as `upstream` (hanzoai/engine) in git
-- **Workspace version**: 0.8.1 (synced with upstream)
+- A **real implementation repo** (native inference) — NOT an SDK, NOT a discovery/wrapper repo. It *serves* the `/v1` API that the cloud SDK family calls.
+- Cloud SDKs (Python flagship `hanzoai/python-sdk`; `@hanzo/ai`; Go/Rust/C++/Swift/Kotlin) are the clients. SDK completeness: Python > Rust > C++ > Go.
+- DRY: one impl, one place. Keep engine internals here; link out, never duplicate.
+- Whole-model truth: `~/work/hanzo/SDK-ARCHITECTURE.md`.
+
+## Brand rules (enforce in every doc and commit)
+
+- Hanzo is a full AI cloud / inference engine — **never** an "LLM gateway" or "OpenAI-compatible proxy", and never positioned against a proxy product. Speaking the OpenAI / Anthropic wire formats is a feature, not the identity.
+- HTTP paths are **`/v1/...`** only — never an `/api/` prefix.
+- **Zen** is our own model family (zen-eco, zen-ultra, Zen5, …); never surface upstream model names as the brand in public docs.
+- Crisp, modern, developer-first voice; no emoji-spam.
+
+## Fast orientation (full detail below)
+
+- Build / run: see **Essential Commands**. Agent rules: see **Rules for AI Assistants**. Symlinks: see **Context for All AI Assistants**.
+- Core crates: `hanzo-engine/` (inference lib+bin; canonical `hanzo_engine::{infer,embed}`, consumed by EVM precompiles `0x0201`/`0x0202`) · `hanzo-server/` + `hanzo-server-core/src/routes.rs` (CLI + `/v1` HTTP routing) · `hanzo-pyo3/` (Python) · `hanzo/` (Rust API) · `hanzo-quant/` · `hanzo-paged-attn/` · `hanzo-vision/` · `hanzo-audio/` · `hanzo-llm-mcp/`.
+
+---
+
+# Engineering knowledge base
 
 ### Hanzo-Specific Components
 
