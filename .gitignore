@@ -34,3 +34,6 @@ scripts/__pycache__/
 /.router-retrain/
 /engine-upstream/
 target-router/
+
+# nested repo — lives in zenlm/zen5-engine, cloned here for local builds
+hanzo-zen5/
