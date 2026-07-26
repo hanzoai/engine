@@ -1,18 +1,14 @@
+<a name="top"></a>
 <p align="center"><img src=".github/hero.svg" alt="Hanzo Engine" width="880"></p>
 
-<a name="top"></a>
-<!--
-<h1 align="center">
-  Hanzo Engine
-</h1>
--->
-
 <div align="center">
-  <img src="https://raw.githubusercontent.com/hanzoai/engine/master/res/banner.png" alt="Hanzo Engine" width="100%" style="max-width: 800px;">
+  <img src="https://raw.githubusercontent.com/hanzoai/engine/main/res/banner.png" alt="Hanzo Engine" width="100%" style="max-width: 800px;">
 </div>
 
+<h1 align="center">Hanzo Engine</h1>
+
 <h3 align="center">
-Fast, flexible LLM inference.
+The native, multimodal inference engine — text, vision, audio, speech, image, and embeddings in one fast Rust binary.
 </h3>
 
 <p align="center">
@@ -26,6 +22,8 @@ Fast, flexible LLM inference.
 </p>
 
 <p align="center"><sub>Forked from <a href="https://github.com/EricLBuehler/mistral.rs"><b>EricLBuehler/mistral.rs</b></a> (MIT).</sub></p>
+
+Hanzo Engine runs any Hugging Face model with zero config, quantizes it for your hardware, and serves it over the OpenAI and Anthropic wire formats plus a built-in web UI — one binary, from your laptop to a GPU cluster. It is the native inference layer of the [Open AI Cloud](https://hanzo.ai).
 
 ## Latest
 
@@ -42,7 +40,7 @@ Fast, flexible LLM inference.
 - **Any Hugging Face model, zero config**: Just `hanzo run -m user/model`. Architecture, quantization format, and chat template are auto-detected.
 - **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
 - **Smart quantization**: `--quant` automatically selects the best quantization format at that level: using a prebuilt UQFF if one is published, otherwise applying ISQ. [Docs](https://hanzoai.github.io/engine/tutorials/06-quantize-a-model/)
-- **OpenAI + Anthropic compatible serving**: The same `hanzo serve` process exposes OpenAI-compatible `/v1` endpoints and an Anthropic-compatible Messages endpoint.
+- **OpenAI + Anthropic wire formats**: The same `hanzo serve` process exposes OpenAI-compatible `/v1` endpoints and an Anthropic-compatible Messages endpoint.
 - **Built-in web UI**: Served at `/ui` by default. Shows reasoning, code execution, plots, and files inline. Edit any message and the new branch runs with its own Python state. Pass `--no-ui` to disable.
 - **Hardware-aware**: `hanzo tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
@@ -54,12 +52,12 @@ Fast, flexible LLM inference.
 
 **Linux/macOS:**
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/hanzoai/engine/master/install.sh | sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/hanzoai/engine/main/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/hanzoai/engine/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/hanzoai/engine/main/install.ps1 | iex
 ```
 
 [Manual installation & other platforms](https://hanzoai.github.io/engine/guides/install/)
@@ -110,7 +108,7 @@ hanzo doctor
 <details open>
   <summary><b>UI Demo</b></summary>
   <br>
-  <img src="https://raw.githubusercontent.com/hanzoai/engine/master/res/chat.gif" alt="Web Chat UI Demo" />
+  <img src="https://raw.githubusercontent.com/hanzoai/engine/main/res/ui.gif" alt="Web Chat UI Demo" />
 </details>
 
 ## What Makes It Fast
@@ -294,7 +292,7 @@ For complete documentation, see the **[Documentation](https://hanzoai.github.io/
 
 **Quick Links:**
 - [CLI Reference](https://hanzoai.github.io/engine/reference/cli/) - All commands and options
-- [HTTP API](https://hanzoai.github.io/engine/reference/http-api/) - OpenAI-compatible endpoints
+- [HTTP API](https://hanzoai.github.io/engine/reference/http-api/) - OpenAI-compatible `/v1` endpoints
 - [Quantization](https://hanzoai.github.io/engine/reference/quantization-types/) - ISQ, GGUF, GPTQ, and more
 - [Device Mapping](https://hanzoai.github.io/engine/explanation/device-mapping/) - Multi-GPU and CPU offloading
 - [MCP Integration](https://hanzoai.github.io/engine/guides/agents/connect-mcp-server/) - MCP integration documentation
@@ -307,10 +305,12 @@ Contributions welcome! Please [open an issue](https://github.com/hanzoai/engine/
 
 ## Credits
 
-This project would not be possible without the excellent work at [Hanzo](https://github.com/hanzoai/ml). Thank you to all [contributors](https://github.com/hanzoai/engine/graphs/contributors)!
+Built on the excellent open-source work of [mistral.rs](https://github.com/EricLBuehler/mistral.rs) and [Candle](https://github.com/hanzoai/ml). Thank you to all [contributors](https://github.com/hanzoai/engine/graphs/contributors)!
 
 Hanzo Engine is not affiliated with Mistral AI.
 
-<p align="right">
-  <a href="#top">Back to Top</a>
-</p>
+## Hanzo — the Open AI Cloud
+
+Open source · every language · on-chain settlement. [hanzo.ai](https://hanzo.ai) · [docs.hanzo.ai](https://docs.hanzo.ai)
+
+**SDKs in every language** — [Python](https://github.com/hanzoai/python-sdk) (flagship) · [TypeScript](https://github.com/hanzo-js/sdk) · [Go](https://github.com/hanzo-go/sdk) · [Rust](https://github.com/hanzo-rs/sdk) · [C++](https://github.com/hanzo-cpp/sdk) · [Swift](https://github.com/hanzo-swift/sdk) · [Kotlin](https://github.com/hanzo-kt/sdk) · [umbrella](https://github.com/hanzoai/sdk)
