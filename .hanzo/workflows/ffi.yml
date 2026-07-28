@@ -38,6 +38,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The job image (catthehacker/ubuntu:act-24.04) ships no Rust, so
+      # build.sh died on `cargo: command not found` with exit 127 — which act
+      # reports as a generic "command not found, please refer to
+      # github.com/nektos/act/issues/107", pointing at act rather than at the
+      # missing toolchain. Nothing else in this workflow installs one.
+      #
+      # Same action hanzoai/universe uses for its CLI job, so the two agree on
+      # how Rust arrives on a runner.
+      - uses: dtolnay/rust-toolchain@stable
+
       - name: Build cdylib + staticlib (host backend)
         run: |
           # Locate the cargo workspace root (handles flat or engine/-nested checkout).
