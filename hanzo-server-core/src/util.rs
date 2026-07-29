@@ -25,6 +25,26 @@ const MAX_REMOTE_MEDIA_BYTES: u64 = 64 * 1024 * 1024;
 ///   - no redirects, so a public URL cannot hop to a private one after the check,
 ///   - resolved address must be globally routable -- no loopback/private/link-local/unspecified,
 ///   - body capped at MAX_REMOTE_MEDIA_BYTES, enforced on the stream, not on a claimed header.
+/// Whether this process may read media from its own filesystem.
+///
+/// `parse_image_url`/`parse_audio_url` are reachable from `/v1/chat/completions`
+/// and `/v1/embeddings`, where the string comes from the request body. A
+/// `file://` URL — or a bare path, which is promoted to one below — therefore
+/// lets a caller name any file the server process can open and receive its
+/// bytes back decoded as media. The remote path already refuses to be steered
+/// (no redirects, no private addresses); the local path had no equivalent gate.
+///
+/// Local media is genuinely useful when the engine runs as a local tool against
+/// files the operator already owns, so this is a gate rather than a removal —
+/// and it is closed unless the operator opens it, because a server serving
+/// other people is the case that must be safe by default.
+fn local_media_allowed() -> bool {
+    matches!(
+        std::env::var("HANZO_ALLOW_LOCAL_MEDIA").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
+}
+
 async fn fetch_remote_media(url: &url::Url) -> Result<Vec<u8>, anyhow::Error> {
     if url.scheme() != "http" && url.scheme() != "https" {
         anyhow::bail!("Unsupported URL scheme for remote media: {}", url.scheme());
@@ -131,7 +151,7 @@ async fn fetch_remote_media(url: &url::Url) -> Result<Vec<u8>, anyhow::Error> {
 pub async fn parse_image_url(url_unparsed: &str) -> Result<DynamicImage, anyhow::Error> {
     let url = if let Ok(url) = url::Url::parse(url_unparsed) {
         url
-    } else if File::open(url_unparsed).await.is_ok() {
+    } else if local_media_allowed() && File::open(url_unparsed).await.is_ok() {
         url::Url::from_file_path(std::path::absolute(url_unparsed)?)
             .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url_unparsed))?
     } else {
@@ -145,6 +165,12 @@ pub async fn parse_image_url(url_unparsed: &str) -> Result<DynamicImage, anyhow:
     let bytes = if url.scheme() == "http" || url.scheme() == "https" {
         fetch_remote_media(&url).await?
     } else if url.scheme() == "file" {
+        if !local_media_allowed() {
+            anyhow::bail!(
+                "Refusing to read local media: set HANZO_ALLOW_LOCAL_MEDIA=1 to allow \
+                 file:// and local paths on this server"
+            );
+        }
         let path = url
             .to_file_path()
             .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url))?;
@@ -173,7 +199,7 @@ pub async fn parse_image_url(url_unparsed: &str) -> Result<DynamicImage, anyhow:
 pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::Error> {
     let url = if let Ok(url) = url::Url::parse(url_unparsed) {
         url
-    } else if File::open(url_unparsed).await.is_ok() {
+    } else if local_media_allowed() && File::open(url_unparsed).await.is_ok() {
         url::Url::from_file_path(std::path::absolute(url_unparsed)?)
             .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url_unparsed))?
     } else {
@@ -187,6 +213,12 @@ pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::E
     let bytes = if url.scheme() == "http" || url.scheme() == "https" {
         fetch_remote_media(&url).await?
     } else if url.scheme() == "file" {
+        if !local_media_allowed() {
+            anyhow::bail!(
+                "Refusing to read local media: set HANZO_ALLOW_LOCAL_MEDIA=1 to allow \
+                 file:// and local paths on this server"
+            );
+        }
         let path = url
             .to_file_path()
             .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url))?;
