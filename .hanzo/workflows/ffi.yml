@@ -62,6 +62,11 @@ jobs:
           ls -lh "$ROOT"/target/release/libhanzo_engine_ffi.* || true
 
       - name: Upload library
+        # v3, not v4+: this workflow runs on git.hanzo.ai, which presents as GHES.
+        # The v4 action refuses outright — "GHESNotSupportedError: @actions/artifact
+        # v2.0.0+ ... not currently supported on GHES" — so the job builds its
+        # artifact and then discards it at the last step, and reads as a build
+        # failure when the build actually succeeded.
         uses: actions/upload-artifact@v3
         with:
           name: libhanzo_engine_ffi-${{ matrix.label }}
