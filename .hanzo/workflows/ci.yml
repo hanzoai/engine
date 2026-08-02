@@ -95,7 +95,12 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update
-          apt-get install -y curl build-essential libssl-dev protobuf-compiler pkg-config
+          # libclang is for bindgen, which the rocm feature runs over include/hip.h.
+          # Without it the check dies at
+          #   panicked … Unable to find libclang: "couldn't find any valid shared
+          #   libraries matching: ['libclang.so', …], set the `LIBCLANG_PATH`
+          # which reads as a broken build script rather than a missing package.
+          apt-get install -y curl build-essential libssl-dev protobuf-compiler pkg-config libclang-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable

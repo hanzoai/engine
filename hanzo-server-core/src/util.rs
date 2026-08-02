@@ -14,17 +14,6 @@ use tokio::{
 /// single `image_url` can stream until the process is OOM-killed.
 const MAX_REMOTE_MEDIA_BYTES: u64 = 64 * 1024 * 1024;
 
-/// Fetch `url` over http(s) for media, refusing what a server must not fetch on a caller's behalf.
-///
-/// `parse_image_url`/`parse_audio_url` run on `/v1/chat/completions` and `/v1/embeddings`, so the URL
-/// arrives from an untrusted request body. A bare GET there is an SSRF primitive: the server will
-/// happily fetch `http://169.254.169.254/...` (cloud metadata, i.e. credentials), reach hosts inside
-/// the deployment's network that the caller cannot, follow a redirect from a public host into either,
-/// and stream an unbounded body. This refuses all four:
-///   - only http/https (the caller's scheme choice is not ours to trust),
-///   - no redirects, so a public URL cannot hop to a private one after the check,
-///   - resolved address must be globally routable -- no loopback/private/link-local/unspecified,
-///   - body capped at MAX_REMOTE_MEDIA_BYTES, enforced on the stream, not on a claimed header.
 /// Whether this process may read media from its own filesystem.
 ///
 /// `parse_image_url`/`parse_audio_url` are reachable from `/v1/chat/completions`
@@ -45,6 +34,17 @@ fn local_media_allowed() -> bool {
     )
 }
 
+/// Fetch `url` over http(s) for media, refusing what a server must not fetch on a caller's behalf.
+///
+/// `parse_image_url`/`parse_audio_url` run on `/v1/chat/completions` and `/v1/embeddings`, so the URL
+/// arrives from an untrusted request body. A bare GET there is an SSRF primitive: the server will
+/// happily fetch `http://169.254.169.254/...` (cloud metadata, i.e. credentials), reach hosts inside
+/// the deployment's network that the caller cannot, follow a redirect from a public host into either,
+/// and stream an unbounded body. This refuses all four:
+///   - only http/https (the caller's scheme choice is not ours to trust),
+///   - no redirects, so a public URL cannot hop to a private one after the check,
+///   - resolved address must be globally routable -- no loopback/private/link-local/unspecified,
+///   - body capped at MAX_REMOTE_MEDIA_BYTES, enforced on the stream, not on a claimed header.
 async fn fetch_remote_media(url: &url::Url) -> Result<Vec<u8>, anyhow::Error> {
     if url.scheme() != "http" && url.scheme() != "https" {
         anyhow::bail!("Unsupported URL scheme for remote media: {}", url.scheme());
