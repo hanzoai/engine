@@ -101,6 +101,13 @@ jobs:
           #   libraries matching: ['libclang.so', …], set the `LIBCLANG_PATH`
           # which reads as a broken build script rather than a missing package.
           apt-get install -y curl build-essential libssl-dev protobuf-compiler pkg-config libclang-dev
+          # rocblas-dev: the hanzo-rocm build script compiles include/rocblas.h,
+          # which does #include <rocblas/rocblas.h>. rocm/dev-ubuntu-24.04:7.2.4
+          # ships the HIP headers but NOT rocBLAS — bindgen generated the hip
+          # bindings and then died on
+          #   include/rocblas.h:5:10: fatal error: 'rocblas/rocblas.h' file not found
+          # so the include path was already right and the package was simply absent.
+          apt-get install -y rocblas-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
