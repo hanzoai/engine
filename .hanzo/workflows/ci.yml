@@ -107,13 +107,18 @@ jobs:
           # bindings and then died on
           #   include/rocblas.h:5:10: fatal error: 'rocblas/rocblas.h' file not found
           # so the include path was already right and the package was simply absent.
-          # hanzo-rocm's build script generates bindings for exactly FOUR
-          # libraries — hip, rocblas, rocsolver, rocfft. rocm/dev-ubuntu-24.04
-          # ships only HIP, so each missing one surfaced as its own
+          # rocm-libs, not a hand-listed set. hanzo-rocm binds a header per ROCm
+          # math library and rocm/dev-ubuntu-24.04 ships only HIP, so every
+          # missing one is its own
           #   fatal error: 'roc*/roc*.h' file not found
-          # one round trip at a time, until the crate's own "bindings for X"
-          # lines were read and the whole set installed at once.
-          apt-get install -y rocblas-dev rocsolver-dev rocfft-dev
+          # and they only become visible ONE PER RUN, because the build stops at
+          # the first. Enumerating them cost four round trips — rocblas, then
+          # rocsolver, then rocfft, then miopen — and each list that looked
+          # complete was not: cargo:rustc-link-lib named three, the crate's
+          # "bindings for X" lines named four, and miopen was a fifth that only
+          # appeared once the other four succeeded. rocm-libs is the meta-package
+          # for the whole math stack, so the set stops being something to guess.
+          apt-get install -y rocm-libs
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
