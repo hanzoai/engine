@@ -107,7 +107,12 @@ jobs:
           # bindings and then died on
           #   include/rocblas.h:5:10: fatal error: 'rocblas/rocblas.h' file not found
           # so the include path was already right and the package was simply absent.
-          apt-get install -y rocblas-dev
+          # rocblas AND rocsolver: hanzo-rocm links amdhip64 (base image) +
+          # rocblas + rocsolver, and binds a header for each. The image carries
+          # only HIP, so each missing one surfaced as its own
+          #   fatal error: 'roc*/roc*.h' file not found
+          # one round trip at a time. Both are installed together.
+          apt-get install -y rocblas-dev rocsolver-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable

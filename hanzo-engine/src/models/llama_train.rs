@@ -325,6 +325,20 @@ mod tests {
         }
     }
 
+    /// Deterministic N(0,1) sample stream, the same shape gguf_moe.rs uses and for
+    /// the same reason: the CPU backend's `Device::set_seed` is a NO-OP (candle's
+    /// CPU rng is not seedable), so an unseeded `Tensor::randn` gives this test a
+    /// different starting point on every run. The loss assertion below has an
+    /// absolute term, and a run that reduced the loss 9.09 -> 0.53 — a 17x drop —
+    /// still failed it by 0.03. That is the guard flaking for reasons unrelated to
+    /// what it guards.
+    fn normals(seed: u64, n: usize) -> Vec<f32> {
+        use rand::prelude::*;
+        use rand_distr::StandardNormal;
+        let mut rng = rand_isaac::Isaac64Rng::seed_from_u64(seed);
+        (0..n).map(|_| rng.sample::<f32, _>(StandardNormal)).collect()
+    }
+
     /// Random-init base weights, HF-named exactly as the engine loads them. Embeddings
     /// are tied to `lm_head`, so there is no separate `lm_head.weight` (the loaded model
     /// derives it from `model.embed_tokens.weight`).
@@ -336,12 +350,32 @@ mod tests {
         // Realistic embedding scale so the tied head can grow confident logits.
         m.insert(
             "model.embed_tokens.weight".to_string(),
-            Tensor::randn(0f32, 0.5f32, (cfg.vocab_size, cfg.hidden_size), device).unwrap(),
+            Tensor::from_vec(
+                normals(0xE3BD, cfg.vocab_size * cfg.hidden_size)
+                    .into_iter()
+                    .map(|v| v * 0.5)
+                    .collect::<Vec<f32>>(),
+                (cfg.vocab_size, cfg.hidden_size),
+                device,
+            )
+            .unwrap(),
         );
+        // Each projection gets its own stream, keyed by shape+index, so adding a
+        // layer cannot shift the values of the ones before it.
+        let mut nth = 0u64;
         let mut put = |name: String, out: usize, inp: usize| {
+            nth += 1;
             m.insert(
                 name,
-                Tensor::randn(0f32, 0.05f32, (out, inp), device).unwrap(),
+                Tensor::from_vec(
+                    normals(0x5EED + nth, out * inp)
+                        .into_iter()
+                        .map(|v| v * 0.05)
+                        .collect::<Vec<f32>>(),
+                    (out, inp),
+                    device,
+                )
+                .unwrap(),
             );
         };
         for l in 0..cfg.num_hidden_layers {
