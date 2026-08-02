@@ -107,12 +107,13 @@ jobs:
           # bindings and then died on
           #   include/rocblas.h:5:10: fatal error: 'rocblas/rocblas.h' file not found
           # so the include path was already right and the package was simply absent.
-          # rocblas AND rocsolver: hanzo-rocm links amdhip64 (base image) +
-          # rocblas + rocsolver, and binds a header for each. The image carries
-          # only HIP, so each missing one surfaced as its own
+          # hanzo-rocm's build script generates bindings for exactly FOUR
+          # libraries — hip, rocblas, rocsolver, rocfft. rocm/dev-ubuntu-24.04
+          # ships only HIP, so each missing one surfaced as its own
           #   fatal error: 'roc*/roc*.h' file not found
-          # one round trip at a time. Both are installed together.
-          apt-get install -y rocblas-dev rocsolver-dev
+          # one round trip at a time, until the crate's own "bindings for X"
+          # lines were read and the whole set installed at once.
+          apt-get install -y rocblas-dev rocsolver-dev rocfft-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
