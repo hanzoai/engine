@@ -336,7 +336,9 @@ mod tests {
         use rand::prelude::*;
         use rand_distr::StandardNormal;
         let mut rng = rand_isaac::Isaac64Rng::seed_from_u64(seed);
-        (0..n).map(|_| rng.sample::<f32, _>(StandardNormal)).collect()
+        (0..n)
+            .map(|_| rng.sample::<f32, _>(StandardNormal))
+            .collect()
     }
 
     /// Random-init base weights, HF-named exactly as the engine loads them. Embeddings
