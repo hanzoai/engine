@@ -1,11 +1,23 @@
-# Release Hanzo Engine -- native (Hanzo Git) copy.
+# Release Hanzo Engine -- the ONLY release lane.
 #
-# This is the .hanzo/workflows copy of .github/workflows/release.yml. The Hanzo
-# Git fork scans .hanzo/workflows FIRST; GitHub.com ignores .hanzo/, so this file
-# is INERT on GitHub -- it cannot affect the live GitHub release lane, which keeps
-# running from .github/workflows/release.yml until the Phase-E cutover.
+# This file used to describe itself as the inert native COPY of
+# .github/workflows/release.yml, "which keeps running ... until the Phase-E
+# cutover". There is no such file: .github/ holds actions/, hero.svg and
+# ISSUE_TEMPLATE/ and no workflows/ directory at all. So the lane that sentence
+# called live cannot fire, and a reader trusting it looks for a release pipeline
+# on GitHub that is not there.
 #
-# One native adaptation vs the .github copy: the macOS leg targets the git-runner
+# That mattered. GitHub.com ignores .hanzo/, so a tag pushed to GitHub triggers
+# NOTHING, and this file only runs where .hanzo/workflows is read -- the forge.
+# Tags kept being minted against a lane that could not build them: v1.7.93 is the
+# newest tag and main is nine commits past it, seven of those `fix(ci):` commits
+# repairing the native legs.
+#
+# So: a release happens when a v* tag reaches the FORGE. A tag that only reaches
+# GitHub is a number with no binary behind it. Verify a release by its artifacts,
+# never by the existence of the tag.
+#
+# One native adaptation vs the retired .github copy: the macOS leg targets the git-runner
 # `metal` host daemon (dbc, Apple M4 Max) instead of the GitHub `self-hosted`
 # label set. The amd64/arm64 cross-build legs are unchanged -- they run on the
 # `hanzo-build-linux-amd64` label the git-runner maps.
