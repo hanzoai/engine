@@ -34,15 +34,7 @@ error() { printf "${RED}error:${NC} %s\n" "$1" >&2; exit 1; }
 
 # Banner
 print_banner() {
-    printf "${BOLD}"
-    echo "  __  __ _     _             _              "
-    echo " |  \\/  (_)___| |_ _ __ __ _| |  _ __ ___   "
-    echo " | |\\/| | / __| __| '__/ _\` | | | '__/ __|  "
-    echo " | |  | | \\__ \\ |_| | | (_| | |_| |  \\__ \\  "
-    echo " |_|  |_|_|___/\\__|_|  \\__,_|_(_)_|  |___/  "
-    echo ""
-    printf "${NC}${BLUE}Fast, flexible LLM inference.${NC}\n"
-    echo ""
+    printf "${BOLD}Hanzo Engine${NC} ${BLUE}- fast, flexible LLM inference.${NC}\n\n"
 }
 
 # Detect operating system
@@ -62,9 +54,9 @@ detect_os() {
 
 # Minimum required Rust version
 REQUIRED_RUST_VERSION="1.88"
-HANZO_REPO_URL="https://github.com/EricLBuehler/mistral.rs"
-HANZO_BRANCH="master"
-HANZO_CLI_PACKAGE="mistralrs-cli"
+HANZO_REPO_URL="https://github.com/hanzoai/engine"
+HANZO_BRANCH="main"
+HANZO_CLI_PACKAGE="hanzo-cli"
 
 # Check if Rust is installed
 check_rust() {
@@ -231,6 +223,30 @@ detect_nccl() {
     return 1
 }
 
+# Native target of the AMD GPU (e.g. gfx1151). Empty when there is no ROCm GPU.
+detect_rocm_arch() {
+    if command -v offload-arch >/dev/null 2>&1; then
+        arch=$(offload-arch 2>/dev/null | head -1)
+        if [ -n "$arch" ]; then
+            echo "$arch"
+            return
+        fi
+    fi
+    for bin in rocminfo "${ROCM_PATH:-/opt/rocm}/bin/rocminfo"; do
+        command -v "$bin" >/dev/null 2>&1 || continue
+        arch=$("$bin" 2>/dev/null | grep -oE 'gfx[0-9a-f]+' | head -1)
+        if [ -n "$arch" ]; then
+            echo "$arch"
+            return
+        fi
+    done
+}
+
+# The rocm feature compiles hanzo-rocm-kernels with hipcc and links rocBLAS.
+detect_hipcc() {
+    command -v hipcc >/dev/null 2>&1 || [ -x "${ROCM_PATH:-/opt/rocm}/bin/hipcc" ]
+}
+
 # Build feature string based on detected hardware
 build_features() {
     os="$1"
@@ -244,9 +260,10 @@ build_features() {
         cuda_cc=$(detect_cuda_compute_cap)
         if [ -n "$cuda_cc" ]; then
             features="cuda"
-            # Extract major.minor from compute cap (e.g., 89 -> 8.9)
-            cc_major=$(echo "$cuda_cc" | cut -c1)
-            cc_minor=$(echo "$cuda_cc" | cut -c2-)
+            # cuda_cc is the dot-stripped cap, so the minor is always the last digit:
+            # 89 -> 8.9, 121 -> 12.1 (string surgery printed 1.21 for a 3-digit cap).
+            cc_major=$(( cuda_cc / 10 ))
+            cc_minor=$(( cuda_cc % 10 ))
             info "CUDA detected (compute capability: ${cc_major}.${cc_minor})"
 
             if [ "${HANZO_INSTALL_NO_NCCL:-}" = "1" ]; then
@@ -288,7 +305,17 @@ build_features() {
                 fi
             fi
         else
-            info "No NVIDIA GPU detected"
+            rocm_arch=$(detect_rocm_arch)
+            if [ -z "$rocm_arch" ]; then
+                warn "No accelerator detected (no NVIDIA, no AMD/ROCm) - installing a CPU-only engine"
+            elif detect_hipcc; then
+                features="rocm"
+                ROCM_GFX_ARCH="${ROCM_GFX_ARCH:-$rocm_arch}"
+                export ROCM_GFX_ARCH
+                info "AMD GPU detected ($rocm_arch) - enabling rocm"
+            else
+                warn "AMD GPU detected ($rocm_arch) but hipcc is missing - install the ROCm toolchain (hip + rocblas), else this is a CPU-only engine"
+            fi
         fi
     fi
 
@@ -332,17 +359,33 @@ install_ffmpeg() {
     fi
 }
 
-# Install hanzo-cli
+# Install the engine from the repository. There is no registry release of
+# HANZO_CLI_PACKAGE, so the repository is the only place the binary exists.
+# HANZOAI_VERSION pins a release tag; HANZOAI_INSTALL_DIR redirects the bin dir.
 install_hanzo() {
     features="$1"
 
-    if [ -n "$features" ]; then
-        info "Installing hanzo-cli with features: $features"
-        cargo install hanzo-cli@0.8.1 --features "$features"
+    set -- install --git "$HANZO_REPO_URL" --locked "$HANZO_CLI_PACKAGE"
+    if [ -n "${HANZOAI_VERSION:-}" ]; then
+        set -- "$@" --tag "$HANZOAI_VERSION"
+        info "Pinning release tag $HANZOAI_VERSION"
     else
-        info "Installing hanzo-cli with default features"
-        cargo install hanzo-cli@0.8.1
+        set -- "$@" --branch "$HANZO_BRANCH"
     fi
+    # cargo --root R writes R/bin, but callers name a BIN dir, so trim one /bin.
+    if [ -n "${HANZOAI_INSTALL_DIR:-}" ]; then
+        root=${HANZOAI_INSTALL_DIR%/}
+        root=${root%/bin}
+        set -- "$@" --root "$root"
+        info "Installing into $root/bin"
+    fi
+    if [ -n "$features" ]; then
+        set -- "$@" --features "$features"
+        info "Installing $HANZO_CLI_PACKAGE with features: $features"
+    else
+        info "Installing $HANZO_CLI_PACKAGE with default features"
+    fi
+    cargo "$@"
 }
 
 # Main installation flow
