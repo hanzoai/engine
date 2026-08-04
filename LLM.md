@@ -6,6 +6,19 @@ Guidance for AI agents working in this repo. (Symlinked to `CLAUDE.md` / `AGENTS
 
 **Hanzo Engine** is Hanzo AI's native inference engine: a fast, multimodal Rust engine (LLM + vision + audio + speech + image + embeddings) that serves the `/v1` inference plane of the Open AI Cloud. One `hanzo` binary (`run`, `serve`, `bench`, `tune`) + a Rust crate (`hanzo`) + a Python package (`hanzo`).
 
+## Provenance and licensing — read before touching LICENSE, NOTICE, or a manifest
+
+Hanzo Engine is a fork of **[mistral.rs](https://github.com/EricLBuehler/mistral.rs)** (Eric Buehler, **MIT**), not an independent implementation. That is a fact about the code, not a footnote: upstream history is retained in full — the root commit is upstream's own `1ecfb7084` (2024-02-26), 3,697 of the 5,495 commits on `main` are authored by Eric Buehler, and upstream is merged through mistral.rs `0a14af4a` (PR #2188, 2026-06-02). The `mistralrs-* -> hanzo-*` rename rewrote commit hashes from `7483b396f` (2024-02-27) onward, so our SHAs stop matching upstream's there even where the content is theirs; `tools/upstream-map.sh` maps the paths. A renamed file is still upstream's file.
+
+The licence posture, and why each piece exists:
+
+- **`LICENSE` is MIT and names two holders — `Eric Buehler` first, then `Hanzo AI, Inc.`** MIT §2 is satisfied by *retaining that copyright line*, so the upstream line is load-bearing. Never delete it. This is not hypothetical: `963f0ff2b` (2026-06-01) replaced it with a Hanzo-only line as part of a brand sweep, and `3b993189e` restored it 45 days later. Releases cut in that window went out non-compliant. Brand sweeps must skip `LICENSE`.
+- **`LICENSE-APACHE` is for vendored GPU kernels, not for candle.** The tree bundles Apache-2.0 CUDA/Metal source from vLLM, FlashInfer, Marlin, and NVIDIA FasterTransformer, with per-file headers intact. Apache-2.0 §4(d) makes **`NOTICE` an actual distribution obligation** — unlike MIT, retaining the licence text alone is not enough. `NOTICE` must ship with any binary or crate we distribute.
+- **candle is consumed only through our fork, [hanzoai/ml](https://github.com/hanzoai/ml)** (`hanzo-ml` = candle-core, `hanzo-nn`, `hanzo-transformers`, `hanzo-flash-attn{,-v3}`, `hanzo-metal-kernels`), as crates.io registry deps. candle is dual **MIT OR Apache-2.0**; we elect MIT here. Attribution for it lives in that repo's LICENSE files and NOTICE — don't restate them here, and don't point a "candle" link at `hanzoai/ml` as though our fork were upstream.
+- Workspace `license = "MIT"` matches upstream. `enso`, `hanzo-router`, and `hanzo-router-retrain` declare `MIT OR Apache-2.0`; that is deliberate and safe — they are first-party routing code with no mistral.rs-derived dependency.
+
+The rule that generalises: `license =` in a manifest is a *claim*; the LICENSE files are the *fact*. A fork cannot relicense, and a find-and-replace across manifests or copyright headers is a licensing change, not a chore.
+
 ## Canonical role in the Hanzo model
 
 - A **real implementation repo** (native inference) — NOT an SDK, NOT a discovery/wrapper repo. It *serves* the `/v1` API that the cloud SDK family calls.
