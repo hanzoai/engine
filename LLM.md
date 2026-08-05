@@ -468,22 +468,99 @@ Honest scope: the LinUCB per-user bandit is solid and realizable. Per-user real-
 LoRA over a neural encoder and self-adaptive expert vectors are research-frontier and
 attach at the same `policy`/`learner` seam -- flagged, not faked.
 
-## Context for All AI Assistants
+## Working here
 
-This file (`LLM.md`) is symlinked as:
-- `.AGENTS.md`
-- `CLAUDE.md`
-- `QWEN.md`
-- `GEMINI.md`
+`LLM.md` is the canonical guide. `CLAUDE.md` and `AGENTS.md` are symlinks to it and
+all three are tracked -- nothing here is gitignored, and the two aliases were real,
+separately-drifting files until they were folded in.
 
-All files reference the same knowledge base. Updates here propagate to all AI systems.
+1. Record a significant discovery in this file. Never in a new summary file.
+2. Always `cargo check` before calling an integration complete, and if it does not
+   compile, keep editing. Do not return TODOs.
 
-## Rules for AI Assistants
+### Code style (extremely important, and the convention here)
 
-1. **ALWAYS** update LLM.md with significant discoveries
-2. **NEVER** commit symlinked files (.AGENTS.md, CLAUDE.md, etc.) - they're in .gitignore
-3. **NEVER** create random summary files - update THIS file
-4. **ALWAYS** check compilation with `cargo check` before considering integration complete
+**Comments.** Default to none. Add one only when the *why* is not obvious from the
+code: a hidden constraint, an invariant, a surprising edge case, a reference to a
+spec or an HF source. Never paraphrase the next line, never restate the function
+name, never narrate steps.
+
+- Multi-line comments are discouraged in code, and are really only for
+  documentation or where they are the best way to carry the information.
+- One line each, up to ~120 cols. No multi-paragraph `///` blocks, no bulleted
+  lists in doc comments, no `// === Section ===` banners.
+- Terse and casual, and never explaining what the code directly below does.
+- ASCII only unless instructed otherwise. No em-dashes, en-dashes, ellipsis
+  characters, smart quotes or box-drawing. Do not use `--`. `...`, `"` and `'` are
+  fine.
+- Do not reference the current task, PR, fix or commit in a comment. That belongs
+  in the PR description, and it rots as the codebase moves.
+- Terse trailing annotations like `// already sent above` are fine.
+
+**Magic values.** Hoist durations, sizes and sentinels to named `const`s at the top
+of the file. A sentinel that crosses a module boundary -- one place sets `Some(0)`,
+another checks for it -- must be a `pub const`, not a literal both sides happen to
+share.
+
+**Function shape.** At 6+ arguments, wrap the invariants in a small context struct
+(`DispatchCtx<'a>`). Do not add error handling, fallbacks or validation for cases
+that cannot occur; trust internal code and framework guarantees. No
+backwards-compatibility shims unless asked.
+
+**Pull requests.** Never include a "Test plan" section. Conventional commit style:
+`feat(crate):`, `fix(crate):`, `docs:`. Update `docs/src/content/docs/` and the
+examples alongside a feature or a breaking change.
+
+### Test, lint, docs
+
+```bash
+export HF_TOKEN=<token>      # TESTS_HF_TOKEN for CI parity; some tests need it
+cargo test -p hanzo-engine -p hanzo-quant -p hanzo-vision
+cargo test --workspace       # crates without tests are skipped
+make fmt                     # rustfmt + ruff + clang-format
+cargo fmt --all -- --check
+cargo clippy --workspace --tests --examples -- -D warnings
+cargo doc --workspace        # rendered under target/doc/
+```
+
+CI (`.github/workflows/ci.yml`) runs exactly: `cargo check` all targets, `cargo
+test` on the core crates, `cargo fmt -- --check`, `cargo clippy -D warnings`,
+`cargo doc`, and `crate-ci/typos`. The docs site builds with `cd docs && npm run
+build` and deploys through `.github/workflows/docs.yml`.
+
+Unit tests sit beside their source; integration tests live in `tests/`; `cargo test
+-p <crate>` narrows to one. Python tests need the package built and installed
+first.
+
+### Where each feature lives
+
+Paths are relative to `docs/src/content/docs/`. The CLI auto-detects model type, so
+every one of these is `hanzo run -m <model>`.
+
+| Feature | Crate | Docs |
+|---|---|---|
+| Text inference | `hanzo-engine`, `hanzo` | `guides/customize/sampling.md`, `guides/agents/` |
+| Multimodal | `hanzo-vision` | `explanation/multimodal-pipeline.md`, `reference/supported-models.md` |
+| Diffusion, speech | -- | `reference/supported-models.md` |
+| Quantization and ISQ | `hanzo-quant` | `reference/quantization-types.md`, `explanation/quantization-tradeoffs.md`; `scripts/convert_awq_marlin.py` |
+| Paged attention | `hanzo-paged-attn` | `explanation/paged-attention.md`, `guides/perf/use-paged-attention.md` |
+| Adapters, LoRA, X-LoRA | -- | `guides/customize/lora-adapters.md` |
+| AnyMoE | -- | `guides/customize/anymoe.md` |
+
+Also outside the workspace: `chat_templates/` (JSON/Jinja), `examples/` (Rust,
+Python, server, notebooks), `scripts/`.
+
+### Two pitfalls that produce wrong output rather than an error
+
+**`torch.bucketize(right=True)` needs `Ok(i) => i + 1`.** Rust's
+`binary_search_by` returns `Ok(i)` at the found position, which is bisect_left. For
+bisect_right you must insert after equal elements. `Err(i) => i` is right either
+way.
+
+**Causal Conv1d left padding is `effective_kernel_size - stride`**, not
+`(kernel_size - 1) * dilation` -- that is the total padding for the non-causal
+case. kernel_size=3, stride=2, dilation=1 gives 1, not 2. Check against the HF
+model's `VoxtralRealtimeCausalConv1d` or its equivalent.
 
 ---
 
