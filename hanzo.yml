@@ -1,0 +1,23 @@
+# Canonical CI/CD config for hanzoai/engine — read by the hanzoai/ci reusable
+# (.hanzo/workflows/cicd.yml) and by platform.hanzo.ai.
+#
+# The Zen inference engine: a 23-crate Rust workspace.
+#
+# Test-only caller, deliberately. The image lane already exists and is not this
+# one — .hanzo/workflows/deploy.yml builds Dockerfile and pushes it, and the
+# GPU/FFI/release lanes sit beside it. Declaring `images:` here would run a
+# second full release build of the same workspace (the Dockerfile compiles
+# hanzo-server + hanzo-bench with CARGO_BUILD_JOBS=2) on every push, for an
+# artifact that is already being produced. Two builds of one commit is not
+# twice the truth; it is twice the runner.
+#
+# The gates are the repo's own (.hanzo/workflows/ci.yml), cheapest first: fmt
+# is seconds and catches what needs no compiler, then a full type-check of every
+# member. `cargo check` — not `cargo build` — because nothing here consumes a
+# binary; the question this gate asks is whether the workspace still compiles.
+
+test:
+  - name: fmt
+    run: cargo fmt --all -- --check
+  - name: check
+    run: cargo check --workspace
