@@ -11,6 +11,13 @@
 # artifact that is already being produced. Two builds of one commit is not
 # twice the truth; it is twice the runner.
 #
+# `rustup component add rustfmt` first: the toolchain this workflow provisions
+# (dtolnay/rust-toolchain@stable) installs the compiler ALONE, so `cargo fmt`
+# dies with "'cargo-fmt' is not installed for the toolchain" before reading a
+# line of code — a red run that says nothing about the repo. ci.yml buys this
+# with `components:` on the toolchain action; the provision step above is not
+# ours to configure, so the gate buys it itself. It is idempotent.
+#
 # The gates are the repo's own (.hanzo/workflows/ci.yml), cheapest first: fmt
 # is seconds and catches what needs no compiler, then a full type-check of every
 # member. `cargo check` — not `cargo build` — because nothing here consumes a
@@ -18,6 +25,6 @@
 
 test:
   - name: fmt
-    run: cargo fmt --all -- --check
+    run: rustup component add rustfmt && cargo fmt --all -- --check
   - name: check
     run: cargo check --workspace
