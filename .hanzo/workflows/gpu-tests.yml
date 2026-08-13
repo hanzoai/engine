@@ -38,6 +38,13 @@ jobs:
       - name: Remove cargo config (macOS ring crate fix)
         if: matrix.backend == 'metal'
         run: rm -f .cargo/config.toml
+      # hanzo-quant's build script compiles the .metal kernels to .air, and from
+      # Xcode 26 the `metal` compiler is no longer bundled: an Xcode that has
+      # never been asked for it answers "cannot execute tool 'metal' due to
+      # missing Metal Toolchain". Ask once; it is a no-op on a host that has it.
+      - name: Provision the Metal toolchain
+        if: matrix.backend == 'metal'
+        run: xcrun -sdk macosx metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
       - uses: ./.github/actions/gpu-guard
       - uses: dtolnay/rust-toolchain@stable
       - name: Check (${{ matrix.backend }})
