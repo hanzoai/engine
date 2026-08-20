@@ -4,7 +4,7 @@
 # .github/workflows/ci.yml. The Hanzo Git fork scans .hanzo/workflows FIRST
 # (GIT__actions__WORKFLOW_DIRS=.hanzo/workflows,.github/workflows,.gitea/workflows),
 # and GitHub.com ignores .hanzo/, so this file is inert on GitHub and only runs
-# on the native forge -- zero effect on the GitHub CI lanes.
+# on the native Hanzo Git -- zero effect on the GitHub CI lanes.
 #
 # Two native adaptations vs the .github copy, nothing else:
 #   1. runs-on stays `hanzo-build-linux-amd64` -- the git-runner maps that label
