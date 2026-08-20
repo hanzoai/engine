@@ -7,7 +7,7 @@ on:
 # resolves"; which tag RUNS is a reviewed pin in hanzoai/universe.
 #
 # What was here before could never have produced an image. It called
-# `buildctl-daemonless.sh`, then `kubectl patch app`, and forge jobs run in
+# `buildctl-daemonless.sh`, then `kubectl patch app`, and Hanzo Git jobs run in
 # catthehacker/ubuntu:act-24.04 which ships NEITHER — both are exit 127. It also
 # read `secrets.GIT_CLONE_TOKEN`, which exists on neither this repo nor the
 # hanzoai org, so even the secret was empty.
