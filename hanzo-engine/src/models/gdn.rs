@@ -1191,6 +1191,116 @@ mod tests {
         run_gdn_recurrence_shapes(&Device::Cpu)
     }
 
+    // `recurrence_portable` is the semantics of record for GDN, and hanzo-kernel's `gdn_scan` claims it
+    // as its bit-exact target. That claim was only ever checked against the DSL's own oracle, so a drift
+    // between the two repos could not be caught here. This closes the loop: same inputs, this crate's
+    // scan vs `hanzo_kernel::gdn::gdn_scan_ref`, which `gdn_scan_cpu_bit_exact` gates the lowered kernel
+    // against. Composing the two gives engine-portable == DSL-on-every-backend, which is the
+    // precondition for GDN ever dispatching to the DSL (today ROCm has no fused arm and lands here, at
+    // ~10 tensor launches per timestep).
+    //
+    // Layout: this crate takes (batch, seq, heads, dim) and scales q by 1/sqrt(k_dim) internally; the
+    // oracle takes bh-major [bh, seq, dim] with bh = batch*heads and q pre-scaled. Hence the transpose
+    // to (batch, heads, seq, dim) before flattening, and the explicit scale on the oracle's q.
+    #[test]
+    fn gdn_recurrence_portable_matches_dsl_oracle() -> Result<()> {
+        let dev = Device::Cpu;
+        let gen = |n: usize, seed: usize| -> Vec<f32> {
+            (0..n)
+                .map(|i| (((i * 1103515245 + seed * 12345 + 7) % 2000) as f32 / 1000.0) - 1.0)
+                .collect()
+        };
+        let max_rel = |a: &[f32], b: &[f32]| -> f32 {
+            a.iter()
+                .zip(b)
+                .map(|(x, y)| (x - y).abs() / x.abs().max(1e-4))
+                .fold(0.0f32, f32::max)
+        };
+        // bh-major flatten of a (batch, seq, heads, ..) tensor, matching the oracle's indexing.
+        let bh_major = |t: &Tensor| -> Result<Vec<f32>> {
+            t.transpose(1, 2)?.contiguous()?.flatten_all()?.to_vec1()
+        };
+        // Decode, short prefill, a real prefill chunk at the shipping head dim, and non-square dims.
+        for &(batch, nvh, hkd, hvd, seq) in &[
+            (1usize, 4usize, 128usize, 128usize, 1usize),
+            (1, 8, 128, 128, 7),
+            (1, 4, 128, 128, 64),
+            (2, 3, 48, 32, 40),
+        ] {
+            let q = Tensor::from_vec(
+                gen(batch * seq * nvh * hkd, 1),
+                (batch, seq, nvh, hkd),
+                &dev,
+            )?;
+            let k = Tensor::from_vec(
+                gen(batch * seq * nvh * hkd, 2),
+                (batch, seq, nvh, hkd),
+                &dev,
+            )?;
+            let v = Tensor::from_vec(
+                gen(batch * seq * nvh * hvd, 3),
+                (batch, seq, nvh, hvd),
+                &dev,
+            )?;
+            // g < 0 (decay in (0,1]) and beta in [0,1] are the physical GDN gate ranges.
+            let g = Tensor::from_vec(
+                gen(batch * seq * nvh, 4)
+                    .iter()
+                    .map(|x| x * 0.5 - 0.5)
+                    .collect::<Vec<_>>(),
+                (batch, seq, nvh),
+                &dev,
+            )?;
+            let beta = Tensor::from_vec(
+                gen(batch * seq * nvh, 5)
+                    .iter()
+                    .map(|x| (x + 1.0) * 0.5)
+                    .collect::<Vec<_>>(),
+                (batch, seq, nvh),
+                &dev,
+            )?;
+            let state0 = Tensor::from_vec(
+                gen(batch * nvh * hkd * hvd, 6),
+                (batch, nvh, hkd, hvd),
+                &dev,
+            )?;
+
+            let mut s_port = state0.clone();
+            let y_port = recurrence_portable(&q, &k, &v, &g, &beta, &mut s_port)?;
+
+            let scale = 1.0f32 / (hkd as f32).sqrt();
+            let q_ref: Vec<f32> = bh_major(&q)?.iter().map(|x| x * scale).collect();
+            let mut s_ref = state0.flatten_all()?.to_vec1::<f32>()?;
+            let y_ref = hanzo_kernel::gdn::gdn_scan_ref(
+                &q_ref,
+                &bh_major(&k)?,
+                &bh_major(&v)?,
+                &g.transpose(1, 2)?.contiguous()?.flatten_all()?.to_vec1()?,
+                &beta
+                    .transpose(1, 2)?
+                    .contiguous()?
+                    .flatten_all()?
+                    .to_vec1()?,
+                &mut s_ref,
+                batch * nvh,
+                seq,
+                hkd,
+                hvd,
+            );
+
+            let ry = max_rel(&bh_major(&y_port)?, &y_ref);
+            let rs = max_rel(&s_port.flatten_all()?.to_vec1::<f32>()?, &s_ref);
+            eprintln!(
+                "[gdn portable-vs-dsl-oracle] b{batch} h{nvh} k{hkd} v{hvd} s{seq}  y_rel={ry:.2e} state_rel={rs:.2e}"
+            );
+            assert!(
+                ry < 1e-4 && rs < 1e-4,
+                "portable!=dsl oracle b{batch} h{nvh} k{hkd} v{hvd} s{seq} y_rel={ry} state_rel={rs}"
+            );
+        }
+        Ok(())
+    }
+
     // The fused CUDA recurrence (cuda/gdn.cu: tiled decode kernel for seq<64, warp-per-column prefill
     // kernel for seq>=64) must match the portable ops-composed scan bit-for-bit within f32 reorder.
     // This is the correctness gate for the fused-vs-ops-composed path the GDN_FUSED_FALLBACK knob
