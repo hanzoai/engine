@@ -198,4 +198,16 @@ license-app-zoo = []
 cudaforge = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The DSL's CPU oracle for the gated delta-rule scan, so the GDN kernel hanzo-kernel lowers to every
+# backend is gated against THIS crate's `recurrence_portable` rather than only against itself.
+# `default-features = false` keeps cubecl's runtime backends out of the test build: `gdn_scan_ref` is
+# plain f32 Rust, so no GPU and no lowering engine is pulled in.
+#
+# Pinned exactly, and NOT to the newest release: 0.2.40 and 0.2.41 are the only versions published
+# after the `#[kernel]` macro learned to rewrite a bare `island! { .. }` statement, and both resolve
+# hanzo-kernel-macros 0.1.1 from the registry, which predates that rewrite -- so `island!` survives
+# expansion and neither version compiles for anyone outside the ml workspace (19 errors, "cannot find
+# macro `island`"). Relax to a caret range once a macros release carrying the rewrite exists.
+hanzo-kernel = { version = "=0.2.20", default-features = false }
+
 tempfile = "3"
