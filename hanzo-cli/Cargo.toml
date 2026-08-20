@@ -61,6 +61,12 @@ hostname = "0.4.2"
 half = { workspace = true }
 hanzo-nn = { workspace = true }
 hanzo-quant = { workspace = true }
+# The DSL's CPU oracle for the fused add+rmsnorm, so `rmsnorm_dsl_oracle.rs` can gate engine's
+# `forward_of_sum` against hanzo-kernel's definition of the op rather than only against engine's own
+# composite. `default-features = false` keeps cubecl's runtime backends out: `add_rmsnorm_ref` is plain
+# f32 Rust, so no GPU and no lowering engine is pulled in. Pinned to match hanzo-engine's dev-dep (see
+# the note there for why not the newest release).
+hanzo-kernel = { version = "=0.2.20", default-features = false }
 
 [features]
 default = ["code-execution"]
