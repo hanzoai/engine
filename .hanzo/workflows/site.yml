@@ -1,0 +1,38 @@
+name: site
+
+# engine.hanzo.ai, served from the object-store plane.
+#
+# `site/` is the whole site: one index.html, an install.sh it links, and a CNAME
+# file left over from GitHub Pages. Nothing builds it, so nothing here builds it
+# either — the action syncs the directory to s3://hanzo-sites/hanzo/engine, which
+# `engine-static` in universe serves.
+#
+# Separate from deploy.yml on purpose: that one builds and pushes the inference
+# image, which has nothing to do with this page and must not gate it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.hanzo/workflows/site.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  site:
+    runs-on: hanzo-build-linux-amd64
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish to the Sites plane
+        uses: hanzoai/ci/.github/actions/site@v1
+        with:
+          slug: engine
+          dir: site
+        env:
+          KMS_CLIENT_ID: ${{ secrets.KMS_CLIENT_ID }}
+          KMS_CLIENT_SECRET: ${{ secrets.KMS_CLIENT_SECRET }}
