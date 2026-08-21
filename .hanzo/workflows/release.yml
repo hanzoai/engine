@@ -8,12 +8,12 @@
 # on GitHub that is not there.
 #
 # That mattered. GitHub.com ignores .hanzo/, so a tag pushed to GitHub triggers
-# NOTHING, and this file only runs where .hanzo/workflows is read -- the forge.
+# NOTHING, and this file only runs where .hanzo/workflows is read -- Hanzo Git.
 # Tags kept being minted against a lane that could not build them: v1.7.93 is the
 # newest tag and main is nine commits past it, seven of those `fix(ci):` commits
 # repairing the native legs.
 #
-# So: a release happens when a v* tag reaches the FORGE. A tag that only reaches
+# So: a release happens when a v* tag reaches the GIT.HANZO.AI. A tag that only reaches
 # GitHub is a number with no binary behind it. Verify a release by its artifacts,
 # never by the existence of the tag.
 #
@@ -65,7 +65,7 @@ concurrency:
 
 jobs:
   # Create the Release first; every build leg then uploads its bundle straight to
-  # it as a RELEASE ASSET (forge-native, .hanzo/actions/forge-release). Release
+  # it as a RELEASE ASSET (Hanzo Git-native, .hanzo/actions/Hanzo Git-release). Release
   # assets are not billed against the
   # Actions artifact-storage quota, so the release ships even when that quota is
   # exhausted (the v1.7.30 failure: every leg built + signed, then `upload-artifact`
@@ -75,12 +75,12 @@ jobs:
     runs-on: hanzo-build-linux-amd64
     timeout-minutes: 15
     steps:
-      # The forge-release action is local to the repo tree -> check it out first.
+      # Hanzo Git-release action is local to the repo tree -> check it out first.
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.version || github.ref }}
-      - name: Ensure the Release exists (forge-native)
-        uses: ./.hanzo/actions/forge-release
+      - name: Ensure the Release exists (Hanzo Git-native)
+        uses: ./.hanzo/actions/Hanzo Git-release
         with:
           # Tag push: github.ref_name is the tag. Manual run: the `version` input
           # names the tag to (re)build -- recovers a tag whose push did not trigger
@@ -197,8 +197,8 @@ jobs:
             --output-certificate "$f.pem" \
             "$f" || echo "::warning::cosign keyless signing unavailable (Fulcio egress blocked); shipping $f unsigned"
 
-      - name: Upload bundle to release (forge-native)
-        uses: ./.hanzo/actions/forge-release
+      - name: Upload bundle to release (Hanzo Git-native)
+        uses: ./.hanzo/actions/Hanzo Git-release
         with:
           tag: ${{ inputs.version || github.ref_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -208,7 +208,7 @@ jobs:
             ${{ matrix.name }}.${{ matrix.ext }}.pem
 
   # macOS is the one target that cannot be cross-compiled from Linux (needs the
-  # Apple SDK + codesign). On the native forge it targets the `metal` host daemon
+  # Apple SDK + codesign). On the native Hanzo Git it targets the `metal` host daemon
   # (dbc, Apple M4 Max). It stays GATED on a repo variable so it never queues on a
   # missing runner: register the metal host daemon, set repo variable
   # MACOS_RUNNER_ONLINE=true, and this leg builds natively -- no other change.
@@ -252,8 +252,8 @@ jobs:
           f="hanzoai-macos-${{ matrix.arch }}.tar.gz"
           # Non-fatal: ship the binary even when Fulcio egress is blocked (see build job).
           cosign sign-blob --yes --output-signature "$f.sig" --output-certificate "$f.pem" "$f" || echo "::warning::cosign keyless signing unavailable (Fulcio egress blocked); shipping $f unsigned"
-      - name: Upload bundle to release (forge-native)
-        uses: ./.hanzo/actions/forge-release
+      - name: Upload bundle to release (Hanzo Git-native)
+        uses: ./.hanzo/actions/Hanzo Git-release
         with:
           tag: ${{ inputs.version || github.ref_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
