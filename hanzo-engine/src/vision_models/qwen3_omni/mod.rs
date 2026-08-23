@@ -1575,16 +1575,20 @@ mod speech_tests {
     fn read_f32_le(path: &PathBuf) -> Vec<f32> {
         std::fs::read(path)
             .unwrap()
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect()
     }
 
     fn read_i64_le(path: &PathBuf) -> Vec<i64> {
         std::fs::read(path)
             .unwrap()
-            .chunks_exact(8)
-            .map(|c| i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| i64::from_le_bytes(*c))
             .collect()
     }
 
