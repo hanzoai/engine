@@ -1549,7 +1549,7 @@ impl SequenceGroup {
         &self,
         response: ChatCompletionResponse,
         sender: Sender<Response>,
-    ) -> Result<(), SendError<Response>> {
+    ) -> Result<(), Box<SendError<Response>>> {
         if self.choices.len() == self.n_choices {
             sender.send(Response::Done(response)).await?;
         }
@@ -1560,7 +1560,7 @@ impl SequenceGroup {
     pub async fn maybe_send_raw_done_response(
         &self,
         sender: Sender<Response>,
-    ) -> Result<(), SendError<Response>> {
+    ) -> Result<(), Box<SendError<Response>>> {
         if self.raw_choices.len() == self.n_choices {
             assert_eq!(self.raw_choices.len(), 1);
             let (logits_chunks, tokens) = self.raw_choices[0].clone();
@@ -1578,7 +1578,7 @@ impl SequenceGroup {
     pub async fn maybe_send_embedding_done_response(
         &self,
         sender: Sender<Response>,
-    ) -> Result<(), SendError<Response>> {
+    ) -> Result<(), Box<SendError<Response>>> {
         if self.embedding_choices.len() == self.n_choices {
             assert_eq!(self.embedding_choices.len(), 1);
             let embeddings = self.embedding_choices[0].clone();
@@ -1600,7 +1600,7 @@ impl SequenceGroup {
         &self,
         response: ImageGenerationResponse,
         sender: Sender<Response>,
-    ) -> Result<(), SendError<Response>> {
+    ) -> Result<(), Box<SendError<Response>>> {
         if self.image_choices.len() == self.n_choices {
             sender.send(Response::ImageGeneration(response)).await?;
         }
@@ -1611,7 +1611,7 @@ impl SequenceGroup {
     pub async fn maybe_send_speech_response(
         &self,
         sender: Sender<Response>,
-    ) -> Result<(), SendError<Response>> {
+    ) -> Result<(), Box<SendError<Response>>> {
         assert_eq!(self.speech_pcms.len(), 1);
 
         let (pcm, rate, channels) = self.speech_pcms[0].clone();
@@ -1629,7 +1629,7 @@ impl SequenceGroup {
     pub async fn maybe_send_frames_response(
         &self,
         sender: Sender<Response>,
-    ) -> Result<(), SendError<Response>> {
+    ) -> Result<(), Box<SendError<Response>>> {
         assert_eq!(self.frames.len(), 1);
 
         let (frames, fps) = self.frames[0].clone();
@@ -1641,7 +1641,7 @@ impl SequenceGroup {
     pub async fn maybe_send_transcription_response(
         &self,
         sender: Sender<Response>,
-    ) -> Result<(), SendError<Response>> {
+    ) -> Result<(), Box<SendError<Response>>> {
         assert_eq!(self.transcriptions.len(), 1);
 
         let text = self.transcriptions[0].clone();

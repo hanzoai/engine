@@ -804,8 +804,10 @@ fn tokens_from_le_bytes(bytes: &[u8]) -> Option<Vec<u32>> {
     }
     Some(
         bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes(c.try_into().expect("chunks_exact(4) yields 4 bytes")))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
             .collect(),
     )
 }
