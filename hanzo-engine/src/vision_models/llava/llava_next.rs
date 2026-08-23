@@ -239,8 +239,7 @@ impl Model {
         let n_images = num_image_samples.len();
 
         // Per-image caching: each image may have multiple samples (base + tiles).
-        let image_features_vec: Vec<Tensor>;
-        if image_hashes.len() == n_images && n_images > 0 {
+        let image_features_vec: Vec<Tensor> = if image_hashes.len() == n_images && n_images > 0 {
             // Compute sample offset ranges per image.
             let mut sample_offsets = vec![0usize; n_images + 1];
             for (i, &ns) in num_image_samples.iter().enumerate() {
@@ -293,10 +292,10 @@ impl Model {
                 }
             }
 
-            image_features_vec = per_image
+            per_image
                 .into_iter()
                 .map(|o| o.expect("all images should be resolved"))
-                .collect();
+                .collect()
         } else {
             // Fallback: no hashes, encode all at once.
             let image_features = self.encode_images(&images_typed)?;
@@ -306,8 +305,8 @@ impl Model {
                 feats.push(image_features.i(index..index + num_image_sample)?);
                 index += num_image_sample;
             }
-            image_features_vec = feats;
-        }
+            feats
+        };
         let image_features_vec = image_features_vec
             .iter()
             .enumerate()

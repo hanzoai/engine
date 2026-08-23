@@ -202,8 +202,8 @@ pub fn load_w(path: &Path) -> anyhow::Result<Policy> {
     let data = t.data();
     anyhow::ensure!(data.len() % 8 == 0, "heads w bytes not f64-aligned");
     let mut w = Vec::with_capacity(data.len() / 8);
-    for c in data.chunks_exact(8) {
-        w.push(f64::from_le_bytes(c.try_into().unwrap()));
+    for c in data.as_chunks::<8>().0 {
+        w.push(f64::from_le_bytes(*c));
     }
     anyhow::ensure!(w.len() == DK, "heads w len {} != DK {}", w.len(), DK);
     Ok(Policy::from_weights(w))

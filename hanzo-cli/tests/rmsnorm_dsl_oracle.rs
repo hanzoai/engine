@@ -85,8 +85,7 @@ fn check(dev: &Device, rows: usize, cols: usize) -> (bool, f32) {
     // Oracle against the weight the kernel ACTUALLY holds, so the gate measures the kernel and never
     // the quantizer round-trip.
     let alpha: Vec<f32> = to_f32(norm.weight()).iter().map(|w| w * 1.01).collect();
-    let (want_s, want_y) =
-        hanzo_kernel::norm::add_rmsnorm_ref(&x_v, &r_v, &alpha, rows, cols, EPS);
+    let (want_s, want_y) = hanzo_kernel::norm::add_rmsnorm_ref(&x_v, &r_v, &alpha, rows, cols, EPS);
 
     let (got_s, got_y) = norm.forward_of_sum(&x, &r).expect("forward_of_sum");
 
@@ -118,8 +117,13 @@ fn rms_norm_of_sum_matches_dsl_oracle() {
         worst = worst.max(y_rel);
         // 1e-5 relative is ~2 orders above the f32 reduction-order noise measured on gfx1151 for this
         // op (~1e-6), and far below anything a real semantic drift could hide under.
-        if !sum_exact || !(y_rel < 1e-5) {
-            bad.push(format!("{rows}x{cols} sum_bit_exact={sum_exact} y_rel={y_rel:.3e}"));
+        // NaN is spelled out rather than left to `!(y_rel < 1e-5)`: the negated form
+        // catches it, `y_rel >= 1e-5` would not, and a kernel that produces NaN is the
+        // loudest failure this gate exists to catch.
+        if !sum_exact || y_rel.is_nan() || y_rel >= 1e-5 {
+            bad.push(format!(
+                "{rows}x{cols} sum_bit_exact={sum_exact} y_rel={y_rel:.3e}"
+            ));
         }
     }
     assert!(
