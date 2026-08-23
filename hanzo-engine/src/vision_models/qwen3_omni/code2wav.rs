@@ -612,15 +612,19 @@ mod code2wav_tests {
     fn read_f32_le(p: &str) -> Vec<f32> {
         std::fs::read(p)
             .unwrap()
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect()
     }
     fn read_i64_le(p: &str) -> Vec<i64> {
         std::fs::read(p)
             .unwrap()
-            .chunks_exact(8)
-            .map(|c| i64::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| i64::from_le_bytes(*c))
             .collect()
     }
     fn cosine(a: &[f32], b: &[f32]) -> f32 {

@@ -1009,8 +1009,10 @@ mod thinker_tests {
     fn read_f32_le(path: &str) -> Vec<f32> {
         let bytes = std::fs::read(path).unwrap();
         bytes
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect()
     }
 
@@ -1489,8 +1491,10 @@ mod thinker_tests {
         );
         if let Ok(refv) =
             std::fs::read("/home/z/work/zen/hf/omni_fixtures/thinker_logits.f32").map(|b| {
-                b.chunks_exact(4)
-                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                b.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| f32::from_le_bytes(*c))
                     .collect::<Vec<f32>>()
             })
         {
