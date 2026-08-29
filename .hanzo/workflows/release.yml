@@ -72,7 +72,7 @@ jobs:
   # hit "Artifact storage quota has been hit").
   create-release:
     name: Create Release
-    runs-on: hanzo-build-linux-amd64
+    runs-on: [hanzo-build-linux-amd64]
     timeout-minutes: 15
     steps:
       # Hanzo Git-release action is local to the repo tree -> check it out first.
@@ -106,7 +106,7 @@ jobs:
   build:
     name: ${{ matrix.name }}
     needs: create-release
-    runs-on: hanzo-build-linux-amd64
+    runs-on: [hanzo-build-linux-amd64]
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -217,7 +217,7 @@ jobs:
     name: hanzoai-macos-${{ matrix.arch }}
     needs: create-release
     if: ${{ vars.MACOS_RUNNER_ONLINE == 'true' }}
-    runs-on: metal
+    runs-on: [metal]
     timeout-minutes: 120
     strategy:
       fail-fast: false
