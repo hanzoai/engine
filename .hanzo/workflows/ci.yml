@@ -34,7 +34,7 @@ on:
 jobs:
   check-linux:
     name: Check (linux)
-    runs-on: hanzo-build-linux-amd64
+    runs-on: [hanzo-build-linux-amd64]
     container: buildpack-deps:bookworm
     timeout-minutes: 90
     steps:
@@ -56,7 +56,7 @@ jobs:
   # compile-only and need no GPU -- they run on the build fleet, not the shared GPU dev boxes.
   check-vulkan:
     name: Check (vulkan)
-    runs-on: hanzo-build-linux-amd64
+    runs-on: [hanzo-build-linux-amd64]
     # ash loads Vulkan at runtime and hanzo-ml falls back to its committed SPIR-V, so the vulkan arm
     # compiles with no GPU and no Vulkan SDK in the same image as check-linux.
     container: buildpack-deps:bookworm
@@ -76,7 +76,7 @@ jobs:
 
   check-rocm:
     name: Check (rocm)
-    runs-on: hanzo-build-linux-amd64
+    runs-on: [hanzo-build-linux-amd64]
     # ROCm dev image (gfx1151 / Strix Halo base, matching build_rocm) supplies hipcc. The HIP kernels
     # compile from source with no SPIR-V fallback, so this needs the toolchain but still no GPU.
     container: rocm/dev-ubuntu-24.04:7.2.4
@@ -128,7 +128,7 @@ jobs:
 
   test-linux:
     name: Test Suite (linux)
-    runs-on: hanzo-build-linux-amd64
+    runs-on: [hanzo-build-linux-amd64]
     container: buildpack-deps:bookworm
     timeout-minutes: 90
     steps:
@@ -148,7 +148,7 @@ jobs:
 
   fmt:
     name: Rustfmt
-    runs-on: hanzo-build-linux-amd64
+    runs-on: [hanzo-build-linux-amd64]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -161,7 +161,7 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: hanzo-build-linux-amd64
+    runs-on: [hanzo-build-linux-amd64]
     # self-hosted runner image lacks a C toolchain; run in an image that has build-essential
     container: buildpack-deps:bookworm
     timeout-minutes: 90
@@ -181,7 +181,7 @@ jobs:
 
   docs:
     name: Docs
-    runs-on: hanzo-build-linux-amd64
+    runs-on: [hanzo-build-linux-amd64]
     # self-hosted runner image lacks a C toolchain; run in an image that has build-essential
     container: buildpack-deps:bookworm
     timeout-minutes: 90
@@ -200,7 +200,7 @@ jobs:
 
   typos:
     name: Typos
-    runs-on: hanzo-build-linux-amd64
+    runs-on: [hanzo-build-linux-amd64]
     container: buildpack-deps:bookworm
     timeout-minutes: 90
     steps:
@@ -217,7 +217,7 @@ jobs:
 
   doc-links:
     name: Doc Links
-    runs-on: hanzo-build-linux-amd64
+    runs-on: [hanzo-build-linux-amd64]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -230,7 +230,7 @@ jobs:
 
   msrv:
     name: MSRV Check (1.90)
-    runs-on: hanzo-build-linux-amd64
+    runs-on: [hanzo-build-linux-amd64]
     # self-hosted runner image lacks a C toolchain; run in an image that has build-essential
     container: buildpack-deps:bookworm
     timeout-minutes: 90
