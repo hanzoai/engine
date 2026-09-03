@@ -29,7 +29,10 @@ impl Advertiser {
     pub fn start(port: u16, models: &[String]) -> Result<Arc<Self>> {
         let daemon = ServiceDaemon::new()?;
         let instance = hostname();
-        let host_name = format!("{instance}.local.");
+        // The A record for `<machine>.local` belongs to the system responder.
+        // Point the SRV target at a name this daemon alone owns, so the two
+        // responders never contend for one name.
+        let host_name = format!("{instance}-engine.local.");
         let info = build_info(&instance, &host_name, port, models)?;
         let fullname = info.get_fullname().to_string();
         daemon.register(info)?;
