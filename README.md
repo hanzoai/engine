@@ -305,7 +305,7 @@ Contributions welcome! Please [open an issue](https://github.com/hanzoai/engine/
 
 ## Credits
 
-Built on the excellent open-source work of [mistral.rs](https://github.com/EricLBuehler/mistral.rs) and [Candle](https://github.com/hanzoai/ml). Thank you to all [contributors](https://github.com/hanzoai/engine/graphs/contributors)!
+Built on the excellent open-source work of [mistral.rs](https://github.com/EricLBuehler/mistral.rs) (MIT) and [candle](https://github.com/huggingface/candle) (MIT OR Apache-2.0), which we consume through our fork [hanzoai/ml](https://github.com/hanzoai/ml). Thank you to all [contributors](https://github.com/hanzoai/engine/graphs/contributors)!
 
 Hanzo Engine is not affiliated with Mistral AI.
 
