@@ -20,14 +20,14 @@
 # One native adaptation vs the retired .github copy: the macOS leg targets the git-runner
 # `metal` host daemon (dbc, Apple M4 Max) instead of the GitHub `self-hosted`
 # label set. The amd64/arm64 cross-build legs are unchanged -- they run on the
-# `hanzo-build-linux-amd64` label the git-runner maps.
+# `linux-amd64` label the git-runner maps.
 #
 # One tag -> prebuilt, portable, cosign-signed `hanzoai` binaries for every
 # platform, attached to the Release. Consumed by install.sh
 # (`curl -fsSL https://hanzo.ai/install.sh | sh`) and the desktop engine manager.
 #
 # Design notes (why this shape):
-#   * EVERY build leg runs on the always-online `hanzo-build-linux-amd64` runner
+#   * EVERY build leg runs on the always-online `linux-amd64` runner
 #     and CROSS-compiles with cargo-zigbuild. No leg targets a self-hosted
 #     mac/win runner in a way that can queue for 48h and force a workflow-level
 #     cancel (the historical failure: legs targeting an offline runner never
@@ -72,7 +72,7 @@ jobs:
   # hit "Artifact storage quota has been hit").
   create-release:
     name: Create Release
-    runs-on: [hanzo-build-linux-amd64]
+    runs-on: [linux-amd64]
     timeout-minutes: 15
     steps:
       # Hanzo Git-release action is local to the repo tree -> check it out first.
@@ -106,7 +106,7 @@ jobs:
   build:
     name: ${{ matrix.name }}
     needs: create-release
-    runs-on: [hanzo-build-linux-amd64]
+    runs-on: [linux-amd64]
     timeout-minutes: 120
     strategy:
       fail-fast: false
