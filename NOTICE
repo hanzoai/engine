@@ -31,23 +31,34 @@ Copyright (c) 2024 Eric Buehler, used under the MIT License:
 Hanzo Engine is an independent fork: all crates, binaries, and APIs are
 Hanzo-branded (hanzo-engine), and Hanzo AI is not affiliated with Mistral AI.
 
-Forked from https://github.com/EricLBuehler/mistral.rs. This tree does not
-pin the exact upstream revision it diverged from (the initial import was
-squashed into a single commit), and Hanzo Engine now tracks its own release
-line (1.7.x) rather than upstream tags.
+Forked from https://github.com/EricLBuehler/mistral.rs. Upstream history is
+retained in full, not squashed: this tree's root commit is upstream's own
+1ecfb70842640b12c8321d69be58bec5331ddffc (EricLBuehler, 2024-02-26), and 3,697
+of the 5,495 commits reachable from main are authored by Eric Buehler. The
+crate rename (mistralrs-* -> hanzo-*) rewrote commit hashes from
+7483b396fa0513362977a6e033e5259d1a7319e7 (2024-02-27) onward, so beyond that
+point our SHAs no longer equal upstream's even where the content is theirs;
+tools/upstream-map.sh maps the paths. Upstream work is merged through
+mistral.rs 0a14af4a43e6f61afbed71f72f22c162ab944c0d (PR #2188, 2026-06-02).
+Hanzo Engine tracks its own release line (1.7.x) rather than upstream tags.
 
 Hanzo Engine is built on candle (https://github.com/huggingface/candle),
 Copyright (c) 2023 HuggingFace Inc., dual-licensed under the MIT License OR the
 Apache License, Version 2.0; used here under the MIT License (full text above).
-The candle crates are consumed as Hanzo's fork, published as hanzo-ml
-(candle-core), hanzo-nn (candle-nn), hanzo-flash-attn, and hanzo-metal-kernels.
+The candle crates are consumed as Hanzo's fork (https://github.com/hanzoai/ml),
+published as hanzo-ml (candle-core), hanzo-nn (candle-nn), hanzo-transformers
+(candle-transformers), hanzo-flash-attn, hanzo-flash-attn-v3, and
+hanzo-metal-kernels. That fork carries candle's own LICENSE-MIT and
+LICENSE-APACHE and its own NOTICE; this file does not restate them.
 
 Hanzo Engine bundles third-party GPU kernels, each under its own permissive
 license (per-file copyright headers retained in-source):
   - vLLM (Apache-2.0), Copyright (c) 2023 The vLLM team
   - FlashInfer (Apache-2.0), Copyright (c) 2023-2025 FlashInfer team
   - Apple MLX (MIT), Copyright (c) 2023-2024 Apple Inc.
-  - NVIDIA CUTLASS (BSD-3-Clause), Copyright (c) 2020-2023 NVIDIA CORPORATION
+  - NVIDIA FasterTransformer (Apache-2.0), Copyright (c) 2020-2023 NVIDIA
+    CORPORATION (reached via the vLLM kernels; no CUTLASS source is vendored,
+    and no BSD-3-Clause-licensed source is present in this tree)
   - Marlin (Apache-2.0), Copyright (c) 2024 Elias Frantar
   - ggml / llama.cpp (MIT), Copyright (c) ggml authors (Georgi Gerganov et al.)
 
