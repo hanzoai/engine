@@ -11,7 +11,7 @@ on:
     paths:
       - 'hanzo-engine-ffi/**'
       - 'hanzo-engine/**'
-      - '.hanzo/workflows/ffi.yml'
+      - '.github/workflows/ffi.yml'
   workflow_dispatch:
 
 jobs:
