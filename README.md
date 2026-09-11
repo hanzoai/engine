@@ -30,27 +30,39 @@ Hanzo Engine runs any Hugging Face model with zero config, quantizes it for your
 - **Qwen3-Omni**: native end-to-end omni-modal model (understand → think → speak) — text/image/video/audio in, text + 24kHz speech out, through one extensible modality pipeline. Validated against the reference weights.
 - **New frontier models**: MiniMax-M2 (sparse-MoE) and DeepSeek-V3.2, alongside the existing DeepSeek-V3, Kimi-K2, GLM-4, and Qwen3 families. [Supported models](https://hanzoai.github.io/engine/reference/supported-models/)
 - **Paged-attention serving** for the omni Thinker, plus a **disk-first KV cache** (cross-restart sessions + agent prefix reuse) for cheap long-context serving.
-- **Anthropic Messages API**: `hanzo serve` now exposes an Anthropic-compatible `POST /v1/messages` endpoint (streaming, tool use, and Claude Code harness support) alongside the OpenAI-compatible `/v1` API. [Examples](examples/server/)
+- **Anthropic Messages API**: `hanzo-engine serve` now exposes an Anthropic-compatible `POST /v1/messages` endpoint (streaming, tool use, and Claude Code harness support) alongside the OpenAI-compatible `/v1` API. [Examples](examples/server/)
 - **Agentic runtime**: web search, local Python code execution with model feedback, session management, and custom tool hooks. [Guide](https://hanzoai.github.io/engine/tutorials/05-build-an-agent/)
 - **Gemma 4**: full multimodal: text, image, video, and audio input. [Guide](https://hanzoai.github.io/engine/reference/supported-models/) | [Video setup](https://hanzoai.github.io/engine/guides/models/video-setup/)
 - **MXFP4 ISQ quantization**: MXFP4 with optimized decode kernels for faster, smaller models. [Quantization docs](https://hanzoai.github.io/engine/reference/quantization-types/)
 
 ## Why Hanzo Engine?
 
-- **Any Hugging Face model, zero config**: Just `hanzo run -m user/model`. Architecture, quantization format, and chat template are auto-detected.
+- **Any Hugging Face model, zero config**: Just `hanzo-engine run -m user/model`. Architecture, quantization format, and chat template are auto-detected.
 - **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
 - **Smart quantization**: `--quant` automatically selects the best quantization format at that level: using a prebuilt UQFF if one is published, otherwise applying ISQ. [Docs](https://hanzoai.github.io/engine/tutorials/06-quantize-a-model/)
-- **OpenAI + Anthropic wire formats**: The same `hanzo serve` process exposes OpenAI-compatible `/v1` endpoints and an Anthropic-compatible Messages endpoint.
+- **OpenAI + Anthropic wire formats**: The same `hanzo-engine serve` process exposes OpenAI-compatible `/v1` endpoints and an Anthropic-compatible Messages endpoint.
 - **Built-in web UI**: Served at `/ui` by default. Shows reasoning, code execution, plots, and files inline. Edit any message and the new branch runs with its own Python state. Pass `--no-ui` to disable.
-- **Hardware-aware**: `hanzo tune` benchmarks your system and picks optimal quantization + device mapping.
+- **Hardware-aware**: `hanzo-engine tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
 - **Native agentic support**: built-in [agentic loop](https://hanzoai.github.io/engine/guides/agents/) with web search, local Python code execution with model feedback, session management, and custom tool hooks.
 
 ## Quick Start
 
-### Install
+### Binaries
 
-**Linux/macOS:**
+This repository builds two programs, and neither is called `hanzo`:
+
+| binary | crate | how to get it |
+|---|---|---|
+| `hanzoai` | `hanzo-server` | prebuilt, attached to each [release](https://github.com/hanzoai/engine/releases/latest) |
+| `hanzo-engine` | `hanzo-cli` | built from source by `install.sh` |
+
+The `hanzo` on your PATH is the [Hanzo CLI](https://github.com/hanzoai/cli); its `hanzo engine serve MODEL` runs `hanzo-engine serve -m MODEL`. `hanzoai` logs a deprecation warning that names `hanzo serve` from hanzo-cli, which is the `hanzo-engine` binary.
+
+Release v1.7.92 carries `hanzoai-macos-arm64.tar.gz` and `hanzoai-macos-amd64.tar.gz` (Metal), and `hanzoai-linux-amd64.tar.gz` and `hanzoai-linux-arm64.tar.gz` (CPU only, with cosign `.sig` and `.pem`). Each tarball holds the one `hanzoai` binary.
+
+`install.sh` needs Rust 1.88 or newer. It runs `cargo install --git https://github.com/hanzoai/engine --locked hanzo-cli` with the features it detects, which puts `hanzo-engine` in `~/.cargo/bin`:
+
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/hanzoai/engine/main/install.sh | sh
 ```
@@ -62,46 +74,64 @@ irm https://raw.githubusercontent.com/hanzoai/engine/main/install.ps1 | iex
 
 [Manual installation & other platforms](https://hanzoai.github.io/engine/guides/install/)
 
-### Run Your First Model
+### Serve a model
 
 ```bash
-# Interactive chat
-hanzo run -m Qwen/Qwen3-4B
-
-# One-shot prompt (no interactive session)
-hanzo run -m Qwen/Qwen3-4B -i "What is the capital of France?"
-
-# One-shot with an image
-hanzo run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
-
-# Agentic REPL: search + code execution from the terminal
-hanzo run --agent -m Qwen/Qwen3-4B
-
-# Start an API server with the built-in web UI
-hanzo serve -m google/gemma-4-E4B-it
+curl -L https://github.com/hanzoai/engine/releases/latest/download/hanzoai-macos-arm64.tar.gz | tar xz
+./hanzoai --serve-ip 127.0.0.1 --port 1234 run -m zenlm/zen-nano-0.6b
 ```
 
-For the server command, visit `http://localhost:1234/ui` for the web chat interface. OpenAI-compatible clients use `http://localhost:1234/v1`; Anthropic-compatible clients use `http://localhost:1234`.
-
-### The `hanzo` CLI
-
-The CLI is designed to be **zero-config**: just point it at a model and go.
-
-- **Auto-detection**: Automatically detects model architecture, quantization format, and chat template
-- **All-in-one**: Single binary for chat, server, benchmarks, and web UI (`run`, `serve`, `bench`)
-- **Hardware tuning**: Run `hanzo tune` to automatically benchmark and configure optimal settings for your hardware
-- **Format-agnostic**: Works with Hugging Face models, GGUF files, and [UQFF quantizations](https://hanzoai.github.io/engine/reference/uqff-format/) seamlessly
+From another shell:
 
 ```bash
-# Auto-tune for your hardware and emit a config file
-hanzo tune -m Qwen/Qwen3-4B --emit-config config.toml
-
-# Run using the generated config
-hanzo from-config -f config.toml
-
-# Diagnose system issues (CUDA, Metal, HuggingFace connectivity)
-hanzo doctor
+curl 127.0.0.1:1234/v1/models
 ```
+
+`hanzoai` has no default port: give it `--port`, or `-i` for an interactive session. `--serve-ip` defaults to `0.0.0.0`, every interface. OpenAI-compatible clients use `http://127.0.0.1:1234/v1`.
+
+`hanzo-engine serve -m <model>` listens on `0.0.0.0:1234` unless given `-p` and `--host`, serves a web UI at `/ui`, and advertises itself over mDNS unless given `--no-advertise`. LM Studio also defaults to port 1234. `hanzo-engine tune -m <model> --emit-config config.toml` recommends a quantization and device map for the machine, and `hanzo-engine from-config -f config.toml` runs it.
+
+### Chat and embeddings on one port
+
+`multi-model` serves several models on one port, and each request names one by `alias`. With this `models.json`:
+
+```json
+{
+  "chat": { "alias": "chat", "Plain": { "model_id": "zenlm/zen-nano-0.6b" } },
+  "embed": { "alias": "embed", "Embedding": { "model_id": "zenlm/zen-embedding-0.6B" } }
+}
+```
+
+```bash
+./hanzoai --serve-ip 127.0.0.1 --port 1234 multi-model --config models.json
+```
+
+```bash
+curl 127.0.0.1:1234/v1/embeddings -H 'Content-Type: application/json' \
+  -d '{"model":"embed","input":"hello"}'
+curl 127.0.0.1:1234/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"chat","messages":[{"role":"user","content":"hello"}]}'
+```
+
+### Memory
+
+Weights take about their file size in memory. Weight files of Zen models in GB (10^9 bytes), as the Hugging Face API lists them (`/api/models/<repo>?blobs=true`). The 16-bit column is the safetensors release; Q8_0 and Q4_K_M are GGUF files, from the `-GGUF` repos for the embedding models.
+
+| model | parameters | 16-bit | Q8_0 | Q4_K_M |
+|---|---|---|---|---|
+| `zenlm/zen-nano-0.6b` | 0.60 B | 1.19 | 0.64 | 0.40 |
+| `zenlm/zen-embedding-0.6B` | 0.60 B | 1.19 | 0.64 | |
+| `zenlm/zen-eco-4b-instruct` | 4.02 B | 8.04 | | |
+| `zenlm/zen-embedding-8B` | 7.57 B | 15.13 | | 4.68 |
+| `zenlm/zen-vl-8b-instruct` | 8.77 B | 17.53 | | |
+
+That is about 2.0 GB per billion parameters at 16 bits, 1.07 GB at Q8_0 and 0.62 GB at Q4_K_M, so a 14B model needs roughly 28, 15 or 8.7 GB for weights. `hanzoai --isq q8_0` or `--isq q4k` quantizes a 16-bit model as it loads.
+
+The KV cache comes on top: 2 × layers × KV heads × head dim × 2 bytes per token at 16 bits. With the values in each `config.json`, `zen-nano-0.6b` (28 × 8 × 128) takes 0.11 MB per token and `zen-eco-4b-instruct` (36 × 8 × 128) 0.15 MB, so a 32,768-token context adds 3.8 or 4.8 GB. The automatic device map plans for `--max-seq-len`, 4096 tokens unless set.
+
+Measured on a 64 GB M1 Max with `vmmap -summary`: `zen-nano-0.6b` at 16 bits served with a 2.0 GB physical footprint, and 3.6 GB with `zen-embedding-0.6B` loaded beside it.
+
+On Apple Silicon the GPU budget is the larger of Metal's recommended working set and 2/3 of RAM (3/4 above 36 GB), or `sysctl iogpu.wired_limit_mb` when that is set (`hanzo-engine/src/utils/memory_usage.rs`). For the 64 GB M1 Max above the device map reported 52 GB. On a 24 GB Mac the budget starts at 16 GB, about what a 14B model at Q8_0 needs for weights alone.
 
 [Full CLI documentation](https://hanzoai.github.io/engine/reference/cli/)
 
