@@ -36,7 +36,7 @@ The rule that generalises: `license =` in a manifest is a *claim*; the LICENSE f
 ## Fast orientation (full detail below)
 
 - Build / run: see **Essential Commands**. Agent rules: see **Rules for AI Assistants**. Symlinks: see **Context for All AI Assistants**.
-- Core crates: `hanzo-engine/` (inference lib+bin; canonical `hanzo_engine::{infer,embed}`, consumed by EVM precompiles `0x0201`/`0x0202`) · `hanzo-server/` + `hanzo-server-core/src/routes.rs` (CLI + `/v1` HTTP routing) · `hanzo-pyo3/` (Python) · `hanzo/` (Rust API) · `hanzo-quant/` · `hanzo-paged-attn/` · `hanzo-vision/` · `hanzo-audio/` · `hanzo-llm-mcp/`.
+- Core crates: `hanzo-engine/` (inference library; canonical `hanzo_engine::{infer,embed}`, consumed by EVM precompiles `0x0201`/`0x0202`) · `hanzo-server/` (binary `hanzo-server`, released as `hanzoai`) + `hanzo-server-core/src/routes.rs` (`/v1` HTTP routing) · `hanzo-cli/` (binary `hanzo-engine`) · `hanzo-pyo3/` (Python) · `hanzo/` (Rust API) · `hanzo-quant/` · `hanzo-paged-attn/` · `hanzo-vision/` · `hanzo-audio/` · `hanzo-llm-mcp/`.
 
 ---
 
@@ -44,9 +44,9 @@ The rule that generalises: `license =` in a manifest is a *claim*; the LICENSE f
 
 ### Hanzo-Specific Components
 
-`hanzo-engine/` is now both a **library** and a **binary**:
+`hanzo-engine/` is a **library**; the binaries are built by other crates.
 
-1. **Library — `hanzo_engine::*`** (the canonical inference API for the Hanzo stack):
+- **Library — `hanzo_engine::*`** (the canonical inference API for the Hanzo stack):
    - `InferenceEngine` trait: `fn infer(&self, model_id: &[u8;32], prompt: &[u8]) -> Result<Vec<u8>, EngineError>`
    - `EmbeddingEngine` trait: `fn embed(&self, dim: usize, text: &[u8]) -> Result<Vec<f32>, EngineError>`
    - Process-wide registry (`OnceLock`-backed): `register_inference_engine`, `register_embedding_engine`, `infer`, `embed`
@@ -54,15 +54,16 @@ The rule that generalises: `license =` in a manifest is a *claim*; the LICENSE f
    - Consumers: hanzo-vm precompiles `0x0201` (AI inference) and `0x0202` (AI embedding) — they call `hanzo_engine::infer` / `embed` synchronously through the registry
    - **NOT** the routing/pricing crate. The Hamiltonian-Hidden-Markov MarketMaker lives in `hanzo-hmm` (`~/work/hanzo/net/hanzo-hmm`) and prices heterogeneous compute; the EVM precompiles depend on `hanzo-engine`, not on `hanzo-hmm`.
 
-2. **Binary — `hanzo-engine`** (thin CLI wrapper):
-   - Shells out to `hanzo-server` for the full HTTP server experience
-   - Use the library for programmatic / in-process integration
+- **Binaries** (names from `cargo metadata`):
+   - `hanzo-engine`, package `hanzo-cli/`: `serve`, `run`, `tune`, `bench`, `from-config`, `doctor`. Links `hanzo-server-core` in process. `install.sh` installs it with `cargo install --git ... hanzo-cli`.
+   - `hanzo-server`, package `hanzo-server/`: the older model-subcommand server. Release CI packages it as `hanzoai` (`.github/workflows/release.yml`), and it logs a deprecation warning naming hanzo-cli.
+   - Neither binary is `hanzo`; that name belongs to the Hanzo CLI (hanzoai/cli), whose `hanzo engine serve MODEL` runs `hanzo-engine serve -m MODEL`.
 
 ### Architecture
 
 Hanzo Engine is a Rust workspace containing:
 - All upstream hanzo workspace members (hanzo-engine, hanzo-server, hanzo, hanzo-llm-mcp, …)
-- **hanzo-engine/** — lib + bin: canonical Hanzo inference + embedding API
+- **hanzo-engine/** — library: canonical Hanzo inference + embedding API
 - Local hanzo-ml fork at `../ml/hanzo-{ml,nn,flash-attn,metal-kernels}` overrides upstream's `hanzo-ml-*` crates via `[workspace.dependencies]` path overrides
 
 The engine provides comprehensive LLM inference with support for text, multimodal (incl. video), image generation, speech, and embeddings through multiple APIs (Rust, Python, OpenAI HTTP, MCP).
@@ -79,39 +80,21 @@ Composition with `hanzo-engine`: `hanzo-federation` ships the cross-host trainin
 
 ## Essential Commands
 
-### Building Hanzo Engine
+### Building
+
+The root `Cargo.toml` is a virtual workspace, so every build names a package.
 
 ```bash
-# Check compilation (recommended first step)
-cargo check --package hanzo-engine --no-default-features --features metal
+# Check the library compiles
+cargo check -p hanzo-engine --no-default-features --features metal
 
-# Build for macOS (Metal backend)
-cargo build --package hanzo-engine --release --no-default-features --features metal
+# CLI binary `hanzo-engine` (what install.sh installs)
+cargo install --locked --path hanzo-cli --features metal            # macOS
+cargo install --locked --path hanzo-cli --features cuda-full        # Linux, CUDA + flash-attn + cuDNN
+cargo install --locked --path hanzo-cli --features rocm             # Linux, AMD
 
-# Build for Linux (CUDA backend)
-cargo build --package hanzo-engine --release --features cuda
-
-# Install hanzo-engine binary
-cargo install --path hanzo-engine --no-default-features --features metal
-```
-
-### Building Core Components
-
-```bash
-# Basic release build
-cargo build --release
-
-# With CUDA support (Linux)
-cargo build --release --features "cuda flash-attn cudnn"
-
-# With Metal support (macOS)
-cargo build --release --features metal
-
-# With ROCm support (Linux, AMD)
-cargo build --release --features rocm
-
-# Install hanzo-server binary
-cargo install --path hanzo-server --features <features>
+# Release server binary target/release/hanzo-server; release.yml packages it as `hanzoai`
+cargo build --release -p hanzo-server --no-default-features --features metal
 ```
 
 #### ROCm on AMD APUs (Strix Halo / gfx1151, unified memory)
@@ -146,14 +129,15 @@ cargo clippy --workspace --tests --examples -- -D warnings
 
 ### Running Models
 ```bash
-# Run interactive mode with plain model
-cargo run --release --features <features> -- -i plain -m <model_id> -a <arch>
+# Release binary. No default port; --serve-ip defaults to 0.0.0.0.
+hanzoai --serve-ip 127.0.0.1 --port 1234 run -m <model_id>
+hanzoai --serve-ip 127.0.0.1 --port 1234 multi-model --config models.json   # several models, one port
+hanzoai --port 1234 gguf -m <repo> -f <file.gguf>
+hanzoai -i plain -m <model_id>                                              # interactive, no server
 
-# Run with GGUF quantized model
-cargo run --release --features <features> -- -i gguf -f <file> -t <tokenizer>
-
-# Run server
-cargo run --release --features <features> -- --port 1234 <model_args>
+# CLI binary. serve defaults to 0.0.0.0:1234 and advertises over mDNS unless --no-advertise.
+hanzo-engine serve -m <model_id>
+hanzo-engine run -m <model_id> -i "prompt"
 ```
 
 ## Models
@@ -214,7 +198,7 @@ When adding new quantization methods:
 
 ### Facial Animation (MuseTalk)
 
-`hanzo serve --arch musetalk -m <bundle>` loads a MuseTalk lip-sync/avatar model and
+`hanzo-engine serve --arch musetalk -m <bundle>` loads a MuseTalk lip-sync/avatar model and
 serves `/v1/animate` (alias `/v1/video/lipsync`): POST `{model, visual, audio, fps?}`,
 audio + visual in, dubbed mp4 out. A still image -> Portrait, a video -> Footage
 (lip-sync); the pipeline picks the animator via `accepts()` and the handler muxes the
@@ -311,7 +295,7 @@ A repeatable, measurement-first process. The scar tissue behind every step is in
 a cache-warm microbench for a memory-bound kernel, and kill a lever the moment the engine says it lost.**
 
 ### Tune a kernel (the loop that took prefill 212 -> 704 t/s)
-1. PROFILE a real forward: `VK_PROFILE_GPU=1 VK_PROFILE=1 hanzo bench --prompt-len 512 --gen-len 0 ...`
+1. PROFILE a real forward: `VK_PROFILE_GPU=1 VK_PROFILE=1 hanzo-engine bench --prompt-len 512 --gen-len 0 ...`
    -> per-op GPU time + record/submit/fence + pool fresh/hit counters.
 2. RANK by roofline: achieved BW = bytes-moved / GPU-time vs device peak. Biggest (time-share x
    distance-from-roofline) = the target. (Q4_K GEMM: ~24 GB/s vs ~135 practical = the 18% that IS the gap.)
@@ -331,14 +315,14 @@ per (kernel, shape, device). Deterministic objective (ns), cheap trials -> a for
 the DSL autotune automates the sweep so a hand-picked constant can't be a local optimum on another GPU.
 
 ### Onboard a new model fast (get it to SOTA on our stack)
-1. LOAD the GGUF; confirm COHERENCE with a known-answer generation (`hanzo run -i "The capital of France is"`).
+1. LOAD the GGUF; confirm COHERENCE with a known-answer generation (`hanzo-engine run -m <model> -i "The capital of France is"`).
 2. PROFILE prefill + decode -> the hot kernels for THIS model's quant mix + shapes.
 3. ROOFLINE-RANK -> the offenders. The classic miss: a quant type with NO tiled prefill path (Q6_K was
    76% of prefill because attn_v/ffn_down are Q6_K in Q4_K_M and only had the column matvec).
 4. ENSURE every quant type in the model has a tiled prefill path (Q4_K, Q6_K done; Q5_K/Q8_0/IQ next).
 5. AUTOTUNE the tile configs for the model's shapes.
 6. GATE vs llama-bench, SAME box + model: `~/llama.cpp/build/bin/llama-bench -m <gguf> -p 512 -n 128`
-   vs `hanzo bench --prompt-len 512 --gen-len 128 auto -m <dir> -f <gguf>`. That ratio is the SOTA gate.
+   vs `hanzo-engine bench --prompt-len 512 --gen-len 128 auto -m <dir> -f <gguf>`. That ratio is the SOTA gate.
 
 ### The tooling
 - Roofline dashboard (visual "find" UI: roofline plot + priority-ranked kernels + tuning log).
@@ -548,7 +532,7 @@ first.
 ### Where each feature lives
 
 Paths are relative to `docs/src/content/docs/`. The CLI auto-detects model type, so
-every one of these is `hanzo run -m <model>`.
+every one of these is `hanzo-engine run -m <model>`.
 
 | Feature | Crate | Docs |
 |---|---|---|
@@ -910,7 +894,7 @@ path -> provably lossless (greedy byte-identical on/off). Auto-gates: drafts onl
   (3) Hosted GPU + model availability: /v1/3d,/videos,/audio/music,/animate are GPU-bound and need those
       specific models loaded; the compute layer schedules the ComfyUI graph on GPU workers but there is no
       per-org binding of "engine deployment X (with ACE-Step/WAN/TRELLIS/MuseTalk loaded) serves this org".
-  Self-hosted single-engine works TODAY (set HANZO_ENGINE_URL, run `hanzo serve`); the gap is the 3-part
+  Self-hosted single-engine works TODAY (set HANZO_ENGINE_URL, run `hanzo-engine serve`); the gap is the 3-part
   wiring to make it hosted SaaS: per-org engine-URL resolution from engine_selector, IAM-token forwarding
   onto the node /v1 calls, and per-tenant engine/model provisioning.
 
