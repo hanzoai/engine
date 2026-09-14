@@ -50,6 +50,8 @@ pub mod route;
 
 #[cfg(feature = "proxy")]
 pub mod proxy;
+#[cfg(feature = "proxy")]
+mod pool_file;
 
 pub use classify::{Classifier, Heuristic, Request};
 pub use featurize::{Featurizer, HashFeaturizer};
@@ -58,7 +60,8 @@ pub use memory::MemSnapshot;
 pub use policy::{prefer, Context, Decision, Policy};
 pub use registry::{Backend, Level, Modality, ModelCard, Registry, Task};
 pub use replica::{
-    Balancer, BalancerConfig, Lease, Replica, ReplicaSet, ReplicaStatus, DEFAULT_MAX_INFLIGHT,
+    Balancer, BalancerConfig, Lease, Replica, ReplicaSet, ReplicaStatus, RoutingHints,
+    DEFAULT_MAX_INFLIGHT,
 };
 pub use ring::Ring;
 pub use route::{Route, RoutePolicy, Slo, User, REFUSED_MODEL};

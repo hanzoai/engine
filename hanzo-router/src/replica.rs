@@ -10,7 +10,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+
+#[path = "scheduler.rs"]
+mod scheduler;
+pub use scheduler::RoutingHints;
+use scheduler::SchedulerState;
 
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +34,22 @@ pub struct Replica {
     pub id: String,
     /// Base URL, e.g. `http://127.0.0.1:1234` (no trailing path).
     pub url: String,
+    /// Concurrent request slots; zero inherits the pool's max_inflight.
+    #[serde(default)]
+    pub capacity: usize,
+    /// Relative measured throughput for allocating new sessions (100 = baseline).
+    #[serde(default = "default_weight")]
+    pub weight: u32,
+    /// Preferred agent roles; preferences never override health or session pins.
+    #[serde(default)]
+    pub roles: Vec<String>,
+    /// Optional backend model ID when replicas use different local aliases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_model: Option<String>,
+}
+
+fn default_weight() -> u32 {
+    100
 }
 
 impl Replica {
@@ -37,6 +58,10 @@ impl Replica {
         Self {
             id: url.clone(),
             url,
+            capacity: 0,
+            weight: default_weight(),
+            roles: Vec::new(),
+            upstream_model: None,
         }
     }
 
@@ -44,12 +69,31 @@ impl Replica {
         if self.id.is_empty() {
             self.id = self.url.clone();
         }
+        self.weight = self.weight.max(1);
         self
+    }
+}
+
+#[derive(Clone)]
+struct WorkerSettings {
+    capacity: usize,
+    weight: u32,
+    roles: Vec<String>,
+}
+
+impl From<&Replica> for WorkerSettings {
+    fn from(r: &Replica) -> Self {
+        Self {
+            capacity: r.capacity,
+            weight: r.weight,
+            roles: r.roles.clone(),
+        }
     }
 }
 
 struct Node {
     replica: Replica,
+    settings: RwLock<WorkerSettings>,
     healthy: AtomicBool,
     inflight: AtomicUsize,
 }
@@ -76,6 +120,7 @@ impl Inner {
 pub struct ReplicaSet {
     inner: RwLock<Inner>,
     max_inflight: usize,
+    scheduler: Mutex<SchedulerState>,
 }
 
 impl ReplicaSet {
@@ -87,6 +132,7 @@ impl ReplicaSet {
                 (
                     r.id.clone(),
                     Arc::new(Node {
+                        settings: RwLock::new(WorkerSettings::from(&r)),
                         replica: r,
                         healthy: AtomicBool::new(true),
                         inflight: AtomicUsize::new(0),
@@ -101,7 +147,8 @@ impl ReplicaSet {
         inner.rebuild_ring();
         Self {
             inner: RwLock::new(inner),
-            max_inflight,
+            max_inflight: max_inflight.max(1),
+            scheduler: Mutex::new(SchedulerState::default()),
         }
     }
 
@@ -138,6 +185,7 @@ impl ReplicaSet {
             None => false,
         };
         if changed {
+            self.scheduler.lock().unwrap().invalidate_cache(id);
             inner.rebuild_ring();
         }
     }
@@ -160,6 +208,7 @@ impl ReplicaSet {
         inner.nodes.insert(
             replica.id.clone(),
             Arc::new(Node {
+                settings: RwLock::new(WorkerSettings::from(&replica)),
                 replica,
                 healthy: AtomicBool::new(true),
                 inflight: AtomicUsize::new(0),
@@ -179,6 +228,7 @@ impl ReplicaSet {
 
     pub fn statuses(&self) -> Vec<ReplicaStatus> {
         let inner = self.inner.read().unwrap();
+        let scheduler = self.scheduler.lock().unwrap();
         let mut out: Vec<ReplicaStatus> = inner
             .nodes
             .values()
@@ -187,6 +237,11 @@ impl ReplicaSet {
                 url: n.replica.url.clone(),
                 healthy: n.healthy.load(Ordering::Acquire),
                 inflight: n.inflight.load(Ordering::Acquire),
+                capacity: self.slots(n),
+                weight: n.settings.read().unwrap().weight,
+                roles: n.settings.read().unwrap().roles.clone(),
+                upstream_model: n.replica.upstream_model.clone(),
+                ttft_ewma_ms: scheduler.ttft_ms(&n.replica.id),
             })
             .collect();
         out.sort_by(|a, b| a.id.cmp(&b.id));
@@ -215,6 +270,10 @@ impl Lease {
         &self.node.replica.url
     }
 
+    pub fn upstream_model(&self) -> Option<&str> {
+        self.node.replica.upstream_model.as_deref()
+    }
+
     pub fn inflight(&self) -> usize {
         self.node.inflight.load(Ordering::Acquire)
     }
@@ -233,15 +292,30 @@ pub struct ReplicaStatus {
     pub url: String,
     pub healthy: bool,
     pub inflight: usize,
+    pub capacity: usize,
+    pub weight: u32,
+    pub roles: Vec<String>,
+    pub upstream_model: Option<String>,
+    /// Time to first body byte, observed by this router; not decode throughput.
+    pub ttft_ewma_ms: Option<f64>,
 }
 
 /// Declarative pool: `model -> replicas`, plus the shared in-flight ceiling.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BalancerConfig {
     #[serde(default = "default_max_inflight")]
     pub max_inflight: usize,
     #[serde(default)]
     pub models: BTreeMap<String, Vec<Replica>>,
+}
+
+impl Default for BalancerConfig {
+    fn default() -> Self {
+        Self {
+            max_inflight: DEFAULT_MAX_INFLIGHT,
+            models: BTreeMap::new(),
+        }
+    }
 }
 
 fn default_max_inflight() -> usize {
@@ -287,6 +361,11 @@ impl Balancer {
         if sets.len() == 1 {
             return sets.values().next().cloned();
         }
+        for fallback in &["zen5.8", "qwen3.8", "zen5.8-coder", "default"] {
+            if let Some(set) = sets.get(*fallback) {
+                return Some(set.clone());
+            }
+        }
         None
     }
 
@@ -297,6 +376,35 @@ impl Balancer {
         sets.entry(model.to_string())
             .or_insert_with(|| Arc::new(ReplicaSet::new([], self.max_inflight)))
             .register(replica);
+    }
+
+    /// Retune an existing worker without replacing its leases, health, or pins.
+    /// Exact model/worker lookup; never uses the inference alias fallback.
+    pub fn update_worker(
+        &self,
+        model: &str,
+        id: &str,
+        capacity: usize,
+        weight: u32,
+        roles: Vec<String>,
+    ) -> bool {
+        if capacity == 0 || weight == 0 {
+            return false;
+        }
+        let sets = self.sets.read().unwrap();
+        let Some(set) = sets.get(model) else {
+            return false;
+        };
+        let inner = set.inner.read().unwrap();
+        let Some(node) = inner.nodes.get(id) else {
+            return false;
+        };
+        *node.settings.write().unwrap() = WorkerSettings {
+            capacity,
+            weight,
+            roles,
+        };
+        true
     }
 
     pub fn models(&self) -> Vec<String> {
@@ -328,6 +436,13 @@ mod tests {
             ],
             2,
         )
+    }
+
+    #[test]
+    fn config_default_matches_yaml_default() {
+        let yaml: BalancerConfig = serde_yaml::from_str("models: {}").unwrap();
+        assert_eq!(BalancerConfig::default().max_inflight, yaml.max_inflight);
+        assert_eq!(yaml.max_inflight, DEFAULT_MAX_INFLIGHT);
     }
 
     #[test]

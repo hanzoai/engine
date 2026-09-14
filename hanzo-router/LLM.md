@@ -78,3 +78,43 @@ evo 10.0.0.144 / 192.168.77.1(->spark) ; spark 10.0.0.242 / 192.168.77.2 ; dbc 1
 All nohup+disown (survive session end). memguard.sh is a dead one-shot (already tripped);
 current config is memory-bounded, no guard needed. To kill a serve: `kill -TERM <pid>` by exact
 PID -- NEVER `pkill -f "release/hanzo serve"` (the pattern self-matches your own shell -> kills it).
+
+---
+
+## Zen 5.8 / Qwen 3.8 Blackwell Cluster Topology (Live Production)
+
+### Upstream Engines
+- **Spark (`10.0.0.19:30000`)**: Blackwell GB10 running SGLang (`hanzo-sglang.service`):
+  - Model: `RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead`
+  - Flags: `--host 0.0.0.0 --port 30000 --mem-fraction-static 0.65 --max-running-requests 8 --reasoning-parser qwen3`
+  - Radix KV cache with chunked prefill at ~1,700 tok/s, CUDA graph acceleration.
+- **Evo (`10.0.0.21:8080`)**: Strix Halo gfx1151 running `llama-server`:
+  - Model: `Qwen3.8-27B-Q6_K.gguf`
+
+### Native Rust Router (`10.0.0.19:1235`)
+- Service: `hanzo-router.service` on Spark.
+- Binary: `/home/z/.local/bin/hanzo-router` compiled with `--features proxy`.
+- Config: `/home/z/.config/hanzo/router-pool.yaml`
+- Features:
+  - Models served: `default`, `qwen3.8`, `zen-coder`, `zen5.8`, `zen5.8-coder`, `qwen/qwen3.8-27b`.
+  - Probes: `/api/hello` (HEAD and GET return 200 for Claude Code reachability), `/v1/models` (Anthropic and OpenAI model discovery), `/health` (backend liveness).
+  - Normalization: Auto-rewrites `output_config.effort` and `reasoning_effort` from "high"/"max" to "medium" to ensure chat templates with discrete thinking tiers (xhigh, medium, low) do not throw TemplateErrors.
+  - Fallback: Unrecognized models (e.g. `claude-*`) automatically route to primary coder pool (`zen5.8`).
+
+### Claude Code Usage
+Point Claude Code directly to the router on Spark:
+```bash
+export ANTHROPIC_BASE_URL="http://10.0.0.19:1235"
+export ANTHROPIC_API_KEY="dummy"
+claude
+```
+Or via the public cloud gateway `https://api.hanzo.ai` (routed to the AI Lab grant cluster).
+
+### Python Coderouter Decommissioning
+- Python `coderouter.service` has been permanently disabled and stopped on all cluster nodes.
+- Zero runtime Python router dependency; pure Rust `hanzo-router` handles all load balancing, streaming, session affinity, and wire normalization.
+- Mid-conversation non-leading system messages are normalized in `src/proxy.rs` (prefixed with `[System]: ` as user role) and in SGLang chat templates, eliminating 400 Jinja errors from Claude Code / dev agents.
+- Public ingress routes on `https://api.hanzo.ai` (`/api/hello`, `/v1/models`, `/v1/messages`) route via Traefik to `hanzo-router:1235`.
+- Isolated Claude Code profile `~/.claude-hanzo` configured; alias `hanzo-code` available in `~/.zshrc` to prevent collisions between personal `claude.ai` OAuth subscriptions and custom API routing.
+- Sub-agent and role-based steering: `hanzo-router` infers agent roles from wire models and query sources. Sub-agents, titles, fast summaries, and `haiku`/`flash` requests automatically route to **Evo** (AMD Strix Halo APU, `Qwen3.8-27B-Q6_K.gguf` via Vulkan RADV with 300ms TTFT), while main agent implementation and `opus`/`sonnet` queries route to **Spark** (DGX Spark Blackwell GB10 NVFP4).
+

@@ -16,7 +16,7 @@ use tracing_subscriber::EnvFilter;
     about = "Replica load-balancing proxy for hanzo-engine"
 )]
 struct Args {
-    #[arg(long, default_value = "0.0.0.0")]
+    #[arg(long, default_value = "127.0.0.1")]
     host: String,
     #[arg(short = 'p', long, default_value_t = 1234)]
     port: u16,
@@ -80,6 +80,12 @@ async fn main() -> anyhow::Result<()> {
         balancer,
         probe_interval,
         upstream_model: args.upstream_model.clone(),
+        // CLI pool overrides are not represented in the file, so disable retuning.
+        config_path: if args.model.is_none() && args.max_inflight.is_none() {
+            args.config.clone()
+        } else {
+            None
+        },
     })
     .await
 }

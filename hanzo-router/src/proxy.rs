@@ -1,16 +1,16 @@
 //! The effectful front for [`crate::replica`]: an axum reverse proxy that picks a
-//! replica per request (prefix-affinity + least-loaded + health) and streams the
+//! replica per request (session pins + cache hints + capacity + health) and streams the
 //! response back unchanged. SSE bodies pass through byte-for-byte; the in-flight
 //! [`Lease`] rides the response stream and releases when it ends or the client
 //! aborts. A background loop re-probes replica `/health` to evict and restore.
 //!
 //! Feature-gated (`proxy`) so the pure router core stays dependency-light.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::{Request, State};
@@ -22,7 +22,8 @@ use futures::Stream;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::replica::{Balancer, Lease, Replica, ReplicaStatus};
+use crate::replica::{Balancer, Lease, Replica, ReplicaSet, ReplicaStatus, RoutingHints};
+use sha2::{Digest, Sha256};
 
 const MAX_BODY_BYTES: usize = 32 << 20;
 const PREFIX_CHARS: usize = 512;
@@ -31,8 +32,10 @@ pub const DEFAULT_PROBE_INTERVAL: Duration = Duration::from_secs(5);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const HEALTH_PATH: &str = "/health";
 /// Response header naming the replica that served the request (observability).
-const REPLICA_HEADER: &str = "x-hanzo-replica";
-const CONV_HEADERS: [&str; 3] = [
+const REPLICA_HEADER: &str = "x-replica-id";
+const CONV_HEADERS: [&str; 5] = [
+    "x-hanzo-session",
+    "x-smg-routing-key",
     "x-hanzo-conversation-id",
     "x-conversation-id",
     "x-session-id",
@@ -57,6 +60,7 @@ struct ProxyState {
     balancer: Balancer,
     client: reqwest::Client,
     upstream_model: Option<String>,
+    pool_file: Option<crate::pool_file::PoolFile>,
 }
 
 /// What to serve: the pool + where to bind + how often to re-probe.
@@ -70,12 +74,22 @@ pub struct ServeConfig {
     /// and 500 on anything else, so a fabric fronting `claude-*`-style clients
     /// pins the upstream id here. `None` forwards the client's `model` unchanged.
     pub upstream_model: Option<String>,
+    /// Writable YAML used for durable operator retuning; None disables writes.
+    pub config_path: Option<std::path::PathBuf>,
 }
 
 fn app(state: Arc<ProxyState>) -> Router {
     Router::new()
-        .route("/health", get(|| async { "ok" }))
-        .route("/v1/replicas", get(list_replicas).post(add_replica))
+        .route(
+            "/health",
+            get(|| async { "ok" }).head(|| async { StatusCode::OK }),
+        )
+        .route("/api/hello", get(hello).head(hello))
+        .route("/v1/models", get(list_models))
+        .route(
+            "/v1/replicas",
+            get(list_replicas).post(add_replica).put(update_replica),
+        )
         .fallback(proxy)
         .with_state(state)
 }
@@ -88,10 +102,27 @@ pub async fn serve_listener(
     probe_interval: Duration,
     upstream_model: Option<String>,
 ) -> anyhow::Result<()> {
+    serve_listener_config(listener, balancer, probe_interval, upstream_model, None).await
+}
+
+async fn serve_listener_config(
+    listener: tokio::net::TcpListener,
+    balancer: Balancer,
+    probe_interval: Duration,
+    upstream_model: Option<String>,
+    config_path: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(!probe_interval.is_zero(), "probe interval must be positive");
     let state = Arc::new(ProxyState {
         balancer,
-        client: reqwest::Client::builder().build()?,
+        client: reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(PROBE_TIMEOUT)
+            .build()?,
         upstream_model,
+        pool_file: config_path
+            .map(crate::pool_file::PoolFile::new)
+            .transpose()?,
     });
     tokio::spawn(probe_loop(state.clone(), probe_interval));
     axum::serve(listener, app(state)).await?;
@@ -102,11 +133,12 @@ pub async fn serve_listener(
 pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind((cfg.host.as_str(), cfg.port)).await?;
     tracing::info!("hanzo-router proxy listening on {}:{}", cfg.host, cfg.port);
-    serve_listener(
+    serve_listener_config(
         listener,
         cfg.balancer,
         cfg.probe_interval,
         cfg.upstream_model,
+        cfg.config_path,
     )
     .await
 }
@@ -132,31 +164,39 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request) -> Response {
     let Some(set) = state.balancer.set_for(model) else {
         return err(StatusCode::NOT_FOUND, "no replica set for model");
     };
-    let key = affinity_key(&parts.headers, json.as_ref());
-    let body_bytes = match (state.upstream_model.as_deref(), json) {
-        (Some(um), Some(mut j)) => {
-            j["model"] = Value::String(um.to_string());
-            serde_json::to_vec(&j)
-                .map(Bytes::from)
-                .unwrap_or(body_bytes)
-        }
-        _ => body_bytes,
-    };
+    let hints = routing_hints(&parts.headers, json.as_ref());
     let fwd = forward_headers(&parts.headers);
+    let mut excluded = HashSet::new();
     for _ in 0..set.len().max(1) {
-        let Some(lease) = set.pick(&key) else { break };
+        let Some(lease) = set.pick_agent(&hints, &excluded, Instant::now()) else {
+            break;
+        };
+        let started = Instant::now();
+        let wire_body = match json.as_ref() {
+            Some(j) if j.is_object() => {
+                let mut rewritten = j.clone();
+                if let Some(model) = lease.upstream_model().or(state.upstream_model.as_deref()) {
+                    rewritten["model"] = Value::String(model.to_owned());
+                }
+                normalize_reasoning_effort(&mut rewritten);
+                normalize_messages(&mut rewritten);
+                Bytes::from(serde_json::to_vec(&rewritten).expect("JSON value"))
+            }
+            _ => body_bytes.clone(),
+        };
         let url = format!("{}{}", lease.url().trim_end_matches('/'), path_q);
         let send = state
             .client
             .request(parts.method.clone(), &url)
             .headers(fwd.clone())
-            .body(body_bytes.clone())
+            .body(wire_body)
             .send()
             .await;
         match send {
-            Ok(resp) => return stream_response(resp, lease),
-            Err(e) if e.is_connect() || e.is_timeout() => {
+            Ok(resp) => return stream_response(resp, lease, set.clone(), hints, started),
+            Err(e) if e.is_connect() => {
                 let id = lease.id().to_string();
+                excluded.insert(id.clone());
                 drop(lease);
                 tracing::warn!("replica {id} unreachable ({e}), evicting");
                 set.mark_unhealthy(&id);
@@ -164,17 +204,35 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request) -> Response {
             Err(e) => return err(StatusCode::BAD_GATEWAY, &format!("upstream error: {e}")),
         }
     }
-    err(StatusCode::SERVICE_UNAVAILABLE, "no healthy replica")
+    let mut response = err(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "no available replica for routing hints",
+    );
+    response
+        .headers_mut()
+        .insert("retry-after", HeaderValue::from_static("1"));
+    response
 }
 
 /// Wrap the upstream byte stream so the [`Lease`] drops when the body ends.
-fn stream_response(resp: reqwest::Response, lease: Lease) -> Response {
+fn stream_response(
+    resp: reqwest::Response,
+    lease: Lease,
+    set: Arc<ReplicaSet>,
+    hints: RoutingHints,
+    started: Instant,
+) -> Response {
     let status = resp.status();
     let src = resp.headers().clone();
     let replica = HeaderValue::from_str(lease.id()).ok();
     let body = Body::from_stream(LeasedStream {
         inner: Box::pin(resp.bytes_stream()),
-        _lease: lease,
+        lease: Some(lease),
+        set,
+        hints,
+        started,
+        first_byte: false,
+        successful: status.is_success(),
     });
     let mut response = Response::new(body);
     *response.status_mut() = status;
@@ -192,14 +250,44 @@ fn stream_response(resp: reqwest::Response, lease: Lease) -> Response {
 
 struct LeasedStream {
     inner: Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>,
-    _lease: Lease,
+    lease: Option<Lease>,
+    set: Arc<ReplicaSet>,
+    hints: RoutingHints,
+    started: Instant,
+    first_byte: bool,
+    successful: bool,
 }
 
 impl Stream for LeasedStream {
     type Item = reqwest::Result<Bytes>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
-        self.get_mut().inner.as_mut().poll_next(cx)
+        let this = self.get_mut();
+        let next = this.inner.as_mut().poll_next(cx);
+        match &next {
+            Poll::Ready(Some(Ok(bytes))) if !bytes.is_empty() && !this.first_byte => {
+                this.first_byte = true;
+                if this.successful {
+                    if let Some(lease) = &this.lease {
+                        this.set.observe_ttft(lease.id(), this.started.elapsed());
+                    }
+                }
+            }
+            Poll::Ready(Some(Err(_))) => {
+                this.successful = false;
+                this.lease.take();
+            }
+            Poll::Ready(None) => {
+                if let Some(lease) = this.lease.take() {
+                    if this.successful && this.first_byte {
+                        this.set
+                            .observe_completion(lease.id(), &this.hints, Instant::now());
+                    }
+                }
+            }
+            _ => {}
+        }
+        next
     }
 }
 
@@ -245,6 +333,163 @@ pub fn affinity_key(headers: &HeaderMap, body: Option<&Value>) -> String {
     s.chars().take(PREFIX_CHARS).collect()
 }
 
+/// Normalize reasoning effort values (e.g. Claude Code's effort: "high" or "max")
+/// to "medium" so backends whose chat templates support xhigh/medium/low (like Qwen)
+/// or backends mapping effort onto discrete tiers do not fail with TemplateError.
+fn normalize_reasoning_effort(val: &mut Value) {
+    if let Some(obj) = val.as_object_mut() {
+        if let Some(oc) = obj.get_mut("output_config").and_then(|v| v.as_object_mut()) {
+            if let Some(effort) = oc.get("effort").and_then(|v| v.as_str()) {
+                if effort == "high" || effort == "max" {
+                    oc.insert("effort".to_string(), Value::String("medium".to_string()));
+                }
+            }
+        }
+        if let Some(effort) = obj.get("reasoning_effort").and_then(|v| v.as_str()) {
+            if effort == "high" || effort == "max" {
+                obj.insert(
+                    "reasoning_effort".to_string(),
+                    Value::String("medium".to_string()),
+                );
+            }
+        }
+    }
+}
+
+/// Normalize messages to ensure strict chat-template compatibility:
+/// Any non-leading system message (e.g. injected developer prompts, tool results,
+/// or system reminders mid-conversation) has its role changed to "user" with a "[System]: "
+/// prefix so backends with strict Jinja templates (like Qwen) do not reject the turn.
+fn normalize_messages(val: &mut Value) {
+    if let Some(obj) = val.as_object_mut() {
+        if let Some(messages) = obj.get_mut("messages").and_then(|v| v.as_array_mut()) {
+            for (idx, msg) in messages.iter_mut().enumerate() {
+                if idx > 0 {
+                    if let Some(role) = msg.get("role").and_then(|r| r.as_str()) {
+                        if role == "system" {
+                            if let Some(mobj) = msg.as_object_mut() {
+                                mobj.insert("role".to_string(), Value::String("user".to_string()));
+                                if let Some(content) = mobj.get("content").and_then(|c| c.as_str()) {
+                                    let new_content = format!("[System]: {}", content);
+                                    mobj.insert("content".to_string(), Value::String(new_content));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Build fixed-size scoped keys without retaining prompts, credentials, or IDs.
+/// Cloud may carry hints in metadata because its metered relay forwards JSON but
+/// does not forward arbitrary request headers. Explicit headers take precedence.
+fn routing_hints(headers: &HeaderMap, body: Option<&Value>) -> RoutingHints {
+    fn digest(value: &Value) -> String {
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(value).expect("JSON value"))
+        )
+    }
+    let header = |key: &str| {
+        headers
+            .get(key)
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty())
+    };
+    let meta = body.and_then(|b| b.get("metadata"));
+    let hint = |name: &str, key: &str| {
+        header(name).or_else(|| {
+            meta.and_then(|m| m.get(key))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+        })
+    };
+    // This listener is private to the authenticated cloud gateway. Its org/user
+    // headers must come from that gateway; the bearer adds isolation for direct
+    // private clients. No identity is ever taken from JSON metadata.
+    let scope = serde_json::json!([
+        header("x-org-id"),
+        header("x-user-id"),
+        header("authorization"),
+        body.and_then(|b| b.get("model"))
+    ]);
+    let session = hint("x-session-id", "session_id")
+        .or_else(|| CONV_HEADERS.iter().find_map(|h| header(h)))
+        .map(|s| digest(&serde_json::json!([scope, "session", s])));
+    let prefix = body.and_then(|b| {
+        let mut initial = Vec::new();
+        if let Some(messages) = b.get("messages").and_then(Value::as_array) {
+            for m in messages {
+                match m.get("role").and_then(Value::as_str) {
+                    Some("system" | "developer") => initial.push(m.clone()),
+                    Some("user") => {
+                        initial.push(m.clone());
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+        }
+        let input = b.get("input");
+        if initial.is_empty()
+            && input.is_none()
+            && b.get("system").is_none()
+            && b.get("instructions").is_none()
+        {
+            return None;
+        }
+        Some(digest(&serde_json::json!([
+            scope,
+            "prefix",
+            b.get("system"),
+            b.get("instructions"),
+            b.get("tools"),
+            b.get("tool_choice"),
+            initial,
+            input
+        ])))
+    });
+    let explicit_role = hint("x-agent-role", "agent_role").map(str::to_owned);
+    let role = explicit_role.or_else(|| {
+        if let Some(m) = body.and_then(|b| b.get("model")).and_then(Value::as_str) {
+            let m_lower = m.to_lowercase();
+            if m_lower.contains("haiku")
+                || m_lower.contains("flash")
+                || m_lower.contains("subagent")
+                || m_lower.contains("review")
+                || m_lower.contains("halo")
+            {
+                return Some("subagent".to_string());
+            }
+            if m_lower.contains("opus")
+                || m_lower.contains("sonnet")
+                || m_lower.contains("coder")
+                || m_lower.contains("reason")
+            {
+                return Some("main".to_string());
+            }
+        }
+        if let Some(qs) = meta.and_then(|m| m.get("query_source")).and_then(Value::as_str) {
+            if qs.contains("title")
+                || qs.contains("summary")
+                || qs.contains("background")
+                || qs.contains("subagent")
+            {
+                return Some("subagent".to_string());
+            }
+        }
+        None
+    });
+    RoutingHints {
+        session,
+        prefix,
+        role,
+        target: hint("x-target-replica", "target_replica").map(str::to_owned),
+    }
+}
+
 fn push_content(s: &mut String, content: Option<&Value>) {
     match content {
         Some(Value::String(t)) => s.push_str(t),
@@ -273,6 +518,36 @@ fn err(status: StatusCode, msg: &str) -> Response {
     (status, msg.to_string()).into_response()
 }
 
+async fn hello() -> StatusCode {
+    StatusCode::OK
+}
+
+async fn list_models(State(state): State<Arc<ProxyState>>) -> Response {
+    let mut model_ids: Vec<String> = state.balancer.statuses().into_keys().collect();
+    for primary in &["zen5.8", "zen5.8-coder", "qwen3.8"] {
+        if !model_ids.iter().any(|m| m == primary) {
+            model_ids.push(primary.to_string());
+        }
+    }
+    model_ids.sort();
+    let data: Vec<Value> = model_ids
+        .into_iter()
+        .map(|id| {
+            serde_json::json!({
+                "id": id,
+                "object": "model",
+                "created": 1726272000,
+                "owned_by": "hanzo"
+            })
+        })
+        .collect();
+    Json(serde_json::json!({
+        "object": "list",
+        "data": data
+    }))
+    .into_response()
+}
+
 async fn list_replicas(
     State(state): State<Arc<ProxyState>>,
 ) -> Json<BTreeMap<String, Vec<ReplicaStatus>>> {
@@ -285,6 +560,17 @@ struct RegisterBody {
     url: String,
     #[serde(default)]
     id: Option<String>,
+    #[serde(default)]
+    capacity: usize,
+    #[serde(default = "registration_weight")]
+    weight: u32,
+    #[serde(default)]
+    roles: Vec<String>,
+    #[serde(default)]
+    upstream_model: Option<String>,
+}
+fn registration_weight() -> u32 {
+    100
 }
 
 async fn add_replica(
@@ -296,9 +582,32 @@ async fn add_replica(
         Replica {
             id: body.id.unwrap_or_default(),
             url: body.url,
+            capacity: body.capacity,
+            weight: body.weight,
+            roles: body.roles,
+            upstream_model: body.upstream_model,
         },
     );
     Json(state.balancer.statuses())
+}
+
+async fn update_replica(
+    State(state): State<Arc<ProxyState>>,
+    Json(update): Json<crate::pool_file::WorkerUpdate>,
+) -> Response {
+    let Some(file) = &state.pool_file else {
+        return err(
+            StatusCode::CONFLICT,
+            "durable worker settings require a config file",
+        );
+    };
+    if let Err(message) = update.validate() {
+        return err(StatusCode::BAD_REQUEST, message);
+    }
+    match file.update(&state.balancer, update).await {
+        Ok(()) => Json(state.balancer.statuses()).into_response(),
+        Err(message) => err(StatusCode::CONFLICT, &message),
+    }
 }
 
 async fn probe_loop(state: Arc<ProxyState>, interval: Duration) {
@@ -334,6 +643,97 @@ mod tests {
             );
         }
         h
+    }
+
+    #[test]
+    fn routing_metadata_is_scoped_and_prefix_covers_tools_and_long_context() {
+        let mut body = serde_json::json!({
+            "model": "zen-coder",
+            "metadata": {"session_id": "cc-1", "agent_role": "reviewer"},
+            "system": [{"type": "text", "text": "S".repeat(2000)}],
+            "tools": [{"name":"read","input_schema":{"type":"object"}}],
+            "messages": [{"role":"user","content":"repo A"}]
+        });
+        let org_a = headers(&[("x-org-id", "a")]);
+        let first = routing_hints(&org_a, Some(&body));
+        assert_eq!(first.role.as_deref(), Some("reviewer"));
+        assert_eq!(first.session.as_ref().unwrap().len(), 64);
+        assert_ne!(
+            first.session,
+            routing_hints(&headers(&[("x-org-id", "b")]), Some(&body)).session
+        );
+        assert_ne!(
+            first.prefix,
+            routing_hints(&headers(&[("x-org-id", "b")]), Some(&body)).prefix
+        );
+        body["messages"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"role":"assistant","content":"done"}));
+        assert_eq!(first.prefix, routing_hints(&org_a, Some(&body)).prefix);
+        body["tools"][0]["name"] = serde_json::json!("write");
+        assert_ne!(first.prefix, routing_hints(&org_a, Some(&body)).prefix);
+        body["messages"][0]["content"] = serde_json::json!("repo B");
+        assert_ne!(first.prefix, routing_hints(&org_a, Some(&body)).prefix);
+        body["model"] = serde_json::json!("other-model");
+        assert_ne!(first.session, routing_hints(&org_a, Some(&body)).session);
+        let explicit = routing_hints(&headers(&[("x-session-id", "override")]), Some(&body));
+        assert_ne!(
+            explicit.session,
+            routing_hints(&HeaderMap::new(), Some(&body)).session
+        );
+        assert!(
+            routing_hints(&HeaderMap::new(), Some(&serde_json::json!({"model":"m"})))
+                .prefix
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn leased_stream_releases_on_eof_error_and_abort() {
+        use futures::StreamExt;
+        for mode in ["complete", "abort", "error"] {
+            let set = Arc::new(ReplicaSet::new([Replica::new("worker")], 1));
+            let hints = RoutingHints {
+                session: Some("s".into()),
+                prefix: Some("p".into()),
+                ..Default::default()
+            };
+            let lease = set
+                .pick_agent(&hints, &HashSet::new(), Instant::now())
+                .unwrap();
+            let inner: Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>> =
+                if mode == "error" {
+                    // An invalid URI makes a reqwest error without network access.
+                    let error = reqwest::Client::new()
+                        .get("not a url")
+                        .send()
+                        .await
+                        .unwrap_err();
+                    Box::pin(futures::stream::iter(vec![Err(error)]))
+                } else {
+                    Box::pin(futures::stream::iter(vec![Ok(Bytes::from_static(
+                        b"data: [DONE]\n\n",
+                    ))]))
+                };
+            let mut stream = LeasedStream {
+                inner,
+                lease: Some(lease),
+                set: set.clone(),
+                hints,
+                started: Instant::now(),
+                first_byte: false,
+                successful: true,
+            };
+            assert_eq!(set.statuses()[0].inflight, 1);
+            if mode != "abort" {
+                while stream.next().await.is_some() {}
+            } else {
+                drop(stream);
+            }
+            assert_eq!(set.statuses()[0].inflight, 0, "{mode}");
+            assert_eq!(set.statuses()[0].ttft_ewma_ms.is_some(), mode == "complete");
+        }
     }
 
     #[test]
@@ -431,6 +831,7 @@ mod e2e {
         let app = Router::new()
             .route("/health", get(mock_health))
             .route("/v1/chat/completions", post(mock_chat))
+            .route("/v1/messages", post(mock_chat))
             .with_state(mock.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -461,7 +862,7 @@ mod e2e {
             .post(format!("{base}/v1/chat/completions"))
             .header("x-conversation-id", conv)
             .json(
-                &serde_json::json!({"model": "qwen", "messages": [{"role":"user","content":"hi"}]}),
+                &serde_json::json!({"model": "qwen", "messages": [{"role":"user","content":conv}]}),
             )
             .send()
             .await
@@ -538,16 +939,71 @@ mod e2e {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(replica_id(&t), "A", "B down -> served by survivor A");
 
-        // (c) restart B: the prober restores it and it reclaims its conversation.
+        // (c) restart B: existing sessions stay on the replacement cache owner.
         mock_b.alive.store(true, Ordering::Release);
         tokio::time::sleep(Duration::from_millis(320)).await;
         let (s, t) = chat(&client, &base, &b_conv).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(
             replica_id(&t),
-            "B",
-            "B restored -> reclaims its conversation"
+            "A",
+            "B restored -> existing session keeps its new cache owner"
         );
+    }
+
+    #[tokio::test]
+    async fn cloud_metadata_routes_roles_and_rejects_unknown_targets() {
+        let (url_a, _) = spawn_mock("A").await;
+        let (url_b, _) = spawn_mock("B").await;
+        let balancer = Balancer::new(2);
+        let mut a = Replica::new(url_a);
+        a.id = "spark".into();
+        a.roles = vec!["main".into()];
+        let mut b = Replica::new(url_b);
+        b.id = "evo".into();
+        b.roles = vec!["reviewer".into()];
+        balancer.register("zen-coder", a);
+        balancer.register("zen-coder", b);
+        let base = start_proxy(balancer, Duration::from_secs(60)).await;
+        let client = reqwest::Client::new();
+        let mut body = serde_json::json!({"model":"zen-coder", "messages":[{"role":"user","content":"review"}],
+            "metadata":{"session_id":"cc-1","agent_role":"reviewer"}});
+        for role in ["reviewer", "main"] {
+            body["metadata"]["agent_role"] = serde_json::json!(role);
+            let resp = client
+                .post(format!("{base}/v1/chat/completions"))
+                .header("x-org-id", "acme")
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.headers()[REPLICA_HEADER],
+                "evo",
+                "role changes cannot break pins"
+            );
+            assert_eq!(replica_id(&resp.text().await.unwrap()), "B");
+        }
+        // The same caller-chosen session ID in another org has no affinity to B.
+        let resp = client
+            .post(format!("{base}/v1/chat/completions"))
+            .header("x-org-id", "other")
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.headers()[REPLICA_HEADER], "spark");
+        assert_eq!(replica_id(&resp.text().await.unwrap()), "A");
+        body["metadata"]["target_replica"] = serde_json::json!("unknown");
+        let resp = client
+            .post(format!("{base}/v1/chat/completions"))
+            .header("x-org-id", "acme")
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(resp.headers()["retry-after"], "1");
     }
 
     #[tokio::test]
@@ -632,4 +1088,115 @@ mod e2e {
             "client model must be rewritten to `default` upstream, got: {text}"
         );
     }
+
+    #[tokio::test]
+    async fn claude_code_hello_and_models_and_fallback() {
+        let (url, _) = spawn_mock("A").await;
+        let balancer = Balancer::new(2);
+        balancer.register("zen5.8", Replica::new(url));
+        let base = start_proxy(balancer, Duration::from_secs(60)).await;
+        let client = reqwest::Client::new();
+
+        // 1. /api/hello GET and HEAD
+        let resp_get = client.get(format!("{base}/api/hello")).send().await.unwrap();
+        assert_eq!(resp_get.status(), StatusCode::OK);
+
+        let resp_head = client.head(format!("{base}/api/hello")).send().await.unwrap();
+        assert_eq!(resp_head.status(), StatusCode::OK);
+
+        // 2. /v1/models GET returns models list including zen5.8, zen5.8-coder, qwen3.8
+        let resp_models = client.get(format!("{base}/v1/models")).send().await.unwrap();
+        assert_eq!(resp_models.status(), StatusCode::OK);
+        let models_json: Value = resp_models.json().await.unwrap();
+        let list = models_json.get("data").and_then(Value::as_array).unwrap();
+        assert!(list.iter().any(|m| m.get("id").and_then(Value::as_str) == Some("zen5.8")));
+        assert!(list.iter().any(|m| m.get("id").and_then(Value::as_str) == Some("qwen3.8")));
+
+        // 3. Fallback routing: unrecognized claude model resolves to zen5.8
+        let resp_msg = client
+            .post(format!("{base}/v1/messages"))
+            .json(&serde_json::json!({
+                "model": "claude-3-7-sonnet-20250219",
+                "max_tokens": 10,
+                "messages": [{"role": "user", "content": "hi"}]
+            }))
+            .send()
+            .await
+            .unwrap();
+        let status = resp_msg.status();
+        let body = resp_msg.text().await.unwrap();
+        assert_eq!(status, StatusCode::OK, "fallback response error: {body}");
+    }
+
+    #[test]
+    fn normalize_reasoning_effort_normalizes_high_and_max() {
+        let mut v = serde_json::json!({
+            "output_config": {"effort": "high"},
+            "reasoning_effort": "max"
+        });
+        normalize_reasoning_effort(&mut v);
+        assert_eq!(v["output_config"]["effort"], "medium");
+        assert_eq!(v["reasoning_effort"], "medium");
+
+        let mut v2 = serde_json::json!({
+            "output_config": {"effort": "low"},
+            "reasoning_effort": "medium"
+        });
+        normalize_reasoning_effort(&mut v2);
+        assert_eq!(v2["output_config"]["effort"], "low");
+        assert_eq!(v2["reasoning_effort"], "medium");
+    }
+
+    #[test]
+    fn normalize_messages_rewrites_non_leading_system() {
+        let mut v = serde_json::json!({
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "hello"},
+                {"role": "system", "content": "Remember to speak concisely."}
+            ]
+        });
+        normalize_messages(&mut v);
+        assert_eq!(v["messages"][0]["role"], "system");
+        assert_eq!(v["messages"][0]["content"], "You are a helpful assistant.");
+        assert_eq!(v["messages"][1]["role"], "user");
+        assert_eq!(v["messages"][2]["role"], "user");
+        assert_eq!(v["messages"][2]["content"], "[System]: Remember to speak concisely.");
+    }
+
+    #[test]
+    fn routing_hints_infers_subagent_and_main_roles() {
+        let headers = HeaderMap::new();
+
+        // 1. Haiku model infers subagent
+        let body_haiku = serde_json::json!({
+            "model": "claude-3-5-haiku-20241022",
+            "messages": [{"role": "user", "content": "fast summary"}]
+        });
+        let hints = routing_hints(&headers, Some(&body_haiku));
+        assert_eq!(hints.role.as_deref(), Some("subagent"));
+
+        // 2. Opus model infers main
+        let body_opus = serde_json::json!({
+            "model": "claude-opus-5",
+            "messages": [{"role": "user", "content": "deep coding"}]
+        });
+        let hints = routing_hints(&headers, Some(&body_opus));
+        assert_eq!(hints.role.as_deref(), Some("main"));
+
+        // 3. query_source generates title infers subagent
+        let body_meta = serde_json::json!({
+            "model": "zen5.8",
+            "metadata": {"query_source": "generate_session_title"}
+        });
+        let hints = routing_hints(&headers, Some(&body_meta));
+        assert_eq!(hints.role.as_deref(), Some("subagent"));
+
+        // 4. Explicit header overrides inference
+        let mut custom_headers = HeaderMap::new();
+        custom_headers.insert("x-agent-role", HeaderValue::from_static("reviewer"));
+        let hints = routing_hints(&custom_headers, Some(&body_opus));
+        assert_eq!(hints.role.as_deref(), Some("reviewer"));
+    }
 }
+

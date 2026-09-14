@@ -926,3 +926,23 @@ path -> provably lossless (greedy byte-identical on/off). Auto-gates: drafts onl
   128-block)+BF16 safetensors fixture exercised the `--indir` streaming path and resume. NEEDS a real
   zai-org/GLM-5.2-FP8 checkpoint for full-scale conversion + an in-engine load smoke test (and the tokenizer
   is loaded separately -- GGUF vocab embedding is not done here).
+
+## Agent session placement in the native router
+
+`hanzo-router/src/scheduler.rs` extends the existing replica pool for the HTTP
+front: scoped session pins, successful-response prefix locality hints, configured
+worker roles/capacity/throughput weights, atomic admission, and observed TTFT
+EWMA. The legacy `ReplicaSet::pick` ring API remains available; the HTTP front
+uses `pick_agent`. New sessions require a slot; pins tolerate 2× capacity before
+reassignment. A session stays on the failover worker after recovery. Pins expire
+at 30 minutes, prefix hints at five, each bounded to 10,000 rows per model.
+`X-Session-Id` / `X-Agent-Role` / `X-Target-Replica` or JSON metadata
+`session_id` / `agent_role` / `target_replica` carry hints; keys are SHA-256 of the
+principal/model namespace and structured session/prefix input, never stored raw
+prompts. The listener defaults to loopback and trusts identity from the private
+cloud gateway, not public clients. Its replica admin surface is private too.
+Cloud's existing metered relay preserves JSON metadata but not arbitrary headers;
+cloud owns the composition in `native/engine-router` and `deploy/engine-pool.yaml`.
+No KV migration or engine-reported cache/queue telemetry is claimed: completed
+2xx response prefixes are locality hints. Streams release leases on EOF/error/drop;
+only pre-connect errors retry, never timeouts or partially delivered streams.
