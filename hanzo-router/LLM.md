@@ -86,8 +86,8 @@ PID -- NEVER `pkill -f "release/hanzo serve"` (the pattern self-matches your own
 ### Upstream Engines
 - **Spark (`10.0.0.19:30000`)**: Blackwell GB10 running SGLang (`hanzo-sglang.service`):
   - Model: `RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead`
-  - Flags: `--host 0.0.0.0 --port 30000 --mem-fraction-static 0.65 --max-running-requests 8 --reasoning-parser qwen3`
-  - Radix KV cache with chunked prefill at ~1,700 tok/s, CUDA graph acceleration.
+  - Flags: `--host 0.0.0.0 --port 30000 --mem-fraction-static 0.65 --max-running-requests 8 --reasoning-parser qwen3 --tool-call-parser qwen3_coder`
+  - Radix KV cache with chunked prefill at ~1,700 tok/s, CUDA graph acceleration, native Anthropic /v1/messages tool_use parsing.
 - **Evo (`10.0.0.21:8080`)**: Strix Halo gfx1151 running `llama-server`:
   - Model: `Qwen3.8-27B-Q6_K.gguf`
 
