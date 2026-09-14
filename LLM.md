@@ -994,3 +994,31 @@ only pre-connect errors retry, never timeouts or partially delivered streams.
   - `hanzo network use local`: Local development network (chain 1337).
 - Manage agent sandboxes and workspaces with `hanzo sbx` (`hanzo sbx list`, `hanzo sbx run <agent>`, `hanzo sbx models`).
 
+### 7. Native Anthropic Server-Side Tools Support (`web_search_*`, `bash_*`, `text_editor_*`, `computer_*`)
+- **Problem**: When Claude Code issued web searches or tool calls, the request sent server-side tool definitions (e.g. `type: "web_search_20250101"`, `tool_choice: {"type": "tool", "name": "web_search"}`). Upstream SGLang dropped these tools as unsupported, causing `ValueError: tool_choice='tool' requires at least one custom tool; all supplied tools were server-side Anthropic built-ins which the OpenAI-compatible backend cannot invoke` (HTTP 400).
+- **Fix**: SGLang's Anthropic adapter (`sglang/srt/entrypoints/anthropic/serving.py`) was patched on Spark to automatically synthesize function schemas for all Anthropic server-side built-in families:
+  - `web_search_*` -> function `web_search` with `{query: string}` parameter schema.
+  - `bash_*` -> function `bash` with `{command: string, restart: boolean}` schema.
+  - `text_editor_*` -> function `str_replace_editor` / `text_editor` with full command parameters (`view`, `create`, `str_replace`, `insert`, `undo_edit`).
+  - `computer_*` -> function `computer` with GUI action schemas (`key`, `type`, `mouse_move`, `click`, etc.).
+- **Result**: The underlying Qwen 3.8 / Zen model generates function calls normally; SGLang translates them back to Anthropic `tool_use` events (`name: "web_search"`), which Claude Code receives, executes, and continues with zero 400 errors.
+
+### 8. Model Selection Consistency & Sub-Agent Routing on Evo
+- **Consistent Model Naming & 1M Context UI**:
+  - `zen5.8-coder`: `Zen 5.8 Coder (1M Context · DGX Spark)` (`claude-sonnet-4-6[1m]`, medium effort)
+  - `zen5.8-evo`: `Zen 5.8 Evo (1M Context · AMD Strix Halo)` (`claude-sonnet-4-6[1m]`, medium effort)
+  - `zen5-flash`: `Zen 5 Flash (Fast · Strix Halo Evo)` (`claude-haiku-4-5`, subagents & auxiliary tasks)
+  - `zen5.8`: `Zen 5.8 (1M Context · DGX Spark)` (`claude-opus-5[1m]`)
+- **Launcher Binary Auto-Selection**:
+  - `/Users/z/.local/bin/claude-hanzo` inspects `basename $0`:
+    - `claude-zen`: automatically adds `--model zen5.8-coder`.
+    - `claude-evo`: automatically adds `--model zen5.8-evo`.
+    - `claude-flash`: automatically adds `--model zen5-flash`.
+    - `claude-spark`: automatically adds `--model zen5.8-spark`.
+  - Automatically injects `--dangerously-skip-permissions` by default (overridable with `--safe` or `--ask`).
+  - Configures `CLAUDE_CONFIG_DIR=~/.claude-hanzo` so standard `claude` (Claude Max / OAuth) remains 100% clean and untouched.
+- **Sub-Agent Steering**:
+  - Sets `CLAUDE_CODE_SUBAGENT_MODEL="zen5-flash"`, `ANTHROPIC_DEFAULT_HAIKU_MODEL="zen5-flash"`, and `ANTHROPIC_SMALL_MODEL="zen5-flash"`.
+  - In `router-pool.yaml`, `zen5-flash` has weight 1000 on Strix Halo Evo APU, offloading fast subagents and summaries from Spark's 1M context main engine.
+
+
