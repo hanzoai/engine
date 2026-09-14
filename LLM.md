@@ -971,3 +971,26 @@ only pre-connect errors retry, never timeouts or partially delivered streams.
   - Support for `torch.uint8` packed weights, `torch.float8_e4m3fn` block scales, and `torch.float32` global scalar `weight_scale_2`.
   - Integrated into `ColumnParallelLayer`, `RowParallelLayer`, `ReplicatedLayer`, and `linear_b` via `QuantizedConfig::ModelOpt`.
 
+### 4. Cloudflare Tunnel & Public Reselling Ingress (`api.hanzo.ai`)
+- Redundant `cloudflared` daemons run natively on host nodes and as Kubernetes pods (`hanzo/cloudflared-*`).
+- Ingress `hanzo-domains-api-hanzo-ai` terminates public traffic and routes to `cloud:8000` (which routes through `hanzo-router:1235` to Spark and Evo).
+- Exposes full OpenAI `/v1/chat/completions` and Anthropic `/v1/messages` (with structured `thinking` blocks).
+- Metered via Hanzo IAM: authenticated calls via `Bearer <token>` debit user/org quota and emit asynchronous usage records to the platform accounting database.
+
+### 5. Workstation Setup & Claude Code Isolation (`ra` and `dbc`)
+- Standard `claude` remains completely clean and untouched: no global `ANTHROPIC_BASE_URL` or `ANTHROPIC_API_KEY` exports in shell profiles.
+- Dedicated launchers installed in `~/.local/bin/`:
+  - `claude-hanzo` / `claude-zen`: Primary coding launcher with 1M context (`CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000`), medium reasoning effort (`CLAUDE_CODE_EFFORT_LEVEL=medium`), and 1-hour timeout buffers.
+  - Automatically fetches the active IAM token from `hanzo auth token` to route through `https://api.hanzo.ai` under `z@hanzo.ai` / org `hanzo`.
+  - Pass `--local` to bypass IAM and hit the local cluster GPU mesh directly (`http://10.0.0.19:1235`).
+  - Dedicated configuration isolated to `~/.claude-hanzo/settings.json`, preserving `~/.claude/settings.json` for Anthropic/claude.ai.
+- Symlinks available: `claude-zen`, `claude-spark`, `claude-evo`, `claude-mesh`.
+
+### 6. Environment & Network Control (`mainnet` / `testnet` / `devnet` / `local`)
+- Switch active environment via `hanzo network use <network>`:
+  - `hanzo network use mainnet`: Production L1 (chain 36963, RPC `https://rpc.hanzo.network`, API `https://api.hanzo.ai`).
+  - `hanzo network use testnet`: Testnet (chain 36962, RPC `https://rpc.testnet.hanzo.network`).
+  - `hanzo network use devnet`: Devnet (chain 36964, RPC `https://rpc.devnet.hanzo.network`).
+  - `hanzo network use local`: Local development network (chain 1337).
+- Manage agent sandboxes and workspaces with `hanzo sbx` (`hanzo sbx list`, `hanzo sbx run <agent>`, `hanzo sbx models`).
+
