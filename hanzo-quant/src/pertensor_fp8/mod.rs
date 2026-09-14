@@ -9,7 +9,7 @@ use hanzo_nn::Linear;
 mod ops;
 
 use crate::{
-    generate_isq, generate_isq_imatrix, has_missing_required_tensors,
+    generate_isq, generate_isq_imatrix,
     hqq::{ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     make_dummy_or_error,
     utils::{serialize_tensor, UQFF_VERSION},
@@ -307,14 +307,19 @@ pub fn pertensor_fp8_linear_b(
     _hints: Shard,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
+    let has_scale = vb.contains_tensor("weight_scale_inv") || vb.contains_tensor("weight_scale");
     // Handle the case where we actually have unquantized weights
-    if vb.contains_tensor("weight") && !vb.contains_tensor("weight_scale_inv") {
+    if vb.contains_tensor("weight") && !has_scale {
         return crate::linear_b(in_dim, out_dim, bias, &None, vb);
     }
 
-    if has_missing_required_tensors(&vb, &["weight", "weight_scale_inv"]) {
+    let scale_name = if vb.contains_tensor("weight_scale_inv") {
+        "weight_scale_inv"
+    } else if vb.contains_tensor("weight_scale") {
+        "weight_scale"
+    } else {
         return make_dummy_or_error("pertensor_fp8_linear", &vb, &["weight", "weight_scale_inv"]);
-    }
+    };
 
     // Load FP8 weight tensor
     let weight = vb.get_with_hints_dtype(
@@ -326,7 +331,7 @@ pub fn pertensor_fp8_linear_b(
 
     // Load per-tensor weight scale (scalar)
     let weight_scale_inv =
-        vb.get_with_hints_dtype((), "weight_scale_inv", Default::default(), DType::F32)?;
+        vb.get_with_hints_dtype((), scale_name, Default::default(), DType::F32)?;
 
     // Load activation scale if present (optional - some models may not have it)
     let activation_scale = if vb.contains_tensor("activation_scale") {

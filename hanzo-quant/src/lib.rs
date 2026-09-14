@@ -37,6 +37,7 @@ mod lora;
 #[cfg(all(feature = "cuda", feature = "cutile"))]
 pub mod moe;
 mod mxfp4;
+pub mod nvfp4;
 mod pending_layer;
 mod pertensor_fp8;
 pub mod rotary;
@@ -97,6 +98,7 @@ pub use lora::{
     LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
 };
 pub use mxfp4::MXFP4Layer;
+pub use nvfp4::NVFP4Layer;
 pub use pending_layer::PendingIsqLayer;
 pub use pertensor_fp8::PerTensorFP8Linear;
 pub use unquantized::UnquantLinear;
@@ -316,12 +318,26 @@ pub enum QuantizedConfig {
         group_size: usize,
     },
     MXFP4 {},
+    ModelOpt {
+        quant_algo: Option<String>,
+        quantized_layers: std::collections::HashMap<String, ModelOptLayerConfig>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelOptLayerConfig {
+    #[serde(default)]
+    pub quant_algo: Option<String>,
+    #[serde(default)]
+    pub group_size: Option<usize>,
 }
 
 // Common fields for all variants
 #[derive(Deserialize)]
 struct RawConfig {
     quant_method: Option<String>,
+    quant_algo: Option<String>,
+    quantized_layers: Option<std::collections::HashMap<String, ModelOptLayerConfig>>,
     bits: Option<usize>,
     group_size: Option<usize>,
     checkpoint_format: Option<String>,
@@ -373,6 +389,12 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
             Some(m) if m == "mxfp4" => {
                 Ok(QuantizedConfig::MXFP4 {  })
             }
+            Some(m) if m == "modelopt" => {
+                Ok(QuantizedConfig::ModelOpt {
+                    quant_algo: raw.quant_algo,
+                    quantized_layers: raw.quantized_layers.unwrap_or_default(),
+                })
+            }
             None => {
                 let bits = raw
                     .bits
@@ -384,7 +406,7 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
             }
             Some(unknown_method) => {
                 Err(serde::de::Error::custom(format!(
-                    "Unknown quantization method: {unknown_method}. Expected one of: gptq, fp8, bitsandbytes, afq, or not specified"
+                    "Unknown quantization method: {unknown_method}. Expected one of: gptq, fp8, bitsandbytes, afq, mxfp4, modelopt, or not specified"
                 )))
             },
         }
@@ -399,10 +421,11 @@ impl QuantizedConfig {
             Self::Bitsandbytes { .. } => "bitsandbytes",
             Self::Afq { .. } => "afq",
             Self::MXFP4 { .. } => "mxfp4",
+            Self::ModelOpt { .. } => "modelopt",
         }
     }
 
-    pub fn get_bits_name(&self, _vb: &ShardedVarBuilder) -> String {
+    pub fn get_bits_name(&self, vb: &ShardedVarBuilder) -> String {
         match self {
             Self::GptqAwq { bits, .. } => format!("{bits} bits"),
             Self::Fp8 { .. } => "8 bits".to_string(),
@@ -414,6 +437,24 @@ impl QuantizedConfig {
             } => "8 bits".to_string(),
             Self::Afq { bits, .. } => format!("{bits} bits"),
             Self::MXFP4 {} => format!("{} bits", mxfp4::N_BITS),
+            Self::ModelOpt { quantized_layers, .. } => {
+                let prefix = vb.prefix();
+                if let Some(cfg) = quantized_layers.iter().find_map(|(k, v)| {
+                    if k == &prefix || k.ends_with(&format!(".{prefix}")) || prefix.ends_with(k) {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                }) {
+                    match cfg.quant_algo.as_deref() {
+                        Some("NVFP4") => "4 bits (NVFP4)".to_string(),
+                        Some("FP8") => "8 bits (FP8)".to_string(),
+                        _ => "mixed precision".to_string(),
+                    }
+                } else {
+                    "16 bits".to_string()
+                }
+            }
         }
     }
 
@@ -437,6 +478,7 @@ impl QuantizedConfig {
                 bnb_4bit_quant_type: None,
             } => IsqType::Q4K.pack_factor(dtype),
             Self::MXFP4 {} => IsqType::Q4_0.pack_factor(dtype),
+            Self::ModelOpt { .. } => 4,
         }
     }
 }
@@ -505,6 +547,13 @@ pub enum QuantMethodConfig {
         blocks: Tensor,
         scales: Tensor,
         bias: Option<Tensor>,
+    },
+    NVFP4 {
+        weight: Tensor,
+        weight_scale: Tensor,
+        weight_scale_2: Option<Tensor>,
+        bias: Option<Tensor>,
+        dequant_dtype: DType,
     },
 }
 
@@ -1607,6 +1656,9 @@ pub fn linear_no_bias(
             QuantizedConfig::MXFP4 {} => {
                 MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, false, vb)?
             }
+            QuantizedConfig::ModelOpt { quantized_layers, .. } => {
+                distributed::layers::load_modelopt_linear(in_dim, out_dim, false, quant_conf, quantized_layers, &vb)?
+            }
         }
     } else {
         if !vb.contains_tensor("weight") {
@@ -1669,6 +1721,9 @@ pub fn linear(
             }
             QuantizedConfig::MXFP4 {} => {
                 MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, true, vb)?
+            }
+            QuantizedConfig::ModelOpt { quantized_layers, .. } => {
+                distributed::layers::load_modelopt_linear(in_dim, out_dim, true, quant_conf, quantized_layers, &vb)?
             }
         }
     } else {

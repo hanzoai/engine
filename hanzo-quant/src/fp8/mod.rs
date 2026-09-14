@@ -45,7 +45,8 @@ impl QuantMethod for FP8Linear {
             | QuantMethodConfig::BlockwiseFP8 { .. }
             | QuantMethodConfig::PerTensorFP8 { .. }
             | QuantMethodConfig::Afq { .. }
-            | QuantMethodConfig::MXFP4 { .. } => unreachable!(),
+            | QuantMethodConfig::MXFP4 { .. }
+            | QuantMethodConfig::NVFP4 { .. } => unreachable!(),
             QuantMethodConfig::FP8 { lin, dtype } => {
                 let QuantizationResult {
                     qw,

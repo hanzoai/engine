@@ -117,7 +117,10 @@ async fn serve_listener_config(
         balancer,
         client: reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(PROBE_TIMEOUT)
+            .connect_timeout(Duration::from_secs(30))
+            .tcp_keepalive(Some(Duration::from_secs(15)))
+            .tcp_nodelay(true)
+            .pool_idle_timeout(Some(Duration::from_secs(300)))
             .build()?,
         upstream_model,
         pool_file: config_path
@@ -194,14 +197,13 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request) -> Response {
             .await;
         match send {
             Ok(resp) => return stream_response(resp, lease, set.clone(), hints, started),
-            Err(e) if e.is_connect() => {
+            Err(e) => {
                 let id = lease.id().to_string();
                 excluded.insert(id.clone());
                 drop(lease);
-                tracing::warn!("replica {id} unreachable ({e}), evicting");
+                tracing::warn!("replica {id} failed ({e}), evicting and trying next replica");
                 set.mark_unhealthy(&id);
             }
-            Err(e) => return err(StatusCode::BAD_GATEWAY, &format!("upstream error: {e}")),
         }
     }
     let mut response = err(
@@ -225,6 +227,12 @@ fn stream_response(
     let status = resp.status();
     let src = resp.headers().clone();
     let replica = HeaderValue::from_str(lease.id()).ok();
+    let is_sse = src
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.contains("text/event-stream"))
+        .unwrap_or(false);
+    let ping_deadline = Box::pin(tokio::time::sleep(Duration::from_secs(15)));
     let body = Body::from_stream(LeasedStream {
         inner: Box::pin(resp.bytes_stream()),
         lease: Some(lease),
@@ -233,6 +241,8 @@ fn stream_response(
         started,
         first_byte: false,
         successful: status.is_success(),
+        is_sse,
+        ping_deadline,
     });
     let mut response = Response::new(body);
     *response.status_mut() = status;
@@ -256,26 +266,34 @@ struct LeasedStream {
     started: Instant,
     first_byte: bool,
     successful: bool,
+    is_sse: bool,
+    ping_deadline: Pin<Box<tokio::time::Sleep>>,
 }
 
 impl Stream for LeasedStream {
     type Item = reqwest::Result<Bytes>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        use std::future::Future;
         let this = self.get_mut();
         let next = this.inner.as_mut().poll_next(cx);
-        match &next {
-            Poll::Ready(Some(Ok(bytes))) if !bytes.is_empty() && !this.first_byte => {
-                this.first_byte = true;
-                if this.successful {
-                    if let Some(lease) = &this.lease {
-                        this.set.observe_ttft(lease.id(), this.started.elapsed());
+        match next {
+            Poll::Ready(Some(Ok(bytes))) => {
+                if !bytes.is_empty() && !this.first_byte {
+                    this.first_byte = true;
+                    if this.successful {
+                        if let Some(lease) = &this.lease {
+                            this.set.observe_ttft(lease.id(), this.started.elapsed());
+                        }
                     }
                 }
+                this.ping_deadline.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(15));
+                Poll::Ready(Some(Ok(bytes)))
             }
-            Poll::Ready(Some(Err(_))) => {
+            Poll::Ready(Some(Err(e))) => {
                 this.successful = false;
                 this.lease.take();
+                Poll::Ready(Some(Err(e)))
             }
             Poll::Ready(None) => {
                 if let Some(lease) = this.lease.take() {
@@ -284,10 +302,17 @@ impl Stream for LeasedStream {
                             .observe_completion(lease.id(), &this.hints, Instant::now());
                     }
                 }
+                Poll::Ready(None)
             }
-            _ => {}
+            Poll::Pending => {
+                if this.is_sse && this.ping_deadline.as_mut().poll(cx).is_ready() {
+                    this.ping_deadline.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(15));
+                    Poll::Ready(Some(Ok(Bytes::from_static(b": keep-alive\n\n"))))
+                } else {
+                    Poll::Pending
+                }
+            }
         }
-        next
     }
 }
 
@@ -724,6 +749,8 @@ mod tests {
                 started: Instant::now(),
                 first_byte: false,
                 successful: true,
+                is_sse: false,
+                ping_deadline: Box::pin(tokio::time::sleep(Duration::from_secs(15))),
             };
             assert_eq!(set.statuses()[0].inflight, 1);
             if mode != "abort" {

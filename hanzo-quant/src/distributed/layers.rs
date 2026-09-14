@@ -27,6 +27,57 @@ fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     }
 }
 
+pub fn load_modelopt_linear(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    quant_conf: &QuantizedConfig,
+    quantized_layers: &std::collections::HashMap<String, crate::ModelOptLayerConfig>,
+    vb: &ShardedVarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    let prefix = vb.prefix();
+    let layer_cfg = quantized_layers.iter().find_map(|(k, v)| {
+        if k == &prefix || k.ends_with(&format!(".{prefix}")) || prefix.ends_with(k) {
+            Some(v)
+        } else {
+            None
+        }
+    });
+    match layer_cfg.and_then(|c| c.quant_algo.as_deref()) {
+        Some("NVFP4") => {
+            crate::NVFP4Layer::linear_b(in_dim, out_dim, bias, vb.clone())
+        }
+        Some("FP8") => {
+            pertensor_fp8_linear_b(
+                in_dim,
+                out_dim,
+                quant_conf,
+                bias,
+                Default::default(),
+                vb.clone(),
+            )
+        }
+        _ => {
+            if vb.contains_tensor("weight_scale") && vb.contains_tensor("weight") {
+                if vb.contains_tensor("weight_scale_2") {
+                    crate::NVFP4Layer::linear_b(in_dim, out_dim, bias, vb.clone())
+                } else {
+                    pertensor_fp8_linear_b(
+                        in_dim,
+                        out_dim,
+                        quant_conf,
+                        bias,
+                        Default::default(),
+                        vb.clone(),
+                    )
+                }
+            } else {
+                crate::linear_b(in_dim, out_dim, bias, &None, vb.clone())
+            }
+        }
+    }
+}
+
 /// This layer has a weight that is parallelized along the input dimension,
 /// returning the "full" output dimension.
 #[derive(Debug)]
@@ -106,6 +157,9 @@ impl RowParallelLayer {
                 }
                 QuantizedConfig::MXFP4 {} => {
                     MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
+                QuantizedConfig::ModelOpt { quantized_layers, .. } => {
+                    load_modelopt_linear(in_dim, out_dim, bias, quant_conf, quantized_layers, &vb)?
                 }
             }
         } else {
@@ -408,6 +462,9 @@ impl ColumnParallelLayer {
                 }
                 QuantizedConfig::MXFP4 {} => {
                     MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
+                QuantizedConfig::ModelOpt { quantized_layers, .. } => {
+                    load_modelopt_linear(in_dim, out_dim, bias, quant_conf, quantized_layers, &vb)?
                 }
             }
         } else {
@@ -770,6 +827,9 @@ impl ReplicatedLayer {
                 QuantizedConfig::MXFP4 {} => {
                     MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
                 }
+                QuantizedConfig::ModelOpt { quantized_layers, .. } => {
+                    load_modelopt_linear(in_dim, out_dim, bias, quant_conf, quantized_layers, &vb)?
+                }
             }
         } else {
             if !vb.contains_tensor("weight") {
@@ -850,6 +910,9 @@ impl ReplicatedLayer {
                 }
                 QuantizedConfig::MXFP4 {} => {
                     MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
+                QuantizedConfig::ModelOpt { quantized_layers, .. } => {
+                    load_modelopt_linear(in_dim, out_dim, bias, quant_conf, quantized_layers, &vb)?
                 }
             }
         } else {

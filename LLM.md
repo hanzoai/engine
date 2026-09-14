@@ -946,3 +946,28 @@ cloud owns the composition in `native/engine-router` and `deploy/engine-pool.yam
 No KV migration or engine-reported cache/queue telemetry is claimed: completed
 2xx response prefixes are locality hints. Streams release leases on EOF/error/drop;
 only pre-connect errors retry, never timeouts or partially delivered streams.
+
+## High-Availability 2-Node GPU Cluster & Streaming Keep-Alive
+
+### 1. Dual-Node GPU Topology & Failover
+- **Spark (`10.0.0.19`)**: Primary engine (NVIDIA Blackwell GB10 NVFP4 on `:30000`, 128GB VRAM). Designated for Main Thread (TTFT 133ms, 1M context capacity).
+- **Evo (`10.0.0.21`)**: Secondary engine (AMD Strix Halo Ryzen AI Max+ 395 Q6_K on `:8080`, 128GB unified memory). Designated for Subagents (TTFT 618ms).
+- Both nodes run `hanzo-router` on port `:1235` with bidirectional awareness:
+  - If Spark fails: router automatically evicts Spark and routes Main Thread to Evo.
+  - If Evo fails: router automatically spills Subagents to Spark.
+  - In Kubernetes, `hanzo-router` endpoints include both `10.0.0.19:1235` and `10.0.0.21:1235` behind `hanzo-ingress` (Traefik).
+
+### 2. SSE Keep-Alive & Mid-Response Connection Protection
+- Problem: During long reasoning or deep thinking cycles (e.g. 10–18 minutes), upstream generation pauses between tokens or during prefill caused NAT firewalls and client watchdogs (`CLAUDE_STREAM_IDLE_TIMEOUT_MS`, default 300s) to abort connections with "API Error: Connection lost mid-response".
+- Solution in `hanzo-router/src/proxy.rs`:
+  - `LeasedStream` maintains a 15-second timer. If no data arrives from upstream for 15s during an active SSE stream, it emits an SSE comment (`: keep-alive\n\n`).
+  - Standard SSE clients silently ignore comment lines starting with `:`, while the socket receives live TCP packets that reset idle watchdog timers and keep stateful NAT tables alive.
+  - Upstream `reqwest::Client` configured with 30s connect timeout, 15s TCP keepalive, TCP nodelay, and 300s pool idle timeout.
+  - Client workstations (`ra` and `dbc`) configure `API_TIMEOUT_MS=3600000` and `CLAUDE_STREAM_IDLE_TIMEOUT_MS=3600000`.
+
+### 3. ModelOpt NVFP4 Support in `hanzo-quant`
+- Implemented in `hanzo-quant/src/nvfp4/`:
+  - Rayon-parallelized `nvfp4_dequantize` with E2M1 LUT and block size 16.
+  - Support for `torch.uint8` packed weights, `torch.float8_e4m3fn` block scales, and `torch.float32` global scalar `weight_scale_2`.
+  - Integrated into `ColumnParallelLayer`, `RowParallelLayer`, `ReplicatedLayer`, and `linear_b` via `QuantizedConfig::ModelOpt`.
+

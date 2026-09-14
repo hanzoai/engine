@@ -44,7 +44,8 @@ impl QuantMethod for BlockwiseFP8Linear {
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::PerTensorFP8 { .. }
             | QuantMethodConfig::Afq { .. }
-            | QuantMethodConfig::MXFP4 { .. } => unreachable!(),
+            | QuantMethodConfig::MXFP4 { .. }
+            | QuantMethodConfig::NVFP4 { .. } => unreachable!(),
             QuantMethodConfig::BlockwiseFP8 {
                 weight,
                 weight_scale_inv,

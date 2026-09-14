@@ -255,9 +255,13 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
     print_stdout(table).expect("print table");
 }
 
-async fn warmup_run(hanzo: Arc<Hanzo>) {
+// Warm each test AT ITS OWN SHAPE, which is what llama-bench does before it times anything. A short
+// "Hello!" prompt reaches only the decode matvec: the prefill GEMM's Metal pipeline is then compiled
+// inside the first timed repetition, so a 3-repetition prefill mean carries a compile that the rival's
+// protocol excludes. `messages` is the exact request the timed loop will send.
+async fn warmup_run(hanzo: Arc<Hanzo>, messages: RequestMessage, n_gen: usize) {
     let sampling_params = SamplingParams {
-        max_len: Some(1),
+        max_len: Some(n_gen),
         ..SamplingParams::deterministic()
     };
     let sender = hanzo.get_sender(None).unwrap();
@@ -265,11 +269,7 @@ async fn warmup_run(hanzo: Arc<Hanzo>) {
 
     let req = Request::Normal(Box::new(NormalRequest {
         id: hanzo.next_request_id(),
-        messages: RequestMessage::Completion {
-            text: "Hello!".to_string(),
-            echo_prompt: false,
-            best_of: None,
-        },
+        messages,
         sampling_params: sampling_params.clone(),
         response: tx,
         return_logprobs: false,
@@ -620,7 +620,26 @@ async fn main() -> anyhow::Result<()> {
         .await;
 
     info!("Starting warmup run.");
-    warmup_run(hanzo.clone()).await;
+    if args.n_gen > 0 {
+        warmup_run(
+            hanzo.clone(),
+            RequestMessage::Completion {
+                text: "Rust".to_string(),
+                echo_prompt: false,
+                best_of: None,
+            },
+            1,
+        )
+        .await;
+    }
+    if args.n_prompt > 0 {
+        warmup_run(
+            hanzo.clone(),
+            RequestMessage::CompletionTokens((1000..1000 + args.n_prompt as u32).collect()),
+            1,
+        )
+        .await;
+    }
     info!("Finished warmup run.");
     info!("Starting benchmarks.");
 
