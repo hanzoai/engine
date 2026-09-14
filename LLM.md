@@ -1021,4 +1021,27 @@ only pre-connect errors retry, never timeouts or partially delivered streams.
   - Sets `CLAUDE_CODE_SUBAGENT_MODEL="zen5-flash"`, `ANTHROPIC_DEFAULT_HAIKU_MODEL="zen5-flash"`, and `ANTHROPIC_SMALL_MODEL="zen5-flash"`.
   - In `router-pool.yaml`, `zen5-flash` has weight 1000 on Strix Halo Evo APU, offloading fast subagents and summaries from Spark's 1M context main engine.
 
+### 9. Hanzo Cloud MCP & Tooling Architecture
+- **Automatic MCP Registration**:
+  - Registered `hanzo-mcp` across both `ra` and `dbc` workstations (`/Users/z/.local/bin/hanzo-mcp` and `/Users/a/.local/bin/hanzo-mcp`) in `~/.claude-hanzo/.claude.json`.
+  - Both machines verified healthy via `CLAUDE_CONFIG_DIR=~/.claude-hanzo claude mcp list` reporting `hanzo: ... - ✔ Connected`.
+- **Local MCP Capabilities (31 Tools)**:
+  - Exposes 31 native tools: `browser`, `cdp`, `playwright` (headless browser execution), `fetch`, `curl`, `wget`, `git`, `code`, `fs`, `lsp`, `todo`, `vision`, `exec`, `ps`, `npx`, `uvx`, `open`, `jq`, `version`, `tool`, and the unified dispatcher `hanzo`.
+  - These tools run on the local host with zero remote authentication dependencies.
+- **Unified Cloud MCP Projection (`hanzo`)**:
+  - Rather than exposing all 120 cloud operations individually into the model's tool schema—which bloats the context and degrades tool routing accuracy—`hanzo-mcp` exposes a unified `hanzo` tool.
+  - At runtime, `hanzo` dynamically introspects `https://api.hanzo.ai/v1/openapi.json` to route to all 120 services and operations:
+    - Web Search: `hanzo(service="websearch", action="search", params='{"query": "..."}')`
+    - Web Crawling: `hanzo(service="crawl", action="...", params='...')`
+    - Cloud Infrastructure: `hanzo(service="paas", ...)`, `hanzo(service="iam", ...)`, `hanzo(service="billing", ...)`, etc.
+    - Catalog exploration: `hanzo(service="services")`.
+- **Direct Cloud MCP Endpoint (`api.hanzo.ai/v1/mcp`) Protocol Compatibility**:
+  - `https://api.hanzo.ai/v1/mcp` serves MCP JSON-RPC over POST with protocol version `2026-07-28`.
+  - Upstream Claude Code v2.1 MCP client enforces protocol version `2024-11-05`, refusing direct HTTP attachment (`Server's protocol version is not supported: 2026-07-28`).
+  - `hanzo-mcp` bridges this by serving standard `2024-11-05` to Claude Code while dynamically projecting cloud services from `api.hanzo.ai`.
+- **Authentication**:
+  - Authenticated cloud services (`websearch`, `crawl`, `search`) enforce tenant isolation and validated IAM principals (`401: web search requires a validated principal`).
+  - Running `hanzo auth login` establishes/refreshes the OIDC session in `~/.hanzo/credentials.json`, which `hanzo-mcp` automatically adopts.
+
+
 
