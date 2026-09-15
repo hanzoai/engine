@@ -49,9 +49,9 @@ pub mod ring;
 pub mod route;
 
 #[cfg(feature = "proxy")]
-pub mod proxy;
-#[cfg(feature = "proxy")]
 mod pool_file;
+#[cfg(feature = "proxy")]
+pub mod proxy;
 
 pub use classify::{Classifier, Heuristic, Request};
 pub use featurize::{Featurizer, HashFeaturizer};

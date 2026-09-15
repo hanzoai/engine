@@ -37,6 +37,9 @@ pub struct Replica {
     /// Concurrent request slots; zero inherits the pool's max_inflight.
     #[serde(default)]
     pub capacity: usize,
+    /// Per-request prompt + generation token ceiling. Zero is unspecified.
+    #[serde(default)]
+    pub max_context: usize,
     /// Relative measured throughput for allocating new sessions (100 = baseline).
     #[serde(default = "default_weight")]
     pub weight: u32,
@@ -59,6 +62,7 @@ impl Replica {
             id: url.clone(),
             url,
             capacity: 0,
+            max_context: 0,
             weight: default_weight(),
             roles: Vec::new(),
             upstream_model: None,
@@ -238,6 +242,7 @@ impl ReplicaSet {
                 healthy: n.healthy.load(Ordering::Acquire),
                 inflight: n.inflight.load(Ordering::Acquire),
                 capacity: self.slots(n),
+                max_context: n.replica.max_context,
                 weight: n.settings.read().unwrap().weight,
                 roles: n.settings.read().unwrap().roles.clone(),
                 upstream_model: n.replica.upstream_model.clone(),
@@ -293,6 +298,7 @@ pub struct ReplicaStatus {
     pub healthy: bool,
     pub inflight: usize,
     pub capacity: usize,
+    pub max_context: usize,
     pub weight: u32,
     pub roles: Vec<String>,
     pub upstream_model: Option<String>,
@@ -355,6 +361,13 @@ impl Balancer {
     /// common single-model deployment).
     pub fn set_for(&self, model: Option<&str>) -> Option<Arc<ReplicaSet>> {
         let sets = self.sets.read().unwrap();
+        // Claude Code's explicit context suffix is a client capability hint,
+        // not a different model or a reason to lose the requested pool.
+        let model = model.map(|m| {
+            m.strip_suffix("[1m]")
+                .or_else(|| m.strip_suffix("[1M]"))
+                .unwrap_or(m)
+        });
         if let Some(set) = model.and_then(|m| sets.get(m)) {
             return Some(set.clone());
         }

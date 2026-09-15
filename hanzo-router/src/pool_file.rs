@@ -150,7 +150,7 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let yaml = "models:\n  zen-coder:\n    - id: spark\n      url: http://spark.local:30000\n      capacity: 4\n      weight: 300\n      roles: [main]\n      upstream_model: local-model\n";
+        let yaml = "models:\n  zen-coder:\n    - id: spark\n      url: http://spark.local:30000\n      capacity: 4\n      weight: 300\n      roles: [main]\n      upstream_model: local-model\n      max_context: 1000000\n";
         std::fs::write(&path, yaml).unwrap();
         let balancer = Balancer::from_config(serde_yaml::from_str(yaml).unwrap());
         let pool = PoolFile::new(path.clone()).unwrap();
@@ -182,6 +182,7 @@ mod tests {
         let restored =
             Balancer::from_config(serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap());
         assert_eq!(restored.statuses()["zen-coder"][0].weight, 400);
+        assert_eq!(restored.statuses()["zen-coder"][0].max_context, 1_000_000);
         assert_eq!(
             restored.statuses()["zen-coder"][0]
                 .upstream_model

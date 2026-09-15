@@ -18,6 +18,20 @@ pub struct RoutingHints {
     pub prefix: Option<String>,
     pub role: Option<String>,
     pub target: Option<String>,
+    /// Prompt + output tokens estimated from the request bytes.
+    pub approx_tokens: usize,
+    /// Prompt + output tokens counted by each worker's own tokenizer.
+    pub token_counts: HashMap<String, usize>,
+}
+
+impl RoutingHints {
+    /// A worker's exact count when it answered, the byte estimate otherwise.
+    pub fn required_tokens(&self, worker: &str) -> usize {
+        self.token_counts
+            .get(worker)
+            .copied()
+            .unwrap_or(self.approx_tokens)
+    }
 }
 
 #[derive(Clone)]
@@ -95,8 +109,12 @@ impl ReplicaSet {
         let inner = self.inner.read().unwrap();
         let mut state = self.scheduler.lock().unwrap();
         state.prune(now);
-        let healthy =
-            |n: &&Arc<Node>| n.healthy.load(Ordering::Acquire) && !excluded.contains(&n.replica.id);
+        let healthy = |n: &&Arc<Node>| {
+            n.healthy.load(Ordering::Acquire)
+                && !excluded.contains(&n.replica.id)
+                && (n.replica.max_context == 0
+                    || hints.required_tokens(&n.replica.id) <= n.replica.max_context)
+        };
         let available =
             |n: &&Arc<Node>| healthy(n) && n.inflight.load(Ordering::Acquire) < self.slots(n);
         let mut selected = None;
@@ -224,6 +242,35 @@ mod tests {
             session: Some(session.into()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn context_capacity_overrides_pins_cache_roles_and_targets() {
+        let mut spark = Replica::new("spark");
+        spark.max_context = 1_000_000;
+        let mut evo = Replica::new("evo");
+        evo.max_context = 65_536;
+        evo.roles = vec!["reviewer".into()];
+        let p = ReplicaSet::new([spark, evo], 8);
+        let now = Instant::now();
+        let mut h = hints("growing-session");
+        h.role = Some("reviewer".into());
+        h.prefix = Some("cached-prefix".into());
+        h.approx_tokens = 65_536;
+        assert_eq!(pick(&p, &h, now).id(), "evo");
+        p.observe_completion("evo", &h, now);
+        h.approx_tokens = 176_939;
+        assert_eq!(pick(&p, &h, now).id(), "spark");
+        h.target = Some("evo".into());
+        assert!(p.pick_agent(&h, &HashSet::new(), now).is_none());
+        h.target = None;
+        h.approx_tokens = 1_000_000;
+        assert_eq!(pick(&p, &h, now).id(), "spark");
+        h.approx_tokens += 1;
+        assert!(p.pick_agent(&h, &HashSet::new(), now).is_none());
+        h.approx_tokens = 176_939;
+        p.mark_unhealthy("spark");
+        assert!(p.pick_agent(&h, &HashSet::new(), now).is_none());
     }
     fn pick(pool: &ReplicaSet, h: &RoutingHints, now: Instant) -> Lease {
         pool.pick_agent(h, &HashSet::new(), now).unwrap()

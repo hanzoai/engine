@@ -6,7 +6,7 @@
 //!
 //! Feature-gated (`proxy`) so the pure router core stays dependency-light.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll};
@@ -167,7 +167,56 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request) -> Response {
     let Some(set) = state.balancer.set_for(model) else {
         return err(StatusCode::NOT_FOUND, "no replica set for model");
     };
-    let hints = routing_hints(&parts.headers, json.as_ref());
+    let mut hints = routing_hints(&parts.headers, json.as_ref());
+    // Count with the serving tokenizer before admission. Compaction includes
+    // system prompts, tool schemas, tool results and the entire conversation;
+    // a character estimate alone cannot enforce a near-limit context window.
+    if parts.uri.path() == "/v1/messages" {
+        if let Some(body) = json.as_ref() {
+            if set.statuses().iter().any(|r| r.max_context != 0) {
+                hints.token_counts = count_prompt_tokens(&state, &set, &parts.headers, body).await;
+            }
+        }
+    }
+    let workers = set.statuses();
+    let eligible: Vec<_> = workers
+        .iter()
+        .filter(|r| hints.target.as_ref().is_none_or(|id| *id == r.id))
+        .collect();
+    if !eligible.is_empty()
+        && eligible
+            .iter()
+            .all(|r| r.max_context != 0 && r.max_context < hints.required_tokens(&r.id))
+    {
+        let limit = eligible.iter().map(|r| r.max_context).max().unwrap_or(0);
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request_error", &format!(
+            "prompt is too long: {} tokens including requested output exceeds the {} token context window of the configured replicas",
+            eligible.iter().map(|r| hints.required_tokens(&r.id)).min().unwrap_or(0), limit
+        ));
+    }
+    let wants_stream = json
+        .as_ref()
+        .and_then(|b| b.get("stream"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    let anthropic = parts.uri.path() == "/v1/messages";
+    let dispatch = Box::pin(dispatch(state, parts, path_q, body_bytes, json, set, hints));
+    if wants_stream {
+        response_with_progress(dispatch, anthropic, Duration::from_secs(15)).await
+    } else {
+        dispatch.await
+    }
+}
+
+async fn dispatch(
+    state: Arc<ProxyState>,
+    parts: axum::http::request::Parts,
+    path_q: String,
+    body_bytes: Bytes,
+    json: Option<Value>,
+    set: Arc<ReplicaSet>,
+    hints: RoutingHints,
+) -> Response {
     let fwd = forward_headers(&parts.headers);
     let mut excluded = HashSet::new();
     for _ in 0..set.len().max(1) {
@@ -213,6 +262,77 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request) -> Response {
     response
         .headers_mut()
         .insert("retry-after", HeaderValue::from_static("1"));
+    response
+}
+
+/// Some engines do not send HTTP headers until prefill completes. Keep the
+/// public connection alive during that wait, not just after upstream headers.
+/// Cancellation drops the pending request/lease; delayed errors remain errors.
+async fn response_with_progress(
+    mut pending: Pin<Box<dyn std::future::Future<Output = Response> + Send>>,
+    anthropic: bool,
+    interval: Duration,
+) -> Response {
+    tokio::select! {
+        response = &mut pending => return response,
+        _ = tokio::time::sleep(interval) => {},
+    }
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, axum::Error>>(4);
+    tokio::spawn(async move {
+        use futures::StreamExt;
+        let mut ping = tokio::time::interval(interval);
+        let response = loop {
+            tokio::select! {
+                _ = tx.closed() => return,
+                response = &mut pending => break response,
+                _ = ping.tick() => {
+                    if tx.send(Ok(Bytes::from_static(b": keep-alive\n\n"))).await.is_err() { return; }
+                }
+            }
+        };
+        if !response.status().is_success() {
+            let status = response.status();
+            let bytes = to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .unwrap_or_default();
+            let value = serde_json::from_slice::<Value>(&bytes).ok();
+            let error = value.and_then(|v| v.get("error").cloned()).unwrap_or_else(|| serde_json::json!({
+                "type": "api_error", "message": String::from_utf8_lossy(&bytes), "status": status.as_u16()
+            }));
+            let event = serde_json::json!({"type":"error","error":error});
+            let wire = if anthropic {
+                format!("event: error\ndata: {event}\n\n")
+            } else {
+                format!("data: {event}\n\n")
+            };
+            let _ = tx.send(Ok(Bytes::from(wire))).await;
+            return;
+        }
+        let mut body = response.into_body().into_data_stream();
+        loop {
+            tokio::select! {
+                _ = tx.closed() => return,
+                chunk = body.next() => match chunk {
+                    Some(chunk) => if tx.send(chunk).await.is_err() { return; },
+                    None => return,
+                }
+            }
+        }
+    });
+    let stream = futures::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|item| (item, rx))
+    });
+    let mut response = Response::new(Body::from_stream(stream));
+    response.headers_mut().insert(
+        "content-type",
+        HeaderValue::from_static("text/event-stream"),
+    );
+    response
+        .headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-cache"));
+    response
+        .headers_mut()
+        .insert("x-accel-buffering", HeaderValue::from_static("no"));
     response
 }
 
@@ -287,7 +407,9 @@ impl Stream for LeasedStream {
                         }
                     }
                 }
-                this.ping_deadline.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(15));
+                this.ping_deadline
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + Duration::from_secs(15));
                 Poll::Ready(Some(Ok(bytes)))
             }
             Poll::Ready(Some(Err(e))) => {
@@ -306,7 +428,9 @@ impl Stream for LeasedStream {
             }
             Poll::Pending => {
                 if this.is_sse && this.ping_deadline.as_mut().poll(cx).is_ready() {
-                    this.ping_deadline.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(15));
+                    this.ping_deadline
+                        .as_mut()
+                        .reset(tokio::time::Instant::now() + Duration::from_secs(15));
                     Poll::Ready(Some(Ok(Bytes::from_static(b": keep-alive\n\n"))))
                 } else {
                     Poll::Pending
@@ -389,12 +513,22 @@ fn normalize_messages(val: &mut Value) {
     if let Some(obj) = val.as_object_mut() {
         if let Some(messages) = obj.get_mut("messages").and_then(|v| v.as_array_mut()) {
             for (idx, msg) in messages.iter_mut().enumerate() {
+                if let Some(blocks) = msg.get_mut("content").and_then(Value::as_array_mut) {
+                    for block in blocks {
+                        tool_reference_to_text(block);
+                        if let Some(inner) = block.get_mut("content").and_then(Value::as_array_mut)
+                        {
+                            inner.iter_mut().for_each(tool_reference_to_text);
+                        }
+                    }
+                }
                 if idx > 0 {
                     if let Some(role) = msg.get("role").and_then(|r| r.as_str()) {
                         if role == "system" {
                             if let Some(mobj) = msg.as_object_mut() {
                                 mobj.insert("role".to_string(), Value::String("user".to_string()));
-                                if let Some(content) = mobj.get("content").and_then(|c| c.as_str()) {
+                                if let Some(content) = mobj.get("content").and_then(|c| c.as_str())
+                                {
                                     let new_content = format!("[System]: {}", content);
                                     mobj.insert("content".to_string(), Value::String(new_content));
                                 }
@@ -404,6 +538,16 @@ fn normalize_messages(val: &mut Value) {
                 }
             }
         }
+    }
+}
+
+/// ToolSearch results carry `tool_reference` blocks, which only the first-party
+/// API expands. Local engines reject them, poisoning every later turn of the
+/// conversation, so they become the text the model needs: the tool's name.
+fn tool_reference_to_text(block: &mut Value) {
+    if block.get("type").and_then(Value::as_str) == Some("tool_reference") {
+        let name = block.get("tool_name").and_then(Value::as_str).unwrap_or("");
+        *block = serde_json::json!({"type": "text", "text": format!("Tool loaded: {name}")});
     }
 }
 
@@ -496,7 +640,10 @@ fn routing_hints(headers: &HeaderMap, body: Option<&Value>) -> RoutingHints {
                 return Some("main".to_string());
             }
         }
-        if let Some(qs) = meta.and_then(|m| m.get("query_source")).and_then(Value::as_str) {
+        if let Some(qs) = meta
+            .and_then(|m| m.get("query_source"))
+            .and_then(Value::as_str)
+        {
             if qs.contains("title")
                 || qs.contains("summary")
                 || qs.contains("background")
@@ -512,7 +659,94 @@ fn routing_hints(headers: &HeaderMap, body: Option<&Value>) -> RoutingHints {
         prefix,
         role,
         target: hint("x-target-replica", "target_replica").map(str::to_owned),
+        approx_tokens: body.map(estimate_required_tokens).unwrap_or(0),
+        token_counts: Default::default(),
     }
+}
+
+fn output_tokens(body: &Value) -> usize {
+    ["max_completion_tokens", "max_output_tokens", "max_tokens"]
+        .iter()
+        .find_map(|key| body.get(*key).and_then(Value::as_u64))
+        .unwrap_or(4096)
+        .try_into()
+        .unwrap_or(usize::MAX)
+}
+
+/// Scheduling estimate for APIs without an exact counting endpoint.
+/// Serialize all prompt-bearing fields, including nested tool results/schemas.
+fn estimate_required_tokens(body: &Value) -> usize {
+    let bytes = [
+        "system",
+        "messages",
+        "tools",
+        "tool_choice",
+        "input",
+        "instructions",
+        "prompt",
+    ]
+    .iter()
+    .filter_map(|key| body.get(*key))
+    .fold(0usize, |sum, value| {
+        sum.saturating_add(serde_json::to_vec(value).map(|v| v.len()).unwrap_or(0))
+    });
+    bytes
+        .div_ceil(3)
+        .saturating_add(256)
+        .saturating_add(output_tokens(body))
+}
+
+/// Count on each candidate's own tokenizer: pool members can serve different
+/// models and chat templates, so counts are not interchangeable. A worker that
+/// cannot answer is scheduled by the byte estimate instead.
+async fn count_prompt_tokens(
+    state: &ProxyState,
+    set: &ReplicaSet,
+    headers: &HeaderMap,
+    body: &Value,
+) -> HashMap<String, usize> {
+    let workers = set
+        .statuses()
+        .into_iter()
+        .filter(|r| r.healthy && r.max_context != 0);
+    let counts = futures::future::join_all(workers.map(|worker| async move {
+        let mut request = body.clone();
+        if let Some(model) = worker
+            .upstream_model
+            .as_deref()
+            .or(state.upstream_model.as_deref())
+        {
+            request["model"] = Value::String(model.to_owned());
+        }
+        normalize_reasoning_effort(&mut request);
+        normalize_messages(&mut request);
+        let response = state
+            .client
+            .post(format!(
+                "{}/v1/messages/count_tokens",
+                worker.url.trim_end_matches('/')
+            ))
+            .headers(forward_headers(headers))
+            .timeout(Duration::from_secs(15))
+            .json(&request)
+            .send()
+            .await
+            .ok()
+            .filter(|r| r.status().is_success())?;
+        let value = response.json::<Value>().await.ok()?;
+        let tokens = usize::try_from(value.get("input_tokens")?.as_u64()?).ok()?;
+        Some((worker.id, tokens.saturating_add(output_tokens(body))))
+    }))
+    .await;
+    counts.into_iter().flatten().collect()
+}
+
+fn api_error(status: StatusCode, kind: &str, message: &str) -> Response {
+    (
+        status,
+        Json(serde_json::json!({"type":"error","error":{"type":kind,"message":message}})),
+    )
+        .into_response()
 }
 
 fn push_content(s: &mut String, content: Option<&Value>) {
@@ -558,11 +792,24 @@ async fn list_models(State(state): State<Arc<ProxyState>>) -> Response {
     let data: Vec<Value> = model_ids
         .into_iter()
         .map(|id| {
+            let context = state
+                .balancer
+                .set_for(Some(&id))
+                .map(|set| {
+                    set.statuses()
+                        .iter()
+                        .map(|r| r.max_context)
+                        .max()
+                        .unwrap_or(0)
+                })
+                .unwrap_or(0);
             serde_json::json!({
                 "id": id,
                 "object": "model",
                 "created": 1726272000,
-                "owned_by": "hanzo"
+                "owned_by": "hanzo",
+                "context_window": context,
+                "max_context_length": context
             })
         })
         .collect();
@@ -587,6 +834,8 @@ struct RegisterBody {
     id: Option<String>,
     #[serde(default)]
     capacity: usize,
+    #[serde(default)]
+    max_context: usize,
     #[serde(default = "registration_weight")]
     weight: u32,
     #[serde(default)]
@@ -608,6 +857,7 @@ async fn add_replica(
             id: body.id.unwrap_or_default(),
             url: body.url,
             capacity: body.capacity,
+            max_context: body.max_context,
             weight: body.weight,
             roles: body.roles,
             upstream_model: body.upstream_model,
@@ -658,6 +908,61 @@ async fn probe_loop(state: Arc<ProxyState>, interval: Duration) {
 mod tests {
     use super::*;
     use axum::http::HeaderName;
+
+    #[tokio::test]
+    async fn slow_headers_send_pings_preserve_errors_and_cancel_leases() {
+        use futures::StreamExt;
+        for mode in ["success", "error", "cancel"] {
+            let set = Arc::new(ReplicaSet::new([Replica::new("worker")], 1));
+            let lease = set
+                .pick_agent(&RoutingHints::default(), &HashSet::new(), Instant::now())
+                .unwrap();
+            let (release, wait) = tokio::sync::oneshot::channel::<()>();
+            let pending = Box::pin(async move {
+                let _lease = lease;
+                let _ = wait.await;
+                if mode == "error" {
+                    api_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_request_error",
+                        "prompt is too long",
+                    )
+                } else {
+                    ([("content-type", "text/event-stream")], "data: done\n\n").into_response()
+                }
+            });
+            let response = response_with_progress(pending, true, Duration::from_millis(5)).await;
+            assert_eq!(response.headers()["content-type"], "text/event-stream");
+            let mut body = response.into_body().into_data_stream();
+            assert_eq!(body.next().await.unwrap().unwrap(), ": keep-alive\n\n");
+            assert_eq!(set.statuses()[0].inflight, 1);
+            if mode == "cancel" {
+                drop(body);
+            } else {
+                release.send(()).unwrap();
+                let mut wire = Vec::new();
+                while let Some(chunk) = body.next().await {
+                    wire.extend_from_slice(&chunk.unwrap());
+                }
+                let wire = String::from_utf8(wire).unwrap();
+                assert!(wire.contains(if mode == "error" {
+                    "event: error\ndata:"
+                } else {
+                    "data: done"
+                }));
+                if mode == "error" {
+                    assert!(wire.contains("prompt is too long"));
+                }
+            }
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while set.statuses()[0].inflight != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+    }
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
         let mut h = HeaderMap::new();
@@ -859,6 +1164,12 @@ mod e2e {
             .route("/health", get(mock_health))
             .route("/v1/chat/completions", post(mock_chat))
             .route("/v1/messages", post(mock_chat))
+            .route("/v1/messages/count_tokens", post(|Json(body): Json<Value>| async move {
+                if body["metadata"]["count_unavailable"] == true {
+                    return StatusCode::NOT_FOUND.into_response();
+                }
+                Json(serde_json::json!({"input_tokens": body["metadata"]["test_tokens"].as_u64().unwrap_or(53)})).into_response()
+            }))
             .with_state(mock.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1034,6 +1345,95 @@ mod e2e {
     }
 
     #[tokio::test]
+    async fn exact_context_admission_routes_long_compaction_and_reserves_output() {
+        let (spark_url, _) = spawn_mock("Spark").await;
+        let (evo_url, _) = spawn_mock("Evo").await;
+        let balancer = Balancer::new(8);
+        let mut spark = Replica::new(spark_url);
+        spark.id = "spark".into();
+        spark.max_context = 1_000_000;
+        let mut evo = Replica::new(evo_url);
+        evo.id = "evo".into();
+        evo.max_context = 65_536;
+        evo.roles = vec!["reviewer".into()];
+        balancer.register("zen-coder", spark);
+        balancer.register("zen-coder", evo);
+        // A distinct fallback makes this test catch suffixes losing their pool.
+        balancer.register("default", Replica::new("http://127.0.0.1:1"));
+        let base = start_proxy(balancer, Duration::from_secs(60)).await;
+        let client = reqwest::Client::new();
+        let models: Value = client
+            .get(format!("{base}/v1/models"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            models["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["id"] == "zen-coder")
+                .unwrap()["context_window"],
+            1_000_000
+        );
+        let mut body = serde_json::json!({"model":"zen-coder[1m]", "max_tokens":1000,
+            "messages":[{"role":"user","content":"summarize our conversation"}],
+            "metadata":{"session_id":"compact", "agent_role":"reviewer", "test_tokens":64_536}});
+        for (tokens, worker) in [(64_536, "evo"), (176_939, "spark"), (999_000, "spark")] {
+            body["metadata"]["test_tokens"] = serde_json::json!(tokens);
+            let response = client
+                .post(format!("{base}/v1/messages"))
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[REPLICA_HEADER], worker);
+            let _ = response.bytes().await.unwrap();
+        }
+        body["metadata"]["test_tokens"] = serde_json::json!(999_001);
+        let response = client
+            .post(format!("{base}/v1/messages"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error: Value = response.json().await.unwrap();
+        assert_eq!(error["error"]["type"], "invalid_request_error");
+        assert!(error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("prompt is too long"));
+        // Tokenizers unavailable: the byte estimate still routes, never refuses.
+        body["metadata"]["count_unavailable"] = serde_json::json!(true);
+        let response = client
+            .post(format!("{base}/v1/messages"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = response.bytes().await.unwrap();
+        body["metadata"]["count_unavailable"] = serde_json::json!(false);
+        body["metadata"]["test_tokens"] = serde_json::json!(176_939);
+        body["metadata"]["target_replica"] = serde_json::json!("evo");
+        assert_eq!(
+            client
+                .post(format!("{base}/v1/messages"))
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
     async fn dead_replica_evicted_never_breaks_a_request() {
         let (url_a, _a) = spawn_mock("A").await;
         let dead = free_url().await;
@@ -1125,19 +1525,35 @@ mod e2e {
         let client = reqwest::Client::new();
 
         // 1. /api/hello GET and HEAD
-        let resp_get = client.get(format!("{base}/api/hello")).send().await.unwrap();
+        let resp_get = client
+            .get(format!("{base}/api/hello"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp_get.status(), StatusCode::OK);
 
-        let resp_head = client.head(format!("{base}/api/hello")).send().await.unwrap();
+        let resp_head = client
+            .head(format!("{base}/api/hello"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp_head.status(), StatusCode::OK);
 
         // 2. /v1/models GET returns models list including zen5.8, zen5.8-coder, qwen3.8
-        let resp_models = client.get(format!("{base}/v1/models")).send().await.unwrap();
+        let resp_models = client
+            .get(format!("{base}/v1/models"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp_models.status(), StatusCode::OK);
         let models_json: Value = resp_models.json().await.unwrap();
         let list = models_json.get("data").and_then(Value::as_array).unwrap();
-        assert!(list.iter().any(|m| m.get("id").and_then(Value::as_str) == Some("zen5.8")));
-        assert!(list.iter().any(|m| m.get("id").and_then(Value::as_str) == Some("qwen3.8")));
+        assert!(list
+            .iter()
+            .any(|m| m.get("id").and_then(Value::as_str) == Some("zen5.8")));
+        assert!(list
+            .iter()
+            .any(|m| m.get("id").and_then(Value::as_str) == Some("qwen3.8")));
 
         // 3. Fallback routing: unrecognized claude model resolves to zen5.8
         let resp_msg = client
@@ -1175,6 +1591,25 @@ mod e2e {
     }
 
     #[test]
+    fn normalize_messages_turns_tool_references_into_text() {
+        let mut v = serde_json::json!({"messages": [{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": [
+                {"type": "tool_reference", "tool_name": "Monitor"},
+                {"type": "text", "text": "kept"}
+            ]},
+            {"type": "tool_reference", "tool_name": "WebFetch"}
+        ]}]});
+        normalize_messages(&mut v);
+        let blocks = &v["messages"][0]["content"];
+        assert_eq!(
+            blocks[0]["content"][0],
+            serde_json::json!({"type": "text", "text": "Tool loaded: Monitor"})
+        );
+        assert_eq!(blocks[0]["content"][1]["text"], "kept");
+        assert_eq!(blocks[1]["text"], "Tool loaded: WebFetch");
+    }
+
+    #[test]
     fn normalize_messages_rewrites_non_leading_system() {
         let mut v = serde_json::json!({
             "messages": [
@@ -1188,7 +1623,10 @@ mod e2e {
         assert_eq!(v["messages"][0]["content"], "You are a helpful assistant.");
         assert_eq!(v["messages"][1]["role"], "user");
         assert_eq!(v["messages"][2]["role"], "user");
-        assert_eq!(v["messages"][2]["content"], "[System]: Remember to speak concisely.");
+        assert_eq!(
+            v["messages"][2]["content"],
+            "[System]: Remember to speak concisely."
+        );
     }
 
     #[test]
@@ -1226,4 +1664,3 @@ mod e2e {
         assert_eq!(hints.role.as_deref(), Some("reviewer"));
     }
 }
-
