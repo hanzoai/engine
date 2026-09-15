@@ -8,6 +8,18 @@
  *
  * Block tile 64x64x32, 8 warps (4x2), 256 threads; each warp owns one 16-row
  * M sub-tile and two 16-column N sub-tiles.
+ *
+ * This is the fallback. On a device with block-scaled tensor cores and a
+ * checkpoint that calibrated an activation scale, nvfp4_cutlass.cu runs the MMA
+ * on FP4 operands directly and is several times faster. Measured on a GB10:
+ * a register-resident WMMA chain tops out at 123.5 TFLOP/s bf16, this kernel
+ * reaches 18.5, and the block-scaled path reaches 357 at the same shapes. So
+ * tuning this kernel cannot close that gap; its ceiling is below the other
+ * path's measured rate. Where it does run, ncu says the limit is the shared
+ * memory pipeline, not the tensor cores: 30% compute throughput against 76%
+ * L1/shared, with 27 of every 60 warp cycles spent at a CTA barrier, because
+ * the weight dequantization is done by 64 of the 256 threads and writes single
+ * 2-byte shared stores.
  */
 
 #include <cstdint>

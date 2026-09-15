@@ -552,6 +552,9 @@ pub enum QuantMethodConfig {
         weight: Tensor,
         weight_scale: Tensor,
         weight_scale_2: Option<Tensor>,
+        /// The checkpoint's calibrated activation scale, present only when it was
+        /// quantized for FP4 activations.
+        input_scale: Option<Tensor>,
         bias: Option<Tensor>,
         dequant_dtype: DType,
     },
