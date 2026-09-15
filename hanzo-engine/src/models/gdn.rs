@@ -504,20 +504,31 @@ impl GatedDeltaNet {
 
         let vb_la = mapper.set_device(layer_idx, vb.pp("linear_attn"), loading_isq);
 
+        // The grouped layout is built by interleaving rows, so these projections have to be dense.
+        // They are not always stored that way: ModelOpt ships in_proj_* as per-tensor FP8, which a
+        // raw get() hands to a matmul as fp8 bytes. Load them through the quantized loader instead.
+        let dense = |name: &str, out_dim: usize| -> Result<Tensor> {
+            hanzo_quant::linear_no_bias(
+                hidden_size,
+                out_dim,
+                cfg.quantization_config(),
+                vb_la.pp(name),
+            )?
+            .dequantize_w()?
+            .to_dtype(vb_la.dtype())
+        };
+
         // Load qkvz and ba projections
         let qkvz_out = key_dim * 2 + value_dim * 2;
         let mut qkvz_w = match weight_mode {
-            GdnWeightMode::MergedOnly => {
-                vb_la.get((qkvz_out, hidden_size), "in_proj_qkvz.weight")?
-            }
+            GdnWeightMode::MergedOnly => dense("in_proj_qkvz", qkvz_out)?,
             GdnWeightMode::MergedWithFallback => {
                 if vb_la.contains_tensor("in_proj_qkvz.weight") {
-                    vb_la.get((qkvz_out, hidden_size), "in_proj_qkvz.weight")?
+                    dense("in_proj_qkvz", qkvz_out)?
                 } else {
                     // Load separate HF weights and interleave into grouped layout
-                    let qkv_w =
-                        vb_la.get((key_dim * 2 + value_dim, hidden_size), "in_proj_qkv.weight")?;
-                    let z_w = vb_la.get((value_dim, hidden_size), "in_proj_z.weight")?;
+                    let qkv_w = dense("in_proj_qkv", key_dim * 2 + value_dim)?;
+                    let z_w = dense("in_proj_z", value_dim)?;
                     let q_w = qkv_w.narrow(0, 0, key_dim)?;
                     let k_w = qkv_w.narrow(0, key_dim, key_dim)?;
                     let v_w = qkv_w.narrow(0, key_dim * 2, value_dim)?;
@@ -534,15 +545,13 @@ impl GatedDeltaNet {
         };
 
         let mut ba_w = match weight_mode {
-            GdnWeightMode::MergedOnly => {
-                vb_la.get((num_v_heads * 2, hidden_size), "in_proj_ba.weight")?
-            }
+            GdnWeightMode::MergedOnly => dense("in_proj_ba", num_v_heads * 2)?,
             GdnWeightMode::MergedWithFallback => {
                 if vb_la.contains_tensor("in_proj_ba.weight") {
-                    vb_la.get((num_v_heads * 2, hidden_size), "in_proj_ba.weight")?
+                    dense("in_proj_ba", num_v_heads * 2)?
                 } else {
-                    let b_w = vb_la.get((num_v_heads, hidden_size), "in_proj_b.weight")?;
-                    let a_w = vb_la.get((num_v_heads, hidden_size), "in_proj_a.weight")?;
+                    let b_w = dense("in_proj_b", num_v_heads)?;
+                    let a_w = dense("in_proj_a", num_v_heads)?;
                     let b_grouped = b_w.reshape((num_k_heads, v_per_group, hidden_size))?;
                     let a_grouped = a_w.reshape((num_k_heads, v_per_group, hidden_size))?;
                     let merged = Tensor::cat(&[b_grouped, a_grouped], 1)?;
