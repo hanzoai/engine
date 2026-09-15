@@ -82,7 +82,7 @@ fn load_vb(path: PathBuf, dev: &Device) -> Result<ShardedVarBuilder> {
     )?)
 }
 
-/// Deterministic standard-normal noise (splitmix64 + Box-Muller). candle's CPU RNG isn't seedable
+/// Deterministic standard-normal noise (splitmix64 + Box-Muller). hanzo-ml's CPU RNG isn't seedable
 /// via `Device::set_seed`; the sample only needs to be reproducible, not to match torch's RNG.
 fn seeded_gaussian(shape: &[usize], seed: u64, dev: &Device) -> Result<Tensor> {
     let n: usize = shape.iter().product();

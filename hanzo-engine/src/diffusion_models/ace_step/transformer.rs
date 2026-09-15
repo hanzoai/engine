@@ -223,7 +223,7 @@ impl CrossAttn {
 }
 
 // Depthwise (groups == channels) conv1d, kernel 3 / stride 1 / pad 1, vectorised across channels.
-// candle lowers a grouped conv to one conv per group (here 12800 launches); this is the identical
+// hanzo-ml lowers a grouped conv to one conv per group (here 12800 launches); this is the identical
 // arithmetic expressed as 3 shifted channel-broadcast multiply-adds -> ~10 ops, not ~38k.
 // x [B,C,L], w [1,C,3], b [1,C,1].
 fn depthwise_k3_p1(x: &Tensor, w: &Tensor, b: &Tensor) -> Result<Tensor> {

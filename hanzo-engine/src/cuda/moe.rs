@@ -384,7 +384,7 @@ pub fn moe_gemm_transposed(
 /// Fused MoE expert-combine: `out[t,:] = sum_e scores[t,e] * routed[t,e,:]`.
 ///
 /// Replaces the two-op `routed.broadcast_mul(scores).sum(dim=topk)`, whose
-/// candle reduce (`fast_sum_f32`) walked the middle `topk` axis of a
+/// hanzo-ml reduce (`fast_sum_f32`) walked the middle `topk` axis of a
 /// [T, topk, N] tensor with an uncoalesced strided gather (`~15%` of Qwen3.6
 /// prefill GPU time vs llama's `~0`). One coalesced pass over N here.
 ///

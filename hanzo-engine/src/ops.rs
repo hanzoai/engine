@@ -234,7 +234,7 @@ pub struct MoeRouterTopKConfig {
 
 /// Deterministic top-k expert selection with a CANONICAL, backend-independent tie-break: order
 /// each row by (score DESC, expert-index ASC) using f32 total ordering (NaN-safe), take the first
-/// `k`. Unlike candle's `.topk()` (whose tie-break is unspecified) and the separate CUDA bf16/f16
+/// `k`. Unlike hanzo-ml's `.topk()` (whose tie-break is unspecified) and the separate CUDA bf16/f16
 /// router kernel, this yields the SAME experts on every machine — the routing analog of the
 /// lowest-id argmax tie-break the sampler now uses. `top_k <= num_experts` for every MoE config.
 #[allow(clippy::cast_possible_truncation)]
@@ -259,7 +259,7 @@ pub fn moe_router_topk(
     // While a poi proof transcript is being emitted (inside `poi_forward::prove`), routing takes the
     // single canonical CPU path so a prover and a re-executing verifier on different hardware select
     // the IDENTICAL experts (a different expert is a different sub-network). Off during normal
-    // inference: `proving()` is false, so the fast CUDA/candle path is byte-for-byte unchanged.
+    // inference: `proving()` is false, so the fast CUDA/hanzo-ml path is byte-for-byte unchanged.
     let proof = crate::poi_forward::proving();
     #[cfg(feature = "cuda")]
     if !proof {

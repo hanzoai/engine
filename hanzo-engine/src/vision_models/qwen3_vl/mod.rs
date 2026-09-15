@@ -49,7 +49,7 @@ pub struct Qwen3VLModel {
 /// Shared between Qwen3VL models.
 #[allow(clippy::too_many_arguments)]
 /// Running count of attended tokens per row, which is what MRoPE wants for a text-only batch.
-/// candle spells `cumsum` as a triangular matmul, so at 124K tokens it asks for a 124K x 124K
+/// hanzo-ml spells `cumsum` as a triangular matmul, so at 124K tokens it asks for a 124K x 124K
 /// matrix and the launch fails; the scan itself is linear, so it runs on the host.
 pub(crate) fn positions_from_mask(mask: &Tensor) -> Result<Tensor> {
     let (batch, seq_len) = mask.dims2()?;

@@ -1955,7 +1955,7 @@ mod speech_tests {
         );
 
         // Deterministic, bit-exact facts that prove the speech-generation orchestration is faithful
-        // to HF, independent of irreducible cross-stack (candle-BF16 vs PyTorch-BF16) fp drift:
+        // to HF, independent of irreducible cross-stack (hanzo-ml-BF16 vs PyTorch-BF16) fp drift:
         //   1. thinker conditioning + prefill construction reproduce HF (cosine ~1),
         //   2. frame-0 free-running is a full 16/16 bit-exact step through the real pipeline
         //      (prefill -> talker forward -> code0 argmax+suppress -> code-predictor MTP over 15 groups),
