@@ -432,12 +432,14 @@ impl Qwen3_5MoeModel {
             let trimmed_len = input_ids.dim(1)?;
             position_ids.narrow(2, full_len - trimmed_len, trimmed_len)?
         } else {
-            let mut position_ids = Tensor::new(
-                seqlen_offsets.iter().map(|x| *x as i64).collect::<Vec<_>>(),
-                input_ids.device(),
-            )?
-            .reshape((1, (), 1))?
-            .repeat((3, 1, 1))?;
+            // Not only decode reaches here: a chunked prefill also arrives without a mask, and
+            // then this forward carries `len` tokens from each sequence's offset, not one.
+            let len = input_ids.dim(1)? as i64;
+            let rows = seqlen_offsets
+                .iter()
+                .map(|off| Tensor::arange(*off as i64, *off as i64 + len, input_ids.device()))
+                .collect::<Result<Vec<_>>>()?;
+            let mut position_ids = Tensor::stack(&rows, 0)?.unsqueeze(0)?.repeat((3, 1, 1))?;
             position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
             position_ids
         };
