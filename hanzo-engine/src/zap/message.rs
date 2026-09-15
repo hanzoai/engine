@@ -159,13 +159,12 @@ impl ChatRequest {
         } else {
             Some(self.tools.into_iter().map(Tool::into_engine).collect())
         };
-        // `Required`/`Named` would need the concrete tool struct to force; the
-        // wire kind alone can't carry it, so fall back to engine auto-select.
+        // `Named` would need the concrete tool struct to force; the wire kind
+        // alone can't carry it, so it falls back to engine auto-select.
         let tool_choice = match self.tool_choice {
             ToolChoiceKind::None => Some(EngineToolChoice::None),
-            ToolChoiceKind::Auto | ToolChoiceKind::Required | ToolChoiceKind::Named => {
-                Some(EngineToolChoice::Auto)
-            }
+            ToolChoiceKind::Required => Some(EngineToolChoice::Required),
+            ToolChoiceKind::Auto | ToolChoiceKind::Named => Some(EngineToolChoice::Auto),
         };
         let mut req = NormalRequest::new_simple(
             messages,
