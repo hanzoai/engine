@@ -489,6 +489,16 @@ pub enum GdnWeightMode {
     MergedWithFallback,
 }
 
+
+/// Rows produced by the conv state spliced onto the left of a continuation are context, not output.
+fn trim_carried(out: &Tensor, carried: usize) -> Result<Tensor> {
+    if carried == 0 {
+        return Ok(out.clone());
+    }
+    let len = out.dim(1)?;
+    out.narrow(1, carried, len - carried)
+}
+
 impl GatedDeltaNet {
     pub fn load(
         vb: ShardedVarBuilder,
@@ -908,7 +918,21 @@ impl GatedDeltaNet {
     /// Full sequence causal conv1d for prefill.
     fn causal_conv1d_full(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (batch_size, seq_len, conv_dim) = x.dims3()?;
-        let x_t = x.transpose(1, 2)?.contiguous()?;
+        // The full kernel has no conv_state argument and zero-pads its left edge, which is right
+        // only at the start of a sequence. A continuation (a later prefill chunk, or a speculative
+        // replay) must see the previous tokens, so splice them on and drop their outputs after.
+        let carried = if cache.seqlen_offset > 0 {
+            self.conv_kernel_size - 1
+        } else {
+            0
+        };
+        let x_t = if carried > 0 {
+            let left = cache.conv_state.narrow(D::Minus1, 1, carried)?;
+            Tensor::cat(&[&left, &x.transpose(1, 2)?], D::Minus1)?.contiguous()?
+        } else {
+            x.transpose(1, 2)?.contiguous()?
+        };
+        let seq_len = seq_len + carried;
 
         #[cfg(feature = "cuda")]
         if x_t.device().is_cuda() {
@@ -925,7 +949,7 @@ impl GatedDeltaNet {
                 false,
             )?;
             cache.conv_state = new_conv_state;
-            return output.transpose(1, 2);
+            return trim_carried(&output.transpose(1, 2)?, carried);
         }
 
         #[cfg(feature = "metal")]
@@ -943,7 +967,7 @@ impl GatedDeltaNet {
                 self.conv_kernel_size,
             )?;
             cache.conv_state = new_conv_state;
-            return output.transpose(1, 2);
+            return trim_carried(&output.transpose(1, 2)?, carried);
         }
 
         // CPU fallback
@@ -978,7 +1002,7 @@ impl GatedDeltaNet {
         }
         let out = Tensor::stack(&conv_outputs, 2)?;
         let out = hanzo_nn::ops::silu(&out)?;
-        out.transpose(1, 2)
+        trim_carried(&out.transpose(1, 2)?, carried)
     }
 }
 
@@ -1111,6 +1135,177 @@ mod tests {
         }
         eprintln!("[gdn split-vs-merged] max_abs={worst:.3e}");
         assert!(worst < 1e-5, "split != merged, max_abs={worst}");
+        Ok(())
+    }
+
+    /// A prompt served in chunks must equal the same prompt served whole. The full conv kernel has
+    /// no conv_state argument and zero-pads its left edge, so before the carry a second chunk
+    /// convolved its first kernel_size-1 rows against zeros. Chunked prefill is the live path: a
+    /// long prompt arrives in 4096-token pieces.
+    #[test]
+    fn gdn_chunked_prefill_matches_contiguous() -> Result<()> {
+        let dev = Device::Cpu;
+        let (num_k_heads, num_v_heads, head_k_dim, head_v_dim) = (2usize, 4usize, 6usize, 8usize);
+        let (hidden, conv_kernel_size) = (10usize, 4usize);
+        let key_dim = num_k_heads * head_k_dim;
+        let value_dim = num_v_heads * head_v_dim;
+        let v_per_group = num_v_heads / num_k_heads;
+        let conv_dim = key_dim * 2 + value_dim;
+
+        let qkvz_w = synthetic((key_dim * 2 + value_dim * 2) * hidden, 31, &dev)?
+            .reshape((key_dim * 2 + value_dim * 2, hidden))?;
+        let ba_w =
+            synthetic(num_v_heads * 2 * hidden, 32, &dev)?.reshape((num_v_heads * 2, hidden))?;
+        let gdn = GatedDeltaNet {
+            in_proj: GdnInProj::Merged {
+                qkvz: Linear::new(qkvz_w, None),
+                ba: Linear::new(ba_w, None),
+            },
+            conv1d_weight: synthetic(conv_dim * conv_kernel_size, 33, &dev)?.reshape((
+                conv_dim,
+                1,
+                conv_kernel_size,
+            ))?,
+            dt_bias: synthetic(num_v_heads, 34, &dev)?,
+            a_log: synthetic(num_v_heads, 35, &dev)?,
+            norm: RmsNormGated::from_weight(synthetic(head_v_dim, 36, &dev)?, 1e-6),
+            out_proj: unquant(synthetic(hidden * value_dim, 37, &dev)?.reshape((hidden, value_dim))?)?,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            conv_kernel_size,
+            key_dim,
+            value_dim,
+        };
+        let _ = v_per_group;
+
+        let fresh = || -> Result<GdnLayerCache> {
+            Ok(GdnLayerCache {
+                conv_state: Tensor::zeros((1, conv_dim, conv_kernel_size), DType::F32, &dev)?,
+                recurrent_state: Tensor::zeros(
+                    (1, num_v_heads, head_k_dim, head_v_dim),
+                    DType::F32,
+                    &dev,
+                )?,
+                seqlen_offset: 0,
+            })
+        };
+
+        let total = 8usize;
+        let x = synthetic(total * hidden, 38, &dev)?.reshape((1, total, hidden))?;
+
+        let mut whole_cache = fresh()?;
+        let whole = gdn.forward(&x, &mut whole_cache)?;
+
+        // The split lands past kernel_size, so the second chunk's left edge is real context.
+        let split_at = 5usize;
+        let mut chunk_cache = fresh()?;
+        let first = x.narrow(1, 0, split_at)?;
+        gdn.forward(&first, &mut chunk_cache)?;
+        chunk_cache.seqlen_offset += split_at;
+        let second = x.narrow(1, split_at, total - split_at)?;
+        let tail = gdn.forward(&second, &mut chunk_cache)?;
+
+        let want: Vec<f32> = whole
+            .narrow(1, split_at, total - split_at)?
+            .flatten_all()?
+            .to_vec1()?;
+        let got: Vec<f32> = tail.flatten_all()?.to_vec1()?;
+        assert_eq!(want.len(), got.len());
+        let worst = want
+            .iter()
+            .zip(&got)
+            .fold(0f32, |acc, (w, g)| acc.max((w - g).abs()));
+        eprintln!("[gdn chunked-vs-contiguous] max_abs={worst:.3e}");
+        assert!(worst < 1e-5, "chunked prefill != contiguous, max_abs={worst}");
+        Ok(())
+    }
+
+    /// Speculative rollback restores a checkpoint and replays the accepted prefix in one forward.
+    /// That wide continuation takes the full conv path plus the carried state, while decoding the same
+    /// tokens one at a time takes the update path, so the two are independent implementations. Width 2
+    /// sits below the kernel, where a wrong saved window hides from any check on the output alone.
+    #[test]
+    fn gdn_replay_after_rewind_matches_stepwise() -> Result<()> {
+        let dev = Device::Cpu;
+        let (num_k_heads, num_v_heads, head_k_dim, head_v_dim) = (2usize, 4usize, 6usize, 8usize);
+        let (hidden, conv_kernel_size) = (10usize, 4usize);
+        let key_dim = num_k_heads * head_k_dim;
+        let value_dim = num_v_heads * head_v_dim;
+        let conv_dim = key_dim * 2 + value_dim;
+        let gdn = GatedDeltaNet {
+            in_proj: GdnInProj::Merged {
+                qkvz: Linear::new(
+                    synthetic((key_dim * 2 + value_dim * 2) * hidden, 51, &dev)?
+                        .reshape((key_dim * 2 + value_dim * 2, hidden))?,
+                    None,
+                ),
+                ba: Linear::new(
+                    synthetic(num_v_heads * 2 * hidden, 52, &dev)?.reshape((num_v_heads * 2, hidden))?,
+                    None,
+                ),
+            },
+            conv1d_weight: synthetic(conv_dim * conv_kernel_size, 53, &dev)?.reshape((
+                conv_dim,
+                1,
+                conv_kernel_size,
+            ))?,
+            dt_bias: synthetic(num_v_heads, 54, &dev)?,
+            a_log: synthetic(num_v_heads, 55, &dev)?,
+            norm: RmsNormGated::from_weight(synthetic(head_v_dim, 56, &dev)?, 1e-6),
+            out_proj: unquant(synthetic(hidden * value_dim, 57, &dev)?.reshape((hidden, value_dim))?)?,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            conv_kernel_size,
+            key_dim,
+            value_dim,
+        };
+        let snapshot = |c: &GdnLayerCache| GdnLayerCache {
+            conv_state: c.conv_state.clone(),
+            recurrent_state: c.recurrent_state.clone(),
+            seqlen_offset: c.seqlen_offset,
+        };
+        let max_abs = |a: &Tensor, b: &Tensor| -> Result<f32> {
+            (a - b)?.abs()?.flatten_all()?.max(0)?.to_scalar::<f32>()
+        };
+
+        let (prompt_len, drafted, accepted) = (5usize, 4usize, 2usize);
+        let all = synthetic((prompt_len + drafted) * hidden, 58, &dev)?
+            .reshape((1, prompt_len + drafted, hidden))?;
+        let draft = all.narrow(1, prompt_len, drafted)?;
+
+        let mut cache = GdnLayerCache {
+            conv_state: Tensor::zeros((1, conv_dim, conv_kernel_size), DType::F32, &dev)?,
+            recurrent_state: Tensor::zeros((1, num_v_heads, head_k_dim, head_v_dim), DType::F32, &dev)?,
+            seqlen_offset: 0,
+        };
+        gdn.forward(&all.narrow(1, 0, prompt_len)?, &mut cache)?;
+        cache.seqlen_offset = prompt_len;
+        let checkpoint = snapshot(&cache);
+
+        // advance over the whole draft, then roll back and replay only what was accepted
+        gdn.forward(&draft, &mut cache)?;
+        let mut replay = snapshot(&checkpoint);
+        let replayed = gdn.forward(&draft.narrow(1, 0, accepted)?, &mut replay)?;
+
+        let mut truth = snapshot(&checkpoint);
+        let mut rows = Vec::with_capacity(accepted);
+        for i in 0..accepted {
+            truth.seqlen_offset = prompt_len + i;
+            rows.push(gdn.forward(&draft.narrow(1, i, 1)?, &mut truth)?);
+        }
+        let stepwise = Tensor::cat(&rows, 1)?;
+
+        let out = max_abs(&replayed, &stepwise)?;
+        let conv = max_abs(&replay.conv_state, &truth.conv_state)?;
+        let rec = max_abs(&replay.recurrent_state, &truth.recurrent_state)?;
+        eprintln!("[gdn replay-vs-stepwise] out={out:.3e} conv_state={conv:.3e} recurrent={rec:.3e}");
+        assert!(out < 1e-5, "replayed output != stepwise, max_abs={out}");
+        assert!(conv < 1e-5, "replayed conv_state != stepwise, max_abs={conv}");
+        assert!(rec < 1e-5, "replayed recurrent_state != stepwise, max_abs={rec}");
         Ok(())
     }
 

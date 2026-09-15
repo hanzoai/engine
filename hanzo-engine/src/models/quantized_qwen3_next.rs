@@ -264,6 +264,16 @@ struct QGatedDeltaNet {
     value_dim: usize,
 }
 
+
+/// Rows produced by the conv state spliced onto the left of a continuation are context, not output.
+fn trim_carried(out: &Tensor, carried: usize) -> Result<Tensor> {
+    if carried == 0 {
+        return Ok(out.clone());
+    }
+    let len = out.dim(1)?;
+    out.narrow(1, carried, len - carried)
+}
+
 impl QGatedDeltaNet {
     fn forward(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         // Run the GDN recurrence + gates in f32 end-to-end (matches quantized_qwen3_5_moe); lift the
@@ -423,7 +433,21 @@ impl QGatedDeltaNet {
 
     fn causal_conv1d_full(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (batch_size, seq_len, conv_dim) = x.dims3()?;
-        let x_t = x.transpose(1, 2)?.contiguous()?;
+        // The full kernel has no conv_state argument and zero-pads its left edge, which is right
+        // only at the start of a sequence. A continuation (a later prefill chunk, or a speculative
+        // replay) must see the previous tokens, so splice them on and drop their outputs after.
+        let carried = if cache.seqlen_offset > 0 {
+            self.conv_kernel_size - 1
+        } else {
+            0
+        };
+        let x_t = if carried > 0 {
+            let left = cache.conv_state.narrow(D::Minus1, 1, carried)?;
+            Tensor::cat(&[&left, &x.transpose(1, 2)?], D::Minus1)?.contiguous()?
+        } else {
+            x.transpose(1, 2)?.contiguous()?
+        };
+        let seq_len = seq_len + carried;
 
         #[cfg(feature = "cuda")]
         if x_t.device().is_cuda() {
@@ -436,7 +460,7 @@ impl QGatedDeltaNet {
                 false,
             )?;
             cache.conv_state = new_conv_state;
-            return output.transpose(1, 2);
+            return trim_carried(&output.transpose(1, 2)?, carried);
         }
 
         let pad_width = self.conv_kernel_size.saturating_sub(seq_len);
@@ -469,7 +493,7 @@ impl QGatedDeltaNet {
         }
         let out = Tensor::stack(&conv_outputs, 2)?;
         let out = hanzo_nn::ops::silu(&out)?;
-        out.transpose(1, 2)
+        trim_carried(&out.transpose(1, 2)?, carried)
     }
 }
 
