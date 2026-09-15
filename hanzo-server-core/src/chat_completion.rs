@@ -476,6 +476,20 @@ fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
 ///
 /// This function transforms an OpenAI-compatible chat completion request into the
 /// request format used by hanzo.
+/// Carry a previous assistant turn's chain-of-thought into the template map. Templates that
+/// render `reasoning_content` (Qwen3, DeepSeek-R1) lose thinking continuity across turns without it.
+fn insert_reasoning_content(
+    message_map: &mut IndexMap<String, hanzo_engine::MessageContent>,
+    reasoning_content: &Option<String>,
+) {
+    if let Some(reasoning_content) = reasoning_content {
+        message_map.insert(
+            "reasoning_content".to_string(),
+            Either::Left(reasoning_content.clone()),
+        );
+    }
+}
+
 pub async fn parse_request(
     oairequest: ChatCompletionRequest,
     state: SharedState,
@@ -503,6 +517,7 @@ pub async fn parse_request(
             let mut audio_urls = Vec::new();
             let mut video_urls = Vec::new();
             for message in req_messages {
+                let reasoning_content = message.reasoning_content.clone();
                 let content = match message.content.as_deref() {
                     Some(content) => content.clone(),
                     None => {
@@ -577,6 +592,8 @@ pub async fn parse_request(
                         if let Some(ref name) = message.name {
                             message_map.insert("name".to_string(), Either::Left(name.clone()));
                         }
+
+                        insert_reasoning_content(&mut message_map, &reasoning_content);
 
                         messages.push(message_map);
                     }
@@ -799,6 +816,7 @@ pub async fn parse_request(
                         }
 
                         message_map.insert("content".to_string(), Either::Right(content_map));
+                        insert_reasoning_content(&mut message_map, &reasoning_content);
                         messages.push(message_map);
                         image_urls.extend(image_urls_iter);
                         audio_urls.extend(audio_urls_iter);
@@ -887,6 +905,7 @@ pub async fn parse_request(
             Some(ResponseFormat::JsonSchema {
                 json_schema: JsonSchemaResponseFormat { name: _, schema },
             }) => Constraint::JsonSchema(schema),
+            Some(ResponseFormat::JsonObject) => Constraint::JsonSchema(json!({"type": "object"})),
             Some(ResponseFormat::Text) => Constraint::None,
             None => Constraint::None,
         },

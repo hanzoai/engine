@@ -263,6 +263,7 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                     name: msg_param.name,
                     tool_calls: None,
                     tool_call_id: None,
+                    reasoning_content: None,
                 });
             }
             TaggedInputItem::ItemReference { id: _ } => {
@@ -285,6 +286,7 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                         function: crate::openai::FunctionCalled { name, arguments },
                     }]),
                     tool_call_id: None,
+                    reasoning_content: None,
                 });
             }
             TaggedInputItem::FunctionCallOutput { call_id, output } => {
@@ -295,6 +297,7 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                     name: None,
                     tool_calls: None,
                     tool_call_id: Some(call_id),
+                    reasoning_content: None,
                 });
             }
         }
@@ -937,6 +940,7 @@ impl futures::Stream for OpenResponsesStreamer {
                                 name: None,
                                 tool_calls: None,
                                 tool_call_id: None,
+                                reasoning_content: None,
                             });
                         }
 
@@ -1430,6 +1434,7 @@ async fn parse_openresponses_request(
             name: None,
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         });
     }
 
@@ -1448,6 +1453,7 @@ async fn parse_openresponses_request(
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
+                reasoning_content: None,
             });
         }
     }
@@ -1488,15 +1494,7 @@ async fn parse_openresponses_request(
                     schema: schema.unwrap_or(serde_json::Value::Object(Default::default())),
                 },
             },
-            TextFormat::JsonObject => {
-                // JsonObject is treated as a schema with empty object
-                crate::openai::ResponseFormat::JsonSchema {
-                    json_schema: crate::openai::JsonSchemaResponseFormat {
-                        name: "json_object".to_string(),
-                        schema: serde_json::json!({"type": "object"}),
-                    },
-                }
-            }
+            TextFormat::JsonObject => crate::openai::ResponseFormat::JsonObject,
         })
     } else {
         oairequest.response_format
@@ -1654,6 +1652,7 @@ pub async fn create_response(
                                         name: None,
                                         tool_calls: None,
                                         tool_call_id: None,
+                                        reasoning_content: None,
                                     });
                                 }
                             }
@@ -1752,6 +1751,7 @@ pub async fn create_response(
                                     name: None,
                                     tool_calls: None,
                                     tool_call_id: None,
+                                    reasoning_content: None,
                                 });
                             }
                         }

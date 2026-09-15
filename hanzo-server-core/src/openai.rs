@@ -258,6 +258,8 @@ pub struct ToolCall {
 ///     role: "user".to_string(),
 ///     name: None,
 ///     tool_calls: None,
+///     tool_call_id: None,
+///     reasoning_content: None,
 /// };
 ///
 /// // System message
@@ -266,6 +268,8 @@ pub struct ToolCall {
 ///     role: "system".to_string(),
 ///     name: None,
 ///     tool_calls: None,
+///     tool_call_id: None,
+///     reasoning_content: None,
 /// };
 /// ```
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -279,6 +283,10 @@ pub struct Message {
     pub tool_calls: Option<Vec<ToolCall>>,
     /// Tool call ID this message is responding to (for tool messages)
     pub tool_call_id: Option<String>,
+    /// Chain-of-thought carried back from a previous assistant turn. Templates that
+    /// render `reasoning_content` need it to keep thinking continuous across turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 /// Stop token configuration for generation
@@ -524,6 +532,9 @@ pub enum ResponseFormat {
     /// Free-form text response
     #[serde(rename = "text")]
     Text,
+    /// Structured response as any JSON object
+    #[serde(rename = "json_object")]
+    JsonObject,
     /// Structured response following a JSON schema
     #[serde(rename = "json_schema")]
     JsonSchema {
