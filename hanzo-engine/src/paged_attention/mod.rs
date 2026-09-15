@@ -143,6 +143,13 @@ pub fn calculate_cache_config(
     let model_weight_per_device_mb =
         model_weight_size_in_bytes.unwrap_or(0) / num_devices / SIZE_IN_MB;
 
+    // A budget the caller named is an instruction, not a hint: the demand floor below applies only
+    // to the automatic path.
+    let budget_is_explicit = matches!(
+        mem_gpu,
+        MemoryGpuConfig::MbAmount(_) | MemoryGpuConfig::ContextSize(_)
+    );
+
     let mut min_mem_gpu = usize::MAX;
     for dev in layer_devices {
         let device = dev.as_ref().unwrap_or(device);
@@ -193,8 +200,7 @@ pub fn calculate_cache_config(
         // on a tight/coherent pool, thrashes or hangs the allocator (ROCm/WSL: an 84 GB alloc never
         // returns). More concurrent sessions/agents raise max_batch_size and grow KV automatically.
         // Bound demand by the post-model/OS-reserve ceiling (20% of unified RAM, min 16 GB, so KV
-        // never starves the OS) and floor at one full context so a lone request always loads. An
-        // explicit --pa-context-len (ContextSize upstream) sizes KV exactly and bypasses this.
+        // never starves the OS) and floor at one full context so a lone request always loads.
         let demand_mb = match max_num_tokens {
             Some(toks) => {
                 (ctxt_to_blocks!(toks, dtype_size, block_size, config) / SIZE_IN_MB).max(one_ctx_mb)
@@ -207,7 +213,11 @@ pub fn calculate_cache_config(
             .saturating_sub(model_weight_per_device_mb)
             .saturating_sub(reserve_mb)
             .max(one_ctx_mb);
-        let target = mem_gpu.min(kv_ceiling).min(demand_mb).max(one_ctx_mb);
+        let target = if budget_is_explicit {
+            mem_gpu.min(kv_ceiling)
+        } else {
+            mem_gpu.min(kv_ceiling).min(demand_mb).max(one_ctx_mb)
+        };
         if target != mem_gpu {
             if !silent {
                 info!(
