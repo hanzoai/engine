@@ -834,27 +834,7 @@ impl IsqModel for Qwen3_5TextModel {
                     uvb_l.pp("self_attn").pp("k_norm").add(&attn.k_norm);
                 }
                 LayerImpl::LinearAttention(gdn) => {
-                    uvb_l
-                        .pp("linear_attn")
-                        .pp("in_proj_qkvz")
-                        .add_tensor("weight", gdn.in_proj_qkvz.weight().clone());
-                    uvb_l
-                        .pp("linear_attn")
-                        .pp("in_proj_ba")
-                        .add_tensor("weight", gdn.in_proj_ba.weight().clone());
-                    uvb_l
-                        .pp("linear_attn")
-                        .add_tensor("conv1d.weight", gdn.conv1d_weight.clone());
-                    uvb_l
-                        .pp("linear_attn")
-                        .add_tensor("dt_bias", gdn.dt_bias.clone());
-                    uvb_l
-                        .pp("linear_attn")
-                        .add_tensor("A_log", gdn.a_log.clone());
-                    uvb_l
-                        .pp("linear_attn")
-                        .pp("norm")
-                        .add_tensor("weight", gdn.norm.weight.clone());
+                    gdn.add_residual_tensors(&uvb_l.pp("linear_attn"));
                 }
             }
         }
