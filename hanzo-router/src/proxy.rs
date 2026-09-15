@@ -8,9 +8,11 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll};
 use std::time::{Duration, Instant};
+use tokio::signal::unix::{signal, SignalKind};
 
 use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::{Request, State};
@@ -30,6 +32,11 @@ const PREFIX_CHARS: usize = 512;
 /// Default background health re-probe cadence (see [`ServeConfig::probe_interval`]).
 pub const DEFAULT_PROBE_INTERVAL: Duration = Duration::from_secs(5);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Above this prompt size, time to first byte measures the prompt, not the
+/// worker, and a 12-minute prefill would poison the ranking EWMA for hours.
+const TTFT_SAMPLE_CEILING: usize = 8192;
+/// A long prefill plus its generation; past this a stuck stream holds the door.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(1800);
 /// Liveness is "the server answers HTTP". Engines' own /health can run a
 /// generation through the scheduler (SGLang does), which waits behind a long
 /// prefill and would evict the one replica able to serve it.
@@ -64,6 +71,25 @@ struct ProxyState {
     client: reqwest::Client,
     upstream_model: Option<String>,
     pool_file: Option<crate::pool_file::PoolFile>,
+    /// Requests admitted but not yet holding a lease. Token counting runs here,
+    /// and a shutdown that waited only on leases would cut them mid-count.
+    admitted: Arc<AtomicUsize>,
+}
+
+/// Increments while a request is between arrival and its lease.
+struct Admission(Arc<AtomicUsize>);
+
+impl Admission {
+    fn new(state: &ProxyState) -> Self {
+        state.admitted.fetch_add(1, Ordering::AcqRel);
+        Self(state.admitted.clone())
+    }
+}
+
+impl Drop for Admission {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 /// What to serve: the pool + where to bind + how often to re-probe.
@@ -131,9 +157,13 @@ async fn serve_listener_config(
         pool_file: config_path
             .map(crate::pool_file::PoolFile::new)
             .transpose()?,
+        admitted: Arc::new(AtomicUsize::new(0)),
     });
     tokio::spawn(probe_loop(state.clone(), probe_interval));
-    axum::serve(listener, app(state)).await?;
+    let draining = state.clone();
+    axum::serve(listener, app(state))
+        .with_graceful_shutdown(async move { drain(draining).await })
+        .await?;
     Ok(())
 }
 
@@ -154,6 +184,7 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
 /// Forward any non-admin path to a chosen replica, retrying past replicas that
 /// refuse the connection (evicting them so the ring reroutes).
 async fn proxy(State(state): State<Arc<ProxyState>>, req: Request) -> Response {
+    let admitted = Admission::new(&state);
     let (parts, body) = req.into_parts();
     let path_q = parts
         .uri
@@ -207,7 +238,9 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request) -> Response {
         .and_then(Value::as_bool)
         == Some(true);
     let anthropic = parts.uri.path() == "/v1/messages";
-    let dispatch = Box::pin(dispatch(state, parts, path_q, body_bytes, json, set, hints));
+    let dispatch = Box::pin(dispatch(
+        state, parts, path_q, body_bytes, json, set, hints, admitted,
+    ));
     if wants_stream {
         response_with_progress(dispatch, anthropic, Duration::from_secs(15)).await
     } else {
@@ -223,7 +256,10 @@ async fn dispatch(
     json: Option<Value>,
     set: Arc<ReplicaSet>,
     hints: RoutingHints,
+    admitted: Admission,
 ) -> Response {
+    // The lease takes over from here; a dropped stream releases both.
+    let _admitted = admitted;
     let fwd = forward_headers(&parts.headers);
     let mut excluded = HashSet::new();
     for _ in 0..set.len().max(1) {
@@ -360,6 +396,7 @@ fn stream_response(
         .map(|ct| ct.contains("text/event-stream"))
         .unwrap_or(false);
     let ping_deadline = Box::pin(tokio::time::sleep(Duration::from_secs(15)));
+    let sample_ttft = hints.required_tokens(lease.id()) <= TTFT_SAMPLE_CEILING;
     let body = Body::from_stream(LeasedStream {
         inner: Box::pin(resp.bytes_stream()),
         lease: Some(lease),
@@ -368,6 +405,7 @@ fn stream_response(
         started,
         first_byte: false,
         successful: status.is_success(),
+        sample_ttft,
         is_sse,
         ping_deadline,
     });
@@ -393,6 +431,7 @@ struct LeasedStream {
     started: Instant,
     first_byte: bool,
     successful: bool,
+    sample_ttft: bool,
     is_sse: bool,
     ping_deadline: Pin<Box<tokio::time::Sleep>>,
 }
@@ -408,7 +447,7 @@ impl Stream for LeasedStream {
             Poll::Ready(Some(Ok(bytes))) => {
                 if !bytes.is_empty() && !this.first_byte {
                     this.first_byte = true;
-                    if this.successful {
+                    if this.successful && this.sample_ttft {
                         if let Some(lease) = &this.lease {
                             this.set.observe_ttft(lease.id(), this.started.elapsed());
                         }
@@ -918,6 +957,37 @@ async fn update_replica(
     }
 }
 
+/// Stop accepting on the first termination signal, then let the requests we
+/// already took finish: a restart that cuts them is an outage the client sees
+/// as a dropped stream, and an engine keeps generating for a client that left.
+async fn drain(state: Arc<ProxyState>) {
+    let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {},
+        _ = term.recv() => {},
+    }
+    let deadline = Instant::now() + DRAIN_TIMEOUT;
+    loop {
+        let busy = state.admitted.load(Ordering::Acquire)
+            + state
+                .balancer
+                .statuses()
+                .values()
+                .flatten()
+                .map(|r| r.inflight)
+                .sum::<usize>();
+        if busy == 0 {
+            tracing::info!("drained, shutting down");
+            return;
+        }
+        if Instant::now() >= deadline {
+            tracing::warn!("{busy} requests still in flight at drain deadline, shutting down");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 async fn probe_loop(state: Arc<ProxyState>, interval: Duration) {
     loop {
         tokio::time::sleep(interval).await;
@@ -1075,6 +1145,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_long_prefill_does_not_teach_ttft() {
+        use futures::StreamExt;
+        // A 12-minute prefill is a fact about the prompt; recording it would rank
+        // the worker that served the longest conversation as the slowest one.
+        let set = Arc::new(ReplicaSet::new([Replica::new("worker")], 1));
+        let mut hints = RoutingHints::default();
+        hints.approx_tokens = TTFT_SAMPLE_CEILING + 1;
+        let lease = set
+            .pick_agent(&hints, &HashSet::new(), Instant::now())
+            .unwrap();
+        let sample_ttft = hints.required_tokens(lease.id()) <= TTFT_SAMPLE_CEILING;
+        let mut stream = LeasedStream {
+            inner: Box::pin(futures::stream::iter(vec![Ok(Bytes::from_static(b"hi"))])),
+            lease: Some(lease),
+            set: set.clone(),
+            hints,
+            started: Instant::now(),
+            sample_ttft,
+            first_byte: false,
+            successful: true,
+            is_sse: false,
+            ping_deadline: Box::pin(tokio::time::sleep(Duration::from_secs(15))),
+        };
+        while stream.next().await.is_some() {}
+        assert_eq!(set.statuses()[0].ttft_ewma_ms, None);
+    }
+
+    #[tokio::test]
     async fn leased_stream_releases_on_eof_error_and_abort() {
         use futures::StreamExt;
         for mode in ["complete", "abort", "error"] {
@@ -1107,6 +1205,7 @@ mod tests {
                 set: set.clone(),
                 hints,
                 started: Instant::now(),
+                sample_ttft: true,
                 first_byte: false,
                 successful: true,
                 is_sse: false,
