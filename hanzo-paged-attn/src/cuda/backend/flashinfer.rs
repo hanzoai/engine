@@ -402,7 +402,7 @@ pub fn flashinfer_decode(
         (0, None)
     };
 
-    unsafe {
+    let status = unsafe {
         ffi_flashinfer_decode(
             q_ptr as *const core::ffi::c_void,
             kc_ptr as *const core::ffi::c_void,
@@ -432,7 +432,10 @@ pub fn flashinfer_decode(
             dtype_code(dtype, "flashinfer_decode")?,
             use_tensor_cores,
             q_s.device().cuda_stream().cu_stream(),
-        );
+        )
+    };
+    if status != 0 {
+        hanzo_ml::bail!("flashinfer_decode rejected this layer; see stderr for the reason");
     }
 
     Ok(out.clone())

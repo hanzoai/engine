@@ -111,7 +111,7 @@ extern "C" {
         dtype: u32,
         use_tensor_cores: bool,
         stream: CUstream,
-    );
+    ) -> c_int;
 
     pub fn flashinfer_prefill(
         q: *const c_void,

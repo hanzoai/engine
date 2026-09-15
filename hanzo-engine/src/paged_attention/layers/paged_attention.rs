@@ -5,7 +5,13 @@ use hanzo_ml::{DType, Device, Result, Tensor};
 use hanzo_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
 
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicI32, Ordering};
+
+/// FlashInfer covers most shapes and rejects the rest; say so once, not once per token.
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+static FLASHINFER_DECODE_FELL_BACK: AtomicBool = AtomicBool::new(false);
 
 use crate::{
     attention::{AttentionMask, SdpaParams},
@@ -827,7 +833,7 @@ impl PagedAttention {
             let fi_meta =
                 input_metadata.flashinfer_decode_metadata(&dev, use_full, use_tensor_cores)?;
 
-            return flashinfer_decode(
+            let decoded = flashinfer_decode(
                 &query,
                 key_cache.as_ref().unwrap(),
                 value_cache.as_ref().unwrap(),
@@ -844,6 +850,14 @@ impl PagedAttention {
                 sdpa_params.softcap,
                 use_tensor_cores,
             );
+            match decoded {
+                Ok(out) => return Ok(out),
+                Err(e) => {
+                    if !FLASHINFER_DECODE_FELL_BACK.swap(true, Ordering::Relaxed) {
+                        tracing::warn!("{e}; using the standard paged-attention decode instead");
+                    }
+                }
+            }
         }
 
         let res = paged_attention(

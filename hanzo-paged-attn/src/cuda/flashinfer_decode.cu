@@ -482,7 +482,9 @@ extern "C" void reshape_and_cache_flashinfer(
   }
 }
 
-extern "C" void flashinfer_decode(
+// FlashInfer reports a shape its dispatch tables do not cover by throwing, and a C++ exception
+// crossing back into Rust aborts the process, so the status travels as a return value instead.
+extern "C" int32_t flashinfer_decode(
     void *q, void *key_cache, void *value_cache, const int32_t *kv_indptr,
     const int32_t *kv_indices, const int32_t *kv_last_page_len,
     const int32_t *request_indices, const int32_t *kv_tile_indices,
@@ -493,6 +495,7 @@ extern "C" void flashinfer_decode(
     int32_t q_stride_n, int32_t q_stride_h, float sm_scale, int32_t window_left,
     float logits_soft_cap, uint32_t dtype, bool use_tensor_cores,
     cudaStream_t stream) {
+  try {
   if (dtype == 0) {
     mistralrs_flashinfer::dispatch_flashinfer_decode_head_dim<__half>(
         q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
@@ -519,7 +522,16 @@ extern "C" void flashinfer_decode(
         stream);
   } else {
     fprintf(stderr, "FlashInfer decode received unsupported dtype %u\n", dtype);
+    return 1;
   }
+  } catch (const std::exception &e) {
+    fprintf(stderr, "FlashInfer decode failed: %s\n", e.what());
+    return 1;
+  } catch (...) {
+    fprintf(stderr, "FlashInfer decode failed with unknown exception\n");
+    return 1;
+  }
+  return 0;
 }
 
 extern "C" int32_t flashinfer_prefill(

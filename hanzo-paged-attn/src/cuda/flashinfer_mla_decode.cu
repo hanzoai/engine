@@ -52,7 +52,8 @@ void run_mla_decode(void *q_nope, void *q_pe, void *ckv_cache, void *kpe_cache,
 }
 } // namespace
 
-extern "C" void flashinfer_mla_decode(
+// Same contract as flashinfer_decode: a throw here would cross into Rust and abort the process.
+extern "C" int32_t flashinfer_mla_decode(
     void *q_nope, void *q_pe, void *ckv_cache, void *kpe_cache,
     const int32_t *kv_indptr, const int32_t *kv_indices,
     const int32_t *kv_last_page_len, void *o, int32_t batch_size,
@@ -61,6 +62,7 @@ extern "C" void flashinfer_mla_decode(
     float rope_theta, const int32_t *request_indices,
     const int32_t *kv_tile_indices, const int32_t *o_indptr,
     const int32_t *kv_chunk_size_ptr, uint32_t dtype, cudaStream_t stream) {
+  try {
   if (dtype == 0) {
     run_mla_decode<__half>(
         q_nope, q_pe, ckv_cache, kpe_cache, kv_indptr, kv_indices,
@@ -82,5 +84,14 @@ extern "C" void flashinfer_mla_decode(
   } else {
     fprintf(stderr, "FlashInfer MLA decode received unsupported dtype %u\n",
             dtype);
+    return 1;
   }
+  } catch (const std::exception &e) {
+    fprintf(stderr, "FlashInfer MLA decode failed: %s\n", e.what());
+    return 1;
+  } catch (...) {
+    fprintf(stderr, "FlashInfer MLA decode failed with unknown exception\n");
+    return 1;
+  }
+  return 0;
 }

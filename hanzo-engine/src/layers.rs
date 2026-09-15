@@ -1496,7 +1496,8 @@ impl Qwen2VLRotaryEmbedding {
         let position_ids_expanded = position_ids.unsqueeze(2)?;
         let freqs = inv_freq_expanded
             .matmul(&position_ids_expanded.to_dtype(inv_freq_expanded.dtype())?)?
-            .transpose(2, 3)?;
+            .transpose(2, 3)?
+            .contiguous()?;
         let cos = freqs.cos()?;
         let sin = freqs.sin()?;
 
@@ -1559,9 +1560,9 @@ impl Qwen2VLRotaryEmbedding {
 #[derive(Debug, Clone)]
 pub struct Qwen3VLRotaryEmbedding {
     inv_freq: Tensor,
-    /// Precomputed interleave indices for H (dim=1, offset=1) and W (dim=2, offset=2).
-    /// Stored as (indices_1d, dim_idx) pairs. Created once at init to avoid CPU->GPU sync per step.
-    interleave_indices: Vec<(Tensor, usize)>,
+    /// Which of the three position planes each frequency reads: 0 temporal, 1 H, 2 W.
+    /// Built once at init; a per-step Tensor::from_vec would sync the device every decode.
+    plane: Tensor,
 }
 
 impl Qwen3VLRotaryEmbedding {
@@ -1578,28 +1579,22 @@ impl Qwen3VLRotaryEmbedding {
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (inv_freq_len,), device)?.to_dtype(DType::F32)?;
 
-        // Precompute interleave index tensors for H (dim=1, offset=1) and W (dim=2, offset=2)
-        // to avoid CPU->GPU sync from Tensor::from_vec on every decode step.
+        // THW THW ... TTTT: H claims 1, 4, 7, ... and W claims 2, 5, 8, ..., each for as many
+        // frequencies as its mrope section covers; everything left over stays temporal.
         let half_dim = head_dim / 2;
-        let mut interleave_indices = Vec::new();
+        let mut plane = vec![0u32; half_dim];
         for (dim_idx, offset) in [(1usize, 1usize), (2usize, 2usize)] {
-            let indices: Vec<u32> = (offset..)
+            for i in (offset..)
                 .step_by(3)
                 .take(mrope_section[dim_idx])
-                .filter(|&i| i < half_dim)
-                .map(|i| i as u32)
-                .collect();
-            if !indices.is_empty() {
-                let num = indices.len();
-                let idx_tensor = Tensor::from_vec(indices, (num,), device)?;
-                interleave_indices.push((idx_tensor, dim_idx));
+                .take_while(|&i| i < half_dim)
+            {
+                plane[i] = dim_idx as u32;
             }
         }
+        let plane = Tensor::from_vec(plane, (half_dim,), device)?;
 
-        Ok(Self {
-            inv_freq,
-            interleave_indices,
-        })
+        Ok(Self { inv_freq, plane })
     }
 
     /// Compute (cos, sin) from 3D position_ids of shape (3, batch, seq_len).
@@ -1617,23 +1612,17 @@ impl Qwen3VLRotaryEmbedding {
         // -> transpose -> (3, batch, seq_len, head_dim/2)
         let freqs = inv_freq_expanded
             .matmul(&position_ids_expanded.to_dtype(inv_freq_expanded.dtype())?)?
-            .transpose(2, 3)?;
+            .transpose(2, 3)?
+            .contiguous()?;
 
-        // Apply interleaved MRoPE: start with temporal, overwrite H and W at interleaved positions
-        // freqs_t = freqs[0] as base (all temporal)
-        let mut freqs_t = freqs.i(0)?.contiguous()?;
-        let (batch, seq_len, _) = freqs_t.dims3()?;
-
-        // For H (dim=1) and W (dim=2), overwrite interleaved positions using precomputed indices
-        for (idx_tensor, dim_idx) in &self.interleave_indices {
-            let freqs_dim = freqs.i(*dim_idx)?.contiguous()?;
-            let num_indices = idx_tensor.dim(0)?;
-            let idx_expanded = idx_tensor
-                .reshape((1, 1, num_indices))?
-                .repeat((batch, seq_len, 1))?;
-            let src_vals = freqs_dim.gather(&idx_expanded, D::Minus1)?;
-            freqs_t = freqs_t.scatter(&idx_expanded, &src_vals, D::Minus1)?;
-        }
+        // Interleaved MRoPE: every frequency reads the plane it was assigned, in one gather.
+        let (_, batch, seq_len, half_dim) = freqs.dims4()?;
+        let plane = self
+            .plane
+            .reshape((1, 1, 1, half_dim))?
+            .broadcast_as((1, batch, seq_len, half_dim))?
+            .contiguous()?;
+        let freqs_t = freqs.gather(&plane, 0)?.squeeze(0)?;
 
         // cos/sin from freqs_t -> (batch, seq_len, head_dim/2)
         // hanzo-ml's rope() expects half-dim cos/sin and handles both halves internally
@@ -1702,7 +1691,8 @@ impl Qwen2_5VLRotaryEmbedding {
         let position_ids_expanded = position_ids.unsqueeze(2)?;
         let freqs = inv_freq_expanded
             .matmul(&position_ids_expanded.to_dtype(inv_freq_expanded.dtype())?)?
-            .transpose(2, 3)?;
+            .transpose(2, 3)?
+            .contiguous()?;
         let cos = freqs.cos()?;
         let sin = freqs.sin()?;
 
@@ -4398,5 +4388,57 @@ impl Module for ScaledEmbedding {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let embedding = Embedding::new(self.embedding.clone(), self.embedding.dim(D::Minus1)?);
         xs.apply(&embedding)? * self.scale
+    }
+}
+
+#[cfg(test)]
+mod interleaved_mrope_tests {
+    use super::*;
+
+    /// Every frequency must read the plane its section assigns it: T everywhere except
+    /// 1, 4, 7, ... (H) and 2, 5, 8, ... (W), each bounded by its mrope section.
+    #[test]
+    fn frequencies_read_their_assigned_plane() -> Result<()> {
+        let dev = Device::Cpu;
+        let (head_dim, batch, seq) = (128usize, 2usize, 5usize);
+        let base = 10_000f32;
+        let mrope_section = vec![11usize, 11, 10];
+        let rope = Qwen3VLRotaryEmbedding::new(base, head_dim, &dev, mrope_section.clone())?;
+
+        let pos: Vec<i64> = (0..3 * batch * seq).map(|i| (i % 7) as i64).collect();
+        let position_ids = Tensor::from_vec(pos.clone(), (3, batch, seq), &dev)?;
+        let got: Vec<f32> = rope
+            .compute_cos_sin(&position_ids, DType::F32)?
+            .0
+            .flatten_all()?
+            .to_vec1()?;
+
+        let half = head_dim / 2;
+        let inv: Vec<f32> = (0..head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
+            .collect();
+        let mut plane = vec![0usize; half];
+        for (dim_idx, offset) in [(1usize, 1usize), (2usize, 2usize)] {
+            for i in (offset..)
+                .step_by(3)
+                .take(mrope_section[dim_idx])
+                .take_while(|&i| i < half)
+            {
+                plane[i] = dim_idx;
+            }
+        }
+
+        for b in 0..batch {
+            for s in 0..seq {
+                for j in 0..half {
+                    let p = pos[plane[j] * batch * seq + b * seq + s] as f32;
+                    let want = (p * inv[j]).cos();
+                    let g = got[(b * seq + s) * half + j];
+                    assert!((g - want).abs() < 1e-5, "b{b} s{s} j{j}: {g} vs {want}");
+                }
+            }
+        }
+        Ok(())
     }
 }
