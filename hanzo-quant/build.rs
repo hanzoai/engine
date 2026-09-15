@@ -50,6 +50,7 @@ fn main() -> Result<(), String> {
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_wmma_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_nvfp4_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_nvfp4_wmma_kernels)");
 
     #[cfg(feature = "cuda")]
     {
@@ -88,6 +89,7 @@ fn main() -> Result<(), String> {
             println!("cargo:rustc-cfg=has_vector_fp8_kernels");
             // WMMA tensor core MXFP4 kernel (FP16/BF16 WMMA requires SM >= 80)
             println!("cargo:rustc-cfg=has_mxfp4_wmma_kernels");
+            println!("cargo:rustc-cfg=has_nvfp4_wmma_kernels");
         }
         // MXFP4 and NVFP4 are always enabled with CUDA (LUT-based dequantization in registers)
         println!("cargo:rustc-cfg=has_mxfp4_kernels");

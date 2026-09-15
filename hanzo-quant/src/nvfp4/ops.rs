@@ -211,10 +211,13 @@ pub fn nvfp4_matmul(
         }};
     }
 
-    match input.dtype() {
-        DType::F16 => launch!(f16, launch_nvfp4_matmul_f16),
-        DType::BF16 => launch!(bf16, launch_nvfp4_matmul_bf16),
-        dtype => hanzo_ml::bail!("Unsupported dtype for NVFP4 matmul: {dtype:?}"),
+    // The WMMA kernel falls back to the same vecmat path for M <= 4, so decode is unaffected.
+    match (input.dtype(), ffi::HAVE_NVFP4_WMMA_KERNELS) {
+        (DType::F16, true) => launch!(f16, launch_nvfp4_matmul_wmma_f16),
+        (DType::F16, false) => launch!(f16, launch_nvfp4_matmul_f16),
+        (DType::BF16, true) => launch!(bf16, launch_nvfp4_matmul_wmma_bf16),
+        (DType::BF16, false) => launch!(bf16, launch_nvfp4_matmul_bf16),
+        (dtype, _) => hanzo_ml::bail!("Unsupported dtype for NVFP4 matmul: {dtype:?}"),
     }
 }
 
@@ -247,8 +250,15 @@ mod tests {
     #[cfg(feature = "cuda")]
     #[test]
     fn nvfp4_matmul_matches_dequantized() -> Result<()> {
+        for (n, k) in [(64usize, 128usize), (512, 5120), (256, 17408)] {
+            check_shape(n, k)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    fn check_shape(n: usize, k: usize) -> Result<()> {
         let dev = Device::new_cuda(0)?;
-        let (n, k) = (64usize, 128usize);
         let blocks = k / NVFP4_BLOCK_SIZE;
         let global = 0.75f32;
 
@@ -265,7 +275,7 @@ mod tests {
         let w_q = w_q_cpu.to_device(&dev)?;
         let w_s = w_s_cpu.to_device(&dev)?;
 
-        for m in [1usize, 4, 17, 64] {
+        for m in [1usize, 2, 4, 17, 64, 512] {
             let x: Vec<f32> = (0..m * k).map(|i| ((i % 17) as f32 - 8.0) / 8.0).collect();
             let x_cpu = Tensor::from_vec(x, (m, k), &Device::Cpu)?;
             let want: Vec<f32> = x_cpu.matmul(&w_ref)?.flatten_all()?.to_vec1()?;
@@ -279,7 +289,7 @@ mod tests {
             for (i, (g, w)) in got.iter().zip(&want).enumerate() {
                 assert!(
                     (g - w).abs() <= 0.02 * w.abs().max(1.0),
-                    "m={m} i={i}: got {g}, want {w}"
+                    "n={n} k={k} m={m} i={i}: got {g}, want {w}"
                 );
             }
         }
