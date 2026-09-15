@@ -29,8 +29,11 @@ const MAX_BODY_BYTES: usize = 32 << 20;
 const PREFIX_CHARS: usize = 512;
 /// Default background health re-probe cadence (see [`ServeConfig::probe_interval`]).
 pub const DEFAULT_PROBE_INTERVAL: Duration = Duration::from_secs(5);
-const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-const HEALTH_PATH: &str = "/health";
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Liveness is "the server answers HTTP". Engines' own /health can run a
+/// generation through the scheduler (SGLang does), which waits behind a long
+/// prefill and would evict the one replica able to serve it.
+const HEALTH_PATH: &str = "/v1/models";
 /// Response header naming the replica that served the request (observability).
 const REPLICA_HEADER: &str = "x-replica-id";
 const CONV_HEADERS: [&str; 5] = [
@@ -888,17 +891,35 @@ async fn update_replica(
 async fn probe_loop(state: Arc<ProxyState>, interval: Duration) {
     loop {
         tokio::time::sleep(interval).await;
-        for model in state.balancer.models() {
-            let Some(set) = state.balancer.set_for(Some(&model)) else {
-                continue;
-            };
-            for st in set.statuses() {
-                let url = format!("{}{}", st.url.trim_end_matches('/'), HEALTH_PATH);
+        let sets: Vec<_> = state
+            .balancer
+            .models()
+            .iter()
+            .filter_map(|m| state.balancer.set_for(Some(m)))
+            .collect();
+        // One probe per upstream per cycle, concurrently: a URL shared by many
+        // model pools is one server, and a slow one must not delay the others.
+        let urls: HashSet<String> = sets
+            .iter()
+            .flat_map(|set| set.statuses().into_iter().map(|r| r.url))
+            .collect();
+        let health: HashMap<String, bool> =
+            futures::future::join_all(urls.into_iter().map(|url| async {
+                let probe = format!("{}{}", url.trim_end_matches('/'), HEALTH_PATH);
                 let ok = matches!(
-                    state.client.get(&url).timeout(PROBE_TIMEOUT).send().await,
+                    state.client.get(&probe).timeout(PROBE_TIMEOUT).send().await,
                     Ok(r) if r.status().is_success()
                 );
-                set.set_health(&st.id, ok);
+                (url, ok)
+            }))
+            .await
+            .into_iter()
+            .collect();
+        for set in sets {
+            for st in set.statuses() {
+                if let Some(ok) = health.get(&st.url) {
+                    set.set_health(&st.id, *ok);
+                }
             }
         }
     }
@@ -1161,7 +1182,7 @@ mod e2e {
             alive: AtomicBool::new(true),
         });
         let app = Router::new()
-            .route("/health", get(mock_health))
+            .route("/v1/models", get(mock_health))
             .route("/v1/chat/completions", post(mock_chat))
             .route("/v1/messages", post(mock_chat))
             .route("/v1/messages/count_tokens", post(|Json(body): Json<Value>| async move {
@@ -1476,7 +1497,7 @@ mod e2e {
     #[tokio::test]
     async fn upstream_model_is_rewritten() {
         let app = Router::new()
-            .route("/health", get(|| async { "ok" }))
+            .route("/v1/models", get(|| async { "ok" }))
             .route("/v1/chat/completions", post(echo_model));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
