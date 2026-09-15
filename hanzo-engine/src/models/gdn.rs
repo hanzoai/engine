@@ -304,6 +304,7 @@ fn recurrence_cuda(
     // transpose+contiguous reshuffle (the large `ucopy_f32` copies) that
     // `recurrence_flatten` does. Only the (small) state is flattened to [B*H,K,V].
     if s_len >= CHUNK_THRESHOLD && (kd == 64 || kd == 128) {
+        let dtype = q.dtype();
         let q = q.to_dtype(DType::F32)?;
         let k = k.to_dtype(DType::F32)?;
         let v = v.to_dtype(DType::F32)?;
@@ -317,7 +318,7 @@ fn recurrence_cuda(
             &q, &k, &v, &g, &beta, &mut s,
         )?;
         *state = s.reshape((b, nh, kd, vd))?.to_dtype(state.dtype())?;
-        return out.to_dtype(q.dtype());
+        return out.to_dtype(dtype);
     }
 
     let (q_bh, k_bh, v_bh, g_bh, beta_bh, mut s) = recurrence_flatten(q, k, v, g, beta, state)?;
