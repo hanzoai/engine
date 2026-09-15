@@ -123,7 +123,9 @@ async fn serve_listener_config(
             .connect_timeout(Duration::from_secs(30))
             .tcp_keepalive(Some(Duration::from_secs(15)))
             .tcp_nodelay(true)
-            .pool_idle_timeout(Some(Duration::from_secs(300)))
+            // Below the engines' 5s keep-alive (uvicorn, cpp-httplib): reusing a
+            // socket the server is closing fails the request, and a failure evicts.
+            .pool_idle_timeout(Some(Duration::from_secs(4)))
             .build()?,
         upstream_model,
         pool_file: config_path
@@ -906,10 +908,14 @@ async fn probe_loop(state: Arc<ProxyState>, interval: Duration) {
         let health: HashMap<String, bool> =
             futures::future::join_all(urls.into_iter().map(|url| async {
                 let probe = format!("{}{}", url.trim_end_matches('/'), HEALTH_PATH);
-                let ok = matches!(
-                    state.client.get(&probe).timeout(PROBE_TIMEOUT).send().await,
-                    Ok(r) if r.status().is_success()
-                );
+                let answers = || async {
+                    matches!(
+                        state.client.get(&probe).timeout(PROBE_TIMEOUT).send().await,
+                        Ok(r) if r.status().is_success()
+                    )
+                };
+                // One dropped connection is not a dead server: ask twice.
+                let ok = answers().await || answers().await;
                 (url, ok)
             }))
             .await
