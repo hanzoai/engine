@@ -9,7 +9,7 @@ use hanzo_nn::Linear;
 use hanzo_quant::{QuantMethod, QuantizedConfig, RowParallelLayer, ShardedVarBuilder};
 use std::sync::Arc;
 
-use crate::device_map::DeviceMapper;
+use crate::{device_map::DeviceMapper, utils::unvarbuilder::UnVarBuilder};
 
 // ====================== GDN Config Trait ======================
 
@@ -452,9 +452,21 @@ fn recurrence_portable(
 
 // ====================== Gated Delta Net layer ======================
 
+/// The two checkpoint layouts of the delta-net input projections, in the form each one is usable in.
+pub enum GdnInProj {
+    /// One interleaved grouped-head matrix per pair, which only exists dense.
+    Merged { qkvz: Linear, ba: Linear },
+    /// The HF section-major projections, kept quantized because nothing has to be re-indexed.
+    Split {
+        qkv: Arc<dyn QuantMethod>,
+        z: Arc<dyn QuantMethod>,
+        b: Arc<dyn QuantMethod>,
+        a: Arc<dyn QuantMethod>,
+    },
+}
+
 pub struct GatedDeltaNet {
-    pub in_proj_qkvz: Linear,
-    pub in_proj_ba: Linear,
+    pub in_proj: GdnInProj,
     pub conv1d_weight: Tensor,
     pub dt_bias: Tensor,
     pub a_log: Tensor,
@@ -501,63 +513,47 @@ impl GatedDeltaNet {
         let value_dim = num_v_heads * head_v_dim;
         let conv_kernel_size = cfg.linear_conv_kernel_dim();
         let hidden_size = cfg.hidden_size();
-        let v_per_group = num_v_heads / num_k_heads;
 
         let vb_la = mapper.set_device(layer_idx, vb.pp("linear_attn"), loading_isq);
 
-        // The grouped layout is built by interleaving rows, so these projections have to be dense.
-        // They are not always stored that way: ModelOpt ships in_proj_* as per-tensor FP8, which a
-        // raw get() hands to a matmul as fp8 bytes. Load them through the quantized loader instead.
-        let dense = |name: &str, out_dim: usize| -> Result<Tensor> {
+        // ISQ stages vb_la on the CPU and only moves what it claims; the input projections are not
+        // ISQ targets and a QuantMethod cannot be moved after loading, so they load on the device.
+        let vb_proj = mapper.set_device(layer_idx, vb.pp("linear_attn"), false);
+
+        // ModelOpt ships in_proj_* as per-tensor FP8, which a raw get() hands to a matmul as fp8
+        // bytes. Everything here goes through the quantized loader instead.
+        let proj = |name: &str, out_dim: usize| -> Result<Arc<dyn QuantMethod>> {
             hanzo_quant::linear_no_bias(
                 hidden_size,
                 out_dim,
                 cfg.quantization_config(),
-                vb_la.pp(name),
-            )?
-            .dequantize_w()?
-            .to_dtype(vb_la.dtype())
+                vb_proj.pp(name),
+            )
+        };
+        let dense = |name: &str, out_dim: usize| -> Result<Linear> {
+            Ok(Linear::new(
+                proj(name, out_dim)?
+                    .dequantize_w()?
+                    .to_dtype(vb_la.dtype())?,
+                None,
+            ))
         };
 
-        // Load qkvz and ba projections
-        let qkvz_out = key_dim * 2 + value_dim * 2;
-        let mut qkvz_w = match weight_mode {
-            GdnWeightMode::MergedOnly => dense("in_proj_qkvz", qkvz_out)?,
-            GdnWeightMode::MergedWithFallback => {
-                if vb_la.contains_tensor("in_proj_qkvz.weight") {
-                    dense("in_proj_qkvz", qkvz_out)?
-                } else {
-                    // Load separate HF weights and interleave into grouped layout
-                    let qkv_w = dense("in_proj_qkv", key_dim * 2 + value_dim)?;
-                    let z_w = dense("in_proj_z", value_dim)?;
-                    let q_w = qkv_w.narrow(0, 0, key_dim)?;
-                    let k_w = qkv_w.narrow(0, key_dim, key_dim)?;
-                    let v_w = qkv_w.narrow(0, key_dim * 2, value_dim)?;
-                    let q_grouped = q_w.reshape((num_k_heads, head_k_dim, hidden_size))?;
-                    let k_grouped = k_w.reshape((num_k_heads, head_k_dim, hidden_size))?;
-                    let v_grouped =
-                        v_w.reshape((num_k_heads, v_per_group * head_v_dim, hidden_size))?;
-                    let z_grouped =
-                        z_w.reshape((num_k_heads, v_per_group * head_v_dim, hidden_size))?;
-                    let merged = Tensor::cat(&[q_grouped, k_grouped, v_grouped, z_grouped], 1)?;
-                    merged.reshape((qkvz_out, hidden_size))?
-                }
+        let merged = match weight_mode {
+            GdnWeightMode::MergedOnly => true,
+            GdnWeightMode::MergedWithFallback => vb_la.contains_tensor("in_proj_qkvz.weight"),
+        };
+        let in_proj = if merged {
+            GdnInProj::Merged {
+                qkvz: dense("in_proj_qkvz", key_dim * 2 + value_dim * 2)?,
+                ba: dense("in_proj_ba", num_v_heads * 2)?,
             }
-        };
-
-        let mut ba_w = match weight_mode {
-            GdnWeightMode::MergedOnly => dense("in_proj_ba", num_v_heads * 2)?,
-            GdnWeightMode::MergedWithFallback => {
-                if vb_la.contains_tensor("in_proj_ba.weight") {
-                    dense("in_proj_ba", num_v_heads * 2)?
-                } else {
-                    let b_w = dense("in_proj_b", num_v_heads)?;
-                    let a_w = dense("in_proj_a", num_v_heads)?;
-                    let b_grouped = b_w.reshape((num_k_heads, v_per_group, hidden_size))?;
-                    let a_grouped = a_w.reshape((num_k_heads, v_per_group, hidden_size))?;
-                    let merged = Tensor::cat(&[b_grouped, a_grouped], 1)?;
-                    merged.reshape((num_v_heads * 2, hidden_size))?
-                }
+        } else {
+            GdnInProj::Split {
+                qkv: proj("in_proj_qkv", key_dim * 2 + value_dim)?,
+                z: proj("in_proj_z", value_dim)?,
+                b: proj("in_proj_b", num_v_heads)?,
+                a: proj("in_proj_a", num_v_heads)?,
             }
         };
 
@@ -567,15 +563,10 @@ impl GatedDeltaNet {
         let mut a_log = vb_la.get(num_v_heads, "A_log")?;
 
         if let Some(ref target_dev) = isq_target_device {
-            qkvz_w = qkvz_w.to_device(target_dev)?;
-            ba_w = ba_w.to_device(target_dev)?;
             conv1d_weight = conv1d_weight.to_device(target_dev)?;
             dt_bias = dt_bias.to_device(target_dev)?;
             a_log = a_log.to_device(target_dev)?;
         }
-
-        let in_proj_qkvz = Linear::new(qkvz_w, None);
-        let in_proj_ba = Linear::new(ba_w, None);
 
         let norm = RmsNormGated::new(
             head_v_dim,
@@ -594,8 +585,7 @@ impl GatedDeltaNet {
         )?;
 
         Ok(Self {
-            in_proj_qkvz,
-            in_proj_ba,
+            in_proj,
             conv1d_weight,
             dt_bias,
             a_log,
@@ -611,60 +601,114 @@ impl GatedDeltaNet {
         })
     }
 
+    /// Records what `load` reads back, so a UQFF residual round trips into the variant it came from.
+    pub fn add_residual_tensors(&self, uvb_la: &UnVarBuilder) {
+        match &self.in_proj {
+            GdnInProj::Merged { qkvz, ba } => {
+                uvb_la
+                    .pp("in_proj_qkvz")
+                    .add_tensor("weight", qkvz.weight().clone());
+                uvb_la
+                    .pp("in_proj_ba")
+                    .add_tensor("weight", ba.weight().clone());
+            }
+            GdnInProj::Split { qkv, z, b, a } => {
+                uvb_la.pp("in_proj_qkv").add(qkv);
+                uvb_la.pp("in_proj_z").add(z);
+                uvb_la.pp("in_proj_b").add(b);
+                uvb_la.pp("in_proj_a").add(a);
+            }
+        }
+        uvb_la.add_tensor("conv1d.weight", self.conv1d_weight.clone());
+        uvb_la.add_tensor("dt_bias", self.dt_bias.clone());
+        uvb_la.add_tensor("A_log", self.a_log.clone());
+        uvb_la
+            .pp("norm")
+            .add_tensor("weight", self.norm.weight.clone());
+    }
+
+    /// (q, k, v) flat over key_dim/value_dim, z as (b, s, v_heads, head_v_dim), b and a as (b, s, v_heads).
+    fn project_in(&self, x: &Tensor) -> Result<[Tensor; 6]> {
+        let (batch_size, seq_len, _hidden) = x.dims3()?;
+        let v_per_group = self.num_v_heads / self.num_k_heads;
+        match &self.in_proj {
+            GdnInProj::Merged { qkvz, ba } => {
+                let v_group = v_per_group * self.head_v_dim;
+                let group_size_qkvz = 2 * self.head_k_dim + 2 * v_group;
+                let mixed_qkvz = qkvz.forward(x)?.reshape((
+                    batch_size,
+                    seq_len,
+                    self.num_k_heads,
+                    group_size_qkvz,
+                ))?;
+                let mixed_ba = ba.forward(x)?.reshape((
+                    batch_size,
+                    seq_len,
+                    self.num_k_heads,
+                    2 * v_per_group,
+                ))?;
+                Ok([
+                    mixed_qkvz.narrow(D::Minus1, 0, self.head_k_dim)?.reshape((
+                        batch_size,
+                        seq_len,
+                        self.key_dim,
+                    ))?,
+                    mixed_qkvz
+                        .narrow(D::Minus1, self.head_k_dim, self.head_k_dim)?
+                        .reshape((batch_size, seq_len, self.key_dim))?,
+                    mixed_qkvz
+                        .narrow(D::Minus1, 2 * self.head_k_dim, v_group)?
+                        .reshape((batch_size, seq_len, self.value_dim))?,
+                    mixed_qkvz
+                        .narrow(D::Minus1, 2 * self.head_k_dim + v_group, v_group)?
+                        .reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?,
+                    mixed_ba.narrow(D::Minus1, 0, v_per_group)?.reshape((
+                        batch_size,
+                        seq_len,
+                        self.num_v_heads,
+                    ))?,
+                    mixed_ba
+                        .narrow(D::Minus1, v_per_group, v_per_group)?
+                        .reshape((batch_size, seq_len, self.num_v_heads))?,
+                ])
+            }
+            GdnInProj::Split { qkv, z, b, a } => {
+                let qkv = qkv.forward(x)?;
+                Ok([
+                    qkv.narrow(D::Minus1, 0, self.key_dim)?,
+                    qkv.narrow(D::Minus1, self.key_dim, self.key_dim)?,
+                    qkv.narrow(D::Minus1, 2 * self.key_dim, self.value_dim)?,
+                    z.forward(x)?.reshape((
+                        batch_size,
+                        seq_len,
+                        self.num_v_heads,
+                        self.head_v_dim,
+                    ))?,
+                    b.forward(x)?,
+                    a.forward(x)?,
+                ])
+            }
+        }
+    }
+
     pub fn forward(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (batch_size, seq_len, _hidden) = x.dims3()?;
         let dtype = x.dtype();
         let v_per_group = self.num_v_heads / self.num_k_heads;
 
-        // 1. Project input
-        let mixed_qkvz = self.in_proj_qkvz.forward(x)?;
-        let mixed_ba = self.in_proj_ba.forward(x)?;
+        let [q, k, v_flat, z, b, a] = self.project_in(x)?;
 
-        // 2. Grouped head layout
-        let group_size_qkvz = 2 * self.head_k_dim + 2 * v_per_group * self.head_v_dim;
-        let mixed_qkvz =
-            mixed_qkvz.reshape((batch_size, seq_len, self.num_k_heads, group_size_qkvz))?;
-
-        let group_size_ba = 2 * v_per_group;
-        let mixed_ba = mixed_ba.reshape((batch_size, seq_len, self.num_k_heads, group_size_ba))?;
-
-        // Split within each group
-        let mut offset = 0;
-        let q = mixed_qkvz.narrow(D::Minus1, offset, self.head_k_dim)?;
-        offset += self.head_k_dim;
-        let k = mixed_qkvz.narrow(D::Minus1, offset, self.head_k_dim)?;
-        offset += self.head_k_dim;
-        let v = mixed_qkvz.narrow(D::Minus1, offset, v_per_group * self.head_v_dim)?;
-        offset += v_per_group * self.head_v_dim;
-        let z = mixed_qkvz.narrow(D::Minus1, offset, v_per_group * self.head_v_dim)?;
-
-        let b = mixed_ba.narrow(D::Minus1, 0, v_per_group)?;
-        let a = mixed_ba.narrow(D::Minus1, v_per_group, v_per_group)?;
-
-        // Reshape v, z -> (batch, seq, num_v_heads, head_v_dim)
-        let v = v.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
-        let z = z.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
-
-        // Reshape b, a -> (batch, seq, num_v_heads)
-        let b = b.reshape((batch_size, seq_len, self.num_v_heads))?;
-        let a = a.reshape((batch_size, seq_len, self.num_v_heads))?;
-
-        // Flatten q, k, v for conv1d
-        let q = q.reshape((batch_size, seq_len, self.key_dim))?;
-        let k = k.reshape((batch_size, seq_len, self.key_dim))?;
-        let v_flat = v.reshape((batch_size, seq_len, self.value_dim))?;
-
-        // 3. Concatenate q, k, v for conv1d
+        // 1. Concatenate q, k, v for conv1d
         let mixed_qkv = Tensor::cat(&[&q, &k, &v_flat], D::Minus1)?;
 
-        // 4. Apply causal conv1d (includes silu activation)
+        // 2. Apply causal conv1d (includes silu activation)
         let mixed_qkv = if cache.seqlen_offset > 0 && seq_len == 1 {
             self.causal_conv1d_update(&mixed_qkv, cache)?
         } else {
             self.causal_conv1d_full(&mixed_qkv, cache)?
         };
 
-        // 5. Split back after conv and reshape to per-head
+        // 3. Split back after conv and reshape to per-head
         let q = mixed_qkv.narrow(D::Minus1, 0, self.key_dim)?;
         let k = mixed_qkv.narrow(D::Minus1, self.key_dim, self.key_dim)?;
         let v = mixed_qkv.narrow(D::Minus1, self.key_dim * 2, self.value_dim)?;
@@ -673,7 +717,7 @@ impl GatedDeltaNet {
         let k = k.reshape((batch_size, seq_len, self.num_k_heads, self.head_k_dim))?;
         let v = v.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
 
-        // 6. Compute beta and g
+        // 4. Compute beta and g
         let (beta, g) = {
             #[cfg(feature = "cuda")]
             {
@@ -719,7 +763,7 @@ impl GatedDeltaNet {
             }
         };
 
-        // 7. If num_v_heads > num_k_heads, repeat_interleave q and k
+        // 5. If num_v_heads > num_k_heads, repeat_interleave q and k
         let (q, k) = if v_per_group > 1 {
             let q = q
                 .unsqueeze(3)?
@@ -734,16 +778,16 @@ impl GatedDeltaNet {
             (q, k)
         };
 
-        // 8. L2-normalize q and k
+        // 6. L2-normalize q and k
         let q = l2_norm(&q, 1e-6)?;
         let k = l2_norm(&k, 1e-6)?;
 
-        // 9. Apply recurrence
+        // 7. Apply recurrence
         let y = gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?;
 
         cache.seqlen_offset += seq_len;
 
-        // 10. Apply RMSNormGated
+        // 8. Apply RMSNormGated
         let z_shape = z.shape().clone();
         let y = y.reshape(((), self.head_v_dim))?;
         let z = z.reshape(((), self.head_v_dim))?;
@@ -751,7 +795,7 @@ impl GatedDeltaNet {
         let y = y.reshape(z_shape)?;
         let y = y.reshape((batch_size, seq_len, self.value_dim))?;
 
-        // 11. Output projection
+        // 9. Output projection
         let y_proj = y;
         let res = self.out_proj.forward(&y_proj)?;
         Ok(res)
@@ -941,6 +985,134 @@ impl GatedDeltaNet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use hanzo_quant::{QuantMethodConfig, UnquantLinear};
+
+    fn synthetic(n: usize, seed: usize, dev: &Device) -> Result<Tensor> {
+        let v = (0..n)
+            .map(|i| (((i * 2654435761 + seed * 40503) % 1009) as f32 / 504.0) - 1.0)
+            .collect::<Vec<_>>();
+        Tensor::from_vec(v, n, dev)
+    }
+
+    fn unquant(w: Tensor) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(w, None)),
+        )?))
+    }
+
+    // The split projections and the merged grouped-head matrix must be the same linear map. The merge
+    // recipe written out here is the HF layout's definition, not a call into the code under test.
+    #[test]
+    fn gdn_split_in_proj_matches_merged() -> Result<()> {
+        let dev = Device::Cpu;
+        let (num_k_heads, num_v_heads, head_k_dim, head_v_dim) = (2usize, 4usize, 6usize, 8usize);
+        let (hidden, conv_kernel_size) = (10usize, 4usize);
+        let key_dim = num_k_heads * head_k_dim;
+        let value_dim = num_v_heads * head_v_dim;
+        let v_per_group = num_v_heads / num_k_heads;
+        let conv_dim = key_dim * 2 + value_dim;
+        let rows = |n: usize, seed: usize| -> Result<Tensor> {
+            synthetic(n * hidden, seed, &dev)?.reshape((n, hidden))
+        };
+
+        let qkv_w = rows(key_dim * 2 + value_dim, 1)?;
+        let z_w = rows(value_dim, 2)?;
+        let b_w = rows(num_v_heads, 3)?;
+        let a_w = rows(num_v_heads, 4)?;
+
+        let group = |t: &Tensor, per_head: usize| -> Result<Tensor> {
+            t.reshape((num_k_heads, per_head, hidden))
+        };
+        let qkvz_w = Tensor::cat(
+            &[
+                group(&qkv_w.narrow(0, 0, key_dim)?, head_k_dim)?,
+                group(&qkv_w.narrow(0, key_dim, key_dim)?, head_k_dim)?,
+                group(
+                    &qkv_w.narrow(0, key_dim * 2, value_dim)?,
+                    v_per_group * head_v_dim,
+                )?,
+                group(&z_w, v_per_group * head_v_dim)?,
+            ],
+            1,
+        )?
+        .reshape((key_dim * 2 + value_dim * 2, hidden))?;
+        let ba_w = Tensor::cat(&[group(&b_w, v_per_group)?, group(&a_w, v_per_group)?], 1)?
+            .reshape((num_v_heads * 2, hidden))?;
+
+        let conv1d_weight = synthetic(conv_dim * conv_kernel_size, 5, &dev)?.reshape((
+            conv_dim,
+            1,
+            conv_kernel_size,
+        ))?;
+        let dt_bias = synthetic(num_v_heads, 6, &dev)?;
+        let a_log = synthetic(num_v_heads, 7, &dev)?;
+        let norm_weight = synthetic(head_v_dim, 8, &dev)?;
+        let out_w = synthetic(hidden * value_dim, 9, &dev)?.reshape((hidden, value_dim))?;
+
+        let build = |in_proj: GdnInProj| -> Result<GatedDeltaNet> {
+            Ok(GatedDeltaNet {
+                in_proj,
+                conv1d_weight: conv1d_weight.clone(),
+                dt_bias: dt_bias.clone(),
+                a_log: a_log.clone(),
+                norm: RmsNormGated::from_weight(norm_weight.clone(), 1e-6),
+                out_proj: unquant(out_w.clone())?,
+                num_k_heads,
+                num_v_heads,
+                head_k_dim,
+                head_v_dim,
+                conv_kernel_size,
+                key_dim,
+                value_dim,
+            })
+        };
+        let merged = build(GdnInProj::Merged {
+            qkvz: Linear::new(qkvz_w, None),
+            ba: Linear::new(ba_w, None),
+        })?;
+        let split = build(GdnInProj::Split {
+            qkv: unquant(qkv_w)?,
+            z: unquant(z_w)?,
+            b: unquant(b_w)?,
+            a: unquant(a_w)?,
+        })?;
+
+        let fresh_cache = || -> Result<GdnLayerCache> {
+            Ok(GdnLayerCache {
+                conv_state: Tensor::zeros((1, conv_dim, conv_kernel_size), DType::F32, &dev)?,
+                recurrent_state: Tensor::zeros(
+                    (1, num_v_heads, head_k_dim, head_v_dim),
+                    DType::F32,
+                    &dev,
+                )?,
+                seqlen_offset: 0,
+            })
+        };
+        let mut merged_cache = fresh_cache()?;
+        let mut split_cache = fresh_cache()?;
+        let mut worst = 0f32;
+        // Prefill then decode: the second step reads the conv and recurrent state the first one wrote.
+        for (step, seq_len) in [5usize, 1].into_iter().enumerate() {
+            let x = synthetic(seq_len * hidden, 20 + step, &dev)?.reshape((1, seq_len, hidden))?;
+            let ym = merged
+                .forward(&x, &mut merged_cache)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let ys = split
+                .forward(&x, &mut split_cache)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            assert_eq!(ym.len(), ys.len());
+            worst = ym
+                .iter()
+                .zip(&ys)
+                .fold(worst, |acc, (m, s)| acc.max((m - s).abs()));
+        }
+        eprintln!("[gdn split-vs-merged] max_abs={worst:.3e}");
+        assert!(worst < 1e-5, "split != merged, max_abs={worst}");
+        Ok(())
+    }
 
     // Scalar reimplementation of the Vulkan gdn_step.comp single-step math (one (bh, v) state column,
     // looping k). q is pre-scaled by the caller, exactly as gated_delta_rule_recurrence applies the
