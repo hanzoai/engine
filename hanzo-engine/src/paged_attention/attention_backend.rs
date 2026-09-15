@@ -1,6 +1,6 @@
 use hanzo_ml::Tensor;
 
-use crate::pipeline::text_models_inputs_processor::FLASHINFER_PREFILL_MAX_GROUP_SIZE;
+use crate::pipeline::text_models_inputs_processor::FLASHINFER_DECODE_GROUP_SIZES;
 
 #[cfg(any(
     all(feature = "cuda", target_family = "unix"),
@@ -74,6 +74,6 @@ impl AttentionBackend for FlashInferAttentionBackend {
         let q_group = spec.q_heads / spec.kv_heads;
         spec.k_head_dim == spec.v_head_dim
             && matches!(spec.k_head_dim, 64 | 128 | 256 | 512)
-            && q_group <= FLASHINFER_PREFILL_MAX_GROUP_SIZE
+            && FLASHINFER_DECODE_GROUP_SIZES.contains(&q_group)
     }
 }

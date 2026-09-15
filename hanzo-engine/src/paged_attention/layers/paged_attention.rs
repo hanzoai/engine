@@ -852,6 +852,9 @@ impl PagedAttention {
             );
             match decoded {
                 Ok(out) => return Ok(out),
+                // The standard kernel reads metadata that is only built when it is the chosen
+                // backend, so falling back is only possible if this layer also asked for it.
+                Err(e) if resolve_block_tables(&dev).is_none() => return Err(e),
                 Err(e) => {
                     if !FLASHINFER_DECODE_FELL_BACK.swap(true, Ordering::Relaxed) {
                         tracing::warn!("{e}; using the standard paged-attention decode instead");

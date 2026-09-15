@@ -69,6 +69,9 @@ pub mod text_models_inputs_processor {
     const FLASHINFER_DECODE_SPLIT_PAGES: usize = 1;
     pub(crate) const FLASHINFER_PREFILL_TILE_Q: usize = 64;
     pub(crate) const FLASHINFER_PREFILL_MAX_GROUP_SIZE: usize = 8;
+    /// The GQA group sizes FlashInfer's decode kernel instantiates (DISPATCH_GQA_GROUP_SIZE);
+    /// it throws on anything else, and Qwen3.5-27B's 6 is one of those.
+    pub(crate) const FLASHINFER_DECODE_GROUP_SIZES: [usize; 5] = [1, 2, 3, 4, 8];
     const TABLE_SIGNATURE_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
     const TABLE_SIGNATURE_PRIME: u64 = 0x100000001b3;
 
