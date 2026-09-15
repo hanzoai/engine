@@ -179,7 +179,8 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request) -> Response {
     if parts.uri.path() == "/v1/messages" {
         if let Some(body) = json.as_ref() {
             if set.statuses().iter().any(|r| r.max_context != 0) {
-                hints.token_counts = count_prompt_tokens(&state, &set, &parts.headers, body).await;
+                hints.token_counts =
+                    count_prompt_tokens(&state, &set, &parts.headers, body, hints.images).await;
             }
         }
     }
@@ -187,6 +188,7 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request) -> Response {
     let eligible: Vec<_> = workers
         .iter()
         .filter(|r| hints.target.as_ref().is_none_or(|id| *id == r.id))
+        .filter(|r| !hints.images || r.vision)
         .collect();
     if !eligible.is_empty()
         && eligible
@@ -666,7 +668,29 @@ fn routing_hints(headers: &HeaderMap, body: Option<&Value>) -> RoutingHints {
         target: hint("x-target-replica", "target_replica").map(str::to_owned),
         approx_tokens: body.map(estimate_required_tokens).unwrap_or(0),
         token_counts: Default::default(),
+        images: body.is_some_and(carries_images),
     }
+}
+
+/// Image parts in any dialect: Anthropic `image` blocks (also inside tool
+/// results), OpenAI chat `image_url` parts, Responses `input_image` items.
+fn carries_images(body: &Value) -> bool {
+    fn scan(value: &Value) -> bool {
+        match value {
+            Value::Array(items) => items.iter().any(scan),
+            Value::Object(fields) => {
+                matches!(
+                    fields.get("type").and_then(Value::as_str),
+                    Some("image" | "image_url" | "input_image")
+                ) || fields.values().any(scan)
+            }
+            _ => false,
+        }
+    }
+    ["messages", "input"]
+        .iter()
+        .filter_map(|key| body.get(*key))
+        .any(scan)
 }
 
 fn output_tokens(body: &Value) -> usize {
@@ -709,11 +733,12 @@ async fn count_prompt_tokens(
     set: &ReplicaSet,
     headers: &HeaderMap,
     body: &Value,
+    images: bool,
 ) -> HashMap<String, usize> {
     let workers = set
         .statuses()
         .into_iter()
-        .filter(|r| r.healthy && r.max_context != 0);
+        .filter(|r| r.healthy && r.max_context != 0 && (r.vision || !images));
     let counts = futures::future::join_all(workers.map(|worker| async move {
         let mut request = body.clone();
         if let Some(model) = worker
@@ -841,6 +866,8 @@ struct RegisterBody {
     capacity: usize,
     #[serde(default)]
     max_context: usize,
+    #[serde(default)]
+    vision: Option<bool>,
     #[serde(default = "registration_weight")]
     weight: u32,
     #[serde(default)]
@@ -863,6 +890,7 @@ async fn add_replica(
             url: body.url,
             capacity: body.capacity,
             max_context: body.max_context,
+            vision: body.vision.unwrap_or(true),
             weight: body.weight,
             roles: body.roles,
             upstream_model: body.upstream_model,
@@ -1615,6 +1643,30 @@ mod e2e {
         normalize_reasoning_effort(&mut v2);
         assert_eq!(v2["output_config"]["effort"], "low");
         assert_eq!(v2["reasoning_effort"], "medium");
+    }
+
+    #[test]
+    fn images_are_found_in_every_dialect_and_nowhere_else() {
+        let image =
+            |part: Value| serde_json::json!({"messages": [{"role": "user", "content": [part]}]});
+        assert!(carries_images(&image(
+            serde_json::json!({"type": "image", "source": {}})
+        )));
+        assert!(carries_images(&image(
+            serde_json::json!({"type": "image_url", "image_url": {"url": "data:"}})
+        )));
+        assert!(carries_images(&image(
+            serde_json::json!({"type": "tool_result", "content": [{"type": "image", "source": {}}]})
+        )));
+        assert!(carries_images(
+            &serde_json::json!({"input": [{"role": "user", "content": [{"type": "input_image"}]}]})
+        ));
+        assert!(!carries_images(&image(
+            serde_json::json!({"type": "text", "text": "image"})
+        )));
+        assert!(!carries_images(
+            &serde_json::json!({"tools": [{"input_schema": {"type": "image"}}], "messages": []})
+        ));
     }
 
     #[test]

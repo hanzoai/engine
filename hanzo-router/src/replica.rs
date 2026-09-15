@@ -40,6 +40,9 @@ pub struct Replica {
     /// Per-request prompt + generation token ceiling. Zero is unspecified.
     #[serde(default)]
     pub max_context: usize,
+    /// Accepts image input; requests carrying images skip replicas without it.
+    #[serde(default = "default_vision")]
+    pub vision: bool,
     /// Relative measured throughput for allocating new sessions (100 = baseline).
     #[serde(default = "default_weight")]
     pub weight: u32,
@@ -55,6 +58,10 @@ fn default_weight() -> u32 {
     100
 }
 
+fn default_vision() -> bool {
+    true
+}
+
 impl Replica {
     pub fn new(url: impl Into<String>) -> Self {
         let url = url.into();
@@ -63,6 +70,7 @@ impl Replica {
             url,
             capacity: 0,
             max_context: 0,
+            vision: true,
             weight: default_weight(),
             roles: Vec::new(),
             upstream_model: None,
@@ -243,6 +251,7 @@ impl ReplicaSet {
                 inflight: n.inflight.load(Ordering::Acquire),
                 capacity: self.slots(n),
                 max_context: n.replica.max_context,
+                vision: n.replica.vision,
                 weight: n.settings.read().unwrap().weight,
                 roles: n.settings.read().unwrap().roles.clone(),
                 upstream_model: n.replica.upstream_model.clone(),
@@ -299,6 +308,7 @@ pub struct ReplicaStatus {
     pub inflight: usize,
     pub capacity: usize,
     pub max_context: usize,
+    pub vision: bool,
     pub weight: u32,
     pub roles: Vec<String>,
     pub upstream_model: Option<String>,

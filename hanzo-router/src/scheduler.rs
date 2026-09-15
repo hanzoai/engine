@@ -22,6 +22,8 @@ pub struct RoutingHints {
     pub approx_tokens: usize,
     /// Prompt + output tokens counted by each worker's own tokenizer.
     pub token_counts: HashMap<String, usize>,
+    /// The request carries image input.
+    pub images: bool,
 }
 
 impl RoutingHints {
@@ -112,6 +114,7 @@ impl ReplicaSet {
         let healthy = |n: &&Arc<Node>| {
             n.healthy.load(Ordering::Acquire)
                 && !excluded.contains(&n.replica.id)
+                && (!hints.images || n.replica.vision)
                 && (n.replica.max_context == 0
                     || hints.required_tokens(&n.replica.id) <= n.replica.max_context)
         };
@@ -272,6 +275,23 @@ mod tests {
         p.mark_unhealthy("spark");
         assert!(p.pick_agent(&h, &HashSet::new(), now).is_none());
     }
+    #[test]
+    fn images_skip_replicas_without_vision_even_when_pinned() {
+        let spark = Replica::new("spark");
+        let mut evo = Replica::new("evo");
+        evo.vision = false;
+        evo.roles = vec!["main".into()];
+        let p = ReplicaSet::new([spark, evo], 8);
+        let now = Instant::now();
+        let mut h = hints("pasted-image");
+        h.role = Some("main".into());
+        assert_eq!(pick(&p, &h, now).id(), "evo");
+        h.images = true;
+        assert_eq!(pick(&p, &h, now).id(), "spark");
+        p.mark_unhealthy("spark");
+        assert!(p.pick_agent(&h, &HashSet::new(), now).is_none());
+    }
+
     fn pick(pool: &ReplicaSet, h: &RoutingHints, now: Instant) -> Lease {
         pool.pick_agent(h, &HashSet::new(), now).unwrap()
     }
