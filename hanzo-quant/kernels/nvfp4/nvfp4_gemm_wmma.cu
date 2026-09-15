@@ -6,7 +6,7 @@
  * NVFP4 scales are FP8 E4M3 per 16 weights with one FP32 scale for the tensor,
  * so each uint4 row load covers two blocks and reads two scales.
  *
- * Block tile 64x64x64, 8 warps (4x2), 256 threads; each warp owns one 16-row
+ * Block tile 64x64x32, 8 warps (4x2), 256 threads; each warp owns one 16-row
  * M sub-tile and two 16-column N sub-tiles.
  */
 
@@ -126,11 +126,13 @@ constexpr int BLOCK_THREADS = WARPS_PER_BLOCK * 32; // 256
 
 constexpr int M_BLK = WARPS_M * WMMA_M_DIM;      // 64
 constexpr int N_BLK = WARPS_N * 2 * WMMA_N_DIM;  // 64
-// One uint4 covers 32 weights; two per row amortize the A-tile reload and the barrier
-// over 64 columns of K instead of 32.
-constexpr int PAIRS_PER_ROW = 2;
-constexpr int K_BLK = NVFP4_BLOCK_SIZE * 2 * PAIRS_PER_ROW; // 64
-constexpr int WMMA_K_STEPS = K_BLK / WMMA_K_DIM;            // 4
+// One uint4 covers 32 weights. Two per row would halve the A-tile reloads and the barriers,
+// and measured 15-22% SLOWER in-engine on a GB10 (254 vs 297 T/s at pp178, 280 vs 358 at
+// pp1291, 255 vs 310 at pp12452): the extra 16 KB of shared memory costs more occupancy than
+// the reuse buys. Keep one.
+constexpr int PAIRS_PER_ROW = 1;
+constexpr int K_BLK = NVFP4_BLOCK_SIZE * 2 * PAIRS_PER_ROW; // 32
+constexpr int WMMA_K_STEPS = K_BLK / WMMA_K_DIM;            // 2
 
 using VecT = float4;
 constexpr int VEC_SIZE = 8; // float4 = 16 bytes = 8 fp16/bf16 values
