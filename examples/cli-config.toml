@@ -15,13 +15,16 @@ mode = "auto"
 
 # OS-level sandbox applied to model-generated code execution.
 # mode = "auto"|"on"|"off" (auto = on for Linux/macOS, no-op elsewhere)
-# Limits override SandboxPolicy::default() when set.
+# profile = "developer"|"restricted" (developer is the default once agent or code tools are on)
+# network defaults to "full" for developer and "loopback" for restricted.
+# Limits and network override the profile defaults when set.
 [sandbox]
 mode = "auto"
+profile = "developer"
 max_memory_mb = 2048
-max_cpu_secs = 300
+max_cpu_secs = 600
 max_procs = 64
-network = "loopback"  # "none" | "loopback" | "full"
+# network = "loopback"  # "none" | "loopback" | "full"
 
 [[models]]
 kind = "auto"

@@ -31,11 +31,26 @@ The default policy:
 | field | default |
 |---|---|
 | `max_memory_mb` | 2048 |
-| `max_cpu_secs` | 300 |
+| `max_cpu_secs` | 600, raised further when a code execution timeout is longer |
 | `max_procs` | 64 additional UID tasks on Linux |
 | `max_open_fds` | 1024 |
 | `max_file_sz_mb` | 256 |
-| `network` | `loopback` |
+| `network` | profile-dependent: `loopback` for `restricted`, `full` for `developer` |
+
+## Profiles
+
+A profile is the shape of the policy before your own overrides:
+
+| profile | network | filesystem and environment |
+|---|---|---|
+| `restricted` | `loopback` | the built-in allowlist only |
+| `developer` | `full` | adds the toolchain roots on `PATH`, `HOME` and the usual version-manager variables (`RUSTUP_HOME`, `PYENV_ROOT`, `NVM_DIR`, `CONDA_PREFIX`, ...) |
+
+`--sandbox-profile` picks one. Without it, `--agent` and `--enable-code-execution` select
+`developer` and everything else selects `restricted`: a restricted policy hides the interpreters
+and libraries a model-run command needs, so every command fails on import. Any explicit flag still
+wins, so `--sandbox-profile developer --sandbox-network loopback` is a developer filesystem with no
+outbound network.
 
 On macOS, the resource cap fields are accepted for configuration compatibility but are not enforced by Seatbelt. Filesystem and network isolation still apply.
 
@@ -48,8 +63,9 @@ CLI/TOML expose the common controls: mode, memory, CPU, process count, and netwo
 ```toml
 [sandbox]
 mode          = "auto"      # "auto" | "on" | "off"
+profile       = "developer" # "restricted" | "developer"
 max_memory_mb = 2048
-max_cpu_secs  = 300
+max_cpu_secs  = 600
 max_procs     = 64
 network       = "loopback"  # "none" | "loopback" | "full"
 ```
@@ -58,6 +74,7 @@ network       = "loopback"  # "none" | "loopback" | "full"
 
 ```
 --sandbox {auto|on|off}              default: auto
+--sandbox-profile {restricted|developer}  default: developer with agent tools, else restricted
 --sb-max-memory-mb <USIZE>
 --sb-max-cpu-secs  <USIZE>
 --sb-max-procs     <USIZE>
