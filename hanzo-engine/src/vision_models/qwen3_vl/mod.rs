@@ -48,6 +48,27 @@ pub struct Qwen3VLModel {
 /// Compute 3D MRoPE position IDs and position deltas for Qwen3 VL models.
 /// Shared between Qwen3VL models.
 #[allow(clippy::too_many_arguments)]
+/// Running count of attended tokens per row, which is what MRoPE wants for a text-only batch.
+/// candle spells `cumsum` as a triangular matmul, so at 124K tokens it asks for a 124K x 124K
+/// matrix and the launch fails; the scan itself is linear, so it runs on the host.
+pub(crate) fn positions_from_mask(mask: &Tensor) -> Result<Tensor> {
+    let (batch, seq_len) = mask.dims2()?;
+    let flat: Vec<f32> = mask
+        .to_dtype(DType::F32)?
+        .to_device(&Device::Cpu)?
+        .flatten_all()?
+        .to_vec1()?;
+    let mut positions = Vec::with_capacity(flat.len());
+    for row in flat.chunks(seq_len) {
+        let mut attended = 0f32;
+        for m in row {
+            attended += m;
+            positions.push(attended - 1.0);
+        }
+    }
+    Tensor::from_vec(positions, (batch, seq_len), mask.device())
+}
+
 pub(crate) fn get_rope_index(
     input_ids: &Tensor,
     image_grid_thw: Option<&Tensor>,
@@ -317,7 +338,7 @@ pub(crate) fn get_rope_index(
 
         Ok((position_ids, mrope_position_deltas))
     } else if let AttentionMask::Custom(attention_mask) = attention_mask {
-        let position_ids = (attention_mask.to_dtype(DType::F32)?.cumsum(D::Minus1)? - 1f64)?;
+        let position_ids = positions_from_mask(attention_mask)?;
         let position_ids = masked_fill(&position_ids, &attention_mask.eq(0f64)?, 1i64)?;
         let position_ids = position_ids.unsqueeze(0)?.repeat((3, 1, 1))?;
 

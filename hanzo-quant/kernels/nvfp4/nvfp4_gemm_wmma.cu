@@ -4,9 +4,9 @@
  * Same shape as the MXFP4 WMMA kernel: dequantize a weight tile into shared
  * memory with vectorized uint4 loads and the E2M1 LUT, then run 16x16x16 MMA.
  * NVFP4 scales are FP8 E4M3 per 16 weights with one FP32 scale for the tensor,
- * so a K_BLK of 32 covers two blocks and reads two scales.
+ * so each uint4 row load covers two blocks and reads two scales.
  *
- * Block tile 64x64x32, 8 warps (4x2), 256 threads; each warp owns one 16-row
+ * Block tile 64x64x64, 8 warps (4x2), 256 threads; each warp owns one 16-row
  * M sub-tile and two 16-column N sub-tiles.
  */
 
@@ -126,8 +126,11 @@ constexpr int BLOCK_THREADS = WARPS_PER_BLOCK * 32; // 256
 
 constexpr int M_BLK = WARPS_M * WMMA_M_DIM;      // 64
 constexpr int N_BLK = WARPS_N * 2 * WMMA_N_DIM;  // 64
-constexpr int K_BLK = NVFP4_BLOCK_SIZE * 2;      // 32, one uint4 per row
-constexpr int WMMA_K_STEPS = K_BLK / WMMA_K_DIM; // 2
+// One uint4 covers 32 weights; two per row amortize the A-tile reload and the barrier
+// over 64 columns of K instead of 32.
+constexpr int PAIRS_PER_ROW = 2;
+constexpr int K_BLK = NVFP4_BLOCK_SIZE * 2 * PAIRS_PER_ROW; // 64
+constexpr int WMMA_K_STEPS = K_BLK / WMMA_K_DIM;            // 4
 
 using VecT = float4;
 constexpr int VEC_SIZE = 8; // float4 = 16 bytes = 8 fp16/bf16 values
@@ -194,19 +197,24 @@ __launch_bounds__(BLOCK_THREADS) __global__
       const int gn = n_base + ln;
       T *dst = &B_sh[ln * K_BLK];
       if (gn < N) {
-        uint4 w_vec = *reinterpret_cast<const uint4 *>(
-            &weight[(size_t)gn * (K / 2) + k_base / 2]);
-        const size_t s_off =
+        const size_t w_row = (size_t)gn * (K / 2) + k_base / 2;
+        const size_t s_row =
             (size_t)gn * scale_stride + k_base / NVFP4_BLOCK_SIZE;
-        const float s0 =
-            e4m3_to_float(__ldg(&weight_scale[s_off])) * global_scale * 0.5f;
-        const float s1 = e4m3_to_float(__ldg(&weight_scale[s_off + 1])) *
-                         global_scale * 0.5f;
-
-        dequant_store_8<T>(w_vec.x, s0, LUT0, LUT1, LUT2, LUT3, dst);
-        dequant_store_8<T>(w_vec.y, s0, LUT0, LUT1, LUT2, LUT3, dst + 8);
-        dequant_store_8<T>(w_vec.z, s1, LUT0, LUT1, LUT2, LUT3, dst + 16);
-        dequant_store_8<T>(w_vec.w, s1, LUT0, LUT1, LUT2, LUT3, dst + 24);
+#pragma unroll
+        for (int p = 0; p < PAIRS_PER_ROW; p++) {
+          uint4 w_vec =
+              *reinterpret_cast<const uint4 *>(&weight[w_row + p * 16]);
+          const float s0 = e4m3_to_float(__ldg(&weight_scale[s_row + p * 2])) *
+                           global_scale * 0.5f;
+          const float s1 =
+              e4m3_to_float(__ldg(&weight_scale[s_row + p * 2 + 1])) *
+              global_scale * 0.5f;
+          T *d = dst + p * 32;
+          dequant_store_8<T>(w_vec.x, s0, LUT0, LUT1, LUT2, LUT3, d);
+          dequant_store_8<T>(w_vec.y, s0, LUT0, LUT1, LUT2, LUT3, d + 8);
+          dequant_store_8<T>(w_vec.z, s1, LUT0, LUT1, LUT2, LUT3, d + 16);
+          dequant_store_8<T>(w_vec.w, s1, LUT0, LUT1, LUT2, LUT3, d + 24);
+        }
       } else {
 #pragma unroll
         for (int k = 0; k < K_BLK; k++)
@@ -297,7 +305,7 @@ launch_nvfp4_matmul_wmma_f16(const __half *input, const uint8_t *weight,
                              const uint8_t *weight_scale, float global_scale,
                              const __half *bias, __half *output, int M, int N,
                              int K, bool has_bias, cudaStream_t stream) {
-  if (M <= 4) {
+  if (M <= 4 || K % nvfp4_wmma::K_BLK != 0) {
     launch_nvfp4_matmul_f16(input, weight, weight_scale, global_scale, bias,
                             output, M, N, K, has_bias, stream);
     return;
@@ -318,7 +326,7 @@ extern "C" void launch_nvfp4_matmul_wmma_bf16(
     const uint8_t *weight_scale, float global_scale, const __nv_bfloat16 *bias,
     __nv_bfloat16 *output, int M, int N, int K, bool has_bias,
     cudaStream_t stream) {
-  if (M <= 4) {
+  if (M <= 4 || K % nvfp4_wmma::K_BLK != 0) {
     launch_nvfp4_matmul_bf16(input, weight, weight_scale, global_scale, bias,
                              output, M, N, K, has_bias, stream);
     return;

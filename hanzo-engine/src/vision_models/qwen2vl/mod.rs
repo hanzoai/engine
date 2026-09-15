@@ -252,7 +252,7 @@ impl Qwen2VLModel {
             .unsqueeze(1)?;
             Ok((position_ids, mrope_position_deltas))
         } else if let AttentionMask::Custom(attention_mask) = attention_mask {
-            let position_ids = (attention_mask.to_dtype(DType::F32)?.cumsum(D::Minus1)? - 1f64)?;
+            let position_ids = crate::vision_models::qwen3_vl::positions_from_mask(attention_mask)?;
             let position_ids = masked_fill(&position_ids, &attention_mask.eq(0f64)?, 1i64)?;
             let position_ids = position_ids.unsqueeze(0)?.repeat((3, 1, 1))?;
 
