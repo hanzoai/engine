@@ -54,6 +54,85 @@ Decisions in the merge:
 - **Known loss:** Qwen2.5-VL video timing in MRoPE (`second_per_grid_ts`), to re-add inside upstream's
   `compute_rope_index`.
 
+## evo: prefill is flat on both backends — the cause is above the backend (2026-09-15)
+
+Measured in a restored window, llama.cpp 38a5b42d, Qwen3.8-27B Q6_K, Vulkan RADV Mesa 25.2.8, fa on,
+ub 2048 / b 4096, np 4, 3 runs per point:
+
+| prompt tokens | prefill T/s | decode T/s | TTFT |
+|---|---|---|---|
+| 276 | 225 | 9.00 | 1.26 s |
+| 1,468 | 236 | 9.10 | 6.25 s |
+| 11,750 | 224 | 8.57 | 52.96 s |
+| 4 clients @1.3K | — | 12.6 aggregate, 7.13/stream | 22.9 s |
+
+**The shape is the finding.** Prefill does not improve with prompt length — 225 T/s at 276 tokens and 224
+at 11,750 — while the same build on spark's CUDA climbs 362 to 630 over that range. A prefill flat in the
+prompt length is doing per-token work that should be batched, so the gap on evo is not a constant factor
+to shave. Whether ROCm shows the same shape decides where evo effort goes: if ROCm climbs, ROCm is the
+path and Vulkan prefill is a dead end; if both are flat, the cause is above the backend and our engine
+inherits it.
+
+**ROCm answers the question, and the answer is uncomfortable.** Same file, same flags, 3 runs, median
+prefill T/s by prompt length (~200 / 1.3K / 12.5K):
+
+| build | ~200 | ~1.3K | ~12.5K |
+|---|---|---|---|
+| evo, ROCm 7.13 gfx1151 | 208 | 249 | 242 |
+| evo, Vulkan RADV | 225 | 236 | 224 |
+| spark, CUDA 13.0 sm_121 | 362 | 553 | 630 |
+
+Both evo backends sit in a 208-249 band whatever the prompt length, while CUDA nearly doubles over the
+same range. So this is not a Vulkan defect and swapping backends does not fix it: longer prompts buy
+spark more work per pass and buy evo nothing. **Our engine will inherit this on evo unless it batches
+prefill differently there.** Between the two, ROCm leads at depth (242 vs 224 at 12.5K) and Vulkan
+decodes slightly faster (9.10 vs 8.56 at 1.3K); pick ROCm for prefill-at-depth and record that the
+choice is worth under 10%. Quality 4/4 at temperature 0 on both.
+
+**Production consequence, worth keeping:** 53 s to first token at 12.5K and 22.9 s with four clients is
+what the fleet feels when evo serves alone during a spark window. It is the argument for keeping both
+hosts up and for the router preferring spark on long prompts.
+
+## Claude Code against our stack: what upstream does not fix (2026-09-15)
+
+Measured while porting upstream's Anthropic surface. Of the four things that break Claude Code against
+this cluster, upstream fixes none:
+
+- `tool_reference` blocks (what ToolSearch results are) — 400.
+- `document` blocks in tool results — 400.
+- MCP image shapes (`data` + `mimeType`) — base64 dumped into the prompt as text.
+- Server-side `tool_choice` — half-fixed: it recognises `web_search_*` and `code_execution_*` only, so
+  `bash_*`, `text_editor_*` and `computer_*` still 400 for want of a schema.
+
+Its `count_tokens` restructuring is the real fix and we took it.
+
+**Where each is handled matters.** hanzo-engine now renders `tool_reference` natively, but the pool is
+served by SGLang on spark and llama-server on evo, so hanzo-router's rewrite is what actually keeps
+Claude Code working today and must stay until the engine serves the fleet.
+
+**Deliberately not ported**, because the chains run to ~22k lines and would tear out our router work:
+upstream's error-codes, skills, `/v1/responses` and OpenAI tool-surface commits (`ApiError`,
+`skill_store`, `OpenAiToolSurface`, `StreamOutcomeHandle`), the tool-call lifecycle and the forced-decode
+half of `required`, and the agentic file-surfacing commits, which live in a `shell.rs` we do not have.
+
+## Cluster toolchain (2026-09-15)
+
+- **spark** driver 580 caps CUDA at 13.0, so cuTile (needs 13.2+) could not build. CUDA 13.4.1 now sits
+  beside 13.0; `/usr/local/cuda` still points at 13.0 because SGLang pins that path. Build with
+  `CUDA_HOME=/usr/local/cuda-13.4`, run with `LD_LIBRARY_PATH=/usr/local/cuda-13.4/compat:...lib64`,
+  which is a newer user-mode driver on the old kernel module. No driver upgrade, no reboot.
+- **A CUDA build script pins the compiler first, then probes the version with that same path.**
+  `cudaforge` resolves `NVCC` → PATH → `CUDA_HOME`, so PATH wins by default and a host with two toolkits
+  compiles with one and gates features on the other. hanzo-quant, hanzo-engine, hanzo-paged-attn and
+  hanzo-flash-attn each carry the same pin, and the four must agree.
+- **hanzo-ml** carries the newer framework APIs the merge needs (`barrier_pool`, `indexed_gemv`,
+  `gemv_fused_shared_lhs`, quantized `embedding`, safetensors 0.8, `GgmlDType::block_align`). Storage
+  locks moved to parking_lot, so `storage_and_layout()` returns `StorageRef`, not a std guard.
+- **`tools/merge-audit.sh` gates the merge.** It fails unless every upstream-added file is present and
+  compiled, deliberately removed with a reason in `tools/merge-audit-removed.txt`, or renamed to a path
+  that exists; a removal entry whose file reappears is itself a failure. It also knows that `main.rs`,
+  `include!` and `#[path]` compile a file, not only `mod`.
+
 ## Canonical role in the Hanzo model
 
 - A **real implementation repo** (native inference) — NOT an SDK, NOT a discovery/wrapper repo. It *serves* the `/v1` API that the cloud SDK family calls.
@@ -603,6 +682,44 @@ this session's GB10 (sm_121, 273 GB/s LPDDR5X, 128 GB unified) measurements. **T
 constraint for batch-1 decode is MEMORY BANDWIDTH (~11 GB read/token); every win = fewer
 bytes/token or higher BW utilization. Compute-side FP4 tensor-core gains are IRRELEVANT at
 batch-1 (and broken on sm_121).**
+
+## The window bug, and what it teaches about this model (2026-09-15)
+
+Found while onboarding the vision variant; it was present in both ports and neither's tests caught it,
+because they pinned the layer *mode* and never the window.
+
+- **`compress_ratios[il]` selects a layer's compressor, not its context.** Read as "no window", it gave
+  the ratio-0 layers — and on the safetensors path the ratio-4 `Indexed` layers too, about half the
+  model — unbounded attention, against a reference that windows every layer (its KV cache for those
+  layers is `window_size` long) and a llama.cpp that marks every layer SWA (`set_swa_pattern(0)`).
+- **Setting `SdpaParams.sliding_window` is not enough.** Every shipped checkpoint carries `attn_sinks`
+  on all 43 layers, so `run_attention` dispatches to the sinks backend *before* the flash block. head_dim
+  512 misses every templated sinks kernel, and only the fused CUDA decode branch (q_len 1..=8, no mask)
+  reads `window_size`. CUDA prefill, Metal and CPU honour the mask alone, so the window must also arrive
+  as a mask or a KV slice.
+- **The old path was worse than unwindowed.** With flash prefill on by default, CUDA prefill at
+  q_len > 8 produced `CausalFlash`, which carries no tensor, and reached the unfused sinks path with no
+  mask at all: non-causal attention. `combine_with_mask` needs a base tensor, so DSA selection was
+  silently disabled on the Indexed layers as well. Any earlier number from that path measured a
+  different model. The GGUF path was unaffected — it has always used `CausalMaskConfig::gguf()`.
+- **Forcing a custom mask costs almost nothing here.** Flash is unreachable while sinks preempt it, and
+  the eager sinks path already materialises the scores, so the mask adds one L² plane beside 64·L².
+  Passing the window to flash instead only pays off once the sinks backend can serve head_dim 512.
+
+### Make it unrepresentable, don't remember it (queued)
+
+The root cause has exactly two instances, both DeepSeek-V4 and both fixed (`deepseek4.rs`,
+`deepseek4_mtp.rs`); the GGUF window bug is a sibling, not the same cause. Counted with the right
+predicate — `sinks: Some(`, since grepping `sinks` also matches `sinks: None` — only three files in the
+crate load sinks at all, and the gpt-oss pair is safe because head_dim 64 hits a templated kernel that
+applies causality itself.
+
+Two instances is not an argument for vigilance. The bug needs three independent facts to line up: sinks
+present, a head_dim outside every templated kernel's set, and a mask config that may return a
+tensor-free variant (`CausalFlash`). No reviewer holds all three at once, which is why it survived tests
+that pinned the layer mode. The fix is structural: `run_attention` should refuse a tensor-free mask when
+it is about to dispatch to a backend that reads only the mask, so the combination fails at startup or at
+compile time instead of silently producing bidirectional attention. Not attempted during the merge.
 
 ## V4 architecture — the corrected mental model
 - **NOT MLA.** V4 replaced MLA with **hybrid sparse attention (DSA)**, per-layer mix of:
