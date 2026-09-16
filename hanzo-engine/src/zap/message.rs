@@ -461,6 +461,7 @@ mod tests {
             system_fingerprint: "local".to_string(),
             object: "chat.completion".to_string(),
             usage: crate::response::Usage {
+                cached_prompt_tokens: 0,
                 completion_tokens: 3,
                 prompt_tokens: 5,
                 total_tokens: 8,

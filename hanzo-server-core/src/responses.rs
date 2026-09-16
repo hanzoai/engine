@@ -1147,10 +1147,10 @@ impl futures::Stream for OpenResponsesStreamer {
 
                         // Add usage from chunk if available
                         if let Some(usage) = &chat_chunk.usage {
-                            response.usage = Some(ResponseUsage::new(
-                                usage.prompt_tokens,
-                                usage.completion_tokens,
-                            ));
+                            response.usage = Some(
+                                ResponseUsage::new(usage.prompt_tokens, usage.completion_tokens)
+                                    .with_cached_tokens(usage.cached_prompt_tokens),
+                            );
                         }
 
                         events_to_emit.push(OpenResponsesStreamEvent::ResponseCompleted {
@@ -1338,10 +1338,13 @@ fn chat_response_to_response_resource(
     } else {
         Some(reasoning_parts.join(""))
     };
-    resource.usage = Some(ResponseUsage::new(
-        chat_resp.usage.prompt_tokens,
-        chat_resp.usage.completion_tokens,
-    ));
+    resource.usage = Some(
+        ResponseUsage::new(
+            chat_resp.usage.prompt_tokens,
+            chat_resp.usage.completion_tokens,
+        )
+        .with_cached_tokens(chat_resp.usage.cached_prompt_tokens),
+    );
     resource.metadata = metadata;
     resource.completed_at = Some(
         SystemTime::now()

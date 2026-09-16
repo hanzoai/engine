@@ -28,7 +28,7 @@ use either::Either;
 use hanzo_engine::{
     AgentPermission, ApproximateUserLocation, ChatCompletionChunkResponse, CodeExecutionPermission,
     Function, Hanzo, Request, RequestMessage, Response, TokenizationRequest, Tool,
-    ToolCallResponse, ToolChoice, ToolType, WebSearchOptions, WebSearchUserLocation,
+    ToolCallResponse, ToolChoice, ToolType, Usage, WebSearchOptions, WebSearchUserLocation,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -383,9 +383,9 @@ pub enum AnthropicResponseBlock {
     },
 }
 
-/// Prefix-cache accounting is not plumbed through `Usage`, so the cache fields are always zero;
-/// the Anthropic SDKs require them to be present.
-#[derive(Debug, Serialize)]
+/// `cache_creation_input_tokens` stays zero: the engine reports prefix-cache reads but does not
+/// distinguish the turn that first wrote the prefix.
+#[derive(Debug, Default, Serialize)]
 pub struct AnthropicUsage {
     pub input_tokens: u32,
     pub cache_creation_input_tokens: u32,
@@ -1052,6 +1052,18 @@ impl AnthropicMessagesRequest {
     }
 }
 
+/// Anthropic counts a cached prefix separately, so `input_tokens` has to exclude what
+/// `cache_read_input_tokens` already reports or a cached turn double-counts its prompt.
+fn anthropic_usage(usage: &Usage) -> AnthropicUsage {
+    let cache_read = usage.cached_prompt_tokens as u32;
+    AnthropicUsage {
+        input_tokens: (usage.prompt_tokens as u32).saturating_sub(cache_read),
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: cache_read,
+        output_tokens: usage.completion_tokens as u32,
+    }
+}
+
 fn map_stop_reason(finish: &str) -> String {
     match finish {
         "length" => "max_tokens",
@@ -1152,7 +1164,7 @@ impl StreamBuilder {
         &mut self,
         model: String,
         id: String,
-        input_tokens: u32,
+        usage: AnthropicUsage,
     ) -> Vec<NamedEvent> {
         self.started = true;
         let msg = json!({
@@ -1166,9 +1178,9 @@ impl StreamBuilder {
                 "stop_reason": Value::Null,
                 "stop_sequence": Value::Null,
                 "usage": {
-                    "input_tokens": input_tokens,
-                    "cache_creation_input_tokens": 0,
-                    "cache_read_input_tokens": 0,
+                    "input_tokens": usage.input_tokens,
+                    "cache_creation_input_tokens": usage.cache_creation_input_tokens,
+                    "cache_read_input_tokens": usage.cache_read_input_tokens,
                     "output_tokens": 0,
                 },
             }
@@ -1369,12 +1381,12 @@ impl StreamBuilder {
                     chunk.id.clone()
                 }
             );
-            let input_tokens = chunk
+            let usage = chunk
                 .usage
                 .as_ref()
-                .map(|u| u.prompt_tokens as u32)
-                .unwrap_or(0);
-            events.extend(self.start(chunk.model.clone(), id, input_tokens));
+                .map(anthropic_usage)
+                .unwrap_or_default();
+            events.extend(self.start(chunk.model.clone(), id, usage));
         }
         let Some(choice) = chunk.choices.first() else {
             return events;
@@ -1424,7 +1436,7 @@ impl StreamBuilder {
                     resp.id.clone()
                 }
             );
-            events.extend(self.start(resp.model.clone(), id, resp.usage.prompt_tokens as u32));
+            events.extend(self.start(resp.model.clone(), id, anthropic_usage(&resp.usage)));
         }
         let finish = resp.choices.first().map(|c| c.finish_reason.as_str());
         if let Some(c) = resp.choices.first() {
@@ -1666,12 +1678,7 @@ pub async fn messages(
                 content: build_content_blocks(&text, thinking.as_deref(), tool_calls.as_ref()),
                 stop_reason,
                 stop_sequence,
-                usage: AnthropicUsage {
-                    input_tokens: resp.usage.prompt_tokens as u32,
-                    cache_creation_input_tokens: 0,
-                    cache_read_input_tokens: 0,
-                    output_tokens: resp.usage.completion_tokens as u32,
-                },
+                usage: anthropic_usage(&resp.usage),
             };
             Json(out).into_response()
         }
@@ -2260,6 +2267,7 @@ mod tests {
             system_fingerprint: "local".to_string(),
             object: "chat.completion.chunk".to_string(),
             usage: finish.is_some().then_some(Usage {
+                cached_prompt_tokens: 0,
                 completion_tokens: 5,
                 prompt_tokens: 3,
                 total_tokens: 8,
@@ -2483,5 +2491,45 @@ mod tests {
         assert!(oai.tools.is_none());
         assert!(oai.web_search_options.is_none());
         assert!(!oai.enable_code_execution);
+    }
+
+    fn usage_with_cache(prompt: usize, cached: usize) -> Usage {
+        Usage {
+            completion_tokens: 7,
+            prompt_tokens: prompt,
+            cached_prompt_tokens: cached,
+            total_tokens: prompt + 7,
+            avg_tok_per_sec: 0.0,
+            avg_prompt_tok_per_sec: 0.0,
+            avg_compl_tok_per_sec: 0.0,
+            total_time_sec: 0.0,
+            total_prompt_time_sec: 0.0,
+            total_completion_time_sec: 0.0,
+        }
+    }
+
+    /// The wire mapping only: a cached count reaches `cache_read_input_tokens` and leaves
+    /// `input_tokens`. A live cache hit needs a warm prefix cache and a model.
+    #[test]
+    fn anthropic_usage_maps_cache_reads_out_of_input_tokens() {
+        let cached = anthropic_usage(&usage_with_cache(1000, 900));
+        assert_eq!(cached.cache_read_input_tokens, 900);
+        assert_eq!(cached.input_tokens, 100);
+        assert_eq!(cached.output_tokens, 7);
+
+        let fresh = anthropic_usage(&usage_with_cache(1000, 0));
+        assert_eq!(fresh.cache_read_input_tokens, 0);
+        assert_eq!(fresh.input_tokens, 1000);
+    }
+
+    #[test]
+    fn message_start_usage_carries_cache_read_tokens() {
+        let mut b = StreamBuilder::new(false, None);
+        let mut chunk = fake_chunk("hi", None);
+        chunk.usage = Some(usage_with_cache(1000, 900));
+        let events = b.ingest_chunk(&chunk);
+        let usage = &events[0].1["message"]["usage"];
+        assert_eq!(usage["cache_read_input_tokens"], json!(900));
+        assert_eq!(usage["input_tokens"], json!(100));
     }
 }
