@@ -14,9 +14,9 @@ use hanzo_server_core::server::ServerBuilder;
 #[cfg(feature = "code-execution")]
 use super::serve::build_code_exec_config;
 use super::serve::{
-    apply_agent_mode, apply_quant_resolution, convert_to_model_selected, extract_device_settings,
-    extract_isq_setting, extract_paged_attn_settings, extract_sandbox_settings, load_mcp_config,
-    log_agent_runtime, validate_agent_options,
+    apply_agent_mode, apply_quant_resolution, convert_to_model_selected, default_sandbox_profile,
+    extract_device_settings, extract_isq_setting, extract_paged_attn_settings,
+    extract_sandbox_settings, load_mcp_config, log_agent_runtime, validate_agent_options,
 };
 use crate::args::{AgentCliOptions, GlobalOptions, ModelType, RuntimeOptions, SandboxOptions};
 
@@ -99,6 +99,8 @@ pub async fn run_interactive(
         .with_prompt_lookup_optional(runtime.prompt_lookup_ngram, runtime.gamma())
         .with_paged_attn_cache_type(paged_cache_type);
 
+    let sandbox_profile = default_sandbox_profile(&runtime);
+
     if let Some(model) = runtime.search_embedding_model {
         builder = builder.with_search_embedding_model(model.into());
     }
@@ -106,7 +108,7 @@ pub async fn run_interactive(
     let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
     builder = builder.with_mcp_config_optional(mcp_client_config);
 
-    let sandbox_policy = extract_sandbox_settings(sandbox);
+    let sandbox_policy = extract_sandbox_settings(sandbox, sandbox_profile);
 
     #[cfg(feature = "code-execution")]
     {

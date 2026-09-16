@@ -9,6 +9,9 @@ pub enum ToolChoice {
     #[serde(rename = "auto")]
     /// Allow automatic selection of any given tool, or none.
     Auto,
+    #[serde(rename = "required", alias = "any")]
+    /// Require at least one tool call, leaving the choice of tool to the model.
+    Required,
     #[serde(untagged)]
     /// Force selection of a given tool.
     Tool(Tool),

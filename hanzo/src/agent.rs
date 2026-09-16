@@ -279,6 +279,7 @@ impl<'a> AgentStream<'a> {
                                                     system_fingerprint: String::new(),
                                                     object: String::new(),
                                                     usage: crate::Usage {
+                                                        cached_prompt_tokens: 0,
                                                         completion_tokens: 0,
                                                         prompt_tokens: 0,
                                                         total_tokens: 0,

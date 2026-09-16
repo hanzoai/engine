@@ -109,6 +109,8 @@ pub async fn run_server(
         .with_prompt_lookup_optional(runtime.prompt_lookup_ngram, runtime.gamma())
         .with_paged_attn_cache_type(paged_cache_type);
 
+    let sandbox_profile = default_sandbox_profile(&runtime);
+
     if let Some(model) = runtime.search_embedding_model {
         builder = builder.with_search_embedding_model(model.into());
     }
@@ -116,7 +118,7 @@ pub async fn run_server(
     let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
     builder = builder.with_mcp_config_optional(mcp_client_config);
 
-    let sandbox_policy = extract_sandbox_settings(sandbox);
+    let sandbox_policy = extract_sandbox_settings(sandbox, sandbox_profile);
 
     let approval_broker = ApprovalBroker::default();
 
@@ -883,6 +885,7 @@ pub(crate) fn build_code_exec_config(
 
 pub(crate) fn extract_sandbox_settings(
     sandbox: SandboxOptions,
+    default_profile: hanzo_sandbox::SandboxProfile,
 ) -> Option<hanzo_sandbox::SandboxPolicy> {
     let mode = match (
         sandbox.mode,
@@ -906,7 +909,8 @@ pub(crate) fn extract_sandbox_settings(
     match mode {
         SandboxMode::Off => None,
         SandboxMode::Auto | SandboxMode::On => {
-            let mut policy = hanzo_sandbox::SandboxPolicy::default();
+            let profile = sandbox.profile.map_or(default_profile, Into::into);
+            let mut policy = profile.default_policy();
             if let Some(v) = sandbox.max_memory_mb {
                 policy.max_memory_mb = v;
             }
@@ -916,11 +920,28 @@ pub(crate) fn extract_sandbox_settings(
             if let Some(v) = sandbox.max_procs {
                 policy.max_procs = v;
             }
-            policy.network = sandbox.network.into();
+            if let Some(network) = sandbox.network {
+                policy.network = network.into();
+            }
             policy.strict = matches!(mode, SandboxMode::On);
             Some(policy)
         }
     }
+}
+
+/// Once the model can run commands, a restricted policy breaks every toolchain it reaches for.
+pub(crate) fn default_sandbox_profile(runtime: &RuntimeOptions) -> hanzo_sandbox::SandboxProfile {
+    #[cfg(feature = "code-execution")]
+    {
+        if runtime.agent || runtime.enable_code_execution {
+            return hanzo_sandbox::SandboxProfile::Developer;
+        }
+    }
+    #[cfg(not(feature = "code-execution"))]
+    {
+        let _ = runtime;
+    }
+    hanzo_sandbox::SandboxProfile::Restricted
 }
 
 pub(crate) fn apply_agent_mode(runtime: &mut RuntimeOptions) {
@@ -1045,5 +1066,71 @@ fn log_agent_runtime_details(runtime: &RuntimeOptions) {
         tracing::warn!(
             "code-exec: not compiled in (build with `--features code-execution`); --agent enabled search only"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hanzo_sandbox::NetworkMode;
+
+    use super::*;
+    use crate::args::{SandboxNetworkMode, SandboxProfileArg};
+
+    fn options(mode: SandboxMode) -> SandboxOptions {
+        SandboxOptions {
+            mode,
+            ..SandboxOptions::default()
+        }
+    }
+
+    #[test]
+    fn sandbox_off_returns_none() {
+        let profile = default_sandbox_profile(&RuntimeOptions::default());
+        assert!(extract_sandbox_settings(options(SandboxMode::Off), profile).is_none());
+    }
+
+    #[test]
+    fn sandbox_on_sets_strict() {
+        let profile = default_sandbox_profile(&RuntimeOptions::default());
+        let policy = extract_sandbox_settings(options(SandboxMode::On), profile).unwrap();
+        assert!(policy.strict);
+    }
+
+    #[test]
+    fn restricted_profile_uses_loopback_and_adds_nothing() {
+        let sandbox = SandboxOptions {
+            mode: SandboxMode::On,
+            profile: Some(SandboxProfileArg::Restricted),
+            ..SandboxOptions::default()
+        };
+        let policy =
+            extract_sandbox_settings(sandbox, hanzo_sandbox::SandboxProfile::Developer).unwrap();
+        assert_eq!(policy.network, NetworkMode::Loopback);
+        assert!(policy.extra_env.is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "code-execution")]
+    fn agent_defaults_to_the_developer_profile() {
+        let runtime = RuntimeOptions {
+            agent: true,
+            ..RuntimeOptions::default()
+        };
+        let profile = default_sandbox_profile(&runtime);
+        let policy = extract_sandbox_settings(options(SandboxMode::On), profile).unwrap();
+        assert_eq!(policy.network, NetworkMode::Full);
+        assert!(policy.extra_env.iter().any(|v| v == "RUSTUP_HOME"));
+    }
+
+    #[test]
+    fn explicit_network_overrides_the_profile_default() {
+        let sandbox = SandboxOptions {
+            mode: SandboxMode::On,
+            network: Some(SandboxNetworkMode::Loopback),
+            ..SandboxOptions::default()
+        };
+        let policy =
+            extract_sandbox_settings(sandbox, hanzo_sandbox::SandboxProfile::Developer).unwrap();
+        assert_eq!(policy.network, NetworkMode::Loopback);
     }
 }

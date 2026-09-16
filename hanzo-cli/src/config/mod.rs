@@ -264,3 +264,27 @@ impl ModelEntry {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+    use crate::args::SandboxProfileArg;
+
+    /// The shipped example is the only config most people start from, and nothing else loads it.
+    #[test]
+    fn example_cli_config_loads_with_its_sandbox_profile() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/cli-config.toml");
+        let CliConfig::Serve(cfg) = load_cli_config(&path).expect("example config must load")
+        else {
+            panic!("the example is a serve config");
+        };
+        assert_eq!(cfg.sandbox.profile, Some(SandboxProfileArg::Developer));
+        assert_eq!(cfg.sandbox.max_cpu_secs, Some(600));
+        assert!(
+            cfg.sandbox.network.is_none(),
+            "network is left to the profile"
+        );
+    }
+}

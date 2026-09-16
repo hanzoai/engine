@@ -14,8 +14,8 @@ use crate::commands::run::interactive_mode;
 #[cfg(feature = "code-execution")]
 use crate::commands::serve::build_code_exec_config;
 use crate::commands::serve::{
-    apply_agent_mode, convert_to_model_selected, extract_sandbox_settings, load_mcp_config,
-    log_agent_runtime, log_api_surfaces, validate_agent_options,
+    apply_agent_mode, convert_to_model_selected, default_sandbox_profile, extract_sandbox_settings,
+    load_mcp_config, log_agent_runtime, log_api_surfaces, validate_agent_options,
 };
 use crate::config::{load_cli_config, CliConfig};
 use crate::ui::build_ui_router;
@@ -97,6 +97,8 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         builder = builder.with_default_model_id(default_model_id);
     }
 
+    let sandbox_profile = default_sandbox_profile(&runtime);
+
     if let Some(model) = runtime.search_embedding_model {
         builder = builder.with_search_embedding_model(model.into());
     }
@@ -104,7 +106,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
     let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
     builder = builder.with_mcp_config_optional(mcp_client_config);
 
-    let sandbox_policy = extract_sandbox_settings(sandbox);
+    let sandbox_policy = extract_sandbox_settings(sandbox, sandbox_profile);
 
     #[cfg(feature = "code-execution")]
     {
@@ -218,6 +220,8 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         builder = builder.add_model_config(config);
     }
 
+    let sandbox_profile = default_sandbox_profile(&runtime);
+
     if let Some(model) = runtime.search_embedding_model {
         builder = builder.with_search_embedding_model(model.into());
     }
@@ -225,7 +229,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
     let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
     builder = builder.with_mcp_config_optional(mcp_client_config);
 
-    let sandbox_policy = extract_sandbox_settings(sandbox);
+    let sandbox_policy = extract_sandbox_settings(sandbox, sandbox_profile);
 
     #[cfg(feature = "code-execution")]
     {
