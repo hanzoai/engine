@@ -1102,12 +1102,12 @@ only pre-connect errors retry, never timeouts or partially delivered streams.
 ## High-Availability 2-Node GPU Cluster & Streaming Keep-Alive
 
 ### 1. Dual-Node GPU Topology & Failover
-- **Spark (`10.0.0.19`)**: Primary engine (NVIDIA Blackwell GB10 NVFP4 on `:30000`, 128GB VRAM). Designated for Main Thread (TTFT 133ms, 1M context capacity).
-- **Evo (`10.0.0.21`)**: Secondary engine (AMD Strix Halo Ryzen AI Max+ 395 Q6_K on `:8080`, 128GB unified memory). Designated for Subagents (TTFT 618ms).
+- **Spark**: Primary engine (NVIDIA Blackwell GB10 NVFP4 on `:30000`, 128GB VRAM). Designated for Main Thread (TTFT 133ms, 1M context capacity).
+- **Evo**: Secondary engine (AMD Strix Halo Ryzen AI Max+ 395 Q6_K on `:8080`, 128GB unified memory). Designated for Subagents (TTFT 618ms).
 - Both nodes run `hanzo-router` on port `:1235` with bidirectional awareness:
   - If Spark fails: router automatically evicts Spark and routes Main Thread to Evo.
   - If Evo fails: router automatically spills Subagents to Spark.
-  - In Kubernetes, `hanzo-router` endpoints include both `10.0.0.19:1235` and `10.0.0.21:1235` behind `hanzo-ingress` (Traefik).
+  - In Kubernetes, `hanzo-router` endpoints include both nodes on `:1235` behind `hanzo-ingress` (Traefik). Addresses live in the private record, not here.
 
 ### 2. SSE Keep-Alive & Mid-Response Connection Protection
 - Problem: During long reasoning or deep thinking cycles (e.g. 10–18 minutes), upstream generation pauses between tokens or during prefill caused NAT firewalls and client watchdogs (`CLAUDE_STREAM_IDLE_TIMEOUT_MS`, default 300s) to abort connections with "API Error: Connection lost mid-response".
