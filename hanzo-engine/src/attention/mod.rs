@@ -55,10 +55,29 @@ impl AttentionMask {
 mod backends;
 
 #[allow(unused)]
-pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn};
+pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn, tiled_sdpa};
 
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
+
+/// Key chunk for [`tiled_sdpa`]. Query chunking alone leaves a block that is linear in the context,
+/// so the key axis is chunked too once the whole block stops fitting.
+pub(crate) const ATTENTION_KV_CHUNK_SIZE: usize = 4096;
+
+/// Bytes of f32 scores one eager attention block may hold before it is computed in tiles instead.
+/// Above this a long prefill cannot be served at all: a 4096-token chunk against a 124K prefix is 24
+/// heads x 4096 x 124K x 4 B. Below it the single-block path is left exactly as it is, so the shapes
+/// that work today keep their arithmetic.
+pub(crate) const ATTENTION_SCORE_BLOCK_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+/// Whether one [q_len, kv_len] score block fits [`ATTENTION_SCORE_BLOCK_BYTES`].
+fn score_block_fits(b_sz: usize, n_heads: usize, q_len: usize, kv_len: usize) -> bool {
+    b_sz.saturating_mul(n_heads)
+        .saturating_mul(q_len)
+        .saturating_mul(kv_len)
+        .saturating_mul(std::mem::size_of::<f32>())
+        <= ATTENTION_SCORE_BLOCK_BYTES
+}
 
 /// Generic chunked attention computation that can be used by different backends
 pub(crate) fn chunked_attention<F>(
@@ -120,7 +139,7 @@ where
     Tensor::cat(&attn_chunks, 2)
 }
 
-fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
+pub(crate) fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
     if n_rep == 1 {
         Ok(x)
     } else {
@@ -501,6 +520,20 @@ impl Sdpa {
             );
         }
 
+        // Every path below materializes the whole score block, which is what a long prefill cannot
+        // pay for; past the budget the same attention is computed over tiles.
+        if !score_block_fits(b_sz, n_attn_heads, seq_len, k.dim(2)?) {
+            return tiled_sdpa(
+                q,
+                k,
+                v,
+                mask,
+                sdpa_params,
+                ATTENTION_CHUNK_SIZE,
+                ATTENTION_KV_CHUNK_SIZE,
+            );
+        }
+
         let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?;
         let v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?;
 
@@ -731,6 +764,22 @@ fn vk_sdpa_nsplit() -> usize {
             .filter(|&n| n >= 1)
             .unwrap_or(8)
     })
+}
+
+#[cfg(test)]
+mod score_block_budget {
+    use super::score_block_fits;
+
+    #[test]
+    fn a_long_prefill_is_the_only_shape_that_tiles() {
+        // 4096 new tokens against a 124K prefix, 24 heads: the shape that wires 48 GB of scores.
+        assert!(!score_block_fits(1, 24, 4096, 124_094));
+        // The same context at decode width, and a speculative verify, stay on the single block.
+        assert!(score_block_fits(1, 24, 1, 124_094));
+        assert!(score_block_fits(1, 24, 8, 124_094));
+        // A square 4K prefill fits, so its arithmetic is untouched.
+        assert!(score_block_fits(1, 24, 4096, 4096));
+    }
 }
 
 #[cfg(all(test, feature = "flash-attn"))]

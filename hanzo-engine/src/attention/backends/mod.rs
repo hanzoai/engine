@@ -4,10 +4,12 @@ mod flash;
 pub(crate) mod metal_flash_attn;
 mod naive;
 mod sinks;
+mod tiled;
 
 pub(crate) use flash::flash_attn;
 pub(crate) use naive::{maybe_synchronize, naive_sdpa};
 pub(crate) use sinks::sinks_attn;
+pub(crate) use tiled::tiled_sdpa;
 
 #[cfg(not(feature = "metal"))]
 pub(crate) mod metal_flash_attn {
