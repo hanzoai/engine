@@ -1,0 +1,33 @@
+---
+title: Decode throughput
+description: Single-stream token generation rate at temperature zero, measured at three prompt depths on both fleet hosts.
+---
+
+import Throughput from '../../../components/Throughput.astro';
+
+Decode rate is tokens generated per second after the first token, for one stream
+at temperature zero, 128 generated tokens per run, three runs per point.
+
+<Throughput query={{ model: 'zen5.8', limit: 100 }} metrics={['decode']} />
+
+## What was measured
+
+The rate is computed from the engine's own completion-token count, not from the
+number of stream events: a path that emits several tokens per event would
+otherwise be undercounted. It is measured between the first and last token, so it
+excludes prefill entirely, which is [a separate claim](/hanzo/benchmarks/prefill-by-prompt-length/).
+
+Every row was produced on a quiet host with the fleet's own service stopped, and
+passed its [quality checks](/hanzo/benchmarks/quality-at-temperature-zero/) in the
+same window. A row that failed them renders no number.
+
+## What this does not say
+
+- Batch of one. It is not a serving-capacity figure; see
+  [four concurrent clients](/hanzo/benchmarks/four-client-concurrency/).
+- Single-token decode is bound by memory bandwidth, so the number tracks the
+  quantization format and the memory system far more than it tracks the engine.
+  Comparing two rows with different formats compares formats.
+- No speculative decoding or multi-token prediction is enabled in these runs.
+- It is not a per-user latency figure. Decode rate says how fast tokens arrive once
+  they start, not when they start.

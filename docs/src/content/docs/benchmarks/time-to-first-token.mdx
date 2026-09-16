@@ -1,0 +1,33 @@
+---
+title: Time to first token
+description: How long a caller waits before the first token arrives, at three prompt depths, single stream.
+---
+
+import Throughput from '../../../components/Throughput.astro';
+
+Time to first token is the wall-clock gap between sending the request and the
+first content token arriving, over loopback, with no prefix cache available.
+
+<Throughput query={{ model: 'zen5.8', limit: 100 }} metrics={['ttft', 'prefill']} />
+
+## What was measured
+
+Each prompt opens with a fresh nonce, so nothing is served from a cache and the
+figure is the cold cost of reading that prompt. The client is the same streaming
+client for every serving path, and the clock starts before the request is written.
+
+This is the number a caller feels. At the deepest prompts it is measured in tens of
+seconds, which is what makes it worth publishing separately from prefill rate: a
+respectable throughput figure and an uncomfortable wait are the same measurement
+seen from two ends.
+
+## What this does not say
+
+- It excludes the network. Requests were made over loopback on the serving host, so
+  a real client adds its own round trip, and any proxy in front of the host adds
+  its own idle timeout.
+- It includes tokenization and prefill, and nothing after the first token.
+- No prefix caching. A production caller that resends a shared prefix will see less
+  than this; nothing here says how much less.
+- It is single-stream. With other work in flight the wait grows, as the
+  [four-client rows](/hanzo/benchmarks/four-client-concurrency/) show.

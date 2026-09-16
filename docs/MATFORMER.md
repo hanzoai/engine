@@ -89,12 +89,6 @@ Memory scales approximately with parameter count:
 - E2B slice (1.91B): ~4GB VRAM  
 - Smaller slices: Proportionally less
 
-### Inference Speed
-
-Speed improvement is roughly linear with layer count:
-- 30 layers vs 35 layers = ~14% faster
-- 20 layers vs 35 layers = ~43% faster
-
 ### Quality Trade-offs
 
 Example accuracy on MMLU benchmark:

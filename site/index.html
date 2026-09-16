@@ -480,60 +480,6 @@
     .comparison-table thead th:not(:first-child) { text-align: center; }
     .comparison-table tbody td:not(:first-child) { text-align: center; color: #ccc; }
 
-    /* ---- Benchmarks ---- */
-    .bench-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 16px;
-    }
-    .bench-card {
-      background: #0a0a0a;
-      border: 1px solid #1a1a1a;
-      border-radius: 8px;
-      padding: 28px 24px;
-      text-align: center;
-      transition: border-color 0.15s;
-    }
-    .bench-card:hover { border-color: #333; }
-    .bench-card .bench-model {
-      font-size: 14px;
-      font-weight: 600;
-      color: #fff;
-      margin-bottom: 4px;
-    }
-    .bench-card .bench-params {
-      font-size: 11px;
-      color: #555;
-      margin-bottom: 20px;
-    }
-    .bench-bar-wrap {
-      margin-bottom: 12px;
-    }
-    .bench-bar-label {
-      display: flex;
-      justify-content: space-between;
-      font-size: 11px;
-      color: #666;
-      margin-bottom: 4px;
-    }
-    .bench-bar-label .bar-val {
-      color: #ccc;
-      font-family: Zen Mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-      font-weight: 500;
-    }
-    .bench-bar {
-      height: 4px;
-      background: #1a1a1a;
-      border-radius: 2px;
-      overflow: hidden;
-    }
-    .bench-bar-fill {
-      height: 100%;
-      background: #444;
-      border-radius: 2px;
-      transition: width 0.3s ease;
-    }
-
     /* ---- Footer ---- */
     footer {
       border-top: 1px solid #1a1a1a;
@@ -567,7 +513,6 @@
       .value-grid { grid-template-columns: repeat(2, 1fr); }
       .model-grid { grid-template-columns: repeat(2, 1fr); }
       .api-examples { grid-template-columns: 1fr; }
-      .bench-grid { grid-template-columns: repeat(2, 1fr); }
     }
     @media (max-width: 768px) {
       .hero { padding: 72px 0 64px; }
@@ -575,7 +520,6 @@
       .hero .tagline { font-size: 17px; }
       .feature-grid { grid-template-columns: 1fr; }
       .model-grid { grid-template-columns: 1fr; }
-      .bench-grid { grid-template-columns: 1fr; }
       section { padding: 56px 0; }
       .section-title { font-size: 26px; }
       .nav-links { gap: 16px; }
@@ -604,7 +548,6 @@
         <li><a href="#deploy">Deploy</a></li>
         <li><a href="#architecture">Architecture</a></li>
         <li><a href="#api">API</a></li>
-        <li><a href="#benchmarks">Benchmarks</a></li>
         <li><a href="https://github.com/hanzoai/engine">GitHub</a></li>
       </ul>
     </div>
@@ -870,7 +813,7 @@
       <div class="feature-grid">
         <div class="feature-card">
           <h3>Paged Attention v2</h3>
-          <div class="feat-stat">2-4x throughput improvement</div>
+          <div class="feat-stat">Non-contiguous KV blocks</div>
           <p>Efficient KV-cache management with non-contiguous memory blocks. Serves more concurrent requests with less GPU memory. Eliminates fragmentation waste.</p>
         </div>
         <div class="feature-card">
@@ -880,7 +823,7 @@
         </div>
         <div class="feature-card">
           <h3>Speculative Decoding</h3>
-          <div class="feat-stat">2-3x faster generation</div>
+          <div class="feat-stat">Draft proposes, target verifies</div>
           <p>Draft model acceleration. A smaller model proposes candidate tokens, verified by the target model in parallel. Mathematically equivalent output.</p>
         </div>
         <div class="feature-card">
@@ -1112,94 +1055,17 @@
   </section>
 
   <!-- ============================================================ -->
-  <!-- 9. Performance Benchmarks                                     -->
-  <!-- ============================================================ -->
-  <section id="benchmarks">
-    <div class="container">
-      <div class="section-label">Performance</div>
-      <h2 class="section-title">Benchmarks</h2>
-      <p class="section-desc">Token generation throughput across hardware configurations. Measured with continuous batching enabled, batch size 1, output length 512.</p>
-
-      <div class="bench-grid">
-        <div class="bench-card">
-          <div class="bench-model">zen4-mini</div>
-          <div class="bench-params">8B dense</div>
-          <div class="bench-bar-wrap">
-            <div class="bench-bar-label">
-              <span>A100 80GB</span>
-              <span class="bar-val">~120 tok/s</span>
-            </div>
-            <div class="bench-bar">
-              <div class="bench-bar-fill" style="width: 100%"></div>
-            </div>
-          </div>
-          <div class="bench-bar-wrap">
-            <div class="bench-bar-label">
-              <span>M3 Max</span>
-              <span class="bar-val">~45 tok/s</span>
-            </div>
-            <div class="bench-bar">
-              <div class="bench-bar-fill" style="width: 38%"></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="bench-card">
-          <div class="bench-model">zen4</div>
-          <div class="bench-params">744B MoE</div>
-          <div class="bench-bar-wrap">
-            <div class="bench-bar-label">
-              <span>8x A100 80GB</span>
-              <span class="bar-val">~35 tok/s</span>
-            </div>
-            <div class="bench-bar">
-              <div class="bench-bar-fill" style="width: 29%"></div>
-            </div>
-          </div>
-          <div class="bench-bar-wrap">
-            <div class="bench-bar-label">
-              <span>8x H100 SXM</span>
-              <span class="bar-val">~58 tok/s</span>
-            </div>
-            <div class="bench-bar">
-              <div class="bench-bar-fill" style="width: 48%"></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="bench-card">
-          <div class="bench-model">zen4-coder</div>
-          <div class="bench-params">480B MoE</div>
-          <div class="bench-bar-wrap">
-            <div class="bench-bar-label">
-              <span>8x A100 80GB</span>
-              <span class="bar-val">~40 tok/s</span>
-            </div>
-            <div class="bench-bar">
-              <div class="bench-bar-fill" style="width: 33%"></div>
-            </div>
-          </div>
-          <div class="bench-bar-wrap">
-            <div class="bench-bar-label">
-              <span>8x H100 SXM</span>
-              <span class="bar-val">~65 tok/s</span>
-            </div>
-            <div class="bench-bar">
-              <div class="bench-bar-fill" style="width: 54%"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================================================ -->
   <!-- 10. Footer                                                    -->
   <!-- ============================================================ -->
   <footer>
     <div class="container">
       <span class="footer-copy">&copy; 2026 Hanzo AI Inc.</span>
       <ul class="footer-links">
+        <li><a href="https://hanzoai.github.io/hanzo/benchmarks/prefill-by-prompt-length/">Prefill</a></li>
+        <li><a href="https://hanzoai.github.io/hanzo/benchmarks/decode-throughput/">Decode</a></li>
+        <li><a href="https://hanzoai.github.io/hanzo/benchmarks/time-to-first-token/">Time to first token</a></li>
+        <li><a href="https://hanzoai.github.io/hanzo/benchmarks/four-client-concurrency/">Concurrency</a></li>
+        <li><a href="https://hanzoai.github.io/hanzo/benchmarks/long-context-124k/">Long context</a></li>
         <li><a href="https://github.com/hanzoai/engine">GitHub</a></li>
         <li><a href="https://github.com/hanzoai/engine/pkgs/container/engine">Docker</a></li>
         <li><a href="https://crates.io/crates/hanzo-engine">Crates.io</a></li>
