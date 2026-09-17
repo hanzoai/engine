@@ -2,7 +2,10 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use hanzo_ml::{DType, Device, Module, Result, Tensor, D};
@@ -61,7 +64,7 @@ impl GdnConfig for TextConfig {
 // ====================== Full Attention layer with MRoPE ======================
 
 #[allow(dead_code)]
-struct FullAttention {
+pub(super) struct FullAttention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
     v_proj: Arc<dyn QuantMethod>,
@@ -88,7 +91,27 @@ impl FullAttention {
         paged_attn: Option<PagedAttention>,
         comm: &Arc<hanzo_quant::Comm>,
     ) -> Result<Self> {
-        let vb_sa = mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq);
+        Self::load_parts(
+            mapper.set_device(layer_idx, vb.clone(), loading_isq),
+            mapper.set_device(layer_idx, vb, false),
+            cfg,
+            rotary_emb,
+            paged_attn,
+            comm,
+        )
+    }
+
+    /// Load from varbuilders already placed on their device: `vb_quant` carries the projections
+    /// (quantized under ISQ), `vb_plain` the norms.
+    fn load_parts(
+        vb_quant: ShardedVarBuilder,
+        vb_plain: ShardedVarBuilder,
+        cfg: &TextConfig,
+        rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
+        paged_attn: Option<PagedAttention>,
+        comm: &Arc<hanzo_quant::Comm>,
+    ) -> Result<Self> {
+        let vb_sa = vb_quant.pp("self_attn");
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim;
@@ -130,7 +153,7 @@ impl FullAttention {
             vb_sa.pp("o_proj"),
         )?;
 
-        let vb_sa_norms = mapper.set_device(layer_idx, vb.pp("self_attn"), false);
+        let vb_sa_norms = vb_plain.pp("self_attn");
         let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
         let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
 
@@ -326,12 +349,12 @@ impl Mlp {
 
 // ====================== Decoder Layer ======================
 
-enum LayerImpl {
+pub(super) enum LayerImpl {
     FullAttention(FullAttention),
     LinearAttention(GatedDeltaNet),
 }
 
-struct DecoderLayer {
+pub(super) struct DecoderLayer {
     layer_impl: LayerImpl,
     input_layernorm: GemmaRmsNorm,
     post_attention_layernorm: GemmaRmsNorm,
@@ -339,8 +362,56 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
+    /// One full-attention block off varbuilders already placed on their device: the geometry the
+    /// main stack's attention layers use, with no device mapping of its own.
+    pub(super) fn load_full_attention(
+        vb_quant: ShardedVarBuilder,
+        vb_plain: ShardedVarBuilder,
+        cfg: &TextConfig,
+        rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
+        paged_attn: Option<PagedAttention>,
+        comm: &Arc<hanzo_quant::Comm>,
+    ) -> Result<Self> {
+        Ok(Self {
+            layer_impl: LayerImpl::FullAttention(FullAttention::load_parts(
+                vb_quant.clone(),
+                vb_plain.clone(),
+                cfg,
+                rotary_emb,
+                paged_attn,
+                comm,
+            )?),
+            input_layernorm: GemmaRmsNorm::new(
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+                vb_plain.pp("input_layernorm"),
+            )?,
+            post_attention_layernorm: GemmaRmsNorm::new(
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+                vb_plain.pp("post_attention_layernorm"),
+            )?,
+            mlp: Mlp::new(
+                vb_quant.pp("mlp"),
+                cfg.hidden_size,
+                cfg.intermediate_size,
+                &cfg.quantization_config,
+                cfg.hidden_act,
+                comm,
+            )?,
+        })
+    }
+
+    /// The rotary embedding of a full-attention block; `None` for a linear-attention one.
+    pub(super) fn rotary_emb(&self) -> Option<&Arc<Qwen3VLRotaryEmbedding>> {
+        match &self.layer_impl {
+            LayerImpl::FullAttention(attn) => Some(&attn.rotary_emb),
+            LayerImpl::LinearAttention(_) => None,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
-    fn forward_attention(
+    pub(super) fn forward_attention(
         &self,
         x: &Tensor,
         attention_mask: &AttentionMask,
@@ -388,6 +459,14 @@ impl DecoderLayer {
 
 // ====================== Text Model ======================
 
+/// What the MTP head reads from the target: the final-norm hidden state of every logit row of
+/// the last forward, `[batch, rows, hidden]`, and those rows' MRoPE positions, `[batch, rows, 3]`.
+#[derive(Clone)]
+pub(super) struct SpecCapture {
+    pub(super) hidden: Tensor,
+    pub(super) positions: Tensor,
+}
+
 pub struct Qwen3_5TextModel {
     embed_tokens: Embedding,
     pub(super) norm: GemmaRmsNorm,
@@ -402,6 +481,9 @@ pub struct Qwen3_5TextModel {
     pub(super) max_seq_len: usize,
     /// Hidden-state capture for a parallel-block draft (DFlash). Off by default.
     pub(super) spec_capture: crate::speculative::HiddenPrefixCapture,
+    /// What the MTP head reads from the last forward. Off by default.
+    last_spec: Mutex<Option<SpecCapture>>,
+    store_spec: AtomicBool,
 }
 
 impl Qwen3_5TextModel {
@@ -597,6 +679,8 @@ impl Qwen3_5TextModel {
             cache: EitherCache::Hybrid(pipeline_cache),
             max_seq_len: cfg.max_position_embeddings,
             spec_capture: crate::speculative::HiddenPrefixCapture::default(),
+            last_spec: Mutex::new(None),
+            store_spec: AtomicBool::new(false),
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
@@ -740,7 +824,36 @@ impl Qwen3_5TextModel {
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
         let xs = ctx.logits(&xs)?;
+        if self.store_spec.load(Ordering::Relaxed) {
+            // The same row selection the logits get, so a row index means the same position in both.
+            let positions = ctx.logits(&position_ids.permute((1, 2, 0))?.contiguous()?)?;
+            if let Ok(mut slot) = self.last_spec.lock() {
+                *slot = Some(SpecCapture {
+                    hidden: xs.clone(),
+                    positions,
+                });
+            }
+        }
         self.lm_head.forward(&xs)
+    }
+
+    /// Stash the final-norm hidden state and positions of each forward for the MTP head.
+    pub(super) fn set_store_spec(&self, store: bool) {
+        self.store_spec.store(store, Ordering::Relaxed);
+        if !store {
+            if let Ok(mut slot) = self.last_spec.lock() {
+                *slot = None;
+            }
+        }
+    }
+
+    /// What the last forward stashed, if any.
+    pub(super) fn last_spec(&self) -> Option<SpecCapture> {
+        self.last_spec.lock().ok().and_then(|slot| slot.clone())
+    }
+
+    pub(super) fn mapper(&self) -> &dyn DeviceMapper {
+        &*self.mapper
     }
 
     /// The embedding and output head, lent to a draft that carries neither.
