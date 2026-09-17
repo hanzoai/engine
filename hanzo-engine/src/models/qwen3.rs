@@ -647,8 +647,8 @@ impl IsqModel for Model {
 }
 
 impl crate::speculative::SpeculativeTargetMixin for Model {
-    fn set_speculative_capture_layers(&self, layers: Vec<usize>, retain: Option<usize>) {
-        self.spec_capture.set_layers(layers, retain);
+    fn request_speculative_capture(&self, request: crate::speculative::CaptureRequest) {
+        self.spec_capture.request(request);
     }
 
     fn note_speculative_forward(&self, seq_ids: &[usize]) {

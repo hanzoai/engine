@@ -6,7 +6,7 @@ use std::sync::{
     Mutex,
 };
 
-use hanzo_ml::{Result, Tensor};
+use hanzo_ml::{DType, Result, Tensor};
 
 /// Captured hiddens of one sequence: every layer holds positions `start..end()`, one
 /// `[rows, hidden]` tensor each, in the HF `hidden_states[i + 1]` convention (the output of
@@ -72,15 +72,21 @@ impl HiddenWindow {
 #[derive(Default)]
 pub struct HiddenPrefixCapture {
     enabled: AtomicBool,
-    plan: Mutex<CapturePlan>,
+    plan: Mutex<CaptureRequest>,
     state: Mutex<CaptureState>,
 }
 
-#[derive(Default)]
-struct CapturePlan {
-    layers: Vec<usize>,
-    /// Positions before its anchor a draft may read. `None` keeps the whole prefix.
-    retain: Option<usize>,
+/// What a draft asks its target to capture.
+#[derive(Clone, Default)]
+pub struct CaptureRequest {
+    /// The layers whose outputs the draft fuses (its checkpoint's `target_layer_ids`). Empty
+    /// turns capture off.
+    pub layers: Vec<usize>,
+    /// Positions before its anchor the draft may read. `None` keeps the whole prefix.
+    pub retain: Option<usize>,
+    /// The dtype the draft computes in. Rows convert once, as they are appended, rather than
+    /// the whole window on every draft. `None` keeps the target's dtype.
+    pub dtype: Option<DType>,
 }
 
 #[derive(Default)]
@@ -109,13 +115,13 @@ impl CaptureState {
 const MIN_ROWS: usize = 256;
 
 impl HiddenPrefixCapture {
-    /// Capture `layers` (a draft checkpoint's `target_layer_ids`), keeping the last `retain`
-    /// positions, or all of them for `None`. An empty list turns capture off. Either way the
-    /// buffer is dropped, so no sequence inherits another's rows.
-    pub fn set_layers(&self, layers: Vec<usize>, retain: Option<usize>) {
-        self.enabled.store(!layers.is_empty(), Ordering::Relaxed);
+    /// Capture what `request` names. The buffer is dropped, so no sequence inherits another's
+    /// rows.
+    pub fn request(&self, request: CaptureRequest) {
+        self.enabled
+            .store(!request.layers.is_empty(), Ordering::Relaxed);
         if let Ok(mut plan) = self.plan.lock() {
-            *plan = CapturePlan { layers, retain };
+            *plan = request;
         }
         if let Ok(mut state) = self.state.lock() {
             state.drop_rows();
@@ -157,7 +163,11 @@ impl HiddenPrefixCapture {
     /// forward's first token; `this_forward[k]` is the k-th captured layer, shaped
     /// `[1, query_len, hidden]` or `[query_len, hidden]`.
     pub fn fold(&self, start_pos: usize, this_forward: Vec<Tensor>) -> Result<()> {
-        let retain = self.plan.lock().map(|plan| plan.retain).unwrap_or(None);
+        let (retain, dtype) = self
+            .plan
+            .lock()
+            .map(|plan| (plan.retain, plan.dtype))
+            .unwrap_or((None, None));
         let Ok(mut state) = self.state.lock() else {
             return Ok(());
         };
@@ -168,6 +178,21 @@ impl HiddenPrefixCapture {
         let Some(mut added) = rows.first().map(|t| t.dim(0)).transpose()? else {
             return Ok(());
         };
+
+        // A forward longer than the reach contributes only its tail, so only the tail converts.
+        let tail = retain.filter(|keep| added > *keep);
+        if let Some(keep) = tail {
+            for t in rows.iter_mut() {
+                *t = t.narrow(0, added - keep, keep)?;
+            }
+            first += added - keep;
+            added = keep;
+        }
+        if let Some(dtype) = dtype {
+            for t in rows.iter_mut() {
+                *t = t.to_dtype(dtype)?;
+            }
+        }
 
         let fits = |buf: &Tensor, new: &Tensor| -> Result<bool> {
             Ok(buf.dtype() == new.dtype()
@@ -185,26 +210,17 @@ impl HiddenPrefixCapture {
 
         // Rows at or past this forward's start are rejected drafts. A start the buffer cannot
         // reach, behind it or past its end, reseeds: the window then says which positions it
-        // holds, and the proposer decides whether that is enough to draft from.
-        if !state.bufs.is_empty() && state.start <= first && first <= state.start + state.len {
+        // holds, and the proposer decides whether that is enough to draft from. A trimmed
+        // forward always reseeds, since its tail starts past anything held.
+        let reachable = tail.is_none()
+            && !state.bufs.is_empty()
+            && state.start <= first
+            && first <= state.start + state.len;
+        if reachable {
             state.len = first - state.start;
         } else {
             state.start = first;
             state.len = 0;
-        }
-
-        // A forward longer than the reach contributes only its tail.
-        if let Some(keep) = retain {
-            if added > keep {
-                let skip = added - keep;
-                for t in rows.iter_mut() {
-                    *t = t.narrow(0, skip, keep)?;
-                }
-                first += skip;
-                added = keep;
-                state.start = first;
-                state.len = 0;
-            }
         }
 
         let capacity = state.bufs.first().map(|b| b.dim(0)).transpose()?;
@@ -296,7 +312,11 @@ mod tests {
 
     fn capturing(retain: Option<usize>, seq: usize) -> HiddenPrefixCapture {
         let capture = HiddenPrefixCapture::default();
-        capture.set_layers(vec![3], retain);
+        capture.request(CaptureRequest {
+            layers: vec![3],
+            retain,
+            dtype: None,
+        });
         capture.note_forward(&[seq]);
         capture
     }
@@ -424,6 +444,33 @@ mod tests {
         let (start, _, positions) = held(&capture)?;
         assert_eq!(start, 0);
         assert_eq!(positions, (0..3 * MIN_ROWS).collect::<Vec<_>>());
+        Ok(())
+    }
+
+    /// Rows land in the draft's dtype as they are appended, so the draft converts nothing, and a
+    /// long prefill converts only the tail that is kept.
+    #[test]
+    fn rows_are_held_in_the_dtype_the_draft_asked_for() -> Result<()> {
+        let capture = HiddenPrefixCapture::default();
+        capture.request(CaptureRequest {
+            layers: vec![3],
+            retain: Some(4),
+            dtype: Some(DType::F16),
+        });
+        capture.note_forward(&[1]);
+
+        capture.fold(0, vec![rows(1.0, 0, 10)?])?;
+        capture.fold(10, vec![rows(2.0, 10, 1)?])?;
+        let window = capture.hiddens().unwrap();
+        assert_eq!(window.layers[0].dtype(), DType::F16);
+        assert_eq!(window.start, 6);
+        let positions: Vec<f32> = window.layers[0]
+            .to_dtype(DType::F32)?
+            .to_vec2::<f32>()?
+            .iter()
+            .map(|r| r[1])
+            .collect();
+        assert_eq!(positions, vec![6.0, 7.0, 8.0, 9.0, 10.0]);
         Ok(())
     }
 

@@ -67,11 +67,9 @@ pub trait SpeculativeTargetMixin {
         None
     }
 
-    /// Capture the output of every layer in `layers` (a draft checkpoint's `target_layer_ids`)
-    /// during each forward, keeping the last `retain` positions, or all of them for `None`.
-    /// Default no-op: only models that expose multi-layer hiddens override it. Uses interior
-    /// mutability, so `&self` suffices.
-    fn set_speculative_capture_layers(&self, _layers: Vec<usize>, _retain: Option<usize>) {}
+    /// Capture what a draft asks for during each forward. Default no-op: only models that
+    /// expose multi-layer hiddens override it. Uses interior mutability, so `&self` suffices.
+    fn request_speculative_capture(&self, _request: super::CaptureRequest) {}
 
     /// The multi-layer target hiddens captured so far for the one running sequence.
     /// `Ok(None)` when capture is off, unsupported (the default), or holds nothing.

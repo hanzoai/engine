@@ -478,9 +478,7 @@ impl crate::speculative::SpeculativeTargetMixin for Qwen3_5Model {
                     &self.text.device,
                     self.text.shared_heads(),
                 )?;
-                self.text
-                    .spec_capture
-                    .set_layers(proposer.capture_layers(), proposer.capture_retain());
+                self.text.spec_capture.request(proposer.capture_request());
                 let info = crate::speculative::SpeculativeAttachInfo::dflash(proposer.block_size());
                 self.dflash = Some(proposer);
                 Ok(Some(info))

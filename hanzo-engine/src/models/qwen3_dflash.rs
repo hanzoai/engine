@@ -440,6 +440,11 @@ pub struct Qwen3DFlash2 {
 }
 
 impl Qwen3DFlash2 {
+    /// The dtype the draft computes in.
+    pub fn dtype(&self) -> DType {
+        self.dtype
+    }
+
     pub fn config(&self) -> &DFlash2Config {
         &self.cfg
     }
@@ -946,26 +951,26 @@ impl DFlash2Proposer {
         Ok(Self::new(Qwen3DFlash2::load(cfg, vb)?, heads))
     }
 
-    /// The target layers whose hidden states this draft fuses — what the target captures.
-    pub fn capture_layers(&self) -> Vec<usize> {
-        self.draft
-            .config()
-            .dflash_config
-            .target_layer_ids
-            .iter()
-            .map(|&id| id as usize)
-            .collect()
+    /// What the target must capture for this draft: its fused layers, in its dtype, and as
+    /// many positions as it reads. That is its reach before the anchor plus one block, since a
+    /// verify leaves up to a block of rows past the anchor before rejection trims them. A
+    /// full-attention layer reads the whole prefix.
+    pub fn capture_request(&self) -> crate::speculative::CaptureRequest {
+        let cfg = self.draft.config();
+        crate::speculative::CaptureRequest {
+            layers: cfg
+                .dflash_config
+                .target_layer_ids
+                .iter()
+                .map(|&id| id as usize)
+                .collect(),
+            retain: self.draft.reach().map(|reach| reach + cfg.block_size()),
+            dtype: Some(self.draft.dtype()),
+        }
     }
 
     pub fn block_size(&self) -> usize {
         self.draft.config().block_size()
-    }
-
-    /// Positions the target's capture must keep, or `None` for the whole prefix. The draft
-    /// reads its reach before the anchor, and a verify leaves up to a block of rows past the
-    /// anchor before rejection trims them.
-    pub fn capture_retain(&self) -> Option<usize> {
-        self.draft.reach().map(|reach| reach + self.block_size())
     }
 }
 

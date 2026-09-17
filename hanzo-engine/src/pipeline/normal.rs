@@ -1795,7 +1795,11 @@ impl Pipeline for NormalPipeline {
                 crate::models::qwen3_dspark::DsparkProposer::new(draft, confidence_threshold);
             // DSpark attends the whole confirmed prefix, so the capture keeps all of it.
             self.model
-                .set_speculative_capture_layers(capture_layers, None);
+                .request_speculative_capture(crate::speculative::CaptureRequest {
+                    layers: capture_layers,
+                    retain: None,
+                    dtype: Some(dtype),
+                });
             let info =
                 crate::speculative::SpeculativeAttachInfo::dspark(block_size, confidence_threshold);
             crate::speculative::logging::log_attach(&info);
@@ -1814,10 +1818,8 @@ impl Pipeline for NormalPipeline {
                 self.model.device(),
                 heads,
             )?;
-            self.model.set_speculative_capture_layers(
-                proposer.capture_layers(),
-                proposer.capture_retain(),
-            );
+            self.model
+                .request_speculative_capture(proposer.capture_request());
             let info = crate::speculative::SpeculativeAttachInfo::dflash(proposer.block_size());
             crate::speculative::logging::log_attach(&info);
             self.draft_proposer = Some(Box::new(proposer));

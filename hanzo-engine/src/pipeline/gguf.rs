@@ -2685,9 +2685,7 @@ impl Pipeline for GGUFPipeline {
                     &model.device,
                     model.shared_heads(),
                 )?;
-                model
-                    .spec_capture
-                    .set_layers(proposer.capture_layers(), proposer.capture_retain());
+                model.spec_capture.request(proposer.capture_request());
                 let info = crate::speculative::SpeculativeAttachInfo::dflash(proposer.block_size());
                 crate::speculative::logging::log_attach(&info);
                 self.draft_proposer = Some(Box::new(proposer));
