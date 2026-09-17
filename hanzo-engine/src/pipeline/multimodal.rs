@@ -1136,6 +1136,13 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
         self.model.speculative_target_hiddens(rows)
     }
 
+    fn speculative_target_hidden_layers(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> hanzo_ml::Result<Option<Vec<Tensor>>> {
+        self.model.speculative_target_hidden_layers(rows)
+    }
+
     fn speculative_propose(
         &mut self,
         ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
@@ -1415,6 +1422,10 @@ impl Pipeline for MultimodalPipeline {
         } else {
             Ok(ForwardInputsResult::CausalGeneration { logits })
         }
+    }
+
+    fn note_forward_sequences(&self, seq_ids: &[usize]) {
+        self.model.note_speculative_forward(seq_ids);
     }
 
     fn attach_speculative(

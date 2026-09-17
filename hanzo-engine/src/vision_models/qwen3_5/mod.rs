@@ -42,6 +42,9 @@ pub struct Qwen3_5Model {
     vision_start_token_id: u32,
     vision_end_token_id: u32,
     encoder_cache: Arc<Mutex<EncoderCacheManager>>,
+    /// The attached DFlash 2 draft, if any. It decodes through `text`'s embedding and head
+    /// and reads the hidden prefix `text` captures.
+    dflash: Option<crate::models::qwen3_dflash::DFlash2Proposer>,
 }
 
 impl Qwen3_5Model {
@@ -83,6 +86,7 @@ impl Qwen3_5Model {
             vision_start_token_id: cfg.vision_start_token_id,
             vision_end_token_id: cfg.vision_end_token_id,
             encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
+            dflash: None,
         })
     }
 
@@ -458,18 +462,68 @@ impl Qwen3_5Model {
 }
 
 impl crate::speculative::SpeculativeTargetMixin for Qwen3_5Model {
-    /// Hosts no proposer: the model loads no MTP head and lends a draft neither hidden states
-    /// nor its output head.
+    /// Hosts a DFlash 2 draft. The checkpoint ships an MTP head too, which this model does not
+    /// load.
     fn attach_speculative(
         &mut self,
         config: crate::speculative::SpeculativeConfig,
     ) -> Result<Option<crate::speculative::SpeculativeAttachInfo>> {
+        use crate::speculative::SpeculativeConfig;
         match config {
-            crate::speculative::SpeculativeConfig::Off => Ok(None),
+            SpeculativeConfig::Off => Ok(None),
+            SpeculativeConfig::Dflash { path, block_size } => {
+                let proposer = crate::models::qwen3_dflash::DFlash2Proposer::from_checkpoint(
+                    std::path::Path::new(&path),
+                    block_size,
+                    &self.text.device,
+                    self.text.shared_heads(),
+                )?;
+                self.text
+                    .spec_capture
+                    .set_layers(proposer.capture_layers());
+                let info = crate::speculative::SpeculativeAttachInfo::dflash(proposer.block_size());
+                self.dflash = Some(proposer);
+                Ok(Some(info))
+            }
             _ => hanzo_ml::bail!(
-                "Qwen3.5 hosts no speculative proposer: it loads no MTP head and lends a draft neither hidden states nor its output head."
+                "Qwen3.5 speculates through a DFlash 2 draft (--dflash); it loads no MTP head and hosts no other proposer."
             ),
         }
+    }
+
+    fn has_speculative_proposer(&self) -> bool {
+        self.dflash.is_some()
+    }
+
+    fn speculative_proposal_len(&self) -> Option<usize> {
+        use crate::speculative::SpeculativeProposer;
+        self.dflash.as_ref().map(|draft| draft.proposal_len())
+    }
+
+    fn speculative_propose(
+        &mut self,
+        ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
+    ) -> Result<Option<crate::speculative::SpeculativeProposalBatch>> {
+        use crate::speculative::SpeculativeProposer;
+        match self.dflash.as_mut() {
+            Some(draft) => draft.propose(ctx, None).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    fn note_speculative_forward(&self, seq_ids: &[usize]) {
+        self.text.spec_capture.note_forward(seq_ids);
+    }
+
+    fn speculative_target_hidden_layers(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> Result<Option<Vec<Tensor>>> {
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let hiddens = self.text.spec_capture.hiddens();
+        Ok((!hiddens.is_empty()).then_some(hiddens))
     }
 }
 

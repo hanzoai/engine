@@ -400,6 +400,8 @@ pub struct Qwen3_5TextModel {
     pub(super) device: Device,
     pub(super) dtype: DType,
     pub(super) max_seq_len: usize,
+    /// Hidden-state capture for a parallel-block draft (DFlash). Off by default.
+    pub(super) spec_capture: crate::speculative::HiddenPrefixCapture,
 }
 
 impl Qwen3_5TextModel {
@@ -594,6 +596,7 @@ impl Qwen3_5TextModel {
             lm_head,
             cache: EitherCache::Hybrid(pipeline_cache),
             max_seq_len: cfg.max_position_embeddings,
+            spec_capture: crate::speculative::HiddenPrefixCapture::default(),
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
@@ -622,7 +625,7 @@ impl Qwen3_5TextModel {
         mut xs: Tensor,
         attention_mask: &AttentionMask,
         position_ids: &Tensor,
-        _seqlen_offsets: &[usize],
+        seqlen_offsets: &[usize],
         ctx: &ModelForwardContext<'_>,
         visual_pos_masks: Option<&Tensor>,
         deepstack_visual_embeds: Option<&[Tensor]>,
@@ -684,6 +687,8 @@ impl Qwen3_5TextModel {
             None
         };
 
+        let capture_layers = self.spec_capture.layers_for(seqlen_offsets.len());
+        let mut captured: Vec<Tensor> = Vec::with_capacity(capture_layers.len());
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
 
@@ -724,11 +729,28 @@ impl Qwen3_5TextModel {
                     xs = self.deepstack_process(xs, idx, idx_expanded, &deepstack[i])?;
                 }
             }
+            if capture_layers.contains(&i) {
+                captured.push(xs.clone());
+            }
+        }
+        if !capture_layers.is_empty() {
+            let start_pos = seqlen_offsets.first().copied().unwrap_or(0);
+            self.spec_capture.fold(start_pos, captured)?;
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
         let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
+    }
+
+    /// The embedding and output head, lent to a draft that carries neither.
+    pub(super) fn shared_heads(&self) -> crate::speculative::SpeculativeSharedHeads {
+        let embed_tokens = self.embed_tokens.clone();
+        let lm_head = Arc::clone(&self.lm_head);
+        crate::speculative::SpeculativeSharedHeads {
+            embed: Arc::new(move |ids: &Tensor| embed_tokens.forward(ids)),
+            lm_head: Arc::new(move |hidden: &Tensor| lm_head.forward(hidden)),
+        }
     }
 
     fn deepstack_process(

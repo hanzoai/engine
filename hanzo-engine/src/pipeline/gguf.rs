@@ -2651,6 +2651,12 @@ impl Pipeline for GGUFPipeline {
         self.draft_proposer.is_some()
     }
 
+    fn note_forward_sequences(&self, seq_ids: &[usize]) {
+        if let Model::Qwen35(ref model) = self.model {
+            model.spec_capture.note_forward(seq_ids);
+        }
+    }
+
     fn attach_speculative(
         &mut self,
         config: crate::speculative::SpeculativeConfig,
@@ -2662,10 +2668,28 @@ impl Pipeline for GGUFPipeline {
                     "DSpark speculative decoding targets the safetensors (normal) Qwen3 pipeline, not GGUF."
                 );
             }
-            crate::speculative::SpeculativeConfig::Dflash { .. } => {
-                hanzo_ml::bail!(
-                    "DFlash 2 reads the target's captured layer hiddens and decodes through its embedding and output head; the GGUF pipeline lends neither."
-                );
+            crate::speculative::SpeculativeConfig::Dflash { path, block_size } => {
+                let Model::Qwen35(ref model) = self.model else {
+                    hanzo_ml::bail!(
+                        "DFlash 2 reads the target's layer hiddens and decodes through its embedding and output head; among GGUF models only Qwen3.5 lends them."
+                    );
+                };
+                if self.metadata.cache_engine.is_none() {
+                    hanzo_ml::bail!(
+                        "DFlash 2 on Qwen3.5 requires PagedAttention: rejected drafts are rewound through the paged cache."
+                    );
+                }
+                let proposer = crate::models::qwen3_dflash::DFlash2Proposer::from_checkpoint(
+                    std::path::Path::new(&path),
+                    block_size,
+                    &model.device,
+                    model.shared_heads(),
+                )?;
+                model.spec_capture.set_layers(proposer.capture_layers());
+                let info = crate::speculative::SpeculativeAttachInfo::dflash(proposer.block_size());
+                crate::speculative::logging::log_attach(&info);
+                self.draft_proposer = Some(Box::new(proposer));
+                Ok(())
             }
             crate::speculative::SpeculativeConfig::PromptLookup {
                 ngram_min,
@@ -2872,6 +2896,20 @@ impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
             gathered.push(h);
         }
         Ok(Some(Tensor::cat(&gathered, 0)?))
+    }
+
+    fn speculative_target_hidden_layers(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> hanzo_ml::Result<Option<Vec<Tensor>>> {
+        let Model::Qwen35(ref model) = self.model else {
+            return Ok(None);
+        };
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let hiddens = model.spec_capture.hiddens();
+        Ok((!hiddens.is_empty()).then_some(hiddens))
     }
 
     fn speculative_propose(

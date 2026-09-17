@@ -812,6 +812,8 @@ pub struct ModelWeights {
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     dtype: DType,
+    /// Hidden-state capture for a parallel-block draft (DFlash). Off until a draft names layers.
+    pub(crate) spec_capture: crate::speculative::HiddenPrefixCapture,
 }
 
 pub(crate) fn gguf_qmm(q: hanzo_ml::quantized::QTensor) -> Result<Arc<dyn QuantMethod>> {
@@ -1068,6 +1070,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             max_seq_len: props.max_seq_len,
             mapper: Some(mapper),
             dtype,
+            spec_capture: crate::speculative::HiddenPrefixCapture::default(),
         })
     }
 }
@@ -1138,6 +1141,8 @@ impl ModelWeights {
         let cos_sin =
             self.compute_text_mrope(seqlen_offsets, seq_len, x.dtype(), rope_positions)?;
 
+        let capture_layers = self.spec_capture.layers_for(b_sz);
+        let mut captured: Vec<Tensor> = Vec::with_capacity(capture_layers.len());
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 x = mapper.map(x, layer_idx)?;
@@ -1223,12 +1228,33 @@ impl ModelWeights {
             if seq_len > 1 && x.device().is_metal() {
                 x.device().synchronize()?;
             }
+            if capture_layers.contains(&layer_idx) {
+                captured.push(x.clone());
+            }
+        }
+        if !capture_layers.is_empty() {
+            let start_pos = seqlen_offsets.first().copied().unwrap_or(0);
+            self.spec_capture.fold(start_pos, captured)?;
         }
 
         let x = x.to_device(&self.device)?;
         let x = self.norm.forward(&x)?;
         let x = extract_logits(&x, context_lens)?;
         self.output.forward(&x.contiguous()?)
+    }
+
+    /// The embedding and output head, lent to a draft that carries neither. The head takes the
+    /// residual stream's dtype, which is the embedding's.
+    pub(crate) fn shared_heads(&self) -> crate::speculative::SpeculativeSharedHeads {
+        let embed_tokens = self.tok_embeddings.clone();
+        let output = Arc::clone(&self.output);
+        let dtype = self.tok_embeddings.embeddings().dtype();
+        crate::speculative::SpeculativeSharedHeads {
+            embed: Arc::new(move |ids: &Tensor| embed_tokens.forward(ids)),
+            lm_head: Arc::new(move |hidden: &Tensor| {
+                output.forward(&hidden.to_dtype(dtype)?.contiguous()?)
+            }),
+        }
     }
 
     /// Build text-only mRoPE cos/sin. position_ids shape (3, batch, seq) with all three temporal/
