@@ -1076,22 +1076,16 @@ impl ModelWeights {
                             slot,
                             offset: seqlen_offsets.first().copied().unwrap_or(0),
                         };
-                        let out = forward_pooled(pool, slots, layer_idx, trail, |cache| {
+                        forward_pooled(pool, slots, layer_idx, trail, |cache| {
                             gdn.forward(&normed, cache)
-                        })?;
-                        out
+                        })?
                     } else {
                         let indices = state_indices
                             .as_ref()
                             .expect("checked above: recurrent indices required");
-                        let out = forward_pooled(
-                            pool,
-                            PoolSlots::Many(indices),
-                            layer_idx,
-                            trail,
-                            |cache| gdn.forward(&normed, cache),
-                        )?;
-                        out
+                        forward_pooled(pool, PoolSlots::Many(indices), layer_idx, trail, |cache| {
+                            gdn.forward(&normed, cache)
+                        })?
                     }
                 }
             };
@@ -1172,10 +1166,9 @@ impl ModelWeights {
                         slot,
                         offset: offsets.first().copied().unwrap_or(0),
                     };
-                    let out = forward_pooled(pool, slots, local_idx, trail, |cache| {
+                    forward_pooled(pool, slots, local_idx, trail, |cache| {
                         gdn.forward(&normed, cache)
-                    })?;
-                    out
+                    })?
                 }
             };
             let x_mid = (attn_out + residual)?;
