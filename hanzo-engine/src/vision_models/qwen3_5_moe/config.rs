@@ -93,6 +93,17 @@ impl TextConfig {
             .collect()
     }
 
+    /// Decoder layers that hold a KV cache, in cache order: the linear-attention layers keep
+    /// their state in the recurrent pool instead.
+    pub fn attention_layers(&self) -> Vec<usize> {
+        self.layer_types()
+            .into_iter()
+            .enumerate()
+            .filter(|(_, t)| matches!(t, LayerType::FullAttention))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
     pub fn linear_key_dim(&self) -> usize {
         self.linear_num_key_heads * self.linear_key_head_dim
     }

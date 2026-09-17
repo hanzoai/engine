@@ -18,7 +18,7 @@ use crate::{
     layers_masker::PastKvLenCache,
     paged_attention::{
         encoder_cache::{CacheModality, EncoderCacheManager},
-        AttentionImplementation, ModelConfigMetadata,
+        AttentionImplementation, ModelConfigLike, ModelConfigMetadata,
     },
     pipeline::{
         EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
@@ -585,6 +585,9 @@ impl MultimodalModel for Qwen3_5Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.text.cfg
+    }
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        self.text.model_config_like()
     }
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
         assert_eq!(input_ids.dims()[0], 1);
