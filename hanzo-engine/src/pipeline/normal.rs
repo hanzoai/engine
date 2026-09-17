@@ -1278,7 +1278,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
     fn speculative_target_hidden_layers(
         &self,
         rows: &[(usize, usize)],
-    ) -> hanzo_ml::Result<Option<Vec<Tensor>>> {
+    ) -> hanzo_ml::Result<Option<crate::speculative::HiddenWindow>> {
         // Unconditional delegate: DSpark's proposer lives in `draft_proposer` but reads the
         // TARGET's captured multi-layer hiddens. Non-capture targets return `None` here, so
         // classic draft-model / no-proposer runs are unaffected.
@@ -1793,8 +1793,9 @@ impl Pipeline for NormalPipeline {
             let draft = crate::models::qwen3_dspark::Qwen3DSpark::load(cfg, vb)?;
             let proposer =
                 crate::models::qwen3_dspark::DsparkProposer::new(draft, confidence_threshold);
-            // Enable target-side capture of the fused layer hiddens the proposer reads.
-            self.model.set_speculative_capture_layers(capture_layers);
+            // DSpark attends the whole confirmed prefix, so the capture keeps all of it.
+            self.model
+                .set_speculative_capture_layers(capture_layers, None);
             let info =
                 crate::speculative::SpeculativeAttachInfo::dspark(block_size, confidence_threshold);
             crate::speculative::logging::log_attach(&info);
@@ -1813,8 +1814,10 @@ impl Pipeline for NormalPipeline {
                 self.model.device(),
                 heads,
             )?;
-            self.model
-                .set_speculative_capture_layers(proposer.capture_layers());
+            self.model.set_speculative_capture_layers(
+                proposer.capture_layers(),
+                proposer.capture_retain(),
+            );
             let info = crate::speculative::SpeculativeAttachInfo::dflash(proposer.block_size());
             crate::speculative::logging::log_attach(&info);
             self.draft_proposer = Some(Box::new(proposer));

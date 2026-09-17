@@ -607,21 +607,13 @@ impl SpeculativeProposer for DsparkProposer {
         let anchor_pos = ctx.base_lens[0];
         let block = self.draft.config().block_size;
 
-        // Gap 2: DSpark drafts against the fused hiddens of the WHOLE confirmed prefix. The target
-        // model hands us its accumulated confirmed-prefix buffer (`[prefix_len, hidden]` per fused
-        // layer); slice it to the `anchor_pos` positions that precede the anchor. In the steady
-        // state `prefix_len == anchor_pos`; a shorter prefix means the accumulator hasn't caught up
-        // (e.g. right after a discontinuity) — bail so the target simply decodes one token.
-        let prefix_len = hiddens.first().map(|t| t.dim(0)).transpose()?.unwrap_or(0);
-        if prefix_len < anchor_pos {
-            return Ok(SpeculativeProposalBatch::new(vec![
-                SpeculativeProposal::new(Vec::new()),
-            ]));
+        // DSpark drafts against the fused hiddens of the WHOLE confirmed prefix, positions
+        // `0..anchor_pos`. A window that starts later or ends earlier has not caught up (right
+        // after a discontinuity): propose nothing and the target decodes one token.
+        if hiddens.start != 0 || hiddens.end()? < anchor_pos {
+            return stand_down();
         }
-        let prefix = hiddens
-            .iter()
-            .map(|t| t.narrow(0, 0, anchor_pos))
-            .collect::<Result<Vec<_>>>()?;
+        let prefix = hiddens.rows(0, anchor_pos)?;
 
         // Deterministic draft (argmax): draft quality only affects accept rate, and the
         // target verify decides every emitted token.
@@ -726,7 +718,7 @@ mod tests {
             sequences: &[],
             cache: SpeculativeKvCache::Normal,
             target_hiddens: None,
-            target_hidden_layers: Some(hiddens),
+            target_hidden_layers: Some(crate::speculative::HiddenWindow::new(0, hiddens)?),
             rng,
         };
 

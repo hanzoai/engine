@@ -1139,7 +1139,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
     fn speculative_target_hidden_layers(
         &self,
         rows: &[(usize, usize)],
-    ) -> hanzo_ml::Result<Option<Vec<Tensor>>> {
+    ) -> hanzo_ml::Result<Option<crate::speculative::HiddenWindow>> {
         self.model.speculative_target_hidden_layers(rows)
     }
 

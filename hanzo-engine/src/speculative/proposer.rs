@@ -31,7 +31,7 @@ pub struct SpeculativeProposeBatchCtx<'a> {
     /// tensor per fused target decoder layer, each `[prefix_len, hidden]`. `None` for
     /// single-hidden proposers (V4 MTP) and standalone draft models — additive, so
     /// existing proposers are unaffected.
-    pub target_hidden_layers: Option<Vec<Tensor>>,
+    pub target_hidden_layers: Option<super::HiddenWindow>,
     pub rng: Arc<Mutex<Isaac64Rng>>,
 }
 

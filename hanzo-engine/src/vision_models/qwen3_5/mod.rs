@@ -480,7 +480,7 @@ impl crate::speculative::SpeculativeTargetMixin for Qwen3_5Model {
                 )?;
                 self.text
                     .spec_capture
-                    .set_layers(proposer.capture_layers());
+                    .set_layers(proposer.capture_layers(), proposer.capture_retain());
                 let info = crate::speculative::SpeculativeAttachInfo::dflash(proposer.block_size());
                 self.dflash = Some(proposer);
                 Ok(Some(info))
@@ -518,12 +518,11 @@ impl crate::speculative::SpeculativeTargetMixin for Qwen3_5Model {
     fn speculative_target_hidden_layers(
         &self,
         rows: &[(usize, usize)],
-    ) -> Result<Option<Vec<Tensor>>> {
+    ) -> Result<Option<crate::speculative::HiddenWindow>> {
         if rows.is_empty() {
             return Ok(None);
         }
-        let hiddens = self.text.spec_capture.hiddens();
-        Ok((!hiddens.is_empty()).then_some(hiddens))
+        Ok(self.text.spec_capture.hiddens())
     }
 }
 

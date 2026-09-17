@@ -2685,7 +2685,9 @@ impl Pipeline for GGUFPipeline {
                     &model.device,
                     model.shared_heads(),
                 )?;
-                model.spec_capture.set_layers(proposer.capture_layers());
+                model
+                    .spec_capture
+                    .set_layers(proposer.capture_layers(), proposer.capture_retain());
                 let info = crate::speculative::SpeculativeAttachInfo::dflash(proposer.block_size());
                 crate::speculative::logging::log_attach(&info);
                 self.draft_proposer = Some(Box::new(proposer));
@@ -2901,15 +2903,14 @@ impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
     fn speculative_target_hidden_layers(
         &self,
         rows: &[(usize, usize)],
-    ) -> hanzo_ml::Result<Option<Vec<Tensor>>> {
+    ) -> hanzo_ml::Result<Option<crate::speculative::HiddenWindow>> {
         let Model::Qwen35(ref model) = self.model else {
             return Ok(None);
         };
         if rows.is_empty() {
             return Ok(None);
         }
-        let hiddens = model.spec_capture.hiddens();
-        Ok((!hiddens.is_empty()).then_some(hiddens))
+        Ok(model.spec_capture.hiddens())
     }
 
     fn speculative_propose(

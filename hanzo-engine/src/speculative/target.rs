@@ -12,9 +12,12 @@ use super::{
 /// draft through the target's own head puts its logits on the verifier's scale.
 #[derive(Clone)]
 pub struct SpeculativeSharedHeads {
-    pub embed: Arc<dyn Fn(&Tensor) -> Result<Tensor> + Send + Sync>,
-    pub lm_head: Arc<dyn Fn(&Tensor) -> Result<Tensor> + Send + Sync>,
+    pub embed: SharedLayer,
+    pub lm_head: SharedLayer,
 }
+
+/// One target layer, lent as a function of its input.
+pub type SharedLayer = Arc<dyn Fn(&Tensor) -> Result<Tensor> + Send + Sync>;
 
 pub trait SpeculativeTargetMixin {
     fn attach_speculative(
@@ -64,19 +67,18 @@ pub trait SpeculativeTargetMixin {
         None
     }
 
-    /// Enable capture of the DSpark target-layer hidden states, stashing every layer index in
-    /// `layers` (the draft checkpoint's `target_layer_ids`) during each forward. Default no-op:
-    /// only models that expose multi-layer hiddens (Qwen3) override it. Uses interior
+    /// Capture the output of every layer in `layers` (a draft checkpoint's `target_layer_ids`)
+    /// during each forward, keeping the last `retain` positions, or all of them for `None`.
+    /// Default no-op: only models that expose multi-layer hiddens override it. Uses interior
     /// mutability, so `&self` suffices.
-    fn set_speculative_capture_layers(&self, _layers: Vec<usize>) {}
+    fn set_speculative_capture_layers(&self, _layers: Vec<usize>, _retain: Option<usize>) {}
 
-    /// The multi-layer target hidden prefix captured by the most recent forward, one
-    /// `[prefix_len, hidden]` tensor per fused layer, gathered for the requested `(seq, row)`
-    /// pairs. `Ok(None)` when capture is off or unsupported (the default).
+    /// The multi-layer target hiddens captured so far for the one running sequence.
+    /// `Ok(None)` when capture is off, unsupported (the default), or holds nothing.
     fn speculative_target_hidden_layers(
         &self,
         _rows: &[(usize, usize)],
-    ) -> Result<Option<Vec<Tensor>>> {
+    ) -> Result<Option<super::HiddenWindow>> {
         Ok(None)
     }
 }

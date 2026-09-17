@@ -27,7 +27,7 @@ pub trait SpeculativePipelineExt: Pipeline {
     fn speculative_target_hidden_layers(
         &self,
         _rows: &[(usize, usize)],
-    ) -> Result<Option<Vec<Tensor>>> {
+    ) -> Result<Option<super::HiddenWindow>> {
         Ok(None)
     }
 

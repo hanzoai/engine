@@ -173,7 +173,7 @@ impl BlockConv {
                 "dflash_config.conv_kernel_size must be >= 1",
             ));
         }
-        if group_size == 0 || h % group_size != 0 {
+        if group_size == 0 || !h.is_multiple_of(group_size) {
             return Err(hanzo_ml::Error::msg(format!(
                 "dflash_config.conv_group_size {group_size} must divide hidden_size {h}"
             )));
@@ -500,11 +500,20 @@ impl Qwen3DFlash2 {
         })
     }
 
+    /// How far before the anchor any layer attends: the widest window, or `None` when a
+    /// full-attention layer sees the whole context.
+    pub fn reach(&self) -> Option<usize> {
+        (0..self.layers.len())
+            .map(|layer| self.cfg.layer_window(layer))
+            .try_fold(0usize, |widest, window| window.map(|w| widest.max(w)))
+    }
+
     /// Draft one block: `block_size - 1` tokens from one forward.
     ///
     /// * `target_hiddens` — the `num_fused_layers` target decoder-layer hidden
-    ///   states (`target_layer_ids`), each `[ctx_len, hidden]` covering positions
-    ///   `0..ctx_len` (a leading batch dim of 1 is accepted and squeezed).
+    ///   states (`target_layer_ids`) for the positions the window holds. The draft
+    ///   reads what falls inside its reach before the anchor; a window that starts
+    ///   later than that only shortens its context.
     /// * `anchor_token` — the last confirmed token, seeding block slot 0.
     /// * `anchor_pos` — RoPE position of the anchor; block slot `i` sits at
     ///   `anchor_pos + i`.
@@ -516,7 +525,7 @@ impl Qwen3DFlash2 {
     /// where each logit row is the selector's proposal distribution for that slot.
     pub fn draft_block(
         &self,
-        target_hiddens: &[Tensor],
+        target_hiddens: &crate::speculative::HiddenWindow,
         anchor_token: u32,
         anchor_pos: usize,
         embed: &TargetTokenEmbedder<'_>,
@@ -526,11 +535,11 @@ impl Qwen3DFlash2 {
         let dev = &self.device;
         let bs = self.cfg.block_size();
 
-        if target_hiddens.len() != self.cfg.num_fused_layers() {
+        if target_hiddens.layers.len() != self.cfg.num_fused_layers() {
             return Err(hanzo_ml::Error::msg(format!(
                 "draft_block expected {} target hidden states, got {}",
                 self.cfg.num_fused_layers(),
-                target_hiddens.len()
+                target_hiddens.layers.len()
             )));
         }
         if anchor_token as usize >= self.cfg.vocab_size {
@@ -553,23 +562,16 @@ impl Qwen3DFlash2 {
         //    Rows at or past the anchor are never attended either, so the usable context is
         //    `[ctx_start, ctx_end)` with `ctx_end` clamped to the anchor. Every fused layer
         //    covers the same positions, so one range slices them all.
-        let reach = (0..self.layers.len())
-            .map(|layer| self.cfg.layer_window(layer))
-            .try_fold(0usize, |widest, window| window.map(|w| widest.max(w)));
-        let mut ctx_end = anchor_pos;
-        for t in target_hiddens {
-            ctx_end = ctx_end.min(as_2d(t)?.dim(0)?);
-        }
-        let ctx_start = reach.map_or(0, |w| ctx_end.saturating_sub(w));
-        let mut ctx_parts = Vec::with_capacity(target_hiddens.len());
-        for t in target_hiddens {
-            ctx_parts.push(
-                as_2d(t)?
-                    .narrow(0, ctx_start, ctx_end - ctx_start)?
-                    .to_device(dev)?
-                    .to_dtype(self.dtype)?,
-            );
-        }
+        let held = target_hiddens.start..target_hiddens.end()?;
+        let std::ops::Range {
+            start: ctx_start,
+            end: ctx_end,
+        } = context_range(self.reach(), held, anchor_pos);
+        let ctx_parts = target_hiddens
+            .rows(ctx_start, ctx_end)?
+            .iter()
+            .map(|t| t.to_device(dev)?.to_dtype(self.dtype))
+            .collect::<Result<Vec<_>>>()?;
         let ctx_refs: Vec<&Tensor> = ctx_parts.iter().collect();
         let ctx_cat = Tensor::cat(&ctx_refs, D::Minus1)?; // [ctx_len, num_fused * hidden]
         let ctx_len = ctx_cat.dim(0)?;
@@ -727,6 +729,21 @@ impl Qwen3DFlash2 {
         Ok((cos, sin))
     }
 
+}
+
+/// The context positions a draft at `anchor_pos` reads, given the positions `held`. Rows at or
+/// past the anchor are never attended, and nothing older than `reach` is visible to any layer.
+fn context_range(
+    reach: Option<usize>,
+    held: std::ops::Range<usize>,
+    anchor_pos: usize,
+) -> std::ops::Range<usize> {
+    let end = anchor_pos.min(held.end);
+    let start = reach
+        .map_or(0, |w| end.saturating_sub(w))
+        .max(held.start)
+        .min(end);
+    start..end
 }
 
 /// Additive attention mask `[bs, ctx_len + bs]`: `0` where attended, `-inf`
@@ -943,6 +960,13 @@ impl DFlash2Proposer {
     pub fn block_size(&self) -> usize {
         self.draft.config().block_size()
     }
+
+    /// Positions the target's capture must keep, or `None` for the whole prefix. The draft
+    /// reads its reach before the anchor, and a verify leaves up to a block of rows past the
+    /// anchor before rejection trims them.
+    pub fn capture_retain(&self) -> Option<usize> {
+        self.draft.reach().map(|reach| reach + self.block_size())
+    }
 }
 
 impl SpeculativeProposer for DFlash2Proposer {
@@ -975,20 +999,12 @@ impl SpeculativeProposer for DFlash2Proposer {
         let anchor_token = ctx.sampled_tokens[0];
         let anchor_pos = ctx.base_lens[0];
 
-        // The draft reads the fused hiddens of the WHOLE confirmed prefix; slice the
-        // target's accumulator to the positions that precede the anchor. A shorter
-        // prefix means the accumulator has not caught up (right after a
-        // discontinuity) — propose nothing and let the target decode one token.
-        let prefix_len = hiddens.first().map(|t| t.dim(0)).transpose()?.unwrap_or(0);
-        if prefix_len < anchor_pos {
-            return Ok(SpeculativeProposalBatch::new(vec![
-                SpeculativeProposal::new(Vec::new()),
-            ]));
+        // A window that ends before the anchor, or starts at or after it, holds nothing the
+        // draft can read (right after a discontinuity): propose nothing and the target decodes
+        // one token.
+        if hiddens.end()? < anchor_pos || hiddens.start >= anchor_pos {
+            return stand_down();
         }
-        let prefix = hiddens
-            .iter()
-            .map(|t| t.narrow(0, 0, anchor_pos))
-            .collect::<Result<Vec<_>>>()?;
 
         let embed_fn = Arc::clone(&self.heads.embed);
         let embed = move |ids: &Tensor| embed_fn(ids);
@@ -998,7 +1014,7 @@ impl SpeculativeProposer for DFlash2Proposer {
         // the target verify decides every emitted token.
         let (tokens_t, logits) =
             self.draft
-                .draft_block(&prefix, anchor_token, anchor_pos, &embed, &lm_head, 0.0)?;
+                .draft_block(hiddens, anchor_token, anchor_pos, &embed, &lm_head, 0.0)?;
 
         let tokens: Vec<u32> = tokens_t.to_vec1::<u32>()?;
         // The verifier indexes logit rows by draft position and expects [1, n, vocab].
@@ -1232,6 +1248,31 @@ mod tests {
         Ok(())
     }
 
+    /// A capture that keeps only `reach + block` positions must hand the draft the very rows the
+    /// whole prefix would, at every anchor a verify can land on. A capture that starts later
+    /// than the reach shortens the context and nothing else.
+    #[test]
+    fn dflash_context_range_is_the_same_from_a_bounded_window() {
+        let (reach, block) = (16usize, 8usize);
+        let retain = reach + block;
+        for verified_to in [retain, retain + 1, 100, 1000] {
+            // After a verify the capture holds the newest `retain` rows ending at `verified_to`;
+            // the next anchor sits anywhere in the block that verify covered.
+            let bounded = verified_to - retain..verified_to;
+            for anchor_pos in verified_to + 1 - block..=verified_to {
+                assert_eq!(
+                    context_range(Some(reach), bounded.clone(), anchor_pos),
+                    context_range(Some(reach), 0..verified_to, anchor_pos),
+                    "verified_to {verified_to} anchor {anchor_pos}"
+                );
+            }
+        }
+        assert_eq!(context_range(Some(reach), 0..10, 10), 0..10);
+        assert_eq!(context_range(Some(reach), 95..100, 100), 95..100);
+        assert_eq!(context_range(None, 0..100, 60), 0..60);
+        assert_eq!(context_range(None, 40..100, 60), 40..60);
+    }
+
     /// End-to-end over the real checkpoint IF present (skips gracefully otherwise):
     /// fused target hiddens + an anchor -> `block_size - 1` in-vocab tokens whose
     /// proposal rows are `[block_size - 1, vocab]`. No GPU, no model download — the
@@ -1272,7 +1313,9 @@ mod tests {
             hiddens.push(Tensor::randn(0f32, 1f32, (ctx_len, h), &dev)?);
         }
 
-        let (tokens, logits) = model.draft_block(&hiddens, 12345, ctx_len, &embed, &lm_head, 0.0)?;
+        let hiddens = crate::speculative::HiddenWindow::new(0, hiddens)?;
+        let (tokens, logits) =
+            model.draft_block(&hiddens, 12345, ctx_len, &embed, &lm_head, 0.0)?;
         assert_eq!(tokens.dims(), &[draft_len]);
         assert_eq!(logits.dims(), &[draft_len, vocab]);
         assert_eq!(draft_len, block - 1);

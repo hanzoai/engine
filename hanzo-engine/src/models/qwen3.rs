@@ -647,8 +647,8 @@ impl IsqModel for Model {
 }
 
 impl crate::speculative::SpeculativeTargetMixin for Model {
-    fn set_speculative_capture_layers(&self, layers: Vec<usize>) {
-        self.spec_capture.set_layers(layers);
+    fn set_speculative_capture_layers(&self, layers: Vec<usize>, retain: Option<usize>) {
+        self.spec_capture.set_layers(layers, retain);
     }
 
     fn note_speculative_forward(&self, seq_ids: &[usize]) {
@@ -667,17 +667,11 @@ impl crate::speculative::SpeculativeTargetMixin for Model {
     fn speculative_target_hidden_layers(
         &self,
         rows: &[(usize, usize)],
-    ) -> Result<Option<Vec<Tensor>>> {
+    ) -> Result<Option<crate::speculative::HiddenWindow>> {
         if rows.is_empty() {
             return Ok(None);
         }
-        // One `[prefix_len, hidden]` tensor per fused layer, for the single sequence the
-        // capture tracks; the proposer slices it to `anchor_pos`.
-        let hiddens = self.spec_capture.hiddens();
-        if hiddens.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(hiddens))
+        Ok(self.spec_capture.hiddens())
     }
 }
 
