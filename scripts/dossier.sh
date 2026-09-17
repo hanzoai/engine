@@ -12,14 +12,19 @@
 #              --hanzo-bench PATH --llama-bench PATH \
 #              --model GGUF --model-tag qwen3-1p7b \
 #              [-p 512,500 -n 128 -r 7] [--concurrency 1] [--max-ctx 4096] \
+#              [--hanzo-args "--paged-attn --pa-ctxt-len 4096"] \
 #              [--engine-dir DIR --llama-dir DIR] [--out DIR] [--force]
+#
+# --hanzo-args reach hanzo-bench verbatim and are recorded in the manifest. hanzo-bench leaves
+# PagedAttention off on ROCm and Vulkan, and the server turns it on, so a run that is to stand
+# for what we serve passes --paged-attn here.
 #
 # One GPU workload per box: the quiet-gate HARD-FAILS if another GPU job
 # (cargo/rustc/ncu/nsys/rocprof/metal-capture/hanzo-bench/hanzo-server/llama-bench/
 # ollama/vllm) is already running. Desktop CPU load is recorded, not fatal.
 set -euo pipefail
 
-BACKEND="" HANZO="" LLAMA="" MODEL="" MTAG="" OUT="" FORCE=0 STOCH=0
+BACKEND="" HANZO="" LLAMA="" MODEL="" MTAG="" OUT="" FORCE=0 STOCH=0 HARGS=""
 PLIST="512" NGEN=128 REPS=7 CONC=1 MAXCTX=4096
 ENGINE_DIR="$HOME/work/hanzo/engine" LLAMA_DIR=""
 while [[ $# -gt 0 ]]; do case "$1" in
@@ -33,6 +38,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
   -r) REPS="$2"; shift 2;;
   --concurrency) CONC="$2"; shift 2;;
   --max-ctx) MAXCTX="$2"; shift 2;;
+  --hanzo-args) HARGS="$2"; shift 2;;
   --engine-dir) ENGINE_DIR="$2"; shift 2;;
   --llama-dir) LLAMA_DIR="$2"; shift 2;;
   --out) OUT="$2"; shift 2;;
@@ -111,6 +117,7 @@ manifest() {
     llama_dirty="$( [[ -n "$LLAMA_DIR" ]] && dirty_of "$LLAMA_DIR" || echo false)" \
     hanzo_bench_bin="$HANZO" llama_bench_bin="$LLAMA" model_path="$MODEL" \
     prompt_sizes="$PLIST" n_gen="$NGEN" reps="$REPS" concurrency="$CONC" max_ctx="$MAXCTX" \
+    hanzo_args="$HARGS" \
     backend_env="$(backend_env)" sampler="$SAMPLER" gpu="$gpu" <<'PY'
 import json, hashlib, os, sys, time
 out = sys.argv[1]
@@ -137,7 +144,7 @@ m = {
   "model_sha256": sha256(kv.get("model_path")),
   "params": {"prompt_sizes": kv.get("prompt_sizes"), "n_gen": int(kv.get("n_gen") or 0),
              "reps": int(kv.get("reps") or 0), "concurrency": int(kv.get("concurrency") or 1),
-             "max_ctx": int(kv.get("max_ctx") or 0)},
+             "max_ctx": int(kv.get("max_ctx") or 0), "hanzo_args": kv.get("hanzo_args") or ""},
   "env": {"backend_env": kv.get("backend_env")},
   "gpu": kv.get("gpu") or None,
 }
@@ -152,7 +159,7 @@ run_hanzo() { # $1=phase(pp|tg) $2=n $3=tag
   local p g; if [[ "$1" == pp ]]; then p="$2"; g=0; else p=0; g="$2"; fi
   echo ">> hanzo-bench $BACKEND $3 (p=$p g=$g r=$REPS c=$CONC)" >&2
   env $(backend_env) "$HANZO" -p "$p" -g "$g" -r "$REPS" --concurrency "$CONC" \
-      $([[ "$STOCH" == 1 ]] && echo --stochastic) \
+      $([[ "$STOCH" == 1 ]] && echo --stochastic) $HARGS \
       --json "$OUT/hanzo_${3}.json" \
       gguf -m "$MDIR" -f "$MFILE" --max-seq-len "$MAXCTX" \
       > "$OUT/hanzo_${3}.log" 2>&1 || { echo "hanzo-bench FAILED ($3); tail:" >&2; tail -8 "$OUT/hanzo_${3}.log" >&2; }
