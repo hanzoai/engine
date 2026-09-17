@@ -44,6 +44,7 @@ pub(crate) mod quantized_qwen3_next;
 pub(crate) mod quantized_starcoder2;
 pub(crate) mod qwen2;
 pub(crate) mod qwen3;
+pub(crate) mod qwen3_dflash;
 pub(crate) mod qwen3_dspark;
 pub(crate) mod qwen3_moe;
 pub(crate) mod qwen3_next;

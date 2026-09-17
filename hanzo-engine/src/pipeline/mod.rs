@@ -865,6 +865,10 @@ pub trait Pipeline:
         return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, hanzo_ml::Error>;
 
+    /// Names the sequences the next `forward_inputs` call runs. A target that keeps
+    /// per-sequence speculative state attributes it by these ids; the default ignores them.
+    fn note_forward_sequences(&self, _seq_ids: &[usize]) {}
+
     fn attach_speculative(
         &mut self,
         _config: crate::speculative::SpeculativeConfig,
@@ -969,6 +973,9 @@ pub trait Pipeline:
                         }
                     }
 
+                    let forward_ids: Vec<usize> =
+                        seq_indices.iter().map(|&idx| *input_seqs[idx].id()).collect();
+                    self.note_forward_sequences(&forward_ids);
                     let start = Instant::now();
                     let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
                     let end = Instant::now();
@@ -1365,6 +1372,9 @@ pub trait Pipeline:
                             seq_indices,
                         } = inputs.map_err(hanzo_ml::Error::msg)?;
 
+                        let forward_ids: Vec<usize> =
+                            seq_indices.iter().map(|&idx| *input_seqs[idx].id()).collect();
+                        self.note_forward_sequences(&forward_ids);
                         let start = Instant::now();
                         let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
                         let end = Instant::now();

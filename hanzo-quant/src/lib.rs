@@ -914,7 +914,9 @@ impl TryFrom<GgmlDType> for IsqType {
             | GgmlDType::BF16
             | GgmlDType::F32
             | GgmlDType::F16
-            // IQ / ternary / 1-bit / NVFP4 codec types are decode-only, not ISQ targets.
+            // IQ / ternary / 1-bit / FP4 codec types are decode-only, not ISQ targets.
+            | GgmlDType::ROCMFP4
+            | GgmlDType::ROCMFP4_FAST
             | GgmlDType::IQ2_XXS
             | GgmlDType::IQ2_XS
             | GgmlDType::IQ3_XXS

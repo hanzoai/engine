@@ -723,6 +723,19 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub prompt_lookup_ngram: Option<usize>,
 
+    /// Attach a DFlash 2 block-diffusion draft from this checkpoint directory (`config.json` +
+    /// `model.safetensors`). The draft has no embedding or output head of its own and decodes
+    /// through the target's, so it pairs only with the model it was trained beside.
+    #[arg(long)]
+    #[serde(default)]
+    pub dflash: Option<String>,
+
+    /// Draft a block shorter than the DFlash checkpoint's trained `block_size`. 0 drafts the
+    /// full block.
+    #[arg(long, default_value_t = 0)]
+    #[serde(default)]
+    pub dflash_block_size: usize,
+
     /// Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset.
     #[arg(long)]
     #[serde(default)]
@@ -862,6 +875,15 @@ pub struct BenchRuntimeOptions {
     /// model — drafts are pulled from the sequence's own history; reuses `--gamma` for draft length.
     #[arg(long)]
     pub prompt_lookup_ngram: Option<usize>,
+
+    /// Attach a DFlash 2 block-diffusion draft from this checkpoint directory.
+    #[arg(long)]
+    pub dflash: Option<String>,
+
+    /// Draft a block shorter than the DFlash checkpoint's trained `block_size`. 0 drafts the
+    /// full block.
+    #[arg(long, default_value_t = 0)]
+    pub dflash_block_size: usize,
 }
 
 impl BenchRuntimeOptions {
@@ -1032,6 +1054,8 @@ impl Default for RuntimeOptions {
             draft_quantized_file: None,
             gamma: None,
             prompt_lookup_ngram: None,
+            dflash: None,
+            dflash_block_size: 0,
             mcp_config: None,
             agent: false,
             enable_search: false,

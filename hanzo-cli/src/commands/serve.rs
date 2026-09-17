@@ -107,6 +107,7 @@ pub async fn run_server(
             runtime.gamma(),
         )
         .with_prompt_lookup_optional(runtime.prompt_lookup_ngram, runtime.gamma())
+        .with_dflash_optional(runtime.dflash.clone(), runtime.dflash_block_size)
         .with_paged_attn_cache_type(paged_cache_type);
 
     let sandbox_profile = default_sandbox_profile(&runtime);

@@ -11,6 +11,9 @@ pub enum SpeculativeAttachKind {
         block_size: usize,
         confidence_threshold: f32,
     },
+    Dflash {
+        block_size: usize,
+    },
     PromptLookup {
         ngram_min: usize,
         ngram_max: usize,
@@ -48,6 +51,12 @@ impl SpeculativeAttachInfo {
         }
     }
 
+    pub fn dflash(block_size: usize) -> Self {
+        Self {
+            kind: SpeculativeAttachKind::Dflash { block_size },
+        }
+    }
+
     pub fn prompt_lookup(ngram_min: usize, ngram_max: usize, gamma: usize) -> Self {
         Self {
             kind: SpeculativeAttachKind::PromptLookup {
@@ -75,6 +84,9 @@ pub fn log_attach(info: &SpeculativeAttachInfo) {
             confidence_threshold,
         } => tracing::info!(
             "Speculative decoding enabled: DSpark parallel-block draft with block_size={block_size}, confidence_threshold={confidence_threshold}"
+        ),
+        SpeculativeAttachKind::Dflash { block_size } => tracing::info!(
+            "Speculative decoding enabled: DFlash 2 block-diffusion draft with block_size={block_size}"
         ),
         SpeculativeAttachKind::PromptLookup {
             ngram_min,

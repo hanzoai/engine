@@ -152,6 +152,7 @@ pub mod defaults {
     pub const MTP_CONFIG: Option<hanzo_engine::MtpConfig> = None;
     pub const DRAFT_MODEL: Option<hanzo_engine::ModelSelected> = None;
     pub const PROMPT_LOOKUP_NGRAM: Option<usize> = None;
+    pub const DFLASH: Option<(String, usize)> = None;
     /// Shortest tail n-gram prompt-lookup will match on (Hugging Face / apoorvumang parity:
     /// search down to a single token).
     pub const PROMPT_LOOKUP_NGRAM_MIN: usize = 1;
@@ -297,6 +298,10 @@ pub struct ServerBuilder {
     /// Optional max n-gram for prompt-lookup speculative decoding (no draft model).
     prompt_lookup_ngram: Option<usize>,
 
+    /// Optional DFlash 2 block-diffusion draft: `(checkpoint_dir, block_size)`, where a
+    /// `block_size` of 0 drafts the checkpoint's full trained block.
+    dflash: Option<(String, usize)>,
+
     /// Draft tokens proposed per target verification step.
     gamma: usize,
 
@@ -341,6 +346,7 @@ impl Default for ServerBuilder {
             mtp_config: defaults::MTP_CONFIG,
             draft_model: defaults::DRAFT_MODEL,
             prompt_lookup_ngram: defaults::PROMPT_LOOKUP_NGRAM,
+            dflash: defaults::DFLASH,
             gamma: defaults::GAMMA,
             disable_eos_stop: false,
             code_exec_config: None,
@@ -664,6 +670,14 @@ impl ServerBuilder {
         self
     }
 
+    /// Attach a DFlash 2 block-diffusion draft if a checkpoint directory was given. The draft
+    /// decodes through the target's own embedding and output head, so it pairs only with the
+    /// model it was trained beside. `block_size` 0 drafts the full trained block.
+    pub fn with_dflash_optional(mut self, path: Option<String>, block_size: usize) -> Self {
+        self.dflash = path.map(|path| (path, block_size));
+        self
+    }
+
     /// Disable EOS token stopping (generate until max_len regardless of EOS).
     pub fn with_disable_eos_stop(mut self, disable: bool) -> Self {
         self.disable_eos_stop = disable;
@@ -825,7 +839,12 @@ impl ServerBuilder {
         )?;
         info!("Model loaded.");
 
-        if let Some(draft_model) = self.draft_model.clone() {
+        if let Some((path, block_size)) = self.dflash.clone() {
+            pipeline
+                .lock()
+                .await
+                .attach_speculative(hanzo_engine::SpeculativeConfig::Dflash { path, block_size })?;
+        } else if let Some(draft_model) = self.draft_model.clone() {
             let draft_loader = LoaderBuilder::new(draft_model).build()?;
             let draft_pipeline = draft_loader.load_model_from_hf(
                 None,
@@ -991,7 +1010,12 @@ impl ServerBuilder {
             isq,
             cache_config,
         )?;
-        if let Some(draft_model) = self.draft_model.clone() {
+        if let Some((path, block_size)) = self.dflash.clone() {
+            pipeline
+                .lock()
+                .await
+                .attach_speculative(hanzo_engine::SpeculativeConfig::Dflash { path, block_size })?;
+        } else if let Some(draft_model) = self.draft_model.clone() {
             let draft_loader = LoaderBuilder::new(draft_model).build()?;
             let draft_pipeline = draft_loader.load_model_from_hf(
                 None,

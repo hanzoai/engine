@@ -282,9 +282,14 @@ fn typed_slice<'a, T>(xs: &'a [T], layout: &Layout, name: &'static str) -> Resul
     }
 }
 
-fn cpu_positions<'a>(
-    storage_and_layout: &'a Option<(std::sync::RwLockReadGuard<'a, Storage>, &'a Layout)>,
-) -> Result<Option<&'a [u32]>> {
+/// Generic over the guard: it only reads through it, so it does not name the lock
+/// `Tensor::storage_and_layout` happens to hand out.
+fn cpu_positions<'a, G>(
+    storage_and_layout: &'a Option<(G, &'a Layout)>,
+) -> Result<Option<&'a [u32]>>
+where
+    G: std::ops::Deref<Target = Storage>,
+{
     let Some((storage, layout)) = storage_and_layout else {
         return Ok(None);
     };
