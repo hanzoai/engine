@@ -82,6 +82,18 @@ def row_entry(run, model, cell):
         "hi": round(ratio["hi"], 6),
         "verdict": ratio["verdict"],
         "noisy": hanzo["cv"] > NOISY_CV or llama["cv"] > NOISY_CV,
+        **best(hanzo, llama, ratio),
+    }
+
+
+def best(hanzo, llama, ratio):
+    """Best-of-N, where the run recorded it. Runs scored before it existed carry none."""
+    if hanzo.get("best") is None or llama.get("best") is None:
+        return {}
+    return {
+        "hanzo_best": round(hanzo["best"], 4),
+        "llama_best": round(llama["best"], 4),
+        "best_ratio": round(ratio["best"], 6) if ratio.get("best") else None,
     }
 
 

@@ -11,6 +11,8 @@ pure function of those raw samples, computed here and nowhere else:
   * mean, sample stddev (ddof=1), n
   * 95% CI         = mean +/- t(0.975, n-1) * s / sqrt(n)    (Student t, small n)
   * CV%            = 100 * s / mean                          (flagged when > 5%)
+  * best           = the fastest repetition of all that were taken, warmup included. It is what
+                     a short run of three reports, where an interval on two samples says little
   * ratio          = mean_hanzo / mean_llama, with the relative CIs added in
                      quadrature (delta method, independent means)
 
@@ -49,12 +51,13 @@ def stats(samples):
     mean = sum(samples) / n
     if n == 1:
         return {"mean": mean, "ci": float("nan"), "cv": float("nan"), "n": 1,
-                "samples": samples}
+                "samples": samples, "best": samples[0]}
     var = sum((x - mean) ** 2 for x in samples) / (n - 1)
     s = math.sqrt(var)
     ci = tcrit(n) * s / math.sqrt(n)
     cv = 100.0 * s / mean if mean else float("nan")
-    return {"mean": mean, "ci": ci, "cv": cv, "n": n, "std": s, "samples": samples}
+    return {"mean": mean, "ci": ci, "cv": cv, "n": n, "std": s, "samples": samples,
+            "best": max(samples)}
 
 
 def hanzo_samples(rec):
@@ -73,12 +76,21 @@ def hanzo_samples(rec):
     return [toks / secs / c for secs, toks in per if secs > 0 and toks > 0]
 
 
+def hanzo_best(rec):
+    """The fastest of ALL repetitions. The discarded first one counts: a best is a best."""
+    rates = [toks / secs / rec["concurrency"] for secs, toks in rec["per_rep"] if secs > 0 and toks > 0]
+    return max(rates) if rates else None
+
+
 def load_hanzo(path):
     d = json.load(open(path))
     out = {}
     for r in d["results"]:
         key = (r["phase"], r["n"], r["concurrency"])
-        out[key] = {"stats": stats(hanzo_samples(r)),
+        scored = stats(hanzo_samples(r))
+        if scored:
+            scored["best"] = hanzo_best(r)
+        out[key] = {"stats": scored,
                     "backend": d["backend"], "model": d.get("model_id", "?"),
                     "engine_version": d.get("engine_version"), "src": os.path.basename(path)}
     return out
@@ -100,7 +112,7 @@ def load_llama(path):
             mean, sd = row.get("avg_ts"), row.get("stddev_ts", 0.0) or 0.0
             ci = tcrit(n_rep) * sd / math.sqrt(n_rep) if n_rep > 1 else float("nan")
             st = {"mean": mean, "ci": ci, "cv": (100 * sd / mean if mean else float("nan")),
-                  "n": n_rep, "std": sd, "samples": None}
+                  "n": n_rep, "std": sd, "samples": None, "best": None}
         out[(phase, n, 1)] = {"stats": st, "src": os.path.basename(path)}
     return out
 
@@ -116,7 +128,8 @@ def ratio(h, l):
     ci = r * rel
     lo, hi = r - ci, r + ci
     verdict = "WIN" if lo > 1.0 else "LOSS" if hi < 1.0 else "PARITY"
-    return {"ratio": r, "ci": ci, "lo": lo, "hi": hi, "verdict": verdict}
+    best = h["best"] / l["best"] if h.get("best") and l.get("best") else None
+    return {"ratio": r, "ci": ci, "lo": lo, "hi": hi, "verdict": verdict, "best": best}
 
 
 # LaTeX control sequences are letters ONLY (no digits), so every measured cell gets
@@ -173,8 +186,8 @@ def main():
             print(f"warn: unreadable {p}: {e}", file=sys.stderr)
 
     board, tex, texrows = [], [], []
-    md = ["| model | backend | phase | n | conc | hanzo t/s | llama t/s | ratio | verdict |",
-          "|---|---|---|---|---|---|---|---|---|"]
+    md = ["| model | backend | phase | n | conc | hanzo t/s | llama t/s | ratio | verdict | best hanzo | best llama | best ratio |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for tag in sorted(hanzo):
         for key in sorted(hanzo[tag]):
             phase, n, conc = key
@@ -184,10 +197,12 @@ def main():
             ls = lrec["stats"] if lrec else None
             rr = ratio(hs, ls) if ls else None
             model, backend = h["model"], h["backend"]
-            md.append("| {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
+            best = lambda st: f"{st['best']:.2f}" if st and st.get("best") else "--"
+            md.append("| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
                 model.split("/")[-1][:20], backend, phase, n, conc, fmt(hs), fmt(ls),
                 (f"{rr['ratio']:.3f}±{rr['ci']:.3f}" if rr else "--"),
-                (rr["verdict"] if rr else "--")))
+                (rr["verdict"] if rr else "--"), best(hs), best(ls),
+                (f"{rr['best']:.3f}" if rr and rr.get("best") else "--")))
             board.append({"tag": tag, "model": model, "backend": backend, "phase": phase,
                           "n": n, "concurrency": conc, "hanzo": hs, "llama": ls, "ratio": rr,
                           "engine_version": h.get("engine_version"),
