@@ -354,6 +354,10 @@ pub fn gated_delta_rule_recurrence(
         }
         return recurrence_metal(q, k, v, g, beta, state);
     }
+    #[cfg(feature = "rocm")]
+    if state.device().is_rocm() {
+        return recurrence_rocm(q, k, v, g, beta, state);
+    }
     // The Vulkan single-step kernel (gdn_step_vulkan) isn't ported to canonical hanzo-ml yet, so
     // don't intercept the Vulkan decode path -- fall through to recurrence_portable, which is
     // documented to "serve CPU, Vulkan, and any backend without a fused kernel".
@@ -389,7 +393,7 @@ fn recurrence_vulkan_step(
 
 /// Flatten (b, s, heads, dim) -> (b*heads, s, dim) in f32 contiguous, the layout the fused
 /// CUDA/Metal kernels expect. state (b, heads, k, v) flattens to (b*heads, k, v) the same way.
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 fn recurrence_flatten(
     q: &Tensor,
     k: &Tensor,
@@ -431,7 +435,7 @@ fn recurrence_flatten(
 
 /// Reshape a fused kernel's (b*heads, s, v_dim) output back to (b, s, heads, v_dim), write the
 /// (b*heads, k, v) state back into `state`, and restore the input dtype.
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 fn recurrence_unflatten(
     out_bh: &Tensor,
     state_flat: &Tensor,
@@ -449,6 +453,24 @@ fn recurrence_unflatten(
         .transpose(1, 2)?
         .contiguous()?
         .to_dtype(q.dtype())
+}
+
+/// Fused ROCm recurrence: ONE `gdn_scan` launch (a thread per (b*head, v) column, sequential
+/// over the sequence, state in registers) replaces the host-side per-token ops loop. Prefill
+/// and decode both take this path; the state is flattened to f32, updated in place by the
+/// kernel, and folded back by `recurrence_unflatten`.
+#[cfg(feature = "rocm")]
+fn recurrence_rocm(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state: &mut Tensor,
+) -> Result<Tensor> {
+    let (qf, kf, vf, gf, bf, statef) = recurrence_flatten(q, k, v, g, beta, state)?;
+    let out = hanzo_ml::rocm_backend::gdn_scan_rocm(&qf, &kf, &vf, &gf, &bf, &statef)?;
+    recurrence_unflatten(&out, &statef, q, v, state)
 }
 
 /// Fused CUDA recurrence: chunked scan for prefill (seq >= 64), single-pass for short/decode.
@@ -2117,6 +2139,84 @@ mod tests {
     }
 
     // Fast Vulkan reproduction of the qwen35moe prompt-step recurrence shape crash. Skips cleanly with
+    // no GPU. Run on a ROCm box (evo) with:
+    //   cargo test --features rocm -p hanzo-engine gdn_scan_rocm_matches_portable -- --nocapture
+    #[test]
+    #[cfg_attr(not(feature = "rocm"), ignore = "requires rocm feature")]
+    fn gdn_scan_rocm_matches_portable() -> Result<()> {
+        #[cfg(feature = "rocm")]
+        {
+            let Ok(dev) = Device::new_rocm(0) else {
+                eprintln!("skip: no rocm device");
+                return Ok(());
+            };
+            return run_gdn_scan_rocm_matches_portable(&dev);
+        }
+        #[cfg(not(feature = "rocm"))]
+        {
+            eprintln!("skip: built without the rocm feature");
+            Ok(())
+        }
+    }
+
+    fn run_gdn_scan_rocm_matches_portable(dev: &Device) -> Result<()> {
+        let (batch, nvh, hkd, hvd, seq) = (1usize, 4usize, 128usize, 128usize, 32usize);
+        let gen = |n: usize, seed: usize| -> Vec<f32> {
+            (0..n)
+                .map(|i| (((i * 1103515245 + seed * 12345 + 7) % 2000) as f32 / 1000.0) - 1.0)
+                .collect()
+        };
+        let on = |v: Vec<f32>, shape: (usize, usize, usize, usize)| -> Result<Tensor> {
+            Tensor::from_vec(v, shape, &Device::Cpu)?.to_device(dev)
+        };
+        let on3 = |v: Vec<f32>, shape: (usize, usize, usize)| -> Result<Tensor> {
+            Tensor::from_vec(v, shape, &Device::Cpu)?.to_device(dev)
+        };
+        let q = on(gen(batch * seq * nvh * hkd, 1), (batch, seq, nvh, hkd))?;
+        let k = on(gen(batch * seq * nvh * hkd, 2), (batch, seq, nvh, hkd))?;
+        let v = on(gen(batch * seq * nvh * hvd, 3), (batch, seq, nvh, hvd))?;
+        let g = on3(
+            gen(batch * seq * nvh, 4).iter().map(|x| x * 0.5 - 0.5).collect(),
+            (batch, seq, nvh),
+        )?;
+        let beta = on3(
+            gen(batch * seq * nvh, 5).iter().map(|x| (x + 1.0) * 0.5).collect(),
+            (batch, seq, nvh),
+        )?;
+        let cpu = |t: &Tensor| -> Result<Tensor> { t.to_device(&Device::Cpu) };
+        let (qc, kc, vc, gc, bc) = (cpu(&q)?, cpu(&k)?, cpu(&v)?, cpu(&g)?, cpu(&beta)?);
+        let sc = Tensor::from_vec(
+            gen(batch * nvh * hkd * hvd, 6),
+            (batch, nvh, hkd, hvd),
+            &Device::Cpu,
+        )?;
+        let state_dev = sc.to_device(dev)?;
+
+        let mut state_fused = state_dev.clone();
+        let y_fused = gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut state_fused)?;
+        let mut state_ref = sc.clone();
+        let y_ref = recurrence_portable(&qc, &kc, &vc, &gc, &bc, &mut state_ref)?;
+
+        let a = y_fused.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+        let b = y_ref.to_vec1::<f32>()?;
+        let max_rel = a
+            .iter()
+            .zip(&b)
+            .map(|(x, y)| (x - y).abs() / y.abs().max(1e-3))
+            .fold(0f32, f32::max);
+        assert!(max_rel < 1e-4, "gdn_scan_rocm vs portable max_rel {max_rel}");
+
+        let sf = state_fused.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+        let sr = state_ref.to_vec1::<f32>()?;
+        let state_rel = sf
+            .iter()
+            .zip(&sr)
+            .map(|(x, y)| (x - y).abs() / y.abs().max(1e-3))
+            .fold(0f32, f32::max);
+        assert!(state_rel < 1e-4, "gdn_scan_rocm state divergence {state_rel}");
+        Ok(())
+    }
+
     // no GPU. Run on a Vulkan box with:
     //   cargo test --features vulkan -p hanzo-engine gdn_recurrence_vulkan_shapes -- --nocapture --include-ignored
     #[test]
