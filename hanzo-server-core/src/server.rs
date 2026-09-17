@@ -132,17 +132,6 @@ pub mod defaults {
     pub const PAGED_CTXT_LEN: Option<usize> = None;
     pub const PAGED_ATTN_BLOCK_SIZE: Option<usize> = None;
     pub const PAGED_ATTN: Option<bool> = None;
-    pub const PAGED_ATTN_CPU: bool = false;
-    pub const PAGED_ATTN_CUDA: bool = true;
-    pub const PAGED_ATTN_METAL: bool = false;
-    pub const PAGED_ATTN_ROCM: bool = true;
-    // Vulkan has a paged-attention path (`VulkanDevice::paged_attention_vk` + paged_attn.spv +
-    // reshape_and_cache.spv), enabled opt-in via `--paged-attn on`. It correctly eliminates the naive
-    // Sdpa layout-copy churn (GQA repeat_kv + KV-append cat: copy2d 14k->1.2k), BUT the current v1
-    // scalar attention kernel is slower per-dispatch than the copies it removes, so it nets a decode
-    // regression on this APU until the kernel is optimized (v2 partitioned) and the MoE route/combine
-    // op-chains are fused. Default OFF until then; the `is_vulkan()` branch keeps the opt-in wired.
-    pub const PAGED_ATTN_VULKAN: bool = false;
     pub const CPU: bool = false;
     pub const ENABLE_SEARCH: bool = false;
     pub const SEARCH_EMBEDDING_MODEL: Option<SearchEmbeddingModel> = None;
@@ -1539,25 +1528,21 @@ fn hanzo_instance_info(loader: &dyn Loader) {
     debug!("Model kind is: {}", loader.get_kind().to_string());
 }
 
-/// Determines whether paged attention should be enabled based on device type and preferences.
+/// Whether paged attention is on: the caller's word where the device has a paged path, the
+/// engine's default for that device otherwise.
 fn configure_paged_attn(device: &Device, paged_attn: Option<bool>) -> bool {
-    if device.is_cpu() {
+    let paged_path = device.is_cuda()
+        || hanzo_engine::distributed::use_nccl()
+        || device.is_metal()
+        || device.is_rocm()
+        || device.is_vulkan();
+    if !paged_path {
         if paged_attn == Some(true) {
-            warn!("Paged attention is not supported on CPU.");
+            warn!("Paged attention is not supported on this device.");
         }
-
-        defaults::PAGED_ATTN_CPU
-    } else if device.is_cuda() || hanzo_engine::distributed::use_nccl() {
-        paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA)
-    } else if device.is_metal() {
-        paged_attn.unwrap_or(defaults::PAGED_ATTN_METAL)
-    } else if device.is_rocm() {
-        paged_attn.unwrap_or(defaults::PAGED_ATTN_ROCM)
-    } else if device.is_vulkan() {
-        paged_attn.unwrap_or(defaults::PAGED_ATTN_VULKAN)
-    } else {
-        false
+        return false;
     }
+    paged_attn.unwrap_or_else(|| hanzo_engine::paged_attn_default(device))
 }
 
 /// Initializes the cache configuration for paged attention based on provided parameters.

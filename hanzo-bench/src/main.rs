@@ -374,11 +374,11 @@ struct Args {
     #[arg(long = "pa-blk-size")]
     paged_attn_block_size: Option<usize>,
 
-    /// Disable PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
+    /// Turn PagedAttention off where it is this device's default (CUDA, ROCm).
     #[arg(long = "no-paged-attn", default_value_t = false)]
     no_paged_attn: bool,
 
-    /// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
+    /// Turn PagedAttention on where it is not this device's default (Metal, Vulkan).
     #[arg(long = "paged-attn", default_value_t = false)]
     paged_attn: bool,
 
@@ -505,14 +505,12 @@ async fn main() -> anyhow::Result<()> {
         DeviceMapSetting::Auto(auto_device_map_params)
     };
 
-    let no_paged_attn = if device.is_cuda() || hanzo_engine::distributed::use_nccl() {
-        args.no_paged_attn
-    } else if device.is_metal() {
-        !args.paged_attn
+    // The served default for this device, unless a flag says otherwise: a benchmark measures
+    // what is served.
+    let no_paged_attn = if args.paged_attn {
+        false
     } else {
-        // ROCm/Vulkan support PagedAttention (server-core enables it): default off to match
-        // llama-bench's contiguous KV, but honor `--paged-attn` so the production path is benchable.
-        !args.paged_attn
+        args.no_paged_attn || !hanzo_engine::paged_attn_default(&device)
     };
 
     let cache_config = match (
