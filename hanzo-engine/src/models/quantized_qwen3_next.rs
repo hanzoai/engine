@@ -63,7 +63,7 @@ use crate::gguf::Content;
 use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::models::gdn::{
-    gated_delta_rule_recurrence, l2_norm, sigmoid, softplus, GdnLayerCache, RmsNormGated,
+    forward_pooled, l2_norm, sigmoid, softplus, GdnLayerCache, PoolSlots, RmsNormGated,
 };
 use crate::models::quantized_qwen3_5_moe::{gguf_qmm, FusedMoe};
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
@@ -337,6 +337,8 @@ impl QGatedDeltaNet {
             .narrow(D::Minus1, v_per_group, v_per_group)?
             .reshape((batch_size, seq_len, self.num_v_heads))?;
 
+        cache.trail_conv(&mixed_qkv)?;
+
         // 3. Causal conv1d over the concatenated qkv (includes silu).
         let mixed_qkv = if cache.seqlen_offset > 0 && seq_len == 1 {
             self.causal_conv1d_update(&mixed_qkv, cache)?
@@ -393,7 +395,7 @@ impl QGatedDeltaNet {
         let k = l2_norm(&k, L2_NORM_EPS)?;
 
         // 8. Recurrent gated delta rule (dispatches to the fused per-backend kernel internally).
-        let y = gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?;
+        let y = cache.recurrence(&q, &k, &v, &g, &beta)?;
         cache.seqlen_offset += seq_len;
 
         // 9. Gated RMSNorm with z, then output projection.
@@ -423,7 +425,9 @@ impl QGatedDeltaNet {
         for i in (total_len - seq_len)..total_len {
             let window =
                 hidden_new.narrow(2, i + 1 - self.conv_kernel_size, self.conv_kernel_size)?;
-            let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
+            let out = window
+                .broadcast_mul(&weight.unsqueeze(0)?)?
+                .sum(D::Minus1)?;
             conv_outputs.push(out);
         }
         let out = Tensor::stack(&conv_outputs, 2)?;
@@ -488,7 +492,9 @@ impl QGatedDeltaNet {
         let mut conv_outputs = Vec::with_capacity(seq_len);
         for i in 0..seq_len {
             let window = padded_t.narrow(2, i, self.conv_kernel_size)?;
-            let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
+            let out = window
+                .broadcast_mul(&weight.unsqueeze(0)?)?
+                .sum(D::Minus1)?;
             conv_outputs.push(out);
         }
         let out = Tensor::stack(&conv_outputs, 2)?;
@@ -959,6 +965,7 @@ impl ModelWeights {
         let mut x = self.tok_embeddings.as_ref().unwrap().forward(input_ids)?;
 
         let mut hybrid_cache = self.cache.hybrid();
+        let trail = hybrid_cache.records_trail(x.dim(1)?);
         let state_indices = hybrid_cache.state_indices().cloned();
         let state_indices_host: Option<Vec<u32>> =
             hybrid_cache.state_indices_host().map(|s| s.to_vec());
@@ -1065,58 +1072,25 @@ impl ModelWeights {
                             .ok_or_else(|| {
                                 hanzo_ml::Error::msg("missing host recurrent state index")
                             })? as usize;
-                        let mut gdn_cache = GdnLayerCache {
-                            conv_state: pool.conv_state.narrow(0, slot, 1)?,
-                            recurrent_state: pool.recurrent_state.narrow(0, slot, 1)?,
-                            seqlen_offset: seqlen_offsets.first().copied().unwrap_or(0),
+                        let slots = PoolSlots::One {
+                            slot,
+                            offset: seqlen_offsets.first().copied().unwrap_or(0),
                         };
-                        let out = gdn.forward(&normed, &mut gdn_cache)?;
-                        let conv_dt = pool.conv_state.dtype();
-                        let rec_dt = pool.recurrent_state.dtype();
-                        pool.conv_state.slice_set(
-                            &gdn_cache.conv_state.to_dtype(conv_dt)?.contiguous()?,
-                            0,
-                            slot,
-                        )?;
-                        pool.recurrent_state.slice_set(
-                            &gdn_cache.recurrent_state.to_dtype(rec_dt)?.contiguous()?,
-                            0,
-                            slot,
-                        )?;
-                        pool.set_seqlen_offset(slot, gdn_cache.seqlen_offset);
+                        let out = forward_pooled(pool, slots, layer_idx, trail, |cache| {
+                            gdn.forward(&normed, cache)
+                        })?;
                         out
                     } else {
                         let indices = state_indices
                             .as_ref()
                             .expect("checked above: recurrent indices required");
-                        let indices_vec: Vec<u32> = indices.to_vec1()?;
-                        if indices_vec.is_empty() {
-                            hanzo_ml::bail!("Hybrid recurrent state indices are empty.");
-                        }
-                        let first_offset = pool.get_seqlen_offset(indices_vec[0] as usize);
-                        if indices_vec
-                            .iter()
-                            .any(|&idx| pool.get_seqlen_offset(idx as usize) != first_offset)
-                        {
-                            hanzo_ml::bail!(
-                                "Hybrid recurrent seqlen offsets diverged within a batch for layer {layer_idx}."
-                            );
-                        }
-                        let conv_state = pool.gather_conv_state(indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(indices)?;
-                        let mut gdn_cache = GdnLayerCache {
-                            conv_state,
-                            recurrent_state,
-                            seqlen_offset: first_offset,
-                        };
-                        let out = gdn.forward(&normed, &mut gdn_cache)?;
-                        pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
-                        pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
-                        let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
-                        for &idx in &indices_vec {
-                            let updated = pool.get_seqlen_offset(idx as usize) + delta;
-                            pool.set_seqlen_offset(idx as usize, updated);
-                        }
+                        let out = forward_pooled(
+                            pool,
+                            PoolSlots::Many(indices),
+                            layer_idx,
+                            trail,
+                            |cache| gdn.forward(&normed, cache),
+                        )?;
                         out
                     }
                 }
@@ -1137,6 +1111,7 @@ impl ModelWeights {
 
     fn run_local_layers(&self, h: &Tensor, offsets: &[usize]) -> Result<Tensor> {
         let mut hybrid_cache = self.cache.hybrid();
+        let trail = hybrid_cache.records_trail(h.dim(1)?);
         let is_head = self.pp.as_ref().unwrap().is_head();
 
         // Worker ranks are stateless across requests: a fresh prompt (past-kv len 0) zeroes the
@@ -1193,25 +1168,13 @@ impl ModelWeights {
                     else {
                         hanzo_ml::bail!("Hybrid cache layer {local_idx} not recurrent.");
                     };
-                    let mut gdn_cache = GdnLayerCache {
-                        conv_state: pool.conv_state.narrow(0, slot, 1)?,
-                        recurrent_state: pool.recurrent_state.narrow(0, slot, 1)?,
-                        seqlen_offset: offsets.first().copied().unwrap_or(0),
+                    let slots = PoolSlots::One {
+                        slot,
+                        offset: offsets.first().copied().unwrap_or(0),
                     };
-                    let out = gdn.forward(&normed, &mut gdn_cache)?;
-                    let conv_dt = pool.conv_state.dtype();
-                    let rec_dt = pool.recurrent_state.dtype();
-                    pool.conv_state.slice_set(
-                        &gdn_cache.conv_state.to_dtype(conv_dt)?.contiguous()?,
-                        0,
-                        slot,
-                    )?;
-                    pool.recurrent_state.slice_set(
-                        &gdn_cache.recurrent_state.to_dtype(rec_dt)?.contiguous()?,
-                        0,
-                        slot,
-                    )?;
-                    pool.set_seqlen_offset(slot, gdn_cache.seqlen_offset);
+                    let out = forward_pooled(pool, slots, local_idx, trail, |cache| {
+                        gdn.forward(&normed, cache)
+                    })?;
                     out
                 }
             };

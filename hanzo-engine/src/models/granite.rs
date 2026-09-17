@@ -946,7 +946,9 @@ impl MambaLayer {
         let mut conv_outputs = Vec::with_capacity(seq_len);
         for i in 0..seq_len {
             let window = padded_t.narrow(2, i, self.conv_kernel_size)?;
-            let out = (window * weight.unsqueeze(0)?)?.sum(hanzo_ml::D::Minus1)?;
+            let out = window
+                .broadcast_mul(&weight.unsqueeze(0)?)?
+                .sum(hanzo_ml::D::Minus1)?;
             conv_outputs.push(out);
         }
         let mut hidden_states_b_c = Tensor::stack(&conv_outputs, 1)?; // (batch, seq_len, conv_dim)

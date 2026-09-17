@@ -1882,6 +1882,7 @@ impl Pipeline for NormalPipeline {
             let cache = crate::speculative::cache::PagedSpeculativeCacheAccess::new(
                 &metadata,
                 cache_engine,
+                self.cache(),
             );
             return crate::speculative::driver::try_sample_speculative_causal_gen(
                 self,

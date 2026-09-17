@@ -458,11 +458,8 @@ impl Qwen3_5Model {
 }
 
 impl crate::speculative::SpeculativeTargetMixin for Qwen3_5Model {
-    /// Refuses every proposer. A verify forward advances the GDN layers' recurrent state
-    /// through the drafted tokens, and the speculative cache rolls a rejected draft back by
-    /// trimming attention KV only — the recurrent state would keep the rejected tokens and
-    /// every later token would decode from it. Until the verify path restores that state,
-    /// speculating here changes the output, which speculation must never do.
+    /// Hosts no proposer: the model loads no MTP head and lends a draft neither hidden states
+    /// nor its output head.
     fn attach_speculative(
         &mut self,
         config: crate::speculative::SpeculativeConfig,
@@ -470,7 +467,7 @@ impl crate::speculative::SpeculativeTargetMixin for Qwen3_5Model {
         match config {
             crate::speculative::SpeculativeConfig::Off => Ok(None),
             _ => hanzo_ml::bail!(
-                "Qwen3.5 is a hybrid model: its linear-attention layers carry recurrent state that a rejected draft cannot be trimmed out of, so speculative decoding would change its output. It stays off for this model."
+                "Qwen3.5 hosts no speculative proposer: it loads no MTP head and lends a draft neither hidden states nor its output head."
             ),
         }
     }

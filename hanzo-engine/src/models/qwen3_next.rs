@@ -13,7 +13,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use super::gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode};
+use super::gdn::{
+    forward_pooled, GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode, PoolSlots,
+};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
@@ -856,6 +858,7 @@ impl Model {
         let mut x = self.embed_tokens.forward(input_ids)?;
 
         let mut hybrid_cache = self.kv_cache.hybrid();
+        let trail = hybrid_cache.records_trail(x.dim(1)?);
         let state_indices = hybrid_cache.state_indices().cloned();
         if self
             .layer_types
@@ -915,40 +918,13 @@ impl Model {
                         let indices = state_indices.as_ref().expect(
                             "checked above: linear-attention layers require recurrent indices",
                         );
-                        let indices_vec: Vec<u32> = indices.to_vec1()?;
-                        if indices_vec.is_empty() {
-                            hanzo_ml::bail!("Hybrid recurrent state indices are empty.");
-                        }
-
-                        let first_offset = pool.get_seqlen_offset(indices_vec[0] as usize);
-                        if indices_vec
-                            .iter()
-                            .any(|&idx| pool.get_seqlen_offset(idx as usize) != first_offset)
-                        {
-                            hanzo_ml::bail!(
-                                "Hybrid recurrent seqlen offsets diverged within a batch for layer {layer_idx}."
-                            );
-                        }
-
-                        let conv_state = pool.gather_conv_state(indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(indices)?;
-
-                        let mut gdn_cache = GdnLayerCache {
-                            conv_state,
-                            recurrent_state,
-                            seqlen_offset: first_offset,
-                        };
-
-                        x = layer.forward_linear(&x, &mut gdn_cache)?;
-
-                        pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
-                        pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
-
-                        let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
-                        for &idx in &indices_vec {
-                            let updated = pool.get_seqlen_offset(idx as usize) + delta;
-                            pool.set_seqlen_offset(idx as usize, updated);
-                        }
+                        x = forward_pooled(
+                            pool,
+                            PoolSlots::Many(indices),
+                            layer_idx,
+                            trail,
+                            |cache| layer.forward_linear(&x, cache),
+                        )?;
                     } else {
                         hanzo_ml::bail!(
                             "Hybrid cache layer {layer_idx} is not recurrent for a linear-attention layer."

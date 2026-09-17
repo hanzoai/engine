@@ -848,6 +848,24 @@ impl ForwardInputsResult {
 pub(crate) struct FileListCache {
     files: Vec<String>,
 }
+/// Tell the target what the next forward is: the sequences it runs and, for a hybrid target,
+/// whether it verifies staged drafts, which is when the recurrent layers must keep a trail.
+fn announce_forward<P: Pipeline + ?Sized>(
+    pipeline: &P,
+    input_seqs: &[&mut Sequence],
+    seq_indices: &[usize],
+) {
+    let ids: Vec<usize> = seq_indices
+        .iter()
+        .map(|&idx| *input_seqs[idx].id())
+        .collect();
+    pipeline.note_forward_sequences(&ids);
+    if pipeline.cache().is_hybrid() {
+        let verify_len =
+            crate::speculative::staging::staged_batch_width(input_seqs).map(|width| width + 1);
+        pipeline.cache().hybrid().expect_verify(verify_len);
+    }
+}
 
 #[async_trait::async_trait]
 pub trait Pipeline:
@@ -973,9 +991,7 @@ pub trait Pipeline:
                         }
                     }
 
-                    let forward_ids: Vec<usize> =
-                        seq_indices.iter().map(|&idx| *input_seqs[idx].id()).collect();
-                    self.note_forward_sequences(&forward_ids);
+                    announce_forward(self, input_seqs, &seq_indices);
                     let start = Instant::now();
                     let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
                     let end = Instant::now();
@@ -1372,9 +1388,7 @@ pub trait Pipeline:
                             seq_indices,
                         } = inputs.map_err(hanzo_ml::Error::msg)?;
 
-                        let forward_ids: Vec<usize> =
-                            seq_indices.iter().map(|&idx| *input_seqs[idx].id()).collect();
-                        self.note_forward_sequences(&forward_ids);
+                        announce_forward(self, input_seqs, &seq_indices);
                         let start = Instant::now();
                         let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
                         let end = Instant::now();
