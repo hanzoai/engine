@@ -532,8 +532,10 @@ pub enum QuantMethodConfig {
     },
     PerTensorFP8 {
         weight: Tensor,
-        weight_scale_inv: Tensor,
-        activation_scale: Option<Tensor>,
+        weight_scale: Tensor,
+        /// The checkpoint's calibrated activation scale, present only when it quantized
+        /// activations too.
+        input_scale: Option<Tensor>,
         bias: Option<Tensor>,
         dequant_dtype: DType,
     },
