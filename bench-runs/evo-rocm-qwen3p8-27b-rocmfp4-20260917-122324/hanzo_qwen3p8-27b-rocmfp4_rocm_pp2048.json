@@ -1,0 +1,31 @@
+{
+  "engine_version": "1.7.95",
+  "backend": "ROCm",
+  "sampler": "greedy-argmax",
+  "model_id": "/data/models/qwen3.8-27b",
+  "n_prompt": 2048,
+  "n_gen": 0,
+  "repetitions": 3,
+  "results": [
+    {
+      "test": "pp 2048",
+      "phase": "prefill",
+      "n": 2048,
+      "concurrency": 1,
+      "per_rep": [
+        [
+          42.63398373,
+          2048
+        ],
+        [
+          41.495180776,
+          2048
+        ],
+        [
+          41.426390476,
+          2048
+        ]
+      ]
+    }
+  ]
+}
