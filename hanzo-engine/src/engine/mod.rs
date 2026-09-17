@@ -720,6 +720,11 @@ impl Engine {
                                                 .get_paged_recurrent_prefix(
                                                     &block_hashes[..num_prefix_blocks],
                                                 )
+                                                .filter(|snapshots| {
+                                                    snapshots.iter().all(|snapshot| {
+                                                        snapshot.seqlen_offset == cached_prefix_len
+                                                    })
+                                                })
                                             {
                                                 if let Err(e) = hybrid_cache
                                                     .restore_recurrent_state(slot_idx, &snapshots)
@@ -827,7 +832,9 @@ impl Engine {
                         self.logger.add_tokens_processed(total_processed_tokens);
 
                         // Capture recurrent states at full-block boundaries so hybrid models can
-                        // reuse recurrent prefix state when paged prefix caching hits.
+                        // reuse recurrent prefix state when paged prefix caching hits. The step
+                        // has already appended its sampled token, which no layer has consumed,
+                        // so the boundary is where the state is, not where the sequence is.
                         {
                             let pipeline = get_mut_arcmutex!(self.pipeline);
                             if pipeline.cache().is_hybrid() {
@@ -836,14 +843,19 @@ impl Engine {
                                 let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
 
                                 for seq in guards_mut.iter() {
-                                    let seq_len = seq.get_toks().len();
-                                    if seq_len == 0 || seq_len % block_size != 0 {
-                                        continue;
-                                    }
-
                                     let Some(slot_idx) = seq.recurrent_state_idx() else {
                                         continue;
                                     };
+                                    let Some(seq_len) = hybrid_cache.recurrent_offset(slot_idx)
+                                    else {
+                                        continue;
+                                    };
+                                    if seq_len == 0
+                                        || seq_len % block_size != 0
+                                        || seq_len > seq.get_toks().len()
+                                    {
+                                        continue;
+                                    }
 
                                     let snapshots = match hybrid_cache
                                         .snapshot_recurrent_state(slot_idx)

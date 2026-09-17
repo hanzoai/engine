@@ -470,6 +470,17 @@ impl HybridCache {
         self.verify_len == Some(seq_len)
     }
 
+    /// Tokens the recurrent layers have consumed for `slot_idx`. `None` without a recurrent
+    /// layer, or when the layers disagree.
+    pub fn recurrent_offset(&self, slot_idx: usize) -> Option<usize> {
+        let mut offsets = self.caches.iter().filter_map(|cache| match cache {
+            HybridLayerCache::Recurrent(pool) => Some(pool.get_seqlen_offset(slot_idx)),
+            HybridLayerCache::Attention(_) => None,
+        });
+        let first = offsets.next()?;
+        offsets.all(|offset| offset == first).then_some(first)
+    }
+
     /// Undo the last `rejected` positions of the latest forward, in every recurrent layer.
     pub fn rewind_recurrent(&mut self, slot_idx: usize, rejected: usize) -> Result<()> {
         for cache in &mut self.caches {
@@ -644,7 +655,8 @@ impl HybridCache {
     }
 }
 
-/// Snapshot of a single recurrent layer's state for prefix caching.
+/// Snapshot of a single recurrent layer's state for prefix caching. Recurrent state cannot be
+/// rewound, so a snapshot serves exactly one prefix: the first `seqlen_offset` tokens.
 #[derive(Clone, Debug)]
 pub struct RecurrentStateSnapshot {
     pub conv_state: Tensor,
