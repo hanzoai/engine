@@ -43,6 +43,10 @@ pub trait SpeculativeTargetMixin {
         Ok(None)
     }
 
+    /// Names the sequences the next forward runs, so the captured hidden prefix stays
+    /// attributed to one sequence. Default no-op.
+    fn note_speculative_forward(&self, _seq_ids: &[usize]) {}
+
     /// Enable capture of the DSpark target-layer hidden states, stashing every layer index in
     /// `layers` (the draft checkpoint's `target_layer_ids`) during each forward. Default no-op:
     /// only models that expose multi-layer hiddens (Qwen3) override it. Uses interior

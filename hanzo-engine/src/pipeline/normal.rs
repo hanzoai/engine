@@ -1730,6 +1730,10 @@ impl Pipeline for NormalPipeline {
             Ok(ForwardInputsResult::CausalGeneration { logits })
         }
     }
+    fn note_forward_sequences(&self, seq_ids: &[usize]) {
+        self.model.note_speculative_forward(seq_ids);
+    }
+
     fn attach_speculative(
         &mut self,
         config: crate::speculative::SpeculativeConfig,
