@@ -655,6 +655,15 @@ impl crate::speculative::SpeculativeTargetMixin for Model {
         self.spec_capture.note_forward(seq_ids);
     }
 
+    fn speculative_shared_heads(&self) -> Option<crate::speculative::SpeculativeSharedHeads> {
+        let embed_tokens = self.embed_tokens.clone();
+        let lm_head = Arc::clone(&self.lm_head);
+        Some(crate::speculative::SpeculativeSharedHeads {
+            embed: Arc::new(move |ids: &Tensor| embed_tokens.forward(ids)),
+            lm_head: Arc::new(move |hidden: &Tensor| lm_head.forward(hidden)),
+        })
+    }
+
     fn speculative_target_hidden_layers(
         &self,
         rows: &[(usize, usize)],

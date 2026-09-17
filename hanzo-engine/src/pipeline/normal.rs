@@ -1743,6 +1743,7 @@ impl Pipeline for NormalPipeline {
                 config,
                 crate::speculative::SpeculativeConfig::Off
                     | crate::speculative::SpeculativeConfig::Dspark { .. }
+                    | crate::speculative::SpeculativeConfig::Dflash { .. }
                     | crate::speculative::SpeculativeConfig::PromptLookup { .. }
             )
         {
@@ -1796,6 +1797,25 @@ impl Pipeline for NormalPipeline {
             self.model.set_speculative_capture_layers(capture_layers);
             let info =
                 crate::speculative::SpeculativeAttachInfo::dspark(block_size, confidence_threshold);
+            crate::speculative::logging::log_attach(&info);
+            self.draft_proposer = Some(Box::new(proposer));
+            return Ok(());
+        }
+        if let crate::speculative::SpeculativeConfig::Dflash { path, block_size } = config {
+            let heads = self.model.speculative_shared_heads().ok_or_else(|| {
+                hanzo_ml::Error::msg(
+                    "DFlash 2 decodes through the target's embedding and output head, which this model does not lend",
+                )
+            })?;
+            let proposer = crate::models::qwen3_dflash::DFlash2Proposer::from_checkpoint(
+                std::path::Path::new(&path),
+                block_size,
+                self.model.device(),
+                heads,
+            )?;
+            self.model
+                .set_speculative_capture_layers(proposer.capture_layers());
+            let info = crate::speculative::SpeculativeAttachInfo::dflash(proposer.block_size());
             crate::speculative::logging::log_attach(&info);
             self.draft_proposer = Some(Box::new(proposer));
             return Ok(());

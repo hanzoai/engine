@@ -31,6 +31,15 @@ pub enum SpeculativeConfig {
         path: String,
         confidence_threshold: f32,
     },
+    /// DFlash2 block-diffusion draft (Qwen3). `path` is the draft checkpoint
+    /// directory; `block_size` overrides the checkpoint's own `dflash_config.block_size`
+    /// when non-zero. Drafts the whole block in one pass over five layers whose
+    /// two-tap dynamic convolutions keep the tail of the block from decaying, then a
+    /// codebook selector traces one coherent path through the per-slot candidates.
+    Dflash {
+        path: String,
+        block_size: usize,
+    },
     /// Prompt-lookup / n-gram drafting: no draft model. The tail n-gram of the sequence's
     /// own history (lengths `ngram_max` down to `ngram_min`) is matched against earlier
     /// context and the ≤`gamma` tokens that followed the match become the draft. The target
@@ -58,6 +67,11 @@ impl std::fmt::Debug for SpeculativeConfig {
                 .debug_struct("Dspark")
                 .field("path", path)
                 .field("confidence_threshold", confidence_threshold)
+                .finish(),
+            Self::Dflash { path, block_size } => f
+                .debug_struct("Dflash")
+                .field("path", path)
+                .field("block_size", block_size)
                 .finish(),
             Self::PromptLookup {
                 ngram_min,

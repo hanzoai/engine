@@ -1,9 +1,20 @@
+use std::sync::Arc;
+
 use hanzo_ml::{Result, Tensor};
 
 use super::{
     logging::log_attach, SpeculativeAttachInfo, SpeculativeConfig, SpeculativeProposalBatch,
     SpeculativeProposeBatchCtx,
 };
+
+/// A target's token embedding (`ids -> [.., hidden]`) and output head
+/// (`[.., hidden] -> [.., vocab]`), lent to a draft that carries neither. Decoding the
+/// draft through the target's own head puts its logits on the verifier's scale.
+#[derive(Clone)]
+pub struct SpeculativeSharedHeads {
+    pub embed: Arc<dyn Fn(&Tensor) -> Result<Tensor> + Send + Sync>,
+    pub lm_head: Arc<dyn Fn(&Tensor) -> Result<Tensor> + Send + Sync>,
+}
 
 pub trait SpeculativeTargetMixin {
     fn attach_speculative(
@@ -46,6 +57,12 @@ pub trait SpeculativeTargetMixin {
     /// Names the sequences the next forward runs, so the captured hidden prefix stays
     /// attributed to one sequence. Default no-op.
     fn note_speculative_forward(&self, _seq_ids: &[usize]) {}
+
+    /// The embedding and output head a headless draft (DFlash) decodes through.
+    /// `None` when the model does not lend them (the default).
+    fn speculative_shared_heads(&self) -> Option<SpeculativeSharedHeads> {
+        None
+    }
 
     /// Enable capture of the DSpark target-layer hidden states, stashing every layer index in
     /// `layers` (the draft checkpoint's `target_layer_ids`) during each forward. Default no-op:

@@ -121,6 +121,7 @@ pub async fn run_bench(
             runtime.gamma(),
         )
         .with_prompt_lookup_optional(runtime.prompt_lookup_ngram, runtime.gamma())
+        .with_dflash_optional(runtime.dflash.clone(), runtime.dflash_block_size)
         .set_paged_attn(paged_attn)
         .with_cpu(cpu)
         .with_seed_optional(global.seed)

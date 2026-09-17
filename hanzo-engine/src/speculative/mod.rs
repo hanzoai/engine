@@ -22,4 +22,4 @@ pub use proposer::{
     SpeculativeKvCache, SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
     SpeculativeProposer, TargetTokenEmbedder,
 };
-pub use target::SpeculativeTargetMixin;
+pub use target::{SpeculativeSharedHeads, SpeculativeTargetMixin};

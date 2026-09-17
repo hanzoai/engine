@@ -2662,6 +2662,11 @@ impl Pipeline for GGUFPipeline {
                     "DSpark speculative decoding targets the safetensors (normal) Qwen3 pipeline, not GGUF."
                 );
             }
+            crate::speculative::SpeculativeConfig::Dflash { .. } => {
+                hanzo_ml::bail!(
+                    "DFlash 2 reads the target's captured layer hiddens and decodes through its embedding and output head; the GGUF pipeline lends neither."
+                );
+            }
             crate::speculative::SpeculativeConfig::PromptLookup {
                 ngram_min,
                 ngram_max,
