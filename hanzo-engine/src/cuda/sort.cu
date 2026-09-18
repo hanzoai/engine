@@ -783,6 +783,23 @@ ASORT_OP(int64_t, asort_desc_i64, false)
 // same code. NaN is never chosen; ties go to the lower index.
 // ============================================================================
 
+// Warp max with the winning lane's index, as the MoE router kernels below read it.
+template <typename T>
+__device__ __forceinline__ T warp_reduce_max_with_idx(T val, int idx,
+                                                      int &max_idx) {
+#pragma unroll
+  for (int offset = 16; offset > 0; offset /= 2) {
+    T other_val = __shfl_down_sync(0xffffffff, val, offset);
+    int other_idx = __shfl_down_sync(0xffffffff, idx, offset);
+    if (other_val > val) {
+      val = other_val;
+      idx = other_idx;
+    }
+  }
+  max_idx = idx;
+  return val;
+}
+
 __device__ __forceinline__ void warp_max_with_idx(float &val, int &idx) {
 #pragma unroll
   for (int offset = 16; offset > 0; offset /= 2) {
