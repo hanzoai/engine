@@ -37,6 +37,9 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
     let ncols = *dims
         .last()
         .ok_or_else(|| hanzo_ml::Error::Msg("empty dims".to_string()))?;
+    if ncols == 0 || k == 0 || k > ncols {
+        hanzo_ml::bail!("topk of {k} over rows of width {ncols}");
+    }
     let nrows = (input.elem_count() / ncols) as i32;
     let ncols_i32 = ncols as i32;
     let k_i32 = k as i32;

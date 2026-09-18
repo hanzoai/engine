@@ -645,6 +645,7 @@ impl PropsGGUF {
             full_attention_interval: c
                 .get_value::<u32>("full_attention_interval")
                 .ok()
+                .filter(|i| *i > 0)
                 .map(|x| x as usize)
                 .unwrap_or(DEFAULT_FULL_ATTENTION_INTERVAL),
             conv_kernel: c

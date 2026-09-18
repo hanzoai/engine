@@ -339,7 +339,7 @@ impl CandidateSelector {
 
         // The walk is host code over each slot's candidates, so the candidates come from a host
         // partial select over the logit rows; nothing on the device sorts a vocabulary-wide row.
-        let rows_h = logits.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+        let rows_h = logits.contiguous()?.to_dtype(DType::F32)?.to_vec2::<f32>()?;
         let (candidates, unary): (Vec<Vec<u32>>, Vec<Vec<f32>>) =
             rows_h.iter().map(|row| top_k_of(row, top_k)).unzip();
         let gate_hidden = self.hidden_projection.forward(hidden)?; // [slots, rank]
@@ -353,7 +353,11 @@ impl CandidateSelector {
                 .predecessor_codebook
                 .index_select(&previous_t, 0)?
                 .mul(&gate_hidden.narrow(0, slot, 1)?)?; // [1, rank]
-            let ids = Tensor::from_vec(candidates[slot].clone(), (top_k,), &device)?;
+            let ids_h = &candidates[slot];
+            if ids_h.is_empty() {
+                hanzo_ml::bail!("slot {slot} has no finite logit");
+            }
+            let ids = Tensor::from_vec(ids_h.clone(), (ids_h.len(),), &device)?;
             let successors = self.successor_codebook.index_select(&ids, 0)?; // [top_k, rank]
             let pairwise = gate
                 .matmul(&successors.t()?.contiguous()?)?

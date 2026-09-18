@@ -883,6 +883,8 @@ static int launch_topk(const T *input, T *values_out, uint32_t *indices_out,
                        int nrows, int ncols, int k, cudaStream_t stream) {
   if (nrows <= 0 || k <= 0)
     return 0;
+  if (ncols <= 0 || k > ncols)
+    return (int)cudaErrorInvalidValue;
   const int block_size = ncols <= 64     ? 64
                          : ncols <= 128  ? 128
                          : ncols <= 256  ? 256
