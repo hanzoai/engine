@@ -51,7 +51,6 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::layers::{linear_no_bias, RmsNorm, RotaryEmbedding};
-use crate::ops::{TopKLastDimOp, TopKOutput};
 use crate::speculative::{
     SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposer,
     SpeculativeSharedHeads, TargetTokenEmbedder,
@@ -338,9 +337,11 @@ impl CandidateSelector {
         let (slots, vocab) = logits.dims2()?;
         let top_k = self.top_k.min(vocab);
 
-        let TopKOutput { values, indices } = logits.contiguous()?.topk(top_k)?;
-        let unary = values.to_dtype(DType::F32)?.to_vec2::<f32>()?;
-        let candidates = indices.to_dtype(DType::U32)?.to_vec2::<u32>()?;
+        // The walk is host code over each slot's candidates, so the candidates come from a host
+        // partial select over the logit rows; nothing on the device sorts a vocabulary-wide row.
+        let rows_h = logits.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+        let (candidates, unary): (Vec<Vec<u32>>, Vec<Vec<f32>>) =
+            rows_h.iter().map(|row| top_k_of(row, top_k)).unzip();
         let gate_hidden = self.hidden_projection.forward(hidden)?; // [slots, rank]
 
         let mut tokens = Vec::with_capacity(slots);
@@ -855,6 +856,28 @@ fn repeat_kv(x: &Tensor, nrep: usize) -> Result<Tensor> {
 /// else a multinomial draw over `softmax(scores / temperature)`. The draw is over
 /// the selector's `top_k` candidates, not the vocabulary — the walk cannot leave
 /// the candidate set.
+/// The `k` largest entries of `row`, largest first: their indices and values. NaN is never
+/// chosen; ties go to the lower index.
+fn top_k_of(row: &[f32], k: usize) -> (Vec<u32>, Vec<f32>) {
+    let mut idx: Vec<u32> = (0..row.len() as u32)
+        .filter(|&i| !row[i as usize].is_nan())
+        .collect();
+    let k = k.min(idx.len());
+    let larger_first = |&a: &u32, &b: &u32| {
+        row[b as usize]
+            .partial_cmp(&row[a as usize])
+            .expect("NaN was filtered out")
+            .then(a.cmp(&b))
+    };
+    if k > 0 {
+        idx.select_nth_unstable_by(k - 1, larger_first);
+    }
+    idx.truncate(k);
+    idx.sort_unstable_by(larger_first);
+    let vals = idx.iter().map(|&i| row[i as usize]).collect();
+    (idx, vals)
+}
+
 fn select_candidate(scores: &[f32], temperature: f64) -> usize {
     if scores.is_empty() {
         return 0;
