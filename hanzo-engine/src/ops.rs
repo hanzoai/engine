@@ -14,6 +14,15 @@ use hanzo_ml::Shape;
 // ============================================================================
 
 #[cfg(feature = "cuda")]
+fn topk_launched(err: i32, dims: &[usize], k: usize) -> Result<()> {
+    if err == 0 {
+        Ok(())
+    } else {
+        hanzo_ml::bail!("topk kernel failed with CUDA error {err} on {dims:?} (k = {k})")
+    }
+}
+
+#[cfg(feature = "cuda")]
 #[allow(clippy::cast_possible_truncation)]
 fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
     use hanzo_ml::backend::BackendStorage;
@@ -64,7 +73,7 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
             let mut values_dst = unsafe { dev.alloc::<half::bf16>(out_elem_count) }?;
             let (values_ptr, values_guard) = values_dst.device_ptr_mut(&stream);
 
-            unsafe {
+            let err = unsafe {
                 ffi::topk_bf16(
                     src_ptr,
                     values_ptr as *mut c_void,
@@ -73,8 +82,9 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
                     ncols_i32,
                     k_i32,
                     stream_raw,
-                );
-            }
+                )
+            };
+            topk_launched(err, dims, k)?;
 
             drop(values_guard);
             drop(indices_guard);
@@ -102,7 +112,7 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
             let mut values_dst = unsafe { dev.alloc::<half::f16>(out_elem_count) }?;
             let (values_ptr, values_guard) = values_dst.device_ptr_mut(&stream);
 
-            unsafe {
+            let err = unsafe {
                 ffi::topk_f16(
                     src_ptr,
                     values_ptr as *mut c_void,
@@ -111,8 +121,9 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
                     ncols_i32,
                     k_i32,
                     stream_raw,
-                );
-            }
+                )
+            };
+            topk_launched(err, dims, k)?;
 
             drop(values_guard);
             drop(indices_guard);
@@ -140,7 +151,7 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
             let mut values_dst = unsafe { dev.alloc::<f32>(out_elem_count) }?;
             let (values_ptr, values_guard) = values_dst.device_ptr_mut(&stream);
 
-            unsafe {
+            let err = unsafe {
                 ffi::topk_f32(
                     src_ptr,
                     values_ptr as *mut c_void,
@@ -149,8 +160,9 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
                     ncols_i32,
                     k_i32,
                     stream_raw,
-                );
-            }
+                )
+            };
+            topk_launched(err, dims, k)?;
 
             drop(values_guard);
             drop(indices_guard);

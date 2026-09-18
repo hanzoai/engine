@@ -776,33 +776,27 @@ ASORT_OP(uint32_t, asort_desc_u32, false)
 ASORT_OP(int64_t, asort_desc_i64, false)
 
 // ============================================================================
-// Optimized parallel topk kernel for small k (MoE routing)
-//
-// Much faster than full sort for small k:
-// - Processes all rows in parallel (one block per row)
-// - Uses simple "find max k times" algorithm: O(n*k) for small k
-// - Single kernel launch for all rows
+// Top-k of every row, one block per row: k rounds of "largest not yet taken",
+// read straight from the row. The taken set is the k chosen indices in shared
+// memory, so a row of any width costs no shared memory beyond k ints: a MoE
+// router's 128 experts and a draft selector's 248K-token vocabulary run the
+// same code. NaN is never chosen; ties go to the lower index.
 // ============================================================================
 
-template <typename T>
-__device__ __forceinline__ T warp_reduce_max_with_idx(T val, int idx,
-                                                      int &max_idx) {
+__device__ __forceinline__ void warp_max_with_idx(float &val, int &idx) {
 #pragma unroll
   for (int offset = 16; offset > 0; offset /= 2) {
-    T other_val = __shfl_down_sync(0xffffffff, val, offset);
-    int other_idx = __shfl_down_sync(0xffffffff, idx, offset);
-    if (other_val > val) {
+    const float other_val = __shfl_down_sync(0xffffffff, val, offset);
+    const int other_idx = __shfl_down_sync(0xffffffff, idx, offset);
+    if (other_idx >= 0 &&
+        (idx < 0 || other_val > val ||
+         (other_val == val && other_idx < idx))) {
       val = other_val;
       idx = other_idx;
     }
   }
-  max_idx = idx;
-  return val;
 }
 
-// One block per row, finds top-k elements
-// For n <= 1024 (typical MoE expert count), single block is sufficient
-// Writes values and indices to SEPARATE buffers (no post-processing needed)
 template <typename T>
 __global__ void topk_kernel(const T *__restrict__ input, // [nrows, ncols]
                             T *__restrict__ values_out,  // [nrows, k]
@@ -812,147 +806,95 @@ __global__ void topk_kernel(const T *__restrict__ input, // [nrows, ncols]
   if (row >= nrows)
     return;
 
-  const T *row_in = input + row * ncols;
-  T *row_values = values_out + row * k;
-  uint32_t *row_indices = indices_out + row * k;
+  const T *row_in = input + (size_t)row * ncols;
+  T *row_values = values_out + (size_t)row * k;
+  uint32_t *row_indices = indices_out + (size_t)row * k;
+
+  extern __shared__ int s_taken[]; // [k]
+  __shared__ float warp_vals[32];
+  __shared__ int warp_idxs[32];
 
   const int tid = threadIdx.x;
-  const int block_size = blockDim.x;
+  const int warp_id = tid >> 5;
+  const int lane_id = tid & 31;
+  const int num_warps = (blockDim.x + 31) >> 5;
 
-  // Shared memory for this row's data and mask
-  extern __shared__ char smem[];
-  T *s_data = (T *)smem;
-  bool *s_used = (bool *)(s_data + ncols);
-
-  // Load data into shared memory
-  for (int i = tid; i < ncols; i += block_size) {
-    s_data[i] = row_in[i];
-    s_used[i] = false;
-  }
-  __syncthreads();
-
-  // Find top-k elements
   for (int ki = 0; ki < k; ki++) {
-    // Find max among unused elements
-    T local_max = (T)(-INFINITY);
-    int local_idx = -1;
-
-    for (int i = tid; i < ncols; i += block_size) {
-      float candidate = (float)s_data[i];
-      if (!s_used[i] && candidate == candidate &&
-          candidate > (float)local_max) {
-        local_max = s_data[i];
-        local_idx = i;
+    float best = -INFINITY;
+    int best_idx = -1;
+    for (int i = tid; i < ncols; i += blockDim.x) {
+      bool taken = false;
+      for (int j = 0; j < ki; j++)
+        taken |= (s_taken[j] == i);
+      if (taken)
+        continue;
+      const float c = (float)row_in[i];
+      if (c != c)
+        continue;
+      if (best_idx < 0 || c > best) {
+        best = c;
+        best_idx = i;
       }
     }
-
-    // Warp reduction to find max
-    int warp_max_idx;
-    T warp_max = warp_reduce_max_with_idx(local_max, local_idx, warp_max_idx);
-
-    // Block reduction (if more than 1 warp)
-    __shared__ T warp_maxes[32];
-    __shared__ int warp_indices[32];
-
-    const int warp_id = tid / 32;
-    const int lane_id = tid % 32;
-    const int num_warps = (block_size + 31) / 32;
-
+    warp_max_with_idx(best, best_idx);
     if (lane_id == 0) {
-      warp_maxes[warp_id] = warp_max;
-      warp_indices[warp_id] = warp_max_idx;
+      warp_vals[warp_id] = best;
+      warp_idxs[warp_id] = best_idx;
     }
     __syncthreads();
-
-    // Final reduction in first warp
     if (tid < 32) {
-      T val = (tid < num_warps) ? warp_maxes[tid] : (T)(-INFINITY);
-      int idx = (tid < num_warps) ? warp_indices[tid] : -1;
-      int final_idx;
-      T final_max = warp_reduce_max_with_idx(val, idx, final_idx);
-
+      float v = (tid < num_warps) ? warp_vals[tid] : -INFINITY;
+      int idx = (tid < num_warps) ? warp_idxs[tid] : -1;
+      warp_max_with_idx(v, idx);
       if (tid == 0) {
-        if (final_idx < 0) {
-          final_idx = 0;
-          final_max = (T)0;
+        if (idx < 0) { // the row has no untaken number left
+          idx = 0;
+          v = 0.0f;
         }
-        row_values[ki] = final_max;
-        row_indices[ki] = (uint32_t)final_idx;
-        s_used[final_idx] = true;
+        row_values[ki] = (T)v;
+        row_indices[ki] = (uint32_t)idx;
+        s_taken[ki] = idx;
       }
     }
     __syncthreads();
   }
 }
 
-// Wrapper for f32 - writes to separate values and indices buffers
-extern "C" void topk_f32(const float *input,
-                         float *values_out,     // [nrows, k]
-                         uint32_t *indices_out, // [nrows, k]
-                         int nrows, int ncols, int k, int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-
-  // One block per row
-  int block_size = 256;
-  if (ncols <= 64)
-    block_size = 64;
-  else if (ncols <= 128)
-    block_size = 128;
-  else if (ncols <= 256)
-    block_size = 256;
-  else
-    block_size = 512;
-
-  size_t smem_size = ncols * sizeof(float) + ncols * sizeof(bool);
-
-  topk_kernel<float><<<nrows, block_size, smem_size, custream>>>(
+// Returns the launch's cudaError_t as an int; 0 is success.
+template <typename T>
+static int launch_topk(const T *input, T *values_out, uint32_t *indices_out,
+                       int nrows, int ncols, int k, cudaStream_t stream) {
+  if (nrows <= 0 || k <= 0)
+    return 0;
+  const int block_size = ncols <= 64     ? 64
+                         : ncols <= 128  ? 128
+                         : ncols <= 256  ? 256
+                         : ncols <= 4096 ? 512
+                                         : 1024;
+  topk_kernel<T><<<nrows, block_size, (size_t)k * sizeof(int), stream>>>(
       input, values_out, indices_out, nrows, ncols, k);
+  return (int)cudaGetLastError();
 }
 
-// Wrapper for bf16 - writes to separate values and indices buffers
-extern "C" void topk_bf16(const __nv_bfloat16 *input,
-                          __nv_bfloat16 *values_out, // [nrows, k]
-                          uint32_t *indices_out,     // [nrows, k]
-                          int nrows, int ncols, int k, int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-
-  int block_size = 256;
-  if (ncols <= 64)
-    block_size = 64;
-  else if (ncols <= 128)
-    block_size = 128;
-  else if (ncols <= 256)
-    block_size = 256;
-  else
-    block_size = 512;
-
-  size_t smem_size = ncols * sizeof(__nv_bfloat16) + ncols * sizeof(bool);
-
-  topk_kernel<__nv_bfloat16><<<nrows, block_size, smem_size, custream>>>(
-      input, values_out, indices_out, nrows, ncols, k);
+extern "C" int topk_f32(const float *input, float *values_out,
+                        uint32_t *indices_out, int nrows, int ncols, int k,
+                        int64_t stream) {
+  return launch_topk<float>(input, values_out, indices_out, nrows, ncols, k,
+                            (cudaStream_t)stream);
 }
 
-// Wrapper for f16 - writes to separate values and indices buffers
-extern "C" void topk_f16(const __half *input,
-                         __half *values_out,    // [nrows, k]
-                         uint32_t *indices_out, // [nrows, k]
-                         int nrows, int ncols, int k, int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
+extern "C" int topk_bf16(const __nv_bfloat16 *input, __nv_bfloat16 *values_out,
+                         uint32_t *indices_out, int nrows, int ncols, int k,
+                         int64_t stream) {
+  return launch_topk<__nv_bfloat16>(input, values_out, indices_out, nrows,
+                                    ncols, k, (cudaStream_t)stream);
+}
 
-  int block_size = 256;
-  if (ncols <= 64)
-    block_size = 64;
-  else if (ncols <= 128)
-    block_size = 128;
-  else if (ncols <= 256)
-    block_size = 256;
-  else
-    block_size = 512;
-
-  size_t smem_size = ncols * sizeof(__half) + ncols * sizeof(bool);
-
-  topk_kernel<__half><<<nrows, block_size, smem_size, custream>>>(
-      input, values_out, indices_out, nrows, ncols, k);
+extern "C" int topk_f16(const __half *input, __half *values_out,
+                        uint32_t *indices_out, int nrows, int ncols, int k,
+                        int64_t stream) {
+  return launch_topk<__half>(input, values_out, indices_out, nrows, ncols, k,
+                             (cudaStream_t)stream);
 }
 
 constexpr int MOE_ROUTER_SCORE_RAW = 0;
