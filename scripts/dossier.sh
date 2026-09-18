@@ -10,14 +10,15 @@
 #
 #   dossier.sh --backend rocm|vulkan|metal|cuda \
 #              --hanzo-engine PATH --llama-bench PATH \
-#              --model GGUF --model-tag qwen3-1p7b \
+#              --model GGUF-or-hub-id --model-tag qwen3-1p7b \
 #              [-p 512,500 -n 128 -r 7] [--concurrency 1] [--max-ctx 4096] \
-#              [--hanzo-args "--paged-attn --pa-ctxt-len 4096"] \
+#              [--hanzo-args "--dflash DRAFT"] \
 #              [--engine-dir DIR --llama-dir DIR] [--out DIR] [--force]
 #
 # --hanzo-args reach `hanzo-engine bench` verbatim, before the model selection, and are recorded
-# in the manifest; speculation goes there. The model is built as the server builds it, so what
-# is measured is what is served.
+# in the manifest; speculation goes there. A GGUF file loads as `text --format gguf`, anything
+# else as `auto -m` (a Hub id), with paged attention sized to --max-ctx as a server sizes it, so
+# what is measured is what is served.
 #
 # One GPU workload per box: the quiet-gate HARD-FAILS if another GPU job
 # (cargo/rustc/ncu/nsys/rocprof/metal-capture/hanzo-engine/llama-bench/
@@ -50,11 +51,14 @@ esac; done
 # Sampler is an explicit, recorded choice. Default greedy argmax = parity with llama-bench;
 # --stochastic reproduces the full-vocab multinomial only to MEASURE its tax.
 SAMPLER="$([[ "$STOCH" == 1 ]] && echo stochastic-temp1-fullvocab || echo greedy-argmax)"
-[[ -f "$MODEL" ]] || { echo "no model: $MODEL" >&2; exit 2; }
 [[ -x "$HANZO" ]] || { echo "no hanzo-engine: $HANZO" >&2; exit 2; }
 OUT="${OUT:-$ENGINE_DIR/bench-runs/$(hostname -s)-$BACKEND-$MTAG-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT"
-MDIR="$(cd "$(dirname "$MODEL")" && pwd)"; MFILE="$(basename "$MODEL")"
+if [[ -f "$MODEL" ]]; then
+  MODEL_ARGS=(text --format gguf -m "$(cd "$(dirname "$MODEL")" && pwd)" -f "$(basename "$MODEL")")
+else
+  MODEL_ARGS=(auto -m "$MODEL")
+fi
 
 # --- backend runtime env (one place) -------------------------------------------
 backend_env() { case "$BACKEND" in
@@ -126,7 +130,7 @@ run_hanzo() { # $1=phase(pp|tg) $2=n $3=tag
   echo ">> hanzo-engine bench $BACKEND $3 (p=$p g=$g r=$REPS c=$CONC)" >&2
   env $(backend_env) "$HANZO" bench --prompt-len "$p" --gen-len "$g" --repetitions "$REPS" --concurrency "$CONC" \
       $([[ "$STOCH" == 1 ]] && echo --stochastic) --json "$OUT/hanzo_${3}.json" $HARGS \
-      text --format gguf -m "$MDIR" -f "$MFILE" --max-seq-len "$MAXCTX" \
+      "${MODEL_ARGS[@]}" --max-seq-len "$MAXCTX" --paged-attn on --pa-context-len "$MAXCTX" \
       > "$OUT/hanzo_${3}.log" 2>&1 || { echo "hanzo-engine bench FAILED ($3); tail:" >&2; tail -8 "$OUT/hanzo_${3}.log" >&2; }
 }
 run_llama() { # $1=phase(pp|tg) $2=n $3=tag
