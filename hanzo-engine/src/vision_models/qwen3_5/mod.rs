@@ -50,7 +50,7 @@ pub struct Qwen3_5Model {
     mtp: Option<Box<dyn crate::speculative::SpeculativeProposer + Send + Sync>>,
     /// The MRoPE positions of the target rows the MTP head drafts from, handed over as those
     /// rows are selected.
-    mtp_anchors: mtp::AnchorPositions,
+    mtp_anchors: crate::models::qwen3_5_mtp::AnchorPositions,
     /// The text hyperparameters, kept so the MTP head can be loaded after the model is.
     text_config: config::TextConfig,
 }
@@ -503,8 +503,6 @@ impl crate::speculative::SpeculativeTargetMixin for Qwen3_5Model {
                     config.model.clone(),
                     proposer.proposal_len(),
                 );
-                // The head reads the final-norm hidden state of every forward from here on.
-                self.text.set_store_spec(true);
                 self.mtp = Some(proposer);
                 Ok(Some(info))
             }

@@ -3,19 +3,11 @@
 //! One full-attention decoder block with the main stack's geometry, fed
 //! `fc(concat(pre_fc_norm_embedding(embed(token)), pre_fc_norm_hidden(hidden)))` where `hidden` is
 //! the target's final-norm hidden state at that position. It shares the target's token embeddings
-//! and `lm_head`, so a draft token comes out on the verifier's own scale.
+//! and `lm_head`.
 //!
-//! A row fed token `t + 1` over the hidden at `t` predicts token `t + 2`. Chaining that — the
-//! head's own hidden state and its argmax at the next position — drafts `n_predict` tokens per
-//! target step. The chain attends over its own KV, which resets each round: the target hidden
-//! already carries the context, and the target verify decides every emitted token, so the KV
-//! only reaches draft acceptance, never correctness.
+//! The head is one [`MtpStep`]; [`Qwen3_5MtpProposer`] chains it into a draft.
 
-use std::{
-    fs,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::{fs, path::PathBuf, sync::Arc};
 
 use hanzo_ml::{DType, Device, Module, Result, Tensor, D};
 use hanzo_quant::{QuantMethod, ReplicatedLayer, ShardedVarBuilder};
@@ -25,12 +17,9 @@ use crate::{
     device_map::DeviceMapper,
     kv_cache::KvCache,
     layers::{GemmaRmsNorm, Qwen3VLRotaryEmbedding},
+    models::qwen3_5_mtp::{chain_cache, default_n_predict, MtpStep, Qwen3_5MtpProposer},
     pipeline::text_models_inputs_processor::FlashParams,
-    speculative::{
-        MtpConfig, SelfSpeculative, SpeculativeProposal, SpeculativeProposalBatch,
-        SpeculativeProposeBatchCtx, SpeculativeProposer, SpeculativeSharedHeads,
-        TargetTokenEmbedder,
-    },
+    speculative::{MtpConfig, SelfSpeculative, SpeculativeProposer},
     utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor},
 };
 
@@ -38,27 +27,6 @@ use super::{config::TextConfig, text::DecoderLayer, Qwen3_5Model};
 
 /// The tensor that says a checkpoint carries a head.
 pub const MTP_FC_WEIGHT: &str = "mtp.fc.weight";
-
-/// Drafts per target step. A wider model amortizes the verify forward over more drafts, so it
-/// drafts deeper; past that, acceptance falls faster than the saved forwards pay for.
-const DEFAULT_N_PREDICT: usize = 2;
-const DEEP_N_PREDICT: usize = 3;
-const DEEP_HIDDEN_SIZE: usize = 4096;
-
-/// The three MRoPE planes of one position.
-type Mrope = [u32; 3];
-
-/// The MRoPE positions of the target rows the next draft starts from, one per sequence. The
-/// model fills it when it selects those rows; the proposer takes it when it drafts.
-pub(super) type AnchorPositions = Arc<Mutex<Option<Vec<Mrope>>>>;
-
-/// The head's KV, holding one row per chained draft and nothing else. It is the head's own, so
-/// the head takes no slot in the target's paged cache and the target's cache stays sized by the
-/// model's own layers; a paged head would instead take the slot after them, and this is the only
-/// place that decides.
-fn chain_cache(max_draft: usize) -> KvCache {
-    KvCache::new_normal(2, max_draft, max_draft)
-}
 
 pub struct Qwen3_5MtpHead {
     pre_fc_norm_embedding: GemmaRmsNorm,
@@ -144,22 +112,7 @@ impl Qwen3_5MtpHead {
         })
     }
 
-    pub fn device(&self) -> &Device {
-        &self.device
-    }
-
-    pub fn dtype(&self) -> DType {
-        self.dtype
-    }
-
-    /// Drop the chain's KV, so the next chain attends only to itself.
-    pub fn reset(&mut self) {
-        self.cache.reset();
-    }
-
-    /// One drafter step over `[batch, 1, hidden]` inputs at `[3, batch, 1]` MRoPE positions.
-    /// Returns the normed hidden state, which is both the `lm_head` input and the next step's.
-    pub fn forward(
+    fn forward(
         &mut self,
         input_embeds: &Tensor,
         target_hidden: &Tensor,
@@ -188,127 +141,26 @@ impl Qwen3_5MtpHead {
     }
 }
 
-/// Drives the head as the target's own speculative draft.
-pub struct Qwen3_5MtpProposer {
-    head: Qwen3_5MtpHead,
-    heads: SpeculativeSharedHeads,
-    n_predict: usize,
-    anchors: AnchorPositions,
-}
-
-impl Qwen3_5MtpProposer {
-    pub(super) fn new(
-        head: Qwen3_5MtpHead,
-        heads: SpeculativeSharedHeads,
-        n_predict: usize,
-        anchors: AnchorPositions,
-    ) -> Self {
-        Self {
-            head,
-            heads,
-            n_predict,
-            anchors,
-        }
-    }
-}
-
-impl SpeculativeProposer for Qwen3_5MtpProposer {
-    fn proposal_len(&self) -> usize {
-        self.n_predict
-    }
-
-    fn propose(
+impl MtpStep for Qwen3_5MtpHead {
+    fn step(
         &mut self,
-        ctx: SpeculativeProposeBatchCtx<'_>,
-        _target_embedder: Option<&TargetTokenEmbedder<'_>>,
-    ) -> Result<SpeculativeProposalBatch> {
-        let batch = ctx.sampled_tokens.len();
-        if batch == 0 {
-            return Ok(SpeculativeProposalBatch::new(Vec::new()));
-        }
-        let hidden = ctx.target_hiddens.ok_or_else(|| {
-            hanzo_ml::Error::msg("Qwen3.5 MTP needs the target hidden state to draft")
-        })?;
-        let mut mrope = self
-            .anchors
-            .lock()
-            .ok()
-            .and_then(|mut slot| slot.take())
-            .ok_or_else(|| {
-                hanzo_ml::Error::msg("Qwen3.5 MTP needs the target row positions to draft")
-            })?;
-        if mrope.len() != batch || hidden.dim(0)? != batch {
-            hanzo_ml::bail!(
-                "Qwen3.5 MTP batch mismatch: {batch} anchors sampled, {} positions, {} hidden rows",
-                mrope.len(),
-                hidden.dim(0)?
-            );
-        }
+        input_embeds: &Tensor,
+        target_hidden: &Tensor,
+        positions: &Tensor,
+    ) -> Result<Tensor> {
+        self.forward(input_embeds, target_hidden, positions)
+    }
 
-        let device = self.head.device().clone();
-        let mut hidden = match hidden.dims() {
-            [_, _, _] => hidden.to_device(&device)?.to_dtype(self.head.dtype())?,
-            [_, _] => hidden
-                .unsqueeze(1)?
-                .to_device(&device)?
-                .to_dtype(self.head.dtype())?,
-            other => hanzo_ml::bail!("Qwen3.5 MTP target hidden has shape {other:?}"),
-        };
-        let mut tokens = ctx.sampled_tokens.to_vec();
-        self.head.reset();
+    fn reset(&mut self) {
+        self.cache.reset();
+    }
 
-        let mut drafts: Vec<Vec<u32>> = Vec::with_capacity(self.n_predict);
-        let mut logits: Vec<Tensor> = Vec::with_capacity(self.n_predict);
-        for step in 0..self.n_predict {
-            let ids = Tensor::from_vec(tokens.clone(), (batch, 1), &device)?;
-            let embeds = (self.heads.embed)(&ids)?.to_dtype(self.head.dtype())?;
-            let mut planes = Vec::with_capacity(3 * batch);
-            for plane in 0..3 {
-                planes.extend(mrope.iter().map(|pos| pos[plane]));
-            }
-            let positions = Tensor::from_vec(planes, (3, batch, 1), &device)?;
-            let normed = self.head.forward(&embeds, &hidden, &positions)?;
-            let step_logits = (self.heads.lm_head)(&normed)?;
-            let step_drafts: Vec<u32> = step_logits
-                .argmax(D::Minus1)?
-                .to_dtype(DType::U32)?
-                .flatten_all()?
-                .to_vec1()?;
-            if step_drafts.len() != batch {
-                hanzo_ml::bail!(
-                    "Qwen3.5 MTP drafted {} tokens for {batch} sequences",
-                    step_drafts.len()
-                );
-            }
-            logits.push(step_logits);
-            if step + 1 < self.n_predict {
-                // The draft becomes the next step's input, one position on, off the head's own
-                // hidden state.
-                tokens.clone_from(&step_drafts);
-                hidden = normed;
-                for pos in mrope.iter_mut() {
-                    for plane in pos.iter_mut() {
-                        *plane += 1;
-                    }
-                }
-            }
-            drafts.push(step_drafts);
-        }
+    fn device(&self) -> &Device {
+        &self.device
+    }
 
-        // Per sequence: its drafted tokens and their logits as `[1, n_predict, vocab]`, the rows
-        // the verifier indexes by draft position.
-        let mut proposals = Vec::with_capacity(batch);
-        for row in 0..batch {
-            let row_logits = logits
-                .iter()
-                .map(|step| step.narrow(0, row, 1))
-                .collect::<Result<Vec<_>>>()?;
-            proposals.push(SpeculativeProposal::with_logits(
-                drafts.iter().map(|step| step[row]).collect(),
-                Tensor::cat(&row_logits, 1)?,
-            ));
-        }
-        Ok(SpeculativeProposalBatch::new(proposals))
+    fn dtype(&self) -> DType {
+        self.dtype
     }
 }
 
@@ -348,11 +200,7 @@ impl SelfSpeculative for Qwen3_5Model {
         )?;
         let n_predict = cfg
             .n_predict
-            .unwrap_or(if self.text_config.hidden_size >= DEEP_HIDDEN_SIZE {
-                DEEP_N_PREDICT
-            } else {
-                DEFAULT_N_PREDICT
-            })
+            .unwrap_or(default_n_predict(self.text_config.hidden_size))
             .max(1);
         let head = Qwen3_5MtpHead::load(
             vb,
@@ -361,8 +209,10 @@ impl SelfSpeculative for Qwen3_5Model {
             &self.text.device,
             n_predict,
         )?;
+        // The head reads the final-norm hidden state of every forward from here on.
+        self.text.set_store_spec(true);
         Ok(Box::new(Qwen3_5MtpProposer::new(
-            head,
+            Box::new(head),
             self.text.shared_heads(),
             n_predict,
             self.mtp_anchors.clone(),
@@ -374,10 +224,15 @@ impl SelfSpeculative for Qwen3_5Model {
 mod tests {
     use super::*;
     use crate::device_map::DummyDeviceMapper;
-    use crate::speculative::SpeculativeKvCache;
+    use crate::models::qwen3_5_mtp::fixtures::{positions, shared_heads, synthetic};
+    use crate::models::qwen3_5_mtp::{AnchorPositions, Mrope};
+    use crate::speculative::{
+        SpeculativeKvCache, SpeculativeProposeBatchCtx, SpeculativeSharedHeads,
+    };
     use rand::SeedableRng;
     use rand_isaac::Isaac64Rng;
     use std::collections::HashMap;
+    use std::sync::Mutex;
 
     const HIDDEN: usize = 12;
     const HEAD_DIM: usize = 16;
@@ -385,18 +240,6 @@ mod tests {
     const KV_HEADS: usize = 1;
     const FFN: usize = 20;
     const VOCAB: usize = 32;
-
-    /// Small, distinct, reproducible weights: enough spread that a zero output means a broken
-    /// forward rather than a symmetric one.
-    fn synthetic(rows: usize, cols: usize, seed: u32, device: &Device) -> Result<Tensor> {
-        let data: Vec<f32> = (0..rows * cols)
-            .map(|i| {
-                let x = (i as u32).wrapping_mul(2654435761).wrapping_add(seed);
-                ((x >> 8) % 1000) as f32 / 4000.0 - 0.125
-            })
-            .collect();
-        Tensor::from_vec(data, (rows, cols), device)
-    }
 
     fn tiny_config() -> TextConfig {
         serde_json::from_value(serde_json::json!({
@@ -504,29 +347,6 @@ mod tests {
         Qwen3_5MtpHead::load(vb, &tiny_config(), &mapper, &device, n_predict)
     }
 
-    /// Token embeddings and an output head, as the target lends them.
-    fn shared_heads(device: &Device) -> Result<SpeculativeSharedHeads> {
-        let embed = synthetic(VOCAB, HIDDEN, 21, device)?;
-        let out = synthetic(VOCAB, HIDDEN, 22, device)?;
-        Ok(SpeculativeSharedHeads {
-            embed: Arc::new(move |ids: &Tensor| {
-                let (batch, seq) = ids.dims2()?;
-                embed
-                    .index_select(&ids.flatten_all()?, 0)?
-                    .reshape((batch, seq, HIDDEN))
-            }),
-            lm_head: Arc::new(move |hidden: &Tensor| hidden.broadcast_matmul(&out.t()?)),
-        })
-    }
-
-    fn positions(anchors: &[Mrope], device: &Device) -> Result<Tensor> {
-        let mut planes = Vec::with_capacity(3 * anchors.len());
-        for plane in 0..3 {
-            planes.extend(anchors.iter().map(|pos| pos[plane]));
-        }
-        Tensor::from_vec(planes, (3, anchors.len(), 1), device)
-    }
-
     /// The head maps one row per sequence to one hidden state per sequence, and a chained step
     /// over its own KV keeps that shape.
     #[test]
@@ -557,7 +377,7 @@ mod tests {
         assert_eq!(second.dims(), &[batch, 1, HIDDEN]);
 
         // A reset chain starts over: the same inputs at the same positions give the first step back.
-        head.reset();
+        MtpStep::reset(&mut head);
         let again = head.forward(
             &embeds,
             &hidden,
@@ -577,8 +397,8 @@ mod tests {
         let dir = tempfile::tempdir().map_err(hanzo_ml::Error::msg)?;
         let anchors: AnchorPositions = Arc::new(Mutex::new(None));
         let mut proposer = Qwen3_5MtpProposer::new(
-            load_head(dir.path(), N_PREDICT)?,
-            shared_heads(&device)?,
+            Box::new(load_head(dir.path(), N_PREDICT)?),
+            shared_heads(VOCAB, HIDDEN, &device)?,
             N_PREDICT,
             anchors.clone(),
         );

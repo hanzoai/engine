@@ -119,6 +119,8 @@ impl Model {
             // GLM-5.2 (`glm-dsa`) loads as Deepseek2 and carries an in-band `nextn` MTP head.
             Model::Deepseek2(m) => Some(m),
             Model::Deepseek4(m) => Some(m),
+            // Qwen3.5 carries its head as the block trailing the transformer.
+            Model::Qwen35(m) => Some(m),
             _ => None,
         }
     }
@@ -135,6 +137,8 @@ pub struct GGUFPipeline {
     generation_defaults: Option<crate::ModelGenerationDefaults>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     draft_proposer: Option<Box<dyn crate::speculative::SpeculativeProposer + Send + Sync>>,
+    /// The GGUF files this model was read from, so `--mtp-model self` finds a head inside one.
+    weight_files: Vec<PathBuf>,
     /// Captured ROCm/HIP decode graphs, keyed by decode bucket. See
     /// [`crate::pipeline::rocm_graph`]. Mirrors `NormalPipeline::cuda_decode_graph`.
     #[cfg(feature = "rocm")]
@@ -1084,6 +1088,7 @@ impl Loader for GGUFLoader {
             generation_defaults,
             mapper: pipeline_mapper,
             draft_proposer: None,
+            weight_files: paths.get_weight_filenames().to_vec(),
             #[cfg(feature = "rocm")]
             rocm_decode_graph: std::sync::Mutex::new(RocmDecodeGraphState::default()),
             #[cfg(feature = "cuda")]
@@ -2661,6 +2666,9 @@ impl Pipeline for GGUFPipeline {
         &mut self,
         config: crate::speculative::SpeculativeConfig,
     ) -> Result<(), hanzo_ml::Error> {
+        if let Model::Qwen35(ref model) = self.model {
+            model.set_store_spec(false);
+        }
         match config {
             crate::speculative::SpeculativeConfig::Off => Ok(()),
             crate::speculative::SpeculativeConfig::Dspark { .. } => {
@@ -2742,7 +2750,26 @@ impl Pipeline for GGUFPipeline {
                 // the ONE seam — the pipeline asks the model for its SelfSpeculative
                 // capability and never names an architecture. A model without an MTP
                 // head is reported honestly instead of silently unsupported.
-                let n_predict = mtp_config.n_predict.unwrap_or(1);
+                if self.metadata.cache_engine.is_none() {
+                    hanzo_ml::bail!(
+                        "MTP speculative decoding requires PagedAttention: rejected drafts are rewound through the paged cache."
+                    );
+                }
+                // `self` names the head inside the file this model was read from, which is where
+                // Qwen3.5 keeps it; a path names a head in another file, as GLM-5.2 keeps it.
+                let mtp_config = if mtp_config.model == "self" {
+                    let own = self.weight_files.first().ok_or_else(|| {
+                        hanzo_ml::Error::msg(
+                            "`--mtp-model self` needs the GGUF this model was read from, and none was recorded",
+                        )
+                    })?;
+                    crate::speculative::MtpConfig::new(
+                        own.to_string_lossy().into_owned(),
+                        mtp_config.n_predict,
+                    )
+                } else {
+                    mtp_config
+                };
                 let proposer = self
                     .model
                     .as_self_speculative()
@@ -2752,8 +2779,10 @@ impl Pipeline for GGUFPipeline {
                         )
                     })?
                     .attach_mtp(&mtp_config)?;
-                let info =
-                    crate::speculative::SpeculativeAttachInfo::mtp("mtp".to_string(), n_predict);
+                let info = crate::speculative::SpeculativeAttachInfo::mtp(
+                    mtp_config.model.clone(),
+                    proposer.proposal_len(),
+                );
                 crate::speculative::logging::log_attach(&info);
                 self.draft_proposer = Some(proposer);
                 Ok(())
@@ -2873,6 +2902,31 @@ impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
     ) -> hanzo_ml::Result<Option<Tensor>> {
         if self.draft_proposer.is_none() || rows.is_empty() {
             return Ok(None);
+        }
+        // Qwen3.5 stashes the position of each row beside its hidden state; the head needs both,
+        // so the anchors are filled from the same rows in the same pass.
+        if let Model::Qwen35(ref model) = self.model {
+            let Some((hidden, positions)) = model.last_spec() else {
+                return Ok(None);
+            };
+            let (batch, row_count, _) = hidden.dims3()?;
+            let mut gathered = Vec::with_capacity(rows.len());
+            let mut anchors = Vec::with_capacity(rows.len());
+            for &(b, r) in rows {
+                if b >= batch || r >= row_count {
+                    hanzo_ml::bail!(
+                        "Qwen3.5 MTP row ({b}, {r}) is outside the stashed {batch}x{row_count} hidden state"
+                    );
+                }
+                gathered.push(hidden.narrow(0, b, 1)?.narrow(1, r, 1)?);
+                // Text-only decoding, so all three MRoPE planes carry the same position.
+                let p = u32::try_from(positions[b][r]).map_err(hanzo_ml::Error::wrap)?;
+                anchors.push([p, p, p]);
+            }
+            if let Ok(mut slot) = model.mtp_anchors().lock() {
+                *slot = Some(anchors);
+            }
+            return Ok(Some(Tensor::cat(&gathered, 0)?));
         }
         let hidden = match self.model {
             Model::Deepseek4(ref model) => model.last_spec_hidden(),
