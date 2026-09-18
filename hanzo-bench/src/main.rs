@@ -1,703 +1,448 @@
+//! hanzo-bench: count-based prefill and decode throughput of the engine as it is served, and
+//! the scoring of what was measured (`board`).
+//!
+//! The model is built by the server's own builder, so a run measures what a server gets: its
+//! device, paged attention, graphs and speculation. Tokens are the engine's usage counts and
+//! the clock is this process's wall clock -- llama-bench's method, so the two compare like for
+//! like.
+
+use std::io::Write;
+use std::path::PathBuf;
+use std::time::Instant;
+
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
+use hanzo_bench::board::{self, Phase, Samples, Shape, Timed};
 use hanzo_engine::{
-    get_auto_device_map_params, get_model_dtype, initialize_logging, paged_attn_supported,
-    parse_isq_value, Builder, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, DeviceMapSetting, Hanzo, Loader, LoaderBuilder, MemoryGpuConfig,
-    ModelSelected, NormalRequest, PagedAttentionConfig, PagedCacheType, Request, RequestMessage,
-    Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
+    initialize_logging, Constraint, Hanzo, ModelSelected, MtpConfig, NormalRequest, PagedCacheType,
+    Request, RequestMessage, Response, SamplingParams, TokenSource,
 };
-use hanzo_ml::Device;
-use std::fmt::Display;
-use std::sync::Arc;
-use std::time::Instant;
-use tokio::sync::mpsc::channel;
-use tracing::{info, warn};
-
-#[derive(Clone, Copy)]
-enum TestName {
-    Prompt(usize),
-    Gen(usize),
-}
-
-impl Display for TestName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let name = match self {
-            TestName::Prompt(n) => format!("pp {n}"),
-            TestName::Gen(n) => format!("tg {n}"),
-        };
-        write!(f, "{name}")
-    }
-}
-
-// Per repetition: (wall seconds for the whole concurrency batch, tokens scored that batch). Tokens
-// scored are prompt_tokens for a Prompt test and completion_tokens for a Gen test -- llama-bench's
-// definition. Wall-clock is measured here rather than read from the response's self-reported rate,
-// which the completion path does not populate from real prefill timing.
-struct BenchResult {
-    per_rep: Vec<(f64, usize)>,
-    concurrency: usize,
-    test_name: TestName,
-}
-
-struct UncertainTokSec {
-    mean: f32,
-    std_dev: f32,
-}
-
-impl Display for UncertainTokSec {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:.3}±{:.3}", self.mean, self.std_dev)
-    }
-}
-
-async fn run_bench(
-    hanzo: Arc<Hanzo>,
-    prompt: RequestMessage,
-    n_gen: usize,
-    concurrency: usize,
-    repetitions: usize,
-    test_name: TestName,
-    greedy: bool,
-) -> anyhow::Result<BenchResult> {
-    // Sampling PARITY with llama-bench (which decodes greedily) is a required control.
-    // greedy == deterministic(): top_k=Some(1) engages the device top-1 (argmax) path.
-    // A None temperature is forced to 1.0 downstream (engine add_request), and top_k=None
-    // then falls into a full-vocabulary CPU multinomial that idles the GPU -- a per-token
-    // sampler tax NOT present in llama-bench, which silently inflated the apparent decode
-    // gap. The stochastic branch reproduces that artifact so the tax can be measured.
-    let sampling_params = if greedy {
-        SamplingParams {
-            max_len: Some(n_gen),
-            ..SamplingParams::deterministic()
-        }
-    } else {
-        SamplingParams {
-            temperature: None,
-            top_k: None,
-            top_p: None,
-            min_p: None,
-            top_n_logprobs: 0,
-            frequency_penalty: None,
-            presence_penalty: None,
-            repetition_penalty: None,
-            max_len: Some(n_gen),
-            stop_toks: None,
-            logits_bias: None,
-            n_choices: 1,
-            dry_params: None,
-        }
-    };
-    let sender = hanzo.get_sender(None).unwrap();
-    let (tx, mut rx) = channel(10_000);
-
-    let req = Request::Normal(Box::new(NormalRequest {
-        id: hanzo.next_request_id(),
-        messages: prompt,
-        sampling_params: sampling_params.clone(),
-        response: tx,
-        return_logprobs: false,
-        is_streaming: false,
-        constraint: Constraint::None,
-        suffix: None,
-        tools: None,
-        tool_choice: None,
-        logits_processors: None,
-        return_raw_logits: false,
-        web_search_options: None,
-        enable_code_execution: false,
-        code_execution_permission: None,
-        code_execution_approval_notifier: None,
-        agent_permission: None,
-        agent_approval_handler: None,
-        agent_approval_notifier: None,
-        max_tool_rounds: None,
-        tool_dispatch_url: None,
-        model_id: None,
-        truncate_sequence: false,
-        session_id: None,
-        files: None,
-    }));
-
-    // Scored token count for one finished request: prompt tokens for a prefill test, generated
-    // (completion) tokens for a decode test -- llama-bench's t/s convention. The response's own
-    // rate fields are ignored (see BenchResult); only the token COUNTS are trusted.
-    let scored = |u: &Usage| -> usize {
-        match test_name {
-            TestName::Prompt(_) => u.prompt_tokens,
-            TestName::Gen(_) => u.completion_tokens,
-        }
-    };
-
-    let mut per_rep: Vec<(f64, usize)> = Vec::with_capacity(repetitions);
-    for _ in 0..repetitions {
-        let t0 = Instant::now();
-        for _ in 0..concurrency {
-            if sender.send(req.clone()).await.is_err() {
-                eprintln!("Receiver disconnected");
-            }
-        }
-        let mut toks = 0usize;
-        for _ in 0..concurrency {
-            loop {
-                match rx.recv().await {
-                    Some(Response::AgenticToolCallProgress { .. }) => continue,
-                    Some(Response::AgenticToolApprovalRequired { .. }) => continue,
-                    Some(Response::File(_)) => continue,
-                    Some(Response::Done(res)) => {
-                        toks += scored(&res.usage);
-                        break;
-                    }
-                    Some(Response::CompletionDone(res)) => {
-                        toks += scored(&res.usage);
-                        break;
-                    }
-                    // A benchmark must surface a failed forward, not panic: report the engine's own
-                    // error so the cause (e.g. a device/storage mismatch) is legible.
-                    Some(Response::InternalError(e)) => anyhow::bail!("internal error: {e}"),
-                    Some(Response::ModelError(e, _)) => anyhow::bail!("model error: {e}"),
-                    Some(Response::CompletionModelError(e, _)) => anyhow::bail!("model error: {e}"),
-                    Some(Response::ValidationError(e)) => anyhow::bail!("validation error: {e}"),
-                    Some(_) => anyhow::bail!("unexpected response variant during benchmark"),
-                    None => anyhow::bail!("response channel closed before a terminal response"),
-                }
-            }
-        }
-        per_rep.push((t0.elapsed().as_secs_f64(), toks));
-    }
-
-    Ok(BenchResult {
-        per_rep,
-        concurrency,
-        test_name,
-    })
-}
-
-fn uncertain(v: &[f32]) -> UncertainTokSec {
-    if v.is_empty() {
-        return UncertainTokSec {
-            mean: 0.0,
-            std_dev: 0.0,
-        };
-    }
-    let mean = v.iter().sum::<f32>() / v.len() as f32;
-    let variance = v.iter().map(|e| (mean - e).powf(2.)).sum::<f32>() / v.len() as f32;
-    UncertainTokSec {
-        mean,
-        std_dev: variance.sqrt(),
-    }
-}
-
-// Per-stream throughput: scored tokens over the batch wall, divided by concurrency (so t/s is the
-// single-stream rate and the throughput column's `t/s * concurrency` recovers the aggregate).
-fn get_tok_s(result: &BenchResult) -> UncertainTokSec {
-    let rates: Vec<f32> = result
-        .per_rep
-        .iter()
-        .filter(|(secs, toks)| *secs > 0.0 && *toks > 0)
-        .map(|(secs, toks)| *toks as f32 / *secs as f32 / result.concurrency as f32)
-        .collect();
-    uncertain(&rates)
-}
-
-fn get_ms_tok(result: &BenchResult) -> UncertainTokSec {
-    let ms: Vec<f32> = result
-        .per_rep
-        .iter()
-        .filter(|(secs, toks)| *secs > 0.0 && *toks > 0)
-        .map(|(secs, toks)| *secs as f32 * 1000. * result.concurrency as f32 / *toks as f32)
-        .collect();
-    uncertain(&ms)
-}
-
-fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
-    let backend = match device {
-        Device::Cpu => "CPU",
-        Device::Cuda(_) => "CUDA",
-        Device::Metal(_) => "Metal",
-        #[cfg(feature = "rocm")]
-        Device::Rocm(_) => "ROCm",
-        #[cfg(feature = "vulkan")]
-        Device::Vulkan(_) => "Vulkan",
-    };
-    let results: Vec<Vec<CellStruct>> = results
-        .into_iter()
-        .map(|r| {
-            vec![
-                model.cell(),
-                backend.cell(),
-                r.test_name.to_string().cell(),
-                get_tok_s(&r).cell().justify(Justify::Right),
-                get_ms_tok(&r).cell().justify(Justify::Right),
-                r.concurrency.cell().justify(Justify::Right),
-                (get_tok_s(&r).mean * r.concurrency as f32)
-                    .cell()
-                    .justify(Justify::Right),
-            ]
-        })
-        .collect();
-
-    let table = results
-        .table()
-        .title(vec![
-            "model".cell().bold(true),
-            // "size".cell().bold(true),
-            // "params".cell().bold(true),
-            "backend".cell().bold(true),
-            // "ngl".cell().bold(true),
-            "test".cell().bold(true),
-            "t/s".cell().bold(true),
-            "ms/t".cell().bold(true),
-            "concurrency".cell().bold(true),
-            "throughput/s".cell().bold(true),
-        ])
-        .bold(true);
-    print_stdout(table).expect("print table");
-}
-
-// Warm each test AT ITS OWN SHAPE, which is what llama-bench does before it times anything. A short
-// "Hello!" prompt reaches only the decode matvec: the prefill GEMM's Metal pipeline is then compiled
-// inside the first timed repetition, so a 3-repetition prefill mean carries a compile that the rival's
-// protocol excludes. `messages` is the exact request the timed loop will send.
-async fn warmup_run(hanzo: Arc<Hanzo>, messages: RequestMessage, n_gen: usize) {
-    let sampling_params = SamplingParams {
-        max_len: Some(n_gen),
-        ..SamplingParams::deterministic()
-    };
-    let sender = hanzo.get_sender(None).unwrap();
-    let (tx, mut rx) = channel(10_000);
-
-    let req = Request::Normal(Box::new(NormalRequest {
-        id: hanzo.next_request_id(),
-        messages,
-        sampling_params: sampling_params.clone(),
-        response: tx,
-        return_logprobs: false,
-        is_streaming: false,
-        constraint: Constraint::None,
-        suffix: None,
-        tools: None,
-        tool_choice: None,
-        logits_processors: None,
-        return_raw_logits: false,
-        web_search_options: None,
-        enable_code_execution: false,
-        code_execution_permission: None,
-        code_execution_approval_notifier: None,
-        agent_permission: None,
-        agent_approval_handler: None,
-        agent_approval_notifier: None,
-        max_tool_rounds: None,
-        tool_dispatch_url: None,
-        model_id: None,
-        truncate_sequence: false,
-        session_id: None,
-        files: None,
-    }));
-
-    if sender.send(req.clone()).await.is_err() {
-        eprintln!("Receiver disconnected");
-    }
-
-    let _ = rx.recv().await;
-}
-
-fn parse_cache_type(s: &str) -> Result<PagedCacheType, String> {
-    s.parse()
-}
+use hanzo_server_core::server::ServerBuilder;
+use tokio::sync::mpsc::{channel, Sender};
+use tracing::info;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Model
-    #[clap(subcommand)]
-    model: ModelSelected,
+    #[command(subcommand)]
+    command: Command,
 
     /// Integer seed to ensure reproducible random number generation.
     #[arg(short, long)]
     seed: Option<u64>,
 
-    /// Number of prompt tokens to run.
+    /// Prompt tokens of the prefill test; 0 skips it.
     #[arg(long, short = 'p', default_value_t = 512)]
     n_prompt: usize,
 
-    /// Number of generations tokens to run.
+    /// Generated tokens of the decode test; 0 skips it.
     #[arg(long, short = 'g', default_value_t = 128)]
     n_gen: usize,
 
-    /// Number of concurrent requests to run. Default is 1
-    #[clap(short, long, value_parser, value_delimiter = ',')]
-    concurrency: Option<Vec<usize>>,
+    /// Concurrent requests per repetition; each value is its own set of tests.
+    #[arg(short, long, value_delimiter = ',', default_value = "1")]
+    concurrency: Vec<usize>,
 
-    /// Number of times to repeat each test.
+    /// Repetitions of each test. With three or more, the first is scored as warmup.
     #[arg(long, short, default_value_t = 5)]
     repetitions: usize,
 
-    /// NOTE: This can be omitted to use automatic device mapping!
-    /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
-    /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
-    /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
-    #[arg(short, long, value_parser, value_delimiter = ';')]
+    /// Device layers, as a count or `ORD:NUM;...`; omitted, the automatic device map.
+    #[arg(short, long, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
 
     /// In-situ quantization to apply.
     #[arg(long = "isq")]
     in_situ_quant: Option<String>,
 
-    /// GPU memory to allocate for KV cache with PagedAttention in MBs.
-    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
+    /// KV cache budget in MB. Priority: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
     #[arg(long = "pa-gpu-mem")]
     paged_attn_gpu_mem: Option<usize>,
 
-    /// Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
-    /// If this is not set and the device is CUDA, it will default to `0.9`.
-    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
+    /// KV cache budget as a fraction of device memory, 0 to 1.
     #[arg(long = "pa-gpu-mem-usage")]
     paged_attn_gpu_mem_usage: Option<f32>,
 
-    /// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
-    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-    /// This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
+    /// KV cache budget as the tokens it must hold; default, the model's `max-seq-len`.
     #[arg(long = "pa-ctxt-len")]
     paged_ctxt_len: Option<usize>,
 
-    /// PagedAttention KV cache type (auto or f8e4m3).
-    /// Defaults to `auto`.
-    #[arg(long = "pa-cache-type", value_parser = parse_cache_type)]
+    /// KV cache type (auto or f8e4m3).
+    #[arg(long = "pa-cache-type", value_parser = |s: &str| s.parse::<PagedCacheType>())]
     cache_type: Option<PagedCacheType>,
 
-    /// Block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA, it will default to 32.
-    /// PagedAttention is only supported on CUDA and is always automatically activated.
+    /// Tokens per KV cache block.
     #[arg(long = "pa-blk-size")]
     paged_attn_block_size: Option<usize>,
 
-    /// Turn PagedAttention off where it is this device's default (CUDA, ROCm).
-    #[arg(long = "no-paged-attn", default_value_t = false)]
+    /// Turn PagedAttention off where the server would turn it on.
+    #[arg(long = "no-paged-attn")]
     no_paged_attn: bool,
 
-    /// Turn PagedAttention on where it is not this device's default (Metal, Vulkan).
-    #[arg(long = "paged-attn", default_value_t = false)]
+    /// Turn PagedAttention on where the server would leave it off.
+    #[arg(long = "paged-attn", conflicts_with = "no_paged_attn")]
     paged_attn: bool,
 
-    /// Emit the raw per-repetition samples (wall seconds, scored tokens) for every test to this
-    /// path as JSON. Downstream statistics (mean, 95% CI, coefficient of variation) are computed
-    /// from these samples rather than a pre-aggregated mean/stddev, so the reported uncertainty is
-    /// auditable and reproducible. The token COUNTS are the engine's own usage figures; the timing
-    /// is wall-clock, identical in method to llama-bench, so the two engines compare like-for-like.
-    #[arg(long = "json")]
-    json: Option<String>,
+    /// Draft with a DFlash checkpoint directory.
+    #[arg(long)]
+    dflash: Option<String>,
 
-    /// Decode with the full-vocabulary stochastic sampler (temperature 1.0, no top-k) instead
-    /// of greedy argmax. Default is greedy, at sampling parity with llama-bench; this flag
-    /// exists only to MEASURE the sampler tax (the artifact greedy avoids), not to report a rate.
+    /// Draft a block shorter than the DFlash checkpoint's trained block; 0 drafts the full block.
+    #[arg(long, default_value_t = 0)]
+    dflash_block_size: usize,
+
+    /// Draft with a multi-token-prediction head.
+    #[arg(long)]
+    mtp_model: Option<String>,
+
+    #[arg(long, requires = "mtp_model")]
+    mtp_n_predict: Option<usize>,
+
+    /// Write the raw per-repetition samples (wall seconds, scored tokens) of every test here.
+    /// Every published statistic is computed from this file, so its uncertainty is auditable.
+    #[arg(long = "json")]
+    json: Option<PathBuf>,
+
+    /// Sample from the full vocabulary at temperature 1 instead of greedily. It exists to
+    /// measure the sampler's tax, not to report a rate.
     #[arg(long)]
     stochastic: bool,
 }
 
-fn backend_str(device: &Device) -> &'static str {
-    match device {
-        Device::Cpu => "CPU",
-        Device::Cuda(_) => "CUDA",
-        Device::Metal(_) => "Metal",
-        #[cfg(feature = "rocm")]
-        Device::Rocm(_) => "ROCm",
-        #[cfg(feature = "vulkan")]
-        Device::Vulkan(_) => "Vulkan",
+// Parsed once per process; the model selection is the large variant.
+#[allow(clippy::large_enum_variant)]
+#[derive(clap::Subcommand)]
+enum Command {
+    #[command(flatten)]
+    Measure(ModelSelected),
+    /// Score a run directory from the raw samples in it: board.md, board.json, and the paper's
+    /// results-data.tex and board.tex.
+    Score { run: PathBuf },
+    /// Runs as Hanzo Research evidence: printed, or filed with --to (bearer `$HANZO_API_KEY`).
+    Publish {
+        #[arg(required = true)]
+        runs: Vec<PathBuf>,
+        #[arg(long, value_name = "URL")]
+        to: Option<String>,
+    },
+    /// Pin a run before its first sample: write its manifest.
+    Manifest {
+        out: PathBuf,
+        #[command(flatten)]
+        pins: board::Pins,
+    },
+}
+
+const BACKEND: &str = if cfg!(feature = "vulkan") {
+    "Vulkan"
+} else if cfg!(feature = "rocm") {
+    "ROCm"
+} else if cfg!(feature = "metal") {
+    "Metal"
+} else if cfg!(feature = "cuda") {
+    "CUDA"
+} else {
+    "CPU"
+};
+
+/// Greedy is sampling parity with llama-bench: top-k 1 takes the device argmax. The stochastic
+/// sampler draws from the full vocabulary on the host, a per-token tax llama-bench does not pay.
+fn sampling(max_len: usize, greedy: bool) -> SamplingParams {
+    if greedy {
+        return SamplingParams {
+            max_len: Some(max_len),
+            ..SamplingParams::deterministic()
+        };
+    }
+    SamplingParams {
+        temperature: None,
+        top_k: None,
+        top_p: None,
+        min_p: None,
+        top_n_logprobs: 0,
+        frequency_penalty: None,
+        presence_penalty: None,
+        repetition_penalty: None,
+        max_len: Some(max_len),
+        stop_toks: None,
+        logits_bias: None,
+        n_choices: 1,
+        dry_params: None,
     }
 }
 
-// Serialize one test's raw samples. `per_rep` is the ground truth; every published statistic is a
-// pure function of this array, so a reviewer can recompute the board from the JSON alone.
-fn result_json(r: &BenchResult) -> serde_json::Value {
-    serde_json::json!({
-        "test": r.test_name.to_string(),
-        "phase": match r.test_name { TestName::Prompt(_) => "prefill", TestName::Gen(_) => "decode" },
-        "n": match r.test_name { TestName::Prompt(n) | TestName::Gen(n) => n },
-        "concurrency": r.concurrency,
-        "per_rep": r.per_rep.iter().map(|(secs, toks)| serde_json::json!([secs, toks])).collect::<Vec<_>>(),
-    })
+fn request(
+    hanzo: &Hanzo,
+    messages: RequestMessage,
+    sampling_params: SamplingParams,
+    response: Sender<Response>,
+) -> Request {
+    Request::Normal(Box::new(NormalRequest {
+        id: hanzo.next_request_id(),
+        messages,
+        sampling_params,
+        response,
+        return_logprobs: false,
+        is_streaming: false,
+        constraint: Constraint::None,
+        suffix: None,
+        tools: None,
+        tool_choice: None,
+        logits_processors: None,
+        return_raw_logits: false,
+        web_search_options: None,
+        enable_code_execution: false,
+        code_execution_permission: None,
+        code_execution_approval_notifier: None,
+        agent_permission: None,
+        agent_approval_handler: None,
+        agent_approval_notifier: None,
+        max_tool_rounds: None,
+        tool_dispatch_url: None,
+        model_id: None,
+        truncate_sequence: false,
+        session_id: None,
+        files: None,
+    }))
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let mut args = Args::parse();
+/// Time `repetitions` of one shape: each sends `concurrency` copies of the request and waits for
+/// all of them. A failed forward is the run's failure, with the engine's own words.
+async fn time(
+    hanzo: &Hanzo,
+    messages: RequestMessage,
+    max_len: usize,
+    shape: Shape,
+    repetitions: usize,
+    greedy: bool,
+) -> anyhow::Result<Timed> {
+    let sender = hanzo.get_sender(None)?;
+    let (tx, mut rx) = channel(10_000);
+    let req = request(hanzo, messages, sampling(max_len, greedy), tx);
+    let mut per_rep = Vec::with_capacity(repetitions);
+    for _ in 0..repetitions {
+        let t0 = Instant::now();
+        for _ in 0..shape.concurrency {
+            sender.send(req.clone()).await?;
+        }
+        let mut tokens = 0;
+        let mut finished = 0;
+        while finished < shape.concurrency {
+            let usage = match rx.recv().await {
+                Some(Response::Done(res)) => res.usage,
+                Some(Response::CompletionDone(res)) => res.usage,
+                Some(Response::AgenticToolCallProgress { .. })
+                | Some(Response::AgenticToolApprovalRequired { .. })
+                | Some(Response::File(_)) => continue,
+                Some(Response::InternalError(e)) => anyhow::bail!("internal error: {e}"),
+                Some(Response::ModelError(e, _)) => anyhow::bail!("model error: {e}"),
+                Some(Response::CompletionModelError(e, _)) => anyhow::bail!("model error: {e}"),
+                Some(Response::ValidationError(e)) => anyhow::bail!("validation error: {e}"),
+                Some(_) => anyhow::bail!("unexpected response during a benchmark"),
+                None => anyhow::bail!("response channel closed before a terminal response"),
+            };
+            tokens += match shape.phase {
+                Phase::Prefill => usage.prompt_tokens,
+                Phase::Decode => usage.completion_tokens,
+            };
+            finished += 1;
+        }
+        per_rep.push((t0.elapsed().as_secs_f64(), tokens));
+    }
+    Ok(Timed { shape, per_rep })
+}
+
+fn print_table(model: &str, results: &[Timed]) {
+    let rows: Vec<Vec<CellStruct>> = results
+        .iter()
+        .filter_map(|t| Some((t.shape, t.stats()?)))
+        .map(|(shape, st)| {
+            let test = match shape.phase {
+                Phase::Prefill => format!("pp {}", shape.n),
+                Phase::Decode => format!("tg {}", shape.n),
+            };
+            let std = st.spread.as_ref().map_or(0.0, |s| s.std);
+            let right = |s: String| s.cell().justify(Justify::Right);
+            vec![
+                model.cell(),
+                BACKEND.cell(),
+                test.cell(),
+                right(format!("{:.3}±{std:.3}", st.mean)),
+                right(format!("{:.3}", 1000.0 / st.mean)),
+                right(shape.concurrency.to_string()),
+                right(format!("{:.3}", st.mean * shape.concurrency as f64)),
+                right(format!("{:.3}", st.best)),
+            ]
+        })
+        .collect();
+    let heads = [
+        "model",
+        "backend",
+        "test",
+        "t/s",
+        "ms/t",
+        "concurrency",
+        "throughput/s",
+        "best t/s",
+    ];
+    let table = rows
+        .table()
+        .title(heads.map(|h| h.cell().bold(true)))
+        .bold(true);
+    print_stdout(table).expect("print table");
+}
+
+async fn measure(args: &Args, model: ModelSelected) -> anyhow::Result<()> {
     initialize_logging();
-
-    warn!("hanzo-bench is deprecated. Please use `hanzo bench` from hanzo-cli instead.");
-
-    args.concurrency = Some(args.concurrency.unwrap_or(vec![1]));
-
-    let dtype = get_model_dtype(&args.model)?;
-    let auto_device_map_params = get_auto_device_map_params(&args.model)?;
-
-    let max_seq_len = auto_device_map_params.max_seq_len();
-
-    let loader: Box<dyn Loader> = LoaderBuilder::new(args.model).build()?;
-    let model_name = loader.get_id();
-
-    // Device selection mirrors the accelerator cascade in hanzo-server-core's `init_device`
-    // (vulkan > rocm > metal > cuda/cpu): the bench must run on the same backend it was
-    // compiled for, otherwise `--features rocm` silently falls through to CPU.
-    #[cfg(feature = "vulkan")]
-    let device = Device::new_vulkan(0)?;
-    #[cfg(all(feature = "rocm", not(feature = "vulkan")))]
-    let device = Device::new_rocm(0)?;
-    #[cfg(all(feature = "metal", not(feature = "rocm"), not(feature = "vulkan")))]
-    let device = Device::new_metal(0)?;
-    #[cfg(all(not(feature = "metal"), not(feature = "rocm"), not(feature = "vulkan")))]
-    let device = if hanzo_engine::distributed::use_nccl() {
-        Device::Cpu
-    } else {
-        Device::cuda_if_available(0)?
+    let paged_attn = match (args.paged_attn, args.no_paged_attn) {
+        (true, _) => Some(true),
+        (_, true) => Some(false),
+        _ => None,
     };
-
-    if let Some(seed) = args.seed {
-        device.set_seed(seed)?;
-    }
-
-    let token_source = TokenSource::CacheToken;
-    info!(
-        "avx: {}, neon: {}, simd128: {}, f16c: {}",
-        hanzo_ml::utils::with_avx(),
-        hanzo_ml::utils::with_neon(),
-        hanzo_ml::utils::with_simd128(),
-        hanzo_ml::utils::with_f16c()
-    );
-    info!("Sampling method: penalties -> temperature -> topk -> topp -> minp -> multinomial");
-    info!("Model kind is: {}", loader.get_kind().to_string());
-
-    // Parse device mapper
-    let mapper = if let Some(device_layers) = args.num_device_layers {
-        if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
-            let layers = device_layers[0].parse::<usize>().unwrap();
-            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(vec![
-                DeviceLayerMapMetadata { ordinal: 0, layers },
-            ]))
-        } else {
-            let mut mapping = Vec::new();
-            for layer in device_layers {
-                let split = layer.splitn(2, ':').collect::<Vec<_>>();
-                if split.len() < 2 {
-                    panic!("Expected layer to be of format ORD:NUM, got {layer}");
-                }
-                let ord = split[0]
-                    .parse::<usize>()
-                    .unwrap_or_else(|_| panic!("Failed to parse {} as integer.", split[0]));
-                let num = split[1]
-                    .parse::<usize>()
-                    .unwrap_or_else(|_| panic!("Failed to parse {} as integer.", split[1]));
-                for DeviceLayerMapMetadata { ordinal, layers: _ } in &mapping {
-                    if *ordinal == ord {
-                        panic!("Duplicate ordinal {ord}");
-                    }
-                }
-                mapping.push(DeviceLayerMapMetadata {
-                    ordinal: ord,
-                    layers: num,
-                });
-            }
-            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
-        }
-    } else {
-        DeviceMapSetting::Auto(auto_device_map_params)
-    };
-
-    // The served default for this device, unless a flag says otherwise: a benchmark measures
-    // what is served.
-    let no_paged_attn = if args.paged_attn {
-        false
-    } else {
-        args.no_paged_attn || !hanzo_engine::paged_attn_default(&device)
-    };
-
-    let cache_config = match (
-        args.paged_attn_block_size,
-        args.paged_attn_gpu_mem,
-        args.paged_attn_gpu_mem_usage,
-        args.paged_ctxt_len,
-        paged_attn_supported(),
-        no_paged_attn,
-    ) {
-        (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::ContextSize(max_seq_len),
-            args.cache_type.unwrap_or_default(),
-        )?),
-        (block_size, None, None, Some(ctxt), true, false) => Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::ContextSize(ctxt),
-            args.cache_type.unwrap_or_default(),
-        )?),
-        (block_size, None, Some(f), None, true, false) => Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::Utilization(f),
-            args.cache_type.unwrap_or_default(),
-        )?),
-        (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::MbAmount(m),
-            args.cache_type.unwrap_or_default(),
-        )?),
-        (block_size, Some(_m), Some(f), None, true, false) => {
-            info!("Both memory size, and usage were specified, defaulting to the usage value.");
-            Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::Utilization(f),
-                args.cache_type.unwrap_or_default(),
-            )?)
-        }
-        (block_size, Some(_m), None, Some(ctxt), true, false) => {
-            info!("All memory size and ctxt len, defaulting to the context len value.");
-            Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::ContextSize(ctxt),
-                args.cache_type.unwrap_or_default(),
-            )?)
-        }
-        (block_size, None, Some(f), Some(_ctxt), true, false) => {
-            info!("Both ctxt len and usage were specified, defaulting to the usage value.");
-            Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::Utilization(f),
-                args.cache_type.unwrap_or_default(),
-            )?)
-        }
-        (_, _, _, _, _, _) => None,
-    };
-
-    let isq = args
-        .in_situ_quant
-        .as_ref()
-        .map(|isq| parse_isq_value(isq, Some(&device)).map_err(|e| anyhow::anyhow!("{e}")))
-        .transpose()?;
-
-    let pipeline = loader.load_model_from_hf(
-        None,
-        token_source,
-        &dtype,
-        &device,
-        false,
-        mapper,
-        isq,
-        cache_config,
-    )?;
+    let mtp = args
+        .mtp_model
+        .clone()
+        .map(|m| MtpConfig::new(m, args.mtp_n_predict));
+    let hanzo = ServerBuilder::new()
+        .with_model(model)
+        .with_max_seqs(args.concurrency.iter().copied().max().unwrap_or(1))
+        .with_token_source(TokenSource::CacheToken)
+        .with_interactive_mode(false)
+        .with_prefix_cache_n(0)
+        .with_disable_eos_stop(true)
+        .with_seed_optional(args.seed)
+        .with_num_device_layers_optional(args.num_device_layers.clone())
+        .with_in_situ_quant_optional(args.in_situ_quant.clone())
+        .set_paged_attn(paged_attn)
+        .with_paged_attn_gpu_mem_optional(args.paged_attn_gpu_mem)
+        .with_paged_attn_gpu_mem_usage_optional(args.paged_attn_gpu_mem_usage)
+        .with_paged_ctxt_len_optional(args.paged_ctxt_len)
+        .with_paged_attn_block_size_optional(args.paged_attn_block_size)
+        .with_paged_attn_cache_type(args.cache_type.unwrap_or_default())
+        .with_mtp_config_optional(mtp)
+        .with_dflash_optional(args.dflash.clone(), args.dflash_block_size)
+        .build()
+        .await?;
+    let model_id = hanzo
+        .get_default_model_id()
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     info!("Model loaded.");
 
-    let scheduler_config = if cache_config.is_some() {
-        // Handle case where we may have device mapping
-        if let Some(ref cache_config) = pipeline.lock().await.get_metadata().cache_config {
-            SchedulerConfig::PagedAttentionMeta {
-                max_num_seqs: *args.concurrency.as_ref().unwrap().iter().max().unwrap(),
-                config: cache_config.clone(),
-            }
-        } else {
-            SchedulerConfig::DefaultScheduler {
-                method: DefaultSchedulerMethod::Fixed(
-                    (*args.concurrency.as_ref().unwrap().iter().max().unwrap())
-                        .try_into()
-                        .unwrap(),
-                ),
-            }
-        }
-    } else {
-        SchedulerConfig::DefaultScheduler {
-            method: DefaultSchedulerMethod::Fixed(
-                (*args.concurrency.as_ref().unwrap().iter().max().unwrap())
-                    .try_into()
-                    .unwrap(),
-            ),
-        }
+    let decode = RequestMessage::Completion {
+        text: "Rust".to_string(),
+        echo_prompt: false,
+        best_of: None,
     };
-    let hanzo = Builder::new(pipeline, scheduler_config, false, None)
-        .with_no_prefix_cache(true)
-        .with_disable_eos_stop(true)
-        .build()
-        .await;
+    let prefill = RequestMessage::CompletionTokens((1000..1000 + args.n_prompt as u32).collect());
+    // A shape's phase and length, the request that exercises it, and the tokens it may generate.
+    let tests = [
+        (
+            Phase::Decode,
+            args.n_gen,
+            decode,
+            args.n_gen.saturating_sub(1),
+        ),
+        (Phase::Prefill, args.n_prompt, prefill, 1),
+    ];
+    let tests: Vec<_> = tests.into_iter().filter(|t| t.1 > 0).collect();
 
-    info!("Starting warmup run.");
-    if args.n_gen > 0 {
-        warmup_run(
-            hanzo.clone(),
-            RequestMessage::Completion {
-                text: "Rust".to_string(),
-                echo_prompt: false,
-                best_of: None,
-            },
-            1,
-        )
-        .await;
-    }
-    if args.n_prompt > 0 {
-        warmup_run(
-            hanzo.clone(),
-            RequestMessage::CompletionTokens((1000..1000 + args.n_prompt as u32).collect()),
-            1,
-        )
-        .await;
+    // Warm each test at its own shape, as llama-bench does before it times anything: a short
+    // prompt reaches only the decode matvec, and the prefill kernels would otherwise compile
+    // inside the first timed repetition.
+    for (phase, n, messages, _) in &tests {
+        let shape = Shape {
+            phase: *phase,
+            n: *n,
+            concurrency: 1,
+        };
+        time(&hanzo, messages.clone(), 1, shape, 1, true).await?;
     }
     info!("Finished warmup run.");
-    info!("Starting benchmarks.");
 
-    let mut json_records = Vec::new();
-    for concurrency in args.concurrency.as_ref().unwrap() {
-        let mut results = vec![];
-        if args.n_gen > 0 {
-            let r = run_bench(
-                hanzo.clone(),
-                RequestMessage::Completion {
-                    text: "Rust".to_string(),
-                    echo_prompt: false,
-                    best_of: None,
-                },
-                args.n_gen - 1,
-                *concurrency,
-                args.repetitions,
-                TestName::Gen(args.n_gen),
-                !args.stochastic,
-            )
-            .await?;
-            results.push(r);
+    let mut results = Vec::new();
+    for &concurrency in &args.concurrency {
+        let from = results.len();
+        for (phase, n, messages, max_len) in &tests {
+            let shape = Shape {
+                phase: *phase,
+                n: *n,
+                concurrency,
+            };
+            let greedy = !args.stochastic;
+            results.push(
+                time(
+                    &hanzo,
+                    messages.clone(),
+                    *max_len,
+                    shape,
+                    args.repetitions,
+                    greedy,
+                )
+                .await?,
+            );
         }
-
-        if args.n_prompt > 0 {
-            let tks = (1000..1000 + args.n_prompt as u32).collect();
-            let r = run_bench(
-                hanzo.clone(),
-                RequestMessage::CompletionTokens(tks),
-                1,
-                *concurrency,
-                args.repetitions,
-                TestName::Prompt(args.n_prompt),
-                !args.stochastic,
-            )
-            .await?;
-
-            results.push(r);
-        }
-
-        if args.json.is_some() {
-            json_records.extend(results.iter().map(result_json));
-        }
-        print_usage(&model_name, &device, results);
+        print_table(&model_id, &results[from..]);
     }
 
     if let Some(path) = &args.json {
-        let doc = serde_json::json!({
-            "engine_version": env!("CARGO_PKG_VERSION"),
-            "backend": backend_str(&device),
-            "sampler": if args.stochastic { "stochastic-temp1-fullvocab" } else { "greedy-argmax" },
-            "model_id": model_name,
-            "n_prompt": args.n_prompt,
-            "n_gen": args.n_gen,
-            "repetitions": args.repetitions,
-            "results": json_records,
-        });
-        std::fs::write(path, serde_json::to_string_pretty(&doc)?)?;
-        info!("Wrote raw samples to {path}");
+        let sampler = match args.stochastic {
+            true => "stochastic-temp1-fullvocab",
+            false => "greedy-argmax",
+        };
+        let samples = Samples {
+            engine_version: env!("CARGO_PKG_VERSION").into(),
+            backend: BACKEND.into(),
+            sampler: sampler.into(),
+            model_id,
+            results,
+        };
+        std::fs::write(path, serde_json::to_string_pretty(&samples)?)?;
+        info!("Wrote raw samples to {}", path.display());
     }
+    Ok(())
+}
 
+fn print_json<T: serde::Serialize>(value: &T) -> anyhow::Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
+}
+
+fn publish(runs: &[PathBuf], to: Option<&String>) -> anyhow::Result<()> {
+    let runs = runs
+        .iter()
+        .map(|r| board::read(r))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let evidence = board::evidence(&runs)?;
+    match to {
+        Some(url) => board::post(url, &evidence),
+        None => print_json(&serde_json::json!({"experiments": evidence, "attempts": []})),
+    }
+}
+
+fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    match &args.command {
+        Command::Score { run } => print!("{}", board::markdown(&board::score(run)?)),
+        Command::Publish { runs, to } => publish(runs, to.as_ref())?,
+        Command::Manifest { out, pins } => {
+            std::fs::write(
+                out,
+                serde_json::to_string_pretty(&board::pin(pins.clone())?)?,
+            )?;
+            println!("manifest -> {}", out.display());
+        }
+        Command::Measure(model) => {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?
+                .block_on(measure(&args, model.clone()))?;
+            // The samples are written. A GPU runtime's exit-time teardown can abort after the
+            // fact (ROCm on gfx1151 does), and a harness would read that as a failed run.
+            std::io::stdout().flush()?;
+            std::process::exit(0);
+        }
+    }
     Ok(())
 }

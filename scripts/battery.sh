@@ -37,7 +37,7 @@ for pair in "${PAIRS[@]}"; do
   d="$(printf '%s\n' "$out" | tail -1)"          # dossier prints the run dir as its last line
   if [[ "$rc" -ne 0 || ! -d "$d" ]]; then fail "FAILED $tag (rc=$rc)" "$tag:rc$rc"; continue; fi
   RUNS+=("$d")
-  python3 "$(dirname "$0")/bench_stats.py" "$d" >/dev/null 2>&1 || echo "warn: stats failed for $tag" >&2
+  "$HANZO" score "$d" >/dev/null 2>&1 || echo "warn: scoring failed for $tag" >&2
 done
 
 # Empty-RUNS guard (set -u would otherwise trip on ${RUNS[0]}).

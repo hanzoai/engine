@@ -20,19 +20,26 @@ serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true
 hanzo-engine.workspace = true
+hanzo-server-core = { version = "1.7.41", path = "../hanzo-server-core", default-features = false }
 tracing.workspace = true
 tokio.workspace = true
 cli-table.workspace = true
 libc.workspace = true
+sha2.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [features]
-cuda = ["hanzo-engine/cuda"]
-vulkan = ["hanzo-engine/vulkan"]
-rocm = ["hanzo-engine/rocm"]
-cudnn = ["hanzo-engine/cudnn"]
-metal = ["hanzo-engine/metal"]
-flash-attn = ["cuda", "hanzo-engine/flash-attn"]
-accelerate = ["hanzo-engine/accelerate"]
-mkl = ["hanzo-engine/mkl"]
-nccl = ["hanzo-engine/nccl"]
-ring = ["hanzo-engine/ring"]
+cuda = ["hanzo-engine/cuda", "hanzo-server-core/cuda"]
+vulkan = ["hanzo-engine/vulkan", "hanzo-server-core/vulkan"]
+rocm = ["hanzo-engine/rocm", "hanzo-server-core/rocm"]
+cudnn = ["hanzo-engine/cudnn", "hanzo-server-core/cudnn"]
+metal = ["hanzo-engine/metal", "hanzo-server-core/metal"]
+flash-attn = ["cuda", "hanzo-engine/flash-attn", "hanzo-server-core/flash-attn"]
+accelerate = ["hanzo-engine/accelerate", "hanzo-server-core/accelerate"]
+mkl = ["hanzo-engine/mkl", "hanzo-server-core/mkl"]
+nccl = ["hanzo-engine/nccl", "hanzo-server-core/nccl"]
+ring = ["hanzo-engine/ring", "hanzo-server-core/ring"]

@@ -6,7 +6,7 @@
 # the SAME shapes, on a VERIFIED-QUIET box, and records a pinned manifest so the
 # numbers are reproducible. Timing is wall-clock for BOTH engines (identical
 # method => no cross-engine instrument bias); repetition + Student-t CIs quantify
-# residual noise; the quiet-gate removes contention. Analysis is bench_stats.py.
+# residual noise; the quiet-gate removes contention. Scoring is `hanzo-bench score`.
 #
 #   dossier.sh --backend rocm|vulkan|metal|cuda \
 #              --hanzo-bench PATH --llama-bench PATH \
@@ -78,7 +78,7 @@ quiet_gate() {
   # argv, so a guard daemon (earlyoom, whose --prefer string names these tools) or
   # a network-bound eval (python calling an API) that merely mentions them does not
   # false-positive. Desktop/CPU load is recorded as advisory, never fatal -- a
-  # shared workstation is never fully idle, and CV>5% flagging in bench_stats.py
+  # shared workstation is never fully idle, and CV>5% flagging in `hanzo-bench score`
   # surfaces any timing noise it induces.
   local hits busy load
   hits="$(ps -eo pid=,comm= 2>/dev/null | grep -wE "$COMPET" | grep -vw "$$" || true)"
@@ -104,53 +104,20 @@ manifest() {
   ever="$(grep -m1 '^version' "$ENGINE_DIR/Cargo.toml" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
   egit="$(git -C "$ENGINE_DIR" rev-parse HEAD 2>/dev/null || true)"
   gpu="$(rocminfo 2>/dev/null | grep -m1 'Marketing Name' | sed 's/^ *//' || nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1 || true)"
-  # Values pass via argv (key=value), never interpolated into the Python source: a model path
-  # with a space or quote cannot break or inject the manifest builder. The binaries are hashed
-  # and each tree's dirty state recorded -- a binary built from an uncommitted tree carries a
-  # clean commit SHA and would otherwise misreport its provenance.
-  python3 - "$OUT/manifest.json" \
-    backend="$BACKEND" engine_dir="$ENGINE_DIR" engine_git_sha="$egit" \
-    engine_dirty="$(dirty_of "$ENGINE_DIR")" engine_version="$ever" \
-    hanzo_ml="$(ver_of hanzo-ml)" hanzo_rocm_kernels="$(ver_of hanzo-rocm-kernels)" \
-    hanzo_metal_kernels="$(ver_of hanzo-metal-kernels)" \
-    llama_dir="$LLAMA_DIR" llama_sha="$( [[ -n "$LLAMA_DIR" ]] && git -C "$LLAMA_DIR" rev-parse HEAD 2>/dev/null || true)" \
-    llama_dirty="$( [[ -n "$LLAMA_DIR" ]] && dirty_of "$LLAMA_DIR" || echo false)" \
-    hanzo_bench_bin="$HANZO" llama_bench_bin="$LLAMA" model_path="$MODEL" \
-    prompt_sizes="$PLIST" n_gen="$NGEN" reps="$REPS" concurrency="$CONC" max_ctx="$MAXCTX" \
-    hanzo_args="$HARGS" \
-    backend_env="$(backend_env)" sampler="$SAMPLER" gpu="$gpu" <<'PY'
-import json, hashlib, os, sys, time
-out = sys.argv[1]
-kv = dict(a.split("=", 1) for a in sys.argv[2:])
-def sha256(p):
-    if not p or not os.path.exists(p): return None
-    h = hashlib.sha256()
-    with open(p, "rb") as f:
-        for b in iter(lambda: f.read(1 << 20), b""): h.update(b)
-    return h.hexdigest()
-def size(p): return os.path.getsize(p) if p and os.path.exists(p) else None
-m = {
-  "host": os.uname().nodename, "uname": " ".join(os.uname()), "backend": kv.get("backend"),
-  "timestamp": time.time(), "iso": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-  "sampler": kv.get("sampler"),
-  "engine_git_sha": kv.get("engine_git_sha") or None, "engine_git_dirty": kv.get("engine_dirty") == "true",
-  "engine_version": kv.get("engine_version"),
-  "hanzo_ml": kv.get("hanzo_ml"), "hanzo_rocm_kernels": kv.get("hanzo_rocm_kernels"),
-  "hanzo_metal_kernels": kv.get("hanzo_metal_kernels"),
-  "llama_sha": kv.get("llama_sha") or None, "llama_git_dirty": kv.get("llama_dirty") == "true",
-  "hanzo_bench_bin": kv.get("hanzo_bench_bin"), "hanzo_bench_bin_sha256": sha256(kv.get("hanzo_bench_bin")),
-  "llama_bench_bin": kv.get("llama_bench_bin"), "llama_bench_bin_sha256": sha256(kv.get("llama_bench_bin")),
-  "model_path": kv.get("model_path"), "model_bytes": size(kv.get("model_path")),
-  "model_sha256": sha256(kv.get("model_path")),
-  "params": {"prompt_sizes": kv.get("prompt_sizes"), "n_gen": int(kv.get("n_gen") or 0),
-             "reps": int(kv.get("reps") or 0), "concurrency": int(kv.get("concurrency") or 1),
-             "max_ctx": int(kv.get("max_ctx") or 0), "hanzo_args": kv.get("hanzo_args") or ""},
-  "env": {"backend_env": kv.get("backend_env")},
-  "gpu": kv.get("gpu") or None,
-}
-json.dump(m, open(out, "w"), indent=2)
-print("manifest ->", out)
-PY
+  # Values pass as arguments, never interpolated into a script: a model path with a space or a
+  # quote cannot break the manifest. The binaries are hashed and each tree's dirty state
+  # recorded -- a binary built from an uncommitted tree carries a clean commit SHA and would
+  # otherwise misreport its provenance.
+  "$HANZO" manifest "$OUT/manifest.json" \
+    --backend "$BACKEND" --sampler "$SAMPLER" --gpu "$gpu" \
+    --engine-git-sha "$egit" --engine-git-dirty "$(dirty_of "$ENGINE_DIR")" --engine-version "$ever" \
+    --hanzo-ml "$(ver_of hanzo-ml)" --hanzo-rocm-kernels "$(ver_of hanzo-rocm-kernels)" \
+    --hanzo-metal-kernels "$(ver_of hanzo-metal-kernels)" \
+    --llama-sha "$( [[ -n "$LLAMA_DIR" ]] && git -C "$LLAMA_DIR" rev-parse HEAD 2>/dev/null || true)" \
+    --llama-git-dirty "$( [[ -n "$LLAMA_DIR" ]] && dirty_of "$LLAMA_DIR" || echo false)" \
+    --hanzo-bench-bin "$HANZO" --llama-bench-bin "$LLAMA" --model-path "$MODEL" \
+    --prompt-sizes "$PLIST" --n-gen "$NGEN" --reps "$REPS" --concurrency "$CONC" --max-ctx "$MAXCTX" \
+    --hanzo-args "$HARGS" --backend-env "$(backend_env)"
 }
 
 run_hanzo() { # $1=phase(pp|tg) $2=n $3=tag
@@ -183,5 +150,6 @@ for P in "${PS[@]}"; do
   run_hanzo pp "$P" "${MTAG}_${BACKEND}_pp${P}"
   run_llama pp "$P" "${MTAG}_${BACKEND}_pp${P}"
 done
+"$HANZO" score "$OUT" >&2 || echo "scoring failed; the samples are in $OUT" >&2
 echo "=== done: $OUT ===" >&2
 echo "$OUT"
