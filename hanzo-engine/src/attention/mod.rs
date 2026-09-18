@@ -70,13 +70,74 @@ pub(crate) const ATTENTION_KV_CHUNK_SIZE: usize = 4096;
 /// that work today keep their arithmetic.
 pub(crate) const ATTENTION_SCORE_BLOCK_BYTES: usize = 2 * 1024 * 1024 * 1024;
 
-/// Whether one [q_len, kv_len] score block fits [`ATTENTION_SCORE_BLOCK_BYTES`].
-fn score_block_fits(b_sz: usize, n_heads: usize, q_len: usize, kv_len: usize) -> bool {
+/// The same ceiling on ROCm, where 2 GiB is not a safe operating point but the edge of a cliff.
+///
+/// The eager path holds about 5.6 block-sized temporaries at once (scores, their f32 copy, the
+/// masked sum, the softmax, its cast back), so a block just under the general ceiling is an ~11 GiB
+/// transient. On a discrete card that is VRAM nobody else wanted. On an APU it is GTT, which is
+/// SYSTEM memory charged to no cgroup: it comes out of the same pool as the host and everything the
+/// node serves, and nothing but the OOM killer bounds it.
+///
+/// It also never came back. A chunked prefill asks for a block of `n_heads * 1024 * kv_len * 4`
+/// bytes and `kv_len` grows every chunk, so each chunk's temporaries are a size no earlier chunk
+/// used; a pool that reuses a freed buffer only on an exact byte match reuses none of them. Summed
+/// over the chunks of one prompt that is quadratic in its length -- measured on a 27B with 24 heads
+/// at 0.275 GB per (1K tokens)^2: 7 GB at 4K, 23 GB at 8K, ~82 GB at 16K, taking down a node that
+/// also served production. 5.6 x 94 MiB per 1K of context, halved by the sum, is that coefficient.
+///
+/// Tiling fixes both at once, because a tile is the SAME size whatever the context: the transient
+/// stops growing with `kv_len`, and every chunk and every layer asks for buffers the last one just
+/// freed. 256 MiB puts the switch at ~2.7K tokens of context for that model, and a full tile under
+/// it (see [`kv_tile_within`]), so the largest attention transient is a few hundred MiB at any
+/// context length instead of ~11 GiB at 21K.
+pub(crate) const ROCM_SCORE_BLOCK_BYTES: usize = 256 * 1024 * 1024;
+
+/// The score-block ceiling for `device`. Every other device keeps the general one, so the shapes
+/// that work there today keep their arithmetic.
+fn score_block_budget(device: &Device) -> usize {
+    if device.is_rocm() {
+        ROCM_SCORE_BLOCK_BYTES
+    } else {
+        ATTENTION_SCORE_BLOCK_BYTES
+    }
+}
+
+/// Whether one [q_len, kv_len] block of f32 scores fits `budget` bytes.
+fn score_block_fits(
+    b_sz: usize,
+    n_heads: usize,
+    q_len: usize,
+    kv_len: usize,
+    budget: usize,
+) -> bool {
     b_sz.saturating_mul(n_heads)
         .saturating_mul(q_len)
         .saturating_mul(kv_len)
         .saturating_mul(std::mem::size_of::<f32>())
-        <= ATTENTION_SCORE_BLOCK_BYTES
+        <= budget
+}
+
+/// Smallest key tile worth a kernel launch. Below this the tile count, not the block size, is the
+/// cost, and a budget that small is a misconfiguration rather than something to honour exactly.
+const MIN_KV_TILE: usize = 256;
+
+/// The key tile for a block that did not fit `budget`: the largest power of two, up to
+/// [`ATTENTION_KV_CHUNK_SIZE`], whose [q_tile, kv_tile] block does fit.
+///
+/// A block sent to the tiled path for exceeding a ceiling must come back in pieces that respect it,
+/// or the ceiling bounds nothing: with 24 heads a [1024, 4096] tile is 393 MiB, over a 256 MiB
+/// budget it was meant to honour. A power of two keeps every full tile the same size across chunks
+/// and layers, which is what lets a freed tile be handed straight to the next one.
+fn kv_tile_within(b_sz: usize, n_heads: usize, q_tile: usize, budget: usize) -> usize {
+    let row_bytes = b_sz
+        .saturating_mul(n_heads)
+        .saturating_mul(q_tile)
+        .saturating_mul(std::mem::size_of::<f32>())
+        .max(1);
+    let fits = (budget / row_bytes).max(1);
+    // Largest power of two <= fits.
+    let tile = 1usize << (usize::BITS - 1 - fits.leading_zeros());
+    tile.clamp(MIN_KV_TILE, ATTENTION_KV_CHUNK_SIZE)
 }
 
 /// Generic chunked attention computation that can be used by different backends
@@ -522,7 +583,8 @@ impl Sdpa {
 
         // Every path below materializes the whole score block, which is what a long prefill cannot
         // pay for; past the budget the same attention is computed over tiles.
-        if !score_block_fits(b_sz, n_attn_heads, seq_len, k.dim(2)?) {
+        let budget = score_block_budget(q.device());
+        if !score_block_fits(b_sz, n_attn_heads, seq_len, k.dim(2)?, budget) {
             return tiled_sdpa(
                 q,
                 k,
@@ -530,7 +592,7 @@ impl Sdpa {
                 mask,
                 sdpa_params,
                 ATTENTION_CHUNK_SIZE,
-                ATTENTION_KV_CHUNK_SIZE,
+                kv_tile_within(b_sz, n_attn_heads, ATTENTION_CHUNK_SIZE, budget),
             );
         }
 
@@ -768,17 +830,95 @@ fn vk_sdpa_nsplit() -> usize {
 
 #[cfg(test)]
 mod score_block_budget {
-    use super::score_block_fits;
+    use super::{
+        kv_tile_within, score_block_budget, score_block_fits, ATTENTION_CHUNK_SIZE,
+        ATTENTION_KV_CHUNK_SIZE, ATTENTION_SCORE_BLOCK_BYTES as GENERAL, MIN_KV_TILE,
+        ROCM_SCORE_BLOCK_BYTES as ROCM,
+    };
+    use hanzo_ml::Device;
 
     #[test]
     fn a_long_prefill_is_the_only_shape_that_tiles() {
         // 4096 new tokens against a 124K prefix, 24 heads: the shape that wires 48 GB of scores.
-        assert!(!score_block_fits(1, 24, 4096, 124_094));
+        assert!(!score_block_fits(1, 24, 4096, 124_094, GENERAL));
         // The same context at decode width, and a speculative verify, stay on the single block.
-        assert!(score_block_fits(1, 24, 1, 124_094));
-        assert!(score_block_fits(1, 24, 8, 124_094));
+        assert!(score_block_fits(1, 24, 1, 124_094, GENERAL));
+        assert!(score_block_fits(1, 24, 8, 124_094, GENERAL));
         // A square 4K prefill fits, so its arithmetic is untouched.
-        assert!(score_block_fits(1, 24, 4096, 4096));
+        assert!(score_block_fits(1, 24, 4096, 4096, GENERAL));
+    }
+
+    /// Every device but ROCm keeps the general ceiling, so nothing that works today changes path.
+    #[test]
+    fn only_rocm_gets_the_lower_ceiling() {
+        assert_eq!(score_block_budget(&Device::Cpu), GENERAL);
+        assert!(ROCM < GENERAL);
+    }
+
+    /// The chunks that took a node down, under the ceiling that would have stopped them.
+    ///
+    /// A 1024-query chunk against a growing context, 24 heads. Under the general ceiling every one
+    /// of these is a single block -- a DIFFERENT size each chunk, which is what made the retained
+    /// memory quadratic -- right up to 21K of context. Under the ROCm ceiling they tile from ~2.7K.
+    #[test]
+    fn a_chunked_prefill_tiles_long_before_it_can_cost_the_node() {
+        for kv_len in [4096, 8192, 16_384] {
+            assert!(
+                score_block_fits(1, 24, ATTENTION_CHUNK_SIZE, kv_len, GENERAL),
+                "{kv_len}: the general ceiling still materializes this whole"
+            );
+            assert!(
+                !score_block_fits(1, 24, ATTENTION_CHUNK_SIZE, kv_len, ROCM),
+                "{kv_len}: the ROCm ceiling must tile this"
+            );
+        }
+        // Short contexts and every decode step stay on the single block: one query against 262K of
+        // context is 25 MiB, and tiling that would only add launches.
+        assert!(score_block_fits(1, 24, ATTENTION_CHUNK_SIZE, 2048, ROCM));
+        assert!(score_block_fits(1, 24, 1, 262_144, ROCM));
+    }
+
+    /// A tile must honour the ceiling that sent the block to the tiled path, or the ceiling bounds
+    /// nothing: [1024, 4096] at 24 heads is 393 MiB, over the 256 MiB it was tiled to respect.
+    #[test]
+    fn a_tile_fits_the_budget_that_demanded_it() {
+        for (heads, budget) in [
+            (24, ROCM),
+            (8, ROCM),
+            (64, ROCM),
+            (24, GENERAL),
+            (128, GENERAL),
+        ] {
+            let tile = kv_tile_within(1, heads, ATTENTION_CHUNK_SIZE, budget);
+            assert!(
+                tile.is_power_of_two(),
+                "{heads} heads: {tile} is not a power of two"
+            );
+            assert!((MIN_KV_TILE..=ATTENTION_KV_CHUNK_SIZE).contains(&tile));
+            assert!(
+                score_block_fits(1, heads, ATTENTION_CHUNK_SIZE, tile, budget)
+                    || tile == MIN_KV_TILE,
+                "{heads} heads under {budget}: a {tile}-key tile does not fit"
+            );
+        }
+        // The measured model: 24 heads under the ROCm ceiling is a 2048-key tile, 196 MiB.
+        assert_eq!(kv_tile_within(1, 24, ATTENTION_CHUNK_SIZE, ROCM), 2048);
+        // The general ceiling is generous enough that the tile is the one already in use, so no
+        // other device's tiled arithmetic moves.
+        assert_eq!(
+            kv_tile_within(1, 24, ATTENTION_CHUNK_SIZE, GENERAL),
+            ATTENTION_KV_CHUNK_SIZE
+        );
+    }
+
+    /// A budget too small to be meant still yields a usable tile rather than zero or a panic.
+    #[test]
+    fn a_degenerate_budget_still_yields_a_tile() {
+        assert_eq!(kv_tile_within(1, 24, ATTENTION_CHUNK_SIZE, 0), MIN_KV_TILE);
+        assert_eq!(
+            kv_tile_within(usize::MAX, usize::MAX, usize::MAX, 1),
+            MIN_KV_TILE
+        );
     }
 }
 
