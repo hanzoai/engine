@@ -223,6 +223,9 @@ pub enum MatchingCache {
     },
 }
 
+/// Device bytes the recurrent-prefix snapshots may hold in total.
+const PAGED_RECURRENT_BUDGET_BYTES: usize = 2 << 30;
+
 impl PrefixCacheManagerV2 {
     pub fn new(n_on_device: usize, no_prefix_cache: bool, has_paged_attention: bool) -> Self {
         if !no_prefix_cache && !has_paged_attention {
@@ -256,6 +259,15 @@ impl PrefixCacheManagerV2 {
 
     fn paged_recurrent_capacity(&self) -> usize {
         self.n_on_device.max(1).saturating_mul(8)
+    }
+
+    /// Bytes the recurrent-prefix snapshots hold on the device.
+    fn paged_recurrent_bytes(&self) -> usize {
+        self.paged_recurrent_caches
+            .values()
+            .flatten()
+            .map(RecurrentStateSnapshot::bytes)
+            .sum()
     }
 
     /// This always keeps the cache on the device.
@@ -509,7 +521,12 @@ impl PrefixCacheManagerV2 {
         let _ = self.paged_recurrent_caches.shift_remove(&key);
         self.paged_recurrent_caches.insert(key, snapshots);
 
-        while self.paged_recurrent_caches.len() > self.paged_recurrent_capacity() {
+        // A snapshot is every recurrent layer's state (153 MB for a 27B hybrid), so the bound is
+        // bytes as well as entries; the newest snapshot always stays.
+        while self.paged_recurrent_caches.len() > 1
+            && (self.paged_recurrent_caches.len() > self.paged_recurrent_capacity()
+                || self.paged_recurrent_bytes() > PAGED_RECURRENT_BUDGET_BYTES)
+        {
             let _ = self.paged_recurrent_caches.shift_remove_index(0);
         }
     }

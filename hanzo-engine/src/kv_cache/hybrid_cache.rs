@@ -664,6 +664,16 @@ pub struct RecurrentStateSnapshot {
     pub seqlen_offset: usize,
 }
 
+impl RecurrentStateSnapshot {
+    /// Device bytes this snapshot holds.
+    pub fn bytes(&self) -> usize {
+        [&self.conv_state, &self.recurrent_state]
+            .into_iter()
+            .map(|t| t.elem_count() * t.dtype().size_in_bytes())
+            .sum()
+    }
+}
+
 impl HybridCache {
     /// Snapshot the recurrent state for a sequence at the given slot index.
     /// Returns one snapshot per recurrent layer, in layer order.
