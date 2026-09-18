@@ -562,6 +562,14 @@ pub struct GeneralMetadata {
 }
 
 impl GeneralMetadata {
+    /// The longest sequence this pipeline can hold: the model's window, or the paged KV pool when
+    /// that is smaller. A prompt past it can never be scheduled, so admission refuses it.
+    pub fn context_len(&self) -> usize {
+        self.cache_config.as_ref().map_or(self.max_seq_len, |c| {
+            self.max_seq_len.min(c.block_size * c.num_gpu_blocks)
+        })
+    }
+
     pub fn tok_env(&self) -> Option<TokEnv> {
         self.llg_factory.as_ref().map(|f| f.tok_env().clone())
     }
