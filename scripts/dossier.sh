@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
 # dossier.sh — collect count-based prefill/decode samples for the SOTA dossier.
 #
-# Runs OUR hanzo-bench (--json: raw per-rep [wall_s, tokens], immune to any
+# Runs OUR `hanzo-engine bench` (--json: raw per-rep [wall_s, tokens], immune to any
 # self-reported-rate bug) and llama.cpp's llama-bench (-o json) on the SAME GGUF,
 # the SAME shapes, on a VERIFIED-QUIET box, and records a pinned manifest so the
 # numbers are reproducible. Timing is wall-clock for BOTH engines (identical
 # method => no cross-engine instrument bias); repetition + Student-t CIs quantify
-# residual noise; the quiet-gate removes contention. Scoring is `hanzo-bench score`.
+# residual noise; the quiet-gate removes contention. Scoring is `hanzo-engine board score`.
 #
 #   dossier.sh --backend rocm|vulkan|metal|cuda \
-#              --hanzo-bench PATH --llama-bench PATH \
+#              --hanzo-engine PATH --llama-bench PATH \
 #              --model GGUF --model-tag qwen3-1p7b \
 #              [-p 512,500 -n 128 -r 7] [--concurrency 1] [--max-ctx 4096] \
 #              [--hanzo-args "--paged-attn --pa-ctxt-len 4096"] \
 #              [--engine-dir DIR --llama-dir DIR] [--out DIR] [--force]
 #
-# --hanzo-args reach hanzo-bench verbatim and are recorded in the manifest. hanzo-bench leaves
-# PagedAttention off on ROCm and Vulkan, and the server turns it on, so a run that is to stand
-# for what we serve passes --paged-attn here.
+# --hanzo-args reach `hanzo-engine bench` verbatim, before the model selection, and are recorded
+# in the manifest; speculation goes there. The model is built as the server builds it, so what
+# is measured is what is served.
 #
 # One GPU workload per box: the quiet-gate HARD-FAILS if another GPU job
-# (cargo/rustc/ncu/nsys/rocprof/metal-capture/hanzo-bench/hanzo-server/llama-bench/
+# (cargo/rustc/ncu/nsys/rocprof/metal-capture/hanzo-engine/llama-bench/
 # ollama/vllm) is already running. Desktop CPU load is recorded, not fatal.
 set -euo pipefail
 
@@ -29,7 +29,7 @@ PLIST="512" NGEN=128 REPS=7 CONC=1 MAXCTX=4096
 ENGINE_DIR="$HOME/work/hanzo/engine" LLAMA_DIR=""
 while [[ $# -gt 0 ]]; do case "$1" in
   --backend) BACKEND="$2"; shift 2;;
-  --hanzo-bench) HANZO="$2"; shift 2;;
+  --hanzo-engine) HANZO="$2"; shift 2;;
   --llama-bench) LLAMA="$2"; shift 2;;
   --model) MODEL="$2"; shift 2;;
   --model-tag) MTAG="$2"; shift 2;;
@@ -46,12 +46,12 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --stochastic) STOCH=1; shift;;
   *) echo "unknown arg: $1" >&2; exit 2;;
 esac; done
-: "${BACKEND:?--backend required}" "${HANZO:?--hanzo-bench required}" "${MODEL:?--model required}" "${MTAG:?--model-tag required}"
+: "${BACKEND:?--backend required}" "${HANZO:?--hanzo-engine required}" "${MODEL:?--model required}" "${MTAG:?--model-tag required}"
 # Sampler is an explicit, recorded choice. Default greedy argmax = parity with llama-bench;
 # --stochastic reproduces the full-vocab multinomial only to MEASURE its tax.
 SAMPLER="$([[ "$STOCH" == 1 ]] && echo stochastic-temp1-fullvocab || echo greedy-argmax)"
 [[ -f "$MODEL" ]] || { echo "no model: $MODEL" >&2; exit 2; }
-[[ -x "$HANZO" ]] || { echo "no hanzo-bench: $HANZO" >&2; exit 2; }
+[[ -x "$HANZO" ]] || { echo "no hanzo-engine: $HANZO" >&2; exit 2; }
 OUT="${OUT:-$ENGINE_DIR/bench-runs/$(hostname -s)-$BACKEND-$MTAG-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT"
 MDIR="$(cd "$(dirname "$MODEL")" && pwd)"; MFILE="$(basename "$MODEL")"
@@ -71,14 +71,14 @@ gpu_busy() { case "$BACKEND" in
 esac; }
 
 # --- quiet gate: one GPU workload per box --------------------------------------
-COMPET='ncu|nsys|rocprof|rocprofv3|metal-capture|xctrace|cargo|rustc|hanzo-bench|hanzo-server|llama-bench|llama-server|ollama|vllm|sglang'
+COMPET='ncu|nsys|rocprof|rocprofv3|metal-capture|xctrace|cargo|rustc|hanzo-engine|llama-bench|llama-server|ollama|vllm|sglang'
 quiet_gate() {
   # The real GPU-contention signals are (a) GPU busy% and (b) a true GPU-compute
   # process. Match the competitor list against the COMMAND NAME, not the full
   # argv, so a guard daemon (earlyoom, whose --prefer string names these tools) or
   # a network-bound eval (python calling an API) that merely mentions them does not
   # false-positive. Desktop/CPU load is recorded as advisory, never fatal -- a
-  # shared workstation is never fully idle, and CV>5% flagging in `hanzo-bench score`
+  # shared workstation is never fully idle, and CV>5% flagging in `hanzo-engine board score`
   # surfaces any timing noise it induces.
   local hits busy load
   hits="$(ps -eo pid=,comm= 2>/dev/null | grep -wE "$COMPET" | grep -vw "$$" || true)"
@@ -108,7 +108,7 @@ manifest() {
   # quote cannot break the manifest. The binaries are hashed and each tree's dirty state
   # recorded -- a binary built from an uncommitted tree carries a clean commit SHA and would
   # otherwise misreport its provenance.
-  "$HANZO" manifest "$OUT/manifest.json" \
+  "$HANZO" board manifest "$OUT/manifest.json" \
     --backend "$BACKEND" --sampler "$SAMPLER" --gpu "$gpu" \
     --engine-git-sha "$egit" --engine-git-dirty "$(dirty_of "$ENGINE_DIR")" --engine-version "$ever" \
     --hanzo-ml "$(ver_of hanzo-ml)" --hanzo-rocm-kernels "$(ver_of hanzo-rocm-kernels)" \
@@ -121,15 +121,13 @@ manifest() {
 }
 
 run_hanzo() { # $1=phase(pp|tg) $2=n $3=tag
-  # hanzo-bench flags: -p n_prompt, -g n_gen. (-n is --num-device-layers -- never pass it;
-  # leaving it unset selects the production auto device map, all layers on GPU here.)
+  # The device map is the server's automatic one, every layer on the GPU here.
   local p g; if [[ "$1" == pp ]]; then p="$2"; g=0; else p=0; g="$2"; fi
-  echo ">> hanzo-bench $BACKEND $3 (p=$p g=$g r=$REPS c=$CONC)" >&2
-  env $(backend_env) "$HANZO" -p "$p" -g "$g" -r "$REPS" --concurrency "$CONC" \
-      $([[ "$STOCH" == 1 ]] && echo --stochastic) $HARGS \
-      --json "$OUT/hanzo_${3}.json" \
-      gguf -m "$MDIR" -f "$MFILE" --max-seq-len "$MAXCTX" \
-      > "$OUT/hanzo_${3}.log" 2>&1 || { echo "hanzo-bench FAILED ($3); tail:" >&2; tail -8 "$OUT/hanzo_${3}.log" >&2; }
+  echo ">> hanzo-engine bench $BACKEND $3 (p=$p g=$g r=$REPS c=$CONC)" >&2
+  env $(backend_env) "$HANZO" bench --prompt-len "$p" --gen-len "$g" --repetitions "$REPS" --concurrency "$CONC" \
+      $([[ "$STOCH" == 1 ]] && echo --stochastic) --json "$OUT/hanzo_${3}.json" $HARGS \
+      text --format gguf -m "$MDIR" -f "$MFILE" --max-seq-len "$MAXCTX" \
+      > "$OUT/hanzo_${3}.log" 2>&1 || { echo "hanzo-engine bench FAILED ($3); tail:" >&2; tail -8 "$OUT/hanzo_${3}.log" >&2; }
 }
 run_llama() { # $1=phase(pp|tg) $2=n $3=tag
   [[ -x "$LLAMA" ]] || { echo '{"skipped":"no llama-bench"}' > "$OUT/llama_${3}.json"; return; }
@@ -150,6 +148,6 @@ for P in "${PS[@]}"; do
   run_hanzo pp "$P" "${MTAG}_${BACKEND}_pp${P}"
   run_llama pp "$P" "${MTAG}_${BACKEND}_pp${P}"
 done
-"$HANZO" score "$OUT" >&2 || echo "scoring failed; the samples are in $OUT" >&2
+"$HANZO" board score "$OUT" >&2 || echo "scoring failed; the samples are in $OUT" >&2
 echo "=== done: $OUT ===" >&2
 echo "$OUT"

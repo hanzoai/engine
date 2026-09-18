@@ -414,7 +414,9 @@ hanzo cache delete -m meta-llama/Llama-3.2-3B
 
 ### bench - Performance Benchmarking
 
-Run performance benchmarks to measure prefill and decode speeds.
+Prefill and decode throughput, counted: tokens from the engine's own usage figures over this
+process's wall clock, the method llama-bench uses, so the two engines compare like for like. The
+model is built as `serve` builds it, so what is measured is what is served, speculation included.
 
 ```bash
 hanzo bench [MODEL_TYPE] -m <MODEL_ID> [OPTIONS]
@@ -425,17 +427,18 @@ Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified.
 **Examples:**
 
 ```bash
-# Run default benchmark (512 prompt tokens, 128 generated tokens, 3 iterations)
+# Prefill at 512 tokens and decode of 128, five repetitions
 hanzo bench -m Qwen/Qwen3-4B
 
-# Custom prompt and generation lengths
-hanzo bench -m Qwen/Qwen3-4B --prompt-len 1024 --gen-len 256
+# Several prompt lengths, more repetitions, eight concurrent streams
+hanzo bench -m Qwen/Qwen3-4B --prompt-len 512,2048,4096 --gen-len 128 --repetitions 7 --concurrency 1,8
 
-# More iterations for better statistics
-hanzo bench -m Qwen/Qwen3-4B --iterations 10
+# The raw samples, for `hanzo board score`
+hanzo bench -m Qwen/Qwen3-4B --json samples.json
 
-# With ISQ quantization
-hanzo bench -m Qwen/Qwen3-4B --isq q4k
+# With a DFlash draft, or the checkpoint's own MTP head
+hanzo bench --dflash <draft-dir> -m Qwen/Qwen3-4B
+hanzo bench --mtp-model Qwen/Qwen3-4B -m Qwen/Qwen3-4B
 ```
 
 **Example output:**

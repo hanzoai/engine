@@ -202,6 +202,7 @@ seccompiler = "0.5.0"
 hanzo = { version = "1.7.41", path = "hanzo" }
 hanzo-engine = { version = "1.7.41", path = "hanzo-engine" }
 hanzo-server-core = { version = "1.7.41", path = "hanzo-server-core" }
+hanzo-bench = { version = "1.7.41", path = "hanzo-bench" }
 hanzo-paged-attn = { version = "1.7.41", path = "hanzo-paged-attn" }
 hanzo-quant = { version = "1.7.41", path = "hanzo-quant" }
 hanzo-vision = { version = "1.7.41", path = "hanzo-vision" }

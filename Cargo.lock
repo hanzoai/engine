@@ -3197,6 +3197,7 @@ dependencies = [
  "futures-util",
  "half",
  "hanzo",
+ "hanzo-bench",
  "hanzo-engine",
  "hanzo-kernel",
  "hanzo-ml",

@@ -5,11 +5,11 @@
 # this file only iterates and folds the per-model boards into one table.
 #
 #   battery.sh --backend rocm|vulkan|metal|cuda \
-#     --hanzo-bench PATH --llama-bench PATH [--llama-dir DIR --engine-dir DIR] \
+#     --hanzo-engine PATH --llama-bench PATH [--llama-dir DIR --engine-dir DIR] \
 #     [-p 512,500,2048,4096 -n 128 -r 7 --concurrency 1] \
 #     --models "tag1=/path/one.gguf,tag2=/path/two.gguf,..."
 #
-# Decode is greedy-vs-greedy by default (dossier.sh -> hanzo-bench greedy); sampling parity is
+# Decode is greedy-vs-greedy by default (dossier.sh -> hanzo-engine bench, greedy); sampling parity is
 # recorded per run. Intended to run ONCE on the new engine cut, not to re-measure old versions.
 set -euo pipefail
 ARGS=(); BACKEND=""; MODELS=""
@@ -37,7 +37,7 @@ for pair in "${PAIRS[@]}"; do
   d="$(printf '%s\n' "$out" | tail -1)"          # dossier prints the run dir as its last line
   if [[ "$rc" -ne 0 || ! -d "$d" ]]; then fail "FAILED $tag (rc=$rc)" "$tag:rc$rc"; continue; fi
   RUNS+=("$d")
-  "$HANZO" score "$d" >/dev/null 2>&1 || echo "warn: scoring failed for $tag" >&2
+  "$HANZO" board score "$d" >/dev/null 2>&1 || echo "warn: scoring failed for $tag" >&2
 done
 
 # Empty-RUNS guard (set -u would otherwise trip on ${RUNS[0]}).
