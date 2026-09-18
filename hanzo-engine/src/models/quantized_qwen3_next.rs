@@ -263,7 +263,6 @@ struct QGatedDeltaNet {
     value_dim: usize,
 }
 
-
 /// Rows produced by the conv state spliced onto the left of a continuation are context, not output.
 fn trim_carried(out: &Tensor, carried: usize) -> Result<Tensor> {
     if carried == 0 {
@@ -445,7 +444,10 @@ impl QGatedDeltaNet {
             0
         };
         let x_t = if carried > 0 {
-            let left = cache.conv_state.narrow(D::Minus1, 1, carried)?;
+            let left = cache
+                .conv_state
+                .narrow(D::Minus1, 1, carried)?
+                .to_dtype(x.dtype())?;
             Tensor::cat(&[&left, &x.transpose(1, 2)?], D::Minus1)?.contiguous()?
         } else {
             x.transpose(1, 2)?.contiguous()?
