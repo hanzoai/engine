@@ -15,6 +15,10 @@ use crate::pipeline::AutoDeviceMapParams;
 use crate::pipeline::DeviceMappedModelLoader;
 use crate::GGUFArchitecture;
 
+/// Layers between two full-attention layers in a hybrid schedule, when the GGUF does not say.
+/// Matches llama.cpp's default for the gated-delta-net archs.
+pub const DEFAULT_FULL_ATTENTION_INTERVAL: usize = 4;
+
 #[derive(Debug)]
 pub struct ContentConfig {
     max_seq_len: usize,
@@ -22,8 +26,26 @@ pub struct ContentConfig {
     num_attn_heads: usize,
     num_kv_heads: usize,
     num_layers: usize,
+    kv_layers: Vec<usize>,
     key_length: Option<usize>,
     value_length: Option<usize>,
+}
+
+/// The layers that hold KV. A hybrid arch interleaves gated linear-attention layers with full
+/// attention and only the latter reach the KV cache: layer `i` is full attention iff
+/// `(i + 1) % full_attention_interval == 0`. Trailing multi-token-prediction blocks are counted in
+/// `block_count` but sit outside the transformer depth.
+fn kv_layers(arch: &str, num_layers: usize, u: impl Fn(&str) -> Option<usize>) -> Vec<usize> {
+    match arch {
+        "qwen35" | "qwen35moe" | "qwen3next" => {
+            let interval = u(&format!("{arch}.full_attention_interval"))
+                .filter(|i| *i > 0)
+                .unwrap_or(DEFAULT_FULL_ATTENTION_INTERVAL);
+            let depth = num_layers - u(&format!("{arch}.nextn_predict_layers")).unwrap_or(0);
+            (0..depth).filter(|i| (i + 1) % interval == 0).collect()
+        }
+        _ => (0..num_layers).collect(),
+    }
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -68,6 +90,7 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
                     num_attn_heads: n_head,
                     num_kv_heads: 1,
                     num_layers,
+                    kv_layers: (0..num_layers).collect(),
                     key_length: Some(kv_lora + qk_rope),
                     value_length: Some(kv_lora),
                 };
@@ -83,11 +106,13 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
                 num_attn_heads: n_head,
                 num_kv_heads: n_head,
                 num_layers,
+                kv_layers: (0..num_layers).collect(),
                 key_length: Some(q_head_dim),
                 value_length: Some(v_head_dim),
             };
         }
 
+        let num_layers = metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize;
         Self {
             max_seq_len: metadata[&format!("{arch}.context_length")]
                 .to_u64()
@@ -110,7 +135,8 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
                         .unwrap_or(0) as usize
                 })
             },
-            num_layers: metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize,
+            num_layers,
+            kv_layers: kv_layers(arch, num_layers, u),
             key_length: metadata
                 .get(&format!("{arch}.attention.key_length"))
                 .map(|x| x.to_u64().unwrap() as usize),
@@ -136,6 +162,9 @@ impl ModelConfigLike for ContentConfig {
     }
     fn num_layers(&self) -> usize {
         self.num_layers
+    }
+    fn kv_layers(&self) -> Vec<usize> {
+        self.kv_layers.clone()
     }
     fn k_head_dim(&self) -> usize {
         self.key_length

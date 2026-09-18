@@ -26,7 +26,9 @@ use crate::{
     models::gdn::{
         forward_pooled, GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode, PoolSlots,
     },
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        AttentionImplementation, KvLayers, ModelConfigLike, ModelConfigMetadata, PagedAttention,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, ModelForwardContext, NormalLoadingMetadata,
@@ -472,6 +474,7 @@ pub struct Qwen3_5TextModel {
     pub(super) norm: GemmaRmsNorm,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
+    kv_layers: Vec<usize>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     lm_head: Arc<dyn QuantMethod>,
     pub(super) cache: EitherCache,
@@ -675,6 +678,7 @@ impl Qwen3_5TextModel {
             norm,
             layers,
             layer_types: layer_types.clone(),
+            kv_layers: cfg.attention_layers(),
             lm_head,
             cache: EitherCache::Hybrid(pipeline_cache),
             max_seq_len: cfg.max_position_embeddings,
@@ -701,6 +705,10 @@ impl Qwen3_5TextModel {
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
         self.embed_tokens.forward(input_ids)
+    }
+
+    pub(super) fn model_config_like(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        Arc::new(KvLayers::new(self.cfg.clone(), self.kv_layers.clone()))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -773,6 +781,9 @@ impl Qwen3_5TextModel {
 
         let capture_layers = self.spec_capture.layers_for(seqlen_offsets.len());
         let mut captured: Vec<Tensor> = Vec::with_capacity(capture_layers.len());
+        // The paged cache holds one K/V pair per attention layer, so an attention layer reads it
+        // at its ordinal among attention layers, not at its decoder index.
+        let mut kv_layer = 0;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
 
@@ -784,10 +795,11 @@ impl Qwen3_5TextModel {
                             &attention_mask.get(xs.device()),
                             &cos_sin,
                             kv_cache,
-                            ctx.paged_layer(i),
+                            ctx.paged_layer(kv_layer),
                             ctx.flash_params(),
                         )?;
                     }
+                    kv_layer += 1;
                 }
                 LayerType::LinearAttention => {
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {
