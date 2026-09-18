@@ -171,7 +171,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 seq.finalize_reasoning();
             }
             let delta_result = seq.get_delta();
-            if let Some(delta) = crate::handle_seq_error_ok!(delta_result, seq.responder()) {
+            if let Some(delta) = crate::handle_seq_error_stateaware_ok!(delta_result, seq) {
                 if seq.get_mut_group().is_chat {
                     let (content_delta, reasoning_delta) = if seq.reasoning_mode().is_some() {
                         (
@@ -317,14 +317,14 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 let mut logprobs = Vec::new();
                 for logprob in seq.logprobs() {
                     let resp_logprob = crate::ResponseLogprob {
-                        token: crate::handle_seq_error_ok!(
+                        token: crate::handle_seq_error_stateaware_ok!(
                         tokenizer
                         .as_ref()
                         .ok_or(hanzo_ml::Error::Msg(
                             "`finish_or_add_toks_to_seq` requires the pipeline to have a tokenizer"
                                 .to_string(),
                         ))?.decode(&[logprob.token], false),
-                        seq.responder()
+                        seq
                     ),
                         bytes: logprob.bytes.clone().map(|b| b.into_bytes()),
                         logprob: logprob.logprob,
