@@ -566,6 +566,7 @@ impl PagedAttention {
         if crate::perf_flags::flashinfer_prefill_enabled()
             && write_cache
             && seq_len > 1
+            && input_metadata.has_prefill_plan(use_full)
             && query.dtype() != DType::F32
             && alibi_slopes.is_none()
             && sdpa_params.sinks.is_none()

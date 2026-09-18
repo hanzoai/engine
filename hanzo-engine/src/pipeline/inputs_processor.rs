@@ -515,6 +515,17 @@ pub mod text_models_inputs_processor {
             })
         }
 
+        /// Whether this forward carries a FlashInfer prefill plan. A multi-token forward laid out
+        /// as decode rows -- a speculative verify chunk -- carries none and takes the decode kernel.
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        pub(crate) fn has_prefill_plan(&self, use_full: bool) -> bool {
+            if use_full {
+                self.full_paged_kv_q_indptr.is_some()
+            } else {
+                self.paged_kv_q_indptr.is_some()
+            }
+        }
+
         #[cfg(all(feature = "cuda", target_family = "unix"))]
         pub(crate) fn flashinfer_prefill_metadata(
             &self,
