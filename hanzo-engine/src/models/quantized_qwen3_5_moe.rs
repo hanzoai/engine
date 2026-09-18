@@ -62,6 +62,7 @@
 //! that path is untouched and still correct for its grouped inputs.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::attention::{AttentionMask, SdpaParams};
@@ -218,13 +219,25 @@ impl FusedMoe {
     }
 }
 
-struct DenseMlp {
+pub(crate) struct DenseMlp {
     gate: Arc<dyn QuantMethod>,
     up: Arc<dyn QuantMethod>,
     down: Arc<dyn QuantMethod>,
 }
 
 impl DenseMlp {
+    pub(crate) fn load<R: std::io::Seek + std::io::Read>(
+        ct: &mut Content<'_, R>,
+        prefix: &str,
+        device: &Device,
+    ) -> Result<Self> {
+        Ok(Self {
+            gate: gguf_qmm(ct.tensor(&format!("{prefix}.ffn_gate.weight"), device)?)?,
+            up: gguf_qmm(ct.tensor(&format!("{prefix}.ffn_up.weight"), device)?)?,
+            down: gguf_qmm(ct.tensor(&format!("{prefix}.ffn_down.weight"), device)?)?,
+        })
+    }
+
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let gate = self.gate.forward(xs)?;
         let up = self.up.forward(xs)?;
@@ -233,13 +246,13 @@ impl DenseMlp {
     }
 }
 
-enum MoeOrMlp {
+pub(crate) enum MoeOrMlp {
     FusedMoe(Box<FusedMoe>),
     Mlp(DenseMlp),
 }
 
 impl MoeOrMlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    pub(crate) fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::Mlp(m) => m.forward(xs),
             Self::FusedMoe(m) => m.forward(xs),
@@ -249,7 +262,7 @@ impl MoeOrMlp {
 
 // ===================== Gated full-attention layer =====================
 
-struct GatedFullAttention {
+pub(crate) struct GatedFullAttention {
     // q_proj output is doubled: first head_dim is q, second head_dim is the output gate.
     attn_q: Arc<dyn QuantMethod>,
     attn_k: Arc<dyn QuantMethod>,
@@ -267,6 +280,56 @@ struct GatedFullAttention {
 }
 
 impl GatedFullAttention {
+    /// The attention of one full-attention block at `prefix`. `paged_attn` is `None` for a block
+    /// that keeps its own `KvCache` instead of a slot in the paged cache.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn load<R: std::io::Seek + std::io::Read>(
+        ct: &mut Content<'_, R>,
+        prefix: &str,
+        props: &PropsGGUF,
+        rotary: Arc<Qwen3VLRotaryEmbedding>,
+        paged_attn: Option<PagedAttention>,
+        device: &Device,
+        dtype: DType,
+    ) -> Result<Self> {
+        Ok(Self {
+            attn_q: gguf_qmm(ct.tensor(&format!("{prefix}.attn_q.weight"), device)?)?,
+            attn_k: gguf_qmm(ct.tensor(&format!("{prefix}.attn_k.weight"), device)?)?,
+            attn_v: gguf_qmm(ct.tensor(&format!("{prefix}.attn_v.weight"), device)?)?,
+            attn_o: gguf_qmm(ct.tensor(&format!("{prefix}.attn_output.weight"), device)?)?,
+            q_norm: QRmsNorm::new(
+                ct.tensor(&format!("{prefix}.attn_q_norm.weight"), device)?,
+                props.rms_norm_eps,
+            )?,
+            k_norm: QRmsNorm::new(
+                ct.tensor(&format!("{prefix}.attn_k_norm.weight"), device)?,
+                props.rms_norm_eps,
+            )?,
+            n_head: props.head_count,
+            n_kv_head: props.head_count_kv,
+            head_dim: props.head_dim,
+            rotary,
+            paged_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: props.head_count / props.head_count_kv,
+                softcap: None,
+                softmax_scale: 1.0 / (props.head_dim as f32).sqrt(),
+                sliding_window: None,
+                sinks: None,
+            },
+            dtype,
+        })
+    }
+
+    /// This block's MRoPE cos/sin for `[3, batch, seq]` position ids.
+    pub(crate) fn rotary_cos_sin(
+        &self,
+        positions: &Tensor,
+        dtype: DType,
+    ) -> Result<(Tensor, Tensor)> {
+        self.rotary.compute_cos_sin(positions, dtype)
+    }
+
     fn forward(
         &self,
         x: &Tensor,
@@ -373,7 +436,7 @@ impl GatedFullAttention {
 
 // ===================== Gated DeltaNet (linear-attention) layer =====================
 
-struct QGatedDeltaNet {
+pub(crate) struct QGatedDeltaNet {
     in_proj_qkv: Arc<dyn QuantMethod>, // merged q,k,v (no z) -> attn_qkv
     in_proj_z: Arc<dyn QuantMethod>,   // z gate -> attn_gate
     in_proj_b: Arc<dyn QuantMethod>,   // beta -> ssm_beta
@@ -615,44 +678,80 @@ impl QGatedDeltaNet {
 
 // ===================== Decoder layer =====================
 
-enum LayerImpl {
+pub(crate) enum LayerImpl {
     FullAttention(GatedFullAttention),
     LinearAttention(QGatedDeltaNet),
 }
 
-struct DecoderLayer {
-    layer_impl: LayerImpl,
-    input_layernorm: QRmsNorm,
-    post_attention_layernorm: QRmsNorm,
-    mlp: MoeOrMlp,
+pub(crate) struct DecoderLayer {
+    pub(crate) layer_impl: LayerImpl,
+    pub(crate) input_layernorm: QRmsNorm,
+    pub(crate) post_attention_layernorm: QRmsNorm,
+    pub(crate) mlp: MoeOrMlp,
+}
+
+impl DecoderLayer {
+    /// This block's MRoPE cos/sin for `[3, batch, seq]` position ids.
+    pub(crate) fn rotary_cos_sin(
+        &self,
+        positions: &Tensor,
+        dtype: DType,
+    ) -> Result<(Tensor, Tensor)> {
+        let LayerImpl::FullAttention(attn) = &self.layer_impl else {
+            hanzo_ml::bail!("expected a full-attention block");
+        };
+        attn.rotary_cos_sin(positions, dtype)
+    }
+
+    /// One full-attention block over its own `KvCache`: attention, then the MLP, both residual.
+    pub(crate) fn forward_attention(
+        &self,
+        x: &Tensor,
+        mask: &AttentionMask,
+        cos_sin: &(Tensor, Tensor),
+        kv_cache: &mut KvCache,
+    ) -> Result<Tensor> {
+        let LayerImpl::FullAttention(attn) = &self.layer_impl else {
+            hanzo_ml::bail!("expected a full-attention block");
+        };
+        let residual = x.clone();
+        let normed = self.input_layernorm.forward(x)?;
+        let x = (attn.forward(&normed, mask, cos_sin, kv_cache, None)? + residual)?;
+        let residual = x.clone();
+        let normed = self.post_attention_layernorm.forward(&x)?;
+        self.mlp.forward(&normed)? + residual
+    }
 }
 
 // ===================== Config extraction =====================
 
 #[allow(dead_code)]
-struct PropsGGUF {
-    head_count: usize,
-    head_count_kv: usize,
-    block_count: usize,
-    embedding_length: usize,
-    rms_norm_eps: f32,
-    max_seq_len: usize,
-    rope_freq_base: f32,
-    head_dim: usize,
-    rot_dim: usize,
-    mrope_section: Vec<usize>,
-    full_attention_interval: usize,
+pub(crate) struct PropsGGUF {
+    pub(crate) head_count: usize,
+    pub(crate) head_count_kv: usize,
+    pub(crate) block_count: usize,
+    pub(crate) embedding_length: usize,
+    pub(crate) rms_norm_eps: f32,
+    pub(crate) max_seq_len: usize,
+    pub(crate) rope_freq_base: f32,
+    pub(crate) head_dim: usize,
+    pub(crate) rot_dim: usize,
+    pub(crate) mrope_section: Vec<usize>,
+    pub(crate) full_attention_interval: usize,
     // GDN
-    conv_kernel: usize,
-    head_k_dim: usize,
-    head_v_dim: usize,
-    num_k_heads: usize,
-    num_v_heads: usize,
+    pub(crate) conv_kernel: usize,
+    pub(crate) head_k_dim: usize,
+    pub(crate) head_v_dim: usize,
+    pub(crate) num_k_heads: usize,
+    pub(crate) num_v_heads: usize,
     // MoE (None for dense)
-    num_experts: Option<usize>,
-    num_experts_per_tok: usize,
-    moe_intermediate_size: usize,
-    is_moe: bool,
+    pub(crate) num_experts: Option<usize>,
+    pub(crate) num_experts_per_tok: usize,
+    pub(crate) moe_intermediate_size: usize,
+    pub(crate) is_moe: bool,
+    /// Trailing multi-token-prediction blocks, excluded from `block_count`; the first sits at
+    /// `blk.{block_count}`.
+    pub(crate) nextn_predict_layers: usize,
 }
 
 fn verify_arch(
@@ -757,9 +856,9 @@ impl PropsGGUF {
                     })
                     .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
             },
-            // block_count includes trailing MTP (multi-token-prediction) layers in some exports
-            // (e.g. the MXFP4 gguf: block_count=41, nextn_predict_layers=1). MTP is ignored for
-            // text-only inference, so the transformer depth is block_count - nextn_predict_layers.
+            // block_count includes the trailing multi-token-prediction blocks, so the transformer
+            // depth is block_count - nextn_predict_layers; the head loads from `blk.{depth}` when
+            // `--mtp-model` asks for it.
             block_count: (c
                 .get_value::<u32>("block_count")
                 .map_err(|e| hanzo_ml::Error::Msg(format!("{e}")))?
@@ -794,6 +893,7 @@ impl PropsGGUF {
             num_experts_per_tok,
             moe_intermediate_size,
             is_moe,
+            nextn_predict_layers: c.get_value::<u32>("nextn_predict_layers").unwrap_or(0) as usize,
         })
     }
 }
@@ -812,8 +912,22 @@ pub struct ModelWeights {
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     dtype: DType,
+    props: PropsGGUF,
     /// Hidden-state capture for a parallel-block draft (DFlash). Off until a draft names layers.
     pub(crate) spec_capture: crate::speculative::HiddenPrefixCapture,
+    /// What the MTP head reads from the last forward. Off by default.
+    last_spec: Mutex<Option<SpecRows>>,
+    store_spec: AtomicBool,
+    /// The MRoPE positions of the target rows the MTP head drafts from, handed over as those
+    /// rows are selected.
+    mtp_anchors: crate::models::qwen3_5_mtp::AnchorPositions,
+}
+
+/// The rows the last forward took its logits from: their final-norm hidden state,
+/// `[batch, rows, hidden]`, and the absolute position of each.
+pub(crate) struct SpecRows {
+    pub(crate) hidden: Tensor,
+    pub(crate) positions: Vec<Vec<usize>>,
 }
 
 pub(crate) fn gguf_qmm(q: hanzo_ml::quantized::QTensor) -> Result<Arc<dyn QuantMethod>> {
@@ -917,46 +1031,15 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
             let layer_impl = match layer_types[layer_idx] {
                 LayerType::FullAttention => {
-                    let attn_q = gguf_qmm(ct.tensor(&format!("{prefix}.attn_q.weight"), dev)?)?;
-                    let attn_k = gguf_qmm(ct.tensor(&format!("{prefix}.attn_k.weight"), dev)?)?;
-                    let attn_v = gguf_qmm(ct.tensor(&format!("{prefix}.attn_v.weight"), dev)?)?;
-                    let attn_o =
-                        gguf_qmm(ct.tensor(&format!("{prefix}.attn_output.weight"), dev)?)?;
-                    let q_norm = QRmsNorm::new(
-                        ct.tensor(&format!("{prefix}.attn_q_norm.weight"), dev)?,
-                        props.rms_norm_eps,
-                    )?;
-                    let k_norm = QRmsNorm::new(
-                        ct.tensor(&format!("{prefix}.attn_k_norm.weight"), dev)?,
-                        props.rms_norm_eps,
-                    )?;
                     let paged_attn = match attention_mechanism {
                         AttentionImplementation::PagedAttention => {
                             Some(PagedAttention::new(props.head_dim, dev, None)?)
                         }
                         AttentionImplementation::Eager => None,
                     };
-                    LayerImpl::FullAttention(GatedFullAttention {
-                        attn_q,
-                        attn_k,
-                        attn_v,
-                        attn_o,
-                        q_norm,
-                        k_norm,
-                        n_head: props.head_count,
-                        n_kv_head: props.head_count_kv,
-                        head_dim: props.head_dim,
-                        rotary,
-                        paged_attn,
-                        sdpa_params: SdpaParams {
-                            n_kv_groups: props.head_count / props.head_count_kv,
-                            softcap: None,
-                            softmax_scale: 1.0 / (props.head_dim as f32).sqrt(),
-                            sliding_window: None,
-                            sinks: None,
-                        },
-                        dtype,
-                    })
+                    LayerImpl::FullAttention(GatedFullAttention::load(
+                        &mut ct, &prefix, &props, rotary, paged_attn, dev, dtype,
+                    )?)
                 }
                 LayerType::LinearAttention => {
                     let in_proj_qkv =
@@ -1022,10 +1105,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     props.num_experts_per_tok,
                 )?))
             } else {
-                let gate = gguf_qmm(ct.tensor(&format!("{prefix}.ffn_gate.weight"), dev)?)?;
-                let up = gguf_qmm(ct.tensor(&format!("{prefix}.ffn_up.weight"), dev)?)?;
-                let down = gguf_qmm(ct.tensor(&format!("{prefix}.ffn_down.weight"), dev)?)?;
-                MoeOrMlp::Mlp(DenseMlp { gate, up, down })
+                MoeOrMlp::Mlp(DenseMlp::load(&mut ct, &prefix, dev)?)
             };
 
             layers.push(DecoderLayer {
@@ -1070,7 +1150,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
             max_seq_len: props.max_seq_len,
             mapper: Some(mapper),
             dtype,
+            props,
             spec_capture: crate::speculative::HiddenPrefixCapture::default(),
+            last_spec: Mutex::new(None),
+            store_spec: AtomicBool::new(false),
+            mtp_anchors: Arc::new(Mutex::new(None)),
         })
     }
 }
@@ -1233,8 +1317,59 @@ impl ModelWeights {
 
         let x = x.to_device(&self.device)?;
         let x = self.norm.forward(&x)?;
-        let x = extract_logits(&x, context_lens)?;
+        let x = extract_logits(&x, context_lens.clone())?;
+        if self.store_spec.load(Ordering::Relaxed) {
+            // The rows `extract_logits` kept, and where each sits in its sequence, so a row index
+            // means the same position in both.
+            let positions = context_lens
+                .iter()
+                .enumerate()
+                .map(|(seq, (start, len))| {
+                    let offset = seqlen_offsets.get(seq).copied().unwrap_or(0) + start;
+                    (offset..offset + len).collect()
+                })
+                .collect();
+            if let Ok(mut slot) = self.last_spec.lock() {
+                *slot = Some(SpecRows {
+                    hidden: x.clone(),
+                    positions,
+                });
+            }
+        }
         self.output.forward(&x.contiguous()?)
+    }
+
+    pub(crate) fn mtp_anchors(&self) -> crate::models::qwen3_5_mtp::AnchorPositions {
+        self.mtp_anchors.clone()
+    }
+
+    pub(crate) fn props(&self) -> &PropsGGUF {
+        &self.props
+    }
+
+    pub(crate) fn rotary(&self) -> Arc<Qwen3VLRotaryEmbedding> {
+        self.rotary.clone()
+    }
+
+    pub(crate) fn compute_dtype(&self) -> DType {
+        self.dtype
+    }
+
+    /// Stash the final-norm hidden state and positions of each forward for the MTP head.
+    pub(crate) fn set_store_spec(&self, store: bool) {
+        self.store_spec.store(store, Ordering::Relaxed);
+        if !store {
+            if let Ok(mut slot) = self.last_spec.lock() {
+                *slot = None;
+            }
+        }
+    }
+
+    /// What the last forward stashed, if any.
+    pub(crate) fn last_spec(&self) -> Option<(Tensor, Vec<Vec<usize>>)> {
+        let slot = self.last_spec.lock().ok()?;
+        slot.as_ref()
+            .map(|rows| (rows.hidden.clone(), rows.positions.clone()))
     }
 
     /// The embedding and output head, lent to a draft that carries neither. The head takes the
