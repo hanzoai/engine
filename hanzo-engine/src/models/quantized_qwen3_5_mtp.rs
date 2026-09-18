@@ -108,8 +108,9 @@ impl Qwen35GgufMtpHead {
         target_hidden: &Tensor,
         positions: &Tensor,
     ) -> Result<Tensor> {
-        let embeds = self.enorm.forward(input_embeds)?;
-        let hidden = self.hnorm.forward(target_hidden)?;
+        // The two norms carry the dtype of their own GGUF weights; the projection reads one.
+        let embeds = self.enorm.forward(input_embeds)?.to_dtype(self.dtype)?;
+        let hidden = self.hnorm.forward(target_hidden)?.to_dtype(self.dtype)?;
         let xs = self
             .eh_proj
             .forward(&Tensor::cat(&[embeds, hidden], D::Minus1)?.contiguous()?)?;
