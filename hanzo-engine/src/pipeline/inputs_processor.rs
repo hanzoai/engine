@@ -417,6 +417,12 @@ pub mod text_models_inputs_processor {
     }
 
     impl PagedAttentionInputMetadata {
+        /// Whether a prompt forward reads its cached prefix back out of the paged cache and attends over
+        /// prefix and chunk together. The paged attention layer and the prompt masker both ask.
+        pub fn gathers_prefix(&self) -> bool {
+            self.num_cached_tokens.is_some() && self.block_tables.is_some()
+        }
+
         #[cfg(all(feature = "cuda", target_family = "unix"))]
         pub(crate) fn flashinfer_decode_metadata(
             &self,

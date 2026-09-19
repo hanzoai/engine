@@ -1203,10 +1203,7 @@ impl ModelWeights {
         )?;
         let mask = crate::layers_masker::paged_chunk_mask(
             mask,
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true),
+            metadata.as_ref().map(|(_, meta)| *meta),
             input_ids,
         )?;
         let mask = if let Some(ref mapper) = self.mapper {

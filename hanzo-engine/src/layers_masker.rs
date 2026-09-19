@@ -359,6 +359,16 @@ mod tests {
     }
 
     #[test]
+    fn a_later_chunk_keeps_its_mask_only_over_a_gathered_prefix() {
+        assert!(later_chunk_keeps_mask(4096, true, false));
+        // A verify chunk of eight drafts on ROCm gathers nothing: its rows decode against their
+        // own context lengths, and a prompt mask would meet eight keys instead of the context.
+        assert!(!later_chunk_keeps_mask(8, false, false));
+        assert!(!later_chunk_keeps_mask(4096, true, true));
+        assert!(!later_chunk_keeps_mask(1, true, false));
+    }
+
+    #[test]
     fn causal_sliding_mask_keeps_exact_window_width() -> Result<()> {
         let mask = CausalMasker.make_swa_mask(2, 3, 2, &Device::Cpu, DType::F32)?;
 
@@ -374,26 +384,35 @@ mod tests {
 }
 
 /// The mask for one forward of a paged prompt. `mask` is causal over the chunk and the prefix cached
-/// before it. A first chunk uses it. A later chunk of one token needs none, and a fused varlen
-/// kernel takes causality as a flag; any other later chunk runs eager attention, which is causal
-/// only through its mask, so it keeps it.
+/// before it. A first chunk uses it; a later chunk keeps it as [`later_chunk_keeps_mask`] decides.
 pub fn paged_chunk_mask(
     mask: crate::attention::AttentionMask,
-    is_first_chunk: bool,
+    meta: Option<&crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata>,
     tokens: &Tensor,
 ) -> Result<crate::attention::AttentionMask> {
-    if is_first_chunk {
-        return Ok(mask);
-    }
-    let eager = match &mask {
-        crate::attention::AttentionMask::Custom(m) => {
-            tokens.dim(1)? > 1 && !crate::attention::fused_varlen(tokens.device(), m.dtype())
-        }
+    let meta = match meta {
+        Some(meta) if !meta.is_first_prompt_chunk => meta,
+        _ => return Ok(mask),
+    };
+    let keep = match &mask {
+        crate::attention::AttentionMask::Custom(m) => later_chunk_keeps_mask(
+            tokens.dim(1)?,
+            meta.gathers_prefix(),
+            crate::attention::fused_varlen(tokens.device(), m.dtype()),
+        ),
         _ => false,
     };
-    Ok(if eager {
+    Ok(if keep {
         mask
     } else {
         crate::attention::AttentionMask::None
     })
+}
+
+/// A later chunk that gathers its cached prefix attends over prefix and chunk in eager attention,
+/// which is causal only through its mask, unless a fused varlen kernel takes causality as a flag. A
+/// single token needs no mask, and neither does a chunk that gathers no prefix: a speculative verify
+/// chunk's rows each read their own context length through the paged decode kernel.
+fn later_chunk_keeps_mask(query_len: usize, gathers_prefix: bool, fused_varlen: bool) -> bool {
+    query_len > 1 && gathers_prefix && !fused_varlen
 }

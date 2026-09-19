@@ -380,7 +380,7 @@ impl PagedAttention {
         let mask_is_prefill = !matches!(attention_mask, AttentionMask::None);
         let single_token_first_prompt = input_metadata.is_first_prompt_chunk && seq_len == 1;
         let use_gather_path = if write_cache {
-            has_cached_prefix && has_block_tables
+            input_metadata.gathers_prefix()
         } else {
             (has_cached_prefix || mask_is_prefill || single_token_first_prompt) && has_block_tables
         };
