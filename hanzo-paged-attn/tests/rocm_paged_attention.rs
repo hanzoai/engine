@@ -241,8 +241,9 @@ fn run_case(
 #[test]
 fn rocm_paged_attention_v1_matches_reference() -> Result<(), Box<dyn std::error::Error>> {
     let dev = Device::new_rocm(0)?;
-    // context_len = 40 spans 3 blocks (16 + 16 + 8), last block partial.
-    let (nbad, max_err) = run_case(&dev, 40, 40, None, 2e-2)?;
+    // context_len = 40 spans 3 blocks (16 + 16 + 8), last block partial. A short context averages
+    // its values to about 0.2, so the tolerance sits two orders below the answer.
+    let (nbad, max_err) = run_case(&dev, 40, 40, None, 2e-3)?;
     eprintln!("nbad={nbad} max_err={max_err}");
     assert_eq!(
         nbad, 0,
@@ -259,7 +260,7 @@ fn rocm_paged_attention_v1_device_side_seqlen() -> Result<(), Box<dyn std::error
     let dev = Device::new_rocm(0)?;
     let capacity = NUM_BLOCKS * BLOCK_SIZE; // 128 — fixed launch sizing
     for &ctx in &[17usize, 96usize] {
-        let (nbad, max_err) = run_case(&dev, ctx, capacity, None, 2e-2)?;
+        let (nbad, max_err) = run_case(&dev, ctx, capacity, None, 2e-3)?;
         eprintln!("device_side_seqlen ctx={ctx} cap={capacity} nbad={nbad} max_err={max_err}");
         assert_eq!(
             nbad, 0,
