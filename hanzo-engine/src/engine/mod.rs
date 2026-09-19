@@ -938,6 +938,8 @@ impl Engine {
                                     .as_millis();
                                 seq.prompt_timestamp = Some(now);
                             }
+                            // A prefill's large temporaries go back to the box; decode reuses small ones.
+                            get_mut_arcmutex!(self.pipeline).device().trim();
                         }
                     }
                 }
