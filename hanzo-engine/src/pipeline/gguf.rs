@@ -1880,6 +1880,14 @@ impl GGUFPipeline {
         if !rocm_decode_graphs_enabled() || !self.model_supports_decode_graph() {
             return Ok(None);
         }
+        // A draft reads what the target's layer loop records as it runs (`spec_capture`):
+        // host-side code that truncates, appends and keys rows per sequence. A graph replay
+        // re-issues only the recorded kernels, so none of that runs and the draft reads rows
+        // that were never written. The CUDA and Vulkan paths stay eager under speculation for
+        // this reason; this one claimed to mirror the CUDA gate and had not.
+        if self.draft_proposer.is_some() {
+            return Ok(None);
+        }
         // Mirror the CUDA gate: only steady-state single-token decode with paged
         // metadata present and no prefix-cache prefill in flight.
         if metadata.is_first_prompt_chunk
