@@ -354,15 +354,14 @@ impl ModelWeights {
             self.dtype,
             &CausalMaskConfig::gguf(),
         )?;
-        let mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
-            mask
-        } else {
-            AttentionMask::None
-        };
+        let mask = crate::layers_masker::paged_chunk_mask(
+            mask,
+            metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true),
+            input_ids,
+        )?;
         let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
