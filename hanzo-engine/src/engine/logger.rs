@@ -44,9 +44,15 @@ impl IntervalLogger {
         let t_enc_hits = encoder_cache_hits.clone();
         let t_enc_misses = encoder_cache_misses.clone();
         thread::spawn(move || {
+            // Speculative counters are cumulative; the line reports each window's share, so
+            // the previous reading is kept and advanced every interval, logged or not.
+            let mut drafts = crate::speculative::stats::snapshot();
             // Start the actual logging
             loop {
                 thread::sleep(interval);
+                let drafts_now = crate::speculative::stats::snapshot();
+                let draft_info = draft_window(drafts, drafts_now);
+                drafts = drafts_now;
                 if !t_enable_logging.load(Ordering::Relaxed) {
                     continue;
                 }
@@ -80,7 +86,7 @@ impl IntervalLogger {
                     // swapped to 0 each interval, so the metric reflects only the current
                     // window and is not cumulative.
                     info!(
-                        "Throughput (T/s) {:.2}, Prefix cache hitrate {:.2}%{enc_cache_info}, {num_running} running, {num_waiting} waiting",
+                        "Throughput (T/s) {:.2}, Prefix cache hitrate {:.2}%{enc_cache_info}{draft_info}, {num_running} running, {num_waiting} waiting",
                         tokens_processed as f64 / interval.as_secs_f64(),
                         100. * prefix_cache_hits as f64 / total_new_seqs as f64,
                     );
@@ -154,5 +160,83 @@ impl IntervalLogger {
             (Some(h), Some(m)) => Some((h.load(Ordering::Relaxed), m.load(Ordering::Relaxed))),
             _ => None,
         }
+    }
+}
+
+/// What speculative decoding did over one logging window, for the throughput line.
+///
+/// Empty when nothing was verified in the window, so a server without a draft logs
+/// exactly what it logged before. "tokens per verify" adds the one token every verify
+/// step emits beyond its accepted drafts -- the target's correction, or the bonus
+/// token when every draft held -- which is the figure sglang reports as its accept
+/// length, so two engines serving one draft compare directly. (The step a sequence
+/// ends on can emit fewer; over a window that is noise.)
+fn draft_window(
+    before: crate::speculative::stats::SpeculativeStats,
+    now: crate::speculative::stats::SpeculativeStats,
+) -> String {
+    // A benchmark may reset the counters mid-run; the window is then all since the reset.
+    let window = if now.verify_rounds < before.verify_rounds {
+        now
+    } else {
+        crate::speculative::stats::SpeculativeStats {
+            verify_rounds: now.verify_rounds - before.verify_rounds,
+            accepted_sum: now.accepted_sum.saturating_sub(before.accepted_sum),
+            proposed_sum: now.proposed_sum.saturating_sub(before.proposed_sum),
+        }
+    };
+    if window.verify_rounds == 0 {
+        return String::new();
+    }
+    let held = if window.proposed_sum == 0 {
+        0.
+    } else {
+        100. * window.accepted_sum as f64 / window.proposed_sum as f64
+    };
+    format!(
+        ", Drafts {:.2} of {:.2} accepted per verify ({held:.1}%), {:.2} tokens per verify",
+        window.mean_accepted(),
+        window.mean_proposed(),
+        window.mean_accepted() + 1.,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::draft_window;
+    use crate::speculative::stats::SpeculativeStats;
+
+    fn at(verify_rounds: u64, accepted_sum: u64, proposed_sum: u64) -> SpeculativeStats {
+        SpeculativeStats {
+            verify_rounds,
+            accepted_sum,
+            proposed_sum,
+        }
+    }
+
+    /// No draft, or a window with no verify step: the line is exactly what it was.
+    #[test]
+    fn nothing_verified_adds_nothing() {
+        assert_eq!(draft_window(at(0, 0, 0), at(0, 0, 0)), "");
+        assert_eq!(draft_window(at(7, 20, 56), at(7, 20, 56)), "");
+    }
+
+    /// The window is the difference, not the running total: 4 rounds, 12 of 28 held.
+    #[test]
+    fn a_window_reports_its_own_share() {
+        assert_eq!(
+            draft_window(at(10, 20, 70), at(14, 32, 98)),
+            ", Drafts 3.00 of 7.00 accepted per verify (42.9%), 4.00 tokens per verify"
+        );
+    }
+
+    /// Counters reset between two readings: the window is everything since the reset,
+    /// never a wrapped subtraction.
+    #[test]
+    fn a_reset_mid_window_is_not_a_wraparound() {
+        assert_eq!(
+            draft_window(at(100, 300, 800), at(2, 5, 16)),
+            ", Drafts 2.50 of 8.00 accepted per verify (31.2%), 3.50 tokens per verify"
+        );
     }
 }
