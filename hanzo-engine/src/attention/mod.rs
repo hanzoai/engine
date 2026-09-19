@@ -58,6 +58,12 @@ mod backends;
 pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn, tiled_sdpa};
 
 /// Chunk size for attention computation to avoid OOM on long sequences
+/// Whether prompt attention over a gathered prefix runs a fused varlen kernel, which takes causality
+/// as a flag. Every other path is eager and is causal only through its mask.
+pub(crate) fn fused_varlen(device: &Device, dtype: DType) -> bool {
+    device.is_cpu() || (device.is_cuda() && crate::using_flash_attn() && dtype != DType::F32)
+}
+
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
 
 /// Key chunk for [`tiled_sdpa`]. Query chunking alone leaves a block that is linear in the context,

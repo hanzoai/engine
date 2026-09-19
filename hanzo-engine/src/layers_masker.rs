@@ -374,16 +374,24 @@ mod tests {
 }
 
 /// The mask for one forward of a paged prompt. `mask` is causal over the chunk and the prefix cached
-/// before it. A first chunk uses it. A later chunk of one token needs none, and on CUDA the fused
-/// paged prefill bakes causality in; any other later chunk runs eager attention, which is causal
-/// only when told, so it keeps the mask.
+/// before it. A first chunk uses it. A later chunk of one token needs none, and a fused varlen
+/// kernel takes causality as a flag; any other later chunk runs eager attention, which is causal
+/// only through its mask, so it keeps it.
 pub fn paged_chunk_mask(
     mask: crate::attention::AttentionMask,
     is_first_chunk: bool,
     tokens: &Tensor,
 ) -> Result<crate::attention::AttentionMask> {
-    let eager_continuation = tokens.dim(1)? > 1 && !tokens.device().is_cuda();
-    Ok(if is_first_chunk || eager_continuation {
+    if is_first_chunk {
+        return Ok(mask);
+    }
+    let eager = match &mask {
+        crate::attention::AttentionMask::Custom(m) => {
+            tokens.dim(1)? > 1 && !crate::attention::fused_varlen(tokens.device(), m.dtype())
+        }
+        _ => false,
+    };
+    Ok(if eager {
         mask
     } else {
         crate::attention::AttentionMask::None

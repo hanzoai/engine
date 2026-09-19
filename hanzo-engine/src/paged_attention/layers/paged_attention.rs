@@ -255,8 +255,7 @@ fn adjust_kv_mask(mask: &Tensor, kv_seq_len: usize) -> Result<Tensor> {
 }
 
 fn supports_packed_varlen_sdpa(query: &Tensor) -> bool {
-    query.device().is_cpu()
-        || (query.device().is_cuda() && crate::using_flash_attn() && query.dtype() != DType::F32)
+    crate::attention::fused_varlen(query.device(), query.dtype())
 }
 
 pub struct PagedAttention {
@@ -521,8 +520,10 @@ impl PagedAttention {
                         cumulative_seqlens: cu_kv_map,
                     },
                     sliding_k: None,
+                    // No FlashParams means a causal decoder (the quantized text models); only an
+                    // explicit `causal: false` asks for bidirectional attention.
                     causal: query_lens.iter().any(|&len| len > 1)
-                        && flash_params.map_or(mask_is_prefill, |fp| fp.causal),
+                        && flash_params.map_or(true, |fp| fp.causal),
                 };
 
                 return Sdpa.run_attention(
