@@ -1278,7 +1278,7 @@ pub trait Pipeline:
                 let chunk_size = if is_prompt
                     && !return_raw_logits
                     && !self.get_metadata().is_xlora
-                    && self.device().is_cuda()
+                    && (self.device().is_cuda() || self.device().is_rocm())
                 {
                     Some(DEFAULT_PAGED_PREFILL_CHUNK_SIZE)
                 } else {
