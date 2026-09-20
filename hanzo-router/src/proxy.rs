@@ -92,6 +92,99 @@ impl Drop for Admission {
     }
 }
 
+/// Diagnostics mode (`HANZO_ROUTER_DEBUG=1`): a per-request admission record,
+/// full request body dumps, and per-rid timing lines. Off by default.
+fn debug_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("HANZO_ROUTER_DEBUG")
+            .is_some_and(|v| v != "0" && v != "false" && !v.is_empty())
+    })
+}
+
+const DEBUG_DIR: &str = "/tmp/hanzo-router-debug";
+const DEBUG_MAX_FILES: usize = 200;
+
+/// The client-visible request id: an incoming `x-request-id` if present, else a
+/// synthesized one that is stable within this process.
+fn new_rid(headers: &HeaderMap) -> String {
+    if let Some(v) = headers.get("x-request-id").and_then(|v| v.to_str().ok()) {
+        if !v.is_empty() {
+            return rid_safe(v);
+        }
+    }
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros())
+        .unwrap_or(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    rid_safe(&format!("r{micros:x}{seq:08x}"))
+}
+
+/// Constrain a rid to a safe filename subset.
+fn rid_safe(rid: &str) -> String {
+    let s: String = rid
+        .chars()
+        .take(48)
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .collect();
+    if s.is_empty() {
+        "r".to_string()
+    } else {
+        s
+    }
+}
+
+/// 8-byte hex of SHA-256: a stable field digest for prefix correlation.
+fn digest16(bytes: &[u8]) -> String {
+    let d = Sha256::digest(bytes);
+    d.iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// (serialized byte length, digest) of a top-level JSON field; (0, zeros) if absent.
+fn field_stat(body: &Value, key: &str) -> (usize, String) {
+    match body.get(key) {
+        Some(v) if !v.is_null() => {
+            let s = v.to_string();
+            (s.len(), digest16(s.as_bytes()))
+        }
+        _ => (0, "0000000000000000".to_string()),
+    }
+}
+
+/// Best-effort full request body dump with rotation; never fails the request.
+fn dump_body(rid: &str, body: &Bytes) {
+    let dir = std::path::Path::new(DEBUG_DIR);
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = dir.join(format!("{ts}-{rid}.json"));
+    if let Ok(mut f) = std::fs::File::create(&path) {
+        use std::io::Write;
+        let _ = f.write_all(body);
+        let _ = f.flush();
+        let _ = f.sync_all();
+    }
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    if files.len() > DEBUG_MAX_FILES {
+        files.sort();
+        for old in files.drain(..files.len() - DEBUG_MAX_FILES) {
+            let _ = std::fs::remove_file(old);
+        }
+    }
+}
+
 /// What to serve: the pool + where to bind + how often to re-probe.
 pub struct ServeConfig {
     pub host: String,
@@ -238,8 +331,28 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request) -> Response {
         .and_then(Value::as_bool)
         == Some(true);
     let anthropic = parts.uri.path() == "/v1/messages";
+    let rid = new_rid(&parts.headers);
+    if debug_on() {
+        let body = json.as_ref().unwrap_or(&Value::Null);
+        let (sys_b, sys_d) = field_stat(body, "system");
+        let (tools_b, tools_d) = field_stat(body, "tools");
+        let (msgs_b, msgs_d) = field_stat(body, "messages");
+        tracing::info!(
+            target: "router.debug",
+            rid = %rid,
+            model = model.unwrap_or("-"),
+            path = %path_q,
+            system = %format!("{sys_b}:{sys_d}"),
+            tools = %format!("{tools_b}:{tools_d}"),
+            messages = %format!("{msgs_b}:{msgs_d}"),
+            body = body_bytes.len(),
+            stream = wants_stream,
+            "admit",
+        );
+        dump_body(&rid, &body_bytes);
+    }
     let dispatch = Box::pin(dispatch(
-        state, parts, path_q, body_bytes, json, set, hints, admitted,
+        state, parts, path_q, body_bytes, json, set, hints, admitted, rid,
     ));
     if wants_stream {
         response_with_progress(dispatch, anthropic, Duration::from_secs(15)).await
@@ -257,6 +370,7 @@ async fn dispatch(
     set: Arc<ReplicaSet>,
     hints: RoutingHints,
     admitted: Admission,
+    rid: String,
 ) -> Response {
     // The lease takes over from here; a dropped stream releases both.
     let _admitted = admitted;
@@ -288,7 +402,20 @@ async fn dispatch(
             .send()
             .await;
         match send {
-            Ok(resp) => return stream_response(resp, lease, set.clone(), hints, started),
+            Ok(resp) => {
+                if debug_on() {
+                    let status = resp.status();
+                        tracing::info!(
+                            target: "router.debug",
+                            rid = %rid,
+                            replica = %lease.id(),
+                            status = %status.as_str(),
+                            headers_ms = started.elapsed().as_millis() as u64,
+                            "upstream headers",
+                        );
+                }
+                return stream_response(resp, lease, set.clone(), hints, started, rid);
+            }
             Err(e) => {
                 let id = lease.id().to_string();
                 excluded.insert(id.clone());
@@ -386,6 +513,7 @@ fn stream_response(
     set: Arc<ReplicaSet>,
     hints: RoutingHints,
     started: Instant,
+    rid: String,
 ) -> Response {
     let status = resp.status();
     let src = resp.headers().clone();
@@ -408,6 +536,7 @@ fn stream_response(
         sample_ttft,
         is_sse,
         ping_deadline,
+        rid: if debug_on() { Some(rid) } else { None },
     });
     let mut response = Response::new(body);
     *response.status_mut() = status;
@@ -434,6 +563,7 @@ struct LeasedStream {
     sample_ttft: bool,
     is_sse: bool,
     ping_deadline: Pin<Box<tokio::time::Sleep>>,
+    rid: Option<String>,
 }
 
 impl Stream for LeasedStream {
@@ -447,6 +577,14 @@ impl Stream for LeasedStream {
             Poll::Ready(Some(Ok(bytes))) => {
                 if !bytes.is_empty() && !this.first_byte {
                     this.first_byte = true;
+                    if let Some(rid) = &this.rid {
+                        tracing::info!(
+                            target: "router.debug",
+                            rid = %rid,
+                            first_byte_ms = this.started.elapsed().as_millis() as u64,
+                            "first byte",
+                        );
+                    }
                     if this.successful && this.sample_ttft {
                         if let Some(lease) = &this.lease {
                             this.set.observe_ttft(lease.id(), this.started.elapsed());
@@ -460,10 +598,28 @@ impl Stream for LeasedStream {
             }
             Poll::Ready(Some(Err(e))) => {
                 this.successful = false;
+                if let Some(rid) = &this.rid {
+                    tracing::warn!(
+                        target: "router.debug",
+                        rid = %rid,
+                        elapsed_ms = this.started.elapsed().as_millis() as u64,
+                        error = %e,
+                        "stream error",
+                    );
+                }
                 this.lease.take();
                 Poll::Ready(Some(Err(e)))
             }
             Poll::Ready(None) => {
+                if let Some(rid) = &this.rid {
+                    tracing::info!(
+                        target: "router.debug",
+                        rid = %rid,
+                        total_ms = this.started.elapsed().as_millis() as u64,
+                        ok = this.successful && this.first_byte,
+                        "stream end",
+                    );
+                }
                 if let Some(lease) = this.lease.take() {
                     if this.successful && this.first_byte {
                         this.set
@@ -1167,6 +1323,7 @@ mod tests {
             successful: true,
             is_sse: false,
             ping_deadline: Box::pin(tokio::time::sleep(Duration::from_secs(15))),
+            rid: None,
         };
         while stream.next().await.is_some() {}
         assert_eq!(set.statuses()[0].ttft_ewma_ms, None);
@@ -1210,6 +1367,7 @@ mod tests {
                 successful: true,
                 is_sse: false,
                 ping_deadline: Box::pin(tokio::time::sleep(Duration::from_secs(15))),
+                rid: None,
             };
             assert_eq!(set.statuses()[0].inflight, 1);
             if mode != "abort" {
