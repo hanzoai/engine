@@ -327,7 +327,7 @@ impl Sdpa {
         // through to the eager path. The kernel does GQA, so it takes the un-expanded k/v.
         #[cfg(feature = "rocm")]
         if q.device().is_rocm() && !matches!(mask, AttentionMask::None if !do_causal) {
-            const ROCM_FLASH_MIN_SEQ: usize = 768;
+            const ROCM_FLASH_MIN_SEQ: usize = 512;
             let (_, _, seq_len, head_dim) = q.dims4()?;
             let is_full_causal = matches!(mask, AttentionMask::CausalFlash)
                 || (mask.is_custom()
