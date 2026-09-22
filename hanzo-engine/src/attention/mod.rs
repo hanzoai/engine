@@ -386,7 +386,7 @@ fn rocm_decode_attn(
     use hanzo_ml::DType;
     let (_b, h, q_len, d) = q.dims4()?;
     if q_len != 1
-        || d != 128
+        || !(d == 128 || d == 256)
         || !matches!(q.dtype(), DType::F16 | DType::BF16)
         || q.dtype() != k.dtype()
         || q.dtype() != v.dtype()
@@ -399,7 +399,7 @@ fn rocm_decode_attn(
         return Ok(None);
     }
     let hkv = k.dim(1)?;
-    if hkv == 0 || h % hkv != 0 || k.dim(3)? != 128 || v.dim(3)? != 128 {
+    if hkv == 0 || h % hkv != 0 || k.dim(3)? != d || v.dim(3)? != d {
         return Ok(None);
     }
     // Read k/v in place when the head dim is contiguous (the kernel handles arbitrary batch/head/seq
@@ -492,7 +492,7 @@ impl Sdpa {
         // through to the eager path. The kernel does GQA, so it takes the un-expanded k/v.
         #[cfg(feature = "rocm")]
         if q.device().is_rocm() && !matches!(mask, AttentionMask::None if !do_causal) {
-            const ROCM_FLASH_MIN_SEQ: usize = 768;
+            const ROCM_FLASH_MIN_SEQ: usize = 512;
             let (_, _, seq_len, head_dim) = q.dims4()?;
             let is_full_causal = matches!(mask, AttentionMask::CausalFlash)
                 || (mask.is_custom()
@@ -500,9 +500,9 @@ impl Sdpa {
                     && !explicitly_noncausal);
             if is_full_causal
                 && seq_len >= ROCM_FLASH_MIN_SEQ
-                && head_dim == 128
-                && k.dim(3)? == 128
-                && v.dim(3)? == 128
+                && (head_dim == 128 || head_dim == 256)
+                && k.dim(3)? == head_dim
+                && v.dim(3)? == head_dim
                 && matches!(q.dtype(), DType::F16 | DType::BF16)
                 && sdpa_params.softcap.is_none_or(|x| x == 1.0)
             {
