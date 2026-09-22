@@ -101,6 +101,11 @@ fn fix_broken_json(raw: &str) -> anyhow::Result<String> {
 }
 
 impl ToolCallingMatcher {
+    /// `required` and a named tool both oblige the model to emit a call.
+    fn must_call(&self) -> bool {
+        matches!(self.tool_choice, ToolChoice::Tool(_) | ToolChoice::Required)
+    }
+
     pub fn new(tool_choice: ToolChoice, tools: Option<&[crate::Tool]>) -> anyhow::Result<Self> {
         let known_tool_names = tools.map(|t| {
             t.iter()
@@ -213,7 +218,7 @@ impl ToolCallingMatcher {
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?
         } else {
-            if matches!(self.tool_choice, ToolChoice::Tool(_)) {
+            if self.must_call() {
                 anyhow::bail!("Tool choice was required but no tools were called.")
             }
             return Ok(Vec::new());
@@ -233,7 +238,7 @@ impl ToolCallingMatcher {
                 }
                 valid
             });
-            if calls.is_empty() && before > 0 && matches!(self.tool_choice, ToolChoice::Tool(_)) {
+            if calls.is_empty() && before > 0 && self.must_call() {
                 anyhow::bail!("Tool choice was required but model called unknown tools.");
             }
         }

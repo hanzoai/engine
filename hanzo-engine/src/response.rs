@@ -127,6 +127,8 @@ pub struct Usage {
     pub completion_tokens: usize,
     pub prompt_tokens: usize,
     pub total_tokens: usize,
+    /// Prompt tokens served from the prefix cache. Counted inside `prompt_tokens`.
+    pub cached_prompt_tokens: usize,
     pub avg_tok_per_sec: f32,
     pub avg_prompt_tok_per_sec: f32,
     pub avg_compl_tok_per_sec: f32,

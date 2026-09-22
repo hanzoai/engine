@@ -3,14 +3,16 @@
 Native, **bridge-free** GPU inference for the hanzo stack on Windows, built on the
 llama.cpp/ggml runtime. Two selectable backends wired in:
 
-| Backend | Use | Measured on AMD Radeon 8060S (Strix Halo, gfx1151), Qwen3-0.6B |
-|---|---|---|
-| **vulkan** (default) | any GPU (AMD/NVIDIA/Intel), Win+Linux | **~350 tok/s decode**, ~11k tok/s prefill (real AMD driver, `KHR_coopmat`) |
-| **rocm** (opt-in) | AMD, long-context fast-path | ties Vulkan at std ctx, ~3× at 130K ctx (tuned rocWMMA) |
+| Backend | Use |
+|---|---|
+| **vulkan** (default) | any GPU (AMD/NVIDIA/Intel), Win+Linux (`KHR_coopmat`) |
+| **rocm** (opt-in) | AMD, long-context fast-path (tuned rocWMMA) |
 
-For comparison, the WSL2 Hanzo Engine/ROCm path capped at **~1.4 tok/s** — the
-WSL→D3D12 bridge synchronizes every GPU call. Native = **~250× faster**. This is
-why the engine is built on ggml's mature native backends, not a hand-ported one.
+Native backends, not a bridge: a WSL to D3D12 path synchronizes on every GPU call,
+which is why this builds on ggml's native backends rather than a hand-ported one.
+Throughput for these backends is published per claim, with the build, flags, spread
+and date behind each figure, at
+<https://hanzoai.github.io/hanzo/benchmarks/decode-throughput/>.
 
 Serves the **OpenAI-compatible API** (`/v1/chat/completions`, `/v1/embeddings`) on
 `127.0.0.1:<port>` — a drop-in for the hanzo node (point a provider's `external_url`

@@ -1,6 +1,6 @@
 ---
 title: ROCm GGUF decode on RDNA3.5 APUs
-description: Native-resident GGUF quant decode on AMD Strix Halo (gfx1151) -- the complete quant zoo, the unified compute core, and measured performance vs llama.cpp on the same silicon.
+description: Native-resident GGUF quant decode on AMD Strix Halo (gfx1151) -- the complete quant zoo and the unified compute core behind it.
 sidebar:
   order: 40
 ---
@@ -29,18 +29,19 @@ There is no per-format kernel. Each stage is a single `WTYPE`-templated core:
 
 Adding a format is **one `qdec<WTYPE>::partial` decode function + one `qdw_traits<WTYPE>` row + one `DEFINE_QMATVECU` generation entry** -- zero new kernels. Capability is a single value (`RocmQuantType::qmmq_capable()`), and the type/activation-dtype/MoE/dp4a axes are orthogonal template parameters that compose.
 
-## Performance (Qwen3-30B-A3B, gfx1151, vs llama.cpp on the same GPU)
+## Measured performance
 
-Measured on a quiet GPU, `pp1024`/`tg128`@d4, native Linux ROCm 7.13. Hanzo numbers are bit-exact.
+Throughput figures for this backend are published one claim per page, each rendering
+its own run (engine build, flags, host, repetition count, spread and date) from the
+benchmark endpoint:
+[prefill by prompt length](/hanzo/benchmarks/prefill-by-prompt-length/),
+[decode throughput](/hanzo/benchmarks/decode-throughput/),
+[time to first token](/hanzo/benchmarks/time-to-first-token/) and
+[four concurrent clients](/hanzo/benchmarks/four-client-concurrency/).
 
-| | hanzo (ROCm) | llama.cpp HIP | llama.cpp Vulkan |
-|---|---|---|---|
-| **Prefill** (Q4_K, tok/s) | **1209** | 1071 (1.13x) | 957 (1.26x) |
-| Decode Q4_K (tok/s) | 64.7 | 66.2 | 82.8 |
-| Decode Q2_K (tok/s) | 75.0 | 79.3 | 91.9 |
-| Decode IQ3_XXS (tok/s) | 65.5 | 57.6 | 91.2 |
-
-**Prefill leads both backends** (dense and sparse). **Decode is at llama.cpp-HIP parity** across the zoo. The decode matvec runs at ~90% of the realistic LPDDR5X bandwidth ceiling (~234 GB/s) -- it is memory-bound, not compute-bound, so lower-bit quants decode proportionally faster (the Q4_K -> Q2_K ladder). The residual gap to llama.cpp's Vulkan backend is non-matvec dispatch overhead, not the matvec.
+Decode here is memory-bound rather than compute-bound, so lower-bit quantizations
+decode proportionally faster on the same silicon. That is a property of the memory
+system, and the claim pages are where the numbers for it live.
 
 ## Running it
 

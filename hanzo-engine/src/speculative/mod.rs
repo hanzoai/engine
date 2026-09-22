@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod capability;
+pub mod capture;
 pub mod config;
 pub mod draft;
 pub mod driver;
@@ -12,6 +13,7 @@ pub mod target;
 pub mod verifier;
 
 pub use capability::SelfSpeculative;
+pub use capture::{CaptureRequest, HiddenPrefixCapture, HiddenWindow};
 pub use config::{MtpConfig, SpeculativeConfig};
 pub use draft::{DraftModelProposer, DraftPipeline};
 pub use logging::{SpeculativeAttachInfo, SpeculativeAttachKind};
@@ -20,4 +22,4 @@ pub use proposer::{
     SpeculativeKvCache, SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
     SpeculativeProposer, TargetTokenEmbedder,
 };
-pub use target::SpeculativeTargetMixin;
+pub use target::{SpeculativeSharedHeads, SpeculativeTargetMixin};

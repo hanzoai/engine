@@ -1,0 +1,31 @@
+---
+title: Four concurrent clients
+description: Aggregate and per-stream token rates with four clients starting together on the same prompt depth.
+---
+
+import Throughput from '../../../components/Throughput.astro';
+
+Four clients release from a barrier at the same instant, each with its own distinct
+prompt at roughly 1.3K tokens, and each generating 128 tokens. Aggregate is every
+token generated divided by the wall time of the whole group; per-stream is the
+median of the individual decode rates.
+
+<Throughput query={{ model: 'zen5.8', limit: 100 }} concurrent={true} />
+
+## What was measured
+
+The four prompts differ from each other and from any earlier run, so no request
+warms the cache for another. Both figures come from the same group: the aggregate
+says what the host produced, the per-stream median says what one caller in that
+group experienced, and the gap between them is the cost of sharing.
+
+## What this does not say
+
+- Four clients is not a load test. It is the smallest number that shows contention;
+  it says nothing about where a host saturates.
+- Every client sends the same prompt length and starts at the same moment. Real
+  traffic is mixed and arrives unevenly, which changes both figures.
+- Aggregate throughput is not capacity. It is the observed rate for exactly this
+  shape of work, and it excludes admission, queueing and any router in front.
+- Time to first token under concurrency is reported per stream and is much worse
+  than the [single-stream figure](/hanzo/benchmarks/time-to-first-token/).

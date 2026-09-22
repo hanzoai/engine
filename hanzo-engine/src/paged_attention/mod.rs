@@ -32,7 +32,7 @@ pub use attention_backend::{
     FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE,
 };
 pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
-pub use config::{KvCacheLayout, ModelConfigLike, ModelConfigMetadata};
+pub use config::{KvCacheLayout, KvLayers, ModelConfigLike, ModelConfigMetadata};
 use hanzo_ml::{DType, Device};
 pub use kv_cache_manager::KVCacheManager;
 pub use layers::PagedAttention;
@@ -91,14 +91,17 @@ macro_rules! mb_to_blocks {
         $mb_size
             / $dtype_size
             / $block_size
-            / $config.num_layers()
+            / $config.kv_layers().len()
             / $config.kv_cache_elements_per_token()
     };
 }
 
 macro_rules! ctxt_to_blocks {
     ($context_len:expr, $dtype_size:expr, $block_size:expr, $config:expr) => {
-        $context_len * $dtype_size * $config.num_layers() * $config.kv_cache_elements_per_token()
+        $context_len
+            * $dtype_size
+            * $config.kv_layers().len()
+            * $config.kv_cache_elements_per_token()
     };
 }
 
@@ -134,6 +137,9 @@ pub fn calculate_cache_config(
     let block_size = block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
     if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
         anyhow::bail!("Block size must be in {SUPPORTED_BLOCK_SIZE:?}, got {block_size}");
+    }
+    if config.kv_layers().is_empty() {
+        anyhow::bail!("Model has no layer that holds a KV cache; disable PagedAttention.");
     }
     let dtype = cache_type.to_dtype(dtype);
     let dtype_size = dtype.size_in_bytes();
@@ -247,4 +253,63 @@ pub fn calculate_cache_config(
         num_gpu_blocks,
         cache_type,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Qwen3.5-27B shape: 64 decoder layers, 4 KV heads of 128, of which 16 are full attention.
+    fn dense() -> ModelConfigMetadata {
+        ModelConfigMetadata {
+            max_seq_len: 262144,
+            num_layers: 64,
+            hidden_size: 4096,
+            num_kv_heads: 4,
+            num_attn_heads: 32,
+            sliding_window: None,
+            k_head_dim: 128,
+            v_head_dim: 128,
+            kv_cache_layout: KvCacheLayout::StandardNoFlashInfer,
+        }
+    }
+
+    fn hybrid() -> KvLayers<ModelConfigMetadata> {
+        KvLayers::new(dense(), (0..64).filter(|i| (i + 1) % 4 == 0).collect())
+    }
+
+    fn blocks(config: &dyn ModelConfigLike, mem_gpu: MemoryGpuConfig) -> usize {
+        calculate_cache_config(
+            mem_gpu,
+            Some(32),
+            DType::BF16,
+            PagedCacheType::Auto,
+            config,
+            &Device::Cpu,
+            &[None],
+            true,
+            None,
+            None,
+        )
+        .unwrap()
+        .num_gpu_blocks
+    }
+
+    #[test]
+    fn hybrid_caches_only_its_attention_layers() {
+        assert_eq!(hybrid().kv_layers().len(), 16);
+        assert_eq!(
+            blocks(&hybrid(), MemoryGpuConfig::MbAmount(8192)),
+            4 * blocks(&dense(), MemoryGpuConfig::MbAmount(8192))
+        );
+    }
+
+    #[test]
+    fn hybrid_context_costs_a_quarter_of_the_bytes() {
+        let bytes =
+            |config: &dyn ModelConfigLike| ctxt_to_blocks!(262144usize, 2usize, 32usize, config);
+        // 16 layers x 2 (K,V) x 4 kv heads x 128 head dim x 2 bytes = 32 KB/token.
+        assert_eq!(bytes(&hybrid()), 262144 * 32 * 1024);
+        assert_eq!(bytes(&dense()), 4 * bytes(&hybrid()));
+    }
 }

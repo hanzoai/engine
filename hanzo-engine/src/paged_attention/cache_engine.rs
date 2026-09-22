@@ -95,12 +95,13 @@ impl CacheEngine {
     ) -> Result<Vec<KVCache>> {
         let mut gpu_cache = Vec::new();
 
-        for (layer_idx, device) in layer_devices
-            .iter()
-            .take(model_config.num_layers())
-            .map(|x| x.as_ref().unwrap_or(device))
-            .enumerate()
-        {
+        // One K/V pair per cached layer, on that layer's own device: for a hybrid only the
+        // attention layers are here, and they reach their pair by its position in this list.
+        for layer_idx in model_config.kv_layers() {
+            let device = layer_devices
+                .get(layer_idx)
+                .and_then(Option::as_ref)
+                .unwrap_or(device);
             let requested_kv_cache_layout = model_config.kv_cache_layout_for_layer(layer_idx);
             let kv_cache_layout =
                 if matches!(requested_kv_cache_layout, KvCacheLayout::FlashInferHnd)

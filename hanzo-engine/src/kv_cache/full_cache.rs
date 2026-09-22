@@ -51,6 +51,15 @@ impl EitherCache {
         }
     }
 
+    /// Clone the shared handle to the hybrid cache, for callers that must rewind it while the
+    /// model is borrowed elsewhere. `None` for non-hybrid caches.
+    pub fn hybrid_arc(&self) -> Option<Arc<Mutex<HybridCache>>> {
+        match self {
+            Self::Hybrid(hybrid) => Some(hybrid.clone()),
+            _ => None,
+        }
+    }
+
     pub fn is_hybrid(&self) -> bool {
         matches!(self, Self::Hybrid(_))
     }

@@ -1,7 +1,7 @@
 //! Sandbox configuration options.
 
 use clap::{Args, ValueEnum};
-use hanzo_sandbox::NetworkMode;
+use hanzo_sandbox::{NetworkMode, SandboxProfile};
 use serde::Deserialize;
 
 #[derive(Args, Clone, Deserialize)]
@@ -16,6 +16,16 @@ pub struct SandboxOptions {
     #[serde(default)]
     pub mode: SandboxMode,
 
+    /// Sandbox policy profile.
+    #[arg(
+        id = "sandbox_profile",
+        long = "sandbox-profile",
+        value_name = "PROFILE",
+        value_enum
+    )]
+    #[serde(default)]
+    pub profile: Option<SandboxProfileArg>,
+
     /// Per-session memory cap in MiB (default: 2048).
     #[arg(id = "sandbox_max_memory_mb", long = "sb-max-memory-mb")]
     pub max_memory_mb: Option<u64>,
@@ -29,24 +39,20 @@ pub struct SandboxOptions {
     pub max_procs: Option<u32>,
 
     /// Network access permitted to the sandboxed session.
-    #[arg(
-        id = "sandbox_network",
-        long = "sandbox-network",
-        default_value = "loopback",
-        value_enum
-    )]
+    #[arg(id = "sandbox_network", long = "sandbox-network", value_enum)]
     #[serde(default)]
-    pub network: SandboxNetworkMode,
+    pub network: Option<SandboxNetworkMode>,
 }
 
 impl Default for SandboxOptions {
     fn default() -> Self {
         Self {
             mode: SandboxMode::Auto,
+            profile: None,
             max_memory_mb: None,
             max_cpu_secs: None,
             max_procs: None,
-            network: SandboxNetworkMode::Loopback,
+            network: None,
         }
     }
 }
@@ -70,6 +76,22 @@ pub enum SandboxNetworkMode {
     #[default]
     Loopback,
     Full,
+}
+
+#[derive(Clone, Copy, ValueEnum, PartialEq, Eq, Deserialize, Debug)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxProfileArg {
+    Restricted,
+    Developer,
+}
+
+impl From<SandboxProfileArg> for SandboxProfile {
+    fn from(profile: SandboxProfileArg) -> Self {
+        match profile {
+            SandboxProfileArg::Restricted => SandboxProfile::Restricted,
+            SandboxProfileArg::Developer => SandboxProfile::Developer,
+        }
+    }
 }
 
 impl From<SandboxNetworkMode> for NetworkMode {

@@ -18,7 +18,7 @@ use crate::{
     layers_masker::PastKvLenCache,
     paged_attention::{
         encoder_cache::{CacheModality, EncoderCacheManager},
-        AttentionImplementation, ModelConfigMetadata,
+        AttentionImplementation, ModelConfigLike, ModelConfigMetadata,
     },
     pipeline::{
         EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
@@ -27,6 +27,7 @@ use crate::{
 };
 
 pub(crate) mod config;
+pub mod mtp;
 mod text;
 
 pub(crate) use config::Config;
@@ -42,6 +43,16 @@ pub struct Qwen3_5Model {
     vision_start_token_id: u32,
     vision_end_token_id: u32,
     encoder_cache: Arc<Mutex<EncoderCacheManager>>,
+    /// The attached DFlash 2 draft, if any. It decodes through `text`'s embedding and head
+    /// and reads the hidden prefix `text` captures.
+    dflash: Option<crate::models::qwen3_dflash::DFlash2Proposer>,
+    /// The attached MTP head, if any: the checkpoint's own draft, loaded on demand.
+    mtp: Option<Box<dyn crate::speculative::SpeculativeProposer + Send + Sync>>,
+    /// The MRoPE positions of the target rows the MTP head drafts from, handed over as those
+    /// rows are selected.
+    mtp_anchors: crate::models::qwen3_5_mtp::AnchorPositions,
+    /// The text hyperparameters, kept so the MTP head can be loaded after the model is.
+    text_config: config::TextConfig,
 }
 
 impl Qwen3_5Model {
@@ -76,6 +87,7 @@ impl Qwen3_5Model {
         )?;
         Ok(Self {
             text,
+            text_config,
             vision,
             spatial_merge_size: cfg.vision_config.spatial_merge_size,
             image_token_id: cfg.image_token_id,
@@ -83,6 +95,9 @@ impl Qwen3_5Model {
             vision_start_token_id: cfg.vision_start_token_id,
             vision_end_token_id: cfg.vision_end_token_id,
             encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
+            dflash: None,
+            mtp: None,
+            mtp_anchors: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -457,7 +472,118 @@ impl Qwen3_5Model {
     }
 }
 
-impl crate::speculative::SpeculativeTargetMixin for Qwen3_5Model {}
+impl crate::speculative::SpeculativeTargetMixin for Qwen3_5Model {
+    /// Hosts either a DFlash 2 draft (`--dflash`) or the checkpoint's own MTP head (`--mtp`).
+    fn attach_speculative(
+        &mut self,
+        config: crate::speculative::SpeculativeConfig,
+    ) -> Result<Option<crate::speculative::SpeculativeAttachInfo>> {
+        use crate::speculative::{SelfSpeculative, SpeculativeConfig};
+        self.dflash = None;
+        self.mtp = None;
+        self.text.spec_capture.request(Default::default());
+        self.text.set_store_spec(false);
+        match config {
+            SpeculativeConfig::Off => Ok(None),
+            SpeculativeConfig::Dflash { path, block_size } => {
+                let proposer = crate::models::qwen3_dflash::DFlash2Proposer::from_checkpoint(
+                    std::path::Path::new(&path),
+                    block_size,
+                    &self.text.device,
+                    self.text.shared_heads(),
+                )?;
+                self.text.spec_capture.request(proposer.capture_request());
+                let info = crate::speculative::SpeculativeAttachInfo::dflash(proposer.block_size());
+                self.dflash = Some(proposer);
+                Ok(Some(info))
+            }
+            SpeculativeConfig::Mtp(config) => {
+                let proposer = self.attach_mtp(&config)?;
+                let info = crate::speculative::SpeculativeAttachInfo::mtp(
+                    config.model.clone(),
+                    proposer.proposal_len(),
+                );
+                self.mtp = Some(proposer);
+                Ok(Some(info))
+            }
+            _ => hanzo_ml::bail!(
+                "Qwen3.5 speculates through its built-in MTP head (--mtp) or a DFlash 2 draft (--dflash); it hosts no other proposer."
+            ),
+        }
+    }
+
+    fn has_speculative_proposer(&self) -> bool {
+        self.dflash.is_some() || self.mtp.is_some()
+    }
+
+    fn speculative_proposal_len(&self) -> Option<usize> {
+        use crate::speculative::SpeculativeProposer;
+        match (self.dflash.as_ref(), self.mtp.as_ref()) {
+            (Some(draft), _) => Some(draft.proposal_len()),
+            (None, Some(head)) => Some(head.proposal_len()),
+            (None, None) => None,
+        }
+    }
+
+    fn speculative_propose(
+        &mut self,
+        ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
+    ) -> Result<Option<crate::speculative::SpeculativeProposalBatch>> {
+        use crate::speculative::SpeculativeProposer;
+        match (self.dflash.as_mut(), self.mtp.as_mut()) {
+            (Some(draft), _) => draft.propose(ctx, None).map(Some),
+            (None, Some(head)) => head.propose(ctx, None).map(Some),
+            (None, None) => Ok(None),
+        }
+    }
+
+    /// The MTP head drafts from one target row per sequence: the row whose hidden state produced
+    /// the token just sampled. Their MRoPE positions go to the head with them.
+    fn speculative_target_hiddens(&self, rows: &[(usize, usize)]) -> Result<Option<Tensor>> {
+        if self.mtp.is_none() || rows.is_empty() {
+            return Ok(None);
+        }
+        let capture = self.text.last_spec().ok_or_else(|| {
+            hanzo_ml::Error::msg("Qwen3.5 MTP: the target stashed no hidden state to draft from")
+        })?;
+        let (batch, row_count, _) = capture.hidden.dims3()?;
+        let positions = capture
+            .positions
+            .contiguous()?
+            .to_dtype(DType::U32)?
+            .to_vec3::<u32>()?;
+        let mut hiddens = Vec::with_capacity(rows.len());
+        let mut anchors = Vec::with_capacity(rows.len());
+        for &(batch_idx, row) in rows {
+            if batch_idx >= batch || row >= row_count {
+                hanzo_ml::bail!(
+                    "Qwen3.5 MTP row ({batch_idx}, {row}) is outside the stashed {batch}x{row_count} hidden state"
+                );
+            }
+            hiddens.push(capture.hidden.narrow(0, batch_idx, 1)?.narrow(1, row, 1)?);
+            let position = &positions[batch_idx][row];
+            anchors.push([position[0], position[1], position[2]]);
+        }
+        if let Ok(mut slot) = self.mtp_anchors.lock() {
+            *slot = Some(anchors);
+        }
+        Tensor::cat(&hiddens, 0).map(Some)
+    }
+
+    fn note_speculative_forward(&self, seq_ids: &[usize]) {
+        self.text.spec_capture.note_forward(seq_ids);
+    }
+
+    fn speculative_target_hidden_layers(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> Result<Option<crate::speculative::HiddenWindow>> {
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        Ok(self.text.spec_capture.hiddens())
+    }
+}
 
 impl MultimodalModel for Qwen3_5Model {
     fn forward(
@@ -520,6 +646,9 @@ impl MultimodalModel for Qwen3_5Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.text.cfg
+    }
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        self.text.model_config_like()
     }
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
         assert_eq!(input_ids.dims()[0], 1);

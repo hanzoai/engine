@@ -433,8 +433,7 @@ extern "C" {
         stream: i64,
     );
 
-    // Optimized parallel topk for small k (MoE routing)
-    // Single kernel call writes to both values and indices buffers
+    // Row-wise top-k of any width; each returns the launch's CUDA error (0 = success).
     pub(crate) fn topk_f32(
         input: *const c_void,
         values_out: *mut c_void,  // [nrows, k]
@@ -443,7 +442,7 @@ extern "C" {
         ncols: i32,
         k: i32,
         stream: i64,
-    );
+    ) -> i32;
     pub(crate) fn topk_bf16(
         input: *const c_void,
         values_out: *mut c_void,  // [nrows, k]
@@ -452,7 +451,7 @@ extern "C" {
         ncols: i32,
         k: i32,
         stream: i64,
-    );
+    ) -> i32;
     pub(crate) fn topk_f16(
         input: *const c_void,
         values_out: *mut c_void,  // [nrows, k]
@@ -461,7 +460,7 @@ extern "C" {
         ncols: i32,
         k: i32,
         stream: i64,
-    );
+    ) -> i32;
 
     pub(crate) fn moe_router_topk_f32(
         logits: *const c_void,

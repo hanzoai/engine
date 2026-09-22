@@ -138,7 +138,7 @@ pub struct CodeExecutionConfig {
     /// Defaults to `python3` (`python` on Windows).
     #[serde(default = "default_python_path")]
     pub python_path: std::path::PathBuf,
-    /// Per-execution timeout. Defaults to 30s.
+    /// Per-execution timeout. Defaults to 60s.
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
     /// If `None`, a temp dir is created. Otherwise this is the cwd for the model's code.
@@ -267,7 +267,7 @@ fn default_python_path() -> std::path::PathBuf {
     }
 }
 fn default_timeout_secs() -> u64 {
-    30
+    60
 }
 
 impl Default for CodeExecutionConfig {
@@ -337,7 +337,7 @@ pub use utils::debug::{
 };
 pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};
-pub use utils::{paged_attn_supported, using_flash_attn};
+pub use utils::{paged_attn_default, paged_attn_supported, using_flash_attn};
 
 // re-export llguidance for easier LlguidanceGrammar construction
 pub use llguidance;

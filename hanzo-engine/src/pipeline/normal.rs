@@ -1278,7 +1278,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
     fn speculative_target_hidden_layers(
         &self,
         rows: &[(usize, usize)],
-    ) -> hanzo_ml::Result<Option<Vec<Tensor>>> {
+    ) -> hanzo_ml::Result<Option<crate::speculative::HiddenWindow>> {
         // Unconditional delegate: DSpark's proposer lives in `draft_proposer` but reads the
         // TARGET's captured multi-layer hiddens. Non-capture targets return `None` here, so
         // classic draft-model / no-proposer runs are unaffected.
@@ -1730,6 +1730,10 @@ impl Pipeline for NormalPipeline {
             Ok(ForwardInputsResult::CausalGeneration { logits })
         }
     }
+    fn note_forward_sequences(&self, seq_ids: &[usize]) {
+        self.model.note_speculative_forward(seq_ids);
+    }
+
     fn attach_speculative(
         &mut self,
         config: crate::speculative::SpeculativeConfig,
@@ -1739,6 +1743,7 @@ impl Pipeline for NormalPipeline {
                 config,
                 crate::speculative::SpeculativeConfig::Off
                     | crate::speculative::SpeculativeConfig::Dspark { .. }
+                    | crate::speculative::SpeculativeConfig::Dflash { .. }
                     | crate::speculative::SpeculativeConfig::PromptLookup { .. }
             )
         {
@@ -1788,10 +1793,34 @@ impl Pipeline for NormalPipeline {
             let draft = crate::models::qwen3_dspark::Qwen3DSpark::load(cfg, vb)?;
             let proposer =
                 crate::models::qwen3_dspark::DsparkProposer::new(draft, confidence_threshold);
-            // Enable target-side capture of the fused layer hiddens the proposer reads.
-            self.model.set_speculative_capture_layers(capture_layers);
+            // DSpark attends the whole confirmed prefix, so the capture keeps all of it.
+            self.model
+                .request_speculative_capture(crate::speculative::CaptureRequest {
+                    layers: capture_layers,
+                    retain: None,
+                    dtype: Some(dtype),
+                });
             let info =
                 crate::speculative::SpeculativeAttachInfo::dspark(block_size, confidence_threshold);
+            crate::speculative::logging::log_attach(&info);
+            self.draft_proposer = Some(Box::new(proposer));
+            return Ok(());
+        }
+        if let crate::speculative::SpeculativeConfig::Dflash { path, block_size } = config {
+            let heads = self.model.speculative_shared_heads().ok_or_else(|| {
+                hanzo_ml::Error::msg(
+                    "DFlash 2 decodes through the target's embedding and output head, which this model does not lend",
+                )
+            })?;
+            let proposer = crate::models::qwen3_dflash::DFlash2Proposer::from_checkpoint(
+                std::path::Path::new(&path),
+                block_size,
+                self.model.device(),
+                heads,
+            )?;
+            self.model
+                .request_speculative_capture(proposer.capture_request());
+            let info = crate::speculative::SpeculativeAttachInfo::dflash(proposer.block_size());
             crate::speculative::logging::log_attach(&info);
             self.draft_proposer = Some(Box::new(proposer));
             return Ok(());
@@ -1858,6 +1887,7 @@ impl Pipeline for NormalPipeline {
             let cache = crate::speculative::cache::PagedSpeculativeCacheAccess::new(
                 &metadata,
                 cache_engine,
+                self.cache(),
             );
             return crate::speculative::driver::try_sample_speculative_causal_gen(
                 self,

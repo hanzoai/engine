@@ -15,7 +15,7 @@
 
 using namespace flashinfer;
 
-namespace mistralrs_flashinfer {
+namespace hanzo_flashinfer {
 
 template <typename DType>
 __global__ void reshape_and_cache_flashinfer_kernel(
@@ -443,7 +443,7 @@ void dispatch_flashinfer_prefill_head_dim(
   }
 }
 
-} // namespace mistralrs_flashinfer
+} // namespace hanzo_flashinfer
 
 extern "C" void reshape_and_cache_flashinfer(
     void *key, void *value, void *key_cache, void *value_cache,
@@ -454,14 +454,14 @@ extern "C" void reshape_and_cache_flashinfer(
   dim3 block(std::min(num_heads * head_size, 512));
 
   if (dtype == 0) {
-    mistralrs_flashinfer::reshape_and_cache_flashinfer_kernel<__half>
+    hanzo_flashinfer::reshape_and_cache_flashinfer_kernel<__half>
         <<<grid, block, 0, stream>>>(
             static_cast<__half *>(key), static_cast<__half *>(value),
             static_cast<__half *>(key_cache),
             static_cast<__half *>(value_cache), slot_mapping, num_heads,
             head_size, block_size, key_stride, value_stride);
   } else if (dtype == 1) {
-    mistralrs_flashinfer::reshape_and_cache_flashinfer_kernel<__nv_bfloat16>
+    hanzo_flashinfer::reshape_and_cache_flashinfer_kernel<__nv_bfloat16>
         <<<grid, block, 0, stream>>>(static_cast<__nv_bfloat16 *>(key),
                                      static_cast<__nv_bfloat16 *>(value),
                                      static_cast<__nv_bfloat16 *>(key_cache),
@@ -469,7 +469,7 @@ extern "C" void reshape_and_cache_flashinfer(
                                      slot_mapping, num_heads, head_size,
                                      block_size, key_stride, value_stride);
   } else if (dtype == 2) {
-    mistralrs_flashinfer::reshape_and_cache_flashinfer_kernel<float>
+    hanzo_flashinfer::reshape_and_cache_flashinfer_kernel<float>
         <<<grid, block, 0, stream>>>(
             static_cast<float *>(key), static_cast<float *>(value),
             static_cast<float *>(key_cache), static_cast<float *>(value_cache),
@@ -497,7 +497,7 @@ extern "C" int32_t flashinfer_decode(
     cudaStream_t stream) {
   try {
   if (dtype == 0) {
-    mistralrs_flashinfer::dispatch_flashinfer_decode_head_dim<__half>(
+    hanzo_flashinfer::dispatch_flashinfer_decode_head_dim<__half>(
         q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
         request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
         block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size,
@@ -505,7 +505,7 @@ extern "C" int32_t flashinfer_decode(
         q_stride_h, sm_scale, window_left, logits_soft_cap, use_tensor_cores,
         stream);
   } else if (dtype == 1) {
-    mistralrs_flashinfer::dispatch_flashinfer_decode_head_dim<__nv_bfloat16>(
+    hanzo_flashinfer::dispatch_flashinfer_decode_head_dim<__nv_bfloat16>(
         q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
         request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
         block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size,
@@ -513,7 +513,7 @@ extern "C" int32_t flashinfer_decode(
         q_stride_h, sm_scale, window_left, logits_soft_cap, use_tensor_cores,
         stream);
   } else if (dtype == 2) {
-    mistralrs_flashinfer::dispatch_flashinfer_decode_head_dim<float>(
+    hanzo_flashinfer::dispatch_flashinfer_decode_head_dim<float>(
         q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
         request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
         block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size,
@@ -547,14 +547,14 @@ extern "C" int32_t flashinfer_prefill(
     float logits_soft_cap, uint32_t dtype, cudaStream_t stream) {
   try {
     if (dtype == 0) {
-      mistralrs_flashinfer::dispatch_flashinfer_prefill_head_dim<__half>(
+      hanzo_flashinfer::dispatch_flashinfer_prefill_head_dim<__half>(
           q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
           q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
           kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
           total_q, num_qo_heads, num_kv_heads, head_size, page_size, q_stride_n,
           q_stride_h, sm_scale, window_left, logits_soft_cap, stream);
     } else if (dtype == 1) {
-      mistralrs_flashinfer::dispatch_flashinfer_prefill_head_dim<__nv_bfloat16>(
+      hanzo_flashinfer::dispatch_flashinfer_prefill_head_dim<__nv_bfloat16>(
           q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
           q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
           kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
@@ -585,14 +585,14 @@ extern "C" void gather_kv_cache_flashinfer(
   dim3 block(std::min(num_kv_heads * head_size, 512));
 
   if (dtype == 0) {
-    mistralrs_flashinfer::gather_kv_cache_flashinfer_kernel<__half>
+    hanzo_flashinfer::gather_kv_cache_flashinfer_kernel<__half>
         <<<grid, block, 0, stream>>>(
             static_cast<__half *>(key_cache),
             static_cast<__half *>(value_cache), static_cast<__half *>(k_out),
             static_cast<__half *>(v_out), block_table, cu_seq_lens, num_tokens,
             block_size, block_table_stride, num_kv_heads, head_size);
   } else if (dtype == 1) {
-    mistralrs_flashinfer::gather_kv_cache_flashinfer_kernel<__nv_bfloat16>
+    hanzo_flashinfer::gather_kv_cache_flashinfer_kernel<__nv_bfloat16>
         <<<grid, block, 0, stream>>>(static_cast<__nv_bfloat16 *>(key_cache),
                                      static_cast<__nv_bfloat16 *>(value_cache),
                                      static_cast<__nv_bfloat16 *>(k_out),
@@ -601,7 +601,7 @@ extern "C" void gather_kv_cache_flashinfer(
                                      block_size, block_table_stride,
                                      num_kv_heads, head_size);
   } else if (dtype == 2) {
-    mistralrs_flashinfer::gather_kv_cache_flashinfer_kernel<float>
+    hanzo_flashinfer::gather_kv_cache_flashinfer_kernel<float>
         <<<grid, block, 0, stream>>>(
             static_cast<float *>(key_cache), static_cast<float *>(value_cache),
             static_cast<float *>(k_out), static_cast<float *>(v_out),

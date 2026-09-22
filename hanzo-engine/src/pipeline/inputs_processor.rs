@@ -69,9 +69,9 @@ pub mod text_models_inputs_processor {
     const FLASHINFER_DECODE_SPLIT_PAGES: usize = 1;
     pub(crate) const FLASHINFER_PREFILL_TILE_Q: usize = 64;
     pub(crate) const FLASHINFER_PREFILL_MAX_GROUP_SIZE: usize = 8;
-    /// The GQA group sizes FlashInfer's decode kernel instantiates (DISPATCH_GQA_GROUP_SIZE);
-    /// it throws on anything else, and Qwen3.5-27B's 6 is one of those.
-    pub(crate) const FLASHINFER_DECODE_GROUP_SIZES: [usize; 5] = [1, 2, 3, 4, 8];
+    /// The GQA group sizes FlashInfer's decode kernel instantiates; it throws on anything else, so
+    /// this must stay in step with DISPATCH_GQA_GROUP_SIZE in hanzo-paged-attn's flashinfer/utils.cuh.
+    pub(crate) const FLASHINFER_DECODE_GROUP_SIZES: [usize; 6] = [1, 2, 3, 4, 6, 8];
     const TABLE_SIGNATURE_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
     const TABLE_SIGNATURE_PRIME: u64 = 0x100000001b3;
 
@@ -417,6 +417,12 @@ pub mod text_models_inputs_processor {
     }
 
     impl PagedAttentionInputMetadata {
+        /// Whether a prompt forward reads its cached prefix back out of the paged cache and attends over
+        /// prefix and chunk together. The paged attention layer and the prompt masker both ask.
+        pub fn gathers_prefix(&self) -> bool {
+            self.num_cached_tokens.is_some() && self.block_tables.is_some()
+        }
+
         #[cfg(all(feature = "cuda", target_family = "unix"))]
         pub(crate) fn flashinfer_decode_metadata(
             &self,
@@ -513,6 +519,17 @@ pub mod text_models_inputs_processor {
                     "paged_kv_block_valid_mask missing",
                 )?,
             })
+        }
+
+        /// Whether this forward carries a FlashInfer prefill plan. A multi-token forward laid out
+        /// as decode rows -- a speculative verify chunk -- carries none and takes the decode kernel.
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        pub(crate) fn has_prefill_plan(&self, use_full: bool) -> bool {
+            if use_full {
+                self.full_paged_kv_q_indptr.is_some()
+            } else {
+                self.paged_kv_q_indptr.is_some()
+            }
         }
 
         #[cfg(all(feature = "cuda", target_family = "unix"))]

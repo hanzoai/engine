@@ -71,7 +71,7 @@ fn gate(x: &Tensor, g: &Tensor) -> Result<Tensor> {
     x.broadcast_mul(g)
 }
 
-// candle Linear only matmuls up to rank 4; apply over the last dim of an arbitrary-rank tensor.
+// hanzo-ml Linear only matmuls up to rank 4; apply over the last dim of an arbitrary-rank tensor.
 fn apply_linear(x: &Tensor, l: &Linear) -> Result<Tensor> {
     let dims = x.dims().to_vec();
     let d = dims[dims.len() - 1];

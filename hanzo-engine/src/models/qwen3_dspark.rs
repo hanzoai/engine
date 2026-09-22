@@ -586,40 +586,34 @@ impl SpeculativeProposer for DsparkProposer {
         ctx: SpeculativeProposeBatchCtx<'_>,
         _target_embedder: Option<&TargetTokenEmbedder<'_>>,
     ) -> Result<SpeculativeProposalBatch> {
-        let hiddens = ctx.target_hidden_layers.as_ref().ok_or_else(|| {
-            hanzo_ml::Error::Msg(
-                "DSpark proposer requires the multi-layer target hidden prefix".into(),
-            )
-        })?;
         let batch = ctx.sampled_tokens.len();
-        if batch == 0 {
-            return Ok(SpeculativeProposalBatch::new(Vec::new()));
-        }
-        // DSpark drafts from ONE sequence's full prefix context (the captured hiddens are that
-        // sequence's forward). Batched multi-sequence drafting needs a per-sequence prefix
-        // slice and is a follow-on; the supported shape here is a single active sequence.
+        // The target captures hiddens on single-sequence forwards only, so a batched step —
+        // or a sequence whose prefix was never captured — has nothing to draft from. That is
+        // an ordinary state under concurrency, not a failure: propose nothing and the target
+        // decodes those sequences one token at a time.
+        let stand_down = || {
+            Ok(SpeculativeProposalBatch::new(vec![
+                SpeculativeProposal::new(Vec::new());
+                batch
+            ]))
+        };
         if batch != 1 {
-            hanzo_ml::bail!("DSpark proposer drafts one sequence per step (got batch={batch})");
+            return stand_down();
         }
+        let Some(hiddens) = ctx.target_hidden_layers.as_ref() else {
+            return stand_down();
+        };
         let anchor_token = ctx.sampled_tokens[0];
         let anchor_pos = ctx.base_lens[0];
         let block = self.draft.config().block_size;
 
-        // Gap 2: DSpark drafts against the fused hiddens of the WHOLE confirmed prefix. The target
-        // model hands us its accumulated confirmed-prefix buffer (`[prefix_len, hidden]` per fused
-        // layer); slice it to the `anchor_pos` positions that precede the anchor. In the steady
-        // state `prefix_len == anchor_pos`; a shorter prefix means the accumulator hasn't caught up
-        // (e.g. right after a discontinuity) — bail so the target simply decodes one token.
-        let prefix_len = hiddens.first().map(|t| t.dim(0)).transpose()?.unwrap_or(0);
-        if prefix_len < anchor_pos {
-            return Ok(SpeculativeProposalBatch::new(vec![
-                SpeculativeProposal::new(Vec::new()),
-            ]));
+        // DSpark drafts against the fused hiddens of the WHOLE confirmed prefix, positions
+        // `0..anchor_pos`. A window that starts later or ends earlier has not caught up (right
+        // after a discontinuity): propose nothing and the target decodes one token.
+        if hiddens.start != 0 || hiddens.end()? < anchor_pos {
+            return stand_down();
         }
-        let prefix = hiddens
-            .iter()
-            .map(|t| t.narrow(0, 0, anchor_pos))
-            .collect::<Result<Vec<_>>>()?;
+        let prefix = hiddens.rows(0, anchor_pos)?;
 
         // Deterministic draft (argmax): draft quality only affects accept rate, and the
         // target verify decides every emitted token.
@@ -724,7 +718,7 @@ mod tests {
             sequences: &[],
             cache: SpeculativeKvCache::Normal,
             target_hiddens: None,
-            target_hidden_layers: Some(hiddens),
+            target_hidden_layers: Some(crate::speculative::HiddenWindow::new(0, hiddens)?),
             rng,
         };
 

@@ -13,7 +13,7 @@ docs/book/
 # Starlight / Astro
 docs/node_modules/
 docs/dist/
-docs/.astro/target/
+docs/.astro/
 **/target/
 *.so
 *.a

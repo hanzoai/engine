@@ -12,6 +12,20 @@ use hanzo_ml::{Device, IndexOp, Result, Tensor};
 use super::KvCache;
 use crate::layers_masker::PastKvLenCache;
 
+/// The state a pool held after each position of one forward. A speculative verify runs the anchor
+/// and every draft through the recurrent layers in that forward; when only some drafts are
+/// accepted, the state after the last accepted one is the entry to restore.
+#[derive(Debug, Clone)]
+pub struct RecurrentTrail {
+    /// Pool slots in batch order.
+    pub slots: Vec<u32>,
+    /// Offset of each slot before the forward, in batch order.
+    pub start_offsets: Vec<usize>,
+    /// `conv[t]`, `recurrent[t]`: batch-major state after position `t`.
+    pub conv: Vec<Tensor>,
+    pub recurrent: Vec<Tensor>,
+}
+
 /// Pool-based recurrent state cache for continuous batching.
 ///
 /// Works for both Mamba SSM and GDN (Gated Delta Net) recurrent layers.
@@ -29,6 +43,8 @@ pub struct RecurrentStatePool {
     pub recurrent_state: Tensor,
     /// Per-slot sequence length offsets (for tracking generation position)
     seqlen_offsets: Vec<usize>,
+    /// Present only while it describes the forward that produced the current state.
+    trail: Option<RecurrentTrail>,
     /// Stack of free slot indices (for allocation)
     free_slots: Vec<usize>,
     /// Current capacity (grows dynamically)
@@ -72,6 +88,7 @@ impl RecurrentStatePool {
             conv_state,
             recurrent_state,
             seqlen_offsets,
+            trail: None,
             free_slots,
             capacity,
             conv_dim,
@@ -132,6 +149,7 @@ impl RecurrentStatePool {
     /// Free a state slot when a sequence completes.
     pub fn free(&mut self, slot_idx: usize) {
         debug_assert!(slot_idx < self.capacity);
+        self.trail = None;
         self.seqlen_offsets[slot_idx] = 0;
         self.free_slots.push(slot_idx);
     }
@@ -196,6 +214,57 @@ impl RecurrentStatePool {
         Ok(())
     }
 
+    /// Replace the trail. Every forward through the pool calls this, with `None` when it kept no
+    /// trail, so a trail never outlives the state it describes.
+    pub fn set_trail(&mut self, trail: Option<RecurrentTrail>) {
+        self.trail = trail;
+    }
+
+    /// Undo the last `rejected` positions of the forward that produced `slot_idx`'s state.
+    /// Fails, leaving the pool untouched, unless the trail covers exactly that forward.
+    pub fn rewind(&mut self, slot_idx: usize, rejected: usize) -> Result<()> {
+        if rejected == 0 {
+            return Ok(());
+        }
+        let Some(trail) = self.trail.as_ref() else {
+            hanzo_ml::bail!(
+                "recurrent rewind of {rejected} for slot {slot_idx}: the last forward kept no trail"
+            );
+        };
+        let len = trail.recurrent.len();
+        let Some(row) = trail.slots.iter().position(|&s| s as usize == slot_idx) else {
+            hanzo_ml::bail!("recurrent rewind: slot {slot_idx} was not in the last forward");
+        };
+        if trail.conv.len() != len
+            || trail.start_offsets.len() != trail.slots.len()
+            || rejected >= len
+        {
+            hanzo_ml::bail!("recurrent rewind of {rejected} exceeds a trail of {len} positions");
+        }
+        let start = trail.start_offsets[row];
+        if self.seqlen_offsets[slot_idx] != start + len {
+            hanzo_ml::bail!(
+                "recurrent rewind: slot {slot_idx} is at {}, the trail ends at {}",
+                self.seqlen_offsets[slot_idx],
+                start + len
+            );
+        }
+        let keep = len - rejected;
+        let conv = trail.conv[keep - 1]
+            .narrow(0, row, 1)?
+            .to_dtype(self.conv_state.dtype())?
+            .contiguous()?;
+        let recurrent = trail.recurrent[keep - 1]
+            .narrow(0, row, 1)?
+            .to_dtype(self.recurrent_state.dtype())?
+            .contiguous()?;
+        let offset = start + keep;
+        self.conv_state.slice_set(&conv, 0, slot_idx)?;
+        self.recurrent_state.slice_set(&recurrent, 0, slot_idx)?;
+        self.seqlen_offsets[slot_idx] = offset;
+        Ok(())
+    }
+
     /// Reset a specific slot's state to zeros
     pub fn reset_slot(&mut self, slot_idx: usize) -> Result<()> {
         let zero_conv = Tensor::zeros(
@@ -212,6 +281,7 @@ impl RecurrentStatePool {
         self.recurrent_state
             .slice_set(&zero_recurrent, 0, slot_idx)?;
         self.seqlen_offsets[slot_idx] = 0;
+        self.trail = None;
         Ok(())
     }
 
@@ -220,6 +290,7 @@ impl RecurrentStatePool {
         self.conv_state = self.conv_state.zeros_like()?;
         self.recurrent_state = self.recurrent_state.zeros_like()?;
         self.seqlen_offsets.fill(0);
+        self.trail = None;
         self.free_slots = (0..self.capacity).rev().collect();
         Ok(())
     }
@@ -247,6 +318,7 @@ impl Clone for RecurrentStatePool {
             conv_state: self.conv_state.clone(),
             recurrent_state: self.recurrent_state.clone(),
             seqlen_offsets: self.seqlen_offsets.clone(),
+            trail: self.trail.clone(),
             free_slots: self.free_slots.clone(),
             capacity: self.capacity,
             conv_dim: self.conv_dim,
@@ -350,6 +422,8 @@ pub struct HybridCache {
     /// device->host sync, so the GDN decode path stays capturable by a CUDA/HIP graph
     /// (a `state_indices.to_vec1()` would abort stream capture).
     state_indices_host: Option<Vec<u32>>,
+    /// Tokens per sequence in the next forward when it verifies staged drafts, anchor included.
+    verify_len: Option<usize>,
 }
 
 impl HybridCache {
@@ -381,7 +455,40 @@ impl HybridCache {
             config,
             state_indices: None,
             state_indices_host: None,
+            verify_len: None,
         })
+    }
+
+    /// Announce the next forward: `Some(n)` when it verifies staged drafts, `n` tokens per
+    /// sequence with the anchor. Set before every forward, so it never describes an older one.
+    pub fn expect_verify(&mut self, verify_len: Option<usize>) {
+        self.verify_len = verify_len;
+    }
+
+    /// Whether a forward of `seq_len` tokens is the announced verify, and so must keep a trail.
+    pub fn records_trail(&self, seq_len: usize) -> bool {
+        self.verify_len == Some(seq_len)
+    }
+
+    /// Tokens the recurrent layers have consumed for `slot_idx`. `None` without a recurrent
+    /// layer, or when the layers disagree.
+    pub fn recurrent_offset(&self, slot_idx: usize) -> Option<usize> {
+        let mut offsets = self.caches.iter().filter_map(|cache| match cache {
+            HybridLayerCache::Recurrent(pool) => Some(pool.get_seqlen_offset(slot_idx)),
+            HybridLayerCache::Attention(_) => None,
+        });
+        let first = offsets.next()?;
+        offsets.all(|offset| offset == first).then_some(first)
+    }
+
+    /// Undo the last `rejected` positions of the latest forward, in every recurrent layer.
+    pub fn rewind_recurrent(&mut self, slot_idx: usize, rejected: usize) -> Result<()> {
+        for cache in &mut self.caches {
+            if let HybridLayerCache::Recurrent(pool) = cache {
+                pool.rewind(slot_idx, rejected)?;
+            }
+        }
+        Ok(())
     }
 
     /// Allocate state slots for a new sequence across all recurrent layers.
@@ -536,7 +643,8 @@ impl PastKvLenCache for HybridCache {
 
 impl HybridCache {
     /// Truncate all attention layer KV caches to the given sequence length.
-    /// Recurrent layers are unchanged, use snapshot/restore for recurrent rollback.
+    /// Recurrent layers are unchanged: `rewind_recurrent` undoes a verify, snapshot/restore
+    /// anything older.
     pub fn truncate_attention_to(&mut self, len: usize) -> Result<()> {
         for cache in &mut self.caches {
             if let HybridLayerCache::Attention(kv) = cache {
@@ -547,12 +655,23 @@ impl HybridCache {
     }
 }
 
-/// Snapshot of a single recurrent layer's state for prefix caching.
+/// Snapshot of a single recurrent layer's state for prefix caching. Recurrent state cannot be
+/// rewound, so a snapshot serves exactly one prefix: the first `seqlen_offset` tokens.
 #[derive(Clone, Debug)]
 pub struct RecurrentStateSnapshot {
     pub conv_state: Tensor,
     pub recurrent_state: Tensor,
     pub seqlen_offset: usize,
+}
+
+impl RecurrentStateSnapshot {
+    /// Device bytes this snapshot holds.
+    pub fn bytes(&self) -> usize {
+        [&self.conv_state, &self.recurrent_state]
+            .into_iter()
+            .map(|t| t.elem_count() * t.dtype().size_in_bytes())
+            .sum()
+    }
 }
 
 impl HybridCache {
@@ -594,9 +713,150 @@ impl HybridCache {
                     pool.scatter_conv_state(&idx_tensor, &conv)?;
                     pool.scatter_recurrent_state(&idx_tensor, &recurrent)?;
                     pool.set_seqlen_offset(slot_idx, snap.seqlen_offset);
+                    pool.set_trail(None);
                 }
             }
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hanzo_ml::DType;
+
+    const CONV: (usize, usize) = (2, 3);
+    const STATE: [usize; 3] = [1, 2, 2];
+    const LEN: usize = 3;
+
+    fn pool() -> Result<RecurrentStatePool> {
+        let mut pool =
+            RecurrentStatePool::new(CONV.0, CONV.1, STATE.to_vec(), DType::F32, &Device::Cpu)?;
+        assert_eq!((pool.allocate(), pool.allocate()), (Some(0), Some(1)));
+        Ok(pool)
+    }
+
+    /// Entry `t`, batch row `row` holds the constant `10 t + row`, so a restored slot names the
+    /// position and the row it came from.
+    fn trail(slots: &[u32], start_offsets: &[usize]) -> Result<RecurrentTrail> {
+        let at = |t: usize, tail: &[usize]| -> Result<Tensor> {
+            let rows = (0..slots.len())
+                .map(|row| {
+                    let mut shape = vec![1];
+                    shape.extend_from_slice(tail);
+                    Tensor::full((10 * t + row) as f32, shape, &Device::Cpu)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Tensor::cat(&rows, 0)
+        };
+        Ok(RecurrentTrail {
+            slots: slots.to_vec(),
+            start_offsets: start_offsets.to_vec(),
+            conv: (0..LEN)
+                .map(|t| at(t, &[CONV.0, CONV.1]))
+                .collect::<Result<_>>()?,
+            recurrent: (0..LEN).map(|t| at(t, &STATE)).collect::<Result<_>>()?,
+        })
+    }
+
+    fn slot_values(pool: &RecurrentStatePool, slot: usize) -> Result<(Vec<f32>, Vec<f32>)> {
+        Ok((
+            pool.conv_state.i(slot)?.flatten_all()?.to_vec1()?,
+            pool.recurrent_state.i(slot)?.flatten_all()?.to_vec1()?,
+        ))
+    }
+
+    /// Slots 1 and 0 ran a three-position forward as batch rows 0 and 1, from offsets 4 and 7.
+    fn after_forward() -> Result<RecurrentStatePool> {
+        let mut pool = pool()?;
+        pool.set_seqlen_offset(1, 4 + LEN);
+        pool.set_seqlen_offset(0, 7 + LEN);
+        pool.set_trail(Some(trail(&[1, 0], &[4, 7])?));
+        Ok(pool)
+    }
+
+    #[test]
+    fn rewind_restores_the_kept_position_of_that_row_only() -> Result<()> {
+        let mut pool = after_forward()?;
+        let untouched = slot_values(&pool, 1)?;
+
+        pool.rewind(0, 2)?;
+
+        // Slot 0 is batch row 1, and keeping one of three positions is trail entry 0.
+        let (conv, recurrent) = slot_values(&pool, 0)?;
+        assert!(conv.iter().chain(&recurrent).all(|&v| v == 1.0));
+        assert_eq!(pool.get_seqlen_offset(0), 7 + 1);
+        assert_eq!(slot_values(&pool, 1)?, untouched);
+        assert_eq!(pool.get_seqlen_offset(1), 4 + LEN);
+
+        pool.rewind(1, 1)?;
+        let (conv, recurrent) = slot_values(&pool, 1)?;
+        assert!(conv.iter().chain(&recurrent).all(|&v| v == 10.0));
+        assert_eq!(pool.get_seqlen_offset(1), 4 + 2);
+        Ok(())
+    }
+
+    #[test]
+    fn rewind_of_nothing_needs_no_trail() -> Result<()> {
+        let mut pool = pool()?;
+        pool.rewind(0, 0)
+    }
+
+    #[test]
+    fn rewind_refuses_what_the_trail_does_not_cover() -> Result<()> {
+        let mut bare = pool()?;
+        assert!(bare.rewind(0, 1).is_err(), "no trail");
+
+        let mut pool = after_forward()?;
+        let before = (slot_values(&pool, 0)?, slot_values(&pool, 1)?);
+        assert!(pool.rewind(0, LEN).is_err(), "every position rejected");
+        assert!(pool.rewind(3, 1).is_err(), "slot outside the forward");
+
+        pool.rewind(0, 1)?;
+        let rewound = slot_values(&pool, 0)?;
+        assert!(
+            pool.rewind(0, 1).is_err(),
+            "the trail no longer ends at the slot"
+        );
+        assert_eq!(slot_values(&pool, 0)?, rewound);
+        assert_eq!(slot_values(&pool, 1)?, before.1);
+        Ok(())
+    }
+
+    #[test]
+    fn state_replaced_outside_a_forward_drops_the_trail() -> Result<()> {
+        let mut pool = after_forward()?;
+        pool.reset_slot(1)?;
+        assert!(pool.rewind(0, 1).is_err());
+
+        let mut pool = after_forward()?;
+        pool.free(1);
+        assert!(pool.rewind(0, 1).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn only_the_announced_verify_keeps_a_trail() -> Result<()> {
+        let mut cache = HybridCache::new(
+            HybridCacheConfig {
+                layer_types: vec![HybridLayerType::Recurrent, HybridLayerType::Attention],
+                max_seq_len: 16,
+                recurrent: RecurrentLayerConfig {
+                    conv_dim: CONV.0,
+                    conv_width: CONV.1,
+                    state_dims: STATE.to_vec(),
+                },
+            },
+            DType::F32,
+            &Device::Cpu,
+        )?;
+        assert!(!cache.records_trail(4));
+        cache.expect_verify(Some(4));
+        assert!(cache.records_trail(4));
+        assert!(!cache.records_trail(1) && !cache.records_trail(5));
+        cache.expect_verify(None);
+        assert!(!cache.records_trail(4));
         Ok(())
     }
 }

@@ -532,8 +532,10 @@ pub enum QuantMethodConfig {
     },
     PerTensorFP8 {
         weight: Tensor,
-        weight_scale_inv: Tensor,
-        activation_scale: Option<Tensor>,
+        weight_scale: Tensor,
+        /// The checkpoint's calibrated activation scale, present only when it quantized
+        /// activations too.
+        input_scale: Option<Tensor>,
         bias: Option<Tensor>,
         dequant_dtype: DType,
     },
@@ -552,6 +554,9 @@ pub enum QuantMethodConfig {
         weight: Tensor,
         weight_scale: Tensor,
         weight_scale_2: Option<Tensor>,
+        /// The checkpoint's calibrated activation scale, present only when it was
+        /// quantized for FP4 activations.
+        input_scale: Option<Tensor>,
         bias: Option<Tensor>,
         dequant_dtype: DType,
     },
@@ -911,7 +916,9 @@ impl TryFrom<GgmlDType> for IsqType {
             | GgmlDType::BF16
             | GgmlDType::F32
             | GgmlDType::F16
-            // IQ / ternary / 1-bit / NVFP4 codec types are decode-only, not ISQ targets.
+            // IQ / ternary / 1-bit / FP4 codec types are decode-only, not ISQ targets.
+            | GgmlDType::ROCMFP4
+            | GgmlDType::ROCMFP4_FAST
             | GgmlDType::IQ2_XXS
             | GgmlDType::IQ2_XS
             | GgmlDType::IQ3_XXS

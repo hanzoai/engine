@@ -12,7 +12,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     lora::{LoraConfig, Ordering},
-    paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata},
+    paged_attention::{AttentionImplementation, KvLayers, ModelConfigLike, ModelConfigMetadata},
     pipeline::{
         isq::IsqModelLoader, text_models_inputs_processor::FlashParams, EitherCache, IsqModel,
         ModelForwardContext,
@@ -5490,6 +5490,7 @@ impl DeviceMappedModelLoader for GraniteMoeHybridLoader {
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
         let cfg: crate::models::granite::Config = serde_json::from_str(config)?;
 
+        let attention_layers = cfg.attention_layers();
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
             num_layers: cfg.num_hidden_layers,
@@ -5502,7 +5503,7 @@ impl DeviceMappedModelLoader for GraniteMoeHybridLoader {
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
-        Ok(Box::new(cfg))
+        Ok(Box::new(KvLayers::new(cfg, attention_layers)))
     }
 }
 
@@ -5909,6 +5910,7 @@ impl DeviceMappedModelLoader for Qwen3NextLoader {
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
         let cfg: crate::models::qwen3_next::Config = serde_json::from_str(config)?;
 
+        let attention_layers = cfg.attention_layers();
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
             num_layers: cfg.num_hidden_layers,
@@ -5921,7 +5923,7 @@ impl DeviceMappedModelLoader for Qwen3NextLoader {
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
-        Ok(Box::new(cfg))
+        Ok(Box::new(KvLayers::new(cfg, attention_layers)))
     }
 }
 

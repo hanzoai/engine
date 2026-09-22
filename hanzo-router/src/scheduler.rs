@@ -111,19 +111,38 @@ impl ReplicaSet {
         let inner = self.inner.read().unwrap();
         let mut state = self.scheduler.lock().unwrap();
         state.prune(now);
-        let healthy = |n: &&Arc<Node>| {
+        let live = |n: &&Arc<Node>| {
             n.healthy.load(Ordering::Acquire)
                 && !excluded.contains(&n.replica.id)
                 && (!hints.images || n.replica.vision)
-                && (n.replica.max_context == 0
-                    || hints.required_tokens(&n.replica.id) <= n.replica.max_context)
         };
-        let available =
-            |n: &&Arc<Node>| healthy(n) && n.inflight.load(Ordering::Acquire) < self.slots(n);
+        let fits = |n: &&Arc<Node>| {
+            n.replica.max_context == 0
+                || hints.required_tokens(&n.replica.id) <= n.replica.max_context
+        };
+        let free = |n: &&Arc<Node>| n.inflight.load(Ordering::Acquire) < self.slots(n);
+        // Advertised context is a PREFERENCE, not a gate. While some live replica
+        // advertises enough room the choice is restricted to those; when NONE does,
+        // the request goes to the roomiest replica that is up instead of being
+        // refused. A pool whose big replica is down must still answer: refusing
+        // turned one node's absence into a total outage, which is what the estate
+        // saw as 503 "no available replica for routing hints" on every turn.
+        //
+        // Vision stays a gate: a text-only engine cannot read an image at all, and
+        // the catalog's vision_fallback is the right answer for that case. An
+        // explicit target also stays fail-closed — it names one replica, so
+        // silently sending the request elsewhere would answer a different question.
+        let roomy = inner
+            .nodes
+            .values()
+            .any(|n| live(&n) && fits(&n) && free(&n));
+        let healthy = |n: &&Arc<Node>| live(n) && (!roomy || fits(n));
+        let available = |n: &&Arc<Node>| healthy(n) && free(n);
+        let targetable = |n: &&Arc<Node>| live(n) && fits(n) && free(n);
         let mut selected = None;
         if let Some(target) = &hints.target {
             // A target is a configured ID, never a caller-supplied URL. Fail closed.
-            selected = inner.nodes.get(target).filter(available).cloned();
+            selected = inner.nodes.get(target).filter(targetable).cloned();
             selected.as_ref()?;
         } else if let Some(pin) = hints.session.as_ref().and_then(|s| state.sessions.get(s)) {
             selected = inner
@@ -149,11 +168,19 @@ impl ReplicaSet {
                     .role
                     .as_ref()
                     .is_some_and(|r| settings.roles.contains(r));
+                // Only meaningful once the preference is relaxed: smaller is better,
+                // and an unlimited (0) ceiling is the roomiest there is.
+                let room = if roomy || n.replica.max_context == 0 {
+                    0
+                } else {
+                    usize::MAX - n.replica.max_context
+                };
                 let load = n.inflight.load(Ordering::Acquire) as f64 / self.slots(n) as f64;
                 let allocation = (sessions.get(n.replica.id.as_str()).copied().unwrap_or(0) + 1)
                     as f64
                     / settings.weight as f64;
                 (
+                    room,
                     !cache,
                     !role,
                     load,
@@ -269,10 +296,50 @@ mod tests {
         h.target = None;
         h.approx_tokens = 1_000_000;
         assert_eq!(pick(&p, &h, now).id(), "spark");
+        // Past every advertised ceiling the roomiest replica still answers rather
+        // than the pool refusing: preference, not gate.
         h.approx_tokens += 1;
-        assert!(p.pick_agent(&h, &HashSet::new(), now).is_none());
+        assert_eq!(pick(&p, &h, now).id(), "spark");
+        // The big replica being down is the case that used to 503 every request
+        // whose context exceeded what remained. It now degrades onto evo.
         h.approx_tokens = 176_939;
         p.mark_unhealthy("spark");
+        assert_eq!(pick(&p, &h, now).id(), "evo");
+        // Nothing live is still a refusal — there is no replica to degrade onto.
+        p.mark_unhealthy("evo");
+        assert!(p.pick_agent(&h, &HashSet::new(), now).is_none());
+    }
+
+    #[test]
+    fn context_preference_binds_while_any_replica_has_room() {
+        // The relaxation must not leak into the ordinary case: while spark can hold
+        // the request, a request that does not fit evo must never land there.
+        let mut spark = Replica::new("spark");
+        spark.max_context = 1_000_000;
+        spark.capacity = 4;
+        let mut evo = Replica::new("evo");
+        evo.max_context = 65_536;
+        evo.capacity = 4;
+        let p = ReplicaSet::new([spark, evo], 8);
+        let now = Instant::now();
+        let mut h = hints("big-context");
+        h.approx_tokens = 176_939;
+        for _ in 0..4 {
+            assert_eq!(pick(&p, &h, now).id(), "spark");
+        }
+    }
+
+    #[test]
+    fn an_explicit_target_still_fails_closed_on_context() {
+        // Degradation is for the pool's own choice. A caller naming one replica
+        // gets that replica or an error, never a different one.
+        let mut evo = Replica::new("evo");
+        evo.max_context = 65_536;
+        let p = ReplicaSet::new([evo], 8);
+        let now = Instant::now();
+        let mut h = hints("explicit");
+        h.target = Some("evo".into());
+        h.approx_tokens = 176_939;
         assert!(p.pick_agent(&h, &HashSet::new(), now).is_none());
     }
     #[test]

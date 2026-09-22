@@ -371,7 +371,7 @@ pub(crate) fn build_moe_or_mlp<R: std::io::Seek + std::io::Read>(
 mod tests {
     use super::*;
 
-    // Deterministic N(0,1) sample stream. The CPU backend's Device::set_seed is a no-op (candle's CPU
+    // Deterministic N(0,1) sample stream. The CPU backend's Device::set_seed is a no-op (hanzo-ml's CPU
     // rng is not seedable), so the guards below drive their own seeded rng and build tensors from the
     // values -- otherwise unseeded randn lets a borderline top-k boundary flip under f16 rounding and
     // the guard flakes for reasons unrelated to what it guards.

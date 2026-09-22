@@ -68,12 +68,31 @@ impl AttentionBackend for FlashInferAttentionBackend {
         if !cfg!(feature = "cuda") || !crate::perf_flags::flashinfer_decode_enabled() {
             return false;
         }
-        if spec.kv_heads == 0 || !spec.q_heads.is_multiple_of(spec.kv_heads) {
-            return false;
-        }
-        let q_group = spec.q_heads / spec.kv_heads;
         spec.k_head_dim == spec.v_head_dim
             && matches!(spec.k_head_dim, 64 | 128 | 256 | 512)
-            && FLASHINFER_DECODE_GROUP_SIZES.contains(&q_group)
+            && decode_group_supported(spec.q_heads, spec.kv_heads)
+    }
+}
+
+fn decode_group_supported(q_heads: usize, kv_heads: usize) -> bool {
+    kv_heads != 0
+        && q_heads.is_multiple_of(kv_heads)
+        && FLASHINFER_DECODE_GROUP_SIZES.contains(&(q_heads / kv_heads))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_group_supported;
+
+    #[test]
+    fn decode_groups_match_the_kernel_instantiations() {
+        for group in [1, 2, 3, 4, 6, 8] {
+            assert!(decode_group_supported(group * 2, 2), "group {group}");
+        }
+        for group in [5, 7, 9, 16] {
+            assert!(!decode_group_supported(group * 2, 2), "group {group}");
+        }
+        assert!(!decode_group_supported(24, 5));
+        assert!(!decode_group_supported(24, 0));
     }
 }

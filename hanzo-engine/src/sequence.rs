@@ -1114,6 +1114,7 @@ impl Sequence {
         get_mut_group!(self).total_time = now - self.timestamp;
 
         get_mut_group!(self).total_prompt_toks = self.prompt_len;
+        get_mut_group!(self).total_cached_toks = self.prefix_cache_len;
         get_mut_group!(self).total_toks = self.len();
     }
 
@@ -1435,6 +1436,7 @@ pub struct SequenceGroup {
     n_choices: usize, // The target number of choices to return. Can be decreased if an error is thrown.
     best_of: Option<usize>, // Top n seqs based on cumulative logprobs.
     pub total_prompt_toks: usize,
+    pub total_cached_toks: usize,
     pub total_toks: usize,
     pub total_prompt_time: u128,
     pub total_time: u128,
@@ -1475,6 +1477,7 @@ impl SequenceGroup {
             completion_choices: Vec::new(),
             n_choices,
             total_prompt_toks: 0,
+            total_cached_toks: 0,
             total_toks: 0,
             total_prompt_time: 0,
             total_time: 0,
@@ -1521,6 +1524,7 @@ impl SequenceGroup {
         Usage {
             completion_tokens: self.total_toks.saturating_sub(self.total_prompt_toks),
             prompt_tokens: self.total_prompt_toks,
+            cached_prompt_tokens: self.total_cached_toks,
             total_tokens: self.total_toks,
             avg_tok_per_sec: if self.total_time > 0 {
                 (self.total_toks as f32 / self.total_time as f32) * 1000.

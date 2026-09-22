@@ -20,9 +20,13 @@ use crate::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
     layers::{self, GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
-    models::gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode},
+    models::gdn::{
+        forward_pooled, GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode, PoolSlots,
+    },
     moe::{MoEExperts, MoEExpertsConfig},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        AttentionImplementation, KvLayers, ModelConfigLike, ModelConfigMetadata, PagedAttention,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, ModelForwardContext, NormalLoadingMetadata,
@@ -509,6 +513,7 @@ pub struct Qwen3_5MoeTextModel {
     pub(super) norm: GemmaRmsNorm,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
+    kv_layers: Vec<usize>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     lm_head: Arc<dyn QuantMethod>,
     pub(super) cache: EitherCache,
@@ -712,6 +717,7 @@ impl Qwen3_5MoeTextModel {
             norm,
             layers,
             layer_types: layer_types.clone(),
+            kv_layers: cfg.attention_layers(),
             lm_head,
             cache: EitherCache::Hybrid(pipeline_cache),
             max_seq_len: cfg.max_position_embeddings,
@@ -737,6 +743,10 @@ impl Qwen3_5MoeTextModel {
         self.embed_tokens.forward(input_ids)
     }
 
+    pub(super) fn model_config_like(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        Arc::new(KvLayers::new(self.cfg.clone(), self.kv_layers.clone()))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn forward_embeds(
         &self,
@@ -749,6 +759,7 @@ impl Qwen3_5MoeTextModel {
         deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
         let mut hybrid_cache = self.cache.hybrid();
+        let trail = hybrid_cache.records_trail(xs.dim(1)?);
         let state_indices = hybrid_cache.state_indices().cloned();
         if self
             .layer_types
@@ -804,6 +815,9 @@ impl Qwen3_5MoeTextModel {
             None
         };
 
+        // The paged cache holds one K/V pair per attention layer, so an attention layer reads it
+        // at its ordinal among attention layers, not at its decoder index.
+        let mut kv_layer = 0;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
 
@@ -815,50 +829,20 @@ impl Qwen3_5MoeTextModel {
                             &attention_mask.get(xs.device()),
                             &cos_sin,
                             kv_cache,
-                            ctx.paged_layer(i),
+                            ctx.paged_layer(kv_layer),
                             ctx.flash_params(),
                         )?;
                     }
+                    kv_layer += 1;
                 }
                 LayerType::LinearAttention => {
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {
                         let indices = state_indices.as_ref().expect(
                             "checked above: linear-attention layers require recurrent indices",
                         );
-                        let indices_vec: Vec<u32> = indices.to_vec1()?;
-                        if indices_vec.is_empty() {
-                            hanzo_ml::bail!("Hybrid recurrent state indices are empty.");
-                        }
-
-                        let first_offset = pool.get_seqlen_offset(indices_vec[0] as usize);
-                        if indices_vec
-                            .iter()
-                            .any(|&idx| pool.get_seqlen_offset(idx as usize) != first_offset)
-                        {
-                            hanzo_ml::bail!(
-                                "Hybrid recurrent seqlen offsets diverged within a batch for layer {i}."
-                            );
-                        }
-
-                        let conv_state = pool.gather_conv_state(indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(indices)?;
-
-                        let mut gdn_cache = GdnLayerCache {
-                            conv_state,
-                            recurrent_state,
-                            seqlen_offset: first_offset,
-                        };
-
-                        xs = layer.forward_linear(&xs, &mut gdn_cache)?;
-
-                        pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
-                        pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
-
-                        let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
-                        for &idx in &indices_vec {
-                            let updated = pool.get_seqlen_offset(idx as usize) + delta;
-                            pool.set_seqlen_offset(idx as usize, updated);
-                        }
+                        xs = forward_pooled(pool, PoolSlots::Many(indices), i, trail, |cache| {
+                            layer.forward_linear(&xs, cache)
+                        })?;
                     } else {
                         hanzo_ml::bail!(
                             "Hybrid cache layer {i} is not recurrent for a linear-attention layer."
@@ -957,27 +941,7 @@ impl IsqModel for Qwen3_5MoeTextModel {
                     uvb_l.pp("self_attn").pp("k_norm").add(&attn.k_norm);
                 }
                 LayerImpl::LinearAttention(gdn) => {
-                    uvb_l
-                        .pp("linear_attn")
-                        .pp("in_proj_qkvz")
-                        .add_tensor("weight", gdn.in_proj_qkvz.weight().clone());
-                    uvb_l
-                        .pp("linear_attn")
-                        .pp("in_proj_ba")
-                        .add_tensor("weight", gdn.in_proj_ba.weight().clone());
-                    uvb_l
-                        .pp("linear_attn")
-                        .add_tensor("conv1d.weight", gdn.conv1d_weight.clone());
-                    uvb_l
-                        .pp("linear_attn")
-                        .add_tensor("dt_bias", gdn.dt_bias.clone());
-                    uvb_l
-                        .pp("linear_attn")
-                        .add_tensor("A_log", gdn.a_log.clone());
-                    uvb_l
-                        .pp("linear_attn")
-                        .pp("norm")
-                        .add_tensor("weight", gdn.norm.weight.clone());
+                    gdn.add_residual_tensors(&uvb_l.pp("linear_attn"));
                 }
             }
 

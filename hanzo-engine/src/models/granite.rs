@@ -23,7 +23,9 @@ use crate::{
     },
     layers::{embedding, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        AttentionImplementation, KvLayers, ModelConfigLike, ModelConfigMetadata, PagedAttention,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, ForwardMaskCache, IsqModel, KvCache, ModelForwardContext,
@@ -147,6 +149,17 @@ impl Config {
         } else {
             self.layer_types.clone()
         }
+    }
+
+    /// Decoder layers that hold a KV cache, in cache order: the Mamba layers keep their state in
+    /// the recurrent pool instead.
+    pub fn attention_layers(&self) -> Vec<usize> {
+        self.layer_types()
+            .into_iter()
+            .enumerate()
+            .filter(|(_, t)| matches!(t, GraniteLayerType::Attention))
+            .map(|(i, _)| i)
+            .collect()
     }
 
     // Mamba helper methods
@@ -946,7 +959,9 @@ impl MambaLayer {
         let mut conv_outputs = Vec::with_capacity(seq_len);
         for i in 0..seq_len {
             let window = padded_t.narrow(2, i, self.conv_kernel_size)?;
-            let out = (window * weight.unsqueeze(0)?)?.sum(hanzo_ml::D::Minus1)?;
+            let out = window
+                .broadcast_mul(&weight.unsqueeze(0)?)?
+                .sum(hanzo_ml::D::Minus1)?;
             conv_outputs.push(out);
         }
         let mut hidden_states_b_c = Tensor::stack(&conv_outputs, 1)?; // (batch, seq_len, conv_dim)
@@ -1256,7 +1271,7 @@ impl CausalSelfAttention {
         attention_mask: &AttentionMask,
         kv_cache: &mut KvCache,
         ctx: &mut ModelForwardContext<'_>,
-        layer_idx: usize,
+        kv_layer: usize,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
@@ -1289,7 +1304,7 @@ impl CausalSelfAttention {
             (q, k)
         };
 
-        let metadata = ctx.paged_layer(layer_idx);
+        let metadata = ctx.paged_layer(kv_layer);
         let flash_params = ctx.flash_params();
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
@@ -1433,13 +1448,13 @@ impl Block {
         attention_mask: &AttentionMask,
         kv_cache: &mut KvCache,
         ctx: &mut ModelForwardContext<'_>,
-        layer_idx: usize,
+        kv_layer: usize,
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
         let attn_out = self
             .attn
-            .forward(&x, attention_mask, kv_cache, ctx, layer_idx)?;
+            .forward(&x, attention_mask, kv_cache, ctx, kv_layer)?;
         // Scale residual connection
         let attn_out = scale_tensor(attn_out, self.residual_multiplier)?;
         let x = (attn_out + residual)?;
@@ -1607,6 +1622,7 @@ pub struct GraniteMoeHybrid {
     wte: Embedding,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<GraniteLayerType>,
+    kv_layers: Vec<usize>,
     ln_f: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
     hybrid_cache: Arc<Mutex<GraniteHybridCache>>,
@@ -1840,6 +1856,7 @@ impl GraniteMoeHybrid {
             wte,
             layers,
             layer_types,
+            kv_layers: cfg.attention_layers(),
             ln_f,
             lm_head,
             hybrid_cache,
@@ -1901,6 +1918,9 @@ impl GraniteMoeHybrid {
         };
         let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
 
+        // The paged cache holds one K/V pair per attention layer, so an attention layer reads it
+        // at its ordinal among attention layers, not at its decoder index.
+        let mut kv_layer = 0;
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             x = self.mapper.map(x, layer_idx)?;
 
@@ -1910,13 +1930,14 @@ impl GraniteMoeHybrid {
                         pipeline_cache.get_mut(layer_idx)
                     {
                         let mask_for_layer = &mask.get(x.device());
-                        x = block.forward(&x, mask_for_layer, kv_cache, ctx, layer_idx)?;
+                        x = block.forward(&x, mask_for_layer, kv_cache, ctx, kv_layer)?;
                     } else if let GraniteLayerCache::Attention(kv_cache) =
                         &mut internal_cache.caches[layer_idx]
                     {
                         let mask_for_layer = &mask.get(x.device());
-                        x = block.forward(&x, mask_for_layer, kv_cache, ctx, layer_idx)?;
+                        x = block.forward(&x, mask_for_layer, kv_cache, ctx, kv_layer)?;
                     }
+                    kv_layer += 1;
                 }
                 DecoderLayer::Mamba(block) => {
                     // Use pooled recurrent state whenever state indices are available.
@@ -2111,6 +2132,9 @@ impl NormalModel for GraniteMoeHybrid {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        Arc::new(KvLayers::new(self.cfg.clone(), self.kv_layers.clone()))
     }
 }
 

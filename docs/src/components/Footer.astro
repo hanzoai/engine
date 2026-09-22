@@ -1,0 +1,52 @@
+---
+// One page per claim, linked from the foot of every page, never from body copy.
+import Default from '@astrojs/starlight/components/Footer.astro';
+
+const claims = [
+	['Prefill by prompt length', '/hanzo/benchmarks/prefill-by-prompt-length/'],
+	['Decode throughput', '/hanzo/benchmarks/decode-throughput/'],
+	['Time to first token', '/hanzo/benchmarks/time-to-first-token/'],
+	['Four concurrent clients', '/hanzo/benchmarks/four-client-concurrency/'],
+	['The deepest prompts', '/hanzo/benchmarks/long-context-124k/'],
+	['Quality at temperature zero', '/hanzo/benchmarks/quality-at-temperature-zero/'],
+];
+---
+
+<Default><slot /></Default>
+
+<nav class="measured-claims" aria-labelledby="measured-claims-heading">
+	<h2 id="measured-claims-heading">Measured claims</h2>
+	<ul>
+		{claims.map(([title, href]) => (
+			<li><a href={href}>{title}</a></li>
+		))}
+	</ul>
+</nav>
+
+<style>
+	.measured-claims {
+		border-top: 1px solid var(--sl-color-gray-5);
+		margin-top: 1.5rem;
+		padding-top: 1rem;
+	}
+	.measured-claims h2 {
+		font-size: var(--sl-text-xs);
+		font-weight: 600;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--sl-color-gray-3);
+		margin: 0 0 0.5rem;
+	}
+	.measured-claims ul {
+		list-style: none;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem 1rem;
+		margin: 0;
+		padding: 0;
+	}
+	.measured-claims a {
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-2);
+	}
+</style>

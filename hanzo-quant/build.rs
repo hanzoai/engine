@@ -41,6 +41,17 @@ fn cuda_version_from_build_system() -> (usize, usize) {
     }
 }
 
+/// CUTLASS commit carrying the sm_120 block-scaled collective this kernel builds on.
+#[cfg(feature = "cuda")]
+const NVFP4_CUTLASS_COMMIT: &str = "b46b16d003484063bca4ed365e44095c4c6ed633";
+
+/// Block-scaled NVFP4 needs Blackwell tensor cores and the CUDA 13 toolkit that
+/// can target them. Measured on a GB10 with CUDA 13.0.
+#[cfg(feature = "cuda")]
+fn nvfp4_cutlass_supported(cuda_major: usize, compute_cap: usize, target: &str) -> bool {
+    cuda_major >= 13 && compute_cap == 121 && target.contains("linux")
+}
+
 fn main() -> Result<(), String> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_marlin_kernels)");
@@ -51,6 +62,7 @@ fn main() -> Result<(), String> {
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_wmma_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_nvfp4_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_nvfp4_wmma_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_nvfp4_cutlass_kernels)");
 
     #[cfg(feature = "cuda")]
     {
@@ -95,11 +107,14 @@ fn main() -> Result<(), String> {
         println!("cargo:rustc-cfg=has_mxfp4_kernels");
         println!("cargo:rustc-cfg=has_nvfp4_kernels");
 
-        let excluded_files = if cc_over_80 {
+        let mut excluded_files = if cc_over_80 {
             vec!["dummy_*.cu", "*_dummy.cu"]
         } else {
             vec!["marlin_*.cu", "*_fp8.cu", "*_fp8_gemm.cu", "*_wmma.cu"]
         };
+        // The block-scaled path needs CUTLASS headers and sm_121a, so it has its own builder.
+        excluded_files.push("nvfp4_cutlass.cu");
+        excluded_files.push("nvfp4_quantize.cu");
         builder = builder.exclude(&excluded_files);
 
         // https://github.com/hanzoai/engine/issues/286
@@ -109,6 +124,7 @@ fn main() -> Result<(), String> {
         }
 
         let target = std::env::var("TARGET").unwrap();
+        let (cuda_major, cuda_minor) = cuda_version_from_build_system();
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
         // https://github.com/hanzoai/engine/issues/588
         let out_file = if target.contains("msvc") {
@@ -137,22 +153,54 @@ fn main() -> Result<(), String> {
             println!("cargo:rustc-link-lib=dylib=stdc++");
         }
 
-        let (major, minor) = cuda_version_from_build_system();
-        println!("cargo:rustc-cfg=feature=\"cuda-{major}0{minor}0\"");
+        println!("cargo:rustc-cfg=feature=\"cuda-{cuda_major}0{cuda_minor}0\"");
+
+        if nvfp4_cutlass_supported(cuda_major, compute_cap, &target) {
+            let mut nvfp4_builder = cudaforge::KernelBuilder::new()
+                .source_files([
+                    "kernels/nvfp4_cutlass/nvfp4_cutlass.cu",
+                    "kernels/nvfp4_cutlass/nvfp4_quantize.cu",
+                ])
+                .watch(["kernels/nvfp4_cutlass"])
+                .out_dir(build_dir.clone())
+                // Block-scaled MMA is a family-specific feature: plain sm_121 will not do.
+                .compute_cap_arch("121a")
+                .arg("-std=c++17")
+                .arg("-O3")
+                .arg("-U__CUDA_NO_BFLOAT16_CONVERSIONS__")
+                .arg("--expt-relaxed-constexpr")
+                .arg("--expt-extended-lambda")
+                // The epilogue folds the two global scales with explicit round-to-nearest
+                // multiplies, which a contraction would silently change.
+                .arg("--fmad=false")
+                .arg("--compiler-options")
+                .arg("-fPIC")
+                .with_cutlass(Some(NVFP4_CUTLASS_COMMIT));
+            if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
+                nvfp4_builder = nvfp4_builder
+                    .arg("--compiler-options")
+                    .arg(cuda_nvcc_flags_env);
+            }
+            nvfp4_builder
+                .build_lib(build_dir.join("libhanzonvfp4.a"))
+                .expect("Build hanzo NVFP4 block-scaled lib failed!");
+            println!("cargo:rustc-link-lib=hanzonvfp4");
+            println!("cargo:rustc-cfg=has_nvfp4_cutlass_kernels");
+        }
 
         // cuTile needs CUDA >= 13.1: its JIT toolchain (`tileiras`) ships with 13.1+, not 13.0, so a
         // 13.0 build compiles but fails to JIT at runtime.
-        let cuda_ge_131 = major > 13 || (major == 13 && minor >= 1);
+        let cuda_ge_131 = cuda_major > 13 || (cuda_major == 13 && cuda_minor >= 1);
         if std::env::var("CARGO_FEATURE_CUTILE").is_ok() {
             if !cuda_ge_131 {
                 panic!(
-                    "the `cutile` feature requires CUDA >= 13.1 to build (found {major}.{minor}); \
+                    "the `cutile` feature requires CUDA >= 13.1 to build (found {cuda_major}.{cuda_minor}); \
                      build without `--features cutile`"
                 );
             }
         } else if cuda_ge_131 {
             println!(
-                "cargo:warning=CUDA {major}.{minor} detected: enable the `cutile` feature for \
+                "cargo:warning=CUDA {cuda_major}.{cuda_minor} detected: enable the `cutile` feature for \
                  optimized kernels."
             );
         }
@@ -272,29 +320,12 @@ fn main() -> Result<(), String> {
             for metal_file in HEADER_SOURCES {
                 compile_air_cmd.arg(sources.join(format!("{metal_file}.metal")));
             }
-            compile_air_cmd
-                .spawn()
-                .expect("Failed to compile air")
-                .wait()
-                .expect("Failed to compile air");
-
-            let mut child = compile_air_cmd.spawn().expect("Failed to compile air");
-
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    if !status.success() {
-                        panic!("Compiling metal -> air failed. Exit with status: {status}")
-                    }
-                }
-                Ok(None) => {
-                    let status = child
-                        .wait()
-                        .expect("Compiling metal -> air failed while waiting for result");
-                    if !status.success() {
-                        panic!("Compiling metal -> air failed. Exit with status: {status}")
-                    }
-                }
-                Err(e) => panic!("Compiling metal -> air failed: {e:?}"),
+            // Run the Metal compiler once and fail the build on a nonzero exit.
+            let status = compile_air_cmd
+                .status()
+                .expect("Failed to invoke metal compiler (metal -> air)");
+            if !status.success() {
+                panic!("Compiling metal -> air failed. Exit with status: {status}")
             }
 
             // Compile air to metallib
@@ -305,7 +336,14 @@ fn main() -> Result<(), String> {
             };
             let metallib = out_dir.join(lib_name);
             let mut compile_metallib_cmd = Command::new("xcrun");
-            compile_metallib_cmd.arg("metal").arg("-o").arg(&metallib);
+            // Keep the link step on the same SDK/std as the AIR compile step.
+            compile_metallib_cmd
+                .arg("--sdk")
+                .arg(platform.sdk())
+                .arg("metal")
+                .arg(format!("-std={}", platform.metal_std()))
+                .arg("-o")
+                .arg(&metallib);
 
             for metal_file in METAL_SOURCES {
                 compile_metallib_cmd.arg(out_dir.join(format!("{metal_file}.air")));
@@ -314,25 +352,11 @@ fn main() -> Result<(), String> {
                 compile_metallib_cmd.arg(out_dir.join(format!("{metal_file}.air")));
             }
 
-            let mut child = compile_metallib_cmd
-                .spawn()
-                .expect("Failed to compile air -> metallib");
-
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    if !status.success() {
-                        panic!("Compiling air -> metallib failed. Exit with status: {status}")
-                    }
-                }
-                Ok(None) => {
-                    let status = child
-                        .wait()
-                        .expect("Compiling air -> metallib failed while waiting for result");
-                    if !status.success() {
-                        panic!("Compiling air -> metallib failed. Exit with status: {status}")
-                    }
-                }
-                Err(e) => panic!("Compiling air -> metallib failed: {e:?}"),
+            let status = compile_metallib_cmd
+                .status()
+                .expect("Failed to invoke metal linker (air -> metallib)");
+            if !status.success() {
+                panic!("Compiling air -> metallib failed. Exit with status: {status}")
             }
 
             Ok(())

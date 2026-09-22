@@ -114,7 +114,7 @@ impl DCUpBlock {
 }
 
 // Depthwise conv2d (groups == channels), square kernel k, stride 1, pad p, vectorised across channels.
-// candle lowers a grouped conv to one conv per group (up to 8192 launches in stage3); this is the same
+// hanzo-ml lowers a grouped conv to one conv per group (up to 8192 launches in stage3); this is the same
 // cross-correlation expressed as k*k shifted channel-broadcast multiply-adds. x [B,C,H,W], w [1,C,k,k].
 fn depthwise_conv2d(x: &Tensor, w: &Tensor, p: usize) -> Result<Tensor> {
     let (_, _, h, wd) = x.dims4()?;
@@ -400,7 +400,7 @@ mod tests {
     use super::*;
     use hanzo_ml::Device;
 
-    // The depthwise_conv2d reformulation must match candle's grouped Conv2d for the kernels stage3 uses:
+    // The depthwise_conv2d reformulation must match hanzo-ml's grouped Conv2d for the kernels stage3 uses:
     // GlumbConv conv_depth (k3/p1) and MultiscaleProj proj_in (k5/p2).
     #[test]
     fn depthwise_conv2d_matches_grouped_conv() {

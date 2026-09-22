@@ -562,6 +562,14 @@ pub struct GeneralMetadata {
 }
 
 impl GeneralMetadata {
+    /// The longest sequence this pipeline can hold: the model's window, or the paged KV pool when
+    /// that is smaller. A prompt past it can never be scheduled, so admission refuses it.
+    pub fn context_len(&self) -> usize {
+        self.cache_config.as_ref().map_or(self.max_seq_len, |c| {
+            self.max_seq_len.min(c.block_size * c.num_gpu_blocks)
+        })
+    }
+
     pub fn tok_env(&self) -> Option<TokEnv> {
         self.llg_factory.as_ref().map(|f| f.tok_env().clone())
     }
@@ -848,6 +856,24 @@ impl ForwardInputsResult {
 pub(crate) struct FileListCache {
     files: Vec<String>,
 }
+/// Tell the target what the next forward is: the sequences it runs and, for a hybrid target,
+/// whether it verifies staged drafts, which is when the recurrent layers must keep a trail.
+fn announce_forward<P: Pipeline + ?Sized>(
+    pipeline: &P,
+    input_seqs: &[&mut Sequence],
+    seq_indices: &[usize],
+) {
+    let ids: Vec<usize> = seq_indices
+        .iter()
+        .map(|&idx| *input_seqs[idx].id())
+        .collect();
+    pipeline.note_forward_sequences(&ids);
+    if pipeline.cache().is_hybrid() {
+        let verify_len =
+            crate::speculative::staging::staged_batch_width(input_seqs).map(|width| width + 1);
+        pipeline.cache().hybrid().expect_verify(verify_len);
+    }
+}
 
 #[async_trait::async_trait]
 pub trait Pipeline:
@@ -864,6 +890,10 @@ pub trait Pipeline:
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, hanzo_ml::Error>;
+
+    /// Names the sequences the next `forward_inputs` call runs. A target that keeps
+    /// per-sequence speculative state attributes it by these ids; the default ignores them.
+    fn note_forward_sequences(&self, _seq_ids: &[usize]) {}
 
     fn attach_speculative(
         &mut self,
@@ -969,6 +999,7 @@ pub trait Pipeline:
                         }
                     }
 
+                    announce_forward(self, input_seqs, &seq_indices);
                     let start = Instant::now();
                     let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
                     let end = Instant::now();
@@ -1247,7 +1278,7 @@ pub trait Pipeline:
                 let chunk_size = if is_prompt
                     && !return_raw_logits
                     && !self.get_metadata().is_xlora
-                    && self.device().is_cuda()
+                    && (self.device().is_cuda() || self.device().is_rocm())
                 {
                     Some(DEFAULT_PAGED_PREFILL_CHUNK_SIZE)
                 } else {
@@ -1365,6 +1396,7 @@ pub trait Pipeline:
                             seq_indices,
                         } = inputs.map_err(hanzo_ml::Error::msg)?;
 
+                        announce_forward(self, input_seqs, &seq_indices);
                         let start = Instant::now();
                         let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
                         let end = Instant::now();
