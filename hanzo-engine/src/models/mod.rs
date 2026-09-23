@@ -16,6 +16,7 @@ pub(crate) mod glm5_moe;
 pub(crate) mod gpt2;
 pub(crate) mod gpt_oss;
 pub(crate) mod granite;
+pub(crate) mod hyper;
 pub(crate) mod llada;
 pub(crate) mod llama;
 pub(crate) mod llama_train;
