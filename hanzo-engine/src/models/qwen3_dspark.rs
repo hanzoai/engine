@@ -593,7 +593,9 @@ impl SpeculativeProposer for DsparkProposer {
         // decodes those sequences one token at a time.
         let stand_down = || {
             Ok(SpeculativeProposalBatch::new(vec![
-                SpeculativeProposal::new(Vec::new());
+                SpeculativeProposal::new(
+                    Vec::new()
+                );
                 batch
             ]))
         };

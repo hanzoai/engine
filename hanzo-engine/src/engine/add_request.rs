@@ -322,7 +322,10 @@ impl Engine {
         if matches!(
             get_mut_arcmutex!(self.pipeline).category(),
             ModelCategory::Text | ModelCategory::Multimodal { .. } | ModelCategory::Embedding
-        ) && prompt_tokens.len() > get_mut_arcmutex!(self.pipeline).get_metadata().context_len()
+        ) && prompt_tokens.len()
+            > get_mut_arcmutex!(self.pipeline)
+                .get_metadata()
+                .context_len()
         {
             // text/vision => truncate from start
             // embedding => truncate from end
@@ -341,7 +344,9 @@ impl Engine {
                 ModelCategory::Text | ModelCategory::Multimodal { .. }
             ) {
                 let prompt_len = prompt_tokens.len();
-                let max_len = get_mut_arcmutex!(self.pipeline).get_metadata().context_len();
+                let max_len = get_mut_arcmutex!(self.pipeline)
+                    .get_metadata()
+                    .context_len();
                 let currently_over = prompt_len - max_len;
 
                 // Reserve space for generation tokens
@@ -364,7 +369,9 @@ impl Engine {
                 warn!("Prompt for request {} was {currently_over} tokens over the model maximum length. The first {slice_start} tokens were truncated to make space for generation.", request.id);
             } else {
                 let prompt_len = prompt_tokens.len();
-                let max_len = get_mut_arcmutex!(self.pipeline).get_metadata().context_len();
+                let max_len = get_mut_arcmutex!(self.pipeline)
+                    .get_metadata()
+                    .context_len();
                 let currently_over = prompt_len - max_len;
 
                 prompt_tokens = prompt_tokens[..max_len].to_vec();

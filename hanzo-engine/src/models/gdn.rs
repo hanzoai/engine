@@ -545,7 +545,6 @@ fn recurrence_cuda(
 
     let (q_bh, k_bh, v_bh, g_bh, beta_bh, mut s) = recurrence_flatten(q, k, v, g, beta, state)?;
     let out_bh = if q.dim(1)? >= CHUNK_THRESHOLD {
-
         crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
             &q_bh, &k_bh, &v_bh, &g_bh, &beta_bh, &mut s,
         )?
@@ -1456,7 +1455,9 @@ mod tests {
             dt_bias: synthetic(num_v_heads, 34, &dev)?,
             a_log: synthetic(num_v_heads, 35, &dev)?,
             norm: RmsNormGated::from_weight(synthetic(head_v_dim, 36, &dev)?, 1e-6),
-            out_proj: unquant(synthetic(hidden * value_dim, 37, &dev)?.reshape((hidden, value_dim))?)?,
+            out_proj: unquant(
+                synthetic(hidden * value_dim, 37, &dev)?.reshape((hidden, value_dim))?,
+            )?,
             num_k_heads,
             num_v_heads,
             head_k_dim,
@@ -1506,7 +1507,10 @@ mod tests {
             .zip(&got)
             .fold(0f32, |acc, (w, g)| acc.max((w - g).abs()));
         eprintln!("[gdn chunked-vs-contiguous] max_abs={worst:.3e}");
-        assert!(worst < 1e-5, "chunked prefill != contiguous, max_abs={worst}");
+        assert!(
+            worst < 1e-5,
+            "chunked prefill != contiguous, max_abs={worst}"
+        );
         Ok(())
     }
 
@@ -1591,8 +1595,11 @@ mod tests {
         };
 
         let (prompt_len, drafted, accepted) = (5usize, 4usize, 2usize);
-        let all = synthetic((prompt_len + drafted) * hidden, 58, &dev)?
-            .reshape((1, prompt_len + drafted, hidden))?;
+        let all = synthetic((prompt_len + drafted) * hidden, 58, &dev)?.reshape((
+            1,
+            prompt_len + drafted,
+            hidden,
+        ))?;
         let draft = all.narrow(1, prompt_len, drafted)?;
 
         let mut cache = GdnLayerCache {
@@ -2271,11 +2278,17 @@ mod tests {
         let k = on(gen(batch * seq * nvh * hkd, 2), (batch, seq, nvh, hkd))?;
         let v = on(gen(batch * seq * nvh * hvd, 3), (batch, seq, nvh, hvd))?;
         let g = on3(
-            gen(batch * seq * nvh, 4).iter().map(|x| x * 0.5 - 0.5).collect(),
+            gen(batch * seq * nvh, 4)
+                .iter()
+                .map(|x| x * 0.5 - 0.5)
+                .collect(),
             (batch, seq, nvh),
         )?;
         let beta = on3(
-            gen(batch * seq * nvh, 5).iter().map(|x| (x + 1.0) * 0.5).collect(),
+            gen(batch * seq * nvh, 5)
+                .iter()
+                .map(|x| (x + 1.0) * 0.5)
+                .collect(),
             (batch, seq, nvh),
         )?;
         let cpu = |t: &Tensor| -> Result<Tensor> { t.to_device(&Device::Cpu) };
@@ -2299,7 +2312,10 @@ mod tests {
             .zip(&b)
             .map(|(x, y)| (x - y).abs() / y.abs().max(1e-3))
             .fold(0f32, f32::max);
-        assert!(max_rel < 1e-4, "gdn_scan_rocm vs portable max_rel {max_rel}");
+        assert!(
+            max_rel < 1e-4,
+            "gdn_scan_rocm vs portable max_rel {max_rel}"
+        );
 
         let sf = state_fused.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
         let sr = state_ref.to_vec1::<f32>()?;
@@ -2308,7 +2324,10 @@ mod tests {
             .zip(&sr)
             .map(|(x, y)| (x - y).abs() / y.abs().max(1e-3))
             .fold(0f32, f32::max);
-        assert!(state_rel < 1e-4, "gdn_scan_rocm state divergence {state_rel}");
+        assert!(
+            state_rel < 1e-4,
+            "gdn_scan_rocm state divergence {state_rel}"
+        );
         Ok(())
     }
 

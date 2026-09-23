@@ -411,7 +411,11 @@ mod tests {
             rows.iter_mut().for_each(|r| r.sort_unstable());
             Ok(rows)
         };
-        assert_eq!(set(&logits_f32)?, set(&logits_f16)?, "f16 router changed top-{top_k} routing");
+        assert_eq!(
+            set(&logits_f32)?,
+            set(&logits_f16)?,
+            "f16 router changed top-{top_k} routing"
+        );
         Ok(())
     }
 
