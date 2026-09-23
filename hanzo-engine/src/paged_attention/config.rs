@@ -97,12 +97,20 @@ pub trait ModelConfigLike {
         true
     }
     /// The decoder layers that hold a paged K/V pair, in cache order. The cache holds one K/V
-    /// tensor per entry, shaped and placed from that layer, and an attention layer reaches its
-    /// pair by its position here. Hybrids override this with their attention layers: linear
-    /// layers keep their state in the recurrent pool and never touch the paged cache. A proposer
-    /// head appends its own layer after them.
+    /// tensor per entry, shaped from that layer and placed with its
+    /// [`kv_reader`](Self::kv_reader), and an attention layer reaches its pair by its position
+    /// here. Hybrids override this with their attention layers: linear layers keep their state in
+    /// the recurrent pool and never touch the paged cache. A proposer head appends its own layer
+    /// after them.
     fn kv_layers(&self) -> Vec<usize> {
         (0..self.num_layers()).collect()
+    }
+    /// The decoder layer that reads cache entry `layer_idx`, whose device the entry lives on. A
+    /// decoder layer reads its own entry. An entry past the decoder depth -- a proposer head -- has
+    /// no decoder layer and lives on the base device; a config that appends an entry some decoder
+    /// layer reads, such as a per-layer side cache, names that layer here.
+    fn kv_reader(&self, layer_idx: usize) -> Option<usize> {
+        (layer_idx < self.num_layers()).then_some(layer_idx)
     }
     fn attention_layer_spec(&self, layer_idx: usize) -> AttentionLayerSpec {
         AttentionLayerSpec {
@@ -124,8 +132,29 @@ pub trait ModelConfigLike {
     fn kv_cache_layout_for_layer(&self, layer_idx: usize) -> KvCacheLayout {
         select_kv_cache_layout_for_layer(KvCacheLayout::Standard, self, layer_idx)
     }
+    /// Elements one token takes in cache entry `layer_idx`, from that layer's own spec: K and V
+    /// each at the wider head dim, or the latent row of an MLA layout.
+    fn kv_cache_elements_per_token_for_layer(&self, layer_idx: usize) -> usize {
+        match self.kv_cache_layout_for_layer(layer_idx) {
+            KvCacheLayout::Standard
+            | KvCacheLayout::StandardNoFlashInfer
+            | KvCacheLayout::FlashInferHnd => {
+                let spec = self.attention_layer_spec(layer_idx);
+                2 * spec.kv_heads * spec.k_head_dim.max(spec.v_head_dim)
+            }
+            KvCacheLayout::Mla {
+                kv_lora_rank,
+                kpe_head_dim,
+            } => kv_lora_rank + kpe_head_dim,
+        }
+    }
+    /// Elements one token takes across the whole cache: every entry of
+    /// [`kv_layers`](Self::kv_layers) at its own layer's size.
     fn kv_cache_elements_per_token(&self) -> usize {
-        2 * self.num_kv_heads() * self.k_head_dim().max(self.v_head_dim())
+        self.kv_layers()
+            .into_iter()
+            .map(|layer_idx| self.kv_cache_elements_per_token_for_layer(layer_idx))
+            .sum()
     }
 }
 
@@ -190,19 +219,6 @@ impl ModelConfigLike for ModelConfigMetadata {
     fn kv_cache_layout_for_layer(&self, layer_idx: usize) -> KvCacheLayout {
         select_kv_cache_layout_for_layer(self.kv_cache_layout, self, layer_idx)
     }
-    fn kv_cache_elements_per_token(&self) -> usize {
-        match self.kv_cache_layout() {
-            KvCacheLayout::Standard
-            | KvCacheLayout::StandardNoFlashInfer
-            | KvCacheLayout::FlashInferHnd => {
-                2 * self.num_kv_heads * self.k_head_dim.max(self.v_head_dim)
-            }
-            KvCacheLayout::Mla {
-                kv_lora_rank,
-                kpe_head_dim,
-            } => kv_lora_rank + kpe_head_dim,
-        }
-    }
 }
 
 /// A config whose model holds a paged K/V pair at only some of its decoder layers. Hybrids build
@@ -223,6 +239,9 @@ impl<C> KvLayers<C> {
 impl<C: ModelConfigLike> ModelConfigLike for KvLayers<C> {
     fn kv_layers(&self) -> Vec<usize> {
         self.layers.clone()
+    }
+    fn kv_reader(&self, layer_idx: usize) -> Option<usize> {
+        self.inner.kv_reader(layer_idx)
     }
     fn max_seq_len(&self) -> usize {
         self.inner.max_seq_len()
@@ -272,7 +291,7 @@ impl<C: ModelConfigLike> ModelConfigLike for KvLayers<C> {
     fn kv_cache_layout_for_layer(&self, layer_idx: usize) -> KvCacheLayout {
         self.inner.kv_cache_layout_for_layer(layer_idx)
     }
-    fn kv_cache_elements_per_token(&self) -> usize {
-        self.inner.kv_cache_elements_per_token()
+    fn kv_cache_elements_per_token_for_layer(&self, layer_idx: usize) -> usize {
+        self.inner.kv_cache_elements_per_token_for_layer(layer_idx)
     }
 }

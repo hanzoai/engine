@@ -1298,10 +1298,12 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
     fn build_speculative_verify_inputs(
         &self,
         input_meta: InputMetadata,
+        prior: Vec<Vec<u32>>,
     ) -> hanzo_ml::Result<Box<dyn Any>> {
         Ok(Box::new(ModelInputs {
             input_ids: input_meta.input,
             input_ids_full: None,
+            prior,
             seqlen_offsets: input_meta.positions,
             seqlen_offsets_full: None,
             context_lens: input_meta.context_lens,
@@ -1637,6 +1639,7 @@ impl Pipeline for NormalPipeline {
         let ModelInputs {
             input_ids,
             input_ids_full,
+            prior: _,
             seqlen_offsets,
             seqlen_offsets_full,
             context_lens,

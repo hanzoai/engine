@@ -95,13 +95,11 @@ impl CacheEngine {
     ) -> Result<Vec<KVCache>> {
         let mut gpu_cache = Vec::new();
 
-        // One K/V pair per cached layer, on that layer's own device: for a hybrid only the
-        // attention layers are here, and they reach their pair by its position in this list.
+        // One K/V pair per cached layer, on the device of the layer that reads it: for a hybrid
+        // only the attention layers are here, and they reach their pair by its position in this
+        // list.
         for layer_idx in model_config.kv_layers() {
-            let device = layer_devices
-                .get(layer_idx)
-                .and_then(Option::as_ref)
-                .unwrap_or(device);
+            let device = Self::device_for(model_config, &layer_devices, device, layer_idx);
             let requested_kv_cache_layout = model_config.kv_cache_layout_for_layer(layer_idx);
             let kv_cache_layout =
                 if matches!(requested_kv_cache_layout, KvCacheLayout::FlashInferHnd)
@@ -386,6 +384,22 @@ impl CacheEngine {
         Ok(gpu_cache)
     }
 
+    /// The device for cache entry `layer_idx`: that of the decoder layer reading it
+    /// ([`ModelConfigLike::kv_reader`]), or the base device when no decoder layer reads it or the
+    /// map does not place that layer.
+    fn device_for<'a>(
+        model_config: &dyn ModelConfigLike,
+        layer_devices: &'a [Option<Device>],
+        device: &'a Device,
+        layer_idx: usize,
+    ) -> &'a Device {
+        model_config
+            .kv_reader(layer_idx)
+            .and_then(|reader| layer_devices.get(reader))
+            .and_then(Option::as_ref)
+            .unwrap_or(device)
+    }
+
     fn calculate_key_block_shape(
         model_config: &dyn ModelConfigLike,
         dtype: DType,
@@ -438,5 +452,51 @@ impl CacheEngine {
             block_size,
             model_config.k_head_dim_for_layer(layer_idx),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::paged_attention::tests::Indexed;
+    use crate::paged_attention::{KvLayers, ModelConfigMetadata};
+
+    #[test]
+    fn entries_live_with_the_layer_that_reads_them() {
+        let layer_devices = vec![Some(Device::Cpu); Indexed.num_layers()];
+        let base = Device::Cpu;
+        let at = |config: &dyn ModelConfigLike, layer_idx| {
+            CacheEngine::device_for(config, &layer_devices, &base, layer_idx)
+        };
+        let mapped = |layer: usize| layer_devices[layer].as_ref().unwrap();
+
+        // An attention layer and its index cache past the decoder depth share that layer's device.
+        assert!(std::ptr::eq(at(&Indexed, 3), mapped(3)));
+        assert!(std::ptr::eq(at(&Indexed, 48 + 3), mapped(3)));
+        assert!(std::ptr::eq(at(&Indexed, 48 + 47), mapped(47)));
+
+        // By default an entry past the depth, a proposer head, has no reader: the base device.
+        let head = KvLayers::new(
+            ModelConfigMetadata {
+                max_seq_len: 4096,
+                num_layers: 48,
+                hidden_size: 2560,
+                num_kv_heads: 2,
+                num_attn_heads: 24,
+                sliding_window: None,
+                k_head_dim: 256,
+                v_head_dim: 256,
+                kv_cache_layout: KvCacheLayout::Standard,
+            },
+            vec![3, 7, 48],
+        );
+        assert!(std::ptr::eq(at(&head, 7), mapped(7)));
+        assert!(std::ptr::eq(at(&head, 48), &base));
+
+        // A reader the device map does not place falls back to the base device too.
+        assert!(std::ptr::eq(
+            CacheEngine::device_for(&Indexed, &layer_devices[..3], &base, 48 + 3),
+            &base
+        ));
     }
 }

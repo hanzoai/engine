@@ -2106,10 +2106,27 @@ pub mod text_models_inputs_processor {
         })
     }
 
+    /// Tokens before a chunk that an n-gram embedding reads: `ngram_size - 1` for the widest
+    /// n-gram a model hashes (qwen4exp's trigrams).
+    pub const PRIOR: usize = 2;
+
+    /// Up to [`PRIOR`] tokens before each sequence's chunk, whose first token sits at
+    /// `positions[i]` of that sequence. Empty for a chunk that starts its sequence.
+    fn prior(input_seqs: &[&mut Sequence], positions: &[usize]) -> Vec<Vec<u32>> {
+        input_seqs
+            .iter()
+            .zip(positions)
+            .map(|(seq, &pos)| seq.prior(pos, PRIOR).to_vec())
+            .collect()
+    }
+
     #[derive(Clone)]
     pub struct ModelInputs {
         pub input_ids: Tensor,
         pub input_ids_full: Option<Tensor>,
+        /// Up to [`PRIOR`] tokens before each sequence's chunk in `input_ids`, which an n-gram
+        /// embedding hashes the chunk's first tokens with.
+        pub prior: Vec<Vec<u32>>,
         pub seqlen_offsets: Vec<usize>,
         pub seqlen_offsets_full: Option<Vec<usize>>,
         pub context_lens: Vec<(usize, usize)>,
@@ -2193,6 +2210,7 @@ pub mod text_models_inputs_processor {
                 let inputs: Box<dyn Any> = Box::new(ModelInputs {
                     input_ids,
                     input_ids_full: Some(input_ids_full),
+                    prior: prior(input_seqs, &seqlen_offsets),
                     seqlen_offsets,
                     seqlen_offsets_full: Some(seqlen_offsets_full),
                     context_lens,
@@ -2234,6 +2252,7 @@ pub mod text_models_inputs_processor {
                 let inputs: Box<dyn Any> = Box::new(ModelInputs {
                     input_ids: input_ids.clone(),
                     input_ids_full: Some(input_ids),
+                    prior: prior(input_seqs, &seqlen_offsets),
                     seqlen_offsets: seqlen_offsets.clone(),
                     seqlen_offsets_full: Some(seqlen_offsets),
                     context_lens,
@@ -2275,6 +2294,7 @@ pub mod text_models_inputs_processor {
                 let inputs: Box<dyn Any> = Box::new(ModelInputs {
                     input_ids,
                     input_ids_full: None,
+                    prior: prior(input_seqs, &seqlen_offsets),
                     seqlen_offsets,
                     seqlen_offsets_full: None,
                     context_lens,
@@ -2317,6 +2337,7 @@ pub mod text_models_inputs_processor {
                 let inputs: Box<dyn Any> = Box::new(ModelInputs {
                     input_ids,
                     input_ids_full: None,
+                    prior: prior(input_seqs, &seqlen_offsets),
                     seqlen_offsets,
                     seqlen_offsets_full: None,
                     context_lens,
@@ -2334,6 +2355,111 @@ pub mod text_models_inputs_processor {
 
         fn get_type(&self) -> InputsProcessorType {
             InputsProcessorType::Text
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::sampler::Sampler;
+        use crate::sequence::{SeqStepType, SequenceGroup, SequenceRecognizer};
+
+        fn sequence(tokens: Vec<u32>) -> Sequence {
+            let (tx, _rx) = tokio::sync::mpsc::channel(1);
+            let sampler =
+                Sampler::new(None, 0, None, None, None, None, None, 32, 1.0, 0.0, vec![]).unwrap();
+            let group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
+                1, false, true, None,
+            )));
+            Sequence::new_waiting(
+                tokens,
+                "prompt".to_string(),
+                0,
+                0,
+                1,
+                tx,
+                sampler,
+                vec![],
+                vec![],
+                None,
+                false,
+                false,
+                group,
+                0,
+                0,
+                SequenceRecognizer::None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                SeqStepType::PromptAndDecode,
+                None,
+                None,
+                None,
+                false,
+                vec![],
+            )
+        }
+
+        fn process(seqs: &mut [&mut Sequence], is_prompt: bool) -> Vec<Vec<u32>> {
+            let out = TextInputsProcessor
+                .process_inputs(
+                    None,
+                    seqs,
+                    is_prompt,
+                    false,
+                    &Device::Cpu,
+                    false,
+                    None,
+                    false,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+            out.inputs.downcast::<ModelInputs>().unwrap().prior
+        }
+
+        #[test]
+        fn prior_holds_the_tokens_before_each_chunk() {
+            let toks: Vec<u32> = (1..=8).collect();
+
+            // First chunk: nothing precedes it.
+            let mut fresh = sequence(toks.clone());
+            assert_eq!(process(&mut [&mut fresh], true), vec![Vec::<u32>::new()]);
+
+            // Later chunk after a prefix-cache hit: only the suffix is prefilled, and the tokens
+            // before it come from the sequence, not from `get_toks`. One token in, one precedes.
+            let mut hit = sequence(toks.clone()).prefill_v2_normal(vec![], toks[5..].to_vec(), 5);
+            assert_eq!(hit.get_toks(), &[6, 7, 8]);
+            assert_eq!(process(&mut [&mut hit], true), vec![vec![4, 5]]);
+            let mut second =
+                sequence(toks.clone()).prefill_v2_normal(vec![], toks[1..].to_vec(), 1);
+            assert_eq!(process(&mut [&mut second], true), vec![vec![1]]);
+
+            // Later chunk of a chunked paged prefill, which windows `get_toks` to the chunk's end
+            // and starts the chunk at the prefix-cache length.
+            let mut chunked = sequence(toks.clone());
+            chunked.set_prefix_cache_len(4);
+            chunked.set_prefill_toks(toks[..6].to_vec());
+            assert_eq!(prior(&[&mut chunked], &[4]), vec![vec![3, 4]]);
+
+            // Decode step: the input is the last token. A one-token sequence has nothing before it.
+            let mut decode = sequence(toks.clone());
+            let mut short = sequence(vec![42]);
+            assert_eq!(
+                process(&mut [&mut decode, &mut short], false),
+                vec![vec![6, 7], vec![]]
+            );
+
+            // Verify step: staged proposals ride behind the last token, which keeps its prior.
+            decode.set_staged_speculative(vec![9, 10], None);
+            assert_eq!(process(&mut [&mut decode], false), vec![vec![6, 7]]);
         }
     }
 }

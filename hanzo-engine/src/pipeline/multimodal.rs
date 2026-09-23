@@ -1153,6 +1153,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
     fn build_speculative_verify_inputs(
         &self,
         input_meta: InputMetadata,
+        _prior: Vec<Vec<u32>>,
     ) -> hanzo_ml::Result<Box<dyn Any>> {
         let model_specific_args = self.model.default_model_specific_args(&input_meta.input);
         Ok(Box::new(ModelInputs {
