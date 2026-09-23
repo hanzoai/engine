@@ -922,17 +922,19 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 LayerType::LinearAttention => HybridLayerType::Recurrent,
             })
             .collect();
-        let hybrid_cache_config = HybridCacheConfig {
-            layer_types: pipeline_layer_types,
-            max_seq_len: props.max_seq_len,
-            recurrent: RecurrentLayerConfig {
+        let hybrid_cache_config = HybridCacheConfig::uniform(
+            pipeline_layer_types,
+            props.max_seq_len,
+            RecurrentLayerConfig {
                 conv_dim,
                 conv_width: props.conv_kernel,
                 state_dims: vec![props.num_v_heads, props.head_k_dim, props.head_v_dim],
+                conv_dtype: dtype,
+                state_dtype: dtype,
             },
-        };
+        );
         let pipeline_cache = Arc::new(Mutex::new(
-            HybridCache::new(hybrid_cache_config, dtype, device)
+            HybridCache::new(hybrid_cache_config, device)
                 .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {e}")))?,
         ));
 

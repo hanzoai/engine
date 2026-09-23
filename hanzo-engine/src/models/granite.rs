@@ -1831,23 +1831,22 @@ impl GraniteMoeHybrid {
             })
             .collect();
 
-        let hybrid_cache_config = HybridCacheConfig {
-            layer_types: pipeline_layer_types,
-            max_seq_len: cfg.max_position_embeddings,
-            recurrent: RecurrentLayerConfig {
+        let hybrid_cache_config = HybridCacheConfig::uniform(
+            pipeline_layer_types,
+            cfg.max_position_embeddings,
+            RecurrentLayerConfig {
                 conv_dim: cfg.mamba_conv_dim(),
                 conv_width: cfg.mamba_d_conv,
                 state_dims: vec![cfg.mamba_n_heads(), cfg.mamba_d_head(), cfg.mamba_d_state],
+                conv_dtype: vb_m.dtype(),
+                state_dtype: vb_m.dtype(),
             },
-        };
+        );
 
         let pipeline_cache = Arc::new(Mutex::new(
-            HybridCache::new(
-                hybrid_cache_config,
-                vb_m.dtype(),
-                &normal_loading_metadata.real_device,
-            )
-            .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e)))?,
+            HybridCache::new(hybrid_cache_config, &normal_loading_metadata.real_device).map_err(
+                |e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e)),
+            )?,
         ));
 
         let num_attention_heads = cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size();

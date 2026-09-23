@@ -7,7 +7,7 @@
 //! The key insight is that recurrent state is accessed via `state_indices` which map
 //! each sequence in the current batch to its slot in the pool.
 
-use hanzo_ml::{Device, IndexOp, Result, Tensor};
+use hanzo_ml::{DType, Device, IndexOp, Result, Tensor};
 
 use super::KvCache;
 use crate::layers_masker::PastKvLenCache;
@@ -21,7 +21,8 @@ pub struct RecurrentTrail {
     pub slots: Vec<u32>,
     /// Offset of each slot before the forward, in batch order.
     pub start_offsets: Vec<usize>,
-    /// `conv[t]`, `recurrent[t]`: batch-major state after position `t`.
+    /// `conv[t]`, `recurrent[t]`: batch-major state after position `t`. `recurrent` is empty
+    /// for a conv-only pool, whose forward runs no recurrence.
     pub conv: Vec<Tensor>,
     pub recurrent: Vec<Tensor>,
 }
@@ -33,11 +34,11 @@ pub struct RecurrentTrail {
 /// state slots that grows dynamically. Each sequence is assigned a slot index,
 /// and the forward pass uses `index_select` (gather) and index assignment (scatter)
 /// to access the correct states.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RecurrentStatePool {
-    /// Convolution state pool: (capacity, conv_dim, conv_width)
+    /// Convolution state pool: (capacity, conv_dim, conv_width), in `conv_dtype`
     pub conv_state: Tensor,
-    /// Recurrent state pool: (capacity, ...state_dims)
+    /// Recurrent state pool: (capacity, ...state_dims), in `state_dtype`
     /// For Mamba: (capacity, n_heads, head_dim, d_state)
     /// For GDN: (capacity, n_v_heads, key_dim, value_dim)
     pub recurrent_state: Tensor,
@@ -49,11 +50,8 @@ pub struct RecurrentStatePool {
     free_slots: Vec<usize>,
     /// Current capacity (grows dynamically)
     capacity: usize,
-    /// Shape parameters for growing
-    conv_dim: usize,
-    conv_width: usize,
-    state_dims: Vec<usize>,
-    dtype: hanzo_ml::DType,
+    /// Shapes and dtypes for growing and resetting
+    config: RecurrentLayerConfig,
     device: Device,
 }
 
@@ -61,25 +59,10 @@ pub struct RecurrentStatePool {
 const INITIAL_POOL_CAPACITY: usize = 4;
 
 impl RecurrentStatePool {
-    /// Create a new recurrent state pool.
-    ///
-    /// - `conv_dim`: dimension of the convolution state
-    /// - `conv_width`: kernel size / d_conv for causal conv1d
-    /// - `state_dims`: shape of the recurrent state per slot (e.g. `[n_heads, head_dim, d_state]`)
-    pub fn new(
-        conv_dim: usize,
-        conv_width: usize,
-        state_dims: Vec<usize>,
-        dtype: hanzo_ml::DType,
-        device: &Device,
-    ) -> Result<Self> {
+    /// Create a new recurrent state pool of `config`'s shapes and dtypes.
+    pub fn new(config: RecurrentLayerConfig, device: &Device) -> Result<Self> {
         let capacity = INITIAL_POOL_CAPACITY;
-
-        let conv_state = Tensor::zeros((capacity, conv_dim, conv_width), dtype, device)?;
-
-        let mut recurrent_shape = vec![capacity];
-        recurrent_shape.extend_from_slice(&state_dims);
-        let recurrent_state = Tensor::zeros(recurrent_shape, dtype, device)?;
+        let (conv_state, recurrent_state) = config.zeros(capacity, device)?;
 
         let free_slots: Vec<usize> = (0..capacity).rev().collect();
         let seqlen_offsets = vec![0; capacity];
@@ -91,10 +74,7 @@ impl RecurrentStatePool {
             trail: None,
             free_slots,
             capacity,
-            conv_dim,
-            conv_width,
-            state_dims,
-            dtype,
+            config,
             device: device.clone(),
         })
     }
@@ -103,18 +83,9 @@ impl RecurrentStatePool {
     fn grow(&mut self) -> Result<()> {
         let new_capacity = self.capacity * 2;
 
-        // Allocate new larger conv_state and copy existing data
-        let new_conv = Tensor::zeros(
-            (new_capacity, self.conv_dim, self.conv_width),
-            self.dtype,
-            &self.device,
-        )?;
+        // Allocate larger pools and copy existing data
+        let (new_conv, new_recurrent) = self.config.zeros(new_capacity, &self.device)?;
         new_conv.slice_set(&self.conv_state, 0, 0)?;
-
-        // Allocate new larger recurrent_state and copy existing data
-        let mut recurrent_shape = vec![new_capacity];
-        recurrent_shape.extend_from_slice(&self.state_dims);
-        let new_recurrent = Tensor::zeros(recurrent_shape, self.dtype, &self.device)?;
         new_recurrent.slice_set(&self.recurrent_state, 0, 0)?;
 
         // Add new slots to free list
@@ -221,7 +192,9 @@ impl RecurrentStatePool {
     }
 
     /// Undo the last `rejected` positions of the forward that produced `slot_idx`'s state.
-    /// Fails, leaving the pool untouched, unless the trail covers exactly that forward.
+    /// Fails, leaving the pool untouched, unless the trail covers exactly that forward. The conv
+    /// trail sets the length, since every forward through a pool advances its conv state; a
+    /// conv-only pool runs no recurrence and so trails none.
     pub fn rewind(&mut self, slot_idx: usize, rejected: usize) -> Result<()> {
         if rejected == 0 {
             return Ok(());
@@ -231,14 +204,22 @@ impl RecurrentStatePool {
                 "recurrent rewind of {rejected} for slot {slot_idx}: the last forward kept no trail"
             );
         };
-        let len = trail.recurrent.len();
+        let len = trail.conv.len();
         let Some(row) = trail.slots.iter().position(|&s| s as usize == slot_idx) else {
             hanzo_ml::bail!("recurrent rewind: slot {slot_idx} was not in the last forward");
         };
-        if trail.conv.len() != len
-            || trail.start_offsets.len() != trail.slots.len()
-            || rejected >= len
-        {
+        let moved = if self.config.state_dims.is_empty() {
+            0
+        } else {
+            len
+        };
+        if trail.recurrent.len() != moved || trail.start_offsets.len() != trail.slots.len() {
+            hanzo_ml::bail!(
+                "recurrent rewind: the trail has {len} conv and {} recurrent positions",
+                trail.recurrent.len()
+            );
+        }
+        if rejected >= len {
             hanzo_ml::bail!("recurrent rewind of {rejected} exceeds a trail of {len} positions");
         }
         let start = trail.start_offsets[row];
@@ -254,29 +235,29 @@ impl RecurrentStatePool {
             .narrow(0, row, 1)?
             .to_dtype(self.conv_state.dtype())?
             .contiguous()?;
-        let recurrent = trail.recurrent[keep - 1]
-            .narrow(0, row, 1)?
-            .to_dtype(self.recurrent_state.dtype())?
-            .contiguous()?;
+        // A conv-only pool's recurrent state never moved, so it already is the kept one.
+        let recurrent = trail
+            .recurrent
+            .get(keep - 1)
+            .map(|state| {
+                state
+                    .narrow(0, row, 1)?
+                    .to_dtype(self.recurrent_state.dtype())?
+                    .contiguous()
+            })
+            .transpose()?;
         let offset = start + keep;
         self.conv_state.slice_set(&conv, 0, slot_idx)?;
-        self.recurrent_state.slice_set(&recurrent, 0, slot_idx)?;
+        if let Some(recurrent) = recurrent {
+            self.recurrent_state.slice_set(&recurrent, 0, slot_idx)?;
+        }
         self.seqlen_offsets[slot_idx] = offset;
         Ok(())
     }
 
     /// Reset a specific slot's state to zeros
     pub fn reset_slot(&mut self, slot_idx: usize) -> Result<()> {
-        let zero_conv = Tensor::zeros(
-            (1, self.conv_dim, self.conv_width),
-            self.dtype,
-            &self.device,
-        )?;
-
-        let mut recurrent_shape = vec![1usize];
-        recurrent_shape.extend_from_slice(&self.state_dims);
-        let zero_recurrent = Tensor::zeros(recurrent_shape, self.dtype, &self.device)?;
-
+        let (zero_conv, zero_recurrent) = self.config.zeros(1, &self.device)?;
         self.conv_state.slice_set(&zero_conv, 0, slot_idx)?;
         self.recurrent_state
             .slice_set(&zero_recurrent, 0, slot_idx)?;
@@ -305,28 +286,6 @@ impl RecurrentStatePool {
 
     pub fn device(&self) -> &Device {
         &self.device
-    }
-
-    pub fn dtype(&self) -> hanzo_ml::DType {
-        self.dtype
-    }
-}
-
-impl Clone for RecurrentStatePool {
-    fn clone(&self) -> Self {
-        Self {
-            conv_state: self.conv_state.clone(),
-            recurrent_state: self.recurrent_state.clone(),
-            seqlen_offsets: self.seqlen_offsets.clone(),
-            trail: self.trail.clone(),
-            free_slots: self.free_slots.clone(),
-            capacity: self.capacity,
-            conv_dim: self.conv_dim,
-            conv_width: self.conv_width,
-            state_dims: self.state_dims.clone(),
-            dtype: self.dtype,
-            device: self.device.clone(),
-        }
     }
 }
 
@@ -383,7 +342,7 @@ pub enum HybridLayerType {
     Recurrent,
 }
 
-/// Configuration for the recurrent layer state dimensions
+/// Configuration of one recurrent state pool
 #[derive(Clone, Debug)]
 pub struct RecurrentLayerConfig {
     /// Dimension of the convolution state
@@ -393,7 +352,25 @@ pub struct RecurrentLayerConfig {
     /// Shape of the recurrent state per slot.
     /// For Mamba: [n_heads, head_dim, d_state]
     /// For GDN: [n_v_heads, key_dim, value_dim]
+    /// Empty for a conv-only pool, whose one scalar per slot no forward moves.
     pub state_dims: Vec<usize>,
+    pub conv_dtype: DType,
+    pub state_dtype: DType,
+}
+
+impl RecurrentLayerConfig {
+    /// Zeroed conv and recurrent state for `slots` slots.
+    fn zeros(&self, slots: usize, device: &Device) -> Result<(Tensor, Tensor)> {
+        let conv = Tensor::zeros(
+            (slots, self.conv_dim, self.conv_width),
+            self.conv_dtype,
+            device,
+        )?;
+        let mut shape = vec![slots];
+        shape.extend_from_slice(&self.state_dims);
+        let recurrent = Tensor::zeros(shape, self.state_dtype, device)?;
+        Ok((conv, recurrent))
+    }
 }
 
 /// Configuration for creating a hybrid cache
@@ -401,7 +378,28 @@ pub struct RecurrentLayerConfig {
 pub struct HybridCacheConfig {
     pub layer_types: Vec<HybridLayerType>,
     pub max_seq_len: usize,
-    pub recurrent: RecurrentLayerConfig,
+    /// One per recurrent pool, in cache order: one for each `Recurrent` layer, then side pools,
+    /// which sit after the layers, from index `layer_types.len()` on.
+    pub pools: Vec<RecurrentLayerConfig>,
+}
+
+impl HybridCacheConfig {
+    /// `layer_types` with `pool` for every recurrent layer and no side pools.
+    pub fn uniform(
+        layer_types: Vec<HybridLayerType>,
+        max_seq_len: usize,
+        pool: RecurrentLayerConfig,
+    ) -> Self {
+        let recurrent = layer_types
+            .iter()
+            .filter(|&&t| t == HybridLayerType::Recurrent)
+            .count();
+        Self {
+            pools: vec![pool; recurrent],
+            layer_types,
+            max_seq_len,
+        }
+    }
 }
 
 /// Hybrid cache that stores per-layer caches for mixed attention/recurrent models
@@ -429,8 +427,9 @@ pub struct HybridCache {
 impl HybridCache {
     pub const CACHE_GROW_SIZE: usize = 512;
 
-    pub fn new(config: HybridCacheConfig, dtype: hanzo_ml::DType, device: &Device) -> Result<Self> {
-        let mut caches = Vec::with_capacity(config.layer_types.len());
+    pub fn new(config: HybridCacheConfig, device: &Device) -> Result<Self> {
+        let mut pools = config.pools.iter();
+        let mut caches = Vec::with_capacity(config.layer_types.len() + config.pools.len());
 
         for layer_type in &config.layer_types {
             let cache = match layer_type {
@@ -439,15 +438,21 @@ impl HybridCache {
                     config.max_seq_len,
                     Self::CACHE_GROW_SIZE,
                 )),
-                HybridLayerType::Recurrent => HybridLayerCache::Recurrent(RecurrentStatePool::new(
-                    config.recurrent.conv_dim,
-                    config.recurrent.conv_width,
-                    config.recurrent.state_dims.clone(),
-                    dtype,
-                    device,
-                )?),
+                HybridLayerType::Recurrent => {
+                    let Some(pool) = pools.next() else {
+                        hanzo_ml::bail!("hybrid cache: more recurrent layers than pools");
+                    };
+                    HybridLayerCache::Recurrent(RecurrentStatePool::new(pool.clone(), device)?)
+                }
             };
             caches.push(cache);
+        }
+        // The pools left over are side pools, after the layers.
+        for pool in pools {
+            caches.push(HybridLayerCache::Recurrent(RecurrentStatePool::new(
+                pool.clone(),
+                device,
+            )?));
         }
 
         Ok(Self {
@@ -470,8 +475,8 @@ impl HybridCache {
         self.verify_len == Some(seq_len)
     }
 
-    /// Tokens the recurrent layers have consumed for `slot_idx`. `None` without a recurrent
-    /// layer, or when the layers disagree.
+    /// Tokens the recurrent pools have consumed for `slot_idx`. `None` without a recurrent
+    /// pool, or when the pools disagree.
     pub fn recurrent_offset(&self, slot_idx: usize) -> Option<usize> {
         let mut offsets = self.caches.iter().filter_map(|cache| match cache {
             HybridLayerCache::Recurrent(pool) => Some(pool.get_seqlen_offset(slot_idx)),
@@ -481,7 +486,7 @@ impl HybridCache {
         offsets.all(|offset| offset == first).then_some(first)
     }
 
-    /// Undo the last `rejected` positions of the latest forward, in every recurrent layer.
+    /// Undo the last `rejected` positions of the latest forward, in every recurrent pool.
     pub fn rewind_recurrent(&mut self, slot_idx: usize, rejected: usize) -> Result<()> {
         for cache in &mut self.caches {
             if let HybridLayerCache::Recurrent(pool) = cache {
@@ -491,8 +496,8 @@ impl HybridCache {
         Ok(())
     }
 
-    /// Allocate state slots for a new sequence across all recurrent layers.
-    /// Returns the slot index (same for all layers).
+    /// Allocate state slots for a new sequence across all recurrent pools.
+    /// Returns the slot index (same for all pools).
     pub fn allocate_seq(&mut self) -> Option<usize> {
         // Collect recurrent layer indices once so rollback can target only recurrent pools.
         let recurrent_layers: Vec<usize> = self
@@ -559,7 +564,7 @@ impl HybridCache {
         expected_slot
     }
 
-    /// Free state slots for a sequence across all recurrent layers.
+    /// Free state slots for a sequence across all recurrent pools.
     pub fn free_seq(&mut self, slot_idx: usize) {
         for cache in &mut self.caches {
             if let HybridLayerCache::Recurrent(pool) = cache {
@@ -568,7 +573,7 @@ impl HybridCache {
         }
     }
 
-    /// Reset a specific sequence's state in all recurrent layers.
+    /// Reset a specific sequence's state in all recurrent pools.
     pub fn reset_seq(&mut self, slot_idx: usize) -> Result<()> {
         for cache in &mut self.caches {
             if let HybridLayerCache::Recurrent(pool) = cache {
@@ -584,8 +589,9 @@ impl HybridCache {
         }
     }
 
+    /// Model layers. Side pools follow them in `caches`, so this is not `caches.len()`.
     pub fn num_layers(&self) -> usize {
-        self.caches.len()
+        self.config.layer_types.len()
     }
 
     pub fn layer_types(&self) -> &[HybridLayerType] {
@@ -596,12 +602,12 @@ impl HybridCache {
         &self.config
     }
 
-    /// Get a mutable reference to a specific layer's cache
+    /// Get a mutable reference to a specific layer's cache; side pools follow from `num_layers()`
     pub fn get_mut(&mut self, layer: usize) -> Option<&mut HybridLayerCache> {
         self.caches.get_mut(layer)
     }
 
-    /// Get a reference to a specific layer's cache
+    /// Get a reference to a specific layer's cache; side pools follow from `num_layers()`
     pub fn get(&self, layer: usize) -> Option<&HybridLayerCache> {
         self.caches.get(layer)
     }
@@ -655,7 +661,7 @@ impl HybridCache {
     }
 }
 
-/// Snapshot of a single recurrent layer's state for prefix caching. Recurrent state cannot be
+/// Snapshot of a single recurrent pool's state for prefix caching. Recurrent state cannot be
 /// rewound, so a snapshot serves exactly one prefix: the first `seqlen_offset` tokens.
 #[derive(Clone, Debug)]
 pub struct RecurrentStateSnapshot {
@@ -676,7 +682,7 @@ impl RecurrentStateSnapshot {
 
 impl HybridCache {
     /// Snapshot the recurrent state for a sequence at the given slot index.
-    /// Returns one snapshot per recurrent layer, in layer order.
+    /// Returns one snapshot per recurrent pool, in cache order.
     #[allow(clippy::cast_possible_truncation)]
     pub fn snapshot_recurrent_state(&self, slot_idx: usize) -> Result<Vec<RecurrentStateSnapshot>> {
         let mut snapshots = Vec::new();
@@ -696,7 +702,7 @@ impl HybridCache {
     }
 
     /// Restore recurrent state snapshots into the pool at the given slot index.
-    /// Snapshots must be in the same layer order as returned by `snapshot_recurrent_state`.
+    /// Snapshots must be in the same order as returned by `snapshot_recurrent_state`.
     #[allow(clippy::cast_possible_truncation)]
     pub fn restore_recurrent_state(
         &mut self,
@@ -724,17 +730,36 @@ impl HybridCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hanzo_ml::DType;
+    use crate::models::gdn::{forward_pooled, GdnLayerCache, PoolSlots};
 
     const CONV: (usize, usize) = (2, 3);
     const STATE: [usize; 3] = [1, 2, 2];
     const LEN: usize = 3;
 
+    fn config(state_dims: &[usize], conv_dtype: DType, state_dtype: DType) -> RecurrentLayerConfig {
+        RecurrentLayerConfig {
+            conv_dim: CONV.0,
+            conv_width: CONV.1,
+            state_dims: state_dims.to_vec(),
+            conv_dtype,
+            state_dtype,
+        }
+    }
+
     fn pool() -> Result<RecurrentStatePool> {
         let mut pool =
-            RecurrentStatePool::new(CONV.0, CONV.1, STATE.to_vec(), DType::F32, &Device::Cpu)?;
+            RecurrentStatePool::new(config(&STATE, DType::F32, DType::F32), &Device::Cpu)?;
         assert_eq!((pool.allocate(), pool.allocate()), (Some(0), Some(1)));
         Ok(pool)
+    }
+
+    /// Deterministic values in [-1, 1).
+    fn seeded(shape: &[usize], seed: usize) -> Result<Tensor> {
+        let n = shape.iter().product::<usize>();
+        let v = (0..n)
+            .map(|i| ((i * 2654435761 + seed * 40503) % 1009) as f32 / 504.5 - 1.0)
+            .collect::<Vec<_>>();
+        Tensor::from_vec(v, shape, &Device::Cpu)
     }
 
     /// Entry `t`, batch row `row` holds the constant `10 t + row`, so a restored slot names the
@@ -760,11 +785,10 @@ mod tests {
         })
     }
 
+    /// Every value of `slot`, conv then recurrent, as f32.
     fn slot_values(pool: &RecurrentStatePool, slot: usize) -> Result<(Vec<f32>, Vec<f32>)> {
-        Ok((
-            pool.conv_state.i(slot)?.flatten_all()?.to_vec1()?,
-            pool.recurrent_state.i(slot)?.flatten_all()?.to_vec1()?,
-        ))
+        let flat = |t: &Tensor| t.i(slot)?.flatten_all()?.to_dtype(DType::F32)?.to_vec1();
+        Ok((flat(&pool.conv_state)?, flat(&pool.recurrent_state)?))
     }
 
     /// Slots 1 and 0 ran a three-position forward as batch rows 0 and 1, from offsets 4 and 7.
@@ -821,6 +845,16 @@ mod tests {
         );
         assert_eq!(slot_values(&pool, 0)?, rewound);
         assert_eq!(slot_values(&pool, 1)?, before.1);
+
+        // A pool with recurrent state trails it at every position its conv trail covers.
+        for cut in [1, LEN] {
+            let mut pool = after_forward()?;
+            let mut short = trail(&[1, 0], &[4, 7])?;
+            short.recurrent.truncate(LEN - cut);
+            pool.set_trail(Some(short));
+            assert!(pool.rewind(0, 1).is_err(), "a recurrent trail {cut} short");
+            assert_eq!(slot_values(&pool, 0)?, before.0);
+        }
         Ok(())
     }
 
@@ -839,16 +873,11 @@ mod tests {
     #[test]
     fn only_the_announced_verify_keeps_a_trail() -> Result<()> {
         let mut cache = HybridCache::new(
-            HybridCacheConfig {
-                layer_types: vec![HybridLayerType::Recurrent, HybridLayerType::Attention],
-                max_seq_len: 16,
-                recurrent: RecurrentLayerConfig {
-                    conv_dim: CONV.0,
-                    conv_width: CONV.1,
-                    state_dims: STATE.to_vec(),
-                },
-            },
-            DType::F32,
+            HybridCacheConfig::uniform(
+                vec![HybridLayerType::Recurrent, HybridLayerType::Attention],
+                16,
+                config(&STATE, DType::F32, DType::F32),
+            ),
             &Device::Cpu,
         )?;
         assert!(!cache.records_trail(4));
@@ -857,6 +886,194 @@ mod tests {
         assert!(!cache.records_trail(1) && !cache.records_trail(5));
         cache.expect_verify(None);
         assert!(!cache.records_trail(4));
+        Ok(())
+    }
+
+    /// A conv-only layer: it notes its trail, keeps the last `CONV.1` raw inputs as its state
+    /// (`GdnLayerCache::trail_conv`), and runs no recurrence.
+    fn conv_only(cache: &mut GdnLayerCache, x: &Tensor) -> Result<Tensor> {
+        cache.trail_conv(x)?;
+        let seq_len = x.dim(1)?;
+        let window = Tensor::cat(&[&cache.conv_state, &x.transpose(1, 2)?], 2)?;
+        cache.conv_state = window.narrow(2, seq_len, CONV.1)?.contiguous()?;
+        cache.seqlen_offset += seq_len;
+        Ok(x.clone())
+    }
+
+    /// A conv-only pool keeps no recurrent trail. A verify through it, rejecting the tail, rewinds
+    /// to the conv state that decoding the accepted tokens one at a time reaches, and the next true
+    /// token lands where plain decoding put it.
+    #[test]
+    fn conv_only_pool_rewinds_on_its_conv_trail() -> Result<()> {
+        const VERIFY: usize = 4;
+        let (slot, prompt, kept) = (1usize, 2usize, 2usize);
+        let stream = seeded(&[1, prompt + VERIFY, CONV.0], 1)?;
+        let wrong = seeded(&[1, VERIFY - kept, CONV.0], 2)?;
+        let indices = Tensor::from_vec(vec![slot as u32], 1, &Device::Cpu)?;
+        let run = |pool: &mut RecurrentStatePool, x: &Tensor, trail: bool| {
+            forward_pooled(pool, PoolSlots::Many(&indices), 0, trail, |cache| {
+                conv_only(cache, x)
+            })
+        };
+        let prefilled = || -> Result<RecurrentStatePool> {
+            let mut pool =
+                RecurrentStatePool::new(config(&[], DType::F32, DType::F32), &Device::Cpu)?;
+            assert_eq!((pool.allocate(), pool.allocate()), (Some(0), Some(1)));
+            run(&mut pool, &stream.narrow(1, 0, prompt)?, false)?;
+            Ok(pool)
+        };
+
+        let mut plain = prefilled()?;
+        let mut states = Vec::with_capacity(VERIFY);
+        for t in 0..VERIFY {
+            run(&mut plain, &stream.narrow(1, prompt + t, 1)?, false)?;
+            states.push(slot_values(&plain, slot)?);
+        }
+
+        let mut spec = prefilled()?;
+        let verify = Tensor::cat(&[stream.narrow(1, prompt, kept)?, wrong], 1)?;
+        run(&mut spec, &verify, true)?;
+        spec.rewind(slot, VERIFY - kept)?;
+        assert_eq!(spec.get_seqlen_offset(slot), prompt + kept);
+        assert_eq!(slot_values(&spec, slot)?, states[kept - 1]);
+        assert_eq!(slot_values(&spec, slot)?.1, vec![0.0]);
+
+        run(&mut spec, &stream.narrow(1, prompt + kept, 1)?, false)?;
+        assert_eq!(slot_values(&spec, slot)?, states[kept]);
+        Ok(())
+    }
+
+    /// A GDN layer, an attention layer, and a conv-only side pool after them. Both pools keep a
+    /// bf16 conv state beside an f32 recurrent state.
+    fn side_cache() -> Result<HybridCache> {
+        let mut cfg = HybridCacheConfig::uniform(
+            vec![HybridLayerType::Recurrent, HybridLayerType::Attention],
+            16,
+            config(&STATE, DType::BF16, DType::F32),
+        );
+        cfg.pools.push(config(&[], DType::BF16, DType::F32));
+        HybridCache::new(cfg, &Device::Cpu)
+    }
+
+    fn pool_at(cache: &HybridCache, idx: usize) -> &RecurrentStatePool {
+        cache
+            .get(idx)
+            .and_then(HybridLayerCache::as_recurrent_pool)
+            .expect("a recurrent pool")
+    }
+
+    #[test]
+    fn side_pools_follow_the_layers_in_their_own_dtypes() -> Result<()> {
+        let mut cache = side_cache()?;
+        assert_eq!((cache.num_layers(), cache.caches.len()), (2, 3));
+        assert!(cache
+            .get(1)
+            .and_then(HybridLayerCache::as_kv_cache)
+            .is_some());
+
+        // Five sequences outgrow the first four slots; every pool hands out the same ones.
+        for want in 0..5 {
+            assert_eq!(cache.allocate_seq(), Some(want));
+        }
+        for idx in [0, 2] {
+            let pool = pool_at(&cache, idx);
+            assert_eq!(pool.capacity(), 8);
+            assert_eq!(
+                (pool.conv_state.dtype(), pool.recurrent_state.dtype()),
+                (DType::BF16, DType::F32)
+            );
+        }
+        assert_eq!(pool_at(&cache, 2).recurrent_state.dims(), &[8]);
+
+        // Fill slot 3 from f32 values: the conv state keeps them rounded to bf16, the recurrent
+        // state keeps them exactly. Then snapshot it, wipe it, and restore it there and into slot 1.
+        let slot = Tensor::from_vec(vec![3u32], 1, &Device::Cpu)?;
+        let mut filled = Vec::new();
+        for (seed, idx) in [(3, 0), (5, 2)] {
+            let pool = cache
+                .get_mut(idx)
+                .and_then(HybridLayerCache::as_recurrent_pool_mut)
+                .expect("a recurrent pool");
+            let conv = seeded(&[1, CONV.0, CONV.1], seed)?;
+            let mut shape = vec![1];
+            shape.extend_from_slice(&pool.recurrent_state.dims()[1..]);
+            let recurrent = seeded(&shape, seed + 1)?;
+            pool.scatter_conv_state(&slot, &conv)?;
+            pool.scatter_recurrent_state(&slot, &recurrent)?;
+            pool.set_seqlen_offset(3, 9);
+
+            let flat = |t: &Tensor| t.flatten_all()?.to_vec1::<f32>();
+            let rounded = conv.to_dtype(DType::BF16)?.to_dtype(DType::F32)?;
+            assert_ne!(flat(&rounded)?, flat(&conv)?);
+            let want = (flat(&rounded)?, flat(&recurrent)?);
+            assert_eq!(slot_values(pool, 3)?, want);
+            filled.push(want);
+        }
+
+        let snaps = cache.snapshot_recurrent_state(3)?;
+        assert_eq!(snaps.len(), 2);
+        for snap in &snaps {
+            assert_eq!(
+                (snap.conv_state.dtype(), snap.recurrent_state.dtype()),
+                (DType::BF16, DType::F32)
+            );
+            assert_eq!(snap.seqlen_offset, 9);
+        }
+        cache.reset_seq(3)?;
+        assert_eq!(
+            slot_values(pool_at(&cache, 2), 3)?.0,
+            vec![0.0; CONV.0 * CONV.1]
+        );
+
+        for target in [3, 1] {
+            cache.restore_recurrent_state(target, &snaps)?;
+            for (idx, want) in [0, 2].into_iter().zip(&filled) {
+                assert_eq!(&slot_values(pool_at(&cache, idx), target)?, want);
+            }
+            assert_eq!(cache.recurrent_offset(target), Some(9));
+        }
+
+        let short = HybridCacheConfig {
+            layer_types: vec![HybridLayerType::Recurrent; 2],
+            max_seq_len: 16,
+            pools: vec![config(&STATE, DType::BF16, DType::F32)],
+        };
+        assert!(HybridCache::new(short, &Device::Cpu).is_err());
+        Ok(())
+    }
+
+    /// A verify rewinds every pool. The side pool's trail is conv alone, and its rewind must not
+    /// fail the layers' rewind.
+    #[test]
+    fn rewind_reaches_a_conv_only_side_pool() -> Result<()> {
+        let mut cache = side_cache()?;
+        assert_eq!(
+            (cache.allocate_seq(), cache.allocate_seq()),
+            (Some(0), Some(1))
+        );
+        let mut conv_only = trail(&[1, 0], &[4, 7])?;
+        conv_only.recurrent.clear();
+        for (idx, trail) in [(0, trail(&[1, 0], &[4, 7])?), (2, conv_only)] {
+            let pool = cache
+                .get_mut(idx)
+                .and_then(HybridLayerCache::as_recurrent_pool_mut)
+                .expect("a recurrent pool");
+            pool.set_seqlen_offset(1, 4 + LEN);
+            pool.set_seqlen_offset(0, 7 + LEN);
+            pool.set_trail(Some(trail));
+        }
+
+        cache.rewind_recurrent(0, 2)?;
+
+        // Slot 0 is batch row 1, and keeping one of three positions is trail entry 0. The side
+        // pool's scalar state was never moved, so it stays zero.
+        assert_eq!(cache.recurrent_offset(0), Some(7 + 1));
+        assert_eq!(cache.recurrent_offset(1), Some(4 + LEN));
+        let (conv, recurrent) = slot_values(pool_at(&cache, 0), 0)?;
+        assert!(conv.iter().chain(&recurrent).all(|&v| v == 1.0));
+        let (conv, recurrent) = slot_values(pool_at(&cache, 2), 0)?;
+        assert!(conv.iter().all(|&v| v == 1.0));
+        assert_eq!(recurrent, vec![0.0]);
         Ok(())
     }
 }
