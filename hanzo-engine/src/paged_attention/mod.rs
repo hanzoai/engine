@@ -86,22 +86,17 @@ const SUPPORTED_BLOCK_SIZE: &[usize] = &[8, 16, 32];
 
 const SIZE_IN_MB: usize = 1024 * 1024;
 
+// A token costs every cache entry its own layer's size (`kv_cache_elements_per_token` sums them),
+// so a hybrid whose side caches are narrower than its attention layers is not charged the widest.
 macro_rules! mb_to_blocks {
     ($mb_size:expr, $dtype_size:expr, $block_size:expr, $config:expr) => {
-        $mb_size
-            / $dtype_size
-            / $block_size
-            / $config.kv_layers().len()
-            / $config.kv_cache_elements_per_token()
+        $mb_size / $dtype_size / $block_size / $config.kv_cache_elements_per_token()
     };
 }
 
 macro_rules! ctxt_to_blocks {
     ($context_len:expr, $dtype_size:expr, $block_size:expr, $config:expr) => {
-        $context_len
-            * $dtype_size
-            * $config.kv_layers().len()
-            * $config.kv_cache_elements_per_token()
+        $context_len * $dtype_size * $config.kv_cache_elements_per_token()
     };
 }
 
@@ -311,5 +306,151 @@ mod tests {
         // 16 layers x 2 (K,V) x 4 kv heads x 128 head dim x 2 bytes = 32 KB/token.
         assert_eq!(bytes(&hybrid()), 262144 * 32 * 1024);
         assert_eq!(bytes(&dense()), 4 * bytes(&hybrid()));
+    }
+
+    /// qwen4exp shape: 48 decoder layers with gated attention (2 KV heads of 256) at every
+    /// fourth, and after them each attention layer's QSA index cache (1 head of 128) at
+    /// `48 + layer`, read by that layer.
+    pub(super) struct Indexed;
+
+    impl Indexed {
+        const DEPTH: usize = 48;
+
+        fn attention() -> impl Iterator<Item = usize> {
+            (0..Self::DEPTH).filter(|i| (i + 1) % 4 == 0)
+        }
+    }
+
+    impl ModelConfigLike for Indexed {
+        fn max_seq_len(&self) -> usize {
+            262144
+        }
+        fn num_layers(&self) -> usize {
+            Self::DEPTH
+        }
+        fn hidden_size(&self) -> usize {
+            2560
+        }
+        fn num_kv_heads(&self) -> usize {
+            2
+        }
+        fn num_attn_heads(&self) -> usize {
+            24
+        }
+        fn k_head_dim(&self) -> usize {
+            256
+        }
+        fn v_head_dim(&self) -> usize {
+            256
+        }
+        fn num_kv_heads_for_layer(&self, layer_idx: usize) -> usize {
+            if layer_idx < Self::DEPTH {
+                2
+            } else {
+                1
+            }
+        }
+        fn k_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+            if layer_idx < Self::DEPTH {
+                256
+            } else {
+                128
+            }
+        }
+        fn v_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+            self.k_head_dim_for_layer(layer_idx)
+        }
+        fn kv_layers(&self) -> Vec<usize> {
+            Self::attention()
+                .chain(Self::attention().map(|l| Self::DEPTH + l))
+                .collect()
+        }
+        fn kv_reader(&self, layer_idx: usize) -> Option<usize> {
+            Some(layer_idx % Self::DEPTH)
+        }
+    }
+
+    /// The budget as it was before entries were sized per layer: every entry charged the model's
+    /// one `2 * kv_heads * max(k, v)`, or its MLA latent row.
+    fn uniform(config: &ModelConfigMetadata, mb: usize) -> usize {
+        let row = match config.kv_cache_layout {
+            KvCacheLayout::Mla {
+                kv_lora_rank,
+                kpe_head_dim,
+            } => kv_lora_rank + kpe_head_dim,
+            _ => 2 * config.num_kv_heads * config.k_head_dim.max(config.v_head_dim),
+        };
+        let entries = config.kv_layers().len();
+        mb * SIZE_IN_MB / 2 / 32 / entries / row
+    }
+
+    #[test]
+    fn uniform_models_keep_their_block_counts() {
+        let mla = ModelConfigMetadata {
+            num_layers: 61,
+            kv_cache_layout: KvCacheLayout::Mla {
+                kv_lora_rank: 512,
+                kpe_head_dim: 64,
+            },
+            ..dense()
+        };
+        // Absorbed-MLA GGUF shape: one head, K wider than V.
+        let absorbed = ModelConfigMetadata {
+            num_kv_heads: 1,
+            k_head_dim: 576,
+            v_head_dim: 512,
+            ..dense()
+        };
+        for config in [&dense(), &mla, &absorbed] {
+            for mb in [7, 8192, 12345, 65536] {
+                assert_eq!(
+                    blocks(config, MemoryGpuConfig::MbAmount(mb)),
+                    uniform(config, mb)
+                );
+            }
+        }
+        for mb in [7, 8192, 12345] {
+            let hybrid = hybrid();
+            let entries = hybrid.kv_layers().len();
+            assert_eq!(
+                blocks(&hybrid, MemoryGpuConfig::MbAmount(mb)),
+                mb * SIZE_IN_MB / 2 / 32 / entries / (2 * 4 * 128)
+            );
+        }
+        for toks in [4096, 100_003, 262144] {
+            let mb = toks * 2 * 64 * (2 * 4 * 128) / SIZE_IN_MB;
+            assert_eq!(
+                blocks(&dense(), MemoryGpuConfig::ContextSize(toks)),
+                uniform(&dense(), mb)
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_cache_charges_each_entry_its_own_size() {
+        // 12 x 2 (K,V) x 2 heads x 256 + 12 x 2 x 1 head x 128 elements per token.
+        let row = 12 * 1024 + 12 * 256;
+        assert_eq!(Indexed.kv_layers().len(), 24);
+        assert_eq!(Indexed.kv_cache_elements_per_token(), row);
+        for mb in [7, 8192, 12345] {
+            let charged = blocks(&Indexed, MemoryGpuConfig::MbAmount(mb));
+            assert_eq!(charged, mb * SIZE_IN_MB / 2 / 32 / row);
+            // Charging all 24 entries the attention layers' 1024 would have lost 3/8 of them.
+            assert!(charged > mb * SIZE_IN_MB / 2 / 32 / 24 / 1024);
+        }
+
+        // What the engine allocates for those blocks is exactly what the budget charged.
+        let cache = CacheConfig {
+            block_size: 32,
+            num_gpu_blocks: 3,
+            cache_type: PagedCacheType::Auto,
+        };
+        let engine = CacheEngine::new(&Indexed, &cache, DType::BF16, &Device::Cpu, vec![]).unwrap();
+        let held: usize = engine
+            .get_kv_cache()
+            .iter()
+            .map(|(k, v)| k.elem_count() + v.elem_count())
+            .sum();
+        assert_eq!(held, 3 * 32 * row);
     }
 }

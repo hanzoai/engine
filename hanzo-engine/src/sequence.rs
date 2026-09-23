@@ -785,6 +785,14 @@ impl Sequence {
         &self.tokens
     }
 
+    /// Up to `n` tokens before position `pos` of the whole sequence, fewer near its start. These
+    /// come from the sequence itself rather than [`get_toks`](Self::get_toks): a prefix-cache hit
+    /// prefills only the suffix past the hit, and the tokens before it are still context.
+    pub(crate) fn prior(&self, pos: usize, n: usize) -> &[u32] {
+        let end = pos.min(self.tokens.len());
+        &self.tokens[end.saturating_sub(n)..end]
+    }
+
     pub(crate) fn active_staged_speculative_tokens(&self) -> &[u32] {
         &self.staged_speculative_tokens
     }

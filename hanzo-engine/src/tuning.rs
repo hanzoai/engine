@@ -421,14 +421,13 @@ fn calculate_max_context(
 
     let remaining_bytes = available_vram_bytes - model_size_bytes;
 
-    // KV cache elements per token (from ModelConfigLike trait)
-    // This accounts for num_kv_heads, k_head_dim, v_head_dim correctly
+    // KV cache elements per token across every cached layer, each at its own layer's
+    // num_kv_heads, k_head_dim, v_head_dim (from ModelConfigLike trait)
     let kv_elems_per_token = model_cfg.kv_cache_elements_per_token();
-    let num_layers = model_cfg.num_layers();
 
-    // Total KV cache bytes per token = elements * dtype_size * num_layers
+    // Total KV cache bytes per token = elements * dtype_size
     let dtype_size = dtype.size_in_bytes();
-    let kv_bytes_per_token = kv_elems_per_token * dtype_size * num_layers;
+    let kv_bytes_per_token = kv_elems_per_token * dtype_size;
 
     if kv_bytes_per_token == 0 {
         return Ok((native_max_seq_len, true));
