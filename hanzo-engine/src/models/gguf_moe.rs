@@ -404,9 +404,14 @@ mod tests {
             .broadcast_matmul(&w16.t()?)?
             .to_dtype(DType::F32)?;
 
-        let top_f32 = logits_f32.topk(top_k)?.indices.to_vec2::<u32>()?;
-        let top_f16 = logits_f16.topk(top_k)?.indices.to_vec2::<u32>()?;
-        assert_eq!(top_f32, top_f16, "f16 router changed top-{top_k} routing");
+        // Routing is the set of experts, each carrying its own weight: near-ties may trade places
+        // inside the top k without changing the output, so compare the sets.
+        let set = |t: &Tensor| -> Result<Vec<Vec<u32>>> {
+            let mut rows = t.topk(top_k)?.indices.to_vec2::<u32>()?;
+            rows.iter_mut().for_each(|r| r.sort_unstable());
+            Ok(rows)
+        };
+        assert_eq!(set(&logits_f32)?, set(&logits_f16)?, "f16 router changed top-{top_k} routing");
         Ok(())
     }
 
