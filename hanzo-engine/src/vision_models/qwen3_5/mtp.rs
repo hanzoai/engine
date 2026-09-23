@@ -226,10 +226,8 @@ mod tests {
     use super::*;
     use crate::device_map::DummyDeviceMapper;
     use crate::models::qwen3_5_mtp::fixtures::{positions, shared_heads, synthetic};
-    use crate::models::qwen3_5_mtp::{AnchorPositions, Mrope};
-    use crate::speculative::{
-        SpeculativeKvCache, SpeculativeProposeBatchCtx, SpeculativeSharedHeads,
-    };
+    use crate::models::qwen3_5_mtp::AnchorPositions;
+    use crate::speculative::{SpeculativeKvCache, SpeculativeProposeBatchCtx};
     use rand::SeedableRng;
     use rand_isaac::Isaac64Rng;
     use std::collections::HashMap;
