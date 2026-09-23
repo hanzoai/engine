@@ -329,6 +329,8 @@ impl GatedFullAttention {
         self.rotary.compute_cos_sin(positions, dtype)
     }
 
+    /// Project, attend, then gate and project out: vLLM `Qwen3NextAttention.forward`
+    /// (`qwen3_next.py:446-457`).
     fn forward(
         &self,
         x: &Tensor,
@@ -337,6 +339,19 @@ impl GatedFullAttention {
         kv_cache: &mut KvCache,
         paged: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
+        let (q, k, v, gate) = self.project(x, cos_sin)?;
+        let y = self.attend(&q, &k, &v, mask, kv_cache, paged)?;
+        self.output(&y, &gate, x.dtype())
+    }
+
+    /// `(q, k, v, gate)`: q, k and v as `[batch, heads, seq, head_dim]` in the compute dtype, with
+    /// q and k normed and roped, and the pre-sigmoid output gate as `[batch, seq, heads·head_dim]`.
+    /// vLLM `_project_qkv_gate` (`qwen3_next.py:384-444`).
+    pub(crate) fn project(
+        &self,
+        x: &Tensor,
+        cos_sin: &(Tensor, Tensor),
+    ) -> Result<(Tensor, Tensor, Tensor, Tensor)> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
         let q_gate = self.attn_q.forward(x)?;
@@ -376,11 +391,26 @@ impl GatedFullAttention {
             self.k_norm.eps(),
         )?;
 
-        let (q, k, v) = (
+        Ok((
             q.to_dtype(self.dtype)?,
             k.to_dtype(self.dtype)?,
             v.to_dtype(self.dtype)?,
-        );
+            gate,
+        ))
+    }
+
+    /// `project`'s q attended over this block's cache once k and v are written to it, as
+    /// `[batch, seq, heads·head_dim]`. vLLM `self.attn(q, k, v)` (`qwen3_next.py:453`).
+    pub(crate) fn attend(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        mask: &AttentionMask,
+        kv_cache: &mut KvCache,
+        paged: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+    ) -> Result<Tensor> {
+        let (b_sz, _, seq_len, _) = q.dims4()?;
 
         // PagedAttention keeps the decode KV write/read position-invariant (device slot_mappings +
         // bucketed context_lens), which is what makes the whole decode forward capturable by a CUDA
@@ -389,9 +419,9 @@ impl GatedFullAttention {
         let y = match (&self.paged_attn, paged) {
             (Some(paged_attn), Some(((key_cache, value_cache), input_metadata))) => paged_attn
                 .forward(
-                    &q,
-                    &k,
-                    &v,
+                    q,
+                    k,
+                    v,
                     mask,
                     Some(key_cache),
                     Some(value_cache),
@@ -402,9 +432,9 @@ impl GatedFullAttention {
             (Some(paged_attn), None) => {
                 let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
                 paged_attn.forward(
-                    &q,
-                    &k,
-                    &v,
+                    q,
+                    k,
+                    v,
                     mask,
                     None,
                     None,
@@ -414,22 +444,23 @@ impl GatedFullAttention {
                 )?
             }
             (None, _) => {
-                let (k, v) = kv_cache.append(&k, &v)?;
-                Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
+                let (k, v) = kv_cache.append(k, v)?;
+                Sdpa.run_attention(q, &k, &v, mask, None, &self.sdpa_params)?
             }
         };
 
-        let y = if mask.is_custom() {
-            y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
+        if mask.is_custom() {
+            y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))
         } else {
-            y.reshape((b_sz, seq_len, ()))?
-        };
+            y.reshape((b_sz, seq_len, ()))
+        }
+    }
 
-        // Output gate: y = y * sigmoid(gate).
+    /// `o_proj(y * sigmoid(gate))` in `dtype`, the residual stream's. vLLM `qwen3_next.py:454-456`.
+    pub(crate) fn output(&self, y: &Tensor, gate: &Tensor, dtype: DType) -> Result<Tensor> {
         let gate = sigmoid(&gate.to_dtype(y.dtype())?)?;
         let y = y.broadcast_mul(&gate)?;
-
-        self.attn_o.forward(&y.to_dtype(x.dtype())?)
+        self.attn_o.forward(&y.to_dtype(dtype)?)
     }
 }
 
@@ -464,6 +495,64 @@ fn trim_carried(out: &Tensor, carried: usize) -> Result<Tensor> {
 }
 
 impl QGatedDeltaNet {
+    /// The GDN block at `prefix`. Its output norm gates with silu(z), vLLM's default
+    /// `output_gate_type` (`qwen_gdn_linear_attn.py:471`).
+    pub(crate) fn load<R: std::io::Seek + std::io::Read>(
+        ct: &mut Content<'_, R>,
+        prefix: &str,
+        props: &PropsGGUF,
+        dev: &Device,
+    ) -> Result<Self> {
+        let in_proj_qkv = gguf_qmm(ct.tensor(&format!("{prefix}.attn_qkv.weight"), dev)?)?;
+        let in_proj_z = gguf_qmm(ct.tensor(&format!("{prefix}.attn_gate.weight"), dev)?)?;
+        let in_proj_b = gguf_qmm(ct.tensor(&format!("{prefix}.ssm_beta.weight"), dev)?)?;
+        let in_proj_a = gguf_qmm(ct.tensor(&format!("{prefix}.ssm_alpha.weight"), dev)?)?;
+        let out_proj = gguf_qmm(ct.tensor(&format!("{prefix}.ssm_out.weight"), dev)?)?;
+
+        // conv1d / dt / a are small f32 params kept dequantized.
+        let mut conv1d_weight = ct
+            .tensor(&format!("{prefix}.ssm_conv1d.weight"), dev)?
+            .dequantize(dev)?;
+        // GGUF squeezes conv1d to 2D (conv_dim, kernel); ensure 2D.
+        if conv1d_weight.rank() == 3 {
+            conv1d_weight = conv1d_weight.squeeze(1)?;
+        }
+        // GGUF conversions name this `ssm_dt.bias` (Unsloth/llama.cpp) or `ssm_dt`; accept both.
+        let dt_bias = ct
+            .tensor(&format!("{prefix}.ssm_dt.bias"), dev)
+            .or_else(|_| ct.tensor(&format!("{prefix}.ssm_dt"), dev))?
+            .dequantize(dev)?
+            .to_dtype(DType::F32)?;
+        let a = ct
+            .tensor(&format!("{prefix}.ssm_a"), dev)?
+            .dequantize(dev)?
+            .to_dtype(DType::F32)?;
+
+        let ssm_norm_w = ct
+            .tensor(&format!("{prefix}.ssm_norm.weight"), dev)?
+            .dequantize(dev)?;
+        let norm = RmsNormGated::from_weight(ssm_norm_w, props.rms_norm_eps as f64);
+
+        Ok(Self {
+            in_proj_qkv,
+            in_proj_z,
+            in_proj_b,
+            in_proj_a,
+            conv1d_weight,
+            dt_bias,
+            a,
+            norm,
+            out_proj,
+            num_k_heads: props.num_k_heads,
+            num_v_heads: props.num_v_heads,
+            head_k_dim: props.head_k_dim,
+            head_v_dim: props.head_v_dim,
+            conv_kernel_size: props.conv_kernel,
+            key_dim: props.num_k_heads * props.head_k_dim,
+            value_dim: props.num_v_heads * props.head_v_dim,
+        })
+    }
+
     fn forward(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         // GDN recurrence + gates run in f32 end-to-end to avoid bf16/f32 boundary mismatches;
         // input is lifted to f32 here and the out_proj result cast back to the model dtype.
@@ -755,16 +844,23 @@ pub(crate) struct PropsGGUF {
     pub(crate) nextn_predict_layers: usize,
 }
 
-fn verify_arch(
+/// The file's `general.architecture`, which must be one of `allowed`.
+pub(crate) fn verify_arch(
     metadata: &HashMap<String, hanzo_ml::quantized::gguf_file::Value>,
+    allowed: &[&str],
 ) -> Result<String> {
     use crate::utils::gguf_metadata::TryValueInto;
     let actual_arch: String = metadata
         .get("general.architecture")
         .cloned()
         .try_value_into()?;
-    if actual_arch != "qwen35moe" && actual_arch != "qwen35" {
-        hanzo_ml::bail!("Expected `qwen35moe`/`qwen35` architecture, got `{actual_arch}`.");
+    if !allowed.contains(&actual_arch.as_str()) {
+        let expected = allowed
+            .iter()
+            .map(|arch| format!("`{arch}`"))
+            .collect::<Vec<_>>()
+            .join("/");
+        hanzo_ml::bail!("Expected {expected} architecture, got `{actual_arch}`.");
     }
     Ok(actual_arch)
 }
@@ -948,7 +1044,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         dtype: DType,
     ) -> Result<Self> {
         let meta = ct.get_metadata();
-        let actual_arch = verify_arch(meta)?;
+        let actual_arch = verify_arch(meta, &["qwen35moe", "qwen35"])?;
         let is_moe = actual_arch == "qwen35moe";
 
         let metadata = ContentMetadata {
@@ -1044,58 +1140,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     )?)
                 }
                 LayerType::LinearAttention => {
-                    let in_proj_qkv =
-                        gguf_qmm(ct.tensor(&format!("{prefix}.attn_qkv.weight"), dev)?)?;
-                    let in_proj_z =
-                        gguf_qmm(ct.tensor(&format!("{prefix}.attn_gate.weight"), dev)?)?;
-                    let in_proj_b =
-                        gguf_qmm(ct.tensor(&format!("{prefix}.ssm_beta.weight"), dev)?)?;
-                    let in_proj_a =
-                        gguf_qmm(ct.tensor(&format!("{prefix}.ssm_alpha.weight"), dev)?)?;
-                    let out_proj = gguf_qmm(ct.tensor(&format!("{prefix}.ssm_out.weight"), dev)?)?;
-
-                    // conv1d / dt / a are small f32 params kept dequantized.
-                    let mut conv1d_weight = ct
-                        .tensor(&format!("{prefix}.ssm_conv1d.weight"), dev)?
-                        .dequantize(dev)?;
-                    // GGUF squeezes conv1d to 2D (conv_dim, kernel); ensure 2D.
-                    if conv1d_weight.rank() == 3 {
-                        conv1d_weight = conv1d_weight.squeeze(1)?;
-                    }
-                    // GGUF conversions name this `ssm_dt.bias` (Unsloth/llama.cpp) or `ssm_dt`; accept both.
-                    let dt_bias = ct
-                        .tensor(&format!("{prefix}.ssm_dt.bias"), dev)
-                        .or_else(|_| ct.tensor(&format!("{prefix}.ssm_dt"), dev))?
-                        .dequantize(dev)?
-                        .to_dtype(DType::F32)?;
-                    let a = ct
-                        .tensor(&format!("{prefix}.ssm_a"), dev)?
-                        .dequantize(dev)?
-                        .to_dtype(DType::F32)?;
-
-                    let ssm_norm_w = ct
-                        .tensor(&format!("{prefix}.ssm_norm.weight"), dev)?
-                        .dequantize(dev)?;
-                    let norm = RmsNormGated::from_weight(ssm_norm_w, props.rms_norm_eps as f64);
-
-                    LayerImpl::LinearAttention(QGatedDeltaNet {
-                        in_proj_qkv,
-                        in_proj_z,
-                        in_proj_b,
-                        in_proj_a,
-                        conv1d_weight,
-                        dt_bias,
-                        a,
-                        norm,
-                        out_proj,
-                        num_k_heads: props.num_k_heads,
-                        num_v_heads: props.num_v_heads,
-                        head_k_dim: props.head_k_dim,
-                        head_v_dim: props.head_v_dim,
-                        conv_kernel_size: props.conv_kernel,
-                        key_dim,
-                        value_dim,
-                    })
+                    LayerImpl::LinearAttention(QGatedDeltaNet::load(&mut ct, &prefix, &props, dev)?)
                 }
             };
 
@@ -1425,5 +1470,419 @@ impl ModelWeights {
             }
         };
         self.rotary.compute_cos_sin(&position_ids, dtype)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::gdn::{GatedDeltaNet, GdnInProj};
+    use hanzo_ml::quantized::{gguf_file, GgmlDType, QTensor};
+    use hanzo_nn::Linear;
+    use hanzo_quant::UnquantLinear;
+    use rand::{rngs::StdRng, Rng, SeedableRng};
+
+    const HIDDEN: usize = 12;
+    const HEADS: usize = 2;
+    const KV_HEADS: usize = 1;
+    const HEAD_DIM: usize = 16;
+    const ROT_DIM: usize = 8;
+    const THETA: f32 = 10_000.0;
+    const EPS: f32 = 1e-6;
+    const GDN_HEADS: usize = 2;
+    const GDN_DIM: usize = 4;
+    const CONV: usize = 4;
+
+    fn props() -> PropsGGUF {
+        PropsGGUF {
+            head_count: HEADS,
+            head_count_kv: KV_HEADS,
+            block_count: 4,
+            embedding_length: HIDDEN,
+            rms_norm_eps: EPS,
+            max_seq_len: 64,
+            rope_freq_base: THETA,
+            head_dim: HEAD_DIM,
+            rot_dim: ROT_DIM,
+            mrope_section: vec![2, 1, 1],
+            full_attention_interval: 4,
+            conv_kernel: CONV,
+            head_k_dim: GDN_DIM,
+            head_v_dim: GDN_DIM,
+            num_k_heads: GDN_HEADS,
+            num_v_heads: GDN_HEADS,
+            num_experts: None,
+            num_experts_per_tok: 0,
+            moe_intermediate_size: 0,
+            is_moe: false,
+            nextn_predict_layers: 0,
+        }
+    }
+
+    /// Seeded tensors in torch layout (`[out, in]`, or `[n]` for a vector), named as in the GGUF.
+    fn draw(shapes: &[(&str, &[usize])], seed: u64) -> Vec<(String, Vec<usize>, Vec<f32>)> {
+        let mut rng = StdRng::seed_from_u64(seed);
+        shapes
+            .iter()
+            .map(|(name, shape)| {
+                let n: usize = shape.iter().product();
+                // Vectors sit around 1, as a trained norm weight does.
+                let shift = if shape.len() == 1 { 1.0 } else { 0.0 };
+                let data = (0..n)
+                    .map(|_| shift + rng.random_range(-0.5f32..0.5))
+                    .collect();
+                (format!("blk.0.{name}"), shape.to_vec(), data)
+            })
+            .collect()
+    }
+
+    fn open(
+        dir: &std::path::Path,
+        tensors: &[(String, Vec<usize>, Vec<f32>)],
+    ) -> Result<std::fs::File> {
+        let path = dir.join("block.gguf");
+        let owned = tensors
+            .iter()
+            .map(|(name, shape, data)| {
+                let t = Tensor::from_vec(data.clone(), shape.as_slice(), &Device::Cpu)?;
+                Ok((name.as_str(), QTensor::quantize(&t, GgmlDType::F32)?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let refs = owned.iter().map(|(n, t)| (*n, t)).collect::<Vec<_>>();
+        let arch = gguf_file::Value::String("qwen35".to_string());
+        let mut file = std::fs::File::create(&path).map_err(hanzo_ml::Error::msg)?;
+        gguf_file::write(&mut file, &[("general.architecture", &arch)], &refs)?;
+        std::fs::File::open(&path).map_err(hanzo_ml::Error::msg)
+    }
+
+    fn metadata(arch: &str) -> HashMap<String, gguf_file::Value> {
+        HashMap::from([(
+            "general.architecture".to_string(),
+            gguf_file::Value::String(arch.to_string()),
+        )])
+    }
+
+    #[test]
+    fn verify_arch_accepts_only_the_listed() -> Result<()> {
+        let allowed = ["qwen35moe", "qwen35"];
+        assert_eq!(verify_arch(&metadata("qwen35"), &allowed)?, "qwen35");
+        let err = verify_arch(&metadata("qwen4exp"), &allowed)
+            .expect_err("qwen4exp is not listed")
+            .to_string();
+        assert!(
+            err.contains("Expected `qwen35moe`/`qwen35` architecture, got `qwen4exp`."),
+            "{err}"
+        );
+        assert_eq!(
+            verify_arch(&metadata("qwen4exp"), &["qwen4exp"])?,
+            "qwen4exp"
+        );
+        Ok(())
+    }
+
+    /// One position of vLLM `Qwen3NextAttention.forward` in f64: `q`, `k`, `v` and `gate` are
+    /// `_project_qkv_gate` (`qwen3_next.py:384-444`), `y` is `self.attn` (`:453`) and `out` is
+    /// `o_proj(y * sigmoid(gate))` (`:454-456`).
+    struct Row {
+        q: Vec<f64>,
+        k: Vec<f64>,
+        v: Vec<f64>,
+        gate: Vec<f64>,
+        y: Vec<f64>,
+        out: Vec<f64>,
+    }
+
+    /// The reference over one sequence at positions `0..`: per-head q/k RMSNorm, NeoX RoPE on the
+    /// first `ROT_DIM` dims (text MRoPE has equal planes, so it is plain partial RoPE), and causal
+    /// `softmax(q·k/√d)·v` with each KV head serving `HEADS / KV_HEADS` query heads.
+    fn attention_reference(x: &[f64], w: &HashMap<String, Vec<f64>>) -> Vec<Row> {
+        let linear = |m: &[f64], u: &[f64]| -> Vec<f64> {
+            m.chunks(u.len())
+                .map(|row| row.iter().zip(u).map(|(a, b)| a * b).sum())
+                .collect()
+        };
+        let norm = |u: &mut [f64], g: &[f64]| {
+            let mean = u.iter().map(|a| a * a).sum::<f64>() / u.len() as f64;
+            let inv = 1.0 / (mean + f64::from(EPS)).sqrt();
+            for (a, g) in u.iter_mut().zip(g) {
+                *a *= inv * g;
+            }
+        };
+        let rope = |u: &mut [f64], p: usize| {
+            let (lo, hi) = u[..ROT_DIM].split_at_mut(ROT_DIM / 2);
+            for (i, (a, c)) in lo.iter_mut().zip(hi).enumerate() {
+                let theta = p as f64 * f64::from(THETA).powf(-((2 * i) as f64) / ROT_DIM as f64);
+                let (x0, x1) = (*a, *c);
+                *a = x0 * theta.cos() - x1 * theta.sin();
+                *c = x1 * theta.cos() + x0 * theta.sin();
+            }
+        };
+        let mut rows = x
+            .chunks(HIDDEN)
+            .enumerate()
+            .map(|(p, xt)| {
+                // q_proj interleaves `[q_h | gate_h]` per head (`qwen3_next.py:424-432`).
+                let qg = linear(&w["blk.0.attn_q.weight"], xt);
+                let (mut q, mut gate) = (vec![], vec![]);
+                for head in qg.chunks(2 * HEAD_DIM) {
+                    let mut qh = head[..HEAD_DIM].to_vec();
+                    norm(&mut qh, &w["blk.0.attn_q_norm.weight"]);
+                    rope(&mut qh, p);
+                    q.extend(qh);
+                    gate.extend_from_slice(&head[HEAD_DIM..]);
+                }
+                let mut k = linear(&w["blk.0.attn_k.weight"], xt);
+                for kh in k.chunks_mut(HEAD_DIM) {
+                    norm(kh, &w["blk.0.attn_k_norm.weight"]);
+                    rope(kh, p);
+                }
+                let v = linear(&w["blk.0.attn_v.weight"], xt);
+                Row {
+                    q,
+                    k,
+                    v,
+                    gate,
+                    y: vec![],
+                    out: vec![],
+                }
+            })
+            .collect::<Vec<_>>();
+        for t in 0..rows.len() {
+            let mut y = vec![0f64; HEADS * HEAD_DIM];
+            for h in 0..HEADS {
+                let kv = (h / (HEADS / KV_HEADS)) * HEAD_DIM;
+                let qh = &rows[t].q[h * HEAD_DIM..(h + 1) * HEAD_DIM];
+                let scores = rows[..=t]
+                    .iter()
+                    .map(|row| {
+                        let dot: f64 = qh.iter().zip(&row.k[kv..]).map(|(a, b)| a * b).sum();
+                        dot / (HEAD_DIM as f64).sqrt()
+                    })
+                    .collect::<Vec<_>>();
+                let top = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let e = scores.iter().map(|s| (s - top).exp()).collect::<Vec<_>>();
+                let z: f64 = e.iter().sum();
+                for (row, e) in rows[..=t].iter().zip(&e) {
+                    for (yj, vj) in y[h * HEAD_DIM..(h + 1) * HEAD_DIM]
+                        .iter_mut()
+                        .zip(&row.v[kv..])
+                    {
+                        *yj += e / z * vj;
+                    }
+                }
+            }
+            let gated = y
+                .iter()
+                .zip(&rows[t].gate)
+                .map(|(a, g)| a / (1.0 + (-g).exp()))
+                .collect::<Vec<_>>();
+            rows[t].out = linear(&w["blk.0.attn_output.weight"], &gated);
+            rows[t].y = y;
+        }
+        rows
+    }
+
+    /// `got` against `want` at position `at`, each value relative to its reference or, where that
+    /// is below 0.1, to 0.1: the values are sums that can cancel to near zero, where the f32
+    /// rounding of their O(1) terms is no longer small relative to the result.
+    fn check(stage: &str, at: usize, got: &[f32], want: &[f64], tol: f64) {
+        assert_eq!(got.len(), want.len(), "{stage} at {at}");
+        let worst = got
+            .iter()
+            .zip(want)
+            .map(|(g, r)| (f64::from(*g) - r).abs() / r.abs().max(0.1))
+            .fold(0f64, f64::max);
+        assert!(
+            worst < tol,
+            "{stage} at {at}: max relative error {worst:.3e}"
+        );
+    }
+
+    /// Position `i` of head `h` in the values of a `[1, heads, len, HEAD_DIM]` tensor.
+    fn head(t: &[f32], len: usize, h: usize, i: usize) -> &[f32] {
+        &t[(h * len + i) * HEAD_DIM..][..HEAD_DIM]
+    }
+
+    /// A prompt, then one decode step over the block's own `KvCache`, each through `project`,
+    /// `attend` and `output`: every stage equals the reference over the whole sequence.
+    #[test]
+    fn gated_attention_matches_reference() -> Result<()> {
+        // The CPU's eager SDPA, which serves the prompt, multiplies in f16 (hanzo-quant
+        // `MatMul::matmul` without `accelerate`): 2^-11 rounding per operand through the score and
+        // value products. The single-query kernel that serves the decode step is f32.
+        const F16_ATTENTION: f64 = 1e-2;
+        let dev = Device::Cpu;
+        let tensors = draw(
+            &[
+                ("attn_q.weight", &[2 * HEADS * HEAD_DIM, HIDDEN]),
+                ("attn_k.weight", &[KV_HEADS * HEAD_DIM, HIDDEN]),
+                ("attn_v.weight", &[KV_HEADS * HEAD_DIM, HIDDEN]),
+                ("attn_output.weight", &[HIDDEN, HEADS * HEAD_DIM]),
+                ("attn_q_norm.weight", &[HEAD_DIM]),
+                ("attn_k_norm.weight", &[HEAD_DIM]),
+            ],
+            0x6174_746e,
+        );
+        let dir = tempfile::tempdir().map_err(hanzo_ml::Error::msg)?;
+        let mut files = [open(dir.path(), &tensors)?];
+        let mut readers: Vec<&mut std::fs::File> = files.iter_mut().collect();
+        let mut ct = Content::from_readers(&mut readers)?;
+        let props = props();
+        let rotary = Arc::new(Qwen3VLRotaryEmbedding::new(
+            THETA,
+            ROT_DIM,
+            &dev,
+            props.mrope_section.clone(),
+        )?);
+        let attn =
+            GatedFullAttention::load(&mut ct, "blk.0", &props, rotary, None, &dev, DType::F32)?;
+        let w: HashMap<String, Vec<f64>> = tensors
+            .iter()
+            .map(|(name, _, data)| (name.clone(), data.iter().map(|&a| f64::from(a)).collect()))
+            .collect();
+
+        let (prompt, total) = (5usize, 6usize);
+        let mut rng = StdRng::seed_from_u64(0x7870);
+        let x: Vec<f32> = (0..total * HIDDEN)
+            .map(|_| rng.random_range(-1f32..1.0))
+            .collect();
+        let want = attention_reference(&x.iter().map(|&a| f64::from(a)).collect::<Vec<_>>(), &w);
+        let xs = Tensor::from_vec(x, (1, total, HIDDEN), &dev)?;
+
+        let mut cache = KvCache::new_normal(2, total, total);
+        for (start, len) in [(0, prompt), (prompt, 1)] {
+            let ids = Tensor::zeros((1, len), DType::U32, &dev)?;
+            let offsets: &[usize] = &[start];
+            let mask = CausalMasker.make_causal_mask(
+                &ids,
+                &offsets,
+                DType::F32,
+                &CausalMaskConfig::gguf(),
+            )?;
+            let pos = Tensor::arange(start as u32, (start + len) as u32, &dev)?.unsqueeze(0)?;
+            let cos_sin =
+                attn.rotary_cos_sin(&Tensor::stack(&[&pos, &pos, &pos], 0)?, DType::F32)?;
+            let chunk = xs.narrow(1, start, len)?.contiguous()?;
+            let (q, k, v, gate) = attn.project(&chunk, &cos_sin)?;
+            let y = attn.attend(&q, &k, &v, &mask, &mut cache, None)?;
+            let out = attn.output(&y, &gate, DType::F32)?;
+
+            let tol = if len > 1 { F16_ATTENTION } else { 1e-5 };
+            let values = |t: &Tensor| t.flatten_all()?.to_vec1::<f32>();
+            let (q, k, v) = (values(&q)?, values(&k)?, values(&v)?);
+            let (gate, y, out) = (values(&gate)?, values(&y)?, values(&out)?);
+            let width = HEADS * HEAD_DIM;
+            for (i, row) in want[start..start + len].iter().enumerate() {
+                let at = start + i;
+                for h in 0..HEADS {
+                    let own = h * HEAD_DIM..(h + 1) * HEAD_DIM;
+                    check("q", at, head(&q, len, h, i), &row.q[own], 1e-5);
+                }
+                for h in 0..KV_HEADS {
+                    let own = h * HEAD_DIM..(h + 1) * HEAD_DIM;
+                    check("k", at, head(&k, len, h, i), &row.k[own.clone()], 1e-5);
+                    check("v", at, head(&v, len, h, i), &row.v[own], 1e-5);
+                }
+                check("gate", at, &gate[i * width..][..width], &row.gate, 1e-5);
+                check("y", at, &y[i * width..][..width], &row.y, tol);
+                check("out", at, &out[i * HIDDEN..][..HIDDEN], &row.out, tol);
+            }
+        }
+        Ok(())
+    }
+
+    /// `QGatedDeltaNet::load` reads a Qwen3.5 GGUF block into the layer the safetensors
+    /// `GatedDeltaNet` computes from the same weights. With as many V heads as K heads the GGUF's
+    /// tiled V order is the checkpoint's grouped order, so the two agree over a prompt and a step.
+    #[test]
+    fn gdn_load_matches_safetensors_layer() -> Result<()> {
+        let dev = Device::Cpu;
+        let (key_dim, value_dim) = (GDN_HEADS * GDN_DIM, GDN_HEADS * GDN_DIM);
+        let conv_dim = 2 * key_dim + value_dim;
+        let mut tensors = draw(
+            &[
+                ("attn_qkv.weight", &[conv_dim, HIDDEN]),
+                ("attn_gate.weight", &[value_dim, HIDDEN]),
+                ("ssm_beta.weight", &[GDN_HEADS, HIDDEN]),
+                ("ssm_alpha.weight", &[GDN_HEADS, HIDDEN]),
+                ("ssm_out.weight", &[HIDDEN, value_dim]),
+                ("ssm_conv1d.weight", &[conv_dim, CONV]),
+                ("ssm_dt.bias", &[GDN_HEADS]),
+                ("ssm_norm.weight", &[GDN_DIM]),
+            ],
+            0x6764_6e6c,
+        );
+        let a_log = Tensor::new(&[-0.3f32, 0.4], &dev)?;
+        // The converter stores -exp(A_log).
+        let ssm_a = a_log.exp()?.neg()?;
+        tensors.push(("blk.0.ssm_a".to_string(), vec![GDN_HEADS], ssm_a.to_vec1()?));
+        let tensor = |name: &str| -> Result<Tensor> {
+            let (_, shape, data) = tensors
+                .iter()
+                .find(|(n, _, _)| n == &format!("blk.0.{name}"))
+                .expect("drawn above");
+            Tensor::from_vec(data.clone(), shape.as_slice(), &dev)
+        };
+        let dense = |name: &str| -> Result<Arc<dyn QuantMethod>> {
+            Ok(Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(Linear::new(tensor(name)?, None)),
+            )?))
+        };
+        let twin = GatedDeltaNet {
+            in_proj: GdnInProj::Split {
+                qkv: dense("attn_qkv.weight")?,
+                z: dense("attn_gate.weight")?,
+                b: dense("ssm_beta.weight")?,
+                a: dense("ssm_alpha.weight")?,
+            },
+            conv1d_weight: tensor("ssm_conv1d.weight")?.unsqueeze(1)?,
+            dt_bias: tensor("ssm_dt.bias")?,
+            a_log,
+            norm: RmsNormGated::from_weight(tensor("ssm_norm.weight")?, f64::from(EPS)),
+            out_proj: dense("ssm_out.weight")?,
+            num_k_heads: GDN_HEADS,
+            num_v_heads: GDN_HEADS,
+            head_k_dim: GDN_DIM,
+            head_v_dim: GDN_DIM,
+            conv_kernel_size: CONV,
+            key_dim,
+            value_dim,
+        };
+
+        let dir = tempfile::tempdir().map_err(hanzo_ml::Error::msg)?;
+        let mut files = [open(dir.path(), &tensors)?];
+        let mut readers: Vec<&mut std::fs::File> = files.iter_mut().collect();
+        let mut ct = Content::from_readers(&mut readers)?;
+        let gdn = QGatedDeltaNet::load(&mut ct, "blk.0", &props(), &dev)?;
+
+        let fresh = || -> Result<GdnLayerCache> {
+            Ok(GdnLayerCache {
+                conv_state: Tensor::zeros((1, conv_dim, CONV), DType::F32, &dev)?,
+                recurrent_state: Tensor::zeros((1, GDN_HEADS, GDN_DIM, GDN_DIM), DType::F32, &dev)?,
+                seqlen_offset: 0,
+                trail: None,
+            })
+        };
+        let (mut ours, mut theirs) = (fresh()?, fresh()?);
+        let mut rng = StdRng::seed_from_u64(0x6764_6e78);
+        let mut at = 0;
+        for len in [5usize, 1] {
+            let x: Vec<f32> = (0..len * HIDDEN)
+                .map(|_| rng.random_range(-1f32..1.0))
+                .collect();
+            let x = Tensor::from_vec(x, (1, len, HIDDEN), &dev)?;
+            let got = gdn
+                .forward(&x, &mut ours)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let want = twin
+                .forward(&x, &mut theirs)?
+                .flatten_all()?
+                .to_dtype(DType::F64)?
+                .to_vec1::<f64>()?;
+            check("gdn", at, &got, &want, 1e-5);
+            at += len;
+        }
+        Ok(())
     }
 }

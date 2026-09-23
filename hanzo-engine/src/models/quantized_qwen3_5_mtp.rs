@@ -22,7 +22,9 @@ use crate::models::quantized_qwen3_5_moe::{
     gguf_qmm, DecoderLayer, DenseMlp, GatedFullAttention, LayerImpl, ModelWeights, MoeOrMlp,
     PropsGGUF,
 };
-use crate::models::qwen3_5_mtp::{chain_cache, default_n_predict, MtpStep, Qwen3_5MtpProposer};
+use crate::models::qwen3_5_mtp::{
+    chain_cache, default_n_predict, MtpOut, MtpStep, Qwen3_5MtpProposer,
+};
 use crate::speculative::{MtpConfig, SelfSpeculative, SpeculativeProposer};
 
 /// The tensor that says a GGUF carries a head, relative to its block prefix.
@@ -129,8 +131,9 @@ impl MtpStep for Qwen35GgufMtpHead {
         input_embeds: &Tensor,
         target_hidden: &Tensor,
         positions: &Tensor,
-    ) -> Result<Tensor> {
+    ) -> Result<MtpOut> {
         self.forward(input_embeds, target_hidden, positions)
+            .map(MtpOut::same)
     }
 
     fn reset(&mut self) {
@@ -298,18 +301,26 @@ mod tests {
             &hidden,
             &positions(&[[7, 7, 7], [9, 9, 9]], &device)?,
         )?;
-        assert_eq!(first.dims(), &[batch, 1, HIDDEN]);
+        assert_eq!(first.head.dims(), &[batch, 1, HIDDEN]);
         assert!(
-            first.abs()?.sum_all()?.to_scalar::<f32>()? > 0.0,
+            first.head.abs()?.sum_all()?.to_scalar::<f32>()? > 0.0,
             "the head returned an all-zero hidden state"
+        );
+        // Qwen3.5's head carries the state it hands `lm_head`.
+        assert_eq!(
+            (&first.carry - &first.head)?
+                .abs()?
+                .max_all()?
+                .to_scalar::<f32>()?,
+            0.0
         );
 
         let second = head.step(
             &embeds,
-            &first,
+            &first.carry,
             &positions(&[[8, 8, 8], [10, 10, 10]], &device)?,
         )?;
-        assert_eq!(second.dims(), &[batch, 1, HIDDEN]);
+        assert_eq!(second.head.dims(), &[batch, 1, HIDDEN]);
 
         // A reset chain starts over: the same inputs at the same positions give the first step back.
         head.reset();
@@ -318,7 +329,10 @@ mod tests {
             &hidden,
             &positions(&[[7, 7, 7], [9, 9, 9]], &device)?,
         )?;
-        let drift = (&again - &first)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        let drift = (&again.head - &first.head)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
         assert!(drift < 1e-5, "reset left {drift} of the old chain behind");
         Ok(())
     }
