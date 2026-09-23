@@ -42,10 +42,20 @@ pub trait GdnConfig {
 
 // ====================== RMSNorm Gated ======================
 
-/// RMSNorm with gating: `rms_norm(x) * weight * silu(gate)`
+/// The gate's activation. vLLM `RMSNormGated` accepts silu or sigmoid (`layernorm.py:248-249`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Act {
+    Silu,
+    Sigmoid,
+}
+
+/// RMSNorm with gating: `rms_norm(x) * weight * act(gate)`, the norm taken before the gate
+/// (vLLM `RMSNormGated`, `norm_before_gate=True`, `layernorm.py:243-269`). The gate is silu
+/// unless [`RmsNormGated::sigmoid`] switches it.
 pub struct RmsNormGated {
     pub weight: Tensor,
     eps: f64,
+    act: Act,
 }
 
 impl RmsNormGated {
@@ -59,18 +69,36 @@ impl RmsNormGated {
         if let Some(target_dev) = isq_target_device {
             weight = weight.to_device(target_dev)?;
         }
-        Ok(Self { weight, eps })
+        Ok(Self::from_weight(weight, eps))
     }
 
     /// Build directly from an already-materialized weight (e.g. a dequantized GGUF tensor).
     pub fn from_weight(weight: Tensor, eps: f64) -> Self {
-        Self { weight, eps }
+        Self {
+            weight,
+            eps,
+            act: Act::Silu,
+        }
+    }
+
+    /// Gate with `sigmoid(gate)`, as a GDN with `output_gate_type = "sigmoid"` does
+    /// (vLLM `qwen_gdn_linear_attn.py:471-484`).
+    #[allow(dead_code)] // no Qwen3.5 GDN gates with sigmoid; qwen4exp's does
+    pub fn sigmoid(self) -> Self {
+        Self {
+            act: Act::Sigmoid,
+            ..self
+        }
     }
 
     pub fn forward(&self, x: &Tensor, gate: &Tensor) -> Result<Tensor> {
         let dtype = x.dtype();
         let x = x.to_dtype(DType::F32)?.contiguous()?;
-        let gate = hanzo_nn::ops::silu(&gate.to_dtype(DType::F32)?)?;
+        let gate = gate.to_dtype(DType::F32)?;
+        let gate = match self.act {
+            Act::Silu => hanzo_nn::ops::silu(&gate)?,
+            Act::Sigmoid => sigmoid(&gate)?,
+        };
         let weight = self.weight.to_dtype(DType::F32)?;
         let normed = hanzo_nn::ops::rms_norm(&x, &weight, self.eps as f32)?;
         normed.broadcast_mul(&gate)?.to_dtype(dtype)
@@ -1221,6 +1249,60 @@ mod tests {
         Ok(Arc::new(UnquantLinear::new(
             QuantMethodConfig::Unquantized(Linear::new(w, None)),
         )?))
+    }
+
+    /// vLLM `RMSNormGated.forward_static` with `norm_before_gate=True` and one group, in f64
+    /// (`layernorm.py:243-269`): each row is `x * rsqrt(mean(x²) + eps) * w * act(z)`.
+    fn gated_norm_reference(x: &[f64], z: &[f64], w: &[f64], eps: f64, sigmoid: bool) -> Vec<f64> {
+        let n = w.len();
+        let mut out = Vec::with_capacity(x.len());
+        for (xr, zr) in x.chunks(n).zip(z.chunks(n)) {
+            let variance = xr.iter().map(|v| v * v).sum::<f64>() / n as f64;
+            let inv = 1.0 / (variance + eps).sqrt();
+            for ((a, g), wj) in xr.iter().zip(zr).zip(w) {
+                let s = 1.0 / (1.0 + (-g).exp());
+                let act = if sigmoid { s } else { g * s };
+                out.push(a * inv * wj * act);
+            }
+        }
+        out
+    }
+
+    /// Both gates against the reference: `from_weight` gates with silu, `.sigmoid()` with sigmoid.
+    #[test]
+    fn rms_norm_gated_matches_reference() -> Result<()> {
+        use rand::{rngs::StdRng, Rng, SeedableRng};
+        let dev = Device::Cpu;
+        let (rows, n, eps) = (6usize, 128usize, 1e-6);
+        let mut rng = StdRng::seed_from_u64(0x676e_6f72);
+        let mut draw = |len: usize, scale: f32| -> Vec<f32> {
+            (0..len).map(|_| rng.random_range(-scale..scale)).collect()
+        };
+        let (x, z, w) = (draw(rows * n, 2.0), draw(rows * n, 4.0), draw(n, 1.5));
+        let wide = |v: &[f32]| v.iter().map(|&a| f64::from(a)).collect::<Vec<_>>();
+
+        for sigmoid in [false, true] {
+            let norm = RmsNormGated::from_weight(Tensor::from_vec(w.clone(), n, &dev)?, eps);
+            let norm = if sigmoid { norm.sigmoid() } else { norm };
+            let got = norm
+                .forward(
+                    &Tensor::from_vec(x.clone(), (rows, n), &dev)?,
+                    &Tensor::from_vec(z.clone(), (rows, n), &dev)?,
+                )?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let want = gated_norm_reference(&wide(&x), &wide(&z), &wide(&w), eps, sigmoid);
+            let worst = got
+                .iter()
+                .zip(&want)
+                .map(|(g, r)| (f64::from(*g) - r).abs() / r.abs().max(1e-3))
+                .fold(0f64, f64::max);
+            assert!(
+                worst < 1e-5,
+                "sigmoid={sigmoid}: max relative error {worst:.3e}"
+            );
+        }
+        Ok(())
     }
 
     // The split projections and the merged grouped-head matrix must be the same linear map. The merge

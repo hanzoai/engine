@@ -17,7 +17,7 @@ use crate::{
     device_map::DeviceMapper,
     kv_cache::KvCache,
     layers::{GemmaRmsNorm, Qwen3VLRotaryEmbedding},
-    models::qwen3_5_mtp::{chain_cache, default_n_predict, MtpStep, Qwen3_5MtpProposer},
+    models::qwen3_5_mtp::{chain_cache, default_n_predict, MtpOut, MtpStep, Qwen3_5MtpProposer},
     pipeline::text_models_inputs_processor::FlashParams,
     speculative::{MtpConfig, SelfSpeculative, SpeculativeProposer},
     utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor},
@@ -147,8 +147,9 @@ impl MtpStep for Qwen3_5MtpHead {
         input_embeds: &Tensor,
         target_hidden: &Tensor,
         positions: &Tensor,
-    ) -> Result<Tensor> {
+    ) -> Result<MtpOut> {
         self.forward(input_embeds, target_hidden, positions)
+            .map(MtpOut::same)
     }
 
     fn reset(&mut self) {
