@@ -2261,6 +2261,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "rocm")]
     fn run_gdn_scan_rocm_matches_portable(dev: &Device) -> Result<()> {
         let (batch, nvh, hkd, hvd, seq) = (1usize, 4usize, 128usize, 128usize, 32usize);
         let gen = |n: usize, seed: usize| -> Vec<f32> {
