@@ -650,10 +650,10 @@ impl Qwen3_5TextModel {
             })
             .collect();
 
-        let hybrid_cache_config = HybridCacheConfig {
-            layer_types: pipeline_layer_types,
-            max_seq_len: cfg.max_position_embeddings,
-            recurrent: RecurrentLayerConfig {
+        let hybrid_cache_config = HybridCacheConfig::uniform(
+            pipeline_layer_types,
+            cfg.max_position_embeddings,
+            RecurrentLayerConfig {
                 conv_dim: cfg.linear_conv_dim(),
                 conv_width: cfg.linear_conv_kernel_dim,
                 state_dims: vec![
@@ -661,16 +661,15 @@ impl Qwen3_5TextModel {
                     cfg.linear_key_head_dim,
                     cfg.linear_value_head_dim,
                 ],
+                conv_dtype: vb_m.dtype(),
+                state_dtype: vb_m.dtype(),
             },
-        };
+        );
 
         let pipeline_cache = Arc::new(Mutex::new(
-            HybridCache::new(
-                hybrid_cache_config,
-                vb_m.dtype(),
-                &normal_loading_metadata.real_device,
-            )
-            .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e)))?,
+            HybridCache::new(hybrid_cache_config, &normal_loading_metadata.real_device).map_err(
+                |e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e)),
+            )?,
         ));
 
         Ok(Self {

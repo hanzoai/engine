@@ -1207,6 +1207,7 @@ impl GatedDeltaNet {
 mod tests {
     use super::*;
 
+    use crate::kv_cache::RecurrentLayerConfig;
     use hanzo_quant::{QuantMethodConfig, UnquantLinear};
 
     fn synthetic(n: usize, seed: usize, dev: &Device) -> Result<Tensor> {
@@ -1600,10 +1601,13 @@ mod tests {
 
         let prefilled = || -> Result<RecurrentStatePool> {
             let mut pool = RecurrentStatePool::new(
-                conv_dim,
-                conv_kernel_size,
-                state_dims.to_vec(),
-                DType::F32,
+                RecurrentLayerConfig {
+                    conv_dim,
+                    conv_width: conv_kernel_size,
+                    state_dims: state_dims.to_vec(),
+                    conv_dtype: DType::F32,
+                    state_dtype: DType::F32,
+                },
                 &dev,
             )?;
             assert_eq!((pool.allocate(), pool.allocate()), (Some(0), Some(1)));
