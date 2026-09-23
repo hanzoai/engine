@@ -82,7 +82,7 @@ impl Config {
 }
 
 /// One layer's indexer. The q/k norms are Gemma norms whose `1 + w` the GGUF already carries, so
-/// they run as plain RMS norms.
+/// they run as plain RMS norms, in f32 with that f32 weight.
 pub(crate) struct Indexer {
     q: Arc<dyn QuantMethod>,
     k: Arc<dyn QuantMethod>,
@@ -111,9 +111,9 @@ impl Indexer {
         })
     }
 
-    /// Queries `[B, S, heads, dim]`, normed then roped, and raw keys `[B, S, dim]` of `u`
-    /// `[B, S, hidden]`; `cos_sin` holds the rotary tables at the chunk's positions
-    /// (nvidia/indexer_qsa.py:230-237, 276-282).
+    /// Queries `[B, S, heads, dim]`, normed in f32 and rounded once, then roped, and raw keys
+    /// `[B, S, dim]` of `u` `[B, S, hidden]`; `cos_sin` holds the rotary tables at the chunk's
+    /// positions (nvidia/indexer_qsa.py:230-237, 276-282; nvidia/ops/qsa_pre_indexer.py:68-71).
     pub(crate) fn project(
         &self,
         u: &Tensor,
@@ -125,13 +125,18 @@ impl Indexer {
             .forward(u)?
             .reshape((b, s, self.cfg.heads, self.cfg.dim))?
             .transpose(1, 2)?;
-        let q = rope(&self.q_norm.forward(&q)?, cos_sin)?.transpose(1, 2)?;
+        let normed = self
+            .q_norm
+            .forward(&q.to_dtype(DType::F32)?)?
+            .to_dtype(q.dtype())?;
+        let q = rope(&normed, cos_sin)?.transpose(1, 2)?;
         Ok((q, self.k.forward(u)?))
     }
 
     /// Compressed keys `[G, dim]` of raw keys `[G·ratio, dim]` taken group by group: the f32
-    /// mean, rounded to bf16, normed, then roped at the group's first position `ratio·j`, where
-    /// `cos_sin` holds one row per group (nvidia/ops/qsa_pre_indexer.py:261-269, 271, 322-334).
+    /// mean, rounded to bf16, normed in f32 and rounded once to the raw keys' dtype, then roped at
+    /// the group's first position `ratio·j`, where `cos_sin` holds one row per group
+    /// (nvidia/ops/qsa_pre_indexer.py:68-71, 261-269, 271, 322-334).
     pub(crate) fn compress(&self, raw: &Tensor, cos_sin: &(Tensor, Tensor)) -> Result<Tensor> {
         let (n, dim) = raw.dims2()?;
         let r = self.cfg.ratio;
@@ -141,8 +146,12 @@ impl Indexer {
         let g = n / r;
         let pooled = (raw.to_dtype(DType::F32)?.reshape((g, r, dim))?.sum(1)? / r as f64)?
             .to_dtype(DType::BF16)?
-            .to_dtype(raw.dtype())?;
-        let x = self.k_norm.forward(&pooled)?.reshape((1, 1, g, dim))?;
+            .to_dtype(DType::F32)?;
+        let x = self
+            .k_norm
+            .forward(&pooled)?
+            .to_dtype(raw.dtype())?
+            .reshape((1, 1, g, dim))?;
         rope(&x, cos_sin)?.reshape((g, dim))
     }
 }
@@ -411,9 +420,13 @@ mod tests {
         x.iter().map(|&v| f64::from(v)).collect()
     }
 
+    fn f64s(t: &Tensor) -> Result<Vec<f64>> {
+        t.to_dtype(DType::F64)?.flatten_all()?.to_vec1::<f64>()
+    }
+
     /// Max error within `1e-5` of the reference's largest magnitude (at least 1).
     fn close(got: &Tensor, want: &[f64], what: &str) -> Result<()> {
-        let got = got.to_dtype(DType::F64)?.flatten_all()?.to_vec1::<f64>()?;
+        let got = f64s(got)?;
         assert_eq!(got.len(), want.len(), "{what}: length");
         let scale = want.iter().fold(1f64, |m, v| m.max(v.abs()));
         let err = got
@@ -424,10 +437,36 @@ mod tests {
         Ok(())
     }
 
+    /// Each bf16 value is the reference rounded once: within half a bf16 ulp of it, which is
+    /// `2^(⌊log2 |v|⌋ - 8)` as bf16 keeps 8 significant bits, plus the f32 arithmetic's own error.
+    /// A second rounding costs up to another half ulp.
+    fn rounded_once(got: &Tensor, want: &[f64], what: &str) -> Result<()> {
+        assert_eq!(got.dtype(), DType::BF16, "{what}: dtype");
+        let got = f64s(got)?;
+        assert_eq!(got.len(), want.len(), "{what}: length");
+        let scale = want.iter().fold(0f64, |m, v| m.max(v.abs()));
+        for (i, (g, w)) in got.iter().zip(want).enumerate() {
+            let half = f64::from_bits(w.abs().to_bits() & 0x7ff0_0000_0000_0000) / 256.0;
+            assert!(
+                (g - w).abs() <= half + 1e-6 * scale,
+                "{what}[{i}] = {g}, reference {w}: more than one rounding"
+            );
+        }
+        Ok(())
+    }
+
     /// `[3, 1, S]` MRoPE position ids with the three planes equal, as for text.
     fn planes(pos: &[usize], dev: &Device) -> Result<Tensor> {
         let p: Vec<u32> = pos.iter().map(|&p| p as u32).collect();
         Tensor::from_vec(p.repeat(3), (3, 1, pos.len()), dev)
+    }
+
+    /// Gemma norm weights as the GGUF stores them, f32 `1 + w`: `w` is a bf16 checkpoint value
+    /// near -0.17, so most `1 + w` need more bits than bf16 keeps.
+    fn folded(rng: &mut StdRng, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|_| 1.0 + half::bf16::from_f32(rng.random_range(-0.3..-0.05)).to_f32())
+            .collect()
     }
 
     struct Weights {
@@ -444,14 +483,8 @@ mod tests {
         let w = Weights {
             q: grid(rng, cfg.heads * cfg.dim * HIDDEN, 16),
             k: grid(rng, cfg.dim * HIDDEN, 16),
-            q_norm: grid(rng, cfg.dim, 16)
-                .iter()
-                .map(|v| 1.0 + v / 4.0)
-                .collect(),
-            k_norm: grid(rng, cfg.dim, 16)
-                .iter()
-                .map(|v| 1.0 + v / 4.0)
-                .collect(),
+            q_norm: folded(rng, cfg.dim),
+            k_norm: folded(rng, cfg.dim),
         };
         let dev = Device::Cpu;
         let q = QTensor::quantize(
@@ -494,6 +527,23 @@ mod tests {
         let mut file = std::fs::File::create(path).map_err(hanzo_ml::Error::msg)?;
         gguf_file::write(&mut file, &metadata, &tensors)?;
         Ok(w)
+    }
+
+    /// Layer 3's config and indexer, read back from the GGUF at `path`.
+    fn load(path: &std::path::Path) -> Result<(Config, Indexer)> {
+        let mut files = [std::fs::File::open(path).map_err(hanzo_ml::Error::msg)?];
+        let mut readers: Vec<&mut std::fs::File> = files.iter_mut().collect();
+        let mut ct = Content::from_readers(&mut readers)?;
+        let cfg = Config::from_gguf(
+            &ContentMetadata {
+                path_prefix: "qwen4exp",
+                metadata: ct.get_metadata(),
+            },
+            3,
+        )?
+        .expect("layer 3 has an indexer");
+        let indexer = Indexer::from_gguf(&mut ct, "blk.3", cfg, EPS, &Device::Cpu)?;
+        Ok((cfg, indexer))
     }
 
     /// The production header's values give 512 groups and a width of 2051; a GDN layer, whose
@@ -549,19 +599,8 @@ mod tests {
             blocks: 2,
         };
         let w = fixture(&path, &tiny, &mut rng)?;
-        let mut files = [std::fs::File::open(&path).map_err(hanzo_ml::Error::msg)?];
-        let mut readers: Vec<&mut std::fs::File> = files.iter_mut().collect();
-        let mut ct = Content::from_readers(&mut readers)?;
-        let cfg = Config::from_gguf(
-            &ContentMetadata {
-                path_prefix: "qwen4exp",
-                metadata: ct.get_metadata(),
-            },
-            3,
-        )?
-        .expect("layer 3 has an indexer");
+        let (cfg, indexer) = load(&path)?;
         assert_eq!((cfg, cfg.width()), (tiny, 11));
-        let indexer = Indexer::from_gguf(&mut ct, "blk.3", cfg, EPS, &dev)?;
         let rotary = Qwen3VLRotaryEmbedding::new(THETA, ROT, &dev, vec![2, 1, 1])?;
 
         // A chunk at positions 5..16.
@@ -619,6 +658,57 @@ mod tests {
             .fold(0f64, |m, (a, b)| m.max((f64::from(*a) - b).abs()));
         assert!(miss > 1e-4, "the bf16 rounding left no trace ({miss})");
         Ok(())
+    }
+
+    /// With bf16 activations each norm keeps x, its rms and the f32 weight `1 + w` in f32 and
+    /// rounds once, before RoPE (nvidia/ops/qsa_pre_indexer.py:68-71; the query at :174-186, the
+    /// compressed key at :322-334). RoPE at position 0 is the identity, so each output is that one
+    /// rounding of the f64 norm of the bf16 values the indexer normed. Rounding `1 + w` to bf16
+    /// first moves many outputs an ulp. The bound is half a bf16 ulp, not 1e-5, because the bf16
+    /// rounding is what is under test.
+    #[test]
+    fn norms_round_once() -> Result<()> {
+        let dev = Device::Cpu;
+        let mut rng = StdRng::seed_from_u64(0x7173_6105);
+        let dir = tempfile::tempdir().map_err(hanzo_ml::Error::msg)?;
+        let path = dir.path().join("qsa.gguf");
+        let tiny = Config {
+            heads: 2,
+            dim: 16,
+            ratio: 4,
+            blocks: 2,
+        };
+        let w = fixture(&path, &tiny, &mut rng)?;
+        let (cfg, indexer) = load(&path)?;
+        let rotary = Qwen3VLRotaryEmbedding::new(THETA, ROT, &dev, vec![2, 1, 1])?;
+        let origin = |n: usize| rotary.compute_cos_sin(&planes(&vec![0; n], &dev)?, DType::BF16);
+
+        let s = 11;
+        let u = Tensor::from_vec(grid(&mut rng, s * HIDDEN, 16), (1, s, HIDDEN), &dev)?
+            .to_dtype(DType::BF16)?;
+        let (q, _) = indexer.project(&u, &origin(s)?)?;
+        let want: Vec<f64> = f64s(&indexer.q.forward(&u)?)?
+            .chunks(cfg.dim)
+            .flat_map(|h| reference::norm(h, &wide(&w.q_norm), f64::from(EPS)))
+            .collect();
+        rounded_once(&q, &want, "queries")?;
+
+        let groups = 3;
+        let raw = Tensor::from_vec(
+            grid(&mut rng, groups * cfg.ratio * cfg.dim, 4096),
+            (groups * cfg.ratio, cfg.dim),
+            &dev,
+        )?
+        .to_dtype(DType::BF16)?;
+        let kc = indexer.compress(&raw, &origin(groups)?)?;
+        let want: Vec<f64> = f64s(&raw)?
+            .chunks(cfg.ratio * cfg.dim)
+            .flat_map(|keys| {
+                let keys: Vec<Vec<f64>> = keys.chunks(cfg.dim).map(<[f64]>::to_vec).collect();
+                reference::norm(&reference::pool(&keys), &wide(&w.k_norm), f64::from(EPS))
+            })
+            .collect();
+        rounded_once(&kc, &want, "compressed keys")
     }
 
     /// Value descending, ties to the lower index, -0 tying +0, emitted ascending. Ordering -0

@@ -2333,7 +2333,70 @@ impl AnyMoeBaseModelMixin for TextModel {}
 
 #[cfg(test)]
 mod tests {
-    use super::sliding_decode_kv_window;
+    use super::*;
+    use crate::paged_attention::{
+        calculate_cache_config, CacheConfig, CacheEngine, MemoryGpuConfig, PagedCacheType,
+    };
+
+    /// The paged budget charges a token what the cache allocates for it: each layer at its own
+    /// width, summed. With 35 layers, every fifth global at head dim 512 and the rest sliding at
+    /// 256, one KV head, that is 21504 elements, which 35 does not divide; a floored per-layer
+    /// mean would charge 21490 and allocate past the budget.
+    #[test]
+    fn paged_budget_is_the_per_layer_sum() {
+        let dims: Vec<usize> = (0..35)
+            .map(|i| if (i + 1) % 5 == 0 { 512 } else { 256 })
+            .collect();
+        let config = Gemma4ModelConfigLike {
+            base: ModelConfigMetadata {
+                max_seq_len: 131072,
+                num_layers: 35,
+                hidden_size: 1536,
+                num_kv_heads: 1,
+                num_attn_heads: 8,
+                sliding_window: Some(512),
+                k_head_dim: 256,
+                v_head_dim: 256,
+                kv_cache_layout: KvCacheLayout::Standard,
+            },
+            per_layer_num_kv_heads: vec![1; 35],
+            per_layer_k_head_dim: dims.clone(),
+            per_layer_v_head_dim: dims,
+            per_layer_uses_own_kv_cache: vec![true; 35],
+            per_layer_donates_shared_kv: vec![false; 35],
+        };
+        assert_eq!(config.kv_cache_elements_per_token(), 21504);
+
+        // 8192 MiB of bf16 in blocks of 32 tokens: 2^32 / 32 / 21504 = 6241 blocks.
+        let blocks = calculate_cache_config(
+            MemoryGpuConfig::MbAmount(8192),
+            Some(32),
+            DType::BF16,
+            PagedCacheType::Auto,
+            &config,
+            &Device::Cpu,
+            &[None],
+            true,
+            None,
+            None,
+        )
+        .unwrap()
+        .num_gpu_blocks;
+        assert_eq!(blocks, 6241);
+
+        let cache = CacheConfig {
+            block_size: 32,
+            num_gpu_blocks: 3,
+            cache_type: PagedCacheType::Auto,
+        };
+        let engine = CacheEngine::new(&config, &cache, DType::BF16, &Device::Cpu, vec![]).unwrap();
+        let held: usize = engine
+            .get_kv_cache()
+            .iter()
+            .map(|(k, v)| k.elem_count() + v.elem_count())
+            .sum();
+        assert_eq!(held, 3 * 32 * 21504);
+    }
 
     #[test]
     fn sliding_decode_kv_window_clamps_only_single_token_sliding_decode() {
