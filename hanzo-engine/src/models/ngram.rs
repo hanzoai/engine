@@ -20,6 +20,7 @@ use hanzo_ml::{bail, DType, Device, IndexOp, Result, Tensor, D};
 use hanzo_quant::QuantMethod;
 
 use crate::gguf::Content;
+use crate::kv_cache::RecurrentLayerConfig;
 use crate::models::gdn::{sigmoid, GdnLayerCache};
 use crate::models::quantized_qwen3_5_moe::gguf_qmm;
 use crate::utils::gguf_metadata::ContentMetadata;
@@ -160,6 +161,19 @@ impl Ngram {
     pub(crate) fn history(&self) -> Result<(usize, usize)> {
         let (channels, kernel) = self.conv.dims2()?;
         Ok((channels, (kernel - 1) * self.hash.order()))
+    }
+
+    /// The side pool that carries the history across forwards: conv only, in `dtype`. vLLM keeps
+    /// it in the model dtype (ple_layer.py:638-648).
+    pub(crate) fn pool(&self, dtype: DType) -> Result<RecurrentLayerConfig> {
+        let (conv_dim, conv_width) = self.history()?;
+        Ok(RecurrentLayerConfig {
+            conv_dim,
+            conv_width,
+            state_dims: Vec::new(),
+            conv_dtype: dtype,
+            state_dtype: dtype,
+        })
     }
 
     /// Hash each sequence's chunk against the tokens before it and gather its rows:
@@ -376,7 +390,8 @@ mod tests {
 
     use super::reference::{block, Weights};
     use super::*;
-    use crate::models::gdn::GdnTrail;
+    use crate::kv_cache::{HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType};
+    use crate::models::gdn::{forward_pooled, GdnTrail, PoolSlots};
 
     // A tiny hash small enough to evaluate by hand: order 3, two heads per order.
     const EOS: u32 = 9;
@@ -722,6 +737,91 @@ mod tests {
             let want = wide(&stop.conv_state.flatten_all()?.to_vec1::<f32>()?);
             let h = gap(noted, &want)?;
             assert!(h < 1e-5, "trail after position {t} off by {h:e}");
+        }
+        Ok(())
+    }
+
+    /// A cache with one attention layer and the block's side pool after it.
+    fn side_cache(ngram: &Ngram) -> Result<HybridCache> {
+        let cfg = HybridCacheConfig {
+            layer_types: vec![HybridLayerType::Attention],
+            max_seq_len: 64,
+            pools: vec![ngram.pool(DType::F32)?],
+        };
+        HybridCache::new(cfg, &Device::Cpu)
+    }
+
+    /// One forward of the block through the side pool, as the model runs it.
+    fn pooled(
+        ngram: &Ngram,
+        cache: &mut HybridCache,
+        slot: usize,
+        (x, e): (&Tensor, &Tensor),
+        trail: bool,
+    ) -> Result<Tensor> {
+        let side = cache.num_layers();
+        let pool = cache
+            .get_mut(side)
+            .and_then(HybridLayerCache::as_recurrent_pool_mut)
+            .expect("the side pool");
+        let offset = pool.get_seqlen_offset(slot);
+        forward_pooled(pool, PoolSlots::One { slot, offset }, side, trail, |c| {
+            ngram.forward(x, e, c)
+        })
+    }
+
+    /// In its side pool the block rewinds and restores like a GDN layer. A verify keeps the conv
+    /// trail; rewinding the rejected drafts and decoding on gives what decoding the accepted
+    /// tokens one at a time gives, and so does a snapshot of the prompt restored into another slot.
+    #[test]
+    fn block_rewinds_and_restores_in_a_side_pool() -> Result<()> {
+        const VERIFY: usize = 4;
+        let (prompt, kept) = (6, 2);
+        let (ngram, _) = fixture(9)?;
+        let (x, e) = inputs(10, 1, prompt + VERIFY)?;
+        let (wrong_x, wrong_e) = inputs(11, 1, VERIFY - kept)?;
+        let at = |t: usize, len: usize| -> Result<(Tensor, Tensor)> {
+            Ok((x.narrow(1, t, len)?, e.narrow(1, t, len)?))
+        };
+        let (px, pe) = at(0, prompt)?;
+
+        let mut plain = side_cache(&ngram)?;
+        let slot = plain.allocate_seq().expect("a slot");
+        pooled(&ngram, &mut plain, slot, (&px, &pe), false)?;
+        let mut want = Vec::with_capacity(VERIFY);
+        for t in prompt..prompt + VERIFY {
+            let (xt, et) = at(t, 1)?;
+            let d = pooled(&ngram, &mut plain, slot, (&xt, &et), false)?;
+            want.push(wide(&d.flatten_all()?.to_vec1::<f32>()?));
+        }
+
+        let mut spec = side_cache(&ngram)?;
+        let slot = spec.allocate_seq().expect("a slot");
+        pooled(&ngram, &mut spec, slot, (&px, &pe), false)?;
+        let snapshot = spec.snapshot_recurrent_state(slot)?;
+        let (ax, ae) = at(prompt, kept)?;
+        let vx = Tensor::cat(&[&ax, &wrong_x], 1)?;
+        let ve = Tensor::cat(&[&ae, &wrong_e], 1)?;
+        let verified = pooled(&ngram, &mut spec, slot, (&vx, &ve), true)?;
+        for (t, want) in want.iter().enumerate().take(kept) {
+            let d = gap(&verified.narrow(1, t, 1)?, want)?;
+            assert!(d < 1e-5, "accepted draft {t} off by {d:e}");
+        }
+        spec.rewind_recurrent(slot, VERIFY - kept)?;
+        assert_eq!(spec.recurrent_offset(slot), Some(prompt + kept));
+        for (t, want) in want.iter().enumerate().skip(kept) {
+            let (xt, et) = at(prompt + t, 1)?;
+            let d = gap(&pooled(&ngram, &mut spec, slot, (&xt, &et), false)?, want)?;
+            assert!(d < 1e-5, "token {t} after the rewind off by {d:e}");
+        }
+
+        let other = spec.allocate_seq().expect("a second slot");
+        spec.restore_recurrent_state(other, &snapshot)?;
+        assert_eq!(spec.recurrent_offset(other), Some(prompt));
+        for (t, want) in want.iter().enumerate() {
+            let (xt, et) = at(prompt + t, 1)?;
+            let d = gap(&pooled(&ngram, &mut spec, other, (&xt, &et), false)?, want)?;
+            assert!(d < 1e-5, "token {t} after the restore off by {d:e}");
         }
         Ok(())
     }

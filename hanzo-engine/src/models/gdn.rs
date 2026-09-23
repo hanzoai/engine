@@ -83,7 +83,6 @@ impl RmsNormGated {
 
     /// Gate with `sigmoid(gate)`, as a GDN with `output_gate_type = "sigmoid"` does
     /// (vLLM `qwen_gdn_linear_attn.py:471-484`).
-    #[allow(dead_code)] // no Qwen3.5 GDN gates with sigmoid; qwen4exp's does
     pub fn sigmoid(self) -> Self {
         Self {
             act: Act::Sigmoid,
@@ -290,19 +289,26 @@ pub fn forward_pooled(
     };
     let out = forward(&mut cache)?;
 
+    // A conv-only pool's recurrent state never moves; on the `One` path it is still a view of the
+    // pool, which `slice_set` cannot write into itself.
+    let recurrent = !pool.conv_only();
     match &slots {
         PoolSlots::One { slot, .. } => {
             let conv = cache.conv_state.to_dtype(pool.conv_state.dtype())?;
-            let recurrent = cache
-                .recurrent_state
-                .to_dtype(pool.recurrent_state.dtype())?;
             pool.conv_state.slice_set(&conv.contiguous()?, 0, *slot)?;
-            pool.recurrent_state
-                .slice_set(&recurrent.contiguous()?, 0, *slot)?;
+            if recurrent {
+                let state = cache
+                    .recurrent_state
+                    .to_dtype(pool.recurrent_state.dtype())?;
+                pool.recurrent_state
+                    .slice_set(&state.contiguous()?, 0, *slot)?;
+            }
         }
         PoolSlots::Many(indices) => {
             pool.scatter_conv_state(indices, &cache.conv_state)?;
-            pool.scatter_recurrent_state(indices, &cache.recurrent_state)?;
+            if recurrent {
+                pool.scatter_recurrent_state(indices, &cache.recurrent_state)?;
+            }
         }
     }
     let advanced = cache.seqlen_offset.saturating_sub(first_offset);

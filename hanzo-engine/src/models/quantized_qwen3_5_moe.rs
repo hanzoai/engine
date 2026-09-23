@@ -553,6 +553,16 @@ impl QGatedDeltaNet {
         })
     }
 
+    /// Gate the output norm with sigmoid(z), `output_gate_type = "sigmoid"`
+    /// (vLLM `qwen_gdn_linear_attn.py:471-484`).
+    #[allow(dead_code)] // no Qwen3.5 GDN gates with sigmoid; qwen4exp's does
+    pub(crate) fn sigmoid(self) -> Self {
+        Self {
+            norm: self.norm.sigmoid(),
+            ..self
+        }
+    }
+
     fn forward(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         // GDN recurrence + gates run in f32 end-to-end to avoid bf16/f32 boundary mismatches;
         // input is lifted to f32 here and the out_proj result cast back to the model dtype.

@@ -208,11 +208,7 @@ impl RecurrentStatePool {
         let Some(row) = trail.slots.iter().position(|&s| s as usize == slot_idx) else {
             hanzo_ml::bail!("recurrent rewind: slot {slot_idx} was not in the last forward");
         };
-        let moved = if self.config.state_dims.is_empty() {
-            0
-        } else {
-            len
-        };
+        let moved = if self.conv_only() { 0 } else { len };
         if trail.recurrent.len() != moved || trail.start_offsets.len() != trail.slots.len() {
             hanzo_ml::bail!(
                 "recurrent rewind: the trail has {len} conv and {} recurrent positions",
@@ -278,6 +274,11 @@ impl RecurrentStatePool {
 
     pub fn capacity(&self) -> usize {
         self.capacity
+    }
+
+    /// Whether the pool holds a conv state alone; its one scalar per slot never moves.
+    pub fn conv_only(&self) -> bool {
+        self.config.state_dims.is_empty()
     }
 
     pub fn num_free_slots(&self) -> usize {
