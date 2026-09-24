@@ -10,7 +10,7 @@ function getBase(): string {
 }
 
 function apiUrl(path: string): string {
-  return `${getBase()}api/${path}`;
+  return `${getBase()}v1/${path}`;
 }
 
 async function get<T>(path: string): Promise<T> {

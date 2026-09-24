@@ -12,7 +12,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/v1": "http://localhost:1234",
-      "/ui/api": "http://localhost:1234",
+      "/ui/v1": "http://localhost:1234",
       "/ui/uploads": "http://localhost:1234",
       "/ui/speech": "http://localhost:1234",
     },
