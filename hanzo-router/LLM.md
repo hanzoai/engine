@@ -97,7 +97,7 @@ PID -- NEVER `pkill -f "release/hanzo serve"` (the pattern self-matches your own
 - Config: `~/.config/hanzo/router-pool.yaml`
 - Features:
   - Models served: `default`, `qwen3.8`, `zen-coder`, `zen5.8`, `zen5.8-coder`, `qwen/qwen3.8-27b`.
-  - Probes: `/api/hello` (HEAD and GET return 200 for Claude Code reachability), `/v1/models` (Anthropic and OpenAI model discovery), `/health` (backend liveness).
+  - Probes: `/v1/models` (Anthropic and OpenAI model discovery), `/health` (backend liveness). No `/api/` path: Claude Code's fire-and-forget `HEAD /api/hello` warm-up passes through to a replica and 404s, and the client ignores the result.
   - Normalization: Auto-rewrites `output_config.effort` and `reasoning_effort` from "high"/"max" to "medium" to ensure chat templates with discrete thinking tiers (xhigh, medium, low) do not throw TemplateErrors.
   - Fallback: Unrecognized models (e.g. `claude-*`) automatically route to primary coder pool (`zen5.8`).
 
@@ -114,7 +114,7 @@ Or via the public cloud gateway `https://api.hanzo.ai` (routed to the AI Lab gra
 - Python `coderouter.service` has been permanently disabled and stopped on all cluster nodes.
 - Zero runtime Python router dependency; pure Rust `hanzo-router` handles all load balancing, streaming, session affinity, and wire normalization.
 - Mid-conversation non-leading system messages are normalized in `src/proxy.rs` (prefixed with `[System]: ` as user role) and in SGLang chat templates, eliminating 400 Jinja errors from Claude Code / dev agents.
-- Public ingress routes on `https://api.hanzo.ai` (`/api/hello`, `/v1/models`, `/v1/messages`) route via Traefik to `hanzo-router:1235`.
+- Public ingress routes on `https://api.hanzo.ai` (`/v1/models`, `/v1/messages`) route via Traefik to `hanzo-router:1235`.
 - Isolated Claude Code profile `~/.claude-hanzo` configured; alias `hanzo-code` available in `~/.zshrc` to prevent collisions between personal `claude.ai` OAuth subscriptions and custom API routing.
 - Sub-agent and role-based steering: `hanzo-router` infers agent roles from wire models and query sources. Sub-agents, titles, fast summaries, and `haiku`/`flash` requests automatically route to **Evo** (AMD Strix Halo APU, `Qwen3.8-27B-Q6_K.gguf` via Vulkan RADV with 300ms TTFT), while main agent implementation and `opus`/`sonnet` queries route to **Spark** (DGX Spark Blackwell GB10 NVFP4).
 

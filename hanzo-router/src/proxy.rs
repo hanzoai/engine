@@ -206,7 +206,6 @@ fn app(state: Arc<ProxyState>) -> Router {
             "/health",
             get(|| async { "ok" }).head(|| async { StatusCode::OK }),
         )
-        .route("/api/hello", get(hello).head(hello))
         .route("/v1/models", get(list_models))
         .route(
             "/v1/replicas",
@@ -1000,10 +999,6 @@ fn forward_headers(src: &HeaderMap) -> HeaderMap {
 
 fn err(status: StatusCode, msg: &str) -> Response {
     (status, msg.to_string()).into_response()
-}
-
-async fn hello() -> StatusCode {
-    StatusCode::OK
 }
 
 async fn list_models(State(state): State<Arc<ProxyState>>) -> Response {
@@ -1829,27 +1824,22 @@ mod e2e {
     }
 
     #[tokio::test]
-    async fn claude_code_hello_and_models_and_fallback() {
+    async fn claude_code_models_and_fallback_without_api_prefix() {
         let (url, _) = spawn_mock("A").await;
         let balancer = Balancer::new(2);
         balancer.register("zen5.8", Replica::new(url));
         let base = start_proxy(balancer, Duration::from_secs(60)).await;
         let client = reqwest::Client::new();
 
-        // 1. /api/hello GET and HEAD
-        let resp_get = client
-            .get(format!("{base}/api/hello"))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp_get.status(), StatusCode::OK);
-
-        let resp_head = client
-            .head(format!("{base}/api/hello"))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp_head.status(), StatusCode::OK);
+        // 1. The router owns no /api/ path. Claude Code's HEAD /api/hello
+        //    warm-up passes through like any unknown path; the replica has
+        //    none, so it is a 404 whose result the client ignores.
+        for req in [
+            client.get(format!("{base}/api/hello")),
+            client.head(format!("{base}/api/hello")),
+        ] {
+            assert_eq!(req.send().await.unwrap().status(), StatusCode::NOT_FOUND);
+        }
 
         // 2. /v1/models GET returns models list including zen5.8, zen5.8-coder, qwen3.8
         let resp_models = client
