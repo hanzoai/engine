@@ -910,10 +910,11 @@ impl PropsGGUF {
             .map(|x| x as usize)
             .unwrap_or((head_dim as f64 * DEFAULT_PARTIAL_ROTARY_FACTOR) as usize);
 
+        // An INT32 array in the file (the converter writes Python ints).
         let mrope_section = c
-            .get_value::<Vec<u32>>("rope.dimension_sections")
+            .get_value::<Vec<i32>>("rope.dimension_sections")
             .ok()
-            .map(|v| v.into_iter().map(|x| x as usize).collect::<Vec<_>>())
+            .map(|v| v.into_iter().map(|x| x.max(0) as usize).collect::<Vec<_>>())
             // mrope_section sums to rot_dim/2; default [t,h,w,0] from llama.cpp is [11,11,10,0].
             .unwrap_or_else(|| vec![11, 11, 10, 0]);
 

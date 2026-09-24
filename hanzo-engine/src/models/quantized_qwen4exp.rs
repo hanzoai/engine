@@ -91,8 +91,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let streams = get("hyper_connection.count")?;
         // The indexer keeps every key up to its budget, where dense attention is exact.
         props.max_seq_len = props.max_seq_len.min(get("attention.indexer.top_k")?);
-        let ngram_layer = match md.get_value::<Vec<u32>>("ple.layers") {
-            Ok(layers) if layers.len() == 1 => layers[0] as usize,
+        // An INT32 array in the file, as the converter writes Python ints.
+        let ngram_layer = match md.get_value::<Vec<i32>>("ple.layers") {
+            Ok(layers) if layers.len() == 1 && layers[0] >= 0 => layers[0] as usize,
             other => hanzo_ml::bail!("qwen4exp needs exactly one n-gram layer, got {other:?}"),
         };
         let hash = Hash::from_gguf(&md)?;
@@ -373,8 +374,9 @@ mod tests {
     const OFFSET: [u64; 4] = [0, 11, 24, 41];
 
     fn metadata() -> HashMap<String, gguf_file::Value> {
-        use gguf_file::Value::{Array, F32, U32, U64};
-        let u32s = |v: &[u32]| Array(v.iter().map(|&x| U32(x)).collect());
+        use gguf_file::Value::{Array, F32, I32, U32, U64};
+        // Value types as the real file stores them: INT32 arrays, u32 scalars, u64 hash tables.
+        let i32s = |v: &[i32]| Array(v.iter().map(|&x| I32(x)).collect());
         let u64s = |v: &[u64]| Array(v.iter().map(|&x| U64(x)).collect());
         let n = |x: usize| U32(x as u32);
         [
@@ -384,11 +386,11 @@ mod tests {
             ("attention.layer_norm_rms_epsilon", F32(1e-6)),
             ("attention.indexer.top_k", n(32)),
             ("block_count", n(4)),
-            ("context_length", U64(64)),
+            ("context_length", n(64)),
             ("embedding_length", n(HIDDEN)),
             ("full_attention_interval", n(4)),
             ("rope.dimension_count", n(4)),
-            ("rope.dimension_sections", u32s(&[1, 1, 0, 0])),
+            ("rope.dimension_sections", i32s(&[1, 1, 0, 0])),
             ("rope.freq_base", F32(10_000.0)),
             ("ssm.conv_kernel", n(CONV)),
             ("ssm.state_size", n(GDN_DIM)),
@@ -399,7 +401,7 @@ mod tests {
             ("expert_used_count", n(2)),
             ("expert_feed_forward_length", n(FFN)),
             ("hyper_connection.count", n(STREAMS)),
-            ("ple.layers", u32s(&[1])),
+            ("ple.layers", i32s(&[1])),
             ("ple.ngram_size", n(MULT.len())),
             ("ple.heads_per_ngram", n(2)),
             ("ple.eos_token_id", U32(EOS)),
