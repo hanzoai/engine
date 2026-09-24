@@ -3,13 +3,8 @@
 #
 # The Zen inference engine: a 23-crate Rust workspace.
 #
-# Test-only caller, deliberately. The image lane already exists and is not this
-# one — .hanzo/workflows/deploy.yml builds Dockerfile and pushes it, and the
-# GPU/FFI/release lanes sit beside it. Declaring `images:` here would run a
-# second full release build of the same workspace (the Dockerfile compiles
-# hanzo-server + hanzo-bench with CARGO_BUILD_JOBS=2) on every push, for an
-# artifact that is already being produced. Two builds of one commit is not
-# twice the truth; it is twice the runner.
+# The image is declared at the end of this file and built by the build door;
+# it is the Dockerfile's one builder. The GPU/FFI/release lanes sit beside it.
 #
 # `rustup component add rustfmt` first: the toolchain this workflow provisions
 # (dtolnay/rust-toolchain@stable) installs the compiler ALONE, so `cargo fmt`
@@ -28,3 +23,11 @@ test:
     run: rustup component add rustfmt && cargo fmt --all -- --check
   - name: check
     run: cargo check --workspace
+
+# Built by the build door, one BuildKit Job per platform.
+images:
+  - name: engine
+    context: .
+    dockerfile: Dockerfile
+    repo: ghcr.io/hanzoai/engine
+    platforms: [linux/amd64]
