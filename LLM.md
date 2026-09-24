@@ -143,7 +143,7 @@ half of `required`, and the agentic file-surfacing commits, which live in a `she
 ## Brand rules (enforce in every doc and commit)
 
 - Hanzo is a full AI cloud / inference engine — **never** an "LLM gateway" or "OpenAI-compatible proxy", and never positioned against a proxy product. Speaking the OpenAI / Anthropic wire formats is a feature, not the identity.
-- HTTP paths are **`/v1/...`** only — never an `/api/` prefix.
+- HTTP paths are **`/v1/...`** only — never an `/api/` prefix. The CLI UI's own calls are `/ui/v1/*` (`hanzo-cli/src/ui/mod.rs`, `webui/src/lib/services/api.ts`), web-chat's are `/v1/*`, and hanzo-router serves no `/api/` path. `hanzo.yml`'s `v1-only` gate greps for a regression; `route_registry` tests the server routes.
 - **Zen** is our own model family (zen-eco, zen-ultra, Zen5, …); never surface upstream model names as the brand in public docs.
 - Crisp, modern, developer-first voice; no emoji-spam.
 

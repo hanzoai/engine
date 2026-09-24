@@ -168,3 +168,19 @@ pub const SWAGGER_ROUTES: &[RouteInfo] = &[
     RouteInfo::new("/docs/", "GET", RouteKind::Docs),
     RouteInfo::new("/docs/{*rest}", "GET", RouteKind::Docs),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_route_is_under_api() {
+        #[cfg(feature = "swagger-ui")]
+        let docs = SWAGGER_ROUTES;
+        #[cfg(not(feature = "swagger-ui"))]
+        let docs: &[RouteInfo] = &[];
+        for r in API_ROUTES.iter().chain(docs) {
+            assert!(!r.path.starts_with("/api/"), "{} is under /api/", r.path);
+        }
+    }
+}
