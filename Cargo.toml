@@ -40,8 +40,8 @@ rust-version = "1.88"
 [workspace.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 # Hanzo ML crates.
-hanzo-ml = { version = "0.11.102" }
-hanzo-nn = { version = "0.11.40" }
+hanzo-ml = { version = "0.11.103" }
+hanzo-nn = { version = "0.11.41" }
 hanzo-transformers = { version = "0.11.10" }
 hanzo-flash-attn = { version = "0.11.36" }
 hanzo-flash-attn-v3 = { version = "0.11.10", package = "hanzo-flash-attn-v3" }
