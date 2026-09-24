@@ -281,10 +281,6 @@ pub fn forward_pooled(
             pool.gather_recurrent_state(indices)?,
         ),
     };
-    // The tensors handed to the forward. One it still holds afterwards was left alone or updated in
-    // place (a kernel writing its state back, or a conv-only pool's empty state): on the `One` path
-    // that is the pool's own storage already, and `slice_set` cannot copy a tensor onto itself.
-    let given = (conv_state.id(), recurrent_state.id());
     let mut cache = GdnLayerCache {
         conv_state,
         recurrent_state,
@@ -293,8 +289,12 @@ pub fn forward_pooled(
     };
     let out = forward(&mut cache)?;
 
-    let conv = cache.conv_state.id() != given.0;
-    let recurrent = cache.recurrent_state.id() != given.1;
+    // A state the cache still holds in the pool's storage was left alone or updated in place (a
+    // kernel writing its state back into the view it was given, perhaps returning a reshape of
+    // it; a conv-only pool's empty state). There is nothing to copy, and `slice_set` cannot copy
+    // a tensor onto its own storage.
+    let conv = !shares_storage(&cache.conv_state, &pool.conv_state);
+    let recurrent = !shares_storage(&cache.recurrent_state, &pool.recurrent_state);
     match &slots {
         PoolSlots::One { slot, .. } => {
             if conv {
@@ -329,6 +329,13 @@ pub fn forward_pooled(
         recurrent: t.recurrent,
     }));
     Ok(out)
+}
+
+/// Whether two tensors are views of one storage.
+fn shares_storage(a: &Tensor, b: &Tensor) -> bool {
+    let (a, _) = a.storage_and_layout();
+    let (b, _) = b.storage_and_layout();
+    std::ptr::eq(&*a, &*b)
 }
 
 // ====================== GDN math functions ======================
@@ -1278,6 +1285,10 @@ mod tests {
                 cache
                     .recurrent_state
                     .slice_set(&Tensor::full(2f32, (1, 2), &dev)?, 0, 0)?;
+                // A kernel may return the state as a reshape of the view: a new tensor over the
+                // same storage.
+                cache.recurrent_state =
+                    cache.recurrent_state.reshape((1, 2, 1))?.reshape((1, 2))?;
                 cache.seqlen_offset += 1;
                 Tensor::zeros(1, DType::F32, &dev)
             },
