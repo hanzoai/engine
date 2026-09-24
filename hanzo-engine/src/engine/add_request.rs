@@ -203,6 +203,12 @@ impl Engine {
             )
             .with_xml_calls(xml_calls),
         );
+        // Halogen spec §5.10: a forced call starts in the prompt, rendered with thinking off.
+        let prefill = if is_chat {
+            matcher.forced_prefix()
+        } else {
+            None
+        };
 
         let image_generation_format = match &request.messages {
             RequestMessage::ImageGeneration { format, .. } => Some(*format),
@@ -257,6 +263,11 @@ impl Engine {
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
                 let tools = request.tools.unwrap_or_default();
+                let enable_thinking = if prefill.is_some() {
+                    Some(false)
+                } else {
+                    enable_thinking
+                };
                 let template = pipeline.get_processor().process(
                     pipeline,
                     messages,
@@ -266,7 +277,20 @@ impl Engine {
                     reasoning_effort,
                     tools,
                 );
-                handle_seq_error!(template, request.response)
+                let (mut toks, mut text) = handle_seq_error!(template, request.response);
+                if let Some(prefill) = &prefill {
+                    let ids = pipeline
+                        .tokenizer()
+                        .ok_or_else(|| anyhow::Error::msg("a forced tool call needs a tokenizer"))
+                        .and_then(|tokenizer| {
+                            tokenizer
+                                .encode_fast(prefill.as_str(), false)
+                                .map_err(anyhow::Error::msg)
+                        });
+                    toks.extend_from_slice(handle_seq_error!(ids, request.response).get_ids());
+                    text.push_str(prefill);
+                }
+                (toks, text)
             }
             RequestMessage::Completion { text, .. }
             | RequestMessage::Embedding { prompt: text } => {
@@ -779,6 +803,9 @@ impl Engine {
                 (request.sampling_params.thinking_budget, &thinking_close)
             {
                 seq.set_thinking_budget(budget, close.clone());
+            }
+            if let Some(prefill) = &prefill {
+                seq.seed_completion(prefill);
             }
 
             // Allocate recurrent state pool slot for hybrid models

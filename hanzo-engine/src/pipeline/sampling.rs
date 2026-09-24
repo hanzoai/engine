@@ -373,6 +373,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             } else {
                 text
             };
+            let mut declined = false;
             if is_chat {
                 let (text_new, tool_calls, reasoning_content) = if let Some(mode) =
                     seq.reasoning_mode()
@@ -413,6 +414,10 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 if !tool_calls.is_empty() {
                     reason = StopReason::ToolCalls;
                 }
+                // Halogen spec §5.10: a request that had to call a tool and did not is refused,
+                // not answered with text.
+                declined = tool_calls.is_empty()
+                    && seq.tools.as_ref().is_some_and(|tools| tools.must_call());
 
                 let choice = crate::Choice {
                     finish_reason: fixup_sentencepiece!(reason),
@@ -452,24 +457,33 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
             let mut group = seq.get_mut_group();
             if group.is_chat {
-                group
-                    .maybe_send_chat_done_response(
-                        crate::ChatCompletionResponse {
-                            id: seq.id().to_string(),
-                            choices: group.get_choices().to_vec(),
-                            created: seq.creation_time(),
-                            model: pipeline_name,
-                            system_fingerprint: crate::SYSTEM_FINGERPRINT.to_string(),
-                            object: "chat.completion".to_string(),
-                            usage: group.get_usage(),
-                            agentic_tool_calls: None,
-                            files: None,
-                            session_id: None,
-                        },
-                        seq.responder(),
-                    )
-                    .await
-                    .map_err(hanzo_ml::Error::msg)?;
+                let response = crate::ChatCompletionResponse {
+                    id: seq.id().to_string(),
+                    choices: group.get_choices().to_vec(),
+                    created: seq.creation_time(),
+                    model: pipeline_name,
+                    system_fingerprint: crate::SYSTEM_FINGERPRINT.to_string(),
+                    object: "chat.completion".to_string(),
+                    usage: group.get_usage(),
+                    agentic_tool_calls: None,
+                    files: None,
+                    session_id: None,
+                };
+                if declined {
+                    group
+                        .send_chat_model_error(
+                            crate::tools::FORCED_CALL_DECLINED.to_string(),
+                            response,
+                            seq.responder(),
+                        )
+                        .await
+                        .map_err(hanzo_ml::Error::msg)?;
+                } else {
+                    group
+                        .maybe_send_chat_done_response(response, seq.responder())
+                        .await
+                        .map_err(hanzo_ml::Error::msg)?;
+                }
             } else {
                 let completion_response = crate::CompletionResponse {
                     id: seq.id().to_string(),

@@ -1094,6 +1094,13 @@ impl Sequence {
         self.commit(&held);
     }
 
+    /// Starts the completion with text the prompt already wrote for the model, such as a forced
+    /// call's opening (Halogen spec §5.10), so the parsers read the output as the model continues
+    /// it.
+    pub fn seed_completion(&mut self, text: &str) {
+        self.commit(text.as_bytes());
+    }
+
     /// Whether the sequence is inside its think block, per its reasoning parser.
     pub fn in_reasoning(&self) -> bool {
         self.reasoning_parser
@@ -1658,10 +1665,11 @@ pub struct SequenceGroup {
     pub completion_streaming_chunks: Vec<CompletionChunkChoice>,
     pub is_streaming: bool,
     pub is_chat: bool,
-    // Guards `CompletionDone` to a single delivery: an errored sequence
-    // decrements `n_choices`, so an exact `len == n_choices` gate could latch
-    // permanently open and re-fire on every subsequent finish.
-    completion_done_sent: bool,
+    // Guards the group's terminal response to a single delivery: an errored
+    // sequence decrements `n_choices`, so an exact `len == n_choices` gate could
+    // latch permanently open and re-fire on every subsequent finish, and a chat
+    // group refused with a model error sends nothing after it.
+    done_sent: bool,
 }
 
 impl SequenceGroup {
@@ -1695,7 +1703,7 @@ impl SequenceGroup {
             is_streaming,
             is_chat,
             best_of,
-            completion_done_sent: false,
+            done_sent: false,
         }
     }
 
@@ -1761,14 +1769,30 @@ impl SequenceGroup {
     }
 
     pub async fn maybe_send_chat_done_response(
-        &self,
+        &mut self,
         response: ChatCompletionResponse,
         sender: Sender<Response>,
     ) -> Result<(), Box<SendError<Response>>> {
-        if self.choices.len() == self.n_choices {
+        if !self.done_sent && self.choices.len() == self.n_choices {
+            self.done_sent = true;
             sender.send(Response::Done(response)).await?;
         }
 
+        Ok(())
+    }
+
+    /// Ends the group with a model error in place of its answer. A choice that finishes later
+    /// sends nothing: the client has its response.
+    pub async fn send_chat_model_error(
+        &mut self,
+        message: String,
+        response: ChatCompletionResponse,
+        sender: Sender<Response>,
+    ) -> Result<(), Box<SendError<Response>>> {
+        if !self.done_sent {
+            self.done_sent = true;
+            sender.send(Response::ModelError(message, response)).await?;
+        }
         Ok(())
     }
 
@@ -1916,10 +1940,10 @@ impl SequenceGroup {
         sender: Sender<Response>,
     ) -> Result<(), Box<SendError<Response>>> {
         // `>=` (not `==`) so a group whose `n_choices` was decremented by an
-        // errored sequence still delivers; `completion_done_sent` keeps it to a
+        // errored sequence still delivers; `done_sent` keeps it to a
         // single terminal response even if more finishes arrive afterward.
-        if !self.completion_done_sent && self.completion_choices.len() >= self.n_choices {
-            self.completion_done_sent = true;
+        if !self.done_sent && self.completion_choices.len() >= self.n_choices {
+            self.done_sent = true;
             sender.send(Response::CompletionDone(response)).await?;
         }
         Ok(())
@@ -2188,6 +2212,23 @@ mod tests {
         assert_eq!(completion(&seq), "my plan</think>the ");
         seq.finalize_reasoning();
         assert_eq!(seq.get_response_content().as_deref(), Some("the "));
+    }
+
+    #[test]
+    fn a_seeded_completion_reaches_the_parsers() {
+        let mut seq = test_sequence(vec![1], None);
+        seq.enable_reasoning(
+            ReasoningMode::TagBased,
+            Box::new(TagReasoningContext::new_think_tags()),
+        );
+        seq.seed_completion("<tool_call>\n<function=f>\n");
+        push(&mut seq, 10, "</function>");
+        assert_eq!(completion(&seq), "<tool_call>\n<function=f>\n</function>");
+        seq.finalize_reasoning();
+        assert_eq!(
+            seq.get_response_content().as_deref(),
+            Some("<tool_call>\n<function=f>\n</function>")
+        );
     }
 
     #[test]
