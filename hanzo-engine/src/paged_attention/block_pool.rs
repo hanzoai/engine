@@ -281,6 +281,10 @@ pub struct BlockPool {
     null_block_id: usize,
     /// The block size (number of tokens per block) for hash computation.
     hash_block_size: usize,
+    /// Blocks entered into the prefix cache since start.
+    stored: u64,
+    /// Cached blocks whose hash was dropped since start: reallocated, or cleared by a reset.
+    evicted: u64,
 }
 
 impl BlockPool {
@@ -312,6 +316,8 @@ impl BlockPool {
             num_gpu_blocks,
             null_block_id: 0, // Will be set below
             hash_block_size,
+            stored: 0,
+            evicted: 0,
         };
 
         // Pop the first block as the null block (placeholder, never freed)
@@ -492,6 +498,7 @@ impl BlockPool {
             block.block_hash = Some(hash_with_group);
             self.cached_block_hash_to_block
                 .insert(hash_with_group, block_id);
+            self.stored += 1;
         }
     }
 
@@ -501,6 +508,7 @@ impl BlockPool {
         if let Some(hash) = block_hash {
             self.cached_block_hash_to_block.pop(&hash, block_id);
             self.blocks[block_id].reset_hash();
+            self.evicted += 1;
         }
     }
 
@@ -512,6 +520,11 @@ impl BlockPool {
             return false;
         }
 
+        self.evicted += self
+            .blocks
+            .iter()
+            .filter(|b| b.block_hash.is_some())
+            .count() as u64;
         self.cached_block_hash_to_block.clear();
         for block in &mut self.blocks {
             block.reset_hash();
@@ -523,6 +536,11 @@ impl BlockPool {
     /// Get the number of cached blocks in the hash map.
     pub fn num_cached_blocks(&self) -> usize {
         self.cached_block_hash_to_block.len()
+    }
+
+    /// Blocks in the prefix cache now, and the blocks stored and evicted since start.
+    pub fn prefix_counts(&self) -> (usize, u64, u64) {
+        (self.num_cached_blocks(), self.stored, self.evicted)
     }
 
     /// Get the block size used for hash computation.
@@ -612,6 +630,7 @@ mod tests {
 
         // Verify they're cached
         assert_eq!(pool.num_cached_blocks(), 3);
+        assert_eq!(pool.prefix_counts(), (3, 3, 0));
 
         // Look up by hash
         let cached = pool.get_cached_block(h0, &[0]);
@@ -665,6 +684,7 @@ mod tests {
 
         // The evicted block should no longer be in cache
         // (one of the blocks had hash h0, now it's been evicted)
+        assert_eq!(pool.prefix_counts(), (0, 1, 1));
     }
 
     #[test]
@@ -754,5 +774,10 @@ mod tests {
         // Now reset should succeed
         assert!(pool.reset_prefix_cache());
         assert_eq!(pool.num_cached_blocks(), 0);
+        assert_eq!(
+            pool.prefix_counts(),
+            (0, 1, 1),
+            "a reset evicts the cached block"
+        );
     }
 }

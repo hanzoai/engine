@@ -3,8 +3,8 @@ use engine::Engine;
 pub use engine::{
     agentic_session::{AgenticSessionStore, SerializedSession, SerializedVideo},
     get_engine_terminate_flag, reset_engine_terminate_flag, should_terminate_engine_sequences,
-    EngineInstruction, IntervalLogger, SearchEmbeddingModel, DEFAULT_MAX_TOOL_ROUNDS,
-    ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
+    Beat, EngineInstruction, IntervalLogger, Load, Phase, PrefixMode, PrefixStats,
+    SearchEmbeddingModel, DEFAULT_MAX_TOOL_ROUNDS, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
 };
 use hanzo_ml::Device;
 use hf_hub::Cache;

@@ -322,6 +322,13 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
     fn running_seq_ids(&self) -> Vec<usize> {
         self.running.iter().map(|seq| *seq.id()).collect()
     }
+    fn oldest_running(&self) -> Option<u64> {
+        self.running
+            .iter()
+            .filter(|seq| seq.is_running())
+            .filter_map(|seq| u64::try_from(seq.timestamp()).ok())
+            .min()
+    }
     fn add_seq(&mut self, seq: Sequence) {
         if seq.is_running() {
             // prefill case

@@ -220,8 +220,8 @@ impl PagedAttentionScheduler {
             match alloc_result {
                 Some(_) => {
                     // Allocation succeeded
-                    if num_computed > 0 {
-                        logger.add_prefix_cache_hit();
+                    if self.prefix_caching_enabled {
+                        logger.add_prefix_lookup(num_computed);
                     }
                     // Reset waiting count on successful allocation
                     self.waiting_counts.remove(&seq_id);
@@ -531,6 +531,17 @@ impl Scheduler for PagedAttentionScheduler {
             .iter()
             .map(|seq| *get_mut_arcmutex!(seq).id())
             .collect()
+    }
+    fn oldest_running(&self) -> Option<u64> {
+        self.running
+            .iter()
+            .filter_map(|seq| {
+                let seq = get_mut_arcmutex!(seq);
+                seq.is_running()
+                    .then(|| u64::try_from(seq.timestamp()).ok())
+                    .flatten()
+            })
+            .min()
     }
     fn block_size(&self) -> Option<usize> {
         Some(self.block_size)
