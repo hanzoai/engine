@@ -76,6 +76,14 @@ where
         clear_staged_speculative_tokens(seqs);
         return Ok(false);
     }
+    // A serial request decodes one token per forward. A forward verifies drafts only when every
+    // sequence in it staged some, so the whole batch samples plainly this step. Such a sequence
+    // never stages drafts (see `speculating`), so this forward carried none to verify.
+    if !seqs.iter().all(|seq| seq.speculates()) {
+        trim_mixed_staged_allocations(seqs, cache)?;
+        clear_staged_speculative_tokens(seqs);
+        return Ok(false);
+    }
 
     let staged_state = staged_batch_state(seqs);
     match staged_state {
@@ -184,7 +192,7 @@ where
         .await?;
         let sampled_token = anchor.token;
         finish_or_add_toks_to_seq(target, prefix_cacher, seq, anchor, eos_tok, true).await?;
-        if !matches!(seq.getstate(), SequenceState::Done(_)) {
+        if speculating(seq) {
             active_indices.push(idx);
             sampled_tokens.push(sampled_token);
             base_lens.push(base_len);
@@ -281,6 +289,9 @@ where
         let Some(continuation_token) = outcome.continuation_token else {
             continue;
         };
+        if !speculating(seqs[idx]) {
+            continue;
+        }
         active_indices.push(idx);
         sampled_tokens.push(continuation_token);
         base_lens.push(outcome.keep_len);
@@ -411,8 +422,31 @@ where
     Ok(())
 }
 
+/// Whether a sequence goes on to have drafts staged for the next forward: it is still running and
+/// may speculate.
+fn speculating(seq: &Sequence) -> bool {
+    !matches!(seq.getstate(), SequenceState::Done(_)) && seq.speculates()
+}
+
 fn clear_active_staged(seqs: &mut [&mut Sequence], active_indices: &[usize]) {
     for idx in active_indices {
         seqs[*idx].clear_staged_speculative_tokens();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::speculating;
+    use crate::sequence::{test_sequence, SequenceState, StopReason};
+
+    #[test]
+    fn only_a_running_speculative_sequence_gets_drafts() {
+        assert!(speculating(&test_sequence(vec![1], None)));
+        let mut serial = test_sequence(vec![1], None);
+        serial.set_serial(true);
+        assert!(!speculating(&serial));
+        let done = test_sequence(vec![1], None);
+        done.set_state(SequenceState::Done(StopReason::Eos));
+        assert!(!speculating(&done));
     }
 }

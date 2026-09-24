@@ -753,6 +753,7 @@ impl Engine {
                 // Each choice draws its own stream, so n > 1 does not repeat one answer.
                 seq.set_seed(seed.wrapping_add(response_index as u64));
             }
+            seq.set_serial(request.sampling_params.serial);
 
             // Allocate recurrent state pool slot for hybrid models
             {

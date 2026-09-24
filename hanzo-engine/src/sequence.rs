@@ -592,6 +592,8 @@ pub struct Sequence {
 
     /// The request's own RNG when it carried a seed; `None` draws from the engine's shared RNG.
     rng: Option<Arc<std::sync::Mutex<Isaac64Rng>>>,
+    /// Decode one token per forward, without the speculative proposer.
+    serial: bool,
     /// Answer bytes held back from the completion because they could begin a stop string.
     held: Vec<u8>,
 }
@@ -701,6 +703,7 @@ impl Sequence {
             reasoning_parser: None,
             reasoning_mode: None,
             rng: None,
+            serial: false,
             held: Vec::new(),
         }
     }
@@ -1076,6 +1079,23 @@ impl Sequence {
         shared: &Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Arc<std::sync::Mutex<Isaac64Rng>> {
         self.rng.as_ref().unwrap_or(shared).clone()
+    }
+
+    /// Decode this sequence one token per forward, without the speculative proposer.
+    pub fn set_serial(&mut self, serial: bool) {
+        self.serial = serial;
+    }
+
+    /// Whether the speculative driver may draft for this sequence: not for a serial request.
+    pub(crate) fn speculates(&self) -> bool {
+        !self.serial
+    }
+
+    /// Counts `drafted` speculative tokens verified for this sequence, `accepted` of them kept.
+    pub(crate) fn record_drafts(&self, drafted: usize, accepted: usize) {
+        let mut group = get_mut_group!(self);
+        group.total_draft_toks += drafted;
+        group.total_draft_accepted += accepted;
     }
 
     pub fn responder(&self) -> Sender<Response> {
@@ -1936,6 +1956,24 @@ mod tests {
         };
         assert_eq!(draws(7), draws(7));
         assert_ne!(draws(7), draws(8));
+    }
+
+    #[test]
+    fn a_serial_sequence_does_not_speculate() {
+        let mut seq = test_sequence(vec![1], None);
+        assert!(seq.speculates());
+        seq.set_serial(true);
+        assert!(!seq.speculates());
+    }
+
+    #[test]
+    fn drafts_accumulate_on_the_group() {
+        let seq = test_sequence(vec![1], None);
+        seq.record_drafts(4, 0);
+        seq.record_drafts(0, 3);
+        seq.record_drafts(4, 1);
+        let usage = seq.get_mut_group().get_usage();
+        assert_eq!((usage.draft_tokens, usage.draft_accepted), (8, 4));
     }
 
     #[test]

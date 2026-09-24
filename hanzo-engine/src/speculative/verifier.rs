@@ -17,6 +17,10 @@ pub struct VerificationOutcome {
     pub continuation_token: Option<u32>,
 }
 
+/// Verifies one sequence's staged drafts against the target's logits for them, emitting every
+/// accepted draft and then the target's own next token. `rng` is the engine's shared RNG; a seeded
+/// sequence draws from its own. The drafts count toward the request's usage as they are judged, so
+/// the response a finishing token sends carries them.
 #[allow(clippy::too_many_arguments)]
 pub async fn finish_verified_step<P: Pipeline>(
     pipeline: &P,
@@ -37,233 +41,144 @@ pub async fn finish_verified_step<P: Pipeline>(
         Some(&general_metadata.eos_tok[..])
     };
     let return_logprobs = seq.return_logprobs();
-    // A seeded sequence draws from its own RNG, in both verification paths below.
     let rng = seq.rng(&rng);
+    let outcome = |accepted_drafts, keep_len, continuation_token| VerificationOutcome {
+        accepted_drafts,
+        proposed_drafts: proposal.len(),
+        keep_len,
+        continuation_token,
+    };
 
     if let Some(anchor) = anchor_to_emit {
         finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, anchor, eos_tok, true).await?;
         if matches!(seq.getstate(), SequenceState::Done(_)) {
-            let keep_len = base_len + 1;
             seq.clear_staged_speculative_tokens();
-            return Ok(VerificationOutcome {
-                accepted_drafts: 0,
-                proposed_drafts: proposal.len(),
-                keep_len,
-                continuation_token: None,
-            });
+            return Ok(outcome(0, base_len + 1, None));
         }
     }
+    seq.record_drafts(proposal.len(), 0);
 
-    if let Some(proposal_logits) = proposal_logits {
-        if !seq.sampler().is_argmax() && matches!(seq.recognizer, SequenceRecognizer::None) {
-            return finish_verified_step_stochastic(
-                pipeline,
-                seq,
-                verify_logits,
-                proposal,
-                proposal_logits,
-                base_len,
-                prefix_cacher,
-                eos_tok,
-                return_logprobs,
-                rng,
-            )
-            .await;
-        }
-    }
+    // Speculative sampling needs the drafts' distribution and a free sampler. A greedy or
+    // grammar-constrained sequence is verified by matching the target's own choice.
+    let candidates = proposal_logits.filter(|_| {
+        !seq.sampler().is_argmax() && matches!(seq.recognizer, SequenceRecognizer::None)
+    });
 
     let mut accepted = 0usize;
     for (idx, draft) in proposal.iter().copied().enumerate() {
         let row = logit_row(&verify_logits, idx)?;
-        let sampled = sample_sequence(
-            row.clone(),
-            seq,
-            return_logprobs,
-            rng.clone(),
-            false,
-            false,
-            false,
-        )
-        .await?;
-        let sampled_token = sampled.token;
-        if sampled_token == draft {
-            accepted += 1;
-            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
-            if matches!(seq.getstate(), SequenceState::Done(_)) {
-                let keep_len = base_len + 1 + accepted;
-                seq.clear_staged_speculative_tokens();
-                return Ok(VerificationOutcome {
-                    accepted_drafts: accepted,
-                    proposed_drafts: proposal.len(),
-                    keep_len,
-                    continuation_token: None,
-                });
+        let (emitted, is_draft) = match &candidates {
+            Some(candidates) => {
+                let candidate_row = logit_row(candidates, idx)?;
+                judge_draft(seq, row, candidate_row, draft, return_logprobs, &rng)?
             }
-        } else {
-            let keep_len = base_len + 1 + accepted;
-            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
-            if matches!(seq.getstate(), SequenceState::Done(_)) {
-                seq.clear_staged_speculative_tokens();
-                return Ok(VerificationOutcome {
-                    accepted_drafts: accepted,
-                    proposed_drafts: proposal.len(),
-                    keep_len,
-                    continuation_token: None,
-                });
+            _ => {
+                let sampled =
+                    sample_sequence(row, seq, return_logprobs, rng.clone(), false, false, false)
+                        .await?;
+                let is_draft = sampled.token == draft;
+                (sampled, is_draft)
             }
-            return Ok(VerificationOutcome {
-                accepted_drafts: accepted,
-                proposed_drafts: proposal.len(),
-                keep_len,
-                continuation_token: Some(sampled_token),
-            });
-        }
-    }
-
-    let row = logit_row(&verify_logits, accepted)?;
-    let continuation = sample_sequence(
-        row.clone(),
-        seq,
-        return_logprobs,
-        rng.clone(),
-        false,
-        false,
-        false,
-    )
-    .await?;
-    let continuation_token = continuation.token;
-    finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, continuation, eos_tok, true).await?;
-
-    let keep_len = base_len + 1 + accepted;
-    let continuation_token = if matches!(seq.getstate(), SequenceState::Done(_)) {
-        seq.clear_staged_speculative_tokens();
-        None
-    } else {
-        Some(continuation_token)
-    };
-
-    Ok(VerificationOutcome {
-        accepted_drafts: accepted,
-        proposed_drafts: proposal.len(),
-        keep_len,
-        continuation_token,
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn finish_verified_step_stochastic<P: Pipeline>(
-    pipeline: &P,
-    seq: &mut Sequence,
-    verify_logits: Tensor,
-    proposal: Vec<u32>,
-    proposal_logits: Tensor,
-    base_len: usize,
-    prefix_cacher: &mut PrefixCacheManagerV2,
-    eos_tok: Option<&[u32]>,
-    return_logprobs: bool,
-    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-) -> Result<VerificationOutcome> {
-    let mut accepted = 0usize;
-    for (idx, draft) in proposal.iter().copied().enumerate() {
-        let target_row = logit_row(&verify_logits, idx)?;
-        let candidate_row = logit_row(&proposal_logits, idx)?;
-        let sampler = seq.sampler();
-        let target_probs =
-            sampler.speculative_target_probs(flat_logits(target_row.clone())?, seq.get_toks())?;
-        let candidate_probs =
-            sampler.speculative_candidate_probs(flat_logits(candidate_row)?, seq.get_toks())?;
-        if target_probs.len() != candidate_probs.len() {
-            hanzo_ml::bail!(
-                "speculative target/candidate vocab mismatch: target={}, candidate={}",
-                target_probs.len(),
-                candidate_probs.len()
-            );
-        }
-        let draft_idx = draft as usize;
-        let p_i = target_probs.get(draft_idx).copied().unwrap_or(0.0);
-        let q_i = candidate_probs.get(draft_idx).copied().unwrap_or(0.0);
-        let accept_prob = if q_i <= 0.0 {
-            if p_i > 0.0 {
-                1.0
-            } else {
-                0.0
-            }
-        } else {
-            (p_i / q_i).min(1.0)
         };
-        let draw = {
-            let mut rng = rng.lock().expect("could not lock rng mutex");
-            rng.random::<f32>()
-        };
-
-        if draw <= accept_prob {
+        if is_draft {
             accepted += 1;
-            let sampled = sampler.logprobs_from_probs(draft, &target_probs, return_logprobs)?;
-            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
+            seq.record_drafts(0, 1);
+            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, emitted, eos_tok, true).await?;
             if matches!(seq.getstate(), SequenceState::Done(_)) {
-                let keep_len = base_len + 1 + accepted;
                 seq.clear_staged_speculative_tokens();
-                return Ok(VerificationOutcome {
-                    accepted_drafts: accepted,
-                    proposed_drafts: proposal.len(),
-                    keep_len,
-                    continuation_token: None,
-                });
+                return Ok(outcome(accepted, base_len + 1 + accepted, None));
             }
             continue;
         }
-
-        let mut adjusted_probs = target_probs
-            .iter()
-            .zip(candidate_probs.iter())
-            .map(|(p, q)| (p - q).max(0.0))
-            .collect::<Vec<_>>();
-        if normalize_probs(&mut adjusted_probs).is_err() {
-            adjusted_probs = target_probs;
-        }
-        let sampled = sampler.sample_from_probs(&adjusted_probs, return_logprobs, rng.clone())?;
-        let sampled_token = sampled.token;
-        let keep_len = base_len + 1 + accepted;
-        finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
-        if matches!(seq.getstate(), SequenceState::Done(_)) {
+        let token = emitted.token;
+        finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, emitted, eos_tok, true).await?;
+        let continuation = if matches!(seq.getstate(), SequenceState::Done(_)) {
             seq.clear_staged_speculative_tokens();
-            return Ok(VerificationOutcome {
-                accepted_drafts: accepted,
-                proposed_drafts: proposal.len(),
-                keep_len,
-                continuation_token: None,
-            });
-        }
-        return Ok(VerificationOutcome {
-            accepted_drafts: accepted,
-            proposed_drafts: proposal.len(),
-            keep_len,
-            continuation_token: Some(sampled_token),
-        });
+            None
+        } else {
+            Some(token)
+        };
+        return Ok(outcome(accepted, base_len + 1 + accepted, continuation));
     }
 
+    // Every draft held: the row after the last one gives the next token.
     let row = logit_row(&verify_logits, accepted)?;
-    let sampler = seq.sampler();
-    let target_probs =
-        sampler.speculative_target_probs(flat_logits(row.clone())?, seq.get_toks())?;
-    let continuation = sampler.sample_from_probs(&target_probs, return_logprobs, rng)?;
-    let continuation_token = continuation.token;
+    let continuation = match &candidates {
+        Some(_) => {
+            let sampler = seq.sampler();
+            let target_probs =
+                sampler.speculative_target_probs(flat_logits(row)?, seq.get_toks())?;
+            sampler.sample_from_probs(&target_probs, return_logprobs, rng.clone())?
+        }
+        _ => sample_sequence(row, seq, return_logprobs, rng.clone(), false, false, false).await?,
+    };
+    let token = continuation.token;
     finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, continuation, eos_tok, true).await?;
-
-    let keep_len = base_len + 1 + accepted;
-    let continuation_token = if matches!(seq.getstate(), SequenceState::Done(_)) {
+    let continuation = if matches!(seq.getstate(), SequenceState::Done(_)) {
         seq.clear_staged_speculative_tokens();
         None
     } else {
-        Some(continuation_token)
+        Some(token)
     };
+    Ok(outcome(accepted, base_len + 1 + accepted, continuation))
+}
 
-    Ok(VerificationOutcome {
-        accepted_drafts: accepted,
-        proposed_drafts: proposal.len(),
-        keep_len,
-        continuation_token,
-    })
+/// Judges one draft by speculative sampling: the draft is kept with probability min(1, p/q), and
+/// otherwise the token comes from the residual max(0, p - q), so the emitted token follows the
+/// target's distribution p exactly. Returns the emitted token and whether it is the draft.
+fn judge_draft(
+    seq: &Sequence,
+    target_row: Tensor,
+    candidate_row: Tensor,
+    draft: u32,
+    return_logprobs: bool,
+    rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
+) -> Result<(Logprobs, bool)> {
+    let sampler = seq.sampler();
+    let target_probs =
+        sampler.speculative_target_probs(flat_logits(target_row)?, seq.get_toks())?;
+    let candidate_probs =
+        sampler.speculative_candidate_probs(flat_logits(candidate_row)?, seq.get_toks())?;
+    if target_probs.len() != candidate_probs.len() {
+        hanzo_ml::bail!(
+            "speculative target/candidate vocab mismatch: target={}, candidate={}",
+            target_probs.len(),
+            candidate_probs.len()
+        );
+    }
+    let draft_idx = draft as usize;
+    let p_i = target_probs.get(draft_idx).copied().unwrap_or(0.0);
+    let q_i = candidate_probs.get(draft_idx).copied().unwrap_or(0.0);
+    let accept_prob = if q_i <= 0.0 {
+        if p_i > 0.0 {
+            1.0
+        } else {
+            0.0
+        }
+    } else {
+        (p_i / q_i).min(1.0)
+    };
+    let draw = {
+        let mut rng = rng.lock().expect("could not lock rng mutex");
+        rng.random::<f32>()
+    };
+    if draw <= accept_prob {
+        return Ok((
+            sampler.logprobs_from_probs(draft, &target_probs, return_logprobs)?,
+            true,
+        ));
+    }
+
+    let mut adjusted_probs = target_probs
+        .iter()
+        .zip(candidate_probs.iter())
+        .map(|(p, q)| (p - q).max(0.0))
+        .collect::<Vec<_>>();
+    if normalize_probs(&mut adjusted_probs).is_err() {
+        adjusted_probs = target_probs;
+    }
+    let sampled = sampler.sample_from_probs(&adjusted_probs, return_logprobs, rng.clone())?;
+    Ok((sampled, false))
 }
 
 fn logit_row(logits: &Tensor, row: usize) -> Result<Tensor> {
