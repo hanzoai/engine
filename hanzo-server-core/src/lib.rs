@@ -236,6 +236,7 @@ mod handlers;
 pub mod image_generation;
 pub mod model_registry;
 pub mod music_generation;
+pub mod observe;
 pub mod openai;
 pub mod openapi_doc;
 pub mod responses;

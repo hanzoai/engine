@@ -45,11 +45,17 @@ pub const SYSTEM_INFO_ROUTE: RouteInfo = RouteInfo::new("/v1/system/info", "GET"
 pub const SYSTEM_DOCTOR_ROUTE: RouteInfo =
     RouteInfo::new("/v1/system/doctor", "POST", RouteKind::Hanzo);
 pub const HEALTH_ROUTE: RouteInfo = RouteInfo::new("/health", "GET", RouteKind::Hanzo);
+/// Prometheus text: the request totals and the engine's load (Halogen spec §10.2).
+pub const METRICS_ROUTE: RouteInfo = RouteInfo::new("/metrics", "GET", RouteKind::Hanzo);
+/// The prefix cache's counters (Halogen spec §10.3).
+pub const CACHE_ROUTE: RouteInfo = RouteInfo::new("/cache", "GET", RouteKind::Hanzo);
 pub const ROOT_ROUTE: RouteInfo = RouteInfo::new("/", "GET", RouteKind::Hanzo);
 pub const RE_ISQ_ROUTE: RouteInfo = RouteInfo::new("/re_isq", "POST", RouteKind::Hanzo);
 /// The production model-routing contract consumed by hanzoai/ai cloud-api's
 /// `router.Client`. Base path (no `/v1`) is fixed by the merged Go client.
 pub const ROUTE_ROUTE: RouteInfo = RouteInfo::new("/route", "POST", RouteKind::Hanzo);
+/// The routing decision for a request, without classifying it.
+pub const ROUTING_ROUTE: RouteInfo = RouteInfo::new("/v1/route", "POST", RouteKind::Hanzo);
 pub const IMAGE_GENERATION_ROUTE: RouteInfo =
     RouteInfo::new("/v1/images/generations", "POST", RouteKind::OpenAi);
 pub const TRYON_GENERATION_ROUTE: RouteInfo =
@@ -119,9 +125,12 @@ pub const TRAINING_SAVE_WEIGHTS_ROUTE: RouteInfo = RouteInfo::new(
     RouteKind::Hanzo,
 );
 
+/// Every route the router registers, besides the docs.
 pub const API_ROUTES: &[RouteInfo] = &[
     ROOT_ROUTE,
     HEALTH_ROUTE,
+    METRICS_ROUTE,
+    CACHE_ROUTE,
     MODELS_ROUTE,
     UNLOAD_MODEL_ROUTE,
     RELOAD_MODEL_ROUTE,
@@ -138,6 +147,7 @@ pub const API_ROUTES: &[RouteInfo] = &[
     COMPLETIONS_ROUTE,
     EMBEDDINGS_ROUTE,
     IMAGE_GENERATION_ROUTE,
+    TRYON_GENERATION_ROUTE,
     VIDEO_GENERATION_ROUTE,
     VIDEO_JOB_ROUTE,
     VIDEO_CONTENT_ROUTE,
@@ -145,7 +155,10 @@ pub const API_ROUTES: &[RouteInfo] = &[
     THREED_JOB_ROUTE,
     THREED_CONTENT_ROUTE,
     SPEECH_GENERATION_ROUTE,
+    MUSIC_GENERATION_ROUTE,
     AUDIO_TRANSCRIPTION_ROUTE,
+    ANIMATE_ROUTE,
+    LIPSYNC_ROUTE,
     FILES_ROUTE,
     FILE_ROUTE,
     FILE_CONTENT_ROUTE,
@@ -159,7 +172,20 @@ pub const API_ROUTES: &[RouteInfo] = &[
     TRAINING_SAMPLE_ROUTE,
     TRAINING_SAVE_WEIGHTS_ROUTE,
     ROUTE_ROUTE,
+    ROUTING_ROUTE,
 ];
+
+/// The `/v1` paths the router registers, sorted, each once.
+pub fn v1_paths() -> Vec<&'static str> {
+    let mut paths: Vec<&'static str> = API_ROUTES
+        .iter()
+        .map(|route| route.path)
+        .filter(|path| path.starts_with("/v1/"))
+        .collect();
+    paths.sort_unstable();
+    paths.dedup();
+    paths
+}
 
 #[cfg(feature = "swagger-ui")]
 pub const SWAGGER_ROUTES: &[RouteInfo] = &[
@@ -168,3 +194,36 @@ pub const SWAGGER_ROUTES: &[RouteInfo] = &[
     RouteInfo::new("/docs/", "GET", RouteKind::Docs),
     RouteInfo::new("/docs/{*rest}", "GET", RouteKind::Docs),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::{v1_paths, API_ROUTES};
+
+    /// A path registered twice panics axum, so the registry names each path once.
+    #[test]
+    fn each_path_once() {
+        let mut paths: Vec<_> = API_ROUTES.iter().map(|route| route.path).collect();
+        let count = paths.len();
+        paths.sort_unstable();
+        paths.dedup();
+        assert_eq!(paths.len(), count);
+    }
+
+    #[test]
+    fn v1_paths_are_sorted_and_v1_only() {
+        let paths = v1_paths();
+        assert!(paths.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(paths.iter().all(|path| path.starts_with("/v1/")));
+        for path in [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/messages",
+            "/v1/messages/count_tokens",
+            "/v1/models",
+            "/v1/responses",
+        ] {
+            assert!(paths.contains(&path), "{path}");
+        }
+        assert!(!paths.contains(&"/health"));
+    }
+}

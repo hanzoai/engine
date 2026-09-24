@@ -1,19 +1,28 @@
 //! ## General hanzo server route handlers.
 
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use anyhow::Result;
 use axum::extract::Path;
 use axum::extract::{Json, State};
-use axum::http::StatusCode;
+use axum::http::{header::CONTENT_TYPE, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::Extension;
 use hanzo_engine::{
-    auto_tune, collect_system_info, parse_isq_value, run_doctor, AutoDeviceMapParams,
+    auto_tune, collect_system_info, ledger, parse_isq_value, run_doctor, AutoDeviceMapParams,
     AutoTuneRequest, AutoTuneResult, Error, Hanzo, ModelDType, ModelSelected,
     ModelStatus as CoreModelStatus, Request, SerializedSession, TokenSource, TuneProfile,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use utoipa::ToSchema;
 
 use crate::{
+    defaults::Defaults,
+    observe::{self, Snapshot, ToolFormat},
     openai::{ModelObject, ModelObjects},
+    route_registry::v1_paths,
     types::ExtractedState,
 };
 
@@ -93,14 +102,128 @@ pub async fn models(State(state): ExtractedState) -> Json<ModelObjects> {
     })
 }
 
+/// `GET /`: the server is up.
+pub async fn root() -> &'static str {
+    "OK"
+}
+
+/// What the server and the default engine are, read from the engine's published state without
+/// waiting on it.
+fn snapshot(state: &Hanzo, model: String) -> Result<Snapshot, String> {
+    let config = state.config(None)?;
+    let logger = state.get_logger(None).map_err(|e| e.to_string())?;
+    let alive = state.engine_alive(None).map_err(|e| e.to_string())?;
+    let tool_format = match config.chat_template.as_deref() {
+        Some(template) if template.uses_xml_tool_calls() => ToolFormat::QwenXml,
+        Some(template) if template.is_harmony_format() => ToolFormat::Harmony,
+        _ => ToolFormat::Json,
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+    Ok(Snapshot {
+        model,
+        endpoints: v1_paths(),
+        alive,
+        beat: logger.last_beat(),
+        load: logger.load(),
+        now,
+        context: config.context,
+        slots: config.slots,
+        drafter: config.drafter,
+        indexer_budget: config.indexer_budget,
+        checkpoint_format: config.kind.checkpoint_format(),
+        tool_format,
+        prefix: logger.prefix_stats(),
+    })
+}
+
+/// `GET /health`: what this server serves and whether its engine answers (Halogen spec §10.1).
+/// 200 when it does; 503 with the same body, `status: engine_unresponsive`, when it does not.
 #[utoipa::path(
   get,
   tag = "Hanzo",
   path = "/health",
-  responses((status = 200, description = "Server is healthy"))
+  responses(
+    (status = 200, description = "The server, its engine and its request surface"),
+    (status = 503, description = "The engine does not answer; the same body")
+  )
 )]
-pub async fn health() -> &'static str {
-    "OK"
+pub async fn health(
+    State(state): ExtractedState,
+    Extension(defaults): Extension<Defaults>,
+) -> (StatusCode, Json<Value>) {
+    let model = defaults
+        .served_name
+        .clone()
+        .or_else(|| state.get_default_model_id().ok().flatten())
+        .unwrap_or_else(|| "default".to_string());
+    match snapshot(&state, model.clone()) {
+        Ok(snapshot) => {
+            let (responds, body) = observe::health(&snapshot, &defaults);
+            let status = if responds {
+                StatusCode::OK
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            };
+            (status, Json(body))
+        }
+        Err(detail) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "status": "engine_unresponsive",
+                "model": model,
+                "engine": {"responds": false, "detail": detail},
+            })),
+        ),
+    }
+}
+
+/// The ledger totals at the last `/metrics` scrape; the rate gauges cover what finished since.
+static LAST_SCRAPE: Mutex<Option<ledger::Totals>> = Mutex::new(None);
+
+/// `GET /metrics`: Prometheus text (Halogen spec §10.2). Never waits on an engine.
+pub async fn metrics(State(state): ExtractedState) -> impl IntoResponse {
+    let loads: Vec<_> = state
+        .list_models()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|id| state.get_logger(Some(id)).ok())
+        .map(|logger| logger.load())
+        .collect();
+    let totals = ledger::totals();
+    let previous = LAST_SCRAPE
+        .lock()
+        .map(|mut last| last.replace(totals))
+        .unwrap_or_default()
+        .unwrap_or_default();
+    (
+        [(CONTENT_TYPE, observe::METRICS_CONTENT_TYPE)],
+        observe::metrics(&totals, &previous, &loads),
+    )
+}
+
+/// `GET /cache`: the default engine's prefix-cache counters (Halogen spec §10.3); 501 when
+/// prefix caching is off.
+pub async fn cache(State(state): ExtractedState) -> Response {
+    let prefix = match state.get_logger(None) {
+        Ok(logger) => logger.prefix_stats(),
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(observe::error(&format!("no engine is loaded: {e}"))),
+            )
+                .into_response()
+        }
+    };
+    match observe::cache(&prefix, &ledger::totals()) {
+        Some(body) => Json(body).into_response(),
+        None => (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(observe::error("this engine reports no prompt cache")),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn system_info() -> Json<hanzo_engine::SystemInfo> {
