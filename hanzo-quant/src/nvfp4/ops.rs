@@ -268,14 +268,13 @@ pub fn nvfp4_moe_gemm(
         w_scales.contiguous()?,
         alpha.to_dtype(DType::F32)?.contiguous()?,
     );
-    let st = |t: &Tensor| t.storage_and_layout().0;
     let (ac_s, as_s, wc_s, ws_s, al_s, id_s) = (
-        st(&a_codes),
-        st(&a_scales),
-        st(&w_codes),
-        st(&w_scales),
-        st(&alpha),
-        st(&ids),
+        a_codes.storage_and_layout().0,
+        a_scales.storage_and_layout().0,
+        w_codes.storage_and_layout().0,
+        w_scales.storage_and_layout().0,
+        alpha.storage_and_layout().0,
+        ids.storage_and_layout().0,
     );
     let (
         Storage::Cuda(ac),
