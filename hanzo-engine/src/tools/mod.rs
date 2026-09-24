@@ -27,14 +27,12 @@ fn contains_tool_call_prefix(prefix: &str) -> bool {
     parsers::contains_tool_call_prefix(prefix)
 }
 
-fn process_model_specific_message(message: &str) -> Result<String> {
-    parsers::process_model_specific_message(message)
-}
-
 pub struct ToolCallingMatcher {
     tool_choice: ToolChoice,
     known_tool_names: Option<std::collections::HashSet<String>>,
     tools: Option<Arc<Vec<crate::Tool>>>,
+    /// The model writes calls as Qwen XML, which the JSON call grammar would corrupt.
+    xml: bool,
 }
 
 // Same as CalledFunction, but has different cases for variations on the names
@@ -117,7 +115,19 @@ impl ToolCallingMatcher {
             tool_choice,
             known_tool_names,
             tools: tools_arc,
+            xml: false,
         })
+    }
+
+    /// Calls arrive as Qwen XML: they are parsed from the text as written, with no grammar
+    /// forcing JSON after `<tool_call>`.
+    pub fn with_xml_calls(mut self, xml: bool) -> Self {
+        self.xml = xml;
+        self
+    }
+
+    fn tools(&self) -> &[crate::Tool] {
+        self.tools.as_deref().map_or(&[], Vec::as_slice)
     }
 
     /// Build a tool call grammar if a known format prefix is detected in
@@ -125,7 +135,7 @@ impl ToolCallingMatcher {
     /// `None`, no format matches, or the format is not yet ready (e.g.
     /// DeepSeek before the JSON fence).
     pub fn build_tool_call_grammar(&self, text: &str) -> Option<llguidance::api::TopLevelGrammar> {
-        if matches!(self.tool_choice, ToolChoice::None) {
+        if matches!(self.tool_choice, ToolChoice::None) || self.xml {
             return None;
         }
         let tools = self.tools.as_ref()?;
@@ -160,7 +170,7 @@ impl ToolCallingMatcher {
         if matches!(self.tool_choice, ToolChoice::None) {
             return Ok((false, false));
         }
-        let message_prefix = process_model_specific_message(message_prefix)?;
+        let message_prefix = parsers::process_model_specific_message(message_prefix, self.tools())?;
         let message_prefix = fix_broken_json(&message_prefix).map_err(hanzo_ml::Error::msg)?;
 
         // Check if the prefix could be a JSON serialization of any of the following types.
@@ -184,7 +194,7 @@ impl ToolCallingMatcher {
         if matches!(self.tool_choice, ToolChoice::None) {
             return Ok(Vec::new());
         }
-        let message = process_model_specific_message(message)?;
+        let message = parsers::process_model_specific_message(message, self.tools())?;
         let message = fix_broken_json(&message)?;
 
         let mut calls = if let Ok(deser) =

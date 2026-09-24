@@ -124,6 +124,15 @@ impl ChatTemplate {
             .any(|t| crate::reasoning_parsers::tag_based::is_channel_tag_template(t))
     }
 
+    /// Whether the template asks for tool calls as Qwen XML
+    /// (`<tool_call><function=NAME><parameter=KEY>VALUE</parameter></function></tool_call>`)
+    /// rather than a JSON body.
+    pub fn uses_xml_tool_calls(&self) -> bool {
+        self.get_template_contents()
+            .iter()
+            .any(|t| t.contains("<function=") && t.contains("<parameter="))
+    }
+
     pub fn eos_tok(&self) -> Option<String> {
         match self.eos_token.as_ref()?.0 {
             Either::Left(ref lit) => Some(lit.clone()),

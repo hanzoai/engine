@@ -53,7 +53,7 @@ impl ToolFormatParser for DeepSeekParser {
         }
     }
 
-    fn parse(&self, message: &str) -> hanzo_ml::Result<Option<String>> {
+    fn parse(&self, message: &str, _tools: &[Tool]) -> hanzo_ml::Result<Option<String>> {
         let re = DEEPSEEK_REGEX.get_or_init(|| {
             Regex::new(
                 r"(?s)<｜tool▁call▁begin｜>function<｜tool▁sep｜>(?P<name>[^\n]+)\n```json\n(?P<json>.+?)\n```<｜tool▁call▁end｜>",

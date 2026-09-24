@@ -188,13 +188,21 @@ impl Engine {
             _ => None,
         };
         let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
-        let matcher = Arc::new(handle_seq_error!(
-            ToolCallingMatcher::new(
-                request.tool_choice.unwrap_or(ToolChoice::Auto),
-                request.tools.as_deref(),
-            ),
-            request.response
-        ));
+        let xml_calls = has_tools
+            && get_mut_arcmutex!(self.pipeline)
+                .get_chat_template()
+                .as_ref()
+                .is_some_and(|ch_t| ch_t.uses_xml_tool_calls());
+        let matcher = Arc::new(
+            handle_seq_error!(
+                ToolCallingMatcher::new(
+                    request.tool_choice.unwrap_or(ToolChoice::Auto),
+                    request.tools.as_deref(),
+                ),
+                request.response
+            )
+            .with_xml_calls(xml_calls),
+        );
 
         let image_generation_format = match &request.messages {
             RequestMessage::ImageGeneration { format, .. } => Some(*format),
