@@ -332,7 +332,7 @@ pub enum ModelSelected {
         quantized_model_id: String,
 
         /// Quantized filename(s).
-        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
+        /// May be a single filename, or several separated by `;` (`GGUF_MULTI_FILE_DELIMITER`).
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
@@ -367,7 +367,7 @@ pub enum ModelSelected {
         quantized_model_id: String,
 
         /// Quantized filename(s).
-        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
+        /// May be a single filename, or several separated by `;` (`GGUF_MULTI_FILE_DELIMITER`).
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
@@ -415,7 +415,7 @@ pub enum ModelSelected {
         quantized_model_id: String,
 
         /// Quantized filename(s).
-        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
+        /// May be a single filename, or several separated by `;` (`GGUF_MULTI_FILE_DELIMITER`).
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
