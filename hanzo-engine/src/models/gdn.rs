@@ -281,6 +281,10 @@ pub fn forward_pooled(
             pool.gather_recurrent_state(indices)?,
         ),
     };
+    // The tensors handed to the forward. One it still holds afterwards was left alone or updated in
+    // place (a kernel writing its state back, or a conv-only pool's empty state): on the `One` path
+    // that is the pool's own storage already, and `slice_set` cannot copy a tensor onto itself.
+    let given = (conv_state.id(), recurrent_state.id());
     let mut cache = GdnLayerCache {
         conv_state,
         recurrent_state,
@@ -289,13 +293,14 @@ pub fn forward_pooled(
     };
     let out = forward(&mut cache)?;
 
-    // A conv-only pool's recurrent state never moves; on the `One` path it is still a view of the
-    // pool, which `slice_set` cannot write into itself.
-    let recurrent = !pool.conv_only();
+    let conv = cache.conv_state.id() != given.0;
+    let recurrent = cache.recurrent_state.id() != given.1;
     match &slots {
         PoolSlots::One { slot, .. } => {
-            let conv = cache.conv_state.to_dtype(pool.conv_state.dtype())?;
-            pool.conv_state.slice_set(&conv.contiguous()?, 0, *slot)?;
+            if conv {
+                let conv = cache.conv_state.to_dtype(pool.conv_state.dtype())?;
+                pool.conv_state.slice_set(&conv.contiguous()?, 0, *slot)?;
+            }
             if recurrent {
                 let state = cache
                     .recurrent_state
@@ -305,7 +310,9 @@ pub fn forward_pooled(
             }
         }
         PoolSlots::Many(indices) => {
-            pool.scatter_conv_state(indices, &cache.conv_state)?;
+            if conv {
+                pool.scatter_conv_state(indices, &cache.conv_state)?;
+            }
             if recurrent {
                 pool.scatter_recurrent_state(indices, &cache.recurrent_state)?;
             }
@@ -1242,6 +1249,55 @@ mod tests {
 
     use crate::kv_cache::RecurrentLayerConfig;
     use hanzo_quant::{QuantMethodConfig, UnquantLinear};
+
+    // A kernel may write its state back into the tensor it was given; on the one-slot path that
+    // tensor is a view of the pool, so there is nothing left to copy (the ROCm scan does this).
+    #[test]
+    fn pooled_forward_keeps_states_updated_in_place() -> Result<()> {
+        let dev = Device::Cpu;
+        let mut pool = RecurrentStatePool::new(
+            RecurrentLayerConfig {
+                conv_dim: 3,
+                conv_width: 2,
+                state_dims: vec![2],
+                conv_dtype: DType::F32,
+                state_dtype: DType::F32,
+            },
+            &dev,
+        )?;
+        let slot = pool.allocate().expect("a free slot");
+        let out = forward_pooled(
+            &mut pool,
+            PoolSlots::One { slot, offset: 0 },
+            0,
+            false,
+            |cache| {
+                cache
+                    .conv_state
+                    .slice_set(&Tensor::ones((1, 3, 2), DType::F32, &dev)?, 0, 0)?;
+                cache
+                    .recurrent_state
+                    .slice_set(&Tensor::full(2f32, (1, 2), &dev)?, 0, 0)?;
+                cache.seqlen_offset += 1;
+                Tensor::zeros(1, DType::F32, &dev)
+            },
+        )?;
+        assert_eq!(out.dims(), [1]);
+        let conv = pool
+            .conv_state
+            .narrow(0, slot, 1)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let state = pool
+            .recurrent_state
+            .narrow(0, slot, 1)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        assert_eq!(conv, vec![1.0; 6]);
+        assert_eq!(state, vec![2.0; 2]);
+        assert_eq!(pool.get_seqlen_offset(slot), 1);
+        Ok(())
+    }
 
     fn synthetic(n: usize, seed: usize, dev: &Device) -> Result<Tensor> {
         let v = (0..n)
