@@ -44,8 +44,9 @@ pub fn embedding(
     vb: ShardedVarBuilder,
     config: &Option<QuantizedConfig>,
 ) -> Result<Embedding> {
-    // AFQ quantized applies quantization to the embeddings.
-    let embeddings = if let Some(QuantizedConfig::Afq { .. }) = config {
+    // AFQ quantizes the embeddings too, unless its recipe leaves this module unquantized.
+    let afq = config.as_ref().and_then(|c| c.afq_at(&vb.prefix()));
+    let embeddings = if afq.is_some() {
         let afq_layer =
             AfqLayer::afq_linear_b(out_size, in_size, config.as_ref().unwrap(), false, vb)?;
         afq_layer.dequantize_w()?

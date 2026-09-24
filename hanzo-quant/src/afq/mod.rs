@@ -6,6 +6,7 @@ use std::{
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use hanzo_ml::{DType, Device, Result, Tensor};
+use hanzo_nn::Linear;
 
 use crate::{
     utils::{
@@ -13,7 +14,7 @@ use crate::{
         UQFF_VERSION,
     },
     Comm, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
-    QuantizedSerde, QuantizedSerdeType, ShardedVarBuilder,
+    QuantizedSerde, QuantizedSerdeType, ShardedVarBuilder, UnquantLinear,
 };
 
 pub mod ops;
@@ -280,8 +281,20 @@ impl AfqLayer {
         bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
-        let QuantizedConfig::Afq { bits, group_size } = config else {
+        if !matches!(config, QuantizedConfig::Afq { .. }) {
             hanzo_ml::bail!("Unexpected quantization config.")
+        }
+        let Some((bits, group_size)) = config.afq_at(&vb.prefix()) else {
+            // The recipe leaves this module unquantized.
+            let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
+            let bias = if bias {
+                Some(vb.get((out_dim,), "bias")?)
+            } else {
+                None
+            };
+            return Ok(Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(Linear::new(weight, bias)),
+            )?));
         };
 
         let w_q = vb.get_with_hints_dtype(
@@ -306,8 +319,8 @@ impl AfqLayer {
             scales,
             bias,
             biases,
-            bits: AfqBits::try_from(*bits)?,
-            group_size: AfqGroupSize::try_from(*group_size)?,
+            bits: AfqBits::try_from(bits)?,
+            group_size: AfqGroupSize::try_from(group_size)?,
         }))
     }
 
@@ -319,8 +332,8 @@ impl AfqLayer {
         bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
-        let QuantizedConfig::Afq { bits, group_size } = config else {
-            hanzo_ml::bail!("Unexpected quantization config.")
+        let Some((bits, group_size)) = config.afq_at(&vb.prefix()) else {
+            hanzo_ml::bail!("{} is not an AFQ-quantized expert bank", vb.prefix())
         };
 
         let w_q = vb.get_with_hints_dtype(
@@ -351,8 +364,8 @@ impl AfqLayer {
             scales,
             bias,
             biases,
-            bits: AfqBits::try_from(*bits)?,
-            group_size: AfqGroupSize::try_from(*group_size)?,
+            bits: AfqBits::try_from(bits)?,
+            group_size: AfqGroupSize::try_from(group_size)?,
         }))
     }
 }

@@ -316,12 +316,86 @@ pub enum QuantizedConfig {
     Afq {
         bits: usize,
         group_size: usize,
+        /// MLX's per-module entries, by module path: its own bits and group size, or left
+        /// unquantized.
+        #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+        modules: std::collections::HashMap<String, AfqModule>,
     },
     MXFP4 {},
     ModelOpt {
         quant_algo: Option<String>,
         quantized_layers: std::collections::HashMap<String, ModelOptLayerConfig>,
     },
+}
+
+/// One module's entry in an MLX `quantization` block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AfqModule {
+    /// `false`: the module stays unquantized. (`true` means the block's defaults.)
+    Quantized(bool),
+    /// The module's own affine recipe.
+    Recipe { bits: usize, group_size: usize },
+}
+
+/// The entry for the module at `prefix` in a per-module recipe keyed by module path: the exact
+/// path, or one path ending the other at a `.` boundary (checkpoints nest the same modules under
+/// different roots).
+pub(crate) fn recipe_entry<'a, V>(
+    recipe: &'a std::collections::HashMap<String, V>,
+    prefix: &str,
+) -> Option<&'a V> {
+    recipe.get(prefix).or_else(|| {
+        recipe.iter().find_map(|(k, v)| {
+            (k.ends_with(&format!(".{prefix}")) || prefix.ends_with(&format!(".{k}"))).then_some(v)
+        })
+    })
+}
+
+impl QuantizedConfig {
+    /// The AFQ (bits, group size) for the module at `prefix`: its own entry, else the block's
+    /// defaults; `None` when the recipe leaves it unquantized or the config is not AFQ.
+    pub fn afq_at(&self, prefix: &str) -> Option<(usize, usize)> {
+        let QuantizedConfig::Afq {
+            bits,
+            group_size,
+            modules,
+        } = self
+        else {
+            return None;
+        };
+        match recipe_entry(modules, prefix) {
+            Some(AfqModule::Quantized(false)) => None,
+            Some(AfqModule::Recipe { bits, group_size }) => Some((*bits, *group_size)),
+            Some(AfqModule::Quantized(true)) | None => Some((*bits, *group_size)),
+        }
+    }
+}
+
+/// MLX's per-module entries among a quantization block's keys: booleans and objects carrying
+/// `bits`. Only the affine mode exists in AFQ.
+fn afq_modules<E: serde::de::Error>(
+    rest: std::collections::HashMap<String, serde_json::Value>,
+) -> std::result::Result<std::collections::HashMap<String, AfqModule>, E> {
+    let mut modules = std::collections::HashMap::new();
+    for (key, value) in rest {
+        let mode = match &value {
+            serde_json::Value::Bool(_) => None,
+            serde_json::Value::Object(o) if o.contains_key("bits") => o.get("mode"),
+            serde_json::Value::String(_) if key == "mode" => Some(&value),
+            _ => continue,
+        };
+        if let Some(mode) = mode.and_then(|m| m.as_str()).filter(|m| *m != "affine") {
+            return Err(E::custom(format!(
+                "AFQ supports the affine mode only; {key} asks for {mode}"
+            )));
+        }
+        if key != "mode" {
+            let module = serde_json::from_value(value).map_err(E::custom)?;
+            modules.insert(key, module);
+        }
+    }
+    Ok(modules)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -343,6 +417,8 @@ struct RawConfig {
     checkpoint_format: Option<String>,
     weight_block_size: Option<Vec<usize>>,
     bnb_4bit_quant_type: Option<String>,
+    #[serde(flatten)]
+    rest: std::collections::HashMap<String, serde_json::Value>,
 }
 
 // Custom deserializer implementation
@@ -384,7 +460,11 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                 let group_size = raw
                     .group_size
                     .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
-                Ok(QuantizedConfig::Afq { bits, group_size })
+                Ok(QuantizedConfig::Afq {
+                    bits,
+                    group_size,
+                    modules: afq_modules(raw.rest)?,
+                })
             }
             Some(m) if m == "mxfp4" => {
                 Ok(QuantizedConfig::MXFP4 {  })
@@ -402,7 +482,11 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                 let group_size = raw
                     .group_size
                     .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
-                Ok(QuantizedConfig::Afq { bits, group_size })
+                Ok(QuantizedConfig::Afq {
+                    bits,
+                    group_size,
+                    modules: afq_modules(raw.rest)?,
+                })
             }
             Some(unknown_method) => {
                 Err(serde::de::Error::custom(format!(
@@ -1838,5 +1922,55 @@ mod tests {
         assert!(msg.contains("temporary UQFF placeholders"));
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod afq_recipe_tests {
+    use super::*;
+
+    // Entries copied from the MTPLX pack of Qwen3.8-Flash-Next (config.json `quantization`):
+    // 4-bit g64 by default, routers and the indexer at 8 bits, hyper-connections unquantized.
+    const RECIPE: &str = r#"{
+        "bits": 4, "group_size": 64, "mode": "affine",
+        "language_model.lm_head": {"bits": 4, "group_size": 64, "mode": "affine"},
+        "language_model.model.layers.0.mlp.gate": {"bits": 8, "group_size": 64, "mode": "affine"},
+        "language_model.model.layers.11.self_attn.indexer.index_qk_proj": {"bits": 8, "group_size": 64, "mode": "affine"},
+        "language_model.model.layers.0.attn_hyper_connection.input_mix_weight_down": false
+    }"#;
+
+    #[test]
+    fn mlx_recipe_resolves_per_module() {
+        let config: QuantizedConfig = serde_json::from_str(RECIPE).unwrap();
+        let at = |prefix: &str| config.afq_at(prefix);
+        assert_eq!(at("language_model.lm_head"), Some((4, 64)));
+        assert_eq!(at("language_model.model.layers.0.mlp.gate"), Some((8, 64)));
+        assert_eq!(
+            at("language_model.model.layers.11.self_attn.indexer.index_qk_proj"),
+            Some((8, 64))
+        );
+        assert_eq!(
+            at("language_model.model.layers.0.attn_hyper_connection.input_mix_weight_down"),
+            None
+        );
+        // A module the recipe does not list takes the defaults.
+        assert_eq!(
+            at("language_model.model.layers.3.mlp.switch_mlp.gate_proj"),
+            Some((4, 64))
+        );
+        // The same path nested under another root matches on a `.` boundary; a bare suffix does not.
+        assert_eq!(
+            at("model.language_model.model.layers.0.mlp.gate"),
+            Some((8, 64))
+        );
+        assert_eq!(at("layers.10.mlp.gate"), Some((4, 64)));
+    }
+
+    #[test]
+    fn mlx_recipe_refuses_other_modes() {
+        let recipe = r#"{"bits": 4, "group_size": 32, "a.b": {"bits": 4, "group_size": 32, "mode": "mxfp4"}}"#;
+        assert!(serde_json::from_str::<QuantizedConfig>(recipe).is_err());
+        let recipe = r#"{"bits": 4, "group_size": 32, "mode": "nvfp4"}"#;
+        assert!(serde_json::from_str::<QuantizedConfig>(recipe).is_err());
     }
 }

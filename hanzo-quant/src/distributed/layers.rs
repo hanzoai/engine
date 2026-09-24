@@ -35,14 +35,7 @@ pub fn load_modelopt_linear(
     quantized_layers: &std::collections::HashMap<String, crate::ModelOptLayerConfig>,
     vb: &ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
-    let prefix = vb.prefix();
-    let layer_cfg = quantized_layers.iter().find_map(|(k, v)| {
-        if k == &prefix || k.ends_with(&format!(".{prefix}")) || prefix.ends_with(k) {
-            Some(v)
-        } else {
-            None
-        }
-    });
+    let layer_cfg = crate::recipe_entry(quantized_layers, &vb.prefix());
     match layer_cfg.and_then(|c| c.quant_algo.as_deref()) {
         Some("NVFP4") => crate::NVFP4Layer::linear_b(in_dim, out_dim, bias, vb.clone()),
         Some("FP8") => pertensor_fp8_linear_b(
