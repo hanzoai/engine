@@ -386,7 +386,8 @@ fn rocm_decode_attn(
     use hanzo_ml::DType;
     let (_b, h, q_len, d) = q.dims4()?;
     if q_len != 1
-        || !(d == 128 || d == 256)
+        // The pinned hanzo-ml decode kernel is built for head_dim 128 only (FD_DH).
+        || d != 128
         || !matches!(q.dtype(), DType::F16 | DType::BF16)
         || q.dtype() != k.dtype()
         || q.dtype() != v.dtype()
@@ -500,7 +501,8 @@ impl Sdpa {
                     && !explicitly_noncausal);
             if is_full_causal
                 && seq_len >= ROCM_FLASH_MIN_SEQ
-                && (head_dim == 128 || head_dim == 256)
+                // The pinned hanzo-ml flash kernel is built for head_dim 128 only (FA_DH).
+                && head_dim == 128
                 && k.dim(3)? == head_dim
                 && v.dim(3)? == head_dim
                 && matches!(q.dtype(), DType::F16 | DType::BF16)
