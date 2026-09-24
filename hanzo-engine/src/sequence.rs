@@ -769,12 +769,15 @@ impl Sequence {
         matches!(*self.state.read().unwrap(), SequenceState::Waiting)
     }
 
+    /// Whether the schedulers should drop the sequence and free its blocks. An errored sequence has
+    /// had its error sent; kept, it would be stepped again forever.
     pub fn is_finished_paged_attn(&self) -> bool {
         matches!(
             *self.state.read().unwrap(),
             SequenceState::FinishedAborted
                 | SequenceState::FinishedIgnored
                 | SequenceState::Done(_)
+                | SequenceState::Error
         )
     }
 
@@ -1780,6 +1783,14 @@ pub(crate) fn test_sequence(tokens: Vec<u32>, temperature: Option<f64>) -> Seque
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_errored_sequence_is_finished() {
+        let seq = test_sequence(vec![1, 2, 3], None);
+        assert!(!seq.is_finished_paged_attn());
+        seq.set_state(SequenceState::Error);
+        assert!(seq.is_finished_paged_attn());
+    }
     use tokio::sync::mpsc::channel;
 
     fn make_test_sequence() -> Sequence {
