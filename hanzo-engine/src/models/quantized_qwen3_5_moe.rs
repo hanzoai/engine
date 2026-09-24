@@ -331,7 +331,7 @@ impl GatedFullAttention {
 
     /// Project, attend, then gate and project out: vLLM `Qwen3NextAttention.forward`
     /// (`qwen3_next.py:446-457`).
-    fn forward(
+    pub(crate) fn forward(
         &self,
         x: &Tensor,
         mask: &AttentionMask,
@@ -555,7 +555,6 @@ impl QGatedDeltaNet {
 
     /// Gate the output norm with sigmoid(z), `output_gate_type = "sigmoid"`
     /// (vLLM `qwen_gdn_linear_attn.py:471-484`).
-    #[allow(dead_code)] // no Qwen3.5 GDN gates with sigmoid; qwen4exp's does
     pub(crate) fn sigmoid(self) -> Self {
         Self {
             norm: self.norm.sigmoid(),
@@ -563,7 +562,7 @@ impl QGatedDeltaNet {
         }
     }
 
-    fn forward(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
+    pub(crate) fn forward(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         // GDN recurrence + gates run in f32 end-to-end to avoid bf16/f32 boundary mismatches;
         // input is lifted to f32 here and the out_proj result cast back to the model dtype.
         let orig_dtype = x.dtype();
@@ -876,7 +875,7 @@ pub(crate) fn verify_arch(
 }
 
 impl PropsGGUF {
-    fn try_from(c: &ContentMetadata, is_moe: bool) -> Result<Self> {
+    pub(crate) fn try_from(c: &ContentMetadata, is_moe: bool) -> Result<Self> {
         let required = [
             "attention.head_count",
             "attention.head_count_kv",
@@ -1277,8 +1276,14 @@ impl ModelWeights {
             .as_ref()
             .and_then(|(_, meta)| meta.rope_positions.as_ref())
             .and_then(|rp| rp.get(&self.device.location()));
-        let cos_sin =
-            self.compute_text_mrope(seqlen_offsets, seq_len, x.dtype(), rope_positions)?;
+        let cos_sin = text_mrope(
+            &self.rotary,
+            &self.device,
+            seqlen_offsets,
+            seq_len,
+            x.dtype(),
+            rope_positions,
+        )?;
 
         let capture_layers = self.spec_capture.layers_for(b_sz);
         let mut captured: Vec<Tensor> = Vec::with_capacity(capture_layers.len());
@@ -1444,45 +1449,46 @@ impl ModelWeights {
             }),
         }
     }
+}
 
-    /// Build text-only mRoPE cos/sin. position_ids shape (3, batch, seq) with all three temporal/
-    /// height/width rows equal to the absolute token position; this collapses interleaved mRoPE to
-    /// plain partial RoPE, which is correct for text-only generation.
-    fn compute_text_mrope(
-        &self,
-        seqlen_offsets: &[usize],
-        seq_len: usize,
-        dtype: DType,
-        rope_positions: Option<&Tensor>,
-    ) -> Result<(Tensor, Tensor)> {
-        // (3, batch, seq) position ids -> interleaved mRoPE collapses to partial RoPE for text.
-        let position_ids = match rope_positions {
-            // Decode-graph path: read the advancing position from the stable device buffer the graph
-            // runner refreshes in place (no host Tensor::from_vec, so the captured cos/sin advance).
-            Some(rp) if seq_len == 1 => {
-                let batch = rp.dim(0)?;
-                let pos = rp.reshape((1, batch, 1))?;
-                Tensor::cat(&[&pos, &pos, &pos], 0)?
-            }
-            _ => {
-                let batch = seqlen_offsets.len().max(1);
-                let mut positions = Vec::with_capacity(batch * seq_len);
-                for &off in seqlen_offsets.iter() {
-                    for p in 0..seq_len {
-                        positions.push((off + p) as u32);
-                    }
+/// Build text-only mRoPE cos/sin. position_ids shape (3, batch, seq) with all three temporal/
+/// height/width rows equal to the absolute token position; this collapses interleaved mRoPE to
+/// plain partial RoPE, which is correct for text-only generation.
+pub(crate) fn text_mrope(
+    rotary: &Qwen3VLRotaryEmbedding,
+    device: &Device,
+    seqlen_offsets: &[usize],
+    seq_len: usize,
+    dtype: DType,
+    rope_positions: Option<&Tensor>,
+) -> Result<(Tensor, Tensor)> {
+    // (3, batch, seq) position ids -> interleaved mRoPE collapses to partial RoPE for text.
+    let position_ids = match rope_positions {
+        // Decode-graph path: read the advancing position from the stable device buffer the graph
+        // runner refreshes in place (no host Tensor::from_vec, so the captured cos/sin advance).
+        Some(rp) if seq_len == 1 => {
+            let batch = rp.dim(0)?;
+            let pos = rp.reshape((1, batch, 1))?;
+            Tensor::cat(&[&pos, &pos, &pos], 0)?
+        }
+        _ => {
+            let batch = seqlen_offsets.len().max(1);
+            let mut positions = Vec::with_capacity(batch * seq_len);
+            for &off in seqlen_offsets.iter() {
+                for p in 0..seq_len {
+                    positions.push((off + p) as u32);
                 }
-                if seqlen_offsets.is_empty() {
-                    for p in 0..seq_len {
-                        positions.push(p as u32);
-                    }
-                }
-                let pos_1d = Tensor::from_vec(positions, (batch, seq_len), &self.device)?;
-                Tensor::stack(&[&pos_1d, &pos_1d, &pos_1d], 0)?
             }
-        };
-        self.rotary.compute_cos_sin(&position_ids, dtype)
-    }
+            if seqlen_offsets.is_empty() {
+                for p in 0..seq_len {
+                    positions.push(p as u32);
+                }
+            }
+            let pos_1d = Tensor::from_vec(positions, (batch, seq_len), device)?;
+            Tensor::stack(&[&pos_1d, &pos_1d, &pos_1d], 0)?
+        }
+    };
+    rotary.compute_cos_sin(&position_ids, dtype)
 }
 
 #[cfg(test)]

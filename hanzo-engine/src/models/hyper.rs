@@ -1,6 +1,4 @@
 #![allow(clippy::cast_precision_loss)]
-// The first caller is the qwen4exp loader.
-#![allow(dead_code)]
 
 //! Gated-residual hyper-connections, the residual of Qwen3.8-Flash-Next (`qwen4exp`).
 //!

@@ -1,6 +1,4 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-// The first caller is the qwen4exp loader.
-#![allow(dead_code)]
 
 //! Hashed n-gram memory of Qwen3.8-Flash-Next (GGUF arch `qwen4exp`, `per_layer_token_embd` +
 //! `blk.1.ple_*`; vLLM `Qwen4ExpPLELayer`).
