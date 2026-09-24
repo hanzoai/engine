@@ -53,6 +53,7 @@ use crate::{
 
 mod add_request;
 pub(crate) mod agentic_loop;
+pub mod ledger;
 pub use agentic_loop::DEFAULT_MAX_TOOL_ROUNDS;
 pub(crate) mod agentic_session;
 mod file_tools;

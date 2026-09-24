@@ -919,6 +919,11 @@ pub trait Pipeline:
         false
     }
 
+    /// The speculative proposer attached at load, as it was logged.
+    fn drafter(&self) -> Option<crate::speculative::SpeculativeAttachInfo> {
+        None
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn try_sample_speculative_causal_gen(
         &mut self,

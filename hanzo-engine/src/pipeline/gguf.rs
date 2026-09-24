@@ -139,6 +139,8 @@ pub struct GGUFPipeline {
     generation_defaults: Option<crate::ModelGenerationDefaults>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     draft_proposer: Option<Box<dyn crate::speculative::SpeculativeProposer + Send + Sync>>,
+    /// The speculative proposer attached at load.
+    drafter: Option<crate::speculative::SpeculativeAttachInfo>,
     /// The GGUF files this model was read from, so `--mtp-model self` finds a head inside one.
     weight_files: Vec<PathBuf>,
     /// Captured ROCm/HIP decode graphs, keyed by decode bucket. See
@@ -1093,6 +1095,7 @@ impl Loader for GGUFLoader {
             generation_defaults,
             mapper: pipeline_mapper,
             draft_proposer: None,
+            drafter: None,
             weight_files: paths.get_weight_filenames().to_vec(),
             #[cfg(feature = "rocm")]
             rocm_decode_graph: std::sync::Mutex::new(RocmDecodeGraphState::default()),
@@ -2679,6 +2682,10 @@ impl Pipeline for GGUFPipeline {
         self.draft_proposer.is_some()
     }
 
+    fn drafter(&self) -> Option<crate::speculative::SpeculativeAttachInfo> {
+        self.drafter.clone()
+    }
+
     fn note_forward_sequences(&self, seq_ids: &[usize]) {
         if let Model::Qwen35(ref model) = self.model {
             model.spec_capture.note_forward(seq_ids);
@@ -2719,6 +2726,7 @@ impl Pipeline for GGUFPipeline {
                 model.spec_capture.request(proposer.capture_request());
                 let info = crate::speculative::SpeculativeAttachInfo::dflash(proposer.block_size());
                 crate::speculative::logging::log_attach(&info);
+                self.drafter = Some(info);
                 self.draft_proposer = Some(Box::new(proposer));
                 Ok(())
             }
@@ -2733,6 +2741,7 @@ impl Pipeline for GGUFPipeline {
                     ngram_min, ngram_max, gamma,
                 );
                 crate::speculative::logging::log_attach(&info);
+                self.drafter = Some(info);
                 self.draft_proposer = Some(Box::new(proposer));
                 Ok(())
             }
@@ -2765,6 +2774,7 @@ impl Pipeline for GGUFPipeline {
                 let proposer = crate::speculative::DraftModelProposer::new(draft, gamma)?;
                 let info = crate::speculative::SpeculativeAttachInfo::draft_model(gamma);
                 crate::speculative::logging::log_attach(&info);
+                self.drafter = Some(info);
                 self.draft_proposer = Some(Box::new(proposer));
                 Ok(())
             }
@@ -2807,6 +2817,7 @@ impl Pipeline for GGUFPipeline {
                     proposer.proposal_len(),
                 );
                 crate::speculative::logging::log_attach(&info);
+                self.drafter = Some(info);
                 self.draft_proposer = Some(proposer);
                 Ok(())
             }
