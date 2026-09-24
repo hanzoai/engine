@@ -398,6 +398,10 @@ impl super::ReasoningParser for TagReasoningContext {
     fn reasoning_content(&self) -> Option<String> {
         Self::reasoning_content(self)
     }
+
+    fn in_reasoning(&self) -> bool {
+        self.in_think_block
+    }
 }
 
 /// Check if a chat template uses `<think>...</think>` tags.
@@ -417,6 +421,21 @@ pub fn is_channel_tag_template(template: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn in_reasoning_follows_the_think_block() {
+        use crate::reasoning_parsers::ReasoningParser;
+        let mut ctx = TagReasoningContext::new_in_think_block();
+        assert!(ctx.in_reasoning());
+        ctx.process_text("plan</th");
+        assert!(ctx.in_reasoning());
+        ctx.process_text("ink>answer");
+        assert!(!ctx.in_reasoning());
+        let mut ctx = TagReasoningContext::new_think_tags();
+        assert!(!ctx.in_reasoning());
+        ctx.process_text("<think>");
+        assert!(ctx.in_reasoning());
+    }
 
     // === Think Tag Tests ===
 

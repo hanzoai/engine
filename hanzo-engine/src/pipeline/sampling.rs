@@ -84,7 +84,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     let completion_bytes = tok_env
         .tok_trie()
         .decode_ext(&[logprobs.token], include_special);
-    seq.add_token(logprobs.clone(), completion_bytes, &is_done);
+    if let Some(stop) = seq.add_token(logprobs.clone(), completion_bytes, &is_done) {
+        is_done = Some(stop);
+    }
 
     // If we can have a tool and we got a tool, stop the sequence early.
     // Doesn't conflict with the logic below because it does the same thing anyway.
@@ -97,6 +99,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 && matches!(parse_text_tools(d, seq.tools.clone()), Ok((None, _tools)))
             {
                 seq.set_state(SequenceState::Done(StopReason::Eos));
+                seq.release_held();
                 is_done = Some(StopReason::Eos);
             }
         }
@@ -343,21 +346,16 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             // Signal EOS to all reasoning parsers
             seq.finalize_reasoning();
 
+            // A stop string never enters the completion, so its text is the whole completion.
             let text = match reason {
                 crate::sequence::StopReason::Length(_)
                 | crate::sequence::StopReason::ModelLength(_)
                 | crate::sequence::StopReason::Eos
                 | crate::sequence::StopReason::StopTok(_)
                 | crate::sequence::StopReason::Canceled
-                | crate::sequence::StopReason::ToolCalls => {
+                | crate::sequence::StopReason::ToolCalls
+                | crate::sequence::StopReason::StopString { .. } => {
                     String::from_utf8_lossy(seq.completion_bytes()).to_string()
-                }
-                crate::sequence::StopReason::StopString {
-                    completion_bytes_pos,
-                    ..
-                } => {
-                    let txt = String::from_utf8_lossy(seq.completion_bytes());
-                    txt[..completion_bytes_pos].to_string()
                 }
                 crate::sequence::StopReason::GeneratedImage
                 | crate::sequence::StopReason::GeneratedSpeech
