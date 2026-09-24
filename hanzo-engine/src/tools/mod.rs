@@ -293,22 +293,23 @@ where
     }
 }
 
-/// Takes raw UTf8 text and parses any possible tool calls from it.
+/// Parses the tool calls in raw UTF-8 text. Returns the text unchanged when there are none; with
+/// calls, the text outside them, stripped, or `None` when that is empty (Halogen spec §8.2, §9.3):
+/// a call's own text is never content too.
 pub fn parse_text_tools(
     raw_text: &str,
     matcher: Option<Arc<ToolCallingMatcher>>,
-) -> anyhow::Result<(Option<&str>, Vec<ToolCallResponse>)> {
-    let mut tool_calls = Vec::new();
-    let mut text_new = Some(raw_text);
-
-    if let Some(ref matcher) = matcher {
-        let calls = matcher.get_call(raw_text).map_err(hanzo_ml::Error::msg)?;
-        if !calls.is_empty() {
-            text_new = None;
-            tool_calls = calls;
-        }
+) -> anyhow::Result<(Option<String>, Vec<ToolCallResponse>)> {
+    let Some(matcher) = matcher else {
+        return Ok((Some(raw_text.to_string()), Vec::new()));
     };
-    Ok((text_new, tool_calls))
+    let calls = matcher.get_call(raw_text)?;
+    if calls.is_empty() {
+        return Ok((Some(raw_text.to_string()), calls));
+    }
+    let outside = parsers::outside_calls(raw_text, matcher.tools())?;
+    let outside = outside.trim();
+    Ok(((!outside.is_empty()).then(|| outside.to_string()), calls))
 }
 
 #[cfg(test)]
@@ -374,7 +375,7 @@ mod tests {
         let required = Arc::new(matcher(ToolChoice::Required, &tools, true));
         assert!(required.must_call());
         let (text, calls) = parse_text_tools("It is sunny.", Some(required.clone())).unwrap();
-        assert_eq!(text, Some("It is sunny."));
+        assert_eq!(text.as_deref(), Some("It is sunny."));
         assert!(calls.is_empty());
         // A call to a tool the request did not define is dropped, not an error.
         let (_, calls) = parse_text_tools(
@@ -382,6 +383,26 @@ mod tests {
             Some(required),
         )
         .unwrap();
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn the_content_is_the_text_outside_the_calls() {
+        let tools = [tool("get_weather")];
+        let auto = Arc::new(matcher(ToolChoice::Auto, &tools, true));
+        let call = "<tool_call>\n<function=get_weather>\n<parameter=city>\nOslo\n</parameter>\n</function>\n</tool_call>";
+        let (text, calls) =
+            parse_text_tools(&format!("Checking Oslo.\n\n{call}\n"), Some(auto.clone())).unwrap();
+        assert_eq!(text.as_deref(), Some("Checking Oslo."));
+        assert_eq!(calls.len(), 1);
+        // Only calls: no content at all.
+        let (text, calls) =
+            parse_text_tools(&format!("\n{call}\n{call}"), Some(auto.clone())).unwrap();
+        assert_eq!(text, None);
+        assert_eq!(calls.len(), 2);
+        // No call: the text is untouched, whitespace included, as a stream's delta must be.
+        let (text, calls) = parse_text_tools(" Hello ", Some(auto)).unwrap();
+        assert_eq!(text.as_deref(), Some(" Hello "));
         assert!(calls.is_empty());
     }
 

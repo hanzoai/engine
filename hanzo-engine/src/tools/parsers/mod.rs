@@ -58,6 +58,12 @@ pub trait ToolFormatParser: Send + Sync {
     /// The tool call format this parser handles.
     fn format(&self) -> ToolCallFormat;
 
+    /// The text of `message` outside the calls [`parse`](Self::parse) read from it. A format whose
+    /// calls are the whole message has none.
+    fn outside(&self, _message: &str) -> String {
+        String::new()
+    }
+
     /// Build an llguidance grammar that constrains model output to a valid
     /// tool call in this format.  The grammar covers the **post-prefix**
     /// content (the prefix itself is already generated when grammar
@@ -105,6 +111,17 @@ pub fn build_tool_call_grammar(text: &str, tools: &[Tool]) -> Option<TopLevelGra
         }
     }
     None
+}
+
+/// The text of `message` outside its tool calls, per the first parser that reads calls in it, as
+/// [`process_model_specific_message`] picks it. Empty when no parser does.
+pub fn outside_calls(message: &str, tools: &[Tool]) -> Result<String> {
+    for parser in PARSERS.iter() {
+        if parser.parse(message, tools)?.is_some() {
+            return Ok(parser.outside(message));
+        }
+    }
+    Ok(String::new())
 }
 
 /// Try each parser in order to extract tool calls from `message`.

@@ -25,17 +25,15 @@ macro_rules! fixup_sentencepiece {
     };
 }
 
-#[allow(dead_code)]
 fn parse_text_and_tool_calls(
     raw_text: &str,
     matcher: Option<Arc<crate::tools::ToolCallingMatcher>>,
 ) -> Result<(Option<String>, Vec<ToolCallResponse>)> {
-    let (text_new, tool_calls) =
-        parse_text_tools(raw_text, matcher).map_err(hanzo_ml::Error::msg)?;
-    Ok((text_new.map(ToString::to_string), tool_calls))
+    parse_text_tools(raw_text, matcher).map_err(hanzo_ml::Error::msg)
 }
 
-#[allow(dead_code)]
+/// One streamed delta's content and tool calls. Calls are read from the answer only: with a
+/// reasoning parser, from its content delta, never the raw text, which holds the think block too.
 fn parse_streaming_text_and_tool_calls(
     content_delta: Option<String>,
     raw_delta: &str,
@@ -96,7 +94,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 t.prefix_could_be_tool(d.as_str())?;
 
             if tool_use_is_done
-                && matches!(parse_text_tools(d, seq.tools.clone()), Ok((None, _tools)))
+                && parse_text_tools(d, seq.tools.clone()).is_ok_and(|(_, calls)| !calls.is_empty())
             {
                 seq.set_state(SequenceState::Done(StopReason::Eos));
                 seq.release_held();
@@ -176,22 +174,13 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             let delta_result = seq.get_delta();
             if let Some(delta) = crate::handle_seq_error_stateaware_ok!(delta_result, seq) {
                 if seq.get_mut_group().is_chat {
-                    let (content_delta, reasoning_delta) = if seq.reasoning_mode().is_some() {
-                        (
-                            seq.get_response_content_delta(),
-                            seq.get_reasoning_content_delta(),
-                        )
-                    } else {
-                        let (text_new, _) = parse_text_tools(delta.as_str(), seq.tools.clone())
-                            .map_err(hanzo_ml::Error::msg)?;
-                        (text_new.map(ToString::to_string), None)
-                    };
-
-                    let tool_calls = if seq.is_harmony_mode() {
+                    let (content_delta, reasoning_delta, tool_calls) = if seq.is_harmony_mode() {
+                        let content_delta = seq.get_response_content_delta();
+                        let reasoning_delta = seq.get_reasoning_content_delta();
                         // In Harmony mode, only finalize tool calls when the sequence is done
                         // (EOS token or stop string), not when we first detect a tool call.
                         // This ensures tool call arguments are fully generated.
-                        if is_done.is_some() && seq.has_harmony_tool_calls() {
+                        let tool_calls = if is_done.is_some() && seq.has_harmony_tool_calls() {
                             // Sequence is done and has tool calls - finalize and send them
                             is_done = Some(StopReason::ToolCalls);
                             let harmony_tool_calls = seq.get_harmony_tool_calls();
@@ -210,15 +199,20 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                                 .collect()
                         } else {
                             vec![]
-                        }
+                        };
+                        (content_delta, reasoning_delta, tool_calls)
                     } else {
-                        // Not in Harmony mode - parse text for tool calls
-                        let (_, tool_calls) = parse_text_tools(delta.as_str(), seq.tools.clone())
-                            .map_err(hanzo_ml::Error::msg)?;
+                        // A call's own text is not content (Halogen spec §8.3, §9.4).
+                        let (content_delta, tool_calls) = parse_streaming_text_and_tool_calls(
+                            seq.get_response_content_delta(),
+                            delta.as_str(),
+                            seq.reasoning_mode().is_some(),
+                            seq.tools.clone(),
+                        )?;
                         if !tool_calls.is_empty() {
                             is_done = Some(StopReason::ToolCalls);
                         }
-                        tool_calls
+                        (content_delta, seq.get_reasoning_content_delta(), tool_calls)
                     };
 
                     seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
@@ -375,41 +369,41 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             };
             let mut declined = false;
             if is_chat {
-                let (text_new, tool_calls, reasoning_content) = if let Some(mode) =
-                    seq.reasoning_mode()
-                {
-                    let final_content = seq.get_response_content();
-                    let reasoning = seq.get_reasoning_content();
+                let (text_new, tool_calls, reasoning_content) =
+                    if let Some(mode) = seq.reasoning_mode() {
+                        let final_content = seq.get_response_content();
+                        let reasoning = seq.get_reasoning_content();
 
-                    let tool_calls = if mode == crate::reasoning_parsers::ReasoningMode::Harmony {
-                        let harmony_tool_calls = seq.get_harmony_tool_calls();
-                        harmony_tool_calls
-                            .into_iter()
-                            .enumerate()
-                            .map(|(i, tc)| ToolCallResponse {
-                                index: i,
-                                id: tc.id,
-                                tp: ToolCallType::Function,
-                                function: CalledFunction {
-                                    name: tc.name,
-                                    arguments: tc.arguments,
-                                },
-                            })
-                            .collect()
-                    } else if let Some(ref content) = final_content {
-                        let (_, tc) = parse_text_tools(content.as_str(), seq.tools.clone())
-                            .map_err(hanzo_ml::Error::msg)?;
-                        tc
+                        let (final_content, tool_calls) =
+                            if mode == crate::reasoning_parsers::ReasoningMode::Harmony {
+                                let harmony_tool_calls = seq.get_harmony_tool_calls();
+                                let tool_calls = harmony_tool_calls
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(i, tc)| ToolCallResponse {
+                                        index: i,
+                                        id: tc.id,
+                                        tp: ToolCallType::Function,
+                                        function: CalledFunction {
+                                            name: tc.name,
+                                            arguments: tc.arguments,
+                                        },
+                                    })
+                                    .collect();
+                                (final_content, tool_calls)
+                            } else if let Some(ref content) = final_content {
+                                // Halogen spec §8.2: a call's own text is not content.
+                                parse_text_and_tool_calls(content.as_str(), seq.tools.clone())?
+                            } else {
+                                (None, vec![])
+                            };
+
+                        (final_content, tool_calls, reasoning)
                     } else {
-                        vec![]
+                        let (text_new, tool_calls) =
+                            parse_text_and_tool_calls(text.as_str(), seq.tools.clone())?;
+                        (text_new, tool_calls, None)
                     };
-
-                    (final_content, tool_calls, reasoning)
-                } else {
-                    let (text_new, tool_calls) = parse_text_tools(text.as_str(), seq.tools.clone())
-                        .map_err(hanzo_ml::Error::msg)?;
-                    (text_new.map(ToString::to_string), tool_calls, None)
-                };
 
                 if !tool_calls.is_empty() {
                     reason = StopReason::ToolCalls;
@@ -790,6 +784,31 @@ mod tests {
 
         assert_eq!(content, None);
         assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn a_streamed_call_is_not_content_and_calls_in_the_think_block_are_not_calls() {
+        let tool = weather_tool();
+        let matcher = Arc::new(
+            ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool]))
+                .unwrap()
+                .with_xml_calls(true),
+        );
+        let call = "<tool_call>\n<function=get_weather>\n<parameter=city>\nOslo\n</parameter>\n</function>\n</tool_call>";
+        let content = format!("Let me check.\n{call}");
+        let raw = format!("I could use <tool_call> here.</think>{content}");
+        let (text, calls) =
+            parse_streaming_text_and_tool_calls(Some(content), &raw, true, Some(matcher.clone()))
+                .unwrap();
+        assert_eq!(text.as_deref(), Some("Let me check."));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.arguments, r#"{"city":"Oslo"}"#);
+        // A call written in the reasoning, with no answer yet, is not a call.
+        let raw = format!("thinking {call}");
+        let (text, calls) =
+            parse_streaming_text_and_tool_calls(None, &raw, true, Some(matcher)).unwrap();
+        assert_eq!(text, None);
+        assert!(calls.is_empty());
     }
 
     #[test]

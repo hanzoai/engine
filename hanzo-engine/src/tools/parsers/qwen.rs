@@ -58,12 +58,15 @@ impl ToolFormatParser for QwenParser {
         )
     }
 
+    /// Halogen spec §9.3: the text between and around the closed blocks. An unclosed trailing
+    /// `<tool_call>` is not a call, so it stays.
+    fn outside(&self, message: &str) -> String {
+        block().replace_all(message, "").into_owned()
+    }
+
     fn parse(&self, message: &str, tools: &[Tool]) -> hanzo_ml::Result<Option<String>> {
-        let block = BLOCK.get_or_init(|| {
-            Regex::new(r"(?s)<tool_call>\s*(?P<inner>.*?)\s*</tool_call>").unwrap()
-        });
         let mut calls = Vec::new();
-        for caps in block.captures_iter(message) {
+        for caps in block().captures_iter(message) {
             let inner = caps.name("inner").unwrap().as_str();
             let call = if inner.starts_with("<function=") {
                 xml_call(inner, tools)
@@ -82,6 +85,11 @@ impl ToolFormatParser for QwenParser {
             _ => Some(Value::Array(calls).to_string()),
         })
     }
+}
+
+/// One closed `<tool_call>` block, its body captured as `inner`.
+fn block() -> &'static Regex {
+    BLOCK.get_or_init(|| Regex::new(r"(?s)<tool_call>\s*(?P<inner>.*?)\s*</tool_call>").unwrap())
 }
 
 /// One XML call as `{"name": ..., "arguments": {...}}`.
