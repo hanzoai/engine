@@ -458,6 +458,53 @@ impl ModelConfig::FromGGUF for ModelWeights {
     }
 }
 
+/// At trace level, a fingerprint of `t`: its sum and absolute sum, and for its last token the
+/// norm and a 64-value sketch (signed sums over a fixed pseudo-random ±1 pattern, scaled by
+/// 1/√len). The sketch is linear, so two runs' sketches differ by the sketch of their difference,
+/// whose norm estimates the difference's: runs on two backends line up stage by stage.
+fn trace(stage: &str, layer: usize, t: &Tensor) -> Result<()> {
+    const SKETCH: usize = 64;
+    if tracing::enabled!(tracing::Level::TRACE) {
+        let t = t.to_dtype(DType::F32)?.to_device(&Device::Cpu)?;
+        let sum = t.sum_all()?.to_scalar::<f32>()?;
+        let abs = t.abs()?.sum_all()?.to_scalar::<f32>()?;
+        // The last token: position `seq - 1` of `[batch, seq, ..]`, or the last row of logits.
+        let last = if t.rank() >= 3 {
+            t.narrow(1, t.dim(1)? - 1, 1)?
+        } else {
+            t.narrow(0, t.dim(0)? - 1, 1)?
+        };
+        let v = last.flatten_all()?.to_vec1::<f32>()?;
+        let norm = v.iter().map(|x| f64::from(*x).powi(2)).sum::<f64>().sqrt();
+        let scale = (v.len() as f64).sqrt().recip();
+        let sketch: Vec<f32> = (0..SKETCH as u64)
+            .map(|j| {
+                let dot: f64 = v
+                    .iter()
+                    .enumerate()
+                    .map(|(i, x)| {
+                        // splitmix64 of (i, j): one sign bit per entry.
+                        let mut z = (i as u64).wrapping_mul(SKETCH as u64).wrapping_add(j);
+                        z = z.wrapping_add(0x9e37_79b9_7f4a_7c15);
+                        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                        if (z ^ (z >> 31)) & 1 == 0 {
+                            f64::from(*x)
+                        } else {
+                            -f64::from(*x)
+                        }
+                    })
+                    .sum();
+                (dot * scale) as f32
+            })
+            .collect();
+        tracing::trace!(
+            "{stage} {layer}: sum {sum:.6e} abs {abs:.6e} norm {norm:.6e} sketch {sketch:?}"
+        );
+    }
+    Ok(())
+}
+
 impl ModelWeights {
     /// Logits for `input_ids` (batch, seq). `prior[b]` holds the tokens before sequence b's chunk
     /// that the n-gram hash reads (at most `ngram_size - 1`, fewer at the sequence start).
@@ -475,6 +522,8 @@ impl ModelWeights {
             hanzo_ml::bail!("layer {} has no n-gram block", self.ngram_layer);
         };
         let g = ngram.embed(prior, &input_ids.to_vec2::<u32>()?, e.device())?;
+        trace("embed", 0, &e)?;
+        trace("ngram-rows", 0, &g)?;
         let mut x = expand(&e, self.streams)?;
 
         let mut hybrid_cache = self.cache.hybrid();
@@ -551,6 +600,7 @@ impl ModelWeights {
                 x = mapper.map(x, i)?;
             }
             x = layer.forward(i, x, &mut step)?;
+            trace("layer", i, &x)?;
             // Metal recycles pooled buffers without a completion check; drain each prefill layer
             // as Qwen3.5 does.
             if seq_len > 1 && x.device().is_metal() {
@@ -560,8 +610,11 @@ impl ModelWeights {
 
         let x = x.to_device(&self.device)?;
         let h = self.head.mix(&self.head.norm(&x)?)?;
+        trace("head", 0, &h)?;
         let h = extract_logits(&h, context_lens)?;
-        self.output.forward(&h.contiguous()?)
+        let logits = self.output.forward(&h.contiguous()?)?;
+        trace("logits", 0, &logits)?;
+        Ok(logits)
     }
 }
 
