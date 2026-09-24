@@ -351,63 +351,51 @@ impl Engine {
             return;
         }
 
-        if matches!(
-            get_mut_arcmutex!(self.pipeline).category(),
-            ModelCategory::Text | ModelCategory::Multimodal { .. } | ModelCategory::Embedding
-        ) && prompt_tokens.len()
-            > get_mut_arcmutex!(self.pipeline)
-                .get_metadata()
-                .context_len()
-        {
-            // text/vision => truncate from start
-            // embedding => truncate from end
-            let category = get_mut_arcmutex!(self.pipeline).category();
+        let (category, context) = {
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            (pipeline.category(), pipeline.get_metadata().context_len())
+        };
+        let generates = matches!(
+            category,
+            ModelCategory::Text | ModelCategory::Multimodal { .. }
+        );
+        if generates && truncate_sequence && prompt_tokens.len() >= context {
+            // Truncate from the start, keeping room for the requested tokens, or for one.
+            let prompt_len = prompt_tokens.len();
+            let sampling_max = request
+                .sampling_params
+                .max_len
+                .map_or(1, |max_len| max_len.min(context));
+            let slice_start = prompt_len.saturating_sub(context.saturating_sub(sampling_max));
+            prompt_tokens = prompt_tokens[slice_start..].to_vec();
+            warn!("Prompt for request {} was {} tokens over the model maximum length. The first {slice_start} tokens were truncated to make space for generation.", request.id, prompt_len - context);
+        } else if matches!(category, ModelCategory::Embedding) && prompt_tokens.len() > context {
             if !truncate_sequence {
                 request
                     .response
                     .send(Response::ValidationError(
-                        format!("Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?", get_mut_arcmutex!(self.pipeline).get_metadata().context_len()).into(),
+                        format!("Prompt sequence length is greater than {context}, perhaps consider using `truncate_sequence`?").into(),
                     ))
                     .await
                     .unwrap_or_else(|_| warn!("Receiver disconnected"));
                 return;
-            } else if matches!(
-                category,
-                ModelCategory::Text | ModelCategory::Multimodal { .. }
+            }
+            let currently_over = prompt_tokens.len() - context;
+            prompt_tokens.truncate(context);
+            warn!("Prompt for request {} was {currently_over} tokens over the model maximum length. The last {currently_over} tokens were truncated to make space for generation.", request.id);
+        }
+        if generates {
+            if let Err(e) = check_fit(
+                prompt_tokens.len(),
+                context,
+                request.sampling_params.max_len,
             ) {
-                let prompt_len = prompt_tokens.len();
-                let max_len = get_mut_arcmutex!(self.pipeline)
-                    .get_metadata()
-                    .context_len();
-                let currently_over = prompt_len - max_len;
-
-                // Reserve space for generation tokens
-                // If user specified max_len (generation length), reserve that many tokens (capped to max_len)
-                // Otherwise, reserve just 1 token minimum to allow at least some generation
-                let sampling_max = if let Some(sampling_max) = request.sampling_params.max_len {
-                    sampling_max.min(max_len)
-                } else {
-                    1
-                };
-
-                // Calculate how many prompt tokens to keep: max_len - sampling_max
-                // This ensures we have room for generation
-                let tokens_to_keep = max_len.saturating_sub(sampling_max);
-
-                // Safely calculate slice start position - keep the end of the prompt
-                let slice_start = prompt_len.saturating_sub(tokens_to_keep);
-
-                prompt_tokens = prompt_tokens[slice_start..].to_vec();
-                warn!("Prompt for request {} was {currently_over} tokens over the model maximum length. The first {slice_start} tokens were truncated to make space for generation.", request.id);
-            } else {
-                let prompt_len = prompt_tokens.len();
-                let max_len = get_mut_arcmutex!(self.pipeline)
-                    .get_metadata()
-                    .context_len();
-                let currently_over = prompt_len - max_len;
-
-                prompt_tokens = prompt_tokens[..max_len].to_vec();
-                warn!("Prompt for request {} was {currently_over} tokens over the model maximum length. The last {currently_over} tokens were truncated to make space for generation.", request.id);
+                request
+                    .response
+                    .send(Response::ValidationError(e.into()))
+                    .await
+                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                return;
             }
         }
 
@@ -839,6 +827,24 @@ impl Engine {
                     None,
                     pipeline.device_mapper(),
                 );
+                // Media expand in the prompt: check the fit on the length the model reads.
+                if let Err(e) = check_fit(
+                    seq.get_toks().len(),
+                    context,
+                    request.sampling_params.max_len,
+                ) {
+                    if let Some(slot) = seq.recurrent_state_idx() {
+                        if pipeline.cache().is_hybrid() {
+                            pipeline.cache().hybrid().free_seq(slot);
+                        }
+                    }
+                    request
+                        .response
+                        .send(Response::ValidationError(e.into()))
+                        .await
+                        .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                    return;
+                }
             }
 
             let prefill_cache = handle_seq_error!(
@@ -998,5 +1004,46 @@ impl Engine {
             .send(Ok(txt))
             .await
             .expect("Sender disconnected unexpectedly!");
+    }
+}
+
+/// Refuses a prompt, or a `max_tokens`, the context cannot hold (Halogen spec §3.2). `prompt` is the
+/// whole prompt the model reads, media expansion and a forced call's opening included.
+fn check_fit(prompt: usize, context: usize, max_tokens: Option<usize>) -> Result<(), String> {
+    if prompt >= context {
+        return Err(format!(
+            "the prompt does not fit: it is {prompt} tokens and the context is {context}, {} tokens over. Shorten the prompt, or raise the context.",
+            prompt - context
+        ));
+    }
+    let room = context - prompt;
+    match max_tokens {
+        Some(want) if want > room => Err(format!(
+            "max_tokens {want} does not fit: prompt is {prompt} tokens and the context is {context}, leaving room for {room}."
+        )),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_fit;
+
+    #[test]
+    fn a_prompt_must_leave_room_for_the_requested_tokens() {
+        assert_eq!(check_fit(100, 4096, Some(3996)), Ok(()));
+        assert_eq!(check_fit(100, 4096, None), Ok(()));
+        assert_eq!(
+            check_fit(100, 4096, Some(3997)),
+            Err("max_tokens 3997 does not fit: prompt is 100 tokens and the context is 4096, leaving room for 3996.".to_string())
+        );
+        assert_eq!(
+            check_fit(4096, 4096, None),
+            Err("the prompt does not fit: it is 4096 tokens and the context is 4096, 0 tokens over. Shorten the prompt, or raise the context.".to_string())
+        );
+        assert_eq!(
+            check_fit(5000, 4096, Some(1)),
+            Err("the prompt does not fit: it is 5000 tokens and the context is 4096, 904 tokens over. Shorten the prompt, or raise the context.".to_string())
+        );
     }
 }
