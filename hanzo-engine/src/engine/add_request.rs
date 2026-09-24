@@ -479,6 +479,12 @@ impl Engine {
 
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
 
+        let mut logits_processors = request.logits_processors.unwrap_or_default();
+        if let Some(bias) = request.sampling_params.logits_bias.clone() {
+            if !bias.is_empty() {
+                logits_processors.push(Arc::new(crate::sampler::LogitBias(bias)));
+            }
+        }
         let sampler = Sampler::new(
             Some(request.sampling_params.temperature.unwrap_or(1.0)),
             request.sampling_params.top_n_logprobs,
@@ -490,7 +496,7 @@ impl Engine {
             topk,
             topp,
             minp,
-            request.logits_processors.unwrap_or_default(),
+            logits_processors,
         );
         let sampler = handle_seq_error!(sampler, request.response);
 

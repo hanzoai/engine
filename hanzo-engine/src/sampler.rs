@@ -268,6 +268,22 @@ impl<T: Fn(&Tensor, &[u32]) -> Result<Tensor> + Send + Sync> CustomLogitsProcess
     }
 }
 
+/// OpenAI `logit_bias`: a value added to each named token's logit before sampling, so -100 bans
+/// the token and +100 all but forces it. Ids past the vocabulary are ignored.
+pub struct LogitBias(pub HashMap<u32, f32>);
+
+impl CustomLogitsProcessor for LogitBias {
+    fn apply(&self, logits: &Tensor, _context: &[u32]) -> Result<Tensor> {
+        let mut values = logits.to_dtype(hanzo_ml::DType::F32)?.to_vec1::<f32>()?;
+        for (&token, &bias) in &self.0 {
+            if let Some(logit) = values.get_mut(token as usize) {
+                *logit += bias;
+            }
+        }
+        Tensor::from_vec(values, logits.dims(), logits.device())?.to_dtype(logits.dtype())
+    }
+}
+
 /// Sampler for sampling.
 #[derive(Clone)]
 pub struct Sampler {
@@ -1508,6 +1524,42 @@ impl Sampler {
 #[cfg(test)]
 mod tests {
     use super::{ModelGenerationDefaults, SamplingParams};
+
+    #[test]
+    fn logit_bias_moves_the_greedy_choice() {
+        use super::{LogitBias, Sampler};
+        use hanzo_ml::{Device, Tensor};
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        let greedy = |bias: HashMap<u32, f32>| {
+            let sampler = Sampler::new(
+                None,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                -1,
+                1.0,
+                0.0,
+                vec![Arc::new(LogitBias(bias))],
+            )
+            .unwrap();
+            let logits = Tensor::arange(0f32, 16f32, &Device::Cpu).unwrap();
+            let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(0)));
+            sampler
+                .sample(logits, &[0], false, rng, false, false)
+                .unwrap()
+                .token
+        };
+        assert_eq!(greedy(HashMap::new()), 15);
+        assert_eq!(greedy(HashMap::from([(15, -100.0)])), 14);
+        assert_eq!(greedy(HashMap::from([(3, 100.0), (99, 100.0)])), 3);
+    }
 
     #[test]
     fn test_argmax() {
