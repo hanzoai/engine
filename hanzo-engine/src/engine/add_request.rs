@@ -748,6 +748,12 @@ impl Engine {
                 }
             }
 
+            // Per-request generation controls.
+            if let Some(seed) = request.sampling_params.seed {
+                // Each choice draws its own stream, so n > 1 does not repeat one answer.
+                seq.set_seed(seed.wrapping_add(response_index as u64));
+            }
+
             // Allocate recurrent state pool slot for hybrid models
             {
                 let pipeline = get_mut_arcmutex!(self.pipeline);

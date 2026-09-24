@@ -37,6 +37,8 @@ pub async fn finish_verified_step<P: Pipeline>(
         Some(&general_metadata.eos_tok[..])
     };
     let return_logprobs = seq.return_logprobs();
+    // A seeded sequence draws from its own RNG, in both verification paths below.
+    let rng = seq.rng(&rng);
 
     if let Some(anchor) = anchor_to_emit {
         finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, anchor, eos_tok, true).await?;

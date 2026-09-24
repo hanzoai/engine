@@ -16,6 +16,8 @@ use crate::{
     AudioInput, ChatCompletionResponse, Usage, VideoInput,
 };
 use hanzo_ml::Tensor;
+use rand::SeedableRng;
+use rand_isaac::Isaac64Rng;
 use std::{
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
@@ -588,6 +590,8 @@ pub struct Sequence {
     reasoning_parser: Option<Box<dyn ReasoningParser>>,
     reasoning_mode: Option<ReasoningMode>,
 
+    /// The request's own RNG when it carried a seed; `None` draws from the engine's shared RNG.
+    rng: Option<Arc<std::sync::Mutex<Isaac64Rng>>>,
     /// Answer bytes held back from the completion because they could begin a stop string.
     held: Vec<u8>,
 }
@@ -696,6 +700,7 @@ impl Sequence {
             step_start_instant: None,
             reasoning_parser: None,
             reasoning_mode: None,
+            rng: None,
             held: Vec::new(),
         }
     }
@@ -1055,6 +1060,22 @@ impl Sequence {
         self.reasoning_parser
             .as_ref()
             .is_some_and(|parser| parser.in_reasoning())
+    }
+
+    /// Seeds this sequence's own RNG: every sampling decision of the sequence, plain or
+    /// speculative, then draws from it, so a seeded sampled request replays token for token.
+    pub fn set_seed(&mut self, seed: u64) {
+        self.rng = Some(Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(
+            seed,
+        ))));
+    }
+
+    /// The RNG this sequence samples with: its own when seeded, else `shared`.
+    pub(crate) fn rng(
+        &self,
+        shared: &Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Arc<std::sync::Mutex<Isaac64Rng>> {
+        self.rng.as_ref().unwrap_or(shared).clone()
     }
 
     pub fn responder(&self) -> Sender<Response> {
@@ -1897,6 +1918,24 @@ mod tests {
             Box::new(TagReasoningContext::new_in_think_block()),
         );
         seq
+    }
+
+    #[test]
+    fn a_seeded_sequence_owns_its_rng() {
+        use rand::Rng;
+        let shared = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(0)));
+        let plain = test_sequence(vec![1], Some(1.0));
+        assert!(Arc::ptr_eq(&plain.rng(&shared), &shared));
+        let draws = |seed| {
+            let mut seq = test_sequence(vec![1], Some(1.0));
+            seq.set_seed(seed);
+            let rng = seq.rng(&shared);
+            assert!(!Arc::ptr_eq(&rng, &shared));
+            let mut rng = rng.lock().unwrap();
+            (0..8).map(|_| rng.random::<u64>()).collect::<Vec<_>>()
+        };
+        assert_eq!(draws(7), draws(7));
+        assert_ne!(draws(7), draws(8));
     }
 
     #[test]
