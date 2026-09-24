@@ -19,9 +19,9 @@ use tracing_subscriber::{prelude::*, EnvFilter};
 
 use args::{resolve_model_type, resolve_quantize_model_type, CacheCommand, Cli, Command};
 use commands::{
-    run_bench, run_cache_delete, run_cache_list, run_distill_cmd, run_doctor, run_from_config,
-    run_board, run_interactive, run_login, run_quantize, run_server, run_train, run_tune, BenchArgs,
-    DistillRunConfig, TrainRunConfig,
+    run_bench, run_board, run_cache_delete, run_cache_list, run_distill_cmd, run_doctor,
+    run_from_config, run_interactive, run_login, run_quantize, run_server, run_train, run_tune,
+    BenchArgs, DistillRunConfig, TrainRunConfig,
 };
 
 const LOG_TARGETS: &[&str] = &[

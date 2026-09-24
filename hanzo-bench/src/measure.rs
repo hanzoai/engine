@@ -177,9 +177,19 @@ fn print_table(model: &str, results: &[Timed]) {
         })
         .collect();
     let heads = [
-        "model", "backend", "test", "t/s", "ms/t", "concurrency", "throughput/s", "best t/s",
+        "model",
+        "backend",
+        "test",
+        "t/s",
+        "ms/t",
+        "concurrency",
+        "throughput/s",
+        "best t/s",
     ];
-    let table = rows.table().title(heads.map(|h| h.cell().bold(true))).bold(true);
+    let table = rows
+        .table()
+        .title(heads.map(|h| h.cell().bold(true)))
+        .bold(true);
     print_stdout(table).expect("print table");
 }
 
@@ -224,7 +234,14 @@ pub async fn run(hanzo: &Hanzo, spec: &Spec) -> Result<Samples> {
                 concurrency,
             };
             let greedy = !spec.stochastic;
-            let timed = time(hanzo, messages.clone(), *max_len, shape, spec.repetitions, greedy);
+            let timed = time(
+                hanzo,
+                messages.clone(),
+                *max_len,
+                shape,
+                spec.repetitions,
+                greedy,
+            );
             results.push(timed.await?);
         }
         print_table(&spec.model_id, &results[from..]);

@@ -437,7 +437,9 @@ impl QuantizedConfig {
             } => "8 bits".to_string(),
             Self::Afq { bits, .. } => format!("{bits} bits"),
             Self::MXFP4 {} => format!("{} bits", mxfp4::N_BITS),
-            Self::ModelOpt { quantized_layers, .. } => {
+            Self::ModelOpt {
+                quantized_layers, ..
+            } => {
                 let prefix = vb.prefix();
                 if let Some(cfg) = quantized_layers.iter().find_map(|(k, v)| {
                     if k == &prefix || k.ends_with(&format!(".{prefix}")) || prefix.ends_with(k) {
@@ -1663,9 +1665,16 @@ pub fn linear_no_bias(
             QuantizedConfig::MXFP4 {} => {
                 MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, false, vb)?
             }
-            QuantizedConfig::ModelOpt { quantized_layers, .. } => {
-                distributed::layers::load_modelopt_linear(in_dim, out_dim, false, quant_conf, quantized_layers, &vb)?
-            }
+            QuantizedConfig::ModelOpt {
+                quantized_layers, ..
+            } => distributed::layers::load_modelopt_linear(
+                in_dim,
+                out_dim,
+                false,
+                quant_conf,
+                quantized_layers,
+                &vb,
+            )?,
         }
     } else {
         if !vb.contains_tensor("weight") {
@@ -1729,9 +1738,16 @@ pub fn linear(
             QuantizedConfig::MXFP4 {} => {
                 MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, true, vb)?
             }
-            QuantizedConfig::ModelOpt { quantized_layers, .. } => {
-                distributed::layers::load_modelopt_linear(in_dim, out_dim, true, quant_conf, quantized_layers, &vb)?
-            }
+            QuantizedConfig::ModelOpt {
+                quantized_layers, ..
+            } => distributed::layers::load_modelopt_linear(
+                in_dim,
+                out_dim,
+                true,
+                quant_conf,
+                quantized_layers,
+                &vb,
+            )?,
         }
     } else {
         if has_missing_required_tensors(&vb, &["weight", "bias"]) {

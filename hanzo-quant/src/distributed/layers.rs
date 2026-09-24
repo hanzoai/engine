@@ -44,19 +44,15 @@ pub fn load_modelopt_linear(
         }
     });
     match layer_cfg.and_then(|c| c.quant_algo.as_deref()) {
-        Some("NVFP4") => {
-            crate::NVFP4Layer::linear_b(in_dim, out_dim, bias, vb.clone())
-        }
-        Some("FP8") => {
-            pertensor_fp8_linear_b(
-                in_dim,
-                out_dim,
-                quant_conf,
-                bias,
-                Default::default(),
-                vb.clone(),
-            )
-        }
+        Some("NVFP4") => crate::NVFP4Layer::linear_b(in_dim, out_dim, bias, vb.clone()),
+        Some("FP8") => pertensor_fp8_linear_b(
+            in_dim,
+            out_dim,
+            quant_conf,
+            bias,
+            Default::default(),
+            vb.clone(),
+        ),
         _ => {
             if vb.contains_tensor("weight_scale") && vb.contains_tensor("weight") {
                 if vb.contains_tensor("weight_scale_2") {
@@ -158,7 +154,9 @@ impl RowParallelLayer {
                 QuantizedConfig::MXFP4 {} => {
                     MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
                 }
-                QuantizedConfig::ModelOpt { quantized_layers, .. } => {
+                QuantizedConfig::ModelOpt {
+                    quantized_layers, ..
+                } => {
                     load_modelopt_linear(in_dim, out_dim, bias, quant_conf, quantized_layers, &vb)?
                 }
             }
@@ -463,7 +461,9 @@ impl ColumnParallelLayer {
                 QuantizedConfig::MXFP4 {} => {
                     MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
                 }
-                QuantizedConfig::ModelOpt { quantized_layers, .. } => {
+                QuantizedConfig::ModelOpt {
+                    quantized_layers, ..
+                } => {
                     load_modelopt_linear(in_dim, out_dim, bias, quant_conf, quantized_layers, &vb)?
                 }
             }
@@ -827,7 +827,9 @@ impl ReplicatedLayer {
                 QuantizedConfig::MXFP4 {} => {
                     MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
                 }
-                QuantizedConfig::ModelOpt { quantized_layers, .. } => {
+                QuantizedConfig::ModelOpt {
+                    quantized_layers, ..
+                } => {
                     load_modelopt_linear(in_dim, out_dim, bias, quant_conf, quantized_layers, &vb)?
                 }
             }
@@ -911,7 +913,9 @@ impl ReplicatedLayer {
                 QuantizedConfig::MXFP4 {} => {
                     MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
                 }
-                QuantizedConfig::ModelOpt { quantized_layers, .. } => {
+                QuantizedConfig::ModelOpt {
+                    quantized_layers, ..
+                } => {
                     load_modelopt_linear(in_dim, out_dim, bias, quant_conf, quantized_layers, &vb)?
                 }
             }

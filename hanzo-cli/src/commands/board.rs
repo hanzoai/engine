@@ -1,6 +1,5 @@
 //! `hanzo-engine board`: score a run, file it as evidence, pin its manifest.
 
-
 use anyhow::Result;
 use hanzo_bench::board;
 
@@ -16,7 +15,9 @@ pub fn run_board(cmd: BoardCommand) -> Result<()> {
                 Some(url) => board::post(&url, &evidence)?,
                 None => println!(
                     "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({"experiments": evidence, "attempts": []}))?
+                    serde_json::to_string_pretty(
+                        &serde_json::json!({"experiments": evidence, "attempts": []})
+                    )?
                 ),
             }
         }
@@ -27,4 +28,3 @@ pub fn run_board(cmd: BoardCommand) -> Result<()> {
     }
     Ok(())
 }
-

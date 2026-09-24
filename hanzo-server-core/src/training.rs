@@ -632,7 +632,9 @@ mod tests {
 
     #[test]
     fn save_weights_request_cannot_choose_a_directory() {
-        assert!(serde_json::from_str::<SaveWeightsRequest>(r#"{"name":"a","dir":"/tmp"}"#).is_err());
+        assert!(
+            serde_json::from_str::<SaveWeightsRequest>(r#"{"name":"a","dir":"/tmp"}"#).is_err()
+        );
         assert!(serde_json::from_str::<SaveWeightsRequest>(r#"{"name":"a"}"#).is_ok());
         for name in ["", ".", "..", "../a", "a/b", "/abs", "a\\b"] {
             assert!(!valid_file_name(name), "{name:?} must be rejected");

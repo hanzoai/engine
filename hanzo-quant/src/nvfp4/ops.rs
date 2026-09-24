@@ -16,8 +16,7 @@ use crate::utils::slice_ptr;
 pub const NVFP4_BLOCK_SIZE: usize = 16;
 
 pub const FP4_E2M1_LUT: [f32; 16] = [
-    0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
-    0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+    0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
 ];
 
 /// Dequantize NVFP4 weights to `out_dtype`.
@@ -34,7 +33,10 @@ pub fn nvfp4_dequantize(
     let dev = w_q.device();
     let dims = w_q.dims();
     if dims.len() < 2 {
-        hanzo_ml::bail!("Expected at least 2 dimensions for NVFP4 weight tensor, got {:?}", dims);
+        hanzo_ml::bail!(
+            "Expected at least 2 dimensions for NVFP4 weight tensor, got {:?}",
+            dims
+        );
     }
     let n = dims[dims.len() - 2];
     let half_k = dims[dims.len() - 1];
@@ -77,7 +79,8 @@ pub fn nvfp4_dequantize(
                     let high_nibble = ((byte >> 4) & 0x0F) as usize;
 
                     row_out[blk_out_offset + byte_idx * 2] = FP4_E2M1_LUT[low_nibble] * blk_scale;
-                    row_out[blk_out_offset + byte_idx * 2 + 1] = FP4_E2M1_LUT[high_nibble] * blk_scale;
+                    row_out[blk_out_offset + byte_idx * 2 + 1] =
+                        FP4_E2M1_LUT[high_nibble] * blk_scale;
                 }
             }
         });
@@ -227,10 +230,13 @@ mod tests {
 
     #[test]
     fn test_nvfp4_dequantize_basic() {
-        let weight = Tensor::new(&[0x10u8, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE], &Device::Cpu)
-            .unwrap()
-            .reshape((1, 8))
-            .unwrap();
+        let weight = Tensor::new(
+            &[0x10u8, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE],
+            &Device::Cpu,
+        )
+        .unwrap()
+        .reshape((1, 8))
+        .unwrap();
         let scale = Tensor::new(&[1.0f32], &Device::Cpu)
             .unwrap()
             .to_dtype(DType::F8E4M3)
@@ -242,7 +248,11 @@ mod tests {
         let vals: Vec<f32> = dequant.flatten_all().unwrap().to_vec1().unwrap();
         for i in 0..16 {
             let expected = FP4_E2M1_LUT[i];
-            assert!((vals[i] - expected).abs() < 1e-4, "Mismatch at {i}: got {}, expected {expected}", vals[i]);
+            assert!(
+                (vals[i] - expected).abs() < 1e-4,
+                "Mismatch at {i}: got {}, expected {expected}",
+                vals[i]
+            );
         }
     }
 
@@ -262,15 +272,20 @@ mod tests {
         let blocks = k / NVFP4_BLOCK_SIZE;
         let global = 0.75f32;
 
-        let packed: Vec<u8> = (0..n * k / 2).map(|i| ((i * 37 + 11) % 256) as u8).collect();
+        let packed: Vec<u8> = (0..n * k / 2)
+            .map(|i| ((i * 37 + 11) % 256) as u8)
+            .collect();
         let scales: Vec<f32> = (0..n * blocks)
             .map(|i| [0.5f32, 1.0, 2.0, 0.25][i % 4])
             .collect();
 
         let w_q_cpu = Tensor::from_vec(packed, (n, k / 2), &Device::Cpu)?;
-        let w_s_cpu = Tensor::from_vec(scales, (n, blocks), &Device::Cpu)?.to_dtype(DType::F8E4M3)?;
+        let w_s_cpu =
+            Tensor::from_vec(scales, (n, blocks), &Device::Cpu)?.to_dtype(DType::F8E4M3)?;
         let s2 = Tensor::new(global, &Device::Cpu)?;
-        let w_ref = nvfp4_dequantize(&w_q_cpu, &w_s_cpu, Some(&s2), DType::F32)?.t()?.contiguous()?;
+        let w_ref = nvfp4_dequantize(&w_q_cpu, &w_s_cpu, Some(&s2), DType::F32)?
+            .t()?
+            .contiguous()?;
 
         let w_q = w_q_cpu.to_device(&dev)?;
         let w_s = w_s_cpu.to_device(&dev)?;
