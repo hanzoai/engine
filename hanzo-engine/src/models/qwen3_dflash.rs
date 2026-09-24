@@ -1051,18 +1051,16 @@ impl SpeculativeProposer for DFlash2Proposer {
         let embed = move |ids: &Tensor| embed_fn(ids);
         let head = Arc::clone(&self.heads.lm_head);
         let lm_head = move |hidden: &Tensor| head(hidden);
-        // Deterministic walk (argmax): draft quality only moves the accept rate, and
-        // the target verify decides every emitted token.
-        let (tokens_t, logits) =
+        // Argmax walk. The proposal carries no distribution, so the verifier accepts a draft only
+        // when its own sample matches it, which is exact at any temperature; the p/q ratio test
+        // would need the drafts drawn from the logits.
+        let (tokens_t, _) =
             self.draft
                 .draft_block(hiddens, anchor_token, anchor_pos, &embed, &lm_head, 0.0)?;
 
         let tokens: Vec<u32> = tokens_t.to_vec1::<u32>()?;
-        // The verifier indexes logit rows by draft position and expects [1, n, vocab].
-        let logits = logits.unsqueeze(0)?;
-
         Ok(SpeculativeProposalBatch::new(vec![
-            SpeculativeProposal::with_logits(tokens, logits),
+            SpeculativeProposal::new(tokens),
         ]))
     }
 }

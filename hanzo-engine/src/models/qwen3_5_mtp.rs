@@ -11,12 +11,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_ml::{DType, Device, Result, Tensor};
 
 use crate::kv_cache::KvCache;
 use crate::speculative::{
-    SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposer,
-    SpeculativeSharedHeads, TargetTokenEmbedder,
+    draft_contexts, sample_drafts, SpeculativeProposal, SpeculativeProposalBatch,
+    SpeculativeProposeBatchCtx, SpeculativeProposer, SpeculativeSharedHeads, TargetTokenEmbedder,
 };
 
 /// Drafts per target step. A wider model amortizes the verify forward over more drafts, so it
@@ -123,6 +123,7 @@ impl SpeculativeProposer for Qwen3_5MtpProposer {
         if batch == 0 {
             return Ok(SpeculativeProposalBatch::new(Vec::new()));
         }
+        let mut contexts = draft_contexts(&ctx);
         let hidden = ctx.target_hiddens.ok_or_else(|| {
             hanzo_ml::Error::msg("Qwen3.5 MTP needs the target hidden state to draft")
         })?;
@@ -166,17 +167,7 @@ impl SpeculativeProposer for Qwen3_5MtpProposer {
             let positions = Tensor::from_vec(planes, (3, batch, 1), &device)?;
             let out = self.head.step(&embeds, &hidden, &positions)?;
             let step_logits = (self.heads.lm_head)(&out.head)?;
-            let step_drafts: Vec<u32> = step_logits
-                .argmax(D::Minus1)?
-                .to_dtype(DType::U32)?
-                .flatten_all()?
-                .to_vec1()?;
-            if step_drafts.len() != batch {
-                hanzo_ml::bail!(
-                    "Qwen3.5 MTP drafted {} tokens for {batch} sequences",
-                    step_drafts.len()
-                );
-            }
+            let step_drafts = sample_drafts(&step_logits, ctx.sequences, &mut contexts, &ctx.rng)?;
             logits.push(step_logits);
             if step + 1 < self.n_predict {
                 // The draft becomes the next step's input, one position on, off what the head
@@ -269,6 +260,7 @@ pub(crate) mod fixtures {
 mod tests {
     use super::fixtures::{shared_heads, synthetic};
     use super::*;
+    use crate::sequence::test_sequence;
     use crate::speculative::{SpeculativeKvCache, SpeculativeProposeBatchCtx};
     use rand::SeedableRng;
     use rand_isaac::Isaac64Rng;
@@ -331,6 +323,7 @@ mod tests {
 
         let batch = 2;
         let hidden = synthetic(batch, HIDDEN, 51, &device)?.reshape((batch, 1, HIDDEN))?;
+        let (first, second) = (test_sequence(vec![1], None), test_sequence(vec![2], None));
         let sampled = [3u32, 9];
         let out = proposer.propose(
             SpeculativeProposeBatchCtx {
@@ -338,7 +331,7 @@ mod tests {
                 sampled_tokens_emitted: true,
                 seq_ids: &[0, 1],
                 base_lens: &[5, 7],
-                sequences: &[],
+                sequences: &[&first, &second],
                 cache: SpeculativeKvCache::Normal,
                 target_hiddens: Some(hidden.clone()),
                 target_hidden_layers: None,

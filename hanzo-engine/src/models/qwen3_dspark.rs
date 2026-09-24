@@ -617,9 +617,9 @@ impl SpeculativeProposer for DsparkProposer {
         }
         let prefix = hiddens.rows(0, anchor_pos)?;
 
-        // Deterministic draft (argmax): draft quality only affects accept rate, and the
-        // target verify decides every emitted token.
-        let (tokens_t, logits, confidence) =
+        // Argmax drafts. The proposal carries no distribution, so the verifier accepts a draft only
+        // when its own sample matches it, which is exact at any temperature.
+        let (tokens_t, _, confidence) =
             self.draft
                 .draft_block(&prefix, anchor_token, anchor_pos, 0.0)?;
 
@@ -628,13 +628,10 @@ impl SpeculativeProposer for DsparkProposer {
         let keep =
             confident_prefix_length(self.confidence_threshold, &conf, block).min(tokens.len());
 
-        // Truncate to the confident prefix. The verifier indexes logit rows by draft
-        // position and expects `[1, keep, vocab]`.
+        // Truncate to the confident prefix.
         let tokens = tokens[..keep].to_vec();
-        let logits = logits.narrow(0, 0, keep)?.unsqueeze(0)?; // [1, keep, vocab]
-
         Ok(SpeculativeProposalBatch::new(vec![
-            SpeculativeProposal::with_logits(tokens, logits),
+            SpeculativeProposal::new(tokens),
         ]))
     }
 }

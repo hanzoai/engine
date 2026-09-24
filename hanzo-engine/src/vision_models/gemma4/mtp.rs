@@ -22,8 +22,9 @@ use crate::{
     },
     sequence::Sequence,
     speculative::{
-        MtpConfig, SpeculativeKvCache, SpeculativeProposal, SpeculativeProposalBatch,
-        SpeculativeProposeBatchCtx, SpeculativeProposer, TargetTokenEmbedder,
+        sample_drafts, MtpConfig, SpeculativeKvCache, SpeculativeProposal,
+        SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposer,
+        TargetTokenEmbedder,
     },
     utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor},
 };
@@ -246,7 +247,11 @@ impl Gemma4MtpRuntime {
             let input_embed = target_embedder(&last_token)?;
             let (_argmax_token, draft_logits, next_hidden) =
                 self.model.step(input_embed, hidden, base_lens, cache)?;
-            let draft_token = sample_draft_tokens(&draft_logits, sequences, &mut contexts, &rng)?;
+            let draft_token = Tensor::from_vec(
+                sample_drafts(&draft_logits, sequences, &mut contexts, &rng)?,
+                (batch, 1),
+                self.model.device(),
+            )?;
             tokens.push(draft_token.clone());
             logits.push(draft_logits);
             last_token = draft_token;
@@ -266,38 +271,6 @@ impl Gemma4MtpRuntime {
             .map(|(row, tokens)| Ok(SpeculativeProposal::with_logits(tokens, logits.get(row)?)))
             .collect()
     }
-}
-
-fn sample_draft_tokens(
-    logits: &Tensor,
-    sequences: &[&Sequence],
-    contexts: &mut [Vec<u32>],
-    rng: &Arc<Mutex<Isaac64Rng>>,
-) -> Result<Tensor> {
-    let batch = sequences.len();
-    if contexts.len() != batch {
-        hanzo_ml::bail!(
-            "MTP sampling context batch mismatch: contexts={}, sequences={batch}",
-            contexts.len()
-        );
-    }
-
-    let mut tokens = Vec::with_capacity(batch);
-    for (row, seq) in sequences.iter().enumerate() {
-        let row_logits = logits.get(row)?.squeeze(0)?.to_dtype(DType::F32)?;
-        let sampled = seq.sampler().sample(
-            row_logits,
-            &contexts[row],
-            false,
-            rng.clone(),
-            false,
-            batch > 1,
-        )?;
-        contexts[row].push(sampled.token);
-        tokens.push(sampled.token);
-    }
-
-    Tensor::from_vec(tokens, (batch, 1), logits.device())
 }
 
 impl SpeculativeProposer for Gemma4MtpRuntime {

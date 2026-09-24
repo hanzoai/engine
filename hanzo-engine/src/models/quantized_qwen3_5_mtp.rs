@@ -186,6 +186,7 @@ mod tests {
     use super::*;
     use crate::models::qwen3_5_mtp::fixtures::{positions, shared_heads, synthetic};
     use crate::models::qwen3_5_mtp::AnchorPositions;
+    use crate::sequence::test_sequence;
     use crate::speculative::{SpeculativeKvCache, SpeculativeProposeBatchCtx};
     use hanzo_ml::quantized::{gguf_file, GgmlDType, QTensor};
     use rand::SeedableRng;
@@ -352,6 +353,7 @@ mod tests {
 
         let batch = 2;
         let hidden = synthetic(batch, HIDDEN, 41, &device)?.reshape((batch, 1, HIDDEN))?;
+        let (first, second) = (test_sequence(vec![1], None), test_sequence(vec![2], None));
         let sampled = [5u32, 11];
         let base_lens = [8usize, 12];
         let seq_ids = [0usize, 1];
@@ -363,7 +365,7 @@ mod tests {
                     sampled_tokens_emitted: true,
                     seq_ids: &seq_ids,
                     base_lens: &base_lens,
-                    sequences: &[],
+                    sequences: &[&first, &second],
                     cache: SpeculativeKvCache::Normal,
                     target_hiddens: hidden,
                     target_hidden_layers: None,

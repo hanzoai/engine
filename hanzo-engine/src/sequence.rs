@@ -1723,6 +1723,61 @@ impl SequenceGroup {
     }
 }
 
+/// A waiting sequence over `tokens` that samples at `temperature` (greedy when `None`), for tests.
+#[cfg(test)]
+pub(crate) fn test_sequence(tokens: Vec<u32>, temperature: Option<f64>) -> Sequence {
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let sampler = crate::sampler::Sampler::new(
+        temperature,
+        0,
+        None,
+        None,
+        None,
+        None,
+        None,
+        32,
+        1.0,
+        0.0,
+        vec![],
+    )
+    .unwrap();
+    let group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
+        1, false, true, None,
+    )));
+    Sequence::new_waiting(
+        tokens,
+        "prompt".to_string(),
+        0,
+        0,
+        1,
+        tx,
+        sampler,
+        vec![],
+        vec![],
+        None,
+        false,
+        false,
+        group,
+        0,
+        0,
+        SequenceRecognizer::None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        SeqStepType::PromptAndDecode,
+        None,
+        None,
+        None,
+        false,
+        vec![],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
