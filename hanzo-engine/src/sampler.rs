@@ -1201,6 +1201,42 @@ impl Sampler {
         })
     }
 
+    /// Logprobs for a token the engine writes itself, such as a think close when the thinking
+    /// budget runs out: no draw, and the token's log-probability under the model's softmax.
+    pub(crate) fn forced(
+        &self,
+        logits: &Tensor,
+        token: u32,
+        return_logprobs: bool,
+    ) -> Result<Logprobs> {
+        let raw: Vec<f32> = logits.to_dtype(hanzo_ml::DType::F32)?.to_vec1()?;
+        let max = raw.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let sum: f32 = raw.iter().map(|&logit| (logit - max).exp()).sum();
+        let logprob = raw
+            .get(token as usize)
+            .map_or(f32::NEG_INFINITY, |&logit| logit - max - sum.ln());
+        let top_logprobs = if return_logprobs {
+            let probs: Vec<f32> = raw.iter().map(|&logit| (logit - max).exp() / sum).collect();
+            Some(self.get_top_logprobs(&probs)?)
+        } else {
+            None
+        };
+        let bytes = match &self.tokenizer {
+            Some(tokenizer) => Some(
+                tokenizer
+                    .decode(&[token], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            ),
+            None => None,
+        };
+        Ok(Logprobs {
+            token,
+            logprob,
+            top_logprobs,
+            bytes,
+        })
+    }
+
     pub(crate) fn sample_from_probs(
         &self,
         probs: &[f32],
@@ -1851,5 +1887,40 @@ mod tests {
         // Knobs orthogonal to the sampling/greedy choice still apply.
         assert_eq!(params.repetition_penalty, Some(1.1));
         assert_eq!(params.max_len, Some(256));
+    }
+
+    #[test]
+    fn a_forced_token_reports_its_logprob_under_the_softmax() {
+        use super::Sampler;
+        use hanzo_ml::{Device, Tensor};
+
+        let sampler = Sampler::new(
+            Some(0.7),
+            2,
+            None,
+            None,
+            None,
+            None,
+            None,
+            -1,
+            1.0,
+            0.0,
+            vec![],
+        )
+        .unwrap();
+        let logits = Tensor::new(&[0f32, 1.0, 3.0], &Device::Cpu).unwrap();
+        let forced = sampler.forced(&logits, 1, true).unwrap();
+        let sum = 1f32 + 1f32.exp() + 3f32.exp();
+        assert_eq!(forced.token, 1);
+        assert!((forced.logprob - (1.0 - sum.ln())).abs() < 1e-5);
+        let top = forced.top_logprobs.unwrap();
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0].token, 2);
+        assert_eq!(top[1].token, 1);
+        assert!(sampler
+            .forced(&logits, 0, false)
+            .unwrap()
+            .top_logprobs
+            .is_none());
     }
 }

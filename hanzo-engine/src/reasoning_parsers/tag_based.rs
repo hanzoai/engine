@@ -17,6 +17,28 @@
 pub const THINK_OPEN_TAG: &str = "<think>";
 pub const THINK_CLOSE_TAG: &str = "</think>";
 
+/// The sentence written before `</think>` when the thinking budget runs out (Halogen spec §5.3).
+pub const THINKING_CLOSE_LEAD: &str = "\n\nConsidering the limited time by the user, I have to give the solution based on the thinking directly now.\n";
+
+/// The tokens that close a think block when its budget runs out (Halogen spec §5.3): the lead
+/// sentence, `</think>`, and a blank line, each tokenized with no special tokens added. `None` when
+/// the tokenizer has no single `</think>` token.
+pub fn thinking_close(tokenizer: &tokenizers::Tokenizer) -> anyhow::Result<Option<Vec<u32>>> {
+    let Some(end) = tokenizer.token_to_id(THINK_CLOSE_TAG) else {
+        return Ok(None);
+    };
+    let encode = |text: &str| -> anyhow::Result<Vec<u32>> {
+        let encoding = tokenizer
+            .encode_fast(text, false)
+            .map_err(anyhow::Error::msg)?;
+        Ok(encoding.get_ids().to_vec())
+    };
+    let mut close = encode(THINKING_CLOSE_LEAD)?;
+    close.push(end);
+    close.extend(encode("\n\n")?);
+    Ok(Some(close))
+}
+
 /// The bare channel token (used for template detection).
 pub const CHANNEL_OPEN_TOKEN: &str = "<|channel>";
 pub const CHANNEL_CLOSE_TOKEN: &str = "<channel|>";
@@ -421,6 +443,34 @@ pub fn is_channel_tag_template(template: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn word_tokenizer(close_tag: bool) -> tokenizers::Tokenizer {
+        let mut json = serde_json::json!({
+            "version": "1.0",
+            "model": {
+                "type": "WordLevel",
+                "vocab": {"<unk>": 0, THINKING_CLOSE_LEAD: 1, "\n\n": 2},
+                "unk_token": "<unk>"
+            },
+            "added_tokens": []
+        });
+        if close_tag {
+            json["added_tokens"] = serde_json::json!([{
+                "id": 3, "content": THINK_CLOSE_TAG, "single_word": false, "lstrip": false,
+                "rstrip": false, "normalized": false, "special": false
+            }]);
+        }
+        json.to_string().parse().unwrap()
+    }
+
+    #[test]
+    fn thinking_close_is_the_lead_then_the_close_tag_then_a_blank_line() {
+        assert_eq!(
+            thinking_close(&word_tokenizer(true)).unwrap(),
+            Some(vec![1, 3, 2])
+        );
+        assert_eq!(thinking_close(&word_tokenizer(false)).unwrap(), None);
+    }
 
     #[test]
     fn in_reasoning_follows_the_think_block() {

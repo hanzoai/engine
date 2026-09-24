@@ -59,7 +59,8 @@ pub async fn finish_verified_step<P: Pipeline>(
     seq.record_drafts(proposal.len(), 0);
 
     // Speculative sampling needs the drafts' distribution and a free sampler. A greedy or
-    // grammar-constrained sequence is verified by matching the target's own choice.
+    // grammar-constrained sequence, and any token the engine writes itself (a think close), is
+    // verified by matching the target's own choice.
     let candidates = proposal_logits.filter(|_| {
         !seq.sampler().is_argmax() && matches!(seq.recognizer, SequenceRecognizer::None)
     });
@@ -68,7 +69,7 @@ pub async fn finish_verified_step<P: Pipeline>(
     for (idx, draft) in proposal.iter().copied().enumerate() {
         let row = logit_row(&verify_logits, idx)?;
         let (emitted, is_draft) = match &candidates {
-            Some(candidates) => {
+            Some(candidates) if seq.forced_token().is_none() => {
                 let candidate_row = logit_row(candidates, idx)?;
                 judge_draft(seq, row, candidate_row, draft, return_logprobs, &rng)?
             }
@@ -104,7 +105,7 @@ pub async fn finish_verified_step<P: Pipeline>(
     // Every draft held: the row after the last one gives the next token.
     let row = logit_row(&verify_logits, accepted)?;
     let continuation = match &candidates {
-        Some(_) => {
+        Some(_) if seq.forced_token().is_none() => {
             let sampler = seq.sampler();
             let target_probs =
                 sampler.speculative_target_probs(flat_logits(row)?, seq.get_toks())?;

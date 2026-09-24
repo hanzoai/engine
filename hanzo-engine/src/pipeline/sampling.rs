@@ -566,6 +566,11 @@ pub async fn sample_sequence(
 ) -> Result<Logprobs> {
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
 
+    // The engine is closing the think block: its token, not the model's draw (Halogen spec §5.3).
+    if let Some(token) = seq.forced_token() {
+        return seq.sampler().forced(&logits, token, return_logprobs);
+    }
+
     let rng = seq.rng(&rng);
     let sampler = seq.sampler();
     let ctx_clone = seq.get_toks().to_vec();
@@ -732,6 +737,18 @@ mod tests {
         assert_eq!(run(Some(3), 0).await, run(Some(3), 99).await);
         assert_ne!(run(Some(3), 0).await, run(Some(4), 0).await);
         assert_ne!(run(None, 0).await, run(None, 99).await);
+    }
+
+    #[tokio::test]
+    async fn a_think_close_in_progress_is_written_instead_of_sampled() {
+        let mut seq = crate::sequence::test_sequence(vec![1, 2], None);
+        seq.enable_reasoning(
+            crate::reasoning_parsers::ReasoningMode::TagBased,
+            Box::new(crate::reasoning_parsers::TagReasoningContext::new_in_think_block()),
+        );
+        seq.set_thinking_budget(0, vec![4, 2]);
+        // Greedy would pick 1; the close's first token comes out instead.
+        assert_eq!(draw(&mut seq, &shared_rng(0)).await, 4);
     }
 
     #[test]

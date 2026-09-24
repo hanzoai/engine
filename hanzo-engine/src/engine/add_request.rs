@@ -511,6 +511,27 @@ impl Engine {
             return;
         }
 
+        // Halogen spec §5.3: the tokens that close the think block when its budget runs out. Only
+        // `<think>` templates have a budget; Harmony and Gemma channels are not closed early.
+        let thinking_close = match request.sampling_params.thinking_budget {
+            Some(_) => {
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                let think_tags = pipeline.get_chat_template().is_some_and(|template| {
+                    !template.is_harmony_format()
+                        && !template.uses_channel_tags()
+                        && template.uses_think_tags()
+                });
+                match pipeline.tokenizer() {
+                    Some(tokenizer) if think_tags => handle_seq_error!(
+                        crate::reasoning_parsers::tag_based::thinking_close(&tokenizer),
+                        request.response
+                    ),
+                    _ => None,
+                }
+            }
+            None => None,
+        };
+
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
             let factory = get_mut_arcmutex!(self.pipeline)
@@ -754,6 +775,11 @@ impl Engine {
                 seq.set_seed(seed.wrapping_add(response_index as u64));
             }
             seq.set_serial(request.sampling_params.serial);
+            if let (Some(budget), Some(close)) =
+                (request.sampling_params.thinking_budget, &thinking_close)
+            {
+                seq.set_thinking_budget(budget, close.clone());
+            }
 
             // Allocate recurrent state pool slot for hybrid models
             {

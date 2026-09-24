@@ -19,6 +19,7 @@ use hanzo_ml::Tensor;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use std::{
+    collections::VecDeque,
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
     path::PathBuf,
@@ -502,6 +503,24 @@ pub fn build_mm_features_from_ranges(
         .collect()
 }
 
+/// Think-block accounting for one sequence: the thinking budget (Halogen spec §5.3) and the
+/// reasoning-token count (§7.2).
+#[derive(Default)]
+struct Thinking {
+    /// Most tokens the think block may take before the engine closes it.
+    budget: Option<usize>,
+    /// The tokens written into the stream to close the block when the budget runs out.
+    close: Vec<u32>,
+    /// Tokens generated inside the think block so far.
+    spent: usize,
+    /// Close tokens still to be written, in order.
+    forced: VecDeque<u32>,
+    /// Whether the sequence has been inside a think block.
+    opened: bool,
+    /// Generated tokens up to and including the one that first closed the block.
+    closed_at: Option<usize>,
+}
+
 /// Length of the longest tail of `text` that is a proper start of `stop`.
 fn partial_stop_len(text: &[u8], stop: &[u8]) -> usize {
     (1..stop.len().min(text.len() + 1))
@@ -594,6 +613,7 @@ pub struct Sequence {
     rng: Option<Arc<std::sync::Mutex<Isaac64Rng>>>,
     /// Decode one token per forward, without the speculative proposer.
     serial: bool,
+    thinking: Thinking,
     /// Answer bytes held back from the completion because they could begin a stop string.
     held: Vec<u8>,
 }
@@ -704,6 +724,7 @@ impl Sequence {
             reasoning_mode: None,
             rng: None,
             serial: false,
+            thinking: Thinking::default(),
             held: Vec::new(),
         }
     }
@@ -972,6 +993,7 @@ impl Sequence {
             is_done,
             Some(StopReason::Eos) | Some(StopReason::StopTok(_))
         );
+        let generated = self.tokens.len().saturating_sub(self.prompt_len);
         let was_reasoning = self.in_reasoning();
         self.last_logprob = tok.logprob;
         self.last_is_done = *is_done;
@@ -999,10 +1021,24 @@ impl Sequence {
             self.release_held();
         }
 
+        let now_reasoning = self.in_reasoning();
+        let thinking = &mut self.thinking;
+        thinking.opened |= was_reasoning || now_reasoning;
+        if was_reasoning {
+            thinking.spent += 1;
+            if !now_reasoning && thinking.closed_at.is_none() {
+                thinking.closed_at = Some(generated + 1);
+            }
+        }
+        if thinking.forced.front() == Some(&tok.token) {
+            thinking.forced.pop_front();
+        }
+
         self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
         self.reset_prefill_toks();
+        self.force_close_when_spent();
         stop
     }
 
@@ -1065,6 +1101,47 @@ impl Sequence {
             .is_some_and(|parser| parser.in_reasoning())
     }
 
+    /// Caps the think block at `budget` generated tokens (Halogen spec §5.3). When they are spent
+    /// and the block is still open, `close` is written into the stream as ordinary generated
+    /// tokens, on the same state, and the answer follows. A sequence under a grammar is not
+    /// forced: the close would break the grammar.
+    pub fn set_thinking_budget(&mut self, budget: usize, close: Vec<u32>) {
+        self.thinking.budget = Some(budget);
+        self.thinking.close = close;
+        self.force_close_when_spent();
+    }
+
+    fn force_close_when_spent(&mut self) {
+        let spent = self
+            .thinking
+            .budget
+            .is_some_and(|budget| self.thinking.spent >= budget);
+        if spent
+            && self.thinking.forced.is_empty()
+            && self.in_reasoning()
+            && matches!(self.recognizer, SequenceRecognizer::None)
+        {
+            let close = self.thinking.close.clone();
+            self.thinking.forced.extend(close);
+        }
+    }
+
+    /// The token the engine writes next in place of sampling, while it closes the think block.
+    pub(crate) fn forced_token(&self) -> Option<u32> {
+        self.thinking.forced.front().copied()
+    }
+
+    /// Generated tokens spent reasoning (Halogen spec §7.2): through the token that closed the
+    /// think block, or every generated token when the block never closed, or 0 without one.
+    pub fn reasoning_tokens(&self) -> usize {
+        let generated = self.tokens.len().saturating_sub(self.prompt_len);
+        match self.thinking.closed_at {
+            Some(closed) => closed.min(generated),
+            None if self.thinking.opened => generated,
+            None => 0,
+        }
+    }
+
     /// Seeds this sequence's own RNG: every sampling decision of the sequence, plain or
     /// speculative, then draws from it, so a seeded sampled request replays token for token.
     pub fn set_seed(&mut self, seed: u64) {
@@ -1086,9 +1163,10 @@ impl Sequence {
         self.serial = serial;
     }
 
-    /// Whether the speculative driver may draft for this sequence: not for a serial request.
+    /// Whether the speculative driver may draft for this sequence now: not for a serial request,
+    /// nor while the engine writes a think close into it.
     pub(crate) fn speculates(&self) -> bool {
-        !self.serial
+        !self.serial && self.thinking.forced.is_empty()
     }
 
     /// Counts `drafted` speculative tokens verified for this sequence, `accepted` of them kept.
@@ -1239,6 +1317,7 @@ impl Sequence {
         get_mut_group!(self).total_prompt_toks = self.prompt_len;
         get_mut_group!(self).total_cached_toks = self.prefix_cache_len;
         get_mut_group!(self).total_toks = self.len();
+        get_mut_group!(self).total_reasoning_toks = self.reasoning_tokens();
     }
 
     pub fn add_image_choice_to_group(&self, choice: ImageChoice) {
@@ -1938,6 +2017,75 @@ mod tests {
             Box::new(TagReasoningContext::new_in_think_block()),
         );
         seq
+    }
+
+    const CLOSE: [u32; 3] = [100, 101, 102];
+    const CLOSE_TEXT: [&str; 3] = ["\n\nTime is up, answering.\n", "</think>", "\n\n"];
+
+    #[test]
+    fn a_spent_thinking_budget_writes_the_close_and_the_answer_follows() {
+        let mut seq = thinking_sequence();
+        seq.set_thinking_budget(2, CLOSE.to_vec());
+        push(&mut seq, 10, "Let me");
+        assert_eq!(seq.forced_token(), None);
+        assert!(seq.speculates());
+        push(&mut seq, 11, " think");
+        // Two tokens spent and the block is open: the engine writes the close, in order.
+        for (token, text) in CLOSE.iter().zip(CLOSE_TEXT) {
+            assert_eq!(seq.forced_token(), Some(*token));
+            assert!(!seq.speculates());
+            push(&mut seq, *token, text);
+        }
+        assert_eq!(seq.forced_token(), None);
+        assert!(seq.speculates());
+        push(&mut seq, 12, "42");
+        assert!(!seq.in_reasoning());
+        // Halogen spec §7.2: reasoning runs through the `</think>` token.
+        assert_eq!(seq.reasoning_tokens(), 4);
+        seq.finalize_reasoning();
+        assert_eq!(
+            seq.get_reasoning_content().as_deref(),
+            Some("Let me think\n\nTime is up, answering.\n")
+        );
+        assert_eq!(seq.get_response_content().as_deref(), Some("\n\n42"));
+    }
+
+    #[test]
+    fn a_block_closed_within_the_budget_is_not_forced() {
+        let mut seq = thinking_sequence();
+        seq.set_thinking_budget(3, CLOSE.to_vec());
+        push(&mut seq, 10, "short");
+        push(&mut seq, 11, "</think>");
+        push(&mut seq, 12, "answer");
+        push(&mut seq, 13, " more");
+        assert_eq!(seq.forced_token(), None);
+        assert_eq!(seq.reasoning_tokens(), 2);
+    }
+
+    #[test]
+    fn a_zero_budget_closes_the_block_before_any_thinking() {
+        let mut seq = thinking_sequence();
+        seq.set_thinking_budget(0, CLOSE.to_vec());
+        assert_eq!(seq.forced_token(), Some(100));
+        // No budget, or no block to close, forces nothing.
+        let mut seq = test_sequence(vec![1], None);
+        seq.set_thinking_budget(0, CLOSE.to_vec());
+        assert_eq!(seq.forced_token(), None);
+    }
+
+    #[test]
+    fn reasoning_tokens_follow_halogen() {
+        // Never closed: every generated token is reasoning.
+        let mut seq = thinking_sequence();
+        push(&mut seq, 10, "still");
+        push(&mut seq, 11, " going");
+        assert_eq!(seq.reasoning_tokens(), 2);
+        seq.update_time_info();
+        assert_eq!(seq.get_mut_group().get_usage().reasoning_tokens, 2);
+        // No think block at all.
+        let mut seq = test_sequence(vec![1], None);
+        push(&mut seq, 10, "plain");
+        assert_eq!(seq.reasoning_tokens(), 0);
     }
 
     #[test]

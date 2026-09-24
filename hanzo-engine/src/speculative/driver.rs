@@ -76,9 +76,10 @@ where
         clear_staged_speculative_tokens(seqs);
         return Ok(false);
     }
-    // A serial request decodes one token per forward. A forward verifies drafts only when every
-    // sequence in it staged some, so the whole batch samples plainly this step. Such a sequence
-    // never stages drafts (see `speculating`), so this forward carried none to verify.
+    // A serial request, or a sequence the engine is writing a think close into, decodes one token
+    // per forward. A forward verifies drafts only when every sequence in it staged some, so the
+    // whole batch samples plainly this step. Such a sequence never stages drafts (see
+    // `speculating`), so this forward carried none to verify.
     if !seqs.iter().all(|seq| seq.speculates()) {
         trim_mixed_staged_allocations(seqs, cache)?;
         clear_staged_speculative_tokens(seqs);
@@ -423,7 +424,8 @@ where
 }
 
 /// Whether a sequence goes on to have drafts staged for the next forward: it is still running and
-/// may speculate.
+/// may speculate. A sequence that began a think close during this step decodes plainly until the
+/// close is written.
 fn speculating(seq: &Sequence) -> bool {
     !matches!(seq.getstate(), SequenceState::Done(_)) && seq.speculates()
 }
