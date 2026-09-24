@@ -1075,10 +1075,9 @@ impl Sequence {
             return Ok(None);
         }
 
-        // The first token usually starts with a space. We don't want to add that to the delta.
-        // Since we're using the completion_bytes, we need to take care of that ourselves.
-        // Had we used HF's Tokenizer, it would have taken care of that for us.
-        if is_first {
+        // A chat message drops the whitespace its first token carries; a completion keeps it, as
+        // the exact continuation of the prompt.
+        if is_first && self.get_mut_group().is_chat {
             return Ok(Some(new_decoded.trim_start().to_string()));
         }
         Ok(Some(new_decoded.to_string()))
