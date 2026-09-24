@@ -1448,6 +1448,9 @@ pub struct SequenceGroup {
     pub total_prompt_toks: usize,
     pub total_cached_toks: usize,
     pub total_toks: usize,
+    pub total_reasoning_toks: usize,
+    pub total_draft_toks: usize,
+    pub total_draft_accepted: usize,
     pub total_prompt_time: u128,
     pub total_time: u128,
     pub total_completion_time: u128,
@@ -1489,6 +1492,9 @@ impl SequenceGroup {
             total_prompt_toks: 0,
             total_cached_toks: 0,
             total_toks: 0,
+            total_reasoning_toks: 0,
+            total_draft_toks: 0,
+            total_draft_accepted: 0,
             total_prompt_time: 0,
             total_time: 0,
             total_completion_time: 0,
@@ -1556,6 +1562,9 @@ impl SequenceGroup {
             total_time_sec: self.total_time as f32 / 1000.,
             total_completion_time_sec: self.total_completion_time as f32 / 1000.,
             total_prompt_time_sec: self.total_prompt_time as f32 / 1000.,
+            reasoning_tokens: self.total_reasoning_toks,
+            draft_tokens: self.total_draft_toks,
+            draft_accepted: self.total_draft_accepted,
         }
     }
 
