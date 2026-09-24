@@ -2686,6 +2686,13 @@ impl Pipeline for GGUFPipeline {
         self.drafter.clone()
     }
 
+    fn indexer_budget(&self) -> Option<usize> {
+        match self.model {
+            Model::Qwen4Exp(ref model) => Some(model.indexer_budget),
+            _ => None,
+        }
+    }
+
     fn note_forward_sequences(&self, seq_ids: &[usize]) {
         if let Model::Qwen35(ref model) = self.model {
             model.spec_capture.note_forward(seq_ids);

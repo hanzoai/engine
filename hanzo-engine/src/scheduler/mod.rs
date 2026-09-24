@@ -26,6 +26,16 @@ pub enum SchedulerConfig {
 }
 
 impl SchedulerConfig {
+    /// Sequences the scheduler runs at once.
+    pub fn max_seqs(&self) -> usize {
+        match self {
+            Self::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(n),
+            } => n.get(),
+            Self::PagedAttentionMeta { max_num_seqs, .. } => *max_num_seqs,
+        }
+    }
+
     pub fn into_scheduler(self) -> Arc<Mutex<dyn Scheduler>> {
         match self {
             Self::DefaultScheduler { method } => {

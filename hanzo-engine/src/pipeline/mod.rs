@@ -924,6 +924,11 @@ pub trait Pipeline:
         None
     }
 
+    /// The sparse-attention indexer's key budget per query, for a model that carries one.
+    fn indexer_budget(&self) -> Option<usize> {
+        None
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn try_sample_speculative_causal_gen(
         &mut self,
