@@ -609,6 +609,9 @@ fn interactive_fallback_sample_parameters() -> SamplingParams {
         logits_bias: None,
         n_choices: 1,
         dry_params: Some(DrySamplingParams::default()),
+        seed: None,
+        thinking_budget: None,
+        serial: false,
     }
 }
 

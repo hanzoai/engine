@@ -70,6 +70,18 @@ pub struct SamplingParams {
     pub logits_bias: Option<HashMap<u32, f32>>,
     pub n_choices: usize,
     pub dry_params: Option<DrySamplingParams>,
+    /// Seeds this request's own RNG, so a sampled request can be replayed. `None` draws from the
+    /// engine's shared RNG.
+    #[serde(default)]
+    pub seed: Option<u64>,
+    /// Most tokens the model may spend inside its think block. When they run out the engine writes
+    /// the close for it and the answer follows in the same stream.
+    #[serde(default)]
+    pub thinking_budget: Option<usize>,
+    /// Decode one token per forward pass, without the server's speculative proposer. The output is
+    /// the same; only the speed differs.
+    #[serde(default)]
+    pub serial: bool,
 }
 
 impl SamplingParams {
@@ -94,6 +106,9 @@ impl SamplingParams {
             logits_bias: None,
             n_choices: 1,
             dry_params: None,
+            seed: None,
+            thinking_budget: None,
+            serial: false,
         }
     }
 
@@ -116,6 +131,9 @@ impl SamplingParams {
             logits_bias: None,
             n_choices: 1,
             dry_params: None,
+            seed: None,
+            thinking_budget: None,
+            serial: false,
         }
     }
 
