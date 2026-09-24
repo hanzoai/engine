@@ -100,6 +100,60 @@ macro_rules! ctxt_to_blocks {
     };
 }
 
+/// What a unified-memory plan is asked to size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KvRequest {
+    /// The automatic path: the working set (`demand` tokens), at least one context (`floor`
+    /// tokens), within what fits.
+    Auto { demand: usize, floor: usize },
+    /// An explicit context of this many tokens: it fits or it is an error.
+    Tokens(usize),
+    /// An explicit KV budget in bytes: it fits or it is an error.
+    Bytes(usize),
+}
+
+/// The KV cache bytes a unified-memory device gives the paged cache. The ceiling is the device's
+/// budget (`IGPU_MEMORY_FRACTION` of physical RAM, already applied by [`MemoryUsage`]); charged
+/// against it are the weights, the fixed non-KV memory (recurrent states, prefix snapshots,
+/// activations, runtime) and the KV. There is no second reserve on top of the fraction. An
+/// explicit request that does not fit is an error naming the shortfall, never a silent cap.
+pub(crate) fn plan_unified(
+    ceiling: usize,
+    weights: usize,
+    fixed: usize,
+    request: KvRequest,
+    per_token: usize,
+) -> anyhow::Result<usize> {
+    const GIB: f64 = (1u64 << 30) as f64;
+    let room = ceiling as i128 - weights as i128 - fixed as i128;
+    let short = |need: usize| {
+        anyhow::anyhow!(
+            "unified memory: {:.2} GiB of KV does not fit; the {:.2} GiB ceiling holds {:.2} GiB of weights and {:.2} GiB fixed, {:.2} GiB short (raise IGPU_MEMORY_FRACTION or ask for less)",
+            need as f64 / GIB,
+            ceiling as f64 / GIB,
+            weights as f64 / GIB,
+            fixed as f64 / GIB,
+            (need as i128 - room) as f64 / GIB,
+        )
+    };
+    let need = match request {
+        KvRequest::Tokens(t) => t * per_token,
+        KvRequest::Bytes(b) => b,
+        KvRequest::Auto { demand, floor } => {
+            let room_bytes = room.max(0) as usize;
+            let want = (demand * per_token).min(room_bytes).max(floor * per_token);
+            if (want as i128) > room {
+                return Err(short(want));
+            }
+            return Ok(want);
+        }
+    };
+    if (need as i128) > room {
+        return Err(short(need));
+    }
+    Ok(need)
+}
+
 /// Memory values are in MBs or a percentage in [0,1]. Specify block size or the default is 32.
 ///
 /// `model_weight_size_in_bytes`: total model weight footprint. When provided, the per-device
@@ -146,10 +200,7 @@ pub fn calculate_cache_config(
 
     // A budget the caller named is an instruction, not a hint: the demand floor below applies only
     // to the automatic path.
-    let budget_is_explicit = matches!(
-        mem_gpu,
-        MemoryGpuConfig::MbAmount(_) | MemoryGpuConfig::ContextSize(_)
-    );
+    let mem_gpu_request = mem_gpu;
 
     let mut min_mem_gpu = usize::MAX;
     for dev in layer_devices {
@@ -192,45 +243,34 @@ pub fn calculate_cache_config(
     #[cfg(feature = "vulkan")]
     let unified_memory = unified_memory || device.is_vulkan();
     if unified_memory {
-        let one_ctx_mb =
-            ctxt_to_blocks!(config.max_seq_len(), dtype_size, block_size, config) / SIZE_IN_MB;
-        // KV competes with the model and the OS/compute working set for ONE shared physical pool, so
-        // size it to DEMAND -- the concurrent working set (`max_num_tokens` = max_seq_len *
-        // max_batch_size = context * concurrency) -- NOT to capacity. Grabbing all free RAM (the
-        // discrete-VRAM vLLM approach) wires tens of GB of KV that a single agent never touches and,
-        // on a tight/coherent pool, thrashes or hangs the allocator (ROCm/WSL: an 84 GB alloc never
-        // returns). More concurrent sessions/agents raise max_batch_size and grow KV automatically.
-        // Bound demand by the post-model/OS-reserve ceiling (20% of unified RAM, min 16 GB, so KV
-        // never starves the OS) and floor at one full context so a lone request always loads.
-        let demand_mb = match max_num_tokens {
-            Some(toks) => {
-                (ctxt_to_blocks!(toks, dtype_size, block_size, config) / SIZE_IN_MB).max(one_ctx_mb)
-            }
-            None => one_ctx_mb,
+        // One pool holds the weights, the fixed working set and the KV, so the KV is planned
+        // against the device budget (the fraction), sized to demand on the automatic path.
+        let per_token = dtype_size * config.kv_cache_elements_per_token();
+        let mem = MemoryUsage.query(device)?;
+        let (ceiling, weights) = match model_weight_size_in_bytes {
+            Some(w) => (mem.total(), w / num_devices),
+            // After loading, what is allocated already holds the weights.
+            None => (mem.available(), 0),
         };
-        let total_mb = MemoryUsage.query(device)?.total() / SIZE_IN_MB;
-        let reserve_mb = (total_mb / 5).max(16 * 1024);
-        let kv_ceiling = total_mb
-            .saturating_sub(model_weight_per_device_mb)
-            .saturating_sub(reserve_mb)
-            .max(one_ctx_mb);
-        let target = if budget_is_explicit {
-            mem_gpu.min(kv_ceiling)
-        } else {
-            mem_gpu.min(kv_ceiling).min(demand_mb).max(one_ctx_mb)
+        let request = match mem_gpu_request {
+            MemoryGpuConfig::ContextSize(t) => KvRequest::Tokens(t),
+            MemoryGpuConfig::MbAmount(mb) => KvRequest::Bytes(mb * SIZE_IN_MB),
+            MemoryGpuConfig::Utilization(_) => KvRequest::Auto {
+                demand: max_num_tokens.unwrap_or(config.max_seq_len()).max(config.max_seq_len()),
+                floor: config.max_seq_len(),
+            },
         };
-        if target != mem_gpu {
-            if !silent {
-                info!(
-                    "Unified memory: KV cache {} MB -> {} MB ({} max-context sequences, demand-sized; {} MB OS reserve).",
-                    mem_gpu,
-                    target,
-                    (target / one_ctx_mb.max(1)).max(1),
-                    reserve_mb,
-                );
-            }
-            mem_gpu = target;
+        let kv = plan_unified(ceiling, weights, 0, request, per_token)?;
+        let target = kv / SIZE_IN_MB;
+        if target != mem_gpu && !silent {
+            info!(
+                "Unified memory: KV cache {} MB -> {} MB ({} max-context sequences).",
+                mem_gpu,
+                target,
+                (kv / (per_token * config.max_seq_len()).max(1)).max(1),
+            );
         }
+        mem_gpu = target;
     }
 
     let num_gpu_blocks = mb_to_blocks!(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
@@ -253,6 +293,41 @@ pub fn calculate_cache_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// GB10: MemTotal 127,600,508 KiB. Serving Qwen3.8-Flash-Next at 1,048,576 bf16 tokens with 8
+    /// sequences: 77,632,650,240 B of weights, 27,456 B of KV per token, and fixed memory of 8 x
+    /// 2 x 116,379,648 B of recurrent state plus 1 GiB of prefix snapshots and 3.5 GiB runtime.
+    fn gb10(fraction: f64) -> anyhow::Result<usize> {
+        let mem_total = 127_600_508usize * 1024;
+        let ceiling = (mem_total as f64 * fraction) as usize;
+        let fixed = 8 * 2 * 116_379_648 + (1 << 30) + (7 << 29);
+        plan_unified(ceiling, 77_632_650_240, fixed, KvRequest::Tokens(1_048_576), 27_456)
+            .map(|kv| ceiling - 77_632_650_240 - fixed - kv)
+    }
+
+    #[test]
+    fn unified_plan_fits_1m_at_090() {
+        let left = gb10(0.90).expect("1M fits at 0.90");
+        assert!(left >= 4 << 30, "only {:.2} GiB of ceiling left", left as f64 / (1u64 << 30) as f64);
+    }
+
+    #[test]
+    fn unified_plan_refuses_1m_at_085() {
+        let err = gb10(0.85).expect_err("1M must not fit at 0.85").to_string();
+        assert!(err.contains("1.91 GiB short"), "{err}");
+    }
+
+    #[test]
+    fn unified_plan_auto_is_demand_capped() {
+        // demand below room: the demand; demand above room: the room; floor above room: error
+        let r = plan_unified(100, 20, 10, KvRequest::Auto { demand: 5, floor: 2 }, 4).unwrap();
+        assert_eq!(r, 20);
+        let r = plan_unified(100, 20, 10, KvRequest::Auto { demand: 50, floor: 2 }, 4).unwrap();
+        assert_eq!(r, 70);
+        assert!(plan_unified(100, 20, 10, KvRequest::Auto { demand: 50, floor: 20 }, 4).is_err());
+        assert!(plan_unified(100, 20, 10, KvRequest::Bytes(71), 4).is_err());
+        assert_eq!(plan_unified(100, 20, 10, KvRequest::Bytes(70), 4).unwrap(), 70);
+    }
 
     /// Qwen3.5-27B shape: 64 decoder layers, 4 KV heads of 128, of which 16 are full attention.
     fn dense() -> ModelConfigMetadata {

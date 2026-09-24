@@ -2126,7 +2126,6 @@ pub mod text_models_inputs_processor {
         pub input_ids_full: Option<Tensor>,
         /// Up to [`PRIOR`] tokens before each sequence's chunk in `input_ids`, which an n-gram
         /// embedding hashes the chunk's first tokens with.
-        #[allow(dead_code)] // the first reader is the qwen4exp forward
         pub prior: Vec<Vec<u32>>,
         pub seqlen_offsets: Vec<usize>,
         pub seqlen_offsets_full: Option<Vec<usize>>,

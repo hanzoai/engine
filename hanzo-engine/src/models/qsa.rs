@@ -25,6 +25,46 @@ use crate::layers::QRmsNorm;
 use crate::models::quantized_qwen3_5_moe::gguf_qmm;
 use crate::utils::gguf_metadata::ContentMetadata;
 
+/// Attention with the QSA kernel's math over dense causal keys, which is what QSA computes while
+/// every visible key is selected (`ops/qsa.py:193-359`, one tile): f32 scores scaled by
+/// `d^-0.5 · log2 e`, `exp2` against the row max, the probabilities rounded to the activation
+/// dtype for the PV product while the normalizer sums them unrounded, an f32 PV, one division and
+/// one rounding.
+///
+/// `q` `[b, hq, s, d]`, `k`/`v` `[b, hkv, L, d]` with the `s` queries at positions `L - s ..
+/// L`; returns `[b, hq, s, d]` in `q`'s dtype.
+pub(crate) fn attend(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+    let dtype = q.dtype();
+    let (b, hq, s, d) = q.dims4()?;
+    let (_, hkv, l, _) = k.dims4()?;
+    let group = hq / hkv;
+    let expand = |t: &Tensor| -> Result<Tensor> {
+        if group == 1 {
+            return t.to_dtype(DType::F32);
+        }
+        t.to_dtype(DType::F32)?
+            .unsqueeze(2)?
+            .broadcast_as((b, hkv, group, l, d))?
+            .reshape((b, hq, l, d))
+    };
+    let (k, v) = (expand(k)?, expand(v)?);
+    let scale = ((d as f64).powf(-0.5) * std::f64::consts::LOG2_E) as f32;
+    let scores = (q.to_dtype(DType::F32)?.matmul(&k.t()?.contiguous()?)? * f64::from(scale))?;
+    let offset = l - s;
+    let mask: Vec<f32> = (0..s)
+        .flat_map(|i| (0..l).map(move |j| if j <= offset + i { 0.0 } else { f32::NEG_INFINITY }))
+        .collect();
+    let mask = Tensor::from_vec(mask, (1, 1, s, l), q.device())?;
+    let scores = scores.broadcast_add(&mask)?;
+    let max = scores.max_keepdim(D::Minus1)?;
+    let p = (scores.broadcast_sub(&max)? * std::f64::consts::LN_2)?.exp()?;
+    let l_sum = p.sum_keepdim(D::Minus1)?;
+    let p = p.to_dtype(dtype)?.to_dtype(DType::F32)?;
+    p.matmul(&v.contiguous()?)?
+        .broadcast_div(&l_sum)?
+        .to_dtype(dtype)
+}
+
 /// Shape of one layer's indexer and of its selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Config {

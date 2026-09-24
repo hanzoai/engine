@@ -37,7 +37,7 @@ use crate::models::quantized_qwen3_5_moe::gguf_qmm;
 /// Reads the streams into one block input.
 pub(crate) struct Mixer {
     /// Per-stream norm weight, `[n, hidden]` f32.
-    norm: Tensor,
+    pub(crate) norm: Tensor,
     /// Ones, `[hidden]`: the fused RMS norm's weight, as `norm` differs per stream.
     unit: Tensor,
     down: Arc<dyn QuantMethod>,
@@ -67,6 +67,28 @@ impl Mixer {
         })
     }
 
+    /// The mixer at `vb` (a `GatedResidual` of the safetensors checkpoint) over `n` streams:
+    /// `hc_norm.weight` `[n·h]` BF16 holds the Gemma weight, so the norm multiplies by `1 + w`
+    /// (the `+1` GGUF folds in at conversion); `input_mix_weight_down` `[rank, n·h]` and
+    /// `input_mix_weight_up` `[n·h, rank]` are bf16 GEMMs.
+    pub(crate) fn new(vb: &hanzo_quant::ShardedVarBuilder, n: usize, eps: f32) -> Result<Self> {
+        let host = vb.clone().set_device(Device::Cpu);
+        let w = host.get_unchecked_dtype("hc_norm.weight", DType::F32)?;
+        let hn = w.dim(0)?;
+        let rank = host
+            .get_unchecked_dtype("input_mix_weight_down.weight", DType::BF16)?
+            .dim(0)?;
+        let dev = vb.device().clone();
+        let norm = (w.to_device(&dev)? + 1.0)?.reshape((n, hn / n))?;
+        Ok(Self {
+            unit: Tensor::ones(hn / n, DType::F32, &dev)?,
+            norm,
+            down: hanzo_quant::linear_no_bias(hn, rank, &None, vb.pp("input_mix_weight_down"))?,
+            up: hanzo_quant::linear_no_bias(rank, hn, &None, vb.pp("input_mix_weight_up"))?,
+            eps,
+        })
+    }
+
     /// `xn_s = x_s / rms(x_s) · w_s` for each stream of `[b, s, n, h]` (`ops/hc.py:42-52`).
     pub(crate) fn norm(&self, x: &Tensor) -> Result<Tensor> {
         let x32 = x.to_dtype(DType::F32)?.contiguous()?;
@@ -87,11 +109,30 @@ impl Mixer {
 /// A block inside a hyper-connection: its input comes from the [`Mixer`] and its output goes
 /// back into every stream.
 pub(crate) struct Branch {
-    mixer: Mixer,
+    pub(crate) mixer: Mixer,
     inject: Arc<dyn QuantMethod>,
 }
 
 impl Branch {
+    /// The branch at `vb` over `n` streams: the [`Mixer`] and `block_inject_weight` `[n, n·h]`, a
+    /// bf16 GEMM (vLLM runs it merged with the down projection; each output row is the same).
+    pub(crate) fn new(vb: &hanzo_quant::ShardedVarBuilder, n: usize, eps: f32) -> Result<Self> {
+        let mixer = Mixer::new(vb, n, eps)?;
+        let hn = mixer.norm.elem_count();
+        Ok(Self {
+            mixer,
+            inject: hanzo_quant::linear_no_bias(hn, n, &None, vb.pp("block_inject_weight"))?,
+        })
+    }
+
+    /// The block input `[b, s, h]` and the injection logits `[b, s, n]` from the streams.
+    pub(crate) fn mix(&self, x: &Tensor) -> Result<(Tensor, Tensor)> {
+        let (b, s, n, h) = x.dims4()?;
+        let xn = self.mixer.norm(x)?;
+        let inj = self.inject.forward(&xn.reshape((b, s, n * h))?)?;
+        Ok((self.mixer.mix(&xn)?, inj))
+    }
+
     /// The branch at `prefix` over `n` streams.
     pub(crate) fn from_gguf<R: Read + Seek>(
         ct: &mut Content<'_, R>,
@@ -147,7 +188,7 @@ fn mean(xn: &Tensor, g: &Tensor) -> Result<Tensor> {
 
 /// `x_s + 2σ(inj_s / n) · y` for `x` `[b, s, n, h]`, `y` `[b, s, h]` and `inj` `[b, s, n]`, in
 /// f32 and rounded once (`ops/hc.py:224-225`).
-fn combine(x: &Tensor, y: &Tensor, inj: &Tensor) -> Result<Tensor> {
+pub(crate) fn combine(x: &Tensor, y: &Tensor, inj: &Tensor) -> Result<Tensor> {
     let n = x.dim(2)?;
     let gate = (sigmoid(&(inj.to_dtype(DType::F32)? / n as f64)?)? * 2.0)?;
     let y = y
@@ -479,6 +520,91 @@ mod tests {
             .flat_map(|((x, y), inj)| reference::combine(x, y, inj))
             .collect();
         assert_rounded_once("combine", &f64s(&combine(&x, &y, &inj)?)?, &want);
+        Ok(())
+    }
+
+    /// The safetensors constructors add the Gemma `+1` the GGUF converter folds in: a branch and a
+    /// head built from `w` compute bit for bit what the GGUF loaders compute from `1 + w`.
+    #[test]
+    fn mixer_new_folds_gemma_one() -> Result<()> {
+        let mut rng = StdRng::seed_from_u64(0x676d);
+        let (mut block, mut head) = (weights(&mut rng), weights(&mut rng));
+        // bf16-exact values, so the safetensors (bf16) and GGUF (f32) twins hold the same numbers
+        let exact = |v: &mut Vec<f32>| {
+            for x in v.iter_mut() {
+                *x = half::bf16::from_f32(*x).to_f32();
+            }
+        };
+        let mut st = std::collections::HashMap::new();
+        for (prefix, w) in [("b", &mut block), ("h", &mut head)] {
+            for v in [&mut w.norm, &mut w.down, &mut w.up, &mut w.inject] {
+                exact(v);
+            }
+            // the checkpoint keeps w; GGUF keeps 1 + w, which is exact in f32 here
+            let gemma: Vec<f32> = w
+                .norm
+                .iter()
+                .map(|x| half::bf16::from_f32(x - 1.0).to_f32())
+                .collect();
+            w.norm = gemma.iter().map(|x| x + 1.0).collect();
+            let bf = |d: &[f32], dims: &[usize]| tensor(d, dims)?.to_dtype(DType::BF16);
+            st.insert(format!("{prefix}.hc_norm.weight"), bf(&gemma, &[N * H])?);
+            st.insert(
+                format!("{prefix}.input_mix_weight_down.weight"),
+                bf(&w.down, &[RANK, N * H])?,
+            );
+            st.insert(
+                format!("{prefix}.input_mix_weight_up.weight"),
+                bf(&w.up, &[N * H, RANK])?,
+            );
+            st.insert(
+                format!("{prefix}.block_inject_weight.weight"),
+                bf(&w.inject, &[N, N * H])?,
+            );
+        }
+        let dir = tempfile::tempdir().map_err(hanzo_ml::Error::msg)?;
+        let path = dir.path().join("hyper.safetensors");
+        hanzo_ml::safetensors::save(&st, &path)?;
+        let vb = unsafe {
+            hanzo_quant::ShardedSafeTensors::sharded(
+                &[&path],
+                DType::F32,
+                &Device::Cpu,
+                None,
+                std::sync::Arc::new(|_| true),
+            )?
+        };
+        let (gguf_branch, gguf_head) = load(&block, &head)?;
+        let branch = Branch::new(&vb.pp("b"), N, EPS)?;
+        let mixer = Mixer::new(&vb.pp("h"), N, EPS)?;
+
+        let bits = |t: &Tensor| -> Result<Vec<u32>> {
+            Ok(t.to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?
+                .into_iter()
+                .map(f32::to_bits)
+                .collect())
+        };
+        let x = tensor(
+            &uniform(&mut rng, BATCH * SEQ * N * H, -1.0, 1.0),
+            &[BATCH, SEQ, N, H],
+        )?;
+        assert_eq!(bits(&branch.mixer.norm)?, bits(&gguf_branch.mixer.norm)?, "norm weight");
+        for (what, got, want) in [
+            ("branch", &branch.mixer, &gguf_branch.mixer),
+            ("head", &mixer, &gguf_head),
+        ] {
+            let g = got.mix(&got.norm(&x)?)?;
+            let w = want.mix(&want.norm(&x)?)?;
+            assert_eq!(bits(&g)?, bits(&w)?, "{what} mix");
+        }
+        let block_fn = |u: &Tensor| u.affine(0.5, 0.0);
+        assert_eq!(
+            bits(&branch.apply(&x, block_fn)?)?,
+            bits(&gguf_branch.apply(&x, block_fn)?)?,
+            "branch apply"
+        );
         Ok(())
     }
 

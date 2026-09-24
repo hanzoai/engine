@@ -40,6 +40,7 @@ mod mxfp4;
 pub mod nvfp4;
 mod pending_layer;
 mod pertensor_fp8;
+pub mod quantize;
 pub mod rotary;
 pub mod safetensors;
 mod scalar_fp8;
@@ -61,7 +62,7 @@ pub use afq::ops::{
 pub use afq::{AfqBits, AfqGroupSize, AfqInner, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParams, BnbQuantType};
 pub use blockwise_fp8::{
-    blockwise_fp8_moe, fp8_blockwise_dequantize, fp8_blockwise_quantize, BlockwiseFP8Linear,
+    blockwise_fp8_act, blockwise_fp8_moe, fp8_blockwise_dequantize, fp8_blockwise_quantize, BlockwiseFP8Linear,
 };
 pub use distributed::{
     layers::{

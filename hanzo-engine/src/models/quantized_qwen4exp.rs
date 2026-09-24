@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use hanzo_ml::{DType, Device, Result, Tensor};
 use hanzo_nn::{Embedding, Module};
-use hanzo_quant::QuantMethod;
+use hanzo_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
@@ -42,19 +42,140 @@ use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 const ARCH: &str = "qwen4exp";
 
 /// One decoder layer: a mixing block (attention or gated delta-net) and the MoE, each behind its
-/// own hyper-connection branch.
+/// own hyper-connection branch, and on one layer the n-gram block in front of them.
 struct Layer {
     mix: LayerImpl,
     attn: Branch,
     ffn: Branch,
     moe: FusedMoe,
+    ngram: Option<Ngram>,
+}
+
+/// What one forward hands every layer.
+struct Step<'a> {
+    cache: &'a mut HybridCache,
+    slots: &'a dyn Fn() -> Result<PoolSlots<'a>>,
+    trail: bool,
+    mask: &'a DeviceMappedMask,
+    cos_sin: &'a (Tensor, Tensor),
+    paged: Option<&'a (Vec<(Tensor, Tensor)>, &'a PagedAttentionInputMetadata)>,
+    /// The next attention layer's ordinal in the paged cache.
+    kv_layer: usize,
+    /// The n-gram embeddings of this forward, and the side pool holding the conv history.
+    ngram: Option<&'a Tensor>,
+    side: usize,
+}
+
+impl Layer {
+    /// Layer `i` at `lvb` (`...layers.{i}`) of a safetensors snapshot.
+    fn new(
+        i: usize,
+        lvb: &ShardedVarBuilder,
+        cfg: &crate::models::qwen4exp::Config,
+        weights: &[std::path::PathBuf],
+        rotary: Arc<Qwen3VLRotaryEmbedding>,
+        attention_mechanism: AttentionImplementation,
+        dtype: DType,
+    ) -> Result<Self> {
+        use crate::models::ngram::Fp8Table;
+        use crate::models::qwen4exp::PREFIX;
+        let text = cfg.text();
+        let props = cfg.props();
+        let quant = cfg.quant()?;
+        let eps = props.rms_norm_eps;
+        let dev = lvb.device().clone();
+        let mix = if text.attention(i) {
+            let paged = match attention_mechanism {
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(props.head_dim, &dev, None)?)
+                }
+                AttentionImplementation::Eager => None,
+            };
+            LayerImpl::FullAttention(GatedFullAttention::new(
+                &lvb.pp("self_attn"),
+                &props,
+                &quant,
+                rotary,
+                paged,
+                &dev,
+                dtype,
+            )?)
+        } else {
+            LayerImpl::LinearAttention(QGatedDeltaNet::new(&lvb.pp("linear_attn"), &props, &quant)?)
+        };
+        let ngram = if i == text.ple_layer()? {
+            let hash = Hash::new(
+                &lvb.pp("ple.ple_embedding"),
+                text.eos_token_id,
+                text.heads_per_ngram,
+            )?;
+            let table = Fp8Table::open(
+                weights,
+                &format!("{PREFIX}layers.{i}.ple.ple_embedding.ngram_embedding"),
+            )?;
+            Some(Ngram::new(&lvb.pp("ple"), hash, table, f64::from(eps))?)
+        } else {
+            None
+        };
+        Ok(Self {
+            mix,
+            attn: Branch::new(&lvb.pp("attn_hyper_connection"), text.hc_count, eps)?,
+            ffn: Branch::new(&lvb.pp("mlp_hyper_connection"), text.hc_count, eps)?,
+            moe: FusedMoe::new(&lvb.pp("mlp"), &props, &quant, dtype)?,
+            ngram,
+        })
+    }
+
+    /// This layer over the streams `x` `[b, s, n, h]`.
+    fn forward(&self, i: usize, x: Tensor, step: &mut Step<'_>) -> Result<Tensor> {
+        let mut x = x;
+        if let Some(ngram) = &self.ngram {
+            let Some(HybridLayerCache::Recurrent(pool)) = step.cache.get_mut(step.side) else {
+                hanzo_ml::bail!("hybrid cache has no n-gram pool at {}", step.side);
+            };
+            let Some(g) = step.ngram else {
+                hanzo_ml::bail!("layer {i} needs the n-gram embeddings");
+            };
+            let g = g.to_device(x.device())?;
+            let delta = forward_pooled(pool, (step.slots)()?, step.side, step.trail, |cache| {
+                ngram.forward(&x, &g, cache)
+            })?;
+            // The served graph adds the f32 delta inside one kernel and rounds only the sum.
+            x = (x.to_dtype(DType::F32)? + delta)?.to_dtype(x.dtype())?;
+        }
+        x = match &self.mix {
+            LayerImpl::FullAttention(attn) => {
+                let paged = step
+                    .paged
+                    .map(|(kv_cache, meta)| (kv_cache[step.kv_layer].clone(), *meta));
+                step.kv_layer += 1;
+                let Some(HybridLayerCache::Attention(kv_cache)) = step.cache.get_mut(i) else {
+                    hanzo_ml::bail!("hybrid cache layer {i} is not attention");
+                };
+                let mask = step.mask.get(x.device());
+                let cos_sin = step.cos_sin;
+                self.attn
+                    .apply(&x, |u| attn.forward(u, &mask, cos_sin, kv_cache, paged))?
+            }
+            LayerImpl::LinearAttention(gdn) => {
+                let Some(HybridLayerCache::Recurrent(pool)) = step.cache.get_mut(i) else {
+                    hanzo_ml::bail!("hybrid cache layer {i} is not recurrent");
+                };
+                let slots = (step.slots)()?;
+                let trail = step.trail;
+                self.attn.apply(&x, |u| {
+                    forward_pooled(pool, slots, i, trail, |cache| gdn.forward(u, cache))
+                })?
+            }
+        };
+        self.ffn.apply(&x, |v| self.moe.forward(v))
+    }
 }
 
 pub struct ModelWeights {
     tok_embeddings: Embedding,
     /// Residual streams.
     streams: usize,
-    ngram: Ngram,
     /// The layer whose input the n-gram delta joins.
     ngram_layer: usize,
     layers: Vec<Layer>,
@@ -66,6 +187,160 @@ pub struct ModelWeights {
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     dtype: DType,
+    /// The attention layers' shape and the layers that hold paged K/V (safetensors path).
+    meta: Option<(crate::paged_attention::ModelConfigMetadata, Vec<usize>)>,
+}
+
+/// The hybrid cache: one pool per gated delta-net layer (f32 state, conv history in `dtype`),
+/// then the n-gram history as a side pool.
+fn hybrid_cache(
+    props: &PropsGGUF,
+    attention: &dyn Fn(usize) -> bool,
+    ngram: &Ngram,
+    dtype: DType,
+    device: &Device,
+) -> Result<EitherCache> {
+    let layer_types: Vec<HybridLayerType> = (0..props.block_count)
+        .map(|i| {
+            if attention(i) {
+                HybridLayerType::Attention
+            } else {
+                HybridLayerType::Recurrent
+            }
+        })
+        .collect();
+    let key_dim = props.num_k_heads * props.head_k_dim;
+    let gdn = RecurrentLayerConfig {
+        conv_dim: key_dim * 2 + props.num_v_heads * props.head_v_dim,
+        conv_width: props.conv_kernel,
+        state_dims: vec![props.num_v_heads, props.head_k_dim, props.head_v_dim],
+        conv_dtype: dtype,
+        state_dtype: DType::F32,
+    };
+    let recurrent = layer_types
+        .iter()
+        .filter(|t| **t == HybridLayerType::Recurrent)
+        .count();
+    let mut pools = vec![gdn; recurrent];
+    pools.push(ngram.pool(dtype)?);
+    let cache = HybridCache::new(
+        HybridCacheConfig {
+            layer_types,
+            max_seq_len: props.max_seq_len,
+            pools,
+        },
+        device,
+    )
+    .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {e}")))?;
+    Ok(EitherCache::Hybrid(Arc::new(Mutex::new(cache))))
+}
+
+impl ModelWeights {
+    /// The text model of a Qwen3.8-Flash-Next safetensors snapshot (`vb` at its root, `weights`
+    /// its files, which the n-gram table maps itself): block-FP8 side layers, NVFP4 experts,
+    /// bf16 elsewhere, with the served numerics. The context is the QSA indexer's budget.
+    pub fn new(
+        cfg: &crate::models::qwen4exp::Config,
+        vb: ShardedVarBuilder,
+        weights: &[std::path::PathBuf],
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
+        attention_mechanism: AttentionImplementation,
+        dtype: DType,
+    ) -> Result<Self> {
+        use crate::models::ngram::Fp8Table;
+        use crate::models::qwen4exp::PREFIX;
+        let text = cfg.text();
+        let props = cfg.props();
+        let quant = cfg.quant()?;
+        let device = vb.device().clone();
+        let eps = props.rms_norm_eps;
+        let streams = text.hc_count;
+        let ngram_layer = text.ple_layer()?;
+        let attention = |i: usize| text.attention(i);
+        let lm = vb.pp(PREFIX.trim_end_matches('.'));
+
+        let tok_embeddings = mapper
+            .set_nm_device(lm.pp("embed_tokens"), false)
+            .get((text.vocab_size, text.hidden_size), "weight")?;
+        let output = hanzo_quant::linear_no_bias(
+            text.hidden_size,
+            text.vocab_size,
+            &None,
+            mapper.set_nm_device(vb.pp("lm_head"), false),
+        )?;
+        let head = Mixer::new(
+            &mapper.set_nm_device(lm.pp("hyper_connection_mixer"), false),
+            streams,
+            eps,
+        )?;
+        let rotary = Arc::new(Qwen3VLRotaryEmbedding::new(
+            props.rope_freq_base,
+            props.rot_dim,
+            &device,
+            props.mrope_section.clone(),
+        )?);
+
+        let mut layers = Vec::with_capacity(props.block_count);
+        for i in NiceProgressBar::<_, 'b'>(
+            0..props.block_count,
+            "Loading repeating layers",
+            &new_multi_progress(),
+        ) {
+            let lvb = mapper.set_device(i, lm.pp(format!("layers.{i}")), false);
+            let dev = lvb.device().clone();
+            let rotary = if dev.same_device(&device) {
+                rotary.clone()
+            } else {
+                Arc::new(Qwen3VLRotaryEmbedding::new(
+                    props.rope_freq_base,
+                    props.rot_dim,
+                    &dev,
+                    props.mrope_section.clone(),
+                )?)
+            };
+            layers.push(Layer::new(
+                i,
+                &lvb,
+                cfg,
+                weights,
+                rotary,
+                attention_mechanism,
+                dtype,
+            )?);
+        }
+        let Some(ngram) = layers[ngram_layer].ngram.as_ref() else {
+            hanzo_ml::bail!("layer {ngram_layer} has no n-gram block");
+        };
+        let cache = hybrid_cache(&props, &attention, ngram, dtype, &device)?;
+        Ok(Self {
+            tok_embeddings: Embedding::new(tok_embeddings, text.hidden_size),
+            streams,
+            ngram_layer,
+            layers,
+            head,
+            output,
+            rotary,
+            device,
+            cache,
+            max_seq_len: props.max_seq_len,
+            mapper: Some(mapper),
+            dtype,
+            meta: Some((
+                crate::paged_attention::ModelConfigMetadata {
+                    max_seq_len: props.max_seq_len,
+                    num_layers: props.block_count,
+                    hidden_size: text.hidden_size,
+                    num_kv_heads: props.head_count_kv,
+                    num_attn_heads: props.head_count,
+                    sliding_window: None,
+                    k_head_dim: props.head_dim,
+                    v_head_dim: props.head_dim,
+                    kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+                },
+                (0..props.block_count).filter(|&i| text.attention(i)).collect(),
+            )),
+        })
+    }
 }
 
 impl ModelConfig::FromGGUF for ModelWeights {
@@ -107,7 +382,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let output = gguf_qmm(ct.tensor("output.weight", device)?)?;
         let head = Mixer::from_gguf(&mut ct, "output_hc", streams, eps, device)?;
         let ngram_dev = mapper.device_for(ngram_layer, false).unwrap_or(device);
-        let ngram = Ngram::load(&mut ct, hash, ngram_layer, f64::from(eps), ngram_dev)?;
+        let mut ngram = Some(Ngram::load(&mut ct, hash, ngram_layer, f64::from(eps), ngram_dev)?);
 
         let rotary = Arc::new(Qwen3VLRotaryEmbedding::new(
             props.rope_freq_base,
@@ -141,9 +416,10 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     }
                     AttentionImplementation::Eager => None,
                 };
-                LayerImpl::FullAttention(GatedFullAttention::load(
-                    &mut ct, &prefix, &props, rotary, paged, dev, dtype,
-                )?)
+                LayerImpl::FullAttention(
+                    GatedFullAttention::load(&mut ct, &prefix, &props, rotary, paged, dev, dtype)?
+                        .qsa(),
+                )
             } else {
                 // The output gate is a sigmoid here, where Qwen3.5 uses silu.
                 LayerImpl::LinearAttention(
@@ -155,57 +431,29 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 attn: Branch::from_gguf(&mut ct, &format!("{prefix}.hc_attn"), streams, eps, dev)?,
                 ffn: Branch::from_gguf(&mut ct, &format!("{prefix}.hc_ffn"), streams, eps, dev)?,
                 moe: FusedMoe::from_gguf(&mut ct, &prefix, dev, props.num_experts_per_tok)?,
+                ngram: if i == ngram_layer { ngram.take() } else { None },
             });
         }
 
-        // One pool per gated delta-net layer, then the n-gram history as a side pool. The
-        // recurrent state is f32 (the config's `mamba_ssm_dtype`); the conv history is not.
-        let layer_types: Vec<HybridLayerType> = (0..props.block_count)
-            .map(|i| {
-                if attention(i) {
-                    HybridLayerType::Attention
-                } else {
-                    HybridLayerType::Recurrent
-                }
-            })
-            .collect();
-        let gdn = RecurrentLayerConfig {
-            conv_dim,
-            conv_width: props.conv_kernel,
-            state_dims: vec![props.num_v_heads, props.head_k_dim, props.head_v_dim],
-            conv_dtype: dtype,
-            state_dtype: DType::F32,
+        let Some(ngram) = layers[ngram_layer].ngram.as_ref() else {
+            hanzo_ml::bail!("layer {ngram_layer} has no n-gram block");
         };
-        let recurrent = layer_types
-            .iter()
-            .filter(|t| **t == HybridLayerType::Recurrent)
-            .count();
-        let mut pools = vec![gdn; recurrent];
-        pools.push(ngram.pool(dtype)?);
-        let cache = HybridCache::new(
-            HybridCacheConfig {
-                layer_types,
-                max_seq_len: props.max_seq_len,
-                pools,
-            },
-            device,
-        )
-        .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {e}")))?;
+        let cache = hybrid_cache(&props, &attention, ngram, dtype, device)?;
 
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, props.embedding_length),
             streams,
-            ngram,
             ngram_layer,
             layers,
             head,
             output,
             rotary,
             device: device.clone(),
-            cache: EitherCache::Hybrid(Arc::new(Mutex::new(cache))),
+            cache,
             max_seq_len: props.max_seq_len,
             mapper: Some(mapper),
             dtype,
+            meta: None,
         })
     }
 }
@@ -223,9 +471,10 @@ impl ModelWeights {
     ) -> Result<Tensor> {
         let (b_sz, seq_len) = input_ids.dims2()?;
         let e = self.tok_embeddings.forward(input_ids)?;
-        let g = self
-            .ngram
-            .embed(prior, &input_ids.to_vec2::<u32>()?, e.device())?;
+        let Some(ngram) = self.layers[self.ngram_layer].ngram.as_ref() else {
+            hanzo_ml::bail!("layer {} has no n-gram block", self.ngram_layer);
+        };
+        let g = ngram.embed(prior, &input_ids.to_vec2::<u32>()?, e.device())?;
         let mut x = expand(&e, self.streams)?;
 
         let mut hybrid_cache = self.cache.hybrid();
@@ -233,6 +482,7 @@ impl ModelWeights {
         let state_indices = hybrid_cache.state_indices().cloned();
         let state_indices_host: Option<Vec<u32>> =
             hybrid_cache.state_indices_host().map(|s| s.to_vec());
+        let offset = seqlen_offsets.first().copied().unwrap_or(0);
         let slots = || -> Result<PoolSlots<'_>> {
             if b_sz == 1 {
                 // One sequence reads its slot on the host, with no device sync (as Qwen3.5).
@@ -242,7 +492,7 @@ impl ModelWeights {
                     .ok_or_else(|| hanzo_ml::Error::msg("missing host recurrent state index"))?;
                 Ok(PoolSlots::One {
                     slot: slot as usize,
-                    offset: seqlen_offsets.first().copied().unwrap_or(0),
+                    offset,
                 })
             } else {
                 state_indices
@@ -284,49 +534,23 @@ impl ModelWeights {
             rope_positions,
         )?;
 
-        // The paged cache holds one K/V pair per attention layer, read at its ordinal.
-        let mut kv_layer = 0;
         let side = self.layers.len();
+        let mut step = Step {
+            cache: &mut *hybrid_cache,
+            slots: &slots,
+            trail,
+            mask: &mask,
+            cos_sin: &cos_sin,
+            paged: metadata.as_ref(),
+            kv_layer: 0,
+            ngram: Some(&g),
+            side,
+        };
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 x = mapper.map(x, i)?;
             }
-            if i == self.ngram_layer {
-                let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(side) else {
-                    hanzo_ml::bail!("hybrid cache has no n-gram pool at {side}");
-                };
-                let g = g.to_device(x.device())?;
-                let delta = forward_pooled(pool, slots()?, side, trail, |cache| {
-                    self.ngram.forward(&x, &g, cache)
-                })?;
-                x = (x + delta)?;
-            }
-            x = match &layer.mix {
-                LayerImpl::FullAttention(attn) => {
-                    let paged = metadata
-                        .as_ref()
-                        .map(|(kv_cache, meta)| (kv_cache[kv_layer].clone(), *meta));
-                    kv_layer += 1;
-                    let Some(HybridLayerCache::Attention(kv_cache)) = hybrid_cache.get_mut(i)
-                    else {
-                        hanzo_ml::bail!("hybrid cache layer {i} is not attention");
-                    };
-                    let mask = mask.get(x.device());
-                    layer
-                        .attn
-                        .apply(&x, |u| attn.forward(u, &mask, &cos_sin, kv_cache, paged))?
-                }
-                LayerImpl::LinearAttention(gdn) => {
-                    let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) else {
-                        hanzo_ml::bail!("hybrid cache layer {i} is not recurrent");
-                    };
-                    let slots = slots()?;
-                    layer.attn.apply(&x, |u| {
-                        forward_pooled(pool, slots, i, trail, |cache| gdn.forward(u, cache))
-                    })?
-                }
-            };
-            x = layer.ffn.apply(&x, |v| layer.moe.forward(v))?;
+            x = layer.forward(i, x, &mut step)?;
             // Metal recycles pooled buffers without a completion check; drain each prefill layer
             // as Qwen3.5 does.
             if seq_len > 1 && x.device().is_metal() {
@@ -338,6 +562,80 @@ impl ModelWeights {
         let h = self.head.mix(&self.head.norm(&x)?)?;
         let h = extract_logits(&h, context_lens)?;
         self.output.forward(&h.contiguous()?)
+    }
+}
+
+impl crate::pipeline::IsqModel for ModelWeights {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
+        let mapper = self.mapper.as_deref().expect("a device mapper");
+        (Vec::new(), mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        Vec::new()
+    }
+}
+
+impl crate::amoe::AnyMoeBaseModelMixin for ModelWeights {}
+
+impl crate::speculative::SpeculativeTargetMixin for ModelWeights {}
+
+impl crate::pipeline::NormalModel for ModelWeights {
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
+    ) -> Result<Tensor> {
+        let metadata = ctx.paged_metadata();
+        self.forward(
+            input_ids,
+            ctx.prior(),
+            ctx.seqlen_offsets(),
+            ctx.context_lens_vec(),
+            metadata,
+        )
+    }
+    fn xlora_forward(
+        &self,
+        _input_ids: &Tensor,
+        _input_ids_full: &Tensor,
+        _seqlen_offsets: &[usize],
+        _seqlen_offsets_full: &[usize],
+        _no_kv_cache: bool,
+        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        _flash_params: &crate::pipeline::text_models_inputs_processor::FlashParams,
+        _flash_params_full: &crate::pipeline::text_models_inputs_processor::FlashParams,
+    ) -> Result<Tensor> {
+        hanzo_ml::bail!("qwen4exp does not support X-LoRA")
+    }
+    fn cache(&self) -> &EitherCache {
+        &self.cache
+    }
+    fn cache_mut(&mut self) -> &mut EitherCache {
+        &mut self.cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        false
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+    fn config(&self) -> &crate::paged_attention::ModelConfigMetadata {
+        &self.meta.as_ref().expect("a safetensors qwen4exp").0
+    }
+    fn model_config(&self) -> Arc<dyn crate::paged_attention::ModelConfigLike + Send + Sync> {
+        let (meta, layers) = self.meta.as_ref().expect("a safetensors qwen4exp");
+        Arc::new(crate::paged_attention::KvLayers::new(meta.clone(), layers.clone()))
     }
 }
 
@@ -595,6 +893,342 @@ mod tests {
                 "chunks {chunks:?}: worst relative error {worst:e}"
             );
         }
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The safetensors constructor
+    // ---------------------------------------------------------------------------------------
+
+    use crate::models::qwen4exp::manifest;
+    use crate::models::qwen4exp::tests::{
+        assert_close, config, fixture, gpu, rows, snapshot, tiny_checkpoint, tiny_config,
+        vb as snapshot_vb, weights, Recorder, Tol, CHUNKS,
+    };
+
+    fn tiny_model(dev: &Device, dtype: DType) -> Result<(ModelWeights, std::collections::BTreeSet<String>, tempfile::TempDir)> {
+        let dir = tempfile::tempdir().map_err(hanzo_ml::Error::msg)?;
+        let files = tiny_checkpoint(dir.path())?;
+        let (vb, names) = Recorder::over(&files, dtype, dev)?;
+        let model = ModelWeights::new(
+            &tiny_config(),
+            vb,
+            &files,
+            Box::new(DummyDeviceMapper { nm_device: dev.clone() }),
+            AttentionImplementation::Eager,
+            dtype,
+        )?;
+        {
+            let mut cache = model.cache.hybrid();
+            let slot = cache.allocate_seq().expect("a free recurrent slot") as u32;
+            cache.set_state_indices(Some(Tensor::new(&[slot], dev)?));
+            cache.set_state_indices_host(Some(vec![slot]));
+        }
+        let read = names.lock().unwrap().clone();
+        Ok((model, read, dir))
+    }
+
+    /// The loader reads exactly the manifest, apart from the table the n-gram block maps itself.
+    #[test]
+    fn loader_takes_the_manifest() -> Result<()> {
+        let mut devs = vec![Device::Cpu];
+        if let Ok(d) = Device::new_cuda(0) {
+            devs.push(d);
+        }
+        for dev in devs {
+            let (_, read, _dir) = tiny_model(&dev, DType::BF16)?;
+            let want: std::collections::BTreeSet<String> = manifest(&tiny_config().text_config)?
+                .into_iter()
+                .map(|e| e.name)
+                .filter(|n| !n.contains(".shard_") && !n.ends_with("ngram_embedding.weight_scale"))
+                .collect();
+            let missing: Vec<_> = want.difference(&read).collect();
+            let extra: Vec<_> = read.difference(&want).collect();
+            assert!(missing.is_empty() && extra.is_empty(), "{dev:?}: missing {missing:?}, extra {extra:?}");
+        }
+        Ok(())
+    }
+
+    fn tiny_last_logits(toks: &[u32], chunks: &[usize], dtype: DType) -> Result<Vec<f32>> {
+        let (model, _, _dir) = tiny_model(&Device::Cpu, dtype)?;
+        let (mut at, mut logits) = (0, None);
+        for &len in chunks {
+            let ids = Tensor::new(&toks[at..at + len], &Device::Cpu)?.unsqueeze(0)?;
+            let prior = vec![toks[at.saturating_sub(2)..at].to_vec()];
+            logits = Some(model.forward(&ids, &prior, &[at], vec![(len - 1, 1)], None)?);
+            at += len;
+        }
+        logits.expect("a chunk").to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()
+    }
+
+    /// Chunks and single steps carry every cache of the safetensors model as one pass does.
+    #[test]
+    fn tiny_chunked_matches_one_pass() -> Result<()> {
+        const T: [u32; 7] = [1, 5, 9, 3, 7, 2, 11];
+        let whole = tiny_last_logits(&T, &[T.len()], DType::F32)?;
+        assert!(whole.iter().all(|v| v.is_finite()));
+        let runs: [(&[usize], f32); 4] = [(&[3, 4], 1e-5), (&[2, 2, 3], 1e-5), (&[6, 1], 2e-3), (&[1; 7], 2e-3)];
+        for (chunks, bound) in runs {
+            let got = tiny_last_logits(&T, chunks, DType::F32)?;
+            let worst = got
+                .iter()
+                .zip(&whole)
+                .map(|(a, b)| (a - b).abs() / (1.0 + b.abs()))
+                .fold(0f32, f32::max);
+            assert!(worst <= bound, "chunks {chunks:?}: worst relative error {worst:e}");
+        }
+        Ok(())
+    }
+
+    fn tiny_json() -> String {
+        serde_json::to_string(&tiny_config()).expect("config serializes")
+    }
+
+    #[test]
+    fn from_causal_lm_name_maps_qwen4exp() {
+        use crate::pipeline::NormalLoaderType;
+        let t = NormalLoaderType::from_causal_lm_name("Qwen4ExpForConditionalGeneration").unwrap();
+        assert_eq!(t, NormalLoaderType::Qwen4Exp);
+        assert_eq!(t.to_string(), "qwen4exp");
+        assert_eq!("qwen4exp".parse::<NormalLoaderType>().unwrap(), NormalLoaderType::Qwen4Exp);
+    }
+
+    /// The registered loader builds the tiny checkpoint from its config.json and runs it through
+    /// `NormalModel::forward` to the same logits as the model built directly.
+    #[test]
+    fn normal_loader_runs_tiny_checkpoint() -> Result<()> {
+        use crate::pipeline::loaders::{NormalLoadingMetadata, NormalModelLoader};
+        use crate::pipeline::text_models_inputs_processor::FlashParams;
+        use crate::pipeline::{ModelForwardContext, NormalModel};
+        let dev = Device::Cpu;
+        let dir = tempfile::tempdir().map_err(hanzo_ml::Error::msg)?;
+        let files = tiny_checkpoint(dir.path())?;
+        let vb = unsafe {
+            hanzo_quant::ShardedSafeTensors::sharded(&files, DType::F32, &dev, None, Arc::new(|_| true))?
+        };
+        let meta = NormalLoadingMetadata {
+            weights: files.clone(),
+            mapper: Box::new(DummyDeviceMapper { nm_device: dev.clone() }),
+            loading_isq: false,
+            real_device: dev.clone(),
+            multi_progress: Arc::new(indicatif::MultiProgress::new()),
+            matformer_slicing_config: None,
+        };
+        let model = crate::pipeline::Qwen4ExpLoader
+            .load(&tiny_json(), vb, meta, AttentionImplementation::Eager)
+            .map_err(hanzo_ml::Error::msg)?;
+        assert_eq!(model.config().num_layers, 4);
+        assert_eq!(model.model_config().kv_layers(), vec![3]);
+        {
+            let mut cache = model.cache().hybrid();
+            let slot = cache.allocate_seq().expect("a free recurrent slot") as u32;
+            cache.set_state_indices(Some(Tensor::new(&[slot], &dev)?));
+            cache.set_state_indices_host(Some(vec![slot]));
+        }
+        const T: [u32; 5] = [1, 5, 9, 3, 7];
+        let ids = Tensor::new(&T, &dev)?.unsqueeze(0)?;
+        let (offsets, lens, pos, prior) = ([0usize], [(T.len() - 1, 1)], [0usize], [vec![]]);
+        let flash = FlashParams::empty(true);
+        let mut ctx = ModelForwardContext::new(&offsets, &lens, &pos, None, &flash).with_prior(&prior);
+        let got = NormalModel::forward(model.as_ref(), &ids, &mut ctx)?;
+        let want = tiny_last_logits(&T, &[T.len()], DType::F32)?;
+        let got = got.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(got, want);
+        Ok(())
+    }
+
+    /// Only the attention layers hold paged K/V, and the device charge is the manifest's device
+    /// entries: the n-gram table and hash are host-side and never charged.
+    #[test]
+    fn hybrid_kv_charges_attention_layers_only() -> Result<()> {
+        use crate::pipeline::loaders::DeviceMappedModelLoader;
+        let json = tiny_json();
+        let loader = crate::pipeline::Qwen4ExpLoader;
+        let kv = loader.model_config(&json).map_err(hanzo_ml::Error::msg)?.kv_layers();
+        let want: Vec<usize> = (0..4).filter(|&i| tiny_config().text().attention(i)).collect();
+        assert_eq!(kv, want);
+        assert_eq!(kv, vec![3]);
+        Ok(())
+    }
+
+    /// The loader's charge for the real snapshot, from its config alone: the manifest's device
+    /// bytes plus what is held wider on the device (f32 norms and GDN side tensors, the banks'
+    /// alpha and global scale), the attention layers' KV per token, and one sequence's state.
+    #[test]
+    #[ignore = "reads the Qwen3.8-Flash-Next snapshot's config"]
+    fn qwen4exp_accounting_matches_checkpoint() -> Result<()> {
+        use crate::pipeline::loaders::DeviceMappedModelLoader;
+        let json = std::fs::read_to_string(snapshot().join("config.json")).map_err(hanzo_ml::Error::wrap)?;
+        let (layers, rest) = crate::pipeline::Qwen4ExpLoader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
+        let estimate = layers.iter().sum::<usize>() + rest;
+        println!("estimate {estimate} B ({:.3} GiB)", estimate as f64 / (1u64 << 30) as f64);
+        assert!(
+            (74_895_296_000..=74_895_296_000 + (32 << 20)).contains(&estimate),
+            "estimate {estimate}"
+        );
+        let per_token = crate::pipeline::Qwen4ExpLoader
+            .model_config(&json)
+            .map_err(hanzo_ml::Error::msg)?
+            .kv_cache_elements_per_token();
+        assert_eq!(per_token * DType::BF16.size_in_bytes(), 24_576);
+        assert_eq!(per_token * DType::F8E4M3.size_in_bytes(), 12_288);
+        assert_eq!(config(&snapshot()).text().state_bytes_per_sequence(), 116_379_648);
+        Ok(())
+    }
+
+    #[test]
+    fn table_never_charged() -> Result<()> {
+        use crate::models::qwen4exp::Role;
+        let json = tiny_json();
+        let (layers, rest) = crate::pipeline::Qwen4ExpLoader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
+        let entries = manifest(tiny_config().text())?;
+        let host: usize = entries.iter().filter(|e| e.role == Role::Host).map(|e| e.bytes()).sum();
+        let table: usize = entries
+            .iter()
+            .filter(|e| e.name.contains("ngram_embedding"))
+            .map(|e| e.bytes())
+            .sum();
+        assert!(table > 0 && host >= table);
+        let pure: Vec<_> = entries.into_iter().filter(|e| e.role == Role::Device).collect();
+        let charged: usize = layers.iter().sum::<usize>() + rest;
+        let device: usize = pure.iter().map(crate::pipeline::Qwen4ExpLoader::device_bytes).sum();
+        assert_eq!(charged, device, "every charged byte is a device entry's");
+        Ok(())
+    }
+
+    /// The loader's per-layer estimate is what loading the tiny model on CUDA allocates: the
+    /// default mempool's used bytes after the load, less before, within allocator rounding.
+    #[test]
+    #[cfg(feature = "cuda")]
+    fn loader_estimate_equals_allocation() -> Result<()> {
+        use hanzo_ml::cuda_backend::cudarc::driver::sys;
+        let Ok(dev) = Device::new_cuda(0) else { return Ok(()) };
+        let Device::Cuda(cu) = &dev else { unreachable!() };
+        let used = || -> u64 {
+            cu.synchronize().expect("sync");
+            let mut pool: sys::CUmemoryPool = std::ptr::null_mut();
+            let mut v = 0u64;
+            unsafe {
+                sys::cuDeviceGetDefaultMemPool(&mut pool, cu.cuda_stream().context().cu_device());
+                sys::cuMemPoolGetAttribute(
+                    pool,
+                    sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_USED_MEM_CURRENT,
+                    (&mut v as *mut u64).cast(),
+                );
+            }
+            v
+        };
+        let json = tiny_json();
+        let (layers, rest) = crate::pipeline::Qwen4ExpLoader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
+        let estimate = (layers.iter().sum::<usize>() + rest) as u64;
+        let before = used();
+        let (model, _, _dir) = tiny_model(&dev, DType::BF16)?;
+        let cache = cache_bytes(&model)?;
+        let after = used();
+        let weights = after - before - cache;
+        let tensors = manifest(tiny_config().text())?.len() as u64;
+        println!("estimate {estimate}, allocated {weights} (+{cache} cache) over {tensors} tensors");
+        // the pool rounds each allocation up; nothing beyond that may differ
+        assert!(weights >= estimate, "allocated {weights} under the estimate {estimate}");
+        assert!(weights - estimate <= tensors * 512, "allocated {weights}, estimate {estimate}");
+        drop(model);
+        Ok(())
+    }
+
+    /// Device bytes the model's recurrent pools hold (K/V grows on first use).
+    #[cfg(feature = "cuda")]
+    fn cache_bytes(model: &ModelWeights) -> Result<u64> {
+        let cache = model.cache.hybrid();
+        let bytes = |t: &Tensor| (t.elem_count() * t.dtype().size_in_bytes()) as u64;
+        Ok(cache
+            .caches
+            .iter()
+            .filter_map(|c| c.as_recurrent_pool())
+            .map(|p| bytes(&p.conv_state) + bytes(&p.recurrent_state))
+            .sum())
+    }
+
+    /// Layers 0-3 of the real snapshot one at a time, each over [16, 7, 1] and dropped before
+    /// the next loads, then the head: the streams after each layer and the logits.
+    #[test]
+    #[ignore = "reads the Qwen3.8-Flash-Next snapshot; needs a CUDA device"]
+    fn golden_chain() -> Result<()> {
+        let g = gpu(1.55);
+        let dev = g.dev.clone();
+        let cfg = config(&snapshot());
+        let props = cfg.props();
+        let text = cfg.text();
+        let files = weights(&snapshot());
+        let lm = snapshot_vb(&dev)?.pp("model.language_model");
+        let rotary = Arc::new(Qwen3VLRotaryEmbedding::new(props.rope_freq_base, props.rot_dim, &dev, props.mrope_section.clone())?);
+        let layers = 4;
+        let attention = |i: usize| text.attention(i);
+        let gdn = RecurrentLayerConfig {
+            conv_dim: 2 * props.num_k_heads * props.head_k_dim + props.num_v_heads * props.head_v_dim,
+            conv_width: props.conv_kernel,
+            state_dims: vec![props.num_v_heads, props.head_k_dim, props.head_v_dim],
+            conv_dtype: DType::BF16,
+            state_dtype: DType::F32,
+        };
+        let side = RecurrentLayerConfig {
+            conv_dim: text.hc_count * text.hidden_size,
+            conv_width: (text.ple_conv_kernel_size - 1) * text.ngram_size,
+            state_dims: vec![],
+            conv_dtype: DType::BF16,
+            state_dtype: DType::BF16,
+        };
+        let types: Vec<_> = (0..layers)
+            .map(|i| if attention(i) { HybridLayerType::Attention } else { HybridLayerType::Recurrent })
+            .collect();
+        let mut pools = vec![gdn; types.iter().filter(|t| **t == HybridLayerType::Recurrent).count()];
+        pools.push(side);
+        let mut cache = HybridCache::new(HybridCacheConfig { layer_types: types, max_seq_len: props.max_seq_len, pools }, &dev)
+            .map_err(|e| hanzo_ml::Error::Msg(e.to_string()))?;
+        let slot = cache.allocate_seq().expect("slot");
+        let toks = crate::models::qwen4exp::tests::tokens();
+        let mut x = expand(&fixture("embed").to_device(&dev)?.unsqueeze(0)?, text.hc_count)?;
+        for i in 0..layers {
+            let layer = Layer::new(i, &lm.pp(format!("layers.{i}")), &cfg, &files, rotary.clone(), AttentionImplementation::Eager, DType::BF16)?;
+            let mut outs = vec![];
+            let mut at = 0;
+            for len in CHUNKS {
+                let xi = x.narrow(1, at, len)?;
+                let ids = Tensor::new(&toks[at..at + len], &dev)?.unsqueeze(0)?;
+                let offsets = [at];
+                let mask = CausalMasker.make_causal_mask(&ids, &offsets as &dyn PastKvLenCache, DType::BF16, &CausalMaskConfig::gguf())?;
+                let mask = DeviceMappedMask::from_single(mask);
+                let cos_sin = text_mrope(&rotary, &dev, &offsets, len, DType::BF16, None)?;
+                let g = match &layer.ngram {
+                    Some(ng) => Some(ng.embed(&[toks[at.saturating_sub(2)..at].to_vec()], &[toks[at..at + len].to_vec()], &dev)?),
+                    None => None,
+                };
+                let slots = move || Ok(PoolSlots::One { slot, offset: at });
+                let mut step = Step {
+                    cache: &mut cache,
+                    slots: &slots,
+                    trail: false,
+                    mask: &mask,
+                    cos_sin: &cos_sin,
+                    paged: None,
+                    kv_layer: 0,
+                    ngram: g.as_ref(),
+                    side: layers,
+                };
+                outs.push(layer.forward(i, xi, &mut step)?);
+                at += len;
+            }
+            x = Tensor::cat(&outs, 1)?;
+            let want = fixture(&format!("l{}.x", i + 1));
+            assert_close(&format!("streams after layer {i}"), &x.reshape((24, ()))?, &want, Tol::most(8.0, 0.99, 0.9995));
+            drop(layer);
+        }
+        let head = Mixer::new(&lm.pp("hyper_connection_mixer"), text.hc_count, props.rms_norm_eps)?;
+        let h = head.mix(&head.norm(&x)?)?.squeeze(0)?;
+        assert_close("head.h", &h, &fixture("head.h"), Tol::ulps(4.0));
+        let w = rows("lm_head.weight", 0..8192).to_device(&dev)?;
+        let lm_head = hanzo_quant::UnquantLinear::new(hanzo_quant::QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(w, None)))?;
+        let logits = lm_head.forward(&h)?;
+        assert_close("head.logits", &logits, &fixture("head.logits"), Tol::ulps(4.0));
         Ok(())
     }
 }

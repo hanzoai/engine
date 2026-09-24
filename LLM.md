@@ -403,6 +403,46 @@ Avoid returning TODOs.
   bit-exact on CPU. `sdpa`/`sdpa_runtime` online-softmax is the structural cure for the 8B
   flash-collapse. See `ml/LLM.md` for the DSL and env-var details.
 
+## Qwen3.8-Flash-Next (`qwen4exp`) — native and GGUF
+
+- **Two doors, one model.** `Qwen4ExpForConditionalGeneration` / `model_type: qwen4_exp` is the
+  native safetensors checkpoint (`Qwen4ExpLoader`, `pipeline/loaders/normal_loaders.rs`); the GGUF
+  arch string `qwen4exp` is the same tower quantized upstream (`pipeline/gguf.rs`). Both reach
+  `models/quantized_qwen4exp::ModelWeights`, which is the ONLY place the layers are built.
+- **The manifest is the contract.** `models/qwen4exp::manifest` derives every tensor the text model
+  reads — name, stored dtype, shape, and a `Role` of `Device` or `Host` — from the config alone. The
+  checkpoint's headers must equal it (apart from the `DEFERRED` prefixes), so a silent shape or dtype
+  drift in a release checkpoint is a load failure naming the tensor, not a wrong logit.
+  `manifest_is_closed_under_config` proves the derivation is total, `loader_estimate_equals_allocation`
+  that the loader reserves exactly what the manifest sums, and `deferrals_match_their_prefixes` that
+  what is skipped is skipped on purpose.
+- **What is where.** Routed experts stay PACKED NVFP4 (E2M1 codes, one E4M3 scale per 16, an F32
+  global scale) and are read straight into the MoE kernel — nothing dequantizes 71 GB to walk it.
+  Dense side layers are block FP8 (E4M3, one F32 scale per 128x128). The rest is BF16. Layer 1's PLE
+  n-gram table is `Role::Host`: it is hashed and looked up in an mmap'd buffer, never uploaded, and
+  never charged to the KV budget (`table_never_charged`,
+  `hybrid_kv_charges_attention_layers_only` — only the full-attention layers are).
+- **W4A4, matched to the server, not to an ideal.** `hanzo-quant/src/quantize/` reproduces vLLM's
+  *served* activation quantizers bit-exactly — per-token/per-128-group FP8 in the three forms the
+  compiled graph uses, and per-16 NVFP4 with the served fast-math formula. On CUDA that means the
+  approximate instructions (`div.full.f32`, `rcp.approx.ftz.f32`) as inline PTX in `kernels/quantize`,
+  built WITHOUT fast-math so only the places the server approximates are approximate. On CPU the same
+  formulas use IEEE divide/reciprocal and differ in the last bit — which is why the CPU golden is a
+  transcriptor and the GPU vectors are the arbiter.
+- **The reference is the server, not the module source.** `scripts/qwen4exp_golden.py` runs 24 tokens
+  through the embedding, layers 0-3 (three gated-delta-nets, then attention), the final
+  hyper-connection mixer and lm_head rows [0, 8192) and writes every intermediate to
+  `hanzo-engine/tests/fixtures/qwen4exp.safetensors`. It rounds to bf16 ONLY where a served kernel
+  stores (`tl.store` or a custom kernel's output); between store points arithmetic is f32, because
+  inductor fuses away the eager casts. Every kernel it transcribes is listed with its sha256 and the
+  script refuses to run when one differs. `scripts/qwen4exp_vectors.py` then runs the SERVED kernels
+  on the same inputs — one layer at a time, at most 1.2 GiB of device memory, FlashInfer JIT refused
+  — so it measures the golden's gap without disturbing a running server.
+- **Deferred, and it shows.** `self_attn.indexer.` (M2: QSA sparse attention) and `mtp.` (M3:
+  multi-token prediction) are not read, so a native load attends densely through every key: the
+  logits match, the tokens/sec do not yet. The `qsa.rs` and `hyper.rs` machinery is already there for
+  the full-attention and mixer paths.
+
 ## Kernel tuning + new-model onboarding: the roofline-driven process (SOTA loop)
 A repeatable, measurement-first process. The scar tissue behind every step is in `ml/LLM.md`
 ("Vulkan PREFILL: the Q6_K lever, the roofline method..."). The rule: **measure in-engine, never trust

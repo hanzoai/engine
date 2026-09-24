@@ -27,6 +27,8 @@ pub struct BlockwiseFP8Linear {
     bias: Option<Tensor>,
     dequant_dtype: DType,
     weight_block_size: Vec<usize>,
+    /// The served activation quantizer this layer's input takes.
+    act: crate::quantize::Fp8Mode,
 }
 
 impl QuantMethod for BlockwiseFP8Linear {
@@ -58,6 +60,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                 bias,
                 dequant_dtype,
                 weight_block_size,
+                act: crate::quantize::Fp8Mode::Linear,
             }),
         }
     }
@@ -92,6 +95,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                     &self.weight,
                     &self.weight_scale_inv,
                     &self.weight_block_size,
+                    self.act,
                 )?;
 
                 // Reshape back to original batch dimensions
@@ -112,14 +116,18 @@ impl QuantMethod for BlockwiseFP8Linear {
             }
         }
 
-        // Fallback: dequantize and use unquantized matmul
-        let weight = self.dequantize_w()?;
-        // Dispatch to unquant. This uses some cublaslt for bias & on cuda always, so it is better
-        let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
-            weight,
-            self.bias.clone(),
-        )))?;
-        unquant.forward(x)
+        // CPU: the same W8A8 math with IEEE arithmetic, both operands dequantized exactly to f32.
+        let y = ops::w8a8_reference(
+            x,
+            &self.weight,
+            &self.weight_scale_inv,
+            &self.weight_block_size,
+            self.act,
+        )?;
+        match &self.bias {
+            Some(bias) => y.broadcast_add(bias),
+            None => Ok(y),
+        }
     }
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
@@ -147,54 +155,42 @@ impl QuantMethod for BlockwiseFP8Linear {
             }
         }
 
-        // Fallback: dequantize weights and compute manually
-        let weight = self.dequantize_w()?;
-
-        // Expected shapes:
-        // - x: (n_tokens, 1, hidden_dim) or (n_tokens, n_experts_per_tok, hidden_dim)
-        // - indices: (n_tokens, n_experts_per_tok)
-        // - weight: (n_experts, out_features, in_features)
-
-        let (n_tokens, n_experts_per_tok) = indices.dims2()?;
-        let (_n_experts, out_features, _in_features) = weight.dims3()?;
-
-        // Flatten indices to select expert weights
-        let flat_indices = indices.flatten_all()?;
-
-        // Select weights for each (token, expert) pair
-        // weight_selected: (n_tokens * n_experts_per_tok, out_features, in_features)
-        let weight_selected = weight.index_select(&flat_indices, 0)?;
-
-        // Reshape x for batched matmul
-        let x_expanded = if x.dims().len() == 3 && x.dim(1)? == 1 {
-            // x is (n_tokens, 1, hidden_dim) - broadcast to (n_tokens * n_experts_per_tok, 1, hidden_dim)
-            x.squeeze(1)?
-                .unsqueeze(1)?
-                .broadcast_as((n_tokens * n_experts_per_tok, 1, x.dim(2)?))?
-                .contiguous()?
-        } else if x.dims().len() == 3 {
-            // x is (n_tokens, n_experts_per_tok, hidden_dim)
-            x.reshape((n_tokens * n_experts_per_tok, 1, x.dim(2)?))?
-        } else {
-            // x is (n_tokens, hidden_dim)
-            x.unsqueeze(1)?
-                .broadcast_as((n_tokens * n_experts_per_tok, 1, x.dim(1)?))?
-                .contiguous()?
-        };
-
-        // Batched matmul: (batch, 1, k) @ (batch, k, n).T = (batch, 1, n)
-        // weight_selected is (batch, n, k), so we need to transpose last two dims
-        let weight_t = weight_selected.transpose(1, 2)?;
-        let result = x_expanded.matmul(&weight_t)?;
-
-        // Reshape result to (n_tokens, n_experts_per_tok, out_features)
-        let result = result.reshape((n_tokens, n_experts_per_tok, out_features))?;
-
-        // Apply bias if present
-        if let Some(ref bias) = self.bias {
-            result.broadcast_add(bias)
-        } else {
-            Ok(result)
+        // CPU: quantize each input row as the MoE gather does, dequantize both operands exactly
+        // to f32 and multiply per (token, slot) by its expert.
+        let (n_tokens, topk) = indices.dims2()?;
+        let (n_experts, out_features, k) = self.weight.dims3()?;
+        let rows = x.elem_count() / k;
+        let (qa, sa) = crate::quantize::fp8(&x.reshape((rows, k))?, crate::quantize::Fp8Mode::Gather)?;
+        let a = qa
+            .to_dtype(DType::F32)?
+            .reshape((rows, k / 128, 128))?
+            .broadcast_mul(&sa.unsqueeze(2)?)?
+            .reshape((n_tokens, rows / n_tokens, k))?;
+        let experts = (0..n_experts)
+            .map(|e| {
+                ops::fp8_blockwise_dequantize(
+                    &self.weight.get(e)?,
+                    &self.weight_scale_inv.get(e)?,
+                    self.weight_block_size.clone(),
+                    DType::F32,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let ids = indices.to_dtype(DType::U32)?.to_vec2::<u32>()?;
+        let mut out = Vec::with_capacity(n_tokens * topk);
+        for (t, row) in ids.iter().enumerate() {
+            for (j, &e) in row.iter().enumerate() {
+                let r = if a.dim(1)? > 1 { j } else { 0 };
+                let xr = a.get(t)?.get(r)?.unsqueeze(0)?;
+                out.push(xr.matmul(&experts[e as usize].t()?)?.squeeze(0)?);
+            }
+        }
+        let result = Tensor::stack(&out, 0)?
+            .reshape((n_tokens, topk, out_features))?
+            .to_dtype(x.dtype())?;
+        match &self.bias {
+            Some(bias) => result.broadcast_add(bias),
+            None => Ok(result),
         }
     }
 
@@ -416,12 +412,32 @@ pub fn blockwise_fp8_moe(
     weight_block_size: Vec<usize>,
     dequant_dtype: DType,
 ) -> Result<Arc<dyn QuantMethod>> {
+    blockwise_fp8_act(
+        weight,
+        weight_scale_inv,
+        weight_block_size,
+        dequant_dtype,
+        crate::quantize::Fp8Mode::Linear,
+    )
+}
+
+/// A block-FP8 layer whose input takes the served activation quantizer `act`: `Linear` for a
+/// GEMM of the compiled graph, `Eager` for one inside a custom op (vLLM's shared expert inside
+/// `moe_forward_shared` quantizes with the standalone QuantFP8 kernel).
+pub fn blockwise_fp8_act(
+    weight: Tensor,
+    weight_scale_inv: Tensor,
+    weight_block_size: Vec<usize>,
+    dequant_dtype: DType,
+    act: crate::quantize::Fp8Mode,
+) -> Result<Arc<dyn QuantMethod>> {
     Ok(Arc::new(BlockwiseFP8Linear {
         weight,
         weight_scale_inv,
         bias: None,
         dequant_dtype,
         weight_block_size,
+        act,
     }))
 }
 
@@ -475,5 +491,6 @@ pub fn blockwise_fp8_linear_b(
         weight_scale_inv,
         bias,
         dequant_dtype: vb.dtype(),
+        act: crate::quantize::Fp8Mode::Linear,
     }))
 }

@@ -46,8 +46,12 @@ pub fn load_modelopt_linear(
             Default::default(),
             vb.clone(),
         ),
+        // Route by the tensors present, not the config: a ModelOpt checkpoint may carry
+        // block-FP8 side layers its (stale) `exclude_modules` still lists as unquantized.
         _ => {
-            if vb.contains_tensor("weight_scale") && vb.contains_tensor("weight") {
+            if !vb.contains_tensor("weight") {
+                crate::linear_b(in_dim, out_dim, bias, &None, vb.clone())
+            } else if vb.contains_tensor("weight_scale") {
                 if vb.contains_tensor("weight_scale_2") {
                     crate::NVFP4Layer::linear_b(in_dim, out_dim, bias, vb.clone())
                 } else {
@@ -60,11 +64,75 @@ pub fn load_modelopt_linear(
                         vb.clone(),
                     )
                 }
+            } else if vb.contains_tensor("weight_scale_inv") {
+                modelopt_block_fp8(in_dim, out_dim, bias, vb)
             } else {
-                crate::linear_b(in_dim, out_dim, bias, &None, vb.clone())
+                modelopt_unquantized(in_dim, out_dim, bias, vb)
             }
         }
     }
+}
+
+/// A DeepSeek-layout block-FP8 module in a ModelOpt checkpoint: F8E4M3 `weight` and a
+/// `weight_scale_inv` of one scale per 128x128 block, stored F32 or BF16.
+fn modelopt_block_fp8(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    vb: &ShardedVarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    let scale = vb
+        .clone()
+        .set_device(Device::Cpu)
+        .get_unchecked_dtype("weight_scale_inv", hanzo_ml::DType::F32)?;
+    let (rows, cols) = scale.dims2()?;
+    if rows != out_dim.div_ceil(128) || cols != in_dim.div_ceil(128) {
+        hanzo_ml::bail!(
+            "{}: weight_scale_inv {rows}x{cols} is not 128x128 blocks over a {out_dim}x{in_dim} weight",
+            vb.prefix()
+        );
+    }
+    let config = QuantizedConfig::Fp8 {
+        weight_block_size: Some(vec![128, 128]),
+    };
+    blockwise_fp8_linear_b(in_dim, out_dim, &config, bias, Default::default(), vb.clone())
+}
+
+/// A module with neither scale: its weight must be a float. An FP8 or packed weight here has
+/// lost its scale, and reading its codes as values would run silently wrong.
+fn modelopt_unquantized(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    vb: &ShardedVarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    // Loaded at the builder's dtype: floats convert, FP8 and integer storage keep their dtype.
+    let weight = vb.get_unchecked_dtype("weight", vb.dtype())?;
+    if !weight.dtype().is_float() || weight.dtype() == hanzo_ml::DType::F8E4M3 {
+        hanzo_ml::bail!(
+            "{}.weight is {:?} with no weight_scale or weight_scale_inv",
+            vb.prefix(),
+            weight.dtype()
+        );
+    }
+    if weight.dims() != [out_dim, in_dim] {
+        hanzo_ml::bail!(
+            "{}.weight is {:?}, expected [{out_dim}, {in_dim}]",
+            vb.prefix(),
+            weight.dims()
+        );
+    }
+    let weight = weight.to_dtype(vb.dtype())?;
+    let weight =
+        crate::lora::merge_lora_weights(vb, weight, in_dim, out_dim, Default::default())?;
+    let bias = if bias {
+        Some(vb.get((out_dim,), "bias")?)
+    } else {
+        None
+    };
+    Ok(Arc::new(<UnquantLinear as QuantMethod>::new(
+        QuantMethodConfig::Unquantized(Linear::new(weight, bias)),
+    )?))
 }
 
 /// This layer has a weight that is parallelized along the input dimension,
@@ -2149,6 +2217,113 @@ pub fn compute_n_kv_groups(
 #[cfg(test)]
 mod tests {
     use super::validate_tp_head_layout;
+
+    mod modelopt {
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        use hanzo_ml::{DType, Device, Result, Tensor};
+
+        use crate::{
+            ColumnParallelLayer, Comm, Id, QuantMethod, QuantizedConfig, RowParallelLayer,
+            ShardedSafeTensors, ShardedVarBuilder,
+        };
+
+        const N: usize = 256;
+        const K: usize = 384;
+
+        fn config() -> QuantizedConfig {
+            QuantizedConfig::ModelOpt {
+                quant_algo: Some("MIXED_PRECISION".into()),
+                quantized_layers: HashMap::new(),
+            }
+        }
+
+        /// One module `m` in its own file: an F8E4M3 weight and the given extra tensors.
+        fn file(tag: &str, extra: &[(&str, Tensor)]) -> Result<(ShardedVarBuilder, Tensor)> {
+            let w = (Tensor::randn(0f32, 1f32, (N, K), &Device::Cpu)? * 40.0)?
+                .clamp(-448f32, 448f32)?
+                .to_dtype(DType::F8E4M3)?;
+            let mut st = HashMap::from([("m.weight".to_string(), w.clone())]);
+            for (name, t) in extra {
+                st.insert(format!("m.{name}"), t.clone());
+            }
+            let path = std::env::temp_dir().join(format!(
+                "hanzo-modelopt-{}-{tag}.safetensors",
+                std::process::id()
+            ));
+            hanzo_ml::safetensors::save(&st, &path)?;
+            let vb = unsafe {
+                ShardedSafeTensors::sharded(
+                    &[&path],
+                    DType::F32,
+                    &Device::Cpu,
+                    None,
+                    Arc::new(|_| true),
+                )?
+            };
+            Ok((vb.pp("m"), w))
+        }
+
+        fn scale(dtype: DType) -> Result<Tensor> {
+            Tensor::rand(0.001f32, 0.01f32, (N / 128, K / 128), &Device::Cpu)?.to_dtype(dtype)
+        }
+
+        /// A ModelOpt `weight_scale_inv` layer is block FP8 through every loader, and computes
+        /// the dequantized weight's matmul. Before the fix it loaded as the raw FP8 codes.
+        #[test]
+        fn modelopt_block_fp8_routes_to_blockwise() -> Result<()> {
+            let comm = Arc::new(Comm::from_device(Id::new(), &Device::Cpu, 0, 1)?);
+            let cfg = Some(config());
+            let x = Tensor::randn(0f32, 1f32, (3, K), &Device::Cpu)?;
+            for (tag, dtype) in [("f32", DType::F32), ("bf16", DType::BF16)] {
+                let s = scale(dtype)?;
+                let (vb, w) = file(tag, &[("weight_scale_inv", s.clone())])?;
+                let layers: [Arc<dyn QuantMethod>; 3] = [
+                    crate::linear_no_bias(K, N, &cfg, vb.clone())?,
+                    ColumnParallelLayer::new(K, N, &cfg, false, &comm, vb.clone())?,
+                    RowParallelLayer::new(K, N, &cfg, false, &comm, vb.clone())?,
+                ];
+                let s = s
+                    .to_dtype(DType::F32)?
+                    .repeat_interleave_dims(128)?;
+                let dq = (w.to_dtype(DType::F32)? * s)?;
+                let want = x.matmul(&dq.t()?)?;
+                for layer in layers {
+                    let got = layer.forward(&x)?;
+                    let err = (got - &want)?.abs()?.max_all()?.to_scalar::<f32>()?;
+                    let scale = want.abs()?.max_all()?.to_scalar::<f32>()?;
+                    assert!(err <= 1e-5 * scale, "{tag}: {err} off {scale}");
+                }
+            }
+            Ok(())
+        }
+
+        /// An FP8 weight with no scale beside it is an error, never a float weight.
+        #[test]
+        fn modelopt_fp8_without_scale_errors() -> Result<()> {
+            let (vb, _) = file("noscale", &[])?;
+            let err = crate::linear_no_bias(K, N, &Some(config()), vb)
+                .err()
+                .expect("an unscaled FP8 weight must not load");
+            assert!(err.to_string().contains("no weight_scale"), "{err}");
+            Ok(())
+        }
+
+        trait Blocks {
+            fn repeat_interleave_dims(&self, b: usize) -> Result<Tensor>;
+        }
+
+        impl Blocks for Tensor {
+            /// Each element of a [n, k] scale grid expanded to a b x b block.
+            fn repeat_interleave_dims(&self, b: usize) -> Result<Tensor> {
+                let (n, k) = self.dims2()?;
+                self.reshape((n, 1, k, 1))?
+                    .broadcast_as((n, b, k, b))?
+                    .reshape((n * b, k * b))
+            }
+        }
+    }
 
     #[test]
     fn tp_head_layout_accepts_partitioned_kv_heads() {

@@ -27,7 +27,7 @@ pub use normal_loaders::{
     Glm5MoeLoader, GptOssLoader, GraniteMoeHybridLoader, LlamaLoader, MambaLoader, MiniMaxM2Loader,
     MistralLoader, MixtralLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel,
     NormalModelLoader, OlmoLoader, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader,
-    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, SmolLm3Loader, Starcoder2Loader,
+    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen4ExpLoader, SmolLm3Loader, Starcoder2Loader,
 };
 
 pub use multimodal_loaders::{
@@ -435,6 +435,12 @@ pub trait DeviceMappedModelLoader {
     ) -> Result<Vec<usize>>;
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
         None
+    }
+    /// Device bytes of one sequence's recurrent state (a hybrid's linear-attention layers and
+    /// any side pool), held for every concurrent sequence outside the paged KV cache. Zero for a
+    /// model without recurrent layers.
+    fn recurrent_state_bytes_per_seq(&self, _config: &str) -> Result<usize> {
+        Ok(0)
     }
     fn num_layers(&self, config: &str) -> Result<usize>;
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>>;

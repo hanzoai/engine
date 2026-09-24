@@ -224,7 +224,7 @@ pub enum MatchingCache {
 }
 
 /// Device bytes the recurrent-prefix snapshots may hold in total.
-const PAGED_RECURRENT_BUDGET_BYTES: usize = 2 << 30;
+pub(crate) const PAGED_RECURRENT_BUDGET_BYTES: usize = 2 << 30;
 
 impl PrefixCacheManagerV2 {
     pub fn new(n_on_device: usize, no_prefix_cache: bool, has_paged_attention: bool) -> Self {

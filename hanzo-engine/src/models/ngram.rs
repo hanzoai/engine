@@ -71,6 +71,57 @@ impl Hash {
         Ok(hash)
     }
 
+    /// The hash from a safetensors checkpoint's I64 buffers at `vb`
+    /// (`...ple.ple_embedding`: `layer_multipliers`, `ngram_heads_vocab_sizes`,
+    /// `ngram_heads_offsets`), with `eos` the config's `eos_token_id` and `heads` its
+    /// `heads_per_ngram`.
+    pub(crate) fn new(vb: &hanzo_quant::ShardedVarBuilder, eos: u32, heads: usize) -> Result<Self> {
+        let host = vb.clone().set_device(Device::Cpu);
+        let u64s = |name: &str| -> Result<Vec<u64>> {
+            Ok(host
+                .get_unchecked_dtype(name, DType::I64)?
+                .to_vec1::<i64>()?
+                .into_iter()
+                .map(|v| v as u64)
+                .collect())
+        };
+        Self::checked(
+            Self {
+                eos,
+                heads,
+                mult: u64s("layer_multipliers")?,
+                offset: u64s("ngram_heads_offsets")?,
+                size: u64s("ngram_heads_vocab_sizes")?,
+            },
+            None,
+        )
+    }
+
+    /// `hash` if its tables sit end to end, every row fits a u32 id and the counts agree.
+    fn checked(hash: Self, order: Option<usize>) -> Result<Self> {
+        let order = order.unwrap_or(hash.mult.len());
+        let end = hash
+            .offset
+            .iter()
+            .zip(&hash.size)
+            .try_fold(0u64, |at, (&o, &s)| (o == at).then_some(at + s));
+        if order < 2
+            || hash.mult.len() != order
+            || hash.size.len() != (order - 1) * hash.heads
+            || hash.offset.len() != hash.size.len()
+            || !end.is_some_and(|end| end <= u64::from(u32::MAX))
+        {
+            bail!(
+                "n-gram hash is inconsistent: order {order}, {} heads, {} multipliers, {} offsets, {} sizes",
+                hash.heads,
+                hash.mult.len(),
+                hash.offset.len(),
+                hash.size.len()
+            );
+        }
+        Ok(hash)
+    }
+
     /// The n-gram order, `ple.ngram_size`.
     fn order(&self) -> usize {
         self.mult.len()
@@ -105,12 +156,130 @@ impl Hash {
     }
 }
 
+/// The FP8 n-gram table of a safetensors checkpoint, read from its file mapping row by row.
+///
+/// The checkpoint splits the table into `shard_{i}` tensors of `rows_per_shard` rows that sit end
+/// to end in one file; row `r` is `width` bytes at `shards[r / rows_per_shard] + (r %
+/// rows_per_shard) · width`. The table's data starts at an arbitrary (only 2-byte aligned) file
+/// offset, so rows are copied as bytes. Every row is E4M3 over one global BF16 scale.
+pub(crate) struct Fp8Table {
+    map: Arc<memmap2::Mmap>,
+    /// Absolute byte offset of each shard's data in the mapping.
+    shards: Vec<usize>,
+    rows_per_shard: usize,
+    width: usize,
+    /// `ngram_embedding.weight_scale`, BF16, as f32.
+    scale: f32,
+}
+
+impl Fp8Table {
+    /// The table under `prefix` (`...ngram_embedding`) in `weights`: headers parsed, the file
+    /// holding `shard_0` mapped, and the table's byte range advised random access.
+    pub(crate) fn open(weights: &[std::path::PathBuf], prefix: &str) -> Result<Self> {
+        use std::io::Read;
+        for path in weights {
+            let mut f = std::fs::File::open(path).map_err(hanzo_ml::Error::wrap)?;
+            let mut len = [0u8; 8];
+            f.read_exact(&mut len).map_err(hanzo_ml::Error::wrap)?;
+            let n = u64::from_le_bytes(len) as usize;
+            let mut buf = vec![0u8; n];
+            f.read_exact(&mut buf).map_err(hanzo_ml::Error::wrap)?;
+            let header: std::collections::HashMap<String, serde_json::Value> =
+                serde_json::from_slice(&buf).map_err(hanzo_ml::Error::wrap)?;
+            let entry = |name: &str| -> Option<(String, Vec<usize>, usize, usize)> {
+                let v = header.get(name)?;
+                let off = v["data_offsets"].as_array()?;
+                Some((
+                    v["dtype"].as_str()?.to_string(),
+                    v["shape"].as_array()?.iter().map(|d| d.as_u64().unwrap_or(0) as usize).collect(),
+                    8 + n + off[0].as_u64()? as usize,
+                    8 + n + off[1].as_u64()? as usize,
+                ))
+            };
+            let Some((dtype, shape, _, _)) = entry(&format!("{prefix}.shard_0.weight")) else {
+                continue;
+            };
+            if dtype != "F8_E4M3" || shape.len() != 2 {
+                bail!("{prefix}.shard_0 is {dtype} {shape:?}, expected 2-D F8_E4M3");
+            }
+            let (rows_per_shard, width) = (shape[0], shape[1]);
+            let mut shards = Vec::new();
+            let mut end = None;
+            while let Some((dtype, shape, start, stop)) =
+                entry(&format!("{prefix}.shard_{}.weight", shards.len()))
+            {
+                if dtype != "F8_E4M3" || shape != [rows_per_shard, width] {
+                    bail!("{prefix}.shard_{} is {dtype} {shape:?}", shards.len());
+                }
+                if end.is_some_and(|e| e != start) {
+                    bail!("{prefix}.shard_{} does not follow its predecessor", shards.len());
+                }
+                shards.push(start);
+                end = Some(stop);
+            }
+            let Some((sdtype, _, sstart, _)) = entry(&format!("{prefix}.weight_scale")) else {
+                bail!("{prefix}.weight_scale is missing beside the table");
+            };
+            let map = unsafe { memmap2::Mmap::map(&f).map_err(hanzo_ml::Error::wrap)? };
+            let raw = &map[sstart..sstart + 4];
+            let scale = match sdtype.as_str() {
+                "BF16" => half::bf16::from_le_bytes([raw[0], raw[1]]).to_f32(),
+                "F32" => f32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]),
+                d => bail!("{prefix}.weight_scale is {d}"),
+            };
+            #[cfg(unix)]
+            {
+                let first = shards[0];
+                let page = 4096;
+                let lo = first / page * page;
+                let hi = end.unwrap_or(first);
+                unsafe {
+                    libc::madvise(
+                        map.as_ptr().add(lo) as *mut libc::c_void,
+                        hi - lo,
+                        libc::MADV_RANDOM,
+                    );
+                }
+            }
+            return Ok(Self {
+                map: Arc::new(map),
+                shards,
+                rows_per_shard,
+                width,
+                scale,
+            });
+        }
+        bail!("no weight file holds {prefix}.shard_0.weight")
+    }
+
+    /// The raw E4M3 bytes of `rows`, `width` each.
+    pub(crate) fn bytes(&self, rows: &[u32]) -> Result<Vec<u8>> {
+        let mut out = Vec::with_capacity(rows.len() * self.width);
+        for &r in rows {
+            let r = r as usize;
+            let shard = r / self.rows_per_shard;
+            let Some(&base) = self.shards.get(shard) else {
+                bail!("n-gram row {r} is past the table");
+            };
+            let at = base + (r % self.rows_per_shard) * self.width;
+            out.extend_from_slice(&self.map[at..at + self.width]);
+        }
+        Ok(out)
+    }
+}
+
+/// The table rows the hash picks from.
+pub(crate) enum Table {
+    /// `per_layer_token_embd`, (rows, width), left on the CPU where the mmap serves it.
+    Gguf(QTensor),
+    Fp8(Fp8Table),
+}
+
 /// The n-gram block: the hash, its table, and the gate + dilated conv that turn the gathered rows
 /// into a delta for every residual stream.
 pub(crate) struct Ngram {
     hash: Hash,
-    /// `per_layer_token_embd`, (rows, width), left on the CPU where the mmap serves it.
-    table: QTensor,
+    table: Table,
     /// Embedding to one key per stream, (streams · hidden).
     key: Arc<dyn QuantMethod>,
     /// Embedding to one value shared by the streams, (hidden).
@@ -149,7 +318,39 @@ impl Ngram {
             // The taps are bf16 parameters in vLLM (ple_layer.py:589-598, 1152).
             conv: get("conv1d")?.dequantize(dev)?.to_dtype(DType::BF16)?,
             hash,
-            table,
+            table: Table::Gguf(table),
+            eps,
+        })
+    }
+
+    /// The block at `vb` (`...ple`) of a safetensors checkpoint: `key_proj`/`value_proj` bf16
+    /// GEMMs, the three Gemma norms as `1 + w` in f32, the depthwise conv `[c, 1, k]` as bf16
+    /// taps `[c, k]`, and the table and hash given.
+    pub(crate) fn new(
+        vb: &hanzo_quant::ShardedVarBuilder,
+        hash: Hash,
+        table: Fp8Table,
+        eps: f64,
+    ) -> Result<Self> {
+        let dev = vb.device().clone();
+        let host = vb.clone().set_device(Device::Cpu);
+        let w = |name: &str| host.get_unchecked_dtype(&format!("{name}.weight"), DType::F32);
+        let key = w("key_proj")?;
+        let value = w("value_proj")?;
+        let lin = |name: &str, t: &Tensor| {
+            hanzo_quant::linear_no_bias(t.dim(1)?, t.dim(0)?, &None, vb.pp(name))
+        };
+        let gemma = |name: &str| -> Result<Tensor> { (w(name)?.to_device(&dev)? + 1.0) };
+        let conv = w("conv1d")?.squeeze(1)?.to_dtype(DType::BF16)?.to_device(&dev)?;
+        Ok(Self {
+            key: lin("key_proj", &key)?,
+            value: lin("value_proj", &value)?,
+            norm_query: gemma("norm_query")?,
+            norm_key: gemma("norm_key")?,
+            norm_conv: gemma("norm_conv")?,
+            conv,
+            hash,
+            table: Table::Fp8(table),
             eps,
         })
     }
@@ -191,49 +392,111 @@ impl Ngram {
             .zip(ids)
             .flat_map(|(p, c)| self.hash.rows(p, c))
             .collect();
-        let rows = Tensor::from_vec(rows, (ids.len(), seq, self.hash.size.len()), &Device::Cpu)?;
-        self.table
-            .embedding(&rows)?
-            .reshape((ids.len(), seq, ()))?
-            .to_device(dev)
+        match &self.table {
+            Table::Gguf(table) => {
+                let rows =
+                    Tensor::from_vec(rows, (ids.len(), seq, self.hash.size.len()), &Device::Cpu)?;
+                table
+                    .embedding(&rows)?
+                    .reshape((ids.len(), seq, ()))?
+                    .to_device(dev)
+            }
+            // 16 x 160 bytes of E4M3 per token go up; the device dequantizes and rounds once to
+            // bf16, as the served dequant kernel stores f32(fp8) · f32(scale).
+            Table::Fp8(table) => {
+                let bytes = table.bytes(&rows)?;
+                Tensor::from_raw_buffer(
+                    &bytes,
+                    DType::F8E4M3,
+                    &[ids.len(), seq, rows.len() / ids.len().max(1) / seq.max(1) * table.width],
+                    &Device::Cpu,
+                )?
+                .to_device(dev)?
+                .to_dtype(DType::F32)?
+                .affine(f64::from(table.scale), 0.0)?
+                .to_dtype(DType::BF16)
+            }
+        }
+    }
+
+    /// The raw table bytes of `chunk`'s rows (tests).
+    #[cfg(test)]
+    pub(crate) fn row_bytes(&self, prior: &[u32], chunk: &[u32]) -> Result<Vec<u8>> {
+        match &self.table {
+            Table::Fp8(t) => t.bytes(&self.hash.rows(prior, chunk)),
+            Table::Gguf(_) => bail!("row bytes of a GGUF table"),
+        }
+    }
+
+    /// The hash's table rows of `chunk` after `prior`.
+    pub(crate) fn rows(&self, prior: &[u32], chunk: &[u32]) -> Vec<u32> {
+        self.hash.rows(prior, chunk)
     }
 
     /// The delta for streams `x` (batch, seq, streams, hidden) from embeddings `e` (batch, seq,
-    /// width), advancing the conv history in `cache` (ple_layer.py:1155-1188).
+    /// width), advancing the conv history in `cache` (ple_layer.py:1155-1188). The delta is f32:
+    /// the served graph adds it to the streams inside one kernel and rounds only the sum.
+    ///
+    /// Numerics follow the served kernels (inductor `triton_red_fused_..._sigmoid_sign_sqrt_...`,
+    /// `ple_layer.py:730-830`): key and value are bf16 GEMMs; both norms, their dot product and
+    /// the gate stay f32; `gate · value` is stored (and normed from its unrounded square sum);
+    /// the norm is stored; the conv (f32 accumulate) is stored, then its silu. With f32
+    /// activations every rounding is a no-op.
     pub(crate) fn forward(
         &self,
         x: &Tensor,
         e: &Tensor,
         cache: &mut GdnLayerCache,
     ) -> Result<Tensor> {
+        self.forward_probed(x, e, cache, None)
+    }
+
+    /// [`Self::forward`], noting each stored stage in `probe` when given (for the goldens).
+    pub(crate) fn forward_probed(
+        &self,
+        x: &Tensor,
+        e: &Tensor,
+        cache: &mut GdnLayerCache,
+        mut probe: Option<&mut Vec<(&'static str, Tensor)>>,
+    ) -> Result<Tensor> {
+        let mut note = |name: &'static str, t: &Tensor| {
+            if let Some(p) = probe.as_mut() {
+                p.push((name, t.clone()));
+            }
+        };
         let (b, s, n, h) = x.dims4()?;
         let dtype = x.dtype();
+        let store = |t: &Tensor| -> Result<Tensor> { t.to_dtype(dtype)?.to_dtype(DType::F32) };
         let e = e.to_dtype(dtype)?;
-        // A key per stream from the embedding; the raw streams are the queries (:1171-1177).
-        let key = norm(
-            &self.key.forward(&e)?.reshape((b, s, n, h))?,
-            &self.norm_key,
-            self.eps,
-        )?;
-        let query = norm(x, &self.norm_query, self.eps)?;
-        // score = Σ key·query / √h per stream; gate = σ(sign(score)·√max(|score|, 1e-6)) (:1178-1179).
-        // vLLM rounds each of these bf16 ops; here they run in f32 and round once.
-        let score = (key.to_dtype(DType::F32)? * query.to_dtype(DType::F32)?)?
-            .sum_keepdim(D::Minus1)?
-            .affine(1.0 / (h as f64).sqrt(), 0.0)?;
+        let key = store(&self.key.forward(&e)?)?.reshape((b, s, n, h))?;
+        let value = store(&self.value.forward(&e)?)?;
+        note("key", &key);
+        note("value", &value);
+        let kn = norm_f32(&key, &self.norm_key, self.eps)?;
+        let qn = norm_f32(&x.to_dtype(DType::F32)?, &self.norm_query, self.eps)?;
+        let scale = (1.0 / (h as f64).sqrt()) as f32;
+        let score = (kn * qn)?.sum_keepdim(D::Minus1)?.affine(f64::from(scale), 0.0)?;
         let gate = sigmoid(&(score.sign()? * score.abs()?.maximum(1e-6)?.sqrt()?)?)?;
-        // The gated value, one per stream, and its normed copy for the conv (:1180-1181).
-        let v = gate
+        let gv_f = gate.broadcast_mul(&value.unsqueeze(2)?)?;
+        let gv = store(&gv_f)?;
+        note("gv", &gv);
+        let ssq = gv_f.sqr()?.sum_keepdim(D::Minus1)?;
+        let rstd = ((ssq / h as f64)? + self.eps)?.sqrt()?.recip()?;
+        let u = gv
+            .broadcast_mul(&rstd)?
+            .broadcast_mul(&self.norm_conv.to_dtype(DType::F32)?.reshape((n, h))?)?
             .to_dtype(dtype)?
-            .broadcast_mul(&self.value.forward(&e)?.unsqueeze(2)?)?;
-        let u = norm(&v, &self.norm_conv, self.eps)?.reshape((b, s, n * h))?;
-        let c = self.conv(&u, cache)?;
-        (v.reshape((b, s, n * h))? + c)?.reshape((b, s, n, h))
+            .reshape((b, s, n * h))?;
+        note("nrm", &u);
+        let c = self.conv(&u, cache)?.to_dtype(DType::F32)?;
+        note("conv", &c);
+        (gv.reshape((b, s, n * h))? + c)?.reshape((b, s, n, h))
     }
 
     /// silu of the causal depthwise conv over `u` (batch, seq, channels) with taps at t, t-d, ...,
     /// t-(k-1)·d, reading the history in `cache` and leaving the last (k-1)·d inputs there
-    /// (ple_layer.py:801-850).
+    /// (ple_layer.py:801-850). The conv accumulates in f32 and is rounded to `u`'s dtype, then
+    /// the silu is rounded again, as the eager bf16 `F.conv1d` then `F.silu` store them.
     fn conv(&self, u: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (b, s, _) = u.dims3()?;
         let (c, rows) = self.history()?;
@@ -256,16 +519,26 @@ impl Ngram {
         )?;
         cache.conv_state = history.narrow(1, s, rows)?.transpose(1, 2)?.contiguous()?;
         cache.seqlen_offset += s;
-        // out_t = Σ_j w_j ⊙ history[t + j·d] (:820-826). vLLM rounds the sum and then the silu to
-        // bf16; here both run in f32 and round once.
+        // out_t = Σ_j w_j ⊙ history[t + j·d] (:820-826).
         let history = history.to_dtype(DType::F32)?;
         let w = self.conv.to_dtype(DType::F32)?;
         let mut out = history.narrow(1, 0, s)?.broadcast_mul(&w.i((.., 0))?)?;
         for j in 1..k {
             out = (out + history.narrow(1, j * d, s)?.broadcast_mul(&w.i((.., j))?)?)?;
         }
+        let out = out.to_dtype(u.dtype())?.to_dtype(DType::F32)?;
         hanzo_nn::ops::silu(&out)?.to_dtype(u.dtype())
     }
+}
+
+/// RMS norm over each stream of `x` (.., streams, hidden) with that stream's slice of `w`
+/// (streams · hidden), in f32 and not rounded (the served gate kernel keeps it in registers).
+fn norm_f32(x: &Tensor, w: &Tensor, eps: f64) -> Result<Tensor> {
+    let (n, h) = (x.dim(D::Minus2)?, x.dim(D::Minus1)?);
+    let f = x.to_dtype(DType::F32)?;
+    let rstd = (f.sqr()?.mean_keepdim(D::Minus1)? + eps)?.sqrt()?.recip()?;
+    f.broadcast_mul(&rstd)?
+        .broadcast_mul(&w.to_dtype(DType::F32)?.reshape((n, h))?)
 }
 
 /// RMS norm over each stream of `x` (.., streams, hidden) with that stream's slice of `w`
@@ -832,12 +1105,68 @@ mod tests {
         let ids = vec![vec![2, 9, 4], vec![7, 7, 3]];
         let e = ngram.embed(&prior, &ids, &Device::Cpu)?;
         assert_eq!(e.dims(), &[2, 3, WIDTH]);
-        let table = ngram.table.dequantize(&Device::Cpu)?;
+        let Table::Gguf(table) = &ngram.table else {
+            panic!("a GGUF table")
+        };
+        let table = table.dequantize(&Device::Cpu)?;
         for (i, (p, c)) in prior.iter().zip(&ids).enumerate() {
             let rows = Tensor::new(ngram.hash.rows(p, c), &Device::Cpu)?;
             let want = table.index_select(&rows, 0)?.reshape((3, WIDTH))?;
             let want = wide(&want.flatten_all()?.to_vec1::<f32>()?);
             assert_eq!(gap(&e.i(i)?, &want)?, 0.0, "sequence {i}");
+        }
+        Ok(())
+    }
+
+    /// A table whose data starts 2 bytes into the data section (an odd 2-byte offset): rows come
+    /// back byte-exact, and the device dequant is f32(fp8) · f32(scale) rounded once.
+    #[test]
+    fn fp8_table_reads_unaligned_rows() -> Result<()> {
+        let (rows, width, shards) = (5usize, 6usize, 3usize);
+        let bytes: Vec<u8> = (0..rows * width * shards).map(|i| (i * 37 % 251) as u8 & 0x7e).collect();
+        let mut header = serde_json::Map::new();
+        // a 2-byte BF16 scale first, so the shards start at data offset 2
+        header.insert(
+            "t.weight_scale".into(),
+            serde_json::json!({"dtype": "BF16", "shape": [1], "data_offsets": [0, 2]}),
+        );
+        for sh in 0..shards {
+            let start = 2 + sh * rows * width;
+            header.insert(
+                format!("t.shard_{sh}.weight"),
+                serde_json::json!({"dtype": "F8_E4M3", "shape": [rows, width], "data_offsets": [start, start + rows * width]}),
+            );
+        }
+        let mut json = serde_json::to_vec(&header).map_err(hanzo_ml::Error::wrap)?;
+        // an odd header length puts the data section itself off 8-byte alignment too
+        while (8 + json.len()) % 2 == 0 {
+            json.push(b' ');
+        }
+        let scale = half::bf16::from_f32(0.0123);
+        let mut file = (json.len() as u64).to_le_bytes().to_vec();
+        file.extend(&json);
+        file.extend(scale.to_le_bytes());
+        file.extend(&bytes);
+        let path = std::env::temp_dir().join(format!("hanzo-ple-table-{}.safetensors", std::process::id()));
+        std::fs::write(&path, &file).map_err(hanzo_ml::Error::wrap)?;
+        let table = Fp8Table::open(&[path], "t")?;
+        let picks = [0u32, 4, 5, 9, 14, 7];
+        let got = table.bytes(&picks)?;
+        for (i, &r) in picks.iter().enumerate() {
+            let at = r as usize * width;
+            assert_eq!(&got[i * width..(i + 1) * width], &bytes[at..at + width], "row {r}");
+        }
+        assert_eq!(table.scale, scale.to_f32());
+        let e = Tensor::from_raw_buffer(&got, DType::F8E4M3, &[picks.len(), width], &Device::Cpu)?
+            .to_dtype(DType::F32)?
+            .affine(f64::from(table.scale), 0.0)?
+            .to_dtype(DType::BF16)?
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        for (i, b) in got.iter().enumerate() {
+            let want = half::bf16::from_f32(float8::F8E4M3::from_bits(*b).to_f32() * scale.to_f32()).to_f32();
+            assert_eq!(e[i].to_bits(), want.to_bits(), "element {i}");
         }
         Ok(())
     }

@@ -166,6 +166,7 @@ pub fn load_llama_base_for_training(
         std::slice::from_ref(device),
     )?;
     let meta = NormalLoadingMetadata {
+        weights: Vec::new(),
         mapper,
         loading_isq: false,
         real_device: device.clone(),
@@ -529,6 +530,7 @@ mod tests {
             )
             .unwrap();
         let meta = NormalLoadingMetadata {
+            weights: Vec::new(),
             mapper,
             loading_isq: false,
             real_device: device.clone(),

@@ -72,7 +72,7 @@ pub use loaders::{
     NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, OlmoLoader,
     Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName,
     QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3EmbeddingLoader,
-    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3OmniLoader, Qwen3VLLoader, Qwen3VLMoELoader,
+    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen4ExpLoader, Qwen3OmniLoader, Qwen3VLLoader, Qwen3VLMoELoader,
     Qwen3_5Loader, Qwen3_5MoeLoader, QwenImageLoader, SmolLm3Loader, Starcoder2Loader, TokenSource,
     VLlama4Loader, VLlamaLoader, VoxtralLoader,
 };
@@ -245,6 +245,9 @@ pub(crate) struct ModelForwardContext<'a> {
     context_lens: &'a [(usize, usize)],
     position_ids: &'a [usize],
     flash_params: &'a FlashParams,
+    /// The tokens before each sequence's chunk that an n-gram embedding hashes with its first
+    /// tokens (`ModelInputs::prior`); empty for models that need none.
+    prior: &'a [Vec<u32>],
 }
 
 #[allow(dead_code)]
@@ -263,6 +266,7 @@ impl<'a> ModelForwardContext<'a> {
             context_lens,
             position_ids,
             flash_params,
+            prior: &[],
         }
     }
 
@@ -280,7 +284,17 @@ impl<'a> ModelForwardContext<'a> {
             context_lens,
             position_ids,
             flash_params,
+            prior: &[],
         }
+    }
+
+    /// The same context carrying each sequence's n-gram prior.
+    pub(crate) fn with_prior(self, prior: &'a [Vec<u32>]) -> Self {
+        Self { prior, ..self }
+    }
+
+    pub(crate) fn prior(&self) -> &[Vec<u32>] {
+        self.prior
     }
 
     pub(crate) fn cache(&self) -> &ForwardCache<'a> {

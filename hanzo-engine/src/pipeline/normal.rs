@@ -15,7 +15,7 @@ use super::{
     GLM4Loader, GLM4MoeLiteLoader, GLM4MoeLoader, GPT2Loader, Gemma2Loader, GemmaLoader,
     Glm5MoeLoader, GptOssLoader, GraniteMoeHybridLoader, LlamaLoader, MambaLoader, MiniMaxM2Loader,
     MistralLoader, MixtralLoader, NormalLoaderType, OlmoLoader, Phi2Loader, Phi3Loader,
-    Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, SmolLm3Loader,
+    Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen4ExpLoader, SmolLm3Loader,
     Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
@@ -299,6 +299,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::GraniteMoeHybrid) => Box::new(GraniteMoeHybridLoader),
             Some(NormalLoaderType::GptOss) => Box::new(GptOssLoader),
             Some(NormalLoaderType::Qwen3Next) => Box::new(Qwen3NextLoader),
+            Some(NormalLoaderType::Qwen4Exp) => Box::new(Qwen4ExpLoader),
             Some(NormalLoaderType::MiniMaxM2) => Box::new(MiniMaxM2Loader),
             Some(NormalLoaderType::GPT2) => Box::new(GPT2Loader),
             Some(NormalLoaderType::Falcon) => Box::new(FalconLoader),
@@ -1018,6 +1019,22 @@ impl Loader for NormalLoader {
 
         let model_metadata = model.model_config();
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+            // On unified memory the KV is planned against the device budget, charged with the
+            // weights: the loader's estimate, the number the device mapper planned with. An ISQ
+            // load changes the weights' size, so it falls back to what is left after loading.
+            let weight_estimate = if crate::utils::normal::is_integrated_gpu(&device)
+                && in_situ_quant.is_none()
+            {
+                Some(
+                    self.inner
+                        .layer_sizes_in_bytes(&config, dtype, 1, None)?
+                        .iter()
+                        .sum::<usize>()
+                        + self.inner.non_mapped_size_in_bytes(&config, dtype, 1, None)?,
+                )
+            } else {
+                None
+            };
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
                 paged_attn_config.block_size,
@@ -1031,7 +1048,7 @@ impl Loader for NormalLoader {
                     .map(Some)
                     .collect::<Vec<_>>(),
                 silent,
-                None,
+                weight_estimate,
                 max_kv_tokens,
             )?;
 
@@ -1639,7 +1656,7 @@ impl Pipeline for NormalPipeline {
         let ModelInputs {
             input_ids,
             input_ids_full,
-            prior: _,
+            prior,
             seqlen_offsets,
             seqlen_offsets_full,
             context_lens,
@@ -1711,7 +1728,8 @@ impl Pipeline for NormalPipeline {
                         .as_ref()
                         .map(|(kv_cache, meta)| (kv_cache.as_slice(), meta)),
                     &flash_meta,
-                );
+                )
+                .with_prior(&prior);
                 self.model.forward(&input_ids, &mut ctx)?
             }
             true => self.model.xlora_forward(
