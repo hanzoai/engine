@@ -52,6 +52,9 @@ pub struct Replica {
     /// Optional backend model ID when replicas use different local aliases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_model: Option<String>,
+    /// Optional Bearer API key for upstreams that require authorization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
 }
 
 fn default_weight() -> u32 {
@@ -74,6 +77,7 @@ impl Replica {
             weight: default_weight(),
             roles: Vec::new(),
             upstream_model: None,
+            api_key: None,
         }
     }
 
@@ -255,6 +259,7 @@ impl ReplicaSet {
                 weight: n.settings.read().unwrap().weight,
                 roles: n.settings.read().unwrap().roles.clone(),
                 upstream_model: n.replica.upstream_model.clone(),
+                api_key: n.replica.api_key.clone(),
                 ttft_ewma_ms: scheduler.ttft_ms(&n.replica.id),
             })
             .collect();
@@ -288,6 +293,10 @@ impl Lease {
         self.node.replica.upstream_model.as_deref()
     }
 
+    pub fn api_key(&self) -> Option<&str> {
+        self.node.replica.api_key.as_deref()
+    }
+
     pub fn inflight(&self) -> usize {
         self.node.inflight.load(Ordering::Acquire)
     }
@@ -312,6 +321,8 @@ pub struct ReplicaStatus {
     pub weight: u32,
     pub roles: Vec<String>,
     pub upstream_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
     /// Time to first body byte, observed by this router; not decode throughput.
     pub ttft_ewma_ms: Option<f64>,
 }

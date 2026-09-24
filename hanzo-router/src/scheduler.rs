@@ -18,6 +18,7 @@ pub struct RoutingHints {
     pub prefix: Option<String>,
     pub role: Option<String>,
     pub target: Option<String>,
+    pub overlay: Option<String>,
     /// Prompt + output tokens estimated from the request bytes.
     pub approx_tokens: usize,
     /// Prompt + output tokens counted by each worker's own tokenizer.
