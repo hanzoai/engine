@@ -2277,6 +2277,7 @@ mod tests {
                 total_time_sec: 0.0,
                 total_prompt_time_sec: 0.0,
                 total_completion_time_sec: 0.0,
+                ..Usage::default()
             }),
             session_id: None,
         }
@@ -2505,6 +2506,7 @@ mod tests {
             total_time_sec: 0.0,
             total_prompt_time_sec: 0.0,
             total_completion_time_sec: 0.0,
+            ..Usage::default()
         }
     }
 

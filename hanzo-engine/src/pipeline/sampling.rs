@@ -48,6 +48,14 @@ fn parse_streaming_text_and_tool_calls(
     parse_text_and_tool_calls(raw_text.as_str(), matcher)
 }
 
+/// Enter a finished sequence in the request ledger (Halogen spec §10.2, §11).
+fn record_finish(this: &dyn Pipeline, seq: &Sequence, usage: &crate::Usage) {
+    let drafter = this.drafter();
+    let structured = matches!(seq.recognizer, SequenceRecognizer::Llguidance(_))
+        && !seq.is_tool_grammar_active();
+    crate::engine::ledger::record(usage, drafter.as_ref().map(|d| d.name()), structured);
+}
+
 pub(crate) async fn finish_or_add_toks_to_seq(
     this: &dyn Pipeline,
     prefix_cacher: &mut PrefixCacheManagerV2,
@@ -264,6 +272,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 let usage = seq.get_mut_group().get_usage();
                 seq.get_mut_group().total_prompt_toks = 0;
                 seq.get_mut_group().total_toks = 0;
+                record_finish(this, seq, &usage);
                 Some(usage)
             } else {
                 None
@@ -448,6 +457,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
             // Ensure timing info is synced to group before sending response
             seq.update_time_info();
+            record_finish(this, seq, &seq.get_mut_group().get_usage());
 
             let mut group = seq.get_mut_group();
             if group.is_chat {

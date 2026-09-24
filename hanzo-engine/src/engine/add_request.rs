@@ -847,15 +847,26 @@ impl Engine {
                 }
             }
 
-            let prefill_cache = handle_seq_error!(
-                get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache(
-                    seq.get_toks(),
-                    seq.image_hashes(),
-                    seq.audio_hashes(),
-                    seq.video_hashes(),
-                ),
-                request.response
-            );
+            let (prefill_cache, looked_up) = {
+                let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
+                let found = handle_seq_error!(
+                    prefix_cacher.search_for_matching_cache(
+                        seq.get_toks(),
+                        seq.image_hashes(),
+                        seq.audio_hashes(),
+                        seq.video_hashes(),
+                    ),
+                    request.response
+                );
+                (found, prefix_cacher.holds_sequences())
+            };
+            if looked_up {
+                let cached = match &prefill_cache {
+                    Some(MatchingCache::Normal { offset, .. }) => *offset,
+                    None => 0,
+                };
+                self.logger.add_prefix_lookup(cached);
+            }
 
             seq = match prefill_cache.clone() {
                 Some(MatchingCache::Normal {
@@ -867,8 +878,6 @@ impl Engine {
                     toks,
                     offset,
                 }) => {
-                    self.logger.add_prefix_cache_hit();
-
                     // Restore recurrent state for hybrid models
                     if let Some(snapshots) = recurrent_snapshots {
                         if let Some(slot_idx) = seq.recurrent_state_idx() {

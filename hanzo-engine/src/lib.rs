@@ -2,9 +2,10 @@
 use engine::Engine;
 pub use engine::{
     agentic_session::{AgenticSessionStore, SerializedSession, SerializedVideo},
-    get_engine_terminate_flag, reset_engine_terminate_flag, should_terminate_engine_sequences,
-    EngineInstruction, IntervalLogger, SearchEmbeddingModel, DEFAULT_MAX_TOOL_ROUNDS,
-    ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
+    get_engine_terminate_flag, ledger, reset_engine_terminate_flag,
+    should_terminate_engine_sequences, Beat, EngineInstruction, IntervalLogger, Load, Phase,
+    PrefixMode, PrefixStats, SearchEmbeddingModel, DEFAULT_MAX_TOOL_ROUNDS, ENGINE_INSTRUCTIONS,
+    TERMINATE_ALL_NEXT_STEP,
 };
 use hanzo_ml::Device;
 use hf_hub::Cache;
@@ -413,6 +414,9 @@ impl AddModelConfig {
     }
 }
 
+/// This engine's version.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Clone)]
 pub struct Config {
     pub kind: ModelKind,
@@ -421,6 +425,17 @@ pub struct Config {
     pub modalities: Modalities,
     pub max_seq_len: Option<usize>,
     pub generation_defaults: Option<ModelGenerationDefaults>,
+    /// The longest sequence the engine admits: the model's window, or the paged KV pool when
+    /// that is smaller.
+    pub context: Option<usize>,
+    /// Sequences the scheduler runs at once.
+    pub slots: usize,
+    /// The speculative proposer attached at load.
+    pub drafter: Option<speculative::SpeculativeAttachInfo>,
+    /// The sparse-attention indexer's key budget per query, for a model that carries one.
+    pub indexer_budget: Option<usize>,
+    /// The chat template requests are rendered with.
+    pub chat_template: Option<Arc<ChatTemplate>>,
 }
 
 /// Configuration for recreating a model loader when reloading an unloaded model.
@@ -788,13 +803,17 @@ impl Hanzo {
         let kind = metadata.kind.clone();
         let device = pipeline_guard.device();
         let modalities = metadata.modalities.clone();
-        let max_seq_len = match &category {
-            ModelCategory::Diffusion | ModelCategory::Speech => None,
-            _ => Some(metadata.max_seq_len),
+        let (max_seq_len, context) = match &category {
+            ModelCategory::Diffusion | ModelCategory::Speech => (None, None),
+            _ => (Some(metadata.max_seq_len), Some(metadata.context_len())),
         };
         let generation_defaults = pipeline_guard.generation_defaults();
         let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
+        let drafter = pipeline_guard.drafter();
+        let indexer_budget = pipeline_guard.indexer_budget();
+        let chat_template = pipeline_guard.get_chat_template();
         drop(pipeline_guard);
+        let slots = method.max_seqs();
 
         // cuTile kernels JIT-compile into a thread-local cache, so warmup must run on the engine thread.
         #[cfg(feature = "cutile")]
@@ -816,6 +835,11 @@ impl Hanzo {
             modalities,
             max_seq_len,
             generation_defaults,
+            context,
+            slots,
+            drafter,
+            indexer_budget,
+            chat_template,
         };
 
         // Shared between engine and EngineInstance so the SDK/HTTP API
@@ -1309,6 +1333,13 @@ impl Hanzo {
         } else {
             Err(Error::EnginePoisoned)
         }
+    }
+
+    /// Whether the engine thread serving `model_id` (the default engine when `None`) still runs.
+    /// A thread that panicked or was told to terminate has finished.
+    pub fn engine_alive(&self, model_id: Option<&str>) -> Result<bool, Error> {
+        let resolved_model_id = self.resolve_alias_or_default(model_id)?;
+        Ok(!self.engine_dead(&resolved_model_id)?)
     }
 
     fn engine_dead(&self, model_id: &str) -> Result<bool, Error> {

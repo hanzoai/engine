@@ -26,6 +26,16 @@ pub enum SchedulerConfig {
 }
 
 impl SchedulerConfig {
+    /// Sequences the scheduler runs at once.
+    pub fn max_seqs(&self) -> usize {
+        match self {
+            Self::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(n),
+            } => n.get(),
+            Self::PagedAttentionMeta { max_num_seqs, .. } => *max_num_seqs,
+        }
+    }
+
     pub fn into_scheduler(self) -> Arc<Mutex<dyn Scheduler>> {
         match self {
             Self::DefaultScheduler { method } => {
@@ -58,6 +68,8 @@ pub trait Scheduler: Send + Sync {
     /// Ids of the currently-running sequences. Used by the engine to prune per-sequence state
     /// (e.g. the speculative draft proposer's KV caches) for sequences that have been reaped.
     fn running_seq_ids(&self) -> Vec<usize>;
+    /// Creation time (ms since the Unix epoch) of the oldest sequence still running.
+    fn oldest_running(&self) -> Option<u64>;
     fn add_seq(&mut self, seq: Sequence);
     /// This may do nothing. It depends on the implementation
     fn free_finished_sequence_groups(&mut self);

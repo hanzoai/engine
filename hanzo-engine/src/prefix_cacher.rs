@@ -201,6 +201,10 @@ pub struct PrefixCacheManagerV2 {
     /// written here on eviction instead of being dropped, and can be restored
     /// later (including across process restarts).
     disk: Option<DiskSpill>,
+    /// Sequences stored since start.
+    stores: u64,
+    /// Sequences evicted since start (dropped or spilled to disk).
+    evicted: u64,
 }
 
 /// A disk-backed KV spill store bundled with the live-model limits/fingerprint
@@ -238,7 +242,20 @@ impl PrefixCacheManagerV2 {
             no_prefix_cache,
             has_paged_attention,
             disk: None,
+            stores: 0,
+            evicted: 0,
         }
+    }
+
+    /// Whether this cache holds whole sequences, the non-paged mode. Under paged attention the
+    /// KV cache manager reuses prefixes block by block instead.
+    pub fn holds_sequences(&self) -> bool {
+        !self.no_prefix_cache && !self.has_paged_attention
+    }
+
+    /// Sequences held now, and the sequences stored and evicted since start.
+    pub fn counts(&self) -> (usize, u64, u64) {
+        (self.caches.len(), self.stores, self.evicted)
     }
 
     /// Attach a disk-backed KV spill store with the validation `limits` for the
@@ -286,6 +303,7 @@ impl PrefixCacheManagerV2 {
         if !self.has_paged_attention {
             let cache = seq.normal_cache().to_vec();
 
+            self.stores += 1;
             self.caches.insert(
                 seq.get_toks().to_vec().into(),
                 CacheElement {
@@ -308,11 +326,13 @@ impl PrefixCacheManagerV2 {
         if self.no_prefix_cache {
             return Ok(0);
         }
-        if self.disk.is_some() {
+        let evicted = if self.disk.is_some() {
             self.evict_caches_spilling()
         } else {
             self.evict_caches_dropping()
-        }
+        }?;
+        self.evicted += evicted as u64;
+        Ok(evicted)
     }
 
     /// No-disk eviction: drop the oldest device-resident prefixes. This is the
@@ -497,6 +517,7 @@ impl PrefixCacheManagerV2 {
     /// Evict all the caches.
     pub fn evict_all_caches(&mut self) -> Result<usize> {
         let len = self.caches.len();
+        self.evicted += len as u64;
         self.caches.clear();
         self.paged_recurrent_caches.clear();
         Ok(len)
@@ -1116,6 +1137,7 @@ mod tests {
 
         assert_eq!(mgr.evict_caches()?, 1, "the overflow prefix is evicted");
         assert!(mgr.caches.is_empty(), "evicted prefix left memory");
+        assert_eq!(mgr.counts(), (0, 0, 1), "a spill counts as an eviction");
 
         // The spill file exists on disk under the token content key.
         let key = key_for_bytes(&tokens_to_le_bytes(&toks));
@@ -1134,6 +1156,21 @@ mod tests {
         assert_eq!(orig_kv.current_seq_len(), rest_kv.current_seq_len());
         assert_eq!(vals(orig_kv, false), vals(rest_kv, false));
         assert_eq!(vals(orig_kv, true), vals(rest_kv, true));
+        Ok(())
+    }
+
+    /// Stores and evictions count sequences; the paged and disabled modes hold none.
+    #[test]
+    fn counts_stores_and_evictions() -> hanzo_ml::Result<()> {
+        let mut mgr = PrefixCacheManagerV2::new(0, false, false);
+        assert!(mgr.holds_sequences());
+        let mut seq = crate::sequence::test_sequence(vec![1, 2, 3], None);
+        mgr.add_sequence(&mut seq, None);
+        assert_eq!(mgr.counts(), (1, 1, 0));
+        assert_eq!(mgr.evict_all_caches()?, 1);
+        assert_eq!(mgr.counts(), (0, 1, 1));
+        assert!(!PrefixCacheManagerV2::new(4, false, true).holds_sequences());
+        assert!(!PrefixCacheManagerV2::new(4, true, false).holds_sequences());
         Ok(())
     }
 

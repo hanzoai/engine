@@ -579,6 +579,30 @@ Honest scope: the LinUCB per-user bandit is solid and realizable. Per-user real-
 LoRA over a neural encoder and self-adaptive expert vectors are research-frontier and
 attach at the same `policy`/`learner` seam -- flagged, not faked.
 
+## Observability: `/health`, `/metrics`, `/cache`, the request ledger
+
+Ported from Halogen's front end (spec §10, §11); the bodies are built in
+`hanzo-server-core/src/observe.rs` from plain values, the handlers in `handlers.rs`.
+
+- **Nothing waits on the engine.** The engine loop publishes to its `IntervalLogger`:
+  a heartbeat (`Phase` idle/loop/prefill/decode plus when it entered it) at every
+  iteration and step, and its load (running, waiting, oldest running sequence, paged
+  KV occupancy) and prefix-cache counts at the top of every iteration, which is also
+  the moment it goes idle, so at rest the numbers are exact. Readers only load atomics.
+- **`/health`** is 503 with the same body when the engine thread has exited or the loop
+  overstayed its phase: 30 s between steps, 300 s in a decode step, 1800 s in a prefill
+  (Halogen's PING budget and engine-silence limits). A long prefill is work, not a stall.
+- **Counters are process-wide and only grow**: `engine/ledger.rs` statics, fed once per
+  finished sequence from its `Usage` in `finish_or_add_toks_to_seq`. An engine rebooted
+  inside the process does not reset them; `n > 1` counts each choice.
+- **Ledger line**: INFO on target `hanzo_engine::engine::ledger`, message starting
+  `serve_api: ` so `bench-serving.py`'s regex matches it. Rounds are derived, not
+  counted: `n - 1 - draft_accepted` (a verify round commits accepted + 1, the first
+  token comes from prefill). Undrafted requests log `batch` with no rounds, which the
+  bench's regex skips, as it skips Halogen's serial requests.
+- **Drafter names** come from `SpeculativeAttachInfo::name`: `mtp`, `dflash`, else `spec`.
+  Pipelines record the attach info (`Pipeline::drafter`); `Hanzo::config` carries it.
+
 ## Working here
 
 `LLM.md` is the canonical guide. `CLAUDE.md` and `AGENTS.md` are symlinks to it and

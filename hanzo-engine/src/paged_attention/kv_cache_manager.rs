@@ -104,6 +104,14 @@ impl KVCacheManager {
         self.block_pool.num_free_blocks()
     }
 
+    /// Token positions held by live requests, and the pool's size in positions. The null block
+    /// is not counted; a freed block that keeps its hash for the prefix cache is free.
+    pub fn occupancy(&self) -> (usize, usize) {
+        let total = self.block_pool.num_gpu_blocks() - 1;
+        let used = total - self.num_free_blocks();
+        (used * self.block_size, total * self.block_size)
+    }
+
     /// Whether prefix caching is enabled.
     pub fn caching_enabled(&self) -> bool {
         self.enable_caching
@@ -472,10 +480,12 @@ mod tests {
 
         mgr.allocate_slots(1, 12, &[]).unwrap();
         assert_eq!(mgr.num_free_blocks(), 4); // 8-1null-3alloc = 4
+        assert_eq!(mgr.occupancy(), (12, 28)); // 3 of 7 blocks of 4
 
         mgr.free(1);
         assert_eq!(mgr.num_free_blocks(), 7); // 8-1null = 7
         assert!(!mgr.has_request(1));
+        assert_eq!(mgr.occupancy(), (0, 28));
     }
 
     #[test]

@@ -22,8 +22,8 @@ use crate::{
     embeddings::embeddings,
     files::{delete_file, get_file, get_file_content, list_files},
     handlers::{
-        delete_session, get_model_status, get_session, health, models, put_session, re_isq,
-        reload_model, system_doctor, system_info, tune_model, unload_model,
+        cache, delete_session, get_model_status, get_session, health, metrics, models, put_session,
+        re_isq, reload_model, root, system_doctor, system_info, tune_model, unload_model,
     },
     image_generation::image_generation,
     music_generation::music_generation,
@@ -31,16 +31,17 @@ use crate::{
     route::{classify_handler, route_handler},
     route_registry::{
         AGENT_APPROVAL_ROUTE, ANIMATE_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE,
-        AUDIO_TRANSCRIPTION_ROUTE, CANCEL_RESPONSE_ROUTE, COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE,
-        FILES_ROUTE, FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE,
-        LIPSYNC_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE, MUSIC_GENERATION_ROUTE,
+        ANTHROPIC_MESSAGES_ROUTE, AUDIO_TRANSCRIPTION_ROUTE, CACHE_ROUTE, CANCEL_RESPONSE_ROUTE,
+        CHAT_COMPLETIONS_ROUTE, COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE, FILES_ROUTE,
+        FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE, LIPSYNC_ROUTE,
+        METRICS_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE, MUSIC_GENERATION_ROUTE,
         RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE, ROUTE_ROUTE,
-        SESSION_ROUTE, SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE,
-        THREED_CONTENT_ROUTE, THREED_GENERATION_ROUTE, THREED_JOB_ROUTE, TRAINING_CLIENTS_ROUTE,
-        TRAINING_CLIENT_ROUTE, TRAINING_FORWARD_BACKWARD_ROUTE, TRAINING_OPTIM_STEP_ROUTE,
-        TRAINING_SAMPLE_ROUTE, TRAINING_SAVE_WEIGHTS_ROUTE, TRYON_GENERATION_ROUTE,
-        TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE, VIDEO_CONTENT_ROUTE, VIDEO_GENERATION_ROUTE,
-        VIDEO_JOB_ROUTE,
+        ROUTING_ROUTE, SESSION_ROUTE, SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE,
+        SYSTEM_INFO_ROUTE, THREED_CONTENT_ROUTE, THREED_GENERATION_ROUTE, THREED_JOB_ROUTE,
+        TRAINING_CLIENTS_ROUTE, TRAINING_CLIENT_ROUTE, TRAINING_FORWARD_BACKWARD_ROUTE,
+        TRAINING_OPTIM_STEP_ROUTE, TRAINING_SAMPLE_ROUTE, TRAINING_SAVE_WEIGHTS_ROUTE,
+        TRYON_GENERATION_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE, VIDEO_CONTENT_ROUTE,
+        VIDEO_GENERATION_ROUTE, VIDEO_JOB_ROUTE,
     },
     speech_generation::speech_generation,
     threed_generation::{create_3d, get_3d, get_3d_content},
@@ -319,12 +320,14 @@ fn init_router(
         ])
         .allow_origin(allow_origin);
 
+    // Every route is registered once, through its route-registry constant; API_ROUTES lists them
+    // all (a path registered twice panics axum).
     let router = Router::new()
-        // chat/completions + messages have no route-registry constant yet, so
-        // they stay as literals; everything else is registered once via its
-        // *_ROUTE constant below (duplicating them here panics axum).
-        .route("/v1/chat/completions", post(chatcompletions))
-        .route("/v1/messages", post(crate::anthropic::messages))
+        .route(CHAT_COMPLETIONS_ROUTE.path, post(chatcompletions))
+        .route(
+            ANTHROPIC_MESSAGES_ROUTE.path,
+            post(crate::anthropic::messages),
+        )
         .route(
             ANTHROPIC_COUNT_TOKENS_ROUTE.path,
             post(crate::anthropic::count_tokens),
@@ -339,11 +342,13 @@ fn init_router(
         .route(SYSTEM_INFO_ROUTE.path, get(system_info))
         .route(SYSTEM_DOCTOR_ROUTE.path, post(system_doctor))
         .route(HEALTH_ROUTE.path, get(health))
-        .route(ROOT_ROUTE.path, get(health))
+        .route(METRICS_ROUTE.path, get(metrics))
+        .route(CACHE_ROUTE.path, get(cache))
+        .route(ROOT_ROUTE.path, get(root))
         .route(RE_ISQ_ROUTE.path, post(re_isq))
         .route(IMAGE_GENERATION_ROUTE.path, post(image_generation))
         .route(TRYON_GENERATION_ROUTE.path, post(tryon_generation))
-        .route("/v1/route", post(route_handler))
+        .route(ROUTING_ROUTE.path, post(route_handler))
         .route(ROUTE_ROUTE.path, post(classify_handler))
         .route(VIDEO_GENERATION_ROUTE.path, post(create_video))
         .route(VIDEO_JOB_ROUTE.path, get(get_video))

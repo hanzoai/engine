@@ -107,6 +107,8 @@ pub struct NormalPipeline {
     imatrix: Option<PathBuf>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     draft_proposer: Option<Box<dyn crate::speculative::SpeculativeProposer + Send + Sync>>,
+    /// The speculative proposer attached at load.
+    drafter: Option<crate::speculative::SpeculativeAttachInfo>,
 }
 
 #[cfg(feature = "cuda")]
@@ -1110,6 +1112,7 @@ impl Loader for NormalLoader {
             imatrix: self.config.imatrix.clone(),
             mapper: pipeline_mapper,
             draft_proposer: None,
+            drafter: None,
         })))
     }
 
@@ -1766,6 +1769,7 @@ impl Pipeline for NormalPipeline {
                 ngram_min, ngram_max, gamma,
             );
             crate::speculative::logging::log_attach(&info);
+            self.drafter = Some(info);
             self.draft_proposer = Some(Box::new(proposer));
             return Ok(());
         }
@@ -1806,6 +1810,7 @@ impl Pipeline for NormalPipeline {
             let info =
                 crate::speculative::SpeculativeAttachInfo::dspark(block_size, confidence_threshold);
             crate::speculative::logging::log_attach(&info);
+            self.drafter = Some(info);
             self.draft_proposer = Some(Box::new(proposer));
             return Ok(());
         }
@@ -1825,6 +1830,7 @@ impl Pipeline for NormalPipeline {
                 .request_speculative_capture(proposer.capture_request());
             let info = crate::speculative::SpeculativeAttachInfo::dflash(proposer.block_size());
             crate::speculative::logging::log_attach(&info);
+            self.drafter = Some(info);
             self.draft_proposer = Some(Box::new(proposer));
             return Ok(());
         }
@@ -1850,13 +1856,19 @@ impl Pipeline for NormalPipeline {
             let proposer = crate::speculative::DraftModelProposer::new(draft, gamma)?;
             let info = crate::speculative::SpeculativeAttachInfo::draft_model(gamma);
             crate::speculative::logging::log_attach(&info);
+            self.drafter = Some(info);
             self.draft_proposer = Some(Box::new(proposer));
             return Ok(());
         }
         if let Some(info) = self.model.attach_speculative(config)? {
             self.model.log_speculative_attach(&info);
+            self.drafter = Some(info);
         }
         Ok(())
+    }
+
+    fn drafter(&self) -> Option<crate::speculative::SpeculativeAttachInfo> {
+        self.drafter.clone()
     }
 
     fn retain_speculative_seqs(&mut self, live: &[usize]) {

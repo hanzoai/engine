@@ -64,6 +64,8 @@ pub struct ModelWeights {
     pub device: Device,
     pub cache: EitherCache,
     pub max_seq_len: usize,
+    /// Keys the sparse-attention indexer keeps per query (`attention.indexer.top_k`).
+    pub indexer_budget: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     dtype: DType,
 }
@@ -90,7 +92,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let mut props = PropsGGUF::try_from(&md, true)?;
         let streams = get("hyper_connection.count")?;
         // The indexer keeps every key up to its budget, where dense attention is exact.
-        props.max_seq_len = props.max_seq_len.min(get("attention.indexer.top_k")?);
+        let indexer_budget = get("attention.indexer.top_k")?;
+        props.max_seq_len = props.max_seq_len.min(indexer_budget);
         // An INT32 array in the file, as the converter writes Python ints.
         let ngram_layer = match md.get_value::<Vec<i32>>("ple.layers") {
             Ok(layers) if layers.len() == 1 && layers[0] >= 0 => layers[0] as usize,
@@ -204,6 +207,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             device: device.clone(),
             cache: EitherCache::Hybrid(Arc::new(Mutex::new(cache))),
             max_seq_len: props.max_seq_len,
+            indexer_budget,
             mapper: Some(mapper),
             dtype,
         })
@@ -564,6 +568,7 @@ mod tests {
         assert!(logits.iter().all(|x| x.is_finite()), "{logits:?}");
         // The indexer's budget caps the context.
         assert_eq!(model(&bytes)?.max_seq_len, 32);
+        assert_eq!(model(&bytes)?.indexer_budget, 32);
         Ok(())
     }
 

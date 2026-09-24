@@ -919,6 +919,16 @@ pub trait Pipeline:
         false
     }
 
+    /// The speculative proposer attached at load, as it was logged.
+    fn drafter(&self) -> Option<crate::speculative::SpeculativeAttachInfo> {
+        None
+    }
+
+    /// The sparse-attention indexer's key budget per query, for a model that carries one.
+    fn indexer_budget(&self) -> Option<usize> {
+        None
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn try_sample_speculative_causal_gen(
         &mut self,

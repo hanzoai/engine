@@ -16,7 +16,7 @@ use crate::{
 use hanzo_quant::RingConfig;
 use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::ParserFactory;
-pub use logger::IntervalLogger;
+pub use logger::{Beat, IntervalLogger, Load, Phase, PrefixMode, PrefixStats};
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,7 @@ use crate::{
 
 mod add_request;
 pub(crate) mod agentic_loop;
+pub mod ledger;
 pub use agentic_loop::DEFAULT_MAX_TOOL_ROUNDS;
 pub(crate) mod agentic_session;
 mod file_tools;
@@ -191,6 +192,20 @@ fn model_fingerprint(meta: &crate::pipeline::GeneralMetadata) -> u64 {
     h
 }
 
+/// Move a sequence on after its prompt step. A one-shot sequence (an image) is done. A sequence
+/// the prompt step itself finished (a one-token budget, or EOS first) stays finished; only a
+/// running one goes on to decode.
+fn after_prompt_step(seq: &crate::sequence::Sequence) {
+    match seq.sequence_stepping_type() {
+        SeqStepType::OneShot => seq.set_state(SequenceState::Done(StopReason::GeneratedImage)),
+        SeqStepType::PromptAndDecode => {
+            if seq.is_running() {
+                seq.set_state(SequenceState::RunningCompletion)
+            }
+        }
+    }
+}
+
 pub struct Engine {
     tx: Sender<Request>,
     rx: Arc<Mutex<Receiver<Request>>>,
@@ -262,6 +277,11 @@ impl Engine {
         // Configure prefix caching on the scheduler based on the global no_prefix_cache flag
         // This ensures PagedAttention prefix caching respects the same setting
         get_mut_arcmutex!(scheduler).set_prefix_caching_enabled(!no_prefix_cache);
+        logger.set_prefix_mode(match get_mut_arcmutex!(scheduler).block_size() {
+            _ if no_prefix_cache => PrefixMode::Off,
+            Some(block_size) => PrefixMode::Blocks(block_size),
+            None => PrefixMode::Sequence,
+        });
 
         let has_paged_attention = get_mut_arcmutex!(scheduler).kv_cache_manager().is_some();
 
@@ -356,6 +376,7 @@ impl Engine {
         let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
+            self.logger.beat(Phase::Loop);
             let should_terminate = || {
                 matches!(
                     ENGINE_INSTRUCTIONS
@@ -398,17 +419,18 @@ impl Engine {
                 break 'lp;
             }
 
-            let (waiting_len, running_len) = {
+            let scheduler_idle = {
                 let scheduler = get_mut_arcmutex!(self.scheduler);
-                (scheduler.waiting_len(), scheduler.running_len())
+                self.publish(&*scheduler);
+                scheduler.waiting_len() == 0 && scheduler.running_len() == 0
             };
-            let scheduler_idle = waiting_len == 0 && running_len == 0;
 
             if scheduler_idle {
                 if should_terminate() {
                     self.replicate_request_to_daemons(&Request::Terminate);
                     break 'lp;
                 }
+                self.logger.beat(Phase::Idle);
                 enum WaitEvent {
                     Request(Option<Request>),
                     Wake,
@@ -457,6 +479,7 @@ impl Engine {
                     if !scheduled.completion.is_empty() {
                         let current_completion_ids: Vec<usize> =
                             scheduled.completion.iter().map(|seq| *seq.id()).collect();
+                        self.logger.beat(Phase::Decode);
                         let res = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
                             let pre_op = if !self.no_kv_cache
@@ -505,6 +528,7 @@ impl Engine {
                             'lp,
                             self.prefix_cacher
                         );
+                        self.logger.beat(Phase::Loop);
 
                         self.logger.add_tokens_processed(scheduled.completion.len());
 
@@ -523,6 +547,7 @@ impl Engine {
                             seq.set_step_start_instant();
                         }
 
+                        self.logger.beat(Phase::Prefill);
                         let prompt_exec_time = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
@@ -577,6 +602,7 @@ impl Engine {
                             'lp,
                             self.prefix_cacher
                         );
+                        self.logger.beat(Phase::Loop);
 
                         let total_processed_tokens: usize = scheduled
                             .prompt
@@ -586,14 +612,7 @@ impl Engine {
                         self.logger.add_tokens_processed(total_processed_tokens);
 
                         for seq in scheduled.prompt.iter_mut() {
-                            match seq.sequence_stepping_type() {
-                                SeqStepType::OneShot => {
-                                    seq.set_state(SequenceState::Done(StopReason::GeneratedImage))
-                                }
-                                SeqStepType::PromptAndDecode => {
-                                    seq.set_state(SequenceState::RunningCompletion)
-                                }
-                            }
+                            after_prompt_step(seq);
                             let now = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .expect("Time travel has occurred!")
@@ -644,6 +663,11 @@ impl Engine {
                 SchedulerOutput::PagedAttention { mut output } => {
                     if !output.scheduled.is_empty() {
                         let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();
+                        self.logger.beat(if is_prompt {
+                            Phase::Prefill
+                        } else {
+                            Phase::Decode
+                        });
 
                         // Record prompt timing BEFORE step() so it's available if response is sent inside step()
                         if is_prompt {
@@ -818,6 +842,7 @@ impl Engine {
                             'lp,
                             self.prefix_cacher
                         );
+                        self.logger.beat(Phase::Loop);
 
                         let total_processed_tokens: usize = guards_mut
                             .iter()
@@ -967,6 +992,26 @@ impl Engine {
         }
     }
 
+    /// Publish the scheduler's load, the paged pool's occupancy and the prefix cache's counts to
+    /// the logger, where `/health`, `/metrics` and `/cache` read them without an engine lock.
+    fn publish(&self, scheduler: &dyn Scheduler) {
+        let kv_cache_manager = scheduler.kv_cache_manager();
+        let kv = kv_cache_manager
+            .as_ref()
+            .map(|kv| get_mut_arcmutex!(kv).occupancy());
+        self.logger.set_load(Load {
+            running: scheduler.running_len(),
+            waiting: scheduler.waiting_len(),
+            oldest: scheduler.oldest_running(),
+            kv,
+        });
+        let (entries, stores, evicted) = match &kv_cache_manager {
+            Some(kv) => get_mut_arcmutex!(kv).block_pool().prefix_counts(),
+            None => get_mut_arcmutex!(self.prefix_cacher).counts(),
+        };
+        self.logger.set_prefix_counts(entries, stores, evicted);
+    }
+
     fn build_sequence_recognizer(
         factory: &Option<Arc<ParserFactory>>,
         constraint: &Constraint,
@@ -1016,5 +1061,29 @@ impl Engine {
                 writer.write_all(req.as_bytes()).unwrap();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::after_prompt_step;
+    use crate::sequence::{test_sequence, SequenceState, StopReason};
+
+    /// A running sequence goes on to decode; one its prompt step finished stays finished, so it is
+    /// never decoded again nor finished twice.
+    #[test]
+    fn a_prompt_step_finish_is_kept() {
+        let seq = test_sequence(vec![1, 2, 3], None);
+        seq.set_state(SequenceState::RunningPrompt);
+        after_prompt_step(&seq);
+        assert!(seq.is_completion());
+
+        let seq = test_sequence(vec![1, 2, 3], None);
+        seq.set_state(SequenceState::Done(StopReason::Length(1)));
+        after_prompt_step(&seq);
+        assert!(matches!(
+            seq.getstate(),
+            SequenceState::Done(StopReason::Length(1))
+        ));
     }
 }
