@@ -279,8 +279,7 @@ def cmd_shared(args):
     from safetensors.torch import load_file, save_file
     from vllm import _custom_ops as ops
     from vllm.model_executor.layers.activation import SiluAndMul
-    from vllm.model_executor.layers.quantization.input_quant_fp8 import QuantFP8
-    from vllm.model_executor.layers.quantization.utils.quant_utils import GroupShape
+    from vllm.model_executor.layers.quantization.utils import fp8_utils
 
     gate = load_file(os.path.join(FIX, "gate.safetensors"))
     idx = json.load(open(os.path.join(SNAP, "model.safetensors.index.json")))["weight_map"]
@@ -296,22 +295,22 @@ def cmd_shared(args):
     gu_s = torch.cat([t["gate_proj.weight_scale_inv"], t["up_proj.weight_scale_inv"]]).cuda()
     dn_w = t["down_proj.weight"].cuda()
     dn_s = t["down_proj.weight_scale_inv"].cuda()
-    quant = QuantFP8(static=False, group_shape=GroupShape(1, 128), column_major_scales=True)
-
     def mm(a, w, s):
-        aq, as_ = quant.forward_cuda(a)
+        # QuantFP8.forward_cuda for CutlassFp8BlockScaledMMKernel's (1,128) column-major key.
+        aq, as_ = fp8_utils.per_token_group_quant_fp8(a, group_size=128, column_major_scales=True,
+                                                       use_ue8m0=False)
         # CutlassFp8BlockScaledMMKernel: weight is [N, K]; cutlass takes K-major B.
         return ops.cutlass_scaled_mm(aq, w.t(), as_, s.t(), torch.bfloat16)
 
-    act = SiluAndMul()
-    compiled = torch.compile(act.forward_native, dynamic=False, fullgraph=True)
+    native = SiluAndMul.forward_native
+    compiled = torch.compile(native, dynamic=False, fullgraph=True)
     out = {"gate_up.weight": gu_w.cpu(), "gate_up.weight_scale_inv": gu_s.cpu(),
            "down.weight": dn_w.cpu(), "down.weight_scale_inv": dn_s.cpu()}
     for T in SHARED_T:
         x = gate["x"][:T].cuda()
         gu = mm(x, gu_w, gu_s)
         h_c = compiled(gu)
-        h_e = act.forward_native(gu)
+        h_e = native(gu)
         I = gu.shape[-1] // 2
         g32, u32 = gu[:, :I].float(), gu[:, I:].float()
         h_ref = (g32 / (1.0 + torch.exp(-g32)) * u32).to(torch.bfloat16)
