@@ -556,18 +556,26 @@ pub(crate) mod tests {
         assert_eq!(host_bytes, 51_200_246_042);
         assert_eq!(table, 51_200_245_760);
 
-        // The shards sit end to end in numeric order, in one file.
+        // The shards are one file's contiguous run. The writer laid most of them out in numeric
+        // order and a few pairs transposed, so the file order is not the shard order.
         let shard = |s: usize| {
             &heads[&format!(
                 "{PREFIX}layers.{}.ple.ple_embedding.ngram_embedding.shard_{s}.weight",
                 text.ple_layer().unwrap()
             )]
         };
-        for s in 1..text.split_ngram_parts {
-            let (a, b) = (shard(s - 1), shard(s));
-            assert_eq!(a.file, b.file);
-            assert_eq!(a.end, b.start, "shard {s} does not follow shard {}", s - 1);
+        let mut spans: Vec<&Header> = (0..text.split_ngram_parts).map(shard).collect();
+        let file = spans[0].file.clone();
+        assert!(spans.iter().all(|h| h.file == file), "the table spans files");
+        spans.sort_by_key(|h| h.start);
+        for (a, b) in spans.iter().zip(&spans[1..]) {
+            assert_eq!(a.end, b.start, "a hole sits between two shards");
         }
+        assert_eq!(
+            spans.last().unwrap().end - spans[0].start,
+            table as u64,
+            "the shards are not the whole run"
+        );
 
         // Scale invariants over all 48 x 512 experts: gate and up share weight_scale_2, and each
         // (layer, projection) has one input_scale.
