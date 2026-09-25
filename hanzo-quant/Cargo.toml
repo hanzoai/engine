@@ -83,3 +83,4 @@ cuda-13000 = []
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }
+rayon.workspace = true
