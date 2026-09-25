@@ -8,7 +8,7 @@ let prevModel = null;
  * Refresh the list of available models
  */
 async function refreshModels() {
-  const res = await fetch('/api/list_models');
+  const res = await fetch('/v1/list_models');
   const data = await res.json();
   const modelSelect = document.getElementById('modelSelect');
   
@@ -44,7 +44,7 @@ async function refreshModels() {
  * Select a model on the server
  */
 async function selectModel(name, notify = true) {
-  await fetch('/api/select_model', {
+  await fetch('/v1/select_model', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name })

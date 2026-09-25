@@ -19,6 +19,11 @@
 # binary; the question this gate asks is whether the workspace still compiles.
 
 test:
+  # Every first-party path is /v1/...; a quoted "/api/" or a joined `}api/`
+  # outside Markdown (prose that cites third-party APIs) is a regression.
+  - name: v1-only
+    run: |
+      ! git grep -nE -e '["(`]/api/' -e "'/api/" -e '}api/' -- ':!*.md' ':!hanzo.yml'
   - name: fmt
     run: rustup component add rustfmt && cargo fmt --all -- --check
   - name: check

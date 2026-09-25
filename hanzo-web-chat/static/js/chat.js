@@ -8,7 +8,7 @@ let pendingClear = false;
  * Refresh the chat list in the sidebar
  */
 async function refreshChatList() {
-  const res = await fetch('/api/list_chats');
+  const res = await fetch('/v1/list_chats');
   const data = await res.json();
   const chatList = document.getElementById('chatList');
   
@@ -51,7 +51,7 @@ async function refreshChatList() {
 async function findBlankChat(model) {
   // Check if current chat is already blank
   if (currentChatId) {
-    const currentRes = await fetch('/api/load_chat', {
+    const currentRes = await fetch('/v1/load_chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: currentChatId })
@@ -66,7 +66,7 @@ async function findBlankChat(model) {
   }
   
   // Otherwise check all chats
-  const res = await fetch('/api/list_chats');
+  const res = await fetch('/v1/list_chats');
   const data = await res.json();
   
   // Sort by creation time, newest first
@@ -77,7 +77,7 @@ async function findBlankChat(model) {
     // Skip the current chat since we already checked it
     if (chat.id === currentChatId) continue;
     
-    const chatRes = await fetch('/api/load_chat', {
+    const chatRes = await fetch('/v1/load_chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: chat.id })
@@ -101,7 +101,7 @@ async function findBlankChat(model) {
 async function loadChat(id) {
   if (!maybeClearChat(true)) return;
   
-  const res = await fetch('/api/load_chat', {
+  const res = await fetch('/v1/load_chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id })
@@ -219,7 +219,7 @@ function initChatHandlers() {
     }
     
     // No blank chat found, create a new one
-    const res = await fetch('/api/new_chat', {
+    const res = await fetch('/v1/new_chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: prevModel })
@@ -252,7 +252,7 @@ function initChatHandlers() {
     }
     const newTitle = prompt('Enter new chat name:', '');
     if (newTitle && newTitle.trim()) {
-      const res = await fetch('/api/rename_chat', {
+      const res = await fetch('/v1/rename_chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: currentChatId, title: newTitle.trim() })
@@ -271,7 +271,7 @@ function initChatHandlers() {
       return; 
     }
     if (!confirm('Delete this chat permanently?')) return;
-    const res = await fetch('/api/delete_chat', {
+    const res = await fetch('/v1/delete_chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: currentChatId })

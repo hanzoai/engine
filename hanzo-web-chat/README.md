@@ -122,18 +122,18 @@ cargo run --release --features cuda --bin hanzo-web-chat -- \
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/ws` | WebSocket connection for streaming chat |
-| GET | `/api/settings` | Get server default settings |
-| GET | `/api/list_models` | List available models |
-| POST | `/api/select_model` | Switch active model |
-| GET | `/api/list_chats` | List saved chats |
-| POST | `/api/new_chat` | Create new chat |
-| POST | `/api/load_chat` | Load chat history |
-| POST | `/api/delete_chat` | Delete chat |
-| POST | `/api/rename_chat` | Rename chat |
-| POST | `/api/upload_image` | Upload image (multimodal models) |
-| POST | `/api/upload_text` | Upload text/code file |
-| POST | `/api/upload_audio` | Upload audio file |
-| POST | `/api/generate_speech` | Generate speech (TTS models) |
+| GET | `/v1/settings` | Get server default settings |
+| GET | `/v1/list_models` | List available models |
+| POST | `/v1/select_model` | Switch active model |
+| GET | `/v1/list_chats` | List saved chats |
+| POST | `/v1/new_chat` | Create new chat |
+| POST | `/v1/load_chat` | Load chat history |
+| POST | `/v1/delete_chat` | Delete chat |
+| POST | `/v1/rename_chat` | Rename chat |
+| POST | `/v1/upload_image` | Upload image (multimodal models) |
+| POST | `/v1/upload_text` | Upload text/code file |
+| POST | `/v1/upload_audio` | Upload audio file |
+| POST | `/v1/generate_speech` | Generate speech (TTS models) |
 
 ---
 

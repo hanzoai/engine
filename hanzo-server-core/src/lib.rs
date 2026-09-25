@@ -104,7 +104,7 @@
 //!         .await
 //!         .unwrap();
 //!
-//!     let hanzo_base_path = "/api/mistral";
+//!     let hanzo_base_path = "/engine";
 //!
 //!     let hanzo_routes = RouterBuilder::new()
 //!         .with_hanzo(shared_hanzo.clone())
