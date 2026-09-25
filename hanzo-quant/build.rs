@@ -115,6 +115,10 @@ fn main() -> Result<(), String> {
         // The block-scaled path needs CUTLASS headers and sm_121a, so it has its own builder.
         excluded_files.push("nvfp4_cutlass.cu");
         excluded_files.push("nvfp4_quantize.cu");
+        // The activation quantizers must not take --use_fast_math: they have their own builder.
+        excluded_files.push("quantize/*");
+        // Routed experts build with CUTLASS for sm_121a, without fast math: their own builder.
+        excluded_files.push("moe/*");
         builder = builder.exclude(&excluded_files);
 
         // https://github.com/hanzoai/engine/issues/286
@@ -138,6 +142,39 @@ fn main() -> Result<(), String> {
             .expect("Build mistral quant lib failed!");
         println!("cargo:rustc-link-search={}", build_dir.display());
         println!("cargo:rustc-link-lib=hanzoquant");
+
+        // Activation quantizers: bit-exact with the served kernels, so no --use_fast_math (every
+        // division and reciprocal would become an approximation the server does not use) and no
+        // contraction. The approximate instructions the server does use are inline PTX.
+        let mut quantize_builder = cudaforge::KernelBuilder::new()
+            .source_glob("kernels/quantize/*.cu")
+            .watch(["kernels/quantize"])
+            .out_dir(build_dir.clone())
+            .arg("-std=c++17")
+            .arg("-O3")
+            .arg("-U__CUDA_NO_HALF_OPERATORS__")
+            .arg("-U__CUDA_NO_HALF_CONVERSIONS__")
+            .arg("-U__CUDA_NO_HALF2_OPERATORS__")
+            .arg("-U__CUDA_NO_BFLOAT16_CONVERSIONS__")
+            .arg("--expt-relaxed-constexpr")
+            .arg("--expt-extended-lambda")
+            .arg("--fmad=false")
+            .arg("--compiler-options")
+            .arg("-fPIC");
+        if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
+            quantize_builder = quantize_builder
+                .arg("--compiler-options")
+                .arg(cuda_nvcc_flags_env);
+        }
+        let quantize_lib = if target.contains("msvc") {
+            build_dir.join("hanzoquantize.lib")
+        } else {
+            build_dir.join("libhanzoquantize.a")
+        };
+        quantize_builder
+            .build_lib(quantize_lib)
+            .expect("Build hanzo activation quantizers failed!");
+        println!("cargo:rustc-link-lib=hanzoquantize");
         println!("cargo:rustc-link-lib=dylib=cudart");
 
         if target.contains("msvc") {
@@ -161,7 +198,9 @@ fn main() -> Result<(), String> {
                     "kernels/nvfp4_cutlass/nvfp4_cutlass.cu",
                     "kernels/nvfp4_cutlass/nvfp4_quantize.cu",
                 ])
-                .watch(["kernels/nvfp4_cutlass"])
+                .source_glob("kernels/moe/*.cu")
+                .watch(["kernels/nvfp4_cutlass", "kernels/quantize"])
+                .watch(["kernels/moe"])
                 .out_dir(build_dir.clone())
                 // Block-scaled MMA is a family-specific feature: plain sm_121 will not do.
                 .compute_cap_arch("121a")
