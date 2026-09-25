@@ -1364,3 +1364,29 @@ Two things had to be fixed before any of this could be measured at all, and both
 
 
 
+
+## MoE router and shared-expert overlap held to vLLM (W8c: E2, E3)
+
+- **One router.** `src/cuda/exact/route.cu` is vLLM v0.29.0's `topkGating`, verbatim, built in
+  the exact lane (`src/cuda/exact/*.cu`, no `--use_fast_math`, as vLLM builds `_moe_C`). It serves
+  every MoE model through `ops::moe_router_topk` for vLLM's 15 fused counts (1-512 powers of two,
+  192, 320, 384, 448, 576); other counts keep the portable path. Bitwise vs vLLM on 495 cases
+  (15 counts x f32/bf16/f16 x 11 configs); the same source with fast math differs in 173,639 words.
+- **The gate is cuBLAS's choice, and the workspace changes it.** `cuda::lane::Lane::linear` is
+  torch's `F.linear` (GemmEx T/N, COMPUTE_32F, DEFAULT_TENSOR_OP) on a handle carrying torch's
+  32 MiB workspace. Without it (hanzo-ml's handle, or 4 MiB) the N=512 gate differs at M 98-101,
+  126-160, 184-256, 289-320. Never route the gate through hanzo-ml matmul or UnquantLinear.
+- **cuBLAS class map on GB10, cuBLAS 13.1.1** (rows bitwise equal across M within a class):
+  N=512: {1, 17-183, 257-320} | {2-16} | {184-256, 321-4096}; N=1: one class. {2-16} is the
+  reduced-precision split-K kernel (57-59% of logits correctly rounded vs 100% at M=1). vLLM's
+  capture lists [1,2,4,8,16] and [1,2,4,5,8,10,16,20,...,80] never pad across a class; its full
+  512 grid would, at T=177..183 -> 184 (C3/W3 owns batch padding).
+- **Pin.** `lane::CUBLAS = 13.1.1` (vLLM's wheel ships nvidia-cublas 13.1.1.3, byte-identical to
+  /usr/local/cuda-13.0's). **Hazard:** /usr/local/cuda-13.4 with cuBLAS 13.7.0.27 is installed
+  beside it; an alternatives flip or LD_LIBRARY_PATH change moves gate logits silently except for
+  the startup warn, `lane::tests::cublas_version` and `pad_classes`. Dockerfile.cuda pins
+  libcublas-13-0=13.1.1.3-1.
+- **Branch** (`cuda::branch`): side Lane + two reused events, fork before the router gate GEMM,
+  join before the combine, capture-safe; refuses a context with cudarc event tracking on.
+- Goldens: `scripts/qwen4exp_moe_golden.py {route,gate,shared,check}` ->
+  `hanzo-engine/tests/fixtures/qwen4exp_moe/`. Window checks: `scripts/qwen4exp_moe_window.sh`.

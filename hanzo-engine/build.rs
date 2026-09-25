@@ -58,8 +58,37 @@ fn main() {
         builder
             .build_lib(out_file)
             .expect("Build mistral-core failed!");
+
+        // The exact lane: kernels held bitwise to vLLM's, built as vLLM builds _moe_C, without
+        // --use_fast_math (IEEE expf and division, no FTZ).
+        let mut exact = cudaforge::KernelBuilder::new()
+            .source_glob("src/cuda/exact/*.cu")
+            .out_dir(&build_dir)
+            .arg("-std=c++17")
+            .arg("-O3")
+            .arg("-U__CUDA_NO_HALF_OPERATORS__")
+            .arg("-U__CUDA_NO_HALF_CONVERSIONS__")
+            .arg("-U__CUDA_NO_HALF2_OPERATORS__")
+            .arg("-U__CUDA_NO_BFLOAT16_CONVERSIONS__")
+            .arg("--expt-relaxed-constexpr")
+            .arg("--expt-extended-lambda")
+            .arg("--compiler-options")
+            .arg("-fPIC");
+        if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
+            exact = exact.arg("--compiler-options").arg(cuda_nvcc_flags_env);
+        }
+        let exact_file = if target.contains("msvc") {
+            build_dir.join("hanzocudaexact.lib")
+        } else {
+            build_dir.join("libhanzocudaexact.a")
+        };
+        exact
+            .build_lib(exact_file)
+            .expect("Build hanzo exact CUDA lane failed!");
+
         println!("cargo:rustc-link-search={}", build_dir.display());
         println!("cargo:rustc-link-lib=hanzocuda");
+        println!("cargo:rustc-link-lib=hanzocudaexact");
         println!("cargo:rustc-link-lib=dylib=cudart");
 
         if target.contains("msvc") {
