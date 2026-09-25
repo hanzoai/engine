@@ -46,12 +46,20 @@ struct Entry {
 pub struct SchedulerState {
     sessions: HashMap<String, Entry>,
     prefixes: HashMap<String, Entry>,
+    /// prefix -> worker -> (tokens that worker reported serving from cache, seen).
+    /// A hint says who saw a prefix; this says who still holds it, in tokens, and
+    /// is the only locality evidence that survives eviction or a replica restart.
+    residency: HashMap<String, HashMap<String, (usize, Instant)>>,
     ttft: HashMap<String, f64>,
 }
 
 impl SchedulerState {
     pub(super) fn invalidate_cache(&mut self, worker: &str) {
         self.prefixes.retain(|_, entry| entry.worker != worker);
+        for by_worker in self.residency.values_mut() {
+            by_worker.remove(worker);
+        }
+        self.residency.retain(|_, by_worker| !by_worker.is_empty());
         self.ttft.remove(worker);
     }
 
@@ -64,6 +72,34 @@ impl SchedulerState {
             .retain(|_, e| now.saturating_duration_since(e.seen) < SESSION_TTL);
         self.prefixes
             .retain(|_, e| now.saturating_duration_since(e.seen) < PREFIX_TTL);
+        for by_worker in self.residency.values_mut() {
+            by_worker.retain(|_, (_, seen)| now.saturating_duration_since(*seen) < PREFIX_TTL);
+        }
+        self.residency
+            .retain(|_, by_worker| !by_worker.is_empty());
+    }
+
+    /// Most any worker has reported for a prefix, or zero with nothing measured.
+    fn cached_max(&self, prefix: Option<&String>) -> usize {
+        prefix
+            .and_then(|p| self.residency.get(p))
+            .map(|by_worker| {
+                by_worker
+                    .values()
+                    .map(|(tokens, _)| *tokens)
+                    .max()
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0)
+    }
+
+    /// Tokens a specific worker reported having cached for this prefix.
+    fn cached_tokens(&self, prefix: Option<&String>, worker: &str) -> usize {
+        prefix
+            .and_then(|p| self.residency.get(p))
+            .and_then(|by_worker| by_worker.get(worker))
+            .map(|(tokens, _)| *tokens)
+            .unwrap_or(0)
     }
 }
 
@@ -122,21 +158,31 @@ impl ReplicaSet {
             |n: &&Arc<Node>| healthy(n) && n.inflight.load(Ordering::Acquire) < self.slots(n);
         let mut selected = None;
         if let Some(target) = &hints.target {
-            // A target is a configured ID, never a caller-supplied URL. Fail closed.
+            // A target is a configured ID, never a caller-supplied URL. Inside
+            // this pool it is a demand: held slots mean wait, absent means the
+            // caller pinned a box that does not serve this model, and answering
+            // an in-range request with 503 there loses both the request and the
+            // locality the pin was chasing. Residency below still prefers it.
             selected = inner.nodes.get(target).filter(available).cloned();
-            selected.as_ref()?;
-        } else if let Some(pin) = hints.session.as_ref().and_then(|s| state.sessions.get(s)) {
-            selected = inner
-                .nodes
-                .get(&pin.worker)
-                .filter(|n| {
-                    healthy(n)
-                        && n.inflight.load(Ordering::Acquire) < self.slots(n).saturating_mul(2)
-                })
-                .cloned();
+            if selected.is_none() && inner.nodes.contains_key(target) {
+                return None;
+            }
         }
         if selected.is_none() {
-            let cached = hints.prefix.as_ref().and_then(|p| state.prefixes.get(p));
+            if let Some(pin) = hints.session.as_ref().and_then(|s| state.sessions.get(s)) {
+                selected = inner
+                    .nodes
+                    .get(&pin.worker)
+                    .filter(|n| {
+                        healthy(n)
+                            && n.inflight.load(Ordering::Acquire)
+                                < self.slots(n).saturating_mul(2)
+                    })
+                    .cloned();
+            }
+        }
+        if selected.is_none() {
+            let hinted = hints.prefix.as_ref().and_then(|p| state.prefixes.get(p));
             let mut sessions: HashMap<&str, usize> = HashMap::new();
             for e in state.sessions.values() {
                 *sessions.entry(&e.worker).or_default() += 1;
@@ -144,7 +190,12 @@ impl ReplicaSet {
             // Stable ID breaks exact ties, independent of HashMap iteration order.
             let rank = |n: &Arc<Node>| {
                 let settings = n.settings.read().unwrap().clone();
-                let cache = cached.is_some_and(|e| e.worker == n.replica.id);
+                let measured = state.cached_tokens(hints.prefix.as_ref(), &n.replica.id);
+                // A worker holding more of this prefix wins outright. Only when
+                // nothing is measured anywhere does the unproven hint decide.
+                let cache = measured > 0
+                    || (state.cached_max(hints.prefix.as_ref()) == 0
+                        && hinted.is_some_and(|e| e.worker == n.replica.id));
                 let role = hints
                     .role
                     .as_ref()
@@ -154,6 +205,7 @@ impl ReplicaSet {
                     as f64
                     / settings.weight as f64;
                 (
+                    std::cmp::Reverse(measured),
                     !cache,
                     !role,
                     load,
@@ -182,7 +234,13 @@ impl ReplicaSet {
 
     /// Only complete successful responses teach locality. Aborted/error streams
     /// do not claim reusable prefixes. Health transitions invalidate these hints.
-    pub fn observe_completion(&self, worker: &str, hints: &RoutingHints, now: Instant) {
+    pub fn observe_completion(
+        &self,
+        worker: &str,
+        hints: &RoutingHints,
+        cached: Option<usize>,
+        now: Instant,
+    ) {
         let inner = self.inner.read().unwrap();
         if !inner
             .nodes
@@ -195,6 +253,18 @@ impl ReplicaSet {
         state.prune(now);
         if let Some(prefix) = &hints.prefix {
             remember(&mut state.prefixes, prefix.clone(), worker, now);
+            match cached {
+                Some(tokens) => {
+                    state
+                        .residency
+                        .entry(prefix.clone())
+                        .or_default()
+                        .insert(worker.to_owned(), (tokens, now));
+                }
+                // An engine that reports nothing records nothing: absence must
+                // not read as a miss, or placement discards the hint it still has.
+                None => {}
+            }
         }
         if let Some(session) = &hints.session {
             if let Some(pin) = state.sessions.get_mut(session) {
@@ -261,7 +331,7 @@ mod tests {
         h.prefix = Some("cached-prefix".into());
         h.approx_tokens = 65_536;
         assert_eq!(pick(&p, &h, now).id(), "evo");
-        p.observe_completion("evo", &h, now);
+        p.observe_completion("evo", &h, None, now);
         h.approx_tokens = 176_939;
         assert_eq!(pick(&p, &h, now).id(), "spark");
         h.target = Some("evo".into());
@@ -326,7 +396,7 @@ mod tests {
         h.role = Some("reviewer".into());
         h.prefix = Some("org/model/prefix".into());
         assert_eq!(pick(&p, &h, now).id(), "http://evo");
-        p.observe_completion("http://evo", &h, now);
+        p.observe_completion("http://evo", &h, None, now);
         let mut other = hints("main");
         other.prefix = h.prefix.clone();
         other.role = Some("main".into());
@@ -337,11 +407,47 @@ mod tests {
         );
         other.target = Some("http://spark".into());
         assert_eq!(pick(&p, &other, now).id(), "http://spark");
+        // A target naming something outside this pool is a preference, not a
+        // demand: it cannot kill the request and cannot become an address.
+        // Locality decides instead, and the pin is where the KV actually is.
         other.target = Some("http://unconfigured".into());
-        assert!(p.pick_agent(&other, &HashSet::new(), now).is_none());
+        assert_eq!(pick(&p, &other, now).id(), "http://spark");
         h.session = Some("fresh".into());
         h.role = Some("main".into());
         assert_eq!(pick(&p, &h, now + SESSION_TTL).id(), "http://spark");
+    }
+
+    /// Residency is what a TTL hint cannot be: proof, per worker, in tokens.
+    #[test]
+    fn measured_residency_outranks_a_stale_hint_and_dies_with_the_worker() {
+        let p = pool();
+        let now = Instant::now();
+        let prefix = "org/model/40k-tool-schema";
+        // Spark served this prefix and reported nothing, so it only holds a
+        // hint. Evo reported 40k cached tokens for the same prefix, and it is
+        // the lighter-weight box, so nothing but the measurement prefers it.
+        let mut seen = hints("on-spark");
+        seen.prefix = Some(prefix.into());
+        p.observe_completion("http://spark", &seen, None, now);
+        let mut proven = seen.clone();
+        proven.session = Some("on-evo".into());
+        p.observe_completion("http://evo", &proven, Some(40_000), now);
+        let mut cold = seen.clone();
+        cold.session = None;
+        assert_eq!(
+            pick(&p, &cold, now).id(),
+            "http://evo",
+            "measured tokens beat both the hint and the weight"
+        );
+        // A health flip is a process restart: the blocks are gone, so the claim
+        // must go with them and the surviving evidence decides.
+        p.mark_unhealthy("http://evo");
+        p.mark_healthy("http://evo");
+        assert_eq!(
+            pick(&p, &cold, now).id(),
+            "http://spark",
+            "an invalidated worker cannot still claim residency"
+        );
     }
 
     #[test]
@@ -381,7 +487,7 @@ mod tests {
             prefix: Some("p".into()),
             ..Default::default()
         };
-        p.observe_completion("http://evo", &h, now);
+        p.observe_completion("http://evo", &h, None, now);
         p.observe_ttft("http://evo", Duration::from_millis(100));
         p.observe_ttft("http://evo", Duration::from_millis(200));
         assert_eq!(p.statuses()[0].ttft_ewma_ms, Some(120.0));

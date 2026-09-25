@@ -537,6 +537,7 @@ fn stream_response(
         is_sse,
         ping_deadline,
         rid: if debug_on() { Some(rid) } else { None },
+        cache: CacheScan::default(),
     });
     let mut response = Response::new(body);
     *response.status_mut() = status;
@@ -564,6 +565,7 @@ struct LeasedStream {
     is_sse: bool,
     ping_deadline: Pin<Box<tokio::time::Sleep>>,
     rid: Option<String>,
+    cache: CacheScan,
 }
 
 impl Stream for LeasedStream {
@@ -590,6 +592,9 @@ impl Stream for LeasedStream {
                             this.set.observe_ttft(lease.id(), this.started.elapsed());
                         }
                     }
+                }
+                if this.successful {
+                    this.cache.scan(&bytes);
                 }
                 this.ping_deadline
                     .as_mut()
@@ -622,8 +627,13 @@ impl Stream for LeasedStream {
                 }
                 if let Some(lease) = this.lease.take() {
                     if this.successful && this.first_byte {
-                        this.set
-                            .observe_completion(lease.id(), &this.hints, Instant::now());
+                        let cached = this.cache.tokens;
+                        this.set.observe_completion(
+                            lease.id(),
+                            &this.hints,
+                            cached,
+                            Instant::now(),
+                        );
                     }
                 }
                 Poll::Ready(None)
@@ -639,6 +649,48 @@ impl Stream for LeasedStream {
                 }
             }
         }
+    }
+}
+
+/// Reads how much of a prompt an engine served from its own cache. Both usage
+/// spellings count: `cache_read_input_tokens` on the Anthropic surface,
+/// `cached_tokens` on the OpenAI one. A response that reports nothing stays
+/// `None`, which is not the same fact as a response reporting zero.
+#[derive(Default)]
+struct CacheScan {
+    tokens: Option<usize>,
+    /// Tail of the previous chunk, so a field split across two is still read.
+    carry: Vec<u8>,
+}
+
+const CACHE_MARKER_LEN: usize = b"\"cache_read_input_tokens\":".len();
+const CACHE_MARKERS: [&[u8]; 2] = [
+    b"\"cache_read_input_tokens\":",
+    b"\"cached_tokens\":",
+];
+
+impl CacheScan {
+    fn scan(&mut self, bytes: &[u8]) {
+        let mut window = std::mem::take(&mut self.carry);
+        window.extend_from_slice(bytes);
+        let first = window.len().saturating_sub(bytes.len() + CACHE_MARKER_LEN);
+        for marker in CACHE_MARKERS {
+            let mut at = first;
+            while let Some(hit) = window[at..].windows(marker.len()).position(|w| w == &marker[..]) {
+                let value = at + hit + marker.len();
+                let mut end = value;
+                while end < window.len() && window[end].is_ascii_digit() {
+                    end += 1;
+                }
+                if let Ok(text) = std::str::from_utf8(&window[value..end]) {
+                    if let Ok(tokens) = text.parse::<usize>() {
+                        self.tokens = Some(self.tokens.unwrap_or(0).max(tokens));
+                    }
+                }
+                at = value;
+            }
+        }
+        self.carry = window[window.len().saturating_sub(CACHE_MARKER_LEN - 1)..].to_vec();
     }
 }
 
@@ -1324,6 +1376,7 @@ mod tests {
             is_sse: false,
             ping_deadline: Box::pin(tokio::time::sleep(Duration::from_secs(15))),
             rid: None,
+            cache: CacheScan::default(),
         };
         while stream.next().await.is_some() {}
         assert_eq!(set.statuses()[0].ttft_ewma_ms, None);
@@ -1368,6 +1421,7 @@ mod tests {
                 is_sse: false,
                 ping_deadline: Box::pin(tokio::time::sleep(Duration::from_secs(15))),
                 rid: None,
+                cache: CacheScan::default(),
             };
             assert_eq!(set.statuses()[0].inflight, 1);
             if mode != "abort" {
@@ -1602,7 +1656,7 @@ mod e2e {
     }
 
     #[tokio::test]
-    async fn cloud_metadata_routes_roles_and_rejects_unknown_targets() {
+    async fn cloud_metadata_routes_roles_and_treats_an_absent_target_as_a_preference() {
         let (url_a, _) = spawn_mock("A").await;
         let (url_b, _) = spawn_mock("B").await;
         let balancer = Balancer::new(2);
@@ -1644,7 +1698,11 @@ mod e2e {
             .unwrap();
         assert_eq!(resp.headers()[REPLICA_HEADER], "spark");
         assert_eq!(replica_id(&resp.text().await.unwrap()), "A");
-        body["metadata"]["target_replica"] = serde_json::json!("unknown");
+        // Pinning a box that does not serve this model must not kill the
+        // request: the session pin still holds, and no caller string becomes an
+        // address. A saturated in-pool target still waits (retry-after), which
+        // replica::scheduler::tests covers directly.
+        body["metadata"]["target_replica"] = serde_json::json!("http://evil.example");
         let resp = client
             .post(format!("{base}/v1/chat/completions"))
             .header("x-org-id", "acme")
@@ -1652,8 +1710,11 @@ mod e2e {
             .send()
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(resp.headers()["retry-after"], "1");
+        assert_eq!(resp.status(), StatusCode::OK, "an absent target is not a refusal");
+        assert_eq!(
+            resp.headers()[REPLICA_HEADER], "evo",
+            "with no matching ID, the pin and locality decide"
+        );
     }
 
     #[tokio::test]
