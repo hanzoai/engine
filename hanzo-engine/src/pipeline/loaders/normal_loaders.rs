@@ -12,7 +12,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     lora::{LoraConfig, Ordering},
-    paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata},
+    paged_attention::{AttentionImplementation, KvLayers, ModelConfigLike, ModelConfigMetadata},
     pipeline::{
         isq::IsqModelLoader, text_models_inputs_processor::FlashParams, EitherCache, IsqModel,
         ModelForwardContext,
@@ -96,6 +96,9 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin 
 
 /// Metadata for loading a model with ISQ or device mapping.
 pub struct NormalLoadingMetadata {
+    /// The safetensors files behind the varbuilder, for a model that maps part of a file itself
+    /// (qwen4exp's n-gram table). Empty when there are none.
+    pub weights: Vec<std::path::PathBuf>,
     // Device mapping metadata which can be used to construct a concrete device mapper
     pub mapper: Box<dyn DeviceMapper + Send + Sync>,
     // Flag to check if loading in ISQ
@@ -223,6 +226,8 @@ pub enum NormalLoaderType {
     Olmo,
     #[serde(rename = "mamba")]
     Mamba,
+    #[serde(rename = "qwen4exp")]
+    Qwen4Exp,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -253,6 +258,7 @@ impl NormalLoaderType {
             "GraniteMoeHybridForCausalLM" => Ok(Self::GraniteMoeHybrid),
             "GptOssForCausalLM" => Ok(Self::GptOss),
             "Qwen3NextForCausalLM" => Ok(Self::Qwen3Next),
+            "Qwen4ExpForConditionalGeneration" => Ok(Self::Qwen4Exp),
             "MiniMaxM2ForCausalLM" => Ok(Self::MiniMaxM2),
             "GPT2LMHeadModel" => Ok(Self::GPT2),
             "FalconForCausalLM" | "RWForCausalLM" => Ok(Self::Falcon),
@@ -298,7 +304,8 @@ impl FromStr for NormalLoaderType {
             "falcon" => Ok(Self::Falcon),
             "olmo" => Ok(Self::Olmo),
             "mamba" => Ok(Self::Mamba),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `deepseekv32`, `deepseekv4`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `glm5moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `qwen3next`, `minimax_m2`, `gpt2`, `falcon`, `olmo`, `mamba`.")),
+            "qwen4exp" => Ok(Self::Qwen4Exp),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `deepseekv32`, `deepseekv4`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `glm5moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `qwen3next`, `minimax_m2`, `gpt2`, `falcon`, `olmo`, `mamba`, `qwen4exp`.")),
         }
     }
 }
@@ -335,6 +342,7 @@ impl Display for NormalLoaderType {
             Self::Falcon => write!(f, "falcon"),
             Self::Olmo => write!(f, "olmo"),
             Self::Mamba => write!(f, "mamba"),
+            Self::Qwen4Exp => write!(f, "qwen4exp"),
         }
     }
 }
@@ -405,6 +413,7 @@ impl AutoNormalLoader {
             NormalLoaderType::Falcon => Ok(Box::new(FalconLoader)),
             NormalLoaderType::Olmo => Ok(Box::new(OlmoLoader)),
             NormalLoaderType::Mamba => Ok(Box::new(MambaLoader)),
+            NormalLoaderType::Qwen4Exp => Ok(Box::new(Qwen4ExpLoader)),
         }
     }
 }
@@ -5490,6 +5499,7 @@ impl DeviceMappedModelLoader for GraniteMoeHybridLoader {
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
         let cfg: crate::models::granite::Config = serde_json::from_str(config)?;
 
+        let attention_layers = cfg.attention_layers();
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
             num_layers: cfg.num_hidden_layers,
@@ -5502,7 +5512,7 @@ impl DeviceMappedModelLoader for GraniteMoeHybridLoader {
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
-        Ok(Box::new(cfg))
+        Ok(Box::new(KvLayers::new(cfg, attention_layers)))
     }
 }
 
@@ -5909,6 +5919,7 @@ impl DeviceMappedModelLoader for Qwen3NextLoader {
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
         let cfg: crate::models::qwen3_next::Config = serde_json::from_str(config)?;
 
+        let attention_layers = cfg.attention_layers();
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
             num_layers: cfg.num_hidden_layers,
@@ -5921,7 +5932,199 @@ impl DeviceMappedModelLoader for Qwen3NextLoader {
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
-        Ok(Box::new(cfg))
+        Ok(Box::new(KvLayers::new(cfg, attention_layers)))
+    }
+}
+
+// ======================== Qwen4Exp (Qwen3.8-Flash-Next) loader
+
+/// [`NormalLoader`] for Qwen3.8-Flash-Next from its safetensors snapshot, text only: the vision
+/// tower (`model.visual.*`) is never read.
+///
+/// [`NormalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.NormalLoader.html
+pub struct Qwen4ExpLoader;
+
+impl Qwen4ExpLoader {
+    fn cfg(config: &str) -> Result<crate::models::qwen4exp::Config> {
+        Ok(serde_json::from_str(config)?)
+    }
+
+    /// Bytes each manifest entry takes once loaded, in its device dtype: the NVFP4 per-expert
+    /// scalars fold into a bank's alpha and global scale, the f32-held tensors (HC norms, GDN
+    /// A_log, dt_bias, conv, in_proj_a/b, the Gemma norms) count 4 bytes an element, the rest
+    /// their stored size. Host entries (the n-gram table and hash) count nothing.
+    pub(crate) fn device_bytes(e: &crate::models::qwen4exp::Entry) -> usize {
+        use crate::models::qwen4exp::Role;
+        if e.role == Role::Host {
+            return 0;
+        }
+        let n: usize = e.shape.iter().product();
+        let name = e.name.as_str();
+        if name.ends_with("weight_scale_2") || name.ends_with("input_scale") {
+            // one f32 of alpha and one of the global scale per expert per bank, taken on the
+            // weight_scale_2 entry
+            return if name.ends_with("weight_scale_2") { 8 } else { 0 };
+        }
+        let f32_held = name.contains("hc_norm")
+            || name.ends_with("A_log")
+            || name.ends_with("dt_bias")
+            || name.contains("linear_attn.conv1d")
+            || name.contains("in_proj_a.")
+            || name.contains("in_proj_b.")
+            || name.ends_with("q_norm.weight")
+            || name.ends_with("k_norm.weight")
+            || name.contains("ple.norm_")
+            || name.contains("linear_attn.norm.weight");
+        if f32_held {
+            n * 4
+        } else {
+            e.bytes()
+        }
+    }
+
+    /// Device bytes per decoder layer and outside the layers.
+    pub(crate) fn sizes(config: &str) -> Result<(Vec<usize>, usize)> {
+        let cfg = Self::cfg(config)?;
+        let text = cfg.text();
+        let mut layers = vec![0usize; text.num_hidden_layers];
+        let mut rest = 0usize;
+        for e in crate::models::qwen4exp::manifest(text)? {
+            let b = Self::device_bytes(&e);
+            let layer = e
+                .name
+                .strip_prefix(&format!("{}layers.", crate::models::qwen4exp::PREFIX))
+                .and_then(|r| r.split('.').next())
+                .and_then(|i| i.parse::<usize>().ok());
+            match layer {
+                Some(i) => layers[i] += b,
+                None => rest += b,
+            }
+        }
+        Ok((layers, rest))
+    }
+}
+
+impl NormalModelLoader for Qwen4ExpLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg = Self::cfg(config)?;
+        let dtype = vb.dtype();
+        Ok(Box::new(models::quantized_qwen4exp::ModelWeights::new(
+            &cfg,
+            vb,
+            &normal_loading_metadata.weights,
+            normal_loading_metadata.mapper,
+            attention_mechanism,
+            dtype,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _vb: ShardedVarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        anyhow::bail!("qwen4exp does not support X-LoRA")
+    }
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(Self::cfg(config)?))
+    }
+    fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
+        Ok(true)
+    }
+}
+
+impl IsqModelLoader for Qwen4ExpLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        // Already quantized: NVFP4 experts and block-FP8 side layers.
+        Ok(Vec::new())
+    }
+    fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(Vec::new())
+    }
+}
+
+impl DeviceMappedModelLoader for Qwen4ExpLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        // A prefill chunk's widest live activations: the four streams plus the routed experts'
+        // gate and up outputs over the top-k.
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+        let cfg = Self::cfg(config)?;
+        let t = cfg.text();
+        let tokens = (*max_seq_len).min(ATTENTION_CHUNK_SIZE) * max_batch_size;
+        Ok(tokens
+            * (t.hc_count * t.hidden_size + t.num_experts_per_tok * t.moe_intermediate_size * 2))
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        _dtype: DType,
+        _weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        Ok(Self::sizes(config)?.1)
+    }
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        _dtype: DType,
+        _weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        Ok(Self::sizes(config)?.0)
+    }
+    fn recurrent_state_bytes_per_seq(&self, config: &str) -> Result<usize> {
+        Ok(Self::cfg(config)?.text().state_bytes_per_sequence())
+    }
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        Ok(Self::cfg(config)?.text().num_hidden_layers)
+    }
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg = Self::cfg(config)?;
+        let props = cfg.props();
+        let t = cfg.text();
+        let meta = ModelConfigMetadata {
+            max_seq_len: props.max_seq_len,
+            num_layers: t.num_hidden_layers,
+            hidden_size: t.hidden_size,
+            num_kv_heads: t.num_key_value_heads,
+            num_attn_heads: t.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: t.head_dim,
+            v_head_dim: t.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+        let attention = (0..t.num_hidden_layers).filter(|&i| t.attention(i)).collect();
+        Ok(Box::new(KvLayers::new(meta, attention)))
     }
 }
 

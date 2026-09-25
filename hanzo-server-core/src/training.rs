@@ -17,7 +17,6 @@
 //! separate metadata and never wait on a running step.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::Path;
@@ -154,12 +153,11 @@ pub struct SampleResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SaveWeightsRequest {
-    /// Adapter name (`[A-Za-z0-9._-]`); becomes the directory name.
+    /// Adapter name (`[A-Za-z0-9._-]`). The adapter is written to
+    /// `~/.cache/hanzo/adapters/{client_id}/{name}`; a request cannot choose the directory.
     pub name: String,
-    /// Parent directory; defaults to `~/.cache/hanzo/adapters/{client_id}`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dir: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
@@ -575,7 +573,7 @@ pub async fn training_sample(
     Ok(Json(SampleResponse { sequences }))
 }
 
-fn valid_adapter_name(name: &str) -> bool {
+pub(crate) fn valid_file_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
         && name != ".."
@@ -603,20 +601,17 @@ pub async fn training_save_weights(
     Path(id): Path<String>,
     Json(req): Json<SaveWeightsRequest>,
 ) -> Result<Json<SaveWeightsResponse>, TrainingError> {
-    if !valid_adapter_name(&req.name) {
+    if !valid_file_name(&req.name) {
         return Err(bad_request(
             "name must be non-empty [A-Za-z0-9._-] and not `.` / `..`",
         ));
     }
     let session = state.get(&id)?;
-    let parent = match &req.dir {
-        Some(dir) => PathBuf::from(dir),
-        None => dirs::home_dir()
-            .ok_or_else(|| internal("cannot resolve home directory for the default adapter dir"))?
-            .join(".cache/hanzo/adapters")
-            .join(&id),
-    };
-    let path = parent.join(&req.name);
+    let path = dirs::home_dir()
+        .ok_or_else(|| internal("cannot resolve home directory for the adapter dir"))?
+        .join(".cache/hanzo/adapters")
+        .join(&id)
+        .join(&req.name);
     let guard = session.ready_client().await?;
     let path = tokio::task::spawn_blocking(move || {
         let client = guard.as_ref().expect("ready_client guarantees Some");
@@ -634,6 +629,17 @@ pub async fn training_save_weights(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_weights_request_cannot_choose_a_directory() {
+        assert!(
+            serde_json::from_str::<SaveWeightsRequest>(r#"{"name":"a","dir":"/tmp"}"#).is_err()
+        );
+        assert!(serde_json::from_str::<SaveWeightsRequest>(r#"{"name":"a"}"#).is_ok());
+        for name in ["", ".", "..", "../a", "a/b", "/abs", "a\\b"] {
+            assert!(!valid_file_name(name), "{name:?} must be rejected");
+        }
+    }
 
     #[test]
     fn wire_datum_parses_text_and_tokens_forms() {
@@ -673,12 +679,12 @@ mod tests {
 
     #[test]
     fn adapter_names_reject_traversal() {
-        assert!(valid_adapter_name("my-adapter_v1.2"));
-        assert!(!valid_adapter_name(""));
-        assert!(!valid_adapter_name("."));
-        assert!(!valid_adapter_name(".."));
-        assert!(!valid_adapter_name("a/b"));
-        assert!(!valid_adapter_name("a\\b"));
+        assert!(valid_file_name("my-adapter_v1.2"));
+        assert!(!valid_file_name(""));
+        assert!(!valid_file_name("."));
+        assert!(!valid_file_name(".."));
+        assert!(!valid_file_name("a/b"));
+        assert!(!valid_file_name("a\\b"));
     }
 
     #[tokio::test]

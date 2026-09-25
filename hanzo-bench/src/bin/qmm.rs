@@ -63,11 +63,20 @@ fn main() -> anyhow::Result<()> {
     };
     // Qwen3-8B: q 4096x4096, k 1024x4096, v 1024x4096, o 4096x4096, gate/up 12288x4096, down 4096x12288.
     let default = [
-        "4096,4096", "1024,4096", "1024,4096", "4096,4096", "12288,4096", "12288,4096", "4096,12288",
+        "4096,4096",
+        "1024,4096",
+        "1024,4096",
+        "4096,4096",
+        "12288,4096",
+        "12288,4096",
+        "4096,12288",
     ];
     let shapes: Vec<(usize, usize)> = match &args.shape {
         Some(v) => v.iter().map(|s| parse_shape(s)).collect::<Result<_, _>>()?,
-        None => default.iter().map(|s| parse_shape(s)).collect::<Result<_, _>>()?,
+        None => default
+            .iter()
+            .map(|s| parse_shape(s))
+            .collect::<Result<_, _>>()?,
     };
 
     let mut layer_ms = 0.0f64;

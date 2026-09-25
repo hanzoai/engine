@@ -83,6 +83,51 @@ generate_repr!(Logprobs);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// Logprobs in the OpenAI completions shape: one entry per generated token, each with its text
+/// offset into the completion.
+pub struct CompletionLogprobs {
+    pub tokens: Vec<String>,
+    pub token_logprobs: Vec<f32>,
+    pub top_logprobs: Vec<std::collections::HashMap<String, f32>>,
+    pub text_offset: Vec<usize>,
+}
+
+generate_repr!(CompletionLogprobs);
+
+impl CompletionLogprobs {
+    /// From per-token logprobs, `start` bytes into the completion text.
+    pub fn new(logprobs: &[ResponseLogprob], start: usize) -> Self {
+        let mut offset = start;
+        let mut out = Self {
+            tokens: Vec::with_capacity(logprobs.len()),
+            token_logprobs: Vec::with_capacity(logprobs.len()),
+            top_logprobs: Vec::with_capacity(logprobs.len()),
+            text_offset: Vec::with_capacity(logprobs.len()),
+        };
+        for lp in logprobs {
+            out.text_offset.push(offset);
+            offset += lp.token.len();
+            out.tokens.push(lp.token.clone());
+            out.token_logprobs.push(lp.logprob);
+            out.top_logprobs.push(
+                lp.top_logprobs
+                    .iter()
+                    .map(|t| {
+                        (
+                            t.bytes.clone().unwrap_or_else(|| t.token.to_string()),
+                            t.logprob,
+                        )
+                    })
+                    .collect(),
+            );
+        }
+        out
+    }
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[derive(Debug, Clone, Serialize)]
 /// Chat completion choice.
 pub struct Choice {
     pub finish_reason: String,
@@ -113,7 +158,7 @@ generate_repr!(ChunkChoice);
 pub struct CompletionChunkChoice {
     pub text: String,
     pub index: usize,
-    pub logprobs: Option<ResponseLogprob>,
+    pub logprobs: Option<CompletionLogprobs>,
     pub finish_reason: Option<String>,
 }
 
@@ -127,6 +172,8 @@ pub struct Usage {
     pub completion_tokens: usize,
     pub prompt_tokens: usize,
     pub total_tokens: usize,
+    /// Prompt tokens served from the prefix cache. Counted inside `prompt_tokens`.
+    pub cached_prompt_tokens: usize,
     pub avg_tok_per_sec: f32,
     pub avg_prompt_tok_per_sec: f32,
     pub avg_compl_tok_per_sec: f32,
@@ -207,7 +254,7 @@ pub struct CompletionChoice {
     pub finish_reason: String,
     pub index: usize,
     pub text: String,
-    pub logprobs: Option<Logprobs>,
+    pub logprobs: Option<CompletionLogprobs>,
 }
 
 generate_repr!(CompletionChoice);
@@ -519,5 +566,42 @@ impl Response {
             }),
             Self::File(f) => Ok(ResponseOk::File(f)),
         }
+    }
+}
+
+#[cfg(test)]
+mod completion_logprobs_tests {
+    use super::*;
+
+    fn lp(token: &str, logprob: f32, top: &[(u32, &str, f32)]) -> ResponseLogprob {
+        ResponseLogprob {
+            token: token.to_string(),
+            logprob,
+            bytes: None,
+            top_logprobs: top
+                .iter()
+                .map(|&(id, text, logprob)| TopLogprob {
+                    token: id,
+                    logprob,
+                    bytes: Some(text.to_string()),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn completions_shape_offsets_tokens_into_the_text() {
+        let got = CompletionLogprobs::new(
+            &[
+                lp(" Paris", -0.7, &[(1, " Paris", -0.7), (2, " London", -3.5)]),
+                lp(".", -0.6, &[(3, ".", -0.6)]),
+            ],
+            0,
+        );
+        assert_eq!(got.tokens, [" Paris", "."]);
+        assert_eq!(got.token_logprobs, [-0.7, -0.6]);
+        assert_eq!(got.text_offset, [0, 6]);
+        assert_eq!(got.top_logprobs[0].get(" London"), Some(&-3.5));
+        assert_eq!(got.top_logprobs[1].len(), 1);
     }
 }

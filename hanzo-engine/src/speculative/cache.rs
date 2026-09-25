@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use hanzo_ml::{Device, Result, Tensor};
 
 use crate::device_map::DeviceMapper;
+use crate::kv_cache::{EitherCache, HybridCache};
 use crate::paged_attention::CacheEngine;
 use crate::pipeline::text_models_inputs_processor::{
     FlashParams, InputMetadata, PagedAttentionInputMetadata, PagedAttentionMeta,
@@ -97,13 +99,20 @@ pub trait SpeculativeCacheAccess {
 pub struct PagedSpeculativeCacheAccess<'a> {
     metadata: &'a PagedAttentionMeta,
     kv_cache: Vec<(Tensor, Tensor)>,
+    /// The recurrent pools of a hybrid target. Paged blocks hold only its attention layers.
+    recurrent: Option<Arc<Mutex<HybridCache>>>,
 }
 
 impl<'a> PagedSpeculativeCacheAccess<'a> {
-    pub fn new(metadata: &'a PagedAttentionMeta, cache_engine: &CacheEngine) -> Self {
+    pub fn new(
+        metadata: &'a PagedAttentionMeta,
+        cache_engine: &CacheEngine,
+        target: &EitherCache,
+    ) -> Self {
         Self {
             metadata,
             kv_cache: cache_engine.get_kv_cache().clone(),
+            recurrent: target.hybrid_arc(),
         }
     }
 }
@@ -130,6 +139,39 @@ impl SpeculativeCacheGuard for PagedSpeculativeCacheGuard<'_> {
 
 impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
     type Guard = PagedSpeculativeCacheGuard<'a>;
+
+    /// Trimming paged blocks drops the rejected drafts' keys and values. A hybrid target's
+    /// recurrent layers consumed those drafts too, so they rewind by the same count.
+    fn finish_verification(
+        &self,
+        guard: &mut Self::Guard,
+        seq: &mut Sequence,
+        keep_len: usize,
+        accepted_all: bool,
+    ) -> Result<()> {
+        if accepted_all {
+            guard.commit()?;
+        } else {
+            guard.rollback_to(keep_len)?;
+        }
+        let Some(hybrid) = &self.recurrent else {
+            return Ok(());
+        };
+        let rejected = guard.reserved_len.saturating_sub(keep_len);
+        if rejected == 0 {
+            return Ok(());
+        }
+        let slot = seq.recurrent_state_idx().ok_or_else(|| {
+            hanzo_ml::Error::Msg(format!(
+                "speculative sequence {} has no recurrent state slot",
+                seq.id()
+            ))
+        })?;
+        hybrid
+            .lock()
+            .map_err(|_| hanzo_ml::Error::Msg("hybrid cache poisoned".into()))?
+            .rewind_recurrent(slot, rejected)
+    }
 
     fn begin(
         &self,

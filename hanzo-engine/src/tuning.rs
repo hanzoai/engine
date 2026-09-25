@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::device_map::{DeviceLayerMapMetadata, DeviceMapMetadata};
 use crate::model_loader::{get_auto_device_map_params, get_model_dtype};
+use crate::paged_attention::ModelConfigLike;
 use crate::pipeline::{
     AutoDeviceMapParams, AutoEmbeddingLoader, AutoMultimodalLoader, AutoNormalLoader,
     DeviceMappedModelLoader, EmbeddingLoaderType, MultimodalLoaderType, NormalLoaderType,
@@ -148,7 +149,7 @@ fn select_devices(force_cpu: bool) -> Result<Vec<Device>> {
         return Ok(vec![Device::Cpu]);
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(feature = "cuda")]
     {
         if let Ok(dev) = Device::new_cuda(0) {
             return Ok(crate::device_map::get_all_similar_devices(&dev)?);
@@ -406,39 +407,36 @@ fn available_vram(devices: &[Device]) -> u64 {
 /// the context is limited by the model's native max, not VRAM
 #[allow(clippy::cast_possible_truncation)]
 fn calculate_max_context(
-    loader: &dyn DeviceMappedModelLoader,
-    config: &str,
+    model_cfg: &dyn ModelConfigLike,
     model_size_bytes: u64,
     available_vram_bytes: u64,
     dtype: DType,
-) -> Result<(usize, bool)> {
-    let model_cfg = loader.model_config(config)?;
+) -> (usize, bool) {
     let native_max_seq_len = model_cfg.max_seq_len();
 
     if model_size_bytes >= available_vram_bytes {
-        return Ok((0, false));
+        return (0, false);
     }
 
     let remaining_bytes = available_vram_bytes - model_size_bytes;
 
-    // KV cache elements per token (from ModelConfigLike trait)
-    // This accounts for num_kv_heads, k_head_dim, v_head_dim correctly
+    // KV cache elements per token across every cached layer, each at its own layer's
+    // num_kv_heads, k_head_dim, v_head_dim (from ModelConfigLike trait)
     let kv_elems_per_token = model_cfg.kv_cache_elements_per_token();
-    let num_layers = model_cfg.num_layers();
 
-    // Total KV cache bytes per token = elements * dtype_size * num_layers
+    // Total KV cache bytes per token = elements * dtype_size
     let dtype_size = dtype.size_in_bytes();
-    let kv_bytes_per_token = kv_elems_per_token * dtype_size * num_layers;
+    let kv_bytes_per_token = kv_elems_per_token * dtype_size;
 
     if kv_bytes_per_token == 0 {
-        return Ok((native_max_seq_len, true));
+        return (native_max_seq_len, true);
     }
 
     let calculated_max = remaining_bytes as usize / kv_bytes_per_token;
 
     // Return the minimum of calculated max and model's native max
     let is_at_model_max = calculated_max >= native_max_seq_len;
-    Ok((calculated_max.min(native_max_seq_len), is_at_model_max))
+    (calculated_max.min(native_max_seq_len), is_at_model_max)
 }
 
 fn map_for_candidate(
@@ -591,9 +589,10 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
             1.0
         };
 
-        let (context_room, context_is_model_max) =
-            calculate_max_context(loader, &config, estimated_size, avail_vram_bytes, dtype)
-                .unwrap_or((0, false));
+        let (context_room, context_is_model_max) = loader
+            .model_config(&config)
+            .map(|cfg| calculate_max_context(&*cfg, estimated_size, avail_vram_bytes, dtype))
+            .unwrap_or((0, false));
 
         let candidate = TuneCandidate {
             isq,
@@ -684,4 +683,39 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
         warnings,
         notes,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::paged_attention::{KvCacheLayout, KvLayers, ModelConfigMetadata};
+
+    /// A hybrid's context is priced by the attention layers it caches, not by every decoder layer:
+    /// the Qwen3.5-27B shape, 16 of 64 layers at 4 KV heads of 128, costs 16 x 2 x 4 x 128 x 2 B
+    /// = 32 KiB a token, a quarter of what the same model with attention everywhere costs.
+    #[test]
+    fn hybrid_context_counts_only_attention_layers() {
+        let dense = ModelConfigMetadata {
+            max_seq_len: 262144,
+            num_layers: 64,
+            hidden_size: 4096,
+            num_kv_heads: 4,
+            num_attn_heads: 32,
+            sliding_window: None,
+            k_head_dim: 128,
+            v_head_dim: 128,
+            kv_cache_layout: KvCacheLayout::StandardNoFlashInfer,
+        };
+        let hybrid = KvLayers::new(
+            dense.clone(),
+            (0..64).filter(|i| (i + 1) % 4 == 0).collect(),
+        );
+        let (model, gib) = (3 << 30, 1u64 << 30);
+        let fits = |config: &dyn ModelConfigLike, free| {
+            calculate_max_context(config, model, model + free, DType::BF16)
+        };
+        assert_eq!(fits(&hybrid, 4 * gib), (131072, false));
+        assert_eq!(fits(&dense, 4 * gib), (32768, false));
+        assert_eq!(fits(&hybrid, 16 * gib), (262144, true));
+    }
 }

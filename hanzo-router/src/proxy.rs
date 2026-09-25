@@ -405,14 +405,14 @@ async fn dispatch(
             Ok(resp) => {
                 if debug_on() {
                     let status = resp.status();
-                        tracing::info!(
-                            target: "router.debug",
-                            rid = %rid,
-                            replica = %lease.id(),
-                            status = %status.as_str(),
-                            headers_ms = started.elapsed().as_millis() as u64,
-                            "upstream headers",
-                        );
+                    tracing::info!(
+                        target: "router.debug",
+                        rid = %rid,
+                        replica = %lease.id(),
+                        status = %status.as_str(),
+                        headers_ms = started.elapsed().as_millis() as u64,
+                        "upstream headers",
+                    );
                 }
                 return stream_response(resp, lease, set.clone(), hints, started, rid);
             }

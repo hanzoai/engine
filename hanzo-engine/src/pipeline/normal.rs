@@ -15,7 +15,7 @@ use super::{
     GLM4Loader, GLM4MoeLiteLoader, GLM4MoeLoader, GPT2Loader, Gemma2Loader, GemmaLoader,
     Glm5MoeLoader, GptOssLoader, GraniteMoeHybridLoader, LlamaLoader, MambaLoader, MiniMaxM2Loader,
     MistralLoader, MixtralLoader, NormalLoaderType, OlmoLoader, Phi2Loader, Phi3Loader,
-    Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, SmolLm3Loader,
+    Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen4ExpLoader, SmolLm3Loader,
     Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
@@ -299,6 +299,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::GraniteMoeHybrid) => Box::new(GraniteMoeHybridLoader),
             Some(NormalLoaderType::GptOss) => Box::new(GptOssLoader),
             Some(NormalLoaderType::Qwen3Next) => Box::new(Qwen3NextLoader),
+            Some(NormalLoaderType::Qwen4Exp) => Box::new(Qwen4ExpLoader),
             Some(NormalLoaderType::MiniMaxM2) => Box::new(MiniMaxM2Loader),
             Some(NormalLoaderType::GPT2) => Box::new(GPT2Loader),
             Some(NormalLoaderType::Falcon) => Box::new(FalconLoader),
@@ -1018,6 +1019,22 @@ impl Loader for NormalLoader {
 
         let model_metadata = model.model_config();
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+            // On unified memory the KV is planned against the device budget, charged with the
+            // weights: the loader's estimate, the number the device mapper planned with. An ISQ
+            // load changes the weights' size, so it falls back to what is left after loading.
+            let weight_estimate = if crate::utils::normal::is_integrated_gpu(&device)
+                && in_situ_quant.is_none()
+            {
+                Some(
+                    self.inner
+                        .layer_sizes_in_bytes(&config, dtype, 1, None)?
+                        .iter()
+                        .sum::<usize>()
+                        + self.inner.non_mapped_size_in_bytes(&config, dtype, 1, None)?,
+                )
+            } else {
+                None
+            };
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
                 paged_attn_config.block_size,
@@ -1031,7 +1048,7 @@ impl Loader for NormalLoader {
                     .map(Some)
                     .collect::<Vec<_>>(),
                 silent,
-                None,
+                weight_estimate,
                 max_kv_tokens,
             )?;
 
@@ -1278,7 +1295,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
     fn speculative_target_hidden_layers(
         &self,
         rows: &[(usize, usize)],
-    ) -> hanzo_ml::Result<Option<Vec<Tensor>>> {
+    ) -> hanzo_ml::Result<Option<crate::speculative::HiddenWindow>> {
         // Unconditional delegate: DSpark's proposer lives in `draft_proposer` but reads the
         // TARGET's captured multi-layer hiddens. Non-capture targets return `None` here, so
         // classic draft-model / no-proposer runs are unaffected.
@@ -1298,10 +1315,12 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
     fn build_speculative_verify_inputs(
         &self,
         input_meta: InputMetadata,
+        prior: Vec<Vec<u32>>,
     ) -> hanzo_ml::Result<Box<dyn Any>> {
         Ok(Box::new(ModelInputs {
             input_ids: input_meta.input,
             input_ids_full: None,
+            prior,
             seqlen_offsets: input_meta.positions,
             seqlen_offsets_full: None,
             context_lens: input_meta.context_lens,
@@ -1637,6 +1656,7 @@ impl Pipeline for NormalPipeline {
         let ModelInputs {
             input_ids,
             input_ids_full,
+            prior,
             seqlen_offsets,
             seqlen_offsets_full,
             context_lens,
@@ -1708,7 +1728,8 @@ impl Pipeline for NormalPipeline {
                         .as_ref()
                         .map(|(kv_cache, meta)| (kv_cache.as_slice(), meta)),
                     &flash_meta,
-                );
+                )
+                .with_prior(&prior);
                 self.model.forward(&input_ids, &mut ctx)?
             }
             true => self.model.xlora_forward(
@@ -1730,6 +1751,10 @@ impl Pipeline for NormalPipeline {
             Ok(ForwardInputsResult::CausalGeneration { logits })
         }
     }
+    fn note_forward_sequences(&self, seq_ids: &[usize]) {
+        self.model.note_speculative_forward(seq_ids);
+    }
+
     fn attach_speculative(
         &mut self,
         config: crate::speculative::SpeculativeConfig,
@@ -1739,6 +1764,7 @@ impl Pipeline for NormalPipeline {
                 config,
                 crate::speculative::SpeculativeConfig::Off
                     | crate::speculative::SpeculativeConfig::Dspark { .. }
+                    | crate::speculative::SpeculativeConfig::Dflash { .. }
                     | crate::speculative::SpeculativeConfig::PromptLookup { .. }
             )
         {
@@ -1788,10 +1814,34 @@ impl Pipeline for NormalPipeline {
             let draft = crate::models::qwen3_dspark::Qwen3DSpark::load(cfg, vb)?;
             let proposer =
                 crate::models::qwen3_dspark::DsparkProposer::new(draft, confidence_threshold);
-            // Enable target-side capture of the fused layer hiddens the proposer reads.
-            self.model.set_speculative_capture_layers(capture_layers);
+            // DSpark attends the whole confirmed prefix, so the capture keeps all of it.
+            self.model
+                .request_speculative_capture(crate::speculative::CaptureRequest {
+                    layers: capture_layers,
+                    retain: None,
+                    dtype: Some(dtype),
+                });
             let info =
                 crate::speculative::SpeculativeAttachInfo::dspark(block_size, confidence_threshold);
+            crate::speculative::logging::log_attach(&info);
+            self.draft_proposer = Some(Box::new(proposer));
+            return Ok(());
+        }
+        if let crate::speculative::SpeculativeConfig::Dflash { path, block_size } = config {
+            let heads = self.model.speculative_shared_heads().ok_or_else(|| {
+                hanzo_ml::Error::msg(
+                    "DFlash 2 decodes through the target's embedding and output head, which this model does not lend",
+                )
+            })?;
+            let proposer = crate::models::qwen3_dflash::DFlash2Proposer::from_checkpoint(
+                std::path::Path::new(&path),
+                block_size,
+                self.model.device(),
+                heads,
+            )?;
+            self.model
+                .request_speculative_capture(proposer.capture_request());
+            let info = crate::speculative::SpeculativeAttachInfo::dflash(proposer.block_size());
             crate::speculative::logging::log_attach(&info);
             self.draft_proposer = Some(Box::new(proposer));
             return Ok(());
@@ -1858,6 +1908,7 @@ impl Pipeline for NormalPipeline {
             let cache = crate::speculative::cache::PagedSpeculativeCacheAccess::new(
                 &metadata,
                 cache_engine,
+                self.cache(),
             );
             return crate::speculative::driver::try_sample_speculative_causal_gen(
                 self,

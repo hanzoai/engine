@@ -51,6 +51,12 @@ pub struct TextConfig {
     pub linear_value_head_dim: usize,
     pub linear_num_key_heads: usize,
     pub linear_num_value_heads: usize,
+    /// Decoder layers in the checkpoint's built-in MTP head (`mtp.*`); 0 when it carries none.
+    #[serde(default)]
+    pub mtp_num_hidden_layers: usize,
+    /// Whether the MTP head embeds tokens itself instead of sharing `embed_tokens`.
+    #[serde(default)]
+    pub mtp_use_dedicated_embeddings: bool,
     // Other
     #[serde(default)]
     pub tie_word_embeddings: bool,
@@ -80,6 +86,17 @@ impl TextConfig {
                     LayerType::LinearAttention
                 }
             })
+            .collect()
+    }
+
+    /// Decoder layers that hold a KV cache, in cache order: the linear-attention layers keep
+    /// their state in the recurrent pool instead.
+    pub fn attention_layers(&self) -> Vec<usize> {
+        self.layer_types()
+            .into_iter()
+            .enumerate()
+            .filter(|(_, t)| matches!(t, LayerType::FullAttention))
+            .map(|(i, _)| i)
             .collect()
     }
 

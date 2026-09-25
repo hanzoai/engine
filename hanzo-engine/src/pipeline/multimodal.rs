@@ -1136,6 +1136,13 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
         self.model.speculative_target_hiddens(rows)
     }
 
+    fn speculative_target_hidden_layers(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> hanzo_ml::Result<Option<crate::speculative::HiddenWindow>> {
+        self.model.speculative_target_hidden_layers(rows)
+    }
+
     fn speculative_propose(
         &mut self,
         ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
@@ -1146,6 +1153,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
     fn build_speculative_verify_inputs(
         &self,
         input_meta: InputMetadata,
+        _prior: Vec<Vec<u32>>,
     ) -> hanzo_ml::Result<Box<dyn Any>> {
         let model_specific_args = self.model.default_model_specific_args(&input_meta.input);
         Ok(Box::new(ModelInputs {
@@ -1417,6 +1425,10 @@ impl Pipeline for MultimodalPipeline {
         }
     }
 
+    fn note_forward_sequences(&self, seq_ids: &[usize]) {
+        self.model.note_speculative_forward(seq_ids);
+    }
+
     fn attach_speculative(
         &mut self,
         config: crate::speculative::SpeculativeConfig,
@@ -1458,6 +1470,7 @@ impl Pipeline for MultimodalPipeline {
             let cache = crate::speculative::cache::PagedSpeculativeCacheAccess::new(
                 &metadata,
                 cache_engine,
+                self.cache(),
             );
             return crate::speculative::driver::try_sample_speculative_causal_gen(
                 self,

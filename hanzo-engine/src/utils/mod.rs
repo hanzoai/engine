@@ -281,6 +281,19 @@ pub const fn paged_attn_supported() -> bool {
     false
 }
 
+/// Whether PagedAttention is on for `device` when nobody asks either way. The server, the CLI and
+/// the bench all take this answer, so a benchmark measures what is served.
+///
+/// On CUDA and ROCm a paged KV cache is position-invariant, which is what lets a decode step
+/// replay as a captured graph. Metal keeps its contiguous cache. Vulkan has a paged path
+/// (`VulkanDevice::paged_attention_vk`), but its v1 scalar attention kernel costs more per
+/// dispatch than the layout copies it removes, a decode regression on the APU, so it stays
+/// opt-in until that kernel is partitioned.
+pub fn paged_attn_default(device: &hanzo_ml::Device) -> bool {
+    paged_attn_supported()
+        && (device.is_cuda() || device.is_rocm() || crate::distributed::use_nccl())
+}
+
 /// `true` if built with the `flash-attn` or `flash-attn-v3` features, false otherwise.
 #[cfg(not(any(feature = "flash-attn", feature = "flash-attn-v3")))]
 pub const fn using_flash_attn() -> bool {

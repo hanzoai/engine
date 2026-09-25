@@ -49,6 +49,8 @@ pub enum GGUFArchitecture {
     Qwen3Next,
     Qwen35,
     Qwen35MoE,
+    /// Qwen3.8-Flash-Next: Qwen3.5 blocks behind hyper-connections, plus a hashed n-gram memory.
+    Qwen4Exp,
     Mistral3,
     #[strum(serialize = "gpt-oss")]
     GptOss,

@@ -62,7 +62,7 @@ immediately with `status: "loading"`; poll the client until `ready`.
 | `/v1/training/clients/{id}/forward_backward` | POST | `{"data": [...]}` → `{"loss", "num_tokens", "metrics"}` |
 | `/v1/training/clients/{id}/optim_step` | POST | `{"adam_params": {"lr", ...}}` |
 | `/v1/training/clients/{id}/sample` | POST | `{"prompt"` or `"tokens", "sampling_params", "num_samples"}` |
-| `/v1/training/clients/{id}/save_weights` | POST | `{"name", "dir"?}` → `{"path", "format": "peft"}` |
+| `/v1/training/clients/{id}/save_weights` | POST | `{"name"}` → `{"path", "format": "peft"}`, written under `~/.cache/hanzo/adapters/{id}/` |
 
 `data` entries are either raw text — `{"prompt": "...", "completion": "..."}`,
 tokenized server-side with the client's tokenizer — or a pre-tokenized datum:

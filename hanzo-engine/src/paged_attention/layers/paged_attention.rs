@@ -255,8 +255,7 @@ fn adjust_kv_mask(mask: &Tensor, kv_seq_len: usize) -> Result<Tensor> {
 }
 
 fn supports_packed_varlen_sdpa(query: &Tensor) -> bool {
-    query.device().is_cpu()
-        || (query.device().is_cuda() && crate::using_flash_attn() && query.dtype() != DType::F32)
+    crate::attention::fused_varlen(query.device(), query.dtype())
 }
 
 pub struct PagedAttention {
@@ -381,7 +380,7 @@ impl PagedAttention {
         let mask_is_prefill = !matches!(attention_mask, AttentionMask::None);
         let single_token_first_prompt = input_metadata.is_first_prompt_chunk && seq_len == 1;
         let use_gather_path = if write_cache {
-            has_cached_prefix && has_block_tables
+            input_metadata.gathers_prefix()
         } else {
             (has_cached_prefix || mask_is_prefill || single_token_first_prompt) && has_block_tables
         };
@@ -521,8 +520,10 @@ impl PagedAttention {
                         cumulative_seqlens: cu_kv_map,
                     },
                     sliding_k: None,
+                    // No FlashParams means a causal decoder (the quantized text models); only an
+                    // explicit `causal: false` asks for bidirectional attention.
                     causal: query_lens.iter().any(|&len| len > 1)
-                        && flash_params.map_or(mask_is_prefill, |fp| fp.causal),
+                        && flash_params.map_or(true, |fp| fp.causal),
                 };
 
                 return Sdpa.run_attention(
@@ -566,6 +567,7 @@ impl PagedAttention {
         if crate::perf_flags::flashinfer_prefill_enabled()
             && write_cache
             && seq_len > 1
+            && input_metadata.has_prefill_plan(use_full)
             && query.dtype() != DType::F32
             && alibi_slopes.is_none()
             && sdpa_params.sinks.is_none()

@@ -1,10 +1,6 @@
 <a name="top"></a>
 <p align="center"><img src=".github/hero.svg" alt="Hanzo Engine" width="880"></p>
 
-<div align="center">
-  <img src="https://raw.githubusercontent.com/hanzoai/engine/main/res/banner.png" alt="Hanzo Engine" width="100%" style="max-width: 800px;">
-</div>
-
 <h1 align="center">Hanzo Engine</h1>
 
 <h3 align="center">
@@ -21,12 +17,11 @@ The native, multimodal inference engine — text, vision, audio, speech, image, 
   </a>
 </p>
 
-<p align="center"><sub>Forked from <a href="https://github.com/EricLBuehler/mistral.rs"><b>EricLBuehler/mistral.rs</b></a> (MIT).</sub></p>
-
 Hanzo Engine runs any Hugging Face model with zero config, quantizes it for your hardware, and serves it over the OpenAI and Anthropic wire formats plus a built-in web UI — one binary, from your laptop to a GPU cluster. It is the native inference layer of the [Open AI Cloud](https://hanzo.ai).
 
 ## Latest
 
+- **NVFP4, natively**: packed 4-bit weights go straight into the GEMM, with a register-resident E2M1 codebook for decode and tensor cores for prefill, so a 27B NVFP4 checkpoint loads in 31 GB instead of the 104 GB a dequantize-at-load path asks for. [Quantization docs](https://hanzoai.github.io/engine/reference/quantization-types/)
 - **Qwen3-Omni**: native end-to-end omni-modal model (understand → think → speak) — text/image/video/audio in, text + 24kHz speech out, through one extensible modality pipeline. Validated against the reference weights.
 - **New frontier models**: MiniMax-M2 (sparse-MoE) and DeepSeek-V3.2, alongside the existing DeepSeek-V3, Kimi-K2, GLM-4, and Qwen3 families. [Supported models](https://hanzoai.github.io/engine/reference/supported-models/)
 - **Paged-attention serving** for the omni Thinker, plus a **disk-first KV cache** (cross-restart sessions + agent prefix reuse) for cheap long-context serving.
@@ -59,7 +54,7 @@ This repository builds two programs, and neither is called `hanzo`:
 
 The `hanzo` on your PATH is the [Hanzo CLI](https://github.com/hanzoai/cli); its `hanzo engine serve MODEL` runs `hanzo-engine serve -m MODEL`. `hanzoai` logs a deprecation warning that names `hanzo serve` from hanzo-cli, which is the `hanzo-engine` binary.
 
-Release v1.7.92 carries `hanzoai-macos-arm64.tar.gz` and `hanzoai-macos-amd64.tar.gz` (Metal), and `hanzoai-linux-amd64.tar.gz` and `hanzoai-linux-arm64.tar.gz` (CPU only, with cosign `.sig` and `.pem`). Each tarball holds the one `hanzoai` binary.
+Each release attaches `hanzoai-macos-arm64.tar.gz` and `hanzoai-macos-amd64.tar.gz` (Metal), and `hanzoai-linux-amd64.tar.gz` and `hanzoai-linux-arm64.tar.gz` (CPU only, with cosign `.sig` and `.pem`). Each tarball holds the one `hanzoai` binary.
 
 `install.sh` needs Rust 1.88 or newer. It runs `cargo install --git https://github.com/hanzoai/engine --locked hanzo-cli` with the features it detects, which puts `hanzo-engine` in `~/.cargo/bin`:
 
@@ -335,12 +330,15 @@ Contributions welcome! Please [open an issue](https://github.com/hanzoai/engine/
 
 ## Credits
 
-Built on the excellent open-source work of [mistral.rs](https://github.com/EricLBuehler/mistral.rs) (MIT) and [candle](https://github.com/huggingface/candle) (MIT OR Apache-2.0), which we consume through our fork [hanzoai/ml](https://github.com/hanzoai/ml). Thank you to all [contributors](https://github.com/hanzoai/engine/graphs/contributors)!
+Tensors, kernels, and autodiff come from [hanzoai/ml](https://github.com/hanzoai/ml), the Rust compute
+core underneath this engine. Thank you to all [contributors](https://github.com/hanzoai/engine/graphs/contributors).
 
-Hanzo Engine is not affiliated with Mistral AI.
+Hanzo Engine is MIT licensed. `LICENSE` carries the full text and every copyright line it names;
+`NOTICE` carries the Apache-2.0 attributions that ship with the vendored GPU kernels, and both
+travel with any binary or crate we distribute.
 
 ## Hanzo — the Open AI Cloud
 
 Open source · every language · on-chain settlement. [hanzo.ai](https://hanzo.ai) · [docs.hanzo.ai](https://docs.hanzo.ai)
 
-**SDKs in every language** — [Python](https://github.com/hanzoai/python-sdk) (flagship) · [TypeScript](https://github.com/hanzo-js/sdk) · [Go](https://github.com/hanzo-go/sdk) · [Rust](https://github.com/hanzo-rs/sdk) · [C++](https://github.com/hanzo-cpp/sdk) · [Swift](https://github.com/hanzo-swift/sdk) · [Kotlin](https://github.com/hanzo-kt/sdk) · [umbrella](https://github.com/hanzoai/sdk)
+**SDKs in every language** — [Python](https://github.com/hanzoai/python-sdk) (flagship) · [TypeScript](https://github.com/hanzo-js/sdk) · [Go](https://github.com/hanzo-go/sdk) · [Rust](https://crates.io/crates/hanzo-client) · [C++](https://github.com/hanzo-cpp/sdk) · [Swift](https://github.com/hanzo-swift/sdk) · [Kotlin](https://github.com/hanzo-kt/sdk) · [umbrella](https://github.com/hanzoai/sdk)

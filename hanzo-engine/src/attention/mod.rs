@@ -55,10 +55,183 @@ impl AttentionMask {
 mod backends;
 
 #[allow(unused)]
-pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn};
+pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn, tiled_sdpa};
 
 /// Chunk size for attention computation to avoid OOM on long sequences
+/// Whether prompt attention over a gathered prefix runs a fused varlen kernel, which takes causality
+/// as a flag. Every other path is eager and is causal only through its mask.
+pub(crate) fn fused_varlen(device: &Device, dtype: DType) -> bool {
+    device.is_cpu() || (device.is_cuda() && crate::using_flash_attn() && dtype != DType::F32)
+}
+
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
+
+/// Key chunk for [`tiled_sdpa`]. Query chunking alone leaves a block that is linear in the context,
+/// so the key axis is chunked too once the whole block stops fitting.
+pub(crate) const ATTENTION_KV_CHUNK_SIZE: usize = 4096;
+
+/// Bytes of f32 scores one eager attention block may hold before it is computed in tiles instead.
+/// Above this a long prefill cannot be served at all: a 4096-token chunk against a 124K prefix is 24
+/// heads x 4096 x 124K x 4 B. Below it the single-block path is left exactly as it is, so the shapes
+/// that work today keep their arithmetic.
+pub(crate) const ATTENTION_SCORE_BLOCK_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+/// The same ceiling on ROCm, where 2 GiB is not a safe operating point but the edge of a cliff.
+///
+/// The eager path holds about 5.6 block-sized temporaries at once (scores, their f32 copy, the
+/// masked sum, the softmax, its cast back), so a block just under the general ceiling is an ~11 GiB
+/// transient. On a discrete card that is VRAM nobody else wanted. On an APU it is GTT, which is
+/// SYSTEM memory charged to no cgroup: it comes out of the same pool as the host and everything the
+/// node serves, and nothing but the OOM killer bounds it.
+///
+/// It also never came back. A chunked prefill asks for a block of `n_heads * 1024 * kv_len * 4`
+/// bytes and `kv_len` grows every chunk, so each chunk's temporaries are a size no earlier chunk
+/// used; a pool that reuses a freed buffer only on an exact byte match reuses none of them. Summed
+/// over the chunks of one prompt that is quadratic in its length -- measured on a 27B with 24 heads
+/// at 0.275 GB per (1K tokens)^2: 7 GB at 4K, 23 GB at 8K, ~82 GB at 16K, taking down a node that
+/// also served production. 5.6 x 94 MiB per 1K of context, halved by the sum, is that coefficient.
+///
+/// Tiling fixes both at once, because a tile is the SAME size whatever the context: the transient
+/// stops growing with `kv_len`, and every chunk and every layer asks for buffers the last one just
+/// freed. 256 MiB puts the switch at ~2.7K tokens of context for that model, and a full tile under
+/// it (see [`kv_tile_within`]), so the largest attention transient is a few hundred MiB at any
+/// context length instead of ~11 GiB at 21K.
+pub(crate) const ROCM_SCORE_BLOCK_BYTES: usize = 256 * 1024 * 1024;
+
+/// The score-block ceiling for `device`. Every other device keeps the general one, so the shapes
+/// that work there today keep their arithmetic.
+fn score_block_budget(device: &Device) -> usize {
+    if device.is_rocm() {
+        ROCM_SCORE_BLOCK_BYTES
+    } else {
+        ATTENTION_SCORE_BLOCK_BYTES
+    }
+}
+
+/// Whether one [q_len, kv_len] block of f32 scores fits `budget` bytes.
+fn score_block_fits(
+    b_sz: usize,
+    n_heads: usize,
+    q_len: usize,
+    kv_len: usize,
+    budget: usize,
+) -> bool {
+    b_sz.saturating_mul(n_heads)
+        .saturating_mul(q_len)
+        .saturating_mul(kv_len)
+        .saturating_mul(std::mem::size_of::<f32>())
+        <= budget
+}
+
+/// [`naive_sdpa`] with the query axis taken `rows` at a time. The result is the same for any `rows`;
+/// what changes is the [rows, kv_len] block in flight, which is how a caller holds it under a ceiling
+/// without giving up the fused softmax.
+///
+/// It IS `naive_sdpa`, called once per run: a run is never longer than [`ATTENTION_CHUNK_SIZE`], so
+/// the chunking inside it passes each one straight through. There is no second copy of the
+/// arithmetic to drift from the first.
+fn naive_sdpa_rows(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    mask: Option<&Tensor>,
+    sdpa_params: &SdpaParams,
+    rows: usize,
+) -> Result<Tensor> {
+    chunked_attention_rows(
+        q,
+        k,
+        v,
+        mask,
+        rows.min(ATTENTION_CHUNK_SIZE),
+        |q, k, v, mask| naive_sdpa(q, k, v, mask, sdpa_params),
+    )
+}
+
+/// How one eager attention block is computed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Blocking {
+    /// The whole [q_len, kv_len] block at once.
+    Whole,
+    /// The query axis in runs of this many rows, each an ordinary fused softmax over the full key
+    /// row. Softmax rows are independent, so where the query axis is cut changes nothing about the
+    /// result: this is the SAME arithmetic as [`Blocking::Whole`], not an approximation of it.
+    Rows(usize),
+    /// Both axes, recombined with an online softmax. What is left once a single query row no longer
+    /// fits, and the only blocking whose transient does not grow with the context at all.
+    Tiles { q: usize, kv: usize },
+}
+
+/// Fewest query rows worth a launch. Below this the run count is the cost -- 1024 queries in runs of
+/// 8 is 128 launches per layer -- and cutting the key axis instead is the better trade.
+const MIN_Q_ROWS: usize = 16;
+
+/// The largest power-of-two run of query rows whose [rows, kv_len] block fits `budget`, or 0.
+fn rows_within(b_sz: usize, n_heads: usize, kv_len: usize, budget: usize) -> usize {
+    let row_bytes = b_sz
+        .saturating_mul(n_heads)
+        .saturating_mul(kv_len)
+        .saturating_mul(std::mem::size_of::<f32>())
+        .max(1);
+    match budget / row_bytes {
+        0 => 0,
+        fits => 1usize << (usize::BITS - 1 - fits.leading_zeros()),
+    }
+}
+
+/// Decides how a [q_len, kv_len] block is computed under `budget`. Pure, so the policy is testable
+/// without the device it is for.
+///
+/// `by_rows` is whether the query axis may be cut finer than [`ATTENTION_CHUNK_SIZE`]. Where it may,
+/// that is preferred to tiling both axes: it keeps the fused softmax and the exact arithmetic, and
+/// its blocks are near-constant in size (`rows * kv_len` tracks the budget), where the online softmax
+/// costs about a dozen launches and three extra f32 passes over the scores per tile. It is declined
+/// once the runs get too short to be worth launching.
+pub(crate) fn blocking(
+    budget: usize,
+    by_rows: bool,
+    b_sz: usize,
+    n_heads: usize,
+    q_len: usize,
+    kv_len: usize,
+) -> Blocking {
+    if score_block_fits(b_sz, n_heads, q_len, kv_len, budget) {
+        return Blocking::Whole;
+    }
+    if by_rows {
+        let rows = rows_within(b_sz, n_heads, kv_len, budget);
+        if rows >= MIN_Q_ROWS {
+            return Blocking::Rows(rows.min(ATTENTION_CHUNK_SIZE));
+        }
+    }
+    Blocking::Tiles {
+        q: ATTENTION_CHUNK_SIZE,
+        kv: kv_tile_within(b_sz, n_heads, ATTENTION_CHUNK_SIZE, budget),
+    }
+}
+
+/// Smallest key tile worth a kernel launch. Below this the tile count, not the block size, is the
+/// cost, and a budget that small is a misconfiguration rather than something to honour exactly.
+const MIN_KV_TILE: usize = 256;
+
+/// The key tile for a block that did not fit `budget`: the largest power of two, up to
+/// [`ATTENTION_KV_CHUNK_SIZE`], whose [q_tile, kv_tile] block does fit.
+///
+/// A block sent to the tiled path for exceeding a ceiling must come back in pieces that respect it,
+/// or the ceiling bounds nothing: with 24 heads a [1024, 4096] tile is 393 MiB, over a 256 MiB
+/// budget it was meant to honour. A power of two keeps every full tile the same size across chunks
+/// and layers, which is what lets a freed tile be handed straight to the next one.
+fn kv_tile_within(b_sz: usize, n_heads: usize, q_tile: usize, budget: usize) -> usize {
+    let row_bytes = b_sz
+        .saturating_mul(n_heads)
+        .saturating_mul(q_tile)
+        .saturating_mul(std::mem::size_of::<f32>())
+        .max(1);
+    let fits = (budget / row_bytes).max(1);
+    // Largest power of two <= fits.
+    let tile = 1usize << (usize::BITS - 1 - fits.leading_zeros());
+    tile.clamp(MIN_KV_TILE, ATTENTION_KV_CHUNK_SIZE)
+}
 
 /// Generic chunked attention computation that can be used by different backends
 pub(crate) fn chunked_attention<F>(
@@ -71,41 +244,52 @@ pub(crate) fn chunked_attention<F>(
 where
     F: Fn(&Tensor, &Tensor, &Tensor, Option<&Tensor>) -> Result<Tensor>,
 {
-    let seq_len = q.dim(2)?;
+    chunked_attention_rows(q, k, v, mask, ATTENTION_CHUNK_SIZE, attention_fn)
+}
 
-    if seq_len <= ATTENTION_CHUNK_SIZE {
+/// [`chunked_attention`] with the run length chosen by the caller. `rows` is how many query rows
+/// one call to `attention_fn` takes. Each row's softmax is its own, so the result does not depend
+/// on it; only the size of the block in flight does.
+pub(crate) fn chunked_attention_rows<F>(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    mask: Option<&Tensor>,
+    rows: usize,
+    attention_fn: F,
+) -> Result<Tensor>
+where
+    F: Fn(&Tensor, &Tensor, &Tensor, Option<&Tensor>) -> Result<Tensor>,
+{
+    let seq_len = q.dim(2)?;
+    let rows = rows.max(1);
+
+    if seq_len <= rows {
         // For short sequences, use the regular path
         return attention_fn(q, k, v, mask);
     }
 
     // Chunk the query to avoid OOM on long sequences
-    let num_chunks = seq_len.div_ceil(ATTENTION_CHUNK_SIZE);
+    let num_chunks = seq_len.div_ceil(rows);
     let mut attn_chunks = Vec::with_capacity(num_chunks);
 
     for chunk_idx in 0..num_chunks {
-        let offset = chunk_idx * ATTENTION_CHUNK_SIZE;
-        let chunk_len = ATTENTION_CHUNK_SIZE.min(seq_len - offset);
+        let offset = chunk_idx * rows;
+        let chunk_len = rows.min(seq_len - offset);
 
         // Extract query chunk
         let q_chunk = q.narrow(2, offset, chunk_len)?;
 
         // Extract mask chunk if present
+        // The query axis is second from last at every rank: (q, kv), (b, q, kv), (b, h, q, kv).
         let mask_chunk = mask
             .map(|m| {
-                match m.rank() {
-                    2 => {
-                        // For 2D masks (seq_len, seq_len), narrow along dimension 0
-                        m.narrow(0, offset, chunk_len)
-                    }
-                    3 => {
-                        // For 3D masks (batch, seq_len, seq_len), narrow along dimension 1
-                        m.narrow(1, offset, chunk_len)
-                    }
-                    4 => {
-                        // For 4D masks (batch, heads, seq_len, seq_len), narrow along dimension 2
-                        m.narrow(2, offset, chunk_len)
-                    }
-                    _ => m.narrow(2, offset, chunk_len), // Default to dimension 2
+                let q_dim = m.rank().saturating_sub(2);
+                if m.dim(q_dim)? == 1 {
+                    // Broadcast over the query axis: every run takes the one row there is.
+                    Ok(m.clone())
+                } else {
+                    m.narrow(q_dim, offset, chunk_len)
                 }
             })
             .transpose()?;
@@ -120,7 +304,7 @@ where
     Tensor::cat(&attn_chunks, 2)
 }
 
-fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
+pub(crate) fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
     if n_rep == 1 {
         Ok(x)
     } else {
@@ -202,6 +386,7 @@ fn rocm_decode_attn(
     use hanzo_ml::DType;
     let (_b, h, q_len, d) = q.dims4()?;
     if q_len != 1
+        // The pinned hanzo-ml decode kernel is built for head_dim 128 only (FD_DH).
         || d != 128
         || !matches!(q.dtype(), DType::F16 | DType::BF16)
         || q.dtype() != k.dtype()
@@ -215,7 +400,7 @@ fn rocm_decode_attn(
         return Ok(None);
     }
     let hkv = k.dim(1)?;
-    if hkv == 0 || h % hkv != 0 || k.dim(3)? != 128 || v.dim(3)? != 128 {
+    if hkv == 0 || h % hkv != 0 || k.dim(3)? != d || v.dim(3)? != d {
         return Ok(None);
     }
     // Read k/v in place when the head dim is contiguous (the kernel handles arbitrary batch/head/seq
@@ -308,7 +493,7 @@ impl Sdpa {
         // through to the eager path. The kernel does GQA, so it takes the un-expanded k/v.
         #[cfg(feature = "rocm")]
         if q.device().is_rocm() && !matches!(mask, AttentionMask::None if !do_causal) {
-            const ROCM_FLASH_MIN_SEQ: usize = 768;
+            const ROCM_FLASH_MIN_SEQ: usize = 512;
             let (_, _, seq_len, head_dim) = q.dims4()?;
             let is_full_causal = matches!(mask, AttentionMask::CausalFlash)
                 || (mask.is_custom()
@@ -316,9 +501,10 @@ impl Sdpa {
                     && !explicitly_noncausal);
             if is_full_causal
                 && seq_len >= ROCM_FLASH_MIN_SEQ
+                // The pinned hanzo-ml flash kernel is built for head_dim 128 only (FA_DH).
                 && head_dim == 128
-                && k.dim(3)? == 128
-                && v.dim(3)? == 128
+                && k.dim(3)? == head_dim
+                && v.dim(3)? == head_dim
                 && matches!(q.dtype(), DType::F16 | DType::BF16)
                 && sdpa_params.softcap.is_none_or(|x| x == 1.0)
             {
@@ -501,16 +687,36 @@ impl Sdpa {
             );
         }
 
+        // Every path below materializes the whole score block, which is what a long prefill cannot
+        // pay for; past the budget the same attention is computed over tiles.
+        // Only ROCm cuts the query axis finer: it is the one device whose ceiling is low enough to
+        // need it, and leaving the rest alone keeps the arithmetic of every shape that works today.
+        let rows = match blocking(
+            score_block_budget(q.device()),
+            q.device().is_rocm(),
+            b_sz,
+            n_attn_heads,
+            seq_len,
+            k.dim(2)?,
+        ) {
+            Blocking::Tiles { q: q_tile, kv } => {
+                return tiled_sdpa(q, k, v, mask, sdpa_params, q_tile, kv);
+            }
+            Blocking::Rows(rows) => rows,
+            Blocking::Whole => ATTENTION_CHUNK_SIZE,
+        };
+
         let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?;
         let v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?;
 
         if mask.is_some_and(|x| x.rank() == 2) || hanzo_quant::distributed::use_nccl() {
-            return naive_sdpa(
+            return naive_sdpa_rows(
                 &q.contiguous()?,
                 &k.contiguous()?,
                 &v.contiguous()?,
                 mask,
                 sdpa_params,
+                rows,
             );
         }
 
@@ -604,7 +810,7 @@ impl Sdpa {
                 hanzo_ml::bail!("`cuda` feature is not enabled")
             }
         } else {
-            naive_sdpa(q, &k, &v, mask, sdpa_params)
+            naive_sdpa_rows(q, &k, &v, mask, sdpa_params, rows)
         }
     }
 }
@@ -731,6 +937,285 @@ fn vk_sdpa_nsplit() -> usize {
             .filter(|&n| n >= 1)
             .unwrap_or(8)
     })
+}
+
+#[cfg(test)]
+mod score_block_budget {
+    use super::{
+        blocking, kv_tile_within, score_block_budget, score_block_fits, Blocking,
+        ATTENTION_CHUNK_SIZE, ATTENTION_KV_CHUNK_SIZE, ATTENTION_SCORE_BLOCK_BYTES as GENERAL,
+        MIN_KV_TILE, MIN_Q_ROWS, ROCM_SCORE_BLOCK_BYTES as ROCM,
+    };
+    use hanzo_ml::Device;
+
+    #[test]
+    fn a_long_prefill_is_the_only_shape_that_tiles() {
+        // 4096 new tokens against a 124K prefix, 24 heads: the shape that wires 48 GB of scores.
+        assert!(!score_block_fits(1, 24, 4096, 124_094, GENERAL));
+        // The same context at decode width, and a speculative verify, stay on the single block.
+        assert!(score_block_fits(1, 24, 1, 124_094, GENERAL));
+        assert!(score_block_fits(1, 24, 8, 124_094, GENERAL));
+        // A square 4K prefill fits, so its arithmetic is untouched.
+        assert!(score_block_fits(1, 24, 4096, 4096, GENERAL));
+    }
+
+    /// Every device but ROCm keeps the general ceiling, so nothing that works today changes path.
+    #[test]
+    fn only_rocm_gets_the_lower_ceiling() {
+        assert_eq!(score_block_budget(&Device::Cpu), GENERAL);
+        assert!(ROCM < GENERAL);
+    }
+
+    /// The chunks that took a node down, under the ceiling that would have stopped them.
+    ///
+    /// A 1024-query chunk against a growing context, 24 heads. Under the general ceiling every one
+    /// of these is a single block -- a DIFFERENT size each chunk, which is what made the retained
+    /// memory quadratic -- right up to 21K of context. Under the ROCm ceiling they tile from ~2.7K.
+    #[test]
+    fn a_chunked_prefill_tiles_long_before_it_can_cost_the_node() {
+        for kv_len in [4096, 8192, 16_384] {
+            assert!(
+                score_block_fits(1, 24, ATTENTION_CHUNK_SIZE, kv_len, GENERAL),
+                "{kv_len}: the general ceiling still materializes this whole"
+            );
+            assert!(
+                !score_block_fits(1, 24, ATTENTION_CHUNK_SIZE, kv_len, ROCM),
+                "{kv_len}: the ROCm ceiling must tile this"
+            );
+        }
+        // Short contexts and every decode step stay on the single block: one query against 262K of
+        // context is 25 MiB, and tiling that would only add launches.
+        assert!(score_block_fits(1, 24, ATTENTION_CHUNK_SIZE, 2048, ROCM));
+        assert!(score_block_fits(1, 24, 1, 262_144, ROCM));
+    }
+
+    /// A tile must honour the ceiling that sent the block to the tiled path, or the ceiling bounds
+    /// nothing: [1024, 4096] at 24 heads is 393 MiB, over the 256 MiB it was tiled to respect.
+    #[test]
+    fn a_tile_fits_the_budget_that_demanded_it() {
+        for (heads, budget) in [
+            (24, ROCM),
+            (8, ROCM),
+            (64, ROCM),
+            (24, GENERAL),
+            (128, GENERAL),
+        ] {
+            let tile = kv_tile_within(1, heads, ATTENTION_CHUNK_SIZE, budget);
+            assert!(
+                tile.is_power_of_two(),
+                "{heads} heads: {tile} is not a power of two"
+            );
+            assert!((MIN_KV_TILE..=ATTENTION_KV_CHUNK_SIZE).contains(&tile));
+            assert!(
+                score_block_fits(1, heads, ATTENTION_CHUNK_SIZE, tile, budget)
+                    || tile == MIN_KV_TILE,
+                "{heads} heads under {budget}: a {tile}-key tile does not fit"
+            );
+        }
+        // The measured model: 24 heads under the ROCm ceiling is a 2048-key tile, 196 MiB.
+        assert_eq!(kv_tile_within(1, 24, ATTENTION_CHUNK_SIZE, ROCM), 2048);
+        // The general ceiling is generous enough that the tile is the one already in use, so no
+        // other device's tiled arithmetic moves.
+        assert_eq!(
+            kv_tile_within(1, 24, ATTENTION_CHUNK_SIZE, GENERAL),
+            ATTENTION_KV_CHUNK_SIZE
+        );
+    }
+
+    /// The measured model on the measured device: 24 heads, 1024-query chunks, 256 MiB. Every
+    /// context evo can serve is cut by ROWS -- the fused softmax, the exact arithmetic -- and the
+    /// online softmax is left for contexts where a run would be too short to be worth launching.
+    #[test]
+    fn rocm_cuts_the_query_axis_before_it_tiles_both() {
+        let by = |kv_len| blocking(ROCM, true, 1, 24, ATTENTION_CHUNK_SIZE, kv_len);
+        // Under the ceiling nothing is cut at all.
+        assert_eq!(by(2048), Blocking::Whole);
+        // 256 MiB / (24 * kv_len * 4 B), rounded down to a power of two.
+        assert_eq!(by(4096), Blocking::Rows(512));
+        assert_eq!(by(8192), Blocking::Rows(256));
+        assert_eq!(by(16_384), Blocking::Rows(128));
+        assert_eq!(by(65_536), Blocking::Rows(32));
+        assert_eq!(by(131_072), Blocking::Rows(16));
+        // Past that a run is under MIN_Q_ROWS, so the key axis is cut instead.
+        assert_eq!(
+            by(262_144),
+            Blocking::Tiles {
+                q: ATTENTION_CHUNK_SIZE,
+                kv: 2048
+            }
+        );
+    }
+
+    /// Whatever `Rows` picks must itself fit, or it moved the problem instead of bounding it.
+    #[test]
+    fn a_run_of_rows_fits_the_budget_that_demanded_it() {
+        for heads in [8, 24, 64] {
+            for kv_len in [4096, 8192, 16_384, 40_000, 65_536, 131_072] {
+                if let Blocking::Rows(rows) =
+                    blocking(ROCM, true, 1, heads, ATTENTION_CHUNK_SIZE, kv_len)
+                {
+                    assert!(
+                        rows.is_power_of_two() && rows >= MIN_Q_ROWS,
+                        "{heads}h {kv_len}: {rows}"
+                    );
+                    assert!(
+                        score_block_fits(1, heads, rows, kv_len, ROCM),
+                        "{heads} heads, {kv_len} keys: a {rows}-row run does not fit"
+                    );
+                }
+            }
+        }
+    }
+
+    /// No other device is cut by rows, so the arithmetic of every shape that works there today is
+    /// exactly what it was: whole under the general ceiling, the same 4096-key tiles over it.
+    #[test]
+    fn only_rocm_is_cut_by_rows() {
+        for kv_len in [4096, 16_384, 124_094, 262_144] {
+            let got = blocking(GENERAL, false, 1, 24, 4096, kv_len);
+            assert!(!matches!(got, Blocking::Rows(_)), "{kv_len}: {got:?}");
+        }
+        assert_eq!(
+            blocking(GENERAL, false, 1, 24, 4096, 124_094),
+            Blocking::Tiles {
+                q: ATTENTION_CHUNK_SIZE,
+                kv: ATTENTION_KV_CHUNK_SIZE
+            }
+        );
+        assert_eq!(blocking(GENERAL, false, 1, 24, 4096, 4096), Blocking::Whole);
+    }
+
+    /// A budget too small to be meant still yields a usable tile rather than zero or a panic.
+    #[test]
+    fn a_degenerate_budget_still_yields_a_tile() {
+        assert_eq!(kv_tile_within(1, 24, ATTENTION_CHUNK_SIZE, 0), MIN_KV_TILE);
+        assert_eq!(
+            kv_tile_within(usize::MAX, usize::MAX, usize::MAX, 1),
+            MIN_KV_TILE
+        );
+    }
+}
+
+#[cfg(test)]
+mod rows_are_the_same_arithmetic {
+    use super::{naive_sdpa, naive_sdpa_rows, SdpaParams};
+    use hanzo_ml::{DType, Device, Result, Tensor};
+
+    /// Deterministic, well-spread values; the CPU device's seed is a no-op in this stack.
+    fn filled(shape: (usize, usize, usize, usize), salt: f32) -> Result<Tensor> {
+        let n = shape.0 * shape.1 * shape.2 * shape.3;
+        let data: Vec<f32> = (0..n)
+            .map(|i| ((i as f32 * 0.618_034 + salt).sin() * 1.7) + ((i % 7) as f32 - 3.0) * 0.11)
+            .collect();
+        Tensor::from_vec(data, shape, &Device::Cpu)
+    }
+
+    fn worst(a: &Tensor, b: &Tensor) -> Result<f32> {
+        a.sub(b)?
+            .abs()?
+            .flatten_all()?
+            .max(0)?
+            .to_dtype(DType::F32)?
+            .to_scalar::<f32>()
+    }
+
+    fn params() -> SdpaParams {
+        SdpaParams {
+            n_kv_groups: 1,
+            softcap: None,
+            softmax_scale: 0.125,
+            sliding_window: None,
+            sinks: None,
+        }
+    }
+
+    /// A causal prefill chunk against a longer context, which is the shape that gets cut: `q_len`
+    /// new queries whose row i may see keys 0..=prefix+i.
+    fn causal(q_len: usize, kv_len: usize, rank: usize) -> Result<Tensor> {
+        let prefix = kv_len - q_len;
+        let data: Vec<f32> = (0..q_len)
+            .flat_map(|i| {
+                (0..kv_len).map(move |j| {
+                    if j <= prefix + i {
+                        0.0
+                    } else {
+                        f32::NEG_INFINITY
+                    }
+                })
+            })
+            .collect();
+        let m = Tensor::from_vec(data, (q_len, kv_len), &Device::Cpu)?;
+        match rank {
+            2 => Ok(m),
+            3 => m.unsqueeze(0),
+            _ => m.unsqueeze(0)?.unsqueeze(0),
+        }
+    }
+
+    /// Runs that do not divide the query length, down to one row at a time, against the whole block.
+    /// Each row's softmax is its own, so this is equality, not closeness: the bound is what a GEMM
+    /// may differ by when only its row count changes, not a tolerance on the method.
+    #[test]
+    fn any_run_length_gives_the_whole_block() -> Result<()> {
+        let (heads, q_len, kv_len, d) = (3, 37, 101, 16);
+        let q = filled((1, heads, q_len, d), 0.1)?;
+        let k = filled((1, heads, kv_len, d), 1.3)?;
+        let v = filled((1, heads, kv_len, d), 2.9)?;
+        for rank in [2, 3, 4] {
+            let mask = causal(q_len, kv_len, rank)?;
+            let whole = naive_sdpa(&q, &k, &v, Some(&mask), &params())?;
+            for rows in [1, 2, 7, 16, 36, 37, 64] {
+                let cut = naive_sdpa_rows(&q, &k, &v, Some(&mask), &params(), rows)?;
+                assert_eq!(cut.dims(), whole.dims());
+                let diff = worst(&cut, &whole)?;
+                assert!(
+                    diff <= 1e-6,
+                    "rank-{rank} mask, runs of {rows}: off by {diff}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// A mask that broadcasts over the query axis has one row for every run to take. Narrowing it
+    /// past row 0 is an error, which the fixed 1024-row chunk never reached and a finer cut does.
+    #[test]
+    fn a_mask_broadcast_over_queries_survives_the_cut() -> Result<()> {
+        let (heads, q_len, kv_len, d) = (2, 19, 23, 8);
+        let q = filled((1, heads, q_len, d), 0.4)?;
+        let k = filled((1, heads, kv_len, d), 1.1)?;
+        let v = filled((1, heads, kv_len, d), 2.2)?;
+        // Hide the last five keys from every query alike: shape (1, 1, 1, kv_len).
+        let data: Vec<f32> = (0..kv_len)
+            .map(|j| {
+                if j + 5 < kv_len {
+                    0.0
+                } else {
+                    f32::NEG_INFINITY
+                }
+            })
+            .collect();
+        let mask = Tensor::from_vec(data, (1, 1, 1, kv_len), &Device::Cpu)?;
+        let whole = naive_sdpa(&q, &k, &v, Some(&mask), &params())?;
+        let cut = naive_sdpa_rows(&q, &k, &v, Some(&mask), &params(), 4)?;
+        let diff = worst(&cut, &whole)?;
+        assert!(diff <= 1e-6, "off by {diff}");
+        Ok(())
+    }
+
+    /// No mask at all, and a run longer than the query: both are the untouched single call.
+    #[test]
+    fn unmasked_and_oversized_runs_are_unchanged() -> Result<()> {
+        let q = filled((1, 2, 9, 8), 0.7)?;
+        let k = filled((1, 2, 13, 8), 1.9)?;
+        let v = filled((1, 2, 13, 8), 3.1)?;
+        let whole = naive_sdpa(&q, &k, &v, None, &params())?;
+        for rows in [0, 1, 3, 9, 4096] {
+            let diff = worst(&naive_sdpa_rows(&q, &k, &v, None, &params(), rows)?, &whole)?;
+            assert!(diff <= 1e-6, "runs of {rows}: off by {diff}");
+        }
+        Ok(())
+    }
 }
 
 #[cfg(all(test, feature = "flash-attn"))]

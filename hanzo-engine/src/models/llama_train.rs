@@ -166,6 +166,7 @@ pub fn load_llama_base_for_training(
         std::slice::from_ref(device),
     )?;
     let meta = NormalLoadingMetadata {
+        weights: Vec::new(),
         mapper,
         loading_isq: false,
         real_device: device.clone(),
@@ -326,7 +327,7 @@ mod tests {
     }
 
     /// Deterministic N(0,1) sample stream, the same shape gguf_moe.rs uses and for
-    /// the same reason: the CPU backend's `Device::set_seed` is a NO-OP (candle's
+    /// the same reason: the CPU backend's `Device::set_seed` is a NO-OP (hanzo-ml's
     /// CPU rng is not seedable), so an unseeded `Tensor::randn` gives this test a
     /// different starting point on every run. The loss assertion below has an
     /// absolute term, and a run that reduced the loss 9.09 -> 0.53 — a 17x drop —
@@ -529,6 +530,7 @@ mod tests {
             )
             .unwrap();
         let meta = NormalLoadingMetadata {
+            weights: Vec::new(),
             mapper,
             loading_isq: false,
             real_device: device.clone(),

@@ -16,8 +16,7 @@ use crate::utils::slice_ptr;
 pub const NVFP4_BLOCK_SIZE: usize = 16;
 
 pub const FP4_E2M1_LUT: [f32; 16] = [
-    0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
-    0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+    0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
 ];
 
 /// Dequantize NVFP4 weights to `out_dtype`.
@@ -34,7 +33,10 @@ pub fn nvfp4_dequantize(
     let dev = w_q.device();
     let dims = w_q.dims();
     if dims.len() < 2 {
-        hanzo_ml::bail!("Expected at least 2 dimensions for NVFP4 weight tensor, got {:?}", dims);
+        hanzo_ml::bail!(
+            "Expected at least 2 dimensions for NVFP4 weight tensor, got {:?}",
+            dims
+        );
     }
     let n = dims[dims.len() - 2];
     let half_k = dims[dims.len() - 1];
@@ -56,7 +58,9 @@ pub fn nvfp4_dequantize(
     let w_bytes: Vec<u8> = w_q_cpu.flatten_all()?.to_vec1()?;
     let scale_vals: Vec<f32> = scale_cpu.flatten_all()?.to_vec1()?;
 
-    let total_elements = n * k;
+    // Every leading dim is a bank of N rows (a stacked expert bank is [E, N, K/2]).
+    let rows: usize = dims[..dims.len() - 1].iter().product();
+    let total_elements = rows * k;
     let mut out_data = vec![0.0f32; total_elements];
 
     out_data
@@ -77,16 +81,15 @@ pub fn nvfp4_dequantize(
                     let high_nibble = ((byte >> 4) & 0x0F) as usize;
 
                     row_out[blk_out_offset + byte_idx * 2] = FP4_E2M1_LUT[low_nibble] * blk_scale;
-                    row_out[blk_out_offset + byte_idx * 2 + 1] = FP4_E2M1_LUT[high_nibble] * blk_scale;
+                    row_out[blk_out_offset + byte_idx * 2 + 1] =
+                        FP4_E2M1_LUT[high_nibble] * blk_scale;
                 }
             }
         });
 
-    let shape = if dims.len() == 3 {
-        vec![dims[0], n, k]
-    } else {
-        vec![n, k]
-    };
+    let mut shape = dims[..dims.len() - 1].to_vec();
+    shape.push(k);
+    let _ = n;
 
     Tensor::from_vec(out_data, shape.as_slice(), &Device::Cpu)?
         .to_device(dev)?
@@ -221,16 +224,206 @@ pub fn nvfp4_matmul(
     }
 }
 
+/// W4A4 over a stacked bank: `out[w, n] = alpha[e] * sum_k (a_code * a_scale)(row, k) *
+/// (w_code * w_scale)(e, n, k)` for each assignment `w = t * topk + slot` with expert
+/// `e = ids[t, slot]` and activation row `t` (or `w` when the activations carry the topk dim).
+///
+/// - `a_codes` U8 [rows, K/2], `a_scales` F8E4M3 [rows, K/16] (from `quantize::nvfp4`)
+/// - `w_codes` U8 [E, N, K/2], `w_scales` F8E4M3 [E, N, K/16], `alpha` F32 [E]
+/// - `ids` U32 [T, topk]
+///
+/// Returns [T, topk, N] in `out_dtype`. Decode sizes take the indexed vecmat, the rest the grouped
+/// WMMA kernel over moe_dispatch_build's routing.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn nvfp4_moe_gemm(
+    a_codes: &Tensor,
+    a_scales: &Tensor,
+    w_codes: &Tensor,
+    w_scales: &Tensor,
+    alpha: &Tensor,
+    ids: &Tensor,
+    input_has_topk_dim: bool,
+    out_dtype: DType,
+) -> Result<Tensor> {
+    let Device::Cuda(dev) = a_codes.device() else {
+        hanzo_ml::bail!("NVFP4 MoE GEMM needs CUDA tensors");
+    };
+    let (tokens, topk) = ids.dims2()?;
+    let (experts, n, half_k) = w_codes.dims3()?;
+    let k = half_k * 2;
+    if a_codes.dim(1)? != half_k || k % 32 != 0 {
+        hanzo_ml::bail!(
+            "NVFP4 MoE GEMM: activations {:?} for weights {:?}",
+            a_codes.dims(),
+            w_codes.dims()
+        );
+    }
+    let work = tokens * topk;
+    let ids = ids.to_dtype(DType::U32)?.contiguous()?.copy()?;
+    let (a_codes, a_scales, w_codes, w_scales, alpha) = (
+        a_codes.contiguous()?,
+        a_scales.contiguous()?,
+        w_codes.contiguous()?,
+        w_scales.contiguous()?,
+        alpha.to_dtype(DType::F32)?.contiguous()?,
+    );
+    let (ac_s, as_s, wc_s, ws_s, al_s, id_s) = (
+        a_codes.storage_and_layout().0,
+        a_scales.storage_and_layout().0,
+        w_codes.storage_and_layout().0,
+        w_scales.storage_and_layout().0,
+        alpha.storage_and_layout().0,
+        ids.storage_and_layout().0,
+    );
+    let (
+        Storage::Cuda(ac),
+        Storage::Cuda(as_),
+        Storage::Cuda(wc),
+        Storage::Cuda(ws),
+        Storage::Cuda(al),
+        Storage::Cuda(id),
+    ) = (&*ac_s, &*as_s, &*wc_s, &*ws_s, &*al_s, &*id_s)
+    else {
+        hanzo_ml::bail!("NVFP4 MoE GEMM expects CUDA storage");
+    };
+    let (ac_p, _g1) = slice_ptr(ac.as_cuda_slice::<u8>()?, a_codes.layout().start_offset());
+    let (as_p, _g2) = slice_ptr(as_.as_cuda_slice::<F8E4M3>()?, a_scales.layout().start_offset());
+    let (wc_p, _g3) = slice_ptr(wc.as_cuda_slice::<u8>()?, w_codes.layout().start_offset());
+    let (ws_p, _g4) = slice_ptr(ws.as_cuda_slice::<F8E4M3>()?, w_scales.layout().start_offset());
+    let (al_p, _g5) = slice_ptr(al.as_cuda_slice::<f32>()?, alpha.layout().start_offset());
+    let (id_slice, id_off) = (id.as_cuda_slice::<u32>()?, ids.layout().start_offset());
+    let (id_p, _g6) = slice_ptr(id_slice, id_off);
+    let stream = dev.cuda_stream().cu_stream();
+    let grouped = work > VECMAT_ROWS;
+    let routing = if grouped {
+        if id_off != 0 {
+            hanzo_ml::bail!("NVFP4 MoE GEMM wants its expert ids at offset 0");
+        }
+        Some(crate::moe_dispatch_build(id_slice, work, experts, topk, dev)?)
+    } else {
+        None
+    };
+
+    macro_rules! run {
+        ($t:ty, $vec:ident, $grp:ident) => {{
+            let output = dev.alloc_zeros::<$t>(work * n)?;
+            {
+                let (o_p, _og) = slice_ptr(&output, 0);
+                match &routing {
+                    None => unsafe {
+                        ffi::$vec(
+                            ac_p as *const u8,
+                            as_p as *const u8,
+                            wc_p as *const u8,
+                            ws_p as *const u8,
+                            al_p as *const f32,
+                            id_p as *const u32,
+                            o_p as *mut $t,
+                            work as i32,
+                            topk as i32,
+                            experts as i32,
+                            n as i32,
+                            k as i32,
+                            input_has_topk_dim,
+                            stream,
+                        )
+                    },
+                    Some((bounds, sorted_work, _)) => {
+                        let (b_p, _bg) = slice_ptr(bounds, 0);
+                        let (w_p, _wg) = slice_ptr(sorted_work, 0);
+                        unsafe {
+                            ffi::$grp(
+                                ac_p as *const u8,
+                                as_p as *const u8,
+                                wc_p as *const u8,
+                                ws_p as *const u8,
+                                al_p as *const f32,
+                                b_p as *const u32,
+                                w_p as *const u32,
+                                o_p as *mut $t,
+                                experts as i32,
+                                topk as i32,
+                                n as i32,
+                                k as i32,
+                                input_has_topk_dim,
+                                stream,
+                            )
+                        }
+                    }
+                }
+            }
+            Ok(Tensor::from((
+                Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+                Shape::from((tokens, topk, n)),
+            )))
+        }};
+    }
+    match out_dtype {
+        DType::F16 => run!(f16, launch_nvfp4_moe_vecmat_f16, launch_nvfp4_moe_grouped_f16),
+        DType::BF16 => run!(bf16, launch_nvfp4_moe_vecmat_bf16, launch_nvfp4_moe_grouped_bf16),
+        DType::F32 => run!(f32, launch_nvfp4_moe_vecmat_f32, launch_nvfp4_moe_grouped_f32),
+        d => hanzo_ml::bail!("NVFP4 MoE GEMM output {d:?}"),
+    }
+}
+
+/// Above this many (token, slot) rows the grouped WMMA kernel runs; at or below, the vecmat.
+#[cfg(feature = "cuda")]
+pub const VECMAT_ROWS: usize = 64;
+
+/// The CPU W4A4 reference: codes times scales, exactly, then an f32 dot per (token, slot) and
+/// alpha; [T, topk, N] in `out_dtype`.
+#[allow(clippy::too_many_arguments)]
+pub fn nvfp4_moe_reference(
+    a_codes: &Tensor,
+    a_scales: &Tensor,
+    w_codes: &Tensor,
+    w_scales: &Tensor,
+    alpha: &Tensor,
+    ids: &Tensor,
+    input_has_topk_dim: bool,
+    out_dtype: DType,
+) -> Result<Tensor> {
+    let (tokens, topk) = ids.dims2()?;
+    let (experts, n, _) = w_codes.dims3()?;
+    let a = nvfp4_dequantize(a_codes, a_scales, None, DType::F32)?.to_device(&Device::Cpu)?;
+    let alpha = alpha.to_dtype(DType::F32)?.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+    let ids = ids.to_dtype(DType::U32)?.to_device(&Device::Cpu)?.to_vec2::<u32>()?;
+    let mut banks = Vec::with_capacity(experts);
+    for e in 0..experts {
+        banks.push(
+            nvfp4_dequantize(&w_codes.get(e)?, &w_scales.get(e)?, None, DType::F32)?
+                .to_device(&Device::Cpu)?,
+        );
+    }
+    let mut out = Vec::with_capacity(tokens * topk);
+    for (t, row) in ids.iter().enumerate() {
+        for (j, &e) in row.iter().enumerate() {
+            let r = if input_has_topk_dim { t * topk + j } else { t };
+            let y = a.get(r)?.unsqueeze(0)?.matmul(&banks[e as usize].t()?)?;
+            out.push((y * alpha[e as usize] as f64)?.squeeze(0)?);
+        }
+    }
+    let _ = n;
+    Tensor::stack(&out, 0)?
+        .reshape((tokens, topk, n))?
+        .to_dtype(out_dtype)?
+        .to_device(a_codes.device())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_nvfp4_dequantize_basic() {
-        let weight = Tensor::new(&[0x10u8, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE], &Device::Cpu)
-            .unwrap()
-            .reshape((1, 8))
-            .unwrap();
+        let weight = Tensor::new(
+            &[0x10u8, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE],
+            &Device::Cpu,
+        )
+        .unwrap()
+        .reshape((1, 8))
+        .unwrap();
         let scale = Tensor::new(&[1.0f32], &Device::Cpu)
             .unwrap()
             .to_dtype(DType::F8E4M3)
@@ -242,7 +435,11 @@ mod tests {
         let vals: Vec<f32> = dequant.flatten_all().unwrap().to_vec1().unwrap();
         for i in 0..16 {
             let expected = FP4_E2M1_LUT[i];
-            assert!((vals[i] - expected).abs() < 1e-4, "Mismatch at {i}: got {}, expected {expected}", vals[i]);
+            assert!(
+                (vals[i] - expected).abs() < 1e-4,
+                "Mismatch at {i}: got {}, expected {expected}",
+                vals[i]
+            );
         }
     }
 
@@ -262,15 +459,20 @@ mod tests {
         let blocks = k / NVFP4_BLOCK_SIZE;
         let global = 0.75f32;
 
-        let packed: Vec<u8> = (0..n * k / 2).map(|i| ((i * 37 + 11) % 256) as u8).collect();
+        let packed: Vec<u8> = (0..n * k / 2)
+            .map(|i| ((i * 37 + 11) % 256) as u8)
+            .collect();
         let scales: Vec<f32> = (0..n * blocks)
             .map(|i| [0.5f32, 1.0, 2.0, 0.25][i % 4])
             .collect();
 
         let w_q_cpu = Tensor::from_vec(packed, (n, k / 2), &Device::Cpu)?;
-        let w_s_cpu = Tensor::from_vec(scales, (n, blocks), &Device::Cpu)?.to_dtype(DType::F8E4M3)?;
+        let w_s_cpu =
+            Tensor::from_vec(scales, (n, blocks), &Device::Cpu)?.to_dtype(DType::F8E4M3)?;
         let s2 = Tensor::new(global, &Device::Cpu)?;
-        let w_ref = nvfp4_dequantize(&w_q_cpu, &w_s_cpu, Some(&s2), DType::F32)?.t()?.contiguous()?;
+        let w_ref = nvfp4_dequantize(&w_q_cpu, &w_s_cpu, Some(&s2), DType::F32)?
+            .t()?
+            .contiguous()?;
 
         let w_q = w_q_cpu.to_device(&dev)?;
         let w_s = w_s_cpu.to_device(&dev)?;

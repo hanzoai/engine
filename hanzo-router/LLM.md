@@ -84,17 +84,17 @@ PID -- NEVER `pkill -f "release/hanzo serve"` (the pattern self-matches your own
 ## Zen 5.8 / Qwen 3.8 Blackwell Cluster Topology (Live Production)
 
 ### Upstream Engines
-- **Spark (`10.0.0.19:30000`)**: Blackwell GB10 running SGLang (`hanzo-sglang.service`):
+- **Spark (`:30000`)**: Blackwell GB10 running SGLang (`hanzo-sglang.service`):
   - Model: `RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead`
   - Flags: `--host 0.0.0.0 --port 30000 --mem-fraction-static 0.65 --max-running-requests 8 --reasoning-parser qwen3 --tool-call-parser qwen3_coder`
   - Radix KV cache with chunked prefill at ~1,700 tok/s, CUDA graph acceleration, native Anthropic /v1/messages tool_use parsing.
-- **Evo (`10.0.0.21:8080`)**: Strix Halo gfx1151 running `llama-server`:
+- **Evo (`:8080`)**: Strix Halo gfx1151 running `llama-server`:
   - Model: `Qwen3.8-27B-Q6_K.gguf`
 
-### Native Rust Router (`10.0.0.19:1235`)
+### Native Rust Router (`:1235`, on Spark)
 - Service: `hanzo-router.service` on Spark.
-- Binary: `/home/z/.local/bin/hanzo-router` compiled with `--features proxy`.
-- Config: `/home/z/.config/hanzo/router-pool.yaml`
+- Binary: `~/.local/bin/hanzo-router`, compiled with `--features proxy`.
+- Config: `~/.config/hanzo/router-pool.yaml`
 - Features:
   - Models served: `default`, `qwen3.8`, `zen-coder`, `zen5.8`, `zen5.8-coder`, `qwen/qwen3.8-27b`.
   - Probes: `/api/hello` (HEAD and GET return 200 for Claude Code reachability), `/v1/models` (Anthropic and OpenAI model discovery), `/health` (backend liveness).
@@ -104,7 +104,7 @@ PID -- NEVER `pkill -f "release/hanzo serve"` (the pattern self-matches your own
 ### Claude Code Usage
 Point Claude Code directly to the router on Spark:
 ```bash
-export ANTHROPIC_BASE_URL="http://10.0.0.19:1235"
+export ANTHROPIC_BASE_URL="http://<spark>:1235"   # address in the private record
 export ANTHROPIC_API_KEY="dummy"
 claude
 ```

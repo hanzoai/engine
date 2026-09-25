@@ -85,7 +85,7 @@ pub fn rollout(
     let dev = dit.device().clone();
     let dtype = dit.dtype();
     if !matches!(dev, Device::Cpu) {
-        dev.set_seed(params.seed)?; // candle CPU rng is not seedable; GPU is (stage-6 reproducibility)
+        dev.set_seed(params.seed)?; // hanzo-ml CPU rng is not seedable; GPU is (stage-6 reproducibility)
     }
     let acp = alphas_cumprod();
     let nr = noise_range(params.ddim_steps);

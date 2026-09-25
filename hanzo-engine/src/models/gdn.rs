@@ -9,7 +9,11 @@ use hanzo_nn::Linear;
 use hanzo_quant::{QuantMethod, QuantizedConfig, RowParallelLayer, ShardedVarBuilder};
 use std::sync::Arc;
 
-use crate::device_map::DeviceMapper;
+use crate::{
+    device_map::DeviceMapper,
+    kv_cache::{RecurrentStatePool, RecurrentTrail},
+    utils::unvarbuilder::UnVarBuilder,
+};
 
 // ====================== GDN Config Trait ======================
 
@@ -38,10 +42,20 @@ pub trait GdnConfig {
 
 // ====================== RMSNorm Gated ======================
 
-/// RMSNorm with gating: `rms_norm(x) * weight * silu(gate)`
+/// The gate's activation. vLLM `RMSNormGated` accepts silu or sigmoid (`layernorm.py:248-249`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Act {
+    Silu,
+    Sigmoid,
+}
+
+/// RMSNorm with gating: `rms_norm(x) * weight * act(gate)`, the norm taken before the gate
+/// (vLLM `RMSNormGated`, `norm_before_gate=True`, `layernorm.py:243-269`). The gate is silu
+/// unless [`RmsNormGated::sigmoid`] switches it.
 pub struct RmsNormGated {
     pub weight: Tensor,
     eps: f64,
+    act: Act,
 }
 
 impl RmsNormGated {
@@ -55,18 +69,35 @@ impl RmsNormGated {
         if let Some(target_dev) = isq_target_device {
             weight = weight.to_device(target_dev)?;
         }
-        Ok(Self { weight, eps })
+        Ok(Self::from_weight(weight, eps))
     }
 
     /// Build directly from an already-materialized weight (e.g. a dequantized GGUF tensor).
     pub fn from_weight(weight: Tensor, eps: f64) -> Self {
-        Self { weight, eps }
+        Self {
+            weight,
+            eps,
+            act: Act::Silu,
+        }
+    }
+
+    /// Gate with `sigmoid(gate)`, as a GDN with `output_gate_type = "sigmoid"` does
+    /// (vLLM `qwen_gdn_linear_attn.py:471-484`).
+    pub fn sigmoid(self) -> Self {
+        Self {
+            act: Act::Sigmoid,
+            ..self
+        }
     }
 
     pub fn forward(&self, x: &Tensor, gate: &Tensor) -> Result<Tensor> {
         let dtype = x.dtype();
         let x = x.to_dtype(DType::F32)?.contiguous()?;
-        let gate = hanzo_nn::ops::silu(&gate.to_dtype(DType::F32)?)?;
+        let gate = gate.to_dtype(DType::F32)?;
+        let gate = match self.act {
+            Act::Silu => hanzo_nn::ops::silu(&gate)?,
+            Act::Sigmoid => sigmoid(&gate)?,
+        };
         let weight = self.weight.to_dtype(DType::F32)?;
         let normed = hanzo_nn::ops::rms_norm(&x, &weight, self.eps as f32)?;
         normed.broadcast_mul(&gate)?.to_dtype(dtype)
@@ -75,6 +106,13 @@ impl RmsNormGated {
 
 // ====================== GDN layer cache ======================
 
+/// The state after each position of one forward, batch-major.
+#[derive(Debug, Clone, Default)]
+pub struct GdnTrail {
+    pub conv: Vec<Tensor>,
+    pub recurrent: Vec<Tensor>,
+}
+
 #[derive(Debug)]
 pub struct GdnLayerCache {
     /// Conv state: (batch, conv_dim, kernel_size)
@@ -82,6 +120,8 @@ pub struct GdnLayerCache {
     /// Recurrent state: (batch, num_v_heads, head_k_dim, head_v_dim)
     pub recurrent_state: Tensor,
     pub seqlen_offset: usize,
+    /// `Some` asks `forward` to fill it.
+    pub trail: Option<GdnTrail>,
 }
 
 #[allow(dead_code)]
@@ -103,6 +143,7 @@ impl GdnLayerCache {
             conv_state,
             recurrent_state,
             seqlen_offset: 0,
+            trail: None,
         })
     }
 
@@ -114,14 +155,187 @@ impl GdnLayerCache {
     }
 }
 
+impl GdnLayerCache {
+    /// Note the conv state after each position of `inputs`, the raw conv inputs of this forward
+    /// as (batch, seq, conv_dim). Call before the conv advances `conv_state`. No-op without a
+    /// trail.
+    pub fn trail_conv(&mut self, inputs: &Tensor) -> Result<()> {
+        let Some(trail) = self.trail.as_mut() else {
+            return Ok(());
+        };
+        // The conv state is the last `kernel` raw inputs, so the state after position `t` is a
+        // window over the old state followed by the new inputs.
+        let kernel = self.conv_state.dim(D::Minus1)?;
+        let window = Tensor::cat(
+            &[
+                &self.conv_state.to_dtype(inputs.dtype())?,
+                &inputs.transpose(1, 2)?,
+            ],
+            D::Minus1,
+        )?;
+        trail.conv = (0..inputs.dim(1)?)
+            .map(|t| window.narrow(D::Minus1, t + 1, kernel)?.contiguous())
+            .collect::<Result<_>>()?;
+        Ok(())
+    }
+
+    /// The gated delta rule over this cache's recurrent state, noting the state after each
+    /// position when a trail was asked for.
+    pub fn recurrence(
+        &mut self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        g: &Tensor,
+        beta: &Tensor,
+    ) -> Result<Tensor> {
+        let Some(trail) = self.trail.as_mut() else {
+            return gated_delta_rule_recurrence(q, k, v, g, beta, &mut self.recurrent_state);
+        };
+        // One position at a time, copying the state after each. The fused kernels advance the
+        // state in place, so a handle kept across steps would alias the final state.
+        let seq_len = q.dim(1)?;
+        trail.recurrent = Vec::with_capacity(seq_len);
+        let mut ys = Vec::with_capacity(seq_len);
+        for t in 0..seq_len {
+            let at = |x: &Tensor| x.narrow(1, t, 1)?.contiguous();
+            ys.push(gated_delta_rule_recurrence(
+                &at(q)?,
+                &at(k)?,
+                &at(v)?,
+                &at(g)?,
+                &at(beta)?,
+                &mut self.recurrent_state,
+            )?);
+            trail.recurrent.push(self.recurrent_state.copy()?);
+        }
+        Tensor::cat(&ys, 1)
+    }
+}
+
 impl Clone for GdnLayerCache {
     fn clone(&self) -> Self {
         Self {
             conv_state: self.conv_state.clone(),
             recurrent_state: self.recurrent_state.clone(),
             seqlen_offset: self.seqlen_offset,
+            trail: self.trail.clone(),
         }
     }
+}
+
+// ====================== Pooled state ======================
+
+/// The pool slots one forward reads and writes.
+pub enum PoolSlots<'a> {
+    /// One sequence at a host-known slot, `offset` tokens in. Access is constant-offset
+    /// `narrow`/`slice_set` with no device sync, which keeps the decode step capturable by a
+    /// CUDA/HIP graph.
+    One { slot: usize, offset: usize },
+    /// A batch, gathered and scattered through a device index tensor.
+    Many(&'a Tensor),
+}
+
+/// Run `forward` over pooled state: load the batch's slots, let it advance them, write them back.
+/// With `trail` the pool also keeps the state after each position, so a partly accepted verify can
+/// rewind. Without it the pool's previous trail is dropped, since it no longer matches the state.
+pub fn forward_pooled(
+    pool: &mut RecurrentStatePool,
+    slots: PoolSlots<'_>,
+    layer_idx: usize,
+    trail: bool,
+    forward: impl FnOnce(&mut GdnLayerCache) -> Result<Tensor>,
+) -> Result<Tensor> {
+    let (slot_ids, start_offsets) = match &slots {
+        PoolSlots::One { slot, offset } => (vec![*slot as u32], vec![*offset]),
+        PoolSlots::Many(indices) => {
+            let ids: Vec<u32> = indices.to_vec1()?;
+            let offsets: Vec<usize> = ids
+                .iter()
+                .map(|&id| pool.get_seqlen_offset(id as usize))
+                .collect();
+            (ids, offsets)
+        }
+    };
+    let Some(&first_offset) = start_offsets.first() else {
+        hanzo_ml::bail!("Hybrid recurrent state indices are empty.");
+    };
+    // A layer forward asks one thing of the offset: is this the start of a sequence, which
+    // zero-pads the conv, or a continuation, which carries its state. Sequences of different
+    // lengths batch freely; a new one cannot share a forward with a continuing one.
+    if start_offsets
+        .iter()
+        .any(|&o| (o == 0) != (first_offset == 0))
+    {
+        hanzo_ml::bail!(
+            "Hybrid layer {layer_idx}: a new sequence shares a forward with a continuing one."
+        );
+    }
+    let (conv_state, recurrent_state) = match &slots {
+        PoolSlots::One { slot, .. } => (
+            pool.conv_state.narrow(0, *slot, 1)?,
+            pool.recurrent_state.narrow(0, *slot, 1)?,
+        ),
+        PoolSlots::Many(indices) => (
+            pool.gather_conv_state(indices)?,
+            pool.gather_recurrent_state(indices)?,
+        ),
+    };
+    let mut cache = GdnLayerCache {
+        conv_state,
+        recurrent_state,
+        seqlen_offset: first_offset,
+        trail: trail.then(GdnTrail::default),
+    };
+    let out = forward(&mut cache)?;
+
+    // A state the cache still holds in the pool's storage was left alone or updated in place (a
+    // kernel writing its state back into the view it was given, perhaps returning a reshape of
+    // it; a conv-only pool's empty state). There is nothing to copy, and `slice_set` cannot copy
+    // a tensor onto its own storage.
+    let conv = !shares_storage(&cache.conv_state, &pool.conv_state);
+    let recurrent = !shares_storage(&cache.recurrent_state, &pool.recurrent_state);
+    match &slots {
+        PoolSlots::One { slot, .. } => {
+            if conv {
+                let conv = cache.conv_state.to_dtype(pool.conv_state.dtype())?;
+                pool.conv_state.slice_set(&conv.contiguous()?, 0, *slot)?;
+            }
+            if recurrent {
+                let state = cache
+                    .recurrent_state
+                    .to_dtype(pool.recurrent_state.dtype())?;
+                pool.recurrent_state
+                    .slice_set(&state.contiguous()?, 0, *slot)?;
+            }
+        }
+        PoolSlots::Many(indices) => {
+            if conv {
+                pool.scatter_conv_state(indices, &cache.conv_state)?;
+            }
+            if recurrent {
+                pool.scatter_recurrent_state(indices, &cache.recurrent_state)?;
+            }
+        }
+    }
+    let advanced = cache.seqlen_offset.saturating_sub(first_offset);
+    for (&id, &offset) in slot_ids.iter().zip(&start_offsets) {
+        pool.set_seqlen_offset(id as usize, offset + advanced);
+    }
+    pool.set_trail(cache.trail.map(|t| RecurrentTrail {
+        slots: slot_ids,
+        start_offsets,
+        conv: t.conv,
+        recurrent: t.recurrent,
+    }));
+    Ok(out)
+}
+
+/// Whether two tensors are views of one storage.
+fn shares_storage(a: &Tensor, b: &Tensor) -> bool {
+    let (a, _) = a.storage_and_layout();
+    let (b, _) = b.storage_and_layout();
+    std::ptr::eq(&*a, &*b)
 }
 
 // ====================== GDN math functions ======================
@@ -188,6 +402,10 @@ pub fn gated_delta_rule_recurrence(
         }
         return recurrence_metal(q, k, v, g, beta, state);
     }
+    #[cfg(feature = "rocm")]
+    if state.device().is_rocm() {
+        return recurrence_rocm(q, k, v, g, beta, state);
+    }
     // The Vulkan single-step kernel (gdn_step_vulkan) isn't ported to canonical hanzo-ml yet, so
     // don't intercept the Vulkan decode path -- fall through to recurrence_portable, which is
     // documented to "serve CPU, Vulkan, and any backend without a fused kernel".
@@ -223,7 +441,7 @@ fn recurrence_vulkan_step(
 
 /// Flatten (b, s, heads, dim) -> (b*heads, s, dim) in f32 contiguous, the layout the fused
 /// CUDA/Metal kernels expect. state (b, heads, k, v) flattens to (b*heads, k, v) the same way.
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 fn recurrence_flatten(
     q: &Tensor,
     k: &Tensor,
@@ -265,7 +483,7 @@ fn recurrence_flatten(
 
 /// Reshape a fused kernel's (b*heads, s, v_dim) output back to (b, s, heads, v_dim), write the
 /// (b*heads, k, v) state back into `state`, and restore the input dtype.
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 fn recurrence_unflatten(
     out_bh: &Tensor,
     state_flat: &Tensor,
@@ -283,6 +501,24 @@ fn recurrence_unflatten(
         .transpose(1, 2)?
         .contiguous()?
         .to_dtype(q.dtype())
+}
+
+/// Fused ROCm recurrence: ONE `gdn_scan` launch (a thread per (b*head, v) column, sequential
+/// over the sequence, state in registers) replaces the host-side per-token ops loop. Prefill
+/// and decode both take this path; the state is flattened to f32, updated in place by the
+/// kernel, and folded back by `recurrence_unflatten`.
+#[cfg(feature = "rocm")]
+fn recurrence_rocm(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state: &mut Tensor,
+) -> Result<Tensor> {
+    let (qf, kf, vf, gf, bf, statef) = recurrence_flatten(q, k, v, g, beta, state)?;
+    let out = hanzo_ml::rocm_backend::gdn_scan_rocm(&qf, &kf, &vf, &gf, &bf, &statef)?;
+    recurrence_unflatten(&out, &statef, q, v, state)
 }
 
 /// Fused CUDA recurrence: chunked scan for prefill (seq >= 64), single-pass for short/decode.
@@ -452,9 +688,21 @@ fn recurrence_portable(
 
 // ====================== Gated Delta Net layer ======================
 
+/// The two checkpoint layouts of the delta-net input projections, in the form each one is usable in.
+pub enum GdnInProj {
+    /// One interleaved grouped-head matrix per pair, which only exists dense.
+    Merged { qkvz: Linear, ba: Linear },
+    /// The HF section-major projections, kept quantized because nothing has to be re-indexed.
+    Split {
+        qkv: Arc<dyn QuantMethod>,
+        z: Arc<dyn QuantMethod>,
+        b: Arc<dyn QuantMethod>,
+        a: Arc<dyn QuantMethod>,
+    },
+}
+
 pub struct GatedDeltaNet {
-    pub in_proj_qkvz: Linear,
-    pub in_proj_ba: Linear,
+    pub in_proj: GdnInProj,
     pub conv1d_weight: Tensor,
     pub dt_bias: Tensor,
     pub a_log: Tensor,
@@ -475,6 +723,15 @@ pub enum GdnWeightMode {
     MergedOnly,
     /// Try merged first, fall back to separate HF names (in_proj_qkv + in_proj_z, in_proj_b + in_proj_a)
     MergedWithFallback,
+}
+
+/// Rows produced by the conv state spliced onto the left of a continuation are context, not output.
+fn trim_carried(out: &Tensor, carried: usize) -> Result<Tensor> {
+    if carried == 0 {
+        return Ok(out.clone());
+    }
+    let len = out.dim(1)?;
+    out.narrow(1, carried, len - carried)
 }
 
 impl GatedDeltaNet {
@@ -501,63 +758,47 @@ impl GatedDeltaNet {
         let value_dim = num_v_heads * head_v_dim;
         let conv_kernel_size = cfg.linear_conv_kernel_dim();
         let hidden_size = cfg.hidden_size();
-        let v_per_group = num_v_heads / num_k_heads;
 
         let vb_la = mapper.set_device(layer_idx, vb.pp("linear_attn"), loading_isq);
 
-        // The grouped layout is built by interleaving rows, so these projections have to be dense.
-        // They are not always stored that way: ModelOpt ships in_proj_* as per-tensor FP8, which a
-        // raw get() hands to a matmul as fp8 bytes. Load them through the quantized loader instead.
-        let dense = |name: &str, out_dim: usize| -> Result<Tensor> {
+        // ISQ stages vb_la on the CPU and only moves what it claims; the input projections are not
+        // ISQ targets and a QuantMethod cannot be moved after loading, so they load on the device.
+        let vb_proj = mapper.set_device(layer_idx, vb.pp("linear_attn"), false);
+
+        // ModelOpt ships in_proj_* as per-tensor FP8, which a raw get() hands to a matmul as fp8
+        // bytes. Everything here goes through the quantized loader instead.
+        let proj = |name: &str, out_dim: usize| -> Result<Arc<dyn QuantMethod>> {
             hanzo_quant::linear_no_bias(
                 hidden_size,
                 out_dim,
                 cfg.quantization_config(),
-                vb_la.pp(name),
-            )?
-            .dequantize_w()?
-            .to_dtype(vb_la.dtype())
+                vb_proj.pp(name),
+            )
+        };
+        let dense = |name: &str, out_dim: usize| -> Result<Linear> {
+            Ok(Linear::new(
+                proj(name, out_dim)?
+                    .dequantize_w()?
+                    .to_dtype(vb_la.dtype())?,
+                None,
+            ))
         };
 
-        // Load qkvz and ba projections
-        let qkvz_out = key_dim * 2 + value_dim * 2;
-        let mut qkvz_w = match weight_mode {
-            GdnWeightMode::MergedOnly => dense("in_proj_qkvz", qkvz_out)?,
-            GdnWeightMode::MergedWithFallback => {
-                if vb_la.contains_tensor("in_proj_qkvz.weight") {
-                    dense("in_proj_qkvz", qkvz_out)?
-                } else {
-                    // Load separate HF weights and interleave into grouped layout
-                    let qkv_w = dense("in_proj_qkv", key_dim * 2 + value_dim)?;
-                    let z_w = dense("in_proj_z", value_dim)?;
-                    let q_w = qkv_w.narrow(0, 0, key_dim)?;
-                    let k_w = qkv_w.narrow(0, key_dim, key_dim)?;
-                    let v_w = qkv_w.narrow(0, key_dim * 2, value_dim)?;
-                    let q_grouped = q_w.reshape((num_k_heads, head_k_dim, hidden_size))?;
-                    let k_grouped = k_w.reshape((num_k_heads, head_k_dim, hidden_size))?;
-                    let v_grouped =
-                        v_w.reshape((num_k_heads, v_per_group * head_v_dim, hidden_size))?;
-                    let z_grouped =
-                        z_w.reshape((num_k_heads, v_per_group * head_v_dim, hidden_size))?;
-                    let merged = Tensor::cat(&[q_grouped, k_grouped, v_grouped, z_grouped], 1)?;
-                    merged.reshape((qkvz_out, hidden_size))?
-                }
+        let merged = match weight_mode {
+            GdnWeightMode::MergedOnly => true,
+            GdnWeightMode::MergedWithFallback => vb_la.contains_tensor("in_proj_qkvz.weight"),
+        };
+        let in_proj = if merged {
+            GdnInProj::Merged {
+                qkvz: dense("in_proj_qkvz", key_dim * 2 + value_dim * 2)?,
+                ba: dense("in_proj_ba", num_v_heads * 2)?,
             }
-        };
-
-        let mut ba_w = match weight_mode {
-            GdnWeightMode::MergedOnly => dense("in_proj_ba", num_v_heads * 2)?,
-            GdnWeightMode::MergedWithFallback => {
-                if vb_la.contains_tensor("in_proj_ba.weight") {
-                    dense("in_proj_ba", num_v_heads * 2)?
-                } else {
-                    let b_w = dense("in_proj_b", num_v_heads)?;
-                    let a_w = dense("in_proj_a", num_v_heads)?;
-                    let b_grouped = b_w.reshape((num_k_heads, v_per_group, hidden_size))?;
-                    let a_grouped = a_w.reshape((num_k_heads, v_per_group, hidden_size))?;
-                    let merged = Tensor::cat(&[b_grouped, a_grouped], 1)?;
-                    merged.reshape((num_v_heads * 2, hidden_size))?
-                }
+        } else {
+            GdnInProj::Split {
+                qkv: proj("in_proj_qkv", key_dim * 2 + value_dim)?,
+                z: proj("in_proj_z", value_dim)?,
+                b: proj("in_proj_b", num_v_heads)?,
+                a: proj("in_proj_a", num_v_heads)?,
             }
         };
 
@@ -567,15 +808,10 @@ impl GatedDeltaNet {
         let mut a_log = vb_la.get(num_v_heads, "A_log")?;
 
         if let Some(ref target_dev) = isq_target_device {
-            qkvz_w = qkvz_w.to_device(target_dev)?;
-            ba_w = ba_w.to_device(target_dev)?;
             conv1d_weight = conv1d_weight.to_device(target_dev)?;
             dt_bias = dt_bias.to_device(target_dev)?;
             a_log = a_log.to_device(target_dev)?;
         }
-
-        let in_proj_qkvz = Linear::new(qkvz_w, None);
-        let in_proj_ba = Linear::new(ba_w, None);
 
         let norm = RmsNormGated::new(
             head_v_dim,
@@ -594,8 +830,7 @@ impl GatedDeltaNet {
         )?;
 
         Ok(Self {
-            in_proj_qkvz,
-            in_proj_ba,
+            in_proj,
             conv1d_weight,
             dt_bias,
             a_log,
@@ -611,60 +846,116 @@ impl GatedDeltaNet {
         })
     }
 
+    /// Records what `load` reads back, so a UQFF residual round trips into the variant it came from.
+    pub fn add_residual_tensors(&self, uvb_la: &UnVarBuilder) {
+        match &self.in_proj {
+            GdnInProj::Merged { qkvz, ba } => {
+                uvb_la
+                    .pp("in_proj_qkvz")
+                    .add_tensor("weight", qkvz.weight().clone());
+                uvb_la
+                    .pp("in_proj_ba")
+                    .add_tensor("weight", ba.weight().clone());
+            }
+            GdnInProj::Split { qkv, z, b, a } => {
+                uvb_la.pp("in_proj_qkv").add(qkv);
+                uvb_la.pp("in_proj_z").add(z);
+                uvb_la.pp("in_proj_b").add(b);
+                uvb_la.pp("in_proj_a").add(a);
+            }
+        }
+        uvb_la.add_tensor("conv1d.weight", self.conv1d_weight.clone());
+        uvb_la.add_tensor("dt_bias", self.dt_bias.clone());
+        uvb_la.add_tensor("A_log", self.a_log.clone());
+        uvb_la
+            .pp("norm")
+            .add_tensor("weight", self.norm.weight.clone());
+    }
+
+    /// (q, k, v) flat over key_dim/value_dim, z as (b, s, v_heads, head_v_dim), b and a as (b, s, v_heads).
+    fn project_in(&self, x: &Tensor) -> Result<[Tensor; 6]> {
+        let (batch_size, seq_len, _hidden) = x.dims3()?;
+        let v_per_group = self.num_v_heads / self.num_k_heads;
+        match &self.in_proj {
+            GdnInProj::Merged { qkvz, ba } => {
+                let v_group = v_per_group * self.head_v_dim;
+                let group_size_qkvz = 2 * self.head_k_dim + 2 * v_group;
+                let mixed_qkvz = qkvz.forward(x)?.reshape((
+                    batch_size,
+                    seq_len,
+                    self.num_k_heads,
+                    group_size_qkvz,
+                ))?;
+                let mixed_ba = ba.forward(x)?.reshape((
+                    batch_size,
+                    seq_len,
+                    self.num_k_heads,
+                    2 * v_per_group,
+                ))?;
+                Ok([
+                    mixed_qkvz.narrow(D::Minus1, 0, self.head_k_dim)?.reshape((
+                        batch_size,
+                        seq_len,
+                        self.key_dim,
+                    ))?,
+                    mixed_qkvz
+                        .narrow(D::Minus1, self.head_k_dim, self.head_k_dim)?
+                        .reshape((batch_size, seq_len, self.key_dim))?,
+                    mixed_qkvz
+                        .narrow(D::Minus1, 2 * self.head_k_dim, v_group)?
+                        .reshape((batch_size, seq_len, self.value_dim))?,
+                    mixed_qkvz
+                        .narrow(D::Minus1, 2 * self.head_k_dim + v_group, v_group)?
+                        .reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?,
+                    mixed_ba.narrow(D::Minus1, 0, v_per_group)?.reshape((
+                        batch_size,
+                        seq_len,
+                        self.num_v_heads,
+                    ))?,
+                    mixed_ba
+                        .narrow(D::Minus1, v_per_group, v_per_group)?
+                        .reshape((batch_size, seq_len, self.num_v_heads))?,
+                ])
+            }
+            GdnInProj::Split { qkv, z, b, a } => {
+                let qkv = qkv.forward(x)?;
+                Ok([
+                    qkv.narrow(D::Minus1, 0, self.key_dim)?,
+                    qkv.narrow(D::Minus1, self.key_dim, self.key_dim)?,
+                    qkv.narrow(D::Minus1, 2 * self.key_dim, self.value_dim)?,
+                    z.forward(x)?.reshape((
+                        batch_size,
+                        seq_len,
+                        self.num_v_heads,
+                        self.head_v_dim,
+                    ))?,
+                    b.forward(x)?,
+                    a.forward(x)?,
+                ])
+            }
+        }
+    }
+
     pub fn forward(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (batch_size, seq_len, _hidden) = x.dims3()?;
         let dtype = x.dtype();
         let v_per_group = self.num_v_heads / self.num_k_heads;
 
-        // 1. Project input
-        let mixed_qkvz = self.in_proj_qkvz.forward(x)?;
-        let mixed_ba = self.in_proj_ba.forward(x)?;
+        let [q, k, v_flat, z, b, a] = self.project_in(x)?;
 
-        // 2. Grouped head layout
-        let group_size_qkvz = 2 * self.head_k_dim + 2 * v_per_group * self.head_v_dim;
-        let mixed_qkvz =
-            mixed_qkvz.reshape((batch_size, seq_len, self.num_k_heads, group_size_qkvz))?;
-
-        let group_size_ba = 2 * v_per_group;
-        let mixed_ba = mixed_ba.reshape((batch_size, seq_len, self.num_k_heads, group_size_ba))?;
-
-        // Split within each group
-        let mut offset = 0;
-        let q = mixed_qkvz.narrow(D::Minus1, offset, self.head_k_dim)?;
-        offset += self.head_k_dim;
-        let k = mixed_qkvz.narrow(D::Minus1, offset, self.head_k_dim)?;
-        offset += self.head_k_dim;
-        let v = mixed_qkvz.narrow(D::Minus1, offset, v_per_group * self.head_v_dim)?;
-        offset += v_per_group * self.head_v_dim;
-        let z = mixed_qkvz.narrow(D::Minus1, offset, v_per_group * self.head_v_dim)?;
-
-        let b = mixed_ba.narrow(D::Minus1, 0, v_per_group)?;
-        let a = mixed_ba.narrow(D::Minus1, v_per_group, v_per_group)?;
-
-        // Reshape v, z -> (batch, seq, num_v_heads, head_v_dim)
-        let v = v.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
-        let z = z.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
-
-        // Reshape b, a -> (batch, seq, num_v_heads)
-        let b = b.reshape((batch_size, seq_len, self.num_v_heads))?;
-        let a = a.reshape((batch_size, seq_len, self.num_v_heads))?;
-
-        // Flatten q, k, v for conv1d
-        let q = q.reshape((batch_size, seq_len, self.key_dim))?;
-        let k = k.reshape((batch_size, seq_len, self.key_dim))?;
-        let v_flat = v.reshape((batch_size, seq_len, self.value_dim))?;
-
-        // 3. Concatenate q, k, v for conv1d
+        // 1. Concatenate q, k, v for conv1d
         let mixed_qkv = Tensor::cat(&[&q, &k, &v_flat], D::Minus1)?;
 
-        // 4. Apply causal conv1d (includes silu activation)
+        cache.trail_conv(&mixed_qkv)?;
+
+        // 2. Apply causal conv1d (includes silu activation)
         let mixed_qkv = if cache.seqlen_offset > 0 && seq_len == 1 {
             self.causal_conv1d_update(&mixed_qkv, cache)?
         } else {
             self.causal_conv1d_full(&mixed_qkv, cache)?
         };
 
-        // 5. Split back after conv and reshape to per-head
+        // 3. Split back after conv and reshape to per-head
         let q = mixed_qkv.narrow(D::Minus1, 0, self.key_dim)?;
         let k = mixed_qkv.narrow(D::Minus1, self.key_dim, self.key_dim)?;
         let v = mixed_qkv.narrow(D::Minus1, self.key_dim * 2, self.value_dim)?;
@@ -673,7 +964,7 @@ impl GatedDeltaNet {
         let k = k.reshape((batch_size, seq_len, self.num_k_heads, self.head_k_dim))?;
         let v = v.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
 
-        // 6. Compute beta and g
+        // 4. Compute beta and g
         let (beta, g) = {
             #[cfg(feature = "cuda")]
             {
@@ -719,7 +1010,7 @@ impl GatedDeltaNet {
             }
         };
 
-        // 7. If num_v_heads > num_k_heads, repeat_interleave q and k
+        // 5. If num_v_heads > num_k_heads, repeat_interleave q and k
         let (q, k) = if v_per_group > 1 {
             let q = q
                 .unsqueeze(3)?
@@ -734,16 +1025,16 @@ impl GatedDeltaNet {
             (q, k)
         };
 
-        // 8. L2-normalize q and k
+        // 6. L2-normalize q and k
         let q = l2_norm(&q, 1e-6)?;
         let k = l2_norm(&k, 1e-6)?;
 
-        // 9. Apply recurrence
-        let y = gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?;
+        // 7. Apply recurrence
+        let y = cache.recurrence(&q, &k, &v, &g, &beta)?;
 
         cache.seqlen_offset += seq_len;
 
-        // 10. Apply RMSNormGated
+        // 8. Apply RMSNormGated
         let z_shape = z.shape().clone();
         let y = y.reshape(((), self.head_v_dim))?;
         let z = z.reshape(((), self.head_v_dim))?;
@@ -751,7 +1042,7 @@ impl GatedDeltaNet {
         let y = y.reshape(z_shape)?;
         let y = y.reshape((batch_size, seq_len, self.value_dim))?;
 
-        // 11. Output projection
+        // 9. Output projection
         let y_proj = y;
         let res = self.out_proj.forward(&y_proj)?;
         Ok(res)
@@ -853,7 +1144,9 @@ impl GatedDeltaNet {
         for i in (total_len - seq_len)..total_len {
             let window =
                 hidden_new.narrow(2, i + 1 - self.conv_kernel_size, self.conv_kernel_size)?;
-            let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
+            let out = window
+                .broadcast_mul(&weight.unsqueeze(0)?)?
+                .sum(D::Minus1)?;
             conv_outputs.push(out);
         }
         let out = Tensor::stack(&conv_outputs, 2)?;
@@ -864,7 +1157,24 @@ impl GatedDeltaNet {
     /// Full sequence causal conv1d for prefill.
     fn causal_conv1d_full(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (batch_size, seq_len, conv_dim) = x.dims3()?;
-        let x_t = x.transpose(1, 2)?.contiguous()?;
+        // The full kernel has no conv_state argument and zero-pads its left edge, which is right
+        // only at the start of a sequence. A continuation (a later prefill chunk, or a speculative
+        // replay) must see the previous tokens, so splice them on and drop their outputs after.
+        let carried = if cache.seqlen_offset > 0 {
+            self.conv_kernel_size - 1
+        } else {
+            0
+        };
+        let x_t = if carried > 0 {
+            let left = cache
+                .conv_state
+                .narrow(D::Minus1, 1, carried)?
+                .to_dtype(x.dtype())?;
+            Tensor::cat(&[&left, &x.transpose(1, 2)?], D::Minus1)?.contiguous()?
+        } else {
+            x.transpose(1, 2)?.contiguous()?
+        };
+        let seq_len = seq_len + carried;
 
         #[cfg(feature = "cuda")]
         if x_t.device().is_cuda() {
@@ -881,7 +1191,7 @@ impl GatedDeltaNet {
                 false,
             )?;
             cache.conv_state = new_conv_state;
-            return output.transpose(1, 2);
+            return trim_carried(&output.transpose(1, 2)?, carried);
         }
 
         #[cfg(feature = "metal")]
@@ -899,7 +1209,7 @@ impl GatedDeltaNet {
                 self.conv_kernel_size,
             )?;
             cache.conv_state = new_conv_state;
-            return output.transpose(1, 2);
+            return trim_carried(&output.transpose(1, 2)?, carried);
         }
 
         // CPU fallback
@@ -929,18 +1239,624 @@ impl GatedDeltaNet {
         let mut conv_outputs = Vec::with_capacity(seq_len);
         for i in 0..seq_len {
             let window = padded_t.narrow(2, i, self.conv_kernel_size)?;
-            let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
+            let out = window
+                .broadcast_mul(&weight.unsqueeze(0)?)?
+                .sum(D::Minus1)?;
             conv_outputs.push(out);
         }
         let out = Tensor::stack(&conv_outputs, 2)?;
         let out = hanzo_nn::ops::silu(&out)?;
-        out.transpose(1, 2)
+        trim_carried(&out.transpose(1, 2)?, carried)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::kv_cache::RecurrentLayerConfig;
+    use hanzo_quant::{QuantMethodConfig, UnquantLinear};
+
+    // A kernel may write its state back into the tensor it was given; on the one-slot path that
+    // tensor is a view of the pool, so there is nothing left to copy (the ROCm scan does this).
+    #[test]
+    fn pooled_forward_keeps_states_updated_in_place() -> Result<()> {
+        let dev = Device::Cpu;
+        let mut pool = RecurrentStatePool::new(
+            RecurrentLayerConfig {
+                conv_dim: 3,
+                conv_width: 2,
+                state_dims: vec![2],
+                conv_dtype: DType::F32,
+                state_dtype: DType::F32,
+            },
+            &dev,
+        )?;
+        let slot = pool.allocate().expect("a free slot");
+        let out = forward_pooled(
+            &mut pool,
+            PoolSlots::One { slot, offset: 0 },
+            0,
+            false,
+            |cache| {
+                cache
+                    .conv_state
+                    .slice_set(&Tensor::ones((1, 3, 2), DType::F32, &dev)?, 0, 0)?;
+                cache
+                    .recurrent_state
+                    .slice_set(&Tensor::full(2f32, (1, 2), &dev)?, 0, 0)?;
+                // A kernel may return the state as a reshape of the view: a new tensor over the
+                // same storage.
+                cache.recurrent_state =
+                    cache.recurrent_state.reshape((1, 2, 1))?.reshape((1, 2))?;
+                cache.seqlen_offset += 1;
+                Tensor::zeros(1, DType::F32, &dev)
+            },
+        )?;
+        assert_eq!(out.dims(), [1]);
+        let conv = pool
+            .conv_state
+            .narrow(0, slot, 1)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let state = pool
+            .recurrent_state
+            .narrow(0, slot, 1)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        assert_eq!(conv, vec![1.0; 6]);
+        assert_eq!(state, vec![2.0; 2]);
+        assert_eq!(pool.get_seqlen_offset(slot), 1);
+        Ok(())
+    }
+
+    fn synthetic(n: usize, seed: usize, dev: &Device) -> Result<Tensor> {
+        let v = (0..n)
+            .map(|i| (((i * 2654435761 + seed * 40503) % 1009) as f32 / 504.0) - 1.0)
+            .collect::<Vec<_>>();
+        Tensor::from_vec(v, n, dev)
+    }
+
+    fn unquant(w: Tensor) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(w, None)),
+        )?))
+    }
+
+    /// vLLM `RMSNormGated.forward_static` with `norm_before_gate=True` and one group, in f64
+    /// (`layernorm.py:243-269`): each row is `x * rsqrt(mean(x²) + eps) * w * act(z)`.
+    fn gated_norm_reference(x: &[f64], z: &[f64], w: &[f64], eps: f64, sigmoid: bool) -> Vec<f64> {
+        let n = w.len();
+        let mut out = Vec::with_capacity(x.len());
+        for (xr, zr) in x.chunks(n).zip(z.chunks(n)) {
+            let variance = xr.iter().map(|v| v * v).sum::<f64>() / n as f64;
+            let inv = 1.0 / (variance + eps).sqrt();
+            for ((a, g), wj) in xr.iter().zip(zr).zip(w) {
+                let s = 1.0 / (1.0 + (-g).exp());
+                let act = if sigmoid { s } else { g * s };
+                out.push(a * inv * wj * act);
+            }
+        }
+        out
+    }
+
+    /// Both gates against the reference: `from_weight` gates with silu, `.sigmoid()` with sigmoid.
+    #[test]
+    fn rms_norm_gated_matches_reference() -> Result<()> {
+        use rand::{rngs::StdRng, Rng, SeedableRng};
+        let dev = Device::Cpu;
+        let (rows, n, eps) = (6usize, 128usize, 1e-6);
+        let mut rng = StdRng::seed_from_u64(0x676e_6f72);
+        let mut draw = |len: usize, scale: f32| -> Vec<f32> {
+            (0..len).map(|_| rng.random_range(-scale..scale)).collect()
+        };
+        let (x, z, w) = (draw(rows * n, 2.0), draw(rows * n, 4.0), draw(n, 1.5));
+        let wide = |v: &[f32]| v.iter().map(|&a| f64::from(a)).collect::<Vec<_>>();
+
+        for sigmoid in [false, true] {
+            let norm = RmsNormGated::from_weight(Tensor::from_vec(w.clone(), n, &dev)?, eps);
+            let norm = if sigmoid { norm.sigmoid() } else { norm };
+            let got = norm
+                .forward(
+                    &Tensor::from_vec(x.clone(), (rows, n), &dev)?,
+                    &Tensor::from_vec(z.clone(), (rows, n), &dev)?,
+                )?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let want = gated_norm_reference(&wide(&x), &wide(&z), &wide(&w), eps, sigmoid);
+            let worst = got
+                .iter()
+                .zip(&want)
+                .map(|(g, r)| (f64::from(*g) - r).abs() / r.abs().max(1e-3))
+                .fold(0f64, f64::max);
+            assert!(
+                worst < 1e-5,
+                "sigmoid={sigmoid}: max relative error {worst:.3e}"
+            );
+        }
+        Ok(())
+    }
+
+    // The split projections and the merged grouped-head matrix must be the same linear map. The merge
+    // recipe written out here is the HF layout's definition, not a call into the code under test.
+    #[test]
+    fn gdn_split_in_proj_matches_merged() -> Result<()> {
+        let dev = Device::Cpu;
+        let (num_k_heads, num_v_heads, head_k_dim, head_v_dim) = (2usize, 4usize, 6usize, 8usize);
+        let (hidden, conv_kernel_size) = (10usize, 4usize);
+        let key_dim = num_k_heads * head_k_dim;
+        let value_dim = num_v_heads * head_v_dim;
+        let v_per_group = num_v_heads / num_k_heads;
+        let conv_dim = key_dim * 2 + value_dim;
+        let rows = |n: usize, seed: usize| -> Result<Tensor> {
+            synthetic(n * hidden, seed, &dev)?.reshape((n, hidden))
+        };
+
+        let qkv_w = rows(key_dim * 2 + value_dim, 1)?;
+        let z_w = rows(value_dim, 2)?;
+        let b_w = rows(num_v_heads, 3)?;
+        let a_w = rows(num_v_heads, 4)?;
+
+        let group = |t: &Tensor, per_head: usize| -> Result<Tensor> {
+            t.reshape((num_k_heads, per_head, hidden))
+        };
+        let qkvz_w = Tensor::cat(
+            &[
+                group(&qkv_w.narrow(0, 0, key_dim)?, head_k_dim)?,
+                group(&qkv_w.narrow(0, key_dim, key_dim)?, head_k_dim)?,
+                group(
+                    &qkv_w.narrow(0, key_dim * 2, value_dim)?,
+                    v_per_group * head_v_dim,
+                )?,
+                group(&z_w, v_per_group * head_v_dim)?,
+            ],
+            1,
+        )?
+        .reshape((key_dim * 2 + value_dim * 2, hidden))?;
+        let ba_w = Tensor::cat(&[group(&b_w, v_per_group)?, group(&a_w, v_per_group)?], 1)?
+            .reshape((num_v_heads * 2, hidden))?;
+
+        let conv1d_weight = synthetic(conv_dim * conv_kernel_size, 5, &dev)?.reshape((
+            conv_dim,
+            1,
+            conv_kernel_size,
+        ))?;
+        let dt_bias = synthetic(num_v_heads, 6, &dev)?;
+        let a_log = synthetic(num_v_heads, 7, &dev)?;
+        let norm_weight = synthetic(head_v_dim, 8, &dev)?;
+        let out_w = synthetic(hidden * value_dim, 9, &dev)?.reshape((hidden, value_dim))?;
+
+        let build = |in_proj: GdnInProj| -> Result<GatedDeltaNet> {
+            Ok(GatedDeltaNet {
+                in_proj,
+                conv1d_weight: conv1d_weight.clone(),
+                dt_bias: dt_bias.clone(),
+                a_log: a_log.clone(),
+                norm: RmsNormGated::from_weight(norm_weight.clone(), 1e-6),
+                out_proj: unquant(out_w.clone())?,
+                num_k_heads,
+                num_v_heads,
+                head_k_dim,
+                head_v_dim,
+                conv_kernel_size,
+                key_dim,
+                value_dim,
+            })
+        };
+        let merged = build(GdnInProj::Merged {
+            qkvz: Linear::new(qkvz_w, None),
+            ba: Linear::new(ba_w, None),
+        })?;
+        let split = build(GdnInProj::Split {
+            qkv: unquant(qkv_w)?,
+            z: unquant(z_w)?,
+            b: unquant(b_w)?,
+            a: unquant(a_w)?,
+        })?;
+
+        let fresh_cache = || -> Result<GdnLayerCache> {
+            Ok(GdnLayerCache {
+                conv_state: Tensor::zeros((1, conv_dim, conv_kernel_size), DType::F32, &dev)?,
+                recurrent_state: Tensor::zeros(
+                    (1, num_v_heads, head_k_dim, head_v_dim),
+                    DType::F32,
+                    &dev,
+                )?,
+                seqlen_offset: 0,
+                trail: None,
+            })
+        };
+        let mut merged_cache = fresh_cache()?;
+        let mut split_cache = fresh_cache()?;
+        let mut worst = 0f32;
+        // Prefill then decode: the second step reads the conv and recurrent state the first one wrote.
+        for (step, seq_len) in [5usize, 1].into_iter().enumerate() {
+            let x = synthetic(seq_len * hidden, 20 + step, &dev)?.reshape((1, seq_len, hidden))?;
+            let ym = merged
+                .forward(&x, &mut merged_cache)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let ys = split
+                .forward(&x, &mut split_cache)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            assert_eq!(ym.len(), ys.len());
+            worst = ym
+                .iter()
+                .zip(&ys)
+                .fold(worst, |acc, (m, s)| acc.max((m - s).abs()));
+        }
+        eprintln!("[gdn split-vs-merged] max_abs={worst:.3e}");
+        assert!(worst < 1e-5, "split != merged, max_abs={worst}");
+        Ok(())
+    }
+
+    /// A prompt served in chunks must equal the same prompt served whole. The full conv kernel has
+    /// no conv_state argument and zero-pads its left edge, so before the carry a second chunk
+    /// convolved its first kernel_size-1 rows against zeros. Chunked prefill is the live path: a
+    /// long prompt arrives in 4096-token pieces.
+    #[test]
+    fn gdn_chunked_prefill_matches_contiguous() -> Result<()> {
+        let dev = Device::Cpu;
+        let (num_k_heads, num_v_heads, head_k_dim, head_v_dim) = (2usize, 4usize, 6usize, 8usize);
+        let (hidden, conv_kernel_size) = (10usize, 4usize);
+        let key_dim = num_k_heads * head_k_dim;
+        let value_dim = num_v_heads * head_v_dim;
+        let v_per_group = num_v_heads / num_k_heads;
+        let conv_dim = key_dim * 2 + value_dim;
+
+        let qkvz_w = synthetic((key_dim * 2 + value_dim * 2) * hidden, 31, &dev)?
+            .reshape((key_dim * 2 + value_dim * 2, hidden))?;
+        let ba_w =
+            synthetic(num_v_heads * 2 * hidden, 32, &dev)?.reshape((num_v_heads * 2, hidden))?;
+        let gdn = GatedDeltaNet {
+            in_proj: GdnInProj::Merged {
+                qkvz: Linear::new(qkvz_w, None),
+                ba: Linear::new(ba_w, None),
+            },
+            conv1d_weight: synthetic(conv_dim * conv_kernel_size, 33, &dev)?.reshape((
+                conv_dim,
+                1,
+                conv_kernel_size,
+            ))?,
+            dt_bias: synthetic(num_v_heads, 34, &dev)?,
+            a_log: synthetic(num_v_heads, 35, &dev)?,
+            norm: RmsNormGated::from_weight(synthetic(head_v_dim, 36, &dev)?, 1e-6),
+            out_proj: unquant(
+                synthetic(hidden * value_dim, 37, &dev)?.reshape((hidden, value_dim))?,
+            )?,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            conv_kernel_size,
+            key_dim,
+            value_dim,
+        };
+        let _ = v_per_group;
+
+        let fresh = || -> Result<GdnLayerCache> {
+            Ok(GdnLayerCache {
+                conv_state: Tensor::zeros((1, conv_dim, conv_kernel_size), DType::F32, &dev)?,
+                recurrent_state: Tensor::zeros(
+                    (1, num_v_heads, head_k_dim, head_v_dim),
+                    DType::F32,
+                    &dev,
+                )?,
+                seqlen_offset: 0,
+                trail: None,
+            })
+        };
+
+        let total = 8usize;
+        let x = synthetic(total * hidden, 38, &dev)?.reshape((1, total, hidden))?;
+
+        let mut whole_cache = fresh()?;
+        let whole = gdn.forward(&x, &mut whole_cache)?;
+
+        // The split lands past kernel_size, so the second chunk's left edge is real context.
+        let split_at = 5usize;
+        let mut chunk_cache = fresh()?;
+        let first = x.narrow(1, 0, split_at)?;
+        gdn.forward(&first, &mut chunk_cache)?;
+        chunk_cache.seqlen_offset += split_at;
+        let second = x.narrow(1, split_at, total - split_at)?;
+        let tail = gdn.forward(&second, &mut chunk_cache)?;
+
+        let want: Vec<f32> = whole
+            .narrow(1, split_at, total - split_at)?
+            .flatten_all()?
+            .to_vec1()?;
+        let got: Vec<f32> = tail.flatten_all()?.to_vec1()?;
+        assert_eq!(want.len(), got.len());
+        let worst = want
+            .iter()
+            .zip(&got)
+            .fold(0f32, |acc, (w, g)| acc.max((w - g).abs()));
+        eprintln!("[gdn chunked-vs-contiguous] max_abs={worst:.3e}");
+        assert!(
+            worst < 1e-5,
+            "chunked prefill != contiguous, max_abs={worst}"
+        );
+        Ok(())
+    }
+
+    /// A small merged-projection layer on synthetic weights, with the shapes its state takes.
+    struct Tiny {
+        gdn: GatedDeltaNet,
+        hidden: usize,
+        conv_dim: usize,
+        conv_kernel_size: usize,
+        state_dims: [usize; 3],
+    }
+
+    fn tiny_gdn(dev: &Device) -> Result<Tiny> {
+        let (num_k_heads, num_v_heads, head_k_dim, head_v_dim) = (2usize, 4usize, 6usize, 8usize);
+        let (hidden, conv_kernel_size) = (10usize, 4usize);
+        let key_dim = num_k_heads * head_k_dim;
+        let value_dim = num_v_heads * head_v_dim;
+        let conv_dim = key_dim * 2 + value_dim;
+        let gdn = GatedDeltaNet {
+            in_proj: GdnInProj::Merged {
+                qkvz: Linear::new(
+                    synthetic((key_dim * 2 + value_dim * 2) * hidden, 51, dev)?
+                        .reshape((key_dim * 2 + value_dim * 2, hidden))?,
+                    None,
+                ),
+                ba: Linear::new(
+                    synthetic(num_v_heads * 2 * hidden, 52, dev)?
+                        .reshape((num_v_heads * 2, hidden))?,
+                    None,
+                ),
+            },
+            conv1d_weight: synthetic(conv_dim * conv_kernel_size, 53, dev)?.reshape((
+                conv_dim,
+                1,
+                conv_kernel_size,
+            ))?,
+            dt_bias: synthetic(num_v_heads, 54, dev)?,
+            a_log: synthetic(num_v_heads, 55, dev)?,
+            norm: RmsNormGated::from_weight(synthetic(head_v_dim, 56, dev)?, 1e-6),
+            out_proj: unquant(
+                synthetic(hidden * value_dim, 57, dev)?.reshape((hidden, value_dim))?,
+            )?,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            conv_kernel_size,
+            key_dim,
+            value_dim,
+        };
+        Ok(Tiny {
+            gdn,
+            hidden,
+            conv_dim,
+            conv_kernel_size,
+            state_dims: [num_v_heads, head_k_dim, head_v_dim],
+        })
+    }
+
+    /// Speculative rollback restores a checkpoint and replays the accepted prefix in one forward.
+    /// That wide continuation takes the full conv path plus the carried state, while decoding the same
+    /// tokens one at a time takes the update path, so the two are independent implementations. Width 2
+    /// sits below the kernel, where a wrong saved window hides from any check on the output alone.
+    #[test]
+    fn gdn_replay_after_rewind_matches_stepwise() -> Result<()> {
+        let dev = Device::Cpu;
+        let Tiny {
+            gdn,
+            hidden,
+            conv_dim,
+            conv_kernel_size,
+            state_dims: [num_v_heads, head_k_dim, head_v_dim],
+        } = tiny_gdn(&dev)?;
+        let snapshot = |c: &GdnLayerCache| GdnLayerCache {
+            conv_state: c.conv_state.clone(),
+            recurrent_state: c.recurrent_state.clone(),
+            seqlen_offset: c.seqlen_offset,
+            trail: None,
+        };
+        let max_abs = |a: &Tensor, b: &Tensor| -> Result<f32> {
+            (a - b)?.abs()?.flatten_all()?.max(0)?.to_scalar::<f32>()
+        };
+
+        let (prompt_len, drafted, accepted) = (5usize, 4usize, 2usize);
+        let all = synthetic((prompt_len + drafted) * hidden, 58, &dev)?.reshape((
+            1,
+            prompt_len + drafted,
+            hidden,
+        ))?;
+        let draft = all.narrow(1, prompt_len, drafted)?;
+
+        let mut cache = GdnLayerCache {
+            conv_state: Tensor::zeros((1, conv_dim, conv_kernel_size), DType::F32, &dev)?,
+            recurrent_state: Tensor::zeros(
+                (1, num_v_heads, head_k_dim, head_v_dim),
+                DType::F32,
+                &dev,
+            )?,
+            seqlen_offset: 0,
+            trail: None,
+        };
+        gdn.forward(&all.narrow(1, 0, prompt_len)?, &mut cache)?;
+        cache.seqlen_offset = prompt_len;
+        let checkpoint = snapshot(&cache);
+
+        // advance over the whole draft, then roll back and replay only what was accepted
+        gdn.forward(&draft, &mut cache)?;
+        let mut replay = snapshot(&checkpoint);
+        let replayed = gdn.forward(&draft.narrow(1, 0, accepted)?, &mut replay)?;
+
+        let mut truth = snapshot(&checkpoint);
+        let mut rows = Vec::with_capacity(accepted);
+        for i in 0..accepted {
+            truth.seqlen_offset = prompt_len + i;
+            rows.push(gdn.forward(&draft.narrow(1, i, 1)?, &mut truth)?);
+        }
+        let stepwise = Tensor::cat(&rows, 1)?;
+
+        let out = max_abs(&replayed, &stepwise)?;
+        let conv = max_abs(&replay.conv_state, &truth.conv_state)?;
+        let rec = max_abs(&replay.recurrent_state, &truth.recurrent_state)?;
+        eprintln!(
+            "[gdn replay-vs-stepwise] out={out:.3e} conv_state={conv:.3e} recurrent={rec:.3e}"
+        );
+        assert!(out < 1e-5, "replayed output != stepwise, max_abs={out}");
+        assert!(
+            conv < 1e-5,
+            "replayed conv_state != stepwise, max_abs={conv}"
+        );
+        assert!(
+            rec < 1e-5,
+            "replayed recurrent_state != stepwise, max_abs={rec}"
+        );
+        Ok(())
+    }
+
+    /// A verify runs the anchor and every draft through the layer. Rejecting the tail and rewinding
+    /// must leave the layer where plain decoding of the accepted tokens alone would: the same state,
+    /// and the same output for every token after. Two sequences of different lengths share the
+    /// forward, sit in slots that differ from their batch rows, and reject different amounts, so the
+    /// drafts here are wrong on purpose.
+    #[test]
+    fn gdn_rewind_after_verify_matches_plain_decode() -> Result<()> {
+        let dev = Device::Cpu;
+        let Tiny {
+            gdn,
+            hidden,
+            conv_dim,
+            conv_kernel_size,
+            state_dims,
+        } = tiny_gdn(&dev)?;
+        let max_abs = |a: &Tensor, b: &Tensor| -> Result<f32> {
+            (a - b)?.abs()?.flatten_all()?.max(0)?.to_scalar::<f32>()
+        };
+        let run = |pool: &mut RecurrentStatePool, slots: &[u32], x: &Tensor, trail: bool| {
+            let indices = Tensor::from_vec(slots.to_vec(), slots.len(), &dev)?;
+            forward_pooled(pool, PoolSlots::Many(&indices), 0, trail, |cache| {
+                gdn.forward(x, cache)
+            })
+        };
+
+        const VERIFY: usize = 4;
+        // (slot, prompt length, tokens of the verify that were right). Batch order is `seqs` order.
+        let seqs = [(1u32, 3usize, 3usize), (0u32, 5usize, 1usize)];
+        let order: Vec<u32> = seqs.iter().map(|s| s.0).collect();
+        let streams = seqs
+            .iter()
+            .map(|&(slot, prompt, _)| {
+                synthetic((prompt + VERIFY) * hidden, 60 + slot as usize, &dev)?.reshape((
+                    1,
+                    prompt + VERIFY,
+                    hidden,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let wrong = synthetic(seqs.len() * VERIFY * hidden, 70, &dev)?.reshape((
+            seqs.len(),
+            VERIFY,
+            hidden,
+        ))?;
+        // The token each sequence truly decodes `step` tokens after its prompt.
+        let truth = |row: usize, step: usize| streams[row].narrow(1, seqs[row].1 + step, 1);
+
+        let prefilled = || -> Result<RecurrentStatePool> {
+            let mut pool = RecurrentStatePool::new(
+                RecurrentLayerConfig {
+                    conv_dim,
+                    conv_width: conv_kernel_size,
+                    state_dims: state_dims.to_vec(),
+                    conv_dtype: DType::F32,
+                    state_dtype: DType::F32,
+                },
+                &dev,
+            )?;
+            assert_eq!((pool.allocate(), pool.allocate()), (Some(0), Some(1)));
+            for (row, &(slot, prompt, _)) in seqs.iter().enumerate() {
+                run(
+                    &mut pool,
+                    &[slot],
+                    &streams[row].narrow(1, 0, prompt)?,
+                    false,
+                )?;
+            }
+            Ok(pool)
+        };
+
+        // Plain decode, one true token per step, keeping the outputs and the state after each.
+        let mut plain = prefilled()?;
+        let mut plain_out = Vec::with_capacity(VERIFY);
+        let mut plain_state = Vec::with_capacity(VERIFY);
+        for step in 0..VERIFY {
+            let x = Tensor::cat(&[truth(0, step)?, truth(1, step)?], 0)?;
+            plain_out.push(run(&mut plain, &order, &x, false)?);
+            plain_state.push((plain.conv_state.copy()?, plain.recurrent_state.copy()?));
+        }
+
+        // One verify forward: each row is right for its first `kept` tokens, wrong after.
+        let mut spec = prefilled()?;
+        let rows = seqs
+            .iter()
+            .enumerate()
+            .map(|(row, &(_, prompt, kept))| {
+                Tensor::cat(
+                    &[
+                        streams[row].narrow(1, prompt, kept)?,
+                        wrong.narrow(0, row, 1)?.narrow(1, kept, VERIFY - kept)?,
+                    ],
+                    1,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let verified = run(&mut spec, &order, &Tensor::cat(&rows, 0)?, true)?;
+
+        for (row, &(slot, prompt, kept)) in seqs.iter().enumerate() {
+            for step in 0..kept {
+                let got = verified.narrow(0, row, 1)?.narrow(1, step, 1)?;
+                let want = plain_out[step].narrow(0, row, 1)?;
+                let err = max_abs(&got, &want)?;
+                assert!(
+                    err < 1e-5,
+                    "verify row {row} step {step} != plain, max_abs={err}"
+                );
+            }
+
+            spec.rewind(slot as usize, VERIFY - kept)?;
+
+            assert_eq!(spec.get_seqlen_offset(slot as usize), prompt + kept);
+            let (conv, recurrent) = &plain_state[kept - 1];
+            let slot = slot as usize;
+            let conv_err = max_abs(&spec.conv_state.i(slot)?, &conv.i(slot)?)?;
+            let rec_err = max_abs(&spec.recurrent_state.i(slot)?, &recurrent.i(slot)?)?;
+            eprintln!(
+                "[gdn rewind] row {row} kept {kept}: conv={conv_err:.3e} recurrent={rec_err:.3e}"
+            );
+            assert!(
+                conv_err < 1e-5,
+                "rewound conv state != plain, max_abs={conv_err}"
+            );
+            assert!(
+                rec_err < 1e-5,
+                "rewound recurrent state != plain, max_abs={rec_err}"
+            );
+        }
+
+        // The sequences now sit at different depths. Their next true tokens decode as plain did.
+        let x = Tensor::cat(&[truth(0, seqs[0].2)?, truth(1, seqs[1].2)?], 0)?;
+        let next = run(&mut spec, &order, &x, false)?;
+        for (row, &(_, _, kept)) in seqs.iter().enumerate() {
+            let err = max_abs(
+                &next.narrow(0, row, 1)?,
+                &plain_out[kept].narrow(0, row, 1)?,
+            )?;
+            assert!(
+                err < 1e-5,
+                "decode after rewind, row {row} != plain, max_abs={err}"
+            );
+        }
+        Ok(())
+    }
 
     // Scalar reimplementation of the Vulkan gdn_step.comp single-step math (one (bh, v) state column,
     // looping k). q is pre-scaled by the caller, exactly as gated_delta_rule_recurrence applies the
@@ -1392,6 +2308,97 @@ mod tests {
     }
 
     // Fast Vulkan reproduction of the qwen35moe prompt-step recurrence shape crash. Skips cleanly with
+    // no GPU. Run on a ROCm box (evo) with:
+    //   cargo test --features rocm -p hanzo-engine gdn_scan_rocm_matches_portable -- --nocapture
+    #[test]
+    #[cfg_attr(not(feature = "rocm"), ignore = "requires rocm feature")]
+    fn gdn_scan_rocm_matches_portable() -> Result<()> {
+        #[cfg(feature = "rocm")]
+        {
+            let Ok(dev) = Device::new_rocm(0) else {
+                eprintln!("skip: no rocm device");
+                return Ok(());
+            };
+            return run_gdn_scan_rocm_matches_portable(&dev);
+        }
+        #[cfg(not(feature = "rocm"))]
+        {
+            eprintln!("skip: built without the rocm feature");
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "rocm")]
+    fn run_gdn_scan_rocm_matches_portable(dev: &Device) -> Result<()> {
+        let (batch, nvh, hkd, hvd, seq) = (1usize, 4usize, 128usize, 128usize, 32usize);
+        let gen = |n: usize, seed: usize| -> Vec<f32> {
+            (0..n)
+                .map(|i| (((i * 1103515245 + seed * 12345 + 7) % 2000) as f32 / 1000.0) - 1.0)
+                .collect()
+        };
+        let on = |v: Vec<f32>, shape: (usize, usize, usize, usize)| -> Result<Tensor> {
+            Tensor::from_vec(v, shape, &Device::Cpu)?.to_device(dev)
+        };
+        let on3 = |v: Vec<f32>, shape: (usize, usize, usize)| -> Result<Tensor> {
+            Tensor::from_vec(v, shape, &Device::Cpu)?.to_device(dev)
+        };
+        let q = on(gen(batch * seq * nvh * hkd, 1), (batch, seq, nvh, hkd))?;
+        let k = on(gen(batch * seq * nvh * hkd, 2), (batch, seq, nvh, hkd))?;
+        let v = on(gen(batch * seq * nvh * hvd, 3), (batch, seq, nvh, hvd))?;
+        let g = on3(
+            gen(batch * seq * nvh, 4)
+                .iter()
+                .map(|x| x * 0.5 - 0.5)
+                .collect(),
+            (batch, seq, nvh),
+        )?;
+        let beta = on3(
+            gen(batch * seq * nvh, 5)
+                .iter()
+                .map(|x| (x + 1.0) * 0.5)
+                .collect(),
+            (batch, seq, nvh),
+        )?;
+        let cpu = |t: &Tensor| -> Result<Tensor> { t.to_device(&Device::Cpu) };
+        let (qc, kc, vc, gc, bc) = (cpu(&q)?, cpu(&k)?, cpu(&v)?, cpu(&g)?, cpu(&beta)?);
+        let sc = Tensor::from_vec(
+            gen(batch * nvh * hkd * hvd, 6),
+            (batch, nvh, hkd, hvd),
+            &Device::Cpu,
+        )?;
+        let state_dev = sc.to_device(dev)?;
+
+        let mut state_fused = state_dev.clone();
+        let y_fused = gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut state_fused)?;
+        let mut state_ref = sc.clone();
+        let y_ref = recurrence_portable(&qc, &kc, &vc, &gc, &bc, &mut state_ref)?;
+
+        let a = y_fused.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+        let b = y_ref.to_vec1::<f32>()?;
+        let max_rel = a
+            .iter()
+            .zip(&b)
+            .map(|(x, y)| (x - y).abs() / y.abs().max(1e-3))
+            .fold(0f32, f32::max);
+        assert!(
+            max_rel < 1e-4,
+            "gdn_scan_rocm vs portable max_rel {max_rel}"
+        );
+
+        let sf = state_fused.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+        let sr = state_ref.to_vec1::<f32>()?;
+        let state_rel = sf
+            .iter()
+            .zip(&sr)
+            .map(|(x, y)| (x - y).abs() / y.abs().max(1e-3))
+            .fold(0f32, f32::max);
+        assert!(
+            state_rel < 1e-4,
+            "gdn_scan_rocm state divergence {state_rel}"
+        );
+        Ok(())
+    }
+
     // no GPU. Run on a Vulkan box with:
     //   cargo test --features vulkan -p hanzo-engine gdn_recurrence_vulkan_shapes -- --nocapture --include-ignored
     #[test]

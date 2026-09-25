@@ -276,25 +276,37 @@ pub enum Command {
         #[command(flatten)]
         runtime: BenchRuntimeOptions,
 
-        /// Number of tokens in prompt. Accepts comma-separated values for sweeps.
+        /// Prompt tokens of the prefill test; several values are several tests, 0 skips it.
         #[arg(long, value_delimiter = ',', default_value = "512")]
         prompt_len: Vec<usize>,
 
-        /// Number of tokens to generate
+        /// Generated tokens of the decode test; 0 skips it.
         #[arg(long, default_value = "128")]
         gen_len: usize,
 
-        /// Number of prompt tokens to prefill before measuring decode. Accepts comma-separated values for sweeps.
-        #[arg(long, value_delimiter = ',', default_value = "4")]
-        depth: Vec<usize>,
+        /// Repetitions of each test. With three or more, the first is scored as warmup.
+        #[arg(long, default_value = "5")]
+        repetitions: usize,
 
-        /// Number of benchmark iterations
-        #[arg(long, default_value = "3")]
-        iterations: usize,
+        /// Concurrent requests per repetition; each value is its own set of tests.
+        #[arg(long, value_delimiter = ',', default_value = "1")]
+        concurrency: Vec<usize>,
 
-        /// Number of warmup runs (discarded)
-        #[arg(long, default_value = "1")]
-        warmup: usize,
+        /// Sample from the full vocabulary at temperature 1 instead of greedily, to measure the
+        /// sampler's tax; never to report a rate.
+        #[arg(long)]
+        stochastic: bool,
+
+        /// Write the raw per-repetition samples (wall seconds, scored tokens) of every test here;
+        /// `board score` computes everything published from them.
+        #[arg(long)]
+        json: Option<PathBuf>,
+    },
+
+    /// Score a benchmark run, file it as evidence, or pin its manifest.
+    Board {
+        #[command(subcommand)]
+        cmd: BoardCommand,
     },
 
     /// Run from a full TOML configuration file
@@ -723,6 +735,19 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub prompt_lookup_ngram: Option<usize>,
 
+    /// Attach a DFlash 2 block-diffusion draft from this checkpoint directory (`config.json` +
+    /// `model.safetensors`). The draft has no embedding or output head of its own and decodes
+    /// through the target's, so it pairs only with the model it was trained beside.
+    #[arg(long)]
+    #[serde(default)]
+    pub dflash: Option<String>,
+
+    /// Draft a block shorter than the DFlash checkpoint's trained `block_size`. 0 drafts the
+    /// full block.
+    #[arg(long, default_value_t = 0)]
+    #[serde(default)]
+    pub dflash_block_size: usize,
+
     /// Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset.
     #[arg(long)]
     #[serde(default)]
@@ -792,7 +817,7 @@ pub struct AgentCliOptions {
     #[arg(long)]
     pub code_exec_python: Option<PathBuf>,
 
-    /// Code execution timeout in seconds (default: 30). Requires code execution to be on.
+    /// Code execution timeout in seconds (default: 60). Requires code execution to be on.
     #[cfg(feature = "code-execution")]
     #[arg(long)]
     pub code_exec_timeout: Option<u64>,
@@ -822,6 +847,26 @@ impl AgentCliOptions {
         }
         runtime.code_exec_permission = self.code_exec_permission;
     }
+}
+
+#[derive(clap::Subcommand)]
+pub enum BoardCommand {
+    /// Score a run directory from the raw samples in it: board.md, board.json, and the paper's
+    /// results-data.tex and board.tex.
+    Score { run: PathBuf },
+    /// Runs as Hanzo Research evidence: printed, or filed with --to (bearer `$HANZO_API_KEY`).
+    Publish {
+        #[arg(required = true)]
+        runs: Vec<PathBuf>,
+        #[arg(long, value_name = "URL")]
+        to: Option<String>,
+    },
+    /// Pin a run before its first sample: write its manifest.
+    Manifest {
+        out: PathBuf,
+        #[command(flatten)]
+        pins: hanzo_bench::board::Pins,
+    },
 }
 
 #[derive(clap::Args, Clone, Default)]
@@ -862,6 +907,15 @@ pub struct BenchRuntimeOptions {
     /// model — drafts are pulled from the sequence's own history; reuses `--gamma` for draft length.
     #[arg(long)]
     pub prompt_lookup_ngram: Option<usize>,
+
+    /// Attach a DFlash 2 block-diffusion draft from this checkpoint directory.
+    #[arg(long)]
+    pub dflash: Option<String>,
+
+    /// Draft a block shorter than the DFlash checkpoint's trained `block_size`. 0 drafts the
+    /// full block.
+    #[arg(long, default_value_t = 0)]
+    pub dflash_block_size: usize,
 }
 
 impl BenchRuntimeOptions {
@@ -1032,6 +1086,8 @@ impl Default for RuntimeOptions {
             draft_quantized_file: None,
             gamma: None,
             prompt_lookup_ngram: None,
+            dflash: None,
+            dflash_block_size: 0,
             mcp_config: None,
             agent: false,
             enable_search: false,

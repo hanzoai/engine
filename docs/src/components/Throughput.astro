@@ -1,0 +1,240 @@
+---
+// Measured runs, fetched at read time. No figure is written into this file or any page using it.
+interface Props {
+	/** Endpoint filters only: engine, model, host, format, since, until, limit, cursor. */
+	query: Record<string, string | number>;
+	metrics?: string[];
+	concurrent?: boolean;
+	minPromptTokens?: number;
+}
+
+const {
+	query,
+	metrics = ['prefill', 'decode', 'ttft'],
+	concurrent = false,
+	minPromptTokens = 0,
+} = Astro.props;
+const search = new URLSearchParams(
+	Object.entries(query).map(([key, value]) => [key, String(value)]),
+).toString();
+---
+
+<div
+	class="throughput"
+	data-throughput
+	data-search={search}
+	data-metrics={metrics.join(',')}
+	data-concurrent={concurrent ? 'yes' : ''}
+	data-min-prompt={String(minPromptTokens)}
+>
+	<p class="throughput-note">Loading the measured runs.</p>
+	<noscript>
+		<p class="throughput-note">
+			Measurements load from the benchmark endpoint. Without JavaScript, read them
+			directly from <code>/v1/benchmark/throughput</code>.
+		</p>
+	</noscript>
+</div>
+
+<style>
+	.throughput {
+		margin: 1rem 0 1.5rem;
+	}
+	.throughput table {
+		width: 100%;
+	}
+	.throughput-note {
+		color: var(--sl-color-gray-3);
+		font-size: var(--sl-text-sm);
+	}
+	.throughput-withheld {
+		color: var(--sl-color-orange-high);
+	}
+	.throughput-provenance {
+		border-top: 1px solid var(--sl-color-gray-5);
+		margin-top: 0.75rem;
+		padding-top: 0.75rem;
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-2);
+	}
+	.throughput-provenance dt {
+		font-weight: 600;
+	}
+	.throughput-provenance dd {
+		margin: 0 0 0.35rem;
+	}
+	.throughput-provenance code {
+		font-size: var(--sl-text-xs);
+		overflow-wrap: anywhere;
+	}
+</style>
+
+<script>
+	// One line to point the pages somewhere else.
+	const ENDPOINT = 'https://api.hanzo.ai/v1/benchmark/throughput';
+
+	const LABEL = { prefill: 'Prefill', decode: 'Decode', ttft: 'TTFT' };
+
+	function text(value) {
+		return value === undefined || value === null || value === '' ? '-' : String(value);
+	}
+
+	// The range is the measurement; a median alone is not.
+	function reading(metric) {
+		if (!metric || metric.median === undefined || metric.median === null) return '-';
+		const unit = metric.unit ? ` ${metric.unit}` : '';
+		const spread =
+			metric.min === metric.max ? `${metric.min}` : `${metric.min}-${metric.max}`;
+		return `${metric.median} (${spread})${unit}`;
+	}
+
+	// A run that failed its checks never renders as a win.
+	function passed(run) {
+		return String(run?.quality?.verdict ?? '').toLowerCase() === 'pass';
+	}
+
+	function cell(row, content, className) {
+		const td = document.createElement(row ? 'td' : 'th');
+		td.textContent = content;
+		if (className) td.className = className;
+		return td;
+	}
+
+	function header(names) {
+		const tr = document.createElement('tr');
+		for (const name of names) tr.appendChild(cell(false, name));
+		const thead = document.createElement('thead');
+		thead.appendChild(tr);
+		return thead;
+	}
+
+	function hardware(run) {
+		const hw = run.hardware || {};
+		const parts = [hw.label, hw.backend, hw.memoryGb ? `${hw.memoryGb} GB` : null];
+		return parts.filter(Boolean).join(' / ') || '-';
+	}
+
+	function provenance(runs) {
+		const seen = new Map();
+		for (const run of runs) {
+			const key = [run.engine, run.engineVersion, run.engineBuild, run.model, run.format, run.host]
+				.map((v) => text(v))
+				.join('|');
+			if (!seen.has(key)) seen.set(key, run);
+		}
+		const dl = document.createElement('dl');
+		dl.className = 'throughput-provenance';
+		for (const run of seen.values()) {
+			const build = run.engineBuild ? ` (build ${run.engineBuild})` : '';
+			const rows = [
+				['Engine', `${text(run.engine)} ${text(run.engineVersion)}${build}`],
+				['Model', `${text(run.model)}, ${text(run.format)}`],
+				['Host', `${text(run.host)}: ${hardware(run)}`],
+				['Flags', text(run.flags)],
+				[
+					'Quality',
+					`${text(run.quality?.verdict)}${run.quality?.checks ? ` (${text(run.quality.checks)})` : ''}`,
+				],
+				['Run', text(run.source)],
+			];
+			if (run.notes) rows.push(['Notes', text(run.notes)]);
+			for (const [term, description] of rows) {
+				const dt = document.createElement('dt');
+				dt.textContent = term;
+				const dd = document.createElement('dd');
+				if (term === 'Flags') {
+					const code = document.createElement('code');
+					code.textContent = description;
+					dd.appendChild(code);
+				} else {
+					dd.textContent = description;
+				}
+				dl.append(dt, dd);
+			}
+		}
+		return dl;
+	}
+
+	function table(runs, metrics, concurrent) {
+		const columns = concurrent
+			? ['Clients', 'Prompt tokens', 'Aggregate', 'Per stream', 'Runs', 'Engine version', 'Measured']
+			: [
+					'Prompt tokens',
+					...metrics.map((m) => `${LABEL[m] || m} (median, range)`),
+					'Runs',
+					'Engine version',
+					'Measured',
+				];
+		const el = document.createElement('table');
+		el.appendChild(header(columns));
+		const tbody = document.createElement('tbody');
+		for (const run of runs) {
+			const tr = document.createElement('tr');
+			const ok = passed(run);
+			if (concurrent) {
+				tr.appendChild(cell(true, text(run.concurrency)));
+				tr.appendChild(cell(true, text(run.promptTokens)));
+				tr.appendChild(
+					ok
+						? cell(true, reading(run.aggregate))
+						: cell(true, 'withheld: quality checks failed', 'throughput-withheld'),
+				);
+				tr.appendChild(ok ? cell(true, reading(run.perStream)) : cell(true, '-'));
+			} else {
+				tr.appendChild(cell(true, text(run.promptTokens)));
+				for (const metric of metrics) {
+					tr.appendChild(
+						ok
+							? cell(true, reading(run[metric]))
+							: cell(true, 'withheld: quality checks failed', 'throughput-withheld'),
+					);
+				}
+			}
+			tr.appendChild(cell(true, text(run.repetitions)));
+			tr.appendChild(cell(true, text(run.engineVersion)));
+			tr.appendChild(cell(true, text(run.measuredAt)));
+			tbody.appendChild(tr);
+		}
+		el.appendChild(tbody);
+		return el;
+	}
+
+	async function render(node) {
+		const metrics = (node.dataset.metrics || '').split(',').filter(Boolean);
+		const concurrent = node.dataset.concurrent === 'yes';
+		let payload;
+		try {
+			const response = await fetch(`${ENDPOINT}?${node.dataset.search}`, {
+				headers: { accept: 'application/json' },
+			});
+			if (!response.ok) throw new Error(`${response.status}`);
+			payload = await response.json();
+		} catch {
+			node.innerHTML = '';
+			const note = document.createElement('p');
+			note.className = 'throughput-note';
+			note.textContent =
+				'These measurements are not published yet. Nothing is shown here until a run is.';
+			node.appendChild(note);
+			return;
+		}
+		const minPrompt = Number(node.dataset.minPrompt || 0);
+		const runs = (payload?.data ?? []).filter((run) => {
+			const streams = Number(run.concurrency ?? 1);
+			if (concurrent ? streams < 2 : streams > 1) return false;
+			return Number(run.promptTokens ?? 0) >= minPrompt;
+		});
+		node.innerHTML = '';
+		if (runs.length === 0) {
+			const note = document.createElement('p');
+			note.className = 'throughput-note';
+			note.textContent = 'No run matches this claim yet.';
+			node.appendChild(note);
+			return;
+		}
+		node.appendChild(table(runs, metrics, concurrent));
+		node.appendChild(provenance(runs));
+	}
+
+	for (const node of document.querySelectorAll('[data-throughput]')) render(node);
+</script>

@@ -132,17 +132,6 @@ pub mod defaults {
     pub const PAGED_CTXT_LEN: Option<usize> = None;
     pub const PAGED_ATTN_BLOCK_SIZE: Option<usize> = None;
     pub const PAGED_ATTN: Option<bool> = None;
-    pub const PAGED_ATTN_CPU: bool = false;
-    pub const PAGED_ATTN_CUDA: bool = true;
-    pub const PAGED_ATTN_METAL: bool = false;
-    pub const PAGED_ATTN_ROCM: bool = true;
-    // Vulkan has a paged-attention path (`VulkanDevice::paged_attention_vk` + paged_attn.spv +
-    // reshape_and_cache.spv), enabled opt-in via `--paged-attn on`. It correctly eliminates the naive
-    // Sdpa layout-copy churn (GQA repeat_kv + KV-append cat: copy2d 14k->1.2k), BUT the current v1
-    // scalar attention kernel is slower per-dispatch than the copies it removes, so it nets a decode
-    // regression on this APU until the kernel is optimized (v2 partitioned) and the MoE route/combine
-    // op-chains are fused. Default OFF until then; the `is_vulkan()` branch keeps the opt-in wired.
-    pub const PAGED_ATTN_VULKAN: bool = false;
     pub const CPU: bool = false;
     pub const ENABLE_SEARCH: bool = false;
     pub const SEARCH_EMBEDDING_MODEL: Option<SearchEmbeddingModel> = None;
@@ -152,6 +141,7 @@ pub mod defaults {
     pub const MTP_CONFIG: Option<hanzo_engine::MtpConfig> = None;
     pub const DRAFT_MODEL: Option<hanzo_engine::ModelSelected> = None;
     pub const PROMPT_LOOKUP_NGRAM: Option<usize> = None;
+    pub const DFLASH: Option<(String, usize)> = None;
     /// Shortest tail n-gram prompt-lookup will match on (Hugging Face / apoorvumang parity:
     /// search down to a single token).
     pub const PROMPT_LOOKUP_NGRAM_MIN: usize = 1;
@@ -297,6 +287,10 @@ pub struct ServerBuilder {
     /// Optional max n-gram for prompt-lookup speculative decoding (no draft model).
     prompt_lookup_ngram: Option<usize>,
 
+    /// Optional DFlash 2 block-diffusion draft: `(checkpoint_dir, block_size)`, where a
+    /// `block_size` of 0 drafts the checkpoint's full trained block.
+    dflash: Option<(String, usize)>,
+
     /// Draft tokens proposed per target verification step.
     gamma: usize,
 
@@ -341,6 +335,7 @@ impl Default for ServerBuilder {
             mtp_config: defaults::MTP_CONFIG,
             draft_model: defaults::DRAFT_MODEL,
             prompt_lookup_ngram: defaults::PROMPT_LOOKUP_NGRAM,
+            dflash: defaults::DFLASH,
             gamma: defaults::GAMMA,
             disable_eos_stop: false,
             code_exec_config: None,
@@ -664,6 +659,14 @@ impl ServerBuilder {
         self
     }
 
+    /// Attach a DFlash 2 block-diffusion draft if a checkpoint directory was given. The draft
+    /// decodes through the target's own embedding and output head, so it pairs only with the
+    /// model it was trained beside. `block_size` 0 drafts the full trained block.
+    pub fn with_dflash_optional(mut self, path: Option<String>, block_size: usize) -> Self {
+        self.dflash = path.map(|path| (path, block_size));
+        self
+    }
+
     /// Disable EOS token stopping (generate until max_len regardless of EOS).
     pub fn with_disable_eos_stop(mut self, disable: bool) -> Self {
         self.disable_eos_stop = disable;
@@ -825,7 +828,12 @@ impl ServerBuilder {
         )?;
         info!("Model loaded.");
 
-        if let Some(draft_model) = self.draft_model.clone() {
+        if let Some((path, block_size)) = self.dflash.clone() {
+            pipeline
+                .lock()
+                .await
+                .attach_speculative(hanzo_engine::SpeculativeConfig::Dflash { path, block_size })?;
+        } else if let Some(draft_model) = self.draft_model.clone() {
             let draft_loader = LoaderBuilder::new(draft_model).build()?;
             let draft_pipeline = draft_loader.load_model_from_hf(
                 None,
@@ -991,7 +999,12 @@ impl ServerBuilder {
             isq,
             cache_config,
         )?;
-        if let Some(draft_model) = self.draft_model.clone() {
+        if let Some((path, block_size)) = self.dflash.clone() {
+            pipeline
+                .lock()
+                .await
+                .attach_speculative(hanzo_engine::SpeculativeConfig::Dflash { path, block_size })?;
+        } else if let Some(draft_model) = self.draft_model.clone() {
             let draft_loader = LoaderBuilder::new(draft_model).build()?;
             let draft_pipeline = draft_loader.load_model_from_hf(
                 None,
@@ -1515,25 +1528,21 @@ fn hanzo_instance_info(loader: &dyn Loader) {
     debug!("Model kind is: {}", loader.get_kind().to_string());
 }
 
-/// Determines whether paged attention should be enabled based on device type and preferences.
+/// Whether paged attention is on: the caller's word where the device has a paged path, the
+/// engine's default for that device otherwise.
 fn configure_paged_attn(device: &Device, paged_attn: Option<bool>) -> bool {
-    if device.is_cpu() {
+    let paged_path = device.is_cuda()
+        || hanzo_engine::distributed::use_nccl()
+        || device.is_metal()
+        || device.is_rocm()
+        || device.is_vulkan();
+    if !paged_path {
         if paged_attn == Some(true) {
-            warn!("Paged attention is not supported on CPU.");
+            warn!("Paged attention is not supported on this device.");
         }
-
-        defaults::PAGED_ATTN_CPU
-    } else if device.is_cuda() || hanzo_engine::distributed::use_nccl() {
-        paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA)
-    } else if device.is_metal() {
-        paged_attn.unwrap_or(defaults::PAGED_ATTN_METAL)
-    } else if device.is_rocm() {
-        paged_attn.unwrap_or(defaults::PAGED_ATTN_ROCM)
-    } else if device.is_vulkan() {
-        paged_attn.unwrap_or(defaults::PAGED_ATTN_VULKAN)
-    } else {
-        false
+        return false;
     }
+    paged_attn.unwrap_or_else(|| hanzo_engine::paged_attn_default(device))
 }
 
 /// Initializes the cache configuration for paged attention based on provided parameters.

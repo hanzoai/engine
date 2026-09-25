@@ -65,6 +65,7 @@ use crate::{
     models::quantized_qwen3_5_moe::ModelWeights as QQwen35,
     models::quantized_qwen3_moe::ModelWeights as QQwen3MoE,
     models::quantized_qwen3_next::ModelWeights as QQwen3Next,
+    models::quantized_qwen4exp::ModelWeights as QQwen4Exp,
     models::quantized_starcoder2::ModelWeights as QStarcoder2,
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
@@ -100,6 +101,7 @@ enum Model {
     Qwen3MoE(QQwen3MoE),
     Qwen3Next(QQwen3Next),
     Qwen35(QQwen35),
+    Qwen4Exp(QQwen4Exp),
     Deepseek2(QDeepSeek2),
     Deepseek4(QDeepSeek4),
     GptOss(QGptOss),
@@ -119,6 +121,8 @@ impl Model {
             // GLM-5.2 (`glm-dsa`) loads as Deepseek2 and carries an in-band `nextn` MTP head.
             Model::Deepseek2(m) => Some(m),
             Model::Deepseek4(m) => Some(m),
+            // Qwen3.5 carries its head as the block trailing the transformer.
+            Model::Qwen35(m) => Some(m),
             _ => None,
         }
     }
@@ -135,6 +139,8 @@ pub struct GGUFPipeline {
     generation_defaults: Option<crate::ModelGenerationDefaults>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     draft_proposer: Option<Box<dyn crate::speculative::SpeculativeProposer + Send + Sync>>,
+    /// The GGUF files this model was read from, so `--mtp-model self` finds a head inside one.
+    weight_files: Vec<PathBuf>,
     /// Captured ROCm/HIP decode graphs, keyed by decode bucket. See
     /// [`crate::pipeline::rocm_graph`]. Mirrors `NormalPipeline::cuda_decode_graph`.
     #[cfg(feature = "rocm")]
@@ -918,6 +924,7 @@ impl Loader for GGUFLoader {
                 GGUFArchitecture::Qwen35 | GGUFArchitecture::Qwen35MoE => {
                     Model::Qwen35(QQwen35::try_from(model_config)?)
                 }
+                GGUFArchitecture::Qwen4Exp => Model::Qwen4Exp(QQwen4Exp::try_from(model_config)?),
                 GGUFArchitecture::Deepseek2 | GGUFArchitecture::GlmDsa => {
                     Model::Deepseek2(QDeepSeek2::try_from(model_config)?)
                 }
@@ -1001,6 +1008,7 @@ impl Loader for GGUFLoader {
             Model::Qwen3MoE(ref p) => p.max_seq_len,
             Model::Qwen3Next(ref p) => p.max_seq_len,
             Model::Qwen35(ref p) => p.max_seq_len,
+            Model::Qwen4Exp(ref p) => p.max_seq_len,
             Model::Deepseek2(ref p) => p.max_seq_len,
             Model::Deepseek4(ref p) => p.max_seq_len,
             Model::GptOss(ref p) => p.max_seq_len,
@@ -1020,6 +1028,7 @@ impl Loader for GGUFLoader {
             Model::Qwen3(ref model) => model.cache.normal().0.len(),
             Model::Qwen3MoE(ref model) => model.cache.normal().0.len(),
             Model::Qwen35(ref model) => model.cache.hybrid().num_layers(),
+            Model::Qwen4Exp(ref model) => model.cache.hybrid().num_layers(),
             Model::Qwen3Next(ref model) => model.cache.hybrid().num_layers(),
             Model::Deepseek2(ref model) => model.cache.normal().0.len(),
             Model::Deepseek4(ref model) => model.cache.normal().0.len(),
@@ -1084,6 +1093,7 @@ impl Loader for GGUFLoader {
             generation_defaults,
             mapper: pipeline_mapper,
             draft_proposer: None,
+            weight_files: paths.get_weight_filenames().to_vec(),
             #[cfg(feature = "rocm")]
             rocm_decode_graph: std::sync::Mutex::new(RocmDecodeGraphState::default()),
             #[cfg(feature = "cuda")]
@@ -1194,6 +1204,7 @@ impl CacheManagerMixin for GGUFPipeline {
             Model::Qwen3(ref model) => &model.cache,
             Model::Qwen3MoE(ref model) => &model.cache,
             Model::Qwen35(ref model) => &model.cache,
+            Model::Qwen4Exp(ref model) => &model.cache,
             Model::Qwen3Next(ref model) => &model.cache,
             Model::Deepseek2(ref model) => &model.cache,
             Model::Deepseek4(ref model) => &model.cache,
@@ -1218,6 +1229,7 @@ impl MetadataMixin for GGUFPipeline {
             Model::Qwen3(ref model) => model.device.clone(),
             Model::Qwen3MoE(ref model) => model.device.clone(),
             Model::Qwen35(ref model) => model.device.clone(),
+            Model::Qwen4Exp(ref model) => model.device.clone(),
             Model::Qwen3Next(ref model) => model.device.clone(),
             Model::Deepseek2(ref model) => model.device.clone(),
             Model::Deepseek4(ref model) => model.device.clone(),
@@ -1875,6 +1887,14 @@ impl GGUFPipeline {
         if !rocm_decode_graphs_enabled() || !self.model_supports_decode_graph() {
             return Ok(None);
         }
+        // A draft reads what the target's layer loop records as it runs (`spec_capture`):
+        // host-side code that truncates, appends and keys rows per sequence. A graph replay
+        // re-issues only the recorded kernels, so none of that runs and the draft reads rows
+        // that were never written. The CUDA and Vulkan paths stay eager under speculation for
+        // this reason; this one claimed to mirror the CUDA gate and had not.
+        if self.draft_proposer.is_some() {
+            return Ok(None);
+        }
         // Mirror the CUDA gate: only steady-state single-token decode with paged
         // metadata present and no prefix-cache prefill in flight.
         if metadata.is_first_prompt_chunk
@@ -2447,6 +2467,7 @@ impl Pipeline for GGUFPipeline {
         let ModelInputs {
             input_ids,
             input_ids_full,
+            prior,
             seqlen_offsets,
             seqlen_offsets_full,
             context_lens,
@@ -2625,6 +2646,13 @@ impl Pipeline for GGUFPipeline {
             Model::Qwen35(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
+            Model::Qwen4Exp(ref model) => model.forward(
+                &input_ids,
+                &prior,
+                &seqlen_offsets,
+                context_lens,
+                paged_attn_meta,
+            )?,
             Model::Qwen3Next(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
@@ -2651,16 +2679,48 @@ impl Pipeline for GGUFPipeline {
         self.draft_proposer.is_some()
     }
 
+    fn note_forward_sequences(&self, seq_ids: &[usize]) {
+        if let Model::Qwen35(ref model) = self.model {
+            model.spec_capture.note_forward(seq_ids);
+        }
+    }
+
     fn attach_speculative(
         &mut self,
         config: crate::speculative::SpeculativeConfig,
     ) -> Result<(), hanzo_ml::Error> {
+        if let Model::Qwen35(ref model) = self.model {
+            model.set_store_spec(false);
+        }
         match config {
             crate::speculative::SpeculativeConfig::Off => Ok(()),
             crate::speculative::SpeculativeConfig::Dspark { .. } => {
                 hanzo_ml::bail!(
                     "DSpark speculative decoding targets the safetensors (normal) Qwen3 pipeline, not GGUF."
                 );
+            }
+            crate::speculative::SpeculativeConfig::Dflash { path, block_size } => {
+                let Model::Qwen35(ref model) = self.model else {
+                    hanzo_ml::bail!(
+                        "DFlash 2 reads the target's layer hiddens and decodes through its embedding and output head; among GGUF models only Qwen3.5 lends them."
+                    );
+                };
+                if self.metadata.cache_engine.is_none() {
+                    hanzo_ml::bail!(
+                        "DFlash 2 on Qwen3.5 requires PagedAttention: rejected drafts are rewound through the paged cache."
+                    );
+                }
+                let proposer = crate::models::qwen3_dflash::DFlash2Proposer::from_checkpoint(
+                    std::path::Path::new(&path),
+                    block_size,
+                    &model.device,
+                    model.shared_heads(),
+                )?;
+                model.spec_capture.request(proposer.capture_request());
+                let info = crate::speculative::SpeculativeAttachInfo::dflash(proposer.block_size());
+                crate::speculative::logging::log_attach(&info);
+                self.draft_proposer = Some(Box::new(proposer));
+                Ok(())
             }
             crate::speculative::SpeculativeConfig::PromptLookup {
                 ngram_min,
@@ -2713,7 +2773,26 @@ impl Pipeline for GGUFPipeline {
                 // the ONE seam — the pipeline asks the model for its SelfSpeculative
                 // capability and never names an architecture. A model without an MTP
                 // head is reported honestly instead of silently unsupported.
-                let n_predict = mtp_config.n_predict.unwrap_or(1);
+                if self.metadata.cache_engine.is_none() {
+                    hanzo_ml::bail!(
+                        "MTP speculative decoding requires PagedAttention: rejected drafts are rewound through the paged cache."
+                    );
+                }
+                // `self` names the head inside the file this model was read from, which is where
+                // Qwen3.5 keeps it; a path names a head in another file, as GLM-5.2 keeps it.
+                let mtp_config = if mtp_config.model == "self" {
+                    let own = self.weight_files.first().ok_or_else(|| {
+                        hanzo_ml::Error::msg(
+                            "`--mtp-model self` needs the GGUF this model was read from, and none was recorded",
+                        )
+                    })?;
+                    crate::speculative::MtpConfig::new(
+                        own.to_string_lossy().into_owned(),
+                        mtp_config.n_predict,
+                    )
+                } else {
+                    mtp_config
+                };
                 let proposer = self
                     .model
                     .as_self_speculative()
@@ -2723,8 +2802,10 @@ impl Pipeline for GGUFPipeline {
                         )
                     })?
                     .attach_mtp(&mtp_config)?;
-                let info =
-                    crate::speculative::SpeculativeAttachInfo::mtp("mtp".to_string(), n_predict);
+                let info = crate::speculative::SpeculativeAttachInfo::mtp(
+                    mtp_config.model.clone(),
+                    proposer.proposal_len(),
+                );
                 crate::speculative::logging::log_attach(&info);
                 self.draft_proposer = Some(proposer);
                 Ok(())
@@ -2762,6 +2843,7 @@ impl Pipeline for GGUFPipeline {
             let cache = crate::speculative::cache::PagedSpeculativeCacheAccess::new(
                 &metadata,
                 cache_engine,
+                self.cache(),
             );
             return crate::speculative::driver::try_sample_speculative_causal_gen(
                 self,
@@ -2844,6 +2926,31 @@ impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
         if self.draft_proposer.is_none() || rows.is_empty() {
             return Ok(None);
         }
+        // Qwen3.5 stashes the position of each row beside its hidden state; the head needs both,
+        // so the anchors are filled from the same rows in the same pass.
+        if let Model::Qwen35(ref model) = self.model {
+            let Some((hidden, positions)) = model.last_spec() else {
+                return Ok(None);
+            };
+            let (batch, row_count, _) = hidden.dims3()?;
+            let mut gathered = Vec::with_capacity(rows.len());
+            let mut anchors = Vec::with_capacity(rows.len());
+            for &(b, r) in rows {
+                if b >= batch || r >= row_count {
+                    hanzo_ml::bail!(
+                        "Qwen3.5 MTP row ({b}, {r}) is outside the stashed {batch}x{row_count} hidden state"
+                    );
+                }
+                gathered.push(hidden.narrow(0, b, 1)?.narrow(1, r, 1)?);
+                // Text-only decoding, so all three MRoPE planes carry the same position.
+                let p = u32::try_from(positions[b][r]).map_err(hanzo_ml::Error::wrap)?;
+                anchors.push([p, p, p]);
+            }
+            if let Ok(mut slot) = model.mtp_anchors().lock() {
+                *slot = Some(anchors);
+            }
+            return Ok(Some(Tensor::cat(&gathered, 0)?));
+        }
         let hidden = match self.model {
             Model::Deepseek4(ref model) => model.last_spec_hidden(),
             // GLM-5.2 (`glm-dsa`) loads as Deepseek2; same MTP spec-hidden stash.
@@ -2868,6 +2975,19 @@ impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
         Ok(Some(Tensor::cat(&gathered, 0)?))
     }
 
+    fn speculative_target_hidden_layers(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> hanzo_ml::Result<Option<crate::speculative::HiddenWindow>> {
+        let Model::Qwen35(ref model) = self.model else {
+            return Ok(None);
+        };
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        Ok(model.spec_capture.hiddens())
+    }
+
     fn speculative_propose(
         &mut self,
         ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
@@ -2881,10 +3001,12 @@ impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
     fn build_speculative_verify_inputs(
         &self,
         input_meta: crate::pipeline::text_models_inputs_processor::InputMetadata,
+        prior: Vec<Vec<u32>>,
     ) -> hanzo_ml::Result<Box<dyn Any>> {
         Ok(Box::new(ModelInputs {
             input_ids: input_meta.input,
             input_ids_full: None,
+            prior,
             seqlen_offsets: input_meta.positions,
             seqlen_offsets_full: None,
             context_lens: input_meta.context_lens,

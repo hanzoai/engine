@@ -24,21 +24,25 @@ export default defineConfig({
         },
         {
           label: 'Tutorials',
-          autogenerate: { directory: 'tutorials' },
+          items: [{ autogenerate: { directory: 'tutorials' } }],
         },
         {
           label: 'Guides',
-          autogenerate: { directory: 'guides' },
+          items: [{ autogenerate: { directory: 'guides' } }],
         },
         {
           label: 'Reference',
-          autogenerate: { directory: 'reference' },
+          items: [{ autogenerate: { directory: 'reference' } }],
         },
         {
           label: 'Explanation',
-          autogenerate: { directory: 'explanation' },
+          items: [{ autogenerate: { directory: 'explanation' } }],
         },
       ],
+      components: {
+        // Measured claims are entry points in the footer, not body copy.
+        Footer: './src/components/Footer.astro',
+      },
       customCss: ['./src/styles/custom.css'],
     }),
   ],

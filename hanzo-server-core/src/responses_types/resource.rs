@@ -41,6 +41,18 @@ impl ResponseUsage {
             output_tokens_details: None,
         }
     }
+
+    /// Surface prompt tokens served from the prefix cache. OpenAI keeps them inside
+    /// `input_tokens` and only breaks them out here, unlike the Anthropic shape.
+    pub fn with_cached_tokens(mut self, cached_tokens: usize) -> Self {
+        if cached_tokens > 0 {
+            self.input_tokens_details = Some(InputTokensDetails {
+                cached_tokens: Some(cached_tokens),
+                ..Default::default()
+            });
+        }
+        self
+    }
 }
 
 /// Detailed input token breakdown

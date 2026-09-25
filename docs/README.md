@@ -1,4 +1,4 @@
-![Hanzo Engine](banner.png)
+# Hanzo Engine
 
 **Fast, flexible LLM inference.** Run 40+ model families (text, vision, video, audio, speech, image generation, and embeddings) with automatic hardware optimization, OpenAI-compatible APIs, and built-in agentic features.
 

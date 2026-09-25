@@ -1,0 +1,34 @@
+---
+title: The deepest prompts measured
+description: Prefill, decode and time to first token at the deepest prompts any configuration in the sweep reached.
+---
+
+import Throughput from '../../../components/Throughput.astro';
+
+One configuration in the sweep was asked for prompts of 60,000 and 124,000 tokens.
+What it read is the token count its own tokenizer reported, which is lower than the
+request and is carried on the rows below rather than rounded up here.
+
+<Throughput query={{ model: 'zen5.8', limit: 100 }} minPromptTokens={50000} />
+
+## What was measured
+
+The same harness, the same corpus, the same fresh-nonce rule as every other claim:
+the prompt is genuinely read each time. Only the configurations whose rows appear
+above reached these depths; the others were not run there and are not implied to
+fail there.
+
+## What this does not say
+
+- It is a throughput measurement, not a recall measurement. The
+  [quality checks](/hanzo/benchmarks/quality-at-temperature-zero/) include an
+  in-context recall probe, but that probe runs at roughly 1.3K tokens. Nothing here
+  says the model finds a fact buried this deep.
+- Time to first token at this depth is long enough to exceed the default idle
+  timeout of common proxies. A deployment that puts one in front of the host has to
+  raise that timeout or stream keep-alives; the measurement is of the host, not of
+  any path to it.
+- It does not say this depth is available on every host. The configuration that
+  reached it is named in the rows.
+- The declared maximum context of a serving path is not this number. This is the
+  deepest prompt actually measured.

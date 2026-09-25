@@ -1,4 +1,4 @@
-//! Numeric correctness gate for the ROCm/HIP PagedAttention v1 decode kernel.
+//! Numeric correctness gate for the ROCm/HIP PagedAttention decode kernels.
 //!
 //! Builds a single decode query, a small paged K/V cache spanning a few blocks,
 //! a block_table, and a DEVICE-side `context_lens` array, runs
@@ -11,7 +11,10 @@
 //! exercises this directly: two different device-side context lengths are run
 //! with IDENTICAL launch shapes and an identical `max_context_len` (the cache
 //! capacity), and each result must match its own reference — i.e. only the
-//! device array changed, not the launch parameters. Run with:
+//! device array changed, not the launch parameters.
+//!
+//! The long-context tests run past what v1 can hold in shared memory (a little
+//! under 16K tokens on gfx1151), so they are served by the partitioned v2. Run with:
 //!   cargo +nightly test -p hanzo-paged-attn --features rocm
 
 #![cfg(feature = "rocm")]
@@ -43,6 +46,8 @@ fn run_case(
     dev: &Device,
     context_len: usize,
     max_context_len: usize,
+    spike: Option<usize>,
+    atol: f32,
 ) -> Result<(usize, f32), Box<dyn std::error::Error>> {
     assert!(context_len <= max_context_len);
     let scale = 1.0f32 / (HEAD_SIZE as f32).sqrt();
@@ -74,13 +79,17 @@ fn run_case(
     // max_context_len logical blocks. Physical blocks are a non-identity
     // permutation to exercise the indirection.
     let max_logical_blocks = max_context_len.div_ceil(BLOCK_SIZE);
-    assert!(max_logical_blocks <= NUM_BLOCKS);
+    // (i * 3 + 2) mod n is a permutation exactly when 3 does not divide n, so the
+    // pool is the smallest such n that holds the capacity -- 8 for the short cases.
+    let num_blocks = (NUM_BLOCKS.max(max_logical_blocks)..)
+        .find(|n| n % 3 != 0)
+        .unwrap();
     let phys_of_logical: Vec<usize> = (0..max_logical_blocks)
-        .map(|i| (i * 3 + 2) % NUM_BLOCKS)
+        .map(|i| (i * 3 + 2) % num_blocks)
         .collect();
 
-    let kc_elems = NUM_BLOCKS * NUM_KV_HEADS * (HEAD_SIZE / X) * BLOCK_SIZE * X;
-    let vc_elems = NUM_BLOCKS * NUM_KV_HEADS * HEAD_SIZE * BLOCK_SIZE;
+    let kc_elems = num_blocks * NUM_KV_HEADS * (HEAD_SIZE / X) * BLOCK_SIZE * X;
+    let vc_elems = num_blocks * NUM_KV_HEADS * HEAD_SIZE * BLOCK_SIZE;
     let mut kc_host = vec![0f32; kc_elems];
     let mut vc_host = vec![0f32; vc_elems];
 
@@ -99,6 +108,20 @@ fn run_case(
             + d * BLOCK_SIZE
             + off
     };
+
+    // A spike key: aligned with the query and forty times its length, so its logit
+    // dominates every other and the answer is essentially V at that position. Placed
+    // late in a long context it sits in a late partition, so a v2 that drops or
+    // mis-scales one lands far from the reference instead of inside the tolerance.
+    if let Some(at) = spike {
+        assert!(at < context_len);
+        for h in 0..NUM_KV_HEADS {
+            let qh = h * NUM_HEADS / NUM_KV_HEADS;
+            for d in 0..HEAD_SIZE {
+                k_ref[h][at][d] = 40.0 * q_host[qh * HEAD_SIZE + d];
+            }
+        }
+    }
 
     for t in 0..context_len {
         let blk = phys_of_logical[t / BLOCK_SIZE];
@@ -151,7 +174,7 @@ fn run_case(
             .iter()
             .map(|&x| f16::from_f32(x))
             .collect::<Vec<_>>(),
-        (NUM_BLOCKS, NUM_KV_HEADS, HEAD_SIZE / X, BLOCK_SIZE, X),
+        (num_blocks, NUM_KV_HEADS, HEAD_SIZE / X, BLOCK_SIZE, X),
         dev,
     )?;
     let value_cache = Tensor::from_vec(
@@ -159,7 +182,7 @@ fn run_case(
             .iter()
             .map(|&x| f16::from_f32(x))
             .collect::<Vec<_>>(),
-        (NUM_BLOCKS, NUM_KV_HEADS, HEAD_SIZE, BLOCK_SIZE),
+        (num_blocks, NUM_KV_HEADS, HEAD_SIZE, BLOCK_SIZE),
         dev,
     )?;
     let bt_host: Vec<i32> = phys_of_logical.iter().map(|&p| p as i32).collect();
@@ -185,7 +208,14 @@ fn run_case(
     )?;
     let out = out.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
 
-    let atol = 2e-2f32;
+    // A tolerance only means something if the answer is larger than it: attention
+    // spread evenly over 20K tokens averages the values to a few thousandths, and an
+    // all-zero output would sit inside a loose bound. Refuse such a case outright.
+    let max_ref = out_ref.iter().flatten().fold(0f32, |m, v| m.max(v.abs()));
+    assert!(
+        max_ref > 10.0 * atol,
+        "ctx={context_len}: the reference (max |x| = {max_ref}) is too small for atol {atol} to discriminate"
+    );
     let rtol = 2e-2f32;
     let mut nbad = 0usize;
     let mut max_err = 0f32;
@@ -211,8 +241,9 @@ fn run_case(
 #[test]
 fn rocm_paged_attention_v1_matches_reference() -> Result<(), Box<dyn std::error::Error>> {
     let dev = Device::new_rocm(0)?;
-    // context_len = 40 spans 3 blocks (16 + 16 + 8), last block partial.
-    let (nbad, max_err) = run_case(&dev, 40, 40)?;
+    // context_len = 40 spans 3 blocks (16 + 16 + 8), last block partial. A short context averages
+    // its values to about 0.2, so the tolerance sits two orders below the answer.
+    let (nbad, max_err) = run_case(&dev, 40, 40, None, 2e-3)?;
     eprintln!("nbad={nbad} max_err={max_err}");
     assert_eq!(
         nbad, 0,
@@ -229,11 +260,54 @@ fn rocm_paged_attention_v1_device_side_seqlen() -> Result<(), Box<dyn std::error
     let dev = Device::new_rocm(0)?;
     let capacity = NUM_BLOCKS * BLOCK_SIZE; // 128 — fixed launch sizing
     for &ctx in &[17usize, 96usize] {
-        let (nbad, max_err) = run_case(&dev, ctx, capacity)?;
+        let (nbad, max_err) = run_case(&dev, ctx, capacity, None, 2e-3)?;
         eprintln!("device_side_seqlen ctx={ctx} cap={capacity} nbad={nbad} max_err={max_err}");
         assert_eq!(
             nbad, 0,
             "device-side seqlen case ctx={ctx} mismatch (max_err={max_err})"
+        );
+    }
+    Ok(())
+}
+
+/// Past what v1 can hold in shared memory: 20000 tokens is ~78 KiB of v1 logits
+/// against a 64 KiB workgroup, which v1 cannot launch at all. v2 serves it. The
+/// even case checks the ordinary merge at a tolerance tight enough that an
+/// all-zero answer fails; the spike case puts the dominant key in a late
+/// partition, where a dropped or mis-scaled partition cannot hide.
+#[test]
+fn rocm_paged_attention_serves_a_context_v1_cannot() -> Result<(), Box<dyn std::error::Error>> {
+    let dev = Device::new_rocm(0)?;
+    for (ctx, spike, atol) in [
+        (20_000usize, None, 2e-4f32),
+        (20_000, Some(17_321), 2e-2),
+        // 16384 = 32 partitions exactly, so the spike is the ONLY token of the 33rd:
+        // a boundary v2 must merge, at a length v1 cannot launch.
+        (16_385, Some(16_384), 2e-2),
+    ] {
+        let (nbad, max_err) = run_case(&dev, ctx, ctx, spike, atol)?;
+        eprintln!("long ctx={ctx} spike={spike:?} nbad={nbad} max_err={max_err}");
+        assert_eq!(
+            nbad, 0,
+            "ctx={ctx} spike={spike:?} mismatch (max_err={max_err})"
+        );
+    }
+    Ok(())
+}
+
+/// The capacity a captured decode graph is launched with is the bucket, not the
+/// live length: partitions past this sequence's end must do nothing and must not
+/// be read. Two live lengths under one long capacity, each against its own reference.
+#[test]
+fn rocm_paged_attention_long_capacity_short_context() -> Result<(), Box<dyn std::error::Error>> {
+    let dev = Device::new_rocm(0)?;
+    let capacity = 24_576;
+    for (ctx, spike) in [(16_500usize, Some(16_400usize)), (700, Some(3))] {
+        let (nbad, max_err) = run_case(&dev, ctx, capacity, spike, 2e-2)?;
+        eprintln!("capacity={capacity} ctx={ctx} nbad={nbad} max_err={max_err}");
+        assert_eq!(
+            nbad, 0,
+            "capacity={capacity} ctx={ctx} mismatch (max_err={max_err})"
         );
     }
     Ok(())

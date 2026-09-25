@@ -72,7 +72,7 @@ pub use loaders::{
     NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, OlmoLoader,
     Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName,
     QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3EmbeddingLoader,
-    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3OmniLoader, Qwen3VLLoader, Qwen3VLMoELoader,
+    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen4ExpLoader, Qwen3OmniLoader, Qwen3VLLoader, Qwen3VLMoELoader,
     Qwen3_5Loader, Qwen3_5MoeLoader, QwenImageLoader, SmolLm3Loader, Starcoder2Loader, TokenSource,
     VLlama4Loader, VLlamaLoader, VoxtralLoader,
 };
@@ -245,6 +245,9 @@ pub(crate) struct ModelForwardContext<'a> {
     context_lens: &'a [(usize, usize)],
     position_ids: &'a [usize],
     flash_params: &'a FlashParams,
+    /// The tokens before each sequence's chunk that an n-gram embedding hashes with its first
+    /// tokens (`ModelInputs::prior`); empty for models that need none.
+    prior: &'a [Vec<u32>],
 }
 
 #[allow(dead_code)]
@@ -263,6 +266,7 @@ impl<'a> ModelForwardContext<'a> {
             context_lens,
             position_ids,
             flash_params,
+            prior: &[],
         }
     }
 
@@ -280,7 +284,17 @@ impl<'a> ModelForwardContext<'a> {
             context_lens,
             position_ids,
             flash_params,
+            prior: &[],
         }
+    }
+
+    /// The same context carrying each sequence's n-gram prior.
+    pub(crate) fn with_prior(self, prior: &'a [Vec<u32>]) -> Self {
+        Self { prior, ..self }
+    }
+
+    pub(crate) fn prior(&self) -> &[Vec<u32>] {
+        self.prior
     }
 
     pub(crate) fn cache(&self) -> &ForwardCache<'a> {
@@ -562,6 +576,14 @@ pub struct GeneralMetadata {
 }
 
 impl GeneralMetadata {
+    /// The longest sequence this pipeline can hold: the model's window, or the paged KV pool when
+    /// that is smaller. A prompt past it can never be scheduled, so admission refuses it.
+    pub fn context_len(&self) -> usize {
+        self.cache_config.as_ref().map_or(self.max_seq_len, |c| {
+            self.max_seq_len.min(c.block_size * c.num_gpu_blocks)
+        })
+    }
+
     pub fn tok_env(&self) -> Option<TokEnv> {
         self.llg_factory.as_ref().map(|f| f.tok_env().clone())
     }
@@ -848,6 +870,24 @@ impl ForwardInputsResult {
 pub(crate) struct FileListCache {
     files: Vec<String>,
 }
+/// Tell the target what the next forward is: the sequences it runs and, for a hybrid target,
+/// whether it verifies staged drafts, which is when the recurrent layers must keep a trail.
+fn announce_forward<P: Pipeline + ?Sized>(
+    pipeline: &P,
+    input_seqs: &[&mut Sequence],
+    seq_indices: &[usize],
+) {
+    let ids: Vec<usize> = seq_indices
+        .iter()
+        .map(|&idx| *input_seqs[idx].id())
+        .collect();
+    pipeline.note_forward_sequences(&ids);
+    if pipeline.cache().is_hybrid() {
+        let verify_len =
+            crate::speculative::staging::staged_batch_width(input_seqs).map(|width| width + 1);
+        pipeline.cache().hybrid().expect_verify(verify_len);
+    }
+}
 
 #[async_trait::async_trait]
 pub trait Pipeline:
@@ -864,6 +904,10 @@ pub trait Pipeline:
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, hanzo_ml::Error>;
+
+    /// Names the sequences the next `forward_inputs` call runs. A target that keeps
+    /// per-sequence speculative state attributes it by these ids; the default ignores them.
+    fn note_forward_sequences(&self, _seq_ids: &[usize]) {}
 
     fn attach_speculative(
         &mut self,
@@ -969,6 +1013,7 @@ pub trait Pipeline:
                         }
                     }
 
+                    announce_forward(self, input_seqs, &seq_indices);
                     let start = Instant::now();
                     let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
                     let end = Instant::now();
@@ -1247,7 +1292,7 @@ pub trait Pipeline:
                 let chunk_size = if is_prompt
                     && !return_raw_logits
                     && !self.get_metadata().is_xlora
-                    && self.device().is_cuda()
+                    && (self.device().is_cuda() || self.device().is_rocm())
                 {
                     Some(DEFAULT_PAGED_PREFILL_CHUNK_SIZE)
                 } else {
@@ -1365,6 +1410,7 @@ pub trait Pipeline:
                             seq_indices,
                         } = inputs.map_err(hanzo_ml::Error::msg)?;
 
+                        announce_forward(self, input_seqs, &seq_indices);
                         let start = Instant::now();
                         let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
                         let end = Instant::now();

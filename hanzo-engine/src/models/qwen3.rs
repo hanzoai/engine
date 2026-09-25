@@ -364,19 +364,8 @@ pub struct Model {
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
-    /// DSpark speculative multi-layer hidden exposure. When `store_spec_hiddens` is set,
-    /// `forward_embeds` snapshots the post-layer output of every layer index listed in
-    /// `spec_capture_layers` (HF `hidden_states[i+1]` convention) and folds it into a persistent
-    /// per-sequence CONFIRMED-PREFIX buffer (`spec_prefix`): before appending this forward's rows
-    /// it truncates the buffer to the forward's start position (`seqlen_offset`), which seeds the
-    /// prompt on prefill (start 0), extends it on each decode, and rolls back rejected speculative
-    /// drafts on the next verify forward. The DSpark proposer reads the whole `[prefix_len, hidden]`
-    /// per-layer buffer as its fused context. Single-sequence only (batch == 1); the accumulator
-    /// resets whenever a forward starts at position 0. Default OFF ⇒ the layer loop is
-    /// byte-identical to the non-speculative path.
-    spec_prefix: std::sync::Mutex<Vec<Tensor>>,
-    spec_capture_layers: std::sync::Mutex<Vec<usize>>,
-    store_spec_hiddens: std::sync::atomic::AtomicBool,
+    /// Hidden-state capture for a parallel-block draft (DSpark, DFlash). Off by default.
+    spec_capture: crate::speculative::HiddenPrefixCapture,
 }
 
 impl Model {
@@ -527,9 +516,7 @@ impl Model {
                 kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
-            spec_prefix: std::sync::Mutex::new(Vec::new()),
-            spec_capture_layers: std::sync::Mutex::new(Vec::new()),
-            store_spec_hiddens: std::sync::atomic::AtomicBool::new(false),
+            spec_capture: crate::speculative::HiddenPrefixCapture::default(),
         })
     }
 
@@ -539,73 +526,6 @@ impl Model {
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         self.forward_embeds(input_ids, self.embed_tokens.forward(input_ids)?, ctx)
-    }
-
-    /// Enable/disable DSpark target-layer hidden capture, and set which layer indices to
-    /// stash (the DSpark checkpoint's `target_layer_ids`). Clearing drops the accumulated
-    /// confirmed-prefix buffer so a finished sequence cannot leak state into the next one.
-    pub fn set_store_spec_hiddens(&self, store: bool, capture_layers: Vec<usize>) {
-        if let Ok(mut layers) = self.spec_capture_layers.lock() {
-            *layers = capture_layers;
-        }
-        self.store_spec_hiddens
-            .store(store, std::sync::atomic::Ordering::Relaxed);
-        if !store {
-            if let Ok(mut h) = self.spec_prefix.lock() {
-                h.clear();
-            }
-        }
-    }
-
-    /// The accumulated confirmed-prefix target-layer hidden states (in `spec_capture_layers`
-    /// order), each `[prefix_len, hidden]`, if capture is enabled. Cloned (cheap, shared
-    /// storage); the buffer is retained.
-    pub fn last_spec_hiddens(&self) -> Vec<Tensor> {
-        self.spec_prefix
-            .lock()
-            .ok()
-            .map(|h| h.clone())
-            .unwrap_or_default()
-    }
-
-    /// Fold this forward's captured rows into the persistent confirmed-prefix buffer.
-    /// `start_pos` is the forward's `seqlen_offset` (KV position of its first token): the buffer
-    /// is truncated there before appending, so a prefill (`start_pos == 0`) reseeds it, a decode
-    /// extends it, and the next verify forward drops rejected drafts. `this_forward[k]` is the
-    /// k-th captured layer, `[1, query_len, hidden]` (batch == 1) or `[query_len, hidden]`.
-    fn fold_spec_prefix(&self, start_pos: usize, this_forward: Vec<Tensor>) -> Result<()> {
-        let mut prefix = match self.spec_prefix.lock() {
-            Ok(prefix) => prefix,
-            Err(_) => return Ok(()),
-        };
-        if prefix.len() != this_forward.len() {
-            prefix.clear();
-        }
-        let mut merged = Vec::with_capacity(this_forward.len());
-        for (k, cur) in this_forward.into_iter().enumerate() {
-            let rows = match cur.dims() {
-                [1, _, _] => cur.squeeze(0)?, // [1, seq, hidden] -> [seq, hidden]
-                [_, _] => cur,
-                other => hanzo_ml::bail!("unexpected DSpark capture shape {other:?}"),
-            };
-            let row = match prefix.get(k) {
-                // Continuous capture: truncate to the forward's start and append the new rows.
-                Some(prev) if start_pos <= prev.dim(0)? => {
-                    if start_pos == 0 {
-                        rows
-                    } else {
-                        Tensor::cat(&[&prev.narrow(0, 0, start_pos)?, &rows], 0)?
-                    }
-                }
-                // Fresh prefill (start 0) or a discontinuity we can't extend: reset to these rows.
-                // When `start_pos > 0` here the prefix is short of `start_pos`; the proposer sees a
-                // prefix shorter than `anchor_pos` and safely bails until the next prefill.
-                _ => rows,
-            };
-            merged.push(row);
-        }
-        *prefix = merged;
-        Ok(())
     }
 
     pub fn forward_embeds(
@@ -636,18 +556,7 @@ impl Model {
         // DSpark capture: read the requested layer indices once (empty when OFF, so the `.contains`
         // guard below is a no-op and the loop stays byte-identical). Single-sequence only — DSpark
         // drafts one sequence per step, and the confirmed-prefix accumulator is per-sequence.
-        let capture_layers: Vec<usize> = if self
-            .store_spec_hiddens
-            .load(std::sync::atomic::Ordering::Relaxed)
-            && ctx.seqlen_offsets().len() == 1
-        {
-            self.spec_capture_layers
-                .lock()
-                .map(|l| l.clone())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let capture_layers = self.spec_capture.layers_for(ctx.seqlen_offsets().len());
         let mut this_forward: Vec<Tensor> = Vec::with_capacity(capture_layers.len());
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
@@ -658,7 +567,7 @@ impl Model {
         }
         if !capture_layers.is_empty() {
             let start_pos = ctx.seqlen_offsets().first().copied().unwrap_or(0);
-            self.fold_spec_prefix(start_pos, this_forward)?;
+            self.spec_capture.fold(start_pos, this_forward)?;
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
@@ -738,26 +647,31 @@ impl IsqModel for Model {
 }
 
 impl crate::speculative::SpeculativeTargetMixin for Model {
-    fn set_speculative_capture_layers(&self, layers: Vec<usize>) {
-        self.set_store_spec_hiddens(true, layers);
+    fn request_speculative_capture(&self, request: crate::speculative::CaptureRequest) {
+        self.spec_capture.request(request);
+    }
+
+    fn note_speculative_forward(&self, seq_ids: &[usize]) {
+        self.spec_capture.note_forward(seq_ids);
+    }
+
+    fn speculative_shared_heads(&self) -> Option<crate::speculative::SpeculativeSharedHeads> {
+        let embed_tokens = self.embed_tokens.clone();
+        let lm_head = Arc::clone(&self.lm_head);
+        Some(crate::speculative::SpeculativeSharedHeads {
+            embed: Arc::new(move |ids: &Tensor| embed_tokens.forward(ids)),
+            lm_head: Arc::new(move |hidden: &Tensor| lm_head.forward(hidden)),
+        })
     }
 
     fn speculative_target_hidden_layers(
         &self,
         rows: &[(usize, usize)],
-    ) -> Result<Option<Vec<Tensor>>> {
+    ) -> Result<Option<crate::speculative::HiddenWindow>> {
         if rows.is_empty() {
             return Ok(None);
         }
-        // The accumulated confirmed-prefix buffer for the single active sequence, one
-        // `[prefix_len, hidden]` tensor per fused layer. `fold_spec_prefix` keeps it aligned to
-        // the confirmed prefix (prompt-seeded, decode-extended, rollback-truncated); the proposer
-        // slices it to `anchor_pos`.
-        let hiddens = self.last_spec_hiddens();
-        if hiddens.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(hiddens))
+        Ok(self.spec_capture.hiddens())
     }
 }
 

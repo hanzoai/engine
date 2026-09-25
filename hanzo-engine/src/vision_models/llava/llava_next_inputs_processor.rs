@@ -199,6 +199,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                     let text_models_inputs_processor::ModelInputs {
                         input_ids,
                         input_ids_full: _,
+                        prior: _,
                         seqlen_offsets,
                         seqlen_offsets_full: _,
                         context_lens,

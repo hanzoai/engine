@@ -32,7 +32,7 @@ pub use attention_backend::{
     FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE,
 };
 pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
-pub use config::{KvCacheLayout, ModelConfigLike, ModelConfigMetadata};
+pub use config::{KvCacheLayout, KvLayers, ModelConfigLike, ModelConfigMetadata};
 use hanzo_ml::{DType, Device};
 pub use kv_cache_manager::KVCacheManager;
 pub use layers::PagedAttention;
@@ -86,20 +86,72 @@ const SUPPORTED_BLOCK_SIZE: &[usize] = &[8, 16, 32];
 
 const SIZE_IN_MB: usize = 1024 * 1024;
 
+// A token costs every cache entry its own layer's size (`kv_cache_elements_per_token` sums them),
+// so a hybrid whose side caches are narrower than its attention layers is not charged the widest.
 macro_rules! mb_to_blocks {
     ($mb_size:expr, $dtype_size:expr, $block_size:expr, $config:expr) => {
-        $mb_size
-            / $dtype_size
-            / $block_size
-            / $config.num_layers()
-            / $config.kv_cache_elements_per_token()
+        $mb_size / $dtype_size / $block_size / $config.kv_cache_elements_per_token()
     };
 }
 
 macro_rules! ctxt_to_blocks {
     ($context_len:expr, $dtype_size:expr, $block_size:expr, $config:expr) => {
-        $context_len * $dtype_size * $config.num_layers() * $config.kv_cache_elements_per_token()
+        $context_len * $dtype_size * $config.kv_cache_elements_per_token()
     };
+}
+
+/// What a unified-memory plan is asked to size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KvRequest {
+    /// The automatic path: the working set (`demand` tokens), at least one context (`floor`
+    /// tokens), within what fits.
+    Auto { demand: usize, floor: usize },
+    /// An explicit context of this many tokens: it fits or it is an error.
+    Tokens(usize),
+    /// An explicit KV budget in bytes: it fits or it is an error.
+    Bytes(usize),
+}
+
+/// The KV cache bytes a unified-memory device gives the paged cache. The ceiling is the device's
+/// budget (`IGPU_MEMORY_FRACTION` of physical RAM, already applied by [`MemoryUsage`]); charged
+/// against it are the weights, the fixed non-KV memory (recurrent states, prefix snapshots,
+/// activations, runtime) and the KV. There is no second reserve on top of the fraction. An
+/// explicit request that does not fit is an error naming the shortfall, never a silent cap.
+pub(crate) fn plan_unified(
+    ceiling: usize,
+    weights: usize,
+    fixed: usize,
+    request: KvRequest,
+    per_token: usize,
+) -> anyhow::Result<usize> {
+    const GIB: f64 = (1u64 << 30) as f64;
+    let room = ceiling as i128 - weights as i128 - fixed as i128;
+    let short = |need: usize| {
+        anyhow::anyhow!(
+            "unified memory: {:.2} GiB of KV does not fit; the {:.2} GiB ceiling holds {:.2} GiB of weights and {:.2} GiB fixed, {:.2} GiB short (raise IGPU_MEMORY_FRACTION or ask for less)",
+            need as f64 / GIB,
+            ceiling as f64 / GIB,
+            weights as f64 / GIB,
+            fixed as f64 / GIB,
+            (need as i128 - room) as f64 / GIB,
+        )
+    };
+    let need = match request {
+        KvRequest::Tokens(t) => t * per_token,
+        KvRequest::Bytes(b) => b,
+        KvRequest::Auto { demand, floor } => {
+            let room_bytes = room.max(0) as usize;
+            let want = (demand * per_token).min(room_bytes).max(floor * per_token);
+            if (want as i128) > room {
+                return Err(short(want));
+            }
+            return Ok(want);
+        }
+    };
+    if (need as i128) > room {
+        return Err(short(need));
+    }
+    Ok(need)
 }
 
 /// Memory values are in MBs or a percentage in [0,1]. Specify block size or the default is 32.
@@ -135,6 +187,9 @@ pub fn calculate_cache_config(
     if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
         anyhow::bail!("Block size must be in {SUPPORTED_BLOCK_SIZE:?}, got {block_size}");
     }
+    if config.kv_layers().is_empty() {
+        anyhow::bail!("Model has no layer that holds a KV cache; disable PagedAttention.");
+    }
     let dtype = cache_type.to_dtype(dtype);
     let dtype_size = dtype.size_in_bytes();
 
@@ -145,10 +200,7 @@ pub fn calculate_cache_config(
 
     // A budget the caller named is an instruction, not a hint: the demand floor below applies only
     // to the automatic path.
-    let budget_is_explicit = matches!(
-        mem_gpu,
-        MemoryGpuConfig::MbAmount(_) | MemoryGpuConfig::ContextSize(_)
-    );
+    let mem_gpu_request = mem_gpu;
 
     let mut min_mem_gpu = usize::MAX;
     for dev in layer_devices {
@@ -191,45 +243,34 @@ pub fn calculate_cache_config(
     #[cfg(feature = "vulkan")]
     let unified_memory = unified_memory || device.is_vulkan();
     if unified_memory {
-        let one_ctx_mb =
-            ctxt_to_blocks!(config.max_seq_len(), dtype_size, block_size, config) / SIZE_IN_MB;
-        // KV competes with the model and the OS/compute working set for ONE shared physical pool, so
-        // size it to DEMAND -- the concurrent working set (`max_num_tokens` = max_seq_len *
-        // max_batch_size = context * concurrency) -- NOT to capacity. Grabbing all free RAM (the
-        // discrete-VRAM vLLM approach) wires tens of GB of KV that a single agent never touches and,
-        // on a tight/coherent pool, thrashes or hangs the allocator (ROCm/WSL: an 84 GB alloc never
-        // returns). More concurrent sessions/agents raise max_batch_size and grow KV automatically.
-        // Bound demand by the post-model/OS-reserve ceiling (20% of unified RAM, min 16 GB, so KV
-        // never starves the OS) and floor at one full context so a lone request always loads.
-        let demand_mb = match max_num_tokens {
-            Some(toks) => {
-                (ctxt_to_blocks!(toks, dtype_size, block_size, config) / SIZE_IN_MB).max(one_ctx_mb)
-            }
-            None => one_ctx_mb,
+        // One pool holds the weights, the fixed working set and the KV, so the KV is planned
+        // against the device budget (the fraction), sized to demand on the automatic path.
+        let per_token = dtype_size * config.kv_cache_elements_per_token();
+        let mem = MemoryUsage.query(device)?;
+        let (ceiling, weights) = match model_weight_size_in_bytes {
+            Some(w) => (mem.total(), w / num_devices),
+            // After loading, what is allocated already holds the weights.
+            None => (mem.available(), 0),
         };
-        let total_mb = MemoryUsage.query(device)?.total() / SIZE_IN_MB;
-        let reserve_mb = (total_mb / 5).max(16 * 1024);
-        let kv_ceiling = total_mb
-            .saturating_sub(model_weight_per_device_mb)
-            .saturating_sub(reserve_mb)
-            .max(one_ctx_mb);
-        let target = if budget_is_explicit {
-            mem_gpu.min(kv_ceiling)
-        } else {
-            mem_gpu.min(kv_ceiling).min(demand_mb).max(one_ctx_mb)
+        let request = match mem_gpu_request {
+            MemoryGpuConfig::ContextSize(t) => KvRequest::Tokens(t),
+            MemoryGpuConfig::MbAmount(mb) => KvRequest::Bytes(mb * SIZE_IN_MB),
+            MemoryGpuConfig::Utilization(_) => KvRequest::Auto {
+                demand: max_num_tokens.unwrap_or(config.max_seq_len()).max(config.max_seq_len()),
+                floor: config.max_seq_len(),
+            },
         };
-        if target != mem_gpu {
-            if !silent {
-                info!(
-                    "Unified memory: KV cache {} MB -> {} MB ({} max-context sequences, demand-sized; {} MB OS reserve).",
-                    mem_gpu,
-                    target,
-                    (target / one_ctx_mb.max(1)).max(1),
-                    reserve_mb,
-                );
-            }
-            mem_gpu = target;
+        let kv = plan_unified(ceiling, weights, 0, request, per_token)?;
+        let target = kv / SIZE_IN_MB;
+        if target != mem_gpu && !silent {
+            info!(
+                "Unified memory: KV cache {} MB -> {} MB ({} max-context sequences).",
+                mem_gpu,
+                target,
+                (kv / (per_token * config.max_seq_len()).max(1)).max(1),
+            );
         }
+        mem_gpu = target;
     }
 
     let num_gpu_blocks = mb_to_blocks!(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
@@ -247,4 +288,244 @@ pub fn calculate_cache_config(
         num_gpu_blocks,
         cache_type,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// GB10: MemTotal 127,600,508 KiB. Serving Qwen3.8-Flash-Next at 1,048,576 bf16 tokens with 8
+    /// sequences: 77,632,650,240 B of weights, 27,456 B of KV per token, and fixed memory of 8 x
+    /// 2 x 116,379,648 B of recurrent state plus 1 GiB of prefix snapshots and 3.5 GiB runtime.
+    fn gb10(fraction: f64) -> anyhow::Result<usize> {
+        let mem_total = 127_600_508usize * 1024;
+        let ceiling = (mem_total as f64 * fraction) as usize;
+        let fixed = 8 * 2 * 116_379_648 + (1 << 30) + (7 << 29);
+        plan_unified(ceiling, 77_632_650_240, fixed, KvRequest::Tokens(1_048_576), 27_456)
+            .map(|kv| ceiling - 77_632_650_240 - fixed - kv)
+    }
+
+    #[test]
+    fn unified_plan_fits_1m_at_090() {
+        let left = gb10(0.90).expect("1M fits at 0.90");
+        assert!(left >= 4 << 30, "only {:.2} GiB of ceiling left", left as f64 / (1u64 << 30) as f64);
+    }
+
+    #[test]
+    fn unified_plan_refuses_1m_at_085() {
+        let err = gb10(0.85).expect_err("1M must not fit at 0.85").to_string();
+        assert!(err.contains("1.91 GiB short"), "{err}");
+    }
+
+    #[test]
+    fn unified_plan_auto_is_demand_capped() {
+        // demand below room: the demand; demand above room: the room; floor above room: error
+        let r = plan_unified(100, 20, 10, KvRequest::Auto { demand: 5, floor: 2 }, 4).unwrap();
+        assert_eq!(r, 20);
+        let r = plan_unified(100, 20, 10, KvRequest::Auto { demand: 50, floor: 2 }, 4).unwrap();
+        assert_eq!(r, 70);
+        assert!(plan_unified(100, 20, 10, KvRequest::Auto { demand: 50, floor: 20 }, 4).is_err());
+        assert!(plan_unified(100, 20, 10, KvRequest::Bytes(71), 4).is_err());
+        assert_eq!(plan_unified(100, 20, 10, KvRequest::Bytes(70), 4).unwrap(), 70);
+    }
+
+    /// Qwen3.5-27B shape: 64 decoder layers, 4 KV heads of 128, of which 16 are full attention.
+    fn dense() -> ModelConfigMetadata {
+        ModelConfigMetadata {
+            max_seq_len: 262144,
+            num_layers: 64,
+            hidden_size: 4096,
+            num_kv_heads: 4,
+            num_attn_heads: 32,
+            sliding_window: None,
+            k_head_dim: 128,
+            v_head_dim: 128,
+            kv_cache_layout: KvCacheLayout::StandardNoFlashInfer,
+        }
+    }
+
+    fn hybrid() -> KvLayers<ModelConfigMetadata> {
+        KvLayers::new(dense(), (0..64).filter(|i| (i + 1) % 4 == 0).collect())
+    }
+
+    fn blocks(config: &dyn ModelConfigLike, mem_gpu: MemoryGpuConfig) -> usize {
+        calculate_cache_config(
+            mem_gpu,
+            Some(32),
+            DType::BF16,
+            PagedCacheType::Auto,
+            config,
+            &Device::Cpu,
+            &[None],
+            true,
+            None,
+            None,
+        )
+        .unwrap()
+        .num_gpu_blocks
+    }
+
+    #[test]
+    fn hybrid_caches_only_its_attention_layers() {
+        assert_eq!(hybrid().kv_layers().len(), 16);
+        assert_eq!(
+            blocks(&hybrid(), MemoryGpuConfig::MbAmount(8192)),
+            4 * blocks(&dense(), MemoryGpuConfig::MbAmount(8192))
+        );
+    }
+
+    #[test]
+    fn hybrid_context_costs_a_quarter_of_the_bytes() {
+        let bytes =
+            |config: &dyn ModelConfigLike| ctxt_to_blocks!(262144usize, 2usize, 32usize, config);
+        // 16 layers x 2 (K,V) x 4 kv heads x 128 head dim x 2 bytes = 32 KB/token.
+        assert_eq!(bytes(&hybrid()), 262144 * 32 * 1024);
+        assert_eq!(bytes(&dense()), 4 * bytes(&hybrid()));
+    }
+
+    /// qwen4exp shape: 48 decoder layers with gated attention (2 KV heads of 256) at every
+    /// fourth, and after them each attention layer's QSA index cache (1 head of 128) at
+    /// `48 + layer`, read by that layer.
+    pub(super) struct Indexed;
+
+    impl Indexed {
+        const DEPTH: usize = 48;
+
+        fn attention() -> impl Iterator<Item = usize> {
+            (0..Self::DEPTH).filter(|i| (i + 1) % 4 == 0)
+        }
+    }
+
+    impl ModelConfigLike for Indexed {
+        fn max_seq_len(&self) -> usize {
+            262144
+        }
+        fn num_layers(&self) -> usize {
+            Self::DEPTH
+        }
+        fn hidden_size(&self) -> usize {
+            2560
+        }
+        fn num_kv_heads(&self) -> usize {
+            2
+        }
+        fn num_attn_heads(&self) -> usize {
+            24
+        }
+        fn k_head_dim(&self) -> usize {
+            256
+        }
+        fn v_head_dim(&self) -> usize {
+            256
+        }
+        fn num_kv_heads_for_layer(&self, layer_idx: usize) -> usize {
+            if layer_idx < Self::DEPTH {
+                2
+            } else {
+                1
+            }
+        }
+        fn k_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+            if layer_idx < Self::DEPTH {
+                256
+            } else {
+                128
+            }
+        }
+        fn v_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+            self.k_head_dim_for_layer(layer_idx)
+        }
+        fn kv_layers(&self) -> Vec<usize> {
+            Self::attention()
+                .chain(Self::attention().map(|l| Self::DEPTH + l))
+                .collect()
+        }
+        fn kv_reader(&self, layer_idx: usize) -> Option<usize> {
+            Some(layer_idx % Self::DEPTH)
+        }
+    }
+
+    /// The budget as it was before entries were sized per layer: every entry charged the model's
+    /// one `2 * kv_heads * max(k, v)`, or its MLA latent row.
+    fn uniform(config: &ModelConfigMetadata, mb: usize) -> usize {
+        let row = match config.kv_cache_layout {
+            KvCacheLayout::Mla {
+                kv_lora_rank,
+                kpe_head_dim,
+            } => kv_lora_rank + kpe_head_dim,
+            _ => 2 * config.num_kv_heads * config.k_head_dim.max(config.v_head_dim),
+        };
+        let entries = config.kv_layers().len();
+        mb * SIZE_IN_MB / 2 / 32 / entries / row
+    }
+
+    #[test]
+    fn uniform_models_keep_their_block_counts() {
+        let mla = ModelConfigMetadata {
+            num_layers: 61,
+            kv_cache_layout: KvCacheLayout::Mla {
+                kv_lora_rank: 512,
+                kpe_head_dim: 64,
+            },
+            ..dense()
+        };
+        // Absorbed-MLA GGUF shape: one head, K wider than V.
+        let absorbed = ModelConfigMetadata {
+            num_kv_heads: 1,
+            k_head_dim: 576,
+            v_head_dim: 512,
+            ..dense()
+        };
+        for config in [&dense(), &mla, &absorbed] {
+            for mb in [7, 8192, 12345, 65536] {
+                assert_eq!(
+                    blocks(config, MemoryGpuConfig::MbAmount(mb)),
+                    uniform(config, mb)
+                );
+            }
+        }
+        for mb in [7, 8192, 12345] {
+            let hybrid = hybrid();
+            let entries = hybrid.kv_layers().len();
+            assert_eq!(
+                blocks(&hybrid, MemoryGpuConfig::MbAmount(mb)),
+                mb * SIZE_IN_MB / 2 / 32 / entries / (2 * 4 * 128)
+            );
+        }
+        for toks in [4096, 100_003, 262144] {
+            let mb = toks * 2 * 64 * (2 * 4 * 128) / SIZE_IN_MB;
+            assert_eq!(
+                blocks(&dense(), MemoryGpuConfig::ContextSize(toks)),
+                uniform(&dense(), mb)
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_cache_charges_each_entry_its_own_size() {
+        // 12 x 2 (K,V) x 2 heads x 256 + 12 x 2 x 1 head x 128 elements per token.
+        let row = 12 * 1024 + 12 * 256;
+        assert_eq!(Indexed.kv_layers().len(), 24);
+        assert_eq!(Indexed.kv_cache_elements_per_token(), row);
+        for mb in [7, 8192, 12345] {
+            let charged = blocks(&Indexed, MemoryGpuConfig::MbAmount(mb));
+            assert_eq!(charged, mb * SIZE_IN_MB / 2 / 32 / row);
+            // Charging all 24 entries the attention layers' 1024 would have lost 3/8 of them.
+            assert!(charged > mb * SIZE_IN_MB / 2 / 32 / 24 / 1024);
+        }
+
+        // What the engine allocates for those blocks is exactly what the budget charged.
+        let cache = CacheConfig {
+            block_size: 32,
+            num_gpu_blocks: 3,
+            cache_type: PagedCacheType::Auto,
+        };
+        let engine = CacheEngine::new(&Indexed, &cache, DType::BF16, &Device::Cpu, vec![]).unwrap();
+        let held: usize = engine
+            .get_kv_cache()
+            .iter()
+            .map(|(k, v)| k.elem_count() + v.elem_count())
+            .sum();
+        assert_eq!(held, 3 * 32 * row);
+    }
 }

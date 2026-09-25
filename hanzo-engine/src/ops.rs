@@ -14,6 +14,15 @@ use hanzo_ml::Shape;
 // ============================================================================
 
 #[cfg(feature = "cuda")]
+fn topk_launched(err: i32, dims: &[usize], k: usize) -> Result<()> {
+    if err == 0 {
+        Ok(())
+    } else {
+        hanzo_ml::bail!("topk kernel failed with CUDA error {err} on {dims:?} (k = {k})")
+    }
+}
+
+#[cfg(feature = "cuda")]
 #[allow(clippy::cast_possible_truncation)]
 fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
     use hanzo_ml::backend::BackendStorage;
@@ -28,6 +37,9 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
     let ncols = *dims
         .last()
         .ok_or_else(|| hanzo_ml::Error::Msg("empty dims".to_string()))?;
+    if ncols == 0 || k == 0 || k > ncols {
+        hanzo_ml::bail!("topk of {k} over rows of width {ncols}");
+    }
     let nrows = (input.elem_count() / ncols) as i32;
     let ncols_i32 = ncols as i32;
     let k_i32 = k as i32;
@@ -64,7 +76,7 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
             let mut values_dst = unsafe { dev.alloc::<half::bf16>(out_elem_count) }?;
             let (values_ptr, values_guard) = values_dst.device_ptr_mut(&stream);
 
-            unsafe {
+            let err = unsafe {
                 ffi::topk_bf16(
                     src_ptr,
                     values_ptr as *mut c_void,
@@ -73,8 +85,9 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
                     ncols_i32,
                     k_i32,
                     stream_raw,
-                );
-            }
+                )
+            };
+            topk_launched(err, dims, k)?;
 
             drop(values_guard);
             drop(indices_guard);
@@ -102,7 +115,7 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
             let mut values_dst = unsafe { dev.alloc::<half::f16>(out_elem_count) }?;
             let (values_ptr, values_guard) = values_dst.device_ptr_mut(&stream);
 
-            unsafe {
+            let err = unsafe {
                 ffi::topk_f16(
                     src_ptr,
                     values_ptr as *mut c_void,
@@ -111,8 +124,9 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
                     ncols_i32,
                     k_i32,
                     stream_raw,
-                );
-            }
+                )
+            };
+            topk_launched(err, dims, k)?;
 
             drop(values_guard);
             drop(indices_guard);
@@ -140,7 +154,7 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
             let mut values_dst = unsafe { dev.alloc::<f32>(out_elem_count) }?;
             let (values_ptr, values_guard) = values_dst.device_ptr_mut(&stream);
 
-            unsafe {
+            let err = unsafe {
                 ffi::topk_f32(
                     src_ptr,
                     values_ptr as *mut c_void,
@@ -149,8 +163,9 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
                     ncols_i32,
                     k_i32,
                     stream_raw,
-                );
-            }
+                )
+            };
+            topk_launched(err, dims, k)?;
 
             drop(values_guard);
             drop(indices_guard);
@@ -234,7 +249,7 @@ pub struct MoeRouterTopKConfig {
 
 /// Deterministic top-k expert selection with a CANONICAL, backend-independent tie-break: order
 /// each row by (score DESC, expert-index ASC) using f32 total ordering (NaN-safe), take the first
-/// `k`. Unlike candle's `.topk()` (whose tie-break is unspecified) and the separate CUDA bf16/f16
+/// `k`. Unlike hanzo-ml's `.topk()` (whose tie-break is unspecified) and the separate CUDA bf16/f16
 /// router kernel, this yields the SAME experts on every machine — the routing analog of the
 /// lowest-id argmax tie-break the sampler now uses. `top_k <= num_experts` for every MoE config.
 #[allow(clippy::cast_possible_truncation)]
@@ -259,7 +274,7 @@ pub fn moe_router_topk(
     // While a poi proof transcript is being emitted (inside `poi_forward::prove`), routing takes the
     // single canonical CPU path so a prover and a re-executing verifier on different hardware select
     // the IDENTICAL experts (a different expert is a different sub-network). Off during normal
-    // inference: `proving()` is false, so the fast CUDA/candle path is byte-for-byte unchanged.
+    // inference: `proving()` is false, so the fast CUDA/hanzo-ml path is byte-for-byte unchanged.
     let proof = crate::poi_forward::proving();
     #[cfg(feature = "cuda")]
     if !proof {

@@ -1,0 +1,39 @@
+---
+title: Prefill by prompt length
+description: How prompt-processing throughput changes as the prompt grows, measured on both fleet hosts at three depths.
+---
+
+import Throughput from '../../../components/Throughput.astro';
+
+Prompt processing was measured at roughly 200, 1.3K and 12.5K tokens on each host,
+three runs per point, single stream. The question was not which host is faster at
+one depth but what the curve does: prefill that stays flat as the prompt grows is
+doing per-token work that should have been batched, and no constant-factor tuning
+will fix it.
+
+<Throughput query={{ model: 'zen5.8', limit: 100 }} metrics={['prefill', 'ttft']} />
+
+## What was measured
+
+Each request opens with a fresh session nonce, so no prefix cache can serve part
+of the prompt and inflate the result. Prefill throughput is the engine's own
+prompt-token count divided by time to first token. The prompt body is the same
+corpus excerpt at a given depth for every engine, so the comparison is between
+serving paths, not between texts.
+
+Runs happened inside a restored window: the fleet's own service on that host was
+stopped first, transfers and peer builds paused, and the host's free memory
+recorded before and after. The window ledger and the exact command line for each
+run are carried on the rows above.
+
+## What this does not say
+
+- It is not a claim about a model's quality. It measures how fast a prompt is read.
+- It is single-stream. Four-client behaviour is a [separate claim](/hanzo/benchmarks/four-client-concurrency/).
+- The depths stop at roughly 12.5K except on the one configuration that went
+  [deeper](/hanzo/benchmarks/long-context-124k/). Nothing here extrapolates past the
+  deepest prompt actually run.
+- It is one model at one quantization per row. A different quant moves prefill and
+  decode independently.
+- A prefill figure is not a latency budget. At depth, time to first token is what a
+  caller waits for, and that is [its own claim](/hanzo/benchmarks/time-to-first-token/).

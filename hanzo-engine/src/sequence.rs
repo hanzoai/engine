@@ -769,12 +769,15 @@ impl Sequence {
         matches!(*self.state.read().unwrap(), SequenceState::Waiting)
     }
 
+    /// Whether the schedulers should drop the sequence and free its blocks. An errored sequence has
+    /// had its error sent; kept, it would be stepped again forever.
     pub fn is_finished_paged_attn(&self) -> bool {
         matches!(
             *self.state.read().unwrap(),
             SequenceState::FinishedAborted
                 | SequenceState::FinishedIgnored
                 | SequenceState::Done(_)
+                | SequenceState::Error
         )
     }
 
@@ -783,6 +786,14 @@ impl Sequence {
             return toks;
         }
         &self.tokens
+    }
+
+    /// Up to `n` tokens before position `pos` of the whole sequence, fewer near its start. These
+    /// come from the sequence itself rather than [`get_toks`](Self::get_toks): a prefix-cache hit
+    /// prefills only the suffix past the hit, and the tokens before it are still context.
+    pub(crate) fn prior(&self, pos: usize, n: usize) -> &[u32] {
+        let end = pos.min(self.tokens.len());
+        &self.tokens[end.saturating_sub(n)..end]
     }
 
     pub(crate) fn active_staged_speculative_tokens(&self) -> &[u32] {
@@ -1067,10 +1078,9 @@ impl Sequence {
             return Ok(None);
         }
 
-        // The first token usually starts with a space. We don't want to add that to the delta.
-        // Since we're using the completion_bytes, we need to take care of that ourselves.
-        // Had we used HF's Tokenizer, it would have taken care of that for us.
-        if is_first {
+        // A chat message drops the whitespace its first token carries; a completion keeps it, as
+        // the exact continuation of the prompt.
+        if is_first && self.get_mut_group().is_chat {
             return Ok(Some(new_decoded.trim_start().to_string()));
         }
         Ok(Some(new_decoded.to_string()))
@@ -1114,6 +1124,7 @@ impl Sequence {
         get_mut_group!(self).total_time = now - self.timestamp;
 
         get_mut_group!(self).total_prompt_toks = self.prompt_len;
+        get_mut_group!(self).total_cached_toks = self.prefix_cache_len;
         get_mut_group!(self).total_toks = self.len();
     }
 
@@ -1435,6 +1446,7 @@ pub struct SequenceGroup {
     n_choices: usize, // The target number of choices to return. Can be decreased if an error is thrown.
     best_of: Option<usize>, // Top n seqs based on cumulative logprobs.
     pub total_prompt_toks: usize,
+    pub total_cached_toks: usize,
     pub total_toks: usize,
     pub total_prompt_time: u128,
     pub total_time: u128,
@@ -1475,6 +1487,7 @@ impl SequenceGroup {
             completion_choices: Vec::new(),
             n_choices,
             total_prompt_toks: 0,
+            total_cached_toks: 0,
             total_toks: 0,
             total_prompt_time: 0,
             total_time: 0,
@@ -1521,6 +1534,7 @@ impl SequenceGroup {
         Usage {
             completion_tokens: self.total_toks.saturating_sub(self.total_prompt_toks),
             prompt_tokens: self.total_prompt_toks,
+            cached_prompt_tokens: self.total_cached_toks,
             total_tokens: self.total_toks,
             avg_tok_per_sec: if self.total_time > 0 {
                 (self.total_toks as f32 / self.total_time as f32) * 1000.
@@ -1711,9 +1725,72 @@ impl SequenceGroup {
     }
 }
 
+/// A waiting sequence over `tokens` that samples at `temperature` (greedy when `None`), for tests.
+#[cfg(test)]
+pub(crate) fn test_sequence(tokens: Vec<u32>, temperature: Option<f64>) -> Sequence {
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let sampler = crate::sampler::Sampler::new(
+        temperature,
+        0,
+        None,
+        None,
+        None,
+        None,
+        None,
+        32,
+        1.0,
+        0.0,
+        vec![],
+    )
+    .unwrap();
+    let group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
+        1, false, true, None,
+    )));
+    Sequence::new_waiting(
+        tokens,
+        "prompt".to_string(),
+        0,
+        0,
+        1,
+        tx,
+        sampler,
+        vec![],
+        vec![],
+        None,
+        false,
+        false,
+        group,
+        0,
+        0,
+        SequenceRecognizer::None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        SeqStepType::PromptAndDecode,
+        None,
+        None,
+        None,
+        false,
+        vec![],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_errored_sequence_is_finished() {
+        let seq = test_sequence(vec![1, 2, 3], None);
+        assert!(!seq.is_finished_paged_attn());
+        seq.set_state(SequenceState::Error);
+        assert!(seq.is_finished_paged_attn());
+    }
     use tokio::sync::mpsc::channel;
 
     fn make_test_sequence() -> Sequence {

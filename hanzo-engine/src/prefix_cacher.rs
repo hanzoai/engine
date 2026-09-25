@@ -43,6 +43,26 @@ pub(crate) struct CacheElement {
 }
 
 impl CacheElement {
+    /// The longest prefix of a `shared`-token match this element can serve. Attention KV rewinds
+    /// to any length. Recurrent state does not rewind at all, so an element that carries it
+    /// serves the tokens its snapshots consumed, provided the match reaches that far.
+    fn servable_len(&self, shared: usize) -> usize {
+        let Some(snapshots) = &self.recurrent_snapshots else {
+            return shared;
+        };
+        let Some(consumed) = snapshots.first().map(|snapshot| snapshot.seqlen_offset) else {
+            return shared;
+        };
+        let uniform = snapshots
+            .iter()
+            .all(|snapshot| snapshot.seqlen_offset == consumed);
+        if uniform && consumed <= shared {
+            consumed
+        } else {
+            0
+        }
+    }
+
     fn can_rewind_to(&self, len: usize) -> bool {
         self.cache
             .iter()
@@ -203,6 +223,9 @@ pub enum MatchingCache {
     },
 }
 
+/// Device bytes the recurrent-prefix snapshots may hold in total.
+pub(crate) const PAGED_RECURRENT_BUDGET_BYTES: usize = 2 << 30;
+
 impl PrefixCacheManagerV2 {
     pub fn new(n_on_device: usize, no_prefix_cache: bool, has_paged_attention: bool) -> Self {
         if !no_prefix_cache && !has_paged_attention {
@@ -236,6 +259,15 @@ impl PrefixCacheManagerV2 {
 
     fn paged_recurrent_capacity(&self) -> usize {
         self.n_on_device.max(1).saturating_mul(8)
+    }
+
+    /// Bytes the recurrent-prefix snapshots hold on the device.
+    fn paged_recurrent_bytes(&self) -> usize {
+        self.paged_recurrent_caches
+            .values()
+            .flatten()
+            .map(RecurrentStateSnapshot::bytes)
+            .sum()
     }
 
     /// This always keeps the cache on the device.
@@ -489,7 +521,12 @@ impl PrefixCacheManagerV2 {
         let _ = self.paged_recurrent_caches.shift_remove(&key);
         self.paged_recurrent_caches.insert(key, snapshots);
 
-        while self.paged_recurrent_caches.len() > self.paged_recurrent_capacity() {
+        // A snapshot is every recurrent layer's state (153 MB for a 27B hybrid), so the bound is
+        // bytes as well as entries; the newest snapshot always stays.
+        while self.paged_recurrent_caches.len() > 1
+            && (self.paged_recurrent_caches.len() > self.paged_recurrent_capacity()
+                || self.paged_recurrent_bytes() > PAGED_RECURRENT_BUDGET_BYTES)
+        {
             let _ = self.paged_recurrent_caches.shift_remove_index(0);
         }
     }
@@ -534,7 +571,7 @@ impl PrefixCacheManagerV2 {
 
         let mut best_match: Option<(usize, &CacheElement, usize, usize, usize)> = None;
         for (k, v) in &self.caches {
-            let match_len = toks.shared_prefix_len(k);
+            let match_len = v.servable_len(toks.shared_prefix_len(k));
             if match_len == 0 {
                 continue;
             }
@@ -841,7 +878,9 @@ mod tests {
         key_for_bytes, tokens_to_le_bytes, CacheElement, DiskKvCache, MatchingCache,
         PrefixCacheManagerV2,
     };
-    use crate::kv_cache::{KvCache, RestoreLimits, RotatingCache, SingleCache};
+    use crate::kv_cache::{
+        KvCache, RecurrentStateSnapshot, RestoreLimits, RotatingCache, SingleCache,
+    };
 
     /// Generous, fingerprint-0 limits for the happy-path disk tests.
     fn test_limits() -> RestoreLimits {
@@ -918,6 +957,63 @@ mod tests {
             None => panic!("expected a shorter valid prefix-cache hit"),
         }
 
+        Ok(())
+    }
+
+    /// A finished hybrid sequence is cached with state that consumed all but its last sampled
+    /// token. It serves that length and no other: a longer match is cut back to it, and a match
+    /// that ends earlier would restore state holding tokens the new request never sent.
+    #[test]
+    fn a_recurrent_snapshot_serves_only_the_prefix_it_consumed() -> hanzo_ml::Result<()> {
+        let snapshot = |consumed: usize| -> hanzo_ml::Result<RecurrentStateSnapshot> {
+            Ok(RecurrentStateSnapshot {
+                conv_state: Tensor::zeros((1, 2, 3), DType::F32, &Device::Cpu)?,
+                recurrent_state: Tensor::zeros((1, 1, 2, 2), DType::F32, &Device::Cpu)?,
+                seqlen_offset: consumed,
+            })
+        };
+        let cached = |consumed: usize| -> hanzo_ml::Result<PrefixCacheManagerV2> {
+            let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
+            prefix_cacher.caches.insert(
+                vec![1, 2, 3, 4, 5, 6, 7, 8].into(),
+                CacheElement {
+                    cache: vec![Some(make_normal_kv_cache(8)?)],
+                    recurrent_snapshots: Some(vec![snapshot(consumed)?, snapshot(consumed)?]),
+                    audio_hashes: None,
+                    image_hashes: None,
+                    video_hashes: None,
+                },
+            );
+            Ok(prefix_cacher)
+        };
+
+        // The next turn repeats all eight tokens; the state consumed seven of them.
+        let hit = cached(7)?.search_for_matching_cache(
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            None,
+            None,
+            None,
+        )?;
+        match hit {
+            Some(MatchingCache::Normal {
+                toks,
+                offset,
+                recurrent_snapshots,
+                ..
+            }) => {
+                assert_eq!(offset, 7, "the hit must stop where the state stopped");
+                assert_eq!(toks, vec![8, 9, 10]);
+                assert_eq!(recurrent_snapshots.unwrap()[0].seqlen_offset, 7);
+            }
+            None => panic!("a match that reaches the snapshot must hit"),
+        }
+
+        // The request diverges at token 5: the state holds tokens it never sent.
+        let miss = cached(7)?.search_for_matching_cache(&[1, 2, 3, 4, 99], None, None, None)?;
+        assert!(
+            miss.is_none(),
+            "restored recurrent state past the shared prefix"
+        );
         Ok(())
     }
 

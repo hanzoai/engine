@@ -171,7 +171,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 seq.finalize_reasoning();
             }
             let delta_result = seq.get_delta();
-            if let Some(delta) = crate::handle_seq_error_ok!(delta_result, seq.responder()) {
+            if let Some(delta) = crate::handle_seq_error_stateaware_ok!(delta_result, seq) {
                 if seq.get_mut_group().is_chat {
                     let (content_delta, reasoning_delta) = if seq.reasoning_mode().is_some() {
                         (
@@ -245,12 +245,15 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             index: seq.get_response_index(),
                             finish_reason: is_done.map(|x| x.to_string()),
                             logprobs: if seq.return_logprobs() {
-                                Some(crate::ResponseLogprob {
-                                    token: delta,
-                                    bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
-                                    logprob: logprobs.logprob,
-                                    top_logprobs: logprobs.top_logprobs.unwrap().clone(),
-                                })
+                                Some(crate::CompletionLogprobs::new(
+                                    &[crate::ResponseLogprob {
+                                        token: delta,
+                                        bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
+                                        logprob: logprobs.logprob,
+                                        top_logprobs: logprobs.top_logprobs.unwrap().clone(),
+                                    }],
+                                    0,
+                                ))
                             } else {
                                 None
                             },
@@ -317,14 +320,14 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 let mut logprobs = Vec::new();
                 for logprob in seq.logprobs() {
                     let resp_logprob = crate::ResponseLogprob {
-                        token: crate::handle_seq_error_ok!(
+                        token: crate::handle_seq_error_stateaware_ok!(
                         tokenizer
                         .as_ref()
                         .ok_or(hanzo_ml::Error::Msg(
                             "`finish_or_add_toks_to_seq` requires the pipeline to have a tokenizer"
                                 .to_string(),
                         ))?.decode(&[logprob.token], false),
-                        seq.responder()
+                        seq
                     ),
                         bytes: logprob.bytes.clone().map(|b| b.into_bytes()),
                         logprob: logprob.logprob,
@@ -347,16 +350,14 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 | crate::sequence::StopReason::StopTok(_)
                 | crate::sequence::StopReason::Canceled
                 | crate::sequence::StopReason::ToolCalls => {
-                    String::from_utf8_lossy(seq.completion_bytes())
-                        .trim_start()
-                        .to_string()
+                    String::from_utf8_lossy(seq.completion_bytes()).to_string()
                 }
                 crate::sequence::StopReason::StopString {
                     completion_bytes_pos,
                     ..
                 } => {
                     let txt = String::from_utf8_lossy(seq.completion_bytes());
-                    txt[..completion_bytes_pos].trim_start().to_string()
+                    txt[..completion_bytes_pos].to_string()
                 }
                 crate::sequence::StopReason::GeneratedImage
                 | crate::sequence::StopReason::GeneratedSpeech
@@ -366,7 +367,15 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 }
             };
 
-            if seq.get_mut_group().is_chat {
+            // A completion is the exact continuation of its prompt; a chat message drops the
+            // whitespace the first token carries.
+            let is_chat = seq.get_mut_group().is_chat;
+            let text = if is_chat {
+                text.trim_start().to_string()
+            } else {
+                text
+            };
+            if is_chat {
                 let (text_new, tool_calls, reasoning_content) = if let Some(mode) =
                     seq.reasoning_mode()
                 {
@@ -424,7 +433,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     finish_reason: fixup_sentencepiece!(reason),
                     index: seq.get_response_index(),
                     text,
-                    logprobs: logprobs.map(|l| crate::Logprobs { content: Some(l) }),
+                    logprobs: logprobs.map(|l| crate::CompletionLogprobs::new(&l, 0)),
                 };
                 seq.add_completion_choice_to_group(choice);
             }

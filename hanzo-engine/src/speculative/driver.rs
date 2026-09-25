@@ -27,7 +27,7 @@ pub trait SpeculativePipelineExt: Pipeline {
     fn speculative_target_hidden_layers(
         &self,
         _rows: &[(usize, usize)],
-    ) -> Result<Option<Vec<Tensor>>> {
+    ) -> Result<Option<super::HiddenWindow>> {
         Ok(None)
     }
 
@@ -36,7 +36,14 @@ pub trait SpeculativePipelineExt: Pipeline {
         ctx: SpeculativeProposeBatchCtx<'_>,
     ) -> Result<Option<SpeculativeProposalBatch>>;
 
-    fn build_speculative_verify_inputs(&self, input_meta: InputMetadata) -> Result<Box<dyn Any>>;
+    /// Inputs for a verify forward over `input_meta`; `prior` holds up to
+    /// [`PRIOR`](crate::pipeline::text_models_inputs_processor::PRIOR) tokens before each
+    /// sequence's verify chunk.
+    fn build_speculative_verify_inputs(
+        &self,
+        input_meta: InputMetadata,
+        prior: Vec<Vec<u32>>,
+    ) -> Result<Box<dyn Any>>;
 }
 
 /// Drop staged speculative proposals when the next step cannot verify them.

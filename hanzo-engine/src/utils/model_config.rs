@@ -305,6 +305,7 @@ use crate::{
     models::quantized_qwen3_5_moe::ModelWeights as QQwen35,
     models::quantized_qwen3_moe::ModelWeights as QQwen3MoE,
     models::quantized_qwen3_next::ModelWeights as QQwen3Next,
+    models::quantized_qwen4exp::ModelWeights as QQwen4Exp,
     models::quantized_starcoder2::ModelWeights as QStarcoder2,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
@@ -329,7 +330,7 @@ impl TryFrom<ModelParams<'_, ParamsGGML>> for XLoraQLlama {
 }
 
 akin! {
-    let &models_gguf = [QLlama, QPhi, QPhi3, QGemma, QMiniMax, QStarcoder2, QQwen, QQwen3, QQwen3MoE, QQwen3Next, QQwen35, QDeepSeek2, QDeepSeek4, QGptOss, QGlm4Moe];
+    let &models_gguf = [QLlama, QPhi, QPhi3, QGemma, QMiniMax, QStarcoder2, QQwen, QQwen3, QQwen3MoE, QQwen3Next, QQwen35, QQwen4Exp, QDeepSeek2, QDeepSeek4, QGptOss, QGlm4Moe];
 
     impl<R: std::io::Seek + std::io::Read> TryFrom<ModelParams<'_, ParamsGGUF<'_, R>>> for *models_gguf {
         type Error = hanzo_ml::Error;

@@ -1566,16 +1566,6 @@ dependencies = [
 
 [[package]]
 name = "cudarc"
-version = "0.17.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bf99ab37ee7072d64d906aa2dada9a3422f1d975cdf8c8055a573bc84897ed8"
-dependencies = [
- "half",
- "libloading 0.8.9",
-]
-
-[[package]]
-name = "cudarc"
 version = "0.19.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42310153e06cf4cd532901f7096beb27504d681736a29ee90728ae4e2d93b2a8"
@@ -1688,6 +1678,12 @@ dependencies = [
  "libloading 0.8.9",
  "winapi",
 ]
+
+[[package]]
+name = "daachorse"
+version = "3.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5614204febbc33cc07a2806aa6440b904ac012b68eecc37f4493ea4a76455a3d"
 
 [[package]]
 name = "darling"
@@ -2392,7 +2388,7 @@ dependencies = [
  "lebe",
  "miniz_oxide",
  "num-complex",
- "pulp 0.22.3",
+ "pulp",
  "rayon-core",
  "smallvec 1.15.2",
  "zune-inflate",
@@ -2438,9 +2434,20 @@ dependencies = [
 
 [[package]]
 name = "fancy-regex"
-version = "0.18.0"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1e1dacd0d2082dfcf1351c4bdd566bbe89a2b263235a2b50058f1e130a47277"
+checksum = "72cf461f865c862bb7dc573f643dd6a2b6842f7c30b07882b56bd148cc2761b8"
+dependencies = [
+ "bit-set 0.8.0",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
+name = "fancy-regex"
+version = "0.19.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d301f5bf187b3c295fce6468d3875037a0bccc5f6b151c63cac2f85babf21912"
 dependencies = [
  "bit-set 0.8.0",
  "regex-automata",
@@ -2769,52 +2776,17 @@ dependencies = [
 
 [[package]]
 name = "gemm"
-version = "0.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab96b703d31950f1aeddded248bc95543c9efc7ac9c4a21fda8703a83ee35451"
-dependencies = [
- "dyn-stack",
- "gemm-c32 0.18.2",
- "gemm-c64 0.18.2",
- "gemm-common 0.18.2",
- "gemm-f16 0.18.2",
- "gemm-f32 0.18.2",
- "gemm-f64 0.18.2",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid",
- "seq-macro",
-]
-
-[[package]]
-name = "gemm"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa0673db364b12263d103b68337a68fbecc541d6f6b61ba72fe438654709eacb"
 dependencies = [
  "dyn-stack",
- "gemm-c32 0.19.0",
- "gemm-c64 0.19.0",
- "gemm-common 0.19.0",
- "gemm-f16 0.19.0",
- "gemm-f32 0.19.0",
- "gemm-f64 0.19.0",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid",
- "seq-macro",
-]
-
-[[package]]
-name = "gemm-c32"
-version = "0.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6db9fd9f40421d00eea9dd0770045a5603b8d684654816637732463f4073847"
-dependencies = [
- "dyn-stack",
- "gemm-common 0.18.2",
+ "gemm-c32",
+ "gemm-c64",
+ "gemm-common",
+ "gemm-f16",
+ "gemm-f32",
+ "gemm-f64",
  "num-complex",
  "num-traits",
  "paste",
@@ -2829,22 +2801,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "086936dbdcb99e37aad81d320f98f670e53c1e55a98bee70573e83f95beb128c"
 dependencies = [
  "dyn-stack",
- "gemm-common 0.19.0",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid",
- "seq-macro",
-]
-
-[[package]]
-name = "gemm-c64"
-version = "0.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfcad8a3d35a43758330b635d02edad980c1e143dc2f21e6fd25f9e4eada8edf"
-dependencies = [
- "dyn-stack",
- "gemm-common 0.18.2",
+ "gemm-common",
  "num-complex",
  "num-traits",
  "paste",
@@ -2859,33 +2816,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20c8aeeeec425959bda4d9827664029ba1501a90a0d1e6228e48bef741db3a3f"
 dependencies = [
  "dyn-stack",
- "gemm-common 0.19.0",
+ "gemm-common",
  "num-complex",
  "num-traits",
  "paste",
  "raw-cpuid",
  "seq-macro",
-]
-
-[[package]]
-name = "gemm-common"
-version = "0.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a352d4a69cbe938b9e2a9cb7a3a63b7e72f9349174a2752a558a8a563510d0f3"
-dependencies = [
- "bytemuck",
- "dyn-stack",
- "half",
- "libm",
- "num-complex",
- "num-traits",
- "once_cell",
- "paste",
- "pulp 0.21.5",
- "raw-cpuid",
- "rayon",
- "seq-macro",
- "sysctl",
 ]
 
 [[package]]
@@ -2902,29 +2838,11 @@ dependencies = [
  "num-traits",
  "once_cell",
  "paste",
- "pulp 0.22.3",
+ "pulp",
  "raw-cpuid",
  "rayon",
  "seq-macro",
  "sysctl",
-]
-
-[[package]]
-name = "gemm-f16"
-version = "0.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cff95ae3259432f3c3410eaa919033cd03791d81cebd18018393dc147952e109"
-dependencies = [
- "dyn-stack",
- "gemm-common 0.18.2",
- "gemm-f32 0.18.2",
- "half",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid",
- "rayon",
- "seq-macro",
 ]
 
 [[package]]
@@ -2934,29 +2852,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3df7a55202e6cd6739d82ae3399c8e0c7e1402859b30e4cb780e61525d9486e"
 dependencies = [
  "dyn-stack",
- "gemm-common 0.19.0",
- "gemm-f32 0.19.0",
+ "gemm-common",
+ "gemm-f32",
  "half",
  "num-complex",
  "num-traits",
  "paste",
  "raw-cpuid",
  "rayon",
- "seq-macro",
-]
-
-[[package]]
-name = "gemm-f32"
-version = "0.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc8d3d4385393304f407392f754cd2dc4b315d05063f62cf09f47b58de276864"
-dependencies = [
- "dyn-stack",
- "gemm-common 0.18.2",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid",
  "seq-macro",
 ]
 
@@ -2967,22 +2870,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02e0b8c9da1fbec6e3e3ab2ce6bc259ef18eb5f6f0d3e4edf54b75f9fd41a81c"
 dependencies = [
  "dyn-stack",
- "gemm-common 0.19.0",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid",
- "seq-macro",
-]
-
-[[package]]
-name = "gemm-f64"
-version = "0.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35b2a4f76ce4b8b16eadc11ccf2e083252d8237c1b589558a49b0183545015bd"
-dependencies = [
- "dyn-stack",
- "gemm-common 0.18.2",
+ "gemm-common",
  "num-complex",
  "num-traits",
  "paste",
@@ -2997,7 +2885,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "056131e8f2a521bfab322f804ccd652520c79700d81209e9d9275bbdecaadc6a"
 dependencies = [
  "dyn-stack",
- "gemm-common 0.19.0",
+ "gemm-common",
  "num-complex",
  "num-traits",
  "paste",
@@ -3219,7 +3107,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "clap",
@@ -3251,7 +3139,7 @@ checksum = "b9dc246ef72490c348c62b93c06989605dc074e285657501c0aaa02d73c5b408"
 
 [[package]]
 name = "hanzo-audio"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "apodize",
@@ -3261,25 +3149,30 @@ dependencies = [
 
 [[package]]
 name = "hanzo-bench"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "cli-table",
  "hanzo-engine",
  "hanzo-ml",
+ "hanzo-server-core",
  "libc",
+ "reqwest 0.13.4",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "tokio",
  "tracing",
 ]
 
 [[package]]
 name = "hanzo-bindgen-cuda"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202df0871f0b56488003aa8f3ecffc6ed579918ea5b2f1852bd1b41268559bff"
+checksum = "dcea37f1eb8b724580055b1224c68f73965b03ae1d4868cc19c794e2a9d27b3f"
 dependencies = [
  "glob",
  "num_cpus",
@@ -3288,7 +3181,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-cli"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "axum",
@@ -3304,6 +3197,7 @@ dependencies = [
  "futures-util",
  "half",
  "hanzo",
+ "hanzo-bench",
  "hanzo-engine",
  "hanzo-kernel",
  "hanzo-ml",
@@ -3334,7 +3228,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-code-exec"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3352,7 +3246,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-engine"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -3432,7 +3326,7 @@ dependencies = [
  "rust-mcp-schema",
  "rustc-hash 2.1.3",
  "rustfft",
- "safetensors 0.7.0",
+ "safetensors",
  "schemars 1.2.1",
  "scraper",
  "serde",
@@ -3476,7 +3370,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-film"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3494,9 +3388,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-flash-attn"
-version = "0.11.35"
+version = "0.11.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "918a7b9fdcb762bf519c69a7f379fa90d7273a90c5a3e9ff04791e0f8f402c2f"
+checksum = "ca9f9e51ce2b82a9829e0bdc12ff698c21acafa0c038659fc8b1c6508c2d999e"
 dependencies = [
  "anyhow",
  "bindgen_cuda",
@@ -3519,9 +3413,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-flash-attn-v3"
-version = "0.11.9"
+version = "0.11.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b025c8d36091d5c9b14fb667da2eddaf022995ffaa04918c00363a0acec1afe"
+checksum = "db078bccabe90c880c36942b3f4ac309cf4336a396fbe7be6909db75af6c9387"
 dependencies = [
  "anyhow",
  "half",
@@ -3554,9 +3448,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-kernels"
-version = "0.11.36"
+version = "0.11.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78c3433dc82e36ddcfb1386aa0e60a62d20edb0b452d0869fc1fd14ef80fa8dd"
+checksum = "327a7b12d6f98d25308beb9997696c90b501e88097b324dbeb21266ddfcfbf27"
 dependencies = [
  "glob",
  "hanzo-bindgen-cuda",
@@ -3564,7 +3458,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-llm-mcp"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3586,7 +3480,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-macros"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -3596,9 +3490,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-metal-kernels"
-version = "0.11.44"
+version = "0.11.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5db77d88f8169317e0ebe78dd98a6e76f0e8aaaecc4c661a6ee0e43b2bc8d48b"
+checksum = "087da648626e031b5f6181293d0b34db4ddc4130c365dd074c0f13d9a46aecd4"
 dependencies = [
  "block2",
  "half",
@@ -3612,22 +3506,21 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.11.95"
+version = "0.11.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f22aa32f780d11a511394ae1a159c90c6764f1e1146b4914d4dfd9423e8c449f"
+checksum = "1988740f6703c39246dbedff15e17fd99cf0fdcf91250a6850d209b195b3eea6"
 dependencies = [
  "accelerate-src",
  "ash",
  "byteorder",
- "cudarc 0.19.8",
+ "cudarc",
  "float8",
- "gemm 0.19.0",
+ "gemm",
  "half",
  "hanzo-kernels",
  "hanzo-metal-kernels",
  "hanzo-rocm",
  "hanzo-rocm-kernels",
- "hanzo-ug",
  "intel-mkl-src",
  "libc",
  "libm",
@@ -3636,23 +3529,25 @@ dependencies = [
  "num_cpus",
  "objc2-foundation",
  "objc2-metal",
+ "parking_lot",
  "pollster",
  "rand 0.9.5",
  "rand_distr 0.5.1",
  "rayon",
- "safetensors 0.7.0",
+ "safetensors",
  "thiserror 2.0.18",
- "tokenizers 0.22.2",
+ "tokenizers 0.23.2",
  "wgpu",
- "yoke 0.8.3",
+ "yoke",
+ "zerocopy",
  "zip 8.6.0",
 ]
 
 [[package]]
 name = "hanzo-nn"
-version = "0.11.39"
+version = "0.11.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "194a8234aa87a29b85d87e7fdc4f0d02bcd2d53dd0e6e0831c6619b28e8a272e"
+checksum = "ff67158b7ef6e3d22d922d31950f6111ea71fce57ea6a606f33976d26ee0406f"
 dependencies = [
  "accelerate-src",
  "half",
@@ -3663,14 +3558,14 @@ dependencies = [
  "num-traits",
  "objc2-metal",
  "rayon",
- "safetensors 0.7.0",
+ "safetensors",
  "serde",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "hanzo-paged-attn"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "cudaforge",
@@ -3686,7 +3581,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-pyo3"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3712,7 +3607,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-quant"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "byteorder",
  "cuda-async",
@@ -3737,13 +3632,13 @@ dependencies = [
  "paste",
  "rayon",
  "regex",
- "safetensors 0.7.0",
+ "safetensors",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "yoke 0.8.3",
+ "yoke",
 ]
 
 [[package]]
@@ -3759,9 +3654,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-rocm-kernels"
-version = "0.11.36"
+version = "0.11.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d285024e8b46a2dff985a42b5e230308f2e51148b243560a69b966dc15ff8bfe"
+checksum = "93d84b39bb8bba24a36637b1867f970d893c8b5eed4af67da614f5bbcee73f1a"
 dependencies = [
  "dirs 5.0.1",
  "half",
@@ -3797,14 +3692,14 @@ dependencies = [
  "clap",
  "enso",
  "hanzo-router",
- "safetensors 0.7.0",
+ "safetensors",
  "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "hanzo-sandbox"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "itoa",
@@ -3820,7 +3715,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3843,7 +3738,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server-core"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3878,14 +3773,14 @@ dependencies = [
 
 [[package]]
 name = "hanzo-train"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "hanzo-ml",
  "hanzo-nn",
  "hf-hub",
  "rand 0.9.5",
- "safetensors 0.7.0",
+ "safetensors",
  "serde",
  "serde_json",
  "tempfile",
@@ -3897,12 +3792,12 @@ dependencies = [
 
 [[package]]
 name = "hanzo-transformers"
-version = "0.11.9"
+version = "0.11.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b561ebf35167c463b2ce29ce318d44840f00d91a17dd9be021b0b2a1a9cca6a9"
+checksum = "f33c79e0af54abbc2f977a7e4adc8fdef167d6b40507a0b74ecc5024ed372fd0"
 dependencies = [
  "byteorder",
- "fancy-regex 0.18.0",
+ "fancy-regex 0.19.2",
  "hanzo-ml",
  "hanzo-nn",
  "num-traits",
@@ -3915,19 +3810,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "hanzo-ug"
-version = "0.11.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de16cfe5017dbaedf840d5929928a3cb6e85003b7d25a9c5d41d3bceace0939d"
-dependencies = [
- "ug",
- "ug-cuda",
- "ug-metal",
-]
-
-[[package]]
 name = "hanzo-vision"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "hanzo-ml",
  "image",
@@ -3936,7 +3820,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-web-chat"
-version = "1.7.93"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "axum",
@@ -4273,7 +4157,7 @@ dependencies = [
  "displaydoc",
  "potential_utf",
  "utf8_iter",
- "yoke 0.8.3",
+ "yoke",
  "zerofrom",
  "zerovec",
 ]
@@ -4340,7 +4224,7 @@ dependencies = [
  "displaydoc",
  "icu_locale_core",
  "writeable",
- "yoke 0.8.3",
+ "yoke",
  "zerofrom",
  "zerotrie",
  "zerovec",
@@ -5323,20 +5207,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "num"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
-dependencies = [
- "num-bigint",
- "num-complex",
- "num-integer",
- "num-iter",
- "num-rational",
- "num-traits",
-]
-
-[[package]]
 name = "num-bigint"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5379,16 +5249,6 @@ version = "0.1.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7969661fd2958a5cb096e56c8e1ad0444ac2bbcd0061bd28660485a44879858f"
 dependencies = [
- "num-traits",
-]
-
-[[package]]
-name = "num-iter"
-version = "0.1.46"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c92800bd69a1eac91786bcfe9da64a897eb72911b8dc3095decbd07429e8048b"
-dependencies = [
- "num-integer",
  "num-traits",
 ]
 
@@ -5971,20 +5831,6 @@ checksum = "6f42ea446cab60335f76979ec15e12619a2165b5ae2c12166bef27d283a9fadf"
 dependencies = [
  "idna",
  "psl-types",
-]
-
-[[package]]
-name = "pulp"
-version = "0.21.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96b86df24f0a7ddd5e4b95c94fc9ed8a98f1ca94d3b01bdce2824097e7835907"
-dependencies = [
- "bytemuck",
- "cfg-if",
- "libm",
- "num-complex",
- "reborrow",
- "version_check",
 ]
 
 [[package]]
@@ -6973,23 +6819,15 @@ dependencies = [
 
 [[package]]
 name = "safetensors"
-version = "0.4.5"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44560c11236a6130a46ce36c836a62936dc81ebf8c36a37947423571be0e55b6"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "safetensors"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "675656c1eabb620b921efea4f9199f97fc86e36dd6ffd1fbbe48d0f59a4987f5"
+checksum = "79b079b829cb27a1c3c374341345ed2e8b2c0c839034522cee576c140bd7f846"
 dependencies = [
  "hashbrown 0.16.1",
+ "libc",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -8219,22 +8057,22 @@ dependencies = [
 
 [[package]]
 name = "tokenizers"
-version = "0.22.2"
+version = "0.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b238e22d44a15349529690fb07bd645cf58149a1b1e44d6cb5bd1641ff1a6223"
+checksum = "7afbf6e88718afcc138bad01d6ccc3051dbbc3b2ce9793d8b8a3aeb610969cfc"
 dependencies = [
  "ahash",
- "aho-corasick",
  "compact_str",
+ "daachorse",
  "dary_heap",
  "derive_builder",
  "esaxx-rs",
+ "fancy-regex 0.17.0",
  "getrandom 0.3.4",
  "itertools 0.14.0",
  "log",
  "macro_rules_attribute",
  "monostate",
- "onig",
  "paste",
  "rand 0.9.5",
  "rayon",
@@ -8685,54 +8523,6 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
-
-[[package]]
-name = "ug"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76b761acf8af3494640d826a8609e2265e19778fb43306c7f15379c78c9b05b0"
-dependencies = [
- "gemm 0.18.2",
- "half",
- "libloading 0.8.9",
- "memmap2",
- "num",
- "num-traits",
- "num_cpus",
- "rayon",
- "safetensors 0.4.5",
- "serde",
- "thiserror 1.0.69",
- "tracing",
- "yoke 0.7.5",
-]
-
-[[package]]
-name = "ug-cuda"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f0a1fa748f26166778c33b8498255ebb7c6bffb472bcc0a72839e07ebb1d9b5"
-dependencies = [
- "cudarc 0.17.8",
- "half",
- "serde",
- "thiserror 1.0.69",
- "ug",
-]
-
-[[package]]
-name = "ug-metal"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f7adf545a99a086d362efc739e7cf4317c18cbeda22706000fd434d70ea3d95"
-dependencies = [
- "half",
- "metal",
- "objc",
- "serde",
- "thiserror 1.0.69",
- "ug",
-]
 
 [[package]]
 name = "unchecked-index"
@@ -9819,37 +9609,13 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
 name = "yoke"
-version = "0.7.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "120e6aef9aa629e3d4f52dc8cc43a015c7724194c97dfaf45180d2daf2b77f40"
-dependencies = [
- "serde",
- "stable_deref_trait",
- "yoke-derive 0.7.5",
- "zerofrom",
-]
-
-[[package]]
-name = "yoke"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "709fe23a0424b6a435d82152b1bd3fdfb0833487d5fa90d05d42762a9891fef5"
 dependencies = [
  "stable_deref_trait",
- "yoke-derive 0.8.2",
+ "yoke-derive",
  "zerofrom",
-]
-
-[[package]]
-name = "yoke-derive"
-version = "0.7.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2380878cad4ac9aac1e2435f3eb4020e8374b5f13c296cb75b4620ff8e229154"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
- "synstructure",
 ]
 
 [[package]]
@@ -9918,7 +9684,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0f9152d31db0792fa83f70fb2f83148effb5c1f5b8c7686c3459e361d9bc20bf"
 dependencies = [
  "displaydoc",
- "yoke 0.8.3",
+ "yoke",
  "zerofrom",
 ]
 
@@ -9928,7 +9694,7 @@ version = "0.11.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90f911cbc359ab6af17377d242225f4d75119aec87ea711a880987b18cd7b239"
 dependencies = [
- "yoke 0.8.3",
+ "yoke",
  "zerofrom",
  "zerovec-derive",
 ]

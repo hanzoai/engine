@@ -53,6 +53,8 @@ Response shape:
   "stop_sequence": null,
   "usage": {
     "input_tokens": 18,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
     "output_tokens": 31
   }
 }
@@ -89,7 +91,9 @@ reasoning content. Tool-call argument deltas use
 ## Count tokens
 
 Use `POST /v1/messages/count_tokens` with the same request shape to count the
-input tokens after chat-template formatting:
+input tokens after chat-template formatting. The request is translated and rendered
+by the same code path `/v1/messages` uses, so the count is the number a generation
+would report, and `max_tokens` is not required:
 
 ```bash
 curl http://localhost:1234/v1/messages/count_tokens \
@@ -115,14 +119,15 @@ Request fields:
 | Anthropic field | Support |
 |---|---|
 | `model` | Supported. Use `default` or a loaded model id. |
-| `messages` | Supports `user` and `assistant` messages with string content or content blocks. |
+| `messages` | Supports `user`, `assistant` and `system` messages with string content or content blocks. |
 | `system` | Supported as a top-level string or text-block array. |
 | `max_tokens` | Supported. |
 | `temperature`, `top_p`, `top_k`, `min_p` | Supported. |
 | `stop_sequences` | Supported. |
 | `stream` | Supported. |
-| `tools` | Client tools are converted to OpenAI-compatible function tools. Anthropic server tools for `web_search_*` and `code_execution_*` map to Hanzo Engine agentic features. |
-| `tool_choice` | `auto`, `none`, and specific client `tool` choices are supported. `any` is accepted as `auto`. Anthropic server-tool choices are accepted as `auto`. |
+| `tools` | Client tools are converted to OpenAI-compatible function tools. `web_search_*` and `code_execution_*` map to Hanzo Engine agentic features. `bash_*`, `text_editor_*` and `computer_*` ship without a schema, so Hanzo Engine supplies the published one and the model can call them like any other function. |
+| `tool_choice` | `auto`, `none`, and specific client `tool` choices are supported. `any` requires a tool call without naming one. A choice naming a server-side tool is accepted as `auto`. |
+| `output_config` | `effort` folds into `reasoning_effort`, and a `json_schema` `format` into `response_format`. |
 | `thinking` | `{"type":"enabled"}` maps to Hanzo Engine thinking mode when the loaded chat template supports it. |
 | `enable_thinking`, `reasoning_effort` | Supported as Hanzo Engine extensions. |
 | `logit_bias`, `logprobs`, `top_logprobs` | Supported as Hanzo Engine extensions. |
@@ -138,8 +143,14 @@ Content blocks:
 | `text` | Supported. |
 | `image` | Supports base64 and URL sources. Requires a multimodal model. |
 | `tool_use` | Supported on assistant messages. |
-| `tool_result` | Supported on user messages. Text results are forwarded as tool messages. |
-| `thinking`, `redacted_thinking` | Accepted in request history. Returned when the model exposes separate reasoning content. |
+| `tool_result` | Supported on user messages. Its blocks are flattened to text and forwarded as a tool message. |
+| `thinking`, `redacted_thinking` | Accepted in request history, and `thinking` is carried back to the chat template as `reasoning_content`. Returned when the model exposes separate reasoning content. |
+| `document` | A text or block source is inlined. A PDF or other binary source is named rather than pasted into the prompt as base64. |
+| `tool_reference` | Carried as the name of the tool it refers to. Expanding one into a full definition is a first-party API feature. |
+
+An unrecognized block type is not an error. It contributes whatever text it carries and is
+logged once per type, so a client that ships a new block costs one degraded turn instead of
+failing every request in the conversation.
 
 Hanzo Engine agentic extensions accepted on this endpoint: `session_id`,
 `web_search_options`, `enable_code_execution`, `agent_permission`,

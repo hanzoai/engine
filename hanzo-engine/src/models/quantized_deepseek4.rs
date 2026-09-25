@@ -244,7 +244,7 @@ impl V4Moe {
             (Some(tid2eid), _) => {
                 // Hash routing: each token id maps to a fixed set of `used` experts.
                 // GGUF stores the table file-shape [used=6, vocab]; the reader reverses
-                // dims, so in candle it's [vocab, used]. Select the token's row (dim 0)
+                // dims, so in hanzo-ml it's [vocab, used]. Select the token's row (dim 0)
                 // -> [t, used] directly (no transpose).
                 let ids = tid2eid
                     .index_select(&input_ids.to_dtype(DType::U32)?, 0)? // [t, used]

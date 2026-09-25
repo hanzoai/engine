@@ -40,6 +40,7 @@ mod mxfp4;
 pub mod nvfp4;
 mod pending_layer;
 mod pertensor_fp8;
+pub mod quantize;
 pub mod rotary;
 pub mod safetensors;
 mod scalar_fp8;
@@ -61,7 +62,7 @@ pub use afq::ops::{
 pub use afq::{AfqBits, AfqGroupSize, AfqInner, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParams, BnbQuantType};
 pub use blockwise_fp8::{
-    blockwise_fp8_moe, fp8_blockwise_dequantize, fp8_blockwise_quantize, BlockwiseFP8Linear,
+    blockwise_fp8_act, blockwise_fp8_moe, fp8_blockwise_dequantize, fp8_blockwise_quantize, BlockwiseFP8Linear,
 };
 pub use distributed::{
     layers::{
@@ -316,12 +317,86 @@ pub enum QuantizedConfig {
     Afq {
         bits: usize,
         group_size: usize,
+        /// MLX's per-module entries, by module path: its own bits and group size, or left
+        /// unquantized.
+        #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+        modules: std::collections::HashMap<String, AfqModule>,
     },
     MXFP4 {},
     ModelOpt {
         quant_algo: Option<String>,
         quantized_layers: std::collections::HashMap<String, ModelOptLayerConfig>,
     },
+}
+
+/// One module's entry in an MLX `quantization` block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AfqModule {
+    /// `false`: the module stays unquantized. (`true` means the block's defaults.)
+    Quantized(bool),
+    /// The module's own affine recipe.
+    Recipe { bits: usize, group_size: usize },
+}
+
+/// The entry for the module at `prefix` in a per-module recipe keyed by module path: the exact
+/// path, or one path ending the other at a `.` boundary (checkpoints nest the same modules under
+/// different roots).
+pub(crate) fn recipe_entry<'a, V>(
+    recipe: &'a std::collections::HashMap<String, V>,
+    prefix: &str,
+) -> Option<&'a V> {
+    recipe.get(prefix).or_else(|| {
+        recipe.iter().find_map(|(k, v)| {
+            (k.ends_with(&format!(".{prefix}")) || prefix.ends_with(&format!(".{k}"))).then_some(v)
+        })
+    })
+}
+
+impl QuantizedConfig {
+    /// The AFQ (bits, group size) for the module at `prefix`: its own entry, else the block's
+    /// defaults; `None` when the recipe leaves it unquantized or the config is not AFQ.
+    pub fn afq_at(&self, prefix: &str) -> Option<(usize, usize)> {
+        let QuantizedConfig::Afq {
+            bits,
+            group_size,
+            modules,
+        } = self
+        else {
+            return None;
+        };
+        match recipe_entry(modules, prefix) {
+            Some(AfqModule::Quantized(false)) => None,
+            Some(AfqModule::Recipe { bits, group_size }) => Some((*bits, *group_size)),
+            Some(AfqModule::Quantized(true)) | None => Some((*bits, *group_size)),
+        }
+    }
+}
+
+/// MLX's per-module entries among a quantization block's keys: booleans and objects carrying
+/// `bits`. Only the affine mode exists in AFQ.
+fn afq_modules<E: serde::de::Error>(
+    rest: std::collections::HashMap<String, serde_json::Value>,
+) -> std::result::Result<std::collections::HashMap<String, AfqModule>, E> {
+    let mut modules = std::collections::HashMap::new();
+    for (key, value) in rest {
+        let mode = match &value {
+            serde_json::Value::Bool(_) => None,
+            serde_json::Value::Object(o) if o.contains_key("bits") => o.get("mode"),
+            serde_json::Value::String(_) if key == "mode" => Some(&value),
+            _ => continue,
+        };
+        if let Some(mode) = mode.and_then(|m| m.as_str()).filter(|m| *m != "affine") {
+            return Err(E::custom(format!(
+                "AFQ supports the affine mode only; {key} asks for {mode}"
+            )));
+        }
+        if key != "mode" {
+            let module = serde_json::from_value(value).map_err(E::custom)?;
+            modules.insert(key, module);
+        }
+    }
+    Ok(modules)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -343,6 +418,8 @@ struct RawConfig {
     checkpoint_format: Option<String>,
     weight_block_size: Option<Vec<usize>>,
     bnb_4bit_quant_type: Option<String>,
+    #[serde(flatten)]
+    rest: std::collections::HashMap<String, serde_json::Value>,
 }
 
 // Custom deserializer implementation
@@ -384,7 +461,11 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                 let group_size = raw
                     .group_size
                     .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
-                Ok(QuantizedConfig::Afq { bits, group_size })
+                Ok(QuantizedConfig::Afq {
+                    bits,
+                    group_size,
+                    modules: afq_modules(raw.rest)?,
+                })
             }
             Some(m) if m == "mxfp4" => {
                 Ok(QuantizedConfig::MXFP4 {  })
@@ -402,7 +483,11 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                 let group_size = raw
                     .group_size
                     .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
-                Ok(QuantizedConfig::Afq { bits, group_size })
+                Ok(QuantizedConfig::Afq {
+                    bits,
+                    group_size,
+                    modules: afq_modules(raw.rest)?,
+                })
             }
             Some(unknown_method) => {
                 Err(serde::de::Error::custom(format!(
@@ -437,7 +522,9 @@ impl QuantizedConfig {
             } => "8 bits".to_string(),
             Self::Afq { bits, .. } => format!("{bits} bits"),
             Self::MXFP4 {} => format!("{} bits", mxfp4::N_BITS),
-            Self::ModelOpt { quantized_layers, .. } => {
+            Self::ModelOpt {
+                quantized_layers, ..
+            } => {
                 let prefix = vb.prefix();
                 if let Some(cfg) = quantized_layers.iter().find_map(|(k, v)| {
                     if k == &prefix || k.ends_with(&format!(".{prefix}")) || prefix.ends_with(k) {
@@ -532,8 +619,10 @@ pub enum QuantMethodConfig {
     },
     PerTensorFP8 {
         weight: Tensor,
-        weight_scale_inv: Tensor,
-        activation_scale: Option<Tensor>,
+        weight_scale: Tensor,
+        /// The checkpoint's calibrated activation scale, present only when it quantized
+        /// activations too.
+        input_scale: Option<Tensor>,
         bias: Option<Tensor>,
         dequant_dtype: DType,
     },
@@ -552,6 +641,9 @@ pub enum QuantMethodConfig {
         weight: Tensor,
         weight_scale: Tensor,
         weight_scale_2: Option<Tensor>,
+        /// The checkpoint's calibrated activation scale, present only when it was
+        /// quantized for FP4 activations.
+        input_scale: Option<Tensor>,
         bias: Option<Tensor>,
         dequant_dtype: DType,
     },
@@ -911,7 +1003,9 @@ impl TryFrom<GgmlDType> for IsqType {
             | GgmlDType::BF16
             | GgmlDType::F32
             | GgmlDType::F16
-            // IQ / ternary / 1-bit / NVFP4 codec types are decode-only, not ISQ targets.
+            // IQ / ternary / 1-bit / FP4 codec types are decode-only, not ISQ targets.
+            | GgmlDType::ROCMFP4
+            | GgmlDType::ROCMFP4_FAST
             | GgmlDType::IQ2_XXS
             | GgmlDType::IQ2_XS
             | GgmlDType::IQ3_XXS
@@ -1656,9 +1750,16 @@ pub fn linear_no_bias(
             QuantizedConfig::MXFP4 {} => {
                 MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, false, vb)?
             }
-            QuantizedConfig::ModelOpt { quantized_layers, .. } => {
-                distributed::layers::load_modelopt_linear(in_dim, out_dim, false, quant_conf, quantized_layers, &vb)?
-            }
+            QuantizedConfig::ModelOpt {
+                quantized_layers, ..
+            } => distributed::layers::load_modelopt_linear(
+                in_dim,
+                out_dim,
+                false,
+                quant_conf,
+                quantized_layers,
+                &vb,
+            )?,
         }
     } else {
         if !vb.contains_tensor("weight") {
@@ -1722,9 +1823,16 @@ pub fn linear(
             QuantizedConfig::MXFP4 {} => {
                 MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, true, vb)?
             }
-            QuantizedConfig::ModelOpt { quantized_layers, .. } => {
-                distributed::layers::load_modelopt_linear(in_dim, out_dim, true, quant_conf, quantized_layers, &vb)?
-            }
+            QuantizedConfig::ModelOpt {
+                quantized_layers, ..
+            } => distributed::layers::load_modelopt_linear(
+                in_dim,
+                out_dim,
+                true,
+                quant_conf,
+                quantized_layers,
+                &vb,
+            )?,
         }
     } else {
         if has_missing_required_tensors(&vb, &["weight", "bias"]) {
@@ -1815,5 +1923,55 @@ mod tests {
         assert!(msg.contains("temporary UQFF placeholders"));
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod afq_recipe_tests {
+    use super::*;
+
+    // Entries copied from the MTPLX pack of Qwen3.8-Flash-Next (config.json `quantization`):
+    // 4-bit g64 by default, routers and the indexer at 8 bits, hyper-connections unquantized.
+    const RECIPE: &str = r#"{
+        "bits": 4, "group_size": 64, "mode": "affine",
+        "language_model.lm_head": {"bits": 4, "group_size": 64, "mode": "affine"},
+        "language_model.model.layers.0.mlp.gate": {"bits": 8, "group_size": 64, "mode": "affine"},
+        "language_model.model.layers.11.self_attn.indexer.index_qk_proj": {"bits": 8, "group_size": 64, "mode": "affine"},
+        "language_model.model.layers.0.attn_hyper_connection.input_mix_weight_down": false
+    }"#;
+
+    #[test]
+    fn mlx_recipe_resolves_per_module() {
+        let config: QuantizedConfig = serde_json::from_str(RECIPE).unwrap();
+        let at = |prefix: &str| config.afq_at(prefix);
+        assert_eq!(at("language_model.lm_head"), Some((4, 64)));
+        assert_eq!(at("language_model.model.layers.0.mlp.gate"), Some((8, 64)));
+        assert_eq!(
+            at("language_model.model.layers.11.self_attn.indexer.index_qk_proj"),
+            Some((8, 64))
+        );
+        assert_eq!(
+            at("language_model.model.layers.0.attn_hyper_connection.input_mix_weight_down"),
+            None
+        );
+        // A module the recipe does not list takes the defaults.
+        assert_eq!(
+            at("language_model.model.layers.3.mlp.switch_mlp.gate_proj"),
+            Some((4, 64))
+        );
+        // The same path nested under another root matches on a `.` boundary; a bare suffix does not.
+        assert_eq!(
+            at("model.language_model.model.layers.0.mlp.gate"),
+            Some((8, 64))
+        );
+        assert_eq!(at("layers.10.mlp.gate"), Some((4, 64)));
+    }
+
+    #[test]
+    fn mlx_recipe_refuses_other_modes() {
+        let recipe = r#"{"bits": 4, "group_size": 32, "a.b": {"bits": 4, "group_size": 32, "mode": "mxfp4"}}"#;
+        assert!(serde_json::from_str::<QuantizedConfig>(recipe).is_err());
+        let recipe = r#"{"bits": 4, "group_size": 32, "mode": "nvfp4"}"#;
+        assert!(serde_json::from_str::<QuantizedConfig>(recipe).is_err());
     }
 }

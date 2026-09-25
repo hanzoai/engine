@@ -1,0 +1,33 @@
+---
+title: Quality at temperature zero
+description: The four checks every configuration passes before any of its throughput numbers may be published.
+---
+
+import Throughput from '../../../components/Throughput.astro';
+
+Before a configuration's throughput is published, it answers four prompts at
+temperature zero: three questions with one correct answer each, and one in-context
+recall probe that plants a short code inside roughly 1.3K tokens of unrelated text
+and asks for it back. The verdict below is the gate. A configuration that fails it
+renders no throughput number anywhere in these pages, however fast it was.
+
+<Throughput query={{ model: 'zen5.8', limit: 100 }} metrics={['decode']} />
+
+## What was measured
+
+The checks run in the same window, against the same loaded model, as the throughput
+points beside them, not from a separate session that might have had a different
+build or different flags. Answers are matched against an expected pattern after any
+reasoning block is stripped, so a correct answer wrapped in thinking still passes.
+
+## What this does not say
+
+- Four prompts are not an evaluation suite. Passing means the configuration was
+  serving coherently at the moment it was measured; it is a floor under the
+  throughput numbers, not a quality score.
+- No coding, reasoning, multilingual or long-context recall coverage. The recall
+  probe sits at roughly 1.3K tokens and says nothing about
+  [deep prompts](/hanzo/benchmarks/long-context-124k/).
+- It does not rank models or quantization formats against each other. Two
+  configurations that both pass are not thereby equal.
+- Temperature zero only. It says nothing about behaviour under sampling.
