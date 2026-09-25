@@ -1242,6 +1242,34 @@ FP8 layers set decode: 26.65 GB read per token against SGLang's 19.44, at 187 vs
 linear is the next lever for both. llama.cpp decodes fastest only because Q4_K_M reads 15.74 GB per
 token; no NVFP4 GGUF of this model exists.
 
+**The harness is checked in** (`scripts/bench_http.py`, tests in `scripts/bench_http_test.py`). Prompt
+= uuid nonce + WORDS x size + "Summarize in one sentence."; sizes 4/40/400/4000 are ~220 / 1,335 /
+12,497 / 124,094 Qwen3.8 tokens, and the prompt length reported is the server's `usage.prompt_tokens`.
+A token chunk is one whose delta carries `content`, `reasoning` (vLLM v0.29), `reasoning_content`
+(hanzo) or `tool_calls`. TTFT and the decode window use token chunks only; decode =
+(`usage.completion_tokens` - 1) / (last token chunk - first token chunk), so MTP/DFlash steps that
+carry several tokens per chunk are counted as tokens, and a stream without usage fails (vLLM sends
+usage in a later empty-choices chunk, hanzo on its finish chunk). `--concurrency N` reports each
+stream plus the aggregate; `--json FILE` appends JSON lines.
+
+```
+python3 scripts/bench_http.py http://127.0.0.1:30000/v1/chat/completions --sizes 4,40,400,4000 --gen 128
+python3 scripts/bench_http.py http://127.0.0.1:30000/v1/chat/completions --sizes 40 --concurrency 8
+```
+
+**GB/token is two labeled numbers** (`scripts/bytes_per_token.py`):
+- *computed* weight+KV+state bytes per token from the safetensors headers and config.json, skipping
+  `visual.*` and `mtp.*` and counting one `embed_tokens` row; `--resident REGEX=DTYPE` names modules an
+  engine holds at another dtype. `weights --checkpoint <27B snapshot> --context 1400 --kv-dtype bf16`
+  prints 19.44 GB of weights (19,435,407,488 B, SGLang's 19.44), 0.09 GB of bf16 KV (64 KiB/token over
+  16 full-attention layers) and 0.31 GB of GDN state: 19.84 GB per token.
+- *measured* SM-to-L2 bytes per token: `sudo nsys profile --gpu-metrics-devices=0
+  --gpu-metrics-set=gb20y-top`, then `nsys export --type sqlite` and `bytes_per_token.py nsys
+  --sqlite F --tokens N` (sums 'VidL2 Total from L1TEX [Bytes]'). GB10's metric sets (gb20y,
+  gb20y-top) have no DRAM counter (`RmProfilingAdminOnly=1`, so metrics need root), so this is L2
+  traffic including hits: a cross-check that exposes redundant reads, never a substitute for the
+  computed figure.
+
 **evo (Strix Halo gfx1151, Qwen3.8-27B Q6_K), llama.cpp Vulkan baseline vs hanzo-engine ROCm:**
 
 | | llama.cpp | hanzo-engine |
