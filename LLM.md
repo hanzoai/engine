@@ -438,6 +438,14 @@ Avoid returning TODOs.
   script refuses to run when one differs. `scripts/qwen4exp_vectors.py` then runs the SERVED kernels
   on the same inputs — one layer at a time, at most 1.2 GiB of device memory, FlashInfer JIT refused
   — so it measures the golden's gap without disturbing a running server.
+- **Two facts about the checkpoint and the recorder.** Layer 1's n-gram table is 128 shards in one
+  contiguous run, but the writer put 126 of them in numeric order and transposed one pair, so shard
+  100 and 101 sit between 97 and 98 — read each shard from its own header range, never from a stride.
+  And six served prefill vectors (`gdn.prefill.{conv,q,k,v,core,normed}`) are every zero: the
+  recorder's `causal_conv1d_fn` call returned its `empty_like` buffer unwritten, so those stages have
+  no served reference at all and their `*.golden` gaps in the vectors metadata are fiction. `g` and
+  `beta` are right, because they come from `a` and `b`, not from `conv`. `vectors()` refuses an
+  all-zero stage by name. Re-record with `scripts/qwen4exp_vectors.py` to settle the call form.
 - **Deferred, and it shows.** `self_attn.indexer.` (M2: QSA sparse attention) and `mtp.` (M3:
   multi-token prediction) are not read, so a native load attends densely through every key: the
   logits match, the tokens/sec do not yet. The `qsa.rs` and `hyper.rs` machinery is already there for
