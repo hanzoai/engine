@@ -25,6 +25,8 @@ pub mod cublaslt;
 pub mod cutile;
 pub mod distributed;
 mod dummy;
+#[cfg(all(feature = "cuda", has_nvfp4_cutlass_kernels))]
+pub mod experts;
 pub mod f8q8;
 mod fp8;
 pub mod gemv;

@@ -120,6 +120,8 @@ fn main() -> Result<(), String> {
         // The activation quantizers must not take --use_fast_math: they have their own builder.
         excluded_files.push("quantize/*");
         excluded_files.push("blockwise_fp8_cutlass/*");
+        // Routed experts build with CUTLASS for sm_121a, without fast math: their own builder.
+        excluded_files.push("moe/*");
         builder = builder.exclude(&excluded_files);
 
         // https://github.com/hanzoai/engine/issues/286
@@ -200,7 +202,9 @@ fn main() -> Result<(), String> {
                     "kernels/nvfp4_cutlass/nvfp4_cutlass.cu",
                     "kernels/nvfp4_cutlass/nvfp4_quantize.cu",
                 ])
+                .source_glob("kernels/moe/*.cu")
                 .watch(["kernels/nvfp4_cutlass", "kernels/quantize"])
+                .watch(["kernels/moe"])
                 .out_dir(build_dir.clone())
                 // Block-scaled MMA is a family-specific feature: plain sm_121 will not do.
                 .compute_cap_arch("121a")
