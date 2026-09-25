@@ -12,6 +12,11 @@ pub(crate) use ops::{fp8_blockwise_matmul, fp8_indexed_moe_gemm};
 #[cfg(feature = "cuda")]
 mod ffi;
 
+#[cfg(has_blockwise_fp8_cutlass_kernels)]
+pub mod cutlass;
+#[cfg(test)]
+mod fixture;
+
 use crate::{
     generate_isq, generate_isq_imatrix, has_missing_required_tensors,
     hqq::{ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},

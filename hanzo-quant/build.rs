@@ -41,14 +41,15 @@ fn cuda_version_from_build_system() -> (usize, usize) {
     }
 }
 
-/// CUTLASS commit carrying the sm_120 block-scaled collective this kernel builds on.
+/// CUTLASS commit carrying the sm_120 block-scaled and blockwise collectives
+/// the NVFP4 and block-FP8 libs build on.
 #[cfg(feature = "cuda")]
-const NVFP4_CUTLASS_COMMIT: &str = "b46b16d003484063bca4ed365e44095c4c6ed633";
+const CUTLASS_COMMIT: &str = "b46b16d003484063bca4ed365e44095c4c6ed633";
 
-/// Block-scaled NVFP4 needs Blackwell tensor cores and the CUDA 13 toolkit that
-/// can target them. Measured on a GB10 with CUDA 13.0.
+/// The CUTLASS sm_121a libs need Blackwell tensor cores and the CUDA 13 toolkit
+/// that can target them. Measured on a GB10 with CUDA 13.0.
 #[cfg(feature = "cuda")]
-fn nvfp4_cutlass_supported(cuda_major: usize, compute_cap: usize, target: &str) -> bool {
+fn cutlass_sm121_supported(cuda_major: usize, compute_cap: usize, target: &str) -> bool {
     cuda_major >= 13 && compute_cap == 121 && target.contains("linux")
 }
 
@@ -63,6 +64,7 @@ fn main() -> Result<(), String> {
     println!("cargo::rustc-check-cfg=cfg(has_nvfp4_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_nvfp4_wmma_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_nvfp4_cutlass_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_blockwise_fp8_cutlass_kernels)");
 
     #[cfg(feature = "cuda")]
     {
@@ -115,6 +117,7 @@ fn main() -> Result<(), String> {
         // The block-scaled path needs CUTLASS headers and sm_121a, so it has its own builder.
         excluded_files.push("nvfp4_cutlass.cu");
         excluded_files.push("nvfp4_quantize.cu");
+        excluded_files.push("blockwise_fp8_cutlass/*");
         builder = builder.exclude(&excluded_files);
 
         // https://github.com/hanzoai/engine/issues/286
@@ -155,7 +158,8 @@ fn main() -> Result<(), String> {
 
         println!("cargo:rustc-cfg=feature=\"cuda-{cuda_major}0{cuda_minor}0\"");
 
-        if nvfp4_cutlass_supported(cuda_major, compute_cap, &target) {
+        let cutlass_sm121 = cutlass_sm121_supported(cuda_major, compute_cap, &target);
+        if cutlass_sm121 {
             let mut nvfp4_builder = cudaforge::KernelBuilder::new()
                 .source_files([
                     "kernels/nvfp4_cutlass/nvfp4_cutlass.cu",
@@ -175,7 +179,7 @@ fn main() -> Result<(), String> {
                 .arg("--fmad=false")
                 .arg("--compiler-options")
                 .arg("-fPIC")
-                .with_cutlass(Some(NVFP4_CUTLASS_COMMIT));
+                .with_cutlass(Some(CUTLASS_COMMIT));
             if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
                 nvfp4_builder = nvfp4_builder
                     .arg("--compiler-options")
@@ -186,6 +190,45 @@ fn main() -> Result<(), String> {
                 .expect("Build hanzo NVFP4 block-scaled lib failed!");
             println!("cargo:rustc-link-lib=hanzonvfp4");
             println!("cargo:rustc-cfg=has_nvfp4_cutlass_kernels");
+        }
+
+        if cutlass_sm121 {
+            // vLLM v0.29.0's three sm_12x blockwise FP8 tiles, one per translation unit.
+            // Default contraction (--fmad=true, no fast-math) as vLLM compiles them: the
+            // mainloop's per-128-K promotion is a single FFMA, and splitting it rounds twice.
+            let mut blockwise_builder = cudaforge::KernelBuilder::new()
+                .source_files([
+                    "kernels/blockwise_fp8_cutlass/blockwise_fp8_cutlass.cu",
+                    "kernels/blockwise_fp8_cutlass/swap.cu",
+                    "kernels/blockwise_fp8_cutlass/pingpong.cu",
+                    "kernels/blockwise_fp8_cutlass/cooperative.cu",
+                ])
+                .watch(["kernels/blockwise_fp8_cutlass"])
+                .out_dir(build_dir.clone())
+                .compute_cap_arch("121a")
+                .arg("-std=c++17")
+                .arg("-O3")
+                .arg("-U__CUDA_NO_BFLOAT16_CONVERSIONS__")
+                .arg("--expt-relaxed-constexpr")
+                .arg("--expt-extended-lambda")
+                .arg("--compiler-options")
+                .arg("-fPIC")
+                .with_cutlass(Some(CUTLASS_COMMIT));
+            if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
+                blockwise_builder = blockwise_builder
+                    .arg("--compiler-options")
+                    .arg(cuda_nvcc_flags_env);
+            }
+            // cudaforge compiles on rayon's global pool, which the main builder already
+            // sized; a local one-thread pool keeps these multi-GB CUTLASS units serial.
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .map_err(|e| e.to_string())?
+                .install(|| blockwise_builder.build_lib(build_dir.join("libhanzoblockwisefp8.a")))
+                .expect("Build hanzo block-FP8 CUTLASS lib failed!");
+            println!("cargo:rustc-link-lib=hanzoblockwisefp8");
+            println!("cargo:rustc-cfg=has_blockwise_fp8_cutlass_kernels");
         }
 
         // cuTile needs CUDA >= 13.1: its JIT toolchain (`tileiras`) ships with 13.1+, not 13.0, so a
