@@ -556,18 +556,26 @@ pub(crate) mod tests {
         assert_eq!(host_bytes, 51_200_246_042);
         assert_eq!(table, 51_200_245_760);
 
-        // The shards sit end to end in numeric order, in one file.
+        // The shards are one file's contiguous run. The writer laid most of them out in numeric
+        // order and a few pairs transposed, so the file order is not the shard order.
         let shard = |s: usize| {
             &heads[&format!(
                 "{PREFIX}layers.{}.ple.ple_embedding.ngram_embedding.shard_{s}.weight",
                 text.ple_layer().unwrap()
             )]
         };
-        for s in 1..text.split_ngram_parts {
-            let (a, b) = (shard(s - 1), shard(s));
-            assert_eq!(a.file, b.file);
-            assert_eq!(a.end, b.start, "shard {s} does not follow shard {}", s - 1);
+        let mut spans: Vec<&Header> = (0..text.split_ngram_parts).map(shard).collect();
+        let file = spans[0].file.clone();
+        assert!(spans.iter().all(|h| h.file == file), "the table spans files");
+        spans.sort_by_key(|h| h.start);
+        for (a, b) in spans.iter().zip(&spans[1..]) {
+            assert_eq!(a.end, b.start, "a hole sits between two shards");
         }
+        assert_eq!(
+            spans.last().unwrap().end - spans[0].start,
+            table as u64,
+            "the shards are not the whole run"
+        );
 
         // Scale invariants over all 48 x 512 experts: gate and up share weight_scale_2, and each
         // (layer, projection) has one input_scale.
@@ -852,7 +860,7 @@ pub(crate) mod tests {
             dev: &hanzo_ml::Device,
         ) -> Result<hanzo_ml::Tensor> {
             self.names.lock().unwrap().insert(name.to_string());
-            self.inner.get(s, name, h, dtype, dev)
+            hanzo_nn::var_builder::SimpleBackend::get(&self.inner, s, name, h, dtype, dev)
         }
         fn get_unchecked(
             &self,
@@ -993,6 +1001,7 @@ pub(crate) mod tests {
             let hanzo_ml::Device::Cuda(cu) = &dev else { unreachable!() };
             let (free, _) = result::mem_get_info().expect("cuMemGetInfo");
             assert!(free as f64 >= 3.0 * GIB, "only {:.1} GiB free on the device", free as f64 / GIB);
+            use hanzo_ml::backend::BackendDevice;
             let mut pool: sys::CUmemoryPool = std::ptr::null_mut();
             let mut zero = 0u64;
             unsafe {
@@ -1009,7 +1018,13 @@ pub(crate) mod tests {
             return Guard { _lock: lock, bound: (bound_gib * GIB) as u64, pool, dev };
         }
         #[allow(unreachable_code)]
-        Guard { _lock: lock, bound: (bound_gib * GIB) as u64, dev }
+        Guard {
+            _lock: lock,
+            bound: (bound_gib * GIB) as u64,
+            #[cfg(feature = "cuda")]
+            pool: std::ptr::null_mut(),
+            dev,
+        }
     }
 
     impl Guard {
@@ -1017,6 +1032,7 @@ pub(crate) mod tests {
         pub(crate) fn high_water(&self) -> u64 {
             #[cfg(feature = "cuda")]
             {
+                use hanzo_ml::backend::BackendDevice;
                 use hanzo_ml::cuda_backend::cudarc::driver::sys;
                 if let hanzo_ml::Device::Cuda(cu) = &self.dev {
                     let _ = cu.synchronize();
@@ -1294,6 +1310,7 @@ pub(crate) mod tests {
         use crate::models::gdn::{GatedDeltaNet, GdnInProj, GdnLayerCache, RmsNormGated};
         use crate::models::quantized_qwen3_5_moe::{PropsGGUF, QGatedDeltaNet};
         use hanzo_ml::{Device, Tensor};
+        use hanzo_quant::QuantMethod;
         let dev = Device::Cpu;
         let (kh, vh, d, h, conv) = (2usize, 6usize, 128usize, 256usize, 4usize);
         let (key_dim, value_dim) = (kh * d, vh * d);
@@ -1603,7 +1620,7 @@ pub(crate) mod tests {
         let toks = tokens();
         let x = fixture("l1.x");
         let (mut ids, mut bytes, mut es, mut stages, mut xps) = (vec![], vec![], vec![], HashMap::<&str, Vec<Tensor>>::new(), vec![]);
-        let mut at = 0;
+        let mut at: usize = 0;
         for len in CHUNKS {
             let prior = toks[at.saturating_sub(2)..at].to_vec();
             let chunk_ids = toks[at..at + len].to_vec();

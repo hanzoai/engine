@@ -204,18 +204,15 @@ impl Fp8Table {
             }
             let (rows_per_shard, width) = (shape[0], shape[1]);
             let mut shards = Vec::new();
-            let mut end = None;
+            let mut end = 0usize;
             while let Some((dtype, shape, start, stop)) =
                 entry(&format!("{prefix}.shard_{}.weight", shards.len()))
             {
                 if dtype != "F8_E4M3" || shape != [rows_per_shard, width] {
                     bail!("{prefix}.shard_{} is {dtype} {shape:?}", shards.len());
                 }
-                if end.is_some_and(|e| e != start) {
-                    bail!("{prefix}.shard_{} does not follow its predecessor", shards.len());
-                }
                 shards.push(start);
-                end = Some(stop);
+                end = end.max(stop);
             }
             let Some((sdtype, _, sstart, _)) = entry(&format!("{prefix}.weight_scale")) else {
                 bail!("{prefix}.weight_scale is missing beside the table");
@@ -232,7 +229,7 @@ impl Fp8Table {
                 let first = shards[0];
                 let page = 4096;
                 let lo = first / page * page;
-                let hi = end.unwrap_or(first);
+                let hi = end;
                 unsafe {
                     libc::madvise(
                         map.as_ptr().add(lo) as *mut libc::c_void,
