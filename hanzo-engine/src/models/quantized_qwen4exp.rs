@@ -1050,7 +1050,7 @@ mod tests {
     /// `NormalModel::forward` to the same logits as the model built directly.
     #[test]
     fn normal_loader_runs_tiny_checkpoint() -> Result<()> {
-        use crate::pipeline::loaders::{NormalLoadingMetadata, NormalModelLoader};
+        use crate::pipeline::{NormalLoadingMetadata, NormalModelLoader};
         use crate::pipeline::text_models_inputs_processor::FlashParams;
         use crate::pipeline::{ModelForwardContext, NormalModel};
         let dev = Device::Cpu;
@@ -1094,7 +1094,7 @@ mod tests {
     /// entries: the n-gram table and hash are host-side and never charged.
     #[test]
     fn hybrid_kv_charges_attention_layers_only() -> Result<()> {
-        use crate::pipeline::loaders::DeviceMappedModelLoader;
+        use crate::pipeline::DeviceMappedModelLoader;
         let json = tiny_json();
         let loader = crate::pipeline::Qwen4ExpLoader;
         let kv = loader.model_config(&json).map_err(hanzo_ml::Error::msg)?.kv_layers();
@@ -1110,7 +1110,7 @@ mod tests {
     #[test]
     #[ignore = "reads the Qwen3.8-Flash-Next snapshot's config"]
     fn qwen4exp_accounting_matches_checkpoint() -> Result<()> {
-        use crate::pipeline::loaders::DeviceMappedModelLoader;
+        use crate::pipeline::DeviceMappedModelLoader;
         let json = std::fs::read_to_string(snapshot().join("config.json")).map_err(hanzo_ml::Error::wrap)?;
         let (layers, rest) = crate::pipeline::Qwen4ExpLoader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
         let estimate = layers.iter().sum::<usize>() + rest;
@@ -1154,6 +1154,7 @@ mod tests {
     #[test]
     #[cfg(feature = "cuda")]
     fn loader_estimate_equals_allocation() -> Result<()> {
+        use hanzo_ml::backend::BackendDevice;
         use hanzo_ml::cuda_backend::cudarc::driver::sys;
         let Ok(dev) = Device::new_cuda(0) else { return Ok(()) };
         let Device::Cuda(cu) = &dev else { unreachable!() };
@@ -1248,7 +1249,7 @@ mod tests {
                 let xi = x.narrow(1, at, len)?;
                 let ids = Tensor::new(&toks[at..at + len], &dev)?.unsqueeze(0)?;
                 let offsets = [at];
-                let mask = CausalMasker.make_causal_mask(&ids, &offsets as &dyn PastKvLenCache, DType::BF16, &CausalMaskConfig::gguf())?;
+                let mask = CausalMasker.make_causal_mask(&ids, &&offsets[..] as &dyn PastKvLenCache, DType::BF16, &CausalMaskConfig::gguf())?;
                 let mask = DeviceMappedMask::from_single(mask);
                 let cos_sin = text_mrope(&rotary, &dev, &offsets, len, DType::BF16, None)?;
                 let g = match &layer.ngram {
