@@ -1,8 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-// The first caller is the qwen4exp loader.
+// The first caller is the zen6 loader.
 #![allow(dead_code)]
 
-//! Qwen4Exp QSA: attention restricted to the best compressed key groups.
+//! zen6's QSA: attention restricted to the best compressed key groups.
 //!
 //! A weight-free indexer projects `heads` query heads and one key head of width `dim` from the
 //! block input. Each run of `ratio` raw keys pools into one compressed key. A query scores every
@@ -517,8 +517,7 @@ mod tests {
     }
 
     /// A GGUF holding one QSA layer's indexer keys and `blk.3.indexer.*` tensors, projections in
-    /// BF16 as the real file stores them. `Content` admits only architectures it knows, so the
-    /// file declares `qwen35moe`; the indexer reads its keys under `qwen4exp` regardless.
+    /// BF16 as the real file stores them.
     fn fixture(path: &std::path::Path, cfg: &Config, rng: &mut StdRng) -> Result<Weights> {
         let w = Weights {
             q: grid(rng, cfg.heads * cfg.dim * HIDDEN, 16),
@@ -555,14 +554,14 @@ mod tests {
                 .map(gguf_file::Value::I32)
                 .to_vec(),
         );
-        let arch = gguf_file::Value::String("qwen35moe".to_string());
+        let arch = gguf_file::Value::String("zen6".to_string());
         let (heads, dim, top_k) = (u32v(cfg.heads), u32v(cfg.dim), u32v(cfg.blocks * cfg.ratio));
         let metadata = [
             ("general.architecture", &arch),
-            ("qwen4exp.attention.indexer.head_count", &heads),
-            ("qwen4exp.attention.indexer.key_length", &dim),
-            ("qwen4exp.attention.indexer.top_k", &top_k),
-            ("qwen4exp.attention.compress_ratios", &ratios),
+            ("zen6.attention.indexer.head_count", &heads),
+            ("zen6.attention.indexer.key_length", &dim),
+            ("zen6.attention.indexer.top_k", &top_k),
+            ("zen6.attention.compress_ratios", &ratios),
         ];
         let mut file = std::fs::File::create(path).map_err(hanzo_ml::Error::msg)?;
         gguf_file::write(&mut file, &metadata, &tensors)?;
@@ -576,7 +575,7 @@ mod tests {
         let mut ct = Content::from_readers(&mut readers)?;
         let cfg = Config::from_gguf(
             &ContentMetadata {
-                path_prefix: "qwen4exp",
+                path_prefix: "zen6",
                 metadata: ct.get_metadata(),
             },
             3,
@@ -601,10 +600,10 @@ mod tests {
             ("compress_ratios", Value::Array(ratios)),
         ]
         .into_iter()
-        .map(|(k, v)| (format!("qwen4exp.attention.{k}"), v))
+        .map(|(k, v)| (format!("zen6.attention.{k}"), v))
         .collect();
         let md = ContentMetadata {
-            path_prefix: "qwen4exp",
+            path_prefix: "zen6",
             metadata: &metadata,
         };
         let cfg = Config::from_gguf(&md, 47)?;

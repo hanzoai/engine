@@ -403,13 +403,18 @@ Avoid returning TODOs.
   bit-exact on CPU. `sdpa`/`sdpa_runtime` online-softmax is the structural cure for the 8B
   flash-collapse. See `ml/LLM.md` for the DSL and env-var details.
 
-## Qwen3.8-Flash-Next (`qwen4exp`) — native and GGUF
+## zen6 (Qwen3.8-Flash-Next) — native and GGUF
 
-- **Two doors, one model.** `Qwen4ExpForConditionalGeneration` / `model_type: qwen4_exp` is the
-  native safetensors checkpoint (`Qwen4ExpLoader`, `pipeline/loaders/normal_loaders.rs`); the GGUF
-  arch string `qwen4exp` is the same tower quantized upstream (`pipeline/gguf.rs`). Both reach
-  `models/quantized_qwen4exp::ModelWeights`, which is the ONLY place the layers are built.
-- **The manifest is the contract.** `models/qwen4exp::manifest` derives every tensor the text model
+- **The name is zen6** (upstream: `qwen4_exp`): module, loader, `--arch zen6`, GGUF arch,
+  fixtures, scripts. Upstream spellings are read in two places and never written:
+  `Qwen4ExpForConditionalGeneration` in `NormalLoaderType::from_causal_lm_name`, and GGUF
+  `general.architecture = qwen4exp`, a parse alias on `GGUFArchitecture::Zen6` whose `qwen4exp.*`
+  keys `Content::from_readers` moves under `zen6.*`.
+- **Two doors, one model.** The native safetensors checkpoint (`Zen6Loader`,
+  `pipeline/loaders/normal_loaders.rs`) and the same tower quantized upstream to GGUF
+  (`pipeline/gguf.rs`) both reach `models/quantized_zen6::ModelWeights`, which is the ONLY place the
+  layers are built.
+- **The manifest is the contract.** `models/zen6::manifest` derives every tensor the text model
   reads — name, stored dtype, shape, and a `Role` of `Device` or `Host` — from the config alone. The
   checkpoint's headers must equal it (apart from the `DEFERRED` prefixes), so a silent shape or dtype
   drift in a release checkpoint is a load failure naming the tensor, not a wrong logit.
@@ -429,13 +434,13 @@ Avoid returning TODOs.
   built WITHOUT fast-math so only the places the server approximates are approximate. On CPU the same
   formulas use IEEE divide/reciprocal and differ in the last bit — which is why the CPU golden is a
   transcriptor and the GPU vectors are the arbiter.
-- **The reference is the server, not the module source.** `scripts/qwen4exp_golden.py` runs 24 tokens
+- **The reference is the server, not the module source.** `scripts/zen6_golden.py` runs 24 tokens
   through the embedding, layers 0-3 (three gated-delta-nets, then attention), the final
   hyper-connection mixer and lm_head rows [0, 8192) and writes every intermediate to
-  `hanzo-engine/tests/fixtures/qwen4exp.safetensors`. It rounds to bf16 ONLY where a served kernel
+  `hanzo-engine/tests/fixtures/zen6.safetensors`. It rounds to bf16 ONLY where a served kernel
   stores (`tl.store` or a custom kernel's output); between store points arithmetic is f32, because
   inductor fuses away the eager casts. Every kernel it transcribes is listed with its sha256 and the
-  script refuses to run when one differs. `scripts/qwen4exp_vectors.py` then runs the SERVED kernels
+  script refuses to run when one differs. `scripts/zen6_vectors.py` then runs the SERVED kernels
   on the same inputs — one layer at a time, at most 1.2 GiB of device memory, FlashInfer JIT refused
   — so it measures the golden's gap without disturbing a running server.
 - **Two facts about the checkpoint and the recorder.** Layer 1's n-gram table is 128 shards in one
@@ -445,7 +450,7 @@ Avoid returning TODOs.
   recorder's `causal_conv1d_fn` call returned its `empty_like` buffer unwritten, so those stages have
   no served reference at all and their `*.golden` gaps in the vectors metadata are fiction. `g` and
   `beta` are right, because they come from `a` and `b`, not from `conv`. `vectors()` refuses an
-  all-zero stage by name. Re-record with `scripts/qwen4exp_vectors.py` to settle the call form.
+  all-zero stage by name. Re-record with `scripts/zen6_vectors.py` to settle the call form.
 - **Deferred, and it shows.** `self_attn.indexer.` (M2: QSA sparse attention) and `mtp.` (M3:
   multi-token prediction) are not read, so a native load attends densely through every key: the
   logits match, the tokens/sec do not yet. The `qsa.rs` and `hyper.rs` machinery is already there for
@@ -1424,5 +1429,5 @@ Two things had to be fixed before any of this could be measured at all, and both
   libcublas-13-0=13.1.1.3-1.
 - **Branch** (`cuda::branch`): side Lane + two reused events, fork before the router gate GEMM,
   join before the combine, capture-safe; refuses a context with cudarc event tracking on.
-- Goldens: `scripts/qwen4exp_moe_golden.py {route,gate,shared,check}` ->
-  `hanzo-engine/tests/fixtures/qwen4exp_moe/`. Window checks: `scripts/qwen4exp_moe_window.sh`.
+- Goldens: `scripts/zen6_moe_golden.py {route,gate,shared,check}` ->
+  `hanzo-engine/tests/fixtures/zen6_moe/`. Window checks: `scripts/zen6_moe_window.sh`.

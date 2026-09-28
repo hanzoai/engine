@@ -37,7 +37,7 @@ pub struct ContentConfig {
 /// `block_count` but sit outside the transformer depth.
 fn kv_layers(arch: &str, num_layers: usize, u: impl Fn(&str) -> Option<usize>) -> Vec<usize> {
     match arch {
-        "qwen35" | "qwen35moe" | "qwen3next" | "qwen4exp" => {
+        "qwen35" | "qwen35moe" | "qwen3next" | "zen6" => {
             let interval = u(&format!("{arch}.full_attention_interval"))
                 .filter(|i| *i > 0)
                 .unwrap_or(DEFAULT_FULL_ATTENTION_INTERVAL);
@@ -464,7 +464,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                 };
                 token_embd + output_norm + output
             }
-            GGUFArchitecture::Qwen4Exp => {
+            GGUFArchitecture::Zen6 => {
                 // The head's hyper-connection mixer is the output norm. The n-gram table stays on
                 // the CPU, served by the mmap, so it takes no device memory.
                 let token_embd = tensor_info_size_in_bytes!(
@@ -852,7 +852,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
             GGUFArchitecture::Qwen35
             | GGUFArchitecture::Qwen35MoE
             | GGUFArchitecture::Qwen3Next
-            | GGUFArchitecture::Qwen4Exp
+            | GGUFArchitecture::Zen6
             | GGUFArchitecture::Deepseek2
             | GGUFArchitecture::Deepseek4
             | GGUFArchitecture::GptOss

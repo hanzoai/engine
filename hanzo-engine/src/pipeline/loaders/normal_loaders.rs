@@ -97,7 +97,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin 
 /// Metadata for loading a model with ISQ or device mapping.
 pub struct NormalLoadingMetadata {
     /// The safetensors files behind the varbuilder, for a model that maps part of a file itself
-    /// (qwen4exp's n-gram table). Empty when there are none.
+    /// (zen6's n-gram table). Empty when there are none.
     pub weights: Vec<std::path::PathBuf>,
     // Device mapping metadata which can be used to construct a concrete device mapper
     pub mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -226,8 +226,8 @@ pub enum NormalLoaderType {
     Olmo,
     #[serde(rename = "mamba")]
     Mamba,
-    #[serde(rename = "qwen4exp")]
-    Qwen4Exp,
+    #[serde(rename = "zen6")]
+    Zen6,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -258,7 +258,8 @@ impl NormalLoaderType {
             "GraniteMoeHybridForCausalLM" => Ok(Self::GraniteMoeHybrid),
             "GptOssForCausalLM" => Ok(Self::GptOss),
             "Qwen3NextForCausalLM" => Ok(Self::Qwen3Next),
-            "Qwen4ExpForConditionalGeneration" => Ok(Self::Qwen4Exp),
+            // Upstream's class for the zen6 architecture (Qwen3.8-Flash-Next).
+            "Qwen4ExpForConditionalGeneration" => Ok(Self::Zen6),
             "MiniMaxM2ForCausalLM" => Ok(Self::MiniMaxM2),
             "GPT2LMHeadModel" => Ok(Self::GPT2),
             "FalconForCausalLM" | "RWForCausalLM" => Ok(Self::Falcon),
@@ -304,8 +305,8 @@ impl FromStr for NormalLoaderType {
             "falcon" => Ok(Self::Falcon),
             "olmo" => Ok(Self::Olmo),
             "mamba" => Ok(Self::Mamba),
-            "qwen4exp" => Ok(Self::Qwen4Exp),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `deepseekv32`, `deepseekv4`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `glm5moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `qwen3next`, `minimax_m2`, `gpt2`, `falcon`, `olmo`, `mamba`, `qwen4exp`.")),
+            "zen6" => Ok(Self::Zen6),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `deepseekv32`, `deepseekv4`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `glm5moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `qwen3next`, `minimax_m2`, `gpt2`, `falcon`, `olmo`, `mamba`, `zen6`.")),
         }
     }
 }
@@ -342,7 +343,7 @@ impl Display for NormalLoaderType {
             Self::Falcon => write!(f, "falcon"),
             Self::Olmo => write!(f, "olmo"),
             Self::Mamba => write!(f, "mamba"),
-            Self::Qwen4Exp => write!(f, "qwen4exp"),
+            Self::Zen6 => write!(f, "zen6"),
         }
     }
 }
@@ -413,7 +414,7 @@ impl AutoNormalLoader {
             NormalLoaderType::Falcon => Ok(Box::new(FalconLoader)),
             NormalLoaderType::Olmo => Ok(Box::new(OlmoLoader)),
             NormalLoaderType::Mamba => Ok(Box::new(MambaLoader)),
-            NormalLoaderType::Qwen4Exp => Ok(Box::new(Qwen4ExpLoader)),
+            NormalLoaderType::Zen6 => Ok(Box::new(Zen6Loader)),
         }
     }
 }
@@ -5936,16 +5937,16 @@ impl DeviceMappedModelLoader for Qwen3NextLoader {
     }
 }
 
-// ======================== Qwen4Exp (Qwen3.8-Flash-Next) loader
+// ======================== Zen6 (Qwen3.8-Flash-Next) loader
 
 /// [`NormalLoader`] for Qwen3.8-Flash-Next from its safetensors snapshot, text only: the vision
 /// tower (`model.visual.*`) is never read.
 ///
 /// [`NormalLoader`]: https://docs.rs/hanzo/latest/hanzo/struct.NormalLoader.html
-pub struct Qwen4ExpLoader;
+pub struct Zen6Loader;
 
-impl Qwen4ExpLoader {
-    fn cfg(config: &str) -> Result<crate::models::qwen4exp::Config> {
+impl Zen6Loader {
+    fn cfg(config: &str) -> Result<crate::models::zen6::Config> {
         Ok(serde_json::from_str(config)?)
     }
 
@@ -5953,8 +5954,8 @@ impl Qwen4ExpLoader {
     /// scalars fold into a bank's alpha and global scale, the f32-held tensors (HC norms, GDN
     /// A_log, dt_bias, conv, in_proj_a/b, the Gemma norms) count 4 bytes an element, the rest
     /// their stored size. Host entries (the n-gram table and hash) count nothing.
-    pub(crate) fn device_bytes(e: &crate::models::qwen4exp::Entry) -> usize {
-        use crate::models::qwen4exp::Role;
+    pub(crate) fn device_bytes(e: &crate::models::zen6::Entry) -> usize {
+        use crate::models::zen6::Role;
         if e.role == Role::Host {
             return 0;
         }
@@ -5988,11 +5989,11 @@ impl Qwen4ExpLoader {
         let text = cfg.text();
         let mut layers = vec![0usize; text.num_hidden_layers];
         let mut rest = 0usize;
-        for e in crate::models::qwen4exp::manifest(text)? {
+        for e in crate::models::zen6::manifest(text)? {
             let b = Self::device_bytes(&e);
             let layer = e
                 .name
-                .strip_prefix(&format!("{}layers.", crate::models::qwen4exp::PREFIX))
+                .strip_prefix(&format!("{}layers.", crate::models::zen6::PREFIX))
                 .and_then(|r| r.split('.').next())
                 .and_then(|i| i.parse::<usize>().ok());
             match layer {
@@ -6004,7 +6005,7 @@ impl Qwen4ExpLoader {
     }
 }
 
-impl NormalModelLoader for Qwen4ExpLoader {
+impl NormalModelLoader for Zen6Loader {
     fn load(
         &self,
         config: &str,
@@ -6014,7 +6015,7 @@ impl NormalModelLoader for Qwen4ExpLoader {
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         let cfg = Self::cfg(config)?;
         let dtype = vb.dtype();
-        Ok(Box::new(models::quantized_qwen4exp::ModelWeights::new(
+        Ok(Box::new(models::quantized_zen6::ModelWeights::new(
             &cfg,
             vb,
             &normal_loading_metadata.weights,
@@ -6033,7 +6034,7 @@ impl NormalModelLoader for Qwen4ExpLoader {
         _normal_loading_metadata: NormalLoadingMetadata,
         _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        anyhow::bail!("qwen4exp does not support X-LoRA")
+        anyhow::bail!("zen6 does not support X-LoRA")
     }
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
@@ -6046,7 +6047,7 @@ impl NormalModelLoader for Qwen4ExpLoader {
     }
 }
 
-impl IsqModelLoader for Qwen4ExpLoader {
+impl IsqModelLoader for Zen6Loader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         // Already quantized: NVFP4 experts and block-FP8 side layers.
         Ok(Vec::new())
@@ -6056,7 +6057,7 @@ impl IsqModelLoader for Qwen4ExpLoader {
     }
 }
 
-impl DeviceMappedModelLoader for Qwen4ExpLoader {
+impl DeviceMappedModelLoader for Zen6Loader {
     fn mapped_max_act_size_elems(
         &self,
         config: &str,

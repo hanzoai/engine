@@ -187,6 +187,23 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
             all_metadata.extend(content.metadata.clone())
         }
 
+        // A file may spell its architecture upstream's way (`GGUFArchitecture::Zen6` reads
+        // `qwen4exp`). Its metadata is read under our name, so every key lookup sees one spelling.
+        let name = arch.to_string();
+        if let Some(Value::String(spelled)) = all_metadata.get("general.architecture").cloned() {
+            if spelled != name {
+                let from = format!("{spelled}.");
+                all_metadata = all_metadata
+                    .into_iter()
+                    .map(|(k, v)| match k.strip_prefix(&from) {
+                        Some(rest) => (format!("{name}.{rest}"), v),
+                        None => (k, v),
+                    })
+                    .collect();
+                all_metadata.insert("general.architecture".into(), Value::String(name));
+            }
+        }
+
         Ok(Self {
             contents,
             readers,
@@ -389,6 +406,28 @@ mod tests {
             err.to_string().to_lowercase().contains("architecture"),
             "unexpected error: {err}"
         );
+    }
+
+    /// Upstream's spelling reads as zen6, its keys moved under zen6.
+    #[test]
+    fn upstream_spelling_reads_as_zen6() {
+        let arch = Value::String("qwen4exp".to_string());
+        let blocks = Value::U32(48);
+        let kv = [
+            ("general.architecture", &arch),
+            ("qwen4exp.block_count", &blocks),
+        ];
+        let mut buf = Cursor::new(Vec::new());
+        gguf_file::write(&mut buf, &kv, &[]).unwrap();
+        let mut cur = Cursor::new(buf.into_inner());
+        let mut readers = [&mut cur];
+        let ct = Content::from_readers(&mut readers).unwrap();
+        assert!(matches!(ct.arch(), GGUFArchitecture::Zen6));
+        assert_eq!(ct.arch().to_string(), "zen6");
+        let md = ct.get_metadata();
+        assert_eq!(md["general.architecture"].to_string().unwrap(), "zen6");
+        assert_eq!(md["zen6.block_count"].to_u32().unwrap(), 48);
+        assert_eq!(md.len(), 2);
     }
 
     #[test]

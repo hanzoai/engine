@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation)]
 
-//! Qwen3.8-Flash-Next (`Qwen4ExpForConditionalGeneration`) from its Hugging Face safetensors
-//! snapshot: the config and the manifest of every tensor the text model reads.
+//! zen6 (Qwen3.8-Flash-Next) from its Hugging Face safetensors snapshot: the config and the
+//! manifest of every tensor the text model reads.
 //!
 //! The manifest is built from the config alone and is the loader's contract: the checkpoint's
 //! headers must equal it, apart from the prefixes on [`DEFERRED`], and the loader must read exactly
@@ -140,7 +140,7 @@ impl TextConfig {
     pub(crate) fn ple_layer(&self) -> Result<usize> {
         match self.ple_layer_ids.as_slice() {
             [id] if *id >= 1 => Ok(id - 1),
-            other => hanzo_ml::bail!("qwen4exp needs exactly one n-gram layer, got {other:?}"),
+            other => hanzo_ml::bail!("zen6 needs exactly one n-gram layer, got {other:?}"),
         }
     }
 
@@ -881,17 +881,17 @@ pub(crate) mod tests {
         hanzo_ml::safetensors::load(&path, &hanzo_ml::Device::Cpu).expect("fixture loads")
     }
 
-    /// A tensor of the CPU golden (`scripts/qwen4exp_golden.py`), on the host.
+    /// A tensor of the CPU golden (`scripts/zen6_golden.py`), on the host.
     pub(crate) fn fixture(name: &str) -> hanzo_ml::Tensor {
         static FIX: std::sync::OnceLock<HashMap<String, hanzo_ml::Tensor>> =
             std::sync::OnceLock::new();
-        FIX.get_or_init(|| load_fixture("qwen4exp.safetensors"))
+        FIX.get_or_init(|| load_fixture("zen6.safetensors"))
             .get(name)
             .unwrap_or_else(|| panic!("no golden tensor {name}"))
             .clone()
     }
 
-    /// A tensor the served vLLM kernels produced (`scripts/qwen4exp_vectors.py`), on the host.
+    /// A tensor the served vLLM kernels produced (`scripts/zen6_vectors.py`), on the host.
     /// A stage whose served output is every zero did not run: the recording allocated the result
     /// and the kernel never wrote it. Refuse it there instead of letting a caller measure the
     /// distance from live data to an empty allocation, which reads as a parity gap.
@@ -899,7 +899,7 @@ pub(crate) mod tests {
         static VEC: std::sync::OnceLock<HashMap<String, hanzo_ml::Tensor>> =
             std::sync::OnceLock::new();
         let t = VEC
-            .get_or_init(|| load_fixture("qwen4exp_vectors.safetensors"))
+            .get_or_init(|| load_fixture("zen6_vectors.safetensors"))
             .get(name)
             .unwrap_or_else(|| panic!("no served vector {name}"))
             .clone();

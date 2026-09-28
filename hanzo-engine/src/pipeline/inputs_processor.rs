@@ -2107,7 +2107,7 @@ pub mod text_models_inputs_processor {
     }
 
     /// Tokens before a chunk that an n-gram embedding reads: `ngram_size - 1` for the widest
-    /// n-gram a model hashes (qwen4exp's trigrams).
+    /// n-gram a model hashes (zen6's trigrams).
     pub const PRIOR: usize = 2;
 
     /// Up to [`PRIOR`] tokens before each sequence's chunk, whose first token sits at

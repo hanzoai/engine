@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-//! Qwen3.8-Flash-Next from its GGUF (arch `qwen4exp`).
+//! zen6 (Qwen3.8-Flash-Next) from its GGUF.
 //!
 //! Qwen3.5's blocks (gated attention, gated delta-net, 512-expert MoE with a shared expert) joined
 //! by `n`-stream hyper-connections in place of RMSNorm residuals, and a hashed n-gram memory added
@@ -39,7 +39,7 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 
-const ARCH: &str = "qwen4exp";
+const ARCH: &str = "zen6";
 
 /// One decoder layer: a mixing block (attention or gated delta-net) and the MoE, each behind its
 /// own hyper-connection branch, and on one layer the n-gram block in front of them.
@@ -71,14 +71,14 @@ impl Layer {
     fn new(
         i: usize,
         lvb: &ShardedVarBuilder,
-        cfg: &crate::models::qwen4exp::Config,
+        cfg: &crate::models::zen6::Config,
         weights: &[std::path::PathBuf],
         rotary: Arc<Qwen3VLRotaryEmbedding>,
         attention_mechanism: AttentionImplementation,
         dtype: DType,
     ) -> Result<Self> {
         use crate::models::ngram::Fp8Table;
-        use crate::models::qwen4exp::PREFIX;
+        use crate::models::zen6::PREFIX;
         let text = cfg.text();
         let props = cfg.props();
         let quant = cfg.quant()?;
@@ -240,7 +240,7 @@ impl ModelWeights {
     /// its files, which the n-gram table maps itself): block-FP8 side layers, NVFP4 experts,
     /// bf16 elsewhere, with the served numerics. The context is the QSA indexer's budget.
     pub fn new(
-        cfg: &crate::models::qwen4exp::Config,
+        cfg: &crate::models::zen6::Config,
         vb: ShardedVarBuilder,
         weights: &[std::path::PathBuf],
         mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -248,7 +248,7 @@ impl ModelWeights {
         dtype: DType,
     ) -> Result<Self> {
         use crate::models::ngram::Fp8Table;
-        use crate::models::qwen4exp::PREFIX;
+        use crate::models::zen6::PREFIX;
         let text = cfg.text();
         let props = cfg.props();
         let quant = cfg.quant()?;
@@ -369,7 +369,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         // An INT32 array in the file, as the converter writes Python ints.
         let ngram_layer = match md.get_value::<Vec<i32>>("ple.layers") {
             Ok(layers) if layers.len() == 1 && layers[0] >= 0 => layers[0] as usize,
-            other => hanzo_ml::bail!("qwen4exp needs exactly one n-gram layer, got {other:?}"),
+            other => hanzo_ml::bail!("zen6 needs exactly one n-gram layer, got {other:?}"),
         };
         let hash = Hash::from_gguf(&md)?;
         let eps = props.rms_norm_eps;
@@ -666,7 +666,7 @@ impl crate::pipeline::NormalModel for ModelWeights {
         _flash_params: &crate::pipeline::text_models_inputs_processor::FlashParams,
         _flash_params_full: &crate::pipeline::text_models_inputs_processor::FlashParams,
     ) -> Result<Tensor> {
-        hanzo_ml::bail!("qwen4exp does not support X-LoRA")
+        hanzo_ml::bail!("zen6 does not support X-LoRA")
     }
     fn cache(&self) -> &EitherCache {
         &self.cache
@@ -684,10 +684,10 @@ impl crate::pipeline::NormalModel for ModelWeights {
         self.max_seq_len
     }
     fn config(&self) -> &crate::paged_attention::ModelConfigMetadata {
-        &self.meta.as_ref().expect("a safetensors qwen4exp").0
+        &self.meta.as_ref().expect("a safetensors zen6").0
     }
     fn model_config(&self) -> Arc<dyn crate::paged_attention::ModelConfigLike + Send + Sync> {
-        let (meta, layers) = self.meta.as_ref().expect("a safetensors qwen4exp");
+        let (meta, layers) = self.meta.as_ref().expect("a safetensors zen6");
         Arc::new(crate::paged_attention::KvLayers::new(meta.clone(), layers.clone()))
     }
 }
@@ -704,7 +704,7 @@ mod tests {
     use crate::device_map::DummyDeviceMapper;
     use crate::utils::model_config::FromGGUF;
 
-    // A tiny qwen4exp: 4 layers (three gated delta-nets, then attention), 2 streams, and the
+    // A tiny zen6: 4 layers (three gated delta-nets, then attention), 2 streams, and the
     // n-gram block at layer 1 with a hand-sized hash (order 3, two heads per order).
     const VOCAB: usize = 24;
     // Hidden and FFN widths are Q8_0 blocks (32): expert banks are quantized, as in real files.
@@ -953,8 +953,8 @@ mod tests {
     // The safetensors constructor
     // ---------------------------------------------------------------------------------------
 
-    use crate::models::qwen4exp::manifest;
-    use crate::models::qwen4exp::tests::{
+    use crate::models::zen6::manifest;
+    use crate::models::zen6::tests::{
         assert_close, config, fixture, gpu, rows, snapshot, tiny_checkpoint, tiny_config,
         vb as snapshot_vb, weights, Recorder, Tol, CHUNKS,
     };
@@ -1038,12 +1038,12 @@ mod tests {
     }
 
     #[test]
-    fn from_causal_lm_name_maps_qwen4exp() {
+    fn from_causal_lm_name_maps_zen6() {
         use crate::pipeline::NormalLoaderType;
         let t = NormalLoaderType::from_causal_lm_name("Qwen4ExpForConditionalGeneration").unwrap();
-        assert_eq!(t, NormalLoaderType::Qwen4Exp);
-        assert_eq!(t.to_string(), "qwen4exp");
-        assert_eq!("qwen4exp".parse::<NormalLoaderType>().unwrap(), NormalLoaderType::Qwen4Exp);
+        assert_eq!(t, NormalLoaderType::Zen6);
+        assert_eq!(t.to_string(), "zen6");
+        assert_eq!("zen6".parse::<NormalLoaderType>().unwrap(), NormalLoaderType::Zen6);
     }
 
     /// The registered loader builds the tiny checkpoint from its config.json and runs it through
@@ -1067,7 +1067,7 @@ mod tests {
             multi_progress: Arc::new(indicatif::MultiProgress::new()),
             matformer_slicing_config: None,
         };
-        let model = crate::pipeline::Qwen4ExpLoader
+        let model = crate::pipeline::Zen6Loader
             .load(&tiny_json(), vb, meta, AttentionImplementation::Eager)
             .map_err(hanzo_ml::Error::msg)?;
         assert_eq!(model.config().num_layers, 4);
@@ -1096,7 +1096,7 @@ mod tests {
     fn hybrid_kv_charges_attention_layers_only() -> Result<()> {
         use crate::pipeline::DeviceMappedModelLoader;
         let json = tiny_json();
-        let loader = crate::pipeline::Qwen4ExpLoader;
+        let loader = crate::pipeline::Zen6Loader;
         let kv = loader.model_config(&json).map_err(hanzo_ml::Error::msg)?.kv_layers();
         let want: Vec<usize> = (0..4).filter(|&i| tiny_config().text().attention(i)).collect();
         assert_eq!(kv, want);
@@ -1109,17 +1109,17 @@ mod tests {
     /// alpha and global scale), the attention layers' KV per token, and one sequence's state.
     #[test]
     #[ignore = "reads the Qwen3.8-Flash-Next snapshot's config"]
-    fn qwen4exp_accounting_matches_checkpoint() -> Result<()> {
+    fn zen6_accounting_matches_checkpoint() -> Result<()> {
         use crate::pipeline::DeviceMappedModelLoader;
         let json = std::fs::read_to_string(snapshot().join("config.json")).map_err(hanzo_ml::Error::wrap)?;
-        let (layers, rest) = crate::pipeline::Qwen4ExpLoader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
+        let (layers, rest) = crate::pipeline::Zen6Loader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
         let estimate = layers.iter().sum::<usize>() + rest;
         println!("estimate {estimate} B ({:.3} GiB)", estimate as f64 / (1u64 << 30) as f64);
         assert!(
             (74_895_296_000..=74_895_296_000 + (32 << 20)).contains(&estimate),
             "estimate {estimate}"
         );
-        let per_token = crate::pipeline::Qwen4ExpLoader
+        let per_token = crate::pipeline::Zen6Loader
             .model_config(&json)
             .map_err(hanzo_ml::Error::msg)?
             .kv_cache_elements_per_token();
@@ -1131,9 +1131,9 @@ mod tests {
 
     #[test]
     fn table_never_charged() -> Result<()> {
-        use crate::models::qwen4exp::Role;
+        use crate::models::zen6::Role;
         let json = tiny_json();
-        let (layers, rest) = crate::pipeline::Qwen4ExpLoader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
+        let (layers, rest) = crate::pipeline::Zen6Loader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
         let entries = manifest(tiny_config().text())?;
         let host: usize = entries.iter().filter(|e| e.role == Role::Host).map(|e| e.bytes()).sum();
         let table: usize = entries
@@ -1144,7 +1144,7 @@ mod tests {
         assert!(table > 0 && host >= table);
         let pure: Vec<_> = entries.into_iter().filter(|e| e.role == Role::Device).collect();
         let charged: usize = layers.iter().sum::<usize>() + rest;
-        let device: usize = pure.iter().map(crate::pipeline::Qwen4ExpLoader::device_bytes).sum();
+        let device: usize = pure.iter().map(crate::pipeline::Zen6Loader::device_bytes).sum();
         assert_eq!(charged, device, "every charged byte is a device entry's");
         Ok(())
     }
@@ -1173,7 +1173,7 @@ mod tests {
             v
         };
         let json = tiny_json();
-        let (layers, rest) = crate::pipeline::Qwen4ExpLoader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
+        let (layers, rest) = crate::pipeline::Zen6Loader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
         let estimate = (layers.iter().sum::<usize>() + rest) as u64;
         let before = used();
         let (model, _, _dir) = tiny_model(&dev, DType::BF16)?;
@@ -1239,7 +1239,7 @@ mod tests {
         let mut cache = HybridCache::new(HybridCacheConfig { layer_types: types, max_seq_len: props.max_seq_len, pools }, &dev)
             .map_err(|e| hanzo_ml::Error::Msg(e.to_string()))?;
         let slot = cache.allocate_seq().expect("slot");
-        let toks = crate::models::qwen4exp::tests::tokens();
+        let toks = crate::models::zen6::tests::tokens();
         let mut x = expand(&fixture("embed").to_device(&dev)?.unsqueeze(0)?, text.hc_count)?;
         for i in 0..layers {
             let layer = Layer::new(i, &lm.pp(format!("layers.{i}")), &cfg, &files, rotary.clone(), AttentionImplementation::Eager, DType::BF16)?;

@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-//! Hashed n-gram memory of Qwen3.8-Flash-Next (GGUF arch `qwen4exp`, `per_layer_token_embd` +
+//! Hashed n-gram memory of zen6 (Qwen3.8-Flash-Next; GGUF `per_layer_token_embd` +
 //! `blk.1.ple_*`; vLLM `Qwen4ExpPLELayer`).
 //!
 //! Each token's n-grams (orders 2..=ngram_size, `heads_per_ngram` hash heads each) pick rows of one
@@ -685,21 +685,18 @@ mod tests {
         use gguf_file::Value;
         let u64s = |v: &[u64]| Value::Array(v.iter().map(|&x| Value::U64(x)).collect());
         HashMap::from([
-            (
-                "qwen4exp.ple.ngram_size".into(),
-                Value::U32(mult.len() as u32),
-            ),
-            ("qwen4exp.ple.heads_per_ngram".into(), Value::U32(heads)),
-            ("qwen4exp.ple.eos_token_id".into(), Value::U32(eos)),
-            ("qwen4exp.ple.layer_multipliers".into(), u64s(mult)),
-            ("qwen4exp.ple.head_offsets".into(), u64s(offset)),
-            ("qwen4exp.ple.head_vocab_sizes".into(), u64s(size)),
+            ("zen6.ple.ngram_size".into(), Value::U32(mult.len() as u32)),
+            ("zen6.ple.heads_per_ngram".into(), Value::U32(heads)),
+            ("zen6.ple.eos_token_id".into(), Value::U32(eos)),
+            ("zen6.ple.layer_multipliers".into(), u64s(mult)),
+            ("zen6.ple.head_offsets".into(), u64s(offset)),
+            ("zen6.ple.head_vocab_sizes".into(), u64s(size)),
         ])
     }
 
     fn hash_of(md: &HashMap<String, gguf_file::Value>) -> Result<Hash> {
         Hash::from_gguf(&ContentMetadata {
-            path_prefix: "qwen4exp",
+            path_prefix: "zen6",
             metadata: md,
         })
     }
@@ -876,8 +873,8 @@ mod tests {
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
-        // Content wants an architecture it knows; the block reads only the keys and tensors above.
-        let arch = gguf_file::Value::String("qwen35moe".into());
+        // The block reads only the keys and tensors above.
+        let arch = gguf_file::Value::String("zen6".into());
         let md = metadata(EOS, HEADS, &MULT, &OFFSET, &SIZE);
         let mut kv: Vec<(&str, &gguf_file::Value)> = vec![("general.architecture", &arch)];
         kv.extend(md.iter().map(|(k, v)| (k.as_str(), v)));
@@ -889,7 +886,7 @@ mod tests {
         let mut readers = [&mut file];
         let mut ct = Content::from_readers(&mut readers)?;
         let hash = Hash::from_gguf(&ContentMetadata {
-            path_prefix: "qwen4exp",
+            path_prefix: "zen6",
             metadata: ct.get_metadata(),
         })?;
         Ok((Ngram::load(&mut ct, hash, 1, EPS, &dev)?, weights))

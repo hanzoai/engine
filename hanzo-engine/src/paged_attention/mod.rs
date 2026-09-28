@@ -383,7 +383,7 @@ mod tests {
         assert_eq!(bytes(&dense()), 4 * bytes(&hybrid()));
     }
 
-    /// qwen4exp shape: 48 decoder layers with gated attention (2 KV heads of 256) at every
+    /// zen6 shape: 48 decoder layers with gated attention (2 KV heads of 256) at every
     /// fourth, and after them each attention layer's QSA index cache (1 head of 128) at
     /// `48 + layer`, read by that layer.
     pub(super) struct Indexed;

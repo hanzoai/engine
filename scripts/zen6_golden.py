@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CPU golden for Qwen3.8-Flash-Next (qwen4exp) layers 0-3, as vLLM serves them on a GB10.
+"""CPU golden for zen6 (Qwen3.8-Flash-Next) layers 0-3, as vLLM serves them on a GB10.
 
 Runs 24 real tokens through the embedding, layers 0-3 (three gated delta-nets, then QSA attention),
 the final hyper-connection mixer and lm_head rows [0, 8192), and writes every intermediate the
@@ -10,7 +10,7 @@ inductor (custom_ops none), and inside a fused kernel inductor drops the eager b
 value is rounded to bf16 here only where a served kernel stores it: a tl.store or an extern op's
 output in the live run's compiled graph, or a store in a custom kernel's source. Between store
 points arithmetic is f32. The served approximate instructions (div.full.f32, rcp.approx.ftz.f32,
-libdevice rsqrt) are IEEE here; the GPU vectors (qwen4exp_vectors.py) measure that gap.
+libdevice rsqrt) are IEEE here; the GPU vectors (zen6_vectors.py) measure that gap.
 
 Every compiled or custom kernel this script transcribes is listed in KERNELS with its sha256, and
 the script refuses to run when one differs: a regenerated compile cache changes the rounding model.
@@ -18,8 +18,8 @@ the script refuses to run when one differs: a regenerated compile cache changes 
 Run on CPU only, in a capped scope:
   systemd-run --user --scope --quiet -p MemoryMax=3G -p MemorySwapMax=0 choom -n 1000 -- \
     env VLLM_TARGET_DEVICE=cpu CUDA_VISIBLE_DEVICES= nice -n19 ionice -c3 \
-    ~/vllm-env/bin/python scripts/qwen4exp_golden.py --snapshot <fp8hybrid> \
-      --out hanzo-engine/tests/fixtures/qwen4exp.safetensors
+    ~/vllm-env/bin/python scripts/zen6_golden.py --snapshot <fp8hybrid> \
+      --out hanzo-engine/tests/fixtures/zen6.safetensors
 """
 
 from __future__ import annotations

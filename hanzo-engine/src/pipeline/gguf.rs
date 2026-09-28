@@ -65,8 +65,8 @@ use crate::{
     models::quantized_qwen3_5_moe::ModelWeights as QQwen35,
     models::quantized_qwen3_moe::ModelWeights as QQwen3MoE,
     models::quantized_qwen3_next::ModelWeights as QQwen3Next,
-    models::quantized_qwen4exp::ModelWeights as QQwen4Exp,
     models::quantized_starcoder2::ModelWeights as QStarcoder2,
+    models::quantized_zen6::ModelWeights as QZen6,
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
@@ -101,7 +101,7 @@ enum Model {
     Qwen3MoE(QQwen3MoE),
     Qwen3Next(QQwen3Next),
     Qwen35(QQwen35),
-    Qwen4Exp(QQwen4Exp),
+    Zen6(QZen6),
     Deepseek2(QDeepSeek2),
     Deepseek4(QDeepSeek4),
     GptOss(QGptOss),
@@ -924,7 +924,7 @@ impl Loader for GGUFLoader {
                 GGUFArchitecture::Qwen35 | GGUFArchitecture::Qwen35MoE => {
                     Model::Qwen35(QQwen35::try_from(model_config)?)
                 }
-                GGUFArchitecture::Qwen4Exp => Model::Qwen4Exp(QQwen4Exp::try_from(model_config)?),
+                GGUFArchitecture::Zen6 => Model::Zen6(QZen6::try_from(model_config)?),
                 GGUFArchitecture::Deepseek2 | GGUFArchitecture::GlmDsa => {
                     Model::Deepseek2(QDeepSeek2::try_from(model_config)?)
                 }
@@ -1008,7 +1008,7 @@ impl Loader for GGUFLoader {
             Model::Qwen3MoE(ref p) => p.max_seq_len,
             Model::Qwen3Next(ref p) => p.max_seq_len,
             Model::Qwen35(ref p) => p.max_seq_len,
-            Model::Qwen4Exp(ref p) => p.max_seq_len,
+            Model::Zen6(ref p) => p.max_seq_len,
             Model::Deepseek2(ref p) => p.max_seq_len,
             Model::Deepseek4(ref p) => p.max_seq_len,
             Model::GptOss(ref p) => p.max_seq_len,
@@ -1028,7 +1028,7 @@ impl Loader for GGUFLoader {
             Model::Qwen3(ref model) => model.cache.normal().0.len(),
             Model::Qwen3MoE(ref model) => model.cache.normal().0.len(),
             Model::Qwen35(ref model) => model.cache.hybrid().num_layers(),
-            Model::Qwen4Exp(ref model) => model.cache.hybrid().num_layers(),
+            Model::Zen6(ref model) => model.cache.hybrid().num_layers(),
             Model::Qwen3Next(ref model) => model.cache.hybrid().num_layers(),
             Model::Deepseek2(ref model) => model.cache.normal().0.len(),
             Model::Deepseek4(ref model) => model.cache.normal().0.len(),
@@ -1204,7 +1204,7 @@ impl CacheManagerMixin for GGUFPipeline {
             Model::Qwen3(ref model) => &model.cache,
             Model::Qwen3MoE(ref model) => &model.cache,
             Model::Qwen35(ref model) => &model.cache,
-            Model::Qwen4Exp(ref model) => &model.cache,
+            Model::Zen6(ref model) => &model.cache,
             Model::Qwen3Next(ref model) => &model.cache,
             Model::Deepseek2(ref model) => &model.cache,
             Model::Deepseek4(ref model) => &model.cache,
@@ -1229,7 +1229,7 @@ impl MetadataMixin for GGUFPipeline {
             Model::Qwen3(ref model) => model.device.clone(),
             Model::Qwen3MoE(ref model) => model.device.clone(),
             Model::Qwen35(ref model) => model.device.clone(),
-            Model::Qwen4Exp(ref model) => model.device.clone(),
+            Model::Zen6(ref model) => model.device.clone(),
             Model::Qwen3Next(ref model) => model.device.clone(),
             Model::Deepseek2(ref model) => model.device.clone(),
             Model::Deepseek4(ref model) => model.device.clone(),
@@ -2646,7 +2646,7 @@ impl Pipeline for GGUFPipeline {
             Model::Qwen35(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
-            Model::Qwen4Exp(ref model) => model.forward(
+            Model::Zen6(ref model) => model.forward(
                 &input_ids,
                 &prior,
                 &seqlen_offsets,

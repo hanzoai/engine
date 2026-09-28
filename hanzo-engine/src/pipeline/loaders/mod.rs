@@ -27,7 +27,7 @@ pub use normal_loaders::{
     Glm5MoeLoader, GptOssLoader, GraniteMoeHybridLoader, LlamaLoader, MambaLoader, MiniMaxM2Loader,
     MistralLoader, MixtralLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel,
     NormalModelLoader, OlmoLoader, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader,
-    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen4ExpLoader, SmolLm3Loader, Starcoder2Loader,
+    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, SmolLm3Loader, Starcoder2Loader, Zen6Loader,
 };
 
 pub use multimodal_loaders::{

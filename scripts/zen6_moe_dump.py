@@ -3,12 +3,12 @@
 teacher-forced routing bar (hanzo's Lane::linear + route::topk on vLLM's x must reproduce
 vLLM's logits, ids and weights bitwise on every (token, layer) pair).
 
-Needs the whole GPU: run only in a window with hanzo-vllm stopped (scripts/qwen4exp_moe_window.sh).
+Needs the whole GPU: run only in a window with hanzo-vllm stopped (scripts/zen6_moe_window.sh).
 The run is eager: the gate's graph replay equals eager (gate.safetensors asserts it per M).
 
 For each concurrency c in {1, 3, 4} it generates greedily for the section-3b prompts (a uuid
 nonce, WORDS x size, "Summarize in one sentence."; size 4 is ~220 tokens, size 40 ~1,335) and
-writes target/qwen4exp_moe_window/dump_c{c}.safetensors:
+writes target/zen6_moe_window/dump_c{c}.safetensors:
 
     x.{call}.{layer}       gate input  [M, 2560] bf16 (M is that forward's token count)
     logits.{call}.{layer}  F.linear     [M, 512]  bf16
@@ -20,7 +20,7 @@ import os
 import uuid
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(ROOT, "target", "qwen4exp_moe_window")
+OUT = os.path.join(ROOT, "target", "zen6_moe_window")
 SNAP = ("/home/z/.cache/huggingface/hub/models--nvidia--Qwen3.8-Flash-Next-NVFP4/snapshots/"
         "fc694b54fb0174e0913e6adf86691ef85a4ead47-fp8hybrid")
 WORDS = ("The bandwidth of a decode step is the only number that matters here. "

@@ -234,7 +234,7 @@ mod tests {
     use std::collections::HashMap;
 
     pub(crate) const FIXTURES: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/qwen4exp_moe");
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/zen6_moe");
 
     /// The golden script's configs: (name, score, renormalize, bias, routed scaling factor).
     fn configs() -> Vec<(String, MoeRouterScoreFunction, bool, bool, f32)> {
@@ -507,7 +507,7 @@ mod tests {
 
     /// W8c-4: device time of (a) route alone, (c) the path it replaces (f32 cast, f32 GEMM,
     /// softmax_last_dim, topk, renorm) and (d) main.linear + route, E=512, k=10, bf16. Bar:
-    /// (d) < (c) at every T. The (a)-vs-vLLM bar is scripts/qwen4exp_moe_bench.py's.
+    /// (d) < (c) at every T. The (a)-vs-vLLM bar is scripts/zen6_moe_bench.py's.
     #[test]
     #[ignore]
     fn bench() {

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""vLLM goldens for the Flash-Next (qwen4_exp) MoE router, gate and shared expert.
+"""vLLM goldens for the zen6 (Flash-Next) MoE router, gate and shared expert.
 
-Writes hanzo-engine/tests/fixtures/qwen4exp_moe/{route,gate,shared}.safetensors from
+Writes hanzo-engine/tests/fixtures/zen6_moe/{route,gate,shared}.safetensors from
 vLLM 0.29.0's own kernels, and checks them against hanzo's exact-lane router.
 
     route   every fused expert count x {f32,bf16,f16} through topk_softmax/topk_sigmoid
@@ -14,7 +14,7 @@ vLLM 0.29.0's own kernels, and checks them against hanzo's exact-lane router.
 The GB10 serves live traffic, so run one at a time, small, and at the lowest priority:
 
     for i in 1 2 3; do systemd-run --user --scope -p MemoryMax=3G nice -n19 ionice -c3 \\
-        /home/z/vllm-env/bin/python scripts/qwen4exp_moe_golden.py route && break; done
+        /home/z/vllm-env/bin/python scripts/zen6_moe_golden.py route && break; done
 
 It refuses to start below 6 GiB MemAvailable. A CUDA OOM at context creation is the box
 being busy, not a bug; the loop above retries it at most three times.
@@ -30,7 +30,7 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FIX = os.path.join(ROOT, "hanzo-engine", "tests", "fixtures", "qwen4exp_moe")
+FIX = os.path.join(ROOT, "hanzo-engine", "tests", "fixtures", "zen6_moe")
 ROUTE_CU = os.path.join(ROOT, "hanzo-engine", "src", "cuda", "exact", "route.cu")
 VLLM = "/home/z/vllm-env/lib/python3.12/site-packages/vllm"
 SNAP = ("/home/z/.cache/huggingface/hub/models--nvidia--Qwen3.8-Flash-Next-NVFP4/snapshots/"

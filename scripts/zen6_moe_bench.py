@@ -9,7 +9,7 @@ and after it (the GB10 serves live traffic); fewer than 20 clean pairs in 200 at
 INCONCLUSIVE and reported with its numbers. Eager host time per call is reported without a bar.
 
     systemd-run --user --scope -p MemoryMax=3G nice -n19 ionice -c3 \\
-        /home/z/vllm-env/bin/python scripts/qwen4exp_moe_bench.py
+        /home/z/vllm-env/bin/python scripts/zen6_moe_bench.py
 """
 import argparse
 import ctypes

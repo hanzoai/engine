@@ -1,6 +1,6 @@
 #![allow(clippy::cast_precision_loss)]
 
-//! Gated-residual hyper-connections, the residual of Qwen3.8-Flash-Next (`qwen4exp`).
+//! Gated-residual hyper-connections, the residual of zen6 (Qwen3.8-Flash-Next).
 //!
 //! The residual is `n` parallel streams. Each block reads one gated mean of them and writes its
 //! output back into every stream through that stream's own gate (vLLM

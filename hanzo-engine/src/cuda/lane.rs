@@ -458,14 +458,14 @@ pub(crate) mod tests {
         assert!(fails.contains_key("f32 gemm + cast"));
     }
 
-    /// W8c-11, window only: vLLM's dumped gate inputs (scripts/qwen4exp_moe_dump.py) through
+    /// W8c-11, window only: vLLM's dumped gate inputs (scripts/zen6_moe_dump.py) through
     /// Lane::linear and route::topk at the same M. Bar: logits, ids and weights bitwise on 100%
     /// of (token, layer) pairs at every concurrency dumped.
     #[test]
     #[ignore]
     fn teacher_forced() {
         const SNAP: &str = "/home/z/.cache/huggingface/hub/models--nvidia--Qwen3.8-Flash-Next-NVFP4/snapshots/fc694b54fb0174e0913e6adf86691ef85a4ead47-fp8hybrid";
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../target/qwen4exp_moe_window");
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../target/zen6_moe_window");
         let dev = device();
         let main = Lane::new(stream(&dev)).unwrap();
         let shards: Vec<_> = std::fs::read_dir(SNAP)

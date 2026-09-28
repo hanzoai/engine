@@ -6,7 +6,7 @@
 # anything answers on :18300.
 #
 #   1. Teacher-forced routing (bar: 100% bitwise). vLLM runs eager with a hook on every
-#      layer's mlp.gate (qwen4exp_moe_dump.py) at c=1, 3, 4; hanzo replays the dumped x through
+#      layer's mlp.gate (zen6_moe_dump.py) at c=1, 3, 4; hanzo replays the dumped x through
 #      Lane::linear + route::topk at the same M (lane::tests::teacher_forced).
 #   2. hanzo 2x2 A/B: --moe-router fused|split x --shared-expert-overlap 256|0. For each: decode
 #      tok/s at c=1, 3, 4 (bench_http.py), three greedy runs checked identical, and an nsys trace
@@ -14,10 +14,10 @@
 #      shows shared-expert kernels overlapping routed-expert kernels (checked by eye in nsys).
 #   3. vLLM baseline without speculation, max-num-seqs 8 (W8's bar config) on the same prompts.
 #
-# Usage: scripts/qwen4exp_moe_window.sh <hanzo binary>
+# Usage: scripts/zen6_moe_window.sh <hanzo binary>
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
-out=$root/target/qwen4exp_moe_window
+out=$root/target/zen6_moe_window
 snap=/home/z/.cache/huggingface/hub/models--nvidia--Qwen3.8-Flash-Next-NVFP4/snapshots/fc694b54fb0174e0913e6adf86691ef85a4ead47-fp8hybrid
 py=/home/z/vllm-env/bin/python
 hanzo=${1:?usage: $0 <hanzo binary>}
@@ -37,7 +37,7 @@ done
 [ -f "$root/scripts/bench_http.py" ] || { echo "scripts/bench_http.py (W0) is missing" >&2; exit 1; }
 
 echo "== 1. teacher-forced routing"
-VLLM_ALLOW_INSECURE_SERIALIZATION=1 nice -n19 "$py" "$root/scripts/qwen4exp_moe_dump.py"
+VLLM_ALLOW_INSECURE_SERIALIZATION=1 nice -n19 "$py" "$root/scripts/zen6_moe_dump.py"
 /data/engine-build.sh "$root" cargo test -p hanzo-engine --features cuda --lib \
   cuda::lane::tests::teacher_forced -- --ignored --nocapture --test-threads=1
 

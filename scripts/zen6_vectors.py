@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Served-kernel vectors for qwen4exp: vLLM's own GPU kernels on the golden's inputs.
+"""Served-kernel vectors for zen6: vLLM's own GPU kernels on the golden's inputs.
 
-The CPU golden (qwen4exp_golden.py) transcribes the served kernels with IEEE arithmetic. This
+The CPU golden (zen6_golden.py) transcribes the served kernels with IEEE arithmetic. This
 script runs the served kernels themselves, on the golden's inputs and on synthetic edge rows, so the
 engine's tests can hold its quantizers to bit equality with the server and its blocks to the
 server's own outputs. It records how far the golden sits from the server, stage by stage.
@@ -12,8 +12,8 @@ cached fused_moe_120 and fp4_quantization_120f modules must load as they are).
 
   systemd-run --user --scope --quiet -p MemoryMax=6G -p MemorySwapMax=0 choom -n 1000 -- \
     env MAX_JOBS=1 nice -n19 ionice -c3 ~/vllm-env/bin/python \
-    scripts/qwen4exp_vectors.py --snapshot <fp8hybrid> \
-      --golden hanzo-engine/tests/fixtures/qwen4exp.safetensors
+    scripts/zen6_vectors.py --snapshot <fp8hybrid> \
+      --golden hanzo-engine/tests/fixtures/zen6.safetensors
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import qwen4exp_golden as G  # noqa: E402
+import zen6_golden as G  # noqa: E402
 
 DEV = torch.device("cuda")
 BF16 = torch.bfloat16
@@ -103,7 +103,7 @@ def inductor_kernel(path: Path, name: str):
         "tl_math": tl_math,
     }
     # a real file, so triton can read the source back
-    cache = ROOT / "target" / "qwen4exp-vectors"
+    cache = ROOT / "target" / "zen6-vectors"
     cache.mkdir(parents=True, exist_ok=True)
     f = cache / f"{name}_{path.stem[:8]}.py"
     f.write_text(
@@ -248,7 +248,7 @@ def main() -> None:
     ap.add_argument("--snapshot", required=True, type=Path)
     ap.add_argument("--golden", required=True, type=Path)
     ap.add_argument("--quant-out", type=Path, default=ROOT / "hanzo-quant/tests/fixtures/vllm_vectors.safetensors")
-    ap.add_argument("--out", type=Path, default=ROOT / "hanzo-engine/tests/fixtures/qwen4exp_vectors.safetensors")
+    ap.add_argument("--out", type=Path, default=ROOT / "hanzo-engine/tests/fixtures/zen6_vectors.safetensors")
     args = ap.parse_args()
 
     G.check_kernels()

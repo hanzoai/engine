@@ -49,8 +49,11 @@ pub enum GGUFArchitecture {
     Qwen3Next,
     Qwen35,
     Qwen35MoE,
-    /// Qwen3.8-Flash-Next: Qwen3.5 blocks behind hyper-connections, plus a hashed n-gram memory.
-    Qwen4Exp,
+    /// zen6 (Qwen3.8-Flash-Next): Qwen3.5 blocks behind hyper-connections, plus a hashed n-gram
+    /// memory. Upstream's converter writes `general.architecture = qwen4exp`; that spelling reads
+    /// as this variant, `Content` moves the file's keys under `zen6`, and nothing writes it back.
+    #[strum(to_string = "zen6", serialize = "qwen4exp")]
+    Zen6,
     Mistral3,
     #[strum(serialize = "gpt-oss")]
     GptOss,

@@ -343,7 +343,7 @@ def nvfp4_real(ck, golden, report) -> tuple[dict, Nvfp4Case]:
     import torch
     from vllm.model_executor.layers.fused_moe.router.fused_topk_router import fused_topk
 
-    import qwen4exp_golden as G
+    import zen6_golden as G
 
     dev = torch.device("cuda")
     ids = golden["l3.ids"].reshape(-1)
@@ -426,8 +426,8 @@ def vectors(args) -> None:
     from safetensors.torch import load_file, save_file
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import qwen4exp_golden as G
-    import qwen4exp_vectors as QV
+    import zen6_golden as G
+    import zen6_vectors as QV
 
     claim(1.5)
     QV.forbid_jit()
@@ -479,7 +479,7 @@ def main() -> None:
     g.add_argument("--peak", type=float, required=True, help="GiB the step will allocate")
     v = sub.add_parser("vectors")
     v.add_argument("--snapshot", required=True, type=Path)
-    v.add_argument("--golden", type=Path, default=Path("/data/engine-qwen4/hanzo-engine/tests/fixtures/qwen4exp.safetensors"))
+    v.add_argument("--golden", type=Path, default=ROOT / "hanzo-engine/tests/fixtures/zen6.safetensors")
     args = ap.parse_args()
     if args.cmd == "gate":
         gate(args.peak)

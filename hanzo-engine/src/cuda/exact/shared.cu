@@ -1,4 +1,4 @@
-// Shared-expert epilogue kernels for the Flash-Next (qwen4_exp) MoE block, in the exact lane
+// Shared-expert epilogue kernels for the zen6 (Flash-Next) MoE block, in the exact lane
 // (no --use_fast_math): IEEE expf and division, as torch computes them.
 //
 // act:  h[t, j] = bf16(g / (1 + expf(-g)) * u), g = gu[t, j], u = gu[t, I + j]: SiluAndMul over

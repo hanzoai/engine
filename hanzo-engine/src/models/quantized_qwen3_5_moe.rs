@@ -406,7 +406,7 @@ pub(crate) struct GatedFullAttention {
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     dtype: DType,
-    /// Attend with the QSA kernel's math (qwen4exp) instead of SDPA.
+    /// Attend with the QSA kernel's math (zen6) instead of SDPA.
     qsa: bool,
 }
 
@@ -462,7 +462,7 @@ impl GatedFullAttention {
         })
     }
 
-    /// Attend with the QSA kernel's math (qwen4exp's attention in both formats).
+    /// Attend with the QSA kernel's math (zen6's attention in both formats).
     pub(crate) fn qsa(self) -> Self {
         Self { qsa: true, ..self }
     }
@@ -1943,17 +1943,14 @@ mod tests {
     fn verify_arch_accepts_only_the_listed() -> Result<()> {
         let allowed = ["qwen35moe", "qwen35"];
         assert_eq!(verify_arch(&metadata("qwen35"), &allowed)?, "qwen35");
-        let err = verify_arch(&metadata("qwen4exp"), &allowed)
-            .expect_err("qwen4exp is not listed")
+        let err = verify_arch(&metadata("zen6"), &allowed)
+            .expect_err("zen6 is not listed")
             .to_string();
         assert!(
-            err.contains("Expected `qwen35moe`/`qwen35` architecture, got `qwen4exp`."),
+            err.contains("Expected `qwen35moe`/`qwen35` architecture, got `zen6`."),
             "{err}"
         );
-        assert_eq!(
-            verify_arch(&metadata("qwen4exp"), &["qwen4exp"])?,
-            "qwen4exp"
-        );
+        assert_eq!(verify_arch(&metadata("zen6"), &["zen6"])?, "zen6");
         Ok(())
     }
 
