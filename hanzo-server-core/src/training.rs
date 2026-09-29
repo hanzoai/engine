@@ -3,13 +3,13 @@
 //! Lets a client drive `create → forward_backward → optim_step → sample →
 //! save_weights` over HTTP against the same server that does inference:
 //!
-//! - `POST /v1/training/clients` — load a base model + inject LoRA (async load; poll status)
-//! - `GET /v1/training/clients` / `GET /v1/training/clients/{id}` — list / inspect (+ loss history)
-//! - `POST /v1/training/clients/{id}/forward_backward` — accumulate gradients
-//! - `POST /v1/training/clients/{id}/optim_step` — apply AdamW to them
-//! - `POST /v1/training/clients/{id}/sample` — decode from the current base+LoRA weights
-//! - `POST /v1/training/clients/{id}/save_weights` — write the PEFT adapter for inference
-//! - `DELETE /v1/training/clients/{id}` — drop the client and free its memory
+//! - `POST /v1/train/clients` — load a base model + inject LoRA (async load; poll status)
+//! - `GET /v1/train/clients` / `GET /v1/train/clients/{id}` — list / inspect (+ loss history)
+//! - `POST /v1/train/clients/{id}/forward_backward` — accumulate gradients
+//! - `POST /v1/train/clients/{id}/optim_step` — apply AdamW to them
+//! - `POST /v1/train/clients/{id}/sample` — decode from the current base+LoRA weights
+//! - `POST /v1/train/clients/{id}/save_weights` — write the PEFT adapter for inference
+//! - `DELETE /v1/train/clients/{id}` — drop the client and free its memory
 //!
 //! Model loads and train steps are compute-bound: every heavy call runs on the
 //! blocking pool holding that client's own lock, so ops on one client serialize
@@ -359,11 +359,11 @@ fn bad_request(e: impl std::fmt::Display) -> TrainingError {
 }
 
 /// Create a training client: registers it immediately (status `loading`) and
-/// loads the base model in the background — poll `GET /v1/training/clients/{id}`.
+/// loads the base model in the background — poll `GET /v1/train/clients/{id}`.
 #[utoipa::path(
   post,
   tag = "Hanzo",
-  path = "/v1/training/clients",
+  path = "/v1/train/clients",
   request_body = CreateTrainingClientRequest,
   responses((status = 200, description = "Training client registered; base model loading", body = TrainingClientInfo))
 )]
@@ -387,7 +387,7 @@ pub async fn create_training_client(
 #[utoipa::path(
   get,
   tag = "Hanzo",
-  path = "/v1/training/clients",
+  path = "/v1/train/clients",
   responses((status = 200, description = "All live training clients", body = TrainingClientList))
 )]
 pub async fn list_training_clients(
@@ -401,7 +401,7 @@ pub async fn list_training_clients(
 #[utoipa::path(
   get,
   tag = "Hanzo",
-  path = "/v1/training/clients/{id}",
+  path = "/v1/train/clients/{id}",
   responses(
     (status = 200, description = "Training client state + loss history", body = TrainingClientDetail),
     (status = 404, description = "No such training client")
@@ -418,7 +418,7 @@ pub async fn get_training_client(
 #[utoipa::path(
   delete,
   tag = "Hanzo",
-  path = "/v1/training/clients/{id}",
+  path = "/v1/train/clients/{id}",
   responses(
     (status = 200, description = "Training client removed", body = DeleteTrainingClientResponse),
     (status = 404, description = "No such training client")
@@ -462,7 +462,7 @@ fn to_data(client: &TrainingClient, wire: &[WireDatum]) -> anyhow::Result<Vec<Da
 #[utoipa::path(
   post,
   tag = "Hanzo",
-  path = "/v1/training/clients/{id}/forward_backward",
+  path = "/v1/train/clients/{id}/forward_backward",
   request_body = ForwardBackwardRequest,
   responses(
     (status = 200, description = "Loss over the supervised tokens of the batch", body = ForwardBackwardOutput),
@@ -496,7 +496,7 @@ pub async fn training_forward_backward(
 #[utoipa::path(
   post,
   tag = "Hanzo",
-  path = "/v1/training/clients/{id}/optim_step",
+  path = "/v1/train/clients/{id}/optim_step",
   request_body = OptimStepRequest,
   responses(
     (status = 200, description = "Gradients applied", body = OptimStepResponse),
@@ -527,7 +527,7 @@ pub async fn training_optim_step(
 #[utoipa::path(
   post,
   tag = "Hanzo",
-  path = "/v1/training/clients/{id}/sample",
+  path = "/v1/train/clients/{id}/sample",
   request_body = SampleRequest,
   responses(
     (status = 200, description = "Sampled sequences", body = SampleResponse),
@@ -588,7 +588,7 @@ pub(crate) fn valid_file_name(name: &str) -> bool {
 #[utoipa::path(
   post,
   tag = "Hanzo",
-  path = "/v1/training/clients/{id}/save_weights",
+  path = "/v1/train/clients/{id}/save_weights",
   request_body = SaveWeightsRequest,
   responses(
     (status = 200, description = "PEFT adapter written", body = SaveWeightsResponse),

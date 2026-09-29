@@ -98,23 +98,23 @@ pub const SESSION_ROUTE: RouteInfo = RouteInfo::new(
     RouteKind::Hanzo,
 );
 pub const TRAINING_CLIENTS_ROUTE: RouteInfo =
-    RouteInfo::new("/v1/training/clients", "GET, POST", RouteKind::Hanzo);
+    RouteInfo::new("/v1/train/clients", "GET, POST", RouteKind::Hanzo);
 pub const TRAINING_CLIENT_ROUTE: RouteInfo =
-    RouteInfo::new("/v1/training/clients/{id}", "GET, DELETE", RouteKind::Hanzo);
+    RouteInfo::new("/v1/train/clients/{id}", "GET, DELETE", RouteKind::Hanzo);
 pub const TRAINING_FORWARD_BACKWARD_ROUTE: RouteInfo = RouteInfo::new(
-    "/v1/training/clients/{id}/forward_backward",
+    "/v1/train/clients/{id}/forward_backward",
     "POST",
     RouteKind::Hanzo,
 );
 pub const TRAINING_OPTIM_STEP_ROUTE: RouteInfo = RouteInfo::new(
-    "/v1/training/clients/{id}/optim_step",
+    "/v1/train/clients/{id}/optim_step",
     "POST",
     RouteKind::Hanzo,
 );
 pub const TRAINING_SAMPLE_ROUTE: RouteInfo =
-    RouteInfo::new("/v1/training/clients/{id}/sample", "POST", RouteKind::Hanzo);
+    RouteInfo::new("/v1/train/clients/{id}/sample", "POST", RouteKind::Hanzo);
 pub const TRAINING_SAVE_WEIGHTS_ROUTE: RouteInfo = RouteInfo::new(
-    "/v1/training/clients/{id}/save_weights",
+    "/v1/train/clients/{id}/save_weights",
     "POST",
     RouteKind::Hanzo,
 );
