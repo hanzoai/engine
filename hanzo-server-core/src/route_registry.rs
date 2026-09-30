@@ -180,7 +180,8 @@ mod tests {
         #[cfg(not(feature = "swagger-ui"))]
         let docs: &[RouteInfo] = &[];
         for r in API_ROUTES.iter().chain(docs) {
-            assert!(!r.path.starts_with("/api/"), "{} is under /api/", r.path);
+            let top = r.path.split('/').nth(1);
+            assert_ne!(top, Some("api"), "{} has an api prefix", r.path);
         }
     }
 }
