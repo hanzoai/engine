@@ -25,9 +25,6 @@ docs/.astro/
 .DS_Store
 .claude/
 
-# License DEV signing key (private). NEVER commit. Tests/issuer read it locally; regenerate with
-# license-dev-key/README.md if missing. The matching PUBLIC key is the const in hanzo-engine/src/license.rs.
-license-dev-key/dev_signing_key.b64
 scripts/__pycache__/
 
 /engine-upstream/

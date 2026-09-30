@@ -537,7 +537,7 @@ fast path; runtime HW auto-select is kept). One bare name per real knob. Canonic
   set `=0` to force the eager/unfused path. (`HANZO_ROCM_FLASH_ATTN` and its A/B toggle were already
   deleted; ROCm flash is always-on when applicable.) `FLASH_PREFILL` gates `using_flash_attn()` (CUDA).
 - **De-branded runtime config**: `KV_SPILL_DIR`, `KV_SPILL_BUDGET_MB`, `ISQ_SINGLETHREAD`,
-  `DEV_SIGNING_SEED`, `VK_FUSED_QKNORM`, `MXFP4_DP4A`, `MN_LOCAL_WORLD_SIZE`, `NO_NCCL`,
+  `VK_FUSED_QKNORM`, `MXFP4_DP4A`, `MN_LOCAL_WORLD_SIZE`, `NO_NCCL`,
   `FFI_MODELS`, `FFI_TOK_DIR`, `CUDA_FLASH_BF16`, `METAL_PRECOMPILE`, `ROCM_GFX_ARCH`.
 - **DELETED (one-off dev A/B toggles that forced the OLD/slow path)**: `HANZO_GDN_FUSED_FALLBACK`,
   `HANZO_ADD_RMSNORM_FALLBACK`, `HANZO_QK_NORM_ROPE_FALLBACK`, `HANZO_NO_MEMPOOL_FIX`, `SAMPLER_TRACE`
@@ -545,9 +545,20 @@ fast path; runtime HW auto-select is kept). One bare name per real knob. Canonic
   vs unfused decision is now the always-fast path; bit-exact oracle tests force the unfused/scalar leg
   via test-only programmatic setters (`layers::set_force_unfused_qk_norm_rope`,
   `hanzo_ml::set_force_scalar_matvec`), never env, never set in production.
-- License gate reads `HANZO_ENGINE_LICENSE_TOKEN` / `HANZO_ENGINE_LICENSE_FILE` +
-  `HANZO_LICENSE_SIGNING_KEY` (see `license.rs`); these are product-namespaced identity vars, not perf
-  flags, and stay branded by design -- the ONLY remaining `HANZO_` env names.
+- License gate reads `HANZO_ENGINE_LICENSE_TOKEN` / `HANZO_ENGINE_LICENSE_FILE` (see `license.rs`);
+  these are product-namespaced identity vars, not perf flags, and stay branded by design -- the ONLY
+  remaining `HANZO_` env names.
+
+## License key
+
+- `license.rs` `HANZO_LICENSE_PUBKEY` is the public half of the production seed in Hanzo KMS at
+  `/engine/LICENSE_SIGNING_KEY` (org `hanzo`, env `prod`). It is the only key the verifier trusts, in
+  every profile; there is no dev key outside `#[cfg(test)]`.
+- The engine never signs. hanzoai/licensing mints (`KMSSigner`, same public key as its `Pubkey`), and
+  hanzo-inc/cloud serves it at `/v1/licensing`.
+- The tests pin two tokens: one the production key signed (app "test", expired) and one the retired
+  development key signed, which must fail `BadSig`. Rotating the key means a new KMS value, both
+  public constants, and a fresh production token here and in hanzoai/licensing.
 
 ## Latest Upstream Features (as of commit 530463af1)
 
