@@ -50,7 +50,7 @@ PY
 
 echo
 echo "and the other direction, what upstream has never had and we must not lose:"
-for d in hanzo-router enso hanzo-quant/src/nvfp4 hanzo-quant/kernels/nvfp4 \
+for d in hanzo-router hanzo-quant/src/nvfp4 hanzo-quant/kernels/nvfp4 \
          hanzo-paged-attn/src/rocm hanzo-paged-attn/src/vulkan; do
   [ -e "$d" ] && printf '  %-40s present\n' "$d" || printf '  %-40s GONE\n' "$d"
 done

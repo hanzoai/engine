@@ -15,7 +15,7 @@ The licence posture, and why each piece exists:
 - **`LICENSE` is MIT and names two holders — `Eric Buehler` first, then `Hanzo AI, Inc.`** MIT §2 is satisfied by *retaining that copyright line*, so the upstream line is load-bearing. Never delete it. This is not hypothetical: `963f0ff2b` (2026-06-01) replaced it with a Hanzo-only line as part of a brand sweep, and `3b993189e` restored it 45 days later. Releases cut in that window went out non-compliant. Brand sweeps must skip `LICENSE`.
 - **`LICENSE-APACHE` is for vendored GPU kernels, not for candle.** The tree bundles Apache-2.0 CUDA/Metal source from vLLM, FlashInfer, Marlin, and NVIDIA FasterTransformer, with per-file headers intact. Apache-2.0 §4(d) makes **`NOTICE` an actual distribution obligation** — unlike MIT, retaining the licence text alone is not enough. `NOTICE` must ship with any binary or crate we distribute.
 - **candle is consumed only through our fork, [hanzoai/ml](https://github.com/hanzoai/ml)** (`hanzo-ml` = candle-core, `hanzo-nn`, `hanzo-transformers`, `hanzo-flash-attn{,-v3}`, `hanzo-metal-kernels`), as crates.io registry deps. candle is dual **MIT OR Apache-2.0**; we elect MIT here. Attribution for it lives in that repo's LICENSE files and NOTICE — don't restate them here, and don't point a "candle" link at `hanzoai/ml` as though our fork were upstream.
-- Workspace `license = "MIT"` matches upstream. `enso`, `hanzo-router`, and `hanzo-router-retrain` declare `MIT OR Apache-2.0`; that is deliberate and safe — they are first-party routing code with no mistral.rs-derived dependency.
+- Workspace `license = "MIT"` matches upstream. `hanzo-router` declares `MIT OR Apache-2.0`; that is deliberate and safe — it is first-party routing code with no mistral.rs-derived dependency.
 
 The rule that generalises: `license =` in a manifest is a *claim*; the LICENSE files are the *fact*. A fork cannot relicense, and a find-and-replace across manifests or copyright headers is a licensing change, not a chore.
 
@@ -30,7 +30,7 @@ lands beside ours (1,622 duplicates). What works:
   pre-rename path at the fork point `0a14af4a`. The 327 conflicts become ordinary three-way hunks,
   resolved in slices: models, pipeline core, attention and quant, server, root.
 - `tools/merge-audit.sh` checks that every upstream-added file landed and is declared, and that our-only
-  subsystems (router, enso, NVFP4, ROCm, Vulkan) survived.
+  subsystems (router, NVFP4, ROCm, Vulkan) survived.
 - Files main renamed by hand are invisible to the pairing and need their own three-way:
   `mistralrs_for_server_builder.rs` is our `server.rs`, `mistralrs_server_router_builder.rs` is
   `router.rs`, `mistralrs.pyi` is `hanzo.pyi`. `git diff -M --name-status 0a14af4a main` lists them.
@@ -594,7 +594,7 @@ git rebase upstream/master
 cargo check --package hanzo-engine --no-default-features --features metal
 ```
 
-## enso -- the learned router policy (brain) for hanzo-router (mechanism)
+## hanzo-router -- the routing mechanism
 
 `hanzo-router` is the routing MECHANISM (registry, SLO gate, placement, dispatch).
 It exposes one seam: the `RoutePolicy` trait --
@@ -603,34 +603,8 @@ The rule-based `Policy` implements it as the cold-start fallback (placement-agno
 fixed low confidence). New vocabulary lives in `registry` (`Modality`, `Level`) and
 `route` (`Route`, `User`, `Slo`, `REFUSED_MODEL`). Pre-existing API unchanged.
 
-`enso` (separate crate, `enso/`) is the learned POLICY implementing `RoutePolicy`.
-Six orthogonal pieces, one concern each:
-- `featurize`: Request -> feature vector x (hashing + metadata, sub-us; a tiny
-  finetunable encoder swaps in at the same `Featurizer` trait).
-- `profile`: eval rows p per (model, level, modality); `ingest`/`parse_jsonl` fold
-  bench tuples into the table. REAL eval data plugs in HERE (JSONL of `EvalSample`);
-  absent it, `synth` emits clearly-labeled synthetic tuples + an `oracle`.
-- `policy`: the one learnable object -- bilinear utility `x^T W p`.
-- `guard`: two-tier safety -- hot-path keyword classifier + escalate to a `Teacher`
-  seam (Qwen3Guard; `DistilledTeacher` stands in until weights are wired).
-- `selector`: safety-gated, SLO-feasible `argmax[utility - lambda*cost - mu*latency]`.
-- `learner`: offline ridge fit of base W + online per-user LinUCB. `theta_u` is
-  prior-centered at W; `dW_u = theta_u - W` is the per-user delta. Serving is greedy
-  on `theta_u` (sub-ms); UCB exploration runs off the hot path during learning.
-
-Registry is cross-modal: LLMs, dub generators (musetalk/echomimic), image models are
-all profile rows -- "add a model = add a row".
-
-Proof: `cargo test -p enso --test proof -- --nocapture` (add `--release` for the
-latency number). It asserts correct (model, level) picks, per-user bandit divergence
-after feedback (alice -> zen-eco, bob -> zen-ultra on the same request), guard
-block/escalate, sub-ms routing (p99 ~1.5us), and 100% (model, level) accuracy vs the
-oracle on a held-out synthetic split (rule baseline 0% on (model, level): no level/cost
-awareness). 100% reflects well-separated synthetic profiles -- real data will be lower.
-
-Honest scope: the LinUCB per-user bandit is solid and realizable. Per-user real-time
-LoRA over a neural encoder and self-adaptive expert vectors are research-frontier and
-attach at the same `policy`/`learner` seam -- flagged, not faked.
+A learned policy implements `RoutePolicy` outside this repo; its fitted heads mount with
+`ROUTER_HEADS=<path>` (`Policy::load_heads`).
 
 ## Working here
 

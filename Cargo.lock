@@ -2241,15 +2241,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "869b0adbda23651a9c5c0c3d270aac9fcb52e8622a8f2b17e57802d7791962f2"
 
 [[package]]
-name = "enso"
-version = "0.1.1"
-dependencies = [
- "hanzo-router",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "enum-as-inner"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3685,19 +3676,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hanzo-router-retrain"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "enso",
- "hanzo-router",
- "safetensors",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "hanzo-sandbox"
 version = "1.7.100"
 dependencies = [
@@ -3747,7 +3725,6 @@ dependencies = [
  "data-url",
  "dirs 6.0.0",
  "either",
- "enso",
  "futures",
  "hanzo-3d",
  "hanzo-engine",

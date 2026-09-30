@@ -4,7 +4,6 @@ members = [
     "hanzo-engine",
     "hanzo-engine-ffi",
     "hanzo-router",
-    "enso",
     "hanzo-server-core",
     "hanzo-server",
     "hanzo-cli",
@@ -21,7 +20,6 @@ members = [
     "hanzo-code-exec",
     "hanzo-film",
     "hanzo-train",
-    "hanzo-router-retrain",
 ]
 resolver = "2"
 

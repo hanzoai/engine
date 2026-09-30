@@ -15,8 +15,7 @@ use axum::{
     response::IntoResponse,
 };
 // The featurizer is a hanzo-router primitive; the learned head is mounted on the
-// one `hanzo_router::Policy` (see `deployment_policy`), so `enso` -- the router's
-// offline learner/featurizer library -- is not threaded through the serve seam.
+// one `hanzo_router::Policy` (see `deployment_policy`).
 use hanzo_router::featurize::{Featurizer, HashFeaturizer};
 use hanzo_router::{
     prefer, route, Backend, Decision, Heuristic, MemSnapshot, ModelCard, Policy, Registry,
@@ -243,7 +242,7 @@ fn approx_tokens(prompt: &str) -> usize {
 /// The policy is a parameter because `hanzo-router` is the mechanism and the policy is the value
 /// plugged into it. There is one `Policy` type: without a mounted head it is the rule-based
 /// preference walk; with one (`ROUTER_HEADS` -> `Policy::load_heads`) it scores arms with the
-/// bilinear head `hanzo-router-retrain` fits nightly. Taking the policy as a parameter is what lets
+/// fitted bilinear head. Taking the policy as a parameter is what lets
 /// `deployment_policy` swap the two without the mechanism knowing which it serves.
 fn classify_route_with(
     policy: &dyn RoutePolicy,

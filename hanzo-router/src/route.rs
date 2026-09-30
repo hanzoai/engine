@@ -2,7 +2,7 @@
 //! [`Route`] (which model, at what level, in what modality, with what
 //! confidence). This is the boundary that decomplects mechanism from brain:
 //! `hanzo-router` owns the mechanism (registry, SLO gate, placement, dispatch);
-//! a learned policy (the `enso` crate) owns the brain and implements this trait.
+//! a learned policy owns the brain and implements this trait.
 //!
 //! The rule-based [`crate::policy::Policy`] implements it too, as the cold-start
 //! fallback — so a deployment routes sensibly before any eval data exists, and a
