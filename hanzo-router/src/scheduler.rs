@@ -36,6 +36,18 @@ impl RoutingHints {
     }
 }
 
+/// Up, not excluded by failover, and able to read the request's images.
+fn serves(n: &Node, hints: &RoutingHints, excluded: &HashSet<String>) -> bool {
+    n.healthy.load(Ordering::Acquire)
+        && !excluded.contains(&n.replica.id)
+        && (!hints.images || n.replica.vision)
+}
+
+/// Advertised context holds the prompt plus requested output.
+fn holds(n: &Node, hints: &RoutingHints) -> bool {
+    n.replica.max_context == 0 || hints.required_tokens(&n.replica.id) <= n.replica.max_context
+}
+
 #[derive(Clone)]
 struct Entry {
     worker: String,
@@ -147,15 +159,8 @@ impl ReplicaSet {
         let inner = self.inner.read().unwrap();
         let mut state = self.scheduler.lock().unwrap();
         state.prune(now);
-        let live = |n: &&Arc<Node>| {
-            n.healthy.load(Ordering::Acquire)
-                && !excluded.contains(&n.replica.id)
-                && (!hints.images || n.replica.vision)
-        };
-        let fits = |n: &&Arc<Node>| {
-            n.replica.max_context == 0
-                || hints.required_tokens(&n.replica.id) <= n.replica.max_context
-        };
+        let live = |n: &&Arc<Node>| serves(n, hints, excluded);
+        let fits = |n: &&Arc<Node>| holds(n, hints);
         let free = |n: &&Arc<Node>| n.inflight.load(Ordering::Acquire) < self.slots(n);
         // Advertised context is a PREFERENCE, not a gate. While some live replica
         // advertises enough room the choice is restricted to those; when NONE does,
@@ -257,6 +262,18 @@ impl ReplicaSet {
             remember(&mut state.sessions, session.clone(), &node.replica.id, now);
         }
         Some(Lease::acquire(node))
+    }
+
+    /// Whether a refusal from [`Self::pick_agent`] is only held slots: the named
+    /// target, or with none any replica, is up and could serve these hints. The
+    /// proxy then waits for a release rather than fail a request a busy replica
+    /// takes moments later.
+    pub fn saturated(&self, hints: &RoutingHints, excluded: &HashSet<String>) -> bool {
+        let inner = self.inner.read().unwrap();
+        match hints.target.as_ref().and_then(|t| inner.nodes.get(t)) {
+            Some(n) => serves(n, hints, excluded) && holds(n, hints),
+            None => inner.nodes.values().any(|n| serves(n, hints, excluded)),
+        }
     }
 
     /// Only complete successful responses teach locality. Aborted/error streams

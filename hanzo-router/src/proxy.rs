@@ -37,6 +37,10 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const TTFT_SAMPLE_CEILING: usize = 8192;
 /// A long prefill plus its generation; past this a stuck stream holds the door.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(1800);
+/// Longest a request waits for a held slot: other callers' prefills and
+/// generations, the span a drain allows one stream.
+const QUEUE_TIMEOUT: Duration = DRAIN_TIMEOUT;
+const QUEUE_POLL: Duration = Duration::from_millis(250);
 /// Liveness is "the server answers HTTP". Engines' own /health can run a
 /// generation through the scheduler (SGLang does), which waits behind a long
 /// prefill and would evict the one replica able to serve it.
@@ -375,8 +379,16 @@ async fn dispatch(
     let _admitted = admitted;
     let fwd = forward_headers(&parts.headers);
     let mut excluded = HashSet::new();
-    for _ in 0..set.len().max(1) {
+    let mut failures = 0;
+    let queued = Instant::now();
+    while failures < set.len().max(1) {
         let Some(lease) = set.pick_agent(&hints, &excluded, Instant::now()) else {
+            // Held slots are a queue, not an outage. A client that gives up drops
+            // this future, and with it the wait.
+            if set.saturated(&hints, &excluded) && queued.elapsed() < QUEUE_TIMEOUT {
+                tokio::time::sleep(QUEUE_POLL).await;
+                continue;
+            }
             break;
         };
         let started = Instant::now();
@@ -421,6 +433,7 @@ async fn dispatch(
                 drop(lease);
                 tracing::warn!("replica {id} failed ({e}), evicting and trying next replica");
                 set.mark_unhealthy(&id);
+                failures += 1;
             }
         }
     }
@@ -1586,6 +1599,57 @@ mod e2e {
             .json()
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn pinned_requests_queue_for_a_held_slot() {
+        let busy = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (b, p) = (busy.clone(), peak.clone());
+        let app = Router::new()
+            .route("/v1/models", get(|| async { "ok" }))
+            .route(
+                "/v1/chat/completions",
+                post(move || {
+                    let (b, p) = (b.clone(), p.clone());
+                    async move {
+                        p.fetch_max(b.fetch_add(1, Ordering::AcqRel) + 1, Ordering::AcqRel);
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        b.fetch_sub(1, Ordering::AcqRel);
+                        "data: {\"replica\":\"halo\"}\n\n"
+                    }
+                }),
+            );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let balancer = Balancer::new(64);
+        balancer.register(
+            "qwen",
+            Replica {
+                id: "halo".into(),
+                capacity: 1,
+                ..Replica::new(url)
+            },
+        );
+        let base = start_proxy(balancer, Duration::from_secs(60)).await;
+        let client = reqwest::Client::new();
+        let send = |conv: &'static str| {
+            let (client, base) = (client.clone(), base.clone());
+            async move {
+                client
+                    .post(format!("{base}/v1/chat/completions"))
+                    .header("x-target-replica", "halo")
+                    .json(&serde_json::json!({"model": "qwen", "messages": [{"role":"user","content":conv}]}))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status()
+            }
+        };
+        let codes = futures::future::join_all(["a", "b", "c"].map(send)).await;
+        assert_eq!(codes, [StatusCode::OK; 3]);
+        assert_eq!(peak.load(Ordering::Acquire), 1);
     }
 
     #[tokio::test]
