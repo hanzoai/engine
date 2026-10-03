@@ -143,11 +143,11 @@ pub(crate) fn topk(
     let stream = dev.cuda_stream();
     let bias_sl = bias.as_ref().map(|t| t.storage_and_layout());
     let scale_sl = scale.as_ref().map(|t| t.storage_and_layout());
-    let f32_ptr = |sl: &Option<(
-        std::sync::RwLockReadGuard<'_, Storage>,
-        &hanzo_ml::Layout,
-    )>|
-     -> Result<*const f32> {
+    // Generic over the guard: storage_and_layout's lock type is hanzo-ml's choice.
+    fn f32_ptr<G: std::ops::Deref<Target = Storage>>(
+        sl: &Option<(G, &hanzo_ml::Layout)>,
+        stream: &std::sync::Arc<CudaStream>,
+    ) -> Result<*const f32> {
         let Some((s, l)) = sl else {
             return Ok(std::ptr::null());
         };
@@ -158,11 +158,11 @@ pub(crate) fn topk(
         else {
             hanzo_ml::bail!("route: bias and expert_scale must be CUDA f32");
         };
-        let (p, _) = s.device_ptr(&stream);
+        let (p, _) = s.device_ptr(stream);
         Ok((p as usize + l.start_offset() * 4) as *const f32)
-    };
-    let bias_ptr = f32_ptr(&bias_sl)?;
-    let scale_ptr = f32_ptr(&scale_sl)?;
+    }
+    let bias_ptr = f32_ptr(&bias_sl, &stream)?;
+    let scale_ptr = f32_ptr(&scale_sl, &stream)?;
 
     let n = rows * cfg.top_k;
     let mut weights = unsafe { dev.alloc::<f32>(n) }?;
