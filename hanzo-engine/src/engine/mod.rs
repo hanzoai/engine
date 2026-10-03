@@ -675,7 +675,7 @@ impl Engine {
 
                             // For hybrid models under paged attention, restore recurrent state
                             // from block-hash keyed prefix snapshots before prompt prefill.
-                            if is_prompt && pipeline.cache().is_hybrid() {
+                            if is_prompt && pipeline.has_hybrid_cache() {
                                 let mut hybrid_cache = pipeline.cache().hybrid();
                                 let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
                                 let kv_cache_manager = scheduler.kv_cache_manager().unwrap();
@@ -837,7 +837,7 @@ impl Engine {
                         // so the boundary is where the state is, not where the sequence is.
                         {
                             let pipeline = get_mut_arcmutex!(self.pipeline);
-                            if pipeline.cache().is_hybrid() {
+                            if pipeline.has_hybrid_cache() {
                                 let block_size = scheduler.block_size().unwrap();
                                 let hybrid_cache = pipeline.cache().hybrid();
                                 let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
@@ -948,7 +948,7 @@ impl Engine {
             // Free recurrent state pool slots for finished sequences (hybrid models)
             {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
-                if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
+                if !pipeline.get_metadata().no_kv_cache && pipeline.has_hybrid_cache() {
                     let recurrent_indices = scheduler.get_finished_recurrent_indices();
                     if !recurrent_indices.is_empty() {
                         let mut hybrid_cache = pipeline.cache().hybrid();

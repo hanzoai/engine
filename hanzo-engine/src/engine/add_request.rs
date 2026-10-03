@@ -737,7 +737,7 @@ impl Engine {
             // Allocate recurrent state pool slot for hybrid models
             {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
-                if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
+                if !pipeline.get_metadata().no_kv_cache && pipeline.has_hybrid_cache() {
                     let mut hybrid_cache = pipeline.cache().hybrid();
                     if let Some(slot_idx) = hybrid_cache.allocate_seq() {
                         seq.set_recurrent_state_idx(Some(slot_idx));
@@ -793,7 +793,7 @@ impl Engine {
                     if let Some(snapshots) = recurrent_snapshots {
                         if let Some(slot_idx) = seq.recurrent_state_idx() {
                             let pipeline = get_mut_arcmutex!(self.pipeline);
-                            if pipeline.cache().is_hybrid() {
+                            if pipeline.has_hybrid_cache() {
                                 let mut hybrid_cache = pipeline.cache().hybrid();
                                 if let Err(e) =
                                     hybrid_cache.restore_recurrent_state(slot_idx, &snapshots)

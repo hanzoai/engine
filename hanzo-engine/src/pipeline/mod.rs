@@ -632,6 +632,12 @@ pub trait CacheManagerMixin {
         load_preallocated_cache: bool,
     );
     fn cache(&self) -> &EitherCache;
+    /// Whether the model cache is hybrid (recurrent layers beside attention).
+    /// A pipeline that holds no cache at all (embeddings) answers false
+    /// without being asked for one.
+    fn has_hybrid_cache(&self) -> bool {
+        self.cache().is_hybrid()
+    }
 }
 
 pub trait MetadataMixin {
@@ -882,7 +888,7 @@ fn announce_forward<P: Pipeline + ?Sized>(
         .map(|&idx| *input_seqs[idx].id())
         .collect();
     pipeline.note_forward_sequences(&ids);
-    if pipeline.cache().is_hybrid() {
+    if pipeline.has_hybrid_cache() {
         let verify_len =
             crate::speculative::staging::staged_batch_width(input_seqs).map(|width| width + 1);
         pipeline.cache().hybrid().expect_verify(verify_len);
@@ -1263,7 +1269,7 @@ pub trait Pipeline:
                 // recurrent_state_idx so recurrent layers are active during forward.
                 // Paged attention manages KV caches separately, but recurrent state
                 // pool access still needs the indices tensor to be set.
-                if self.cache().is_hybrid() {
+                if self.has_hybrid_cache() {
                     let mut hybrid_cache = self.cache().hybrid();
                     let recurrent_device = hybrid_cache.caches.iter().find_map(|c| {
                         if let HybridLayerCache::Recurrent(pool) = c {
