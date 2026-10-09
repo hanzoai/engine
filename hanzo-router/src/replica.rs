@@ -238,6 +238,31 @@ impl ReplicaSet {
         self.len() == 0
     }
 
+    /// Normalized load in `[0, 1]`: in-flight over the slots of the healthy replicas
+    /// (each replica's `capacity`, else the pool's max_inflight). Zero when idle,
+    /// approaching one as the set saturates: the per-arm load a mean-field (load-aware)
+    /// model router best-responds to, the live analogue of the offline harness's
+    /// simulated load vector. All-unhealthy reads as fully loaded (`1.0`): an arm with
+    /// no capacity is maximally congested.
+    pub fn load(&self) -> f64 {
+        let inner = self.inner.read().unwrap();
+        let healthy: Vec<&Arc<Node>> = inner
+            .nodes
+            .values()
+            .filter(|n| n.healthy.load(Ordering::Acquire))
+            .collect();
+        let slots: usize = healthy.iter().map(|n| self.slots(n)).sum();
+        if slots == 0 {
+            return 1.0;
+        }
+        let inflight: usize = inner
+            .nodes
+            .values()
+            .map(|n| n.inflight.load(Ordering::Acquire))
+            .sum();
+        (inflight as f64 / slots as f64).min(1.0)
+    }
+
     pub fn statuses(&self) -> Vec<ReplicaStatus> {
         let inner = self.inner.read().unwrap();
         let scheduler = self.scheduler.lock().unwrap();
@@ -436,6 +461,20 @@ impl Balancer {
         m
     }
 
+    /// The live per-model load field: `model id -> normalized in-flight load`
+    /// ([`ReplicaSet::load`]). This is the arm-load vector the mean-field router reads
+    /// (`ROUTER_FIELD`) so model selection best-responds to real congestion: the
+    /// serving-path source the offline proof simulates. Keyed by the model ids the head
+    /// ranks; a model with no set reads as unloaded downstream.
+    pub fn load_field(&self) -> BTreeMap<String, f64> {
+        self.sets
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(m, s)| (m.clone(), s.load()))
+            .collect()
+    }
+
     pub fn statuses(&self) -> BTreeMap<String, Vec<ReplicaStatus>> {
         self.sets
             .read()
@@ -548,6 +587,19 @@ mod tests {
         let set = bal.set_for(Some("qwen3")).unwrap();
         assert_eq!(set.len(), 2);
         assert_eq!(bal.models(), vec!["qwen3"]);
+    }
+
+    #[test]
+    fn balancer_load_field_maps_each_model() {
+        let bal = Balancer::new(4);
+        bal.register("hot", Replica::new("http://h"));
+        bal.register("cold", Replica::new("http://c"));
+        let hot = bal.set_for(Some("hot")).unwrap();
+        let _a = hot.pick("k").unwrap();
+        let _b = hot.pick("k").unwrap(); // 2 in-flight / cap 4 = 0.5
+        let field = bal.load_field();
+        assert!((field["hot"] - 0.5).abs() < 1e-9);
+        assert_eq!(field["cold"], 0.0);
     }
 
     #[test]

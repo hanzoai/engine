@@ -31,6 +31,23 @@ pub struct Policy {
     /// it is loaded from the `ROUTER_HEADS` bundle, not the YAML policy file.
     #[serde(skip)]
     pub learned: Option<std::sync::Arc<crate::heads::Heads>>,
+    /// Mean-field strength `gamma` for load-aware routing (`ROUTER_FIELD`). `None`
+    /// (the default) is the static head — congestion is ignored. `Some(gamma>0)` makes
+    /// [`Policy::route_field`] subtract `gamma * congestion(arm_load)` from each arm's
+    /// score, so a request best-responds to the live arm-load field instead of always
+    /// piling onto the globally-best arm. Not serialized: read from the env, reversible.
+    #[serde(skip)]
+    pub field_gamma: Option<f64>,
+}
+
+/// Read the mean-field strength from `ROUTER_FIELD`: a positive float enables
+/// load-aware routing; unset, unparseable, or `<= 0` leaves it OFF. Default-off and
+/// reversible by construction — the static head is exactly `field_gamma == None`.
+pub fn field_gamma_from_env() -> Option<f64> {
+    std::env::var("ROUTER_FIELD")
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|g| *g > 0.0)
 }
 
 /// Where the router decided to serve the request.
@@ -211,6 +228,7 @@ pub fn prefer() -> Policy {
         memory_fraction: None,
         cost_ceiling: None,
         learned: None,
+        field_gamma: None,
     }
 }
 
@@ -225,9 +243,43 @@ impl Policy {
         }
     }
 
-    /// Load a `ROUTER_HEADS` serve bundle from `path` and mount it ([`with_heads`]).
+    /// Load a `ROUTER_HEADS` serve bundle from `path` and mount it ([`with_heads`]),
+    /// reading the mean-field strength from `ROUTER_FIELD` ([`field_gamma_from_env`]) so
+    /// a deployment opts into load-aware routing purely by env — default-off, reversible.
     pub fn load_heads(path: &std::path::Path) -> std::io::Result<Self> {
-        crate::heads::Heads::load(path).map(Self::with_heads)
+        crate::heads::Heads::load(path).map(|h| Self {
+            field_gamma: field_gamma_from_env(),
+            ..Self::with_heads(h)
+        })
+    }
+
+    /// Load-aware routing: score the mounted head against the live arm-load field.
+    /// When the mean-field is enabled ([`Policy::field_gamma`] `= Some(gamma>0)`, from
+    /// `ROUTER_FIELD`) and a learned head is mounted, the pick best-responds to `load`
+    /// (arm id -> normalized load, e.g. [`crate::replica::Balancer::load_field`]) via
+    /// [`crate::heads::Heads::best_field`]. Otherwise this is exactly the static
+    /// [`RoutePolicy::route`] — so the seam is safe to call unconditionally and the
+    /// field is off until both a head and a positive gamma are present.
+    pub fn route_field(
+        &self,
+        req: &Request,
+        user: &User,
+        slo: &Slo,
+        registry: &Registry,
+        load: &crate::heads::LoadField,
+    ) -> Route {
+        if let (Some(heads), Some(gamma)) = (&self.learned, self.field_gamma) {
+            let x = HashFeaturizer::default().featurize(req);
+            if let Some((model, confidence)) = heads.best_field(&x, slo, load, gamma) {
+                return Route {
+                    model,
+                    level: Level::Balanced,
+                    modality: req.target_modality(),
+                    confidence,
+                };
+            }
+        }
+        self.route(req, user, slo, registry)
     }
 }
 
@@ -387,6 +439,59 @@ mod prefer_tests {
         assert_eq!(
             r.model, "strong",
             "mounted head routes by learned quality, not the prefer table"
+        );
+    }
+
+    #[test]
+    fn route_field_diverts_under_load_but_is_static_when_off() {
+        use crate::featurize::{FEAT_DIM, NUM_TASKS};
+        use crate::heads::{Arm, Heads, LoadField};
+        let g = Task::General.index();
+        let k = NUM_TASKS + 4;
+        let mut w = vec![0.0; FEAT_DIM * k];
+        w[g * k + g] = 1.0; // utility reads x[General] * p[General]
+        let mkarm = |m: &str, q: f64| {
+            let mut f = vec![0.0; k];
+            f[g] = q;
+            Arm {
+                model: m.into(),
+                feat: f,
+            }
+        };
+        let heads = Heads::new(w, vec![mkarm("weak", 0.2), mkarm("strong", 0.9)]);
+        let reg = pool();
+        let req = Request {
+            text: "overview".into(),
+            approx_tokens: 200,
+            task_hint: Some(Task::General),
+            ..Default::default()
+        };
+        let slo = Slo {
+            lambda_cost: 0.0,
+            mu_latency: 0.0,
+            ..Slo::default()
+        };
+        let hot: LoadField = [("weak".into(), 0.0), ("strong".into(), 0.9)].into();
+
+        // Field OFF (field_gamma None): route_field == static head, load ignored.
+        let off = Policy::with_heads(heads.clone());
+        assert_eq!(
+            off.route_field(&req, &User::anonymous(), &slo, &reg, &hot)
+                .model,
+            "strong",
+            "field off -> static head, congestion ignored"
+        );
+
+        // Field ON: a congested best arm yields to the idle runner-up.
+        let on = Policy {
+            field_gamma: Some(1.0),
+            ..Policy::with_heads(heads)
+        };
+        assert_eq!(
+            on.route_field(&req, &User::anonymous(), &slo, &reg, &hot)
+                .model,
+            "weak",
+            "field on -> best-responds to load, diverts off the hot arm"
         );
     }
 }

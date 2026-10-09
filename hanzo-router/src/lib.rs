@@ -55,9 +55,9 @@ pub mod proxy;
 
 pub use classify::{Classifier, Heuristic, Request};
 pub use featurize::{Featurizer, HashFeaturizer};
-pub use heads::Heads;
+pub use heads::{congestion, Heads, LoadField, LOAD_CAP};
 pub use memory::MemSnapshot;
-pub use policy::{prefer, Context, Decision, Policy};
+pub use policy::{field_gamma_from_env, prefer, Context, Decision, Policy};
 pub use registry::{Backend, Level, Modality, ModelCard, Registry, Task};
 pub use replica::{
     Balancer, BalancerConfig, Lease, Replica, ReplicaSet, ReplicaStatus, RoutingHints,
