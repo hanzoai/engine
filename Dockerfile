@@ -10,13 +10,16 @@ FROM rust:1-trixie AS builder
 WORKDIR /hanzo
 COPY . .
 
-# Portable, memory-bounded release build (see Dockerfile.cuda for the rationale):
-# RUSTFLAGS="" strips .cargo/config.toml `target-cpu=native` so the image runs on
-# any x86-64 host; CARGO_BUILD_JOBS=2 caps rustc so the ARC pod does not OOM.
+# Portable release build: RUSTFLAGS="" strips .cargo/config.toml `target-cpu=native`
+# so the image runs on any x86-64 host. Cargo takes every CPU the build Job has (8):
+# cold, hanzo-server and hanzo-bench build in 3m50s at 7.0 GiB peak on eight Zen 5
+# cores in a 16 GiB cgroup (2026-10-08), inside the door's 16 GiB limit. Capped
+# at the two jobs the retired ARC pods needed, it takes about three times as long
+# (24.5 CPU-minutes over two), against the door's 30-minute deadline, which also
+# counts the time the Job waits for a node.
 ENV RUSTFLAGS="" \
     CARGO_INCREMENTAL=0 \
-    CARGO_NET_RETRY=5 \
-    CARGO_BUILD_JOBS=2
+    CARGO_NET_RETRY=5
 # Only the two binaries the runtime stage copies (hanzo-server, hanzo-bench) —
 # a full --workspace build (incl. tests/examples) OOM-killed the runner.
 RUN cargo build --release -p hanzo-server -p hanzo-bench
