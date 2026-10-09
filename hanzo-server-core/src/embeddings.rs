@@ -74,10 +74,8 @@ pub async fn embeddings(
         return validation_error(e);
     }
 
-    if let Some(dimensions) = oairequest.dimensions {
-        return validation_error(anyhow!(
-            "Custom embedding dimensions ({dimensions}) are not supported."
-        ));
+    if oairequest.dimensions == Some(0) {
+        return validation_error(anyhow!("dimensions must be at least 1."));
     }
 
     let inputs = match normalize_inputs(oairequest.input) {
@@ -94,139 +92,70 @@ pub async fn embeddings(
     } else {
         Some(oairequest.model.clone())
     };
+    let model_id = model_override.as_deref();
+    let truncate_sequence = oairequest.truncate_sequence.unwrap_or(false);
 
     let encoding = oairequest.encoding_format.unwrap_or_default();
     let return_base64 = matches!(encoding, EmbeddingEncodingFormat::Base64);
 
-    let mut data = Vec::with_capacity(inputs.len());
+    let results =
+        match inputs {
+            Inputs::Prompt(prompts) => {
+                join_all(prompts.into_iter().map(|prompt| {
+                    fetch_embedding(state.clone(), prompt, model_id, truncate_sequence)
+                }))
+                .await
+            }
+            Inputs::Tokens(batches) => {
+                join_all(batches.into_iter().map(|tokens| {
+                    fetch_embedding_tokens(state.clone(), tokens, model_id, truncate_sequence)
+                }))
+                .await
+            }
+            Inputs::Images(image_urls) => {
+                join_all(
+                    image_urls
+                        .into_iter()
+                        .map(|image_url| fetch_embedding_image(state.clone(), image_url, model_id)),
+                )
+                .await
+            }
+        };
+
+    let mut data = Vec::with_capacity(results.len());
     let mut total_prompt_tokens: usize = 0;
     let mut total_tokens: usize = 0;
-
-    match inputs {
-        Inputs::Prompt(prompts) => {
-            let futures = prompts.into_iter().map(|prompt| {
-                let state = state.clone();
-                let model_override = model_override.clone();
-                async move {
-                    fetch_embedding(
-                        state,
-                        prompt,
-                        model_override.as_deref(),
-                        oairequest.truncate_sequence.unwrap_or(false),
-                    )
-                    .await
-                }
-            });
-
-            let results = join_all(futures).await;
-            for (index, result) in results.into_iter().enumerate() {
-                match result {
-                    Ok(EmbeddingWithUsage {
-                        embedding,
-                        prompt_tokens,
-                        total_tokens: item_total_tokens,
-                    }) => {
-                        let embedding = if return_base64 {
-                            EmbeddingVector::Base64(encode_embedding_base64(&embedding))
-                        } else {
-                            EmbeddingVector::Float(embedding)
-                        };
-                        data.push(EmbeddingData {
-                            object: "embedding",
-                            embedding,
-                            index,
-                        });
-                        total_prompt_tokens = total_prompt_tokens.saturating_add(prompt_tokens);
-                        total_tokens = total_tokens.saturating_add(item_total_tokens);
-                    }
-                    Err(e) => {
-                        Hanzo::maybe_log_error(state.clone(), e.as_ref());
-                        return internal_error(e);
-                    }
-                }
+    for (index, result) in results.into_iter().enumerate() {
+        let EmbeddingWithUsage {
+            embedding,
+            prompt_tokens,
+            total_tokens: item_total_tokens,
+        } = match result {
+            Ok(item) => item,
+            Err(e) => {
+                Hanzo::maybe_log_error(state.clone(), e.as_ref());
+                return internal_error(e);
             }
-        }
-        Inputs::Tokens(batches) => {
-            let futures = batches.into_iter().map(|tokens| {
-                let state = state.clone();
-                let model_override = model_override.clone();
-                async move {
-                    fetch_embedding_tokens(
-                        state,
-                        tokens,
-                        model_override.as_deref(),
-                        oairequest.truncate_sequence.unwrap_or(false),
-                    )
-                    .await
-                }
-            });
-
-            let results = join_all(futures).await;
-            for (index, result) in results.into_iter().enumerate() {
-                match result {
-                    Ok(EmbeddingWithUsage {
-                        embedding,
-                        prompt_tokens,
-                        total_tokens: item_total_tokens,
-                    }) => {
-                        let embedding = if return_base64 {
-                            EmbeddingVector::Base64(encode_embedding_base64(&embedding))
-                        } else {
-                            EmbeddingVector::Float(embedding)
-                        };
-                        data.push(EmbeddingData {
-                            object: "embedding",
-                            embedding,
-                            index,
-                        });
-                        total_prompt_tokens = total_prompt_tokens.saturating_add(prompt_tokens);
-                        total_tokens = total_tokens.saturating_add(item_total_tokens);
-                    }
-                    Err(e) => {
-                        Hanzo::maybe_log_error(state.clone(), e.as_ref());
-                        return internal_error(e);
-                    }
-                }
-            }
-        }
-        Inputs::Images(image_urls) => {
-            let futures =
-                image_urls.into_iter().map(|image_url| {
-                    let state = state.clone();
-                    let model_override = model_override.clone();
-                    async move {
-                        fetch_embedding_image(state, image_url, model_override.as_deref()).await
-                    }
-                });
-
-            let results = join_all(futures).await;
-            for (index, result) in results.into_iter().enumerate() {
-                match result {
-                    Ok(EmbeddingWithUsage {
-                        embedding,
-                        prompt_tokens,
-                        total_tokens: item_total_tokens,
-                    }) => {
-                        let embedding = if return_base64 {
-                            EmbeddingVector::Base64(encode_embedding_base64(&embedding))
-                        } else {
-                            EmbeddingVector::Float(embedding)
-                        };
-                        data.push(EmbeddingData {
-                            object: "embedding",
-                            embedding,
-                            index,
-                        });
-                        total_prompt_tokens = total_prompt_tokens.saturating_add(prompt_tokens);
-                        total_tokens = total_tokens.saturating_add(item_total_tokens);
-                    }
-                    Err(e) => {
-                        Hanzo::maybe_log_error(state.clone(), e.as_ref());
-                        return internal_error(e);
-                    }
-                }
-            }
-        }
+        };
+        let embedding = match oairequest.dimensions {
+            Some(dimensions) => match matryoshka(embedding, dimensions) {
+                Ok(embedding) => embedding,
+                Err(e) => return validation_error(e),
+            },
+            None => embedding,
+        };
+        let embedding = if return_base64 {
+            EmbeddingVector::Base64(encode_embedding_base64(&embedding))
+        } else {
+            EmbeddingVector::Float(embedding)
+        };
+        data.push(EmbeddingData {
+            object: "embedding",
+            embedding,
+            index,
+        });
+        total_prompt_tokens = total_prompt_tokens.saturating_add(prompt_tokens);
+        total_tokens = total_tokens.saturating_add(item_total_tokens);
     }
 
     let usage = EmbeddingUsage {
@@ -258,14 +187,6 @@ impl Inputs {
             Self::Prompt(x) => x.is_empty(),
             Self::Tokens(x) => x.is_empty(),
             Self::Images(x) => x.is_empty(),
-        }
-    }
-
-    fn len(&self) -> usize {
-        match self {
-            Self::Prompt(x) => x.len(),
-            Self::Tokens(x) => x.len(),
-            Self::Images(x) => x.len(),
         }
     }
 }
@@ -470,6 +391,29 @@ where
     EmbeddingResponder::InternalError(err)
 }
 
+/// The leading `dimensions` values, L2-normalized again: a Matryoshka-trained model's shorter
+/// embedding (OpenAI's `dimensions`). EmbeddingGemma 2 is trained at 768, 512, 256 and 128.
+fn matryoshka(mut embedding: Vec<f32>, dimensions: usize) -> Result<Vec<f32>> {
+    if dimensions > embedding.len() {
+        anyhow::bail!(
+            "dimensions ({dimensions}) exceeds the model's {}.",
+            embedding.len()
+        );
+    }
+    embedding.truncate(dimensions);
+    let norm = embedding
+        .iter()
+        .map(|&x| f64::from(x) * f64::from(x))
+        .sum::<f64>()
+        .sqrt();
+    if norm > 0. {
+        for x in &mut embedding {
+            *x = (f64::from(*x) / norm) as f32;
+        }
+    }
+    Ok(embedding)
+}
+
 fn encode_embedding_base64(embedding: &[f32]) -> String {
     let mut bytes = Vec::with_capacity(std::mem::size_of_val(embedding));
     for value in embedding {
@@ -483,5 +427,18 @@ fn saturating_to_u32(value: usize) -> u32 {
         u32::MAX
     } else {
         value as u32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::matryoshka;
+
+    #[test]
+    fn matryoshka_keeps_the_head_at_unit_length() {
+        let e = matryoshka(vec![3., 4., 12.], 2).unwrap();
+        assert_eq!(e, vec![0.6, 0.8]);
+        assert_eq!(matryoshka(vec![1., 0.], 2).unwrap(), vec![1., 0.]);
+        assert!(matryoshka(vec![1., 0.], 3).is_err());
     }
 }

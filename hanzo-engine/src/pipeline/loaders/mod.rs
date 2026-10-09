@@ -39,9 +39,9 @@ pub use multimodal_loaders::{
 };
 
 pub use embedding_loaders::{
-    AutoEmbeddingLoader, BertLoader, EmbeddingGemmaLoader, EmbeddingLoaderType, EmbeddingModel,
-    EmbeddingModelLoader, EmbeddingModule, EmbeddingModulePaths, EmbeddingModuleType,
-    Qwen3EmbeddingLoader,
+    AutoEmbeddingLoader, BertLoader, EmbeddingGemma2Loader, EmbeddingGemmaLoader,
+    EmbeddingLoaderType, EmbeddingModel, EmbeddingModelLoader, EmbeddingModule,
+    EmbeddingModulePaths, EmbeddingModuleType, Qwen3EmbeddingLoader,
 };
 
 pub use animation_loaders::{

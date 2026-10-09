@@ -65,6 +65,8 @@ pub struct ModelConfig {
     pub num_device_layers: Option<Vec<String>>,
     /// Model-specific in-situ quantization
     pub in_situ_quant: Option<String>,
+    /// Hugging Face revision (commit, branch or tag) to load; `main` when unset.
+    pub revision: Option<String>,
 }
 
 impl ModelConfig {
@@ -77,6 +79,7 @@ impl ModelConfig {
             jinja_explicit: None,
             num_device_layers: None,
             in_situ_quant: None,
+            revision: None,
         }
     }
 
@@ -102,6 +105,11 @@ impl ModelConfig {
 
     pub fn with_in_situ_quant(mut self, in_situ_quant: String) -> Self {
         self.in_situ_quant = Some(in_situ_quant);
+        self
+    }
+
+    pub fn with_revision(mut self, revision: String) -> Self {
+        self.revision = Some(revision);
         self
     }
 }
@@ -990,7 +998,7 @@ impl ServerBuilder {
 
         let draft_mapper = self.draft_model.as_ref().map(|_| mapper.clone());
         let pipeline: LoadedPipeline = loader.load_model_from_hf(
-            None,
+            first_model.revision.clone(),
             self.token_source.clone(),
             &dtype,
             &device,
@@ -1144,7 +1152,7 @@ impl ServerBuilder {
                 .transpose()?;
 
             let pipeline: LoadedPipeline = loader.load_model_from_hf(
-                None,
+                model_config.revision.clone(),
                 self.token_source.clone(),
                 &dtype,
                 &device,

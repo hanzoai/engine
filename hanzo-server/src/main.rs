@@ -288,6 +288,8 @@ struct ModelConfigParsed {
     num_device_layers: Option<Vec<String>>,
     /// Model-specific in-situ quantization
     in_situ_quant: Option<String>,
+    /// Hugging Face revision to load (a commit pins the weights); `main` when unset
+    revision: Option<String>,
 }
 
 /// Load multi-model configuration from file
@@ -317,6 +319,7 @@ fn load_multi_model_config(config_path: &str) -> Result<Vec<ModelConfig>> {
             jinja_explicit: parsed_config.jinja_explicit,
             num_device_layers: parsed_config.num_device_layers,
             in_situ_quant: parsed_config.in_situ_quant,
+            revision: parsed_config.revision,
         };
         configs.push(config);
     }

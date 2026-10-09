@@ -570,19 +570,37 @@ fast path; runtime HW auto-select is kept). One bare name per real knob. Canonic
 
 See `docs/` directory for detailed documentation on specific models and features.
 
-## Known Issues & Work in Progress
+## Embeddings
 
-### Embeddings Implementation
-- **Status**: Temporarily disabled (backed up to `embeddings.rs.bak`)
-- **Issue**: The `embedding` module in `hanzo_engine` is private and not accessible through public API
-- **TODO**: Research proper way to implement embeddings using public API
-- **Previous attempt**: Used internal `BertEmbeddingModel` and `BertPipeline` which are not publicly exposed
-
-### Dependencies
-Current `hanzo-engine/Cargo.toml` needs these dependencies for embeddings:
-- `hanzo-ml` (from workspace)
-- `tokenizers` (from workspace)
-- May need to re-export or use different approach
+- **Path**: `/v1/embeddings` (hanzo-server-core `embeddings.rs`) sends each input as its own sequence;
+  the scheduler buckets sequences by exact length, so an embedding batch never holds padding and
+  pooling reads every position (`embedding_models/layers.rs`). The model's token states pass through
+  the sentence-transformers modules of `modules.json` (Pooling, Dense, Normalize).
+- **Pooling** reads both `1_Pooling/config.json` layouts: sentence-transformers 6
+  (`embedding_dimension`, `pooling_mode` a mode or a list) and the older `pooling_mode_*` flags.
+  An unsupported setting (`include_prompt: false`, no mode) fails at load, not at the first request.
+- **`dimensions`** keeps the leading values and L2-normalizes them again (Matryoshka); 422 above
+  the model's width. Meaningful for EmbeddingGemma 2 (768/512/256/128) and Qwen3 Embedding.
+- **Revision**: a multi-model config entry takes `revision` (hanzo-server's JSON, server-core
+  `ModelConfig::revision`), passed to `load_model_from_hf`; a commit pins the weights an index was
+  built from. Single-model mode and the CLI's TOML config load `main`.
+- **EmbeddingGemma 2** (`embedding_models/embedding_gemma2.rs`, arch `embeddinggemma2`, auto from
+  `EmbeddingGemma2Model`): the text backbone only (`language_model.*`; the vision and audio towers
+  are never read). Gemma 4 layer: norms scale by the weight (not 1 + weight), v is RMS-normed with
+  no scale, attention scale 1, full layers take `per_layer_config`'s head dim 512 and one KV head,
+  sliding layers see `|i - j| <= sliding_window` (inclusive: the exclusive masker gets window + 1),
+  a projection-only PLE (each layer reads its 512 rows of `ple.per_layer_model_projection`, shared
+  norm), then `layer_scalar`, final norm and `embedding_projection` 512 -> 768 per token. Context
+  8,192 (`CONTEXT`, the model card's). Never F16: its activations overflow it.
+  Parity (2026-10-08, evo CPU F32, 64 texts in 14 languages incl. 4 of 250-1,256 tokens, vs
+  sentence-transformers 6.1.0 / transformers 5.19.0): min cosine 0.9999993 at 768/512/256/128,
+  token counts 64/64 equal. Qwen3-Embedding-0.6B on the same build: 0.9999956.
+- **Cost on 4 Zen 5 cores** (evo cpus 4-7, F32, SciFact passages ~310 tokens, one request at a
+  time): EmbeddingGemma 2 1.26 texts/s (385 tok/s), 1.66 GiB loaded; Qwen3-Embedding-0.6B
+  0.68 texts/s (222 tok/s), 3.13 GiB; both in one multi-model process 4.69 GiB loaded, 4.93 GiB
+  peak, each at its own speed. torch on the same cores reads 2.8 and 0.9 texts/s. Profile
+  (EmbeddingGemma 2): gemm's AVX2 microkernel 35% (no AVX-512 kernel is selected), hanzo-ml's
+  BarrierPool spin 28%, and `MatMul::matmul` casts CPU attention to F16 (`hanzo-quant` lib.rs).
 
 ## Syncing with Upstream
 

@@ -10,6 +10,7 @@ use crate::{
     embedding_models::{
         bert::{BertConfig, BertEmbeddingModel},
         embedding_gemma::{EmbeddingGemma, EmbeddingGemmaConfig},
+        embedding_gemma2::{self, EmbeddingGemma2, EmbeddingGemma2Config},
         qwen3_embedding::{Config as Qwen3EmbeddingConfig, Model as Qwen3EmbeddingModel},
     },
     matformer::MatformerSliceConfig,
@@ -88,6 +89,8 @@ pub trait EmbeddingModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModel
 pub enum EmbeddingLoaderType {
     #[serde(rename = "embeddinggemma")]
     EmbeddingGemma,
+    #[serde(rename = "embeddinggemma2")]
+    EmbeddingGemma2,
     #[serde(rename = "qwen3embedding")]
     Qwen3Embedding,
     /// I-JEPA ViT image encoder (per-image mean-pooled embedding). Tokenizer-free;
@@ -103,6 +106,7 @@ impl EmbeddingLoaderType {
     pub fn from_causal_lm_name(name: &str) -> Result<Self> {
         match name {
             "Gemma3TextModel" => Ok(Self::EmbeddingGemma),
+            "EmbeddingGemma2Model" => Ok(Self::EmbeddingGemma2),
             "Qwen3ForCausalLM" => Ok(Self::Qwen3Embedding),
             "BertModel" | "BertForMaskedLM" => Ok(Self::Bert),
             other => anyhow::bail!(
@@ -117,11 +121,12 @@ impl FromStr for EmbeddingLoaderType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "embeddinggemma" => Ok(Self::EmbeddingGemma),
+            "embeddinggemma2" => Ok(Self::EmbeddingGemma2),
             "qwen3embedding" => Ok(Self::Qwen3Embedding),
             "ijepa" => Ok(Self::Ijepa),
             "bert" => Ok(Self::Bert),
             a => Err(format!(
-                "Unknown architecture `{a}`. Possible architectures: `embeddinggemma`, `qwen3embedding`, `ijepa`, `bert`."
+                "Unknown architecture `{a}`. Possible architectures: `embeddinggemma`, `embeddinggemma2`, `qwen3embedding`, `ijepa`, `bert`."
             )),
         }
     }
@@ -131,6 +136,7 @@ impl Display for EmbeddingLoaderType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EmbeddingGemma => write!(f, "embeddinggemma"),
+            Self::EmbeddingGemma2 => write!(f, "embeddinggemma2"),
             Self::Qwen3Embedding => write!(f, "qwen3embedding"),
             Self::Ijepa => write!(f, "ijepa"),
             Self::Bert => write!(f, "bert"),
@@ -287,6 +293,7 @@ impl AutoEmbeddingLoader {
 
         match tp {
             EmbeddingLoaderType::EmbeddingGemma => Ok(Box::new(EmbeddingGemmaLoader)),
+            EmbeddingLoaderType::EmbeddingGemma2 => Ok(Box::new(EmbeddingGemma2Loader)),
             EmbeddingLoaderType::Qwen3Embedding => Ok(Box::new(Qwen3EmbeddingLoader)),
             EmbeddingLoaderType::Bert => Ok(Box::new(BertLoader)),
             // I-JEPA is a vision encoder with a dedicated (tokenizer-free) loader; it is
@@ -572,6 +579,128 @@ impl DeviceMappedModelLoader for EmbeddingGemmaLoader {
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
         None // todo
+    }
+}
+
+/// [`EmbeddingModelLoader`] for EmbeddingGemma 2 (`EmbeddingGemma2Model`): its text backbone.
+pub struct EmbeddingGemma2Loader;
+
+impl EmbeddingGemma2Loader {
+    fn config(config: &str) -> Result<EmbeddingGemma2Config> {
+        Ok(serde_json::from_str(config)?)
+    }
+}
+
+impl EmbeddingModelLoader for EmbeddingGemma2Loader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn EmbeddingModel + Send + Sync>> {
+        Ok(Box::new(EmbeddingGemma2::new(
+            &Self::config(config)?,
+            vb,
+            self.is_gptx(config)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+    fn has_causal_attention(&self, _: &str) -> Result<bool> {
+        Ok(false)
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(Self::config(config)?))
+    }
+}
+
+impl IsqModelLoader for EmbeddingGemma2Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"layers\.(\d+)\.self_attn\.(q|k|v|o)_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.(gate|up|down)_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"layers\.(\d+)\.ple_block\.(per_layer_input_gate|per_layer_projection)\.weight$",
+            )?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+}
+
+impl DeviceMappedModelLoader for EmbeddingGemma2Loader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+        let cfg = Self::config(config)?.text_config;
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg = Self::config(config)?.text_config;
+        let (_, rest) = embedding_gemma2::sizes(&cfg, weight_pack_factor)?;
+        Ok(rest * dtype.size_in_bytes())
+    }
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg = Self::config(config)?.text_config;
+        let (layers, _) = embedding_gemma2::sizes(&cfg, weight_pack_factor)?;
+        Ok(layers
+            .into_iter()
+            .map(|n| n * dtype.size_in_bytes())
+            .collect())
+    }
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        Ok(Self::config(config)?.text_config.num_hidden_layers)
+    }
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg = Self::config(config)?.text_config;
+        Ok(Box::new(ModelConfigMetadata {
+            max_seq_len: embedding_gemma2::CONTEXT,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: cfg.head_dim,
+            v_head_dim: cfg.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        }))
     }
 }
 

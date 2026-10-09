@@ -9,6 +9,7 @@ semantic tasks.
 | Model | Notes | Documentation |
 | --- | --- | --- |
 | EmbeddingGemma | Google’s multilingual embedding model. | [EMBEDDINGGEMMA.md](EMBEDDINGGEMMA.md) |
+| EmbeddingGemma 2 | Google’s multilingual, Matryoshka (768/512/256/128) successor; text served. | [EMBEDDINGGEMMA2.md](EMBEDDINGGEMMA2.md) |
 | Qwen3 Embedding | Qwen’s general-purpose embedding encoder. | [QWEN3_EMBEDDING.md](QWEN3_EMBEDDING.md) |
 
 > Have another embedding model you would like supported? Open an issue with the model ID and configuration.

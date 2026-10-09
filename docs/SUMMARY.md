@@ -66,6 +66,7 @@
 - [Voxtral (Speech-to-Text)](VOXTRAL.md)
 - [Dia (Speech)](DIA.md)
 - [EmbeddingGemma](EMBEDDINGGEMMA.md)
+- [EmbeddingGemma 2](EMBEDDINGGEMMA2.md)
 - [Qwen3 Embedding](QWEN3_EMBEDDING.md)
 
 # Performance & Optimization

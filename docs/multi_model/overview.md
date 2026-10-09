@@ -56,6 +56,7 @@ Create a JSON file with model configurations as object keys:
   - `jinja_explicit`: JINJA template file
   - `num_device_layers`: Device layer configuration  
   - `in_situ_quant`: In-situ quantization setting
+  - `revision`: Hugging Face revision to load (a commit hash pins the weights); `main` when unset
 
 **How API identifiers work:**
 - ✅ Object keys are **organizational only** (for config readability)

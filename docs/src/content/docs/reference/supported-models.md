@@ -87,6 +87,7 @@ Passing `--arch` is only necessary in rare cases.
 | Architecture | Example repo |
 |---|---|
 | `EmbeddingGemma` | `google/embeddinggemma-300m` |
+| `EmbeddingGemma2` | `google/embeddinggemma-2` (text) |
 | `Qwen3Embedding` | `Qwen/Qwen3-Embedding-0.6B` |
 
 ## Format and quantization notes

@@ -198,7 +198,7 @@ Create vector embeddings via the OpenAI-compatible endpoint. Supported request f
 
 - `input`: a single string, an array of strings, an array of token IDs (`[123, 456]`), or a batch of token arrays (`[[...], [...]]`).
 - `encoding_format`: `"float"` (default) returns arrays of `f32`; `"base64"` returns Base64 strings.
-- `dimensions`: currently unsupported; providing it yields a validation error.
+- `dimensions`: keep the leading `dimensions` values of each embedding and L2-normalize them again (Matryoshka truncation, as OpenAI's field does). It must be at least 1 and at most the model's width; it is meaningful only for models trained for it, such as EmbeddingGemma 2 (768, 512, 256, 128) and Qwen3 Embedding.
 - `truncate_sequence`: `bool`, default `false`. Set to `true` to clip over-length prompts instead of receiving a validation error.
 
 > ℹ️ Requests whose prompt exceeds the model's maximum context length now fail unless you opt in to truncation. Embedding requests truncate tokens from the end of the prompt.
@@ -240,7 +240,7 @@ curl http://localhost:1234/v1/embeddings \
   }'
 ```
 
-Responses follow the OpenAI schema: `object: "list"`, `data[*].embedding` containing either float arrays or Base64 strings depending on `encoding_format`, and a `usage` block (`prompt_tokens`, `total_tokens`). At present those counters report `0` because token accounting for embeddings is not yet implemented.
+Responses follow the OpenAI schema: `object: "list"`, `data[*].embedding` containing either float arrays or Base64 strings depending on `encoding_format`, and a `usage` block (`prompt_tokens`, `total_tokens`) counting the tokens each input encoded to, special tokens included.
 
 ## `POST`: `/v1/images/generations`
 Generate images using diffusion models (like FLUX). First, serve a diffusion model:
