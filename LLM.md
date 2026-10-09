@@ -133,6 +133,30 @@ half of `required`, and the agentic file-surfacing commits, which live in a `she
   that exists; a removal entry whose file reappears is itself a failure. It also knows that `main.rs`,
   `include!` and `#[path]` compile a file, not only `mod`.
 
+## Releasing the image (2026-10-08)
+
+- **One image**: `hanzo.yml` declares `ghcr.io/hanzoai/engine` from `Dockerfile`, linux/amd64, holding
+  `hanzo-server` alone (the deployment's command). A release is the version in `Cargo.toml` and the 18
+  workspace entries of `Cargo.lock`, a `release: hanzo-engine X` commit and a `vX` tag.
+- **Nothing builds on a push or a tag**: GitHub Actions is off on hanzoai/engine
+  (`gh api repos/hanzoai/engine/actions/permissions` answers `enabled: false`), and `cargo fmt --check`
+  is red across the workspace on main. The image is asked of the door directly, as org hanzo:
+  `POST https://api.hanzo.ai/v1/build` with `{repo, sha, image: ghcr.io/hanzoai/engine:X, tags: [vX],
+  dockerfile: Dockerfile, context: ., platforms: [linux/amd64]}` (bearer `hanzo --as hanzo auth token`,
+  `X-Org-Id: hanzo`), then `GET /v1/build/<id>`. A 429 is the org's concurrent-build limit.
+- **The door's 30 minutes include the queue.** Its Jobs (2 CPU requested, 8 limit, 16 GiB) share the
+  three 8-vCPU CI nodes with the forge's runners and can wait past the deadline unscheduled; a Job still
+  running at the deadline keeps running and pushes while the row reads `failed`, so ghcr is the record.
+  A cold build compiled in 16m50s on a contended CI node (1.7.103); 1.7.104 built and pushed in 8 minutes.
+- **Three defects stopped every image after 1.7.53**, each found by a build that died: the Dockerfile
+  capped cargo at two jobs (1.7.102 lets it use the Job's CPUs); `hanzo-zen5/zen5-engine-src` was a
+  gitlink no `.gitmodules` named, and BuildKit's submodule update failed before the Dockerfile was read
+  (1.7.103 drops it); the runtime stage copied `hanzo-bench`, which has had no binary since b2832f1c5
+  (1.7.104 ships hanzo-server alone). Dockerfile.cuda and Dockerfile.rocm still build and copy
+  `hanzo-bench`.
+- **Digest**: `docker-content-digest` of `ghcr.io/v2/hanzoai/engine/manifests/X` with a pull token from
+  `ghcr.io/token?scope=repository:hanzoai/engine:pull` (basic auth with `gh auth token`).
+
 ## Canonical role in the Hanzo model
 
 - A **real implementation repo** (native inference) — NOT an SDK, NOT a discovery/wrapper repo. It *serves* the `/v1` API that the cloud SDK family calls.
@@ -595,6 +619,9 @@ See `docs/` directory for detailed documentation on specific models and features
   Parity (2026-10-08, evo CPU F32, 64 texts in 14 languages incl. 4 of 250-1,256 tokens, vs
   sentence-transformers 6.1.0 / transformers 5.19.0): min cosine 0.9999993 at 768/512/256/128,
   token counts 64/64 equal. Qwen3-Embedding-0.6B on the same build: 0.9999956.
+- **Production** (universe `charts/app/values/hanzo/engine.yaml`, 1.7.104): both models in one
+  multi-model process per replica, `files/engine/models.json` pinning each revision; zen-embedding is
+  Qwen3, zen-embedding-2 is EmbeddingGemma 2. `kubectl top` 4.9-5.0 GiB a pod (3.2 GiB with Qwen3 alone).
 - **Cost on 4 Zen 5 cores** (evo cpus 4-7, F32, SciFact passages ~310 tokens, one request at a
   time): EmbeddingGemma 2 1.26 texts/s (385 tok/s), 1.66 GiB loaded; Qwen3-Embedding-0.6B
   0.68 texts/s (222 tok/s), 3.13 GiB; both in one multi-model process 4.69 GiB loaded, 4.93 GiB
