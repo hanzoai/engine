@@ -41,6 +41,8 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(1800);
 /// generations, the span a drain allows one stream.
 const QUEUE_TIMEOUT: Duration = DRAIN_TIMEOUT;
 const QUEUE_POLL: Duration = Duration::from_millis(250);
+/// Longest a request waits when its replica bounds the queue (`queue: N`).
+const QUEUE_SHORT: Duration = Duration::from_secs(5);
 /// Liveness is "the server answers HTTP". Engines' own /health can run a
 /// generation through the scheduler (SGLang does), which waits behind a long
 /// prefill and would evict the one replica able to serve it.
@@ -381,13 +383,27 @@ async fn dispatch(
     let mut excluded = HashSet::new();
     let mut failures = 0;
     let queued = Instant::now();
+    let mut waiter = None;
     while failures < set.len().max(1) {
         let Some(lease) = set.pick_agent(&hints, &excluded, Instant::now()) else {
             // Held slots are a queue, not an outage. A client that gives up drops
-            // this future, and with it the wait.
-            if set.saturated(&hints, &excluded) && queued.elapsed() < QUEUE_TIMEOUT {
-                tokio::time::sleep(QUEUE_POLL).await;
-                continue;
+            // this future, and with it the wait. A replica's `queue` bounds how
+            // many wait, and for how long; zero answers 503 at once.
+            if let Some(limit) = set.queue(&hints, &excluded) {
+                let patience = if limit == usize::MAX {
+                    QUEUE_TIMEOUT
+                } else {
+                    QUEUE_SHORT
+                };
+                if queued.elapsed() < patience
+                    && (waiter.is_some() || {
+                        waiter = set.wait(limit);
+                        waiter.is_some()
+                    })
+                {
+                    tokio::time::sleep(QUEUE_POLL).await;
+                    continue;
+                }
             }
             break;
         };
@@ -1129,6 +1145,8 @@ struct RegisterBody {
     roles: Vec<String>,
     #[serde(default)]
     upstream_model: Option<String>,
+    #[serde(default)]
+    queue: Option<usize>,
 }
 fn registration_weight() -> u32 {
     100
@@ -1149,6 +1167,7 @@ async fn add_replica(
             weight: body.weight,
             roles: body.roles,
             upstream_model: body.upstream_model,
+            queue: body.queue,
         },
     );
     Json(state.balancer.statuses())
@@ -1650,6 +1669,75 @@ mod e2e {
         let codes = futures::future::join_all(["a", "b", "c"].map(send)).await;
         assert_eq!(codes, [StatusCode::OK; 3]);
         assert_eq!(peak.load(Ordering::Acquire), 1);
+    }
+
+    /// Three requests at once against one slot held 600 ms: how each is answered.
+    async fn three_at_one_slot(queue: Option<usize>) -> (Vec<StatusCode>, Duration) {
+        let app = Router::new()
+            .route("/v1/models", get(|| async { "ok" }))
+            .route(
+                "/v1/chat/completions",
+                post(|| async {
+                    tokio::time::sleep(Duration::from_millis(600)).await;
+                    "data: {\"replica\":\"halo\"}\n\n"
+                }),
+            );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let balancer = Balancer::new(64);
+        balancer.register(
+            "qwen",
+            Replica {
+                id: "halo".into(),
+                capacity: 1,
+                queue,
+                ..Replica::new(url)
+            },
+        );
+        let base = start_proxy(balancer, Duration::from_secs(60)).await;
+        let client = reqwest::Client::new();
+        let started = Instant::now();
+        let send = |conv: &'static str| {
+            let (client, base) = (client.clone(), base.clone());
+            async move {
+                let start = Instant::now();
+                let response = client
+                    .post(format!("{base}/v1/chat/completions"))
+                    .json(&serde_json::json!({"model": "qwen", "messages": [{"role":"user","content":conv}]}))
+                    .send()
+                    .await
+                    .unwrap();
+                let status = response.status();
+                if status == StatusCode::SERVICE_UNAVAILABLE {
+                    assert_eq!(response.headers()["retry-after"], "1");
+                    assert!(start.elapsed() < Duration::from_millis(400), "refused at once");
+                }
+                status
+            }
+        };
+        let mut codes = futures::future::join_all(["a", "b", "c"].map(send)).await;
+        codes.sort();
+        (codes, started.elapsed())
+    }
+
+    #[tokio::test]
+    async fn queue_zero_refuses_at_once_when_every_slot_is_held() {
+        let (codes, _) = three_at_one_slot(Some(0)).await;
+        assert_eq!(codes, [StatusCode::OK, StatusCode::SERVICE_UNAVAILABLE, StatusCode::SERVICE_UNAVAILABLE]);
+    }
+
+    #[tokio::test]
+    async fn queue_n_lets_n_wait_and_turns_the_rest_away() {
+        let (codes, _) = three_at_one_slot(Some(1)).await;
+        assert_eq!(codes, [StatusCode::OK, StatusCode::OK, StatusCode::SERVICE_UNAVAILABLE]);
+    }
+
+    #[tokio::test]
+    async fn an_unset_queue_is_the_long_one() {
+        let (codes, took) = three_at_one_slot(None).await;
+        assert_eq!(codes, [StatusCode::OK; 3]);
+        assert!(took >= Duration::from_millis(1500), "served one after another");
     }
 
     #[tokio::test]

@@ -264,15 +264,23 @@ impl ReplicaSet {
         Some(Lease::acquire(node))
     }
 
-    /// Whether a refusal from [`Self::pick_agent`] is only held slots: the named
-    /// target, or with none any replica, is up and could serve these hints. The
-    /// proxy then waits for a release rather than fail a request a busy replica
-    /// takes moments later.
-    pub fn saturated(&self, hints: &RoutingHints, excluded: &HashSet<String>) -> bool {
+    /// Whether a refusal from [`Self::pick_agent`] is only held slots, and how
+    /// many requests may then wait: the named target, or with none any replica,
+    /// is up and could serve these hints. The proxy then waits for a release
+    /// rather than fail a request a busy replica takes moments later, unless the
+    /// replica's `queue` says otherwise (zero refuses at once). `usize::MAX` is
+    /// the unbounded queue; `None` is no replica that could serve.
+    pub fn queue(&self, hints: &RoutingHints, excluded: &HashSet<String>) -> Option<usize> {
         let inner = self.inner.read().unwrap();
+        let limit = |n: &Arc<Node>| n.replica.queue.unwrap_or(usize::MAX);
         match hints.target.as_ref().and_then(|t| inner.nodes.get(t)) {
-            Some(n) => serves(n, hints, excluded) && holds(n, hints),
-            None => inner.nodes.values().any(|n| serves(n, hints, excluded)),
+            Some(n) => (serves(n, hints, excluded) && holds(n, hints)).then(|| limit(n)),
+            None => inner
+                .nodes
+                .values()
+                .filter(|n| serves(n, hints, excluded))
+                .map(limit)
+                .max(),
         }
     }
 
@@ -444,6 +452,46 @@ mod tests {
         assert_eq!(pick(&p, &h, now).id(), "spark");
         p.mark_unhealthy("spark");
         assert!(p.pick_agent(&h, &HashSet::new(), now).is_none());
+    }
+
+    #[test]
+    fn a_replica_bounds_the_queue_for_its_held_slots() {
+        let none = HashSet::new();
+        let mut local = Replica::new("local");
+        local.capacity = 1;
+        local.queue = Some(0);
+        let p = ReplicaSet::new([local], 8);
+        let now = Instant::now();
+        let h = hints("a");
+        let lease = pick(&p, &h, now);
+        let other = hints("b");
+        assert!(p.pick_agent(&other, &none, now).is_none(), "the slot is held");
+        assert_eq!(p.queue(&other, &none), Some(0), "and nobody may wait for it");
+        assert!(p.wait(0).is_none());
+        drop(lease);
+
+        let mut two = Replica::new("two");
+        two.queue = Some(2);
+        let q = ReplicaSet::new([two], 8);
+        assert_eq!(q.queue(&h, &none), Some(2));
+        let (a, b) = (q.wait(2), q.wait(2));
+        assert!(a.is_some() && b.is_some());
+        assert!(q.wait(2).is_none(), "two wait, the third is turned away");
+        drop(a);
+        assert!(q.wait(2).is_some(), "a place frees when a waiter leaves");
+
+        let open = ReplicaSet::new([Replica::new("open")], 8);
+        assert_eq!(open.queue(&h, &none), Some(usize::MAX), "unset: the long queue");
+        open.mark_unhealthy("open");
+        assert_eq!(open.queue(&h, &none), None, "no replica that could serve");
+
+        let mut text = Replica::new("text");
+        text.vision = false;
+        text.queue = Some(0);
+        let t = ReplicaSet::new([text], 8);
+        let mut image = hints("img");
+        image.images = true;
+        assert_eq!(t.queue(&image, &none), None, "an image skips a text-only replica");
     }
 
     fn pick(pool: &ReplicaSet, h: &RoutingHints, now: Instant) -> Lease {

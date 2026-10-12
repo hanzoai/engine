@@ -52,6 +52,10 @@ pub struct Replica {
     /// Optional backend model ID when replicas use different local aliases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_model: Option<String>,
+    /// How many requests may wait for a held slot: zero refuses at once with 503,
+    /// N lets N wait a few seconds. Unset, they queue as long as a stream may run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue: Option<usize>,
 }
 
 fn default_weight() -> u32 {
@@ -74,6 +78,7 @@ impl Replica {
             weight: default_weight(),
             roles: Vec::new(),
             upstream_model: None,
+            queue: None,
         }
     }
 
@@ -133,6 +138,17 @@ pub struct ReplicaSet {
     inner: RwLock<Inner>,
     max_inflight: usize,
     scheduler: Mutex<SchedulerState>,
+    /// Requests waiting for a held slot now, against the replicas' `queue` limits.
+    waiting: Arc<AtomicUsize>,
+}
+
+/// A place in the queue for a held slot; freed when dropped.
+pub struct Waiter(Arc<AtomicUsize>);
+
+impl Drop for Waiter {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 impl ReplicaSet {
@@ -161,7 +177,18 @@ impl ReplicaSet {
             inner: RwLock::new(inner),
             max_inflight: max_inflight.max(1),
             scheduler: Mutex::new(SchedulerState::default()),
+            waiting: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// Join the queue for a held slot unless `limit` requests already wait.
+    pub fn wait(&self, limit: usize) -> Option<Waiter> {
+        self.waiting
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < limit).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| Waiter(self.waiting.clone()))
     }
 
     /// Route `key` to a replica: the affinity primary first, spilling down the
