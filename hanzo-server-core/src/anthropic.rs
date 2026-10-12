@@ -1014,6 +1014,7 @@ impl AnthropicMessagesRequest {
         }
 
         Ok(ChatCompletionRequest {
+            chat_template_kwargs: None,
             messages: Either::Left(messages),
             model,
             logit_bias: self.logit_bias,

@@ -47,22 +47,58 @@ pub type MessageContent = Either<String, Vec<IndexMap<String, Value>>>;
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
-    /// Minimal reasoning, faster responses
+    /// Least reasoning; a template that has no such level reads it as low
+    Minimal,
+    /// Brief reasoning, faster responses
     Low,
     /// Balanced reasoning depth
     #[default]
     Medium,
     /// Deep reasoning, more thorough analysis
     High,
+    /// Deepest reasoning a template defines above high
+    #[serde(rename = "xhigh")]
+    XHigh,
+    /// Same level as xhigh under another name
+    Max,
 }
 
 impl ReasoningEffort {
-    /// Convert to string representation for chat template
+    /// The name as the client sent it.
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Minimal => "minimal",
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.to_lowercase().as_str() {
+            "minimal" => Some(Self::Minimal),
+            "low" => Some(Self::Low),
+            "medium" => Some(Self::Medium),
+            "high" => Some(Self::High),
+            "xhigh" => Some(Self::XHigh),
+            "max" => Some(Self::Max),
+            _ => None,
+        }
+    }
+
+    /// The name a chat template is rendered with. A template that resolves the six names itself
+    /// (Qwen3.5 / 3.8: `high` is medium, `max` is xhigh, `minimal` is low) gets the name as sent; one
+    /// written for three levels (Harmony) gets low, medium or high.
+    pub fn for_template(self, template: &str) -> &'static str {
+        if template.contains("xhigh") {
+            return self.as_str();
+        }
+        match self {
+            Self::Minimal | Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High | Self::XHigh | Self::Max => "high",
         }
     }
 }

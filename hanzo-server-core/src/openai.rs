@@ -623,7 +623,13 @@ pub struct ChatCompletionRequest {
     pub dry_sequence_breakers: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
-    /// Reasoning effort level for Harmony-format models (GPT-OSS).
+    /// vLLM's name for per-request chat-template variables. `enable_thinking` and `reasoning_effort`
+    /// are read from it when their own fields are absent; the others have no effect.
+    #[serde(default)]
+    #[schema(value_type = Option<Object>)]
+    pub chat_template_kwargs: Option<HashMap<String, Value>>,
+    /// Reasoning effort level for models that think at levels.
+    /// "minimal", "low", "medium", "high", "xhigh" or "max"; the chat template decides what each means.
     /// Controls the depth of reasoning/analysis: "low", "medium", or "high".
     #[schema(example = json!(Option::None::<String>))]
     pub reasoning_effort: Option<String>,

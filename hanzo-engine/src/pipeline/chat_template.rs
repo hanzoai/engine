@@ -102,6 +102,14 @@ impl ChatTemplate {
             .any(|t| crate::reasoning_parsers::harmony::is_harmony_template(t))
     }
 
+    /// The tool-call format this template tells the model to emit, when the output alone would not
+    /// tell it from another (see [`ToolCallFormat::of_template`]).
+    pub fn tool_call_format(&self) -> Option<crate::tools::ToolCallFormat> {
+        self.get_template_contents()
+            .iter()
+            .find_map(|t| crate::tools::ToolCallFormat::of_template(t))
+    }
+
     /// Check if this chat template uses `<think>...</think>` tags for reasoning.
     ///
     /// This is mutually exclusive with Harmony format - if the template uses
@@ -605,7 +613,9 @@ pub fn apply_chat_template_to(
     let date_string = date.format("%d, %B, %Y").to_string();
 
     // Convert reasoning effort to string for template
-    let reasoning_effort_str = reasoning_effort.map(|r| r.as_str()).unwrap_or("medium");
+    let reasoning_effort_str = reasoning_effort
+        .unwrap_or_default()
+        .for_template(&resolved_template);
 
     // Detect builtin tools from the tools list
     // Known builtin tools for GPT-OSS/Harmony format: "browser", "python"

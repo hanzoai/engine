@@ -748,25 +748,30 @@ pub fn affinity_key(headers: &HeaderMap, body: Option<&Value>) -> String {
     s.chars().take(PREFIX_CHARS).collect()
 }
 
-/// Normalize reasoning effort values (e.g. Claude Code's effort: "high" or "max")
-/// to "medium" so backends whose chat templates support xhigh/medium/low (like Qwen)
-/// or backends mapping effort onto discrete tiers do not fail with TemplateError.
+/// Reasoning effort as the owner set it, whichever name the client sends (Claude Code's `high` and
+/// `max`, OpenAI's `minimal`): high is medium, max is xhigh, minimal is low; low, medium and xhigh stay.
+/// A backend whose template knows only some of the names never sees the others.
 fn normalize_reasoning_effort(val: &mut Value) {
+    fn owner(effort: &str) -> Option<&'static str> {
+        match effort {
+            "high" => Some("medium"),
+            "max" => Some("xhigh"),
+            "minimal" => Some("low"),
+            _ => None,
+        }
+    }
     if let Some(obj) = val.as_object_mut() {
         if let Some(oc) = obj.get_mut("output_config").and_then(|v| v.as_object_mut()) {
-            if let Some(effort) = oc.get("effort").and_then(|v| v.as_str()) {
-                if effort == "high" || effort == "max" {
-                    oc.insert("effort".to_string(), Value::String("medium".to_string()));
-                }
+            if let Some(to) = oc.get("effort").and_then(|v| v.as_str()).and_then(owner) {
+                oc.insert("effort".to_string(), Value::String(to.to_string()));
             }
         }
-        if let Some(effort) = obj.get("reasoning_effort").and_then(|v| v.as_str()) {
-            if effort == "high" || effort == "max" {
-                obj.insert(
-                    "reasoning_effort".to_string(),
-                    Value::String("medium".to_string()),
-                );
-            }
+        if let Some(to) = obj
+            .get("reasoning_effort")
+            .and_then(|v| v.as_str())
+            .and_then(owner)
+        {
+            obj.insert("reasoning_effort".to_string(), Value::String(to.to_string()));
         }
     }
 }
@@ -1999,22 +2004,30 @@ mod e2e {
     }
 
     #[test]
-    fn normalize_reasoning_effort_normalizes_high_and_max() {
+    fn normalize_reasoning_effort_applies_the_owners_mapping() {
         let mut v = serde_json::json!({
             "output_config": {"effort": "high"},
             "reasoning_effort": "max"
         });
         normalize_reasoning_effort(&mut v);
         assert_eq!(v["output_config"]["effort"], "medium");
-        assert_eq!(v["reasoning_effort"], "medium");
+        assert_eq!(v["reasoning_effort"], "xhigh");
 
         let mut v2 = serde_json::json!({
-            "output_config": {"effort": "low"},
-            "reasoning_effort": "medium"
+            "output_config": {"effort": "minimal"},
+            "reasoning_effort": "xhigh"
         });
         normalize_reasoning_effort(&mut v2);
         assert_eq!(v2["output_config"]["effort"], "low");
-        assert_eq!(v2["reasoning_effort"], "medium");
+        assert_eq!(v2["reasoning_effort"], "xhigh");
+
+        let mut v3 = serde_json::json!({
+            "output_config": {"effort": "low"},
+            "reasoning_effort": "medium"
+        });
+        normalize_reasoning_effort(&mut v3);
+        assert_eq!(v3["output_config"]["effort"], "low");
+        assert_eq!(v3["reasoning_effort"], "medium");
     }
 
     #[test]

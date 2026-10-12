@@ -66,6 +66,8 @@ impl ItemStatus {
 pub enum ReasoningEffort {
     /// No reasoning
     None,
+    /// Least reasoning effort
+    Minimal,
     /// Low reasoning effort
     Low,
     /// Medium reasoning effort (default)
@@ -73,6 +75,11 @@ pub enum ReasoningEffort {
     Medium,
     /// High reasoning effort
     High,
+    /// Deepest reasoning effort
+    #[serde(rename = "xhigh")]
+    XHigh,
+    /// Same level as xhigh under another name
+    Max,
 }
 
 /// Truncation strategy for input

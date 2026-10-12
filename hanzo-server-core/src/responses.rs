@@ -1465,9 +1465,12 @@ async fn parse_openresponses_request(
     let (enable_thinking, reasoning_effort) = if let Some(ref reasoning) = oairequest.reasoning {
         let effort = reasoning.effort.map(|e| match e {
             crate::responses_types::enums::ReasoningEffort::None => "none".to_string(),
+            crate::responses_types::enums::ReasoningEffort::Minimal => "minimal".to_string(),
             crate::responses_types::enums::ReasoningEffort::Low => "low".to_string(),
             crate::responses_types::enums::ReasoningEffort::Medium => "medium".to_string(),
             crate::responses_types::enums::ReasoningEffort::High => "high".to_string(),
+            crate::responses_types::enums::ReasoningEffort::XHigh => "xhigh".to_string(),
+            crate::responses_types::enums::ReasoningEffort::Max => "max".to_string(),
         });
         // Enable thinking if reasoning is configured with any effort level
         let thinking = reasoning
@@ -1505,6 +1508,7 @@ async fn parse_openresponses_request(
 
     // Convert to ChatCompletionRequest
     let chat_request = ChatCompletionRequest {
+        chat_template_kwargs: None,
         messages: Either::Left(final_messages.clone()),
         model: oairequest.model,
         logit_bias: oairequest.logit_bias,

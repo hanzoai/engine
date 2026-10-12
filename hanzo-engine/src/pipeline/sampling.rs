@@ -704,7 +704,7 @@ mod tests {
     #[test]
     fn gemma4_tool_call_suppresses_raw_content_without_suffix() {
         let tool = weather_tool();
-        let matcher = Arc::new(ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool])).unwrap());
+        let matcher = Arc::new(ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool]), None).unwrap());
         let raw = r#"<|tool_call>call:get_weather{city:<|"|>Paris<|"|>}"#;
 
         let (content, tool_calls) = parse_text_and_tool_calls(raw, Some(matcher)).unwrap();
@@ -718,7 +718,7 @@ mod tests {
     #[test]
     fn reasoning_stream_does_not_fallback_to_raw_delta() {
         let tool = weather_tool();
-        let matcher = Arc::new(ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool])).unwrap());
+        let matcher = Arc::new(ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool]), None).unwrap());
         let raw = r#"<|tool_call>call:get_weather{city:<|"|>Paris<|"|>}"#;
 
         let (content, tool_calls) =
@@ -731,7 +731,7 @@ mod tests {
     #[test]
     fn non_reasoning_stream_uses_raw_delta() {
         let tool = weather_tool();
-        let matcher = Arc::new(ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool])).unwrap());
+        let matcher = Arc::new(ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool]), None).unwrap());
         let raw = r#"<|tool_call>call:get_weather{city:<|"|>Paris<|"|>}"#;
 
         let (content, tool_calls) =

@@ -87,6 +87,8 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         .with_paged_ctxt_len_optional(paged_ctxt_len)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_mtp_config_optional(runtime.mtp_config())
+        .with_prompt_lookup_optional(runtime.prompt_lookup_ngram, runtime.gamma())
+        .with_dflash_optional(runtime.dflash.clone(), runtime.dflash_block_size)
         .with_paged_attn_cache_type(paged_cache_type);
 
     for config in model_configs {
@@ -214,6 +216,8 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         .with_paged_ctxt_len_optional(paged_ctxt_len)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_mtp_config_optional(runtime.mtp_config())
+        .with_prompt_lookup_optional(runtime.prompt_lookup_ngram, runtime.gamma())
+        .with_dflash_optional(runtime.dflash.clone(), runtime.dflash_block_size)
         .with_paged_attn_cache_type(paged_cache_type);
 
     for config in model_configs {
@@ -302,7 +306,9 @@ async fn build_model_configs(
 
         let resolved_loader_id = crate::commands::serve::model_id_of(&model_type);
         let mut config = ModelConfig::new(entry.model_id.clone(), model_selected);
-        if resolved_loader_id != entry.model_id {
+        if let Some(name) = entry.name.clone() {
+            config = config.with_alias(name);
+        } else if resolved_loader_id != entry.model_id {
             config = config.with_alias(entry.model_id.clone());
         }
 

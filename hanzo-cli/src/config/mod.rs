@@ -80,6 +80,9 @@ pub enum ModelKind {
 pub struct ModelEntry {
     pub kind: ModelKind,
     pub model_id: String,
+    /// The id requests name this model by (`"model": "zen6"`), where it is not `model_id`.
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(default)]
     pub tokenizer: Option<PathBuf>,
     #[serde(default)]

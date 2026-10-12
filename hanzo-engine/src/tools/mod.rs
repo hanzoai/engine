@@ -14,6 +14,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use hanzo_llm_mcp::CalledFunction;
+pub use parsers::ToolCallFormat;
 
 pub use hanzo_llm_mcp::{ToolCallback, ToolCallbackWithTool};
 
@@ -27,12 +28,16 @@ fn contains_tool_call_prefix(prefix: &str) -> bool {
     parsers::contains_tool_call_prefix(prefix)
 }
 
-fn process_model_specific_message(message: &str) -> Result<String> {
-    parsers::process_model_specific_message(message)
+fn process_model_specific_message(
+    message: &str,
+    format: Option<ToolCallFormat>,
+) -> Result<String> {
+    parsers::process_model_specific_message_in(message, format)
 }
 
 pub struct ToolCallingMatcher {
     tool_choice: ToolChoice,
+    format: Option<ToolCallFormat>,
     known_tool_names: Option<std::collections::HashSet<String>>,
     tools: Option<Arc<Vec<crate::Tool>>>,
 }
@@ -106,7 +111,13 @@ impl ToolCallingMatcher {
         matches!(self.tool_choice, ToolChoice::Tool(_) | ToolChoice::Required)
     }
 
-    pub fn new(tool_choice: ToolChoice, tools: Option<&[crate::Tool]>) -> anyhow::Result<Self> {
+    /// `format` is what the model's chat template says it emits ([`ToolCallFormat::of_template`]);
+    /// `None` reads every format the parsers know.
+    pub fn new(
+        tool_choice: ToolChoice,
+        tools: Option<&[crate::Tool]>,
+        format: Option<ToolCallFormat>,
+    ) -> anyhow::Result<Self> {
         let known_tool_names = tools.map(|t| {
             t.iter()
                 .map(|tool| tool.function.name.clone())
@@ -115,6 +126,7 @@ impl ToolCallingMatcher {
         let tools_arc = tools.map(|t| Arc::new(t.to_vec()));
         Ok(Self {
             tool_choice,
+            format,
             known_tool_names,
             tools: tools_arc,
         })
@@ -129,7 +141,7 @@ impl ToolCallingMatcher {
             return None;
         }
         let tools = self.tools.as_ref()?;
-        parsers::build_tool_call_grammar(text, tools)
+        parsers::build_tool_call_grammar_in(text, tools, self.format)
     }
 
     /// Build a pure JSON object grammar for Harmony tool call arguments.
@@ -160,7 +172,7 @@ impl ToolCallingMatcher {
         if matches!(self.tool_choice, ToolChoice::None) {
             return Ok((false, false));
         }
-        let message_prefix = process_model_specific_message(message_prefix)?;
+        let message_prefix = process_model_specific_message(message_prefix, self.format)?;
         let message_prefix = fix_broken_json(&message_prefix).map_err(hanzo_ml::Error::msg)?;
 
         // Check if the prefix could be a JSON serialization of any of the following types.
@@ -184,7 +196,7 @@ impl ToolCallingMatcher {
         if matches!(self.tool_choice, ToolChoice::None) {
             return Ok(Vec::new());
         }
-        let message = process_model_specific_message(message)?;
+        let message = process_model_specific_message(message, self.format)?;
         let message = fix_broken_json(&message)?;
 
         let mut calls = if let Ok(deser) =
@@ -224,6 +236,15 @@ impl ToolCallingMatcher {
             return Ok(Vec::new());
         };
 
+        if self.format == Some(ToolCallFormat::Qwen3Coder) {
+            if let Some(tools) = &self.tools {
+                for call in &mut calls {
+                    call.function.arguments =
+                        typed_arguments(tools, &call.function.name, &call.function.arguments);
+                }
+            }
+        }
+
         // Filter out hallucinated tool names.
         if let Some(ref known) = self.known_tool_names {
             let before = calls.len();
@@ -245,6 +266,80 @@ impl ToolCallingMatcher {
 
         Ok(calls)
     }
+}
+
+/// The Qwen3-Coder format writes every argument as text. Each takes the type its tool's schema
+/// declares, as vLLM's `qwen3_coder` parser gives it: `null` is null, a string stays one, integers and
+/// numbers parse (a whole number is an integer), booleans are `true` or not, objects and arrays are
+/// JSON, and a value that does not fit its type stays text.
+fn typed_arguments(tools: &[crate::Tool], name: &str, arguments: &str) -> String {
+    let Some(tool) = tools.iter().find(|t| t.function.name == name) else {
+        return arguments.to_string();
+    };
+    let Ok(Value::Object(mut args)) = serde_json::from_str::<Value>(arguments) else {
+        return arguments.to_string();
+    };
+    let properties = tool
+        .function
+        .parameters
+        .as_ref()
+        .and_then(|p| p.get("properties"))
+        .and_then(Value::as_object);
+    for (key, value) in args.iter_mut() {
+        if let Value::String(text) = value {
+            let kind = properties.and_then(|p| p.get(key)).and_then(|p| p.get("type"));
+            if let Some(typed) = typed_value(text, kind) {
+                *value = typed;
+            }
+        }
+    }
+    serde_json::to_string(&Value::Object(args)).unwrap_or_else(|_| arguments.to_string())
+}
+
+fn typed_value(text: &str, kind: Option<&Value>) -> Option<Value> {
+    if text.eq_ignore_ascii_case("null") {
+        return Some(Value::Null);
+    }
+    let kinds: Vec<String> = match kind {
+        Some(Value::String(k)) => vec![k.to_lowercase()],
+        Some(Value::Array(ks)) => ks
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_lowercase)
+            .collect(),
+        _ => Vec::new(),
+    };
+    let json = || serde_json::from_str::<Value>(text).ok();
+    if kinds.is_empty() {
+        return json().filter(|v| matches!(v, Value::Number(_) | Value::Array(_) | Value::Object(_)));
+    }
+    if kinds
+        .iter()
+        .any(|k| matches!(k.as_str(), "string" | "str" | "text" | "varchar" | "char" | "enum"))
+    {
+        return None;
+    }
+    for k in &kinds {
+        let typed = match k.as_str() {
+            k if k.starts_with("int") || k.starts_with("uint") || matches!(k, "long" | "short" | "unsigned") => {
+                text.trim().parse::<i64>().ok().map(Value::from)
+            }
+            "number" | "float" | "double" => text.trim().parse::<f64>().ok().and_then(|f| {
+                if f.is_finite() && f.fract() == 0.0 && f.abs() < 9e15 {
+                    Some(Value::from(f as i64))
+                } else {
+                    serde_json::Number::from_f64(f).map(Value::Number)
+                }
+            }),
+            "boolean" | "bool" => Some(Value::Bool(text.trim().eq_ignore_ascii_case("true"))),
+            "object" | "array" | "dict" | "list" => json().filter(|v| v.is_object() || v.is_array()),
+            _ => None,
+        };
+        if typed.is_some() {
+            return typed;
+        }
+    }
+    None
 }
 
 /// Checks if the given prefix could be the start of, or the entire JSON serialization of a given type, `T`.
@@ -281,4 +376,78 @@ pub fn parse_text_tools(
         }
     };
     Ok((text_new, tool_calls))
+}
+
+#[cfg(test)]
+mod qwen3_coder_tests {
+    use super::*;
+    use crate::{Function, Tool, ToolType};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    fn tool() -> Tool {
+        let parameters: HashMap<String, Value> = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {
+                "city": {"type": "string"},
+                "days": {"type": "integer"},
+                "scale": {"type": "number"},
+                "metric": {"type": "boolean"},
+                "tags": {"type": "array"},
+                "zip": {"type": "string"},
+            }
+        }))
+        .unwrap();
+        Tool {
+            tp: ToolType::Function,
+            function: Function {
+                description: None,
+                name: "weather".to_string(),
+                parameters: Some(parameters),
+                strict: None,
+            },
+        }
+    }
+
+    const MESSAGE: &str = "<tool_call>\n<function=weather>\n<parameter=city>\nParis\n</parameter>\n<parameter=days>\n3\n</parameter>\n<parameter=scale>\n2.0\n</parameter>\n<parameter=metric>\nTrue\n</parameter>\n<parameter=tags>\n[\"a\", \"b\"]\n</parameter>\n<parameter=zip>\n75001\n</parameter>\n</function>\n</tool_call>";
+
+    #[test]
+    fn arguments_take_the_type_of_their_schema() {
+        let matcher =
+            ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool()]), Some(ToolCallFormat::Qwen3Coder))
+                .unwrap();
+        let calls = matcher.get_call(MESSAGE).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "weather");
+        let args: Value = serde_json::from_str(&calls[0].function.arguments).unwrap();
+        assert_eq!(
+            args,
+            json!({"city": "Paris", "days": 3, "scale": 2, "metric": true, "tags": ["a", "b"], "zip": "75001"})
+        );
+    }
+
+    #[test]
+    fn a_call_in_progress_is_a_possible_tool_and_a_finished_one_is_not_json() {
+        let matcher =
+            ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool()]), Some(ToolCallFormat::Qwen3Coder))
+                .unwrap();
+        let (possible, _) = matcher
+            .prefix_could_be_tool("<tool_call>\n<function=weather>\n<parameter=ci")
+            .unwrap();
+        assert!(possible);
+        assert!(matcher
+            .build_tool_call_grammar("<tool_call>\n")
+            .is_none());
+    }
+
+    #[test]
+    fn a_json_call_still_parses_under_the_hint() {
+        let matcher =
+            ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool()]), Some(ToolCallFormat::Qwen3Coder))
+                .unwrap();
+        let calls = matcher
+            .get_call("<tool_call>{\"name\": \"weather\", \"arguments\": {\"city\": \"Rome\"}}</tool_call>")
+            .unwrap();
+        assert_eq!(calls.len(), 1);
+    }
 }

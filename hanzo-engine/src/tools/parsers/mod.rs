@@ -10,6 +10,7 @@ pub(crate) mod harmony;
 mod llama;
 mod mistral_nemo;
 mod qwen;
+mod qwen3_coder;
 
 use hanzo_ml::Result;
 use llguidance::api::TopLevelGrammar;
@@ -22,6 +23,10 @@ use crate::Tool;
 pub enum ToolCallFormat {
     /// `<tool_call>{"name":"...","arguments":{...}}</tool_call>`
     Qwen,
+    /// `<tool_call><function=NAME><parameter=KEY>VALUE</parameter></function></tool_call>`: the
+    /// Qwen3.5 / 3.8 templates' XML. Chosen by the chat template ([`ToolCallFormat::of_template`]),
+    /// never by sniffing the output, since it opens with the same `<tool_call>` as the JSON one.
+    Qwen3Coder,
     /// `<|python_tag|>{"name":"...","parameters":{...}}`
     Llama,
     /// `[TOOL_CALLS][{"name":"...","arguments":{...}}]`
@@ -30,6 +35,15 @@ pub enum ToolCallFormat {
     DeepSeek,
     /// `<|tool_call>call:NAME{key:<|"|>value<|"|>}<tool_call|>` (non-JSON)
     Gemma4,
+}
+
+impl ToolCallFormat {
+    /// The format a chat template instructs the model to emit, when it is one that the output alone
+    /// does not tell from another.
+    pub fn of_template(template: &str) -> Option<Self> {
+        (template.contains("<function=") && template.contains("<parameter=") && template.contains("<tool_call>"))
+            .then_some(Self::Qwen3Coder)
+    }
 }
 
 /// A parser that can detect and extract tool calls from model output.
@@ -65,6 +79,8 @@ pub trait ToolFormatParser: Send + Sync {
     fn tool_call_grammar(&self, tools: &[Tool], text: &str) -> TopLevelGrammar;
 }
 
+static QWEN3_CODER: qwen3_coder::Qwen3CoderParser = qwen3_coder::Qwen3CoderParser;
+
 /// Static registry of all supported tool-call format parsers, tried in order.
 ///
 /// **Order matters**: Gemma 4 must come before Qwen because `<|tool_call>`
@@ -90,6 +106,19 @@ pub fn contains_tool_call_prefix(text: &str) -> bool {
 /// `text`.  Returns `None` if no format matches or if the format is not
 /// yet ready for grammar activation (e.g. DeepSeek before the JSON fence).
 pub fn build_tool_call_grammar(text: &str, tools: &[Tool]) -> Option<TopLevelGrammar> {
+    build_tool_call_grammar_in(text, tools, None)
+}
+
+/// [`build_tool_call_grammar`] for a model whose chat template names its format
+/// ([`ToolCallFormat::of_template`]); a format that is not JSON is parsed, never constrained.
+pub fn build_tool_call_grammar_in(
+    text: &str,
+    tools: &[Tool],
+    format: Option<ToolCallFormat>,
+) -> Option<TopLevelGrammar> {
+    if format == Some(ToolCallFormat::Qwen3Coder) {
+        return None;
+    }
     for parser in PARSERS.iter() {
         if parser.could_be_tool_call(text) {
             // DeepSeek: wait until the JSON fence is present so we don't
@@ -106,6 +135,19 @@ pub fn build_tool_call_grammar(text: &str, tools: &[Tool]) -> Option<TopLevelGra
 /// Try each parser in order to extract tool calls from `message`.
 /// Returns the original message unchanged if no parser matches.
 pub fn process_model_specific_message(message: &str) -> Result<String> {
+    process_model_specific_message_in(message, None)
+}
+
+/// [`process_model_specific_message`] for a model whose chat template names its format first.
+pub fn process_model_specific_message_in(
+    message: &str,
+    format: Option<ToolCallFormat>,
+) -> Result<String> {
+    if format == Some(ToolCallFormat::Qwen3Coder) {
+        if let Some(json) = QWEN3_CODER.parse(message)? {
+            return Ok(json);
+        }
+    }
     for parser in PARSERS.iter() {
         if let Some(json) = parser.parse(message)? {
             return Ok(json);

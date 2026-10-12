@@ -462,14 +462,7 @@ impl IntoResponse for ChatCompletionResponder {
 
 /// Parse reasoning_effort string to ReasoningEffort enum
 fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
-    effort
-        .as_ref()
-        .and_then(|e| match e.to_lowercase().as_str() {
-            "low" => Some(ReasoningEffort::Low),
-            "medium" => Some(ReasoningEffort::Medium),
-            "high" => Some(ReasoningEffort::High),
-            _ => None,
-        })
+    effort.as_deref().and_then(ReasoningEffort::parse)
 }
 
 /// Parses and validates a chat completion request.
@@ -505,8 +498,19 @@ pub async fn parse_request(
     // Validate that the requested model matches the loaded model
     validate_model_name(&oairequest.model, state.clone())?;
 
-    // Parse reasoning effort for Harmony-format models
-    let reasoning_effort = parse_reasoning_effort(&oairequest.reasoning_effort);
+    // The template variables vLLM clients send as `chat_template_kwargs` stand behind the fields
+    // of the same name.
+    let kwargs = oairequest.chat_template_kwargs.clone().unwrap_or_default();
+    let enable_thinking = oairequest
+        .enable_thinking
+        .or_else(|| kwargs.get("enable_thinking").and_then(|v| v.as_bool()));
+    let reasoning_effort = oairequest.reasoning_effort.clone().or_else(|| {
+        kwargs
+            .get("reasoning_effort")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    });
+    let reasoning_effort = parse_reasoning_effort(&reasoning_effort);
 
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
 
@@ -857,13 +861,13 @@ pub async fn parse_request(
                     images,
                     audios,
                     videos,
-                    enable_thinking: oairequest.enable_thinking,
+                    enable_thinking,
                     reasoning_effort,
                 }
             } else {
                 RequestMessage::Chat {
                     messages,
-                    enable_thinking: oairequest.enable_thinking,
+                    enable_thinking,
                     reasoning_effort,
                 }
             }
@@ -877,7 +881,7 @@ pub async fn parse_request(
             messages.push(message_map);
             RequestMessage::Chat {
                 messages,
-                enable_thinking: oairequest.enable_thinking,
+                enable_thinking,
                 reasoning_effort,
             }
         }

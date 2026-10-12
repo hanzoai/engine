@@ -68,14 +68,7 @@ use which::{Architecture, DiffusionArchitecture, MultimodalArchitecture, SpeechL
 
 /// Parse reasoning effort string to ReasoningEffort enum
 fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
-    effort
-        .as_ref()
-        .and_then(|e| match e.to_lowercase().as_str() {
-            "low" => Some(ReasoningEffort::Low),
-            "medium" => Some(ReasoningEffort::Medium),
-            "high" => Some(ReasoningEffort::High),
-            _ => None,
-        })
+    effort.as_deref().and_then(ReasoningEffort::parse)
 }
 
 static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
