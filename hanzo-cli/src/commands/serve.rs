@@ -33,6 +33,7 @@ pub async fn run_server(
     agent_options: AgentCliOptions,
     sandbox: SandboxOptions,
     global: GlobalOptions,
+    loads: Vec<hanzo_server_core::extension::Load>,
 ) -> Result<()> {
     enforce_license_or_abort();
 
@@ -132,18 +133,34 @@ pub async fn run_server(
     let _ = sandbox_policy;
 
     let hanzo = builder.build().await?;
+    let extensions = match loads.is_empty() {
+        true => None,
+        false => {
+            let device = hanzo_server_core::server::init_device(cpu, global.seed)?;
+            let licensed = tokio::task::spawn_blocking(move || {
+                hanzo_server_core::extension::Licensed::load(
+                    hanzo_server_core::gate::Gate::open(),
+                    loads,
+                    &device,
+                )
+            });
+            Some(licensed.await??)
+        }
+    };
     let hanzo_for_ui = hanzo.clone();
     let hanzo_for_mdns = hanzo.clone();
 
     // Build and run the server
-    let mut app = RouterBuilder::new()
+    let mut routes = RouterBuilder::new()
         .with_hanzo(hanzo)
         .with_max_tool_rounds_optional(server.max_tool_rounds)
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
         .with_agent_permission(runtime.code_exec_permission.into())
-        .with_approval_broker(approval_broker.clone())
-        .build()
-        .await?;
+        .with_approval_broker(approval_broker.clone());
+    if let Some(extensions) = extensions {
+        routes = routes.with_extensions(extensions);
+    }
+    let mut app = routes.build().await?;
 
     if !server.no_ui {
         let enable_code_execution = {

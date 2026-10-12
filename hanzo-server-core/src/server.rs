@@ -1424,7 +1424,7 @@ pub async fn load_model_at_runtime(hanzo: &Arc<Hanzo>, config: ModelConfig) -> R
 
 // TODO: replace with best device?
 /// Initializes the device to be used for computation, optionally forcing CPU usage and setting a seed.
-fn init_device(force_cpu: bool, seed: Option<u64>) -> Result<hanzo_ml::Device> {
+pub fn init_device(force_cpu: bool, seed: Option<u64>) -> Result<hanzo_ml::Device> {
     #[cfg(feature = "wgpu")]
     let device = if force_cpu {
         Device::Cpu

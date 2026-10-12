@@ -13,6 +13,10 @@ license.workspace = true
 rust-version.workspace = true
 default-run = "hanzo-engine"
 
+[lib]
+name = "hanzo_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "hanzo-engine"
 path = "src/main.rs"

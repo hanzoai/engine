@@ -1,0 +1,253 @@
+//! hanzo-cli - Clean command-line interface for hanzo
+//!
+//! A new CLI design with:
+//! - Orthogonal flags (format, adapter, modality are independent)
+//! - Unified PagedAttention configuration
+//! - Logical argument grouping
+//! - Config-file-first support
+
+mod args;
+mod cluster;
+mod commands;
+mod config;
+mod ui;
+
+use anyhow::Result;
+use clap::{CommandFactory, Parser};
+use clap_complete::generate;
+use tracing_subscriber::{prelude::*, EnvFilter};
+
+use args::{resolve_model_type, resolve_quantize_model_type, CacheCommand, Cli, Command};
+use commands::{
+    run_bench, run_board, run_cache_delete, run_cache_list, run_distill_cmd, run_doctor,
+    run_from_config, run_interactive, run_login, run_quantize, run_server, run_train, run_tune,
+    BenchArgs, DistillRunConfig, TrainRunConfig,
+};
+
+const LOG_TARGETS: &[&str] = &[
+    "hanzo",
+    "hanzo_audio",
+    "hanzo_code_exec",
+    "hanzo_engine",
+    "hanzo_llm_mcp",
+    "hanzo_paged_attn",
+    "hanzo_quant",
+    "hanzo_sandbox",
+    "hanzo_server",
+    "hanzo_server_core",
+    "hanzo_train",
+    "hanzo_vision",
+];
+
+/// The `hanzo-engine` command. `loads` are extensions a build outside this repository adds to
+/// `serve`, loaded only under the engine's license entitlement (`hanzo_server_core::extension`);
+/// the public binary passes none.
+pub async fn run(loads: Vec<hanzo_server_core::extension::Load>) -> Result<()> {
+    let cli = Cli::parse();
+    init_tracing(cli.global.verbose);
+
+    match cli.command {
+        Command::Serve {
+            model_type,
+            default_model,
+            server,
+            runtime,
+            agent_options,
+            sandbox,
+        } => {
+            let model_type = resolve_model_type(model_type, default_model)?;
+            run_server(
+                model_type,
+                server,
+                runtime,
+                agent_options,
+                sandbox,
+                cli.global,
+                loads,
+            )
+            .await?;
+        }
+
+        Command::Run {
+            model_type,
+            default_model,
+            runtime,
+            agent_options,
+            sandbox,
+            thinking,
+            input,
+            image,
+            video,
+            audio,
+        } => {
+            let model_type = resolve_model_type(model_type, default_model)?;
+            run_interactive(
+                model_type,
+                runtime,
+                agent_options,
+                sandbox,
+                cli.global,
+                thinking,
+                input,
+                image,
+                video,
+                audio,
+            )
+            .await?;
+        }
+
+        Command::Completions { shell } => {
+            let mut cmd = Cli::command();
+            let name = cmd.get_name().to_string();
+            generate(shell, &mut cmd, name, &mut std::io::stdout());
+        }
+
+        Command::Quantize {
+            model_type,
+            default_quantize,
+        } => {
+            let model_type = resolve_quantize_model_type(model_type, default_quantize)?;
+            run_quantize(model_type, cli.global).await?;
+        }
+
+        Command::FromConfig { file } => {
+            run_from_config(file).await?;
+        }
+
+        Command::Cluster { action } => {
+            cluster::run(action)?;
+        }
+
+        Command::Doctor { json } => {
+            run_doctor(json)?;
+        }
+
+        Command::Tune {
+            model_type,
+            default_model,
+            profile,
+            json,
+            emit_config,
+        } => {
+            let model_type = resolve_model_type(model_type, default_model)?;
+            run_tune(model_type, cli.global, profile, json, emit_config).await?;
+        }
+
+        Command::Train {
+            model,
+            data,
+            lora_rank,
+            lora_alpha,
+            lr,
+            steps,
+            batch_size,
+            out,
+            seed,
+            sample_prompt,
+        } => {
+            run_train(TrainRunConfig {
+                model,
+                data,
+                lora_rank,
+                lora_alpha,
+                lr,
+                steps,
+                batch_size,
+                out,
+                seed,
+                sample_prompt,
+            })?;
+        }
+
+        Command::Distill {
+            teacher,
+            student,
+            prompts,
+            max_tokens,
+            temperature,
+            lora_rank,
+            lora_alpha,
+            lr,
+            steps,
+            batch_size,
+            out,
+            seed,
+            sample_prompt,
+        } => {
+            run_distill_cmd(DistillRunConfig {
+                teacher,
+                student,
+                prompts,
+                max_tokens,
+                temperature,
+                lora_rank,
+                lora_alpha,
+                lr,
+                steps,
+                batch_size,
+                out,
+                seed,
+                sample_prompt,
+            })?;
+        }
+
+        Command::Login { token } => {
+            run_login(token)?;
+        }
+
+        Command::Cache { cmd } => match cmd {
+            CacheCommand::List => run_cache_list()?,
+            CacheCommand::Delete { model_id } => run_cache_delete(&model_id)?,
+        },
+
+        Command::Bench {
+            model_type,
+            default_model,
+            runtime,
+            prompt_len,
+            gen_len,
+            repetitions,
+            concurrency,
+            stochastic,
+            json,
+        } => {
+            let model_type = resolve_model_type(model_type, default_model)?;
+            let args = BenchArgs {
+                prompt_len,
+                gen_len,
+                repetitions,
+                concurrency,
+                stochastic,
+                json,
+            };
+            run_bench(model_type, runtime, cli.global, args).await?;
+        }
+        Command::Board { cmd } => run_board(cmd)?,
+    }
+
+    Ok(())
+}
+
+fn init_tracing(verbose: u8) {
+    tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| default_filter(verbose)))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+}
+
+fn default_filter(verbose: u8) -> EnvFilter {
+    let (base, level) = match verbose {
+        0 => ("warn", "info"),
+        1 => ("warn", "debug"),
+        _ => ("warn,hf_hub=info", "trace"),
+    };
+    LOG_TARGETS
+        .iter()
+        .fold(EnvFilter::new(base), |filter, target| {
+            filter.add_directive(
+                format!("{target}={level}")
+                    .parse()
+                    .expect("valid default log directive"),
+            )
+        })
+}

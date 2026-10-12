@@ -46,6 +46,8 @@ intel-mkl-src = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+ed25519-dalek.workspace = true
+tower = { version = "0.5", features = ["util"] }
 
 [features]
 default = ["swagger-ui"]

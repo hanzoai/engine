@@ -113,6 +113,8 @@ pub struct RouterBuilder {
     max_body_limit: Option<usize>,
     /// Server-level agentic defaults
     agentic_defaults: AgenticDefaults,
+    /// Extensions loaded under a license: their routes and picks.
+    extensions: Option<crate::extension::Licensed>,
 }
 
 impl Default for RouterBuilder {
@@ -127,6 +129,7 @@ impl Default for RouterBuilder {
             allowed_origins: None,
             max_body_limit: None,
             agentic_defaults: AgenticDefaults::default(),
+            extensions: None,
         }
     }
 }
@@ -235,6 +238,12 @@ impl RouterBuilder {
         self
     }
 
+    /// Serves `extensions`' routes beside the engine's and asks their picks first.
+    pub fn with_extensions(mut self, extensions: crate::extension::Licensed) -> Self {
+        self.extensions = Some(extensions);
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -259,6 +268,10 @@ impl RouterBuilder {
             self.max_body_limit,
             self.agentic_defaults,
         )?;
+
+        if let Some(extensions) = &self.extensions {
+            router = extensions.serve(router);
+        }
 
         #[cfg(feature = "swagger-ui")]
         if self.include_swagger_routes {

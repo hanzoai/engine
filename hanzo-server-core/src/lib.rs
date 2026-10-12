@@ -230,6 +230,8 @@ mod completion_core;
 pub mod completions;
 pub mod embeddings;
 pub mod files;
+pub mod extension;
+pub mod gate;
 pub mod handler_core;
 mod handlers;
 pub mod image_generation;

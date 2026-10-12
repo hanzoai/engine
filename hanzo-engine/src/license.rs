@@ -23,6 +23,9 @@ pub const LICENSE_TOKEN_ENV: &str = "HANZO_ENGINE_LICENSE_TOKEN";
 /// Env var holding a path to a file whose contents are the token (fallback source).
 pub const LICENSE_FILE_ENV: &str = "HANZO_ENGINE_LICENSE_FILE";
 
+/// The entitlement a license names to load Kai and Enso, the proprietary models, into the engine.
+pub const LOCAL_KAI_ENSO: &str = "local_kai_enso";
+
 /// Current token schema version. `verify_license` rejects anything else.
 pub const LICENSE_SCHEMA_VERSION: u8 = 1;
 
@@ -105,6 +108,8 @@ pub enum LicenseError {
     NotYetValid,
     /// Token's `app_id` does not match this build's expected app.
     WrongApp,
+    /// A valid token whose `features` do not name the entitlement asked for.
+    NotEntitled,
 }
 
 impl std::fmt::Display for LicenseError {
@@ -116,6 +121,7 @@ impl std::fmt::Display for LicenseError {
             LicenseError::Expired => "license token has expired",
             LicenseError::NotYetValid => "license token is not yet valid (issued-at is in the future)",
             LicenseError::WrongApp => "license token app_id does not match this build",
+            LicenseError::NotEntitled => "license token does not grant this entitlement",
         };
         f.write_str(msg)
     }
@@ -173,28 +179,48 @@ pub fn verify_license(
     Ok(license)
 }
 
-fn current_unix_time() -> i64 {
+/// [`verify_license`], then the claims must name `entitlement` among their `features`.
+pub fn verify_entitlement(
+    token: &str,
+    pubkey: &[u8; 32],
+    expected_app: &str,
+    now_unix: i64,
+    entitlement: &str,
+) -> Result<License, LicenseError> {
+    let license = verify_license(token, pubkey, expected_app, now_unix)?;
+    match license.features.iter().any(|f| f == entitlement) {
+        true => Ok(license),
+        false => Err(LicenseError::NotEntitled),
+    }
+}
+
+/// Seconds since the Unix epoch on this host's clock; 0 before it.
+pub fn current_unix_time() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }
 
-/// Read the token from `HANZO_ENGINE_LICENSE_TOKEN`, falling back to the file named by
-/// `HANZO_ENGINE_LICENSE_FILE`, and verify it against the embedded pubkey + this build's expected app
-/// + the current system time.
-pub fn load_and_verify() -> Result<License, LicenseError> {
-    let token = match std::env::var(LICENSE_TOKEN_ENV) {
-        Ok(t) if !t.trim().is_empty() => t,
+/// The token from `HANZO_ENGINE_LICENSE_TOKEN`, falling back to the file named by
+/// `HANZO_ENGINE_LICENSE_FILE`.
+pub fn read_token() -> Result<String, LicenseError> {
+    match std::env::var(LICENSE_TOKEN_ENV) {
+        Ok(t) if !t.trim().is_empty() => Ok(t),
         _ => match std::env::var(LICENSE_FILE_ENV) {
             Ok(path) if !path.trim().is_empty() => {
-                std::fs::read_to_string(path.trim()).map_err(|_| LicenseError::Missing)?
+                std::fs::read_to_string(path.trim()).map_err(|_| LicenseError::Missing)
             }
-            _ => return Err(LicenseError::Missing),
+            _ => Err(LicenseError::Missing),
         },
-    };
+    }
+}
+
+/// Read the token ([`read_token`]) and verify it against the embedded pubkey + this build's
+/// expected app + the current system time.
+pub fn load_and_verify() -> Result<License, LicenseError> {
     verify_license(
-        &token,
+        &read_token()?,
         &HANZO_LICENSE_PUBKEY,
         EXPECTED_APP_ID,
         current_unix_time(),
@@ -286,6 +312,23 @@ mod tests {
         let token = encode_license(&make_license(DEV_APP, now, now + ONE_DAY), &test_key());
         let err = verify_license(&token, &HANZO_LICENSE_PUBKEY, DEV_APP, now).unwrap_err();
         assert_eq!(err, LicenseError::BadSig);
+    }
+
+    // A valid token naming the entitlement grants it; one that does not is NotEntitled; a bad
+    // signature is refused before any entitlement is read.
+    #[test]
+    fn entitlement_is_named_or_refused() {
+        let now = 1_700_000_000;
+        let mut lic = make_license(DEV_APP, now, now + ONE_DAY);
+        let plain = encode_license(&lic, &test_key());
+        lic.features.push(LOCAL_KAI_ENSO.to_string());
+        let entitled = encode_license(&lic, &test_key());
+        let check = |t: &str, key: &[u8; 32]| {
+            verify_entitlement(t, key, DEV_APP, now, LOCAL_KAI_ENSO)
+        };
+        assert_eq!(check(&entitled, &test_pubkey()).unwrap(), lic);
+        assert_eq!(check(&plain, &test_pubkey()), Err(LicenseError::NotEntitled));
+        assert_eq!(check(&entitled, &HANZO_LICENSE_PUBKEY), Err(LicenseError::BadSig));
     }
 
     // (a) a freshly-issued valid token verifies OK.

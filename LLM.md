@@ -584,6 +584,25 @@ fast path; runtime HW auto-select is kept). One bare name per real knob. Canonic
   development key signed, which must fail `BadSig`. Rotating the key means a new KMS value, both
   public constants, and a fresh production token here and in hanzoai/licensing.
 
+## Extensions (`hanzo-server-core/src/extension.rs`, `gate.rs`)
+
+A build outside this repository adds to `hanzo-engine serve` through one seam: `hanzo_cli::run(loads)`
+(the public binary passes none). A `Load` builds an `Extension` on the engine's device: routes merged
+beside the engine's, and a `pick` every request passes first (`Answer` it, or `Pass` it on); `bind`
+hands it the engine's own router so it can answer through the engine in process.
+
+- Extensions load only through ONE check, `Licensed::load(Gate::open(), loads, device)`: the license
+  token (`HANZO_ENGINE_LICENSE_TOKEN` / `_FILE`, the key above, this build's app) must name the
+  entitlement `local_kai_enso` (`license::verify_entitlement`). Refused, no loader runs and the error
+  names only the license's failure. Past `exp` the gate reads the token again; unrenewed, extension
+  routes answer 403 `unlicensed` and picks are skipped.
+- Kai (`POST /v1/decisions`) and Enso (catalog routing) are such extensions and live in the private
+  `hanzo-inc/engine` (`host/`), never here: cargo resolves an optional path or git dependency even
+  with its feature off (missing path: "No such file or directory"; private git: HTTP 404), so a private
+  crate named in this workspace breaks every public clone and lands in the public `Cargo.lock`.
+- hanzo-ml 0.11.111, hanzo-nn 0.11.48, hanzo-transformers 0.11.18: Kai's pins, so one hanzo-ml links
+  when the private host builds this engine with Kai (cargo unifies 0.11.x to the highest).
+
 ## Latest Upstream Features (as of commit 530463af1)
 
 - **Qwen 3 VL** - Vision-language model support (#1657)
