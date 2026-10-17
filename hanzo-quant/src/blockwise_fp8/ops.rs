@@ -811,7 +811,10 @@ pub fn w8a8_matmul(
     };
     let (qa_ptr, _g1) = slice_ptr(qa_c.as_cuda_slice::<F8E4M3>()?, qa.layout().start_offset());
     let (sa_ptr, _g2) = slice_ptr(sa_c.as_cuda_slice::<f32>()?, sa.layout().start_offset());
-    let (w_ptr, _g3) = slice_ptr(w_c.as_cuda_slice::<F8E4M3>()?, weight.layout().start_offset());
+    let (w_ptr, _g3) = slice_ptr(
+        w_c.as_cuda_slice::<F8E4M3>()?,
+        weight.layout().start_offset(),
+    );
     let (s_ptr, _g4) = slice_ptr(s_c.as_cuda_slice::<f32>()?, scales.layout().start_offset());
     let stream = dev.cuda_stream().cu_stream();
 
@@ -886,10 +889,16 @@ pub fn fp8_indexed_moe_gemm(
     let input_has_topk_dim = rows_per_token > 1;
     let (num_experts, n, weight_k) = weights.dims3()?;
     if weight_k != k || weights.dtype() != DType::F8E4M3 {
-        hanzo_ml::bail!("Weights {:?} {:?} for K {k}", weights.dims(), weights.dtype());
+        hanzo_ml::bail!(
+            "Weights {:?} {:?} for K {k}",
+            weights.dims(),
+            weights.dtype()
+        );
     }
     let (qa, sa) = fp8(
-        &input.reshape((num_tokens * rows_per_token, k))?.contiguous()?,
+        &input
+            .reshape((num_tokens * rows_per_token, k))?
+            .contiguous()?,
         Fp8Mode::Gather,
     )?;
     let (weights, scales, indices) = (
@@ -915,7 +924,10 @@ pub fn fp8_indexed_moe_gemm(
     };
     let (qa_ptr, _g1) = slice_ptr(qa_c.as_cuda_slice::<F8E4M3>()?, qa.layout().start_offset());
     let (sa_ptr, _g2) = slice_ptr(sa_c.as_cuda_slice::<f32>()?, sa.layout().start_offset());
-    let (w_ptr, _g3) = slice_ptr(w_c.as_cuda_slice::<F8E4M3>()?, weights.layout().start_offset());
+    let (w_ptr, _g3) = slice_ptr(
+        w_c.as_cuda_slice::<F8E4M3>()?,
+        weights.layout().start_offset(),
+    );
     let (s_ptr, _g4) = slice_ptr(s_c.as_cuda_slice::<f32>()?, scales.layout().start_offset());
     let (i_ptr, _g5) = slice_ptr(i_c.as_cuda_slice::<u32>()?, indices.layout().start_offset());
     let stream = dev.cuda_stream().cu_stream();
@@ -1322,19 +1334,37 @@ mod tests {
         let Ok(dev) = Device::new_cuda(0) else {
             return Ok(());
         };
-        for (n, k) in [(10240, 2560), (6144, 2560), (2560, 6144), (640, 2560), (2560, 640)] {
+        for (n, k) in [
+            (10240, 2560),
+            (6144, 2560),
+            (2560, 6144),
+            (640, 2560),
+            (2560, 640),
+        ] {
             let (w, s) = fp8_weight(&[n, k], &Device::Cpu)?;
             let (wg, sg) = (w.to_device(&dev)?, s.to_device(&dev)?);
             for m in [1, 4, 5, 64, 300] {
                 let x = Tensor::randn(0f32, 1f32, (m, k), &Device::Cpu)?.to_dtype(DType::BF16)?;
                 let want = ops::w8a8_reference(&x, &w, &s, &[128, 128], Fp8Mode::Linear)?;
-                let got = ops::fp8_blockwise_matmul(&x.to_device(&dev)?, &wg, &sg, &[128, 128], Fp8Mode::Linear)?;
+                let got = ops::fp8_blockwise_matmul(
+                    &x.to_device(&dev)?,
+                    &wg,
+                    &sg,
+                    &[128, 128],
+                    Fp8Mode::Linear,
+                )?;
                 assert_eq!(got.dtype(), DType::BF16);
                 assert_within_ulp(&format!("({n},{k}) m={m}"), &got, &want)?;
             }
             // f32 activations keep an f32 output
             let x = Tensor::randn(0f32, 1f32, (3, k), &Device::Cpu)?;
-            let got = ops::fp8_blockwise_matmul(&x.to_device(&dev)?, &wg, &sg, &[128, 128], Fp8Mode::Linear)?;
+            let got = ops::fp8_blockwise_matmul(
+                &x.to_device(&dev)?,
+                &wg,
+                &sg,
+                &[128, 128],
+                Fp8Mode::Linear,
+            )?;
             assert_eq!(got.dtype(), DType::F32);
         }
         Ok(())
@@ -1354,7 +1384,8 @@ mod tests {
             let ids: Vec<u32> = (0..m * topk).map(|i| ((i * 5 + 3) % e) as u32).collect();
             let ids = Tensor::from_vec(ids, (m, topk), &Device::Cpu)?;
             for rows in [1, topk] {
-                let x = Tensor::randn(0f32, 1f32, (m, rows, k), &Device::Cpu)?.to_dtype(DType::BF16)?;
+                let x =
+                    Tensor::randn(0f32, 1f32, (m, rows, k), &Device::Cpu)?.to_dtype(DType::BF16)?;
                 let got = ops::fp8_indexed_moe_gemm(
                     &x.to_device(&dev)?,
                     &wg,
@@ -1373,12 +1404,25 @@ mod tests {
                 for t in 0..m {
                     for j in 0..topk {
                         let ex = idv[t][j] as usize;
-                        let wd = ops::fp8_blockwise_dequantize(&w.get(ex)?, &s.get(ex)?, vec![128, 128], DType::F32)?;
+                        let wd = ops::fp8_blockwise_dequantize(
+                            &w.get(ex)?,
+                            &s.get(ex)?,
+                            vec![128, 128],
+                            DType::F32,
+                        )?;
                         let r = if rows > 1 { j } else { 0 };
-                        want.push(a.get(t)?.get(r)?.unsqueeze(0)?.matmul(&wd.t()?)?.squeeze(0)?);
+                        want.push(
+                            a.get(t)?
+                                .get(r)?
+                                .unsqueeze(0)?
+                                .matmul(&wd.t()?)?
+                                .squeeze(0)?,
+                        );
                     }
                 }
-                let want = Tensor::stack(&want, 0)?.reshape((m, topk, n))?.to_dtype(DType::BF16)?;
+                let want = Tensor::stack(&want, 0)?
+                    .reshape((m, topk, n))?
+                    .to_dtype(DType::BF16)?;
                 assert_within_ulp(&format!("moe m={m} rows={rows}"), &got, &want)?;
             }
         }

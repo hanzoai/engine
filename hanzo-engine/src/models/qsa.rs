@@ -51,7 +51,15 @@ pub(crate) fn attend(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
     let scores = (q.to_dtype(DType::F32)?.matmul(&k.t()?.contiguous()?)? * f64::from(scale))?;
     let offset = l - s;
     let mask: Vec<f32> = (0..s)
-        .flat_map(|i| (0..l).map(move |j| if j <= offset + i { 0.0 } else { f32::NEG_INFINITY }))
+        .flat_map(|i| {
+            (0..l).map(move |j| {
+                if j <= offset + i {
+                    0.0
+                } else {
+                    f32::NEG_INFINITY
+                }
+            })
+        })
         .collect();
     let mask = Tensor::from_vec(mask, (1, 1, s, l), q.device())?;
     let scores = scores.broadcast_add(&mask)?;

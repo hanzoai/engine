@@ -87,8 +87,7 @@ impl SchedulerState {
         for by_worker in self.residency.values_mut() {
             by_worker.retain(|_, (_, seen)| now.saturating_duration_since(*seen) < PREFIX_TTL);
         }
-        self.residency
-            .retain(|_, by_worker| !by_worker.is_empty());
+        self.residency.retain(|_, by_worker| !by_worker.is_empty());
     }
 
     /// Most any worker has reported for a prefix, or zero with nothing measured.
@@ -199,8 +198,7 @@ impl ReplicaSet {
                     .get(&pin.worker)
                     .filter(|n| {
                         healthy(n)
-                            && n.inflight.load(Ordering::Acquire)
-                                < self.slots(n).saturating_mul(2)
+                            && n.inflight.load(Ordering::Acquire) < self.slots(n).saturating_mul(2)
                     })
                     .cloned();
             }
@@ -465,8 +463,15 @@ mod tests {
         let h = hints("a");
         let lease = pick(&p, &h, now);
         let other = hints("b");
-        assert!(p.pick_agent(&other, &none, now).is_none(), "the slot is held");
-        assert_eq!(p.queue(&other, &none), Some(0), "and nobody may wait for it");
+        assert!(
+            p.pick_agent(&other, &none, now).is_none(),
+            "the slot is held"
+        );
+        assert_eq!(
+            p.queue(&other, &none),
+            Some(0),
+            "and nobody may wait for it"
+        );
         assert!(p.wait(0).is_none());
         drop(lease);
 
@@ -481,7 +486,11 @@ mod tests {
         assert!(q.wait(2).is_some(), "a place frees when a waiter leaves");
 
         let open = ReplicaSet::new([Replica::new("open")], 8);
-        assert_eq!(open.queue(&h, &none), Some(usize::MAX), "unset: the long queue");
+        assert_eq!(
+            open.queue(&h, &none),
+            Some(usize::MAX),
+            "unset: the long queue"
+        );
         open.mark_unhealthy("open");
         assert_eq!(open.queue(&h, &none), None, "no replica that could serve");
 
@@ -491,7 +500,11 @@ mod tests {
         let t = ReplicaSet::new([text], 8);
         let mut image = hints("img");
         image.images = true;
-        assert_eq!(t.queue(&image, &none), None, "an image skips a text-only replica");
+        assert_eq!(
+            t.queue(&image, &none),
+            None,
+            "an image skips a text-only replica"
+        );
     }
 
     fn pick(pool: &ReplicaSet, h: &RoutingHints, now: Instant) -> Lease {

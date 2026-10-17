@@ -39,7 +39,8 @@ pub(crate) struct Fixture {
 }
 
 pub(crate) fn path() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/blockwise_fp8.safetensors")
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/blockwise_fp8.safetensors")
 }
 
 pub(crate) fn load() -> Result<Fixture> {
@@ -119,13 +120,23 @@ pub(crate) struct Reference {
     pub c: Vec<f64>,
 }
 
-pub(crate) fn reference(qa: &Tensor, sa: &Tensor, qw: &Tensor, sw: &Tensor, m: usize) -> Result<Reference> {
+pub(crate) fn reference(
+    qa: &Tensor,
+    sa: &Tensor,
+    qw: &Tensor,
+    sw: &Tensor,
+    m: usize,
+) -> Result<Reference> {
     let (_, k) = qa.dims2()?;
     let (n, _) = qw.dims2()?;
     let kb = k / BLOCK;
     let a = codes(&qa.narrow(0, 0, m)?)?;
     let w = codes(qw)?;
-    let sa: Vec<f64> = sa.narrow(0, 0, m)?.to_dtype(DType::F64)?.flatten_all()?.to_vec1()?;
+    let sa: Vec<f64> = sa
+        .narrow(0, 0, m)?
+        .to_dtype(DType::F64)?
+        .flatten_all()?
+        .to_vec1()?;
     let sw: Vec<f64> = sw.to_dtype(DType::F64)?.flatten_all()?.to_vec1()?;
     let mut y = vec![0.0; m * n];
     let mut c = vec![0.0; m * n];
@@ -221,7 +232,11 @@ mod tests {
                 case.k,
                 got.len()
             );
-            assert_eq!(bad, 0, "{}: fixture output outside the fp64 bound", case.name);
+            assert_eq!(
+                bad, 0,
+                "{}: fixture output outside the fp64 bound",
+                case.name
+            );
         }
         Ok(())
     }

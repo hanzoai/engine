@@ -413,7 +413,8 @@ pub(crate) fn quantize_linear(input: &Tensor, input_scale: f32) -> Result<(Tenso
                 let Storage::Cuda(s) = &*storage else {
                     hanzo_ml::bail!("expected CUDA storage")
                 };
-                let (x_ptr, _x) = slice_ptr(s.as_cuda_slice::<bf16>()?, input.layout().start_offset());
+                let (x_ptr, _x) =
+                    slice_ptr(s.as_cuda_slice::<bf16>()?, input.layout().start_offset());
                 unsafe {
                     nvfp4_quantize_activations_bf16(
                         x_ptr as *const bf16,

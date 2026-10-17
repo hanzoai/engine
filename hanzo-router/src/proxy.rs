@@ -692,10 +692,7 @@ struct CacheScan {
 }
 
 const CACHE_MARKER_LEN: usize = b"\"cache_read_input_tokens\":".len();
-const CACHE_MARKERS: [&[u8]; 2] = [
-    b"\"cache_read_input_tokens\":",
-    b"\"cached_tokens\":",
-];
+const CACHE_MARKERS: [&[u8]; 2] = [b"\"cache_read_input_tokens\":", b"\"cached_tokens\":"];
 
 impl CacheScan {
     fn scan(&mut self, bytes: &[u8]) {
@@ -704,7 +701,10 @@ impl CacheScan {
         let first = window.len().saturating_sub(bytes.len() + CACHE_MARKER_LEN);
         for marker in CACHE_MARKERS {
             let mut at = first;
-            while let Some(hit) = window[at..].windows(marker.len()).position(|w| w == &marker[..]) {
+            while let Some(hit) = window[at..]
+                .windows(marker.len())
+                .position(|w| w == &marker[..])
+            {
                 let value = at + hit + marker.len();
                 let mut end = value;
                 while end < window.len() && window[end].is_ascii_digit() {
@@ -1711,7 +1711,10 @@ mod e2e {
                 let status = response.status();
                 if status == StatusCode::SERVICE_UNAVAILABLE {
                     assert_eq!(response.headers()["retry-after"], "1");
-                    assert!(start.elapsed() < Duration::from_millis(400), "refused at once");
+                    assert!(
+                        start.elapsed() < Duration::from_millis(400),
+                        "refused at once"
+                    );
                 }
                 status
             }
@@ -1724,20 +1727,37 @@ mod e2e {
     #[tokio::test]
     async fn queue_zero_refuses_at_once_when_every_slot_is_held() {
         let (codes, _) = three_at_one_slot(Some(0)).await;
-        assert_eq!(codes, [StatusCode::OK, StatusCode::SERVICE_UNAVAILABLE, StatusCode::SERVICE_UNAVAILABLE]);
+        assert_eq!(
+            codes,
+            [
+                StatusCode::OK,
+                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::SERVICE_UNAVAILABLE
+            ]
+        );
     }
 
     #[tokio::test]
     async fn queue_n_lets_n_wait_and_turns_the_rest_away() {
         let (codes, _) = three_at_one_slot(Some(1)).await;
-        assert_eq!(codes, [StatusCode::OK, StatusCode::OK, StatusCode::SERVICE_UNAVAILABLE]);
+        assert_eq!(
+            codes,
+            [
+                StatusCode::OK,
+                StatusCode::OK,
+                StatusCode::SERVICE_UNAVAILABLE
+            ]
+        );
     }
 
     #[tokio::test]
     async fn an_unset_queue_is_the_long_one() {
         let (codes, took) = three_at_one_slot(None).await;
         assert_eq!(codes, [StatusCode::OK; 3]);
-        assert!(took >= Duration::from_millis(1500), "served one after another");
+        assert!(
+            took >= Duration::from_millis(1500),
+            "served one after another"
+        );
     }
 
     #[tokio::test]
@@ -1857,9 +1877,14 @@ mod e2e {
             .send()
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK, "an absent target is not a refusal");
         assert_eq!(
-            resp.headers()[REPLICA_HEADER], "evo",
+            resp.status(),
+            StatusCode::OK,
+            "an absent target is not a refusal"
+        );
+        assert_eq!(
+            resp.headers()[REPLICA_HEADER],
+            "evo",
             "with no matching ID, the pin and locality decide"
         );
     }

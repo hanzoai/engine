@@ -9,7 +9,10 @@ fn gb10() -> Result<(Device, CudaDevice)> {
         unreachable!()
     };
     if !device_supported(&cuda) {
-        hanzo_ml::bail!("these tests need an sm_121 device, got {:?}", compute_cap(&cuda)?);
+        hanzo_ml::bail!(
+            "these tests need an sm_121 device, got {:?}",
+            compute_cap(&cuda)?
+        );
     }
     Ok((device, cuda))
 }
@@ -38,9 +41,17 @@ fn kernels_prepare_on_sm121() -> Result<()> {
             r.major, r.minor, r.threads, r.registers_per_thread, r.shared_bytes, r.local_bytes
         );
         assert_eq!(r.threads, 384, "{tile:?}: 1 producer + 2 math warpgroups");
-        assert!(r.shared_bytes <= SMEM_OPT_IN, "{tile:?}: {} B shared", r.shared_bytes);
+        assert!(
+            r.shared_bytes <= SMEM_OPT_IN,
+            "{tile:?}: {} B shared",
+            r.shared_bytes
+        );
         for (m, n, k) in [(5, 16384, 2560), (200, 2560, 6144), (4096, 1280, 2560)] {
-            assert_eq!(workspace_size(&cuda, tile, m, n, k)?, 0, "{tile:?} at ({m},{n},{k})");
+            assert_eq!(
+                workspace_size(&cuda, tile, m, n, k)?,
+                0,
+                "{tile:?} at ({m},{n},{k})"
+            );
         }
     }
     Ok(())
@@ -82,7 +93,12 @@ fn matches_fixture_bitwise() -> Result<()> {
         let sw = case.sw.to_device(&dev)?;
         let want = bits(&case.out)?;
         for &m in &case.m {
-            let got = bits(&matmul(&qa.narrow(0, 0, m)?, &sa.narrow(0, 0, m)?, &qw, &sw)?)?;
+            let got = bits(&matmul(
+                &qa.narrow(0, 0, m)?,
+                &sa.narrow(0, 0, m)?,
+                &qw,
+                &sw,
+            )?)?;
             let want = &want[..m * case.n];
             let diff: Vec<usize> = (0..got.len()).filter(|&i| got[i] != want[i]).collect();
             if diff.is_empty() {
@@ -90,7 +106,11 @@ fn matches_fixture_bitwise() -> Result<()> {
             }
             failures += 1;
             let worst = diff.iter().map(|&i| ulps(got[i], want[i])).max().unwrap();
-            let first: Vec<(usize, usize)> = diff.iter().take(5).map(|&i| (i / case.n, i % case.n)).collect();
+            let first: Vec<(usize, usize)> = diff
+                .iter()
+                .take(5)
+                .map(|&i| (i / case.n, i % case.n))
+                .collect();
             println!(
                 "{} M={m} {:?}: {} of {} differ, max {worst} ulp, first {first:?}",
                 case.name,
@@ -99,10 +119,17 @@ fn matches_fixture_bitwise() -> Result<()> {
                 got.len()
             );
         }
-        println!("{}: N={} K={} M={:?}: checked", case.name, case.n, case.k, case.m);
+        println!(
+            "{}: N={} K={} M={:?}: checked",
+            case.name, case.n, case.k, case.m
+        );
     }
     if failures > 0 {
-        let meta: Vec<_> = fx.metadata.iter().filter(|(k, _)| k.as_str() != "cases").collect();
+        let meta: Vec<_> = fx
+            .metadata
+            .iter()
+            .filter(|(k, _)| k.as_str() != "cases")
+            .collect();
         println!("fixture metadata: {meta:?}");
     }
     assert_eq!(failures, 0, "outputs differ from the fixture's");
@@ -158,9 +185,17 @@ fn operands(rows: usize, n: usize, k: usize, seed: u64) -> Result<Operands> {
     let cpu = Device::Cpu;
     Ok(Operands {
         qa: Tensor::from_vec(a, (rows, k), &cpu)?,
-        sa: Tensor::from_vec(rng.scales(rows * k / BLOCK, 1e-4, 1e-1), (rows, k / BLOCK), &cpu)?,
+        sa: Tensor::from_vec(
+            rng.scales(rows * k / BLOCK, 1e-4, 1e-1),
+            (rows, k / BLOCK),
+            &cpu,
+        )?,
         qw: Tensor::from_vec(rng.codes(n * k), (n, k), &cpu)?,
-        sw: Tensor::from_vec(rng.scales(n / BLOCK * k / BLOCK, 1e-5, 1e-2), (n / BLOCK, k / BLOCK), &cpu)?,
+        sw: Tensor::from_vec(
+            rng.scales(n / BLOCK * k / BLOCK, 1e-5, 1e-2),
+            (n / BLOCK, k / BLOCK),
+            &cpu,
+        )?,
     })
 }
 
@@ -198,7 +233,12 @@ fn tiles_agree_bitwise() -> Result<()> {
             for tile in Tile::ALL {
                 let got = bits(&matmul_tile(&qa, &sa, &gpu.qw, &gpu.sw, tile)?)?;
                 let diff = got.iter().zip(&dispatched).filter(|(a, b)| a != b).count();
-                assert_eq!(diff, 0, "N={n} K={k} M={m}: {tile:?} differs from {:?} in {diff}", Tile::for_rows(m));
+                assert_eq!(
+                    diff,
+                    0,
+                    "N={n} K={k} M={m}: {tile:?} differs from {:?} in {diff}",
+                    Tile::for_rows(m)
+                );
             }
             for (idx, &b) in dispatched.iter().enumerate() {
                 let y = bf16::from_bits(b).to_f64();
@@ -211,7 +251,10 @@ fn tiles_agree_bitwise() -> Result<()> {
                 );
             }
             if m > 2 {
-                assert!(dispatched[2 * n..3 * n].iter().all(|&b| b == 0), "N={n} K={k} M={m}: zero row is not +0.0");
+                assert!(
+                    dispatched[2 * n..3 * n].iter().all(|&b| b == 0),
+                    "N={n} K={k} M={m}: zero row is not +0.0"
+                );
             }
         }
         println!("N={n} K={k}: 3 tiles agree and hold the fp64 bound at M={T4_ROWS:?}");
@@ -229,7 +272,11 @@ fn rows_are_independent() -> Result<()> {
         for &m in &T4_ROWS {
             let (qa, sa) = gpu.rows(m)?;
             let part = bits(&matmul(&qa, &sa, &gpu.qw, &gpu.sw)?)?;
-            assert_eq!(part, full[..m * n], "N={n} K={k}: rows at M={m} differ from M=300");
+            assert_eq!(
+                part,
+                full[..m * n],
+                "N={n} K={k}: rows at M={m} differ from M=300"
+            );
         }
     }
     Ok(())
@@ -268,33 +315,82 @@ fn rejects_unsupported_inputs() -> Result<()> {
     let (dev, _) = gb10()?;
     let expect_err = |r: Result<Tensor>, needle: &str, what: &str| {
         let e = r.expect_err(what).to_string();
-        assert!(e.contains(needle), "{what}: error `{e}` does not name `{needle}`");
+        assert!(
+            e.contains(needle),
+            "{what}: error `{e}` does not name `{needle}`"
+        );
     };
     let good = operands(8, 256, 256, 7)?.to(&dev)?;
     let (qa, sa, qw, sw) = (&good.qa, &good.sa, &good.qw, &good.sw);
 
     let odd_k = operands(8, 256, 384, 9)?.to(&dev)?;
     expect_err(
-        matmul(&odd_k.qa.narrow(1, 0, 320)?, &odd_k.sa, &odd_k.qw.narrow(1, 0, 320)?, &odd_k.sw),
+        matmul(
+            &odd_k.qa.narrow(1, 0, 320)?,
+            &odd_k.sa,
+            &odd_k.qw.narrow(1, 0, 320)?,
+            &odd_k.sw,
+        ),
         "multiples of 128",
         "K=320",
     );
-    expect_err(matmul(qa, sa, &qw.narrow(0, 0, 192)?, sw), "multiples of 128", "N=192");
-    expect_err(matmul(qa, &sa.narrow(0, 0, 4)?, qw, sw), "activation scales [8, 2]", "short sa");
-    expect_err(matmul(qa, sa, qw, &sw.narrow(1, 0, 1)?), "weight scales [2, 2]", "narrow sw");
-    expect_err(matmul(&Tensor::zeros(qa.shape(), DType::BF16, &dev)?, sa, qw, sw), "activations as F8E4M3", "bf16 qa");
-    expect_err(matmul(qa, sa, &Tensor::zeros(qw.shape(), DType::BF16, &dev)?, sw), "weights as F8E4M3", "bf16 qw");
-    expect_err(matmul(qa, &Tensor::zeros(sa.shape(), DType::BF16, &dev)?, qw, sw), "activation scales as F32", "bf16 sa");
-    expect_err(matmul(qa, sa, qw, &Tensor::zeros(sw.shape(), DType::BF16, &dev)?), "weight scales as F32", "bf16 sw");
+    expect_err(
+        matmul(qa, sa, &qw.narrow(0, 0, 192)?, sw),
+        "multiples of 128",
+        "N=192",
+    );
+    expect_err(
+        matmul(qa, &sa.narrow(0, 0, 4)?, qw, sw),
+        "activation scales [8, 2]",
+        "short sa",
+    );
+    expect_err(
+        matmul(qa, sa, qw, &sw.narrow(1, 0, 1)?),
+        "weight scales [2, 2]",
+        "narrow sw",
+    );
+    expect_err(
+        matmul(&Tensor::zeros(qa.shape(), DType::BF16, &dev)?, sa, qw, sw),
+        "activations as F8E4M3",
+        "bf16 qa",
+    );
+    expect_err(
+        matmul(qa, sa, &Tensor::zeros(qw.shape(), DType::BF16, &dev)?, sw),
+        "weights as F8E4M3",
+        "bf16 qw",
+    );
+    expect_err(
+        matmul(qa, &Tensor::zeros(sa.shape(), DType::BF16, &dev)?, qw, sw),
+        "activation scales as F32",
+        "bf16 sa",
+    );
+    expect_err(
+        matmul(qa, sa, qw, &Tensor::zeros(sw.shape(), DType::BF16, &dev)?),
+        "weight scales as F32",
+        "bf16 sw",
+    );
     let cpu = operands(8, 256, 256, 7)?;
-    expect_err(matmul(&cpu.qa, &cpu.sa, &cpu.qw, &cpu.sw), "CUDA device", "CPU tensors");
-    expect_err(matmul(qa, &cpu.sa, qw, sw), "CUDA device", "CPU activation scales");
+    expect_err(
+        matmul(&cpu.qa, &cpu.sa, &cpu.qw, &cpu.sw),
+        "CUDA device",
+        "CPU tensors",
+    );
+    expect_err(
+        matmul(qa, &cpu.sa, qw, sw),
+        "CUDA device",
+        "CPU activation scales",
+    );
 
     // A contiguous view whose first element sits one byte into the buffer.
-    let flat = Tensor::from_vec(Rng(3).codes(8 * 256 + 1), 8 * 256 + 1, &Device::Cpu)?.to_device(&dev)?;
+    let flat =
+        Tensor::from_vec(Rng(3).codes(8 * 256 + 1), 8 * 256 + 1, &Device::Cpu)?.to_device(&dev)?;
     let shifted = flat.narrow(0, 1, 8 * 256)?.reshape((8, 256))?;
     assert!(shifted.is_contiguous() && shifted.layout().start_offset() == 1);
-    expect_err(matmul(&shifted, sa, qw, sw), "16-byte aligned", "misaligned activations");
+    expect_err(
+        matmul(&shifted, sa, qw, sw),
+        "16-byte aligned",
+        "misaligned activations",
+    );
 
     let empty = matmul(&qa.narrow(0, 0, 0)?, &sa.narrow(0, 0, 0)?, qw, sw)?;
     assert_eq!(empty.dims2()?, (0, 256));
@@ -304,13 +400,19 @@ fn rejects_unsupported_inputs() -> Result<()> {
 
 /// Copy `src` into `dst`'s device memory, in place: the captured graph keeps
 /// reading `dst`'s address.
-fn overwrite(dst: &Tensor, src: &Tensor, stream: &hanzo_ml::cuda::cudarc::driver::CudaStream) -> Result<()> {
+fn overwrite(
+    dst: &Tensor,
+    src: &Tensor,
+    stream: &hanzo_ml::cuda::cudarc::driver::CudaStream,
+) -> Result<()> {
     use hanzo_ml::cuda::cudarc::driver::result;
     assert_eq!((dst.dims(), dst.dtype()), (src.dims(), src.dtype()));
     let bytes = dst.elem_count() * dst.dtype().size_in_bytes();
     let ptr = |t: &Tensor| -> Result<u64> {
         let (storage, layout) = t.storage_and_layout();
-        let Storage::Cuda(s) = &*storage else { unreachable!() };
+        let Storage::Cuda(s) = &*storage else {
+            unreachable!()
+        };
         let (p, _g) = match t.dtype() {
             DType::F8E4M3 => slice_ptr(s.as_cuda_slice::<F8E4M3>()?, layout.start_offset()),
             _ => slice_ptr(s.as_cuda_slice::<f32>()?, layout.start_offset()),
@@ -330,7 +432,11 @@ fn capturable_in_cuda_graph() -> Result<()> {
     // As the engine's capture paths do: no cross-stream event waits inside capture.
     unsafe { cuda.disable_event_tracking() };
     let stream = cuda.cuda_stream();
-    let shapes = [(5usize, 2560usize, 6144usize), (40, 16384, 2560), (300, 1280, 2560)];
+    let shapes = [
+        (5usize, 2560usize, 6144usize),
+        (40, 16384, 2560),
+        (300, 1280, 2560),
+    ];
     let inputs: Vec<Operands> = shapes
         .iter()
         .enumerate()
@@ -345,9 +451,14 @@ fn capturable_in_cuda_graph() -> Result<()> {
     stream
         .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
         .map_err(hanzo_ml::Error::wrap)?;
-    let captured: Result<Vec<Tensor>> = inputs.iter().map(|x| matmul(&x.qa, &x.sa, &x.qw, &x.sw)).collect();
+    let captured: Result<Vec<Tensor>> = inputs
+        .iter()
+        .map(|x| matmul(&x.qa, &x.sa, &x.qw, &x.sw))
+        .collect();
     let graph = stream
-        .end_capture(sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH)
+        .end_capture(
+            sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+        )
         .map_err(hanzo_ml::Error::wrap)?
         .expect("capture produced a graph");
     let outputs = captured?;
@@ -355,12 +466,18 @@ fn capturable_in_cuda_graph() -> Result<()> {
     let (mut kernels, mut memsets, mut total) = (0, 0, 0usize);
     unsafe {
         let mut count = 0usize;
-        sys::cuGraphGetNodes(graph.cu_graph(), std::ptr::null_mut(), &mut count).result().map_err(hanzo_ml::Error::wrap)?;
+        sys::cuGraphGetNodes(graph.cu_graph(), std::ptr::null_mut(), &mut count)
+            .result()
+            .map_err(hanzo_ml::Error::wrap)?;
         let mut nodes = vec![std::ptr::null_mut(); count];
-        sys::cuGraphGetNodes(graph.cu_graph(), nodes.as_mut_ptr(), &mut count).result().map_err(hanzo_ml::Error::wrap)?;
+        sys::cuGraphGetNodes(graph.cu_graph(), nodes.as_mut_ptr(), &mut count)
+            .result()
+            .map_err(hanzo_ml::Error::wrap)?;
         for node in nodes {
             let mut kind = sys::CUgraphNodeType::CU_GRAPH_NODE_TYPE_EMPTY;
-            sys::cuGraphNodeGetType(node, &mut kind).result().map_err(hanzo_ml::Error::wrap)?;
+            sys::cuGraphNodeGetType(node, &mut kind)
+                .result()
+                .map_err(hanzo_ml::Error::wrap)?;
             total += 1;
             match kind {
                 sys::CUgraphNodeType::CU_GRAPH_NODE_TYPE_KERNEL => kernels += 1,
@@ -384,8 +501,17 @@ fn capturable_in_cuda_graph() -> Result<()> {
         graph.launch().map_err(hanzo_ml::Error::wrap)?;
         stream.synchronize().map_err(hanzo_ml::Error::wrap)?;
         for (i, (x, out)) in inputs.iter().zip(&outputs).enumerate() {
-            let eager = bits(&matmul(&x.qa.copy()?, &x.sa.copy()?, &x.qw.copy()?, &x.sw.copy()?)?)?;
-            assert_eq!(bits(out)?, eager, "replay {round}, call {i}: graph differs from eager");
+            let eager = bits(&matmul(
+                &x.qa.copy()?,
+                &x.sa.copy()?,
+                &x.qw.copy()?,
+                &x.sw.copy()?,
+            )?)?;
+            assert_eq!(
+                bits(out)?,
+                eager,
+                "replay {round}, call {i}: graph differs from eager"
+            );
         }
     }
     Ok(())

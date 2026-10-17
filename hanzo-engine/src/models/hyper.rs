@@ -584,7 +584,11 @@ mod tests {
             &uniform(&mut rng, BATCH * SEQ * N * H, -1.0, 1.0),
             &[BATCH, SEQ, N, H],
         )?;
-        assert_eq!(bits(&branch.mixer.norm)?, bits(&gguf_branch.mixer.norm)?, "norm weight");
+        assert_eq!(
+            bits(&branch.mixer.norm)?,
+            bits(&gguf_branch.mixer.norm)?,
+            "norm weight"
+        );
         for (what, got, want) in [
             ("branch", &branch.mixer, &gguf_branch.mixer),
             ("head", &mixer, &gguf_head),

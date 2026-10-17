@@ -3,8 +3,7 @@
 use float8::F8E4M3;
 use half::{bf16, f16};
 use hanzo_ml::{
-    cuda::cudarc::driver::sys::CUstream, CudaStorage, DType, Device, Result, Shape, Storage,
-    Tensor,
+    cuda::cudarc::driver::sys::CUstream, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
 };
 
 use super::{Fp8Mode, FP8_GROUP, NVFP4_BLOCK};

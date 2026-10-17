@@ -203,16 +203,26 @@ impl FusedMoe {
             hanzo_quant::linear_no_bias(i, o, q, vb.pp(name))
         };
         let experts = vb.pp("experts");
-        let bank = |proj: &str, share: &[&str], n: usize, k: usize| -> Result<Arc<dyn QuantMethod>> {
-            Ok(Arc::new(hanzo_quant::NVFP4Layer::experts(experts.clone(), proj, share, e, n, k, dtype)?))
-        };
+        let bank =
+            |proj: &str, share: &[&str], n: usize, k: usize| -> Result<Arc<dyn QuantMethod>> {
+                Ok(Arc::new(hanzo_quant::NVFP4Layer::experts(
+                    experts.clone(),
+                    proj,
+                    share,
+                    e,
+                    n,
+                    k,
+                    dtype,
+                )?))
+            };
         // The shared expert runs inside the served MoE custom op, where the
         // standalone QuantFP8 kernel quantizes its inputs (amax div.full 448): a block-FP8
         // projection takes the Eager quantizer, anything else loads through `quant`.
         let shared = |i: usize, o: usize, name: &str| -> Result<Arc<dyn QuantMethod>> {
             let p = vb.pp(name);
             if p.contains_tensor("weight_scale_inv") {
-                let w = p.get_with_hints_dtype((o, i), "weight", Default::default(), DType::F8E4M3)?;
+                let w =
+                    p.get_with_hints_dtype((o, i), "weight", Default::default(), DType::F8E4M3)?;
                 let sc = p.get_with_hints_dtype(
                     (o.div_ceil(128), i.div_ceil(128)),
                     "weight_scale_inv",
@@ -325,7 +335,8 @@ impl FusedMoe {
         let dtype = xs.dtype();
         let act = swiglu_rounded(&g.to_dtype(dtype)?, &u.to_dtype(dtype)?, dtype)?;
         let out = self.shared_down_proj.forward(&act)?.to_dtype(dtype)?;
-        let gate = sigmoid(&self.shared_gate.forward(xs)?.to_dtype(DType::F32)?)?.to_dtype(dtype)?;
+        let gate =
+            sigmoid(&self.shared_gate.forward(xs)?.to_dtype(DType::F32)?)?.to_dtype(dtype)?;
         out.broadcast_mul(&gate)
     }
 
@@ -342,7 +353,8 @@ impl FusedMoe {
             // routed + shared in f32, one rounding (the compiled add kernel)
             (routed.to_dtype(DType::F32)? + shared.to_dtype(DType::F32)?)?
         };
-        out.reshape((batch, seq_len, hidden_dim))?.to_dtype(original_dtype)
+        out.reshape((batch, seq_len, hidden_dim))?
+            .to_dtype(original_dtype)
     }
 }
 
@@ -429,12 +441,19 @@ impl GatedFullAttention {
             props.head_count_kv,
             props.head_dim,
         );
-        let lin = |i: usize, o: usize, name: &str| {
-            hanzo_quant::linear_no_bias(i, o, quant, vb.pp(name))
-        };
+        let lin =
+            |i: usize, o: usize, name: &str| hanzo_quant::linear_no_bias(i, o, quant, vb.pp(name));
         let norm = |name: &str| -> Result<QRmsNorm> {
-            let w = vb.get_with_hints_dtype((d,), &format!("{name}.weight"), Default::default(), DType::F32)?;
-            Ok(QRmsNorm::from_weight((w.to_device(device)? + 1.0)?, props.rms_norm_eps as f64))
+            let w = vb.get_with_hints_dtype(
+                (d,),
+                &format!("{name}.weight"),
+                Default::default(),
+                DType::F32,
+            )?;
+            Ok(QRmsNorm::from_weight(
+                (w.to_device(device)? + 1.0)?,
+                props.rms_norm_eps as f64,
+            ))
         };
         Ok(Self {
             attn_q: lin(h, 2 * hq * d, "q_proj")?,
@@ -812,9 +831,9 @@ impl QGatedDeltaNet {
             } else {
                 let w = host.get_unchecked_dtype(&format!("{name}.weight"), vb.dtype())?;
                 let w = permute(&w, dv, start)?.to_device(&dev)?;
-                Ok(Arc::new(hanzo_quant::UnquantLinear::new(QuantMethodConfig::Unquantized(
-                    hanzo_nn::Linear::new(w, None),
-                ))?))
+                Ok(Arc::new(hanzo_quant::UnquantLinear::new(
+                    QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(w, None)),
+                )?))
             }
         };
         let _ = (quant, h);
@@ -826,12 +845,18 @@ impl QGatedDeltaNet {
         // in_proj_a / in_proj_b run on the f32-lifted input: f32 weights holding the bf16 values
         let f32_lin = |name: &str| -> Result<Arc<dyn QuantMethod>> {
             let w = heads(&rows(&format!("{name}.weight"))?, 0, 0, 1)?.to_device(&dev)?;
-            Ok(Arc::new(hanzo_quant::UnquantLinear::new(QuantMethodConfig::Unquantized(
-                hanzo_nn::Linear::new(w, None),
-            ))?))
+            Ok(Arc::new(hanzo_quant::UnquantLinear::new(
+                QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(w, None)),
+            )?))
         };
         let conv = rows("conv1d.weight")?.squeeze(1)?;
-        let conv = Tensor::cat(&[conv.narrow(0, 0, 2 * key_dim)?, heads(&conv, 0, 2 * key_dim, dv)?], 0)?;
+        let conv = Tensor::cat(
+            &[
+                conv.narrow(0, 0, 2 * key_dim)?,
+                heads(&conv, 0, 2 * key_dim, dv)?,
+            ],
+            0,
+        )?;
         let a_log = heads(&rows("A_log")?, 0, 0, 1)?;
         Ok(Self {
             in_proj_qkv,
@@ -841,8 +866,11 @@ impl QGatedDeltaNet {
             conv1d_weight: conv.to_device(&dev)?,
             dt_bias: heads(&rows("dt_bias")?, 0, 0, 1)?.to_device(&dev)?,
             a: a_log.exp()?.neg()?.to_device(&dev)?,
-            norm: RmsNormGated::from_weight(rows("norm.weight")?.to_device(&dev)?, props.rms_norm_eps as f64)
-                .sigmoid(),
+            norm: RmsNormGated::from_weight(
+                rows("norm.weight")?.to_device(&dev)?,
+                props.rms_norm_eps as f64,
+            )
+            .sigmoid(),
             out_proj,
             num_k_heads: kh,
             num_v_heads: vh,
@@ -921,7 +949,11 @@ impl QGatedDeltaNet {
         // 4. beta = sigmoid(b); g = -exp(A_log) * softplus(a + dt_bias), softplus as the served
         //    kernel forms it (identity past 20).
         let beta = sigmoid(&b)?;
-        let dt_bias = self.dt_bias.to_dtype(DType::F32)?.unsqueeze(0)?.unsqueeze(0)?;
+        let dt_bias = self
+            .dt_bias
+            .to_dtype(DType::F32)?
+            .unsqueeze(0)?
+            .unsqueeze(0)?;
         let xa = a.broadcast_add(&dt_bias)?;
         let sp = {
             let pos = (xa.clone() + (xa.neg()?.exp()? + 1.0)?.log()?)?;
@@ -942,9 +974,12 @@ impl QGatedDeltaNet {
         // 5. Tile q, k to the V-head count: V head j reads key head j % num_k_heads.
         let (q, k) = if v_per_group > 1 {
             let tile = |t: &Tensor| {
-                t.unsqueeze(2)?
-                    .repeat((1, 1, v_per_group, 1, 1))?
-                    .reshape((batch_size, seq_len, self.num_v_heads, self.head_k_dim))
+                t.unsqueeze(2)?.repeat((1, 1, v_per_group, 1, 1))?.reshape((
+                    batch_size,
+                    seq_len,
+                    self.num_v_heads,
+                    self.head_k_dim,
+                ))
             };
             (tile(&q)?, tile(&k)?)
         } else {
@@ -968,7 +1003,9 @@ impl QGatedDeltaNet {
         let y = y.reshape(((), self.head_v_dim))?;
         let z = z.reshape(((), self.head_v_dim))?;
         let y = store(self.norm.forward(&y, &z)?)?;
-        let y = y.reshape(z_shape)?.reshape((batch_size, seq_len, self.value_dim))?;
+        let y = y
+            .reshape(z_shape)?
+            .reshape((batch_size, seq_len, self.value_dim))?;
         note("normed", &y);
 
         self.out_proj.forward(&y)?.to_dtype(rd)
@@ -977,19 +1014,29 @@ impl QGatedDeltaNet {
     /// The served causal conv: each tap's product rounded to `rd` (the
     /// kernel multiplies two bf16 tensors), accumulated in f32 over the four taps in order, then
     /// silu in f32. The conv state (the last `kernel` inputs) advances as in the other paths.
-    fn causal_conv1d_served(&self, x: &Tensor, cache: &mut GdnLayerCache, rd: DType) -> Result<Tensor> {
+    fn causal_conv1d_served(
+        &self,
+        x: &Tensor,
+        cache: &mut GdnLayerCache,
+        rd: DType,
+    ) -> Result<Tensor> {
         let (_, seq_len, _) = x.dims3()?;
         let kw = self.conv_kernel_size;
         let x_t = x.transpose(1, 2)?.contiguous()?;
         let left = if cache.seqlen_offset > 0 {
-            cache.conv_state.narrow(D::Minus1, 1, kw - 1)?.to_dtype(DType::F32)?
+            cache
+                .conv_state
+                .narrow(D::Minus1, 1, kw - 1)?
+                .to_dtype(DType::F32)?
         } else {
             let (b, c, _) = cache.conv_state.dims3()?;
             Tensor::zeros((b, c, kw - 1), DType::F32, x.device())?
         };
         let hist = Tensor::cat(&[&left, &x_t], D::Minus1)?.contiguous()?;
         let total = hist.dim(D::Minus1)?;
-        cache.conv_state = hist.narrow(D::Minus1, total - kw, kw)?.to_dtype(cache.conv_state.dtype())?;
+        cache.conv_state = hist
+            .narrow(D::Minus1, total - kw, kw)?
+            .to_dtype(cache.conv_state.dtype())?;
         let weight = self.conv1d_weight.to_dtype(DType::F32)?;
         let mut acc: Option<Tensor> = None;
         for j in 0..kw {

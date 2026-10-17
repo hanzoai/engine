@@ -186,7 +186,11 @@ mod served {
         check_fp8(
             Fp8Mode::Eager,
             "fp8.eager",
-            &[("syn", "syn.x"), ("l3mu", "x.l3mu"), ("l3act", "fp8.eager.l3act.x")],
+            &[
+                ("syn", "syn.x"),
+                ("l3mu", "x.l3mu"),
+                ("l3act", "fp8.eager.l3act.x"),
+            ],
         )
     }
 

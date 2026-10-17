@@ -1682,7 +1682,9 @@ impl Qwen3VLRotaryEmbedding {
             let (_, _, _, d) = x.dims4()?;
             let half = cos.dim(D::Minus1)?;
             let x32 = x.to_dtype(DType::F32)?;
-            let inv = ((x32.sqr()?.sum_keepdim(D::Minus1)? / d as f64)? + eps)?.sqrt()?.recip()?;
+            let inv = ((x32.sqr()?.sum_keepdim(D::Minus1)? / d as f64)? + eps)?
+                .sqrt()?
+                .recip()?;
             let xn = x32
                 .broadcast_mul(&inv)?
                 .broadcast_mul(&w.to_dtype(DType::F32)?)?

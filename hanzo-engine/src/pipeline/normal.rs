@@ -1022,19 +1022,20 @@ impl Loader for NormalLoader {
             // On unified memory the KV is planned against the device budget, charged with the
             // weights: the loader's estimate, the number the device mapper planned with. An ISQ
             // load changes the weights' size, so it falls back to what is left after loading.
-            let weight_estimate = if crate::utils::normal::is_integrated_gpu(&device)
-                && in_situ_quant.is_none()
-            {
-                Some(
-                    self.inner
-                        .layer_sizes_in_bytes(&config, dtype, 1, None)?
-                        .iter()
-                        .sum::<usize>()
-                        + self.inner.non_mapped_size_in_bytes(&config, dtype, 1, None)?,
-                )
-            } else {
-                None
-            };
+            let weight_estimate =
+                if crate::utils::normal::is_integrated_gpu(&device) && in_situ_quant.is_none() {
+                    Some(
+                        self.inner
+                            .layer_sizes_in_bytes(&config, dtype, 1, None)?
+                            .iter()
+                            .sum::<usize>()
+                            + self
+                                .inner
+                                .non_mapped_size_in_bytes(&config, dtype, 1, None)?,
+                    )
+                } else {
+                    None
+                };
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
                 paged_attn_config.block_size,

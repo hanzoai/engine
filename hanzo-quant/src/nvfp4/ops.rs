@@ -288,9 +288,15 @@ pub fn nvfp4_moe_gemm(
         hanzo_ml::bail!("NVFP4 MoE GEMM expects CUDA storage");
     };
     let (ac_p, _g1) = slice_ptr(ac.as_cuda_slice::<u8>()?, a_codes.layout().start_offset());
-    let (as_p, _g2) = slice_ptr(as_.as_cuda_slice::<F8E4M3>()?, a_scales.layout().start_offset());
+    let (as_p, _g2) = slice_ptr(
+        as_.as_cuda_slice::<F8E4M3>()?,
+        a_scales.layout().start_offset(),
+    );
     let (wc_p, _g3) = slice_ptr(wc.as_cuda_slice::<u8>()?, w_codes.layout().start_offset());
-    let (ws_p, _g4) = slice_ptr(ws.as_cuda_slice::<F8E4M3>()?, w_scales.layout().start_offset());
+    let (ws_p, _g4) = slice_ptr(
+        ws.as_cuda_slice::<F8E4M3>()?,
+        w_scales.layout().start_offset(),
+    );
     let (al_p, _g5) = slice_ptr(al.as_cuda_slice::<f32>()?, alpha.layout().start_offset());
     let (id_slice, id_off) = (id.as_cuda_slice::<u32>()?, ids.layout().start_offset());
     let (id_p, _g6) = slice_ptr(id_slice, id_off);
@@ -300,7 +306,9 @@ pub fn nvfp4_moe_gemm(
         if id_off != 0 {
             hanzo_ml::bail!("NVFP4 MoE GEMM wants its expert ids at offset 0");
         }
-        Some(crate::moe_dispatch_build(id_slice, work, experts, topk, dev)?)
+        Some(crate::moe_dispatch_build(
+            id_slice, work, experts, topk, dev,
+        )?)
     } else {
         None
     };
@@ -360,9 +368,21 @@ pub fn nvfp4_moe_gemm(
         }};
     }
     match out_dtype {
-        DType::F16 => run!(f16, launch_nvfp4_moe_vecmat_f16, launch_nvfp4_moe_grouped_f16),
-        DType::BF16 => run!(bf16, launch_nvfp4_moe_vecmat_bf16, launch_nvfp4_moe_grouped_bf16),
-        DType::F32 => run!(f32, launch_nvfp4_moe_vecmat_f32, launch_nvfp4_moe_grouped_f32),
+        DType::F16 => run!(
+            f16,
+            launch_nvfp4_moe_vecmat_f16,
+            launch_nvfp4_moe_grouped_f16
+        ),
+        DType::BF16 => run!(
+            bf16,
+            launch_nvfp4_moe_vecmat_bf16,
+            launch_nvfp4_moe_grouped_bf16
+        ),
+        DType::F32 => run!(
+            f32,
+            launch_nvfp4_moe_vecmat_f32,
+            launch_nvfp4_moe_grouped_f32
+        ),
         d => hanzo_ml::bail!("NVFP4 MoE GEMM output {d:?}"),
     }
 }
@@ -387,8 +407,14 @@ pub fn nvfp4_moe_reference(
     let (tokens, topk) = ids.dims2()?;
     let (experts, n, _) = w_codes.dims3()?;
     let a = nvfp4_dequantize(a_codes, a_scales, None, DType::F32)?.to_device(&Device::Cpu)?;
-    let alpha = alpha.to_dtype(DType::F32)?.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
-    let ids = ids.to_dtype(DType::U32)?.to_device(&Device::Cpu)?.to_vec2::<u32>()?;
+    let alpha = alpha
+        .to_dtype(DType::F32)?
+        .to_device(&Device::Cpu)?
+        .to_vec1::<f32>()?;
+    let ids = ids
+        .to_dtype(DType::U32)?
+        .to_device(&Device::Cpu)?
+        .to_vec2::<u32>()?;
     let mut banks = Vec::with_capacity(experts);
     for e in 0..experts {
         banks.push(

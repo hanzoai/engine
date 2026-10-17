@@ -165,7 +165,8 @@ impl QuantMethod for BlockwiseFP8Linear {
         let (n_tokens, topk) = indices.dims2()?;
         let (n_experts, out_features, k) = self.weight.dims3()?;
         let rows = x.elem_count() / k;
-        let (qa, sa) = crate::quantize::fp8(&x.reshape((rows, k))?, crate::quantize::Fp8Mode::Gather)?;
+        let (qa, sa) =
+            crate::quantize::fp8(&x.reshape((rows, k))?, crate::quantize::Fp8Mode::Gather)?;
         let a = qa
             .to_dtype(DType::F32)?
             .reshape((rows, k / 128, 128))?

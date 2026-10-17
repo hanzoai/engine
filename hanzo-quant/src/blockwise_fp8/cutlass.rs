@@ -117,7 +117,10 @@ fn check(status: i32, what: &str) -> Result<()> {
         return Ok(());
     }
     let message = unsafe { CStr::from_ptr(hanzo_blockwise_fp8_error_string(status)) };
-    hanzo_ml::bail!("block-FP8 CUTLASS {what} failed: {}", message.to_string_lossy())
+    hanzo_ml::bail!(
+        "block-FP8 CUTLASS {what} failed: {}",
+        message.to_string_lossy()
+    )
 }
 
 fn compute_cap(dev: &CudaDevice) -> Result<(i32, i32)> {
@@ -153,7 +156,10 @@ pub(crate) fn prepare(dev: &CudaDevice, tile: Tile) -> Result<Resources> {
     if let Some((_, _, r)) = guard.iter().find(|(d, t, _)| *d == device && *t == tile) {
         return Ok(*r);
     }
-    dev.cuda_stream().context().bind_to_thread().map_err(hanzo_ml::Error::wrap)?;
+    dev.cuda_stream()
+        .context()
+        .bind_to_thread()
+        .map_err(hanzo_ml::Error::wrap)?;
     let mut resources = Resources::default();
     check(
         unsafe { hanzo_blockwise_fp8_prepare(device, tile.code(), &mut resources) },
@@ -164,7 +170,13 @@ pub(crate) fn prepare(dev: &CudaDevice, tile: Tile) -> Result<Resources> {
 }
 
 /// Bytes of scratch the tile needs at this shape (0 for all three: no split-K).
-pub(crate) fn workspace_size(dev: &CudaDevice, tile: Tile, m: usize, n: usize, k: usize) -> Result<usize> {
+pub(crate) fn workspace_size(
+    dev: &CudaDevice,
+    tile: Tile,
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<usize> {
     let resources = prepare(dev, tile)?;
     let shape = shape_mnk(m, n, k)?;
     let mut bytes = 0usize;
@@ -176,8 +188,15 @@ pub(crate) fn workspace_size(dev: &CudaDevice, tile: Tile, m: usize, n: usize, k
 }
 
 fn shape_mnk(m: usize, n: usize, k: usize) -> Result<ShapeMnk> {
-    let fits = |v: usize| i32::try_from(v).map_err(|_| hanzo_ml::Error::Msg(format!("block-FP8 GEMM dimension {v} exceeds i32")));
-    Ok(ShapeMnk { m: fits(m)?, n: fits(n)?, k: fits(k)? })
+    let fits = |v: usize| {
+        i32::try_from(v)
+            .map_err(|_| hanzo_ml::Error::Msg(format!("block-FP8 GEMM dimension {v} exceeds i32")))
+    };
+    Ok(ShapeMnk {
+        m: fits(m)?,
+        n: fits(n)?,
+        k: fits(k)?,
+    })
 }
 
 /// Device pointer of a tensor's first element, after `contiguous()`: the
@@ -188,7 +207,9 @@ struct Operand {
 
 impl Operand {
     fn new(t: &Tensor) -> Result<Self> {
-        Ok(Self { tensor: t.contiguous()? })
+        Ok(Self {
+            tensor: t.contiguous()?,
+        })
     }
 
     fn with_ptr<T: DeviceRepr + hanzo_ml::cuda::CudaDType, R>(
@@ -204,7 +225,9 @@ impl Operand {
         let slice = s.as_cuda_slice::<T>()?;
         let (ptr, _guard) = slice_ptr(slice, layout.start_offset());
         if ptr % align != 0 {
-            hanzo_ml::bail!("block-FP8 GEMM needs {what} {align}-byte aligned, got address {ptr:#x}");
+            hanzo_ml::bail!(
+                "block-FP8 GEMM needs {what} {align}-byte aligned, got address {ptr:#x}"
+            );
         }
         f(ptr)
     }
@@ -212,7 +235,10 @@ impl Operand {
 
 fn expect_dtype(t: &Tensor, dtype: DType, what: &str) -> Result<()> {
     if t.dtype() != dtype {
-        hanzo_ml::bail!("block-FP8 GEMM needs {what} as {dtype:?}, got {:?}", t.dtype());
+        hanzo_ml::bail!(
+            "block-FP8 GEMM needs {what} as {dtype:?}, got {:?}",
+            t.dtype()
+        );
     }
     Ok(())
 }
@@ -229,7 +255,13 @@ pub fn matmul(qa: &Tensor, sa: &Tensor, qw: &Tensor, sw: &Tensor) -> Result<Tens
 }
 
 /// [`matmul`] on a chosen tile. All three give the same bits.
-pub(crate) fn matmul_tile(qa: &Tensor, sa: &Tensor, qw: &Tensor, sw: &Tensor, tile: Tile) -> Result<Tensor> {
+pub(crate) fn matmul_tile(
+    qa: &Tensor,
+    sa: &Tensor,
+    qw: &Tensor,
+    sw: &Tensor,
+    tile: Tile,
+) -> Result<Tensor> {
     expect_dtype(qa, DType::F8E4M3, "activations")?;
     expect_dtype(qw, DType::F8E4M3, "weights")?;
     expect_dtype(sa, DType::F32, "activation scales")?;
@@ -243,7 +275,11 @@ pub(crate) fn matmul_tile(qa: &Tensor, sa: &Tensor, qw: &Tensor, sw: &Tensor, ti
         hanzo_ml::bail!("block-FP8 GEMM needs N and K multiples of {BLOCK}, got N={n} K={k}");
     }
     if sa.dims2()? != (m, k / BLOCK) {
-        hanzo_ml::bail!("block-FP8 GEMM needs activation scales [{m}, {}], got {:?}", k / BLOCK, sa.dims());
+        hanzo_ml::bail!(
+            "block-FP8 GEMM needs activation scales [{m}, {}], got {:?}",
+            k / BLOCK,
+            sa.dims()
+        );
     }
     if sw.dims2()? != (n / BLOCK, k / BLOCK) {
         hanzo_ml::bail!(
@@ -256,7 +292,11 @@ pub(crate) fn matmul_tile(qa: &Tensor, sa: &Tensor, qw: &Tensor, sw: &Tensor, ti
     let Device::Cuda(dev) = qa.device().clone() else {
         hanzo_ml::bail!("block-FP8 GEMM needs activations on a CUDA device");
     };
-    for (t, what) in [(sa, "activation scales"), (qw, "weights"), (sw, "weight scales")] {
+    for (t, what) in [
+        (sa, "activation scales"),
+        (qw, "weights"),
+        (sw, "weight scales"),
+    ] {
         if !t.device().same_device(qa.device()) {
             hanzo_ml::bail!("block-FP8 GEMM needs {what} on the activations' CUDA device");
         }
@@ -269,7 +309,9 @@ pub(crate) fn matmul_tile(qa: &Tensor, sa: &Tensor, qw: &Tensor, sw: &Tensor, ti
     let shape = shape_mnk(m, n, k)?;
     let mut workspace_bytes = 0usize;
     check(
-        unsafe { hanzo_blockwise_fp8_workspace_size(&resources.context, &shape, &mut workspace_bytes) },
+        unsafe {
+            hanzo_blockwise_fp8_workspace_size(&resources.context, &shape, &mut workspace_bytes)
+        },
         "workspace size",
     )?;
     let workspace = if workspace_bytes == 0 {
@@ -281,7 +323,12 @@ pub(crate) fn matmul_tile(qa: &Tensor, sa: &Tensor, qw: &Tensor, sw: &Tensor, ti
     let output = unsafe { dev.alloc::<bf16>(m * n)? };
     let stream = dev.cuda_stream().cu_stream() as *mut c_void;
 
-    let (qa, sa, qw, sw) = (Operand::new(qa)?, Operand::new(sa)?, Operand::new(qw)?, Operand::new(sw)?);
+    let (qa, sa, qw, sw) = (
+        Operand::new(qa)?,
+        Operand::new(sa)?,
+        Operand::new(qw)?,
+        Operand::new(sw)?,
+    );
     qa.with_ptr::<F8E4M3, _>("activations", OPERAND_ALIGN, |a| {
         sa.with_ptr::<f32, _>("activation scales", SCALE_ALIGN, |a_scale| {
             qw.with_ptr::<F8E4M3, _>("weights", OPERAND_ALIGN, |w| {
@@ -296,7 +343,9 @@ pub(crate) fn matmul_tile(qa: &Tensor, sa: &Tensor, qw: &Tensor, sw: &Tensor, ti
                         w: w as *const c_void,
                         w_scale: w_scale as *const f32,
                         output: out as *mut c_void,
-                        workspace: work.as_ref().map_or(std::ptr::null_mut(), |(p, _)| *p as *mut c_void),
+                        workspace: work
+                            .as_ref()
+                            .map_or(std::ptr::null_mut(), |(p, _)| *p as *mut c_void),
                         workspace_bytes,
                         stream,
                     };

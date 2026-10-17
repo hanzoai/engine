@@ -256,7 +256,9 @@ pub fn calculate_cache_config(
             MemoryGpuConfig::ContextSize(t) => KvRequest::Tokens(t),
             MemoryGpuConfig::MbAmount(mb) => KvRequest::Bytes(mb * SIZE_IN_MB),
             MemoryGpuConfig::Utilization(_) => KvRequest::Auto {
-                demand: max_num_tokens.unwrap_or(config.max_seq_len()).max(config.max_seq_len()),
+                demand: max_num_tokens
+                    .unwrap_or(config.max_seq_len())
+                    .max(config.max_seq_len()),
                 floor: config.max_seq_len(),
             },
         };
@@ -301,14 +303,24 @@ mod tests {
         let mem_total = 127_600_508usize * 1024;
         let ceiling = (mem_total as f64 * fraction) as usize;
         let fixed = 8 * 2 * 116_379_648 + (1 << 30) + (7 << 29);
-        plan_unified(ceiling, 77_632_650_240, fixed, KvRequest::Tokens(1_048_576), 27_456)
-            .map(|kv| ceiling - 77_632_650_240 - fixed - kv)
+        plan_unified(
+            ceiling,
+            77_632_650_240,
+            fixed,
+            KvRequest::Tokens(1_048_576),
+            27_456,
+        )
+        .map(|kv| ceiling - 77_632_650_240 - fixed - kv)
     }
 
     #[test]
     fn unified_plan_fits_1m_at_090() {
         let left = gb10(0.90).expect("1M fits at 0.90");
-        assert!(left >= 4 << 30, "only {:.2} GiB of ceiling left", left as f64 / (1u64 << 30) as f64);
+        assert!(
+            left >= 4 << 30,
+            "only {:.2} GiB of ceiling left",
+            left as f64 / (1u64 << 30) as f64
+        );
     }
 
     #[test]
@@ -320,13 +332,46 @@ mod tests {
     #[test]
     fn unified_plan_auto_is_demand_capped() {
         // demand below room: the demand; demand above room: the room; floor above room: error
-        let r = plan_unified(100, 20, 10, KvRequest::Auto { demand: 5, floor: 2 }, 4).unwrap();
+        let r = plan_unified(
+            100,
+            20,
+            10,
+            KvRequest::Auto {
+                demand: 5,
+                floor: 2,
+            },
+            4,
+        )
+        .unwrap();
         assert_eq!(r, 20);
-        let r = plan_unified(100, 20, 10, KvRequest::Auto { demand: 50, floor: 2 }, 4).unwrap();
+        let r = plan_unified(
+            100,
+            20,
+            10,
+            KvRequest::Auto {
+                demand: 50,
+                floor: 2,
+            },
+            4,
+        )
+        .unwrap();
         assert_eq!(r, 70);
-        assert!(plan_unified(100, 20, 10, KvRequest::Auto { demand: 50, floor: 20 }, 4).is_err());
+        assert!(plan_unified(
+            100,
+            20,
+            10,
+            KvRequest::Auto {
+                demand: 50,
+                floor: 20
+            },
+            4
+        )
+        .is_err());
         assert!(plan_unified(100, 20, 10, KvRequest::Bytes(71), 4).is_err());
-        assert_eq!(plan_unified(100, 20, 10, KvRequest::Bytes(70), 4).unwrap(), 70);
+        assert_eq!(
+            plan_unified(100, 20, 10, KvRequest::Bytes(70), 4).unwrap(),
+            70
+        );
     }
 
     /// Qwen3.5-27B shape: 64 decoder layers, 4 KV heads of 128, of which 16 are full attention.

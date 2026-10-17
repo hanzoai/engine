@@ -131,12 +131,16 @@ impl Experts {
         }
         let inter = n13 / 2;
         if hidden % 128 != 0 || inter % 128 != 0 {
-            hanzo_ml::bail!("NVFP4 experts need H and I multiples of 128, got H={hidden} I={inter}");
+            hanzo_ml::bail!(
+                "NVFP4 experts need H and I multiples of 128, got H={hidden} I={inter}"
+            );
         }
         if w2.dims3()? != (e, hidden, inter / 2) {
             hanzo_ml::bail!("w2 {:?} does not match w13 {:?}", w2.shape(), w13.shape());
         }
-        if w13_scale.dims3()? != (e, n13, hidden / 16) || w2_scale.dims3()? != (e, hidden, inter / 16) {
+        if w13_scale.dims3()? != (e, n13, hidden / 16)
+            || w2_scale.dims3()? != (e, hidden, inter / 16)
+        {
             hanzo_ml::bail!("NVFP4 expert scales have the wrong shape");
         }
         if e > 1024 {
@@ -233,7 +237,10 @@ impl Experts {
     pub fn layout(&self, m: usize, k: usize) -> Result<Layout> {
         let shape = self.shape(m, k);
         let mut l = Layout::default();
-        check(unsafe { hanzo_moe_nvfp4_layout(&shape, &mut l) }, "nvfp4 layout")?;
+        check(
+            unsafe { hanzo_moe_nvfp4_layout(&shape, &mut l) },
+            "nvfp4 layout",
+        )?;
         Ok(l)
     }
 
@@ -281,8 +288,7 @@ impl Experts {
                 self.hidden
             );
         }
-        if x.dtype() != DType::BF16 || weights.dtype() != DType::F32 || out.dtype() != DType::BF16
-        {
+        if x.dtype() != DType::BF16 || weights.dtype() != DType::F32 || out.dtype() != DType::BF16 {
             hanzo_ml::bail!("nvfp4 experts take BF16 x and out, F32 router weights");
         }
         if !matches!(ids.dtype(), DType::U32 | DType::I32) {
@@ -340,7 +346,10 @@ fn prepare(dev: &hanzo_ml::CudaDevice) -> Result<()> {
     let ordinal = dev.cuda_stream().context().ordinal();
     let mut done = DONE.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap();
     if !done.contains(&ordinal) {
-        check(unsafe { hanzo_moe_nvfp4_prepare(ordinal as i32) }, "nvfp4 prepare")?;
+        check(
+            unsafe { hanzo_moe_nvfp4_prepare(ordinal as i32) },
+            "nvfp4 prepare",
+        )?;
         done.push(ordinal);
     }
     Ok(())

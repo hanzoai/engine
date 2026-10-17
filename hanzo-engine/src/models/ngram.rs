@@ -189,7 +189,11 @@ impl Fp8Table {
                 let off = v["data_offsets"].as_array()?;
                 Some((
                     v["dtype"].as_str()?.to_string(),
-                    v["shape"].as_array()?.iter().map(|d| d.as_u64().unwrap_or(0) as usize).collect(),
+                    v["shape"]
+                        .as_array()?
+                        .iter()
+                        .map(|d| d.as_u64().unwrap_or(0) as usize)
+                        .collect(),
                     8 + n + off[0].as_u64()? as usize,
                     8 + n + off[1].as_u64()? as usize,
                 ))
@@ -336,7 +340,10 @@ impl Ngram {
             hanzo_quant::linear_no_bias(t.dim(1)?, t.dim(0)?, &None, vb.pp(name))
         };
         let gemma = |name: &str| -> Result<Tensor> { (w(name)?.to_device(&dev)? + 1.0) };
-        let conv = w("conv1d")?.squeeze(1)?.to_dtype(DType::BF16)?.to_device(&dev)?;
+        let conv = w("conv1d")?
+            .squeeze(1)?
+            .to_dtype(DType::BF16)?
+            .to_device(&dev)?;
         Ok(Self {
             key: lin("key_proj", &key)?,
             value: lin("value_proj", &value)?,
@@ -403,7 +410,11 @@ impl Ngram {
                 Tensor::from_raw_buffer(
                     &bytes,
                     DType::F8E4M3,
-                    &[ids.len(), seq, rows.len() / ids.len().max(1) / seq.max(1) * table.width],
+                    &[
+                        ids.len(),
+                        seq,
+                        rows.len() / ids.len().max(1) / seq.max(1) * table.width,
+                    ],
                     &Device::Cpu,
                 )?
                 .to_device(dev)?
@@ -470,7 +481,9 @@ impl Ngram {
         let kn = norm_f32(&key, &self.norm_key, self.eps)?;
         let qn = norm_f32(&x.to_dtype(DType::F32)?, &self.norm_query, self.eps)?;
         let scale = (1.0 / (h as f64).sqrt()) as f32;
-        let score = (kn * qn)?.sum_keepdim(D::Minus1)?.affine(f64::from(scale), 0.0)?;
+        let score = (kn * qn)?
+            .sum_keepdim(D::Minus1)?
+            .affine(f64::from(scale), 0.0)?;
         let gate = sigmoid(&(score.sign()? * score.abs()?.maximum(1e-6)?.sqrt()?)?)?;
         let gv_f = gate.broadcast_mul(&value.unsqueeze(2)?)?;
         let gv = store(&gv_f)?;
@@ -1116,7 +1129,9 @@ mod tests {
     #[test]
     fn fp8_table_reads_unaligned_rows() -> Result<()> {
         let (rows, width, shards) = (5usize, 6usize, 3usize);
-        let bytes: Vec<u8> = (0..rows * width * shards).map(|i| (i * 37 % 251) as u8 & 0x7e).collect();
+        let bytes: Vec<u8> = (0..rows * width * shards)
+            .map(|i| (i * 37 % 251) as u8 & 0x7e)
+            .collect();
         let mut header = serde_json::Map::new();
         // a 2-byte BF16 scale first, so the shards start at data offset 2
         header.insert(
@@ -1140,14 +1155,21 @@ mod tests {
         file.extend(&json);
         file.extend(scale.to_le_bytes());
         file.extend(&bytes);
-        let path = std::env::temp_dir().join(format!("hanzo-ple-table-{}.safetensors", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "hanzo-ple-table-{}.safetensors",
+            std::process::id()
+        ));
         std::fs::write(&path, &file).map_err(hanzo_ml::Error::wrap)?;
         let table = Fp8Table::open(&[path], "t")?;
         let picks = [0u32, 4, 5, 9, 14, 7];
         let got = table.bytes(&picks)?;
         for (i, &r) in picks.iter().enumerate() {
             let at = r as usize * width;
-            assert_eq!(&got[i * width..(i + 1) * width], &bytes[at..at + width], "row {r}");
+            assert_eq!(
+                &got[i * width..(i + 1) * width],
+                &bytes[at..at + width],
+                "row {r}"
+            );
         }
         assert_eq!(table.scale, scale.to_f32());
         let e = Tensor::from_raw_buffer(&got, DType::F8E4M3, &[picks.len(), width], &Device::Cpu)?
@@ -1158,7 +1180,9 @@ mod tests {
             .flatten_all()?
             .to_vec1::<f32>()?;
         for (i, b) in got.iter().enumerate() {
-            let want = half::bf16::from_f32(float8::F8E4M3::from_bits(*b).to_f32() * scale.to_f32()).to_f32();
+            let want =
+                half::bf16::from_f32(float8::F8E4M3::from_bits(*b).to_f32() * scale.to_f32())
+                    .to_f32();
             assert_eq!(e[i].to_bits(), want.to_bits(), "element {i}");
         }
         Ok(())
