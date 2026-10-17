@@ -667,10 +667,13 @@ impl MatMul {
         }
         #[cfg(not(feature = "accelerate"))]
         {
-            if a.device().is_cpu() {
+            // The CPU multiplies half-precision inputs in F32 and F32 inputs as they are. Rounding
+            // them to F16 instead kept three significant digits of every attention score and sent
+            // any score past 65504 to infinity.
+            if a.device().is_cpu() && matches!(a.dtype(), DType::F16 | DType::BF16) {
                 let original_dtype = a.dtype();
-                a.to_dtype(DType::F16)?
-                    .matmul(&b.to_dtype(DType::F16)?)?
+                a.to_dtype(DType::F32)?
+                    .matmul(&b.to_dtype(DType::F32)?)?
                     .to_dtype(original_dtype)
             } else {
                 a.matmul(b)
