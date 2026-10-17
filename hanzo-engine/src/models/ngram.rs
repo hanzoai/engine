@@ -144,7 +144,7 @@ impl Hash {
                 let back = seq[t + 1 - n];
                 mixed ^= u64::from(if cut { self.eos } else { back }) * self.mult[n - 1];
                 cut |= back == self.eos;
-                // row = mixed_n mod size + offset, per head (:433).
+                // row = mixed_n mod size + offset, per head.
                 for h in (n - 2) * self.heads..(n - 1) * self.heads {
                     rows.push((mixed % self.size[h] + self.offset[h]) as u32);
                 }
@@ -516,7 +516,7 @@ impl Ngram {
             );
         }
         if cache.seqlen_offset == 0 {
-            // A new sequence starts from an empty history (:810-815).
+            // A new sequence starts from an empty history.
             cache.conv_state = cache.conv_state.zeros_like()?;
         }
         cache.trail_conv(u)?;
@@ -527,7 +527,7 @@ impl Ngram {
         )?;
         cache.conv_state = history.narrow(1, s, rows)?.transpose(1, 2)?.contiguous()?;
         cache.seqlen_offset += s;
-        // out_t = Σ_j w_j ⊙ history[t + j·d] (:820-826).
+        // out_t = Σ_j w_j ⊙ history[t + j·d].
         let history = history.to_dtype(DType::F32)?;
         let w = self.conv.to_dtype(DType::F32)?;
         let mut out = history.narrow(1, 0, s)?.broadcast_mul(&w.i((.., 0))?)?;
@@ -651,7 +651,7 @@ mod reference {
                 delta[t * c + ch] = v[t * c + ch] + a / (1.0 + (-a).exp());
             }
         }
-        // The next state is the last (k-1)·d inputs (:843-846).
+        // The next state is the last (k-1)·d inputs.
         let history = (seq..seq + rows)
             .flat_map(|i| (0..c).map(move |ch| (i, ch)))
             .map(|(i, ch)| past(i, ch))
