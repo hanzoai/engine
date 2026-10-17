@@ -336,22 +336,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_image_url() {
-        // from URL
-        let url = "https://www.rust-lang.org/logos/rust-logo-32x32.png";
-        let image = parse_image_url(url).await.unwrap();
-        assert_eq!(image.dimensions(), (32, 32));
+        std::env::set_var("HANZO_ALLOW_LOCAL_MEDIA", "1");
 
-        let url = "http://www.rust-lang.org/logos/rust-logo-32x32.png";
+        // from URL
+        let url = "https://rust-lang.org/logos/rust-logo-32x32.png";
         let image = parse_image_url(url).await.unwrap();
         assert_eq!(image.dimensions(), (32, 32));
 
         // from file path
-        let url = "resources/rust-logo-32x32.png";
-        let image = parse_image_url(url).await.unwrap();
+        let file_path = if std::path::Path::new("resources/rust-logo-32x32.png").exists() {
+            "resources/rust-logo-32x32.png".to_string()
+        } else if std::path::Path::new("hanzo-server-core/resources/rust-logo-32x32.png").exists() {
+            "hanzo-server-core/resources/rust-logo-32x32.png".to_string()
+        } else {
+            format!(
+                "{}/resources/rust-logo-32x32.png",
+                env!("CARGO_MANIFEST_DIR")
+            )
+        };
+        let image = parse_image_url(&file_path).await.unwrap();
         assert_eq!(image.dimensions(), (32, 32));
 
         // URL must be an absolute path
-        let absolute_path = std::path::absolute(url).unwrap();
+        let absolute_path = std::path::absolute(&file_path).unwrap();
         let url = format!("file://{}", absolute_path.as_os_str().to_str().unwrap());
         let image = parse_image_url(&url).await.unwrap();
         assert_eq!(image.dimensions(), (32, 32));

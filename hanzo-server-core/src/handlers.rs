@@ -4,6 +4,7 @@ use anyhow::Result;
 use axum::extract::Path;
 use axum::extract::{Json, State};
 use axum::http::StatusCode;
+use axum::Extension;
 use hanzo_engine::{
     auto_tune, collect_system_info, parse_isq_value, run_doctor, AutoDeviceMapParams,
     AutoTuneRequest, AutoTuneResult, Error, Hanzo, ModelDType, ModelSelected,
@@ -13,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::{
+    defaults::Defaults,
     openai::{ModelObject, ModelObjects},
     types::ExtractedState,
 };
@@ -41,20 +43,26 @@ impl From<TuneProfileRequest> for TuneProfile {
   path = "/v1/models",
   responses((status = 200, description = "Served model info", body = ModelObjects))
 )]
-pub async fn models(State(state): ExtractedState) -> Json<ModelObjects> {
+pub async fn models(
+    State(state): ExtractedState,
+    Extension(defaults): Extension<Defaults>,
+) -> Json<ModelObjects> {
     let mut model_objects = Vec::new();
 
-    // Add "default" as a special model option
-    model_objects.push(ModelObject {
-        id: "default".to_string(),
-        object: "model",
-        created: state.get_creation_time(),
-        owned_by: "local",
-        status: None,
-        tools_available: None,
-        mcp_tools_count: None,
-        mcp_servers_connected: None,
-    });
+    // Add "default" as a special model option. With `--served-model-name` the served id is the
+    // one model listed, so a client that takes the first id gets it.
+    if defaults.served_name.is_none() {
+        model_objects.push(ModelObject {
+            id: "default".to_string(),
+            object: "model",
+            created: state.get_creation_time(),
+            owned_by: "local",
+            status: None,
+            tools_available: None,
+            mcp_tools_count: None,
+            mcp_servers_connected: None,
+        });
+    }
 
     // Get all models with their status (loaded, unloaded, reloading)
     let models_with_status = state.list_models_with_status().unwrap_or_default();

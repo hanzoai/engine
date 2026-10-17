@@ -1,6 +1,7 @@
 //! Server configuration options
 
 use clap::Args;
+use hanzo_server_core::defaults::Defaults;
 use serde::Deserialize;
 
 /// HTTP server configuration
@@ -37,6 +38,11 @@ pub struct ServerOptions {
     #[arg(long)]
     #[serde(default)]
     pub tool_dispatch_url: Option<String>,
+
+    /// Request defaults: budgets, sampling, reasoning controls and the served model id.
+    #[command(flatten)]
+    #[serde(flatten)]
+    pub defaults: Defaults,
 }
 
 impl Default for ServerOptions {
@@ -48,6 +54,7 @@ impl Default for ServerOptions {
             no_advertise: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
+            defaults: Defaults::default(),
         }
     }
 }

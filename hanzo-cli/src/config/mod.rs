@@ -17,8 +17,10 @@ use hanzo_engine::{ModelDType, NormalLoaderType, TokenSource};
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "kebab-case")]
 pub enum CliConfig {
-    Serve(ServeConfig),
-    Run(RunConfig),
+    // Both boxed: each is hundreds of bytes, and the server's options make them differ by more
+    // than clippy's large_enum_variant allows.
+    Serve(Box<ServeConfig>),
+    Run(Box<RunConfig>),
 }
 
 #[derive(Deserialize, Default)]

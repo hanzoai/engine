@@ -1,15 +1,13 @@
 //! ## Chat Completions functionality and route handler.
 
-use std::{
-    collections::HashMap, io::Cursor, ops::Deref, pin::Pin, sync::Arc, task::Poll, time::Duration,
-};
+use std::{collections::HashMap, io::Cursor, ops::Deref, pin::Pin, sync::Arc, task::Poll};
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Json, State},
-    http::{self},
+    extract::{rejection::JsonRejection, Json, State},
+    http::{self, StatusCode},
     response::{
-        sse::{Event, KeepAlive, KeepAliveStream},
+        sse::{Event, KeepAliveStream},
         IntoResponse, Sse,
     },
     Extension,
@@ -19,8 +17,8 @@ use either::Either;
 use hanzo_engine::{
     AgentPermission, AgentToolApprovalHandler, AgentToolApprovalNotifier, AgenticToolCallData,
     AgenticToolCallPhase, AgenticToolCallRecord, ChatCompletionChunkResponse,
-    ChatCompletionResponse, Constraint, Hanzo, ModelCategory, NormalRequest, ReasoningEffort,
-    Request, RequestMessage, Response, SamplingParams,
+    ChatCompletionResponse, Constraint, Hanzo, ModelCategory, NormalRequest, Request,
+    RequestMessage, Response, SamplingParams, ToolChoice,
 };
 use image::DynamicImage;
 use indexmap::IndexMap;
@@ -30,21 +28,24 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
     completion_core::{
-        convert_stop_tokens, get_dry_sampling_params, handle_completion_error,
-        BaseCompletionResponder,
+        convert_stop_tokens, error_response, get_dry_sampling_params, handle_completion_error,
+        handle_request_error, model_error, model_error_response, BaseCompletionResponder,
     },
+    controls,
+    defaults::Defaults,
+    error::ApiError,
     handler_core::{
-        create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
-        JsonError, ModelErrorMessage,
+        create_response_channel, send_request_with_model, JsonError, ModelErrorMessage,
     },
     openai::{
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
         ResponseFormat,
     },
     router::AgenticDefaults,
-    streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
+    shape::{self, Framing},
+    streaming::{base_create_streamer, error_event, keep_alive, BaseStreamer, DoneState},
     types::{ExtractedState, OnChunkCallback, OnDoneCallback, SharedState},
-    util::{parse_audio_url, parse_image_url, sanitize_error_message, validate_model_name},
+    util::{parse_audio_url, parse_image_url, validate_model_name},
     video::parse_video_url,
 };
 
@@ -326,6 +327,10 @@ impl futures::Stream for ChatCompletionStreamer {
     ) -> Poll<Option<Self::Item>> {
         match self.done_state {
             DoneState::SendingDone => {
+                // The usage chunk (`include_usage`) goes last, just before `[DONE]`.
+                if let Some(tail) = self.tail.take() {
+                    return Poll::Ready(Some(Event::default().json_data(tail)));
+                }
                 // https://platform.openai.com/docs/api-reference/completions/create
                 // If true, returns a stream of events that happen during the Run as server-sent events, terminating when the Run enters a terminal state with a data: [DONE] message.
                 self.done_state = DoneState::Done;
@@ -346,20 +351,22 @@ impl futures::Stream for ChatCompletionStreamer {
                     Hanzo::maybe_log_error(self.state.clone(), &ModelErrorMessage(msg.to_string()));
                     // Done now, just need to send the [DONE]
                     self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(Event::default().data(msg))))
+                    Poll::Ready(Some(Ok(error_event(model_error(&msg)))))
                 }
                 Response::ValidationError(e) => {
                     self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(
-                        Event::default().data(sanitize_error_message(e.as_ref()))
-                    )))
+                    Poll::Ready(Some(Ok(error_event(ApiError::from_error(
+                        e.as_ref(),
+                        StatusCode::BAD_REQUEST,
+                    )))))
                 }
                 Response::InternalError(e) => {
                     Hanzo::maybe_log_error(self.state.clone(), &*e);
                     self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(
-                        Event::default().data(sanitize_error_message(e.as_ref()))
-                    )))
+                    Poll::Ready(Some(Ok(error_event(ApiError::from_error(
+                        e.as_ref(),
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                    )))))
                 }
                 Response::Chunk(mut response) => {
                     if response.choices.iter().all(|x| x.finish_reason.is_some()) {
@@ -368,15 +375,23 @@ impl futures::Stream for ChatCompletionStreamer {
                     // Done now, just need to send the [DONE]
                     Hanzo::maybe_log_response(self.state.clone(), &response);
 
-                    if let Some(on_chunk) = &self.on_chunk {
+                    let this = &mut *self;
+                    this.first_call.chunk(&mut response);
+
+                    if let Some(on_chunk) = &this.on_chunk {
                         response = on_chunk(response);
                     }
 
-                    if self.store_chunks {
-                        self.chunks.push(response.clone());
+                    if this.store_chunks {
+                        this.chunks.push(response.clone());
                     }
 
-                    Poll::Ready(Some(Event::default().json_data(response)))
+                    let (frame, tail) =
+                        shape::chunk(&response, response.usage.as_ref(), &this.framing);
+                    if tail.is_some() {
+                        this.tail = tail;
+                    }
+                    Poll::Ready(Some(Event::default().json_data(frame)))
                 }
                 Response::AgenticToolCallProgress {
                     round,
@@ -435,41 +450,40 @@ impl futures::Stream for ChatCompletionStreamer {
 pub type ChatCompletionResponder =
     BaseCompletionResponder<ChatCompletionResponse, KeepAliveStream<ChatCompletionStreamer>>;
 
-type JsonModelError = BaseJsonModelError<ChatCompletionResponse>;
-impl ErrorToResponse for JsonModelError {}
-
 impl IntoResponse for ChatCompletionResponder {
-    /// Converts the chat completion responder into an HTTP response.
+    /// Converts the chat completion responder into an HTTP response. Errors are OpenAI's
+    /// envelope; a finished body carries usage details and `timings`.
     fn into_response(self) -> axum::response::Response {
         match self {
             ChatCompletionResponder::Sse(s) => s.into_response(),
-            ChatCompletionResponder::Json(s) => Json(s).into_response(),
+            ChatCompletionResponder::Json(s) => Json(shape::body(&s, &s.usage)).into_response(),
             ChatCompletionResponder::InternalError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                error_response(e.as_ref(), http::StatusCode::INTERNAL_SERVER_ERROR)
             }
             ChatCompletionResponder::ValidationError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+                error_response(e.as_ref(), http::StatusCode::BAD_REQUEST)
             }
             ChatCompletionResponder::ModelError(msg, response) => {
-                JsonModelError::new(msg, response)
-                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                model_error_response(&msg, shape::body(&response, &response.usage))
             }
         }
     }
 }
 
-/// Parse reasoning_effort string to ReasoningEffort enum
-fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
-    effort
-        .as_ref()
-        .and_then(|e| match e.to_lowercase().as_str() {
-            "low" => Some(ReasoningEffort::Low),
-            "medium" => Some(ReasoningEffort::Medium),
-            "high" => Some(ReasoningEffort::High),
-            _ => None,
-        })
+impl ChatCompletionResponder {
+    /// Applies the per-request framing to a finished body: the served model id and one tool call
+    /// when parallel calls are off. Streams are framed chunk by chunk.
+    pub fn framed(self, framing: &Framing) -> Self {
+        let frame = |mut response: ChatCompletionResponse| {
+            framing.finish(&mut response);
+            response
+        };
+        match self {
+            Self::Json(response) => Self::Json(frame(response)),
+            Self::ModelError(msg, response) => Self::ModelError(msg, frame(response)),
+            other => other,
+        }
+    }
 }
 
 /// Parses and validates a chat completion request.
@@ -490,9 +504,15 @@ fn insert_reasoning_content(
     }
 }
 
+///
+/// The request controls are checked in this order: the token budget, the
+/// template controls and their aliases, the sampling values, `tool_choice`, the effort, the
+/// messages, the drafter, `logit_bias`, then the budget against the cap. The first failure is
+/// the request's error, a 400 unless it says otherwise.
 pub async fn parse_request(
     oairequest: ChatCompletionRequest,
     state: SharedState,
+    defaults: &Defaults,
     tx: Sender<Response>,
     tool_dispatch_url: Option<String>,
     agent_approval_handler: Option<AgentToolApprovalHandler>,
@@ -503,10 +523,49 @@ pub async fn parse_request(
     Hanzo::maybe_log_request(state.clone(), repr);
 
     // Validate that the requested model matches the loaded model
-    validate_model_name(&oairequest.model, state.clone())?;
+    validate_model_name(&oairequest.model, state.clone())
+        .map_err(|e| ApiError::new(StatusCode::NOT_FOUND, e.to_string()))?;
+    let model_id = (oairequest.model != "default").then(|| oairequest.model.clone());
 
-    // Parse reasoning effort for Harmony-format models
-    let reasoning_effort = parse_reasoning_effort(&oairequest.reasoning_effort);
+    let max_tokens = controls::fold_budget(&[
+        ("max_tokens", oairequest.max_tokens),
+        ("max_completion_tokens", oairequest.max_completion_tokens),
+        ("max_output_tokens", oairequest.max_output_tokens),
+    ])?;
+    let reasoning = controls::Reasoning {
+        reasoning_effort: oairequest.reasoning_effort.clone(),
+        enable_thinking: oairequest.enable_thinking,
+        preserve_thinking: oairequest.preserve_thinking,
+        max_thinking_tokens: oairequest.max_thinking_tokens,
+    }
+    .fold(controls::Aliases {
+        chat_template_kwargs: oairequest.chat_template_kwargs.as_ref(),
+        thinking_budget_tokens: oairequest.thinking_budget_tokens.as_ref(),
+        thinking_budget: oairequest.thinking_budget.as_ref(),
+        thinking_token_budget: oairequest.thinking_token_budget.as_ref(),
+        reasoning: oairequest.reasoning.as_ref(),
+        thinking: oairequest.thinking.as_ref(),
+    })?;
+    let sampling = controls::Sampling {
+        temperature: oairequest.temperature,
+        top_p: oairequest.top_p,
+        top_k: oairequest.top_k,
+        min_p: oairequest.min_p,
+        presence_penalty: oairequest.presence_penalty,
+        frequency_penalty: oairequest.frequency_penalty,
+    }
+    .resolve(defaults)?;
+    let tool_choice = controls::tool_choice(
+        oairequest.tool_choice.as_ref(),
+        oairequest.tools.as_deref().unwrap_or_default(),
+    )?;
+    // `tool_choice: none` renders no tools and parses no calls.
+    let tools = if matches!(tool_choice, Some(ToolChoice::None)) {
+        None
+    } else {
+        oairequest.tools
+    };
+    let template = controls::template(&reasoning, defaults)?;
 
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
 
@@ -857,14 +916,16 @@ pub async fn parse_request(
                     images,
                     audios,
                     videos,
-                    enable_thinking: oairequest.enable_thinking,
-                    reasoning_effort,
+                    enable_thinking: template.enable_thinking,
+                    reasoning_effort: template.reasoning_effort,
+                    preserve_thinking: template.preserve_thinking,
                 }
             } else {
                 RequestMessage::Chat {
                     messages,
-                    enable_thinking: oairequest.enable_thinking,
-                    reasoning_effort,
+                    enable_thinking: template.enable_thinking,
+                    reasoning_effort: template.reasoning_effort,
+                    preserve_thinking: template.preserve_thinking,
                 }
             }
         }
@@ -877,11 +938,29 @@ pub async fn parse_request(
             messages.push(message_map);
             RequestMessage::Chat {
                 messages,
-                enable_thinking: oairequest.enable_thinking,
-                reasoning_effort,
+                enable_thinking: template.enable_thinking,
+                reasoning_effort: template.reasoning_effort,
+                preserve_thinking: template.preserve_thinking,
             }
         }
     };
+
+    let config = state
+        .config(model_id.as_deref())
+        .map_err(anyhow::Error::msg)?;
+    let serial = controls::drafter(
+        oairequest.drafter.as_deref(),
+        config.drafter.as_ref().map(|drafter| drafter.name()),
+    )?;
+    let logits_bias = controls::logit_bias(oairequest.logit_bias.as_ref(), config.vocab_size)?;
+    let max_len =
+        controls::resolve_budget(max_tokens, defaults.max_tokens, defaults.max_tokens_cap)?;
+    let thinking_budget = controls::thinking_budget(
+        template.thinking,
+        reasoning.max_thinking_tokens,
+        max_len,
+        defaults,
+    );
 
     let dry_params = get_dry_sampling_params(
         oairequest.dry_multiplier,
@@ -916,27 +995,30 @@ pub async fn parse_request(
             id: state.next_request_id(),
             messages,
             sampling_params: SamplingParams {
-                temperature: oairequest.temperature,
-                top_k: oairequest.top_k,
-                top_p: oairequest.top_p,
-                min_p: oairequest.min_p,
+                temperature: sampling.temperature,
+                top_k: sampling.top_k.map(|k| k as usize),
+                top_p: sampling.top_p,
+                min_p: sampling.min_p,
                 top_n_logprobs: oairequest.top_logprobs.unwrap_or(1),
-                frequency_penalty: oairequest.frequency_penalty,
-                presence_penalty: oairequest.presence_penalty,
+                frequency_penalty: sampling.frequency_penalty,
+                presence_penalty: sampling.presence_penalty,
                 repetition_penalty: oairequest.repetition_penalty,
-                max_len: oairequest.max_tokens,
+                max_len: Some(max_len),
                 stop_toks,
-                logits_bias: oairequest.logit_bias,
+                logits_bias,
                 n_choices: oairequest.n_choices,
                 dry_params,
+                seed: oairequest.seed.map(|seed| seed as u64),
+                thinking_budget,
+                serial,
             },
             response: tx,
             return_logprobs: oairequest.logprobs,
             is_streaming,
             suffix: None,
             constraint,
-            tool_choice: oairequest.tool_choice,
-            tools: oairequest.tools,
+            tool_choice,
+            tools,
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: oairequest.web_search_options,
@@ -950,11 +1032,7 @@ pub async fn parse_request(
             files: oairequest.files,
             max_tool_rounds: oairequest.max_tool_rounds,
             tool_dispatch_url,
-            model_id: if oairequest.model == "default" {
-                None
-            } else {
-                Some(oairequest.model.clone())
-            },
+            model_id,
             truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
         })),
         is_streaming,
@@ -972,8 +1050,15 @@ pub async fn parse_request(
 pub async fn chatcompletions(
     State(state): ExtractedState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
-    Json(mut oairequest): Json<ChatCompletionRequest>,
+    Extension(defaults): Extension<Defaults>,
+    body: Result<Json<ChatCompletionRequest>, JsonRejection>,
 ) -> ChatCompletionResponder {
+    let mut oairequest = match body {
+        Ok(Json(oairequest)) => oairequest,
+        Err(rejection) => {
+            return ChatCompletionResponder::ValidationError(Box::new(ApiError::from(rejection)))
+        }
+    };
     let (tx, mut rx) = create_response_channel(None);
 
     // Apply server-level default for max_tool_rounds (per-request value takes priority)
@@ -994,6 +1079,15 @@ pub async fn chatcompletions(
     oairequest.code_execution_permission = None;
 
     let is_streaming = oairequest.stream.unwrap_or(false);
+    let framing = Framing {
+        model: defaults.served_name.clone(),
+        include_usage: oairequest
+            .stream_options
+            .as_ref()
+            .and_then(|o| o.include_usage)
+            .unwrap_or(false),
+        single_call: oairequest.parallel_tool_calls == Some(false),
+    };
     if matches!(oairequest.agent_permission, Some(AgentPermission::Ask)) && !is_streaming {
         return ChatCompletionResponder::ValidationError(Box::new(JsonError::new(
             "agent_permission \"ask\" requires stream=true over HTTP; approve or deny emitted requests with POST /v1/agent/approvals/{approval_id}.".to_string(),
@@ -1020,6 +1114,7 @@ pub async fn chatcompletions(
     let (request, is_streaming) = match parse_request(
         oairequest,
         state.clone(),
+        &defaults,
         tx,
         agentic_defaults.tool_dispatch_url,
         agent_approval_handler,
@@ -1028,7 +1123,7 @@ pub async fn chatcompletions(
     .await
     {
         Ok(x) => x,
-        Err(e) => return handle_error(state, e.into()),
+        Err(e) => return handle_request_error(state, e),
     };
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
@@ -1036,9 +1131,11 @@ pub async fn chatcompletions(
     }
 
     if is_streaming {
-        ChatCompletionResponder::Sse(create_streamer(rx, state, None, None))
+        ChatCompletionResponder::Sse(create_streamer(rx, state, None, None, framing))
     } else {
-        process_non_streaming_response(&mut rx, state).await
+        process_non_streaming_response(&mut rx, state)
+            .await
+            .framed(&framing)
     }
 }
 
@@ -1050,18 +1147,17 @@ pub fn handle_error(
     handle_completion_error(state, e)
 }
 
-/// Creates a SSE streamer for chat completions with optional callbacks.
+/// Creates a SSE streamer for chat completions with optional callbacks. `framing` sets the served
+/// model id, where usage goes (`include_usage`), and whether only the first tool call is kept.
 pub fn create_streamer(
     rx: Receiver<Response>,
     state: SharedState,
     on_chunk: Option<ChatCompletionOnChunkCallback>,
     on_done: Option<ChatCompletionOnDoneCallback>,
+    framing: Framing,
 ) -> Sse<KeepAliveStream<ChatCompletionStreamer>> {
-    let streamer = base_create_streamer(rx, state, on_chunk, on_done);
-    let keep_alive_interval = get_keep_alive_interval();
-
-    Sse::new(streamer)
-        .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval)))
+    let streamer = base_create_streamer(rx, state, on_chunk, on_done, framing);
+    Sse::new(streamer).keep_alive(keep_alive())
 }
 
 /// Process non-streaming chat completion responses.

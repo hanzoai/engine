@@ -4,20 +4,20 @@
 //! See: <https://www.openresponses.org/>
 
 use std::{
-    collections::HashMap,
     pin::Pin,
     task::Poll,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Result;
 use axum::{
-    extract::{Json, Path, State},
+    extract::{rejection::JsonRejection, Json, Path, State},
     http::{self, StatusCode},
     response::{
-        sse::{Event, KeepAlive, KeepAliveStream},
+        sse::{Event, KeepAliveStream},
         IntoResponse, Sse,
     },
+    Extension,
 };
 use either::Either;
 use hanzo_engine::{ChatCompletionResponse, Hanzo, Request, Response};
@@ -34,12 +34,17 @@ use crate::{
     background_tasks::get_background_task_manager,
     cached_responses::get_response_cache,
     chat_completion::parse_request as parse_chat_request,
-    completion_core::{handle_completion_error, BaseCompletionResponder},
-    handler_core::{
-        create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
-        JsonError, ModelErrorMessage,
+    completion_core::{
+        error_response, handle_completion_error, handle_request_error, BaseCompletionResponder,
     },
-    openai::{ChatCompletionRequest, Message, MessageContent, ToolCall},
+    controls,
+    defaults::Defaults,
+    error::ApiError,
+    handler_core::{
+        create_response_channel, send_request_with_model, ErrorToResponse, JsonError,
+        ModelErrorMessage,
+    },
+    openai::{ChatCompletionRequest, Message, MessageContent, StreamOptions, ToolCall},
     responses_types::{
         content::OutputContent,
         enums::{ItemStatus, ResponseStatus},
@@ -47,7 +52,8 @@ use crate::{
         items::{InputItem, MessageContentParam, OutputItem},
         resource::{ResponseError, ResponseResource, ResponseUsage},
     },
-    streaming::{get_keep_alive_interval, DoneState},
+    shape::{self, FirstCall, Framing},
+    streaming::{keep_alive, DoneState},
     types::{ExtractedState, OnDoneCallback, SharedState},
     util::sanitize_error_message,
 };
@@ -306,12 +312,19 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
     messages
 }
 
-/// Reasoning configuration for models that support extended thinking
+/// Reasoning configuration for models that support extended thinking. It folds into the chat
+/// controls the way chat's `reasoning` does.
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ReasoningConfig {
-    /// Effort level for reasoning (low, medium, high)
+    /// `minimal`, `low`, `medium`, `high`, `xhigh`, or `none` (thinking off)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub effort: Option<crate::responses_types::enums::ReasoningEffort>,
+    pub effort: Option<String>,
+    /// Most tokens the think block may take
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<i64>,
+    /// Whether the reply thinks
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
     /// Whether to generate a summary of reasoning
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<ReasoningSummary>,
@@ -359,14 +372,6 @@ pub enum TextFormat {
     /// JSON object output
     #[serde(rename = "json_object")]
     JsonObject,
-}
-
-/// Stream options configuration
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
-pub struct StreamOptions {
-    /// Include usage statistics in stream
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub include_usage: Option<bool>,
 }
 
 /// Request context carrying parameters to echo back in the response.
@@ -541,13 +546,14 @@ pub struct OpenResponsesCreateRequest {
     pub include: Option<Vec<IncludeOption>>,
 
     // ===== Generation Parameters =====
-    /// Maximum number of output tokens to generate
-    #[serde(
-        alias = "max_tokens",
-        alias = "max_completion_tokens",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub max_output_tokens: Option<usize>,
+    /// Maximum number of output tokens to generate, reasoning included. `max_tokens` and
+    /// `max_completion_tokens` are the same budget; 0 means the server's default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_completion_tokens: Option<i64>,
 
     /// Temperature for sampling (0-2)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -578,14 +584,12 @@ pub struct OpenResponsesCreateRequest {
     )]
     pub tools: Option<Vec<hanzo_engine::Tool>>,
 
-    /// Controls how the model uses tools
+    /// Controls how the model uses tools; the flat `{"type":"function","name":X}` is accepted.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_choice: Option<hanzo_engine::ToolChoice>,
+    #[schema(value_type = Option<hanzo_engine::ToolChoice>)]
+    pub tool_choice: Option<Value>,
 
-    /// Whether to allow parallel tool calls.
-    ///
-    /// Accepted and echoed back; the engine generates one sequence per turn so the
-    /// flag is advisory (not enforced). `false` is honored by codex-family clients.
+    /// Whether to allow parallel tool calls: `false` keeps only the first call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parallel_tool_calls: Option<bool>,
 
@@ -599,7 +603,41 @@ pub struct OpenResponsesCreateRequest {
     // ===== Reasoning =====
     /// Configuration for reasoning/thinking behavior
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<ReasoningConfig>,
+    #[schema(value_type = Option<ReasoningConfig>)]
+    pub reasoning: Option<Value>,
+
+    /// Most tokens the think block may take (hanzo extension, as on chat)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_thinking_tokens: Option<i64>,
+
+    /// Alias of `max_thinking_tokens`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<i64>)]
+    pub thinking_budget_tokens: Option<Value>,
+
+    /// Alias of `max_thinking_tokens`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<i64>)]
+    pub thinking_budget: Option<Value>,
+
+    /// Alias of `max_thinking_tokens`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<i64>)]
+    pub thinking_token_budget: Option<Value>,
+
+    /// Anthropic's `{type, budget_tokens}`, or a bare effort level (as on chat)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
+    pub thinking: Option<Value>,
+
+    /// `serial` decodes without the speculative drafter; the loaded drafter's name
+    /// (`mtp`, `dflash`, `spec`) keeps it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drafter: Option<String>,
+
+    /// Seeds this request's sampling so it can be replayed (hanzo extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<i64>,
 
     // ===== Output Format =====
     /// Text output configuration
@@ -621,7 +659,8 @@ pub struct OpenResponsesCreateRequest {
 
     /// Logit bias for token manipulation
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub logit_bias: Option<HashMap<u32, f32>>,
+    #[schema(value_type = Option<HashMap<String, f32>>)]
+    pub logit_bias: Option<serde_json::Map<String, Value>>,
 
     /// Whether to return log probabilities
     #[serde(default)]
@@ -637,7 +676,7 @@ pub struct OpenResponsesCreateRequest {
 
     /// Top-k sampling (hanzo extension)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_k: Option<usize>,
+    pub top_k: Option<i64>,
 
     /// Grammar for constrained generation (hanzo extension)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -746,11 +785,13 @@ pub enum OpenResponsesStreamEvent {
         call_id: String,
         arguments: String,
     },
-    /// Response completed event
+    /// Response completed event; `timings` sits beside `response`
     #[serde(rename = "response.completed")]
     ResponseCompleted {
         sequence_number: u64,
         response: ResponseResource,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timings: Option<Value>,
     },
     /// Response failed event
     #[serde(rename = "response.failed")]
@@ -804,6 +845,8 @@ pub struct OpenResponsesStreamer {
     events: Vec<OpenResponsesStreamEvent>,
     /// Request context for echoing back request parameters
     request_context: RequestContext,
+    /// Drops tool calls after the first when parallel calls are off
+    first_call: FirstCall,
 }
 
 impl OpenResponsesStreamer {
@@ -839,6 +882,7 @@ impl OpenResponsesStreamer {
             conversation_history,
             on_done: None,
             events: Vec::new(),
+            first_call: FirstCall::new(request_context.parallel_tool_calls == Some(false)),
             request_context,
         }
     }
@@ -1021,7 +1065,8 @@ impl futures::Stream for OpenResponsesStreamer {
                     self.events.push(event.clone());
                     Poll::Ready(Some(Event::default().event("error").json_data(event)))
                 }
-                Response::Chunk(chat_chunk) => {
+                Response::Chunk(mut chat_chunk) => {
+                    self.first_call.chunk(&mut chat_chunk);
                     let mut events_to_emit = Vec::new();
 
                     // Emit response.in_progress if not sent
@@ -1147,15 +1192,13 @@ impl futures::Stream for OpenResponsesStreamer {
 
                         // Add usage from chunk if available
                         if let Some(usage) = &chat_chunk.usage {
-                            response.usage = Some(
-                                ResponseUsage::new(usage.prompt_tokens, usage.completion_tokens)
-                                    .with_cached_tokens(usage.cached_prompt_tokens),
-                            );
+                            response.usage = Some(ResponseUsage::from_usage(usage));
                         }
 
                         events_to_emit.push(OpenResponsesStreamEvent::ResponseCompleted {
                             sequence_number: seq,
                             response,
+                            timings: chat_chunk.usage.as_ref().map(shape::timings),
                         });
 
                         self.done_state = DoneState::SendingDone;
@@ -1190,6 +1233,7 @@ impl futures::Stream for OpenResponsesStreamer {
                     let event = OpenResponsesStreamEvent::ResponseCompleted {
                         sequence_number: seq,
                         response,
+                        timings: None,
                     };
                     self.done_state = DoneState::SendingDone;
                     self.events.push(event.clone());
@@ -1251,24 +1295,21 @@ fn get_event_type(event: &OpenResponsesStreamEvent) -> &'static str {
 pub type OpenResponsesResponder =
     BaseCompletionResponder<ResponseResource, KeepAliveStream<OpenResponsesStreamer>>;
 
-type JsonModelError = BaseJsonModelError<ResponseResource>;
-impl ErrorToResponse for JsonModelError {}
-
 impl IntoResponse for OpenResponsesResponder {
+    /// Errors are OpenAI's envelope.
     fn into_response(self) -> axum::response::Response {
         match self {
             OpenResponsesResponder::Sse(s) => s.into_response(),
             OpenResponsesResponder::Json(s) => Json(s).into_response(),
             OpenResponsesResponder::InternalError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                error_response(e.as_ref(), http::StatusCode::INTERNAL_SERVER_ERROR)
             }
             OpenResponsesResponder::ValidationError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+                error_response(e.as_ref(), http::StatusCode::BAD_REQUEST)
             }
-            OpenResponsesResponder::ModelError(msg, response) => JsonModelError::new(msg, response)
-                .to_response(http::StatusCode::INTERNAL_SERVER_ERROR),
+            OpenResponsesResponder::ModelError(msg, response) => {
+                crate::completion_core::model_error_response(&msg, serde_json::json!(response))
+            }
         }
     }
 }
@@ -1338,13 +1379,8 @@ fn chat_response_to_response_resource(
     } else {
         Some(reasoning_parts.join(""))
     };
-    resource.usage = Some(
-        ResponseUsage::new(
-            chat_resp.usage.prompt_tokens,
-            chat_resp.usage.completion_tokens,
-        )
-        .with_cached_tokens(chat_resp.usage.cached_prompt_tokens),
-    );
+    resource.usage = Some(ResponseUsage::from_usage(&chat_resp.usage));
+    resource.timings = Some(shape::timings(&chat_resp.usage));
     resource.metadata = metadata;
     resource.completed_at = Some(
         SystemTime::now()
@@ -1371,10 +1407,13 @@ fn chat_response_to_response_resource(
     resource
 }
 
-/// Parse OpenResponses request into internal format
+/// Parse OpenResponses request into internal format. The request folds into a chat request: the
+/// three budget names fold, 0 means the default, the flat `tool_choice` is nested, and
+/// `reasoning` and the thinking aliases fold as on chat.
 async fn parse_openresponses_request(
-    oairequest: OpenResponsesCreateRequest,
+    mut oairequest: OpenResponsesCreateRequest,
     state: SharedState,
+    defaults: &Defaults,
     tx: Sender<Response>,
 ) -> Result<(
     Request,
@@ -1396,11 +1435,27 @@ async fn parse_openresponses_request(
         );
     }
 
+    let max_tokens = controls::fold_budget(&[
+        ("max_output_tokens", oairequest.max_output_tokens),
+        ("max_tokens", oairequest.max_tokens),
+        ("max_completion_tokens", oairequest.max_completion_tokens),
+    ])?
+    .filter(|&budget| budget != 0);
+    let max_tokens =
+        controls::resolve_budget(max_tokens, defaults.max_tokens, defaults.max_tokens_cap)?;
+    oairequest.tool_choice = oairequest
+        .tool_choice
+        .take()
+        .map(controls::nest_tool_choice);
+
     // Build request context to echo back request parameters
     // Must capture these before consuming oairequest
     let request_context = RequestContext {
         tools: oairequest.tools.clone(),
-        tool_choice: oairequest.tool_choice.clone(),
+        tool_choice: oairequest
+            .tool_choice
+            .clone()
+            .and_then(|choice| serde_json::from_value(choice).ok()),
         parallel_tool_calls: oairequest.parallel_tool_calls,
         text: oairequest.text.clone(),
         temperature: oairequest.temperature,
@@ -1408,7 +1463,7 @@ async fn parse_openresponses_request(
         presence_penalty: oairequest.presence_penalty,
         frequency_penalty: oairequest.frequency_penalty,
         top_logprobs: oairequest.top_logprobs,
-        max_output_tokens: oairequest.max_output_tokens,
+        max_output_tokens: Some(max_tokens),
         max_tool_calls: oairequest.max_tool_calls,
         store: oairequest.store,
         background: oairequest.background,
@@ -1461,23 +1516,6 @@ async fn parse_openresponses_request(
         }
     }
 
-    // Extract reasoning configuration
-    let (enable_thinking, reasoning_effort) = if let Some(ref reasoning) = oairequest.reasoning {
-        let effort = reasoning.effort.map(|e| match e {
-            crate::responses_types::enums::ReasoningEffort::None => "none".to_string(),
-            crate::responses_types::enums::ReasoningEffort::Low => "low".to_string(),
-            crate::responses_types::enums::ReasoningEffort::Medium => "medium".to_string(),
-            crate::responses_types::enums::ReasoningEffort::High => "high".to_string(),
-        });
-        // Enable thinking if reasoning is configured with any effort level
-        let thinking = reasoning
-            .effort
-            .map(|e| !matches!(e, crate::responses_types::enums::ReasoningEffort::None));
-        (thinking, effort)
-    } else {
-        (None, None)
-    };
-
     // Convert truncation enum to truncate_sequence bool
     let truncate_sequence = oairequest
         .truncation
@@ -1510,7 +1548,9 @@ async fn parse_openresponses_request(
         logit_bias: oairequest.logit_bias,
         logprobs: oairequest.logprobs,
         top_logprobs: oairequest.top_logprobs,
-        max_tokens: oairequest.max_output_tokens,
+        max_tokens: Some(max_tokens as i64),
+        max_completion_tokens: None,
+        max_output_tokens: None,
         n_choices: oairequest.n_choices,
         presence_penalty: oairequest.presence_penalty,
         frequency_penalty: oairequest.frequency_penalty,
@@ -1519,8 +1559,10 @@ async fn parse_openresponses_request(
         temperature: oairequest.temperature,
         top_p: oairequest.top_p,
         stream: oairequest.stream,
+        stream_options: None,
         tools: oairequest.tools,
         tool_choice: oairequest.tool_choice,
+        parallel_tool_calls: oairequest.parallel_tool_calls,
         response_format,
         web_search_options: oairequest.web_search_options,
         enable_code_execution: false,
@@ -1529,20 +1571,30 @@ async fn parse_openresponses_request(
         session_id: None,
         max_tool_rounds: None,
         top_k: oairequest.top_k,
+        seed: oairequest.seed,
+        drafter: oairequest.drafter,
         grammar: oairequest.grammar,
         min_p: oairequest.min_p,
         dry_multiplier: oairequest.dry_multiplier,
         dry_base: oairequest.dry_base,
         dry_allowed_length: oairequest.dry_allowed_length,
         dry_sequence_breakers: oairequest.dry_sequence_breakers,
-        enable_thinking,
+        enable_thinking: None,
         truncate_sequence,
-        reasoning_effort,
+        reasoning_effort: None,
+        preserve_thinking: None,
+        max_thinking_tokens: oairequest.max_thinking_tokens,
+        thinking_budget_tokens: oairequest.thinking_budget_tokens,
+        thinking_budget: oairequest.thinking_budget,
+        thinking_token_budget: oairequest.thinking_token_budget,
+        reasoning: oairequest.reasoning,
+        thinking: oairequest.thinking,
+        chat_template_kwargs: None,
         files: None,
     };
 
     let (request, is_streaming) =
-        parse_chat_request(chat_request, state, tx, None, None, None).await?;
+        parse_chat_request(chat_request, state, defaults, tx, None, None, None).await?;
     Ok((
         request,
         is_streaming,
@@ -1562,8 +1614,15 @@ async fn parse_openresponses_request(
 )]
 pub async fn create_response(
     State(state): ExtractedState,
-    Json(oairequest): Json<OpenResponsesCreateRequest>,
+    Extension(defaults): Extension<Defaults>,
+    body: Result<Json<OpenResponsesCreateRequest>, JsonRejection>,
 ) -> OpenResponsesResponder {
+    let oairequest = match body {
+        Ok(Json(oairequest)) => oairequest,
+        Err(rejection) => {
+            return OpenResponsesResponder::ValidationError(Box::new(ApiError::from(rejection)))
+        }
+    };
     let (tx, rx) = create_response_channel(None);
     let request_id = format!("resp_{}", Uuid::new_v4());
     let metadata = oairequest.metadata.clone();
@@ -1577,7 +1636,15 @@ pub async fn create_response(
         Some(oairequest.model.clone())
     };
 
-    let model_name = oairequest.model.clone();
+    let model_name = defaults
+        .served_name
+        .clone()
+        .unwrap_or_else(|| oairequest.model.clone());
+    let framing = Framing {
+        model: defaults.served_name.clone(),
+        include_usage: false,
+        single_call: oairequest.parallel_tool_calls == Some(false),
+    };
 
     // Handle background processing
     if background {
@@ -1603,7 +1670,9 @@ pub async fn create_response(
             let (bg_tx, mut bg_rx) = create_response_channel(None);
 
             let (request, _, conversation_history, _include_config, request_context) =
-                match parse_openresponses_request(oairequest, state_clone.clone(), bg_tx).await {
+                match parse_openresponses_request(oairequest, state_clone.clone(), &defaults, bg_tx)
+                    .await
+                {
                     Ok(x) => x,
                     Err(e) => {
                         task_manager.mark_failed(
@@ -1633,7 +1702,8 @@ pub async fn create_response(
             };
 
             match response {
-                Some(Response::Done(chat_resp)) => {
+                Some(Response::Done(mut chat_resp)) => {
+                    framing.finish(&mut chat_resp);
                     let response = chat_response_to_response_resource(
                         &chat_resp,
                         task_id.clone(),
@@ -1694,9 +1764,9 @@ pub async fn create_response(
     }
 
     let (request, is_streaming, conversation_history, _include_config, request_context) =
-        match parse_openresponses_request(oairequest, state.clone(), tx).await {
+        match parse_openresponses_request(oairequest, state.clone(), &defaults, tx).await {
             Ok(x) => x,
-            Err(e) => return handle_error(state, e.into()),
+            Err(e) => return handle_request_error(state, e),
         };
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
@@ -1715,11 +1785,7 @@ pub async fn create_response(
             request_context,
         );
 
-        let keep_alive_interval = get_keep_alive_interval();
-        let sse = Sse::new(streamer)
-            .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval)));
-
-        OpenResponsesResponder::Sse(sse)
+        OpenResponsesResponder::Sse(Sse::new(streamer).keep_alive(keep_alive()))
     } else {
         // Non-streaming response. Files are reachable via GET /v1/files/{id}.
         let mut rx = rx;
@@ -1732,7 +1798,8 @@ pub async fn create_response(
         };
 
         match response {
-            Some(Response::Done(chat_resp)) => {
+            Some(Response::Done(mut chat_resp)) => {
+                framing.finish(&mut chat_resp);
                 let response = chat_response_to_response_resource(
                     &chat_resp,
                     request_id.clone(),
@@ -1764,7 +1831,8 @@ pub async fn create_response(
 
                 OpenResponsesResponder::Json(response)
             }
-            Some(Response::ModelError(msg, partial_resp)) => {
+            Some(Response::ModelError(msg, mut partial_resp)) => {
+                framing.finish(&mut partial_resp);
                 let mut response = chat_response_to_response_resource(
                     &partial_resp,
                     request_id.clone(),

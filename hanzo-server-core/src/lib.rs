@@ -29,7 +29,9 @@
 //!         create_streamer, handle_error, parse_request, process_non_streaming_response,
 //!         ChatCompletionOnChunkCallback, ChatCompletionOnDoneCallback, ChatCompletionResponder,
 //!     },
+//!     defaults::Defaults,
 //!     handler_core::{create_response_channel, send_request},
+//!     shape::Framing,
 //!     server::ServerBuilder,
 //!     router::RouterBuilder,
 //!     openai::ChatCompletionRequest,
@@ -163,7 +165,7 @@
 //!     let (tx, mut rx) = create_response_channel(None);
 //!
 //!     let (request, is_streaming) =
-//!         match parse_request(oai_request, hanzo_state.clone(), tx, None, None, None).await {
+//!         match parse_request(oai_request, hanzo_state.clone(), &Defaults::default(), tx, None, None, None).await {
 //!             Ok(x) => x,
 //!             Err(e) => return handle_error(hanzo_state, e.into()),
 //!         };
@@ -194,7 +196,13 @@
 //!                 (db_fn)();
 //!             });
 //!
-//!         let streamer = create_streamer(rx, hanzo_state.clone(), Some(on_chunk), Some(on_done));
+//!         let streamer = create_streamer(
+//!             rx,
+//!             hanzo_state.clone(),
+//!             Some(on_chunk),
+//!             Some(on_done),
+//!             Framing::default(),
+//!         );
 //!
 //!         ChatCompletionResponder::Sse(streamer)
 //!     } else {
@@ -228,7 +236,10 @@ pub mod cached_responses;
 pub mod chat_completion;
 mod completion_core;
 pub mod completions;
+pub mod controls;
+pub mod defaults;
 pub mod embeddings;
+pub mod error;
 pub mod files;
 pub mod handler_core;
 mod handlers;
@@ -243,6 +254,7 @@ pub mod route;
 pub mod route_registry;
 pub mod router;
 pub mod server;
+pub mod shape;
 pub mod speech_generation;
 pub mod streaming;
 pub mod threed_generation;

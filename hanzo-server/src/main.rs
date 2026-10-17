@@ -10,6 +10,7 @@ use tokio::join;
 use tracing::{error, info, warn};
 
 use hanzo_server_core::{
+    defaults::Defaults,
     router::RouterBuilder,
     server::{
         configure_paged_attn_from_flags, defaults, get_search_embedding_model, ModelConfig,
@@ -157,6 +158,10 @@ struct Args {
     /// MCP client configuration file path
     #[arg(long)]
     mcp_config: Option<String>,
+
+    /// Request defaults: budgets, sampling, reasoning controls and the served model id.
+    #[command(flatten)]
+    defaults: Defaults,
 }
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
@@ -334,6 +339,7 @@ fn load_multi_model_config(config_path: &str) -> Result<Vec<ModelConfig>> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    let defaults = args.defaults.clone().validated()?;
 
     initialize_logging();
 
@@ -349,6 +355,9 @@ async fn main() -> Result<()> {
             config,
             default_model_id,
         } => {
+            if defaults.served_name.is_some() {
+                anyhow::bail!("--served-model-name names one model; a multi-model config names each with its model_id");
+            }
             // Multi-model mode
             let model_configs = load_multi_model_config(&config)?;
 
@@ -405,6 +414,7 @@ async fn main() -> Result<()> {
                 .with_paged_ctxt_len_optional(args.paged_ctxt_len)
                 .with_paged_attn_block_size_optional(args.paged_attn_block_size)
                 .with_mcp_config_optional(mcp_config)
+                .with_model_id_override_optional(defaults.served_name.clone())
                 .with_paged_attn_cache_type(args.cache_type.unwrap_or_default());
 
             if let Some(model) = args.search_embedding_model {
@@ -435,7 +445,8 @@ async fn main() -> Result<()> {
             .unwrap_or_else(|| "0.0.0.0".to_string());
         info!("MCP server listening on http://{host}:{port}/mcp.");
         info!("MCP protocol version is {}.", LATEST_PROTOCOL_VERSION);
-        let mcp_server = mcp_server::create_http_mcp_server(hanzo.clone(), host, port);
+        let mcp_server =
+            mcp_server::create_http_mcp_server(hanzo.clone(), defaults.clone(), host, port);
 
         tokio::spawn(async move {
             if let Err(e) = mcp_server.await {
@@ -455,7 +466,11 @@ async fn main() -> Result<()> {
         // Create listener early to validate address before model loading
         let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
 
-        let app = RouterBuilder::new().with_hanzo(hanzo).build().await?;
+        let app = RouterBuilder::new()
+            .with_hanzo(hanzo)
+            .with_defaults(defaults)
+            .build()
+            .await?;
 
         info!("OpenAI-compatible server listening on http://{ip}:{port}.");
 

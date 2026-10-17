@@ -11,15 +11,14 @@ use std::{
     pin::Pin,
     sync::{Mutex, OnceLock},
     task::Poll,
-    time::Duration,
 };
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::State,
+    extract::{rejection::JsonRejection, State},
     http::StatusCode,
     response::{
-        sse::{Event, KeepAlive, KeepAliveStream},
+        sse::{Event, KeepAliveStream},
         IntoResponse, Sse,
     },
     Extension, Json,
@@ -37,13 +36,17 @@ use uuid::Uuid;
 
 use crate::{
     chat_completion::{parse_request, process_non_streaming_response, ChatCompletionResponder},
+    completion_core::model_error,
+    defaults::Defaults,
+    error::ApiError,
     handler_core::{create_response_channel, send_request_with_model, ModelErrorMessage},
     openai::{
         ChatCompletionRequest, FunctionCalled, Grammar, JsonSchemaResponseFormat, Message,
         MessageContent, MessageInnerContent, ResponseFormat, StopTokens, ToolCall,
     },
     router::AgenticDefaults,
-    streaming::{get_keep_alive_interval, DoneState},
+    shape,
+    streaming::{keep_alive, DoneState},
     types::{ExtractedState, SharedState},
     util::sanitize_error_message,
 };
@@ -103,7 +106,7 @@ pub struct AnthropicMessagesRequest {
     #[serde(default)]
     pub max_tool_rounds: Option<usize>,
     #[serde(default)]
-    pub logit_bias: Option<HashMap<u32, f32>>,
+    pub logit_bias: Option<serde_json::Map<String, Value>>,
     #[serde(default)]
     pub logprobs: bool,
     #[serde(default)]
@@ -404,6 +407,9 @@ pub struct AnthropicMessagesResponse {
     pub stop_reason: String,
     pub stop_sequence: Option<String>,
     pub usage: AnthropicUsage,
+    /// The `timings` object of a finished body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timings: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -427,6 +433,20 @@ fn anthropic_error(
 
 fn bad_request(message: impl Into<String>) -> axum::response::Response {
     anthropic_error(StatusCode::BAD_REQUEST, "invalid_request_error", message)
+}
+
+/// An `ApiError` in Anthropic's shape: /v1/messages keeps the error body the Anthropic SDKs read.
+fn anthropic_api_error(e: ApiError) -> axum::response::Response {
+    let err_type = match e.status.as_u16() {
+        400 => "invalid_request_error",
+        401 => "authentication_error",
+        403 => "permission_error",
+        404 => "not_found_error",
+        429 => "rate_limit_error",
+        503 => "overloaded_error",
+        _ => "api_error",
+    };
+    anthropic_error(e.status, err_type, e.message)
 }
 
 /// Claude Code sends Anthropic model ids (`claude-sonnet-4-5-*`, ...); route them to the
@@ -608,9 +628,14 @@ fn convert_tool_choice(
     }
 }
 
+/// `thinking.type` turns the template's thinking on or off: the value reaches the template. With
+/// neither the field nor the `enable_thinking` extension, the server's `--enable-thinking`
+/// applies, else thinking is off: Claude Code asks for thinking explicitly, and a silent
+/// default-on would change every turn.
 fn resolve_thinking(
     thinking: Option<&AnthropicThinking>,
     extension: Option<bool>,
+    default: Option<bool>,
 ) -> Result<Option<bool>> {
     let native = thinking
         .map(|thinking| match thinking.tp.as_str() {
@@ -624,8 +649,7 @@ fn resolve_thinking(
             anyhow::bail!("Anthropic `thinking.type` conflicts with `enable_thinking`.");
         }
     }
-    // Claude Code asks for thinking explicitly; a silent default-on would change every harness turn.
-    Ok(Some(extension.or(native).unwrap_or(false)))
+    Ok(Some(extension.or(native).or(default).unwrap_or(false)))
 }
 
 /// `thinking.display: omitted` means the client does not want the reasoning echoed back.
@@ -990,10 +1014,20 @@ impl AnthropicMessagesRequest {
     }
 
     /// The single translation both `/v1/messages` and `/v1/messages/count_tokens` go through.
-    fn into_chat_completion_request(self) -> Result<ChatCompletionRequest> {
+    fn into_chat_completion_request(self, defaults: &Defaults) -> Result<ChatCompletionRequest> {
         let messages = self.build_messages();
         let model = resolve_model(&self.model).to_string();
-        let enable_thinking = resolve_thinking(self.thinking.as_ref(), self.enable_thinking)?;
+        let enable_thinking = resolve_thinking(
+            self.thinking.as_ref(),
+            self.enable_thinking,
+            defaults.enable_thinking,
+        )?;
+        // `thinking.budget_tokens` is the think-block budget.
+        let max_thinking_tokens = self
+            .thinking
+            .as_ref()
+            .and_then(|thinking| thinking.budget_tokens)
+            .map(|budget| budget as i64);
         let response_format =
             resolve_response_format(self.output_config.as_ref(), self.response_format)?;
         let reasoning_effort = self
@@ -1013,13 +1047,19 @@ impl AnthropicMessagesRequest {
             converted = ConvertedTools::default();
         }
 
+        let tool_choice = tool_choice
+            .map(|choice| serde_json::to_value(choice).context("tool_choice"))
+            .transpose()?;
+
         Ok(ChatCompletionRequest {
             messages: Either::Left(messages),
             model,
             logit_bias: self.logit_bias,
             logprobs: self.logprobs,
             top_logprobs: self.top_logprobs,
-            max_tokens: self.max_tokens,
+            max_tokens: self.max_tokens.map(|budget| budget as i64),
+            max_completion_tokens: None,
+            max_output_tokens: None,
             n_choices: 1,
             presence_penalty: self.presence_penalty,
             frequency_penalty: self.frequency_penalty,
@@ -1028,8 +1068,10 @@ impl AnthropicMessagesRequest {
             temperature: self.temperature,
             top_p: self.top_p,
             stream: self.stream,
+            stream_options: None,
             tools: (!converted.tools.is_empty()).then_some(converted.tools),
             tool_choice,
+            parallel_tool_calls: None,
             response_format,
             web_search_options: converted.web_search_options,
             enable_code_execution: converted.enable_code_execution,
@@ -1037,7 +1079,9 @@ impl AnthropicMessagesRequest {
             code_execution_permission: self.code_execution_permission,
             session_id: self.session_id,
             files: self.files,
-            top_k: self.top_k,
+            top_k: self.top_k.map(|k| k as i64),
+            seed: None,
+            drafter: None,
             grammar: self.grammar,
             min_p: self.min_p,
             dry_multiplier: self.dry_multiplier,
@@ -1046,6 +1090,14 @@ impl AnthropicMessagesRequest {
             dry_sequence_breakers: self.dry_sequence_breakers,
             enable_thinking,
             reasoning_effort,
+            preserve_thinking: None,
+            max_thinking_tokens,
+            thinking_budget_tokens: None,
+            thinking_budget: None,
+            thinking_token_budget: None,
+            reasoning: None,
+            thinking: None,
+            chat_template_kwargs: None,
             max_tool_rounds: self.max_tool_rounds,
             truncate_sequence: self.truncate_sequence,
         })
@@ -1581,9 +1633,7 @@ fn create_messages_streamer(
     builder: StreamBuilder,
 ) -> Sse<KeepAliveStream<MessagesStreamer>> {
     let streamer = MessagesStreamer::new(rx, state, builder);
-    let keep_alive_interval = get_keep_alive_interval();
-    Sse::new(streamer)
-        .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval)))
+    Sse::new(streamer).keep_alive(keep_alive())
 }
 
 /// `POST /v1/messages` - Anthropic-compatible chat for Claude Code.
@@ -1593,8 +1643,13 @@ fn create_messages_streamer(
 pub async fn messages(
     State(state): ExtractedState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
-    Json(body): Json<Value>,
+    Extension(defaults): Extension<Defaults>,
+    body: Result<Json<Value>, JsonRejection>,
 ) -> axum::response::Response {
+    let body = match body {
+        Ok(Json(body)) => body,
+        Err(rejection) => return bad_request(rejection.body_text()),
+    };
     let areq: AnthropicMessagesRequest = match serde_json::from_value(body) {
         Ok(r) => r,
         Err(e) => return bad_request(e.to_string()),
@@ -1612,7 +1667,7 @@ pub async fn messages(
     let stream = areq.stream.unwrap_or(false);
     let stop_sequences = areq.stop_sequences.clone();
 
-    let mut oairequest = match areq.into_chat_completion_request() {
+    let mut oairequest = match areq.into_chat_completion_request(&defaults) {
         Ok(r) => r,
         Err(e) => return bad_request(e.to_string()),
     };
@@ -1630,6 +1685,7 @@ pub async fn messages(
     let (request, _is_streaming) = match parse_request(
         oairequest,
         state.clone(),
+        &defaults,
         tx,
         agentic_defaults.tool_dispatch_url,
         None,
@@ -1638,7 +1694,7 @@ pub async fn messages(
     .await
     {
         Ok(x) => x,
-        Err(e) => return bad_request(format!("request parse failed: {e}")),
+        Err(e) => return anthropic_api_error(ApiError::from_request(&e)),
     };
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
@@ -1679,10 +1735,19 @@ pub async fn messages(
                 stop_reason,
                 stop_sequence,
                 usage: anthropic_usage(&resp.usage),
+                timings: Some(shape::timings(&resp.usage)),
             };
             Json(out).into_response()
         }
-        other => other.into_response(),
+        ChatCompletionResponder::ValidationError(e) => {
+            anthropic_api_error(ApiError::from_error(e.as_ref(), StatusCode::BAD_REQUEST))
+        }
+        ChatCompletionResponder::InternalError(e) => anthropic_api_error(ApiError::from_error(
+            e.as_ref(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )),
+        ChatCompletionResponder::ModelError(msg, _) => anthropic_api_error(model_error(&msg)),
+        other @ ChatCompletionResponder::Sse(_) => other.into_response(),
     }
 }
 
@@ -1693,8 +1758,13 @@ pub async fn messages(
 /// refuses on this number, so it has to be the number the model would really see.
 pub async fn count_tokens(
     State(state): ExtractedState,
-    Json(body): Json<Value>,
+    Extension(defaults): Extension<Defaults>,
+    body: Result<Json<Value>, JsonRejection>,
 ) -> axum::response::Response {
+    let body = match body {
+        Ok(Json(body)) => body,
+        Err(rejection) => return bad_request(rejection.body_text()),
+    };
     let creq: AnthropicMessagesRequest = match serde_json::from_value(body) {
         Ok(r) => r,
         Err(e) => return bad_request(e.to_string()),
@@ -1704,17 +1774,18 @@ pub async fn count_tokens(
     }
 
     let model_id = model_id(resolve_model(&creq.model));
-    let mut oairequest = match creq.into_chat_completion_request() {
+    let mut oairequest = match creq.into_chat_completion_request(&defaults) {
         Ok(r) => r,
         Err(e) => return bad_request(e.to_string()),
     };
     oairequest.stream = Some(false);
 
     let (tx, _rx) = create_response_channel(Some(1));
-    let (request, _) = match parse_request(oairequest, state.clone(), tx, None, None, None).await {
-        Ok(x) => x,
-        Err(e) => return bad_request(format!("request parse failed: {e}")),
-    };
+    let (request, _) =
+        match parse_request(oairequest, state.clone(), &defaults, tx, None, None, None).await {
+            Ok(x) => x,
+            Err(e) => return anthropic_api_error(ApiError::from_request(&e)),
+        };
 
     let Request::Normal(request) = request else {
         return anthropic_error(
@@ -1793,6 +1864,13 @@ mod tests {
 
     fn request(value: Value) -> AnthropicMessagesRequest {
         serde_json::from_value(value).expect("request must parse")
+    }
+
+    /// The engine `ToolChoice` the chat request carries as JSON.
+    fn choice_of(oai: &ChatCompletionRequest) -> Option<ToolChoice> {
+        oai.tool_choice
+            .clone()
+            .map(|choice| serde_json::from_value(choice).expect("a tool_choice"))
     }
 
     fn text_of(message: &Message) -> String {
@@ -1959,8 +2037,10 @@ mod tests {
             ],
             "tool_choice": {"type": "tool", "name": "bash"},
         }));
-        let oai = req.into_chat_completion_request().expect("must translate");
-        let tools = oai.tools.expect("client tools");
+        let oai = req
+            .into_chat_completion_request(&Defaults::default())
+            .expect("must translate");
+        let tools = oai.tools.clone().expect("client tools");
         let names: Vec<&str> = tools.iter().map(|t| t.function.name.as_str()).collect();
         assert_eq!(
             names,
@@ -1975,7 +2055,7 @@ mod tests {
             oai.web_search_options.is_some(),
             "web_search stays server-side"
         );
-        match oai.tool_choice {
+        match choice_of(&oai) {
             Some(ToolChoice::Tool(tool)) => assert_eq!(tool.function.name, "bash"),
             other => panic!("expected a forced bash tool, got {other:?}"),
         }
@@ -1996,8 +2076,10 @@ mod tests {
                 "tools": [{"type": "web_search_20250305", "name": "web_search"}],
                 "tool_choice": choice,
             }));
-            let oai = req.into_chat_completion_request().expect("must translate");
-            assert!(matches!(oai.tool_choice, Some(ToolChoice::Auto)));
+            let oai = req
+                .into_chat_completion_request(&Defaults::default())
+                .expect("must translate");
+            assert!(matches!(choice_of(&oai), Some(ToolChoice::Auto)));
         }
     }
 
@@ -2010,8 +2092,10 @@ mod tests {
             "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
             "tool_choice": {"type": "any"},
         }));
-        let oai = req.into_chat_completion_request().expect("must translate");
-        assert!(matches!(oai.tool_choice, Some(ToolChoice::Required)));
+        let oai = req
+            .into_chat_completion_request(&Defaults::default())
+            .expect("must translate");
+        assert!(matches!(choice_of(&oai), Some(ToolChoice::Required)));
     }
 
     /// Breakage 4: count_tokens and generation share one translation, so the tokenized
@@ -2036,9 +2120,11 @@ mod tests {
             "thinking": {"type": "enabled", "budget_tokens": 1024},
         });
         let generate = request(body.clone())
-            .into_chat_completion_request()
+            .into_chat_completion_request(&Defaults::default())
             .expect("messages");
-        let mut count = request(body).into_chat_completion_request().expect("count");
+        let mut count = request(body)
+            .into_chat_completion_request(&Defaults::default())
+            .expect("count");
         // count_tokens is the only difference: it never streams.
         count.stream = Some(false);
 
@@ -2155,7 +2241,9 @@ mod tests {
                 "format": {"type": "json_schema", "schema": {"type": "object"}},
             },
         }));
-        let oai = req.into_chat_completion_request().expect("must translate");
+        let oai = req
+            .into_chat_completion_request(&Defaults::default())
+            .expect("must translate");
         assert_eq!(oai.reasoning_effort.as_deref(), Some("high"));
         match oai.response_format {
             Some(ResponseFormat::JsonSchema { json_schema }) => {
@@ -2173,7 +2261,9 @@ mod tests {
             "messages": [{"role": "user", "content": "hi"}],
         }));
         assert_eq!(
-            off.into_chat_completion_request().unwrap().enable_thinking,
+            off.into_chat_completion_request(&Defaults::default())
+                .unwrap()
+                .enable_thinking,
             Some(false)
         );
 
@@ -2183,7 +2273,9 @@ mod tests {
             "thinking": {"type": "enabled", "budget_tokens": 2048},
         }));
         assert_eq!(
-            on.into_chat_completion_request().unwrap().enable_thinking,
+            on.into_chat_completion_request(&Defaults::default())
+                .unwrap()
+                .enable_thinking,
             Some(true)
         );
 
@@ -2285,6 +2377,7 @@ mod tests {
                 total_time_sec: 0.0,
                 total_prompt_time_sec: 0.0,
                 total_completion_time_sec: 0.0,
+                ..Usage::default()
             }),
             session_id: None,
         }
@@ -2458,7 +2551,9 @@ mod tests {
             "stop_sequences": ["END"],
             "metadata": {"user_id": "ignored"},
         }));
-        let oai = req.into_chat_completion_request().expect("must translate");
+        let oai = req
+            .into_chat_completion_request(&Defaults::default())
+            .expect("must translate");
         assert_eq!(oai.min_p, Some(0.05));
         assert_eq!(oai.top_k, Some(40));
         assert_eq!(oai.repetition_penalty, Some(1.1));
@@ -2478,7 +2573,9 @@ mod tests {
             "messages": [{"role": "user", "content": "hi"}],
             "tools": [{"type": DYNAMIC_WEB_SEARCH_TYPE, "name": "web_search"}],
         }));
-        let oai = req.into_chat_completion_request().expect("must translate");
+        let oai = req
+            .into_chat_completion_request(&Defaults::default())
+            .expect("must translate");
         assert!(oai.web_search_options.is_some());
         assert!(oai.enable_code_execution);
     }
@@ -2495,10 +2592,65 @@ mod tests {
             ],
             "tool_choice": {"type": "none"},
         }));
-        let oai = req.into_chat_completion_request().expect("must translate");
+        let oai = req
+            .into_chat_completion_request(&Defaults::default())
+            .expect("must translate");
         assert!(oai.tools.is_none());
         assert!(oai.web_search_options.is_none());
         assert!(!oai.enable_code_execution);
+        assert!(matches!(choice_of(&oai), Some(ToolChoice::None)));
+    }
+
+    /// `thinking.type` reaches the template in both directions, `budget_tokens` becomes the
+    /// think-block budget, and `--enable-thinking` is the default when the request is silent.
+    #[test]
+    fn thinking_type_and_budget_reach_the_chat_request() {
+        let body = |thinking: Value| {
+            request(json!({
+                "model": "m", "max_tokens": 8,
+                "messages": [{"role": "user", "content": "hi"}],
+                "thinking": thinking,
+            }))
+        };
+        let on_by_default = Defaults {
+            enable_thinking: Some(true),
+            ..Defaults::default()
+        };
+        let off = body(json!({"type": "disabled"}))
+            .into_chat_completion_request(&on_by_default)
+            .unwrap();
+        assert_eq!(off.enable_thinking, Some(false));
+        assert_eq!(off.max_thinking_tokens, None);
+
+        let off_by_default = Defaults {
+            enable_thinking: Some(false),
+            ..Defaults::default()
+        };
+        let on = body(json!({"type": "enabled", "budget_tokens": 3000}))
+            .into_chat_completion_request(&off_by_default)
+            .unwrap();
+        assert_eq!(on.enable_thinking, Some(true));
+        assert_eq!(on.max_thinking_tokens, Some(3000));
+
+        let silent = request(json!({
+            "model": "m", "max_tokens": 8,
+            "messages": [{"role": "user", "content": "hi"}],
+        }));
+        assert_eq!(
+            silent
+                .into_chat_completion_request(&on_by_default)
+                .unwrap()
+                .enable_thinking,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn api_errors_keep_the_anthropic_shape() {
+        let response = anthropic_api_error(ApiError::new(StatusCode::NOT_FOUND, "no model"));
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let response = anthropic_api_error(ApiError::invalid("bad"));
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     fn usage_with_cache(prompt: usize, cached: usize) -> Usage {
@@ -2513,6 +2665,7 @@ mod tests {
             total_time_sec: 0.0,
             total_prompt_time_sec: 0.0,
             total_completion_time_sec: 0.0,
+            ..Usage::default()
         }
     }
 
