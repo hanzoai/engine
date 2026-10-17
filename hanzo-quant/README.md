@@ -19,7 +19,8 @@ Currently supported:
 - Unquantized (used for ISQ): `UnquantLinear`
 - Bnb: `BnbLinear` (int8, fp4, nf4)
 
-Some kernels are copied or based on implementations in:
-- https://github.com/vllm-project/vllm
+Some kernels are copied from or based on third-party implementations, among them:
 - https://github.com/mobiusml/hqq
 - https://github.com/bitsandbytes-foundation/bitsandbytes
+
+Each such file keeps its license header, and the workspace `NOTICE` lists every copyright holder.

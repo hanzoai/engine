@@ -23,7 +23,7 @@
     }                                                                          \
   } while (0)
 
-namespace vllm {
+namespace pagedattn {
 
 /// Gather K and V from paged KV cache into contiguous output tensors.
 ///
@@ -116,10 +116,10 @@ __global__ void gather_kv_cache_kernel(
   }
 }
 
-} // namespace vllm
+} // namespace pagedattn
 
 #define CALL_GATHER_KV_CACHE(OUT_T, CACHE_T, KV_DTYPE)                         \
-  vllm::gather_kv_cache_kernel<CACHE_T, OUT_T, KV_DTYPE>                       \
+  pagedattn::gather_kv_cache_kernel<CACHE_T, OUT_T, KV_DTYPE>                       \
       <<<grid, block, 0, stream>>>(                                            \
           reinterpret_cast<CACHE_T *>(key_cache),                              \
           reinterpret_cast<CACHE_T *>(value_cache),                            \
@@ -154,22 +154,22 @@ extern "C" void gather_kv_cache(
     // FP8 E4M3 cache -> dequantize to out_dtype
     if (out_dtype == 0) {
       CALL_GATHER_KV_CACHE(uint16_t, uint8_t,
-                           vllm::Fp8KVCacheDataType::kFp8E4M3);
+                           pagedattn::Fp8KVCacheDataType::kFp8E4M3);
     } else if (out_dtype == 1) {
       CALL_GATHER_KV_CACHE(__nv_bfloat16, uint8_t,
-                           vllm::Fp8KVCacheDataType::kFp8E4M3);
+                           pagedattn::Fp8KVCacheDataType::kFp8E4M3);
     } else if (out_dtype == 2) {
-      CALL_GATHER_KV_CACHE(float, uint8_t, vllm::Fp8KVCacheDataType::kFp8E4M3);
+      CALL_GATHER_KV_CACHE(float, uint8_t, pagedattn::Fp8KVCacheDataType::kFp8E4M3);
     }
   } else {
     // Non-FP8 cache: cache_t == out_t
     if (out_dtype == 0) {
-      CALL_GATHER_KV_CACHE(uint16_t, uint16_t, vllm::Fp8KVCacheDataType::kAuto);
+      CALL_GATHER_KV_CACHE(uint16_t, uint16_t, pagedattn::Fp8KVCacheDataType::kAuto);
     } else if (out_dtype == 1) {
       CALL_GATHER_KV_CACHE(__nv_bfloat16, __nv_bfloat16,
-                           vllm::Fp8KVCacheDataType::kAuto);
+                           pagedattn::Fp8KVCacheDataType::kAuto);
     } else if (out_dtype == 2) {
-      CALL_GATHER_KV_CACHE(float, float, vllm::Fp8KVCacheDataType::kAuto);
+      CALL_GATHER_KV_CACHE(float, float, pagedattn::Fp8KVCacheDataType::kAuto);
     }
   }
   CUDA_CHECK(cudaGetLastError());

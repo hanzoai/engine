@@ -95,7 +95,14 @@ fn modelopt_block_fp8(
     let config = QuantizedConfig::Fp8 {
         weight_block_size: Some(vec![128, 128]),
     };
-    blockwise_fp8_linear_b(in_dim, out_dim, &config, bias, Default::default(), vb.clone())
+    blockwise_fp8_linear_b(
+        in_dim,
+        out_dim,
+        &config,
+        bias,
+        Default::default(),
+        vb.clone(),
+    )
 }
 
 /// A module with neither scale: its weight must be a float. An FP8 or packed weight here has
@@ -123,8 +130,7 @@ fn modelopt_unquantized(
         );
     }
     let weight = weight.to_dtype(vb.dtype())?;
-    let weight =
-        crate::lora::merge_lora_weights(vb, weight, in_dim, out_dim, Default::default())?;
+    let weight = crate::lora::merge_lora_weights(vb, weight, in_dim, out_dim, Default::default())?;
     let bias = if bias {
         Some(vb.get((out_dim,), "bias")?)
     } else {
@@ -2284,9 +2290,7 @@ mod tests {
                     ColumnParallelLayer::new(K, N, &cfg, false, &comm, vb.clone())?,
                     RowParallelLayer::new(K, N, &cfg, false, &comm, vb.clone())?,
                 ];
-                let s = s
-                    .to_dtype(DType::F32)?
-                    .repeat_interleave_dims(128)?;
+                let s = s.to_dtype(DType::F32)?.repeat_interleave_dims(128)?;
                 let dq = (w.to_dtype(DType::F32)? * s)?;
                 let want = x.matmul(&dq.t()?)?;
                 for layer in layers {

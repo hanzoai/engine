@@ -43,7 +43,7 @@ constexpr uintptr_t kOperandAlignment = 16;
 constexpr uintptr_t kScaleAlignment = sizeof(float);
 constexpr size_t kDefaultSharedBytes = 48 * 1024;
 
-// The sm_12x family guard vLLM wraps its kernel in (cutlass_extensions/common.hpp).
+// Runs the kernel body only on the sm_12x family (1200 <= __CUDA_ARCH__ < 1300).
 template <typename Kernel> struct enable_sm120_family : Kernel {
   template <typename... Args> CUTLASS_DEVICE void operator()(Args &&...args) {
 #if defined __CUDA_ARCH__
@@ -128,17 +128,17 @@ struct Gemm {
   struct Kernel : public KernelType {};
 };
 
-// vLLM's sm120_blockwise_fp8_config_swapab: M <= 64.
+// M <= 64: A and B swapped, so the weights fill the tile's 128 rows.
 using SwapAbGemm =
     Gemm<128, 1, 128, Shape<_128, _32, _128>,
          cutlass::epilogue::collective::EpilogueScheduleAuto,
          cutlass::gemm::KernelTmaWarpSpecializedBlockwiseCooperativeSm120, true>;
-// vLLM's sm120_blockwise_fp8_config_pingpong: 64 < M <= 256.
+// 64 < M <= 256.
 using PingpongGemm =
     Gemm<1, 128, 128, Shape<_64, _128, _128>,
          cutlass::epilogue::collective::EpilogueScheduleAuto,
          cutlass::gemm::KernelTmaWarpSpecializedBlockwisePingpongSm120, false>;
-// vLLM's sm120_blockwise_fp8_config_default: M > 256.
+// M > 256.
 using CooperativeGemm =
     Gemm<1, 128, 128, Shape<_128, _128, _128>,
          cutlass::epilogue::collective::EpilogueScheduleAuto,
@@ -184,7 +184,7 @@ typename G::Kernel::Arguments make_arguments(const hanzo_blockwise_fp8_launch &l
   typename Kernel::EpilogueArguments epilogue{{}, out, c_stride, out, c_stride};
   cutlass::KernelHardwareInfo hw_info{launch.context.device,
                                       launch.context.sm_count};
-  // Default scheduler arguments, as vLLM's cutlass_gemm_caller passes.
+  // Default tile-scheduler arguments.
   return {cutlass::gemm::GemmUniversalMode::kGemm, problem, mainloop, epilogue,
           hw_info, typename Kernel::TileSchedulerArguments{}};
 }

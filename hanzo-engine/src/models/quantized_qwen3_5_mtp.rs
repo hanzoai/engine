@@ -1,6 +1,6 @@
 //! The multi-token-prediction head a Qwen3.5 GGUF carries in `blk.{N}.nextn.*`.
 //!
-//! The same head as the safetensors `mtp.*`, under llama.cpp's names: `eh_proj` is the `[2h, h]`
+//! The same head as the safetensors `mtp.*`, under its GGUF names: `eh_proj` is the `[2h, h]`
 //! concat projection, `enorm` and `hnorm` normalize the token embedding and the target hidden
 //! state, `shared_head_norm` is the final norm, and `blk.{N}`'s own attention and MLP are the
 //! decoder block between them. `N` is the transformer depth, since the converter counts the head

@@ -8,7 +8,7 @@
  *   - bias: [M] optional bias vector
  *   - Y: [B, M] output matrix
  *
- * Design follows llama.cpp mmvf.cu approach:
+ * Design:
  *   - Simple loop without heavy unrolling
  *   - Vectorized loads (float2, half2, nv_bfloat162)
  *   - __ldg() for read-only cache path

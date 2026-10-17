@@ -7,7 +7,7 @@
 #include <type_traits>
 #include "cuda_fp8.h"
 
-namespace vllm {
+namespace pagedattn {
 #ifndef USE_ROCM
 
 namespace fp8 {
@@ -243,4 +243,4 @@ __inline__ __device__ Tout scaled_convert(const Tin& x, const float scale) {
 
 }  // namespace fp8
 #endif  // not USE_ROCM
-}  // namespace vllm
+}  // namespace pagedattn

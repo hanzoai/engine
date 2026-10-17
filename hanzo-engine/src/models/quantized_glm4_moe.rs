@@ -5,7 +5,7 @@
 //! Standard GQA attention (q/k/v biases, optional q/k RMSNorm, partial NeoX RoPE) with the shared
 //! DeepSeek-style sigmoid/group MoE gate (`models::gguf_moe`). Covers GLM-4.5-Air, GLM-4.5/4.6 and
 //! GLM-4.7 (355B). The trailing `nextn_predict_layers` MTP block is skipped for text generation.
-//! Tensor/metadata names follow llama.cpp's `LLM_ARCH_GLM4_MOE`.
+//! Tensor/metadata names follow the GGUF `glm4moe` arch.
 //!
 //! GLM-4.7-Flash is a *different* GGUF arch (`deepseek2`, MLA) — see `quantized_deepseek2`.
 

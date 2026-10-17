@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-/* vLLM v0.29.0's sm_12x tiles, picked by M: <=64, <=256, larger. */
+/* The sm_12x tiles, picked by M: <=64, <=256, larger. */
 enum {
   HANZO_BLOCKWISE_FP8_SWAP_AB = 0,     /* 128x32x128 cooperative, A/B swapped */
   HANZO_BLOCKWISE_FP8_PINGPONG = 1,    /* 64x128x128 pingpong */

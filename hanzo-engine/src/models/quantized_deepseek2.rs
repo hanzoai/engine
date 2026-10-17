@@ -6,7 +6,7 @@
 //! weights from a GGUF `deepseek2` checkpoint and runs them through the quantized `GgufMatMul` path.
 //! The same arch covers V3/V4-class checkpoints (the V3 no-aux-loss gate is scaffolded behind the
 //! `expert_weights_norm`/`expert_gating_func` metadata; see TODOs). Layout/tensor names follow
-//! llama.cpp's `LLM_ARCH_DEEPSEEK2` convention.
+//! the GGUF `deepseek2` arch convention.
 //!
 //! NOTE: MLA here uses the un-absorbed (materialized K/V) eager path that the safetensors model uses
 //! on the no-paged branch; the CUDA paged "absorbed" MLA decode in `crate::mla` is NOT wired here yet
@@ -44,7 +44,7 @@ use hanzo_quant::{QuantMethod, QuantMethodConfig, RingPipeline, UnquantLinear};
 
 const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
 
-// llama.cpp expert gating funcs (LLM_EXPERT_GATING_FUNC_TYPE). V2 = softmax, V3 = sigmoid.
+// GGUF `expert_gating_func` values. V2 = softmax, V3 = sigmoid.
 const EXPERT_GATING_SOFTMAX: u32 = 1;
 const EXPERT_GATING_SIGMOID: u32 = 2;
 
@@ -132,7 +132,7 @@ fn dsa_rope_positions(offsets: &[usize], device: &Device) -> Result<Tensor> {
 /// layer ships no indexer tensors (an IndexShare "shared" layer, or a non-DSA
 /// checkpoint) — that layer then reuses the previous full layer's selection.
 ///
-/// Tensor names (llama.cpp `blk.N.` convention, mapped from the HF
+/// Tensor names (GGUF `blk.N.` convention, mapped from the HF
 /// `self_attn.indexer.{wq_b,wk,weights_proj,k_norm}` our `--indexer`
 /// converter extracts as `out-idx-*`):
 ///   `attn_indexer_q`      = `wq_b`         (q-LoRA latent -> n_head·head_dim)
@@ -799,7 +799,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             "embedding_length",
             "attention.layer_norm_rms_epsilon",
             "attention.kv_lora_rank",
-            "attention.key_length", // qk_nope_head_dim (llama.cpp sets key_length = nope dim)
+            "attention.key_length", // qk_nope_head_dim (the GGUF's key_length is the nope dim)
             "rope.dimension_count", // qk_rope_head_dim
             "expert_count",
             "expert_used_count",

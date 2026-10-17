@@ -135,7 +135,9 @@ impl QuantMethod for NVFP4Layer {
                 {
                     let global = global_scale(weight_scale_2.as_ref())?;
                     let activation = match input_scale.as_ref() {
-                        Some(s) => Some(s.flatten_all()?.to_dtype(DType::F32)?.to_vec1::<f32>()?[0]),
+                        Some(s) => {
+                            Some(s.flatten_all()?.to_dtype(DType::F32)?.to_vec1::<f32>()?[0])
+                        }
                         None => None,
                     };
                     #[cfg(has_nvfp4_cutlass_kernels)]
@@ -562,12 +564,19 @@ mod tests {
             .map(|i| ((i * 2654435761usize) >> 7) as u8)
             .collect();
         let q = Tensor::from_vec(codes, (e, n, k / 2), &Device::Cpu)?;
-        let s = Tensor::rand(0.002f32, 0.05f32, (e, n, k / 16), &Device::Cpu)?.to_dtype(DType::F8E4M3)?;
+        let s = Tensor::rand(0.002f32, 0.05f32, (e, n, k / 16), &Device::Cpu)?
+            .to_dtype(DType::F8E4M3)?;
         let global = Tensor::rand(0.5f32, 2.0f32, e, &Device::Cpu)?;
         Ok((q, s, global))
     }
 
-    fn stacked(q: &Tensor, s: &Tensor, global: &Tensor, input_scale: f32, dev: &Device) -> Result<NVFP4Layer> {
+    fn stacked(
+        q: &Tensor,
+        s: &Tensor,
+        global: &Tensor,
+        input_scale: f32,
+        dev: &Device,
+    ) -> Result<NVFP4Layer> {
         Ok(NVFP4Layer {
             weight: Weight::Stacked {
                 q: q.to_device(dev)?,
@@ -583,14 +592,25 @@ mod tests {
 
     fn assert_within_ulp(what: &str, got: &Tensor, want: &Tensor) -> Result<()> {
         let cols = *want.dims().last().unwrap();
-        let g = got.to_dtype(DType::F32)?.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
-        let w = want.to_dtype(DType::F32)?.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
+        let g = got
+            .to_dtype(DType::F32)?
+            .to_device(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let w = want
+            .to_dtype(DType::F32)?
+            .to_device(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
         assert_eq!(g.len(), w.len(), "{what}");
         for (r, (gr, wr)) in g.chunks(cols).zip(w.chunks(cols)).enumerate() {
             let rms = (wr.iter().map(|v| v * v).sum::<f32>() / cols as f32).sqrt();
             for (i, (a, b)) in gr.iter().zip(wr).enumerate() {
                 let bound = f32::from_bits(b.abs().to_bits() & 0x7f80_0000) / 128.0 + rms / 1024.0;
-                assert!((a - b).abs() <= bound, "{what}: row {r} col {i}: {a} vs {b}");
+                assert!(
+                    (a - b).abs() <= bound,
+                    "{what}: row {r} col {i}: {a} vs {b}"
+                );
             }
         }
         Ok(())
@@ -600,22 +620,38 @@ mod tests {
     #[cfg(feature = "cuda")]
     #[test]
     fn stacked_gather_matches_reference() -> Result<()> {
-        let Ok(dev) = Device::new_cuda(0) else { return Ok(()) };
+        let Ok(dev) = Device::new_cuda(0) else {
+            return Ok(());
+        };
         let e = 16;
         for (n, k) in [(640, 2560), (2560, 640)] {
             let (q, s, global) = bank(e, n, k)?;
             let input_scale = 0.013f32;
             let gpu = stacked(&q, &s, &global, input_scale, &dev)?;
             let cpu = stacked(&q, &s, &global, input_scale, &Device::Cpu)?;
-            for (t, topk) in [(1usize, 1usize), (8, 1), (1, 10), (7, 10), (16, 10), (256, 10)] {
-                let ids: Vec<u32> = (0..t * topk).map(|i| ((i * 7 + i / topk) % e) as u32).collect();
+            for (t, topk) in [
+                (1usize, 1usize),
+                (8, 1),
+                (1, 10),
+                (7, 10),
+                (16, 10),
+                (256, 10),
+            ] {
+                let ids: Vec<u32> = (0..t * topk)
+                    .map(|i| ((i * 7 + i / topk) % e) as u32)
+                    .collect();
                 let ids = Tensor::from_vec(ids, (t, topk), &Device::Cpu)?;
                 for rows in [1, topk] {
-                    let x = (Tensor::randn(0f32, 1f32, (t, rows, k), &Device::Cpu)? * 3.0)?.to_dtype(DType::BF16)?;
+                    let x = (Tensor::randn(0f32, 1f32, (t, rows, k), &Device::Cpu)? * 3.0)?
+                        .to_dtype(DType::BF16)?;
                     let want = cpu.gather_forward_raw(&x, &ids)?;
                     let got = gpu.gather_forward_raw(&x.to_device(&dev)?, &ids.to_device(&dev)?)?;
                     assert_eq!(got.dims(), &[t, topk, n]);
-                    assert_within_ulp(&format!("({n},{k}) t={t} topk={topk} rows={rows}"), &got, &want)?;
+                    assert_within_ulp(
+                        &format!("({n},{k}) t={t} topk={topk} rows={rows}"),
+                        &got,
+                        &want,
+                    )?;
                 }
             }
         }
@@ -631,27 +667,60 @@ mod tests {
         let mut want_s = Vec::new();
         for x in 0..e {
             for proj in ["gate_proj", "up_proj"] {
-                let q: Vec<u8> = (0..n * k / 2).map(|i| (i + 31 * x + proj.len()) as u8).collect();
-                let s = Tensor::full(0.25f32 * (x + 1) as f32, (n, k / 16), &Device::Cpu)?.to_dtype(DType::F8E4M3)?;
+                let q: Vec<u8> = (0..n * k / 2)
+                    .map(|i| (i + 31 * x + proj.len()) as u8)
+                    .collect();
+                let s = Tensor::full(0.25f32 * (x + 1) as f32, (n, k / 16), &Device::Cpu)?
+                    .to_dtype(DType::F8E4M3)?;
                 if proj == "gate_proj" {
                     want_q.push(q.clone());
                     want_s.push(s.clone());
                 }
                 let p = format!("{x}.{proj}");
-                st.insert(format!("{p}.weight"), Tensor::from_vec(q, (n, k / 2), &Device::Cpu)?);
+                st.insert(
+                    format!("{p}.weight"),
+                    Tensor::from_vec(q, (n, k / 2), &Device::Cpu)?,
+                );
                 st.insert(format!("{p}.weight_scale"), s);
-                st.insert(format!("{p}.weight_scale_2"), Tensor::new(0.5f32 + x as f32, &Device::Cpu)?);
-                let input = if proj == "up_proj" && x == 1 { 0.3f32 } else { 0.1 };
-                st.insert(format!("{p}.input_scale"), Tensor::new(input, &Device::Cpu)?);
+                st.insert(
+                    format!("{p}.weight_scale_2"),
+                    Tensor::new(0.5f32 + x as f32, &Device::Cpu)?,
+                );
+                let input = if proj == "up_proj" && x == 1 {
+                    0.3f32
+                } else {
+                    0.1
+                };
+                st.insert(
+                    format!("{p}.input_scale"),
+                    Tensor::new(input, &Device::Cpu)?,
+                );
             }
         }
-        let path = std::env::temp_dir().join(format!("hanzo-nvfp4-experts-{}.safetensors", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "hanzo-nvfp4-experts-{}.safetensors",
+            std::process::id()
+        ));
         hanzo_ml::safetensors::save(&st, &path)?;
         let vb = unsafe {
-            crate::ShardedSafeTensors::sharded(&[&path], DType::BF16, &Device::Cpu, None, Arc::new(|_| true))?
+            crate::ShardedSafeTensors::sharded(
+                &[&path],
+                DType::BF16,
+                &Device::Cpu,
+                None,
+                Arc::new(|_| true),
+            )?
         };
         let layer = NVFP4Layer::experts(vb, "gate_proj", &["up_proj"], e, n, k, DType::BF16)?;
-        let Weight::Stacked { q, scale, global, alpha, gs, .. } = &layer.weight else {
+        let Weight::Stacked {
+            q,
+            scale,
+            global,
+            alpha,
+            gs,
+            ..
+        } = &layer.weight
+        else {
             panic!("not a stacked bank")
         };
         let qv = q.to_vec3::<u8>()?;
@@ -666,7 +735,10 @@ mod tests {
         // up's 0.3 is the largest activation scale over gate and up
         assert_eq!(*gs, 1.0 / 0.3f32);
         assert_eq!(global.to_vec1::<f32>()?, [0.5, 1.5, 2.5]);
-        assert_eq!(alpha.to_vec1::<f32>()?, [0.3 * 0.5f32, 0.3 * 1.5, 0.3 * 2.5]);
+        assert_eq!(
+            alpha.to_vec1::<f32>()?,
+            [0.3 * 0.5f32, 0.3 * 1.5, 0.3 * 2.5]
+        );
         Ok(())
     }
 
@@ -675,7 +747,9 @@ mod tests {
     #[cfg(feature = "cuda")]
     #[test]
     fn dense_w4a4_matches_reference() -> Result<()> {
-        let Ok(dev) = Device::new_cuda(0) else { return Ok(()) };
+        let Ok(dev) = Device::new_cuda(0) else {
+            return Ok(());
+        };
         let (n, k) = (256usize, 1024usize);
         let (q, s, _) = bank(1, n, k)?;
         let (q, s) = (q.squeeze(0)?, s.squeeze(0)?);
@@ -688,9 +762,16 @@ mod tests {
             bias: None,
             dequant_dtype: DType::BF16,
         })?;
-        let cpu = stacked(&q.unsqueeze(0)?, &s.unsqueeze(0)?, &Tensor::new(&[global], &Device::Cpu)?, input_scale, &Device::Cpu)?;
+        let cpu = stacked(
+            &q.unsqueeze(0)?,
+            &s.unsqueeze(0)?,
+            &Tensor::new(&[global], &Device::Cpu)?,
+            input_scale,
+            &Device::Cpu,
+        )?;
         for m in [1usize, 3, 4, 5, 64] {
-            let x = (Tensor::randn(0f32, 1f32, (m, k), &Device::Cpu)? * 2.0)?.to_dtype(DType::BF16)?;
+            let x =
+                (Tensor::randn(0f32, 1f32, (m, k), &Device::Cpu)? * 2.0)?.to_dtype(DType::BF16)?;
             let got = layer.forward_raw(&x.to_device(&dev)?)?;
             let want = cpu
                 .gather_forward_raw(&x, &Tensor::zeros((m, 1), DType::U32, &Device::Cpu)?)?

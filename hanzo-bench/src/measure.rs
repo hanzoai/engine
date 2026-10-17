@@ -2,8 +2,8 @@
 //!
 //! The caller builds the model with the server's own builder, so a run measures what a server
 //! gets: its device, paged attention, graphs and speculation. Tokens are the engine's usage
-//! counts and the clock is this process's wall clock -- llama-bench's method, so the two engines
-//! compare like for like.
+//! counts and the clock is this process's wall clock, so a run compares like for like with any
+//! bench that times the same way.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -46,8 +46,9 @@ pub const BACKEND: &str = if cfg!(feature = "vulkan") {
     "CPU"
 };
 
-/// Greedy is sampling parity with llama-bench: top-k 1 takes the device argmax. The stochastic
-/// sampler draws from the full vocabulary on the host, a per-token tax llama-bench does not pay.
+/// Greedy is top-k 1: the device argmax picks each token, the fixed cost a bench of the bare
+/// forward pays. The stochastic sampler draws from the full vocabulary on the host, a per-token
+/// tax on top of it.
 fn sampling(max_len: usize, greedy: bool) -> SamplingParams {
     if greedy {
         return SamplingParams {
@@ -211,9 +212,8 @@ pub async fn run(hanzo: &Hanzo, spec: &Spec) -> Result<Samples> {
         tests.push((Phase::Prefill, n, prefill, 1));
     }
 
-    // Warm each test at its own shape, as llama-bench does before it times anything: a short
-    // prompt reaches only the decode matvec, and the prefill kernels would otherwise compile
-    // inside the first timed repetition.
+    // Warm each test at its own shape before timing it: a short prompt reaches only the decode
+    // matvec, and the prefill kernels would otherwise compile inside the first timed repetition.
     for (phase, n, messages, _) in &tests {
         let shape = Shape {
             phase: *phase,

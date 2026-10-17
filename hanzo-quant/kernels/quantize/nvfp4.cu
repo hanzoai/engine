@@ -2,8 +2,8 @@
  * NVFP4 activation quantization with the served fast-math formula (e2m1.cuh), linear scale
  * layout: codes [M, K/2] (low nibble first), E4M3 scales [M, K/16].
  *
- * The same formula serves vLLM's scaled_fp4_quant (the fc1 input of the NVFP4 MoE and the dense
- * NVFP4 layers) and FlashInfer's cvt_warp_fp16_to_fp4 (the fc2 input, after the bf16 SwiGLU).
+ * The same formula is scaled_fp4_quant's (the fc1 input of the NVFP4 MoE and the dense NVFP4
+ * layers) and FlashInfer's cvt_warp_fp16_to_fp4's (the fc2 input, after the bf16 SwiGLU).
  */
 
 #include "e2m1.cuh"

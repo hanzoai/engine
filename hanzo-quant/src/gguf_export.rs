@@ -1,9 +1,9 @@
-//! GGUF export: write a loaded llama-family model to a llama.cpp-loadable `.gguf`.
+//! GGUF export: write a loaded llama-family model to a standard `.gguf` any GGUF reader loads.
 //!
 //! Companion to the engine's GGUF *reader* (`hanzo-engine/src/gguf`). The on-disk
 //! format primitives (`gguf_file::write`, `QTensor::quantize`) live in `hanzo-ml`;
 //! this module is the model -> GGUF mapping and is the one home for GGUF *creation*:
-//! llama metadata keys, llama.cpp tensor names, and per-tensor output typing (norms
+//! llama metadata keys, GGUF tensor names (`blk.N.*`), and per-tensor output typing (norms
 //! and other 1-D tensors stay F32; 2-D weights become F16 or Q8_0).
 
 use std::{
@@ -26,7 +26,7 @@ use hanzo_ml::{
 use crate::safetensors::MmapedSafetensors;
 
 /// Output tensor type for a GGUF export. 2-D weights are written in this type; 1-D
-/// tensors (norms, biases) always stay F32, matching llama.cpp conventions.
+/// tensors (norms, biases) always stay F32, as GGUF files keep them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GgufOutputType {
     F16,
@@ -41,7 +41,7 @@ impl GgufOutputType {
         }
     }
 
-    /// llama.cpp `general.file_type` (ftype) code.
+    /// The GGUF `general.file_type` (ftype) code.
     fn file_type(self) -> u32 {
         match self {
             Self::F16 => 1,
@@ -146,7 +146,7 @@ fn output_dtype(t: &Tensor, ty: GgufOutputType) -> GgmlDType {
 }
 
 // ---------------------------------------------------------------------------
-// Tensor name mapping: HF (safetensors) -> llama.cpp (GGUF).
+// Tensor name mapping: HF (safetensors) -> GGUF.
 // ---------------------------------------------------------------------------
 
 fn map_tensor_name(hf: &str) -> Option<String> {
@@ -273,7 +273,7 @@ fn read_config(dir: &Path) -> Result<LlamaConfig> {
 // tokenizer.json -> tokenizer.ggml.* metadata.
 // ---------------------------------------------------------------------------
 
-/// llama.cpp token type codes.
+/// GGUF token type codes (`tokenizer.ggml.token_type`).
 const TT_NORMAL: i32 = 1;
 const TT_UNKNOWN: i32 = 2;
 const TT_CONTROL: i32 = 3;

@@ -1,7 +1,7 @@
 //! Block pool for paged attention KV cache management.
 //!
-//! This module implements a flat block pool with a doubly-linked free list,
-//! following vLLM's v1 `BlockPool` + `FreeKVCacheBlockQueue` design.
+//! This module implements a flat block pool with a doubly-linked free list
+//! (`BlockPool` over a `FreeKVCacheBlockQueue`).
 //!
 //! Key properties:
 //! - O(1) allocation (pop from free list head, LRU eviction order)
@@ -179,8 +179,7 @@ impl FreeKVCacheBlockQueue {
 ///
 /// Most hash keys map to a single block. When hash collisions or duplicate
 /// caching occur, the value becomes a HashMap of block_id -> block_id.
-/// This follows vLLM's `BlockHashToBlockMap` optimization to avoid allocating
-/// a HashMap for the common single-block case.
+/// This avoids allocating a HashMap for the common single-block case.
 pub struct BlockHashToBlockMap {
     cache: HashMap<BlockHashWithGroupId, CachedBlocks>,
 }

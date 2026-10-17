@@ -1,4 +1,4 @@
-//! Activation quantizers bit-exact with the kernels vLLM serves.
+//! Activation quantizers bit-exact with the served kernels.
 //!
 //! [`fp8`] quantizes per token and per 128-wide group to E4M3 with an F32 scale, in the three
 //! forms the served graph uses ([`Fp8Mode`]). [`nvfp4`] quantizes per 16 to E2M1 codes with an
@@ -29,7 +29,7 @@ pub enum Fp8Mode {
     /// The standalone QuantFP8 kernel that runs inside custom ops (the shared expert inside
     /// `moe_forward_shared`): `s = max(amax div.full 448, 1/229376)`, `q` as above.
     Eager,
-    /// vLLM's `per_token_group_fp8_quant` (eps 1e-10) for fused-MoE gathers:
+    /// `per_token_group_fp8_quant` (eps 1e-10) for fused-MoE gathers:
     /// `s = max(amax, 1e-10) / 448`, `q = e4m3(clamp(x / s, +-448))`, IEEE divisions.
     Gather,
 }

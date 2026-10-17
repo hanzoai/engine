@@ -66,10 +66,10 @@ fn sinks_attn_regular(
     // Flash-attn-sinks kernels (CUDA + Metal) only template head_dims
     // {64,80,96,112,128,192,256}. DeepSeek-V4's absorbed-MLA latent is head_dim
     // 512 — out of range — so route it to the unfused eager path (device-agnostic:
-    // MatMul + softmax_with_sinks run on GPU too). This matches ds4.c
-    // `layer_attention_rows_one` (sink logit in the softmax denominator, no value)
-    // and llama.cpp, which likewise fall back to explicit KQ-softmax for head_dims
-    // the flash kernel doesn't support. Eager here, not a new 512-wide flash kernel.
+    // MatMul + softmax_with_sinks run on GPU too): explicit KQ-softmax with the
+    // sink logit in the softmax denominator and no value of its own, for every
+    // head_dim the flash kernel doesn't template. Eager here, not a new 512-wide
+    // flash kernel.
     let head_dim = q.dim(hanzo_ml::D::Minus1)?;
     let flash_ok = matches!(head_dim, 64 | 80 | 96 | 112 | 128 | 192 | 256);
 
@@ -86,12 +86,11 @@ fn sinks_attn_regular(
     }
 
     // head_dim-512 decode + speculative-verify (DeepSeek-V4 absorbed-MLA latent):
-    // fused F32 online-softmax flash-decode kernel, a faithful port of ds4's
-    // `attention_decode_mixed_heads8_online_kernel` (sink folded into the
-    // denominator only; ds4's sliding-window clamp, per query row). Covers
+    // fused F32 online-softmax flash-decode kernel (sink folded into the
+    // denominator only; the sliding-window clamp applied per query row). Covers
     // q_len 1..=8 — single-token decode AND MTP/EAGLE verify widths — with
     // causal masking of the trailing block handled inside the kernel. All-F32
-    // = ds4-parity numerics AND replaces the slow eager 3-pass below.
+    // operands and accumulation, AND it replaces the slow eager 3-pass below.
     // `mask` here is the CUSTOM-mask extraction only (plain causal arrives as None
     // and the kernel applies per-row causality itself). A Some(..) means the
     // compressed-layer combined mask — those rows need it, so keep the eager path.
@@ -223,7 +222,7 @@ fn sinks_attn_cpu(
     mask: Option<&Tensor>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    // Compute in F32 (ds4.c `layer_attention_rows_one` is all-F32) — also unifies
+    // Compute in F32 (every operand and accumulation) — also unifies
     // dtypes so q/k/v (model dtype, e.g. BF16) and the F32 sink logits + mask agree.
     let q = q.to_dtype(hanzo_ml::DType::F32)?;
     let k = repeat_kv(k.to_dtype(hanzo_ml::DType::F32)?, sdpa_params.n_kv_groups)?;

@@ -2,7 +2,7 @@
 // (no --use_fast_math): IEEE expf and division, as torch computes them.
 //
 // act:  h[t, j] = bf16(g / (1 + expf(-g)) * u), g = gu[t, j], u = gu[t, I + j]: SiluAndMul over
-//       vLLM's merged gate_up layout, f32 math, one rounding (torch's f32 reference exactly).
+//       the merged gate_up layout [g | u], f32 math, one rounding (torch's f32 reference exactly).
 // gate: y[t, :] = bf16(float(bf16(1 / (1 + expf(-g[t])))) * float(d[t, :])): torch's eager
 //       sigmoid(g) * d, each op rounding to bf16 as torch's does.
 #include <cuda_bf16.h>

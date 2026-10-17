@@ -5964,7 +5964,11 @@ impl Zen6Loader {
         if name.ends_with("weight_scale_2") || name.ends_with("input_scale") {
             // one f32 of alpha and one of the global scale per expert per bank, taken on the
             // weight_scale_2 entry
-            return if name.ends_with("weight_scale_2") { 8 } else { 0 };
+            return if name.ends_with("weight_scale_2") {
+                8
+            } else {
+                0
+            };
         }
         let f32_held = name.contains("hc_norm")
             || name.ends_with("A_log")
@@ -6124,7 +6128,9 @@ impl DeviceMappedModelLoader for Zen6Loader {
             v_head_dim: t.head_dim,
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
-        let attention = (0..t.num_hidden_layers).filter(|&i| t.attention(i)).collect();
+        let attention = (0..t.num_hidden_layers)
+            .filter(|&i| t.attention(i))
+            .collect();
         Ok(Box::new(KvLayers::new(meta, attention)))
     }
 }

@@ -22,7 +22,7 @@
       ],
       "best": 3570.2949666652735
     },
-    "llama": {
+    "rival": {
       "mean": 4551.341428571429,
       "ci": 20.126975341065364,
       "cv": 0.4781389779865493,
@@ -49,7 +49,7 @@
     },
     "engine_version": "1.7.87",
     "hanzo_src": "hanzo_qwen3-1p7b_rocm_pp2048.json",
-    "llama_src": "llama_qwen3-1p7b_rocm_pp2048.json"
+    "rival_src": "rival_qwen3-1p7b_rocm_pp2048.json"
   },
   {
     "tag": "qwen3-1p7b_rocm_pp4096",
@@ -74,7 +74,7 @@
       ],
       "best": 2927.6965684156166
     },
-    "llama": {
+    "rival": {
       "mean": 4103.267142857143,
       "ci": 15.956642285870466,
       "cv": 0.4204620149842528,
@@ -101,7 +101,7 @@
     },
     "engine_version": "1.7.87",
     "hanzo_src": "hanzo_qwen3-1p7b_rocm_pp4096.json",
-    "llama_src": "llama_qwen3-1p7b_rocm_pp4096.json"
+    "rival_src": "rival_qwen3-1p7b_rocm_pp4096.json"
   },
   {
     "tag": "qwen3-1p7b_rocm_pp500",
@@ -126,7 +126,7 @@
       ],
       "best": 3636.2007610146397
     },
-    "llama": {
+    "rival": {
       "mean": 4678.028571428572,
       "ci": 186.34300613862197,
       "cv": 4.306904858041425,
@@ -153,7 +153,7 @@
     },
     "engine_version": "1.7.87",
     "hanzo_src": "hanzo_qwen3-1p7b_rocm_pp500.json",
-    "llama_src": "llama_qwen3-1p7b_rocm_pp500.json"
+    "rival_src": "rival_qwen3-1p7b_rocm_pp500.json"
   },
   {
     "tag": "qwen3-1p7b_rocm_pp512",
@@ -178,7 +178,7 @@
       ],
       "best": 3804.7510267904627
     },
-    "llama": {
+    "rival": {
       "mean": 4742.484285714286,
       "ci": 213.99456958833997,
       "cv": 4.878787504002017,
@@ -205,7 +205,7 @@
     },
     "engine_version": "1.7.87",
     "hanzo_src": "hanzo_qwen3-1p7b_rocm_pp512.json",
-    "llama_src": "llama_qwen3-1p7b_rocm_pp512.json"
+    "rival_src": "rival_qwen3-1p7b_rocm_pp512.json"
   },
   {
     "tag": "qwen3-1p7b_rocm_tg128",
@@ -230,7 +230,7 @@
       ],
       "best": 115.0052566140861
     },
-    "llama": {
+    "rival": {
       "mean": 133.75742857142862,
       "ci": 0.6939578386594808,
       "cv": 0.5609578441326822,
@@ -257,6 +257,6 @@
     },
     "engine_version": "1.7.87",
     "hanzo_src": "hanzo_qwen3-1p7b_rocm_tg128.json",
-    "llama_src": "llama_qwen3-1p7b_rocm_tg128.json"
+    "rival_src": "rival_qwen3-1p7b_rocm_tg128.json"
   }
 ]

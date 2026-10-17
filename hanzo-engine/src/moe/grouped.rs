@@ -20,7 +20,7 @@ fn glu_activation(act: Activation) -> Option<hanzo_quant::GluActivationType> {
     })
 }
 
-/// Fused expert-grouped MMQ MoE for CUDA prefill (llama `mul_mat_id`): quantize the 16-bit activation
+/// Fused expert-grouped MMQ MoE for CUDA prefill (an indexed `mul_mat_id`): quantize the 16-bit activation
 /// to q8_1 ONCE, run gate+up and the GLU-fused down through the int8 tensor-core MMQ kernels, and fold
 /// the routing weights into the reduce. Keeps the activation 16-bit end to end (no f32 round-trip) and
 /// shares one dispatch/quantize across the three projections. Returns `[num_tokens, hidden]` in

@@ -1662,8 +1662,8 @@ impl Qwen3VLRotaryEmbedding {
         qk_rms_norm_mrope(q, k, q_weight, k_weight, q_eps, k_eps, cos, sin, true)
     }
 
-    /// q/k RMSNorm then NeoX partial RoPE with vLLM's fused `fused_qk_rmsnorm_rope_gate` rounding
-    /// (`fused_qk_norm_rope.py:67-99`): per head the norm is computed in f32 and rounded to the
+    /// q/k RMSNorm then NeoX partial RoPE, rounded as the served fused q/k-norm + RoPE kernel
+    /// rounds: per head the norm is computed in f32 and rounded to the
     /// activation dtype; RoPE then rotates the first `2·cos.dim(-1)` dims in f32 against the
     /// (activation-dtype) cos/sin table and rounds once; the other dims keep the rounded norm.
     /// `q`, `k`: `[b, heads, s, d]`; weights f32 `[d]` (the Gemma `1 + w`); cos/sin `[b, s, r/2]`.
@@ -1682,7 +1682,9 @@ impl Qwen3VLRotaryEmbedding {
             let (_, _, _, d) = x.dims4()?;
             let half = cos.dim(D::Minus1)?;
             let x32 = x.to_dtype(DType::F32)?;
-            let inv = ((x32.sqr()?.sum_keepdim(D::Minus1)? / d as f64)? + eps)?.sqrt()?.recip()?;
+            let inv = ((x32.sqr()?.sum_keepdim(D::Minus1)? / d as f64)? + eps)?
+                .sqrt()?
+                .recip()?;
             let xn = x32
                 .broadcast_mul(&inv)?
                 .broadcast_mul(&w.to_dtype(DType::F32)?)?

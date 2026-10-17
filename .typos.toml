@@ -6,7 +6,6 @@ extend-exclude = [
     "hanzo-cli/static/",
     "CLAUDE.md",
     "hanzo-web-chat/static/",
-    "examples/server/phi3_duckduckgo_mistral.rs.ipynb",
 ]
 ignore-hidden = false
 

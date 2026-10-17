@@ -2,11 +2,11 @@
  * @brief Fused MoE expert-combine kernel (prefill + decode).
  *
  * Replaces the two-op `routed.broadcast_mul(scores).sum(dim=topk)` combine,
- * which materialized a [T, topk, N] product and then ran a STRIDED candle
+ * which materialized a [T, topk, N] product and then ran a STRIDED hanzo-ml
  * reduce over the middle (topk) axis. That reduce (`fast_sum_f32`) gathered
  * `topk` values `N` apart per output element -- one uncoalesced cache line per
- * add, ~15% of prefill GPU time on Qwen3.6-35B (measured: 216ms vs llama's
- * 1ms). llama fuses the same weighted-accumulate; so do we now.
+ * add, ~15% of prefill GPU time on Qwen3.6-35B (measured: 216ms against 1ms for
+ * a fused weighted-accumulate). This kernel is that fused accumulate.
  *
  * out[t, :] = sum_{e in [0,topk)} scores[t, e] * routed[t, e, :]
  *

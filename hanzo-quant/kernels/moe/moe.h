@@ -28,7 +28,7 @@ extern "C" {
 
 /* Combine rules. */
 #define HANZO_MOE_FINALIZE 0 /* s = fma.rn.ftz(w, y, s): FlashInfer finalizeMoeRoutingKernel */
-#define HANZO_MOE_SUM 1      /* s = add.rn(s, y): vLLM moe_sum; the weight is already in y */
+#define HANZO_MOE_SUM 1      /* s = add.rn(s, y): moe_sum; the weight is already in y */
 
 /* GEMM tiles. P is 128x128x128; D32 and D64 swap A and B (weights as A) with N = 32, 64. */
 #define HANZO_MOE_TILE_P 0
@@ -136,12 +136,12 @@ int hanzo_moe_nvfp4_run(const hanzo_moe_nvfp4_launch *launch, int first, int las
 
 /* ---------------------------------------------------------------------------------------- */
 /* Block-FP8 experts (E4, the MTP drafter): E4M3 weights with a scale per 128x128 block,      */
-/* activations quantized per token and 128-wide group, vLLM's Triton path.                    */
+/* activations quantized per token and 128-wide group, as the served Triton path does.        */
 /* ---------------------------------------------------------------------------------------- */
 
 typedef struct {
   hanzo_moe_shape shape;
-  const uint8_t *xq;      /* [m, h] E4M3: vLLM per_token_group_quant_fp8 of x (M1's gather mode) */
+  const uint8_t *xq;      /* [m, h] E4M3: per_token_group_quant_fp8 of x (M1's gather mode) */
   const float *xs;        /* [m, h/128] */
   const int32_t *ids;     /* [m, k] */
   const float *weights;   /* [m, k] router weights, applied in GEMM2's epilogue */

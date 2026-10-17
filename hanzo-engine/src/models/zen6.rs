@@ -8,8 +8,6 @@
 //! it. Routed experts are NVFP4 (ModelOpt: packed E2M1 codes, E4M3 block scales, an F32 global
 //! scale and an F32 activation scale); the dense side layers are block FP8 (E4M3 with one F32 scale
 //! per 128x128 block); the rest is BF16. The n-gram table (layer 1's PLE) stays on the host.
-//!
-//! Source: vLLM `transformers_utils/configs/qwen4_exp.py`, `models/qwen4_exp/nvidia/model.py`.
 
 use hanzo_ml::{DType, Result};
 use serde::{Deserialize, Serialize};
@@ -159,7 +157,9 @@ impl TextConfig {
             * self.linear_value_head_dim
             * DType::F32.size_in_bytes()
             + conv_dim * self.linear_conv_kernel_dim * DType::BF16.size_in_bytes();
-        let layers = (0..self.num_hidden_layers).filter(|&i| !self.attention(i)).count();
+        let layers = (0..self.num_hidden_layers)
+            .filter(|&i| !self.attention(i))
+            .count();
         let ngram = self.hc_count
             * self.hidden_size
             * (self.ple_conv_kernel_size - 1)
@@ -174,7 +174,7 @@ impl TextConfig {
     }
 
     /// Per-head table sizes: the `h+1`-th prime past `ngram_vocab_size_base - 1` for head `h` of
-    /// the (single) PLE layer, as vLLM's `_make_vocab_layout`.
+    /// the (single) PLE layer.
     pub(crate) fn ngram_head_sizes(&self) -> Vec<u64> {
         let mut sizes = Vec::with_capacity(self.ngram_heads());
         let mut p = self.ngram_vocab_size_base - 1;
@@ -252,15 +252,16 @@ pub(crate) fn manifest(cfg: &TextConfig) -> Result<Vec<Entry>> {
     let hc = cfg.hc_count * h;
     let rank = cfg.hc_lowrank;
     let blocks = |n: usize| n.div_ceil(128);
-    let fp8 = |put: &mut dyn FnMut(String, DType, &[usize], Role), p: String, n: usize, k: usize| {
-        put(format!("{p}.weight"), DType::F8E4M3, &[n, k], Role::Device);
-        put(
-            format!("{p}.weight_scale_inv"),
-            DType::F32,
-            &[blocks(n), blocks(k)],
-            Role::Device,
-        );
-    };
+    let fp8 =
+        |put: &mut dyn FnMut(String, DType, &[usize], Role), p: String, n: usize, k: usize| {
+            put(format!("{p}.weight"), DType::F8E4M3, &[n, k], Role::Device);
+            put(
+                format!("{p}.weight_scale_inv"),
+                DType::F32,
+                &[blocks(n), blocks(k)],
+                Role::Device,
+            );
+        };
 
     put(
         lm("embed_tokens.weight"),
@@ -269,7 +270,12 @@ pub(crate) fn manifest(cfg: &TextConfig) -> Result<Vec<Entry>> {
         Role::Device,
     );
     let mixer = |put: &mut dyn FnMut(String, DType, &[usize], Role), p: String, inject: bool| {
-        put(format!("{p}.hc_norm.weight"), DType::BF16, &[hc], Role::Device);
+        put(
+            format!("{p}.hc_norm.weight"),
+            DType::BF16,
+            &[hc],
+            Role::Device,
+        );
         put(
             format!("{p}.input_mix_weight_down.weight"),
             DType::BF16,
@@ -302,8 +308,18 @@ pub(crate) fn manifest(cfg: &TextConfig) -> Result<Vec<Entry>> {
         let l = |s: &str| lm(&format!("layers.{i}.{s}"));
         if i == ple_layer {
             let p = |s: &str| l(&format!("ple.{s}"));
-            put(p("key_proj.weight"), DType::BF16, &[hc, cfg.ple_embed_dim], Role::Device);
-            put(p("value_proj.weight"), DType::BF16, &[h, cfg.ple_embed_dim], Role::Device);
+            put(
+                p("key_proj.weight"),
+                DType::BF16,
+                &[hc, cfg.ple_embed_dim],
+                Role::Device,
+            );
+            put(
+                p("value_proj.weight"),
+                DType::BF16,
+                &[h, cfg.ple_embed_dim],
+                Role::Device,
+            );
             for n in ["norm_key", "norm_query", "norm_conv"] {
                 put(p(&format!("{n}.weight")), DType::BF16, &[hc], Role::Device);
             }
@@ -314,7 +330,12 @@ pub(crate) fn manifest(cfg: &TextConfig) -> Result<Vec<Entry>> {
                 Role::Device,
             );
             let e = |s: &str| p(&format!("ple_embedding.{s}"));
-            put(e("layer_multipliers"), DType::I64, &[cfg.ngram_size], Role::Host);
+            put(
+                e("layer_multipliers"),
+                DType::I64,
+                &[cfg.ngram_size],
+                Role::Host,
+            );
             for n in ["ngram_heads_vocab_sizes", "ngram_heads_offsets"] {
                 put(e(n), DType::I64, &[cfg.ngram_heads()], Role::Host);
             }
@@ -328,7 +349,12 @@ pub(crate) fn manifest(cfg: &TextConfig) -> Result<Vec<Entry>> {
                     Role::Host,
                 );
             }
-            put(e("ngram_embedding.weight_scale"), DType::BF16, &[1], Role::Host);
+            put(
+                e("ngram_embedding.weight_scale"),
+                DType::BF16,
+                &[1],
+                Role::Host,
+            );
         }
         mixer(&mut put, l("attn_hyper_connection"), true);
         mixer(&mut put, l("mlp_hyper_connection"), true);
@@ -339,8 +365,18 @@ pub(crate) fn manifest(cfg: &TextConfig) -> Result<Vec<Entry>> {
             fp8(&mut put, a("k_proj"), kv_dim, h);
             fp8(&mut put, a("v_proj"), kv_dim, h);
             fp8(&mut put, a("o_proj"), h, q_dim);
-            put(a("q_norm.weight"), DType::BF16, &[cfg.head_dim], Role::Device);
-            put(a("k_norm.weight"), DType::BF16, &[cfg.head_dim], Role::Device);
+            put(
+                a("q_norm.weight"),
+                DType::BF16,
+                &[cfg.head_dim],
+                Role::Device,
+            );
+            put(
+                a("k_norm.weight"),
+                DType::BF16,
+                &[cfg.head_dim],
+                Role::Device,
+            );
         } else {
             let g = |s: &str| l(&format!("linear_attn.{s}"));
             let v = cfg.linear_num_value_heads;
@@ -365,9 +401,18 @@ pub(crate) fn manifest(cfg: &TextConfig) -> Result<Vec<Entry>> {
             );
         }
         let m = |s: &str| l(&format!("mlp.{s}"));
-        put(m("gate.weight"), DType::BF16, &[cfg.num_experts, h], Role::Device);
+        put(
+            m("gate.weight"),
+            DType::BF16,
+            &[cfg.num_experts, h],
+            Role::Device,
+        );
         for e in 0..cfg.num_experts {
-            for (proj, n, k) in [("gate_proj", ff, h), ("up_proj", ff, h), ("down_proj", h, ff)] {
+            for (proj, n, k) in [
+                ("gate_proj", ff, h),
+                ("up_proj", ff, h),
+                ("down_proj", h, ff),
+            ] {
                 let p = |s: &str| m(&format!("experts.{e}.{proj}.{s}"));
                 put(p("weight"), DType::U8, &[n, k / 2], Role::Device);
                 put(p("weight_scale"), DType::F8E4M3, &[n, k / 16], Role::Device);
@@ -379,7 +424,12 @@ pub(crate) fn manifest(cfg: &TextConfig) -> Result<Vec<Entry>> {
         fp8(&mut put, m("shared_expert.gate_proj"), sff, h);
         fp8(&mut put, m("shared_expert.up_proj"), sff, h);
         fp8(&mut put, m("shared_expert.down_proj"), h, sff);
-        put(m("shared_expert_gate.weight"), DType::BF16, &[1, h], Role::Device);
+        put(
+            m("shared_expert_gate.weight"),
+            DType::BF16,
+            &[1, h],
+            Role::Device,
+        );
     }
     mixer(&mut put, lm("hyper_connection_mixer"), false);
     put(
@@ -522,7 +572,12 @@ pub(crate) mod tests {
             }
         }
         stray.sort();
-        assert!(stray.is_empty(), "{} tensors outside the manifest: {:?}", stray.len(), &stray[..stray.len().min(20)]);
+        assert!(
+            stray.is_empty(),
+            "{} tensors outside the manifest: {:?}",
+            stray.len(),
+            &stray[..stray.len().min(20)]
+        );
         assert_eq!(deferred_counts.get("self_attn.indexer."), Some(&36));
         assert_eq!(deferred_counts.get("mtp."), Some(&3101));
         assert_eq!(deferred_counts.get("model.visual."), Some(&333));
@@ -531,10 +586,12 @@ pub(crate) mod tests {
         for e in &manifest {
             match heads.get(&e.name) {
                 None => wrong.push(format!("{} missing", e.name)),
-                Some(h) if h.dtype != st_dtype(e.dtype) || h.shape != e.shape => wrong.push(format!(
-                    "{}: header {} {:?}, manifest {:?} {:?}",
-                    e.name, h.dtype, h.shape, e.dtype, e.shape
-                )),
+                Some(h) if h.dtype != st_dtype(e.dtype) || h.shape != e.shape => {
+                    wrong.push(format!(
+                        "{}: header {} {:?}, manifest {:?} {:?}",
+                        e.name, h.dtype, h.shape, e.dtype, e.shape
+                    ))
+                }
                 Some(h) => assert_eq!((h.end - h.start) as usize, e.bytes(), "{}", e.name),
             }
         }
@@ -566,7 +623,10 @@ pub(crate) mod tests {
         };
         let mut spans: Vec<&Header> = (0..text.split_ngram_parts).map(shard).collect();
         let file = spans[0].file.clone();
-        assert!(spans.iter().all(|h| h.file == file), "the table spans files");
+        assert!(
+            spans.iter().all(|h| h.file == file),
+            "the table spans files"
+        );
         spans.sort_by_key(|h| h.start);
         for (a, b) in spans.iter().zip(&spans[1..]) {
             assert_eq!(a.end, b.start, "a hole sits between two shards");
@@ -592,9 +652,8 @@ pub(crate) mod tests {
         let mut input_scales: BTreeMap<(usize, &str), HashSet<u32>> = BTreeMap::new();
         for l in 0..text.num_hidden_layers {
             for e in 0..text.num_experts {
-                let p = |proj: &str, s: &str| {
-                    format!("{PREFIX}layers.{l}.mlp.experts.{e}.{proj}.{s}")
-                };
+                let p =
+                    |proj: &str, s: &str| format!("{PREFIX}layers.{l}.mlp.experts.{e}.{proj}.{s}");
                 let (g, u) = (
                     scalar(&p("gate_proj", "weight_scale_2")),
                     scalar(&p("up_proj", "weight_scale_2")),
@@ -692,7 +751,9 @@ pub(crate) mod tests {
         use rand::{rngs::StdRng, Rng, SeedableRng};
         let cfg = tiny();
         let mut rng = StdRng::seed_from_u64(0x7169_6e79);
-        let mut uniform = |n: usize, lo: f32, hi: f32| -> Vec<f32> { (0..n).map(|_| rng.random_range(lo..hi)).collect() };
+        let mut uniform = |n: usize, lo: f32, hi: f32| -> Vec<f32> {
+            (0..n).map(|_| rng.random_range(lo..hi)).collect()
+        };
         let dev = Device::Cpu;
         let mut main: HashMap<String, Tensor> = HashMap::new();
         let mut table: Vec<(String, Vec<u8>, Vec<usize>, &str)> = vec![];
@@ -709,7 +770,15 @@ pub(crate) mod tests {
                 continue;
             }
             if name.ends_with("ngram_embedding.weight_scale") {
-                table.insert(0, (e.name.clone(), half::bf16::from_f32(0.05).to_le_bytes().to_vec(), e.shape.clone(), "BF16"));
+                table.insert(
+                    0,
+                    (
+                        e.name.clone(),
+                        half::bf16::from_f32(0.05).to_le_bytes().to_vec(),
+                        e.shape.clone(),
+                        "BF16",
+                    ),
+                );
                 continue;
             }
             let t = match e.dtype {
@@ -724,22 +793,39 @@ pub(crate) mod tests {
                     Tensor::from_vec(v, n, &dev)?
                 }
                 DType::U8 => Tensor::from_vec(
-                    uniform(n, 0.0, 255.99).into_iter().map(|v| v as u8).collect::<Vec<u8>>(),
+                    uniform(n, 0.0, 255.99)
+                        .into_iter()
+                        .map(|v| v as u8)
+                        .collect::<Vec<u8>>(),
                     e.shape.as_slice(),
                     &dev,
                 )?,
                 DType::F8E4M3 if name.ends_with("weight_scale") => {
-                    Tensor::from_vec(uniform(n, 0.5, 1.5), e.shape.as_slice(), &dev)?.to_dtype(DType::F8E4M3)?
+                    Tensor::from_vec(uniform(n, 0.5, 1.5), e.shape.as_slice(), &dev)?
+                        .to_dtype(DType::F8E4M3)?
                 }
-                DType::F8E4M3 => Tensor::from_vec(uniform(n, -64.0, 64.0), e.shape.as_slice(), &dev)?.to_dtype(DType::F8E4M3)?,
+                DType::F8E4M3 => {
+                    Tensor::from_vec(uniform(n, -64.0, 64.0), e.shape.as_slice(), &dev)?
+                        .to_dtype(DType::F8E4M3)?
+                }
                 DType::F32 if name.ends_with("weight_scale_inv") => {
                     // the matching weight's fan-in sets the block scale: code 64 ~ 1/sqrt(k)
-                    let k = if name.contains("out_proj") || name.contains("o_proj") || name.contains("down_proj") {
+                    let k = if name.contains("out_proj")
+                        || name.contains("o_proj")
+                        || name.contains("down_proj")
+                    {
                         e.shape[1] as f32 * 128.0
                     } else {
                         cfg.hidden_size as f32
                     };
-                    Tensor::from_vec(uniform(n, 0.8, 1.2).into_iter().map(|v| v / (64.0 * k.sqrt())).collect(), e.shape.as_slice(), &dev)?
+                    Tensor::from_vec(
+                        uniform(n, 0.8, 1.2)
+                            .into_iter()
+                            .map(|v| v / (64.0 * k.sqrt()))
+                            .collect(),
+                        e.shape.as_slice(),
+                        &dev,
+                    )?
                 }
                 DType::F32 if name.ends_with("weight_scale_2") => {
                     // gate and up share it; a function of the expert and projection family
@@ -760,7 +846,8 @@ pub(crate) mod tests {
                         let a = 1.0 / fan_in.sqrt();
                         (-a, a)
                     };
-                    Tensor::from_vec(uniform(n, lo, hi), e.shape.as_slice(), &dev)?.to_dtype(DType::BF16)?
+                    Tensor::from_vec(uniform(n, lo, hi), e.shape.as_slice(), &dev)?
+                        .to_dtype(DType::BF16)?
                 }
                 d => panic!("tiny checkpoint: {d:?}"),
             };
@@ -795,7 +882,13 @@ pub(crate) mod tests {
         }
         assert!(m.iter().any(|e| e.role == Role::Host));
         assert!(m.iter().any(|e| e.role == Role::Device));
-        for d in [DType::BF16, DType::F32, DType::F8E4M3, DType::U8, DType::I64] {
+        for d in [
+            DType::BF16,
+            DType::F32,
+            DType::F8E4M3,
+            DType::U8,
+            DType::I64,
+        ] {
             assert!(m.iter().any(|e| e.dtype == d), "no {d:?} entry");
         }
         // 4 heads over primes past 12: 13, 17, 19, 23 -> 72 rows, padded to 80, 20 per shard.
@@ -877,11 +970,13 @@ pub(crate) mod tests {
     }
 
     fn load_fixture(file: &str) -> HashMap<String, hanzo_ml::Tensor> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(file);
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(file);
         hanzo_ml::safetensors::load(&path, &hanzo_ml::Device::Cpu).expect("fixture loads")
     }
 
-    /// A tensor of the CPU golden (`scripts/zen6_golden.py`), on the host.
+    /// A tensor of the CPU golden for layers 0-3 (`tests/fixtures/zen6.safetensors`), on the host.
     pub(crate) fn fixture(name: &str) -> hanzo_ml::Tensor {
         static FIX: std::sync::OnceLock<HashMap<String, hanzo_ml::Tensor>> =
             std::sync::OnceLock::new();
@@ -891,7 +986,8 @@ pub(crate) mod tests {
             .clone()
     }
 
-    /// A tensor the served vLLM kernels produced (`scripts/zen6_vectors.py`), on the host.
+    /// A tensor the served reference kernels produced on the golden's inputs
+    /// (`tests/fixtures/zen6_vectors.safetensors`), on the host.
     /// A stage whose served output is every zero did not run: the recording allocated the result
     /// and the kernel never wrote it. Refuse it there instead of letting a caller measure the
     /// distance from live data to an empty allocation, which reads as a parity gap.
@@ -904,7 +1000,11 @@ pub(crate) mod tests {
             .unwrap_or_else(|| panic!("no served vector {name}"))
             .clone();
         let flat = t.flatten_all().and_then(|t| t.to_dtype(DType::F32));
-        match flat.and_then(|t| t.abs()).and_then(|t| t.max_all()).and_then(|t| t.to_scalar::<f32>()) {
+        match flat
+            .and_then(|t| t.abs())
+            .and_then(|t| t.max_all())
+            .and_then(|t| t.to_scalar::<f32>())
+        {
             Ok(0.0) => panic!("{name} holds only zeros: the recording never wrote it"),
             Ok(_) => t,
             Err(e) => panic!("{name}: {e}"),
@@ -923,7 +1023,11 @@ pub(crate) mod tests {
 
     impl Tol {
         pub(crate) const fn ulps(ulps: f64) -> Self {
-            Self { ulps, share: 1.0, cos: 0.0 }
+            Self {
+                ulps,
+                share: 1.0,
+                cos: 0.0,
+            }
         }
         pub(crate) const fn most(ulps: f64, share: f64, cos: f64) -> Self {
             Self { ulps, share, cos }
@@ -932,7 +1036,12 @@ pub(crate) mod tests {
 
     /// Per-element ulp distances and per-row cosines of `got` against `want`, rows along the
     /// last dim; prints the stage's max, 99.9th-percentile ulp and minimum cosine.
-    pub(crate) fn assert_close(what: &str, got: &hanzo_ml::Tensor, want: &hanzo_ml::Tensor, tol: Tol) {
+    pub(crate) fn assert_close(
+        what: &str,
+        got: &hanzo_ml::Tensor,
+        want: &hanzo_ml::Tensor,
+        tol: Tol,
+    ) {
         let cols = *want.dims().last().expect("rank >= 1");
         let f = |t: &hanzo_ml::Tensor| -> Vec<f32> {
             t.to_dtype(DType::F32)
@@ -942,7 +1051,13 @@ pub(crate) mod tests {
                 .expect("to host")
         };
         let (g, w) = (f(got), f(want));
-        assert_eq!(g.len(), w.len(), "{what}: {:?} vs {:?}", got.dims(), want.dims());
+        assert_eq!(
+            g.len(),
+            w.len(),
+            "{what}: {:?} vs {:?}",
+            got.dims(),
+            want.dims()
+        );
         let mut ulps = Vec::with_capacity(g.len());
         let mut min_cos = 1f64;
         for (gr, wr) in g.chunks(cols).zip(w.chunks(cols)) {
@@ -950,7 +1065,11 @@ pub(crate) mod tests {
             let (mut dot, mut ng, mut nw) = (0f64, 0f64, 0f64);
             for (a, b) in gr.iter().zip(wr) {
                 let (a, b) = (f64::from(*a), f64::from(*b));
-                let spacing = if b == 0.0 { 0.0 } else { 2f64.powi(b.abs().log2().floor() as i32 - 7) };
+                let spacing = if b == 0.0 {
+                    0.0
+                } else {
+                    2f64.powi(b.abs().log2().floor() as i32 - 7)
+                };
                 ulps.push((a - b).abs() / (spacing + rms / 1024.0).max(f64::MIN_POSITIVE));
                 dot += a * b;
                 ng += a * a;
@@ -962,7 +1081,8 @@ pub(crate) mod tests {
         }
         let mut sorted = ulps.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let at = |q: f64| sorted[((sorted.len() as f64 * q).ceil() as usize).clamp(1, sorted.len()) - 1];
+        let at =
+            |q: f64| sorted[((sorted.len() as f64 * q).ceil() as usize).clamp(1, sorted.len()) - 1];
         let (max, p999) = (at(1.0), at(0.999));
         println!("{what}: max {max:.3} ulp, p99.9 {p999:.3} ulp, min row cos {min_cos:.7}");
         let q = at(tol.share);
@@ -973,7 +1093,11 @@ pub(crate) mod tests {
             tol.ulps,
             tol.share
         );
-        assert!(min_cos >= tol.cos, "{what}: min row cosine {min_cos} < {}", tol.cos);
+        assert!(
+            min_cos >= tol.cos,
+            "{what}: min row cosine {min_cos} < {}",
+            tol.cos
+        );
     }
 
     /// Serializes the real-checkpoint GPU tests and bounds each one's device memory: holds a
@@ -1003,19 +1127,32 @@ pub(crate) mod tests {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let avail = mem_available();
-        assert!(avail as f64 >= 6.0 * GIB, "only {:.1} GiB MemAvailable", avail as f64 / GIB);
+        assert!(
+            avail as f64 >= 6.0 * GIB,
+            "only {:.1} GiB MemAvailable",
+            avail as f64 / GIB
+        );
         let dev = hanzo_ml::Device::new_cuda(0).expect("a CUDA device");
         #[cfg(feature = "cuda")]
         {
             use hanzo_ml::cuda_backend::cudarc::driver::{result, sys};
-            let hanzo_ml::Device::Cuda(cu) = &dev else { unreachable!() };
+            let hanzo_ml::Device::Cuda(cu) = &dev else {
+                unreachable!()
+            };
             let (free, _) = result::mem_get_info().expect("cuMemGetInfo");
-            assert!(free as f64 >= 3.0 * GIB, "only {:.1} GiB free on the device", free as f64 / GIB);
+            assert!(
+                free as f64 >= 3.0 * GIB,
+                "only {:.1} GiB free on the device",
+                free as f64 / GIB
+            );
             use hanzo_ml::backend::BackendDevice;
             let mut pool: sys::CUmemoryPool = std::ptr::null_mut();
             let mut zero = 0u64;
             unsafe {
-                let r = sys::cuDeviceGetDefaultMemPool(&mut pool, cu.cuda_stream().context().cu_device());
+                let r = sys::cuDeviceGetDefaultMemPool(
+                    &mut pool,
+                    cu.cuda_stream().context().cu_device(),
+                );
                 assert_eq!(r, sys::CUresult::CUDA_SUCCESS, "default mempool");
                 cu.synchronize().expect("sync");
                 let r = sys::cuMemPoolSetAttribute(
@@ -1025,7 +1162,12 @@ pub(crate) mod tests {
                 );
                 assert_eq!(r, sys::CUresult::CUDA_SUCCESS, "reset USED_MEM_HIGH");
             }
-            return Guard { _lock: lock, bound: (bound_gib * GIB) as u64, pool, dev };
+            return Guard {
+                _lock: lock,
+                bound: (bound_gib * GIB) as u64,
+                pool,
+                dev,
+            };
         }
         #[allow(unreachable_code)]
         Guard {
@@ -1065,9 +1207,17 @@ pub(crate) mod tests {
     impl Drop for Guard {
         fn drop(&mut self) {
             let high = self.high_water();
-            println!("device pool high-water {:.3} GiB (bound {:.2})", high as f64 / GIB, self.bound as f64 / GIB);
+            println!(
+                "device pool high-water {:.3} GiB (bound {:.2})",
+                high as f64 / GIB,
+                self.bound as f64 / GIB
+            );
             if !std::thread::panicking() {
-                assert!(high <= self.bound, "device high-water {high} over the bound {}", self.bound);
+                assert!(
+                    high <= self.bound,
+                    "device high-water {high} over the bound {}",
+                    self.bound
+                );
             }
         }
     }
@@ -1087,12 +1237,14 @@ pub(crate) mod tests {
         };
         let row: usize = h.shape[1..].iter().product::<usize>() * dtype.size_in_bytes();
         let mut f = std::fs::File::open(&h.file).expect("open");
-        f.seek(SeekFrom::Start(h.start + (range.start * row) as u64)).expect("seek");
+        f.seek(SeekFrom::Start(h.start + (range.start * row) as u64))
+            .expect("seek");
         let mut buf = vec![0u8; range.len() * row];
         f.read_exact(&mut buf).expect("read");
         let mut shape = h.shape.clone();
         shape[0] = range.len();
-        hanzo_ml::Tensor::from_raw_buffer(&buf, dtype, &shape, &hanzo_ml::Device::Cpu).expect("tensor")
+        hanzo_ml::Tensor::from_raw_buffer(&buf, dtype, &shape, &hanzo_ml::Device::Cpu)
+            .expect("tensor")
     }
 
     /// The golden's 24 token ids.
@@ -1107,7 +1259,9 @@ pub(crate) mod tests {
     pub(crate) fn streams(name: &str, dev: &hanzo_ml::Device) -> hanzo_ml::Tensor {
         let x = fixture(name);
         let (t, nh) = x.dims2().expect("2-D");
-        x.reshape((1, t, 4, nh / 4)).and_then(|x| x.to_device(dev)).expect("streams")
+        x.reshape((1, t, 4, nh / 4))
+            .and_then(|x| x.to_device(dev))
+            .expect("streams")
     }
 
     /// The branch's norm, block input, injection and combine against layer 0's golden, and the
@@ -1120,17 +1274,42 @@ pub(crate) mod tests {
         let eps = config(&snapshot()).text().rms_norm_eps as f32;
         let root = vb(&dev)?;
         let lm = root.pp("model.language_model");
-        let branch = crate::models::hyper::Branch::new(&lm.pp("layers.0.attn_hyper_connection"), 4, eps)?;
+        let branch =
+            crate::models::hyper::Branch::new(&lm.pp("layers.0.attn_hyper_connection"), 4, eps)?;
         let e = fixture("embed").to_device(&dev)?.unsqueeze(0)?;
         let x0 = crate::models::hyper::expand(&e, 4)?;
         let xn = branch.mixer.norm(&x0)?;
-        assert_close("l0.attn.xn", &xn.reshape((24, 10240))?, &fixture("l0.attn.xn"), Tol::ulps(1.0));
+        assert_close(
+            "l0.attn.xn",
+            &xn.reshape((24, 10240))?,
+            &fixture("l0.attn.xn"),
+            Tol::ulps(1.0),
+        );
         let (u, inj) = branch.mix(&x0)?;
-        assert_close("l0.attn.u", &u.squeeze(0)?, &fixture("l0.attn.u"), Tol::ulps(1.0));
-        assert_close("l0.attn.inj", &inj.squeeze(0)?, &fixture("l0.attn.inj"), Tol::ulps(1.0));
+        assert_close(
+            "l0.attn.u",
+            &u.squeeze(0)?,
+            &fixture("l0.attn.u"),
+            Tol::ulps(1.0),
+        );
+        assert_close(
+            "l0.attn.inj",
+            &inj.squeeze(0)?,
+            &fixture("l0.attn.inj"),
+            Tol::ulps(1.0),
+        );
         let y = fixture("l0.attn.y").to_device(&dev)?.unsqueeze(0)?;
-        let x = crate::models::hyper::combine(&x0, &y, &fixture("l0.attn.inj").to_device(&dev)?.unsqueeze(0)?)?;
-        assert_close("l0.mid", &x.reshape((24, 10240))?, &fixture("l0.mid"), Tol::ulps(1.0));
+        let x = crate::models::hyper::combine(
+            &x0,
+            &y,
+            &fixture("l0.attn.inj").to_device(&dev)?.unsqueeze(0)?,
+        )?;
+        assert_close(
+            "l0.mid",
+            &x.reshape((24, 10240))?,
+            &fixture("l0.mid"),
+            Tol::ulps(1.0),
+        );
 
         let head = crate::models::hyper::Mixer::new(&lm.pp("hyper_connection_mixer"), 4, eps)?;
         let x4 = streams("l4.x", &dev);
@@ -1148,12 +1327,22 @@ pub(crate) mod tests {
         let ids = tokens();
         let emb: Vec<hanzo_ml::Tensor> = ids
             .iter()
-            .map(|&t| rows(&format!("{PREFIX}embed_tokens.weight"), t as usize..t as usize + 1))
+            .map(|&t| {
+                rows(
+                    &format!("{PREFIX}embed_tokens.weight"),
+                    t as usize..t as usize + 1,
+                )
+            })
             .collect();
         let e = hanzo_ml::Tensor::cat(&emb, 0)?.to_device(&dev)?;
         let want = fixture("embed");
         let bits = |t: &hanzo_ml::Tensor| -> Result<Vec<u16>> {
-            Ok(t.to_device(&hanzo_ml::Device::Cpu)?.flatten_all()?.to_vec1::<half::bf16>()?.into_iter().map(|v| v.to_bits()).collect())
+            Ok(t.to_device(&hanzo_ml::Device::Cpu)?
+                .flatten_all()?
+                .to_vec1::<half::bf16>()?
+                .into_iter()
+                .map(|v| v.to_bits())
+                .collect())
         };
         assert_eq!(bits(&e)?, bits(&want)?, "embedding rows");
 
@@ -1163,7 +1352,12 @@ pub(crate) mod tests {
         ))?;
         use hanzo_quant::QuantMethod;
         let logits = head.forward(&fixture("head.h").to_device(&dev)?)?;
-        assert_close("head.logits", &logits, &fixture("head.logits"), Tol::ulps(1.0));
+        assert_close(
+            "head.logits",
+            &logits,
+            &fixture("head.logits"),
+            Tol::ulps(1.0),
+        );
         Ok(())
     }
 
@@ -1199,7 +1393,12 @@ pub(crate) mod tests {
     pub(crate) const CHUNKS: [usize; 3] = [16, 7, 1];
 
     /// Rows `at..at+len` of a `[t, ...]` host tensor on `dev`, with a leading batch dim.
-    pub(crate) fn chunk(t: &hanzo_ml::Tensor, at: usize, len: usize, dev: &hanzo_ml::Device) -> hanzo_ml::Tensor {
+    pub(crate) fn chunk(
+        t: &hanzo_ml::Tensor,
+        at: usize,
+        len: usize,
+        dev: &hanzo_ml::Device,
+    ) -> hanzo_ml::Tensor {
         t.narrow(0, at, len)
             .and_then(|t| t.to_device(dev))
             .and_then(|t| t.unsqueeze(0))
@@ -1207,7 +1406,8 @@ pub(crate) mod tests {
     }
 
     fn quant_fixture(name: &str) -> hanzo_ml::Tensor {
-        static Q: std::sync::OnceLock<HashMap<String, hanzo_ml::Tensor>> = std::sync::OnceLock::new();
+        static Q: std::sync::OnceLock<HashMap<String, hanzo_ml::Tensor>> =
+            std::sync::OnceLock::new();
         Q.get_or_init(|| {
             let path = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../hanzo-quant/tests/fixtures/vllm_vectors.safetensors");
@@ -1258,14 +1458,20 @@ pub(crate) mod tests {
         let mut kv = crate::pipeline::KvCache::new_normal(2, props.max_seq_len, 64);
         let mask = crate::attention::AttentionMask::None;
         let u = fixture("l3.attn.u");
-        let (mut qs, mut ks, mut cores, mut outs, mut prods) = (vec![], vec![], vec![], vec![], vec![]);
+        let (mut qs, mut ks, mut cores, mut outs, mut prods) =
+            (vec![], vec![], vec![], vec![], vec![]);
         let mut at = 0;
         for len in CHUNKS {
             let x = chunk(&u, at, len, &dev);
             let cos_sin = text_mrope(&rotary, &dev, &[at], len, DType::BF16, None)?;
             let (q, k, v, gate) = attn.project(&x, &cos_sin)?;
             // [1, h, s, d] -> [s, h·d]
-            let flat = |t: &hanzo_ml::Tensor| t.squeeze(0).and_then(|t| t.transpose(0, 1)).and_then(|t| t.contiguous()).and_then(|t| t.reshape((len, ())));
+            let flat = |t: &hanzo_ml::Tensor| {
+                t.squeeze(0)
+                    .and_then(|t| t.transpose(0, 1))
+                    .and_then(|t| t.contiguous())
+                    .and_then(|t| t.reshape((len, ())))
+            };
             qs.push(flat(&q)?);
             ks.push(flat(&k)?);
             let y = attn.attend(&q, &k, &v, &mask, &mut kv, None)?;
@@ -1276,20 +1482,64 @@ pub(crate) mod tests {
             at += len;
         }
         let cat = |v: &[hanzo_ml::Tensor]| hanzo_ml::Tensor::cat(v, 0).expect("cat");
-        assert_close("attn.q vs served", &cat(&qs), &vectors("attn.normrope.q"), Tol::ulps(1.0));
-        assert_close("attn.k vs served", &cat(&ks), &vectors("attn.normrope.k"), Tol::ulps(1.0));
-        assert_close("attn.core vs served (24 rows)", &cat(&cores), &vectors("attn.core24"), Tol::most(2.0, 0.999, 0.0));
-        assert_close("attn.core row 23 vs served (1 row)", &cores[2], &vectors("attn.core1"), Tol::ulps(4.0));
-        assert_close("attn.core vs golden", &cat(&cores), &fixture("l3.attn.core"), Tol::most(2.0, 0.999, 0.0));
-        let (oq, _) = hanzo_quant::quantize::fp8(&cat(&prods), hanzo_quant::quantize::Fp8Mode::Linear)?;
+        assert_close(
+            "attn.q vs served",
+            &cat(&qs),
+            &vectors("attn.normrope.q"),
+            Tol::ulps(1.0),
+        );
+        assert_close(
+            "attn.k vs served",
+            &cat(&ks),
+            &vectors("attn.normrope.k"),
+            Tol::ulps(1.0),
+        );
+        assert_close(
+            "attn.core vs served (24 rows)",
+            &cat(&cores),
+            &vectors("attn.core24"),
+            Tol::most(2.0, 0.999, 0.0),
+        );
+        assert_close(
+            "attn.core row 23 vs served (1 row)",
+            &cores[2],
+            &vectors("attn.core1"),
+            Tol::ulps(4.0),
+        );
+        assert_close(
+            "attn.core vs golden",
+            &cat(&cores),
+            &fixture("l3.attn.core"),
+            Tol::most(2.0, 0.999, 0.0),
+        );
+        let (oq, _) =
+            hanzo_quant::quantize::fp8(&cat(&prods), hanzo_quant::quantize::Fp8Mode::Linear)?;
         let (a, b) = (fp8_codes(&oq), fp8_codes(&quant_fixture("fp8.gated.q")));
         let differ = a.iter().zip(&b).filter(|(x, y)| x != y).count();
-        println!("o_proj input codes: {differ} of {} differ from served", a.len());
+        println!(
+            "o_proj input codes: {differ} of {} differ from served",
+            a.len()
+        );
         assert!(differ as f64 <= 1e-4 * a.len() as f64);
         let out = cat(&outs);
-        assert_close("o_proj vs served w8a8", &out, &vectors("w8a8.o_proj"), Tol::most(1.0, 0.999, 0.0));
-        assert_close("o_proj vs served w8a8 (max)", &out, &vectors("w8a8.o_proj"), Tol::ulps(2.0));
-        assert_close("attn block vs golden", &out, &fixture("l3.attn.y"), Tol::most(4.0, 0.999, 0.9999));
+        assert_close(
+            "o_proj vs served w8a8",
+            &out,
+            &vectors("w8a8.o_proj"),
+            Tol::most(1.0, 0.999, 0.0),
+        );
+        assert_close(
+            "o_proj vs served w8a8 (max)",
+            &out,
+            &vectors("w8a8.o_proj"),
+            Tol::ulps(2.0),
+        );
+        assert_close(
+            "attn block vs golden",
+            &out,
+            &fixture("l3.attn.y"),
+            Tol::most(4.0, 0.999, 0.9999),
+        );
 
         let want: std::collections::BTreeSet<String> = manifest(cfg.text())?
             .into_iter()
@@ -1302,14 +1552,27 @@ pub(crate) mod tests {
 
     /// The engine's tiled V heads back in the checkpoint's grouped order along `dim` (width
     /// `width` per head): grouped head `k·g + r` sits at tiled `r·K + k`.
-    fn grouped(t: &hanzo_ml::Tensor, dim: usize, start: usize, heads: usize, kh: usize, width: usize) -> hanzo_ml::Tensor {
+    fn grouped(
+        t: &hanzo_ml::Tensor,
+        dim: usize,
+        start: usize,
+        heads: usize,
+        kh: usize,
+        width: usize,
+    ) -> hanzo_ml::Tensor {
         let g = heads / kh;
         let mut parts = vec![t.narrow(dim, 0, start).expect("lead")];
         for j in 0..heads {
             let (k, r) = (j / g, j % g);
-            parts.push(t.narrow(dim, start + (r * kh + k) * width, width).expect("head"));
+            parts.push(
+                t.narrow(dim, start + (r * kh + k) * width, width)
+                    .expect("head"),
+            );
         }
-        let parts: Vec<_> = parts.into_iter().filter(|p| p.dim(dim).unwrap() > 0).collect();
+        let parts: Vec<_> = parts
+            .into_iter()
+            .filter(|p| p.dim(dim).unwrap() > 0)
+            .collect();
         hanzo_ml::Tensor::cat(&parts, dim).expect("cat")
     }
 
@@ -1357,9 +1620,20 @@ pub(crate) mod tests {
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))
         .collect();
-        let path = std::env::temp_dir().join(format!("hanzo-gdn-tiled-{}.safetensors", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "hanzo-gdn-tiled-{}.safetensors",
+            std::process::id()
+        ));
         hanzo_ml::safetensors::save(&st, &path)?;
-        let vb = unsafe { hanzo_quant::ShardedSafeTensors::sharded(&[&path], DType::F32, &dev, None, std::sync::Arc::new(|_| true))? };
+        let vb = unsafe {
+            hanzo_quant::ShardedSafeTensors::sharded(
+                &[&path],
+                DType::F32,
+                &dev,
+                None,
+                std::sync::Arc::new(|_| true),
+            )?
+        };
         let props = PropsGGUF {
             head_count: 1,
             head_count_kv: 1,
@@ -1384,14 +1658,21 @@ pub(crate) mod tests {
             nextn_predict_layers: 0,
         };
         let ours = QGatedDeltaNet::new(&vb, &props, &None)?;
-        let block = |w: &Tensor, s: &Tensor| hanzo_quant::blockwise_fp8_moe(w.clone(), s.clone(), vec![128, 128], DType::F32);
+        let block = |w: &Tensor, s: &Tensor| {
+            hanzo_quant::blockwise_fp8_moe(w.clone(), s.clone(), vec![128, 128], DType::F32)
+        };
         let dense = |w: &Tensor| -> Result<std::sync::Arc<dyn hanzo_quant::QuantMethod>> {
-            Ok(std::sync::Arc::new(hanzo_quant::UnquantLinear::new(hanzo_quant::QuantMethodConfig::Unquantized(
-                hanzo_nn::Linear::new(w.clone(), None),
-            ))?))
+            Ok(std::sync::Arc::new(hanzo_quant::UnquantLinear::new(
+                hanzo_quant::QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(w.clone(), None)),
+            )?))
         };
         let twin = GatedDeltaNet {
-            in_proj: GdnInProj::Split { qkv: block(&qkv, &qkv_s)?, z: block(&z, &z_s)?, b: dense(&b)?, a: dense(&a)? },
+            in_proj: GdnInProj::Split {
+                qkv: block(&qkv, &qkv_s)?,
+                z: block(&z, &z_s)?,
+                b: dense(&b)?,
+                a: dense(&a)?,
+            },
             conv1d_weight: conv1d,
             dt_bias: dt,
             a_log,
@@ -1420,7 +1701,10 @@ pub(crate) mod tests {
             let want = twin.forward(&x, &mut b_cache)?;
             let err = (got - &want)?.abs()?.max_all()?.to_scalar::<f32>()?;
             let scale = want.abs()?.max_all()?.to_scalar::<f32>()?;
-            assert!(err <= 1e-5 * scale.max(1.0), "len {len}: {err:e} off {scale:e}");
+            assert!(
+                err <= 1e-5 * scale.max(1.0),
+                "len {len}: {err:e} off {scale:e}"
+            );
         }
         Ok(())
     }
@@ -1439,12 +1723,20 @@ pub(crate) mod tests {
         let props = cfg.props();
         let (kh, vh) = (props.num_k_heads, props.num_v_heads);
         let (vb, names) = Recorder::over(&weights(&snapshot()), DType::BF16, &dev)?;
-        let gdn = QGatedDeltaNet::new(&vb.pp("model.language_model.layers.0.linear_attn"), &props, &cfg.quant()?)?;
+        let gdn = QGatedDeltaNet::new(
+            &vb.pp("model.language_model.layers.0.linear_attn"),
+            &props,
+            &cfg.quant()?,
+        )?;
         let key_dim = kh * props.head_k_dim;
         let conv_dim = 2 * key_dim + vh * props.head_v_dim;
         let mut cache = GdnLayerCache {
             conv_state: Tensor::zeros((1, conv_dim, props.conv_kernel), DType::BF16, &dev)?,
-            recurrent_state: Tensor::zeros((1, vh, props.head_k_dim, props.head_v_dim), DType::F32, &dev)?,
+            recurrent_state: Tensor::zeros(
+                (1, vh, props.head_k_dim, props.head_v_dim),
+                DType::F32,
+                &dev,
+            )?,
             seqlen_offset: 0,
             trail: None,
         };
@@ -1454,36 +1746,98 @@ pub(crate) mod tests {
         let mut at = 0;
         for len in CHUNKS {
             let mut probe = vec![];
-            outs.push(gdn.forward_probed(&chunk(&u, at, len, &dev), &mut cache, Some(&mut probe))?.squeeze(0)?);
+            outs.push(
+                gdn.forward_probed(&chunk(&u, at, len, &dev), &mut cache, Some(&mut probe))?
+                    .squeeze(0)?,
+            );
             for (name, t) in probe {
-                stages.entry(name).or_default().push(t.squeeze(0)?.reshape((len, ()))?);
+                stages
+                    .entry(name)
+                    .or_default()
+                    .push(t.squeeze(0)?.reshape((len, ()))?);
             }
             at += len;
         }
         let cat = |name: &str| Tensor::cat(&stages[name], 0).expect("cat");
         let conv = grouped(&cat("conv"), 1, 2 * key_dim, vh, kh, props.head_v_dim);
-        assert_close("gdn.conv vs served", &conv, &vectors("gdn.prefill.conv"), Tol::ulps(1.0));
+        assert_close(
+            "gdn.conv vs served",
+            &conv,
+            &vectors("gdn.prefill.conv"),
+            Tol::ulps(1.0),
+        );
         // the first K tiled heads are the key heads themselves
         let first = |t: Tensor| t.narrow(1, 0, key_dim).expect("key heads");
-        assert_close("gdn.q vs served", &first(cat("q")), &vectors("gdn.prefill.q"), Tol::ulps(1.0));
-        assert_close("gdn.k vs served", &first(cat("k")), &vectors("gdn.prefill.k"), Tol::ulps(1.0));
+        assert_close(
+            "gdn.q vs served",
+            &first(cat("q")),
+            &vectors("gdn.prefill.q"),
+            Tol::ulps(1.0),
+        );
+        assert_close(
+            "gdn.k vs served",
+            &first(cat("k")),
+            &vectors("gdn.prefill.k"),
+            Tol::ulps(1.0),
+        );
         let v = grouped(&cat("v"), 1, 0, vh, kh, props.head_v_dim);
-        assert_close("gdn.v vs served", &v, &vectors("gdn.prefill.v"), Tol::ulps(1.0));
+        assert_close(
+            "gdn.v vs served",
+            &v,
+            &vectors("gdn.prefill.v"),
+            Tol::ulps(1.0),
+        );
         let rel = |what: &str, got: Tensor, want: Tensor| {
-            let err = (got - &want).and_then(|d| d.abs()).and_then(|d| d.max_all()).and_then(|d| d.to_scalar::<f32>()).unwrap();
-            let scale = want.abs().and_then(|d| d.max_all()).and_then(|d| d.to_scalar::<f32>()).unwrap();
+            let err = (got - &want)
+                .and_then(|d| d.abs())
+                .and_then(|d| d.max_all())
+                .and_then(|d| d.to_scalar::<f32>())
+                .unwrap();
+            let scale = want
+                .abs()
+                .and_then(|d| d.max_all())
+                .and_then(|d| d.to_scalar::<f32>())
+                .unwrap();
             println!("{what}: max relative {:e}", err / scale);
             assert!(err <= 1e-6 * scale.max(1.0), "{what}: {err:e} of {scale:e}");
         };
-        rel("gdn.g", grouped(&cat("g"), 1, 0, vh, kh, 1).to_device(&hanzo_ml::Device::Cpu)?, vectors("gdn.prefill.g"));
-        rel("gdn.beta", grouped(&cat("beta"), 1, 0, vh, kh, 1).to_device(&hanzo_ml::Device::Cpu)?, vectors("gdn.prefill.beta"));
+        rel(
+            "gdn.g",
+            grouped(&cat("g"), 1, 0, vh, kh, 1).to_device(&hanzo_ml::Device::Cpu)?,
+            vectors("gdn.prefill.g"),
+        );
+        rel(
+            "gdn.beta",
+            grouped(&cat("beta"), 1, 0, vh, kh, 1).to_device(&hanzo_ml::Device::Cpu)?,
+            vectors("gdn.prefill.beta"),
+        );
         let core = grouped(&cat("core"), 1, 0, vh, kh, props.head_v_dim);
-        assert_close("gdn.core vs served", &core, &vectors("gdn.prefill.core"), Tol::most(8.0, 0.999, 0.9999));
-        assert_close("gdn.core vs golden", &core, &fixture("l0.gdn.core"), Tol::most(4.0, 0.999, 0.0));
+        assert_close(
+            "gdn.core vs served",
+            &core,
+            &vectors("gdn.prefill.core"),
+            Tol::most(8.0, 0.999, 0.9999),
+        );
+        assert_close(
+            "gdn.core vs golden",
+            &core,
+            &fixture("l0.gdn.core"),
+            Tol::most(4.0, 0.999, 0.0),
+        );
         let normed = grouped(&cat("normed"), 1, 0, vh, kh, props.head_v_dim);
-        assert_close("gdn.normed token 24 vs served decode", &normed.narrow(0, 23, 1)?, &vectors("gdn.decode1.normed"), Tol::most(8.0, 0.999, 0.0));
+        assert_close(
+            "gdn.normed token 24 vs served decode",
+            &normed.narrow(0, 23, 1)?,
+            &vectors("gdn.decode1.normed"),
+            Tol::most(8.0, 0.999, 0.0),
+        );
         let out = Tensor::cat(&outs, 0)?;
-        assert_close("gdn block vs golden", &out, &fixture("l0.attn.y"), Tol::most(4.0, 0.999, 0.9999));
+        assert_close(
+            "gdn block vs golden",
+            &out,
+            &fixture("l0.attn.y"),
+            Tol::most(4.0, 0.999, 0.9999),
+        );
 
         // the final state, grouped, every fourth head as the golden keeps it
         let state = grouped(&cache.recurrent_state.squeeze(0)?, 0, 0, vh, kh, 1);
@@ -1517,15 +1871,24 @@ pub(crate) mod tests {
         let cfg = config(&snapshot());
         let props = cfg.props();
         let (vb, names) = Recorder::over(&weights(&snapshot()), DType::BF16, &dev)?;
-        let moe = FusedMoe::new(&vb.pp("model.language_model.layers.3.mlp"), &props, &cfg.quant()?, DType::BF16)?;
+        let moe = FusedMoe::new(
+            &vb.pp("model.language_model.layers.3.mlp"),
+            &props,
+            &cfg.quant()?,
+            DType::BF16,
+        )?;
         let u = fixture("l3.mlp.u");
         let (ids_ref, w_ref) = (fixture("l3.ids"), fixture("l3.weights"));
-        let (mut logits, mut routed, mut shared, mut outs, mut own_ids) = (vec![], vec![], vec![], vec![], vec![]);
+        let (mut logits, mut routed, mut shared, mut outs, mut own_ids) =
+            (vec![], vec![], vec![], vec![], vec![]);
         let mut at = 0;
         for len in CHUNKS {
             let x = chunk(&u, at, len, &dev).squeeze(0)?;
             logits.push(moe.logits(&x)?);
-            let ids = ids_ref.narrow(0, at, len)?.to_dtype(DType::U32)?.to_device(&dev)?;
+            let ids = ids_ref
+                .narrow(0, at, len)?
+                .to_dtype(DType::U32)?
+                .to_device(&dev)?;
             let w = w_ref.narrow(0, at, len)?.to_device(&dev)?;
             routed.push(moe.experts(&x, &ids, &w)?);
             shared.push(moe.shared(&x)?);
@@ -1535,17 +1898,27 @@ pub(crate) mod tests {
             at += len;
         }
         let cat = |v: &[Tensor]| Tensor::cat(v, 0).expect("cat");
-        assert_close("router logits", &cat(&logits), &fixture("l3.router"), Tol::ulps(1.0));
+        assert_close(
+            "router logits",
+            &cat(&logits),
+            &fixture("l3.router"),
+            Tol::ulps(1.0),
+        );
         // routing from the reference logits
         let (ids, w) = moe.route(&fixture("l3.router").to_device(&dev)?)?;
         assert_eq!(
-            ids.to_dtype(DType::U32)?.to_device(&hanzo_ml::Device::Cpu)?.to_vec2::<u32>()?,
+            ids.to_dtype(DType::U32)?
+                .to_device(&hanzo_ml::Device::Cpu)?
+                .to_vec2::<u32>()?,
             ids_ref.to_dtype(DType::U32)?.to_vec2::<u32>()?,
             "expert ids from the reference logits"
         );
-        let werr = (w.to_device(&hanzo_ml::Device::Cpu)? - &w_ref)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        let werr = (w.to_device(&hanzo_ml::Device::Cpu)? - &w_ref)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
         assert!(werr <= 1e-6, "routing weights {werr:e}");
-        // fc1's activation quantizer against vLLM's scaled_fp4_quant
+        // fc1's activation quantizer against the served NVFP4 activation quantizer
         let gs = fixture("l3.mlp.gs").to_vec1::<f32>()?;
         let (codes, scales) = hanzo_quant::quantize::nvfp4(&u.to_device(&dev)?, gs[0])?;
         let bytes = |t: &Tensor| -> Vec<u8> {
@@ -1555,25 +1928,62 @@ pub(crate) mod tests {
                 _ => fp8_codes(&t),
             }
         };
-        assert_eq!(bytes(&codes), bytes(&quant_fixture("fp4.input.l3mu.q")), "fc1 input codes");
-        assert_eq!(bytes(&scales), bytes(&quant_fixture("fp4.input.l3mu.s")), "fc1 input scales");
+        assert_eq!(
+            bytes(&codes),
+            bytes(&quant_fixture("fp4.input.l3mu.q")),
+            "fc1 input codes"
+        );
+        assert_eq!(
+            bytes(&scales),
+            bytes(&quant_fixture("fp4.input.l3mu.s")),
+            "fc1 input scales"
+        );
         let routed = cat(&routed);
-        assert_close("experts vs served", &routed, &vectors("moe.routed"), Tol::most(2.0, 0.999, 0.99999));
+        assert_close(
+            "experts vs served",
+            &routed,
+            &vectors("moe.routed"),
+            Tol::most(2.0, 0.999, 0.99999),
+        );
         // The golden transcribes the grouped GEMM in IEEE order, one expert at a time; the served
         // kernel accumulates in tensor-core order. The vectors file records that distance in its
         // own metadata, gaps["moe.routed.golden"] = 96.34 max ulp, 43.54 at p99.9, min row cos
         // 0.9994971. Bit-exactness with the kernel is the contract, asserted above, so the golden
-        // is checked at the distance the golden itself documents: no further than vLLM's kernel.
-        assert_close("experts vs golden", &routed, &fixture("l3.routed"), Tol::most(97.0, 0.999, 0.9994));
-        assert_close("shared vs golden", &cat(&shared), &fixture("l3.shared"), Tol::ulps(1.0));
-        let down = moe.shared_down_proj.forward(&fixture("l3.shared.act").to_device(&dev)?)?;
-        assert_close("shared down vs served w8a8", &down, &vectors("w8a8.shared_down"), Tol::most(1.0, 0.999, 0.0));
+        // is checked at the distance the golden itself documents: no further than the kernel.
+        assert_close(
+            "experts vs golden",
+            &routed,
+            &fixture("l3.routed"),
+            Tol::most(97.0, 0.999, 0.9994),
+        );
+        assert_close(
+            "shared vs golden",
+            &cat(&shared),
+            &fixture("l3.shared"),
+            Tol::ulps(1.0),
+        );
+        let down = moe
+            .shared_down_proj
+            .forward(&fixture("l3.shared.act").to_device(&dev)?)?;
+        assert_close(
+            "shared down vs served w8a8",
+            &down,
+            &vectors("w8a8.shared_down"),
+            Tol::most(1.0, 0.999, 0.0),
+        );
         assert_eq!(
-            cat(&own_ids).to_device(&hanzo_ml::Device::Cpu)?.to_vec2::<u32>()?,
+            cat(&own_ids)
+                .to_device(&hanzo_ml::Device::Cpu)?
+                .to_vec2::<u32>()?,
             ids_ref.to_dtype(DType::U32)?.to_vec2::<u32>()?,
             "own routing"
         );
-        assert_close("moe block vs golden", &cat(&outs), &fixture("l3.moe"), Tol::most(4.0, 1.0, 0.9999));
+        assert_close(
+            "moe block vs golden",
+            &cat(&outs),
+            &fixture("l3.moe"),
+            Tol::most(4.0, 1.0, 0.9999),
+        );
         let want: std::collections::BTreeSet<String> = manifest(cfg.text())?
             .into_iter()
             .map(|e| e.name)
@@ -1591,7 +2001,10 @@ pub(crate) mod tests {
         let vb = vb(&hanzo_ml::Device::Cpu)?;
         let t = cfg.text();
         let hash = crate::models::ngram::Hash::new(
-            &vb.pp(format!("{PREFIX}layers.{}.ple.ple_embedding", t.ple_layer()?)),
+            &vb.pp(format!(
+                "{PREFIX}layers.{}.ple.ple_embedding",
+                t.ple_layer()?
+            )),
             t.eos_token_id,
             t.heads_per_ngram,
         )?;
@@ -1622,7 +2035,11 @@ pub(crate) mod tests {
         let files = weights(&snapshot());
         let (vb, names) = Recorder::over(&files, DType::BF16, &dev)?;
         let pre = format!("{PREFIX}layers.{layer}.ple");
-        let hash = Hash::new(&vb.pp(format!("{pre}.ple_embedding")), t.eos_token_id, t.heads_per_ngram)?;
+        let hash = Hash::new(
+            &vb.pp(format!("{pre}.ple_embedding")),
+            t.eos_token_id,
+            t.heads_per_ngram,
+        )?;
         let table = Fp8Table::open(&files, &format!("{pre}.ple_embedding.ngram_embedding"))?;
         let ngram = Ngram::new(&vb.pp(&pre), hash, table, t.rms_norm_eps)?;
         let (c, rows) = ngram.history()?;
@@ -1634,7 +2051,13 @@ pub(crate) mod tests {
         };
         let toks = tokens();
         let x = fixture("l1.x");
-        let (mut ids, mut bytes, mut es, mut stages, mut xps) = (vec![], vec![], vec![], HashMap::<&str, Vec<Tensor>>::new(), vec![]);
+        let (mut ids, mut bytes, mut es, mut stages, mut xps) = (
+            vec![],
+            vec![],
+            vec![],
+            HashMap::<&str, Vec<Tensor>>::new(),
+            vec![],
+        );
         let mut at: usize = 0;
         for len in CHUNKS {
             let prior = toks[at.saturating_sub(2)..at].to_vec();
@@ -1647,30 +2070,61 @@ pub(crate) mod tests {
             let mut probe = vec![];
             let delta = ngram.forward_probed(&xs, &e, &mut cache, Some(&mut probe))?;
             for (name, v) in probe {
-                stages.entry(name).or_default().push(v.squeeze(0)?.reshape((len, ()))?);
+                stages
+                    .entry(name)
+                    .or_default()
+                    .push(v.squeeze(0)?.reshape((len, ()))?);
             }
             let xp = (xs.to_dtype(DType::F32)? + delta)?.to_dtype(DType::BF16)?;
             xps.push(xp.reshape((len, ()))?);
             at += len;
         }
-        let want_ids: Vec<u32> = fixture("l1.ple.ids").flatten_all()?.to_dtype(DType::U32)?.to_vec1()?;
+        let want_ids: Vec<u32> = fixture("l1.ple.ids")
+            .flatten_all()?
+            .to_dtype(DType::U32)?
+            .to_vec1()?;
         assert_eq!(ids, want_ids, "n-gram ids");
         let want_bytes: Vec<u8> = fixture("l1.ple.rows").flatten_all()?.to_vec1()?;
         assert_eq!(bytes, want_bytes, "table bytes");
         let e = Tensor::cat(&es, 0)?;
-        assert_close("ple.e (bit-exact)", &e, &fixture("l1.ple.e"), Tol::ulps(0.0));
+        assert_close(
+            "ple.e (bit-exact)",
+            &e,
+            &fixture("l1.ple.e"),
+            Tol::ulps(0.0),
+        );
         let cat = |name: &str| Tensor::cat(&stages[name], 0).expect("cat");
-        for (stage, want) in [("key", "l1.ple.key"), ("value", "l1.ple.value"), ("gv", "l1.ple.gv"), ("nrm", "l1.ple.nrm"), ("conv", "l1.ple.conv")] {
-            assert_close(&format!("ple.{stage}"), &cat(stage), &fixture(want), Tol::ulps(1.0));
+        for (stage, want) in [
+            ("key", "l1.ple.key"),
+            ("value", "l1.ple.value"),
+            ("gv", "l1.ple.gv"),
+            ("nrm", "l1.ple.nrm"),
+            ("conv", "l1.ple.conv"),
+        ] {
+            assert_close(
+                &format!("ple.{stage}"),
+                &cat(stage),
+                &fixture(want),
+                Tol::ulps(1.0),
+            );
         }
-        assert_close("streams after the n-gram add", &Tensor::cat(&xps, 0)?, &fixture("l1.xp"), Tol::most(4.0, 0.999, 0.9999));
+        assert_close(
+            "streams after the n-gram add",
+            &Tensor::cat(&xps, 0)?,
+            &fixture("l1.xp"),
+            Tol::most(4.0, 0.999, 0.9999),
+        );
         let want: std::collections::BTreeSet<String> = manifest(t)?
             .into_iter()
             .filter(|e| e.role == Role::Device || !e.name.contains(".shard_"))
             .map(|e| e.name)
             .filter(|n| n.starts_with(&format!("{pre}.")) && !n.ends_with("weight_scale"))
             .collect();
-        assert_eq!(*names.lock().unwrap(), want, "tensors read through the varbuilder");
+        assert_eq!(
+            *names.lock().unwrap(),
+            want,
+            "tensors read through the varbuilder"
+        );
         Ok(())
     }
 
@@ -1681,7 +2135,13 @@ pub(crate) mod tests {
             Some("self_attn.indexer.")
         );
         assert_eq!(deferred("mtp.layers.0.mlp.gate.weight"), Some("mtp."));
-        assert_eq!(deferred("model.visual.blocks.0.norm1.weight"), Some("model.visual."));
-        assert_eq!(deferred("model.language_model.layers.3.self_attn.q_proj.weight"), None);
+        assert_eq!(
+            deferred("model.visual.blocks.0.norm1.weight"),
+            Some("model.visual.")
+        );
+        assert_eq!(
+            deferred("model.language_model.layers.3.self_attn.q_proj.weight"),
+            None
+        );
     }
 }

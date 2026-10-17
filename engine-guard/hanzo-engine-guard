@@ -3,7 +3,7 @@
 
 Two bounded jobs (neither can DoS the machine):
 
-  * circuit breaker  - kill the legacy `mistralrs-server` recursion on sight;
+  * circuit breaker  - kill the legacy server binary's recursion on sight;
                        if `hanzo serve` procs exceed RUNAWAY_CEILING, kill all.
   * keepalive        - respawn an engine port that was healthy and then died,
                        but ONLY while a desktop/node is running, with per-port
@@ -37,8 +37,8 @@ CYCLE = 5
 RUNAWAY_CEILING = int(os.environ.get("HANZO_ENGINE_RUNAWAY_CEILING", "256"))
 BACKOFF = [15, 30, 60, 120, 300]
 MAX_FAILS = 8
-ENGINE_PAT = "release/hanzo serve"        # native engine; never matches mistralrs
-BOMB_PAT = "mistralrs-server"
+ENGINE_PAT = "release/hanzo serve"        # native engine; never matches BOMB_PAT
+BOMB_PAT = "mistralrs-server"             # the legacy server binary's executable name on disk
 DESKTOP_PATS = ("hanzo-desktop", "zoo-desktop", "lux-desktop", "hanzo-node")
 
 IS_WIN = os.name == "nt"
@@ -55,7 +55,7 @@ def parse_port(cmdline):
 
 
 def is_bomb(name, exe, argv0):
-    """True iff a process IS the legacy mistralrs-server binary - matched
+    """True iff a process IS the legacy server binary (BOMB_PAT) - matched
     PRECISELY by exe/argv0 basename or comm (`name`), NEVER by a cmdline
     substring (which would wrongly flag editors, greps, or scripts that merely
     mention the name). `name` also matches the 15-char-truncated Linux comm."""
@@ -136,7 +136,7 @@ def _kill_matching(pat):
 
 
 def _bomb_procs():
-    """Processes that ARE the legacy mistralrs-server binary (precise: see
+    """Processes that ARE the legacy server binary, BOMB_PAT (precise: see
     is_bomb). Never matched by a cmdline substring."""
     if psutil:
         out = []

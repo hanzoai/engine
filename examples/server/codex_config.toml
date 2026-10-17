@@ -1,4 +1,4 @@
-# Example ~/.codex/config.toml snippet for a local mistral.rs server.
+# Example ~/.codex/config.toml snippet for a local Hanzo Engine server.
 # Start the server with:
 #   hanzo serve -p 1234 -m Qwen/Qwen3-Coder-Next
 #
@@ -10,8 +10,8 @@ model_context_window = 32768
 model_reasoning_summary = "none"
 model_supports_reasoning_summaries = false
 
-[model_providers.mistralrs]
-name = "mistral.rs"
+[model_providers.hanzo]
+name = "Hanzo Engine"
 base_url = "http://localhost:1234/v1"
 wire_api = "responses"
 request_max_retries = 1
@@ -21,6 +21,6 @@ stream_idle_timeout_ms = 300000
 # If a reverse proxy enforces auth, uncomment this and export HANZO_API_KEY.
 # env_key = "HANZO_API_KEY"
 
-[profiles.mistralrs]
+[profiles.hanzo]
 model = "default"
 model_provider = "hanzo"

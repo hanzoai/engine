@@ -1,6 +1,7 @@
-//! Fused MoE router: vLLM v0.29.0's `topkGating`, ported verbatim to `exact/route.cu` and built
-//! without fast math, so ids and weights equal vLLM's bit for bit (score, top-k with ties to the
-//! lower index, renormalize, routed scaling factor) in one launch.
+//! Fused MoE router: `topkGating`, ported verbatim to `exact/route.cu` (its header names the
+//! source) and built without fast math, so ids and weights equal the recorded reference routing
+//! bit for bit (score, top-k with ties to the lower index, renormalize, routed scaling factor) in
+//! one launch.
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -11,10 +12,12 @@ use hanzo_ml::cuda_backend::{CudaStorage, CudaStorageSlice, WrapErr};
 use hanzo_ml::{DType, Result, Shape, Storage, Tensor};
 
 use super::ffi;
-use crate::ops::{MoeRouterScoreFunction, MoeRouterSelectedWeight, MoeRouterTopKConfig, TopKOutput};
+use crate::ops::{
+    MoeRouterScoreFunction, MoeRouterSelectedWeight, MoeRouterTopKConfig, TopKOutput,
+};
 
-/// The expert counts `route.cu` instantiates: vLLM's fused set (1-512 powers of two, 192, 320,
-/// 384, 448, 576). Others take the portable path, as they take vLLM's unfused one.
+/// The expert counts `route.cu` instantiates: the fused set (1-512 powers of two, 192, 320,
+/// 384, 448, 576). Others take the portable path.
 pub(crate) fn experts() -> &'static [usize] {
     static TABLE: OnceLock<Vec<usize>> = OnceLock::new();
     TABLE.get_or_init(|| {
@@ -32,7 +35,7 @@ pub(crate) fn supports(experts: usize) -> bool {
 }
 
 /// Whether `cfg` is one `route.cu` computes. A sigmoid of the selected logit exists only for the
-/// raw score (llama4); every other combination is vLLM's or an extension of it.
+/// raw score (llama4); every other combination is the ported kernel's or an extension of it.
 pub(crate) fn serves(experts: usize, top_k: usize, cfg: &MoeRouterTopKConfig) -> bool {
     supports(experts)
         && top_k >= 1
@@ -126,7 +129,10 @@ pub(crate) fn topk(
         .last()
         .ok_or_else(|| hanzo_ml::Error::Msg("route: scalar logits".into()))?;
     if !serves(experts, cfg.top_k, &cfg) {
-        hanzo_ml::bail!("route: {experts} experts, top_k {} is not served", cfg.top_k);
+        hanzo_ml::bail!(
+            "route: {experts} experts, top_k {} is not served",
+            cfg.top_k
+        );
     }
     let bias = f32_vector(bias, experts, "bias")?;
     let scale = f32_vector(scale, experts, "expert_scale")?;
@@ -179,8 +185,8 @@ pub(crate) fn topk(
                 let len = rows * experts;
                 let (base, _g) = src.device_ptr(&stream);
                 let at = base as usize + layout.start_offset() * bytes;
-                // vLLM loads a row in 16-byte vectors: a view that starts off that alignment is
-                // copied out first rather than read misaligned.
+                // The kernel loads a row in 16-byte vectors: a view that starts off that
+                // alignment is copied out first rather than read misaligned.
                 let copy = if at % 16 != 0 {
                     let view = src.slice(layout.start_offset()..layout.start_offset() + len);
                     Some(stream.clone_dtod(&view).w()?)
@@ -239,9 +245,27 @@ mod tests {
     /// The golden script's configs: (name, score, renormalize, bias, routed scaling factor).
     fn configs() -> Vec<(String, MoeRouterScoreFunction, bool, bool, f32)> {
         let mut v = vec![
-            ("softmax.renorm".into(), MoeRouterScoreFunction::Softmax, true, false, 1.0),
-            ("softmax.plain".into(), MoeRouterScoreFunction::Softmax, false, false, 1.0),
-            ("softmax.bias".into(), MoeRouterScoreFunction::Softmax, true, true, 1.0),
+            (
+                "softmax.renorm".into(),
+                MoeRouterScoreFunction::Softmax,
+                true,
+                false,
+                1.0,
+            ),
+            (
+                "softmax.plain".into(),
+                MoeRouterScoreFunction::Softmax,
+                false,
+                false,
+                1.0,
+            ),
+            (
+                "softmax.bias".into(),
+                MoeRouterScoreFunction::Softmax,
+                true,
+                true,
+                1.0,
+            ),
         ];
         for renorm in [true, false] {
             for bias in [false, true] {
@@ -259,7 +283,12 @@ mod tests {
         v
     }
 
-    pub(crate) fn cfg(score: MoeRouterScoreFunction, k: usize, renorm: bool, rsf: f32) -> MoeRouterTopKConfig {
+    pub(crate) fn cfg(
+        score: MoeRouterScoreFunction,
+        k: usize,
+        renorm: bool,
+        rsf: f32,
+    ) -> MoeRouterTopKConfig {
         MoeRouterTopKConfig {
             top_k: k,
             score_function: score,
@@ -300,9 +329,10 @@ mod tests {
         hanzo_ml::safetensors::load(format!("{FIXTURES}/{name}.safetensors"), dev).unwrap()
     }
 
-    /// Every (count, dtype, config) route.cu instantiates, bitwise against vLLM's topkGating.
+    /// Every (count, dtype, config) route.cu instantiates, bitwise against the recorded
+    /// topkGating outputs (`route.safetensors`).
     #[test]
-    fn matches_vllm() {
+    fn matches_reference() {
         let dev = Device::new_cuda(0).unwrap();
         let g = load("route", &dev);
         let (mut cases, mut words) = (0usize, 0usize);
@@ -330,14 +360,14 @@ mod tests {
                     assert_eq!(a.len(), b.len());
                     assert_eq!(
                         bad, 0,
-                        "{e} experts {dt} {name}: {bad} words differ from vLLM"
+                        "{e} experts {dt} {name}: {bad} words differ from the reference"
                     );
                     cases += 1;
                     words += a.len() + c.len();
                 }
             }
         }
-        println!("matches_vllm: {cases} cases, {words} words, 0 differ");
+        println!("matches_reference: {cases} cases, {words} words, 0 differ");
     }
 
     /// A row-narrowed view, aligned or not, routes the same as its own copy.
@@ -351,7 +381,12 @@ mod tests {
             // Row 1 starts off 16 bytes for 8 f16 experts only; the others stay aligned.
             let view = x.narrow(0, 1, 40).unwrap();
             let copy = Tensor::from_vec(
-                view.flatten_all().unwrap().to_dtype(DType::F32).unwrap().to_vec1::<f32>().unwrap(),
+                view.flatten_all()
+                    .unwrap()
+                    .to_dtype(DType::F32)
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap(),
                 view.dims(),
                 &dev,
             )
@@ -379,18 +414,30 @@ mod tests {
         clip.logit_clip = Some((-1.0, 3.5));
         let mut floor = cfg(MoeRouterScoreFunction::Sigmoid, 6, true, 2.5);
         floor.norm_min = 1e-20;
-        for (name, c, s) in [("raw", raw, None), ("clip", clip, Some(&scale)), ("floor", floor, None)] {
+        for (name, c, s) in [
+            ("raw", raw, None),
+            ("clip", clip, Some(&scale)),
+            ("floor", floor, None),
+        ] {
             let fused = topk(&x, c, None, s).unwrap();
             let cpu = x.to_device(&Device::Cpu).unwrap();
             let s_cpu = s.map(|t| t.to_device(&Device::Cpu).unwrap());
             let port = crate::ops::moe_router_topk(&cpu, c, None, s_cpu.as_ref()).unwrap();
             assert_eq!(ids(&fused.indices), ids(&port.indices), "{name} ids");
             let (a, b) = (
-                fused.values.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+                fused
+                    .values
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap(),
                 port.values.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
             );
             for (u, v) in a.iter().zip(&b) {
-                assert!((u - v).abs() <= 2e-6 * v.abs().max(1e-30), "{name}: {u} vs {v}");
+                assert!(
+                    (u - v).abs() <= 2e-6 * v.abs().max(1e-30),
+                    "{name}: {u} vs {v}"
+                );
             }
         }
     }
@@ -419,7 +466,9 @@ mod tests {
                 f();
             }
             let g = s
-                .end_capture(CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH)
+                .end_capture(
+                    CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+                )
                 .unwrap()
                 .unwrap();
             g.launch().unwrap();
@@ -430,8 +479,12 @@ mod tests {
         /// Device microseconds per call for one replay.
         pub fn replay_us(s: &Arc<CudaStream>, g: &CudaGraph, launches: usize) -> f64 {
             let ctx = s.context();
-            let a = ctx.new_event(Some(CUevent_flags::CU_EVENT_DEFAULT)).unwrap();
-            let b = ctx.new_event(Some(CUevent_flags::CU_EVENT_DEFAULT)).unwrap();
+            let a = ctx
+                .new_event(Some(CUevent_flags::CU_EVENT_DEFAULT))
+                .unwrap();
+            let b = ctx
+                .new_event(Some(CUevent_flags::CU_EVENT_DEFAULT))
+                .unwrap();
             a.record(s).unwrap();
             g.launch().unwrap();
             b.record(s).unwrap();
@@ -440,10 +493,20 @@ mod tests {
 
         pub fn gpu_util() -> u32 {
             let out = std::process::Command::new("nvidia-smi")
-                .args(["--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"])
+                .args([
+                    "--query-gpu=utilization.gpu",
+                    "--format=csv,noheader,nounits",
+                ])
                 .output()
                 .unwrap();
-            String::from_utf8_lossy(&out.stdout).trim().lines().next().unwrap().trim().parse().unwrap()
+            String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .lines()
+                .next()
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap()
         }
 
         pub struct Paired {
@@ -472,7 +535,12 @@ mod tests {
         }
 
         pub fn run(s: &Arc<CudaStream>, ga: &CudaGraph, gb: &CudaGraph, launches: usize) -> Paired {
-            let mut p = Paired { a: vec![], b: vec![], ratios: vec![], attempts: 0 };
+            let mut p = Paired {
+                a: vec![],
+                b: vec![],
+                ratios: vec![],
+                attempts: 0,
+            };
             while p.ratios.len() < PAIRS && p.attempts < ATTEMPTS {
                 p.attempts += 1;
                 let before = gpu_util();
@@ -507,7 +575,7 @@ mod tests {
 
     /// W8c-4: device time of (a) route alone, (c) the path it replaces (f32 cast, f32 GEMM,
     /// softmax_last_dim, topk, renorm) and (d) main.linear + route, E=512, k=10, bf16. Bar:
-    /// (d) < (c) at every T. The (a)-vs-vLLM bar is scripts/zen6_moe_bench.py's.
+    /// (d) < (c) at every T.
     #[test]
     #[ignore]
     fn bench() {
@@ -529,7 +597,10 @@ mod tests {
             "T", "(a) us", "(c) us", "(d) us", "d/c", "pairs", "(a) host", "(c) host", "(d) host"
         );
         for t in [1usize, 8, 64, 512, 4096] {
-            let x_t = Tensor::randn(0f32, 1., (t, HIDDEN), &dev).unwrap().to_dtype(DType::BF16).unwrap();
+            let x_t = Tensor::randn(0f32, 1., (t, HIDDEN), &dev)
+                .unwrap()
+                .to_dtype(DType::BF16)
+                .unwrap();
             let x = slice(&x_t);
             let mut logits = s.alloc_zeros::<half::bf16>(t * 512).unwrap();
             let mut w = s.alloc_zeros::<f32>(t * 10).unwrap();
@@ -538,31 +609,67 @@ mod tests {
             let (wp, _) = w.device_ptr_mut(&s);
             let (ip, _) = ids.device_ptr_mut(&s);
             let route_only = || unsafe {
-                launch(DType::BF16, lp as *const c_void, wp as *mut f32, ip as *mut u32,
-                       std::ptr::null(), std::ptr::null(), t, 512, &c, &s).unwrap();
+                launch(
+                    DType::BF16,
+                    lp as *const c_void,
+                    wp as *mut f32,
+                    ip as *mut u32,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    t,
+                    512,
+                    &c,
+                    &s,
+                )
+                .unwrap();
             };
             let mut logits2 = s.alloc_zeros::<half::bf16>(t * 512).unwrap();
             let (lp2, _) = logits2.device_ptr_mut(&s);
             let mut fused = || {
                 main.linear(&x, &wg, &mut logits2, t, 512, HIDDEN).unwrap();
                 unsafe {
-                    launch(DType::BF16, lp2 as *const c_void, wp as *mut f32, ip as *mut u32,
-                           std::ptr::null(), std::ptr::null(), t, 512, &c, &s).unwrap();
+                    launch(
+                        DType::BF16,
+                        lp2 as *const c_void,
+                        wp as *mut f32,
+                        ip as *mut u32,
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        t,
+                        512,
+                        &c,
+                        &s,
+                    )
+                    .unwrap();
                 }
             };
             let old = || {
-                let l = x_t.to_dtype(DType::F32).unwrap().matmul(&wg32.t().unwrap()).unwrap();
+                let l = x_t
+                    .to_dtype(DType::F32)
+                    .unwrap()
+                    .matmul(&wg32.t().unwrap())
+                    .unwrap();
                 let p = hanzo_nn::ops::softmax_last_dim(&l).unwrap();
                 let TopKOutput { values, indices } = p.topk(10).unwrap();
-                let v = values.broadcast_div(&values.sum_keepdim(1).unwrap()).unwrap();
+                let v = values
+                    .broadcast_div(&values.sum_keepdim(1).unwrap())
+                    .unwrap();
                 drop((v, indices));
             };
             let ga = capture(&s, LAUNCHES, route_only);
             let gc = capture(&s, LAUNCHES, old);
             let gd = capture(&s, LAUNCHES, &mut fused);
-            let a_us = median(&(0..20).map(|_| replay_us(&s, &ga, LAUNCHES)).collect::<Vec<_>>());
+            let a_us = median(
+                &(0..20)
+                    .map(|_| replay_us(&s, &ga, LAUNCHES))
+                    .collect::<Vec<_>>(),
+            );
             let p = run(&s, &gd, &gc, LAUNCHES);
-            let (ha, hc, hd) = (host_us(&s, route_only), host_us(&s, old), host_us(&s, &mut fused));
+            let (ha, hc, hd) = (
+                host_us(&s, route_only),
+                host_us(&s, old),
+                host_us(&s, &mut fused),
+            );
             let verdict = if !p.conclusive() {
                 ok = false;
                 "INCONCLUSIVE"

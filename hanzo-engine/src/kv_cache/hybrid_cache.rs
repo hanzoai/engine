@@ -1,6 +1,6 @@
 //! Hybrid cache for models that mix attention and recurrent layers (e.g., GraniteMoeHybrid, Qwen3 Next)
 //!
-//! This implements vLLM-style continuous batching for hybrid models:
+//! This implements continuous batching for hybrid models:
 //! - Attention layers use standard KV cache batching
 //! - Recurrent layers (Mamba SSM or GDN) use a pool-based state with indexed access
 //!

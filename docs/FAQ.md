@@ -25,7 +25,7 @@ See the [Quantization Overview](QUANTS.md) for all options.
 ### What's the difference between ISQ, GGUF, and UQFF?
 
 - **ISQ** quantizes at load time. Any HF model works, but loading is slower because quantization happens on the fly.
-- **GGUF** is a pre-quantized format from the llama.cpp ecosystem. Download a GGUF file and load it directly.
+- **GGUF** is a pre-quantized single-file format, widely published on the Hugging Face Hub. Download a GGUF file and load it directly.
 - **UQFF** is hanzo's own pre-quantized format. Supports more quantization types than GGUF (HQQ, FP8, AFQ, etc.) and loads instantly.
 
 ### Can I use models from local files?

@@ -24,7 +24,7 @@
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
 
 // ============================================================
-// ggml_type enum (matching llama.cpp values)
+// ggml_type enum (the GGUF tensor type codes)
 // ============================================================
 
 enum ggml_type {
@@ -348,7 +348,7 @@ static __device__ void no_device_code(
 #define GGML_ASSERT(x)  do { if (!(x)) { fprintf(stderr, "GGML_ASSERT failed: %s\n", #x); abort(); } } while(0)
 #endif
 
-// Fast unsigned division helpers, matching llama.cpp's CUDA MMQ kernels.
+// Fast unsigned division helpers.
 // Divisors are invariant for a launch, so the host precomputes <mp, L, d>
 // and the device replaces integer div/rem with multiply-high arithmetic.
 static const uint3 init_fastdiv_values(uint64_t d_64) {

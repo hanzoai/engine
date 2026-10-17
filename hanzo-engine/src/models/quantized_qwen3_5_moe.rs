@@ -15,10 +15,8 @@
 //! GDN V-head ordering are documented inline; every assumption is called out. MTP and vision are
 //! ignored (text-only).
 //!
-//! ===================== GGUF tensor-name mapping (source: llama.cpp) =====================
-//! Verified against llama.cpp `gguf-py/gguf/constants.py` (MODEL_ARCH.QWEN35 / QWEN35MOE),
-//! `gguf-py/gguf/tensor_mapping.py`, `conversion/qwen.py` (Qwen3_5MoeTextModel ->
-//! _LinearAttentionVReorderBase -> Qwen3NextModel) and `src/models/qwen35moe.cpp`.
+//! ===================== GGUF tensor-name mapping =====================
+//! The `qwen35` / `qwen35moe` GGUF archs, as converted GGUF files name the HF tensors.
 //!
 //! Per layer `blk.{i}`:
 //!   GDN (linear-attention) layers:
@@ -48,7 +46,7 @@
 //!   ssm.group_count (=linear_num_key_heads), ssm.time_step_rank (=linear_num_value_heads),
 //!   ssm.inner_size (=value_dim), expert_count, expert_used_count, expert_feed_forward_length.
 //!
-//! V-head ordering: llama.cpp's qwen3.5 converter (_LinearAttentionVReorderBase) REORDERS the V
+//! V-head ordering: the GGUF conversion REORDERS the V
 //! heads of in_proj_qkv(v part) / in_proj_z / in_proj_a / in_proj_b / out_proj / conv1d(v part) /
 //! A_log / dt_bias from HF grouped order [K0_v0..v{r-1}, K1_v0..v{r-1}, ...] into TILED order
 //! [v0_K0..v0_K{K-1}, v1_K0..v1_K{K-1}, ...]. We do NOT undo this at load; instead the recurrence
@@ -134,7 +132,7 @@ pub(crate) struct FusedMoe {
     norm_topk_prob: bool,
     num_experts_per_tok: usize,
     /// The dtype router logits are rounded to before the f32 softmax: F32 for GGUF, the
-    /// activation dtype (bf16) for vLLM's served router GEMM.
+    /// activation dtype (bf16) for the served bf16 router GEMM.
     router_dtype: DType,
 }
 
@@ -205,16 +203,26 @@ impl FusedMoe {
             hanzo_quant::linear_no_bias(i, o, q, vb.pp(name))
         };
         let experts = vb.pp("experts");
-        let bank = |proj: &str, share: &[&str], n: usize, k: usize| -> Result<Arc<dyn QuantMethod>> {
-            Ok(Arc::new(hanzo_quant::NVFP4Layer::experts(experts.clone(), proj, share, e, n, k, dtype)?))
-        };
-        // The shared expert runs inside vLLM's moe_forward_shared custom op, where the
+        let bank =
+            |proj: &str, share: &[&str], n: usize, k: usize| -> Result<Arc<dyn QuantMethod>> {
+                Ok(Arc::new(hanzo_quant::NVFP4Layer::experts(
+                    experts.clone(),
+                    proj,
+                    share,
+                    e,
+                    n,
+                    k,
+                    dtype,
+                )?))
+            };
+        // The shared expert runs inside the served MoE custom op, where the
         // standalone QuantFP8 kernel quantizes its inputs (amax div.full 448): a block-FP8
         // projection takes the Eager quantizer, anything else loads through `quant`.
         let shared = |i: usize, o: usize, name: &str| -> Result<Arc<dyn QuantMethod>> {
             let p = vb.pp(name);
             if p.contains_tensor("weight_scale_inv") {
-                let w = p.get_with_hints_dtype((o, i), "weight", Default::default(), DType::F8E4M3)?;
+                let w =
+                    p.get_with_hints_dtype((o, i), "weight", Default::default(), DType::F8E4M3)?;
                 let sc = p.get_with_hints_dtype(
                     (o.div_ceil(128), i.div_ceil(128)),
                     "weight_scale_inv",
@@ -265,7 +273,7 @@ impl FusedMoe {
     }
 
     /// `(ids [t, k], weights [t, k] f32)`: softmax in f32 over the logits, the top k by
-    /// probability (ties to the lower index), renormalized in f32 (vLLM `topk_softmax`).
+    /// probability (ties to the lower index), renormalized in f32.
     pub(crate) fn route(&self, logits: &Tensor) -> Result<(Tensor, Tensor)> {
         let routing_weights = hanzo_nn::ops::softmax_last_dim(&logits.to_dtype(DType::F32)?)?;
         let TopKOutput {
@@ -327,7 +335,8 @@ impl FusedMoe {
         let dtype = xs.dtype();
         let act = swiglu_rounded(&g.to_dtype(dtype)?, &u.to_dtype(dtype)?, dtype)?;
         let out = self.shared_down_proj.forward(&act)?.to_dtype(dtype)?;
-        let gate = sigmoid(&self.shared_gate.forward(xs)?.to_dtype(DType::F32)?)?.to_dtype(dtype)?;
+        let gate =
+            sigmoid(&self.shared_gate.forward(xs)?.to_dtype(DType::F32)?)?.to_dtype(dtype)?;
         out.broadcast_mul(&gate)
     }
 
@@ -344,7 +353,8 @@ impl FusedMoe {
             // routed + shared in f32, one rounding (the compiled add kernel)
             (routed.to_dtype(DType::F32)? + shared.to_dtype(DType::F32)?)?
         };
-        out.reshape((batch, seq_len, hidden_dim))?.to_dtype(original_dtype)
+        out.reshape((batch, seq_len, hidden_dim))?
+            .to_dtype(original_dtype)
     }
 }
 
@@ -431,12 +441,19 @@ impl GatedFullAttention {
             props.head_count_kv,
             props.head_dim,
         );
-        let lin = |i: usize, o: usize, name: &str| {
-            hanzo_quant::linear_no_bias(i, o, quant, vb.pp(name))
-        };
+        let lin =
+            |i: usize, o: usize, name: &str| hanzo_quant::linear_no_bias(i, o, quant, vb.pp(name));
         let norm = |name: &str| -> Result<QRmsNorm> {
-            let w = vb.get_with_hints_dtype((d,), &format!("{name}.weight"), Default::default(), DType::F32)?;
-            Ok(QRmsNorm::from_weight((w.to_device(device)? + 1.0)?, props.rms_norm_eps as f64))
+            let w = vb.get_with_hints_dtype(
+                (d,),
+                &format!("{name}.weight"),
+                Default::default(),
+                DType::F32,
+            )?;
+            Ok(QRmsNorm::from_weight(
+                (w.to_device(device)? + 1.0)?,
+                props.rms_norm_eps as f64,
+            ))
         };
         Ok(Self {
             attn_q: lin(h, 2 * hq * d, "q_proj")?,
@@ -518,8 +535,7 @@ impl GatedFullAttention {
         self.rotary.compute_cos_sin(positions, dtype)
     }
 
-    /// Project, attend, then gate and project out: vLLM `Qwen3NextAttention.forward`
-    /// (`qwen3_next.py:446-457`).
+    /// Project, attend, then gate and project out.
     pub(crate) fn forward(
         &self,
         x: &Tensor,
@@ -535,7 +551,6 @@ impl GatedFullAttention {
 
     /// `(q, k, v, gate)`: q, k and v as `[batch, heads, seq, head_dim]` in the compute dtype, with
     /// q and k normed and roped, and the pre-sigmoid output gate as `[batch, seq, heads·head_dim]`.
-    /// vLLM `_project_qkv_gate` (`qwen3_next.py:384-444`).
     pub(crate) fn project(
         &self,
         x: &Tensor,
@@ -588,7 +603,7 @@ impl GatedFullAttention {
     }
 
     /// `project`'s q attended over this block's cache once k and v are written to it, as
-    /// `[batch, seq, heads·head_dim]`. vLLM `self.attn(q, k, v)` (`qwen3_next.py:453`).
+    /// `[batch, seq, heads·head_dim]`.
     pub(crate) fn attend(
         &self,
         q: &Tensor,
@@ -654,7 +669,7 @@ impl GatedFullAttention {
 
     /// `o_proj(y * sigmoid(gate))` in `dtype`, the residual stream's. The product is formed in f32
     /// and handed over unrounded: the served graph fuses it into o_proj's activation quantizer
-    /// (`…mul_permute_sigmoid…`), which reads it from registers. vLLM `qwen3_next.py:454-456`.
+    /// (`…mul_permute_sigmoid…`), which reads it from registers.
     pub(crate) fn output(&self, y: &Tensor, gate: &Tensor, dtype: DType) -> Result<Tensor> {
         let gate = sigmoid(&gate.to_dtype(DType::F32)?)?;
         let y = y.to_dtype(DType::F32)?.broadcast_mul(&gate)?;
@@ -693,8 +708,8 @@ fn trim_carried(out: &Tensor, carried: usize) -> Result<Tensor> {
 }
 
 impl QGatedDeltaNet {
-    /// The GDN block at `prefix`. Its output norm gates with silu(z), vLLM's default
-    /// `output_gate_type` (`qwen_gdn_linear_attn.py:471`).
+    /// The GDN block at `prefix`. Its output norm gates with silu(z), the default when the config
+    /// sets no `output_gate_type`.
     pub(crate) fn load<R: std::io::Seek + std::io::Read>(
         ct: &mut Content<'_, R>,
         prefix: &str,
@@ -715,7 +730,7 @@ impl QGatedDeltaNet {
         if conv1d_weight.rank() == 3 {
             conv1d_weight = conv1d_weight.squeeze(1)?;
         }
-        // GGUF conversions name this `ssm_dt.bias` (Unsloth/llama.cpp) or `ssm_dt`; accept both.
+        // GGUF conversions name this `ssm_dt.bias` or `ssm_dt`; accept both.
         let dt_bias = ct
             .tensor(&format!("{prefix}.ssm_dt.bias"), dev)
             .or_else(|_| ct.tensor(&format!("{prefix}.ssm_dt"), dev))?
@@ -816,9 +831,9 @@ impl QGatedDeltaNet {
             } else {
                 let w = host.get_unchecked_dtype(&format!("{name}.weight"), vb.dtype())?;
                 let w = permute(&w, dv, start)?.to_device(&dev)?;
-                Ok(Arc::new(hanzo_quant::UnquantLinear::new(QuantMethodConfig::Unquantized(
-                    hanzo_nn::Linear::new(w, None),
-                ))?))
+                Ok(Arc::new(hanzo_quant::UnquantLinear::new(
+                    QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(w, None)),
+                )?))
             }
         };
         let _ = (quant, h);
@@ -830,12 +845,18 @@ impl QGatedDeltaNet {
         // in_proj_a / in_proj_b run on the f32-lifted input: f32 weights holding the bf16 values
         let f32_lin = |name: &str| -> Result<Arc<dyn QuantMethod>> {
             let w = heads(&rows(&format!("{name}.weight"))?, 0, 0, 1)?.to_device(&dev)?;
-            Ok(Arc::new(hanzo_quant::UnquantLinear::new(QuantMethodConfig::Unquantized(
-                hanzo_nn::Linear::new(w, None),
-            ))?))
+            Ok(Arc::new(hanzo_quant::UnquantLinear::new(
+                QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(w, None)),
+            )?))
         };
         let conv = rows("conv1d.weight")?.squeeze(1)?;
-        let conv = Tensor::cat(&[conv.narrow(0, 0, 2 * key_dim)?, heads(&conv, 0, 2 * key_dim, dv)?], 0)?;
+        let conv = Tensor::cat(
+            &[
+                conv.narrow(0, 0, 2 * key_dim)?,
+                heads(&conv, 0, 2 * key_dim, dv)?,
+            ],
+            0,
+        )?;
         let a_log = heads(&rows("A_log")?, 0, 0, 1)?;
         Ok(Self {
             in_proj_qkv,
@@ -845,8 +866,11 @@ impl QGatedDeltaNet {
             conv1d_weight: conv.to_device(&dev)?,
             dt_bias: heads(&rows("dt_bias")?, 0, 0, 1)?.to_device(&dev)?,
             a: a_log.exp()?.neg()?.to_device(&dev)?,
-            norm: RmsNormGated::from_weight(rows("norm.weight")?.to_device(&dev)?, props.rms_norm_eps as f64)
-                .sigmoid(),
+            norm: RmsNormGated::from_weight(
+                rows("norm.weight")?.to_device(&dev)?,
+                props.rms_norm_eps as f64,
+            )
+            .sigmoid(),
             out_proj,
             num_k_heads: kh,
             num_v_heads: vh,
@@ -858,8 +882,7 @@ impl QGatedDeltaNet {
         })
     }
 
-    /// Gate the output norm with sigmoid(z), `output_gate_type = "sigmoid"`
-    /// (vLLM `qwen_gdn_linear_attn.py:471-484`).
+    /// Gate the output norm with sigmoid(z), `output_gate_type = "sigmoid"`.
     pub(crate) fn sigmoid(self) -> Self {
         Self {
             norm: self.norm.sigmoid(),
@@ -868,8 +891,7 @@ impl QGatedDeltaNet {
     }
 
     /// The block over `x` `[b, s, h]`. Arithmetic is f32, rounded to `x`'s dtype at the six points
-    /// vLLM's prefill path stores (`qwen_gdn_linear_attn.py:889-965, 1259-1545`,
-    /// `fused_gdn_prefill_post_conv.py:100-215`): the projection outputs (qkv and z, then b and a),
+    /// the served prefill path stores: the projection outputs (qkv and z, then b and a),
     /// the causal conv + silu, the l2-normed q and k (and v), the recurrence output, and the gated
     /// norm. g, beta and the state stay f32. With f32 input every rounding is a no-op.
     pub(crate) fn forward(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
@@ -927,7 +949,11 @@ impl QGatedDeltaNet {
         // 4. beta = sigmoid(b); g = -exp(A_log) * softplus(a + dt_bias), softplus as the served
         //    kernel forms it (identity past 20).
         let beta = sigmoid(&b)?;
-        let dt_bias = self.dt_bias.to_dtype(DType::F32)?.unsqueeze(0)?.unsqueeze(0)?;
+        let dt_bias = self
+            .dt_bias
+            .to_dtype(DType::F32)?
+            .unsqueeze(0)?
+            .unsqueeze(0)?;
         let xa = a.broadcast_add(&dt_bias)?;
         let sp = {
             let pos = (xa.clone() + (xa.neg()?.exp()? + 1.0)?.log()?)?;
@@ -948,9 +974,12 @@ impl QGatedDeltaNet {
         // 5. Tile q, k to the V-head count: V head j reads key head j % num_k_heads.
         let (q, k) = if v_per_group > 1 {
             let tile = |t: &Tensor| {
-                t.unsqueeze(2)?
-                    .repeat((1, 1, v_per_group, 1, 1))?
-                    .reshape((batch_size, seq_len, self.num_v_heads, self.head_k_dim))
+                t.unsqueeze(2)?.repeat((1, 1, v_per_group, 1, 1))?.reshape((
+                    batch_size,
+                    seq_len,
+                    self.num_v_heads,
+                    self.head_k_dim,
+                ))
             };
             (tile(&q)?, tile(&k)?)
         } else {
@@ -974,28 +1003,40 @@ impl QGatedDeltaNet {
         let y = y.reshape(((), self.head_v_dim))?;
         let z = z.reshape(((), self.head_v_dim))?;
         let y = store(self.norm.forward(&y, &z)?)?;
-        let y = y.reshape(z_shape)?.reshape((batch_size, seq_len, self.value_dim))?;
+        let y = y
+            .reshape(z_shape)?
+            .reshape((batch_size, seq_len, self.value_dim))?;
         note("normed", &y);
 
         self.out_proj.forward(&y)?.to_dtype(rd)
     }
 
-    /// vLLM's causal conv (`causal_conv1d.py:398-478`): each tap's product rounded to `rd` (the
+    /// The served causal conv: each tap's product rounded to `rd` (the
     /// kernel multiplies two bf16 tensors), accumulated in f32 over the four taps in order, then
     /// silu in f32. The conv state (the last `kernel` inputs) advances as in the other paths.
-    fn causal_conv1d_served(&self, x: &Tensor, cache: &mut GdnLayerCache, rd: DType) -> Result<Tensor> {
+    fn causal_conv1d_served(
+        &self,
+        x: &Tensor,
+        cache: &mut GdnLayerCache,
+        rd: DType,
+    ) -> Result<Tensor> {
         let (_, seq_len, _) = x.dims3()?;
         let kw = self.conv_kernel_size;
         let x_t = x.transpose(1, 2)?.contiguous()?;
         let left = if cache.seqlen_offset > 0 {
-            cache.conv_state.narrow(D::Minus1, 1, kw - 1)?.to_dtype(DType::F32)?
+            cache
+                .conv_state
+                .narrow(D::Minus1, 1, kw - 1)?
+                .to_dtype(DType::F32)?
         } else {
             let (b, c, _) = cache.conv_state.dims3()?;
             Tensor::zeros((b, c, kw - 1), DType::F32, x.device())?
         };
         let hist = Tensor::cat(&[&left, &x_t], D::Minus1)?.contiguous()?;
         let total = hist.dim(D::Minus1)?;
-        cache.conv_state = hist.narrow(D::Minus1, total - kw, kw)?.to_dtype(cache.conv_state.dtype())?;
+        cache.conv_state = hist
+            .narrow(D::Minus1, total - kw, kw)?
+            .to_dtype(cache.conv_state.dtype())?;
         let weight = self.conv1d_weight.to_dtype(DType::F32)?;
         let mut acc: Option<Tensor> = None;
         for j in 0..kw {
@@ -1273,7 +1314,7 @@ impl PropsGGUF {
             .get_value::<Vec<i32>>("rope.dimension_sections")
             .ok()
             .map(|v| v.into_iter().map(|x| x.max(0) as usize).collect::<Vec<_>>())
-            // mrope_section sums to rot_dim/2; default [t,h,w,0] from llama.cpp is [11,11,10,0].
+            // mrope_section sums to rot_dim/2; the default [t,h,w,0] is [11,11,10,0].
             .unwrap_or_else(|| vec![11, 11, 10, 0]);
 
         let head_k_dim = c
@@ -1954,9 +1995,9 @@ mod tests {
         Ok(())
     }
 
-    /// One position of vLLM `Qwen3NextAttention.forward` in f64: `q`, `k`, `v` and `gate` are
-    /// `_project_qkv_gate` (`qwen3_next.py:384-444`), `y` is `self.attn` (`:453`) and `out` is
-    /// `o_proj(y * sigmoid(gate))` (`:454-456`).
+    /// One position of the full-attention block in f64: `q`, `k`, `v` and `gate` are the
+    /// projections (as `GatedFullAttention::project` returns them), `y` is the attention output
+    /// and `out` is `o_proj(y * sigmoid(gate))`.
     struct Row {
         q: Vec<f64>,
         k: Vec<f64>,
@@ -1995,7 +2036,7 @@ mod tests {
             .chunks(HIDDEN)
             .enumerate()
             .map(|(p, xt)| {
-                // q_proj interleaves `[q_h | gate_h]` per head (`qwen3_next.py:424-432`).
+                // q_proj interleaves `[q_h | gate_h]` per head.
                 let qg = linear(&w["blk.0.attn_q.weight"], xt);
                 let (mut q, mut gate) = (vec![], vec![]);
                 for head in qg.chunks(2 * HEAD_DIM) {

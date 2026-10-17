@@ -2,7 +2,7 @@
 
 //! GGUF DeepSeek-V4 (Flash/Pro) quantized model — `general.architecture = "deepseek4"`.
 //!
-//! Loads antirez's ds4 GGUF (`DeepSeek-V4-Flash-IQ2XXS-w2Q2K-…`) and runs the
+//! Loads the DeepSeek-V4 GGUF (`DeepSeek-V4-Flash-IQ2XXS-w2Q2K-…`) and runs the
 //! brand-new V4 architecture: **Hyper-Connections** (4-stream Sinkhorn residual),
 //! **absorbed-latent MLA** (single 512-dim K==V latent, per-head q-RMS, trailing
 //! partial-RoPE + inverse-RoPE on the output), attention **sinks**, **grouped
@@ -339,7 +339,7 @@ impl V4Attn {
     /// fused F32 flash-decode kernel directly: the model KNOWS this path is
     /// plain-causal + sinks + per-row window (exactly the kernel's semantics),
     /// sidestepping the generic mask-variant ambiguity at the sinks backend.
-    /// ds4-parity numerics AND kills the eager 3-pass on the latency-critical paths.
+    /// All-F32 numerics AND kills the eager 3-pass on the latency-critical paths.
     /// `window_override`: `None` = the layer's own sliding window; `Some(w)` forces
     /// `w` (`Some(0)` = NO clamp — used for pre-sliced combined `[window ++ comp]`
     /// buffers where every row is already visible by construction).
@@ -385,7 +385,7 @@ impl V4Attn {
     }
 
     /// Trailing partial-RoPE on `[B, nh, L, hd]` (and the single-head latent),
-    /// `inverse = true` un-rotates (the absorbed output path). ds4 rotates the
+    /// `inverse = true` un-rotates (the absorbed output path). The rotation covers the
     /// last `rope_dim` dims; the leading `head_dim - rope_dim` pass through.
     fn rope(&self, x: &Tensor, positions: &Tensor, inverse: bool) -> Result<Tensor> {
         let hd = self.head_dim;
@@ -507,7 +507,7 @@ impl V4Attn {
         // Diagnostic kill-switch (env V4_DISABLE_COMPRESSOR=1): drop the compressed-KV
         // rows from prefill attention entirely — at ctx <= window the raw rows cover
         // everything, so this isolates whether the compressor path shifts the logits
-        // vs the ds4 reference. Not for production (>window ctx needs the rows).
+        // vs the reference logits. Not for production (>window ctx needs the rows).
         static DISABLE_COMPRESSOR: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let disable_compressor = *DISABLE_COMPRESSOR
             .get_or_init(|| std::env::var("V4_DISABLE_COMPRESSOR").is_ok_and(|v| v == "1"));
@@ -640,7 +640,7 @@ impl V4Attn {
             // decode AND MTP/EAGLE verify widths) take the fused F32 flash-decode
             // kernel directly: the model KNOWS this arm is plain-causal + sinks +
             // per-row window (exactly the kernel's semantics), sidestepping the
-            // generic mask-variant ambiguity at the sinks backend. ds4-parity
+            // generic mask-variant ambiguity at the sinks backend. All-F32
             // numerics AND kills the eager 3-pass on the latency-critical paths.
             _ => self.dense_attn(&q, &k, &v, mask, b, None)?,
         };
@@ -957,7 +957,7 @@ impl DecoderLayer {
         swiglu_clamp: f32,
     ) -> Result<Self> {
         let is_full = compress_ratio == 0;
-        // Attention grouped-o weight. Reshape to the ds4 row-major [groups, rank,
+        // Attention grouped-o weight. Reshape to the row-major [groups, rank,
         // group_in] layout, then pre-transpose to the matmul-ready [groups, group_in,
         // rank] ONCE here — the forward previously re-transposed+copied this 32Mi bf16
         // constant every token (~33% of decode GPU time).
@@ -1205,7 +1205,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         // BF16), NOT from any particular dtype: consistency is the fix, threading is
         // how. Quant weights dequantize to it at the QMatMul boundary; precision-
         // sensitive ops (RMS-norm/RoPE/softmax-sinks) upcast to F32 internally and
-        // return it. For ds4 NUMERIC parity, the *benchmark* requests F32 at the
+        // return it. For NUMERIC parity with the reference, the *benchmark* requests F32 at the
         // pipeline (so cache + model are both F32) — that's a caller choice, not a
         // model hardcode.
         let props = PropsGGUF::try_from(ContentMetadata {
@@ -1286,7 +1286,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let mode = layer_mode(&props.compress_ratios, i, props.sliding_window);
             // Diagnostic (env V4_FORCE_FULL_ROPE=1): give EVERY layer the Full rope map
             // (θ=rope_theta, no YaRN). Numerically wrong on compressed layers by design —
-            // used to discriminate whether the layer-2+ drift vs ds4 comes from the
+            // used to discriminate whether the layer-2+ drift from the reference comes from the
             // compressed rope path (drift signature changes) or elsewhere (identical).
             static FORCE_FULL_ROPE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
             let force_full = *FORCE_FULL_ROPE
@@ -1509,8 +1509,8 @@ impl ModelWeights {
         }
 
         // Per-layer numeric trace (env V4_TRACE_LAYERS=1, prefill only): last-position
-        // carrier stream-sum L2 + stream-0 L2 + first-4 values per layer — the hanzo
-        // half of the ds4 divergence bisection (pairs with ds4's DS4_TRACE_LAYERS).
+        // carrier stream-sum L2 + stream-0 L2 + first-4 values per layer, to bisect a
+        // divergence from a reference trace layer by layer.
         static TRACE_LAYERS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let trace_layers = *TRACE_LAYERS
             .get_or_init(|| std::env::var("V4_TRACE_LAYERS").is_ok_and(|v| v == "1"))

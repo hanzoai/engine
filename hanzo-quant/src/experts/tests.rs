@@ -1,4 +1,5 @@
-//! Kernel tests against CPU references and vLLM's own outputs (`tests/fixtures/moe_*`).
+//! Kernel tests against CPU references and the served kernels' recorded outputs
+//! (`tests/fixtures/moe_*`).
 //!
 //! GPU runs follow the box's memory rule: the first CUDA action creates the device and
 //! allocates the test's declared peak; any CUDA out-of-memory there panics with
@@ -187,7 +188,9 @@ fn route_matches_stable_sort() -> Result<()> {
         let uniform = distinct(&mut rng, m, k, e);
         check_route(&dev, &uniform, m, k, e, &format!("uniform M={m}"))?;
         // Every token on the same ten experts.
-        let hot: Vec<u32> = (0..m * k).map(|f| (37 + 41 * (f % k)) as u32 % e as u32).collect();
+        let hot: Vec<u32> = (0..m * k)
+            .map(|f| (37 + 41 * (f % k)) as u32 % e as u32)
+            .collect();
         check_route(&dev, &hot, m, k, e, &format!("hot M={m}"))?;
         // Round robin: every expert once M*k >= E.
         let rr: Vec<u32> = (0..m * k).map(|f| (f % e) as u32).collect();
@@ -276,7 +279,9 @@ fn combine_rules_are_exact() -> Result<()> {
                     continue; // 210 MB of y; the other 4096 cases cover the grid stride
                 }
                 let r = m * k;
-                let y: Vec<bf16> = (0..r * h).map(|_| bf16::from_f32(special(&mut rng))).collect();
+                let y: Vec<bf16> = (0..r * h)
+                    .map(|_| bf16::from_f32(special(&mut rng)))
+                    .collect();
                 // A random permutation for dst.
                 let mut dst: Vec<i32> = (0..r as i32).collect();
                 for i in (1..r).rev() {
@@ -289,8 +294,7 @@ fn combine_rules_are_exact() -> Result<()> {
                         _ => rng.unit(),
                     })
                     .collect();
-                let addend: Vec<bf16> =
-                    (0..m * h).map(|_| bf16::from_f32(rng.normal())).collect();
+                let addend: Vec<bf16> = (0..m * h).map(|_| bf16::from_f32(rng.normal())).collect();
                 let yt = Tensor::from_slice(&y, (r, h), &dev)?;
                 let dt = Tensor::from_slice(&dst, r, &dev)?;
                 let wt = Tensor::from_slice(&w, (m, k), &dev)?;
@@ -301,19 +305,12 @@ fn combine_rules_are_exact() -> Result<()> {
                             .flatten_all()?
                             .to_vec1::<bf16>()?;
                         let got: Vec<u16> = got.iter().map(|x| x.to_bits()).collect();
-                        let want = combine_ref(
-                            &y,
-                            &dst,
-                            &w,
-                            with.then_some(&addend[..]),
-                            m,
-                            k,
-                            h,
-                            rule,
-                        );
+                        let want =
+                            combine_ref(&y, &dst, &w, with.then_some(&addend[..]), m, k, h, rule);
                         let bad = got.iter().zip(&want).filter(|(a, b)| a != b).count();
                         assert_eq!(
-                            bad, 0,
+                            bad,
+                            0,
                             "combine {rule:?} addend={with} M={m} H={h} k={k}: {bad} of {} differ",
                             want.len()
                         );
@@ -327,7 +324,9 @@ fn combine_rules_are_exact() -> Result<()> {
     let dst = Tensor::from_slice(&[0i32, 1], 2, &dev)?;
     let w = Tensor::from_slice(&[1.0f32, 1.0], (1, 2), &dev)?;
     for rule in [Rule::Finalize, Rule::Sum] {
-        let out = combine(&y, &dst, &w, None, rule)?.flatten_all()?.to_vec1::<bf16>()?;
+        let out = combine(&y, &dst, &w, None, rule)?
+            .flatten_all()?
+            .to_vec1::<bf16>()?;
         assert!(out.iter().all(|x| x.to_bits() == 0), "{rule:?}: -0 row");
     }
     println!("combine: all cases exact ({})", meminfo());
@@ -389,7 +388,10 @@ pub(super) fn host<T: hanzo_ml::WithDType>(t: &Tensor) -> Vec<T> {
 pub(super) fn bytes(t: &Tensor) -> Vec<u8> {
     match t.dtype() {
         DType::U8 => host::<u8>(t),
-        DType::F8E4M3 => host::<float8::F8E4M3>(t).iter().map(|v| v.to_bits()).collect(),
+        DType::F8E4M3 => host::<float8::F8E4M3>(t)
+            .iter()
+            .map(|v| v.to_bits())
+            .collect(),
         d => panic!("no byte view of {d:?}"),
     }
 }
@@ -433,7 +435,11 @@ pub(super) fn gap(got: &[f32], want: &[f32], cols: usize) -> Gap {
             nw += (*b as f64).powi(2);
             err += ((*a as f64) - (*b as f64)).powi(2);
         }
-        let cos = if ng == 0.0 && nw == 0.0 { 1.0 } else { dot / (ng.sqrt() * nw.sqrt()) };
+        let cos = if ng == 0.0 && nw == 0.0 {
+            1.0
+        } else {
+            dot / (ng.sqrt() * nw.sqrt())
+        };
         min_cos = min_cos.min(cos);
     }
     ulps.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -555,7 +561,18 @@ mod nvfp4_cases {
         let w = g("weights");
         let (m, k) = ids.dims2().unwrap();
         let (h, i) = (ex.hidden(), ex.inter());
-        Case { tag, ex, x, ids, w, fx, m, k, h, i }
+        Case {
+            tag,
+            ex,
+            x,
+            ids,
+            w,
+            fx,
+            m,
+            k,
+            h,
+            i,
+        }
     }
 
     pub struct Run {
@@ -606,8 +623,8 @@ mod nvfp4_cases {
     }
 }
 
-/// T5: codes and scale bytes of every routed row equal vLLM's scaled_fp4_quant, in each group's
-/// swizzled block; the grouped arguments carry the route's row counts.
+/// T5: codes and scale bytes of every routed row equal the fixture's scaled_fp4_quant, in each
+/// group's swizzled block; the grouped arguments carry the route's row counts.
 #[test]
 fn nvfp4_expand() -> Result<()> {
     use crate::experts::Tile;
@@ -638,7 +655,10 @@ fn nvfp4_expand() -> Result<()> {
                     }
                 }
             }
-            assert_eq!(bad, 0, "{tag} {tile:?}: {bad} rows/scales differ from scaled_fp4_quant");
+            assert_eq!(
+                bad, 0,
+                "{tag} {tile:?}: {bad} rows/scales differ from scaled_fp4_quant"
+            );
             // Grouped arguments: problem shapes first, three ints per group.
             let groups = r.min(c.ex.experts());
             let shapes = read::<i32>(&dev, &run.ws, run.layout.args1, 3 * groups);
@@ -654,7 +674,11 @@ fn nvfp4_expand() -> Result<()> {
                     Tile::P => (shapes[3 * g], shapes[3 * g + 1], shapes[3 * g + 2]),
                     _ => (shapes[3 * g + 1], shapes[3 * g], shapes[3 * g + 2]),
                 };
-                assert_eq!((mm, nn, kk), (rows, 2 * c.i as i32, h as i32), "{tag} {tile:?} group {g}");
+                assert_eq!(
+                    (mm, nn, kk),
+                    (rows, 2 * c.i as i32, h as i32),
+                    "{tag} {tile:?} group {g}"
+                );
             }
         }
         // Edge rows of the synthetic case: zeros give scale 0 and code 0; saturating rows reach
@@ -682,7 +706,7 @@ fn unsort(dev: &Device, ws: &Tensor, off: usize, dst: &[i32], cols: usize) -> Ve
     out
 }
 
-/// T6: both grouped GEMMs against vLLM's dense NVFP4 GEMM per expert, on every tile.
+/// T6: both grouped GEMMs against the fixture's dense NVFP4 GEMM per expert, on every tile.
 #[test]
 fn nvfp4_gemm() -> Result<()> {
     use crate::experts::nvfp4::Stage;
@@ -701,11 +725,17 @@ fn nvfp4_gemm() -> Result<()> {
             let run = expand(&dev, &mut c, tile);
             c.ex.exec(&run.bound, Stage::Gemm1, Stage::Gemm1)?;
             let raw = read::<u16>(&dev, &run.ws, run.layout.y1, r * 2 * i);
-            assert!(raw.iter().all(|&v| v != 0xFFFF), "{tag} {tile:?}: GEMM1 left rows unwritten");
+            assert!(
+                raw.iter().all(|&v| v != 0xFFFF),
+                "{tag} {tile:?}: GEMM1 left rows unwritten"
+            );
             let got1 = unsort(&dev, &run.ws, run.layout.y1, &run.dst, 2 * i);
             let g1 = gap(&got1, &want1, 2 * i);
             println!("nvfp4_gemm {tag} {tile:?} GEMM1 {g1:?}");
-            assert!(g1.bit_exact >= 0.999 && g1.max_ulp <= 1.0, "{tag} {tile:?} GEMM1 {g1:?}");
+            assert!(
+                g1.bit_exact >= 0.999 && g1.max_ulp <= 1.0,
+                "{tag} {tile:?} GEMM1 {g1:?}"
+            );
 
             // GEMM2 on the probe's activation, written into the act output region.
             let cols = i / 16;
@@ -713,7 +743,8 @@ fn nvfp4_gemm() -> Result<()> {
             let mut s2 = read::<u8>(&dev, &run.ws, run.layout.s2, run.layout.a1 - run.layout.s2);
             for f in 0..r {
                 let (e, pos) = (ids[f], run.dst[f] as usize);
-                a2[pos * i / 2..(pos + 1) * i / 2].copy_from_slice(&codes[f * i / 2..(f + 1) * i / 2]);
+                a2[pos * i / 2..(pos + 1) * i / 2]
+                    .copy_from_slice(&codes[f * i / 2..(f + 1) * i / 2]);
                 let (base, row) = sf_at(&run, e, pos, cols);
                 for b in 0..cols {
                     s2[sf_byte(base, row, b, cols)] = scales[f * cols + b];
@@ -725,7 +756,10 @@ fn nvfp4_gemm() -> Result<()> {
             let got2 = unsort(&dev, &run.ws, run.layout.y2, &run.dst, h);
             let g2 = gap(&got2, &want2, h);
             println!("nvfp4_gemm {tag} {tile:?} GEMM2 {g2:?}");
-            assert!(g2.bit_exact >= 0.999 && g2.max_ulp <= 1.0, "{tag} {tile:?} GEMM2 {g2:?}");
+            assert!(
+                g2.bit_exact >= 0.999 && g2.max_ulp <= 1.0,
+                "{tag} {tile:?} GEMM2 {g2:?}"
+            );
         }
     }
     Ok(())
@@ -760,7 +794,8 @@ fn nvfp4_act() -> Result<()> {
             let mut y1 = vec![bf16::ZERO; r * 2 * i];
             for f in 0..r {
                 let pos = run.dst[f] as usize;
-                y1[pos * 2 * i..(pos + 1) * 2 * i].copy_from_slice(&gemm1[f * 2 * i..(f + 1) * 2 * i]);
+                y1[pos * 2 * i..(pos + 1) * 2 * i]
+                    .copy_from_slice(&gemm1[f * 2 * i..(f + 1) * 2 * i]);
             }
             write(&dev, &run.ws, run.layout.y1, &y1);
             c.ex.exec(&run.bound, Stage::Act, Stage::Act)?;
@@ -774,14 +809,20 @@ fn nvfp4_act() -> Result<()> {
                 for col in 0..i {
                     let byte = a2[pos * i / 2 + col / 2];
                     let code = if col % 2 == 0 { byte & 0xF } else { byte >> 4 };
-                    let sc = float8::F8E4M3::from_bits(s2[sf_byte(base, row, col / 16, cols)]).to_f32();
+                    let sc =
+                        float8::F8E4M3::from_bits(s2[sf_byte(base, row, col / 16, cols)]).to_f32();
                     let got = decode(code) * sc;
                     if got != want[f * i + col] {
                         bad += 1;
                     }
                 }
             }
-            assert_eq!(bad, 0, "{tag} {tile:?}: {bad} of {} act values differ from FlashInfer", r * i);
+            assert_eq!(
+                bad,
+                0,
+                "{tag} {tile:?}: {bad} of {} act values differ from FlashInfer",
+                r * i
+            );
             println!("nvfp4_act {tag} {tile:?}: {} values exact", r * i);
         }
     }
@@ -811,7 +852,11 @@ fn nvfp4_forward() -> Result<()> {
                     Some(f) => assert_eq!(f, &bits, "{tag} {tile:?}: runs differ"),
                 }
             }
-            let got: Vec<f32> = first.unwrap().iter().map(|&b| bf16::from_bits(b).to_f32()).collect();
+            let got: Vec<f32> = first
+                .unwrap()
+                .iter()
+                .map(|&b| bf16::from_bits(b).to_f32())
+                .collect();
             let g = gap(&got, &want, c.h);
             let ratio = norm(&got, &want) / fi_err;
             println!("nvfp4_forward {tag} {tile:?} {g:?} ||ours-FI||/||FI-ref32|| = {ratio:.4}");
@@ -843,12 +888,17 @@ fn nvfp4_forward() -> Result<()> {
         .unwrap();
     c.ex.exec(&bound, Stage::Route, Stage::Combine)?;
     let graph = stream
-        .end_capture(sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH)
+        .end_capture(
+            sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+        )
         .unwrap()
         .expect("captured graph");
     let mut rng = Rng::new(99);
     let x2: Vec<bf16> = (0..m * h).map(|_| bf16::from_f32(rng.normal())).collect();
-    let ids2: Vec<i32> = distinct(&mut rng, m, k, 512).iter().map(|&v| v as i32).collect();
+    let ids2: Vec<i32> = distinct(&mut rng, m, k, 512)
+        .iter()
+        .map(|&v| v as i32)
+        .collect();
     let w2: Vec<f32> = (0..m * k).map(|_| rng.unit()).collect();
     write(&dev, &x, 0, &x2);
     write(&dev, &ids, 0, &ids2);
@@ -871,16 +921,26 @@ fn nvfp4_forward() -> Result<()> {
         let sf_rows = |_: usize| (r + g * 127).div_ceil(128) * 128 + 128;
         let (hh, ii) = (c.ex.hidden(), c.ex.inter());
         let region_a = al(r * ii / 2) + al(sf_rows(0) * ii / 16);
-        let region_s = (al(r * hh / 2) + al(sf_rows(0) * hh / 16) + al(r * 2 * ii * 2)).max(al(r * hh * 2));
-        assert_eq!(l.total, fixed + region_a + region_s, "arena formula at M={m}");
-        println!("nvfp4 arena M={m}: {} bytes ({} fixed + {} act + {} gemm)", l.total, fixed, region_a, region_s);
+        let region_s =
+            (al(r * hh / 2) + al(sf_rows(0) * hh / 16) + al(r * 2 * ii * 2)).max(al(r * hh * 2));
+        assert_eq!(
+            l.total,
+            fixed + region_a + region_s,
+            "arena formula at M={m}"
+        );
+        println!(
+            "nvfp4 arena M={m}: {} bytes ({} fixed + {} act + {} gemm)",
+            l.total, fixed, region_a, region_s
+        );
     }
 
     // new() refuses a gate/up weight_scale_2 mismatch and a hidden size off the 128 grid.
     let g = |n: &str| c.fx[&format!("s.{n}")].clone();
     let e = g("w13").dim(0)?;
     let bad = Tensor::from_vec(
-        (0..2 * e).map(|v| if v == 1 { 0.5f32 } else { 0.01 }).collect::<Vec<_>>(),
+        (0..2 * e)
+            .map(|v| if v == 1 { 0.5f32 } else { 0.01 })
+            .collect::<Vec<_>>(),
         (e, 2),
         &dev,
     )?;

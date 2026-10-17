@@ -2,8 +2,9 @@
 """Bytes one decode step moves, two ways, never substituted for each other.
 
   weights  COMPUTED weight + KV + recurrent-state bytes per token, from the safetensors headers
-           (only the header bytes are read) and config.json. The method behind SGLang's 19.44 GB
-           and hanzo's 26.65 GB in LLM.md section 3b.
+           (only the header bytes are read) and config.json. The method behind LLM.md's per-token
+           figures: 19.44 GB for the checkpoint as published (NVFP4), 26.65 GB with hanzo's FP8
+           layers.
   nsys     MEASURED SM-to-L2 bytes per token ('VidL2 Total from L1TEX [Bytes]', GB10's gb20y-top
            metric set) and GPU seconds per decode step (kernel time inside NVTX `decode` ranges),
            from an `nsys export --type sqlite` file. GB10 exposes no DRAM counter, so this is L2

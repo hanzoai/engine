@@ -6,14 +6,15 @@ The prompt is a uuid nonce (so no prefix cache can serve it), WORDS repeated `si
 Qwen3.8 tokens; the prompt length reported is the server's own usage.prompt_tokens.
 
 A token chunk is a chunk whose delta carries content, reasoning, reasoning_content or tool_calls
-(vLLM streams thinking as `reasoning`, hanzo as `reasoning_content`). Timing uses token chunks only:
+(a server streams thinking under `reasoning` or `reasoning_content`; hanzo uses the latter).
+Timing uses token chunks only:
 
   TTFT   = first token chunk - send
   decode = (usage.completion_tokens - 1) / (last token chunk - first token chunk)
 
 Under speculation one chunk carries several tokens, so tokens come from usage, never from chunk
-counts, and a stream without usage fails. Gaps between token chunks are one sample per step, the
-way vLLM records inter-token latency under speculation.
+counts, and a stream without usage fails. Gaps between token chunks are one sample per step: a
+step that emits several accepted draft tokens is still one inter-token gap.
 
 Output is one JSON line per request (and one aggregate line per concurrent batch) on stdout.
 """
@@ -167,8 +168,8 @@ def run_batch(args, model, size, concurrency, label, on_first=None):
 
 
 # ---------------------------------------------------------------------------------------------
-# /metrics check. Families are vLLM's names; hanzo serves the same names under `hanzo:` plus
-# mamba_usage_perc for hybrid models. Spec families exist only when a proposer is attached.
+# /metrics check. Families are the names hanzo serves under `hanzo:`, plus mamba_usage_perc for
+# hybrid models. Spec families exist only when a proposer is attached.
 
 CORE = [
     "num_requests_running", "num_requests_waiting", "kv_cache_usage_perc",
@@ -184,7 +185,7 @@ SPEC = [
     "spec_decode_num_drafts", "spec_decode_num_draft_tokens",
     "spec_decode_num_accepted_tokens", "spec_decode_num_accepted_tokens_per_pos",
 ]
-HYBRID = {"hanzo": ["mamba_usage_perc"], "vllm": []}
+HYBRID = {"hanzo": ["mamba_usage_perc"]}
 SUFFIXES = ("_total", "_created", "_bucket", "_sum", "_count")
 
 
@@ -241,10 +242,9 @@ ALL_FAMILIES = set(CORE) | set(SPEC) | {"mamba_usage_perc"}
 
 
 def detect_prefix(samples):
-    for prefix in ("hanzo", "vllm"):
-        if any(n.startswith(prefix + ":") for n in samples):
-            return prefix
-    raise RuntimeError("no hanzo: or vllm: metrics")
+    if any(n.startswith("hanzo:") for n in samples):
+        return "hanzo"
+    raise RuntimeError("no hanzo: metrics")
 
 
 def required_families(prefix, expect):

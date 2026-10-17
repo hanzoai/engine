@@ -42,7 +42,7 @@ pub trait GdnConfig {
 
 // ====================== RMSNorm Gated ======================
 
-/// The gate's activation. vLLM `RMSNormGated` accepts silu or sigmoid (`layernorm.py:248-249`).
+/// The gate's activation: silu or sigmoid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Act {
     Silu,
@@ -50,7 +50,7 @@ enum Act {
 }
 
 /// RMSNorm with gating: `rms_norm(x) * weight * act(gate)`, the norm taken before the gate
-/// (vLLM `RMSNormGated`, `norm_before_gate=True`, `layernorm.py:243-269`). The gate is silu
+/// (`norm_before_gate=True`). The gate is silu
 /// unless [`RmsNormGated::sigmoid`] switches it.
 pub struct RmsNormGated {
     pub weight: Tensor,
@@ -81,8 +81,7 @@ impl RmsNormGated {
         }
     }
 
-    /// Gate with `sigmoid(gate)`, as a GDN with `output_gate_type = "sigmoid"` does
-    /// (vLLM `qwen_gdn_linear_attn.py:471-484`).
+    /// Gate with `sigmoid(gate)`, as a GDN whose config sets `output_gate_type = "sigmoid"` does.
     pub fn sigmoid(self) -> Self {
         Self {
             act: Act::Sigmoid,
@@ -1323,8 +1322,8 @@ mod tests {
         )?))
     }
 
-    /// vLLM `RMSNormGated.forward_static` with `norm_before_gate=True` and one group, in f64
-    /// (`layernorm.py:243-269`): each row is `x * rsqrt(mean(x²) + eps) * w * act(z)`.
+    /// The gated RMSNorm with `norm_before_gate=True` and one group, in f64: each row is
+    /// `x * rsqrt(mean(x²) + eps) * w * act(z)`.
     fn gated_norm_reference(x: &[f64], z: &[f64], w: &[f64], eps: f64, sigmoid: bool) -> Vec<f64> {
         let n = w.len();
         let mut out = Vec::with_capacity(x.len());

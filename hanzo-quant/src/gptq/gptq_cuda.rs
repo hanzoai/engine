@@ -31,7 +31,7 @@ use crate::{
 
 use super::{
     ffi::{
-        gemm_half_q_half_alt, gemm_half_q_half_cuda_part, reconstruct_exllama, reconstruct_gptq,
+        gemm_half_q_half_alt, gemm_half_q_half_cuda_part, reconstruct_gptq, reconstruct_shuffled,
     },
     marlin_ffi::HAVE_MARLIN_KERNELS,
 };
@@ -70,22 +70,22 @@ pub struct GptqLayer {
     bias: Option<Tensor>,   // f16
     g_idx: Option<Tensor>,  // i32
     bits: i32,
-    use_exllama: bool,
+    is_shuffled: bool,
     workspace: Option<Tensor>,
     is_marlin: bool,
     is_awq: bool,
 }
 
 impl GptqLayer {
-    // https://github.com/vllm-project/vllm/blob/966fe72141e8365721840b7ababfb78601c23ead/csrc/quantization/gptq/q_gemm.cu#L1490
-    // https://github.com/vllm-project/vllm/blob/966fe72141e8365721840b7ababfb78601c23ead/csrc/quantization/gptq/q_gemm.cu#L1823
+    // `a @ W`: past the row limits, dequantize W to FP16 and run cuBLAS; below them, run the
+    // quantized GEMM on the packed weights (shuffled layout) or the alt kernel (plain layout).
     fn gptq_gemm(
         &self,
         a: Tensor,
         g_idx: &Tensor,
         qzeros: &Tensor,
         groups: i32,
-        use_exllama: bool,
+        is_shuffled: bool,
     ) -> Result<Tensor> {
         if !a.is_contiguous() {
             hanzo_ml::bail!(
@@ -173,7 +173,7 @@ impl GptqLayer {
         let temp_dq_ptr =
             get_tmp_dq_buffer(len).expect("Temporary dequantization buffer not found");
 
-        let use_reconstruct = if use_exllama {
+        let use_reconstruct = if is_shuffled {
             (self.bits == 8 && m > MAX_Q_GEMM_ROWS_8BIT) || (self.bits != 8 && m > MAX_Q_GEMM_ROWS)
         } else {
             // The 2/3-bit kernels are somehow slower than dequant + gemm baseline, so
@@ -183,8 +183,8 @@ impl GptqLayer {
 
         if use_reconstruct {
             // Reconstruct FP16 matrix, then cuBLAS
-            let reconstruct_kernel = if use_exllama {
-                reconstruct_exllama
+            let reconstruct_kernel = if is_shuffled {
+                reconstruct_shuffled
             } else {
                 reconstruct_gptq
             };
@@ -224,7 +224,7 @@ impl GptqLayer {
                 )
                 .w()?
             };
-        } else if use_exllama {
+        } else if is_shuffled {
             let max_chunks = m / BLOCK_M_SIZE_MAX;
             let last_chunk = max_chunks * BLOCK_M_SIZE_MAX;
             let last_chunk_size = m - last_chunk;
@@ -302,7 +302,7 @@ impl QuantMethod for GptqLayer {
         match method {
             QuantMethodConfig::GptqAwq {
                 bits,
-                use_exllama,
+                is_shuffled,
                 q_weight,
                 qzeros,
                 scales,
@@ -327,7 +327,7 @@ impl QuantMethod for GptqLayer {
                     scales,
                     g_idx,
                     bits,
-                    use_exllama,
+                    is_shuffled,
                     bias,
                     workspace,
                     is_marlin,
@@ -356,7 +356,7 @@ impl QuantMethod for GptqLayer {
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
-        // https://github.com/vllm-project/vllm/blob/ba991d5c84adbc0685075af88333c688ddb06011/vllm/model_executor/layers/quantization/gptq.py#L200
+        // Flatten the leading dims into rows, GEMM, then restore them.
         let out_shape = Shape::from_dims(
             &[
                 &a.dims()[..a.dims().len() - 1],
@@ -376,7 +376,7 @@ impl QuantMethod for GptqLayer {
                     g_idx,
                     qzeros,
                     qzeros.dim(0)? as i32,
-                    self.use_exllama,
+                    self.is_shuffled,
                 )?
                 .reshape(out_shape)?,
             (_, _, true) => marlin_matmul(
@@ -502,7 +502,7 @@ pub fn gptq_linear(
     let config = if marlin_format {
         QuantMethodConfig::GptqAwq {
             bits: *bits as i32,
-            use_exllama: false,
+            is_shuffled: false,
             q_weight: qweight,
             qzeros: None,
             scales,
@@ -594,7 +594,7 @@ pub fn gptq_linear(
 
         QuantMethodConfig::GptqAwq {
             bits: *bits as i32,
-            use_exllama: false,
+            is_shuffled: false,
             q_weight: qweight,
             qzeros: Some(qzeros),
             scales,

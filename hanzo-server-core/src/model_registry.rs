@@ -151,7 +151,7 @@ fn zen_sku_table() -> &'static [ZenSku] {
             quant: None,
             modality: Modality::Text,
         },
-        // Zen5 Pro/Max ride on DeepSeek V4 (Flash / Pro). DS4 is not on main;
+        // Zen5 Pro/Max ride on DeepSeek V4 (Flash / Pro). DeepSeek V4 is not on main;
         // flip to Supported once the deepseek-v4 arch (hanzo-engine zen5.rs)
         // lands in hanzo-engine.
         ZenSku {

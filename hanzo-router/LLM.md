@@ -84,12 +84,9 @@ PID -- NEVER `pkill -f "release/hanzo serve"` (the pattern self-matches your own
 ## Zen 5.8 / Qwen 3.8 Blackwell Cluster Topology (Live Production)
 
 ### Upstream Engines
-- **Spark (`:30000`)**: Blackwell GB10 running SGLang (`hanzo-sglang.service`):
-  - Model: `RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead`
-  - Flags: `--host 0.0.0.0 --port 30000 --mem-fraction-static 0.65 --max-running-requests 8 --reasoning-parser qwen3 --tool-call-parser qwen3_coder`
-  - Radix KV cache with chunked prefill at ~1,700 tok/s, CUDA graph acceleration, native Anthropic /v1/messages tool_use parsing.
-- **Evo (`:8080`)**: Strix Halo gfx1151 running `llama-server`:
-  - Model: `Qwen3.8-27B-Q6_K.gguf`
+- **Spark (`:30000`)**: Blackwell GB10, model `RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead`: chunked prefill
+  at ~1,700 tok/s, CUDA graphs, native Anthropic `/v1/messages` tool_use parsing.
+- **Evo (`:8080`)**: Strix Halo gfx1151, model `Qwen3.8-27B-Q6_K.gguf`.
 
 ### Native Rust Router (`:1235`, on Spark)
 - Service: `hanzo-router.service` on Spark.
@@ -113,7 +110,7 @@ Or via the public cloud gateway `https://api.hanzo.ai` (routed to the AI Lab gra
 ### Python Coderouter Decommissioning
 - Python `coderouter.service` has been permanently disabled and stopped on all cluster nodes.
 - Zero runtime Python router dependency; pure Rust `hanzo-router` handles all load balancing, streaming, session affinity, and wire normalization.
-- Mid-conversation non-leading system messages are normalized in `src/proxy.rs` (prefixed with `[System]: ` as user role) and in SGLang chat templates, eliminating 400 Jinja errors from Claude Code / dev agents.
+- Mid-conversation non-leading system messages are normalized in `src/proxy.rs` (prefixed with `[System]: ` as user role) and in spark's chat template, eliminating 400 Jinja errors from Claude Code / dev agents.
 - Public ingress routes on `https://api.hanzo.ai` (`/v1/models`, `/v1/messages`) route via Traefik to `hanzo-router:1235`.
 - Isolated Claude Code profile `~/.claude-hanzo` configured; alias `hanzo-code` available in `~/.zshrc` to prevent collisions between personal `claude.ai` OAuth subscriptions and custom API routing.
 - Sub-agent and role-based steering: `hanzo-router` infers agent roles from wire models and query sources. Sub-agents, titles, fast summaries, and `haiku`/`flash` requests automatically route to **Evo** (AMD Strix Halo APU, `Qwen3.8-27B-Q6_K.gguf` via Vulkan RADV with 300ms TTFT), while main agent implementation and `opus`/`sonnet` queries route to **Spark** (DGX Spark Blackwell GB10 NVFP4).

@@ -344,8 +344,7 @@ impl ModelConfig::FromGGML for ModelWeights {
     }
 }
 
-// llama `llm` fields:
-// https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#llm
+// llama `llm` fields (the GGUF specification's `[llm].` metadata keys):
 // NOTE: Types here do not match spec
 pub(crate) struct PropsGGUF {
     pub n_expert: usize,

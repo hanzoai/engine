@@ -15,7 +15,7 @@
 //! DeepSeek-V3.2 / V4 and GLM-5, parameterized purely by
 //! `index_n_heads` / `index_head_dim` / `index_topk`.
 //!
-//! # Indexer math (per the `ds4.c` reference, `indexer_allowed_decode_one`)
+//! # Indexer math
 //!
 //! For a query token `i` and a candidate (key) token `c`:
 //!

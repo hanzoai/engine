@@ -380,8 +380,7 @@ fn parse_gemma4_tool_call_arguments(messages: &mut [IndexMap<String, MessageCont
 /// **user** message, but the OpenAI API sends `role: "tool"` as separate
 /// messages. This function replaces consecutive `role: "tool"` messages
 /// with a single `role: "user"` message carrying the `tool_responses`
-/// field, matching the format used by the reference implementations
-/// (llama.cpp `convert_tool_responses_gemma4`, HF transformers).
+/// field, matching the format HF transformers builds for this template.
 ///
 /// Additionally, when the preceding assistant message has structured
 /// `tool_calls`, its raw-JSON `content` is cleared so the template only

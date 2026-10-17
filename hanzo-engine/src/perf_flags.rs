@@ -72,8 +72,8 @@ pub(crate) fn vulkan_graphs_enabled() -> bool {
 
 // Dense fixed-shape prefill graph capture (single-sequence, offset-0 first prompt chunk). Default off,
 // and additionally gated by cuda_graphs_enabled(): capturing the prefill collapses its eager launches
-// into one replay and recovers part of the prefill GPU-idle gap, but it does not close the whole gap
-// to llama, and replay is not yet bit-exact for chunked/large prefill (greedy output diverged on a
+// into one replay and recovers part of the prefill GPU-idle gap, but it does not close the whole gap,
+// and replay is not yet bit-exact for chunked/large prefill (greedy output diverged on a
 // long prompt) — so it fails the exactness bar for a default-on path and stays behind
 // CUDA_PREFILL_GRAPHS=1 for continued hardening. Eager prefill remains the correct default.
 #[cfg(feature = "cuda")]

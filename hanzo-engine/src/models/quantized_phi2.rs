@@ -165,8 +165,7 @@ fn layer_norm(w: QTensor, b: QTensor, eps: f64) -> Result<LayerNorm> {
     Ok(ln)
 }
 
-// phi2 `llm` fields:
-// https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#llm
+// phi2 `llm` fields (the GGUF specification's `[llm].` metadata keys):
 // NOTE: Types here do not match spec
 struct PropsGGUF {
     head_count: usize,

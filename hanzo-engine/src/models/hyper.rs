@@ -3,8 +3,7 @@
 //! Gated-residual hyper-connections, the residual of zen6 (Qwen3.8-Flash-Next).
 //!
 //! The residual is `n` parallel streams. Each block reads one gated mean of them and writes its
-//! output back into every stream through that stream's own gate (vLLM
-//! `qwen4_exp/common/hyperconnection.py:196-242`, served as the kernels in `nvidia/ops/hc.py`):
+//! output back into every stream through that stream's own gate:
 //!
 //! ```text
 //! xn_s = x_s / rms(x_s) · w_s                                  per stream, w = 1 + w_gemma
@@ -13,11 +12,10 @@
 //! ```
 //!
 //! The mixer before the LM head is the same `u` with no write-back. States are
-//! `[batch, seq, n, hidden]`, stream outer, which is vLLM's `[..., n·hidden]` layout.
+//! `[batch, seq, n, hidden]`, stream outer, so flattened they are the weights' `[..., n·hidden]`.
 //!
 //! The norm, `silu(r / n)`, the gated mean and the write-back each run in f32 and round once to
-//! the activation dtype (`ops/hc.py:42-52, 100-105, 150-160, 224-229`). The projections return
-//! the activation dtype, as vLLM's bf16 GEMMs do.
+//! the activation dtype. The projections are bf16 GEMMs and return the activation dtype.
 //!
 //! GGUF, per `prefix` `blk.{i}.hc_attn`, `blk.{i}.hc_ffn` or the head's `output_hc`, as loaded
 //! (`[out, in]`; the header lists them reversed): `{prefix}_norm.weight` `[n·h]` F32 with the
@@ -89,7 +87,7 @@ impl Mixer {
         })
     }
 
-    /// `xn_s = x_s / rms(x_s) · w_s` for each stream of `[b, s, n, h]` (`ops/hc.py:42-52`).
+    /// `xn_s = x_s / rms(x_s) · w_s` for each stream of `[b, s, n, h]`.
     pub(crate) fn norm(&self, x: &Tensor) -> Result<Tensor> {
         let x32 = x.to_dtype(DType::F32)?.contiguous()?;
         hanzo_nn::ops::rms_norm(&x32, &self.unit, self.eps)?
@@ -97,7 +95,7 @@ impl Mixer {
             .to_dtype(x.dtype())
     }
 
-    /// The block input `[b, s, h]` from the normed streams (`nvidia/hyperconnection.py:137-148`).
+    /// The block input `[b, s, h]` from the normed streams.
     pub(crate) fn mix(&self, xn: &Tensor) -> Result<Tensor> {
         let (b, s, n, h) = xn.dims4()?;
         let r = self.down.forward(&xn.reshape((b, s, n * h))?)?;
@@ -115,7 +113,7 @@ pub(crate) struct Branch {
 
 impl Branch {
     /// The branch at `vb` over `n` streams: the [`Mixer`] and `block_inject_weight` `[n, n·h]`, a
-    /// bf16 GEMM (vLLM runs it merged with the down projection; each output row is the same).
+    /// bf16 GEMM of its own (merged into the down projection, each output row is the same).
     pub(crate) fn new(vb: &hanzo_quant::ShardedVarBuilder, n: usize, eps: f32) -> Result<Self> {
         let mixer = Mixer::new(vb, n, eps)?;
         let hn = mixer.norm.elem_count();
@@ -148,7 +146,7 @@ impl Branch {
     }
 
     /// `x_s + 2σ((W_inj vec(xn))_s / n) · f(u)` over `[b, s, n, h]`, where `f` maps the block
-    /// input `[b, s, h]` to the block output (`common/hyperconnection.py:203-242`).
+    /// input `[b, s, h]` to the block output.
     pub(crate) fn apply(
         &self,
         x: &Tensor,
@@ -156,30 +154,27 @@ impl Branch {
     ) -> Result<Tensor> {
         let (b, s, n, h) = x.dims4()?;
         let xn = self.mixer.norm(x)?;
-        // vLLM takes these logits from the down projection's GEMM, in the activation dtype
-        // (`nvidia/hyperconnection.py:139-141`).
+        // The injection logits leave their GEMM in the activation dtype.
         let inj = self.inject.forward(&xn.reshape((b, s, n * h))?)?;
         let y = f(&self.mixer.mix(&xn)?)?;
         combine(x, &y, &inj)
     }
 }
 
-/// The streams at the embedding: `n` copies of `e`, `[b, s, h] -> [b, s, n, h]`
-/// (`nvidia/model.py:489`).
+/// The streams at the embedding: `n` copies of `e`, `[b, s, h] -> [b, s, n, h]`.
 pub(crate) fn expand(e: &Tensor, n: usize) -> Result<Tensor> {
     let (b, s, h) = e.dims3()?;
     e.unsqueeze(2)?.broadcast_as((b, s, n, h))?.contiguous()
 }
 
-/// `silu(r / n)` in f32, rounded once (`ops/hc.py:100-101`).
+/// `silu(r / n)` in f32, rounded once.
 fn silu(r: &Tensor, n: usize) -> Result<Tensor> {
     (r.to_dtype(DType::F32)? / n as f64)?
         .silu()?
         .to_dtype(r.dtype())
 }
 
-/// `(1/n) Σ_s σ(g_s) ⊙ xn_s` over `[b, s, n, h]`, accumulated in f32 and rounded once
-/// (`ops/hc.py:150-156`).
+/// `(1/n) Σ_s σ(g_s) ⊙ xn_s` over `[b, s, n, h]`, accumulated in f32 and rounded once.
 fn mean(xn: &Tensor, g: &Tensor) -> Result<Tensor> {
     let n = xn.dim(2)?;
     let gated = (sigmoid(&g.to_dtype(DType::F32)?)? * xn.to_dtype(DType::F32)?)?;
@@ -187,7 +182,7 @@ fn mean(xn: &Tensor, g: &Tensor) -> Result<Tensor> {
 }
 
 /// `x_s + 2σ(inj_s / n) · y` for `x` `[b, s, n, h]`, `y` `[b, s, h]` and `inj` `[b, s, n]`, in
-/// f32 and rounded once (`ops/hc.py:224-225`).
+/// f32 and rounded once.
 pub(crate) fn combine(x: &Tensor, y: &Tensor, inj: &Tensor) -> Result<Tensor> {
     let n = x.dim(2)?;
     let gate = (sigmoid(&(inj.to_dtype(DType::F32)? / n as f64)?)? * 2.0)?;
@@ -200,8 +195,7 @@ pub(crate) fn combine(x: &Tensor, y: &Tensor, inj: &Tensor) -> Result<Tensor> {
         .to_dtype(x.dtype())
 }
 
-/// vLLM's `GatedResidual` in f64 over one token's `[n·h]` row, stream outer
-/// (`common/hyperconnection.py`, `nvidia/ops/hc.py`).
+/// The gated residual in f64 over one token's `[n·h]` row, stream outer.
 #[cfg(test)]
 mod reference {
     pub(super) fn sigmoid(x: f64) -> f64 {
@@ -215,8 +209,8 @@ mod reference {
             .collect()
     }
 
-    /// `GroupedGemmaRMSNorm` with one group per stream (`common/hyperconnection.py:80-87`,
-    /// `ops/hc.py:45-48`). The GGUF folds `1 + w` into `w`, so `w` multiplies directly.
+    /// The grouped Gemma RMSNorm, one group per stream. The GGUF folds `1 + w` into `w`, so `w`
+    /// multiplies directly.
     pub(super) fn norm(x: &[f64], w: &[f64], h: usize, eps: f64) -> Vec<f64> {
         let mut out = Vec::with_capacity(x.len());
         for (xs, ws) in x.chunks(h).zip(w.chunks(h)) {
@@ -226,13 +220,13 @@ mod reference {
         out
     }
 
-    /// `silu(r / n)` (`common/hyperconnection.py:212-215`, `ops/hc.py:100-101`).
+    /// `silu(r / n)`.
     pub(super) fn silu(r: f64, n: usize) -> f64 {
         let x = r / n as f64;
         x * sigmoid(x)
     }
 
-    /// `(1/n) Σ_s σ(g_s) xn_s` (`common/hyperconnection.py:216-221`, `ops/hc.py:150-156`).
+    /// `(1/n) Σ_s σ(g_s) xn_s`.
     pub(super) fn mean(xn: &[f64], g: &[f64], h: usize) -> Vec<f64> {
         let n = xn.len() / h;
         (0..h)
@@ -245,14 +239,14 @@ mod reference {
             .collect()
     }
 
-    /// The block input from the normed streams (`common/hyperconnection.py:210-221`).
+    /// The block input from the normed streams.
     pub(super) fn mix(xn: &[f64], down: &[f64], up: &[f64], h: usize) -> Vec<f64> {
         let n = xn.len() / h;
         let lora: Vec<f64> = linear(down, xn).into_iter().map(|r| silu(r, n)).collect();
         mean(xn, &linear(up, &lora), h)
     }
 
-    /// `x_s + 2σ(inj_s / n) · y` (`common/hyperconnection.py:237-241`, `ops/hc.py:224-225`).
+    /// `x_s + 2σ(inj_s / n) · y`.
     pub(super) fn combine(x: &[f64], y: &[f64], inj: &[f64]) -> Vec<f64> {
         let n = inj.len();
         let mut out = Vec::with_capacity(x.len());
@@ -483,8 +477,8 @@ mod tests {
     }
 
     /// `silu(r / n)`, the gated mean and the write-back each keep f32 until one final rounding to
-    /// bf16, as vLLM's kernels do. The bound is half a bf16 ulp rather than 1e-5 because the bf16
-    /// rounding is what is under test.
+    /// bf16, as the reference kernels do. The bound is half a bf16 ulp rather than 1e-5 because
+    /// the bf16 rounding is what is under test.
     #[test]
     fn f32_steps_round_once() -> Result<()> {
         let mut rng = StdRng::seed_from_u64(0x726f);
@@ -590,7 +584,11 @@ mod tests {
             &uniform(&mut rng, BATCH * SEQ * N * H, -1.0, 1.0),
             &[BATCH, SEQ, N, H],
         )?;
-        assert_eq!(bits(&branch.mixer.norm)?, bits(&gguf_branch.mixer.norm)?, "norm weight");
+        assert_eq!(
+            bits(&branch.mixer.norm)?,
+            bits(&gguf_branch.mixer.norm)?,
+            "norm weight"
+        );
         for (what, got, want) in [
             ("branch", &branch.mixer, &gguf_branch.mixer),
             ("head", &mixer, &gguf_head),

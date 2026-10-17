@@ -15,9 +15,8 @@
 //! `HybridCache` exactly like both siblings.
 //!
 //! ===================== Qwen3-Next vs Qwen3.5 GGUF differences =====================
-//! (source: llama.cpp `src/models/qwen3next.cpp`, `src/llama-arch.cpp`, `src/llama-model.cpp`)
 //!
-//!  1. RoPE: Qwen3-Next uses plain NEOX **partial** rotary (`LLAMA_ROPE_TYPE_NEOX`, rot_dim =
+//!  1. RoPE: Qwen3-Next uses plain NEOX **partial** rotary (rotate-half, rot_dim =
 //!     head_dim * partial_rotary_factor), NOT the interleaved mRoPE that Qwen3.5 uses. So this
 //!     loader uses `RotaryEmbedding::new_partial` + `forward_qk_norm{,_positions}` (the same path
 //!     the safetensors `qwen3_next` model uses), never `Qwen3VLRotaryEmbedding`.

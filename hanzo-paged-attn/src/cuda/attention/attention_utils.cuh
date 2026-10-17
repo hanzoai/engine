@@ -23,7 +23,7 @@
 #include <float.h>
 #include <type_traits>
 
-namespace vllm {
+namespace pagedattn {
 
 // Q*K^T operation.
 template<int THREAD_GROUP_SIZE, typename Vec, int N>
@@ -40,7 +40,7 @@ inline __device__ float qk_dot_(const Vec (&q)[N], const Vec (&k)[N]) {
   float qk = sum(qk_vec);
 #pragma unroll
   for (int mask = THREAD_GROUP_SIZE / 2; mask >= 1; mask /= 2) {
-    qk += VLLM_SHFL_XOR_SYNC(qk, mask);
+    qk += HANZO_SHFL_XOR_SYNC(qk, mask);
   }
   return qk;
 }
@@ -53,4 +53,4 @@ struct Qk_dot {
   }
 };
 
-} // namespace vllm
+} // namespace pagedattn

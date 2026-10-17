@@ -4,7 +4,7 @@
 //! (a raw u8 exponent, bias 127) and 16 packed bytes -> 32 E2M1 4-bit codes. The 16 distinct
 //! magnitudes the E2M1 LUT can take are {0,.5,1,1.5,2,3,4,6} (+/-), all multiples of 0.5, so each
 //! code is EXACTLY representable as an int8 in [-12, 12] via `code_i8 = round(value * 2)` (the
-//! `KVALUES` table below; identical to llama.cpp `kvalues_mxfp4`). That exactness is the whole point:
+//! `KVALUES` table below, the GGUF `kvalues_mxfp4` table). That exactness is the whole point:
 //! it lets us route MXFP4 through the same hardware int8 dot-product (dp4a / IDP4A / DP4a, i.e. 4x
 //! int8 MAC per instruction) that the Q8_0 prefill path already uses, instead of expanding to f32.
 //!
@@ -27,7 +27,7 @@ use hanzo_ml::{DType, Device, Result, Tensor};
 use super::MXFP4_BLOCK_SIZE;
 
 /// E2M1 nibble -> int8 code = value*2 (value in {0,.5,1,1.5,2,3,4,6} +/-). Exact; bit-for-bit the
-/// llama.cpp `kvalues_mxfp4` table. The *2 is undone by the 0.5 in the per-block multiplier.
+/// GGUF `kvalues_mxfp4` table. The *2 is undone by the 0.5 in the per-block multiplier.
 pub(crate) const KVALUES: [i8; 16] = [0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12];
 
 /// Per-block f32 multiplier so that `code_i8 * mult == dequantized weight`. `0.5` cancels the *2 in

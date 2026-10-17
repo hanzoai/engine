@@ -79,7 +79,7 @@ impl MiniCpmOModel {
         })
     }
 
-    fn get_vllm_embedding(
+    fn get_vlm_embedding(
         &self,
         input_ids: &Tensor,
         device: &Device,
@@ -88,7 +88,7 @@ impl MiniCpmOModel {
         image_bound: Option<Vec<Tensor>>,
         image_hashes: &[u64],
     ) -> Result<Tensor> {
-        let mut vllm_embedding = self.llm.get_input_embeddings(input_ids)?;
+        let mut vlm_embedding = self.llm.get_input_embeddings(input_ids)?;
 
         if let Some(pixel_values_all) = pixel_values_all {
             let tgt_sizes_all = tgt_sizes.as_ref().expect("Need tgt_sizes");
@@ -263,7 +263,7 @@ impl MiniCpmOModel {
                     vision_hidden_states.push(Some(
                         vision_embedding
                             .i(start..start + img_cnt)?
-                            .to_dtype(vllm_embedding.dtype())?,
+                            .to_dtype(vlm_embedding.dtype())?,
                     ));
                     start += img_cnt;
                 } else {
@@ -271,10 +271,10 @@ impl MiniCpmOModel {
                 }
             }
 
-            let mut new_vllm_embedding = Vec::new();
+            let mut new_vlm_embedding = Vec::new();
             for i in 0..input_ids.dim(0)? {
                 if let Some(cur_vs_hs) = &vision_hidden_states[i] {
-                    let mut cur_vllm_emb = vllm_embedding.i(i)?;
+                    let mut cur_vlm_emb = vlm_embedding.i(i)?;
                     let cur_image_bound = &image_bound_vec[i];
                     if !cur_image_bound.is_empty() {
                         let mut image_indices = Vec::new();
@@ -285,24 +285,24 @@ impl MiniCpmOModel {
 
                         let indices = image_indices
                             .reshape(((), 1))?
-                            .repeat((1, cur_vllm_emb.dim(D::Minus1)?))?;
+                            .repeat((1, cur_vlm_emb.dim(D::Minus1)?))?;
                         // Zero out the current data
-                        let cur_vllm_emb_neg = cur_vllm_emb.gather(&indices, 0)?.neg()?;
-                        cur_vllm_emb = cur_vllm_emb.scatter_add(&indices, &cur_vllm_emb_neg, 0)?;
+                        let cur_vlm_emb_neg = cur_vlm_emb.gather(&indices, 0)?.neg()?;
+                        cur_vlm_emb = cur_vlm_emb.scatter_add(&indices, &cur_vlm_emb_neg, 0)?;
                         // Add the image data
-                        cur_vllm_emb = cur_vllm_emb.scatter_add(
+                        cur_vlm_emb = cur_vlm_emb.scatter_add(
                             &indices,
                             &cur_vs_hs.reshape(((), cur_vs_hs.dim(D::Minus1)?))?,
                             0,
                         )?;
-                        new_vllm_embedding.push(cur_vllm_emb);
+                        new_vlm_embedding.push(cur_vlm_emb);
                     }
                 }
             }
-            vllm_embedding = Tensor::stack(&new_vllm_embedding, 0)?;
+            vlm_embedding = Tensor::stack(&new_vlm_embedding, 0)?;
         }
 
-        Ok(vllm_embedding)
+        Ok(vlm_embedding)
     }
 
     pub fn forward(
@@ -314,7 +314,7 @@ impl MiniCpmOModel {
         image_hashes: &[u64],
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let vllm_embedding = self.get_vllm_embedding(
+        let vlm_embedding = self.get_vlm_embedding(
             input_ids,
             self.llm.device(),
             pixel_values_all,
@@ -323,7 +323,7 @@ impl MiniCpmOModel {
             image_hashes,
         )?;
 
-        self.llm.forward_embed(input_ids, vllm_embedding, ctx)
+        self.llm.forward_embed(input_ids, vlm_embedding, ctx)
     }
 }
 

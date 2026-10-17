@@ -165,7 +165,8 @@ impl QuantMethod for BlockwiseFP8Linear {
         let (n_tokens, topk) = indices.dims2()?;
         let (n_experts, out_features, k) = self.weight.dims3()?;
         let rows = x.elem_count() / k;
-        let (qa, sa) = crate::quantize::fp8(&x.reshape((rows, k))?, crate::quantize::Fp8Mode::Gather)?;
+        let (qa, sa) =
+            crate::quantize::fp8(&x.reshape((rows, k))?, crate::quantize::Fp8Mode::Gather)?;
         let a = qa
             .to_dtype(DType::F32)?
             .reshape((rows, k / 128, 128))?
@@ -427,8 +428,8 @@ pub fn blockwise_fp8_moe(
 }
 
 /// A block-FP8 layer whose input takes the served activation quantizer `act`: `Linear` for a
-/// GEMM of the compiled graph, `Eager` for one inside a custom op (vLLM's shared expert inside
-/// `moe_forward_shared` quantizes with the standalone QuantFP8 kernel).
+/// GEMM of the compiled graph, `Eager` for one inside a custom op (the served shared expert,
+/// inside `moe_forward_shared`, quantizes with the standalone QuantFP8 kernel).
 pub fn blockwise_fp8_act(
     weight: Tensor,
     weight_scale_inv: Tensor,

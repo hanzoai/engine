@@ -5,7 +5,7 @@
 # this file only iterates and folds the per-model boards into one table.
 #
 #   battery.sh --backend rocm|vulkan|metal|cuda \
-#     --hanzo-engine PATH --llama-bench PATH [--llama-dir DIR --engine-dir DIR] \
+#     --hanzo-engine PATH --rival-bench PATH --rival-name NAME [--rival-dir DIR --engine-dir DIR] \
 #     [-p 512,500,2048,4096 -n 128 -r 7 --concurrency 1] \
 #     --models "tag1=/path/one.gguf,tag2=/path/two.gguf,..."
 #

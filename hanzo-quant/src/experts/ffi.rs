@@ -53,10 +53,7 @@ pub(crate) fn check(status: c_int, what: &str) -> Result<()> {
         return Ok(());
     }
     let msg = unsafe { CStr::from_ptr(hanzo_moe_error_string(status)) };
-    hanzo_ml::bail!(
-        "moe {what} failed ({status}): {}",
-        msg.to_string_lossy()
-    )
+    hanzo_ml::bail!("moe {what} failed ({status}): {}", msg.to_string_lossy())
 }
 
 pub(crate) fn cuda(dev: &Device) -> Result<CudaDevice> {

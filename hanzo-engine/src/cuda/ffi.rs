@@ -462,7 +462,7 @@ extern "C" {
         stream: i64,
     ) -> i32;
 
-    // exact/route.cu: vLLM v0.29.0 topkGating. Returns 0, 1 for an unsupported
+    // exact/route.cu: the ported topkGating. Returns 0, 1 for an unsupported
     // expert count or score, 2 for a launch error.
     pub(crate) fn route_experts(table: *mut *const i32) -> i32;
     // exact/shared.cu: the shared expert's SiluAndMul and sigmoid gate. Return 0, or 2 for a

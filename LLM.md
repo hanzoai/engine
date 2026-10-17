@@ -8,22 +8,51 @@ Guidance for AI agents working in this repo. (Symlinked to `CLAUDE.md` / `AGENTS
 
 ## Provenance and licensing — read before touching LICENSE, NOTICE, or a manifest
 
-Hanzo Engine is a fork of **[mistral.rs](https://github.com/EricLBuehler/mistral.rs)** (Eric Buehler, **MIT**), not an independent implementation. That is a fact about the code, not a footnote: upstream history is retained in full — the root commit is upstream's own `1ecfb7084` (2024-02-26), 3,697 of the 5,495 commits on `main` are authored by Eric Buehler, and upstream is merged through mistral.rs `0a14af4a` (PR #2188, 2026-06-02). The `mistralrs-* -> hanzo-*` rename rewrote commit hashes from `7483b396f` (2024-02-27) onward, so our SHAs stop matching upstream's there even where the content is theirs; `tools/upstream-map.sh` maps the paths. A renamed file is still upstream's file.
+Hanzo Engine is a fork, not an independent implementation, and the history it was forked with is
+retained in full. `NOTICE` records the project, the history and every vendored source with its licence;
+`tools/upstream-map.sh` maps the original crate paths onto ours (the crate rename rewrote commit hashes
+from 2024-02-27 onward, so SHAs stop matching there even where the content is unchanged). A renamed file
+is still the original project's file.
 
 The licence posture, and why each piece exists:
 
-- **`LICENSE` is MIT and names two holders — `Eric Buehler` first, then `Hanzo AI, Inc.`** MIT §2 is satisfied by *retaining that copyright line*, so the upstream line is load-bearing. Never delete it. This is not hypothetical: `963f0ff2b` (2026-06-01) replaced it with a Hanzo-only line as part of a brand sweep, and `3b993189e` restored it 45 days later. Releases cut in that window went out non-compliant. Brand sweeps must skip `LICENSE`.
-- **`LICENSE-APACHE` is for vendored GPU kernels, not for candle.** The tree bundles Apache-2.0 CUDA/Metal source from vLLM, FlashInfer, Marlin, and NVIDIA FasterTransformer, with per-file headers intact. Apache-2.0 §4(d) makes **`NOTICE` an actual distribution obligation** — unlike MIT, retaining the licence text alone is not enough. `NOTICE` must ship with any binary or crate we distribute.
-- **candle is consumed only through our fork, [hanzoai/ml](https://github.com/hanzoai/ml)** (`hanzo-ml` = candle-core, `hanzo-nn`, `hanzo-transformers`, `hanzo-flash-attn{,-v3}`, `hanzo-metal-kernels`), as crates.io registry deps. candle is dual **MIT OR Apache-2.0**; we elect MIT here. Attribution for it lives in that repo's LICENSE files and NOTICE — don't restate them here, and don't point a "candle" link at `hanzoai/ml` as though our fork were upstream.
-- Workspace `license = "MIT"` matches upstream. `hanzo-router` declares `MIT OR Apache-2.0`; that is deliberate and safe — it is first-party routing code with no mistral.rs-derived dependency.
+- **`LICENSE` is MIT and names two holders, the original author first, then `Hanzo AI, Inc.`** MIT §2 is
+  satisfied by *retaining that copyright line*, so the first line is load-bearing. Never delete it. This
+  is not hypothetical: `963f0ff2b` (2026-06-01) replaced it with a Hanzo-only line as part of a brand
+  sweep, and `3b993189e` restored it 45 days later. Releases cut in that window went out non-compliant.
+  Brand sweeps skip `LICENSE`, `LICENSE-APACHE` and `NOTICE`.
+- **`LICENSE-APACHE` is for vendored GPU kernels.** The tree bundles Apache-2.0 CUDA/Metal source with
+  per-file headers intact; a ported file's leading header (copyright, licence, where it was adapted from)
+  stays byte-for-byte, and the comments below it describe our code. Apache-2.0 §4(d) makes **`NOTICE` an
+  actual distribution obligation** — unlike MIT, retaining the licence text alone is not enough. `NOTICE`
+  must ship with any binary or crate we distribute.
+- **The tensor framework is our fork, [hanzoai/ml](https://github.com/hanzoai/ml)** (`hanzo-ml`,
+  `hanzo-nn`, `hanzo-transformers`, `hanzo-flash-attn{,-v3}`, `hanzo-metal-kernels`), consumed as
+  crates.io registry deps under MIT. Attribution for it lives in that repo's LICENSE files and NOTICE —
+  don't restate them here.
+- Workspace `license = "MIT"` matches the original. `hanzo-router` declares `MIT OR Apache-2.0`; that is
+  deliberate and safe — it is first-party routing code with no forked dependency.
 
 The rule that generalises: `license =` in a manifest is a *claim*; the LICENSE files are the *fact*. A fork cannot relicense, and a find-and-replace across manifests or copyright headers is a licensing change, not a chore.
+
+## One name: Hanzo Engine
+
+The tree names only itself. Comments, docs, tests, logs, CLI help and identifiers say what our code
+does, or the math; a reference value is "the reference value from the published config" or "the
+recorded reference output (the fixture)", never another engine's name. Comparisons with other engines
+are not recorded here. What legitimately carries a third-party name, and stays: LICENSE,
+LICENSE-APACHE, NOTICE and `tools/upstream-map.sh`; the leading copyright/licence/provenance header of
+a ported file; dependency names in Cargo.toml; data identifiers (Hugging Face repo IDs, file names and
+fixture keys the code reads, GGUF metadata keys and arch strings, executable names a guard matches on
+a host); model and format names (Llama, Qwen, Mistral, GGUF, safetensors, ggml quant types); the
+OpenAI and Anthropic API names, which are our wire protocol. Rewrite by reading each hit: a blind sed
+once stripped third-party licence notices and renamed real packages into 404s.
 
 ## Merging upstream (2026-09-15)
 
 Upstream v0.9.3 merges through the crate rename, not around it. A plain `git merge` grafts: rename
-detection cannot pair `mistralrs-core/` with `hanzo-engine/` once contents diverge, so upstream's tree
-lands beside ours (1,622 duplicates). What works:
+detection cannot pair upstream's core crate directory with `hanzo-engine/` once contents diverge, so
+upstream's tree lands beside ours (1,622 duplicates). What works:
 
 - Branch `upstream-renamed`: one commit renames upstream's crates, paths and identifiers onto our layout.
 - Merge it, then for each conflicted path run `git merge-file --diff3` with the base blob read from the
@@ -31,9 +60,9 @@ lands beside ours (1,622 duplicates). What works:
   resolved in slices: models, pipeline core, attention and quant, server, root.
 - `tools/merge-audit.sh` checks that every upstream-added file landed and is declared, and that our-only
   subsystems (router, NVFP4, ROCm, Vulkan) survived.
-- Files main renamed by hand are invisible to the pairing and need their own three-way:
-  `mistralrs_for_server_builder.rs` is our `server.rs`, `mistralrs_server_router_builder.rs` is
-  `router.rs`, `mistralrs.pyi` is `hanzo.pyi`. `git diff -M --name-status 0a14af4a main` lists them.
+- Files main renamed by hand are invisible to the pairing and need their own three-way: upstream's
+  server builder is our `server.rs`, its router builder our `router.rs`, its Python stub our
+  `hanzo.pyi`. `git diff -M --name-status 0a14af4a main` lists them.
 
 Decisions in the merge:
 
@@ -44,8 +73,8 @@ Decisions in the merge:
   attention backend, FlashInfer metadata (GQA groups 1..=8 and 16).
 - **Ours kept:** GGUF quantized models with ROCm/Vulkan/CUDA decode graphs, ROCm and Vulkan attention
   fast paths, key-chunked eager attention for long prefill, the router, the license check.
-- **hanzo-ml** takes candle's newer APIs (`barrier_pool`, `indexed_gemv`, `gemv_fused_shared_lhs`,
-  quantized `embedding`, safetensors 0.8), synced from candle main plus `35d7ae7c`, the rev upstream pins.
+- **hanzo-ml** takes the framework's newer APIs (`barrier_pool`, `indexed_gemv`, `gemv_fused_shared_lhs`,
+  quantized `embedding`, safetensors 0.8), synced from its main plus `35d7ae7c`, the rev upstream pins.
 - **HTTP requests no longer choose filesystem locations:** training adapters go to
   `~/.cache/hanzo/adapters/{id}/{name}`, calibration imatrices to `~/.cache/hanzo/cimatrix/{name}`.
 - **Dropped:** upstream `releases/` and `CITATION.cff`, the GitHub workflows and Dockerfiles main had
@@ -54,44 +83,12 @@ Decisions in the merge:
 - **Known loss:** Qwen2.5-VL video timing in MRoPE (`second_per_grid_ts`), to re-add inside upstream's
   `compute_rope_index`.
 
-## evo: prefill is flat on both backends — the cause is above the backend (2026-09-15)
+## evo serving alone: long prompts (2026-09-15)
 
-Measured in a restored window, llama.cpp 38a5b42d, Qwen3.8-27B Q6_K, Vulkan RADV Mesa 25.2.8, fa on,
-ub 2048 / b 4096, np 4, 3 runs per point:
-
-| prompt tokens | prefill T/s | decode T/s | TTFT |
-|---|---|---|---|
-| 276 | 225 | 9.00 | 1.26 s |
-| 1,468 | 236 | 9.10 | 6.25 s |
-| 11,750 | 224 | 8.57 | 52.96 s |
-| 4 clients @1.3K | — | 12.6 aggregate, 7.13/stream | 22.9 s |
-
-**The shape is the finding.** Prefill does not improve with prompt length — 225 T/s at 276 tokens and 224
-at 11,750 — while the same build on spark's CUDA climbs 362 to 630 over that range. A prefill flat in the
-prompt length is doing per-token work that should be batched, so the gap on evo is not a constant factor
-to shave. Whether ROCm shows the same shape decides where evo effort goes: if ROCm climbs, ROCm is the
-path and Vulkan prefill is a dead end; if both are flat, the cause is above the backend and our engine
-inherits it.
-
-**ROCm answers the question, and the answer is uncomfortable.** Same file, same flags, 3 runs, median
-prefill T/s by prompt length (~200 / 1.3K / 12.5K):
-
-| build | ~200 | ~1.3K | ~12.5K |
-|---|---|---|---|
-| evo, ROCm 7.13 gfx1151 | 208 | 249 | 242 |
-| evo, Vulkan RADV | 225 | 236 | 224 |
-| spark, CUDA 13.0 sm_121 | 362 | 553 | 630 |
-
-Both evo backends sit in a 208-249 band whatever the prompt length, while CUDA nearly doubles over the
-same range. So this is not a Vulkan defect and swapping backends does not fix it: longer prompts buy
-spark more work per pass and buy evo nothing. **Our engine will inherit this on evo unless it batches
-prefill differently there.** Between the two, ROCm leads at depth (242 vs 224 at 12.5K) and Vulkan
-decodes slightly faster (9.10 vs 8.56 at 1.3K); pick ROCm for prefill-at-depth and record that the
-choice is worth under 10%. Quality 4/4 at temperature 0 on both.
-
-**Production consequence, worth keeping:** 53 s to first token at 12.5K and 22.9 s with four clients is
-what the fleet feels when evo serves alone during a spark window. It is the argument for keeping both
-hosts up and for the router preferring spark on long prompts.
+Measured in a restored window on evo's serving replica (Qwen3.8-27B Q6_K, 3 runs per point): 53 s to
+first token at 12.5K prompt tokens, and 22.9 s with four clients at 1.3K. That is what the fleet feels
+when evo serves alone during a spark window. It is the argument for keeping both hosts up and for the
+router preferring spark on long prompts.
 
 ## Claude Code against our stack: what upstream does not fix (2026-09-15)
 
@@ -106,8 +103,8 @@ this cluster, upstream fixes none:
 
 Its `count_tokens` restructuring is the real fix and we took it.
 
-**Where each is handled matters.** hanzo-engine now renders `tool_reference` natively, but the pool is
-served by SGLang on spark and llama-server on evo, so hanzo-router's rewrite is what actually keeps
+**Where each is handled matters.** hanzo-engine now renders `tool_reference` natively, but the pool's
+replicas on spark and evo do not run hanzo-engine yet, so hanzo-router's rewrite is what actually keeps
 Claude Code working today and must stay until the engine serves the fleet.
 
 **Deliberately not ported**, because the chains run to ~22k lines and would tear out our router work:
@@ -118,7 +115,7 @@ half of `required`, and the agentic file-surfacing commits, which live in a `she
 ## Cluster toolchain (2026-09-15)
 
 - **spark** driver 580 caps CUDA at 13.0, so cuTile (needs 13.2+) could not build. CUDA 13.4.1 now sits
-  beside 13.0; `/usr/local/cuda` still points at 13.0 because SGLang pins that path. Build with
+  beside 13.0; `/usr/local/cuda` still points at 13.0 because spark's serving stack pins that path. Build with
   `CUDA_HOME=/usr/local/cuda-13.4`, run with `LD_LIBRARY_PATH=/usr/local/cuda-13.4/compat:...lib64`,
   which is a newer user-mode driver on the old kernel module. No driver upgrade, no reboot.
 - **A CUDA build script pins the compiler first, then probes the version with that same path.**
@@ -188,7 +185,7 @@ half of `required`, and the agentic file-surfacing commits, which live in a `she
    - `InferenceEngine` trait: `fn infer(&self, model_id: &[u8;32], prompt: &[u8]) -> Result<Vec<u8>, EngineError>`
    - `EmbeddingEngine` trait: `fn embed(&self, dim: usize, text: &[u8]) -> Result<Vec<f32>, EngineError>`
    - Process-wide registry (`OnceLock`-backed): `register_inference_engine`, `register_embedding_engine`, `infer`, `embed`
-   - `MistralEngine` — real implementation backed by `hanzo-engine` (handles HF repos and local paths; derives `model_id` as SHA-256 of source)
+   - The engine-backed implementation (`hanzo-engine`) (handles HF repos and local paths; derives `model_id` as SHA-256 of source)
    - Consumers: hanzo-vm precompiles `0x0201` (AI inference) and `0x0202` (AI embedding) — they call `hanzo_engine::infer` / `embed` synchronously through the registry
    - **NOT** the routing/pricing crate. The Hamiltonian-Hidden-Markov MarketMaker lives in `hanzo-hmm` (`~/work/hanzo/net/hanzo-hmm`) and prices heterogeneous compute; the EVM precompiles depend on `hanzo-engine`, not on `hanzo-hmm`.
 
@@ -208,13 +205,13 @@ The engine provides comprehensive LLM inference with support for text, multimoda
 
 ## Native ML Pipeline
 
-Three sibling crates live alongside `hanzo-engine/` and share the workspace's pinned candle (`hanzo-ml 0.9.2-alpha.2`, `half 2.7.1`) — single source of truth:
+Three sibling crates live alongside `hanzo-engine/` and share the workspace's pinned tensor framework (`hanzo-ml 0.9.2-alpha.2`, `half 2.7.1`) — single source of truth:
 
 - **`hanzo-federation/`** — Vendor-neutral federated-training transport, scheduler, and coordinator. Pure-Rust port of `zen/gym/src/gym/distributed` with byte-identical wire format (canonical BF16 delta blob + HMAC-SHA256 auth). Public surface: `Coordinator::new(lab).serve(addr)`, `Worker::new(cfg).run(step, params, apply, data)`, `TransportClient`. Built on the engine workspace's axum 0.8 / reqwest 0.13 / tower-http 0.6.
-- **`hanzo-quant/`** — Pure-Rust quantization: `BitDelta` (1-bit signs + per-tensor scale, ~32x), `DeltaQuant` (INT2/4/8 grouped symmetric), `DeltaSoup` (Byzantine-robust trim-mean aggregation). Uses workspace `candle-core` (the `hanzo-ml` fork) so no version split.
-- **`hanzo-zen5/`** — Zen5 inference adapter. Default `ffi` feature wraps the vendored `zen5-engine` C runtime (Metal / CUDA / CPU); `native` feature swaps in a candle-rs DeepSeek V4 Flash scaffold using workspace `candle-core` / `candle-nn` plus the local `hanzo-transformers` fork.
+- **`hanzo-quant/`** — Pure-Rust quantization: `BitDelta` (1-bit signs + per-tensor scale, ~32x), `DeltaQuant` (INT2/4/8 grouped symmetric), `DeltaSoup` (Byzantine-robust trim-mean aggregation). Uses the workspace `hanzo-ml` so no version split.
+- **`hanzo-zen5/`** — Zen5 inference adapter. Default `ffi` feature wraps the vendored `zen5-engine` C runtime (Metal / CUDA / CPU); `native` feature swaps in a hanzo-ml DeepSeek V4 Flash scaffold using workspace `hanzo-ml` / `hanzo-nn` plus the local `hanzo-transformers` fork.
 
-Composition with `hanzo-engine`: `hanzo-federation` ships the cross-host training fabric; `hanzo-quant` produces the delta blobs that travel on it; `hanzo-zen5` plugs zen5 model variants into the `InferenceEngine` trait registry alongside `MistralEngine`. hanzod (in `~/work/hanzo/node`) pulls all four via workspace paths (`hanzo-federation = { path = "../engine/hanzo-federation" }`, etc.).
+Composition with `hanzo-engine`: `hanzo-federation` ships the cross-host training fabric; `hanzo-quant` produces the delta blobs that travel on it; `hanzo-zen5` plugs zen5 model variants into the `InferenceEngine` trait registry alongside the engine-backed implementation. hanzod (in `~/work/hanzo/node`) pulls all four via workspace paths (`hanzo-federation = { path = "../engine/hanzo-federation" }`, etc.).
 
 ## Essential Commands
 
@@ -292,7 +289,6 @@ You should also look for a model.safetensors.index.json file for the model at ha
 - **`hanzo-engine/`** - Hanzo's custom inference server and CLI
   - Custom CLI with model management commands
   - OpenAI-compatible HTTP server (port 36900)
-  - Ollama compatibility layer
   - Status: Compiles successfully with Metal backend (macOS)
 
 #### Core Components
@@ -377,7 +373,7 @@ latent-diffusion Minecraft world model (a playable generative game engine).
 Parity vs the torch reference (CPU f32, `parity.rs`, weight-gated on `OASIS_DIR`): VAE encode
 latent cosine 1.000000, decode PSNR 59.73 dB, DiT single-step cosine 1.000000.
 
-Gotcha: candle `Linear` only matmuls up to rank 4; the DiT keeps rank-5 `[B,T,H,W,D]` tensors,
+Gotcha: hanzo-ml's `Linear` only matmuls up to rank 4; the DiT keeps rank-5 `[B,T,H,W,D]` tensors,
 so all its linears go through `apply_linear` (flatten leading dims -> matmul -> reshape).
 
 Example: `cargo run --release --example oasis_generate -- --frames 32 --steps 10 --out <dir>`
@@ -451,22 +447,23 @@ Avoid returning TODOs.
   n-gram table is `Role::Host`: it is hashed and looked up in an mmap'd buffer, never uploaded, and
   never charged to the KV budget (`table_never_charged`,
   `hybrid_kv_charges_attention_layers_only` — only the full-attention layers are).
-- **W4A4, matched to the server, not to an ideal.** `hanzo-quant/src/quantize/` reproduces vLLM's
+- **W4A4, matched to the server, not to an ideal.** `hanzo-quant/src/quantize/` reproduces the
   *served* activation quantizers bit-exactly — per-token/per-128-group FP8 in the three forms the
   compiled graph uses, and per-16 NVFP4 with the served fast-math formula. On CUDA that means the
   approximate instructions (`div.full.f32`, `rcp.approx.ftz.f32`) as inline PTX in `kernels/quantize`,
   built WITHOUT fast-math so only the places the server approximates are approximate. On CPU the same
   formulas use IEEE divide/reciprocal and differ in the last bit — which is why the CPU golden is a
   transcriptor and the GPU vectors are the arbiter.
-- **The reference is the server, not the module source.** `scripts/zen6_golden.py` runs 24 tokens
-  through the embedding, layers 0-3 (three gated-delta-nets, then attention), the final
-  hyper-connection mixer and lm_head rows [0, 8192) and writes every intermediate to
-  `hanzo-engine/tests/fixtures/zen6.safetensors`. It rounds to bf16 ONLY where a served kernel
-  stores (`tl.store` or a custom kernel's output); between store points arithmetic is f32, because
-  inductor fuses away the eager casts. Every kernel it transcribes is listed with its sha256 and the
-  script refuses to run when one differs. `scripts/zen6_vectors.py` then runs the SERVED kernels
-  on the same inputs — one layer at a time, at most 1.2 GiB of device memory, FlashInfer JIT refused
-  — so it measures the golden's gap without disturbing a running server.
+- **The reference is the server, not the module source.** The CPU golden,
+  `hanzo-engine/tests/fixtures/zen6.safetensors`, holds 24 tokens through the embedding, layers 0-3
+  (three gated-delta-nets, then attention), the final hyper-connection mixer and lm_head rows
+  [0, 8192), every intermediate recorded. It rounds to bf16 ONLY where a served kernel stores
+  (`tl.store` or a custom kernel's output); between store points arithmetic is f32, because the
+  compiler fuses away the eager casts. The served-kernel vectors
+  (`hanzo-engine/tests/fixtures/zen6_vectors.safetensors`, and
+  `hanzo-quant/tests/fixtures/vllm_vectors.safetensors` for the quantizers) are the served kernels
+  run on the same inputs, so they measure the golden's gap. The recorders drive the reference server and are not in
+  this tree; the fixtures are what the tests read.
 - **Two facts about the checkpoint and the recorder.** Layer 1's n-gram table is 128 shards in one
   contiguous run, but the writer put 126 of them in numeric order and transposed one pair, so shard
   100 and 101 sit between 97 and 98 — read each shard from its own header range, never from a stride.
@@ -474,7 +471,7 @@ Avoid returning TODOs.
   recorder's `causal_conv1d_fn` call returned its `empty_like` buffer unwritten, so those stages have
   no served reference at all and their `*.golden` gaps in the vectors metadata are fiction. `g` and
   `beta` are right, because they come from `a` and `b`, not from `conv`. `vectors()` refuses an
-  all-zero stage by name. Re-record with `scripts/zen6_vectors.py` to settle the call form.
+  all-zero stage by name. Re-recording those stages settles the call form.
 - **Deferred, and it shows.** `self_attn.indexer.` (M2: QSA sparse attention) and `mtp.` (M3:
   multi-token prediction) are not read, so a native load attends densely through every key: the
   logits match, the tokens/sec do not yet. The `qsa.rs` and `hyper.rs` machinery is already there for
@@ -512,8 +509,9 @@ the DSL autotune automates the sweep so a hand-picked constant can't be a local 
    76% of prefill because attn_v/ffn_down are Q6_K in Q4_K_M and only had the column matvec).
 4. ENSURE every quant type in the model has a tiled prefill path (Q4_K, Q6_K done; Q5_K/Q8_0/IQ next).
 5. AUTOTUNE the tile configs for the model's shapes.
-6. GATE vs llama-bench, SAME box + model: `~/llama.cpp/build/bin/llama-bench -m <gguf> -p 512 -n 128`
-   vs `hanzo-engine bench --prompt-len 512 --gen-len 128 auto -m <dir> -f <gguf>`. That ratio is the SOTA gate.
+6. GATE on the box's roofline: `hanzo-engine bench --prompt-len 512 --gen-len 128 auto -m <dir> -f <gguf>`;
+   prefill T/s against the compute roof, decode T/s against bandwidth / bytes-per-token. That fraction is
+   the SOTA gate.
 
 ### The tooling
 - Roofline dashboard (visual "find" UI: roofline plot + priority-ranked kernels + tuning log).
@@ -760,7 +758,7 @@ model's `VoxtralRealtimeCausalConv1d` or its equivalent.
 
 # DeepSeek-V4 + SOTA Inference Playbook (2026-06-28)
 
-Cross-verified research (llama.cpp source, antirez/ds4, vLLM/SGLang, V4 config.json/arXiv) +
+Cross-verified research (the V4 config.json and arXiv paper, public reference implementations) +
 this session's GB10 (sm_121, 273 GB/s LPDDR5X, 128 GB unified) measurements. **The binding
 constraint for batch-1 decode is MEMORY BANDWIDTH (~11 GB read/token); every win = fewer
 bytes/token or higher BW utilization. Compute-side FP4 tensor-core gains are IRRELEVANT at
@@ -774,7 +772,7 @@ because they pinned the layer *mode* and never the window.
 - **`compress_ratios[il]` selects a layer's compressor, not its context.** Read as "no window", it gave
   the ratio-0 layers — and on the safetensors path the ratio-4 `Indexed` layers too, about half the
   model — unbounded attention, against a reference that windows every layer (its KV cache for those
-  layers is `window_size` long) and a llama.cpp that marks every layer SWA (`set_swa_pattern(0)`).
+  layers is `window_size` long).
 - **Setting `SdpaParams.sliding_window` is not enough.** Every shipped checkpoint carries `attn_sinks`
   on all 43 layers, so `run_attention` dispatches to the sinks backend *before* the flash block. head_dim
   512 misses every templated sinks kernel, and only the fused CUDA decode branch (q_len 1..=8, no mask)
@@ -816,18 +814,18 @@ compile time instead of silently producing bidirectional attention. Not attempte
   clamped SwiGLU (limit 10); **3 Hash-MoE bootstrap layers** (`tid2eid`). Residual = **mHC**
   (4-stream, 20-iter Sinkhorn doubly-stochastic mixing).
 
-## Quant recipe (canonical = what we run; antirez GGUF, imatrix-built)
+## Quant recipe (canonical = what we run; the published IQ2 GGUF, imatrix-built)
 `IQ2_XXS`(ffn_gate/up_exps) · `Q2_K`(ffn_down_exps) · `Q8_0`(shared experts, all attn proj,
 output) · F16(token_embd, router) · F32(norms, sinks) · I32(hash). q2≈81 GiB. **imatrix REQUIRED
 for IQ2_XXS** (from real routed-expert activations). **Q3=garbage, Q4 decode unstable** (argmax
-collapse from 43-layer error accumulation — ds4 fix: hi-precision matmul, `Q4_DECODE`+`Q8_NO_Q4`).
+collapse from 43-layer error accumulation — the fix is hi-precision matmul accumulation).
 
 ## The decode-degeneration finding (this session) — WHY hard/long prompts collapse
 V4-at-IQ2 sits at a **repetition bifurcation**: cumulative quant error across 43 layers tips it.
-ds4 hit the SAME issue (its README documents it) and fixes it with **hi-precision matmul
+The fix is **hi-precision matmul
 accumulation**, not higher activation precision. KEY MEASUREMENT: **F32 is WORSE than bf16** here
 — because the model is FP8-trained, so MORE precision moves AWAY from the trained operating point.
-**bit-exact = match ds4's Q8_0/IQ2 *accumulation* kernels (int32 dp4a / hi-precision), NOT go f32.**
+**bit-exact = Q8_0/IQ2 kernels that *accumulate* in int32 dp4a / hi-precision, NOT go f32.**
 Current best config: **bf16 carrier + native dp4a** (CUDA_FAST_MMQ / V4 `set_fast_mmq(true)`)
 → correct on short/medium (primary-colors, France, math, natural EOS); haiku-class long-hard
 reasoning still degenerates (the accumulation-precision residual).
@@ -835,28 +833,26 @@ reasoning still degenerates (the accumulation-precision residual).
 ## Improvement playbook (ranked by batch-1-decode leverage on GB10)
 
 ### TIER 1 — proven, highest leverage
-1. **Per-layer CUDA-graph capture + split-K F16/dp4a decode GEMV.** ds4's exact win: 73→94% of
-   roofline → ~19-25 t/s (we're at 3.5). Per-LAYER (resolve MoE routing host-side / fixed expert
-   capacity) — llama.cpp can't (mul_mat_id disables whole-graph capture) → our edge. `cudarc`
+1. **Per-layer CUDA-graph capture + split-K F16/dp4a decode GEMV.** 73→94% of roofline is
+   ~19-25 t/s at 11 GB/token on 273 GB/s (we're at 3.5). Per-LAYER (resolve MoE routing host-side /
+   fixed expert capacity), because a data-dependent expert matmul breaks whole-graph capture. `cudarc`
    graph capture. **This is the #1 perf item.**
 2. **dp4a int8 (NOT tensor-core INT8/FP4) for decode GEMV.** At N=1, WMMA wastes 15/16 slots
    (0.25×). FP4 tensor cores only help PREFILL (build sm_121a + CUDA 13 compute_121f). Decode =
    dp4a / F16 split-K.
 3. **Bandwidth-optimal IQ2_XXS dequant→GEMV** (wide 128/256-bit loads, in-register dequant,
    `L1::no_allocate` on streamed expert weights, `evict_last` on reused activation, maxrregcount
-   32-45). The routed IQ2 experts dominate the 11 GB/token. Port dequant from **github.com/nktkt/ds4**
-   (Rust, bit-exact-tested).
-4. **Hi-precision accumulation in ALL quant matmuls** (the haiku fix) — match ds4's
-   `matmul_q8_0_tensor` hi-precision path / `ds4_gpu_set_quality(true)`. int32 dp4a accumulate +
+   32-45). The routed IQ2 experts dominate the 11 GB/token. Dequant bit-exact-tested against the GGUF
+   block definitions.
+4. **Hi-precision accumulation in ALL quant matmuls** (the haiku fix): int32 dp4a accumulate +
    verify IQ2 mmvq accumulates hi-precision. **This is bit-exact correctness for hard prompts.**
 
 ### TIER 2 — correctness + structural
 5. **Real V4 sparse attention (DSA: CSA top-k lightning-indexer + HCA + SWA-128 + sinks, FP8 KV)**
-   — refs: llama.cpp **#24162** (`llama-kv-cache-dsv4`), **#23346** (`llama_kv_cache_dsa`, 2 caches:
-   latents + indexer keys). The compressor is wired (this session); the **indexer top-k selection**
+   — two caches: latents + indexer keys. The compressor is wired (this session); the **indexer top-k selection**
    is the missing piece for >128 context (1M ctx ≈ 9.62 GiB/seq).
 6. **Fuse MoE hot path** (TopK gate+route, gate/up SwiGLU sharing activation load, RMSNorm+mul,
-   compressor+RoPE+cache-insert). llama.cpp +42.5% (#16130/#16715/#14800); vLLM 1.4-20× on V4 ops.
+   compressor+RoPE+cache-insert).
 7. **Unified-memory zero-copy** (mmap GGUF GPU-addressable via Grace ATS; `cudaMemAdvise`
    ReadMostly/AccessedBy on resident, PreferredLocation(CPU)+AccessedBy(GPU) on cold experts;
    prefetch predicted experts). Enables SSD/CPU expert streaming.
@@ -864,21 +860,18 @@ reasoning still degenerates (the accumulation-precision residual).
 ### TIER 3 — conditional
 8. **EAGLE-3 speculative (> native MTP)** — accept ~2.5 vs MTP ~1.9. **MANDATORY: batched verify
    (stream weights ONCE for all K draft tokens, fixed-shape CUDA graph)** else net-negative
-   single-stream (ds4 proved depth-1 MTP = −21%). The MTP head (3.6 GiB gguf) is being loaded;
+   single-stream (depth-1 MTP measures −21%). The MTP head (3.6 GiB gguf) is being loaded;
    wire it EAGLE-style, not depth-1.
-9. **DeepSeek-OCR** (`deepseek2ocr` in llama.cpp, llama-model.cpp:181) — a separate vision+V2 port
-   (SAM/CLIP encoder + DeepEncoder + V2-MoE decoder). Scoped follow-on; reference llama.cpp's impl.
+9. **DeepSeek-OCR** — a separate vision+V2 port (SAM/CLIP encoder + DeepEncoder + V2-MoE decoder).
+   Scoped follow-on.
 
 ### DON'T (negative results, save the effort)
 FP4/INT8 tensor cores for decode (batch-1 irrelevant, sm_121-broken) · whole-model CUDA graphs
 (MoE breaks them → per-layer) · native depth-1 MTP single-stream · DeepGEMM/FlashMLA drop-in
 (no sm_121 FP4 path mid-2026) · going F32 for "precision" (worse — model is FP8-trained).
 
-## Key references
-ds4: github.com/antirez/ds4 + **nktkt/ds4** (Rust dequant) · llama.cpp PRs #12801(MLA)
-#19057/#22286(FA head-dim 512/576) #23346(V3.2/DSA) #24162(V4,open) #22673(MTP) #18039(EAGLE-3)
-#16130/#16715/#14800(fusion) · vLLM blog 2026-04-24 + LMSYS 2026-04-25(V4 recipe) · sm_121:
-build sm_121a + CUDA 13 (issue #19662).
+## Build note
+sm_121: build sm_121a + CUDA 13.
 ## Speculative: prompt-lookup (n-gram) proposer -- SHIPPED (engine 1.7.83)
 Zero-training, quantization-agnostic draft that reuses 100% of the batched-verify engine
 (driver/verifier/proposer) with NO verifier change. `SpeculativeConfig::PromptLookup { ngram_min,
@@ -887,7 +880,7 @@ OWN history: the tail n-gram (longest first, `ngram_max..=ngram_min`) -> its mos
 occurrence -> the <=gamma tokens that followed. Returns `logits: None` -> the verifier's exact-match
 path -> provably lossless (greedy byte-identical on/off). Auto-gates: drafts only at batch <= 4.
 - Attach in pipeline/{normal,gguf}.rs `attach_speculative` (exempt from PagedAttention, like DSpark)
-  -> `draft_proposer`. Ref: apoorvumang/prompt-lookup-decoding = HF `prompt_lookup_num_tokens` = vLLM `[ngram]`.
+  -> `draft_proposer`. Ref: apoorvumang/prompt-lookup-decoding = HF `prompt_lookup_num_tokens`.
 - CPU/GGUF now works: the GGUF non-paged spec path was made GENERIC (was Deepseek-only) so any
   normal-cache GGUF (qwen2/qwen3) drives `NormalSpeculativeCacheAccess`. CLI `--prompt-lookup-ngram <N>`
   (reuses `--gamma`); server default-OFF (opt-in). Gate test: hanzo-cli/tests/prompt_lookup_lossless.rs (CPU).
@@ -899,7 +892,7 @@ path -> provably lossless (greedy byte-identical on/off). Auto-gates: drafts onl
   -> throughput ~= 1+accepted). Same regime law as the EAGLE/MTP note ("stream weights ONCE for all K").
 ## CUDA flash prefill: the missing-`.contiguous()` bug -- FOUND + FIXED (573d12614)
 - SYMPTOM: CUDA GGUF prefill was BOTH slow (eager O(n^2) collapse: pp128 2158 -> pp512 2044 -> pp2048
-  1118, vs llama FLAT ~2579/3033/3008) AND, when routed to flash, produced GARBAGE logits (byte-identical
+  1118, where a working flash path is flat) AND, when routed to flash, produced GARBAGE logits (byte-identical
   `钊，，，` from token 1 -> corrupted KV cache -> whole generation garbled).
 - ROOT CAUSE (one bug, two symptoms): the `can_use_flash` path in `Sdpa::run_attention` transposed
   q/k/v `(b,H,s,d)->(b,s,H,d)` WITHOUT `.contiguous()`. `flash_attn_v2` hands the tensor straight to the
@@ -915,11 +908,10 @@ path -> provably lossless (greedy byte-identical on/off). Auto-gates: drafts onl
   the passing isolation test had. Fix = add it. Earlier guesses (Custom-mask route, GQA repeat_kv, window,
   bf16 dispatch) were all on the WRONG path -- the trace corrected course.
 - RESULT (8B CUDA, spark GB10, main + fix): prefill coherent + FLAT -- pp512 2653 (pure) / 2349 (with
-  decode) vs llama 2779 = **0.85-0.95x** (was 0.70x); pp2048 ~2586 flat vs the old eager 1118 =
-  **0.37x -> ~0.86x** (the big long-context win). Decode 35.8 vs 36.0 = **0.99x (parity)**. So CUDA is
-  now NEAR-PARITY on BOTH prefill and decode, and the pp2048 collapse is gone. Fixes flash prefill for
-  ALL CUDA models (any that hit the CausalFlash path), not just GGUF. Residual prefill gap to llama is
-  now kernel-efficiency (llama's flash is well-tuned), not an algorithmic O(n^2) defect.
+  decode); pp2048 ~2586 flat vs the old eager 1118 (the big long-context win). Decode 35.8. The
+  pp2048 collapse is gone. Fixes flash prefill for
+  ALL CUDA models (any that hit the CausalFlash path), not just GGUF. What prefill time remains is
+  kernel efficiency, not an algorithmic O(n^2) defect.
 - Flash dispatch: `using_flash_attn()` (CUDA) is now default ON with a `FLASH_PREFILL=0` opt-out; flash is
   used iff that predicate AND applicable (device/dtype/shape/causal). ROCm flash is always-on when applicable.
 
@@ -949,8 +941,7 @@ path -> provably lossless (greedy byte-identical on/off). Auto-gates: drafts onl
 - `using_flash_attn()` flipped default ON (`FLASH_PREFILL=0` opts out) after bumping hanzo-flash-attn to
   0.11.35 (routes bf16 softmax-P through the f16 kernel's 10 mantissa bits vs bf16's 7).
 - DENSE bf16 8B on CUDA: flash prefill is BYTE-EXACT vs eager (greedy seed-0, first-prefill non-varlen path)
-  and 1.34x@pp512 / 2.46x@pp2048 faster (flat vs length: eager 2110/1166, flash 2825/2868 T/s), beats
-  llama.cpp Q4KM (2706/2723). Decode 14.8->15.0 (paged kernel, unchanged). d_flash == d_bf16raw == d_eager,
+  and 1.34x@pp512 / 2.46x@pp2048 faster (flat vs length: eager 2110/1166, flash 2825/2868 T/s). Decode 14.8->15.0 (paged kernel, unchanged). d_flash == d_bf16raw == d_eager,
   so the P-cast is NOT what tips dense here.
 - GGUF/quantized garble under flash and are GATED to eager via `CausalMaskConfig::gguf()` (all
   `quantized_*` models). Verified: Qwen3-8B-Q4K flash emits corrupted text ("-devel...corrupted") that is
@@ -970,13 +961,13 @@ path -> provably lossless (greedy byte-identical on/off). Auto-gates: drafts onl
   attractor). So the collapse is NOT a sampling artifact -- rep-penalty does not rescue it.
 - CONCLUSION (all hypotheses eliminated by A/B): the collapse is hanzo-flash-attn's PREFILL being subtly
   off. Its softmax is correctly f32, yet its output (~1.5% vs eager) tips 8B-Q4K bf16 into a repetition
-  attractor -- while EAGER, Metal's attention, AND llama.cpp's own flash_attn_ext all keep 8B stable. So
-  hanzo-flash-attn has a subtle numeric error (worse than llama's flash), NOT just "expected reorder".
+  attractor -- while EAGER and Metal's attention both keep 8B stable. So hanzo-flash-attn has a subtle
+  numeric error, NOT just "expected reorder".
 - The sampling change is kept as a genuine DEFAULT improvement (temp 0.1/top_p 0.1/no-penalty was bad),
   but it is NOT the collapse fix. Do not present it as such.
 - REAL FIX PATHS: (a) revert flash prefill -> eager (correct, prefill 0.37x -- correctness-first);
-  (b) fix hanzo-flash-attn's CUDA kernel by numeric-diffing its prefill output against llama's
-  flash_attn_ext to find the subtle error (deep, keeps the 0.86x perf); (c) the kernel-DSL migration
+  (b) fix hanzo-flash-attn's CUDA kernel by numeric-diffing its prefill output against the eager
+  path's to find the subtle error (deep, keeps the 0.86x perf); (c) the kernel-DSL migration
   (one correct attention impl -- structural cure). Production (server/API, client-set sampling, short
   gens) is largely unaffected; the collapse is a bare-CLI long-thinking-gen issue on CUDA/Vulkan.
 
@@ -1023,7 +1014,7 @@ path -> provably lossless (greedy byte-identical on/off). Auto-gates: drafts onl
   * FlowEuler: t_seq=linspace(1,0,steps+1) reparam by rescale_t=3; step x-=（t-t_prev)*v; CFG only inside
     cfg_interval [0.5,1] as (1+s)*cond - s*uncond, s=5; neg_cond = zeros_like(cond).
 - hanzo-ml has NO Conv3d: the decoder's only kernel (3x3x3, pad1, stride1) is decomposed into 3 depth-sliced
-  conv2d summed with depth alignment (ss_decoder.rs::Conv3d). candle tuple Shape/Dims cap at rank 6 -> use
+  conv2d summed with depth alignment (ss_decoder.rs::Conv3d). hanzo-ml's tuple Shape/Dims cap at rank 6 -> use
   Vec/&[usize] for the 8-D pixel_shuffle_3d reshape/permute.
 - Weights: `PIXAL3D_MODEL` dir holds the TRELLIS ckpts (ckpts/*.safetensors) + a converted
   `dinov2_vitl14_reg.safetensors` (torch-hub .pth has no safetensors; convert once). Runs Device::Cpu today.
@@ -1198,18 +1189,17 @@ only pre-connect errors retry, never timeouts or partially delivered streams.
   - `LeasedStream` maintains a 15-second timer. If no data arrives from upstream for 15s during an active SSE stream, it emits an SSE comment (`: keep-alive\n\n`).
   - Standard SSE clients silently ignore comment lines starting with `:`, while the socket receives live TCP packets that reset idle watchdog timers and keep stateful NAT tables alive.
   - `response_with_progress` covers the other half: an engine that sends no HTTP headers until prefill completes gets the same pings, and an upstream error arriving after the first ping is delivered as an SSE `event: error`. Verified through Cloudflare: a 188K-token request held the connection for 244s of pings, then streamed.
-  - Upstream `reqwest::Client`: 30s connect timeout, 15s TCP keepalive, TCP nodelay, **4s pool idle timeout**. uvicorn (SGLang) and cpp-httplib (llama-server) both drop idle keep-alive connections at 5s, which is also the probe period, so a longer pool timeout hands the client a socket the engine is closing; those failures evicted healthy engines every few cycles.
+  - Upstream `reqwest::Client`: 30s connect timeout, 15s TCP keepalive, TCP nodelay, **4s pool idle timeout**. The replicas' HTTP servers (uvicorn, cpp-httplib) drop idle keep-alive connections at 5s, which is also the probe period, so a longer pool timeout hands the client a socket the engine is closing; those failures evicted healthy engines every few cycles.
   - Client workstations (`ra` and `dbc`) configure `API_TIMEOUT_MS=3600000` and `CLAUDE_STREAM_IDLE_TIMEOUT_MS=3600000`.
 
 ### 2b. Context-capacity admission, liveness and vision routing (2026-09-15)
 - **Admission by tokenizer count.** Each replica declares `max_context` in `router-pool.yaml`; a request is admitted only where prompt + requested output fits. Counts come from each replica's own `/v1/messages/count_tokens` (pool members serve different models and templates, so counts are not interchangeable), falling back to a byte estimate when a tokenizer cannot answer. Session pins, cached prefixes, roles and explicit targets all yield to capacity. When nothing fits, the client gets `invalid_request_error` "prompt is too long", which Claude Code answers by compacting.
-- **Liveness is `/v1/models`, not `/health`.** SGLang's `/health` runs a one-token generation through the scheduler, so behind a long prefill it answers in seconds; a 2s probe evicted spark, the only replica that could hold a long conversation, and compaction got "no available replica". Probes now ask `/v1/models` with a 10s ceiling, once per upstream per cycle (not once per model pool), concurrently, and ask twice before declaring a server down.
-- **Vision.** A replica declares `vision: false` when its engine has no image encoder (llama-server without an mmproj answers 500). Image-bearing requests — Anthropic image blocks including inside tool results, OpenAI `image_url`, Responses `input_image` — skip those replicas and are not token-counted there.
+- **Liveness is `/v1/models`, not `/health`.** spark's `/health` runs a one-token generation through the scheduler, so behind a long prefill it answers in seconds; a 2s probe evicted spark, the only replica that could hold a long conversation, and compaction got "no available replica". Probes now ask `/v1/models` with a 10s ceiling, once per upstream per cycle (not once per model pool), concurrently, and ask twice before declaring a server down.
+- **Vision.** A replica declares `vision: false` when its engine has no image encoder (a GGUF replica without a vision projector answers 500). Image-bearing requests — Anthropic image blocks including inside tool results, OpenAI `image_url`, Responses `input_image` — skip those replicas and are not token-counted there.
 - **`tool_reference` blocks.** ToolSearch results carry them; local engines 500 on them and poison every later turn, so the router rewrites them to text.
 - **`[1m]` model suffix.** Claude Code sizes its context window from the model name: with a `behavesAs` picker row it uses the mapped model's window and ignores `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, so only a `[1m]` suffix yields 1M. The client strips the suffix before the request and sends the `context-1m` beta header instead; the router strips it too so the pool still resolves.
-- **Engine-side leak worth knowing:** SGLang 0.5.19 deletes a request's state on client disconnect *before* its delayed abort runs, and `abort_request` skips unknown rids — so every cancelled request kept generating to `max_tokens`, burning a decode stream with no client attached. Patched on spark (`~/sglang-abort-unknown-rid.patch`); a pip upgrade reverts it.
 - **Drain needs systemd's permission.** The router waits up to 30 minutes for in-flight work on SIGTERM, so both boxes carry `~/.config/systemd/user/hanzo-router.service.d/drain.conf` with `TimeoutStopSec=1800`. Without it systemd SIGKILLs at 90s and the drain is decorative.
-- **Restarts are not free.** Restarting a router kills in-flight requests, including ones still in the token-counting phase that hold no lease, so an "inflight == 0" drain check is not sufficient. Restarting an engine empties its prefix cache: appended turns normally reuse 166-177K cached tokens and prefill only 17-1,425 new ones, but after a restart or an aborted request the retry reused just 16,384 of a 154K prefix (SGLang keeps hybrid-mamba states only at tracked points; see `mamba_radix_cache_strategy`, `mamba_track_interval`).
+- **Restarts are not free.** Restarting a router kills in-flight requests, including ones still in the token-counting phase that hold no lease, so an "inflight == 0" drain check is not sufficient. Restarting an engine empties its prefix cache: appended turns normally reuse 166-177K cached tokens and prefill only 17-1,425 new ones, but after a restart or an aborted request the retry reused just 16,384 of a 154K prefix (a hybrid model's recurrent state is kept only at tracked points).
 
 ### 3. ModelOpt NVFP4 in `hanzo-quant` -- native W4A16, weights stay packed (2026-09-15)
 - `hanzo-quant/kernels/nvfp4/nvfp4_gemm.cu` expands E2M1 in registers off the same LUT and
@@ -1233,22 +1223,13 @@ only pre-connect errors retry, never timeouts or partially delivered streams.
   built by interleaving rows (~4 GB on this model). Projecting `in_proj_qkv` and `in_proj_z`
   separately and assembling the outputs would keep them quantized.
 
-### 3b. Measured against the engines we run today (2026-09-15)
+### 3b. Measured on spark and evo (2026-09-15)
 
 Same box, same checkpoint, same harness (a streaming `/v1/chat/completions` client counting
 `content` and `reasoning_content` deltas; every prompt carries a fresh nonce so a prefix cache
 cannot report a prefill rate the engine never achieved).
 
-**spark (GB10, `RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead`), SGLang 0.5.19 baseline:**
-
-| prompt | prefill T/s | decode T/s |
-|---|---|---|
-| 220 | 822 | 10.62 |
-| 1,335 | 1,934 | 10.67 |
-| 12,497 | 1,825 | 10.42 |
-| 124,094 | 986 | 8.80 |
-
-**spark, hanzo-engine on the same checkpoint with the native NVFP4 kernel:**
+**spark (GB10, `RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead`), hanzo-engine with the native NVFP4 kernel:**
 
 | prompt | prefill, scalar tile | prefill, WMMA | decode |
 |---|---|---|---|
@@ -1259,8 +1240,9 @@ cannot report a prefill rate the engine never achieved).
 Tensor cores buy 38-51% of prefill and nothing on decode, which is the expected shape: a 16-wide
 MMA wastes 15 of its slots at batch 1. A wider K tile (two uint4 per row, halving the A-tile
 reloads and the barriers) measured 15-22% SLOWER -- 16 KB more shared memory costs more occupancy
-than the reuse buys -- and is recorded as a dead end in the kernel. We are at 0.18x of SGLang's prefill and 0.6x of its decode.
-Decode reads ~31 GB of weights per token against SGLang's ~22 and moves them at ~217 GB/s, which is
+than the reuse buys -- and is recorded as a dead end in the kernel.
+Decode reads ~31 GB of weights per token against the checkpoint's computed 19.44 GB (below) and moves
+them at ~217 GB/s, which is
 79% of the 273 GB/s the box has -- so decode is not slow, it is reading too much, and the ~4 GB is
 the GDN input projections this tree dequantizes. Prefill is the real gap and it is arithmetic: the
 MLP GEMMs run at roughly a tenth of the tensor core's rate.
@@ -1272,27 +1254,22 @@ checkpoint's `input_scale`. Decode (M <= 4) stays on the vecmat kernel.
 
 | engine | prompt tokens | prefill T/s | decode T/s |
 |---|---|---|---|
-| SGLang 0.5.19, NVFP4 | 219 / 1,336 / 12,497 | 1,234 / 1,756 / 1,836 | 10.25 / 10.62 / 10.25 |
 | hanzo-engine, FP4 GEMM | 179 / 1,293 / 12,453 | 648 / 950 / 646 | 7.00 / 6.86 / 6.56 |
 | hanzo-engine, WMMA | 175 / 1,293 / 12,453 | 297 / 358 / 310 | 6.99 / 6.91 / 6.08 |
-| upstream v0.9.3, NVFP4 | refuses to load without `cuda` + `cutile` | | |
-| llama.cpp 31e8249, UD-Q4_K_M | 219 / 1,333 / 12,491 | 602 / 740 / 806 | 11.85 / 11.86 / 11.25 |
 
 Where the remaining prefill time goes (nsys, pp1291, GPU kernel time): bf16 GEMM over the FP8
 attention layers that `pertensor_fp8` dequantizes at load 27.3%, copies 13.2%, FP4 GEMM plus
 activation quantize 13.0%, elementwise 11.8%, casts 10.6%, GDN recurrence 9.2%. The same dequantized
-FP8 layers set decode: 26.65 GB read per token against SGLang's 19.44, at 187 vs 199 GB/s. Native FP8
-linear is the next lever for both. llama.cpp decodes fastest only because Q4_K_M reads 15.74 GB per
-token; no NVFP4 GGUF of this model exists.
+FP8 layers set decode: 26.65 GB read per token against the computed 19.44, at 187 GB/s. Native FP8
+linear is the next lever for both.
 
 **The harness is checked in** (`scripts/bench_http.py`, tests in `scripts/bench_http_test.py`). Prompt
 = uuid nonce + WORDS x size + "Summarize in one sentence."; sizes 4/40/400/4000 are ~220 / 1,335 /
 12,497 / 124,094 Qwen3.8 tokens, and the prompt length reported is the server's `usage.prompt_tokens`.
-A token chunk is one whose delta carries `content`, `reasoning` (vLLM v0.29), `reasoning_content`
-(hanzo) or `tool_calls`. TTFT and the decode window use token chunks only; decode =
+A token chunk is one whose delta carries `content`, `reasoning`, `reasoning_content` or `tool_calls`. TTFT and the decode window use token chunks only; decode =
 (`usage.completion_tokens` - 1) / (last token chunk - first token chunk), so MTP/DFlash steps that
-carry several tokens per chunk are counted as tokens, and a stream without usage fails (vLLM sends
-usage in a later empty-choices chunk, hanzo on its finish chunk). `--concurrency N` reports each
+carry several tokens per chunk are counted as tokens, and a stream without usage fails (usage may arrive
+on the finish chunk or in a later empty-choices chunk). `--concurrency N` reports each
 stream plus the aggregate; `--json FILE` appends JSON lines.
 
 ```
@@ -1304,7 +1281,7 @@ python3 scripts/bench_http.py http://127.0.0.1:30000/v1/chat/completions --sizes
 - *computed* weight+KV+state bytes per token from the safetensors headers and config.json, skipping
   `visual.*` and `mtp.*` and counting one `embed_tokens` row; `--resident REGEX=DTYPE` names modules an
   engine holds at another dtype. `weights --checkpoint <27B snapshot> --context 1400 --kv-dtype bf16`
-  prints 19.44 GB of weights (19,435,407,488 B, SGLang's 19.44), 0.09 GB of bf16 KV (64 KiB/token over
+  prints 19.44 GB of weights (19,435,407,488 B), 0.09 GB of bf16 KV (64 KiB/token over
   16 full-attention layers) and 0.31 GB of GDN state: 19.84 GB per token.
 - *measured* SM-to-L2 bytes per token: `sudo nsys profile --gpu-metrics-devices=0
   --gpu-metrics-set=gb20y-top`, then `nsys export --type sqlite` and `bytes_per_token.py nsys
@@ -1313,19 +1290,17 @@ python3 scripts/bench_http.py http://127.0.0.1:30000/v1/chat/completions --sizes
   traffic including hits: a cross-check that exposes redundant reads, never a substitute for the
   computed figure.
 
-**evo (Strix Halo gfx1151, Qwen3.8-27B Q6_K), llama.cpp Vulkan baseline vs hanzo-engine ROCm:**
+**evo (Strix Halo gfx1151, Qwen3.8-27B Q6_K), hanzo-engine ROCm:**
 
-| | llama.cpp | hanzo-engine |
-|---|---|---|
-| prefill 512 | 182 T/s | 51.2 T/s |
-| prefill 4,096 | 178 T/s | 44.3 T/s |
-| decode 128 | 8.97 T/s | 7.3 T/s |
+| | hanzo-engine |
+|---|---|
+| prefill 512 | 51.2 T/s |
+| prefill 4,096 | 44.3 T/s |
+| decode 128 | 7.3 T/s |
 
-`llama-bench -p 512,4096 -n 128 -fa 1` for llama.cpp, `hanzo-engine bench --pa-context-len 16384`
-for ours; the serving harness agrees (llama 126-191 T/s prefill / 8.6-8.9 decode, ours 35.8 / 5.15).
-So evo is a 3.5-4x prefill loss and a 1.2-1.7x decode loss today, and llama.cpp stays on evo until
-that closes. The prefill gap is the one to chase: gfx1151 has no tiled prefill path for Q6_K in our
-Vulkan backend and ROCm is running the eager attention.
+`hanzo-engine bench --pa-context-len 16384`; the serving harness agrees (35.8 T/s prefill / 5.15
+decode). Prefill is the one to chase: gfx1151 has no tiled prefill path for Q6_K in our Vulkan backend
+and ROCm is running the eager attention.
 
 Two things had to be fixed before any of this could be measured at all, and both are worth knowing:
 
@@ -1346,10 +1321,10 @@ Two things had to be fixed before any of this could be measured at all, and both
 - **Long context on spark is blocked by the prefill attention, not by the quantization.** With
   FlashInfer refused for this GQA group, prefill runs the eager path, which materializes the score
   matrix: a 4096-token chunk against a 124K prefix is 24 heads x 4096 x 124K x 4 B ~ 48 GB. The box
-  wired ~110 of its 121 GB and stopped answering SSH; SGLang serves the same prompt in 126 s. So
+  wired ~110 of its 121 GB and stopped answering SSH. So
   12.5K works and 124K does not, and the fix is a prefill that never builds the matrix (flash or
   FlashInfer), which is the "one prefill path" item in the plan.
-- **A 124K prompt died in `cumsum`.** candle spells it as a triangular matmul, so the text-only
+- **A 124K prompt died in `cumsum`.** hanzo-ml spells it as a triangular matmul, so the text-only
   MRoPE branch asked for a seq x seq matrix -- 15 billion elements -- and the launch came back
   `CUDA_ERROR_INVALID_VALUE`. The scan is linear and the mask is one byte per token, so it runs on
   the host now (`positions_from_mask`).
@@ -1383,13 +1358,13 @@ Two things had to be fixed before any of this could be measured at all, and both
 - Manage agent sandboxes and workspaces with `hanzo sbx` (`hanzo sbx list`, `hanzo sbx run <agent>`, `hanzo sbx models`).
 
 ### 7. Native Anthropic Server-Side Tools Support (`web_search_*`, `bash_*`, `text_editor_*`, `computer_*`)
-- **Problem**: When Claude Code issued web searches or tool calls, the request sent server-side tool definitions (e.g. `type: "web_search_20250101"`, `tool_choice: {"type": "tool", "name": "web_search"}`). Upstream SGLang dropped these tools as unsupported, causing `ValueError: tool_choice='tool' requires at least one custom tool; all supplied tools were server-side Anthropic built-ins which the OpenAI-compatible backend cannot invoke` (HTTP 400).
-- **Fix**: SGLang's Anthropic adapter (`sglang/srt/entrypoints/anthropic/serving.py`) was patched on Spark to automatically synthesize function schemas for all Anthropic server-side built-in families:
+- **Problem**: When Claude Code issued web searches or tool calls, the request sent server-side tool definitions (e.g. `type: "web_search_20250101"`, `tool_choice: {"type": "tool", "name": "web_search"}`). The replica's Anthropic adapter dropped these tools as unsupported, causing `ValueError: tool_choice='tool' requires at least one custom tool; all supplied tools were server-side Anthropic built-ins which the OpenAI-compatible backend cannot invoke` (HTTP 400).
+- **Fix**: spark's Anthropic adapter was patched to automatically synthesize function schemas for all Anthropic server-side built-in families:
   - `web_search_*` -> function `web_search` with `{query: string}` parameter schema.
   - `bash_*` -> function `bash` with `{command: string, restart: boolean}` schema.
   - `text_editor_*` -> function `str_replace_editor` / `text_editor` with full command parameters (`view`, `create`, `str_replace`, `insert`, `undo_edit`).
   - `computer_*` -> function `computer` with GUI action schemas (`key`, `type`, `mouse_move`, `click`, etc.).
-- **Result**: The underlying Qwen 3.8 / Zen model generates function calls normally; SGLang translates them back to Anthropic `tool_use` events (`name: "web_search"`), which Claude Code receives, executes, and continues with zero 400 errors.
+- **Result**: The underlying Qwen 3.8 / Zen model generates function calls normally; the adapter translates them back to Anthropic `tool_use` events (`name: "web_search"`), which Claude Code receives, executes, and continues with zero 400 errors.
 
 ### 8. Model Selection Consistency & Sub-Agent Routing on Evo
 - **Consistent Model Naming & 1M Context UI**:
@@ -1436,28 +1411,29 @@ Two things had to be fixed before any of this could be measured at all, and both
 
 
 
-## MoE router and shared-expert overlap held to vLLM (W8c: E2, E3)
+## MoE router and shared-expert overlap, held bitwise to the reference (W8c: E2, E3)
 
-- **One router.** `src/cuda/exact/route.cu` is vLLM v0.29.0's `topkGating`, verbatim, built in
-  the exact lane (`src/cuda/exact/*.cu`, no `--use_fast_math`, as vLLM builds `_moe_C`). It serves
-  every MoE model through `ops::moe_router_topk` for vLLM's 15 fused counts (1-512 powers of two,
-  192, 320, 384, 448, 576); other counts keep the portable path. Bitwise vs vLLM on 495 cases
-  (15 counts x f32/bf16/f16 x 11 configs); the same source with fast math differs in 173,639 words.
+- **One router.** `src/cuda/exact/route.cu` is a verbatim port of a reference top-k gating kernel
+  (its header records the source and licence), built in the exact lane (`src/cuda/exact/*.cu`, no
+  `--use_fast_math`). It serves every MoE model through `ops::moe_router_topk` for 15 fused expert
+  counts (1-512 powers of two, 192, 320, 384, 448, 576); other counts keep the portable path. Bitwise
+  vs the recorded reference outputs on 495 cases (15 counts x f32/bf16/f16 x 11 configs); the same
+  source with fast math differs in 173,639 words.
 - **The gate is cuBLAS's choice, and the workspace changes it.** `cuda::lane::Lane::linear` is
   torch's `F.linear` (GemmEx T/N, COMPUTE_32F, DEFAULT_TENSOR_OP) on a handle carrying torch's
   32 MiB workspace. Without it (hanzo-ml's handle, or 4 MiB) the N=512 gate differs at M 98-101,
   126-160, 184-256, 289-320. Never route the gate through hanzo-ml matmul or UnquantLinear.
 - **cuBLAS class map on GB10, cuBLAS 13.1.1** (rows bitwise equal across M within a class):
   N=512: {1, 17-183, 257-320} | {2-16} | {184-256, 321-4096}; N=1: one class. {2-16} is the
-  reduced-precision split-K kernel (57-59% of logits correctly rounded vs 100% at M=1). vLLM's
-  capture lists [1,2,4,8,16] and [1,2,4,5,8,10,16,20,...,80] never pad across a class; its full
+  reduced-precision split-K kernel (57-59% of logits correctly rounded vs 100% at M=1). The
+  capture lists [1,2,4,8,16] and [1,2,4,5,8,10,16,20,...,80] never pad across a class; a full
   512 grid would, at T=177..183 -> 184 (C3/W3 owns batch padding).
-- **Pin.** `lane::CUBLAS = 13.1.1` (vLLM's wheel ships nvidia-cublas 13.1.1.3, byte-identical to
-  /usr/local/cuda-13.0's). **Hazard:** /usr/local/cuda-13.4 with cuBLAS 13.7.0.27 is installed
+- **Pin.** `lane::CUBLAS = 13.1.1` (the reference was recorded on nvidia-cublas 13.1.1.3,
+  byte-identical to /usr/local/cuda-13.0's). **Hazard:** /usr/local/cuda-13.4 with cuBLAS 13.7.0.27 is installed
   beside it; an alternatives flip or LD_LIBRARY_PATH change moves gate logits silently except for
   the startup warn, `lane::tests::cublas_version` and `pad_classes`. Dockerfile.cuda pins
   libcublas-13-0=13.1.1.3-1.
 - **Branch** (`cuda::branch`): side Lane + two reused events, fork before the router gate GEMM,
   join before the combine, capture-safe; refuses a context with cudarc event tracking on.
-- Goldens: `scripts/zen6_moe_golden.py {route,gate,shared,check}` ->
-  `hanzo-engine/tests/fixtures/zen6_moe/`. Window checks: `scripts/zen6_moe_window.sh`.
+- Goldens: `hanzo-engine/tests/fixtures/zen6_moe/` holds the recorded reference router, gate and
+  shared-expert outputs.

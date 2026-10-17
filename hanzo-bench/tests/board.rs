@@ -58,7 +58,7 @@ fn scoring_the_samples_reproduces_the_published_board() {
             .find(|c| c["phase"] == cell.shape.phase.name() && c["n"] == cell.shape.n)
             .unwrap();
         let rival = cell.rival.as_ref().unwrap();
-        for (now, was) in [(&cell.hanzo, &was["hanzo"]), (&rival.llama, &was["llama"])] {
+        for (now, was) in [(&cell.hanzo, &was["hanzo"]), (&rival.stats, &was["rival"])] {
             let spread = now.spread.as_ref().unwrap();
             assert!(close(now.mean, was["mean"].as_f64().unwrap()));
             assert!(close(spread.ci, was["ci"].as_f64().unwrap()));
@@ -102,7 +102,7 @@ fn a_cell_is_filed_once_per_engine() {
     assert_eq!(ours["meta"]["versus"]["verdict"], "LOSS");
     assert_eq!(
         ours["meta"]["versus"]["subject"],
-        "llama.cpp/rocm/evo/Qwen3-1.7B-Q4_K_M"
+        "rival/rocm/evo/Qwen3-1.7B-Q4_K_M"
     );
     assert_eq!(
         (
@@ -118,7 +118,7 @@ fn a_cell_is_filed_once_per_engine() {
     assert_eq!(ours["lib_versions"]["hanzo-engine"], "1.7.87");
     let theirs = filed
         .iter()
-        .find(|e| e["id"] == id("llama.cpp").as_str())
+        .find(|e| e["id"] == id("rival").as_str())
         .unwrap();
     assert!(theirs["meta"].get("versus").is_none() && theirs["meta"].get("args").is_none());
 }

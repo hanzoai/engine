@@ -178,8 +178,7 @@ fn precomput_freqs_cis(
     Ok((cos, sin))
 }
 
-// phi3 `llm` fields:
-// https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#llm
+// phi3 `llm` fields (the GGUF specification's `[llm].` metadata keys):
 // NOTE: Types here do not match spec
 pub(crate) struct PropsGGUF {
     pub head_count: usize,

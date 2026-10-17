@@ -7,8 +7,8 @@
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "default",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "default",
     "ANTHROPIC_CUSTOM_MODEL_OPTION": "default",
-    "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "mistral.rs default",
-    "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Local model served by mistral.rs",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "Hanzo Engine default",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Local model served by Hanzo Engine",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   }
 }

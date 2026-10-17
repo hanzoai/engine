@@ -61,7 +61,7 @@ static void instantiate_mmq_q8_0(float *tmp_fixup, const mmq_args &args,
   }
 
   // Stream-k. When tiling efficiency is high, run one block per output tile
-  // and avoid the stream-k fixup pass. This matches llama.cpp's launch policy
+  // and avoid the stream-k fixup pass: NVIDIA at >= 90% wave efficiency.
   // and is faster for large Gemma prompt batches where ntiles >> SM count.
   const int ntiles_dst = ntx * nty * ntzw;
   const int tiles_nwaves = (ntiles_dst + nsm - 1) / nsm;

@@ -1,6 +1,6 @@
 // Vulkan copy_blocks / swap_blocks: STUBS. Block-level cache movement used for CPU<->GPU swapping
 // and copy-on-write block sharing (CUDA copy_blocks_kernel.cu / Metal cache.rs). The current
-// hanzo-engine cache_engine (vLLM-v1 block pool) does not call these, so they're provided only to
+// hanzo-engine cache_engine (the prefix-cached block pool) does not call these, so they're provided only to
 // match the cuda/metal export surface; both bail if reached.
 //
 // TODO (continuous batching / swapping): copy_blocks = gather/scatter of (src_block -> dst_blocks)

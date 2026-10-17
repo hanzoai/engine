@@ -64,7 +64,8 @@ pub use afq::ops::{
 pub use afq::{AfqBits, AfqGroupSize, AfqInner, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParams, BnbQuantType};
 pub use blockwise_fp8::{
-    blockwise_fp8_act, blockwise_fp8_moe, fp8_blockwise_dequantize, fp8_blockwise_quantize, BlockwiseFP8Linear,
+    blockwise_fp8_act, blockwise_fp8_moe, fp8_blockwise_dequantize, fp8_blockwise_quantize,
+    BlockwiseFP8Linear,
 };
 pub use distributed::{
     layers::{
@@ -576,7 +577,8 @@ impl QuantizedConfig {
 pub enum QuantMethodConfig {
     GptqAwq {
         bits: i32,
-        use_exllama: bool,
+        /// The weights are in the shuffled layout (rows sequential, packed values reordered).
+        is_shuffled: bool,
         q_weight: Tensor,
         qzeros: Option<Tensor>,
         scales: Tensor,

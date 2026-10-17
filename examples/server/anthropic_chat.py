@@ -1,8 +1,8 @@
 """
-Anthropic Messages API example for the mistral.rs server.
+Anthropic Messages API example for the Hanzo Engine server.
 
 Run the server:
-    mistralrs serve -p 1234 -m Qwen/Qwen3-4B
+    hanzo-engine serve -p 1234 -m Qwen/Qwen3-4B
 
 Then run:
     python3 examples/server/anthropic_chat.py
@@ -40,7 +40,7 @@ response = post(
         "messages": [
             {
                 "role": "user",
-                "content": "Explain what mistral.rs is in one paragraph.",
+                "content": "Explain what an inference engine does in one paragraph.",
             }
         ],
     },

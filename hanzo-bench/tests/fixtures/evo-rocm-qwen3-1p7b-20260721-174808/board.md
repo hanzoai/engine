@@ -1,4 +1,4 @@
-| model | backend | phase | n | conc | hanzo t/s | llama t/s | ratio | verdict | best hanzo | best llama | best ratio |
+| model | backend | phase | n | conc | hanzo t/s | rival t/s | ratio | verdict | best hanzo | best rival | best ratio |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | qwen3-1.7b | ROCm | prefill | 2048 | 1 | 3506.1±47.0 | 4551.3±20.1 | 0.770±0.011 | LOSS | 3570.29 | 4574.91 | 0.780 |
 | qwen3-1.7b | ROCm | prefill | 4096 | 1 | 2840.8±93.0 | 4103.3±16.0 | 0.692±0.023 | LOSS | 2927.70 | 4120.12 | 0.711 |

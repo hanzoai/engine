@@ -1,6 +1,6 @@
 /**
  * NVFP4 routed experts (Flash-Next E1) on sm_121a, as FlashInfer's cutlass_fused_moe computes
- * them at vLLM's production tactic, in six launches:
+ * them at the served production tactic, in six launches:
  *
  *   route    stable counting sort by expert (route.cu)
  *   expand   quantize each token once (e2m1.cuh, the served scaled_fp4_quant formula), write its

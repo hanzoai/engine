@@ -1,7 +1,7 @@
 //! Block hashing for prefix caching.
 //!
-//! This module implements content-addressable hashing for KV cache blocks,
-//! following vLLM's v1 approach. Each block is identified by a chain hash of:
+//! This module implements content-addressable hashing for KV cache blocks.
+//! Each block is identified by a chain hash of:
 //! - The hash of all previous blocks (parent hash)
 //! - The tokens contained in the current block
 //! - Optional extra keys (multimodal content hashes, LoRA names, cache salt)

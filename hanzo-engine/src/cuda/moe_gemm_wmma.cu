@@ -230,7 +230,7 @@ __global__ void moe_gemm_grouped_kernel(
           if (topk_weights) {
             val *= topk_weights[token_index];
           }
-          vllm::from_float(output[(size_t)token_index * size_n + n_global],
+          moe_dtype::from_float(output[(size_t)token_index * size_n + n_global],
                            val);
         }
       }

@@ -1,8 +1,7 @@
-//! Block-FP8 GEMM timing on the shapes Qwen3.8-Flash-Next serves, for the
-//! side-by-side with vLLM's kernel (`scripts/blockwise_fp8_bench.py` reads
-//! this output and prints the ratio table).
+//! Block-FP8 GEMM timing on the shapes Qwen3.8-Flash-Next serves, one JSON
+//! line per (N, K, M) in `--out` (default `target/blockwise_fp8.hanzo.jsonl`).
 //!
-//! Method, identical in both harnesses: weights rotate across copies that
+//! Method: weights rotate across copies that
 //! together exceed 2x L2 (48 MiB, at most 8), one CUDA graph per shape
 //! replays one GEMM per copy, 3 warm replays, then 5 rounds of 4 timed
 //! replays between CUDA events. Reported per GEMM: min and median µs.
@@ -37,7 +36,7 @@ mod bench {
     const ROUNDS: usize = 5;
     const REPLAYS: usize = 4;
 
-    /// (N, K): vLLM's fused projections, then hanzo's unfused ones.
+    /// (N, K): the fused projections first, then the unfused ones hanzo runs.
     pub const SHAPES: [(usize, usize); 10] = [
         (16384, 2560),
         (13312, 2560),
@@ -59,7 +58,9 @@ mod bench {
         by_l2.min((MAX_OUTPUT / (m * n * 2)).max(1))
     }
 
-    fn wrap<T>(r: std::result::Result<T, hanzo_ml::cuda::cudarc::driver::DriverError>) -> Result<T> {
+    fn wrap<T>(
+        r: std::result::Result<T, hanzo_ml::cuda::cudarc::driver::DriverError>,
+    ) -> Result<T> {
         r.map_err(hanzo_ml::Error::wrap)
     }
 
@@ -81,7 +82,10 @@ mod bench {
 
     fn utilization() -> String {
         std::process::Command::new("nvidia-smi")
-            .args(["--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"])
+            .args([
+                "--query-gpu=utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ])
             .output()
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())
@@ -124,7 +128,9 @@ mod bench {
             }
         }
         let device = Device::new_cuda(0)?;
-        let Device::Cuda(dev) = device.clone() else { unreachable!() };
+        let Device::Cuda(dev) = device.clone() else {
+            unreachable!()
+        };
         if !cutlass::device_supported(&dev) {
             hanzo_ml::bail!("the block-FP8 CUTLASS lib runs on sm_121 only");
         }
@@ -136,13 +142,15 @@ mod bench {
 
         for &(n, k) in &SHAPES {
             let m_max = *ROWS.iter().max().unwrap();
-            let qa_all = Tensor::from_vec(codes(m_max * k, 11), (m_max, k), &Device::Cpu)?.to_device(&device)?;
+            let qa_all = Tensor::from_vec(codes(m_max * k, 11), (m_max, k), &Device::Cpu)?
+                .to_device(&device)?;
             let sa_all = Tensor::full(1e-2f32, (m_max, k / BLOCK), &device)?;
             let copies_max = copies(1, n, k);
             let weights: Vec<(Tensor, Tensor)> = (0..copies_max)
                 .map(|c| -> Result<_> {
                     Ok((
-                        Tensor::from_vec(codes(n * k, 101 + c as u64), (n, k), &Device::Cpu)?.to_device(&device)?,
+                        Tensor::from_vec(codes(n * k, 101 + c as u64), (n, k), &Device::Cpu)?
+                            .to_device(&device)?,
                         Tensor::full(1e-3f32, (n / BLOCK, k / BLOCK), &device)?,
                     ))
                 })
@@ -157,9 +165,13 @@ mod bench {
                     cutlass::matmul(&qa, &sa, qw, sw)?;
                 }
                 wrap(stream.synchronize())?;
-                wrap(stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED))?;
-                let captured: Result<Vec<Tensor>> =
-                    weights[..c].iter().map(|(qw, sw)| cutlass::matmul(&qa, &sa, qw, sw)).collect();
+                wrap(
+                    stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED),
+                )?;
+                let captured: Result<Vec<Tensor>> = weights[..c]
+                    .iter()
+                    .map(|(qw, sw)| cutlass::matmul(&qa, &sa, qw, sw))
+                    .collect();
                 let graph = wrap(stream.end_capture(
                     sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
                 ))?
@@ -177,7 +189,8 @@ mod bench {
                         wrap(graph.launch())?;
                     }
                     wrap(end.record(&stream))?;
-                    per_gemm.push(wrap(start.elapsed_ms(&end))? as f64 * 1e3 / (REPLAYS * c) as f64);
+                    per_gemm
+                        .push(wrap(start.elapsed_ms(&end))? as f64 * 1e3 / (REPLAYS * c) as f64);
                 }
                 wrap(stream.synchronize())?;
                 drop(outputs);

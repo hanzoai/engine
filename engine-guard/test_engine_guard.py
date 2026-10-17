@@ -20,6 +20,8 @@ eg = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = eg            # register so coverage can resolve it by name
 _spec.loader.exec_module(eg)
 
+BOMB = eg.BOMB_PAT                      # the legacy binary's name, as the guard matches it
+
 
 # ----------------------------------------------------------------- fakes
 class FakeProc:
@@ -82,10 +84,10 @@ def test_parse_port(cmdline, expected):
 
 # ----------------------------------------------------------------- is_bomb
 @pytest.mark.parametrize("name,exe,argv0,expected", [
-    (None, "/opt/hanzo/bin/mistralrs-server", None, True),       # exe basename
-    (None, None, "/usr/local/bin/mistralrs-server", True),       # argv0 basename
-    ("mistralrs-server", None, None, True),                      # full comm
-    ("mistralrs-serve", None, None, True),                       # 15-char truncated comm
+    (None, f"/opt/hanzo/bin/{BOMB}", None, True),                # exe basename
+    (None, None, f"/usr/local/bin/{BOMB}", True),                # argv0 basename
+    (BOMB, None, None, True),                                    # full comm
+    (BOMB[:15], None, None, True),                               # 15-char truncated comm
     # critical false-positive guard: cmd/binary merely *mentions* the name
     ("bash", "/bin/bash", "/bin/bash", False),
     ("python3", "/usr/bin/python3", "python3", False),
@@ -93,7 +95,7 @@ def test_parse_port(cmdline, expected):
     # the native engine itself is never a bomb
     ("hanzo", "/x/target/release/hanzo", "/x/target/release/hanzo", False),
     (None, None, None, False),                                   # nothing known
-    ("mistralrs-serv", None, None, False),                       # 14 chars: not a match
+    (BOMB[:14], None, None, False),                              # 14 chars: not a match
 ])
 def test_is_bomb(name, exe, argv0, expected):
     assert eg.is_bomb(name, exe, argv0) is expected
@@ -189,14 +191,14 @@ def env(monkeypatch):
 
 # ----------------------------------------------------------------- circuit breaker
 def test_kill_bomb_kills_only_the_real_binary(monkeypatch):
-    """The critical guard: kill the real mistralrs-server, never an innocent
-    process whose command line merely CONTAINS that string."""
-    bomb = FakeProc(101, name="mistralrs-serve", exe="/opt/mistralrs-server",
-                    cmdline=["/opt/mistralrs-server", "-p", "1234"])
+    """The critical guard: kill the real legacy binary, never an innocent
+    process whose command line merely CONTAINS its name."""
+    bomb = FakeProc(101, name=BOMB[:15], exe=f"/opt/{BOMB}",
+                    cmdline=[f"/opt/{BOMB}", "-p", "1234"])
     innocent = FakeProc(202, name="bash", exe="/bin/bash",
-                        cmdline=["/bin/bash", "-c", "tail -f mistralrs-server.log"])
+                        cmdline=["/bin/bash", "-c", f"tail -f {BOMB}.log"])
     grep = FakeProc(303, name="grep", exe="/usr/bin/grep",
-                    cmdline=["grep", "mistralrs-server", "/var/log/syslog"])
+                    cmdline=["grep", BOMB, "/var/log/syslog"])
     monkeypatch.setattr(eg, "psutil", FakePsutil([bomb, innocent, grep]))
     eg._kill_bomb()
     assert bomb.killed is True
@@ -206,10 +208,10 @@ def test_kill_bomb_kills_only_the_real_binary(monkeypatch):
 
 def test_bomb_procs_detects_by_exe_argv0_comm(monkeypatch):
     procs = [
-        FakeProc(1, exe="/x/mistralrs-server", cmdline=["/x/mistralrs-server"]),     # exe
-        FakeProc(2, name="mistralrs-serve", cmdline=["python", "run"]),              # comm
-        FakeProc(3, exe="/bin/sh", cmdline=["/x/mistralrs-server", "-p", "1"]),      # argv0
-        FakeProc(4, name="bash", exe="/bin/bash", cmdline=["bash", "-c", "echo mistralrs-server"]),
+        FakeProc(1, exe=f"/x/{BOMB}", cmdline=[f"/x/{BOMB}"]),                         # exe
+        FakeProc(2, name=BOMB[:15], cmdline=["python", "run"]),                        # comm
+        FakeProc(3, exe="/bin/sh", cmdline=[f"/x/{BOMB}", "-p", "1"]),                 # argv0
+        FakeProc(4, name="bash", exe="/bin/bash", cmdline=["bash", "-c", f"echo {BOMB}"]),
     ]
     monkeypatch.setattr(eg, "psutil", FakePsutil(procs))
     assert {pid for pid, _ in eg._bomb_procs()} == {1, 2, 3}
@@ -217,10 +219,10 @@ def test_bomb_procs_detects_by_exe_argv0_comm(monkeypatch):
 
 def test_tick_kills_bomb_not_innocent(monkeypatch):
     """One real _tick cycle: its first act precisely kills the bomb, spares others."""
-    bomb = FakeProc(101, name="mistralrs-serve", exe="/opt/mistralrs-server",
-                    cmdline=["/opt/mistralrs-server"])
+    bomb = FakeProc(101, name=BOMB[:15], exe=f"/opt/{BOMB}",
+                    cmdline=[f"/opt/{BOMB}"])
     innocent = FakeProc(202, name="vim", exe="/usr/bin/vim",
-                        cmdline=["vim", "mistralrs-server.rs"])
+                        cmdline=["vim", f"{BOMB}.rs"])
     monkeypatch.setattr(eg, "psutil", FakePsutil([bomb, innocent]))
     monkeypatch.setattr(eg, "_procs_matching", lambda pat: [])      # no engines
     monkeypatch.setattr(eg, "_any_running", lambda pats: False)
@@ -232,8 +234,8 @@ def test_tick_kills_bomb_not_innocent(monkeypatch):
 
 def test_kill_bomb_swallows_kill_errors(monkeypatch):
     """A bomb that vanishes between detection and kill must not crash the guard."""
-    bomb = FakeProc(101, exe="/opt/mistralrs-server",
-                    cmdline=["/opt/mistralrs-server"], kill_raises=True)
+    bomb = FakeProc(101, exe=f"/opt/{BOMB}",
+                    cmdline=[f"/opt/{BOMB}"], kill_raises=True)
     monkeypatch.setattr(eg, "psutil", FakePsutil([bomb]))
     eg._kill_bomb()                      # must not raise
     assert bomb.killed is True           # attempted
@@ -624,7 +626,7 @@ def test_status_reports_ports_and_bomb_warning(monkeypatch, capsys):
                         if pat == eg.ENGINE_PAT else [])
     monkeypatch.setattr(eg, "_health", lambda port: port == 36900)
     monkeypatch.setattr(eg, "_any_running", lambda pats: True)
-    monkeypatch.setattr(eg, "_bomb_procs", lambda: [(99, "mistralrs-server")])
+    monkeypatch.setattr(eg, "_bomb_procs", lambda: [(99, BOMB)])
     eg.status()
     out = capsys.readouterr().out
     assert "ports [36900, 36901]" in out

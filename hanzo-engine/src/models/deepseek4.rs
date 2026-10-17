@@ -180,9 +180,9 @@ impl DeepSeekV4Config {
         self.head_dim
     }
 
-    /// Attention softmax scale — `1/sqrt(head_dim)`, matching the `ds4.c`
-    /// `kq_scale`. (YaRN magnitude-scaling of the *score* is a numeric-parity
-    /// follow-on; the rotary embedding still applies YaRN to the positions.)
+    /// Attention softmax scale — `1/sqrt(head_dim)`. (YaRN magnitude-scaling of the
+    /// *score* is a numeric-parity follow-on; the rotary embedding still applies YaRN to
+    /// the positions.)
     fn softmax_scale(&self) -> f32 {
         1.0 / (self.head_dim as f32).sqrt()
     }
@@ -393,8 +393,7 @@ impl HyperConnections {
     }
 
     /// Per-token Sinkhorn over `[…, dst, src]`: softmax(src) + eps, then column
-    /// (over `dst`) / row (over `src`) alternation, matching `ds4.c`
-    /// `hc_split_sinkhorn_one`.
+    /// (over `dst`) / row (over `src`) alternation.
     fn sinkhorn(&self, logits: &Tensor) -> Result<Tensor> {
         // CUDA: one fused f32 kernel instead of ~120 tiny bf16 tensor-op launches
         // (the mHC swarm was ~20% of decode GPU time — see hanzo_ml Tensor::hc_sinkhorn).
@@ -451,8 +450,8 @@ struct V4Attention {
 }
 
 /// Unweighted per-head RMS norm over the last (`head_dim`) axis of `[B,nh,L,hd]`
-/// — ds4.c `head_rms_norm_inplace` (ds4.c:4516), applied to the query after
-/// `q_b` and **before** RoPE (ds4.c:6756). No learned gain (γ=1).
+/// — `x / sqrt(mean(x²) + eps)` per head, applied to the query after
+/// `q_b` and **before** RoPE. No learned gain (γ=1).
 pub(crate) fn per_head_rms_norm(x: &Tensor, eps: f64) -> Result<Tensor> {
     let scale = (x.sqr()?.mean_keepdim(D::Minus1)? + eps)?.recip()?.sqrt()?;
     x.broadcast_mul(&scale)
@@ -579,9 +578,8 @@ impl V4Attention {
 
     /// Apply partial RoPE to the **trailing** `rope_dim` of the query `[B,nh,L,hd]`
     /// and the single-head latent `[B,1,L,hd]`; the leading `n_nope` dims pass
-    /// through. This matches ds4.c `rope_tail_ext_inplace` (ds4.c:6856), which
-    /// rotates `x + n_nope` where `n_nope = head_dim - n_rot` — the positional
-    /// part is the **last** `qk_rope_head_dim` dims (the `[q_nope first, q_pe last]`
+    /// through: the rotation starts at `x + n_nope` where `n_nope = head_dim - n_rot` —
+    /// the positional part is the **last** `qk_rope_head_dim` dims (the `[q_nope first, q_pe last]`
     /// split shared by the GGUF and HF DeepSeek conventions), NOT the leading dims.
     fn rope_partial(
         &self,
@@ -620,7 +618,7 @@ impl V4Attention {
         let (bs, seq_len, _) = xs.dims3()?;
 
         // Query: hidden -> q-LoRA(a, norm, b) -> [B, nh, L, head_dim], then the
-        // unweighted per-head RMS norm (ds4.c:6756) before RoPE.
+        // unweighted per-head RMS norm before RoPE.
         let q_lat = self.q_a_norm.forward(&self.q_a.forward(xs)?)?;
         let mut q = self
             .q_b
@@ -1030,7 +1028,7 @@ impl DeepSeekV4 {
             &cfg.quantization_config,
         )?;
 
-        // Per-layer RoPE schedule (ds4.c:6892-6904): **Full** layers (compress
+        // Per-layer RoPE schedule: **Full** layers (compress
         // ratio 0) use `rope_theta` (10000) with NO YaRN; **compressed** layers
         // (Indexed/Sliding) use `compress_rope_theta` (160000) WITH YaRN. Build
         // both rope variants per device and select by `layer_mode`.
@@ -1663,7 +1661,7 @@ mod tests {
         }
     }
 
-    /// M1 — unweighted per-head RMS norm (ds4.c:4516 `head_rms_norm_inplace`):
+    /// M1 — unweighted per-head RMS norm (`x / sqrt(mean(x²) + eps)`):
     /// each head's `head_dim` vector is scaled to unit RMS, independently, with
     /// no learned gain. Verifies the post-q_b/pre-RoPE norm we apply per head.
     #[test]

@@ -214,9 +214,8 @@ impl DrySamplingParamsInner {
                         tokenizer
                             // Prefix with 'a' to get the correct encoding of the token at the end of a text.
                             //
-                            // FIXME: This is a hack. See https://github.com/LostRuins/koboldcpp/pull/982
-                            //        for the correct solution which covers multi-token sequence breakers
-                            //        and ambiguous encodings.
+                            // A breaker is matched in this one encoding only: one that spans
+                            // several tokens or encodes ambiguously is not covered.
                             .encode_fast(["a", &breaker].concat(), true)
                             .map_err(anyhow::Error::msg)
                             .map(|enc| {

@@ -22,8 +22,8 @@ Only dependency: Python 3.8+ and (recommended, cross-platform) `psutil`. Without
 
 ## What it does
 
-1. **Circuit breaker** (always): kills any process that *is* the legacy
-   `mistralrs-server` binary (matched precisely by exe/argv0/comm — never a
+1. **Circuit breaker** (always): kills any process that *is* the legacy server
+   binary named by `BOMB_PAT` (matched precisely by exe/argv0/comm — never a
    substring of some innocent command), and if `hanzo serve` processes ever
    exceed `RUNAWAY_CEILING` (default 256) it kills them all. This is the
    backstop against the historical recursion fork-bomb.

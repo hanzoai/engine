@@ -22,7 +22,7 @@
 
 #include <stdint.h>
 
-namespace vllm {
+namespace pagedattn {
 
 // Define custom FP32 vector data types.
 struct Float4_ {
@@ -270,4 +270,4 @@ inline __device__ void zero(float& dst) {
   dst = 0.f;
 }
 
-} // namespace vllm
+} // namespace pagedattn

@@ -4,8 +4,9 @@
 #
 #   scripts/blockwise_fp8_e2e.sh --out DIR [--plan]
 #
-# It needs the box to itself (~75 GiB resident): the user stops hanzo-vllm first and restarts it
-# afterwards. This script never touches that unit, and refuses to run while :18300 listens.
+# It needs the box to itself (~75 GiB resident): the user stops the server on :18300 first and
+# restarts it afterwards. This script never touches that server, and refuses to run while :18300
+# listens.
 #
 # Per backend: serve, then
 #   - W0's harness (scripts/bench_http.py): c=1 decode of 512 tokens x5, warm prefill at ~8K and ~32K;
@@ -13,12 +14,13 @@
 #   - greedy output identical across 3 runs;
 #   - the startup log's resolution line.
 # Exits 1 unless: auto logs exactly one "fp8-block-gemm-backend auto -> cutlass" line and no
-# fallback WARN; cutlass block-FP8 GEMM µs per decode step <= 1.05 x the vLLM M=1 sum
-# (VLLM_M1_SUM_US, from T6's minima over the model's GEMM shapes); auto decode beats scalar;
+# fallback WARN; cutlass block-FP8 GEMM µs per decode step <= 1.05 x GATE_M1_SUM_US, the M=1
+# GEMM time budget in µs (T6's per-shape minima at M=1, summed over the model's GEMM shapes);
+# auto decode beats scalar;
 # greedy output is identical across 3 runs per backend.
 #
 # Inputs: HANZO_ENGINE_BIN (default <repo>/target/release/hanzo-engine), PORT (default 30000),
-# SNAPSHOT (default the fp8hybrid snapshot below), VLLM_M1_SUM_US (required).
+# SNAPSHOT (default the fp8hybrid snapshot below), GATE_M1_SUM_US (required).
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -57,7 +59,7 @@ fi
 
 # Preflight: every refusal happens before anything starts.
 if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ':18300$'; then
-  echo "e2e: :18300 is listening (hanzo-vllm); a full model needs it stopped" >&2
+  echo "e2e: :18300 is listening; a full model needs that server stopped" >&2
   exit 75
 fi
 mem=$(awk '/^MemAvailable:/ {printf "%d", $2 / 1048576}' /proc/meminfo)
@@ -65,7 +67,7 @@ mem=$(awk '/^MemAvailable:/ {printf "%d", $2 / 1048576}' /proc/meminfo)
 [ -x "$BIN" ] || { echo "e2e: no binary at $BIN" >&2; exit 1; }
 [ -d "$SNAPSHOT" ] || { echo "e2e: no snapshot at $SNAPSHOT" >&2; exit 1; }
 [ -f "$HERE/bench_http.py" ] || { echo "e2e: scripts/bench_http.py (W0's harness) is missing" >&2; exit 1; }
-[ -n "${VLLM_M1_SUM_US:-}" ] || { echo "e2e: set VLLM_M1_SUM_US from T6's vLLM minima" >&2; exit 2; }
+[ -n "${GATE_M1_SUM_US:-}" ] || { echo "e2e: set GATE_M1_SUM_US, the M=1 GEMM budget in us (T6's minima)" >&2; exit 2; }
 command -v nsys >/dev/null || { echo "e2e: nsys not on PATH" >&2; exit 1; }
 mkdir -p "$OUT"
 
@@ -147,8 +149,8 @@ for row in csv.DictReader(open(sys.argv[1])):
         total += float(row["Total Time (ns)"])
 print(total / 1e3 / 20)' "$dir/kern_cuda_gpu_kern_sum.csv")
   echo "$backend: block-FP8 GEMM $per_step us per decode step"
-  if [ "$backend" = auto ] && python3 -c "import sys; sys.exit(0 if $per_step <= 1.05 * $VLLM_M1_SUM_US else 1)"; then :; elif [ "$backend" = auto ]; then
-    echo "FAIL auto: $per_step us per step > 1.05 x vLLM $VLLM_M1_SUM_US us" >&2
+  if [ "$backend" = auto ] && python3 -c "import sys; sys.exit(0 if $per_step <= 1.05 * $GATE_M1_SUM_US else 1)"; then :; elif [ "$backend" = auto ]; then
+    echo "FAIL auto: $per_step us per step > 1.05 x budget $GATE_M1_SUM_US us" >&2
     fail=1
   fi
 done

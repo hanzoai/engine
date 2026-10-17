@@ -12,22 +12,16 @@ function Write-Err { Write-Host "error: $args" -ForegroundColor Red; exit 1 }
 
 # Banner
 function Show-Banner {
-    Write-Host ""
-    Write-Host "  __  __ _     _             _              " -ForegroundColor Cyan
-    Write-Host " |  \/  (_)___| |_ _ __ __ _| |  _ __ ___   " -ForegroundColor Cyan
-    Write-Host " | |\/| | / __| __| '__/ `` | | | '__/ __|  " -ForegroundColor Cyan
-    Write-Host " | |  | | \__ \ |_| | | (_| | |_| |  \__ \  " -ForegroundColor Cyan
-    Write-Host " |_|  |_|_|___/\__|_|  \__,_|_(_)_|  |___/  " -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "Fast, flexible LLM inference." -ForegroundColor Blue
+    Write-Host "Hanzo Engine" -NoNewline
+    Write-Host " - fast, flexible LLM inference." -ForegroundColor Blue
     Write-Host ""
 }
 
 # Minimum required Rust version (from Cargo.toml rust-version)
 $RequiredRustVersion = "1.88"
-$MistralRsRepoUrl = "https://github.com/EricLBuehler/mistral.rs"
-$MistralRsBranch = "master"
-$MistralRsCliPackage = "mistralrs-cli"
+$HanzoRepoUrl = "https://github.com/hanzoai/engine"
+$HanzoBranch = "main"
+$HanzoCliPackage = "hanzo-cli"
 
 # Check if Rust is installed
 function Test-Rust {
@@ -206,16 +200,16 @@ function Get-Features {
         $ccMinor = if ($cudaCC.Length -gt 1) { $cudaCC.Substring(1) } else { "0" }
         Write-Info "CUDA detected (compute capability: $ccMajor.$ccMinor)"
 
-        if ($env:MISTRALRS_INSTALL_NO_NCCL -eq "1") {
-            Write-Info "MISTRALRS_INSTALL_NO_NCCL=1 set - skipping nccl"
+        if ($env:HANZO_INSTALL_NO_NCCL -eq "1") {
+            Write-Info "HANZO_INSTALL_NO_NCCL=1 set - skipping nccl"
         } elseif (Test-NCCL) {
             $features += "nccl"
             Write-Info "NCCL detected - enabling nccl for CUDA multi-GPU tensor parallelism"
-        } elseif ($env:MISTRALRS_INSTALL_NCCL -eq "1") {
+        } elseif ($env:HANZO_INSTALL_NCCL -eq "1") {
             $features += "nccl"
-            Write-Warn "MISTRALRS_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless NCCL is on the linker path"
+            Write-Warn "HANZO_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless NCCL is on the linker path"
         } else {
-            Write-Warn "NCCL not found - skipping nccl. Install NCCL or set MISTRALRS_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
+            Write-Warn "NCCL not found - skipping nccl. Install NCCL or set HANZO_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
         }
 
         # Check for cuDNN
@@ -255,17 +249,33 @@ function Get-Features {
     return $features -join " "
 }
 
-# Install hanzo-cli
-function Install-MistralRS {
+# Install the engine from the repository. There is no registry release of
+# $HanzoCliPackage, so the repository is the only place the binary exists.
+# HANZOAI_VERSION pins a release tag; HANZOAI_INSTALL_DIR redirects the bin dir.
+function Install-Hanzo {
     param([string]$Features)
 
-    if ($Features) {
-        Write-Info "Installing hanzo-cli with features: $Features"
-        & cargo install hanzo-cli@0.8.0 --features "$Features"
+    $cargoArgs = @("install", "--git", $HanzoRepoUrl, "--locked", $HanzoCliPackage)
+    if ($env:HANZOAI_VERSION) {
+        $cargoArgs += @("--tag", $env:HANZOAI_VERSION)
+        Write-Info "Pinning release tag $($env:HANZOAI_VERSION)"
     } else {
-        Write-Info "Installing hanzo-cli with default features"
-        & cargo install hanzo-cli@0.8.0
+        $cargoArgs += @("--branch", $HanzoBranch)
     }
+    # cargo --root R writes R\bin, but callers name a BIN dir, so trim one \bin.
+    if ($env:HANZOAI_INSTALL_DIR) {
+        $root = $env:HANZOAI_INSTALL_DIR.TrimEnd('\', '/')
+        if ($root -match '[\\/]bin$') { $root = $root.Substring(0, $root.Length - 4) }
+        $cargoArgs += @("--root", $root)
+        Write-Info "Installing into $root\bin"
+    }
+    if ($Features) {
+        $cargoArgs += @("--features", $Features)
+        Write-Info "Installing $HanzoCliPackage with features: $Features"
+    } else {
+        Write-Info "Installing $HanzoCliPackage with default features"
+    }
+    & cargo @cargoArgs
 
     if ($LASTEXITCODE -ne 0) {
         Write-Err "Installation failed"
@@ -335,7 +345,7 @@ function Main {
     }
 
     Write-Host ""
-    Install-MistralRS -Features $features
+    Install-Hanzo -Features $features
 
     Write-Host ""
     Write-Success "hanzo installed successfully!"

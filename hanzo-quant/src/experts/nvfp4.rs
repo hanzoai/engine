@@ -1,4 +1,4 @@
-//! NVFP4 routed experts (Flash-Next E1): FlashInfer's `cutlass_fused_moe` as vLLM serves it on
+//! NVFP4 routed experts (Flash-Next E1): FlashInfer's `cutlass_fused_moe` as it is served on
 //! sm_121, in six launches with no host synchronization.
 
 use std::ffi::c_void;
@@ -107,9 +107,9 @@ impl Experts {
     /// `w2` U8 `[E, H, I/2]`, `w2_scale` F8E4M3 `[E, H, I/16]`, `w2_global` and `w2_input` F32
     /// `[E]`. Scales are the checkpoint's linear E4M3 bytes.
     ///
-    /// As vLLM does for FlashInfer: one activation scale per GEMM, the max `input_scale` over
-    /// every expert; `alpha = weight_scale_2 * max_input`, `gs = 1 / max_input`, both f32 RN.
-    /// Where vLLM warns on a gate/up `weight_scale_2` mismatch this is an error.
+    /// One activation scale per GEMM, the max `input_scale` over every expert;
+    /// `alpha = weight_scale_2 * max_input`, `gs = 1 / max_input`, both f32 RN. A gate/up
+    /// `weight_scale_2` mismatch is an error, not a warning.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         w13: &Tensor,
@@ -131,12 +131,16 @@ impl Experts {
         }
         let inter = n13 / 2;
         if hidden % 128 != 0 || inter % 128 != 0 {
-            hanzo_ml::bail!("NVFP4 experts need H and I multiples of 128, got H={hidden} I={inter}");
+            hanzo_ml::bail!(
+                "NVFP4 experts need H and I multiples of 128, got H={hidden} I={inter}"
+            );
         }
         if w2.dims3()? != (e, hidden, inter / 2) {
             hanzo_ml::bail!("w2 {:?} does not match w13 {:?}", w2.shape(), w13.shape());
         }
-        if w13_scale.dims3()? != (e, n13, hidden / 16) || w2_scale.dims3()? != (e, hidden, inter / 16) {
+        if w13_scale.dims3()? != (e, n13, hidden / 16)
+            || w2_scale.dims3()? != (e, hidden, inter / 16)
+        {
             hanzo_ml::bail!("NVFP4 expert scales have the wrong shape");
         }
         if e > 1024 {
@@ -233,12 +237,16 @@ impl Experts {
     pub fn layout(&self, m: usize, k: usize) -> Result<Layout> {
         let shape = self.shape(m, k);
         let mut l = Layout::default();
-        check(unsafe { hanzo_moe_nvfp4_layout(&shape, &mut l) }, "nvfp4 layout")?;
+        check(
+            unsafe { hanzo_moe_nvfp4_layout(&shape, &mut l) },
+            "nvfp4 layout",
+        )?;
         Ok(l)
     }
 
     /// `x` BF16 `[M, H]`, `ids` U32/I32 `[M, k]`, `weights` F32 `[M, k]`, `addend` BF16
-    /// `[M, H]` (the shared expert, added as vLLM adds it). Returns BF16 `[M, H]`.
+    /// `[M, H]` (the shared expert, added as `bf16(f32(bf16(s)) + f32(addend))`). Returns BF16
+    /// `[M, H]`.
     pub fn forward(
         &self,
         x: &Tensor,
@@ -280,8 +288,7 @@ impl Experts {
                 self.hidden
             );
         }
-        if x.dtype() != DType::BF16 || weights.dtype() != DType::F32 || out.dtype() != DType::BF16
-        {
+        if x.dtype() != DType::BF16 || weights.dtype() != DType::F32 || out.dtype() != DType::BF16 {
             hanzo_ml::bail!("nvfp4 experts take BF16 x and out, F32 router weights");
         }
         if !matches!(ids.dtype(), DType::U32 | DType::I32) {
@@ -339,7 +346,10 @@ fn prepare(dev: &hanzo_ml::CudaDevice) -> Result<()> {
     let ordinal = dev.cuda_stream().context().ordinal();
     let mut done = DONE.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap();
     if !done.contains(&ordinal) {
-        check(unsafe { hanzo_moe_nvfp4_prepare(ordinal as i32) }, "nvfp4 prepare")?;
+        check(
+            unsafe { hanzo_moe_nvfp4_prepare(ordinal as i32) },
+            "nvfp4 prepare",
+        )?;
         done.push(ordinal);
     }
     Ok(())

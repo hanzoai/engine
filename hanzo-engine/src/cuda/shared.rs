@@ -18,7 +18,7 @@ fn launched(rc: i32, what: &str) -> Result<()> {
     Ok(())
 }
 
-/// `h[t, j] = bf16(silu(g) * u)` over vLLM's merged layout `gu[t] = [g (inter) | u (inter)]`,
+/// `h[t, j] = bf16(silu(g) * u)` over the merged layout `gu[t] = [g (inter) | u (inter)]`,
 /// in f32 with one rounding.
 pub fn act(
     lane: &Lane,
@@ -94,7 +94,8 @@ mod tests {
         (key(a) - key(b)).unsigned_abs()
     }
 
-    /// act against torch's f32 reference (bitwise) and vLLM's compiled SiluAndMul (tolerance).
+    /// act against torch's f32 reference (bitwise) and the served compiled SiluAndMul's recorded
+    /// output (tolerance).
     #[test]
     fn act_matches() {
         let dev = device();
@@ -111,17 +112,17 @@ mod tests {
             let reference = tensor_bits(&f[&format!("h_ref.{t}")]);
             let bad = got.iter().zip(&reference).filter(|(a, b)| a != b).count();
             assert_eq!(bad, 0, "T={t}: {bad} of {} differ from the torch f32 reference", got.len());
-            let vllm = tensor_bits(&f[&format!("h.{t}")]);
-            let same = got.iter().zip(&vllm).filter(|(a, b)| a == b).count();
-            let worst = got.iter().zip(&vllm).map(|(a, b)| ulps(*a, *b)).max().unwrap();
+            let served = tensor_bits(&f[&format!("h.{t}")]);
+            let same = got.iter().zip(&served).filter(|(a, b)| a == b).count();
+            let worst = got.iter().zip(&served).map(|(a, b)| ulps(*a, *b)).max().unwrap();
             let rate = same as f64 / got.len() as f64;
-            println!("act T={t}: torch f32 ref 100.000% bitwise; vLLM compiled SiluAndMul {:.3}% bitwise, max {worst} ulp", 100. * rate);
+            println!("act T={t}: torch f32 ref 100.000% bitwise; served SiluAndMul {:.3}% bitwise, max {worst} ulp", 100. * rate);
             assert!(rate >= 0.999 && worst <= 1, "T={t}: {:.3}% bitwise, {worst} ulp", 100. * rate);
         }
     }
 
     /// The shared gate's logit, lane.linear with the [1, 2560] weight on a side Lane, equals
-    /// vLLM's F.linear bitwise.
+    /// the recorded F.linear logit bitwise.
     #[test]
     fn logit_matches() {
         let dev = device();
@@ -139,7 +140,7 @@ mod tests {
         }
     }
 
-    /// gate applied to vLLM's (g, d) equals vLLM's eager sigmoid(g) * d bitwise.
+    /// gate applied to the recorded (g, d) equals the recorded eager sigmoid(g) * d bitwise.
     #[test]
     fn gate_matches() {
         let dev = device();

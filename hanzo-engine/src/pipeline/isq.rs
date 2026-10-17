@@ -441,7 +441,7 @@ pub trait IsqModel {
     /// do not search for in the imatrix file). This is used to pair ISQ layers with the
     /// corresponding imatrix weights.
     ///
-    /// - This is only for loading from a llama.cpp imatrix file.
+    /// - This is only for loading from a `.imatrix` file.
     /// - Corresponds to `IsqOrganization::Default`
     fn imatrix_names(&self) -> hanzo_ml::Result<Vec<Option<String>>> {
         // TODO: make this required.

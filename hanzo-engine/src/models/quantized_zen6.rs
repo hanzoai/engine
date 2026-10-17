@@ -9,8 +9,6 @@
 //! Every attention layer carries a sparse-attention (QSA) indexer that keeps at most its token
 //! budget of keys per query. Up to that budget it keeps them all, so dense attention is exact, and
 //! the context is capped there until the sparse path lands.
-//!
-//! Source: vLLM `models/qwen4_exp/nvidia/model.py`.
 
 use std::sync::{Arc, Mutex};
 
@@ -337,7 +335,9 @@ impl ModelWeights {
                     v_head_dim: props.head_dim,
                     kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
                 },
-                (0..props.block_count).filter(|&i| text.attention(i)).collect(),
+                (0..props.block_count)
+                    .filter(|&i| text.attention(i))
+                    .collect(),
             )),
         })
     }
@@ -382,7 +382,13 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let output = gguf_qmm(ct.tensor("output.weight", device)?)?;
         let head = Mixer::from_gguf(&mut ct, "output_hc", streams, eps, device)?;
         let ngram_dev = mapper.device_for(ngram_layer, false).unwrap_or(device);
-        let mut ngram = Some(Ngram::load(&mut ct, hash, ngram_layer, f64::from(eps), ngram_dev)?);
+        let mut ngram = Some(Ngram::load(
+            &mut ct,
+            hash,
+            ngram_layer,
+            f64::from(eps),
+            ngram_dev,
+        )?);
 
         let rotary = Arc::new(Qwen3VLRotaryEmbedding::new(
             props.rope_freq_base,
@@ -688,7 +694,10 @@ impl crate::pipeline::NormalModel for ModelWeights {
     }
     fn model_config(&self) -> Arc<dyn crate::paged_attention::ModelConfigLike + Send + Sync> {
         let (meta, layers) = self.meta.as_ref().expect("a safetensors zen6");
-        Arc::new(crate::paged_attention::KvLayers::new(meta.clone(), layers.clone()))
+        Arc::new(crate::paged_attention::KvLayers::new(
+            meta.clone(),
+            layers.clone(),
+        ))
     }
 }
 
@@ -959,7 +968,14 @@ mod tests {
         vb as snapshot_vb, weights, Recorder, Tol, CHUNKS,
     };
 
-    fn tiny_model(dev: &Device, dtype: DType) -> Result<(ModelWeights, std::collections::BTreeSet<String>, tempfile::TempDir)> {
+    fn tiny_model(
+        dev: &Device,
+        dtype: DType,
+    ) -> Result<(
+        ModelWeights,
+        std::collections::BTreeSet<String>,
+        tempfile::TempDir,
+    )> {
         let dir = tempfile::tempdir().map_err(hanzo_ml::Error::msg)?;
         let files = tiny_checkpoint(dir.path())?;
         let (vb, names) = Recorder::over(&files, dtype, dev)?;
@@ -967,7 +983,9 @@ mod tests {
             &tiny_config(),
             vb,
             &files,
-            Box::new(DummyDeviceMapper { nm_device: dev.clone() }),
+            Box::new(DummyDeviceMapper {
+                nm_device: dev.clone(),
+            }),
             AttentionImplementation::Eager,
             dtype,
         )?;
@@ -997,7 +1015,10 @@ mod tests {
                 .collect();
             let missing: Vec<_> = want.difference(&read).collect();
             let extra: Vec<_> = read.difference(&want).collect();
-            assert!(missing.is_empty() && extra.is_empty(), "{dev:?}: missing {missing:?}, extra {extra:?}");
+            assert!(
+                missing.is_empty() && extra.is_empty(),
+                "{dev:?}: missing {missing:?}, extra {extra:?}"
+            );
         }
         Ok(())
     }
@@ -1011,7 +1032,11 @@ mod tests {
             logits = Some(model.forward(&ids, &prior, &[at], vec![(len - 1, 1)], None)?);
             at += len;
         }
-        logits.expect("a chunk").to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()
+        logits
+            .expect("a chunk")
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()
     }
 
     /// Chunks and single steps carry every cache of the safetensors model as one pass does.
@@ -1020,7 +1045,12 @@ mod tests {
         const T: [u32; 7] = [1, 5, 9, 3, 7, 2, 11];
         let whole = tiny_last_logits(&T, &[T.len()], DType::F32)?;
         assert!(whole.iter().all(|v| v.is_finite()));
-        let runs: [(&[usize], f32); 4] = [(&[3, 4], 1e-5), (&[2, 2, 3], 1e-5), (&[6, 1], 2e-3), (&[1; 7], 2e-3)];
+        let runs: [(&[usize], f32); 4] = [
+            (&[3, 4], 1e-5),
+            (&[2, 2, 3], 1e-5),
+            (&[6, 1], 2e-3),
+            (&[1; 7], 2e-3),
+        ];
         for (chunks, bound) in runs {
             let got = tiny_last_logits(&T, chunks, DType::F32)?;
             let worst = got
@@ -1028,7 +1058,10 @@ mod tests {
                 .zip(&whole)
                 .map(|(a, b)| (a - b).abs() / (1.0 + b.abs()))
                 .fold(0f32, f32::max);
-            assert!(worst <= bound, "chunks {chunks:?}: worst relative error {worst:e}");
+            assert!(
+                worst <= bound,
+                "chunks {chunks:?}: worst relative error {worst:e}"
+            );
         }
         Ok(())
     }
@@ -1043,25 +1076,36 @@ mod tests {
         let t = NormalLoaderType::from_causal_lm_name("Qwen4ExpForConditionalGeneration").unwrap();
         assert_eq!(t, NormalLoaderType::Zen6);
         assert_eq!(t.to_string(), "zen6");
-        assert_eq!("zen6".parse::<NormalLoaderType>().unwrap(), NormalLoaderType::Zen6);
+        assert_eq!(
+            "zen6".parse::<NormalLoaderType>().unwrap(),
+            NormalLoaderType::Zen6
+        );
     }
 
     /// The registered loader builds the tiny checkpoint from its config.json and runs it through
     /// `NormalModel::forward` to the same logits as the model built directly.
     #[test]
     fn normal_loader_runs_tiny_checkpoint() -> Result<()> {
-        use crate::pipeline::{NormalLoadingMetadata, NormalModelLoader};
         use crate::pipeline::text_models_inputs_processor::FlashParams;
         use crate::pipeline::{ModelForwardContext, NormalModel};
+        use crate::pipeline::{NormalLoadingMetadata, NormalModelLoader};
         let dev = Device::Cpu;
         let dir = tempfile::tempdir().map_err(hanzo_ml::Error::msg)?;
         let files = tiny_checkpoint(dir.path())?;
         let vb = unsafe {
-            hanzo_quant::ShardedSafeTensors::sharded(&files, DType::F32, &dev, None, Arc::new(|_| true))?
+            hanzo_quant::ShardedSafeTensors::sharded(
+                &files,
+                DType::F32,
+                &dev,
+                None,
+                Arc::new(|_| true),
+            )?
         };
         let meta = NormalLoadingMetadata {
             weights: files.clone(),
-            mapper: Box::new(DummyDeviceMapper { nm_device: dev.clone() }),
+            mapper: Box::new(DummyDeviceMapper {
+                nm_device: dev.clone(),
+            }),
             loading_isq: false,
             real_device: dev.clone(),
             multi_progress: Arc::new(indicatif::MultiProgress::new()),
@@ -1082,7 +1126,8 @@ mod tests {
         let ids = Tensor::new(&T, &dev)?.unsqueeze(0)?;
         let (offsets, lens, pos, prior) = ([0usize], [(T.len() - 1, 1)], [0usize], [vec![]]);
         let flash = FlashParams::empty(true);
-        let mut ctx = ModelForwardContext::new(&offsets, &lens, &pos, None, &flash).with_prior(&prior);
+        let mut ctx =
+            ModelForwardContext::new(&offsets, &lens, &pos, None, &flash).with_prior(&prior);
         let got = NormalModel::forward(model.as_ref(), &ids, &mut ctx)?;
         let want = tiny_last_logits(&T, &[T.len()], DType::F32)?;
         let got = got.flatten_all()?.to_vec1::<f32>()?;
@@ -1097,8 +1142,13 @@ mod tests {
         use crate::pipeline::DeviceMappedModelLoader;
         let json = tiny_json();
         let loader = crate::pipeline::Zen6Loader;
-        let kv = loader.model_config(&json).map_err(hanzo_ml::Error::msg)?.kv_layers();
-        let want: Vec<usize> = (0..4).filter(|&i| tiny_config().text().attention(i)).collect();
+        let kv = loader
+            .model_config(&json)
+            .map_err(hanzo_ml::Error::msg)?
+            .kv_layers();
+        let want: Vec<usize> = (0..4)
+            .filter(|&i| tiny_config().text().attention(i))
+            .collect();
         assert_eq!(kv, want);
         assert_eq!(kv, vec![3]);
         Ok(())
@@ -1111,10 +1161,15 @@ mod tests {
     #[ignore = "reads the Qwen3.8-Flash-Next snapshot's config"]
     fn zen6_accounting_matches_checkpoint() -> Result<()> {
         use crate::pipeline::DeviceMappedModelLoader;
-        let json = std::fs::read_to_string(snapshot().join("config.json")).map_err(hanzo_ml::Error::wrap)?;
-        let (layers, rest) = crate::pipeline::Zen6Loader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
+        let json = std::fs::read_to_string(snapshot().join("config.json"))
+            .map_err(hanzo_ml::Error::wrap)?;
+        let (layers, rest) =
+            crate::pipeline::Zen6Loader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
         let estimate = layers.iter().sum::<usize>() + rest;
-        println!("estimate {estimate} B ({:.3} GiB)", estimate as f64 / (1u64 << 30) as f64);
+        println!(
+            "estimate {estimate} B ({:.3} GiB)",
+            estimate as f64 / (1u64 << 30) as f64
+        );
         assert!(
             (74_895_296_000..=74_895_296_000 + (32 << 20)).contains(&estimate),
             "estimate {estimate}"
@@ -1125,7 +1180,10 @@ mod tests {
             .kv_cache_elements_per_token();
         assert_eq!(per_token * DType::BF16.size_in_bytes(), 24_576);
         assert_eq!(per_token * DType::F8E4M3.size_in_bytes(), 12_288);
-        assert_eq!(config(&snapshot()).text().state_bytes_per_sequence(), 116_379_648);
+        assert_eq!(
+            config(&snapshot()).text().state_bytes_per_sequence(),
+            116_379_648
+        );
         Ok(())
     }
 
@@ -1133,18 +1191,29 @@ mod tests {
     fn table_never_charged() -> Result<()> {
         use crate::models::zen6::Role;
         let json = tiny_json();
-        let (layers, rest) = crate::pipeline::Zen6Loader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
+        let (layers, rest) =
+            crate::pipeline::Zen6Loader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
         let entries = manifest(tiny_config().text())?;
-        let host: usize = entries.iter().filter(|e| e.role == Role::Host).map(|e| e.bytes()).sum();
+        let host: usize = entries
+            .iter()
+            .filter(|e| e.role == Role::Host)
+            .map(|e| e.bytes())
+            .sum();
         let table: usize = entries
             .iter()
             .filter(|e| e.name.contains("ngram_embedding"))
             .map(|e| e.bytes())
             .sum();
         assert!(table > 0 && host >= table);
-        let pure: Vec<_> = entries.into_iter().filter(|e| e.role == Role::Device).collect();
+        let pure: Vec<_> = entries
+            .into_iter()
+            .filter(|e| e.role == Role::Device)
+            .collect();
         let charged: usize = layers.iter().sum::<usize>() + rest;
-        let device: usize = pure.iter().map(crate::pipeline::Zen6Loader::device_bytes).sum();
+        let device: usize = pure
+            .iter()
+            .map(crate::pipeline::Zen6Loader::device_bytes)
+            .sum();
         assert_eq!(charged, device, "every charged byte is a device entry's");
         Ok(())
     }
@@ -1156,8 +1225,12 @@ mod tests {
     fn loader_estimate_equals_allocation() -> Result<()> {
         use hanzo_ml::backend::BackendDevice;
         use hanzo_ml::cuda_backend::cudarc::driver::sys;
-        let Ok(dev) = Device::new_cuda(0) else { return Ok(()) };
-        let Device::Cuda(cu) = &dev else { unreachable!() };
+        let Ok(dev) = Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let Device::Cuda(cu) = &dev else {
+            unreachable!()
+        };
         let used = || -> u64 {
             cu.synchronize().expect("sync");
             let mut pool: sys::CUmemoryPool = std::ptr::null_mut();
@@ -1173,7 +1246,8 @@ mod tests {
             v
         };
         let json = tiny_json();
-        let (layers, rest) = crate::pipeline::Zen6Loader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
+        let (layers, rest) =
+            crate::pipeline::Zen6Loader::sizes(&json).map_err(hanzo_ml::Error::msg)?;
         let estimate = (layers.iter().sum::<usize>() + rest) as u64;
         let before = used();
         let (model, _, _dir) = tiny_model(&dev, DType::BF16)?;
@@ -1181,10 +1255,18 @@ mod tests {
         let after = used();
         let weights = after - before - cache;
         let tensors = manifest(tiny_config().text())?.len() as u64;
-        println!("estimate {estimate}, allocated {weights} (+{cache} cache) over {tensors} tensors");
+        println!(
+            "estimate {estimate}, allocated {weights} (+{cache} cache) over {tensors} tensors"
+        );
         // the pool rounds each allocation up; nothing beyond that may differ
-        assert!(weights >= estimate, "allocated {weights} under the estimate {estimate}");
-        assert!(weights - estimate <= tensors * 512, "allocated {weights}, estimate {estimate}");
+        assert!(
+            weights >= estimate,
+            "allocated {weights} under the estimate {estimate}"
+        );
+        assert!(
+            weights - estimate <= tensors * 512,
+            "allocated {weights}, estimate {estimate}"
+        );
         drop(model);
         Ok(())
     }
@@ -1214,11 +1296,17 @@ mod tests {
         let text = cfg.text();
         let files = weights(&snapshot());
         let lm = snapshot_vb(&dev)?.pp("model.language_model");
-        let rotary = Arc::new(Qwen3VLRotaryEmbedding::new(props.rope_freq_base, props.rot_dim, &dev, props.mrope_section.clone())?);
+        let rotary = Arc::new(Qwen3VLRotaryEmbedding::new(
+            props.rope_freq_base,
+            props.rot_dim,
+            &dev,
+            props.mrope_section.clone(),
+        )?);
         let layers = 4;
         let attention = |i: usize| text.attention(i);
         let gdn = RecurrentLayerConfig {
-            conv_dim: 2 * props.num_k_heads * props.head_k_dim + props.num_v_heads * props.head_v_dim,
+            conv_dim: 2 * props.num_k_heads * props.head_k_dim
+                + props.num_v_heads * props.head_v_dim,
             conv_width: props.conv_kernel,
             state_dims: vec![props.num_v_heads, props.head_k_dim, props.head_v_dim],
             conv_dtype: DType::BF16,
@@ -1232,28 +1320,67 @@ mod tests {
             state_dtype: DType::BF16,
         };
         let types: Vec<_> = (0..layers)
-            .map(|i| if attention(i) { HybridLayerType::Attention } else { HybridLayerType::Recurrent })
+            .map(|i| {
+                if attention(i) {
+                    HybridLayerType::Attention
+                } else {
+                    HybridLayerType::Recurrent
+                }
+            })
             .collect();
-        let mut pools = vec![gdn; types.iter().filter(|t| **t == HybridLayerType::Recurrent).count()];
+        let mut pools = vec![
+            gdn;
+            types
+                .iter()
+                .filter(|t| **t == HybridLayerType::Recurrent)
+                .count()
+        ];
         pools.push(side);
-        let mut cache = HybridCache::new(HybridCacheConfig { layer_types: types, max_seq_len: props.max_seq_len, pools }, &dev)
-            .map_err(|e| hanzo_ml::Error::Msg(e.to_string()))?;
+        let mut cache = HybridCache::new(
+            HybridCacheConfig {
+                layer_types: types,
+                max_seq_len: props.max_seq_len,
+                pools,
+            },
+            &dev,
+        )
+        .map_err(|e| hanzo_ml::Error::Msg(e.to_string()))?;
         let slot = cache.allocate_seq().expect("slot");
         let toks = crate::models::zen6::tests::tokens();
-        let mut x = expand(&fixture("embed").to_device(&dev)?.unsqueeze(0)?, text.hc_count)?;
+        let mut x = expand(
+            &fixture("embed").to_device(&dev)?.unsqueeze(0)?,
+            text.hc_count,
+        )?;
         for i in 0..layers {
-            let layer = Layer::new(i, &lm.pp(format!("layers.{i}")), &cfg, &files, rotary.clone(), AttentionImplementation::Eager, DType::BF16)?;
+            let layer = Layer::new(
+                i,
+                &lm.pp(format!("layers.{i}")),
+                &cfg,
+                &files,
+                rotary.clone(),
+                AttentionImplementation::Eager,
+                DType::BF16,
+            )?;
             let mut outs = vec![];
             let mut at = 0;
             for len in CHUNKS {
                 let xi = x.narrow(1, at, len)?;
                 let ids = Tensor::new(&toks[at..at + len], &dev)?.unsqueeze(0)?;
                 let offsets = [at];
-                let mask = CausalMasker.make_causal_mask(&ids, &&offsets[..] as &dyn PastKvLenCache, DType::BF16, &CausalMaskConfig::gguf())?;
+                let mask = CausalMasker.make_causal_mask(
+                    &ids,
+                    &&offsets[..] as &dyn PastKvLenCache,
+                    DType::BF16,
+                    &CausalMaskConfig::gguf(),
+                )?;
                 let mask = DeviceMappedMask::from_single(mask);
                 let cos_sin = text_mrope(&rotary, &dev, &offsets, len, DType::BF16, None)?;
                 let g = match &layer.ngram {
-                    Some(ng) => Some(ng.embed(&[toks[at.saturating_sub(2)..at].to_vec()], &[toks[at..at + len].to_vec()], &dev)?),
+                    Some(ng) => Some(ng.embed(
+                        &[toks[at.saturating_sub(2)..at].to_vec()],
+                        &[toks[at..at + len].to_vec()],
+                        &dev,
+                    )?),
                     None => None,
                 };
                 let slots = move || Ok(PoolSlots::One { slot, offset: at });
@@ -1273,16 +1400,32 @@ mod tests {
             }
             x = Tensor::cat(&outs, 1)?;
             let want = fixture(&format!("l{}.x", i + 1));
-            assert_close(&format!("streams after layer {i}"), &x.reshape((24, ()))?, &want, Tol::most(8.0, 0.99, 0.9995));
+            assert_close(
+                &format!("streams after layer {i}"),
+                &x.reshape((24, ()))?,
+                &want,
+                Tol::most(8.0, 0.99, 0.9995),
+            );
             drop(layer);
         }
-        let head = Mixer::new(&lm.pp("hyper_connection_mixer"), text.hc_count, props.rms_norm_eps)?;
+        let head = Mixer::new(
+            &lm.pp("hyper_connection_mixer"),
+            text.hc_count,
+            props.rms_norm_eps,
+        )?;
         let h = head.mix(&head.norm(&x)?)?.squeeze(0)?;
         assert_close("head.h", &h, &fixture("head.h"), Tol::ulps(4.0));
         let w = rows("lm_head.weight", 0..8192).to_device(&dev)?;
-        let lm_head = hanzo_quant::UnquantLinear::new(hanzo_quant::QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(w, None)))?;
+        let lm_head = hanzo_quant::UnquantLinear::new(
+            hanzo_quant::QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(w, None)),
+        )?;
         let logits = lm_head.forward(&h)?;
-        assert_close("head.logits", &logits, &fixture("head.logits"), Tol::ulps(4.0));
+        assert_close(
+            "head.logits",
+            &logits,
+            &fixture("head.logits"),
+            Tol::ulps(4.0),
+        );
         Ok(())
     }
 }

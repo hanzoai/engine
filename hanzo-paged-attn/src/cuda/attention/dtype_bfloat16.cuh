@@ -34,7 +34,7 @@
 
 #include <stdint.h>
 
-namespace vllm {
+namespace pagedattn {
 
 // Define custom BF16 vector data types.
 struct bf16_4_t {
@@ -448,4 +448,4 @@ inline __device__ void zero(__nv_bfloat16& dst) {
 #endif
 }
 
-} // namespace vllm
+} // namespace pagedattn

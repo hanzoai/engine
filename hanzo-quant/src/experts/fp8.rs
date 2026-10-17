@@ -1,5 +1,5 @@
 //! Block-FP8 routed experts with BF16 (or F32) block scales: Flash-Next's MTP drafter MoE (E4),
-//! as vLLM's TritonExperts serves it on sm_121 with VLLM_USE_DEEP_GEMM=0.
+//! as the served Triton experts path computes it on sm_121 (no DeepGEMM).
 
 use std::ffi::c_void;
 
@@ -11,7 +11,7 @@ use super::nvfp4::Stage;
 use super::{Layout, Shape, Tile};
 
 const GROUP: usize = 128;
-/// M1's quantizer mode for vLLM's per_token_group_quant_fp8 (eps 1e-10, IEEE divisions).
+/// M1's quantizer mode for per_token_group_quant_fp8 (eps 1e-10, IEEE divisions).
 const GATHER: i32 = 2;
 
 #[repr(C)]
@@ -84,7 +84,9 @@ impl Experts {
         }
         let inter = n13 / 2;
         if hidden % GROUP != 0 || inter % GROUP != 0 {
-            hanzo_ml::bail!("block-FP8 experts need H and I multiples of 128, got {hidden}, {inter}");
+            hanzo_ml::bail!(
+                "block-FP8 experts need H and I multiples of 128, got {hidden}, {inter}"
+            );
         }
         if w2.dims3()? != (e, hidden, inter) {
             hanzo_ml::bail!("w2 {:?} does not match w13 {:?}", w2.shape(), w13.shape());
@@ -135,7 +137,10 @@ impl Experts {
     pub fn layout(&self, m: usize, k: usize) -> Result<Layout> {
         let shape = self.shape(m, k);
         let mut l = Layout::default();
-        check(unsafe { hanzo_moe_fp8_layout(&shape, &mut l) }, "fp8 layout")?;
+        check(
+            unsafe { hanzo_moe_fp8_layout(&shape, &mut l) },
+            "fp8 layout",
+        )?;
         Ok(l)
     }
 
@@ -180,8 +185,7 @@ impl Experts {
                 self.hidden
             );
         }
-        if x.dtype() != DType::BF16 || weights.dtype() != DType::F32 || out.dtype() != DType::BF16
-        {
+        if x.dtype() != DType::BF16 || weights.dtype() != DType::F32 || out.dtype() != DType::BF16 {
             hanzo_ml::bail!("fp8 experts take BF16 x and out, F32 router weights");
         }
         if !matches!(ids.dtype(), DType::U32 | DType::I32) {
@@ -256,7 +260,10 @@ fn prepare(dev: &hanzo_ml::CudaDevice) -> Result<()> {
     let ordinal = dev.cuda_stream().context().ordinal();
     let mut done = DONE.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap();
     if !done.contains(&ordinal) {
-        check(unsafe { hanzo_moe_fp8_prepare(ordinal as i32) }, "fp8 prepare")?;
+        check(
+            unsafe { hanzo_moe_fp8_prepare(ordinal as i32) },
+            "fp8 prepare",
+        )?;
         done.push(ordinal);
     }
     Ok(())

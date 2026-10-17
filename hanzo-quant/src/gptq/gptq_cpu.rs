@@ -142,7 +142,7 @@ pub fn gptq_linear(
 
     let config = QuantMethodConfig::GptqAwq {
         bits: *bits as i32,
-        use_exllama: false,
+        is_shuffled: false,
         q_weight: qweight,
         qzeros: Some(qzeros),
         scales,
