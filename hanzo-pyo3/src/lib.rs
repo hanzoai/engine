@@ -1233,12 +1233,14 @@ impl Runner {
                             videos,
                             enable_thinking: request.enable_thinking,
                             reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                            preserve_thinking: None,
                         }
                     } else {
                         RequestMessage::Chat {
                             messages: messages_vec,
                             enable_thinking: request.enable_thinking,
                             reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                            preserve_thinking: None,
                         }
                     }
                 }
@@ -1255,6 +1257,7 @@ impl Runner {
                         messages,
                         enable_thinking: request.enable_thinking,
                         reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                        preserve_thinking: None,
                     }
                 }
             };
@@ -1298,6 +1301,9 @@ impl Runner {
                     n_choices: request.n_choices,
                     min_p: request.min_p,
                     dry_params,
+                    seed: None,
+                    thinking_budget: None,
+                    serial: false,
                 },
                 response: tx,
                 return_logprobs: request.logprobs,
@@ -1516,6 +1522,9 @@ impl Runner {
                     n_choices: request.n_choices,
                     min_p: request.min_p,
                     dry_params,
+                    seed: None,
+                    thinking_budget: None,
+                    serial: false,
                 },
                 response: tx,
                 return_logprobs: false,
@@ -1737,6 +1746,7 @@ impl Runner {
             response: tx,
             enable_thinking,
             reasoning_effort: None,
+            preserve_thinking: None,
         });
 
         let runner = self.runner.clone();
@@ -2123,12 +2133,14 @@ impl Runner {
                             videos,
                             enable_thinking: request.enable_thinking,
                             reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                            preserve_thinking: None,
                         }
                     } else {
                         RequestMessage::Chat {
                             messages: messages_vec,
                             enable_thinking: request.enable_thinking,
                             reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                            preserve_thinking: None,
                         }
                     }
                 }
@@ -2145,6 +2157,7 @@ impl Runner {
                         messages,
                         enable_thinking: request.enable_thinking,
                         reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                        preserve_thinking: None,
                     }
                 }
             };
@@ -2188,6 +2201,9 @@ impl Runner {
                     n_choices: request.n_choices,
                     min_p: request.min_p,
                     dry_params,
+                    seed: None,
+                    thinking_budget: None,
+                    serial: false,
                 },
                 response: tx,
                 return_logprobs: request.logprobs,
@@ -2305,6 +2321,9 @@ impl Runner {
                     n_choices: request.n_choices,
                     min_p: request.min_p,
                     dry_params,
+                    seed: None,
+                    thinking_budget: None,
+                    serial: false,
                 },
                 response: tx,
                 return_logprobs: false,

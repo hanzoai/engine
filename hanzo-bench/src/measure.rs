@@ -70,6 +70,9 @@ fn sampling(max_len: usize, greedy: bool) -> SamplingParams {
         logits_bias: None,
         n_choices: 1,
         dry_params: None,
+        seed: None,
+        thinking_budget: None,
+        serial: false,
     }
 }
 

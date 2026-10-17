@@ -16,7 +16,10 @@ use crate::{
     AudioInput, ChatCompletionResponse, Usage, VideoInput,
 };
 use hanzo_ml::Tensor;
+use rand::SeedableRng;
+use rand_isaac::Isaac64Rng;
 use std::{
+    collections::VecDeque,
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
     path::PathBuf,
@@ -500,6 +503,31 @@ pub fn build_mm_features_from_ranges(
         .collect()
 }
 
+/// Think-block accounting for one sequence: the thinking budget and the reasoning-token count.
+#[derive(Default)]
+struct Thinking {
+    /// Most tokens the think block may take before the engine closes it.
+    budget: Option<usize>,
+    /// The tokens written into the stream to close the block when the budget runs out.
+    close: Vec<u32>,
+    /// Tokens generated inside the think block so far.
+    spent: usize,
+    /// Close tokens still to be written, in order.
+    forced: VecDeque<u32>,
+    /// Whether the sequence has been inside a think block.
+    opened: bool,
+    /// Generated tokens up to and including the one that first closed the block.
+    closed_at: Option<usize>,
+}
+
+/// Length of the longest tail of `text` that is a proper start of `stop`.
+fn partial_stop_len(text: &[u8], stop: &[u8]) -> usize {
+    (1..stop.len().min(text.len() + 1))
+        .rev()
+        .find(|&k| text.ends_with(&stop[..k]))
+        .unwrap_or(0)
+}
+
 pub struct Sequence {
     // Metadata, const
     id: usize,
@@ -579,6 +607,14 @@ pub struct Sequence {
     // Unified reasoning parser (think tags, channel tags, or Harmony)
     reasoning_parser: Option<Box<dyn ReasoningParser>>,
     reasoning_mode: Option<ReasoningMode>,
+
+    /// The request's own RNG when it carried a seed; `None` draws from the engine's shared RNG.
+    rng: Option<Arc<std::sync::Mutex<Isaac64Rng>>>,
+    /// Decode one token per forward, without the speculative proposer.
+    serial: bool,
+    thinking: Thinking,
+    /// Answer bytes held back from the completion because they could begin a stop string.
+    held: Vec<u8>,
 }
 
 impl Sequence {
@@ -685,6 +721,10 @@ impl Sequence {
             step_start_instant: None,
             reasoning_parser: None,
             reasoning_mode: None,
+            rng: None,
+            serial: false,
+            thinking: Thinking::default(),
+            held: Vec::new(),
         }
     }
 
@@ -940,40 +980,205 @@ impl Sequence {
         self.prefill_prompt_toks = None
     }
 
+    /// Appends a generated token and its text. Returns the stop reason when the text completes a
+    /// stop string; the text from the stop string on is then dropped.
     pub fn add_token(
         &mut self,
         tok: Logprobs,
         completion_bytes: Vec<u8>,
         is_done: &Option<StopReason>,
-    ) {
+    ) -> Option<StopReason> {
         let stopped_by_token = matches!(
             is_done,
             Some(StopReason::Eos) | Some(StopReason::StopTok(_))
         );
-        if !stopped_by_token {
-            // Completion bytes is used to check for stop strings, and as the response buffer.
-            // We don't need to add stop tokens to the completion bytes to check for stop strings.
-            // And by not adding it here, we can avoid having to delete these tokens from the output.
-            self.completion_bytes.extend_from_slice(&completion_bytes);
-            self.last_completion_bytes_len = completion_bytes.len();
-        }
+        let generated = self.tokens.len().saturating_sub(self.prompt_len);
+        let was_reasoning = self.in_reasoning();
         self.last_logprob = tok.logprob;
         self.last_is_done = *is_done;
 
-        // Process token through reasoning parser if enabled
-        if let Some(ref mut parser) = self.reasoning_parser {
-            if self.reasoning_mode == Some(ReasoningMode::Harmony) {
+        if self.reasoning_mode == Some(ReasoningMode::Harmony) {
+            if let Some(parser) = self.reasoning_parser.as_mut() {
                 parser.process_token(tok.token);
             }
-            if !stopped_by_token {
-                parser.process_bytes(&completion_bytes);
+        }
+        let mut stop = None;
+        if !stopped_by_token {
+            // A stop token's text is not part of the completion, so it never needs deleting.
+            // Stop strings match only the answer, never the think block.
+            let bytes = if was_reasoning {
+                completion_bytes
+            } else {
+                let (bytes, hit) = self.split_at_stop(completion_bytes);
+                stop = hit;
+                bytes
+            };
+            self.last_completion_bytes_len = bytes.len();
+            self.commit(&bytes);
+        }
+        if is_done.is_some() && stop.is_none() {
+            self.release_held();
+        }
+
+        let now_reasoning = self.in_reasoning();
+        let thinking = &mut self.thinking;
+        thinking.opened |= was_reasoning || now_reasoning;
+        if was_reasoning {
+            thinking.spent += 1;
+            if !now_reasoning && thinking.closed_at.is_none() {
+                thinking.closed_at = Some(generated + 1);
             }
+        }
+        if thinking.forced.front() == Some(&tok.token) {
+            thinking.forced.pop_front();
         }
 
         self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
         self.reset_prefill_toks();
+        self.force_close_when_spent();
+        stop
+    }
+
+    /// Appends text to the completion and feeds it to the reasoning parser.
+    fn commit(&mut self, bytes: &[u8]) {
+        self.completion_bytes.extend_from_slice(bytes);
+        if let Some(parser) = self.reasoning_parser.as_mut() {
+            parser.process_bytes(bytes);
+        }
+    }
+
+    /// Splits the next answer bytes at the first stop string. With a hit, the
+    /// text before the stop string comes back with the stop reason. Without one, everything comes
+    /// back but a tail that could still begin a stop string, held until the next token decides it,
+    /// so no part of a stop string reaches the stream.
+    fn split_at_stop(&mut self, bytes: Vec<u8>) -> (Vec<u8>, Option<StopReason>) {
+        if self.stop_strings.is_empty() {
+            return (bytes, None);
+        }
+        let mut text = std::mem::take(&mut self.held);
+        text.extend_from_slice(&bytes);
+        let hit = self
+            .stop_strings
+            .iter()
+            .enumerate()
+            .filter(|(_, stop)| !stop.is_empty())
+            .filter_map(|(idx, stop)| {
+                galil_seiferas::gs_find(&text, stop.as_bytes()).map(|pos| (pos, idx))
+            })
+            .min();
+        if let Some((pos, stop_string_idx)) = hit {
+            text.truncate(pos);
+            let reason = StopReason::StopString {
+                stop_string_idx,
+                completion_bytes_pos: self.completion_bytes.len() + pos,
+            };
+            return (text, Some(reason));
+        }
+        let keep = self
+            .stop_strings
+            .iter()
+            .map(|stop| partial_stop_len(&text, stop.as_bytes()))
+            .max()
+            .unwrap_or(0);
+        self.held = text.split_off(text.len() - keep);
+        (text, None)
+    }
+
+    /// Commits the answer bytes held back as a possible stop-string start: the sequence ends for
+    /// another reason, so they are plain text.
+    pub(crate) fn release_held(&mut self) {
+        let held = std::mem::take(&mut self.held);
+        self.commit(&held);
+    }
+
+    /// Starts the completion with text the prompt already wrote for the model, such as a forced
+    /// call's opening, so the parsers read the output as the model continues it.
+    pub fn seed_completion(&mut self, text: &str) {
+        self.commit(text.as_bytes());
+    }
+
+    /// Whether the sequence is inside its think block, per its reasoning parser.
+    pub fn in_reasoning(&self) -> bool {
+        self.reasoning_parser
+            .as_ref()
+            .is_some_and(|parser| parser.in_reasoning())
+    }
+
+    /// Caps the think block at `budget` generated tokens. When they are spent
+    /// and the block is still open, `close` is written into the stream as ordinary generated
+    /// tokens, on the same state, and the answer follows. A sequence under a grammar is not
+    /// forced: the close would break the grammar.
+    pub fn set_thinking_budget(&mut self, budget: usize, close: Vec<u32>) {
+        self.thinking.budget = Some(budget);
+        self.thinking.close = close;
+        self.force_close_when_spent();
+    }
+
+    fn force_close_when_spent(&mut self) {
+        let spent = self
+            .thinking
+            .budget
+            .is_some_and(|budget| self.thinking.spent >= budget);
+        if spent
+            && self.thinking.forced.is_empty()
+            && self.in_reasoning()
+            && matches!(self.recognizer, SequenceRecognizer::None)
+        {
+            let close = self.thinking.close.clone();
+            self.thinking.forced.extend(close);
+        }
+    }
+
+    /// The token the engine writes next in place of sampling, while it closes the think block.
+    pub(crate) fn forced_token(&self) -> Option<u32> {
+        self.thinking.forced.front().copied()
+    }
+
+    /// Generated tokens spent reasoning: through the token that closed the
+    /// think block, or every generated token when the block never closed, or 0 without one.
+    pub fn reasoning_tokens(&self) -> usize {
+        let generated = self.tokens.len().saturating_sub(self.prompt_len);
+        match self.thinking.closed_at {
+            Some(closed) => closed.min(generated),
+            None if self.thinking.opened => generated,
+            None => 0,
+        }
+    }
+
+    /// Seeds this sequence's own RNG: every sampling decision of the sequence, plain or
+    /// speculative, then draws from it, so a seeded sampled request replays token for token.
+    pub fn set_seed(&mut self, seed: u64) {
+        self.rng = Some(Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(
+            seed,
+        ))));
+    }
+
+    /// The RNG this sequence samples with: its own when seeded, else `shared`.
+    pub(crate) fn rng(
+        &self,
+        shared: &Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Arc<std::sync::Mutex<Isaac64Rng>> {
+        self.rng.as_ref().unwrap_or(shared).clone()
+    }
+
+    /// Decode this sequence one token per forward, without the speculative proposer.
+    pub fn set_serial(&mut self, serial: bool) {
+        self.serial = serial;
+    }
+
+    /// Whether the speculative driver may draft for this sequence now: not for a serial request,
+    /// nor while the engine writes a think close into it.
+    pub(crate) fn speculates(&self) -> bool {
+        !self.serial && self.thinking.forced.is_empty()
+    }
+
+    /// Counts `drafted` speculative tokens verified for this sequence, `accepted` of them kept.
+    pub(crate) fn record_drafts(&self, drafted: usize, accepted: usize) {
+        let mut group = get_mut_group!(self);
+        group.total_draft_toks += drafted;
+        group.total_draft_accepted += accepted;
     }
 
     pub fn responder(&self) -> Sender<Response> {
@@ -1013,7 +1218,8 @@ impl Sequence {
             SequenceState::Done(StopReason::Canceled)
         ) {
             Some(StopReason::Canceled)
-        } else if self.stop_tokens.contains(&tok) {
+        } else if self.stop_tokens.contains(&tok) && !self.in_reasoning() {
+            // A stop matches only the answer, never the think block.
             Some(StopReason::StopTok(tok))
         } else if self.max_len.is_some()
             && self.tokens.len().saturating_sub(self.prompt_len) + 1 >= self.max_len.unwrap()
@@ -1023,17 +1229,7 @@ impl Sequence {
         } else if self.tokens.len().saturating_sub(self.prompt_len) >= max_model_len {
             Some(StopReason::ModelLength(max_model_len))
         } else {
-            if !self.stop_strings.is_empty() {
-                for (idx, s) in self.stop_strings.iter().enumerate() {
-                    if let Some(pos) = galil_seiferas::gs_find(&self.completion_bytes, s.as_bytes())
-                    {
-                        return Some(StopReason::StopString {
-                            stop_string_idx: idx,
-                            completion_bytes_pos: pos,
-                        });
-                    }
-                }
-            }
+            // Stop strings are matched as the token's text is added, by `add_token`.
             None
         }
     }
@@ -1126,6 +1322,7 @@ impl Sequence {
         get_mut_group!(self).total_prompt_toks = self.prompt_len;
         get_mut_group!(self).total_cached_toks = self.prefix_cache_len;
         get_mut_group!(self).total_toks = self.len();
+        get_mut_group!(self).total_reasoning_toks = self.reasoning_tokens();
     }
 
     pub fn add_image_choice_to_group(&self, choice: ImageChoice) {
@@ -1448,6 +1645,9 @@ pub struct SequenceGroup {
     pub total_prompt_toks: usize,
     pub total_cached_toks: usize,
     pub total_toks: usize,
+    pub total_reasoning_toks: usize,
+    pub total_draft_toks: usize,
+    pub total_draft_accepted: usize,
     pub total_prompt_time: u128,
     pub total_time: u128,
     pub total_completion_time: u128,
@@ -1490,6 +1690,9 @@ impl SequenceGroup {
             total_prompt_toks: 0,
             total_cached_toks: 0,
             total_toks: 0,
+            total_reasoning_toks: 0,
+            total_draft_toks: 0,
+            total_draft_accepted: 0,
             total_prompt_time: 0,
             total_time: 0,
             total_completion_time: 0,
@@ -1557,6 +1760,9 @@ impl SequenceGroup {
             total_time_sec: self.total_time as f32 / 1000.,
             total_completion_time_sec: self.total_completion_time as f32 / 1000.,
             total_prompt_time_sec: self.total_prompt_time as f32 / 1000.,
+            reasoning_tokens: self.total_reasoning_toks,
+            draft_tokens: self.total_draft_toks,
+            draft_accepted: self.total_draft_accepted,
         }
     }
 
@@ -1720,6 +1926,7 @@ impl SequenceGroup {
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "text_completion".to_string(),
+                    usage: usage_opt,
                 }))
                 .await?;
         }
@@ -1800,6 +2007,228 @@ pub(crate) fn test_sequence(tokens: Vec<u32>, temperature: Option<f64>) -> Seque
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reasoning_parsers::TagReasoningContext;
+
+    fn push(seq: &mut Sequence, token: u32, text: &str) -> Option<StopReason> {
+        push_done(seq, token, text, None)
+    }
+
+    fn push_done(
+        seq: &mut Sequence,
+        token: u32,
+        text: &str,
+        done: Option<StopReason>,
+    ) -> Option<StopReason> {
+        let logprobs = Logprobs {
+            token,
+            logprob: 0.0,
+            bytes: None,
+            top_logprobs: None,
+        };
+        seq.add_token(logprobs, text.as_bytes().to_vec(), &done)
+    }
+
+    fn completion(seq: &Sequence) -> &str {
+        std::str::from_utf8(seq.completion_bytes()).unwrap()
+    }
+
+    /// A sequence whose prompt ended with `<think>`, so it generates inside the think block.
+    fn thinking_sequence() -> Sequence {
+        let mut seq = test_sequence(vec![1, 2, 3], None);
+        seq.enable_reasoning(
+            ReasoningMode::TagBased,
+            Box::new(TagReasoningContext::new_in_think_block()),
+        );
+        seq
+    }
+
+    const CLOSE: [u32; 3] = [100, 101, 102];
+    const CLOSE_TEXT: [&str; 3] = ["\n\nTime is up, answering.\n", "</think>", "\n\n"];
+
+    #[test]
+    fn a_spent_thinking_budget_writes_the_close_and_the_answer_follows() {
+        let mut seq = thinking_sequence();
+        seq.set_thinking_budget(2, CLOSE.to_vec());
+        push(&mut seq, 10, "Let me");
+        assert_eq!(seq.forced_token(), None);
+        assert!(seq.speculates());
+        push(&mut seq, 11, " think");
+        // Two tokens spent and the block is open: the engine writes the close, in order.
+        for (token, text) in CLOSE.iter().zip(CLOSE_TEXT) {
+            assert_eq!(seq.forced_token(), Some(*token));
+            assert!(!seq.speculates());
+            push(&mut seq, *token, text);
+        }
+        assert_eq!(seq.forced_token(), None);
+        assert!(seq.speculates());
+        push(&mut seq, 12, "42");
+        assert!(!seq.in_reasoning());
+        // Reasoning runs through the `</think>` token.
+        assert_eq!(seq.reasoning_tokens(), 4);
+        seq.finalize_reasoning();
+        assert_eq!(
+            seq.get_reasoning_content().as_deref(),
+            Some("Let me think\n\nTime is up, answering.\n")
+        );
+        assert_eq!(seq.get_response_content().as_deref(), Some("\n\n42"));
+    }
+
+    #[test]
+    fn a_block_closed_within_the_budget_is_not_forced() {
+        let mut seq = thinking_sequence();
+        seq.set_thinking_budget(3, CLOSE.to_vec());
+        push(&mut seq, 10, "short");
+        push(&mut seq, 11, "</think>");
+        push(&mut seq, 12, "answer");
+        push(&mut seq, 13, " more");
+        assert_eq!(seq.forced_token(), None);
+        assert_eq!(seq.reasoning_tokens(), 2);
+    }
+
+    #[test]
+    fn a_zero_budget_closes_the_block_before_any_thinking() {
+        let mut seq = thinking_sequence();
+        seq.set_thinking_budget(0, CLOSE.to_vec());
+        assert_eq!(seq.forced_token(), Some(100));
+        // No budget, or no block to close, forces nothing.
+        let mut seq = test_sequence(vec![1], None);
+        seq.set_thinking_budget(0, CLOSE.to_vec());
+        assert_eq!(seq.forced_token(), None);
+    }
+
+    #[test]
+    fn reasoning_tokens_when_unclosed_or_absent() {
+        // Never closed: every generated token is reasoning.
+        let mut seq = thinking_sequence();
+        push(&mut seq, 10, "still");
+        push(&mut seq, 11, " going");
+        assert_eq!(seq.reasoning_tokens(), 2);
+        seq.update_time_info();
+        assert_eq!(seq.get_mut_group().get_usage().reasoning_tokens, 2);
+        // No think block at all.
+        let mut seq = test_sequence(vec![1], None);
+        push(&mut seq, 10, "plain");
+        assert_eq!(seq.reasoning_tokens(), 0);
+    }
+
+    #[test]
+    fn a_seeded_sequence_owns_its_rng() {
+        use rand::Rng;
+        let shared = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(0)));
+        let plain = test_sequence(vec![1], Some(1.0));
+        assert!(Arc::ptr_eq(&plain.rng(&shared), &shared));
+        let draws = |seed| {
+            let mut seq = test_sequence(vec![1], Some(1.0));
+            seq.set_seed(seed);
+            let rng = seq.rng(&shared);
+            assert!(!Arc::ptr_eq(&rng, &shared));
+            let mut rng = rng.lock().unwrap();
+            (0..8).map(|_| rng.random::<u64>()).collect::<Vec<_>>()
+        };
+        assert_eq!(draws(7), draws(7));
+        assert_ne!(draws(7), draws(8));
+    }
+
+    #[test]
+    fn a_serial_sequence_does_not_speculate() {
+        let mut seq = test_sequence(vec![1], None);
+        assert!(seq.speculates());
+        seq.set_serial(true);
+        assert!(!seq.speculates());
+    }
+
+    #[test]
+    fn drafts_accumulate_on_the_group() {
+        let seq = test_sequence(vec![1], None);
+        seq.record_drafts(4, 0);
+        seq.record_drafts(0, 3);
+        seq.record_drafts(4, 1);
+        let usage = seq.get_mut_group().get_usage();
+        assert_eq!((usage.draft_tokens, usage.draft_accepted), (8, 4));
+    }
+
+    #[test]
+    fn a_stop_string_ends_the_text_before_it() {
+        let mut seq = test_sequence(vec![1], None);
+        seq.stop_strings = vec!["END".to_string()];
+        assert_eq!(push(&mut seq, 10, "Hello "), None);
+        assert_eq!(push(&mut seq, 11, "wor"), None);
+        let stop = push(&mut seq, 12, "ld END more");
+        assert_eq!(
+            stop,
+            Some(StopReason::StopString {
+                stop_string_idx: 0,
+                completion_bytes_pos: 12
+            })
+        );
+        assert_eq!(completion(&seq), "Hello world ");
+    }
+
+    #[test]
+    fn the_start_of_a_stop_string_is_held_until_the_next_token_decides_it() {
+        let mut seq = test_sequence(vec![1], None);
+        seq.stop_strings = vec!["END".to_string()];
+        push(&mut seq, 10, "abc E");
+        assert_eq!(completion(&seq), "abc ");
+        assert!(push(&mut seq, 11, "ND").is_some());
+        assert_eq!(completion(&seq), "abc ");
+
+        // Not a stop string after all: the held text is released.
+        let mut seq = test_sequence(vec![1], None);
+        seq.stop_strings = vec!["END".to_string()];
+        push(&mut seq, 10, "abc E");
+        push(&mut seq, 11, "N");
+        assert_eq!(completion(&seq), "abc ");
+        push(&mut seq, 12, "x");
+        assert_eq!(completion(&seq), "abc ENx");
+
+        // The sequence ends for another reason: the held text is plain text.
+        let mut seq = test_sequence(vec![1], None);
+        seq.stop_strings = vec!["END".to_string()];
+        push(&mut seq, 10, "abc E");
+        assert_eq!(
+            push_done(&mut seq, 11, "N", Some(StopReason::Length(2))),
+            None
+        );
+        assert_eq!(completion(&seq), "abc EN");
+        let mut seq = test_sequence(vec![1], None);
+        seq.stop_strings = vec!["END".to_string()];
+        push(&mut seq, 10, "abc E");
+        push_done(&mut seq, 11, "</s>", Some(StopReason::Eos));
+        assert_eq!(completion(&seq), "abc E");
+    }
+
+    #[test]
+    fn stops_match_only_after_the_think_block() {
+        let mut seq = thinking_sequence();
+        seq.stop_strings = vec!["plan".to_string()];
+        seq.stop_tokens = vec![7];
+        assert_eq!(push(&mut seq, 10, "my plan"), None);
+        assert_eq!(seq.is_done(7, None, 1024), None);
+        assert_eq!(push(&mut seq, 11, "</think>"), None);
+        assert_eq!(seq.is_done(7, None, 1024), Some(StopReason::StopTok(7)));
+        assert!(push(&mut seq, 12, "the plan").is_some());
+        assert_eq!(completion(&seq), "my plan</think>the ");
+        seq.finalize_reasoning();
+        assert_eq!(seq.get_response_content().as_deref(), Some("the "));
+    }
+
+    #[test]
+    fn a_seeded_completion_reaches_the_parsers() {
+        let mut seq = test_sequence(vec![1], None);
+        seq.enable_reasoning(
+            ReasoningMode::TagBased,
+            Box::new(TagReasoningContext::new_think_tags()),
+        );
+        seq.seed_completion("<tool_call>\n<function=f>\n");
+        push(&mut seq, 10, "</function>");
+        assert_eq!(completion(&seq), "<tool_call>\n<function=f>\n</function>");
+        seq.finalize_reasoning();
+        assert_eq!(
+            seq.get_response_content().as_deref(),
+            Some("<tool_call>\n<function=f>\n</function>")
+        );
+    }
 
     #[test]
     fn an_errored_sequence_is_finished() {

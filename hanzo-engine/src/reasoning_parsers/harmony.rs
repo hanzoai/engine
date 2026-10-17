@@ -427,6 +427,10 @@ impl super::ReasoningParser for HarmonyContext {
         Self::reasoning_content(self)
     }
 
+    fn in_reasoning(&self) -> bool {
+        self.channel == Some(HarmonyChannel::Analysis)
+    }
+
     fn has_tool_calls(&self) -> bool {
         Self::has_tool_call(self)
     }

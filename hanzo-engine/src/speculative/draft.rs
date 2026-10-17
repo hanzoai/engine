@@ -92,6 +92,7 @@ impl DraftModelProposer {
         }
 
         let sampler = seq.sampler();
+        let rng = seq.rng(&rng);
         let mut context = toks.to_vec();
         let mut tokens = Vec::with_capacity(self.gamma);
         let mut logit_rows = Vec::with_capacity(self.gamma);

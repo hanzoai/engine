@@ -745,6 +745,7 @@ impl Model {
             response: tx,
             enable_thinking,
             reasoning_effort: None,
+            preserve_thinking: None,
         });
         self.runner.get_sender(model_id)?.send(request).await?;
 

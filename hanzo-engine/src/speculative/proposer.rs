@@ -55,7 +55,7 @@ pub(crate) fn draft_contexts(ctx: &SpeculativeProposeBatchCtx<'_>) -> Vec<Vec<u3
 /// sampler over `contexts[row]`, which then grows by the draft. The verifier accepts a draft with
 /// probability min(1, p/q) where q is that same sampler's distribution, which is exact only when
 /// the draft was drawn from q. Greedy sequences are verified by matching, so an all-greedy batch
-/// takes one device argmax.
+/// takes one device argmax. `rng` is the engine's shared RNG; a seeded sequence draws from its own.
 pub(crate) fn sample_drafts(
     logits: &Tensor,
     sequences: &[&Sequence],
@@ -80,7 +80,7 @@ pub(crate) fn sample_drafts(
                 row_logits,
                 &contexts[row],
                 false,
-                rng.clone(),
+                seq.rng(rng),
                 false,
                 batch > 1,
             )?;
@@ -169,6 +169,28 @@ mod tests {
         let drafts = sample_drafts(&logits, &seqs, &mut contexts, &rng())?;
         assert_eq!(drafts, vec![1, 0]);
         assert_eq!(contexts, vec![vec![1, 2, 1], vec![3, 0]]);
+        Ok(())
+    }
+
+    // A seeded sequence drafts from its own RNG, so its drafts replay whatever the shared RNG did.
+    #[test]
+    fn a_seeded_sequence_drafts_from_its_own_rng() -> Result<()> {
+        let logits = Tensor::new(&[[[0f32, 1.0, 2.0, 0.5]]], &Device::Cpu)?;
+        let drafts = |seed: Option<u64>, shared: u64| -> Result<Vec<u32>> {
+            let mut seq = test_sequence(vec![5], Some(1.0));
+            if let Some(seed) = seed {
+                seq.set_seed(seed);
+            }
+            let shared = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(shared)));
+            (0..32)
+                .map(|_| {
+                    let mut contexts = vec![vec![5]];
+                    Ok(sample_drafts(&logits, &[&seq], &mut contexts, &shared)?[0])
+                })
+                .collect()
+        };
+        assert_eq!(drafts(Some(11), 1)?, drafts(Some(11), 2)?);
+        assert_ne!(drafts(None, 1)?, drafts(None, 2)?);
         Ok(())
     }
 

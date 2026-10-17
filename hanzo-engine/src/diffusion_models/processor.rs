@@ -28,6 +28,7 @@ impl Processor for DiffusionProcessor {
         _add_special_tokens: bool,
         _enable_thinking: Option<bool>,
         _reasoning_effort: Option<crate::request::ReasoningEffort>,
+        _preserve_thinking: Option<bool>,
         _tools: Vec<crate::Tool>,
     ) -> Result<(Vec<u32>, String)> {
         anyhow::bail!(

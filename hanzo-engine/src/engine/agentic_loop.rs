@@ -106,6 +106,7 @@ pub(super) fn upgrade_to_multimodal(request: &mut NormalRequest) {
         messages: vec![],
         enable_thinking: None,
         reasoning_effort: None,
+        preserve_thinking: None,
     };
     let old = std::mem::replace(&mut request.messages, dummy);
     request.messages = match old {
@@ -113,6 +114,7 @@ pub(super) fn upgrade_to_multimodal(request: &mut NormalRequest) {
             messages,
             enable_thinking,
             reasoning_effort,
+            preserve_thinking,
         } => RequestMessage::MultimodalChat {
             images: Vec::new(),
             audios: Vec::new(),
@@ -120,6 +122,7 @@ pub(super) fn upgrade_to_multimodal(request: &mut NormalRequest) {
             messages,
             enable_thinking,
             reasoning_effort,
+            preserve_thinking,
         },
         other @ RequestMessage::MultimodalChat { .. } => other,
         _ => unreachable!(),

@@ -167,6 +167,7 @@ impl RequestLike for TextMessages {
             messages: other,
             enable_thinking: self.enable_thinking,
             reasoning_effort: None,
+            preserve_thinking: None,
         }
     }
     fn enable_search(&self) -> Option<bool> {
@@ -428,6 +429,7 @@ impl RequestLike for MultimodalMessages {
             videos: other_videos,
             enable_thinking: self.enable_thinking,
             reasoning_effort: None,
+            preserve_thinking: None,
         }
     }
     fn enable_search(&self) -> Option<bool> {
@@ -1028,6 +1030,7 @@ impl RequestLike for RequestBuilder {
                 messages: other,
                 enable_thinking: self.enable_thinking,
                 reasoning_effort: None,
+                preserve_thinking: None,
             }
         } else {
             let mut other_messages = Vec::new();
@@ -1045,6 +1048,7 @@ impl RequestLike for RequestBuilder {
                 videos: other_videos,
                 enable_thinking: self.enable_thinking,
                 reasoning_effort: None,
+                preserve_thinking: None,
             }
         }
     }

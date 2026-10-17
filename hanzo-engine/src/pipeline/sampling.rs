@@ -82,7 +82,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     let completion_bytes = tok_env
         .tok_trie()
         .decode_ext(&[logprobs.token], include_special);
-    seq.add_token(logprobs.clone(), completion_bytes, &is_done);
+    if let Some(stop) = seq.add_token(logprobs.clone(), completion_bytes, &is_done) {
+        is_done = Some(stop);
+    }
 
     // If we can have a tool and we got a tool, stop the sequence early.
     // Doesn't conflict with the logic below because it does the same thing anyway.
@@ -95,6 +97,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 && parse_text_tools(d, seq.tools.clone()).is_ok_and(|(_, calls)| !calls.is_empty())
             {
                 seq.set_state(SequenceState::Done(StopReason::Eos));
+                seq.release_held();
                 is_done = Some(StopReason::Eos);
             }
         }
@@ -337,21 +340,16 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             // Signal EOS to all reasoning parsers
             seq.finalize_reasoning();
 
+            // A stop string never enters the completion, so its text is the whole completion.
             let text = match reason {
                 crate::sequence::StopReason::Length(_)
                 | crate::sequence::StopReason::ModelLength(_)
                 | crate::sequence::StopReason::Eos
                 | crate::sequence::StopReason::StopTok(_)
                 | crate::sequence::StopReason::Canceled
-                | crate::sequence::StopReason::ToolCalls => {
+                | crate::sequence::StopReason::ToolCalls
+                | crate::sequence::StopReason::StopString { .. } => {
                     String::from_utf8_lossy(seq.completion_bytes()).to_string()
-                }
-                crate::sequence::StopReason::StopString {
-                    completion_bytes_pos,
-                    ..
-                } => {
-                    let txt = String::from_utf8_lossy(seq.completion_bytes());
-                    txt[..completion_bytes_pos].to_string()
                 }
                 crate::sequence::StopReason::GeneratedImage
                 | crate::sequence::StopReason::GeneratedSpeech
@@ -562,7 +560,8 @@ pub async fn sample_and_add_toks(
     Ok(())
 }
 
-/// Async sample optionally adding to trie.
+/// Async sample optionally adding to trie. `rng` is the engine's shared RNG; a seeded sequence
+/// draws from its own instead.
 #[allow(clippy::too_many_arguments)]
 pub async fn sample_sequence(
     logits: Tensor,
@@ -575,6 +574,12 @@ pub async fn sample_sequence(
 ) -> Result<Logprobs> {
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
 
+    // The engine is closing the think block: its token, not the model's draw.
+    if let Some(token) = seq.forced_token() {
+        return seq.sampler().forced(&logits, token, return_logprobs);
+    }
+
+    let rng = seq.rng(&rng);
     let sampler = seq.sampler();
     let ctx_clone = seq.get_toks().to_vec();
     let rng_clone = rng.clone();
@@ -707,6 +712,51 @@ mod tests {
                 strict: None,
             },
         }
+    }
+
+    fn shared_rng(seed: u64) -> Arc<std::sync::Mutex<Isaac64Rng>> {
+        use rand::SeedableRng;
+        Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(seed)))
+    }
+
+    async fn draw(seq: &mut Sequence, rng: &Arc<std::sync::Mutex<Isaac64Rng>>) -> u32 {
+        let logits =
+            Tensor::new(&[[[0.5f32, 1.0, 0.2, 0.9, 0.7]]], &hanzo_ml::Device::Cpu).unwrap();
+        sample_sequence(logits, seq, false, rng.clone(), false, false, false)
+            .await
+            .unwrap()
+            .token
+    }
+
+    #[tokio::test]
+    async fn a_seeded_request_replays_whatever_the_shared_rng_did() {
+        let run = |seed: Option<u64>, shared: u64| async move {
+            let mut seq = crate::sequence::test_sequence(vec![1, 2], Some(1.0));
+            if let Some(seed) = seed {
+                seq.set_seed(seed);
+            }
+            let rng = shared_rng(shared);
+            let mut tokens = Vec::new();
+            for _ in 0..24 {
+                tokens.push(draw(&mut seq, &rng).await);
+            }
+            tokens
+        };
+        assert_eq!(run(Some(3), 0).await, run(Some(3), 99).await);
+        assert_ne!(run(Some(3), 0).await, run(Some(4), 0).await);
+        assert_ne!(run(None, 0).await, run(None, 99).await);
+    }
+
+    #[tokio::test]
+    async fn a_think_close_in_progress_is_written_instead_of_sampled() {
+        let mut seq = crate::sequence::test_sequence(vec![1, 2], None);
+        seq.enable_reasoning(
+            crate::reasoning_parsers::ReasoningMode::TagBased,
+            Box::new(crate::reasoning_parsers::TagReasoningContext::new_in_think_block()),
+        );
+        seq.set_thinking_budget(0, vec![4, 2]);
+        // Greedy would pick 1; the close's first token comes out instead.
+        assert_eq!(draw(&mut seq, &shared_rng(0)).await, 4);
     }
 
     #[test]

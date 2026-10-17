@@ -99,6 +99,7 @@ pub fn infer(model: &str, prompt: &[u8]) -> Result<Vec<u8>, EngineError> {
             messages: vec![msg],
             enable_thinking: Some(false),
             reasoning_effort: None,
+            preserve_thinking: None,
         };
         let mut sampling = SamplingParams::deterministic();
         sampling.max_len = Some(PRECOMPILE_MAX_TOKENS);

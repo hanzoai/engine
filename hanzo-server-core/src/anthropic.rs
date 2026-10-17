@@ -1723,18 +1723,25 @@ pub async fn count_tokens(
             "expected a chat request for token counting",
         );
     };
-    let (messages, enable_thinking, reasoning_effort) = match request.messages {
+    let (messages, enable_thinking, reasoning_effort, preserve_thinking) = match request.messages {
         RequestMessage::Chat {
             messages,
             enable_thinking,
             reasoning_effort,
+            preserve_thinking,
         }
         | RequestMessage::MultimodalChat {
             messages,
             enable_thinking,
             reasoning_effort,
+            preserve_thinking,
             ..
-        } => (messages, enable_thinking, reasoning_effort),
+        } => (
+            messages,
+            enable_thinking,
+            reasoning_effort,
+            preserve_thinking,
+        ),
         _ => return bad_request("only chat messages can be counted"),
     };
 
@@ -1747,6 +1754,7 @@ pub async fn count_tokens(
         add_special_tokens: true,
         enable_thinking,
         reasoning_effort,
+        preserve_thinking,
         response,
     });
 

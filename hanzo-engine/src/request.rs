@@ -52,7 +52,7 @@ pub enum ReasoningEffort {
     /// Balanced reasoning depth
     #[default]
     Medium,
-    /// Deep reasoning, more thorough analysis
+    /// The deepest level: `xhigh` on templates that name it, `high` elsewhere.
     High,
 }
 
@@ -75,6 +75,8 @@ pub enum RequestMessage {
         enable_thinking: Option<bool>,
         /// Reasoning effort level for Harmony-format models
         reasoning_effort: Option<ReasoningEffort>,
+        /// Whether the template keeps earlier turns' reasoning; `None` keeps its default.
+        preserve_thinking: Option<bool>,
     },
     Completion {
         text: String,
@@ -93,6 +95,8 @@ pub enum RequestMessage {
         enable_thinking: Option<bool>,
         /// Reasoning effort level for Harmony-format models
         reasoning_effort: Option<ReasoningEffort>,
+        /// Whether the template keeps earlier turns' reasoning; `None` keeps its default.
+        preserve_thinking: Option<bool>,
     },
     ImageGeneration {
         prompt: String,
@@ -343,6 +347,7 @@ pub struct TokenizationRequest {
     pub add_special_tokens: bool,
     pub enable_thinking: Option<bool>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    pub preserve_thinking: Option<bool>,
     #[serde(default = "default_responder")]
     #[serde(skip)]
     pub response: Sender<anyhow::Result<Vec<u32>>>,

@@ -124,6 +124,30 @@ impl ChatTemplate {
             .any(|t| crate::reasoning_parsers::tag_based::is_channel_tag_template(t))
     }
 
+    /// Whether the template asks for tool calls as Qwen XML
+    /// (`<tool_call><function=NAME><parameter=KEY>VALUE</parameter></function></tool_call>`)
+    /// rather than a JSON body.
+    pub fn uses_xml_tool_calls(&self) -> bool {
+        self.get_template_contents()
+            .iter()
+            .any(|t| t.contains("<function=") && t.contains("<parameter="))
+    }
+
+    /// The `reasoning_effort` this template renders when a request sets none, as
+    /// [`template_effort`] leaves it: its own default (`xhigh`) where it names `xhigh`, `medium`
+    /// elsewhere.
+    pub fn default_reasoning_effort(&self) -> &'static str {
+        if self
+            .get_template_contents()
+            .iter()
+            .any(|t| t.contains("xhigh"))
+        {
+            "xhigh"
+        } else {
+            "medium"
+        }
+    }
+
     pub fn eos_tok(&self) -> Option<String> {
         match self.eos_token.as_ref()?.0 {
             Either::Left(ref lit) => Some(lit.clone()),
@@ -490,12 +514,35 @@ fn preprocess_gemma4_tool_messages(messages: &mut Vec<IndexMap<String, MessageCo
     *messages = result;
 }
 
+/// The `reasoning_effort` a template receives, chosen here and nowhere else.
+/// The top level is `xhigh` for a template that names it (Qwen3.8 accepts only
+/// `xhigh|medium|low` and raises on anything else) and `high` elsewhere (gpt-oss harmony). Unset
+/// is left undefined, so the template's own default applies, where the template names `xhigh`;
+/// elsewhere it stays `medium`.
+fn template_effort(effort: Option<ReasoningEffort>, template: &str) -> Option<&'static str> {
+    let xhigh = template.contains("xhigh");
+    match effort {
+        Some(ReasoningEffort::Low) => Some("low"),
+        Some(ReasoningEffort::Medium) => Some("medium"),
+        Some(ReasoningEffort::High) if xhigh => Some("xhigh"),
+        Some(ReasoningEffort::High) => Some("high"),
+        None if xhigh => None,
+        None => Some("medium"),
+    }
+}
+
+/// A template variable that is undefined when unset, so `is defined` sees the difference.
+fn defined<T: Into<Value>>(value: Option<T>) -> Value {
+    value.map(Into::into).unwrap_or(Value::UNDEFINED)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn apply_chat_template_to(
     mut messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
     enable_thinking: Option<bool>,
     reasoning_effort: Option<ReasoningEffort>,
+    preserve_thinking: Option<bool>,
     template: &ChatTemplateValue,
     bos_tok: Option<String>,
     eos_tok: Option<String>,
@@ -603,8 +650,8 @@ pub fn apply_chat_template_to(
     let date = chrono::Utc::now();
     let date_string = date.format("%d, %B, %Y").to_string();
 
-    // Convert reasoning effort to string for template
-    let reasoning_effort_str = reasoning_effort.map(|r| r.as_str()).unwrap_or("medium");
+    let reasoning_effort = defined(template_effort(reasoning_effort, &resolved_template));
+    let preserve_thinking = defined(preserve_thinking);
 
     // Detect builtin tools from the tools list
     // Known builtin tools for GPT-OSS/Harmony format: "browser", "python"
@@ -640,7 +687,8 @@ pub fn apply_chat_template_to(
             unk_token => unk_tok,
             date_string => date_string,
             enable_thinking => enable_thinking.unwrap_or(DEFAULT_ENABLE_THINKING),
-            reasoning_effort => reasoning_effort_str,
+            reasoning_effort => reasoning_effort,
+            preserve_thinking => preserve_thinking,
         })?
     } else {
         tmpl.render(context! {
@@ -654,7 +702,8 @@ pub fn apply_chat_template_to(
             builtin_tools => builtin_tools,
             date_string => date_string,
             enable_thinking => enable_thinking.unwrap_or(DEFAULT_ENABLE_THINKING),
-            reasoning_effort => reasoning_effort_str,
+            reasoning_effort => reasoning_effort,
+            preserve_thinking => preserve_thinking,
         })?
     };
 
@@ -680,7 +729,66 @@ mod tests {
         apply_chat_template_to, preprocess_gemma4_tool_messages, ChatTemplateValue,
         GenerationConfig, DEFAULT_ENABLE_THINKING,
     };
-    use crate::MessageContent;
+    use crate::{MessageContent, ReasoningEffort};
+
+    fn render(
+        template: &str,
+        enable_thinking: Option<bool>,
+        effort: Option<ReasoningEffort>,
+        preserve_thinking: Option<bool>,
+    ) -> anyhow::Result<String> {
+        apply_chat_template_to(
+            vec![user_text_message("hi")],
+            true,
+            enable_thinking,
+            effort,
+            preserve_thinking,
+            &ChatTemplateValue(Either::Left(template.to_string())),
+            None,
+            None,
+            None,
+            vec![],
+        )
+    }
+
+    /// The effort check Qwen3.8's template makes (`xhigh|medium|low`, raise otherwise, default
+    /// `xhigh`), cut down to the part that matters here.
+    const XHIGH_TEMPLATE: &str = "{%- set effort = reasoning_effort if reasoning_effort is defined else 'xhigh' -%}{%- if effort not in ['xhigh', 'medium', 'low'] -%}{{ raise_exception('Unexpected reasoning effort ' ~ effort) }}{%- endif -%}{{ effort }}";
+
+    /// gpt-oss names `low|medium|high` and defaults to medium.
+    const HIGH_TEMPLATE: &str = "{%- if reasoning_effort is not defined -%}{%- set reasoning_effort = 'medium' -%}{%- endif -%}Reasoning: {{ reasoning_effort }}";
+
+    #[test]
+    fn effort_is_named_the_way_the_template_names_it() {
+        let cases = [
+            (None, "xhigh", "Reasoning: medium"),
+            (Some(ReasoningEffort::Low), "low", "Reasoning: low"),
+            (Some(ReasoningEffort::Medium), "medium", "Reasoning: medium"),
+            (Some(ReasoningEffort::High), "xhigh", "Reasoning: high"),
+        ];
+        for (effort, xhigh, high) in cases {
+            assert_eq!(render(XHIGH_TEMPLATE, None, effort, None).unwrap(), xhigh);
+            assert_eq!(render(HIGH_TEMPLATE, None, effort, None).unwrap(), high);
+        }
+    }
+
+    #[test]
+    fn unset_template_controls_are_undefined() {
+        let template = "{{ 'P' if preserve_thinking is defined else 'p' }}{{ preserve_thinking }}|{{ 'E' if reasoning_effort is defined else 'e' }}";
+        assert_eq!(
+            render(template, None, None, None).unwrap(),
+            "p|E",
+            "a template without xhigh keeps the medium default"
+        );
+        assert_eq!(
+            render(&format!("{template}{{# xhigh #}}"), None, None, None).unwrap(),
+            "p|e"
+        );
+        assert_eq!(
+            render(template, None, None, Some(false)).unwrap(),
+            "Pfalse|E"
+        );
+    }
 
     fn user_text_message(text: &str) -> IndexMap<String, MessageContent> {
         IndexMap::from([
@@ -701,6 +809,7 @@ mod tests {
             false,
             None,
             None,
+            None,
             &template,
             Some("<bos>".to_string()),
             None,
@@ -712,6 +821,7 @@ mod tests {
             vec![user_text_message("hello")],
             false,
             Some(true),
+            None,
             None,
             &template,
             Some("<bos>".to_string()),
