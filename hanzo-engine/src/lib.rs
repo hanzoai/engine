@@ -329,7 +329,7 @@ pub use speculative::{MtpConfig, SpeculativeConfig};
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
-pub use tools::{ToolCallResponse, ToolCallType, ToolCallbacks, ToolChoice};
+pub use tools::{ToolCallResponse, ToolCallType, ToolCallbacks, ToolChoice, FORCED_CALL_DECLINED};
 pub use topology::{LayerTopology, Topology};
 pub use utils::debug::{
     default_hanzo_filter, initialize_hanzo_logging, initialize_logging,

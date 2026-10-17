@@ -20,7 +20,8 @@ use crate::Tool;
 /// can be constructed for mid-stream constrained decoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolCallFormat {
-    /// `<tool_call>{"name":"...","arguments":{...}}</tool_call>`
+    /// `<tool_call>{"name":"...","arguments":{...}}</tool_call>`, or the same block holding
+    /// `<function=NAME><parameter=KEY>VALUE</parameter></function>`
     Qwen,
     /// `<|python_tag|>{"name":"...","parameters":{...}}`
     Llama,
@@ -49,10 +50,19 @@ pub trait ToolFormatParser: Send + Sync {
     /// OR if the tool call is incomplete (still being generated).
     ///
     /// The caller will fall through to the next parser on `Ok(None)`.
-    fn parse(&self, message: &str) -> Result<Option<String>>;
+    ///
+    /// `tools` are the request's tools, for formats whose arguments are untyped text that only the
+    /// declared schema can type.
+    fn parse(&self, message: &str, tools: &[Tool]) -> Result<Option<String>>;
 
     /// The tool call format this parser handles.
     fn format(&self) -> ToolCallFormat;
+
+    /// The text of `message` outside the calls [`parse`](Self::parse) read from it. A format whose
+    /// calls are the whole message has none.
+    fn outside(&self, _message: &str) -> String {
+        String::new()
+    }
 
     /// Build an llguidance grammar that constrains model output to a valid
     /// tool call in this format.  The grammar covers the **post-prefix**
@@ -103,11 +113,22 @@ pub fn build_tool_call_grammar(text: &str, tools: &[Tool]) -> Option<TopLevelGra
     None
 }
 
+/// The text of `message` outside its tool calls, per the first parser that reads calls in it, as
+/// [`process_model_specific_message`] picks it. Empty when no parser does.
+pub fn outside_calls(message: &str, tools: &[Tool]) -> Result<String> {
+    for parser in PARSERS.iter() {
+        if parser.parse(message, tools)?.is_some() {
+            return Ok(parser.outside(message));
+        }
+    }
+    Ok(String::new())
+}
+
 /// Try each parser in order to extract tool calls from `message`.
 /// Returns the original message unchanged if no parser matches.
-pub fn process_model_specific_message(message: &str) -> Result<String> {
+pub fn process_model_specific_message(message: &str, tools: &[Tool]) -> Result<String> {
     for parser in PARSERS.iter() {
-        if let Some(json) = parser.parse(message)? {
+        if let Some(json) = parser.parse(message, tools)? {
             return Ok(json);
         }
     }

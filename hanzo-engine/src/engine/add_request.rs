@@ -188,13 +188,27 @@ impl Engine {
             _ => None,
         };
         let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
-        let matcher = Arc::new(handle_seq_error!(
-            ToolCallingMatcher::new(
-                request.tool_choice.unwrap_or(ToolChoice::Auto),
-                request.tools.as_deref(),
-            ),
-            request.response
-        ));
+        let xml_calls = has_tools
+            && get_mut_arcmutex!(self.pipeline)
+                .get_chat_template()
+                .as_ref()
+                .is_some_and(|ch_t| ch_t.uses_xml_tool_calls());
+        let matcher = Arc::new(
+            handle_seq_error!(
+                ToolCallingMatcher::new(
+                    request.tool_choice.unwrap_or(ToolChoice::Auto),
+                    request.tools.as_deref(),
+                ),
+                request.response
+            )
+            .with_xml_calls(xml_calls),
+        );
+        // A forced call starts in the prompt, rendered with thinking off.
+        let prefill = if is_chat {
+            matcher.forced_prefix()
+        } else {
+            None
+        };
 
         let image_generation_format = match &request.messages {
             RequestMessage::ImageGeneration { format, .. } => Some(*format),
@@ -249,6 +263,11 @@ impl Engine {
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
                 let tools = request.tools.unwrap_or_default();
+                let enable_thinking = if prefill.is_some() {
+                    Some(false)
+                } else {
+                    enable_thinking
+                };
                 let template = pipeline.get_processor().process(
                     pipeline,
                     messages,
@@ -258,7 +277,20 @@ impl Engine {
                     reasoning_effort,
                     tools,
                 );
-                handle_seq_error!(template, request.response)
+                let (mut toks, mut text) = handle_seq_error!(template, request.response);
+                if let Some(prefill) = &prefill {
+                    let ids = pipeline
+                        .tokenizer()
+                        .ok_or_else(|| anyhow::Error::msg("a forced tool call needs a tokenizer"))
+                        .and_then(|tokenizer| {
+                            tokenizer
+                                .encode_fast(prefill.as_str(), false)
+                                .map_err(anyhow::Error::msg)
+                        });
+                    toks.extend_from_slice(handle_seq_error!(ids, request.response).get_ids());
+                    text.push_str(prefill);
+                }
+                (toks, text)
             }
             RequestMessage::Completion { text, .. }
             | RequestMessage::Embedding { prompt: text } => {

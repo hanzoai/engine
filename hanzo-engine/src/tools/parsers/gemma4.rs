@@ -63,7 +63,7 @@ object: "{{" (pair ("," pair)*)? "}}"
         }
     }
 
-    fn parse(&self, message: &str) -> Result<Option<String>> {
+    fn parse(&self, message: &str, _tools: &[Tool]) -> Result<Option<String>> {
         if !message.contains("<|tool_call>") {
             return Ok(None);
         }
@@ -398,7 +398,7 @@ mod tests {
 
     /// Helper: parse through the full registry (same as the real code path).
     fn parse(msg: &str) -> String {
-        crate::tools::parsers::process_model_specific_message(msg).unwrap()
+        crate::tools::parsers::process_model_specific_message(msg, &[]).unwrap()
     }
 
     #[test]
