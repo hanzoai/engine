@@ -543,7 +543,7 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     }
 }
 
-/// Run one GGUF-quantized MoE projection with llama.cpp-style grouped MMQ.
+/// Run one GGUF-quantized MoE projection with grouped MMQ (rows sorted by expert).
 ///
 /// `ids_src` maps compact expert-sorted rows to input token rows. `ids_dst`
 /// maps those same compact rows to output assignment rows. For Gemma4 MoE this
@@ -879,7 +879,7 @@ pub fn grouped_from_glu_pair(
     )))
 }
 
-/// Run two GGUF-quantized MoE projections with llama.cpp-style grouped MMQ.
+/// Run two GGUF-quantized MoE projections with grouped MMQ (rows sorted by expert).
 ///
 /// Gate/up share one MMQ activation quantization pass while still producing
 /// rows in flat assignment order for the downstream weighted down projection.

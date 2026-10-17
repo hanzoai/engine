@@ -44,7 +44,7 @@ const QUEUE_POLL: Duration = Duration::from_millis(250);
 /// Longest a request waits when its replica bounds the queue (`queue: N`).
 const QUEUE_SHORT: Duration = Duration::from_secs(5);
 /// Liveness is "the server answers HTTP". Engines' own /health can run a
-/// generation through the scheduler (SGLang does), which waits behind a long
+/// generation through the scheduler, which waits behind a long
 /// prefill and would evict the one replica able to serve it.
 const HEALTH_PATH: &str = "/v1/models";
 /// Response header naming the replica that served the request (observability).

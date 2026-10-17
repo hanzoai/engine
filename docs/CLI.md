@@ -415,7 +415,7 @@ hanzo cache delete -m meta-llama/Llama-3.2-3B
 ### bench - Performance Benchmarking
 
 Prefill and decode throughput, counted: tokens from the engine's own usage figures over this
-process's wall clock, the method llama-bench uses, so the two engines compare like for like. The
+process's wall clock, so a run compares like for like with any bench that times the same way. The
 model is built as `serve` builds it, so what is measured is what is served, speculation included.
 
 ```bash

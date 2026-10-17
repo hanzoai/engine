@@ -1,8 +1,8 @@
-//! Block-FP8 GEMM on sm_12x tensor cores, bit-identical to vLLM's.
+//! Block-FP8 GEMM on sm_12x tensor cores, bit-identical to the served kernels.
 //!
-//! The kernels are vLLM v0.29.0's three CUTLASS sm120 blockwise tiles
-//! (`kernels/blockwise_fp8_cutlass`), and [`Tile::for_rows`] is vLLM's M
-//! dispatch. Weights are e4m3 `[N, K]` with F32 `weight_scale_inv`
+//! The kernels are three CUTLASS sm120 blockwise tiles
+//! (`kernels/blockwise_fp8_cutlass`), and [`Tile::for_rows`] picks one by M
+//! alone. Weights are e4m3 `[N, K]` with F32 `weight_scale_inv`
 //! `[N/128, K/128]`; activations are e4m3 `[M, K]` with per-token-group F32
 //! scales `[M, K/128]`, row-major. Output is bf16 `[M, N]`.
 
@@ -23,7 +23,7 @@ const SCALE_ALIGN: u64 = 4;
 const SM_MAJOR: i32 = 12;
 const SM_MINOR: i32 = 1;
 
-/// vLLM's three sm_12x tiles.
+/// The three sm_12x tiles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tile {
     /// 128x32x128 cooperative with A and B swapped: weights fill the MMA's M.
@@ -37,8 +37,8 @@ pub enum Tile {
 impl Tile {
     pub const ALL: [Tile; 3] = [Tile::SwapAb, Tile::Pingpong, Tile::Cooperative];
 
-    /// vLLM v0.29.0 `cutlass_gemm_blockwise_sm120_fp8_dispatch`: M alone
-    /// decides, with no alignment clause and no split-K.
+    /// M alone decides: <= 64 swap-AB, <= 256 pingpong, else cooperative, with
+    /// no alignment clause and no split-K.
     pub fn for_rows(m: usize) -> Tile {
         if m <= 64 {
             Tile::SwapAb
@@ -218,7 +218,7 @@ fn expect_dtype(t: &Tensor, dtype: DType, what: &str) -> Result<()> {
 }
 
 /// `out[M, N] = sum_kb (sa[:, kb] * sw[:, kb]) * (qa_kb @ qw_kb^T)` in bf16,
-/// on the tile vLLM picks for this M.
+/// on the tile [`Tile::for_rows`] picks for this M.
 ///
 /// `qa`: e4m3 `[M, K]`, `sa`: f32 `[M, K/128]`, `qw`: e4m3 `[N, K]`,
 /// `sw`: f32 `[N/128, K/128]`, all on one CUDA device. Any layout is

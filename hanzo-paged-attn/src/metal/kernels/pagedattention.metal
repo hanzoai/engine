@@ -1063,8 +1063,6 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
         const int offset = row_idx * BLOCK_SIZE + physical_block_offset;
         // NOTE: When v_vec contains the tokens that are out of the context,
         // we should explicitly zero out the values since they may contain NaNs.
-        // See
-        // https://github.com/vllm-project/vllm/issues/641#issuecomment-1682544472
         V_vec v_vec;
 
         if constexpr (is_uchar<CACHE_T>()) {

@@ -386,7 +386,7 @@ pub fn moe_gemm_transposed(
 /// Replaces the two-op `routed.broadcast_mul(scores).sum(dim=topk)`, whose
 /// hanzo-ml reduce (`fast_sum_f32`) walked the middle `topk` axis of a
 /// [T, topk, N] tensor with an uncoalesced strided gather (`~15%` of Qwen3.6
-/// prefill GPU time vs llama's `~0`). One coalesced pass over N here.
+/// prefill GPU time). One coalesced pass over N here.
 ///
 /// `routed`: [T, topk, N] contiguous, f32 or bf16. `scores`: [T, topk] f32.
 /// Returns [T, N] in `routed`'s dtype (accumulation is always f32).

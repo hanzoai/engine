@@ -495,7 +495,7 @@ impl Drop for EngineInstance {
 }
 
 /// The Hanzo struct handles sending requests to multiple engines.
-/// It is the core multi-threaded component of mistral.rs, and uses `mpsc`
+/// It is the core multi-threaded component of Hanzo Engine, and uses `mpsc`
 /// `Sender` and `Receiver` primitives to send and receive requests to the
 /// appropriate engine based on model ID.
 ///
@@ -1043,7 +1043,7 @@ impl Hanzo {
                         warn!("  Sandbox: OFF. Network and filesystem are NOT restricted.");
                         warn!("  Pass a sandbox_policy (or --sandbox on at the CLI) to enable isolation.");
                     }
-                    warn!("  See: https://ericlbuehler.github.io/mistral.rs/reference/sandbox/");
+                    warn!("  See: https://hanzoai.github.io/engine/reference/sandbox/");
                     warn!("============================================================");
                     info!("Code execution initialized with {count} tools");
                 }

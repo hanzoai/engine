@@ -8,11 +8,11 @@ Hanzo Engine supports enhancing the performance of models quantized with ISQ by 
 - `Q5K`
 - `Q6K`
 
-> **What is an imatrix?** An imatrix (importance matrix) is generated from data collected during the execution of the model on calibration data. This data is used to enhance the performance of the model by enabling a weighted RMSE minimization when quantizing the tensor. For more information, see the [original PR](https://github.com/ggerganov/llama.cpp/pull/4861).
+> **What is an imatrix?** An imatrix (importance matrix) is generated from data collected during the execution of the model on calibration data. This data is used to enhance the performance of the model by enabling a weighted RMSE minimization when quantizing the tensor.
 
 Using an imatrix causes the quantization process to take longer as the data must be collected, but there is no inference-time performance decrease.
 
-> Note: Hanzo Engine will automatically generate a **.cimatrix** file which can be used within Hanzo Engine as a replacement for a .imatrix file. The primary advantage is the in-situ generation within Hanzo Engine. The format is incompatible with llama.cpp.
+> Note: Hanzo Engine will automatically generate a **.cimatrix** file which can be used within Hanzo Engine as a replacement for a .imatrix file. The primary advantage is the in-situ generation within Hanzo Engine. The format is Hanzo Engine's own; tools that read `.imatrix` files cannot read it.
 
 To use this, simply specify the calibration data file in the various APIs as detailed below.
 

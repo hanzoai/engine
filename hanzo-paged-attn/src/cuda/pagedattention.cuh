@@ -53,7 +53,7 @@
     }                                                                          \
   } while (0)
 
-namespace vllm {
+namespace pagedattn {
 
 // Utility function for attention softmax.
 template <int NUM_WARPS>
@@ -65,7 +65,7 @@ inline __device__ float block_sum(float *red_smem, float sum) {
   // Compute the sum per warp.
 #pragma unroll
   for (int mask = WARP_SIZE / 2; mask >= 1; mask /= 2) {
-    sum += VLLM_SHFL_XOR_SYNC(sum, mask);
+    sum += HANZO_SHFL_XOR_SYNC(sum, mask);
   }
 
   // Warp leaders store the data to shared memory.
@@ -84,11 +84,11 @@ inline __device__ float block_sum(float *red_smem, float sum) {
   // Parallel reduction inside the warp.
 #pragma unroll
   for (int mask = NUM_WARPS / 2; mask >= 1; mask /= 2) {
-    sum += VLLM_SHFL_XOR_SYNC(sum, mask);
+    sum += HANZO_SHFL_XOR_SYNC(sum, mask);
   }
 
   // Broadcast to other threads.
-  return VLLM_SHFL_SYNC(sum, 0);
+  return HANZO_SHFL_SYNC(sum, 0);
 }
 
 inline __device__ float fast_tanh(float x) {
@@ -107,7 +107,7 @@ inline __device__ float fast_tanh(float x) {
 
 // TODO(woosuk): Merge the last two dimensions of the grid.
 // Grid: (num_heads, num_seqs, max_num_partitions).
-template <typename scalar_t, typename cache_t, vllm::Fp8KVCacheDataType kv_dt,
+template <typename scalar_t, typename cache_t, pagedattn::Fp8KVCacheDataType kv_dt,
           int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS,
           int PARTITION_SIZE = 0> // Zero means no partitioning.
 __device__ void paged_attention_kernel(
@@ -255,15 +255,15 @@ __device__ void paged_attention_kernel(
         const int offset1 = (vec_idx * VEC_SIZE) / x;
         const int offset2 = (vec_idx * VEC_SIZE) % x;
 
-        if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kAuto) {
+        if constexpr (kv_dt == pagedattn::Fp8KVCacheDataType::kAuto) {
           k_vecs[j] = *reinterpret_cast<const K_vec *>(
               k_ptr + offset1 * BLOCK_SIZE * x + offset2);
         } else {
-          using Cache_K_vec = typename vllm::Vec<cache_t, VEC_SIZE>::Type;
+          using Cache_K_vec = typename pagedattn::Vec<cache_t, VEC_SIZE>::Type;
           Cache_K_vec fp8_k_vec = *reinterpret_cast<const Cache_K_vec *>(
               k_ptr + offset1 * BLOCK_SIZE * x + offset2);
 
-          k_vecs[j] = vllm::fp8::scaled_convert<K_vec, Cache_K_vec, kv_dt>(
+          k_vecs[j] = pagedattn::fp8::scaled_convert<K_vec, Cache_K_vec, kv_dt>(
               fp8_k_vec, *k_scale);
         }
       }
@@ -298,7 +298,7 @@ __device__ void paged_attention_kernel(
   // The 0-th thread of each thread group already has its max qk value.
 #pragma unroll
   for (int mask = WARP_SIZE / 2; mask >= THREAD_GROUP_SIZE; mask /= 2) {
-    qk_max = fmaxf(qk_max, VLLM_SHFL_XOR_SYNC(qk_max, mask));
+    qk_max = fmaxf(qk_max, HANZO_SHFL_XOR_SYNC(qk_max, mask));
   }
   if (lane == 0) {
     red_smem[warp_idx] = qk_max;
@@ -310,10 +310,10 @@ __device__ void paged_attention_kernel(
   qk_max = lane < NUM_WARPS ? red_smem[lane] : -FLT_MAX;
 #pragma unroll
   for (int mask = NUM_WARPS / 2; mask >= 1; mask /= 2) {
-    qk_max = fmaxf(qk_max, VLLM_SHFL_XOR_SYNC(qk_max, mask));
+    qk_max = fmaxf(qk_max, HANZO_SHFL_XOR_SYNC(qk_max, mask));
   }
   // Broadcast the max qk value to all threads.
-  qk_max = VLLM_SHFL_SYNC(qk_max, 0);
+  qk_max = HANZO_SHFL_SYNC(qk_max, 0);
 
   // For non-partitioned (V1) mode, include the sink in the max.
   // For V2 (partitioned), the sink is handled once in the reduce kernel.
@@ -395,21 +395,20 @@ __device__ void paged_attention_kernel(
         const int offset = row_idx * BLOCK_SIZE + physical_block_offset;
         V_vec v_vec;
 
-        if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kAuto) {
+        if constexpr (kv_dt == pagedattn::Fp8KVCacheDataType::kAuto) {
           v_vec = *reinterpret_cast<const V_vec *>(v_ptr + offset);
         } else {
-          using Cache_V_vec = typename vllm::Vec<cache_t, V_VEC_SIZE>::Type;
+          using Cache_V_vec = typename pagedattn::Vec<cache_t, V_VEC_SIZE>::Type;
           Cache_V_vec fp8_v_vec =
               *reinterpret_cast<const Cache_V_vec *>(v_ptr + offset);
 
-          v_vec = vllm::fp8::scaled_convert<V_vec, Cache_V_vec, kv_dt>(
+          v_vec = pagedattn::fp8::scaled_convert<V_vec, Cache_V_vec, kv_dt>(
               fp8_v_vec, *v_scale);
         }
         if (block_idx == num_context_blocks - 1) {
           // NOTE(woosuk): When v_vec contains the tokens that are out of the
           // context, we should explicitly zero out the values since they may
-          // contain NaNs. See
-          // https://github.com/vllm-project/vllm/issues/641#issuecomment-1682544472
+          // contain NaNs.
           scalar_t *v_vec_ptr = reinterpret_cast<scalar_t *>(&v_vec);
 #pragma unroll
           for (int j = 0; j < V_VEC_SIZE; j++) {
@@ -428,7 +427,7 @@ __device__ void paged_attention_kernel(
     float acc = accs[i];
 #pragma unroll
     for (int mask = NUM_V_VECS_PER_ROW / 2; mask >= 1; mask /= 2) {
-      acc += VLLM_SHFL_XOR_SYNC(acc, mask);
+      acc += HANZO_SHFL_XOR_SYNC(acc, mask);
     }
     accs[i] = acc;
   }
@@ -485,7 +484,7 @@ __device__ void paged_attention_kernel(
 }
 
 // Grid: (num_heads, num_seqs, 1).
-template <typename scalar_t, typename cache_t, vllm::Fp8KVCacheDataType kv_dt,
+template <typename scalar_t, typename cache_t, pagedattn::Fp8KVCacheDataType kv_dt,
           int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS>
 __global__ void paged_attention_v1_kernel(
     scalar_t *__restrict__ out,          // [num_seqs, num_heads, head_size]
@@ -513,7 +512,7 @@ __global__ void paged_attention_v1_kernel(
 }
 
 // Grid: (num_heads, num_seqs, max_num_partitions).
-template <typename scalar_t, typename cache_t, vllm::Fp8KVCacheDataType kv_dt,
+template <typename scalar_t, typename cache_t, pagedattn::Fp8KVCacheDataType kv_dt,
           int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int PARTITION_SIZE>
 __global__ void paged_attention_v2_kernel(
     float *__restrict__ exp_sums,   // [num_seqs, num_heads, max_num_partitions]
@@ -604,7 +603,7 @@ __global__ void paged_attention_v2_reduce_kernel(
   // Reduce within the warp.
 #pragma unroll
   for (int mask = WARP_SIZE / 2; mask >= 1; mask /= 2) {
-    max_logit = fmaxf(max_logit, VLLM_SHFL_XOR_SYNC(max_logit, mask));
+    max_logit = fmaxf(max_logit, HANZO_SHFL_XOR_SYNC(max_logit, mask));
   }
   if (lane == 0) {
     red_smem[warp_idx] = max_logit;
@@ -614,10 +613,10 @@ __global__ void paged_attention_v2_reduce_kernel(
   max_logit = lane < NUM_WARPS ? red_smem[lane] : -FLT_MAX;
 #pragma unroll
   for (int mask = NUM_WARPS / 2; mask >= 1; mask /= 2) {
-    max_logit = fmaxf(max_logit, VLLM_SHFL_XOR_SYNC(max_logit, mask));
+    max_logit = fmaxf(max_logit, HANZO_SHFL_XOR_SYNC(max_logit, mask));
   }
   // Broadcast the max value to all threads.
-  max_logit = VLLM_SHFL_SYNC(max_logit, 0);
+  max_logit = HANZO_SHFL_SYNC(max_logit, 0);
 
   // Include the sink in the global max before rescaling.
   if (sinks != nullptr) {
@@ -664,14 +663,14 @@ __global__ void paged_attention_v2_reduce_kernel(
   }
 }
 
-} // namespace vllm
+} // namespace pagedattn
 
 #define LAUNCH_PAGED_ATTENTION_V1(HEAD_SIZE)                                   \
-  VLLM_DevFuncAttribute_SET_MaxDynamicSharedMemorySize(                        \
-      ((void *)vllm::paged_attention_v1_kernel<T, CACHE_T, KV_DT, HEAD_SIZE,   \
+  HANZO_DevFuncAttribute_SET_MaxDynamicSharedMemorySize(                        \
+      ((void *)pagedattn::paged_attention_v1_kernel<T, CACHE_T, KV_DT, HEAD_SIZE,   \
                                                BLOCK_SIZE, NUM_THREADS>),      \
       shared_mem_size);                                                        \
-  vllm::paged_attention_v1_kernel<T, CACHE_T, KV_DT, HEAD_SIZE, BLOCK_SIZE,    \
+  pagedattn::paged_attention_v1_kernel<T, CACHE_T, KV_DT, HEAD_SIZE, BLOCK_SIZE,    \
                                   NUM_THREADS>                                 \
       <<<grid, block, shared_mem_size, stream>>>(                              \
           reinterpret_cast<T *>(out), reinterpret_cast<T *>(query),            \
@@ -682,7 +681,7 @@ __global__ void paged_attention_v2_reduce_kernel(
           kv_head_stride, k_scale, v_scale, sinks);
 
 // TODO(woosuk): Tune NUM_THREADS.
-template <typename T, typename CACHE_T, vllm::Fp8KVCacheDataType KV_DT,
+template <typename T, typename CACHE_T, pagedattn::Fp8KVCacheDataType KV_DT,
           int BLOCK_SIZE, int NUM_THREADS = 128>
 inline void paged_attention_v1_launcher(
     void *out, void *query, void *key_cache, void *value_cache,
@@ -705,8 +704,7 @@ inline void paged_attention_v1_launcher(
       DIVIDE_ROUND_UP(max_context_len, BLOCK_SIZE) * BLOCK_SIZE;
   int logits_size = padded_max_context_len * sizeof(float);
   int outputs_size = (NUM_WARPS / 2) * head_size * sizeof(float);
-  // Python-side check in vllm.worker.worker._check_if_can_support_max_seq_len
-  // Keep that in sync with the logic here!
+  // Shared memory holds the larger of the logits and the warp outputs.
   int shared_mem_size = std::max(logits_size, outputs_size);
 
   dim3 grid(num_heads, num_seqs, 1);
@@ -770,7 +768,7 @@ inline void paged_attention_v1_launcher(
 
 
 #define LAUNCH_PAGED_ATTENTION_V2(HEAD_SIZE)                                   \
-  vllm::paged_attention_v2_kernel<T, CACHE_T, KV_DT, HEAD_SIZE, BLOCK_SIZE,    \
+  pagedattn::paged_attention_v2_kernel<T, CACHE_T, KV_DT, HEAD_SIZE, BLOCK_SIZE,    \
                                   NUM_THREADS, PARTITION_SIZE>                 \
       <<<grid, block, shared_mem_size, stream>>>(                              \
           exp_sums, max_logits, tmp_out_ptr, reinterpret_cast<T *>(query),     \
@@ -779,13 +777,13 @@ inline void paged_attention_v1_launcher(
           softcapping, block_tables, context_lens, max_num_blocks_per_seq,     \
           reinterpret_cast<float *>(alibi_slopes), q_stride, kv_block_stride,  \
           kv_head_stride, k_scale, v_scale, sinks);                            \
-  vllm::paged_attention_v2_reduce_kernel<T, HEAD_SIZE, NUM_THREADS,            \
+  pagedattn::paged_attention_v2_reduce_kernel<T, HEAD_SIZE, NUM_THREADS,            \
                                          PARTITION_SIZE>                       \
       <<<reduce_grid, block, reduce_shared_mem_size, stream>>>(                \
           reinterpret_cast<T *>(out), exp_sums, max_logits, tmp_out_ptr,       \
           context_lens, max_num_partitions, sinks);
 
-template <typename T, typename CACHE_T, vllm::Fp8KVCacheDataType KV_DT,
+template <typename T, typename CACHE_T, pagedattn::Fp8KVCacheDataType KV_DT,
           int BLOCK_SIZE, int NUM_THREADS = 128, int PARTITION_SIZE = 512>
 inline void paged_attention_v2_launcher(
     void *out, float *exp_sums, float *max_logits, void *tmp_out, void *query,

@@ -8,8 +8,6 @@
 //! it. Routed experts are NVFP4 (ModelOpt: packed E2M1 codes, E4M3 block scales, an F32 global
 //! scale and an F32 activation scale); the dense side layers are block FP8 (E4M3 with one F32 scale
 //! per 128x128 block); the rest is BF16. The n-gram table (layer 1's PLE) stays on the host.
-//!
-//! Source: vLLM `transformers_utils/configs/qwen4_exp.py`, `models/qwen4_exp/nvidia/model.py`.
 
 use hanzo_ml::{DType, Result};
 use serde::{Deserialize, Serialize};
@@ -174,7 +172,7 @@ impl TextConfig {
     }
 
     /// Per-head table sizes: the `h+1`-th prime past `ngram_vocab_size_base - 1` for head `h` of
-    /// the (single) PLE layer, as vLLM's `_make_vocab_layout`.
+    /// the (single) PLE layer.
     pub(crate) fn ngram_head_sizes(&self) -> Vec<u64> {
         let mut sizes = Vec::with_capacity(self.ngram_heads());
         let mut p = self.ngram_vocab_size_base - 1;
@@ -881,7 +879,7 @@ pub(crate) mod tests {
         hanzo_ml::safetensors::load(&path, &hanzo_ml::Device::Cpu).expect("fixture loads")
     }
 
-    /// A tensor of the CPU golden (`scripts/zen6_golden.py`), on the host.
+    /// A tensor of the CPU golden for layers 0-3 (`tests/fixtures/zen6.safetensors`), on the host.
     pub(crate) fn fixture(name: &str) -> hanzo_ml::Tensor {
         static FIX: std::sync::OnceLock<HashMap<String, hanzo_ml::Tensor>> =
             std::sync::OnceLock::new();
@@ -891,7 +889,8 @@ pub(crate) mod tests {
             .clone()
     }
 
-    /// A tensor the served vLLM kernels produced (`scripts/zen6_vectors.py`), on the host.
+    /// A tensor the served reference kernels produced on the golden's inputs
+    /// (`tests/fixtures/zen6_vectors.safetensors`), on the host.
     /// A stage whose served output is every zero did not run: the recording allocated the result
     /// and the kernel never wrote it. Refuse it there instead of letting a caller measure the
     /// distance from live data to an empty allocation, which reads as a parity gap.
@@ -1545,7 +1544,7 @@ pub(crate) mod tests {
         );
         let werr = (w.to_device(&hanzo_ml::Device::Cpu)? - &w_ref)?.abs()?.max_all()?.to_scalar::<f32>()?;
         assert!(werr <= 1e-6, "routing weights {werr:e}");
-        // fc1's activation quantizer against vLLM's scaled_fp4_quant
+        // fc1's activation quantizer against the served NVFP4 activation quantizer
         let gs = fixture("l3.mlp.gs").to_vec1::<f32>()?;
         let (codes, scales) = hanzo_quant::quantize::nvfp4(&u.to_device(&dev)?, gs[0])?;
         let bytes = |t: &Tensor| -> Vec<u8> {
@@ -1563,7 +1562,7 @@ pub(crate) mod tests {
         // kernel accumulates in tensor-core order. The vectors file records that distance in its
         // own metadata, gaps["moe.routed.golden"] = 96.34 max ulp, 43.54 at p99.9, min row cos
         // 0.9994971. Bit-exactness with the kernel is the contract, asserted above, so the golden
-        // is checked at the distance the golden itself documents: no further than vLLM's kernel.
+        // is checked at the distance the golden itself documents: no further than the kernel.
         assert_close("experts vs golden", &routed, &fixture("l3.routed"), Tol::most(97.0, 0.999, 0.9994));
         assert_close("shared vs golden", &cat(&shared), &fixture("l3.shared"), Tol::ulps(1.0));
         let down = moe.shared_down_proj.forward(&fixture("l3.shared.act").to_device(&dev)?)?;

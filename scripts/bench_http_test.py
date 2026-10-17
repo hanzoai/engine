@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""bench_http.py against a fake engine that streams in vLLM's shape and in hanzo's shape."""
+"""bench_http.py against a fake engine in two stream shapes: thinking under `reasoning` with usage
+in a trailing chunk, and hanzo's, thinking under `reasoning_content` with usage on the finish chunk."""
 import http.server
 import io
 import json
@@ -25,7 +26,7 @@ def chunk(delta=None, finish=None, usage=None, choices=True):
     return body
 
 
-def vllm_stream():
+def reasoning_field_stream():
     """Role chunk, 3 reasoning + 3 content chunks carrying 8 tokens, finish, then usage 2 s later."""
     yield chunk({"role": "assistant", "content": ""}), 0
     for text in ["Let", " me think", " now"]:
@@ -144,8 +145,8 @@ class Streams(unittest.TestCase):
         self.assertAlmostEqual(row["decode_tps"], 7 / row["decode_s"], places=6)
         self.assertAlmostEqual(row["itl_p50_s"], span / 5, delta=0.03)
 
-    def test_vllm_shape(self):
-        self.check_shape(vllm_stream)
+    def test_reasoning_field_and_trailing_usage(self):
+        self.check_shape(reasoning_field_stream)
 
     def test_hanzo_shape(self):
         self.check_shape(hanzo_stream)

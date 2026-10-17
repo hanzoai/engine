@@ -725,8 +725,9 @@ fn moe_matvec_unified_numeric() {
             put_d(blk, 108, r, b, 0.0078125, 0.00390625, 5);
         },
     );
-    // IQ4_XS MoE: the dominant attention/expert type in Unsloth-Dynamic mixes. Its 256-elem super-block
-    // rides the SAME batched on-device-ids moe_qmatvec dp4a core (codebook nibble -> signed int8) vs oracle.
+    // IQ4_XS MoE: the dominant attention/expert type in dynamic mixed-type GGUFs. Its 256-elem
+    // super-block rides the SAME batched on-device-ids moe_qmatvec dp4a core (codebook nibble ->
+    // signed int8) vs oracle.
     moe_check::<BlockIQ4xs, _>(
         &dev,
         &mut log,

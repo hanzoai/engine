@@ -480,7 +480,8 @@ mod tests {
         }
     }
 
-    // Content based upon https://github.com/ggerganov/llama.cpp/blob/master/tests/test-tokenizer-random.py#L99-L161
+    // A tokenizer stress passage: ASCII punctuation, a newline, emoji (single, compound and a ZWJ
+    // sequence), CJK and pinyin with tone marks.
     fn get_test_passage() -> String {
         let passage = "Hello, world! \n🚀 (normal) 😶‍🌫️ (compound emoji, zwj sequence) ✅ (emoji as single token)\n你好世界！\nNǐ hǎo shìjiè!";
 
@@ -512,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "fixtures not mirrored: hanzoai/mistralrs_tests does not exist on HF (404); upstream EricBuehler/mistralrs_tests is also not public"]
+    #[ignore = "fixtures not mirrored: hanzoai/mistralrs_tests does not exist on HF (404) and the repo it was copied from is not public"]
     fn test_encode_decode_llama() -> Result<()> {
         if std::env::var("HF_TOKEN").map_or(true, |t| t.is_empty()) {
             eprintln!("skipping: HF_TOKEN not set (gated hanzoai/mistralrs_tests repo)");
@@ -559,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "fixtures not mirrored: hanzoai/mistralrs_tests does not exist on HF (404); upstream EricBuehler/mistralrs_tests is also not public"]
+    #[ignore = "fixtures not mirrored: hanzoai/mistralrs_tests does not exist on HF (404) and the repo it was copied from is not public"]
     fn test_encode_decode_gpt2() -> Result<()> {
         if std::env::var("HF_TOKEN").map_or(true, |t| t.is_empty()) {
             eprintln!("skipping: HF_TOKEN not set (gated hanzoai/mistralrs_tests repo)");

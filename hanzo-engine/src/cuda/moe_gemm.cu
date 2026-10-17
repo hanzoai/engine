@@ -32,7 +32,7 @@
 
 #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
 
-namespace vllm_rs {
+namespace moe_detail {
 
 // Load vector type (128-bit for best bandwidth)
 template <typename T> struct LoadVecType {
@@ -68,7 +68,7 @@ inline __device__ void zero(half2 &dst) {
   dst.y = __half_as_ushort(__float2half(0));
 }
 
-} // namespace vllm_rs
+} // namespace moe_detail
 
 /*
  * @param input             [M, K] - Input activations for all tokens.
@@ -126,8 +126,8 @@ __global__ void moe_gemm_vectorized_kernel(
   const T *weight_row = weight_expert + (size_t)n * K;
 
   // Vector size for load
-  constexpr int LOAD_VEC_SIZE = vllm_rs::LoadVecSize<T>::value;
-  using LoadVecT = typename vllm_rs::LoadVecType<T>::type;
+  constexpr int LOAD_VEC_SIZE = moe_detail::LoadVecSize<T>::value;
+  using LoadVecT = typename moe_detail::LoadVecType<T>::type;
   // Vector size for compute
   constexpr int VEC_SIZE = sizeof(T);
 
@@ -140,7 +140,7 @@ __global__ void moe_gemm_vectorized_kernel(
 
   // This thread's accumulator
   VecT acc;
-  vllm_rs::zero(acc);
+  moe_detail::zero(acc);
   LoadVecT zero_vec;
   zero_vec.x = zero_vec.y = zero_vec.z = zero_vec.w = 0.0f;
 
@@ -197,7 +197,7 @@ __global__ void moe_gemm_vectorized_kernel(
   if (topk_weights) {
     // Apply top-k weight scaling
     T output_val;
-    vllm::from_float(output_val, vllm::to_float(__hadd(acc.x, acc.y)) *
+    moe_dtype::from_float(output_val, moe_dtype::to_float(__hadd(acc.x, acc.y)) *
                                      topk_weights[token_id]);
     output[token_id * N + n] = output_val;
   } else {
@@ -229,7 +229,7 @@ moe_gemm(const void *input,   // input [size_m or size_m / topk, size_k]
   // we would calculate and pass it here.
 
   // Vectorization requires K to be divisible by the vector size
-  int load_vec_size = (dtype == 2) ? 1 : vllm_rs::LoadVecSize<half>::value;
+  int load_vec_size = (dtype == 2) ? 1 : moe_detail::LoadVecSize<half>::value;
   ASSERT_THROW(size_k % BLOCK_K_TILE == 0,
                "size_k must be divisible by BLOCK_K_TILE");
   ASSERT_THROW(size_k % load_vec_size == 0,

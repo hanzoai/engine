@@ -147,8 +147,7 @@ pub struct ModelWeights {
     dtype: DType,
 }
 
-// starcoder2 `llm` fields:
-// https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#llm
+// starcoder2 `llm` fields (the GGUF specification's `[llm].` metadata keys):
 pub(crate) struct PropsGGUF {
     pub head_count: usize,
     pub head_count_kv: usize,

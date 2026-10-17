@@ -84,7 +84,7 @@ curl 127.0.0.1:1234/v1/models
 
 `hanzoai` has no default port: give it `--port`, or `-i` for an interactive session. `--serve-ip` defaults to `0.0.0.0`, every interface. OpenAI-compatible clients use `http://127.0.0.1:1234/v1`.
 
-`hanzo-engine serve -m <model>` listens on `0.0.0.0:1234` unless given `-p` and `--host`, serves a web UI at `/ui`, and advertises itself over mDNS unless given `--no-advertise`. LM Studio also defaults to port 1234. `hanzo-engine tune -m <model> --emit-config config.toml` recommends a quantization and device map for the machine, and `hanzo-engine from-config -f config.toml` runs it.
+`hanzo-engine serve -m <model>` listens on `0.0.0.0:1234` unless given `-p` and `--host`, serves a web UI at `/ui`, and advertises itself over mDNS unless given `--no-advertise`. `hanzo-engine tune -m <model> --emit-config config.toml` recommends a quantization and device map for the machine, and `hanzo-engine from-config -f config.toml` runs it.
 
 ### Chat and embeddings on one port
 

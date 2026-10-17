@@ -81,7 +81,7 @@ impl GgufModelBuilder {
 
     /// Load the GGUF in a specific compute dtype (KV cache + attention operands).
     /// Default `Auto` picks per-device (bf16 on CUDA). `F32` threads full precision
-    /// end-to-end (ds4-parity numerics).
+    /// end-to-end (F32 KV cache and attention operands).
     pub fn with_dtype(mut self, dtype: hanzo_engine::ModelDType) -> Self {
         self.dtype = dtype;
         self

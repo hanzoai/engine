@@ -2,8 +2,8 @@
 //! combine, with no host synchronization, so a forward can be captured in a CUDA graph.
 //!
 //! [`nvfp4::Experts`] are Flash-Next's NVFP4 routed experts (FlashInfer `cutlass_fused_moe` at
-//! vLLM's production tactic); [`fp8::Experts`] its MTP drafter's block-FP8 experts with BF16
-//! scales (vLLM's Triton path).
+//! the served production tactic); [`fp8::Experts`] its MTP drafter's block-FP8 experts with BF16
+//! scales (the served Triton path).
 
 mod combine;
 mod ffi;

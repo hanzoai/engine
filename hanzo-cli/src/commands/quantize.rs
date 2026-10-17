@@ -194,7 +194,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
     Ok(())
 }
 
-/// Export a llama-family model to a single llama.cpp-loadable `.gguf` file.
+/// Export a llama-family model to a single standard `.gguf` file.
 ///
 /// The output tensor type comes from a single `--isq` value: `f16` or `q8_0`.
 async fn run_gguf_export(model_type: &QuantizeModelType) -> Result<()> {

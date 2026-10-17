@@ -1,4 +1,5 @@
-//! Kernel tests against CPU references and vLLM's own outputs (`tests/fixtures/moe_*`).
+//! Kernel tests against CPU references and the served kernels' recorded outputs
+//! (`tests/fixtures/moe_*`).
 //!
 //! GPU runs follow the box's memory rule: the first CUDA action creates the device and
 //! allocates the test's declared peak; any CUDA out-of-memory there panics with
@@ -606,8 +607,8 @@ mod nvfp4_cases {
     }
 }
 
-/// T5: codes and scale bytes of every routed row equal vLLM's scaled_fp4_quant, in each group's
-/// swizzled block; the grouped arguments carry the route's row counts.
+/// T5: codes and scale bytes of every routed row equal the fixture's scaled_fp4_quant, in each
+/// group's swizzled block; the grouped arguments carry the route's row counts.
 #[test]
 fn nvfp4_expand() -> Result<()> {
     use crate::experts::Tile;
@@ -682,7 +683,7 @@ fn unsort(dev: &Device, ws: &Tensor, off: usize, dst: &[i32], cols: usize) -> Ve
     out
 }
 
-/// T6: both grouped GEMMs against vLLM's dense NVFP4 GEMM per expert, on every tile.
+/// T6: both grouped GEMMs against the fixture's dense NVFP4 GEMM per expert, on every tile.
 #[test]
 fn nvfp4_gemm() -> Result<()> {
     use crate::experts::nvfp4::Stage;

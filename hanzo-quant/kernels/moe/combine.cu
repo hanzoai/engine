@@ -6,9 +6,9 @@
  *   FINALIZE  s = fma.rn.ftz(w[t,j], f32(y), s)   FlashInfer finalizeMoeRoutingKernel, whose
  *             `thread_output + row_scale * expert_result` compiles to FFMA.FTZ under
  *             -use_fast_math (fused_moe_120.so, sm_121a).
- *   SUM       s = add.rn(s, f32(y))              vLLM moe_sum (moe_align_sum_kernels.cu), the
+ *   SUM       s = add.rn(s, f32(y))              moe_sum, the
  *             router weight having been applied in the GEMM2 epilogue.
- * An addend (the shared expert) joins as vLLM adds it: bf16_rn(f32(bf16_rn(s)) + f32(addend)).
+ * An addend (the shared expert) joins as bf16_rn(f32(bf16_rn(s)) + f32(addend)).
  *
  * One CTA per token, 8 bf16 (16 bytes) per thread per slot. No atomics: deterministic.
  * The FTZ operation is inline PTX so neither --fmad nor fast math can change it.

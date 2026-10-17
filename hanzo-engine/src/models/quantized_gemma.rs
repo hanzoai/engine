@@ -3,11 +3,11 @@
 //! GGUF Gemma / Gemma2 (`gemma`, `gemma2` archs) quantized dense models.
 //!
 //! Mirrors the safetensors `gemma`/`gemma2` math: `(1 + w)` RMSNorm gating (baked into the GGUF
-//! norm weights by llama.cpp's converter, so the plain `QRmsNorm` applies), `sqrt(hidden)` embedding
+//! norm weights at conversion, so the plain `QRmsNorm` applies), `sqrt(hidden)` embedding
 //! scale, GeGLU (`gelu_pytorch_tanh`), and `head_dim = key_length` (decoupled from `hidden/heads`).
 //! Gemma2 additionally runs post-attention and post-feedforward norms, alternating sliding/full
 //! attention, an attention-logit soft-cap, and a final-logit soft-cap. Tensor/metadata names follow
-//! llama.cpp's `LLM_ARCH_GEMMA`/`LLM_ARCH_GEMMA2`.
+//! the GGUF `gemma`/`gemma2` archs.
 //!
 //! Single-dtype: the residual stream runs in the compute dtype (norm weights held in `dtype` via
 //! `QRmsNorm::new_dtype`, embedding cast to `dtype`), so the per-layer chain stays half-precision and

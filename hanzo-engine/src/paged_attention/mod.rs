@@ -2,9 +2,9 @@
 /// actually allocates the KV cache for the CPU and GPU. It is used by the LLMEngine to execute
 /// operations issued by the scheduler.
 mod attention_backend;
-/// Content-addressable block hashing for prefix caching (vLLM v1 approach).
+/// Content-addressable block hashing for prefix caching (a chain hash per block).
 pub mod block_hash;
-/// Flat block pool with LRU free list for KV cache block management (vLLM v1 approach).
+/// Flat block pool with LRU free list for KV cache block management.
 pub mod block_pool;
 mod cache_engine;
 mod config;
@@ -229,11 +229,11 @@ pub fn calculate_cache_config(
     }
 
     // Unified-memory devices share physical RAM with the OS/CPU, so KV-cache wired buffers compete
-    // for it: grabbing ~90% (the discrete-VRAM vLLM approach) hangs or thrashes the allocation
+    // for it: grabbing ~90% (the discrete-VRAM default) hangs or thrashes the allocation
     // (ROCm/WSL: an 88 GB alloc never returns; the Grace-Blackwell GB10 over-commits its 128 GB
     // unified pool). Cap KV to the model context instead. This covers Metal, the ROCm/Vulkan APUs,
     // AND integrated/coherent CUDA -- `is_integrated_gpu` reads CU_DEVICE_ATTRIBUTE_INTEGRATED, which
-    // is 1 on Jetson and Grace-class parts (GB10/GH200). Discrete-VRAM CUDA stays on the vLLM path
+    // is 1 on Jetson and Grace-class parts (GB10/GH200). Discrete-VRAM CUDA keeps the ~90% path
     // (unused VRAM is otherwise wasted, so max request concurrency is the right default there).
     #[allow(unused_mut, unused_variables)]
     let mut mem_gpu = min_mem_gpu;

@@ -1,4 +1,4 @@
-//! Load + run the DeepSeek-V4 GGUF (antirez ds4 80GB IQ2 build) — the V4 load-test.
+//! Load + run the DeepSeek-V4 GGUF (the 80GB IQ2 build) — the V4 load-test.
 //!
 //! Run (GB10, earlyoom paused):
 //!   cargo run --release --features cuda --example deepseek_v4_gguf -p hanzo
@@ -38,8 +38,8 @@ async fn main() -> Result<()> {
     // NormalSpeculativeCacheAccess; greedy-identical output preserved (the target
     // verify decides every token). n_predict=0 drops the MTP head for the baseline.
     // env V4_DTYPE = auto (default, bf16 on CUDA) | bf16 | f16 | f32. F32 threads the
-    // full-precision KV cache + attention operands (ds4-parity numerics test — does it
-    // stop the long-gen degeneration?).
+    // full-precision KV cache + attention operands (does F32 throughout stop the
+    // long-gen degeneration?).
     let dtype = match std::env::var("V4_DTYPE").as_deref() {
         Ok("f32") => ModelDType::F32,
         Ok("f16") => ModelDType::F16,
@@ -65,11 +65,11 @@ async fn main() -> Result<()> {
     // A prompt that elicits sustained generation so the reported decode rate is
     // steady-state, not dominated by the first few tokens.
     //
-    // env DUMP_LOGPROBS=<path>: ds4-parity diagnostic mode. Adds ds4's default
-    // system prompt ("You are a helpful assistant" — ds4_cli.c:1402) so the
-    // rendered token sequence matches ds4's (BOS + system + <|User|> + prompt +
-    // <|Assistant|> + <think>), and dumps per-step greedy top-10 logprobs as JSON
-    // for a token-exact trajectory diff against `ds4 --dump-logprobs`.
+    // env DUMP_LOGPROBS=<path>: parity diagnostic mode. Adds the system prompt
+    // "You are a helpful assistant" so the rendered token sequence is
+    // BOS + system + <|User|> + prompt + <|Assistant|> + <think>, and dumps per-step
+    // greedy top-10 logprobs as JSON for a token-exact trajectory diff against a
+    // reference run on the same sequence.
     let dump_path = std::env::var("DUMP_LOGPROBS").ok();
     let mut messages = RequestBuilder::new();
     if dump_path.is_some() {
@@ -82,7 +82,7 @@ async fn main() -> Result<()> {
             .return_logprobs(true)
             .set_sampler_topn_logprobs(topn);
     }
-    // env V4_TEMP / V4_TOPP: match ds4's CLI sampling defaults (temp 0.6, top-p)
+    // env V4_TEMP / V4_TOPP: sample at temp 0.6 / top-p 0.95 (the parse defaults below)
     // for behavior-parity runs — argmax (unset) is loop-prone on reasoning models.
     let mut messages = messages
         .add_message(TextMessageRole::User, prompt)

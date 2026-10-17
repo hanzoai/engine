@@ -1,6 +1,7 @@
-//! Fused MoE router: vLLM v0.29.0's `topkGating`, ported verbatim to `exact/route.cu` and built
-//! without fast math, so ids and weights equal vLLM's bit for bit (score, top-k with ties to the
-//! lower index, renormalize, routed scaling factor) in one launch.
+//! Fused MoE router: `topkGating`, ported verbatim to `exact/route.cu` (its header names the
+//! source) and built without fast math, so ids and weights equal the recorded reference routing
+//! bit for bit (score, top-k with ties to the lower index, renormalize, routed scaling factor) in
+//! one launch.
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -13,8 +14,8 @@ use hanzo_ml::{DType, Result, Shape, Storage, Tensor};
 use super::ffi;
 use crate::ops::{MoeRouterScoreFunction, MoeRouterSelectedWeight, MoeRouterTopKConfig, TopKOutput};
 
-/// The expert counts `route.cu` instantiates: vLLM's fused set (1-512 powers of two, 192, 320,
-/// 384, 448, 576). Others take the portable path, as they take vLLM's unfused one.
+/// The expert counts `route.cu` instantiates: the fused set (1-512 powers of two, 192, 320,
+/// 384, 448, 576). Others take the portable path.
 pub(crate) fn experts() -> &'static [usize] {
     static TABLE: OnceLock<Vec<usize>> = OnceLock::new();
     TABLE.get_or_init(|| {
@@ -32,7 +33,7 @@ pub(crate) fn supports(experts: usize) -> bool {
 }
 
 /// Whether `cfg` is one `route.cu` computes. A sigmoid of the selected logit exists only for the
-/// raw score (llama4); every other combination is vLLM's or an extension of it.
+/// raw score (llama4); every other combination is the ported kernel's or an extension of it.
 pub(crate) fn serves(experts: usize, top_k: usize, cfg: &MoeRouterTopKConfig) -> bool {
     supports(experts)
         && top_k >= 1
@@ -179,8 +180,8 @@ pub(crate) fn topk(
                 let len = rows * experts;
                 let (base, _g) = src.device_ptr(&stream);
                 let at = base as usize + layout.start_offset() * bytes;
-                // vLLM loads a row in 16-byte vectors: a view that starts off that alignment is
-                // copied out first rather than read misaligned.
+                // The kernel loads a row in 16-byte vectors: a view that starts off that
+                // alignment is copied out first rather than read misaligned.
                 let copy = if at % 16 != 0 {
                     let view = src.slice(layout.start_offset()..layout.start_offset() + len);
                     Some(stream.clone_dtod(&view).w()?)
@@ -300,9 +301,10 @@ mod tests {
         hanzo_ml::safetensors::load(format!("{FIXTURES}/{name}.safetensors"), dev).unwrap()
     }
 
-    /// Every (count, dtype, config) route.cu instantiates, bitwise against vLLM's topkGating.
+    /// Every (count, dtype, config) route.cu instantiates, bitwise against the recorded
+    /// topkGating outputs (`route.safetensors`).
     #[test]
-    fn matches_vllm() {
+    fn matches_reference() {
         let dev = Device::new_cuda(0).unwrap();
         let g = load("route", &dev);
         let (mut cases, mut words) = (0usize, 0usize);
@@ -330,14 +332,14 @@ mod tests {
                     assert_eq!(a.len(), b.len());
                     assert_eq!(
                         bad, 0,
-                        "{e} experts {dt} {name}: {bad} words differ from vLLM"
+                        "{e} experts {dt} {name}: {bad} words differ from the reference"
                     );
                     cases += 1;
                     words += a.len() + c.len();
                 }
             }
         }
-        println!("matches_vllm: {cases} cases, {words} words, 0 differ");
+        println!("matches_reference: {cases} cases, {words} words, 0 differ");
     }
 
     /// A row-narrowed view, aligned or not, routes the same as its own copy.
@@ -507,7 +509,7 @@ mod tests {
 
     /// W8c-4: device time of (a) route alone, (c) the path it replaces (f32 cast, f32 GEMM,
     /// softmax_last_dim, topk, renorm) and (d) main.linear + route, E=512, k=10, bf16. Bar:
-    /// (d) < (c) at every T. The (a)-vs-vLLM bar is scripts/zen6_moe_bench.py's.
+    /// (d) < (c) at every T.
     #[test]
     #[ignore]
     fn bench() {

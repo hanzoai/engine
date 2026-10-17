@@ -2,7 +2,7 @@ use half::f16;
 
 #[allow(dead_code)]
 extern "C" {
-    pub(crate) fn reconstruct_exllama(
+    pub(crate) fn reconstruct_shuffled(
         b_q_weight: *const u32,
         b_qzeros: *const u32,
         b_scales: *const f16,

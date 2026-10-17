@@ -15,7 +15,7 @@ fn gb10() -> Result<(Device, CudaDevice)> {
 }
 
 #[test]
-fn tile_for_rows_matches_vllm() {
+fn tile_for_rows_splits_at_64_and_256() {
     for m in [1, 63, 64] {
         assert_eq!(Tile::for_rows(m), Tile::SwapAb, "M={m}");
     }
@@ -67,10 +67,10 @@ fn ulps(a: u16, b: u16) -> i32 {
     (ordered(a) - ordered(b)).abs()
 }
 
-/// T3: every fixture case at every M, on the tile vLLM picks, against the
-/// bf16 bits vLLM's cutlass_scaled_mm produced. Zero differing elements.
+/// T3: every fixture case at every M, on the tile [`Tile::for_rows`] picks, against
+/// the reference bf16 bits the fixture records. Zero differing elements.
 #[test]
-fn matches_vllm_bitwise() -> Result<()> {
+fn matches_fixture_bitwise() -> Result<()> {
     use crate::blockwise_fp8::fixture;
     let (dev, _) = gb10()?;
     let fx = fixture::load()?;
@@ -105,7 +105,7 @@ fn matches_vllm_bitwise() -> Result<()> {
         let meta: Vec<_> = fx.metadata.iter().filter(|(k, _)| k.as_str() != "cases").collect();
         println!("fixture metadata: {meta:?}");
     }
-    assert_eq!(failures, 0, "outputs differ from vLLM's");
+    assert_eq!(failures, 0, "outputs differ from the fixture's");
     Ok(())
 }
 

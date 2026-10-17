@@ -766,7 +766,7 @@ extern "C" void gemm_half_q_half_cuda_part(
                                    c, size_m, size_n, size_k, groups, b_q_perm);
 }
 
-__global__ void reconstruct_exllama_8bit_kernel(
+__global__ void reconstruct_shuffled_8bit_kernel(
     const uint32_t *__restrict__ b_q_weight, const int *__restrict__ b_q_perm,
     const uint32_t *__restrict__ b_gptq_qzeros,
     const half *__restrict__ b_gptq_scales, const int size_k, const int size_n,
@@ -867,7 +867,7 @@ __global__ void reconstruct_exllama_8bit_kernel(
   }
 }
 
-__global__ void reconstruct_exllama_4bit_kernel(
+__global__ void reconstruct_shuffled_4bit_kernel(
     const uint32_t *__restrict__ b_q_weight, const int *__restrict__ b_q_perm,
     const uint32_t *__restrict__ b_gptq_qzeros,
     const half *__restrict__ b_gptq_scales, const int size_k, const int size_n,
@@ -976,7 +976,7 @@ __global__ void reconstruct_exllama_4bit_kernel(
   }
 }
 
-__global__ void reconstruct_exllama_3bit_kernel(
+__global__ void reconstruct_shuffled_3bit_kernel(
     const uint32_t *__restrict__ b_q_weight, const int *__restrict__ b_q_perm,
     const uint32_t *__restrict__ b_gptq_qzeros,
     const half *__restrict__ b_gptq_scales, const int size_k, const int size_n,
@@ -1078,7 +1078,7 @@ __global__ void reconstruct_exllama_3bit_kernel(
   }
 }
 
-__global__ void reconstruct_exllama_2bit_kernel(
+__global__ void reconstruct_shuffled_2bit_kernel(
     const uint32_t *__restrict__ b_q_weight, const int *__restrict__ b_q_perm,
     const uint32_t *__restrict__ b_gptq_qzeros,
     const half *__restrict__ b_gptq_scales, const int size_k, const int size_n,
@@ -1173,27 +1173,30 @@ __global__ void reconstruct_exllama_2bit_kernel(
   }
 }
 
-extern "C" void reconstruct_exllama(const uint32_t *b_q_weight,
-                                    const uint32_t *b_gptq_qzeros,
-                                    const half *b_gptq_scales,
-                                    const int *b_q_perm, half *out, int height,
-                                    int width, int groups, int bit) {
+// FP16 weights from the shuffled layout: rows made sequential by b_q_perm,
+// packed values reordered by shuffle_*bit_kernel.
+extern "C" void reconstruct_shuffled(const uint32_t *b_q_weight,
+                                     const uint32_t *b_gptq_qzeros,
+                                     const half *b_gptq_scales,
+                                     const int *b_q_perm, half *out,
+                                     int height, int width, int groups,
+                                     int bit) {
   dim3 blockDim, gridDim;
   blockDim.x = BLOCK_KN_SIZE;
   blockDim.y = 1;
   gridDim.y = DIVIDE(height, BLOCK_KN_SIZE);
   gridDim.x = DIVIDE(width, BLOCK_KN_SIZE);
 
-  auto reconstruct_exllama_kernel = reconstruct_exllama_4bit_kernel;
+  auto reconstruct_shuffled_kernel = reconstruct_shuffled_4bit_kernel;
   if (bit == 2) {
-    reconstruct_exllama_kernel = reconstruct_exllama_2bit_kernel;
+    reconstruct_shuffled_kernel = reconstruct_shuffled_2bit_kernel;
   } else if (bit == 3) {
-    reconstruct_exllama_kernel = reconstruct_exllama_3bit_kernel;
+    reconstruct_shuffled_kernel = reconstruct_shuffled_3bit_kernel;
   } else if (bit == 8) {
-    reconstruct_exllama_kernel = reconstruct_exllama_8bit_kernel;
+    reconstruct_shuffled_kernel = reconstruct_shuffled_8bit_kernel;
   }
 
-  reconstruct_exllama_kernel<<<gridDim, blockDim, 0>>>(
+  reconstruct_shuffled_kernel<<<gridDim, blockDim, 0>>>(
       b_q_weight, b_q_perm, b_gptq_qzeros, b_gptq_scales, height, width, groups,
       out);
 }
@@ -1521,9 +1524,9 @@ void gemm_half_q_half_cuda(cublasHandle_t cublas_handle, const half* a,
                            const uint32_t* b_gptq_qzeros,
                            const half* b_gptq_scales, const int* b_g_idx,
                            half* c, half* temp_dq, int size_m, int size_n,
-                           int size_k, int groups, bool use_exllama, int bit) {
+                           int size_k, int groups, bool is_shuffled, int bit) {
   bool use_reconstruct;
-  if (use_exllama) {
+  if (is_shuffled) {
     use_reconstruct = ((bit == 8 && size_m > MAX_Q_GEMM_ROWS_8BIT) ||
                        (bit != 8 && size_m > MAX_Q_GEMM_ROWS));
   } else {
@@ -1533,9 +1536,9 @@ void gemm_half_q_half_cuda(cublasHandle_t cublas_handle, const half* a,
   }
   if (use_reconstruct) {
     // Reconstruct FP16 matrix, then cuBLAS
-    if (use_exllama) {
-      reconstruct_exllama(b_q_weight, b_gptq_qzeros, b_gptq_scales, b_g_idx,
-                          temp_dq, size_k, size_n, groups, bit);
+    if (is_shuffled) {
+      reconstruct_shuffled(b_q_weight, b_gptq_qzeros, b_gptq_scales, b_g_idx,
+                           temp_dq, size_k, size_n, groups, bit);
     } else {
       reconstruct_gptq(b_q_weight, b_gptq_qzeros, b_gptq_scales, b_g_idx,
                        temp_dq, size_k, size_n, groups, bit);
@@ -1545,7 +1548,7 @@ void gemm_half_q_half_cuda(cublasHandle_t cublas_handle, const half* a,
     const half beta = __float2half(0.0f);
     cublasHgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, size_n, size_m, size_k,
                 &alpha, temp_dq, size_n, a, size_k, &beta, c, size_n);
-  } else if (use_exllama) {
+  } else if (is_shuffled) {
     // Quantized matmul
     int max_chunks = size_m / BLOCK_M_SIZE_MAX;
     int last_chunk = max_chunks * BLOCK_M_SIZE_MAX;

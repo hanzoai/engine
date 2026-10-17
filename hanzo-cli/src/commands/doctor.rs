@@ -112,8 +112,8 @@ pub fn run_doctor(json: bool) -> Result<()> {
 
     // Installation section
     println!();
-    println!("Mistral.rs Installation");
-    println!("-----------------------");
+    println!("Hanzo Engine Installation");
+    println!("-------------------------");
     println!("[INFO] Git revision: {}", system.build.git_revision);
 
     let mut features = Vec::new();

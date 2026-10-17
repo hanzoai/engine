@@ -1,6 +1,6 @@
 /**
- * Block-FP8 routed experts (Flash-Next E4, the MTP drafter's MoE) on sm_121a, as vLLM's
- * TritonExperts computes them with VLLM_USE_DEEP_GEMM=0:
+ * Block-FP8 routed experts (Flash-Next E4, the MTP drafter's MoE) on sm_121a, as the served
+ * Triton experts path computes them (no DeepGEMM):
  *
  *   route    stable counting sort by expert (route.cu)
  *   (quant)  per_token_group_quant_fp8 of x, M1's gather-mode quantizer, launched by the caller
@@ -8,13 +8,14 @@
  *            weights into sorted order; trailing CTAs fill both GEMMs' grouped arguments
  *   gemm1    CUTLASS sm120 pointer-array blockwise-scaled grouped GEMM (A per token and 128-group,
  *            B per 128x128 block), D = bf16(acc)
- *   act      vLLM silu_and_mul_per_block_quant: r = (g * (1 / (1 + expf(-g)))) * u in f32,
+ *   act      silu_and_mul_per_block_quant: r = (g * (1 / (1 + expf(-g)))) * u in f32,
  *            s = max(amax / 448, 1 / (448 * 512)), q = e4m3(clamp(r / s, +-448)), IEEE throughout
  *   gemm2    the same GEMM with an epilogue visitor D = bf16_rn(acc * w[row]): Triton's
  *            `accumulator * moe_weight[:, None]` before the cast
- *   combine  vLLM moe_sum: add.rn over slots from +0, one bf16 rounding
+ *   combine  moe_sum: add.rn over slots from +0, one bf16 rounding
  *
- * Built without fast math and with --fmad=false: every operation is the IEEE one vLLM runs.
+ * Built without fast math and with --fmad=false: every operation is the IEEE one the served
+ * kernels run.
  */
 
 #include "moe.h"
@@ -199,7 +200,7 @@ __global__ void expand_kernel(const uint8_t *__restrict__ xq, const float *__res
   }
 }
 
-/// act: vLLM silu_and_mul_per_block_quant, one 128-thread CTA per (sorted row, group).
+/// act: silu_and_mul_per_block_quant, one 128-thread CTA per (sorted row, group).
 __global__ void __launch_bounds__(GROUP)
     act_kernel(const __nv_bfloat16 *__restrict__ y1, int inter, uint8_t *a2, float *s2) {
   __shared__ float red[GROUP];

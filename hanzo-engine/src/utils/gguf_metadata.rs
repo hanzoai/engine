@@ -16,7 +16,7 @@ use crate::pipeline::DeviceMappedModelLoader;
 use crate::GGUFArchitecture;
 
 /// Layers between two full-attention layers in a hybrid schedule, when the GGUF does not say.
-/// Matches llama.cpp's default for the gated-delta-net archs.
+/// Every fourth layer is full attention, as the gated-delta-net configs publish it.
 pub const DEFAULT_FULL_ATTENTION_INTERVAL: usize = 4;
 
 #[derive(Debug)]
@@ -229,7 +229,7 @@ impl ContentMetadata<'_> {
         Ok(())
     }
 
-    // Reference: https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#required
+    // Reference: the GGUF specification's required `general.*` keys.
     pub fn verify_arch(&self, expected_arch: &str) -> Result<()> {
         let actual_arch: String = self
             .metadata

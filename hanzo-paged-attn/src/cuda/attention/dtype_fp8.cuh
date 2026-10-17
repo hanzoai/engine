@@ -9,7 +9,7 @@
   #endif  // USE_ROCM
 #endif    // ENABLE_FP8
 
-namespace vllm {
+namespace pagedattn {
 
 enum class Fp8KVCacheDataType {
   kAuto = 0,
@@ -38,4 +38,4 @@ struct Vec<uint8_t, 8> {
   using Type = uint2;
 };
 
-}  // namespace vllm
+}  // namespace pagedattn

@@ -57,10 +57,10 @@ fn main() {
 
         builder
             .build_lib(out_file)
-            .expect("Build mistral-core failed!");
+            .expect("Build hanzo-engine CUDA kernels failed!");
 
-        // The exact lane: kernels held bitwise to vLLM's, built as vLLM builds _moe_C, without
-        // --use_fast_math (IEEE expf and division, no FTZ).
+        // The exact lane: kernels held bitwise to their recorded reference outputs, built
+        // without --use_fast_math (IEEE expf and division, no FTZ).
         let mut exact = cudaforge::KernelBuilder::new()
             .source_glob("src/cuda/exact/*.cu")
             .out_dir(&build_dir)

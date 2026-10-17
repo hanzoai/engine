@@ -1,8 +1,8 @@
 // PagedAttention DECODE kernels for ROCm / HIP (RDNA3.5, gfx1151): v1, and the
 // partitioned v2 that long contexts need.
 //
-// This is a self-contained port of the CORE vLLM decode path (see
-// ../cuda/pagedattention.cuh). For a single decode query per sequence it
+// This is a self-contained port of the CUDA decode path
+// (../cuda/pagedattention.cuh). For a single decode query per sequence it
 // gathers K/V from the paged KV cache via a block_table, computes
 // softmax(scale * Q.K^T) . V, and writes the result.
 //
@@ -114,7 +114,7 @@ __device__ __forceinline__ float block_reduce_sum(float val, float *red) {
 
 // One thread block per (head_idx = blockIdx.x, seq_idx = blockIdx.y).
 //
-// Layout (matches vLLM / the CUDA backend):
+// Layout (the CUDA backend's):
 //   q:           [num_seqs, num_heads, head_size]        (q_stride between seqs)
 //   key_cache:   [num_blocks, num_kv_heads, head_size/x, block_size, x]
 //   value_cache: [num_blocks, num_kv_heads, head_size, block_size]

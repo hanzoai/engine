@@ -168,8 +168,8 @@ impl IntervalLogger {
 /// Empty when nothing was verified in the window, so a server without a draft logs
 /// exactly what it logged before. "tokens per verify" adds the one token every verify
 /// step emits beyond its accepted drafts -- the target's correction, or the bonus
-/// token when every draft held -- which is the figure sglang reports as its accept
-/// length, so two engines serving one draft compare directly. (The step a sequence
+/// token when every draft held -- which is the accept length as commonly reported,
+/// so two engines serving one draft compare directly. (The step a sequence
 /// ends on can emit fewer; over a window that is noise.)
 fn draft_window(
     before: crate::speculative::stats::SpeculativeStats,

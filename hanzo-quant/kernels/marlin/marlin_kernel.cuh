@@ -74,9 +74,9 @@ template <typename scalar_t, ScalarTypeID w_type_id>
 __device__ inline typename ScalarType<scalar_t>::FragB dequant(int q);
 
 // Efficiently dequantize an int32 value into a full B-fragment of 4 fp16
-// values. We mostly follow the strategy in the link below, with some small
-// changes:
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/cutlass_extensions/include/cutlass_extensions/interleaved_numeric_conversion.h
+// values: LOP3 drops each packed value into the mantissa of a float with a
+// fixed exponent (fp16 0x6400 = 1024, bf16 0x4300 = 128), and one SUB or FMA
+// then removes that offset and the zero point.
 
 // gptq dequant
 template <>
@@ -270,7 +270,6 @@ Marlin(const int4 *__restrict__ A, // fp16 input matrix of shape mxk
   using FragZP = typename ScalarType<scalar_t>::FragZP;
 
   const bool is_zp_float = false;
-  // static constexpr auto w_type = vllm::ScalarType::from_id(w_type_id);
 
   constexpr int pack_factor = 32 / num_bits;
 

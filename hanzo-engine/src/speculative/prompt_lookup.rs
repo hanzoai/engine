@@ -9,7 +9,7 @@
 //! recur verbatim, and is quantization-agnostic.
 //!
 //! Reference: apoorvumang/prompt-lookup-decoding; the same primitive ships as
-//! Hugging Face `prompt_lookup_num_tokens` and vLLM's `[ngram]` method.
+//! Hugging Face `prompt_lookup_num_tokens`.
 
 use hanzo_ml::Result;
 

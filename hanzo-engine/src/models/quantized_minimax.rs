@@ -7,8 +7,8 @@
 //! per-layer RMSNorm over the *flattened* q/k projection (before the head reshape, `qk_norm_type =
 //! per_layer`, distinct from qwen3's per-head qk-norm), and partial RoPE (only the first
 //! `rope.dimension_count` channels of each head are rotated). The MoE gate/expert math is the shared
-//! `gguf_moe` block (same as deepseek/glm4moe); tensor/metadata names follow llama.cpp's
-//! `LLM_ARCH_MINIMAX_M2`.
+//! `gguf_moe` block (same as deepseek/glm4moe); tensor/metadata names follow the GGUF
+//! `minimax-m2` arch.
 //!
 //! Single-dtype: norm weights held in `dtype` (`QRmsNorm::new_dtype`) and the embedding is cast to
 //! `dtype`, so the residual stream stays in the compute dtype; RoPE runs in F32 for precision.

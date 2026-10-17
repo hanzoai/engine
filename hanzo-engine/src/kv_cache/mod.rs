@@ -1155,7 +1155,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for FullCach
 
 /// Cache manager for hybrid models (attention + recurrent layers).
 ///
-/// This implements vLLM-style continuous batching:
+/// This implements continuous batching:
 /// - Attention layers: Standard KV cache batching (cat on clone_in, chunk on clone_out)
 /// - Recurrent layers: Pool-based state management with indexed access
 ///

@@ -9,8 +9,6 @@
 //! Every attention layer carries a sparse-attention (QSA) indexer that keeps at most its token
 //! budget of keys per query. Up to that budget it keeps them all, so dense attention is exact, and
 //! the context is capped there until the sparse path lands.
-//!
-//! Source: vLLM `models/qwen4_exp/nvidia/model.py`.
 
 use std::sync::{Arc, Mutex};
 

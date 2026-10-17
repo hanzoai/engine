@@ -2,8 +2,8 @@
  * NVFP4 building blocks shared by every activation quantizer: the served approximate
  * instructions, the E2M1 encoder and decoder, and the block-scale formula.
  *
- * The served quantizers (vLLM scaled_fp4_quant, FlashInfer cvt_warp_fp16_to_fp4 with fast math
- * on, TensorRT-LLM quantization_utils.cuh) compute, per block of 16 with global scale gs:
+ * The served quantizers (scaled_fp4_quant, and FlashInfer's cvt_warp_fp16_to_fp4 from its
+ * quantization_utils.cuh, built with fast math on) compute, per block of 16 with global scale gs:
  *
  *   SF    = gs * (vecMax * rcp.approx.ftz(6))
  *   sf8   = e4m3 RN satfinite of SF

@@ -10,7 +10,7 @@
 #include <thrust/scan.h>
 #include <type_traits>
 
-namespace vllm {
+namespace moe_dtype {
 
 inline __device__ uint16_t float_to_half(float f) {
   union {
@@ -51,7 +51,7 @@ inline __device__ float to_float(__nv_bfloat16 u) {
   return __bfloat162float(u);
 }
 
-} // namespace vllm
+} // namespace moe_dtype
 
 #define ASSERT_THROW(cond, msg)                                                \
   do {                                                                         \

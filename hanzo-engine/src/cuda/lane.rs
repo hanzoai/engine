@@ -1,10 +1,11 @@
 //! A Lane: one CUDA stream with its own cuBLAS handle and torch's 32 MiB workspace.
 //!
-//! `Lane::linear` is torch's `F.linear` for bf16 (what vLLM's `ReplicatedLinear` gate runs):
+//! `Lane::linear` is torch's `F.linear` for bf16 (what a replicated, unsharded linear gate runs):
 //! `cublasGemmEx(T, N, out, rows, inp, COMPUTE_32F, DEFAULT_TENSOR_OP)` in the default math
 //! mode. cuBLAS picks its kernel by M and by the workspace it may use: with torch's 32 MiB the
-//! gate's logits equal vLLM's bitwise at every M; hanzo-ml's own handle carries no workspace and
-//! differs at M 98-101, 126-160, 184-256 and 289-320 (N=512, GB10, cuBLAS 13.1.1).
+//! gate's logits equal the recorded reference logits bitwise at every M; hanzo-ml's own handle
+//! carries no workspace and differs at M 98-101, 126-160, 184-256 and 289-320 (N=512, GB10,
+//! cuBLAS 13.1.1).
 //!
 //! Each Lane owns its handle and workspace, since one workspace shared by two concurrent
 //! streams is a race.
@@ -17,8 +18,9 @@ use hanzo_ml::cuda_backend::cudarc::driver::{CudaSlice, CudaStream, DevicePtr, D
 use hanzo_ml::cuda_backend::WrapErr;
 use hanzo_ml::Result;
 
-/// The cuBLAS vLLM 0.29.0 ships (its wheel's nvidia-cublas 13.1.1.3). The gate's kernel choice,
-/// and so its bits, follow the cuBLAS build: a different one breaks parity, not correctness.
+/// The cuBLAS the gate fixture was recorded with (nvidia-cublas 13.1.1.3). The gate's kernel
+/// choice, and so its bits, follow the cuBLAS build: a different one breaks parity, not
+/// correctness.
 pub const CUBLAS: (i32, i32, i32) = (13, 1, 1);
 
 /// torch's cuBLAS workspace on sm_90 and newer.
@@ -54,7 +56,7 @@ impl Lane {
                 tracing::info!("cuBLAS {}.{}.{}", v.0, v.1, v.2);
                 if v != CUBLAS {
                     tracing::warn!(
-                        "cuBLAS {}.{}.{} is loaded; vLLM parity is pinned to {}.{}.{}: gate logits may differ",
+                        "cuBLAS {}.{}.{} is loaded; gate parity is pinned to {}.{}.{}: gate logits may differ",
                         v.0, v.1, v.2, CUBLAS.0, CUBLAS.1, CUBLAS.2
                     );
                 }
@@ -230,9 +232,10 @@ pub(crate) mod tests {
     }
 
     /// Both gates, every fixture M, three ways: the main Lane eager, the main Lane captured and
-    /// replayed, and a second Lane on a new stream. All equal vLLM's F.linear bitwise.
+    /// replayed, and a second Lane on a new stream. All equal the recorded F.linear logits
+    /// bitwise.
     #[test]
-    fn gate_matches_vllm() {
+    fn gate_matches_reference() {
         let dev = device();
         let main = Lane::new(stream(&dev)).unwrap();
         let side = Lane::new(stream(&dev).context().new_stream().unwrap()).unwrap();
@@ -248,16 +251,22 @@ pub(crate) mod tests {
                     ("side", run(&side, &x, &w, m, n)),
                 ] {
                     let bad = got.iter().zip(&want).filter(|(a, b)| a != b).count();
-                    assert_eq!(bad, 0, "{gate} gate M={m} {how}: {bad} logits differ from vLLM");
+                    assert_eq!(
+                        bad, 0,
+                        "{gate} gate M={m} {how}: {bad} logits differ from the reference"
+                    );
                 }
             }
         }
-        println!("gate_matches_vllm: M {:?}, both gates, main/captured/side: 0 differ", gate_ms());
+        println!(
+            "gate_matches_reference: M {:?}, both gates, main/captured/side: 0 differ",
+            gate_ms()
+        );
     }
 
-    /// Lane::linear then route::topk equals vLLM's F.linear then topk_softmax, bitwise.
+    /// Lane::linear then route::topk equals the recorded F.linear then topk_softmax, bitwise.
     #[test]
-    fn gate_routes_like_vllm() {
+    fn gate_routes_like_reference() {
         let dev = device();
         let main = Lane::new(stream(&dev)).unwrap();
         let g = route::tests::load("gate", &dev);
@@ -318,9 +327,10 @@ pub(crate) mod tests {
         out.join(",")
     }
 
-    /// vLLM pads a batch of T up to its capture size P; hanzo's gate runs at T. The first T rows
-    /// must not depend on which of the two M cuBLAS saw, under both capture lists the parity
-    /// configs use. Prints the class map over M=1..512 and vLLM's 512-grid crossings.
+    /// A server that captures graphs pads a batch of T up to its capture size P; hanzo's gate
+    /// runs at T. The first T rows must not depend on which of the two M cuBLAS saw, under both
+    /// capture lists the fixture records. Prints the class map over M=1..512 and the crossings
+    /// of the 512-grid (1, 2, 4, then steps of 8 to 256 and 16 to 512).
     #[test]
     fn pad_classes() {
         let dev = device();
@@ -338,7 +348,7 @@ pub(crate) mod tests {
                     assert_eq!(
                         out[t][..t * n],
                         out[p][..t * n],
-                        "{gate}: rows at T={t} differ from rows at vLLM's padded M={p} ({list})"
+                        "{gate}: rows at T={t} differ from rows at the padded M={p} ({list})"
                     );
                 }
             }
@@ -363,7 +373,7 @@ pub(crate) mod tests {
                 .filter(|&t| class(t) != class(padded(t, &grid)))
                 .collect();
             println!(
-                "{gate} gate (N={n}): {} classes: {}; vLLM 512-grid crossings: T={}",
+                "{gate} gate (N={n}): {} classes: {}; 512-grid crossings: T={}",
                 reps.len(),
                 reps.iter().map(|(_, m)| runs(m)).collect::<Vec<_>>().join(" | "),
                 if cross.is_empty() { "none".into() } else { runs(&cross) }
@@ -383,7 +393,8 @@ pub(crate) mod tests {
         );
     }
 
-    /// Each rejected way to compute the gate fails gate_matches_vllm's comparison, and where.
+    /// Each rejected way to compute the gate fails gate_matches_reference's comparison, and
+    /// where.
     #[test]
     #[ignore]
     fn gate_mutations() {
@@ -452,15 +463,16 @@ pub(crate) mod tests {
         let mut keys: Vec<_> = fails.keys().copied().collect();
         keys.sort();
         for k in keys {
-            println!("mutation '{k}' differs from vLLM at M {:?}", fails[k]);
+            println!("mutation '{k}' differs from the reference at M {:?}", fails[k]);
         }
         assert!(fails.contains_key("no workspace"));
         assert!(fails.contains_key("f32 gemm + cast"));
     }
 
-    /// W8c-11, window only: vLLM's dumped gate inputs (scripts/zen6_moe_dump.py) through
-    /// Lane::linear and route::topk at the same M. Bar: logits, ids and weights bitwise on 100%
-    /// of (token, layer) pairs at every concurrency dumped.
+    /// W8c-11, window only: the served model's recorded gate inputs, logits, ids and weights
+    /// (`target/zen6_moe_window/dump_c{1,3,4}.safetensors`) through Lane::linear and route::topk
+    /// at the same M. Bar: logits, ids and weights bitwise on 100% of (token, layer) pairs at
+    /// every concurrency recorded.
     #[test]
     #[ignore]
     fn teacher_forced() {
@@ -506,15 +518,15 @@ pub(crate) mod tests {
                 )
                 .unwrap();
                 let (ids, wts) = (route::tests::ids(&out.indices), route::tests::bits(&out.values));
-                let (vids, vwts) = (
+                let (want_ids, want_wts) = (
                     route::tests::ids(&d[&format!("i.{n}.{l}")]),
                     route::tests::bits(&d[&format!("w.{n}.{l}")]),
                 );
                 for t in 0..m {
                     pairs += 1;
                     logit_ok += (got[t * 512..(t + 1) * 512] == want[t * 512..(t + 1) * 512]) as usize;
-                    id_ok += (ids[t * 10..(t + 1) * 10] == vids[t * 10..(t + 1) * 10]) as usize;
-                    w_ok += (wts[t * 10..(t + 1) * 10] == vwts[t * 10..(t + 1) * 10]) as usize;
+                    id_ok += (ids[t * 10..(t + 1) * 10] == want_ids[t * 10..(t + 1) * 10]) as usize;
+                    w_ok += (wts[t * 10..(t + 1) * 10] == want_wts[t * 10..(t + 1) * 10]) as usize;
                 }
             }
             println!("c={c}: {pairs} (token, layer) pairs; logits {logit_ok}, ids {id_ok}, weights {w_ok} bitwise");

@@ -1,14 +1,12 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 //! Hashed n-gram memory of zen6 (Qwen3.8-Flash-Next; GGUF `per_layer_token_embd` +
-//! `blk.1.ple_*`; vLLM `Qwen4ExpPLELayer`).
+//! `blk.1.ple_*`).
 //!
 //! Each token's n-grams (orders 2..=ngram_size, `heads_per_ngram` hash heads each) pick rows of one
 //! large table; the rows, concatenated, are the embedding `e`. The block gates a value projection of
 //! `e` per residual stream, runs it through a causal depthwise conv dilated by the n-gram order, and
 //! returns the delta the model adds to its streams.
-//!
-//! Source: vLLM `models/qwen4_exp/nvidia/ple_layer.py` and `model_state.py`.
 
 use std::io::{Read, Seek};
 use std::sync::Arc;
@@ -48,7 +46,7 @@ impl Hash {
             offset: ints("ple.head_offsets")?,
             size: ints("ple.head_vocab_sizes")?,
         };
-        // The head tables sit end to end (ple_layer.py:229-246) and every row fits a u32 id.
+        // The head tables sit end to end and every row fits a u32 id.
         let end = hash
             .offset
             .iter()
@@ -129,7 +127,7 @@ impl Hash {
 
     /// The table rows of each token of `chunk`, `(order - 1) · heads` per token, orders 2..=order
     /// in turn. `prior` is the sequence before the chunk; only its last `order - 1` tokens matter,
-    /// and missing ones read as EOS (model_state.py:65-89).
+    /// and missing ones read as EOS.
     pub(crate) fn rows(&self, prior: &[u32], chunk: &[u32]) -> Vec<u32> {
         let span = self.order() - 1;
         let mut seq = vec![self.eos; span.saturating_sub(prior.len())];
@@ -137,9 +135,9 @@ impl Hash {
         seq.extend_from_slice(chunk);
         let mut rows = Vec::with_capacity(chunk.len() * self.size.len());
         for t in span..seq.len() {
-            // mixed_n = XOR over i < n of x[t-i]·mult[i] (ple_layer.py:426-431). An EOS at t-i cuts
-            // off every older token, which then reads as EOS (:337-369); the token at t is never cut.
-            // No product overflows: each multiplier is below 2^63 / vocab (:219).
+            // mixed_n = XOR over i < n of x[t-i]·mult[i]. An EOS at t-i cuts off every older
+            // token, which then reads as EOS; the token at t is never cut. No product overflows:
+            // each multiplier is below 2^63 / vocab.
             let mut mixed = u64::from(seq[t]) * self.mult[0];
             let mut cut = false;
             for n in 2..=self.order() {
@@ -312,7 +310,7 @@ impl Ngram {
             norm_query: get("norm_query")?.dequantize(dev)?,
             norm_key: get("norm_key")?.dequantize(dev)?,
             norm_conv: get("norm_conv")?.dequantize(dev)?,
-            // The taps are bf16 parameters in vLLM (ple_layer.py:589-598, 1152).
+            // The taps are bf16 parameters.
             conv: get("conv1d")?.dequantize(dev)?.to_dtype(DType::BF16)?,
             hash,
             table: Table::Gguf(table),
@@ -353,14 +351,14 @@ impl Ngram {
     }
 
     /// The conv history a sequence carries: (channels, rows), rows = (kernel - 1) · dilation, and
-    /// the dilation is the n-gram order (ple_layer.py:551-552).
+    /// the dilation is the n-gram order.
     pub(crate) fn history(&self) -> Result<(usize, usize)> {
         let (channels, kernel) = self.conv.dims2()?;
         Ok((channels, (kernel - 1) * self.hash.order()))
     }
 
-    /// The side pool that carries the history across forwards: conv only, in `dtype`. vLLM keeps
-    /// it in the model dtype (ple_layer.py:638-648).
+    /// The side pool that carries the history across forwards: conv only, in `dtype`; served,
+    /// that is the model dtype.
     pub(crate) fn pool(&self, dtype: DType) -> Result<RecurrentLayerConfig> {
         let (conv_dim, conv_width) = self.history()?;
         Ok(RecurrentLayerConfig {
@@ -373,7 +371,7 @@ impl Ngram {
     }
 
     /// Hash each sequence's chunk against the tokens before it and gather its rows:
-    /// (batch, seq, rows · width), f32 on `dev` (ple_layer.py:437-456).
+    /// (batch, seq, rows · width), f32 on `dev`.
     pub(crate) fn embed(
         &self,
         prior: &[Vec<u32>],
@@ -431,14 +429,14 @@ impl Ngram {
     }
 
     /// The delta for streams `x` (batch, seq, streams, hidden) from embeddings `e` (batch, seq,
-    /// width), advancing the conv history in `cache` (ple_layer.py:1155-1188). The delta is f32:
+    /// width), advancing the conv history in `cache`. The delta is f32:
     /// the served graph adds it to the streams inside one kernel and rounds only the sum.
     ///
-    /// Numerics follow the served kernels (inductor `triton_red_fused_..._sigmoid_sign_sqrt_...`,
-    /// `ple_layer.py:730-830`): key and value are bf16 GEMMs; both norms, their dot product and
-    /// the gate stay f32; `gate · value` is stored (and normed from its unrounded square sum);
-    /// the norm is stored; the conv (f32 accumulate) is stored, then its silu. With f32
-    /// activations every rounding is a no-op.
+    /// Numerics follow the served kernels (the fused inductor reduction
+    /// `triton_red_fused_..._sigmoid_sign_sqrt_...`): key and value are bf16 GEMMs; both norms,
+    /// their dot product and the gate stay f32; `gate · value` is stored (and normed from its
+    /// unrounded square sum); the norm is stored; the conv (f32 accumulate) is stored, then its
+    /// silu. With f32 activations every rounding is a no-op.
     pub(crate) fn forward(
         &self,
         x: &Tensor,
@@ -491,9 +489,9 @@ impl Ngram {
     }
 
     /// silu of the causal depthwise conv over `u` (batch, seq, channels) with taps at t, t-d, ...,
-    /// t-(k-1)·d, reading the history in `cache` and leaving the last (k-1)·d inputs there
-    /// (ple_layer.py:801-850). The conv accumulates in f32 and is rounded to `u`'s dtype, then
-    /// the silu is rounded again, as the eager bf16 `F.conv1d` then `F.silu` store them.
+    /// t-(k-1)·d, reading the history in `cache` and leaving the last (k-1)·d inputs there. The
+    /// conv accumulates in f32 and is rounded to `u`'s dtype, then the silu is rounded again, as
+    /// the eager bf16 `F.conv1d` then `F.silu` store them.
     fn conv(&self, u: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (b, s, _) = u.dims3()?;
         let (c, rows) = self.history()?;
@@ -539,7 +537,7 @@ fn norm_f32(x: &Tensor, w: &Tensor, eps: f64) -> Result<Tensor> {
 }
 
 /// RMS norm over each stream of `x` (.., streams, hidden) with that stream's slice of `w`
-/// (streams · hidden), in f32, rounded back to `x`'s dtype (ple_layer.py:68-80, 650-653).
+/// (streams · hidden), in f32, rounded back to `x`'s dtype.
 fn norm(x: &Tensor, w: &Tensor, eps: f64) -> Result<Tensor> {
     let (n, h) = (x.dim(D::Minus2)?, x.dim(D::Minus1)?);
     let f = x.to_dtype(DType::F32)?;
@@ -566,7 +564,7 @@ mod reference {
     }
 
     fn rms(x: &[f64], w: &[f64], eps: f64) -> Vec<f64> {
-        // ple_layer.py:78-80
+        // x / sqrt(mean(x²) + eps) · w
         let r = (x.iter().map(|v| v * v).sum::<f64>() / x.len() as f64 + eps).sqrt();
         x.iter().zip(w).map(|(v, w)| v / r * w).collect()
     }
@@ -595,7 +593,8 @@ mod reference {
         let kernel = w.conv.len() / c;
         let (mut v, mut u) = (vec![0.0; seq * c], vec![0.0; seq * c]);
         for t in 0..seq {
-            // ple_layer.py:1171-1181
+            // key and value of e_t; per stream, gate = σ(sign(s)·sqrt(max(|s|, 1e-6))) with
+            // s = norm(k)·norm(q)/√hidden, v = gate · value, u = norm(v).
             let et = &e[t * width..(t + 1) * width];
             let key = matvec(&w.key, et);
             let value = matvec(&w.value, et);
@@ -621,7 +620,7 @@ mod reference {
                 u[row..row + hidden].copy_from_slice(&normed);
             }
         }
-        // F.conv1d over [zeros((k-1)·d) ++ u], dilation d, then silu (ple_layer.py:816-826).
+        // F.conv1d over [zeros((k-1)·d) ++ u], dilation d, then silu.
         let rows = (kernel - 1) * dilation;
         let past = |i: usize, ch: usize| {
             if i < rows {
@@ -748,7 +747,7 @@ mod tests {
     }
 
     /// The shipped constants load, chain, are prime, stay inside the 320001536-row table, and hash
-    /// [9707, 11, 1879] as a plain transcription of ple_layer.py:336-435 does; for instance
+    /// [9707, 11, 1879] as the plain XOR-of-products rule does; for instance
     /// row 0 of the last token is (1879·m0 ^ 11·m1) % 20000003 = 6380558.
     #[test]
     fn hash_real_constants() -> Result<()> {
@@ -925,7 +924,7 @@ mod tests {
         Ok(worst / scale)
     }
 
-    /// The block matches the f64 transcription of vLLM, delta and the history it leaves.
+    /// The block matches its f64 reference, delta and the history it leaves.
     #[test]
     fn block_matches_reference() -> Result<()> {
         let (ngram, weights) = fixture(1)?;

@@ -2,36 +2,41 @@
 # dossier.sh — collect count-based prefill/decode samples for the SOTA dossier.
 #
 # Runs OUR `hanzo-engine bench` (--json: raw per-rep [wall_s, tokens], immune to any
-# self-reported-rate bug) and llama.cpp's llama-bench (-o json) on the SAME GGUF,
+# self-reported-rate bug) and the rival engine's bench binary (-o json rows) on the SAME GGUF,
 # the SAME shapes, on a VERIFIED-QUIET box, and records a pinned manifest so the
 # numbers are reproducible. Timing is wall-clock for BOTH engines (identical
 # method => no cross-engine instrument bias); repetition + Student-t CIs quantify
 # residual noise; the quiet-gate removes contention. Scoring is `hanzo-engine board score`.
 #
 #   dossier.sh --backend rocm|vulkan|metal|cuda \
-#              --hanzo-engine PATH --llama-bench PATH \
+#              --hanzo-engine PATH --rival-bench PATH --rival-name NAME \
 #              --model GGUF-or-hub-id --model-tag qwen3-1p7b \
 #              [-p 512,500 -n 128 -r 7] [--concurrency 1] [--max-ctx 4096] \
 #              [--hanzo-args "--dflash DRAFT"] \
-#              [--engine-dir DIR --llama-dir DIR] [--out DIR] [--force]
+#              [--engine-dir DIR --rival-dir DIR] [--out DIR] [--force]
 #
 # --hanzo-args reach `hanzo-engine bench` verbatim, before the model selection, and are recorded
 # in the manifest; speculation goes there. A GGUF file loads as `text --format gguf`, anything
 # else as `auto -m` (a Hub id), with paged attention sized to --max-ctx as a server sizes it, so
 # what is measured is what is served.
 #
-# One GPU workload per box: the quiet-gate HARD-FAILS if another GPU job
-# (cargo/rustc/ncu/nsys/rocprof/metal-capture/hanzo-engine/llama-bench/
-# ollama/vllm) is already running. Desktop CPU load is recorded, not fatal.
+# The rival bench is called as `<bench> -m GGUF -p P -n N -fa 1 -r REPS -o json` and its rows
+# land in rival_<tag>.json; --rival-name is the subject its rows are filed under, and --rival-dir
+# its source tree (commit and dirty state go in the manifest).
+#
+# One GPU workload per box: the quiet-gate HARD-FAILS if another GPU job (any command
+# named in COMPET below: compilers, profilers, engines) is already running. Desktop CPU load
+# is recorded, not fatal.
 set -euo pipefail
 
-BACKEND="" HANZO="" LLAMA="" MODEL="" MTAG="" OUT="" FORCE=0 STOCH=0 HARGS=""
+BACKEND="" HANZO="" RIVAL="" RIVAL_NAME="" MODEL="" MTAG="" OUT="" FORCE=0 STOCH=0 HARGS=""
 PLIST="512" NGEN=128 REPS=7 CONC=1 MAXCTX=4096
-ENGINE_DIR="$HOME/work/hanzo/engine" LLAMA_DIR=""
+ENGINE_DIR="$HOME/work/hanzo/engine" RIVAL_DIR=""
 while [[ $# -gt 0 ]]; do case "$1" in
   --backend) BACKEND="$2"; shift 2;;
   --hanzo-engine) HANZO="$2"; shift 2;;
-  --llama-bench) LLAMA="$2"; shift 2;;
+  --rival-bench) RIVAL="$2"; shift 2;;
+  --rival-name) RIVAL_NAME="$2"; shift 2;;
   --model) MODEL="$2"; shift 2;;
   --model-tag) MTAG="$2"; shift 2;;
   -p) PLIST="$2"; shift 2;;
@@ -41,15 +46,17 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --max-ctx) MAXCTX="$2"; shift 2;;
   --hanzo-args) HARGS="$2"; shift 2;;
   --engine-dir) ENGINE_DIR="$2"; shift 2;;
-  --llama-dir) LLAMA_DIR="$2"; shift 2;;
+  --rival-dir) RIVAL_DIR="$2"; shift 2;;
   --out) OUT="$2"; shift 2;;
   --force) FORCE=1; shift;;
   --stochastic) STOCH=1; shift;;
   *) echo "unknown arg: $1" >&2; exit 2;;
 esac; done
 : "${BACKEND:?--backend required}" "${HANZO:?--hanzo-engine required}" "${MODEL:?--model required}" "${MTAG:?--model-tag required}"
-# Sampler is an explicit, recorded choice. Default greedy argmax = parity with llama-bench;
-# --stochastic reproduces the full-vocab multinomial only to MEASURE its tax.
+[[ -z "$RIVAL" || -n "$RIVAL_NAME" ]] || { echo "--rival-bench needs --rival-name" >&2; exit 2; }
+# Sampler is an explicit, recorded choice. Default greedy argmax: the device picks each token, as
+# a bench of the bare forward pass decodes; --stochastic reproduces the full-vocab multinomial
+# only to MEASURE its tax.
 SAMPLER="$([[ "$STOCH" == 1 ]] && echo stochastic-temp1-fullvocab || echo greedy-argmax)"
 [[ -x "$HANZO" ]] || { echo "no hanzo-engine: $HANZO" >&2; exit 2; }
 OUT="${OUT:-$ENGINE_DIR/bench-runs/$(hostname -s)-$BACKEND-$MTAG-$(date +%Y%m%d-%H%M%S)}"
@@ -117,9 +124,10 @@ manifest() {
     --engine-git-sha "$egit" --engine-git-dirty "$(dirty_of "$ENGINE_DIR")" --engine-version "$ever" \
     --hanzo-ml "$(ver_of hanzo-ml)" --hanzo-rocm-kernels "$(ver_of hanzo-rocm-kernels)" \
     --hanzo-metal-kernels "$(ver_of hanzo-metal-kernels)" \
-    --llama-sha "$( [[ -n "$LLAMA_DIR" ]] && git -C "$LLAMA_DIR" rev-parse HEAD 2>/dev/null || true)" \
-    --llama-git-dirty "$( [[ -n "$LLAMA_DIR" ]] && dirty_of "$LLAMA_DIR" || echo false)" \
-    --hanzo-bench-bin "$HANZO" --llama-bench-bin "$LLAMA" --model-path "$MODEL" \
+    --rival "$RIVAL_NAME" \
+    --rival-sha "$( [[ -n "$RIVAL_DIR" ]] && git -C "$RIVAL_DIR" rev-parse HEAD 2>/dev/null || true)" \
+    --rival-git-dirty "$( [[ -n "$RIVAL_DIR" ]] && dirty_of "$RIVAL_DIR" || echo false)" \
+    --hanzo-bench-bin "$HANZO" --rival-bench-bin "$RIVAL" --model-path "$MODEL" \
     --prompt-sizes "$PLIST" --n-gen "$NGEN" --reps "$REPS" --concurrency "$CONC" --max-ctx "$MAXCTX" \
     --hanzo-args "$HARGS" --backend-env "$(backend_env)"
 }
@@ -133,12 +141,12 @@ run_hanzo() { # $1=phase(pp|tg) $2=n $3=tag
       "${MODEL_ARGS[@]}" --max-seq-len "$MAXCTX" --paged-attn on --pa-context-len "$MAXCTX" \
       > "$OUT/hanzo_${3}.log" 2>&1 || { echo "hanzo-engine bench FAILED ($3); tail:" >&2; tail -8 "$OUT/hanzo_${3}.log" >&2; }
 }
-run_llama() { # $1=phase(pp|tg) $2=n $3=tag
-  [[ -x "$LLAMA" ]] || { echo '{"skipped":"no llama-bench"}' > "$OUT/llama_${3}.json"; return; }
+run_rival() { # $1=phase(pp|tg) $2=n $3=tag
+  [[ -x "$RIVAL" ]] || { echo '{"skipped":"no rival bench"}' > "$OUT/rival_${3}.json"; return; }
   local p n; if [[ "$1" == pp ]]; then p="$2"; n=0; else p=0; n="$2"; fi
-  echo ">> llama-bench $BACKEND $3 (p=$p n=$n r=$REPS)" >&2
-  env $(backend_env) "$LLAMA" -m "$MODEL" -p "$p" -n "$n" -fa 1 -r "$REPS" -o json \
-      > "$OUT/llama_${3}.json" 2> "$OUT/llama_${3}.err" || { echo "llama-bench FAILED ($3)" >&2; tail -5 "$OUT/llama_${3}.err" >&2; }
+  echo ">> $RIVAL_NAME bench $BACKEND $3 (p=$p n=$n r=$REPS)" >&2
+  env $(backend_env) "$RIVAL" -m "$MODEL" -p "$p" -n "$n" -fa 1 -r "$REPS" -o json \
+      > "$OUT/rival_${3}.json" 2> "$OUT/rival_${3}.err" || { echo "$RIVAL_NAME bench FAILED ($3)" >&2; tail -5 "$OUT/rival_${3}.err" >&2; }
 }
 
 echo "=== dossier: $BACKEND / $MTAG -> $OUT ===" >&2
@@ -146,11 +154,11 @@ quiet_gate
 manifest || echo "manifest step failed (non-fatal); continuing" >&2
 # decode (one shared run), then each prefill size (ragged included via -p list)
 run_hanzo tg "$NGEN" "${MTAG}_${BACKEND}_tg${NGEN}"
-run_llama tg "$NGEN" "${MTAG}_${BACKEND}_tg${NGEN}"
+run_rival tg "$NGEN" "${MTAG}_${BACKEND}_tg${NGEN}"
 IFS=',' read -ra PS <<< "$PLIST"
 for P in "${PS[@]}"; do
   run_hanzo pp "$P" "${MTAG}_${BACKEND}_pp${P}"
-  run_llama pp "$P" "${MTAG}_${BACKEND}_pp${P}"
+  run_rival pp "$P" "${MTAG}_${BACKEND}_pp${P}"
 done
 "$HANZO" board score "$OUT" >&2 || echo "scoring failed; the samples are in $OUT" >&2
 echo "=== done: $OUT ===" >&2

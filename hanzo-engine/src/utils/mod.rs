@@ -303,7 +303,7 @@ pub const fn using_flash_attn() -> bool {
 /// `true` if built with `flash-attn`/`flash-attn-v3` AND flash is runtime-enabled.
 ///
 /// Default ON for dense safetensors prefill: verified byte-exact vs eager and ~1.3-2.5x faster on
-/// CUDA (flat vs prompt length, beats llama.cpp). hanzo-flash-attn >= 0.11.35 keeps the bf16 softmax
+/// CUDA (flat vs prompt length). hanzo-flash-attn >= 0.11.35 keeps the bf16 softmax
 /// probabilities in the f16 kernel's 10 mantissa bits (flash-attn-2 otherwise rounds P to bf16's 7
 /// before P*V, which can tip repetition-prone bf16 generation into degenerate loops). GGUF/quantized
 /// models stay eager -- they forward_attn without FlashParams and flash corrupts their prefill --

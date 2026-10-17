@@ -10,7 +10,7 @@ pub enum OutputFormat {
     /// Hanzo UQFF: flexible multi-quant single-file format (default).
     #[default]
     Uqff,
-    /// llama.cpp GGUF: `--isq f16` or `--isq q8_0`, loadable by llama.cpp and the engine.
+    /// GGUF: `--isq f16` or `--isq q8_0`, one standard `.gguf` file the engine loads.
     Gguf,
 }
 

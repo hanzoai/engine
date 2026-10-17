@@ -1,7 +1,7 @@
 //! serving — a continuous-batching serving benchmark.
 //!
-//! The default `hanzo bench` is a single-stream, uniform-length probe (llama-bench
-//! style): every request is the same length, so at any decode step every running
+//! The default `hanzo bench` is a single-stream, uniform-length probe (a fixed
+//! pp/tg shape): every request is the same length, so at any decode step every running
 //! sequence shares one length and the batch is trivially dense. That workload
 //! cannot see the continuous-batching win, because it never produces the
 //! length-divergent decode batch that iteration-level scheduling exists to keep
@@ -582,7 +582,7 @@ async fn run_identity(hanzo: Arc<Hanzo>) {
         // Byte-identity across batch sizes requires batch-invariant kernels. F16 /
         // quantized GPU GEMM is not batch-invariant: reduction order depends on
         // batch composition, so greedy argmax can flip between near-tie tokens and
-        // cascade. That is inherent to continuous batching (vLLM/Orca alike), not
+        // cascade. That is inherent to any iteration-level batching scheduler, not
         // corruption. The property that MUST hold is the absence of cross-sequence
         // contamination -- each batched completion stays a valid continuation of ITS
         // OWN prompt. A batched output carrying another prompt's content is the real

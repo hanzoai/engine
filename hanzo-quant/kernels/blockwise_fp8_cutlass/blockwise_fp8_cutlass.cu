@@ -1,7 +1,7 @@
 /**
  * C ABI for the three sm_12x block-FP8 tiles (gemm.cuh): validation and
- * dispatch by the tile the caller prepared. The caller picks the tile by M,
- * exactly as vLLM's cutlass_gemm_blockwise_sm120_fp8_dispatch does.
+ * dispatch by the tile the caller prepared. The caller picks the tile by M
+ * alone: swap-AB for M <= 64, pingpong for M <= 256, cooperative above.
  */
 #include "gemm.cuh"
 

@@ -1,5 +1,5 @@
 #include "pagedattention.cuh"
-using namespace vllm;
+using namespace pagedattn;
 extern "C" void paged_attention_v1_f16(
     void *out,          // [num_seqs, num_heads, head_size]
     void *query,        // [num_seqs, num_heads, head_size]
@@ -21,11 +21,11 @@ extern "C" void paged_attention_v1_f16(
   if (cache_dtype == 3) {
     // FP8 cache
     CALL_V1_LAUNCHER_BLOCK_SIZE(uint16_t, uint8_t,
-                                vllm::Fp8KVCacheDataType::kFp8E4M3);
+                                pagedattn::Fp8KVCacheDataType::kFp8E4M3);
   } else {
     // Non-FP8 cache
     CALL_V1_LAUNCHER_BLOCK_SIZE(uint16_t, uint16_t,
-                                vllm::Fp8KVCacheDataType::kAuto);
+                                pagedattn::Fp8KVCacheDataType::kAuto);
   }
   CUDA_CHECK(cudaGetLastError());
 }

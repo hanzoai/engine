@@ -1,5 +1,5 @@
 """
-FP8 (GLM-5.2) -> standard llama.cpp-style `glm-dsa` GGUF, shard-by-shard, disk-safe.
+FP8 (GLM-5.2) -> standard `glm-dsa` GGUF, shard-by-shard, disk-safe.
 
 Convert a GLM-5.2 FP8 checkpoint to GGUF: download ONE ~5 GB safetensors
 shard, convert its tensors, DELETE the shard, move on. Peak disk = one shard + the growing
@@ -24,9 +24,9 @@ data blob, so it can't be appended shard-by-shard like per-shard safetensors. We
      requantized to its GGUF type, and pwrite()n straight to its slot. Delete the shard. A sidecar
      records finished slots so an interrupted run resumes.
 
-Quantization uses gguf-py's canonical routines where it has them (Q8_0, F32) and a faithful
-llama.cpp `quantize_row_q4_K_ref` for Q4_K (gguf-py 0.19 dequantizes Q4_K but does not quantize
-it). `--selftest` proves the Q4_K blocks decode through gguf-py's own dequantizer and that a tiny
+Quantization uses gguf-py's canonical routines where it has them (Q8_0, F32) and a faithful port
+of the reference Q4_K quantizer, `quantize_row_q4_K_ref`, for Q4_K (gguf-py 0.19 dequantizes Q4_K
+but does not quantize it). `--selftest` proves the Q4_K blocks decode through gguf-py's own dequantizer and that a tiny
 synthetic glm-dsa GGUF round-trips every key and tensor the engine loader requires.
 
 USAGE
@@ -92,18 +92,18 @@ def iter_safetensors(path: str) -> Iterator[tuple[str, np.ndarray]]:
 
 # ------------------------------------------------------------------ quantizers --
 # gguf-py 0.19 implements quantize() for F32/F16/Q8_0/Q4_0/... but NOT the K-quants, while its
-# dequantize() covers Q4_K. So Q8_0 and F32 go through gguf-py; Q4_K is the faithful llama.cpp
-# reference below, validated by round-tripping through gguf-py's dequantize() in --selftest.
+# dequantize() covers Q4_K. So Q8_0 and F32 go through gguf-py; Q4_K is the faithful reference
+# quantizer below, validated by round-tripping through gguf-py's dequantize() in --selftest.
 
 def _nearest_int(f: np.ndarray) -> np.ndarray:
-    """llama.cpp nearest_int: round-half-to-even via the 2^23 float trick (|f| < 2^22)."""
+    """The reference nearest_int: round-half-to-even via the 2^23 float trick (|f| < 2^22)."""
     v = np.ascontiguousarray(f, dtype=np.float32) + np.float32(12582912.0)
     return (v.view(np.int32) & 0x007FFFFF) - 0x00400000
 
 
 def _make_qkx2(x: np.ndarray, w: np.ndarray, nmax: int, rmin: float, rdelta: float,
                nstep: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Vectorized llama.cpp make_qkx2_quants (use_mad=false) over B independent 32-vectors.
+    """Vectorized reference make_qkx2_quants (use_mad=false) over B independent 32-vectors.
 
     Returns (scale[B], the_min[B] = -min, L[B, n] in [0, nmax]).
     """
@@ -153,7 +153,7 @@ def _make_qkx2(x: np.ndarray, w: np.ndarray, nmax: int, rmin: float, rdelta: flo
 
 
 def quantize_q4_k(x2d: np.ndarray) -> np.ndarray:
-    """Faithful llama.cpp quantize_row_q4_K_ref. x2d [rows, cols], cols % 256 == 0 -> uint8 blocks."""
+    """Faithful port of quantize_row_q4_K_ref. x2d [rows, cols], cols % 256 == 0 -> uint8 blocks."""
     x = np.ascontiguousarray(x2d, dtype=np.float32)
     rows, cols = x.shape
     if cols % QK_K:

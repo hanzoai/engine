@@ -20,7 +20,7 @@ done
 {
   echo "\\begin{tabular}{@{}llrrrrl@{}}"
   echo "\\toprule"
-  echo "backend & phase & \$n\$ & hanzo t/s & llama t/s & ratio & verdict \\\\"
+  echo "backend & phase & \$n\$ & hanzo t/s & rival t/s & ratio & verdict \\\\"
   echo "\\midrule"
   for d in "$@"; do [ -f "$d/rows.tex" ] && cat "$d/rows.tex" || true; done
   echo "\\bottomrule"

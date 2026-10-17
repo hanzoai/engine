@@ -2,7 +2,7 @@
 Basic client-side tool calling with the Anthropic Messages API.
 
 Run the server:
-    mistralrs serve -p 1234 --quant 4 -m Qwen/Qwen3-4B
+    hanzo-engine serve -p 1234 --quant 4 -m Qwen/Qwen3-4B
 
 Then run:
     python3 examples/server/anthropic_tool_calling.py

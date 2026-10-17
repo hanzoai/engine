@@ -1,10 +1,10 @@
-//! vLLM's block-FP8 GEMM outputs on synthetic operands, and the fp64 model
+//! Reference block-FP8 GEMM outputs on synthetic operands, and the fp64 model
 //! every output is judged against.
 //!
-//! The fixture is written by `scripts/blockwise_fp8_golden.py`, which runs
-//! vLLM 0.29.0's `cutlass_scaled_mm` (the op `CutlassFp8BlockScaledMMKernel`
-//! reaches) on seeded operands. Layouts are hanzo's: activation scales
-//! row-major `[M, K/128]`, weight scales `[N/128, K/128]`.
+//! The fixture (`tests/fixtures/blockwise_fp8.safetensors`) records the served
+//! `cutlass_scaled_mm` block-FP8 kernel's bf16 outputs on seeded operands; its
+//! metadata names the build that produced them. Layouts are hanzo's: activation
+//! scales row-major `[M, K/128]`, weight scales `[N/128, K/128]`.
 
 use std::collections::HashMap;
 
@@ -13,9 +13,9 @@ use hanzo_ml::{DType, Device, Result, Tensor};
 
 pub(crate) const BLOCK: usize = 128;
 
-/// One weight shape with vLLM's output for the largest M it was run at.
-/// vLLM's rows do not depend on M (the generator asserts it), so row `i` of
-/// `out` is the answer for every M > i.
+/// One weight shape with the reference output for the largest M it was run at.
+/// The reference rows do not depend on M (checked when the fixture was made), so
+/// row `i` of `out` is the answer for every M > i.
 pub(crate) struct Case {
     pub name: String,
     pub n: usize,
@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(meta.get("vllm_version").map(String::as_str), Some("0.29.0"));
         assert_eq!(meta.get("cc").map(String::as_str), Some("12.1"));
         println!(
-            "fixture: vllm {} ({}), torch {}, cuda {}, {}",
+            "fixture: reference {} ({}), torch {}, cuda {}, {}",
             meta["vllm_version"], meta["vllm_commit"], meta["torch"], meta["cuda"], meta["device"]
         );
         assert_eq!(fixture.cases.len(), 5);
@@ -205,7 +205,7 @@ mod tests {
                 if !within_bound(*g, y64, c) {
                     if bad < 5 {
                         println!(
-                            "{} [{}, {}]: vllm {g}, fp64 {y64}, C {c}",
+                            "{} [{}, {}]: fixture {g}, fp64 {y64}, C {c}",
                             case.name,
                             idx / case.n,
                             idx % case.n
@@ -221,7 +221,7 @@ mod tests {
                 case.k,
                 got.len()
             );
-            assert_eq!(bad, 0, "{}: vLLM output outside the fp64 bound", case.name);
+            assert_eq!(bad, 0, "{}: fixture output outside the fp64 bound", case.name);
         }
         Ok(())
     }

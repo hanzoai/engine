@@ -1,6 +1,5 @@
 //! KV Cache Manager for paged attention.
 //!
-//! This is a port of vLLM's v1 `KVCacheManager` + `FullAttentionManager`.
 //! It manages block allocation, prefix cache lookups, and per-request block tracking.
 //!
 //! The manager owns a `BlockPool` and provides high-level operations:

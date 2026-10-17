@@ -232,9 +232,9 @@ fn main() -> Result<(), String> {
         }
 
         if cutlass_sm121 {
-            // vLLM v0.29.0's three sm_12x blockwise FP8 tiles, one per translation unit.
-            // Default contraction (--fmad=true, no fast-math) as vLLM compiles them: the
-            // mainloop's per-128-K promotion is a single FFMA, and splitting it rounds twice.
+            // The three sm_12x blockwise FP8 tiles (swap-AB, pingpong, cooperative), one per
+            // translation unit. Default contraction (--fmad=true, no fast-math): the mainloop's
+            // per-128-K promotion is a single FFMA, and splitting it rounds twice.
             let mut blockwise_builder = cudaforge::KernelBuilder::new()
                 .source_files([
                     "kernels/blockwise_fp8_cutlass/blockwise_fp8_cutlass.cu",

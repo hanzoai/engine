@@ -589,8 +589,8 @@ kernel void kernel_flash_attn_ext_bf16_dk512_dv512(
       break;
 
     // hanzo output layout is [b, n_heads, q_seq, DV] (heads before
-    // tokens). ggml's FA writes [b, tokens, heads, DV]; swap the iq2 and
-    // (iq1+j) factors to land in the right slot here.
+    // tokens), not [b, tokens, heads, DV]; swap the iq2 and (iq1+j)
+    // factors to land in the right slot here.
     device bfloat4 *dst4 =
         (device bfloat4 *)dst + ((uint64_t)iq3 * args.ne2 * args.ne1 +
                                  (uint64_t)iq2 * args.ne1 + (iq1 + j)) *
@@ -614,16 +614,14 @@ kernel void kernel_flash_attn_ext_bf16_dk512_dv512(
 #undef NS20
 }
 
-// Vector flash-attn for decode: q_seq=1, DK=DV=512, bf16. Ported from
-// llama.cpp's kernel_flash_attn_ext_vec
-// (kernel_flash_attn_ext_vec_bf16_hk576_hv512 shape, but with DK=512=DV).
+// Vector flash-attn for decode: q_seq=1, DK=DV=512, bf16: the vector kernel
+// kernel_flash_attn_ext_vec at its bf16 hk576/hv512 shape, with DK=512=DV.
 // Specialization choices:
 //   NE = 2: each simdgroup handles 2 K cols per pass; threads-per-K = 16.
 //   Per-thread O accumulator holds DV4/NL = 128/16 = 8 bfloat4 lanes.
 // NSG (simdgroups per threadgroup) is set via threads_per_threadgroup.y at
 // dispatch time. Output layout: [b, n_heads, q_seq, DV] (hanzo convention;
-// llama's iq2 vs (iq1+j) factors are swapped here, same fix as the prefill
-// kernel above).
+// the iq2 and (iq1+j) factors are swapped, as in the prefill kernel above).
 kernel void kernel_flash_attn_ext_vec_bf16_dk512_dv512(
     constant flash_attn_ext_kargs &args [[buffer(0)]],
     device const char *q [[buffer(1)]], device const char *k [[buffer(2)]],

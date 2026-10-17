@@ -3,9 +3,8 @@
  * Multiplication) for the decode phase.
  *
  * This kernel is optimized for small batch sizes (M <= 8, typically M = 1 for
- * decode). Based on llama.cpp's approach, it uses warp-level reductions instead
- * of tensor cores, which provides better performance for small batches due to
- * lower overhead.
+ * decode). It uses warp-level reductions instead of tensor cores, which
+ * provides better performance for small batches due to lower overhead.
  *
  * @details
  * - Each CUDA block computes ONE output element for ONE token
@@ -25,7 +24,7 @@
 #include <cuda_runtime.h>
 #include <type_traits>
 
-namespace vllm_rs {
+namespace moe_detail {
 
 // Warp reduction sum using shuffle instructions
 template <int WARP_SIZE = 32>
@@ -37,7 +36,7 @@ __device__ __forceinline__ float warp_reduce_sum(float x) {
   return x;
 }
 
-} // namespace vllm_rs
+} // namespace moe_detail
 
 /**
  * @brief MoE GEMV kernel for standard weight layout [E, N, K].
@@ -128,8 +127,8 @@ __global__ void moe_gemv_kernel(
       } else {
         // For BF16, convert each element to float and accumulate
         // Note: __hmul2 doesn't work with bfloat162 on older CUDA versions
-        sum += vllm::to_float(in_v2[i].x) * vllm::to_float(w_v2[i].x);
-        sum += vllm::to_float(in_v2[i].y) * vllm::to_float(w_v2[i].y);
+        sum += moe_dtype::to_float(in_v2[i].x) * moe_dtype::to_float(w_v2[i].x);
+        sum += moe_dtype::to_float(in_v2[i].y) * moe_dtype::to_float(w_v2[i].y);
       }
     }
   }
@@ -137,12 +136,12 @@ __global__ void moe_gemv_kernel(
   // Handle remainder if K is not divisible by LOAD_VEC_SIZE
   const int remainder_start = k_vec * LOAD_VEC_SIZE;
   for (int k = remainder_start + tid; k < K; k += BLOCK_SIZE) {
-    sum = __fmaf_rn(vllm::to_float(input_row[k]), vllm::to_float(weight_row[k]),
+    sum = __fmaf_rn(moe_dtype::to_float(input_row[k]), moe_dtype::to_float(weight_row[k]),
                     sum);
   }
 
   // Warp-level reduction
-  sum = vllm_rs::warp_reduce_sum(sum);
+  sum = moe_detail::warp_reduce_sum(sum);
 
   // Inter-warp reduction using shared memory
   constexpr int NUM_WARPS = BLOCK_SIZE / 32;
@@ -171,7 +170,7 @@ __global__ void moe_gemv_kernel(
         sum *= topk_weights[token_id];
       }
       T out_val;
-      vllm::from_float(out_val, sum);
+      moe_dtype::from_float(out_val, sum);
       output[(size_t)token_id * N + row] = out_val;
     }
   }

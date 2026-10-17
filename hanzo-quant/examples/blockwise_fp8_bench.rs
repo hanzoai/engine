@@ -1,8 +1,7 @@
-//! Block-FP8 GEMM timing on the shapes Qwen3.8-Flash-Next serves, for the
-//! side-by-side with vLLM's kernel (`scripts/blockwise_fp8_bench.py` reads
-//! this output and prints the ratio table).
+//! Block-FP8 GEMM timing on the shapes Qwen3.8-Flash-Next serves, one JSON
+//! line per (N, K, M) in `--out` (default `target/blockwise_fp8.hanzo.jsonl`).
 //!
-//! Method, identical in both harnesses: weights rotate across copies that
+//! Method: weights rotate across copies that
 //! together exceed 2x L2 (48 MiB, at most 8), one CUDA graph per shape
 //! replays one GEMM per copy, 3 warm replays, then 5 rounds of 4 timed
 //! replays between CUDA events. Reported per GEMM: min and median µs.
@@ -37,7 +36,7 @@ mod bench {
     const ROUNDS: usize = 5;
     const REPLAYS: usize = 4;
 
-    /// (N, K): vLLM's fused projections, then hanzo's unfused ones.
+    /// (N, K): the fused projections first, then the unfused ones hanzo runs.
     pub const SHAPES: [(usize, usize); 10] = [
         (16384, 2560),
         (13312, 2560),

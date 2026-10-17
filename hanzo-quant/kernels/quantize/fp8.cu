@@ -6,7 +6,7 @@
  *             quantizes every W8A8 input in the compiled graph (it folds the /448 into a multiply).
  *   1 eager:  s = max(amax div.full 448, 1/229376). The standalone QuantFP8 kernel that runs inside
  *             custom ops (the shared expert inside moe_forward_shared), divisor passed at runtime.
- *   2 gather: vLLM's per_token_group_fp8_quant (eps 1e-10), used by the fused-MoE gathers:
+ *   2 gather: per_token_group_fp8_quant (eps 1e-10), used by the fused-MoE gathers:
  *             s = max(amax, 1e-10) / 448 (IEEE), q = x / s (IEEE).
  *
  * Built without --use_fast_math and with --fmad=false: div.full.f32 is written as inline PTX where

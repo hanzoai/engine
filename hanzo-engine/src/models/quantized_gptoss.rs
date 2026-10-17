@@ -5,7 +5,7 @@
 //! Mirrors the safetensors `gpt_oss` math — clamped-SwiGLU MoE with per-expert biases, per-head
 //! attention sinks, alternating sliding-window attention, and YaRN RoPE — but loads weights from a
 //! `gpt-oss` GGUF (Q8_0 attention/embeddings, MXFP4 routed experts) through the quantized path.
-//! Tensor/metadata names follow llama.cpp's `LLM_ARCH_OPENAI_MOE`.
+//! Tensor/metadata names follow the GGUF `gpt-oss` arch.
 //!
 //! MXFP4 note: hanzo-ml decodes MXFP4 (ggml type 39) on every backend; the fused CUDA indexed-MoE
 //! kernels do not cover MXFP4, so routed-expert matmuls take the generic per-expert QMatMul path

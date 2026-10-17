@@ -34,7 +34,7 @@
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
-#define VLLM_SHFL_XOR_SYNC_WIDTH(var, lane_mask, width)                        \
+#define HANZO_SHFL_XOR_SYNC_WIDTH(var, lane_mask, width)                        \
   __shfl_xor_sync(uint32_t(-1), (var), (lane_mask), (width))
 
 namespace route {
@@ -44,13 +44,15 @@ struct alignas(Alignment) AlignedArray {
   T data[N];
 };
 
-// Score functions. SOFTMAX and SIGMOID are vLLM's; RAW is the engine's
-// (llama4): the logit itself, NaN read as -inf, knockout by a taken mask.
+// Score functions. SOFTMAX is the row softmax and SIGMOID 1 / (1 + exp(-x)), as
+// ported; RAW is the engine's (llama4): the logit itself, NaN read as -inf,
+// knockout by a taken mask.
 enum Score { RAW = 0, SOFTMAX = 1, SIGMOID = 2 };
 
-// Per-launch options outside vLLM's signature. All off reproduces vLLM.
+// Per-launch options outside the ported signature. All off is the ported
+// arithmetic exactly.
 struct Extra {
-  const float *expert_scale; // weight *= expert_scale[id] after vLLM's scale
+  const float *expert_scale; // weight *= expert_scale[id] after routed_scaling_factor
   float lo, hi;              // clip logits to [lo, hi] before scoring
   float norm_min;            // denom = sum > 0 ? max(sum, norm_min) : 1
   bool clip;
@@ -186,7 +188,7 @@ __launch_bounds__(WARPS_PER_CTA *WARP_SIZE_PARAM) __global__
 #pragma unroll
     for (int mask = THREADS_PER_ROW / 2; mask > 0; mask /= 2) {
       thread_max =
-          max(thread_max, VLLM_SHFL_XOR_SYNC_WIDTH(thread_max, mask, THREADS_PER_ROW));
+          max(thread_max, HANZO_SHFL_XOR_SYNC_WIDTH(thread_max, mask, THREADS_PER_ROW));
     }
     float row_sum = 0;
 #pragma unroll
@@ -196,7 +198,7 @@ __launch_bounds__(WARPS_PER_CTA *WARP_SIZE_PARAM) __global__
     }
 #pragma unroll
     for (int mask = THREADS_PER_ROW / 2; mask > 0; mask /= 2) {
-      row_sum += VLLM_SHFL_XOR_SYNC_WIDTH(row_sum, mask, THREADS_PER_ROW);
+      row_sum += HANZO_SHFL_XOR_SYNC_WIDTH(row_sum, mask, THREADS_PER_ROW);
     }
     const float reciprocal_row_sum = 1.f / row_sum;
 #pragma unroll
@@ -219,7 +221,7 @@ __launch_bounds__(WARPS_PER_CTA *WARP_SIZE_PARAM) __global__
       }
     }
   } else {
-    // vLLM: NaN/Inf probabilities are 0, so argmax falls back to index order.
+    // NaN/Inf probabilities are 0, so argmax falls back to index order.
 #pragma unroll
     for (int ii = 0; ii < VPT; ++ii) {
       if (isnan(row_chunk[ii]) || isinf(row_chunk[ii])) {
@@ -293,9 +295,9 @@ __launch_bounds__(WARPS_PER_CTA *WARP_SIZE_PARAM) __global__
 #pragma unroll
     for (int mask = THREADS_PER_ROW / 2; mask > 0; mask /= 2) {
       float other_max_for_choice =
-          VLLM_SHFL_XOR_SYNC_WIDTH(max_val_for_choice, mask, THREADS_PER_ROW);
-      float other_max = VLLM_SHFL_XOR_SYNC_WIDTH(max_val, mask, THREADS_PER_ROW);
-      int other_expert = VLLM_SHFL_XOR_SYNC_WIDTH(expert, mask, THREADS_PER_ROW);
+          HANZO_SHFL_XOR_SYNC_WIDTH(max_val_for_choice, mask, THREADS_PER_ROW);
+      float other_max = HANZO_SHFL_XOR_SYNC_WIDTH(max_val, mask, THREADS_PER_ROW);
+      int other_expert = HANZO_SHFL_XOR_SYNC_WIDTH(expert, mask, THREADS_PER_ROW);
       if (other_max_for_choice > max_val_for_choice ||
           (other_max_for_choice == max_val_for_choice && other_expert < expert)) {
         max_val_for_choice = other_max_for_choice;
@@ -384,8 +386,8 @@ void launch(const InputType *input, float *output, uint32_t *indices,
                                              routed_scaling_factor, extra);
 }
 
-// vLLM's fused expert counts, in its switch order. Anything else takes vLLM's
-// unfused moeSoftmax + moeTopK path upstream, and the engine's portable path.
+// The fused expert counts, in the ported switch order. Any other count takes
+// the engine's portable path.
 constexpr int EXPERT_COUNTS[] = {1,   2,   4,   8,   16,  32,  64,  128,
                                  256, 512, 192, 320, 384, 448, 576};
 

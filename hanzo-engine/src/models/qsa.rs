@@ -10,9 +10,8 @@
 //! plus its own open tail group: at most `width = blocks·ratio + ratio - 1` tokens, so QSA is
 //! exactly dense attention for sequences of up to `width` tokens.
 //!
-//! Line references are to vLLM 0.29.0 `vllm/models/qwen4_exp/` and to the deterministic top-k
-//! served with `VLLM_QSA_DET_TOPK=1` (`kernel-det/src/persistent_topk.cuh`). This is the CPU
-//! implementation.
+//! This is the CPU implementation. Its top-k is the deterministic one: score descending, ties to
+//! the lower index.
 
 use std::io::{Read, Seek};
 use std::sync::Arc;
@@ -26,7 +25,7 @@ use crate::models::quantized_qwen3_5_moe::gguf_qmm;
 use crate::utils::gguf_metadata::ContentMetadata;
 
 /// Attention with the QSA kernel's math over dense causal keys, which is what QSA computes while
-/// every visible key is selected (`ops/qsa.py:193-359`, one tile): f32 scores scaled by
+/// every visible key is selected (one tile): f32 scores scaled by
 /// `d^-0.5 · log2 e`, `exp2` against the row max, the probabilities rounded to the activation
 /// dtype for the PV product while the normalizer sums them unrounded, an f32 PV, one division and
 /// one rounding.
@@ -81,8 +80,7 @@ pub(crate) struct Config {
 impl Config {
     /// Layer `layer`'s indexer from `attention.indexer.{head_count, key_length, top_k}` and its
     /// entry of `attention.compress_ratios`; `None` when that entry is 0 or absent (a GDN layer, or
-    /// the MTP layer past the table). `top_k` counts tokens, so `blocks = top_k / ratio`
-    /// (nvidia/indexer_qsa.py:117-121).
+    /// the MTP layer past the table). `top_k` counts tokens, so `blocks = top_k / ratio`.
     pub(crate) fn from_gguf(md: &ContentMetadata, layer: usize) -> Result<Option<Self>> {
         let msg = |e: anyhow::Error| hanzo_ml::Error::Msg(e.to_string());
         let ratio = match md
@@ -100,7 +98,7 @@ impl Config {
             get("attention.indexer.key_length")?,
             get("attention.indexer.top_k")?,
         );
-        // config.py:143-151: every value positive and the budget a whole number of groups.
+        // Every value positive and the budget a whole number of groups.
         if heads == 0 || dim == 0 || tokens == 0 || tokens % ratio != 0 {
             hanzo_ml::bail!(
                 "layer {layer}: QSA heads {heads}, dim {dim}, top_k {tokens}, ratio {ratio}"
@@ -114,8 +112,7 @@ impl Config {
         }))
     }
 
-    /// Selection width: `blocks` whole groups plus a tail of at most `ratio - 1` tokens
-    /// (nvidia/indexer_qsa.py:170-172).
+    /// Selection width: `blocks` whole groups plus a tail of at most `ratio - 1` tokens.
     pub(crate) fn width(&self) -> usize {
         self.blocks * self.ratio + self.ratio - 1
     }
@@ -133,7 +130,7 @@ pub(crate) struct Indexer {
 
 impl Indexer {
     /// `{prefix}.indexer.{q_proj, k_proj, q_norm, k_norm}`: the checkpoint's `index_qk_proj`
-    /// split into its query rows and its key rows (nvidia/indexer_qsa.py:134-148, 230-237).
+    /// split into its query rows and its key rows.
     pub(crate) fn from_gguf<R: Read + Seek>(
         ct: &mut Content<'_, R>,
         prefix: &str,
@@ -153,7 +150,7 @@ impl Indexer {
 
     /// Queries `[B, S, heads, dim]`, normed in f32 and rounded once, then roped, and raw keys
     /// `[B, S, dim]` of `u` `[B, S, hidden]`; `cos_sin` holds the rotary tables at the chunk's
-    /// positions (nvidia/indexer_qsa.py:230-237, 276-282; nvidia/ops/qsa_pre_indexer.py:68-71).
+    /// positions.
     pub(crate) fn project(
         &self,
         u: &Tensor,
@@ -175,8 +172,7 @@ impl Indexer {
 
     /// Compressed keys `[G, dim]` of raw keys `[G·ratio, dim]` taken group by group: the f32
     /// mean, rounded to bf16, normed in f32 and rounded once to the raw keys' dtype, then roped at
-    /// the group's first position `ratio·j`, where `cos_sin` holds one row per group
-    /// (nvidia/ops/qsa_pre_indexer.py:68-71, 261-269, 271, 322-334).
+    /// the group's first position `ratio·j`, where `cos_sin` holds one row per group.
     pub(crate) fn compress(&self, raw: &Tensor, cos_sin: &(Tensor, Tensor)) -> Result<Tensor> {
         let (n, dim) = raw.dims2()?;
         let r = self.cfg.ratio;
@@ -197,7 +193,7 @@ impl Indexer {
 }
 
 /// NeoX rotate-half RoPE over the leading `2·cos.dim(-1)` dims of each head of `x`
-/// `[B, H, S, D]`, the rest passing through (nvidia/ops/qsa_pre_indexer.py:72-79).
+/// `[B, H, S, D]`, the rest passing through.
 fn rope(x: &Tensor, (cos, sin): &(Tensor, Tensor)) -> Result<Tensor> {
     let d = x.dim(D::Minus1)?;
     let r = 2 * cos.dim(D::Minus1)?;
@@ -210,9 +206,8 @@ fn rope(x: &Tensor, (cos, sin): &(Tensor, Tensor)) -> Result<Tensor> {
 ///
 /// `q` `[S, heads, dim]` holds queries at positions `pos`; `kc` `[G, dim]` holds the sequence's
 /// `G = len / ratio` compressed keys. A query at `p` sees group `j < min((p+1)/ratio, G)`
-/// (nvidia/ops/qsa.py:65-68) and scores it `Σ_h ReLU(q_h·kc_j)/√dim` in f32 (:112-114). The
-/// groups are ranked as the served kernel ranks them ([`top`]) and expanded with the tail
-/// (:151-185).
+/// and scores it `Σ_h ReLU(q_h·kc_j)/√dim` in f32. The groups are ranked as the served kernel
+/// ranks them ([`top`]) and expanded with the tail.
 pub(crate) fn select(q: &Tensor, kc: &Tensor, pos: &[usize], cfg: &Config) -> Result<Tensor> {
     let (rows, heads, dim) = q.dims3()?;
     let (groups, width) = (kc.dim(0)?, cfg.width());
@@ -257,8 +252,7 @@ pub(crate) fn select(q: &Tensor, kc: &Tensor, pos: &[usize], cfg: &Config) -> Re
 }
 
 /// Indices of the `k` best scores, ascending, as the served DET top-k picks them: value
-/// descending, ties to the lower index, -0 tying +0 (kernel-det persistent_topk.cuh:49-57,
-/// 119-135); every index when there are at most `k` (:1192-1197).
+/// descending, ties to the lower index, -0 tying +0; every index when there are at most `k`.
 fn top(score: &[f32], k: usize) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..score.len()).collect();
     if k < idx.len() {
@@ -296,16 +290,16 @@ pub(crate) fn slots(sel: &Tensor, table: &Tensor, size: usize) -> Result<Tensor>
 
 #[cfg(test)]
 mod reference {
-    //! Plain f64 transcriptions of the vLLM lines each function cites.
+    //! Plain f64 transcriptions of each rule.
 
-    /// Gemma RMS norm with its `1 + w` already in `w` (nvidia/ops/qsa_pre_indexer.py:68-71).
+    /// Gemma RMS norm with its `1 + w` already in `w`.
     pub(super) fn norm(x: &[f64], w: &[f64], eps: f64) -> Vec<f64> {
         let r = 1.0 / (x.iter().map(|v| v * v).sum::<f64>() / x.len() as f64 + eps).sqrt();
         x.iter().zip(w).map(|(v, w)| v * r * w).collect()
     }
 
     /// NeoX rotate-half over the leading `rot` dims at `pos`, frequency `i` being
-    /// `theta^(-2i/rot)` (nvidia/ops/qsa_pre_indexer.py:72-79).
+    /// `theta^(-2i/rot)`.
     pub(super) fn rope(x: &mut [f64], pos: usize, rot: usize, theta: f64) {
         let half = rot / 2;
         for i in 0..half {
@@ -322,8 +316,7 @@ mod reference {
             .collect()
     }
 
-    /// Normed, roped queries `[heads·dim]` and the raw key of one token
-    /// (nvidia/indexer_qsa.py:230-237, 276-282).
+    /// Normed, roped queries `[heads·dim]` and the raw key of one token.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn project(
         u: &[f64],
@@ -346,7 +339,7 @@ mod reference {
         (q, linear(u, wk))
     }
 
-    /// The group mean, rounded to bf16 (nvidia/ops/qsa_pre_indexer.py:261-269).
+    /// The group mean, rounded to bf16.
     pub(super) fn pool(raw: &[Vec<f64>]) -> Vec<f64> {
         (0..raw[0].len())
             .map(|d| {
@@ -356,8 +349,7 @@ mod reference {
             .collect()
     }
 
-    /// Group scores of a query `[heads·dim]` at `p` over its visible compressed keys
-    /// (nvidia/ops/qsa.py:65-68, 112-114).
+    /// Group scores of a query `[heads·dim]` at `p` over its visible compressed keys.
     pub(super) fn scores(q: &[f64], kc: &[Vec<f64>], p: usize, ratio: usize) -> Vec<f64> {
         let dim = kc.first().map_or(1, Vec::len);
         kc.iter()
@@ -372,9 +364,8 @@ mod reference {
     }
 
     /// Brute-force selection of a query at `p`: a visible group is kept when fewer than `blocks`
-    /// groups outrank it, outranking meaning a higher score or an equal one at a lower index
-    /// (persistent_topk.cuh:49-57, 119-135); kept groups expand to their tokens, then the tail
-    /// (nvidia/ops/qsa.py:151-185).
+    /// groups outrank it, outranking meaning a higher score or an equal one at a lower index;
+    /// kept groups expand to their tokens, then the tail.
     pub(super) fn select(
         q: &[f64],
         kc: &[Vec<f64>],
@@ -398,7 +389,7 @@ mod reference {
     }
 
     /// Sparse GQA of one query `[heads·dim]` over the paged rows `slots`, `-1` skipped: softmax
-    /// of `scale·q·k` over the valid rows, zero when there are none (nvidia/ops/qsa.py:257-323).
+    /// of `scale·q·k` over the valid rows, zero when there are none.
     /// `k` and `v` are `[slot, kv_heads, dim]`.
     pub(super) fn attend(
         q: &[f64],
@@ -700,11 +691,10 @@ mod tests {
     }
 
     /// With bf16 activations each norm keeps x, its rms and the f32 weight `1 + w` in f32 and
-    /// rounds once, before RoPE (nvidia/ops/qsa_pre_indexer.py:68-71; the query at :174-186, the
-    /// compressed key at :322-334). RoPE at position 0 is the identity, so each output is that one
-    /// rounding of the f64 norm of the bf16 values the indexer normed. Rounding `1 + w` to bf16
-    /// first moves many outputs an ulp. The bound is half a bf16 ulp, not 1e-5, because the bf16
-    /// rounding is what is under test.
+    /// rounds once, before RoPE (the query and the compressed key alike). RoPE at position 0 is
+    /// the identity, so each output is that one rounding of the f64 norm of the bf16 values the
+    /// indexer normed. Rounding `1 + w` to bf16 first moves many outputs an ulp. The bound is half
+    /// a bf16 ulp, not 1e-5, because the bf16 rounding is what is under test.
     #[test]
     fn norms_round_once() -> Result<()> {
         let dev = Device::Cpu;

@@ -7,16 +7,17 @@
 # this is an algorithmic multiple, orthogonal to per-token kernel efficiency. Run the SAME thing
 # per backend so the acceptance/multiple is byte-comparable.
 #
-#   spec_decode.sh --model GGUF --hanzo HANZO_CLI --llama-bench PATH \
+#   spec_decode.sh --model GGUF --hanzo HANZO_CLI [--rival-bench PATH] \
 #     [--backend-env "K=V ..."] [--gammas 4,8,16] [--ngram 3] [--reps 7] [--maxtok 200] \
 #     [--port 8613] [--out DIR]
 #
-# multiple = spec t/s / baseline t/s (same server, spec flags off = baseline). vs-llama = spec
-# t/s / llama-bench greedy t/s. Lossless is asserted by SHA(completion) with lookup ON == OFF.
+# multiple = spec t/s / baseline t/s (same server, spec flags off = baseline). vs-rival = spec
+# t/s / the rival bench's greedy decode t/s (its `-p 0 -n 256 -o json` row). Lossless is asserted
+# by SHA(completion) with lookup ON == OFF.
 set -euo pipefail
-MODEL="" HANZO="" LB="" BENV="" GAMMAS="4,8,16" NGRAM=3 REPS=7 MAXTOK=200 PORT=8613 OUT=""
+MODEL="" HANZO="" RB="" BENV="" GAMMAS="4,8,16" NGRAM=3 REPS=7 MAXTOK=200 PORT=8613 OUT=""
 while [[ $# -gt 0 ]]; do case "$1" in
-  --model) MODEL="$2"; shift 2;; --hanzo) HANZO="$2"; shift 2;; --llama-bench) LB="$2"; shift 2;;
+  --model) MODEL="$2"; shift 2;; --hanzo) HANZO="$2"; shift 2;; --rival-bench) RB="$2"; shift 2;;
   --backend-env) BENV="$2"; shift 2;; --gammas) GAMMAS="$2"; shift 2;; --ngram) NGRAM="$2"; shift 2;;
   --reps) REPS="$2"; shift 2;; --maxtok) MAXTOK="$2"; shift 2;; --port) PORT="$2"; shift 2;;
   --out) OUT="$2"; shift 2;; *) echo "unknown arg: $1" >&2; exit 2;;
@@ -89,21 +90,21 @@ PY
 
 echo "spec-decode: $MFILE (ngram=$NGRAM gammas=$GAMMAS)" >&2
 : > "$OUT/spec_raw.jsonl"
-LLAMA_TS="nan"
-if [[ -n "$LB" && -x "$LB" ]]; then
-  LLAMA_TS="$(env $BENV "$LB" -m "$MODEL" -p 0 -n 256 -o json 2>/dev/null | python3 -c "import sys,json; r=[x for x in json.load(sys.stdin) if x.get('n_gen',0)>0]; print(f'{r[0][\"avg_ts\"]:.1f}' if r else 'nan')" 2>/dev/null || echo nan)"
+RIVAL_TS="nan"
+if [[ -n "$RB" && -x "$RB" ]]; then
+  RIVAL_TS="$(env $BENV "$RB" -m "$MODEL" -p 0 -n 256 -o json 2>/dev/null | python3 -c "import sys,json; r=[x for x in json.load(sys.stdin) if x.get('n_gen',0)>0]; print(f'{r[0][\"avg_ts\"]:.1f}' if r else 'nan')" 2>/dev/null || echo nan)"
 fi
 run_cfg baseline || true
 IFS=',' read -ra GS <<< "$GAMMAS"
 for g in "${GS[@]}"; do run_cfg "g$g" --prompt-lookup-ngram "$NGRAM" --gamma "$g" || true; done
 
-python3 - "$OUT" "$LLAMA_TS" <<'PY'
+python3 - "$OUT" "$RIVAL_TS" <<'PY'
 import json, os, sys, math
-out, llama = sys.argv[1], float(sys.argv[2]) if sys.argv[2] not in ("nan","") else float("nan")
+out, rival = sys.argv[1], float(sys.argv[2]) if sys.argv[2] not in ("nan","") else float("nan")
 rows = [json.loads(l) for l in open(os.path.join(out,"spec_raw.jsonl"))]
 by = {(r["label"], r["workload"]): r for r in rows}
 names = {"A":"sustained-reuse","B":"code-copy","C":"novel"}
-res = {"llama_greedy_ts": llama, "workloads": []}
+res = {"rival_greedy_ts": rival, "workloads": []}
 labels = sorted({r["label"] for r in rows if r["label"]!="baseline"})
 for wl in ["A","B","C"]:
     base = by.get(("baseline",wl))
@@ -114,13 +115,13 @@ for wl in ["A","B","C"]:
         r = by.get((lab,wl))
         if not r: continue
         mult = r["tok_s"]/bt if bt else float("nan")
-        vsll = r["tok_s"]/llama if llama and not math.isnan(llama) else float("nan")
+        vsrv = r["tok_s"]/rival if rival and not math.isnan(rival) else float("nan")
         lossless = (r["completion_sha256"] == base["completion_sha256"])
-        entry["gammas"][lab] = {"ts": r["tok_s"], "multiple": mult, "vs_llama": vsll, "lossless": lossless}
+        entry["gammas"][lab] = {"ts": r["tok_s"], "multiple": mult, "vs_rival": vsrv, "lossless": lossless}
     res["workloads"].append(entry)
     best = max(entry["gammas"].values(), key=lambda x:x["multiple"], default=None)
     if best:
-        print(f'{names[wl]:16} baseline {bt:6.1f}  best mult {best["multiple"]:.2f}x  vs-llama {best["vs_llama"]:.2f}x  lossless={all(g["lossless"] for g in entry["gammas"].values())}')
+        print(f'{names[wl]:16} baseline {bt:6.1f}  best mult {best["multiple"]:.2f}x  vs-rival {best["vs_rival"]:.2f}x  lossless={all(g["lossless"] for g in entry["gammas"].values())}')
 json.dump(res, open(os.path.join(out,"spec_decode.json"),"w"), indent=2)
 print("-> "+os.path.join(out,"spec_decode.json"))
 PY

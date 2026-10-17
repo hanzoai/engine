@@ -612,7 +612,8 @@ impl Sdpa {
 
         // Metal FA path for DK=512 BF16 with a mask. Two specializations:
         // prefill (seq_len > 8) goes through the BlockMMA kernel; decode
-        // (seq_len == 1) uses a vector FA kernel ported from llama.cpp.
+        // (seq_len == 1) uses the vector FA kernel
+        // `kernel_flash_attn_ext_vec_bf16_dk512_dv512`.
         if [q, k, v].into_iter().all(|x| x.device().is_metal())
             && head_dim == 512
             && k_head_dim == 512

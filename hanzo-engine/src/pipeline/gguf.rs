@@ -455,8 +455,8 @@ fn prefill_graph_divergence(
 }
 
 // A captured dense prefill: one cuGraphLaunch replaces the ~1.5k eager kernel launches whose
-// per-op CPU dispatch/alloc cost otherwise starves the GPU (measured prefill GPU util 83% vs
-// llama's 98%). Keyed on the fixed [1, seq_len] bucket. `flash_params` is held so the varlen
+// per-op CPU dispatch/alloc cost otherwise starves the GPU (measured prefill GPU util 83%).
+// Keyed on the fixed [1, seq_len] bucket. `flash_params` is held so the varlen
 // cumulative-seqlens device tensors the captured flash kernels reference stay live.
 #[cfg(feature = "cuda")]
 struct CudaPrefillGraphEntry {
@@ -1336,7 +1336,7 @@ impl GGUFPipeline {
                 // KERNEL-bound (Q2_K down experts hit the CPU-bound generic MoE fallback,
                 // not a resident dp4a kernel), so capture adds warmup overhead with no
                 // payoff (measured regression). Re-enable once the Q2_K resident MoE dp4a
-                // kernel lands; THEN the graph pays off (→ ds4-class ~24 t/s).
+                // kernel lands; THEN the graph pays off (target ~24 t/s).
                 Model::Llama(model) => model.supports_decode_graph(),
                 _ => false,
             }
@@ -1630,8 +1630,8 @@ impl GGUFPipeline {
 
     /// Attempts to satisfy a full dense prefill via a captured CUDA graph. Returns `Ok(None)` when
     /// the graph path does not apply (caller runs eager). One `cuGraphLaunch` replaces the ~1.5k
-    /// eager launches whose per-op CPU dispatch/alloc gaps hold prefill GPU util at ~83% vs llama's
-    /// ~98%. Gated to the offset-0 single-sequence first prompt chunk, where the causal mask, RoPE
+    /// eager launches whose per-op CPU dispatch/alloc gaps hold prefill GPU util at ~83%.
+    /// Gated to the offset-0 single-sequence first prompt chunk, where the causal mask, RoPE
     /// positions and varlen cumulative-seqlens are all fixed for the `[1, seq_len]` bucket, so only
     /// the token ids and the KV slot mapping need refreshing between replays. On any capture/replay
     /// error the path disables and returns the already-correct warmup logits (no lost token).

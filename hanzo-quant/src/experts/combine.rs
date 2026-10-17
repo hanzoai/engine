@@ -13,7 +13,7 @@ use super::ffi::{self, check};
 pub enum Rule {
     /// `s = fma.rn.ftz(w, y, s)`: FlashInfer's finalize (NVFP4 experts).
     Finalize,
-    /// `s = s + y`: vLLM's moe_sum, the weight already applied by GEMM2 (block-FP8 experts).
+    /// `s = s + y`: moe_sum, the weight already applied by GEMM2 (block-FP8 experts).
     Sum,
 }
 

@@ -14,10 +14,10 @@
 //! ```
 //!
 //! `e_proj`/`h_proj` are two `[e,e]` projections summed (≡ a `[2e,e]` concat-proj),
-//! matching DeepSeek's NextN module + llama.cpp's MTP (PR #22673, NextN tensors +
-//! `n_layer_nextn`). The output head + token embeddings are SHARED with the base model.
+//! matching DeepSeek's NextN module and the GGUF's NextN tensors
+//! (`nextn_predict_layers`). The output head + token embeddings are SHARED with the base model.
 //!
-//! Speculative use: research (antirez/ds4 + SGLang) shows naive **depth-1 MTP is
+//! Speculative use: naive **depth-1 MTP is
 //! net-negative single-stream** (accept ~1.8-2.3, verify 2× → −21%). The value is
 //! **EAGLE-style** (accept ~2.5) with **batched verify** (stream weights once for all
 //! K draft tokens inside a fixed-shape graph). So [`MtpHead::draft`] is built to be

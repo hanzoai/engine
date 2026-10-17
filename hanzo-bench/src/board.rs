@@ -1,10 +1,10 @@
 //! A run directory, scored.
 //!
 //! scripts/dossier.sh leaves, per shape, `hanzo_<tag>.json` (this binary's raw per-repetition
-//! `[wall_s, tokens]`) and `llama_<tag>.json` (`llama-bench -o json`) beside a manifest that pins
-//! both engines, the model and the box. Everything published is a pure function of those samples:
-//! the board, and the evidence filed in Hanzo Research, which the site reads. A board is only ever
-//! written, never read back.
+//! `[wall_s, tokens]`) and `rival_<tag>.json` (the rival engine's bench rows, `-o json`) beside a
+//! manifest that pins both engines, the model and the box. Everything published is a pure
+//! function of those samples: the board, and the evidence filed in Hanzo Research, which the site
+//! reads. A board is only ever written, never read back.
 //!
 //! ```text
 //! tok/s    = tokens / wall_s / concurrency     ours; the rival reports its own
@@ -185,9 +185,9 @@ pub struct Samples {
     pub results: Vec<Timed>,
 }
 
-/// One row of `llama-bench -o json`.
+/// One row of the rival's `-o json` bench output: its shape and its per-repetition tok/s.
 #[derive(Deserialize)]
-struct LlamaRow {
+struct RivalRow {
     #[serde(default)]
     n_prompt: usize,
     #[serde(default)]
@@ -211,8 +211,9 @@ fn rates(per_rep: &[(f64, usize)], concurrency: usize) -> Vec<f64> {
 
 impl Timed {
     /// The first repetition is warmup when at least three were taken: this binary warms a shape
-    /// once, so its first large repetition still pays pipeline compilation, while llama-bench
-    /// warms every shape itself. `best` counts it all the same: a best is a best.
+    /// once, so its first large repetition still pays pipeline compilation, while the rival's
+    /// bench warms every shape before it times it. `best` counts it all the same: a best is a
+    /// best.
     pub fn stats(&self) -> Option<Stats> {
         let scored = match self.per_rep.len() {
             0..=2 => &self.per_rep[..],
@@ -235,7 +236,7 @@ impl Source for Samples {
     }
 }
 
-impl Source for Vec<LlamaRow> {
+impl Source for Vec<RivalRow> {
     fn cells(&self) -> Vec<(Shape, Stats)> {
         self.iter()
             .filter_map(|row| {
@@ -260,8 +261,10 @@ impl Source for Vec<LlamaRow> {
 /// The rival's side of a cell. A ratio exists exactly when the rival measured the shape.
 #[derive(Clone, Debug, Serialize)]
 pub struct Rival {
-    pub llama: Stats,
-    pub llama_src: String,
+    #[serde(rename = "rival")]
+    pub stats: Stats,
+    #[serde(rename = "rival_src")]
+    pub src: String,
     pub ratio: Ratio,
 }
 
@@ -329,7 +332,7 @@ pub fn read(dir: &Path) -> Result<Run> {
         .map(|p| Ok((file_name(p), parse::<Samples>(p)?)))
         .collect::<Result<Vec<_>>>()?;
     // Where the rival did not run, the harness leaves a marker object; it is not a result.
-    let theirs: Vec<(String, Vec<LlamaRow>)> = named(dir, "llama_")?
+    let theirs: Vec<(String, Vec<RivalRow>)> = named(dir, "rival_")?
         .iter()
         .filter_map(|p| parse(p).ok().map(|rows| (file_name(p), rows)))
         .collect();
@@ -340,10 +343,10 @@ pub fn read(dir: &Path) -> Result<Run> {
     let cells = by_shape(&ours)
         .into_iter()
         .map(|(shape, (hanzo, hanzo_src))| {
-            let rival = rival.get(&shape).map(|(llama, llama_src)| Rival {
-                ratio: Ratio::of(&hanzo, llama),
-                llama: llama.clone(),
-                llama_src: llama_src.clone(),
+            let rival = rival.get(&shape).map(|(stats, src)| Rival {
+                ratio: Ratio::of(&hanzo, stats),
+                stats: stats.clone(),
+                src: src.clone(),
             });
             Cell {
                 shape,
@@ -396,7 +399,7 @@ pub fn markdown(run: &Run) -> String {
     let model = run.model.rsplit('/').next().unwrap_or("");
     let model: String = model.chars().take(20).collect();
     let mut out = String::from(
-        "| model | backend | phase | n | conc | hanzo t/s | llama t/s | ratio | verdict | best hanzo | best llama | best ratio |\n\
+        "| model | backend | phase | n | conc | hanzo t/s | rival t/s | ratio | verdict | best hanzo | best rival | best ratio |\n\
          |---|---|---|---|---|---|---|---|---|---|---|---|\n",
     );
     for c in &run.cells {
@@ -408,11 +411,11 @@ pub fn markdown(run: &Run) -> String {
             c.shape.n,
             c.shape.concurrency,
             plus_minus(&c.hanzo, "±", true),
-            or_dash(r.map(|r| plus_minus(&r.llama, "±", true))),
+            or_dash(r.map(|r| plus_minus(&r.stats, "±", true))),
             or_dash(r.map(|r| format!("{:.3}±{:.3}", r.ratio.ratio, r.ratio.ci))),
             or_dash(r.map(|r| r.ratio.verdict.name().into())),
             c.hanzo.best,
-            or_dash(r.map(|r| format!("{:.2}", r.llama.best))),
+            or_dash(r.map(|r| format!("{:.2}", r.stats.best))),
             or_dash(r.map(|r| format!("{:.3}", r.ratio.best))),
         );
     }
@@ -473,13 +476,13 @@ pub fn macros(run: &Run) -> String {
             set(format!("{key}Hci"), format!("{:.1}", sp.ci));
         }
         let Some(r) = &c.rival else { continue };
-        set(format!("{key}L"), format!("{:.1}", r.llama.mean));
+        set(format!("{key}L"), format!("{:.1}", r.stats.mean));
         set(format!("{key}R"), format!("{:.2}", r.ratio.ratio));
         set(format!("{key}V"), r.ratio.verdict.name().into());
         if let (Phase::Decode, 1, Some(gb)) = (c.shape.phase, c.shape.concurrency, model_gb) {
             let b = title(&run.backend);
             set(format!("r{b}EffBW"), format!("{:.0}", c.hanzo.mean * gb));
-            set(format!("r{b}RoofBW"), format!("{:.0}", r.llama.mean * gb));
+            set(format!("r{b}RoofBW"), format!("{:.0}", r.stats.mean * gb));
             set(
                 format!("r{b}Reach"),
                 format!("{:.0}\\%", 100.0 * r.ratio.ratio),
@@ -502,7 +505,7 @@ pub fn macros(run: &Run) -> String {
 pub fn tabular(run: &Run) -> String {
     let mut out = String::from(
         "\\begin{tabular}{@{}llrrrrl@{}}\n\\toprule\n\
-         backend & phase & $n$ & hanzo t/s & llama t/s & ratio & verdict \\\\\n\\midrule\n",
+         backend & phase & $n$ & hanzo t/s & rival t/s & ratio & verdict \\\\\n\\midrule\n",
     );
     for c in &run.cells {
         let r = c.rival.as_ref();
@@ -512,7 +515,7 @@ pub fn tabular(run: &Run) -> String {
             c.shape.phase.name(),
             c.shape.n,
             plus_minus(&c.hanzo, "$\\pm$", false),
-            or_dash(r.map(|r| plus_minus(&r.llama, "$\\pm$", false))),
+            or_dash(r.map(|r| plus_minus(&r.stats, "$\\pm$", false))),
             or_dash(r.map(|r| format!("{:.2}$\\pm${:.2}", r.ratio.ratio, r.ratio.ci))),
             or_dash(r.map(|r| format!("\\textsc{{{}}}", r.ratio.verdict.name().to_lowercase()))),
         );
@@ -567,14 +570,17 @@ pub struct Pins {
     pub hanzo_rocm_kernels: Option<String>,
     #[arg(long)]
     pub hanzo_metal_kernels: Option<String>,
+    /// The rival engine's name: the subject its rows are filed under.
     #[arg(long)]
-    pub llama_sha: Option<String>,
+    pub rival: Option<String>,
+    #[arg(long)]
+    pub rival_sha: Option<String>,
     #[arg(long, action = clap::ArgAction::Set, default_value_t = false)]
-    pub llama_git_dirty: bool,
+    pub rival_git_dirty: bool,
     #[arg(long)]
     pub hanzo_bench_bin: Option<String>,
     #[arg(long)]
-    pub llama_bench_bin: Option<String>,
+    pub rival_bench_bin: Option<String>,
     #[arg(long)]
     pub model_path: Option<String>,
     #[arg(long)]
@@ -595,7 +601,7 @@ pub struct Manifest {
     #[serde(flatten)]
     pub pins: Pins,
     pub hanzo_bench_bin_sha256: Option<String>,
-    pub llama_bench_bin_sha256: Option<String>,
+    pub rival_bench_bin_sha256: Option<String>,
     pub model_bytes: Option<u64>,
     pub model_sha256: Option<String>,
 }
@@ -649,7 +655,7 @@ pub fn pin(pins: Pins) -> Result<Manifest> {
                 .to_string(),
         ),
         hanzo_bench_bin_sha256: sha256(pins.hanzo_bench_bin.as_ref())?,
-        llama_bench_bin_sha256: sha256(pins.llama_bench_bin.as_ref())?,
+        rival_bench_bin_sha256: sha256(pins.rival_bench_bin.as_ref())?,
         model_bytes: model
             .and_then(|p| std::fs::metadata(p).ok())
             .map(|m| m.len()),
@@ -769,10 +775,17 @@ fn filed(run: &Run) -> Result<Vec<Experiment>> {
         .collect(),
         args: Some(pins.params.hanzo_args.clone()),
     };
+    let rival = pins.rival.as_deref().filter(|r| !r.is_empty());
+    if rival.is_none() && run.cells.iter().any(|c| c.rival.is_some()) {
+        bail!(
+            "{}: manifest.json names no rival; nothing says whose rows rival_*.json hold",
+            run.run
+        );
+    }
     let theirs = Engine {
-        subject: format!("llama.cpp/{place}"),
-        git_sha: text(&pins.llama_sha),
-        git_dirty: pins.llama_git_dirty,
+        subject: format!("{}/{place}", rival.unwrap_or_default()),
+        git_sha: text(&pins.rival_sha),
+        git_dirty: pins.rival_git_dirty,
         lib_versions: BTreeMap::new(),
         args: None,
     };
@@ -817,13 +830,13 @@ fn filed(run: &Run) -> Result<Vec<Experiment>> {
         .iter()
         .flat_map(|c| {
             let r = c.rival.as_ref();
-            let noisy = c.hanzo.noisy() || r.is_some_and(|r| r.llama.noisy());
+            let noisy = c.hanzo.noisy() || r.is_some_and(|r| r.stats.noisy());
             let versus = r.map(|r| Versus {
                 subject: theirs.subject.clone(),
                 ratio: r.ratio.clone(),
             });
             let mine = file(&ours, c.shape, &c.hanzo, noisy, versus);
-            std::iter::once(mine).chain(r.map(|r| file(&theirs, c.shape, &r.llama, noisy, None)))
+            std::iter::once(mine).chain(r.map(|r| file(&theirs, c.shape, &r.stats, noisy, None)))
         })
         .collect())
 }

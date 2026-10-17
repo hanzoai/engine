@@ -851,7 +851,7 @@ pub fn w8a8_matmul(
 }
 
 /// W8A8 indexed MoE GEMM on CUDA. `input` [T, 1|topk, K] (or [T, K]) is quantized per row and
-/// 128-group ([`Fp8Mode::Gather`], vLLM's per_token_group_fp8_quant); weights [E, N, K] F8E4M3,
+/// 128-group ([`Fp8Mode::Gather`], per_token_group_fp8_quant); weights [E, N, K] F8E4M3,
 /// scales [E, N/128, K/128]; indices [T, topk] u32. Output [T, topk, N] in the input's dtype.
 #[cfg(feature = "cuda")]
 pub fn fp8_indexed_moe_gemm(

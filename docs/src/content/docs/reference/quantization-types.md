@@ -71,7 +71,7 @@ On AMD `gfx1151` (Strix Halo / Radeon 8060S) the **full GGUF quant zoo decodes r
 | I-quants | `iq1_s` `iq1_m` `iq2_xxs` `iq2_xs` `iq2_s` `iq3_xxs` `iq3_s` `iq4_xs` `iq4_nl` |
 | Ternary | `tq1_0` `tq2_0` |
 
-Adding a format is one decode function + one traits row (no per-format kernel). See [ROCm GGUF decode on RDNA3.5 APUs](/hanzo/guides/perf/rocm-apu-gguf/) for the architecture and measured performance vs llama.cpp.
+Adding a format is one decode function + one traits row (no per-format kernel). See [ROCm GGUF decode on RDNA3.5 APUs](/hanzo/guides/perf/rocm-apu-gguf/) for the architecture and its measured performance.
 
 ### FP8
 

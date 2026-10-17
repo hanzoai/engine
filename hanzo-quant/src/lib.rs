@@ -576,7 +576,8 @@ impl QuantizedConfig {
 pub enum QuantMethodConfig {
     GptqAwq {
         bits: i32,
-        use_exllama: bool,
+        /// The weights are in the shuffled layout (rows sequential, packed values reordered).
+        is_shuffled: bool,
         q_weight: Tensor,
         qzeros: Option<Tensor>,
         scales: Tensor,

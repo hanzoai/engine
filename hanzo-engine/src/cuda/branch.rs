@@ -1,9 +1,8 @@
 //! Branch: a side Lane forked from, and joined back into, a main Lane by two reused events.
 //!
-//! This is vLLM's shared-expert overlap (moe_runner.py): fork an aux stream before the router
-//! gate GEMM, run the shared expert on it while the main stream routes and runs the routed
-//! experts, join before the combine. Events are capture-safe, so a captured forward keeps the
-//! two branches parallel on replay.
+//! Shared-expert overlap: fork an aux stream before the router gate GEMM, run the shared expert
+//! on it while the main stream routes and runs the routed experts, join before the combine.
+//! Events are capture-safe, so a captured forward keeps the two branches parallel on replay.
 //!
 //! Contract: callers allocate every buffer either branch touches on the main stream before
 //! `run` and drop it after, and cudarc event tracking is off (the engine synchronizes these two
@@ -33,7 +32,7 @@ impl Branch {
                 "Branch needs cudarc event tracking off (disable it before any weights load)"
             );
         }
-        // Non-blocking, default priority: vLLM's aux stream.
+        // Non-blocking, default priority.
         let side = Lane::new(ctx.new_stream().w()?)?;
         let flags = Some(sys::CUevent_flags::CU_EVENT_DISABLE_TIMING);
         Ok(Self {

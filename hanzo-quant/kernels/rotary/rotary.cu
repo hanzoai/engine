@@ -4,7 +4,7 @@
 
 #include "cuda_compat.h"
 
-namespace vllm {
+namespace hanzo_rotary {
 
 template <typename scalar_t, bool IS_NEOX>
 inline __device__ void apply_rotary_embedding(
@@ -16,14 +16,14 @@ inline __device__ void apply_rotary_embedding(
     // GPT-NeoX style rotary embedding.
     x_index = rot_offset;
     y_index = rot_dim + rot_offset;
-    cos = VLLM_LDG(cos_ptr + x_index);
-    sin = VLLM_LDG(sin_ptr + x_index);
+    cos = HANZO_LDG(cos_ptr + x_index);
+    sin = HANZO_LDG(sin_ptr + x_index);
   } else {
     // GPT-J style rotary embedding.
     x_index = 2 * rot_offset;
     y_index = 2 * rot_offset + 1;
-    cos = VLLM_LDG(cos_ptr + x_index / 2);
-    sin = VLLM_LDG(sin_ptr + x_index / 2);
+    cos = HANZO_LDG(cos_ptr + x_index / 2);
+    sin = HANZO_LDG(sin_ptr + x_index / 2);
   }
 
   const scalar_t x = arr[x_index];
@@ -103,16 +103,18 @@ __global__ void rotary_embedding_positions_kernel(
   }
 }
 
-} // namespace vllm
+} // namespace hanzo_rotary
 
 #define CALL_ROTARY(T, IS_NEOX)                                                \
-  vllm::rotary_embedding_kernel<T, IS_NEOX><<<grid, block, 0, custream>>>(     \
-      reinterpret_cast<T *>(query), reinterpret_cast<T *>(key),                \
-      reinterpret_cast<T *>(cos_cache), reinterpret_cast<T *>(sin_cache),      \
-      rot_dim, query_stride, key_stride, num_heads, num_kv_heads, head_size);
+  hanzo_rotary::rotary_embedding_kernel<T, IS_NEOX>                            \
+      <<<grid, block, 0, custream>>>(                                          \
+          reinterpret_cast<T *>(query), reinterpret_cast<T *>(key),            \
+          reinterpret_cast<T *>(cos_cache), reinterpret_cast<T *>(sin_cache),  \
+          rot_dim, query_stride, key_stride, num_heads, num_kv_heads,          \
+          head_size);
 
 #define CALL_ROTARY_POSITIONS(T, IS_NEOX)                                      \
-  vllm::rotary_embedding_positions_kernel<T, IS_NEOX>                          \
+  hanzo_rotary::rotary_embedding_positions_kernel<T, IS_NEOX>                  \
       <<<grid, block, 0, custream>>>(                                          \
           reinterpret_cast<T *>(query), reinterpret_cast<T *>(key),            \
           reinterpret_cast<T *>(cos_cache), reinterpret_cast<T *>(sin_cache),  \

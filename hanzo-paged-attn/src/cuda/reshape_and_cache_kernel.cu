@@ -26,9 +26,9 @@
     }                                                                          \
   } while (0)
 
-namespace vllm {
+namespace pagedattn {
 
-template <typename scalar_t, typename cache_t, vllm::Fp8KVCacheDataType kv_dt>
+template <typename scalar_t, typename cache_t, pagedattn::Fp8KVCacheDataType kv_dt>
 __global__ void reshape_and_cache_kernel(
     const scalar_t *__restrict__ key,   // [num_tokens, num_heads, head_size]
     const scalar_t *__restrict__ value, // [num_tokens, num_heads, head_size]
@@ -70,22 +70,22 @@ __global__ void reshape_and_cache_kernel(
         block_offset;
     scalar_t tgt_key = key[src_key_idx];
     scalar_t tgt_value = value[src_value_idx];
-    if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kAuto) {
+    if constexpr (kv_dt == pagedattn::Fp8KVCacheDataType::kAuto) {
       key_cache[tgt_key_idx] = tgt_key;
       value_cache[tgt_value_idx] = tgt_value;
     } else {
       key_cache[tgt_key_idx] =
-          vllm::fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_key,
+          pagedattn::fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_key,
                                                               *k_scale);
       value_cache[tgt_value_idx] =
-          vllm::fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_value,
+          pagedattn::fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_value,
                                                               *v_scale);
     }
   }
 }
 
 #define CALL_RESHAPE_AND_CACHE(KV_T, CACHE_T, KV_DTYPE)                        \
-  vllm::reshape_and_cache_kernel<KV_T, CACHE_T, KV_DTYPE>                      \
+  pagedattn::reshape_and_cache_kernel<KV_T, CACHE_T, KV_DTYPE>                      \
       <<<grid, block, 0, stream>>>(                                            \
           reinterpret_cast<KV_T *>(key), reinterpret_cast<KV_T *>(value),      \
           reinterpret_cast<CACHE_T *>(key_cache),                              \
@@ -94,7 +94,7 @@ __global__ void reshape_and_cache_kernel(
           reinterpret_cast<const float *>(k_scale),                            \
           reinterpret_cast<const float *>(v_scale));
 
-} // namespace vllm
+} // namespace pagedattn
 
 extern "C" void reshape_and_cache(
     void *key,         // [num_tokens, num_heads, head_size]
@@ -117,24 +117,24 @@ extern "C" void reshape_and_cache(
     // FP8 E4M3 cache
     if (dtype == 0) {
       CALL_RESHAPE_AND_CACHE(uint16_t, uint8_t,
-                             vllm::Fp8KVCacheDataType::kFp8E4M3);
+                             pagedattn::Fp8KVCacheDataType::kFp8E4M3);
     } else if (dtype == 1) {
       CALL_RESHAPE_AND_CACHE(__nv_bfloat16, uint8_t,
-                             vllm::Fp8KVCacheDataType::kFp8E4M3);
+                             pagedattn::Fp8KVCacheDataType::kFp8E4M3);
     } else if (dtype == 2) {
       CALL_RESHAPE_AND_CACHE(float, uint8_t,
-                             vllm::Fp8KVCacheDataType::kFp8E4M3);
+                             pagedattn::Fp8KVCacheDataType::kFp8E4M3);
     }
   } else {
     // Non-FP8 cache
     if (dtype == 0) {
       CALL_RESHAPE_AND_CACHE(uint16_t, uint16_t,
-                             vllm::Fp8KVCacheDataType::kAuto);
+                             pagedattn::Fp8KVCacheDataType::kAuto);
     } else if (dtype == 1) {
       CALL_RESHAPE_AND_CACHE(__nv_bfloat16, __nv_bfloat16,
-                             vllm::Fp8KVCacheDataType::kAuto);
+                             pagedattn::Fp8KVCacheDataType::kAuto);
     } else if (dtype == 2) {
-      CALL_RESHAPE_AND_CACHE(float, float, vllm::Fp8KVCacheDataType::kAuto);
+      CALL_RESHAPE_AND_CACHE(float, float, pagedattn::Fp8KVCacheDataType::kAuto);
     }
   }
   CUDA_CHECK(cudaGetLastError());
