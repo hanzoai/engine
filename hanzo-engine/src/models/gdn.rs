@@ -89,6 +89,17 @@ impl RmsNormGated {
         }
     }
 
+    /// Whether the gate is `sigmoid(gate)` rather than `silu(gate)`; the fused ROCm mixer reads it.
+    #[cfg(feature = "rocm")]
+    pub fn gates_with_sigmoid(&self) -> bool {
+        self.act == Act::Sigmoid
+    }
+
+    #[cfg(feature = "rocm")]
+    pub fn eps(&self) -> f64 {
+        self.eps
+    }
+
     pub fn forward(&self, x: &Tensor, gate: &Tensor) -> Result<Tensor> {
         let dtype = x.dtype();
         let x = x.to_dtype(DType::F32)?.contiguous()?;
@@ -352,15 +363,8 @@ pub fn softplus(x: &Tensor) -> Result<Tensor> {
     (Tensor::ones_like(x)? + x.exp()?)?.log()
 }
 
-// ROCm eager has no fused Sigmoid op; compose it from exp there (affine/exp/broadcast_div all
-// already lower on ROCm via softmax/l2_norm). Other backends keep the fused kernel.
 pub fn sigmoid(x: &Tensor) -> Result<Tensor> {
-    if x.device().is_rocm() {
-        let denom = x.affine(-1.0, 0.0)?.exp()?.affine(1.0, 1.0)?;
-        Tensor::ones_like(x)?.broadcast_div(&denom)
-    } else {
-        hanzo_nn::ops::sigmoid(x)
-    }
+    hanzo_nn::ops::sigmoid(x)
 }
 
 /// A/B knob: `GDN_FUSED_FALLBACK=1` forces the portable ops-composed scan on every backend,

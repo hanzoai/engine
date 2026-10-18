@@ -951,13 +951,37 @@ impl QGatedDeltaNet {
         // 3. Causal conv1d over the concatenated qkv, then silu.
         let mixed_qkv = if rd != DType::F32 {
             self.causal_conv1d_served(&mixed_qkv, cache, rd)?
-        } else if cache.seqlen_offset > 0 && seq_len == 1 {
-            self.causal_conv1d_update(&mixed_qkv, cache)?
         } else {
-            self.causal_conv1d_full(&mixed_qkv, cache)?
+            self.conv(&mixed_qkv, cache)?
         };
         let mixed_qkv = store(mixed_qkv)?;
         note("conv", &mixed_qkv);
+
+        // 3-8 on ROCm: one launch from the conv output to the gated norm's output. A forward that
+        // keeps a trail steps the recurrence per position below instead.
+        #[cfg(feature = "rocm")]
+        if mixed_qkv.device().is_rocm()
+            && cache.trail.is_none()
+            && self.head_k_dim == 128
+            && self.head_v_dim == 128
+        {
+            let f32s = |t: &Tensor| t.to_dtype(DType::F32)?.contiguous();
+            let y = hanzo_ml::rocm_backend::gdn_mixer_rocm(
+                &mixed_qkv,
+                &f32s(&a)?,
+                &f32s(&b)?,
+                &f32s(&z.reshape((batch_size, seq_len, self.value_dim))?)?,
+                &self.a,
+                &self.dt_bias,
+                &self.norm.weight,
+                &cache.recurrent_state,
+                self.num_k_heads,
+                self.norm.eps() as f32,
+                self.norm.gates_with_sigmoid(),
+            )?;
+            cache.seqlen_offset += seq_len;
+            return self.out_proj.forward(&y)?.to_dtype(rd);
+        }
 
         let q = mixed_qkv.narrow(D::Minus1, 0, self.key_dim)?;
         let k = mixed_qkv.narrow(D::Minus1, self.key_dim, self.key_dim)?;
@@ -1073,6 +1097,25 @@ impl QGatedDeltaNet {
         let acc = acc.expect("kernel width >= 1");
         let out = (acc.clone() / (acc.neg()?.exp()? + 1.0)?)?;
         out.transpose(1, 2)
+    }
+
+    /// The causal conv1d with silu over the projected q|k|v, advancing the conv state. On ROCm one
+    /// launch serves prefill and decode, the state rewritten in place.
+    fn conv(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
+        #[cfg(feature = "rocm")]
+        if x.device().is_rocm() && self.conv_kernel_size == 4 {
+            return hanzo_ml::rocm_backend::gdn_conv_rocm(
+                &x.contiguous()?,
+                &self.conv1d_weight,
+                &cache.conv_state,
+                cache.seqlen_offset == 0,
+            );
+        }
+        if cache.seqlen_offset > 0 && x.dim(1)? == 1 {
+            self.causal_conv1d_update(x, cache)
+        } else {
+            self.causal_conv1d_full(x, cache)
+        }
     }
 
     fn causal_conv1d_update(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
