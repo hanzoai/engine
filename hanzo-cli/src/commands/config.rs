@@ -27,8 +27,8 @@ pub async fn run_from_config(path: std::path::PathBuf) -> Result<()> {
     let config = load_cli_config(&path)?;
 
     match config {
-        CliConfig::Serve(cfg) => run_serve_config(cfg).await,
-        CliConfig::Run(cfg) => run_run_config(cfg).await,
+        CliConfig::Serve(cfg) => run_serve_config(*cfg).await,
+        CliConfig::Run(cfg) => run_run_config(*cfg).await,
     }
 }
 
@@ -44,6 +44,12 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
     } = cfg;
 
     let global = global.to_global_options()?;
+    let defaults = server.defaults.clone().validated()?;
+    if defaults.served_name.is_some() {
+        anyhow::bail!(
+            "served_name names the one model `hanzo serve` loads; a config names each model with its model_id"
+        );
+    }
     apply_agent_mode(&mut runtime);
     validate_agent_options(&runtime)?;
     log_agent_runtime(&runtime, server.max_tool_rounds);
@@ -123,6 +129,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         .with_hanzo(hanzo)
         .with_max_tool_rounds_optional(server.max_tool_rounds)
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
+        .with_defaults(defaults)
         .build()
         .await?;
 

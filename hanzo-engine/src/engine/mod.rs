@@ -191,6 +191,20 @@ fn model_fingerprint(meta: &crate::pipeline::GeneralMetadata) -> u64 {
     h
 }
 
+/// Move a sequence on after its prompt step. A one-shot sequence (an image) is done. A sequence
+/// the prompt step itself finished (a one-token budget, or EOS first) stays finished; only a
+/// running one goes on to decode.
+fn after_prompt_step(seq: &crate::sequence::Sequence) {
+    match seq.sequence_stepping_type() {
+        SeqStepType::OneShot => seq.set_state(SequenceState::Done(StopReason::GeneratedImage)),
+        SeqStepType::PromptAndDecode => {
+            if seq.is_running() {
+                seq.set_state(SequenceState::RunningCompletion)
+            }
+        }
+    }
+}
+
 pub struct Engine {
     tx: Sender<Request>,
     rx: Arc<Mutex<Receiver<Request>>>,
@@ -586,14 +600,7 @@ impl Engine {
                         self.logger.add_tokens_processed(total_processed_tokens);
 
                         for seq in scheduled.prompt.iter_mut() {
-                            match seq.sequence_stepping_type() {
-                                SeqStepType::OneShot => {
-                                    seq.set_state(SequenceState::Done(StopReason::GeneratedImage))
-                                }
-                                SeqStepType::PromptAndDecode => {
-                                    seq.set_state(SequenceState::RunningCompletion)
-                                }
-                            }
+                            after_prompt_step(seq);
                             let now = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .expect("Time travel has occurred!")
@@ -1016,5 +1023,29 @@ impl Engine {
                 writer.write_all(req.as_bytes()).unwrap();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::after_prompt_step;
+    use crate::sequence::{test_sequence, SequenceState, StopReason};
+
+    /// A running sequence goes on to decode; one its prompt step finished stays finished, so it is
+    /// never decoded again nor finished twice.
+    #[test]
+    fn a_prompt_step_finish_is_kept() {
+        let seq = test_sequence(vec![1, 2, 3], None);
+        seq.set_state(SequenceState::RunningPrompt);
+        after_prompt_step(&seq);
+        assert!(seq.is_completion());
+
+        let seq = test_sequence(vec![1, 2, 3], None);
+        seq.set_state(SequenceState::Done(StopReason::Length(1)));
+        after_prompt_step(&seq);
+        assert!(matches!(
+            seq.getstate(),
+            SequenceState::Done(StopReason::Length(1))
+        ));
     }
 }

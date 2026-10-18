@@ -4,31 +4,35 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
-    time::Duration,
 };
 
 use crate::{
     completion_core::{
-        convert_stop_tokens, get_dry_sampling_params, handle_completion_error,
-        BaseCompletionResponder,
+        convert_stop_tokens, error_response, get_dry_sampling_params, handle_completion_error,
+        handle_request_error, model_error, model_error_response, BaseCompletionResponder,
     },
+    controls,
+    defaults::Defaults,
+    error::ApiError,
     handler_core::{
         base_process_non_streaming_response, create_response_channel, send_request,
-        BaseJsonModelError, ErrorToResponse, JsonError, ModelErrorMessage,
+        ModelErrorMessage,
     },
     openai::{CompletionRequest, Grammar},
-    streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
+    shape::{self, Framing},
+    streaming::{base_create_streamer, error_event, keep_alive, BaseStreamer, DoneState},
     types::{ExtractedState, OnChunkCallback, OnDoneCallback, SharedState},
-    util::{sanitize_error_message, validate_model_name},
+    util::validate_model_name,
 };
 use anyhow::Result;
 use axum::{
-    extract::{Json, State},
-    http::{self},
+    extract::{rejection::JsonRejection, Json, State},
+    http::{self, StatusCode},
     response::{
-        sse::{Event, KeepAlive, KeepAliveStream},
+        sse::{Event, KeepAliveStream},
         IntoResponse, Sse,
     },
+    Extension,
 };
 use hanzo_engine::{
     CompletionChunkResponse, CompletionResponse, Constraint, Hanzo, NormalRequest, Request,
@@ -92,6 +96,10 @@ impl futures::Stream for CompletionStreamer {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.done_state {
             DoneState::SendingDone => {
+                // The usage chunk (`include_usage`) goes last, just before `[DONE]`.
+                if let Some(tail) = self.tail.take() {
+                    return Poll::Ready(Some(Event::default().json_data(tail)));
+                }
                 // https://platform.openai.com/docs/api-reference/completions/create
                 // If true, returns a stream of events that happen during the Run as server-sent events, terminating when the Run enters a terminal state with a data: [DONE] message.
                 self.done_state = DoneState::Done;
@@ -112,20 +120,22 @@ impl futures::Stream for CompletionStreamer {
                     Hanzo::maybe_log_error(self.state.clone(), &ModelErrorMessage(msg.to_string()));
                     // Done now, just need to send the [DONE]
                     self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(Event::default().data(msg))))
+                    Poll::Ready(Some(Ok(error_event(model_error(&msg)))))
                 }
                 Response::ValidationError(e) => {
                     self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(
-                        Event::default().data(sanitize_error_message(e.as_ref()))
-                    )))
+                    Poll::Ready(Some(Ok(error_event(ApiError::from_error(
+                        e.as_ref(),
+                        StatusCode::BAD_REQUEST,
+                    )))))
                 }
                 Response::InternalError(e) => {
                     Hanzo::maybe_log_error(self.state.clone(), &*e);
                     self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(
-                        Event::default().data(sanitize_error_message(e.as_ref()))
-                    )))
+                    Poll::Ready(Some(Ok(error_event(ApiError::from_error(
+                        e.as_ref(),
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                    )))))
                 }
                 Response::CompletionChunk(mut response) => {
                     if response.choices.iter().all(|x| x.finish_reason.is_some()) {
@@ -134,15 +144,21 @@ impl futures::Stream for CompletionStreamer {
                     // Done now, just need to send the [DONE]
                     Hanzo::maybe_log_response(self.state.clone(), &response);
 
-                    if let Some(on_chunk) = &self.on_chunk {
+                    let this = &mut *self;
+                    if let Some(on_chunk) = &this.on_chunk {
                         response = on_chunk(response);
                     }
 
-                    if self.store_chunks {
-                        self.chunks.push(response.clone());
+                    if this.store_chunks {
+                        this.chunks.push(response.clone());
                     }
 
-                    Poll::Ready(Some(Event::default().json_data(response)))
+                    let (frame, tail) =
+                        shape::chunk(&response, response.usage.as_ref(), &this.framing);
+                    if tail.is_some() {
+                        this.tail = tail;
+                    }
+                    Poll::Ready(Some(Event::default().json_data(frame)))
                 }
                 Response::AgenticToolCallProgress { .. }
                 | Response::AgenticToolApprovalRequired { .. }
@@ -171,26 +187,39 @@ impl futures::Stream for CompletionStreamer {
 pub type CompletionResponder =
     BaseCompletionResponder<CompletionResponse, KeepAliveStream<CompletionStreamer>>;
 
-/// JSON error response structure for model errors.
-type JsonModelError = BaseJsonModelError<CompletionResponse>;
-impl ErrorToResponse for JsonModelError {}
-
 impl IntoResponse for CompletionResponder {
-    /// Converts the completion responder into an HTTP response.
+    /// Converts the completion responder into an HTTP response. Errors are OpenAI's envelope; a
+    /// finished body carries usage details and `timings`.
     fn into_response(self) -> axum::response::Response {
         match self {
             CompletionResponder::Sse(s) => s.into_response(),
-            CompletionResponder::Json(s) => Json(s).into_response(),
+            CompletionResponder::Json(s) => Json(shape::body(&s, &s.usage)).into_response(),
             CompletionResponder::InternalError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                error_response(e.as_ref(), http::StatusCode::INTERNAL_SERVER_ERROR)
             }
             CompletionResponder::ValidationError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+                error_response(e.as_ref(), http::StatusCode::BAD_REQUEST)
             }
-            CompletionResponder::ModelError(msg, response) => JsonModelError::new(msg, response)
-                .to_response(http::StatusCode::INTERNAL_SERVER_ERROR),
+            CompletionResponder::ModelError(msg, response) => {
+                model_error_response(&msg, shape::body(&response, &response.usage))
+            }
+        }
+    }
+}
+
+impl CompletionResponder {
+    /// Gives a finished body the served model id.
+    pub fn framed(self, framing: &Framing) -> Self {
+        let frame = |mut response: CompletionResponse| {
+            if let Some(model) = &framing.model {
+                response.model = model.clone();
+            }
+            response
+        };
+        match self {
+            Self::Json(response) => Self::Json(frame(response)),
+            Self::ModelError(msg, response) => Self::ModelError(msg, frame(response)),
+            other => other,
         }
     }
 }
@@ -198,17 +227,48 @@ impl IntoResponse for CompletionResponder {
 /// Parses and validates a completion request.
 ///
 /// This function transforms an OpenAI-compatible completion request into the
-/// request format used by hanzo.
+/// request format used by hanzo. The budget, sampling, drafter and `logit_bias` rules are the
+/// chat route's; the default budget is `--completion-max-tokens`.
 pub fn parse_request(
     oairequest: CompletionRequest,
     state: Arc<Hanzo>,
+    defaults: &Defaults,
     tx: Sender<Response>,
 ) -> Result<(Request, bool)> {
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     Hanzo::maybe_log_request(state.clone(), repr);
 
     // Validate that the requested model matches the loaded model
-    validate_model_name(&oairequest.model, state.clone())?;
+    validate_model_name(&oairequest.model, state.clone())
+        .map_err(|e| ApiError::new(StatusCode::NOT_FOUND, e.to_string()))?;
+    let model_id = (oairequest.model != "default").then(|| oairequest.model.clone());
+
+    let max_tokens = controls::fold_budget(&[
+        ("max_tokens", oairequest.max_tokens),
+        ("max_completion_tokens", oairequest.max_completion_tokens),
+    ])?;
+    let sampling = controls::Sampling {
+        temperature: oairequest.temperature,
+        top_p: oairequest.top_p,
+        top_k: oairequest.top_k,
+        min_p: oairequest.min_p,
+        presence_penalty: oairequest.presence_penalty,
+        frequency_penalty: oairequest.frequency_penalty,
+    }
+    .resolve(defaults)?;
+    let config = state
+        .config(model_id.as_deref())
+        .map_err(anyhow::Error::msg)?;
+    let serial = controls::drafter(
+        oairequest.drafter.as_deref(),
+        config.drafter.as_ref().map(|drafter| drafter.name()),
+    )?;
+    let logits_bias = controls::logit_bias(oairequest.logit_bias.as_ref(), config.vocab_size)?;
+    let max_len = controls::resolve_budget(
+        max_tokens,
+        defaults.completion_max_tokens,
+        defaults.max_tokens_cap,
+    )?;
 
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
 
@@ -230,19 +290,22 @@ pub fn parse_request(
                 best_of: oairequest.best_of,
             },
             sampling_params: SamplingParams {
-                temperature: oairequest.temperature,
-                top_k: oairequest.top_k,
-                top_p: oairequest.top_p,
-                min_p: oairequest.min_p,
+                temperature: sampling.temperature,
+                top_k: sampling.top_k.map(|k| k as usize),
+                top_p: sampling.top_p,
+                min_p: sampling.min_p,
                 top_n_logprobs: oairequest.logprobs.unwrap_or(1),
-                frequency_penalty: oairequest.frequency_penalty,
-                presence_penalty: oairequest.presence_penalty,
+                frequency_penalty: sampling.frequency_penalty,
+                presence_penalty: sampling.presence_penalty,
                 repetition_penalty: oairequest.repetition_penalty,
-                max_len: oairequest.max_tokens,
+                max_len: Some(max_len),
                 stop_toks,
-                logits_bias: oairequest.logit_bias,
+                logits_bias,
                 n_choices: oairequest.n_choices,
                 dry_params,
+                seed: oairequest.seed.map(|seed| seed as u64),
+                thinking_budget: None,
+                serial,
             },
             response: tx,
             return_logprobs: oairequest.logprobs.is_some(),
@@ -268,11 +331,7 @@ pub fn parse_request(
             agent_approval_notifier: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
-            model_id: if oairequest.model == "default" {
-                None
-            } else {
-                Some(oairequest.model.clone())
-            },
+            model_id,
             truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
             session_id: None,
             files: None,
@@ -291,13 +350,29 @@ pub fn parse_request(
 )]
 pub async fn completions(
     State(state): ExtractedState,
-    Json(oairequest): Json<CompletionRequest>,
+    Extension(defaults): Extension<Defaults>,
+    body: Result<Json<CompletionRequest>, JsonRejection>,
 ) -> CompletionResponder {
+    let oairequest = match body {
+        Ok(Json(oairequest)) => oairequest,
+        Err(rejection) => {
+            return CompletionResponder::ValidationError(Box::new(ApiError::from(rejection)))
+        }
+    };
     let (tx, mut rx) = create_response_channel(None);
+    let framing = Framing {
+        model: defaults.served_name.clone(),
+        include_usage: oairequest
+            .stream_options
+            .as_ref()
+            .and_then(|o| o.include_usage)
+            .unwrap_or(false),
+        single_call: false,
+    };
 
-    let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx) {
+    let (request, is_streaming) = match parse_request(oairequest, state.clone(), &defaults, tx) {
         Ok(x) => x,
-        Err(e) => return handle_error(state, e.into()),
+        Err(e) => return handle_request_error(state, e),
     };
 
     if let Err(e) = send_request(&state, request).await {
@@ -305,9 +380,11 @@ pub async fn completions(
     }
 
     if is_streaming {
-        CompletionResponder::Sse(create_streamer(rx, state, None, None))
+        CompletionResponder::Sse(create_streamer(rx, state, None, None, framing))
     } else {
-        process_non_streaming_response(&mut rx, state).await
+        process_non_streaming_response(&mut rx, state)
+            .await
+            .framed(&framing)
     }
 }
 
@@ -319,18 +396,17 @@ pub fn handle_error(
     handle_completion_error(state, e)
 }
 
-/// Creates a SSE streamer for chat completions with optional callbacks.
+/// Creates a SSE streamer for completions with optional callbacks. `framing` sets the served
+/// model id and where usage goes (`include_usage`).
 pub fn create_streamer(
     rx: Receiver<Response>,
     state: SharedState,
     on_chunk: Option<CompletionOnChunkCallback>,
     on_done: Option<CompletionOnDoneCallback>,
+    framing: Framing,
 ) -> Sse<KeepAliveStream<CompletionStreamer>> {
-    let streamer = base_create_streamer(rx, state, on_chunk, on_done);
-    let keep_alive_interval = get_keep_alive_interval();
-
-    Sse::new(streamer)
-        .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval)))
+    let streamer = base_create_streamer(rx, state, on_chunk, on_done, framing);
+    Sse::new(streamer).keep_alive(keep_alive())
 }
 
 /// Process non-streaming completion responses.

@@ -414,6 +414,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                             true,
                             None,
                             None,
+                            None,
                             Vec::new(),
                         )
                         .map_err(hanzo_ml::Error::msg)?;

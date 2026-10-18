@@ -31,6 +31,11 @@ pub trait ReasoningParser: Send + Sync {
     fn content(&self) -> Option<String>;
     /// Get all accumulated reasoning.
     fn reasoning_content(&self) -> Option<String>;
+    /// Whether the text read so far leaves the parser inside a reasoning block, so the next
+    /// tokens are reasoning.
+    fn in_reasoning(&self) -> bool {
+        false
+    }
     /// Check if there are any tool calls (Harmony-specific, defaults to false).
     fn has_tool_calls(&self) -> bool {
         false

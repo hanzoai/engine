@@ -70,6 +70,18 @@ pub struct SamplingParams {
     pub logits_bias: Option<HashMap<u32, f32>>,
     pub n_choices: usize,
     pub dry_params: Option<DrySamplingParams>,
+    /// Seeds this request's own RNG, so a sampled request can be replayed. `None` draws from the
+    /// engine's shared RNG.
+    #[serde(default)]
+    pub seed: Option<u64>,
+    /// Most tokens the model may spend inside its think block. When they run out the engine writes
+    /// the close for it and the answer follows in the same stream.
+    #[serde(default)]
+    pub thinking_budget: Option<usize>,
+    /// Decode one token per forward pass, without the server's speculative proposer. The output is
+    /// the same; only the speed differs.
+    #[serde(default)]
+    pub serial: bool,
 }
 
 impl SamplingParams {
@@ -94,6 +106,9 @@ impl SamplingParams {
             logits_bias: None,
             n_choices: 1,
             dry_params: None,
+            seed: None,
+            thinking_budget: None,
+            serial: false,
         }
     }
 
@@ -116,6 +131,9 @@ impl SamplingParams {
             logits_bias: None,
             n_choices: 1,
             dry_params: None,
+            seed: None,
+            thinking_budget: None,
+            serial: false,
         }
     }
 
@@ -264,6 +282,22 @@ pub trait CustomLogitsProcessor: Send + Sync {
 impl<T: Fn(&Tensor, &[u32]) -> Result<Tensor> + Send + Sync> CustomLogitsProcessor for T {
     fn apply(&self, logits: &Tensor, context: &[u32]) -> Result<Tensor> {
         self(logits, context)
+    }
+}
+
+/// OpenAI `logit_bias`: a value added to each named token's logit before sampling, so -100 bans
+/// the token and +100 all but forces it. Ids past the vocabulary are ignored.
+pub struct LogitBias(pub HashMap<u32, f32>);
+
+impl CustomLogitsProcessor for LogitBias {
+    fn apply(&self, logits: &Tensor, _context: &[u32]) -> Result<Tensor> {
+        let mut values = logits.to_dtype(hanzo_ml::DType::F32)?.to_vec1::<f32>()?;
+        for (&token, &bias) in &self.0 {
+            if let Some(logit) = values.get_mut(token as usize) {
+                *logit += bias;
+            }
+        }
+        Tensor::from_vec(values, logits.dims(), logits.device())?.to_dtype(logits.dtype())
     }
 }
 
@@ -1166,6 +1200,42 @@ impl Sampler {
         })
     }
 
+    /// Logprobs for a token the engine writes itself, such as a think close when the thinking
+    /// budget runs out: no draw, and the token's log-probability under the model's softmax.
+    pub(crate) fn forced(
+        &self,
+        logits: &Tensor,
+        token: u32,
+        return_logprobs: bool,
+    ) -> Result<Logprobs> {
+        let raw: Vec<f32> = logits.to_dtype(hanzo_ml::DType::F32)?.to_vec1()?;
+        let max = raw.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let sum: f32 = raw.iter().map(|&logit| (logit - max).exp()).sum();
+        let logprob = raw
+            .get(token as usize)
+            .map_or(f32::NEG_INFINITY, |&logit| logit - max - sum.ln());
+        let top_logprobs = if return_logprobs {
+            let probs: Vec<f32> = raw.iter().map(|&logit| (logit - max).exp() / sum).collect();
+            Some(self.get_top_logprobs(&probs)?)
+        } else {
+            None
+        };
+        let bytes = match &self.tokenizer {
+            Some(tokenizer) => Some(
+                tokenizer
+                    .decode(&[token], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            ),
+            None => None,
+        };
+        Ok(Logprobs {
+            token,
+            logprob,
+            top_logprobs,
+            bytes,
+        })
+    }
+
     pub(crate) fn sample_from_probs(
         &self,
         probs: &[f32],
@@ -1509,6 +1579,42 @@ mod tests {
     use super::{ModelGenerationDefaults, SamplingParams};
 
     #[test]
+    fn logit_bias_moves_the_greedy_choice() {
+        use super::{LogitBias, Sampler};
+        use hanzo_ml::{Device, Tensor};
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        let greedy = |bias: HashMap<u32, f32>| {
+            let sampler = Sampler::new(
+                None,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                -1,
+                1.0,
+                0.0,
+                vec![Arc::new(LogitBias(bias))],
+            )
+            .unwrap();
+            let logits = Tensor::arange(0f32, 16f32, &Device::Cpu).unwrap();
+            let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(0)));
+            sampler
+                .sample(logits, &[0], false, rng, false, false)
+                .unwrap()
+                .token
+        };
+        assert_eq!(greedy(HashMap::new()), 15);
+        assert_eq!(greedy(HashMap::from([(15, -100.0)])), 14);
+        assert_eq!(greedy(HashMap::from([(3, 100.0), (99, 100.0)])), 3);
+    }
+
+    #[test]
     fn test_argmax() {
         use super::Sampler;
         use hanzo_ml::{Device, Tensor};
@@ -1780,5 +1886,40 @@ mod tests {
         // Knobs orthogonal to the sampling/greedy choice still apply.
         assert_eq!(params.repetition_penalty, Some(1.1));
         assert_eq!(params.max_len, Some(256));
+    }
+
+    #[test]
+    fn a_forced_token_reports_its_logprob_under_the_softmax() {
+        use super::Sampler;
+        use hanzo_ml::{Device, Tensor};
+
+        let sampler = Sampler::new(
+            Some(0.7),
+            2,
+            None,
+            None,
+            None,
+            None,
+            None,
+            -1,
+            1.0,
+            0.0,
+            vec![],
+        )
+        .unwrap();
+        let logits = Tensor::new(&[0f32, 1.0, 3.0], &Device::Cpu).unwrap();
+        let forced = sampler.forced(&logits, 1, true).unwrap();
+        let sum = 1f32 + 1f32.exp() + 3f32.exp();
+        assert_eq!(forced.token, 1);
+        assert!((forced.logprob - (1.0 - sum.ln())).abs() < 1e-5);
+        let top = forced.top_logprobs.unwrap();
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0].token, 2);
+        assert_eq!(top[1].token, 1);
+        assert!(sampler
+            .forced(&logits, 0, false)
+            .unwrap()
+            .top_logprobs
+            .is_none());
     }
 }

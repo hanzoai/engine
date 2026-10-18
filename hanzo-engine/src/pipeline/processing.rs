@@ -41,6 +41,7 @@ pub trait Processor {
         add_special_tokens: bool,
         enable_thinking: Option<bool>,
         reasoning_effort: Option<ReasoningEffort>,
+        preserve_thinking: Option<bool>,
         tools: Vec<Tool>,
     ) -> Result<(Vec<u32>, String)> {
         // for message in messages.iter_mut() {
@@ -59,6 +60,7 @@ pub trait Processor {
             add_generation_prompt,
             enable_thinking,
             reasoning_effort,
+            preserve_thinking,
             self.template_action(),
             tools,
         )?;
@@ -103,12 +105,14 @@ fn flatten_content(content: MessageContent) -> MessageContent {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_chat_template(
     pipeline: &dyn Pipeline,
     messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
     enable_thinking: Option<bool>,
     reasoning_effort: Option<ReasoningEffort>,
+    preserve_thinking: Option<bool>,
     action: MessagesAction,
     tools: Vec<Tool>,
 ) -> Result<String> {
@@ -150,6 +154,7 @@ pub(crate) fn apply_chat_template(
         add_generation_prompt,
         enable_thinking,
         reasoning_effort,
+        preserve_thinking,
         template,
         bos_tok,
         eos_tok,

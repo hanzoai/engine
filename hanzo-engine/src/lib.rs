@@ -329,7 +329,7 @@ pub use speculative::{MtpConfig, SpeculativeConfig};
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
-pub use tools::{ToolCallResponse, ToolCallType, ToolCallbacks, ToolChoice};
+pub use tools::{ToolCallResponse, ToolCallType, ToolCallbacks, ToolChoice, FORCED_CALL_DECLINED};
 pub use topology::{LayerTopology, Topology};
 pub use utils::debug::{
     default_hanzo_filter, initialize_hanzo_logging, initialize_logging,
@@ -421,6 +421,10 @@ pub struct Config {
     pub modalities: Modalities,
     pub max_seq_len: Option<usize>,
     pub generation_defaults: Option<ModelGenerationDefaults>,
+    /// The speculative proposer attached at load.
+    pub drafter: Option<speculative::SpeculativeAttachInfo>,
+    /// Token ids the tokenizer knows, added tokens included; `None` without a tokenizer.
+    pub vocab_size: Option<usize>,
 }
 
 /// Configuration for recreating a model loader when reloading an unloaded model.
@@ -794,6 +798,10 @@ impl Hanzo {
         };
         let generation_defaults = pipeline_guard.generation_defaults();
         let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
+        let drafter = pipeline_guard.drafter();
+        let vocab_size = pipeline_guard
+            .tokenizer()
+            .map(|tokenizer| tokenizer.get_vocab_size(true));
         drop(pipeline_guard);
 
         // cuTile kernels JIT-compile into a thread-local cache, so warmup must run on the engine thread.
@@ -816,6 +824,8 @@ impl Hanzo {
             modalities,
             max_seq_len,
             generation_defaults,
+            drafter,
+            vocab_size,
         };
 
         // Shared between engine and EngineInstance so the SDK/HTTP API

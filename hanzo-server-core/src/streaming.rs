@@ -1,11 +1,17 @@
 //! SSE streaming utilities.
 
-use std::env;
+use std::{env, time::Duration};
 
+use axum::response::sse::{Event, KeepAlive};
 use hanzo_engine::Response;
+use serde_json::Value;
 use tokio::sync::mpsc::Receiver;
 
-use crate::types::SharedState;
+use crate::{
+    error::ApiError,
+    shape::{FirstCall, Framing},
+    types::SharedState,
+};
 
 /// Default keep-alive interval for Server-Sent Events (SSE) streams in milliseconds.
 pub const DEFAULT_KEEP_ALIVE_INTERVAL_MS: u64 = 10_000;
@@ -39,6 +45,12 @@ pub struct BaseStreamer<R, C, D> {
     pub on_chunk: Option<C>,
     /// Optional callback to execute when streaming completes
     pub on_done: Option<D>,
+    /// How chunks are written: the served model id, usage placement, one tool call.
+    pub framing: Framing,
+    /// Drops tool calls after the first when parallel calls are off.
+    pub first_call: FirstCall,
+    /// The usage chunk, sent just before `[DONE]` when `include_usage` is on.
+    pub tail: Option<Value>,
 }
 
 /// Generic function to create a SSE streamer with optional callbacks.
@@ -47,6 +59,7 @@ pub(crate) fn base_create_streamer<R, C, D>(
     state: SharedState,
     on_chunk: Option<C>,
     on_done: Option<D>,
+    framing: Framing,
 ) -> BaseStreamer<R, C, D> {
     let store_chunks = on_done.is_some();
 
@@ -58,6 +71,9 @@ pub(crate) fn base_create_streamer<R, C, D>(
         chunks: Vec::new(),
         on_chunk,
         on_done,
+        first_call: FirstCall::new(framing.single_call),
+        framing,
+        tail: None,
     }
 }
 
@@ -71,4 +87,16 @@ pub fn get_keep_alive_interval() -> u64 {
             })
         })
         .unwrap_or(DEFAULT_KEEP_ALIVE_INTERVAL_MS)
+}
+
+/// The comment line `: keepalive` after every interval of silence.
+pub fn keep_alive() -> KeepAlive {
+    KeepAlive::new()
+        .interval(Duration::from_millis(get_keep_alive_interval()))
+        .text("keepalive")
+}
+
+/// An error after the stream started: a `data:` frame in OpenAI's envelope; `[DONE]` follows it.
+pub(crate) fn error_event(error: ApiError) -> Event {
+    Event::default().data(error.body().to_string())
 }

@@ -166,7 +166,7 @@ generate_repr!(CompletionChunkChoice);
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 /// OpenAI compatible (superset) usage during a request.
 pub struct Usage {
     pub completion_tokens: usize,
@@ -180,6 +180,13 @@ pub struct Usage {
     pub total_time_sec: f32,
     pub total_prompt_time_sec: f32,
     pub total_completion_time_sec: f32,
+    /// Generated tokens inside the think block, the close included. Counted inside
+    /// `completion_tokens`.
+    pub reasoning_tokens: usize,
+    /// Tokens the speculative proposer drafted for this request.
+    pub draft_tokens: usize,
+    /// Drafted tokens the target model accepted.
+    pub draft_accepted: usize,
 }
 
 generate_repr!(Usage);
@@ -286,6 +293,9 @@ pub struct CompletionChunkResponse {
     pub model: String,
     pub system_fingerprint: String,
     pub object: String,
+    /// Set on the chunk that finishes the request, like the chat chunk's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
 }
 
 generate_repr!(CompletionChunkResponse);

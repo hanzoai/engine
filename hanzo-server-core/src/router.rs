@@ -113,6 +113,8 @@ pub struct RouterBuilder {
     max_body_limit: Option<usize>,
     /// Server-level agentic defaults
     agentic_defaults: AgenticDefaults,
+    /// Request defaults: budget, cap, sampling and reasoning controls, the served model id
+    defaults: crate::defaults::Defaults,
 }
 
 impl Default for RouterBuilder {
@@ -127,6 +129,7 @@ impl Default for RouterBuilder {
             allowed_origins: None,
             max_body_limit: None,
             agentic_defaults: AgenticDefaults::default(),
+            defaults: crate::defaults::Defaults::default(),
         }
     }
 }
@@ -235,6 +238,12 @@ impl RouterBuilder {
         self
     }
 
+    /// Sets the request defaults: budget, cap, sampling and reasoning controls, served model id.
+    pub fn with_defaults(mut self, defaults: crate::defaults::Defaults) -> Self {
+        self.defaults = defaults;
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -258,6 +267,7 @@ impl RouterBuilder {
             self.allowed_origins,
             self.max_body_limit,
             self.agentic_defaults,
+            self.defaults,
         )?;
 
         #[cfg(feature = "swagger-ui")]
@@ -283,6 +293,7 @@ fn init_router(
     allowed_origins: Option<Vec<String>>,
     max_body_limit: Option<usize>,
     agentic_defaults: AgenticDefaults,
+    defaults: crate::defaults::Defaults,
 ) -> Result<Router> {
     let allow_origin = if let Some(origins) = allowed_origins {
         let parsed_origins: Result<Vec<_>, _> = origins.into_iter().map(|o| o.parse()).collect();
@@ -381,6 +392,7 @@ fn init_router(
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .layer(Extension(agentic_defaults.approval_broker.clone()))
         .layer(Extension(agentic_defaults))
+        .layer(Extension(defaults))
         .layer(Extension(TrainingState::default()))
         .with_state(state);
 

@@ -23,18 +23,19 @@ pub type ToolCallbacks = HashMap<String, Arc<ToolCallback>>;
 /// Collection of callbacks with their tool definitions keyed by tool name.
 pub type ToolCallbacksWithTools = HashMap<String, ToolCallbackWithTool>;
 
+/// The refusal for a request that had to call a tool and did not.
+pub const FORCED_CALL_DECLINED: &str = "tool_choice required a call and the model did not name a function: retry, or name the function in tool_choice";
+
 fn contains_tool_call_prefix(prefix: &str) -> bool {
     parsers::contains_tool_call_prefix(prefix)
-}
-
-fn process_model_specific_message(message: &str) -> Result<String> {
-    parsers::process_model_specific_message(message)
 }
 
 pub struct ToolCallingMatcher {
     tool_choice: ToolChoice,
     known_tool_names: Option<std::collections::HashSet<String>>,
     tools: Option<Arc<Vec<crate::Tool>>>,
+    /// The model writes calls as Qwen XML, which the JSON call grammar would corrupt.
+    xml: bool,
 }
 
 // Same as CalledFunction, but has different cases for variations on the names
@@ -102,8 +103,28 @@ fn fix_broken_json(raw: &str) -> anyhow::Result<String> {
 
 impl ToolCallingMatcher {
     /// `required` and a named tool both oblige the model to emit a call.
-    fn must_call(&self) -> bool {
+    pub fn must_call(&self) -> bool {
         matches!(self.tool_choice, ToolChoice::Tool(_) | ToolChoice::Required)
+    }
+
+    /// The opening of a forced call, written after the generation prompt so the model can only
+    /// continue it: the named function, or the only tool under `required`,
+    /// or the bare opener when `required` leaves several tools to choose from. Only for Qwen XML
+    /// calls; `None` when no call is forced.
+    pub fn forced_prefix(&self) -> Option<String> {
+        const OPENER: &str = "<tool_call>\n<function=";
+        let tools = self.tools();
+        if !self.xml || tools.is_empty() {
+            return None;
+        }
+        match &self.tool_choice {
+            ToolChoice::Tool(tool) => Some(format!("{OPENER}{}>\n", tool.function.name)),
+            ToolChoice::Required if tools.len() == 1 => {
+                Some(format!("{OPENER}{}>\n", tools[0].function.name))
+            }
+            ToolChoice::Required => Some(OPENER.to_string()),
+            ToolChoice::None | ToolChoice::Auto => None,
+        }
     }
 
     pub fn new(tool_choice: ToolChoice, tools: Option<&[crate::Tool]>) -> anyhow::Result<Self> {
@@ -117,7 +138,19 @@ impl ToolCallingMatcher {
             tool_choice,
             known_tool_names,
             tools: tools_arc,
+            xml: false,
         })
+    }
+
+    /// Calls arrive as Qwen XML: they are parsed from the text as written, with no grammar
+    /// forcing JSON after `<tool_call>`.
+    pub fn with_xml_calls(mut self, xml: bool) -> Self {
+        self.xml = xml;
+        self
+    }
+
+    fn tools(&self) -> &[crate::Tool] {
+        self.tools.as_deref().map_or(&[], Vec::as_slice)
     }
 
     /// Build a tool call grammar if a known format prefix is detected in
@@ -125,7 +158,7 @@ impl ToolCallingMatcher {
     /// `None`, no format matches, or the format is not yet ready (e.g.
     /// DeepSeek before the JSON fence).
     pub fn build_tool_call_grammar(&self, text: &str) -> Option<llguidance::api::TopLevelGrammar> {
-        if matches!(self.tool_choice, ToolChoice::None) {
+        if matches!(self.tool_choice, ToolChoice::None) || self.xml {
             return None;
         }
         let tools = self.tools.as_ref()?;
@@ -160,7 +193,7 @@ impl ToolCallingMatcher {
         if matches!(self.tool_choice, ToolChoice::None) {
             return Ok((false, false));
         }
-        let message_prefix = process_model_specific_message(message_prefix)?;
+        let message_prefix = parsers::process_model_specific_message(message_prefix, self.tools())?;
         let message_prefix = fix_broken_json(&message_prefix).map_err(hanzo_ml::Error::msg)?;
 
         // Check if the prefix could be a JSON serialization of any of the following types.
@@ -184,7 +217,7 @@ impl ToolCallingMatcher {
         if matches!(self.tool_choice, ToolChoice::None) {
             return Ok(Vec::new());
         }
-        let message = process_model_specific_message(message)?;
+        let message = parsers::process_model_specific_message(message, self.tools())?;
         let message = fix_broken_json(&message)?;
 
         let mut calls = if let Ok(deser) =
@@ -218,15 +251,13 @@ impl ToolCallingMatcher {
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?
         } else {
-            if self.must_call() {
-                anyhow::bail!("Tool choice was required but no tools were called.")
-            }
+            // A call that `must_call` required and did not come is the caller's to refuse, once
+            // the output is complete (`FORCED_CALL_DECLINED`); text mid-stream is not an error.
             return Ok(Vec::new());
         };
 
         // Filter out hallucinated tool names.
         if let Some(ref known) = self.known_tool_names {
-            let before = calls.len();
             calls.retain(|tc| {
                 let valid = known.contains(&tc.function.name);
                 if !valid {
@@ -238,9 +269,6 @@ impl ToolCallingMatcher {
                 }
                 valid
             });
-            if calls.is_empty() && before > 0 && self.must_call() {
-                anyhow::bail!("Tool choice was required but model called unknown tools.");
-            }
         }
 
         Ok(calls)
@@ -265,20 +293,130 @@ where
     }
 }
 
-/// Takes raw UTf8 text and parses any possible tool calls from it.
+/// Parses the tool calls in raw UTF-8 text. Returns the text unchanged when there are none; with
+/// calls, the text outside them, stripped, or `None` when that is empty:
+/// a call's own text is never content too.
 pub fn parse_text_tools(
     raw_text: &str,
     matcher: Option<Arc<ToolCallingMatcher>>,
-) -> anyhow::Result<(Option<&str>, Vec<ToolCallResponse>)> {
-    let mut tool_calls = Vec::new();
-    let mut text_new = Some(raw_text);
-
-    if let Some(ref matcher) = matcher {
-        let calls = matcher.get_call(raw_text).map_err(hanzo_ml::Error::msg)?;
-        if !calls.is_empty() {
-            text_new = None;
-            tool_calls = calls;
-        }
+) -> anyhow::Result<(Option<String>, Vec<ToolCallResponse>)> {
+    let Some(matcher) = matcher else {
+        return Ok((Some(raw_text.to_string()), Vec::new()));
     };
-    Ok((text_new, tool_calls))
+    let calls = matcher.get_call(raw_text)?;
+    if calls.is_empty() {
+        return Ok((Some(raw_text.to_string()), calls));
+    }
+    let outside = parsers::outside_calls(raw_text, matcher.tools())?;
+    let outside = outside.trim();
+    Ok(((!outside.is_empty()).then(|| outside.to_string()), calls))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hanzo_llm_mcp::{Function, ToolType};
+
+    fn tool(name: &str) -> crate::Tool {
+        crate::Tool {
+            tp: ToolType::Function,
+            function: Function {
+                name: name.into(),
+                description: None,
+                parameters: None,
+                strict: None,
+            },
+        }
+    }
+
+    fn matcher(choice: ToolChoice, tools: &[crate::Tool], xml: bool) -> ToolCallingMatcher {
+        ToolCallingMatcher::new(choice, Some(tools))
+            .unwrap()
+            .with_xml_calls(xml)
+    }
+
+    #[test]
+    fn a_forced_call_is_prefilled_with_as_much_of_the_call_as_is_decided() {
+        let one = [tool("get_weather")];
+        let two = [tool("get_weather"), tool("get_time")];
+        let named = ToolChoice::Tool(tool("get_time"));
+        assert_eq!(
+            matcher(named, &two, true).forced_prefix().as_deref(),
+            Some("<tool_call>\n<function=get_time>\n")
+        );
+        assert_eq!(
+            matcher(ToolChoice::Required, &one, true)
+                .forced_prefix()
+                .as_deref(),
+            Some("<tool_call>\n<function=get_weather>\n")
+        );
+        assert_eq!(
+            matcher(ToolChoice::Required, &two, true)
+                .forced_prefix()
+                .as_deref(),
+            Some("<tool_call>\n<function=")
+        );
+        assert_eq!(matcher(ToolChoice::Auto, &one, true).forced_prefix(), None);
+        assert_eq!(matcher(ToolChoice::None, &one, true).forced_prefix(), None);
+        // JSON-call templates are not prefilled, and nothing is forced without tools.
+        assert_eq!(
+            matcher(ToolChoice::Required, &one, false).forced_prefix(),
+            None
+        );
+        assert_eq!(
+            matcher(ToolChoice::Required, &[], true).forced_prefix(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_required_call_that_is_plain_text_parses_to_no_call() {
+        let tools = [tool("get_weather")];
+        let required = Arc::new(matcher(ToolChoice::Required, &tools, true));
+        assert!(required.must_call());
+        let (text, calls) = parse_text_tools("It is sunny.", Some(required.clone())).unwrap();
+        assert_eq!(text.as_deref(), Some("It is sunny."));
+        assert!(calls.is_empty());
+        // A call to a tool the request did not define is dropped, not an error.
+        let (_, calls) = parse_text_tools(
+            "<tool_call>\n<function=launch>\n</function>\n</tool_call>",
+            Some(required),
+        )
+        .unwrap();
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn the_content_is_the_text_outside_the_calls() {
+        let tools = [tool("get_weather")];
+        let auto = Arc::new(matcher(ToolChoice::Auto, &tools, true));
+        let call = "<tool_call>\n<function=get_weather>\n<parameter=city>\nOslo\n</parameter>\n</function>\n</tool_call>";
+        let (text, calls) =
+            parse_text_tools(&format!("Checking Oslo.\n\n{call}\n"), Some(auto.clone())).unwrap();
+        assert_eq!(text.as_deref(), Some("Checking Oslo."));
+        assert_eq!(calls.len(), 1);
+        // Only calls: no content at all.
+        let (text, calls) =
+            parse_text_tools(&format!("\n{call}\n{call}"), Some(auto.clone())).unwrap();
+        assert_eq!(text, None);
+        assert_eq!(calls.len(), 2);
+        // No call: the text is untouched, whitespace included, as a stream's delta must be.
+        let (text, calls) = parse_text_tools(" Hello ", Some(auto)).unwrap();
+        assert_eq!(text.as_deref(), Some(" Hello "));
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn the_prefill_and_the_continuation_parse_as_one_call() {
+        let tools = [tool("get_weather")];
+        let forced = Arc::new(matcher(ToolChoice::Required, &tools, true));
+        let prefill = forced.forced_prefix().unwrap();
+        let output =
+            format!("{prefill}<parameter=city>\nParis\n</parameter>\n</function>\n</tool_call>");
+        let (text, calls) = parse_text_tools(&output, Some(forced)).unwrap();
+        assert_eq!(text, None);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "get_weather");
+        assert_eq!(calls[0].function.arguments, r#"{"city":"Paris"}"#);
+    }
 }

@@ -8,7 +8,7 @@ use hanzo_engine::{
     Tool, ToolChoice, ToolType, WebSearchOptions,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use utoipa::{
     openapi::{schema::SchemaType, ArrayBuilder, ObjectBuilder, OneOfBuilder, RefOr, Schema, Type},
     PartialSchema, ToSchema,
@@ -542,6 +542,14 @@ pub enum ResponseFormat {
     },
 }
 
+/// `stream_options`: only `include_usage` is read.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, ToSchema)]
+pub struct StreamOptions {
+    /// Every chunk carries `"usage": null` and a last chunk with no choices carries the usage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_usage: Option<bool>,
+}
+
 /// Chat completion request following OpenAI's specification
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ChatCompletionRequest {
@@ -554,16 +562,22 @@ pub struct ChatCompletionRequest {
     #[schema(example = "mistral")]
     #[serde(default = "default_model")]
     pub model: String,
-    #[schema(example = json!(Option::None::<HashMap<u32, f32>>))]
-    pub logit_bias: Option<HashMap<u32, f32>>,
+    /// Token id (as a string) to bias; at most 20480 entries.
+    #[schema(value_type = Option<HashMap<String, f32>>, example = json!(Option::None::<HashMap<String, f32>>))]
+    pub logit_bias: Option<Map<String, Value>>,
     #[serde(default = "default_false")]
     #[schema(example = false)]
     pub logprobs: bool,
     #[schema(example = json!(Option::None::<usize>))]
     pub top_logprobs: Option<usize>,
+    /// Token budget for reasoning plus answer. `max_completion_tokens` and `max_output_tokens`
+    /// are the same budget; values that differ are refused.
     #[schema(example = 256)]
-    #[serde(alias = "max_completion_tokens")]
-    pub max_tokens: Option<usize>,
+    pub max_tokens: Option<i64>,
+    #[schema(example = json!(Option::None::<i64>))]
+    pub max_completion_tokens: Option<i64>,
+    #[schema(example = json!(Option::None::<i64>))]
+    pub max_output_tokens: Option<i64>,
     #[serde(rename = "n")]
     #[serde(default = "default_1usize")]
     #[schema(example = 1)]
@@ -583,10 +597,16 @@ pub struct ChatCompletionRequest {
     pub top_p: Option<f64>,
     #[schema(example = true)]
     pub stream: Option<bool>,
+    #[schema(example = json!(Option::None::<StreamOptions>))]
+    pub stream_options: Option<StreamOptions>,
     #[schema(example = json!(Option::None::<Vec<Tool>>))]
     pub tools: Option<Vec<Tool>>,
-    #[schema(example = json!(Option::None::<ToolChoice>))]
-    pub tool_choice: Option<ToolChoice>,
+    /// `auto`, `none`, `required`, or `{"type":"function","function":{"name":...}}`.
+    #[schema(value_type = Option<ToolChoice>, example = json!(Option::None::<ToolChoice>))]
+    pub tool_choice: Option<Value>,
+    /// `false` keeps only the first tool call.
+    #[schema(example = json!(Option::None::<bool>))]
+    pub parallel_tool_calls: Option<bool>,
     #[schema(example = json!(Option::None::<ResponseFormat>))]
     pub response_format: Option<ResponseFormat>,
     #[schema(example = json!(Option::None::<WebSearchOptions>))]
@@ -607,8 +627,15 @@ pub struct ChatCompletionRequest {
     pub files: Option<Vec<hanzo_engine::RequestedFile>>,
 
     // hanzo additional
-    #[schema(example = json!(Option::None::<usize>))]
-    pub top_k: Option<usize>,
+    #[schema(example = json!(Option::None::<i64>))]
+    pub top_k: Option<i64>,
+    /// Seeds this request's sampling so it can be replayed.
+    #[schema(example = json!(Option::None::<i64>))]
+    pub seed: Option<i64>,
+    /// `serial` decodes without the speculative drafter; the loaded drafter's name
+    /// (`mtp`, `dflash`, `spec`) keeps it.
+    #[schema(example = json!(Option::None::<String>))]
+    pub drafter: Option<String>,
     #[schema(example = json!(Option::None::<Grammar>))]
     pub grammar: Option<Grammar>,
     #[schema(example = json!(Option::None::<f64>))]
@@ -623,10 +650,33 @@ pub struct ChatCompletionRequest {
     pub dry_sequence_breakers: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
-    /// Reasoning effort level for Harmony-format models (GPT-OSS).
-    /// Controls the depth of reasoning/analysis: "low", "medium", or "high".
+    /// `minimal`, `low`, `medium`, `high`, `xhigh`, or `none` (thinking off).
     #[schema(example = json!(Option::None::<String>))]
     pub reasoning_effort: Option<String>,
+    /// Whether the template keeps earlier assistant turns' reasoning.
+    #[schema(example = json!(Option::None::<bool>))]
+    pub preserve_thinking: Option<bool>,
+    /// Most tokens the think block may take; 0 is no budget.
+    #[schema(example = json!(Option::None::<i64>))]
+    pub max_thinking_tokens: Option<i64>,
+    /// Alias of `max_thinking_tokens`.
+    #[schema(value_type = Option<i64>)]
+    pub thinking_budget_tokens: Option<Value>,
+    /// Alias of `max_thinking_tokens`.
+    #[schema(value_type = Option<i64>)]
+    pub thinking_budget: Option<Value>,
+    /// Alias of `max_thinking_tokens`.
+    #[schema(value_type = Option<i64>)]
+    pub thinking_token_budget: Option<Value>,
+    /// OpenRouter's `{effort, max_tokens, enabled}`.
+    #[schema(value_type = Option<Object>)]
+    pub reasoning: Option<Value>,
+    /// Anthropic's `{type, budget_tokens}`, or a bare effort level.
+    #[schema(value_type = Option<Object>)]
+    pub thinking: Option<Value>,
+    /// `reasoning_effort`, `enable_thinking` and `preserve_thinking`, as the template names them.
+    #[schema(value_type = Option<Object>)]
+    pub chat_template_kwargs: Option<Value>,
     /// Maximum number of tool-call rounds the server will auto-execute.
     #[schema(example = json!(Option::None::<usize>))]
     pub max_tool_rounds: Option<usize>,
@@ -701,13 +751,16 @@ pub struct CompletionRequest {
     pub presence_penalty: Option<f32>,
     #[schema(example = json!(Option::None::<f32>))]
     pub frequency_penalty: Option<f32>,
-    #[schema(example = json!(Option::None::<HashMap<u32, f32>>))]
-    pub logit_bias: Option<HashMap<u32, f32>>,
+    /// Token id (as a string) to bias; at most 20480 entries.
+    #[schema(value_type = Option<HashMap<String, f32>>, example = json!(Option::None::<HashMap<String, f32>>))]
+    pub logit_bias: Option<Map<String, Value>>,
     #[schema(example = json!(Option::None::<usize>))]
     pub logprobs: Option<usize>,
+    /// Token budget; `max_completion_tokens` is the same budget.
     #[schema(example = 16)]
-    #[serde(alias = "max_completion_tokens")]
-    pub max_tokens: Option<usize>,
+    pub max_tokens: Option<i64>,
+    #[schema(example = json!(Option::None::<i64>))]
+    pub max_completion_tokens: Option<i64>,
     #[serde(rename = "n")]
     #[serde(default = "default_1usize")]
     #[schema(example = 1)]
@@ -716,6 +769,8 @@ pub struct CompletionRequest {
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
     pub stream: Option<bool>,
+    #[schema(example = json!(Option::None::<StreamOptions>))]
+    pub stream_options: Option<StreamOptions>,
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
     #[schema(example = json!(Option::None::<f64>))]
@@ -730,8 +785,15 @@ pub struct CompletionRequest {
     pub tool_choice: Option<ToolChoice>,
 
     // hanzo additional
-    #[schema(example = json!(Option::None::<usize>))]
-    pub top_k: Option<usize>,
+    #[schema(example = json!(Option::None::<i64>))]
+    pub top_k: Option<i64>,
+    /// Seeds this request's sampling so it can be replayed.
+    #[schema(example = json!(Option::None::<i64>))]
+    pub seed: Option<i64>,
+    /// `serial` decodes without the speculative drafter; the loaded drafter's name
+    /// (`mtp`, `dflash`, `spec`) keeps it.
+    #[schema(example = json!(Option::None::<String>))]
+    pub drafter: Option<String>,
     #[schema(example = json!(Option::None::<Grammar>))]
     pub grammar: Option<Grammar>,
     #[schema(example = json!(Option::None::<f64>))]

@@ -193,6 +193,7 @@ async fn oneshot_text(
         messages,
         enable_thinking,
         reasoning_effort: None,
+        preserve_thinking: None,
     };
 
     let (tx, mut rx) = channel(10_000);
@@ -368,6 +369,7 @@ async fn oneshot_multimodal(
         messages,
         enable_thinking,
         reasoning_effort: None,
+        preserve_thinking: None,
     };
 
     let (tx, mut rx) = channel(10_000);
@@ -609,6 +611,9 @@ fn interactive_fallback_sample_parameters() -> SamplingParams {
         logits_bias: None,
         n_choices: 1,
         dry_params: Some(DrySamplingParams::default()),
+        seed: None,
+        thinking_budget: None,
+        serial: false,
     }
 }
 
@@ -781,6 +786,7 @@ async fn text_interactive_mode(
             messages: messages.clone(),
             enable_thinking,
             reasoning_effort: None,
+            preserve_thinking: None,
         };
 
         let (tx, mut rx) = channel(10_000);
@@ -1434,6 +1440,7 @@ async fn multimodal_interactive_mode(
             messages: messages.clone(),
             enable_thinking,
             reasoning_effort: None,
+            preserve_thinking: None,
         };
 
         let (tx, mut rx) = channel(10_000);

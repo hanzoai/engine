@@ -100,6 +100,8 @@ pub struct MultimodalPipeline {
     processor_filename: Option<PathBuf>,
     preprocessor_filename: Option<PathBuf>,
     imatrix: Option<PathBuf>,
+    /// The speculative proposer attached at load.
+    drafter: Option<crate::speculative::SpeculativeAttachInfo>,
 }
 
 #[cfg(feature = "cuda")]
@@ -979,6 +981,7 @@ impl Loader for MultimodalLoader {
             preprocessor_filename: paths.get_preprocessor_config().clone(),
             mapper: pipeline_mapper,
             imatrix: self.config.imatrix.clone(),
+            drafter: None,
         })))
     }
 
@@ -1442,8 +1445,13 @@ impl Pipeline for MultimodalPipeline {
         }
         if let Some(info) = self.model.attach_speculative(config)? {
             self.model.log_speculative_attach(&info);
+            self.drafter = Some(info);
         }
         Ok(())
+    }
+
+    fn drafter(&self) -> Option<crate::speculative::SpeculativeAttachInfo> {
+        self.drafter.clone()
     }
 
     #[allow(clippy::too_many_arguments)]

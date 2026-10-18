@@ -53,6 +53,18 @@ impl ResponseUsage {
         }
         self
     }
+
+    /// The engine's usage in the Responses shape: cached input tokens when
+    /// there are some, reasoning output tokens always.
+    pub fn from_usage(usage: &hanzo_engine::Usage) -> Self {
+        let mut out = Self::new(usage.prompt_tokens, usage.completion_tokens)
+            .with_cached_tokens(usage.cached_prompt_tokens);
+        out.output_tokens_details = Some(OutputTokensDetails {
+            reasoning_tokens: Some(usage.reasoning_tokens),
+            ..Default::default()
+        });
+        out
+    }
 }
 
 /// Detailed input token breakdown
@@ -174,6 +186,10 @@ pub struct ResponseResource {
     /// Token usage information
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<ResponseUsage>,
+    /// The `timings` object of a finished non-streaming response
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
+    pub timings: Option<Value>,
     /// Error information (if status is failed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ResponseError>,
@@ -249,6 +265,7 @@ impl ResponseResource {
             output_text: None,
             reasoning: None,
             usage: None,
+            timings: None,
             error: None,
             incomplete_details: None,
             metadata: None,

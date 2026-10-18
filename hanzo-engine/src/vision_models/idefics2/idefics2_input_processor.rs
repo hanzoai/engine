@@ -67,6 +67,7 @@ impl Processor for Idefics2Processor {
         add_special_tokens: bool,
         enable_thinking: Option<bool>,
         reasoning_effort: Option<ReasoningEffort>,
+        preserve_thinking: Option<bool>,
         tools: Vec<Tool>,
     ) -> anyhow::Result<(Vec<u32>, String)> {
         let mut prompt = apply_chat_template(
@@ -75,6 +76,7 @@ impl Processor for Idefics2Processor {
             add_generation_prompt,
             enable_thinking,
             reasoning_effort,
+            preserve_thinking,
             self.template_action(),
             tools,
         )?;

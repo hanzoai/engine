@@ -38,6 +38,8 @@ pub async fn run_server(
 
     initialize_logging();
 
+    let defaults = server.defaults.clone().validated()?;
+
     agent_options.apply_to(&mut runtime);
     apply_agent_mode(&mut runtime);
     validate_agent_options(&runtime)?;
@@ -48,7 +50,7 @@ pub async fn run_server(
     let original_model_id = model_id_of(&model_type).to_string();
     apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
     let api_id_override =
-        (model_id_of(&model_type) != original_model_id).then_some(original_model_id);
+        (model_id_of(&model_type) != original_model_id).then(|| original_model_id.clone());
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
     // Inherit the target's context window for the speculative draft (before model_selected is moved).
     let (draft_max_seq_len, draft_max_batch_size) = model_selected.max_dims();
@@ -96,7 +98,7 @@ pub async fn run_server(
         )
         .with_num_device_layers_optional(device_layers)
         .with_in_situ_quant_optional(isq)
-        .with_model_id_override_optional(api_id_override)
+        .with_model_id_override_optional(defaults.served_name.clone().or(api_id_override))
         .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
         .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
         .with_paged_ctxt_len_optional(paged_ctxt_len)
@@ -132,6 +134,12 @@ pub async fn run_server(
     let _ = sandbox_policy;
 
     let hanzo = builder.build().await?;
+    if let Some(served) = &defaults.served_name {
+        // Requests that still name the model they were loaded from reach it.
+        hanzo
+            .register_model_alias(original_model_id, served)
+            .map_err(anyhow::Error::msg)?;
+    }
     let hanzo_for_ui = hanzo.clone();
     let hanzo_for_mdns = hanzo.clone();
 
@@ -142,6 +150,7 @@ pub async fn run_server(
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
         .with_agent_permission(runtime.code_exec_permission.into())
         .with_approval_broker(approval_broker.clone())
+        .with_defaults(defaults)
         .build()
         .await?;
 

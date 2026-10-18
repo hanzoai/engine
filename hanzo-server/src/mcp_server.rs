@@ -8,7 +8,8 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use hanzo_server_core::{
-    chat_completion::parse_request, handler_core::create_response_channel, types::SharedState,
+    chat_completion::parse_request, defaults::Defaults, handler_core::create_response_channel,
+    types::SharedState,
 };
 
 // Import your existing types
@@ -81,6 +82,7 @@ pub trait McpTool: Send + Sync {
         &self,
         args: serde_json::Value,
         state: &SharedState,
+        defaults: &Defaults,
     ) -> std::result::Result<CallToolResult, CallToolError>;
 }
 
@@ -157,6 +159,7 @@ impl McpTool for ChatTool {
         &self,
         args: serde_json::Value,
         state: &SharedState,
+        defaults: &Defaults,
     ) -> std::result::Result<CallToolResult, CallToolError> {
         // Translate to the internal ChatCompletionRequest.
         let chat_req: hanzo_server_core::openai::ChatCompletionRequest =
@@ -164,9 +167,10 @@ impl McpTool for ChatTool {
 
         // Execute the request using existing helper utilities.
         let (tx, mut rx) = create_response_channel(None);
-        let (request, _is_streaming) = parse_request(chat_req, state.clone(), tx, None, None, None)
-            .await
-            .map_err(|e| CallToolError::new(io::Error::other(e.to_string())))?;
+        let (request, _is_streaming) =
+            parse_request(chat_req, state.clone(), defaults, tx, None, None, None)
+                .await
+                .map_err(|e| CallToolError::new(io::Error::other(e.to_string())))?;
 
         hanzo_server_core::handler_core::send_request(state, request)
             .await
@@ -206,12 +210,13 @@ This server provides LLM text and multimodal model inference. You can use the fo
 // HTTP MCP Handler
 pub struct HttpMcpHandler {
     pub state: SharedState,
+    defaults: Defaults,
     tools: HashMap<String, Arc<dyn McpTool>>,
     server_info: InitializeResult,
 }
 
 impl HttpMcpHandler {
-    pub fn new(state: SharedState) -> Self {
+    pub fn new(state: SharedState, defaults: Defaults) -> Self {
         let modalities = &state.config(None).unwrap().modalities;
 
         let mut tools: HashMap<String, Arc<dyn McpTool>> = HashMap::new();
@@ -241,6 +246,7 @@ impl HttpMcpHandler {
 
         Self {
             state,
+            defaults,
             tools,
             server_info,
         }
@@ -295,7 +301,7 @@ impl HttpMcpHandler {
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
                 match self.tools.get(tool_name) {
-                    Some(tool) => match tool.call(args, &self.state).await {
+                    Some(tool) => match tool.call(args, &self.state, &self.defaults).await {
                         Ok(result) => JsonRpcResponse {
                             jsonrpc: "2.0".to_string(),
                             id: request.id,
@@ -351,10 +357,11 @@ async fn handle_jsonrpc(
 // Create HTTP MCP server - this replaces your old create_mcp_server function
 pub async fn create_http_mcp_server(
     state: SharedState,
+    defaults: Defaults,
     host: String,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let handler = Arc::new(HttpMcpHandler::new(state));
+    let handler = Arc::new(HttpMcpHandler::new(state, defaults));
 
     let app = Router::new()
         .route("/mcp", post(handle_jsonrpc))

@@ -27,6 +27,22 @@ pub struct SpeculativeAttachInfo {
 }
 
 impl SpeculativeAttachInfo {
+    /// Every name [`Self::name`] gives, so a request can tell an unknown drafter from one this
+    /// server did not load.
+    pub const NAMES: [&'static str; 3] = ["mtp", "dflash", "spec"];
+
+    /// The drafter's name as requests and the request ledger spell it: `mtp`, `dflash`, or
+    /// `spec` for a separate draft model, DSpark and prompt lookup.
+    pub fn name(&self) -> &'static str {
+        match self.kind {
+            SpeculativeAttachKind::Mtp { .. } => "mtp",
+            SpeculativeAttachKind::Dflash { .. } => "dflash",
+            SpeculativeAttachKind::DraftModel { .. }
+            | SpeculativeAttachKind::Dspark { .. }
+            | SpeculativeAttachKind::PromptLookup { .. } => "spec",
+        }
+    }
+
     pub fn mtp(assistant: String, n_predict: usize) -> Self {
         Self {
             kind: SpeculativeAttachKind::Mtp {
@@ -95,5 +111,26 @@ pub fn log_attach(info: &SpeculativeAttachInfo) {
         } => tracing::info!(
             "Speculative decoding enabled: prompt-lookup n-gram draft with ngram={ngram_min}..={ngram_max}, gamma={gamma}"
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SpeculativeAttachInfo;
+
+    #[test]
+    fn drafter_names() {
+        assert_eq!(SpeculativeAttachInfo::mtp("self".into(), 3).name(), "mtp");
+        assert_eq!(SpeculativeAttachInfo::dflash(16).name(), "dflash");
+        assert_eq!(SpeculativeAttachInfo::draft_model(4).name(), "spec");
+        assert_eq!(SpeculativeAttachInfo::dspark(16, 0.0).name(), "spec");
+        assert_eq!(SpeculativeAttachInfo::prompt_lookup(3, 7, 7).name(), "spec");
+        for info in [
+            SpeculativeAttachInfo::mtp("self".into(), 3),
+            SpeculativeAttachInfo::dflash(16),
+            SpeculativeAttachInfo::draft_model(4),
+        ] {
+            assert!(SpeculativeAttachInfo::NAMES.contains(&info.name()));
+        }
     }
 }
