@@ -16,8 +16,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) const PREFIX: &str = "model.language_model.";
 
 /// Checkpoint prefixes the text model does not read yet, and the milestone that reads them.
-pub(crate) const DEFERRED: [(&str, &str); 3] = [
-    ("self_attn.indexer.", "M2: QSA sparse attention"),
+pub(crate) const DEFERRED: [(&str, &str); 2] = [
     ("mtp.", "M3: multi-token prediction"),
     ("model.visual.", "never: text only"),
 ];
@@ -29,6 +28,16 @@ pub(crate) struct RopeParameters {
     pub(crate) mrope_section: Vec<usize>,
     #[serde(default)]
     pub(crate) rope_type: Option<String>,
+    /// YaRN (`rope_type` `yarn`): how many times the original context the positions reach.
+    #[serde(default)]
+    pub(crate) factor: Option<f64>,
+    /// YaRN: the trained context; `max_position_embeddings` when absent.
+    #[serde(default)]
+    pub(crate) original_max_position_embeddings: Option<usize>,
+    #[serde(default)]
+    pub(crate) beta_fast: Option<f64>,
+    #[serde(default)]
+    pub(crate) beta_slow: Option<f64>,
 }
 
 /// `text_config` of the snapshot's config.json.
@@ -54,7 +63,14 @@ pub(crate) struct TextConfig {
     pub(crate) vocab_size: usize,
     pub(crate) rms_norm_eps: f64,
     pub(crate) max_position_embeddings: usize,
+    /// Tokens each query of the QSA indexer keeps.
     pub(crate) indexer_budget: usize,
+    /// The indexer's query heads, each `indexer_head_dim` wide, as is its one key head.
+    pub(crate) indexer_n_heads: usize,
+    pub(crate) indexer_head_dim: usize,
+    pub(crate) indexer_kv_heads: usize,
+    /// Tokens pooled into one compressed key.
+    pub(crate) indexer_compress_ratio: usize,
     pub(crate) rope_parameters: RopeParameters,
     /// 1-based: the n-gram block runs before layer `ple_layer_ids[0] - 1`.
     pub(crate) ple_layer_ids: Vec<usize>,
@@ -94,17 +110,18 @@ impl Config {
             .map_err(|e| hanzo_ml::Error::Msg(format!("quantization_config: {e}")))
     }
 
-    /// The shared blocks' shape. The context is capped at the QSA indexer's budget, where dense
-    /// attention is exact, until the sparse path lands.
-    pub(crate) fn props(&self) -> crate::models::quantized_qwen3_5_moe::PropsGGUF {
+    /// The shared blocks' shape. The context is `max_position_embeddings`, or the YaRN context
+    /// `rope_parameters` declares: past the indexer's width QSA selects.
+    pub(crate) fn props(&self) -> Result<crate::models::quantized_qwen3_5_moe::PropsGGUF> {
         let t = &self.text_config;
-        crate::models::quantized_qwen3_5_moe::PropsGGUF {
+        let max_seq_len = t.yarn()?.map_or(t.max_position_embeddings, |y| y.context());
+        Ok(crate::models::quantized_qwen3_5_moe::PropsGGUF {
             head_count: t.num_attention_heads,
             head_count_kv: t.num_key_value_heads,
             block_count: t.num_hidden_layers,
             embedding_length: t.hidden_size,
             rms_norm_eps: t.rms_norm_eps as f32,
-            max_seq_len: t.max_position_embeddings.min(t.indexer_budget),
+            max_seq_len,
             rope_freq_base: t.rope_parameters.rope_theta as f32,
             head_dim: t.head_dim,
             rot_dim: t.rotary_dim(),
@@ -124,7 +141,7 @@ impl Config {
             moe_intermediate_size: t.moe_intermediate_size,
             is_moe: true,
             nextn_predict_layers: 0,
-        }
+        })
     }
 }
 
@@ -144,6 +161,46 @@ impl TextConfig {
 
     pub(crate) fn rotary_dim(&self) -> usize {
         (self.head_dim as f64 * self.rope_parameters.partial_rotary_factor) as usize
+    }
+
+    /// YaRN from `rope_parameters` with `rope_type` `yarn`: `factor` over
+    /// `original_max_position_embeddings`, `beta_fast` 32 and `beta_slow` 1 unless given, as the
+    /// GGUF door reads the GGUF `rope.scaling.*` keys. `None` for `default`.
+    pub(crate) fn yarn(&self) -> Result<Option<crate::layers::Yarn>> {
+        let r = &self.rope_parameters;
+        match r.rope_type.as_deref() {
+            None | Some("default") => Ok(None),
+            Some("yarn") => {
+                let Some(factor) = r.factor else {
+                    hanzo_ml::bail!("zen6: YaRN rope_parameters declare no factor");
+                };
+                crate::layers::Yarn::mrope(
+                    factor,
+                    r.original_max_position_embeddings
+                        .unwrap_or(self.max_position_embeddings),
+                    r.beta_fast.unwrap_or(32.0),
+                    r.beta_slow.unwrap_or(1.0),
+                )
+                .map(Some)
+            }
+            Some(other) => hanzo_ml::bail!("zen6 takes YaRN rope scaling, not `{other}`"),
+        }
+    }
+
+    /// Every attention layer's QSA indexer.
+    pub(crate) fn qsa(&self) -> Result<crate::models::qsa::Config> {
+        if self.indexer_kv_heads != 1 {
+            hanzo_ml::bail!(
+                "zen6's QSA indexer has one key head, not {}",
+                self.indexer_kv_heads
+            );
+        }
+        crate::models::qsa::Config::new(
+            self.indexer_n_heads,
+            self.indexer_head_dim,
+            self.indexer_compress_ratio,
+            self.indexer_budget,
+        )
     }
 
     /// Device bytes of one sequence's recurrent state: every gated delta-net layer's f32 state
@@ -377,6 +434,26 @@ pub(crate) fn manifest(cfg: &TextConfig) -> Result<Vec<Entry>> {
                 &[cfg.head_dim],
                 Role::Device,
             );
+            // The QSA indexer: one projection, the query heads' rows and then the key head's.
+            let d = cfg.indexer_head_dim;
+            put(
+                a("indexer.index_qk_proj.weight"),
+                DType::BF16,
+                &[(cfg.indexer_n_heads + cfg.indexer_kv_heads) * d, h],
+                Role::Device,
+            );
+            put(
+                a("indexer.q_layernorm.weight"),
+                DType::BF16,
+                &[d],
+                Role::Device,
+            );
+            put(
+                a("indexer.k_layernorm.weight"),
+                DType::BF16,
+                &[d],
+                Role::Device,
+            );
         } else {
             let g = |s: &str| l(&format!("linear_attn.{s}"));
             let v = cfg.linear_num_value_heads;
@@ -441,17 +518,11 @@ pub(crate) fn manifest(cfg: &TextConfig) -> Result<Vec<Entry>> {
     Ok(out)
 }
 
-/// The deferral a checkpoint name falls under, if any. `self_attn.indexer.` matches inside the
-/// text model's layers, the others at the start of the name.
+/// The deferral a checkpoint name falls under, if any: the prefix it starts with.
 pub(crate) fn deferred(name: &str) -> Option<&'static str> {
-    DEFERRED.iter().find_map(|(p, _)| {
-        let hit = if p.starts_with("self_attn.") {
-            name.starts_with(PREFIX) && name.contains(&format!(".{p}"))
-        } else {
-            name.starts_with(p)
-        };
-        hit.then_some(*p)
-    })
+    DEFERRED
+        .iter()
+        .find_map(|(p, _)| name.starts_with(p).then_some(*p))
 }
 
 #[cfg(test)]
@@ -578,7 +649,7 @@ pub(crate) mod tests {
             stray.len(),
             &stray[..stray.len().min(20)]
         );
-        assert_eq!(deferred_counts.get("self_attn.indexer."), Some(&36));
+        assert_eq!(deferred_counts.get("self_attn.indexer."), None);
         assert_eq!(deferred_counts.get("mtp."), Some(&3101));
         assert_eq!(deferred_counts.get("model.visual."), Some(&333));
 
@@ -710,7 +781,11 @@ pub(crate) mod tests {
             "vocab_size": 512,
             "rms_norm_eps": 1e-6,
             "max_position_embeddings": 4096,
-            "indexer_budget": 2048,
+            "indexer_budget": 8,
+            "indexer_n_heads": 2,
+            "indexer_head_dim": 64,
+            "indexer_kv_heads": 1,
+            "indexer_compress_ratio": 4,
             "rope_parameters": {
                 "rope_theta": 10000000.0,
                 "partial_rotary_factor": 0.25,
@@ -757,7 +832,12 @@ pub(crate) mod tests {
         let dev = Device::Cpu;
         let mut main: HashMap<String, Tensor> = HashMap::new();
         let mut table: Vec<(String, Vec<u8>, Vec<usize>, &str)> = vec![];
-        for e in manifest(&cfg)? {
+        // The QSA indexer's tensors draw last, so every other tensor keeps the values it had
+        // before the loader read the indexer.
+        let (index, rest): (Vec<_>, Vec<_>) = manifest(&cfg)?
+            .into_iter()
+            .partition(|e| e.name.contains(".indexer."));
+        for e in rest.into_iter().chain(index) {
             let n: usize = e.shape.iter().product();
             let name = e.name.as_str();
             let fan_in = *e.shape.last().unwrap_or(&1) as f32;
@@ -870,6 +950,47 @@ pub(crate) mod tests {
         let b = dir.join("model-00002-of-00002.safetensors");
         std::fs::write(&b, &file).map_err(hanzo_ml::Error::wrap)?;
         Ok(vec![a, b])
+    }
+
+    /// The context is `max_position_embeddings`, or the YaRN context `rope_parameters` declares,
+    /// counted as the GGUF door counts it; any other scaling is refused.
+    #[test]
+    fn context_reads_rope_parameters() -> Result<()> {
+        let mut cfg = tiny_config();
+        assert_eq!(cfg.text().yarn()?, None);
+        assert_eq!(cfg.props()?.max_seq_len, 4096);
+        let r = &mut cfg.text_config.rope_parameters;
+        r.rope_type = Some("yarn".into());
+        r.factor = Some(4.0);
+        let want = crate::layers::Yarn {
+            factor: 4.0,
+            length: 4 * 4096,
+            beta_fast: 32.0,
+            beta_slow: 1.0,
+        };
+        assert_eq!(cfg.text().yarn()?, Some(want));
+        assert_eq!(cfg.props()?.max_seq_len, 4 * 4096);
+        cfg.text_config
+            .rope_parameters
+            .original_max_position_embeddings = Some(1024);
+        assert_eq!(cfg.props()?.max_seq_len, 4 * 1024);
+        cfg.text_config.rope_parameters.factor = Some(0.5);
+        assert!(cfg.props().is_err());
+        cfg.text_config.rope_parameters.rope_type = Some("linear".into());
+        assert!(cfg.text().yarn().is_err());
+        Ok(())
+    }
+
+    /// The indexer the config declares, and the one key head it must have.
+    #[test]
+    fn qsa_reads_the_indexer() -> Result<()> {
+        let mut text = tiny();
+        let cfg = text.qsa()?;
+        assert_eq!(cfg, crate::models::qsa::Config::new(2, 64, 4, 8)?);
+        assert_eq!(cfg.width(), 11);
+        text.indexer_kv_heads = 2;
+        assert!(text.qsa().is_err());
+        Ok(())
     }
 
     #[test]
@@ -1438,7 +1559,7 @@ pub(crate) mod tests {
         let g = gpu(1.45);
         let dev = g.dev.clone();
         let cfg = config(&snapshot());
-        let props = cfg.props();
+        let props = cfg.props()?;
         let (vb, names) = Recorder::over(&weights(&snapshot()), DType::BF16, &dev)?;
         let rotary = std::sync::Arc::new(Qwen3VLRotaryEmbedding::new(
             props.rope_freq_base,
@@ -1720,7 +1841,7 @@ pub(crate) mod tests {
         let g = gpu(1.45);
         let dev = g.dev.clone();
         let cfg = config(&snapshot());
-        let props = cfg.props();
+        let props = cfg.props()?;
         let (kh, vh) = (props.num_k_heads, props.num_v_heads);
         let (vb, names) = Recorder::over(&weights(&snapshot()), DType::BF16, &dev)?;
         let gdn = QGatedDeltaNet::new(
@@ -1869,7 +1990,7 @@ pub(crate) mod tests {
         let g = gpu(1.45);
         let dev = g.dev.clone();
         let cfg = config(&snapshot());
-        let props = cfg.props();
+        let props = cfg.props()?;
         let (vb, names) = Recorder::over(&weights(&snapshot()), DType::BF16, &dev)?;
         let moe = FusedMoe::new(
             &vb.pp("model.language_model.layers.3.mlp"),
@@ -2132,7 +2253,7 @@ pub(crate) mod tests {
     fn deferrals_match_their_prefixes() {
         assert_eq!(
             deferred("model.language_model.layers.3.self_attn.indexer.k_layernorm.weight"),
-            Some("self_attn.indexer.")
+            None
         );
         assert_eq!(deferred("mtp.layers.0.mlp.gate.weight"), Some("mtp."));
         assert_eq!(

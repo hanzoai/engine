@@ -7,8 +7,10 @@
 //! to the streams before one layer. The head's hyper-connection mixer is the output norm.
 //!
 //! Every attention layer carries a sparse-attention (QSA) indexer that keeps at most its token
-//! budget of keys per query. Up to that budget it keeps them all, so dense attention is exact, and
-//! the context is capped there until the sparse path lands.
+//! budget of keys per query ([`qsa`]), from either door. The context is the checkpoint's own (the
+//! GGUF's `context_length`, the config's `max_position_embeddings`), or that times the YaRN factor
+//! it declares: the GGUF's `rope.scaling.*` keys, which the serve flag `--rope-yarn-factor` writes
+//! for a file that has none, or `rope_parameters` with `rope_type` `yarn`.
 
 use std::sync::{Arc, Mutex};
 
@@ -21,11 +23,12 @@ use crate::gguf::Content;
 use crate::kv_cache::{
     HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
 };
-use crate::layers::{CausalMaskConfig, CausalMasker, Qwen3VLRotaryEmbedding};
+use crate::layers::{CausalMaskConfig, CausalMasker, Qwen3VLRotaryEmbedding, Yarn};
 use crate::layers_masker::PastKvLenCache;
 use crate::models::gdn::{forward_pooled, PoolSlots};
 use crate::models::hyper::{expand, Branch, Mixer};
 use crate::models::ngram::{Hash, Ngram};
+use crate::models::qsa;
 use crate::models::quantized_qwen3_5_moe::{
     gguf_qmm, text_mrope, verify_arch, FusedMoe, GatedFullAttention, LayerImpl, PropsGGUF,
     QGatedDeltaNet,
@@ -43,6 +46,8 @@ pub(crate) const ARCH: &str = "zen6";
 /// own hyper-connection branch, and on one layer the n-gram block in front of them.
 struct Layer {
     mix: LayerImpl,
+    /// An attention layer's sparse-attention indexer.
+    index: Option<qsa::Indexer>,
     attn: Branch,
     ffn: Branch,
     moe: FusedMoe,
@@ -62,6 +67,16 @@ struct Step<'a> {
     /// The n-gram embeddings of this forward, and the side pool holding the conv history.
     ngram: Option<&'a Tensor>,
     side: usize,
+    /// Where indexed attention layers find their sequences and index caches.
+    index: Option<Index<'a>>,
+}
+
+/// A QSA forward: its sequences, the eager index caches from `eager` on in the hybrid cache, and
+/// the paged index entries from `paged` on in the paged cache, one per attention layer in order.
+struct Index<'a> {
+    batch: &'a qsa::Batch,
+    eager: usize,
+    paged: usize,
 }
 
 impl Layer {
@@ -78,7 +93,7 @@ impl Layer {
         use crate::models::ngram::Fp8Table;
         use crate::models::zen6::PREFIX;
         let text = cfg.text();
-        let props = cfg.props();
+        let props = cfg.props()?;
         let quant = cfg.quant()?;
         let eps = props.rms_norm_eps;
         let dev = lvb.device().clone();
@@ -101,6 +116,16 @@ impl Layer {
         } else {
             LayerImpl::LinearAttention(QGatedDeltaNet::new(&lvb.pp("linear_attn"), &props, &quant)?)
         };
+        let index = if text.attention(i) {
+            Some(qsa::Indexer::new(
+                &lvb.pp("self_attn").pp("indexer"),
+                text.qsa()?,
+                text.hidden_size,
+                f64::from(eps),
+            )?)
+        } else {
+            None
+        };
         let ngram = if i == text.ple_layer()? {
             let hash = Hash::new(
                 &lvb.pp("ple.ple_embedding"),
@@ -117,6 +142,7 @@ impl Layer {
         };
         Ok(Self {
             mix,
+            index,
             attn: Branch::new(&lvb.pp("attn_hyper_connection"), text.hc_count, eps)?,
             ffn: Branch::new(&lvb.pp("mlp_hyper_connection"), text.hc_count, eps)?,
             moe: FusedMoe::new(&lvb.pp("mlp"), &props, &quant, dtype)?,
@@ -142,19 +168,55 @@ impl Layer {
             x = (x.to_dtype(DType::F32)? + delta)?.to_dtype(x.dtype())?;
         }
         x = match &self.mix {
-            LayerImpl::FullAttention(attn) => {
-                let paged = step
-                    .paged
-                    .map(|(kv_cache, meta)| (kv_cache[step.kv_layer].clone(), *meta));
-                step.kv_layer += 1;
-                let Some(HybridLayerCache::Attention(kv_cache)) = step.cache.get_mut(i) else {
-                    hanzo_ml::bail!("hybrid cache layer {i} is not attention");
-                };
-                let mask = step.mask.get(x.device());
-                let cos_sin = step.cos_sin;
-                self.attn
-                    .apply(&x, |u| attn.forward(u, &mask, cos_sin, kv_cache, paged))?
-            }
+            LayerImpl::FullAttention(attn) => match (&self.index, &step.index) {
+                (Some(indexer), Some(index)) => {
+                    let ordinal = step.kv_layer;
+                    step.kv_layer += 1;
+                    let paged = match step.paged {
+                        Some((kv, meta)) => {
+                            match (kv.get(ordinal), kv.get(index.paged + ordinal)) {
+                                (Some(main), Some(rows)) => Some((main, rows, *meta)),
+                                _ => hanzo_ml::bail!(
+                                    "the paged cache has no QSA index for layer {i}"
+                                ),
+                            }
+                        }
+                        None => None,
+                    };
+                    let (layers, sides) = step.cache.caches.split_at_mut(index.eager);
+                    let (
+                        Some(HybridLayerCache::Attention(kv)),
+                        Some(HybridLayerCache::Attention(rows)),
+                    ) = (layers.get_mut(i), sides.get_mut(ordinal))
+                    else {
+                        hanzo_ml::bail!("hybrid cache layer {i} has no attention or index cache");
+                    };
+                    let mask = step.mask.get(x.device());
+                    let (cos_sin, batch) = (step.cos_sin, index.batch);
+                    let store = qsa::Store {
+                        kv,
+                        index: rows,
+                        paged,
+                    };
+                    self.attn.apply(&x, |u| {
+                        qsa::forward(attn, indexer, u, &mask, cos_sin, batch, store)
+                    })?
+                }
+                (None, _) => {
+                    let paged = step
+                        .paged
+                        .map(|(kv_cache, meta)| (kv_cache[step.kv_layer].clone(), *meta));
+                    step.kv_layer += 1;
+                    let Some(HybridLayerCache::Attention(kv_cache)) = step.cache.get_mut(i) else {
+                        hanzo_ml::bail!("hybrid cache layer {i} is not attention");
+                    };
+                    let mask = step.mask.get(x.device());
+                    let cos_sin = step.cos_sin;
+                    self.attn
+                        .apply(&x, |u| attn.forward(u, &mask, cos_sin, kv_cache, paged))?
+                }
+                (Some(_), None) => hanzo_ml::bail!("layer {i}'s indexer outside a QSA forward"),
+            },
             LayerImpl::LinearAttention(gdn) => {
                 let Some(HybridLayerCache::Recurrent(pool)) = step.cache.get_mut(i) else {
                     hanzo_ml::bail!("hybrid cache layer {i} is not recurrent");
@@ -180,6 +242,8 @@ pub struct ModelWeights {
     head: Mixer,
     pub(crate) output: Arc<dyn QuantMethod>,
     pub(crate) rotary: Arc<Qwen3VLRotaryEmbedding>,
+    /// The indexer shape every attention layer shares, when the layers carry indexers.
+    qsa: Option<qsa::Config>,
     pub device: Device,
     pub cache: EitherCache,
     pub max_seq_len: usize,
@@ -190,15 +254,17 @@ pub struct ModelWeights {
     /// The MTP head every forward feeds while one is attached.
     pub(crate) mtp: crate::models::quantized_zen6_mtp::Slot,
     /// The attention layers' shape and the layers that hold paged K/V (safetensors path).
-    meta: Option<(crate::paged_attention::ModelConfigMetadata, Vec<usize>)>,
+    meta: Option<crate::paged_attention::KvLayers<crate::paged_attention::ModelConfigMetadata>>,
 }
 
 /// The hybrid cache: one pool per gated delta-net layer (f32 state, conv history in `dtype`),
-/// then the n-gram history as a side pool.
+/// then the n-gram history as a side pool, then `index` eager QSA index caches, one per attention
+/// layer when the layers carry indexers.
 fn hybrid_cache(
     props: &PropsGGUF,
     attention: &dyn Fn(usize) -> bool,
     ngram: &Ngram,
+    index: usize,
     dtype: DType,
     device: &Device,
 ) -> Result<EitherCache> {
@@ -230,6 +296,7 @@ fn hybrid_cache(
             layer_types,
             max_seq_len: props.max_seq_len,
             pools,
+            side_kv: index,
         },
         device,
     )
@@ -240,7 +307,7 @@ fn hybrid_cache(
 impl ModelWeights {
     /// The text model of a Qwen3.8-Flash-Next safetensors snapshot (`vb` at its root, `weights`
     /// its files, which the n-gram table maps itself): block-FP8 side layers, NVFP4 experts,
-    /// bf16 elsewhere, with the served numerics. The context is the QSA indexer's budget.
+    /// bf16 elsewhere, with the served numerics.
     pub fn new(
         cfg: &crate::models::zen6::Config,
         vb: ShardedVarBuilder,
@@ -252,7 +319,7 @@ impl ModelWeights {
         use crate::models::ngram::Fp8Table;
         use crate::models::zen6::PREFIX;
         let text = cfg.text();
-        let props = cfg.props();
+        let props = cfg.props()?;
         let quant = cfg.quant()?;
         let device = vb.device().clone();
         let eps = props.rms_norm_eps;
@@ -275,11 +342,13 @@ impl ModelWeights {
             streams,
             eps,
         )?;
-        let rotary = Arc::new(Qwen3VLRotaryEmbedding::new(
+        let yarn = text.yarn()?;
+        let rotary = Arc::new(Qwen3VLRotaryEmbedding::new_yarn(
             props.rope_freq_base,
             props.rot_dim,
             &device,
             props.mrope_section.clone(),
+            yarn,
         )?);
 
         let mut layers = Vec::with_capacity(props.block_count);
@@ -293,11 +362,12 @@ impl ModelWeights {
             let rotary = if dev.same_device(&device) {
                 rotary.clone()
             } else {
-                Arc::new(Qwen3VLRotaryEmbedding::new(
+                Arc::new(Qwen3VLRotaryEmbedding::new_yarn(
                     props.rope_freq_base,
                     props.rot_dim,
                     &dev,
                     props.mrope_section.clone(),
+                    yarn,
                 )?)
             };
             layers.push(Layer::new(
@@ -313,7 +383,16 @@ impl ModelWeights {
         let Some(ngram) = layers[ngram_layer].ngram.as_ref() else {
             hanzo_ml::bail!("layer {ngram_layer} has no n-gram block");
         };
-        let cache = hybrid_cache(&props, &attention, ngram, dtype, &device)?;
+        let attention_layers: Vec<usize> =
+            (0..props.block_count).filter(|&i| attention(i)).collect();
+        let cache = hybrid_cache(
+            &props,
+            &attention,
+            ngram,
+            attention_layers.len(),
+            dtype,
+            &device,
+        )?;
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, text.hidden_size),
             streams,
@@ -322,6 +401,7 @@ impl ModelWeights {
             head,
             output,
             rotary,
+            qsa: Some(text.qsa()?),
             device,
             cache,
             max_seq_len: props.max_seq_len,
@@ -329,7 +409,7 @@ impl ModelWeights {
             mapper: Some(mapper),
             dtype,
             mtp: Default::default(),
-            meta: Some((
+            meta: Some(crate::paged_attention::KvLayers::indexed(
                 crate::paged_attention::ModelConfigMetadata {
                     max_seq_len: props.max_seq_len,
                     num_layers: props.block_count,
@@ -341,9 +421,11 @@ impl ModelWeights {
                     v_head_dim: props.head_dim,
                     kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
                 },
-                (0..props.block_count)
-                    .filter(|&i| text.attention(i))
-                    .collect(),
+                &attention_layers,
+                crate::paged_attention::IndexEntries {
+                    num_layers: props.block_count,
+                    width: text.indexer_head_dim,
+                },
             )),
         })
     }
@@ -370,9 +452,15 @@ impl ModelConfig::FromGGUF for ModelWeights {
         };
         let mut props = PropsGGUF::try_from(&md, true)?;
         let streams = get("hyper_connection.count")?;
-        // The indexer keeps every key up to its budget, where dense attention is exact.
+        // Keys the indexer keeps per query. Past them QSA selects, so they no longer cap the context.
         let indexer_budget = get("attention.indexer.top_k")?;
-        props.max_seq_len = props.max_seq_len.min(indexer_budget);
+        let yarn = yarn(&md, props.max_seq_len)?;
+        if let Some(yarn) = yarn {
+            props.max_seq_len = yarn.context();
+        }
+        let indexers = (0..props.block_count)
+            .map(|i| qsa::Config::from_gguf(&md, i))
+            .collect::<Result<Vec<_>>>()?;
         // An INT32 array in the file, as the converter writes Python ints.
         let ngram_layer = match md.get_value::<Vec<i32>>("ple.layers") {
             Ok(layers) if layers.len() == 1 && layers[0] >= 0 => layers[0] as usize,
@@ -397,12 +485,14 @@ impl ModelConfig::FromGGUF for ModelWeights {
             ngram_dev,
         )?);
 
-        let rotary = Arc::new(Qwen3VLRotaryEmbedding::new(
+        let rotary = Arc::new(Qwen3VLRotaryEmbedding::new_yarn(
             props.rope_freq_base,
             props.rot_dim,
             device,
             props.mrope_section.clone(),
+            yarn,
         )?);
+        let mut shape = None;
 
         let mut layers = Vec::with_capacity(props.block_count);
         for i in NiceProgressBar::<_, 'b'>(
@@ -415,12 +505,24 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let rotary = if dev.same_device(device) {
                 rotary.clone()
             } else {
-                Arc::new(Qwen3VLRotaryEmbedding::new(
+                Arc::new(Qwen3VLRotaryEmbedding::new_yarn(
                     props.rope_freq_base,
                     props.rot_dim,
                     dev,
                     props.mrope_section.clone(),
+                    yarn,
                 )?)
+            };
+            let index = match indexers[i] {
+                Some(cfg) if attention(i) => {
+                    if shape.is_some_and(|s| s != cfg) {
+                        hanzo_ml::bail!("zen6 layer {i}: an indexer unlike the others");
+                    }
+                    shape = Some(cfg);
+                    Some(qsa::Indexer::from_gguf(&mut ct, &prefix, cfg, eps, dev)?)
+                }
+                None if !attention(i) => None,
+                _ => hanzo_ml::bail!("zen6 layer {i}: indexer and attention schedule disagree"),
             };
             let mix = if attention(i) {
                 let paged = match attention_mechanism {
@@ -441,6 +543,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             };
             layers.push(Layer {
                 mix,
+                index,
                 attn: Branch::from_gguf(&mut ct, &format!("{prefix}.hc_attn"), streams, eps, dev)?,
                 ffn: Branch::from_gguf(&mut ct, &format!("{prefix}.hc_ffn"), streams, eps, dev)?,
                 moe: FusedMoe::from_gguf(&mut ct, &prefix, dev, props.num_experts_per_tok)?,
@@ -451,7 +554,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let Some(ngram) = layers[ngram_layer].ngram.as_ref() else {
             hanzo_ml::bail!("layer {ngram_layer} has no n-gram block");
         };
-        let cache = hybrid_cache(&props, &attention, ngram, dtype, device)?;
+        let qsa = shape.ok_or_else(|| hanzo_ml::Error::msg("zen6 without attention"))?;
+        let attention_layers = layers.iter().filter(|l| l.index.is_some()).count();
+        let cache = hybrid_cache(&props, &attention, ngram, attention_layers, dtype, device)?;
 
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, props.embedding_length),
@@ -461,6 +566,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             head,
             output,
             rotary,
+            qsa: Some(qsa),
             device: device.clone(),
             cache,
             max_seq_len: props.max_seq_len,
@@ -470,6 +576,40 @@ impl ModelConfig::FromGGUF for ModelWeights {
             mtp: Default::default(),
             meta: None,
         })
+    }
+}
+
+/// YaRN from the GGUF `rope.scaling.{type, factor, original_context_length, yarn_beta_fast,
+/// yarn_beta_slow}`, `None` when the file declares no scaling. The original length defaults to
+/// `context`; [`Yarn::mrope`] counts the ramp over four times the original length, the M-RoPE
+/// table's.
+fn yarn(md: &ContentMetadata, context: usize) -> Result<Option<Yarn>> {
+    let msg = |e: anyhow::Error| hanzo_ml::Error::Msg(e.to_string());
+    match md
+        .get_option_value::<String>("rope.scaling.type")
+        .map_err(msg)?
+        .as_deref()
+    {
+        None | Some("none") => Ok(None),
+        Some("yarn") => {
+            let original = md
+                .get_option_value::<u32>("rope.scaling.original_context_length")
+                .map_err(msg)?
+                .map_or(context, |v| v as usize);
+            let beta = |key: &str, default: f32| {
+                md.get_option_value::<f32>(key)
+                    .map(|v| f64::from(v.unwrap_or(default)))
+                    .map_err(msg)
+            };
+            Yarn::mrope(
+                f64::from(md.get_value::<f32>("rope.scaling.factor").map_err(msg)?),
+                original,
+                beta("rope.scaling.yarn_beta_fast", 32.0)?,
+                beta("rope.scaling.yarn_beta_slow", 1.0)?,
+            )
+            .map(Some)
+        }
+        Some(other) => hanzo_ml::bail!("zen6 takes YaRN rope scaling, not `{other}`"),
     }
 }
 
@@ -598,7 +738,21 @@ impl ModelWeights {
             rope_positions,
         )?;
 
+        let batch = self
+            .qsa
+            .map(|cfg| {
+                let meta = metadata.as_ref().map(|(_, meta)| *meta);
+                qsa::Batch::new(cfg, seqlen_offsets, seq_len, meta, &self.device)
+            })
+            .transpose()?;
+        // The eager index caches follow the n-gram pool; the paged index entries follow the
+        // attention layers' K/V.
         let side = self.layers.len();
+        let index = batch.as_ref().map(|batch| Index {
+            batch,
+            eager: side + 1,
+            paged: self.layers.iter().filter(|l| l.index.is_some()).count(),
+        });
         let mut step = Step {
             cache: &mut *hybrid_cache,
             slots: &slots,
@@ -609,6 +763,7 @@ impl ModelWeights {
             kv_layer: 0,
             ngram: Some(&g),
             side,
+            index,
         };
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
@@ -700,14 +855,10 @@ impl crate::pipeline::NormalModel for ModelWeights {
         self.max_seq_len
     }
     fn config(&self) -> &crate::paged_attention::ModelConfigMetadata {
-        &self.meta.as_ref().expect("a safetensors zen6").0
+        self.meta.as_ref().expect("a safetensors zen6").inner()
     }
     fn model_config(&self) -> Arc<dyn crate::paged_attention::ModelConfigLike + Send + Sync> {
-        let (meta, layers) = self.meta.as_ref().expect("a safetensors zen6");
-        Arc::new(crate::paged_attention::KvLayers::new(
-            meta.clone(),
-            layers.clone(),
-        ))
+        Arc::new(self.meta.clone().expect("a safetensors zen6"))
     }
 }
 
@@ -724,7 +875,8 @@ pub(crate) mod tests {
     use crate::utils::model_config::FromGGUF;
 
     // A tiny zen6: 4 layers (three gated delta-nets, then attention), 2 streams, and the
-    // n-gram block at layer 1 with a hand-sized hash (order 3, two heads per order).
+    // n-gram block at layer 1 with a hand-sized hash (order 3, two heads per order). The attention
+    // layer's indexer keeps 2 groups of 4 tokens, a width of 11.
     const VOCAB: usize = 24;
     // Hidden and FFN widths are Q8_0 blocks (32): expert banks are quantized, as in real files.
     const HIDDEN: usize = 32;
@@ -740,6 +892,8 @@ pub(crate) mod tests {
     const ROW: usize = 2;
     const EOS: u32 = 9;
     const MULT: [u64; 3] = [3, 5, 7];
+    const INDEX_HEADS: usize = 2;
+    const INDEX_DIM: usize = 12;
     const SIZE: [u64; 4] = [11, 13, 17, 19];
     const OFFSET: [u64; 4] = [0, 11, 24, 41];
 
@@ -753,8 +907,12 @@ pub(crate) mod tests {
             ("attention.head_count", n(HEADS)),
             ("attention.head_count_kv", n(1)),
             ("attention.key_length", n(HEAD_DIM)),
+            ("attention.value_length", n(HEAD_DIM)),
             ("attention.layer_norm_rms_epsilon", F32(1e-6)),
-            ("attention.indexer.top_k", n(32)),
+            ("attention.indexer.head_count", n(INDEX_HEADS)),
+            ("attention.indexer.key_length", n(INDEX_DIM)),
+            ("attention.indexer.top_k", n(8)),
+            ("attention.compress_ratios", i32s(&[0, 0, 0, 4])),
             ("block_count", n(4)),
             ("context_length", n(64)),
             ("embedding_length", n(HIDDEN)),
@@ -819,6 +977,10 @@ pub(crate) mod tests {
                 t.push(b("attn_output", &[HIDDEN, HEADS * HEAD_DIM]));
                 t.push(b("attn_q_norm", &[HEAD_DIM]));
                 t.push(b("attn_k_norm", &[HEAD_DIM]));
+                t.push(b("indexer.q_proj", &[INDEX_HEADS * INDEX_DIM, HIDDEN]));
+                t.push(b("indexer.k_proj", &[INDEX_DIM, HIDDEN]));
+                t.push(b("indexer.q_norm", &[INDEX_DIM]));
+                t.push(b("indexer.k_norm", &[INDEX_DIM]));
             } else {
                 t.push(b("attn_qkv", &[conv_dim, HIDDEN]));
                 t.push(b("attn_gate", &[GDN_V_HEADS * GDN_DIM, HIDDEN]));
@@ -884,11 +1046,15 @@ pub(crate) mod tests {
         Ok(file.into_inner())
     }
 
-    /// A model loaded from `bytes`, its cache holding one sequence at slot 0.
-    pub(crate) fn model(bytes: &[u8]) -> Result<ModelWeights> {
+    /// A model loaded from `bytes`, its cache holding one sequence at slot 0; `yarn` extends its
+    /// context by that factor as the serve flag does.
+    fn model_with(bytes: &[u8], yarn: Option<f32>) -> Result<ModelWeights> {
         let mut file = Cursor::new(bytes.to_vec());
         let mut readers = [&mut file];
-        let ct = Content::from_readers(&mut readers)?;
+        let mut ct = Content::from_readers(&mut readers)?;
+        if let Some(factor) = yarn {
+            ct.extend_context(factor).map_err(hanzo_ml::Error::msg)?;
+        }
         let model = ModelWeights::from_gguf(
             ct,
             &Device::Cpu,
@@ -905,6 +1071,10 @@ pub(crate) mod tests {
             cache.set_state_indices_host(Some(vec![slot]));
         }
         Ok(model)
+    }
+
+    pub(crate) fn model(bytes: &[u8]) -> Result<ModelWeights> {
+        model_with(bytes, None)
     }
 
     /// Logits of the last token after feeding `toks` in chunks of the given lengths.
@@ -932,8 +1102,109 @@ pub(crate) mod tests {
         let logits = last_logits(&bytes, &TOKS, &[TOKS.len()])?;
         assert_eq!(logits.len(), VOCAB);
         assert!(logits.iter().all(|x| x.is_finite()), "{logits:?}");
-        // The indexer's budget caps the context.
-        assert_eq!(model(&bytes)?.max_seq_len, 32);
+        // The context is the file's; YaRN multiplies it.
+        assert_eq!(model(&bytes)?.max_seq_len, 64);
+        assert_eq!(model_with(&bytes, Some(4.0))?.max_seq_len, 256);
+        // The budget is the indexer's, reported whatever the context.
+        assert_eq!(model(&bytes)?.indexer_budget, 8);
+        Ok(())
+    }
+
+    /// The serve flag declares the keys a YaRN conversion carries, and the model reads them as
+    /// M-RoPE YaRN: rotations counted over four times the original context.
+    #[test]
+    fn yarn_reads_rope_scaling() -> Result<()> {
+        let bytes = gguf(7)?;
+        let mut file = Cursor::new(bytes);
+        let mut readers = [&mut file];
+        let mut ct = Content::from_readers(&mut readers)?;
+        let md = |ct: &Content<'_, Cursor<Vec<u8>>>| {
+            yarn(
+                &ContentMetadata {
+                    path_prefix: ARCH,
+                    metadata: ct.get_metadata(),
+                },
+                64,
+            )
+        };
+        assert_eq!(md(&ct)?, None);
+        ct.extend_context(4.0).map_err(hanzo_ml::Error::msg)?;
+        let want = Yarn {
+            factor: 4.0,
+            length: 256,
+            beta_fast: 32.0,
+            beta_slow: 1.0,
+        };
+        assert_eq!(md(&ct)?, Some(want));
+        assert_eq!(want.context(), 256);
+        Ok(())
+    }
+
+    /// The paged cache holds the attention layer's K/V and, after the decoder depth, its index
+    /// entry: one head of the indexer's width, on the device of the layer that reads it.
+    #[test]
+    fn paged_cache_holds_the_index() -> Result<()> {
+        use crate::paged_attention::ModelConfigLike;
+        use crate::utils::gguf_metadata::ContentConfig;
+        let mut file = Cursor::new(gguf(7)?);
+        let mut readers = [&mut file];
+        let ct = Content::from_readers(&mut readers)?;
+        let cfg = ContentConfig::from(&ct);
+        assert_eq!(cfg.kv_layers(), vec![3, 4 + 3]);
+        let spec = |l: usize| {
+            (
+                cfg.num_kv_heads_for_layer(l),
+                cfg.k_head_dim_for_layer(l),
+                cfg.v_head_dim_for_layer(l),
+                cfg.kv_reader(l),
+            )
+        };
+        assert_eq!(spec(3), (1, HEAD_DIM, HEAD_DIM, Some(3)));
+        assert_eq!(spec(7), (1, INDEX_DIM, INDEX_DIM, Some(3)));
+        assert_eq!(
+            cfg.kv_cache_elements_per_token(),
+            2 * HEAD_DIM + 2 * INDEX_DIM
+        );
+        Ok(())
+    }
+
+    /// 40 tokens, past the indexer's width of 11: most queries drop groups.
+    fn long() -> Vec<u32> {
+        (0..40u32).map(|i| (i * 7 + i / 5) % VOCAB as u32).collect()
+    }
+
+    /// Past the indexer's width the forward selects, and one pass, chunks that split groups and
+    /// cross the width, and token-at-a-time steps still carry the same state: the index's closed
+    /// groups and open-group raw keys as well as everything above. Every run selects the same
+    /// tokens and attends them through the same masked attention, so they agree to float noise; an
+    /// index carried wrongly moves a selection and misses by orders of magnitude.
+    #[test]
+    fn sparse_forwards_match_one_pass() -> Result<()> {
+        let bytes = gguf(13)?;
+        let toks = long();
+        let whole = last_logits(&bytes, &toks, &[toks.len()])?;
+        let runs: [&[usize]; 4] = [&[13, 27], &[11, 1, 1, 9, 18], &[2, 10, 28], &[12; 3]];
+        for chunks in runs {
+            let chunks: Vec<usize> = if chunks.iter().sum::<usize>() == toks.len() {
+                chunks.to_vec()
+            } else {
+                chunks
+                    .iter()
+                    .copied()
+                    .chain(std::iter::repeat_n(1, 4))
+                    .collect()
+            };
+            let got = last_logits(&bytes, &toks, &chunks)?;
+            let worst = got
+                .iter()
+                .zip(&whole)
+                .map(|(a, b)| (a - b).abs() / (1.0 + b.abs()))
+                .fold(0f32, f32::max);
+            assert!(
+                worst <= 1e-5,
+                "chunks {chunks:?}: worst relative error {worst:e}"
+            );
+        }
         Ok(())
     }
 
@@ -1076,6 +1347,38 @@ pub(crate) mod tests {
         Ok(())
     }
 
+    /// The safetensors door runs QSA as the GGUF door does: its attention layer reads the indexer
+    /// (2 groups of 4 tokens, a width of 11), the context is the config's, and past the width
+    /// chunks that split groups and cross it carry the index as one pass does. Single steps are
+    /// left to the GGUF door's `sparse_forwards_match_one_pass`, through the same `qsa::forward`:
+    /// here a step carries this door's W4A4 rounding (2e-3 in `tiny_chunked_matches_one_pass`),
+    /// which past the width can move a top-k selection.
+    #[test]
+    fn tiny_sparse_matches_one_pass() -> Result<()> {
+        let (model, _, _dir) = tiny_model(&Device::Cpu, DType::F32)?;
+        assert_eq!(model.qsa, Some(qsa::Config::new(2, 64, 4, 8)?));
+        assert_eq!(model.qsa.map(|c| c.width()), Some(11));
+        assert_eq!(model.max_seq_len, 4096);
+        assert_eq!(model.indexer_budget, 8);
+        let toks: Vec<u32> = (0..40u32).map(|i| (i * 7 + i / 5) % 512).collect();
+        let whole = tiny_last_logits(&toks, &[toks.len()], DType::F32)?;
+        assert!(whole.iter().all(|v| v.is_finite()));
+        let runs: [&[usize]; 4] = [&[13, 27], &[2, 10, 28], &[11, 2, 9, 18], &[12, 12, 16]];
+        for chunks in runs {
+            let got = tiny_last_logits(&toks, chunks, DType::F32)?;
+            let worst = got
+                .iter()
+                .zip(&whole)
+                .map(|(a, b)| (a - b).abs() / (1.0 + b.abs()))
+                .fold(0f32, f32::max);
+            assert!(
+                worst <= 1e-5,
+                "chunks {chunks:?}: worst relative error {worst:e}"
+            );
+        }
+        Ok(())
+    }
+
     fn tiny_json() -> String {
         serde_json::to_string(&tiny_config()).expect("config serializes")
     }
@@ -1125,7 +1428,8 @@ pub(crate) mod tests {
             .load(&tiny_json(), vb, meta, AttentionImplementation::Eager)
             .map_err(hanzo_ml::Error::msg)?;
         assert_eq!(model.config().num_layers, 4);
-        assert_eq!(model.model_config().kv_layers(), vec![3]);
+        // Layer 3's K/V and, past the depth of 4, its QSA index entry.
+        assert_eq!(model.model_config().kv_layers(), vec![3, 4 + 3]);
         {
             let mut cache = model.cache().hybrid();
             let slot = cache.allocate_seq().expect("a free recurrent slot") as u32;
@@ -1145,28 +1449,44 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    /// Only the attention layers hold paged K/V, and the device charge is the manifest's device
-    /// entries: the n-gram table and hash are host-side and never charged.
+    /// Only the attention layers hold paged K/V, each followed past the decoder depth by its QSA
+    /// index entry (one head of the indexer's width, on the attention layer's device), and the
+    /// device charge is the manifest's device entries: the n-gram table and hash are host-side and
+    /// never charged.
     #[test]
-    fn hybrid_kv_charges_attention_layers_only() -> Result<()> {
+    fn hybrid_kv_charges_attention_and_index_only() -> Result<()> {
         use crate::pipeline::DeviceMappedModelLoader;
         let json = tiny_json();
-        let loader = crate::pipeline::Zen6Loader;
-        let kv = loader
+        let text = tiny_config().text().clone();
+        let cfg = crate::pipeline::Zen6Loader
             .model_config(&json)
-            .map_err(hanzo_ml::Error::msg)?
-            .kv_layers();
-        let want: Vec<usize> = (0..4)
-            .filter(|&i| tiny_config().text().attention(i))
-            .collect();
-        assert_eq!(kv, want);
-        assert_eq!(kv, vec![3]);
+            .map_err(hanzo_ml::Error::msg)?;
+        let attention: Vec<usize> = (0..4).filter(|&i| text.attention(i)).collect();
+        assert_eq!(attention, vec![3]);
+        assert_eq!(cfg.kv_layers(), vec![3, 4 + 3]);
+        let spec = |l: usize| {
+            (
+                cfg.num_kv_heads_for_layer(l),
+                cfg.k_head_dim_for_layer(l),
+                cfg.v_head_dim_for_layer(l),
+                cfg.kv_reader(l),
+            )
+        };
+        let (kv, d, w) = (
+            text.num_key_value_heads,
+            text.head_dim,
+            text.indexer_head_dim,
+        );
+        assert_eq!(spec(3), (kv, d, d, Some(3)));
+        assert_eq!(spec(7), (1, w, w, Some(3)));
+        assert_eq!(cfg.kv_cache_elements_per_token(), 2 * kv * d + 2 * w);
         Ok(())
     }
 
     /// The loader's charge for the real snapshot, from its config alone: the manifest's device
     /// bytes plus what is held wider on the device (f32 norms and GDN side tensors, the banks'
-    /// alpha and global scale), the attention layers' KV per token, and one sequence's state.
+    /// alpha and global scale), the attention layers' KV and QSA index per token, and one
+    /// sequence's state. The indexers add 12 x (640 x 2560 bf16 + 2 x 128 f32) = 39,333,888 bytes.
     #[test]
     #[ignore = "reads the Qwen3.8-Flash-Next snapshot's config"]
     fn zen6_accounting_matches_checkpoint() -> Result<()> {
@@ -1181,15 +1501,15 @@ pub(crate) mod tests {
             estimate as f64 / (1u64 << 30) as f64
         );
         assert!(
-            (74_895_296_000..=74_895_296_000 + (32 << 20)).contains(&estimate),
+            (74_934_629_888..=74_934_629_888 + (32 << 20)).contains(&estimate),
             "estimate {estimate}"
         );
         let per_token = crate::pipeline::Zen6Loader
             .model_config(&json)
             .map_err(hanzo_ml::Error::msg)?
             .kv_cache_elements_per_token();
-        assert_eq!(per_token * DType::BF16.size_in_bytes(), 24_576);
-        assert_eq!(per_token * DType::F8E4M3.size_in_bytes(), 12_288);
+        assert_eq!(per_token * DType::BF16.size_in_bytes(), 30_720);
+        assert_eq!(per_token * DType::F8E4M3.size_in_bytes(), 15_360);
         assert_eq!(
             config(&snapshot()).text().state_bytes_per_sequence(),
             116_379_648
@@ -1302,7 +1622,7 @@ pub(crate) mod tests {
         let g = gpu(1.55);
         let dev = g.dev.clone();
         let cfg = config(&snapshot());
-        let props = cfg.props();
+        let props = cfg.props()?;
         let text = cfg.text();
         let files = weights(&snapshot());
         let lm = snapshot_vb(&dev)?.pp("model.language_model");
@@ -1351,6 +1671,7 @@ pub(crate) mod tests {
                 layer_types: types,
                 max_seq_len: props.max_seq_len,
                 pools,
+                side_kv: 0,
             },
             &dev,
         )
@@ -1404,6 +1725,7 @@ pub(crate) mod tests {
                     kv_layer: 0,
                     ngram: g.as_ref(),
                     side: layers,
+                    index: None,
                 };
                 outs.push(layer.forward(i, xi, &mut step)?);
                 at += len;

@@ -446,7 +446,8 @@ Avoid returning TODOs.
   Dense side layers are block FP8 (E4M3, one F32 scale per 128x128). The rest is BF16. Layer 1's PLE
   n-gram table is `Role::Host`: it is hashed and looked up in an mmap'd buffer, never uploaded, and
   never charged to the KV budget (`table_never_charged`,
-  `hybrid_kv_charges_attention_layers_only` — only the full-attention layers are).
+  `hybrid_kv_charges_attention_and_index_only` — only the full-attention layers and their QSA
+  index entries are).
 - **W4A4, matched to the server, not to an ideal.** `hanzo-quant/src/quantize/` reproduces the
   *served* activation quantizers bit-exactly — per-token/per-128-group FP8 in the three forms the
   compiled graph uses, and per-16 NVFP4 with the served fast-math formula. On CUDA that means the
@@ -472,10 +473,43 @@ Avoid returning TODOs.
   no served reference at all and their `*.golden` gaps in the vectors metadata are fiction. `g` and
   `beta` are right, because they come from `a` and `b`, not from `conv`. `vectors()` refuses an
   all-zero stage by name. Re-recording those stages settles the call form.
-- **Deferred, and it shows.** `self_attn.indexer.` (M2: QSA sparse attention) and `mtp.` (M3:
-  multi-token prediction) are not read, so a native load attends densely through every key: the
-  logits match, the tokens/sec do not yet. The `qsa.rs` and `hyper.rs` machinery is already there for
-  the full-attention and mixer paths.
+- **Deferred.** `mtp.` (M3: multi-token prediction) is not read by the native door; the GGUF door
+  drafts with the MTP head GGUF published beside the model (`models/quantized_zen6_mtp.rs`).
+
+### QSA sparse attention and YaRN (both doors)
+
+- **Context**: the checkpoint's own (the GGUF's `context_length`, the config's
+  `max_position_embeddings`, 262,144 either way), times the YaRN factor when one is declared.
+  `Yarn::mrope` builds it for both doors from what each checkpoint says: the GGUF
+  `{arch}.rope.scaling.{type, factor, original_context_length, yarn_beta_fast, yarn_beta_slow}`
+  metadata, or `rope_parameters` with `rope_type: "yarn"`, `factor`,
+  `original_max_position_embeddings`, `beta_fast`, `beta_slow` (the original defaults to the
+  context either way). The released GGUF carries none, so `--rope-yarn-factor F` (GGUF serve/run)
+  writes those keys into the loaded metadata (`Content::extend_context`) before any model reads
+  them: `--rope-yarn-factor 4` = the card's static YaRN, 1,048,576 positions. The paged KV cache
+  does not follow the factor: size it with `--pa-context-len N` (or `--max-seq-len`, the device-map
+  demand).
+- **YaRN on M-RoPE** (`layers.rs` `Yarn`): the M-RoPE table spans `factor` times the original
+  length and YaRN counts its rotations over THAT, so the ramp is frequencies 16..24 of 32, not the
+  14..22 a count over the original length gives. The attention factor `0.1 ln F + 1` multiplies cos
+  and sin (f32, before the cast), so the indexer's roped dims carry it too.
+- **QSA** (`models/qsa.rs`): per attention
+  layer an index cache entry of 1 head x 128, K = compressed key at each group's last token, V =
+  raw key per token. Paged: entries `48 + l` in `kv_layers()` (`IndexEntries`, which ContentConfig
+  and the native door's `KvLayers::indexed` share), read by layer `l`.
+  Eager: `HybridCacheConfig::side_kv` caches after the n-gram pool, batched/split/trimmed with the
+  attention caches. Within the width (2051 tokens) the layer runs its dense attention unchanged;
+  past it: device scores, host DET top-k, union-of-selections masked attention with the QSA
+  kernel's numerics (`qsa::softmax_pv`, shared with the dense `qsa::attend`). One forward
+  (`Layer::forward` -> `qsa::forward`) serves both doors; only the loaders differ.
+- **The two doors' indexers are the same tensors.** The safetensors checkpoint stores one
+  `self_attn.indexer.index_qk_proj` `[(4 + 1) x 128, 2560]` bf16, the query heads' rows then the key
+  head's, and Gemma norms `q_layernorm`/`k_layernorm` as `w`; the GGUF splits the projection into
+  `indexer.q_proj`/`k_proj` and stores the norms as `1 + w` in f32. Checked on layer 3 of the released
+  files: rows 0..512 are byte-equal to `q_proj`, rows 512..640 to `k_proj`, and the GGUF norms are
+  exactly `1 + w`. `qsa::Indexer::new` loads the former, `Indexer::from_gguf` the latter.
+- **Validate on a GPU** by comparing paged vs eager (`--paged-attn off`) on the same long prompt: the
+  paged path's only code not run by CPU tests is the `reshape_and_cache` write of the index entry.
 
 ## Kernel tuning + new-model onboarding: the roofline-driven process (SOTA loop)
 A repeatable, measurement-first process. The scar tissue behind every step is in `ml/LLM.md`

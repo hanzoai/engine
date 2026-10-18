@@ -99,6 +99,7 @@ async fn load(path: &Path) -> Arc<Hanzo> {
         quantized_filename: file,
         dtype: ModelDType::Auto,
         topology: None,
+        rope_yarn_factor: None,
         max_seq_len: 4096,
         max_batch_size: 1,
     };

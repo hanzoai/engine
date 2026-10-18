@@ -202,6 +202,7 @@ pub fn parse_model_spec(
                     quantized_filename: file,
                     dtype: ModelDType::Auto,
                     topology: None,
+                    rope_yarn_factor: None,
                     max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
                     max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
                 }

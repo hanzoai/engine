@@ -1,6 +1,4 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-// The first caller is the zen6 loader.
-#![allow(dead_code)]
 
 //! zen6's QSA: attention restricted to the best compressed key groups.
 //!
@@ -10,30 +8,72 @@
 //! plus its own open tail group: at most `width = blocks·ratio + ratio - 1` tokens, so QSA is
 //! exactly dense attention for sequences of up to `width` tokens.
 //!
-//! This is the CPU implementation. Its top-k is the deterministic one: score descending, ties to
-//! the lower index.
+//! # The index
+//!
+//! Beside its K/V, each attention layer keeps an index entry of two rows per token, `dim` wide
+//! and one head: in K the compressed key of group `j` at the group's last token
+//! `ratio·j + ratio - 1` and zero at every other token, in V the token's raw key. Rows per token
+//! give the index the K/V's own slots, so everything the engine does to a sequence's cache
+//! (paging, prefix reuse, trimming a rejected draft, swapping a sequence out) keeps the two
+//! consistent with no bookkeeping of QSA's own. A chunk closes the groups that end inside it from
+//! its own raw keys and the at most `ratio - 1` raw keys before it, read back from the index.
+//!
+//! # The forward
+//!
+//! Every forward projects the indexer and writes the index. While no query of the forward sees
+//! more than `blocks` groups every query keeps every token up to its own, so the layer runs its
+//! dense attention unchanged. Past that, each sequence
+//!
+//! 1. reads its `G = len / ratio` compressed keys from the index;
+//! 2. scores its queries against them on the device, as many queries at a time as keep the
+//!    scores within [`SCORE_BYTES`], and ranks each query's groups on the host by the served
+//!    kernel's rule ([`select`]);
+//! 3. groups consecutive queries while attending the union of their tokens under a mask spends
+//!    at most twice the scores their own selections need, gathers each union's K/V rows once,
+//!    and runs the QSA kernel's arithmetic ([`softmax_pv`]) over it under a mask, grouped-query
+//!    heads folded into rows ([`sparse`]).
+//!
+//! Per layer and sequence, `n` queries at context `T` cost `O(n·T/ratio·heads·dim)` to score and
+//! `O(n·width)` rows of attention, against `O(n·T)` for dense attention; a decode step reads the
+//! `T/ratio` compressed keys and `width` K/V rows. The transients are bounded independently of
+//! `T` except the compressed keys themselves: [`SCORE_BYTES`] of scores, [`UNION`] gathered
+//! rows, and [`LOGITS`] mask entries.
+//!
+//! The top-k is the deterministic one: score descending, ties to the lower index.
 
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
 use hanzo_ml::{DType, Device, Result, Tensor, D};
-use hanzo_quant::QuantMethod;
+use hanzo_nn::Linear;
+use hanzo_quant::{QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear};
+use rayon::prelude::*;
 
+use crate::attention::AttentionMask;
 use crate::gguf::Content;
 use crate::layers::QRmsNorm;
-use crate::models::quantized_qwen3_5_moe::gguf_qmm;
+use crate::models::quantized_qwen3_5_moe::{gguf_qmm, GatedFullAttention};
+use crate::paged_attention::AttentionBackendKind;
+use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+use crate::pipeline::KvCache;
 use crate::utils::gguf_metadata::ContentMetadata;
 
+/// Bytes of f32 scores one chunk of queries may hold, with their per-head terms: the served
+/// kernel's logits workspace, 128 MiB.
+const SCORE_BYTES: usize = 128 << 20;
+
+/// Tokens whose K/V rows one group of queries gathers.
+const UNION: usize = 1 << 15;
+
+/// Mask entries, query rows times gathered tokens, of one group of queries.
+const LOGITS: usize = 1 << 20;
+
 /// Attention with the QSA kernel's math over dense causal keys, which is what QSA computes while
-/// every visible key is selected (one tile): f32 scores scaled by
-/// `d^-0.5 · log2 e`, `exp2` against the row max, the probabilities rounded to the activation
-/// dtype for the PV product while the normalizer sums them unrounded, an f32 PV, one division and
-/// one rounding.
+/// every visible key is selected (one tile), by [`softmax_pv`].
 ///
 /// `q` `[b, hq, s, d]`, `k`/`v` `[b, hkv, L, d]` with the `s` queries at positions `L - s ..
 /// L`; returns `[b, hq, s, d]` in `q`'s dtype.
 pub(crate) fn attend(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
-    let dtype = q.dtype();
     let (b, hq, s, d) = q.dims4()?;
     let (_, hkv, l, _) = k.dims4()?;
     let group = hq / hkv;
@@ -47,8 +87,6 @@ pub(crate) fn attend(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
             .reshape((b, hq, l, d))
     };
     let (k, v) = (expand(k)?, expand(v)?);
-    let scale = ((d as f64).powf(-0.5) * std::f64::consts::LOG2_E) as f32;
-    let scores = (q.to_dtype(DType::F32)?.matmul(&k.t()?.contiguous()?)? * f64::from(scale))?;
     let offset = l - s;
     let mask: Vec<f32> = (0..s)
         .flat_map(|i| {
@@ -62,7 +100,21 @@ pub(crate) fn attend(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
         })
         .collect();
     let mask = Tensor::from_vec(mask, (1, 1, s, l), q.device())?;
-    let scores = scores.broadcast_add(&mask)?;
+    softmax_pv(q, &k, &v, &mask)
+}
+
+/// The QSA kernel's attention arithmetic: f32 scores scaled by
+/// `d^-0.5 · log2 e` plus the additive `mask`, `exp2` against the row max, the probabilities
+/// rounded to the activation dtype for the PV product while the normalizer sums them unrounded,
+/// an f32 PV, one division and one rounding. `q` `[.., m, d]`, `k`/`v` `[.., u, d]`, `mask`
+/// broadcast to `[.., m, u]`; returns `[.., m, d]` in `q`'s dtype.
+fn softmax_pv(q: &Tensor, k: &Tensor, v: &Tensor, mask: &Tensor) -> Result<Tensor> {
+    let dtype = q.dtype();
+    let d = q.dim(D::Minus1)?;
+    let (k, v) = (k.to_dtype(DType::F32)?, v.to_dtype(DType::F32)?);
+    let scale = ((d as f64).powf(-0.5) * std::f64::consts::LOG2_E) as f32;
+    let scores = (q.to_dtype(DType::F32)?.matmul(&k.t()?.contiguous()?)? * f64::from(scale))?;
+    let scores = scores.broadcast_add(mask)?;
     let max = scores.max_keepdim(D::Minus1)?;
     let p = (scores.broadcast_sub(&max)? * std::f64::consts::LN_2)?.exp()?;
     let l_sum = p.sum_keepdim(D::Minus1)?;
@@ -101,33 +153,43 @@ impl Config {
                 .map_err(|_| hanzo_ml::Error::Msg(format!("layer {layer}: compress ratio {r}")))?,
         };
         let get = |key: &str| md.get_value::<u32>(key).map(|v| v as usize).map_err(msg);
-        let (heads, dim, tokens) = (
+        Self::new(
             get("attention.indexer.head_count")?,
             get("attention.indexer.key_length")?,
+            ratio,
             get("attention.indexer.top_k")?,
-        );
+        )
+        .map(Some)
+        .map_err(|e| hanzo_ml::Error::Msg(format!("layer {layer}: {e}")))
+    }
+
+    /// `heads` query heads `dim` wide keeping `tokens` per query in groups of `ratio`.
+    pub(crate) fn new(heads: usize, dim: usize, ratio: usize, tokens: usize) -> Result<Self> {
         // Every value positive and the budget a whole number of groups.
-        if heads == 0 || dim == 0 || tokens == 0 || tokens % ratio != 0 {
-            hanzo_ml::bail!(
-                "layer {layer}: QSA heads {heads}, dim {dim}, top_k {tokens}, ratio {ratio}"
-            );
+        if heads == 0 || dim == 0 || ratio == 0 || tokens == 0 || !tokens.is_multiple_of(ratio) {
+            hanzo_ml::bail!("QSA heads {heads}, dim {dim}, top_k {tokens}, ratio {ratio}");
         }
-        Ok(Some(Self {
+        Ok(Self {
             heads,
             dim,
             ratio,
             blocks: tokens / ratio,
-        }))
+        })
     }
 
     /// Selection width: `blocks` whole groups plus a tail of at most `ratio - 1` tokens.
     pub(crate) fn width(&self) -> usize {
         self.blocks * self.ratio + self.ratio - 1
     }
+
+    /// Groups a query at `p` sees: those complete by `p`, `(p + 1) / ratio`.
+    fn visible(&self, p: usize) -> usize {
+        (p + 1) / self.ratio
+    }
 }
 
-/// One layer's indexer. The q/k norms are Gemma norms whose `1 + w` the GGUF already carries, so
-/// they run as plain RMS norms, in f32 with that f32 weight.
+/// One layer's indexer. The q/k norms are Gemma norms: the GGUF carries their `1 + w` and the
+/// safetensors checkpoint `w`, and either way they run as plain RMS norms, in f32 with `1 + w`.
 pub(crate) struct Indexer {
     q: Arc<dyn QuantMethod>,
     k: Arc<dyn QuantMethod>,
@@ -152,6 +214,41 @@ impl Indexer {
             k: gguf_qmm(tensor("k_proj")?)?,
             q_norm: QRmsNorm::new(tensor("q_norm")?, eps)?,
             k_norm: QRmsNorm::new(tensor("k_norm")?, eps)?,
+            cfg,
+        })
+    }
+
+    /// `{vb}.{index_qk_proj, q_layernorm, k_layernorm}` of a safetensors checkpoint
+    /// (`...self_attn.indexer`): the projection's first `heads·dim` rows are the queries and the
+    /// next `dim` the key, which the GGUF stores as `q_proj` and `k_proj`; the norms are `w`, held
+    /// as `1 + w` in f32.
+    pub(crate) fn new(
+        vb: &ShardedVarBuilder,
+        cfg: Config,
+        hidden: usize,
+        eps: f64,
+    ) -> Result<Self> {
+        let rows = cfg.heads * cfg.dim;
+        let qk = vb.get((rows + cfg.dim, hidden), "index_qk_proj.weight")?;
+        let linear = |w: Tensor| -> Result<Arc<dyn QuantMethod>> {
+            Ok(Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(Linear::new(w, None)),
+            )?))
+        };
+        let norm = |name: &str| -> Result<QRmsNorm> {
+            let w = vb.get_with_hints_dtype(
+                (cfg.dim,),
+                &format!("{name}.weight"),
+                Default::default(),
+                DType::F32,
+            )?;
+            Ok(QRmsNorm::from_weight((w + 1.0)?, eps))
+        };
+        Ok(Self {
+            q: linear(qk.narrow(0, 0, rows)?)?,
+            k: linear(qk.narrow(0, rows, cfg.dim)?)?,
+            q_norm: norm("q_layernorm")?,
+            k_norm: norm("k_layernorm")?,
             cfg,
         })
     }
@@ -198,6 +295,54 @@ impl Indexer {
             .reshape((1, 1, g, dim))?;
         rope(&x, cos_sin)?.reshape((g, dim))
     }
+
+    /// The index's K rows for a chunk, `[rows, dim]`: the compressed key of each group that closes
+    /// inside the chunk at the group's last token, zero elsewhere. `raw` holds the chunk's first
+    /// `n` raw keys, at positions `a..a + n`, and `prior` the `a % ratio` raw keys before them,
+    /// the open group's head, which only a chunk that closes a group reads. The groups are roped
+    /// by `attn`'s rotary at their first positions, as the served model ropes them with the main
+    /// attention's.
+    fn closed(
+        &self,
+        attn: &GatedFullAttention,
+        raw: &Tensor,
+        prior: Option<&Tensor>,
+        a: usize,
+        rows: usize,
+    ) -> Result<Tensor> {
+        let (n, dim) = raw.dims2()?;
+        let r = self.cfg.ratio;
+        let p = a % r;
+        let zeros = |len: usize| Tensor::zeros((len, dim), raw.dtype(), raw.device());
+        let groups = (p + n) / r;
+        if groups == 0 {
+            return zeros(rows);
+        }
+        if prior.map_or(0, |t| t.dim(0).unwrap_or(0)) != p {
+            hanzo_ml::bail!("QSA: a chunk at {a} needs the {p} raw keys before it");
+        }
+        let keys = match prior {
+            Some(prior) => Tensor::cat(&[prior, raw], 0)?,
+            None => raw.clone(),
+        };
+        let first: Vec<u32> = (0..groups).map(|j| (a - p + j * r) as u32).collect();
+        let planes = Tensor::from_vec(first.repeat(3), (3, 1, groups), raw.device())?;
+        let kc = self.compress(
+            &keys.narrow(0, 0, groups * r)?,
+            &attn.rotary_cos_sin(&planes, raw.dtype())?,
+        )?;
+        // Each group as `ratio` rows with its key in the last, less the rows before the chunk.
+        let placed = Tensor::cat(
+            &[
+                &Tensor::zeros((groups, r - 1, dim), kc.dtype(), kc.device())?,
+                &kc.unsqueeze(1)?,
+            ],
+            1,
+        )?
+        .reshape((groups * r, dim))?
+        .narrow(0, p, groups * r - p)?;
+        Tensor::cat(&[&placed, &zeros(rows - (groups * r - p))?], 0)
+    }
 }
 
 /// NeoX rotate-half RoPE over the leading `2·cos.dim(-1)` dims of each head of `x`
@@ -209,16 +354,42 @@ fn rope(x: &Tensor, (cos, sin): &(Tensor, Tensor)) -> Result<Tensor> {
     Tensor::cat(&[&head, &x.narrow(D::Minus1, r, d - r)?], D::Minus1)
 }
 
-/// Tokens each query attends, `[S, width]` i64: the tokens of its best `blocks` visible groups,
-/// then its open tail group, ascending, `-1` past the end.
+/// `Σ_h ReLU(q_h·kc_j)/√dim` of queries `q` `[rows, heads, dim]` against compressed keys `kc`
+/// `[G, dim]`, as `[rows, G]` f32 on their device. Products of bf16 values are exact in f32, so
+/// this is the served kernel's arithmetic up to the order of its sums.
+fn scores(q: &Tensor, kc: &Tensor) -> Result<Tensor> {
+    let (rows, heads, dim) = q.dims3()?;
+    let g = kc.dim(0)?;
+    let q = q
+        .to_dtype(DType::F32)?
+        .reshape((rows * heads, dim))?
+        .t()?
+        .contiguous()?;
+    let s = kc
+        .to_dtype(DType::F32)?
+        .matmul(&q)?
+        .relu()?
+        .reshape((g, rows, heads))?
+        .sum(2)?;
+    s.t()?.contiguous()? / (dim as f64).sqrt()
+}
+
+/// Tokens each query attends, ascending: the tokens of its best `blocks` visible groups, then its
+/// open tail group.
 ///
 /// `q` `[S, heads, dim]` holds queries at positions `pos`; `kc` `[G, dim]` holds the sequence's
-/// `G = len / ratio` compressed keys. A query at `p` sees group `j < min((p+1)/ratio, G)`
-/// and scores it `Σ_h ReLU(q_h·kc_j)/√dim` in f32. The groups are ranked as the served kernel
-/// ranks them ([`top`]) and expanded with the tail.
-pub(crate) fn select(q: &Tensor, kc: &Tensor, pos: &[usize], cfg: &Config) -> Result<Tensor> {
+/// `G = len / ratio` compressed keys. A query at `p` sees group `j < min((p+1)/ratio, G)` and
+/// scores it by [`scores`]. The groups are ranked as the served kernel ranks them ([`top`]) and
+/// expanded with the tail. Only queries that must drop a group are scored, as many at a time as
+/// keep their scores within [`SCORE_BYTES`].
+pub(crate) fn select(
+    q: &Tensor,
+    kc: &Tensor,
+    pos: &[usize],
+    cfg: &Config,
+) -> Result<Vec<Vec<u32>>> {
     let (rows, heads, dim) = q.dims3()?;
-    let (groups, width) = (kc.dim(0)?, cfg.width());
+    let groups = kc.dim(0)?;
     if (heads, dim) != (cfg.heads, cfg.dim) || kc.dims() != [groups, cfg.dim] {
         hanzo_ml::bail!(
             "QSA query {:?} or keys {:?} disagree with {cfg:?}",
@@ -229,34 +400,48 @@ pub(crate) fn select(q: &Tensor, kc: &Tensor, pos: &[usize], cfg: &Config) -> Re
     if pos.len() != rows {
         hanzo_ml::bail!("{} positions for {rows} queries", pos.len());
     }
-    let qs = q.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
-    let ks = kc.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
-    let div = (dim as f64).sqrt() as f32;
-    let mut out = vec![-1i64; rows * width];
-    let mut score = Vec::with_capacity(groups);
-    for ((row, qr), &p) in out
-        .chunks_exact_mut(width)
-        .zip(qs.chunks_exact(heads * dim))
-        .zip(pos)
-    {
-        let visible = ((p + 1) / cfg.ratio).min(groups);
-        score.clear();
-        score.extend(ks.chunks_exact(dim).take(visible).map(|k| {
-            qr.chunks_exact(dim)
-                .map(|h| h.iter().zip(k).map(|(a, b)| a * b).sum::<f32>().max(0.0))
-                .sum::<f32>()
-                / div
-        }));
-        let tail = (p + 1) / cfg.ratio * cfg.ratio..=p;
-        let tokens = top(&score, cfg.blocks)
-            .into_iter()
+    let q = q.contiguous()?;
+    let visible = |p: usize| cfg.visible(p).min(groups);
+    let expand = |kept: Vec<usize>, p: usize| -> Vec<u32> {
+        let tail = cfg.visible(p) * cfg.ratio..=p;
+        kept.into_iter()
             .flat_map(|j| j * cfg.ratio..(j + 1) * cfg.ratio)
-            .chain(tail);
-        for (cell, t) in row.iter_mut().zip(tokens) {
-            *cell = t as i64;
+            .chain(tail)
+            .map(|t| t as u32)
+            .collect()
+    };
+    let mut out: Vec<Vec<u32>> = pos
+        .iter()
+        .map(|&p| {
+            if visible(p) <= cfg.blocks {
+                expand((0..visible(p)).collect(), p)
+            } else {
+                Vec::new()
+            }
+        })
+        .collect();
+    let ranked: Vec<usize> = (0..rows)
+        .filter(|&i| visible(pos[i]) > cfg.blocks)
+        .collect();
+    let Some(span) = ranked.iter().map(|&i| visible(pos[i])).max() else {
+        return Ok(out);
+    };
+    let per = (SCORE_BYTES / (4 * (2 * heads + 1) * span)).max(1);
+    for chunk in ranked.chunks(per) {
+        let cols = chunk.iter().map(|&i| visible(pos[i])).max().unwrap_or(0);
+        let ids: Vec<u32> = chunk.iter().map(|&i| i as u32).collect();
+        let ids = Tensor::from_vec(ids, chunk.len(), q.device())?;
+        let s = scores(&q.index_select(&ids, 0)?, &kc.narrow(0, 0, cols)?)?.to_vec2::<f32>()?;
+        let rows: Vec<Vec<u32>> = chunk
+            .par_iter()
+            .zip(s.par_iter())
+            .map(|(&i, row)| expand(top(&row[..visible(pos[i])], cfg.blocks), pos[i]))
+            .collect();
+        for (&i, row) in chunk.iter().zip(rows) {
+            out[i] = row;
         }
     }
-    Tensor::from_vec(out, (rows, width), q.device())
+    Ok(out)
 }
 
 /// Indices of the `k` best scores, ascending, as the served DET top-k picks them: value
@@ -272,28 +457,489 @@ fn top(score: &[f32], k: usize) -> Vec<usize> {
     idx
 }
 
-/// Paged-cache slots of a selection: token `t` sits at `table[t / size]·size + t % size`, the
-/// engine's slot mapping (pipeline/inputs_processor.rs:1192-1210); `-1` stays `-1`. `table` is
-/// one sequence's u32 block table.
-pub(crate) fn slots(sel: &Tensor, table: &Tensor, size: usize) -> Result<Tensor> {
-    let (rows, width) = sel.dims2()?;
-    let table = table.to_vec1::<u32>()?;
-    let out = sel
-        .flatten_all()?
-        .to_vec1::<i64>()?
-        .into_iter()
-        .map(|t| {
-            if t < 0 {
-                return Ok(-1);
+/// How a paged cache lays out one entry (hanzo-paged-attn `reshape_and_cache`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Layout {
+    /// `[blocks, heads, dim / x, size, x]`, the standard key cache.
+    Key,
+    /// `[blocks, heads, dim, size]`, the standard value cache.
+    Value,
+    /// `[blocks, heads, size, dim]`, FlashInfer's key and value cache.
+    Hnd,
+}
+
+impl Layout {
+    /// The layouts of a paged `(K, V)` pair, which QSA reads only unquantized.
+    fn of(k: &Tensor, v: &Tensor) -> Result<(Self, Self)> {
+        if !matches!(k.dtype(), DType::BF16 | DType::F16 | DType::F32) || k.dtype() != v.dtype() {
+            hanzo_ml::bail!(
+                "QSA reads an unquantized paged KV cache, got {:?}/{:?}",
+                k.dtype(),
+                v.dtype()
+            );
+        }
+        Ok(match AttentionBackendKind::from_cache(k, v) {
+            AttentionBackendKind::Standard => (Self::Key, Self::Value),
+            AttentionBackendKind::FlashInfer => (Self::Hnd, Self::Hnd),
+        })
+    }
+
+    /// `(heads, dim, run, per_block, starts)` of a cache: a token's `dim` values for one head sit
+    /// in runs of `run` contiguous elements, and viewing the cache as rows of `run` elements, the
+    /// token at offset `o` of block `b` has its runs at `b·per_block + o + starts[i]`, head-major.
+    fn runs(self, cache: &Tensor) -> Result<(usize, usize, usize, usize, Vec<u32>)> {
+        Ok(match self {
+            Self::Key => {
+                let (_, heads, chunks, size, x) = cache.dims5()?;
+                let starts = (0..heads * chunks).map(|c| (c * size) as u32).collect();
+                (heads, chunks * x, x, heads * chunks * size, starts)
             }
-            let t = t as usize;
-            match table.get(t / size) {
-                Some(&b) => Ok((b as usize * size + t % size) as i64),
-                None => hanzo_ml::bail!("token {t} lies past a {}-block table", table.len()),
+            Self::Value => {
+                let (_, heads, dim, size) = cache.dims4()?;
+                let starts = (0..heads * dim).map(|c| (c * size) as u32).collect();
+                (heads, dim, 1, heads * dim * size, starts)
+            }
+            Self::Hnd => {
+                let (_, heads, size, dim) = cache.dims4()?;
+                let starts = (0..heads).map(|h| (h * size) as u32).collect();
+                (heads, dim, dim, heads * size, starts)
             }
         })
-        .collect::<Result<Vec<i64>>>()?;
-    Tensor::from_vec(out, (rows, width), sel.device())
+    }
+
+    /// Rows `[heads, n, dim]` of the tokens in blocks `block`, at offsets `offset`: one
+    /// `index_select` over the cache viewed as rows of its longest contiguous run.
+    fn rows(self, cache: &Tensor, block: &Tensor, offset: &Tensor) -> Result<Tensor> {
+        let (heads, dim, run, per_block, starts) = self.runs(cache)?;
+        let runs = cache.elem_count() / run;
+        if runs > u32::MAX as usize {
+            hanzo_ml::bail!("QSA: a paged cache of {runs} rows is past u32 indexing");
+        }
+        let (n, dev) = (block.dim(0)?, cache.device());
+        let m = starts.len();
+        let base = block
+            .broadcast_mul(&Tensor::new(&[per_block as u32], dev)?)?
+            .add(offset)?;
+        let idx = base
+            .unsqueeze(1)?
+            .broadcast_add(&Tensor::from_vec(starts, (1, m), dev)?)?
+            .flatten_all()?;
+        cache
+            .reshape((runs, run))?
+            .index_select(&idx, 0)?
+            .reshape((n, heads, dim))?
+            .transpose(0, 1)?
+            .contiguous()
+    }
+}
+
+/// Where tokens of one sequence sit in a cache entry, on the entry's device.
+#[derive(Clone)]
+pub(crate) enum At {
+    /// Positions on an eager cache's sequence axis, `[n]` u32.
+    Eager(Tensor),
+    /// Physical blocks and offsets in them, `[n]` u32 each.
+    Paged { block: Tensor, offset: Tensor },
+}
+
+impl At {
+    /// `tokens` of a sequence whose paged block table is `table` (blocks of `size` tokens), or of
+    /// an eager sequence without one.
+    fn new(tokens: &[u32], table: Option<(&[u32], usize)>, dev: &Device) -> Result<Self> {
+        let n = tokens.len();
+        let Some((table, size)) = table else {
+            return Ok(Self::Eager(Tensor::from_slice(tokens, n, dev)?));
+        };
+        let (mut block, mut offset) = (Vec::with_capacity(n), Vec::with_capacity(n));
+        for &t in tokens {
+            let t = t as usize;
+            let Some(&b) = table.get(t / size) else {
+                hanzo_ml::bail!("QSA: token {t} lies past a {}-block table", table.len());
+            };
+            block.push(b);
+            offset.push((t % size) as u32);
+        }
+        Ok(Self::Paged {
+            block: Tensor::from_vec(block, n, dev)?,
+            offset: Tensor::from_vec(offset, n, dev)?,
+        })
+    }
+
+    fn to_device(&self, dev: &Device) -> Result<Self> {
+        Ok(match self {
+            Self::Eager(t) => Self::Eager(t.to_device(dev)?),
+            Self::Paged { block, offset } => Self::Paged {
+                block: block.to_device(dev)?,
+                offset: offset.to_device(dev)?,
+            },
+        })
+    }
+}
+
+/// One sequence's `(K, V)` pair of a cache entry, read by token.
+enum Pair<'a> {
+    /// Eager tensors `[1, heads, capacity, dim]`, contiguous.
+    Eager(Tensor, Tensor),
+    /// A paged pair and the sequence's block table.
+    Paged {
+        k: &'a Tensor,
+        v: &'a Tensor,
+        layout: (Layout, Layout),
+        table: &'a [u32],
+        size: usize,
+    },
+}
+
+impl<'a> Pair<'a> {
+    /// Sequence `b`'s rows of an eager cache.
+    fn eager(cache: &KvCache, b: usize) -> Result<Self> {
+        let KvCache::Normal { k, v } = cache else {
+            hanzo_ml::bail!("QSA reads a normal eager KV cache");
+        };
+        let (Some(k), Some(v)) = (k.all_data(), v.all_data()) else {
+            hanzo_ml::bail!("QSA read an empty eager KV cache");
+        };
+        Ok(Self::Eager(k.narrow(0, b, 1)?, v.narrow(0, b, 1)?))
+    }
+
+    /// A paged pair and the block table of the sequence reading it.
+    fn paged(cache: &'a (Tensor, Tensor), table: &'a [u32], size: usize) -> Result<Self> {
+        let (k, v) = cache;
+        Ok(Self::Paged {
+            k,
+            v,
+            layout: Layout::of(k, v)?,
+            table,
+            size,
+        })
+    }
+
+    fn at(&self, tokens: &[u32]) -> Result<At> {
+        match self {
+            Self::Eager(k, _) => At::new(tokens, None, k.device()),
+            Self::Paged { k, table, size, .. } => At::new(tokens, Some((table, *size)), k.device()),
+        }
+    }
+
+    /// K rows `[heads, n, dim]` of the tokens at `at`.
+    fn keys(&self, at: &At) -> Result<Tensor> {
+        self.rows(at, true)
+    }
+
+    /// V rows `[heads, n, dim]` of the tokens at `at`.
+    fn values(&self, at: &At) -> Result<Tensor> {
+        self.rows(at, false)
+    }
+
+    fn rows(&self, at: &At, key: bool) -> Result<Tensor> {
+        match (self, at) {
+            (Self::Eager(k, v), At::Eager(ids)) => {
+                let cache = if key { k } else { v };
+                cache.index_select(ids, 2)?.squeeze(0)
+            }
+            (Self::Paged { k, v, layout, .. }, At::Paged { block, offset }) => {
+                let (cache, layout) = if key { (k, layout.0) } else { (v, layout.1) };
+                layout.rows(cache, block, offset)
+            }
+            _ => hanzo_ml::bail!("QSA: tokens placed for one kind of cache, read from another"),
+        }
+    }
+}
+
+/// Merge of two ascending token lists.
+fn union(a: &[u32], b: &[u32]) -> Vec<u32> {
+    let mut out = Vec::with_capacity(a.len() + b.len());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => {
+                out.push(a[i]);
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                out.push(b[j]);
+                j += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                out.push(a[i]);
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    out.extend_from_slice(&a[i..]);
+    out.extend_from_slice(&b[j..]);
+    out
+}
+
+/// Attention of one sequence's queries `q` `[heads, n, head_dim]` over their selections `sel`,
+/// as `[heads, n, head_dim]`: the QSA kernel's softmax over exactly the selected tokens, by
+/// [`softmax_pv`].
+///
+/// Consecutive queries attend together while their union stays within [`UNION`] tokens and
+/// [`LOGITS`] mask entries, and while its mask keeps at least half of what it scores. Each group
+/// gathers the union's rows once, with the `heads / kv_heads` query heads sharing a K/V head
+/// folded into its rows, so no K/V row is repeated.
+fn sparse(q: &Tensor, sel: &[Vec<u32>], main: &Pair, kv_heads: usize) -> Result<Tensor> {
+    let (heads, n, head_dim) = q.dims3()?;
+    let fold = heads / kv_heads;
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < n {
+        let (mut tokens, mut kept, mut j) = (sel[i].clone(), sel[i].len(), i + 1);
+        while j < n {
+            let merged = union(&tokens, &sel[j]);
+            let rows = j + 1 - i;
+            let area = rows * merged.len();
+            if merged.len() > UNION || area > LOGITS || area > 2 * (kept + sel[j].len()) {
+                break;
+            }
+            (tokens, kept, j) = (merged, kept + sel[j].len(), j + 1);
+        }
+        let rows = j - i;
+        let width = tokens.len();
+        let mut mask = vec![0u8; rows * width];
+        for (row, s) in mask.chunks_exact_mut(width).zip(&sel[i..j]) {
+            let mut c = 0;
+            for &t in s {
+                while tokens[c] != t {
+                    c += 1;
+                }
+                row[c] = 1;
+            }
+        }
+        // A dropped token scores -1e30 below the rest: exp2 takes it to exactly 0, as -inf would.
+        let mask = Tensor::from_vec(mask, (1, rows, width), q.device())?
+            .to_dtype(DType::F32)?
+            .affine(1e30, -1e30)?
+            .repeat((fold, 1, 1))?
+            .reshape((fold * rows, width))?;
+        let at = main.at(&tokens)?;
+        let (k, v) = (main.keys(&at)?, main.values(&at)?);
+        let qg = q
+            .narrow(1, i, rows)?
+            .contiguous()?
+            .reshape((kv_heads, fold * rows, head_dim))?;
+        let y = softmax_pv(&qg, &k, &v, &mask)?;
+        out.push(y.reshape((heads, rows, head_dim))?);
+        i = j;
+    }
+    Tensor::cat(&out, 1)
+}
+
+/// One forward's sequences, as every QSA layer reads them.
+pub(crate) struct Batch {
+    cfg: Config,
+    /// Each sequence's first position in this forward and its real tokens; the rest of its row is
+    /// right padding.
+    spans: Vec<(usize, usize)>,
+    /// Paged: each sequence's block table, and the block size.
+    tables: Option<(Vec<Vec<u32>>, usize)>,
+    /// Where each sequence's group-end tokens sit, for reading its compressed keys; present when
+    /// some query of the forward sees more than `blocks` groups.
+    ends: Option<Vec<At>>,
+}
+
+impl Batch {
+    /// `offsets[b]` is sequence `b`'s first position; `seq` the row length. With `paged` the real
+    /// tokens are the slots its mapping does not pad and the tables are its block tables, else
+    /// every row is real.
+    pub(crate) fn new(
+        cfg: Config,
+        offsets: &[usize],
+        seq: usize,
+        paged: Option<&PagedAttentionInputMetadata>,
+        dev: &Device,
+    ) -> Result<Self> {
+        let b_sz = offsets.len();
+        let pick = |map: &std::collections::HashMap<hanzo_ml::DeviceLocation, Tensor>| {
+            map.get(&dev.location())
+                .or_else(|| map.values().next())
+                .cloned()
+        };
+        let (lens, tables) = match paged {
+            None => (vec![seq; b_sz], None),
+            Some(meta) => {
+                let slots = pick(&meta.slot_mappings)
+                    .ok_or_else(|| hanzo_ml::Error::msg("QSA: no slot mapping"))?
+                    .to_device(&Device::Cpu)?
+                    .flatten_all()?
+                    .to_vec1::<i64>()?;
+                if slots.len() != b_sz * seq {
+                    hanzo_ml::bail!("QSA: {} slots for {b_sz} rows of {seq}", slots.len());
+                }
+                let lens = slots
+                    .chunks_exact(seq)
+                    .map(|row| row.iter().filter(|&&s| s >= 0).count())
+                    .collect();
+                let tables: Option<(Vec<Vec<u32>>, usize)> =
+                    match (meta.block_tables.as_ref().and_then(pick), meta.block_size) {
+                        (Some(tables), Some(size)) => {
+                            let tables = tables.to_device(&Device::Cpu)?.to_vec2::<u32>()?;
+                            // A decode forward repeats each sequence's table once per query row.
+                            let per = (tables.len() / b_sz.max(1)).max(1);
+                            Some((tables.into_iter().step_by(per).collect(), size))
+                        }
+                        _ => None,
+                    };
+                (lens, tables)
+            }
+        };
+        let spans: Vec<(usize, usize)> = offsets.iter().copied().zip(lens).collect();
+        // A query at `p` drops a group once it sees more than `blocks`: from `p = width` on.
+        let sparse = spans.iter().any(|&(a, n)| a + n > cfg.width());
+        let ends = if sparse {
+            let ends = spans
+                .iter()
+                .enumerate()
+                .map(|(b, &(a, n))| {
+                    let ends: Vec<u32> = (1..=(a + n) / cfg.ratio)
+                        .map(|j| (j * cfg.ratio - 1) as u32)
+                        .collect();
+                    match (paged, &tables) {
+                        (None, _) => At::new(&ends, None, dev),
+                        (Some(_), Some((t, size))) => At::new(&ends, Some((&t[b], *size)), dev),
+                        (Some(_), None) => {
+                            hanzo_ml::bail!("QSA: a paged forward without block tables")
+                        }
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Some(ends)
+        } else {
+            None
+        };
+        Ok(Self {
+            cfg,
+            spans,
+            tables,
+            ends,
+        })
+    }
+
+    /// Sequence `b`'s pair of a cache entry: paged when the forward is, else from `eager`.
+    fn pair<'a>(
+        &'a self,
+        b: usize,
+        eager: &KvCache,
+        paged: Option<&'a (Tensor, Tensor)>,
+    ) -> Result<Pair<'a>> {
+        match (paged, &self.tables) {
+            (Some(cache), Some((tables, size))) => Pair::paged(cache, &tables[b], *size),
+            (None, _) => Pair::eager(eager, b),
+            (Some(_), None) => hanzo_ml::bail!("QSA: a paged cache without block tables"),
+        }
+    }
+}
+
+/// A layer's paged K/V entry, its paged index entry, and the forward's metadata.
+pub(crate) type Paged<'a> = (
+    &'a (Tensor, Tensor),
+    &'a (Tensor, Tensor),
+    &'a PagedAttentionInputMetadata,
+);
+
+/// One attention layer's caches in a forward.
+pub(crate) struct Store<'a> {
+    /// The eager K/V, which the paged path leaves alone.
+    pub kv: &'a mut KvCache,
+    /// The eager index.
+    pub index: &'a mut KvCache,
+    pub paged: Option<Paged<'a>>,
+}
+
+/// One QSA attention layer on `u` `[B, S, hidden]`: `attn`'s projections and output around
+/// attention restricted to `indexer`'s selections, as `attn.forward` returns it.
+pub(crate) fn forward(
+    attn: &GatedFullAttention,
+    indexer: &Indexer,
+    u: &Tensor,
+    mask: &AttentionMask,
+    cos_sin: &(Tensor, Tensor),
+    batch: &Batch,
+    store: Store<'_>,
+) -> Result<Tensor> {
+    let (b_sz, seq, _) = u.dims3()?;
+    let cfg = indexer.cfg;
+    if cfg != batch.cfg || batch.spans.len() != b_sz {
+        hanzo_ml::bail!("QSA: a forward of {b_sz} rows read with another batch");
+    }
+    let (q, k, v, gate) = attn.project(u, cos_sin)?;
+    let (iq, raw) = indexer.project(u, cos_sin)?;
+    let (main_paged, index_paged, meta) = match store.paged {
+        Some((main, index, meta)) => (Some(main), Some(index), Some(meta)),
+        None => (None, None, None),
+    };
+
+    // The index rows of every sequence's chunk, written before anything reads them.
+    let mut closed = Vec::with_capacity(b_sz);
+    for (b, &(a, n)) in batch.spans.iter().enumerate() {
+        let p = a % cfg.ratio;
+        let prior = if p == 0 || p + n < cfg.ratio {
+            None
+        } else {
+            let index = batch.pair(b, store.index, index_paged)?;
+            let tokens: Vec<u32> = (a - p..a).map(|t| t as u32).collect();
+            Some(index.values(&index.at(&tokens)?)?.squeeze(0)?)
+        };
+        let raw = raw.get(b)?.narrow(0, 0, n)?;
+        closed.push(indexer.closed(attn, &raw, prior.as_ref(), a, seq)?);
+    }
+    let closed = Tensor::stack(&closed, 0)?;
+    match (index_paged, meta) {
+        (Some(index), Some(meta)) => {
+            let rows = |t: &Tensor| {
+                t.reshape((b_sz * seq, 1, cfg.dim))?
+                    .to_dtype(index.0.dtype())
+            };
+            attn.write_paged(&rows(&closed)?, &rows(&raw)?, index, meta)?
+        }
+        _ => {
+            store
+                .index
+                .append(&closed.unsqueeze(1)?, &raw.unsqueeze(1)?)?;
+        }
+    }
+
+    let Some(ends) = batch.ends.as_ref() else {
+        let paged = main_paged.zip(meta).map(|(c, m)| (c.clone(), m));
+        let y = attn.attend(&q, &k, &v, mask, store.kv, paged)?;
+        return attn.output(&y, &gate, u.dtype());
+    };
+
+    let (heads, kv_heads, head_dim) = attn.heads();
+    match (main_paged, meta) {
+        (Some(main), Some(meta)) => {
+            // `[B, heads, S, dim]` as the slot mapping's `[B·S, heads, dim]` rows.
+            let rows = |t: &Tensor| t.transpose(1, 2)?.reshape((b_sz * seq, kv_heads, head_dim));
+            attn.write_paged(&rows(&k)?, &rows(&v)?, main, meta)?
+        }
+        _ => {
+            store.kv.append(&k, &v)?;
+        }
+    }
+    let mut ys = Vec::with_capacity(b_sz);
+    for (b, &(a, n)) in batch.spans.iter().enumerate() {
+        let kc = if (a + n) / cfg.ratio == 0 {
+            Tensor::zeros((0, cfg.dim), raw.dtype(), raw.device())?
+        } else {
+            let index = batch.pair(b, store.index, index_paged)?;
+            index.keys(&ends[b].to_device(q.device())?)?.squeeze(0)?
+        };
+        let pos: Vec<usize> = (a..a + n).collect();
+        let sel = select(&iq.get(b)?.narrow(0, 0, n)?, &kc, &pos, &cfg)?;
+        let main = batch.pair(b, store.kv, main_paged)?;
+        let y = sparse(&q.get(b)?.narrow(1, 0, n)?, &sel, &main, kv_heads)?;
+        let y = Tensor::cat(
+            &[
+                &y,
+                &Tensor::zeros((heads, seq - n, head_dim), y.dtype(), y.device())?,
+            ],
+            1,
+        )?;
+        ys.push(y.transpose(0, 1)?.reshape((seq, heads * head_dim))?);
+    }
+    attn.output(&Tensor::stack(&ys, 0)?, &gate, u.dtype())
 }
 
 #[cfg(test)]
@@ -318,7 +964,7 @@ mod reference {
         }
     }
 
-    fn linear(x: &[f64], w: &[f64]) -> Vec<f64> {
+    pub(super) fn linear(x: &[f64], w: &[f64]) -> Vec<f64> {
         w.chunks(x.len())
             .map(|r| r.iter().zip(x).map(|(a, b)| a * b).sum())
             .collect()
@@ -380,50 +1026,44 @@ mod reference {
         p: usize,
         ratio: usize,
         blocks: usize,
-    ) -> Vec<i64> {
+    ) -> Vec<u32> {
         let s = scores(q, kc, p, ratio);
-        let mut row: Vec<i64> = Vec::new();
+        let mut row = Vec::new();
         for j in 0..s.len() {
             let above = (0..s.len())
                 .filter(|&i| s[i] > s[j] || (s[i] == s[j] && i < j))
                 .count();
             if above < blocks {
-                row.extend((j * ratio..(j + 1) * ratio).map(|t| t as i64));
+                row.extend((j * ratio..(j + 1) * ratio).map(|t| t as u32));
             }
         }
-        row.extend(((p + 1) / ratio * ratio..=p).map(|t| t as i64));
-        row.resize(blocks * ratio + ratio - 1, -1);
+        row.extend(((p + 1) / ratio * ratio..=p).map(|t| t as u32));
         row
     }
 
-    /// Sparse GQA of one query `[heads·dim]` over the paged rows `slots`, `-1` skipped: softmax
-    /// of `scale·q·k` over the valid rows, zero when there are none.
-    /// `k` and `v` are `[slot, kv_heads, dim]`.
+    /// Sparse GQA of one query `[heads·dim]` over the rows `tokens` of `k` and `v`
+    /// `[token, kv_heads, dim]`: softmax of `scale·q·k` over them.
     pub(super) fn attend(
         q: &[f64],
         k: &[f64],
         v: &[f64],
-        slots: &[i64],
+        tokens: &[u32],
         kv_heads: usize,
         dim: usize,
         scale: f64,
     ) -> Vec<f64> {
         let heads = q.len() / dim;
-        let rows: Vec<usize> = slots
-            .iter()
-            .filter_map(|&s| usize::try_from(s).ok())
-            .collect();
         let mut out = vec![0.0; heads * dim];
         for (h, (qh, oh)) in q.chunks(dim).zip(out.chunks_mut(dim)).enumerate() {
-            let at = |t: usize| (t * kv_heads + h / (heads / kv_heads)) * dim;
-            let logit: Vec<f64> = rows
+            let at = |t: u32| (t as usize * kv_heads + h / (heads / kv_heads)) * dim;
+            let logit: Vec<f64> = tokens
                 .iter()
                 .map(|&t| scale * qh.iter().zip(&k[at(t)..]).map(|(a, b)| a * b).sum::<f64>())
                 .collect();
             let max = logit.iter().copied().fold(f64::NEG_INFINITY, f64::max);
             let w: Vec<f64> = logit.iter().map(|l| (l - max).exp()).collect();
             let z: f64 = w.iter().sum();
-            for (&t, w) in rows.iter().zip(&w) {
+            for (&t, w) in tokens.iter().zip(&w) {
                 for (o, x) in oh.iter_mut().zip(&v[at(t)..at(t) + dim]) {
                     *o += w / z * x;
                 }
@@ -436,7 +1076,6 @@ mod reference {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attention::repeat_kv;
     use crate::layers::Qwen3VLRotaryEmbedding;
     use hanzo_ml::quantized::{gguf_file, GgmlDType, QTensor};
     use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -463,8 +1102,8 @@ mod tests {
         t.to_dtype(DType::F64)?.flatten_all()?.to_vec1::<f64>()
     }
 
-    /// Max error within `1e-5` of the reference's largest magnitude (at least 1).
-    fn close(got: &Tensor, want: &[f64], what: &str) -> Result<()> {
+    /// Max error within `tol` of the reference's largest magnitude (at least 1).
+    fn within(got: &Tensor, want: &[f64], tol: f64, what: &str) -> Result<()> {
         let got = f64s(got)?;
         assert_eq!(got.len(), want.len(), "{what}: length");
         let scale = want.iter().fold(1f64, |m, v| m.max(v.abs()));
@@ -472,8 +1111,12 @@ mod tests {
             .iter()
             .zip(want)
             .fold(0f64, |m, (a, b)| m.max((a - b).abs()));
-        assert!(err <= 1e-5 * scale, "{what}: error {err} at scale {scale}");
+        assert!(err <= tol * scale, "{what}: error {err} at scale {scale}");
         Ok(())
+    }
+
+    fn close(got: &Tensor, want: &[f64], what: &str) -> Result<()> {
+        within(got, want, 1e-5, what)
     }
 
     /// Each bf16 value is the reference rounded once: within half a bf16 ulp of it, which is
@@ -762,7 +1405,8 @@ mod tests {
 
     /// Every query of a 61-token sequence against the brute-force reference. Zero keys score
     /// exactly 0 against every query and copied keys tie exactly with their source, so many rows
-    /// cut the ranking inside a run of equal scores, zeros and non-zeros both.
+    /// cut the ranking inside a run of equal scores, zeros and non-zeros both. The queries arrive
+    /// in two scrambled orders so the scored rows are not contiguous.
     #[test]
     fn select_matches_brute_force() -> Result<()> {
         let dev = Device::Cpu;
@@ -782,34 +1426,42 @@ mod tests {
         for (to, from) in [(9, 2), (12, 5), (14, 7)] {
             kc.copy_within(from * d..(from + 1) * d, to * d);
         }
-        let pos: Vec<usize> = (0..len).collect();
-        let sel = select(
-            &Tensor::from_vec(q.clone(), (len, cfg.heads, d), &dev)?,
-            &Tensor::from_vec(kc.clone(), (groups, d), &dev)?,
-            &pos,
-            &cfg,
-        )?
-        .to_vec2::<i64>()?;
         let keys: Vec<Vec<f64>> = kc.chunks(d).map(wide).collect();
-        let (mut ties, mut zeros) = (0, 0);
-        for ((row, x), &p) in sel.iter().zip(q.chunks(cfg.heads * d)).zip(&pos) {
-            let x = wide(x);
-            assert_eq!(
-                *row,
-                reference::select(&x, &keys, p, cfg.ratio, cfg.blocks),
-                "query at {p}"
-            );
-            let mut s = reference::scores(&x, &keys, p, cfg.ratio);
-            s.sort_by(|a, b| b.total_cmp(a));
-            if s.len() > cfg.blocks && s[cfg.blocks - 1] == s[cfg.blocks] {
-                ties += 1;
-                zeros += usize::from(s[cfg.blocks] == 0.0);
+        let kc = Tensor::from_vec(kc, (groups, d), &dev)?;
+        for order in [
+            (0..len).collect::<Vec<usize>>(),
+            (0..len).map(|i| (i * 17) % len).collect(),
+        ] {
+            let rows: Vec<f32> = order
+                .iter()
+                .flat_map(|&p| q[p * cfg.heads * d..(p + 1) * cfg.heads * d].to_vec())
+                .collect();
+            let sel = select(
+                &Tensor::from_vec(rows, (len, cfg.heads, d), &dev)?,
+                &kc,
+                &order,
+                &cfg,
+            )?;
+            let (mut ties, mut zeros) = (0, 0);
+            for (row, &p) in sel.iter().zip(&order) {
+                let x = wide(&q[p * cfg.heads * d..(p + 1) * cfg.heads * d]);
+                assert_eq!(
+                    *row,
+                    reference::select(&x, &keys, p, cfg.ratio, cfg.blocks),
+                    "query at {p}"
+                );
+                let mut s = reference::scores(&x, &keys, p, cfg.ratio);
+                s.sort_by(|a, b| b.total_cmp(a));
+                if s.len() > cfg.blocks && s[cfg.blocks - 1] == s[cfg.blocks] {
+                    ties += 1;
+                    zeros += usize::from(s[cfg.blocks] == 0.0);
+                }
             }
+            assert!(
+                zeros > 0 && ties > zeros,
+                "cuts inside ties: {ties}, at zero: {zeros}"
+            );
         }
-        assert!(
-            zeros > 0 && ties > zeros,
-            "cuts inside ties: {ties}, at zero: {zeros}"
-        );
         Ok(())
     }
 
@@ -842,114 +1494,397 @@ mod tests {
                 )?,
                 &pos,
                 &cfg,
-            )?
-            .to_vec2::<i64>()?;
+            )?;
             for (p, row) in sel.iter().enumerate() {
-                let dense: Vec<i64> = (0..width as i64)
-                    .map(|t| if t <= p as i64 { t } else { -1 })
-                    .collect();
                 if p < width {
-                    assert_eq!(*row, dense, "len {len}, query at {p}");
+                    assert_eq!(*row, (0..=p as u32).collect::<Vec<_>>(), "len {len}, p {p}");
                 } else {
-                    let kept = row.iter().filter(|&&t| t >= 0).count();
-                    assert_eq!(kept, cfg.blocks * cfg.ratio, "len {len}, query at {p}");
+                    assert_eq!(row.len(), cfg.blocks * cfg.ratio, "len {len}, query at {p}");
                 }
             }
         }
         Ok(())
     }
 
-    /// Attention over the selected tokens, gathered from a paged cache through `slots`, equals
-    /// dense attention masked to the same tokens, and differs from plain causal attention.
-    #[test]
-    fn sparse_attention_equals_masked_dense() -> Result<()> {
+    /// Paged caches holding rows `[token, heads, dim]` of tokens placed through `table`, NaN in
+    /// every other slot: the standard `[blocks, heads, dim / x, size, x]` and
+    /// `[blocks, heads, dim, size]` by the index arithmetic of the engine's `reshape_and_cache`
+    /// kernels, and FlashInfer's `[blocks, heads, size, dim]` of each.
+    #[allow(clippy::type_complexity)]
+    fn paged(
+        k: &[f32],
+        v: &[f32],
+        table: &[u32],
+        (blocks, heads, dim, size, x): (usize, usize, usize, usize, usize),
+    ) -> Result<((Tensor, Tensor), (Tensor, Tensor))> {
+        let n = blocks * heads * dim * size;
+        let (mut kc, mut vc) = (vec![f32::NAN; n], vec![f32::NAN; n]);
+        let (mut kh, mut vh) = (vec![f32::NAN; n], vec![f32::NAN; n]);
+        for t in 0..k.len() / (heads * dim) {
+            let (b, o) = (table[t / size] as usize, t % size);
+            for h in 0..heads {
+                for d in 0..dim {
+                    let src = (t * heads + h) * dim + d;
+                    kc[(((b * heads + h) * (dim / x) + d / x) * size + o) * x + d % x] = k[src];
+                    vc[((b * heads + h) * dim + d) * size + o] = v[src];
+                    kh[((b * heads + h) * size + o) * dim + d] = k[src];
+                    vh[((b * heads + h) * size + o) * dim + d] = v[src];
+                }
+            }
+        }
         let dev = Device::Cpu;
-        let cfg = Config {
-            heads: 2,
-            dim: 16,
-            ratio: 4,
-            blocks: 3,
+        Ok((
+            (
+                Tensor::from_vec(kc, (blocks, heads, dim / x, size, x), &dev)?,
+                Tensor::from_vec(vc, (blocks, heads, dim, size), &dev)?,
+            ),
+            (
+                Tensor::from_vec(kh, (blocks, heads, size, dim), &dev)?,
+                Tensor::from_vec(vh, (blocks, heads, size, dim), &dev)?,
+            ),
+        ))
+    }
+
+    /// Rows read through a block table from both paged layouts, and from an eager cache, are the
+    /// rows written; unwritten slots, which hold NaN, are never read.
+    #[test]
+    fn rows_read_back_through_every_layout() -> Result<()> {
+        let dev = Device::Cpu;
+        let (heads, dim, size, x, len) = (2usize, 8usize, 4usize, 4usize, 13usize);
+        let table = [5u32, 1, 3, 0];
+        let mut rng = StdRng::seed_from_u64(0x7173_6106);
+        let k = grid(&mut rng, len * heads * dim, 64);
+        let v = grid(&mut rng, len * heads * dim, 64);
+        let tokens = [12u32, 0, 7, 3, 4, 11];
+        let want = |x: &[f32]| -> Vec<f64> {
+            (0..heads)
+                .flat_map(|h| {
+                    tokens.iter().flat_map(move |&t| {
+                        x[(t as usize * heads + h) * dim..(t as usize * heads + h + 1) * dim]
+                            .to_vec()
+                    })
+                })
+                .map(f64::from)
+                .collect()
         };
+
+        let (standard, hnd) = paged(&k, &v, &table, (6, heads, dim, size, x))?;
+        let pair = Pair::paged(&standard, &table, size)?;
+        let at = pair.at(&tokens)?;
+        close(&pair.keys(&at)?, &want(&k), "standard keys")?;
+        close(&pair.values(&at)?, &want(&v), "standard values")?;
+
+        let pair = Pair::Paged {
+            k: &hnd.0,
+            v: &hnd.1,
+            layout: (Layout::Hnd, Layout::Hnd),
+            table: &table,
+            size,
+        };
+        let at = pair.at(&tokens)?;
+        close(&pair.keys(&at)?, &want(&k), "flashinfer keys")?;
+        close(&pair.values(&at)?, &want(&v), "flashinfer values")?;
+
+        // An eager cache `[1, heads, capacity, dim]` with room past the sequence.
+        let eager = |x: &[f32]| -> Result<Tensor> {
+            Tensor::from_vec(x.to_vec(), (1, len, heads, dim), &dev)?
+                .transpose(1, 2)?
+                .pad_with_zeros(2, 0, 3)?
+                .contiguous()
+        };
+        let pair = Pair::Eager(eager(&k)?, eager(&v)?);
+        let at = pair.at(&tokens)?;
+        close(&pair.keys(&at)?, &want(&k), "eager keys")?;
+        close(&pair.values(&at)?, &want(&v), "eager values")
+    }
+
+    /// [`attend`] over selections read from a paged cache equals the f64 reference restricted to
+    /// each query's tokens, whether the queries group or not, and differs from plain causal
+    /// attention. Selections of neighbouring queries overlap by construction, so some groups hold
+    /// several queries.
+    #[test]
+    fn attend_equals_reference_over_selections() -> Result<()> {
+        let dev = Device::Cpu;
         let (heads, kv_heads, hd, len, size) = (4usize, 2usize, 8usize, 40usize, 8usize);
         let table = [6u32, 2, 9, 0, 4];
-        let pos = [0usize, 2, 3, 7, 11, 15, 16, 22, 27, 31, 35, 36, 37, 38, 39];
         let mut rng = StdRng::seed_from_u64(0x7173_6104);
         let mut uniform =
             |n: usize| -> Vec<f32> { (0..n).map(|_| rng.random_range(-1.0f32..1.0)).collect() };
+        let pos: Vec<usize> = (24..40).collect();
         let (q, k, v) = (
             uniform(pos.len() * heads * hd),
             uniform(len * kv_heads * hd),
             uniform(len * kv_heads * hd),
         );
-        let (iq, kc) = (
-            uniform(pos.len() * cfg.heads * cfg.dim),
-            uniform(len / cfg.ratio * cfg.dim),
-        );
-        let sel = select(
-            &Tensor::from_vec(iq, (pos.len(), cfg.heads, cfg.dim), &dev)?,
-            &Tensor::from_vec(kc, (len / cfg.ratio, cfg.dim), &dev)?,
-            &pos,
-            &cfg,
-        )?;
-        let at = slots(&sel, &Tensor::new(&table, &dev)?, size)?.to_vec2::<i64>()?;
-        let sel = sel.to_vec2::<i64>()?;
-        for (a, s) in at.iter().flatten().zip(sel.iter().flatten()) {
-            assert_eq!(*a < 0, *s < 0, "slot {a} for token {s}");
-        }
-        assert!(
-            sel.iter()
-                .zip(&pos)
-                .any(|(r, &p)| r.iter().filter(|&&t| t >= 0).count() <= p),
-            "no query dropped a token"
-        );
-
-        // The paged cache: token t's row at slot table[t / size]·size + t % size.
-        let row = kv_heads * hd;
-        let (mut pk, mut pv) = (vec![0f64; 10 * size * row], vec![0f64; 10 * size * row]);
-        for t in 0..len {
-            let s = table[t / size] as usize * size + t % size;
-            pk[s * row..(s + 1) * row].copy_from_slice(&wide(&k[t * row..(t + 1) * row]));
-            pv[s * row..(s + 1) * row].copy_from_slice(&wide(&v[t * row..(t + 1) * row]));
-        }
-        let scale = 1.0 / (hd as f64).sqrt();
-        let sparse: Vec<f64> = q
-            .chunks(heads * hd)
-            .zip(&at)
-            .flat_map(|(x, a)| reference::attend(&wide(x), &pk, &pv, a, kv_heads, hd, scale))
+        // Each query keeps groups 0 and 2 and one that walks with it, all behind it, then its
+        // tail.
+        let sel: Vec<Vec<u32>> = pos
+            .iter()
+            .map(|&p| {
+                [0, 2, p / 4 - 3]
+                    .into_iter()
+                    .flat_map(|j| j * 4..j * 4 + 4)
+                    .chain((p + 1) / 4 * 4..=p)
+                    .map(|t| t as u32)
+                    .collect()
+            })
             .collect();
+        let (cache, _) = paged(&k, &v, &table, (10, kv_heads, hd, size, 4))?;
+        let pair = Pair::paged(&cache, &table, size)?;
+        let scale = 1.0 / (hd as f64).sqrt();
+        // `[heads, n, hd]` from rows `[n, heads, hd]`.
+        let qt = Tensor::from_vec(q.clone(), (pos.len(), heads, hd), &dev)?
+            .transpose(0, 1)?
+            .contiguous()?;
+        let got = sparse(&qt, &sel, &pair, kv_heads)?;
+        let want: Vec<f64> = q
+            .chunks(heads * hd)
+            .zip(&sel)
+            .flat_map(|(x, s)| {
+                reference::attend(&wide(x), &wide(&k), &wide(&v), s, kv_heads, hd, scale)
+            })
+            .collect();
+        within(&got.transpose(0, 1)?, &want, 1e-5, "sparse attention")?;
 
-        let masks = |keep: &dyn Fn(usize, usize) -> bool| -> Result<Tensor> {
-            let m: Vec<f32> = (0..pos.len())
-                .flat_map(|s| (0..len).map(move |t| (s, t)))
-                .map(|(s, t)| if keep(s, t) { 0.0 } else { f32::NEG_INFINITY })
+        let causal: Vec<Vec<u32>> = pos.iter().map(|&p| (0..=p as u32).collect()).collect();
+        let dense = sparse(&qt, &causal, &pair, kv_heads)?;
+        let gap = (dense - &got)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(gap > 1e-2, "the selection changed nothing ({gap})");
+        Ok(())
+    }
+
+    /// The layer shape: 4 query heads over 2 K/V heads of 16, 8 of them rotary, and an indexer of
+    /// 2 heads of 16 keeping 2 groups of 4, a width of 11 tokens.
+    const LAYER: (usize, usize, usize) = (4, 2, 16);
+    const LAYER_QSA: Config = Config {
+        heads: 2,
+        dim: 16,
+        ratio: 4,
+        blocks: 2,
+    };
+
+    /// One attention block `blk.3` with its indexer, eager, and the rotary it shares with it.
+    fn layer(
+        dir: &std::path::Path,
+    ) -> Result<(GatedFullAttention, Indexer, Qwen3VLRotaryEmbedding)> {
+        use crate::models::quantized_qwen3_5_moe::PropsGGUF;
+        let (heads, kv_heads, hd) = LAYER;
+        let path = dir.join("layer.gguf");
+        let mut rng = StdRng::seed_from_u64(0x7173_6107);
+        fixture(&path, &LAYER_QSA, &mut rng)?;
+        let mut tensors = Vec::new();
+        for (name, shape) in [
+            ("attn_q", vec![2 * heads * hd, HIDDEN]),
+            ("attn_k", vec![kv_heads * hd, HIDDEN]),
+            ("attn_v", vec![kv_heads * hd, HIDDEN]),
+            ("attn_output", vec![HIDDEN, heads * hd]),
+            ("attn_q_norm", vec![hd]),
+            ("attn_k_norm", vec![hd]),
+        ] {
+            let n: usize = shape.iter().product();
+            let shift = if shape.len() == 1 { 1.0 } else { 0.0 };
+            let data: Vec<f32> = (0..n)
+                .map(|_| shift + rng.random_range(-0.4f32..0.4))
                 .collect();
-            Tensor::from_vec(m, (pos.len(), len), &dev)
+            let t = QTensor::quantize(
+                &Tensor::from_vec(data, shape, &Device::Cpu)?,
+                GgmlDType::F32,
+            )?;
+            tensors.push((format!("blk.3.{name}.weight"), t));
+        }
+        // The indexer's file, with the attention tensors added.
+        let mut files = [std::fs::File::open(&path).map_err(hanzo_ml::Error::msg)?];
+        let mut readers: Vec<&mut std::fs::File> = files.iter_mut().collect();
+        let mut ct = Content::from_readers(&mut readers)?;
+        for name in ["q_proj", "k_proj", "q_norm", "k_norm"] {
+            let name = format!("blk.3.indexer.{name}.weight");
+            let t = ct.tensor(&name, &Device::Cpu)?;
+            tensors.push((name, t));
+        }
+        let metadata: Vec<(String, gguf_file::Value)> = ct
+            .get_metadata()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let full = dir.join("full.gguf");
+        let mut file = std::fs::File::create(&full).map_err(hanzo_ml::Error::msg)?;
+        gguf_file::write(
+            &mut file,
+            &metadata
+                .iter()
+                .map(|(k, v)| (k.as_str(), v))
+                .collect::<Vec<_>>(),
+            &tensors
+                .iter()
+                .map(|(n, t)| (n.as_str(), t))
+                .collect::<Vec<_>>(),
+        )?;
+        let mut files = [std::fs::File::open(&full).map_err(hanzo_ml::Error::msg)?];
+        let mut readers: Vec<&mut std::fs::File> = files.iter_mut().collect();
+        let mut ct = Content::from_readers(&mut readers)?;
+        let props = PropsGGUF {
+            head_count: heads,
+            head_count_kv: kv_heads,
+            block_count: 4,
+            embedding_length: HIDDEN,
+            rms_norm_eps: EPS,
+            max_seq_len: 64,
+            rope_freq_base: THETA,
+            head_dim: hd,
+            rot_dim: ROT,
+            mrope_section: vec![2, 1, 1],
+            full_attention_interval: 4,
+            conv_kernel: 4,
+            head_k_dim: 4,
+            head_v_dim: 4,
+            num_k_heads: 1,
+            num_v_heads: 1,
+            num_experts: None,
+            num_experts_per_tok: 0,
+            moe_intermediate_size: 0,
+            is_moe: false,
+            nextn_predict_layers: 0,
         };
-        // Dense masked attention in f32 tensor ops. The engine's CPU `Sdpa` multiplies through f16
-        // (hanzo-quant `MatMul::matmul`), which alone misses by ~1e-3.
-        let dense = |mask: Tensor| -> Result<Tensor> {
-            let q = Tensor::from_vec(q.clone(), (1, pos.len(), heads, hd), &dev)?
-                .transpose(1, 2)?
-                .contiguous()?;
-            let kv = |x: &[f32]| -> Result<Tensor> {
-                repeat_kv(
-                    Tensor::from_vec(x.to_vec(), (1, len, kv_heads, hd), &dev)?
-                        .transpose(1, 2)?
-                        .contiguous()?,
-                    heads / kv_heads,
-                )
-            };
-            let logits = (q.matmul(&kv(&k)?.t()?)? * scale)?.broadcast_add(&mask)?;
-            hanzo_nn::ops::softmax_last_dim(&logits)?
-                .matmul(&kv(&v)?)?
-                .transpose(1, 2)
-        };
-        let masked = dense(masks(&|s, t| sel[s].contains(&(t as i64)))?)?;
-        close(&masked, &sparse, "sparse attention")?;
+        let dev = Device::Cpu;
+        let rotary = Qwen3VLRotaryEmbedding::new(THETA, ROT, &dev, vec![2, 1, 1])?;
+        let attn = GatedFullAttention::load(
+            &mut ct,
+            "blk.3",
+            &props,
+            Arc::new(rotary.clone()),
+            None,
+            &dev,
+            DType::F32,
+        )?
+        .qsa();
+        let indexer = Indexer::from_gguf(&mut ct, "blk.3", LAYER_QSA, EPS, &dev)?;
+        Ok((attn, indexer, rotary))
+    }
 
-        let causal = dense(masks(&|s, t| t <= pos[s])?)?;
-        let gap = (causal - masked)?.abs()?.max_all()?.to_scalar::<f32>()?;
-        assert!(gap > 1e-3, "the selection changed nothing ({gap})");
+    /// `u` through the layer in chunks of `chunks` tokens on fresh eager caches, the way the
+    /// model feeds it: its causal mask for a prompt chunk, none for a single token.
+    fn run(
+        (attn, indexer, rotary): &(GatedFullAttention, Indexer, Qwen3VLRotaryEmbedding),
+        u: &Tensor,
+        chunks: &[usize],
+        qsa: bool,
+    ) -> Result<Tensor> {
+        let dev = Device::Cpu;
+        let (mut kv, mut index) = (
+            KvCache::new_normal(2, 4096, 16),
+            KvCache::new_normal(2, 4096, 16),
+        );
+        let (mut a, mut out) = (0, Vec::new());
+        for &n in chunks {
+            let pos: Vec<usize> = (a..a + n).collect();
+            let cos_sin = rotary.compute_cos_sin(&planes(&pos, &dev)?, DType::F32)?;
+            let mask = if n == 1 {
+                AttentionMask::None
+            } else {
+                let m: Vec<f32> = (0..n)
+                    .flat_map(|i| {
+                        (0..a + n).map(move |t| if t <= a + i { 0.0 } else { f32::NEG_INFINITY })
+                    })
+                    .collect();
+                AttentionMask::Custom(Tensor::from_vec(m, (n, a + n), &dev)?)
+            };
+            let x = u.narrow(1, a, n)?;
+            out.push(if qsa {
+                let batch = Batch::new(indexer.cfg, &[a], n, None, &dev)?;
+                let store = Store {
+                    kv: &mut kv,
+                    index: &mut index,
+                    paged: None,
+                };
+                forward(attn, indexer, &x, &mask, &cos_sin, &batch, store)?
+            } else {
+                attn.forward(&x, &mask, &cos_sin, &mut kv, None)?
+            });
+            a += n;
+        }
+        Tensor::cat(&out, 1)
+    }
+
+    /// Up to the width the layer is its dense attention, bit for bit, however the tokens arrive:
+    /// the indexer's projections and index writes leave the attention alone.
+    #[test]
+    fn layer_within_width_is_dense_exactly() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(hanzo_ml::Error::msg)?;
+        let layer = layer(dir.path())?;
+        let width = LAYER_QSA.width();
+        let mut rng = StdRng::seed_from_u64(0x7173_6108);
+        let u = Tensor::from_vec(
+            grid(&mut rng, width * HIDDEN, 64),
+            (1, width, HIDDEN),
+            &Device::Cpu,
+        )?;
+        for chunks in [vec![width], vec![5, 1, 5], vec![3, 4, 1, 1, 2]] {
+            let got = run(&layer, &u, &chunks, true)?;
+            let want = run(&layer, &u, &chunks, false)?;
+            let gap = (got - want)?.abs()?.max_all()?.to_scalar::<f32>()?;
+            assert_eq!(gap, 0.0, "chunks {chunks:?}");
+        }
+        Ok(())
+    }
+
+    /// Past the width, the layer equals attention restricted to each query's brute-force
+    /// selection over the compressed keys of every group closed so far, however the tokens
+    /// arrive: in one pass, or in chunks that split groups and cross the width, with single
+    /// tokens between. The selection is the f64 reference's over the same projections, so the
+    /// index's bookkeeping -- the open group's raw keys carried across chunks, each group closed
+    /// once at its last token and roped at its first -- is what is under test, with the scores,
+    /// the ranking and the attention.
+    #[test]
+    fn layer_equals_restricted_attention() -> Result<()> {
+        let dev = Device::Cpu;
+        let dir = tempfile::tempdir().map_err(hanzo_ml::Error::msg)?;
+        let layer = layer(dir.path())?;
+        let (attn, indexer, rotary) = &layer;
+        let (heads, kv_heads, hd) = LAYER;
+        let cfg = LAYER_QSA;
+        let len = 37;
+        let mut rng = StdRng::seed_from_u64(0x7173_6109);
+        let u = Tensor::from_vec(grid(&mut rng, len * HIDDEN, 64), (1, len, HIDDEN), &dev)?;
+
+        // The reference, from whole-sequence projections.
+        let pos: Vec<usize> = (0..len).collect();
+        let cos_sin = rotary.compute_cos_sin(&planes(&pos, &dev)?, DType::F32)?;
+        let (q, k, v, gate) = attn.project(&u, &cos_sin)?;
+        let (iq, raw) = indexer.project(&u, &cos_sin)?;
+        let groups = len / cfg.ratio;
+        let first: Vec<usize> = (0..groups).map(|j| j * cfg.ratio).collect();
+        let kc = indexer.compress(
+            &raw.get(0)?.narrow(0, 0, groups * cfg.ratio)?,
+            &rotary.compute_cos_sin(&planes(&first, &dev)?, DType::F32)?,
+        )?;
+        let keys: Vec<Vec<f64>> = f64s(&kc)?.chunks(cfg.dim).map(<[f64]>::to_vec).collect();
+        let iq = f64s(&iq)?;
+        let rows = |t: &Tensor| f64s(&t.get(0)?.transpose(0, 1)?.contiguous()?);
+        let (qr, kr, vr) = (rows(&q)?, rows(&k)?, rows(&v)?);
+        let scale = 1.0 / (hd as f64).sqrt();
+        let mut dropped = 0;
+        let y: Vec<f32> = (0..len)
+            .flat_map(|p| {
+                let x = &iq[p * cfg.heads * cfg.dim..(p + 1) * cfg.heads * cfg.dim];
+                let sel = reference::select(x, &keys, p, cfg.ratio, cfg.blocks);
+                dropped += usize::from(sel.len() <= p);
+                let qp = &qr[p * heads * hd..(p + 1) * heads * hd];
+                reference::attend(qp, &kr, &vr, &sel, kv_heads, hd, scale)
+            })
+            .map(|x| x as f32)
+            .collect();
+        assert!(dropped > len / 2, "only {dropped} queries dropped a group");
+        let want = attn.output(
+            &Tensor::from_vec(y, (1, len, heads * hd), &dev)?,
+            &gate,
+            DType::F32,
+        )?;
+        let want = f64s(&want)?;
+
+        for chunks in [vec![len], vec![13, 1, 1, 9, 6, 7], vec![2, 10, 1, 24]] {
+            let got = run(&layer, &u, &chunks, true)?;
+            within(&got, &want, 1e-5, &format!("chunks {chunks:?}"))?;
+        }
         Ok(())
     }
 }

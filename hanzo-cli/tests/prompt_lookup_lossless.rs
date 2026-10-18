@@ -63,6 +63,7 @@ fn gguf(path: &Path) -> ModelSelected {
         quantized_filename: file,
         dtype: ModelDType::Auto,
         topology: None,
+        rope_yarn_factor: None,
         max_seq_len: MAX_SEQ_LEN,
         max_batch_size: 1,
     }

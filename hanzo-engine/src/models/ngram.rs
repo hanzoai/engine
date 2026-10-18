@@ -1024,6 +1024,7 @@ mod tests {
             layer_types: vec![HybridLayerType::Attention],
             max_seq_len: 64,
             pools: vec![ngram.pool(DType::F32)?],
+            side_kv: 0,
         };
         HybridCache::new(cfg, &Device::Cpu)
     }

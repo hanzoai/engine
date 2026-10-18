@@ -887,6 +887,32 @@ impl PagedAttention {
         Ok(res)
     }
 
+    /// Writes `key` and `value` rows `[tokens, kv_heads, head_size]` into `key_cache` and
+    /// `value_cache`, one row per entry of the forward's slot mapping (padding entries skipped):
+    /// the write [`forward`](Self::forward) makes before it attends, for a caller that attends
+    /// over the cache itself.
+    pub fn write(
+        &self,
+        key: &Tensor,
+        value: &Tensor,
+        key_cache: &Tensor,
+        value_cache: &Tensor,
+        input_metadata: &PagedAttentionInputMetadata,
+    ) -> Result<()> {
+        let slot_mapping =
+            resolve_tensor_for_device(&input_metadata.slot_mappings, key.device(), "slot_mapping")?
+                .flatten_all()?;
+        write_kv_cache(
+            key,
+            value,
+            self.k_scale.as_ref(),
+            self.v_scale.as_ref(),
+            &mut key_cache.clone(),
+            &mut value_cache.clone(),
+            &slot_mapping,
+        )
+    }
+
     /// Standard paged attention forward: writes key/value to cache, then
     /// runs attention (Sdpa for prompt, paged kernel for decode).
     #[allow(clippy::too_many_arguments)]

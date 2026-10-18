@@ -515,6 +515,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
             topology,
+            rope_yarn_factor,
             ..
         } => GGUFLoaderBuilder::new(
             args.chat_template,
@@ -526,6 +527,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                rope_yarn_factor,
             },
             args.no_kv_cache,
             args.jinja_explicit,
@@ -550,6 +552,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                rope_yarn_factor: None,
             },
             args.no_kv_cache,
             args.jinja_explicit,
@@ -582,6 +585,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                rope_yarn_factor: None,
             },
             args.no_kv_cache,
             args.jinja_explicit,

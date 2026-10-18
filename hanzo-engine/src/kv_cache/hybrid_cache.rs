@@ -382,6 +382,10 @@ pub struct HybridCacheConfig {
     /// One per recurrent pool, in cache order: one for each `Recurrent` layer, then side pools,
     /// which sit after the layers, from index `layer_types.len()` on.
     pub pools: Vec<RecurrentLayerConfig>,
+    /// Per-token K/V caches after the side pools, each a second row set some attention layer
+    /// keeps beside its own K/V (zen6's sparse-attention index). They batch, split, trim and
+    /// reset with the attention layers' caches.
+    pub side_kv: usize,
 }
 
 impl HybridCacheConfig {
@@ -399,6 +403,7 @@ impl HybridCacheConfig {
             pools: vec![pool; recurrent],
             layer_types,
             max_seq_len,
+            side_kv: 0,
         }
     }
 }
@@ -448,12 +453,19 @@ impl HybridCache {
             };
             caches.push(cache);
         }
-        // The pools left over are side pools, after the layers.
+        // The pools left over are side pools, after the layers; the side K/V caches follow them.
         for pool in pools {
             caches.push(HybridLayerCache::Recurrent(RecurrentStatePool::new(
                 pool.clone(),
                 device,
             )?));
+        }
+        for _ in 0..config.side_kv {
+            caches.push(HybridLayerCache::Attention(KvCache::new_normal(
+                2,
+                config.max_seq_len,
+                Self::CACHE_GROW_SIZE,
+            )));
         }
 
         Ok(Self {
@@ -1038,6 +1050,7 @@ mod tests {
             layer_types: vec![HybridLayerType::Recurrent; 2],
             max_seq_len: 16,
             pools: vec![config(&STATE, DType::BF16, DType::F32)],
+            side_kv: 0,
         };
         assert!(HybridCache::new(short, &Device::Cpu).is_err());
         Ok(())

@@ -363,6 +363,40 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
     pub fn get_metadata(&self) -> &HashMap<String, Value> {
         &self.all_metadata
     }
+
+    /// Declares YaRN context extension by `factor` with the GGUF YaRN keys
+    /// for a YaRN checkpoint: `rope.scaling.{type, factor, original_context_length}`, the
+    /// original being what the file already declares or else its `context_length`. The model
+    /// reads them as it would from the file; they replace any scaling type and factor it
+    /// declares.
+    pub fn extend_context(&mut self, factor: f32) -> anyhow::Result<()> {
+        let arch = self
+            .all_metadata
+            .get("general.architecture")
+            .context("GGUF declares no architecture")?
+            .to_string()?
+            .clone();
+        let key = |name: &str| format!("{arch}.rope.scaling.{name}");
+        if !self
+            .all_metadata
+            .contains_key(&key("original_context_length"))
+        {
+            let context = self
+                .all_metadata
+                .get(&format!("{arch}.context_length"))
+                .context("GGUF declares no context_length")?
+                .to_u64()?;
+            self.all_metadata.insert(
+                key("original_context_length"),
+                Value::U32(u32::try_from(context)?),
+            );
+        }
+        self.all_metadata
+            .insert(key("type"), Value::String("yarn".into()));
+        self.all_metadata.insert(key("factor"), Value::F32(factor));
+        info!("YaRN context extension by {factor}");
+        Ok(())
+    }
 }
 
 #[cfg(test)]

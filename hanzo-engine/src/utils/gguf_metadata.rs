@@ -10,7 +10,7 @@ use tracing::warn;
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::gguf::Content;
 use crate::matformer::MatformerSliceConfig;
-use crate::paged_attention::ModelConfigLike;
+use crate::paged_attention::{IndexEntries, ModelConfigLike};
 use crate::pipeline::AutoDeviceMapParams;
 use crate::pipeline::DeviceMappedModelLoader;
 use crate::GGUFArchitecture;
@@ -29,6 +29,8 @@ pub struct ContentConfig {
     kv_layers: Vec<usize>,
     key_length: Option<usize>,
     value_length: Option<usize>,
+    /// zen6's QSA index entries after the attention layers' K/V.
+    index: Option<IndexEntries>,
 }
 
 /// The layers that hold KV. A hybrid arch interleaves gated linear-attention layers with full
@@ -93,6 +95,7 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
                     kv_layers: (0..num_layers).collect(),
                     key_length: Some(kv_lora + qk_rope),
                     value_length: Some(kv_lora),
+                    index: None,
                 };
             }
 
@@ -109,10 +112,20 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
                 kv_layers: (0..num_layers).collect(),
                 key_length: Some(q_head_dim),
                 value_length: Some(v_head_dim),
+                index: None,
             };
         }
 
         let num_layers = metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize;
+        let index = (arch == "zen6")
+            .then(|| u(&format!("{arch}.attention.indexer.key_length")))
+            .flatten()
+            .map(|width| IndexEntries { num_layers, width });
+        let attention = kv_layers(arch, num_layers, u);
+        let kv_layers = match index {
+            Some(index) => index.layers(&attention),
+            None => attention,
+        };
         Self {
             max_seq_len: metadata[&format!("{arch}.context_length")]
                 .to_u64()
@@ -136,14 +149,22 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
                 })
             },
             num_layers,
-            kv_layers: kv_layers(arch, num_layers, u),
+            kv_layers,
             key_length: metadata
                 .get(&format!("{arch}.attention.key_length"))
                 .map(|x| x.to_u64().unwrap() as usize),
             value_length: metadata
                 .get(&format!("{arch}.attention.value_length"))
                 .map(|x| x.to_u64().unwrap() as usize),
+            index,
         }
+    }
+}
+
+impl ContentConfig {
+    /// The index entries' shape, when `layer_idx` is one of them.
+    fn index_entry(&self, layer_idx: usize) -> Option<IndexEntries> {
+        self.index.filter(|i| i.reader(layer_idx).is_some())
     }
 }
 
@@ -173,6 +194,30 @@ impl ModelConfigLike for ContentConfig {
     fn v_head_dim(&self) -> usize {
         self.value_length
             .unwrap_or(self.hidden_size / self.num_attn_heads)
+    }
+    fn num_kv_heads_for_layer(&self, layer_idx: usize) -> usize {
+        match self.index_entry(layer_idx) {
+            Some(_) => 1,
+            None => self.num_kv_heads,
+        }
+    }
+    fn k_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+        match self.index_entry(layer_idx) {
+            Some(index) => index.width,
+            None => self.k_head_dim(),
+        }
+    }
+    fn v_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+        match self.index_entry(layer_idx) {
+            Some(index) => index.width,
+            None => self.v_head_dim(),
+        }
+    }
+    fn kv_reader(&self, layer_idx: usize) -> Option<usize> {
+        match self.index_entry(layer_idx) {
+            Some(index) => index.reader(layer_idx),
+            None => (layer_idx < self.num_layers).then_some(layer_idx),
+        }
     }
 }
 

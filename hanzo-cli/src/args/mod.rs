@@ -1140,6 +1140,7 @@ fn build_draft_model_selected(
         quantized_filename: draft_quantized_file.unwrap_or_default().to_string(),
         dtype: hanzo_engine::ModelDType::Auto,
         topology: None,
+        rope_yarn_factor: None,
         max_seq_len,
         max_batch_size,
     })

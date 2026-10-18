@@ -32,7 +32,7 @@ pub use attention_backend::{
     FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE,
 };
 pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
-pub use config::{KvCacheLayout, KvLayers, ModelConfigLike, ModelConfigMetadata};
+pub use config::{IndexEntries, KvCacheLayout, KvLayers, ModelConfigLike, ModelConfigMetadata};
 use hanzo_ml::{DType, Device};
 pub use kv_cache_manager::KVCacheManager;
 pub use layers::PagedAttention;

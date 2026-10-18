@@ -769,6 +769,7 @@ pub async fn build_gguf_pipeline(
 
     let config = GGUFSpecificConfig {
         topology: builder.topology.clone(),
+        rope_yarn_factor: None,
     };
 
     maybe_initialize_logging(builder.with_logging);
@@ -834,6 +835,7 @@ pub async fn build_gguf_pipeline(
             quantized_filename: builder.files.join(GGUF_MULTI_FILE_DELIMITER),
             dtype: builder.dtype,
             topology: builder.topology_path.clone(),
+            rope_yarn_factor: None,
             max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
             max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
         },
