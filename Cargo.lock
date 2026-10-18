@@ -3439,9 +3439,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-kernels"
-version = "0.11.37"
+version = "0.11.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "327a7b12d6f98d25308beb9997696c90b501e88097b324dbeb21266ddfcfbf27"
+checksum = "936e15782afe3be515c64331947ecd09db12480690f0aa480c9d28c360677307"
 dependencies = [
  "glob",
  "hanzo-bindgen-cuda",
@@ -3481,9 +3481,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-metal-kernels"
-version = "0.11.45"
+version = "0.11.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "087da648626e031b5f6181293d0b34db4ddc4130c365dd074c0f13d9a46aecd4"
+checksum = "37eb94d720adcb758a0632907d52d0950fabdbd6afacf43502009fd8916bdadb"
 dependencies = [
  "block2",
  "half",
@@ -3497,9 +3497,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.11.103"
+version = "0.11.113"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1988740f6703c39246dbedff15e17fd99cf0fdcf91250a6850d209b195b3eea6"
+checksum = "15f3a1d41f6e3e81f420c951e08ea3614610da950056c2668c92816606ba2d74"
 dependencies = [
  "accelerate-src",
  "ash",
@@ -3536,21 +3536,25 @@ dependencies = [
 
 [[package]]
 name = "hanzo-nn"
-version = "0.11.41"
+version = "0.11.49"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67158b7ef6e3d22d922d31950f6111ea71fce57ea6a606f33976d26ee0406f"
+checksum = "127113b6911b3f56fce5e6408c2bf9e2591403c68cfe2e7ce8effdb399ebbbad"
 dependencies = [
  "accelerate-src",
+ "float8",
+ "gemm",
  "half",
  "hanzo-metal-kernels",
  "hanzo-ml",
  "intel-mkl-src",
  "libc",
+ "memmap2",
  "num-traits",
  "objc2-metal",
  "rayon",
  "safetensors",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 
@@ -3645,9 +3649,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-rocm-kernels"
-version = "0.11.40"
+version = "0.11.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93d84b39bb8bba24a36637b1867f970d893c8b5eed4af67da614f5bbcee73f1a"
+checksum = "73170329a06e496a47c5290ccd2e36a96eaea811640f24a92bd9862a1d05c188"
 dependencies = [
  "dirs 5.0.1",
  "half",
