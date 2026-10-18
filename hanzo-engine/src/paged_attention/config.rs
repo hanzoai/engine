@@ -221,6 +221,30 @@ impl ModelConfigLike for ModelConfigMetadata {
     }
 }
 
+/// zen6's QSA index in the paged cache: attention layer `l` of a `num_layers`-deep decoder keeps
+/// its index entry at `num_layers + l`, one head `width` wide in K and in V, and reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IndexEntries {
+    pub num_layers: usize,
+    pub width: usize,
+}
+
+impl IndexEntries {
+    /// The attention layer that reads cache entry `layer_idx`, when that entry is an index entry.
+    pub fn reader(&self, layer_idx: usize) -> Option<usize> {
+        layer_idx.checked_sub(self.num_layers)
+    }
+
+    /// The `attention` layers' entries, then each one's index entry.
+    pub fn layers(&self, attention: &[usize]) -> Vec<usize> {
+        attention
+            .iter()
+            .copied()
+            .chain(attention.iter().map(|l| self.num_layers + l))
+            .collect()
+    }
+}
+
 /// A config whose model holds a paged K/V pair at only some of its decoder layers. Hybrids build
 /// it from their layer schedule; everything the paged cache does -- sizing, allocation, the index
 /// an attention layer reads -- follows [`ModelConfigLike::kv_layers`].
@@ -228,11 +252,34 @@ impl ModelConfigLike for ModelConfigMetadata {
 pub struct KvLayers<C> {
     inner: C,
     layers: Vec<usize>,
+    index: Option<IndexEntries>,
 }
 
 impl<C> KvLayers<C> {
     pub fn new(inner: C, layers: Vec<usize>) -> Self {
-        Self { inner, layers }
+        Self {
+            inner,
+            layers,
+            index: None,
+        }
+    }
+
+    /// The `attention` layers' K/V and, after them, each one's QSA index entry.
+    pub fn indexed(inner: C, attention: &[usize], index: IndexEntries) -> Self {
+        Self {
+            inner,
+            layers: index.layers(attention),
+            index: Some(index),
+        }
+    }
+
+    pub fn inner(&self) -> &C {
+        &self.inner
+    }
+
+    /// The index entries' shape, when `layer_idx` is one of them.
+    fn index_entry(&self, layer_idx: usize) -> Option<IndexEntries> {
+        self.index.filter(|i| i.reader(layer_idx).is_some())
     }
 }
 
@@ -241,7 +288,10 @@ impl<C: ModelConfigLike> ModelConfigLike for KvLayers<C> {
         self.layers.clone()
     }
     fn kv_reader(&self, layer_idx: usize) -> Option<usize> {
-        self.inner.kv_reader(layer_idx)
+        match self.index_entry(layer_idx) {
+            Some(index) => index.reader(layer_idx),
+            None => self.inner.kv_reader(layer_idx),
+        }
     }
     fn max_seq_len(&self) -> usize {
         self.inner.max_seq_len()
@@ -268,13 +318,22 @@ impl<C: ModelConfigLike> ModelConfigLike for KvLayers<C> {
         self.inner.num_attn_heads_for_layer(layer_idx)
     }
     fn num_kv_heads_for_layer(&self, layer_idx: usize) -> usize {
-        self.inner.num_kv_heads_for_layer(layer_idx)
+        match self.index_entry(layer_idx) {
+            Some(_) => 1,
+            None => self.inner.num_kv_heads_for_layer(layer_idx),
+        }
     }
     fn k_head_dim_for_layer(&self, layer_idx: usize) -> usize {
-        self.inner.k_head_dim_for_layer(layer_idx)
+        match self.index_entry(layer_idx) {
+            Some(index) => index.width,
+            None => self.inner.k_head_dim_for_layer(layer_idx),
+        }
     }
     fn v_head_dim_for_layer(&self, layer_idx: usize) -> usize {
-        self.inner.v_head_dim_for_layer(layer_idx)
+        match self.index_entry(layer_idx) {
+            Some(index) => index.width,
+            None => self.inner.v_head_dim_for_layer(layer_idx),
+        }
     }
     fn uses_own_kv_cache_for_layer(&self, layer_idx: usize) -> bool {
         self.inner.uses_own_kv_cache_for_layer(layer_idx)
@@ -282,16 +341,27 @@ impl<C: ModelConfigLike> ModelConfigLike for KvLayers<C> {
     fn attention_backend_kind(&self) -> AttentionBackendKind {
         self.inner.attention_backend_kind()
     }
+    // An index entry's backend, layout and size follow from its own shape, as for any config that
+    // answers its per-layer shape itself.
     fn attention_backend_kind_for_layer(&self, layer_idx: usize) -> AttentionBackendKind {
-        self.inner.attention_backend_kind_for_layer(layer_idx)
+        match self.index_entry(layer_idx) {
+            Some(_) => select_attention_backend_for_layer(self, layer_idx),
+            None => self.inner.attention_backend_kind_for_layer(layer_idx),
+        }
     }
     fn kv_cache_layout(&self) -> KvCacheLayout {
         self.inner.kv_cache_layout()
     }
     fn kv_cache_layout_for_layer(&self, layer_idx: usize) -> KvCacheLayout {
-        self.inner.kv_cache_layout_for_layer(layer_idx)
+        match self.index_entry(layer_idx) {
+            Some(_) => select_kv_cache_layout_for_layer(KvCacheLayout::Standard, self, layer_idx),
+            None => self.inner.kv_cache_layout_for_layer(layer_idx),
+        }
     }
     fn kv_cache_elements_per_token_for_layer(&self, layer_idx: usize) -> usize {
-        self.inner.kv_cache_elements_per_token_for_layer(layer_idx)
+        match self.index_entry(layer_idx) {
+            Some(index) => 2 * index.width,
+            None => self.inner.kv_cache_elements_per_token_for_layer(layer_idx),
+        }
     }
 }

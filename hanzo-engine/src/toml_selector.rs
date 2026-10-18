@@ -764,6 +764,7 @@ fn loader_from_selected(
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                rope_yarn_factor: None,
             },
             args.no_kv_cache,
             args.jinja_explicit,
@@ -790,6 +791,7 @@ fn loader_from_selected(
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                rope_yarn_factor: None,
             },
             args.no_kv_cache,
             args.jinja_explicit,
@@ -822,6 +824,7 @@ fn loader_from_selected(
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                rope_yarn_factor: None,
             },
             args.no_kv_cache,
             args.jinja_explicit,

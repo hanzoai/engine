@@ -5952,8 +5952,9 @@ impl Zen6Loader {
 
     /// Bytes each manifest entry takes once loaded, in its device dtype: the NVFP4 per-expert
     /// scalars fold into a bank's alpha and global scale, the f32-held tensors (HC norms, GDN
-    /// A_log, dt_bias, conv, in_proj_a/b, the Gemma norms) count 4 bytes an element, the rest
-    /// their stored size. Host entries (the n-gram table and hash) count nothing.
+    /// A_log, dt_bias, conv, in_proj_a/b, the Gemma norms, the QSA indexer's included) count 4
+    /// bytes an element, the rest their stored size. Host entries (the n-gram table and hash)
+    /// count nothing.
     pub(crate) fn device_bytes(e: &crate::models::zen6::Entry) -> usize {
         use crate::models::zen6::Role;
         if e.role == Role::Host {
@@ -5978,6 +5979,8 @@ impl Zen6Loader {
             || name.contains("in_proj_b.")
             || name.ends_with("q_norm.weight")
             || name.ends_with("k_norm.weight")
+            || name.ends_with("q_layernorm.weight")
+            || name.ends_with("k_layernorm.weight")
             || name.contains("ple.norm_")
             || name.contains("linear_attn.norm.weight");
         if f32_held {
@@ -6115,7 +6118,7 @@ impl DeviceMappedModelLoader for Zen6Loader {
     }
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
         let cfg = Self::cfg(config)?;
-        let props = cfg.props();
+        let props = cfg.props()?;
         let t = cfg.text();
         let meta = ModelConfigMetadata {
             max_seq_len: props.max_seq_len,
@@ -6128,10 +6131,14 @@ impl DeviceMappedModelLoader for Zen6Loader {
             v_head_dim: t.head_dim,
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
-        let attention = (0..t.num_hidden_layers)
+        let attention: Vec<usize> = (0..t.num_hidden_layers)
             .filter(|&i| t.attention(i))
             .collect();
-        Ok(Box::new(KvLayers::new(meta, attention)))
+        let index = crate::paged_attention::IndexEntries {
+            num_layers: t.num_hidden_layers,
+            width: t.indexer_head_dim,
+        };
+        Ok(Box::new(KvLayers::indexed(meta, &attention, index)))
     }
 }
 

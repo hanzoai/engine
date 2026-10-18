@@ -344,6 +344,11 @@ pub enum ModelSelected {
         #[arg(long)]
         topology: Option<String>,
 
+        /// Extend the context by this YaRN factor over the file's `context_length`, declared as
+        /// the `rope.scaling.*` metadata a YaRN conversion carries.
+        #[arg(long)]
+        rope_yarn_factor: Option<f32>,
+
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
         max_seq_len: usize,

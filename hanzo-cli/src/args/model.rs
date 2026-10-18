@@ -42,6 +42,12 @@ pub struct FormatOptions {
     #[arg(long)]
     pub tok_model_id: Option<String>,
 
+    /// Extend a GGUF model's context by this YaRN factor over the file's `context_length`
+    /// (e.g. 4 for Qwen3.8-Flash-Next's 262,144 -> 1,048,576), declared as the `rope.scaling.*`
+    /// metadata a YaRN conversion carries
+    #[arg(long)]
+    pub rope_yarn_factor: Option<f32>,
+
     /// GQA value for GGML models
     #[arg(long, default_value_t = 1)]
     #[serde(default = "default_gqa")]

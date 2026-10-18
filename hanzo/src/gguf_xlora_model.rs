@@ -41,6 +41,7 @@ impl GgufXLoraModelBuilder {
         let gguf_model = self.gguf_model.clone();
         let config = GGUFSpecificConfig {
             topology: self.gguf_model.topology,
+            rope_yarn_factor: None,
         };
 
         maybe_initialize_logging(self.gguf_model.with_logging);

@@ -1172,7 +1172,6 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
         modify_draft_cache: bool,
     ) {
         let mut hybrid_cache = pipeline.cache().hybrid();
-        let num_layers = hybrid_cache.num_layers();
 
         // Build state_indices for recurrent layers from sequences' recurrent_state_idx
         // Find the device from the first recurrent layer's pool
@@ -1241,8 +1240,8 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
             }
         }
 
-        // For attention layers, we still need to batch KV caches
-        for layer_idx in 0..num_layers {
+        // Attention layers' and side K/V caches still need batching.
+        for layer_idx in 0..hybrid_cache.caches.len() {
             let layer_cache = hybrid_cache.caches.get_mut(layer_idx).unwrap();
 
             if let HybridLayerCache::Attention(kv_cache) = layer_cache {
@@ -1312,11 +1311,10 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
 
     fn clone_out_cache(&self, pipeline: &T, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         let hybrid_cache = pipeline.cache().hybrid();
-        let num_layers = hybrid_cache.num_layers();
         let num_seqs = seqs.len();
 
-        // For attention layers, split batched KV caches back to sequences
-        for layer_idx in 0..num_layers {
+        // Split attention layers' and side K/V caches back to sequences.
+        for layer_idx in 0..hybrid_cache.caches.len() {
             let layer_cache = hybrid_cache.caches.get(layer_idx).unwrap();
 
             if let HybridLayerCache::Attention(kv_cache) = layer_cache {

@@ -526,6 +526,26 @@ impl GatedFullAttention {
         })
     }
 
+    /// Query heads, K/V heads and head width.
+    pub(crate) fn heads(&self) -> (usize, usize, usize) {
+        (self.n_head, self.n_kv_head, self.head_dim)
+    }
+
+    /// Writes rows `[tokens, heads, dim]` into the paged `(K, V)` entry `cache` at the forward's
+    /// slots, the write this block's paged attention makes before it attends.
+    pub(crate) fn write_paged(
+        &self,
+        k: &Tensor,
+        v: &Tensor,
+        cache: &(Tensor, Tensor),
+        meta: &PagedAttentionInputMetadata,
+    ) -> Result<()> {
+        let Some(paged) = &self.paged_attn else {
+            hanzo_ml::bail!("a paged cache write from a block without paged attention");
+        };
+        paged.write(k, v, &cache.0, &cache.1, meta)
+    }
+
     /// This block's MRoPE cos/sin for `[3, batch, seq]` position ids.
     pub(crate) fn rotary_cos_sin(
         &self,

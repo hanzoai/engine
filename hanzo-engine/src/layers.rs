@@ -1569,6 +1569,87 @@ pub struct Qwen3VLRotaryEmbedding {
     /// Which of the three position planes each frequency reads: 0 temporal, 1 H, 2 W.
     /// Built once at init; a per-step Tensor::from_vec would sync the device every decode.
     plane: Tensor,
+    /// Multiplies cos and sin: YaRN's attention factor, 1 without it.
+    mscale: f64,
+}
+
+/// YaRN context extension of a rotary embedding (Peng et al., arXiv:2309.00071), in f32.
+///
+/// Frequency `i` of a `dim`-wide rotation blends its original value, kept where a rotation turns
+/// at least `beta_fast` times over `length` positions, with that value divided by `factor`, used
+/// where it turns at most `beta_slow` times, by a linear ramp between; cos and sin are then scaled
+/// by `0.1·ln(factor) + 1`, which scales every logit's rotated part by its square.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Yarn {
+    /// How many times the trained context the positions reach.
+    pub factor: f64,
+    /// Positions over which rotations are counted to place the ramp.
+    pub length: usize,
+    pub beta_fast: f64,
+    pub beta_slow: f64,
+}
+
+impl Yarn {
+    /// YaRN on M-RoPE: positions to `factor` times the `original` context, with rotations counted
+    /// over four times `original`, the length the M-RoPE cos/sin table is sized at.
+    pub fn mrope(factor: f64, original: usize, beta_fast: f64, beta_slow: f64) -> Result<Self> {
+        if factor.is_nan() || factor < 1.0 {
+            hanzo_ml::bail!("YaRN factor {factor} shortens the context");
+        }
+        Ok(Self {
+            factor,
+            length: 4 * original,
+            beta_fast,
+            beta_slow,
+        })
+    }
+
+    /// The positions an [`mrope`](Self::mrope) YaRN reaches: `factor` times the original context.
+    pub fn context(&self) -> usize {
+        (self.length as f64 / 4.0 * self.factor) as usize
+    }
+
+    /// The frequency indices where the ramp starts and ends: index `dim·ln(length / (2π·turns)) /
+    /// (2·ln base)` at `beta_fast` turns, floored, and at `beta_slow`, ceiled, clamped to the
+    /// `dim / 2` there are.
+    pub fn range(&self, base: f64, dim: usize) -> (f64, f64) {
+        let at = |turns: f64| {
+            dim as f64 * (self.length as f64 / (turns * 2.0 * std::f64::consts::PI)).ln()
+                / (2.0 * base.ln())
+        };
+        (
+            at(self.beta_fast).floor().max(0.0),
+            at(self.beta_slow).ceil().min(dim as f64 - 1.0),
+        )
+    }
+
+    /// Frequencies of a `dim`-wide rotation at `base`: `1 / base^(2i/dim)` blended with itself over
+    /// `factor` by the linear ramp over [`range`](Self::range).
+    pub fn inv_freq(&self, base: f32, dim: usize) -> Vec<f32> {
+        let (low, high) = self.range(f64::from(base), dim);
+        let (low, mut high) = (low as f32, high as f32);
+        if low == high {
+            high += 0.001;
+        }
+        let factor = self.factor as f32;
+        (0..dim / 2)
+            .map(|i| {
+                let pos = base.powf((2 * i) as f32 / dim as f32);
+                let ramp = ((i as f32 - low) / (high - low)).clamp(0.0, 1.0);
+                let keep = 1.0 - ramp;
+                1.0 / (factor * pos) * (1.0 - keep) + 1.0 / pos * keep
+            })
+            .collect()
+    }
+
+    /// The attention factor: `0.1·ln(factor) + 1`, or 1 when `factor` is at most 1.
+    pub fn mscale(&self) -> f64 {
+        if self.factor <= 1.0 {
+            1.0
+        } else {
+            0.1 * self.factor.ln() + 1.0
+        }
+    }
 }
 
 impl Qwen3VLRotaryEmbedding {
@@ -1578,10 +1659,25 @@ impl Qwen3VLRotaryEmbedding {
         device: &Device,
         mrope_section: Vec<usize>,
     ) -> Result<Self> {
-        let inv_freq: Vec<_> = (0..head_dim)
-            .step_by(2)
-            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
-            .collect();
+        Self::new_yarn(base, head_dim, device, mrope_section, None)
+    }
+
+    /// [`new`](Self::new) extended by `yarn` when it is given: its frequencies and its factor on
+    /// cos and sin, for every plane alike.
+    pub fn new_yarn(
+        base: f32,
+        head_dim: usize,
+        device: &Device,
+        mrope_section: Vec<usize>,
+        yarn: Option<Yarn>,
+    ) -> Result<Self> {
+        let inv_freq: Vec<_> = match yarn {
+            Some(yarn) => yarn.inv_freq(base, head_dim),
+            None => (0..head_dim)
+                .step_by(2)
+                .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
+                .collect(),
+        };
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (inv_freq_len,), device)?.to_dtype(DType::F32)?;
 
@@ -1600,7 +1696,11 @@ impl Qwen3VLRotaryEmbedding {
         }
         let plane = Tensor::from_vec(plane, (half_dim,), device)?;
 
-        Ok(Self { inv_freq, plane })
+        Ok(Self {
+            inv_freq,
+            plane,
+            mscale: yarn.map_or(1.0, |y| y.mscale()),
+        })
     }
 
     /// Compute (cos, sin) from 3D position_ids of shape (3, batch, seq_len).
@@ -1631,9 +1731,18 @@ impl Qwen3VLRotaryEmbedding {
         let freqs_t = freqs.gather(&plane, 0)?.squeeze(0)?;
 
         // cos/sin from freqs_t -> (batch, seq_len, head_dim/2)
-        // hanzo-ml's rope() expects half-dim cos/sin and handles both halves internally
-        let cos = freqs_t.cos()?.to_dtype(dtype)?.contiguous()?;
-        let sin = freqs_t.sin()?.to_dtype(dtype)?.contiguous()?;
+        // hanzo-ml's rope() expects half-dim cos/sin and handles both halves internally. The
+        // YaRN factor multiplies them in f32, before the cast.
+        let (cos, sin) = if self.mscale == 1.0 {
+            (freqs_t.cos()?, freqs_t.sin()?)
+        } else {
+            (
+                (freqs_t.cos()? * self.mscale)?,
+                (freqs_t.sin()? * self.mscale)?,
+            )
+        };
+        let cos = cos.to_dtype(dtype)?.contiguous()?;
+        let sin = sin.to_dtype(dtype)?.contiguous()?;
         Ok((cos, sin))
     }
 
@@ -4485,6 +4594,70 @@ mod interleaved_mrope_tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Qwen3.8-Flash-Next's YaRN (factor 4 over 262,144, theta 1e7, 64 rotary dims) on M-RoPE,
+    /// which counts rotations over its 4x table: the ramp runs over frequencies 16..24, and the
+    /// frequencies match the f32 arithmetic of the formulas above, computed in numpy.
+    /// Counting over the original 262,144, as HF's YaRN does, puts it at 14..22 and moves every
+    /// frequency between.
+    #[test]
+    fn yarn_mrope_ramp_and_frequencies() -> Result<()> {
+        let yarn = |length: usize| Yarn {
+            factor: 4.0,
+            length,
+            beta_fast: 32.0,
+            beta_slow: 1.0,
+        };
+        let (mrope, hf) = (yarn(4 * 262_144), yarn(262_144));
+        assert_eq!(mrope.range(1e7, 64), (16.0, 24.0));
+        assert_eq!(hf.range(1e7, 64), (14.0, 22.0));
+        let near = |got: f32, want: f32, what: &str| {
+            assert!(
+                (got - want).abs() <= 4.0 * f32::EPSILON * want,
+                "{what}: {got:e} vs {want:e}"
+            )
+        };
+        // numpy float32 over the range, ramp and frequency formulas.
+        let want = [
+            (0, 1.0),
+            (15, 5.232_990_952_208_638e-4),
+            (16, 3.162_277_862_429_619e-4),
+            (17, 1.731_801_312_416_792e-4),
+            (20, 2.635_603_232_192_807e-5),
+            (23, 3.198_841_568_519_128_5e-6),
+            (24, 1.405_853_367_941_745e-6),
+            (31, 4.137_042_708_407_534_5e-8),
+        ];
+        let (got, other) = (mrope.inv_freq(1e7, 64), hf.inv_freq(1e7, 64));
+        assert_eq!(got.len(), 32);
+        for (i, want) in want {
+            near(got[i], want as f32, &format!("frequency {i}"));
+        }
+        near(other[20], 1.844_922_4e-5, "HF frequency 20");
+        // Outside the ramp both keep the original, or the original over the factor.
+        for i in (0..14).chain(24..32) {
+            assert_eq!(got[i], other[i], "frequency {i}");
+        }
+        assert!((mrope.mscale() - (0.1 * 4f64.ln() + 1.0)).abs() < 1e-15);
+
+        // The embedding multiplies cos and sin by the factor, in f32, before any cast.
+        let dev = Device::Cpu;
+        let rope = Qwen3VLRotaryEmbedding::new_yarn(1e7, 64, &dev, vec![11, 11, 10], Some(mrope))?;
+        let pos = Tensor::from_vec(vec![1_000_003u32; 3], (3, 1, 1), &dev)?;
+        let (cos, sin) = rope.compute_cos_sin(&pos, DType::F32)?;
+        let (cos, sin) = (
+            cos.flatten_all()?.to_vec1::<f32>()?,
+            sin.flatten_all()?.to_vec1::<f32>()?,
+        );
+        let at = |i: usize| (1_000_003f32 * got[i], 1.138_629_4f32);
+        for i in [0, 20, 31] {
+            let (a, m) = at(i);
+            near(cos[i].abs() + 1.0, (a.cos() * m).abs() + 1.0, "cos");
+            near(sin[i].abs() + 1.0, (a.sin() * m).abs() + 1.0, "sin");
+        }
+        near(cos[20], 0.387_679_13, "numpy cos at frequency 20");
         Ok(())
     }
 }

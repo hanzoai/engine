@@ -493,6 +493,9 @@ pub struct GGUFLoader {
 /// Config for a GGUF loader.
 pub struct GGUFSpecificConfig {
     pub topology: Option<Topology>,
+    /// YaRN context extension by this factor, declared into the file's metadata at load
+    /// ([`Content::extend_context`]).
+    pub rope_yarn_factor: Option<f32>,
 }
 
 #[derive(Default)]
@@ -715,6 +718,9 @@ impl Loader for GGUFLoader {
         let mut readers = files.iter_mut().collect::<Vec<_>>();
         let mut model = Content::from_readers(&mut readers)?;
         model.set_mmaps(mmaps);
+        if let Some(factor) = self.config.rope_yarn_factor {
+            model.extend_context(factor)?;
+        }
 
         // Disk-streaming expert cache (low-memory mode): keep the dense weights resident but stream
         // stacked MoE expert banks from NVMe, so a model far larger than RAM runs on one box. Gated

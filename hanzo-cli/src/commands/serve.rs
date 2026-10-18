@@ -588,6 +588,7 @@ fn convert_text_model(
                 .topology
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
+            rope_yarn_factor: format_opts.rope_yarn_factor,
             max_seq_len: device.max_seq_len,
             max_batch_size: device.max_batch_size,
         }),

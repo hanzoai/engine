@@ -39,6 +39,17 @@ pub mod paged_attention {
             hanzo_ml::bail!("Paged attention requires the CUDA or Metal feature flags.");
         }
 
+        pub fn write(
+            &self,
+            _key: &Tensor,
+            _value: &Tensor,
+            _key_cache: &Tensor,
+            _value_cache: &Tensor,
+            _input_metadata: &PagedAttentionInputMetadata,
+        ) -> Result<()> {
+            hanzo_ml::bail!("Paged attention requires the CUDA or Metal feature flags.");
+        }
+
         #[allow(clippy::too_many_arguments)]
         #[allow(unused_variables)]
         pub fn forward(
