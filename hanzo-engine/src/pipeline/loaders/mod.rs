@@ -382,6 +382,50 @@ impl ModelKind {
             AnyMoe { target } => target.adapted_kind(),
         }
     }
+
+    /// The file format the weights were read from: `safetensors`, `gguf`, `ggml` or `gptq`.
+    pub fn checkpoint_format(&self) -> &'static str {
+        use ModelKind::*;
+
+        match self {
+            Normal | Adapter { .. } => "safetensors",
+            GgufQuantized { quant } | GgufAdapter { quant, .. } => match quant {
+                QuantizationKind::Gguf => "gguf",
+                QuantizationKind::Ggml => "ggml",
+                QuantizationKind::Gptq => "gptq",
+            },
+            AnyMoe { target } => target.checkpoint_format(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AdapterKind, ModelKind, QuantizationKind};
+
+    #[test]
+    fn checkpoint_formats() {
+        let gguf = ModelKind::GgufQuantized {
+            quant: QuantizationKind::Gguf,
+        };
+        assert_eq!(ModelKind::Normal.checkpoint_format(), "safetensors");
+        assert_eq!(gguf.checkpoint_format(), "gguf");
+        assert_eq!(
+            ModelKind::GgufAdapter {
+                adapter: AdapterKind::Lora,
+                quant: QuantizationKind::Ggml,
+            }
+            .checkpoint_format(),
+            "ggml"
+        );
+        assert_eq!(
+            ModelKind::AnyMoe {
+                target: Box::new(gguf),
+            }
+            .checkpoint_format(),
+            "gguf"
+        );
+    }
 }
 
 #[derive(Deserialize)]
