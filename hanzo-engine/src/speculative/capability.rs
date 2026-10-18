@@ -14,7 +14,7 @@
 //! separated from *how the pipeline runs speculation* (attach a proposer, verify a
 //! batch). One way to attach self-speculation, for every model, forever.
 
-use crate::speculative::{MtpConfig, SpeculativeProposer};
+use crate::speculative::{Extended, MtpConfig, SpeculativeProposer};
 use hanzo_ml::Result;
 
 /// A model whose weights include an MTP draft head and can therefore be its own
@@ -28,4 +28,14 @@ use hanzo_ml::Result;
 pub trait SelfSpeculative {
     /// Build the self-speculative proposer for this model from `cfg`.
     fn attach_mtp(&self, cfg: &MtpConfig) -> Result<Box<dyn SpeculativeProposer + Send + Sync>>;
+
+    /// The proposer a pipeline attaches: the head's draft, continued by prompt lookup when `cfg`
+    /// names one.
+    fn mtp_proposer(&self, cfg: &MtpConfig) -> Result<Box<dyn SpeculativeProposer + Send + Sync>> {
+        let draft = self.attach_mtp(cfg)?;
+        Ok(match cfg.lookup {
+            Some(lookup) => Box::new(Extended::new(draft, lookup)),
+            None => draft,
+        })
+    }
 }

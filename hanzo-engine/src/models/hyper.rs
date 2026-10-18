@@ -32,15 +32,65 @@ use crate::gguf::Content;
 use crate::models::gdn::sigmoid;
 use crate::models::quantized_qwen3_5_moe::gguf_qmm;
 
+/// `xn_s = x_s / rms(x_s) · w_s` for each stream of `[b, s, n, h]`.
+pub(crate) struct Norm {
+    /// `[n, hidden]` f32.
+    weight: Tensor,
+    /// Ones, `[hidden]`: the fused RMS norm's weight, as `weight` differs per stream.
+    unit: Tensor,
+    eps: f32,
+}
+
+impl Norm {
+    /// The weight `name` (`[n·h]` F32) over `n` streams.
+    pub(crate) fn from_gguf<R: Read + Seek>(
+        ct: &mut Content<'_, R>,
+        name: &str,
+        n: usize,
+        eps: f32,
+        dev: &Device,
+    ) -> Result<Self> {
+        let weight = ct.tensor(name, dev)?.dequantize(dev)?.reshape((n, ()))?;
+        Ok(Self {
+            unit: Tensor::ones(weight.dim(1)?, DType::F32, dev)?,
+            weight,
+            eps,
+        })
+    }
+
+    /// A norm over the per-stream weight `[n, hidden]` f32.
+    pub(crate) fn new(weight: Tensor, eps: f32) -> Result<Self> {
+        Ok(Self {
+            unit: Tensor::ones(weight.dim(1)?, DType::F32, weight.device())?,
+            weight,
+            eps,
+        })
+    }
+
+    /// The per-stream weight, `[n, hidden]` f32.
+    #[cfg(test)]
+    pub(crate) fn weight(&self) -> &Tensor {
+        &self.weight
+    }
+
+    /// `n · hidden`, the width of the streams it norms.
+    pub(crate) fn width(&self) -> usize {
+        self.weight.elem_count()
+    }
+
+    pub(crate) fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x32 = x.to_dtype(DType::F32)?.contiguous()?;
+        hanzo_nn::ops::rms_norm(&x32, &self.unit, self.eps)?
+            .broadcast_mul(&self.weight)?
+            .to_dtype(x.dtype())
+    }
+}
+
 /// Reads the streams into one block input.
 pub(crate) struct Mixer {
-    /// Per-stream norm weight, `[n, hidden]` f32.
-    pub(crate) norm: Tensor,
-    /// Ones, `[hidden]`: the fused RMS norm's weight, as `norm` differs per stream.
-    unit: Tensor,
+    pub(crate) norm: Norm,
     down: Arc<dyn QuantMethod>,
     up: Arc<dyn QuantMethod>,
-    eps: f32,
 }
 
 impl Mixer {
@@ -52,16 +102,10 @@ impl Mixer {
         eps: f32,
         dev: &Device,
     ) -> Result<Self> {
-        let norm = ct
-            .tensor(&format!("{prefix}_norm.weight"), dev)?
-            .dequantize(dev)?
-            .reshape((n, ()))?;
         Ok(Self {
-            unit: Tensor::ones(norm.dim(1)?, DType::F32, dev)?,
-            norm,
+            norm: Norm::from_gguf(ct, &format!("{prefix}_norm.weight"), n, eps, dev)?,
             down: gguf_qmm(ct.tensor(&format!("{prefix}_down.weight"), dev)?)?,
             up: gguf_qmm(ct.tensor(&format!("{prefix}_up.weight"), dev)?)?,
-            eps,
         })
     }
 
@@ -77,22 +121,17 @@ impl Mixer {
             .get_unchecked_dtype("input_mix_weight_down.weight", DType::BF16)?
             .dim(0)?;
         let dev = vb.device().clone();
-        let norm = (w.to_device(&dev)? + 1.0)?.reshape((n, hn / n))?;
+        let weight = (w.to_device(&dev)? + 1.0)?.reshape((n, hn / n))?;
         Ok(Self {
-            unit: Tensor::ones(hn / n, DType::F32, &dev)?,
-            norm,
+            norm: Norm::new(weight, eps)?,
             down: hanzo_quant::linear_no_bias(hn, rank, &None, vb.pp("input_mix_weight_down"))?,
             up: hanzo_quant::linear_no_bias(rank, hn, &None, vb.pp("input_mix_weight_up"))?,
-            eps,
         })
     }
 
-    /// `xn_s = x_s / rms(x_s) · w_s` for each stream of `[b, s, n, h]`.
+    /// The streams of `[b, s, n, h]`, each normed by its own weight.
     pub(crate) fn norm(&self, x: &Tensor) -> Result<Tensor> {
-        let x32 = x.to_dtype(DType::F32)?.contiguous()?;
-        hanzo_nn::ops::rms_norm(&x32, &self.unit, self.eps)?
-            .broadcast_mul(&self.norm)?
-            .to_dtype(x.dtype())
+        self.norm.forward(x)
     }
 
     /// The block input `[b, s, h]` from the normed streams.
@@ -116,7 +155,7 @@ impl Branch {
     /// bf16 GEMM of its own (merged into the down projection, each output row is the same).
     pub(crate) fn new(vb: &hanzo_quant::ShardedVarBuilder, n: usize, eps: f32) -> Result<Self> {
         let mixer = Mixer::new(vb, n, eps)?;
-        let hn = mixer.norm.elem_count();
+        let hn = mixer.norm.width();
         Ok(Self {
             mixer,
             inject: hanzo_quant::linear_no_bias(hn, n, &None, vb.pp("block_inject_weight"))?,
@@ -143,6 +182,11 @@ impl Branch {
             mixer: Mixer::from_gguf(ct, prefix, n, eps, dev)?,
             inject: gguf_qmm(ct.tensor(&format!("{prefix}_inject.weight"), dev)?)?,
         })
+    }
+
+    /// The block input `[b, s, h]` alone, for a caller that writes nothing back.
+    pub(crate) fn input(&self, x: &Tensor) -> Result<Tensor> {
+        self.mixer.mix(&self.mixer.norm(x)?)
     }
 
     /// `x_s + 2σ((W_inj vec(xn))_s / n) · f(u)` over `[b, s, n, h]`, where `f` maps the block
@@ -197,13 +241,13 @@ pub(crate) fn combine(x: &Tensor, y: &Tensor, inj: &Tensor) -> Result<Tensor> {
 
 /// The gated residual in f64 over one token's `[n·h]` row, stream outer.
 #[cfg(test)]
-mod reference {
-    pub(super) fn sigmoid(x: f64) -> f64 {
+pub(crate) mod reference {
+    pub(crate) fn sigmoid(x: f64) -> f64 {
         1.0 / (1.0 + (-x).exp())
     }
 
     /// `F.linear(x, w)` for a row-major `[out, in]` weight.
-    pub(super) fn linear(w: &[f64], x: &[f64]) -> Vec<f64> {
+    pub(crate) fn linear(w: &[f64], x: &[f64]) -> Vec<f64> {
         w.chunks(x.len())
             .map(|row| row.iter().zip(x).map(|(a, b)| a * b).sum())
             .collect()
@@ -211,7 +255,7 @@ mod reference {
 
     /// The grouped Gemma RMSNorm, one group per stream. The GGUF folds `1 + w` into `w`, so `w`
     /// multiplies directly.
-    pub(super) fn norm(x: &[f64], w: &[f64], h: usize, eps: f64) -> Vec<f64> {
+    pub(crate) fn norm(x: &[f64], w: &[f64], h: usize, eps: f64) -> Vec<f64> {
         let mut out = Vec::with_capacity(x.len());
         for (xs, ws) in x.chunks(h).zip(w.chunks(h)) {
             let rrms = 1.0 / (xs.iter().map(|v| v * v).sum::<f64>() / h as f64 + eps).sqrt();
@@ -221,13 +265,13 @@ mod reference {
     }
 
     /// `silu(r / n)`.
-    pub(super) fn silu(r: f64, n: usize) -> f64 {
+    pub(crate) fn silu(r: f64, n: usize) -> f64 {
         let x = r / n as f64;
         x * sigmoid(x)
     }
 
     /// `(1/n) Σ_s σ(g_s) xn_s`.
-    pub(super) fn mean(xn: &[f64], g: &[f64], h: usize) -> Vec<f64> {
+    pub(crate) fn mean(xn: &[f64], g: &[f64], h: usize) -> Vec<f64> {
         let n = xn.len() / h;
         (0..h)
             .map(|i| {
@@ -240,14 +284,14 @@ mod reference {
     }
 
     /// The block input from the normed streams.
-    pub(super) fn mix(xn: &[f64], down: &[f64], up: &[f64], h: usize) -> Vec<f64> {
+    pub(crate) fn mix(xn: &[f64], down: &[f64], up: &[f64], h: usize) -> Vec<f64> {
         let n = xn.len() / h;
         let lora: Vec<f64> = linear(down, xn).into_iter().map(|r| silu(r, n)).collect();
         mean(xn, &linear(up, &lora), h)
     }
 
     /// `x_s + 2σ(inj_s / n) · y`.
-    pub(super) fn combine(x: &[f64], y: &[f64], inj: &[f64]) -> Vec<f64> {
+    pub(crate) fn combine(x: &[f64], y: &[f64], inj: &[f64]) -> Vec<f64> {
         let n = inj.len();
         let mut out = Vec::with_capacity(x.len());
         for (xs, i) in x.chunks(y.len()).zip(inj) {
@@ -585,8 +629,8 @@ mod tests {
             &[BATCH, SEQ, N, H],
         )?;
         assert_eq!(
-            bits(&branch.mixer.norm)?,
-            bits(&gguf_branch.mixer.norm)?,
+            bits(branch.mixer.norm.weight())?,
+            bits(gguf_branch.mixer.norm.weight())?,
             "norm weight"
         );
         for (what, got, want) in [

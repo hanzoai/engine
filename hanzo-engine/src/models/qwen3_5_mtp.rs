@@ -6,8 +6,8 @@
 //! draft lands on the verifier's own scale.
 //!
 //! The head itself is [`MtpStep`]: one step, and the chain. Qwen3.5 ships one in its safetensors
-//! checkpoint (`mtp.*`) and one in its GGUF (`blk.N.nextn.*`); both drive this proposer, which is
-//! where the chain, the KV and the anchor positions live.
+//! checkpoint (`mtp.*`) and one in its GGUF (`blk.N.nextn.*`), and Qwen3.8-Flash-Next one beside its
+//! GGUF; all drive this proposer, which is where the chain and the anchor positions live.
 
 use std::sync::{Arc, Mutex};
 
@@ -31,6 +31,36 @@ pub type Mrope = [u32; 3];
 /// The MRoPE positions of the target rows the next draft starts from, one per sequence. The
 /// model fills it when it selects those rows; the proposer takes it when it drafts.
 pub type AnchorPositions = Arc<Mutex<Option<Vec<Mrope>>>>;
+
+/// The rows `rows` (`(batch, row)`) of what a forward kept for the head: its hidden state
+/// `[batch, rows, hidden]` and the position of each row. Returns them as `[rows, 1, hidden]` and
+/// hands their positions to the proposer through `anchors`, so a row index means the same
+/// position in both.
+pub(crate) fn anchor_rows(
+    hidden: &Tensor,
+    positions: &[Vec<usize>],
+    rows: &[(usize, usize)],
+    anchors: &AnchorPositions,
+) -> Result<Tensor> {
+    let (batch, row_count, _) = hidden.dims3()?;
+    let mut gathered = Vec::with_capacity(rows.len());
+    let mut mrope = Vec::with_capacity(rows.len());
+    for &(b, r) in rows {
+        if b >= batch || r >= row_count {
+            hanzo_ml::bail!(
+                "MTP row ({b}, {r}) is outside the stashed {batch}x{row_count} hidden state"
+            );
+        }
+        gathered.push(hidden.narrow(0, b, 1)?.narrow(1, r, 1)?);
+        // Text-only decoding, so all three MRoPE planes carry the same position.
+        let p = u32::try_from(positions[b][r]).map_err(hanzo_ml::Error::wrap)?;
+        mrope.push([p, p, p]);
+    }
+    if let Ok(mut slot) = anchors.lock() {
+        *slot = Some(mrope);
+    }
+    Tensor::cat(&gathered, 0)
+}
 
 /// How deep to draft when the caller names no depth.
 pub(crate) fn default_n_predict(hidden_size: usize) -> usize {
@@ -69,16 +99,22 @@ impl MtpOut {
 
 /// One multi-token-prediction head, as the chain drives it.
 pub trait MtpStep {
-    /// One step over `[batch, 1, hidden]` inputs at `[3, batch, 1]` MRoPE positions.
+    /// One step for the sequences `seqs` over `[batch, 1, hidden]` inputs at `[3, batch, 1]`
+    /// MRoPE positions, row `i` being sequence `seqs[i]`.
     fn step(
         &mut self,
+        seqs: &[usize],
         input_embeds: &Tensor,
         target_hidden: &Tensor,
         positions: &Tensor,
     ) -> Result<MtpOut>;
 
-    /// Drop the chain's KV, so the next chain attends only to itself.
+    /// Start a new chain. A head whose KV holds only its chain drops it here.
     fn reset(&mut self);
+
+    /// Release what the head keeps for sequences not in `live`. A head that keeps nothing per
+    /// sequence has nothing to release.
+    fn retain(&mut self, _live: &[usize]) {}
 
     fn device(&self) -> &Device;
 
@@ -165,7 +201,7 @@ impl SpeculativeProposer for Qwen3_5MtpProposer {
                 planes.extend(mrope.iter().map(|pos| pos[plane]));
             }
             let positions = Tensor::from_vec(planes, (3, batch, 1), &device)?;
-            let out = self.head.step(&embeds, &hidden, &positions)?;
+            let out = self.head.step(ctx.seq_ids, &embeds, &hidden, &positions)?;
             let step_logits = (self.heads.lm_head)(&out.head)?;
             let step_drafts = sample_drafts(&step_logits, ctx.sequences, &mut contexts, &ctx.rng)?;
             logits.push(step_logits);
@@ -197,6 +233,10 @@ impl SpeculativeProposer for Qwen3_5MtpProposer {
             ));
         }
         Ok(SpeculativeProposalBatch::new(proposals))
+    }
+
+    fn retain_seqs(&mut self, live: &[usize]) {
+        self.head.retain(live);
     }
 }
 
@@ -278,6 +318,7 @@ mod tests {
     impl MtpStep for Split {
         fn step(
             &mut self,
+            _seqs: &[usize],
             input_embeds: &Tensor,
             target_hidden: &Tensor,
             _positions: &Tensor,

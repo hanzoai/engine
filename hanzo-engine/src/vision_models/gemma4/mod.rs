@@ -677,6 +677,9 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
             self.language_model.set_store_spec_hidden(false);
             return Ok(None);
         };
+        if config.lookup.is_some() {
+            hanzo_ml::bail!("prompt lookup does not continue the Gemma 4 assistant's drafts");
+        }
         let assistant = config.model.clone();
         let runtime = mtp::Gemma4MtpRuntime::load(
             config,

@@ -656,9 +656,24 @@ impl ServerBuilder {
         self
     }
 
+    /// Prompt lookup continuing an MTP head's drafts, when `--prompt-lookup-ngram` is given beside
+    /// the head: the head guesses the next token, and the needle it completes, exactly `ngram`
+    /// tokens, opens up to `gamma` more copied from the context. A shorter needle matches at nearly
+    /// every step and widens every verify forward for tokens that are rarely accepted.
+    fn mtp_lookup(
+        ngram: Option<usize>,
+        gamma: usize,
+    ) -> anyhow::Result<Option<hanzo_engine::speculative::Lookup>> {
+        ngram
+            .map(|ngram| hanzo_engine::speculative::Lookup::new(ngram, ngram, gamma))
+            .transpose()
+            .map_err(anyhow::Error::from)
+    }
+
     /// Enable prompt-lookup (n-gram) speculative decoding if a max n-gram was requested.
     /// No draft model; drafts come from the sequence's own history and `gamma` bounds
-    /// their length. Opt-in — off unless `ngram` is `Some`.
+    /// their length. Opt-in — off unless `ngram` is `Some`. Beside an MTP head it continues the
+    /// head's drafts instead of replacing them.
     pub fn with_prompt_lookup_optional(mut self, ngram: Option<usize>, gamma: usize) -> Self {
         if let Some(ngram) = ngram {
             self.prompt_lookup_ngram = Some(ngram);
@@ -859,6 +874,13 @@ impl ServerBuilder {
                     gamma: self.gamma,
                 },
             )?;
+        } else if let Some(mtp_config) = self.mtp_config.clone() {
+            pipeline
+                .lock()
+                .await
+                .attach_speculative(hanzo_engine::SpeculativeConfig::Mtp(
+                    mtp_config.with_lookup(Self::mtp_lookup(self.prompt_lookup_ngram, self.gamma)?),
+                ))?;
         } else if let Some(ngram_max) = self.prompt_lookup_ngram {
             pipeline.lock().await.attach_speculative(
                 hanzo_engine::SpeculativeConfig::PromptLookup {
@@ -867,11 +889,6 @@ impl ServerBuilder {
                     gamma: self.gamma,
                 },
             )?;
-        } else if let Some(mtp_config) = self.mtp_config.clone() {
-            pipeline
-                .lock()
-                .await
-                .attach_speculative(hanzo_engine::SpeculativeConfig::Mtp(mtp_config))?;
         }
 
         let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
@@ -1030,6 +1047,13 @@ impl ServerBuilder {
                     gamma: self.gamma,
                 },
             )?;
+        } else if let Some(mtp_config) = self.mtp_config.clone() {
+            pipeline
+                .lock()
+                .await
+                .attach_speculative(hanzo_engine::SpeculativeConfig::Mtp(
+                    mtp_config.with_lookup(Self::mtp_lookup(self.prompt_lookup_ngram, self.gamma)?),
+                ))?;
         } else if let Some(ngram_max) = self.prompt_lookup_ngram {
             pipeline.lock().await.attach_speculative(
                 hanzo_engine::SpeculativeConfig::PromptLookup {
@@ -1038,11 +1062,6 @@ impl ServerBuilder {
                     gamma: self.gamma,
                 },
             )?;
-        } else if let Some(mtp_config) = self.mtp_config.clone() {
-            pipeline
-                .lock()
-                .await
-                .attach_speculative(hanzo_engine::SpeculativeConfig::Mtp(mtp_config))?;
         }
         let first_pipeline_name = pipeline.lock().await.name();
         let first_primary_id = first_model
