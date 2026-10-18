@@ -935,6 +935,24 @@ path -> provably lossless (greedy byte-identical on/off). Auto-gates: drafts onl
   COMPUTE-bound: a width-(1+gamma) verify forward costs ~(1+gamma)x a width-1 one, so spec-decode can only
   win on MEMORY-bound decode (GPU, or large models streaming weights once per forward -> wide verify ~free
   -> throughput ~= 1+accepted). Same regime law as the EAGLE/MTP note ("stream weights ONCE for all K").
+
+## zen6 MTP head (`models/quantized_zen6_mtp.rs`)
+- The head is the MTP GGUF published beside the model (`mtp-Qwen3.8-Flash-Next-{shared-,}Q8_0.gguf`, arch `qwen4exp`, read as zen6,
+  `block_count` 49, `nextn_predict_layers` 1). One attention+MoE block at `blk.48`, behind the same
+  4-stream hyper-connections as the trunk. Entry: `eh_proj [enorm(embed(x_{t+1})) | hnorm_s(h_t,s)]`
+  **per stream**, where `h` is the trunk's wide streams before the output mixer. Exit: its own mixer
+  (`nextn.hc_head_*`), then `lm_head`.
+- `shared` files lack `token_embd`/`output` and borrow the target's. Measured: the self-contained file's
+  `token_embd` is byte-identical to UD-IQ4_XS's; its `output` is Q8_0 where the target's is Q6_K.
+- **The head's attention keeps a KV over the whole sequence.** Every target forward writes its pairs'
+  K/V (the hook in `ModelWeights::forward`), keyed by sequence id from
+  `note_forward_sequences`; a draft step truncates at its own position, which drops rejected pairs.
+  The Qwen3.5 and DeepSeek heads here keep only their chain (reset every round): at depth 1 that is one
+  key, so attention returns V and the head drafts context-free. Expect lower acceptance from those.
+- `--prompt-lookup-ngram N --gamma G` beside `--mtp-model` continues each head draft by lookup
+  (`speculative::Extended`): a needle of exactly N tokens ending in the drafted token adds up to G tokens.
+  Greedy batches only.
+
 ## CUDA flash prefill: the missing-`.contiguous()` bug -- FOUND + FIXED (573d12614)
 - SYMPTOM: CUDA GGUF prefill was BOTH slow (eager O(n^2) collapse: pp128 2158 -> pp512 2044 -> pp2048
   1118, where a working flash path is flat) AND, when routed to flash, produced GARBAGE logits (byte-identical

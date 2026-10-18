@@ -128,6 +128,7 @@ impl Qwen35GgufMtpHead {
 impl MtpStep for Qwen35GgufMtpHead {
     fn step(
         &mut self,
+        _seqs: &[usize],
         input_embeds: &Tensor,
         target_hidden: &Tensor,
         positions: &Tensor,
@@ -296,6 +297,7 @@ mod tests {
         let embeds = synthetic(batch, HIDDEN, 31, &device)?.reshape((batch, 1, HIDDEN))?;
         let hidden = synthetic(batch, HIDDEN, 32, &device)?.reshape((batch, 1, HIDDEN))?;
         let first = head.step(
+            &[0, 1],
             &embeds,
             &hidden,
             &positions(&[[7, 7, 7], [9, 9, 9]], &device)?,
@@ -315,6 +317,7 @@ mod tests {
         );
 
         let second = head.step(
+            &[0, 1],
             &embeds,
             &first.carry,
             &positions(&[[8, 8, 8], [10, 10, 10]], &device)?,
@@ -324,6 +327,7 @@ mod tests {
         // A reset chain starts over: the same inputs at the same positions give the first step back.
         head.reset();
         let again = head.step(
+            &[0, 1],
             &embeds,
             &hidden,
             &positions(&[[7, 7, 7], [9, 9, 9]], &device)?,

@@ -14,8 +14,8 @@
 use hanzo_ml::Result;
 
 use super::proposer::{
-    SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposer,
-    TargetTokenEmbedder,
+    draft_contexts, SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
+    SpeculativeProposer, TargetTokenEmbedder,
 };
 
 /// Batches at or below this size run in latency mode, where a rejected draft costs
@@ -49,14 +49,16 @@ fn lookup(toks: &[u32], ngram_min: usize, ngram_max: usize, gamma: usize) -> Vec
     Vec::new()
 }
 
-/// Prompt-lookup / n-gram speculative proposer. See the module docs.
-pub struct PromptLookupProposer {
-    ngram_min: usize,
-    ngram_max: usize,
-    gamma: usize,
+/// Where a lookup draft comes from: the tail needle of `ngram_max` down to `ngram_min` tokens, and
+/// up to `gamma` tokens after its most recent earlier occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Lookup {
+    pub ngram_min: usize,
+    pub ngram_max: usize,
+    pub gamma: usize,
 }
 
-impl PromptLookupProposer {
+impl Lookup {
     pub fn new(ngram_min: usize, ngram_max: usize, gamma: usize) -> Result<Self> {
         if ngram_min == 0 {
             hanzo_ml::bail!("prompt-lookup speculative decoding requires ngram_min >= 1");
@@ -75,11 +77,28 @@ impl PromptLookupProposer {
             gamma,
         })
     }
+
+    fn draft(&self, toks: &[u32]) -> Vec<u32> {
+        lookup(toks, self.ngram_min, self.ngram_max, self.gamma)
+    }
+}
+
+/// Prompt-lookup / n-gram speculative proposer. See the module docs.
+pub struct PromptLookupProposer {
+    lookup: Lookup,
+}
+
+impl PromptLookupProposer {
+    pub fn new(ngram_min: usize, ngram_max: usize, gamma: usize) -> Result<Self> {
+        Ok(Self {
+            lookup: Lookup::new(ngram_min, ngram_max, gamma)?,
+        })
+    }
 }
 
 impl SpeculativeProposer for PromptLookupProposer {
     fn proposal_len(&self) -> usize {
-        self.gamma
+        self.lookup.gamma
     }
 
     fn propose(
@@ -100,7 +119,7 @@ impl SpeculativeProposer for PromptLookupProposer {
                 let tokens = if gated {
                     Vec::new()
                 } else {
-                    lookup(seq.get_toks(), self.ngram_min, self.ngram_max, self.gamma)
+                    self.lookup.draft(seq.get_toks())
                 };
                 SpeculativeProposal::new(tokens)
             })
@@ -109,9 +128,163 @@ impl SpeculativeProposer for PromptLookupProposer {
     }
 }
 
+/// Another proposer's draft, continued by prompt lookup.
+///
+/// The draft runs first. Each sequence's tokens grown by its draft are then looked up, and what
+/// followed the match continues the draft by up to `gamma` tokens, so a model's own guess at the
+/// next token can open a span copied from the context. A looked-up token has no draft
+/// distribution for the verifier to divide by, so only an all-greedy batch continues: greedy
+/// verification matches tokens and reads no draft logits. Every sequence continues by the
+/// shortest continuation any of them found, so the batch keeps the one width a verify forward
+/// takes.
+pub struct Extended {
+    draft: Box<dyn SpeculativeProposer + Send + Sync>,
+    lookup: Lookup,
+}
+
+impl Extended {
+    pub fn new(draft: Box<dyn SpeculativeProposer + Send + Sync>, lookup: Lookup) -> Self {
+        Self { draft, lookup }
+    }
+}
+
+impl SpeculativeProposer for Extended {
+    fn proposal_len(&self) -> usize {
+        self.draft.proposal_len() + self.lookup.gamma
+    }
+
+    fn propose(
+        &mut self,
+        ctx: SpeculativeProposeBatchCtx<'_>,
+        target_embedder: Option<&TargetTokenEmbedder<'_>>,
+    ) -> Result<SpeculativeProposalBatch> {
+        let greedy = ctx.sequences.iter().all(|seq| seq.sampler().is_argmax());
+        let contexts = draft_contexts(&ctx);
+        let mut batch = self.draft.propose(ctx, target_embedder)?;
+        if !greedy || batch.proposals.iter().any(SpeculativeProposal::is_empty) {
+            return Ok(batch);
+        }
+        let found: Vec<Vec<u32>> = contexts
+            .into_iter()
+            .zip(&batch.proposals)
+            .map(|(mut context, proposal)| {
+                context.extend_from_slice(&proposal.tokens);
+                self.lookup.draft(&context)
+            })
+            .collect();
+        let width = found.iter().map(Vec::len).min().unwrap_or(0);
+        if width == 0 {
+            return Ok(batch);
+        }
+        for (proposal, more) in batch.proposals.iter_mut().zip(&found) {
+            proposal.tokens.extend_from_slice(&more[..width]);
+            proposal.logits = None;
+        }
+        Ok(batch)
+    }
+
+    fn retain_seqs(&mut self, live: &[usize]) {
+        self.draft.retain_seqs(live);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::lookup;
+    use super::*;
+    use crate::sequence::test_sequence;
+    use crate::speculative::SpeculativeKvCache;
+    use hanzo_ml::{Device, Tensor};
+    use rand::SeedableRng;
+    use rand_isaac::Isaac64Rng;
+    use std::sync::{Arc, Mutex};
+
+    /// Drafts a fixed token per sequence, with a logit row each.
+    struct Fixed(Vec<u32>);
+
+    impl SpeculativeProposer for Fixed {
+        fn proposal_len(&self) -> usize {
+            1
+        }
+
+        fn propose(
+            &mut self,
+            _ctx: SpeculativeProposeBatchCtx<'_>,
+            _target_embedder: Option<&TargetTokenEmbedder<'_>>,
+        ) -> Result<SpeculativeProposalBatch> {
+            self.0
+                .iter()
+                .map(|&t| {
+                    Ok(SpeculativeProposal::with_logits(
+                        vec![t],
+                        Tensor::zeros((1, 1, 16), hanzo_ml::DType::F32, &Device::Cpu)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()
+                .map(SpeculativeProposalBatch::new)
+        }
+    }
+
+    fn extend(drafts: Vec<u32>, sequences: &[&crate::sequence::Sequence]) -> Result<Vec<Vec<u32>>> {
+        let mut chain = Extended::new(Box::new(Fixed(drafts)), Lookup::new(2, 2, 3)?);
+        assert_eq!(chain.proposal_len(), 4);
+        let anchors: Vec<u32> = sequences
+            .iter()
+            .map(|s| *s.get_toks().last().unwrap())
+            .collect();
+        let seq_ids: Vec<usize> = (0..sequences.len()).collect();
+        let base_lens = vec![0; sequences.len()];
+        let batch = chain.propose(
+            SpeculativeProposeBatchCtx {
+                sampled_tokens: &anchors,
+                sampled_tokens_emitted: true,
+                seq_ids: &seq_ids,
+                base_lens: &base_lens,
+                sequences,
+                cache: SpeculativeKvCache::Normal,
+                target_hiddens: None,
+                target_hidden_layers: None,
+                rng: Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(0))),
+            },
+            None,
+        )?;
+        for proposal in &batch.proposals {
+            // A continued draft verifies by matching; a bare one keeps its logits.
+            assert_eq!(proposal.logits.is_some(), proposal.tokens.len() == 1);
+        }
+        Ok(batch.proposals.into_iter().map(|p| p.tokens).collect())
+    }
+
+    /// The draft token completes a needle the context holds, and what followed it there continues
+    /// the draft.
+    #[test]
+    fn a_draft_opens_a_copied_span() -> Result<()> {
+        let seq = test_sequence(vec![5, 6, 7, 8, 9, 1, 5], None);
+        // [5, 6] recurs at the start, followed by 7, 8, 9.
+        assert_eq!(extend(vec![6], &[&seq])?, vec![vec![6, 7, 8, 9]]);
+        // Nothing earlier ends in [5, 4]: the draft stands alone.
+        assert_eq!(extend(vec![4], &[&seq])?, vec![vec![4]]);
+        Ok(())
+    }
+
+    #[test]
+    fn a_batch_continues_by_its_shortest_find() -> Result<()> {
+        let long = test_sequence(vec![5, 6, 7, 8, 9, 1, 5], None);
+        // [2, 3] recurs one token back, so only [2, 3] follows it before the context ends.
+        let short = test_sequence(vec![9, 2, 3, 2], None);
+        assert_eq!(
+            extend(vec![6, 3], &[&long, &short])?,
+            vec![vec![6, 7, 8], vec![3, 2, 3]]
+        );
+        Ok(())
+    }
+
+    /// A sampled sequence keeps the bare draft: a looked-up token has no distribution to verify.
+    #[test]
+    fn a_sampled_batch_is_not_continued() -> Result<()> {
+        let seq = test_sequence(vec![5, 6, 7, 8, 9, 1, 5], Some(0.8));
+        assert_eq!(extend(vec![6], &[&seq])?, vec![vec![6]]);
+        Ok(())
+    }
 
     #[test]
     fn empty_and_tiny_history_never_panic() {

@@ -37,7 +37,7 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 
-const ARCH: &str = "zen6";
+pub(crate) const ARCH: &str = "zen6";
 
 /// One decoder layer: a mixing block (attention or gated delta-net) and the MoE, each behind its
 /// own hyper-connection branch, and on one layer the n-gram block in front of them.
@@ -171,22 +171,24 @@ impl Layer {
 }
 
 pub struct ModelWeights {
-    tok_embeddings: Embedding,
+    pub(crate) tok_embeddings: Embedding,
     /// Residual streams.
-    streams: usize,
+    pub(crate) streams: usize,
     /// The layer whose input the n-gram delta joins.
     ngram_layer: usize,
     layers: Vec<Layer>,
     head: Mixer,
-    output: Arc<dyn QuantMethod>,
-    rotary: Arc<Qwen3VLRotaryEmbedding>,
+    pub(crate) output: Arc<dyn QuantMethod>,
+    pub(crate) rotary: Arc<Qwen3VLRotaryEmbedding>,
     pub device: Device,
     pub cache: EitherCache,
     pub max_seq_len: usize,
     /// Keys the sparse-attention indexer keeps per query (`attention.indexer.top_k`).
     pub indexer_budget: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
-    dtype: DType,
+    pub(crate) dtype: DType,
+    /// The MTP head every forward feeds while one is attached.
+    pub(crate) mtp: crate::models::quantized_zen6_mtp::Slot,
     /// The attention layers' shape and the layers that hold paged K/V (safetensors path).
     meta: Option<(crate::paged_attention::ModelConfigMetadata, Vec<usize>)>,
 }
@@ -326,6 +328,7 @@ impl ModelWeights {
             indexer_budget: text.indexer_budget,
             mapper: Some(mapper),
             dtype,
+            mtp: Default::default(),
             meta: Some((
                 crate::paged_attention::ModelConfigMetadata {
                     max_seq_len: props.max_seq_len,
@@ -464,6 +467,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             indexer_budget,
             mapper: Some(mapper),
             dtype,
+            mtp: Default::default(),
             meta: None,
         })
     }
@@ -620,6 +624,7 @@ impl ModelWeights {
         }
 
         let x = x.to_device(&self.device)?;
+        self.observe(input_ids, &x, seqlen_offsets, &context_lens)?;
         let h = self.head.mix(&self.head.norm(&x)?)?;
         trace("head", 0, &h)?;
         let h = extract_logits(&h, context_lens)?;
@@ -707,7 +712,7 @@ impl crate::pipeline::NormalModel for ModelWeights {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashMap;
     use std::io::Cursor;
 
@@ -839,7 +844,7 @@ mod tests {
 
     /// The fixture's GGUF bytes. `ssm_a` is negative (the file stores -exp(A_log)); vectors named
     /// as norms sit near 1; everything else is uniform around 0.
-    fn gguf(seed: u64) -> Result<Vec<u8>> {
+    pub(crate) fn gguf(seed: u64) -> Result<Vec<u8>> {
         let mut rng = StdRng::seed_from_u64(seed);
         let quantized = tensors()
             .into_iter()
@@ -880,7 +885,7 @@ mod tests {
     }
 
     /// A model loaded from `bytes`, its cache holding one sequence at slot 0.
-    fn model(bytes: &[u8]) -> Result<ModelWeights> {
+    pub(crate) fn model(bytes: &[u8]) -> Result<ModelWeights> {
         let mut file = Cursor::new(bytes.to_vec());
         let mut readers = [&mut file];
         let ct = Content::from_readers(&mut readers)?;

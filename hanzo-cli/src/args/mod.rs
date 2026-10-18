@@ -731,6 +731,8 @@ pub struct RuntimeOptions {
     /// Enable prompt-lookup (n-gram) speculative decoding with this max tail n-gram. No draft
     /// model — drafts are pulled from the sequence's own history; reuses `--gamma` for draft
     /// length. Best on grounded/repetitive decoding (code edits, RAG, "repeat back"). Off unless set.
+    /// With `--mtp-model` it continues each head draft instead: a needle of exactly this many
+    /// tokens, ending in the drafted token, adds up to `--gamma` tokens (greedy requests only).
     #[arg(long)]
     #[serde(default)]
     pub prompt_lookup_ngram: Option<usize>,
@@ -905,6 +907,7 @@ pub struct BenchRuntimeOptions {
 
     /// Enable prompt-lookup (n-gram) speculative decoding with this max tail n-gram. No draft
     /// model — drafts are pulled from the sequence's own history; reuses `--gamma` for draft length.
+    /// With `--mtp-model` it continues each head draft instead (greedy requests only).
     #[arg(long)]
     pub prompt_lookup_ngram: Option<usize>,
 
@@ -927,10 +930,9 @@ impl BenchRuntimeOptions {
     }
 
     pub fn mtp_config(&self) -> Option<hanzo_engine::MtpConfig> {
-        self.mtp_model.clone().map(|model| hanzo_engine::MtpConfig {
-            model,
-            n_predict: self.mtp_n_predict,
-        })
+        self.mtp_model
+            .clone()
+            .map(|model| hanzo_engine::MtpConfig::new(model, self.mtp_n_predict))
     }
 
     pub fn draft_model_selected(
@@ -992,10 +994,9 @@ impl RuntimeOptions {
     }
 
     pub fn mtp_config(&self) -> Option<hanzo_engine::MtpConfig> {
-        self.mtp_model.clone().map(|model| hanzo_engine::MtpConfig {
-            model,
-            n_predict: self.mtp_n_predict,
-        })
+        self.mtp_model
+            .clone()
+            .map(|model| hanzo_engine::MtpConfig::new(model, self.mtp_n_predict))
     }
 
     /// Build the draft model selector for classic draft+target speculative decoding, if a draft was

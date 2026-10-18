@@ -17,7 +17,7 @@ pub use capture::{CaptureRequest, HiddenPrefixCapture, HiddenWindow};
 pub use config::{MtpConfig, SpeculativeConfig};
 pub use draft::{DraftModelProposer, DraftPipeline};
 pub use logging::{SpeculativeAttachInfo, SpeculativeAttachKind};
-pub use prompt_lookup::PromptLookupProposer;
+pub use prompt_lookup::{Extended, Lookup, PromptLookupProposer};
 pub(crate) use proposer::{draft_contexts, sample_drafts};
 pub use proposer::{
     SpeculativeKvCache, SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,

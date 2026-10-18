@@ -15,6 +15,7 @@ use crate::{
 };
 
 use super::draft::DraftPipeline;
+use super::prompt_lookup::Lookup;
 
 #[derive(Clone)]
 pub enum SpeculativeConfig {
@@ -91,6 +92,8 @@ impl std::fmt::Debug for SpeculativeConfig {
 pub struct MtpConfig {
     pub model: String,
     pub n_predict: Option<usize>,
+    /// Prompt lookup continuing each head draft, when set.
+    pub lookup: Option<Lookup>,
 }
 
 impl MtpConfig {
@@ -98,7 +101,14 @@ impl MtpConfig {
         Self {
             model: model.into(),
             n_predict,
+            lookup: None,
         }
+    }
+
+    /// Continue each head draft by `lookup`.
+    pub fn with_lookup(mut self, lookup: Option<Lookup>) -> Self {
+        self.lookup = lookup;
+        self
     }
 
     pub fn resolve_path(&self) -> hanzo_ml::Result<PathBuf> {

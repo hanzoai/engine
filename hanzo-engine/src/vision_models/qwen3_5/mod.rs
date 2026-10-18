@@ -498,7 +498,7 @@ impl crate::speculative::SpeculativeTargetMixin for Qwen3_5Model {
                 Ok(Some(info))
             }
             SpeculativeConfig::Mtp(config) => {
-                let proposer = self.attach_mtp(&config)?;
+                let proposer = self.mtp_proposer(&config)?;
                 let info = crate::speculative::SpeculativeAttachInfo::mtp(
                     config.model.clone(),
                     proposer.proposal_len(),

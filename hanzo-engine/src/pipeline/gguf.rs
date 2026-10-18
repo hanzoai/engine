@@ -123,6 +123,8 @@ impl Model {
             Model::Deepseek4(m) => Some(m),
             // Qwen3.5 carries its head as the block trailing the transformer.
             Model::Qwen35(m) => Some(m),
+            // Qwen3.8-Flash-Next's head ships as a GGUF of its own.
+            Model::Zen6(m) => Some(m),
             _ => None,
         }
     }
@@ -2694,8 +2696,10 @@ impl Pipeline for GGUFPipeline {
     }
 
     fn note_forward_sequences(&self, seq_ids: &[usize]) {
-        if let Model::Qwen35(ref model) = self.model {
-            model.spec_capture.note_forward(seq_ids);
+        match self.model {
+            Model::Qwen35(ref model) => model.spec_capture.note_forward(seq_ids),
+            Model::Zen6(ref model) => model.note_forward(seq_ids),
+            _ => {}
         }
     }
 
@@ -2703,8 +2707,10 @@ impl Pipeline for GGUFPipeline {
         &mut self,
         config: crate::speculative::SpeculativeConfig,
     ) -> Result<(), hanzo_ml::Error> {
-        if let Model::Qwen35(ref model) = self.model {
-            model.set_store_spec(false);
+        match self.model {
+            Model::Qwen35(ref model) => model.set_store_spec(false),
+            Model::Zen6(ref model) => model.detach_mtp(),
+            _ => {}
         }
         match config {
             crate::speculative::SpeculativeConfig::Off => Ok(()),
@@ -2818,7 +2824,7 @@ impl Pipeline for GGUFPipeline {
                             "this model has no MTP head for self-speculative decoding",
                         )
                     })?
-                    .attach_mtp(&mtp_config)?;
+                    .mtp_proposer(&mtp_config)?;
                 let info = crate::speculative::SpeculativeAttachInfo::mtp(
                     mtp_config.model.clone(),
                     proposer.proposal_len(),
@@ -2944,30 +2950,23 @@ impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
         if self.draft_proposer.is_none() || rows.is_empty() {
             return Ok(None);
         }
-        // Qwen3.5 stashes the position of each row beside its hidden state; the head needs both,
-        // so the anchors are filled from the same rows in the same pass.
-        if let Model::Qwen35(ref model) = self.model {
-            let Some((hidden, positions)) = model.last_spec() else {
+        // Qwen3.5 and Qwen3.8-Flash-Next stash the position of each row beside its hidden state;
+        // the head needs both, so the anchors are filled from the same rows in the same pass.
+        let stash = match self.model {
+            Model::Qwen35(ref model) => Some(
+                model
+                    .last_spec()
+                    .map(|(hidden, positions)| (hidden, positions, model.mtp_anchors())),
+            ),
+            Model::Zen6(ref model) => Some(model.last_spec()),
+            _ => None,
+        };
+        if let Some(stash) = stash {
+            let Some((hidden, positions, anchors)) = stash else {
                 return Ok(None);
             };
-            let (batch, row_count, _) = hidden.dims3()?;
-            let mut gathered = Vec::with_capacity(rows.len());
-            let mut anchors = Vec::with_capacity(rows.len());
-            for &(b, r) in rows {
-                if b >= batch || r >= row_count {
-                    hanzo_ml::bail!(
-                        "Qwen3.5 MTP row ({b}, {r}) is outside the stashed {batch}x{row_count} hidden state"
-                    );
-                }
-                gathered.push(hidden.narrow(0, b, 1)?.narrow(1, r, 1)?);
-                // Text-only decoding, so all three MRoPE planes carry the same position.
-                let p = u32::try_from(positions[b][r]).map_err(hanzo_ml::Error::wrap)?;
-                anchors.push([p, p, p]);
-            }
-            if let Ok(mut slot) = model.mtp_anchors().lock() {
-                *slot = Some(anchors);
-            }
-            return Ok(Some(Tensor::cat(&gathered, 0)?));
+            return crate::models::qwen3_5_mtp::anchor_rows(&hidden, &positions, rows, &anchors)
+                .map(Some);
         }
         let hidden = match self.model {
             Model::Deepseek4(ref model) => model.last_spec_hidden(),

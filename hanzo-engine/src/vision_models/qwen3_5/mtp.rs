@@ -144,6 +144,7 @@ impl Qwen3_5MtpHead {
 impl MtpStep for Qwen3_5MtpHead {
     fn step(
         &mut self,
+        _seqs: &[usize],
         input_embeds: &Tensor,
         target_hidden: &Tensor,
         positions: &Tensor,
