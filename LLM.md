@@ -660,6 +660,51 @@ fixed low confidence). New vocabulary lives in `registry` (`Modality`, `Level`) 
 A learned policy implements `RoutePolicy` outside this repo; its fitted heads mount with
 `ROUTER_HEADS=<path>` (`Policy::load_heads`).
 
+## Observability: `/health`, `/metrics`, `/cache`, the request ledger
+
+The bodies are built in `hanzo-server-core/src/observe.rs` from plain values, the handlers in
+`handlers.rs`.
+
+- **Nothing waits on the engine.** The engine loop publishes to its `IntervalLogger`:
+  a heartbeat (`Phase` idle/loop/prefill/decode plus when it entered it) at every
+  iteration and step, and its load (running, waiting, oldest running sequence, paged
+  KV occupancy) and prefix-cache counts at the top of every iteration, which is also
+  the moment it goes idle, so at rest the numbers are exact. Readers only load atomics.
+- **`/health`** is 503 with the same body when the engine thread has exited or the loop
+  overstayed its phase: 30 s between steps, 300 s in a decode step, 1800 s in a prefill.
+  A long prefill is work, not a stall.
+- **Counters are process-wide and only grow**: `engine/ledger.rs` statics, fed once per
+  finished sequence from its `Usage` in `finish_or_add_toks_to_seq`. An engine rebooted
+  inside the process does not reset them; `n > 1` counts each choice.
+- **Ledger line**: INFO on target `hanzo_engine::engine::ledger`, message starting
+  `serve_api: ` so `bench-serving.py`'s regex matches it. Rounds are derived, not
+  counted: `n - 1 - draft_accepted` (a verify round commits accepted + 1, the first
+  token comes from prefill). Undrafted requests log `batch` with no rounds, which the
+  bench's regex skips, as it skips serial requests.
+- **Drafter names** come from `SpeculativeAttachInfo::name`: `mtp`, `dflash`, else `spec`.
+  Pipelines record the attach info (`Pipeline::drafter`); `Hanzo::config` carries it.
+
+## Request surface: budgets, reasoning, sampling, tools, errors
+
+The rules are pure functions in `hanzo-server-core/src/controls.rs` (checked in one fixed order by
+`chat_completion::parse_request`, which Responses and Messages reuse), errors in `error.rs`, output shapes in `shape.rs`.
+
+- **Defaults are `hanzo serve` flags** (`defaults.rs`, `Defaults::validated` at startup): a value
+  the request sends always wins; nothing out of range is clamped, it is refused.
+- **Temperature**: request, else `--temperature`, else greedy. `0` is greedy.
+- **Budget**: `max_tokens` = `max_completion_tokens` = `max_output_tokens` (different values are a
+  400); default `--max-tokens` (completions `--completion-max-tokens`); over `--max-tokens-cap` is a
+  400; <= 0 is 1. The think-block budget is the request's or `--max-thinking-tokens`, capped at
+  `max_tokens - room` (room `--thinking-answer-room`, else `max(1024, 15%)`), never 0.
+- **Effort** reaches the template through one function, `chat_template::template_effort`: the top
+  level is `xhigh` on templates that name it (Qwen3.8 raises on anything else), `high` elsewhere.
+- **Errors** are OpenAI's envelope everywhere except `/v1/messages`, which keeps Anthropic's;
+  engine `ValidationError` is a 400, a declined forced call (`FORCED_CALL_DECLINED`) a 502, and an
+  error after a stream started is a `data: {"error":...}` frame before `[DONE]`.
+- **Streams**: usage is on the stream only with `stream_options.include_usage` (a `choices: []`
+  chunk before `[DONE]`); the finish chunk carries `timings`. Responses and Messages read usage from
+  the engine's final chunk themselves, so framing lives only in the chat/completions SSE layer.
+
 ## Working here
 
 `LLM.md` is the canonical guide. `CLAUDE.md` and `AGENTS.md` are symlinks to it and
