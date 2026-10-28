@@ -55,7 +55,9 @@ fn initialized_notification() -> Value {
 }
 
 fn extract_jsonrpc_result(response_body: Value) -> Result<Value> {
-    if let Some(error) = response_body.get("error") {
+    // A present-but-null error member is not an error: some JSON-RPC
+    // servers include "error": null on success responses.
+    if let Some(error) = response_body.get("error").filter(|e| !e.is_null()) {
         return Err(anyhow::anyhow!("MCP server error: {}", error));
     }
 
@@ -1020,5 +1022,103 @@ impl McpTransport for WebSocketTransport {
                 .map_err(|e| anyhow::anyhow!("Failed to send WebSocket message: {}", e))?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::Arc;
+
+    #[test]
+    fn normalize_params_maps_null_to_empty_object() {
+        assert_eq!(normalize_params(Value::Null), json!({}));
+        let params = json!({"name": "search", "limit": 3});
+        assert_eq!(normalize_params(params.clone()), params);
+    }
+
+    #[test]
+    fn build_jsonrpc_request_shapes_envelope_and_increments_ids() {
+        let counter = Arc::new(AtomicU64::new(0));
+        let (id0, req0) = build_jsonrpc_request(&counter, "tools/list", Value::Null);
+        let (id1, req1) = build_jsonrpc_request(&counter, "tools/call", json!({"name": "t"}));
+        assert_eq!((id0, id1), (0, 1));
+        assert_eq!(
+            req0,
+            json!({"jsonrpc": "2.0", "id": 0, "method": "tools/list", "params": {}})
+        );
+        assert_eq!(
+            req1,
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "t"}})
+        );
+    }
+
+    #[test]
+    fn initialized_notification_carries_no_id_or_params() {
+        assert_eq!(
+            initialized_notification(),
+            json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        );
+    }
+
+    #[test]
+    fn extract_jsonrpc_result_returns_the_result_member() {
+        let body = json!({"jsonrpc": "2.0", "id": 1, "result": {"tools": []}});
+        assert_eq!(extract_jsonrpc_result(body).unwrap(), json!({"tools": []}));
+    }
+
+    #[test]
+    fn extract_jsonrpc_result_surfaces_server_errors() {
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {"code": -32601, "message": "Method not found"}
+        });
+        let err = extract_jsonrpc_result(body).unwrap_err().to_string();
+        assert!(err.contains("Method not found"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn extract_jsonrpc_result_rejects_missing_result() {
+        let body = json!({"jsonrpc": "2.0", "id": 1});
+        let err = extract_jsonrpc_result(body).unwrap_err().to_string();
+        assert!(err.contains("No result"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn extract_jsonrpc_result_accepts_explicit_null_error() {
+        // Some JSON-RPC servers include "error": null on success responses.
+        // A null error member is not an error.
+        let body = json!({"jsonrpc": "2.0", "id": 1, "result": {"ok": true}, "error": null});
+        assert_eq!(extract_jsonrpc_result(body).unwrap(), json!({"ok": true}));
+    }
+
+    #[test]
+    fn parse_sse_response_extracts_first_valid_data_payload() {
+        let sse =
+            ": comment\n\nevent: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n";
+        let parsed = HttpTransport::parse_sse_response(sse).unwrap();
+        assert_eq!(parsed["result"], json!({}));
+    }
+
+    #[test]
+    fn parse_sse_response_skips_unparseable_data_lines() {
+        let sse = "data: not-json\ndata: {\"ok\":true}\n\n";
+        let parsed = HttpTransport::parse_sse_response(sse).unwrap();
+        assert_eq!(parsed, json!({"ok": true}));
+    }
+
+    #[test]
+    fn parse_sse_response_rejects_payloads_without_json_data() {
+        let sse = "event: message\n: nothing here\n\n";
+        let err = HttpTransport::parse_sse_response(sse)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("No valid JSON data"),
+            "unexpected error: {err}"
+        );
     }
 }
