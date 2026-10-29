@@ -3129,6 +3129,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9dc246ef72490c348c62b93c06989605dc074e285657501c0aaa02d73c5b408"
 
 [[package]]
+name = "hanzo-active-inference"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hanzo-audio"
 version = "1.7.104"
 dependencies = [
@@ -3825,6 +3833,15 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid 1.24.0",
+]
+
+[[package]]
+name = "hanzo-worlds"
+version = "0.1.0"
+dependencies = [
+ "hanzo-active-inference",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
