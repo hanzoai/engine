@@ -42,7 +42,7 @@ use crate::{
         TRAINING_CLIENTS_ROUTE, TRAINING_CLIENT_ROUTE, TRAINING_FORWARD_BACKWARD_ROUTE,
         TRAINING_OPTIM_STEP_ROUTE, TRAINING_SAMPLE_ROUTE, TRAINING_SAVE_WEIGHTS_ROUTE,
         TRYON_GENERATION_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE, VIDEO_CONTENT_ROUTE,
-        VIDEO_GENERATION_ROUTE, VIDEO_JOB_ROUTE,
+        VIDEO_GENERATION_ROUTE, VIDEO_JOB_ROUTE, WORLDS_INFERENCE_ROUTE,
     },
     speech_generation::speech_generation,
     threed_generation::{create_3d, get_3d, get_3d_content},
@@ -54,7 +54,9 @@ use crate::{
     tryon_generation::tryon_generation,
     types::SharedState,
     video_generation::{create_video, get_video, get_video_content},
+    worlds::world_inference,
 };
+use hanzo_worlds::WorldRegistry;
 
 /// Server-level defaults for agentic features.
 /// Injected as an axum Extension so handlers can apply them to incoming requests.
@@ -117,6 +119,8 @@ pub struct RouterBuilder {
     agentic_defaults: AgenticDefaults,
     /// Request defaults: budget, cap, sampling and reasoning controls, the served model id
     defaults: crate::defaults::Defaults,
+    /// Host-owned multi-tenant registry for `/v1/worlds/{world}/inference`
+    worlds: WorldRegistry,
 }
 
 impl Default for RouterBuilder {
@@ -132,6 +136,7 @@ impl Default for RouterBuilder {
             max_body_limit: None,
             agentic_defaults: AgenticDefaults::default(),
             defaults: crate::defaults::Defaults::default(),
+            worlds: WorldRegistry::new(),
         }
     }
 }
@@ -246,6 +251,12 @@ impl RouterBuilder {
         self
     }
 
+    /// Sets the host-owned multi-tenant world registry for `/v1/worlds/{world}/inference`.
+    pub fn with_worlds(mut self, worlds: WorldRegistry) -> Self {
+        self.worlds = worlds;
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -270,6 +281,7 @@ impl RouterBuilder {
             self.max_body_limit,
             self.agentic_defaults,
             self.defaults,
+            self.worlds,
         )?;
 
         #[cfg(feature = "swagger-ui")]
@@ -296,6 +308,7 @@ fn init_router(
     max_body_limit: Option<usize>,
     agentic_defaults: AgenticDefaults,
     defaults: crate::defaults::Defaults,
+    worlds: WorldRegistry,
 ) -> Result<Router> {
     let allow_origin = if let Some(origins) = allowed_origins {
         let parsed_origins: Result<Vec<_>, _> = origins.into_iter().map(|o| o.parse()).collect();
@@ -400,12 +413,14 @@ fn init_router(
             TRAINING_SAVE_WEIGHTS_ROUTE.path,
             post(training_save_weights),
         )
+        .route(WORLDS_INFERENCE_ROUTE.path, post(world_inference))
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .layer(Extension(agentic_defaults.approval_broker.clone()))
         .layer(Extension(agentic_defaults))
         .layer(Extension(defaults))
         .layer(Extension(TrainingState::default()))
+        .layer(Extension(worlds))
         .with_state(state);
 
     Ok(router)

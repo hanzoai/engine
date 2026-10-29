@@ -18,6 +18,7 @@ axum = { workspace = true, features = ["tokio", "multipart"] }
 clap.workspace = true
 hanzo-ml.workspace = true
 hanzo-router = { version = "0.1", path = "../hanzo-router" }
+hanzo-worlds = { version = "0.1", path = "../hanzo-worlds" }
 hanzo-3d = "0.1"
 data-url.workspace = true
 either.workspace = true

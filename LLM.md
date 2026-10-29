@@ -1543,3 +1543,15 @@ Two things had to be fixed before any of this could be measured at all, and both
   join before the combine, capture-safe; refuses a context with cudarc event tracking on.
 - Goldens: `hanzo-engine/tests/fixtures/zen6_moe/` holds the recorded reference router, gate and
   shared-expert outputs.
+
+## Native local world inference
+
+`hanzo-worlds/` supplies versioned `WorldInference`, host-owned `AdmissibilityPolicy`,
+and multi-tenant `WorldRegistry` consuming `hanzoai/ml`'s published
+`hanzo-active-inference 0.1.0` crate. `hanzo-server-core/src/worlds.rs` mounts
+`POST /v1/worlds/{world}/inference` (`WORLDS_INFERENCE_ROUTE`) behind `x-org-id`
+tenant isolation (`crate::tenant::org`). The host owns authenticated tenant/world
+identity, generative model revision, preferences, policy prior and hard admissibility;
+a caller cannot override these through the request (`#[serde(deny_unknown_fields)]`).
+Every response strictly separates `inference`, advisory `recommendation`
+(`advisory_only: true`), and `execution_authorized: false`.

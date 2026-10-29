@@ -126,6 +126,8 @@ pub const TRAINING_SAVE_WEIGHTS_ROUTE: RouteInfo = RouteInfo::new(
     "POST",
     RouteKind::Hanzo,
 );
+pub const WORLDS_INFERENCE_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/worlds/{world}/inference", "POST", RouteKind::Hanzo);
 
 /// Every route the router registers, besides the docs.
 pub const API_ROUTES: &[RouteInfo] = &[
@@ -174,6 +176,7 @@ pub const API_ROUTES: &[RouteInfo] = &[
     TRAINING_OPTIM_STEP_ROUTE,
     TRAINING_SAMPLE_ROUTE,
     TRAINING_SAVE_WEIGHTS_ROUTE,
+    WORLDS_INFERENCE_ROUTE,
     ROUTE_ROUTE,
     ROUTING_ROUTE,
 ];
