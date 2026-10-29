@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "hanzo-worlds",
     "hanzo",
     "hanzo-engine",
     "hanzo-engine-ffi",
