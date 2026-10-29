@@ -275,15 +275,32 @@ async fn dispatch(
                 }
                 normalize_reasoning_effort(&mut rewritten);
                 normalize_messages(&mut rewritten);
+                if let Some(ref ov) = hints.overlay {
+                    if rewritten.get("overlay").is_none() {
+                        rewritten["overlay"] = Value::String(ov.clone());
+                    }
+                }
                 Bytes::from(serde_json::to_vec(&rewritten).expect("JSON value"))
             }
             _ => body_bytes.clone(),
         };
         let url = format!("{}{}", lease.url().trim_end_matches('/'), path_q);
+        let mut fwd_headers = fwd.clone();
+        if let Some(ref ov) = hints.overlay {
+            if let Ok(val) = HeaderValue::from_str(ov) {
+                fwd_headers.insert("x-hanzo-overlay", val.clone());
+                fwd_headers.insert("x-ple-overlay", val);
+            }
+        }
+        if let Some(key) = lease.api_key() {
+            if let Ok(val) = HeaderValue::from_str(&format!("Bearer {key}")) {
+                fwd_headers.insert(axum::http::header::AUTHORIZATION, val);
+            }
+        }
         let send = state
             .client
             .request(parts.method.clone(), &url)
-            .headers(fwd.clone())
+            .headers(fwd_headers)
             .body(wire_body)
             .send()
             .await;
@@ -621,6 +638,19 @@ fn routing_hints(headers: &HeaderMap, body: Option<&Value>) -> RoutingHints {
                 .filter(|s| !s.is_empty())
         })
     };
+    let overlay = header("x-hanzo-overlay")
+        .or_else(|| header("x-ple-overlay"))
+        .or_else(|| header("x-overlay"))
+        .or_else(|| header("x-engraft-overlay"))
+        .or_else(|| body.and_then(|b| b.get("overlay").and_then(Value::as_str)))
+        .or_else(|| body.and_then(|b| b.get("pleo").and_then(Value::as_str)))
+        .or_else(|| body.and_then(|b| b.get("ple_overlay").and_then(Value::as_str)))
+        .or_else(|| {
+            body.and_then(|b| b.get("extra_body"))
+                .and_then(|e| e.get("overlay").or_else(|| e.get("pleo")))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_owned);
     // This listener is private to the authenticated cloud gateway. Its org/user
     // headers must come from that gateway; the bearer adds isolation for direct
     // private clients. No identity is ever taken from JSON metadata.
@@ -628,7 +658,8 @@ fn routing_hints(headers: &HeaderMap, body: Option<&Value>) -> RoutingHints {
         header("x-org-id"),
         header("x-user-id"),
         header("authorization"),
-        body.and_then(|b| b.get("model"))
+        body.and_then(|b| b.get("model")),
+        overlay.as_deref(),
     ]);
     let session = hint("x-session-id", "session_id")
         .or_else(|| CONV_HEADERS.iter().find_map(|h| header(h)))
@@ -705,6 +736,7 @@ fn routing_hints(headers: &HeaderMap, body: Option<&Value>) -> RoutingHints {
         prefix,
         role,
         target: hint("x-target-replica", "target_replica").map(str::to_owned),
+        overlay,
         approx_tokens: body.map(estimate_required_tokens).unwrap_or(0),
         token_counts: Default::default(),
         images: body.is_some_and(carries_images),
@@ -789,13 +821,31 @@ async fn count_prompt_tokens(
         }
         normalize_reasoning_effort(&mut request);
         normalize_messages(&mut request);
+        let mut fwd = forward_headers(headers);
+        let overlay = headers
+            .get("x-hanzo-overlay")
+            .or_else(|| headers.get("x-ple-overlay"))
+            .or_else(|| headers.get("x-overlay"))
+            .and_then(|v| v.to_str().ok())
+            .or_else(|| body.get("overlay").and_then(Value::as_str));
+        if let Some(ov) = overlay {
+            if let Ok(val) = HeaderValue::from_str(ov) {
+                fwd.insert("x-hanzo-overlay", val.clone());
+                fwd.insert("x-ple-overlay", val);
+            }
+        }
+        if let Some(ref key) = worker.api_key {
+            if let Ok(val) = HeaderValue::from_str(&format!("Bearer {key}")) {
+                fwd.insert(axum::http::header::AUTHORIZATION, val);
+            }
+        }
         let response = state
             .client
             .post(format!(
                 "{}/v1/messages/count_tokens",
                 worker.url.trim_end_matches('/')
             ))
-            .headers(forward_headers(headers))
+            .headers(fwd)
             .timeout(Duration::from_secs(15))
             .json(&request)
             .send()
@@ -913,6 +963,8 @@ struct RegisterBody {
     roles: Vec<String>,
     #[serde(default)]
     upstream_model: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
 }
 fn registration_weight() -> u32 {
     100
@@ -933,6 +985,7 @@ async fn add_replica(
             weight: body.weight,
             roles: body.roles,
             upstream_model: body.upstream_model,
+            api_key: body.api_key,
         },
     );
     Json(state.balancer.statuses())
@@ -999,22 +1052,34 @@ async fn probe_loop(state: Arc<ProxyState>, interval: Duration) {
             .collect();
         // One probe per upstream per cycle, concurrently: a URL shared by many
         // model pools is one server, and a slow one must not delay the others.
-        let urls: HashSet<String> = sets
-            .iter()
-            .flat_map(|set| set.statuses().into_iter().map(|r| r.url))
-            .collect();
+        let mut url_keys: HashMap<String, Option<String>> = HashMap::new();
+        for set in &sets {
+            for st in set.statuses() {
+                url_keys.entry(st.url.clone()).or_insert(st.api_key);
+            }
+        }
+        let client = state.client.clone();
         let health: HashMap<String, bool> =
-            futures::future::join_all(urls.into_iter().map(|url| async {
-                let probe = format!("{}{}", url.trim_end_matches('/'), HEALTH_PATH);
-                let answers = || async {
-                    matches!(
-                        state.client.get(&probe).timeout(PROBE_TIMEOUT).send().await,
-                        Ok(r) if r.status().is_success()
-                    )
-                };
-                // One dropped connection is not a dead server: ask twice.
-                let ok = answers().await || answers().await;
-                (url, ok)
+            futures::future::join_all(url_keys.into_iter().map(|(url, key)| {
+                let client = client.clone();
+                async move {
+                    let probe = format!("{}{}", url.trim_end_matches('/'), HEALTH_PATH);
+                    let answers = || async {
+                        let mut req = client.get(&probe).timeout(PROBE_TIMEOUT);
+                        if let Some(ref k) = key {
+                            if let Ok(val) = HeaderValue::from_str(&format!("Bearer {k}")) {
+                                req = req.header(axum::http::header::AUTHORIZATION, val);
+                            }
+                        }
+                        matches!(
+                            req.send().await,
+                            Ok(r) if r.status().is_success() || r.status() == StatusCode::UNAUTHORIZED
+                        )
+                    };
+                    // One dropped connection is not a dead server: ask twice.
+                    let ok = answers().await || answers().await;
+                    (url, ok)
+                }
             }))
             .await
             .into_iter()
