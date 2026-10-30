@@ -7,7 +7,7 @@ use std::{
 use byteorder::{LittleEndian, ReadBytesExt};
 use hanzo_ml::{DType, Device, Result, Tensor, D};
 use hanzo_nn::{Linear, Module};
-use quantize::QuantizationResult;
+pub(crate) use quantize::QuantizationResult;
 
 mod quantize;
 
@@ -55,7 +55,10 @@ impl QuantMethod for FP8Linear {
                 } = Self::quantize(lin.weight(), dtype)?;
                 Ok(Self {
                     lin: Linear::new(qw, lin.bias().cloned()),
-                    dequant_x_scale: dequantize_scale.clone(), // This is probably wrong!
+                    // cuBLASLt multiplies each FP8 operand by its own dequantization
+                    // scale inside the GEMM. Activations get theirs when forward
+                    // quantizes them, which is where this one is replaced.
+                    dequant_x_scale: dequantize_scale.clone(),
                     dequant_w_scale: dequantize_scale,
                     quant_scale: quantize_scale,
                     dtype,

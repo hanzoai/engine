@@ -76,6 +76,26 @@ mod tests;
 #[cfg(feature = "cuda")]
 pub use api::{fused_batch_matmul, fused_batch_matmul_f8, CublasLt};
 
+/// Whether this device carries the FP8 tensor cores `batch_matmul_f8` runs on. Ada is
+/// the first, at compute capability 8.9.
+#[cfg(feature = "cuda")]
+pub fn supports_f8(device: &Device) -> bool {
+    use hanzo_ml::cuda::cudarc::driver::sys::CUdevice_attribute as Attr;
+
+    let Device::Cuda(dev) = device else {
+        return false;
+    };
+    let stream = dev.cuda_stream();
+    let ctx = stream.context();
+    let (Ok(major), Ok(minor)) = (
+        ctx.attribute(Attr::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR),
+        ctx.attribute(Attr::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR),
+    ) else {
+        return false;
+    };
+    (major, minor) >= (8, 9)
+}
+
 pub fn maybe_init_cublas_lt_wrapper(device: Device) {
     static INIT: Once = Once::new();
 

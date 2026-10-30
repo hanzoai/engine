@@ -2241,15 +2241,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "869b0adbda23651a9c5c0c3d270aac9fcb52e8622a8f2b17e57802d7791962f2"
 
 [[package]]
-name = "enso"
-version = "0.1.1"
-dependencies = [
- "hanzo-router",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "enum-as-inner"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3107,7 +3098,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "clap",
@@ -3139,7 +3130,7 @@ checksum = "b9dc246ef72490c348c62b93c06989605dc074e285657501c0aaa02d73c5b408"
 
 [[package]]
 name = "hanzo-audio"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "apodize",
@@ -3149,16 +3140,21 @@ dependencies = [
 
 [[package]]
 name = "hanzo-bench"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "cli-table",
  "hanzo-engine",
  "hanzo-ml",
+ "hanzo-server-core",
  "libc",
+ "reqwest 0.13.4",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -3176,7 +3172,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-cli"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "axum",
@@ -3192,6 +3188,7 @@ dependencies = [
  "futures-util",
  "half",
  "hanzo",
+ "hanzo-bench",
  "hanzo-engine",
  "hanzo-kernel",
  "hanzo-ml",
@@ -3222,7 +3219,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-code-exec"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3240,7 +3237,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-engine"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -3364,7 +3361,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-film"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3452,7 +3449,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-llm-mcp"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3474,7 +3471,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-macros"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -3500,9 +3497,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.11.98"
+version = "0.11.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6d210c5d0d4cf57c60efd5e32f04cac34aae1ad47635704ddb19815f622e878"
+checksum = "1988740f6703c39246dbedff15e17fd99cf0fdcf91250a6850d209b195b3eea6"
 dependencies = [
  "accelerate-src",
  "ash",
@@ -3539,9 +3536,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-nn"
-version = "0.11.40"
+version = "0.11.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ed932a5acc01173c505f0db59be608e1beb76bef991e99eec5e14a55eed8b78"
+checksum = "ff67158b7ef6e3d22d922d31950f6111ea71fce57ea6a606f33976d26ee0406f"
 dependencies = [
  "accelerate-src",
  "half",
@@ -3559,7 +3556,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-paged-attn"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "cudaforge",
@@ -3575,7 +3572,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-pyo3"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3601,7 +3598,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-quant"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "byteorder",
  "cuda-async",
@@ -3648,9 +3645,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-rocm-kernels"
-version = "0.11.38"
+version = "0.11.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c757166ffcfcffb53dc7b44b8f8b59ada5ffc6f04c6290c4bdb6c7aa5131d47"
+checksum = "93d84b39bb8bba24a36637b1867f970d893c8b5eed4af67da614f5bbcee73f1a"
 dependencies = [
  "dirs 5.0.1",
  "half",
@@ -3679,21 +3676,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "hanzo-router-retrain"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "enso",
- "hanzo-router",
- "safetensors",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "hanzo-sandbox"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "itoa",
@@ -3709,7 +3693,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3732,7 +3716,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server-core"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3741,7 +3725,6 @@ dependencies = [
  "data-url",
  "dirs 6.0.0",
  "either",
- "enso",
  "futures",
  "hanzo-3d",
  "hanzo-engine",
@@ -3767,7 +3750,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-train"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "hanzo-ml",
@@ -3805,7 +3788,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-vision"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "hanzo-ml",
  "image",
@@ -3814,7 +3797,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-web-chat"
-version = "1.7.95"
+version = "1.7.100"
 dependencies = [
  "anyhow",
  "axum",

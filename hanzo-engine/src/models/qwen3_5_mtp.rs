@@ -1,7 +1,7 @@
 //! The speculative draft Qwen3.5 runs off its own multi-token-prediction head.
 //!
 //! A row fed token `t + 1` over the target's final-norm hidden state at `t` predicts token
-//! `t + 2`. Chaining that — the head's own hidden state and its argmax at the next position —
+//! `t + 2`. Chaining that — the state the head carries and its argmax at the next position —
 //! drafts `n_predict` tokens per target step, decoded through the target's `lm_head` so every
 //! draft lands on the verifier's own scale.
 //!
@@ -11,12 +11,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use hanzo_ml::{DType, Device, Result, Tensor, D};
+use hanzo_ml::{DType, Device, Result, Tensor};
 
 use crate::kv_cache::KvCache;
 use crate::speculative::{
-    SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposer,
-    SpeculativeSharedHeads, TargetTokenEmbedder,
+    draft_contexts, sample_drafts, SpeculativeProposal, SpeculativeProposalBatch,
+    SpeculativeProposeBatchCtx, SpeculativeProposer, SpeculativeSharedHeads, TargetTokenEmbedder,
 };
 
 /// Drafts per target step. A wider model amortizes the verify forward over more drafts, so it
@@ -49,16 +49,33 @@ pub(crate) fn chain_cache(max_draft: usize) -> KvCache {
     KvCache::new_normal(2, max_draft, max_draft)
 }
 
+/// What one head step hands on.
+pub struct MtpOut {
+    /// The `lm_head` input, `[batch, 1, hidden]`.
+    pub head: Tensor,
+    /// The next step's `target_hidden`.
+    pub carry: Tensor,
+}
+
+impl MtpOut {
+    /// A step whose `lm_head` input is also the next step's `target_hidden`.
+    pub fn same(hidden: Tensor) -> Self {
+        Self {
+            head: hidden.clone(),
+            carry: hidden,
+        }
+    }
+}
+
 /// One multi-token-prediction head, as the chain drives it.
 pub trait MtpStep {
-    /// One step over `[batch, 1, hidden]` inputs at `[3, batch, 1]` MRoPE positions. Returns the
-    /// normed hidden state, which is both the `lm_head` input and the next step's.
+    /// One step over `[batch, 1, hidden]` inputs at `[3, batch, 1]` MRoPE positions.
     fn step(
         &mut self,
         input_embeds: &Tensor,
         target_hidden: &Tensor,
         positions: &Tensor,
-    ) -> Result<Tensor>;
+    ) -> Result<MtpOut>;
 
     /// Drop the chain's KV, so the next chain attends only to itself.
     fn reset(&mut self);
@@ -106,6 +123,7 @@ impl SpeculativeProposer for Qwen3_5MtpProposer {
         if batch == 0 {
             return Ok(SpeculativeProposalBatch::new(Vec::new()));
         }
+        let mut contexts = draft_contexts(&ctx);
         let hidden = ctx.target_hiddens.ok_or_else(|| {
             hanzo_ml::Error::msg("Qwen3.5 MTP needs the target hidden state to draft")
         })?;
@@ -147,25 +165,15 @@ impl SpeculativeProposer for Qwen3_5MtpProposer {
                 planes.extend(mrope.iter().map(|pos| pos[plane]));
             }
             let positions = Tensor::from_vec(planes, (3, batch, 1), &device)?;
-            let normed = self.head.step(&embeds, &hidden, &positions)?;
-            let step_logits = (self.heads.lm_head)(&normed)?;
-            let step_drafts: Vec<u32> = step_logits
-                .argmax(D::Minus1)?
-                .to_dtype(DType::U32)?
-                .flatten_all()?
-                .to_vec1()?;
-            if step_drafts.len() != batch {
-                hanzo_ml::bail!(
-                    "Qwen3.5 MTP drafted {} tokens for {batch} sequences",
-                    step_drafts.len()
-                );
-            }
+            let out = self.head.step(&embeds, &hidden, &positions)?;
+            let step_logits = (self.heads.lm_head)(&out.head)?;
+            let step_drafts = sample_drafts(&step_logits, ctx.sequences, &mut contexts, &ctx.rng)?;
             logits.push(step_logits);
             if step + 1 < self.n_predict {
-                // The draft becomes the next step's input, one position on, off the head's own
-                // hidden state.
+                // The draft becomes the next step's input, one position on, off what the head
+                // carries forward.
                 tokens.clone_from(&step_drafts);
-                hidden = normed;
+                hidden = out.carry;
                 for pos in mrope.iter_mut() {
                     for plane in pos.iter_mut() {
                         *plane += 1;
@@ -245,5 +253,116 @@ pub(crate) mod fixtures {
             planes.extend(anchors.iter().map(|pos| pos[plane]));
         }
         Tensor::from_vec(planes, (3, anchors.len(), 1), device)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixtures::{shared_heads, synthetic};
+    use super::*;
+    use crate::sequence::test_sequence;
+    use crate::speculative::{SpeculativeKvCache, SpeculativeProposeBatchCtx};
+    use rand::SeedableRng;
+    use rand_isaac::Isaac64Rng;
+
+    const HIDDEN: usize = 8;
+    const VOCAB: usize = 16;
+
+    /// A head whose two outputs differ, `head = embeds + hidden` and `carry = 0.5 - hidden`, and
+    /// which records the `target_hidden` of every step.
+    struct Split {
+        seen: Arc<Mutex<Vec<Tensor>>>,
+        device: Device,
+    }
+
+    impl MtpStep for Split {
+        fn step(
+            &mut self,
+            input_embeds: &Tensor,
+            target_hidden: &Tensor,
+            _positions: &Tensor,
+        ) -> Result<MtpOut> {
+            self.seen.lock().expect("seen").push(target_hidden.clone());
+            Ok(MtpOut {
+                head: (input_embeds + target_hidden)?,
+                carry: target_hidden.affine(-1.0, 0.5)?,
+            })
+        }
+
+        fn reset(&mut self) {}
+
+        fn device(&self) -> &Device {
+            &self.device
+        }
+
+        fn dtype(&self) -> DType {
+            DType::F32
+        }
+    }
+
+    fn max_diff(a: &Tensor, b: &Tensor) -> Result<f32> {
+        (a - b)?.abs()?.max_all()?.to_scalar::<f32>()
+    }
+
+    /// Each step's logits are `lm_head(head)`, and the next step's `target_hidden` is its `carry`.
+    #[test]
+    fn mtp_proposer_feeds_head_and_passes_carry() -> Result<()> {
+        const N_PREDICT: usize = 3;
+        let device = Device::Cpu;
+        let heads = shared_heads(VOCAB, HIDDEN, &device)?;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut proposer = Qwen3_5MtpProposer::new(
+            Box::new(Split {
+                seen: seen.clone(),
+                device: device.clone(),
+            }),
+            heads.clone(),
+            N_PREDICT,
+            Arc::new(Mutex::new(Some(vec![[4, 4, 4], [6, 6, 6]]))),
+        );
+
+        let batch = 2;
+        let hidden = synthetic(batch, HIDDEN, 51, &device)?.reshape((batch, 1, HIDDEN))?;
+        let (first, second) = (test_sequence(vec![1], None), test_sequence(vec![2], None));
+        let sampled = [3u32, 9];
+        let out = proposer.propose(
+            SpeculativeProposeBatchCtx {
+                sampled_tokens: &sampled,
+                sampled_tokens_emitted: true,
+                seq_ids: &[0, 1],
+                base_lens: &[5, 7],
+                sequences: &[&first, &second],
+                cache: SpeculativeKvCache::Normal,
+                target_hiddens: Some(hidden.clone()),
+                target_hidden_layers: None,
+                rng: Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(0))),
+            },
+            None,
+        )?;
+
+        let seen = seen.lock().expect("seen");
+        assert_eq!(seen.len(), N_PREDICT);
+        let mut tokens = sampled.to_vec();
+        for step in 0..N_PREDICT {
+            let carried = match step {
+                0 => hidden.clone(),
+                _ => seen[step - 1].affine(-1.0, 0.5)?,
+            };
+            assert_eq!(max_diff(&seen[step], &carried)?, 0.0, "step {step} hidden");
+
+            let ids = Tensor::from_vec(tokens.clone(), (batch, 1), &device)?;
+            let want = (heads.lm_head)(&((heads.embed)(&ids)? + &seen[step])?)?;
+            for (row, proposal) in out.proposals.iter().enumerate() {
+                let got = proposal
+                    .logits
+                    .as_ref()
+                    .expect("per-draft logits")
+                    .narrow(1, step, 1)?;
+                let drift = max_diff(&got, &want.narrow(0, row, 1)?)?;
+                assert!(drift < 1e-6, "step {step} row {row} logits drift {drift}");
+            }
+            tokens = out.proposals.iter().map(|p| p.tokens[step]).collect();
+        }
+        Ok(())
     }
 }

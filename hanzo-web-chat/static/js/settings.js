@@ -28,7 +28,7 @@ let searchEnabledOnServer = false;
  */
 async function loadSettings() {
   try {
-    const res = await fetch('/api/settings');
+    const res = await fetch('/v1/settings');
     if (res.ok) {
       const data = await res.json();
       serverDefaults = data.defaults;

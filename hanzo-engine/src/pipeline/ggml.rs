@@ -539,6 +539,7 @@ impl Pipeline for GGMLPipeline {
         let ModelInputs {
             input_ids,
             input_ids_full,
+            prior: _,
             seqlen_offsets,
             seqlen_offsets_full,
             context_lens,

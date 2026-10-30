@@ -15,7 +15,7 @@ The licence posture, and why each piece exists:
 - **`LICENSE` is MIT and names two holders — `Eric Buehler` first, then `Hanzo AI, Inc.`** MIT §2 is satisfied by *retaining that copyright line*, so the upstream line is load-bearing. Never delete it. This is not hypothetical: `963f0ff2b` (2026-06-01) replaced it with a Hanzo-only line as part of a brand sweep, and `3b993189e` restored it 45 days later. Releases cut in that window went out non-compliant. Brand sweeps must skip `LICENSE`.
 - **`LICENSE-APACHE` is for vendored GPU kernels, not for candle.** The tree bundles Apache-2.0 CUDA/Metal source from vLLM, FlashInfer, Marlin, and NVIDIA FasterTransformer, with per-file headers intact. Apache-2.0 §4(d) makes **`NOTICE` an actual distribution obligation** — unlike MIT, retaining the licence text alone is not enough. `NOTICE` must ship with any binary or crate we distribute.
 - **candle is consumed only through our fork, [hanzoai/ml](https://github.com/hanzoai/ml)** (`hanzo-ml` = candle-core, `hanzo-nn`, `hanzo-transformers`, `hanzo-flash-attn{,-v3}`, `hanzo-metal-kernels`), as crates.io registry deps. candle is dual **MIT OR Apache-2.0**; we elect MIT here. Attribution for it lives in that repo's LICENSE files and NOTICE — don't restate them here, and don't point a "candle" link at `hanzoai/ml` as though our fork were upstream.
-- Workspace `license = "MIT"` matches upstream. `enso`, `hanzo-router`, and `hanzo-router-retrain` declare `MIT OR Apache-2.0`; that is deliberate and safe — they are first-party routing code with no mistral.rs-derived dependency.
+- Workspace `license = "MIT"` matches upstream. `hanzo-router` declares `MIT OR Apache-2.0`; that is deliberate and safe — it is first-party routing code with no mistral.rs-derived dependency.
 
 The rule that generalises: `license =` in a manifest is a *claim*; the LICENSE files are the *fact*. A fork cannot relicense, and a find-and-replace across manifests or copyright headers is a licensing change, not a chore.
 
@@ -30,7 +30,7 @@ lands beside ours (1,622 duplicates). What works:
   pre-rename path at the fork point `0a14af4a`. The 327 conflicts become ordinary three-way hunks,
   resolved in slices: models, pipeline core, attention and quant, server, root.
 - `tools/merge-audit.sh` checks that every upstream-added file landed and is declared, and that our-only
-  subsystems (router, enso, NVFP4, ROCm, Vulkan) survived.
+  subsystems (router, NVFP4, ROCm, Vulkan) survived.
 - Files main renamed by hand are invisible to the pairing and need their own three-way:
   `mistralrs_for_server_builder.rs` is our `server.rs`, `mistralrs_server_router_builder.rs` is
   `router.rs`, `mistralrs.pyi` is `hanzo.pyi`. `git diff -M --name-status 0a14af4a main` lists them.
@@ -143,7 +143,7 @@ half of `required`, and the agentic file-surfacing commits, which live in a `she
 ## Brand rules (enforce in every doc and commit)
 
 - Hanzo is a full AI cloud / inference engine — **never** an "LLM gateway" or "OpenAI-compatible proxy", and never positioned against a proxy product. Speaking the OpenAI / Anthropic wire formats is a feature, not the identity.
-- HTTP paths are **`/v1/...`** only — never an `/api/` prefix.
+- HTTP paths are **`/v1/...`** only — never an `/api/` prefix. The CLI UI's own calls are `/ui/v1/*` (`hanzo-cli/src/ui/mod.rs`, `webui/src/lib/services/api.ts`), web-chat's are `/v1/*`, and hanzo-router serves no `/api/` path. `hanzo.yml`'s `v1-only` gate greps for a regression; `route_registry` tests the server routes.
 - **Zen** is our own model family (zen-eco, zen-ultra, Zen5, …); never surface upstream model names as the brand in public docs.
 - Crisp, modern, developer-first voice; no emoji-spam.
 
@@ -403,6 +403,59 @@ Avoid returning TODOs.
   bit-exact on CPU. `sdpa`/`sdpa_runtime` online-softmax is the structural cure for the 8B
   flash-collapse. See `ml/LLM.md` for the DSL and env-var details.
 
+## zen6 (Qwen3.8-Flash-Next) — native and GGUF
+
+- **The name is zen6** (upstream: `qwen4_exp`): module, loader, `--arch zen6`, GGUF arch,
+  fixtures, scripts. Upstream spellings are read in two places and never written:
+  `Qwen4ExpForConditionalGeneration` in `NormalLoaderType::from_causal_lm_name`, and GGUF
+  `general.architecture = qwen4exp`, a parse alias on `GGUFArchitecture::Zen6` whose `qwen4exp.*`
+  keys `Content::from_readers` moves under `zen6.*`.
+- **Two doors, one model.** The native safetensors checkpoint (`Zen6Loader`,
+  `pipeline/loaders/normal_loaders.rs`) and the same tower quantized upstream to GGUF
+  (`pipeline/gguf.rs`) both reach `models/quantized_zen6::ModelWeights`, which is the ONLY place the
+  layers are built.
+- **The manifest is the contract.** `models/zen6::manifest` derives every tensor the text model
+  reads — name, stored dtype, shape, and a `Role` of `Device` or `Host` — from the config alone. The
+  checkpoint's headers must equal it (apart from the `DEFERRED` prefixes), so a silent shape or dtype
+  drift in a release checkpoint is a load failure naming the tensor, not a wrong logit.
+  `manifest_is_closed_under_config` proves the derivation is total, `loader_estimate_equals_allocation`
+  that the loader reserves exactly what the manifest sums, and `deferrals_match_their_prefixes` that
+  what is skipped is skipped on purpose.
+- **What is where.** Routed experts stay PACKED NVFP4 (E2M1 codes, one E4M3 scale per 16, an F32
+  global scale) and are read straight into the MoE kernel — nothing dequantizes 71 GB to walk it.
+  Dense side layers are block FP8 (E4M3, one F32 scale per 128x128). The rest is BF16. Layer 1's PLE
+  n-gram table is `Role::Host`: it is hashed and looked up in an mmap'd buffer, never uploaded, and
+  never charged to the KV budget (`table_never_charged`,
+  `hybrid_kv_charges_attention_layers_only` — only the full-attention layers are).
+- **W4A4, matched to the server, not to an ideal.** `hanzo-quant/src/quantize/` reproduces vLLM's
+  *served* activation quantizers bit-exactly — per-token/per-128-group FP8 in the three forms the
+  compiled graph uses, and per-16 NVFP4 with the served fast-math formula. On CUDA that means the
+  approximate instructions (`div.full.f32`, `rcp.approx.ftz.f32`) as inline PTX in `kernels/quantize`,
+  built WITHOUT fast-math so only the places the server approximates are approximate. On CPU the same
+  formulas use IEEE divide/reciprocal and differ in the last bit — which is why the CPU golden is a
+  transcriptor and the GPU vectors are the arbiter.
+- **The reference is the server, not the module source.** `scripts/zen6_golden.py` runs 24 tokens
+  through the embedding, layers 0-3 (three gated-delta-nets, then attention), the final
+  hyper-connection mixer and lm_head rows [0, 8192) and writes every intermediate to
+  `hanzo-engine/tests/fixtures/zen6.safetensors`. It rounds to bf16 ONLY where a served kernel
+  stores (`tl.store` or a custom kernel's output); between store points arithmetic is f32, because
+  inductor fuses away the eager casts. Every kernel it transcribes is listed with its sha256 and the
+  script refuses to run when one differs. `scripts/zen6_vectors.py` then runs the SERVED kernels
+  on the same inputs — one layer at a time, at most 1.2 GiB of device memory, FlashInfer JIT refused
+  — so it measures the golden's gap without disturbing a running server.
+- **Two facts about the checkpoint and the recorder.** Layer 1's n-gram table is 128 shards in one
+  contiguous run, but the writer put 126 of them in numeric order and transposed one pair, so shard
+  100 and 101 sit between 97 and 98 — read each shard from its own header range, never from a stride.
+  And six served prefill vectors (`gdn.prefill.{conv,q,k,v,core,normed}`) are every zero: the
+  recorder's `causal_conv1d_fn` call returned its `empty_like` buffer unwritten, so those stages have
+  no served reference at all and their `*.golden` gaps in the vectors metadata are fiction. `g` and
+  `beta` are right, because they come from `a` and `b`, not from `conv`. `vectors()` refuses an
+  all-zero stage by name. Re-record with `scripts/zen6_vectors.py` to settle the call form.
+- **Deferred, and it shows.** `self_attn.indexer.` (M2: QSA sparse attention) and `mtp.` (M3:
+  multi-token prediction) are not read, so a native load attends densely through every key: the
+  logits match, the tokens/sec do not yet. The `qsa.rs` and `hyper.rs` machinery is already there for
+  the full-attention and mixer paths.
+
 ## Kernel tuning + new-model onboarding: the roofline-driven process (SOTA loop)
 A repeatable, measurement-first process. The scar tissue behind every step is in `ml/LLM.md`
 ("Vulkan PREFILL: the Q6_K lever, the roofline method..."). The rule: **measure in-engine, never trust
@@ -484,7 +537,7 @@ fast path; runtime HW auto-select is kept). One bare name per real knob. Canonic
   set `=0` to force the eager/unfused path. (`HANZO_ROCM_FLASH_ATTN` and its A/B toggle were already
   deleted; ROCm flash is always-on when applicable.) `FLASH_PREFILL` gates `using_flash_attn()` (CUDA).
 - **De-branded runtime config**: `KV_SPILL_DIR`, `KV_SPILL_BUDGET_MB`, `ISQ_SINGLETHREAD`,
-  `DEV_SIGNING_SEED`, `VK_FUSED_QKNORM`, `MXFP4_DP4A`, `MN_LOCAL_WORLD_SIZE`, `NO_NCCL`,
+  `VK_FUSED_QKNORM`, `MXFP4_DP4A`, `MN_LOCAL_WORLD_SIZE`, `NO_NCCL`,
   `FFI_MODELS`, `FFI_TOK_DIR`, `CUDA_FLASH_BF16`, `METAL_PRECOMPILE`, `ROCM_GFX_ARCH`.
 - **DELETED (one-off dev A/B toggles that forced the OLD/slow path)**: `HANZO_GDN_FUSED_FALLBACK`,
   `HANZO_ADD_RMSNORM_FALLBACK`, `HANZO_QK_NORM_ROPE_FALLBACK`, `HANZO_NO_MEMPOOL_FIX`, `SAMPLER_TRACE`
@@ -492,9 +545,20 @@ fast path; runtime HW auto-select is kept). One bare name per real knob. Canonic
   vs unfused decision is now the always-fast path; bit-exact oracle tests force the unfused/scalar leg
   via test-only programmatic setters (`layers::set_force_unfused_qk_norm_rope`,
   `hanzo_ml::set_force_scalar_matvec`), never env, never set in production.
-- License gate reads `HANZO_ENGINE_LICENSE_TOKEN` / `HANZO_ENGINE_LICENSE_FILE` +
-  `HANZO_LICENSE_SIGNING_KEY` (see `license.rs`); these are product-namespaced identity vars, not perf
-  flags, and stay branded by design -- the ONLY remaining `HANZO_` env names.
+- License gate reads `HANZO_ENGINE_LICENSE_TOKEN` / `HANZO_ENGINE_LICENSE_FILE` (see `license.rs`);
+  these are product-namespaced identity vars, not perf flags, and stay branded by design -- the ONLY
+  remaining `HANZO_` env names.
+
+## License key
+
+- `license.rs` `HANZO_LICENSE_PUBKEY` is the public half of the production seed in Hanzo KMS at
+  `/engine/LICENSE_SIGNING_KEY` (org `hanzo`, env `prod`). It is the only key the verifier trusts, in
+  every profile; there is no dev key outside `#[cfg(test)]`.
+- The engine never signs. hanzoai/licensing mints (`KMSSigner`, same public key as its `Pubkey`), and
+  hanzo-inc/cloud serves it at `/v1/licensing`.
+- The tests pin two tokens: one the production key signed (app "test", expired) and one the retired
+  development key signed, which must fail `BadSig`. Rotating the key means a new KMS value, both
+  public constants, and a fresh production token here and in hanzoai/licensing.
 
 ## Latest Upstream Features (as of commit 530463af1)
 
@@ -541,7 +605,7 @@ git rebase upstream/master
 cargo check --package hanzo-engine --no-default-features --features metal
 ```
 
-## enso -- the learned router policy (brain) for hanzo-router (mechanism)
+## hanzo-router -- the routing mechanism
 
 `hanzo-router` is the routing MECHANISM (registry, SLO gate, placement, dispatch).
 It exposes one seam: the `RoutePolicy` trait --
@@ -550,34 +614,8 @@ The rule-based `Policy` implements it as the cold-start fallback (placement-agno
 fixed low confidence). New vocabulary lives in `registry` (`Modality`, `Level`) and
 `route` (`Route`, `User`, `Slo`, `REFUSED_MODEL`). Pre-existing API unchanged.
 
-`enso` (separate crate, `enso/`) is the learned POLICY implementing `RoutePolicy`.
-Six orthogonal pieces, one concern each:
-- `featurize`: Request -> feature vector x (hashing + metadata, sub-us; a tiny
-  finetunable encoder swaps in at the same `Featurizer` trait).
-- `profile`: eval rows p per (model, level, modality); `ingest`/`parse_jsonl` fold
-  bench tuples into the table. REAL eval data plugs in HERE (JSONL of `EvalSample`);
-  absent it, `synth` emits clearly-labeled synthetic tuples + an `oracle`.
-- `policy`: the one learnable object -- bilinear utility `x^T W p`.
-- `guard`: two-tier safety -- hot-path keyword classifier + escalate to a `Teacher`
-  seam (Qwen3Guard; `DistilledTeacher` stands in until weights are wired).
-- `selector`: safety-gated, SLO-feasible `argmax[utility - lambda*cost - mu*latency]`.
-- `learner`: offline ridge fit of base W + online per-user LinUCB. `theta_u` is
-  prior-centered at W; `dW_u = theta_u - W` is the per-user delta. Serving is greedy
-  on `theta_u` (sub-ms); UCB exploration runs off the hot path during learning.
-
-Registry is cross-modal: LLMs, dub generators (musetalk/echomimic), image models are
-all profile rows -- "add a model = add a row".
-
-Proof: `cargo test -p enso --test proof -- --nocapture` (add `--release` for the
-latency number). It asserts correct (model, level) picks, per-user bandit divergence
-after feedback (alice -> zen-eco, bob -> zen-ultra on the same request), guard
-block/escalate, sub-ms routing (p99 ~1.5us), and 100% (model, level) accuracy vs the
-oracle on a held-out synthetic split (rule baseline 0% on (model, level): no level/cost
-awareness). 100% reflects well-separated synthetic profiles -- real data will be lower.
-
-Honest scope: the LinUCB per-user bandit is solid and realizable. Per-user real-time
-LoRA over a neural encoder and self-adaptive expert vectors are research-frontier and
-attach at the same `policy`/`learner` seam -- flagged, not faked.
+A learned policy implements `RoutePolicy` outside this repo; its fitted heads mount with
+`ROUTER_HEADS=<path>` (`Policy::load_heads`).
 
 ## Working here
 
@@ -1122,6 +1160,9 @@ only pre-connect errors retry, never timeouts or partially delivered streams.
 - **Admission by tokenizer count.** Each replica declares `max_context` in `router-pool.yaml`; a request is admitted only where prompt + requested output fits. Counts come from each replica's own `/v1/messages/count_tokens` (pool members serve different models and templates, so counts are not interchangeable), falling back to a byte estimate when a tokenizer cannot answer. Session pins, cached prefixes, roles and explicit targets all yield to capacity. When nothing fits, the client gets `invalid_request_error` "prompt is too long", which Claude Code answers by compacting.
 - **Liveness is `/v1/models`, not `/health`.** SGLang's `/health` runs a one-token generation through the scheduler, so behind a long prefill it answers in seconds; a 2s probe evicted spark, the only replica that could hold a long conversation, and compaction got "no available replica". Probes now ask `/v1/models` with a 10s ceiling, once per upstream per cycle (not once per model pool), concurrently, and ask twice before declaring a server down.
 - **Vision.** A replica declares `vision: false` when its engine has no image encoder (llama-server without an mmproj answers 500). Image-bearing requests — Anthropic image blocks including inside tool results, OpenAI `image_url`, Responses `input_image` — skip those replicas and are not token-counted there.
+- **An aborted turn is the one failure that looks like success.** Under KV pressure vLLM answers a streaming request 200, opens the message, emits `stop_reason: end_turn` with **zero output tokens** and closes, in ~0.1s. The client renders that as silence: Claude Code shows nothing and stops the turn, and the router log said `stream end ok=true`, so nothing anywhere named the failure. `dispatch` now reads a completion's first bytes (to `OUTPUT_PROBE_BYTES`) before committing a stream to the client, and a turn that produced no output goes to the next replica. This is the sole exception to "only pre-connect errors retry": an empty completion delivered nothing, so there is no side effect to duplicate. A pool that is silent everywhere returns `503` naming it, never an empty message. `LeasedStream` still never retries a stream that got as far as emitting output.
+- **`carries_output` is a marker scan, not a parse.** A probe that failed to parse a real answer would retry a good turn, which is worse than passing an empty one through, so the scan is deliberately coarse. Its markers are `b"...\"..."` byte literals, not `br#"...\"#"`: a raw string ends at the first `"#`, so `br#"\"content":"#` silently means `"content":` with no closing quote and matched every `message_start`, which made the probe always report output and never retry. The empty-turn tests fail loudly if a marker regresses like that again.
+- **Absent `vision:` means `vision: true`** (`default_vision`), so a pool entry that names no flag is image-capable, not image-blind. The asymmetry in `router-pool.yaml` between the `dgx` and `evo` rows is cosmetic; do not "fix" it by adding flags, and do read a missing flag as `false`.
 - **`tool_reference` blocks.** ToolSearch results carry them; local engines 500 on them and poison every later turn, so the router rewrites them to text.
 - **`[1m]` model suffix.** Claude Code sizes its context window from the model name: with a `behavesAs` picker row it uses the mapped model's window and ignores `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, so only a `[1m]` suffix yields 1M. The client strips the suffix before the request and sends the `context-1m` beta header instead; the router strips it too so the pool still resolves.
 - **Engine-side leak worth knowing:** SGLang 0.5.19 deletes a request's state on client disconnect *before* its delayed abort runs, and `abort_request` skips unknown rids — so every cancelled request kept generating to `max_tokens`, burning a decode stream with no client attached. Patched on spark (`~/sglang-abort-unknown-rid.patch`); a pip upgrade reverts it.
@@ -1201,6 +1242,34 @@ activation quantize 13.0%, elementwise 11.8%, casts 10.6%, GDN recurrence 9.2%. 
 FP8 layers set decode: 26.65 GB read per token against SGLang's 19.44, at 187 vs 199 GB/s. Native FP8
 linear is the next lever for both. llama.cpp decodes fastest only because Q4_K_M reads 15.74 GB per
 token; no NVFP4 GGUF of this model exists.
+
+**The harness is checked in** (`scripts/bench_http.py`, tests in `scripts/bench_http_test.py`). Prompt
+= uuid nonce + WORDS x size + "Summarize in one sentence."; sizes 4/40/400/4000 are ~220 / 1,335 /
+12,497 / 124,094 Qwen3.8 tokens, and the prompt length reported is the server's `usage.prompt_tokens`.
+A token chunk is one whose delta carries `content`, `reasoning` (vLLM v0.29), `reasoning_content`
+(hanzo) or `tool_calls`. TTFT and the decode window use token chunks only; decode =
+(`usage.completion_tokens` - 1) / (last token chunk - first token chunk), so MTP/DFlash steps that
+carry several tokens per chunk are counted as tokens, and a stream without usage fails (vLLM sends
+usage in a later empty-choices chunk, hanzo on its finish chunk). `--concurrency N` reports each
+stream plus the aggregate; `--json FILE` appends JSON lines.
+
+```
+python3 scripts/bench_http.py http://127.0.0.1:30000/v1/chat/completions --sizes 4,40,400,4000 --gen 128
+python3 scripts/bench_http.py http://127.0.0.1:30000/v1/chat/completions --sizes 40 --concurrency 8
+```
+
+**GB/token is two labeled numbers** (`scripts/bytes_per_token.py`):
+- *computed* weight+KV+state bytes per token from the safetensors headers and config.json, skipping
+  `visual.*` and `mtp.*` and counting one `embed_tokens` row; `--resident REGEX=DTYPE` names modules an
+  engine holds at another dtype. `weights --checkpoint <27B snapshot> --context 1400 --kv-dtype bf16`
+  prints 19.44 GB of weights (19,435,407,488 B, SGLang's 19.44), 0.09 GB of bf16 KV (64 KiB/token over
+  16 full-attention layers) and 0.31 GB of GDN state: 19.84 GB per token.
+- *measured* SM-to-L2 bytes per token: `sudo nsys profile --gpu-metrics-devices=0
+  --gpu-metrics-set=gb20y-top`, then `nsys export --type sqlite` and `bytes_per_token.py nsys
+  --sqlite F --tokens N` (sums 'VidL2 Total from L1TEX [Bytes]'). GB10's metric sets (gb20y,
+  gb20y-top) have no DRAM counter (`RmProfilingAdminOnly=1`, so metrics need root), so this is L2
+  traffic including hits: a cross-check that exposes redundant reads, never a substitute for the
+  computed figure.
 
 **evo (Strix Halo gfx1151, Qwen3.8-27B Q6_K), llama.cpp Vulkan baseline vs hanzo-engine ROCm:**
 
@@ -1324,3 +1393,29 @@ Two things had to be fixed before any of this could be measured at all, and both
 
 
 
+
+## MoE router and shared-expert overlap held to vLLM (W8c: E2, E3)
+
+- **One router.** `src/cuda/exact/route.cu` is vLLM v0.29.0's `topkGating`, verbatim, built in
+  the exact lane (`src/cuda/exact/*.cu`, no `--use_fast_math`, as vLLM builds `_moe_C`). It serves
+  every MoE model through `ops::moe_router_topk` for vLLM's 15 fused counts (1-512 powers of two,
+  192, 320, 384, 448, 576); other counts keep the portable path. Bitwise vs vLLM on 495 cases
+  (15 counts x f32/bf16/f16 x 11 configs); the same source with fast math differs in 173,639 words.
+- **The gate is cuBLAS's choice, and the workspace changes it.** `cuda::lane::Lane::linear` is
+  torch's `F.linear` (GemmEx T/N, COMPUTE_32F, DEFAULT_TENSOR_OP) on a handle carrying torch's
+  32 MiB workspace. Without it (hanzo-ml's handle, or 4 MiB) the N=512 gate differs at M 98-101,
+  126-160, 184-256, 289-320. Never route the gate through hanzo-ml matmul or UnquantLinear.
+- **cuBLAS class map on GB10, cuBLAS 13.1.1** (rows bitwise equal across M within a class):
+  N=512: {1, 17-183, 257-320} | {2-16} | {184-256, 321-4096}; N=1: one class. {2-16} is the
+  reduced-precision split-K kernel (57-59% of logits correctly rounded vs 100% at M=1). vLLM's
+  capture lists [1,2,4,8,16] and [1,2,4,5,8,10,16,20,...,80] never pad across a class; its full
+  512 grid would, at T=177..183 -> 184 (C3/W3 owns batch padding).
+- **Pin.** `lane::CUBLAS = 13.1.1` (vLLM's wheel ships nvidia-cublas 13.1.1.3, byte-identical to
+  /usr/local/cuda-13.0's). **Hazard:** /usr/local/cuda-13.4 with cuBLAS 13.7.0.27 is installed
+  beside it; an alternatives flip or LD_LIBRARY_PATH change moves gate logits silently except for
+  the startup warn, `lane::tests::cublas_version` and `pad_classes`. Dockerfile.cuda pins
+  libcublas-13-0=13.1.1.3-1.
+- **Branch** (`cuda::branch`): side Lane + two reused events, fork before the router gate GEMM,
+  join before the combine, capture-safe; refuses a context with cudarc event tracking on.
+- Goldens: `scripts/zen6_moe_golden.py {route,gate,shared,check}` ->
+  `hanzo-engine/tests/fixtures/zen6_moe/`. Window checks: `scripts/zen6_moe_window.sh`.

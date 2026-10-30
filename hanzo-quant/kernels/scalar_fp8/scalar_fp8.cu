@@ -9,11 +9,8 @@
 #define CUDA_CHECK(call)                                                       \
   do {                                                                         \
     cudaError_t err = call;                                                    \
-    if (err != cudaSuccess) {                                                  \
-      fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,         \
-              cudaGetErrorString(err));                                        \
-      exit(err);                                                               \
-    }                                                                          \
+    if (err != cudaSuccess)                                                    \
+      return (int)err;                                                         \
   } while (0)
 
 template <typename T>
@@ -45,7 +42,7 @@ __global__ void dtype_to_fp8_kernel(const T *__restrict__ input,
   }
 }
 
-extern "C" void launch_fp8_to_f32_kernel(const __nv_fp8_e4m3 *d_input,
+extern "C" int launch_fp8_to_f32_kernel(const __nv_fp8_e4m3 *d_input,
                                          float *d_output, size_t num_elements,
                                          cudaStream_t stream) {
   const int block_size = 256;
@@ -54,9 +51,10 @@ extern "C" void launch_fp8_to_f32_kernel(const __nv_fp8_e4m3 *d_input,
   fp8_to_dtype_kernel<float>
       <<<num_blocks, block_size, 0, stream>>>(d_input, d_output, num_elements);
   CUDA_CHECK(cudaGetLastError());
+  return 0;
 }
 
-extern "C" void launch_fp8_to_f16_kernel(const __nv_fp8_e4m3 *d_input,
+extern "C" int launch_fp8_to_f16_kernel(const __nv_fp8_e4m3 *d_input,
                                          __half *d_output, size_t num_elements,
                                          cudaStream_t stream) {
   const int block_size = 256;
@@ -65,9 +63,10 @@ extern "C" void launch_fp8_to_f16_kernel(const __nv_fp8_e4m3 *d_input,
   fp8_to_dtype_kernel<__half>
       <<<num_blocks, block_size, 0, stream>>>(d_input, d_output, num_elements);
   CUDA_CHECK(cudaGetLastError());
+  return 0;
 }
 
-extern "C" void launch_fp8_to_bf16_kernel(const __nv_fp8_e4m3 *d_input,
+extern "C" int launch_fp8_to_bf16_kernel(const __nv_fp8_e4m3 *d_input,
                                           __nv_bfloat16 *d_output,
                                           size_t num_elements,
                                           cudaStream_t stream) {
@@ -77,9 +76,10 @@ extern "C" void launch_fp8_to_bf16_kernel(const __nv_fp8_e4m3 *d_input,
   fp8_to_dtype_kernel<__nv_bfloat16>
       <<<num_blocks, block_size, 0, stream>>>(d_input, d_output, num_elements);
   CUDA_CHECK(cudaGetLastError());
+  return 0;
 }
 
-extern "C" void launch_f32_to_fp8_kernel(const float *d_input,
+extern "C" int launch_f32_to_fp8_kernel(const float *d_input,
                                          __nv_fp8_e4m3 *d_output,
                                          size_t num_elements,
                                          cudaStream_t stream) {
@@ -89,9 +89,10 @@ extern "C" void launch_f32_to_fp8_kernel(const float *d_input,
   dtype_to_fp8_kernel<float>
       <<<num_blocks, block_size, 0, stream>>>(d_input, d_output, num_elements);
   CUDA_CHECK(cudaGetLastError());
+  return 0;
 }
 
-extern "C" void launch_f16_to_fp8_kernel(const __half *d_input,
+extern "C" int launch_f16_to_fp8_kernel(const __half *d_input,
                                          __nv_fp8_e4m3 *d_output,
                                          size_t num_elements,
                                          cudaStream_t stream) {
@@ -101,9 +102,10 @@ extern "C" void launch_f16_to_fp8_kernel(const __half *d_input,
   dtype_to_fp8_kernel<__half>
       <<<num_blocks, block_size, 0, stream>>>(d_input, d_output, num_elements);
   CUDA_CHECK(cudaGetLastError());
+  return 0;
 }
 
-extern "C" void launch_bf16_to_fp8_kernel(const __nv_bfloat16 *d_input,
+extern "C" int launch_bf16_to_fp8_kernel(const __nv_bfloat16 *d_input,
                                           __nv_fp8_e4m3 *d_output,
                                           size_t num_elements,
                                           cudaStream_t stream) {
@@ -113,4 +115,5 @@ extern "C" void launch_bf16_to_fp8_kernel(const __nv_bfloat16 *d_input,
   dtype_to_fp8_kernel<__nv_bfloat16>
       <<<num_blocks, block_size, 0, stream>>>(d_input, d_output, num_elements);
   CUDA_CHECK(cudaGetLastError());
+  return 0;
 }

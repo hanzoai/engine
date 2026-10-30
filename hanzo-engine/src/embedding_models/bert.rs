@@ -514,6 +514,7 @@ mod tests {
             std::slice::from_ref(device),
         )?;
         Ok(NormalLoadingMetadata {
+            weights: Vec::new(),
             mapper,
             loading_isq: false,
             real_device: device.clone(),

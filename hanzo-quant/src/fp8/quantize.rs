@@ -4,23 +4,23 @@ use hanzo_nn::Linear;
 
 use super::FP8Linear;
 
-pub(super) struct QuantizationResult {
+pub(crate) struct QuantizationResult {
     /// Quantized tensor (f8)
-    pub(super) qw: Tensor,
+    pub(crate) qw: Tensor,
     /// Scalar, f32 tensor.
     ///
     /// Convert unquantized to quantized tensor as follows:
     /// `q = x * qs`
-    pub(super) quantize_scale: Tensor,
+    pub(crate) quantize_scale: Tensor,
     /// Scalar, f32 tensor. Reciprocal of `quantize_scale`.
     ///
     /// Convert unquantized to quantized tensor as follows:
     /// `x = q * dqs`
-    pub(super) dequantize_scale: Tensor,
+    pub(crate) dequantize_scale: Tensor,
 }
 
 impl FP8Linear {
-    pub(super) fn quantize(data: &Tensor, dtype: DType) -> Result<QuantizationResult> {
+    pub(crate) fn quantize(data: &Tensor, dtype: DType) -> Result<QuantizationResult> {
         let data = data.to_dtype(DType::BF16)?;
         let mut absmax = data.abs()?;
         while !absmax.dims().is_empty() {

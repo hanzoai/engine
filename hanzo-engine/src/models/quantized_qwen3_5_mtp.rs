@@ -22,7 +22,9 @@ use crate::models::quantized_qwen3_5_moe::{
     gguf_qmm, DecoderLayer, DenseMlp, GatedFullAttention, LayerImpl, ModelWeights, MoeOrMlp,
     PropsGGUF,
 };
-use crate::models::qwen3_5_mtp::{chain_cache, default_n_predict, MtpStep, Qwen3_5MtpProposer};
+use crate::models::qwen3_5_mtp::{
+    chain_cache, default_n_predict, MtpOut, MtpStep, Qwen3_5MtpProposer,
+};
 use crate::speculative::{MtpConfig, SelfSpeculative, SpeculativeProposer};
 
 /// The tensor that says a GGUF carries a head, relative to its block prefix.
@@ -108,8 +110,9 @@ impl Qwen35GgufMtpHead {
         target_hidden: &Tensor,
         positions: &Tensor,
     ) -> Result<Tensor> {
-        let embeds = self.enorm.forward(input_embeds)?;
-        let hidden = self.hnorm.forward(target_hidden)?;
+        // The two norms carry the dtype of their own GGUF weights; the projection reads one.
+        let embeds = self.enorm.forward(input_embeds)?.to_dtype(self.dtype)?;
+        let hidden = self.hnorm.forward(target_hidden)?.to_dtype(self.dtype)?;
         let xs = self
             .eh_proj
             .forward(&Tensor::cat(&[embeds, hidden], D::Minus1)?.contiguous()?)?;
@@ -128,8 +131,9 @@ impl MtpStep for Qwen35GgufMtpHead {
         input_embeds: &Tensor,
         target_hidden: &Tensor,
         positions: &Tensor,
-    ) -> Result<Tensor> {
+    ) -> Result<MtpOut> {
         self.forward(input_embeds, target_hidden, positions)
+            .map(MtpOut::same)
     }
 
     fn reset(&mut self) {
@@ -181,10 +185,9 @@ impl SelfSpeculative for ModelWeights {
 mod tests {
     use super::*;
     use crate::models::qwen3_5_mtp::fixtures::{positions, shared_heads, synthetic};
-    use crate::models::qwen3_5_mtp::{AnchorPositions, Mrope};
-    use crate::speculative::{
-        SpeculativeKvCache, SpeculativeProposeBatchCtx, SpeculativeSharedHeads,
-    };
+    use crate::models::qwen3_5_mtp::AnchorPositions;
+    use crate::sequence::test_sequence;
+    use crate::speculative::{SpeculativeKvCache, SpeculativeProposeBatchCtx};
     use hanzo_ml::quantized::{gguf_file, GgmlDType, QTensor};
     use rand::SeedableRng;
     use rand_isaac::Isaac64Rng;
@@ -297,18 +300,26 @@ mod tests {
             &hidden,
             &positions(&[[7, 7, 7], [9, 9, 9]], &device)?,
         )?;
-        assert_eq!(first.dims(), &[batch, 1, HIDDEN]);
+        assert_eq!(first.head.dims(), &[batch, 1, HIDDEN]);
         assert!(
-            first.abs()?.sum_all()?.to_scalar::<f32>()? > 0.0,
+            first.head.abs()?.sum_all()?.to_scalar::<f32>()? > 0.0,
             "the head returned an all-zero hidden state"
+        );
+        // Qwen3.5's head carries the state it hands `lm_head`.
+        assert_eq!(
+            (&first.carry - &first.head)?
+                .abs()?
+                .max_all()?
+                .to_scalar::<f32>()?,
+            0.0
         );
 
         let second = head.step(
             &embeds,
-            &first,
+            &first.carry,
             &positions(&[[8, 8, 8], [10, 10, 10]], &device)?,
         )?;
-        assert_eq!(second.dims(), &[batch, 1, HIDDEN]);
+        assert_eq!(second.head.dims(), &[batch, 1, HIDDEN]);
 
         // A reset chain starts over: the same inputs at the same positions give the first step back.
         head.reset();
@@ -317,7 +328,10 @@ mod tests {
             &hidden,
             &positions(&[[7, 7, 7], [9, 9, 9]], &device)?,
         )?;
-        let drift = (&again - &first)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        let drift = (&again.head - &first.head)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
         assert!(drift < 1e-5, "reset left {drift} of the old chain behind");
         Ok(())
     }
@@ -339,6 +353,7 @@ mod tests {
 
         let batch = 2;
         let hidden = synthetic(batch, HIDDEN, 41, &device)?.reshape((batch, 1, HIDDEN))?;
+        let (first, second) = (test_sequence(vec![1], None), test_sequence(vec![2], None));
         let sampled = [5u32, 11];
         let base_lens = [8usize, 12];
         let seq_ids = [0usize, 1];
@@ -350,7 +365,7 @@ mod tests {
                     sampled_tokens_emitted: true,
                     seq_ids: &seq_ids,
                     base_lens: &base_lens,
-                    sequences: &[],
+                    sequences: &[&first, &second],
                     cache: SpeculativeKvCache::Normal,
                     target_hiddens: hidden,
                     target_hidden_layers: None,

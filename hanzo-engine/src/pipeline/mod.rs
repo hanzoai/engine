@@ -74,7 +74,7 @@ pub use loaders::{
     QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3EmbeddingLoader,
     Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3OmniLoader, Qwen3VLLoader, Qwen3VLMoELoader,
     Qwen3_5Loader, Qwen3_5MoeLoader, QwenImageLoader, SmolLm3Loader, Starcoder2Loader, TokenSource,
-    VLlama4Loader, VLlamaLoader, VoxtralLoader,
+    VLlama4Loader, VLlamaLoader, VoxtralLoader, Zen6Loader,
 };
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
@@ -245,6 +245,9 @@ pub(crate) struct ModelForwardContext<'a> {
     context_lens: &'a [(usize, usize)],
     position_ids: &'a [usize],
     flash_params: &'a FlashParams,
+    /// The tokens before each sequence's chunk that an n-gram embedding hashes with its first
+    /// tokens (`ModelInputs::prior`); empty for models that need none.
+    prior: &'a [Vec<u32>],
 }
 
 #[allow(dead_code)]
@@ -263,6 +266,7 @@ impl<'a> ModelForwardContext<'a> {
             context_lens,
             position_ids,
             flash_params,
+            prior: &[],
         }
     }
 
@@ -280,7 +284,17 @@ impl<'a> ModelForwardContext<'a> {
             context_lens,
             position_ids,
             flash_params,
+            prior: &[],
         }
+    }
+
+    /// The same context carrying each sequence's n-gram prior.
+    pub(crate) fn with_prior(self, prior: &'a [Vec<u32>]) -> Self {
+        Self { prior, ..self }
+    }
+
+    pub(crate) fn prior(&self) -> &[Vec<u32>] {
+        self.prior
     }
 
     pub(crate) fn cache(&self) -> &ForwardCache<'a> {
@@ -562,6 +576,14 @@ pub struct GeneralMetadata {
 }
 
 impl GeneralMetadata {
+    /// The longest sequence this pipeline can hold: the model's window, or the paged KV pool when
+    /// that is smaller. A prompt past it can never be scheduled, so admission refuses it.
+    pub fn context_len(&self) -> usize {
+        self.cache_config.as_ref().map_or(self.max_seq_len, |c| {
+            self.max_seq_len.min(c.block_size * c.num_gpu_blocks)
+        })
+    }
+
     pub fn tok_env(&self) -> Option<TokEnv> {
         self.llg_factory.as_ref().map(|f| f.tok_env().clone())
     }
@@ -610,6 +632,12 @@ pub trait CacheManagerMixin {
         load_preallocated_cache: bool,
     );
     fn cache(&self) -> &EitherCache;
+    /// Whether the model cache is hybrid (recurrent layers beside attention).
+    /// A pipeline that holds no cache at all (embeddings) answers false
+    /// without being asked for one.
+    fn has_hybrid_cache(&self) -> bool {
+        self.cache().is_hybrid()
+    }
 }
 
 pub trait MetadataMixin {
@@ -860,7 +888,7 @@ fn announce_forward<P: Pipeline + ?Sized>(
         .map(|&idx| *input_seqs[idx].id())
         .collect();
     pipeline.note_forward_sequences(&ids);
-    if pipeline.cache().is_hybrid() {
+    if pipeline.has_hybrid_cache() {
         let verify_len =
             crate::speculative::staging::staged_batch_width(input_seqs).map(|width| width + 1);
         pipeline.cache().hybrid().expect_verify(verify_len);
@@ -1241,7 +1269,7 @@ pub trait Pipeline:
                 // recurrent_state_idx so recurrent layers are active during forward.
                 // Paged attention manages KV caches separately, but recurrent state
                 // pool access still needs the indices tensor to be set.
-                if self.cache().is_hybrid() {
+                if self.has_hybrid_cache() {
                     let mut hybrid_cache = self.cache().hybrid();
                     let recurrent_device = hybrid_cache.caches.iter().find_map(|c| {
                         if let HybridLayerCache::Recurrent(pool) = c {
@@ -1270,7 +1298,7 @@ pub trait Pipeline:
                 let chunk_size = if is_prompt
                     && !return_raw_logits
                     && !self.get_metadata().is_xlora
-                    && self.device().is_cuda()
+                    && (self.device().is_cuda() || self.device().is_rocm())
                 {
                     Some(DEFAULT_PAGED_PREFILL_CHUNK_SIZE)
                 } else {

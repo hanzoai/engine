@@ -92,7 +92,7 @@ pub const DEFAULT_MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 /// let router = RouterBuilder::new()
 ///     .with_hanzo(hanzo_instance)
 ///     .with_include_swagger_routes(false)
-///     .with_base_path("/api/mistral")
+///     .with_base_path("/engine")
 ///     .build()
 ///     .await?;
 /// ```

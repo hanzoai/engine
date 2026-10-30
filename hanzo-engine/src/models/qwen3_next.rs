@@ -26,7 +26,9 @@ use crate::{
     layers::{embedding, linear_no_bias, CausalMasker, GemmaRmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     moe::{MoEExperts, MoEExpertsConfig},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        AttentionImplementation, KvLayers, ModelConfigLike, ModelConfigMetadata, PagedAttention,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, ForwardMaskCache, IsqModel, KvCache, ModelForwardContext,
@@ -104,6 +106,17 @@ impl Config {
                     LayerType::LinearAttention
                 }
             })
+            .collect()
+    }
+
+    /// Decoder layers that hold a KV cache, in cache order: the linear-attention layers keep
+    /// their state in the recurrent pool instead.
+    pub fn attention_layers(&self) -> Vec<usize> {
+        self.layer_types()
+            .into_iter()
+            .enumerate()
+            .filter(|(_, t)| matches!(t, LayerType::FullAttention))
+            .map(|(i, _)| i)
             .collect()
     }
 
@@ -256,7 +269,7 @@ impl FullAttention {
         attention_mask: &AttentionMask,
         kv_cache: &mut KvCache,
         ctx: &mut ModelForwardContext<'_>,
-        layer_idx: usize,
+        kv_layer: usize,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
         let (q_gate, k, v) =
@@ -298,7 +311,7 @@ impl FullAttention {
             self.k_norm.eps(),
             rope_positions,
         )?;
-        let metadata = ctx.paged_layer(layer_idx);
+        let metadata = ctx.paged_layer(kv_layer);
 
         // Standard attention
         let mut y = match &self.paged_attn {
@@ -568,7 +581,7 @@ impl DecoderLayer {
         attention_mask: &AttentionMask,
         kv_cache: &mut KvCache,
         ctx: &mut ModelForwardContext<'_>,
-        layer_idx: usize,
+        kv_layer: usize,
     ) -> Result<Tensor> {
         let attn = match &self.layer_impl {
             LayerImpl::FullAttention(attn) => attn,
@@ -576,7 +589,7 @@ impl DecoderLayer {
         };
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
-        let attn_out = attn.forward(&x, attention_mask, kv_cache, ctx, layer_idx)?;
+        let attn_out = attn.forward(&x, attention_mask, kv_cache, ctx, kv_layer)?;
         let x = (attn_out + residual)?;
         let residual = &x;
         let normed = self.post_attention_layernorm.forward(&x)?;
@@ -607,6 +620,7 @@ pub struct Model {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
+    kv_layers: Vec<usize>,
     norm: GemmaRmsNorm,
     lm_head: Arc<dyn QuantMethod>,
     kv_cache: EitherCache,
@@ -799,10 +813,10 @@ impl Model {
             })
             .collect();
 
-        let hybrid_cache_config = HybridCacheConfig {
-            layer_types: pipeline_layer_types,
-            max_seq_len: cfg.max_position_embeddings,
-            recurrent: RecurrentLayerConfig {
+        let hybrid_cache_config = HybridCacheConfig::uniform(
+            pipeline_layer_types,
+            cfg.max_position_embeddings,
+            RecurrentLayerConfig {
                 conv_dim: cfg.linear_conv_dim(),
                 conv_width: cfg.linear_conv_kernel_dim,
                 state_dims: vec![
@@ -810,16 +824,15 @@ impl Model {
                     cfg.linear_key_head_dim,
                     cfg.linear_value_head_dim,
                 ],
+                conv_dtype: vb_m.dtype(),
+                state_dtype: vb_m.dtype(),
             },
-        };
+        );
 
         let pipeline_cache = Arc::new(Mutex::new(
-            HybridCache::new(
-                hybrid_cache_config,
-                vb_m.dtype(),
-                &normal_loading_metadata.real_device,
-            )
-            .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e)))?,
+            HybridCache::new(hybrid_cache_config, &normal_loading_metadata.real_device).map_err(
+                |e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e)),
+            )?,
         ));
 
         let num_attention_heads = cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size();
@@ -828,6 +841,7 @@ impl Model {
             embed_tokens,
             layers,
             layer_types,
+            kv_layers: cfg.attention_layers(),
             norm,
             lm_head,
             kv_cache: EitherCache::Hybrid(pipeline_cache),
@@ -894,6 +908,9 @@ impl Model {
         };
         let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
 
+        // The paged cache holds one K/V pair per attention layer, so an attention layer reads it
+        // at its ordinal among attention layers, not at its decoder index.
+        let mut kv_layer = 0;
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             x = self.mapper.map(x, layer_idx)?;
 
@@ -903,14 +920,9 @@ impl Model {
                         hybrid_cache.get_mut(layer_idx)
                     {
                         let mask_for_layer = &mask.get(x.device());
-                        x = layer.forward_attention(
-                            &x,
-                            mask_for_layer,
-                            kv_cache,
-                            ctx,
-                            layer_idx,
-                        )?;
+                        x = layer.forward_attention(&x, mask_for_layer, kv_cache, ctx, kv_layer)?;
                     }
+                    kv_layer += 1;
                 }
                 LayerImpl::LinearAttention(_) => {
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(layer_idx)
@@ -1055,6 +1067,9 @@ impl NormalModel for Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        Arc::new(KvLayers::new(self.cfg.clone(), self.kv_layers.clone()))
     }
 }
 

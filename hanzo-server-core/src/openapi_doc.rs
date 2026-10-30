@@ -71,7 +71,7 @@ use hanzo_train::{
 /// )]
 /// struct ApiDoc;
 ///
-/// let mistral_base_path = "/api/mistral";
+/// let mistral_base_path = "/engine";
 /// let mistral_doc = get_openapi_doc(Some(mistral_base_path));
 /// let mut api_docs = ApiDoc::openapi();
 /// api_docs.merge(mistral_doc);

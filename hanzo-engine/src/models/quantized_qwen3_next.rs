@@ -72,7 +72,7 @@ use crate::pipeline::{extract_logits, EitherCache, KvCache};
 use crate::pipeline_parallel::{
     pp_head_forward, use_pipeline_parallel, PipelineParallelModel, RingLayout,
 };
-use crate::utils::gguf_metadata::ContentMetadata;
+use crate::utils::gguf_metadata::{ContentMetadata, DEFAULT_FULL_ATTENTION_INTERVAL};
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 use hanzo_ml::{DType, Device, Result, Tensor, D};
@@ -84,7 +84,6 @@ use crate::kv_cache::{
 };
 
 const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
-const DEFAULT_FULL_ATTENTION_INTERVAL: usize = 4;
 const DEFAULT_PARTIAL_ROTARY_FACTOR: f64 = 0.25;
 const L2_NORM_EPS: f64 = 1e-6;
 
@@ -263,7 +262,6 @@ struct QGatedDeltaNet {
     key_dim: usize,
     value_dim: usize,
 }
-
 
 /// Rows produced by the conv state spliced onto the left of a continuation are context, not output.
 fn trim_carried(out: &Tensor, carried: usize) -> Result<Tensor> {
@@ -446,7 +444,10 @@ impl QGatedDeltaNet {
             0
         };
         let x_t = if carried > 0 {
-            let left = cache.conv_state.narrow(D::Minus1, 1, carried)?;
+            let left = cache
+                .conv_state
+                .narrow(D::Minus1, 1, carried)?
+                .to_dtype(x.dtype())?;
             Tensor::cat(&[&left, &x.transpose(1, 2)?], D::Minus1)?.contiguous()?
         } else {
             x.transpose(1, 2)?.contiguous()?
@@ -644,6 +645,7 @@ impl PropsGGUF {
             full_attention_interval: c
                 .get_value::<u32>("full_attention_interval")
                 .ok()
+                .filter(|i| *i > 0)
                 .map(|x| x as usize)
                 .unwrap_or(DEFAULT_FULL_ATTENTION_INTERVAL),
             conv_kernel: c
@@ -920,17 +922,19 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 LayerType::LinearAttention => HybridLayerType::Recurrent,
             })
             .collect();
-        let hybrid_cache_config = HybridCacheConfig {
-            layer_types: pipeline_layer_types,
-            max_seq_len: props.max_seq_len,
-            recurrent: RecurrentLayerConfig {
+        let hybrid_cache_config = HybridCacheConfig::uniform(
+            pipeline_layer_types,
+            props.max_seq_len,
+            RecurrentLayerConfig {
                 conv_dim,
                 conv_width: props.conv_kernel,
                 state_dims: vec![props.num_v_heads, props.head_k_dim, props.head_v_dim],
+                conv_dtype: dtype,
+                state_dtype: dtype,
             },
-        };
+        );
         let pipeline_cache = Arc::new(Mutex::new(
-            HybridCache::new(hybrid_cache_config, dtype, device)
+            HybridCache::new(hybrid_cache_config, device)
                 .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {e}")))?,
         ));
 
@@ -992,15 +996,11 @@ impl ModelWeights {
             self.dtype,
             &CausalMaskConfig::gguf(),
         )?;
-        let mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
-            mask
-        } else {
-            AttentionMask::None
-        };
+        let mask = crate::layers_masker::paged_chunk_mask(
+            mask,
+            metadata.as_ref().map(|(_, meta)| *meta),
+            input_ids,
+        )?;
         let mask = if let Some(ref mapper) = self.mapper {
             DeviceMappedMask::new(mask, &**mapper)?
         } else {
@@ -1027,6 +1027,9 @@ impl ModelWeights {
             }
         };
 
+        // The paged cache holds one K/V pair per attention layer, so an attention layer reads it
+        // at its ordinal among attention layers, not at its decoder index.
+        let mut kv_layer = 0;
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 x = mapper.map(x, layer_idx)?;
@@ -1038,7 +1041,8 @@ impl ModelWeights {
                 LayerImpl::FullAttention(attn) => {
                     let paged = metadata
                         .as_ref()
-                        .map(|(kv_cache, meta)| (kv_cache[layer_idx].clone(), *meta));
+                        .map(|(kv_cache, meta)| (kv_cache[kv_layer].clone(), *meta));
+                    kv_layer += 1;
                     let Some(HybridLayerCache::Attention(kv_cache)) =
                         hybrid_cache.get_mut(layer_idx)
                     else {

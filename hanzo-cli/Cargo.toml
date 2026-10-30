@@ -21,6 +21,7 @@ doc = false
 [dependencies]
 hanzo-engine = { workspace = true }
 hanzo-server-core = { workspace = true }
+hanzo-bench = { workspace = true }
 hanzo = { workspace = true }
 hanzo-sandbox = { workspace = true }
 hanzo-ml = { workspace = true }
@@ -70,20 +71,20 @@ hanzo-kernel = { version = "=0.2.20", default-features = false }
 
 [features]
 default = ["code-execution"]
-cuda = ["hanzo-engine/cuda", "hanzo-server-core/cuda"]
-vulkan = ["hanzo-engine/vulkan", "hanzo-server-core/vulkan"]
-rocm = ["hanzo-engine/rocm", "hanzo-server-core/rocm"]
-nccl = ["hanzo-engine/nccl", "hanzo-server-core/nccl"]
-cudnn = ["hanzo-engine/cudnn", "hanzo-server-core/cudnn"]
-flash-attn = ["cuda", "hanzo-engine/flash-attn", "hanzo-server-core/flash-attn"]
+cuda = ["hanzo-engine/cuda", "hanzo-server-core/cuda", "hanzo-bench/cuda"]
+vulkan = ["hanzo-engine/vulkan", "hanzo-server-core/vulkan", "hanzo-bench/vulkan"]
+rocm = ["hanzo-engine/rocm", "hanzo-server-core/rocm", "hanzo-bench/rocm"]
+nccl = ["hanzo-engine/nccl", "hanzo-server-core/nccl", "hanzo-bench/nccl"]
+cudnn = ["hanzo-engine/cudnn", "hanzo-server-core/cudnn", "hanzo-bench/cudnn"]
+flash-attn = ["cuda", "hanzo-engine/flash-attn", "hanzo-server-core/flash-attn", "hanzo-bench/flash-attn"]
 flash-attn-v3 = ["cuda", "hanzo-engine/flash-attn-v3", "hanzo-server-core/flash-attn-v3"]
 # Convenience: build CUDA with every optimization on (flash-attn + cuDNN) so a max-opt build can't
 # accidentally omit them. `cuda` alone is the bare backend. metal/vulkan already bundle their opts.
 cuda-full = ["cuda", "flash-attn", "cudnn"]
-accelerate = ["hanzo-engine/accelerate", "hanzo-server-core/accelerate"]
-metal = ["hanzo-engine/metal", "hanzo-server-core/metal"]
-mkl = ["hanzo-engine/mkl", "hanzo-server-core/mkl"]
-ring = ["hanzo-engine/ring", "hanzo-server-core/ring"]
+accelerate = ["hanzo-engine/accelerate", "hanzo-server-core/accelerate", "hanzo-bench/accelerate"]
+metal = ["hanzo-engine/metal", "hanzo-server-core/metal", "hanzo-bench/metal"]
+mkl = ["hanzo-engine/mkl", "hanzo-server-core/mkl", "hanzo-bench/mkl"]
+ring = ["hanzo-engine/ring", "hanzo-server-core/ring", "hanzo-bench/ring"]
 code-execution = ["hanzo-engine/code-execution", "hanzo-server-core/code-execution"]
 license-enforce = ["hanzo-engine/license-enforce", "hanzo-server-core/license-enforce"]
 license-app-hanzo = ["hanzo-engine/license-app-hanzo", "hanzo-server-core/license-app-hanzo"]

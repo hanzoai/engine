@@ -44,8 +44,9 @@ pub fn embedding(
     vb: ShardedVarBuilder,
     config: &Option<QuantizedConfig>,
 ) -> Result<Embedding> {
-    // AFQ quantized applies quantization to the embeddings.
-    let embeddings = if let Some(QuantizedConfig::Afq { .. }) = config {
+    // AFQ quantizes the embeddings too, unless its recipe leaves this module unquantized.
+    let afq = config.as_ref().and_then(|c| c.afq_at(&vb.prefix()));
+    let embeddings = if afq.is_some() {
         let afq_layer =
             AfqLayer::afq_linear_b(out_size, in_size, config.as_ref().unwrap(), false, vb)?;
         afq_layer.dequantize_w()?
@@ -539,6 +540,11 @@ impl QRmsNorm {
             eps: eps as f64,
             weight,
         })
+    }
+
+    /// The norm with `weight` as given (e.g. a checkpoint's Gemma `1 + w`, formed in f32).
+    pub fn from_weight(weight: Tensor, eps: f64) -> Self {
+        Self { eps, weight }
     }
 
     pub fn weight(&self) -> &Tensor {
@@ -1654,6 +1660,44 @@ impl Qwen3VLRotaryEmbedding {
         k_eps: f64,
     ) -> Result<(Tensor, Tensor)> {
         qk_rms_norm_mrope(q, k, q_weight, k_weight, q_eps, k_eps, cos, sin, true)
+    }
+
+    /// q/k RMSNorm then NeoX partial RoPE with vLLM's fused `fused_qk_rmsnorm_rope_gate` rounding
+    /// (`fused_qk_norm_rope.py:67-99`): per head the norm is computed in f32 and rounded to the
+    /// activation dtype; RoPE then rotates the first `2·cos.dim(-1)` dims in f32 against the
+    /// (activation-dtype) cos/sin table and rounds once; the other dims keep the rounded norm.
+    /// `q`, `k`: `[b, heads, s, d]`; weights f32 `[d]` (the Gemma `1 + w`); cos/sin `[b, s, r/2]`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_qk_norm_served(
+        &self,
+        (cos, sin): &(Tensor, Tensor),
+        q: &Tensor,
+        k: &Tensor,
+        q_weight: &Tensor,
+        k_weight: &Tensor,
+        eps: f64,
+    ) -> Result<(Tensor, Tensor)> {
+        let one = |x: &Tensor, w: &Tensor| -> Result<Tensor> {
+            let dtype = x.dtype();
+            let (_, _, _, d) = x.dims4()?;
+            let half = cos.dim(D::Minus1)?;
+            let x32 = x.to_dtype(DType::F32)?;
+            let inv = ((x32.sqr()?.sum_keepdim(D::Minus1)? / d as f64)? + eps)?.sqrt()?.recip()?;
+            let xn = x32
+                .broadcast_mul(&inv)?
+                .broadcast_mul(&w.to_dtype(DType::F32)?)?
+                .to_dtype(dtype)?
+                .to_dtype(DType::F32)?;
+            let c = cos.to_dtype(DType::F32)?.unsqueeze(1)?;
+            let s = sin.to_dtype(DType::F32)?.unsqueeze(1)?;
+            let x1 = xn.narrow(D::Minus1, 0, half)?;
+            let x2 = xn.narrow(D::Minus1, half, half)?;
+            let o1 = (x1.broadcast_mul(&c)? - x2.broadcast_mul(&s)?)?;
+            let o2 = (x2.broadcast_mul(&c)? + x1.broadcast_mul(&s)?)?;
+            let pass = xn.narrow(D::Minus1, 2 * half, d - 2 * half)?;
+            Tensor::cat(&[o1, o2, pass], D::Minus1)?.to_dtype(dtype)
+        };
+        Ok((one(q, q_weight)?, one(k, k_weight)?))
     }
 }
 

@@ -84,10 +84,24 @@ extern "C" {
         stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
-    // FP8 Matmul kernels (for forward method)
+    // W8A8: per-group FP8 activations (codes, f32 scales [M, K/128]) times block-FP8 weights.
+    pub(crate) fn launch_fp8_matmul_f32(
+        qa: *const u8,
+        sa: *const f32,
+        weight: *const u8,
+        weight_scale: *const f32,
+        output: *mut f32,
+        m: i32,
+        n: i32,
+        k: i32,
+        scale_row_stride: i32,
+        block_size_y: i32,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
+    );
     pub(crate) fn launch_fp8_matmul_f16(
-        input: *const f16,
-        weight: *const F8E4M3,
+        qa: *const u8,
+        sa: *const f32,
+        weight: *const u8,
         weight_scale: *const f32,
         output: *mut f16,
         m: i32,
@@ -95,13 +109,12 @@ extern "C" {
         k: i32,
         scale_row_stride: i32,
         block_size_y: i32,
-        block_size_x: i32,
         stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
-
     pub(crate) fn launch_fp8_matmul_bf16(
-        input: *const bf16,
-        weight: *const F8E4M3,
+        qa: *const u8,
+        sa: *const f32,
+        weight: *const u8,
         weight_scale: *const f32,
         output: *mut bf16,
         m: i32,
@@ -109,17 +122,17 @@ extern "C" {
         k: i32,
         scale_row_stride: i32,
         block_size_y: i32,
-        block_size_x: i32,
         stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
 
-    // FP8 Indexed MoE GEMM kernels (for gather_forward method)
-    pub(crate) fn launch_fp8_indexed_moe_gemm_f16(
-        input: *const f16,
-        weights: *const F8E4M3,
+    // W8A8 indexed MoE GEMM (for gather_forward).
+    pub(crate) fn launch_fp8_indexed_moe_gemm_f32(
+        qa: *const u8,
+        sa: *const f32,
+        weights: *const u8,
         weight_scales: *const f32,
         indices: *const u32,
-        output: *mut f16,
+        output: *mut f32,
         num_tokens: i32,
         topk: i32,
         num_experts: i32,
@@ -127,14 +140,30 @@ extern "C" {
         k: i32,
         scale_row_stride: i32,
         block_size_y: i32,
-        block_size_x: i32,
         input_has_topk_dim: bool,
         stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );
-
+    pub(crate) fn launch_fp8_indexed_moe_gemm_f16(
+        qa: *const u8,
+        sa: *const f32,
+        weights: *const u8,
+        weight_scales: *const f32,
+        indices: *const u32,
+        output: *mut f16,
+        num_tokens: i32,
+        topk: i32,
+        num_experts: i32,
+        n: i32,
+        k: i32,
+        scale_row_stride: i32,
+        block_size_y: i32,
+        input_has_topk_dim: bool,
+        stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
+    );
     pub(crate) fn launch_fp8_indexed_moe_gemm_bf16(
-        input: *const bf16,
-        weights: *const F8E4M3,
+        qa: *const u8,
+        sa: *const f32,
+        weights: *const u8,
         weight_scales: *const f32,
         indices: *const u32,
         output: *mut bf16,
@@ -145,7 +174,6 @@ extern "C" {
         k: i32,
         scale_row_stride: i32,
         block_size_y: i32,
-        block_size_x: i32,
         input_has_topk_dim: bool,
         stream: hanzo_ml::cuda::cudarc::driver::sys::CUstream,
     );

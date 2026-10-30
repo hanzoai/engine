@@ -151,32 +151,6 @@ impl AutoDeviceMapParams {
     }
 }
 
-fn calculate_key_block_shape(
-    model_config: &dyn ModelConfigLike,
-    dtype: DType,
-    block_size: usize,
-) -> (usize, usize, usize, usize) {
-    let element_size = dtype.size_in_bytes();
-    let x = 16 / element_size;
-    (
-        model_config.num_kv_heads(),
-        model_config.k_head_dim() / x,
-        block_size,
-        x,
-    )
-}
-
-fn calculate_value_block_shape(
-    model_config: &dyn ModelConfigLike,
-    block_size: usize,
-) -> (usize, usize, usize) {
-    (
-        model_config.num_kv_heads(),
-        model_config.v_head_dim(),
-        block_size,
-    )
-}
-
 macro_rules! b_to_mb {
     ($x:expr) => {
         $x / (1024 * 1024)
@@ -212,6 +186,15 @@ pub fn get_device_layers(
     };
 
     let mut remaining = total_model_size_in_bytes;
+    // Memory that is neither weights nor KV: every concurrent sequence's recurrent state, and
+    // the recurrent-prefix snapshots beside them. It lives on the first device, with the
+    // non-mapped parts.
+    let state_per_seq = loader.recurrent_state_bytes_per_seq(config)?;
+    let fixed = if state_per_seq > 0 {
+        state_per_seq * params.max_batch_size() + crate::prefix_cacher::PAGED_RECURRENT_BUDGET_BYTES
+    } else {
+        0
+    };
     let max_seq_len = match params {
         AutoDeviceMapParams::Text { max_seq_len, .. }
         | AutoDeviceMapParams::Multimodal { max_seq_len, .. } => *max_seq_len,
@@ -222,7 +205,8 @@ pub fn get_device_layers(
     };
 
     let model_cfg = loader.model_config(config)?;
-    let kv_cache_elems = match paged_attn_config {
+    // Tokens every cache entry holds, and the bytes per element: the paged cache's own dtype.
+    let (kv_tokens, kv_dtype_size) = match paged_attn_config {
         Some(cfg) => {
             // For MbAmount, clamp to available memory so the capacity check
             // below stays consistent. Utilization and ContextSize pass through
@@ -259,9 +243,7 @@ pub fn get_device_layers(
                 effective_mem_gpu,
                 Some(cfg.block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE)),
                 dtype,
-                paged_attn_config
-                    .map(|cfg| cfg.cache_type)
-                    .unwrap_or_default(),
+                cfg.cache_type,
                 &*model_cfg,
                 &devices[0],
                 &devices.iter().map(|d| Some(d.clone())).collect::<Vec<_>>(),
@@ -269,31 +251,23 @@ pub fn get_device_layers(
                 Some(total_model_size_in_bytes),
                 Some(max_seq_len * max_batch_size),
             )?;
-            let key_shape = calculate_key_block_shape(&*model_cfg, dtype, cache.block_size);
-            let key_sz =
-                cache.num_gpu_blocks * key_shape.0 * key_shape.1 * key_shape.2 * key_shape.3;
-            let val_shape = calculate_value_block_shape(&*model_cfg, cache.block_size);
-            let val_sz = cache.num_gpu_blocks * val_shape.0 * val_shape.1 * val_shape.2;
-            key_sz + val_sz
+            (
+                cache.num_gpu_blocks * cache.block_size,
+                cfg.cache_type.to_dtype(dtype).size_in_bytes(),
+            )
         }
-        None => {
-            let key_shape = [
-                max_batch_size,
-                model_cfg.num_kv_heads(),
-                max_seq_len,
-                model_cfg.k_head_dim(),
-            ];
-            let val_shape = [
-                max_batch_size,
-                model_cfg.num_kv_heads(),
-                max_seq_len,
-                model_cfg.v_head_dim(),
-            ];
-            key_shape.iter().product::<usize>() + val_shape.iter().product::<usize>()
-        }
+        None => (max_batch_size * max_seq_len, dtype.size_in_bytes()),
     };
-    let kv_cache_bytes = kv_cache_elems * dtype.size_in_bytes();
-
+    // Each block is charged its own cache entry at its own size; a block with no entry (a
+    // recurrent layer of a hybrid) is charged nothing.
+    let mut kv_per_layer = vec![0usize; num_layers];
+    for layer_idx in model_cfg.kv_layers() {
+        if let Some(block) = model_cfg.kv_reader(layer_idx).filter(|&b| b < num_layers) {
+            kv_per_layer[block] += kv_tokens
+                * model_cfg.kv_cache_elements_per_token_for_layer(layer_idx)
+                * kv_dtype_size;
+        }
+    }
     // prepare available memory per device, CPU fallback last (unless unified memory)
     let has_unified_memory = devices.iter().any(crate::utils::normal::is_integrated_gpu);
 
@@ -341,10 +315,11 @@ pub fn get_device_layers(
         // 3) common case, iteratively find the optimal amount of layers to put on the nth device
         //   - if this is the first dev: must hold the non-mapped act and non-mapped model
         //   - otherwise, must hold the mapped act
+        let kv_rest: usize = kv_per_layer[layer..].iter().sum();
         let required_whole_capacity = if ordinal == 0 {
-            remaining + non_mapped_max.max(mapped_max) + kv_cache_bytes * (num_layers - layer)
+            remaining + non_mapped_max.max(mapped_max) + kv_rest + fixed
         } else {
-            remaining + mapped_max + kv_cache_bytes * (num_layers - layer)
+            remaining + mapped_max + kv_rest
         };
 
         let layers_on_dev = if cap >= required_whole_capacity {
@@ -355,11 +330,11 @@ pub fn get_device_layers(
             let mut used_weight_bytes = 0;
             let mut count = 0;
             if ordinal == 0 {
-                used = used.max(non_mapped_max) + non_mapped_size_in_bytes;
+                used = used.max(non_mapped_max) + non_mapped_size_in_bytes + fixed;
                 used_weight_bytes += non_mapped_size_in_bytes;
             }
             while let Some(&sz) = layer_sizes_in_bytes.last() {
-                let delta = sz + kv_cache_bytes;
+                let delta = sz + kv_per_layer[layer + count];
                 if used + delta > cap {
                     break;
                 }

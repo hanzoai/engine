@@ -41,7 +41,7 @@ async function handleImageUpload(file) {
   fd.append('image', file);
   
   try {
-    const r = await fetch('/api/upload_image', { method: 'POST', body: fd });
+    const r = await fetch('/v1/upload_image', { method: 'POST', body: fd });
     if (r.ok) {
       const j = await r.json();
       // Record the server upload URL for use on send
@@ -157,7 +157,7 @@ async function handleTextUpload(file) {
   fd.append('file', file);
   
   try {
-    const r = await fetch('/api/upload_text', { method: 'POST', body: fd });
+    const r = await fetch('/v1/upload_text', { method: 'POST', body: fd });
     
     if (r.ok) {
       const response = await r.json();
@@ -274,7 +274,7 @@ function initStopButton() {
     if (typeof assistantBuf !== 'undefined' && assistantBuf) {
       if (typeof currentChatId !== 'undefined' && currentChatId) {
         try {
-          await fetch('/api/append_message', {
+          await fetch('/v1/append_message', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: currentChatId, role: 'assistant', content: assistantBuf })
@@ -340,7 +340,7 @@ async function handleAudioUpload(file) {
   fd.append('audio', file);
 
   try {
-    const r = await fetch('/api/upload_audio', { method: 'POST', body: fd });
+    const r = await fetch('/v1/upload_audio', { method: 'POST', body: fd });
     if (r.ok) {
       const j = await r.json();
       preview.dataset.uploadUrl = j.url;

@@ -633,6 +633,7 @@ macro_rules! normal_model_loader {
             &$config,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
+                weights: $paths.get_weight_filenames().to_vec(),
                 mapper: $mapper,
                 loading_isq: $loading_isq,
                 real_device: $real_device,
@@ -662,6 +663,7 @@ macro_rules! normal_model_loader_sharded {
             &$config,
             $vb,
             $crate::pipeline::NormalLoadingMetadata {
+                weights: Vec::new(),
                 mapper: $mapper,
                 loading_isq: $loading_isq,
                 real_device: $real_device,
@@ -722,6 +724,7 @@ macro_rules! multimodal_normal_model_loader {
             &$config,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
+                weights: $paths.get_weight_filenames().to_vec(),
                 mapper: $mapper,
                 loading_isq: $loading_isq,
                 real_device: $real_device,
@@ -751,6 +754,7 @@ macro_rules! multimodal_normal_model_loader_sharded {
             &$config,
             $vb,
             $crate::pipeline::NormalLoadingMetadata {
+                weights: Vec::new(),
                 mapper: $mapper,
                 loading_isq: $loading_isq,
                 real_device: $real_device,
@@ -805,6 +809,7 @@ macro_rules! embedding_normal_model_loader {
             &$config,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
+                weights: $paths.get_weight_filenames().to_vec(),
                 mapper: $mapper,
                 loading_isq: $loading_isq,
                 real_device: $real_device,
@@ -833,6 +838,7 @@ macro_rules! embedding_normal_model_loader_sharded {
             &$config,
             $vb,
             $crate::pipeline::NormalLoadingMetadata {
+                weights: Vec::new(),
                 mapper: $mapper,
                 loading_isq: $loading_isq,
                 real_device: $real_device,
@@ -906,6 +912,7 @@ macro_rules! xlora_model_loader {
             Some(xlora_config.as_ref().unwrap().clone()),
             xlora_order.as_ref().unwrap().clone(),
             $crate::pipeline::NormalLoadingMetadata {
+                weights: $paths.get_weight_filenames().to_vec(),
                 mapper: $mapper,
                 loading_isq: $loading_isq,
                 real_device: $real_device,
@@ -994,6 +1001,7 @@ macro_rules! lora_model_loader {
             &$config,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
+                weights: $paths.get_weight_filenames().to_vec(),
                 mapper: $mapper,
                 loading_isq: $loading_isq,
                 real_device: $real_device,

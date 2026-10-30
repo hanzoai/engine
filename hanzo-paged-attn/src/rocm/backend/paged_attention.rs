@@ -1,4 +1,5 @@
-// ROCm/HIP backend for PagedAttention v1 decode + reshape_and_cache.
+// ROCm/HIP backend for PagedAttention decode (v1, and the partitioned v2 long
+// contexts need) + reshape_and_cache.
 //
 // This mirrors src/cuda/backend/paged_attention.rs, retargeted onto hanzo-ml's
 // RocmStorage / RocmDevice. The kernels live in ../../rocm/*.hip.cpp and are
@@ -36,6 +37,21 @@ fn slice_ptr_at(slice: &RocmStorageSlice, offset: usize) -> *const std::ffi::c_v
         }
     }
     .cast_const()
+}
+
+/// Tokens per v2 partition. Must equal `PARTITION_SIZE` in paged_attention.hip.cpp:
+/// the scratch sized here is indexed there.
+const V2_PARTITION_SIZE: usize = 512;
+
+/// Reads a launcher's HIP status, naming the kernel, so a refused launch is reported
+/// where it happened rather than by the next kernel to touch the device.
+fn launched(status: c_int, kernel: &str, max_context_len: usize) -> Result<()> {
+    if status != 0 {
+        hanzo_ml::bail!(
+            "{kernel} launch failed: HIP error {status} (max_context_len {max_context_len})"
+        );
+    }
+    Ok(())
 }
 
 struct PagedAttention {
@@ -195,7 +211,7 @@ impl PagedAttention {
                     unsafe { q_mem.offset_ptr(q_l.start_offset()) as *const std::ffi::c_void };
                 let out = dev.alloc::<$ty>(elem_count)?;
                 let out_ptr = out.as_ptr() as *const std::ffi::c_void;
-                unsafe {
+                let status = unsafe {
                     ffi::$func(
                         out_ptr,
                         q_ptr,
@@ -221,8 +237,9 @@ impl PagedAttention {
                         std::ptr::null(),
                         std::ptr::null(),
                         sinks_ptr,
-                    );
-                }
+                    )
+                };
+                launched(status, stringify!($func), effective_max_context_len)?;
                 // No per-call dev.synchronize() here: the kernel is enqueued on
                 // `stream_raw` and all downstream consumers run on the same
                 // stream, so stream ordering already guarantees correctness.
@@ -235,6 +252,44 @@ impl PagedAttention {
             }};
         }
 
+        // v1 holds a float of logits per context token in shared memory, so past what
+        // one workgroup can hold (a little under 16K tokens on gfx1151) it cannot launch
+        // at all. v2 bounds that at a partition. v1 keeps every shape it serves today.
+        // Both inputs are fixed per captured decode graph (the bucketed context), so a
+        // graph and its replay always take the same kernel.
+        let v1_fits = unsafe {
+            ffi::paged_attention_v1_fits(effective_max_context_len as c_int, block_size as c_int)
+        } != 0;
+        if !v1_fits {
+            return self.rocm_v2(
+                &dev,
+                dtype,
+                q,
+                q_l,
+                out_shape,
+                V2 {
+                    kc_ptr,
+                    vc_ptr,
+                    bt_ptr,
+                    cl_ptr,
+                    alibi_s_ptr,
+                    sinks_ptr,
+                    num_kv_heads,
+                    block_size,
+                    effective_max_context_len,
+                    num_seqs,
+                    num_heads,
+                    head_size,
+                    max_num_blocks_per_seq,
+                    q_stride,
+                    kv_block_stride,
+                    kv_head_stride,
+                    stream_raw,
+                    cache_dtype,
+                },
+            );
+        }
+
         let out = match dtype {
             DType::F16 => launch!(F16, f16, paged_attention_v1_f16),
             DType::BF16 => launch!(BF16, bf16, paged_attention_v1_bf16),
@@ -243,6 +298,102 @@ impl PagedAttention {
 
         Ok((out, out_shape))
     }
+
+    /// The partitioned decode: per-partition statistics into f32 scratch, then one
+    /// reduce into `out`. The scratch lives until this returns; both kernels are
+    /// enqueued on the one stream everything else in the forward uses, so anything
+    /// that reuses its memory is ordered after them.
+    fn rocm_v2(
+        &self,
+        dev: &hanzo_ml::RocmDevice,
+        dtype: DType,
+        q: &RocmStorage,
+        q_l: &Layout,
+        out_shape: Shape,
+        a: V2,
+    ) -> Result<(RocmStorage, Shape)> {
+        let max_num_partitions = a.effective_max_context_len.div_ceil(V2_PARTITION_SIZE);
+        let stats = a.num_seqs * a.num_heads * max_num_partitions;
+        let exp_sums = dev.alloc::<f32>(stats)?;
+        let max_logits = dev.alloc::<f32>(stats)?;
+        let tmp_out = dev.alloc::<f32>(stats * a.head_size)?;
+        let elem_count = out_shape.elem_count();
+
+        macro_rules! launch_v2 {
+            ($variant:ident, $ty:ty, $func:ident) => {{
+                let q_mem = match &q.slice {
+                    RocmStorageSlice::$variant(m) => m,
+                    _ => unreachable!(),
+                };
+                let q_ptr =
+                    unsafe { q_mem.offset_ptr(q_l.start_offset()) as *const std::ffi::c_void };
+                let out = dev.alloc::<$ty>(elem_count)?;
+                let status = unsafe {
+                    ffi::$func(
+                        out.as_ptr() as *const std::ffi::c_void,
+                        exp_sums.as_ptr() as *const std::ffi::c_void,
+                        max_logits.as_ptr() as *const std::ffi::c_void,
+                        tmp_out.as_ptr() as *const std::ffi::c_void,
+                        q_ptr,
+                        a.kc_ptr,
+                        a.vc_ptr,
+                        a.alibi_s_ptr,
+                        a.num_kv_heads as c_int,
+                        self.softmax_scale,
+                        self.softcapping,
+                        a.bt_ptr,
+                        a.cl_ptr,
+                        a.block_size as c_int,
+                        a.effective_max_context_len as c_int,
+                        a.num_seqs as c_int,
+                        a.num_heads as c_int,
+                        a.head_size as c_int,
+                        a.max_num_blocks_per_seq as c_int,
+                        a.q_stride as c_int,
+                        a.kv_block_stride as c_int,
+                        a.kv_head_stride as c_int,
+                        a.stream_raw,
+                        a.cache_dtype,
+                        a.sinks_ptr,
+                    )
+                };
+                launched(status, stringify!($func), a.effective_max_context_len)?;
+                RocmStorage {
+                    slice: RocmStorageSlice::$variant(out),
+                    device: dev.clone(),
+                }
+            }};
+        }
+
+        let out = match dtype {
+            DType::F16 => launch_v2!(F16, f16, paged_attention_v2_f16),
+            DType::BF16 => launch_v2!(BF16, bf16, paged_attention_v2_bf16),
+            dt => hanzo_ml::bail!("paged-attention on rocm supports f16/bf16 only ({dt:?})"),
+        };
+        Ok((out, out_shape))
+    }
+}
+
+/// What the v2 launch needs from the v1 setup it shares.
+struct V2 {
+    kc_ptr: *const std::ffi::c_void,
+    vc_ptr: *const std::ffi::c_void,
+    bt_ptr: *const c_int,
+    cl_ptr: *const c_int,
+    alibi_s_ptr: *const std::ffi::c_void,
+    sinks_ptr: *const f32,
+    num_kv_heads: usize,
+    block_size: usize,
+    effective_max_context_len: usize,
+    num_seqs: usize,
+    num_heads: usize,
+    head_size: usize,
+    max_num_blocks_per_seq: usize,
+    q_stride: usize,
+    kv_block_stride: usize,
+    kv_head_stride: usize,
+    stream_raw: i64,
+    cache_dtype: u32,
 }
 
 impl hanzo_ml::CustomOp1 for PagedAttention {

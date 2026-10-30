@@ -28,6 +28,8 @@ use crate::replica::{Balancer, Lease, Replica, ReplicaSet, ReplicaStatus, Routin
 use sha2::{Digest, Sha256};
 
 const MAX_BODY_BYTES: usize = 32 << 20;
+/// A replica's response body, as the probe and the passthrough both see it.
+type BodyStream = std::pin::Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>;
 const PREFIX_CHARS: usize = 512;
 /// Default background health re-probe cadence (see [`ServeConfig::probe_interval`]).
 pub const DEFAULT_PROBE_INTERVAL: Duration = Duration::from_secs(5);
@@ -37,6 +39,33 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const TTFT_SAMPLE_CEILING: usize = 8192;
 /// A long prefill plus its generation; past this a stuck stream holds the door.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(1800);
+/// Longest a request waits for a held slot: other callers' prefills and
+/// generations, the span a drain allows one stream.
+const QUEUE_TIMEOUT: Duration = DRAIN_TIMEOUT;
+const QUEUE_POLL: Duration = Duration::from_millis(250);
+/// Bytes of a completion read before the client is committed to a replica. An
+/// aborted turn is a few hundred bytes; past this the answer is real and is
+/// forwarded as it arrives, so the probe never costs a generation its streaming.
+const OUTPUT_PROBE_BYTES: usize = 64 * 1024;
+/// Longest upstream error body kept for the log. Rejections are small JSON.
+const UPSTREAM_ERROR_BYTES: usize = 8 * 1024;
+/// Substrings that prove a completion is producing output, in either dialect:
+/// an opened block or delta (Anthropic SSE), a non-empty content array or string
+/// (message JSON, OpenAI chunk), tool arguments. A miss is only possible on
+/// genuinely empty text, which passes through untouched as it always did.
+const OUTPUT_MARKERS: [&[u8]; 8] = [
+    b"content_block_start",
+    b"text_delta",
+    b"thinking_delta",
+    b"input_json_delta",
+    b"\"content\":[{\"",
+    b"\"content\":\"",
+    b"\"reasoning_content\":\"",
+    b"tool_calls",
+];
+/// The longest, and so how far back to keep bytes for a marker a chunk split.
+const OUTPUT_MARKER_LEN: usize = b"\"reasoning_content\":\"".len();
+
 /// Liveness is "the server answers HTTP". Engines' own /health can run a
 /// generation through the scheduler (SGLang does), which waits behind a long
 /// prefill and would evict the one replica able to serve it.
@@ -92,6 +121,99 @@ impl Drop for Admission {
     }
 }
 
+/// Diagnostics mode (`HANZO_ROUTER_DEBUG=1`): a per-request admission record,
+/// full request body dumps, and per-rid timing lines. Off by default.
+fn debug_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("HANZO_ROUTER_DEBUG")
+            .is_some_and(|v| v != "0" && v != "false" && !v.is_empty())
+    })
+}
+
+const DEBUG_DIR: &str = "/tmp/hanzo-router-debug";
+const DEBUG_MAX_FILES: usize = 200;
+
+/// The client-visible request id: an incoming `x-request-id` if present, else a
+/// synthesized one that is stable within this process.
+fn new_rid(headers: &HeaderMap) -> String {
+    if let Some(v) = headers.get("x-request-id").and_then(|v| v.to_str().ok()) {
+        if !v.is_empty() {
+            return rid_safe(v);
+        }
+    }
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros())
+        .unwrap_or(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    rid_safe(&format!("r{micros:x}{seq:08x}"))
+}
+
+/// Constrain a rid to a safe filename subset.
+fn rid_safe(rid: &str) -> String {
+    let s: String = rid
+        .chars()
+        .take(48)
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .collect();
+    if s.is_empty() {
+        "r".to_string()
+    } else {
+        s
+    }
+}
+
+/// 8-byte hex of SHA-256: a stable field digest for prefix correlation.
+fn digest16(bytes: &[u8]) -> String {
+    let d = Sha256::digest(bytes);
+    d.iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// (serialized byte length, digest) of a top-level JSON field; (0, zeros) if absent.
+fn field_stat(body: &Value, key: &str) -> (usize, String) {
+    match body.get(key) {
+        Some(v) if !v.is_null() => {
+            let s = v.to_string();
+            (s.len(), digest16(s.as_bytes()))
+        }
+        _ => (0, "0000000000000000".to_string()),
+    }
+}
+
+/// Best-effort full request body dump with rotation; never fails the request.
+fn dump_body(rid: &str, body: &Bytes) {
+    let dir = std::path::Path::new(DEBUG_DIR);
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = dir.join(format!("{ts}-{rid}.json"));
+    if let Ok(mut f) = std::fs::File::create(&path) {
+        use std::io::Write;
+        let _ = f.write_all(body);
+        let _ = f.flush();
+        let _ = f.sync_all();
+    }
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    if files.len() > DEBUG_MAX_FILES {
+        files.sort();
+        for old in files.drain(..files.len() - DEBUG_MAX_FILES) {
+            let _ = std::fs::remove_file(old);
+        }
+    }
+}
+
 /// What to serve: the pool + where to bind + how often to re-probe.
 pub struct ServeConfig {
     pub host: String,
@@ -113,7 +235,6 @@ fn app(state: Arc<ProxyState>) -> Router {
             "/health",
             get(|| async { "ok" }).head(|| async { StatusCode::OK }),
         )
-        .route("/api/hello", get(hello).head(hello))
         .route("/v1/models", get(list_models))
         .route(
             "/v1/replicas",
@@ -238,8 +359,28 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request) -> Response {
         .and_then(Value::as_bool)
         == Some(true);
     let anthropic = parts.uri.path() == "/v1/messages";
+    let rid = new_rid(&parts.headers);
+    if debug_on() {
+        let body = json.as_ref().unwrap_or(&Value::Null);
+        let (sys_b, sys_d) = field_stat(body, "system");
+        let (tools_b, tools_d) = field_stat(body, "tools");
+        let (msgs_b, msgs_d) = field_stat(body, "messages");
+        tracing::info!(
+            target: "router.debug",
+            rid = %rid,
+            model = model.unwrap_or("-"),
+            path = %path_q,
+            system = %format!("{sys_b}:{sys_d}"),
+            tools = %format!("{tools_b}:{tools_d}"),
+            messages = %format!("{msgs_b}:{msgs_d}"),
+            body = body_bytes.len(),
+            stream = wants_stream,
+            "admit",
+        );
+        dump_body(&rid, &body_bytes);
+    }
     let dispatch = Box::pin(dispatch(
-        state, parts, path_q, body_bytes, json, set, hints, admitted,
+        state, parts, path_q, body_bytes, json, set, hints, admitted, rid,
     ));
     if wants_stream {
         response_with_progress(dispatch, anthropic, Duration::from_secs(15)).await
@@ -257,13 +398,24 @@ async fn dispatch(
     set: Arc<ReplicaSet>,
     hints: RoutingHints,
     admitted: Admission,
+    rid: String,
 ) -> Response {
+    use futures::StreamExt;
     // The lease takes over from here; a dropped stream releases both.
     let _admitted = admitted;
     let fwd = forward_headers(&parts.headers);
     let mut excluded = HashSet::new();
-    for _ in 0..set.len().max(1) {
+    let mut failures = 0;
+    let mut silent = false;
+    let queued = Instant::now();
+    while failures < set.len().max(1) {
         let Some(lease) = set.pick_agent(&hints, &excluded, Instant::now()) else {
+            // Held slots are a queue, not an outage. A client that gives up drops
+            // this future, and with it the wait.
+            if set.saturated(&hints, &excluded) && queued.elapsed() < QUEUE_TIMEOUT {
+                tokio::time::sleep(QUEUE_POLL).await;
+                continue;
+            }
             break;
         };
         let started = Instant::now();
@@ -305,20 +457,104 @@ async fn dispatch(
             .send()
             .await;
         match send {
-            Ok(resp) => return stream_response(resp, lease, set.clone(), hints, started),
+            Ok(resp) => {
+                let status = resp.status();
+                let src = resp.headers().clone();
+                if debug_on() {
+                    tracing::info!(
+                        target: "router.debug",
+                        rid = %rid,
+                        replica = %lease.id(),
+                        status = %status.as_str(),
+                        headers_ms = started.elapsed().as_millis() as u64,
+                        "upstream headers",
+                    );
+                }
+                if !status.is_success() {
+                    return upstream_error(status, src, resp, lease, &rid).await;
+                }
+                // A refusal is a fact about the request, so it is forwarded whole.
+                // An aborted turn looks like success at the HTTP layer: 200, a
+                // message_start, zero output tokens, closed. The client renders
+                // that as silence, and nothing downstream can tell it apart from
+                // an answer, so it is settled here, before any byte is committed.
+                // Side effects are not a risk on this path the way they are on a
+                // partially delivered stream: nothing was delivered.
+                if !completion_route(&path_q) {
+                    let up = Upstream { status, headers: src, prefix: Vec::new(), body: Box::pin(resp.bytes_stream()) };
+                    return stream_response(up, lease, set.clone(), hints, started, rid);
+                }
+                let mut rest: BodyStream = Box::pin(resp.bytes_stream());
+                let mut prefix: Vec<Bytes> = Vec::new();
+                let mut tail: Vec<u8> = Vec::new();
+                let mut read = 0usize;
+                let mut faulted = None;
+                let produced = loop {
+                    if read >= OUTPUT_PROBE_BYTES {
+                        break true;
+                    }
+                    match rest.next().await {
+                        Some(Ok(bytes)) => {
+                            read += bytes.len();
+                            let carried = carries_output(&mut tail, &bytes);
+                            prefix.push(bytes);
+                            if carried {
+                                break true;
+                            }
+                        }
+                        Some(Err(e)) => {
+                            faulted = Some(e);
+                            break false;
+                        }
+                        None => break false,
+                    }
+                };
+                if produced {
+                    let up = Upstream { status, headers: src, prefix, body: rest };
+                    return stream_response(up, lease, set.clone(), hints, started, rid);
+                }
+                let id = lease.id().to_string();
+                drop(lease);
+                match faulted {
+                    Some(e) => {
+                        tracing::warn!("replica {id} failed mid-preflight ({e}), evicting and trying next replica");
+                        set.mark_unhealthy(&id);
+                    }
+                    None => {
+                        tracing::warn!(
+                            target: "router.debug",
+                            rid = %rid,
+                            replica = %id,
+                            "replica closed a completion with no output, trying the next"
+                        );
+                        silent = true;
+                    }
+                }
+                excluded.insert(id);
+                failures += 1;
+            }
             Err(e) => {
                 let id = lease.id().to_string();
                 excluded.insert(id.clone());
                 drop(lease);
                 tracing::warn!("replica {id} failed ({e}), evicting and trying next replica");
                 set.mark_unhealthy(&id);
+                failures += 1;
             }
         }
     }
-    let mut response = err(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "no available replica for routing hints",
-    );
+    let mut response = if silent {
+        api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "api_error",
+            "every replica answered the completion with no output",
+        )
+    } else {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no available replica for routing hints",
+        )
+    };
     response
         .headers_mut()
         .insert("retry-after", HeaderValue::from_static("1"));
@@ -396,16 +632,79 @@ async fn response_with_progress(
     response
 }
 
+/// Routes whose answer is a completion. Only these are probed: an embeddings
+/// or health response has no content marker to find, and reading its silence
+/// as an aborted turn would turn those calls into retries.
+fn completion_route(path_q: &str) -> bool {
+    let path = path_q.split_once('?').map_or(path_q, |(p, _)| p);
+    matches!(path, "/v1/messages" | "/v1/chat/completions" | "/v1/completions")
+}
+
+/// True when the bytes carry assistant output in any served dialect. Built from
+/// markers rather than a parse: a probe that failed to parse a valid answer
+/// would retry a good turn, which is worse than passing an empty one through.
+fn carries_output(tail: &mut Vec<u8>, bytes: &[u8]) -> bool {
+    let mut window = std::mem::take(tail);
+    window.extend_from_slice(bytes);
+    let hit = OUTPUT_MARKERS
+        .iter()
+        .any(|m| window.len() >= m.len() && window.windows(m.len()).any(|w| w == *m));
+    let at = window.len().saturating_sub(OUTPUT_MARKER_LEN);
+    *tail = window[at..].to_vec();
+    hit
+}
+
+/// Forward a refusal with the engine's reason attached. The status alone is
+/// undiagnosable from the client, and the body never outlives the request.
+async fn upstream_error(
+    status: StatusCode,
+    headers: HeaderMap,
+    resp: reqwest::Response,
+    lease: Lease,
+    rid: &str,
+) -> Response {
+    let replica = lease.id().to_string();
+    let bytes = resp.bytes().await.unwrap_or_default();
+    tracing::warn!(
+        target: "router.debug",
+        rid = %rid,
+        replica = %replica,
+        status = %status.as_str(),
+        body = %String::from_utf8_lossy(&bytes[..bytes.len().min(UPSTREAM_ERROR_BYTES)]).trim(),
+        "upstream rejection",
+    );
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = status;
+    *response.headers_mut() = headers;
+    if let Ok(v) = HeaderValue::from_str(&replica) {
+        response.headers_mut().insert(REPLICA_HEADER, v);
+    }
+    drop(lease);
+    response
+}
+
+/// One replica's answer, taken apart: status and headers, the bytes the output
+/// probe already read, and whatever is still to come. Reassembled in order by
+/// [`stream_response`], which is where the probe's prefix rejoins the stream.
+struct Upstream {
+    status: StatusCode,
+    headers: HeaderMap,
+    prefix: Vec<Bytes>,
+    body: BodyStream,
+}
+
 /// Wrap the upstream byte stream so the [`Lease`] drops when the body ends.
 fn stream_response(
-    resp: reqwest::Response,
+    up: Upstream,
     lease: Lease,
     set: Arc<ReplicaSet>,
     hints: RoutingHints,
     started: Instant,
+    rid: String,
 ) -> Response {
-    let status = resp.status();
-    let src = resp.headers().clone();
+    use futures::StreamExt;
+    let status = up.status;
+    let src = up.headers;
     let replica = HeaderValue::from_str(lease.id()).ok();
     let is_sse = src
         .get(axum::http::header::CONTENT_TYPE)
@@ -415,7 +714,7 @@ fn stream_response(
     let ping_deadline = Box::pin(tokio::time::sleep(Duration::from_secs(15)));
     let sample_ttft = hints.required_tokens(lease.id()) <= TTFT_SAMPLE_CEILING;
     let body = Body::from_stream(LeasedStream {
-        inner: Box::pin(resp.bytes_stream()),
+        inner: Box::pin(futures::stream::iter(up.prefix.into_iter().map(Ok)).chain(up.body)),
         lease: Some(lease),
         set,
         hints,
@@ -425,6 +724,8 @@ fn stream_response(
         sample_ttft,
         is_sse,
         ping_deadline,
+        rid: if debug_on() { Some(rid) } else { None },
+        cache: CacheScan::default(),
     });
     let mut response = Response::new(body);
     *response.status_mut() = status;
@@ -451,6 +752,8 @@ struct LeasedStream {
     sample_ttft: bool,
     is_sse: bool,
     ping_deadline: Pin<Box<tokio::time::Sleep>>,
+    rid: Option<String>,
+    cache: CacheScan,
 }
 
 impl Stream for LeasedStream {
@@ -464,11 +767,22 @@ impl Stream for LeasedStream {
             Poll::Ready(Some(Ok(bytes))) => {
                 if !bytes.is_empty() && !this.first_byte {
                     this.first_byte = true;
+                    if let Some(rid) = &this.rid {
+                        tracing::info!(
+                            target: "router.debug",
+                            rid = %rid,
+                            first_byte_ms = this.started.elapsed().as_millis() as u64,
+                            "first byte",
+                        );
+                    }
                     if this.successful && this.sample_ttft {
                         if let Some(lease) = &this.lease {
                             this.set.observe_ttft(lease.id(), this.started.elapsed());
                         }
                     }
+                }
+                if this.successful {
+                    this.cache.scan(&bytes);
                 }
                 this.ping_deadline
                     .as_mut()
@@ -477,14 +791,37 @@ impl Stream for LeasedStream {
             }
             Poll::Ready(Some(Err(e))) => {
                 this.successful = false;
+                if let Some(rid) = &this.rid {
+                    tracing::warn!(
+                        target: "router.debug",
+                        rid = %rid,
+                        elapsed_ms = this.started.elapsed().as_millis() as u64,
+                        error = %e,
+                        "stream error",
+                    );
+                }
                 this.lease.take();
                 Poll::Ready(Some(Err(e)))
             }
             Poll::Ready(None) => {
+                if let Some(rid) = &this.rid {
+                    tracing::info!(
+                        target: "router.debug",
+                        rid = %rid,
+                        total_ms = this.started.elapsed().as_millis() as u64,
+                        ok = this.successful && this.first_byte,
+                        "stream end",
+                    );
+                }
                 if let Some(lease) = this.lease.take() {
                     if this.successful && this.first_byte {
-                        this.set
-                            .observe_completion(lease.id(), &this.hints, Instant::now());
+                        let cached = this.cache.tokens;
+                        this.set.observe_completion(
+                            lease.id(),
+                            &this.hints,
+                            cached,
+                            Instant::now(),
+                        );
                     }
                 }
                 Poll::Ready(None)
@@ -500,6 +837,48 @@ impl Stream for LeasedStream {
                 }
             }
         }
+    }
+}
+
+/// Reads how much of a prompt an engine served from its own cache. Both usage
+/// spellings count: `cache_read_input_tokens` on the Anthropic surface,
+/// `cached_tokens` on the OpenAI one. A response that reports nothing stays
+/// `None`, which is not the same fact as a response reporting zero.
+#[derive(Default)]
+struct CacheScan {
+    tokens: Option<usize>,
+    /// Tail of the previous chunk, so a field split across two is still read.
+    carry: Vec<u8>,
+}
+
+const CACHE_MARKER_LEN: usize = b"\"cache_read_input_tokens\":".len();
+const CACHE_MARKERS: [&[u8]; 2] = [
+    b"\"cache_read_input_tokens\":",
+    b"\"cached_tokens\":",
+];
+
+impl CacheScan {
+    fn scan(&mut self, bytes: &[u8]) {
+        let mut window = std::mem::take(&mut self.carry);
+        window.extend_from_slice(bytes);
+        let first = window.len().saturating_sub(bytes.len() + CACHE_MARKER_LEN);
+        for marker in CACHE_MARKERS {
+            let mut at = first;
+            while let Some(hit) = window[at..].windows(marker.len()).position(|w| w == &marker[..]) {
+                let value = at + hit + marker.len();
+                let mut end = value;
+                while end < window.len() && window[end].is_ascii_digit() {
+                    end += 1;
+                }
+                if let Ok(text) = std::str::from_utf8(&window[value..end]) {
+                    if let Ok(tokens) = text.parse::<usize>() {
+                        self.tokens = Some(self.tokens.unwrap_or(0).max(tokens));
+                    }
+                }
+                at = value;
+            }
+        }
+        self.carry = window[window.len().saturating_sub(CACHE_MARKER_LEN - 1)..].to_vec();
     }
 }
 
@@ -896,10 +1275,6 @@ fn err(status: StatusCode, msg: &str) -> Response {
     (status, msg.to_string()).into_response()
 }
 
-async fn hello() -> StatusCode {
-    StatusCode::OK
-}
-
 async fn list_models(State(state): State<Arc<ProxyState>>) -> Response {
     let mut model_ids: Vec<String> = state.balancer.statuses().into_keys().collect();
     for primary in &["zen5.8", "zen5.8-coder", "qwen3.8"] {
@@ -1232,6 +1607,8 @@ mod tests {
             successful: true,
             is_sse: false,
             ping_deadline: Box::pin(tokio::time::sleep(Duration::from_secs(15))),
+            rid: None,
+            cache: CacheScan::default(),
         };
         while stream.next().await.is_some() {}
         assert_eq!(set.statuses()[0].ttft_ewma_ms, None);
@@ -1275,6 +1652,8 @@ mod tests {
                 successful: true,
                 is_sse: false,
                 ping_deadline: Box::pin(tokio::time::sleep(Duration::from_secs(15))),
+                rid: None,
+                cache: CacheScan::default(),
             };
             assert_eq!(set.statuses()[0].inflight, 1);
             if mode != "abort" {
@@ -1356,6 +1735,9 @@ mod e2e {
     struct Mock {
         id: String,
         alive: AtomicBool,
+        /// Answers with a well-formed stream that carries no output, which is
+        /// how an engine reports a turn it aborted.
+        silent: AtomicBool,
     }
 
     async fn mock_health(State(m): State<Arc<Mock>>) -> Response {
@@ -1370,7 +1752,16 @@ mod e2e {
         if !m.alive.load(Ordering::Acquire) {
             return (StatusCode::SERVICE_UNAVAILABLE, "down").into_response();
         }
-        let body = format!("data: {{\"replica\":\"{}\"}}\n\ndata: [DONE]\n\n", m.id);
+        if m.silent.load(Ordering::Acquire) {
+            let empty = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"content\":[]}}\n\n\
+                event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":0}}\n\n\
+                event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+            return ([(CONTENT_TYPE, "text/event-stream")], empty).into_response();
+        }
+        let body = format!(
+            "data: {{\"choices\":[{{\"delta\":{{\"content\":\".\",\"replica\":\"{}\"}}}}]}}\n\ndata: [DONE]\n\n",
+            m.id
+        );
         ([(CONTENT_TYPE, "text/event-stream")], body).into_response()
     }
 
@@ -1378,6 +1769,7 @@ mod e2e {
         let mock = Arc::new(Mock {
             id: id.to_string(),
             alive: AtomicBool::new(true),
+            silent: AtomicBool::new(false),
         });
         let app = Router::new()
             .route("/v1/models", get(mock_health))
@@ -1447,6 +1839,57 @@ mod e2e {
     }
 
     #[tokio::test]
+    async fn pinned_requests_queue_for_a_held_slot() {
+        let busy = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (b, p) = (busy.clone(), peak.clone());
+        let app = Router::new()
+            .route("/v1/models", get(|| async { "ok" }))
+            .route(
+                "/v1/chat/completions",
+                post(move || {
+                    let (b, p) = (b.clone(), p.clone());
+                    async move {
+                        p.fetch_max(b.fetch_add(1, Ordering::AcqRel) + 1, Ordering::AcqRel);
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        b.fetch_sub(1, Ordering::AcqRel);
+                        "data: {\"choices\":[{\"delta\":{\"content\":\".\",\"replica\":\"halo\"}}]}}\n\ndata: [DONE]\n\n"
+                    }
+                }),
+            );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let balancer = Balancer::new(64);
+        balancer.register(
+            "qwen",
+            Replica {
+                id: "halo".into(),
+                capacity: 1,
+                ..Replica::new(url)
+            },
+        );
+        let base = start_proxy(balancer, Duration::from_secs(60)).await;
+        let client = reqwest::Client::new();
+        let send = |conv: &'static str| {
+            let (client, base) = (client.clone(), base.clone());
+            async move {
+                client
+                    .post(format!("{base}/v1/chat/completions"))
+                    .header("x-target-replica", "halo")
+                    .json(&serde_json::json!({"model": "qwen", "messages": [{"role":"user","content":conv}]}))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status()
+            }
+        };
+        let codes = futures::future::join_all(["a", "b", "c"].map(send)).await;
+        assert_eq!(codes, [StatusCode::OK; 3]);
+        assert_eq!(peak.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
     async fn affinity_streaming_health_and_restore() {
         let (url_a, _a) = spawn_mock("A").await;
         let (url_b, mock_b) = spawn_mock("B").await;
@@ -1509,7 +1952,7 @@ mod e2e {
     }
 
     #[tokio::test]
-    async fn cloud_metadata_routes_roles_and_rejects_unknown_targets() {
+    async fn cloud_metadata_routes_roles_and_treats_an_absent_target_as_a_preference() {
         let (url_a, _) = spawn_mock("A").await;
         let (url_b, _) = spawn_mock("B").await;
         let balancer = Balancer::new(2);
@@ -1551,7 +1994,11 @@ mod e2e {
             .unwrap();
         assert_eq!(resp.headers()[REPLICA_HEADER], "spark");
         assert_eq!(replica_id(&resp.text().await.unwrap()), "A");
-        body["metadata"]["target_replica"] = serde_json::json!("unknown");
+        // Pinning a box that does not serve this model must not kill the
+        // request: the session pin still holds, and no caller string becomes an
+        // address. A saturated in-pool target still waits (retry-after), which
+        // replica::scheduler::tests covers directly.
+        body["metadata"]["target_replica"] = serde_json::json!("http://evil.example");
         let resp = client
             .post(format!("{base}/v1/chat/completions"))
             .header("x-org-id", "acme")
@@ -1559,8 +2006,11 @@ mod e2e {
             .send()
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(resp.headers()["retry-after"], "1");
+        assert_eq!(resp.status(), StatusCode::OK, "an absent target is not a refusal");
+        assert_eq!(
+            resp.headers()[REPLICA_HEADER], "evo",
+            "with no matching ID, the pin and locality decide"
+        );
     }
 
     #[tokio::test]
@@ -1682,13 +2132,52 @@ mod e2e {
         assert_eq!(dead_row["healthy"], false, "dead upstream probed unhealthy");
     }
 
+    /// A replica that aborts a turn answers 200 with a well-formed, empty
+    /// message. Delivered as is, the client shows nothing at all, so the request
+    /// goes to the rest of the pool; only a pool that is silent everywhere
+    /// becomes an error.
+    #[tokio::test]
+    async fn an_aborted_turn_goes_to_the_next_replica() {
+        let (url_a, a) = spawn_mock("A").await;
+        let (url_b, _b) = spawn_mock("B").await;
+        a.silent.store(true, Ordering::Release);
+        let balancer = Balancer::new(64);
+        balancer.register("qwen", Replica::new(url_a));
+        balancer.register("qwen", Replica::new(url_b));
+        let base = start_proxy(balancer, Duration::from_secs(60)).await;
+        let client = reqwest::Client::new();
+        for i in 0..8 {
+            let (s, t) = chat(&client, &base, &format!("conv{i}")).await;
+            assert_eq!(s, StatusCode::OK, "an abort must not surface as a failure");
+            assert_eq!(replica_id(&t), "B", "conv{i} was answered by a replica that aborted");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_silent_pool_answers_an_error_never_an_empty_message() {
+        let (url_a, a) = spawn_mock("A").await;
+        a.silent.store(true, Ordering::Release);
+        let balancer = Balancer::new(64);
+        balancer.register("qwen", Replica::new(url_a));
+        let base = start_proxy(balancer, Duration::from_secs(60)).await;
+        let client = reqwest::Client::new();
+        let (s, t) = chat(&client, &base, "conv").await;
+        assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            t.contains("no output"),
+            "the client must be told the pool produced nothing, got: {t}"
+        );
+    }
+
     async fn echo_model(axum::Json(v): axum::Json<serde_json::Value>) -> Response {
         let m = v
             .get("model")
             .and_then(|x| x.as_str())
             .unwrap_or("<none>")
             .to_string();
-        let body = format!("data: {{\"model\":\"{m}\"}}\n\ndata: [DONE]\n\n");
+        let body = format!(
+            "data: {{\"choices\":[{{\"delta\":{{\"content\":\".\"}}}}],\"model\":\"{m}\"}}\n\ndata: [DONE]\n\n"
+        );
         ([(CONTENT_TYPE, "text/event-stream")], body).into_response()
     }
 
@@ -1736,27 +2225,22 @@ mod e2e {
     }
 
     #[tokio::test]
-    async fn claude_code_hello_and_models_and_fallback() {
+    async fn claude_code_models_and_fallback_without_api_prefix() {
         let (url, _) = spawn_mock("A").await;
         let balancer = Balancer::new(2);
         balancer.register("zen5.8", Replica::new(url));
         let base = start_proxy(balancer, Duration::from_secs(60)).await;
         let client = reqwest::Client::new();
 
-        // 1. /api/hello GET and HEAD
-        let resp_get = client
-            .get(format!("{base}/api/hello"))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp_get.status(), StatusCode::OK);
-
-        let resp_head = client
-            .head(format!("{base}/api/hello"))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp_head.status(), StatusCode::OK);
+        // 1. The router owns no /api/ path. Claude Code's HEAD /api/hello
+        //    warm-up passes through like any unknown path; the replica has
+        //    none, so it is a 404 whose result the client ignores.
+        for req in [
+            client.get(format!("{base}/api/hello")),
+            client.head(format!("{base}/api/hello")),
+        ] {
+            assert_eq!(req.send().await.unwrap().status(), StatusCode::NOT_FOUND);
+        }
 
         // 2. /v1/models GET returns models list including zen5.8, zen5.8-coder, qwen3.8
         let resp_models = client
@@ -1788,6 +2272,55 @@ mod e2e {
         let status = resp_msg.status();
         let body = resp_msg.text().await.unwrap();
         assert_eq!(status, StatusCode::OK, "fallback response error: {body}");
+    }
+
+    #[test]
+    fn an_aborted_turn_has_no_output_to_find() {
+        let mut tail = Vec::new();
+        let start = br#"event: message_start
+data: {"type":"message_start","message":{"id":"x","content":[],"model":"m"}}
+
+"#;
+        let stop = br#"event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#;
+        assert!(!carries_output(&mut tail, start));
+        assert!(!carries_output(&mut tail, stop));
+    }
+
+    #[test]
+    fn output_is_found_in_every_dialect_and_across_a_chunk_boundary() {
+        for answer in [
+            br#"data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}"#.as_slice(),
+            br#"data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hmm"}}"#.as_slice(),
+            br#"data: {"type":"content_block_start","content_block":{"type":"tool_use"}}"#.as_slice(),
+            br#"data: {"choices":[{"delta":{"content":"hi"}}]}"#.as_slice(),
+            br#"data: {"choices":[{"delta":{"reasoning_content":"let me"}}]}"#.as_slice(),
+            br#"{"id":"x","content":[{"type":"text","text":"hi"}]}"#.as_slice(),
+            br#"{"choices":[{"message":{"content":"hi"}}]}"#.as_slice(),
+        ] {
+            assert!(
+                carries_output(&mut Vec::new(), answer),
+                "output missed: {answer:?}"
+            );
+        }
+        // A chunk boundary through the middle of a marker must not read as silence.
+        let frame = br#"event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+"#;
+        let needle = b"content_block_start";
+        let at = frame
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .unwrap();
+        let mut tail = Vec::new();
+        assert!(!carries_output(&mut tail, &frame[..at + 3]));
+        assert!(carries_output(&mut tail, &frame[at + 3..]));
     }
 
     #[test]

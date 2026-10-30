@@ -40,8 +40,8 @@ use hanzo_nn::{Embedding, Module};
 use hanzo_quant::QuantMethod;
 
 use crate::speculative::{
-    MtpConfig, SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
-    SpeculativeProposer, TargetTokenEmbedder,
+    draft_contexts, sample_drafts, MtpConfig, SpeculativeProposal, SpeculativeProposalBatch,
+    SpeculativeProposeBatchCtx, SpeculativeProposer, TargetTokenEmbedder,
 };
 
 use super::quantized_deepseek2::{LayerWeights, ModelWeights, PropsGGUF};
@@ -339,6 +339,7 @@ impl SpeculativeProposer for Deepseek2MtpRuntime {
         ctx: SpeculativeProposeBatchCtx<'_>,
         _target_embedder: Option<&TargetTokenEmbedder<'_>>,
     ) -> Result<SpeculativeProposalBatch> {
+        let mut contexts = draft_contexts(&ctx);
         let hiddens = ctx.target_hiddens.ok_or_else(|| {
             hanzo_ml::Error::Msg("GLM MTP requires the target hidden state for proposal".into())
         })?;
@@ -374,14 +375,7 @@ impl SpeculativeProposer for Deepseek2MtpRuntime {
                 &self.output,
                 &start_offsets,
             )?;
-            let draft = logits.argmax(D::Minus1)?.to_dtype(DType::U32)?;
-            let draft_ids: Vec<u32> = draft.flatten_all()?.to_vec1::<u32>()?;
-            if draft_ids.len() != batch {
-                hanzo_ml::bail!(
-                    "GLM MTP draft produced {} tokens for {batch} rows",
-                    draft_ids.len()
-                );
-            }
+            let draft_ids = sample_drafts(&logits, ctx.sequences, &mut contexts, &ctx.rng)?;
             cur_tokens = draft_ids.clone();
             hidden = next_hidden;
             step_tokens.push(draft_ids);

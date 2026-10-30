@@ -25,7 +25,9 @@ use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::DeviceMapper;
 use crate::layers::Conv3dConfig;
 use crate::matformer::MatformerSliceConfig;
-use crate::paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata};
+use crate::paged_attention::{
+    AttentionImplementation, KvLayers, ModelConfigLike, ModelConfigMetadata,
+};
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::loaders::AutoDeviceMapParams;
 use crate::pipeline::{
@@ -6642,6 +6644,7 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
         let cfg: Qwen3_5Config = serde_json::from_str(config)?;
         let cfg = &cfg.text_config;
 
+        let attention_layers = cfg.attention_layers();
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
             num_layers: cfg.num_hidden_layers,
@@ -6654,7 +6657,7 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
-        Ok(Box::new(cfg))
+        Ok(Box::new(KvLayers::new(cfg, attention_layers)))
     }
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
@@ -7037,6 +7040,7 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
         let cfg: Qwen3_5MoeConfig = serde_json::from_str(config)?;
         let cfg = &cfg.text_config;
 
+        let attention_layers = cfg.attention_layers();
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
             num_layers: cfg.num_hidden_layers,
@@ -7049,7 +7053,7 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
-        Ok(Box::new(cfg))
+        Ok(Box::new(KvLayers::new(cfg, attention_layers)))
     }
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {

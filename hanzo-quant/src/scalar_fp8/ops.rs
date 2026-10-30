@@ -80,13 +80,16 @@ impl CustomOp1 for Fp8ToDtype {
             DType::F32 => {
                 let output = dev.alloc_zeros::<f32>(num_elements)?;
                 let (output_ptr, output_guard) = slice_ptr(&output, 0);
-                unsafe {
-                    super::ffi::launch_fp8_to_f32_kernel(
-                        input as *const _,
-                        output_ptr as *mut _,
-                        num_elements,
-                        dev.cuda_stream().cu_stream(),
-                    );
+                if num_elements > 0 {
+                    let err = unsafe {
+                        super::ffi::launch_fp8_to_f32_kernel(
+                            input as *const _,
+                            output_ptr as *mut _,
+                            num_elements,
+                            dev.cuda_stream().cu_stream(),
+                        )
+                    };
+                    launched(err, input_l.shape())?;
                 }
                 drop(output_guard);
                 CudaStorage::wrap_cuda_slice(output, dev.clone())
@@ -94,13 +97,16 @@ impl CustomOp1 for Fp8ToDtype {
             DType::F16 => {
                 let output = dev.alloc_zeros::<f16>(num_elements)?;
                 let (output_ptr, output_guard) = slice_ptr(&output, 0);
-                unsafe {
-                    super::ffi::launch_fp8_to_f16_kernel(
-                        input as *const _,
-                        output_ptr as *mut _,
-                        num_elements,
-                        dev.cuda_stream().cu_stream(),
-                    );
+                if num_elements > 0 {
+                    let err = unsafe {
+                        super::ffi::launch_fp8_to_f16_kernel(
+                            input as *const _,
+                            output_ptr as *mut _,
+                            num_elements,
+                            dev.cuda_stream().cu_stream(),
+                        )
+                    };
+                    launched(err, input_l.shape())?;
                 }
                 drop(output_guard);
                 CudaStorage::wrap_cuda_slice(output, dev.clone())
@@ -108,13 +114,16 @@ impl CustomOp1 for Fp8ToDtype {
             DType::BF16 => {
                 let output = dev.alloc_zeros::<bf16>(num_elements)?;
                 let (output_ptr, output_guard) = slice_ptr(&output, 0);
-                unsafe {
-                    super::ffi::launch_fp8_to_bf16_kernel(
-                        input as *const _,
-                        output_ptr as *mut _,
-                        num_elements,
-                        dev.cuda_stream().cu_stream(),
-                    );
+                if num_elements > 0 {
+                    let err = unsafe {
+                        super::ffi::launch_fp8_to_bf16_kernel(
+                            input as *const _,
+                            output_ptr as *mut _,
+                            num_elements,
+                            dev.cuda_stream().cu_stream(),
+                        )
+                    };
+                    launched(err, input_l.shape())?;
                 }
                 drop(output_guard);
                 CudaStorage::wrap_cuda_slice(output, dev.clone())
@@ -243,37 +252,46 @@ impl CustomOp1 for DtypeToFp8 {
             DType::F32 => {
                 let (input, _input_guard) =
                     slice_ptr(input_s.as_cuda_slice::<f32>()?, input_l.start_offset());
-                unsafe {
-                    super::ffi::launch_f32_to_fp8_kernel(
-                        input as *const _,
-                        output_ptr as *mut _,
-                        num_elements,
-                        dev.cuda_stream().cu_stream(),
-                    );
+                if num_elements > 0 {
+                    let err = unsafe {
+                        super::ffi::launch_f32_to_fp8_kernel(
+                            input as *const _,
+                            output_ptr as *mut _,
+                            num_elements,
+                            dev.cuda_stream().cu_stream(),
+                        )
+                    };
+                    launched(err, input_l.shape())?;
                 }
             }
             DType::F16 => {
                 let (input, _input_guard) =
                     slice_ptr(input_s.as_cuda_slice::<f16>()?, input_l.start_offset());
-                unsafe {
-                    super::ffi::launch_f16_to_fp8_kernel(
-                        input as *const _,
-                        output_ptr as *mut _,
-                        num_elements,
-                        dev.cuda_stream().cu_stream(),
-                    );
+                if num_elements > 0 {
+                    let err = unsafe {
+                        super::ffi::launch_f16_to_fp8_kernel(
+                            input as *const _,
+                            output_ptr as *mut _,
+                            num_elements,
+                            dev.cuda_stream().cu_stream(),
+                        )
+                    };
+                    launched(err, input_l.shape())?;
                 }
             }
             DType::BF16 => {
                 let (input, _input_guard) =
                     slice_ptr(input_s.as_cuda_slice::<bf16>()?, input_l.start_offset());
-                unsafe {
-                    super::ffi::launch_bf16_to_fp8_kernel(
-                        input as *const _,
-                        output_ptr as *mut _,
-                        num_elements,
-                        dev.cuda_stream().cu_stream(),
-                    );
+                if num_elements > 0 {
+                    let err = unsafe {
+                        super::ffi::launch_bf16_to_fp8_kernel(
+                            input as *const _,
+                            output_ptr as *mut _,
+                            num_elements,
+                            dev.cuda_stream().cu_stream(),
+                        )
+                    };
+                    launched(err, input_l.shape())?;
                 }
             }
             other => hanzo_ml::bail!("Unsupported source dtype for FP8 conversion: {other:?}"),
@@ -324,6 +342,18 @@ impl CustomOp1 for DtypeToFp8 {
 
 /// Convert an FP8 tensor to another dtype.
 #[allow(dead_code)]
+
+/// A conversion kernel's launch result. An empty tensor launches nothing; a failed launch is the
+/// caller's error, with the shape that produced it.
+#[cfg(feature = "cuda")]
+fn launched(err: i32, shape: &hanzo_ml::Shape) -> Result<()> {
+    if err == 0 {
+        Ok(())
+    } else {
+        hanzo_ml::bail!("FP8 conversion kernel failed with CUDA error {err} on {shape:?}")
+    }
+}
+
 pub(crate) fn fp8_to_dtype(input: &Tensor, target_dtype: DType) -> Result<Tensor> {
     if input.dtype() != DType::F8E4M3 {
         hanzo_ml::bail!("Input tensor must be F8E4M3, got {:?}", input.dtype());

@@ -762,6 +762,9 @@ impl CacheManagerMixin for EmbeddingPipeline {
     fn cache(&self) -> &EitherCache {
         unreachable!()
     }
+    fn has_hybrid_cache(&self) -> bool {
+        false
+    }
 }
 
 impl MetadataMixin for EmbeddingPipeline {

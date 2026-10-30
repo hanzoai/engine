@@ -380,15 +380,11 @@ impl ModelWeights {
                 ..Default::default()
             },
         )?;
-        let mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
-            mask
-        } else {
-            AttentionMask::None
-        };
+        let mask = crate::layers_masker::paged_chunk_mask(
+            mask,
+            metadata.as_ref().map(|(_, meta)| *meta),
+            input_ids,
+        )?;
         let mask = DeviceMappedMask::new(mask, &**self.mapper.as_ref().unwrap())?;
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {

@@ -5,7 +5,7 @@ use hanzo_ml::{DType, Device, Result, Tensor};
 use rand_isaac::Isaac64Rng;
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::pipeline::text_models_inputs_processor::{FlashParams, ModelInputs};
+use crate::pipeline::text_models_inputs_processor::{FlashParams, ModelInputs, PRIOR};
 use crate::pipeline::{EitherCache, ForwardInputsResult, NormalCache, Pipeline};
 use crate::sequence::Sequence;
 
@@ -88,23 +88,22 @@ impl DraftModelProposer {
         if have > base_len {
             rollback_cache(draft, base_len)?;
         } else if have < base_len {
-            self.forward(draft, &toks[have..base_len], have)?;
+            self.forward(draft, &toks[..base_len], have)?;
         }
 
         let sampler = seq.sampler();
         let mut context = toks.to_vec();
         let mut tokens = Vec::with_capacity(self.gamma);
         let mut logit_rows = Vec::with_capacity(self.gamma);
-        let mut next_input = anchor;
         for step in 0..self.gamma {
-            let logits = self.forward(draft, &[next_input], base_len + step)?;
+            // The last token of `context` -- the anchor, then each sampled token -- is the input.
+            let logits = self.forward(draft, &context, base_len + step)?;
             let row = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
             let sampled =
                 sampler.sample(row.clone(), &context, false, rng.clone(), false, false)?;
             context.push(sampled.token);
             tokens.push(sampled.token);
             logit_rows.push(row.unsqueeze(0)?);
-            next_input = sampled.token;
         }
 
         let seq_cache = uninstall_cache(draft, self.empty_cache.clone());
@@ -114,17 +113,21 @@ impl DraftModelProposer {
         Ok(SpeculativeProposal::with_logits(tokens, logits))
     }
 
+    /// Runs the draft over `context[start_pos..]`, the tokens before it being context already in
+    /// the draft cache.
     fn forward(
         &self,
         draft: &mut (dyn Pipeline + Send + Sync),
-        tokens: &[u32],
+        context: &[u32],
         start_pos: usize,
     ) -> Result<Tensor> {
+        let tokens = &context[start_pos..];
         let seq_len = tokens.len();
         let input_ids = Tensor::from_slice(tokens, (1, seq_len), &self.device)?;
         let inputs = ModelInputs {
             input_ids,
             input_ids_full: None,
+            prior: vec![context[start_pos.saturating_sub(PRIOR)..start_pos].to_vec()],
             seqlen_offsets: vec![start_pos],
             seqlen_offsets_full: None,
             context_lens: vec![(seq_len - 1, 1)],

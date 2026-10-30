@@ -172,10 +172,20 @@ CORS allowed origins and the request body limit (default 50 MB) are not exposed 
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--prompt-len <n>` | 512 | Prompt length per iteration. |
-| `--gen-len <n>` | 128 | Generation length per iteration. |
-| `--iterations <n>` | 3 | Number of measured runs to average. |
-| `--warmup <n>` | 1 | Number of warmup runs (discarded). |
+| `--prompt-len <n,...>` | 512 | Prompt tokens of the prefill test; several values are several tests, 0 skips it. |
+| `--gen-len <n>` | 128 | Generated tokens of the decode test; 0 skips it. |
+| `--repetitions <n>` | 5 | Repetitions of each test; with three or more, the first is scored as warmup. |
+| `--concurrency <n,...>` | 1 | Concurrent requests per repetition; each value is its own set of tests. |
+| `--json <path>` | not set | Write the raw per-repetition samples, which `hanzo board score` scores. |
+| `--stochastic` | off | Sample from the full vocabulary at temperature 1, to measure the sampler's tax. |
+
+## `hanzo board` commands
+
+| Command | Purpose |
+|---|---|
+| `board score <run-dir>` | board.md, board.json and the paper's TeX, from the raw samples in the directory. |
+| `board publish <run-dir>... [--to URL]` | The runs as Hanzo Research evidence, printed or filed (bearer `$HANZO_API_KEY`). |
+| `board manifest <out> --backend ... --model-path ...` | Pin a run before its first sample. |
 
 ## `hanzo tune` flags
 

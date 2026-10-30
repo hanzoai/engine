@@ -6,7 +6,7 @@
 //! no eval or fit machinery, so it lives in the router next to [`Policy`] and the
 //! learned path stays inside the one policy surface.
 //!
-//! `hanzo-router-retrain` fits `W` and the arm profiles and serializes them here;
+//! A fit writes `W` and the arm profiles in this shape;
 //! this is the artifact the serving engine loads (`ROUTER_HEADS`).
 //!
 //! [`Policy`]: crate::policy::Policy

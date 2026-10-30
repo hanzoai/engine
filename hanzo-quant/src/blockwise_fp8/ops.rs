@@ -733,18 +733,42 @@ pub fn fp8_blockwise_quantize(
     }
 }
 
-/// FP8 blockwise matmul.
-/// Computes output = input @ weight.T where weight is FP8 blockwise quantized.
-/// - input: [M, K] in fp16/bf16
-/// - weight: [N, K] in FP8 with blockwise scales
-/// - scales: [N/block_y, K/block_x] in f32
-/// - output: [M, N] in fp16/bf16
+/// The 128x128 block shape every W8A8 path requires: activations are quantized per 128-wide
+/// group, and each group must meet exactly one weight block along K.
+pub(crate) fn check_w8a8_blocks(weight_block_size: &[usize]) -> Result<()> {
+    if weight_block_size != [128, 128] {
+        hanzo_ml::bail!("W8A8 block FP8 needs 128x128 weight blocks, got {weight_block_size:?}");
+    }
+    Ok(())
+}
+
+/// W8A8 block-FP8 matmul on CUDA: `output = q(input) @ weight.T`, output in the input's dtype.
+/// - input: [M, K] f32/f16/bf16, quantized per token and 128-group with the served quantizer `act`
+/// - weight: [N, K] F8E4M3; scales: [N/128, K/128] f32
+///
+/// Each 128-deep K block is an f32 dot of the codes, scaled by `s_a * s_w` into an f32
+/// accumulator.
 #[cfg(feature = "cuda")]
 pub fn fp8_blockwise_matmul(
     input: &Tensor,
     weight: &Tensor,
     scales: &Tensor,
     weight_block_size: &[usize],
+    act: crate::quantize::Fp8Mode,
+) -> Result<Tensor> {
+    let (qa, sa) = crate::quantize::fp8(&input.contiguous()?, act)?;
+    w8a8_matmul(&qa, &sa, weight, scales, weight_block_size, input.dtype())
+}
+
+/// The W8A8 GEMM over already-quantized activations `qa` [M, K] F8E4M3, `sa` [M, K/128] f32.
+#[cfg(feature = "cuda")]
+pub fn w8a8_matmul(
+    qa: &Tensor,
+    sa: &Tensor,
+    weight: &Tensor,
+    scales: &Tensor,
+    weight_block_size: &[usize],
+    out_dtype: DType,
 ) -> Result<Tensor> {
     use half::{bf16, f16};
     use hanzo_ml::{CudaStorage, Device, Storage};
@@ -754,148 +778,81 @@ pub fn fp8_blockwise_matmul(
     if !ffi::HAVE_BLOCKWISE_GEMM_KERNELS {
         hanzo_ml::bail!("Do not have blockwise FP8 GEMM kernels.");
     }
-
-    if !matches!(input.device(), Device::Cuda(_)) {
-        hanzo_ml::bail!("FP8 blockwise matmul only supported on CUDA");
-    }
-
-    let input = input.contiguous()?;
-    let weight = weight.contiguous()?;
-    let scales = scales.contiguous()?;
-
-    if input.dims().len() != 2 {
-        hanzo_ml::bail!("Expected input to be rank 2, got {:?}", input.dims());
-    }
-    if weight.dims().len() != 2 {
-        hanzo_ml::bail!("Expected weight to be rank 2, got {:?}", weight.dims());
-    }
-    if weight.dtype() != DType::F8E4M3 {
-        hanzo_ml::bail!("Expected FP8 weight, got {:?}", weight.dtype());
-    }
-
-    let m = input.dim(0)? as i32;
-    let k = input.dim(1)? as i32;
-    let n = weight.dim(0)? as i32;
-
-    if weight.dim(1)? as i32 != k {
+    check_w8a8_blocks(weight_block_size)?;
+    let Device::Cuda(dev) = qa.device() else {
+        hanzo_ml::bail!("W8A8 matmul only supported on CUDA");
+    };
+    let (m, k) = qa.dims2()?;
+    let (n, wk) = weight.dims2()?;
+    if wk != k || weight.dtype() != DType::F8E4M3 || qa.dtype() != DType::F8E4M3 {
         hanzo_ml::bail!(
-            "Weight K dimension {} doesn't match input K dimension {}",
-            weight.dim(1)?,
-            k
+            "W8A8 matmul: activations {:?} {:?}, weight {:?} {:?}",
+            qa.dims(),
+            qa.dtype(),
+            weight.dims(),
+            weight.dtype()
         );
     }
-
-    let dev = match input.device() {
-        Device::Cuda(dev) => dev,
-        _ => unreachable!(),
-    };
-
-    let block_size_y = weight_block_size[0] as i32;
-    let block_size_x = weight_block_size[1] as i32;
+    let (qa, sa, weight, scales) = (
+        qa.contiguous()?,
+        sa.contiguous()?,
+        weight.contiguous()?,
+        scales.contiguous()?,
+    );
     let scale_row_stride = scales.dim(1)? as i32;
-
-    let input_l = input.layout();
-    let weight_l = weight.layout();
-    let scales_l = scales.layout();
-
-    let input_storage = input.storage_and_layout().0;
-    let weight_storage = weight.storage_and_layout().0;
-    let scales_storage = scales.storage_and_layout().0;
-
-    let weight_s = match &*weight_storage {
-        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<F8E4M3>()?,
-        _ => hanzo_ml::bail!("Expected CUDA storage for weight"),
+    let qa_st = qa.storage_and_layout().0;
+    let sa_st = sa.storage_and_layout().0;
+    let w_st = weight.storage_and_layout().0;
+    let s_st = scales.storage_and_layout().0;
+    let (Storage::Cuda(qa_c), Storage::Cuda(sa_c), Storage::Cuda(w_c), Storage::Cuda(s_c)) =
+        (&*qa_st, &*sa_st, &*w_st, &*s_st)
+    else {
+        hanzo_ml::bail!("W8A8 matmul expects CUDA storage");
     };
-    let scales_s = match &*scales_storage {
-        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f32>()?,
-        _ => hanzo_ml::bail!("Expected CUDA storage for scales"),
-    };
+    let (qa_ptr, _g1) = slice_ptr(qa_c.as_cuda_slice::<F8E4M3>()?, qa.layout().start_offset());
+    let (sa_ptr, _g2) = slice_ptr(sa_c.as_cuda_slice::<f32>()?, sa.layout().start_offset());
+    let (w_ptr, _g3) = slice_ptr(w_c.as_cuda_slice::<F8E4M3>()?, weight.layout().start_offset());
+    let (s_ptr, _g4) = slice_ptr(s_c.as_cuda_slice::<f32>()?, scales.layout().start_offset());
+    let stream = dev.cuda_stream().cu_stream();
 
-    let (weight_ptr, _weight_guard) = slice_ptr(weight_s, weight_l.start_offset());
-    let (scales_ptr, _scales_guard) = slice_ptr(scales_s, scales_l.start_offset());
-
-    match input.dtype() {
-        DType::F16 => {
-            let output = dev.alloc_zeros::<f16>((m * n) as usize)?;
-
-            let input_s = match &*input_storage {
-                Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
-                _ => hanzo_ml::bail!("Expected CUDA storage for input"),
-            };
-
+    macro_rules! run {
+        ($t:ty, $launch:ident) => {{
+            let output = dev.alloc_zeros::<$t>(m * n)?;
             {
-                let (output_ptr, _output_guard) = slice_ptr(&output, 0);
-                let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
-
+                let (o_ptr, _og) = slice_ptr(&output, 0);
                 unsafe {
-                    ffi::launch_fp8_matmul_f16(
-                        input_ptr as *const _,
-                        weight_ptr as *const _,
-                        scales_ptr as *const _,
-                        output_ptr as *mut _,
-                        m,
-                        n,
-                        k,
+                    ffi::$launch(
+                        qa_ptr as *const u8,
+                        sa_ptr as *const f32,
+                        w_ptr as *const u8,
+                        s_ptr as *const f32,
+                        o_ptr as *mut $t,
+                        m as i32,
+                        n as i32,
+                        k as i32,
                         scale_row_stride,
-                        block_size_y,
-                        block_size_x,
-                        dev.cuda_stream().cu_stream(),
+                        weight_block_size[0] as i32,
+                        stream,
                     )
                 };
             }
-
-            let output_storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
             Ok(Tensor::from((
-                Storage::Cuda(output_storage),
-                hanzo_ml::Shape::from_dims(&[m as usize, n as usize]),
+                Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+                hanzo_ml::Shape::from_dims(&[m, n]),
             )))
-        }
-        DType::BF16 => {
-            let output = dev.alloc_zeros::<bf16>((m * n) as usize)?;
-
-            let input_s = match &*input_storage {
-                Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
-                _ => hanzo_ml::bail!("Expected CUDA storage for input"),
-            };
-
-            {
-                let (output_ptr, _output_guard) = slice_ptr(&output, 0);
-                let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
-
-                unsafe {
-                    ffi::launch_fp8_matmul_bf16(
-                        input_ptr as *const _,
-                        weight_ptr as *const _,
-                        scales_ptr as *const _,
-                        output_ptr as *mut _,
-                        m,
-                        n,
-                        k,
-                        scale_row_stride,
-                        block_size_y,
-                        block_size_x,
-                        dev.cuda_stream().cu_stream(),
-                    )
-                };
-            }
-
-            let output_storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
-            Ok(Tensor::from((
-                Storage::Cuda(output_storage),
-                hanzo_ml::Shape::from_dims(&[m as usize, n as usize]),
-            )))
-        }
-        other => hanzo_ml::bail!("Unsupported input dtype for FP8 matmul: {:?}", other),
+        }};
+    }
+    match out_dtype {
+        DType::F32 => run!(f32, launch_fp8_matmul_f32),
+        DType::F16 => run!(f16, launch_fp8_matmul_f16),
+        DType::BF16 => run!(bf16, launch_fp8_matmul_bf16),
+        other => hanzo_ml::bail!("Unsupported output dtype for W8A8 matmul: {other:?}"),
     }
 }
 
-/// FP8 indexed MoE GEMM for gather_forward.
-/// Computes indexed matmul for MoE where each token selects specific experts.
-/// - input: [num_tokens, 1, K] or [num_tokens, topk, K] in fp16/bf16
-/// - weights: [num_experts, N, K] in FP8 with blockwise scales
-/// - scales: [num_experts, N/block_y, K/block_x] in f32
-/// - indices: [num_tokens, topk] in i32
-/// - output: [num_tokens, topk, N] in fp16/bf16
+/// W8A8 indexed MoE GEMM on CUDA. `input` [T, 1|topk, K] (or [T, K]) is quantized per row and
+/// 128-group ([`Fp8Mode::Gather`], vLLM's per_token_group_fp8_quant); weights [E, N, K] F8E4M3,
+/// scales [E, N/128, K/128]; indices [T, topk] u32. Output [T, topk, N] in the input's dtype.
 #[cfg(feature = "cuda")]
 pub fn fp8_indexed_moe_gemm(
     input: &Tensor,
@@ -907,182 +864,122 @@ pub fn fp8_indexed_moe_gemm(
     use half::{bf16, f16};
     use hanzo_ml::{CudaStorage, Device, Storage};
 
+    use crate::quantize::{fp8, Fp8Mode};
     use crate::{blockwise_fp8::ffi, utils::slice_ptr};
 
     if !ffi::HAVE_BLOCKWISE_GEMM_KERNELS {
         hanzo_ml::bail!("Do not have blockwise FP8 GEMM kernels.");
     }
-
-    if !matches!(input.device(), Device::Cuda(_)) {
+    check_w8a8_blocks(weight_block_size)?;
+    let Device::Cuda(dev) = input.device() else {
         hanzo_ml::bail!("FP8 indexed MoE GEMM only supported on CUDA");
-    }
-
-    let input = input.contiguous()?;
-    let weights = weights.contiguous()?;
-    let scales = scales.contiguous()?;
-    let indices = indices.contiguous()?;
-
-    // Determine input shape
-    // Input can be [num_tokens, 1, K] or [num_tokens, topk, K]
-    let (num_tokens, input_has_topk_dim, k) = if input.dims().len() == 3 {
-        let dims = input.dims3()?;
-        (dims.0, dims.1 > 1, dims.2)
-    } else if input.dims().len() == 2 {
-        let dims = input.dims2()?;
-        (dims.0, false, dims.1)
-    } else {
-        hanzo_ml::bail!("Expected input to be rank 2 or 3, got {:?}", input.dims());
     };
-
-    // Get topk from indices
+    let (num_tokens, rows_per_token, k) = match input.dims() {
+        [t, r, k] => (*t, *r, *k),
+        [t, k] => (*t, 1, *k),
+        d => hanzo_ml::bail!("Expected input to be rank 2 or 3, got {d:?}"),
+    };
     let (indices_tokens, topk) = indices.dims2()?;
     if indices_tokens != num_tokens {
-        hanzo_ml::bail!(
-            "Indices num_tokens {} doesn't match input num_tokens {}",
-            indices_tokens,
-            num_tokens
-        );
+        hanzo_ml::bail!("Indices num_tokens {indices_tokens} doesn't match input {num_tokens}");
     }
-
-    // Weights shape: [num_experts, N, K]
-    if weights.dims().len() != 3 {
-        hanzo_ml::bail!("Expected weights to be rank 3, got {:?}", weights.dims());
-    }
+    let input_has_topk_dim = rows_per_token > 1;
     let (num_experts, n, weight_k) = weights.dims3()?;
-    if weight_k != k {
-        hanzo_ml::bail!(
-            "Weights K dimension {} doesn't match input K dimension {}",
-            weight_k,
-            k
-        );
+    if weight_k != k || weights.dtype() != DType::F8E4M3 {
+        hanzo_ml::bail!("Weights {:?} {:?} for K {k}", weights.dims(), weights.dtype());
     }
+    let (qa, sa) = fp8(
+        &input.reshape((num_tokens * rows_per_token, k))?.contiguous()?,
+        Fp8Mode::Gather,
+    )?;
+    let (weights, scales, indices) = (
+        weights.contiguous()?,
+        scales.contiguous()?,
+        indices.contiguous()?,
+    );
+    let scale_row_stride = scales.dim(2)? as i32;
+    let qa_st = qa.storage_and_layout().0;
+    let sa_st = sa.storage_and_layout().0;
+    let w_st = weights.storage_and_layout().0;
+    let s_st = scales.storage_and_layout().0;
+    let i_st = indices.storage_and_layout().0;
+    let (
+        Storage::Cuda(qa_c),
+        Storage::Cuda(sa_c),
+        Storage::Cuda(w_c),
+        Storage::Cuda(s_c),
+        Storage::Cuda(i_c),
+    ) = (&*qa_st, &*sa_st, &*w_st, &*s_st, &*i_st)
+    else {
+        hanzo_ml::bail!("W8A8 MoE GEMM expects CUDA storage");
+    };
+    let (qa_ptr, _g1) = slice_ptr(qa_c.as_cuda_slice::<F8E4M3>()?, qa.layout().start_offset());
+    let (sa_ptr, _g2) = slice_ptr(sa_c.as_cuda_slice::<f32>()?, sa.layout().start_offset());
+    let (w_ptr, _g3) = slice_ptr(w_c.as_cuda_slice::<F8E4M3>()?, weights.layout().start_offset());
+    let (s_ptr, _g4) = slice_ptr(s_c.as_cuda_slice::<f32>()?, scales.layout().start_offset());
+    let (i_ptr, _g5) = slice_ptr(i_c.as_cuda_slice::<u32>()?, indices.layout().start_offset());
+    let stream = dev.cuda_stream().cu_stream();
 
-    if weights.dtype() != DType::F8E4M3 {
-        hanzo_ml::bail!("Expected FP8 weights, got {:?}", weights.dtype());
+    macro_rules! run {
+        ($t:ty, $launch:ident) => {{
+            let output = dev.alloc_zeros::<$t>(num_tokens * topk * n)?;
+            {
+                let (o_ptr, _og) = slice_ptr(&output, 0);
+                unsafe {
+                    ffi::$launch(
+                        qa_ptr as *const u8,
+                        sa_ptr as *const f32,
+                        w_ptr as *const u8,
+                        s_ptr as *const f32,
+                        i_ptr as *const u32,
+                        o_ptr as *mut $t,
+                        num_tokens as i32,
+                        topk as i32,
+                        num_experts as i32,
+                        n as i32,
+                        k as i32,
+                        scale_row_stride,
+                        weight_block_size[0] as i32,
+                        input_has_topk_dim,
+                        stream,
+                    )
+                };
+            }
+            Ok(Tensor::from((
+                Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+                hanzo_ml::Shape::from_dims(&[num_tokens, topk, n]),
+            )))
+        }};
     }
-
-    let dev = match input.device() {
-        Device::Cuda(dev) => dev,
-        _ => unreachable!(),
-    };
-
-    let block_size_y = weight_block_size[0] as i32;
-    let block_size_x = weight_block_size[1] as i32;
-
-    // Scales shape should be [num_experts, N/block_y, K/block_x]
-    let scale_row_stride = scales.dim(2)? as i32; // K/block_x
-
-    let input_l = input.layout();
-    let weights_l = weights.layout();
-    let scales_l = scales.layout();
-    let indices_l = indices.layout();
-
-    let input_storage = input.storage_and_layout().0;
-    let weights_storage = weights.storage_and_layout().0;
-    let scales_storage = scales.storage_and_layout().0;
-    let indices_storage = indices.storage_and_layout().0;
-
-    let weights_s = match &*weights_storage {
-        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<F8E4M3>()?,
-        _ => hanzo_ml::bail!("Expected CUDA storage for weights"),
-    };
-    let scales_s = match &*scales_storage {
-        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f32>()?,
-        _ => hanzo_ml::bail!("Expected CUDA storage for scales"),
-    };
-    let indices_s = match &*indices_storage {
-        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<u32>()?,
-        _ => hanzo_ml::bail!("Expected CUDA storage for indices"),
-    };
-
-    let (weights_ptr, _weights_guard) = slice_ptr(weights_s, weights_l.start_offset());
-    let (scales_ptr, _scales_guard) = slice_ptr(scales_s, scales_l.start_offset());
-    let (indices_ptr, _indices_guard) = slice_ptr(indices_s, indices_l.start_offset());
-
     match input.dtype() {
-        DType::F16 => {
-            let output = dev.alloc_zeros::<f16>(num_tokens * topk * n)?;
-
-            let input_s = match &*input_storage {
-                Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
-                _ => hanzo_ml::bail!("Expected CUDA storage for input"),
-            };
-
-            {
-                let (output_ptr, _output_guard) = slice_ptr(&output, 0);
-                let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
-
-                unsafe {
-                    ffi::launch_fp8_indexed_moe_gemm_f16(
-                        input_ptr as *const _,
-                        weights_ptr as *const _,
-                        scales_ptr as *const _,
-                        indices_ptr as *const _,
-                        output_ptr as *mut _,
-                        num_tokens as i32,
-                        topk as i32,
-                        num_experts as i32,
-                        n as i32,
-                        k as i32,
-                        scale_row_stride,
-                        block_size_y,
-                        block_size_x,
-                        input_has_topk_dim,
-                        dev.cuda_stream().cu_stream(),
-                    )
-                };
-            }
-
-            let output_storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
-            Ok(Tensor::from((
-                Storage::Cuda(output_storage),
-                hanzo_ml::Shape::from_dims(&[num_tokens, topk, n]),
-            )))
-        }
-        DType::BF16 => {
-            let output = dev.alloc_zeros::<bf16>(num_tokens * topk * n)?;
-
-            let input_s = match &*input_storage {
-                Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
-                _ => hanzo_ml::bail!("Expected CUDA storage for input"),
-            };
-
-            {
-                let (output_ptr, _output_guard) = slice_ptr(&output, 0);
-                let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
-
-                unsafe {
-                    ffi::launch_fp8_indexed_moe_gemm_bf16(
-                        input_ptr as *const _,
-                        weights_ptr as *const _,
-                        scales_ptr as *const _,
-                        indices_ptr as *const _,
-                        output_ptr as *mut _,
-                        num_tokens as i32,
-                        topk as i32,
-                        num_experts as i32,
-                        n as i32,
-                        k as i32,
-                        scale_row_stride,
-                        block_size_y,
-                        block_size_x,
-                        input_has_topk_dim,
-                        dev.cuda_stream().cu_stream(),
-                    )
-                };
-            }
-
-            let output_storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
-            Ok(Tensor::from((
-                Storage::Cuda(output_storage),
-                hanzo_ml::Shape::from_dims(&[num_tokens, topk, n]),
-            )))
-        }
-        other => hanzo_ml::bail!(
-            "Unsupported input dtype for FP8 indexed MoE GEMM: {:?}",
-            other
-        ),
+        DType::F32 => run!(f32, launch_fp8_indexed_moe_gemm_f32),
+        DType::F16 => run!(f16, launch_fp8_indexed_moe_gemm_f16),
+        DType::BF16 => run!(bf16, launch_fp8_indexed_moe_gemm_bf16),
+        other => hanzo_ml::bail!("Unsupported input dtype for FP8 indexed MoE GEMM: {other:?}"),
     }
+}
+
+/// The CPU reference of the W8A8 GEMM: quantize `input` in `mode`, dequantize both operands
+/// exactly to f32, one f32 matmul, output in the input's dtype. `weight` is [.., N, K].
+pub fn w8a8_reference(
+    input: &Tensor,
+    weight: &Tensor,
+    scales: &Tensor,
+    weight_block_size: &[usize],
+    mode: crate::quantize::Fp8Mode,
+) -> Result<Tensor> {
+    check_w8a8_blocks(weight_block_size)?;
+    let k = input.dim(hanzo_ml::D::Minus1)?;
+    let rows = input.elem_count() / k;
+    let (qa, sa) = crate::quantize::fp8(&input.reshape((rows, k))?, mode)?;
+    let a = qa
+        .to_dtype(DType::F32)?
+        .reshape((rows, k / 128, 128))?
+        .broadcast_mul(&sa.unsqueeze(2)?)?
+        .reshape(input.shape())?
+        .to_dtype(DType::F32)?;
+    let w = fp8_blockwise_dequantize(weight, scales, weight_block_size.to_vec(), DType::F32)?;
+    a.broadcast_matmul(&w.t()?)?.to_dtype(input.dtype())
 }
 
 #[cfg(test)]
@@ -1381,6 +1278,110 @@ mod tests {
         // TODO: will be adding real blockwise fp8 gemm shortly ;)
         assert_eq!((32, 7168), truth.dims2()?);
 
+        Ok(())
+    }
+
+    /// Random block-FP8 weights [.., N, K] with scales around a real checkpoint's.
+    fn fp8_weight(shape: &[usize], dev: &Device) -> Result<(Tensor, Tensor)> {
+        let n = shape[shape.len() - 2];
+        let k = shape[shape.len() - 1];
+        let w = (Tensor::randn(0f32, 1f32, shape, &Device::Cpu)? * 100.0)?
+            .clamp(-448f32, 448f32)?
+            .to_dtype(DType::F8E4M3)?;
+        let mut sshape = shape[..shape.len() - 2].to_vec();
+        sshape.extend([n.div_ceil(128), k.div_ceil(128)]);
+        let s = Tensor::rand(1e-4f32, 3e-4f32, sshape.as_slice(), &Device::Cpu)?;
+        Ok((w.to_device(dev)?, s.to_device(dev)?))
+    }
+
+    /// Within 1 bf16 ulp of the reference plus 2^-10 * rms(reference) per row.
+    fn assert_within_ulp(what: &str, got: &Tensor, want: &Tensor) -> Result<()> {
+        let g = got.to_dtype(DType::F32)?.to_device(&Device::Cpu)?;
+        let w = want.to_dtype(DType::F32)?.to_device(&Device::Cpu)?;
+        let cols = *w.dims().last().unwrap();
+        let g = g.flatten_all()?.to_vec1::<f32>()?;
+        let w = w.flatten_all()?.to_vec1::<f32>()?;
+        for (r, (gr, wr)) in g.chunks(cols).zip(w.chunks(cols)).enumerate() {
+            let rms = (wr.iter().map(|v| v * v).sum::<f32>() / cols as f32).sqrt();
+            for (i, (a, b)) in gr.iter().zip(wr).enumerate() {
+                let ulp = f32::from_bits(b.abs().to_bits() & 0x7f80_0000) / 128.0;
+                let bound = ulp + rms / 1024.0;
+                assert!(
+                    (a - b).abs() <= bound,
+                    "{what}: row {r} col {i}: {a} vs {b} (bound {bound})"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn w8a8_matmul_matches_reference() -> Result<()> {
+        use crate::quantize::Fp8Mode;
+        let Ok(dev) = Device::new_cuda(0) else {
+            return Ok(());
+        };
+        for (n, k) in [(10240, 2560), (6144, 2560), (2560, 6144), (640, 2560), (2560, 640)] {
+            let (w, s) = fp8_weight(&[n, k], &Device::Cpu)?;
+            let (wg, sg) = (w.to_device(&dev)?, s.to_device(&dev)?);
+            for m in [1, 4, 5, 64, 300] {
+                let x = Tensor::randn(0f32, 1f32, (m, k), &Device::Cpu)?.to_dtype(DType::BF16)?;
+                let want = ops::w8a8_reference(&x, &w, &s, &[128, 128], Fp8Mode::Linear)?;
+                let got = ops::fp8_blockwise_matmul(&x.to_device(&dev)?, &wg, &sg, &[128, 128], Fp8Mode::Linear)?;
+                assert_eq!(got.dtype(), DType::BF16);
+                assert_within_ulp(&format!("({n},{k}) m={m}"), &got, &want)?;
+            }
+            // f32 activations keep an f32 output
+            let x = Tensor::randn(0f32, 1f32, (3, k), &Device::Cpu)?;
+            let got = ops::fp8_blockwise_matmul(&x.to_device(&dev)?, &wg, &sg, &[128, 128], Fp8Mode::Linear)?;
+            assert_eq!(got.dtype(), DType::F32);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn w8a8_indexed_moe_matches_reference() -> Result<()> {
+        use crate::quantize::{fp8, Fp8Mode};
+        let Ok(dev) = Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let (e, n, k, topk) = (8, 256, 640, 3);
+        let (w, s) = fp8_weight(&[e, n, k], &Device::Cpu)?;
+        let (wg, sg) = (w.to_device(&dev)?, s.to_device(&dev)?);
+        for m in [1usize, 17] {
+            let ids: Vec<u32> = (0..m * topk).map(|i| ((i * 5 + 3) % e) as u32).collect();
+            let ids = Tensor::from_vec(ids, (m, topk), &Device::Cpu)?;
+            for rows in [1, topk] {
+                let x = Tensor::randn(0f32, 1f32, (m, rows, k), &Device::Cpu)?.to_dtype(DType::BF16)?;
+                let got = ops::fp8_indexed_moe_gemm(
+                    &x.to_device(&dev)?,
+                    &wg,
+                    &sg,
+                    &ids.to_device(&dev)?,
+                    &[128, 128],
+                )?;
+                let (qa, sa) = fp8(&x.reshape((m * rows, k))?, Fp8Mode::Gather)?;
+                let a = qa
+                    .to_dtype(DType::F32)?
+                    .reshape((m * rows, k / 128, 128))?
+                    .broadcast_mul(&sa.unsqueeze(2)?)?
+                    .reshape((m, rows, k))?;
+                let idv = ids.to_vec2::<u32>()?;
+                let mut want = Vec::new();
+                for t in 0..m {
+                    for j in 0..topk {
+                        let ex = idv[t][j] as usize;
+                        let wd = ops::fp8_blockwise_dequantize(&w.get(ex)?, &s.get(ex)?, vec![128, 128], DType::F32)?;
+                        let r = if rows > 1 { j } else { 0 };
+                        want.push(a.get(t)?.get(r)?.unsqueeze(0)?.matmul(&wd.t()?)?.squeeze(0)?);
+                    }
+                }
+                let want = Tensor::stack(&want, 0)?.reshape((m, topk, n))?.to_dtype(DType::BF16)?;
+                assert_within_ulp(&format!("moe m={m} rows={rows}"), &got, &want)?;
+            }
+        }
         Ok(())
     }
 }

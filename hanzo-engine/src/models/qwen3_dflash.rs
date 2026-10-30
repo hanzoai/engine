@@ -51,7 +51,6 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::layers::{linear_no_bias, RmsNorm, RotaryEmbedding};
-use crate::ops::{TopKLastDimOp, TopKOutput};
 use crate::speculative::{
     SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposer,
     SpeculativeSharedHeads, TargetTokenEmbedder,
@@ -186,13 +185,17 @@ impl BlockConv {
                 (2, kernel_size, h),
                 &format!("{name}.base_kernel: [pre/post, kernel, hidden]"),
             )?,
-            kernel_projection: linear_no_bias(h, 2 * kernel_size * groups, vb.pp("kernel_projection"))
-                .map_err(|e| {
-                    hanzo_ml::Error::msg(format!(
-                        "{name}.kernel_projection.weight: expected \
+            kernel_projection: linear_no_bias(
+                h,
+                2 * kernel_size * groups,
+                vb.pp("kernel_projection"),
+            )
+            .map_err(|e| {
+                hanzo_ml::Error::msg(format!(
+                    "{name}.kernel_projection.weight: expected \
                          [2 * kernel {kernel_size} * groups {groups}, hidden {h}] — {e}"
-                    ))
-                })?,
+                ))
+            })?,
             kernel_size,
             group_size,
             groups,
@@ -204,10 +207,12 @@ impl BlockConv {
     /// [`finish`]: BlockConv::finish
     fn prepare(&self, hidden: &Tensor) -> Result<(Tensor, Tensor)> {
         let slots = hidden.dim(0)?;
-        let dynamic = self
-            .kernel_projection
-            .forward(hidden)?
-            .reshape((slots, 2, self.kernel_size, self.groups))?;
+        let dynamic = self.kernel_projection.forward(hidden)?.reshape((
+            slots,
+            2,
+            self.kernel_size,
+            self.groups,
+        ))?;
         let pre = dynamic.narrow(1, 0, 1)?.squeeze(1)?;
         let post = dynamic.narrow(1, 1, 1)?.squeeze(1)?;
         Ok((self.convolve(hidden, &pre, 0)?, post))
@@ -228,10 +233,11 @@ impl BlockConv {
     fn convolve(&self, hidden: &Tensor, dynamic: &Tensor, half: usize) -> Result<Tensor> {
         let (slots, hidden_size) = hidden.dims2()?;
         let x = hidden.reshape((slots, self.groups, self.group_size))?;
-        let base = self
-            .base_kernel
-            .narrow(0, half, 1)?
-            .reshape((self.kernel_size, self.groups, self.group_size))?;
+        let base = self.base_kernel.narrow(0, half, 1)?.reshape((
+            self.kernel_size,
+            self.groups,
+            self.group_size,
+        ))?;
         let mut out: Option<Tensor> = None;
         for offset in 0..self.kernel_size {
             // A tap that reaches past the block start reads only zeros.
@@ -241,7 +247,8 @@ impl BlockConv {
             let shifted = if offset == 0 {
                 x.clone()
             } else {
-                x.narrow(0, 0, slots - offset)?.pad_with_zeros(0, offset, 0)?
+                x.narrow(0, 0, slots - offset)?
+                    .pad_with_zeros(0, offset, 0)?
             };
             let taps = base.narrow(0, offset, 1)?.broadcast_add(
                 &dynamic
@@ -282,7 +289,9 @@ impl CandidateSelector {
         let top_k = cfg.dflash_config.selector_top_k;
         let vocab = cfg.vocab_size;
         if rank == 0 {
-            return Err(hanzo_ml::Error::msg("dflash_config.selector_rank must be >= 1"));
+            return Err(hanzo_ml::Error::msg(
+                "dflash_config.selector_rank must be >= 1",
+            ));
         }
         if top_k == 0 || top_k > vocab {
             return Err(hanzo_ml::Error::msg(format!(
@@ -290,18 +299,14 @@ impl CandidateSelector {
             )));
         }
         Ok(Self {
-            hidden_projection: linear_no_bias(
-                cfg.hidden_size,
-                rank,
-                vb.pp("hidden_projection"),
-            )
-            .map_err(|e| {
-                hanzo_ml::Error::msg(format!(
-                    "candidate_selector.hidden_projection.weight: expected \
+            hidden_projection: linear_no_bias(cfg.hidden_size, rank, vb.pp("hidden_projection"))
+                .map_err(|e| {
+                    hanzo_ml::Error::msg(format!(
+                        "candidate_selector.hidden_projection.weight: expected \
                      [rank {rank}, hidden {}] — {e}",
-                    cfg.hidden_size
-                ))
-            })?,
+                        cfg.hidden_size
+                    ))
+                })?,
             predecessor_codebook: named(
                 &vb,
                 "predecessor_codebook",
@@ -338,9 +343,14 @@ impl CandidateSelector {
         let (slots, vocab) = logits.dims2()?;
         let top_k = self.top_k.min(vocab);
 
-        let TopKOutput { values, indices } = logits.contiguous()?.topk(top_k)?;
-        let unary = values.to_dtype(DType::F32)?.to_vec2::<f32>()?;
-        let candidates = indices.to_dtype(DType::U32)?.to_vec2::<u32>()?;
+        // The walk is host code over each slot's candidates, so the candidates come from a host
+        // partial select over the logit rows; nothing on the device sorts a vocabulary-wide row.
+        let rows_h = logits
+            .contiguous()?
+            .to_dtype(DType::F32)?
+            .to_vec2::<f32>()?;
+        let (candidates, unary): (Vec<Vec<u32>>, Vec<Vec<f32>>) =
+            rows_h.iter().map(|row| top_k_of(row, top_k)).unzip();
         let gate_hidden = self.hidden_projection.forward(hidden)?; // [slots, rank]
 
         let mut tokens = Vec::with_capacity(slots);
@@ -352,7 +362,11 @@ impl CandidateSelector {
                 .predecessor_codebook
                 .index_select(&previous_t, 0)?
                 .mul(&gate_hidden.narrow(0, slot, 1)?)?; // [1, rank]
-            let ids = Tensor::from_vec(candidates[slot].clone(), (top_k,), &device)?;
+            let ids_h = &candidates[slot];
+            if ids_h.is_empty() {
+                hanzo_ml::bail!("slot {slot} has no finite logit");
+            }
+            let ids = Tensor::from_vec(ids_h.clone(), (ids_h.len(),), &device)?;
             let successors = self.successor_codebook.index_select(&ids, 0)?; // [top_k, rank]
             let pairwise = gate
                 .matmul(&successors.t()?.contiguous()?)?
@@ -417,11 +431,7 @@ impl DFlash2Layer {
                 vb.pp("attention_conv"),
                 &format!("layers.{index}.attention_conv"),
             )?,
-            mlp_conv: BlockConv::load(
-                cfg,
-                vb.pp("mlp_conv"),
-                &format!("layers.{index}.mlp_conv"),
-            )?,
+            mlp_conv: BlockConv::load(cfg, vb.pp("mlp_conv"), &format!("layers.{index}.mlp_conv"))?,
         })
     }
 }
@@ -585,7 +595,10 @@ impl Qwen3DFlash2 {
         // 2. Seed the block: [anchor, MASK, MASK, ...], embedded through the target.
         let mut ids = Vec::with_capacity(bs);
         ids.push(anchor_token);
-        ids.extend(std::iter::repeat_n(self.cfg.dflash_config.mask_token_id, bs - 1));
+        ids.extend(std::iter::repeat_n(
+            self.cfg.dflash_config.mask_token_id,
+            bs - 1,
+        ));
         let ids_t = Tensor::from_vec(ids, (1, bs), dev)?;
         let mut hstate = as_2d(&embed(&ids_t)?)?.to_dtype(self.dtype)?; // [bs, hidden]
 
@@ -733,7 +746,6 @@ impl Qwen3DFlash2 {
         let sin = Tensor::cat(&[&sin, &sin], D::Minus1)?;
         Ok((cos, sin))
     }
-
 }
 
 /// The context positions a draft at `anchor_pos` reads, given the positions `held`. Rows at or
@@ -855,6 +867,28 @@ fn repeat_kv(x: &Tensor, nrep: usize) -> Result<Tensor> {
 /// else a multinomial draw over `softmax(scores / temperature)`. The draw is over
 /// the selector's `top_k` candidates, not the vocabulary — the walk cannot leave
 /// the candidate set.
+/// The `k` largest entries of `row`, largest first: their indices and values. NaN is never
+/// chosen; ties go to the lower index.
+fn top_k_of(row: &[f32], k: usize) -> (Vec<u32>, Vec<f32>) {
+    let mut idx: Vec<u32> = (0..row.len() as u32)
+        .filter(|&i| !row[i as usize].is_nan())
+        .collect();
+    let k = k.min(idx.len());
+    let larger_first = |&a: &u32, &b: &u32| {
+        row[b as usize]
+            .partial_cmp(&row[a as usize])
+            .expect("NaN was filtered out")
+            .then(a.cmp(&b))
+    };
+    if k > 0 {
+        idx.select_nth_unstable_by(k - 1, larger_first);
+    }
+    idx.truncate(k);
+    idx.sort_unstable_by(larger_first);
+    let vals = idx.iter().map(|&i| row[i as usize]).collect();
+    (idx, vals)
+}
+
 fn select_candidate(scores: &[f32], temperature: f64) -> usize {
     if scores.is_empty() {
         return 0;
@@ -991,7 +1025,9 @@ impl SpeculativeProposer for DFlash2Proposer {
         // decodes those sequences one token at a time.
         let stand_down = || {
             Ok(SpeculativeProposalBatch::new(vec![
-                SpeculativeProposal::new(Vec::new());
+                SpeculativeProposal::new(
+                    Vec::new()
+                );
                 batch
             ]))
         };
@@ -1015,18 +1051,16 @@ impl SpeculativeProposer for DFlash2Proposer {
         let embed = move |ids: &Tensor| embed_fn(ids);
         let head = Arc::clone(&self.heads.lm_head);
         let lm_head = move |hidden: &Tensor| head(hidden);
-        // Deterministic walk (argmax): draft quality only moves the accept rate, and
-        // the target verify decides every emitted token.
-        let (tokens_t, logits) =
+        // Argmax walk. The proposal carries no distribution, so the verifier accepts a draft only
+        // when its own sample matches it, which is exact at any temperature; the p/q ratio test
+        // would need the drafts drawn from the logits.
+        let (tokens_t, _) =
             self.draft
                 .draft_block(hiddens, anchor_token, anchor_pos, &embed, &lm_head, 0.0)?;
 
         let tokens: Vec<u32> = tokens_t.to_vec1::<u32>()?;
-        // The verifier indexes logit rows by draft position and expects [1, n, vocab].
-        let logits = logits.unsqueeze(0)?;
-
         Ok(SpeculativeProposalBatch::new(vec![
-            SpeculativeProposal::with_logits(tokens, logits),
+            SpeculativeProposal::new(tokens),
         ]))
     }
 }
@@ -1100,7 +1134,9 @@ mod tests {
         }
         let c = conv(base, hidden, kernel, group_size)?;
         let x = Tensor::from_vec(
-            (0..(slots * hidden)).map(|v| (v + 1) as f32).collect::<Vec<_>>(),
+            (0..(slots * hidden))
+                .map(|v| (v + 1) as f32)
+                .collect::<Vec<_>>(),
             (slots, hidden),
             &dev,
         )?;
@@ -1232,7 +1268,9 @@ mod tests {
             .to_vec2::<f32>()?;
             for (slot, (full_row, sliced_row)) in full.iter().zip(&sliced).enumerate() {
                 assert!(
-                    full_row[..ctx_start].iter().all(|v| *v == f32::NEG_INFINITY),
+                    full_row[..ctx_start]
+                        .iter()
+                        .all(|v| *v == f32::NEG_INFINITY),
                     "anchor {anchor_pos} slot {slot}: a dropped row was visible"
                 );
                 assert_eq!(
@@ -1310,7 +1348,8 @@ mod tests {
             let rows = table.index_select(&flat, 0)?;
             rows.reshape((ids.dim(0)?, ids.dim(1)?, h))
         };
-        let lm_head = |hidden: &Tensor| -> Result<Tensor> { hidden.matmul(&head_w.t()?.contiguous()?) };
+        let lm_head =
+            |hidden: &Tensor| -> Result<Tensor> { hidden.matmul(&head_w.t()?.contiguous()?) };
 
         let ctx_len = 12usize;
         let mut hiddens = Vec::with_capacity(n_fused);

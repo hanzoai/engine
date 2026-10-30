@@ -1,11 +1,10 @@
 [build]
 rustflags = ["-C", "target-cpu=native"]
 
+# `native` enables exactly what the host has: i8mm on M2 and later, not on M1, where forcing it
+# makes every int8 matmul die with SIGILL.
 [target.aarch64-apple-darwin]
-rustflags = [
-  "-C", "target-cpu=native",
-  "-C", "target-feature=+aes,+sha2,+fp16,+i8mm",
-]
+rustflags = ["-C", "target-cpu=native"]
 
 [target.x86_64-apple-darwin]
 rustflags = [

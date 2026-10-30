@@ -49,20 +49,20 @@ hanzo distill --teacher Qwen/Qwen2.5-1.5B --student HuggingFaceTB/SmolLM2-135M \
 
 ## HTTP API
 
-`hanzo serve` exposes the same primitives under `/v1/training` — the server
+`hanzo serve` exposes the same primitives under `/v1/train` — the server
 that does inference also trains. Model load is async: create returns
 immediately with `status: "loading"`; poll the client until `ready`.
 
 | Route | Method | Purpose |
 | --- | --- | --- |
-| `/v1/training/clients` | POST | create: `{"base_model", "lora_config": {"rank", "alpha", "target_modules"}}` |
-| `/v1/training/clients` | GET | list clients |
-| `/v1/training/clients/{id}` | GET | status, counters, `loss_history` |
-| `/v1/training/clients/{id}` | DELETE | drop the client, free its memory |
-| `/v1/training/clients/{id}/forward_backward` | POST | `{"data": [...]}` → `{"loss", "num_tokens", "metrics"}` |
-| `/v1/training/clients/{id}/optim_step` | POST | `{"adam_params": {"lr", ...}}` |
-| `/v1/training/clients/{id}/sample` | POST | `{"prompt"` or `"tokens", "sampling_params", "num_samples"}` |
-| `/v1/training/clients/{id}/save_weights` | POST | `{"name"}` → `{"path", "format": "peft"}`, written under `~/.cache/hanzo/adapters/{id}/` |
+| `/v1/train/clients` | POST | create: `{"base_model", "lora_config": {"rank", "alpha", "target_modules"}}` |
+| `/v1/train/clients` | GET | list clients |
+| `/v1/train/clients/{id}` | GET | status, counters, `loss_history` |
+| `/v1/train/clients/{id}` | DELETE | drop the client, free its memory |
+| `/v1/train/clients/{id}/forward_backward` | POST | `{"data": [...]}` → `{"loss", "num_tokens", "metrics"}` |
+| `/v1/train/clients/{id}/optim_step` | POST | `{"adam_params": {"lr", ...}}` |
+| `/v1/train/clients/{id}/sample` | POST | `{"prompt"` or `"tokens", "sampling_params", "num_samples"}` |
+| `/v1/train/clients/{id}/save_weights` | POST | `{"name"}` → `{"path", "format": "peft"}`, written under `~/.cache/hanzo/adapters/{id}/` |
 
 `data` entries are either raw text — `{"prompt": "...", "completion": "..."}`,
 tokenized server-side with the client's tokenizer — or a pre-tokenized datum:

@@ -916,7 +916,7 @@ mod cuda {
     use hanzo_ml::{DType, Result, Storage, Tensor};
     use std::ffi::{c_int, c_long};
 
-    use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
+    use crate::utils::slice_ptr_on_stream;
 
     fn dtype_code(dtype: DType) -> Result<u32> {
         match dtype {

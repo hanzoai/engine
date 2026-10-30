@@ -194,8 +194,7 @@ async fn greedy_complete(
                 let choice = resp.choices.into_iter().next().expect("one choice");
                 let logprobs = choice
                     .logprobs
-                    .and_then(|l| l.content)
-                    .map(|c| c.into_iter().map(|r| (r.token, r.logprob)).collect())
+                    .map(|l| l.tokens.into_iter().zip(l.token_logprobs).collect())
                     .unwrap_or_default();
                 return Generation {
                     text: choice.text,

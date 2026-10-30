@@ -17,7 +17,7 @@ use crate::{
     device_map::DeviceMapper,
     kv_cache::KvCache,
     layers::{GemmaRmsNorm, Qwen3VLRotaryEmbedding},
-    models::qwen3_5_mtp::{chain_cache, default_n_predict, MtpStep, Qwen3_5MtpProposer},
+    models::qwen3_5_mtp::{chain_cache, default_n_predict, MtpOut, MtpStep, Qwen3_5MtpProposer},
     pipeline::text_models_inputs_processor::FlashParams,
     speculative::{MtpConfig, SelfSpeculative, SpeculativeProposer},
     utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor},
@@ -147,8 +147,9 @@ impl MtpStep for Qwen3_5MtpHead {
         input_embeds: &Tensor,
         target_hidden: &Tensor,
         positions: &Tensor,
-    ) -> Result<Tensor> {
+    ) -> Result<MtpOut> {
         self.forward(input_embeds, target_hidden, positions)
+            .map(MtpOut::same)
     }
 
     fn reset(&mut self) {
@@ -225,10 +226,9 @@ mod tests {
     use super::*;
     use crate::device_map::DummyDeviceMapper;
     use crate::models::qwen3_5_mtp::fixtures::{positions, shared_heads, synthetic};
-    use crate::models::qwen3_5_mtp::{AnchorPositions, Mrope};
-    use crate::speculative::{
-        SpeculativeKvCache, SpeculativeProposeBatchCtx, SpeculativeSharedHeads,
-    };
+    use crate::models::qwen3_5_mtp::AnchorPositions;
+    use crate::sequence::test_sequence;
+    use crate::speculative::{SpeculativeKvCache, SpeculativeProposeBatchCtx};
     use rand::SeedableRng;
     use rand_isaac::Isaac64Rng;
     use std::collections::HashMap;
@@ -406,6 +406,7 @@ mod tests {
 
         let batch = 2;
         let hidden = synthetic(batch, HIDDEN, 41, &device)?.reshape((batch, 1, HIDDEN))?;
+        let (first, second) = (test_sequence(vec![1], None), test_sequence(vec![2], None));
         let sampled = [5u32, 11];
         let base_lens = [8usize, 12];
         let seq_ids = [0usize, 1];
@@ -417,7 +418,7 @@ mod tests {
                     sampled_tokens_emitted: true,
                     seq_ids: &seq_ids,
                     base_lens: &base_lens,
-                    sequences: &[],
+                    sequences: &[&first, &second],
                     cache: SpeculativeKvCache::Normal,
                     target_hiddens: hidden,
                     target_hidden_layers: None,

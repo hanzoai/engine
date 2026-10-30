@@ -4,7 +4,6 @@ members = [
     "hanzo-engine",
     "hanzo-engine-ffi",
     "hanzo-router",
-    "enso",
     "hanzo-server-core",
     "hanzo-server",
     "hanzo-cli",
@@ -21,12 +20,11 @@ members = [
     "hanzo-code-exec",
     "hanzo-film",
     "hanzo-train",
-    "hanzo-router-retrain",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "1.7.95"
+version = "1.7.100"
 edition = "2021"
 authors = ["Hanzo AI <dev@hanzo.ai>"]
 description = "Fast, flexible LLM inference."
@@ -40,8 +38,8 @@ rust-version = "1.88"
 [workspace.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 # Hanzo ML crates.
-hanzo-ml = { version = "0.11.98" }
-hanzo-nn = { version = "0.11.40" }
+hanzo-ml = { version = "0.11.103" }
+hanzo-nn = { version = "0.11.41" }
 hanzo-transformers = { version = "0.11.10" }
 hanzo-flash-attn = { version = "0.11.36" }
 hanzo-flash-attn-v3 = { version = "0.11.10", package = "hanzo-flash-attn-v3" }
@@ -202,6 +200,7 @@ seccompiler = "0.5.0"
 hanzo = { version = "1.7.41", path = "hanzo" }
 hanzo-engine = { version = "1.7.41", path = "hanzo-engine" }
 hanzo-server-core = { version = "1.7.41", path = "hanzo-server-core" }
+hanzo-bench = { version = "1.7.41", path = "hanzo-bench" }
 hanzo-paged-attn = { version = "1.7.41", path = "hanzo-paged-attn" }
 hanzo-quant = { version = "1.7.41", path = "hanzo-quant" }
 hanzo-vision = { version = "1.7.41", path = "hanzo-vision" }

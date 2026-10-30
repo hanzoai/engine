@@ -26,47 +26,47 @@ mod utils;
 static STATIC_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/static");
 
 pub(crate) const UI_UPLOAD_IMAGE_ROUTE: RouteInfo =
-    RouteInfo::new("/api/upload_image", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/upload_image", "POST", RouteKind::Ui);
 pub(crate) const UI_UPLOAD_VIDEO_ROUTE: RouteInfo =
-    RouteInfo::new("/api/upload_video", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/upload_video", "POST", RouteKind::Ui);
 pub(crate) const UI_UPLOAD_TEXT_ROUTE: RouteInfo =
-    RouteInfo::new("/api/upload_text", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/upload_text", "POST", RouteKind::Ui);
 pub(crate) const UI_UPLOAD_AUDIO_ROUTE: RouteInfo =
-    RouteInfo::new("/api/upload_audio", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/upload_audio", "POST", RouteKind::Ui);
 pub(crate) const UI_LIST_MODELS_ROUTE: RouteInfo =
-    RouteInfo::new("/api/list_models", "GET", RouteKind::Ui);
+    RouteInfo::new("/v1/list_models", "GET", RouteKind::Ui);
 pub(crate) const UI_SELECT_MODEL_ROUTE: RouteInfo =
-    RouteInfo::new("/api/select_model", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/select_model", "POST", RouteKind::Ui);
 pub(crate) const UI_LIST_CHATS_ROUTE: RouteInfo =
-    RouteInfo::new("/api/list_chats", "GET", RouteKind::Ui);
+    RouteInfo::new("/v1/list_chats", "GET", RouteKind::Ui);
 pub(crate) const UI_NEW_CHAT_ROUTE: RouteInfo =
-    RouteInfo::new("/api/new_chat", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/new_chat", "POST", RouteKind::Ui);
 pub(crate) const UI_DELETE_CHAT_ROUTE: RouteInfo =
-    RouteInfo::new("/api/delete_chat", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/delete_chat", "POST", RouteKind::Ui);
 pub(crate) const UI_LOAD_CHAT_ROUTE: RouteInfo =
-    RouteInfo::new("/api/load_chat", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/load_chat", "POST", RouteKind::Ui);
 pub(crate) const UI_RENAME_CHAT_ROUTE: RouteInfo =
-    RouteInfo::new("/api/rename_chat", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/rename_chat", "POST", RouteKind::Ui);
 pub(crate) const UI_APPEND_MESSAGE_ROUTE: RouteInfo =
-    RouteInfo::new("/api/append_message", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/append_message", "POST", RouteKind::Ui);
 pub(crate) const UI_EDIT_MESSAGE_ROUTE: RouteInfo =
-    RouteInfo::new("/api/edit_message", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/edit_message", "POST", RouteKind::Ui);
 pub(crate) const UI_SET_TAIL_ROUTE: RouteInfo =
-    RouteInfo::new("/api/set_tail", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/set_tail", "POST", RouteKind::Ui);
 pub(crate) const UI_FORK_SESSION_ROUTE: RouteInfo =
-    RouteInfo::new("/api/fork_session", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/fork_session", "POST", RouteKind::Ui);
 pub(crate) const UI_SAVE_CHAT_SESSION_ROUTE: RouteInfo =
-    RouteInfo::new("/api/save_chat_session", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/save_chat_session", "POST", RouteKind::Ui);
 pub(crate) const UI_RESTORE_CHAT_SESSION_ROUTE: RouteInfo =
-    RouteInfo::new("/api/restore_chat_session", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/restore_chat_session", "POST", RouteKind::Ui);
 pub(crate) const UI_SETTINGS_ROUTE: RouteInfo =
-    RouteInfo::new("/api/settings", "GET", RouteKind::Ui);
+    RouteInfo::new("/v1/settings", "GET", RouteKind::Ui);
 pub(crate) const UI_CAPABILITIES_ROUTE: RouteInfo =
-    RouteInfo::new("/api/capabilities", "GET", RouteKind::Ui);
+    RouteInfo::new("/v1/capabilities", "GET", RouteKind::Ui);
 pub(crate) const UI_MCP_TOOLS_ROUTE: RouteInfo =
-    RouteInfo::new("/api/mcp_tools", "GET", RouteKind::Ui);
+    RouteInfo::new("/v1/mcp_tools", "GET", RouteKind::Ui);
 pub(crate) const UI_GENERATE_SPEECH_ROUTE: RouteInfo =
-    RouteInfo::new("/api/generate_speech", "POST", RouteKind::Ui);
+    RouteInfo::new("/v1/generate_speech", "POST", RouteKind::Ui);
 pub(crate) const UI_SPEECH_ROUTE: RouteInfo = RouteInfo::new("/speech", "GET", RouteKind::Ui);
 pub(crate) const UI_UPLOADS_ROUTE: RouteInfo = RouteInfo::new("/uploads", "GET", RouteKind::Ui);
 pub(crate) const UI_ROOT_ROUTE: RouteInfo = RouteInfo::new("/", "GET", RouteKind::Ui);
@@ -83,20 +83,12 @@ async fn static_handler(uri: axum::http::Uri) -> Response<Body> {
             .body(Body::from(file.contents()))
             .unwrap()
     } else {
-        // SPA fallback: serve index.html for unrecognized paths
-        if let Some(file) = STATIC_DIR.get_file("index.html") {
-            let mime = mime_guess::from_path("index.html").first_or_octet_stream();
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(axum::http::header::CONTENT_TYPE, mime.as_ref())
-                .body(Body::from(file.contents()))
-                .unwrap()
-        } else {
-            Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::from("Not Found"))
-                .unwrap()
-        }
+        // The app has no client-side routes, so an unknown path is a 404 —
+        // never index.html, which would answer a stale API path with 200.
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::from("Not Found"))
+            .unwrap()
     }
 }
 

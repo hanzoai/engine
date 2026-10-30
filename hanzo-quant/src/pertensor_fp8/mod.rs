@@ -8,6 +8,11 @@ use hanzo_nn::Linear;
 
 mod ops;
 
+#[cfg(feature = "cuda")]
+use crate::{
+    cublaslt::{maybe_init_cublas_lt_wrapper, supports_f8, CublasLtWrapper, CUBLASLT_CONTROLLER},
+    fp8::QuantizationResult,
+};
 use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
@@ -18,23 +23,83 @@ use crate::{
     QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
-/// Per-tensor FP8 Linear layer with static activation scaling.
+/// FP8 tensor cores read both matrices 16 elements at a time.
+#[cfg(feature = "cuda")]
+const GEMM_GRANULE: usize = 16;
+
+#[derive(Debug)]
+enum Weight {
+    Dense(Tensor),
+    /// E4M3 [N, K] with the checkpoint's per-tensor dequantization scale. `dtype` is what
+    /// activations run in, not what `q` holds.
+    #[cfg(feature = "cuda")]
+    Packed {
+        q: Tensor,
+        w_scale: Tensor,
+        /// The checkpoint's calibrated activation scale, present only when it quantized
+        /// activations too. Activations go against their own amax otherwise.
+        x_scale: Option<Tensor>,
+        /// cuBLASLt asks for a scale for D as well. The GEMM writes BF16, which is not
+        /// requantized, so it is one.
+        d_scale: Tensor,
+        dtype: DType,
+    },
+}
+
+/// Per-tensor FP8 linear layer.
 ///
-/// This is used for models that have per-tensor FP8 quantization (weight_block_size = null)
-/// with static activation scales. Each linear layer has:
+/// The checkpoint holds an E4M3 weight under one FP32 dequantization scale, and often an
+/// activation scale calibrated the same way:
 /// - `<layer>.weight` (FP8 E4M3)
-/// - `<layer>.weight_scale_inv` (F32 scalar) - dequantization scale for weights
-/// - `<layer>.activation_scale` (F32 scalar) - quantization scale for activations
+/// - `<layer>.weight_scale`, spelled `weight_scale_inv` by some checkpoints
+/// - `<layer>.input_scale`, spelled `activation_scale` by some checkpoints, optional
 #[derive(Debug)]
 pub struct PerTensorFP8Linear {
-    weight: Tensor,
-    #[allow(dead_code)]
-    weight_scale_inv: Tensor,
-    #[allow(dead_code)]
-    activation_scale: Option<Tensor>,
+    weight: Weight,
     bias: Option<Tensor>,
-    #[allow(dead_code)]
-    dequant_dtype: DType,
+}
+
+/// The weight stays FP8 when cuBLASLt can run the GEMM on it: a device with FP8 tensor
+/// cores and a handle, BF16 activations (what the GEMM writes, and so what the bias must
+/// be), and a shape those cores can read. Anything else dequantizes at load.
+#[cfg(feature = "cuda")]
+fn packed_weight(
+    weight: &Tensor,
+    weight_scale: &Tensor,
+    input_scale: Option<&Tensor>,
+    bias: Option<&Tensor>,
+    dtype: DType,
+) -> Result<Option<Weight>> {
+    if !supports_f8(weight.device())
+        || dtype != DType::BF16
+        || bias.is_some_and(|b| b.dtype() != DType::BF16)
+        || weight.rank() != 2
+        || weight.dims().iter().any(|d| d % GEMM_GRANULE != 0)
+    {
+        return Ok(None);
+    }
+    maybe_init_cublas_lt_wrapper(weight.device().clone());
+    if CUBLASLT_CONTROLLER
+        .get_for_device(weight.device())
+        .is_none()
+    {
+        return Ok(None);
+    }
+
+    let scalar = |t: &Tensor| -> Result<Tensor> { t.reshape(())?.to_dtype(DType::F32) };
+    // Activations divide by their scale in their own dtype, so the GEMM has to multiply
+    // by the scale as that dtype rounds it or the layer picks up a systematic gain.
+    let x_scale = input_scale
+        .map(|s| -> Result<Tensor> { scalar(s)?.to_dtype(dtype)?.to_dtype(DType::F32) })
+        .transpose()?;
+
+    Ok(Some(Weight::Packed {
+        q: weight.clone(),
+        w_scale: scalar(weight_scale)?,
+        x_scale,
+        d_scale: Tensor::new(1f32, weight.device())?,
+        dtype,
+    }))
 }
 
 impl QuantMethod for PerTensorFP8Linear {
@@ -45,20 +110,33 @@ impl QuantMethod for PerTensorFP8Linear {
         match method {
             QuantMethodConfig::PerTensorFP8 {
                 weight,
-                weight_scale_inv,
-                activation_scale,
+                weight_scale,
+                input_scale,
                 bias,
                 dequant_dtype,
             } => {
-                // Dequantize immediately since Hanzo FP8 is storage-only (no ops)
-                let dequant_weight =
-                    ops::fp8_pertensor_dequantize(&weight, &weight_scale_inv, dequant_dtype)?;
-                Ok(Self {
-                    weight: dequant_weight,
-                    weight_scale_inv,
-                    activation_scale,
-                    bias,
+                // Only the tensor core path reads the activation scale.
+                #[cfg(not(feature = "cuda"))]
+                let _ = input_scale;
+
+                #[cfg(feature = "cuda")]
+                if let Some(packed) = packed_weight(
+                    &weight,
+                    &weight_scale,
+                    input_scale.as_ref(),
+                    bias.as_ref(),
                     dequant_dtype,
+                )? {
+                    return Ok(Self {
+                        weight: packed,
+                        bias,
+                    });
+                }
+
+                let dense = ops::fp8_pertensor_dequantize(&weight, &weight_scale, dequant_dtype)?;
+                Ok(Self {
+                    weight: Weight::Dense(dense),
+                    bias,
                 })
             }
             _ => unreachable!(),
@@ -66,17 +144,30 @@ impl QuantMethod for PerTensorFP8Linear {
     }
 
     fn dequantize_w(&self) -> Result<Tensor> {
-        // Weight is already dequantized on load
-        Ok(self.weight.clone())
+        match &self.weight {
+            Weight::Dense(w) => Ok(w.clone()),
+            #[cfg(feature = "cuda")]
+            Weight::Packed {
+                q, w_scale, dtype, ..
+            } => ops::fp8_pertensor_dequantize(q, w_scale, *dtype),
+        }
     }
 
     fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
-        // Weight is already dequantized, use standard matmul
-        let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
-            self.weight.clone(),
-            self.bias.clone(),
-        )))?;
-        unquant.forward(x)
+        match &self.weight {
+            Weight::Dense(w) => self.dense_matmul(w, x),
+            #[cfg(feature = "cuda")]
+            Weight::Packed {
+                q,
+                w_scale,
+                x_scale,
+                d_scale,
+                ..
+            } => match CUBLASLT_CONTROLLER.get_for_device(q.device()) {
+                Some(handle) => self.fp8_matmul(handle, x, q, w_scale, x_scale.as_ref(), d_scale),
+                None => self.dense_matmul(&self.dequantize_w()?, x),
+            },
+        }
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -88,7 +179,12 @@ impl QuantMethod for PerTensorFP8Linear {
     }
 
     fn dtype_and_device(&self) -> (DType, Device) {
-        (DType::F8E4M3, self.weight.device().clone())
+        let device = match &self.weight {
+            Weight::Dense(w) => w.device(),
+            #[cfg(feature = "cuda")]
+            Weight::Packed { q, .. } => q.device(),
+        };
+        (DType::F8E4M3, device.clone())
     }
 
     fn apply_isq(
@@ -245,6 +341,67 @@ impl QuantMethod for PerTensorFP8Linear {
     }
 }
 
+impl PerTensorFP8Linear {
+    fn dense_matmul(&self, weight: &Tensor, x: &Tensor) -> Result<Tensor> {
+        let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+            weight.clone(),
+            self.bias.clone(),
+        )))?;
+        unquant.forward(x)
+    }
+
+    /// `x @ qᵀ` on FP8 tensor cores.
+    ///
+    /// cuBLASLt multiplies each operand by its own dequantization scale inside the GEMM
+    /// (`D = alpha * (w_scale * q)ᵀ (x_scale * xq) + beta * C`), so quantized activations
+    /// go in and a BF16 result in the checkpoint's units comes back. D carries no scale of
+    /// its own because BF16 output is never requantized, and the bias rides the epilogue,
+    /// which leaves C out of the sum.
+    #[cfg(feature = "cuda")]
+    fn fp8_matmul(
+        &self,
+        handle: &CublasLtWrapper,
+        x: &Tensor,
+        q: &Tensor,
+        w_scale: &Tensor,
+        x_scale: Option<&Tensor>,
+        d_scale: &Tensor,
+    ) -> Result<Tensor> {
+        let (out_dim, in_dim) = q.dims2()?;
+        let tokens = x.elem_count() / in_dim;
+        let mut out_shape = x.dims().to_vec();
+        out_shape.pop();
+        out_shape.push(out_dim);
+
+        let (xq, dequant_x_scale) = match x_scale {
+            Some(scale) => (ops::fp8_pertensor_quantize(x, scale)?, scale.clone()),
+            None => {
+                let QuantizationResult {
+                    qw,
+                    dequantize_scale,
+                    ..
+                } = FP8Linear::quantize(x, DType::F8E4M3)?;
+                (qw, dequantize_scale)
+            }
+        };
+
+        handle
+            .batch_matmul_f8(
+                &q.unsqueeze(0)?,
+                &xq.reshape((1, tokens, in_dim))?,
+                w_scale,
+                &dequant_x_scale,
+                d_scale,
+                None,
+                None,
+                None,
+                self.bias.as_ref(),
+                None,
+            )?
+            .reshape(out_shape)
+    }
+}
+
 // Serialization structure (same as UnquantLinear):
 //
 // -----------------------
@@ -270,7 +427,7 @@ impl QuantizedSerde for PerTensorFP8Linear {
         self.serialize_with_bias(self.bias.clone())
     }
     fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
-        // Serialize as unquantized since weights are already dequantized
+        // Serialize as unquantized: the weight is written in its dequantized form.
         let mut buffer = Vec::new();
 
         // Version is always first!
@@ -282,8 +439,8 @@ impl QuantizedSerde for PerTensorFP8Linear {
         // Has bias
         buffer.push(bias.is_some() as u8);
 
-        // Weight (already dequantized)
-        serialize_tensor(&mut buffer, &self.weight)?;
+        // Weight
+        serialize_tensor(&mut buffer, &self.dequantize_w()?)?;
 
         if let Some(bias) = &bias {
             // Bias
@@ -296,9 +453,8 @@ impl QuantizedSerde for PerTensorFP8Linear {
 
 /// Load a per-tensor FP8 linear layer from the VarBuilder.
 ///
-/// This handles models with per-tensor FP8 quantization where:
-/// - `weight_block_size` is null (per-tensor, not blockwise)
-/// - Each layer has: weight (FP8), weight_scale_inv (F32), activation_scale (F32)
+/// This handles models whose FP8 quantization is per-tensor rather than blockwise, so the
+/// weight carries one scale, and the activations at most one.
 pub fn pertensor_fp8_linear_b(
     in_dim: usize,
     out_dim: usize,
@@ -307,18 +463,16 @@ pub fn pertensor_fp8_linear_b(
     _hints: Shard,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
-    let has_scale = vb.contains_tensor("weight_scale_inv") || vb.contains_tensor("weight_scale");
-    // Handle the case where we actually have unquantized weights
-    if vb.contains_tensor("weight") && !has_scale {
-        return crate::linear_b(in_dim, out_dim, bias, &None, vb);
-    }
+    let scale_name = ["weight_scale", "weight_scale_inv"]
+        .into_iter()
+        .find(|name| vb.contains_tensor(name));
 
-    let scale_name = if vb.contains_tensor("weight_scale_inv") {
-        "weight_scale_inv"
-    } else if vb.contains_tensor("weight_scale") {
-        "weight_scale"
-    } else {
-        return make_dummy_or_error("pertensor_fp8_linear", &vb, &["weight", "weight_scale_inv"]);
+    let Some(scale_name) = scale_name else {
+        // Handle the case where we actually have unquantized weights
+        if vb.contains_tensor("weight") {
+            return crate::linear_b(in_dim, out_dim, bias, &None, vb);
+        }
+        return make_dummy_or_error("pertensor_fp8_linear", &vb, &["weight", "weight_scale"]);
     };
 
     // Load FP8 weight tensor
@@ -330,15 +484,14 @@ pub fn pertensor_fp8_linear_b(
     )?;
 
     // Load per-tensor weight scale (scalar)
-    let weight_scale_inv =
-        vb.get_with_hints_dtype((), scale_name, Default::default(), DType::F32)?;
+    let weight_scale = vb.get_with_hints_dtype((), scale_name, Default::default(), DType::F32)?;
 
-    // Load activation scale if present (optional - some models may not have it)
-    let activation_scale = if vb.contains_tensor("activation_scale") {
-        Some(vb.get_with_hints_dtype((), "activation_scale", Default::default(), DType::F32)?)
-    } else {
-        None
-    };
+    // Load the activation scale if the checkpoint calibrated one
+    let input_scale = ["input_scale", "activation_scale"]
+        .into_iter()
+        .find(|name| vb.contains_tensor(name))
+        .map(|name| vb.get_with_hints_dtype((), name, Default::default(), DType::F32))
+        .transpose()?;
 
     let bias = if bias && vb.contains_tensor("bias") {
         Some(vb.get((out_dim,), "bias")?)
@@ -351,14 +504,149 @@ pub fn pertensor_fp8_linear_b(
     // Use the bias dtype if available, otherwise default to BF16.
     let dequant_dtype = bias.as_ref().map(|b| b.dtype()).unwrap_or(DType::BF16);
 
-    // Use new() which handles dequantization (Hanzo FP8 is storage-only)
     Ok(Arc::new(PerTensorFP8Linear::new(
         QuantMethodConfig::PerTensorFP8 {
             weight,
-            weight_scale_inv,
-            activation_scale,
+            weight_scale,
+            input_scale,
             bias,
             dequant_dtype,
         },
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use hanzo_ml::{DType, Device, Result, Tensor};
+
+    use super::{ops::fp8_pertensor_dequantize, PerTensorFP8Linear};
+    use crate::{scalar_fp8::ops::dtype_to_fp8, QuantMethod, QuantMethodConfig};
+
+    /// A layer and the exact dequantization of its weight. Both sides of a comparison
+    /// then see the same E4M3 grid, so only a wiring error can move the result.
+    fn layer(
+        device: &Device,
+        out_dim: usize,
+        in_dim: usize,
+        input_scale: Option<Tensor>,
+        bias: Option<Tensor>,
+    ) -> Result<(PerTensorFP8Linear, Tensor)> {
+        let weight_scale = Tensor::new(0.01f32, device)?;
+        let weight = dtype_to_fp8(&Tensor::rand(-4f32, 4f32, (out_dim, in_dim), device)?)?;
+        let dense = fp8_pertensor_dequantize(&weight, &weight_scale, DType::BF16)?;
+        let layer = PerTensorFP8Linear::new(QuantMethodConfig::PerTensorFP8 {
+            weight,
+            weight_scale,
+            input_scale,
+            bias,
+            dequant_dtype: DType::BF16,
+        })?;
+        Ok((layer, dense))
+    }
+
+    #[test]
+    fn cpu_dequantizes_at_load() -> Result<()> {
+        let dev = Device::Cpu;
+        let (layer, dense) = layer(&dev, 32, 64, None, None)?;
+
+        let got = layer.dequantize_w()?;
+        assert_eq!(got.dtype(), DType::BF16);
+        assert_eq!(
+            got.flatten_all()?.to_vec1::<half::bf16>()?,
+            dense.flatten_all()?.to_vec1::<half::bf16>()?
+        );
+
+        let x = Tensor::rand(-1f32, 1f32, (8, 64), &dev)?.to_dtype(DType::BF16)?;
+        assert_eq!(layer.forward(&x)?.dims(), &[8, 32]);
+        Ok(())
+    }
+
+    /// The FP8 GEMM against the same matmul run on dequantized operands. Both see the
+    /// same quantized activations under a scale BF16 holds exactly, so only the GEMM's
+    /// own arithmetic can move the result.
+    #[cfg(feature = "cuda")]
+    fn gemm_matches_dequantized(
+        input_scale: Option<f32>,
+        bias: bool,
+        x_dims: &[usize],
+    ) -> Result<()> {
+        use super::ops::fp8_pertensor_quantize;
+        use crate::{fp8::QuantizationResult, scalar_fp8::ops::fp8_to_dtype, FP8Linear};
+
+        const IN_DIM: usize = 256;
+        const OUT_DIM: usize = 128;
+
+        let Ok(dev) = Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let input_scale = input_scale.map(|s| Tensor::new(s, &dev)).transpose()?;
+        let bias = bias
+            .then(|| -> Result<Tensor> {
+                Tensor::rand(-1f32, 1f32, OUT_DIM, &dev)?.to_dtype(DType::BF16)
+            })
+            .transpose()?;
+        let (layer, dense) = layer(&dev, OUT_DIM, IN_DIM, input_scale.clone(), bias.clone())?;
+
+        let x = Tensor::rand(-1f32, 1f32, x_dims, &dev)?.to_dtype(DType::BF16)?;
+        let (xq, x_dequant_scale) = match &input_scale {
+            Some(scale) => (fp8_pertensor_quantize(&x, scale)?, scale.clone()),
+            None => {
+                let QuantizationResult {
+                    qw,
+                    dequantize_scale,
+                    ..
+                } = FP8Linear::quantize(&x, DType::F8E4M3)?;
+                (qw, dequantize_scale)
+            }
+        };
+
+        let tokens = x.elem_count() / IN_DIM;
+        let want = fp8_to_dtype(&xq, DType::F32)?
+            .broadcast_mul(&x_dequant_scale)?
+            .to_dtype(DType::BF16)?
+            .reshape((tokens, IN_DIM))?
+            .matmul(&dense.t()?)?;
+        let want = match &bias {
+            Some(bias) => want.broadcast_add(bias)?.to_dtype(DType::F32)?,
+            None => want.to_dtype(DType::F32)?,
+        };
+
+        let out = layer.forward(&x)?;
+        assert_eq!(out.dims().last(), Some(&OUT_DIM));
+        let got = out.reshape((tokens, OUT_DIM))?.to_dtype(DType::F32)?;
+
+        let error = (&got - &want)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        let magnitude = want.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(
+            error <= 0.02 * magnitude,
+            "off by {error} against {magnitude}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "cuda")]
+    fn cuda_gemm_static_scale() -> Result<()> {
+        gemm_matches_dequantized(Some(0.0625), false, &[4, 16, 256])
+    }
+
+    #[test]
+    #[cfg(feature = "cuda")]
+    fn cuda_gemm_dynamic_scale() -> Result<()> {
+        gemm_matches_dequantized(None, false, &[64, 256])
+    }
+
+    /// One row is what decode asks the GEMM for.
+    #[test]
+    #[cfg(feature = "cuda")]
+    fn cuda_gemm_single_row() -> Result<()> {
+        gemm_matches_dequantized(Some(0.0625), false, &[1, 256])
+    }
+
+    /// The bias rides the GEMM's epilogue rather than a second pass.
+    #[test]
+    #[cfg(feature = "cuda")]
+    fn cuda_gemm_bias() -> Result<()> {
+        gemm_matches_dequantized(Some(0.0625), true, &[64, 256])
+    }
 }

@@ -24,7 +24,9 @@ use crate::{
         forward_pooled, GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode, PoolSlots,
     },
     moe::{MoEExperts, MoEExpertsConfig},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        AttentionImplementation, KvLayers, ModelConfigLike, ModelConfigMetadata, PagedAttention,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, ModelForwardContext, NormalLoadingMetadata,
@@ -511,6 +513,7 @@ pub struct Qwen3_5MoeTextModel {
     pub(super) norm: GemmaRmsNorm,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
+    kv_layers: Vec<usize>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     lm_head: Arc<dyn QuantMethod>,
     pub(super) cache: EitherCache,
@@ -686,10 +689,10 @@ impl Qwen3_5MoeTextModel {
             })
             .collect();
 
-        let hybrid_cache_config = HybridCacheConfig {
-            layer_types: pipeline_layer_types,
-            max_seq_len: cfg.max_position_embeddings,
-            recurrent: RecurrentLayerConfig {
+        let hybrid_cache_config = HybridCacheConfig::uniform(
+            pipeline_layer_types,
+            cfg.max_position_embeddings,
+            RecurrentLayerConfig {
                 conv_dim: cfg.linear_conv_dim(),
                 conv_width: cfg.linear_conv_kernel_dim,
                 state_dims: vec![
@@ -697,16 +700,15 @@ impl Qwen3_5MoeTextModel {
                     cfg.linear_key_head_dim,
                     cfg.linear_value_head_dim,
                 ],
+                conv_dtype: vb_m.dtype(),
+                state_dtype: vb_m.dtype(),
             },
-        };
+        );
 
         let pipeline_cache = Arc::new(Mutex::new(
-            HybridCache::new(
-                hybrid_cache_config,
-                vb_m.dtype(),
-                &normal_loading_metadata.real_device,
-            )
-            .map_err(|e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e)))?,
+            HybridCache::new(hybrid_cache_config, &normal_loading_metadata.real_device).map_err(
+                |e| hanzo_ml::Error::Msg(format!("Failed to create hybrid cache: {}", e)),
+            )?,
         ));
 
         Ok(Self {
@@ -714,6 +716,7 @@ impl Qwen3_5MoeTextModel {
             norm,
             layers,
             layer_types: layer_types.clone(),
+            kv_layers: cfg.attention_layers(),
             lm_head,
             cache: EitherCache::Hybrid(pipeline_cache),
             max_seq_len: cfg.max_position_embeddings,
@@ -737,6 +740,10 @@ impl Qwen3_5MoeTextModel {
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
         self.embed_tokens.forward(input_ids)
+    }
+
+    pub(super) fn model_config_like(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        Arc::new(KvLayers::new(self.cfg.clone(), self.kv_layers.clone()))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -807,6 +814,9 @@ impl Qwen3_5MoeTextModel {
             None
         };
 
+        // The paged cache holds one K/V pair per attention layer, so an attention layer reads it
+        // at its ordinal among attention layers, not at its decoder index.
+        let mut kv_layer = 0;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
 
@@ -818,10 +828,11 @@ impl Qwen3_5MoeTextModel {
                             &attention_mask.get(xs.device()),
                             &cos_sin,
                             kv_cache,
-                            ctx.paged_layer(i),
+                            ctx.paged_layer(kv_layer),
                             ctx.flash_params(),
                         )?;
                     }
+                    kv_layer += 1;
                 }
                 LayerType::LinearAttention => {
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {

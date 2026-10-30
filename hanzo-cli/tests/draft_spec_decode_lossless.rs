@@ -151,11 +151,7 @@ async fn greedy_tokens(
         match rx.recv().await {
             Some(Response::CompletionDone(resp)) => {
                 let choice = resp.choices.into_iter().next().expect("one choice");
-                let toks = choice
-                    .logprobs
-                    .and_then(|l| l.content)
-                    .map(|c| c.into_iter().map(|r| r.token).collect())
-                    .unwrap_or_default();
+                let toks = choice.logprobs.map(|l| l.tokens).unwrap_or_default();
                 return (toks, choice.text);
             }
             Some(Response::CompletionModelError(e, _)) => panic!("completion model error: {e}"),

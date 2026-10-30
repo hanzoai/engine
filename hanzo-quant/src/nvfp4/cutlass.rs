@@ -391,6 +391,67 @@ pub fn matmul(input: &Tensor, weight: &Tensor, weights: &Weights) -> Result<Tens
     }
 }
 
+/// The activation quantizer alone: codes `[M, K/2]` and the block scales read back out of the
+/// swizzled layout into `[M, K/16]` order, for comparing against the linear-layout quantizer.
+#[cfg(test)]
+pub(crate) fn quantize_linear(input: &Tensor, input_scale: f32) -> Result<(Tensor, Vec<u8>)> {
+    let Device::Cuda(dev) = input.device().clone() else {
+        hanzo_ml::bail!("NVFP4 activation quantization needs a CUDA tensor");
+    };
+    let (m, k) = input.dims2()?;
+    let packed = dev.alloc_zeros::<u8>(m * k / 2)?;
+    let scale_bytes = unsafe { nvfp4_quantize_scale_bytes(m as i32, k as i32) };
+    let scale = dev.alloc_zeros::<u8>(scale_bytes)?;
+    {
+        let input = input.contiguous()?;
+        let storage = input.storage_and_layout().0;
+        let (a_ptr, _a) = slice_ptr(&packed, 0);
+        let (s_ptr, _s) = slice_ptr(&scale, 0);
+        let stream = dev.cuda_stream().cu_stream() as *mut c_void;
+        match input.dtype() {
+            DType::BF16 => {
+                let Storage::Cuda(s) = &*storage else {
+                    hanzo_ml::bail!("expected CUDA storage")
+                };
+                let (x_ptr, _x) = slice_ptr(s.as_cuda_slice::<bf16>()?, input.layout().start_offset());
+                unsafe {
+                    nvfp4_quantize_activations_bf16(
+                        x_ptr as *const bf16,
+                        a_ptr as *mut u8,
+                        s_ptr as *mut u8,
+                        m as i32,
+                        k as i32,
+                        input_scale,
+                        stream,
+                    )
+                };
+            }
+            d => hanzo_ml::bail!("quantize_linear takes bf16, got {d:?}"),
+        }
+    }
+    let swizzled = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(scale, dev.clone())),
+        Shape::from(scale_bytes),
+    ))
+    .to_vec1::<u8>()?;
+    let cols = k / 16;
+    let padded_cols = cols.div_ceil(4) * 4;
+    let mut linear = Vec::with_capacity(m * cols);
+    for row in 0..m {
+        for col in 0..cols {
+            let off = (((row / 128) * (padded_cols / 4) + col / 4) * 32 + row % 32) * 16
+                + (row % 128) / 32 * 4
+                + col % 4;
+            linear.push(swizzled[off]);
+        }
+    }
+    let codes = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(packed, dev.clone())),
+        Shape::from((m, k / 2)),
+    ));
+    Ok((codes, linear))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

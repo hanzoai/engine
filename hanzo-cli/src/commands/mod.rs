@@ -2,6 +2,7 @@
 
 pub(crate) mod advertise;
 mod bench;
+mod board;
 mod cache;
 mod config;
 mod distill;
@@ -14,7 +15,8 @@ pub(crate) mod serve;
 mod train;
 mod tune;
 
-pub use bench::{run_bench, BenchRunConfig};
+pub use bench::{run_bench, BenchArgs};
+pub use board::run_board;
 pub use cache::{run_cache_delete, run_cache_list};
 pub use config::run_from_config;
 pub use distill::{run_distill_cmd, DistillRunConfig};

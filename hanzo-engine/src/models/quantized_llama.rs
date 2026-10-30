@@ -781,15 +781,11 @@ impl ModelWeights {
             &CausalMaskConfig::gguf(),
         )?;
         // PagedAttention prompt chunking
-        let mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
-            mask
-        } else {
-            AttentionMask::None
-        };
+        let mask = crate::layers_masker::paged_chunk_mask(
+            mask,
+            metadata.as_ref().map(|(_, meta)| *meta),
+            x,
+        )?;
         let mask = if let Some(ref mapper) = self.mapper {
             DeviceMappedMask::new(mask, &**mapper)?
         } else {

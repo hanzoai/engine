@@ -42,10 +42,20 @@ pub trait GdnConfig {
 
 // ====================== RMSNorm Gated ======================
 
-/// RMSNorm with gating: `rms_norm(x) * weight * silu(gate)`
+/// The gate's activation. vLLM `RMSNormGated` accepts silu or sigmoid (`layernorm.py:248-249`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Act {
+    Silu,
+    Sigmoid,
+}
+
+/// RMSNorm with gating: `rms_norm(x) * weight * act(gate)`, the norm taken before the gate
+/// (vLLM `RMSNormGated`, `norm_before_gate=True`, `layernorm.py:243-269`). The gate is silu
+/// unless [`RmsNormGated::sigmoid`] switches it.
 pub struct RmsNormGated {
     pub weight: Tensor,
     eps: f64,
+    act: Act,
 }
 
 impl RmsNormGated {
@@ -59,18 +69,35 @@ impl RmsNormGated {
         if let Some(target_dev) = isq_target_device {
             weight = weight.to_device(target_dev)?;
         }
-        Ok(Self { weight, eps })
+        Ok(Self::from_weight(weight, eps))
     }
 
     /// Build directly from an already-materialized weight (e.g. a dequantized GGUF tensor).
     pub fn from_weight(weight: Tensor, eps: f64) -> Self {
-        Self { weight, eps }
+        Self {
+            weight,
+            eps,
+            act: Act::Silu,
+        }
+    }
+
+    /// Gate with `sigmoid(gate)`, as a GDN with `output_gate_type = "sigmoid"` does
+    /// (vLLM `qwen_gdn_linear_attn.py:471-484`).
+    pub fn sigmoid(self) -> Self {
+        Self {
+            act: Act::Sigmoid,
+            ..self
+        }
     }
 
     pub fn forward(&self, x: &Tensor, gate: &Tensor) -> Result<Tensor> {
         let dtype = x.dtype();
         let x = x.to_dtype(DType::F32)?.contiguous()?;
-        let gate = hanzo_nn::ops::silu(&gate.to_dtype(DType::F32)?)?;
+        let gate = gate.to_dtype(DType::F32)?;
+        let gate = match self.act {
+            Act::Silu => hanzo_nn::ops::silu(&gate)?,
+            Act::Sigmoid => sigmoid(&gate)?,
+        };
         let weight = self.weight.to_dtype(DType::F32)?;
         let normed = hanzo_nn::ops::rms_norm(&x, &weight, self.eps as f32)?;
         normed.broadcast_mul(&gate)?.to_dtype(dtype)
@@ -262,19 +289,33 @@ pub fn forward_pooled(
     };
     let out = forward(&mut cache)?;
 
+    // A state the cache still holds in the pool's storage was left alone or updated in place (a
+    // kernel writing its state back into the view it was given, perhaps returning a reshape of
+    // it; a conv-only pool's empty state). There is nothing to copy, and `slice_set` cannot copy
+    // a tensor onto its own storage.
+    let conv = !shares_storage(&cache.conv_state, &pool.conv_state);
+    let recurrent = !shares_storage(&cache.recurrent_state, &pool.recurrent_state);
     match &slots {
         PoolSlots::One { slot, .. } => {
-            let conv = cache.conv_state.to_dtype(pool.conv_state.dtype())?;
-            let recurrent = cache
-                .recurrent_state
-                .to_dtype(pool.recurrent_state.dtype())?;
-            pool.conv_state.slice_set(&conv.contiguous()?, 0, *slot)?;
-            pool.recurrent_state
-                .slice_set(&recurrent.contiguous()?, 0, *slot)?;
+            if conv {
+                let conv = cache.conv_state.to_dtype(pool.conv_state.dtype())?;
+                pool.conv_state.slice_set(&conv.contiguous()?, 0, *slot)?;
+            }
+            if recurrent {
+                let state = cache
+                    .recurrent_state
+                    .to_dtype(pool.recurrent_state.dtype())?;
+                pool.recurrent_state
+                    .slice_set(&state.contiguous()?, 0, *slot)?;
+            }
         }
         PoolSlots::Many(indices) => {
-            pool.scatter_conv_state(indices, &cache.conv_state)?;
-            pool.scatter_recurrent_state(indices, &cache.recurrent_state)?;
+            if conv {
+                pool.scatter_conv_state(indices, &cache.conv_state)?;
+            }
+            if recurrent {
+                pool.scatter_recurrent_state(indices, &cache.recurrent_state)?;
+            }
         }
     }
     let advanced = cache.seqlen_offset.saturating_sub(first_offset);
@@ -288,6 +329,13 @@ pub fn forward_pooled(
         recurrent: t.recurrent,
     }));
     Ok(out)
+}
+
+/// Whether two tensors are views of one storage.
+fn shares_storage(a: &Tensor, b: &Tensor) -> bool {
+    let (a, _) = a.storage_and_layout();
+    let (b, _) = b.storage_and_layout();
+    std::ptr::eq(&*a, &*b)
 }
 
 // ====================== GDN math functions ======================
@@ -354,6 +402,10 @@ pub fn gated_delta_rule_recurrence(
         }
         return recurrence_metal(q, k, v, g, beta, state);
     }
+    #[cfg(feature = "rocm")]
+    if state.device().is_rocm() {
+        return recurrence_rocm(q, k, v, g, beta, state);
+    }
     // The Vulkan single-step kernel (gdn_step_vulkan) isn't ported to canonical hanzo-ml yet, so
     // don't intercept the Vulkan decode path -- fall through to recurrence_portable, which is
     // documented to "serve CPU, Vulkan, and any backend without a fused kernel".
@@ -389,7 +441,7 @@ fn recurrence_vulkan_step(
 
 /// Flatten (b, s, heads, dim) -> (b*heads, s, dim) in f32 contiguous, the layout the fused
 /// CUDA/Metal kernels expect. state (b, heads, k, v) flattens to (b*heads, k, v) the same way.
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 fn recurrence_flatten(
     q: &Tensor,
     k: &Tensor,
@@ -431,7 +483,7 @@ fn recurrence_flatten(
 
 /// Reshape a fused kernel's (b*heads, s, v_dim) output back to (b, s, heads, v_dim), write the
 /// (b*heads, k, v) state back into `state`, and restore the input dtype.
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 fn recurrence_unflatten(
     out_bh: &Tensor,
     state_flat: &Tensor,
@@ -449,6 +501,24 @@ fn recurrence_unflatten(
         .transpose(1, 2)?
         .contiguous()?
         .to_dtype(q.dtype())
+}
+
+/// Fused ROCm recurrence: ONE `gdn_scan` launch (a thread per (b*head, v) column, sequential
+/// over the sequence, state in registers) replaces the host-side per-token ops loop. Prefill
+/// and decode both take this path; the state is flattened to f32, updated in place by the
+/// kernel, and folded back by `recurrence_unflatten`.
+#[cfg(feature = "rocm")]
+fn recurrence_rocm(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state: &mut Tensor,
+) -> Result<Tensor> {
+    let (qf, kf, vf, gf, bf, statef) = recurrence_flatten(q, k, v, g, beta, state)?;
+    let out = hanzo_ml::rocm_backend::gdn_scan_rocm(&qf, &kf, &vf, &gf, &bf, &statef)?;
+    recurrence_unflatten(&out, &statef, q, v, state)
 }
 
 /// Fused CUDA recurrence: chunked scan for prefill (seq >= 64), single-pass for short/decode.
@@ -489,7 +559,6 @@ fn recurrence_cuda(
 
     let (q_bh, k_bh, v_bh, g_bh, beta_bh, mut s) = recurrence_flatten(q, k, v, g, beta, state)?;
     let out_bh = if q.dim(1)? >= CHUNK_THRESHOLD {
-
         crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
             &q_bh, &k_bh, &v_bh, &g_bh, &beta_bh, &mut s,
         )?
@@ -1097,7 +1166,10 @@ impl GatedDeltaNet {
             0
         };
         let x_t = if carried > 0 {
-            let left = cache.conv_state.narrow(D::Minus1, 1, carried)?;
+            let left = cache
+                .conv_state
+                .narrow(D::Minus1, 1, carried)?
+                .to_dtype(x.dtype())?;
             Tensor::cat(&[&left, &x.transpose(1, 2)?], D::Minus1)?.contiguous()?
         } else {
             x.transpose(1, 2)?.contiguous()?
@@ -1182,7 +1254,61 @@ impl GatedDeltaNet {
 mod tests {
     use super::*;
 
+    use crate::kv_cache::RecurrentLayerConfig;
     use hanzo_quant::{QuantMethodConfig, UnquantLinear};
+
+    // A kernel may write its state back into the tensor it was given; on the one-slot path that
+    // tensor is a view of the pool, so there is nothing left to copy (the ROCm scan does this).
+    #[test]
+    fn pooled_forward_keeps_states_updated_in_place() -> Result<()> {
+        let dev = Device::Cpu;
+        let mut pool = RecurrentStatePool::new(
+            RecurrentLayerConfig {
+                conv_dim: 3,
+                conv_width: 2,
+                state_dims: vec![2],
+                conv_dtype: DType::F32,
+                state_dtype: DType::F32,
+            },
+            &dev,
+        )?;
+        let slot = pool.allocate().expect("a free slot");
+        let out = forward_pooled(
+            &mut pool,
+            PoolSlots::One { slot, offset: 0 },
+            0,
+            false,
+            |cache| {
+                cache
+                    .conv_state
+                    .slice_set(&Tensor::ones((1, 3, 2), DType::F32, &dev)?, 0, 0)?;
+                cache
+                    .recurrent_state
+                    .slice_set(&Tensor::full(2f32, (1, 2), &dev)?, 0, 0)?;
+                // A kernel may return the state as a reshape of the view: a new tensor over the
+                // same storage.
+                cache.recurrent_state =
+                    cache.recurrent_state.reshape((1, 2, 1))?.reshape((1, 2))?;
+                cache.seqlen_offset += 1;
+                Tensor::zeros(1, DType::F32, &dev)
+            },
+        )?;
+        assert_eq!(out.dims(), [1]);
+        let conv = pool
+            .conv_state
+            .narrow(0, slot, 1)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let state = pool
+            .recurrent_state
+            .narrow(0, slot, 1)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        assert_eq!(conv, vec![1.0; 6]);
+        assert_eq!(state, vec![2.0; 2]);
+        assert_eq!(pool.get_seqlen_offset(slot), 1);
+        Ok(())
+    }
 
     fn synthetic(n: usize, seed: usize, dev: &Device) -> Result<Tensor> {
         let v = (0..n)
@@ -1195,6 +1321,60 @@ mod tests {
         Ok(Arc::new(UnquantLinear::new(
             QuantMethodConfig::Unquantized(Linear::new(w, None)),
         )?))
+    }
+
+    /// vLLM `RMSNormGated.forward_static` with `norm_before_gate=True` and one group, in f64
+    /// (`layernorm.py:243-269`): each row is `x * rsqrt(mean(x²) + eps) * w * act(z)`.
+    fn gated_norm_reference(x: &[f64], z: &[f64], w: &[f64], eps: f64, sigmoid: bool) -> Vec<f64> {
+        let n = w.len();
+        let mut out = Vec::with_capacity(x.len());
+        for (xr, zr) in x.chunks(n).zip(z.chunks(n)) {
+            let variance = xr.iter().map(|v| v * v).sum::<f64>() / n as f64;
+            let inv = 1.0 / (variance + eps).sqrt();
+            for ((a, g), wj) in xr.iter().zip(zr).zip(w) {
+                let s = 1.0 / (1.0 + (-g).exp());
+                let act = if sigmoid { s } else { g * s };
+                out.push(a * inv * wj * act);
+            }
+        }
+        out
+    }
+
+    /// Both gates against the reference: `from_weight` gates with silu, `.sigmoid()` with sigmoid.
+    #[test]
+    fn rms_norm_gated_matches_reference() -> Result<()> {
+        use rand::{rngs::StdRng, Rng, SeedableRng};
+        let dev = Device::Cpu;
+        let (rows, n, eps) = (6usize, 128usize, 1e-6);
+        let mut rng = StdRng::seed_from_u64(0x676e_6f72);
+        let mut draw = |len: usize, scale: f32| -> Vec<f32> {
+            (0..len).map(|_| rng.random_range(-scale..scale)).collect()
+        };
+        let (x, z, w) = (draw(rows * n, 2.0), draw(rows * n, 4.0), draw(n, 1.5));
+        let wide = |v: &[f32]| v.iter().map(|&a| f64::from(a)).collect::<Vec<_>>();
+
+        for sigmoid in [false, true] {
+            let norm = RmsNormGated::from_weight(Tensor::from_vec(w.clone(), n, &dev)?, eps);
+            let norm = if sigmoid { norm.sigmoid() } else { norm };
+            let got = norm
+                .forward(
+                    &Tensor::from_vec(x.clone(), (rows, n), &dev)?,
+                    &Tensor::from_vec(z.clone(), (rows, n), &dev)?,
+                )?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let want = gated_norm_reference(&wide(&x), &wide(&z), &wide(&w), eps, sigmoid);
+            let worst = got
+                .iter()
+                .zip(&want)
+                .map(|(g, r)| (f64::from(*g) - r).abs() / r.abs().max(1e-3))
+                .fold(0f64, f64::max);
+            assert!(
+                worst < 1e-5,
+                "sigmoid={sigmoid}: max relative error {worst:.3e}"
+            );
+        }
+        Ok(())
     }
 
     // The split projections and the merged grouped-head matrix must be the same linear map. The merge
@@ -1342,7 +1522,9 @@ mod tests {
             dt_bias: synthetic(num_v_heads, 34, &dev)?,
             a_log: synthetic(num_v_heads, 35, &dev)?,
             norm: RmsNormGated::from_weight(synthetic(head_v_dim, 36, &dev)?, 1e-6),
-            out_proj: unquant(synthetic(hidden * value_dim, 37, &dev)?.reshape((hidden, value_dim))?)?,
+            out_proj: unquant(
+                synthetic(hidden * value_dim, 37, &dev)?.reshape((hidden, value_dim))?,
+            )?,
             num_k_heads,
             num_v_heads,
             head_k_dim,
@@ -1392,7 +1574,10 @@ mod tests {
             .zip(&got)
             .fold(0f32, |acc, (w, g)| acc.max((w - g).abs()));
         eprintln!("[gdn chunked-vs-contiguous] max_abs={worst:.3e}");
-        assert!(worst < 1e-5, "chunked prefill != contiguous, max_abs={worst}");
+        assert!(
+            worst < 1e-5,
+            "chunked prefill != contiguous, max_abs={worst}"
+        );
         Ok(())
     }
 
@@ -1477,8 +1662,11 @@ mod tests {
         };
 
         let (prompt_len, drafted, accepted) = (5usize, 4usize, 2usize);
-        let all = synthetic((prompt_len + drafted) * hidden, 58, &dev)?
-            .reshape((1, prompt_len + drafted, hidden))?;
+        let all = synthetic((prompt_len + drafted) * hidden, 58, &dev)?.reshape((
+            1,
+            prompt_len + drafted,
+            hidden,
+        ))?;
         let draft = all.narrow(1, prompt_len, drafted)?;
 
         let mut cache = GdnLayerCache {
@@ -1575,10 +1763,13 @@ mod tests {
 
         let prefilled = || -> Result<RecurrentStatePool> {
             let mut pool = RecurrentStatePool::new(
-                conv_dim,
-                conv_kernel_size,
-                state_dims.to_vec(),
-                DType::F32,
+                RecurrentLayerConfig {
+                    conv_dim,
+                    conv_width: conv_kernel_size,
+                    state_dims: state_dims.to_vec(),
+                    conv_dtype: DType::F32,
+                    state_dtype: DType::F32,
+                },
                 &dev,
             )?;
             assert_eq!((pool.allocate(), pool.allocate()), (Some(0), Some(1)));
@@ -2117,6 +2308,97 @@ mod tests {
     }
 
     // Fast Vulkan reproduction of the qwen35moe prompt-step recurrence shape crash. Skips cleanly with
+    // no GPU. Run on a ROCm box (evo) with:
+    //   cargo test --features rocm -p hanzo-engine gdn_scan_rocm_matches_portable -- --nocapture
+    #[test]
+    #[cfg_attr(not(feature = "rocm"), ignore = "requires rocm feature")]
+    fn gdn_scan_rocm_matches_portable() -> Result<()> {
+        #[cfg(feature = "rocm")]
+        {
+            let Ok(dev) = Device::new_rocm(0) else {
+                eprintln!("skip: no rocm device");
+                return Ok(());
+            };
+            return run_gdn_scan_rocm_matches_portable(&dev);
+        }
+        #[cfg(not(feature = "rocm"))]
+        {
+            eprintln!("skip: built without the rocm feature");
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "rocm")]
+    fn run_gdn_scan_rocm_matches_portable(dev: &Device) -> Result<()> {
+        let (batch, nvh, hkd, hvd, seq) = (1usize, 4usize, 128usize, 128usize, 32usize);
+        let gen = |n: usize, seed: usize| -> Vec<f32> {
+            (0..n)
+                .map(|i| (((i * 1103515245 + seed * 12345 + 7) % 2000) as f32 / 1000.0) - 1.0)
+                .collect()
+        };
+        let on = |v: Vec<f32>, shape: (usize, usize, usize, usize)| -> Result<Tensor> {
+            Tensor::from_vec(v, shape, &Device::Cpu)?.to_device(dev)
+        };
+        let on3 = |v: Vec<f32>, shape: (usize, usize, usize)| -> Result<Tensor> {
+            Tensor::from_vec(v, shape, &Device::Cpu)?.to_device(dev)
+        };
+        let q = on(gen(batch * seq * nvh * hkd, 1), (batch, seq, nvh, hkd))?;
+        let k = on(gen(batch * seq * nvh * hkd, 2), (batch, seq, nvh, hkd))?;
+        let v = on(gen(batch * seq * nvh * hvd, 3), (batch, seq, nvh, hvd))?;
+        let g = on3(
+            gen(batch * seq * nvh, 4)
+                .iter()
+                .map(|x| x * 0.5 - 0.5)
+                .collect(),
+            (batch, seq, nvh),
+        )?;
+        let beta = on3(
+            gen(batch * seq * nvh, 5)
+                .iter()
+                .map(|x| (x + 1.0) * 0.5)
+                .collect(),
+            (batch, seq, nvh),
+        )?;
+        let cpu = |t: &Tensor| -> Result<Tensor> { t.to_device(&Device::Cpu) };
+        let (qc, kc, vc, gc, bc) = (cpu(&q)?, cpu(&k)?, cpu(&v)?, cpu(&g)?, cpu(&beta)?);
+        let sc = Tensor::from_vec(
+            gen(batch * nvh * hkd * hvd, 6),
+            (batch, nvh, hkd, hvd),
+            &Device::Cpu,
+        )?;
+        let state_dev = sc.to_device(dev)?;
+
+        let mut state_fused = state_dev.clone();
+        let y_fused = gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut state_fused)?;
+        let mut state_ref = sc.clone();
+        let y_ref = recurrence_portable(&qc, &kc, &vc, &gc, &bc, &mut state_ref)?;
+
+        let a = y_fused.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+        let b = y_ref.to_vec1::<f32>()?;
+        let max_rel = a
+            .iter()
+            .zip(&b)
+            .map(|(x, y)| (x - y).abs() / y.abs().max(1e-3))
+            .fold(0f32, f32::max);
+        assert!(
+            max_rel < 1e-4,
+            "gdn_scan_rocm vs portable max_rel {max_rel}"
+        );
+
+        let sf = state_fused.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+        let sr = state_ref.to_vec1::<f32>()?;
+        let state_rel = sf
+            .iter()
+            .zip(&sr)
+            .map(|(x, y)| (x - y).abs() / y.abs().max(1e-3))
+            .fold(0f32, f32::max);
+        assert!(
+            state_rel < 1e-4,
+            "gdn_scan_rocm state divergence {state_rel}"
+        );
+        Ok(())
+    }
+
     // no GPU. Run on a Vulkan box with:
     //   cargo test --features vulkan -p hanzo-engine gdn_recurrence_vulkan_shapes -- --nocapture --include-ignored
     #[test]

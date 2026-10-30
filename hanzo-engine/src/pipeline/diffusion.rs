@@ -215,6 +215,7 @@ impl Loader for DiffusionLoader {
                     configs,
                     vbs,
                     crate::pipeline::NormalLoadingMetadata {
+                        weights: Vec::new(),
                         mapper,
                         loading_isq: false,
                         real_device: device.clone(),

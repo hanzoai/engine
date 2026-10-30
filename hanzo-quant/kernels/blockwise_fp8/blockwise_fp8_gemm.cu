@@ -1,5 +1,5 @@
 /**
- * @brief Optimized FP8 GEMM kernels for blockwise quantized weights.
+ * @brief W8A8 GEMM kernels for block-FP8 weights and per-group FP8 activations.
  */
 
 #include <cstdint>
@@ -41,220 +41,134 @@ __device__ __forceinline__ float get_scale(const float *__restrict__ scale,
 }
 
 // ============================================================================
-// FP8 Matmul Kernel
+// W8A8: E4M3 activations (per token, per 128-wide group, scale s_a) times E4M3
+// weights (128x128 blocks, scale s_w). Every 128-deep K block is an f32 dot of
+// the codes, scaled once by s_a * s_w and added into an f32 accumulator, as
+// the served cutlass_scaled_mm does; one store in the output dtype.
 // ============================================================================
 
-template <typename T, int BLOCK_M, int BLOCK_N, int BLOCK_K>
-__global__ void fp8_matmul_tiled(const T *__restrict__ input,
-                                 const __nv_fp8_e4m3 *__restrict__ weight,
-                                 const float *__restrict__ weight_scale,
-                                 T *__restrict__ output, int M, int N, int K,
-                                 int scale_row_stride, int block_size_y,
-                                 int block_size_x) {
-  __shared__ float s_input[BLOCK_M][BLOCK_K + 4];
-  __shared__ float s_weight[BLOCK_N][BLOCK_K + 4];
+constexpr int KB = 128; // K per activation group and per weight block
 
-  const int bx = blockIdx.x;
-  const int by = blockIdx.y;
-  const int tx = threadIdx.x;
-  const int ty = threadIdx.y;
-
-  const int row = by * BLOCK_M + ty;
-  const int col = bx * BLOCK_N + tx;
-
-  float acc = 0.0f;
-
-  const int num_threads = BLOCK_M * BLOCK_N;
-  const int tid = ty * BLOCK_N + tx;
-
-  for (int k_tile = 0; k_tile < K; k_tile += BLOCK_K) {
-    for (int i = tid; i < BLOCK_M * BLOCK_K; i += num_threads) {
-      int lm = i / BLOCK_K;
-      int lk = i % BLOCK_K;
-      int gm = by * BLOCK_M + lm;
-      int gk = k_tile + lk;
-
-      float val = 0.0f;
-      if (gm < M && gk < K) {
-        if constexpr (std::is_same_v<T, half>) {
-          val = __half2float(__ldg(&input[gm * K + gk]));
-        } else {
-          val = __bfloat162float(__ldg(&input[gm * K + gk]));
-        }
-      }
-      s_input[lm][lk] = val;
-    }
-
-    for (int i = tid; i < BLOCK_N * BLOCK_K; i += num_threads) {
-      int ln = i / BLOCK_K;
-      int lk = i % BLOCK_K;
-      int gn = bx * BLOCK_N + ln;
-      int gk = k_tile + lk;
-
-      float val = 0.0f;
-      if (gn < N && gk < K) {
-        __nv_fp8_e4m3 w;
-        w.__x = __ldg(reinterpret_cast<const uint8_t *>(&weight[gn * K + gk]));
-        float s = get_scale(weight_scale, gn, gk, scale_row_stride,
-                            block_size_y, block_size_x);
-        val = fp8_to_float(w) * s;
-      }
-      s_weight[ln][lk] = val;
-    }
-
-    __syncthreads();
-
-    if (row < M && col < N) {
-#pragma unroll
-      for (int k = 0; k < BLOCK_K; k++) {
-        acc += s_input[ty][k] * s_weight[tx][k];
-      }
-    }
-
-    __syncthreads();
-  }
-
-  if (row < M && col < N) {
-    if constexpr (std::is_same_v<T, half>) {
-      output[row * N + col] = __float2half(acc);
-    } else {
-      output[row * N + col] = __float2bfloat16(acc);
-    }
-  }
+template <typename T> __device__ __forceinline__ void store(T *p, float v);
+template <> __device__ __forceinline__ void store<float>(float *p, float v) { *p = v; }
+template <> __device__ __forceinline__ void store<half>(half *p, float v) {
+  *p = __float2half(v);
+}
+template <> __device__ __forceinline__ void store<__nv_bfloat16>(__nv_bfloat16 *p, float v) {
+  *p = __float2bfloat16(v);
 }
 
-// ============================================================================
-// FP8 MoE GEMM - Warp-parallel kernel with vectorized loads
-// Each warp (32 threads) computes one output element collaboratively
-// ============================================================================
+__device__ __forceinline__ float code(uint8_t v) {
+  __nv_fp8_e4m3 f;
+  f.__x = v;
+  return fp8_to_float(f);
+}
+
+/// One output per thread, 32x32 tiles; K staged 32 at a time through shared memory.
+template <typename T>
+__global__ void w8a8_tiled(const uint8_t *__restrict__ qa, const float *__restrict__ sa,
+                           const uint8_t *__restrict__ w, const float *__restrict__ sw,
+                           T *__restrict__ out, int M, int N, int K, int sw_stride,
+                           int block_y) {
+  constexpr int TILE = 32;
+  __shared__ float s_a[TILE][TILE + 1];
+  __shared__ float s_w[TILE][TILE + 1];
+  const int tx = threadIdx.x, ty = threadIdx.y;
+  const int row = blockIdx.y * TILE + ty;
+  const int col = blockIdx.x * TILE + tx;
+  const int groups = K / KB;
+  float acc = 0.0f;
+  for (int kb = 0; kb < groups; kb++) {
+    float partial = 0.0f;
+    for (int kt = 0; kt < KB; kt += TILE) {
+      const int k0 = kb * KB + kt;
+      const int ar = blockIdx.y * TILE + ty;
+      const int wr = blockIdx.x * TILE + ty;
+      s_a[ty][tx] = ar < M ? code(qa[(size_t)ar * K + k0 + tx]) : 0.0f;
+      s_w[ty][tx] = wr < N ? code(w[(size_t)wr * K + k0 + tx]) : 0.0f;
+      __syncthreads();
+#pragma unroll
+      for (int k = 0; k < TILE; k++)
+        partial += s_a[ty][k] * s_w[tx][k];
+      __syncthreads();
+    }
+    if (row < M && col < N)
+      acc += partial * (sa[(size_t)row * groups + kb] * sw[(col / block_y) * sw_stride + kb]);
+  }
+  if (row < M && col < N)
+    store<T>(&out[(size_t)row * N + col], acc);
+}
+
+/// One warp per output: lane l holds k = 4l..4l+3 of every 128 block.
+template <typename T>
+__device__ __forceinline__ float w8a8_warp_dot(const uint8_t *__restrict__ a_row,
+                                               const float *__restrict__ a_scale,
+                                               const uint8_t *__restrict__ w_row,
+                                               const float *__restrict__ w_scale, int K,
+                                               int lane) {
+  const int groups = K / KB;
+  float acc = 0.0f;
+  for (int kb = 0; kb < groups; kb++) {
+    const int k = kb * KB + lane * 4;
+    const uint32_t a4 = __ldg(reinterpret_cast<const uint32_t *>(&a_row[k]));
+    const uint32_t w4 = __ldg(reinterpret_cast<const uint32_t *>(&w_row[k]));
+    float partial = 0.0f;
+#pragma unroll
+    for (int j = 0; j < 4; j++)
+      partial += code((a4 >> (8 * j)) & 0xFF) * code((w4 >> (8 * j)) & 0xFF);
+    acc += partial * (__ldg(&a_scale[kb]) * __ldg(&w_scale[kb]));
+  }
+#pragma unroll
+  for (int off = 16; off > 0; off /= 2)
+    acc += __shfl_down_sync(0xffffffff, acc, off);
+  return acc;
+}
 
 template <typename T>
-__global__ void fp8_moe_gemm(const T *__restrict__ input,
-                             const __nv_fp8_e4m3 *__restrict__ weights,
-                             const float *__restrict__ weight_scales,
-                             const uint32_t *__restrict__ indices,
-                             T *__restrict__ output, int num_tokens, int topk,
-                             int num_experts, int N, int K,
-                             int scale_row_stride, int block_size_y,
-                             int block_size_x, bool input_has_topk_dim) {
-  // Each warp computes one output element
-  const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
-  const int lane_id = threadIdx.x % 32;
-
-  // Decode warp_id to (token, expert_slot, n_idx)
-  const int n_idx = warp_id % N;
-  const int temp = warp_id / N;
-  const int expert_slot = temp % topk;
-  const int token_idx = temp / topk;
-
-  if (token_idx >= num_tokens)
+__global__ void w8a8_warp(const uint8_t *__restrict__ qa, const float *__restrict__ sa,
+                          const uint8_t *__restrict__ w, const float *__restrict__ sw,
+                          T *__restrict__ out, int M, int N, int K, int sw_stride, int block_y) {
+  const long warp = ((long)blockIdx.x * blockDim.x + threadIdx.x) / 32;
+  const int lane = threadIdx.x % 32;
+  if (warp >= (long)M * N)
     return;
+  const int row = warp / N;
+  const int col = warp % N;
+  const int groups = K / KB;
+  const float acc =
+      w8a8_warp_dot<T>(qa + (size_t)row * K, sa + (size_t)row * groups, w + (size_t)col * K,
+                       sw + (size_t)(col / block_y) * sw_stride, K, lane);
+  if (lane == 0)
+    store<T>(&out[(size_t)row * N + col], acc);
+}
 
-  const uint32_t expert_idx = __ldg(&indices[token_idx * topk + expert_slot]);
-  if (expert_idx >= (uint32_t)num_experts)
+/// Indexed MoE: output [tokens, topk, N]; activation row `token` (or `token * topk + slot`
+/// when the input carries the topk dim), expert `indices[token, slot]`.
+template <typename T>
+__global__ void w8a8_moe(const uint8_t *__restrict__ qa, const float *__restrict__ sa,
+                         const uint8_t *__restrict__ w, const float *__restrict__ sw,
+                         const uint32_t *__restrict__ indices, T *__restrict__ out,
+                         int tokens, int topk, int experts, int N, int K, int sw_stride,
+                         int block_y, bool input_has_topk_dim) {
+  const long warp = ((long)blockIdx.x * blockDim.x + threadIdx.x) / 32;
+  const int lane = threadIdx.x % 32;
+  const int n = warp % N;
+  const long t = warp / N;
+  const int slot = t % topk;
+  const long token = t / topk;
+  if (token >= tokens)
     return;
-
-  // Pointers
-  const __nv_fp8_e4m3 *w_row =
-      weights + (size_t)expert_idx * N * K + (size_t)n_idx * K;
-  const int scale_n_dim = CEILDIV(N, block_size_y);
-  const int scale_expert_stride = scale_n_dim * scale_row_stride;
-  const float *expert_scale =
-      weight_scales + (size_t)expert_idx * scale_expert_stride;
-
-  const T *in_row;
-  if (input_has_topk_dim) {
-    in_row = input + (size_t)token_idx * topk * K + (size_t)expert_slot * K;
-  } else {
-    in_row = input + (size_t)token_idx * K;
-  }
-
-  // Precompute scale row index (constant for this output element)
-  const int scale_row = n_idx / block_size_y;
-  const int scale_row_offset = scale_row * scale_row_stride;
-
-  float acc = 0.0f;
-
-  // Process 4 elements per thread per iteration using vectorized loads
-  // Each warp processes 32*4 = 128 elements per iteration
-  const int K_aligned = (K / 128) * 128;
-
-  for (int k_base = 0; k_base < K_aligned; k_base += 128) {
-    int k = k_base + lane_id * 4;
-
-    // Load 4 FP8 weights at once (32-bit load)
-    uint32_t w4 = __ldg(reinterpret_cast<const uint32_t *>(&w_row[k]));
-
-    // Load 4 input values
-    float i0, i1, i2, i3;
-    if constexpr (std::is_same_v<T, half>) {
-      half2 h01 = __ldg(reinterpret_cast<const half2 *>(&in_row[k]));
-      half2 h23 = __ldg(reinterpret_cast<const half2 *>(&in_row[k + 2]));
-      i0 = __half2float(h01.x);
-      i1 = __half2float(h01.y);
-      i2 = __half2float(h23.x);
-      i3 = __half2float(h23.y);
-    } else {
-      __nv_bfloat162 b01 =
-          __ldg(reinterpret_cast<const __nv_bfloat162 *>(&in_row[k]));
-      __nv_bfloat162 b23 =
-          __ldg(reinterpret_cast<const __nv_bfloat162 *>(&in_row[k + 2]));
-      i0 = __bfloat162float(b01.x);
-      i1 = __bfloat162float(b01.y);
-      i2 = __bfloat162float(b23.x);
-      i3 = __bfloat162float(b23.y);
-    }
-
-    // Extract 4 FP8 values and convert
-    __nv_fp8_e4m3 w0, w1, w2, w3;
-    w0.__x = (w4 >> 0) & 0xFF;
-    w1.__x = (w4 >> 8) & 0xFF;
-    w2.__x = (w4 >> 16) & 0xFF;
-    w3.__x = (w4 >> 24) & 0xFF;
-
-    // Get scale
-    int scale_col = k / block_size_x;
-    float scale = __ldg(&expert_scale[scale_row_offset + scale_col]);
-
-    // Accumulate
-    acc += scale * (i0 * fp8_to_float(w0) + i1 * fp8_to_float(w1) +
-                    i2 * fp8_to_float(w2) + i3 * fp8_to_float(w3));
-  }
-
-  // Handle remainder
-  for (int k = K_aligned + lane_id; k < K; k += 32) {
-    float in_val;
-    if constexpr (std::is_same_v<T, half>) {
-      in_val = __half2float(__ldg(&in_row[k]));
-    } else {
-      in_val = __bfloat162float(__ldg(&in_row[k]));
-    }
-
-    __nv_fp8_e4m3 w;
-    w.__x = __ldg(reinterpret_cast<const uint8_t *>(&w_row[k]));
-
-    int scale_col = k / block_size_x;
-    float scale = __ldg(&expert_scale[scale_row_offset + scale_col]);
-
-    acc += scale * in_val * fp8_to_float(w);
-  }
-
-// Warp reduction using shuffle
-#pragma unroll
-  for (int offset = 16; offset > 0; offset /= 2) {
-    acc += __shfl_down_sync(0xffffffff, acc, offset);
-  }
-
-  // Lane 0 writes the result
-  if (lane_id == 0) {
-    size_t out_idx =
-        (size_t)token_idx * topk * N + (size_t)expert_slot * N + n_idx;
-    if constexpr (std::is_same_v<T, half>) {
-      output[out_idx] = __float2half(acc);
-    } else {
-      output[out_idx] = __float2bfloat16(acc);
-    }
-  }
+  const uint32_t e = __ldg(&indices[token * topk + slot]);
+  if (e >= (uint32_t)experts)
+    return;
+  const long a_row = input_has_topk_dim ? token * topk + slot : token;
+  const int groups = K / KB;
+  const size_t sw_expert = (size_t)((N + block_y - 1) / block_y) * sw_stride;
+  const float acc = w8a8_warp_dot<T>(
+      qa + a_row * K, sa + a_row * groups, w + ((size_t)e * N + n) * K,
+      sw + e * sw_expert + (size_t)(n / block_y) * sw_stride, K, lane);
+  if (lane == 0)
+    store<T>(&out[((size_t)token * topk + slot) * N + n], acc);
 }
 
 } // namespace fp8_gemm
@@ -263,89 +177,49 @@ __global__ void fp8_moe_gemm(const T *__restrict__ input,
 // C API
 // ============================================================================
 
-extern "C" void launch_fp8_matmul_f16(const __half *input,
-                                      const __nv_fp8_e4m3 *weight,
-                                      const float *weight_scale, __half *output,
-                                      int M, int N, int K, int scale_row_stride,
-                                      int block_size_y, int block_size_x,
-                                      cudaStream_t stream) {
-  constexpr int TILE = 32;
-  constexpr int TILE_K = 32;
-
-  dim3 block(TILE, TILE);
-  dim3 grid(CEILDIV(N, TILE), CEILDIV(M, TILE));
-
-  fp8_gemm::fp8_matmul_tiled<half, TILE, TILE, TILE_K>
-      <<<grid, block, 0, stream>>>(input, weight, weight_scale, output, M, N, K,
-                                   scale_row_stride, block_size_y,
-                                   block_size_x);
+namespace {
+template <typename T>
+void launch_matmul(const uint8_t *qa, const float *sa, const uint8_t *w, const float *sw, T *out,
+                   int M, int N, int K, int sw_stride, int block_y, cudaStream_t stream) {
+  if (M <= 16) {
+    const long threads = (long)M * N * 32;
+    fp8_gemm::w8a8_warp<T><<<CEILDIV(threads, 256), 256, 0, stream>>>(qa, sa, w, sw, out, M, N,
+                                                                      K, sw_stride, block_y);
+  } else {
+    dim3 block(32, 32);
+    dim3 grid(CEILDIV(N, 32), CEILDIV(M, 32));
+    fp8_gemm::w8a8_tiled<T><<<grid, block, 0, stream>>>(qa, sa, w, sw, out, M, N, K, sw_stride,
+                                                        block_y);
+  }
   CUDA_CHECK(cudaGetLastError());
 }
 
-extern "C" void
-launch_fp8_matmul_bf16(const __nv_bfloat16 *input, const __nv_fp8_e4m3 *weight,
-                       const float *weight_scale, __nv_bfloat16 *output, int M,
-                       int N, int K, int scale_row_stride, int block_size_y,
-                       int block_size_x, cudaStream_t stream) {
-  constexpr int TILE = 32;
-  constexpr int TILE_K = 32;
-
-  dim3 block(TILE, TILE);
-  dim3 grid(CEILDIV(N, TILE), CEILDIV(M, TILE));
-
-  fp8_gemm::fp8_matmul_tiled<__nv_bfloat16, TILE, TILE, TILE_K>
-      <<<grid, block, 0, stream>>>(input, weight, weight_scale, output, M, N, K,
-                                   scale_row_stride, block_size_y,
-                                   block_size_x);
-  CUDA_CHECK(cudaGetLastError());
-}
-
-extern "C" void launch_fp8_indexed_moe_gemm_f16(
-    const __half *input, const __nv_fp8_e4m3 *weights,
-    const float *weight_scales, const uint32_t *indices, __half *output,
-    int num_tokens, int topk, int num_experts, int N, int K,
-    int scale_row_stride, int block_size_y, int block_size_x,
-    bool input_has_topk_dim, cudaStream_t stream) {
-  // Each warp (32 threads) computes one output element
-  // Use 512 threads per block (16 warps) for better occupancy
-  constexpr int THREADS_PER_BLOCK = 512;
-  constexpr int WARPS_PER_BLOCK = THREADS_PER_BLOCK / 32;
-
-  int total_outputs = num_tokens * topk * N;
-  int total_warps = total_outputs;
-  int num_blocks = CEILDIV(total_warps, WARPS_PER_BLOCK);
-
-  dim3 block(THREADS_PER_BLOCK);
-  dim3 grid(num_blocks);
-
-  fp8_gemm::fp8_moe_gemm<half><<<grid, block, 0, stream>>>(
-      input, weights, weight_scales, indices, output, num_tokens, topk,
-      num_experts, N, K, scale_row_stride, block_size_y, block_size_x,
+template <typename T>
+void launch_moe(const uint8_t *qa, const float *sa, const uint8_t *w, const float *sw,
+                const uint32_t *indices, T *out, int tokens, int topk, int experts, int N, int K,
+                int sw_stride, int block_y, bool input_has_topk_dim, cudaStream_t stream) {
+  const long threads = (long)tokens * topk * N * 32;
+  fp8_gemm::w8a8_moe<T><<<CEILDIV(threads, 512), 512, 0, stream>>>(
+      qa, sa, w, sw, indices, out, tokens, topk, experts, N, K, sw_stride, block_y,
       input_has_topk_dim);
   CUDA_CHECK(cudaGetLastError());
 }
+} // namespace
 
-extern "C" void launch_fp8_indexed_moe_gemm_bf16(
-    const __nv_bfloat16 *input, const __nv_fp8_e4m3 *weights,
-    const float *weight_scales, const uint32_t *indices, __nv_bfloat16 *output,
-    int num_tokens, int topk, int num_experts, int N, int K,
-    int scale_row_stride, int block_size_y, int block_size_x,
-    bool input_has_topk_dim, cudaStream_t stream) {
-  // Each warp (32 threads) computes one output element
-  // Use 512 threads per block (16 warps) for better occupancy
-  constexpr int THREADS_PER_BLOCK = 512;
-  constexpr int WARPS_PER_BLOCK = THREADS_PER_BLOCK / 32;
+#define W8A8_API(NAME, T)                                                                      \
+  extern "C" void launch_fp8_matmul_##NAME(const uint8_t *qa, const float *sa, const uint8_t *w, \
+                                           const float *sw, T *out, int M, int N, int K,        \
+                                           int sw_stride, int block_y, cudaStream_t stream) {   \
+    launch_matmul<T>(qa, sa, w, sw, out, M, N, K, sw_stride, block_y, stream);                 \
+  }                                                                                            \
+  extern "C" void launch_fp8_indexed_moe_gemm_##NAME(                                          \
+      const uint8_t *qa, const float *sa, const uint8_t *w, const float *sw,                   \
+      const uint32_t *indices, T *out, int tokens, int topk, int experts, int N, int K,        \
+      int sw_stride, int block_y, bool input_has_topk_dim, cudaStream_t stream) {              \
+    launch_moe<T>(qa, sa, w, sw, indices, out, tokens, topk, experts, N, K, sw_stride, block_y, \
+                  input_has_topk_dim, stream);                                                 \
+  }
 
-  int total_outputs = num_tokens * topk * N;
-  int total_warps = total_outputs;
-  int num_blocks = CEILDIV(total_warps, WARPS_PER_BLOCK);
-
-  dim3 block(THREADS_PER_BLOCK);
-  dim3 grid(num_blocks);
-
-  fp8_gemm::fp8_moe_gemm<__nv_bfloat16><<<grid, block, 0, stream>>>(
-      input, weights, weight_scales, indices, output, num_tokens, topk,
-      num_experts, N, K, scale_row_stride, block_size_y, block_size_x,
-      input_has_topk_dim);
-  CUDA_CHECK(cudaGetLastError());
-}
+W8A8_API(f32, float)
+W8A8_API(f16, half)
+W8A8_API(bf16, __nv_bfloat16)

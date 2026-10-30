@@ -24,12 +24,15 @@ concurrency:
 
 jobs:
   site:
+    permissions:
+      contents: read
+      id-token: write
     runs-on: [linux-amd64]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Publish to the Sites plane
-        uses: https://git.hanzo.ai/hanzoai/ci/.github/actions/site@v1
+        uses: hanzoai/ci/.github/actions/site@v1
         with:
           slug: engine
           dir: site

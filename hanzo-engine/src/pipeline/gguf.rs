@@ -66,6 +66,7 @@ use crate::{
     models::quantized_qwen3_moe::ModelWeights as QQwen3MoE,
     models::quantized_qwen3_next::ModelWeights as QQwen3Next,
     models::quantized_starcoder2::ModelWeights as QStarcoder2,
+    models::quantized_zen6::ModelWeights as QZen6,
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
@@ -100,6 +101,7 @@ enum Model {
     Qwen3MoE(QQwen3MoE),
     Qwen3Next(QQwen3Next),
     Qwen35(QQwen35),
+    Zen6(QZen6),
     Deepseek2(QDeepSeek2),
     Deepseek4(QDeepSeek4),
     GptOss(QGptOss),
@@ -922,6 +924,7 @@ impl Loader for GGUFLoader {
                 GGUFArchitecture::Qwen35 | GGUFArchitecture::Qwen35MoE => {
                     Model::Qwen35(QQwen35::try_from(model_config)?)
                 }
+                GGUFArchitecture::Zen6 => Model::Zen6(QZen6::try_from(model_config)?),
                 GGUFArchitecture::Deepseek2 | GGUFArchitecture::GlmDsa => {
                     Model::Deepseek2(QDeepSeek2::try_from(model_config)?)
                 }
@@ -1005,6 +1008,7 @@ impl Loader for GGUFLoader {
             Model::Qwen3MoE(ref p) => p.max_seq_len,
             Model::Qwen3Next(ref p) => p.max_seq_len,
             Model::Qwen35(ref p) => p.max_seq_len,
+            Model::Zen6(ref p) => p.max_seq_len,
             Model::Deepseek2(ref p) => p.max_seq_len,
             Model::Deepseek4(ref p) => p.max_seq_len,
             Model::GptOss(ref p) => p.max_seq_len,
@@ -1024,6 +1028,7 @@ impl Loader for GGUFLoader {
             Model::Qwen3(ref model) => model.cache.normal().0.len(),
             Model::Qwen3MoE(ref model) => model.cache.normal().0.len(),
             Model::Qwen35(ref model) => model.cache.hybrid().num_layers(),
+            Model::Zen6(ref model) => model.cache.hybrid().num_layers(),
             Model::Qwen3Next(ref model) => model.cache.hybrid().num_layers(),
             Model::Deepseek2(ref model) => model.cache.normal().0.len(),
             Model::Deepseek4(ref model) => model.cache.normal().0.len(),
@@ -1199,6 +1204,7 @@ impl CacheManagerMixin for GGUFPipeline {
             Model::Qwen3(ref model) => &model.cache,
             Model::Qwen3MoE(ref model) => &model.cache,
             Model::Qwen35(ref model) => &model.cache,
+            Model::Zen6(ref model) => &model.cache,
             Model::Qwen3Next(ref model) => &model.cache,
             Model::Deepseek2(ref model) => &model.cache,
             Model::Deepseek4(ref model) => &model.cache,
@@ -1223,6 +1229,7 @@ impl MetadataMixin for GGUFPipeline {
             Model::Qwen3(ref model) => model.device.clone(),
             Model::Qwen3MoE(ref model) => model.device.clone(),
             Model::Qwen35(ref model) => model.device.clone(),
+            Model::Zen6(ref model) => model.device.clone(),
             Model::Qwen3Next(ref model) => model.device.clone(),
             Model::Deepseek2(ref model) => model.device.clone(),
             Model::Deepseek4(ref model) => model.device.clone(),
@@ -1880,6 +1887,14 @@ impl GGUFPipeline {
         if !rocm_decode_graphs_enabled() || !self.model_supports_decode_graph() {
             return Ok(None);
         }
+        // A draft reads what the target's layer loop records as it runs (`spec_capture`):
+        // host-side code that truncates, appends and keys rows per sequence. A graph replay
+        // re-issues only the recorded kernels, so none of that runs and the draft reads rows
+        // that were never written. The CUDA and Vulkan paths stay eager under speculation for
+        // this reason; this one claimed to mirror the CUDA gate and had not.
+        if self.draft_proposer.is_some() {
+            return Ok(None);
+        }
         // Mirror the CUDA gate: only steady-state single-token decode with paged
         // metadata present and no prefix-cache prefill in flight.
         if metadata.is_first_prompt_chunk
@@ -2452,6 +2467,7 @@ impl Pipeline for GGUFPipeline {
         let ModelInputs {
             input_ids,
             input_ids_full,
+            prior,
             seqlen_offsets,
             seqlen_offsets_full,
             context_lens,
@@ -2630,6 +2646,13 @@ impl Pipeline for GGUFPipeline {
             Model::Qwen35(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
+            Model::Zen6(ref model) => model.forward(
+                &input_ids,
+                &prior,
+                &seqlen_offsets,
+                context_lens,
+                paged_attn_meta,
+            )?,
             Model::Qwen3Next(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
@@ -2978,10 +3001,12 @@ impl crate::speculative::driver::SpeculativePipelineExt for GGUFPipeline {
     fn build_speculative_verify_inputs(
         &self,
         input_meta: crate::pipeline::text_models_inputs_processor::InputMetadata,
+        prior: Vec<Vec<u32>>,
     ) -> hanzo_ml::Result<Box<dyn Any>> {
         Ok(Box::new(ModelInputs {
             input_ids: input_meta.input,
             input_ids_full: None,
+            prior,
             seqlen_offsets: input_meta.positions,
             seqlen_offsets_full: None,
             context_lens: input_meta.context_lens,
