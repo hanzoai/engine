@@ -1,0 +1,29 @@
+# Example: fronting local expert-offloading engines through hanzo-router.
+#
+# lean-qwenflash (MaxDevv) and glm-flash-lite (sybil-solutions) expose an
+# OpenAI-compatible API on :30000 (model names qwen3.8-flash-next / glm-5.3-flash).
+# Register them as replicas; the router forwards /v1/* and injects the bearer
+# when api_key is set (needed for any upstream that requires auth).
+#
+# Start the engine first, then add these entries to your pool file.
+
+models:
+  qwen3.8-flash-next:
+    - id: lean-qwenflash
+      url: http://127.0.0.1:30000
+      max_context: 262144
+      capacity: 8
+      weight: 100
+      roles: [main, implementation, reasoning, subagent]
+      upstream_model: qwen3.8-flash-next
+      # api_key: <optional bearer for the upstream>
+
+  glm-5.3-flash:
+    - id: glm-flash-lite
+      url: http://127.0.0.1:30000
+      max_context: 131072
+      capacity: 4
+      weight: 100
+      roles: [main, implementation, reasoning]
+      upstream_model: glm-5.3-flash
+      # api_key: <optional bearer for the upstream>
