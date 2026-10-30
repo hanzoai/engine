@@ -48,8 +48,16 @@ pub(crate) fn sdpa(q: &Tensor, k: &Tensor, v: &Tensor, mask: &AttentionMask) -> 
     let k = k.contiguous()?;
     let v = v.contiguous()?;
     match Sdpa.run_attention(&q, &k, &v, mask, Some(&flash), &params) {
-        Ok(out) => Ok(out),
-        Err(_) => naive_attention(&q, &k, &v, mask),
+        Ok(out) => {
+            let vals = out.flatten_all()?.to_vec1::<f32>().unwrap();
+            if vals.iter().any(|x| !x.is_finite()) {
+                // Flash path produced NaN; fall back to the reference matmul.
+                naive_attention(&q, &k, &v, mask)
+            } else {
+                Ok(out)
+            }
+        }
+        Err(e) => { eprintln!("DEBUG sdpa err={e}"); naive_attention(&q, &k, &v, mask) }
     }
 }
 

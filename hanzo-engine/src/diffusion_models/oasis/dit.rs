@@ -81,6 +81,7 @@ fn apply_linear(x: &Tensor, l: &Linear) -> Result<Tensor> {
     out.reshape(shape)
 }
 
+
 struct Mlp {
     fc1: Linear,
     fc2: Linear,
@@ -135,8 +136,10 @@ struct AxialAttention {
 
 impl AxialAttention {
     fn new(spatial: bool, vb: ShardedVarBuilder) -> Result<Self> {
+        let qkv = layers::linear_no_bias(DIM, DIM * 3, vb.pp("to_qkv"))?;
+        let _ = qkv.weight();
         Ok(Self {
-            qkv: layers::linear_no_bias(DIM, DIM * 3, vb.pp("to_qkv"))?,
+            qkv,
             proj: layers::linear(DIM, DIM, vb.pp("to_out"))?,
             spatial,
         })
@@ -145,14 +148,16 @@ impl AxialAttention {
     // x [B,T,H,W,D] -> [B,T,H,W,D]. rope is the spatial or per-window temporal table.
     fn forward(&self, x: &Tensor, rope: &RotaryTable, mask: &AttentionMask) -> Result<Tensor> {
         let (b, t, h, w, _) = x.dims5()?;
-        let qkv = apply_linear(x, &self.qkv)?;
+        let qkv = apply_linear(x, &self.qkv)?.contiguous()?;
+        eprintln!("DEBUG qkv shape={:?} finite={}", qkv.dims(), qkv.flatten_all()?.to_vec1::<f32>().unwrap().iter().all(|v| v.is_finite()));
+
         // narrow one of q/k/v then fold into the attention batch layout.
         let heads = |i: usize| -> Result<Tensor> {
-            let g = qkv.narrow(D::Minus1, i * DIM, DIM)?;
+            let g = qkv.narrow(D::Minus1, i * DIM, DIM)?.contiguous()?;
             if self.spatial {
+                let r = g.reshape((b, t, h * w, HEADS, HEAD_DIM))?;
                 // (B T) HEADS (H W) hd
-                g.reshape((b, t, h * w, HEADS, HEAD_DIM))?
-                    .transpose(2, 3)?
+                r.transpose(2, 3)?
                     .reshape((b * t, HEADS, h * w, HEAD_DIM))?
                     .contiguous()
             } else {
@@ -163,10 +168,14 @@ impl AxialAttention {
                     .contiguous()
             }
         };
-        let q = rope.apply(&heads(0)?)?;
-        let k = rope.apply(&heads(1)?)?;
+        let qh = heads(0)?;
+        let q = rope.apply(&qh)?;
+        let kh = heads(1)?;
+        let k = rope.apply(&kh)?;
         let v = heads(2)?;
         let out = sdpa(&q, &k, &v, mask)?;
+        let o = out.flatten_all()?.to_vec1::<f32>().unwrap();
+        if o.iter().any(|x| !x.is_finite()) { eprintln!("DEBUG sdpa nan in AxialAttention spatial={} qshape={:?} mask={:?}", self.spatial, q.dims(), mask); }
         let merged = if self.spatial {
             out.reshape((b, t, HEADS, h * w, HEAD_DIM))?
                 .transpose(2, 3)?
@@ -179,6 +188,21 @@ impl AxialAttention {
         apply_linear(&merged, &self.proj)
     }
 }
+
+fn layer_norm_no_affine(x: &Tensor) -> Result<Tensor> {
+    let hidden = x.dim(D::Minus1)?;
+    let dtype = x.dtype();
+    let xf = x.to_dtype(DType::F32)?.contiguous()?;
+    let mean = (xf.sum_keepdim(D::Minus1)? / hidden as f64)?.contiguous()?;
+    let xc = xf.broadcast_sub(&mean)?.contiguous()?;
+    let var = (xc.sqr()?.sum_keepdim(D::Minus1)? / hidden as f64)?.contiguous()?;
+    let denom = (var + 1e-6)?.sqrt()?.contiguous()?;
+    let out = xc.broadcast_div(&denom)?.contiguous()?;
+    out.to_dtype(dtype)
+}
+
+
+
 
 struct SpatioTemporalBlock {
     s_norm1: LayerNorm,
@@ -218,37 +242,25 @@ impl SpatioTemporalBlock {
         t_mask: &AttentionMask,
     ) -> Result<Tensor> {
         let [ss, sc, sg, ss2, sc2, sg2] = self.s_ada.six(c)?;
-        let x = (x + gate(
-            &self.s_attn.forward(
-                &modulate(&x.apply(&self.s_norm1)?, &ss, &sc)?,
-                s_rope,
-                &AttentionMask::None,
-            )?,
-            &sg,
-        )?)?;
-        let x = (&x
-            + gate(
-                &self
-                    .s_mlp
-                    .forward(&modulate(&x.apply(&self.s_norm2)?, &ss2, &sc2)?)?,
-                &sg2,
-            )?)?;
+        let nrm = layer_norm_no_affine(&x)?;
+        let nrmv = nrm.flatten_all()?.to_vec1::<f32>().unwrap();
+        let ssv = ss.flatten_all()?.to_vec1::<f32>().unwrap();
+        let scv = sc.flatten_all()?.to_vec1::<f32>().unwrap();
+        eprintln!("DBG nrm finite={} min={:.3} max={:.3} ss finite={} min={:.3} max={:.3} sc finite={} min={:.3} max={:.3}", nrmv.iter().all(|v|v.is_finite()), nrmv.iter().cloned().fold(f32::INFINITY,f32::min), nrmv.iter().cloned().fold(f32::NEG_INFINITY,f32::max), ssv.iter().all(|v|v.is_finite()), ssv.iter().cloned().fold(f32::INFINITY,f32::min), ssv.iter().cloned().fold(f32::NEG_INFINITY,f32::max), scv.iter().all(|v|v.is_finite()), scv.iter().cloned().fold(f32::INFINITY,f32::min), scv.iter().cloned().fold(f32::NEG_INFINITY,f32::max));
+        let xn = modulate(&nrm, &ss, &sc)?;
+        let xnv = xn.flatten_all()?.to_vec1::<f32>().unwrap();
+        eprintln!("DBG xn finite={} min={:.3} max={:.3}", xnv.iter().all(|v|v.is_finite()), xnv.iter().cloned().fold(f32::INFINITY,f32::min), xnv.iter().cloned().fold(f32::NEG_INFINITY,f32::max));
+        let sa = self.s_attn.forward(&xn, s_rope, &AttentionMask::None)?;
+        let x = (x + gate(&sa, &sg)?)?;
+        let x2 = modulate(&layer_norm_no_affine(&x)?, &ss2, &sc2)?;
+        let sm = self.s_mlp.forward(&x2)?;
+        let x = (&x + gate(&sm, &sg2)?)?;
         let [ts, tc, tg, ts2, tc2, tg2] = self.t_ada.six(c)?;
-        let x = (&x
-            + gate(
-                &self.t_attn.forward(
-                    &modulate(&x.apply(&self.t_norm1)?, &ts, &tc)?,
-                    t_rope,
-                    t_mask,
-                )?,
-                &tg,
-            )?)?;
-        &x + gate(
-            &self
-                .t_mlp
-                .forward(&modulate(&x.apply(&self.t_norm2)?, &ts2, &tc2)?)?,
-            &tg2,
-        )?
+        let tn = modulate(&layer_norm_no_affine(&x)?, &ts, &tc)?;
+        let ta = self.t_attn.forward(&tn, t_rope, t_mask)?;
+        let x = (&x + gate(&ta, &tg)?)?;
+        let tm = self.t_mlp.forward(&modulate(&layer_norm_no_affine(&x)?, &ts2, &tc2)?)?;
+        &x + gate(&tm, &tg2)?
     }
 }
 
@@ -387,7 +399,7 @@ impl Dit {
                 .narrow(3, 0, tt)?
                 .contiguous()?,
         );
-        for blk in &self.blocks {
+        for (i, blk) in self.blocks.iter().enumerate() {
             h = blk.forward(&h, &c, &self.s_rope, &t_rope, &t_mask)?;
         }
         let out = self.final_layer.forward(&h, &c)?; // [B,T,9,16,64]
