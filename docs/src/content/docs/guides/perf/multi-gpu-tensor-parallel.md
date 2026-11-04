@@ -34,7 +34,7 @@ hanzo serve -m Qwen/Qwen3-32B --quant 4
 If NCCL is not installed, omit `nccl`:
 
 ```bash
-cargo install hanzo-cli --features "cuda flash-attn cudnn"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 To force the installer decision, use `HANZO_INSTALL_NCCL=1` or `HANZO_INSTALL_NO_NCCL=1`. To disable NCCL at runtime without rebuilding:

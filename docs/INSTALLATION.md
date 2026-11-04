@@ -75,12 +75,12 @@ Determine which features to enable based on your hardware:
 ## Install from crates.io
 
 ```bash
-cargo install hanzo-cli --features "<your-features>"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "<your-features>"
 ```
 
 Example:
 ```bash
-cargo install hanzo-cli --features "cuda flash-attn cudnn"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 ## Build from Source

@@ -41,7 +41,7 @@ Flash attention requires compute capability 8.0+. Flash attention v3 requires 9.
 Install with a specific feature set from crates.io:
 
 ```bash
-cargo install hanzo-cli --features "cuda flash-attn cudnn"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 From a source checkout:
@@ -58,7 +58,7 @@ For a non-standard toolkit location, set `CUDA_ROOT` before building:
 
 ```bash
 export CUDA_ROOT=/opt/cuda-12.4
-cargo install hanzo-cli --features "cuda flash-attn cudnn"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 `CUDA_ROOT` overrides the `nvcc` discovered via `PATH`. The build uses the `nvcc` matching the `CUDA_ROOT` value.

@@ -43,7 +43,7 @@ For Linux CUDA multi-GPU, add `nccl` when NCCL is installed. The Linux installer
 From `cargo install`:
 
 ```bash
-cargo install hanzo-cli --features "cuda flash-attn cudnn"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 From a source checkout:

@@ -31,7 +31,7 @@ The standard combination on Apple Silicon is `metal accelerate`. Metal is the GP
 From crates.io:
 
 ```bash
-cargo install hanzo-cli --features "metal accelerate"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "metal accelerate"
 ```
 
 From source:

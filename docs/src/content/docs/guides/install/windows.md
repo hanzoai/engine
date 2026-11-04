@@ -26,7 +26,7 @@ irm https://raw.githubusercontent.com/hanzoai/engine/master/install.ps1 | iex
 The script detects CUDA and selects features accordingly. To install manually:
 
 ```powershell
-cargo install hanzo-cli --features "cuda flash-attn cudnn"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 Prerequisites:

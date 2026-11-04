@@ -60,7 +60,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/hanzoai/e
 
 Or if installed via cargo:
 ```bash
-cargo install hanzo-cli --features "<your-features>" --force
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "<your-features>" --force
 ```
 
 ### Does hanzo work on WSL?

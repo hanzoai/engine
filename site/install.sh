@@ -345,10 +345,10 @@ source_install() {
 
     if [ -n "$features" ]; then
         info "Building hanzo-engine with features: $features"
-        cargo install hanzo-engine --features "$features"
+        cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "$features"
     else
         info "Building hanzo-engine (CPU only)"
-        cargo install hanzo-engine
+        cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli
     fi
 
     success "hanzo-engine built and installed via cargo."
