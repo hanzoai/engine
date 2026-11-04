@@ -730,8 +730,11 @@
 <pre><span class="comment"># Install</span>
 <span class="cmd">curl -sSL https://engine.hanzo.ai/install.sh | sh</span>
 
-<span class="comment"># Or via cargo</span>
-<span class="cmd">cargo install hanzo-engine</span>
+<span class="comment"># Or via npm, any OS (prebuilt; then: hanzo engine serve &lt;model&gt;)</span>
+<span class="cmd">npm i -g hanzo</span>
+
+<span class="comment"># Or from source via cargo</span>
+<span class="cmd">cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli</span>
 
 <span class="comment"># Serve a model</span>
 <span class="cmd">hanzo-engine serve --model zenlm/zen4-mini --port 8000</span>
@@ -1048,8 +1051,8 @@
             </tr>
             <tr>
               <td>Install</td>
-              <td><code>cargo install hanzo-edge</code></td>
-              <td><code>cargo install hanzo-engine</code></td>
+              <td><code>cargo install --git https://github.com/hanzoai/edge hanzo-edge</code></td>
+              <td><code>npm i -g hanzo</code></td>
             </tr>
           </tbody>
         </table>

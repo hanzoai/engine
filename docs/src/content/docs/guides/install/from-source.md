@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-Build from a source checkout to pin a specific commit, apply a local patch, or use a feature combination not in the published binaries. For most installs, the install script or `cargo install hanzo-cli` is sufficient.
+Build from a source checkout to pin a specific commit, apply a local patch, or use a feature combination not in the published binaries. For most installs, `npm i -g hanzo` then `hanzo engine serve <model>` (prebuilt binary, linux amd64/arm64 and macOS), the install script, or `cargo install hanzo-cli` is sufficient.
 
 ## Clone and build
 

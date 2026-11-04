@@ -5,7 +5,9 @@ sidebar:
   order: 2
 ---
 
-On Apple Silicon (M1, M2, M3, M4), the install script detects the chip and builds with Metal support:
+Quick install: `npm i -g hanzo` then `hanzo engine serve <model>`. The first `hanzo engine` fetches the prebuilt `hanzo-engine` binary for macOS and checks its SHA-256.
+
+To build with exactly the features you want: on Apple Silicon (M1, M2, M3, M4), the install script detects the chip and builds with Metal support:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/hanzoai/engine/master/install.sh | sh

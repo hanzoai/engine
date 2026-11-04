@@ -1,6 +1,16 @@
 # Installation Guide
 
-## Quick Install (Recommended)
+## Quick install (prebuilt)
+
+```bash
+npm i -g hanzo                    # any OS; or, on macOS/Linux: curl -fsSL https://hanzo.sh | sh
+hanzo engine serve <model>
+```
+
+The first `hanzo engine` fetches the prebuilt `hanzo-engine` binary (linux amd64/arm64, macOS) and checks
+its SHA-256. For CUDA, ROCm or any other feature set, use the install script or build from source below.
+
+## Install script (builds from source)
 
 The install script automatically detects your hardware (CUDA, Metal, MKL) and builds with optimal features.
 

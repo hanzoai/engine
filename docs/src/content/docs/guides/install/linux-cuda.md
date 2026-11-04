@@ -5,6 +5,8 @@ sidebar:
   order: 1
 ---
 
+For a quick start without a GPU build, `npm i -g hanzo` then `hanzo engine serve <model>` fetches the prebuilt `hanzo-engine` binary (linux amd64/arm64) on first use. For CUDA, build it as below.
+
 The install script handles most Linux-with-CUDA cases:
 
 ```bash

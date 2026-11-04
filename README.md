@@ -43,6 +43,17 @@ Hanzo Engine runs any Hugging Face model with zero config, quantizes it for your
 
 ## Quick Start
 
+### Quick install
+
+```bash
+npm i -g hanzo                    # any OS; or, on macOS/Linux: curl -fsSL https://hanzo.sh | sh
+hanzo engine serve <model>        # e.g. hanzo engine serve zenlm/zen-nano-0.6b
+```
+
+`npm i -g hanzo` installs the [Hanzo CLI](https://github.com/hanzoai/cli) launcher; the first
+`hanzo engine` fetches the prebuilt `hanzo-engine` binary (linux amd64/arm64, macOS) and checks its
+SHA-256. For a CUDA or ROCm build, or any other feature set, build from source as below.
+
 ### Binaries
 
 This repository builds two programs, and neither is called `hanzo`:
@@ -50,7 +61,7 @@ This repository builds two programs, and neither is called `hanzo`:
 | binary | crate | how to get it |
 |---|---|---|
 | `hanzoai` | `hanzo-server` | prebuilt, attached to each [release](https://github.com/hanzoai/engine/releases/latest) |
-| `hanzo-engine` | `hanzo-cli` | built from source by `install.sh` |
+| `hanzo-engine` | `hanzo-cli` | prebuilt, fetched by `hanzo engine` on first use; or built from source by `install.sh` |
 
 The `hanzo` on your PATH is the [Hanzo CLI](https://github.com/hanzoai/cli); its `hanzo engine serve MODEL` runs `hanzo-engine serve -m MODEL`. `hanzoai` logs a deprecation warning that names `hanzo serve` from hanzo-cli, which is the `hanzo-engine` binary.
 
