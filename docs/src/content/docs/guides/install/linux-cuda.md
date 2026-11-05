@@ -5,6 +5,8 @@ sidebar:
   order: 1
 ---
 
+For a quick start without a GPU build, `npm i -g hanzo` then `hanzo engine serve <model>` fetches the prebuilt `hanzo-engine` binary (linux amd64/arm64) on first use. For CUDA, build it as below.
+
 The install script handles most Linux-with-CUDA cases:
 
 ```bash
@@ -39,7 +41,7 @@ Flash attention requires compute capability 8.0+. Flash attention v3 requires 9.
 Install with a specific feature set from crates.io:
 
 ```bash
-cargo install hanzo-cli --features "cuda flash-attn cudnn"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 From a source checkout:
@@ -56,7 +58,7 @@ For a non-standard toolkit location, set `CUDA_ROOT` before building:
 
 ```bash
 export CUDA_ROOT=/opt/cuda-12.4
-cargo install hanzo-cli --features "cuda flash-attn cudnn"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 `CUDA_ROOT` overrides the `nvcc` discovered via `PATH`. The build uses the `nvcc` matching the `CUDA_ROOT` value.

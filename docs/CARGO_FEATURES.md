@@ -30,7 +30,7 @@ Enables NVIDIA GPU acceleration via CUDA. This is the primary feature for runnin
 **Usage:**
 ```bash
 cargo build --release --features cuda
-cargo install hanzo-cli --features cuda
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features cuda
 ```
 
 **What it enables:**
@@ -256,16 +256,16 @@ See [Ring documentation](DISTRIBUTED/RING.md) for detailed setup instructions.
 
 ```bash
 # NVIDIA GPU with all optimizations
-cargo install hanzo-cli --features "cuda cudnn flash-attn"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "cuda cudnn flash-attn"
 
 # Apple Silicon
-cargo install hanzo-cli --features "metal accelerate"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "metal accelerate"
 
 # Intel CPU
-cargo install hanzo-cli --features "mkl"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "mkl"
 
 # Multi-GPU NVIDIA setup
-cargo install hanzo-cli --features "cuda cudnn flash-attn nccl"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "cuda cudnn flash-attn nccl"
 
 # Build from source with CUDA
 git clone https://github.com/hanzoai/engine.git

@@ -14,7 +14,7 @@ This is separate from the [ring backend](/hanzo/guides/perf/multi-machine-ring/)
 Build the same CUDA+NCCL binary on every node:
 
 ```bash
-cargo install hanzo-cli --features "cuda nccl flash-attn cudnn"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "cuda nccl flash-attn cudnn"
 ```
 
 Every node should use the same model, dtype, quantization, and runtime arguments. Use `CUDA_VISIBLE_DEVICES` on each node to choose the local GPUs that participate.

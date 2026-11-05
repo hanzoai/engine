@@ -5,6 +5,8 @@ sidebar:
   order: 3
 ---
 
+`npm i -g hanzo` installs the Hanzo CLI on Windows too, but the prebuilt `hanzo-engine` that `hanzo engine serve <model>` fetches covers Linux and macOS only. Under WSL2 that quick install works as on Linux; natively, use the install script below.
+
 Two options exist on Windows: native install or WSL2 with Ubuntu. The install script supports both.
 
 **Native Windows**, for running hanzo as a Windows process, integration with Windows-specific tooling, or when WSL is not already configured.
@@ -24,7 +26,7 @@ irm https://raw.githubusercontent.com/hanzoai/engine/master/install.ps1 | iex
 The script detects CUDA and selects features accordingly. To install manually:
 
 ```powershell
-cargo install hanzo-cli --features "cuda flash-attn cudnn"
+cargo install --locked --git https://github.com/hanzoai/engine hanzo-cli --features "cuda flash-attn cudnn"
 ```
 
 Prerequisites:
